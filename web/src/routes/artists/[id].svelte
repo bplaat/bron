@@ -46,11 +46,11 @@ export let artist;
 {#if artist.albums != undefined}
     <div class="columns is-multiline">
         {#each artist.albums as album}
-            <div class="column is-one-quarter">
+            <div class="column is-one-fifth">
                 <AlbumCard album={album} />
             </div>
         {/each}
     </div>
 {:else}
-    <p><i>This artist has no albums of it's own</i></p>
+    <p><i>This artist has no albums</i></p>
 {/if}
