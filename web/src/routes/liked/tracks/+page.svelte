@@ -6,7 +6,9 @@
 
     async function fetchPage(page) {
         const response = await fetch(
-            `${import.meta.env.VITE_API_URL}/users/${authUser.id}/liked_tracks?${new URLSearchParams({
+            `${import.meta.env.VITE_API_URL}/users/${
+                authUser.id
+            }/liked_tracks?${new URLSearchParams({
                 page,
             })}`,
             {
@@ -41,5 +43,10 @@
 
 <div class="content">
     <h1 class="title">Liked Tracks</h1>
-    <TracksTable {token} {tracks} />
+
+    {#if tracks.length > 0}
+        <TracksTable {token} {tracks} />
+    {:else}
+        <p>You have not liked any tracks</p>
+    {/if}
 </div>
