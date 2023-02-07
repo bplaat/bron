@@ -8,11 +8,10 @@
     export let isMusicQueue = false;
 
     function playTrack(track) {
-        const index = tracks.indexOf(track);
         musicPlayer.set({
             action: "play",
             queue: tracks.slice(),
-            index,
+            track_id: track.id,
         });
     }
 
@@ -25,7 +24,9 @@
 
     function removeTrack(track) {
         musicPlayer.update((musicPlayer) => {
-            musicPlayer.queue = musicPlayer.queue.filter(otherTrack => otherTrack.id != track.id);
+            musicPlayer.queue = musicPlayer.queue.filter(
+                (otherTrack) => otherTrack.id != track.id
+            );
             return musicPlayer;
         });
     }
@@ -68,7 +69,7 @@
                 class="track-container"
                 on:dblclick|preventDefault={() => playTrack(track)}
                 class:has-background-light={$musicPlayer.queue.length > 0 &&
-                    $musicPlayer.queue[$musicPlayer.index].id == track.id}
+                    $musicPlayer.track_id == track.id}
             >
                 <td>
                     <span class="track-index">{index + 1}</span>
@@ -153,6 +154,8 @@
                         <button
                             class="button"
                             on:click={() => removeTrack(track)}
+                            disabled={$musicPlayer.queue.length > 0 &&
+                                $musicPlayer.track_id == track.id}
                         >
                             <svg class="icon" viewBox="0 0 24 24">
                                 <path
