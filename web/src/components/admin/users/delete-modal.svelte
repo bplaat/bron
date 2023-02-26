@@ -6,7 +6,7 @@
     const lang = {
         en: {
             header: 'Delete user',
-            text: 'Do your realy want to delete this user?',
+            text: 'Do your really want to delete this user?',
             delete: 'Delete user',
             cancel: 'Cancel',
         },
