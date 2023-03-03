@@ -67,7 +67,7 @@ static LRESULT WINAPI AboutWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
 
         // Draw about title
         HFONT title_font = CreateFont(MulDiv(32, window->dpi, 96), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, ANSI_CHARSET, OUT_DEFAULT_PRECIS,
-                                     CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+                                      CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
         SelectObject(hdc_buffer, title_font);
         SetTextColor(hdc_buffer, 0xffffff);
         TextOut(hdc_buffer, MulDiv(16 + 128 + 24, window->dpi, 96), MulDiv(32, window->dpi, 96), GetString(ID_STRING_ABOUT_TITLE),
@@ -80,8 +80,8 @@ static LRESULT WINAPI AboutWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
         wchar_t about_text[512];
         wsprintf(about_text, GetString(ID_STRING_ABOUT_TEXT_FORMAT), app_version[0], app_version[1], app_version[2], app_version[3]);
 
-        HFONT text_font = CreateFont(MulDiv(20, window->dpi, 96), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, ANSI_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-                                    CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+        HFONT text_font = CreateFont(MulDiv(20, window->dpi, 96), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, ANSI_CHARSET, OUT_DEFAULT_PRECIS,
+                                     CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
         SelectObject(hdc_buffer, text_font);
         int y = 32 + 32 + 16;
         wchar_t *c = about_text;
