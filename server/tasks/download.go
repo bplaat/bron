@@ -11,12 +11,13 @@ import (
 	"time"
 
 	"github.com/bplaat/bassiemusic/consts"
-	"github.com/bplaat/bassiemusic/controllers/websocket"
 	"github.com/bplaat/bassiemusic/core/database"
 	"github.com/bplaat/bassiemusic/core/uuid"
 	"github.com/bplaat/bassiemusic/models"
 	"github.com/bplaat/bassiemusic/structs"
 	"github.com/bplaat/bassiemusic/utils"
+	"github.com/bplaat/bassiemusic/utils/uuid"
+	"github.com/gofiber/fiber/v2"
 )
 
 func createArtist(deezerID int, name string, sync bool) string {
@@ -172,7 +173,7 @@ func SearchAndDownloadTrackMusic(track *models.Track) error {
 		}
 
 		// Update track
-		models.TrackModel.Where("id", track.ID).Update(database.Map{
+		models.TrackModel(nil).Where("id", track.ID).Update(database.Map{
 			"duration":   youtubeDuration,
 			"youtube_id": youtubeID,
 		})
@@ -273,24 +274,26 @@ func DownloadTask() {
 		// Wait a little while
 		time.Sleep(5 * time.Second)
 
-		// Get oldest download task
+		// Get first download task
 		downloadTask := models.DownloadTaskModel.OrderBy("created_at").First()
 		if downloadTask == nil {
 			continue
 		}
 
-		//  Execute current download task
+		// Do download task
 		if downloadTask.Type == models.DownloadTaskTypeDeezerArtist {
-			// Update download task status
-			downloadTask.Status = models.DownloadTaskStatusDownloading
-			models.DownloadTaskModel.Where("id", downloadTask.ID).Update(database.Map{
-				"status": downloadTask.Status,
+			// Report progress
+			downloadTask.Status = 1
+			models.DownloadTaskModel().Where("id", downloadTask.ID).Update(database.Map{
+				"status": 1,
 			})
 
-			// Broadcast download tasks update message to admins
-			if err := websocket.BroadcastAdmin("download_tasks.update", downloadTask); err != nil {
-				log.Println(err)
-			}
+			data, _ := json.Marshal(fiber.Map{
+				"success": true,
+				"type":    "taskUpdate",
+				"data":    models.DownloadTaskModel().Find(downloadTask.ID),
+			})
+			controllers.SendMessageToAll(data)
 
 			// Create artist
 			var deezerArtist structs.DeezerArtist
@@ -307,39 +310,49 @@ func DownloadTask() {
 				}
 				DownloadAlbum(album.ID)
 
-				// Update download task progress
-				downloadTask.Progress = float32(math.Round((float64(index) / float64(len(artistAlbums))) * 100))
-				models.DownloadTaskModel.Where("id", downloadTask.ID).Update(database.Map{
-					"progress": downloadTask.Progress,
+				// Report progress
+				progress := int(math.Round((float64(index) / float64(len(artistAlbums))) * 100))
+
+				downloadTask.Progress = progress
+
+				models.DownloadTaskModel().Where("id", downloadTask.ID).Update(database.Map{
+					"progress": progress,
 				})
 
-				// Broadcast download tasks update message to admins
-				if err := websocket.BroadcastAdmin("download_tasks.update", downloadTask); err != nil {
-					log.Println(err)
-				}
+				data, _ := json.Marshal(fiber.Map{
+					"success": true,
+					"type":    "taskUpdate",
+					"data":    models.DownloadTaskModel().Find(downloadTask.ID),
+				})
+				controllers.SendMessageToAll(data)
 			}
 		}
-
 		if downloadTask.Type == models.DownloadTaskTypeDeezerAlbum {
 			// Update download task status
-			downloadTask.Status = models.DownloadTaskStatusDownloading
-			models.DownloadTaskModel.Where("id", downloadTask.ID).Update(database.Map{
-				"status": downloadTask.Status,
+			downloadTask.Status = models.DownloadTaskModelStatusDownloading
+			models.DownloadTaskModel().Where("id", downloadTask.ID).Update(database.Map{
+				"status": models.DownloadTaskModelStatusDownloading,
 			})
 
-			// Broadcast download tasks update message to admins
-			if err := websocket.BroadcastAdmin("download_tasks.update", downloadTask); err != nil {
-				log.Println(err)
-			}
+      // Send task update websocket message to admins
+			jsonMessage, _ := json.Marshal(fiber.Map{
+				"success": true,
+				"type":    "taskUpdate",
+				"data":    models.DownloadTaskModel().Find(downloadTask.ID),
+			})
+			controllers.SendMessageToAll(jsonMessage)
 
-			// Download album
+      // Download aldum
 			DownloadAlbum(int(downloadTask.DeezerID))
 		}
 
-		// Broadcast download tasks delete message to admins
-		if err := websocket.BroadcastAdmin("download_tasks.delete", downloadTask); err != nil {
-			log.Println(err)
-		}
+    // Send task delete websocket message to admins
+		jsonMessage, _ := json.Marshal(fiber.Map{
+			"success": true,
+			"type":    "taskDelete",
+			"data":    models.DownloadTaskModel.Find(downloadTask.ID),
+		})
+		controllers.SendMessageToAll(jsonMessage)
 
 		// Delete download task when done
 		models.DownloadTaskModel.Where("id", downloadTask.ID).Delete()
