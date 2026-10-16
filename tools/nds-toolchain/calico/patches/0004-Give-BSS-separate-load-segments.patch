@@ -1,0 +1,172 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Fri, 16 Oct 2026 20:10:00 +0200
+Subject: [PATCH] Give BSS separate segments and non-overlapping load addresses
+
+Older lld versions include NOBITS sections when checking load-address
+overlap. Put zero-fill sections in separate zero-file-size load segments,
+with distinct LMAs after both initialized load images. Runtime addresses
+and startup loadlists stay unchanged. Keep the BSS segments visible to
+ndstool so its ARM7 device-list placement still accounts for zero-fill RAM.
+---
+diff --git a/share/ds7.ld b/share/ds7.ld
+--- a/share/ds7.ld
++++ b/share/ds7.ld
+@@ -19,11 +19,14 @@
+ 	/* ELF program headers for the ARM7 binary */
+ 	crt0    PT_LOAD FLAGS(7);
+ 	main    PT_LOAD FLAGS(7);
++	mainbss PT_LOAD FLAGS(7);
+ 	wram    PT_LOAD FLAGS(7);
++	wrambss PT_LOAD FLAGS(7);
+ 	ldlist  PT_LOAD FLAGS(7);
+ 
+ 	/* ELF program headers for the ARM7i binary */
+ 	twlwram PT_LOAD FLAGS(0x100007);
++	twlbss PT_LOAD FLAGS(0x100007);
+ 	twlld   PT_LOAD FLAGS(0x100007);
+ }
+ 
+@@ -89,13 +92,13 @@
+ 	PROVIDE_HIDDEN( __twl_end   = ADDR(.twl) + SIZEOF(.twl) );
+ 
+ 	/* DSi exclusive BSS area */
+-	.twl.bss ALIGN(8) (NOLOAD) : {
++	.twl.bss ALIGN(8) (NOLOAD) : AT(__bss_lma + SIZEOF(.main.bss) + SIZEOF(.wram.bss)) {
+ 		*(.twl_bss .twl_bss.*)
+ 		*.twl.* (.dynbss)
+ 		*.twl.* (.bss .bss.* .gnu.linkonce.b.*)
+ 		*.twl.* (COMMON)
+ 		. = ALIGN(4);
+-	} >twlwram :twlwram
++	} >twlwram :twlbss
+ 
+ 	/* Information for DSi exclusive BSS area */
+ 	PROVIDE_HIDDEN( __twl_bss_start = ADDR(.twl.bss)                    );
+@@ -199,13 +202,13 @@
+ 	PROVIDE_HIDDEN( __main_end   = ADDR(.fini_array) + SIZEOF(.fini_array) );
+ 
+ 	/* Main RAM BSS area */
+-	.main.bss ALIGN(8) (NOLOAD) : {
++	.main.bss ALIGN(8) (NOLOAD) : AT(__bss_lma) {
+ 		*(.sbss .sbss.*)
+ 		*.16.o (.dynbss)
+ 		*.16.o (.bss .bss.* .gnu.linkonce.b.*)
+ 		*.16.o (COMMON)
+ 		. = ALIGN(4);
+-	} >main :main
++	} >main :mainbss
+ 
+ 	/* Information for main RAM BSS */
+ 	PROVIDE_HIDDEN( __main_bss_start = ADDR(.main.bss)                     );
+@@ -244,12 +247,12 @@
+ 	PROVIDE_HIDDEN( __wram_end   = ADDR(.wram.rw) + SIZEOF(.wram.rw) );
+ 
+ 	/* WRAM BSS area */
+-	.wram.bss ALIGN(8) (NOLOAD) : {
++	.wram.bss ALIGN(8) (NOLOAD) : AT(__bss_lma + SIZEOF(.main.bss)) {
+ 		*(.dynbss)
+ 		*(.bss .bss.* .gnu.linkonce.b.*)
+ 		*(COMMON)
+ 		. = ALIGN(4);
+-	} >wram :wram
++	} >wram :wrambss
+ 
+ 	/* Information for BSS */
+ 	PROVIDE_HIDDEN( __wram_bss_start = ADDR(.wram.bss)                     );
+@@ -280,6 +283,10 @@
+ 	PROVIDE_HIDDEN( __twl_loadlist_lma   = __twl_lma                                       );
+ 	PROVIDE_HIDDEN( __twl_loadlist_start = LOADADDR(.twl.loadlist)                         );
+ 	PROVIDE_HIDDEN( __twl_loadlist_end   = LOADADDR(.twl.loadlist) + SIZEOF(.twl.loadlist) );
++
++	/* BSS has no ROM data. Keep its LMAs after both load images for older lld. */
++	__bss_lma = MAX(LOADADDR(.loadlist) + SIZEOF(.loadlist),
++	                LOADADDR(.twl.loadlist) + SIZEOF(.twl.loadlist));
+ 
+ 	/* ====================== */
+ 	/*   Debugging metadata   */
+diff --git a/share/ds9.ld b/share/ds9.ld
+--- a/share/ds9.ld
++++ b/share/ds9.ld
+@@ -29,14 +29,17 @@
+ 	vectors PT_LOAD FLAGS(7);
+ 	itcm    PT_LOAD FLAGS(7);
+ 	dtcm    PT_LOAD FLAGS(7);
++	dtcmbss PT_LOAD FLAGS(7);
+ 	main    PT_LOAD FLAGS(7);
+ 	tls     PT_LOAD FLAGS(7);
+ 	tlsinit PT_TLS; /* lld works out the thread pointer offsets with it */
++	maintls PT_LOAD FLAGS(7);
+ 	bss     PT_LOAD FLAGS(7);
+ 	ldlist  PT_LOAD FLAGS(7);
+ 
+ 	/* ELF program headers for the ARM9i binary */
+ 	twl     PT_LOAD FLAGS(0x100007);
++	twlbss PT_LOAD FLAGS(0x100007);
+ 	twlld   PT_LOAD FLAGS(0x100007);
+ }
+ 
+@@ -138,13 +141,13 @@
+ 	PROVIDE_HIDDEN( __dtcm_end   = ADDR(.dtcm) + SIZEOF(.dtcm) );
+ 
+ 	/* DTCM BSS area */
+-	.dtcm.bss ALIGN(8) (NOLOAD) : {
++	.dtcm.bss ALIGN(8) (NOLOAD) : AT(__bss_lma) {
+ 		*(.sbss .sbss.*)
+ 		*.32.o (.dynbss)
+ 		*.32.o (.bss .bss.* .gnu.linkonce.b.*)
+ 		*.32.o (COMMON)
+ 		. = ALIGN(4);
+-	} >dtcm :dtcm
++	} >dtcm :dtcmbss
+ 
+ 	/* Information for DTCM BSS */
+ 	PROVIDE_HIDDEN( __dtcm_bss_start = ADDR(.dtcm.bss)                     );
+@@ -272,9 +275,9 @@
+ 		"Error: TLS section too large" )
+ 
+ 	/* Main thread TLS area */
+-	.main.tls (NOLOAD) : ALIGN(8) {
++	.main.tls (NOLOAD) : AT(__bss_lma + SIZEOF(.dtcm.bss)) ALIGN(8) {
+ 		. += ADDR(.tbss) + SIZEOF(.tbss) - ADDR(.tdata);
+-	} >main :NONE
++	} >main :maintls
+ 
+ 	/* Information for main thread TLS area */
+ 	PROVIDE_HIDDEN( __tls_lma   = LOADADDR(.tdata)                 );
+@@ -282,7 +285,7 @@
+ 	PROVIDE_HIDDEN( __tls_end   = ADDR(.main.tls) + SIZEOF(.tdata) );
+ 
+ 	/* Main BSS area */
+-	.main.bss (NOLOAD) : {
++	.main.bss (NOLOAD) : AT(__bss_lma + SIZEOF(.dtcm.bss) + SIZEOF(.main.tls)) {
+ 		EXCLUDE_FILE(*.twl.*) *(.dynbss)
+ 		EXCLUDE_FILE(*.twl.*) *(.bss .bss.* .gnu.linkonce.b.*)
+ 		EXCLUDE_FILE(*.twl.*) *(COMMON)
+@@ -323,13 +326,13 @@
+ 	PROVIDE_HIDDEN( __twl_end   = ADDR(.twl.rw) + SIZEOF(.twl.rw) );
+ 
+ 	/* DSi exclusive BSS area */
+-	.twl.bss ALIGN(8) (NOLOAD) : {
++	.twl.bss ALIGN(8) (NOLOAD) : AT(__bss_lma + SIZEOF(.dtcm.bss) + SIZEOF(.main.tls) + SIZEOF(.main.bss)) {
+ 		*(.twl_bss .twl_bss.*)
+ 		*.twl.* (.dynbss)
+ 		*.twl.* (.bss .bss.* .gnu.linkonce.b.*)
+ 		*.twl.* (COMMON)
+ 		. = ALIGN(4);
+-	} >main :twl
++	} >main :twlbss
+ 
+ 	/* Information for DSi exclusive BSS area */
+ 	PROVIDE_HIDDEN( __twl_bss_start = ADDR(.twl.bss)                    );
+@@ -372,6 +375,10 @@
+ 	PROVIDE_HIDDEN( __twl_loadlist_lma   = __twl_lma );
+ 	PROVIDE_HIDDEN( __twl_loadlist_start = LOADADDR(.twl.loadlist)                         );
+ 	PROVIDE_HIDDEN( __twl_loadlist_end   = LOADADDR(.twl.loadlist) + SIZEOF(.twl.loadlist) );
++
++	/* BSS has no ROM data. Keep its LMAs after both load images for older lld. */
++	__bss_lma = MAX(LOADADDR(.loadlist) + SIZEOF(.loadlist),
++	                LOADADDR(.twl.loadlist) + SIZEOF(.twl.loadlist));
+ 
+ 	/* ====================== */
+ 	/*   Debugging metadata   */
