@@ -19,8 +19,6 @@ To build all examples using only NASM and a POSIX shell, run:
 ./build.sh
 ```
 
-The ICO embeds 8-bit-per-channel RGBA PNGs. When updating its images, use `oxipng --nc --nb` to preserve that encoding and update the image offsets and lengths in `redsquare/redsquare.asm`.
-
 ## License
 
 Copyright © 2020-2026 [Bastiaan van der Plaat](https://github.com/bplaat)
