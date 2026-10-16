@@ -299,13 +299,16 @@ build_arm7() {
 
 # ndstool runs on the host, it puts the ARM9 and ARM7 programs, the icon and NitroFS in a .nds
 build_ndstool() {
-    outdated "$BUILD_DIR/bin/ndstool" "$BUILD_DIR/ndstool/source" || return 0
+    outdated "$BUILD_DIR/bin/ndstool" "$BUILD_DIR/ndstool/source" "$TOOLCHAIN_DIR/build.sh" || return 0
     msg "Building ndstool"
-    local version
+    local version source objects_dir="$BUILD_DIR/objects/ndstool"
     version="$(printf '%s\n' "${REPOS[@]}" | awk '$1 == "ndstool" { print substr($3, 2) }')"
-    mkdir -p "$BUILD_DIR/bin"
+    mkdir -p "$BUILD_DIR/bin" "$objects_dir"
+    for source in "$BUILD_DIR"/ndstool/source/*.c; do
+        cc -O2 -w -c "$source" -o "$objects_dir/$(basename "${source%.c}").o"
+    done
     c++ -O2 -w -DPACKAGE_VERSION="\"$version\"" "$BUILD_DIR"/ndstool/source/*.cpp \
-        -x c "$BUILD_DIR"/ndstool/source/*.c -o "$BUILD_DIR/bin/ndstool"
+        "$objects_dir"/*.o -o "$BUILD_DIR/bin/ndstool"
 }
 
 # Builds test/ with the toolchain and runs it in melonDS with its own settings: an SD card that
