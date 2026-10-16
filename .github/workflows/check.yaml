@@ -145,7 +145,7 @@ jobs:
       - name: Install assembly and console toolchains and headless Dolphin
         run: |
           sudo apt-get update
-          sudo apt-get install -y nasm python3 clang lld llvm make libfreeimage-dev dolphin-emu xvfb xauth libgl1-mesa-dri
+          sudo apt-get install -y nasm python3 clang lld llvm make libfreeimage-dev libgl-dev dolphin-emu xvfb xauth libgl1-mesa-dri
       - name: Build Windows, macOS and Nintendo DS examples and run Wii toolchain tests
         env:
           LIBGL_ALWAYS_SOFTWARE: 'true'

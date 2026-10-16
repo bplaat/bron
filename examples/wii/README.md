@@ -15,7 +15,7 @@ brew install llvm lld freeimage
 brew install --cask dolphin
 
 # Debian / Ubuntu
-sudo apt install clang lld llvm make git libfreeimage-dev dolphin-emu
+sudo apt install clang lld llvm make git libfreeimage-dev libgl-dev dolphin-emu
 ```
 
 The Rust examples also need [rustup](https://rustup.rs/), it installs the nightly toolchain by itself.
