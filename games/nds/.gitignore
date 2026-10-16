@@ -1,4 +1,2 @@
-target/
-/*/assets/
+*/assets/
 setup_*.exe
-.DS_Store

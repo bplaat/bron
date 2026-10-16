@@ -1,5 +1,6 @@
 *.app/
 target/
+portable-executable/*.com
 /hello-arm64
 /hello-libc-arm64
 /hello-libc-x86_64
