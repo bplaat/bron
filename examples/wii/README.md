@@ -48,3 +48,9 @@ A minimal program that draws a few triangles using a display list.
 ## Blocks
 
 Generates a random 64x64x64 voxel world and renders its visible block faces with GX display lists.
+
+## License
+
+Copyright © 2023-2026 [Bastiaan van der Plaat](https://github.com/bplaat)
+
+Licensed under the [MIT](../../LICENSE) license.
