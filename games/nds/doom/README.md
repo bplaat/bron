@@ -187,7 +187,7 @@ of main RAM on a 16-bit bus at half its clock.
 - [0022](patches/0022-Read-response-files.patch): Response files work
   again, for the options in `/data/doom/args.txt`.
 - [0023](patches/0023-Add-a-Nintendo-DS-build.patch): `Makefile.nds` builds
-  a DSi enhanced `.nds` with the [toolchain](../toolchain), without the
+  a DSi enhanced `.nds` with the [toolchain](../../../tools/nds-toolchain), without the
   32-bit `DG_ScreenBuffer` and SDL_mixer. The renderer, sight checks and
   fixed point math run from ITCM as ARM code, which is nearly full, the rest
   is Thumb code in main RAM.

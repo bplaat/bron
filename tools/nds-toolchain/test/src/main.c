@@ -133,8 +133,7 @@ static void test_format(void) {
     CHECK(sscanf("0x1f -017", "%i %i", &a, &b) == 2 && a == 31 && b == -15);
     // Floats end where a number can't go on, letters only spell inf and nan
     CHECK(sscanf("3.5f rest", "%f%s", &f, word) == 2 && f == 3.5f && !strcmp(word, "f"));
-    CHECK(sscanf("-inf 1e5e", "%f %lf%s", &f, &d, word) == 3 && isinf(f) && f < 0 && d == 1e5 &&
-          !strcmp(word, "e"));
+    CHECK(sscanf("-inf 1e5e", "%f %lf%s", &f, &d, word) == 3 && isinf(f) && f < 0 && d == 1e5 && !strcmp(word, "e"));
     float g = 0;
     CHECK(sscanf("infinity! nanx", "%f%s %f", &f, word, &g) == 3 && isinf(f) && !strcmp(word, "!") && isnan(g));
     CHECK(sscanf("", "%d", &a) == EOF && sscanf("  ", "%s", word) == EOF);

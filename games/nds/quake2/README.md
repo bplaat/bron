@@ -12,17 +12,17 @@ run on a DSi or on hardware yet, see [To do](#to-do).
 
 ## Controls
 
-| Button | In game        | In menus     |
-| ------ | -------------- | ------------ |
-| D-pad  | Move and turn  | Navigate     |
-| A      | Fire           | Select / yes |
-| B      | Jump           | Back / no    |
-| X      | Next weapon    | Backspace    |
-| Y      | Run (hold)     |              |
-| L / R  | Strafe         | Page up/down |
-| SELECT | Help computer  | Help         |
-| START  | Menu           | Close menu   |
-| Stylus | Weapon, item   |              |
+| Button | In game       | In menus     |
+| ------ | ------------- | ------------ |
+| D-pad  | Move and turn | Navigate     |
+| A      | Fire          | Select / yes |
+| B      | Jump          | Back / no    |
+| X      | Next weapon   | Backspace    |
+| Y      | Run (hold)    |              |
+| L / R  | Strafe        | Page up/down |
+| SELECT | Help computer | Help         |
+| START  | Menu          | Close menu   |
+| Stylus | Weapon, item  |              |
 
 The top screen shows the 3D view with the crosshair, the messages and
 center prints over it, and the menus, the loading plaque and, at 1:1, the
@@ -52,20 +52,20 @@ button, quits.
 ./build.sh clean            # remove target/
 ```
 
-DeSmuME emulates the Memory Expansion Pak, the [runner](../toolchain) puts
+DeSmuME emulates the Memory Expansion Pak, the [runner](../../../tools/nds-toolchain) puts
 one in the GBA slot with its `pak` command:
 
 ```sh
-../toolchain/target/bin/desmume-runner target/quake2.nds pak 'wait 2000' 'shot quake2.png'
+../../../target/nds-toolchain/bin/desmume-runner target/quake2.nds pak 'wait 2000' 'shot quake2.png'
 ```
 
 ## Game data
 
 `assets/` is Quake II's base directory: game data goes in `assets/baseq2/`.
 
-| File                | Game                                             |
-| ------------------- | ------------------------------------------------ |
-| `baseq2/pak0.pak`   | Quake II demo 3.14 (the first unit), by default  |
+| File              | Game                                            |
+| ----------------- | ----------------------------------------------- |
+| `baseq2/pak0.pak` | Quake II demo 3.14 (the first unit), by default |
 
 The freely distributable Quake II demo is downloaded from Yamagi's mirror of
 id Software's files, checksum verified and embedded in the ROM through
@@ -90,7 +90,7 @@ downloaded when that fails.
 The 4 MiB of the DS hold the code, Quake II's own state, the collision map,
 which every trace walks, and the sounds, which the sound hardware can only
 read from main RAM. The Memory Expansion Pak, the far heap of the
-[toolchain](../toolchain)'s C library, holds what is read less often: the
+[toolchain](../../../tools/nds-toolchain)'s C library, holds what is read less often: the
 game's edicts, the client's entities, the PVS, the converted world, the
 models and the files while they are read. On a DSi it all comes from main
 RAM. Textures go to 384 KiB of VRAM. Sounds take at most 768 KiB of main
@@ -159,7 +159,7 @@ only, without `__NDS__` checks.
   were sorted by model for GL every frame, binding a texture costs the DS
   little.
 - [0013](patches/0013-Add-a-Nintendo-DS-build.patch): `Makefile.nds`
-  builds a DSi enhanced `.nds` with the [toolchain](../toolchain), with the
+  builds a DSi enhanced `.nds` with the [toolchain](../../../tools/nds-toolchain), with the
   game linked in (`GAME_HARD_LINKED`).
 - [0014](patches/0014-Add-the-DS-system-layer.patch): `nds/sys_nds.c`
   switches the ARM9 to 134 MHz on a DSi, unlocks the Memory Expansion Pak on

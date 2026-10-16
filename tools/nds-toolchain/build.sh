@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Builds the Nintendo DS toolchain in target/: fetches calico, libnds, libdvm, FatFs, the default
+# Builds the Nintendo DS toolchain in ../../target/nds-toolchain/: fetches calico, libnds, libdvm, FatFs, the default
 # ARM7 program, ndstool and LLVM's compiler-rt, applies the patches in <name>/patches/ and builds
 # the libraries, our tiny libc, the ARM7 program and ndstool.
 # The port build scripts run this before they build.
@@ -29,7 +29,7 @@ REPOS=(
 DESMUME_REPO='desmume https://github.com/TASEmulators/desmume.git 1275dc64f5d1f5ef18dc1bc1fa9e012024b6df1a 1275dc64f5d1f5ef18dc1bc1fa9e012024b6df1a'
 
 TOOLCHAIN_DIR="$PWD"
-BUILD_DIR="$TOOLCHAIN_DIR/target"
+BUILD_DIR="$(cd ../.. && pwd)/target/nds-toolchain"
 CALICO_DIR="$BUILD_DIR/calico"
 LIBNDS_DIR="$BUILD_DIR/libnds"
 LIBDVM_DIR="$BUILD_DIR/libdvm"

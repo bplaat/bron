@@ -15,7 +15,7 @@
 # and add the port's flags to CFLAGS after it. The objects go to $(BUILD)/. The port build scripts
 # run the toolchain build first and pass TOOLCHAIN. `make run` starts the program in melonDS.
 
-TOOLCHAIN_TARGET := $(TOOLCHAIN)/target
+TOOLCHAIN_TARGET := $(abspath $(TOOLCHAIN)/../../target/nds-toolchain)
 BUILD ?= build
 OFILES += $(addprefix $(BUILD)/,$(addsuffix .o,$(SOURCES)) $(addsuffix .itcm.o,$(ITCM_SOURCES)))
 

@@ -3,9 +3,11 @@ members = ["apps/*/*", "games/*", "lib/*/*", "lib/*/*/examples/*", "tools/*"]
 exclude = [
     "examples/macos",
     "examples/wii",
+    "games/nds",
     "games/plaatcraft",
     "lib/ui/plaatui",
     "lib/ui/plaatui/examples/showcase",
+    "tools/nds-toolchain",
     "tools/wii-toolchain",
 ]
 resolver = "2"

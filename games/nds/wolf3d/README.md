@@ -176,7 +176,7 @@ Wolf4SDL runs on a small implementation of the parts of SDL 2 and SDL_mixer
 it uses, in `nds/`, so its own code is barely changed.
 
 - [0015](patches/0015-Add-a-Nintendo-DS-build.patch): `Makefile.nds`
-  builds the `.nds` with the [toolchain](../toolchain), with the Apogee v1.4
+  builds the `.nds` with the [toolchain](../../../tools/nds-toolchain), with the Apogee v1.4
   graphics layout. The ray caster, the scaler and the fixed point math run
   from ITCM as ARM code, the AdLib on the ARM7, the rest is Thumb code in main RAM, the cold parts
   optimized for size. The Tab debug keys, which need a keyboard, are left

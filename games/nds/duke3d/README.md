@@ -180,7 +180,7 @@ of main RAM on a 16-bit bus at half its clock.
 ### The DS platform
 
 - [0020](patches/0020-Add-a-Nintendo-DS-build.patch): `Makefile.nds` builds
-  a DSi enhanced `.nds` with the [toolchain](../toolchain). The engine is
+  a DSi enhanced `.nds` with the [toolchain](../../../tools/nds-toolchain). The engine is
   ARM code, its drawers run from ITCM, the game is Thumb code, what doesn't
   run every frame optimized for size.
 - [0021](patches/0021-Add-the-DS-startup.patch): `duke3d_nds.c` switches

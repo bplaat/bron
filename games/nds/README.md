@@ -1,7 +1,7 @@
 # NDS Ports
 
 PC games ported to the Nintendo DS (and DSi), built with clang and lld on
-devkitPro's calico and libnds, which the [toolchain](toolchain) builds from
+devkitPro's calico and libnds, which the [toolchain](../../tools/nds-toolchain) builds from
 source. Like the [SerenityOS ports tree](https://github.com/SerenityOS/serenity/tree/master/Ports),
 every port fetches a pinned upstream source release and applies patch files on
 top, so the upstream code stays untouched in this repository.
@@ -75,7 +75,7 @@ data extension (`wl1`, `wl3` or `wl6`). Shared startup files such as
 ## Getting Started
 
 The ports build with a normal LLVM toolchain (clang 18 or newer, lld and llvm-ar). The
-[toolchain](toolchain) script clones calico, libnds, libdvm, FatFs, the
+[toolchain](../../tools/nds-toolchain) script clones calico, libnds, libdvm, FatFs, the
 default ARM7 program, ndstool and LLVM's compiler-rt builtins, patches and
 builds them the first time you build a port. Install LLVM and the
 [melonDS](https://melonds.kuribo64.net/) emulator:
@@ -92,9 +92,9 @@ sudo apt install clang lld llvm g++ make git curl unzip innoextract melonds
 - Build a port with its `build.sh`, the ROM ends up in `target/<port>.nds`,
   for example:
 
-  ```sh
-  doom/build.sh
-  ```
+    ```sh
+    games/nds/doom/build.sh
+    ```
 
 - To change a port, run `./build.sh dev`, edit and commit in the patched source
   tree in `target/`, then `./build.sh export-patches` writes the commits back to
@@ -106,3 +106,9 @@ In melonDS, disable the JIT recompiler (Config > Emu settings > CPU): its
 [JIT has a CPU bug](https://github.com/melonDS-emu/melonDS/issues/2622) that
 hangs every libnds 2 / calico homebrew on a white screen at boot. Real
 hardware and melonDS without JIT are fine.
+
+## License
+
+Copyright © 2026 [Bastiaan van der Plaat](https://github.com/bplaat)
+
+Licensed under the [MIT](../../LICENSE) license.

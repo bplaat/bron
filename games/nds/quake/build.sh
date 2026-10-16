@@ -26,7 +26,7 @@ BUILD_DIR="$PORT_DIR/target"
 ASSETS_DIR="$PORT_DIR/assets"
 SRC_DIR="$BUILD_DIR/Quake-$version"
 
-TOOLCHAIN_DIR="$(cd ../toolchain && pwd)"
+TOOLCHAIN_DIR="$(cd ../../../tools/nds-toolchain && pwd)"
 
 msg() { printf '\033[1;34m[quake]\033[0m %s\n' "$*"; }
 die() { printf '\033[1;31m[quake]\033[0m %s\n' "$*" >&2; exit 1; }

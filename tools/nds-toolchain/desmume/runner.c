@@ -64,8 +64,7 @@ unsigned long desmume_memory_read_long(int address);
 #define ARGV_MAGIC_ADDRESS 0x02fffe70
 
 // In the bit order of the DS keypad registers, which DeSmuME's keypad uses too
-static const char* const key_names[] = {"a", "b", "select", "start", "right", "left", "up", "down",
-    "r", "l", "x", "y"};
+static const char* const key_names[] = {"a", "b", "select", "start", "right", "left", "up", "down", "r", "l", "x", "y"};
 
 static uint16_t held_keys;
 static unsigned executions;
@@ -98,15 +97,18 @@ static BOOL count_execution(unsigned address, int size) {
 }
 
 static uint16_t parse_keys(const char* text) {
-    if (text == NULL) die("Expected keys");
+    if (text == NULL)
+        die("Expected keys");
     uint16_t keys = 0;
     char copy[256];
     snprintf(copy, sizeof(copy), "%s", text);
     char* save;
     for (char* name = strtok_r(copy, "+", &save); name != NULL; name = strtok_r(NULL, "+", &save)) {
         size_t i = 0;
-        while (i < sizeof(key_names) / sizeof(key_names[0]) && strcmp(name, key_names[i]) != 0) i++;
-        if (i == sizeof(key_names) / sizeof(key_names[0])) die("Unknown key '%s'", name);
+        while (i < sizeof(key_names) / sizeof(key_names[0]) && strcmp(name, key_names[i]) != 0)
+            i++;
+        if (i == sizeof(key_names) / sizeof(key_names[0]))
+            die("Unknown key '%s'", name);
         keys |= 1 << i;
     }
     return keys;
@@ -114,13 +116,15 @@ static uint16_t parse_keys(const char* text) {
 
 static void run(int frames) {
     desmume_input_keypad_update(held_keys);
-    for (int i = 0; i < frames; i++) desmume_cycle(0);
+    for (int i = 0; i < frames; i++)
+        desmume_cycle(0);
     profile_frames += frames;
 }
 
 static uint64_t profile_total(void) {
     uint64_t total = 0;
-    for (int i = 0; i < PROFILE_SIZE; i++) total += profile[i];
+    for (int i = 0; i < PROFILE_SIZE; i++)
+        total += profile[i];
     return total;
 }
 
@@ -131,19 +135,22 @@ static int compare_cycles(const void* a, const void* b) {
 
 static void profile_save(const char* path) {
     FILE* file = fopen(path, "w");
-    if (file == NULL) die("Can't write %s", path);
+    if (file == NULL)
+        die("Can't write %s", path);
     int count = 0;
     static int order[PROFILE_SIZE];
     for (int i = 0; i < PROFILE_SIZE; i++)
-        if (profile[i] != 0) order[count++] = i;
+        if (profile[i] != 0)
+            order[count++] = i;
     qsort(order, count, sizeof(order[0]), compare_cycles);
     fprintf(file, "# frames %llu busy %.1f%%\n", (unsigned long long)profile_frames,
-        profile_frames ? 100.0 * profile_total() / (profile_frames * FRAME_CYCLES) : 0.0);
+            profile_frames ? 100.0 * profile_total() / (profile_frames * FRAME_CYCLES) : 0.0);
     for (int i = 0; i < count; i++) {
         int index = order[i];
         unsigned address = index < PROFILE_MAIN_SIZE ? 0x02000000 + index * 2
-            : index < PROFILE_MAIN_SIZE + PROFILE_ITCM_SIZE ? 0x01ff8000 + (index - PROFILE_MAIN_SIZE) * 2
-            : 0;
+                           : index < PROFILE_MAIN_SIZE + PROFILE_ITCM_SIZE
+                               ? 0x01ff8000 + (index - PROFILE_MAIN_SIZE) * 2
+                               : 0;
         fprintf(file, "%08x %u\n", address, profile[index]);
     }
     fclose(file);
@@ -189,12 +196,13 @@ static void shot(const char* path) {
         die("Can't compress %s", path);
 
     FILE* file = fopen(path, "wb");
-    if (file == NULL) die("Can't write %s", path);
+    if (file == NULL)
+        die("Can't write %s", path);
     uint8_t header[13] = {0};
     put_u32(header, WIDTH);
     put_u32(header + 4, HEIGHT);
-    header[8] = 8; // bits per channel
-    header[9] = 2; // RGB
+    header[8] = 8;  // bits per channel
+    header[9] = 2;  // RGB
     fwrite("\x89PNG\r\n\x1a\n", 1, 8, file);
     write_chunk(file, "IHDR", header, sizeof(header));
     write_chunk(file, "IDAT", compressed, size);
@@ -228,16 +236,20 @@ static int command(char** words) {
         desmume_input_release_touch();
         run(1);
     } else if (strcmp(name, "shot") == 0) {
-        if (words[1] == NULL) die("Expected a file");
+        if (words[1] == NULL)
+            die("Expected a file");
         shot(words[1]);
     } else if (strcmp(name, "save") == 0 || strcmp(name, "load") == 0) {
-        if (words[1] == NULL) die("Expected a file");
+        if (words[1] == NULL)
+            die("Expected a file");
         BOOL ok = name[0] == 's' ? desmume_savestate_save(words[1]) : desmume_savestate_load(words[1]);
-        if (!ok) die("Can't use savestate %s", words[1]);
+        if (!ok)
+            die("Can't use savestate %s", words[1]);
     } else if (strcmp(name, "hook") == 0) {
         char* end;
         unsigned long address = words[1] != NULL ? strtoul(words[1], &end, 16) : 0;
-        if (words[1] == NULL || *end != '\0') die("Expected a hex address");
+        if (words[1] == NULL || *end != '\0')
+            die("Expected a hex address");
         // Thumb function symbols have bit 0 set, the instruction is at the even address
         desmume_memory_register_exec(address & ~1UL, 2, count_execution);
         executions = 0;
@@ -249,21 +261,25 @@ static int command(char** words) {
         profile = desmume_profile_start();
         profile_frames = busy_cycles = busy_frames = 0;
     } else if (strcmp(name, "profile") == 0 && words[1] != NULL && strcmp(words[1], "save") == 0) {
-        if (profile == NULL) die("No profile started");
-        if (words[2] == NULL) die("Expected a file");
+        if (profile == NULL)
+            die("No profile started");
+        if (words[2] == NULL)
+            die("Expected a file");
         profile_save(words[2]);
     } else if (strcmp(name, "profile") == 0 && words[1] != NULL && strcmp(words[1], "stop") == 0) {
         desmume_profile_stop();
         profile = NULL;
     } else if (strcmp(name, "busy") == 0) {
-        if (profile == NULL) die("No profile started");
+        if (profile == NULL)
+            die("No profile started");
         uint64_t total = profile_total(), frames = profile_frames - busy_frames;
         printf("busy %.1f\n", frames ? 100.0 * (total - busy_cycles) / (frames * FRAME_CYCLES) : 0.0);
         fflush(stdout);
         busy_cycles = total;
         busy_frames = profile_frames;
     } else if (strcmp(name, "wav") == 0) {
-        if (words[1] == NULL) die("Expected a file");
+        if (words[1] == NULL)
+            die("Expected a file");
         if (strcmp(words[1], "stop") == 0)
             desmume_wav_end();
         else if (!desmume_wav_begin(words[1]))
@@ -271,7 +287,8 @@ static int command(char** words) {
     } else if (strcmp(name, "peek") == 0) {
         char* end;
         unsigned long address = words[1] != NULL ? strtoul(words[1], &end, 16) : 0;
-        if (words[1] == NULL || *end != '\0') die("Expected a hex address");
+        if (words[1] == NULL || *end != '\0')
+            die("Expected a hex address");
         int count = words[2] != NULL ? parse_number(words[2]) : 1;
         printf("peek %08lx", address);
         for (int i = 0; i < count; i++)
@@ -294,7 +311,7 @@ static int line(char* text) {
     int count = 0;
     char* save;
     for (char* word = strtok_r(text, " \t\r\n", &save); word != NULL && count < 4;
-            word = strtok_r(NULL, " \t\r\n", &save))
+         word = strtok_r(NULL, " \t\r\n", &save))
         words[count++] = word;
     return count == 0 || words[0][0] == '#' || command(words);
 }
@@ -307,8 +324,10 @@ int main(int argc, char** argv) {
     // No sound or window, the emulator only runs
     setenv("SDL_AUDIODRIVER", "dummy", 1);
     setenv("SDL_VIDEODRIVER", "dummy", 1);
-    if (desmume_init() != 0) die("Can't start DeSmuME");
-    if (desmume_open(argv[1]) < 0) die("Can't open %s", argv[1]);
+    if (desmume_init() != 0)
+        die("Can't start DeSmuME");
+    if (desmume_open(argv[1]) < 0)
+        die("Can't open %s", argv[1]);
     // Without an R4 there is no fat:/, so the argv is dropped and NitroFS reads the card itself,
     // like in melonDS
     desmume_memory_write_long(ARGV_MAGIC_ADDRESS, 0);

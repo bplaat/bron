@@ -66,7 +66,8 @@ static bool number_char(const char* text, int length, int c, bool floating, int 
         // The exponent comes after a digit, maybe followed by the point
         if ((c | 32) == 'e')
             return !memchr(text, 'e', length) && !memchr(text, 'E', length) &&
-                   (isdigit((unsigned char)last) || (last == '.' && length > 1 && isdigit((unsigned char)text[length - 2])));
+                   (isdigit((unsigned char)last) ||
+                    (last == '.' && length > 1 && isdigit((unsigned char)text[length - 2])));
         return isdigit(c);
     }
     if (isdigit(c))

@@ -80,6 +80,7 @@ Some desktop apps and games written with the [bwindow](lib/ui/bwindow), [bwebvie
 - [Binman](apps/windows/binman) A safe and minimal Windows cleanup tool
 - [MacView](apps/macos/macview) A macOS bitmap, QOI, SVG, and TinyVG image viewer with Quick Look [preview](apps/macos/macview-preview) and [thumbnail](apps/macos/macview-thumbnail) extensions
 - [ManExplorer](apps/desktop/manexplorer) A simple man page explorer tool
+- [Nintendo DS Ports](games/nds) DOOM, Duke Nukem 3D, Quake, Quake II, and Wolfenstein 3D ports
 - [Navidrome](apps/desktop/navidrome) A [music.bplaat.nl](https://music.bplaat.nl/) webview wrapper
 - [Music Downloader](apps/desktop/music-dl) A tool that downloads complete albums with the correct metadata
 - [Pixel Font Editor](apps/desktop/pixelfont) An 8x8 pixel font editor
@@ -95,6 +96,7 @@ Various tools and websites. For the deployed sites, go to [bron.bplaat.nl](https
 - [ccontinue](tools/ccontinue) A transpiler that translates an OOP extension for the C programming language back to C
 - [cargo-bundle](tools/cargo-bundle) A simple Cargo plugin that builds macOS app bundles
 - [plaatnotes](apps/web/plaatnotes) A self-hosted note-taking web app with rich Markdown support
+- [nds-toolchain](tools/nds-toolchain/) An LLVM-based Nintendo DS toolchain with a small C library and a test ROM
 - [wii-toolchain](tools/wii-toolchain/) An LLVM-based Wii toolchain with a small C library, patched libogc, and Dolphin emulator tests
 
 ### Examples

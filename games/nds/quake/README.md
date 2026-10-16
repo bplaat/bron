@@ -211,7 +211,7 @@ with 32 KiB of ITCM for code and 16 KiB of DTCM for data at full speed.
 ### The DS platform
 
 - [0022](patches/0022-Add-a-Nintendo-DS-build.patch): `Makefile.nds`
-  builds a DSi enhanced `.nds` with the [toolchain](../toolchain). The
+  builds a DSi enhanced `.nds` with the [toolchain](../../../tools/nds-toolchain). The
   collision code and compiler-rt's software floating point, taken out of
   compiler-rt, run from ITCM as ARM code, `HOT_CODE` puts single functions
   there, like the QuakeC interpreter, the rest is Thumb code in main RAM.
