@@ -356,6 +356,8 @@
 %endmacro
 
 %define RT_BITMAP 2
+%define RT_ICON 3
+%define RT_GROUP_ICON 14
 %define RT_VERSION 16
 %define RT_MANIFEST 24
 
@@ -366,7 +368,7 @@
 %macro resource 4-*
     %1:
         dd 0, 0, 0
-        dw 0, (%0 - 1) / 2
+        dw 0, (%0 - 1) / 3
 
         %rotate 1
         %rep (%0 - 1) / 3
@@ -408,7 +410,7 @@
 
             .version_info:
                 dd 0xFEEF04BD ;dwSignature
-                dw 1, 0 ; dwStrucVersion
+                dd 0x00010000 ; dwStrucVersion
 
                 dd %2 >> 32 ; dwFileVersionMS
                 dd %2 & 0xffffffff ; dwFileVersionLS

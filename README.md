@@ -100,6 +100,7 @@ Various tools and websites. For the deployed sites, go to [bron.bplaat.nl](https
 ### Examples
 
 - [Wii Examples](examples/wii/) Wii homebrew examples in C and Rust: triangles, a 2D canvas, and voxel blocks
+- [Windows Examples](examples/windows/) 32-bit and 64-bit Windows assembly examples using NASM
 
 ### Libraries
 
@@ -193,7 +194,7 @@ Most of these libraries are intended primarily for personal use, but can still b
 
 ## Getting Started
 
-- Install [Rust](https://rustup.rs/), [Node.js](https://nodejs.org/), [Hadolint](https://github.com/hadolint/hadolint), a C toolchain (such as GCC, Clang or MSVC), clang-format and [Dolphin emulator](https://dolphin-emu.org/)
+- Install [Rust](https://rustup.rs/), [Node.js](https://nodejs.org/), [Hadolint](https://github.com/hadolint/hadolint), a C toolchain (such as GCC, Clang or MSVC), clang-format, [NASM](https://nasm.us/) and [Dolphin emulator](https://dolphin-emu.org/)
 - Install Rust nightly toolchain, `cargo-binstall`, `cargo-deny` and `cargo-nextest`:
 
     ```sh
@@ -283,6 +284,6 @@ Every top-level task, like checking, building and installing, goes through the [
 
 ## License
 
-Copyright © 2021-2026 [Bastiaan van der Plaat](https://github.com/bplaat)
+Copyright © 2020-2026 [Bastiaan van der Plaat](https://github.com/bplaat)
 
 Licensed under the [MIT](LICENSE) license.

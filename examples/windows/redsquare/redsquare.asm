@@ -2,11 +2,10 @@
     ; Made by Bastiaan van der Plaat (https://bplaat.nl/)
     ; 32-bit: nasm -f bin redsquare.asm -o redsquare-x86.exe && ./redsquare-x86
     ; 64-bit: nasm -DWIN64 -f bin redsquare.asm -o redsquare-x64.exe && ./redsquare-x64
-    ; Use the build script to embed the resources
 
 %include "../libwindows.inc"
 
-header HEADER_GUI ;, HEADER_HAS_RESOURCES
+header HEADER_GUI, HEADER_HAS_RESOURCES
 
 code_section
     ; ### Some stdlib like Win32 wrappers ###
@@ -894,49 +893,98 @@ data_section
     end_import_table
 end_data_section
 
-; resources_section
-;     directory RT_BITMAP, bitmaps, \
-;         RT_VERSION, versions, \
-;         RT_MANIFEST, manifests
+resources_section
+    directory RT_BITMAP, bitmaps, \
+        RT_ICON, icons, \
+        RT_GROUP_ICON, icon_groups, \
+        RT_VERSION, versions, \
+        RT_MANIFEST, manifests
 
-;     resource bitmaps, \
-;         BASSIEBAS_BITMAP_ID, LANG_NEUTRAL, bassiebas_bitmap
+    resource bitmaps, \
+        BASSIEBAS_BITMAP_ID, LANG_NEUTRAL, bassiebas_bitmap
 
-;     resource versions, \
-;         1, LANG_ENGLISH + SUBLANG_ENGLISH_US, version
+    resource icons, \
+        1, LANG_NEUTRAL, app_icon_16, \
+        2, LANG_NEUTRAL, app_icon_24, \
+        3, LANG_NEUTRAL, app_icon_32, \
+        4, LANG_NEUTRAL, app_icon_48, \
+        5, LANG_NEUTRAL, app_icon_64, \
+        6, LANG_NEUTRAL, app_icon_128, \
+        7, LANG_NEUTRAL, app_icon_256
 
-;     resource manifests, \
-;         1, LANG_NEUTRAL, app_manifest
+    resource icon_groups, \
+        ICON_ID, LANG_NEUTRAL, app_icon_group
 
-;     bitmap bassiebas_bitmap, "bassiebas.bmp"
+    resource versions, \
+        1, LANG_ENGLISH + SUBLANG_ENGLISH_US, version
 
-;     %ifdef WIN64
-;         versioninfo version, \
-;             0x0001000000000000, 0x0001000000000000, \
-;             VOS__WINDOWS32, VFT_APP, VFT2_UNKNOWN, \
-;             LANG_ENGLISH + SUBLANG_ENGLISH_US, \
-;             CompanyName, "PlaatSoft", \
-;             FileDescription, "RedSquare", \
-;             FileVersion, "1.0.0.0", \
-;             InternalName, "RedSquare", \
-;             LegalCopyright, "Copyright (c) 2021 PlaatSoft", \
-;             OriginalFilename, "redsquare-x64.exe", \
-;             ProductName, "RedSquare", \
-;             ProductVersion, "1.0.0.0"
-;     %else
-;         versioninfo version, \
-;             0x0001000000000000, 0x0001000000000000, \
-;             VOS__WINDOWS32, VFT_APP, VFT2_UNKNOWN, \
-;             LANG_ENGLISH + SUBLANG_ENGLISH_US, \
-;             CompanyName, "PlaatSoft", \
-;             FileDescription, "RedSquare", \
-;             FileVersion, "1.0.0.0", \
-;             InternalName, "RedSquare", \
-;             LegalCopyright, "Copyright (c) 2021 PlaatSoft", \
-;             OriginalFilename, "redsquare-x86.exe", \
-;             ProductName, "RedSquare", \
-;             ProductVersion, "1.0.0.0"
-;     %endif
+    resource manifests, \
+        1, LANG_NEUTRAL, app_manifest
 
-;     manifest app_manifest, "redsquare.manifest"
-; end_resources_section
+    bitmap bassiebas_bitmap, "bassiebas.bmp"
+
+    ; Optimized PNG offsets and lengths match the directory entries in icon.ico.
+    %macro icon_image 3
+        align 4, db 0
+        app_icon_%1:
+            dd RVA(.data), .data_size, 0, 0
+            .data:
+                incbin "icon.ico", %2, %3
+            .data_size equ $ - .data
+    %endmacro
+
+    icon_image 16, 118, 220
+    icon_image 24, 338, 301
+    icon_image 32, 639, 349
+    icon_image 48, 988, 457
+    icon_image 64, 1445, 573
+    icon_image 128, 2018, 1219
+    icon_image 256, 3237, 2419
+    %unmacro icon_image 3
+
+    align 4, db 0
+    app_icon_group:
+        dd RVA(.data), .data_size, 0, 0
+        .data:
+            dw 0, 1, 7
+            %assign icon_index 0
+            %rep 7
+                incbin "icon.ico", 6 + icon_index * 16, 12
+                dw icon_index + 1
+                %assign icon_index icon_index + 1
+            %endrep
+            %undef icon_index
+        .data_size equ $ - .data
+
+    align 4, db 0
+
+    %ifdef WIN64
+        versioninfo version, \
+            0x0001000000000000, 0x0001000000000000, \
+            VOS__WINDOWS32, VFT_APP, VFT2_UNKNOWN, \
+            LANG_ENGLISH + SUBLANG_ENGLISH_US, \
+            CompanyName, "PlaatSoft", \
+            FileDescription, "RedSquare", \
+            FileVersion, "1.0.0.0", \
+            InternalName, "RedSquare", \
+            LegalCopyright, "Copyright (c) 2021 PlaatSoft", \
+            OriginalFilename, "redsquare-x64.exe", \
+            ProductName, "RedSquare", \
+            ProductVersion, "1.0.0.0"
+    %else
+        versioninfo version, \
+            0x0001000000000000, 0x0001000000000000, \
+            VOS__WINDOWS32, VFT_APP, VFT2_UNKNOWN, \
+            LANG_ENGLISH + SUBLANG_ENGLISH_US, \
+            CompanyName, "PlaatSoft", \
+            FileDescription, "RedSquare", \
+            FileVersion, "1.0.0.0", \
+            InternalName, "RedSquare", \
+            LegalCopyright, "Copyright (c) 2021 PlaatSoft", \
+            OriginalFilename, "redsquare-x86.exe", \
+            ProductName, "RedSquare", \
+            ProductVersion, "1.0.0.0"
+    %endif
+
+    manifest app_manifest, "redsquare.manifest"
+end_resources_section
