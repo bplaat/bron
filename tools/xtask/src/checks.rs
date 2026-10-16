@@ -387,9 +387,8 @@ impl Xtask {
         println!("Building Empires and the DRS viewer...");
         run(Command::new("make").args(["-C", "games/empires"]))?;
 
-        println!("Building Nintendo DS toolchain and test ROM...");
-        run(Command::new("bash").arg("tools/nds-toolchain/build.sh"))?;
-        run(Command::new("make").args(["-C", "tools/nds-toolchain/test"]))?;
+        println!("Running Nintendo DS toolchain tests...");
+        run(Command::new("bash").args(["tools/nds-toolchain/build.sh", "test"]))?;
 
         println!("Running Wii toolchain tests...");
         run(Command::new("bash").args(["tools/wii-toolchain/build.sh", "test"]))

@@ -7,7 +7,7 @@
 # Usage: ./build.sh [command]...
 #   (none)          fetch, patch and build
 #   export-patches  write the commits in target/<name>/ back to <name>/patches/
-#   test            build test/ and run it in melonDS
+#   test            build test/ and run it headless in DeSmuME
 #   desmume         build DeSmuME's library and desmume/runner.c to target/bin/desmume-runner
 #   clean           remove target/
 set -euo pipefail
@@ -24,8 +24,8 @@ REPOS=(
     'compiler-rt https://github.com/llvm/llvm-project.git llvmorg-23.1.3 0d261d1ca552c95a8f007e061c787ac7132fbcbc /compiler-rt/lib/builtins/'
 )
 
-# DeSmuME for desmume/runner.c, only cloned by the desmume command. Its last release is from 2022,
-# so it's a commit of master, a version that is the commit fetches that commit.
+# DeSmuME for desmume/runner.c, cloned by the desmume and test commands. Its last release is from
+# 2022, so it's a commit of master, a version that is the commit fetches that commit.
 DESMUME_REPO='desmume https://github.com/TASEmulators/desmume.git 1275dc64f5d1f5ef18dc1bc1fa9e012024b6df1a 1275dc64f5d1f5ef18dc1bc1fa9e012024b6df1a'
 
 TOOLCHAIN_DIR="$PWD"
@@ -311,49 +311,19 @@ build_ndstool() {
         "$objects_dir"/*.o -o "$BUILD_DIR/bin/ndstool"
 }
 
-# Builds test/ with the toolchain and runs it in melonDS with its own settings: an SD card that
-# is a folder in test/target/, where the test writes its results to test.txt. melonDS writes the
-# folder when it quits, which it does cleanly on SIGINT.
+# Builds test/ with the toolchain and runs it headless in desmume-runner, with an R4 card holding
+# the ROM in test/target/sd/, the runner reads the results from RAM and fails when a check fails
 run_test() {
-    local test_dir="$TOOLCHAIN_DIR/test" target="$TOOLCHAIN_DIR/test/target" config pid
-    make -C "$test_dir" --no-print-directory
-    msg "Running the test in melonDS"
-    rm -rf "$target/sd" "$target"/sd.img*
+    local target="$TOOLCHAIN_DIR/test/target" address
+    build_desmume
+    make -C "$TOOLCHAIN_DIR/test" --no-print-directory
+    address=$("${LLVM}llvm-nm" "$target/test.elf" | awk '$3 == "test_results" { print $1 }')
+    [ -n "$address" ] || die "Missing test results symbol"
+    rm -rf "$target/sd"
     mkdir -p "$target/sd"
-    # melonDS keeps its settings in a portable folder next to its app, so it gets a copy (a clone
-    # that takes no room on APFS), on Linux it follows XDG_CONFIG_HOME
-    if [ "$(uname)" = Darwin ] && [ -z "${MELONDS:-}" ]; then
-        if [ ! -d "$target/melonDS.app" ]; then
-            cp -Rc /Applications/melonDS.app "$target/melonDS.app.part" 2> /dev/null ||
-                { rm -rf "$target/melonDS.app.part" && cp -R /Applications/melonDS.app "$target/melonDS.app.part"; }
-            mv "$target/melonDS.app.part" "$target/melonDS.app"
-        fi
-        export MELONDS="$target/melonDS.app/Contents/MacOS/melonDS"
-        config="$target/portable"
-    else
-        export XDG_CONFIG_HOME="$target/config"
-        config="$XDG_CONFIG_HOME/melonDS"
-    fi
-    mkdir -p "$config"
-    printf '[DLDI]\nEnable = true\nImagePath = "%s"\nImageSize = 0\nFolderSync = true\nFolderPath = "%s"\nReadOnly = false\n' \
-        "$target/sd.img" "$target/sd" > "$config/melonDS.toml"
-    "$TOOLCHAIN_DIR/run.sh" "$target/test.nds" > "$target/melonDS.log" 2>&1 &
-    pid=$!
-    # Wait at most a minute for the results in the SD card image
-    for _ in $(seq 120); do
-        grep -aqs 'DONE [0-9]* failed' "$target/sd.img" && break
-        kill -0 "$pid" 2> /dev/null || break
-        sleep 0.5
-    done
-    kill -INT "$pid" 2> /dev/null || true
-    for _ in $(seq 20); do
-        kill -0 "$pid" 2> /dev/null || break
-        sleep 0.5
-    done
-    kill -KILL "$pid" 2> /dev/null || true
-    wait "$pid" 2> /dev/null || true
-    cat "$target/sd/test.txt" 2> /dev/null || true
-    grep -qs '^DONE 0 failed' "$target/sd/test.txt" || die "The test failed or didn't finish"
+    cp "$target/test.nds" "$target/sd/test.nds"
+    msg "Running the test in DeSmuME"
+    "$BUILD_DIR/bin/desmume-runner" --fat "$target/sd" "$target/sd/test.nds" "test $address 3600"
     msg "All tests passed"
 }
 

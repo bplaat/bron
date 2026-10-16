@@ -2,7 +2,9 @@
 // agent can play a port and take screenshots. The commands come from the arguments, or from stdin
 // one per line when there are none, then it answers each with ok.
 //
-// Usage: desmume-runner <program.nds> ['command args']...
+// Usage: desmume-runner [--fat <directory>] <program.nds> ['command args']...
+//   --fat <directory>         put an R4 card with the files of the directory in the card slot
+//   test <address> <frames>   await test results, fail on errors or timeout
 //   wait <frames>             run frames (60 a second)
 //   press <keys> [frames]     hold keys for frames (default 6), then release them
 //   hold <keys>               hold keys until release
@@ -22,6 +24,9 @@
 //   quit                      stop, also the end of the commands
 // Keys are a, b, x, y, l, r, start, select, up, down, left and right, joined by +, like up+a.
 
+#define _POSIX_C_SOURCE 200809L
+
+#include <limits.h>
 #include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -50,6 +55,8 @@ void desmume_wav_end(void);
 void desmume_memory_register_exec(int address, int size, BOOL (*callback)(unsigned address, int size));
 BOOL desmume_insert_expansion_pak(void);
 unsigned long desmume_memory_read_long(int address);
+unsigned char desmume_memory_read_byte(int address);
+void desmume_set_fat_directory(const char* directory);
 
 #define WIDTH 256
 #define HEIGHT 384
@@ -84,7 +91,7 @@ static void die(const char* format, ...) {
 static int parse_number(const char* text) {
     char* end;
     long value = text != NULL ? strtol(text, &end, 10) : -1;
-    if (text == NULL || *end != '\0' || value < 0)
+    if (text == NULL || *text == '\0' || *end != '\0' || value < 0 || value > INT_MAX)
         die("Expected a number, got '%s'", text != NULL ? text : "nothing");
     return (int)value;
 }
@@ -295,6 +302,27 @@ static int command(char** words) {
             printf(" %08lx", desmume_memory_read_long((int)(address + i * 4)) & 0xffffffffUL);
         printf("\n");
         fflush(stdout);
+    } else if (strcmp(name, "test") == 0) {
+        char* end;
+        unsigned long address = words[1] != NULL ? strtoul(words[1], &end, 16) : 0;
+        if (address < 0x02000000 || address > 0x023fbffc || *end != '\0' || (address & 3))
+            die("Expected a test results address in main RAM");
+        int frames = parse_number(words[2]);
+        unsigned long status = 0;
+        for (int i = 0; i < frames && status == 0; i++) {
+            run(1);
+            status = desmume_memory_read_long((int)address);
+        }
+        for (int i = 0; i < 16 * 1024; i++) {
+            unsigned char c = desmume_memory_read_byte((int)address + 4 + i);
+            if (c == 0)
+                break;
+            putchar(c);
+        }
+        fflush(stdout);
+        if (status != 1)
+            die(status == 0 ? "Test timed out after %d frames" : "Test failed (status %d)",
+                status == 0 ? frames : (int)status);
     } else if (strcmp(name, "pak") == 0) {
         desmume_insert_expansion_pak();
     } else if (strcmp(name, "quit") == 0) {
@@ -317,8 +345,14 @@ static int line(char* text) {
 }
 
 int main(int argc, char** argv) {
+    const char* fat_directory = NULL;
+    if (argc >= 3 && strcmp(argv[1], "--fat") == 0) {
+        fat_directory = argv[2];
+        argc -= 2;
+        argv += 2;
+    }
     if (argc < 2) {
-        fprintf(stderr, "Usage: %s <program.nds> ['command args']...\n", argv[0]);
+        fprintf(stderr, "Usage: %s [--fat <directory>] <program.nds> ['command args']...\n", argv[0]);
         return 1;
     }
     // No sound or window, the emulator only runs
@@ -326,11 +360,14 @@ int main(int argc, char** argv) {
     setenv("SDL_VIDEODRIVER", "dummy", 1);
     if (desmume_init() != 0)
         die("Can't start DeSmuME");
+    if (fat_directory != NULL)
+        desmume_set_fat_directory(fat_directory);
     if (desmume_open(argv[1]) < 0)
         die("Can't open %s", argv[1]);
     // Without an R4 there is no fat:/, so the argv is dropped and NitroFS reads the card itself,
     // like in melonDS
-    desmume_memory_write_long(ARGV_MAGIC_ADDRESS, 0);
+    if (fat_directory == NULL)
+        desmume_memory_write_long(ARGV_MAGIC_ADDRESS, 0);
     desmume_resume();
 
     if (argc > 2) {

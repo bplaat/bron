@@ -19,7 +19,7 @@ What the ports share to build Nintendo DS programs with plain clang and lld, wit
 ./build.sh                 # fetch, patch and build
 ./build.sh clean           # remove ../../target/nds-toolchain/
 ./build.sh export-patches  # write the commits in ../../target/nds-toolchain/<name>/ back to <name>/patches/
-./build.sh test            # build test/ and run it in melonDS
+./build.sh test            # build test/ and run it headless in DeSmuME
 ./build.sh desmume         # build ../../target/nds-toolchain/bin/desmume-runner, needs meson and ninja
 ```
 
@@ -56,11 +56,15 @@ named `*.32.o` or `*.itcm.o` (a port's `ITCM_SOURCES`), which are ARM code in fa
     ARM9 cycles per instruction address with their cache misses, `profile stop`, `wav <file>` and
     `wav stop`, which record the sound, `pak`, which puts a Memory Expansion Pak in the GBA slot
     before the first `wait`, `peek <address> [words]`, which prints words of memory, and `quit`,
-    keys like `up+a`. DeSmuME has no SD card here, the ports read their data from NitroFS.
+    keys like `up+a`. The optional `--fat <directory>` before the ROM argument selects a writable
+    R4 card initialized from that directory; writes stay in emulated memory. Without it, ports read
+    their data from NitroFS. `test <address> <frames>` reads the test ROM's status and log from RAM,
+    returning an error on failed tests or a frame timeout.
 
 - `test/` is a DS program that checks the startup code, the C library, compiler-rt, threads, ITCM,
-  FAT and NitroFS. `./build.sh test` runs it in melonDS with an SD card in `test/target/sd/` and
-  fails when a check fails or it doesn't finish.
+  FAT and NitroFS. `./build.sh test` builds DeSmuME and runs it headless with a writable R4 card
+  initialized from `test/target/sd/`. It prints the results and fails when a check fails or the ROM does not
+  finish within 3600 emulated frames. The ROM also saves `test.txt` on the emulated card.
 
 ## Patches
 
@@ -83,4 +87,7 @@ to write the commits back.
 - compiler-rt: the optimized float functions for ARMv5TE, divisions that return to Thumb on
   ARMv4T
 
-From the repository root, `cargo xtask check-others` includes the toolchain and test ROM build on Linux without starting an emulator. To build only the DS test ROM, run `tools/nds-toolchain/build.sh` followed by `make -C tools/nds-toolchain/test`. Run `tools/nds-toolchain/build.sh test` to execute the tests in melonDS.
+From the repository root, `./meta.sh check-others` (or `cargo xtask check-others`) builds and runs
+these tests on Linux alongside the other platform checks. To run only the DS tests on Linux or
+macOS, use `tools/nds-toolchain/build.sh test`. DeSmuME needs Meson, Ninja, pkg-config and the SDL2,
+GLib, libpcap and zlib development packages. Interactive `make run` continues to use melonDS.

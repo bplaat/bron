@@ -1,5 +1,5 @@
 // Tests the toolchain on the DS: the startup code, the C library, compiler-rt, calico, libdvm
-// and ndstool. The results go to test.txt on the SD card, where `build.sh test` reads them.
+// and ndstool. `build.sh test` reads the results from RAM, they also go to test.txt on the SD card.
 
 #include <assert.h>
 #include <dirent.h>
@@ -22,7 +22,12 @@
 #include <time.h>
 #include <unistd.h>
 
-static char results[16 * 1024];
+// Read from RAM by the `test` command of desmume-runner, the status is 0 while running, 1 when
+// all checks passed and 2 when one failed
+struct {
+    volatile uint32_t status;
+    char text[16 * 1024];
+} test_results;
 static int results_length;
 static char results_path[PATH_MAX];
 static int failures;
@@ -30,12 +35,12 @@ static int failures;
 static void report(const char* format, ...) {
     va_list args;
     va_start(args, format);
-    int length = vsnprintf(results + results_length, sizeof(results) - results_length, format, args);
+    int length = vsnprintf(test_results.text + results_length, sizeof(test_results.text) - results_length, format, args);
     va_end(args);
     if (length > 0)
         results_length += length;
-    if (results_length > (int)sizeof(results) - 1)
-        results_length = (int)sizeof(results) - 1;
+    if (results_length > (int)sizeof(test_results.text) - 1)
+        results_length = (int)sizeof(test_results.text) - 1;
 }
 
 // Writes all results again, so a crash still leaves the results so far
@@ -43,7 +48,7 @@ static void save_results(void) {
     FILE* file = fopen(results_path, "w");
     if (!file)
         return;
-    fwrite(results, 1, results_length, file);
+    fwrite(test_results.text, 1, results_length, file);
     fclose(file);
 }
 
@@ -576,7 +581,8 @@ int main(int argc, char** argv) {
     bool nitro = nitroFSInit(NULL);
     // The results go next to the program, where fatInitDefault() changed to
     if (!fat || !getcwd(results_path, sizeof(results_path) - 16)) {
-        printf("No SD card\n");
+        report("No SD card\n");
+        test_results.status = 2;
     } else {
         strcat(results_path, results_path[strlen(results_path) - 1] == '/' ? "test.txt" : "/test.txt");
         report("argc %d, argv[0] %s\n", argc, argc > 0 ? argv[0] : "-");
@@ -596,7 +602,9 @@ int main(int argc, char** argv) {
         report("DONE %d failed\n", failures);
         save_results();
         printf("DONE %d failed\n", failures);
+        test_results.status = failures == 0 ? 1 : 2;
     }
+    DC_FlushRange(&test_results, sizeof(test_results));
     while (pmMainLoop())
         threadWaitForVBlank();
     return 0;
