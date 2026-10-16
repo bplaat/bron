@@ -1,3 +1,9 @@
+/*
+ * Copyright (c) 2022-2026 Bastiaan van der Plaat
+ *
+ * SPDX-License-Identifier: MIT
+ */
+
 use objc2::rc::{Retained, autoreleasepool};
 use objc2::runtime::AnyObject;
 use objc2::{class, msg_send};

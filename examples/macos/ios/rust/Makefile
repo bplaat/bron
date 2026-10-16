@@ -10,7 +10,7 @@ all: $(BINARY)
 
 $(BINARY): $(wildcard src/* src/assets/*) Cargo.toml Cargo.lock Info.plist
 	mkdir -p "$(APP)"
-	IPHONEOS_DEPLOYMENT_TARGET=15.0 cargo build --target aarch64-apple-ios-sim
+	IPHONEOS_DEPLOYMENT_TARGET=15.0 cargo build --locked --target aarch64-apple-ios-sim
 	cp target/aarch64-apple-ios-sim/debug/bassietest "$(BINARY)"
 	plutil -convert binary1 -o "$(APP)/Info.plist" Info.plist
 

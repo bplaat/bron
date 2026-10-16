@@ -7,7 +7,10 @@ edition = "2024"
 unsafe_op_in_unsafe_fn = "deny"
 
 [dependencies]
-objc2 = "0.6"
+objc2 = { path = "../../../../lib/apple/objc2" }
+
+[patch.crates-io]
+objc2-proc-macros = { path = "../../../../lib/apple/objc2-proc-macros" }
 
 [profile.release]
 opt-level = "z"

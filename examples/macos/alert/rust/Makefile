@@ -10,7 +10,7 @@ all: $(BINARY)
 
 $(BINARY): $(wildcard src/* src/assets/*) Cargo.toml Cargo.lock Info.plist Entitlements.plist
 	mkdir -p "$(APP)/Contents/MacOS"
-	MACOSX_DEPLOYMENT_TARGET="$(MINIMUM_VERSION)" cargo build
+	MACOSX_DEPLOYMENT_TARGET="$(MINIMUM_VERSION)" cargo build --locked
 	cp target/debug/alert "$(BINARY)"
 	plutil -convert binary1 -o "$(APP)/Contents/Info.plist" Info.plist
 	codesign --force --sign - --entitlements Entitlements.plist --options runtime "$(APP)"

@@ -1,15 +1,21 @@
+/*
+ * Copyright (c) 2022-2026 Bastiaan van der Plaat
+ *
+ * SPDX-License-Identifier: MIT
+ */
+
 use std::cell::{OnceCell, RefCell};
 use std::env;
 use std::ffi::{CString, c_char};
 use std::ptr::null_mut;
 
 use objc2::rc::{Allocated, Retained, autoreleasepool};
-use objc2::runtime::{AnyObject as Object, Bool, NSObject};
-use objc2::{ClassType, DefinedClass, class, define_class, msg_send};
+use objc2::runtime::{AnyObject as Object, Bool};
+use objc2::{class, define_class, msg_send};
 
 use crate::uikit::{
     NSLog, NSRect, NSTEXT_ALIGNMENT_CENTER, UI_USER_INTERFACE_STYLE_DARK, UIApplicationMain,
-    UIViewController, ns_string,
+    ns_string,
 };
 
 mod uikit;
@@ -91,14 +97,14 @@ define_class!(
         }
 
         #[unsafe(method(application:didFinishLaunchingWithOptions:))]
-        fn _application_did_finish_launching(&self, app: &Object, options: Option<&Object>) -> Bool {
+        fn _application_did_finish_launching(&self, app: &Object, options: *mut Object) -> Bool {
             self.application_did_finish_launching(app, options)
         }
     }
 );
 
 impl AppDelegate {
-    fn application_did_finish_launching(&self, _app: &Object, _options: Option<&Object>) -> Bool {
+    fn application_did_finish_launching(&self, _app: &Object, _options: *mut Object) -> Bool {
         unsafe {
             let main_screen: Retained<Object> = msg_send![class!(UIScreen), mainScreen];
             let main_screen_bounds: NSRect = msg_send![&main_screen, bounds];

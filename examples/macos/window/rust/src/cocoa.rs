@@ -1,6 +1,12 @@
+/*
+ * Copyright (c) 2022-2026 Bastiaan van der Plaat
+ *
+ * SPDX-License-Identifier: MIT
+ */
+
 use std::ffi::c_void;
 
-use objc2::runtime::{AnyObject as Object, NSObject};
+use objc2::runtime::AnyObject as Object;
 use objc2::{Encode, Encoding, extern_class};
 
 #[repr(C)]

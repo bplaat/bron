@@ -1,16 +1,21 @@
+/*
+ * Copyright (c) 2022-2026 Bastiaan van der Plaat
+ *
+ * SPDX-License-Identifier: MIT
+ */
+
 use std::cell::OnceCell;
 use std::ptr::null;
 
 use objc2::rc::{Allocated, Retained, autoreleasepool};
-use objc2::runtime::{AnyObject as Object, Bool, NSObject};
-use objc2::{ClassType, DefinedClass, class, define_class, msg_send, sel};
+use objc2::runtime::{AnyObject as Object, Bool};
+use objc2::{class, define_class, msg_send, sel};
 
 use crate::cocoa::{
     NS_APPLICATION_ACTIVATION_POLICY_REGULAR, NS_BACKING_STORE_BUFFERED,
     NS_WINDOW_STYLE_MASK_CLOSABLE, NS_WINDOW_STYLE_MASK_MINIATURIZABLE,
     NS_WINDOW_STYLE_MASK_RESIZABLE, NS_WINDOW_STYLE_MASK_TITLED, NSApp, NSAppearanceNameDarkAqua,
-    NSFontAttributeName, NSForegroundColorAttributeName, NSPoint, NSRect, NSSize, NSView,
-    ns_string,
+    NSFontAttributeName, NSForegroundColorAttributeName, NSPoint, NSRect, NSSize, ns_string,
 };
 
 mod cocoa;
@@ -37,8 +42,8 @@ impl CanvasView {
             let keys: [*const Object; 2] = [NSFontAttributeName, NSForegroundColorAttributeName];
             let values: [*const Object; 2] = [&*font, &*color];
             let attributes: Retained<Object> = msg_send![class!(NSDictionary),
-                dictionaryWithObjects:values.as_ptr(),
-                forKeys:keys.as_ptr(),
+                dictionaryWithObjects:values.as_ptr().cast::<std::ffi::c_void>(),
+                forKeys:keys.as_ptr().cast::<std::ffi::c_void>(),
                 count:keys.len()];
 
             let size: NSSize = msg_send![text, sizeWithAttributes:&*attributes];
@@ -80,7 +85,7 @@ define_class!(
         fn _should_terminate_after_last_window_closed(&self, _: &Object) -> Bool { Bool::YES }
 
         #[unsafe(method(openAbout:))]
-        fn _open_about(&self, _: Option<&Object>) { self.open_about(); }
+        fn _open_about(&self, _: *mut Object) { self.open_about(); }
     }
 );
 

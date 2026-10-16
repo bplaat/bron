@@ -1,3 +1,9 @@
+/*
+ * Copyright (c) 2022-2026 Bastiaan van der Plaat
+ *
+ * SPDX-License-Identifier: MIT
+ */
+
 use std::ffi::{c_char, c_void};
 
 pub(crate) type GLenum = u32;

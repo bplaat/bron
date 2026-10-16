@@ -1,19 +1,25 @@
+/*
+ * Copyright (c) 2022-2026 Bastiaan van der Plaat
+ *
+ * SPDX-License-Identifier: MIT
+ */
+
 use std::cell::OnceCell;
-use std::ffi::{c_void, CStr};
+use std::ffi::{CStr, c_void};
 use std::mem::size_of_val;
 use std::ptr::{null, null_mut};
 
-use objc2::rc::{autoreleasepool, Allocated, Retained};
-use objc2::runtime::{AnyObject as Object, Bool, NSObject};
-use objc2::{class, define_class, msg_send, sel, ClassType, DefinedClass};
+use objc2::rc::{Allocated, Retained, autoreleasepool};
+use objc2::runtime::{AnyObject as Object, Bool};
+use objc2::{class, define_class, msg_send, sel};
 
 use crate::cocoa::{
-    dispatch_data_create, ns_string, MTLClearColor, MTLCreateSystemDefaultDevice, NSApp,
-    NSAppearanceNameDarkAqua, NSPoint, NSRect, NSSize, MTL_PIXEL_FORMAT_BGRA8_UNORM,
-    MTL_PRIMITIVE_TYPE_TRIANGLE, NS_APPLICATION_ACTIVATION_POLICY_REGULAR,
+    MTL_PIXEL_FORMAT_BGRA8_UNORM, MTL_PRIMITIVE_TYPE_TRIANGLE, MTLClearColor,
+    MTLCreateSystemDefaultDevice, NS_APPLICATION_ACTIVATION_POLICY_REGULAR,
     NS_BACKING_STORE_BUFFERED, NS_VIEW_HEIGHT_SIZABLE, NS_VIEW_WIDTH_SIZABLE,
     NS_WINDOW_STYLE_MASK_CLOSABLE, NS_WINDOW_STYLE_MASK_MINIATURIZABLE,
-    NS_WINDOW_STYLE_MASK_RESIZABLE, NS_WINDOW_STYLE_MASK_TITLED,
+    NS_WINDOW_STYLE_MASK_RESIZABLE, NS_WINDOW_STYLE_MASK_TITLED, NSApp, NSAppearanceNameDarkAqua,
+    NSPoint, NSRect, NSSize, dispatch_data_create, ns_string,
 };
 
 mod cocoa;
@@ -95,9 +101,8 @@ impl Renderer {
                 eprintln!("Could not create Metal library data");
                 return false;
             };
-            let mut library_error: Option<Retained<Object>> = None;
-            let library: Option<Retained<Object>> =
-                msg_send![&device, newLibraryWithData:&*library_data, error:&mut library_error];
+            let mut library_error: *mut Object = null_mut();
+            let library: Option<Retained<Object>> = msg_send![&device, newLibraryWithData:&*library_data, error:(&raw mut library_error).cast::<c_void>()];
             let Some(library) = library else {
                 eprintln!("Could not load Metal library: {library_error:?}");
                 return false;
@@ -123,10 +128,10 @@ impl Renderer {
             let pixel_format: usize = msg_send![view, colorPixelFormat];
             let _: () = msg_send![&color_attachment, setPixelFormat:pixel_format];
 
-            let mut pipeline_error: Option<Retained<Object>> = None;
+            let mut pipeline_error: *mut Object = null_mut();
             let pipeline_state: Option<Retained<Object>> = msg_send![&device,
                 newRenderPipelineStateWithDescriptor:&*descriptor,
-                error:&mut pipeline_error];
+                error:(&raw mut pipeline_error).cast::<c_void>()];
             let Some(pipeline_state) = pipeline_state else {
                 eprintln!("Could not create Metal pipeline: {pipeline_error:?}");
                 return false;

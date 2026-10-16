@@ -1,11 +1,17 @@
+/*
+ * Copyright (c) 2022-2026 Bastiaan van der Plaat
+ *
+ * SPDX-License-Identifier: MIT
+ */
+
 use std::cell::OnceCell;
 use std::ffi::{CStr, c_char, c_void};
 use std::mem::{offset_of, size_of, size_of_val};
 use std::ptr::null;
 
 use objc2::rc::{Allocated, Retained, autoreleasepool};
-use objc2::runtime::{AnyObject as Object, Bool, NSObject};
-use objc2::{ClassType, DefinedClass, class, define_class, extern_class, msg_send, sel};
+use objc2::runtime::{AnyObject as Object, Bool};
+use objc2::{class, define_class, extern_class, msg_send, sel};
 
 use crate::cocoa::{
     NS_APPLICATION_ACTIVATION_POLICY_REGULAR, NS_BACKING_STORE_BUFFERED,
@@ -148,7 +154,7 @@ impl Drop for RendererState {
 }
 
 define_class!(
-    #[unsafe(super(NSOpenGLView, NSObject))]
+    #[unsafe(super(NSOpenGLView))]
     #[name = "RendererView"]
     #[ivars = RendererIvars]
     struct RendererView;
@@ -213,7 +219,7 @@ impl RendererView {
 
             let swap_interval = 1i32;
             let _: () = msg_send![&context,
-                setValues:&swap_interval,
+                setValues:(&raw const swap_interval).cast::<c_void>(),
                 forParameter:NS_OPENGL_CONTEXT_PARAMETER_SWAP_INTERVAL];
 
             let program = create_program();
@@ -392,7 +398,7 @@ impl AppDelegate {
             ];
             let pixel_format: Allocated<Object> = msg_send![class!(NSOpenGLPixelFormat), alloc];
             let pixel_format: Option<Retained<Object>> =
-                msg_send![pixel_format, initWithAttributes:attributes.as_ptr()];
+                msg_send![pixel_format, initWithAttributes:attributes.as_ptr().cast::<c_void>()];
             let Some(pixel_format) = pixel_format else {
                 eprintln!("Could not create an OpenGL 4.1 Core pixel format");
                 let _: () = msg_send![NSApp, terminate:null::<Object>()];
