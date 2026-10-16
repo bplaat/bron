@@ -16,3 +16,4 @@ config.json
 !GeoLite2-City-Test.mmdb
 canvas.png
 frame.png
+*.exe

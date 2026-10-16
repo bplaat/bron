@@ -1,5 +1,0 @@
-#include "resources.h"
-
-ID_ICON_APP ICON "icon.ico"
-
-ID_MANIFEST_APP MANIFEST "app.manifest"
