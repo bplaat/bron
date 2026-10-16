@@ -1,3 +1,7 @@
 *.app/
 target/
-.DS_Store
+/hello-arm64
+/hello-libc-arm64
+/hello-libc-x86_64
+/hello-static-x86_64
+/alert/asm/alert

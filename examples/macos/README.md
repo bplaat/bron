@@ -1,11 +1,11 @@
-# macOS Assembly Examples
+# macOS Examples
 
 A collection of small macOS programs exploring Mach-O binaries, macOS Cocoa,
 iOS UIKit, and portable executables. The repository starts at hand-written
 assembly and then compares the same Apple platform APIs from C, Objective-C,
 Rust, Swift, and SwiftUI.
 
-## Repository layout
+## Layout
 
 - `alert/` contains minimal macOS `NSAlert` applications in assembly, C,
   Objective-C, Rust, and Swift. The assembly version writes its complete x86_64
@@ -40,10 +40,16 @@ Rust, Swift, and SwiftUI.
 ## Requirements
 
 - macOS with Xcode Command Line Tools
-- NASM for the assembly examples
+- NASM and Python 3 for the assembly examples
 - Xcode's optional Metal Toolchain for the Metal examples
 - Rust and the required Apple targets for the Rust examples
-- A booted iOS Simulator for the simulator examples
+- The iOS Simulator SDK to build the iOS examples, and a booted simulator to run them
 
 Run `make` to build, `make run` to launch, and `make clean` to remove build
 outputs inside an example directory.
+
+## License
+
+Copyright © 2022-2026 [Bastiaan van der Plaat](https://github.com/bplaat)
+
+Licensed under the [MIT](../../LICENSE) license.
