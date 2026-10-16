@@ -3,6 +3,7 @@ members = ["apps/*/*", "games/*", "lib/*/*", "lib/*/*/examples/*", "tools/*"]
 exclude = [
     "examples/macos",
     "examples/wii",
+    "games/empires",
     "games/nds",
     "games/plaatcraft",
     "lib/ui/plaatui",

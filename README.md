@@ -78,7 +78,8 @@ Some desktop apps and games written with the [bwindow](lib/ui/bwindow), [bwebvie
 - [2048](games/game2048) An offline desktop 2048 game app
 - [BassieLight](apps/desktop/bassielight) A simple lights controller with GUI
 - [Binman](apps/windows/binman) A safe and minimal Windows cleanup tool
-- [MacView](apps/macos/macview) A macOS bitmap, QOI, SVG, and TinyVG image viewer with Quick Look [preview](apps/macos/macview-preview) and [thumbnail](apps/macos/macview-thumbnail) extensions
+- [Empires](games/empires) An Age of Empires rendering demo and DRS archive viewer using SDL2
+- [MacView](apps/macos/macview) A macOS bitmap, QOI, SVG, and TinyVG image viewer with Quick Look [preview](apps/macos/macview-preview) and [thumbnail](apps/macos/macview-thumbnail)
 - [ManExplorer](apps/desktop/manexplorer) A simple man page explorer tool
 - [Nintendo DS Ports](games/nds) DOOM, Duke Nukem 3D, Quake, Quake II, and Wolfenstein 3D ports
 - [Navidrome](apps/desktop/navidrome) A [music.bplaat.nl](https://music.bplaat.nl/) webview wrapper
@@ -283,10 +284,10 @@ Library examples live next to the library they show off, in its `examples` direc
 
 The main Rust projects share one `Cargo` workspace and the JavaScript projects share one `npm` workspace. The macOS and iOS Rust examples are standalone projects using the local Apple bindings. The Wii Rust examples are standalone nightly projects with a custom PowerPC target. When a Rust app has a web frontend, its `Cargo` build script runs `npm` for you, so `Cargo` stays the one place where everything comes together.
 
-Every top-level task, like checking, building and installing, goes through the [xtask](tools/xtask) crate with `cargo xtask`, both on your machine and in CI. The [bob/examples](tools/bob/examples) directory uses [bob](tools/bob) to show off that build tool. The [Wii examples](examples/wii/) use Make and Cargo directly, backed by [wii-toolchain](tools/wii-toolchain/).
+Every top-level task, like checking, building and installing, goes through the [xtask](tools/xtask) crate with `cargo xtask`, both on your machine and in CI.
 
 ## License
 
-Copyright © 2020-2026 [Bastiaan van der Plaat](https://github.com/bplaat)
+Copyright © 2019-2026 [Bastiaan van der Plaat](https://github.com/bplaat)
 
 Licensed under the [MIT](LICENSE) license.

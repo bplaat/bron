@@ -1,3 +1,9 @@
+/*
+ * Copyright (c) 2019-2026 Bastiaan van der Plaat
+ *
+ * SPDX-License-Identifier: MIT
+ */
+
 // Perlin Noise Header
 // Adapted from: https://mrl.cs.nyu.edu/~perlin/noise/
 
@@ -54,9 +60,13 @@ void perlin_init(int64_t seed) {
     }
 }
 
-double perlin_fade(double t) { return t * t * t * (t * (t * 6 - 15) + 10); }
+double perlin_fade(double t) {
+    return t * t * t * (t * (t * 6 - 15) + 10);
+}
 
-double perlin_lerp(double t, double a, double b) { return a + t * (b - a); }
+double perlin_lerp(double t, double a, double b) {
+    return a + t * (b - a);
+}
 
 double perlin_grad(int hash, double x, double y, double z) {
     int h = hash & 15;         // CONVERT LO 4 BITS OF HASH CODE
