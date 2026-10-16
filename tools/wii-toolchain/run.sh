@@ -11,8 +11,11 @@ dol="${elf%.elf}.dol"
 if [ -z "${DOLPHIN:-}" ]; then
     if [ "$(uname)" = Darwin ]; then
         DOLPHIN=/Applications/Dolphin.app/Contents/MacOS/Dolphin
-    else
+    elif command -v dolphin-emu > /dev/null; then
         DOLPHIN=dolphin-emu
+    else
+        # Debian and Ubuntu install it in /usr/games, which isn't always in PATH
+        DOLPHIN=/usr/games/dolphin-emu
     fi
 fi
 exec "$DOLPHIN" "$@" "--exec=$dol"

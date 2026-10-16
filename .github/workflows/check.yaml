@@ -145,8 +145,6 @@ jobs:
       - name: Install assembly and console toolchains and headless emulators
         run: |
           sudo apt-get update
-          sudo apt-get install -y nasm python3 clang lld llvm make pkg-config libsdl2-dev libfreeimage-dev libgl-dev dolphin-emu xvfb xauth libgl1-mesa-dri meson ninja-build libglib2.0-dev libpcap-dev zlib1g-dev
+          sudo apt-get install -y nasm python3 clang lld llvm make pkg-config libsdl2-dev libfreeimage-dev libgl-dev dolphin-emu meson ninja-build libglib2.0-dev libpcap-dev zlib1g-dev
       - name: Build assembly examples and games and run NDS and Wii toolchain tests
-        env:
-          LIBGL_ALWAYS_SOFTWARE: 'true'
-        run: xvfb-run --auto-servernum cargo xtask check-others
+        run: cargo xtask check-others

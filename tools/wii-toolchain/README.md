@@ -52,10 +52,12 @@ The toolchain and examples build separately from Bron's main Cargo workspace. Th
 ## Test
 
 `./build.sh test` builds `test/` into the repository root's `target/wii-toolchain/test/` and runs it in Dolphin without its user
-interface. It checks the startup code, the C library, compiler-rt, libogc's paired single math,
-threads and timers, and a texture converted by `gxtexconv`. The program writes its results to
+interface, on Linux headless in `dolphin-emu-nogui` without video when it is installed. It checks
+the startup code, the C library, compiler-rt, libogc's paired single math, threads and timers, and
+a texture converted by `gxtexconv`. The program writes its results to
 `/tmp/test.txt` on Dolphin's NAND after every group, the script prints them and fails when a check
-failed or the program didn't finish.
+failed or the program didn't finish. The program keeps running after the last group, because
+returning reloads IOS, which clears `/tmp`.
 
 From the repository root on Linux, `cargo xtask check-others` builds the assembly examples, Empires, and the Nintendo DS test ROM, then runs this test. On macOS, `cargo xtask check-macos-examples` builds the native macOS applications. `cargo xtask check` includes these platform checks.
 

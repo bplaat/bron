@@ -219,7 +219,13 @@ build_tools() {
 # writes its results to /tmp/test.txt on Dolphin's NAND. Doesn't lock, make runs the build itself.
 run_test() {
     local test_dir="$TOOLCHAIN_DIR/test" test_build="$BUILD_DIR/test" user="$BUILD_DIR/test/dolphin" pid
-    local results="$user/Wii/tmp/test.txt"
+    local results="$user/Wii/tmp/test.txt" nogui options=(--batch)
+    # The Qt interface hangs without a GPU, so Linux uses the headless build with no video
+    nogui=$(command -v dolphin-emu-nogui || echo /usr/games/dolphin-emu-nogui)
+    if [ -z "${DOLPHIN:-}" ] && [ -x "$nogui" ]; then
+        export DOLPHIN="$nogui"
+        options=(--platform=headless --video_backend=Null)
+    fi
     make -C "$test_dir" --no-print-directory
     msg "Running the test in Dolphin"
     rm -f "$results"
@@ -227,7 +233,7 @@ run_test() {
     mkdir -p "$user/Config"
     printf '[Analytics]\nPermissionAsked = True\n[Interface]\nUsePanicHandlers = False\n' \
         > "$user/Config/Dolphin.ini"
-    "$TOOLCHAIN_DIR/run.sh" "$test_build/test.elf" --batch --user="$user" \
+    "$TOOLCHAIN_DIR/run.sh" "$test_build/test.elf" "${options[@]}" --user="$user" \
         > "$test_build/dolphin.log" 2>&1 &
     pid=$!
     # Wait at most a minute for the test to finish
@@ -240,7 +246,8 @@ run_test() {
     kill -KILL "$pid" 2> /dev/null || true
     wait "$pid" 2> /dev/null || true
     cat "$results" 2> /dev/null || true
-    grep -qs '^DONE 0 failed' "$results" || die "The test failed or didn't finish"
+    grep -qs '^DONE 0 failed' "$results" ||
+        { tail -n 20 "$test_build/dolphin.log" >&2; die "The test failed or didn't finish"; }
     msg "All tests passed"
 }
 

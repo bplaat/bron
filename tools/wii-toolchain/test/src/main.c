@@ -461,5 +461,7 @@ int main(void) {
 
     report("DONE %d failed\n", failures);
     save_results();
-    return failures != 0;
+    // Returning reloads IOS, which clears /tmp, so wait until `build.sh test` stops Dolphin
+    while (true)
+        LWP_YieldThread();
 }
