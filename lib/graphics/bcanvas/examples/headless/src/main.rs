@@ -29,6 +29,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     let bitmap = canvas.to_bitmap()?;
-    std::fs::write("canvas.png", image::encode(&bitmap, image::Format::Png)?)?;
+    std::fs::write("frame.png", image::encode(&bitmap, image::Format::Png)?)?;
     Ok(())
 }

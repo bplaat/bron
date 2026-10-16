@@ -75,7 +75,7 @@ let bitmap = canvas.to_bitmap().expect("create bitmap");
 assert_eq!(bitmap.width(), 128);
 ```
 
-Run `cargo run -p example-bcanvas-headless` to draw and save `canvas.png`
+Run `cargo run -p example-bcanvas-headless` to draw and save `frame.png`
 without creating a window. The [example](examples/headless) enables
 the image crate's PNG feature and calls `image::encode`.
 
