@@ -30,8 +30,8 @@ static const Vertex vertices[] = {
 
     id<MTLDevice> device = view.device;
     NSError* error = nil;
-    dispatch_data_t libraryData = dispatch_data_create(embeddedMetallib, sizeof(embeddedMetallib),
-                                                       dispatch_get_main_queue(), ^{});
+    dispatch_data_t libraryData =
+        dispatch_data_create(embeddedMetallib, sizeof(embeddedMetallib), dispatch_get_main_queue(), ^{});
     id<MTLLibrary> library = [device newLibraryWithData:libraryData error:&error];
     if (library == nil) {
         NSLog(@"Could not load Metal library: %@", error);

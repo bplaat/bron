@@ -68,7 +68,7 @@ jobs:
       - name: Install packages (macos)
         if: runner.os == 'macOS'
         run: |
-          brew install cunit
+          brew install cunit nasm
           xcrun --find metal >/dev/null 2>&1 || xcodebuild -downloadComponent MetalToolchain
 
       - uses: actions/cache@v5
@@ -94,6 +94,10 @@ jobs:
           cargo binstall -y --locked cargo-nextest
 
       - run: cargo xtask check-rust
+
+      - name: Build macOS examples
+        if: runner.os == 'macOS'
+        run: cargo xtask check-macos
 
       - name: Report test results
         uses: dorny/test-reporter@v3
@@ -141,8 +145,8 @@ jobs:
       - name: Install NASM, Wii toolchain and headless Dolphin
         run: |
           sudo apt-get update
-          sudo apt-get install -y nasm clang lld llvm make libfreeimage-dev dolphin-emu xvfb xauth libgl1-mesa-dri
-      - name: Build Windows examples and run Wii toolchain tests
+          sudo apt-get install -y nasm python3 clang lld llvm make libfreeimage-dev dolphin-emu xvfb xauth libgl1-mesa-dri
+      - name: Build Windows and macOS assembly examples and run Wii toolchain tests
         env:
           LIBGL_ALWAYS_SOFTWARE: 'true'
         run: xvfb-run --auto-servernum cargo xtask check-others

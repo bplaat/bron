@@ -30,6 +30,9 @@ impl Xtask {
         self.check_rust()?;
         self.check_rust_deps()?;
         self.check_e2e()?;
+        if self.os == Os::Macos {
+            self.check_macos()?;
+        }
         self.check_others()
     }
 
@@ -114,7 +117,12 @@ impl Xtask {
 
         println!("Checking clang-format formatting...");
         let mut files = Vec::new();
-        for directory in ["tools/bob/examples", "examples/wii", "tools/wii-toolchain"] {
+        for directory in [
+            "tools/bob/examples",
+            "examples/macos",
+            "examples/wii",
+            "tools/wii-toolchain",
+        ] {
             collect_source_files(&self.root.join(directory), &mut files)?;
         }
         files.retain(|file| {
@@ -358,9 +366,17 @@ impl Xtask {
         run(Command::new(npm_program(self.os)).args(["test", "--workspace", "plaatnotes"]))
     }
 
+    pub(crate) fn check_macos(&self) -> Result<()> {
+        println!("Building macOS application examples...");
+        run(Command::new("sh").args(["examples/macos/build.sh", "native"]))
+    }
+
     pub(crate) fn check_others(&self) -> Result<()> {
         println!("Building Windows examples...");
         run(Command::new("sh").arg("examples/windows/build.sh"))?;
+
+        println!("Building macOS assembly examples...");
+        run(Command::new("sh").arg("examples/macos/build.sh"))?;
 
         println!("Running Wii toolchain tests...");
         run(Command::new("bash").args(["tools/wii-toolchain/build.sh", "test"]))

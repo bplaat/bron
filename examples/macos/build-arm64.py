@@ -166,7 +166,6 @@ def main() -> None:
         assemble(source_file, output_file, len(identifier), signature_file)
 
     os.chmod(output_file, output_file.stat().st_mode | stat.S_IXUSR)
-    run(str(output_file))
 
 
 if __name__ == "__main__":
