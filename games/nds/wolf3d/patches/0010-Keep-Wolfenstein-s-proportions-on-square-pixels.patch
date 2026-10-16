@@ -1,0 +1,120 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Sun, 4 Oct 2026 12:18:33 +0200
+Subject: [PATCH] Keep Wolfenstein's proportions on square pixels
+
+The 320x200 screen was shown on 4:3 monitors, with pixels 1.2 times
+taller than wide. On the square pixels of the DS the heights of walls,
+sprites and the weapon are 1.2 times their widths (PIXELASPECT), with
+the same field of view, so nothing looks squashed.
+---
+ wl_def.h   |  5 +++++
+ wl_main.c  |  2 +-
+ wl_scale.c | 24 ++++++++++++++----------
+ 3 files changed, 20 insertions(+), 11 deletions(-)
+
+diff --git a/wl_def.h b/wl_def.h
+index 559036b..fc0be48 100644
+--- a/wl_def.h
++++ b/wl_def.h
+@@ -185,6 +185,11 @@ typedef uint8_t tiletype;
+ 
+ #define HEIGHTRATIO     0.50
+ 
++// The 320x200 screen was shown on 4:3 monitors with pixels 1.2 times taller
++// than wide, on square pixels heights are 1.2 times the widths
++#define PIXELASPECT(x)  ((x) * 6 / 5)
++#define UNASPECT(x)     ((x) * 5 / 6)
++
+ #ifndef SPEAR
+     #define LRpack      8       // # of levels to store in endgame
+ #else
+diff --git a/wl_main.c b/wl_main.c
+index 7dba608..9de9b73 100644
+--- a/wl_main.c
++++ b/wl_main.c
+@@ -783,7 +783,7 @@ void CalcProjection (int32_t focal)
+     // divide heightnumerator by a posts distance to get the posts height for
+     // the heightbuffer.  The pixel height is height>>2
+     //
+-    heightnumerator = (TILEGLOBAL*scale)>>6;
++    heightnumerator = PIXELASPECT((TILEGLOBAL*scale)>>6);
+ 
+     //
+     // calculate the angle offset from view angle of each pixel's ray
+diff --git a/wl_scale.c b/wl_scale.c
+index 0b1bf03..02dad7d 100644
+--- a/wl_scale.c
++++ b/wl_scale.c
+@@ -106,11 +106,12 @@ void ScaleShape (int xcenter, int shapenum, int height, uint32_t flags)
+     compshape_t *shape;
+     byte        *linesrc,*linecmds;
+     byte        *curshades = NULL;
+-    int16_t     scale,toppix;
++    int16_t     scale,xscale,toppix;
+     int16_t     x1,x2,actx;
+-    fixed       frac,fracstep;
++    fixed       frac,fracstep,xfracstep;
+ 
+     scale = height >> 3;        // low three bits are fractional
++    xscale = UNASPECT(height) >> 3;
+ 
+     if (!scale)
+         return;                 // too close or far away
+@@ -126,9 +127,10 @@ void ScaleShape (int xcenter, int shapenum, int height, uint32_t flags)
+ #endif
+ 
+     fracstep = FixedDiv(scale,TEXTURESIZE/2);
+-    frac = shape->leftpix * fracstep;
++    xfracstep = FixedDiv(xscale,TEXTURESIZE/2);
++    frac = shape->leftpix * xfracstep;
+ 
+-    actx = xcenter - scale;
++    actx = xcenter - xscale;
+     toppix = centery - scale;
+ 
+     x2 = (frac >> FRACBITS) + actx;
+@@ -143,7 +145,7 @@ void ScaleShape (int xcenter, int shapenum, int height, uint32_t flags)
+         if (x1 >= viewwidth)
+             break;                // off the right side of the view area
+ 
+-        frac += fracstep;
++        frac += xfracstep;
+         x2 = (frac >> FRACBITS) + actx;
+ 
+         if (x2 < 0)
+@@ -187,19 +189,21 @@ void SimpleScaleShape (int xcenter, int shapenum, int height)
+     int         i;
+     compshape_t *shape;
+     byte        *linesrc,*linecmds;
+-    int16_t     scale,toppix;
++    int16_t     scale,xscale,toppix;
+     int16_t     x1,x2,actx;
+-    fixed       frac,fracstep;
++    fixed       frac,fracstep,xfracstep;
+ 
+     scale = height >> 1;
++    xscale = UNASPECT(height) >> 1;
+ 
+     linesrc = PM_GetSpritePage(shapenum);
+     shape = (compshape_t *)linesrc;
+ 
+     fracstep = FixedDiv(scale,TEXTURESIZE/2);
+-    frac = shape->leftpix * fracstep;
++    xfracstep = FixedDiv(xscale,TEXTURESIZE/2);
++    frac = shape->leftpix * xfracstep;
+ 
+-    actx = xcenter - scale;
++    actx = xcenter - xscale;
+     toppix = centery - scale;
+ 
+     x2 = (frac >> FRACBITS) + actx;
+@@ -211,7 +215,7 @@ void SimpleScaleShape (int xcenter, int shapenum, int height)
+         //
+         x1 = x2;
+ 
+-        frac += fracstep;
++        frac += xfracstep;
+         x2 = (frac >> FRACBITS) + actx;
+ 
+         while (x1 < x2)

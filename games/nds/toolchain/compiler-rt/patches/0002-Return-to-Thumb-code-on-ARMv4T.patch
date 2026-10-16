@@ -1,0 +1,131 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Sat, 10 Oct 2026 20:48:22 +0200
+Subject: [PATCH] Return to Thumb code on ARMv4T
+
+Popping the return address into pc only switches back to Thumb code
+from ARMv5T on, the DS's ARM7 is an ARMv4T. The division functions
+return with bx like the others.
+---
+ compiler-rt/lib/builtins/arm/aeabi_idivmod.S  | 3 ++-
+ compiler-rt/lib/builtins/arm/aeabi_ldivmod.S  | 3 ++-
+ compiler-rt/lib/builtins/arm/aeabi_uidivmod.S | 3 ++-
+ compiler-rt/lib/builtins/arm/aeabi_uldivmod.S | 3 ++-
+ compiler-rt/lib/builtins/arm/divmodsi4.S      | 3 ++-
+ compiler-rt/lib/builtins/arm/divsi3.S         | 3 ++-
+ compiler-rt/lib/builtins/arm/modsi3.S         | 3 ++-
+ compiler-rt/lib/builtins/arm/udivsi3.S        | 3 ++-
+ 8 files changed, 16 insertions(+), 8 deletions(-)
+
+diff --git a/compiler-rt/lib/builtins/arm/aeabi_idivmod.S b/compiler-rt/lib/builtins/arm/aeabi_idivmod.S
+index d95b1db..c2065a0 100644
+--- a/compiler-rt/lib/builtins/arm/aeabi_idivmod.S
++++ b/compiler-rt/lib/builtins/arm/aeabi_idivmod.S
+@@ -51,7 +51,8 @@ DEFINE_COMPILERRT_FUNCTION(__aeabi_idivmod)
+         pop     { r12, lr }
+         PAC_RETURN
+ #else
+-        pop     { pc }
++        pop     { lr }
++        JMP(lr)
+ #endif
+ #endif //  defined(USE_THUMB_1)
+ END_COMPILERRT_FUNCTION(__aeabi_idivmod)
+diff --git a/compiler-rt/lib/builtins/arm/aeabi_ldivmod.S b/compiler-rt/lib/builtins/arm/aeabi_ldivmod.S
+index 4fbfe3f..2bb8b1e 100644
+--- a/compiler-rt/lib/builtins/arm/aeabi_ldivmod.S
++++ b/compiler-rt/lib/builtins/arm/aeabi_ldivmod.S
+@@ -47,7 +47,8 @@ DEFINE_COMPILERRT_FUNCTION(__aeabi_ldivmod)
+         pop     {r6, r12, lr}
+         PAC_RETURN
+ #else
+-        pop     {r6, pc}
++        pop     {r6, lr}
++        JMP(lr)
+ #endif
+ END_COMPILERRT_FUNCTION(__aeabi_ldivmod)
+ 
+diff --git a/compiler-rt/lib/builtins/arm/aeabi_uidivmod.S b/compiler-rt/lib/builtins/arm/aeabi_uidivmod.S
+index f77beab..b1b3281 100644
+--- a/compiler-rt/lib/builtins/arm/aeabi_uidivmod.S
++++ b/compiler-rt/lib/builtins/arm/aeabi_uidivmod.S
+@@ -58,7 +58,8 @@ LOCAL_LABEL(case_denom_larger):
+         pop     { r12, lr }
+         PAC_RETURN
+ #else
+-        pop     { pc }
++        pop     { lr }
++        JMP(lr)
+ #endif
+ #endif
+ END_COMPILERRT_FUNCTION(__aeabi_uidivmod)
+diff --git a/compiler-rt/lib/builtins/arm/aeabi_uldivmod.S b/compiler-rt/lib/builtins/arm/aeabi_uldivmod.S
+index e019ba7..6087769 100644
+--- a/compiler-rt/lib/builtins/arm/aeabi_uldivmod.S
++++ b/compiler-rt/lib/builtins/arm/aeabi_uldivmod.S
+@@ -47,7 +47,8 @@ DEFINE_COMPILERRT_FUNCTION(__aeabi_uldivmod)
+         pop     {r6, r12, lr}
+         PAC_RETURN
+ #else
+-        pop     {r6, pc}
++        pop     {r6, lr}
++        JMP(lr)
+ #endif
+ END_COMPILERRT_FUNCTION(__aeabi_uldivmod)
+ 
+diff --git a/compiler-rt/lib/builtins/arm/divmodsi4.S b/compiler-rt/lib/builtins/arm/divmodsi4.S
+index f94438d..ffeb27a 100644
+--- a/compiler-rt/lib/builtins/arm/divmodsi4.S
++++ b/compiler-rt/lib/builtins/arm/divmodsi4.S
+@@ -18,7 +18,8 @@
+     push   {r4-r7, lr}   ;\
+     add     r7,     sp, #12
+ #define CLEAR_FRAME_AND_RETURN \
+-    pop    {r4-r7, pc}
++    pop    {r4-r7, lr}   ;\
++    JMP(lr)
+ 
+ 	.syntax unified
+ 	.text
+diff --git a/compiler-rt/lib/builtins/arm/divsi3.S b/compiler-rt/lib/builtins/arm/divsi3.S
+index faf9af9..f69f86e 100644
+--- a/compiler-rt/lib/builtins/arm/divsi3.S
++++ b/compiler-rt/lib/builtins/arm/divsi3.S
+@@ -17,7 +17,8 @@
+     push   {r4, r7, lr}    ;\
+     add     r7,     sp, #4
+ #define CLEAR_FRAME_AND_RETURN \
+-    pop    {r4, r7, pc}
++    pop    {r4, r7, lr}    ;\
++    JMP(lr)
+ 
+    .syntax unified
+    .text
+diff --git a/compiler-rt/lib/builtins/arm/modsi3.S b/compiler-rt/lib/builtins/arm/modsi3.S
+index 5312f5b..e7c1af1 100644
+--- a/compiler-rt/lib/builtins/arm/modsi3.S
++++ b/compiler-rt/lib/builtins/arm/modsi3.S
+@@ -17,7 +17,8 @@
+     push   {r4, r7, lr}    ;\
+     add     r7,     sp, #4
+ #define CLEAR_FRAME_AND_RETURN \
+-    pop    {r4, r7, pc}
++    pop    {r4, r7, lr}    ;\
++    JMP(lr)
+ 
+ 	.syntax unified
+ 	.text
+diff --git a/compiler-rt/lib/builtins/arm/udivsi3.S b/compiler-rt/lib/builtins/arm/udivsi3.S
+index 16528e8..a890ba2 100644
+--- a/compiler-rt/lib/builtins/arm/udivsi3.S
++++ b/compiler-rt/lib/builtins/arm/udivsi3.S
+@@ -189,7 +189,8 @@ LOCAL_LABEL(divby0):
+ #      if defined(__ARM_EABI__)
+ 	push {r7, lr}
+ 	bl	__aeabi_idiv0 // due to relocation limit, can't use b.
+-	pop  {r7, pc}
++	pop  {r7, lr}
++	JMP(lr)
+ #      else
+ 	JMP(lr)
+ #      endif

@@ -1,0 +1,49 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Sun, 11 Oct 2026 20:24:11 +0200
+Subject: [PATCH] Inline FixedMul
+
+The ray caster and the scaler multiply in fixed point for every column,
+FixedMul is inline so they don't call it, a 64-bit multiply is a single
+instruction in ARM code.
+---
+ wl_utils.c | 5 -----
+ wl_utils.h | 7 ++++++-
+ 2 files changed, 6 insertions(+), 6 deletions(-)
+
+diff --git a/wl_utils.c b/wl_utils.c
+index fe14d16..e2502d1 100644
+--- a/wl_utils.c
++++ b/wl_utils.c
+@@ -27,11 +27,6 @@ void *safe_malloc (size_t size, const char *fname, uint32_t line)
+ }
+ 
+ 
+-fixed FixedMul (fixed a, fixed b)
+-{
+-	return (fixed)(((int64_t)a * b + 0x8000) >> FRACBITS);
+-}
+-
+ fixed FixedDiv (fixed a, fixed b)
+ {
+ 	// The ARM9 has no divide instruction, use the DS hardware divider
+diff --git a/wl_utils.h b/wl_utils.h
+index 2013e21..db957d5 100644
+--- a/wl_utils.h
++++ b/wl_utils.h
+@@ -9,9 +9,14 @@
+ #define FRACBITS         16
+ 
+ void     *safe_malloc (size_t size, const char *fname, uint32_t line);
+-fixed    FixedMul (fixed a, fixed b);
+ fixed    FixedDiv (fixed a, fixed b);
+ 
++// Inline, the ray caster and the sprites multiply for every column
++static inline fixed FixedMul (fixed a, fixed b)
++{
++	return (fixed)(((int64_t)a * b + 0x8000) >> FRACBITS);
++}
++
+ uint16_t ReadShort (void *ptr);
+ uint32_t ReadLong (void *ptr);
+ 

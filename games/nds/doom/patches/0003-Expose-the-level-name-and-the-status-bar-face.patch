@@ -1,0 +1,98 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Sat, 3 Oct 2026 11:04:39 +0200
+Subject: [PATCH] Expose the level name and the status bar face
+
+HU_LevelTitle() and ST_FacePatch() expose the level name and the status
+bar face, for a HUD on a second screen.
+---
+ doomgeneric/hu_stuff.c | 8 ++++++++
+ doomgeneric/hu_stuff.h | 1 +
+ doomgeneric/st_stuff.c | 6 ++++++
+ doomgeneric/st_stuff.h | 4 ++++
+ 4 files changed, 19 insertions(+)
+
+diff --git a/doomgeneric/hu_stuff.c b/doomgeneric/hu_stuff.c
+index d53e8c4..897f1f5 100644
+--- a/doomgeneric/hu_stuff.c
++++ b/doomgeneric/hu_stuff.c
+@@ -88,6 +88,7 @@ char			chat_char; // remove later.
+ static player_t*	plr;
+ patch_t*		hu_font[HU_FONTSIZE];
+ static hu_textline_t	w_title;
++static char		*level_title = "";
+ boolean			chat_on;
+ static hu_itext_t	w_chat;
+ static boolean		always_off = false;
+@@ -363,6 +364,7 @@ void HU_Start(void)
+     // dehacked substitution to get modified level name
+ 
+     s = DEH_String(s);
++    level_title = s;
+     
+     while (*s)
+ 	HUlib_addCharToTextLine(&w_title, *(s++));
+@@ -392,6 +394,12 @@ void HU_Drawer(void)
+ 
+ }
+ 
++// The current level's name, eg. "E1M1: Hangar"
++const char *HU_LevelTitle(void)
++{
++    return level_title;
++}
++
+ void HU_Erase(void)
+ {
+ 
+diff --git a/doomgeneric/hu_stuff.h b/doomgeneric/hu_stuff.h
+index a3affc5..bb58e0f 100644
+--- a/doomgeneric/hu_stuff.h
++++ b/doomgeneric/hu_stuff.h
+@@ -52,6 +52,7 @@ void HU_Ticker(void);
+ void HU_Drawer(void);
+ char HU_dequeueChatChar(void);
+ void HU_Erase(void);
++const char *HU_LevelTitle(void);
+ 
+ extern char *chat_macros[10];
+ 
+diff --git a/doomgeneric/st_stuff.c b/doomgeneric/st_stuff.c
+index e8070c0..f7e400f 100644
+--- a/doomgeneric/st_stuff.c
++++ b/doomgeneric/st_stuff.c
+@@ -379,6 +379,12 @@ static int	st_facecount = 0;
+ // current face index, used by w_faces
+ static int	st_faceindex = 0;
+ 
++// The status bar face of the player, for a HUD on a second screen
++patch_t *ST_FacePatch(void)
++{
++    return faces[st_faceindex];
++}
++
+ // holds key-type for each key box on bar
+ static int	keyboxes[3]; 
+ 
+diff --git a/doomgeneric/st_stuff.h b/doomgeneric/st_stuff.h
+index 8ed53e4..2015541 100644
+--- a/doomgeneric/st_stuff.h
++++ b/doomgeneric/st_stuff.h
+@@ -23,6 +23,7 @@
+ 
+ #include "doomtype.h"
+ #include "d_event.h"
++#include "v_patch.h"
+ #include "m_cheat.h"
+ 
+ // Size of statusbar.
+@@ -51,6 +52,9 @@ void ST_Start (void);
+ // Called by startup code.
+ void ST_Init (void);
+ 
++// The status bar face of the player, for a HUD on a second screen
++patch_t *ST_FacePatch(void);
++
+ 
+ 
+ // States for status bar code.

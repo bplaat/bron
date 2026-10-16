@@ -1,0 +1,49 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Mon, 12 Oct 2026 07:54:52 +0200
+Subject: [PATCH] Add a Nintendo DS build
+
+---
+ Makefile.nds | 33 +++++++++++++++++++++++++++++++++
+ 1 file changed, 33 insertions(+)
+ create mode 100644 Makefile.nds
+
+diff --git a/Makefile.nds b/Makefile.nds
+new file mode 100644
+index 0000000..bae8aa1
+--- /dev/null
++++ b/Makefile.nds
+@@ -0,0 +1,33 @@
++# Nintendo DS build of Quake II with the nds-ports toolchain
++#   make -f Makefile.nds TOOLCHAIN=<toolchain> ICON=<icon.bmp> [NITRO_DIR=<dir>]
++
++NAME := quake2
++GAME_TITLE := Quake II
++GAME_SUBTITLE1 := id Software (1997)
++GAME_SUBTITLE2 := Quake II NDS port
++
++SOURCES := $(addprefix client/,cl_cin cl_ents cl_fx cl_input cl_inv cl_main cl_newfx cl_parse \
++	cl_pred cl_tent cl_scrn cl_view console keys menu qmenu snd_dma snd_mem) \
++	$(addprefix qcommon/,cmd cmodel common crc cvar files md4 net_chan pmove) \
++	$(addprefix server/,sv_ccmds sv_ents sv_game sv_init sv_main sv_send sv_user sv_world) \
++	$(addprefix game/,g_ai g_chase g_cmds g_combat g_func g_items g_main g_misc g_monster g_phys \
++	g_save g_spawn g_svcmds g_target g_trigger g_turret g_utils g_weapon m_actor m_berserk \
++	m_boss2 m_boss3 m_boss31 m_boss32 m_brain m_chick m_flash m_flipper m_float m_flyer \
++	m_gladiator m_gunner m_hover m_infantry m_insane m_medic m_move m_mutant m_parasite \
++	m_soldier m_supertank m_tank p_client p_hud p_trail p_view p_weapon q_shared) \
++	null/cd_null nds/sys_nds nds/net_nds nds/vid_nds nds/in_nds nds/hud_nds nds/snd_nds \
++	$(addprefix ref_nds/,r_main r_image r_draw r_map r_model r_surf r_alias)
++
++include $(TOOLCHAIN)/nds.mk
++
++# Quake II reads files straight into structs with enums, so enums are int
++# sized like on x86, not only as big as their values. Its globals are
++# defined in headers, which needs common symbols. Constants are single
++# precision, clang's OpenCL option for that works for C too. The game is
++# linked in instead of loaded from a library.
++CFLAGS += -Wno-dangling-else -Wno-unused-variable -Wno-unused-but-set-variable \
++	-Wno-misleading-indentation -Wno-pointer-sign -Wno-trigraphs -Wno-absolute-value \
++	-Wno-format-security -Wno-deprecated-non-prototype -Wno-missing-braces -Wno-switch \
++	-Wno-unused-function -Wno-incompatible-pointer-types-discards-qualifiers \
++	-fno-strict-aliasing -fno-short-enums -fcommon -cl-single-precision-constant -std=gnu17 \
++	-DGAME_HARD_LINKED

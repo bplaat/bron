@@ -1,0 +1,42 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Wed, 7 Oct 2026 12:00:00 +0200
+Subject: [PATCH] Keep the settings when Options is left
+
+The settings were only written when the game quit, which a DS game is
+rarely made to do. They are written whenever Options is left.
+---
+ Game/src/config.c | 2 +-
+ Game/src/menues.c | 6 +++++-
+ 2 files changed, 6 insertions(+), 2 deletions(-)
+
+diff --git a/Game/src/config.c b/Game/src/config.c
+index 3b299a6..24eb98c 100644
+--- a/Game/src/config.c
++++ b/Game/src/config.c
+@@ -888,7 +888,7 @@ void CONFIG_WriteSetup( void )
+        SCRIPT_PutString( scripthandle, "Comm Setup",commmacro,ud.ridecule[dummy]);
+    }
+ 
++   // Kept, the settings are written again whenever Options is left
+    SCRIPT_Save (scripthandle, setupfilename);
+-   SCRIPT_Free (scripthandle);
+    }
+ 
+diff --git a/Game/src/menues.c b/Game/src/menues.c
+index 87d4d2c..7335293 100644
+--- a/Game/src/menues.c
++++ b/Game/src/menues.c
+@@ -2404,7 +2404,11 @@ else
+             x = probe(c+6,43,16,3);
+ 
+             if(x == -1)
+-                { if(ps[myconnectindex].gm&MODE_GAME) cmenu(50);else cmenu(0); }
++            {
++                // The settings are kept as soon as Options is left
++                CONFIG_WriteSetup();
++                if(ps[myconnectindex].gm&MODE_GAME) cmenu(50);else cmenu(0);
++            }
+ 
+             switch(x)
+             {

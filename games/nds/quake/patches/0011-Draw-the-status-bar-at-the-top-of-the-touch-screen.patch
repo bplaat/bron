@@ -1,0 +1,126 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Tue, 6 Oct 2026 07:09:55 +0200
+Subject: [PATCH] Draw the status bar at the top of the touch screen
+
+The touch screen is right below the view, so the status bar is at its
+top (SBAR_Y), like it is below the view on a monitor. It never shows the
+inventory, the touch screen has its own weapons, ammo and items below
+the status bar.
+---
+ WinQuake/sbar.c   | 26 +++++++++++++-------------
+ WinQuake/sbar.h   |  1 +
+ WinQuake/screen.c |  4 +---
+ 3 files changed, 15 insertions(+), 16 deletions(-)
+
+diff --git a/WinQuake/sbar.c b/WinQuake/sbar.c
+index 3d1e8ce..e53d487 100644
+--- a/WinQuake/sbar.c
++++ b/WinQuake/sbar.c
+@@ -260,9 +260,9 @@ Sbar_DrawPic
+ void Sbar_DrawPic (int x, int y, qpic_t *pic)
+ {
+ 	if (cl.gametype == GAME_DEATHMATCH)
+-		Draw_Pic (x /* + ((vid.width - 320)>>1)*/, y + (vid.height-SBAR_HEIGHT), pic);
++		Draw_Pic (x /* + ((vid.width - 320)>>1)*/, y + SBAR_Y, pic);
+ 	else
+-		Draw_Pic (x + ((vid.width - 320)>>1), y + (vid.height-SBAR_HEIGHT), pic);
++		Draw_Pic (x + ((vid.width - 320)>>1), y + SBAR_Y, pic);
+ }
+ 
+ /*
+@@ -273,9 +273,9 @@ Sbar_DrawTransPic
+ void Sbar_DrawTransPic (int x, int y, qpic_t *pic)
+ {
+ 	if (cl.gametype == GAME_DEATHMATCH)
+-		Draw_TransPic (x /*+ ((vid.width - 320)>>1)*/, y + (vid.height-SBAR_HEIGHT), pic);
++		Draw_TransPic (x /*+ ((vid.width - 320)>>1)*/, y + SBAR_Y, pic);
+ 	else
+-		Draw_TransPic (x + ((vid.width - 320)>>1), y + (vid.height-SBAR_HEIGHT), pic);
++		Draw_TransPic (x + ((vid.width - 320)>>1), y + SBAR_Y, pic);
+ }
+ 
+ /*
+@@ -288,9 +288,9 @@ Draws one solid graphics character
+ void Sbar_DrawCharacter (int x, int y, int num)
+ {
+ 	if (cl.gametype == GAME_DEATHMATCH)
+-		Draw_Character ( x /*+ ((vid.width - 320)>>1) */ + 4 , y + vid.height-SBAR_HEIGHT, num);
++		Draw_Character ( x /*+ ((vid.width - 320)>>1) */ + 4 , y + SBAR_Y, num);
+ 	else
+-		Draw_Character ( x + ((vid.width - 320)>>1) + 4 , y + vid.height-SBAR_HEIGHT, num);
++		Draw_Character ( x + ((vid.width - 320)>>1) + 4 , y + SBAR_Y, num);
+ }
+ 
+ /*
+@@ -301,9 +301,9 @@ Sbar_DrawString
+ void Sbar_DrawString (int x, int y, char *str)
+ {
+ 	if (cl.gametype == GAME_DEATHMATCH)
+-		Draw_String (x /*+ ((vid.width - 320)>>1)*/, y+ vid.height-SBAR_HEIGHT, str);
++		Draw_String (x /*+ ((vid.width - 320)>>1)*/, y+ SBAR_Y, str);
+ 	else
+-		Draw_String (x + ((vid.width - 320)>>1), y+ vid.height-SBAR_HEIGHT, str);
++		Draw_String (x + ((vid.width - 320)>>1), y+ SBAR_Y, str);
+ }
+ 
+ /*
+@@ -521,8 +521,8 @@ void Sbar_DrawScoreboard (void)
+ 		top = Sbar_ColorForMap (top);
+ 		bottom = Sbar_ColorForMap (bottom);
+ 
+-		Draw_Fill ( x*8+10 + ((vid.width - 320)>>1), y + vid.height - SBAR_HEIGHT, 28, 4, top);
+-		Draw_Fill ( x*8+10 + ((vid.width - 320)>>1), y+4 + vid.height - SBAR_HEIGHT, 28, 4, bottom);
++		Draw_Fill ( x*8+10 + ((vid.width - 320)>>1), y + SBAR_Y, 28, 4, top);
++		Draw_Fill ( x*8+10 + ((vid.width - 320)>>1), y+4 + SBAR_Y, 28, 4, bottom);
+ 
+ 	// draw text
+ 		for (j=0 ; j<20 ; j++)
+@@ -782,7 +782,7 @@ void Sbar_DrawFrags (void)
+ 		xofs = 0;
+ 	else
+ 		xofs = (vid.width - 320)>>1;
+-	y = vid.height - SBAR_HEIGHT - 23;
++	y = SBAR_Y - 23;
+ 
+ 	for (i=0 ; i<l ; i++)
+ 	{
+@@ -854,8 +854,8 @@ void Sbar_DrawFace (void)
+ 			xofs = ((vid.width - 320)>>1) + 113;
+ 
+ 		Sbar_DrawPic (112, 0, rsb_teambord);
+-		Draw_Fill (xofs, vid.height-SBAR_HEIGHT+3, 22, 9, top);
+-		Draw_Fill (xofs, vid.height-SBAR_HEIGHT+12, 22, 9, bottom);
++		Draw_Fill (xofs, SBAR_Y+3, 22, 9, top);
++		Draw_Fill (xofs, SBAR_Y+12, 22, 9, bottom);
+ 
+ 		// draw number
+ 		f = s->frags;
+diff --git a/WinQuake/sbar.h b/WinQuake/sbar.h
+index 286b3b6..0d163c2 100644
+--- a/WinQuake/sbar.h
++++ b/WinQuake/sbar.h
+@@ -22,6 +22,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
+ // does, the entire thing will be redrawn for the next vid.numpages frames.
+ 
+ #define	SBAR_HEIGHT		24
++#define	SBAR_Y			0	// at the top of the touch screen, right below the view
+ 
+ extern	int			sb_lines;			// scan lines to draw
+ 
+diff --git a/WinQuake/screen.c b/WinQuake/screen.c
+index db253ab..f0010e0 100644
+--- a/WinQuake/screen.c
++++ b/WinQuake/screen.c
+@@ -292,10 +292,8 @@ static void SCR_CalcRefdef (void)
+ 
+ 	if (size >= 120)
+ 		sb_lines = 0;		// no status bar at all
+-	else if (size >= 110)
+-		sb_lines = 24;		// no inventory
+ 	else
+-		sb_lines = 24+16+8;
++		sb_lines = 24;		// the touch screen shows the inventory
+ 
+ // these calculations mirror those in R_Init() for r_refdef, but take no
+ // account of water warping

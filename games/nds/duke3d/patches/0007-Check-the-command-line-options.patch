@@ -1,0 +1,83 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Wed, 7 Oct 2026 12:00:00 +0200
+Subject: [PATCH] Check the command line options
+
+-map, -game_dir and -name took the next argument even when there was
+none, and /g added .grp to the argument itself, overwriting the next one,
+and built the path in 16 bytes. The options come from args.txt on the DS,
+where a short line is easy to write.
+---
+ Game/src/config.c |  3 ++-
+ Game/src/game.c   | 18 ++++++------------
+ 2 files changed, 8 insertions(+), 13 deletions(-)
+
+diff --git a/Game/src/config.c b/Game/src/config.c
+index 97933ce..3b299a6 100644
+--- a/Game/src/config.c
++++ b/Game/src/config.c
+@@ -622,8 +622,9 @@ void CONFIG_ReadSetup( void )
+    SCRIPT_GetString( scripthandle, "Comm Setup","PlayerName",&myname[0]);
+ 
+    dummy = CheckParm("NAME");
+-   if( dummy ) strcpy(myname,_argv[dummy+1]);
++   if( dummy && dummy+1 < _argc ) strcpy(myname,_argv[dummy+1]);
+    dummy = CheckParm("MAP");
++   if( dummy+1 >= _argc ) dummy = 0;
+ 
+ 
+ 
+diff --git a/Game/src/game.c b/Game/src/game.c
+index 7874ad4..d25195d 100644
+--- a/Game/src/game.c
++++ b/Game/src/game.c
+@@ -2483,8 +2483,6 @@ void gameexit(char  *msg)
+     uninitgroupfile();
+ 
+     unlink("duke3d.tmp");
+-	
+-    Error(EXIT_SUCCESS, "");
+ 
+ }
+ 
+@@ -7152,7 +7150,7 @@ void checkcommandline(int argc,char  **argv)
+         {
+             c = argv[i];
+ 
+-			if (stricmp(c, "-map") == 0)
++			if (stricmp(c, "-map") == 0 && i + 1 < argc)
+             {
+ 				i++;
+ 				strcpy(boardfilename,argv[i]);
+@@ -7171,7 +7169,7 @@ void checkcommandline(int argc,char  **argv)
+                 continue;
+             }
+ 
+-            if (stricmp(c, "-game_dir") == 0)
++            if (stricmp(c, "-game_dir") == 0 && i + 1 < argc)
+             {
+ 				// Get the file name
+ 				i++;
+@@ -7254,18 +7252,14 @@ void checkcommandline(int argc,char  **argv)
+                     case 'G':
+                         c++;
+                         if(*c){
+-							char  fullpathgrpfile[16]; // 16 not enough
+-							memset(fullpathgrpfile, 0, 16);
+-
+-                            if( strchr(c,'.') == 0){
+-								strcat(c,".grp"); // crap!
+-							}
++							char  fullpathgrpfile[512];
+ 
++							// The .grp is added here, not to the argument itself
+ 							if(getGameDir()[0] != '\0'){
+-								sprintf(fullpathgrpfile, "%s\\%s", getGameDir(), c);
++								snprintf(fullpathgrpfile, sizeof(fullpathgrpfile), "%s/%s%s", getGameDir(), c, strchr(c,'.') ? "" : ".grp");
+ 							}
+ 							else{
+-								strcpy(fullpathgrpfile, c);
++								snprintf(fullpathgrpfile, sizeof(fullpathgrpfile), "%s%s", c, strchr(c,'.') ? "" : ".grp");
+ 							}
+ 
+                             j = initgroupfile(fullpathgrpfile);

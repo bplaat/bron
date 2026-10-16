@@ -1,0 +1,183 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Sun, 4 Oct 2026 12:18:33 +0200
+Subject: [PATCH] Name savegames and high scores without typing
+
+There is no keyboard to type a name: a savegame is named after the
+episode and floor, also when it replaces an older one. Selecting a
+slot saves immediately, without a name-editing step. Quicksave also
+updates the stored and displayed name to match the current level. A
+new high score gets the user name of the DS settings (NDS_PlayerName),
+the list shows it until a button is pressed. It's written to the config
+right away, not only on quitting, a handheld is often just switched off.
+---
+ wl_def.h   |  1 +
+ wl_inter.c | 37 +++++++++-------------------------
+ wl_menu.c  | 59 ++++++++++++++++++------------------------------------
+ 3 files changed, 30 insertions(+), 67 deletions(-)
+
+diff --git a/wl_def.h b/wl_def.h
+index b5c4b98..95d7888 100644
+--- a/wl_def.h
++++ b/wl_def.h
+@@ -994,6 +994,7 @@ boolean         LoadTheGame (FILE *file, int x, int y);
+ boolean         SaveTheGame (FILE *file, int x, int y);
+ void            ShowViewSize (int width);
+ void            ShutdownId (void);
++void            WriteConfig (void);
+ 
+ 
+ /*
+diff --git a/wl_inter.c b/wl_inter.c
+index d25bc8b..6c6ee7d 100644
+--- a/wl_inter.c
++++ b/wl_inter.c
+@@ -1,6 +1,7 @@
+ // WL_INTER.C
+ 
+ #include "wl_def.h"
++#include "wl_nds.h"
+ 
+ LRstruct LevelRatios[LRpack];
+ int32_t lastBreathTime = 0;
+@@ -1158,37 +1159,19 @@ CheckHighScore (int32_t score, word other)
+ #else
+     StartCPMusic (ROSTER_MUS);
+ #endif
+-    DrawHighScores ();
+-
+-    VW_FadeIn ();
+-
++    // There is no keyboard to type a name, a new high score gets the user
++    // name of the DS settings, kept right away with the config
+     if (n != -1)
+     {
+-        //
+-        // got a high score
+-        //
+-        PrintY = 76 + (16 * n);
+-#ifndef SPEAR
+-        PrintX = 4 * 8;
+-        backcolor = BORDCOLOR;
+-        fontcolor = 15;
+-        US_LineInput (PrintX, PrintY, Scores[n].name, 0, true, MaxHighName, 100);
+-#else
+-        PrintX = 16;
+-        fontnumber = 1;
+-        VWB_Bar (PrintX - 2, PrintY - 2, 145, 15, 0x9c);
+-        VW_UpdateScreen ();
+-        backcolor = 0x9c;
+-        fontcolor = 15;
+-        US_LineInput (PrintX, PrintY, Scores[n].name, 0, true, MaxHighName, 130);
+-#endif
+-    }
+-    else
+-    {
+-        IN_ClearKeysDown ();
+-        IN_UserInput (500);
++        NDS_PlayerName (Scores[n].name, sizeof(Scores[n].name));
++        WriteConfig ();
+     }
++    DrawHighScores ();
+ 
++    VW_FadeIn ();
++
++    IN_ClearKeysDown ();
++    IN_UserInput (500);
+ }
+ 
+ 
+diff --git a/wl_menu.c b/wl_menu.c
+index 0b72c63..24950b6 100644
+--- a/wl_menu.c
++++ b/wl_menu.c
+@@ -1508,6 +1508,8 @@ CP_SaveGame (int quick)
+     char input[32];
+ 
+     snprintf (name,sizeof(name),"%s",SaveName);
++    // Every save uses the current level, including quicksave overwrites
++    snprintf (input,sizeof(input),"Episode %d Floor %d",gamestate.episode + 1,gamestate.mapon + 1);
+ 
+     //
+     // QUICKSAVE?
+@@ -1528,7 +1530,7 @@ CP_SaveGame (int quick)
+             unlink (savepath);
+             file = fopen (savepath, "wb");
+ 
+-            snprintf (input,sizeof(input),"%s",SaveGameNames[which]);
++            snprintf (SaveGameNames[which],sizeof(SaveGameNames[which]),"%s",input);
+ 
+             fwrite (input, 1, 32, file);
+             fseek (file, 32, SEEK_SET);
+@@ -1574,55 +1576,32 @@ CP_SaveGame (int quick)
+ 
+             ShootSnd ();
+ 
+-            snprintf (input,sizeof(input),"%s",SaveGameNames[which]);
+             name[7] = which + '0';
+ 
+-            fontnumber = 0;
+-            if (!SaveGamesAvail[which])
+-                VWB_Bar (LSM_X + LSItems.indent + 1, LSM_Y + which * 13 + 1,
+-                         LSM_W - LSItems.indent - 16, 10, BKGDCOLOR);
+-            VW_UpdateScreen ();
+-
+-            if (US_LineInput
+-                (LSM_X + LSItems.indent + 2, LSM_Y + which * 13 + 1, input, input, true, 31,
+-                 LSM_W - LSItems.indent - 30))
+-            {
+-                SaveGamesAvail[which] = 1;
+-                snprintf (SaveGameNames[which],sizeof(SaveGameNames[which]),"%s",input);
++            SaveGamesAvail[which] = 1;
++            snprintf (SaveGameNames[which],sizeof(SaveGameNames[which]),"%s",input);
+ 
+-                if (configdir[0])
+-                    snprintf (savepath, sizeof(savepath), "%s/%s", configdir, name);
+-                else
+-                    snprintf (savepath,sizeof(savepath),"%s",name);
++            if (configdir[0])
++                snprintf (savepath, sizeof(savepath), "%s/%s", configdir, name);
++            else
++                snprintf (savepath,sizeof(savepath),"%s",name);
+ 
+-                unlink (savepath);
+-                file = fopen (savepath, "wb");
+-                fwrite (input, 32, 1, file);
+-                fseek (file, 32, SEEK_SET);
++            unlink (savepath);
++            file = fopen (savepath, "wb");
++            fwrite (input, 32, 1, file);
++            fseek (file, 32, SEEK_SET);
+ 
+-                DrawLSAction (1);
+-                SaveTheGame (file, LSA_X + 8, LSA_Y + 5);
++            DrawLSAction (1);
++            SaveTheGame (file, LSA_X + 8, LSA_Y + 5);
+ 
+-                fclose (file);
++            fclose (file);
+ 
+ #ifdef _arch_dreamcast
+-                DC_SaveToVMU(name, input);
++            DC_SaveToVMU(name, input);
+ #endif
+ 
+-                ShootSnd ();
+-                exit = 1;
+-            }
+-            else
+-            {
+-                VWB_Bar (LSM_X + LSItems.indent + 1, LSM_Y + which * 13 + 1,
+-                         LSM_W - LSItems.indent - 16, 10, BKGDCOLOR);
+-                PrintLSEntry (which, HIGHLIGHT);
+-                VW_UpdateScreen ();
+-                SD_PlaySound (ESCPRESSEDSND);
+-                continue;
+-            }
+-
+-            fontnumber = 1;
++            ShootSnd ();
++            exit = 1;
+             break;
+         }
+ 

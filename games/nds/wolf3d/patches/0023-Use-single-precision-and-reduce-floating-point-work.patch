@@ -1,0 +1,473 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Tue, 6 Oct 2026 12:00:00 +0200
+Subject: [PATCH] Use single precision and reduce floating point work
+
+Use float math for trig, projection and OPL tables, the OPL tables
+without powf. Share the direction conversion and multiply by a constant
+instead of dividing for each aim. CalcRotate works in integers instead of
+doubles for every sprite, and the audio buffer size is found with a bit
+scan instead of the double log2. No double math is left.
+---
+ id_sd.c    |  2 +-
+ nds/opl.c  | 24 ++++++++++++-----
+ wl_act2.c  | 31 ++++------------------
+ wl_def.h   |  4 +--
+ wl_draw.c  |  3 ++-
+ wl_game.c  |  7 +----
+ wl_inter.c | 78 +++++++++++++++++++++++++++---------------------------
+ wl_main.c  | 10 +++----
+ wl_utils.c | 12 +++++++++
+ wl_utils.h |  1 +
+ 10 files changed, 85 insertions(+), 87 deletions(-)
+
+diff --git a/id_sd.c b/id_sd.c
+index 4667fc3..cdc3151 100644
+--- a/id_sd.c
++++ b/id_sd.c
+@@ -878,7 +878,7 @@ SD_Startup(void)
+         if (!param_samplerate || param_samplerate > 44100)
+             Quit ("Divide by zero caused by invalid samplerate!");
+ 
+-        chunksize = 1 << (int)log2(param_audiobuffer / (44100 / param_samplerate));
++        chunksize = 1 << (31 - __builtin_clz(param_audiobuffer / (44100 / param_samplerate)));
+     }
+ 
+     if (Mix_OpenAudioDevice(param_samplerate,AUDIO_S16,2,chunksize,NULL,SDL_AUDIO_ALLOW_FREQUENCY_CHANGE))
+diff --git a/nds/opl.c b/nds/opl.c
+index db40887..96bc7a7 100644
+--- a/nds/opl.c
++++ b/nds/opl.c
+@@ -25,10 +25,11 @@ static const u8 eg_inc[15][8] =
+ static void InitTables (opl_tables_t *t)
+ {
+     int i, w;
++    float volume;
+ 
+     for (i = 0; i < SIN_LEN; ++i)
+     {
+-        s16 s = (s16) lrint (sin ((i * 2 + 1) * M_PI / SIN_LEN) * 4095);
++        s16 s = (s16) lrintf (sinf ((i * 2 + 1) * (float) M_PI / SIN_LEN) * 4095);
+         int quarter = i / (SIN_LEN / 4);
+ 
+         t->sin_tab[0][i] = s;
+@@ -36,8 +37,10 @@ static void InitTables (opl_tables_t *t)
+         t->sin_tab[2][i] = s > 0 ? s : -s;
+         t->sin_tab[3][i] = quarter & 1 ? 0 : t->sin_tab[2][i];
+     }
+-    for (w = 0; w < 32; ++w)
+-        t->att_volume[w] = (u16) lrint (2047 * pow (2.0, -w / 32.0));
++    // 2047 * 2^(-w/32), multiplied up step by step instead of with powf
++    volume = 2047;
++    for (w = 0; w < 32; ++w, volume *= 0.97857206f)
++        t->att_volume[w] = (u16) lrintf (volume);
+ 
+     // The first 16 rates are infinite, rates 0-12 step every 2^(12-n)
+     // samples and 13-15 every sample, with the increments of the MAME
+@@ -45,7 +48,7 @@ static void InitTables (opl_tables_t *t)
+     for (i = 0; i < 96; ++i)
+     {
+         int rate = (i - 16) / 4, sel, shift = 0;
+-        double avg = 0, updates;
++        float avg = 0, updates, factor;
+ 
+         if (i < 16)
+             sel = 14;
+@@ -56,12 +59,19 @@ static void InitTables (opl_tables_t *t)
+         }
+         else
+             sel = rate < 15 ? 4 + (rate - 13) * 4 + ((i - 16) & 3) : 12;
+-        updates = (double) EG_QUANTUM / (1 << shift);
++        updates = (float) EG_QUANTUM / (1 << shift);
+ 
+         for (w = 0; w < 8; ++w)
+-            avg += eg_inc[sel][w] / 8.0;
++            avg += eg_inc[sel][w] / 8.0f;
+         t->rate_inc[i] = (s32) (avg * updates * 65536);
+-        t->rate_att[i] = (u32) (pow (1.0 - avg / 8.0, updates) * 65536);
++        // (1 - avg/8)^updates, updates being EG_QUANTUM / 2^shift: squared
++        // to the EG_QUANTUM power, then shift square roots, the same as powf
++        factor = 1.0f - avg / 8.0f;
++        for (w = 1; w < EG_QUANTUM; w *= 2)
++            factor *= factor;
++        for (w = 0; w < shift; ++w)
++            factor = sqrtf (factor);
++        t->rate_att[i] = (u32) (factor * 65536);
+     }
+ }
+ 
+diff --git a/wl_act2.c b/wl_act2.c
+index 7ba957d..e7bbdcf 100644
+--- a/wl_act2.c
++++ b/wl_act2.c
+@@ -1639,15 +1639,11 @@ void T_Launch (objtype *ob)
+ {
+     objtype *newobj = NULL;
+     int32_t deltax,deltay;
+-    float   angle;
+     int     iangle;
+ 
+     deltax = player->x - ob->x;
+     deltay = ob->y - player->y;
+-    angle = (float) atan2 ((float) deltay, (float) deltax);
+-    if (angle<0)
+-        angle = (float) (M_PI*2+angle);
+-    iangle = (int) (angle/(M_PI*2)*ANGLES);
++    iangle = VectorAngle (deltay, deltax);
+     if (ob->obclass == deathobj)
+     {
+         T_Shoot (ob);
+@@ -2311,15 +2307,11 @@ void T_SchabbThrow (objtype *ob)
+ {
+     objtype *newobj = NULL;
+     int32_t deltax,deltay;
+-    float   angle;
+     int     iangle;
+ 
+     deltax = player->x - ob->x;
+     deltay = ob->y - player->y;
+-    angle = (float) atan2((float) deltay, (float) deltax);
+-    if (angle<0)
+-        angle = (float) (M_PI*2+angle);
+-    iangle = (int) (angle/(M_PI*2)*ANGLES);
++    iangle = VectorAngle (deltay, deltax);
+ 
+     newobj = GetNewActor();
+     newobj->state = &s_needle1;
+@@ -2352,15 +2344,11 @@ void T_GiftThrow (objtype *ob)
+ {
+     objtype *newobj = NULL;
+     int32_t deltax,deltay;
+-    float   angle;
+     int     iangle;
+ 
+     deltax = player->x - ob->x;
+     deltay = ob->y - player->y;
+-    angle = (float) atan2((float) deltay, (float) deltax);
+-    if (angle<0)
+-        angle = (float) (M_PI*2+angle);
+-    iangle = (int) (angle/(M_PI*2)*ANGLES);
++    iangle = VectorAngle (deltay, deltax);
+ 
+     newobj = GetNewActor();
+     newobj->state = &s_rocket;
+@@ -2945,7 +2933,6 @@ void T_FakeFire (objtype *ob)
+ {
+     objtype *newobj = NULL;
+     int32_t deltax,deltay;
+-    float   angle;
+     int     iangle;
+ 
+     if (!objfreelist)       // stop shooting if over MAXACTORS
+@@ -2956,10 +2943,7 @@ void T_FakeFire (objtype *ob)
+ 
+     deltax = player->x - ob->x;
+     deltay = ob->y - player->y;
+-    angle = (float) atan2((float) deltay, (float) deltax);
+-    if (angle<0)
+-        angle = (float)(M_PI*2+angle);
+-    iangle = (int) (angle/(M_PI*2)*ANGLES);
++    iangle = VectorAngle (deltay, deltax);
+ 
+     newobj = GetNewActor();
+     newobj->state = &s_fire1;
+@@ -3804,7 +3788,6 @@ boolean CheckPosition (objtype *ob)
+ void    A_StartDeathCam (objtype *ob)
+ {
+     int32_t dx,dy;
+-    float   fangle;
+     int32_t xmove,ymove;
+     int32_t dist;
+ 
+@@ -3857,11 +3840,7 @@ void    A_StartDeathCam (objtype *ob)
+     dx = ob->x - player->x;
+     dy = player->y - ob->y;
+ 
+-    fangle = (float) atan2((float) dy, (float) dx);          // returns -pi to pi
+-    if (fangle<0)
+-        fangle = (float) (M_PI*2+fangle);
+-
+-    player->angle = (short) (fangle/(M_PI*2)*ANGLES);
++    player->angle = VectorAngle (dy, dx);
+ 
+     //
+     // try to position as close as possible without being in a wall
+diff --git a/wl_def.h b/wl_def.h
+index 90dfee5..47c6859 100644
+--- a/wl_def.h
++++ b/wl_def.h
+@@ -183,7 +183,7 @@ typedef uint8_t tiletype;
+ 
+ #define RUNSPEED        6000
+ 
+-#define HEIGHTRATIO     0.50
++#define HEIGHTRATIO     0.50f
+ 
+ // The DS top screen shows the view at 1:1 in the top left corner of the
+ // screen buffer, menus and pictures are shown scaled
+@@ -206,7 +206,7 @@ typedef uint8_t tiletype;
+                                         // to any actor center
+ 
+ #undef M_PI
+-#define PI              3.141592657
++#define PI              3.141592657f
+ #define M_PI PI
+ 
+ #define GLOBAL1         (1l<<16)
+diff --git a/wl_draw.c b/wl_draw.c
+index d9fff10..7d3fb60 100644
+--- a/wl_draw.c
++++ b/wl_draw.c
+@@ -686,7 +686,8 @@ int CalcRotate (objtype *ob)
+     // but it is close enough with only eight rotations
+ 
+ #ifdef FIXCALCROTATE
+-    viewangle = (int)( player->angle + (centerx - ob->viewx) / (8 * viewwidth / 320.0) );
++    // in integers, truncated like the double division it was
++    viewangle = (player->angle * 8 * viewwidth + (centerx - ob->viewx) * 320) / (8 * viewwidth);
+ #else
+     viewangle = player->angle + (centerx - ob->viewx)/8;
+ #endif
+diff --git a/wl_game.c b/wl_game.c
+index 70b7697..2e5a9b4 100644
+--- a/wl_game.c
++++ b/wl_game.c
+@@ -1197,7 +1197,6 @@ void PlayDemo (int demonumber)
+ 
+ void Died (void)
+ {
+-    float   fangle;
+     int32_t dx,dy;
+     int     iangle,curangle,clockwise,counter,change;
+ 
+@@ -1218,11 +1217,7 @@ void Died (void)
+         dx = LastAttacker->x - player->x;
+         dy = player->y - LastAttacker->y;
+ 
+-        fangle = (float) atan2((float) dy, (float) dx);     // returns -pi to pi
+-        if (fangle<0)
+-            fangle = (float) (M_PI*2+fangle);
+-
+-        iangle = (int) (fangle/(M_PI*2)*ANGLES);
++        iangle = VectorAngle (dy, dx);
+     }
+     else
+     {
+diff --git a/wl_inter.c b/wl_inter.c
+index b372b61..a5dd4b0 100644
+--- a/wl_inter.c
++++ b/wl_inter.c
+@@ -424,22 +424,22 @@ LevelCompleted (void)
+         //
+         // Episode One Par Times
+         //
+-        {1.5, "01:30"},
++        {1.5f, "01:30"},
+         {2, "02:00"},
+         {2, "02:00"},
+-        {3.5, "03:30"},
++        {3.5f, "03:30"},
+         {3, "03:00"},
+         {3, "03:00"},
+-        {2.5, "02:30"},
+-        {2.5, "02:30"},
++        {2.5f, "02:30"},
++        {2.5f, "02:30"},
+         {0, "??:??"},           // Boss level
+         {0, "??:??"},           // Secret level
+ 
+         //
+         // Episode Two Par Times
+         //
+-        {1.5, "01:30"},
+-        {3.5, "03:30"},
++        {1.5f, "01:30"},
++        {3.5f, "03:30"},
+         {3, "03:00"},
+         {2, "02:00"},
+         {4, "04:00"},
+@@ -452,12 +452,12 @@ LevelCompleted (void)
+         //
+         // Episode Three Par Times
+         //
+-        {1.5, "01:30"},
+-        {1.5, "01:30"},
+-        {2.5, "02:30"},
+-        {2.5, "02:30"},
+-        {3.5, "03:30"},
+-        {2.5, "02:30"},
++        {1.5f, "01:30"},
++        {1.5f, "01:30"},
++        {2.5f, "02:30"},
++        {2.5f, "02:30"},
++        {3.5f, "03:30"},
++        {2.5f, "02:30"},
+         {2, "02:00"},
+         {6, "06:00"},
+         {0, "??:??"},
+@@ -468,60 +468,60 @@ LevelCompleted (void)
+         //
+         {2, "02:00"},
+         {2, "02:00"},
+-        {1.5, "01:30"},
++        {1.5f, "01:30"},
+         {1, "01:00"},
+-        {4.5, "04:30"},
+-        {3.5, "03:30"},
++        {4.5f, "04:30"},
++        {3.5f, "03:30"},
+         {2, "02:00"},
+-        {4.5, "04:30"},
++        {4.5f, "04:30"},
+         {0, "??:??"},
+         {0, "??:??"},
+ 
+         //
+         // Episode Five Par Times
+         //
+-        {2.5, "02:30"},
+-        {1.5, "01:30"},
+-        {2.5, "02:30"},
+-        {2.5, "02:30"},
++        {2.5f, "02:30"},
++        {1.5f, "01:30"},
++        {2.5f, "02:30"},
++        {2.5f, "02:30"},
+         {4, "04:00"},
+         {3, "03:00"},
+-        {4.5, "04:30"},
+-        {3.5, "03:30"},
++        {4.5f, "04:30"},
++        {3.5f, "03:30"},
+         {0, "??:??"},
+         {0, "??:??"},
+ 
+         //
+         // Episode Six Par Times
+         //
+-        {6.5, "06:30"},
++        {6.5f, "06:30"},
+         {4, "04:00"},
+-        {4.5, "04:30"},
++        {4.5f, "04:30"},
+         {6, "06:00"},
+         {5, "05:00"},
+-        {5.5, "05:30"},
+-        {5.5, "05:30"},
+-        {8.5, "08:30"},
++        {5.5f, "05:30"},
++        {5.5f, "05:30"},
++        {8.5f, "08:30"},
+         {0, "??:??"},
+         {0, "??:??"}
+ #else
+         //
+         // SPEAR OF DESTINY TIMES
+         //
+-        {1.5, "01:30"},
+-        {3.5, "03:30"},
+-        {2.75, "02:45"},
+-        {3.5, "03:30"},
++        {1.5f, "01:30"},
++        {3.5f, "03:30"},
++        {2.75f, "02:45"},
++        {3.5f, "03:30"},
+         {0, "??:??"},           // Boss 1
+-        {4.5, "04:30"},
+-        {3.25, "03:15"},
+-        {2.75, "02:45"},
+-        {4.75, "04:45"},
++        {4.5f, "04:30"},
++        {3.25f, "03:15"},
++        {2.75f, "02:45"},
++        {4.75f, "04:45"},
+         {0, "??:??"},           // Boss 2
+-        {6.5, "06:30"},
+-        {4.5, "04:30"},
+-        {2.75, "02:45"},
+-        {4.5, "04:30"},
++        {6.5f, "06:30"},
++        {4.5f, "04:30"},
++        {2.75f, "02:45"},
++        {4.5f, "04:30"},
+         {6, "06:00"},
+         {0, "??:??"},           // Boss 3
+         {6, "06:00"},
+diff --git a/wl_main.c b/wl_main.c
+index 36f19be..9285b92 100644
+--- a/wl_main.c
++++ b/wl_main.c
+@@ -721,7 +721,7 @@ void BuildTables (void)
+     int i;
+     for(i=0;i<FINEANGLES/8;i++)
+     {
+-        double tang=tan((i+0.5)/radtoint);
++        float tang=tanf((i+0.5f)/radtoint);
+         finetangent[i]=(int32_t)(tang*GLOBAL1);
+         finetangent[FINEANGLES/4-1-i]=(int32_t)((1/tang)*GLOBAL1);
+     }
+@@ -735,7 +735,7 @@ void BuildTables (void)
+     float anglestep=(float)(PI/2/ANGLEQUAD);
+     for(i=0; i<ANGLEQUAD; i++)
+     {
+-        fixed value=(int32_t)(GLOBAL1*sin(angle));
++        fixed value=(int32_t)(GLOBAL1*sinf(angle));
+         sintable[i]=sintable[i+ANGLES]=sintable[ANGLES/2-i]=value;
+         sintable[ANGLES-i]=sintable[ANGLES/2+i]=-value;
+         angle+=anglestep;
+@@ -766,9 +766,9 @@ void CalcProjection (int32_t focal)
+     int     i;
+     int    intang;
+     float   angle;
+-    double  tang;
++    float   tang;
+     int     halfview;
+-    double  facedist;
++    float   facedist;
+ 
+     focallength = focal;
+     facedist = focal+MINDIST;
+@@ -794,7 +794,7 @@ void CalcProjection (int32_t focal)
+     {
+         // start 1/2 pixel over, so viewangle bisects two middle pixels
+         tang = (int32_t)i*VIEWGLOBAL/viewwidth/facedist;
+-        angle = (float) atan(tang);
++        angle = atanf(tang);
+         intang = (int) (angle*radtoint);
+         pixelangle[halfview-1-i] = intang;
+         pixelangle[halfview+i] = -intang;
+diff --git a/wl_utils.c b/wl_utils.c
+index e2502d1..fa5afb4 100644
+--- a/wl_utils.c
++++ b/wl_utils.c
+@@ -33,6 +33,18 @@ fixed FixedDiv (fixed a, fixed b)
+ 	return div64((int64_t)a << FRACBITS, b);
+ }
+ 
++// Convert a direction to the game's integer angles without double math.
++int VectorAngle (int32_t y, int32_t x)
++{
++    float angle = atan2f ((float) y, (float) x);
++    int result;
++
++    if (angle < 0)
++        angle += 2.0f * PI;
++    result = (int) (angle * (ANGLES / (2.0f * PI)));
++    return result == ANGLES ? 0 : result;
++}
++
+ uint16_t ReadShort (void *ptr)
+ {
+     unsigned value;
+diff --git a/wl_utils.h b/wl_utils.h
+index db957d5..229ebde 100644
+--- a/wl_utils.h
++++ b/wl_utils.h
+@@ -10,6 +10,7 @@
+ 
+ void     *safe_malloc (size_t size, const char *fname, uint32_t line);
+ fixed    FixedDiv (fixed a, fixed b);
++int      VectorAngle (int32_t y, int32_t x);
+ 
+ // Inline, the ray caster and the sprites multiply for every column
+ static inline fixed FixedMul (fixed a, fixed b)

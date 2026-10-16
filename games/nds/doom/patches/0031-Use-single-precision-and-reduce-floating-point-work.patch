@@ -1,0 +1,60 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Tue, 6 Oct 2026 12:00:00 +0200
+Subject: [PATCH] Use single precision and reduce floating point work
+
+Reuse a periodic sine table across harmonics and instruments, and divide
+once per waveform when normalizing instead of once per sample, and use
+float math in the mouse speed widget.
+---
+ doomgeneric/i_ndsmusic.c | 10 ++++++++--
+ doomgeneric/v_video.c    |  2 +-
+ 2 files changed, 9 insertions(+), 3 deletions(-)
+
+diff --git a/doomgeneric/i_ndsmusic.c b/doomgeneric/i_ndsmusic.c
+index ecdde69..6721585 100644
+--- a/doomgeneric/i_ndsmusic.c
++++ b/doomgeneric/i_ndsmusic.c
+@@ -151,6 +151,11 @@ static int8_t Clamp8(float v)
+ static void InitWaves(void)
+ {
+     int w, i, h;
++    float sine[WAVE_LEN];
++
++    // Every harmonic uses the same periodic sine samples.
++    for (i = 0; i < WAVE_LEN; ++i)
++        sine[i] = sinf(2.0f * (float) M_PI * i / WAVE_LEN);
+ 
+     for (w = 0; w < NUM_WAVES; ++w)
+     {
+@@ -160,14 +165,15 @@ static void InitWaves(void)
+         {
+             buf[i] = 0.0f;
+             for (h = 0; h < 8; ++h)
+-                buf[i] += harmonics[w][h] * sinf(2.0f * (float) M_PI * (h + 1) * i / WAVE_LEN);
++                buf[i] += harmonics[w][h] * sine[((h + 1) * i) % WAVE_LEN];
+             if (w == WAVE_DIST)
+                 buf[i] = tanhf(3.0f * buf[i]);
+             if (fabsf(buf[i]) > peak)
+                 peak = fabsf(buf[i]);
+         }
++        float scale = 110.0f / peak;
+         for (i = 0; i < WAVE_LEN; ++i)
+-            waves[w][i] = Clamp8(buf[i] * 110.0f / peak);
++            waves[w][i] = Clamp8(buf[i] * scale);
+     }
+     DC_FlushRange(waves, sizeof(waves));
+ }
+diff --git a/doomgeneric/v_video.c b/doomgeneric/v_video.c
+index 273e008..9859ebc 100644
+--- a/doomgeneric/v_video.c
++++ b/doomgeneric/v_video.c
+@@ -942,7 +942,7 @@ void V_DrawMouseSpeedBox(int speed)
+     // If the mouse is turned off or acceleration is turned off, don't
+     // draw the box at all.
+ 
+-    if (!usemouse || fabs(mouse_acceleration - 1) < 0.01)
++    if (!usemouse || fabsf(mouse_acceleration - 1.0f) < 0.01f)
+     {
+         return;
+     }

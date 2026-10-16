@@ -1,0 +1,28 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Wed, 7 Oct 2026 12:00:00 +0200
+Subject: [PATCH] Name savegames after the level
+
+There is no keyboard to type a savegame name, it is named after the
+level, also when it replaces an older one.
+---
+ Game/src/menues.c | 6 +++++-
+ 1 file changed, 5 insertions(+), 1 deletion(-)
+
+diff --git a/Game/src/menues.c b/Game/src/menues.c
+index 7335293..66ef960 100644
+--- a/Game/src/menues.c
++++ b/Game/src/menues.c
+@@ -3117,7 +3117,11 @@ else
+                 sprintf(text,"EPISODE: %-2d / LEVEL: %-2d / SKILL: %-2d",1+ud.volume_number,1+ud.level_number,ud.player_skill);
+                 gametext(160,170,text,0,2+8+16);
+ 
+-                x = strget((320>>1),184,&ud.savegame[current_menu-360][0],19, 999 );
++                // No keyboard to type a name, savegames are named after the level
++                sprintf(&ud.savegame[current_menu-360][0],"%.19s",level_names[ud.volume_number*11+ud.level_number]);
++                if(ud.savegame[current_menu-360][0] == 0)
++                    sprintf(&ud.savegame[current_menu-360][0],"E%dL%d",ud.volume_number+1,ud.level_number+1);
++                x = 1;
+ 
+                 if(x == -1)
+                 {

@@ -1,0 +1,41 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Sat, 3 Oct 2026 11:04:43 +0200
+Subject: [PATCH] Keep the light tables in DTCM
+
+The colormaps are read for every pixel drawn, the DS keeps them in DTCM,
+its fast data memory, instead of in main RAM. They take 8.5 of its 16
+KiB, the rest is left for the stack of the main thread.
+---
+ doomgeneric/r_data.c | 11 +++++++++++
+ 1 file changed, 11 insertions(+)
+
+diff --git a/doomgeneric/r_data.c b/doomgeneric/r_data.c
+index 2d4b65b..31fcfc9 100644
+--- a/doomgeneric/r_data.c
++++ b/doomgeneric/r_data.c
+@@ -162,6 +162,11 @@ fixed_t*	spritetopoffset;
+ 
+ lighttable_t	*colormaps;
+ 
++// The light tables are read for every pixel drawn, the DS keeps them in
++// DTCM, its fast data memory, rather than in main RAM
++static lighttable_t	dtcm_colormaps[(NUMCOLORMAPS + 2) * 256]
++			    __attribute__((section(".sbss")));
++
+ 
+ //
+ // MAPTEXTURE_T CACHING
+@@ -689,6 +694,12 @@ void R_InitColormaps (void)
+     // Load in the light tables, 
+     //  256 byte align tables.
+     lump = W_GetNumForName(DEH_String("COLORMAP"));
++    if (W_LumpLength(lump) >= sizeof(dtcm_colormaps))
++    {
++	memcpy(dtcm_colormaps, W_CacheLumpNum(lump, PU_CACHE), sizeof(dtcm_colormaps));
++	colormaps = dtcm_colormaps;
++	return;
++    }
+     colormaps = W_CacheLumpNum(lump, PU_STATIC);
+ }
+ 

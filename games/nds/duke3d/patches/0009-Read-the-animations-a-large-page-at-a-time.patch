@@ -1,0 +1,186 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Mon, 12 Oct 2026 16:53:52 +0200
+Subject: [PATCH] Read the animations a large page at a time
+
+The animations were read whole into the cache, the logo of the Atomic
+Edition and the animations of its fourth episode, up to 1.8 MB, are
+bigger than all of it, which stopped the game at startup. Only the large
+page that is played is read from the file, at most 64 KB.
+---
+ Game/src/animlib.c | 32 ++++++++++++++++----------------
+ Game/src/animlib.h |  4 ++--
+ Game/src/funct.h   |  2 +-
+ Game/src/menues.c  | 19 ++++++++-----------
+ 4 files changed, 27 insertions(+), 30 deletions(-)
+
+diff --git a/Game/src/animlib.c b/Game/src/animlib.c
+index d89112c..df97f53 100644
+--- a/Game/src/animlib.c
++++ b/Game/src/animlib.c
+@@ -34,6 +34,7 @@ Prepared for public release: 03/21/2003 - Charlie Wiederhold, 3D Realms
+ #include "util_lib.h"
+ //#include "_animlib.h"
+ #include "animlib.h"
++#include "filesystem.h"
+ 
+ //****************************************************************************
+ //
+@@ -88,25 +89,20 @@ uint16 findpage (uint16 framenumber)
+ //****************************************************************************
+ //
+ //      loadpage ()
+-//      - seek out and load in the large page specified
++//      - seek out and read in the large page specified from the file
+ //
+ //****************************************************************************
+ 
+ void loadpage (uint16 pagenumber, uint16 *pagepointer)
+    {
+-   int32 size;
+-   byte * buffer;
+-
+    CheckAnimStarted ( "loadpage" );
+-   buffer = anim->buffer;
+    if (anim->curlpnum != pagenumber)
+       {
+       anim->curlpnum = pagenumber;
+-      buffer += 0xb00 + (pagenumber*0x10000);
+-      size = sizeof(lp_descriptor);
+-      memcpy(&anim->curlp,buffer,size);
+-      buffer += size + sizeof(uint16);
+-      memcpy(pagepointer,buffer,anim->curlp.nBytes+(anim->curlp.nRecords*2));
++      klseek(anim->handle, 0xb00 + (pagenumber*0x10000), SEEK_SET);
++      kread(anim->handle, &anim->curlp, sizeof(lp_descriptor));
++      klseek(anim->handle, sizeof(uint16), SEEK_CUR);
++      kread(anim->handle, pagepointer, anim->curlp.nBytes+(anim->curlp.nRecords*2));
+       }
+    }
+ 
+@@ -248,20 +244,24 @@ void drawframe (uint16 framenumber)
+ //
+ //****************************************************************************
+ 
+-void ANIM_LoadAnim (byte * buffer)
++void ANIM_LoadAnim (int32 handle)
+    {
+    uint16 i;
+    int32 size;
++   byte * buffer;
+ 
+    if (!Anim_Started) Anim_Started = true;
+ 
+-   anim->buffer = buffer;
++   anim->handle = handle;
+    anim->curlpnum = 0xffff;
+    anim->currentframe = -1;
+    size = sizeof(lpfileheader);
+-   memcpy(&anim->lpheader, buffer, size );
+-   buffer += size+128;
+-   // load the color palette
++   klseek(handle, 0, SEEK_SET);
++   kread(handle, &anim->lpheader, size);
++   klseek(handle, 128, SEEK_CUR);
++   // load the color palette, through the page buffer that has no page yet
++   buffer = (byte *)anim->thepage;
++   kread(handle, buffer, 1024);
+    for (i = 0; i < 768; i += 3)
+       {
+       anim->pal[i+2] = *buffer++;
+@@ -271,7 +271,7 @@ void ANIM_LoadAnim (byte * buffer)
+       }
+         // read in large page descriptors
+    size = sizeof(anim->LpArray);
+-   memcpy(&anim->LpArray,buffer,size);
++   kread(handle, &anim->LpArray, size);
+    }
+ 
+ //****************************************************************************
+diff --git a/Game/src/animlib.h b/Game/src/animlib.h
+index ef3b4cf..c9deecf 100644
+--- a/Game/src/animlib.h
++++ b/Game/src/animlib.h
+@@ -93,7 +93,7 @@ typedef struct
+    lp_descriptor curlp;        // header of large page currently in memory
+    uint16 thepage[0x8000];     // buffer where current large page is loaded
+    byte imagebuffer[0x10000]; // buffer where anim frame is decoded
+-   byte * buffer;
++   int32 handle;              // file the large pages are read from
+    byte pal[768];
+    int32  currentframe;
+   } anim_t;
+@@ -106,7 +106,7 @@ typedef struct
+ //
+ //****************************************************************************
+ 
+-void ANIM_LoadAnim (byte * buffer);
++void ANIM_LoadAnim (int32 handle);
+ 
+ //****************************************************************************
+ //
+diff --git a/Game/src/funct.h b/Game/src/funct.h
+index 96cf198..4563b9a 100644
+--- a/Game/src/funct.h
++++ b/Game/src/funct.h
+@@ -508,7 +508,7 @@ extern void renderframe(uint16 framenumber,uint16 *pagepointer);
+ //#line "animlib.c" 214
+ extern void drawframe(uint16 framenumber);
+ //#line "animlib.c" 228
+-extern void ANIM_LoadAnim(byte *buffer);
++extern void ANIM_LoadAnim(int32 handle);
+ //#line "animlib.c" 260
+ extern void ANIM_FreeAnim(void );
+ //#line "animlib.c" 275
+diff --git a/Game/src/menues.c b/Game/src/menues.c
+index 6db8b7d..385dabd 100644
+--- a/Game/src/menues.c
++++ b/Game/src/menues.c
+@@ -4602,8 +4602,8 @@ void endanimvol43(int32_t fr)
+ int32_t lastanimhack=0;
+ void playanm(char  *fn,uint8_t  t)
+ {
+-    uint8_t  *animbuf, *palptr;
+-    int32_t i, j, k, length=0, numframes=0;
++    uint8_t  *palptr;
++    int32_t i, j, k, numframes=0;
+     int32 handle=-1;
+ 
+     if(t != 7 && t != 9 && t != 10 && t != 11)
+@@ -4620,24 +4620,19 @@ void playanm(char  *fn,uint8_t  t)
+     if(handle == -1) 
+ 		return;
+ 
+-    length = kfilelength(handle);
+-
+     tiles[MAXTILES-3-t].lock = 219+t;
+ 
++    /* The large pages are read from the file as they are played, the
++       biggest animations don't fit in the cache */
+     if(anim == 0 || lastanimhack != (MAXTILES-3-t))
+-        allocache((uint8_t**)&anim,length+sizeof(anim_t),&tiles[MAXTILES-3-t].lock);
+-
+-    animbuf = (uint8_t  *)(anim)+sizeof(anim_t);
++        allocache((uint8_t**)&anim,sizeof(anim_t),&tiles[MAXTILES-3-t].lock);
+ 
+     lastanimhack = (MAXTILES-3-t);
+ 
+     tiles[MAXTILES-3-t].dim.width = 200;
+     tiles[MAXTILES-3-t].dim.height = 320;
+ 
+-    kread(handle,animbuf,length);
+-    kclose(handle);
+-
+-    ANIM_LoadAnim (animbuf);
++    ANIM_LoadAnim (handle);
+     numframes = ANIM_NumFrames();
+ 
+     palptr = ANIM_GetPalette();
+@@ -4690,6 +4685,8 @@ void playanm(char  *fn,uint8_t  t)
+     ENDOFANIMLOOP:
+ 
+     ANIM_FreeAnim ();
++    if(handle != -1)
++        kclose(handle);
+     tiles[MAXTILES-3-t].lock = 1;
+ }
+ 

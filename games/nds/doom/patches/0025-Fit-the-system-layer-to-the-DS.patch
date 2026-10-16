@@ -1,0 +1,253 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Sat, 3 Oct 2026 11:04:45 +0200
+Subject: [PATCH] Fit the system layer to the DS
+
+The zone takes all free RAM, 4 MiB on the DS and 16 MiB on the DSi, and
+needs at least 2 MiB. I_Quit returns to the homebrew launcher, I_Error
+shows the message on the touch screen, the startup banner fits the 32
+column console without the license text, and the Zenity error box for
+Linux is gone. I_Error is declared noreturn, which it always was.
+---
+ doomgeneric/i_system.c | 151 ++++++-----------------------------------
+ doomgeneric/i_system.h |   2 +-
+ 2 files changed, 21 insertions(+), 132 deletions(-)
+
+diff --git a/doomgeneric/i_system.c b/doomgeneric/i_system.c
+index 53ab2c9..107c4a6 100644
+--- a/doomgeneric/i_system.c
++++ b/doomgeneric/i_system.c
+@@ -51,12 +51,14 @@
+ #include "w_wad.h"
+ #include "z_zone.h"
+ 
++#include "doomgeneric_nds.h"
++
+ #ifdef __MACOSX__
+ #include <CoreFoundation/CFUserNotification.h>
+ #endif
+ 
+ #define DEFAULT_RAM 6 /* MiB */
+-#define MIN_RAM     6  /* MiB */
++#define MIN_RAM     2  /* MiB */
+ 
+ 
+ typedef struct atexit_listentry_s atexit_listentry_t;
+@@ -88,45 +90,23 @@ void I_Tactile(int on, int off, int total)
+ {
+ }
+ 
+-// Zone memory auto-allocation function that allocates the zone size
+-// by trying progressively smaller zone sizes until one is found that
+-// works.
++// Memory left outside the zone for libc, file buffers and WAD directories
++#define ZONE_RESERVE (512 * 1024)
+ 
++// The DS has 4 MiB of RAM and the DSi 16 MiB, so rather than a fixed size
++// use everything left between the heap top and the end of RAM, minus a
++// little for the rest of the program.
+ static byte *AutoAllocMemory(int *size, int default_ram, int min_ram)
+ {
++    extern char *fake_heap_end;
+     byte *zonemem;
+ 
+-    // Allocate the zone memory.  This loop tries progressively smaller
+-    // zone sizes until a size is found that can be allocated.
+-    // If we used the -mb command line parameter, only the parameter
+-    // provided is accepted.
+-
+-    zonemem = NULL;
+-
+-    while (zonemem == NULL)
++    *size = (fake_heap_end - (char *) sbrk(0)) - ZONE_RESERVE;
++    zonemem = malloc(*size);
++    if (zonemem == NULL || *size < min_ram * 1024 * 1024)
+     {
+-        // We need a reasonable minimum amount of RAM to start.
+-
+-        if (default_ram < min_ram)
+-        {
+-            I_Error("Unable to allocate %i MiB of RAM for zone", default_ram);
+-        }
+-
+-        // Try to allocate the zone memory.
+-
+-        *size = default_ram * 1024 * 1024;
+-
+-        zonemem = malloc(*size);
+-
+-        // Failed to allocate?  Reduce zone size until we reach a size
+-        // that is acceptable.
+-
+-        if (zonemem == NULL)
+-        {
+-            default_ram -= 1;
+-        }
++        I_Error("Unable to allocate %i KiB of RAM for zone", *size / 1024);
+     }
+-
+     return zonemem;
+ }
+ 
+@@ -163,10 +143,12 @@ byte *I_ZoneBase (int *size)
+     return zonemem;
+ }
+ 
++#define BANNER_WIDTH 31 // fits the 32 column DS console without wrapping
++
+ void I_PrintBanner(char *msg)
+ {
+     int i;
+-    int spaces = 35 - (strlen(msg) / 2);
++    int spaces = (BANNER_WIDTH - (int) strlen(msg)) / 2;
+ 
+     for (i=0; i<spaces; ++i)
+         putchar(' ');
+@@ -178,7 +160,7 @@ void I_PrintDivider(void)
+ {
+     int i;
+ 
+-    for (i=0; i<75; ++i)
++    for (i=0; i<BANNER_WIDTH; ++i)
+     {
+         putchar('=');
+     }
+@@ -191,14 +173,6 @@ void I_PrintStartupBanner(char *gamedescription)
+     I_PrintDivider();
+     I_PrintBanner(gamedescription);
+     I_PrintDivider();
+-    
+-    printf(
+-    " " PACKAGE_NAME " is free software, covered by the GNU General Public\n"
+-    " License.  There is NO warranty; not even for MERCHANTABILITY or FITNESS\n"
+-    " FOR A PARTICULAR PURPOSE. You are welcome to change and distribute\n"
+-    " copies under certain conditions. See the source for more information.\n");
+-
+-    I_PrintDivider();
+ }
+ 
+ // 
+@@ -259,96 +233,12 @@ void I_Quit (void)
+ 
+ #if ORIGCODE
+     SDL_Quit();
+-
+-    exit(0);
+ #endif
+-}
+-
+-#if !defined(_WIN32) && !defined(__MACOSX__) && !defined(__DJGPP__)
+-#define ZENITY_BINARY "/usr/bin/zenity"
+-
+-// returns non-zero if zenity is available
+-
+-static int ZenityAvailable(void)
+-{
+-    return system(ZENITY_BINARY " --help >/dev/null 2>&1") == 0;
+-}
+-
+-// Escape special characters in the given string so that they can be
+-// safely enclosed in shell quotes.
+-
+-static char *EscapeShellString(char *string)
+-{
+-    char *result;
+-    char *r, *s;
+ 
+-    // In the worst case, every character might be escaped.
+-    result = malloc(strlen(string) * 2 + 3);
+-    r = result;
+-
+-    // Enclosing quotes.
+-    *r = '"';
+-    ++r;
+-
+-    for (s = string; *s != '\0'; ++s)
+-    {
+-        // From the bash manual:
+-        //
+-        //  "Enclosing characters in double quotes preserves the literal
+-        //   value of all characters within the quotes, with the exception
+-        //   of $, `, \, and, when history expansion is enabled, !."
+-        //
+-        // Therefore, escape these characters by prefixing with a backslash.
+-
+-        if (strchr("$`\\!", *s) != NULL)
+-        {
+-            *r = '\\';
+-            ++r;
+-        }
+-
+-        *r = *s;
+-        ++r;
+-    }
+-
+-    // Enclosing quotes.
+-    *r = '"';
+-    ++r;
+-    *r = '\0';
+-
+-    return result;
+-}
+-
+-// Open a native error box with a message using zenity
+-
+-static int ZenityErrorBox(char *message)
+-{
+-    int result;
+-    char *escaped_message;
+-    char *errorboxpath;
+-    static size_t errorboxpath_size;
+-
+-    if (!ZenityAvailable())
+-    {
+-        return 0;
+-    }
+-
+-    escaped_message = EscapeShellString(message);
+-
+-    errorboxpath_size = strlen(ZENITY_BINARY) + strlen(escaped_message) + 19;
+-    errorboxpath = malloc(errorboxpath_size);
+-    M_snprintf(errorboxpath, errorboxpath_size, "%s --error --text=%s",
+-               ZENITY_BINARY, escaped_message);
+-
+-    result = system(errorboxpath);
+-
+-    free(errorboxpath);
+-    free(escaped_message);
+-
+-    return result;
++    // Returns to the homebrew launcher
++    exit(0);
+ }
+ 
+-#endif /* !defined(_WIN32) && !defined(__MACOSX__) && !defined(__DJGPP__) */
+-
+ 
+ //
+ // I_Error
+@@ -453,10 +343,9 @@ void I_Error (char *error, ...)
+         printf("%s\n", msgbuf);
+         exit(-1);
+     }
+-
+ #else
+     {
+-        ZenityErrorBox(msgbuf);
++        I_NDS_ErrorBox(msgbuf);
+     }
+ #endif
+ 
+diff --git a/doomgeneric/i_system.h b/doomgeneric/i_system.h
+index b65daff..214e17a 100644
+--- a/doomgeneric/i_system.h
++++ b/doomgeneric/i_system.h
+@@ -52,7 +52,7 @@ ticcmd_t* I_BaseTiccmd (void);
+ // Clean exit, displays sell blurb.
+ void I_Quit (void);
+ 
+-void I_Error (char *error, ...);
++void I_Error (char *error, ...) __attribute__((noreturn));
+ 
+ void I_Tactile (int on, int off, int total);
+ 

@@ -1,0 +1,82 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Sat, 3 Oct 2026 11:04:44 +0200
+Subject: [PATCH] Run hot functions from ITCM
+
+HOT_CODE puts a function in ITCM, the DS's fast code memory, as ARM
+code: the automap's line clipping and drawing and SlopeDiv. Whole hot
+source files are put there by the build.
+---
+ doomgeneric/am_map.c   | 8 ++++----
+ doomgeneric/doomtype.h | 4 ++++
+ doomgeneric/tables.c   | 2 +-
+ 3 files changed, 9 insertions(+), 5 deletions(-)
+
+diff --git a/doomgeneric/am_map.c b/doomgeneric/am_map.c
+index 5e321e1..d00b688 100644
+--- a/doomgeneric/am_map.c
++++ b/doomgeneric/am_map.c
+@@ -865,7 +865,7 @@ void AM_clearFB(int color)
+ // faster reject and precalculated slopes.  If the speed is needed,
+ // use a hash algorithm to handle  the common cases.
+ //
+-boolean
++HOT_CODE boolean
+ AM_clipMline
+ ( mline_t*	ml,
+   fline_t*	fl )
+@@ -1010,7 +1010,7 @@ AM_clipMline
+ //
+ // Classic Bresenham w/ whatever optimizations needed for speed
+ //
+-void
++HOT_CODE void
+ AM_drawFline
+ ( fline_t*	fl,
+   int		color )
+@@ -1088,7 +1088,7 @@ AM_drawFline
+ //
+ // Clip lines, draw visible part sof lines.
+ //
+-void
++HOT_CODE void
+ AM_drawMline
+ ( mline_t*	ml,
+   int		color )
+@@ -1150,7 +1150,7 @@ void AM_drawGrid(int color)
+ // Determines visible lines, draws them.
+ // This is LineDef based, not LineSeg based.
+ //
+-void AM_drawWalls(void)
++HOT_CODE void AM_drawWalls(void)
+ {
+     int i;
+     static mline_t l;
+diff --git a/doomgeneric/doomtype.h b/doomgeneric/doomtype.h
+index dc14bc5..61268ea 100644
+--- a/doomgeneric/doomtype.h
++++ b/doomgeneric/doomtype.h
+@@ -52,6 +52,10 @@
+ #define PACKEDATTR
+ #endif
+ 
++// A hot function the Nintendo DS runs from ITCM, its fast code memory, as
++// ARM code
++#define HOT_CODE __attribute__((section(".itcm"), target("arm"), noinline))
++
+ // C99 integer types; with gcc we just use this.  Other compilers 
+ // should add conditional statements that define the C99 types.
+ 
+diff --git a/doomgeneric/tables.c b/doomgeneric/tables.c
+index 4b409e8..7e1d5e5 100644
+--- a/doomgeneric/tables.c
++++ b/doomgeneric/tables.c
+@@ -40,7 +40,7 @@
+ // which is looked up in the tantoangle[] table.  The +1 size is to handle
+ // the case when x==y without additional checking.
+ 
+-int SlopeDiv(unsigned int num, unsigned int den)
++HOT_CODE int SlopeDiv(unsigned int num, unsigned int den)
+ {
+     unsigned ans;
+     

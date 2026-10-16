@@ -1,0 +1,64 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Wed, 7 Oct 2026 12:00:00 +0200
+Subject: [PATCH] Clear and copy buffers a word at a time
+
+clearbufbyte() and copybufbyte() went a byte at a time, the first
+picking each byte out of the fill value. They write words where they line
+up, and copy with memmove.
+---
+ Engine/src/fixedPoint_math.c | 25 ++++++++++++++++---------
+ 1 file changed, 16 insertions(+), 9 deletions(-)
+
+diff --git a/Engine/src/fixedPoint_math.c b/Engine/src/fixedPoint_math.c
+index c917657..997c3ce 100644
+--- a/Engine/src/fixedPoint_math.c
++++ b/Engine/src/fixedPoint_math.c
+@@ -1,6 +1,7 @@
+ // converted from asm to c by Jonof
+ 
+ #include <stdio.h>
++#include <string.h>
+ #include "platform.h"
+ #include "fixedPoint_math.h"
+ 
+@@ -10,15 +11,21 @@ void clearbuf(void *d, int32_t c, int32_t a)
+ 	while ((c--) > 0) *(p++) = a;
+ }
+ 
++// Fills c bytes with the bytes of a repeated, whole words where they line up
+ void clearbufbyte(void *D, int32_t c, int32_t a)
+-{ // Cringe City
++{
+ 	uint8_t  *p = (uint8_t *)D;
+-	int32_t m[4] = { 0xffl,0xff00l,0xff0000l,0xff000000l };
+-	int32_t n[4] = { 0,8,16,24 };
+-	int32_t z=0;
+-	while ((c--) > 0) {
+-		*(p++) = (uint8_t )((a & m[z])>>n[z]);
+-		z=(z+1)&3;
++	uint32_t v = a;
++
++	for (; c > 0 && ((uintptr_t)p & 3); c--) {
++		*(p++) = (uint8_t )v;
++		v = (v >> 8) | (v << 24);
++	}
++	for (; c >= 4; c -= 4, p += 4)
++		*(uint32_t *)p = v;
++	for (; c > 0; c--) {
++		*(p++) = (uint8_t )v;
++		v = (v >> 8) | (v << 24);
+ 	}
+ }
+ 
+@@ -30,8 +37,8 @@ void copybuf(void *s, void *d, int32_t c)
+ 
+ void copybufbyte(void *S, void *D, int32_t c)
+ {
+-	uint8_t  *p = (uint8_t *)S, *q = (uint8_t *)D;
+-	while((c--) > 0) *(q++) = *(p++);
++	if (c > 0)
++		memmove(D, S, c);
+ }
+ 
+ void copybufreverse(void *S, void *D, int32_t c)

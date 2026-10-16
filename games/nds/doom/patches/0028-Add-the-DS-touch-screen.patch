@@ -1,0 +1,813 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Sat, 3 Oct 2026 11:04:46 +0200
+Subject: [PATCH] Add the DS touch screen
+
+The touch screen shows the classic status bar, the automap with the
+level name, time, kills, items and secrets, and 2 rows of stone cells:
+the weapons with their pickup pictures (the fist and pistol as held,
+scaled down), slot numbers and ammo, which select them when tapped, and
+the status bar's ammo table. The map is redrawn every other frame, Doom
+runs at 35 tics a second, its texts are on a background layer of their
+own over it, drawn only when they change. Outside of a level and with the settings open
+it shows the logo and the controls. Changed rows are copied to VRAM by
+DMA.
+---
+ doomgeneric/i_ndstouch.c | 755 +++++++++++++++++++++++++++++++++++++++
+ doomgeneric/m_menu.c     |   6 +
+ doomgeneric/m_menu.h     |   3 +
+ 3 files changed, 764 insertions(+)
+ create mode 100644 doomgeneric/i_ndstouch.c
+
+diff --git a/doomgeneric/i_ndstouch.c b/doomgeneric/i_ndstouch.c
+new file mode 100644
+index 0000000..9ace8fa
+--- /dev/null
++++ b/doomgeneric/i_ndstouch.c
+@@ -0,0 +1,755 @@
++//
++// Nintendo DS touch screen
++//
++// While playing it shows the classic status bar, the live automap and a
++// weapon selector with the ammo table, drawn with the WAD's own graphics into
++// an 8bpp bitmap with Doom's palette. Tapping a weapon selects it. Outside of
++// a level and with the settings open it shows the controls.
++//
++
++#include <nds.h>
++#include <ctype.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++
++#include "am_map.h"
++#include "d_event.h"
++#include "d_player.h"
++#include "doomstat.h"
++#include "hu_stuff.h"
++#include "i_swap.h"
++#include "i_video.h"
++#include "m_menu.h"
++#include "r_state.h"
++#include "st_stuff.h"
++#include "tables.h"
++#include "v_patch.h"
++#include "w_wad.h"
++#include "z_zone.h"
++
++#include "doomgeneric_nds.h"
++
++extern patch_t *hu_font[HU_FONTSIZE];
++
++// Touch screen layout: the status bar, the map and the weapon selector of 2
++// rows of 4 cells, the last one is the ammo table
++#define SBAR_HEIGHT 32
++#define MAP_Y       SBAR_HEIGHT
++#define MAP_HEIGHT  104
++#define WEAPONS_Y   (MAP_Y + MAP_HEIGHT)
++#define CELL_W      64
++#define CELL_H      28
++#define AMMO_X      (3 * CELL_W)
++#define AMMO_Y      (WEAPONS_Y + CELL_H)
++#define NUM_SLOTS   7
++
++// The cell of weapon slot 1 to 7, slot 1 is fist/chainsaw and 3
++// shotgun/super shotgun
++#define SLOT_X(slot)    ((slot) % 4 * CELL_W)
++#define SLOT_Y(slot)    (WEAPONS_Y + (slot) / 4 * CELL_H)
++
++static int touch_slot = -1;
++
++
++// Tapping a weapon cell selects that weapon, outside of a level and in the
++// menus the touch screen only shows the controls or does nothing, the slot
++// keys would pick savegames
++void NDS_PollTouch(u32 down, u32 held)
++{
++    touchPosition touch;
++    int slot;
++
++    if (!(held & KEY_TOUCH))
++    {
++        if (touch_slot >= 0)
++            NDS_PostKey(ev_keyup, '1' + touch_slot);
++        touch_slot = -1;
++        return;
++    }
++    if (!(down & KEY_TOUCH) || gamestate != GS_LEVEL || menuactive)
++        return;
++    touchRead(&touch);
++    slot = touch.py < WEAPONS_Y ? -1 : (touch.py - WEAPONS_Y) / CELL_H * 4 + touch.px / CELL_W;
++    if (slot >= 0 && slot < NUM_SLOTS)
++    {
++        touch_slot = slot;
++        NDS_PostKey(ev_keydown, '1' + slot);
++    }
++}
++
++
++
++static byte sub_fb[SUB_WIDTH * SUB_HEIGHT] __attribute__((aligned(32)));
++// The texts over the map are on a layer of their own, drawn only when they
++// change rather than with every map: the level name and time in a strip at
++// its top, the percentages in one at its bottom
++#define TEXT_H      12
++#define TEXT_VRAM   ((byte *) BG_BMP_RAM_SUB(4))
++static byte text_fb[2 * TEXT_H * SUB_WIDTH] __attribute__((aligned(32)));
++static unsigned texts_hash;
++// What DrawPatch draws into
++static byte *draw_fb = sub_fb;
++static int draw_h = SUB_HEIGHT;
++static byte stbar[SCREENWIDTH * SBAR_HEIGHT];     // the STBAR picture
++static byte xlat_white[256], xlat_gold[256], xlat_gray[256];
++static unsigned sbar_hash, weapons_hash;
++static boolean help_shown;
++
++// The pickup pictures of the weapons. The fist and pistol have none and
++// show how the player holds them: smaller, only the top of the pistol's
++// hand, at the bottom of the cell.
++static const struct
++{
++    const char *sprite;
++    int rows;       // of the sprite shown, 0 for all
++    int height;     // at most
++    boolean held;
++} weapon_pictures[NUMWEAPONS] =
++{
++    { "PUNGA0", 0,  18,     true },
++    { "PISGA0", 42, CELL_H, true },
++    { "SHOTA0" }, { "MGUNA0" }, { "LAUNA0" }, { "PLASA0" },
++    { "BFUGA0" }, { "CSAWA0" }, { "SGN2A0" },
++};
++
++static const char *const weapon_names[NUMWEAPONS] =
++{
++    "FIST", "PISTOL", "SHOTGUN", "CHAINGUN", "ROCKET", "PLASMA", "BFG 9000", "CHAINSAW", "SUPER SG",
++};
++
++// The graphics, kept in the zone so caching one can't purge another
++static struct
++{
++    patch_t *tallnum[10], *yellownum[10], *graynum[10];
++    patch_t *percent, *arms, *keys[NUMCARDS], *logo;
++    const byte *flat;   // the view border's, 64x64
++} gfx;
++
++// Light levels of COLORMAP
++#define LIGHT_UNOWNED   26
++#define LIGHT_BACKDROP  22
++#define LIGHT_INSET     28
++
++// Palette indices in PLAYPAL
++#define COL_BLACK       0
++#define COL_LIGHT       88      // bevels like the status bar's
++#define COL_DARK        104
++#define COL_SELECTED    231     // yellow
++#define COL_PRESSED     176     // red
++
++// The status bar up to the keys, without the ammo table on the right, is 236
++// wide. The rest of the 256 columns is plain stone from the right end of the
++// ammo table, with the column of key boxes centered in it.
++#define SBAR_CUT    236
++#define SBAR_STONE  (SCREENWIDTH - (SUB_WIDTH - SBAR_CUT))
++#define KEYBOX_SRC  237
++#define KEYBOX_W    11
++#define KEYBOX_X    (SBAR_CUT + (SUB_WIDTH - SBAR_CUT - KEYBOX_W) / 2)
++
++// The ammo table cell shows the status bar's from here, its numbers are right
++// aligned at 288 and 314 like st_stuff.c's
++#define AMMO_SRC_X  252
++#define AMMO_SRC_Y  2
++
++// The stone of the panels is the plain part of the status bar's armor
++// section above its label, mirrored so it tiles without seams
++#define STONE_X 182
++#define STONE_Y 2
++#define STONE_W 48
++#define STONE_H 20
++
++static byte stone[2 * STONE_H][2 * STONE_W];
++
++static void BuildStone(void)
++{
++    int y, x;
++
++    for (y = 0; y < 2 * STONE_H; ++y)
++        for (x = 0; x < 2 * STONE_W; ++x)
++            stone[y][x] = stbar[(STONE_Y + (y < STONE_H ? y : 2 * STONE_H - 1 - y)) * SCREENWIDTH
++                                + STONE_X + (x < STONE_W ? x : 2 * STONE_W - 1 - x)];
++}
++
++// The HUD font is drawn with the red ramp 176-191, remap it onto another ramp
++static void BuildTranslation(byte *xlat, int base, int count)
++{
++    int i;
++
++    for (i = 0; i < 256; ++i)
++        xlat[i] = i;
++    for (i = 0; i < 16; ++i)
++        xlat[176 + i] = base + i * count / 16;
++}
++
++// A copy of its own: Doom turns cached lumps purgable again when it uses
++// them itself (the menu draws M_DOOM, the floors release their flat), and
++// the zone then reuses their memory
++static void *LoadLump(const char *name)
++{
++    int lump = W_CheckNumForName((char *) name);
++    int len;
++    void *copy;
++
++    if (lump < 0)
++        return NULL;
++    len = W_LumpLength(lump);
++    copy = Z_Malloc(len, PU_STATIC, NULL);
++    memcpy(copy, W_CacheLumpNum(lump, PU_CACHE), len);
++    return copy;
++}
++
++static void LoadDigits(patch_t **digits, const char *font)
++{
++    char name[9];
++    int i;
++
++    for (i = 0; i < 10; ++i)
++    {
++        snprintf(name, sizeof(name), "%s%d", font, i);
++        digits[i] = LoadLump(name);
++    }
++}
++
++// The weapon pictures fit inside the bevels of a cell, the ones that are
++// bigger are scaled down, keeping their proportions
++#define ICON_W  (CELL_W - 2)
++#define ICON_H  (CELL_H - 2)
++
++typedef struct
++{
++    int w, h;                   // 0 when the WAD doesn't have the weapon
++    int y;                      // in the cell
++    byte pixels[ICON_W * ICON_H];
++    byte opaque[ICON_W * ICON_H];
++} weapon_icon_t;
++
++static weapon_icon_t weapon_icons[NUMWEAPONS];
++
++static void BuildWeaponIcon(weapon_icon_t *icon, weapontype_t weapon)
++{
++    static byte ones[256];
++    int lump = W_CheckNumForName((char *) weapon_pictures[weapon].sprite);
++    int rows = weapon_pictures[weapon].rows;
++    int maxh = weapon_pictures[weapon].height;
++    const patch_t *patch;
++    byte *pixels, *opaque;
++    int pw, ph, x, y;
++
++    icon->w = icon->h = 0;
++    if (lump < 0)
++        return;
++    patch = W_CacheLumpNum(lump, PU_CACHE);
++    pw = SHORT(patch->width);
++    ph = SHORT(patch->height);
++    if (pw <= 0 || ph <= 0)
++        return;
++    pixels = malloc(pw * ph);
++    opaque = calloc(pw, ph);
++    if (pixels == NULL || opaque == NULL)
++    {
++        free(pixels);
++        free(opaque);
++        return;
++    }
++    // The picture, and where it isn't transparent
++    memset(ones, 1, sizeof(ones));
++    NDS_DrawPatch(pixels, pw, ph, SHORT(patch->leftoffset), SHORT(patch->topoffset), patch, NULL);
++    NDS_DrawPatch(opaque, pw, ph, SHORT(patch->leftoffset), SHORT(patch->topoffset), patch, ones);
++    if (rows > 0 && rows < ph)
++        ph = rows;
++    if (maxh == 0 || maxh > ICON_H)
++        maxh = ICON_H;
++
++    if (pw * maxh > ph * ICON_W)
++    {
++        icon->w = pw < ICON_W ? pw : ICON_W;
++        icon->h = ph * icon->w / pw;
++    }
++    else
++    {
++        icon->h = ph < maxh ? ph : maxh;
++        icon->w = pw * icon->h / ph;
++    }
++    icon->y = weapon_pictures[weapon].held ? ICON_H - icon->h : (ICON_H - icon->h) / 2;
++    // Sampled at the middle of each pixel, 1:1 when it fits
++    for (y = 0; y < icon->h; ++y)
++        for (x = 0; x < icon->w; ++x)
++        {
++            int src = (2 * y + 1) * ph / (2 * icon->h) * pw + (2 * x + 1) * pw / (2 * icon->w);
++
++            icon->pixels[y * ICON_W + x] = pixels[src];
++            icon->opaque[y * ICON_W + x] = opaque[src];
++        }
++    free(pixels);
++    free(opaque);
++}
++
++void NDS_InitSubScreen(void)
++{
++    const byte *playpal = W_CacheLumpName("PLAYPAL", PU_CACHE);
++    char name[9];
++    int i;
++
++    for (i = 0; i < 256; ++i)
++    {
++        int r = gammatable[usegamma][playpal[i * 3]];
++        int g = gammatable[usegamma][playpal[i * 3 + 1]];
++        int b = gammatable[usegamma][playpal[i * 3 + 2]];
++        BG_PALETTE_SUB[i] = RGB15(r >> 3, g >> 3, b >> 3);
++    }
++
++    LoadDigits(gfx.tallnum, "STTNUM");
++    LoadDigits(gfx.yellownum, "STYSNUM");
++    LoadDigits(gfx.graynum, "STGNUM");
++    gfx.percent = LoadLump("STTPRCNT");
++    gfx.arms = LoadLump("STARMS");
++    for (i = 0; i < NUMCARDS; ++i)
++    {
++        snprintf(name, sizeof(name), "STKEYS%d", i);
++        gfx.keys[i] = LoadLump(name);
++    }
++    for (i = 0; i < NUMWEAPONS; ++i)
++        BuildWeaponIcon(&weapon_icons[i], i);
++    gfx.logo = LoadLump("M_DOOM");
++    gfx.flat = LoadLump(gamemode == commercial ? "GRNROCK" : "FLOOR7_2");
++
++    BuildTranslation(xlat_white, 80, 16);
++    BuildTranslation(xlat_gray, 96, 12);
++    BuildTranslation(xlat_gold, 160, 8);
++    NDS_DrawPatch(stbar, SCREENWIDTH, SBAR_HEIGHT, 0, 0, W_CacheLumpName("STBAR", PU_CACHE), NULL);
++    BuildStone();
++
++    videoSetModeSub(MODE_5_2D);
++    bgInitSub(3, BgType_Bmp8, BgSize_B8_256x256, 0, 0);
++    bgInitSub(2, BgType_Bmp8, BgSize_B8_256x256, 4, 0);
++    memset(TEXT_VRAM, 0, SUB_WIDTH * SUB_HEIGHT);
++    memset(sub_fb, 0, sizeof(sub_fb));
++    sbar_hash = weapons_hash = 0;
++    help_shown = false;
++
++    AM_SetFramebuffer(sub_fb + MAP_Y * SUB_WIDTH, SUB_WIDTH, MAP_HEIGHT);
++}
++
++static void DrawPatch(int x, int y, const patch_t *patch, const byte *xlat)
++{
++    if (patch != NULL)
++        NDS_DrawPatch(draw_fb, SUB_WIDTH, draw_h, x, y, patch, xlat);
++}
++
++static int TextWidth(const char *s)
++{
++    int w = 0;
++
++    for (; *s; ++s)
++        w += M_CharWidth(*s);
++    return w;
++}
++
++// Text in the HUD font, cut off where it would pass right
++static void DrawText(int x, int y, const char *s, const byte *xlat, int right)
++{
++    for (; *s && x + M_CharWidth(*s) <= right; x += M_CharWidth(*s++))
++    {
++        int i = toupper((unsigned char) *s) - HU_FONTSTART;
++
++        if (i >= 0 && i < HU_FONTSIZE)
++            DrawPatch(x, y, hu_font[i], xlat);
++    }
++}
++
++static void DrawTextCentered(int x, int y, int w, int h, const char *s, const byte *xlat)
++{
++    DrawText(x + (w - TextWidth(s)) / 2, y + (h - SHORT(hu_font[0]->height)) / 2, s, xlat, x + w);
++}
++
++static void FillRect(int x, int y, int w, int h, byte color)
++{
++    int i;
++
++    for (i = 0; i < h; ++i)
++        memset(sub_fb + (y + i) * SUB_WIDTH + x, color, w);
++}
++
++static void DrawFrame(int x, int y, int w, int h, byte color)
++{
++    FillRect(x, y, w, 1, color);
++    FillRect(x, y + h - 1, w, 1, color);
++    FillRect(x, y, 1, h, color);
++    FillRect(x + w - 1, y, 1, h, color);
++}
++
++// A number in one of the status bar fonts, right aligned
++static void DrawNumber(int right, int y, int value, patch_t **font)
++{
++    if (value < 0)
++        value = 0;
++    do
++    {
++        patch_t *digit = font[value % 10];
++
++        if (digit == NULL)
++            return;
++        right -= SHORT(digit->width);
++        DrawPatch(right, y, digit, NULL);
++        value /= 10;
++    } while (value > 0);
++}
++
++// The classic status bar, drawn like st_stuff.c does at the same positions,
++// its ammo table is a cell of the weapon selector
++static void DrawStatusBar(void)
++{
++    player_t *player = &players[consoleplayer];
++    ammotype_t ammo = weaponinfo[player->readyweapon].ammo;
++    int i, y;
++
++    for (y = 0; y < SBAR_HEIGHT; ++y)
++    {
++        byte *row = sub_fb + y * SUB_WIDTH;
++
++        memcpy(row, stbar + y * SCREENWIDTH, SBAR_CUT);
++        memcpy(row + SBAR_CUT, stbar + y * SCREENWIDTH + SBAR_STONE, SUB_WIDTH - SBAR_CUT);
++        memcpy(row + KEYBOX_X, stbar + y * SCREENWIDTH + KEYBOX_SRC, KEYBOX_W);
++    }
++
++    if (ammo != am_noammo)
++        DrawNumber(44, 3, player->ammo[ammo], gfx.tallnum);
++    DrawNumber(90, 3, player->health, gfx.tallnum);
++    DrawPatch(90, 3, gfx.percent, NULL);
++
++    // The weapons owned, like the status bar's arms
++    DrawPatch(104, 0, gfx.arms, NULL);
++    for (i = 0; i < 6; ++i)
++        DrawPatch(111 + (i % 3) * 12, 4 + (i / 3) * 10,
++                  (player->weaponowned[i + 1] ? gfx.yellownum : gfx.graynum)[i + 2], NULL);
++
++    DrawPatch(143, 0, ST_FacePatch(), NULL);
++
++    DrawNumber(221, 3, player->armorpoints, gfx.tallnum);
++    DrawPatch(221, 3, gfx.percent, NULL);
++
++    // A skull key takes the place of its card
++    for (i = 0; i < 3; ++i)
++    {
++        int card = player->cards[i + 3] ? i + 3 : player->cards[i] ? i : -1;
++
++        if (card >= 0)
++            DrawPatch(KEYBOX_X + 239 - KEYBOX_SRC, 3 + i * 10, gfx.keys[card], NULL);
++    }
++}
++
++// The light top left and dark bottom right edges of the status bar's panels
++static void DrawBevels(int x, int y, int w, int h)
++{
++    FillRect(x, y, w, 1, COL_LIGHT);
++    FillRect(x, y, 1, h, COL_LIGHT);
++    FillRect(x, y + h - 1, w, 1, COL_DARK);
++    FillRect(x + w - 1, y, 1, h, COL_DARK);
++}
++
++// A stone panel like the status bar's
++static void DrawPanel(int x, int y, int w, int h)
++{
++    int i;
++
++    for (i = 0; i < h; ++i)
++    {
++        byte *dest = sub_fb + (y + i) * SUB_WIDTH + x;
++        const byte *src = stone[(y + i) % (2 * STONE_H)];
++        int sx = x % (2 * STONE_W), j, n;
++
++        for (j = 0; j < w; j += n, sx = 0)
++        {
++            n = w - j < 2 * STONE_W - sx ? w - j : 2 * STONE_W - sx;
++            memcpy(dest + j, src + sx, n);
++        }
++    }
++    DrawBevels(x, y, w, h);
++}
++
++// The weapon shown in a slot: slots 1 and 3 have two
++static weapontype_t SlotWeapon(const player_t *player, int slot)
++{
++    if (slot == 0)
++        return player->readyweapon == wp_chainsaw || (player->weaponowned[wp_chainsaw]
++            && player->readyweapon != wp_fist) ? wp_chainsaw : wp_fist;
++    if (slot == 2)
++        return player->readyweapon == wp_supershotgun || (player->weaponowned[wp_supershotgun]
++            && !player->weaponowned[wp_shotgun]) ? wp_supershotgun : wp_shotgun;
++    return slot;
++}
++
++// A weapon slot: the pickup picture of the weapon, or its name, dark when it
++// isn't owned, with its slot number and ammo
++static void DrawWeapon(int slot)
++{
++    const player_t *player = &players[consoleplayer];
++    int cx = SLOT_X(slot), cy = SLOT_Y(slot);
++    weapontype_t weapon = SlotWeapon(player, slot);
++    boolean owned = player->weaponowned[weapon];
++    ammotype_t ammo = weaponinfo[weapon].ammo;
++    const weapon_icon_t *icon = &weapon_icons[weapon];
++
++    DrawPanel(cx, cy, CELL_W, CELL_H);
++    if (icon->w > 0)
++    {
++        // centered inside the bevels, dark when it isn't owned
++        const byte *colormap = colormaps + 256 * (owned ? 0 : LIGHT_UNOWNED);
++        byte *dest = sub_fb + (cy + 1 + icon->y) * SUB_WIDTH + cx + 1 + (ICON_W - icon->w) / 2;
++        int x, y;
++
++        for (y = 0; y < icon->h; ++y, dest += SUB_WIDTH)
++            for (x = 0; x < icon->w; ++x)
++                if (icon->opaque[y * ICON_W + x])
++                    dest[x] = colormap[icon->pixels[y * ICON_W + x]];
++    }
++    else
++    {
++        DrawTextCentered(cx, cy, CELL_W, CELL_H, weapon_names[weapon], owned ? xlat_white : xlat_gray);
++    }
++    // a frame inside the bevels when selected or pressed
++    if (slot == touch_slot || weapon == player->readyweapon)
++        DrawFrame(cx + 1, cy + 1, CELL_W - 2, CELL_H - 2, slot == touch_slot ? COL_PRESSED : COL_SELECTED);
++    DrawPatch(cx + 4, cy + 4, (owned ? gfx.yellownum : gfx.graynum)[slot + 1], NULL);
++    if (owned && ammo != am_noammo)
++        DrawNumber(cx + CELL_W - 4, cy + CELL_H - 10, player->ammo[ammo], gfx.yellownum);
++}
++
++// The status bar's ammo table: the ammo and the most that can be carried
++static void DrawAmmoTable(void)
++{
++    // clip, shells, cells and rockets, in the order of the table
++    static const int rows[NUMAMMO] = { 3, 9, 21, 15 };
++    const player_t *player = &players[consoleplayer];
++    int i;
++
++    for (i = 0; i < CELL_H; ++i)
++        memcpy(sub_fb + (AMMO_Y + i) * SUB_WIDTH + AMMO_X,
++               stbar + (AMMO_SRC_Y + i) * SCREENWIDTH + AMMO_SRC_X, CELL_W);
++    DrawBevels(AMMO_X, AMMO_Y, CELL_W, CELL_H);
++    for (i = 0; i < NUMAMMO; ++i)
++    {
++        DrawNumber(AMMO_X + 288 - AMMO_SRC_X, AMMO_Y + rows[i], player->ammo[i], gfx.yellownum);
++        DrawNumber(AMMO_X + 314 - AMMO_SRC_X, AMMO_Y + rows[i], player->maxammo[i], gfx.yellownum);
++    }
++}
++
++// Drawn over the map each time it redraws: the level name, the time, the
++// kills, items and secrets
++static unsigned MapTextsHash(void)
++{
++    player_t *player = &players[consoleplayer];
++    unsigned h = (uintptr_t) HU_LevelTitle();
++
++    h = h * 33 + leveltime / TICRATE;
++    h = (h * 33 + player->killcount) * 33 + totalkills;
++    h = (h * 33 + player->itemcount) * 33 + totalitems;
++    h = (h * 33 + player->secretcount) * 33 + totalsecret;
++    return h | 1;
++}
++
++static void DrawMapTexts(void)
++{
++    player_t *player = &players[consoleplayer];
++    char buf[48];
++    int secs = leveltime / TICRATE, time_x;
++
++    memset(text_fb, 0, sizeof(text_fb));
++    draw_fb = text_fb;
++    draw_h = 2 * TEXT_H;
++    snprintf(buf, sizeof(buf), "%d:%02d", secs / 60, secs % 60);
++    time_x = SUB_WIDTH - 4 - TextWidth(buf);
++    DrawText(time_x, 3, buf, xlat_white, SUB_WIDTH);
++    DrawText(4, 3, HU_LevelTitle(), xlat_gold, time_x - 8);
++
++    // The three percentages of the intermission, spread over the width
++    {
++        static const char *const labels[3] = { "Kills", "Items", "Secrets" };
++        const int counts[3][2] =
++        {
++            { player->killcount, totalkills },
++            { player->itemcount, totalitems },
++            { player->secretcount, totalsecret },
++        };
++        char values[3][16];
++        int widths[3], total = 0, x = 4, i;
++
++        for (i = 0; i < 3; ++i)
++        {
++            snprintf(values[i], sizeof(values[i]), "%d%%",
++                     counts[i][1] ? counts[i][0] * 100 / counts[i][1] : 100);
++            widths[i] = TextWidth(labels[i]) + 3 + TextWidth(values[i]);
++            total += widths[i];
++        }
++        for (i = 0; i < 3; ++i)
++        {
++            DrawText(x, 2 * TEXT_H - 10, labels[i], xlat_gold, SUB_WIDTH);
++            DrawText(x + widths[i] - TextWidth(values[i]), 2 * TEXT_H - 10, values[i], xlat_white, SUB_WIDTH);
++            x += widths[i] + (SUB_WIDTH - 8 - total) / 2;
++        }
++    }
++    draw_fb = sub_fb;
++    draw_h = SUB_HEIGHT;
++}
++
++// The view border's flat at a light level of COLORMAP
++static void DrawBackdrop(int x, int y, int w, int h, int light)
++{
++    const byte *colormap = colormaps + 256 * light;
++    int i, j;
++
++    for (i = y; i < y + h; ++i)
++        for (j = x; j < x + w; ++j)
++            sub_fb[i * SUB_WIDTH + j] = gfx.flat != NULL ? colormap[gfx.flat[(i & 63) * 64 + (j & 63)]] : COL_BLACK;
++}
++
++// Outside of a level and with the settings: the logo and the controls over
++// the view border's flat
++#define HELP_LINES  7
++#define HELP_H      (HELP_LINES * 12 + 12)
++#define HELP_Y      (SUB_HEIGHT - 8 - HELP_H)
++
++static void DrawHelpScreen(void)
++{
++    static const char *const help[HELP_LINES][2] =
++    {
++        { "A",      "FIRE / OK" },
++        { "B",      "USE / BACK" },
++        { "X",      "NEXT WEAPON" },
++        { "Y",      "RUN" },
++        { "L R",    "STRAFE" },
++        { "START",  "MENU" },
++        { "STYLUS", "TAP A WEAPON" },
++    };
++    int y;
++
++    DrawBackdrop(0, 0, SUB_WIDTH, SUB_HEIGHT, LIGHT_BACKDROP);
++    if (gfx.logo != NULL)
++        DrawPatch((SUB_WIDTH - SHORT(gfx.logo->width)) / 2 + SHORT(gfx.logo->leftoffset),
++                  (HELP_Y - SHORT(gfx.logo->height)) / 2 + SHORT(gfx.logo->topoffset), gfx.logo, NULL);
++
++    // an inset, darker, with the bevels the other way around
++    DrawBackdrop(16, HELP_Y, SUB_WIDTH - 32, HELP_H, LIGHT_INSET);
++    FillRect(16, HELP_Y, SUB_WIDTH - 32, 1, COL_DARK);
++    FillRect(16, HELP_Y, 1, HELP_H, COL_DARK);
++    FillRect(16, HELP_Y + HELP_H - 1, SUB_WIDTH - 32, 1, COL_LIGHT);
++    FillRect(SUB_WIDTH - 17, HELP_Y, 1, HELP_H, COL_LIGHT);
++    for (y = 0; y < HELP_LINES; ++y)
++    {
++        DrawText(28, HELP_Y + 9 + y * 12, help[y][0], xlat_gold, SUB_WIDTH);
++        DrawText(100, HELP_Y + 9 + y * 12, help[y][1], xlat_white, SUB_WIDTH - 20);
++    }
++}
++
++// Cheap fingerprints of what the status bar and weapons show, to skip redundant redraws
++static unsigned StatusBarHash(void)
++{
++    player_t *player = &players[consoleplayer];
++    unsigned h = (uintptr_t) ST_FacePatch();
++    int i;
++
++    h = h * 33 + player->health;
++    h = h * 33 + player->armorpoints;
++    h = h * 33 + player->readyweapon;
++    for (i = 0; i < NUMAMMO; ++i)
++        h = h * 33 + player->ammo[i];
++    for (i = 0; i < NUMWEAPONS; ++i)
++        h = h * 3 + player->weaponowned[i];
++    for (i = 0; i < NUMCARDS; ++i)
++        h = h * 3 + player->cards[i];
++    return h | 1;
++}
++
++static unsigned WeaponsHash(void)
++{
++    player_t *player = &players[consoleplayer];
++    unsigned h = touch_slot + 1;
++    int i;
++
++    h = h * 33 + player->readyweapon;
++    for (i = 0; i < NUMAMMO; ++i)
++        h = (h * 33 + player->ammo[i]) * 33 + player->maxammo[i];
++    for (i = 0; i < NUMWEAPONS; ++i)
++        h = h * 3 + player->weaponowned[i];
++    return h | 1;
++}
++
++// DMA copies the rows while the game goes on, after they are written back
++// from the data cache. The next copy and the next frame's drawing wait for
++// the last one.
++#define VRAM_DMA 3
++
++void NDS_WaitSubScreen(void)
++{
++    dmaBusyWait(VRAM_DMA);
++}
++
++static void CopyRows(const byte *src, byte *dst, int h)
++{
++    dmaBusyWait(VRAM_DMA);
++    DC_FlushRange(src, h * SUB_WIDTH);
++    dmaCopyWordsAsynch(VRAM_DMA, src, dst, h * SUB_WIDTH);
++}
++
++static void CopyToVRAM(int y, int h)
++{
++    CopyRows(sub_fb + y * SUB_WIDTH, (byte *) BG_BMP_RAM_SUB(0) + y * SUB_WIDTH, h);
++}
++
++void NDS_UpdateSubScreen(void)
++{
++    unsigned hash;
++    int i;
++
++    if (gamestate != GS_LEVEL || M_ControlsShown())
++    {
++        if (!help_shown)
++        {
++            REG_DISPCNT_SUB &= ~DISPLAY_BG2_ACTIVE;
++            DrawHelpScreen();
++            CopyToVRAM(0, SUB_HEIGHT);
++            help_shown = true;
++            sbar_hash = weapons_hash = texts_hash = 0;
++        }
++        return;
++    }
++    if (help_shown)
++    {
++        // Until the map draws, like during the wipe into a level
++        FillRect(0, MAP_Y, SUB_WIDTH, MAP_HEIGHT, COL_BLACK);
++        CopyToVRAM(MAP_Y, MAP_HEIGHT);
++        help_shown = false;
++    }
++
++    // The map is always up, it drew into sub_fb in D_Display every other
++    // frame: Doom runs at 35 tics a second, half the frames are enough
++    if (!automapactive)
++        AM_Start();
++    else if (!am_skipdraw)
++        CopyToVRAM(MAP_Y, MAP_HEIGHT);
++    am_skipdraw = !am_skipdraw;
++    if ((hash = MapTextsHash()) != texts_hash)
++    {
++        texts_hash = hash;
++        DrawMapTexts();
++        CopyRows(text_fb, TEXT_VRAM + MAP_Y * SUB_WIDTH, TEXT_H);
++        CopyRows(text_fb + TEXT_H * SUB_WIDTH, TEXT_VRAM + (MAP_Y + MAP_HEIGHT - TEXT_H) * SUB_WIDTH, TEXT_H);
++        REG_DISPCNT_SUB |= DISPLAY_BG2_ACTIVE;
++    }
++
++    if ((hash = StatusBarHash()) != sbar_hash)
++    {
++        sbar_hash = hash;
++        DrawStatusBar();
++        CopyToVRAM(0, SBAR_HEIGHT);
++    }
++    if ((hash = WeaponsHash()) != weapons_hash)
++    {
++        weapons_hash = hash;
++        for (i = 0; i < NUM_SLOTS; ++i)
++            DrawWeapon(i);
++        DrawAmmoTable();
++        CopyToVRAM(WEAPONS_Y, SUB_HEIGHT - WEAPONS_Y);
++    }
++}
+diff --git a/doomgeneric/m_menu.c b/doomgeneric/m_menu.c
+index d63b2bb..54e2c62 100644
+--- a/doomgeneric/m_menu.c
++++ b/doomgeneric/m_menu.c
+@@ -917,6 +917,12 @@ void M_DrawMainMenu(void)
+                       W_CacheLumpName(DEH_String("M_DOOM"), PU_CACHE));
+ }
+ 
++// The settings pages show the controls on the touch screen
++boolean M_ControlsShown(void)
++{
++    return menuactive && (currentMenu == &OptionsDef || currentMenu == &SoundDef);
++}
++
+ 
+ 
+ 
+diff --git a/doomgeneric/m_menu.h b/doomgeneric/m_menu.h
+index 2aaec90..c45e979 100644
+--- a/doomgeneric/m_menu.h
++++ b/doomgeneric/m_menu.h
+@@ -54,6 +54,9 @@ int M_CharWidth (char ch);
+ // does nothing if menu is already up.
+ void M_StartControlPanel (void);
+ 
++// Whether the controls are shown on the touch screen
++boolean M_ControlsShown (void);
++
+ 
+ 
+ extern int detailLevel;

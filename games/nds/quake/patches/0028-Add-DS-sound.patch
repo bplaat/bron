@@ -1,0 +1,420 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Tue, 6 Oct 2026 07:10:01 +0200
+Subject: [PATCH] Add DS sound
+
+Instead of mixing Quake's channels in software, snd_nds.c plays every
+channel on a hardware channel of its own, which does the resampling,
+volume and stereo panning: the ambient and entity channels on hardware
+channels 0-11, the four loudest static sounds (torches, machines) on
+12-15. The samples play straight from the sound cache, which Quake keeps
+8-bit signed or 16-bit at 11025 Hz. Only the sounds that play stay in
+the sound cache, the ambient sounds only near water or sky: with all the static sounds of a level in it, it pushed
+out the models every frame, the start map ran at 2 fps. Sounds load when
+they first play instead of with the level, all of them pushed its models
+out of the cache while it loaded, and a sound that doesn't fit without
+pushing out what was just used waits a second, one loaded again within
+two seconds, which pushes out models drawn every frame or is pushed out
+by them, ten seconds. The software mixer isn't
+built, there is no DMA buffer, S_ClearBuffer stops what the driver
+plays instead, so no old sound loops during loading. When the cache
+frees or moves samples that play, their hardware channel stops before
+it plays what comes there next.
+---
+ WinQuake/snd_dma.c |   6 +-
+ WinQuake/snd_nds.c | 341 +++++++++++++++++++++++++++++++++++++++++++++
+ WinQuake/sound.h   |   3 +
+ 3 files changed, 349 insertions(+), 1 deletion(-)
+ create mode 100644 WinQuake/snd_nds.c
+
+diff --git a/WinQuake/snd_dma.c b/WinQuake/snd_dma.c
+index a261f12..6df279d 100644
+--- a/WinQuake/snd_dma.c
++++ b/WinQuake/snd_dma.c
+@@ -206,7 +206,6 @@ void S_Init (void)
+ 
+ 	S_Startup ();
+ 
+-	SND_InitScaletable ();
+ 
+ 	known_sfx = Hunk_AllocName (MAX_SFX*sizeof(sfx_t), "sfx_t");
+ 	num_sfx = 0;
+@@ -563,6 +562,11 @@ void S_StopAllSoundsC (void)
+ void S_ClearBuffer (void)
+ {
+ 	int		clear;
++
++	// the DS driver plays from the sound cache, without a buffer to clear,
++	// it stops what plays
++	if (sound_started && shm)
++		SNDDMA_ClearBuffer ();
+ 		
+ #ifdef _WIN32
+ 	if (!sound_started || !shm || (!shm->buffer && !pDSBuf))
+diff --git a/WinQuake/snd_nds.c b/WinQuake/snd_nds.c
+new file mode 100644
+index 0000000..5a269c9
+--- /dev/null
++++ b/WinQuake/snd_nds.c
+@@ -0,0 +1,341 @@
++/*
++Copyright (C) 1996-1997 Id Software, Inc.
++
++This program is free software; you can redistribute it and/or
++modify it under the terms of the GNU General Public License
++as published by the Free Software Foundation; either version 2
++of the License, or (at your option) any later version.
++
++This program is distributed in the hope that it will be useful,
++but WITHOUT ANY WARRANTY; without even the implied warranty of
++MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
++
++See the GNU General Public License for more details.
++
++You should have received a copy of the GNU General Public License
++along with this program; if not, write to the Free Software
++Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
++
++*/
++// snd_nds.c -- Nintendo DS sound output
++//
++// Quake keeps its channels, which sound plays where at what volume, but
++// instead of mixing them in software every channel plays on a hardware
++// channel of its own, which does the resampling, volume and stereo panning:
++// the ambient and entity channels on hardware channels 0-11, the four
++// loudest static sounds (torches, machines) on 12-15. The samples play
++// straight from the sound cache, Quake keeps them 8-bit signed or 16-bit at
++// 11025 Hz. The play position Quake's timing needs follows from the tick
++// timer.
++
++#include "quakedef.h"
++
++#include <nds.h>
++
++extern int	paintedtime;
++
++#define	min(a,b)		((a) < (b) ? (a) : (b))
++#define	max(a,b)		((a) > (b) ? (a) : (b))
++#define	bound(lo,x,hi)	max (lo, min (x, hi))
++
++#define	SND_SPEED	11025
++#define	SND_FRAMES	4096		// of the time base, a power of two
++#define	HW_CHANNELS	16
++#define	HW_STATIC	(NUM_AMBIENTS + MAX_DYNAMIC_CHANNELS)	// the first for static sounds
++
++typedef struct
++{
++	int			channel;	// the Quake channel playing, -1 for none
++	sfxcache_t	*sc;
++	qboolean	loops;
++	unsigned	vol, pan;
++} hwchannel_t;
++
++static hwchannel_t	hw[HW_CHANNELS];
++static unsigned	snd_timer;
++static u64	snd_start;
++
++static void HW_Stop (int slot)
++{
++	if (hw[slot].channel >= 0)
++		soundStop (BIT(slot));
++	hw[slot].channel = -1;
++	hw[slot].sc = NULL;
++}
++
++// The cache frees or moves the samples of a hardware channel: it stops, it
++// would play whatever comes there next. A one shot is over.
++static void SND_CacheFreed (void *data)
++{
++	int	slot;
++
++	for (slot = 0; slot < HW_CHANNELS; slot++)
++		if (hw[slot].sc == data)
++		{
++			if (!hw[slot].loops && channels[hw[slot].channel].sfx
++				&& channels[hw[slot].channel].sfx->cache.data == data)
++				channels[hw[slot].channel].sfx = NULL;
++			HW_Stop (slot);
++		}
++}
++
++qboolean SNDDMA_Init (void)
++{
++	int	i;
++
++	shm = &sn;
++	shm->splitbuffer = false;
++	shm->samplebits = 16;
++	shm->speed = SND_SPEED;
++	shm->channels = 2;
++	shm->samples = SND_FRAMES * 2;
++	shm->samplepos = 0;
++	shm->soundalive = true;
++	shm->gamealive = true;
++	shm->submission_chunk = 1;
++	shm->buffer = NULL;		// nothing is mixed, the samples play from the cache
++	// sounds load when they first play: all of a level's sounds pushed its
++	// models out of the cache while it loaded, so they were read again
++	Cvar_SetValue ("precache", 0);
++
++	soundInit ();
++	soundPowerOn ();
++	soundSetMixerVolume (127);
++	for (i = 0; i < HW_CHANNELS; i++)
++		hw[i].channel = -1;
++	cache_freehook = SND_CacheFreed;
++	snd_timer = soundTimerFromHz (SND_SPEED);
++	snd_start = tickGetCount ();
++	return true;
++}
++
++int SNDDMA_GetDMAPos (void)
++{
++	// Ticks run at SYSTEM_CLOCK / 64, a sample lasts snd_timer SYSTEM_CLOCK / 2 cycles
++	u64 frames = (tickGetCount () - snd_start) * 32 / snd_timer;
++
++	shm->samplepos = (frames & (SND_FRAMES - 1)) * 2;
++	return shm->samplepos;
++}
++
++// The volume cvar as 0..256, worked out once for each S_PaintChannels
++static unsigned master_volume;
++
++// The volume (0..2047) and pan (0..127) of a channel like Quake's mixer,
++// with the volume cvar
++static void HW_Volume (const channel_t *ch, unsigned *vol, unsigned *pan)
++{
++	int	left = min (ch->leftvol, 255), right = min (ch->rightvol, 255);
++
++	*vol = (left + right) * 4 * master_volume >> 8;
++	*pan = left + right ? right * 127 / (left + right) : 64;
++}
++
++// Starts the sound of a channel on a hardware channel
++static void HW_Start (int slot, int channel, sfxcache_t *sc)
++{
++	channel_t	*ch = &channels[channel];
++	hwchannel_t	*h = &hw[slot];
++	uintptr_t	start = (uintptr_t) sc->data & ~3;	// whole words from an aligned address
++	unsigned	bytes = sc->length * sc->width, loop;
++	// a loop ends at the last whole word, the bytes after the data aren't
++	// part of the sound
++	unsigned	words = sc->loopstart >= 0 ? bytes / 4 : (bytes + 3) / 4;
++
++	h->channel = channel;
++	h->sc = sc;
++	h->loops = sc->loopstart >= 0;
++	HW_Volume (ch, &h->vol, &h->pan);
++	// the ARM7 plays from main RAM, past the data cache
++	DC_FlushRange ((void *) start, words * 4);
++	if (h->loops)
++	{
++		loop = sc->loopstart * sc->width / 4;
++		soundPreparePcm (slot | SOUND_START, h->vol, h->pan, soundTimerFromHz (sc->speed), SoundMode_Repeat,
++			sc->width == 2 ? SoundFmt_Pcm16 : SoundFmt_Pcm8, (const void *) start, loop, words - loop);
++	}
++	else
++		soundPreparePcm (slot | SOUND_START, h->vol, h->pan, soundTimerFromHz (sc->speed), SoundMode_OneShot,
++			sc->width == 2 ? SoundFmt_Pcm16 : SoundFmt_Pcm8, (const void *) start, 0, words);
++	// started, a new sound on the channel sets it back to 0
++	ch->pos = 1;
++}
++
++// A sound that isn't in the cache loads when it fits without pushing out
++// what was just used (S_LoadSoundUnused), else the sounds wait a second
++// instead of reading the file every frame. One that has to be loaded again
++// within two seconds pushes the models drawn every frame out of the cache or
++// is pushed out by them, it waits ten seconds.
++#define	SND_LOADS	32
++
++static sfxcache_t *SND_LoadSound (sfx_t *sfx)
++{
++	static double	retry;
++	static struct
++	{
++		sfx_t	*sfx;
++		double	loaded, blocked;
++	} loads[SND_LOADS];
++	sfxcache_t		*sc = Cache_Check (&sfx->cache);
++	int				i = ((uintptr_t) sfx >> 4) % SND_LOADS;
++
++	if (sc || realtime < retry)
++		return sc;
++	if (loads[i].sfx == sfx)
++	{
++		if (realtime < loads[i].blocked)
++			return NULL;
++		if (realtime - loads[i].loaded < 2)
++		{
++			loads[i].blocked = realtime + 10;
++			return NULL;
++		}
++	}
++	if (!(sc = S_LoadSoundUnused (sfx)))
++	{
++		retry = realtime + 1;
++		return NULL;
++	}
++	loads[i].sfx = sfx;
++	loads[i].loaded = realtime;
++	loads[i].blocked = 0;
++	return sc;
++}
++
++/*
++================
++S_PaintChannels
++
++Instead of mixing up to endtime, keeps the hardware channels playing what
++the Quake channels play
++================
++*/
++void S_PaintChannels (int endtime)
++{
++	channel_t	*ch;
++	sfxcache_t	*sc;
++	int			i, slot, loudest[HW_CHANNELS - HW_STATIC];
++	unsigned	vol, pan, loudvol[HW_CHANNELS - HW_STATIC];
++
++	master_volume = bound (0, volume.value, 1) * 256;
++
++	// sounds that end before endtime stop, looping ones go on. Only the
++	// ambient and static sounds that play stay in the cache, it can't hold
++	// all of them.
++	for (i = 0, ch = channels; i < total_channels; i++, ch++)
++	{
++		if (!ch->sfx)
++			continue;
++		if (i >= HW_STATIC || i < NUM_AMBIENTS)
++		{
++			if (!(sc = Cache_Check (&ch->sfx->cache)))
++				continue;
++		}
++		else if (!(sc = SND_LoadSound (ch->sfx)))
++		{
++			ch->sfx = NULL;
++			continue;
++		}
++		if (ch->pos == 0)
++			ch->end = max (ch->end, paintedtime);
++		while (ch->end <= endtime)
++		{
++			if (sc->loopstart < 0)
++			{
++				ch->sfx = NULL;
++				break;
++			}
++			ch->end += sc->length - sc->loopstart;
++		}
++	}
++
++	// the ambient and entity channels have hardware channels of their own
++	for (slot = 0; slot < HW_STATIC; slot++)
++	{
++		ch = &channels[slot];
++		// the ambient sounds are always there, silent away from water or sky
++		sc = ch->sfx && (slot >= NUM_AMBIENTS || ch->leftvol || ch->rightvol) ? SND_LoadSound (ch->sfx) : NULL;
++		if (sc && (ch->pos == 0 || hw[slot].sc != sc))
++			HW_Start (slot, slot, sc);
++		else if (!sc && hw[slot].loops)
++			HW_Stop (slot);		// a one shot plays on until its end
++	}
++
++	// the loudest static sounds the others
++	for (i = 0; i < HW_CHANNELS - HW_STATIC; i++)
++	{
++		loudest[i] = -1;
++		loudvol[i] = 0;
++	}
++	for (i = HW_STATIC, ch = channels + HW_STATIC; i < total_channels; i++, ch++)
++	{
++		int	j, k;
++
++		if (!ch->sfx)
++			continue;
++		HW_Volume (ch, &vol, &pan);
++		for (j = 0; j < HW_CHANNELS - HW_STATIC && vol <= loudvol[j]; j++)
++			;
++		if (j == HW_CHANNELS - HW_STATIC)
++			continue;
++		for (k = HW_CHANNELS - HW_STATIC - 1; k > j; k--)
++		{
++			loudest[k] = loudest[k - 1];
++			loudvol[k] = loudvol[k - 1];
++		}
++		loudest[j] = i;
++		loudvol[j] = vol;
++	}
++	// those still playing keep their hardware channel
++	for (slot = HW_STATIC; slot < HW_CHANNELS; slot++)
++	{
++		for (i = 0; i < HW_CHANNELS - HW_STATIC && loudest[i] != hw[slot].channel; i++)
++			;
++		if (hw[slot].channel < 0 || i == HW_CHANNELS - HW_STATIC || !channels[hw[slot].channel].sfx
++			|| hw[slot].sc != Cache_Check (&channels[hw[slot].channel].sfx->cache))
++			HW_Stop (slot);
++		else
++			loudest[i] = -1;
++	}
++	for (i = 0; i < HW_CHANNELS - HW_STATIC; i++)
++	{
++		if (loudest[i] < 0)
++			continue;
++		if (!(sc = SND_LoadSound (channels[loudest[i]].sfx)))
++			continue;
++		for (slot = HW_STATIC; hw[slot].channel >= 0; slot++)
++			;
++		HW_Start (slot, loudest[i], sc);
++	}
++
++	// and the volumes follow the listener
++	for (slot = 0; slot < HW_CHANNELS; slot++)
++	{
++		if (hw[slot].channel < 0 || !channels[hw[slot].channel].sfx)
++			continue;
++		HW_Volume (&channels[hw[slot].channel], &vol, &pan);
++		if (vol != hw[slot].vol)
++			soundChSetVolume (slot, hw[slot].vol = vol);
++		if (pan != hw[slot].pan)
++			soundChSetPan (slot, hw[slot].pan = pan);
++	}
++
++	paintedtime = endtime;
++}
++
++void SNDDMA_Submit (void)
++{
++}
++
++void SNDDMA_ClearBuffer (void)
++{
++	int	i;
++
++	for (i = 0; i < HW_CHANNELS; i++)
++		HW_Stop (i);
++}
++
++void SNDDMA_Shutdown (void)
++{
++	SNDDMA_ClearBuffer ();
++}
+diff --git a/WinQuake/sound.h b/WinQuake/sound.h
+index 1ba08d3..b52d10f 100644
+--- a/WinQuake/sound.h
++++ b/WinQuake/sound.h
+@@ -165,12 +165,15 @@ extern int		snd_blocked;
+ 
+ void S_LocalSound (char *s);
+ sfxcache_t *S_LoadSound (sfx_t *s);
++sfxcache_t *S_LoadSoundUnused (sfx_t *s);
+ 
+ wavinfo_t GetWavinfo (char *name, byte *wav, int wavlength);
+ 
+ void SND_InitScaletable (void);
+ void SNDDMA_Submit(void);
+ 
++void SNDDMA_ClearBuffer(void);
++
+ void S_AmbientOff (void);
+ void S_AmbientOn (void);
+ 

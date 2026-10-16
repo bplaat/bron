@@ -1,0 +1,463 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Mon, 12 Oct 2026 18:09:14 +0200
+Subject: [PATCH] Add the DS touch screen
+
+hud_nds.c draws the touch screen in a game: Quake II's status bar at the
+top on a dark strip, the map in the middle, following you, with the
+level name, time, kills, goals and secrets, and at the bottom a cell for
+each weapon with its icon and ammo, dark until you have it, and one for
+the selected item. A tap on a weapon uses it, on the item uses that, on
+its arrows selects the previous or next one. With the menu and while no
+game runs it shows the controls over the console background. What it
+shows is only redrawn when it changed, the map every fourth frame while
+you move.
+---
+ nds/hud_nds.c | 438 ++++++++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 438 insertions(+)
+ create mode 100644 nds/hud_nds.c
+
+diff --git a/nds/hud_nds.c b/nds/hud_nds.c
+new file mode 100644
+index 0000000..489292e
+--- /dev/null
++++ b/nds/hud_nds.c
+@@ -0,0 +1,438 @@
++/*
++Copyright (C) 1997-2001 Id Software, Inc.
++
++This program is free software; you can redistribute it and/or
++modify it under the terms of the GNU General Public License
++as published by the Free Software Foundation; either version 2
++of the License, or (at your option) any later version.
++
++This program is distributed in the hope that it will be useful,
++but WITHOUT ANY WARRANTY; without even the implied warranty of
++MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
++
++See the GNU General Public License for more details.
++
++You should have received a copy of the GNU General Public License
++along with this program; if not, write to the Free Software
++Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
++
++*/
++// hud_nds.c -- the touch screen
++//
++// In a game the touch screen shows Quake II's status bar at the top, the map
++// in the middle, following you, with the level name, time, kills, goals and
++// secrets, and at the bottom a cell for each weapon with its icon and ammo,
++// dark until you have it, and a cell for the selected item. A tap on a weapon
++// selects it, on the item uses it, on its arrows selects the previous or next
++// one. With the menu and while no game runs it shows the controls over the
++// console background. Everything is drawn with Quake II's own graphics, in
++// its 320x240, and redrawn only when it changed.
++
++#include "../client/client.h"
++
++// The panels, in 2D coordinates (320x240)
++#define	STATUS_H		28
++#define	MAP_TOP			STATUS_H
++#define	MAP_BOTTOM		176
++#define	TITLE_Y			(MAP_TOP + 3)
++#define	STATS_Y			(MAP_BOTTOM - 11)
++#define	MAP_CX			160
++#define	MAP_CY			((MAP_TOP + MAP_BOTTOM) / 2 + 8)
++#define	CELLS_Y			MAP_BOTTOM
++#define	CELL_H			32
++#define	CELL_COLS		6
++#define	NUM_WEAPONS		11
++#define	NUM_CELLS		(NUM_WEAPONS + 1)		// the weapons and the item
++#define	ITEM_CELL		NUM_WEAPONS
++
++// Palette indices
++#define	COL_BLACK		0
++#define	COL_WALL		223		// yellow
++#define	COL_WALL_DIM	60		// brown
++#define	COL_PLAYER		215		// white
++#define	COL_CELL		245		// near black
++#define	COL_LIGHT		152		// bevels of the cells
++#define	COL_DARK		142
++#define	COL_SELECTED	222		// yellow frame of the weapon in hand
++#define	COL_INSET		1
++
++// The weapons in the order of STAT_WEAPONS: the item used, the icon, the
++// view model that shows it is in hand and the ammo
++typedef struct
++{
++	char	*item;
++	char	*icon;
++	char	*model;
++	int		ammo;		// stat, 0 for none
++} weaponcell_t;
++
++static const weaponcell_t	cells[NUM_WEAPONS] =
++{
++	{"Blaster", "w_blaster", "models/weapons/v_blast/tris.md2", 0},
++	{"Shotgun", "w_shotgun", "models/weapons/v_shotg/tris.md2", STAT_SHELLS},
++	{"Super Shotgun", "w_sshotgun", "models/weapons/v_shotg2/tris.md2", STAT_SHELLS},
++	{"Machinegun", "w_machinegun", "models/weapons/v_machn/tris.md2", STAT_BULLETS},
++	{"Chaingun", "w_chaingun", "models/weapons/v_chain/tris.md2", STAT_BULLETS},
++	{"Grenades", "a_grenades", "models/weapons/v_handgr/tris.md2", STAT_GRENADES},
++	{"Grenade Launcher", "w_glauncher", "models/weapons/v_launch/tris.md2", STAT_GRENADES},
++	{"Rocket Launcher", "w_rlauncher", "models/weapons/v_rocket/tris.md2", STAT_ROCKETS},
++	{"HyperBlaster", "w_hyperblaster", "models/weapons/v_hyperb/tris.md2", STAT_CELLS},
++	{"Railgun", "w_railgun", "models/weapons/v_rail/tris.md2", STAT_SLUGS},
++	{"BFG10K", "w_bfg", "models/weapons/v_bfg/tris.md2", STAT_CELLS},
++};
++
++static qboolean	panelsshown, controlsshown;
++static int		drawnstatus[STAT_SPECTATOR + 1], drawnstats[12], drawncells[NUM_CELLS][4];
++static int		mapframe;
++static float	mapangle;
++static vec3_t	maporigin;
++
++static void HUD_CellRect (int i, int *x, int *y, int *w)
++{
++	int	col = i % CELL_COLS;
++
++	*x = col * 320 / CELL_COLS;
++	*w = (col + 1) * 320 / CELL_COLS - *x;
++	*y = CELLS_Y + i / CELL_COLS * CELL_H;
++}
++
++static void HUD_DrawBevel (int x, int y, int w, int h, int light, int dark)
++{
++	re.DrawFill (x, y, w, 1, light);
++	re.DrawFill (x, y, 1, h, light);
++	re.DrawFill (x, y + h - 1, w, 1, dark);
++	re.DrawFill (x + w - 1, y, 1, h, dark);
++}
++
++static void HUD_DrawString (int x, int y, const char *str, int mask)
++{
++	for (; *str; str++, x += 8)
++		re.DrawChar (x, y, *str ^ mask);
++}
++
++// A string over the map, on black so the walls don't run through it, 128 for
++// the green font
++static int HUD_MapString (int x, int y, const char *str, int mask)
++{
++	re.DrawFill (x - 2, y - 1, strlen (str) * 8 + 4, 10, COL_BLACK);
++	HUD_DrawString (x, y, str, mask);
++	return x + strlen (str) * 8;
++}
++
++/*
++===============================================================================
++
++THE PANELS
++
++===============================================================================
++*/
++
++// The picked up item or a powerup's timer shows over the top of the map
++static qboolean HUD_PickupShown (void)
++{
++	short	*stats = cl.frame.playerstate.stats;
++
++	return stats[STAT_PICKUP_ICON] || stats[STAT_TIMER_ICON];
++}
++
++// The status bar on a dark strip
++static void HUD_DrawStatus (void)
++{
++	re.DrawFill (0, 0, 320, STATUS_H, COL_CELL);
++	HUD_DrawBevel (0, 0, 320, STATUS_H, COL_LIGHT, COL_DARK);
++	SCR_DrawStatusBar (2, TITLE_Y - 1);
++}
++
++// The map, with the level name and time over its top unless an item was
++// picked up, and the kills, goals and secrets over its bottom
++static void HUD_DrawMap (void)
++{
++	short	*stats = cl.frame.playerstate.stats;
++	char	str[3][24], *name = cl.configstrings[CS_NAME];
++	static const char	*labels[3] = {"KILLS ", "GOALS ", "SECRETS "};
++	int		i, x, width, time = cl.frame.servertime / 1000;
++
++	re.DrawFill (0, MAP_TOP, 320, MAP_BOTTOM - MAP_TOP, COL_BLACK);
++	R_DrawMap (MAP_TOP, MAP_BOTTOM, MAP_CX, MAP_CY, cl.refdef.vieworg, cl.refdef.viewangles[YAW],
++		COL_WALL, COL_WALL_DIM);
++	// the player, an arrow pointing up
++	for (i = 0; i < 6; i++)
++		re.DrawFill (MAP_CX - i, MAP_CY - 6 + i * 2, 1 + i * 2, 2, COL_PLAYER);
++
++	if (!HUD_PickupShown ())
++	{
++		Com_sprintf (str[0], sizeof(str[0]), "%i:%02i", time / 60, time % 60);
++		HUD_MapString (320 - 4 - strlen (str[0]) * 8, TITLE_Y, str[0], 0);
++		// as much of the name as fits next to the time
++		Com_sprintf (str[1], sizeof(str[1]), "%.*s", 30 - (int) strlen (str[0]), name);
++		HUD_MapString (4, TITLE_Y, str[1], 0);
++	}
++
++	Com_sprintf (str[0], sizeof(str[0]), "%i/%i", stats[STAT_KILLS], stats[STAT_TOTAL_KILLS]);
++	Com_sprintf (str[1], sizeof(str[1]), "%i/%i", stats[STAT_GOALS], stats[STAT_TOTAL_GOALS]);
++	Com_sprintf (str[2], sizeof(str[2]), "%i/%i", stats[STAT_SECRETS], stats[STAT_TOTAL_SECRETS]);
++	width = 0;
++	for (i = 0; i < 3; i++)
++		width += (strlen (labels[i]) + strlen (str[i])) * 8 + (i ? 16 : 0);
++	x = (320 - width) / 2;
++	for (i = 0; i < 3; i++)
++	{
++		x = HUD_MapString (x + (i ? 16 : 0), STATS_Y, labels[i], 128);
++		x = HUD_MapString (x, STATS_Y, str[i], 0);
++	}
++}
++
++// The weapon in hand, from its view model
++static qboolean HUD_CellActive (int i)
++{
++	int	gun = cl.frame.playerstate.gunindex;
++
++	return gun && !strcmp (cl.configstrings[CS_MODELS + gun], cells[i].model);
++}
++
++static void HUD_DrawCell (int i)
++{
++	short		*stats = cl.frame.playerstate.stats;
++	int			x, y, w, count, mask;
++	qboolean	active = i < NUM_WEAPONS && HUD_CellActive (i);
++	char		str[8], *icon;
++
++	HUD_CellRect (i, &x, &y, &w);
++	re.DrawFill (x, y, w, CELL_H, COL_CELL);
++	if (active)
++	{
++		HUD_DrawBevel (x, y, w, CELL_H, COL_SELECTED, COL_SELECTED);
++		HUD_DrawBevel (x + 1, y + 1, w - 2, CELL_H - 2, COL_SELECTED, COL_SELECTED);
++	}
++	else
++		HUD_DrawBevel (x, y, w, CELL_H, COL_LIGHT, COL_DARK);
++
++	if (i == ITEM_CELL)
++	{
++		// the selected item between the arrows that select another one
++		if (!stats[STAT_SELECTED_ICON])
++			return;
++		icon = cl.configstrings[CS_IMAGES + stats[STAT_SELECTED_ICON]];
++		re.DrawPic (x + (w - 24) / 2, y + 4, icon);
++		re.DrawChar (x + 3, y + 12, '<');
++		re.DrawChar (x + w - 11, y + 12, '>');
++		count = stats[STAT_SELECTED_COUNT];
++	}
++	else
++	{
++		if (stats[STAT_WEAPONS] & (1 << i))
++			re.DrawPic (x + 3, y + 4, cells[i].icon);
++		else
++			Draw_PicDark (x + 3, y + 4, cells[i].icon);
++		// only the ammo of a weapon the player has
++		count = cells[i].ammo && stats[STAT_WEAPONS] & (1 << i) ? stats[cells[i].ammo] : -1;
++	}
++	if (count >= 0)
++	{
++		Com_sprintf (str, sizeof(str), "%3i", count);
++		mask = count < 10 || active ? 128 : 0;
++		HUD_DrawString (x + w - 27, y + CELL_H - 11, str, mask);
++	}
++}
++
++// What a cell shows, it is redrawn when that changes
++static void HUD_CellState (int i, int *state)
++{
++	short	*stats = cl.frame.playerstate.stats;
++
++	if (i == ITEM_CELL)
++	{
++		state[0] = stats[STAT_SELECTED_ICON];
++		state[1] = stats[STAT_SELECTED_COUNT];
++		state[2] = state[3] = 0;
++		return;
++	}
++	state[0] = (stats[STAT_WEAPONS] >> i) & 1;
++	state[1] = HUD_CellActive (i);
++	state[2] = cells[i].ammo ? stats[cells[i].ammo] : 0;
++	state[3] = 0;
++}
++
++// What the map's texts show, they are redrawn when it changes
++static void HUD_StatsState (int *state)
++{
++	short	*stats = cl.frame.playerstate.stats;
++	int		i;
++
++	state[0] = cl.servercount;
++	state[1] = cl.frame.servertime / 1000;
++	for (i = 0; i < 6; i++)
++		state[2 + i] = stats[STAT_KILLS + i];
++	state[8] = stats[STAT_PICKUP_ICON];
++	state[9] = stats[STAT_PICKUP_STRING];
++	state[10] = stats[STAT_TIMER_ICON];
++	state[11] = stats[STAT_TIMER];
++}
++
++/*
++================
++HUD_DrawPanels
++
++Redraws the map when you moved or turned, every fourth frame, the status
++bar and the rest when they changed. The picked up item over the map comes
++with the status bar, which is drawn again after the map.
++================
++*/
++static void HUD_DrawPanels (qboolean full)
++{
++	int			state[12], i;
++	qboolean	moved, status;
++
++	status = full || memcmp (cl.frame.playerstate.stats, drawnstatus, sizeof(drawnstatus)) != 0;
++	HUD_StatsState (state);
++	moved = !VectorCompare (cl.refdef.vieworg, maporigin) || cl.refdef.viewangles[YAW] != mapangle;
++	mapframe++;
++	if (full || memcmp (state, drawnstats, sizeof(state)) || (moved && !(mapframe & 3)) || !(mapframe & 15))
++	{
++		VectorCopy (cl.refdef.vieworg, maporigin);
++		mapangle = cl.refdef.viewangles[YAW];
++		HUD_DrawMap ();
++		memcpy (drawnstats, state, sizeof(state));
++		status = true;
++	}
++	if (status)
++	{
++		HUD_DrawStatus ();
++		for (i = 0; i <= STAT_SPECTATOR; i++)
++			drawnstatus[i] = cl.frame.playerstate.stats[i];
++	}
++
++	for (i = 0; i < NUM_CELLS; i++)
++	{
++		HUD_CellState (i, state);
++		if (full || memcmp (state, drawncells[i], sizeof(drawncells[i])))
++		{
++			HUD_DrawCell (i);
++			memcpy (drawncells[i], state, sizeof(drawncells[i]));
++		}
++	}
++}
++
++/*
++===============================================================================
++
++THE CONTROLS
++
++===============================================================================
++*/
++
++static const char *controls[][2] =
++{
++	{"D-PAD", "MOVE AND TURN"},
++	{"A", "FIRE / OK"},
++	{"B", "JUMP / BACK"},
++	{"X", "NEXT WEAPON"},
++	{"Y", "RUN (HOLD)"},
++	{"L R", "STRAFE"},
++	{"SELECT", "HELP COMPUTER"},
++	{"START", "MENU"},
++	{"STYLUS", "WEAPON, ITEM"},
++};
++
++#define	NUM_CONTROLS	(sizeof(controls) / sizeof(controls[0]))
++#define	HELP_COLS		(8 + 14)
++#define	HELP_PAD		6
++#define	HELP_HEAD		16		// the header and the groove under it
++#define	HELP_H			(HELP_PAD + HELP_HEAD + NUM_CONTROLS * 10 - 2 + HELP_PAD)
++#define	HELP_W			(HELP_COLS * 8 + 32)
++#define	HELP_X			((320 - HELP_W) / 2)
++#define	HELP_Y			((240 - HELP_H) / 2)
++
++// With the menu and while no game runs
++static qboolean HUD_ControlsShown (void)
++{
++	return cls.key_dest == key_menu || cls.state != ca_active || !cl.refresh_prepped;
++}
++
++// The controls in a dark inset in the middle of the console background
++static void HUD_DrawControls (void)
++{
++	int	i, x, y;
++
++	re.DrawStretchPic (0, 0, 320, 240, "conback");
++	re.DrawFill (HELP_X, HELP_Y, HELP_W, HELP_H, COL_INSET);
++	HUD_DrawBevel (HELP_X, HELP_Y, HELP_W, HELP_H, COL_DARK, COL_LIGHT);
++
++	// the header over a groove
++	x = HELP_X + 16;
++	y = HELP_Y + HELP_PAD;
++	HUD_DrawString (x + (HELP_COLS - 8) * 4, y, "CONTROLS", 0);
++	re.DrawFill (x, y + 11, HELP_COLS * 8, 1, COL_DARK);
++	re.DrawFill (x, y + 12, HELP_COLS * 8, 1, COL_LIGHT);
++
++	for (i = 0; i < NUM_CONTROLS; i++)
++	{
++		y = HELP_Y + HELP_PAD + HELP_HEAD + i * 10;
++		HUD_DrawString (x, y, controls[i][0], 128);
++		HUD_DrawString (x + 8 * 8, y, controls[i][1], 0);
++	}
++}
++
++/*
++===============================================================================
++
++THE TOUCH SCREEN
++
++===============================================================================
++*/
++
++/*
++================
++HUD_DrawTouchScreen
++
++Called every frame the console isn't shown: redraws what changed of the
++panels, or all of them when something else drew there, or the controls
++================
++*/
++void HUD_DrawTouchScreen (void)
++{
++	qboolean	full;
++
++	if (HUD_ControlsShown ())
++	{
++		if (VID_BeginUI (0, 240) || !controlsshown)
++			HUD_DrawControls ();
++		VID_EndUI ();
++		controlsshown = true;
++		panelsshown = false;
++		return;
++	}
++	full = VID_BeginUI (0, 240) || !panelsshown;
++	controlsshown = false;
++	panelsshown = true;
++	HUD_DrawPanels (full);
++	VID_EndUI ();
++}
++
++/*
++================
++HUD_TouchCommand
++
++The command of a tap at a 2D position, NULL for none: a weapon cell uses
++its weapon, the item cell its item or its arrows select another one
++================
++*/
++char *HUD_TouchCommand (int x, int y)
++{
++	static char	command[32];
++	int			i, cx, cy, w;
++
++	if (!panelsshown || cls.key_dest != key_game || y < CELLS_Y)
++		return NULL;
++	for (i = 0; i < NUM_CELLS; i++)
++	{
++		HUD_CellRect (i, &cx, &cy, &w);
++		if (x < cx || x >= cx + w || y < cy || y >= cy + CELL_H)
++			continue;
++		if (i == ITEM_CELL)
++			return x < cx + w / 3 ? "invprev\n" : x >= cx + w * 2 / 3 ? "invnext\n" : "invuse\n";
++		Com_sprintf (command, sizeof(command), "use %s\n", cells[i].item);
++		return command;
++	}
++	return NULL;
++}

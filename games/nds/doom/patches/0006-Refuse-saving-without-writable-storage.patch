@@ -1,0 +1,77 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Sat, 3 Oct 2026 11:04:40 +0200
+Subject: [PATCH] Refuse saving without writable storage
+
+Without writable storage, like a Nintendo DS without an SD card, saving
+ended the game with an I_Error. Save Game and Quick Save now check first
+and show a message, so you can keep playing.
+---
+ doomgeneric/m_menu.c | 33 +++++++++++++++++++++++++++++++++
+ 1 file changed, 33 insertions(+)
+
+diff --git a/doomgeneric/m_menu.c b/doomgeneric/m_menu.c
+index d4e1ceb..88ae445 100644
+--- a/doomgeneric/m_menu.c
++++ b/doomgeneric/m_menu.c
+@@ -20,6 +20,7 @@
+ 
+ #include <stdlib.h>
+ #include <ctype.h>
++#include <stdio.h>
+ 
+ 
+ #include "doomdef.h"
+@@ -642,6 +643,25 @@ void M_SaveSelect(int choice)
+ //
+ // Selected from DOOM menu
+ //
++// Savegames need writable storage, eg. an SD card on the Nintendo DS.
++// Without it saving is refused with a message instead of an I_Error.
++#define SAVEDISABLED \
++    "no sd card found, saving is\n" \
++    "disabled. you can keep playing.\n\n" \
++    "press a key."
++
++static boolean M_CanWriteSaves(void)
++{
++    char *filename = P_TempSaveGameFile();
++    FILE *f = fopen(filename, "wb");
++
++    if (f == NULL)
++	return false;
++    fclose(f);
++    remove(filename);
++    return true;
++}
++
+ void M_SaveGame (int choice)
+ {
+     if (!usergame)
+@@ -652,6 +672,12 @@ void M_SaveGame (int choice)
+ 	
+     if (gamestate != GS_LEVEL)
+ 	return;
++
++    if (!M_CanWriteSaves())
++    {
++	M_StartMessage(SAVEDISABLED,NULL,false);
++	return;
++    }
+ 	
+     M_SetupNextMenu(&SaveDef);
+     M_ReadSaveStrings();
+@@ -683,6 +709,13 @@ void M_QuickSave(void)
+ 
+     if (gamestate != GS_LEVEL)
+ 	return;
++
++    if (!M_CanWriteSaves())
++    {
++	M_StartControlPanel();
++	M_StartMessage(SAVEDISABLED,NULL,false);
++	return;
++    }
+ 	
+     if (quickSaveSlot < 0)
+     {

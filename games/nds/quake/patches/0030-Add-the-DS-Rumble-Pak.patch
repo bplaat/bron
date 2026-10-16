@@ -1,0 +1,192 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Sat, 10 Oct 2026 22:18:38 +0200
+Subject: [PATCH] Add the DS Rumble Pak
+
+A Rumble Pak in the GBA slot rumbles when the player takes damage,
+longer for more damage, and on the kick of firing a weapon. The pak
+only moves while it is switched back and forth, a tick task does that at
+60 Hz for as long as the rumble lasts. Without a pak, and on the DSi
+which has no GBA slot, nothing changes. The demos playing behind the
+menu don't rumble.
+
+Options always shows Rumble below Crosshair, kept as the rumble cvar in
+config.cfg, it rumbles once turned on.
+---
+ WinQuake/cl_parse.c |  7 +++++++
+ WinQuake/in_nds.c   | 42 ++++++++++++++++++++++++++++++++++++++++--
+ WinQuake/input.h    |  4 ++++
+ WinQuake/menu.c     | 11 ++++++++++-
+ WinQuake/view.c     |  4 ++++
+ 5 files changed, 65 insertions(+), 3 deletions(-)
+
+diff --git a/WinQuake/cl_parse.c b/WinQuake/cl_parse.c
+index c79ca47..d56176b 100644
+--- a/WinQuake/cl_parse.c
++++ b/WinQuake/cl_parse.c
+@@ -514,6 +514,7 @@ Server information pertaining to this client only
+ void CL_ParseClientdata (int bits)
+ {
+ 	int		i, j;
++	float	oldpunch;
+ 	
+ 	if (bits & SU_VIEWHEIGHT)
+ 		cl.viewheight = MSG_ReadChar ();
+@@ -526,6 +527,7 @@ void CL_ParseClientdata (int bits)
+ 		cl.idealpitch = 0;
+ 	
+ 	VectorCopy (cl.mvelocity[0], cl.mvelocity[1]);
++	oldpunch = cl.punchangle[0];
+ 	for (i=0 ; i<3 ; i++)
+ 	{
+ 		if (bits & (SU_PUNCH1<<i) )
+@@ -538,6 +540,11 @@ void CL_ParseClientdata (int bits)
+ 			cl.mvelocity[0][i] = 0;
+ 	}
+ 
++	// firing kicks the view up, which the server lets wear off, the demos
++	// playing behind the menu don't rumble
++	if (cl.punchangle[0] < oldpunch && !cls.demoplayback)
++		IN_Rumble (100);
++
+ // [always sent]	if (bits & SU_ITEMS)
+ 		i = MSG_ReadLong ();
+ 
+diff --git a/WinQuake/in_nds.c b/WinQuake/in_nds.c
+index abb69c2..74c6f1e 100644
+--- a/WinQuake/in_nds.c
++++ b/WinQuake/in_nds.c
+@@ -17,11 +17,12 @@ along with this program; if not, write to the Free Software
+ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
+ 
+ */
+-// in_nds.c -- Nintendo DS buttons and touch screen
++// in_nds.c -- Nintendo DS buttons, touch screen and Rumble Pak
+ //
+ // The buttons send the keys of Quake's default bindings in game and the menu
+ // keys everywhere else, so they can still be rebound. A tap on a weapon of
+-// the touch screen (sbar_nds.c) selects it.
++// the touch screen (sbar_nds.c) selects it. A Rumble Pak in the GBA slot
++// rumbles on taking damage and firing, without one it is left alone.
+ 
+ #include "quakedef.h"
+ 
+@@ -57,8 +58,45 @@ static int	held_key[NUM_BUTTONS];
+ static qboolean	touching;
+ static int	touch_key;		// held by the stylus
+ 
++// The Rumble Pak only moves while it is switched back and forth, which a
++// tick task does at 60 Hz for as long as the rumble lasts. Only a DS has a
++// GBA slot, on a DSi gbacartOpen fails.
++#define RUMBLE_HZ	60
++#define RUMBLE_MAX_MS	500
++
++cvar_t	rumble = {"rumble", "1", true};
++
++static qboolean	rumble_inserted;
++static volatile int	rumble_ticks;
++static TickTask	rumble_task;
++
++static void IN_RumbleTick (TickTask *task)
++{
++	if (rumble_ticks > 0)
++		rumble_ticks--;
++	rumbleSet (rumble_ticks & 1);
++}
++
+ void IN_Init (void)
+ {
++	Cvar_RegisterVariable (&rumble);
++
++	if (!gbacartOpen ())
++		return;
++	rumble_inserted = rumbleIsInserted ();
++	if (rumble_inserted)
++		tickTaskStart (&rumble_task, IN_RumbleTick, ticksFromHz (RUMBLE_HZ), ticksFromHz (RUMBLE_HZ));
++	else
++		gbacartClose ();
++}
++
++void IN_Rumble (int ms)
++{
++	int	ticks;
++
++	ticks = (ms < RUMBLE_MAX_MS ? ms : RUMBLE_MAX_MS) * RUMBLE_HZ / 1000;
++	if (rumble_inserted && rumble.value && ticks > rumble_ticks)
++		rumble_ticks = ticks;
+ }
+ 
+ void IN_Shutdown (void)
+diff --git a/WinQuake/input.h b/WinQuake/input.h
+index c3daa17..d4b021c 100644
+--- a/WinQuake/input.h
++++ b/WinQuake/input.h
+@@ -29,6 +29,10 @@ void IN_Commands (void);
+ void IN_Move (usercmd_t *cmd);
+ // add additional movement on top of the keyboard move cmd
+ 
++void IN_Rumble (int ms);
++// rumbles the Rumble Pak for ms milliseconds, when one is inserted and the
++// rumble cvar is on
++
+ void IN_ClearStates (void);
+ // restores all button and position states to defaults
+ 
+diff --git a/WinQuake/menu.c b/WinQuake/menu.c
+index 6a1027f..811054b 100644
+--- a/WinQuake/menu.c
++++ b/WinQuake/menu.c
+@@ -63,6 +63,7 @@ qboolean	m_entersound;		// play after drawing a frame, so caching
+ qboolean	m_recursiveDraw;
+ 
+ extern cvar_t	crosshair;
++extern cvar_t	rumble;
+ 
+ // While M_PageChanged measures the page the draw functions only hash what
+ // they would draw
+@@ -631,7 +632,7 @@ void M_Save_Key (int k)
+ //=============================================================================
+ /* OPTIONS MENU */
+ 
+-#define	OPTIONS_ITEMS	5
++#define	OPTIONS_ITEMS	6
+ 
+ #define	SLIDER_RANGE	10
+ 
+@@ -684,6 +685,11 @@ void M_AdjustSliders (int dir)
+ 	case 4:	// crosshair
+ 		Cvar_SetValue ("crosshair", !crosshair.value);
+ 		break;
++
++	case 5:	// rumble, which rumbles once turned on
++		Cvar_SetValue ("rumble", !rumble.value);
++		IN_Rumble (200);
++		break;
+ 	}
+ }
+ 
+@@ -735,6 +741,9 @@ void M_Options_Draw (void)
+ 	M_Print (16, 64, "             Crosshair");
+ 	M_DrawCheckbox (220, 64, crosshair.value);
+ 
++	M_Print (16, 72, "                Rumble");
++	M_DrawCheckbox (220, 72, rumble.value);
++
+ // cursor
+ 	M_DrawCursorCharacter (200, 32 + options_cursor*8);
+ }
+diff --git a/WinQuake/view.c b/WinQuake/view.c
+index a0d4434..e98b745 100644
+--- a/WinQuake/view.c
++++ b/WinQuake/view.c
+@@ -332,6 +332,10 @@ void V_ParseDamage (void)
+ 	if (count < 10)
+ 		count = 10;
+ 
++	// the demos playing behind the menu don't rumble
++	if (!cls.demoplayback)
++		IN_Rumble (80 + count * 8);
++
+ 	cl.faceanimtime = cl.time + 0.2;		// but sbar face into pain frame
+ 
+ 	cl.cshifts[CSHIFT_DAMAGE].percent += 3*count;

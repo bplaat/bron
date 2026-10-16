@@ -1,0 +1,5211 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Mon, 12 Oct 2026 07:54:52 +0200
+Subject: [PATCH] Add the DS 3D refresh
+
+---
+ ref_nds/r_alias.c |  247 +++++++++
+ ref_nds/r_draw.c  |  747 ++++++++++++++++++++++++++++
+ ref_nds/r_image.c |  795 +++++++++++++++++++++++++++++
+ ref_nds/r_local.h |  374 ++++++++++++++
+ ref_nds/r_main.c  |  702 ++++++++++++++++++++++++++
+ ref_nds/r_map.c   |  280 +++++++++++
+ ref_nds/r_model.c | 1208 +++++++++++++++++++++++++++++++++++++++++++++
+ ref_nds/r_surf.c  |  786 +++++++++++++++++++++++++++++
+ 8 files changed, 5139 insertions(+)
+ create mode 100644 ref_nds/r_alias.c
+ create mode 100644 ref_nds/r_draw.c
+ create mode 100644 ref_nds/r_image.c
+ create mode 100644 ref_nds/r_local.h
+ create mode 100644 ref_nds/r_main.c
+ create mode 100644 ref_nds/r_map.c
+ create mode 100644 ref_nds/r_model.c
+ create mode 100644 ref_nds/r_surf.c
+
+diff --git a/ref_nds/r_alias.c b/ref_nds/r_alias.c
+new file mode 100644
+index 0000000..deb148c
+--- /dev/null
++++ b/ref_nds/r_alias.c
+@@ -0,0 +1,247 @@
++/*
++Copyright (C) 1997-2001 Id Software, Inc.
++
++This program is free software; you can redistribute it and/or
++modify it under the terms of the GNU General Public License
++as published by the Free Software Foundation; either version 2
++of the License, or (at your option) any later version.
++
++This program is distributed in the hope that it will be useful,
++but WITHOUT ANY WARRANTY; without even the implied warranty of
++MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
++
++See the GNU General Public License for more details.
++
++You should have received a copy of the GNU General Public License
++along with this program; if not, write to the Free Software
++Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
++
++*/
++// r_alias.c -- alias models
++//
++// The vertices of the two frames are interpolated in fixed point into eye
++// space positions, so the position relative to the eye isn't the difference
++// of two rounded positions, then sent through the strips and triangle lists
++// of the model's GL commands. They are lit like GL Quake II, shaded by their
++// normals.
++
++#include "r_local.h"
++
++#define	SHADEDOT_QUANT	16
++#define	NUMVERTEXNORMALS	162
++
++// The view weapon's positions are in 1/16 of the units of the world's, its
++// matrix and projection in finer units: the gun wobbled while turning
++#define	VIEWMODEL_UNITS	16
++
++int			c_alias_polys;
++
++static const float	r_avertexnormal_dots[SHADEDOT_QUANT][256] =
++#include "../ref_gl/anormtab.h"
++;
++static u16		shadedots_i[SHADEDOT_QUANT][NUMVERTEXNORMALS];	// 8.8
++
++static unsigned	alias_xy[MAX_VERTS];
++static u16		alias_z[MAX_VERTS];
++static u16		alias_color[MAX_VERTS];
++
++void R_InitAlias (void)
++{
++	int	i, j;
++
++	for (i = 0; i < SHADEDOT_QUANT; i++)
++		for (j = 0; j < NUMVERTEXNORMALS; j++)
++			shadedots_i[i][j] = r_avertexnormal_dots[i][j] * 256;
++}
++
++// The light of a model like GL Quake II, 1.0 is the normal light
++static void R_AliasLight (entity_t *e, vec3_t shadelight)
++{
++	int		i;
++	float	scale, min;
++
++	if (e->flags & (RF_SHELL_HALF_DAM | RF_SHELL_GREEN | RF_SHELL_RED | RF_SHELL_BLUE | RF_SHELL_DOUBLE))
++	{
++		VectorClear (shadelight);
++		if (e->flags & RF_SHELL_HALF_DAM)
++		{
++			shadelight[0] = 0.56f;
++			shadelight[1] = 0.59f;
++			shadelight[2] = 0.45f;
++		}
++		if (e->flags & RF_SHELL_DOUBLE)
++		{
++			shadelight[0] = 0.9f;
++			shadelight[1] = 0.7f;
++		}
++		if (e->flags & RF_SHELL_RED)
++			shadelight[0] = 1.0f;
++		if (e->flags & RF_SHELL_GREEN)
++			shadelight[1] = 1.0f;
++		if (e->flags & RF_SHELL_BLUE)
++			shadelight[2] = 1.0f;
++		return;
++	}
++	if (e->flags & RF_FULLBRIGHT)
++	{
++		shadelight[0] = shadelight[1] = shadelight[2] = 1.0f;
++		return;
++	}
++
++	R_LightPoint (e->origin, shadelight);
++	if (e->flags & RF_MINLIGHT)
++	{
++		for (i = 0; i < 3; i++)
++			if (shadelight[i] > 0.1f)
++				break;
++		if (i == 3)
++			shadelight[0] = shadelight[1] = shadelight[2] = 0.1f;
++	}
++	if (e->flags & RF_GLOW)
++	{
++		// bonus items will pulse with time
++		scale = 0.1f * sinf (r_newrefdef.time * 7);
++		for (i = 0; i < 3; i++)
++		{
++			min = shadelight[i] * 0.8f;
++			shadelight[i] += scale;
++			if (shadelight[i] < min)
++				shadelight[i] = min;
++		}
++	}
++}
++
++static image_t *R_AliasSkin (entity_t *e, gxalias_t *gx)
++{
++	if (e->skin)
++		return e->skin;		// custom player skin
++	if (e->skinnum >= 0 && e->skinnum < gx->numskins && gx->skins[e->skinnum])
++		return gx->skins[e->skinnum];
++	return gx->skins[0];
++}
++
++/*
++=================
++R_LerpVertices
++
++The positions of the vertices between the two frames in 1/8 units times
++scale of the model's coordinates, and their colors
++=================
++*/
++HOT_CODE static void R_LerpVertices (gxalias_t *gx, daliasframe_t *frame, daliasframe_t *oldframe,
++	int frontlerp, int scale, const int *shade, const u16 *dots)
++{
++	dtrivertx_t	*v = frame->verts, *ov = oldframe->verts;
++	int			i, k, front[3], back[3], move[3], p[3], l;
++
++	// 16.16 fixed point multipliers of the bytes of each frame
++	for (k = 0; k < 3; k++)
++	{
++		front[k] = (int) (frame->scale[k] * scale * 256) * frontlerp;
++		back[k] = (int) (oldframe->scale[k] * scale * 256) * (256 - frontlerp);
++		move[k] = (int) ((frame->translate[k] * frontlerp + oldframe->translate[k] * (256 - frontlerp))
++			* scale * 256);
++	}
++	for (i = 0; i < gx->numverts; i++, v++, ov++)
++	{
++		for (k = 0; k < 3; k++)
++			p[k] = (v->v[k] * front[k] + ov->v[k] * back[k] + move[k]) >> 16;
++		alias_xy[i] = VERTEX_PACK (p[0], p[1]);
++		alias_z[i] = p[2];
++		l = dots[v->lightnormalindex];
++		alias_color[i] = RGB15 (MIN ((l * shade[0]) >> 16, 31), MIN ((l * shade[1]) >> 16, 31),
++			MIN ((l * shade[2]) >> 16, 31));
++	}
++}
++
++HOT_CODE static void R_EmitAliasCommands (gxalias_t *gx)
++{
++	const u16		*cmd = gx->cmds;
++	const unsigned	*st = gx->st;
++	int				count, n;
++
++	while ((count = *cmd++))
++	{
++		GFX_BEGIN = *cmd++;
++		for (; count; count--)
++		{
++			n = *cmd++;
++			GFX_COLOR = alias_color[n];
++			GFX_TEX_COORD = *st++;
++			GFX_VERTEX16 = alias_xy[n];
++			GFX_VERTEX16 = alias_z[n];
++		}
++	}
++}
++
++void R_DrawAliasModel (entity_t *e)
++{
++	gxalias_t		*gx = e->model->alias;
++	daliasframe_t	*frame, *oldframe;
++	vec3_t			mins, maxs, forward, right, up, dist, shadelight;
++	float			m[4][3], units;
++	int				i, scale, frontlerp, shade[3], alpha;
++
++	if (!(e->flags & RF_WEAPONMODEL))
++	{
++		for (i = 0; i < 3; i++)
++		{
++			mins[i] = e->origin[i] - gx->radius;
++			maxs[i] = e->origin[i] + gx->radius;
++		}
++		if (R_CullBox (mins, maxs))
++			return;
++	}
++	else if (r_lefthand->value == 2)
++		return;
++
++	if (e->frame >= gx->numframes || e->frame < 0)
++		e->frame = 0;
++	if (e->oldframe >= gx->numframes || e->oldframe < 0)
++		e->oldframe = 0;
++	frame = (daliasframe_t *)(gx->frames + e->frame * gx->framesize);
++	oldframe = (daliasframe_t *)(gx->frames + e->oldframe * gx->framesize);
++
++	// the normal light shaded by the 8.8 normal dots to the 15 of the colors
++	R_AliasLight (e, shadelight);
++	for (i = 0; i < 3; i++)
++		shade[i] = MIN (shadelight[i], 2.0f) * (GX_NORMAL_LIGHT * 256);
++
++	// straight to eye space, x right, y up, looking down -z
++	AngleVectors (e->angles, forward, right, up);
++	scale = e->flags & RF_WEAPONMODEL ? VERTEX_SCALE * VIEWMODEL_UNITS : VERTEX_SCALE;
++	units = (e->flags & RF_WEAPONMODEL ? VIEWMODEL_UNITS : 1) * MATRIX_SCALE_W;
++	for (i = 0; i < 3; i++)
++	{
++		m[0][i] = forward[i];
++		m[1][i] = -right[i];
++		m[2][i] = up[i];
++	}
++	VectorSubtract (e->origin, r_origin, m[3]);
++	VectorScale (m[3], units, m[3]);
++	for (i = 0; i < 4; i++)
++	{
++		VectorCopy (m[i], dist);
++		m[i][0] = DotProduct (dist, vright);
++		m[i][1] = DotProduct (dist, vup);
++		m[i][2] = -DotProduct (dist, vpn);
++	}
++
++	frontlerp = (1 - e->backlerp) * 256;
++	R_LerpVertices (gx, frame, oldframe, frontlerp, scale, shade,
++		shadedots_i[((int)(e->angles[1] * (SHADEDOT_QUANT / 360.0f))) & (SHADEDOT_QUANT - 1)]);
++
++	if (e->flags & RF_WEAPONMODEL)
++		R_SetViewModelProjection (true);
++	MATRIX_PUSH = 0;
++	R_LoadMatrix (m, false);
++	R_BindImage (R_AliasSkin (e, gx));
++	alpha = e->flags & RF_TRANSLUCENT ? CLAMP (1, (int) (e->alpha * 31), 31) : 31;
++	GFX_POLY_FORMAT = POLY_ALPHA (alpha) | POLY_CULL_FRONT | POLY_ID (alpha < 31 ? 4 : 0);
++	R_EmitAliasCommands (gx);
++	c_alias_polys += gx->numverts;
++	GFX_POLY_FORMAT = POLY_ALPHA (31) | POLY_CULL_NONE;
++	MATRIX_POP = 1;
++	if (e->flags & RF_WEAPONMODEL)
++		R_SetViewModelProjection (false);
++}
+diff --git a/ref_nds/r_draw.c b/ref_nds/r_draw.c
+new file mode 100644
+index 0000000..186bed0
+--- /dev/null
++++ b/ref_nds/r_draw.c
+@@ -0,0 +1,747 @@
++/*
++Copyright (C) 1997-2001 Id Software, Inc.
++
++This program is free software; you can redistribute it and/or
++modify it under the terms of the GNU General Public License
++as published by the Free Software Foundation; either version 2
++of the License, or (at your option) any later version.
++
++This program is distributed in the hope that it will be useful,
++but WITHOUT ANY WARRANTY; without even the implied warranty of
++MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
++
++See the GNU General Public License for more details.
++
++You should have received a copy of the GNU General Public License
++along with this program; if not, write to the Free Software
++Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
++
++*/
++// r_draw.c -- the 2D drawing on both screens
++//
++// Quake II's 2D drawing is 320x240. The touch screen shows a buffer of it in
++// main RAM, copied into an 8bpp bitmap background in VRAM bank C and scaled
++// to 256x192 by the affine background hardware. A second affine layer
++// samples it half a pixel further and is alpha blended on top, a cheap
++// hardware bilinear-like filter. What is drawn there stays until something
++// draws over it, only the rows that changed are copied. The touch screen
++// (hud_nds.c) keeps rows of it drawn and redraws them when something else
++// drew there (VID_BeginUI).
++//
++// The top screen shows the 3D view with two layers over it. The overlay is
++// for the menus, the help computer, the inventory, the loading plaque and
++// the pause: they draw into a second 320x240 buffer, which is cut into 8x8
++// tiles in VRAM bank E for the same affine layers as the touch screen,
++// scaled the same way, or at 1:1 for the 256x192 of the help computer and
++// the inventory. As tiles only the parts with something on them take VRAM.
++// The text layer has Quake II's font as tiles in bank F, at 1:1 over all of
++// it, for the messages and center prints.
++
++#include "r_local.h"
++
++#define	FB_STRIDE	512
++
++// Scale factors in 8.8 fixed point: 320 -> 256 and 240 -> 192
++#define	SCALE_X		((VID_WIDTH << 8) / 256)
++#define	SCALE_Y		((VID_HEIGHT << 8) / 192)
++
++#define	TRANSPARENT_COLOR	255
++
++// Bank E on the top screen: the overlay's tiles, its 64x64 map and the text
++// layer's 32x32 map, the font in bank F
++#define	OVERLAY_TILES		864			// 54 KiB, tile 0 stays empty
++#define	OVERLAY_MAP_BASE	27			// in 2 KiB
++#define	OVERLAY_COLS		(VID_WIDTH / 8)
++#define	OVERLAY_ROWS		(VID_HEIGHT / 8)
++#define	TEXT_MAP_BASE		31
++#define	TEXT_TILE_BASE		4			// in 16 KiB, bank F
++
++byte			vid_buffer[VID_WIDTH * VID_HEIGHT] __attribute__((aligned(32)));
++static byte		top_buffer[VID_WIDTH * VID_HEIGHT] __attribute__((aligned(32)));
++static byte		*draw_buffer = vid_buffer;	// where the 2D drawing goes
++static image_t	*draw_chars;
++static qboolean	touchscreen;				// the startup is over
++
++// Rows of the touch screen changed this frame, to copy to VRAM
++static byte		copyrows[VID_HEIGHT];
++
++// Rows the touch screen keeps drawn, it redraws them when something else
++// drew there
++static int		ui_top, ui_bottom;
++static qboolean	ui_drawing, ui_overdrawn;
++
++// Rows of the overlay drawn this frame and the last one
++static byte		toprows[VID_HEIGHT], lasttoprows[VID_HEIGHT];
++static qboolean	top_drawing, top_shown, top_fade;
++static byte		top_colors[256];	// Quake II's black is 255 there, 0 is transparent
++
++// The overlay's map and the next one, which VID_VBlank2D shows
++static u16		topmap[OVERLAY_ROWS][OVERLAY_COLS];
++static u16		nextmap[OVERLAY_ROWS][OVERLAY_COLS];
++static volatile qboolean	nextmap_ready;
++
++static u16		textmap[32 * 24] __attribute__((aligned(4)));
++static u16		shownmap[32 * 24] __attribute__((aligned(4)));
++static qboolean	font;
++
++void VID_MarkRows (int y, int height)
++{
++	int	bottom = MIN (y + height, VID_HEIGHT);
++
++	y = MAX (y, 0);
++	if (bottom <= y)
++		return;
++	if (top_drawing)
++	{
++		memset (toprows + y, 1, bottom - y);
++		return;
++	}
++	if (!ui_drawing && y < ui_bottom && bottom > ui_top)
++		ui_overdrawn = true;
++	memset (copyrows + y, 1, bottom - y);
++}
++
++/*
++================
++VID_BeginUI
++
++The touch screen keeps the rows from top to bottom drawn, returns whether
++something else drew there since the last time, then they need to be drawn
++again
++================
++*/
++qboolean VID_BeginUI (int top, int bottom)
++{
++	qboolean	overdrawn = ui_overdrawn;
++
++	ui_top = top;
++	ui_bottom = bottom;
++	ui_overdrawn = false;
++	ui_drawing = true;
++	return overdrawn;
++}
++
++void VID_EndUI (void)
++{
++	ui_drawing = false;
++}
++
++// The palette of both screens, from the vertical blank: Quake II's black is
++// 255 on the top screen
++void VID_SetPalette2D (const u16 *palette)
++{
++	memcpy (BG_PALETTE, palette, 256 * sizeof(u16));
++	BG_PALETTE[255] = palette[0];
++	if (touchscreen)
++		memcpy (BG_PALETTE_SUB, palette, 256 * sizeof(u16));
++}
++
++// The next map of the overlay, written while the screen isn't drawn
++void VID_VBlank2D (void)
++{
++	int	ty;
++
++	if (nextmap_ready)
++	{
++		for (ty = 0; ty < OVERLAY_ROWS; ty++)
++			memcpy ((u16 *) BG_MAP_RAM (OVERLAY_MAP_BASE) + ty * 64, nextmap[ty], sizeof(nextmap[ty]));
++		memcpy (topmap, nextmap, sizeof(topmap));
++		nextmap_ready = false;
++	}
++	// Writing the reference point of an affine layer while the screen is
++	// drawn restarts its picture from that line
++	bgUpdate ();
++}
++
++/*
++================
++VID_InitTop
++
++Called by R_Init: the 3D view with the overlay and the text layer over it,
++both empty
++================
++*/
++void VID_InitTop (void)
++{
++	int	bg, i;
++
++	for (i = 0; i < 256; i++)
++		top_colors[i] = i;
++	top_colors[0] = TRANSPARENT_COLOR;
++	top_colors[TRANSPARENT_COLOR] = 0;
++
++	vramSetBankE (VRAM_E_MAIN_BG);
++	vramSetBankF (VRAM_F_MAIN_BG_0x06010000);
++	memset (BG_GFX, 0, 80 * 1024);
++	REG_BG0CNT = BG_PRIORITY (3);
++	REG_BG1CNT = BG_32x32 | BG_COLOR_256 | BG_MAP_BASE (TEXT_MAP_BASE) | BG_TILE_BASE (TEXT_TILE_BASE)
++		| BG_PRIORITY (0);
++	for (i = 0; i < 32 * 24; i++)
++		textmap[i] = shownmap[i] = ' ';
++	memcpy (BG_MAP_RAM (TEXT_MAP_BASE), textmap, sizeof(textmap));
++	for (bg = 2; bg <= 3; bg++)
++		bgSetPriority (bgInit (bg, BgType_ExRotation, BgSize_ER_512x512, OVERLAY_MAP_BASE, 0), bg == 2 ? 1 : 2);
++	memset (top_buffer, TRANSPARENT_COLOR, sizeof(top_buffer));
++	REG_DISPCNT = MODE_5_3D | DISPLAY_BG0_ACTIVE | DISPLAY_BG1_ACTIVE;
++}
++
++// The 256 characters of Quake II's font as 8x8 tiles, 0 is transparent
++static void VID_UploadFont (void)
++{
++	u16		tile[32];
++	byte	*src;
++	int		num, y, x;
++
++	for (num = 0; num < 256; num++)
++	{
++		src = draw_chars->pixels + (num >> 4) * 8 * 128 + (num & 15) * 8;
++		for (y = 0; y < 8; y++, src += 128)
++			for (x = 0; x < 8; x += 2)
++				tile[y * 4 + x / 2] = top_colors[src[x]] | top_colors[src[x + 1]] << 8;
++		memcpy ((byte *) BG_TILE_RAM (TEXT_TILE_BASE) + num * sizeof(tile), tile, sizeof(tile));
++	}
++	font = true;
++}
++
++/*
++================
++VID_TextChar
++
++A character of the text layer, in its 32x24 columns and rows of the top
++screen, shown until VID_UpdateText
++================
++*/
++void VID_TextChar (int col, int row, int num)
++{
++	if (col >= 0 && col < 32 && row >= 0 && row < 24)
++		textmap[row * 32 + col] = num & 255;
++}
++
++void VID_TextString (int col, int row, const char *str, int mask)
++{
++	for (; *str; str++, col++)
++		VID_TextChar (col, row, *str ^ mask);
++}
++
++// Shows the text drawn this frame, the next frame draws it again
++static void VID_UpdateText (void)
++{
++	int	i;
++
++	if (!font && draw_chars)
++		VID_UploadFont ();
++	if (memcmp (shownmap, textmap, sizeof(textmap)))
++	{
++		memcpy (BG_MAP_RAM (TEXT_MAP_BASE), textmap, sizeof(textmap));
++		memcpy (shownmap, textmap, sizeof(textmap));
++	}
++	for (i = 0; i < 32 * 24; i++)
++		textmap[i] = ' ';
++}
++
++/*
++================
++VID_BeginTop
++
++The 2D drawing goes to the overlay of the top screen until VID_EndTop, on
++a transparent background
++================
++*/
++void VID_BeginTop (void)
++{
++	draw_buffer = top_buffer;
++	top_drawing = true;
++	top_fade = false;
++}
++
++// Only threads wait for the vertical blank, not ARM code
++static void VID_WaitForTopMap (void)
++{
++	while (nextmap_ready)
++		threadWaitForVBlank ();
++}
++
++/*
++================
++VID_CutTiles
++
++Cuts the overlay from tile column x0, row y0 on into the tiles of the top
++screen, the tiles with nothing on them are tile 0. A tile keeps its slot in
++VRAM while it shows the same picture, a changed one goes to a slot the
++shown map doesn't use and the new map is shown at the next vblank, so the
++screen never shows a tile while it's written.
++================
++*/
++__attribute__((target("arm")))
++static void VID_CutTiles (int x0, int y0, int cols, int rows)
++{
++	static u32	tilehash[OVERLAY_TILES];
++	static byte	used[OVERLAY_TILES];
++	u16		*tiles = (u16 *) BG_TILE_RAM (0);
++	byte	*row;
++	u32		*p, all, hash;
++	int		tx, ty, x, y, slot, free = 1;
++
++	memset (used, 0, sizeof(used));
++	for (ty = 0; ty < OVERLAY_ROWS; ty++)
++		for (tx = 0; tx < OVERLAY_COLS; tx++)
++			used[topmap[ty][tx]] = true;
++
++	for (ty = 0; ty < OVERLAY_ROWS; ty++)
++	{
++		row = top_buffer + ty * 8 * VID_WIDTH;
++		for (tx = 0; tx < OVERLAY_COLS; tx++)
++		{
++			all = 0xffffffff;
++			hash = 0;
++			if (tx >= x0 && tx < x0 + cols && ty >= y0 && ty < y0 + rows)
++				for (y = 0; y < 8; y++)
++				{
++					p = (u32 *) (row + y * VID_WIDTH + tx * 8);
++					all &= p[0] & p[1];
++					hash = (hash * 0x9e3779b1 + p[0]) * 0x9e3779b1 + p[1];
++				}
++			slot = topmap[ty][tx];
++			if (all == 0xffffffff)
++				slot = 0;
++			else if (!slot || tilehash[slot] != hash)
++			{
++				// a changed tile goes to a free slot, without one it's empty
++				while (free < OVERLAY_TILES && used[free])
++					free++;
++				slot = free < OVERLAY_TILES ? free : 0;
++				if (slot)
++				{
++					used[slot] = true;
++					tilehash[slot] = hash;
++					for (y = 0; y < 8; y++)
++						for (x = 0; x < 8; x += 2)
++							tiles[slot * 32 + y * 4 + x / 2] = top_colors[row[y * VID_WIDTH + tx * 8 + x]]
++								| (top_colors[row[y * VID_WIDTH + tx * 8 + x + 1]] << 8);
++				}
++			}
++			nextmap[ty][tx] = slot;
++		}
++	}
++}
++
++/*
++================
++VID_EndTop
++
++Shows what was drawn on the overlay since VID_BeginTop, scaled to the top
++screen, or a 256x192 part of it from x, y at 1:1 when full is false. The
++drawn rows are cleared for the next time.
++================
++*/
++void VID_EndTop (qboolean full, int x, int y)
++{
++	qboolean	drawn = false, shown;
++	int			i, bg;
++
++	draw_buffer = vid_buffer;
++	top_drawing = false;
++	for (i = 0; i < VID_HEIGHT; i++)
++		if (toprows[i] || lasttoprows[i])
++			drawn = true;
++	if (!drawn)
++		return;
++
++	VID_WaitForTopMap ();
++	if (full)
++		VID_CutTiles (0, 0, OVERLAY_COLS, OVERLAY_ROWS);
++	else
++		VID_CutTiles (x / 8, y / 8, 32, 24);
++	// for VID_VBlank2D, the compiler mustn't move the stores to the map after this
++	__asm__ volatile ("" ::: "memory");
++	nextmap_ready = true;
++
++	// the blend layer samples half an output pixel further, not at 1:1
++	for (bg = 2; bg <= 3; bg++)
++	{
++		bgSetScale (bg, full ? SCALE_X : 256, full ? SCALE_Y : 256);
++		bgSetScroll (bg, full ? 0 : x, full ? 0 : y);
++		if (bg == 2)
++			bgSetScrollf (bg, full ? SCALE_X / 2 : x << 8, full ? SCALE_Y / 2 : y << 8);
++	}
++	shown = false;
++	for (i = 0; i < VID_HEIGHT; i++)
++	{
++		if (toprows[i])
++		{
++			memset (top_buffer + i * VID_WIDTH, TRANSPARENT_COLOR, VID_WIDTH);
++			shown = true;
++		}
++	}
++	memcpy (lasttoprows, toprows, sizeof(toprows));
++	memset (toprows, 0, sizeof(toprows));
++	if (shown != top_shown || shown)
++	{
++		top_shown = shown;
++		REG_DISPCNT = (REG_DISPCNT & ~(DISPLAY_BG2_ACTIVE | DISPLAY_BG3_ACTIVE))
++			| (shown ? DISPLAY_BG3_ACTIVE | (full ? DISPLAY_BG2_ACTIVE : 0) : 0);
++		REG_BLDCNT = shown && full ? BLEND_ALPHA | BLEND_SRC_BG2 | BLEND_DST_BG3 : BLEND_NONE;
++		REG_BLDALPHA = 8 | (8 << 8);
++	}
++}
++
++// Whether the view is dimmed behind the menu this frame
++qboolean VID_TopFaded (void)
++{
++	return top_fade;
++}
++
++// The 3D view, off while a level loads
++void VID_Show3D (qboolean show)
++{
++	if (show)
++		REG_DISPCNT |= DISPLAY_BG0_ACTIVE;
++	else
++		REG_DISPCNT &= ~DISPLAY_BG0_ACTIVE;
++}
++
++/*
++================
++VID_InitTouchScreen
++
++The touch screen keeps the text console of the startup until the first
++frame is drawn
++================
++*/
++static void VID_InitTouchScreen (void)
++{
++	int	bg, sub;
++
++	Sys_EndTextConsole ();
++	videoSetModeSub (MODE_5_2D);
++	vramSetBankC (VRAM_C_SUB_BG);
++	memset (BG_GFX_SUB, 0, FB_STRIDE * 256);
++	for (bg = 2; bg <= 3; bg++)
++	{
++		sub = bgInitSub (bg, BgType_Bmp8, BgSize_B8_512x256, 0, 0);
++		bgSetPriority (sub, bg == 2 ? 0 : 1);
++		bgSetScale (sub, SCALE_X, SCALE_Y);
++		if (bg == 2)
++			bgSetScrollf (sub, SCALE_X / 2, SCALE_Y / 2);
++	}
++	REG_DISPCNT_SUB = MODE_5_2D | DISPLAY_BG2_ACTIVE | DISPLAY_BG3_ACTIVE;
++	REG_BLDCNT_SUB = BLEND_ALPHA | BLEND_SRC_BG2 | BLEND_DST_BG3;
++	REG_BLDALPHA_SUB = 8 | (8 << 8);
++	bgUpdate ();
++	touchscreen = true;
++	memset (copyrows, 1, sizeof(copyrows));
++	ui_overdrawn = true;
++	R_SetPalette (NULL);
++}
++
++/*
++================
++VID_Update2D
++
++Copies the rows of the touch screen that changed and shows the text layer
++================
++*/
++void VID_Update2D (void)
++{
++	u32	*src = (u32 *) vid_buffer, *dst;
++	int	y;
++
++	if (!touchscreen)
++		VID_InitTouchScreen ();
++	dst = (u32 *) BG_BMP_RAM_SUB (0);
++	for (y = 0; y < VID_HEIGHT; y++, src += VID_WIDTH / 4, dst += FB_STRIDE / 4)
++		if (copyrows[y])
++			memcpy (dst, src, VID_WIDTH);
++	memset (copyrows, 0, sizeof(copyrows));
++	VID_UpdateText ();
++}
++
++/*
++===============================================================================
++
++PICS
++
++===============================================================================
++*/
++
++image_t *Draw_FindPic (char *name)
++{
++	char	fullname[MAX_QPATH];
++
++	if (name[0] != '/' && name[0] != '\\')
++	{
++		Com_sprintf (fullname, sizeof(fullname), "pics/%s.pcx", name);
++		return R_FindImage (fullname, it_pic);
++	}
++	return R_FindImage (name + 1, it_pic);
++}
++
++void Draw_InitLocal (void)
++{
++	draw_chars = Draw_FindPic ("conchars");
++	if (!draw_chars)
++		ri.Sys_Error (ERR_FATAL, "Couldn't load pics/conchars.pcx");
++}
++
++/*
++================
++Draw_Char
++
++Draws one 8*8 graphics character with 0 being transparent.
++It can be clipped to the top of the screen to allow the console to be
++smoothly scrolled off.
++================
++*/
++void Draw_Char (int x, int y, int num)
++{
++	byte	*dest, *source;
++	int		drawline, row, col, u;
++
++	num &= 255;
++	if ((num & 127) == 32)
++		return;		// space
++	if (y <= -8 || y > VID_HEIGHT - 8 || x < 0 || x > VID_WIDTH - 8)
++		return;
++
++	row = num >> 4;
++	col = num & 15;
++	source = draw_chars->pixels + (row << 10) + (col << 3);
++	if (y < 0)
++	{
++		// clipped
++		drawline = 8 + y;
++		source -= 128 * y;
++		y = 0;
++	}
++	else
++		drawline = 8;
++	VID_MarkRows (y, drawline);
++
++	dest = draw_buffer + y * VID_WIDTH + x;
++	while (drawline--)
++	{
++		for (u = 0; u < 8; u++)
++			if (source[u] != TRANSPARENT_COLOR)
++				dest[u] = source[u];
++		source += 128;
++		dest += VID_WIDTH;
++	}
++}
++
++void Draw_GetPicSize (int *w, int *h, char *pic)
++{
++	image_t	*gl = Draw_FindPic (pic);
++
++	if (!gl)
++	{
++		*w = *h = -1;
++		return;
++	}
++	*w = gl->width;
++	*h = gl->height;
++}
++
++void Draw_StretchPic (int x, int y, int w, int h, char *name)
++{
++	image_t	*pic = Draw_FindPic (name);
++	byte	*dest, *source;
++	int		v, u, f, fstep, skip, height, width;
++
++	if (!pic)
++	{
++		ri.Con_Printf (PRINT_ALL, "Can't find pic: %s\n", name);
++		return;
++	}
++	if (x < 0 || x >= VID_WIDTH || y >= VID_HEIGHT || w <= 0 || h <= 0)
++		return;
++
++	height = MIN (h, VID_HEIGHT - y);
++	width = MIN (w, VID_WIDTH - x);
++	skip = y < 0 ? -y : 0;
++	VID_MarkRows (y + skip, height - skip);
++	dest = draw_buffer + (y + skip) * VID_WIDTH + x;
++	fstep = (pic->width << 16) / w;
++	if (w == pic->width && h == pic->height)
++	{
++		// most pics are drawn as they are
++		for (v = skip, source = pic->pixels + skip * w; v < height; v++, dest += VID_WIDTH, source += w)
++			for (u = 0; u < width; u++)
++				if (source[u] != TRANSPARENT_COLOR)
++					dest[u] = source[u];
++		return;
++	}
++	for (v = skip; v < height; v++, dest += VID_WIDTH)
++	{
++		source = pic->pixels + (v * pic->height / h) * pic->width;
++		for (u = 0, f = 0; u < width; u++, f += fstep)
++			if (source[f >> 16] != TRANSPARENT_COLOR)
++				dest[u] = source[f >> 16];
++	}
++}
++
++/*
++=============
++Draw_PicDark
++
++A pic as it is drawn, but a third as bright, for the weapons the player
++doesn't have
++=============
++*/
++void Draw_PicDark (int x, int y, char *name)
++{
++	static byte	dark[256];
++	static qboolean	made;
++	image_t	*pic = Draw_FindPic (name);
++	byte	*dest, *source;
++	int		i, j, u, v, d, best, bestd, c[3];
++
++	if (!pic || x < 0 || y < 0 || x + pic->width > VID_WIDTH || y + pic->height > VID_HEIGHT)
++		return;
++	if (!made)
++	{
++		// the palette color nearest to each one at a third of its brightness
++		for (i = 0; i < 256; i++)
++		{
++			for (j = 0; j < 3; j++)
++				c[j] = (d_8to24table[i] >> (j * 8) & 0xff) / 3;
++			best = 0;
++			bestd = 0x7fffffff;
++			for (j = 0; j < 255; j++)
++			{
++				d = 0;
++				for (u = 0; u < 3; u++)
++				{
++					v = (int) (d_8to24table[j] >> (u * 8) & 0xff) - c[u];
++					d += v * v;
++				}
++				if (d < bestd)
++				{
++					bestd = d;
++					best = j;
++				}
++			}
++			dark[i] = best;
++		}
++		made = true;
++	}
++	VID_MarkRows (y, pic->height);
++	dest = draw_buffer + y * VID_WIDTH + x;
++	for (v = 0, source = pic->pixels; v < pic->height; v++, dest += VID_WIDTH, source += pic->width)
++		for (u = 0; u < pic->width; u++)
++			if (source[u] != TRANSPARENT_COLOR)
++				dest[u] = dark[source[u]];
++}
++
++void Draw_Pic (int x, int y, char *name)
++{
++	image_t	*pic = Draw_FindPic (name);
++
++	if (!pic)
++	{
++		ri.Con_Printf (PRINT_ALL, "Can't find pic: %s\n", name);
++		return;
++	}
++	Draw_StretchPic (x, y, pic->width, pic->height, name);
++}
++
++/*
++=============
++Draw_TileClear
++
++This repeats a 64*64 tile graphic to fill the screen around a sized down
++refresh window.
++=============
++*/
++void Draw_TileClear (int x, int y, int w, int h, char *name)
++{
++	image_t	*pic;
++	byte	*psrc, *pdest;
++	int		i, j;
++
++	if (x < 0)
++	{
++		w += x;
++		x = 0;
++	}
++	if (y < 0)
++	{
++		h += y;
++		y = 0;
++	}
++	w = MIN (w, VID_WIDTH - x);
++	h = MIN (h, VID_HEIGHT - y);
++	if (w <= 0 || h <= 0)
++		return;
++	pic = Draw_FindPic (name);
++	if (!pic)
++		return;
++
++	VID_MarkRows (y, h);
++	pdest = draw_buffer + y * VID_WIDTH;
++	for (i = 0; i < h; i++, pdest += VID_WIDTH)
++	{
++		psrc = pic->pixels + pic->width * ((i + y) & 63);
++		for (j = x; j < x + w; j++)
++			pdest[j] = psrc[j & 63];
++	}
++}
++
++/*
++=============
++Draw_Fill
++
++Fills a box of pixels with a single color
++=============
++*/
++void Draw_Fill (int x, int y, int w, int h, int c)
++{
++	byte	*dest;
++	int		v;
++
++	if (x < 0)
++	{
++		w += x;
++		x = 0;
++	}
++	if (y < 0)
++	{
++		h += y;
++		y = 0;
++	}
++	w = MIN (w, VID_WIDTH - x);
++	h = MIN (h, VID_HEIGHT - y);
++	if (w <= 0 || h <= 0)
++		return;
++
++	VID_MarkRows (y, h);
++	for (v = 0, dest = draw_buffer + y * VID_WIDTH + x; v < h; v++, dest += VID_WIDTH)
++		memset (dest, c, w);
++}
++
++// Darkens the view behind the menu on the top screen (R_EndFrame), the 2D
++// drawing behind it on the touch screen: three of every four pixels black
++void Draw_FadeScreen (void)
++{
++	byte	*pbuf;
++	int		x, y, t;
++
++	if (top_drawing)
++	{
++		top_fade = true;
++		return;
++	}
++	VID_MarkRows (0, VID_HEIGHT);
++	for (y = 0; y < VID_HEIGHT; y++)
++	{
++		pbuf = vid_buffer + y * VID_WIDTH;
++		t = (y & 1) << 1;
++		for (x = 0; x < VID_WIDTH; x++)
++			if ((x & 3) != t)
++				pbuf[x] = 0;
++	}
++}
++
++// Cinematics aren't played
++void Draw_StretchRaw (int x, int y, int w, int h, int cols, int rows, byte *data)
++{
++}
+diff --git a/ref_nds/r_image.c b/ref_nds/r_image.c
+new file mode 100644
+index 0000000..9002e6f
+--- /dev/null
++++ b/ref_nds/r_image.c
+@@ -0,0 +1,795 @@
++/*
++Copyright (C) 1997-2001 Id Software, Inc.
++
++This program is free software; you can redistribute it and/or
++modify it under the terms of the GNU General Public License
++as published by the Free Software Foundation; either version 2
++of the License, or (at your option) any later version.
++
++This program is distributed in the hope that it will be useful,
++but WITHOUT ANY WARRANTY; without even the implied warranty of
++MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
++
++See the GNU General Public License for more details.
++
++You should have received a copy of the GNU General Public License
++along with this program; if not, write to the Free Software
++Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
++
++*/
++// r_image.c -- images and textures
++//
++// Pics stay in RAM for the 2D drawing. The textures of the walls, skins,
++// sprites and the sky go to VRAM banks A, B and D, 384 KiB, 8-bit with the
++// palette in the texture palette. They are only read from their files when
++// a map's registration ends, all at once: the largest is halved until they
++// all fit, walls take a smaller mip level of their file.
++
++#include "r_local.h"
++
++#include <malloc.h>
++
++// Texture VRAM, banks A, B and D, the checkerboard at the end
++#define	TEXMEM_SIZE			(384 * 1024)
++#define	TEXMEM_NOTEXTURE	(TEXMEM_SIZE - 256)
++
++#define	MAX_TEXSIZE			256
++#define	MAX_SKINSIZE		128
++#define	MAX_SKYSIZE			64
++
++#define	IMAGE_HASH	256
++
++image_t		r_images[MAX_RIMAGES];
++static image_t	*image_hash[IMAGE_HASH];	// the registered images by name, the 2D
++											// drawing looks up its pics every frame
++int			r_numimages;
++image_t		*r_notexture;
++int			registration_sequence;
++
++unsigned	d_8to24table[256];
++u16			d_8to16table[256];
++
++static void	R_HashImages (void);
++
++static int	tex_next;			// next free texture VRAM
++static int	tex_end = TEXMEM_SIZE;	// the end of the VRAM for textures
++static qboolean	tex_mapped;		// VRAM banks mapped for the CPU
++
++// The DS screens are darker than the CRTs Quake II was made for, the
++// brightness setting scales this
++#define	SCREEN_GAMMA	0.7f
++
++static byte		screengamma[256];
++static u16		texpalette[256] __attribute__((aligned(4)));	// twice as bright
++static u16		palette2d[256] __attribute__((aligned(4)));
++static volatile qboolean	palette_dirty;
++
++/*
++===============================================================================
++
++PALETTE
++
++===============================================================================
++*/
++
++// The palettes go to VRAM in the vertical blank, the 3D engine starts
++// drawing the next frame 22 lines into it
++static void R_VBlank (void)
++{
++	// A CPU copy, DMA would miss palette writes still in the data cache
++	if (palette_dirty)
++	{
++		vramSetBankG (VRAM_G_LCD);
++		memcpy (VRAM_G, texpalette, sizeof(texpalette));
++		vramSetBankG (VRAM_G_TEX_PALETTE_SLOT0);
++		VID_SetPalette2D (palette2d);
++		palette_dirty = false;
++	}
++	VID_VBlank2D ();
++}
++
++// The brightness, vid_gamma, 1 the normal one, lower is brighter
++void R_SetGamma (float gamma)
++{
++	int	i;
++
++	for (i = 0; i < 256; i++)
++		screengamma[i] = powf (i / 255.0f, SCREEN_GAMMA * gamma) * 255 + 0.5f;
++	R_SetPalette (NULL);
++}
++
++// The game palette (NULL) or that of a cinematic
++void R_SetPalette (const unsigned char *pal)
++{
++	int	i, r, g, b;
++
++	for (i = 0; i < 256; i++)
++	{
++		if (pal)
++		{
++			r = pal[i * 3];
++			g = pal[i * 3 + 1];
++			b = pal[i * 3 + 2];
++		}
++		else
++		{
++			r = d_8to24table[i] & 0xff;
++			g = (d_8to24table[i] >> 8) & 0xff;
++			b = (d_8to24table[i] >> 16) & 0xff;
++		}
++		r = screengamma[r];
++		g = screengamma[g];
++		b = screengamma[b];
++		palette2d[i] = RGB15 (r >> 3, g >> 3, b >> 3);
++		texpalette[i] = RGB15 (MIN (r >> 2, 31), MIN (g >> 2, 31), MIN (b >> 2, 31));
++		if (!pal)
++			d_8to16table[i] = palette2d[i];
++	}
++	// for R_VBlank, the compiler mustn't move the stores to them past this
++	__asm__ volatile ("" ::: "memory");
++	palette_dirty = true;
++}
++
++/*
++===============================================================================
++
++FILES
++
++===============================================================================
++*/
++
++/*
++==============
++R_LoadPCX
++
++The 8-bit pixels of a pcx file, malloced from the far heap, and its palette
++when palette isn't NULL. The rows are decoded in main RAM, the far heap of
++the Memory Expansion Pak ignores byte writes.
++==============
++*/
++byte *R_LoadPCX (char *name, int *width, int *height, byte *palette)
++{
++	byte	*raw, *data, *out, row[640];
++	pcx_t	*pcx;
++	FILE	*f;
++	int		x, y, len, w, h, dataByte, runLength;
++
++	// the file in the far heap while it's decoded
++	len = FS_FOpenFile (name, &f);
++	if (len < 0)
++		return NULL;
++	if (!(raw = far_malloc (len)))
++		ri.Sys_Error (ERR_FATAL, "R_LoadPCX: not enough memory for %s", name);
++	FS_Read (raw, len, f);
++	FS_FCloseFile (f);
++	pcx = (pcx_t *)raw;
++	w = LittleShort (pcx->xmax) + 1;
++	h = LittleShort (pcx->ymax) + 1;
++	if (pcx->manufacturer != 0x0a || pcx->version != 5 || pcx->encoding != 1
++		|| pcx->bits_per_pixel != 8 || w > 640 || h > 480)
++	{
++		ri.Con_Printf (PRINT_ALL, "Bad pcx file %s\n", name);
++		free (raw);
++		return NULL;
++	}
++	if (palette)
++		memcpy (palette, raw + len - 768, 768);
++
++	out = far_malloc (w * h);
++	if (!out)
++		ri.Sys_Error (ERR_FATAL, "R_LoadPCX: not enough memory for %s", name);
++	data = &pcx->data;
++	for (y = 0; y < h; y++)
++	{
++		for (x = 0; x < w; )
++		{
++			dataByte = *data++;
++			if ((dataByte & 0xC0) == 0xC0)
++			{
++				runLength = dataByte & 0x3F;
++				dataByte = *data++;
++			}
++			else
++				runLength = 1;
++			while (runLength-- > 0 && x < w)
++				row[x++] = dataByte;
++		}
++		memcpy (out + y * w, row, w);
++	}
++	free (raw);
++	*width = w;
++	*height = h;
++	return out;
++}
++
++// The size of a pcx file from its header, without reading the pixels
++static qboolean R_PCXSize (char *name, int *width, int *height)
++{
++	FILE	*f;
++	pcx_t	pcx;
++
++	if (FS_FOpenFile (name, &f) < 0)
++		return false;
++	FS_Read (&pcx, sizeof(pcx), f);
++	FS_FCloseFile (f);
++	*width = LittleShort (pcx.xmax) + 1;
++	*height = LittleShort (pcx.ymax) + 1;
++	return true;
++}
++
++// The header of a wal file
++static qboolean R_WALHeader (char *name, miptex_t *mt)
++{
++	FILE	*f;
++
++	if (FS_FOpenFile (name, &f) < 0)
++		return false;
++	FS_Read (mt, sizeof(*mt), f);
++	FS_FCloseFile (f);
++	return true;
++}
++
++/*
++===============================================================================
++
++TEXTURES
++
++===============================================================================
++*/
++
++// Nearest power of two up to max, where the sizes in between round down
++static int R_TexSize (int size, int max)
++{
++	int	p;
++
++	for (p = 8; p < max && p * 3 / 2 < size; p <<= 1)
++		;
++	return p;
++}
++
++static int R_Log2 (int n)
++{
++	int	i;
++
++	for (i = 0; (1 << i) < n; i++)
++		;
++	return i;
++}
++
++static void R_MapTextures (qboolean cpu)
++{
++	if (tex_mapped == cpu)
++		return;
++	tex_mapped = cpu;
++	if (cpu)
++	{
++		vramSetBankA (VRAM_A_LCD);
++		vramSetBankB (VRAM_B_LCD);
++		vramSetBankD (VRAM_D_LCD);
++	}
++	else
++	{
++		vramSetBankA (VRAM_A_TEXTURE_SLOT0);
++		vramSetBankB (VRAM_B_TEXTURE_SLOT1);
++		vramSetBankD (VRAM_D_TEXTURE_SLOT2);
++	}
++}
++
++// Address of texture memory while it's mapped for the CPU, A and B follow
++// each other in the LCD mapping, D doesn't
++static u16 *R_TexVRAM (int offset)
++{
++	return offset < 0x40000 ? VRAM_A + offset / 2 : VRAM_D + (offset - 0x40000) / 2;
++}
++
++/*
++================
++R_UploadTexture
++
++Resamples a width x height 8-bit image with the given row stride to w x h in
++VRAM at tex_next, returns the texture parameters, 0 when VRAM is full. With
++transparent set the index 255 becomes the hardware's transparent 0.
++================
++*/
++static unsigned R_UploadTexture (const byte *pixels, int stride, int width, int height,
++	int w, int h, qboolean transparent)
++{
++	int			x, y, offset, u, ustep;
++	const byte	*row;
++	byte		p[2];
++	u16			*dst;
++
++	offset = tex_next;
++	// a texture doesn't cross from bank B to D, D isn't after it for the CPU
++	if (offset < 0x40000 && offset + w * h > 0x40000)
++		offset = 0x40000;
++	if (offset + w * h > tex_end)
++		return 0;
++	tex_next = offset + w * h;
++
++	// in 16.16 fixed point, the middles of the texels
++	ustep = (width << 16) / w;
++	R_MapTextures (true);
++	dst = R_TexVRAM (offset);
++	for (y = 0; y < h; y++)
++	{
++		row = pixels + ((2 * y + 1) * height / (2 * h)) * stride;
++		for (x = 0, u = ustep / 2; x < w; x += 2, u += 2 * ustep)
++		{
++			p[0] = row[u >> 16];
++			p[1] = row[(u + ustep) >> 16];
++			if (transparent)
++			{
++				p[0] = p[0] == 255 ? 0 : p[0];
++				p[1] = p[1] == 255 ? 0 : p[1];
++			}
++			*dst++ = p[0] | (p[1] << 8);
++		}
++	}
++
++	return (offset >> 3) | GL_TEXTURE_WRAP_S | GL_TEXTURE_WRAP_T |
++		((R_Log2 (w) - 3) << 20) | ((R_Log2 (h) - 3) << 23) | (GL_RGB256 << 26) |
++		(transparent ? GL_TEXTURE_COLOR0_TRANSPARENT : 0) | TEXGEN_TEXCOORD;
++}
++
++// The size in VRAM of an image at its planned size
++static int R_ImageTexSize (image_t *image)
++{
++	int	w = image->width, h = image->height;
++
++	if (image->type == it_wall)
++		return R_TexSize (w >> image->mip, MAX_TEXSIZE) * R_TexSize (h >> image->mip, MAX_TEXSIZE);
++	return R_TexSize (w, image->maxsize) * R_TexSize (h, image->maxsize);
++}
++
++// Halves an image in VRAM, false when it can't get smaller
++static qboolean R_ShrinkImage (image_t *image)
++{
++	if (image->type == it_wall)
++	{
++		if (image->mip == MIPLEVELS - 1)
++			return false;
++		image->mip++;
++		return true;
++	}
++	if (image->maxsize <= 8)
++		return false;
++	image->maxsize >>= 1;
++	return true;
++}
++
++static void R_UploadImage (image_t *image)
++{
++	byte		*pixels;
++	miptex_t	mt;
++	FILE		*f;
++	int			w, h, gw, gh, base;
++
++	image->param = 0;
++	if (image->type == it_wall)
++	{
++		// a mip level of the file, resampled to a power of two, a few
++		// textures like 96x32 aren't
++		if (FS_FOpenFile (image->name, &f) < 0)
++			return;
++		base = ftell (f);
++		FS_Read (&mt, sizeof(mt), f);
++		w = MAX (image->width >> image->mip, 1);
++		h = MAX (image->height >> image->mip, 1);
++		gw = R_TexSize (w, MAX_TEXSIZE);
++		gh = R_TexSize (h, MAX_TEXSIZE);
++		pixels = far_malloc (w * h);
++		if (!pixels)
++			ri.Sys_Error (ERR_FATAL, "R_UploadImage: not enough memory for %s", image->name);
++		fseek (f, base + LittleLong (mt.offsets[image->mip]), SEEK_SET);
++		FS_Read (pixels, w * h, f);
++		FS_FCloseFile (f);
++		image->param = R_UploadTexture (pixels, w, w, h, gw, gh, false);
++		free (pixels);
++		// the surfaces' texture coordinates are in 1/8 texels, the hardware
++		// takes 1/16
++		image->scale[0] = (2 * gw << 12) / image->width;
++		image->scale[1] = (2 * gh << 12) / image->height;
++		return;
++	}
++
++	pixels = R_LoadPCX (image->name, &w, &h, NULL);
++	if (!pixels)
++		return;
++	gw = R_TexSize (w, image->maxsize);
++	gh = R_TexSize (h, image->maxsize);
++	image->param = R_UploadTexture (pixels, w, w, h, gw, gh, image->type == it_sprite);
++	free (pixels);
++	// texture coordinates are in 1/16 texels of the file's picture
++	image->scale[0] = (gw << 12) / w;
++	image->scale[1] = (gh << 12) / h;
++}
++
++/*
++================
++R_UploadTextures
++
++Called at the end of the registration of a map: plans the sizes of the
++registered textures, halving the largest until they all fit, then reads
++them from their files into VRAM
++================
++*/
++static int R_CompareTexSize (const void *a, const void *b)
++{
++	return R_ImageTexSize (*(image_t **)b) - R_ImageTexSize (*(image_t **)a);
++}
++
++void R_UploadTextures (void)
++{
++	static image_t	*upload[MAX_RIMAGES];
++	image_t	*image, *largest;
++	int		i, n, total;
++
++	for (i = 0, image = r_images; i < r_numimages; i++, image++)
++	{
++		if (!image->registration_sequence || image->type == it_pic || image == r_notexture)
++			continue;
++		image->mip = 0;
++		image->maxsize = image->type == it_wall ? MAX_TEXSIZE : image->type == it_sky ? MAX_SKYSIZE : MAX_SKINSIZE;
++		// walls at most MAX_TEXSIZE
++		while (image->type == it_wall && image->mip < MIPLEVELS - 1
++			&& MAX (image->width, image->height) >> image->mip > MAX_TEXSIZE)
++			image->mip++;
++	}
++
++	for (;;)
++	{
++		total = 0;
++		largest = NULL;
++		for (i = 0, image = r_images; i < r_numimages; i++, image++)
++		{
++			if (!image->registration_sequence || image->type == it_pic || image == r_notexture)
++				continue;
++			total += R_ImageTexSize (image);
++			if (!largest || R_ImageTexSize (image) > R_ImageTexSize (largest))
++				largest = image;
++		}
++		// some room left for the textures registered later
++		if (total <= TEXMEM_NOTEXTURE - 16 * 1024 || !largest || !R_ShrinkImage (largest))
++			break;
++	}
++
++	// the largest first: their sizes are powers of two, so each starts at
++	// a multiple of its size and none crosses from bank B to bank D
++	for (i = 0, n = 0, image = r_images; i < r_numimages; i++, image++)
++		if (image->registration_sequence && image->type != it_pic && image != r_notexture)
++			upload[n++] = image;
++	qsort (upload, n, sizeof(upload[0]), R_CompareTexSize);
++	tex_next = 0;
++	for (i = 0; i < n; i++)
++		R_UploadImage (upload[i]);
++	R_MapTextures (false);
++}
++
++// The checkerboard for missing textures, at the end of VRAM
++static void R_InitNoTexture (void)
++{
++	byte	pixels[16 * 16];
++	int		x, y;
++
++	r_notexture = &r_images[r_numimages++];
++	strcpy (r_notexture->name, "***r_notexture***");
++	r_notexture->type = it_wall;
++	r_notexture->width = r_notexture->height = 16;
++	r_notexture->registration_sequence = -1;	// never freed
++	R_HashImages ();
++	for (y = 0; y < 16; y++)
++		for (x = 0; x < 16; x++)
++			pixels[y * 16 + x] = (x < 8) ^ (y < 8) ? 0 : 15;
++	tex_next = TEXMEM_NOTEXTURE;
++	r_notexture->param = R_UploadTexture (pixels, 16, 16, 16, 16, 16, false);
++	tex_end = TEXMEM_NOTEXTURE;
++	r_notexture->scale[0] = r_notexture->scale[1] = 2 << 12;
++	R_MapTextures (false);
++}
++
++/*
++================
++R_BindImage
++
++The texture of an image, with the texture matrix scaling its texture
++coordinates to the size in VRAM, the checkerboard while it isn't there
++================
++*/
++void R_BindImage (image_t *image)
++{
++	if (!image || !image->param)
++		image = r_notexture;
++	R_BindTexture (image->param, image->scale);
++}
++
++/*
++===============================================================================
++
++REGISTRATION
++
++===============================================================================
++*/
++
++static int R_ImageHash (const char *name)
++{
++	unsigned	h = 0;
++
++	while (*name)
++		h = h * 31 + *name++;
++	return h & (IMAGE_HASH - 1);
++}
++
++static void R_HashImages (void)
++{
++	int		i, h;
++	image_t	*image;
++
++	memset (image_hash, 0, sizeof(image_hash));
++	for (i = 0, image = r_images; i < r_numimages; i++, image++)
++		if (image->registration_sequence)
++		{
++			h = R_ImageHash (image->name);
++			image->hashnext = image_hash[h];
++			image_hash[h] = image;
++		}
++}
++
++/*
++===============
++R_FindImage
++
++Finds or registers an image, textures are uploaded when the registration
++ends, or right away after it at a small size
++===============
++*/
++image_t *R_FindImage (char *name, imagetype_t type)
++{
++	image_t		*image;
++	miptex_t	mt;
++	int			i, len, w, h;
++
++	if (!name)
++		return NULL;
++	len = strlen (name);
++	if (len < 5 || len >= MAX_QPATH)
++		return NULL;
++
++	for (image = image_hash[R_ImageHash (name)]; image; image = image->hashnext)
++		if (!strcmp (name, image->name))
++		{
++			if (image->registration_sequence > 0)
++				image->registration_sequence = registration_sequence;
++			return image;
++		}
++
++	if (!strcmp (name + len - 4, ".wal"))
++	{
++		if (!R_WALHeader (name, &mt))
++			return NULL;
++		w = LittleLong (mt.width);
++		h = LittleLong (mt.height);
++	}
++	else if (!strcmp (name + len - 4, ".pcx"))
++	{
++		if (!R_PCXSize (name, &w, &h))
++			return NULL;
++	}
++	else
++		return NULL;
++
++	for (i = 0, image = r_images; i < r_numimages; i++, image++)
++		if (!image->registration_sequence)
++			break;
++	if (i == r_numimages)
++	{
++		if (r_numimages == MAX_RIMAGES)
++			ri.Sys_Error (ERR_DROP, "MAX_RIMAGES");
++		r_numimages++;
++	}
++	memset (image, 0, sizeof(*image));
++	strcpy (image->name, name);
++	image->type = type;
++	image->width = w;
++	image->height = h;
++	image->registration_sequence = registration_sequence;
++
++	if (type == it_pic)
++	{
++		image->pixels = R_LoadPCX (name, &w, &h, NULL);
++		if (!image->pixels)
++		{
++			image->registration_sequence = 0;
++			return NULL;
++		}
++	}
++	else if (!r_registering)
++	{
++		// after the registration, small enough for what is left
++		image->mip = MIPLEVELS - 1;
++		image->maxsize = 32;
++		R_UploadImage (image);
++		R_MapTextures (false);
++	}
++	i = R_ImageHash (name);
++	image->hashnext = image_hash[i];
++	image_hash[i] = image;
++	return image;
++}
++
++image_t *R_RegisterSkin (char *name)
++{
++	return R_FindImage (name, it_skin);
++}
++
++/*
++================
++R_FreeUnusedImages
++
++Any image that was not touched on this registration sequence will be freed,
++the pics stay
++================
++*/
++void R_FreeUnusedImages (void)
++{
++	int		i;
++	image_t	*image;
++
++	for (i = 0, image = r_images; i < r_numimages; i++, image++)
++	{
++		if (image->registration_sequence == registration_sequence || image->registration_sequence <= 0)
++			continue;
++		if (image->type == it_pic)
++			continue;
++		memset (image, 0, sizeof(*image));
++	}
++	R_HashImages ();
++}
++
++/*
++===============================================================================
++
++SKY
++
++===============================================================================
++*/
++
++static char		*suf[6] = {"rt", "bk", "lf", "ft", "up", "dn"};
++static int		skytexorder[6] = {0, 2, 1, 3, 4, 5};
++static image_t	*sky_images[6];
++static float	skyrotate;
++static vec3_t	skyaxis;
++
++// 1 = s, 2 = t, 3 = the distance
++static int	st_to_vec[6][3] =
++{
++	{3,-1,2},
++	{-3,1,2},
++	{1,3,2},
++	{-1,-3,2},
++	{-2,-1,3},		// 0 degrees yaw, look straight up
++	{2,-1,-3}		// look straight down
++};
++
++void R_SetSky (char *name, float rotate, vec3_t axis)
++{
++	char	pathname[MAX_QPATH];
++	int		i;
++
++	skyrotate = rotate;
++	VectorCopy (axis, skyaxis);
++	for (i = 0; i < 6; i++)
++	{
++		Com_sprintf (pathname, sizeof(pathname), "env/%s%s.pcx", name, suf[i]);
++		sky_images[i] = R_FindImage (pathname, it_sky);
++	}
++}
++
++static void R_SkyVertex (int s, int t, int axis, int size)
++{
++	int	b[3], v[3], j, k;
++
++	b[0] = s * size;
++	b[1] = t * size;
++	b[2] = size;
++	for (j = 0; j < 3; j++)
++	{
++		k = st_to_vec[axis][j];
++		v[j] = k < 0 ? -b[-k - 1] : b[k - 1];
++	}
++	// half a texel in from the edges, the texture repeats
++	GFX_TEX_COORD = TEXTURE_PACK (s < 0 ? 8 : 255 * 16 + 8, t > 0 ? 8 : 255 * 16 + 8);
++	GFX_VERTEX16 = VERTEX_PACK (v[0], v[1]);
++	GFX_VERTEX16 = v[2] & 0xffff;
++}
++
++/*
++================
++R_DrawSky
++
++The sky box around the eye, with the projection that puts it behind
++everything else
++================
++*/
++void R_DrawSky (void)
++{
++	int	i, size = 256 * VERTEX_SCALE;
++
++	R_SetSkyProjection (true);
++	MATRIX_PUSH = 0;
++	MATRIX_TRANSLATE = F32 (r_origin[0] * MATRIX_SCALE_W);
++	MATRIX_TRANSLATE = F32 (r_origin[1] * MATRIX_SCALE_W);
++	MATRIX_TRANSLATE = F32 (r_origin[2] * MATRIX_SCALE_W);
++	if (skyrotate)
++	{
++		float	m[4][3], a = r_newrefdef.time * skyrotate * (M_PI / 180), s = sinf (a), c = cosf (a);
++		float	x = skyaxis[0], y = skyaxis[1], z = skyaxis[2];
++
++		// the rotation around the sky's axis
++		m[0][0] = c + x * x * (1 - c);
++		m[0][1] = y * x * (1 - c) + z * s;
++		m[0][2] = z * x * (1 - c) - y * s;
++		m[1][0] = x * y * (1 - c) - z * s;
++		m[1][1] = c + y * y * (1 - c);
++		m[1][2] = z * y * (1 - c) + x * s;
++		m[2][0] = x * z * (1 - c) + y * s;
++		m[2][1] = y * z * (1 - c) - x * s;
++		m[2][2] = c + z * z * (1 - c);
++		m[3][0] = m[3][1] = m[3][2] = 0;
++		R_LoadMatrix (m, true);
++	}
++	GFX_COLOR = RGB15 (GX_NORMAL_LIGHT, GX_NORMAL_LIGHT, GX_NORMAL_LIGHT);
++	for (i = 0; i < 6; i++)
++	{
++		R_BindImage (sky_images[skytexorder[i]]);
++		GFX_BEGIN = GL_QUADS;
++		R_SkyVertex (-1, -1, i, size);
++		R_SkyVertex (-1, 1, i, size);
++		R_SkyVertex (1, 1, i, size);
++		R_SkyVertex (1, -1, i, size);
++	}
++	MATRIX_POP = 1;
++	R_SetSkyProjection (false);
++}
++
++/*
++===============================================================================
++
++INIT
++
++===============================================================================
++*/
++
++void R_InitImages (void)
++{
++	byte	pal[768], *pixels;
++	int		i, w, h, r, g, b;
++
++	registration_sequence = 1;
++	pixels = R_LoadPCX ("pics/colormap.pcx", &w, &h, pal);
++	if (!pixels)
++		ri.Sys_Error (ERR_FATAL, "Couldn't load pics/colormap.pcx");
++	free (pixels);
++	for (i = 0; i < 256; i++)
++	{
++		r = pal[i * 3];
++		g = pal[i * 3 + 1];
++		b = pal[i * 3 + 2];
++		d_8to24table[i] = r | (g << 8) | (b << 16) | (255u << 24);
++	}
++	d_8to24table[255] &= 0xffffff;	// 255 is transparent
++
++	vramSetBankA (VRAM_A_TEXTURE_SLOT0);
++	vramSetBankB (VRAM_B_TEXTURE_SLOT1);
++	vramSetBankD (VRAM_D_TEXTURE_SLOT2);
++	vramSetBankG (VRAM_G_TEX_PALETTE_SLOT0);
++	R_InitNoTexture ();
++	R_SetGamma (1);
++	irqSet (IRQ_VBLANK, R_VBlank);
++	irqEnable (IRQ_VBLANK);
++}
++
++void R_ShutdownImages (void)
++{
++	irqClear (IRQ_VBLANK);
++}
+diff --git a/ref_nds/r_local.h b/ref_nds/r_local.h
+new file mode 100644
+index 0000000..9e0d75d
+--- /dev/null
++++ b/ref_nds/r_local.h
+@@ -0,0 +1,374 @@
++/*
++Copyright (C) 1997-2001 Id Software, Inc.
++
++This program is free software; you can redistribute it and/or
++modify it under the terms of the GNU General Public License
++as published by the Free Software Foundation; either version 2
++of the License, or (at your option) any later version.
++
++This program is distributed in the hope that it will be useful,
++but WITHOUT ANY WARRANTY; without even the implied warranty of
++MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
++
++See the GNU General Public License for more details.
++
++You should have received a copy of the GNU General Public License
++along with this program; if not, write to the Free Software
++Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
++
++*/
++// r_local.h -- private refresh defs of the Nintendo DS refresh
++//
++// The world, brush and alias models, sprites, beams and particles are drawn
++// by the geometry engine on the top screen, the 2D drawing stays in software
++// on the touch screen.
++//
++// - Vertices are 16-bit fixed point world coordinates times 8, the matrices
++//   work in units of 512 world units, so maps up to 4096 units fit.
++// - Textures stay 8-bit with Quake II's palette in the texture palette, so
++//   the hardware needs no other formats. They go to VRAM at the end of the
++//   registration of a map, halved until they all fit, nothing of them stays
++//   in main RAM.
++// - Light maps become vertex colors, a sample per style for each vertex,
++//   so the light styles still animate.
++// - Surfaces are polygons, drawn as quad strips zig-zagging across them,
++//   which needs half as many polygons as triangles.
++
++#include "../client/ref.h"
++
++#include <nds.h>
++
++#define	REF_VERSION	"NDS 0.01"
++
++extern refimport_t	ri;
++
++// Vertex coordinates are world units times 8, the matrices are in 1/512
++#define	VERTEX_SCALE		8
++#define	MATRIX_SCALE_W		(1.0f / 512)
++
++// The palette of the textures is twice as bright, so vertex light can go up
++// to double like the light maps of the software refresh
++#define	GX_NORMAL_LIGHT		15
++
++#define	F32(x)				((int) ((x) * 4096))
++#define	MIN(a,b)			((a) < (b) ? (a) : (b))
++#define	MAX(a,b)			((a) > (b) ? (a) : (b))
++#define	CLAMP(lo,x,hi)		((x) < (lo) ? (lo) : (x) > (hi) ? (hi) : (x))
++
++/*
++===============================================================================
++
++IMAGES
++
++===============================================================================
++*/
++
++typedef enum
++{
++	it_skin,
++	it_sprite,
++	it_wall,
++	it_pic,
++	it_sky
++} imagetype_t;
++
++typedef struct image_s
++{
++	char		name[MAX_QPATH];
++	imagetype_t	type;
++	int			width, height;			// of the picture in the file
++	int			registration_sequence;	// 0 = free
++	byte		*pixels;				// pics only, the 2D drawing reads them
++	// textures, uploaded by R_UploadTextures
++	unsigned	param;					// TEXIMAGE_PARAM, 0 while not in VRAM
++	int			scale[2];				// texels to hardware texels, 20.12
++	int			maxsize;				// largest side in VRAM
++	int			mip;					// walls: the mip level in VRAM
++	struct msurface_s	*texturechain;	// walls: the world surfaces to draw
++	struct image_s	*hashnext;			// next image with the same name hash
++} image_t;
++
++#define	MAX_RIMAGES	512
++
++extern image_t		r_images[MAX_RIMAGES];
++extern int			r_numimages;
++extern image_t		*r_notexture;
++extern int			registration_sequence;
++extern qboolean		r_registering;		// between BeginRegistration and EndRegistration
++extern unsigned		d_8to24table[256];
++extern u16			d_8to16table[256];
++
++void	R_InitImages (void);
++void	R_ShutdownImages (void);
++image_t	*R_FindImage (char *name, imagetype_t type);
++image_t	*R_RegisterSkin (char *name);
++void	R_FreeUnusedImages (void);
++void	R_UploadTextures (void);
++void	R_BindImage (image_t *image);
++void	R_SetPalette (const unsigned char *palette);
++void	R_SetGamma (float gamma);
++void	R_SetSky (char *name, float rotate, vec3_t axis);
++void	R_DrawSky (void);
++byte	*R_LoadPCX (char *name, int *width, int *height, byte *palette);
++
++/*
++===============================================================================
++
++MODELS
++
++===============================================================================
++*/
++
++// The planes are those of the file, with the normal and distance in fixed
++// point for the integer tests of the eye against them
++typedef struct mplane_s
++{
++	vec3_t	normal;
++	float	dist;
++	byte	type;			// for texture axis selection and fast side tests
++	byte	signbits;		// signx + signy<<1 + signz<<1
++	byte	pad[2];
++	int		inormal[3];		// normal * 16384
++	int		idist;			// dist * 16384 in 1/8 units
++} mplane_t;
++
++#define	SURF_PLANEBACK		2
++#define	SURF_DRAWSKY		4
++#define	SURF_DRAWTURB		0x10
++#define	SURF_UNDERWATER		0x80
++
++typedef struct mtexinfo_s
++{
++	float		vecs[2][4];
++	int			flags;
++	int			numframes;
++	struct mtexinfo_s	*next;		// animation chain
++	image_t		*image;
++} mtexinfo_t;
++
++// The hardware data of a surface: the packed texture coordinates, then the
++// vertex indices into the model's gxvertexes, word aligned, then the light
++// samples, [numstyles][numverts] of RGB
++typedef struct gxsurf_s
++{
++	byte			numverts;
++	byte			numstyles;		// light samples per vertex
++	unsigned short	pad;
++	unsigned		st[];
++} gxsurf_t;
++
++#define	GX_VERTS(gx)	((unsigned short *) ((gx)->st + (gx)->numverts))
++#define	GX_LIGHT(gx)	((byte *) GX_VERTS (gx) + (((gx)->numverts * 2 + 3) & ~3))
++#define	MAX_SURFVERTS	128
++
++typedef struct msurface_s
++{
++	int			visframe;		// should be drawn when node is crossed
++	mplane_t	*plane;
++	int			flags;
++	mtexinfo_t	*texinfo;
++	gxsurf_t	*gx;
++	struct msurface_s	*texturechain;
++	int			dlightframe;
++	int			dlightbits;
++	byte		styles[MAXLIGHTMAPS];
++	short		texturemins[2];
++	short		extents[2];
++	u16			*colors;		// the vertex colors with all styles at 1.0
++} msurface_t;
++
++typedef struct mnode_s
++{
++// common with leaf
++	int			contents;		// -1, to differentiate from leafs
++	int			visframe;		// node needs to be traversed if current
++	short		minmaxs[6];		// for bounding box culling
++	struct mnode_s	*parent;
++
++// node specific
++	mplane_t	*plane;
++	struct mnode_s	*children[2];
++	unsigned short	firstsurface;
++	unsigned short	numsurfaces;
++} mnode_t;
++
++typedef struct mleaf_s
++{
++// common with node
++	int			contents;		// wil be a negative contents number
++	int			visframe;		// node needs to be traversed if current
++	short		minmaxs[6];		// for bounding box culling
++	struct mnode_s	*parent;
++
++// leaf specific
++	int			cluster;
++	int			area;
++	msurface_t	**firstmarksurface;
++	int			nummarksurfaces;
++} mleaf_t;
++
++typedef enum {mod_bad, mod_brush, mod_sprite, mod_alias} modtype_t;
++
++// What the hardware needs of an alias model: its texture coordinates and
++// the triangle strips and lists of its GL commands
++typedef struct
++{
++	int			numverts;		// of the frames
++	int			numframes;
++	int			framesize;
++	byte		*frames;		// the frames of the file
++	unsigned	*st;			// packed texture coordinates of the commands' vertices
++	u16			*cmds;			// count, strip or list, xyz vertex and st index..., 0
++	int			numskins;
++	image_t		*skins[MAX_MD2SKINS];
++	float		radius;
++} gxalias_t;
++
++typedef struct
++{
++	int		width, height;
++	int		origin_x, origin_y;
++	image_t	*image;
++} mspriteframe_t;
++
++typedef struct
++{
++	int				numframes;
++	mspriteframe_t	frames[];
++} msprite_t;
++
++typedef struct model_s
++{
++	char		name[MAX_QPATH];
++	int			registration_sequence;
++	modtype_t	type;
++	int			numframes;
++	int			flags;
++
++	// volume occupied by the model graphics
++	vec3_t		mins, maxs;
++	float		radius;
++
++	// brush model
++	int			firstmodelsurface, nummodelsurfaces;
++
++	int			numsubmodels;
++	struct mmodel_s	*submodels;
++
++	int			numplanes;
++	mplane_t	*planes;
++
++	int			numleafs;		// number of visible leafs, not counting 0
++	mleaf_t		*leafs;
++
++	int			numvertexes;
++	unsigned	*gxvertexes;	// packed 16-bit x, y and z, 8 bytes each
++
++	int			numnodes;
++	int			firstnode;
++	mnode_t		*nodes;
++
++	int			numtexinfo;
++	mtexinfo_t	*texinfo;
++
++	int			numsurfaces;
++	msurface_t	*surfaces;
++
++	int			nummarksurfaces;
++	msurface_t	**marksurfaces;
++
++	// alias and sprite models
++	gxalias_t	*alias;
++	msprite_t	*sprite;
++
++	void		*data;			// all of a brush model's memory
++} model_t;
++
++typedef struct mmodel_s
++{
++	vec3_t	mins, maxs;
++	vec3_t	origin;
++	float	radius;
++	int		headnode;
++	int		firstface, numfaces;
++} mmodel_t;
++
++extern model_t	*r_worldmodel;
++
++void	R_InitModels (void);
++void	R_ShutdownModels (void);
++void	R_BeginRegistration (char *map);
++struct model_s	*R_RegisterModel (char *name);
++void	R_EndRegistration (void);
++mleaf_t	*Mod_PointInLeaf (vec3_t p, model_t *model);
++
++/*
++===============================================================================
++
++DRAWING
++
++===============================================================================
++*/
++
++extern refdef_t	r_newrefdef;
++extern int		r_framecount;
++extern int		r_visframecount;
++extern vec3_t	r_origin, vpn, vright, vup;
++extern int		modelorg_i[3];
++extern cplane_t	frustum[4];
++extern int		frustum_i[4][4];
++extern entity_t	*currententity;
++extern int		c_brush_polys, c_alias_polys;
++extern int		r_viewcluster, r_viewcluster2;
++
++extern cvar_t	*r_fullbright;
++extern cvar_t	*r_drawentities;
++extern cvar_t	*r_drawworld;
++extern cvar_t	*r_novis;
++extern cvar_t	*r_lefthand;
++
++void	R_LoadMatrix (float m[4][3], qboolean multiply);
++void	R_SetViewModelProjection (qboolean viewmodel);
++void	R_SetSkyProjection (qboolean sky);
++void	R_BindTexture (unsigned param, const int *scale);
++qboolean	R_CullBox (vec3_t mins, vec3_t maxs);
++
++void	R_MarkLeaves (void);
++void	R_DrawWorld (void);
++void	R_DrawBrushModel (entity_t *e);
++void	R_DrawAlphaSurfaces (void);
++void	R_BuildSurfaces (model_t *mod, byte *lightdata);
++void	R_PushDlights (void);
++void	R_LightPoint (vec3_t p, vec3_t color);
++void	R_InitLight (void);
++
++void	R_InitAlias (void);
++void	R_DrawAliasModel (entity_t *e);
++
++void	Draw_InitLocal (void);
++void	Draw_GetPicSize (int *w, int *h, char *name);
++void	Draw_Pic (int x, int y, char *name);
++void	Draw_StretchPic (int x, int y, int w, int h, char *name);
++void	Draw_Char (int x, int y, int c);
++void	Draw_TileClear (int x, int y, int w, int h, char *name);
++void	Draw_Fill (int x, int y, int w, int h, int c);
++void	Draw_FadeScreen (void);
++void	Draw_StretchRaw (int x, int y, int w, int h, int cols, int rows, byte *data);
++image_t	*Draw_FindPic (char *name);
++
++void	Sys_EndTextConsole (void);
++void	VID_InitTop (void);
++void	VID_Update2D (void);
++void	VID_SetPalette2D (const u16 *palette);
++void	VID_VBlank2D (void);
++qboolean	VID_TopFaded (void);
++
++void	R_BuildMap (model_t *mod);
++void	R_FreeMap (void);
++void	R_MapSeen (int surf);
++
++// The 2D drawing, 320x240 on the touch screen
++#define	VID_WIDTH		320
++#define	VID_HEIGHT		240
++extern byte	vid_buffer[VID_WIDTH * VID_HEIGHT];
++void	VID_MarkRows (int y, int height);
+diff --git a/ref_nds/r_main.c b/ref_nds/r_main.c
+new file mode 100644
+index 0000000..9d51a62
+--- /dev/null
++++ b/ref_nds/r_main.c
+@@ -0,0 +1,702 @@
++/*
++Copyright (C) 1997-2001 Id Software, Inc.
++
++This program is free software; you can redistribute it and/or
++modify it under the terms of the GNU General Public License
++as published by the Free Software Foundation; either version 2
++of the License, or (at your option) any later version.
++
++This program is distributed in the hope that it will be useful,
++but WITHOUT ANY WARRANTY; without even the implied warranty of
++MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
++
++See the GNU General Public License for more details.
++
++You should have received a copy of the GNU General Public License
++along with this program; if not, write to the Free Software
++Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
++
++*/
++// r_main.c -- the Nintendo DS refresh: the view, entities and particles
++
++#include "r_local.h"
++
++// The depth buffer holds w, the distance, to at least a 4096th of the
++// largest one of a polygon. The world's projection scales w to 3 times the
++// gun's per world unit, so the gun stays in front of walls, the sky's to
++// 15 times the world's, so it's behind it
++#define	VIEWMODEL_UNITS		16
++#define	WORLD_W_SCALE		(VIEWMODEL_UNITS * 3)
++#define	SKY_W_SCALE			(WORLD_W_SCALE * 15)
++
++// w of the rectangles drawn on the screen, in front of the near planes
++#define	SCREEN_W			128
++
++// The near plane is close, swimming the eye gets close to the surface of
++// the water. The gun keeps 4 units
++#define	NEAR_PLANE			(1.0f / 512)
++#define	VIEWMODEL_NEAR		(4.0f / 512)
++#define	FAR_PLANE			(8192.0f / 512)
++
++// A frame takes at most 2048 polygons and 6144 vertices, the particles get
++// what is left, keeping some for the screen rectangles drawn after them and
++// the commands still waiting in the FIFO
++#define	GX_POLYGONS			2048
++#define	GX_VERTICES			6144
++#define	GX_RESERVE			64
++#define	MAX_PARTICLES_DRAWN	512
++
++refimport_t	ri;
++
++refdef_t	r_newrefdef;
++int			r_framecount = 1;	// so frame counts initialized to 0 don't match
++vec3_t		r_origin, vpn, vright, vup;
++int			modelorg_i[3];		// r_origin * 8
++cplane_t	frustum[4];
++int			frustum_i[4][4];	// normal * 16384, dist * 16384 in world units
++entity_t	*currententity;
++qboolean	r_registering;
++
++cvar_t		*r_fullbright;
++cvar_t		*r_drawentities;
++cvar_t		*r_drawworld;
++cvar_t		*r_novis;
++static cvar_t	*r_lightlevel;		// for the server to know the player's light
++cvar_t		*r_lefthand;
++static cvar_t	*r_speeds;
++static cvar_t	*crosshair;
++static cvar_t	*vid_gamma;
++
++/*
++===============================================================================
++
++MATRICES
++
++===============================================================================
++*/
++
++// F32 rounded to nearest, for translations, the error of F32 would be up to
++// 1/8 of a world unit
++static inline int R_RoundF32 (float x)
++{
++	x *= 4096;
++	return x < 0 ? (int) (x - 0.5f) : (int) (x + 0.5f);
++}
++
++void R_LoadMatrix (float m[4][3], qboolean multiply)
++{
++	int	i, j;
++
++	for (i = 0; i < 4; i++)
++		for (j = 0; j < 3; j++)
++		{
++			if (multiply)
++				MATRIX_MULT4x3 = i < 3 ? F32 (m[i][j]) : R_RoundF32 (m[i][j]);
++			else
++				MATRIX_LOAD4x3 = i < 3 ? F32 (m[i][j]) : R_RoundF32 (m[i][j]);
++		}
++}
++
++void R_BindTexture (unsigned param, const int *scale)
++{
++	GFX_TEX_FORMAT = param;
++	MATRIX_CONTROL = GL_TEXTURE;
++	MATRIX_IDENTITY = 0;
++	MATRIX_SCALE = scale[0];
++	MATRIX_SCALE = scale[1];
++	MATRIX_SCALE = 1 << 12;
++	MATRIX_CONTROL = GL_MODELVIEW;
++}
++
++/*
++================
++R_SetProjection
++
++The perspective, a transposed OpenGL matrix times scale, for eye space in
++units / 512 world units and the near plane at near
++================
++*/
++static void R_SetProjection (float scale, float units, float near)
++{
++	static float	fov_y = -1, f;
++	float			a, b;
++
++	if (r_newrefdef.fov_y != fov_y)
++	{
++		fov_y = r_newrefdef.fov_y;
++		f = 1 / tanf (fov_y * (M_PI / 360));
++	}
++	a = (FAR_PLANE + near) / (near - FAR_PLANE);
++	b = 2 * FAR_PLANE * near / (near - FAR_PLANE) * units;
++	MATRIX_CONTROL = GL_PROJECTION;
++	MATRIX_LOAD4x4 = F32 (f * 192 / 256 * scale);
++	MATRIX_LOAD4x4 = 0;
++	MATRIX_LOAD4x4 = 0;
++	MATRIX_LOAD4x4 = 0;
++	MATRIX_LOAD4x4 = 0;
++	MATRIX_LOAD4x4 = F32 (f * scale);
++	MATRIX_LOAD4x4 = 0;
++	MATRIX_LOAD4x4 = 0;
++	MATRIX_LOAD4x4 = 0;
++	MATRIX_LOAD4x4 = 0;
++	MATRIX_LOAD4x4 = F32 (a * scale);
++	MATRIX_LOAD4x4 = F32 (-scale);
++	MATRIX_LOAD4x4 = 0;
++	MATRIX_LOAD4x4 = 0;
++	MATRIX_LOAD4x4 = F32 (b * scale);
++	MATRIX_LOAD4x4 = 0;
++	MATRIX_CONTROL = GL_MODELVIEW;
++}
++
++// The gun's projection, in its finer units, or back to the world's
++void R_SetViewModelProjection (qboolean viewmodel)
++{
++	if (viewmodel)
++		R_SetProjection (1, VIEWMODEL_UNITS, VIEWMODEL_NEAR);
++	else
++		R_SetProjection (WORLD_W_SCALE, 1, NEAR_PLANE);
++}
++
++// The sky's projection behind the world, or back to the world's
++void R_SetSkyProjection (qboolean sky)
++{
++	R_SetProjection (sky ? SKY_W_SCALE : WORLD_W_SCALE, 1, NEAR_PLANE);
++}
++
++/*
++===============================================================================
++
++SPRITES, BEAMS AND PARTICLES
++
++===============================================================================
++*/
++
++static void R_SpriteVertex (vec3_t org, vec3_t up, float u, vec3_t right, float r, int s, int t)
++{
++	int	x, y, z;
++
++	x = (org[0] + up[0] * u + right[0] * r) * VERTEX_SCALE;
++	y = (org[1] + up[1] * u + right[1] * r) * VERTEX_SCALE;
++	z = (org[2] + up[2] * u + right[2] * r) * VERTEX_SCALE;
++	GFX_TEX_COORD = TEXTURE_PACK (s, t);
++	GFX_VERTEX16 = VERTEX_PACK (x, y);
++	GFX_VERTEX16 = z & 0xffff;
++}
++
++static void R_DrawSpriteModel (entity_t *e)
++{
++	msprite_t		*psprite = e->model->sprite;
++	mspriteframe_t	*frame;
++	int				alpha, w, h;
++
++	frame = &psprite->frames[e->frame % psprite->numframes];
++	alpha = e->flags & RF_TRANSLUCENT ? CLAMP (1, (int) (e->alpha * 31), 31) : 31;
++	R_BindImage (frame->image);
++	GFX_POLY_FORMAT = POLY_ALPHA (alpha) | POLY_CULL_NONE | POLY_ID (alpha < 31 ? 5 : 0);
++	GFX_COLOR = RGB15 (GX_NORMAL_LIGHT, GX_NORMAL_LIGHT, GX_NORMAL_LIGHT);
++	w = frame->width << 4;
++	h = frame->height << 4;
++	GFX_BEGIN = GL_QUADS;
++	R_SpriteVertex (e->origin, vup, -frame->origin_y, vright, -frame->origin_x, 0, h);
++	R_SpriteVertex (e->origin, vup, frame->height - frame->origin_y, vright, -frame->origin_x, 0, 0);
++	R_SpriteVertex (e->origin, vup, frame->height - frame->origin_y, vright, frame->width - frame->origin_x, w, 0);
++	R_SpriteVertex (e->origin, vup, -frame->origin_y, vright, frame->width - frame->origin_x, w, h);
++	GFX_POLY_FORMAT = POLY_ALPHA (31) | POLY_CULL_NONE;
++}
++
++/*
++================
++R_DrawBeam
++
++A laser as a flat strip of its width facing the eye, in its palette color
++================
++*/
++static void R_DrawBeam (entity_t *e)
++{
++	vec3_t	dir, side, toeye, p;
++	float	len, w = e->frame * 0.5f;
++	int		i, alpha = CLAMP (1, (int) (e->alpha * 31), 31);
++
++	VectorSubtract (e->oldorigin, e->origin, dir);
++	VectorSubtract (e->origin, r_origin, toeye);
++	CrossProduct (dir, toeye, side);
++	len = VectorLength (side);
++	if (len < 0.001f)
++		return;
++	VectorScale (side, w / len, side);
++
++	GFX_TEX_FORMAT = 0;
++	GFX_POLY_FORMAT = POLY_ALPHA (alpha) | POLY_CULL_NONE | POLY_ID (6);
++	GFX_COLOR = d_8to16table[e->skinnum & 0xff];
++	GFX_BEGIN = GL_QUADS;
++	for (i = 0; i < 4; i++)
++	{
++		VectorMA (i == 0 || i == 3 ? e->origin : e->oldorigin, i < 2 ? 1 : -1, side, p);
++		GFX_VERTEX16 = VERTEX_PACK ((int) (p[0] * VERTEX_SCALE), (int) (p[1] * VERTEX_SCALE));
++		GFX_VERTEX16 = (int) (p[2] * VERTEX_SCALE) & 0xffff;
++	}
++	GFX_POLY_FORMAT = POLY_ALPHA (31) | POLY_CULL_NONE;
++}
++
++/*
++================
++R_DrawParticles
++
++Small triangles facing the eye, in four steps of translucency
++================
++*/
++HOT_CODE static void R_DrawParticles (void)
++{
++	static const int	levels[4] = {31, 23, 15, 8};
++	int			i, level, x, y, z, ux, uy, uz, rx, ry, rz, depth, scale, n, alpha;
++	int			pvpn[3], pup[3], pright[3];
++	particle_t	*p;
++
++	n = MIN (MAX_PARTICLES_DRAWN, MIN (GX_POLYGONS - GFX_POLYGON_RAM_USAGE,
++		(GX_VERTICES - GFX_VERTEX_RAM_USAGE) / 3) - GX_RESERVE);
++	for (i = 0; i < 3; i++)
++	{
++		pvpn[i] = vpn[i] * 16384;
++		pup[i] = vup[i] * 16384;
++		pright[i] = vright[i] * 16384;
++	}
++	GFX_TEX_FORMAT = 0;
++	for (level = 0; level < 4; level++)
++	{
++		GFX_POLY_FORMAT = POLY_ALPHA (levels[level]) | POLY_CULL_NONE | POLY_ID (level ? 7 : 0);
++		GFX_BEGIN = GL_TRIANGLES;
++		for (i = 0, p = r_newrefdef.particles; i < r_newrefdef.num_particles; i++, p++)
++		{
++			alpha = p->alpha * 4;
++			if (3 - CLAMP (0, alpha, 3) != level || n <= 0)
++				continue;
++
++			x = p->origin[0] * VERTEX_SCALE;
++			y = p->origin[1] * VERTEX_SCALE;
++			z = p->origin[2] * VERTEX_SCALE;
++
++			// a scale up keeps them from disapearing: 1.5 units and 0.004 per
++			// unit of distance, in 1/8 units. The ones closer than 8 units
++			// are left out, close to the eye they would cover the screen.
++			depth = ((x - modelorg_i[0]) * pvpn[0] + (y - modelorg_i[1]) * pvpn[1] +
++				(z - modelorg_i[2]) * pvpn[2]) >> 14;
++			if (depth < 8 * VERTEX_SCALE)
++				continue;
++			scale = depth < 20 * VERTEX_SCALE ? 12 : 12 + ((depth * 262) >> 16);
++			if (scale > depth >> 5)
++				scale = depth >> 5;
++			ux = (pup[0] * scale) >> 14;
++			uy = (pup[1] * scale) >> 14;
++			uz = (pup[2] * scale) >> 14;
++			rx = (pright[0] * scale) >> 14;
++			ry = (pright[1] * scale) >> 14;
++			rz = (pright[2] * scale) >> 14;
++
++			GFX_COLOR = d_8to16table[p->color & 255];
++			GFX_VERTEX16 = VERTEX_PACK (x, y);
++			GFX_VERTEX16 = z & 0xffff;
++			GFX_VERTEX16 = VERTEX_PACK (x + ux, y + uy);
++			GFX_VERTEX16 = (z + uz) & 0xffff;
++			GFX_VERTEX16 = VERTEX_PACK (x + rx, y + ry);
++			GFX_VERTEX16 = (z + rz) & 0xffff;
++			n--;
++		}
++	}
++	GFX_POLY_FORMAT = POLY_ALPHA (31) | POLY_CULL_NONE;
++}
++
++/*
++===============================================================================
++
++ENTITIES
++
++===============================================================================
++*/
++
++static void R_DrawEntity (entity_t *e)
++{
++	currententity = e;
++	if (e->flags & RF_BEAM)
++	{
++		R_DrawBeam (e);
++		return;
++	}
++	if (!e->model)
++		return;
++	switch (e->model->type)
++	{
++	case mod_alias:
++		R_DrawAliasModel (e);
++		break;
++	case mod_brush:
++		R_DrawBrushModel (e);
++		break;
++	case mod_sprite:
++		R_DrawSpriteModel (e);
++		break;
++	default:
++		break;
++	}
++}
++
++// The opaque entities, then the translucent ones over them, the gun last
++static void R_DrawEntitiesOnList (void)
++{
++	int			i, pass;
++	entity_t	*e;
++
++	if (!r_drawentities->value)
++		return;
++	for (pass = 0; pass < 2; pass++)
++		for (i = 0, e = r_newrefdef.entities; i < r_newrefdef.num_entities; i++, e++)
++			if (!(e->flags & RF_VIEWERMODEL) && !(e->flags & RF_WEAPONMODEL)
++				&& !!(e->flags & (RF_TRANSLUCENT | RF_BEAM)) == pass)
++				R_DrawEntity (e);
++	currententity = NULL;
++}
++
++static void R_DrawViewModels (void)
++{
++	int			i;
++	entity_t	*e;
++
++	if (!r_drawentities->value)
++		return;
++	for (i = 0, e = r_newrefdef.entities; i < r_newrefdef.num_entities; i++, e++)
++		if (e->flags & RF_WEAPONMODEL)
++			R_DrawEntity (e);
++	currententity = NULL;
++}
++
++/*
++===============================================================================
++
++FRAME
++
++===============================================================================
++*/
++
++static int SignbitsForPlane (cplane_t *out)
++{
++	int	bits, j;
++
++	// for fast box on planeside test
++	bits = 0;
++	for (j = 0; j < 3; j++)
++		if (out->normal[j] < 0)
++			bits |= 1 << j;
++	return bits;
++}
++
++static void R_SetFrustum (void)
++{
++	int		i, j;
++	float	a, sx, cx, sy, cy;
++
++	// the side planes lean in by half the field of view
++	a = r_newrefdef.fov_x * (M_PI / 360);
++	sx = sinf (a);
++	cx = cosf (a);
++	a = r_newrefdef.fov_y * (M_PI / 360);
++	sy = sinf (a);
++	cy = cosf (a);
++	for (j = 0; j < 3; j++)
++	{
++		frustum[0].normal[j] = vpn[j] * sx + vright[j] * cx;
++		frustum[1].normal[j] = vpn[j] * sx - vright[j] * cx;
++		frustum[2].normal[j] = vpn[j] * sy + vup[j] * cy;
++		frustum[3].normal[j] = vpn[j] * sy - vup[j] * cy;
++	}
++	for (i = 0; i < 4; i++)
++	{
++		frustum[i].type = PLANE_ANYZ;
++		frustum[i].dist = DotProduct (r_origin, frustum[i].normal);
++		frustum[i].signbits = SignbitsForPlane (&frustum[i]);
++		frustum_i[i][0] = frustum[i].normal[0] * 16384;
++		frustum_i[i][1] = frustum[i].normal[1] * 16384;
++		frustum_i[i][2] = frustum[i].normal[2] * 16384;
++		frustum_i[i][3] = frustum[i].dist * 16384;
++	}
++}
++
++static void R_SetupFrame (void)
++{
++	static float	fov_x = -1, fov_y;
++	float			m[4][3];
++	mleaf_t			*leaf;
++	vec3_t			temp;
++	int				i;
++
++	r_framecount++;
++
++	// the top screen is 4:3, whatever the 2D view rectangle
++	if (r_newrefdef.fov_x != fov_x)
++	{
++		fov_x = r_newrefdef.fov_x;
++		fov_y = atanf (tanf (fov_x * (M_PI / 360)) * 192 / 256) * (360 / M_PI);
++	}
++	r_newrefdef.fov_y = fov_y;
++
++	VectorCopy (r_newrefdef.vieworg, r_origin);
++	AngleVectors (r_newrefdef.viewangles, vpn, vright, vup);
++	for (i = 0; i < 3; i++)
++		modelorg_i[i] = r_origin[i] * VERTEX_SCALE;
++
++	// current viewcluster
++	if (!(r_newrefdef.rdflags & RDF_NOWORLDMODEL))
++	{
++		leaf = Mod_PointInLeaf (r_origin, r_worldmodel);
++		r_viewcluster = r_viewcluster2 = leaf->cluster;
++
++		// check above and below so crossing solid water doesn't draw wrong
++		VectorCopy (r_origin, temp);
++		temp[2] += leaf->contents ? 16 : -16;
++		leaf = Mod_PointInLeaf (temp, r_worldmodel);
++		if (!(leaf->contents & CONTENTS_SOLID) && leaf->cluster != r_viewcluster2)
++			r_viewcluster2 = leaf->cluster;
++	}
++
++	R_SetProjection (WORLD_W_SCALE, 1, NEAR_PLANE);
++
++	// world to eye space: x right, y up, looking down -z
++	MATRIX_CONTROL = GL_MODELVIEW;
++	for (i = 0; i < 3; i++)
++	{
++		m[i][0] = vright[i];
++		m[i][1] = vup[i];
++		m[i][2] = -vpn[i];
++	}
++	m[3][0] = -DotProduct (r_origin, vright) * MATRIX_SCALE_W;
++	m[3][1] = -DotProduct (r_origin, vup) * MATRIX_SCALE_W;
++	m[3][2] = DotProduct (r_origin, vpn) * MATRIX_SCALE_W;
++	R_LoadMatrix (m, false);
++
++	GFX_POLY_FORMAT = POLY_ALPHA (31) | POLY_CULL_NONE;
++	GFX_PAL_FORMAT = 0;
++
++	c_brush_polys = 0;
++	c_alias_polys = 0;
++}
++
++// Starts drawing rectangles on the screen, in front of everything
++static void R_BeginScreen (unsigned polyformat, u16 color)
++{
++	int	i;
++
++	// the identity, but with w SCREEN_W
++	MATRIX_CONTROL = GL_PROJECTION;
++	for (i = 0; i < 16; i++)
++		MATRIX_LOAD4x4 = i == 15 ? SCREEN_W : i % 5 ? 0 : 4096;
++	MATRIX_CONTROL = GL_MODELVIEW;
++	MATRIX_IDENTITY = 0;
++	GFX_TEX_FORMAT = 0;
++	GFX_POLY_FORMAT = polyformat;
++	GFX_COLOR = color;
++	GFX_BEGIN = GL_QUADS;
++}
++
++// A rectangle of whole pixels of the top screen, x and y the top left one
++static void R_ScreenRect (int x, int y, int w, int h)
++{
++	int	x1 = x * SCREEN_W / 128 - SCREEN_W, x2 = (x + w) * SCREEN_W / 128 - SCREEN_W;
++	int	y1 = SCREEN_W - (y * SCREEN_W + 95) / 96, y2 = SCREEN_W - ((y + h) * SCREEN_W + 95) / 96;
++
++	GFX_VERTEX16 = VERTEX_PACK (x1, y1);
++	GFX_VERTEX16 = 0;
++	GFX_VERTEX16 = VERTEX_PACK (x2, y1);
++	GFX_VERTEX16 = 0;
++	GFX_VERTEX16 = VERTEX_PACK (x2, y2);
++	GFX_VERTEX16 = 0;
++	GFX_VERTEX16 = VERTEX_PACK (x1, y2);
++	GFX_VERTEX16 = 0;
++}
++
++/*
++================
++R_DrawCrosshair
++
++A cross of 7 by 7 pixels around the pixel right below the middle of the
++view, in front of everything. It's translucent, though as good as opaque,
++the edge marking would outline it.
++================
++*/
++static void R_DrawCrosshair (void)
++{
++	if (!crosshair->value || r_newrefdef.rdflags & RDF_NOWORLDMODEL)
++		return;
++	R_BeginScreen (POLY_ALPHA (30) | POLY_CULL_NONE | POLY_ID (2), RGB15 (31, 31, 31));
++	R_ScreenRect (128 - 3, 96, 7, 1);
++	R_ScreenRect (128, 96 - 3, 1, 3);
++	R_ScreenRect (128, 96 + 1, 1, 3);
++}
++
++// The full screen blend of damage, pickups and liquids
++static void R_DrawBlend (void)
++{
++	float	*b = r_newrefdef.blend;
++
++	if (b[3] <= 0)
++		return;
++	R_BeginScreen (POLY_ALPHA (CLAMP (1, (int) (b[3] * 31), 30)) | POLY_CULL_NONE | POLY_ID (1),
++		RGB15 ((int) (b[0] * 31), (int) (b[1] * 31), (int) (b[2] * 31)));
++	R_ScreenRect (0, 0, 256, 192);
++}
++
++// The light at the eye, for the server to know how well monsters see the
++// player. R_LightPoint's 1.0 is a light map of 128, GL Quake II's 255.
++static void R_SetLightLevel (void)
++{
++	vec3_t	shadelight;
++
++	if (r_newrefdef.rdflags & RDF_NOWORLDMODEL)
++		return;
++	R_LightPoint (r_newrefdef.vieworg, shadelight);
++	r_lightlevel->value = 75 * MAX (shadelight[0], MAX (shadelight[1], shadelight[2]));
++}
++
++/*
++================
++R_RenderFrame
++
++r_newrefdef must be set before the first call
++================
++*/
++static void R_RenderFrame (refdef_t *fd)
++{
++	int	time1 = 0;
++
++	r_newrefdef = *fd;
++	if (!r_worldmodel && !(r_newrefdef.rdflags & RDF_NOWORLDMODEL))
++		ri.Sys_Error (ERR_DROP, "R_RenderView: NULL worldmodel");
++	if (r_speeds->value)
++		time1 = Sys_Milliseconds ();
++
++	R_SetupFrame ();
++	R_SetFrustum ();
++	if (!(r_newrefdef.rdflags & RDF_NOWORLDMODEL))
++	{
++		R_PushDlights ();
++		R_MarkLeaves ();
++	}
++	R_DrawWorld ();
++	R_DrawEntitiesOnList ();
++	R_DrawAlphaSurfaces ();
++	// the particles are left out first when a frame has too many polygons
++	R_DrawViewModels ();
++	R_DrawParticles ();
++	R_DrawCrosshair ();
++	R_DrawBlend ();
++	R_SetLightLevel ();
++
++	if (r_speeds->value)
++		ri.Con_Printf (PRINT_ALL, "%3i ms %4i wpoly %4i epoly\n", Sys_Milliseconds () - time1,
++			c_brush_polys, c_alias_polys);
++}
++
++static void R_BeginFrame (float camera_separation)
++{
++	if (vid_gamma->modified)
++	{
++		vid_gamma->modified = false;
++		R_SetGamma (CLAMP (0.5f, vid_gamma->value, 1.3f));
++	}
++}
++
++// Swaps the 3D buffers at the next vblank, the next 3D command waits for it.
++// The frame is depth tested on w. The view is dimmed behind the menu.
++static void R_EndFrame (void)
++{
++	if (VID_TopFaded ())
++	{
++		R_BeginScreen (POLY_ALPHA (16) | POLY_CULL_NONE | POLY_ID (1), RGB15 (0, 0, 0));
++		R_ScreenRect (0, 0, 256, 192);
++	}
++	GFX_FLUSH = 2;
++	VID_Update2D ();
++}
++
++/*
++===============================================================================
++
++INIT
++
++===============================================================================
++*/
++
++static qboolean R_Init (void *hinstance, void *wndproc)
++{
++	ri.Con_Printf (PRINT_ALL, "ref_nds version: "REF_VERSION"\n");
++
++	r_fullbright = ri.Cvar_Get ("r_fullbright", "0", 0);
++	r_drawentities = ri.Cvar_Get ("r_drawentities", "1", 0);
++	r_drawworld = ri.Cvar_Get ("r_drawworld", "1", 0);
++	r_novis = ri.Cvar_Get ("r_novis", "0", 0);
++	r_lightlevel = ri.Cvar_Get ("r_lightlevel", "0", 0);
++	r_lefthand = ri.Cvar_Get ("hand", "0", CVAR_USERINFO | CVAR_ARCHIVE);
++	r_speeds = ri.Cvar_Get ("r_speeds", "0", 0);
++	crosshair = ri.Cvar_Get ("crosshair", "0", CVAR_ARCHIVE);
++	vid_gamma = ri.Cvar_Get ("vid_gamma", "1", CVAR_ARCHIVE);
++	ri.Vid_NewWindow (VID_WIDTH, VID_HEIGHT);
++
++	// top screen: 3D, textures in banks A, B and D, palette in G, the 2D
++	// layers over it in banks E and F
++	videoSetMode (MODE_5_3D);
++	glInit ();
++	// Edge marking instead of antialiasing: with either the hardware fills
++	// the edges of the polygons, which it otherwise leaves gaps along, but
++	// antialiasing blends them with what is behind, the background where two
++	// polygons meet. All opaque polygons and the background have ID 0, so no
++	// edge is marked, not even at the border of the screen.
++	glEnable (GL_TEXTURE_2D | GL_OUTLINE | GL_BLEND);
++	glClearColor (0, 0, 0, 31);
++	glClearPolyID (0);
++	glClearDepth (GL_MAX_DEPTH);
++	glViewport (0, 0, 255, 191);
++	VID_InitTop ();
++
++	R_InitImages ();
++	R_InitModels ();
++	R_InitAlias ();
++	Draw_InitLocal ();
++	return true;
++}
++
++static void R_Shutdown (void)
++{
++	R_ShutdownModels ();
++	R_ShutdownImages ();
++}
++
++static void R_AppActivate (qboolean activate)
++{
++}
++
++refexport_t GetRefAPI (refimport_t rimp)
++{
++	refexport_t	re;
++
++	ri = rimp;
++	re.api_version = API_VERSION;
++	re.BeginRegistration = R_BeginRegistration;
++	re.RegisterModel = R_RegisterModel;
++	re.RegisterSkin = R_RegisterSkin;
++	re.RegisterPic = Draw_FindPic;
++	re.SetSky = R_SetSky;
++	re.EndRegistration = R_EndRegistration;
++	re.RenderFrame = R_RenderFrame;
++	re.DrawGetPicSize = Draw_GetPicSize;
++	re.DrawPic = Draw_Pic;
++	re.DrawStretchPic = Draw_StretchPic;
++	re.DrawChar = Draw_Char;
++	re.DrawTileClear = Draw_TileClear;
++	re.DrawFill = Draw_Fill;
++	re.DrawFadeScreen = Draw_FadeScreen;
++	re.DrawStretchRaw = Draw_StretchRaw;
++	re.Init = R_Init;
++	re.Shutdown = R_Shutdown;
++	re.CinematicSetPalette = R_SetPalette;
++	re.BeginFrame = R_BeginFrame;
++	re.EndFrame = R_EndFrame;
++	re.AppActivate = R_AppActivate;
++	return re;
++}
+diff --git a/ref_nds/r_map.c b/ref_nds/r_map.c
+new file mode 100644
+index 0000000..dbfe544
+--- /dev/null
++++ b/ref_nds/r_map.c
+@@ -0,0 +1,280 @@
++/*
++Copyright (C) 1997-2001 Id Software, Inc.
++
++This program is free software; you can redistribute it and/or
++modify it under the terms of the GNU General Public License
++as published by the Free Software Foundation; either version 2
++of the License, or (at your option) any later version.
++
++This program is distributed in the hope that it will be useful,
++but WITHOUT ANY WARRANTY; without even the implied warranty of
++MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
++
++See the GNU General Public License for more details.
++
++You should have received a copy of the GNU General Public License
++along with this program; if not, write to the Free Software
++Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
++
++*/
++// r_map.c -- the map of the touch screen
++//
++// A line for each wall of the world seen from above, the bottom edge of
++// sloped ones, made when the map loads, in the far heap. A wall shows on
++// the map once the world drew it.
++
++#include "r_local.h"
++
++#include <malloc.h>
++
++// The map: world units per 2D pixel, the eye at its center, facing up
++#define	MAP_SCALE		10
++#define	MAP_EYE			22		// from the feet to the eye
++#define	MAP_BODY		56		// the player's height
++#define	MAP_LEVELS		96		// walls this far above or below are shown dimmer
++
++typedef struct mapline_s
++{
++	short	x1, y1, x2, y2;
++	short	zmin, zmax;
++	unsigned short	surf;
++	unsigned short	pad;
++} mapline_t;
++
++static mapline_t	*maplines;
++static int			nummaplines;
++static byte			*mapseen;		// a byte for each surface, in main RAM
++static int			mapsurfaces;
++
++// The position of a packed vertex in world units
++static void R_MapVertex (model_t *mod, int v, int *pos)
++{
++	pos[0] = (short) (mod->gxvertexes[v * 2] & 0xffff) / VERTEX_SCALE;
++	pos[1] = (short) (mod->gxvertexes[v * 2] >> 16) / VERTEX_SCALE;
++	pos[2] = (short) (mod->gxvertexes[v * 2 + 1] & 0xffff) / VERTEX_SCALE;
++}
++
++/*
++================
++R_BuildMap
++
++Makes a line of the map for each wall of the world: its extent along the
++wall seen from above and its height. Seen from above a sloped one, like the
++vaults of a ceiling, is its bottom edge, its corners would make a line
++across the room.
++================
++*/
++void R_BuildMap (model_t *mod)
++{
++	msurface_t	*surf;
++	mapline_t	line;
++	unsigned short	*verts;
++	float		*normal;
++	int			i, j, pos[3], vmin[3], vmax[3], t, tmin, tmax, bottom;
++
++	R_FreeMap ();
++	mapsurfaces = mod->numsurfaces;
++	mapseen = malloc (mapsurfaces);
++	maplines = far_malloc (mapsurfaces * sizeof(mapline_t));
++	if (!mapseen || !maplines)
++	{
++		R_FreeMap ();
++		return;
++	}
++	memset (mapseen, 0, mapsurfaces);
++
++	for (i = 0, surf = mod->surfaces; i < mod->numsurfaces; i++, surf++)
++	{
++		if (!surf->gx || (surf->flags & (SURF_DRAWSKY | SURF_DRAWTURB))
++			|| (surf->texinfo->flags & SURF_NODRAW) || fabsf (surf->plane->normal[2]) >= 0.7f)
++			continue;
++		normal = surf->plane->normal;
++		verts = GX_VERTS (surf->gx);
++		line.zmin = 32767;
++		line.zmax = -32768;
++		for (j = 0; j < surf->gx->numverts; j++)
++		{
++			R_MapVertex (mod, verts[j], pos);
++			line.zmin = MIN (line.zmin, pos[2]);
++			line.zmax = MAX (line.zmax, pos[2]);
++		}
++		bottom = fabsf (normal[2]) < 0.01f ? 32767 : line.zmin + 1;
++		tmin = 0x7fffffff;
++		tmax = -0x7fffffff;
++		for (j = 0; j < surf->gx->numverts; j++)
++		{
++			R_MapVertex (mod, verts[j], pos);
++			if (pos[2] > bottom)
++				continue;
++			// along the wall, seen from above
++			t = pos[1] * normal[0] - pos[0] * normal[1];
++			if (t < tmin)
++			{
++				tmin = t;
++				VectorCopy (pos, vmin);
++			}
++			if (t > tmax)
++			{
++				tmax = t;
++				VectorCopy (pos, vmax);
++			}
++		}
++		if (tmax - tmin < 1)
++			continue;
++		line.x1 = vmin[0];
++		line.y1 = vmin[1];
++		line.x2 = vmax[0];
++		line.y2 = vmax[1];
++		line.surf = i;
++		line.pad = 0;
++		// a struct copy, the far heap ignores byte writes
++		maplines[nummaplines++] = line;
++	}
++}
++
++void R_FreeMap (void)
++{
++	free (maplines);
++	free (mapseen);
++	maplines = NULL;
++	mapseen = NULL;
++	nummaplines = 0;
++	mapsurfaces = 0;
++}
++
++// The world drew a surface, its wall shows on the map
++void R_MapSeen (int surf)
++{
++	if (surf < mapsurfaces)
++		mapseen[surf] = 1;
++}
++
++// Region codes for clipping lines to the map
++static inline int R_MapOutcode (int x, int y, int top, int bottom)
++{
++	return (x < 0) | ((x >= VID_WIDTH) << 1) | ((y < top) << 2) | ((y >= bottom) << 3);
++}
++
++// Draws a line clipped to the rows from top to bottom of the touch screen
++HOT_CODE static void R_MapLine (int x1, int y1, int x2, int y2, int top, int bottom, int color)
++{
++	int		c1, c2, c, x, y, dx, dy, sx, sy, err, e2;
++	byte	*dest;
++
++	c1 = R_MapOutcode (x1, y1, top, bottom);
++	c2 = R_MapOutcode (x2, y2, top, bottom);
++	while (c1 | c2)
++	{
++		if (c1 & c2)
++			return;
++		c = c1 ? c1 : c2;
++		if (c & 1)
++		{
++			y = y1 + (y2 - y1) * (0 - x1) / (x2 - x1);
++			x = 0;
++		}
++		else if (c & 2)
++		{
++			y = y1 + (y2 - y1) * (VID_WIDTH - 1 - x1) / (x2 - x1);
++			x = VID_WIDTH - 1;
++		}
++		else if (c & 4)
++		{
++			x = x1 + (x2 - x1) * (top - y1) / (y2 - y1);
++			y = top;
++		}
++		else
++		{
++			x = x1 + (x2 - x1) * (bottom - 1 - y1) / (y2 - y1);
++			y = bottom - 1;
++		}
++		if (c == c1)
++		{
++			x1 = x;
++			y1 = y;
++			c1 = R_MapOutcode (x1, y1, top, bottom);
++		}
++		else
++		{
++			x2 = x;
++			y2 = y;
++			c2 = R_MapOutcode (x2, y2, top, bottom);
++		}
++	}
++
++	dx = abs (x2 - x1);
++	dy = -abs (y2 - y1);
++	sx = x1 < x2 ? 1 : -1;
++	sy = y1 < y2 ? 1 : -1;
++	err = dx + dy;
++	dest = vid_buffer + y1 * VID_WIDTH + x1;
++	for (;;)
++	{
++		*dest = color;
++		if (x1 == x2 && y1 == y2)
++			break;
++		e2 = 2 * err;
++		if (e2 >= dy)
++		{
++			err += dy;
++			x1 += sx;
++			dest += sx;
++		}
++		if (e2 <= dx)
++		{
++			err += dx;
++			y1 += sy;
++			dest += sy * VID_WIDTH;
++		}
++	}
++}
++
++/*
++================
++R_DrawMap
++
++The walls seen around the eye at origin, turned so it looks up, in the rows
++from top to bottom of the touch screen, the ones at its height in color,
++the others in dimcolor, the eye at cx, cy
++================
++*/
++HOT_CODE void R_DrawMap (int top, int bottom, int cx, int cy, vec3_t origin, float yaw, int color, int dimcolor)
++{
++	mapline_t	*line, *end;
++	int			ox, oy, feet, c, s, range, x1, y1, x2, y2, rx1, ry1, rx2, ry2;
++	float		angle;
++
++	VID_MarkRows (top, bottom - top);
++	if (!maplines)
++		return;
++	ox = origin[0];
++	oy = origin[1];
++	feet = origin[2] - MAP_EYE;
++	angle = yaw * (M_PI / 180);
++	// 1/65536 of a 2D pixel per world unit
++	c = cosf (angle) * 65536 / MAP_SCALE;
++	s = sinf (angle) * 65536 / MAP_SCALE;
++	range = MAP_SCALE * MAX (VID_WIDTH, bottom - top);
++
++	for (line = maplines, end = line + nummaplines; line < end; line++)
++	{
++		if (!mapseen[line->surf])
++			continue;
++		if (line->zmin >= feet + MAP_BODY + MAP_LEVELS || line->zmax <= feet - MAP_LEVELS)
++			continue;
++		x1 = line->x1 - ox;
++		y1 = line->y1 - oy;
++		x2 = line->x2 - ox;
++		y2 = line->y2 - oy;
++		if ((x1 < -range && x2 < -range) || (x1 > range && x2 > range)
++			|| (y1 < -range && y2 < -range) || (y1 > range && y2 > range))
++			continue;
++		// right is forward turned clockwise, the screen's y goes down
++		rx1 = (x1 * s - y1 * c) >> 16;
++		ry1 = (x1 * c + y1 * s) >> 16;
++		rx2 = (x2 * s - y2 * c) >> 16;
++		ry2 = (x2 * c + y2 * s) >> 16;
++		R_MapLine (cx + rx1, cy - ry1, cx + rx2, cy - ry2, top, bottom,
++			line->zmin < feet + MAP_BODY && line->zmax > feet ? color : dimcolor);
++	}
++}
+diff --git a/ref_nds/r_model.c b/ref_nds/r_model.c
+new file mode 100644
+index 0000000..f94cbaa
+--- /dev/null
++++ b/ref_nds/r_model.c
+@@ -0,0 +1,1208 @@
++/*
++Copyright (C) 1997-2001 Id Software, Inc.
++
++This program is free software; you can redistribute it and/or
++modify it under the terms of the GNU General Public License
++as published by the Free Software Foundation; either version 2
++of the License, or (at your option) any later version.
++
++This program is distributed in the hope that it will be useful,
++but WITHOUT ANY WARRANTY; without even the implied warranty of
++MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
++
++See the GNU General Public License for more details.
++
++You should have received a copy of the GNU General Public License
++along with this program; if not, write to the Free Software
++Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
++
++*/
++// r_model.c -- model loading and caching
++//
++// The models live in the far heap, the Memory Expansion Pak of a DS. A
++// map is read a lump at a time, its surfaces become what the 3D hardware
++// takes: packed vertices, texture coordinates and the light samples of the
++// vertices. The edges, faces and light maps are only kept while it loads.
++// The far heap ignores byte writes, what has bytes is put together in main
++// RAM and copied there, memcpy handles the bytes at its ends.
++
++#include "r_local.h"
++
++#include <malloc.h>
++
++#define	MAX_MOD_KNOWN	256
++
++// Brush texture coordinates are stored in 1/8 texels, the hardware reads 1/16
++#define	ST_SCALE		8
++
++model_t		*r_worldmodel;
++static model_t	*loadmodel;
++static model_t	mod_known[MAX_MOD_KNOWN];
++static int		mod_numknown;
++static model_t	mod_inline[MAX_MOD_KNOWN];	// the submodels of the world
++
++static FILE		*mod_file;		// the map being read
++static int		mod_fileofs;
++
++/*
++===============================================================================
++
++MEMORY
++
++===============================================================================
++*/
++
++// A model's memory, freed with it
++static void *Mod_Alloc (int size)
++{
++	void	*p = far_malloc (size);
++
++	if (!p)
++		ri.Sys_Error (ERR_DROP, "Mod_Alloc: not enough memory for %s", loadmodel->name);
++	memset (p, 0, size);
++	return p;
++}
++
++// A lump of the map, in the far heap until freed
++static void *Mod_ReadLump (lump_t *l, int size, int *count)
++{
++	void	*in;
++
++	if (l->filelen % size)
++		ri.Sys_Error (ERR_DROP, "MOD_LoadBmodel: funny lump size in %s", loadmodel->name);
++	*count = l->filelen / size;
++	in = far_malloc (l->filelen + 4);
++	if (!in)
++		ri.Sys_Error (ERR_DROP, "Mod_ReadLump: not enough memory for %s", loadmodel->name);
++	fseek (mod_file, mod_fileofs + l->fileofs, SEEK_SET);
++	FS_Read (in, l->filelen, mod_file);
++	return in;
++}
++
++// A whole file in the far heap
++static void *Mod_ReadFile (char *name, int *len)
++{
++	FILE	*f;
++	void	*buf;
++
++	*len = FS_FOpenFile (name, &f);
++	if (*len < 0)
++		return NULL;
++	buf = far_malloc (*len);
++	if (!buf)
++		ri.Sys_Error (ERR_DROP, "Mod_ReadFile: not enough memory for %s", name);
++	FS_Read (buf, *len, f);
++	FS_FCloseFile (f);
++	return buf;
++}
++
++/*
++===============================================================================
++
++BRUSH MODELS
++
++===============================================================================
++*/
++
++// What a map's surfaces are built from, only kept while it loads
++typedef struct
++{
++	int			firstedge, numedges;
++	short		texturemins[2], extents[2];
++	int			lightofs;		// -1 without light map
++} mface_t;
++
++typedef struct
++{
++	vec3_t		*vertexes;
++	dedge_t		*edges;
++	int			numedges;
++	int			*surfedges;
++	mface_t		*faces;
++	byte		*lightdata;
++} loadmap_t;
++
++static loadmap_t	lm;
++
++static void Mod_LoadVertexes (lump_t *l)
++{
++	dvertex_t	*in;
++	unsigned	*out;
++	int			i, j, count, v[3];
++
++	in = Mod_ReadLump (l, sizeof(*in), &count);
++	loadmodel->numvertexes = count;
++	lm.vertexes = far_malloc (count * sizeof(vec3_t));
++	out = loadmodel->gxvertexes = Mod_Alloc (count * 8);
++	for (i = 0; i < count; i++)
++	{
++		for (j = 0; j < 3; j++)
++		{
++			lm.vertexes[i][j] = LittleFloat (in[i].point[j]);
++			v[j] = CLAMP (-32768, (int) (lm.vertexes[i][j] * VERTEX_SCALE), 32767);
++		}
++		*out++ = VERTEX_PACK (v[0], v[1]);
++		*out++ = v[2] & 0xffff;
++	}
++	free (in);
++}
++
++static void Mod_LoadSubmodels (lump_t *l)
++{
++	dmodel_t	*in;
++	mmodel_t	*out;
++	int			i, j, count;
++
++	in = Mod_ReadLump (l, sizeof(*in), &count);
++	out = loadmodel->submodels = Mod_Alloc (count * sizeof(*out));
++	loadmodel->numsubmodels = count;
++	for (i = 0; i < count; i++, out++)
++	{
++		for (j = 0; j < 3; j++)
++		{	// spread the mins / maxs by a pixel
++			out->mins[j] = LittleFloat (in[i].mins[j]) - 1;
++			out->maxs[j] = LittleFloat (in[i].maxs[j]) + 1;
++			out->origin[j] = LittleFloat (in[i].origin[j]);
++		}
++		out->radius = MAX (VectorLength (out->mins), VectorLength (out->maxs));
++		out->headnode = LittleLong (in[i].headnode);
++		out->firstface = LittleLong (in[i].firstface);
++		out->numfaces = LittleLong (in[i].numfaces);
++	}
++	free (in);
++}
++
++static void Mod_LoadPlanes (lump_t *l)
++{
++	dplane_t	*in;
++	mplane_t	*out, p;
++	int			i, j, count, bits;
++
++	in = Mod_ReadLump (l, sizeof(*in), &count);
++	out = loadmodel->planes = Mod_Alloc (count * sizeof(*out));
++	loadmodel->numplanes = count;
++	memset (&p, 0, sizeof(p));
++	for (i = 0; i < count; i++, out++)
++	{
++		bits = 0;
++		for (j = 0; j < 3; j++)
++		{
++			p.normal[j] = LittleFloat (in[i].normal[j]);
++			p.inormal[j] = p.normal[j] * 16384;
++			if (p.normal[j] < 0)
++				bits |= 1 << j;
++		}
++		p.dist = LittleFloat (in[i].dist);
++		p.idist = p.dist * (VERTEX_SCALE * 16384);
++		p.type = LittleLong (in[i].type);
++		p.signbits = bits;
++		memcpy (out, &p, sizeof(p));
++	}
++	free (in);
++}
++
++static void Mod_LoadTexinfo (lump_t *l)
++{
++	texinfo_t	*in;
++	mtexinfo_t	*out, *step;
++	int			i, j, count, next;
++	char		name[MAX_QPATH];
++
++	in = Mod_ReadLump (l, sizeof(*in), &count);
++	out = loadmodel->texinfo = Mod_Alloc (count * sizeof(*out));
++	loadmodel->numtexinfo = count;
++	for (i = 0; i < count; i++, out++)
++	{
++		for (j = 0; j < 8; j++)
++			out->vecs[0][j] = LittleFloat (in[i].vecs[0][j]);
++		out->flags = LittleLong (in[i].flags);
++		next = LittleLong (in[i].nexttexinfo);
++		out->next = next > 0 ? loadmodel->texinfo + next : NULL;
++		Com_sprintf (name, sizeof(name), "textures/%s.wal", in[i].texture);
++		out->image = R_FindImage (name, it_wall);
++		if (!out->image)
++		{
++			ri.Con_Printf (PRINT_ALL, "Couldn't load %s\n", name);
++			out->image = r_notexture;
++		}
++	}
++	free (in);
++
++	// count animation frames
++	for (i = 0; i < count; i++)
++	{
++		out = &loadmodel->texinfo[i];
++		out->numframes = 1;
++		for (step = out->next; step && step != out; step = step->next)
++			out->numframes++;
++	}
++}
++
++// The texture extents of a face, in whole light map samples
++static void Mod_SurfaceExtents (mface_t *f, mtexinfo_t *tex)
++{
++	float	mins[2], maxs[2], val, *v;
++	int		i, j, e, bmins[2], bmaxs[2];
++
++	mins[0] = mins[1] = 999999;
++	maxs[0] = maxs[1] = -99999;
++	for (i = 0; i < f->numedges; i++)
++	{
++		e = lm.surfedges[f->firstedge + i];
++		v = lm.vertexes[e >= 0 ? lm.edges[e].v[0] : lm.edges[-e].v[1]];
++		for (j = 0; j < 2; j++)
++		{
++			val = v[0] * tex->vecs[j][0] + v[1] * tex->vecs[j][1] + v[2] * tex->vecs[j][2] + tex->vecs[j][3];
++			mins[j] = MIN (mins[j], val);
++			maxs[j] = MAX (maxs[j], val);
++		}
++	}
++	for (i = 0; i < 2; i++)
++	{
++		bmins[i] = floorf (mins[i] / 16);
++		bmaxs[i] = ceilf (maxs[i] / 16);
++		f->texturemins[i] = bmins[i] * 16;
++		f->extents[i] = (bmaxs[i] - bmins[i]) * 16;
++	}
++}
++
++static void Mod_LoadFaces (lump_t *l)
++{
++	dface_t		*in;
++	msurface_t	*out;
++	mface_t		*f;
++	int			i, count, planenum, side, ti, flags;
++
++	in = Mod_ReadLump (l, sizeof(*in), &count);
++	out = loadmodel->surfaces = Mod_Alloc (count * sizeof(*out));
++	loadmodel->numsurfaces = count;
++	f = lm.faces = far_malloc (count * sizeof(*f));
++	for (i = 0; i < count; i++, out++, f++)
++	{
++		f->firstedge = LittleLong (in[i].firstedge);
++		f->numedges = LittleShort (in[i].numedges);
++		out->flags = 0;
++		planenum = LittleShort (in[i].planenum);
++		side = LittleShort (in[i].side);
++		if (side)
++			out->flags |= SURF_PLANEBACK;
++		out->plane = loadmodel->planes + planenum;
++
++		ti = LittleShort (in[i].texinfo);
++		if (ti < 0 || ti >= loadmodel->numtexinfo)
++			ri.Sys_Error (ERR_DROP, "MOD_LoadBmodel: bad texinfo number");
++		out->texinfo = loadmodel->texinfo + ti;
++		Mod_SurfaceExtents (f, out->texinfo);
++		out->texturemins[0] = f->texturemins[0];
++		out->texturemins[1] = f->texturemins[1];
++		out->extents[0] = f->extents[0];
++		out->extents[1] = f->extents[1];
++
++		memcpy (out->styles, in[i].styles, MAXLIGHTMAPS);
++		f->lightofs = LittleLong (in[i].lightofs);
++
++		flags = out->texinfo->flags;
++		if (flags & SURF_SKY)
++			out->flags |= SURF_DRAWSKY;
++		if (flags & SURF_WARP)
++			out->flags |= SURF_DRAWTURB;
++	}
++	free (in);
++}
++
++static void Mod_SetParent (mnode_t *node, mnode_t *parent)
++{
++	node->parent = parent;
++	if (node->contents != -1)
++		return;
++	Mod_SetParent (node->children[0], node);
++	Mod_SetParent (node->children[1], node);
++}
++
++static void Mod_LoadNodes (lump_t *l)
++{
++	dnode_t	*in;
++	mnode_t	*out;
++	int		i, j, count, p;
++
++	in = Mod_ReadLump (l, sizeof(*in), &count);
++	out = loadmodel->nodes = Mod_Alloc (count * sizeof(*out));
++	loadmodel->numnodes = count;
++	for (i = 0; i < count; i++, out++)
++	{
++		for (j = 0; j < 3; j++)
++		{
++			out->minmaxs[j] = LittleShort (in[i].mins[j]);
++			out->minmaxs[3 + j] = LittleShort (in[i].maxs[j]);
++		}
++		out->plane = loadmodel->planes + LittleLong (in[i].planenum);
++		out->firstsurface = LittleShort (in[i].firstface);
++		out->numsurfaces = LittleShort (in[i].numfaces);
++		out->contents = -1;	// differentiate from leafs
++		for (j = 0; j < 2; j++)
++		{
++			p = LittleLong (in[i].children[j]);
++			out->children[j] = p >= 0 ? loadmodel->nodes + p : (mnode_t *)(loadmodel->leafs + (-1 - p));
++		}
++	}
++	free (in);
++	Mod_SetParent (loadmodel->nodes, NULL);	// sets nodes and leafs
++}
++
++static void Mod_LoadLeafs (lump_t *l)
++{
++	dleaf_t	*in;
++	mleaf_t	*out;
++	int		i, j, count;
++
++	in = Mod_ReadLump (l, sizeof(*in), &count);
++	out = loadmodel->leafs = Mod_Alloc (count * sizeof(*out));
++	loadmodel->numleafs = count;
++	for (i = 0; i < count; i++, out++)
++	{
++		for (j = 0; j < 3; j++)
++		{
++			out->minmaxs[j] = LittleShort (in[i].mins[j]);
++			out->minmaxs[3 + j] = LittleShort (in[i].maxs[j]);
++		}
++		out->contents = LittleLong (in[i].contents);
++		out->cluster = LittleShort (in[i].cluster);
++		out->area = LittleShort (in[i].area);
++		out->firstmarksurface = loadmodel->marksurfaces + LittleShort (in[i].firstleafface);
++		out->nummarksurfaces = LittleShort (in[i].numleaffaces);
++	}
++	free (in);
++}
++
++static void Mod_LoadMarksurfaces (lump_t *l)
++{
++	short		*in;
++	msurface_t	**out;
++	int			i, j, count;
++
++	in = Mod_ReadLump (l, sizeof(*in), &count);
++	out = loadmodel->marksurfaces = Mod_Alloc (count * sizeof(*out));
++	loadmodel->nummarksurfaces = count;
++	for (i = 0; i < count; i++)
++	{
++		j = LittleShort (in[i]);
++		if (j < 0 || j >= loadmodel->numsurfaces)
++			ri.Sys_Error (ERR_DROP, "Mod_ParseMarksurfaces: bad surface number");
++		out[i] = loadmodel->surfaces + j;
++	}
++	free (in);
++}
++
++/*
++===============================================================================
++
++SURFACES FOR THE HARDWARE
++
++===============================================================================
++*/
++
++static int Mod_SurfaceStyles (msurface_t *surf, mface_t *f)
++{
++	int	numstyles = 0;
++
++	if (f->lightofs >= 0 && lm.lightdata && !(surf->texinfo->flags & (SURF_SKY | SURF_WARP)))
++		while (numstyles < MAXLIGHTMAPS && surf->styles[numstyles] != 255)
++			numstyles++;
++	return numstyles;
++}
++
++// gxsurf_t, texture coordinates, vertex indices and RGB light, word aligned
++static int Mod_GXSize (int n, int numstyles)
++{
++	return (sizeof(gxsurf_t) + n * 4 + ((n * 2 + 3) & ~3) + numstyles * n * 3 + 3) & ~3;
++}
++
++#define	TJ_CELL			7		// 16 units in 1/8 units
++#define	TJ_CELLOF(x)	(((x) + 64) >> TJ_CELL)	// half a cell off the walls on the 16 unit grid
++#define	TJ_HASH			8192
++#define	TJ_MAXINSERT	32		// vertices added to an edge
++#define	TJ_END			0xffff
++
++static int Mod_TJHash (int cx, int cy, int cz)
++{
++	return (cx * 73856093 ^ cy * 19349663 ^ cz * 83492791) & (TJ_HASH - 1);
++}
++
++static int Mod_Sqrt (int n)
++{
++	int	root = 0, bit = 1 << 30;
++
++	while (bit > n)
++		bit >>= 2;
++	for (; bit; bit >>= 2)
++	{
++		if (n >= root + bit)
++		{
++			n -= root + bit;
++			root = (root >> 1) + bit;
++		}
++		else
++			root >>= 1;
++	}
++	return root;
++}
++
++/*
++================
++Mod_EdgeTJunctions
++
++A vertex of one face in the middle of an edge of another is a T-junction,
++the hardware leaves a crack along that edge. The vertices on each edge, at
++most 1/8 unit off it, are found through a hash of the vertex positions by
++16 unit cells. Returns them for Mod_SurfaceVerts, at offset ecache[edge]
++the number of them, then the vertices from v[0] to v[1].
++================
++*/
++// ARM code, the loading time is mostly spent here
++__attribute__((target("arm")))
++static unsigned short *Mod_EdgeTJunctions (model_t *mod, unsigned short **ecache)
++{
++	unsigned short	*head, *next, *elist, *ec;
++	int				i, k, a, b, v, n, total, max, x[3], lo[3], hi[3], c[3], ins[TJ_MAXINSERT];
++	int				d[3], w[3], dot, len2, len, cr, sh, at[TJ_MAXINSERT];
++
++	// positions from the hardware vertices
++#define	TJ_POS(v, k)	((k) == 2 ? (short) (mod->gxvertexes[(v) * 2 + 1] & 0xffff) : \
++						 (short) (mod->gxvertexes[(v) * 2] >> ((k) * 16)))
++
++	head = far_malloc (TJ_HASH * sizeof(*head));
++	next = far_malloc (mod->numvertexes * sizeof(*next));
++	ec = *ecache = far_malloc (lm.numedges * sizeof(*ec));
++	max = MIN (lm.numedges * 2, TJ_END);
++	elist = far_malloc (max * sizeof(*elist));
++	if (!head || !next || !ec || !elist)
++		ri.Sys_Error (ERR_DROP, "Mod_EdgeTJunctions: not enough memory");
++	for (i = 0; i < TJ_HASH; i++)
++		head[i] = TJ_END;
++	for (i = 0; i < mod->numvertexes; i++)
++	{
++		k = Mod_TJHash (TJ_CELLOF (TJ_POS (i, 0)), TJ_CELLOF (TJ_POS (i, 1)), TJ_CELLOF (TJ_POS (i, 2)));
++		next[i] = head[k];
++		head[k] = i;
++	}
++
++	total = 0;
++	for (i = 0; i < lm.numedges; i++)
++	{
++		if (total >= max)
++		{
++			ec[i] = TJ_END;
++			continue;
++		}
++		a = lm.edges[i].v[0];
++		b = lm.edges[i].v[1];
++		for (k = 0; k < 3; k++)
++		{
++			x[k] = TJ_POS (a, k);
++			lo[k] = MIN (x[k], TJ_POS (b, k)) - 1;
++			hi[k] = MAX (x[k], TJ_POS (b, k)) + 1;
++			d[k] = TJ_POS (b, k) - x[k];
++		}
++		// in 32 bits, longer edges than 2048 units are worked out in
++		// coarser steps
++		n = 0;
++		for (sh = 0; MAX (abs (d[0]), MAX (abs (d[1]), abs (d[2]))) >> sh >= 16384; sh++)
++			;
++		for (k = 0; k < 3; k++)
++			d[k] >>= sh;
++		len2 = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
++		len = Mod_Sqrt (len2);
++		for (c[2] = TJ_CELLOF (lo[2]); c[2] <= TJ_CELLOF (hi[2]); c[2]++)
++			for (c[1] = TJ_CELLOF (lo[1]); c[1] <= TJ_CELLOF (hi[1]); c[1]++)
++				for (c[0] = TJ_CELLOF (lo[0]); c[0] <= TJ_CELLOF (hi[0]); c[0]++)
++					for (v = head[Mod_TJHash (c[0], c[1], c[2])]; v != TJ_END; v = next[v])
++					{
++						if (v == a || v == b)
++							continue;
++						for (k = 0; k < 3; k++)
++						{
++							w[k] = TJ_POS (v, k);
++							if (w[k] < lo[k] || w[k] > hi[k] || TJ_CELLOF (w[k]) != c[k])
++								break;
++							w[k] = (w[k] - x[k]) >> sh;
++						}
++						if (k < 3)
++							continue;
++						dot = d[0] * w[0] + d[1] * w[1] + d[2] * w[2];
++						if (dot <= 0 || dot >= len2)
++							continue;
++						// the distance to the edge is |d x w| / |d|
++						cr = abs (d[1] * w[2] - d[2] * w[1]) + abs (d[2] * w[0] - d[0] * w[2])
++							+ abs (d[0] * w[1] - d[1] * w[0]);
++						if (cr > len + len)
++							continue;
++						for (k = 0; k < n && at[k] != dot; k++)
++							;
++						if (k < n)
++							continue;	// a vertex at the same place
++						for (k = n; k > 0 && at[k - 1] > dot; k--)
++							if (k < TJ_MAXINSERT)
++							{
++								ins[k] = ins[k - 1];
++								at[k] = at[k - 1];
++							}
++						if (k < TJ_MAXINSERT)
++						{
++							ins[k] = v;
++							at[k] = dot;
++							n = MIN (n + 1, TJ_MAXINSERT);
++						}
++					}
++		n = MIN (n, max - total - 1);
++		ec[i] = total;
++		elist[total++] = n;
++		for (k = 0; k < n; k++)
++			elist[total++] = ins[k];
++	}
++#undef	TJ_POS
++	free (head);
++	free (next);
++	return elist;
++}
++
++// The vertices of a face with those of its T-junctions, into out unless
++// it's NULL, returns how many
++static int Mod_SurfaceVerts (mface_t *f, unsigned short *elist, unsigned short *ecache, unsigned short *out)
++{
++	int				j, k, e, n = 0, num;
++	unsigned short	*ins;
++
++	for (j = 0; j < f->numedges && n < MAX_SURFVERTS; j++)
++	{
++		e = lm.surfedges[f->firstedge + j];
++		if (out)
++			out[n] = e >= 0 ? lm.edges[e].v[0] : lm.edges[-e].v[1];
++		n++;
++		if (ecache[abs (e)] == TJ_END)
++			continue;
++		ins = elist + ecache[abs (e)];
++		num = *ins++;
++		// backwards on a face that has the edge the other way around
++		for (k = 0; k < num && n < MAX_SURFVERTS; k++, n++)
++			if (out)
++				out[n] = ins[e >= 0 ? k : num - 1 - k];
++	}
++	return n;
++}
++
++/*
++================
++Mod_StripStart
++
++The 3D hardware tells the side a polygon faces from its first three
++vertices, i, j and j' of each quad of R_EmitSurface's strip. In a line it
++can get that wrong, then it leaves the edges that run more across than down
++unfilled. Returns the first vertex to start the strip at that keeps them a
++unit from a line, a T-junction is in a line with its edge. The vertices are
++there twice, one after the other.
++================
++*/
++__attribute__((target("arm")))
++static int Mod_StripStart (model_t *mod, msurface_t *surf, unsigned short *verts, int n)
++{
++	int			r, k, j, a0, a1, d[3][2];
++	long long	c;
++	unsigned	*pos;
++
++	// in the plane seen along the axis it's most across, in the 1/8 units of
++	// the vertices: the cross product over the larger side of j to j' is 8
++	// times the distance of i from their line
++	if (surf->plane->type < 3)
++		a0 = (surf->plane->type + 1) % 3;
++	else
++	{
++		// the axis the normal is most along
++		a0 = fabsf (surf->plane->normal[0]) > fabsf (surf->plane->normal[1]) ? 0 : 1;
++		a0 = fabsf (surf->plane->normal[2]) > fabsf (surf->plane->normal[a0]) ? 2 : a0;
++		a0 = (a0 + 1) % 3;
++	}
++	a1 = (a0 + 1) % 3;
++	for (r = 0; r < n; r++)
++	{
++		for (k = 0; k < (n - 1) / 2; k++)
++		{
++			for (j = 0; j < 3; j++)
++			{
++				pos = mod->gxvertexes + verts[j ? r + n - k - j + 1 : r + k + 1] * 2;
++				d[j][0] = a0 == 2 ? (short) pos[1] : (short) (pos[0] >> (a0 * 16));
++				d[j][1] = a1 == 2 ? (short) pos[1] : (short) (pos[0] >> (a1 * 16));
++			}
++			c = (long long) (d[0][0] - d[1][0]) * (d[2][1] - d[1][1]) -
++				(long long) (d[0][1] - d[1][1]) * (d[2][0] - d[1][0]);
++			if ((c < 0 ? -c : c) < MAX (abs (d[2][0] - d[1][0]), abs (d[2][1] - d[1][1])) * VERTEX_SCALE)
++				break;
++		}
++		if (k == (n - 1) / 2)
++			return r;
++	}
++	return 0;
++}
++
++// The color of a vertex from its RGB light, 128 is the texture as it is,
++// up to twice as bright
++static u16 Mod_LightColor (const byte *rgb)
++{
++	return RGB15 (MIN (rgb[0] * GX_NORMAL_LIGHT >> 7, 31), MIN (rgb[1] * GX_NORMAL_LIGHT >> 7, 31),
++		MIN (rgb[2] * GX_NORMAL_LIGHT >> 7, 31));
++}
++
++/*
++================
++Mod_BuildSurfaces
++
++Packs the vertices, texture coordinates and light samples of the surfaces
++for the 3D hardware, the sky is the sky box and needs none
++================
++*/
++static void Mod_BuildSurfaces (model_t *mod)
++{
++	static unsigned	build[(sizeof(gxsurf_t) + MAX_SURFVERTS * (4 + 2 + MAXLIGHTMAPS * 3) + 3) / 4];
++	int			i, j, k, n, x, y, numstyles, smax, tmax, ls, lt, size, sum[3];
++	unsigned short	*elist, *ecache;
++	byte		*data, *light, *sample;
++	msurface_t	*surf;
++	mface_t		*f;
++	mtexinfo_t	*tex;
++	gxsurf_t	*gx;
++	float		st[MAX_SURFVERTS][2], mins[2], base[2], *v;
++	unsigned short	*verts, start[MAX_SURFVERTS * 2];
++	u16			*colors;
++
++	elist = Mod_EdgeTJunctions (mod, &ecache);
++
++	// all surfaces in one allocation
++	size = 0;
++	for (i = 0, surf = mod->surfaces, f = lm.faces; i < mod->numsurfaces; i++, surf++, f++)
++	{
++		if (surf->flags & SURF_DRAWSKY)
++			continue;
++		n = Mod_SurfaceVerts (f, elist, ecache, NULL);
++		size += Mod_GXSize (n, Mod_SurfaceStyles (surf, f)) + n * sizeof(u16);
++	}
++	data = mod->data = Mod_Alloc (size);
++
++	for (i = 0, surf = mod->surfaces, f = lm.faces; i < mod->numsurfaces; i++, surf++, f++)
++	{
++		if (surf->flags & SURF_DRAWSKY)
++			continue;
++		n = Mod_SurfaceVerts (f, elist, ecache, NULL);
++		tex = surf->texinfo;
++		numstyles = Mod_SurfaceStyles (surf, f);
++
++		// put together in main RAM, it has bytes
++		gx = (gxsurf_t *)build;
++		surf->gx = (gxsurf_t *)data;
++		data += Mod_GXSize (n, numstyles);
++		colors = surf->colors = (u16 *)data;
++		data += n * sizeof(u16);
++		gx->numverts = n;
++		gx->numstyles = numstyles;
++		verts = GX_VERTS (gx);
++		light = GX_LIGHT (gx);
++
++		mins[0] = mins[1] = 999999;
++		Mod_SurfaceVerts (f, elist, ecache, start);
++		memcpy (start + n, start, n * sizeof(*start));
++		k = Mod_StripStart (mod, surf, start, n);
++		memcpy (verts, start + k, n * sizeof(*verts));
++		for (j = 0; j < n; j++)
++		{
++			v = lm.vertexes[verts[j]];
++			for (k = 0; k < 2; k++)
++			{
++				st[j][k] = DotProduct (v, tex->vecs[k]) + tex->vecs[k][3];
++				if (st[j][k] < mins[k])
++					mins[k] = st[j][k];
++			}
++		}
++
++		// start near 0, the hardware only takes 12 bits of texels
++		base[0] = floorf (mins[0] / tex->image->width) * tex->image->width;
++		base[1] = floorf (mins[1] / tex->image->height) * tex->image->height;
++
++		smax = (f->extents[0] >> 4) + 1;
++		tmax = (f->extents[1] >> 4) + 1;
++		for (j = 0; j < n; j++)
++		{
++			x = CLAMP (-32768, (int) ((st[j][0] - base[0]) * ST_SCALE), 32767);
++			y = CLAMP (-32768, (int) ((st[j][1] - base[1]) * ST_SCALE), 32767);
++			gx->st[j] = TEXTURE_PACK (x, y);
++
++			ls = CLAMP (0, (int) ((st[j][0] - f->texturemins[0]) * (1.0f / 16) + 0.5f), smax - 1);
++			lt = CLAMP (0, (int) ((st[j][1] - f->texturemins[1]) * (1.0f / 16) + 0.5f), tmax - 1);
++			sum[0] = sum[1] = sum[2] = 0;
++			for (k = 0; k < numstyles; k++)
++			{
++				sample = lm.lightdata + f->lightofs + (k * smax * tmax + lt * smax + ls) * 3;
++				light[(k * n + j) * 3] = sample[0];
++				light[(k * n + j) * 3 + 1] = sample[1];
++				light[(k * n + j) * 3 + 2] = sample[2];
++				sum[0] += sample[0];
++				sum[1] += sample[1];
++				sum[2] += sample[2];
++			}
++			// the colors with every style at its normal light
++			if (numstyles)
++			{
++				byte	rgb[3] = { MIN (sum[0], 255), MIN (sum[1], 255), MIN (sum[2], 255) };
++
++				colors[j] = Mod_LightColor (rgb);
++			}
++			else
++				colors[j] = RGB15 (GX_NORMAL_LIGHT, GX_NORMAL_LIGHT, GX_NORMAL_LIGHT);
++		}
++		memcpy (surf->gx, gx, Mod_GXSize (n, numstyles));
++	}
++	free (elist);
++	free (ecache);
++}
++
++/*
++=================
++Mod_LoadBrushModel
++=================
++*/
++static void Mod_LoadBrushModel (model_t *mod)
++{
++	dheader_t	header;
++	mmodel_t	*bm;
++	model_t		*starmod;
++	int			i, count;
++
++	if (FS_FOpenFile (mod->name, &mod_file) < 0)
++		ri.Sys_Error (ERR_DROP, "Mod_NumForName: %s not found", mod->name);
++	mod_fileofs = ftell (mod_file);
++	FS_Read (&header, sizeof(header), mod_file);
++	for (i = 0; i < sizeof(dheader_t) / 4; i++)
++		((int *)&header)[i] = LittleLong (((int *)&header)[i]);
++	if (header.version != BSPVERSION)
++		ri.Sys_Error (ERR_DROP, "Mod_LoadBrushModel: %s has wrong version number (%i should be %i)",
++			mod->name, header.version, BSPVERSION);
++
++	mod->type = mod_brush;
++	memset (&lm, 0, sizeof(lm));
++	Mod_LoadVertexes (&header.lumps[LUMP_VERTEXES]);
++	lm.edges = Mod_ReadLump (&header.lumps[LUMP_EDGES], sizeof(dedge_t), &lm.numedges);
++	for (i = 0; i < lm.numedges; i++)
++	{
++		lm.edges[i].v[0] = LittleShort (lm.edges[i].v[0]);
++		lm.edges[i].v[1] = LittleShort (lm.edges[i].v[1]);
++	}
++	lm.surfedges = Mod_ReadLump (&header.lumps[LUMP_SURFEDGES], sizeof(int), &count);
++	for (i = 0; i < count; i++)
++		lm.surfedges[i] = LittleLong (lm.surfedges[i]);
++	if (header.lumps[LUMP_LIGHTING].filelen)
++		lm.lightdata = Mod_ReadLump (&header.lumps[LUMP_LIGHTING], 1, &count);
++	Mod_LoadPlanes (&header.lumps[LUMP_PLANES]);
++	Mod_LoadTexinfo (&header.lumps[LUMP_TEXINFO]);
++	Mod_LoadFaces (&header.lumps[LUMP_FACES]);
++	Mod_BuildSurfaces (mod);
++	R_BuildMap (mod);
++	free (lm.faces);
++	free (lm.lightdata);
++	free (lm.surfedges);
++	free (lm.edges);
++	free (lm.vertexes);
++	Mod_LoadMarksurfaces (&header.lumps[LUMP_LEAFFACES]);
++	Mod_LoadLeafs (&header.lumps[LUMP_LEAFS]);
++	Mod_LoadNodes (&header.lumps[LUMP_NODES]);
++	Mod_LoadSubmodels (&header.lumps[LUMP_MODELS]);
++	FS_FCloseFile (mod_file);
++	mod->numframes = 2;		// regular and alternate animation
++
++	// set up the submodels
++	for (i = 0; i < mod->numsubmodels; i++)
++	{
++		bm = &mod->submodels[i];
++		starmod = &mod_inline[i];
++		*starmod = *loadmodel;
++		starmod->firstmodelsurface = bm->firstface;
++		starmod->nummodelsurfaces = bm->numfaces;
++		starmod->firstnode = bm->headnode;
++		if (starmod->firstnode >= loadmodel->numnodes)
++			ri.Sys_Error (ERR_DROP, "Inline model %i has bad firstnode", i);
++		VectorCopy (bm->maxs, starmod->maxs);
++		VectorCopy (bm->mins, starmod->mins);
++		starmod->radius = bm->radius;
++		if (i == 0)
++			*loadmodel = *starmod;
++		starmod->numleafs = bm->numfaces;
++	}
++}
++
++static void Mod_FreeBrushModel (model_t *mod)
++{
++	R_FreeMap ();
++	free (mod->gxvertexes);
++	free (mod->submodels);
++	free (mod->planes);
++	free (mod->texinfo);
++	free (mod->surfaces);
++	free (mod->marksurfaces);
++	free (mod->leafs);
++	free (mod->nodes);
++}
++
++/*
++===============================================================================
++
++ALIAS MODELS
++
++===============================================================================
++*/
++
++/*
++=================
++Mod_LoadAliasModel
++
++The frames stay as they are in the file, the GL commands become strips and
++triangle lists of xyz vertices, the fans as lists, with the packed texture
++coordinates of their vertices in 1/16 texels of the skin
++=================
++*/
++static void Mod_LoadAliasModel (model_t *mod, byte *buffer, int len)
++{
++	dmdl_t		*pinmodel = (dmdl_t *)buffer;
++	gxalias_t	*gx;
++	daliasframe_t	*frame;
++	int			*cmd, i, j, k, count, numst, numcmds, version, s, t;
++	unsigned	*st;
++	u16			*out;
++	float		r;
++	vec3_t		mins, maxs;
++
++	for (i = 0; i < sizeof(dmdl_t) / 4; i++)
++		((int *)pinmodel)[i] = LittleLong (((int *)pinmodel)[i]);
++	version = pinmodel->version;
++	if (version != ALIAS_VERSION)
++		ri.Sys_Error (ERR_DROP, "%s has wrong version number (%i should be %i)", mod->name, version, ALIAS_VERSION);
++	if (pinmodel->num_xyz <= 0 || pinmodel->num_xyz > MAX_VERTS)
++		ri.Sys_Error (ERR_DROP, "model %s has a bad number of vertices", mod->name);
++	if (pinmodel->num_frames <= 0)
++		ri.Sys_Error (ERR_DROP, "model %s has no frames", mod->name);
++
++	// how many vertices the commands send, fans as triangles
++	numst = numcmds = 0;
++	for (cmd = (int *)(buffer + pinmodel->ofs_glcmds); (count = LittleLong (*cmd)); )
++	{
++		cmd++;
++		if (count < 0)
++		{
++			count = -count;
++			numst += (count - 2) * 3;
++		}
++		else
++			numst += count;
++		numcmds++;
++		cmd += count * 3;
++	}
++
++	// what is read for every vertex drawn in main RAM, the frames in the
++	// far heap
++	gx = mod->alias = calloc (1, sizeof(*gx) + numst * sizeof(unsigned) + (numst + numcmds * 2 + 1) * sizeof(u16));
++	if (!gx)
++		ri.Sys_Error (ERR_DROP, "Mod_LoadAliasModel: not enough memory for %s", mod->name);
++	gx->numverts = pinmodel->num_xyz;
++	gx->numframes = pinmodel->num_frames;
++	gx->framesize = pinmodel->framesize;
++	gx->frames = buffer + pinmodel->ofs_frames;
++	gx->st = st = (unsigned *)(gx + 1);
++	gx->cmds = out = (u16 *)(st + numst);
++
++#define	CMD_ST(c)	(s = LittleFloat (*(float *)&(c)[0]) * pinmodel->skinwidth * 16, \
++					 t = LittleFloat (*(float *)&(c)[1]) * pinmodel->skinheight * 16, TEXTURE_PACK (s, t))
++	for (cmd = (int *)(buffer + pinmodel->ofs_glcmds); (count = LittleLong (*cmd)); )
++	{
++		cmd++;
++		if (count > 0)
++		{
++			*out++ = count;
++			*out++ = GL_TRIANGLE_STRIP;
++			for (i = 0; i < count; i++, cmd += 3)
++			{
++				*st++ = CMD_ST (cmd);
++				*out++ = LittleLong (cmd[2]);
++			}
++		}
++		else
++		{
++			count = -count;
++			*out++ = (count - 2) * 3;
++			*out++ = GL_TRIANGLES;
++			for (i = 2; i < count; i++)
++				for (k = 0; k < 3; k++)
++				{
++					j = k == 0 ? 0 : i - 2 + k;
++					*st++ = CMD_ST (cmd + j * 3);
++					*out++ = LittleLong (cmd[j * 3 + 2]);
++				}
++			cmd += count * 3;
++		}
++	}
++	*out = 0;
++#undef	CMD_ST
++
++	// the skins, and the radius around the origin of all frames
++	gx->numskins = MIN (pinmodel->num_skins, MAX_MD2SKINS);
++	for (i = 0; i < gx->numskins; i++)
++		gx->skins[i] = R_FindImage ((char *)buffer + pinmodel->ofs_skins + i * MAX_SKINNAME, it_skin);
++	r = 0;
++	for (i = 0; i < gx->numframes; i++)
++	{
++		frame = (daliasframe_t *)(gx->frames + i * gx->framesize);
++		for (j = 0; j < 3; j++)
++		{
++			frame->scale[j] = LittleFloat (frame->scale[j]);
++			frame->translate[j] = LittleFloat (frame->translate[j]);
++			mins[j] = fabsf (frame->translate[j]);
++			maxs[j] = fabsf (frame->translate[j] + frame->scale[j] * 255);
++			mins[j] = MAX (mins[j], maxs[j]);
++		}
++		r = MAX (r, VectorLength (mins));
++	}
++	gx->radius = r;
++	mod->radius = r;
++	mod->numframes = gx->numframes;
++	mod->type = mod_alias;
++	mod->data = buffer;
++}
++
++/*
++===============================================================================
++
++SPRITES
++
++===============================================================================
++*/
++
++static void Mod_LoadSpriteModel (model_t *mod, byte *buffer, int len)
++{
++	dsprite_t	*sprin = (dsprite_t *)buffer;
++	msprite_t	*sprout;
++	int			i, numframes;
++
++	if (LittleLong (sprin->version) != SPRITE_VERSION)
++		ri.Sys_Error (ERR_DROP, "%s has wrong version number (%i should be %i)",
++			mod->name, LittleLong (sprin->version), SPRITE_VERSION);
++	numframes = LittleLong (sprin->numframes);
++	if (numframes > MAX_MD2SKINS)
++		ri.Sys_Error (ERR_DROP, "%s has too many frames (%i > %i)", mod->name, numframes, MAX_MD2SKINS);
++
++	sprout = mod->sprite = Mod_Alloc (sizeof(*sprout) + numframes * sizeof(sprout->frames[0]));
++	sprout->numframes = numframes;
++	for (i = 0; i < numframes; i++)
++	{
++		sprout->frames[i].width = LittleLong (sprin->frames[i].width);
++		sprout->frames[i].height = LittleLong (sprin->frames[i].height);
++		sprout->frames[i].origin_x = LittleLong (sprin->frames[i].origin_x);
++		sprout->frames[i].origin_y = LittleLong (sprin->frames[i].origin_y);
++		sprout->frames[i].image = R_FindImage (sprin->frames[i].name, it_sprite);
++	}
++	mod->numframes = numframes;
++	mod->type = mod_sprite;
++	free (buffer);
++}
++
++/*
++===============================================================================
++
++REGISTRATION
++
++===============================================================================
++*/
++
++static void Mod_Free (model_t *mod)
++{
++	if (mod->type == mod_brush)
++		Mod_FreeBrushModel (mod);
++	free (mod->alias);
++	free (mod->sprite);
++	free (mod->data);
++	memset (mod, 0, sizeof(*mod));
++}
++
++/*
++==================
++Mod_ForName
++
++Loads in a model for the given name
++==================
++*/
++static model_t *Mod_ForName (char *name, qboolean crash)
++{
++	model_t	*mod;
++	byte	*buf;
++	int		i, len;
++
++	if (!name[0])
++		ri.Sys_Error (ERR_DROP, "Mod_ForName: NULL name");
++
++	// inline models are grabbed only from worldmodel
++	if (name[0] == '*')
++	{
++		i = atoi (name + 1);
++		if (i < 1 || !r_worldmodel || i >= r_worldmodel->numsubmodels)
++			ri.Sys_Error (ERR_DROP, "bad inline model number");
++		return &mod_inline[i];
++	}
++
++	// search the currently loaded models
++	for (i = 0, mod = mod_known; i < mod_numknown; i++, mod++)
++		if (mod->name[0] && !strcmp (mod->name, name))
++			return mod;
++
++	// find a free model slot spot
++	for (i = 0, mod = mod_known; i < mod_numknown; i++, mod++)
++		if (!mod->name[0])
++			break;
++	if (i == mod_numknown)
++	{
++		if (mod_numknown == MAX_MOD_KNOWN)
++			ri.Sys_Error (ERR_DROP, "mod_numknown == MAX_MOD_KNOWN");
++		mod_numknown++;
++	}
++	strcpy (mod->name, name);
++	loadmodel = mod;
++
++	if (strlen (name) > 4 && !strcmp (name + strlen (name) - 4, ".bsp"))
++	{
++		Mod_LoadBrushModel (mod);
++		return mod;
++	}
++
++	buf = Mod_ReadFile (name, &len);
++	if (!buf)
++	{
++		if (crash)
++			ri.Sys_Error (ERR_DROP, "Mod_NumForName: %s not found", mod->name);
++		memset (mod->name, 0, sizeof(mod->name));
++		return NULL;
++	}
++	switch (LittleLong (*(unsigned *)buf))
++	{
++	case IDALIASHEADER:
++		Mod_LoadAliasModel (mod, buf, len);
++		break;
++	case IDSPRITEHEADER:
++		Mod_LoadSpriteModel (mod, buf, len);
++		break;
++	default:
++		ri.Sys_Error (ERR_DROP, "Mod_NumForName: unknown fileid for %s", mod->name);
++		break;
++	}
++	return mod;
++}
++
++/*
++=====================
++R_BeginRegistration
++
++Specifies the model that will be used as the world
++=====================
++*/
++void R_BeginRegistration (char *model)
++{
++	char	fullname[MAX_QPATH];
++	cvar_t	*flushmap;
++
++	registration_sequence++;
++	r_registering = true;
++	r_viewcluster = -1;		// force markleafs
++
++	Com_sprintf (fullname, sizeof(fullname), "maps/%s.bsp", model);
++
++	// explicitly free the old map if different
++	// this guarantees that mod_known[0] is the world map
++	flushmap = ri.Cvar_Get ("flushmap", "0", 0);
++	if (strcmp (mod_known[0].name, fullname) || flushmap->value)
++		Mod_Free (&mod_known[0]);
++	if (!mod_numknown)
++		mod_numknown = 1;
++	r_worldmodel = Mod_ForName (fullname, true);
++	r_worldmodel->registration_sequence = registration_sequence;
++}
++
++struct model_s *R_RegisterModel (char *name)
++{
++	model_t		*mod;
++	int			i;
++
++	mod = Mod_ForName (name, false);
++	if (!mod)
++		return NULL;
++	mod->registration_sequence = registration_sequence;
++
++	// register any images used by the models
++	if (mod->type == mod_sprite)
++	{
++		for (i = 0; i < mod->sprite->numframes; i++)
++			mod->sprite->frames[i].image = R_FindImage (mod->sprite->frames[i].image ?
++				mod->sprite->frames[i].image->name : "", it_sprite);
++	}
++	else if (mod->type == mod_alias)
++	{
++		for (i = 0; i < mod->alias->numskins; i++)
++			if (mod->alias->skins[i])
++				mod->alias->skins[i] = R_FindImage (mod->alias->skins[i]->name, it_skin);
++	}
++	else if (mod->type == mod_brush)
++	{
++		for (i = 0; i < mod->numtexinfo; i++)
++			mod->texinfo[i].image = R_FindImage (mod->texinfo[i].image->name, it_wall);
++	}
++	return mod;
++}
++
++void R_EndRegistration (void)
++{
++	int		i;
++	model_t	*mod;
++
++	for (i = 0, mod = mod_known; i < mod_numknown; i++, mod++)
++		if (mod->name[0] && mod->registration_sequence != registration_sequence)
++			Mod_Free (mod);
++	R_FreeUnusedImages ();
++	R_UploadTextures ();
++	r_registering = false;
++}
++
++/*
++===============
++Mod_PointInLeaf
++===============
++*/
++mleaf_t *Mod_PointInLeaf (vec3_t p, model_t *model)
++{
++	mnode_t		*node;
++	mplane_t	*plane;
++
++	if (!model || !model->nodes)
++		ri.Sys_Error (ERR_DROP, "Mod_PointInLeaf: bad model");
++	node = model->nodes;
++	while (node->contents == -1)
++	{
++		plane = node->plane;
++		node = node->children[DotProduct (p, plane->normal) - plane->dist <= 0];
++	}
++	return (mleaf_t *)node;
++}
++
++void R_InitModels (void)
++{
++	memset (mod_known, 0, sizeof(mod_known));
++	mod_numknown = 0;
++}
++
++void R_ShutdownModels (void)
++{
++	int	i;
++
++	for (i = 0; i < mod_numknown; i++)
++		if (mod_known[i].name[0])
++			Mod_Free (&mod_known[i]);
++}
+diff --git a/ref_nds/r_surf.c b/ref_nds/r_surf.c
+new file mode 100644
+index 0000000..f508f13
+--- /dev/null
++++ b/ref_nds/r_surf.c
+@@ -0,0 +1,786 @@
++/*
++Copyright (C) 1997-2001 Id Software, Inc.
++
++This program is free software; you can redistribute it and/or
++modify it under the terms of the GNU General Public License
++as published by the Free Software Foundation; either version 2
++of the License, or (at your option) any later version.
++
++This program is distributed in the hope that it will be useful,
++but WITHOUT ANY WARRANTY; without even the implied warranty of
++MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
++
++See the GNU General Public License for more details.
++
++You should have received a copy of the GNU General Public License
++along with this program; if not, write to the Free Software
++Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
++
++*/
++// r_surf.c -- the world and brush models
++//
++// The visible surfaces of the world are chained by texture and drawn as quad
++// strips with vertex colors. Most surfaces only have light styles at their
++// normal light and no dynamic light, they take the colors worked out when
++// the map loaded.
++
++#include "r_local.h"
++
++// Surfaces are left out when the eye is this far behind them: the integer
++// plane tests are up to a unit off for slanted planes far from the origin,
++// the eye of the matrices 1/8, so a surface seen edge on could face the one
++// and not the other, a crack. The back of one is hidden behind its solid.
++#define	BACKFACE_DIST		1.5f
++#define	BACKFACE_DIST_I		((int) (BACKFACE_DIST * VERTEX_SCALE * 16384))	// for the planes' inormal and idist
++
++#define	DLIGHT_CUTOFF		64
++
++// Polygon IDs of the translucent surfaces, those of a different ID blend
++#define	POLYID_ALPHA		8
++
++int			r_visframecount;
++int			r_viewcluster, r_viewcluster2, r_oldviewcluster, r_oldviewcluster2;
++int			c_brush_polys;
++
++static msurface_t	*r_alpha_surfaces;
++static qboolean		r_sky_visible;
++static int			r_dlightframecount;
++
++// The light styles of this frame in 8.8 per channel, and whether one is at
++// its normal light
++static int			style_i[MAX_LIGHTSTYLES][3];
++static byte			style_normal[MAX_LIGHTSTYLES];
++static int			dlight_i[MAX_DLIGHTS][7];	// origin, intensity and color 8.8
++
++/*
++===============================================================================
++
++LIGHT
++
++===============================================================================
++*/
++
++// The light styles and dynamic lights of this frame in integers
++static void R_SetupLight (void)
++{
++	int		i, j;
++	dlight_t	*dl;
++
++	for (i = 0; i < MAX_LIGHTSTYLES; i++)
++	{
++		for (j = 0; j < 3; j++)
++			style_i[i][j] = r_newrefdef.lightstyles[i].rgb[j] * 256;
++		style_normal[i] = style_i[i][0] == 256 && style_i[i][1] == 256 && style_i[i][2] == 256;
++	}
++	for (i = 0, dl = r_newrefdef.dlights; i < r_newrefdef.num_dlights; i++, dl++)
++	{
++		for (j = 0; j < 3; j++)
++		{
++			dlight_i[i][j] = dl->origin[j];
++			dlight_i[i][4 + j] = dl->color[j] * 256;
++		}
++		dlight_i[i][3] = dl->intensity;
++	}
++}
++
++static void R_MarkLights (dlight_t *light, int bit, mnode_t *node)
++{
++	mplane_t	*splitplane;
++	float		dist;
++	msurface_t	*surf;
++	int			i;
++
++	if (node->contents != -1)
++		return;
++
++	splitplane = node->plane;
++	dist = DotProduct (light->origin, splitplane->normal) - splitplane->dist;
++	if (dist > light->intensity - DLIGHT_CUTOFF)
++	{
++		R_MarkLights (light, bit, node->children[0]);
++		return;
++	}
++	if (dist < -light->intensity + DLIGHT_CUTOFF)
++	{
++		R_MarkLights (light, bit, node->children[1]);
++		return;
++	}
++
++	// mark the polygons
++	surf = r_worldmodel->surfaces + node->firstsurface;
++	for (i = 0; i < node->numsurfaces; i++, surf++)
++	{
++		if (surf->dlightframe != r_dlightframecount)
++		{
++			surf->dlightbits = 0;
++			surf->dlightframe = r_dlightframecount;
++		}
++		surf->dlightbits |= bit;
++	}
++	R_MarkLights (light, bit, node->children[0]);
++	R_MarkLights (light, bit, node->children[1]);
++}
++
++void R_PushDlights (void)
++{
++	int			i;
++	dlight_t	*l;
++
++	R_SetupLight ();
++	r_dlightframecount = r_framecount;
++	for (i = 0, l = r_newrefdef.dlights; i < r_newrefdef.num_dlights; i++, l++)
++		R_MarkLights (l, 1 << i, r_worldmodel->nodes);
++}
++
++HOT_CODE static int R_Sqrt (int n)
++{
++	int	root = 0, bit = 1 << 30;
++
++	while (bit > n)
++		bit >>= 2;
++	for (; bit; bit >>= 2)
++	{
++		if (n >= root + bit)
++		{
++			n -= root + bit;
++			root = (root >> 1) + bit;
++		}
++		else
++			root >>= 1;
++	}
++	return root;
++}
++
++// The vertex light of a surface with its light styles and dynamic lights,
++// RGB in 0..255 for the normal light of 128
++HOT_CODE static void R_SurfaceLight (model_t *mod, msurface_t *surf, int (*vlight)[3], qboolean dlit)
++{
++	gxsurf_t		*gx = surf->gx;
++	unsigned short	*verts = GX_VERTS (gx);
++	byte			*light = GX_LIGHT (gx);
++	unsigned		*pos;
++	int				n = gx->numverts, i, k, c, x, y, z, d, l, *s, *dl;
++
++	for (i = 0; i < n; i++)
++		vlight[i][0] = vlight[i][1] = vlight[i][2] = 0;
++	for (k = 0; k < gx->numstyles; k++)
++	{
++		s = style_i[surf->styles[k]];
++		for (i = 0; i < n; i++, light += 3)
++			for (c = 0; c < 3; c++)
++				vlight[i][c] += (light[c] * s[c]) >> 8;
++	}
++	if (!gx->numstyles)
++		for (i = 0; i < n; i++)
++			vlight[i][0] = vlight[i][1] = vlight[i][2] = 128;
++	if (!dlit)
++		return;
++	for (k = 0; k < r_newrefdef.num_dlights; k++)
++	{
++		if (!(surf->dlightbits & (1 << k)))
++			continue;
++		dl = dlight_i[k];
++		for (i = 0; i < n; i++)
++		{
++			pos = mod->gxvertexes + verts[i] * 2;
++			x = ((short) (pos[0] & 0xffff) >> 3) - dl[0];
++			y = ((short) (pos[0] >> 16) >> 3) - dl[1];
++			z = ((short) (pos[1] & 0xffff) >> 3) - dl[2];
++			d = x * x + y * y + z * z;
++			if (d >= dl[3] * dl[3])
++				continue;
++			// half, the light maps' 128 is the normal light, GL Quake II's 255
++			l = dl[3] - R_Sqrt (d);
++			for (c = 0; c < 3; c++)
++				vlight[i][c] += (l * dl[4 + c]) >> 9;
++		}
++	}
++}
++
++// The vertex colors of a surface, from the map unless a light style isn't
++// normal or a dynamic light touches it
++HOT_CODE static u16 *R_SurfaceColors (model_t *mod, msurface_t *surf, u16 *color)
++{
++	gxsurf_t	*gx = surf->gx;
++	int			n = gx->numverts, i, k, vlight[MAX_SURFVERTS][3];
++	qboolean	dlit = surf->dlightframe == r_framecount && mod == r_worldmodel;
++
++	for (k = 0; k < gx->numstyles && style_normal[surf->styles[k]]; k++)
++		;
++	if (k == gx->numstyles && !dlit)
++		return surf->colors;
++	R_SurfaceLight (mod, surf, vlight, dlit);
++	for (i = 0; i < n; i++)
++		color[i] = RGB15 (MIN (vlight[i][0] * GX_NORMAL_LIGHT >> 7, 31),
++			MIN (vlight[i][1] * GX_NORMAL_LIGHT >> 7, 31), MIN (vlight[i][2] * GX_NORMAL_LIGHT >> 7, 31));
++	return color;
++}
++
++/*
++===============
++R_LightPoint
++
++The light at a point, from the vertex light of the nearest vertex of the
++surface below it, 1.0 is the normal light
++===============
++*/
++static qboolean R_RecursiveLightPoint (mnode_t *node, vec3_t start, vec3_t end, vec3_t color)
++{
++	float		front, back, frac, s, t, d, best;
++	int			side, i, k, ds, dt, nearest, vlight[MAX_SURFVERTS][3];
++	mplane_t	*plane;
++	vec3_t		mid, v;
++	msurface_t	*surf;
++	mtexinfo_t	*tex;
++	unsigned	*pos;
++
++	if (node->contents != -1)
++		return false;		// didn't hit anything
++
++	// calculate mid point
++	plane = node->plane;
++	front = DotProduct (start, plane->normal) - plane->dist;
++	back = DotProduct (end, plane->normal) - plane->dist;
++	side = front < 0;
++	if ((back < 0) == side)
++		return R_RecursiveLightPoint (node->children[side], start, end, color);
++
++	frac = front / (front - back);
++	mid[0] = start[0] + (end[0] - start[0]) * frac;
++	mid[1] = start[1] + (end[1] - start[1]) * frac;
++	mid[2] = start[2] + (end[2] - start[2]) * frac;
++
++	// go down front side
++	if (R_RecursiveLightPoint (node->children[side], start, mid, color))
++		return true;
++	if ((back < 0) == side)
++		return false;		// didn't hit anuthing
++
++	// check for impact on this node
++	surf = r_worldmodel->surfaces + node->firstsurface;
++	for (i = 0; i < node->numsurfaces; i++, surf++)
++	{
++		tex = surf->texinfo;
++		if (tex->flags & (SURF_WARP | SURF_SKY) || !surf->gx)
++			continue;	// no lightmaps
++		ds = DotProduct (mid, tex->vecs[0]) + tex->vecs[0][3];
++		dt = DotProduct (mid, tex->vecs[1]) + tex->vecs[1][3];
++		if (ds < surf->texturemins[0] || dt < surf->texturemins[1])
++			continue;
++		if (ds - surf->texturemins[0] > surf->extents[0] || dt - surf->texturemins[1] > surf->extents[1])
++			continue;
++
++		// the vertex nearest to the point
++		best = 1e30f;
++		nearest = 0;
++		for (k = 0; k < surf->gx->numverts; k++)
++		{
++			pos = r_worldmodel->gxvertexes + GX_VERTS (surf->gx)[k] * 2;
++			v[0] = (short) (pos[0] & 0xffff) * (1.0f / VERTEX_SCALE);
++			v[1] = (short) (pos[0] >> 16) * (1.0f / VERTEX_SCALE);
++			v[2] = (short) (pos[1] & 0xffff) * (1.0f / VERTEX_SCALE);
++			s = DotProduct (v, tex->vecs[0]) + tex->vecs[0][3] - ds;
++			t = DotProduct (v, tex->vecs[1]) + tex->vecs[1][3] - dt;
++			d = s * s + t * t;
++			if (d < best)
++			{
++				best = d;
++				nearest = k;
++			}
++		}
++		R_SurfaceLight (r_worldmodel, surf, vlight, false);
++		for (k = 0; k < 3; k++)
++			color[k] = vlight[nearest][k] * (1.0f / 128);
++		return true;
++	}
++
++	// go down back side
++	return R_RecursiveLightPoint (node->children[!side], mid, end, color);
++}
++
++void R_LightPoint (vec3_t p, vec3_t color)
++{
++	vec3_t		end, dist;
++	dlight_t	*dl;
++	float		add;
++	int			lnum;
++
++	if (!r_worldmodel || !r_worldmodel->nodes || r_fullbright->value)
++	{
++		color[0] = color[1] = color[2] = 1.0f;
++		return;
++	}
++
++	end[0] = p[0];
++	end[1] = p[1];
++	end[2] = p[2] - 2048;
++	if (!R_RecursiveLightPoint (r_worldmodel->nodes, p, end, color))
++		VectorClear (color);
++
++	// add dynamic lights
++	for (lnum = 0, dl = r_newrefdef.dlights; lnum < r_newrefdef.num_dlights; lnum++, dl++)
++	{
++		VectorSubtract (p, dl->origin, dist);
++		add = (dl->intensity - VectorLength (dist)) * (1.0f / 256);
++		if (add > 0)
++			VectorMA (color, add, dl->color, color);
++	}
++}
++
++/*
++===============================================================================
++
++SURFACES
++
++===============================================================================
++*/
++
++/*
++===============
++R_TextureAnimation
++
++Returns the proper texture for a given time and base texture
++===============
++*/
++static image_t *R_TextureAnimation (mtexinfo_t *tex)
++{
++	int	c;
++
++	if (!tex->next)
++		return tex->image;
++	c = currententity->frame % tex->numframes;
++	while (c)
++	{
++		tex = tex->next;
++		c--;
++	}
++	return tex->image;
++}
++
++// The polygon of a surface as a quad strip zig-zagging across it: 1 0, 2 n-1,
++// 3 n-2, ... with an odd number of vertices the last quad is a triangle
++HOT_CODE static void R_EmitSurface (model_t *mod, gxsurf_t *gx, u16 *color, unsigned *st)
++{
++	int				i, j, n = gx->numverts;
++	unsigned short	*verts = GX_VERTS (gx);
++
++#define EMIT(v) \
++	GFX_COLOR = color[v]; \
++	GFX_TEX_COORD = st[v]; \
++	GFX_VERTEX16 = mod->gxvertexes[verts[v] * 2]; \
++	GFX_VERTEX16 = mod->gxvertexes[verts[v] * 2 + 1];
++
++	GFX_BEGIN = GL_QUAD_STRIP;
++	for (i = 1, j = 0; ; )
++	{
++		EMIT (i);
++		EMIT (j);
++		i++;
++		j = j ? j - 1 : n - 1;
++		if (i > j)
++			break;
++		if (i == j)
++		{
++			EMIT (i);
++			EMIT (i);
++			break;
++		}
++	}
++#undef EMIT
++
++	c_brush_polys += (n - 1) / 2;
++}
++
++static void R_DrawSurface (model_t *mod, msurface_t *surf)
++{
++	u16	color[MAX_SURFVERTS];
++
++	R_EmitSurface (mod, surf->gx, R_SurfaceColors (mod, surf, color), surf->gx->st);
++}
++
++// Binds the texture of a surface, liquids and flowing surfaces move theirs
++static void R_BindSurfaceTexture (image_t *image, msurface_t *surf)
++{
++	float	flow;
++
++	R_BindImage (image);
++	if (!(surf->texinfo->flags & (SURF_FLOWING | SURF_WARP)))
++		return;
++	// the time wraps at whole repeats of the texture before the fixed
++	// point overflows, in the surfaces' 1/8 texels
++	MATRIX_CONTROL = GL_TEXTURE;
++	if (surf->texinfo->flags & SURF_FLOWING)
++	{
++		flow = fmodf (r_newrefdef.time * 0.5f, 1) * 64;
++		MATRIX_TRANSLATE = F32 (-flow * 8);
++		MATRIX_TRANSLATE = 0;
++	}
++	else
++	{
++		flow = fmodf (r_newrefdef.time, 64);
++		MATRIX_TRANSLATE = F32 (flow * 8);
++		MATRIX_TRANSLATE = F32 (flow * 4);
++	}
++	MATRIX_TRANSLATE = 0;
++	MATRIX_CONTROL = GL_MODELVIEW;
++}
++
++static void R_AlphaFormat (msurface_t *surf, int id)
++{
++	int	alpha = surf->texinfo->flags & SURF_TRANS33 ? 10 : surf->texinfo->flags & SURF_TRANS66 ? 20 : 31;
++
++	GFX_POLY_FORMAT = POLY_ALPHA (alpha) | POLY_CULL_NONE | POLY_ID (id);
++}
++
++/*
++================
++R_DrawAlphaSurfaces
++
++The translucent surfaces of the world and brush models, after everything
++else, in world coordinates
++================
++*/
++void R_DrawAlphaSurfaces (void)
++{
++	msurface_t	*s;
++	model_t		*mod = r_worldmodel;
++	int			id = POLYID_ALPHA;
++
++	currententity = NULL;
++	for (s = r_alpha_surfaces; s; s = s->texturechain)
++	{
++		R_AlphaFormat (s, id);
++		id = id == 62 ? POLYID_ALPHA : id + 1;	// overlapping ones blend
++		R_BindSurfaceTexture (s->texinfo->image, s);
++		R_DrawSurface (mod, s);
++	}
++	r_alpha_surfaces = NULL;
++	GFX_POLY_FORMAT = POLY_ALPHA (31) | POLY_CULL_NONE;
++}
++
++/*
++===============================================================================
++
++BRUSH MODELS
++
++===============================================================================
++*/
++
++qboolean R_CullBox (vec3_t mins, vec3_t maxs)
++{
++	int	i;
++
++	for (i = 0; i < 4; i++)
++		if (BoxOnPlaneSide (mins, maxs, &frustum[i]) == 2)
++			return true;
++	return false;
++}
++
++// Model to world matrix, for brush models in their scaled vertex units. The
++// "stupid quake bug" flips the pitch of brush models
++static void R_EntityMatrix (entity_t *e, float m[4][3])
++{
++	vec3_t	angles, forward, right, up;
++	int		i;
++
++	angles[0] = -e->angles[0];
++	angles[1] = e->angles[1];
++	angles[2] = e->angles[2];
++	AngleVectors (angles, forward, right, up);
++	for (i = 0; i < 3; i++)
++	{
++		m[0][i] = forward[i];
++		m[1][i] = -right[i];
++		m[2][i] = up[i];
++		m[3][i] = e->origin[i] * MATRIX_SCALE_W;
++	}
++}
++
++void R_DrawBrushModel (entity_t *e)
++{
++	int			i;
++	vec3_t		mins, maxs, modelorg, temp, angles, forward, right, up;
++	msurface_t	*psurf;
++	float		dot, m[4][3];
++	model_t		*clmodel = e->model;
++	qboolean	rotated;
++	image_t		*image, *bound;
++
++	if (clmodel->nummodelsurfaces == 0)
++		return;
++
++	rotated = e->angles[0] || e->angles[1] || e->angles[2];
++	if (rotated)
++	{
++		for (i = 0; i < 3; i++)
++		{
++			mins[i] = e->origin[i] - clmodel->radius;
++			maxs[i] = e->origin[i] + clmodel->radius;
++		}
++	}
++	else
++	{
++		VectorAdd (e->origin, clmodel->mins, mins);
++		VectorAdd (e->origin, clmodel->maxs, maxs);
++	}
++	if (R_CullBox (mins, maxs))
++		return;
++
++	VectorSubtract (r_newrefdef.vieworg, e->origin, modelorg);
++	if (rotated)
++	{
++		VectorCopy (modelorg, temp);
++		VectorSet (angles, -e->angles[0], e->angles[1], e->angles[2]);
++		AngleVectors (angles, forward, right, up);
++		modelorg[0] = DotProduct (temp, forward);
++		modelorg[1] = -DotProduct (temp, right);
++		modelorg[2] = DotProduct (temp, up);
++	}
++
++	MATRIX_PUSH = 0;
++	R_EntityMatrix (e, m);
++	R_LoadMatrix (m, true);
++
++	psurf = &clmodel->surfaces[clmodel->firstmodelsurface];
++	for (i = 0, bound = NULL; i < clmodel->nummodelsurfaces; i++, psurf++)
++	{
++		if (!psurf->gx || psurf->texinfo->flags & SURF_NODRAW)
++			continue;
++		dot = DotProduct (modelorg, psurf->plane->normal) - psurf->plane->dist;
++		if (!((psurf->flags & SURF_PLANEBACK) ? dot < BACKFACE_DIST : dot > -BACKFACE_DIST))
++			continue;
++		// translucent ones by themselves, in the model's place
++		if (psurf->texinfo->flags & (SURF_TRANS33 | SURF_TRANS66))
++		{
++			R_AlphaFormat (psurf, POLYID_ALPHA - 1);
++			R_BindSurfaceTexture (psurf->texinfo->image, psurf);
++			R_DrawSurface (clmodel, psurf);
++			GFX_POLY_FORMAT = POLY_ALPHA (31) | POLY_CULL_NONE;
++			bound = NULL;
++			continue;
++		}
++		// the texture only when it changes, liquids move theirs
++		image = R_TextureAnimation (psurf->texinfo);
++		if (image != bound || (psurf->texinfo->flags & (SURF_FLOWING | SURF_WARP)))
++			R_BindSurfaceTexture (image, psurf);
++		bound = image;
++		R_DrawSurface (clmodel, psurf);
++	}
++
++	MATRIX_POP = 1;
++}
++
++/*
++===============================================================================
++
++WORLD MODEL
++
++===============================================================================
++*/
++
++/*
++===============
++R_MarkLeaves
++
++Mark the leaves and nodes that are in the PVS for the current cluster
++===============
++*/
++void R_MarkLeaves (void)
++{
++	byte	*vis, fatvis[MAX_MAP_LEAFS/8];
++	mnode_t	*node;
++	mleaf_t	*leaf;
++	int		i, c, cluster;
++
++	if (r_oldviewcluster == r_viewcluster && r_oldviewcluster2 == r_viewcluster2 && !r_novis->value
++		&& r_viewcluster != -1)
++		return;
++
++	r_visframecount++;
++	r_oldviewcluster = r_viewcluster;
++	r_oldviewcluster2 = r_viewcluster2;
++
++	if (r_novis->value || r_viewcluster == -1 || !CM_NumClusters ())
++	{
++		// mark everything
++		for (i = 0; i < r_worldmodel->numleafs; i++)
++			r_worldmodel->leafs[i].visframe = r_visframecount;
++		for (i = 0; i < r_worldmodel->numnodes; i++)
++			r_worldmodel->nodes[i].visframe = r_visframecount;
++		return;
++	}
++
++	// the PVS of the collision map, which has the same clusters
++	vis = CM_ClusterPVS (r_viewcluster);
++	// may have to combine two clusters because of solid water boundaries
++	if (r_viewcluster2 != r_viewcluster)
++	{
++		c = (CM_NumClusters () + 31) / 32;
++		memcpy (fatvis, vis, c * 4);
++		vis = CM_ClusterPVS (r_viewcluster2);
++		for (i = 0; i < c; i++)
++			((int *)fatvis)[i] |= ((int *)vis)[i];
++		vis = fatvis;
++	}
++
++	for (i = 0, leaf = r_worldmodel->leafs; i < r_worldmodel->numleafs; i++, leaf++)
++	{
++		cluster = leaf->cluster;
++		if (cluster == -1 || !(vis[cluster >> 3] & (1 << (cluster & 7))))
++			continue;
++		node = (mnode_t *)leaf;
++		do
++		{
++			if (node->visframe == r_visframecount)
++				break;
++			node->visframe = r_visframecount;
++			node = node->parent;
++		} while (node);
++	}
++}
++
++/*
++================
++R_CullNode
++
++Frustum test of a node's bounding box in fixed point. Returns the planes its
++children still need testing against, as a node inside a plane is too, or -1
++when it's outside.
++================
++*/
++HOT_CODE static int R_CullNode (mnode_t *node, int clipflags)
++{
++	int		i, *f;
++	short	*mins = node->minmaxs, *maxs = node->minmaxs + 3;
++
++	for (i = 0, f = frustum_i[0]; i < 4; i++, f += 4)
++	{
++		if (!(clipflags & (1 << i)))
++			continue;
++		// the corner furthest along the normal is outside, the whole box is
++		if ((f[0] >= 0 ? maxs[0] : mins[0]) * f[0] + (f[1] >= 0 ? maxs[1] : mins[1]) * f[1] +
++			(f[2] >= 0 ? maxs[2] : mins[2]) * f[2] < f[3])
++			return -1;
++		// the nearest corner is inside, the whole box is
++		if ((f[0] >= 0 ? mins[0] : maxs[0]) * f[0] + (f[1] >= 0 ? mins[1] : maxs[1]) * f[1] +
++			(f[2] >= 0 ? mins[2] : maxs[2]) * f[2] >= f[3])
++			clipflags &= ~(1 << i);
++	}
++	return clipflags;
++}
++
++HOT_CODE static void R_RecursiveWorldNode (mnode_t *node, int clipflags)
++{
++	int			c, dot, front, back;
++	mplane_t	*plane;
++	msurface_t	*surf, **mark;
++	mleaf_t		*pleaf;
++	image_t		*image;
++
++	if (node->contents == CONTENTS_SOLID)
++		return;		// solid
++	if (node->visframe != r_visframecount)
++		return;
++	if (clipflags && (clipflags = R_CullNode (node, clipflags)) < 0)
++		return;
++
++	// if a leaf node, draw stuff
++	if (node->contents != -1)
++	{
++		pleaf = (mleaf_t *)node;
++
++		// check for door connected areas
++		if (r_newrefdef.areabits && !(r_newrefdef.areabits[pleaf->area >> 3] & (1 << (pleaf->area & 7))))
++			return;		// not visible
++
++		mark = pleaf->firstmarksurface;
++		for (c = pleaf->nummarksurfaces; c; c--, mark++)
++			(*mark)->visframe = r_framecount;
++		return;
++	}
++
++	// node is just a decision point, so go down both sides
++	R_RecursiveWorldNode (node->children[0], clipflags);
++	R_RecursiveWorldNode (node->children[1], clipflags);
++
++	// add the surfaces facing us to their texture chain, after the leaves
++	// below marked them: one in reach of BACKFACE_DIST has them on the other
++	// side
++	c = node->numsurfaces;
++	if (!c)
++		return;
++	plane = node->plane;
++	dot = plane->inormal[0] * modelorg_i[0] + plane->inormal[1] * modelorg_i[1] +
++		plane->inormal[2] * modelorg_i[2] - plane->idist;
++	front = dot > -BACKFACE_DIST_I;
++	back = dot < BACKFACE_DIST_I;
++	surf = r_worldmodel->surfaces + node->firstsurface;
++	for ( ; c; c--, surf++)
++	{
++		if (surf->visframe != r_framecount)
++			continue;
++		if (!((surf->flags & SURF_PLANEBACK) ? back : front))
++			continue;		// wrong side
++		if (surf->flags & SURF_DRAWSKY)
++		{
++			r_sky_visible = true;
++			continue;
++		}
++		if (surf->texinfo->flags & SURF_NODRAW)
++			continue;
++		R_MapSeen (surf - r_worldmodel->surfaces);
++		if (surf->texinfo->flags & (SURF_TRANS33 | SURF_TRANS66))
++		{
++			surf->texturechain = r_alpha_surfaces;
++			r_alpha_surfaces = surf;
++			continue;
++		}
++		image = R_TextureAnimation (surf->texinfo);
++		surf->texturechain = image->texturechain;
++		image->texturechain = surf;
++	}
++}
++
++/*
++=============
++R_DrawWorld
++
++The world's surfaces chained by texture, the sky box first behind them when
++any sky shows
++=============
++*/
++void R_DrawWorld (void)
++{
++	entity_t	ent;
++	image_t		*image;
++	msurface_t	*s;
++	int			i;
++
++	if (!r_drawworld->value || r_newrefdef.rdflags & RDF_NOWORLDMODEL)
++		return;
++
++	memset (&ent, 0, sizeof(ent));
++	ent.frame = (int)(r_newrefdef.time * 2);
++	currententity = &ent;
++
++	for (i = 0; i < r_numimages; i++)
++		r_images[i].texturechain = NULL;
++	r_sky_visible = false;
++	R_RecursiveWorldNode (r_worldmodel->nodes, 15);
++
++	for (i = 0, image = r_images; i < r_numimages; i++, image++)
++	{
++		if (!image->texturechain)
++			continue;
++		for (s = image->texturechain; s; s = s->texturechain)
++		{
++			if (s == image->texturechain || s->texinfo->flags & (SURF_FLOWING | SURF_WARP))
++				R_BindSurfaceTexture (image, s);
++			R_DrawSurface (r_worldmodel, s);
++		}
++		image->texturechain = NULL;
++	}
++	if (r_sky_visible)
++		R_DrawSky ();
++	currententity = NULL;
++}

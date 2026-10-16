@@ -1,0 +1,55 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Wed, 7 Oct 2026 12:00:00 +0200
+Subject: [PATCH] Use the DS hardware divider
+
+The ARM9 has no divide instruction, and scale() and divscale() divide 64
+by 32 bits, which compiler-rt does slowly in software. The DS has a
+hardware divider for that, which only the game thread uses.
+---
+ Engine/src/fixedPoint_math.h | 23 +++++++++++++++++++++--
+ 1 file changed, 21 insertions(+), 2 deletions(-)
+
+diff --git a/Engine/src/fixedPoint_math.h b/Engine/src/fixedPoint_math.h
+index d1442cf..f63b730 100644
+--- a/Engine/src/fixedPoint_math.h
++++ b/Engine/src/fixedPoint_math.h
+@@ -57,9 +57,28 @@ static inline int64_t mul32_64(int32_t i1,int32_t i2)
+ {
+ 	return (int64_t)i1*i2;
+ }
++/* The ARM9 has no divide instruction, the DS has a hardware divider that
++   divides 64 by 32 bits. Only the game thread uses it. */
++#define DS_DIVCNT       (*(volatile uint16_t *)0x04000280)
++#define DS_DIV_NUMER    (*(volatile int64_t *)0x04000290)
++#define DS_DIV_DENOM    (*(volatile int32_t *)0x04000298)
++#define DS_DIV_RESULT   (*(volatile int32_t *)0x040002A0)
++#define DS_DIV_64_32    1
++#define DS_DIV_BUSY     (1 << 15)
++
++static inline int32_t div64_32(int64_t num, int32_t den)
++{
++	DS_DIVCNT = DS_DIV_64_32;
++	DS_DIV_NUMER = num;
++	DS_DIV_DENOM = den;
++	while (DS_DIVCNT & DS_DIV_BUSY)
++		;
++	return DS_DIV_RESULT;
++}
++
+ static inline int scale (int32_t input1, int32_t input2, int32_t input3)
+ {
+-	return (int)(mul32_64(input1,input2)/(int64_t)input3);
++	return div64_32(mul32_64(input1,input2),input3);
+ }
+ static inline int mulscale (int32_t input1, int32_t input2, int32_t input3)
+ {
+@@ -75,7 +94,7 @@ static inline int tmulscale(int32_t i1, int32_t i2, int32_t i3, int32_t i4, int3
+ }
+ static inline int32_t divscale(int32_t i1, int32_t i2, int32_t i3)
+ {
+-	return (int32_t)(((int64_t)i1<<i3)/i2);
++	return div64_32((int64_t)i1<<i3,i2);
+ }
+ 
+ #define DEFFUNCS \

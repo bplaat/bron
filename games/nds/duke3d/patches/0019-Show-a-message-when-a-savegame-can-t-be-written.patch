@@ -1,0 +1,28 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Wed, 7 Oct 2026 12:00:00 +0200
+Subject: [PATCH] Show a message when a savegame can't be written
+
+Without an SD card saving silently did nothing, it says so now.
+---
+ Game/src/menues.c | 7 ++++++-
+ 1 file changed, 6 insertions(+), 1 deletion(-)
+
+diff --git a/Game/src/menues.c b/Game/src/menues.c
+index 8f5e5c6..a2bb979 100644
+--- a/Game/src/menues.c
++++ b/Game/src/menues.c
+@@ -597,7 +597,12 @@ int saveplayer(int8_t spot)
+ 		sprintf(fullpathsavefilename, "%s", fnptr);
+ 	}
+ 
+-     if ((fil = fopen(fullpathsavefilename,"wb")) == 0) return(-1);
++     if ((fil = fopen(fullpathsavefilename,"wb")) == 0)
++     {
++         strcpy(fta_quotes[122],"CAN'T SAVE, NO SD CARD?");
++         FTA(122,&ps[myconnectindex],1);
++         return(-1);
++     }
+ 
+      ready2send = 0;
+ 

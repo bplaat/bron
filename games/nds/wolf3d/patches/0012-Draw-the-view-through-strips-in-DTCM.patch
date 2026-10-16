@@ -1,0 +1,333 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Sun, 4 Oct 2026 12:18:33 +0200
+Subject: [PATCH] Draw the view through strips in DTCM
+
+Writing the view down the columns of the frame misses the data cache
+with every pixel, which is slow in DS main RAM. The ray caster only
+notes the texture column of each post and ScaleLine queues the sprite
+columns over each column of the view instead. Once the weapon is queued
+the view is put together in strips of 16 columns in DTCM: the ceiling
+and floor filled in words, only the rows not every post of the strip
+covers, so the screen isn't cleared first, then the wall posts and the
+sprite columns over them, and each row of the strip is copied into the
+frame as one burst of four words. The texture steps in 16.16 fixed
+point, four pixels per loop with their loads first, as a branch costs
+the ARM9 three cycles and a load the one after it. Posts taller than
+the view are clipped at once.
+---
+ wl_def.h   |   8 ++++
+ wl_draw.c  | 132 ++++++++++++++++++++++++++++++++++-------------------
+ wl_scale.c |  79 ++++++++++++++++++++++++++++++--
+ 3 files changed, 166 insertions(+), 53 deletions(-)
+
+diff --git a/wl_def.h b/wl_def.h
+index 02c3902..094ff04 100644
+--- a/wl_def.h
++++ b/wl_def.h
+@@ -1235,6 +1235,14 @@ typedef struct
+ 
+ void ScaleShape (int xcenter, int shapenum, int height, uint32_t flags);
+ void SimpleScaleShape (int xcenter, int shapenum, int height);
++
++// The view is put together in strips of VIEWSTRIP columns (wl_draw.c), the
++// sprite columns over a column of a strip are drawn into it with
++// DrawSpriteColumns
++#define VIEWSTRIP 16
++void DrawSpriteColumns (byte *post, int x);
++// Set once the frame holds a whole new view, cleared by whoever takes it
++extern boolean viewdrawn;
+ #ifdef USE_DIR3DSPR
+ void Transform3DShape (visobj_t *sprite);
+ #endif
+diff --git a/wl_draw.c b/wl_draw.c
+index f0cbe74..d9fff10 100644
+--- a/wl_draw.c
++++ b/wl_draw.c
+@@ -296,11 +296,23 @@ int16_t CalcHeight (void)
+ ===================
+ */
+ 
++//
++// Writing the view down the columns of the frame misses the data cache with
++// every pixel, which is slow in DS main RAM. The ray caster and the sprites
++// only note their columns instead, the view is then put together in strips
++// of VIEWSTRIP columns that stay in DTCM and are copied into the frame in
++// words: the ceiling and floor, the wall post of each column and the
++// sprite columns queued over it by ScaleLine.
++//
++
++extern byte vgaCeiling[];
++
++static byte viewstrip[VIEWSTRIP * TOPSCREENHEIGHT] __attribute__((section(".sbss"), aligned(32)));
++static byte *postsources[TOPSCREENWIDTH];
++boolean viewdrawn;
++
+ void ScalePost (void)
+ {
+-    int ywcount, yoffs, yw, yd, yendoffs;
+-    byte col;
+-
+ #ifdef USE_SKYWALLPARALLAX
+     if (tilehit == 16)
+     {
+@@ -309,59 +321,82 @@ void ScalePost (void)
+     }
+ #endif
+ 
+-#ifdef USE_SHADING
+-    byte *curshades = shadetable[GetShade(wallheight[postx])];
+-#endif
+-
+-    ywcount = yd = wallheight[postx] >> 3;
+-    if(yd <= 0) yd = 100;
++    postsources[postx] = postsource;
++}
+ 
+-    yoffs = (centery - ywcount) * bufferPitch;
+-    if(yoffs < 0) yoffs = 0;
+-    yoffs += postx;
++// Draws the wall post of column x into its column of the strip, from row
++// y1 for n rows
++static void DrawPost (byte *post, int x, int y1, int n)
++{
++    // The texture steps in 16.16 fixed point, from the top of the wall
++    const byte *src = postsources[x];
++    int height = wallheight[x] >> 3;            // half the height in pixels
++    fixed step = div32((TEXTURESIZE/2) << FRACBITS, height);
++    fixed frac = (y1 - (centery - height)) * step;
++
++    post += y1 * VIEWSTRIP;
++    // Four pixels per loop, a branch costs the ARM9 three cycles, the loads
++    // go first so none waits for the one before
++    for (; n >= 4; n -= 4, post += 4 * VIEWSTRIP)
++    {
++        byte a = src[frac >> FRACBITS];
++        byte b = src[(frac + step) >> FRACBITS];
++        byte c = src[(frac + 2 * step) >> FRACBITS];
++        byte d = src[(frac + 3 * step) >> FRACBITS];
++        frac += 4 * step;
++        post[0] = a;
++        post[VIEWSTRIP] = b;
++        post[2 * VIEWSTRIP] = c;
++        post[3 * VIEWSTRIP] = d;
++    }
++    for (; n > 0; n--, post += VIEWSTRIP, frac += step)
++        *post = src[frac >> FRACBITS];
++}
+ 
+-    yendoffs = centery + ywcount - 1;
+-    yw=TEXTURESIZE-1;
++// Puts the view together a strip at a time, into the frame at vbuf
++static void DrawView (void)
++{
++    byte ceiling = vgaCeiling[gamestate.episode*10+gamestate.mapon];
++    int pitch = bufferPitch, height = viewheight;
++    int x, i, y;
+ 
+-    while(yendoffs >= viewheight)
++    for (x = 0; x < viewwidth; x += VIEWSTRIP)
+     {
+-        ywcount -= TEXTURESIZE/2;
+-        while(ywcount <= 0)
++        const uint32_t *src = (const uint32_t *) viewstrip;
++        byte *dest = vbuf + x;
++        int y1[VIEWSTRIP], y2[VIEWSTRIP];
++        int top = 0, bottom = height;
++
++        // The rows of the posts, the ceiling above the lowest top and the
++        // floor below the highest bottom, the rows between are wall in
++        // every column
++        for (i = 0; i < VIEWSTRIP; i++)
+         {
+-            ywcount += yd;
+-            yw--;
++            int h = wallheight[x + i] >> 3;
++            y1[i] = h > 0 ? MAX(centery - h, 0) : centery;
++            y2[i] = h > 0 ? MIN(centery + h, height) : centery;
++            top = MAX(top, y1[i]);
++            bottom = MIN(bottom, y2[i]);
+         }
+-        yendoffs--;
+-    }
+-    if(yw < 0) return;
+-
+-#ifdef USE_SHADING
+-    col = curshades[postsource[yw]];
+-#else
+-    col = postsource[yw];
+-#endif
+-    yendoffs = yendoffs * bufferPitch + postx;
+-    while(yoffs <= yendoffs)
+-    {
+-        vbuf[yendoffs] = col;
+-        ywcount -= TEXTURESIZE/2;
+-        if(ywcount <= 0)
++        memset(viewstrip, ceiling, top * VIEWSTRIP);
++        memset(viewstrip + bottom * VIEWSTRIP, 0x19, (height - bottom) * VIEWSTRIP);
++        for (i = 0; i < VIEWSTRIP; i++)
+         {
+-            do
+-            {
+-                ywcount += yd;
+-                yw--;
+-            }
+-            while(ywcount <= 0);
+-            if(yw < 0) break;
+-#ifdef USE_SHADING
+-            col = curshades[postsource[yw]];
+-#else
+-            col = postsource[yw];
+-#endif
++            if (y2[i] > y1[i])
++                DrawPost (viewstrip + i, x + i, y1[i], y2[i] - y1[i]);
++            DrawSpriteColumns (viewstrip + i, x + i);
++        }
++        // A row of the strip is four words, written as one burst
++        for (y = 0; y < height; y++, dest += pitch, src += 4)
++        {
++            uint32_t a = src[0], b = src[1], c = src[2], d = src[3];
++            ((uint32_t *) dest)[0] = a;
++            ((uint32_t *) dest)[1] = b;
++            ((uint32_t *) dest)[2] = c;
++            ((uint32_t *) dest)[3] = d;
+         }
+-        yendoffs -= bufferPitch;
+     }
++    viewdrawn = true;
+ }
+ 
+ #ifdef USE_SKYWALLPARALLAX
+@@ -1487,7 +1522,6 @@ void ThreeDRefresh (void)
+ //
+ // follow the walls from there to the right, drawing as we go
+ //
+-    VGAClearScreen ();
+ #if defined(USE_FEATUREFLAGS) && defined(USE_STARSKY)
+     if(GetFeatureFlags() & FF_STARSKY)
+         DrawStarSky();
+@@ -1527,6 +1561,8 @@ void ThreeDRefresh (void)
+ 
+     DrawPlayerWeapon ();    // draw player's hands
+ 
++    DrawView ();
++
+     if(Keyboard[sc_Tab] && viewsize == 21 && gamestate.weapon != -1)
+         ShowActStatus();
+ 
+diff --git a/wl_scale.c b/wl_scale.c
+index 02dad7d..d842579 100644
+--- a/wl_scale.c
++++ b/wl_scale.c
+@@ -19,9 +19,10 @@
+ /*
+ ===================
+ =
+-= ScaleLine
++= DrawSpriteLine
+ =
+-= Reconstruct a sprite and draw it
++= Reconstruct a sprite column and draw it into a column of a strip of the
++= view
+ =
+ = each vertical line of the shape has a pointer to segment data:
+ = 	end of segment pixel*2 (0 terminates line)
+@@ -32,7 +33,7 @@
+ ===================
+ */
+ 
+-void ScaleLine (int16_t x, int16_t toppix, fixed fracstep, byte *linesrc, byte *linecmds, byte *curshades)
++static void DrawSpriteLine (byte *post, int16_t toppix, fixed fracstep, byte *linesrc, byte *linecmds, byte *curshades)
+ {
+     byte    *src,*dest;
+     byte    col;
+@@ -75,12 +76,12 @@ void ScaleLine (int16_t x, int16_t toppix, fixed fracstep, byte *linesrc, byte *
+ #endif
+                 col = *src;
+ 
+-            dest = vbuf + ylookup[startpix] + x;
++            dest = post + startpix * VIEWSTRIP;
+ 
+             while (startpix < endpix)
+             {
+                 *dest = col;
+-                dest += bufferPitch;
++                dest += VIEWSTRIP;
+                 startpix++;
+             }
+         }
+@@ -90,6 +91,74 @@ void ScaleLine (int16_t x, int16_t toppix, fixed fracstep, byte *linesrc, byte *
+ }
+ 
+ 
++/*
++===================
++=
++= ScaleLine
++=
++= Queues a sprite column over column x of the view, DrawSpriteColumns draws
++= them once the view is put together
++=
++===================
++*/
++
++typedef struct
++{
++    byte    *linesrc;
++    byte    *curshades;
++    fixed   fracstep;
++    word    cmdofs;                             // of the segment data in linesrc
++    int16_t toppix;
++    word    next;                               // the next one over the column, 0 ends
++} spriteline_t;
++
++#define MAXSPRITELINES 4096
++
++static spriteline_t spritelines[MAXSPRITELINES];
++static int numspritelines;
++// The first and last sprite column over each column of the view, 0 for none
++static word firstline[TOPSCREENWIDTH], lastline[TOPSCREENWIDTH];
++
++void ScaleLine (int16_t x, int16_t toppix, fixed fracstep, byte *linesrc, byte *linecmds, byte *curshades)
++{
++    spriteline_t *line;
++
++    if (numspritelines == MAXSPRITELINES)
++        return;                                 // too many sprites over each other
++
++    line = &spritelines[numspritelines++];
++    line->linesrc = linesrc;
++    line->curshades = curshades;
++    line->fracstep = fracstep;
++    line->cmdofs = linecmds - linesrc;
++    line->toppix = toppix;
++    line->next = 0;
++
++    if (firstline[x])
++        spritelines[lastline[x] - 1].next = numspritelines;
++    else
++        firstline[x] = numspritelines;
++    lastline[x] = numspritelines;
++}
++
++void DrawSpriteColumns (byte *post, int x)
++{
++    const spriteline_t *line;
++    word i;
++
++    for (i = firstline[x]; i; i = line->next)
++    {
++        line = &spritelines[i - 1];
++        DrawSpriteLine (post, line->toppix, line->fracstep, line->linesrc, line->linesrc + line->cmdofs, line->curshades);
++    }
++
++    // The queue is empty once the last column is drawn
++    firstline[x] = 0;
++    if (x == viewwidth - 1)
++        numspritelines = 0;
++}
++
++
+ /*
+ ===================
+ =

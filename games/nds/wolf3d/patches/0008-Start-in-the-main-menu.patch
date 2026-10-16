@@ -1,0 +1,105 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Sun, 4 Oct 2026 12:18:33 +0200
+Subject: [PATCH] Start in the main menu
+
+The game starts with the title and its music until a button is pressed,
+then the main menu, without the signon screen with its memory and sound
+card checks, its "Press a key" and the PG13 screen, and goes back to the
+menu after a game. Back to Demo shows the title, the
+credits, the high scores and the demos like before. The registered
+version no longer shows its order screen. No empty frame is shown while
+the game loads, so the platform can show a picture meanwhile.
+---
+ wl_main.c | 31 ++++++++++++++-----------------
+ 1 file changed, 14 insertions(+), 17 deletions(-)
+
+diff --git a/wl_main.c b/wl_main.c
+index 1b69819..7dba608 100644
+--- a/wl_main.c
++++ b/wl_main.c
+@@ -841,8 +841,6 @@ void SetupWalls (void)
+ void SignonScreen (void)                        // VGA version
+ {
+     VL_SetVGAPlaneMode ();
+-
+-    VL_MemToScreen (signon,320,200,0,0);
+ }
+ 
+ 
+@@ -1229,8 +1227,6 @@ static void InitGame()
+ 
+     SignonScreen ();
+ 
+-	VW_UpdateScreen();
+-
+     VH_Startup ();
+     IN_Startup ();
+     PM_Startup ();
+@@ -1301,10 +1297,6 @@ static void InitGame()
+ // initialize variables
+ //
+     InitRedShifts ();
+-#ifndef SPEARDEMO
+-    if(!didjukebox)
+-#endif
+-        FinishSignon();
+ 
+ #ifdef NOTYET
+     vdisp = (byte *) (0xa0000+PAGE1START);
+@@ -1478,8 +1470,6 @@ static void DemoLoop()
+         #ifndef GOODTIMES
+         #ifndef SPEAR
+         #ifndef JAPAN
+-        if (!param_nowait)
+-            NonShareware();
+         #endif
+         #else
+             #ifndef GOODTIMES
+@@ -1493,18 +1483,22 @@ static void DemoLoop()
+         #endif
+     #endif
+ 
+-    StartCPMusic(INTROSONG);
+-
+-#ifndef JAPAN
+-    if (!param_nowait)
+-        PG13 ();
+ #endif
+ 
+-#endif
++    // The title, which shows while the game loads, stays with its music
++    // until a button is pressed
++    StartCPMusic (INTROSONG);
++    VWB_DrawPic (0, 0, TITLEPIC);
++    VW_UpdateScreen ();
++    IN_Ack ();
++
++    // Then the main menu, Back to Demo shows the title, the credits, the
++    // high scores and the demos
++    boolean menufirst = true;
+ 
+     while (1)
+     {
+-        while (!param_nowait)
++        while (!param_nowait && !menufirst)
+         {
+ //
+ // title page
+@@ -1564,6 +1558,7 @@ static void DemoLoop()
+                 VL_ClearScreen(0);
+             StartCPMusic(INTROSONG);
+         }
++        menufirst = false;
+ 
+         VW_FadeOut ();
+ 
+@@ -1579,6 +1574,8 @@ static void DemoLoop()
+         if (startgame || loadedgame)
+         {
+             GameLoop ();
++            // and the menu after a game too
++            menufirst = true;
+             if(!param_nowait)
+             {
+                 VW_FadeOut();

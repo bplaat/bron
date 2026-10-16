@@ -1,0 +1,31 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Sat, 3 Oct 2026 11:04:40 +0200
+Subject: [PATCH] Start sound and music at full volume
+
+The DS speakers are small. The sliders set the balance, the hardware
+volume control the loudness.
+---
+ doomgeneric/s_sound.c | 5 +++--
+ 1 file changed, 3 insertions(+), 2 deletions(-)
+
+diff --git a/doomgeneric/s_sound.c b/doomgeneric/s_sound.c
+index f6d8be1..cbd05b1 100644
+--- a/doomgeneric/s_sound.c
++++ b/doomgeneric/s_sound.c
+@@ -82,12 +82,13 @@ static channel_t *channels;
+ 
+ // Maximum volume of a sound effect.
+ // Internal default is max out of 0-15.
++// The DS speakers are small, start at full volume.
+ 
+-int sfxVolume = 8;
++int sfxVolume = 15;
+ 
+ // Maximum volume of music. 
+ 
+-int musicVolume = 8;
++int musicVolume = 15;
+ 
+ // Internal volume level, ranging from 0-127
+ 

@@ -1,0 +1,31 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Sun, 4 Oct 2026 12:18:33 +0200
+Subject: [PATCH] Answer prompts with the A and B buttons
+
+Prompts name the A and B buttons, which answer them as joystick buttons
+0 and 1, instead of the Y and N keys.
+---
+ wl_def.h | 9 +++------
+ 1 file changed, 3 insertions(+), 6 deletions(-)
+
+diff --git a/wl_def.h b/wl_def.h
+index 9197234..b5c4b98 100644
+--- a/wl_def.h
++++ b/wl_def.h
+@@ -38,12 +38,9 @@
+ #define NOBUTTONNAME  "B"
+ #define DEFAULT_AUDIO_BUFFER_SIZE    128
+ #else
+-#ifdef SPANISH
+-#define YESBUTTONNAME "S"
+-#else
+-#define YESBUTTONNAME "Y"
+-#endif
+-#define NOBUTTONNAME  "N"
++// The DS buttons, which answer prompts as joystick buttons 0 and 1
++#define YESBUTTONNAME "A"
++#define NOBUTTONNAME  "B"
+ #define DEFAULT_AUDIO_BUFFER_SIZE    2048
+ #endif
+ 

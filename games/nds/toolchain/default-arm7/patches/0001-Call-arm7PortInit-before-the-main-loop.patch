@@ -1,0 +1,36 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Sun, 11 Oct 2026 15:59:17 +0200
+Subject: [PATCH] Call arm7PortInit before the main loop
+
+A program that links its own ARM7 code with the default ARM7 program
+starts its services in arm7PortInit, which does nothing by default.
+---
+ arm7_main.c | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/arm7_main.c b/arm7_main.c
+index 9955acb..4fc5452 100644
+--- a/arm7_main.c
++++ b/arm7_main.c
+@@ -6,6 +6,11 @@
+ #include <maxmod7.h>
+ #endif
+ 
++// A program's own ARM7 code starts its services here, before the main loop
++MK_WEAK void arm7PortInit(void)
++{
++}
++
+ int main(int argc, char* argv[])
+ {
+ 	// Read settings from NVRAM
+@@ -58,6 +63,8 @@ int main(int argc, char* argv[])
+ 	mmInstall(MAIN_THREAD_PRIO+1);
+ #endif
+ 
++	arm7PortInit();
++
+ 	// Main loop (mostly idle)
+ 	while (pmMainLoop()) {
+ 		threadWaitForVBlank();

@@ -1,0 +1,512 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Sun, 4 Oct 2026 12:18:33 +0200
+Subject: [PATCH] Trim the menus for a handheld console
+
+No Read This!, which explains the keyboard, no Change View, the view
+always fills the top screen, and no Control: the buttons are the
+joystick, without mouse or keyboard, and customizing them captured the
+B button that leaves the screen. Sound moves down above Quit, like the
+options in other games. The DS always plays the AdLib and digitized
+sounds, so its sound effects, digitized sounds and music are just
+Disabled or Enabled, older configs with the PC speaker or Sound Source
+get Enabled. The settings are kept in the config as soon as it is left,
+a handheld is often just switched off. In a game the menu
+has no Quit, End Game leaves it. New Game is the first item selected,
+ReadConfig no longer reactivates the item that was Read This! by its
+index. Back (B or START) leaves the main menu like Back to Game/Demo
+instead of asking to quit, Quit still asks.
+
+The episodes the shareware lacks say where the data of the full game
+goes instead of pointing to Read This!.
+---
+ foreign.h |   2 +
+ wl_main.c |   8 +-
+ wl_menu.c | 235 +++++++++++++++---------------------------------------
+ wl_menu.h |  17 +---
+ 4 files changed, 77 insertions(+), 185 deletions(-)
+
+diff --git a/foreign.h b/foreign.h
+index 0ea51fe..3cd1bea 100644
+--- a/foreign.h
++++ b/foreign.h
+@@ -42,6 +42,8 @@
+ #define STR_ESCEXIT	"ESC to exit"
+ 
+ #define STR_NONE	"None"
++#define STR_DISABLED	"Disabled"
++#define STR_ENABLED	"Enabled"
+ #define	STR_PC		"PC Speaker"
+ #define	STR_ALSB	"AdLib/Sound Blaster"
+ #define	STR_DISNEY	"Disney Sound Source"
+diff --git a/wl_main.c b/wl_main.c
+index e88c4e2..1b69819 100644
+--- a/wl_main.c
++++ b/wl_main.c
+@@ -174,6 +174,13 @@ void ReadConfig(void)
+ 
+         fclose (file);
+ 
++        // Every sound is just disabled or enabled, older configs could pick
++        // the PC speaker or the Sound Source
++        if (sd != sdm_Off)
++            sd = sdm_AdLib;
++        if (sds != sds_Off)
++            sds = sds_SoundBlaster;
++
+         if ((sd == sdm_AdLib || sm == smm_AdLib) && !AdLibPresent
+                 && !SoundBlasterPresent)
+         {
+@@ -200,7 +207,6 @@ void ReadConfig(void)
+         if(viewsize<4) viewsize=4;
+         else if(viewsize>21) viewsize=21;
+ 
+-        MainMenu[6].active=1;
+         MainItems.curpos=0;
+     }
+     else
+diff --git a/wl_menu.c b/wl_menu.c
+index 0cce49e..d67ff9d 100644
+--- a/wl_menu.c
++++ b/wl_menu.c
+@@ -30,7 +30,7 @@ void SetTextColor (CP_itemtype *items, int hlight);
+ #define STARTITEM       newgame
+ 
+ #else
+-#define STARTITEM       readthis
++#define STARTITEM       newgame
+ #endif
+ #endif
+ 
+@@ -50,70 +50,62 @@ char endStrings[9][80] = {
+ CP_itemtype MainMenu[] = {
+ #ifdef JAPAN
+     {1, "", CP_NewGame},
+-    {1, "", CP_Sound},
+-    {1, "", CP_Control},
+     {1, "", CP_LoadGame},
+     {0, "", CP_SaveGame},
+-    {1, "", CP_ChangeView},
+-    {2, "", CP_ReadThis},
+     {1, "", CP_ViewScores},
+     {1, "", 0},
++    {1, "", CP_Sound},
+     {1, "", 0}
+ #else
+ 
+     {1, STR_NG, CP_NewGame},
+-    {1, STR_SD, CP_Sound},
+-    {1, STR_CL, CP_Control},
+     {1, STR_LG, CP_LoadGame},
+     {0, STR_SG, CP_SaveGame},
+-    {1, STR_CV, CP_ChangeView},
+-
+-#ifndef GOODTIMES
+-#ifndef SPEAR
+-
+-#ifdef SPANISH
+-    {2, "Ve esto!", CP_ReadThis},
+-#else
+-    {2, "Read This!", CP_ReadThis},
+-#endif
+-
+-#endif
+-#endif
+-
+     {1, STR_VS, CP_ViewScores},
+     {1, STR_BD, 0},
++    {1, STR_SD, CP_Sound},
+     {1, STR_QT, 0}
+ #endif
+ };
+ 
++// In a game the menu starts with Back to Game and ends with End Game, the
++// other items in between in their order, without Quit
++static CP_itemtype GameMenu[lengthof(MainMenu) - 1];
++static int gamemenuitem[lengthof(MainMenu) - 1];
++
++// The items the main menu shows, in a game GameMenu with the items of
++// MainMenu as they are now
++static CP_itemtype *MainMenuItems (void)
++{
++    int i, n = 0;
++
++    if (!ingame)
++        return MainMenu;
++    gamemenuitem[n++] = backtodemo;
++    for (i = 0; i < quit; i++)
++        if (i != backtodemo && i != viewscores)
++            gamemenuitem[n++] = i;
++    gamemenuitem[n++] = viewscores;
++    for (i = 0; i < n; i++)
++        GameMenu[i] = MainMenu[gamemenuitem[i]];
++    return GameMenu;
++}
++
++// Every sound is just disabled or enabled, the DS always plays the AdLib
++// and digitized sounds
+ CP_itemtype SndMenu[] = {
+-#ifdef JAPAN
+-    {1, "", 0},
+-    {1, "", 0},
+-    {1, "", 0},
++    {1, STR_DISABLED, 0},
++    {1, STR_ENABLED, 0},
+     {0, "", 0},
+     {0, "", 0},
+-    {1, "", 0},
+-    {1, "", 0},
+-    {1, "", 0},
+     {0, "", 0},
++    {1, STR_DISABLED, 0},
++    {1, STR_ENABLED, 0},
+     {0, "", 0},
+-    {1, "", 0},
+-    {1, "", 0},
+-#else
+-    {1, STR_NONE, 0},
+-    {1, STR_PC, 0},
+-    {1, STR_ALSB, 0},
+     {0, "", 0},
+     {0, "", 0},
+-    {1, STR_NONE, 0},
+-    {0, STR_DISNEY, 0},
+-    {1, STR_SB, 0},
+-    {0, "", 0},
+-    {0, "", 0},
+-    {1, STR_NONE, 0},
+-    {1, STR_ALSB, 0}
+-#endif
++    {1, STR_DISABLED, 0},
++    {1, STR_ENABLED, 0}
+ };
+ 
+ #ifdef JAPAN
+@@ -421,7 +413,9 @@ US_ControlPanel (ScanCode scancode)
+     //
+     do
+     {
+-        which = HandleMenu (&MainItems, &MainMenu[0], NULL);
++        which = HandleMenu (&MainItems, ingame ? GameMenu : MainMenu, NULL);
++        if (ingame && which >= 0)
++            which = gamemenuitem[which];
+ 
+ #ifdef SPEAR
+ #ifndef SPEARDEMO
+@@ -475,6 +469,8 @@ US_ControlPanel (ScanCode scancode)
+                 }
+                 break;
+ 
++            // Back leaves the menu like Back to Game/Demo
++            case -1:
+             case backtodemo:
+                 StartGame = 1;
+                 if (!ingame)
+@@ -482,7 +478,6 @@ US_ControlPanel (ScanCode scancode)
+                 VL_FadeOut (0, 255, 0, 0, 0, 10);
+                 break;
+ 
+-            case -1:
+             case quit:
+                 CP_Quit (0);
+                 break;
+@@ -540,9 +535,11 @@ DrawMainMenu (void)
+ #ifdef SPANISH
+     DrawWindow (MENU_X - 8, MENU_Y - 3, MENU_W + 8, MENU_H, BKGDCOLOR);
+ #else
+-    DrawWindow (MENU_X - 8, MENU_Y - 3, MENU_W, MENU_H, BKGDCOLOR);
++    // Without Quit in a game, End Game leaves it
++    DrawWindow (MENU_X - 8, MENU_Y - 3, MENU_W, MENU_H - (ingame ? 13 : 0), BKGDCOLOR);
+ #endif
+ #endif
++    MainItems.amount = lengthof(MainMenu) - (ingame ? 1 : 0);
+ 
+     //
+     // CHANGE "GAME" AND "DEMO"
+@@ -568,7 +565,7 @@ DrawMainMenu (void)
+         MainMenu[backtodemo].active = 1;
+     }
+ 
+-    DrawMenu (&MainItems, &MainMenu[0]);
++    DrawMenu (&MainItems, MainMenuItems ());
+     VW_UpdateScreen ();
+ }
+ 
+@@ -884,9 +881,9 @@ CP_NewGame (int blank)
+                 if (!EpisodeSelect[which / 2])
+                 {
+                     SD_PlaySound (NOWAYSND);
+-                    Message ("Please select \"Read This!\"\n"
+-                             "from the Options menu to\n"
+-                             "find out how to order this\n" "episode from Apogee.");
++                    Message ("This episode is in the full\n"
++                             "game. Copy its data files\n"
++                             "to /data/wolf3d/ on the\n" "SD card to play it.");
+                     IN_ClearKeysDown ();
+                     IN_Ack ();
+                     DrawNewEpisode ();
+@@ -955,15 +952,6 @@ CP_NewGame (int blank)
+     StartGame = 1;
+     MenuFadeOut ();
+ 
+-    //
+-    // CHANGE "READ THIS!" TO NORMAL COLOR
+-    //
+-#ifndef SPEAR
+-#ifndef GOODTIMES
+-    MainMenu[readthis].active = 1;
+-#endif
+-#endif
+-
+     pickquick = 0;
+ 
+     return 0;
+@@ -1075,14 +1063,8 @@ CP_Sound (int blank)
+     do
+     {
+         which = HandleMenu (&SndItems, &SndMenu[0], NULL);
+-        //
+-        // HANDLE MENU CHOICES
+-        //
+         switch (which)
+         {
+-                //
+-                // SOUND EFFECTS
+-                //
+             case 0:
+                 if (SoundMode != sdm_Off)
+                 {
+@@ -1092,16 +1074,6 @@ CP_Sound (int blank)
+                 }
+                 break;
+             case 1:
+-                if (SoundMode != sdm_PC)
+-                {
+-                    SD_WaitSoundDone ();
+-                    SD_SetSoundMode (sdm_PC);
+-                    CA_LoadAllSounds ();
+-                    DrawSoundMenu ();
+-                    ShootSnd ();
+-                }
+-                break;
+-            case 2:
+                 if (SoundMode != sdm_AdLib)
+                 {
+                     SD_WaitSoundDone ();
+@@ -1112,9 +1084,6 @@ CP_Sound (int blank)
+                 }
+                 break;
+ 
+-                //
+-                // DIGITIZED SOUND
+-                //
+             case 5:
+                 if (DigiMode != sds_Off)
+                 {
+@@ -1123,14 +1092,6 @@ CP_Sound (int blank)
+                 }
+                 break;
+             case 6:
+-/*                if (DigiMode != sds_SoundSource)
+-                {
+-                    SD_SetDigiDevice (sds_SoundSource);
+-                    DrawSoundMenu ();
+-                    ShootSnd ();
+-                }*/
+-                break;
+-            case 7:
+                 if (DigiMode != sds_SoundBlaster)
+                 {
+                     SD_SetDigiDevice (sds_SoundBlaster);
+@@ -1139,9 +1100,6 @@ CP_Sound (int blank)
+                 }
+                 break;
+ 
+-                //
+-                // MUSIC
+-                //
+             case 10:
+                 if (MusicMode != smm_Off)
+                 {
+@@ -1160,9 +1118,13 @@ CP_Sound (int blank)
+                 }
+                 break;
+         }
++        // HandleMenu sees a held button as pressed again
++        WaitKeyUp ();
+     }
+     while (which >= 0);
+ 
++    // The settings are kept right away, a handheld is often just switched off
++    WriteConfig ();
+     MenuFadeOut ();
+ 
+     return 0;
+@@ -1193,20 +1155,6 @@ DrawSoundMenu (void)
+     DrawWindow (SM_X - 8, SM_Y3 - 3, SM_W, SM_H3, BKGDCOLOR);
+ #endif
+ 
+-    //
+-    // IF NO ADLIB, NON-CHOOSENESS!
+-    //
+-    if (!AdLibPresent && !SoundBlasterPresent)
+-    {
+-        SndMenu[2].active = SndMenu[10].active = SndMenu[11].active = 0;
+-    }
+-
+-    if (!SoundBlasterPresent)
+-        SndMenu[7].active = 0;
+-
+-    if (!SoundBlasterPresent)
+-        SndMenu[5].active = 0;
+-
+     DrawMenu (&SndItems, &SndMenu[0]);
+ #ifndef JAPAN
+     VWB_DrawPic (100, SM_Y1 - 20, C_FXTITLEPIC);
+@@ -1214,69 +1162,23 @@ DrawSoundMenu (void)
+     VWB_DrawPic (100, SM_Y3 - 20, C_MUSICTITLEPIC);
+ #endif
+ 
++    //
++    // DRAW SELECTED/NOT SELECTED GRAPHIC BUTTONS
++    //
+     for (i = 0; i < SndItems.amount; i++)
+-#ifdef JAPAN
+-        if (i != 3 && i != 4 && i != 8 && i != 9)
+-#else
+-        if (SndMenu[i].string[0])
+-#endif
++    {
++        switch (i)
+         {
+-            //
+-            // DRAW SELECTED/NOT SELECTED GRAPHIC BUTTONS
+-            //
+-            on = 0;
+-            switch (i)
+-            {
+-                    //
+-                    // SOUND EFFECTS
+-                    //
+-                case 0:
+-                    if (SoundMode == sdm_Off)
+-                        on = 1;
+-                    break;
+-                case 1:
+-                    if (SoundMode == sdm_PC)
+-                        on = 1;
+-                    break;
+-                case 2:
+-                    if (SoundMode == sdm_AdLib)
+-                        on = 1;
+-                    break;
+-
+-                    //
+-                    // DIGITIZED SOUND
+-                    //
+-                case 5:
+-                    if (DigiMode == sds_Off)
+-                        on = 1;
+-                    break;
+-                case 6:
+-//                    if (DigiMode == sds_SoundSource)
+-//                        on = 1;
+-                    break;
+-                case 7:
+-                    if (DigiMode == sds_SoundBlaster)
+-                        on = 1;
+-                    break;
+-
+-                    //
+-                    // MUSIC
+-                    //
+-                case 10:
+-                    if (MusicMode == smm_Off)
+-                        on = 1;
+-                    break;
+-                case 11:
+-                    if (MusicMode == smm_AdLib)
+-                        on = 1;
+-                    break;
+-            }
+-
+-            if (on)
+-                VWB_DrawPic (SM_X + 24, SM_Y1 + i * 13 + 2, C_SELECTEDPIC);
+-            else
+-                VWB_DrawPic (SM_X + 24, SM_Y1 + i * 13 + 2, C_NOTSELECTEDPIC);
++            case 0: on = SoundMode == sdm_Off; break;
++            case 1: on = SoundMode == sdm_AdLib; break;
++            case 5: on = DigiMode == sds_Off; break;
++            case 6: on = DigiMode == sds_SoundBlaster; break;
++            case 10: on = MusicMode == smm_Off; break;
++            case 11: on = MusicMode == smm_AdLib; break;
++            default: continue;
+         }
++        VWB_DrawPic (SM_X + 24, SM_Y1 + i * 13 + 2, on ? C_SELECTEDPIC : C_NOTSELECTEDPIC);
++    }
+ 
+     DrawMenuGun (&SndItems);
+     VW_UpdateScreen ();
+@@ -1397,15 +1299,6 @@ CP_LoadGame (int quick)
+ 
+             StartGame = 1;
+             ShootSnd ();
+-            //
+-            // CHANGE "READ THIS!" TO NORMAL COLOR
+-            //
+-
+-#ifndef SPEAR
+-#ifndef GOODTIMES
+-            MainMenu[readthis].active = 1;
+-#endif
+-#endif
+ 
+             exit = 1;
+             break;
+diff --git a/wl_menu.h b/wl_menu.h
+index 7d6fdd0..5884f9b 100644
+--- a/wl_menu.h
++++ b/wl_menu.h
+@@ -51,7 +51,7 @@
+ #define MENU_W  178
+ #ifndef SPEAR
+ #ifndef GOODTIMES
+-#define MENU_H  13*10+6
++#define MENU_H  13*7+6
+ #else
+ #define MENU_H  13*9+6
+ #endif
+@@ -63,9 +63,9 @@
+ #define SM_W    250
+ 
+ #define SM_Y1   20
+-#define SM_H1   4*13-7
++#define SM_H1   3*13-7
+ #define SM_Y2   SM_Y1+5*13
+-#define SM_H2   4*13-7
++#define SM_H2   3*13-7
+ #define SM_Y3   SM_Y2+5*13
+ #define SM_H3   3*13-7
+ 
+@@ -209,20 +209,11 @@ enum {MOUSE,JOYSTICK,KEYBOARDBTNS,KEYBOARDMOVE};        // FOR INPUT TYPES
+ enum menuitems
+ {
+         newgame,
+-        soundmenu,
+-        control,
+         loadgame,
+         savegame,
+-        changeview,
+-
+-#ifndef GOODTIMES
+-#ifndef SPEAR
+-        readthis,
+-#endif
+-#endif
+-
+         viewscores,
+         backtodemo,
++        soundmenu,
+         quit
+ };
+ 

@@ -1,0 +1,1122 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Tue, 6 Oct 2026 07:10:01 +0200
+Subject: [PATCH] Add the DS touch screen
+
+sbar_nds.c draws the touch screen below the status bar with Quake's own
+graphics. In a level it shows the map in the middle, following you,
+with the level name, time and the keys, powerups and runes you carry,
+the kills and secrets as percentages, centered, and at the bottom a cell
+for each weapon, dark and without ammo until you have it, flashing when
+picked up, the one in hand in a yellow frame. A tap on a cell selects
+the weapon. When you are dead the map makes way for the kills, secrets
+and time in the big numbers of the intermission, and how to try again,
+instead of the scoreboard over the status bar, which shows no health below 0. The time stops when you die. While the menu is open the touch screen keeps showing the
+game, with the options and while no game runs behind the menu it shows
+the controls, in a dark inset in the middle of the console background.
+
+The pictures of the weapons are drawn from their models when the game
+starts: the ones you pick up, the axe and shotgun as you hold them, seen
+from the side, textured and lit, with Quake's colormap. Which pixels a
+triangle covers is worked out in integers.
+
+The map is made of the walls of the world, a line for each face seen
+from above (Sbar_BuildMap), a sloped one like a vault its bottom edge,
+drawn once the renderer drew the face, the walls at your height brighter. It turns with you, you look up. It runs
+from ITCM and is drawn every fourth frame while you move, the rest only
+when it changes.
+---
+ WinQuake/menu.c     |   6 +
+ WinQuake/menu.h     |   1 +
+ WinQuake/model.c    |   1 +
+ WinQuake/model.h    |   6 +
+ WinQuake/sbar.c     |  15 +-
+ WinQuake/sbar.h     |   8 +
+ WinQuake/sbar_nds.c | 938 ++++++++++++++++++++++++++++++++++++++++++++
+ WinQuake/screen.c   |   2 +
+ 8 files changed, 968 insertions(+), 9 deletions(-)
+ create mode 100644 WinQuake/sbar_nds.c
+
+diff --git a/WinQuake/menu.c b/WinQuake/menu.c
+index 3a3cdae..6a1027f 100644
+--- a/WinQuake/menu.c
++++ b/WinQuake/menu.c
+@@ -1221,6 +1221,12 @@ void M_Init (void)
+ }
+ 
+ 
++// The options are open, the touch screen shows the controls
++qboolean M_OptionsShown (void)
++{
++	return key_dest == key_menu && m_state == m_options;
++}
++
+ static inline qboolean M_OnPage (byte *row, int x, int y)
+ {
+ 	return row[x] != 255 && (x < cursor_x || x >= cursor_x + cursor_w
+diff --git a/WinQuake/menu.h b/WinQuake/menu.h
+index 804370e..0311dae 100644
+--- a/WinQuake/menu.h
++++ b/WinQuake/menu.h
+@@ -35,6 +35,7 @@ void M_Keydown (int key);
+ void M_Draw (void);
+ void M_CenterPage (void);
+ qboolean M_PageChanged (void);
++qboolean M_OptionsShown (void);
+ void M_ToggleMenu_f (void);
+ 
+ 
+diff --git a/WinQuake/model.c b/WinQuake/model.c
+index 14c3b21..10e7dc5 100644
+--- a/WinQuake/model.c
++++ b/WinQuake/model.c
+@@ -1270,6 +1270,7 @@ void Mod_LoadBrushModel (model_t *mod, void *buffer)
+ 	Mod_LoadFaces (&header->lumps[LUMP_FACES]);
+ 	// the 3D hardware has its own copy of the geometry
+ 	R_BuildSurfaces (loadmodel);
++	Sbar_BuildMap (loadmodel);
+ 	Hunk_FreeToHighMark (geometrymark);
+ 	loadmodel->vertexes = NULL;
+ 	loadmodel->edges = NULL;
+diff --git a/WinQuake/model.h b/WinQuake/model.h
+index 910c73c..be323f6 100644
+--- a/WinQuake/model.h
++++ b/WinQuake/model.h
+@@ -342,6 +342,9 @@ typedef struct model_s
+ 	mvertex_t	*vertexes;
+ 	unsigned	*gxvertexes;	// numvertexes packed XY, Z pairs
+ 	struct gxalias_s	*gxalias;	// alias skins in VRAM and more, R_NewMap sets it
++	struct mapline_s	*maplines;	// the walls on the map of the touch screen
++	int			nummaplines;
++	byte		*mapseen;		// numsurfaces, set when drawn
+ 
+ 	int			numedges;
+ 	medge_t		*edges;
+@@ -399,4 +402,7 @@ void	Mod_ReadLump (lump_t *l, int ofs, void *dest, int len);
+ void	R_LoadTextures (texture_t **textures, int numtextures, lump_t *l);
+ void	R_BuildSurfaces (model_t *mod);
+ 
++// sbar_nds.c, the map of the touch screen
++void	Sbar_BuildMap (model_t *mod);
++
+ #endif	// __MODEL__
+diff --git a/WinQuake/sbar.c b/WinQuake/sbar.c
+index e53d487..5da692e 100644
+--- a/WinQuake/sbar.c
++++ b/WinQuake/sbar.c
+@@ -245,6 +245,8 @@ void Sbar_Init (void)
+ 		rsb_ammo[1] = Draw_PicFromWad ("r_ammomulti");
+ 		rsb_ammo[2] = Draw_PicFromWad ("r_ammoplasma");
+ 	}
++
++	Sbar_InitTouchScreen ();
+ }
+ 
+ 
+@@ -945,13 +947,8 @@ void Sbar_Draw (void)
+ 			Sbar_DrawFrags ();
+ 	}
+ 
+-	if (sb_showscores || cl.stats[STAT_HEALTH] <= 0)
+-	{
+-		Sbar_DrawPic (0, 0, sb_scorebar);
+-		Sbar_DrawScoreboard ();
+-		sb_updates = 0;
+-	}
+-	else if (sb_lines)
++	// the scores are on the touch screen (sbar_nds.c), with the status bar
++	if (sb_lines)
+ 	{
+ 		Sbar_DrawPic (0, 0, sb_sbar);
+ 
+@@ -999,8 +996,8 @@ void Sbar_Draw (void)
+ 	// face
+ 		Sbar_DrawFace ();
+ 
+-	// health
+-		Sbar_DrawNum (136, 0, cl.stats[STAT_HEALTH], 3
++	// health, not below 0, the scoreboard used to cover it then
++		Sbar_DrawNum (136, 0, cl.stats[STAT_HEALTH] > 0 ? cl.stats[STAT_HEALTH] : 0, 3
+ 		, cl.stats[STAT_HEALTH] <= 25);
+ 
+ 	// ammo icon
+diff --git a/WinQuake/sbar.h b/WinQuake/sbar.h
+index 0d163c2..2268be3 100644
+--- a/WinQuake/sbar.h
++++ b/WinQuake/sbar.h
+@@ -38,3 +38,11 @@ void Sbar_IntermissionOverlay (void);
+ // called each frame after the level has been completed
+ 
+ void Sbar_FinaleOverlay (void);
++
++void Sbar_InitTouchScreen (void);
++void Sbar_DrawTouchScreen (void);
++void Sbar_IntermissionString (int x, int y, char *str);
++// the map, stats and weapons below the status bar
++
++int Sbar_TouchKey (int x, int y);
++// the key of the weapon at a 2D position, 0 for none
+diff --git a/WinQuake/sbar_nds.c b/WinQuake/sbar_nds.c
+new file mode 100644
+index 0000000..1bf43ff
+--- /dev/null
++++ b/WinQuake/sbar_nds.c
+@@ -0,0 +1,938 @@
++/*
++Copyright (C) 1996-1997 Id Software, Inc.
++
++This program is free software; you can redistribute it and/or
++modify it under the terms of the GNU General Public License
++as published by the Free Software Foundation; either version 2
++of the License, or (at your option) any later version.
++
++This program is distributed in the hope that it will be useful,
++but WITHOUT ANY WARRANTY; without even the implied warranty of
++MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
++
++See the GNU General Public License for more details.
++
++You should have received a copy of the GNU General Public License
++along with this program; if not, write to the Free Software
++Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
++
++*/
++// sbar_nds.c -- the touch screen below the status bar
++//
++// In a level the touch screen shows the status bar at the top, the map in
++// the middle, following you, with the level name, time, kills and secrets
++// and the keys, powerups and runes you carry, and at the bottom a cell for
++// each weapon with its ammo, dark until you have it. The weapons are drawn
++// from their models when the game starts. A tap on a cell selects the
++// weapon. With the options and while no game runs behind the menu it shows
++// the controls over the console background, with Quake's logo. Everything is
++// drawn into the 2D drawing of the touch screen with Quake's own graphics
++// and redrawn only where it changed.
++
++#include "quakedef.h"
++
++#define	min(a,b)		((a) < (b) ? (a) : (b))
++#define	max(a,b)		((a) > (b) ? (a) : (b))
++#define	bound(lo,x,hi)	max (lo, min (x, hi))
++
++// The panels below the status bar, in 2D coordinates (320x200)
++#define	PANEL_Y		SBAR_HEIGHT
++#define	TITLE_Y		(PANEL_Y + 2)
++#define	MAP_Y		PANEL_Y
++#define	MAP_HEIGHT	120
++#define	STATS_Y		(MAP_Y + MAP_HEIGHT - 10)
++#define	SCORES_Y	(MAP_Y + 16)
++#define	CELLS_Y		(MAP_Y + MAP_HEIGHT)
++#define	CELL_W		80
++#define	CELL_H		28
++#define	NUM_CELLS	8
++
++// The pictures of the weapons, made from their models
++#define	PIC_W		48
++#define	PIC_H		24
++#define	PIC_X		12		// in the cell, the ammo is on its right
++
++// The map: world units per 2D pixel vertically, the 2D pixels are 1.2 times
++// as tall as wide on the screen. The player is at the center, facing up.
++#define	MAP_SCALE		10
++#define	MAP_CX			(vid.width / 2)
++#define	MAP_CY			(MAP_Y + MAP_HEIGHT / 2 + 8)
++#define	MAP_RANGE		(MAP_SCALE * 140)	// a wall further away is off the map
++#define	MAP_EYE			46		// from the feet to the eye
++#define	MAP_BODY		56		// the player's height
++#define	MAP_LEVELS		96		// walls this far above or below are shown dimmer
++
++// Palette indices
++#define	COL_BLACK		0
++#define	COL_WALL		109		// gold
++#define	COL_WALL_DIM	102		// brown
++#define	COL_PLAYER		254		// white
++#define	COL_CELL		16		// near black brown
++#define	COL_LIGHT		12		// bevels of the cells
++#define	COL_DARK		3
++#define	COL_SELECTED	111		// yellow frame of the weapon in hand
++
++// A wall of the map, from the faces of the world that are walls
++typedef struct mapline_s
++{
++	short	x1, y1, x2, y2;
++	short	zmin, zmax;
++	unsigned short	surf;
++} mapline_t;
++
++// The weapon cells: the impulse key, the item, the ammo and the model, the
++// one you pick up, the axe and shotgun as you hold them, seen from the angle
++// that shows them best, without what is closer than near to the eye of a
++// model you hold, like the hand holding the axe
++typedef struct
++{
++	int			key;
++	int			item;
++	int			ammo;	// stat, -1 for the axe
++	const char	*model;
++	float		yaw;	// in degrees from its right side
++	float		near;
++} weaponcell_t;
++
++static const weaponcell_t	cells[NUM_CELLS] =
++{
++	{'1', IT_AXE, -1, "progs/v_axe.mdl", 160, 24},
++	{'2', IT_SHOTGUN, STAT_SHELLS, "progs/v_shot.mdl", 25, 0},
++	{'3', IT_SUPER_SHOTGUN, STAT_SHELLS, "progs/g_shot.mdl", 25, 0},
++	{'4', IT_NAILGUN, STAT_NAILS, "progs/g_nail.mdl", 25, 0},
++	{'5', IT_SUPER_NAILGUN, STAT_NAILS, "progs/g_nail2.mdl", 25, 0},
++	{'6', IT_GRENADE_LAUNCHER, STAT_ROCKETS, "progs/g_rock.mdl", 25, 0},
++	{'7', IT_ROCKET_LAUNCHER, STAT_ROCKETS, "progs/g_rock2.mdl", 25, 0},
++	{'8', IT_LIGHTNING, STAT_CELLS, "progs/g_light.mdl", 25, 0},
++};
++
++// A picture like a qpic_t, 255 is transparent
++typedef struct
++{
++	int		width, height;
++	byte	data[PIC_W * PIC_H];
++} weaponpic_t;
++
++static weaponpic_t	weaponpics[NUM_CELLS];
++
++extern float	r_avertexnormals[][3];		// r_nds.c
++
++extern qboolean	scr_drawloading;
++extern qpic_t	*sb_items[32];
++extern qpic_t	*sb_sigil[4];
++
++extern qboolean	scr_drawdialog;
++
++static qboolean	panelsshown, controlsshown;
++static byte			darktable[256], brighttable[256];	// the weapons you don't have, a new one
++static int			drawnstats[8], drawncells[NUM_CELLS][4];
++static int			mapframe;
++static float		mapangle;
++static vec3_t		maporigin;
++
++/*
++===============================================================================
++
++THE MAP
++
++===============================================================================
++*/
++
++/*
++================
++Sbar_BuildMap
++
++Makes a line of the map for each wall of a brush model, from the geometry
++that is only there while it loads: its extent along the wall seen from above
++and its height. Seen from above a sloped one, like the vaults of a ceiling,
++is its bottom edge, its corners would make a line across the room.
++================
++*/
++void Sbar_BuildMap (model_t *mod)
++{
++	msurface_t	*surf;
++	mapline_t	*line;
++	float		*v, *normal, t, tmin, tmax, bottom;
++	int			i, j, e, numlines;
++	float		*vmin, *vmax;
++
++	mod->maplines = NULL;
++	mod->nummaplines = 0;
++	mod->mapseen = Hunk_AllocName (mod->numsurfaces, "mapseen");
++	numlines = 0;
++	for (i = 0, surf = mod->surfaces; i < mod->numsurfaces; i++, surf++)
++		if (!(surf->flags & (SURF_DRAWSKY | SURF_DRAWTURB)) && fabs (surf->plane->normal[2]) < 0.7)
++			numlines++;
++	if (!numlines)
++		return;
++	mod->maplines = Hunk_AllocName (numlines * sizeof(mapline_t), "maplines");
++
++	line = mod->maplines;
++	for (i = 0, surf = mod->surfaces; i < mod->numsurfaces; i++, surf++)
++	{
++		if ((surf->flags & (SURF_DRAWSKY | SURF_DRAWTURB)) || fabs (surf->plane->normal[2]) >= 0.7)
++			continue;
++		normal = surf->plane->normal;
++		line->zmin = 32767;
++		line->zmax = -32768;
++		for (j = 0; j < surf->numedges; j++)
++		{
++			e = mod->surfedges[surf->firstedge + j];
++			v = mod->vertexes[e >= 0 ? mod->edges[e].v[0] : mod->edges[-e].v[1]].position;
++			if (v[2] < line->zmin)
++				line->zmin = v[2];
++			if (v[2] > line->zmax)
++				line->zmax = v[2];
++		}
++		bottom = fabs (normal[2]) < 0.01 ? 1e9 : line->zmin + 1;
++		tmin = 1e9;
++		tmax = -1e9;
++		vmin = vmax = NULL;
++		for (j = 0; j < surf->numedges; j++)
++		{
++			e = mod->surfedges[surf->firstedge + j];
++			v = mod->vertexes[e >= 0 ? mod->edges[e].v[0] : mod->edges[-e].v[1]].position;
++			if (v[2] > bottom)
++				continue;
++			// along the wall, seen from above
++			t = v[1] * normal[0] - v[0] * normal[1];
++			if (t < tmin)
++			{
++				tmin = t;
++				vmin = v;
++			}
++			if (t > tmax)
++			{
++				tmax = t;
++				vmax = v;
++			}
++		}
++		if (!vmin || tmax - tmin < 1)
++			continue;
++		line->x1 = vmin[0];
++		line->y1 = vmin[1];
++		line->x2 = vmax[0];
++		line->y2 = vmax[1];
++		line->surf = i;
++		line++;
++	}
++	mod->nummaplines = line - mod->maplines;
++}
++
++// Region codes for clipping lines to the map
++static inline int Sbar_MapOutcode (int x, int y)
++{
++	return (x < 0) | ((x >= (int) vid.width) << 1) | ((y < MAP_Y) << 2) | ((y >= MAP_Y + MAP_HEIGHT) << 3);
++}
++
++// Draws a line clipped to the map, in 2D coordinates
++HOT_CODE static void Sbar_MapLine (int x1, int y1, int x2, int y2, int color)
++{
++	int		c1, c2, c, x, y, dx, dy, sx, sy, err, e2;
++	byte	*dest;
++
++	c1 = Sbar_MapOutcode (x1, y1);
++	c2 = Sbar_MapOutcode (x2, y2);
++	while (c1 | c2)
++	{
++		if (c1 & c2)
++			return;
++		c = c1 ? c1 : c2;
++		if (c & 1)
++		{
++			y = y1 + (y2 - y1) * (0 - x1) / (x2 - x1);
++			x = 0;
++		}
++		else if (c & 2)
++		{
++			y = y1 + (y2 - y1) * ((int) vid.width - 1 - x1) / (x2 - x1);
++			x = vid.width - 1;
++		}
++		else if (c & 4)
++		{
++			x = x1 + (x2 - x1) * (MAP_Y - y1) / (y2 - y1);
++			y = MAP_Y;
++		}
++		else
++		{
++			x = x1 + (x2 - x1) * (MAP_Y + MAP_HEIGHT - 1 - y1) / (y2 - y1);
++			y = MAP_Y + MAP_HEIGHT - 1;
++		}
++		if (c == c1)
++		{
++			x1 = x;
++			y1 = y;
++			c1 = Sbar_MapOutcode (x1, y1);
++		}
++		else
++		{
++			x2 = x;
++			y2 = y;
++			c2 = Sbar_MapOutcode (x2, y2);
++		}
++	}
++
++	dx = abs (x2 - x1);
++	dy = -abs (y2 - y1);
++	sx = x1 < x2 ? 1 : -1;
++	sy = y1 < y2 ? 1 : -1;
++	err = dx + dy;
++	dest = vid.buffer + y1 * vid.rowbytes + x1;
++	for (;;)
++	{
++		*dest = color;
++		if (x1 == x2 && y1 == y2)
++			break;
++		e2 = 2 * err;
++		if (e2 >= dy)
++		{
++			err += dy;
++			x1 += sx;
++			dest += sx;
++		}
++		if (e2 <= dx)
++		{
++			err += dx;
++			y1 += sy;
++			dest += sy * vid.rowbytes;
++		}
++	}
++}
++
++/*
++================
++Sbar_DrawMap
++
++The walls you have seen around you, turned so you look up, the ones at your
++height brighter
++================
++*/
++HOT_CODE static void Sbar_DrawMap (void)
++{
++	model_t		*mod = cl.worldmodel;
++	mapline_t	*line, *end;
++	byte		*seen = mod->mapseen;
++	int			i, ox, oy, feet, c, s, cx, cy, color;
++	int			x1, y1, x2, y2, rx1, ry1, rx2, ry2;
++	float		angle;
++
++	Draw_Fill (0, MAP_Y, vid.width, MAP_HEIGHT, COL_BLACK);
++
++	ox = r_refdef.vieworg[0];
++	oy = r_refdef.vieworg[1];
++	feet = r_refdef.vieworg[2] - MAP_EYE;
++	angle = r_refdef.viewangles[YAW] * (M_PI / 180);
++	// 1/65536 of a 2D pixel per world unit, wider across
++	c = cos (angle) * 65536 / MAP_SCALE;
++	s = sin (angle) * 65536 / MAP_SCALE;
++	cx = MAP_CX;
++	cy = MAP_CY;
++
++	for (line = mod->maplines, end = line + mod->nummaplines; line < end; line++)
++	{
++		if (!seen[line->surf])
++			continue;
++		if (line->zmin >= feet + MAP_BODY + MAP_LEVELS || line->zmax <= feet - MAP_LEVELS)
++			continue;
++		x1 = line->x1 - ox;
++		y1 = line->y1 - oy;
++		x2 = line->x2 - ox;
++		y2 = line->y2 - oy;
++		if ((x1 < -MAP_RANGE && x2 < -MAP_RANGE) || (x1 > MAP_RANGE && x2 > MAP_RANGE)
++			|| (y1 < -MAP_RANGE && y2 < -MAP_RANGE) || (y1 > MAP_RANGE && y2 > MAP_RANGE))
++			continue;
++		// right is forward turned clockwise, the screen's y goes down
++		rx1 = (x1 * s - y1 * c) * 6 / 5 >> 16;
++		ry1 = (x1 * c + y1 * s) >> 16;
++		rx2 = (x2 * s - y2 * c) * 6 / 5 >> 16;
++		ry2 = (x2 * c + y2 * s) >> 16;
++		color = line->zmin < feet + MAP_BODY && line->zmax > feet ? COL_WALL : COL_WALL_DIM;
++		Sbar_MapLine (cx + rx1, cy - ry1, cx + rx2, cy - ry2, color);
++	}
++
++	// the player, an arrow pointing up
++	for (i = 0; i < 6; i++)
++		Draw_Fill (cx - i * 6 / 5, cy - 6 + i * 2, 1 + i * 12 / 5, 2, COL_PLAYER);
++}
++
++/*
++===============================================================================
++
++THE WEAPONS
++
++===============================================================================
++*/
++
++/*
++================
++Sbar_RenderWeapon
++
++Draws frame 0 of a weapon model into a picture, seen from its right side
++turned by the cell's yaw, textured with its first skin and lit from the
++front and above. The view models (the axe and shotgun) are turned around to
++point the same way and leave out what lies behind the eye, like the muzzle
++flash, or closer than the cell's near. The 2D pixels are 1.2 times as tall
++as wide on the screen.
++================
++*/
++static void Sbar_RenderWeapon (weaponpic_t *pic, const weaponcell_t *cell)
++{
++	const char	*name = cell->model;
++	float		yaw = cell->yaw * (M_PI / 180);
++	static const float	light[3] = {0.3, -0.7, 0.6};
++	float		zbuf[PIC_W * PIC_H], (*proj)[3], minx, maxx, miny, maxy, scale, area, a, b, c, v[3];
++	byte		*file, *skin, *rows, *drawn;
++	mdl_t		*mdl;
++	stvert_t	*st;
++	dtriangle_t	*tris;
++	trivertx_t	*verts;
++	int			mark, i, j, k, x, y, x0, x1, y0, y1, s, t, shade, ts[3], tt[3], smin, smax, tmin, tmax;
++	int			px[3], py[3], w[3], iarea;
++	float		fs, ft;
++	qboolean	viewmodel = !strncmp (name, "progs/v_", 8);
++	float		*p[3];
++
++	pic->width = pic->height = 0;
++	mark = Hunk_LowMark ();
++	file = COM_LoadHunkFile ((char *) name);
++	mdl = (mdl_t *) file;
++	if (!file || LittleLong (mdl->ident) != IDPOLYHEADER || LittleLong (mdl->version) != ALIAS_VERSION)
++	{
++		Hunk_FreeToLowMark (mark);
++		return;
++	}
++
++	// the first skin, the texture coordinates, triangles and first frame
++	skin = (byte *) (mdl + 1) + sizeof(int);
++	if (LittleLong (*(int *) (mdl + 1)) == ALIAS_SKIN_GROUP)
++		skin += sizeof(int) + LittleLong (*(int *) skin) * sizeof(float);
++	rows = (byte *) (mdl + 1);
++	for (i = 0; i < mdl->numskins; i++)
++	{
++		if (LittleLong (*(int *) rows) == ALIAS_SKIN_SINGLE)
++			rows += sizeof(int) + mdl->skinwidth * mdl->skinheight;
++		else
++		{
++			k = LittleLong (*(int *) (rows + sizeof(int)));
++			rows += 2 * sizeof(int) + k * (sizeof(float) + mdl->skinwidth * mdl->skinheight);
++		}
++	}
++	st = (stvert_t *) rows;
++	tris = (dtriangle_t *) (st + mdl->numverts);
++	verts = (trivertx_t *) ((byte *) (tris + mdl->numtris) + sizeof(int) + sizeof(daliasframe_t));
++	if (LittleLong (*(int *) (tris + mdl->numtris)) == ALIAS_GROUP)
++		verts = (trivertx_t *) ((byte *) (tris + mdl->numtris) + sizeof(int) + sizeof(daliasgroup_t)
++			+ LittleLong (*(int *) ((byte *) (tris + mdl->numtris) + sizeof(int))) * sizeof(float) + sizeof(daliasframe_t));
++
++	// forward to the right, up up, the depth is the distance from the
++	// viewer, only the vertices of the triangles drawn count for the size
++	proj = Hunk_AllocName (mdl->numverts * sizeof(*proj), "weapon");
++	drawn = Hunk_AllocName (mdl->numtris, "weapon");
++	for (i = 0; i < mdl->numverts; i++)
++	{
++		for (j = 0; j < 3; j++)
++			v[j] = mdl->scale_origin[j] + mdl->scale[j] * verts[i].v[j];
++		if (viewmodel)
++		{
++			v[0] = -v[0];
++			v[1] = -v[1];
++		}
++		proj[i][0] = (v[0] * cos (yaw) - v[1] * sin (yaw)) * 1.2;
++		proj[i][1] = -v[2];
++		proj[i][2] = v[0] * sin (yaw) + v[1] * cos (yaw);
++	}
++	minx = miny = 1e9;
++	maxx = maxy = -1e9;
++	for (i = 0; i < mdl->numtris; i++)
++	{
++		drawn[i] = true;
++		if (viewmodel)
++			for (j = 0, drawn[i] = false; j < 3; j++)
++				if (mdl->scale_origin[0] + mdl->scale[0] * verts[tris[i].vertindex[j]].v[0] >= cell->near)
++					drawn[i] = true;
++		if (!drawn[i])
++			continue;
++		for (j = 0; j < 3; j++)
++		{
++			p[0] = proj[tris[i].vertindex[j]];
++			minx = min (minx, p[0][0]);
++			maxx = max (maxx, p[0][0]);
++			miny = min (miny, p[0][1]);
++			maxy = max (maxy, p[0][1]);
++		}
++	}
++	scale = min ((PIC_W - 2) / (maxx - minx), (PIC_H - 2) / (maxy - miny));
++	for (i = 0; i < mdl->numverts; i++)
++	{
++		proj[i][0] = (proj[i][0] - (minx + maxx) / 2) * scale + PIC_W / 2;
++		proj[i][1] = (proj[i][1] - (miny + maxy) / 2) * scale + PIC_H / 2;
++	}
++
++	pic->width = PIC_W;
++	pic->height = PIC_H;
++	memset (pic->data, 255, sizeof(pic->data));
++	for (i = 0; i < PIC_W * PIC_H; i++)
++		zbuf[i] = 1e9;
++	for (i = 0; i < mdl->numtris; i++)
++	{
++		if (!drawn[i])
++			continue;
++		for (j = 0; j < 3; j++)
++			p[j] = proj[tris[i].vertindex[j]];
++		area = (p[1][0] - p[0][0]) * (p[2][1] - p[0][1]) - (p[1][1] - p[0][1]) * (p[2][0] - p[0][0]);
++		if (fabs (area) < 0.001)
++			continue;
++
++		// one light level for the triangle, row 32 of the colormap is as is,
++		// a little brighter as the skins are dark
++		a = 0;
++		for (j = 0; j < 3; j++)
++		{
++			k = verts[tris[i].vertindex[j]].lightnormalindex;
++			a += DotProduct (r_avertexnormals[k], light);
++		}
++		shade = 14 - (int) (a / 3 * 18);
++		rows = host_colormap + bound (8, shade, 56) * 256;
++
++		// the texture coordinates of the corners and the texels between them
++		for (j = 0; j < 3; j++)
++		{
++			stvert_t	*v = &st[tris[i].vertindex[j]];
++
++			ts[j] = v->s + (!tris[i].facesfront && v->onseam ? mdl->skinwidth / 2 : 0);
++			tt[j] = v->t;
++		}
++		smin = bound (0, min (ts[0], min (ts[1], ts[2])), mdl->skinwidth - 1);
++		smax = bound (smin + 1, max (ts[0], max (ts[1], ts[2])), mdl->skinwidth);
++		tmin = bound (0, min (tt[0], min (tt[1], tt[2])), mdl->skinheight - 1);
++		tmax = bound (tmin + 1, max (tt[0], max (tt[1], tt[2])), mdl->skinheight);
++
++		x0 = max (0, (int) min (p[0][0], min (p[1][0], p[2][0])));
++		x1 = min (PIC_W - 1, (int) max (p[0][0], max (p[1][0], p[2][0])));
++		y0 = max (0, (int) min (p[0][1], min (p[1][1], p[2][1])));
++		y1 = min (PIC_H - 1, (int) max (p[0][1], max (p[1][1], p[2][1])));
++		// whether a pixel center is inside in 24.8 fixed point integers, the
++		// barycentric coordinates only for the ones that are
++		for (j = 0; j < 3; j++)
++		{
++			px[j] = p[j][0] * 256;
++			py[j] = p[j][1] * 256;
++		}
++		iarea = (px[1] - px[0]) * (py[2] - py[0]) - (py[1] - py[0]) * (px[2] - px[0]);
++		if (!iarea)
++			continue;
++		for (y = y0; y <= y1; y++)
++			for (x = x0; x <= x1; x++)
++			{
++				for (j = 0; j < 3; j++)
++				{
++					int	m = j == 2 ? 0 : j + 1, n = j == 0 ? 2 : j - 1;
++
++					w[j] = (px[m] - 256 * x - 128) * (py[n] - 256 * y - 128) -
++						(py[m] - 256 * y - 128) * (px[n] - 256 * x - 128);
++				}
++				if (iarea > 0 ? w[0] < 0 || w[1] < 0 || w[2] < 0 : w[0] > 0 || w[1] > 0 || w[2] > 0)
++					continue;
++				a = (float) w[0] / iarea;
++				b = (float) w[1] / iarea;
++				c = 1 - a - b;
++				k = y * PIC_W + x;
++				if (a * p[0][2] + b * p[1][2] + c * p[2][2] >= zbuf[k])
++					continue;
++				zbuf[k] = a * p[0][2] + b * p[1][2] + c * p[2][2];
++				fs = ft = 0;
++				for (j = 0; j < 3; j++)
++				{
++					float	w = j == 0 ? a : j == 1 ? b : c;
++
++					fs += w * ts[j];
++					ft += w * tt[j];
++				}
++				// the texels of the triangle, a coordinate on its far edge
++				// is the texel after, past what's painted
++				s = bound (smin, (int) fs, smax - 1);
++				t = bound (tmin, (int) ft, tmax - 1);
++				pic->data[k] = rows[skin[t * mdl->skinwidth + s]];
++				if (pic->data[k] == 255)
++					pic->data[k] = 254;
++			}
++	}
++	Hunk_FreeToLowMark (mark);
++}
++
++/*
++================
++Sbar_InitTouchScreen
++
++Called by Sbar_Init, makes the pictures of the weapons
++================
++*/
++void Sbar_InitTouchScreen (void)
++{
++	int	i;
++
++	for (i = 0; i < NUM_CELLS; i++)
++		Sbar_RenderWeapon (&weaponpics[i], &cells[i]);
++	for (i = 0; i < 256; i++)
++	{
++		darktable[i] = host_colormap[54 * 256 + i];
++		brighttable[i] = host_colormap[12 * 256 + i];
++	}
++}
++
++/*
++===============================================================================
++
++THE PANELS
++
++===============================================================================
++*/
++
++// The time in the level, it stops when you die
++static int Sbar_LevelTime (void)
++{
++	static double	deathtime = -1;
++
++	if (cl.stats[STAT_HEALTH] > 0 || cl.time < deathtime)
++		deathtime = -1;
++	else if (deathtime < 0)
++		deathtime = cl.time;
++	return deathtime < 0 ? cl.time : deathtime;
++}
++
++static void Sbar_TimeString (char *str)
++{
++	int	time = Sbar_LevelTime ();
++
++	sprintf (str, "%i:%02i", time / 60, time % 60);
++}
++
++// A string over the map, on black so the walls don't run through it, 128
++// for the gold font
++static int Sbar_MapString (int x, int y, const char *str, int gold)
++{
++	Draw_Fill (x - 2, y - 1, strlen (str) * 8 + 4, 9, COL_BLACK);
++	for (; *str; str++, x += 8)
++		Draw_Character (x, y, *str | gold);
++	return x;
++}
++
++// A count of the intermission as a percentage, all of nothing is 100%
++static int Sbar_Percentage (int count, int total)
++{
++	return total ? count * 100 / total : 100;
++}
++
++// The level name, time, keys, powerups and runes over the top of the map, the
++// kills and secrets over its bottom
++static void Sbar_DrawStats (void)
++{
++	char	str[40], str2[16];
++	int		i, x;
++	static const int	items[] = {IT_KEY1, IT_KEY2, IT_INVISIBILITY, IT_INVULNERABILITY, IT_SUIT, IT_QUAD};
++
++	Sbar_MapString (4, TITLE_Y, cl.levelname, 0);
++	Sbar_TimeString (str);
++	Sbar_MapString (vid.width - 4 - strlen (str) * 8, TITLE_Y, str, 0);
++
++	// the kills and secrets of the intermission, centered as Quake has no
++	// items, which would be the third of DOOM's
++	sprintf (str, "%i%%", Sbar_Percentage (cl.stats[STAT_MONSTERS], cl.stats[STAT_TOTALMONSTERS]));
++	sprintf (str2, "%i%%", Sbar_Percentage (cl.stats[STAT_SECRETS], cl.stats[STAT_TOTALSECRETS]));
++	x = (vid.width - (strlen ("KILLS ") + strlen (str) + 4 + strlen ("SECRETS ") + strlen (str2)) * 8) / 2;
++	x = Sbar_MapString (x, STATS_Y, "KILLS ", 128);
++	x = Sbar_MapString (x, STATS_Y, str, 0);
++	x = Sbar_MapString (x + 32, STATS_Y, "SECRETS ", 128);
++	Sbar_MapString (x, STATS_Y, str2, 0);
++
++	// the keys, powerups and runes under the time
++	x = vid.width - 2;
++	for (i = 3; i >= 0; i--)
++		if (cl.items & (IT_SIGIL1 << i))
++			Draw_TransPic (x -= 8, TITLE_Y + 10, sb_sigil[i]);
++	for (i = sizeof(items) / sizeof(items[0]) - 1; i >= 0; i--)
++		if (cl.items & items[i])
++			Draw_TransPic (x -= 18, TITLE_Y + 10, sb_items[i]);
++}
++
++// When you are dead, the map makes way for the kills, secrets and time in
++// the big numbers of the intermission
++static qboolean Sbar_ScoresShown (void)
++{
++	return cl.stats[STAT_HEALTH] <= 0;
++}
++
++static void Sbar_DrawScores (void)
++{
++	static const char	*labels[3] = {"KILLS", "SECRETS", "TIME"};
++	char				str[3][32];
++	int					i, y;
++
++	Draw_Fill (0, MAP_Y, vid.width, MAP_HEIGHT, COL_BLACK);
++	Sbar_MapString (4, TITLE_Y, cl.levelname, 0);
++	sprintf (str[0], "%i/%i", cl.stats[STAT_MONSTERS], cl.stats[STAT_TOTALMONSTERS]);
++	sprintf (str[1], "%i/%i", cl.stats[STAT_SECRETS], cl.stats[STAT_TOTALSECRETS]);
++	Sbar_TimeString (str[2]);
++	for (i = 0, y = SCORES_Y; i < 3; i++, y += 26)
++	{
++		// like the intermission, where 999/999 just fits
++		Sbar_MapString (148 - strlen (labels[i]) * 8, y + 8, labels[i], 128);
++		Sbar_IntermissionString (160, y, str[i]);
++	}
++	Sbar_MapString ((vid.width - 20 * 8) / 2, y + 4, "PRESS A TO TRY AGAIN", 0);
++}
++
++// What the stats show, they are redrawn when it changes
++static void Sbar_StatsState (int *state)
++{
++	state[0] = (int) cl.worldmodel;
++	state[1] = Sbar_LevelTime ();
++	state[2] = cl.stats[STAT_MONSTERS];
++	state[3] = cl.stats[STAT_TOTALMONSTERS];
++	state[4] = cl.stats[STAT_SECRETS];
++	state[5] = cl.stats[STAT_TOTALSECRETS];
++	state[6] = cl.items;
++	state[7] = Sbar_ScoresShown ();
++}
++
++// The weapon in hand, the server sends it as a byte, the axe's item is 0 then
++static qboolean Sbar_CellActive (const weaponcell_t *cell)
++{
++	return (cl.stats[STAT_ACTIVEWEAPON] & 255) == (cell->item & 255);
++}
++
++// A new weapon flashes for a second, like in Quake's inventory
++static qboolean Sbar_CellFlash (const weaponcell_t *cell)
++{
++	int	bit = 0, flash;
++
++	while (bit < 31 && !(cell->item & (1 << bit)))
++		bit++;
++	flash = (cl.time - cl.item_gettime[bit]) * 10;
++	return flash < 10 && flash & 1;
++}
++
++static void Sbar_DrawBevel (int x, int y, int w, int h, int light, int dark)
++{
++	Draw_Fill (x, y, w, 1, light);
++	Draw_Fill (x, y, 1, h, light);
++	Draw_Fill (x, y + h - 1, w, 1, dark);
++	Draw_Fill (x + w - 1, y, 1, h, dark);
++}
++
++static void Sbar_DrawCell (int i)
++{
++	const weaponcell_t	*cell = &cells[i];
++	int					x = i % 4 * CELL_W, y = CELLS_Y + i / 4 * CELL_H, ammo;
++	qboolean			owned = (cl.items & cell->item) != 0;
++	qboolean			active = Sbar_CellActive (cell);
++	qpic_t				*pic = (qpic_t *) &weaponpics[i];
++	char				str[8];
++
++	Draw_Fill (x, y, CELL_W, CELL_H, COL_CELL);
++	if (active)
++	{
++		Sbar_DrawBevel (x, y, CELL_W, CELL_H, COL_SELECTED, COL_SELECTED);
++		Sbar_DrawBevel (x + 1, y + 1, CELL_W - 2, CELL_H - 2, COL_SELECTED, COL_SELECTED);
++	}
++	else
++		Sbar_DrawBevel (x, y, CELL_W, CELL_H, COL_LIGHT, COL_DARK);
++
++	if (pic->width && owned && !Sbar_CellFlash (cell))
++		Draw_TransPic (x + PIC_X, y + (CELL_H - PIC_H) / 2, pic);
++	else if (pic->width)
++		Draw_TransPicTranslate (x + PIC_X, y + (CELL_H - PIC_H) / 2, pic, owned ? brighttable : darktable);
++	Draw_Character (x + 3, y + 3, cell->key | (active ? 128 : 0));
++	// only the ammo of a weapon you have, several share a kind of ammo
++	if (cell->ammo >= 0 && owned)
++	{
++		ammo = cl.stats[cell->ammo];
++		sprintf (str, "%3i", ammo);
++		x += CELL_W - 4 - 24;
++		y += CELL_H - 11;
++		if (ammo < 10 || active)
++			for (i = 0; str[i]; i++)
++				Draw_Character (x + i * 8, y, str[i] | 128);
++		else
++			Draw_String (x, y, str);
++	}
++}
++
++// What a cell shows, it is redrawn when that changes
++static void Sbar_CellState (int i, int *state)
++{
++	const weaponcell_t	*cell = &cells[i];
++
++	state[0] = (cl.items & cell->item) != 0;
++	state[1] = Sbar_CellActive (cell);
++	state[2] = cell->ammo < 0 ? 0 : cl.stats[cell->ammo];
++	state[3] = Sbar_CellFlash (cell);
++}
++
++/*
++================
++Sbar_DrawPanels
++
++Redraws the map when you moved or turned, every fourth frame, and the rest
++when it changed
++================
++*/
++static void Sbar_DrawPanels (qboolean full)
++{
++	int			state[8], i;
++	qboolean	moved;
++
++	Sbar_StatsState (state);
++	moved = !VectorCompare (r_refdef.vieworg, maporigin) || r_refdef.viewangles[YAW] != mapangle;
++	mapframe++;
++	if (full || memcmp (state, drawnstats, sizeof(state)) || (moved && !(mapframe & 3)) || !(mapframe & 15))
++	{
++		VectorCopy (r_refdef.vieworg, maporigin);
++		mapangle = r_refdef.viewangles[YAW];
++		if (Sbar_ScoresShown ())
++			Sbar_DrawScores ();
++		else
++		{
++			Sbar_DrawMap ();
++			Sbar_DrawStats ();
++		}
++		memcpy (drawnstats, state, sizeof(state));
++	}
++
++	for (i = 0; i < NUM_CELLS; i++)
++	{
++		Sbar_CellState (i, state);
++		if (full || memcmp (state, drawncells[i], sizeof(drawncells[i])))
++		{
++			Sbar_DrawCell (i);
++			memcpy (drawncells[i], state, sizeof(drawncells[i]));
++		}
++	}
++}
++
++/*
++===============================================================================
++
++THE TOUCH SCREEN
++
++===============================================================================
++*/
++
++// The panels show in a running level
++static qboolean Sbar_PanelsShown (void)
++{
++	return cls.state == ca_connected && cls.signon == SIGNONS && cl.worldmodel && !cl.intermission
++		&& sb_lines && !scr_drawloading;
++}
++
++// The controls in a darker inset in the middle of the console background
++static const char *controls[][2] =
++{
++	{"D-PAD", "MOVE AND TURN"},
++	{"A", "FIRE / OK"},
++	{"B", "JUMP / BACK"},
++	{"X", "NEXT WEAPON"},
++	{"Y", "RUN (HOLD)"},
++	{"L R", "STRAFE"},
++	{"START", "MENU"},
++	{"STYLUS", "TAP A WEAPON"},
++};
++
++#define	NUM_CONTROLS	(sizeof(controls) / sizeof(controls[0]))
++#define	HELP_COLS		(8 + 13)
++#define	HELP_PAD		5
++#define	HELP_HEAD		15		// the header and the groove under it
++#define	HELP_H			(HELP_PAD + HELP_HEAD + NUM_CONTROLS * 9 - 1 + HELP_PAD)
++#define	HELP_W			(HELP_COLS * 8 + 32)
++#define	HELP_X			((vid.width - HELP_W) / 2)
++#define	HELP_Y			((vid.height - HELP_H) / 2)
++
++// With the options and while no game runs behind the menu or a question
++static qboolean Sbar_ControlsShown (void)
++{
++	return (key_dest == key_menu || scr_drawdialog)
++		&& (M_OptionsShown () || cls.demoplayback || cls.state != ca_connected);
++}
++
++static void Sbar_DrawControls (void)
++{
++	int		i, j, x, y;
++	byte	*row;
++
++	Draw_ConsoleBackground (vid.height);
++
++	// an inset, darker, with the bevels the other way around
++	for (y = HELP_Y; y < HELP_Y + HELP_H; y++)
++		for (x = HELP_X, row = vid.buffer + y * vid.rowbytes; x < HELP_X + HELP_W; x++)
++			row[x] = darktable[row[x]];
++	Sbar_DrawBevel (HELP_X, HELP_Y, HELP_W, HELP_H, COL_DARK, COL_LIGHT);
++
++	// the header over a groove
++	x = HELP_X + 16;
++	y = HELP_Y + HELP_PAD;
++	Draw_String (x + (HELP_COLS - 8) * 4, y, "CONTROLS");
++	Draw_Fill (x, y + 11, HELP_COLS * 8, 1, COL_DARK);
++	Draw_Fill (x, y + 12, HELP_COLS * 8, 1, COL_LIGHT);
++
++	for (i = 0; i < NUM_CONTROLS; i++)
++	{
++		y = HELP_Y + HELP_PAD + HELP_HEAD + i * 9;
++		for (j = 0; controls[i][0][j]; j++)
++			Draw_Character (x + j * 8, y, controls[i][0][j] | 128);
++		Draw_String (x + 8 * 8, y, (char *) controls[i][1]);
++	}
++}
++
++/*
++================
++Sbar_DrawTouchScreen
++
++Called every frame instead of Sbar_Draw: draws the status bar and redraws
++what changed below it, or all of it when something else drew there, or
++the controls
++================
++*/
++void Sbar_DrawTouchScreen (void)
++{
++	qboolean	shown, full;
++
++	if (Sbar_ControlsShown ())
++	{
++		if (VID_BeginUI (0, vid.height) || !controlsshown)
++			Sbar_DrawControls ();
++		VID_EndUI ();
++		controlsshown = true;
++		panelsshown = false;
++		return;
++	}
++	if (controlsshown)
++	{
++		controlsshown = false;
++		Sbar_Changed ();
++	}
++
++	Sbar_Draw ();
++	shown = Sbar_PanelsShown ();
++	full = VID_BeginUI (PANEL_Y, vid.height) || !panelsshown;
++	panelsshown = shown;
++	if (shown)
++		Sbar_DrawPanels (full);
++	VID_EndUI ();
++}
++
++/*
++================
++Sbar_TouchKey
++
++The key of the weapon cell at a 2D position, 0 for none
++================
++*/
++int Sbar_TouchKey (int x, int y)
++{
++	int	i;
++
++	if (!panelsshown || key_dest != key_game || y < CELLS_Y)
++		return 0;
++	i = (y - CELLS_Y) / CELL_H * 4 + x / CELL_W;
++	return i < NUM_CELLS ? cells[i].key : 0;
++}
+diff --git a/WinQuake/screen.c b/WinQuake/screen.c
+index f0010e0..c2facaf 100644
+--- a/WinQuake/screen.c
++++ b/WinQuake/screen.c
+@@ -938,6 +938,7 @@ void SCR_UpdateScreen (void)
+ 
+ 	if (scr_drawdialog)
+ 	{
++		Sbar_DrawTouchScreen ();
+ 		// on the top screen like the menu
+ 		VID_BeginMenu ();
+ 		SCR_DrawNotifyString ();
+@@ -969,6 +970,7 @@ void SCR_UpdateScreen (void)
+ 		SCR_DrawTurtle ();
+ 		SCR_DrawPause ();
+ 		SCR_CheckDrawCenterString ();
++		Sbar_DrawTouchScreen ();
+ 		if (key_dest == key_menu)
+ 		{
+ 			// on the top screen, drawn again when it changes

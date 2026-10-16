@@ -1,0 +1,75 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Tue, 6 Oct 2026 07:09:53 +0200
+Subject: [PATCH] Wrap center prints at words
+
+The top screen is 32 characters wide, Quake's center prints and the
+episode end texts have lines of up to 40. A text with a line too long is
+wrapped again at words, its paragraphs, separated by empty lines, stay
+apart. Long texts are centered vertically.
+---
+ WinQuake/screen.c | 44 +++++++++++++++++++++++++++++++++++++++-----
+ 1 file changed, 39 insertions(+), 5 deletions(-)
+
+diff --git a/WinQuake/screen.c b/WinQuake/screen.c
+index 93544b4..62fd94c 100644
+--- a/WinQuake/screen.c
++++ b/WinQuake/screen.c
+@@ -89,18 +89,52 @@ for a few moments
+ */
+ void SCR_CenterPrint (char *str)
+ {
++	char	*p, *linestart, *lastspace;
++	int		cols = TEXT_WIDTH / 8;
++
+ 	strncpy (scr_centerstring, str, sizeof(scr_centerstring)-1);
+ 	scr_centertime_off = scr_centertime.value;
+ 	scr_centertime_start = cl.time;
+ 
++// a text with lines too long for the screen is wrapped again at words, its
++// paragraphs stay apart
++	for (p = linestart = scr_centerstring ; *p ; p++)
++	{
++		if (*p == '\n')
++			linestart = p + 1;
++		else if (p - linestart >= cols)
++			break;
++	}
++	if (*p)
++	{
++		for (p = scr_centerstring + 1 ; *p ; p++)
++			if (*p == '\n' && p[-1] != '\n' && p[1] != '\n')
++				*p = ' ';
++		lastspace = NULL;
++		for (p = linestart = scr_centerstring ; *p ; p++)
++		{
++			if (*p == '\n')
++			{
++				linestart = p + 1;
++				lastspace = NULL;
++				continue;
++			}
++			if (*p == ' ')
++				lastspace = p;
++			if (p - linestart >= cols && lastspace)
++			{
++				*lastspace = '\n';
++				linestart = lastspace + 1;
++				lastspace = NULL;
++			}
++		}
++	}
++
+ // count the number of lines for centering
+ 	scr_center_lines = 1;
+-	while (*str)
+-	{
+-		if (*str == '\n')
++	for (p = scr_centerstring ; *p ; p++)
++		if (*p == '\n')
+ 			scr_center_lines++;
+-		str++;
+-	}
+ }
+ 
+ void SCR_EraseCenterString (void)

@@ -1,0 +1,84 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Wed, 7 Oct 2026 12:00:00 +0200
+Subject: [PATCH] Answer prompts with the A and B buttons
+
+The prompts ask for A and B instead of Y and N, which the A and B buttons
+answer through Enter and Escape, and dying says to press B to restart
+the level.
+---
+ Game/src/game.c   |  2 ++
+ Game/src/menues.c | 12 ++++++------
+ 2 files changed, 8 insertions(+), 6 deletions(-)
+
+diff --git a/Game/src/game.c b/Game/src/game.c
+index d25195d..7d4135d 100644
+--- a/Game/src/game.c
++++ b/Game/src/game.c
+@@ -7716,6 +7716,8 @@ void compilecons(void)
+ 
+    loadefs(userconfilename,mymembuf, 0);  
+ 
++   // B opens on the DS
++   strcpy(fta_quotes[13],"PRESS B TO RESTART LEVEL");
+ }
+ 
+ 
+diff --git a/Game/src/menues.c b/Game/src/menues.c
+index 385dabd..92d3929 100644
+--- a/Game/src/menues.c
++++ b/Game/src/menues.c
+@@ -1523,7 +1523,7 @@ void menus(void)
+             sprintf(text,"\"%s\"",ud.savegame[lastsavedpos]);
+             gametext(160,99,text,0,2+8+16);
+ 
+-            gametext(160,99+9,"(Y/N)",0,2+8+16);
++            gametext(160,99+9,"(A/B)",0,2+8+16);
+ 
+ 			_handle_events();
+             if( KB_KeyPressed(sc_Escape) || KB_KeyPressed(sc_N) || RMB)
+@@ -1702,7 +1702,7 @@ void menus(void)
+             gametext(160,90,"LOAD game:",0,2+8+16);
+             sprintf((char*)tempbuf,"\"%s\"",ud.savegame[current_menu-1000]);
+             gametext(160,99,(char*)tempbuf,0,2+8+16);
+-            gametext(160,99+9,"(Y/N)",0,2+8+16);
++            gametext(160,99+9,"(A/B)",0,2+8+16);
+ 
+ 			_handle_events();
+             if( KB_KeyPressed(sc_Space) || KB_KeyPressed(sc_Enter) || KB_KeyPressed(sc_kpad_Enter) || KB_KeyPressed(sc_Y) || LMB )
+@@ -1809,7 +1809,7 @@ void menus(void)
+             }
+             probe(186,124,0,0);
+             gametext(160,90,"ABORT this game?",0,2+8+16);
+-            gametext(160,90+9,"(Y/N)",0,2+8+16);
++            gametext(160,90+9,"(A/B)",0,2+8+16);
+ 
+             break;
+ 
+@@ -1838,7 +1838,7 @@ void menus(void)
+             dispnames();
+ 
+             gametext(160,90,"OVERWRITE previous SAVED game?",0,2+8+16);
+-            gametext(160,90+9,"(Y/N)",0,2+8+16);
++            gametext(160,90+9,"(A/B)",0,2+8+16);
+ 
+ 			_handle_events();
+             if( KB_KeyPressed(sc_Space) || KB_KeyPressed(sc_Enter) || KB_KeyPressed(sc_kpad_Enter) || KB_KeyPressed(sc_Y) || LMB )
+@@ -3564,7 +3564,7 @@ else
+             c = 320>>1;
+ 
+             gametext(c,90,"Are you sure you want to quit?",0,2+8+16);
+-            gametext(c,99,"(Y/N)",0,2+8+16);
++            gametext(c,99,"(A/B)",0,2+8+16);
+ 
+ 			_handle_events();
+             if( KB_KeyPressed(sc_Space) || KB_KeyPressed(sc_Enter) || KB_KeyPressed(sc_kpad_Enter) || KB_KeyPressed(sc_Y) || LMB )
+@@ -3590,7 +3590,7 @@ else
+ 		case 503:
+             c = 320>>1;
+             gametext(c,90,"Quit to Title?",0,2+8+16);
+-            gametext(c,99,"(Y/N)",0,2+8+16);
++            gametext(c,99,"(A/B)",0,2+8+16);
+ 
+ 			_handle_events();
+             if( KB_KeyPressed(sc_Space) || KB_KeyPressed(sc_Enter) || KB_KeyPressed(sc_kpad_Enter) || KB_KeyPressed(sc_Y) || LMB )

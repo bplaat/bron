@@ -1,0 +1,103 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Sat, 3 Oct 2026 11:04:42 +0200
+Subject: [PATCH] Fill the DS top screen with the view
+
+The view fills the 256x192 top screen at high detail. A view taller than
+the space above the status bar has no status bar or border, the screen
+around it is black, also when a wipe or scaled frame shows all of it.
+---
+ doomgeneric/d_main.c |  3 ++-
+ doomgeneric/r_draw.c | 24 ++++++++++++++++++++++--
+ doomgeneric/r_main.c |  6 ++++++
+ 3 files changed, 30 insertions(+), 3 deletions(-)
+
+diff --git a/doomgeneric/d_main.c b/doomgeneric/d_main.c
+index 4014653..eef0c68 100644
+--- a/doomgeneric/d_main.c
++++ b/doomgeneric/d_main.c
+@@ -219,7 +219,8 @@ void D_Display (void)
+ 			redrawsbar = true;
+ 		if (inhelpscreensstate && !inhelpscreens)
+ 			redrawsbar = true;              // just put away the help screen
+-		ST_Drawer (viewheight == 200, redrawsbar );
++		// no status bar under a view taller than the space above it
++		ST_Drawer (viewheight > SCREENHEIGHT - ST_HEIGHT, redrawsbar );
+ 		fullscreen = viewheight == 200;
+ 		break;
+ 
+diff --git a/doomgeneric/r_draw.c b/doomgeneric/r_draw.c
+index 9271bcd..7ba0a1c 100644
+--- a/doomgeneric/r_draw.c
++++ b/doomgeneric/r_draw.c
+@@ -790,8 +790,12 @@ R_InitBuffer
+ 	columnofs[i] = viewwindowx + i;
+ 
+     // Samw with base row offset.
++    // a view taller than the space above the status bar has none, it is
++    // in the middle of the screen
+     if (width == SCREENWIDTH) 
+ 	viewwindowy = 0; 
++    else if (height > SCREENHEIGHT - SBARHEIGHT)
++	viewwindowy = (SCREENHEIGHT - height) >> 1;
+     else 
+ 	viewwindowy = (SCREENHEIGHT-SBARHEIGHT-height) >> 1; 
+ 
+@@ -828,7 +832,7 @@ void R_FillBackScreen (void)
+     // If we are running full screen, there is no need to do any of this,
+     // and the background buffer can be freed if it was previously in use.
+ 
+-    if (scaledviewwidth == SCREENWIDTH)
++    if (scaledviewwidth == SCREENWIDTH || viewheight > SCREENHEIGHT - SBARHEIGHT)
+     {
+         if (background_buffer != NULL)
+         {
+@@ -836,6 +840,22 @@ void R_FillBackScreen (void)
+             background_buffer = NULL;
+         }
+ 
++        // Around a view taller than the space above the status bar is
++        // black, not what the screen showed before, like when a wipe or
++        // a scaled frame shows all of it
++        for (y = 0; y < SCREENHEIGHT; y++)
++        {
++            dest = I_VideoBuffer + y * SCREENWIDTH;
++            if (y < viewwindowy || y >= viewwindowy + viewheight)
++                memset(dest, 0, SCREENWIDTH);
++            else
++            {
++                memset(dest, 0, viewwindowx);
++                memset(dest + viewwindowx + scaledviewwidth, 0,
++                       SCREENWIDTH - viewwindowx - scaledviewwidth);
++            }
++        }
++
+ 	return;
+     }
+ 
+@@ -945,7 +965,7 @@ void R_DrawViewBorder (void)
+     int		ofs;
+     int		i; 
+  
+-    if (scaledviewwidth == SCREENWIDTH) 
++    if (scaledviewwidth == SCREENWIDTH || viewheight > SCREENHEIGHT - SBARHEIGHT)
+ 	return; 
+   
+     top = ((SCREENHEIGHT-SBARHEIGHT)-viewheight)/2; 
+diff --git a/doomgeneric/r_main.c b/doomgeneric/r_main.c
+index dcd1741..b273201 100644
+--- a/doomgeneric/r_main.c
++++ b/doomgeneric/r_main.c
+@@ -686,6 +686,12 @@ void R_ExecuteSetViewSize (void)
+ 	scaledviewwidth = setblocks*32;
+ 	viewheight = (setblocks*168/10)&~7;
+     }
++
++    // The view fills the top screen at its resolution, the touch screen shows
++    // the status
++    scaledviewwidth = 256;
++    viewheight = 192;
++    setdetail = 0;
+     
+     detailshift = setdetail;
+     viewwidth = scaledviewwidth>>detailshift;

@@ -1,0 +1,243 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Sat, 3 Oct 2026 11:04:47 +0200
+Subject: [PATCH] Add DS sound effects
+
+Sound effects are converted once to signed 8-bit PCM and played on
+hardware channels 0-7, the hardware mixer does the resampling, volume and
+stereo panning. Invalid DMX sample rates and lengths are rejected before
+the sample is converted or its playback time is calculated.
+---
+ doomgeneric/i_ndssound.c | 223 +++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 223 insertions(+)
+ create mode 100644 doomgeneric/i_ndssound.c
+
+diff --git a/doomgeneric/i_ndssound.c b/doomgeneric/i_ndssound.c
+new file mode 100644
+index 0000000..c7f65f0
+--- /dev/null
++++ b/doomgeneric/i_ndssound.c
+@@ -0,0 +1,223 @@
++//
++// Nintendo DS sound effects
++//
++// Sound effects are converted once to signed 8-bit PCM and played directly
++// by the hardware mixer on channels 0-7, which does the resampling, volume
++// and stereo panning.
++//
++
++#include <nds.h>
++#include <string.h>
++
++#include "doomtype.h"
++#include "i_sound.h"
++#include "i_swap.h"
++#include "i_system.h"
++#include "deh_str.h"
++#include "m_misc.h"
++#include "w_wad.h"
++#include "z_zone.h"
++
++#define NUM_SFX_CHANNELS 8
++
++typedef struct
++{
++    sfxinfo_t *sfx;
++    uint32_t end_ms;
++} sfx_channel_t;
++
++// Converted sample, stored in sfx->driver_data as a purgable zone block
++typedef struct
++{
++    int rate;
++    int length;
++    int8_t data[];
++} sfx_sample_t;
++
++// Config variables normally provided by the SDL sound module
++int use_libsamplerate = 0;
++float libsamplerate_scale = 0.65f;
++
++static sfx_channel_t sfx_channels[NUM_SFX_CHANNELS];
++static boolean use_sfx_prefix;
++
++static snddevice_t sound_devices[] = { SNDDEVICE_SB, SNDDEVICE_PAS, SNDDEVICE_GUS,
++    SNDDEVICE_WAVEBLASTER, SNDDEVICE_SOUNDCANVAS, SNDDEVICE_AWE32 };
++
++static uint32_t NowMs(void)
++{
++    return (uint32_t) (tickGetCount() * 1000 / TICK_FREQ);
++}
++
++static sfx_sample_t *CacheSfx(sfxinfo_t *sfx)
++{
++    byte *lump;
++    int lumplen, rate, length, i;
++    sfx_sample_t *sample;
++
++    if (sfx->driver_data != NULL)
++        return sfx->driver_data;
++
++    lump = W_CacheLumpNum(sfx->lumpnum, PU_STATIC);
++    lumplen = W_LumpLength(sfx->lumpnum);
++
++    // DMX header: format 3, sample rate, length; skip the 16 byte pads
++    if (lumplen < 8 || lump[0] != 0x03 || lump[1] != 0x00)
++    {
++        W_ReleaseLumpNum(sfx->lumpnum);
++        return NULL;
++    }
++    rate = lump[2] | (lump[3] << 8);
++    length = (uint32_t) lump[4] | ((uint32_t) lump[5] << 8)
++        | ((uint32_t) lump[6] << 16) | ((uint32_t) lump[7] << 24);
++    if (rate == 0 || length > lumplen - 8 || length <= 48)
++    {
++        W_ReleaseLumpNum(sfx->lumpnum);
++        return NULL;
++    }
++    length -= 32;
++
++    sample = Z_Malloc(sizeof(sfx_sample_t) + ((length + 3) & ~3), PU_STATIC, &sfx->driver_data);
++    sample->rate = rate;
++    sample->length = (length + 3) & ~3;
++    for (i = 0; i < length; ++i)
++        sample->data[i] = lump[8 + 16 + i] ^ 0x80;
++    memset(sample->data + length, 0, sample->length - length);
++    DC_FlushRange(sample->data, sample->length);
++
++    W_ReleaseLumpNum(sfx->lumpnum);
++    Z_ChangeTag(sample, PU_CACHE);
++    return sample;
++}
++
++static void ReleaseChannel(int channel)
++{
++    sfxinfo_t *sfx = sfx_channels[channel].sfx;
++    int i;
++
++    sfx_channels[channel].sfx = NULL;
++    if (sfx == NULL || sfx->driver_data == NULL)
++        return;
++    // The sample may only be purged once no channel plays it anymore
++    for (i = 0; i < NUM_SFX_CHANNELS; ++i)
++        if (sfx_channels[i].sfx == sfx)
++            return;
++    Z_ChangeTag(sfx->driver_data, PU_CACHE);
++}
++
++static boolean NDS_InitSound(boolean _use_sfx_prefix)
++{
++    use_sfx_prefix = _use_sfx_prefix;
++    soundInit();
++    soundPowerOn();
++    soundSetMixerVolume(127);
++    memset(sfx_channels, 0, sizeof(sfx_channels));
++    return true;
++}
++
++static void NDS_ShutdownSound(void)
++{
++    soundStop(0xff);
++}
++
++static int NDS_GetSfxLumpNum(sfxinfo_t *sfx)
++{
++    char namebuf[9];
++
++    // Linked sounds (eg. the chaingun) play the lump of the sound they link to
++    if (sfx->link != NULL)
++        sfx = sfx->link;
++    if (use_sfx_prefix)
++        M_snprintf(namebuf, sizeof(namebuf), "ds%s", DEH_String(sfx->name));
++    else
++        M_StringCopy(namebuf, DEH_String(sfx->name), sizeof(namebuf));
++    return W_GetNumForName(namebuf);
++}
++
++static void NDS_UpdateSound(void)
++{
++    int i;
++    uint32_t now = NowMs();
++
++    for (i = 0; i < NUM_SFX_CHANNELS; ++i)
++        if (sfx_channels[i].sfx != NULL && (int32_t) (now - sfx_channels[i].end_ms) >= 0)
++            ReleaseChannel(i);
++}
++
++static unsigned SfxVolume(int vol)
++{
++    return (vol < 0 ? 0 : vol > 127 ? 127 : vol) << 4;
++}
++
++static unsigned SfxPan(int sep)
++{
++    return (sep < 0 ? 0 : sep > 254 ? 254 : sep) / 2;
++}
++
++static void NDS_UpdateSoundParams(int channel, int vol, int sep)
++{
++    if (channel < 0 || channel >= NUM_SFX_CHANNELS)
++        return;
++    soundChSetVolume(channel, SfxVolume(vol));
++    soundChSetPan(channel, SfxPan(sep));
++}
++
++static int NDS_StartSound(sfxinfo_t *sfx, int channel, int vol, int sep)
++{
++    sfx_sample_t *sample;
++
++    if (channel < 0 || channel >= NUM_SFX_CHANNELS)
++        return -1;
++
++    // The old sample plays until the channel restarts, it may not be
++    // purged to make room for the new one
++    sample = CacheSfx(sfx);
++    if (sample == NULL)
++        return -1;
++    ReleaseChannel(channel);
++
++    // Keep the sample resident while the ARM7 is reading it
++    Z_ChangeTag(sample, PU_STATIC);
++    sfx_channels[channel].sfx = sfx;
++    sfx_channels[channel].end_ms = NowMs() + (uint32_t) sample->length * 1000 / sample->rate + 1;
++
++    soundPreparePcm(channel | SOUND_START, SfxVolume(vol), SfxPan(sep),
++        soundTimerFromHz(sample->rate), SoundMode_OneShot, SoundFmt_Pcm8,
++        sample->data, 0, sample->length / 4);
++    return channel;
++}
++
++static void NDS_StopSound(int channel)
++{
++    if (channel < 0 || channel >= NUM_SFX_CHANNELS)
++        return;
++    soundStop(1U << channel);
++    ReleaseChannel(channel);
++}
++
++static boolean NDS_SoundIsPlaying(int channel)
++{
++    if (channel < 0 || channel >= NUM_SFX_CHANNELS)
++        return false;
++    return sfx_channels[channel].sfx != NULL && (int32_t) (NowMs() - sfx_channels[channel].end_ms) < 0;
++}
++
++static void NDS_PrecacheSounds(sfxinfo_t *sounds, int num_sounds)
++{
++    // Samples are converted on first use, the zone may purge them again
++}
++
++sound_module_t DG_sound_module =
++{
++    sound_devices,
++    arrlen(sound_devices),
++    NDS_InitSound,
++    NDS_ShutdownSound,
++    NDS_GetSfxLumpNum,
++    NDS_UpdateSound,
++    NDS_UpdateSoundParams,
++    NDS_StartSound,
++    NDS_StopSound,
++    NDS_SoundIsPlaying,
++    NDS_PrecacheSounds,
++};

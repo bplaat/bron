@@ -1,0 +1,114 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Sun, 11 Oct 2026 15:00:06 +0200
+Subject: [PATCH] Count the ARM9 cycles per instruction address
+
+For profiling: while profile9 is set, the ARM9 loop adds the cycles of
+each instruction, with its cache misses and waits, to the entry of its
+address, main RAM and ITCM by halfword. desmume_profile_start clears and
+returns the counts, desmume_profile_stop frees them.
+---
+ desmume/src/NDSSystem.cpp                    |  9 +++++++--
+ desmume/src/NDSSystem.h                      | 16 ++++++++++++++++
+ desmume/src/frontend/interface/interface.cpp | 14 ++++++++++++++
+ desmume/src/frontend/interface/interface.h   |  5 +++++
+ 4 files changed, 42 insertions(+), 2 deletions(-)
+
+diff --git a/desmume/src/NDSSystem.cpp b/desmume/src/NDSSystem.cpp
+index c5c7b42..0376b19 100755
+--- a/desmume/src/NDSSystem.cpp
++++ b/desmume/src/NDSSystem.cpp
+@@ -99,6 +99,7 @@ static NDSError _lastNDSError;
+ 
+ GameInfo gameInfo;
+ NDSSystem nds;
++u32 *profile9 = NULL;
+ CFIRMWARE *extFirmwareObj = NULL;
+ 
+ std::vector<u32> memReadBreakPoints;
+@@ -1992,11 +1993,15 @@ static /*donotinline*/ std::pair<s32,s32> armInnerLoop(
+ 			{
+ 				arm9log();
+ 				debug();
++				const u32 adr = NDS_ARM9.instruct_adr;
+ #ifdef HAVE_JIT
+-				arm9 += armcpu_exec<ARMCPU_ARM9,jit>();
++				const s32 cycles = armcpu_exec<ARMCPU_ARM9,jit>();
+ #else
+-				arm9 += armcpu_exec<ARMCPU_ARM9>();
++				const s32 cycles = armcpu_exec<ARMCPU_ARM9>();
+ #endif
++				arm9 += cycles;
++				if (profile9)
++					profile9[profile9_index(adr)] += cycles;
+ 				#ifdef DEVELOPER
+ 					nds_debug_continuing[0] = false;
+ 				#endif
+diff --git a/desmume/src/NDSSystem.h b/desmume/src/NDSSystem.h
+index acffa05..8d7aa16 100755
+--- a/desmume/src/NDSSystem.h
++++ b/desmume/src/NDSSystem.h
+@@ -293,6 +293,22 @@ struct NDSSystem
+ 
+ extern NDSSystem nds;
+ 
++// The ARM9 cycles spent per instruction address while profiling, NULL when not profiling: main
++// RAM by halfword first, then ITCM by halfword, then one entry for everything else
++#define PROFILE9_MAIN_SIZE (0x400000 >> 1)
++#define PROFILE9_ITCM_SIZE (0x8000 >> 1)
++#define PROFILE9_SIZE (PROFILE9_MAIN_SIZE + PROFILE9_ITCM_SIZE + 1)
++extern u32 *profile9;
++
++static inline u32 profile9_index(u32 adr)
++{
++	if ((adr & 0x0F000000) == 0x02000000)
++		return (adr & 0x3FFFFF) >> 1;
++	if (adr < 0x02000000)
++		return PROFILE9_MAIN_SIZE + ((adr & 0x7FFF) >> 1);
++	return PROFILE9_SIZE - 1;
++}
++
+ int NDS_Init();
+ 
+ void Desmume_InitOnce();
+diff --git a/desmume/src/frontend/interface/interface.cpp b/desmume/src/frontend/interface/interface.cpp
+index 19fcb10..73c81d4 100644
+--- a/desmume/src/frontend/interface/interface.cpp
++++ b/desmume/src/frontend/interface/interface.cpp
+@@ -537,6 +537,20 @@ EXPORTED void desmume_memory_register_exec(int address, int size, memory_cb_fnc
+ 	memory_register_hook(address, HOOK_EXEC, size, cb);
+ }
+ 
++EXPORTED u32 *desmume_profile_start(void)
++{
++	if (profile9 == NULL)
++		profile9 = new u32[PROFILE9_SIZE];
++	memset(profile9, 0, PROFILE9_SIZE * sizeof(u32));
++	return profile9;
++}
++
++EXPORTED void desmume_profile_stop(void)
++{
++	delete[] profile9;
++	profile9 = NULL;
++}
++
+ EXPORTED void desmume_screenshot(char *screenshot_buffer)
+ {
+     u16 *gpuFramebuffer = GPU->GetDisplayInfo().masterNativeBuffer16;
+diff --git a/desmume/src/frontend/interface/interface.h b/desmume/src/frontend/interface/interface.h
+index e45a91f..7d436b9 100644
+--- a/desmume/src/frontend/interface/interface.h
++++ b/desmume/src/frontend/interface/interface.h
+@@ -186,6 +186,11 @@ EXPORTED void desmume_memory_register_exec(int address, int size, memory_cb_fnc
+ // Buffer must have the size 98304*3
+ EXPORTED void desmume_screenshot(char *screenshot_buffer);
+ 
++// Starts counting the ARM9 cycles per instruction address (see profile9 in NDSSystem.h) from
++// zero and returns the counts, stop frees them
++EXPORTED u32 *desmume_profile_start(void);
++EXPORTED void desmume_profile_stop(void);
++
+ // For automatic input processing with the SDL window, see desmume_draw_sdl_input.
+ EXPORTED BOOL desmume_input_joy_init(void);
+ EXPORTED void desmume_input_joy_uninit(void);

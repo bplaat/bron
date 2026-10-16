@@ -1,0 +1,44 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Sun, 11 Oct 2026 20:25:35 +0200
+Subject: [PATCH] Inline FixedMul in ARM code
+
+The renderer runs from ITCM as ARM code and multiplies in fixed point
+for every column and span. FixedMul is a macro there, a 64-bit multiply
+is one instruction in ARM code. Thumb code has none and still calls the
+function.
+---
+ doomgeneric/m_fixed.c | 2 +-
+ doomgeneric/m_fixed.h | 6 ++++++
+ 2 files changed, 7 insertions(+), 1 deletion(-)
+
+diff --git a/doomgeneric/m_fixed.c b/doomgeneric/m_fixed.c
+index 770738c..e0727dd 100644
+--- a/doomgeneric/m_fixed.c
++++ b/doomgeneric/m_fixed.c
+@@ -33,7 +33,7 @@
+ // Fixme. __USE_C_FIXED__ or something.
+ 
+ fixed_t
+-FixedMul
++(FixedMul)
+ ( fixed_t	a,
+   fixed_t	b )
+ {
+diff --git a/doomgeneric/m_fixed.h b/doomgeneric/m_fixed.h
+index 733b290..acf1045 100644
+--- a/doomgeneric/m_fixed.h
++++ b/doomgeneric/m_fixed.h
+@@ -34,6 +34,12 @@ typedef int fixed_t;
+ fixed_t FixedMul	(fixed_t a, fixed_t b);
+ fixed_t FixedDiv	(fixed_t a, fixed_t b);
+ 
++// Inline in ARM code, the renderer multiplies for every column and span.
++// Thumb code has no 64-bit multiply, it calls the ARM function instead.
++#ifndef __thumb__
++#define FixedMul(a, b)	((fixed_t) (((int64_t) (a) * (b)) >> FRACBITS))
++#endif
++
+ 
+ 
+ #endif

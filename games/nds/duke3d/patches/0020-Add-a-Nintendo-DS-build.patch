@@ -1,0 +1,78 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Wed, 7 Oct 2026 12:00:00 +0200
+Subject: [PATCH] Add a Nintendo DS build
+
+Makefile.nds builds a DSi enhanced .nds with the toolchain of the ports
+(clang, calico and libnds), without SDL and the Apogee Sound System,
+whose DS versions are in nds/. The engine is ARM code, its drawers run
+from ITCM, the game is Thumb code, the parts that don't run every frame
+optimized for size. The warnings about the old code mixing pointers and
+integers and redefining libnds' types are left out.
+---
+ .gitignore   |  6 ++++++
+ Makefile.nds | 41 +++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 47 insertions(+)
+ create mode 100644 Makefile.nds
+
+diff --git a/.gitignore b/.gitignore
+index 19b2068..f603c47 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -36,3 +36,9 @@ Makefile.in
+ /config.status
+ /configure
+ /stamp-h1
++
++# Nintendo DS build
++/build/
++/duke3d.elf
++/duke3d.nds
++/duke3d.map
+diff --git a/Makefile.nds b/Makefile.nds
+new file mode 100644
+index 0000000..060fb65
+--- /dev/null
++++ b/Makefile.nds
+@@ -0,0 +1,41 @@
++# Nintendo DS build of Chocolate Duke3D with the nds-ports toolchain
++#   make -f Makefile.nds TOOLCHAIN=<toolchain> ICON=<icon.bmp> [NITRO_DIR=<dir>]
++
++NAME := duke3d
++GAME_TITLE := Duke Nukem 3D
++GAME_SUBTITLE1 := 3D Realms (1996)
++GAME_SUBTITLE2 := Chocolate Duke3D NDS port
++HEADER_TITLE := DUKENUKEM3D
++
++SOURCES := $(addprefix Engine/src/,cache dummy_multi filesystem network tiles) \
++	$(addprefix Game/src/,actors animlib config console control cvar_defs cvars game gamedef global \
++	keyboard menues player premap rts scriplib sector sounds audiolib/pitch) \
++	$(addprefix nds/,duke3d_nds display_nds input_nds hud_nds fx_nds music_nds)
++
++# The drawers run from ITCM, the rest of the renderer as ARM code in main RAM
++ITCM_SOURCES := Engine/src/draw
++ARM_SOURCES := Engine/src/engine Engine/src/fixedPoint_math
++OFILES := $(addprefix build/,$(addsuffix .arm.o,$(ARM_SOURCES)))
++
++include $(TOOLCHAIN)/nds.mk
++
++# The old code mixes pointers and integers and redefines libnds' integer types and true and false,
++# the engine's headers go before the toolchain's, which has a filesystem.h of its own
++CFLAGS := -IEngine/src -IGame/src -Inds $(CFLAGS) -Wno-unused -Wno-pointer-sign -Wno-parentheses \
++	-Wno-pointer-to-int-cast -Wno-int-to-pointer-cast -Wno-int-conversion \
++	-Wno-incompatible-pointer-types -Wno-absolute-value -Wno-misleading-indentation \
++	-Wno-deprecated-declarations -Wno-typedef-redefinition -Wno-macro-redefined \
++	-fno-strict-aliasing -fno-short-enums -fcommon -std=gnu99 -DPLATFORM_UNIX
++
++# The game code that isn't run every frame is optimized for size, which leaves more RAM to the
++# tile cache
++COLD_SOURCES := animlib config console control cvar_defs cvars global keyboard menues premap rts scriplib
++$(addprefix $(BUILD)/Game/src/,$(addsuffix .o,$(COLD_SOURCES))): CFLAGS += -Os
++# The startup wants libdvm's filesystem.h, not the engine's
++$(BUILD)/nds/duke3d_nds.o: CFLAGS := -I$(TOOLCHAIN_TARGET)/libdvm/include $(CFLAGS)
++
++$(BUILD)/%.arm.o: CFLAGS += -marm
++
++$(BUILD)/%.arm.o: %.c
++	@mkdir -p $(dir $@)
++	$(CC) $(CFLAGS) -MMD -MP -c $< -o $@

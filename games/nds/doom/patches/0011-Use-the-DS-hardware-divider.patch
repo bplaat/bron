@@ -1,0 +1,183 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Sat, 3 Oct 2026 11:04:41 +0200
+Subject: [PATCH] Use the DS hardware divider
+
+The ARM9 has no divide instruction, so FixedDiv, SlopeDiv and the scale
+of every wall column (dc_iscale) use the DS hardware divider instead of
+dividing in software. The division of a wall column is started at the
+top of the column and its result read after the floor and ceiling
+clipping, so the divider runs meanwhile instead of the CPU waiting for
+it. SlopeDiv divides 32 bits when the numerator fits, which takes half as
+long as 64. The automap clipping, which runs for the lines crossing the
+edges of the touch screen every frame, divides its 64-bit products with
+it too.
+---
+ doomgeneric/am_map.c  | 13 ++++++++-----
+ doomgeneric/m_fixed.c |  9 ++++-----
+ doomgeneric/r_segs.c  | 24 ++++++++++++++++++++++--
+ doomgeneric/tables.c  |  8 +++++++-
+ 4 files changed, 41 insertions(+), 13 deletions(-)
+
+diff --git a/doomgeneric/am_map.c b/doomgeneric/am_map.c
+index 2525041..5e321e1 100644
+--- a/doomgeneric/am_map.c
++++ b/doomgeneric/am_map.c
+@@ -19,6 +19,8 @@
+ 
+ #include <stdio.h>
+ 
++#include <nds/arm9/math.h>
++
+ #include "deh_main.h"
+ 
+ #include "z_zone.h"
+@@ -945,33 +947,34 @@ AM_clipMline
+ 	// clip to each side
+ 	// the products are 64-bit: lines far outside the screen overflow
+ 	// 32 bits, and the wrong intersections could make the clipping
+-	// bounce between the edges forever
++	// bounce between the edges forever. The DS hardware divider
++	// divides them.
+ 	if (outside & TOP)
+ 	{
+ 	    dy = fl->a.y - fl->b.y;
+ 	    dx = fl->b.x - fl->a.x;
+-	    tmp.x = fl->a.x + (int64_t) dx*(fl->a.y)/dy;
++	    tmp.x = fl->a.x + div64((int64_t) dx*(fl->a.y), dy);
+ 	    tmp.y = 0;
+ 	}
+ 	else if (outside & BOTTOM)
+ 	{
+ 	    dy = fl->a.y - fl->b.y;
+ 	    dx = fl->b.x - fl->a.x;
+-	    tmp.x = fl->a.x + (int64_t) dx*(fl->a.y-f_h)/dy;
++	    tmp.x = fl->a.x + div64((int64_t) dx*(fl->a.y-f_h), dy);
+ 	    tmp.y = f_h-1;
+ 	}
+ 	else if (outside & RIGHT)
+ 	{
+ 	    dy = fl->b.y - fl->a.y;
+ 	    dx = fl->b.x - fl->a.x;
+-	    tmp.y = fl->a.y + (int64_t) dy*(f_w-1 - fl->a.x)/dx;
++	    tmp.y = fl->a.y + div64((int64_t) dy*(f_w-1 - fl->a.x), dx);
+ 	    tmp.x = f_w-1;
+ 	}
+ 	else if (outside & LEFT)
+ 	{
+ 	    dy = fl->b.y - fl->a.y;
+ 	    dx = fl->b.x - fl->a.x;
+-	    tmp.y = fl->a.y + (int64_t) dy*(-fl->a.x)/dx;
++	    tmp.y = fl->a.y + div64((int64_t) dy*(-fl->a.x), dx);
+ 	    tmp.x = 0;
+ 	}
+         else
+diff --git a/doomgeneric/m_fixed.c b/doomgeneric/m_fixed.c
+index 23f6ff3..770738c 100644
+--- a/doomgeneric/m_fixed.c
++++ b/doomgeneric/m_fixed.c
+@@ -25,6 +25,8 @@
+ 
+ #include "m_fixed.h"
+ 
++#include <nds/arm9/math.h>
++
+ 
+ 
+ 
+@@ -52,11 +54,8 @@ fixed_t FixedDiv(fixed_t a, fixed_t b)
+     }
+     else
+     {
+-	int64_t result;
+-
+-	result = ((int64_t) a << 16) / b;
+-
+-	return (fixed_t) result;
++	// The ARM9 has no divide instruction, use the DS hardware divider
++	return div64((int64_t) a << 16, b);
+     }
+ }
+ 
+diff --git a/doomgeneric/r_segs.c b/doomgeneric/r_segs.c
+index 9b4e413..7e583e6 100644
+--- a/doomgeneric/r_segs.c
++++ b/doomgeneric/r_segs.c
+@@ -32,6 +32,23 @@
+ #include "r_local.h"
+ #include "r_sky.h"
+ 
++#include <nds/arm9/math.h>
++
++// 0xffffffff / scale with the DS hardware divider, the ARM9 has no divide
++// instruction and this runs for every wall column. The division can be
++// started early and its result read later, the divider runs meanwhile.
++#define R_StartInvScale(scale) \
++    (REG_DIVCNT = DIV_64_32, REG_DIV_NUMER = 0xffffffffLL, REG_DIV_DENOM_L = (scale))
++
++static inline unsigned R_InvScaleResult(void)
++{
++    while (REG_DIVCNT & DIV_BUSY)
++	;
++    return REG_DIV_RESULT_L;
++}
++
++#define R_InvScale(scale)	(R_StartInvScale(scale), R_InvScaleResult())
++
+ 
+ // OPTIMIZE: closed two sided lines as single sided
+ 
+@@ -168,7 +185,7 @@ R_RenderMaskedSegRange
+ 	    }
+ 			
+ 	    sprtopscreen = centeryfrac - FixedMul(dc_texturemid, spryscale);
+-	    dc_iscale = 0xffffffffu / (unsigned)spryscale;
++	    dc_iscale = R_InvScale(spryscale);
+ 	    
+ 	    // draw the texture
+ 	    col = (column_t *)( 
+@@ -209,6 +226,9 @@ void R_RenderSegLoop (void)
+ 
+     for ( ; rw_x < rw_stopx ; rw_x++)
+     {
++	if (segtextured)
++	    R_StartInvScale(rw_scale);
++
+ 	// mark floor / ceiling areas
+ 	yl = (topfrac+HEIGHTUNIT-1)>>HEIGHTBITS;
+ 
+@@ -264,7 +284,7 @@ void R_RenderSegLoop (void)
+ 
+ 	    dc_colormap = walllights[index];
+ 	    dc_x = rw_x;
+-	    dc_iscale = 0xffffffffu / (unsigned)rw_scale;
++	    dc_iscale = R_InvScaleResult();
+ 	}
+         else
+         {
+diff --git a/doomgeneric/tables.c b/doomgeneric/tables.c
+index c221e9a..4b409e8 100644
+--- a/doomgeneric/tables.c
++++ b/doomgeneric/tables.c
+@@ -30,6 +30,8 @@
+ //	
+ //    
+ 
++#include <nds/arm9/math.h>
++
+ #include "tables.h"
+ 
+ // to get a global angle from cartesian coordinates, the coordinates are
+@@ -48,7 +50,11 @@ int SlopeDiv(unsigned int num, unsigned int den)
+     }
+     else
+     {
+-        ans = (num << 3) / (den >> 8);
++        // the DS hardware divider, the ARM9 has no divide instruction,
++        // dividing 32 bits takes half as long as 64
++        unsigned n = num << 3;
++
++        ans = n < 0x80000000u ? div32(n, den >> 8) : div64(n, den >> 8);
+ 
+         if (ans <= SLOPERANGE)
+         {

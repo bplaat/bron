@@ -1,0 +1,31 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Sun, 11 Oct 2026 15:12:12 +0200
+Subject: [PATCH] Skip the PC speaker while it is silent
+
+The PC speaker mixer added silence to every sample of the stream when no
+sound played, it returns at once instead.
+---
+ id_sd.c | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/id_sd.c b/id_sd.c
+index 5ea7ec6..4ad0be6 100644
+--- a/id_sd.c
++++ b/id_sd.c
+@@ -238,6 +238,15 @@ static void SDL_PCMixCallback(void *udata, Uint8 *stream, int len)
+     int i;
+     int nsamples;
+ 
++    // Without a sound playing the stream is left as it is, silence for the
++    // PC speaker, instead of adding zero to every sample
++
++    if (!pcSound && current_freq == 0)
++    {
++        current_remaining = 0;
++        return;
++    }
++
+     // Number of samples is quadrupled, because of 16-bit and stereo
+ 
+     nsamples = len / 4;

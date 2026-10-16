@@ -1,0 +1,107 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Mon, 12 Oct 2026 17:34:11 +0200
+Subject: [PATCH] Send the weapons, ammo and level stats
+
+The client only knew the ammo of the weapon in hand. The touch screen
+of the DS shows a cell for each weapon with its ammo and the kills,
+secrets and goals of the level, the game sends them as stats 18 to 31:
+a bit for each weapon the player has, the ammo of each kind, the counts
+of the level and how many of the selected item the player has.
+---
+ game/p_hud.c    | 44 ++++++++++++++++++++++++++++++++++++++++++++
+ game/q_shared.h | 20 ++++++++++++++++++++
+ 2 files changed, 64 insertions(+)
+
+diff --git a/game/p_hud.c b/game/p_hud.c
+index d5249a0..7986a7b 100644
+--- a/game/p_hud.c
++++ b/game/p_hud.c
+@@ -374,12 +374,56 @@ void Cmd_Help_f (edict_t *ent)
+ G_SetStats
+ ===============
+ */
++static char	*statweapons[] = {"Blaster", "Shotgun", "Super Shotgun", "Machinegun", "Chaingun",
++	"Grenades", "Grenade Launcher", "Rocket Launcher", "HyperBlaster", "Railgun", "BFG10K"};
++static char	*statammo[] = {"Shells", "Bullets", "Grenades", "Rockets", "Cells", "Slugs"};
++
++/*
++===============
++G_SetTouchScreenStats
++
++The weapons, ammo, level stats and count of the selected item, which the
++touch screen of the DS shows
++===============
++*/
++static void G_SetTouchScreenStats (edict_t *ent)
++{
++	static int	weaponitems[sizeof(statweapons) / sizeof(statweapons[0])];
++	static int	ammoitems[sizeof(statammo) / sizeof(statammo[0])];
++	int			*inventory = ent->client->pers.inventory, i;
++	short		*stats = ent->client->ps.stats;
++
++	if (!weaponitems[0])
++	{
++		for (i = 0; i < sizeof(statweapons) / sizeof(statweapons[0]); i++)
++			weaponitems[i] = ITEM_INDEX (FindItem (statweapons[i]));
++		for (i = 0; i < sizeof(statammo) / sizeof(statammo[0]); i++)
++			ammoitems[i] = ITEM_INDEX (FindItem (statammo[i]));
++	}
++	stats[STAT_WEAPONS] = 0;
++	for (i = 0; i < sizeof(weaponitems) / sizeof(weaponitems[0]); i++)
++		if (inventory[weaponitems[i]])
++			stats[STAT_WEAPONS] |= 1 << i;
++	for (i = 0; i < sizeof(ammoitems) / sizeof(ammoitems[0]); i++)
++		stats[STAT_SHELLS + i] = inventory[ammoitems[i]];
++	stats[STAT_KILLS] = level.killed_monsters;
++	stats[STAT_TOTAL_KILLS] = level.total_monsters;
++	stats[STAT_SECRETS] = level.found_secrets;
++	stats[STAT_TOTAL_SECRETS] = level.total_secrets;
++	stats[STAT_GOALS] = level.found_goals;
++	stats[STAT_TOTAL_GOALS] = level.total_goals;
++	stats[STAT_SELECTED_COUNT] = ent->client->pers.selected_item == -1 ? 0
++		: inventory[ent->client->pers.selected_item];
++}
++
+ void G_SetStats (edict_t *ent)
+ {
+ 	gitem_t		*item;
+ 	int			index, cells;
+ 	int			power_armor_type;
+ 
++	G_SetTouchScreenStats (ent);
++
+ 	//
+ 	// health
+ 	//
+diff --git a/game/q_shared.h b/game/q_shared.h
+index b10b741..a662178 100644
+--- a/game/q_shared.h
++++ b/game/q_shared.h
+@@ -1009,6 +1009,26 @@ typedef enum
+ #define STAT_CHASE				16
+ #define STAT_SPECTATOR			17
+ 
++// For the touch screen of the DS: the weapons the player has, a bit for each
++// in the order of their keys (Blaster, Shotgun, Super Shotgun, Machinegun,
++// Chaingun, Grenades, Grenade Launcher, Rocket Launcher, HyperBlaster,
++// Railgun, BFG10K), the ammo of each kind, the kills, secrets and goals of
++// the level and how many of the selected item the player has
++#define	STAT_WEAPONS			18
++#define	STAT_SHELLS				19
++#define	STAT_BULLETS			20
++#define	STAT_GRENADES			21
++#define	STAT_ROCKETS			22
++#define	STAT_CELLS				23
++#define	STAT_SLUGS				24
++#define	STAT_KILLS				25
++#define	STAT_TOTAL_KILLS		26
++#define	STAT_SECRETS			27
++#define	STAT_TOTAL_SECRETS		28
++#define	STAT_GOALS				29
++#define	STAT_TOTAL_GOALS		30
++#define	STAT_SELECTED_COUNT		31
++
+ #define	MAX_STATS				32
+ 
+ 

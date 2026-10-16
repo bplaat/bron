@@ -1,0 +1,88 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Tue, 6 Oct 2026 07:09:55 +0200
+Subject: [PATCH] Draw the intermission numbers without gaps
+
+The time, secrets and kills of the intermission were right aligned in
+fields of three digits, with the slash and colon at fixed places, so
+"12 / 47" had wide gaps. Each is now drawn as one string, like "12/47".
+---
+ WinQuake/sbar.c | 50 ++++++++++++++++++++++++++++++++++---------------
+ 1 file changed, 35 insertions(+), 15 deletions(-)
+
+diff --git a/WinQuake/sbar.c b/WinQuake/sbar.c
+index be9ec9c..3d1e8ce 100644
+--- a/WinQuake/sbar.c
++++ b/WinQuake/sbar.c
+@@ -1260,6 +1260,33 @@ void Sbar_MiniDeathmatchOverlay (void)
+ 	}
+ }
+ 
++/*
++==================
++Sbar_IntermissionString
++
++Digits, colons and slashes in the big numbers, one after the other
++==================
++*/
++void Sbar_IntermissionString (int x, int y, char *str)
++{
++	qpic_t	*pic;
++
++	for ( ; *str ; str++, x += pic->width)
++	{
++		if (*str == ':')
++			pic = sb_colon;
++		else if (*str == '/')
++			pic = sb_slash;
++		else if (*str == '-')
++			pic = sb_nums[0][10];
++		else
++			pic = sb_nums[0][*str - '0'];
++		if (x + pic->width > vid.width)
++			return;
++		Draw_TransPic (x, y, pic);
++	}
++}
++
+ /*
+ ==================
+ Sbar_IntermissionOverlay
+@@ -1270,7 +1297,7 @@ void Sbar_IntermissionOverlay (void)
+ {
+ 	qpic_t	*pic;
+ 	int		dig;
+-	int		num;
++	char	str[32];
+ 
+ 	scr_copyeverything = 1;
+ 	scr_fullupdate = 0;
+@@ -1287,21 +1314,14 @@ void Sbar_IntermissionOverlay (void)
+ 	pic = Draw_CachePic ("gfx/inter.lmp");
+ 	Draw_TransPic (0, 56, pic);
+ 
+-// time
++// time, secrets and kills, each as one string without gaps
+ 	dig = cl.completed_time/60;
+-	Sbar_IntermissionNumber (160, 64, dig, 3, 0);
+-	num = cl.completed_time - dig*60;
+-	Draw_TransPic (234,64,sb_colon);
+-	Draw_TransPic (246,64,sb_nums[0][num/10]);
+-	Draw_TransPic (266,64,sb_nums[0][num%10]);
+-
+-	Sbar_IntermissionNumber (160, 104, cl.stats[STAT_SECRETS], 3, 0);
+-	Draw_TransPic (232,104,sb_slash);
+-	Sbar_IntermissionNumber (240, 104, cl.stats[STAT_TOTALSECRETS], 3, 0);
+-
+-	Sbar_IntermissionNumber (160, 144, cl.stats[STAT_MONSTERS], 3, 0);
+-	Draw_TransPic (232,144,sb_slash);
+-	Sbar_IntermissionNumber (240, 144, cl.stats[STAT_TOTALMONSTERS], 3, 0);
++	sprintf (str, "%i:%02i", dig, cl.completed_time - dig*60);
++	Sbar_IntermissionString (160, 64, str);
++	sprintf (str, "%i/%i", cl.stats[STAT_SECRETS], cl.stats[STAT_TOTALSECRETS]);
++	Sbar_IntermissionString (160, 104, str);
++	sprintf (str, "%i/%i", cl.stats[STAT_MONSTERS], cl.stats[STAT_TOTALMONSTERS]);
++	Sbar_IntermissionString (160, 144, str);
+ 
+ }
+ 

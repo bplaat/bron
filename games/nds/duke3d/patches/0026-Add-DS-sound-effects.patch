@@ -1,0 +1,596 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Wed, 7 Oct 2026 12:00:00 +0200
+Subject: [PATCH] Add DS sound effects
+
+fx_nds.c implements the FX interface of the Apogee Sound System on
+hardware channels 0-7, which do the resampling, volume and panning, at
+the pitch of its own integer table. The first time a VOC or WAV is
+played its samples are moved to a word boundary and made signed in
+place, and a voice's end, when the game gets its callback, is worked
+out from its length.
+---
+ nds/fx_nds.c | 574 +++++++++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 574 insertions(+)
+ create mode 100644 nds/fx_nds.c
+
+diff --git a/nds/fx_nds.c b/nds/fx_nds.c
+new file mode 100644
+index 0000000..609416d
+--- /dev/null
++++ b/nds/fx_nds.c
+@@ -0,0 +1,574 @@
++//
++// Nintendo DS sound effects
++//
++// The FX_* interface of the Apogee Sound System on hardware channels 0-7,
++// which do the resampling, volume and stereo panning, so the ARM9 mixes
++// nothing. The game loads VOC and WAV files into its cache; the first time
++// one is played its samples are moved to a word boundary (the DS reads
++// them by words) and 8-bit samples are made signed, both in place, and the
++// start of the file is replaced by a header saying where the samples are.
++// When a voice ends is worked out from its length, the game gets its
++// callback from the polling in the game thread.
++//
++
++#include <nds.h>
++#include <limits.h>
++#include <string.h>
++
++#include "audiolib/fx_man.h"
++#include "audiolib/pitch.h"
++
++#include "duke3d_nds.h"
++
++#define FX_CHANNELS     8
++
++// Voices are reported done a little after they should have ended, so the
++// game can't reuse the memory of a sample still being played
++#define END_MARGIN      (TICK_FREQ / 50)
++
++typedef struct
++{
++    char kind;          // the 'C' of a VOC or 'R' of a WAV, the game checks it
++    char magic[3];
++    uint32_t offset;    // samples, from the start of the file
++    uint32_t length;    // in bytes
++    uint32_t rate;
++    uint32_t bits;
++} prepared_t;
++
++static const char prepared_magic[3] = { 'N', 'D', 'S' };
++
++typedef struct
++{
++    int handle;         // 0 when free
++    int priority;
++    uint32_t callbackval;
++    prepared_t sound;
++    bool looping;
++    u64 end_tick;
++    int vol, left, right;
++} voice_t;
++
++static voice_t voices[FX_CHANNELS];
++static int next_handle;
++static void (*callback)(int32_t);
++static int fx_volume = 255;
++static bool reverse_stereo;
++
++static uint32_t Read16(const uint8_t *p)
++{
++    return p[0] | (p[1] << 8);
++}
++
++static uint32_t Read32(const uint8_t *p)
++{
++    return p[0] | (p[1] << 8) | (p[2] << 16) | (p[3] << 24);
++}
++
++// Finds the samples of a VOC: one sound data block, old (1) or new (9)
++// style, and the 8-bit blocks of the same sound after it, continuation (2)
++// or more old style ones, which are moved up against it
++static bool ParseVOC(uint8_t *file, uint32_t *offset, uint32_t *length, uint32_t *rate, uint32_t *bits)
++{
++    uint8_t *p = file + Read16(file + 0x14), *data = NULL;
++    uint32_t ext_tc = 0;
++    bool ext = false;
++
++    *length = 0;
++    for (;;)
++    {
++        int type = p[0];
++        uint32_t len = Read32(p) >> 8;
++
++        if (type == 0)
++            break;
++        if (type == 1 && len >= 2 && p[5] == 0 && (data == NULL || *bits == 8))
++        {
++            if (data == NULL)
++            {
++                // An extended block (8) before it sets a finer rate, mono only
++                *rate = ext ? 256000000 / (65536 - ext_tc) : 1000000 / (256 - p[4]);
++                *bits = 8;
++                data = p + 6;
++            }
++            else
++                memmove(data + *length, p + 6, len - 2);
++            *length += len - 2;
++        }
++        else if (data == NULL && type == 9 && len >= 12 && p[9] == 1 && (p[8] == 8 || p[8] == 16))
++        {
++            *rate = Read32(p + 4);
++            *bits = p[8];
++            data = p + 16;
++            *length = len - 12;
++        }
++        else if (data != NULL && type == 2)
++        {
++            memmove(data + *length, p + 4, len);
++            *length += len;
++        }
++        else if (data == NULL && type == 8 && len >= 4 && p[7] == 0)
++        {
++            ext_tc = Read16(p + 4);
++            ext = true;
++            p += 4 + len;
++            continue;
++        }
++        else if (data != NULL)
++            break;
++        ext = false;
++        p += 4 + len;
++    }
++    *offset = data != NULL ? data - file : 0;
++    return data != NULL;
++}
++
++static bool ParseWAV(uint8_t *file, uint32_t *offset, uint32_t *length, uint32_t *rate, uint32_t *bits)
++{
++    uint8_t *p = file + 12, *end = file + 8 + Read32(file + 4);
++    bool have_format = false;
++
++    if (memcmp(file + 8, "WAVE", 4) != 0)
++        return false;
++    while (p + 8 <= end)
++    {
++        uint32_t len = Read32(p + 4);
++
++        if (!memcmp(p, "fmt ", 4) && Read16(p + 8) == 1 && Read16(p + 10) == 1)
++        {
++            *rate = Read32(p + 12);
++            *bits = Read16(p + 22);
++            have_format = *bits == 8 || *bits == 16;
++        }
++        else if (!memcmp(p, "data", 4) && have_format)
++        {
++            *offset = p + 8 - file;
++            *length = len;
++            return true;
++        }
++        p += 8 + ((len + 1) & ~1);
++    }
++    return false;
++}
++
++// Fills in where the samples of a sound file are, preparing it the first time
++static bool PrepareSound(uint8_t *file, prepared_t *prepared)
++{
++    uint32_t offset, length, rate, bits, i;
++    uint8_t *samples;
++    bool ok;
++
++    memcpy(prepared, file, sizeof(*prepared));
++    if (!memcmp(prepared->magic, prepared_magic, sizeof(prepared_magic)))
++        return prepared->length > 0;
++
++    ok = *file == 'C' ? ParseVOC(file, &offset, &length, &rate, &bits)
++                      : ParseWAV(file, &offset, &length, &rate, &bits);
++    if (!ok || rate == 0 || offset < sizeof(prepared_t) + 3)
++        length = 0;
++
++    // Down to a word boundary, behind the header
++    samples = (uint8_t *) ((uintptr_t) (file + offset) & ~3);
++    if (length > 0)
++    {
++        memmove(samples, file + offset, length);
++        if (bits == 8)
++        {
++            for (i = 0; i + 4 <= length; i += 4)
++                *(uint32_t *) (samples + i) ^= 0x80808080;
++            for (; i < length; ++i)
++                samples[i] ^= 0x80;
++        }
++        DC_FlushRange(samples, length);
++    }
++    prepared->kind = *file;
++    memcpy(prepared->magic, prepared_magic, sizeof(prepared_magic));
++    prepared->offset = samples - file;
++    prepared->length = length & ~3;
++    prepared->rate = rate;
++    prepared->bits = bits;
++    memcpy(file, prepared, sizeof(*prepared));
++    return prepared->length > 0;
++}
++
++static voice_t *FindVoice(int handle)
++{
++    int i;
++
++    for (i = 0; i < FX_CHANNELS; ++i)
++        if (voices[i].handle == handle && handle != 0)
++            return &voices[i];
++    return NULL;
++}
++
++// Frees a voice and gives the game its callback, like the original on a
++// kill or the end of a sound
++static void EndVoice(voice_t *v)
++{
++    uint32_t callbackval = v->callbackval;
++
++    soundStop(1U << (v - voices));
++    v->handle = 0;
++    if (callback != NULL)
++        callback(callbackval);
++}
++
++void NDS_UpdateSound(void)
++{
++    u64 now = tickGetCount();
++    int i;
++
++    for (i = 0; i < FX_CHANNELS; ++i)
++        if (voices[i].handle && !voices[i].looping && now >= voices[i].end_tick)
++            EndVoice(&voices[i]);
++}
++
++// A free voice, else the one with the lowest priority if this one isn't lower
++static voice_t *AllocVoice(int priority)
++{
++    voice_t *lowest = NULL;
++    int i;
++
++    NDS_UpdateSound();
++    for (i = 0; i < FX_CHANNELS; ++i)
++    {
++        if (!voices[i].handle)
++            return &voices[i];
++        if (lowest == NULL || voices[i].priority < lowest->priority)
++            lowest = &voices[i];
++    }
++    if (priority < lowest->priority)
++        return NULL;
++    EndVoice(lowest);
++    return lowest;
++}
++
++static void SetVolume(voice_t *v)
++{
++    int ch = v - voices;
++    int left = reverse_stereo ? v->right : v->left;
++    int right = reverse_stereo ? v->left : v->right;
++    int vol = left > right ? left : right;
++    int pan = vol > 0 ? 64 + (right - left) * 63 / vol : 64;
++
++    soundChSetVolume(ch, vol * fx_volume >> 5);
++    soundChSetPan(ch, pan);
++}
++
++static unsigned TimerFor(const prepared_t *s, int pitchoffset)
++{
++    // The Apogee Sound System's 16.16 table of the pitch offsets in cents
++    unsigned hz = (unsigned) (((uint64_t) s->rate * PITCH_GetScale(pitchoffset)) >> 16);
++    unsigned timer = soundTimerFromHz(hz > 0 ? hz : 1);
++
++    return timer < 16 ? 16 : timer;
++}
++
++static int Play(uint8_t *ptr, int32_t loopstart, int pitchoffset, int vol, int left, int right,
++                int priority, uint32_t callbackval)
++{
++    prepared_t sound, *s = &sound;
++    voice_t *v;
++    unsigned timer, words, loop;
++    int ch, bytes_per_sample;
++
++    if (!PrepareSound(ptr, s) || (v = AllocVoice(priority)) == NULL)
++        return FX_Warning;
++
++    ch = v - voices;
++    // Never the handle of a voice still playing
++    do
++        next_handle = next_handle == INT_MAX ? 1 : next_handle + 1;
++    while (FindVoice(next_handle) != NULL);
++    v->handle = next_handle;
++    v->priority = priority;
++    v->callbackval = callbackval;
++    v->sound = sound;
++    v->looping = loopstart >= 0;
++    v->vol = vol;
++    v->left = left;
++    v->right = right;
++
++    timer = TimerFor(s, pitchoffset);
++    bytes_per_sample = s->bits / 8;
++    words = s->length / 4;
++    // Loops start loopstart samples in, as with the original
++    loop = v->looping ? (unsigned) loopstart * bytes_per_sample / 4 : 0;
++    if (loop >= words)
++        loop = 0;
++    // A sample takes timer sound clocks, 32 of which are a tick
++    v->end_tick = tickGetCount() + (u64) (s->length / bytes_per_sample) * timer / (SOUND_CLOCK / TICK_FREQ)
++                + END_MARGIN;
++    soundPreparePcm(ch, 0, 64, timer, v->looping ? SoundMode_Repeat : SoundMode_OneShot,
++                    s->bits == 16 ? SoundFmt_Pcm16 : SoundFmt_Pcm8, ptr + s->offset,
++                    loop, v->looping ? words - loop : words);
++    SetVolume(v);
++    soundStart(1U << ch);
++    return v->handle;
++}
++
++// ---------------------------------------------------------------------------
++// FX interface
++// ---------------------------------------------------------------------------
++
++char *FX_ErrorString(int ErrorNumber)
++{
++    return ErrorNumber == FX_Ok ? "Fx ok." : "Fx error.";
++}
++
++int FX_SetupCard(int SoundCard, fx_device *device)
++{
++    device->MaxVoices = FX_CHANNELS;
++    device->MaxSampleBits = 16;
++    device->MaxChannels = 2;
++    return FX_Ok;
++}
++
++int FX_GetBlasterSettings(fx_blaster_config *blaster)
++{
++    return FX_Error;
++}
++
++int FX_SetupSoundBlaster(fx_blaster_config blaster, int *MaxVoices, int *MaxSampleBits, int *MaxChannels)
++{
++    return FX_Error;
++}
++
++int FX_Init(int SoundCard, int numvoices, int numchannels, int samplebits, unsigned mixrate)
++{
++    soundInit();
++    soundPowerOn();
++    return FX_Ok;
++}
++
++int FX_Shutdown(void)
++{
++    FX_StopAllSounds();
++    return FX_Ok;
++}
++
++int FX_SetCallBack(void (*function)(int32_t))
++{
++    callback = function;
++    return FX_Ok;
++}
++
++void FX_SetVolume(int volume)
++{
++    int i;
++
++    fx_volume = volume < 0 ? 0 : volume > 255 ? 255 : volume;
++    for (i = 0; i < FX_CHANNELS; ++i)
++        if (voices[i].handle)
++            SetVolume(&voices[i]);
++}
++
++int FX_GetVolume(void)
++{
++    return fx_volume;
++}
++
++void FX_SetReverseStereo(int setting)
++{
++    reverse_stereo = setting;
++}
++
++int FX_GetReverseStereo(void)
++{
++    return reverse_stereo;
++}
++
++void FX_SetReverb(int reverb) {}
++void FX_SetFastReverb(int reverb) {}
++int FX_GetMaxReverbDelay(void) { return 0; }
++int FX_GetReverbDelay(void) { return 0; }
++void FX_SetReverbDelay(int delay) {}
++
++int FX_VoiceAvailable(int priority)
++{
++    int i;
++
++    NDS_UpdateSound();
++    for (i = 0; i < FX_CHANNELS; ++i)
++        if (!voices[i].handle || priority >= voices[i].priority)
++            return 1;
++    return 0;
++}
++
++int FX_EndLooping(int handle)
++{
++    voice_t *v = FindVoice(handle);
++
++    if (v != NULL && v->looping)
++        EndVoice(v);
++    return FX_Ok;
++}
++
++int FX_SetPan(int handle, int vol, int left, int right)
++{
++    voice_t *v = FindVoice(handle);
++
++    if (v == NULL)
++        return FX_Warning;
++    v->vol = vol;
++    v->left = left;
++    v->right = right;
++    SetVolume(v);
++    return FX_Ok;
++}
++
++int FX_SetPitch(int handle, int pitchoffset)
++{
++    voice_t *v = FindVoice(handle);
++
++    if (v == NULL)
++        return FX_Warning;
++    soundChSetTimer(v - voices, TimerFor(&v->sound, pitchoffset));
++    return FX_Ok;
++}
++
++int FX_SetFrequency(int handle, int frequency)
++{
++    voice_t *v = FindVoice(handle);
++    unsigned timer;
++
++    if (v == NULL || frequency <= 0)
++        return FX_Warning;
++    timer = soundTimerFromHz(frequency);
++    soundChSetTimer(v - voices, timer < 16 ? 16 : timer);
++    return FX_Ok;
++}
++
++// The left and right levels of a sound at an angle (0..31, 0 ahead, 8 to the
++// right) and distance (0..255), like the original's pan table
++static void Pan3D(int angle, int distance, int *vol, int *left, int *right)
++{
++    int level, a, ramp;
++
++    if (distance < 0)
++    {
++        distance = -distance;
++        angle += 16;
++    }
++    distance = distance > 255 ? 255 : distance;
++    angle &= 31;
++    level = 255 - distance;
++    a = angle & 15;
++    ramp = level - level * (a <= 8 ? a : 16 - a) / 8;
++    *left = angle < 16 ? ramp : level;
++    *right = angle < 16 ? level : ramp;
++    *vol = level;
++}
++
++int FX_PlayVOC(uint8_t *ptr, int pitchoffset, int vol, int left, int right, int priority, uint32_t callbackval)
++{
++    return Play(ptr, -1, pitchoffset, vol, left, right, priority, callbackval);
++}
++
++int FX_PlayLoopedVOC(uint8_t *ptr, int32_t loopstart, int32_t loopend, int32_t pitchoffset, int32_t vol,
++                     int32_t left, int32_t right, int32_t priority, uint32_t callbackval)
++{
++    return Play(ptr, loopstart, pitchoffset, vol, left, right, priority, callbackval);
++}
++
++int FX_PlayWAV(uint8_t *ptr, int pitchoffset, int vol, int left, int right, int priority, uint32_t callbackval)
++{
++    return Play(ptr, -1, pitchoffset, vol, left, right, priority, callbackval);
++}
++
++int FX_PlayLoopedWAV(uint8_t *ptr, int32_t loopstart, int32_t loopend, int32_t pitchoffset, int32_t vol,
++                     int32_t left, int32_t right, int32_t priority, uint32_t callbackval)
++{
++    return Play(ptr, loopstart, pitchoffset, vol, left, right, priority, callbackval);
++}
++
++int FX_PlayVOC3D(uint8_t *ptr, int32_t pitchoffset, int32_t angle, int32_t distance, int32_t priority,
++                 uint32_t callbackval)
++{
++    int vol, left, right;
++
++    Pan3D(angle, distance, &vol, &left, &right);
++    return Play(ptr, -1, pitchoffset, vol, left, right, priority, callbackval);
++}
++
++int FX_PlayWAV3D(uint8_t *ptr, int pitchoffset, int angle, int distance, int priority, uint32_t callbackval)
++{
++    return FX_PlayVOC3D(ptr, pitchoffset, angle, distance, priority, callbackval);
++}
++
++// Raw samples and streams aren't used by Duke Nukem 3D
++int FX_PlayRaw(uint8_t *ptr, uint32_t length, uint32_t rate, int32_t pitchoffset, int32_t vol, int32_t left,
++               int32_t right, int32_t priority, uint32_t callbackval)
++{
++    return FX_Warning;
++}
++
++int FX_PlayLoopedRaw(uint8_t *ptr, uint32_t length, char *loopstart, char *loopend, uint32_t rate,
++                     int32_t pitchoffset, int32_t vol, int32_t left, int32_t right, int32_t priority,
++                     uint32_t callbackval)
++{
++    return FX_Warning;
++}
++
++int32_t FX_Pan3D(int handle, int angle, int distance)
++{
++    voice_t *v = FindVoice(handle);
++
++    if (v == NULL)
++        return FX_Warning;
++    Pan3D(angle, distance, &v->vol, &v->left, &v->right);
++    SetVolume(v);
++    return FX_Ok;
++}
++
++int32_t FX_SoundActive(int32_t handle)
++{
++    NDS_UpdateSound();
++    return FindVoice(handle) != NULL;
++}
++
++int32_t FX_SoundsPlaying(void)
++{
++    int i, n = 0;
++
++    NDS_UpdateSound();
++    for (i = 0; i < FX_CHANNELS; ++i)
++        n += voices[i].handle != 0;
++    return n;
++}
++
++int32_t FX_StopSound(int handle)
++{
++    voice_t *v = FindVoice(handle);
++
++    if (v == NULL)
++        return FX_Warning;
++    EndVoice(v);
++    return FX_Ok;
++}
++
++int32_t FX_StopAllSounds(void)
++{
++    int i;
++
++    for (i = 0; i < FX_CHANNELS; ++i)
++        if (voices[i].handle)
++            EndVoice(&voices[i]);
++    return FX_Ok;
++}
++
++int32_t FX_StartDemandFeedPlayback(void (*function)(char **ptr, uint32_t *length), int32_t rate,
++                                   int32_t pitchoffset, int32_t vol, int32_t left, int32_t right,
++                                   int32_t priority, uint32_t callbackval)
++{
++    return FX_Warning;
++}
++
++int FX_StartRecording(int MixRate, void (*function)(char *ptr, int length))
++{
++    return FX_Error;
++}
++
++void FX_StopRecord(void)
++{
++}

@@ -1,0 +1,240 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Sun, 11 Oct 2026 11:59:51 +0200
+Subject: [PATCH] Add the DS Rumble Pak
+
+A Rumble Pak in the GBA slot rumbles when the player takes damage,
+longer for more damage, whatever hurt: the health of the player's sprite
+is watched while playing. Firing a weapon rumbles too, the shotgun and
+RPG longer. The pak only moves while it is switched back and forth, a
+tick task does that at 60 Hz for as long as the rumble lasts. Without a
+pak, and on the DSi which has no GBA slot, nothing changes. The demos
+playing behind the menu don't rumble.
+
+Game Options has Rumble On/Off below Adult Mode, kept as Rumble in the
+config, it rumbles once turned on.
+---
+ Game/src/config.c |  4 ++++
+ Game/src/menues.c | 10 ++++++++-
+ Game/src/player.c |  6 +++++
+ nds/duke3d_nds.c  |  1 +
+ nds/duke3d_nds.h  |  5 +++++
+ nds/input_nds.c   | 57 +++++++++++++++++++++++++++++++++++++++++++++--
+ 6 files changed, 80 insertions(+), 3 deletions(-)
+
+diff --git a/Game/src/config.c b/Game/src/config.c
+index 556e124..7748a43 100644
+--- a/Game/src/config.c
++++ b/Game/src/config.c
+@@ -43,6 +43,8 @@ Prepared for public release: 03/21/2003 - Charlie Wiederhold, 3D Realms
+ // as well as setting up function mappings
+ 
+ #include "_functio.h"
++// After scriplib.h, which names parameters bool
++#include "duke3d_nds.h"
+ 
+ //
+ // Sound variables
+@@ -662,6 +664,7 @@ void CONFIG_ReadSetup( void )
+    SCRIPT_GetNumber( scripthandle, "Misc", "Executions",&ud.executions);
+    ud.executions++;
+    SCRIPT_GetNumber( scripthandle, "Misc", "RunMode",&ud.auto_run);
++   SCRIPT_GetNumber( scripthandle, "Misc", "Rumble",&nds_rumble);
+    SCRIPT_GetNumber( scripthandle, "Misc", "Crosshairs",&ud.crosshair);
+    SCRIPT_GetNumber( scripthandle, "Misc", "ShowCinematics",&ud.showcinematics);
+    SCRIPT_GetNumber( scripthandle, "Misc", "WeaponAutoSwitch",&ud.weaponautoswitch);
+@@ -824,6 +827,7 @@ void CONFIG_WriteSetup( void )
+    SCRIPT_PutNumber( scripthandle, "Screen Setup", "ScreenGamma",ud.brightness,false,false);
+    SCRIPT_PutNumber( scripthandle, "Misc", "Executions",ud.executions,false,false);
+    SCRIPT_PutNumber( scripthandle, "Misc", "RunMode",ud.auto_run,false,false);
++   SCRIPT_PutNumber( scripthandle, "Misc", "Rumble",nds_rumble,false,false);
+    SCRIPT_PutNumber( scripthandle, "Misc", "Crosshairs",ud.crosshair,false,false);
+    SCRIPT_PutNumber( scripthandle, "Misc", "ShowCinematics",ud.showcinematics,false,false);
+    SCRIPT_PutNumber( scripthandle, "Misc", "HideWeapon",ud.hideweapon,false,false);
+diff --git a/Game/src/menues.c b/Game/src/menues.c
+index a2bb979..d9cee79 100644
+--- a/Game/src/menues.c
++++ b/Game/src/menues.c
+@@ -32,6 +32,7 @@ Prepared for public release: 03/21/2003 - Charlie Wiederhold, 3D Realms
+ #include "filesystem.h"
+ #include "premap.h"
+ #include "display.h"
++#include "duke3d_nds.h"
+ 
+ extern short inputloc;
+ extern int recfilep;
+@@ -2670,7 +2671,7 @@ else
+ 
+             onbar = 0;
+ 
+-			x = probe(c+6,43,16,7);
++			x = probe(c+6,43,16,8);
+ 
+             switch(x)
+             {
+@@ -2727,6 +2728,10 @@ else
+                         }
+                     }
+ #endif
++                    break;
++                case 7: // rumbles once turned on
++                    nds_rumble = !nds_rumble;
++                    NDS_Rumble(200);
+                     break;
+ 
+ 			}
+@@ -2773,6 +2778,9 @@ else
+ #endif
+             menutext(c+160+40,43+16*6,0,0,ud.lockout?"OFF":"ON");
+ 
++            menutext(c,43+16*7,SHX(-10),PHX(-10),"RUMBLE");
++            menutext(c+160+40,43+16*7,0,0,nds_rumble?"ON":"OFF");
++
+ 
+ 			break;
+ 
+diff --git a/Game/src/player.c b/Game/src/player.c
+index 89baba2..528313e 100644
+--- a/Game/src/player.c
++++ b/Game/src/player.c
+@@ -27,6 +27,7 @@ Prepared for public release: 03/21/2003 - Charlie Wiederhold, 3D Realms
+ // Savage Baggage Masters
+ 
+ #include "duke3d.h"
++#include "duke3d_nds.h"
+ 
+ int32 turnheldtime; //MED
+ int32 lastcontroltime; //MED
+@@ -332,6 +333,11 @@ void shoot(short i,short atwith)
+ 
+         ps[p].crack_time = 777;
+ 
++        // The kick of firing rumbles, the demos playing behind the menu
++        // don't rumble
++        if (p == myconnectindex && ud.recstat != 2)
++            NDS_Rumble(atwith == RPG ? 200 : atwith == SHOTGUN ? 120 : 60);
++
+     }
+     else
+     {
+diff --git a/nds/duke3d_nds.c b/nds/duke3d_nds.c
+index 77da380..b90f8f8 100644
+--- a/nds/duke3d_nds.c
++++ b/nds/duke3d_nds.c
+@@ -396,6 +396,7 @@ int main(int argc, char **argv)
+         setCpuClock(true);
+ 
+     NDS_InitVideo();
++    NDS_InitRumble();
+     ConsoleMode();
+     PrintHeader();
+     keysSetRepeat(15, 4);
+diff --git a/nds/duke3d_nds.h b/nds/duke3d_nds.h
+index 26256fd..f405680 100644
+--- a/nds/duke3d_nds.h
++++ b/nds/duke3d_nds.h
+@@ -27,6 +27,11 @@ void NDS_ShowSplash(const uint8_t *pixels, const uint8_t *pal);
+ void NDS_PostScancode(int scancode, bool pressed);
+ 
+ void NDS_PollInput(void);
++// Rumbles a Rumble Pak in the GBA slot for ms milliseconds, when one is
++// inserted and Rumble is on
++void NDS_InitRumble(void);
++void NDS_Rumble(int ms);
++extern int32_t nds_rumble;
+ void NDS_TapScancode(int scancode);
+ void NDS_PollTouch(uint32_t down);
+ void NDS_UpdateSound(void);
+diff --git a/nds/input_nds.c b/nds/input_nds.c
+index 5d1a4a5..b1e53e4 100644
+--- a/nds/input_nds.c
++++ b/nds/input_nds.c
+@@ -1,5 +1,5 @@
+ //
+-// Nintendo DS buttons
++// Nintendo DS buttons and Rumble Pak
+ //
+ // The buttons send PC scancodes: while playing the keys of the game
+ // functions they stand for (the default key setup, which the game always
+@@ -9,7 +9,8 @@
+ // The scancode sent on press is kept, so the release always matches even if
+ // a menu opened or closed in between. Also where the console sleeps while
+ // the lid is closed and the game quits on the DSi power button or
+-// L+R+START+SELECT.
++// L+R+START+SELECT. A Rumble Pak in the GBA slot rumbles on taking damage
++// and firing, without one it is left alone.
+ //
+ 
+ #include <nds.h>
+@@ -60,6 +61,44 @@ void NDS_TapScancode(int scancode)
+     NDS_PostScancode(scancode, true);
+ }
+ 
++// The Rumble Pak only moves while it is switched back and forth, which a tick
++// task does at 60 Hz for as long as the rumble lasts. Only a DS has a GBA
++// slot, on a DSi gbacartOpen fails.
++#define RUMBLE_HZ       60
++#define RUMBLE_MAX_MS   500
++
++int32_t nds_rumble = 1;
++
++static bool rumble_inserted;
++static volatile int rumble_ticks;
++static TickTask rumble_task;
++
++static void RumbleTick(TickTask *task)
++{
++    if (rumble_ticks > 0)
++        --rumble_ticks;
++    rumbleSet(rumble_ticks & 1);
++}
++
++void NDS_InitRumble(void)
++{
++    if (!gbacartOpen())
++        return;
++    rumble_inserted = rumbleIsInserted();
++    if (rumble_inserted)
++        tickTaskStart(&rumble_task, RumbleTick, ticksFromHz(RUMBLE_HZ), ticksFromHz(RUMBLE_HZ));
++    else
++        gbacartClose();
++}
++
++void NDS_Rumble(int ms)
++{
++    int ticks = min(ms, RUMBLE_MAX_MS) * RUMBLE_HZ / 1000;
++
++    if (rumble_inserted && nds_rumble && ticks > rumble_ticks)
++        rumble_ticks = ticks;
++}
++
+ // Playing: in a level, no menu or typing
+ static bool Playing(void)
+ {
+@@ -68,6 +107,19 @@ static bool Playing(void)
+     return (gm & MODE_GAME) && !(gm & (MODE_MENU | MODE_TYPE));
+ }
+ 
++// Taking damage rumbles, longer for more, whatever hurt you: the health of
++// your sprite is watched while playing. The demos playing behind the menu
++// don't rumble.
++static void WatchHealth(bool playing)
++{
++    static int shown = -1;
++    int health = playing && ud.recstat != 2 ? sprite[ps[myconnectindex].i].extra : -1;
++
++    if (health >= 0 && shown >= 0 && health < shown)
++        NDS_Rumble(80 + (shown - health) * 8);
++    shown = health;
++}
++
+ void NDS_PollInput(void)
+ {
+     static uint32_t scanned;
+@@ -118,5 +170,6 @@ void NDS_PollInput(void)
+         tap_key = 0;
+     }
+     NDS_PollTouch(down);
++    WatchHealth(playing);
+ }
+ 

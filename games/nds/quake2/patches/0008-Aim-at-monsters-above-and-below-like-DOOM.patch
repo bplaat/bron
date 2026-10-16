@@ -1,0 +1,145 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Mon, 12 Oct 2026 18:13:14 +0200
+Subject: [PATCH] Aim at monsters above and below like DOOM
+
+Nothing looks up and down on the DS, Quake II fires where you look, so
+monsters on stairs, ledges and in pits couldn't be hit. A shot that
+wouldn't hit a monster goes up or down to the one in sight nearest to
+its direction seen from above, within 21.6 degrees to the side like
+Quake's aim, at any height. The grenades keep their lob.
+---
+ game/p_weapon.c | 61 +++++++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 61 insertions(+)
+
+diff --git a/game/p_weapon.c b/game/p_weapon.c
+index e90282b..5efd28b 100644
+--- a/game/p_weapon.c
++++ b/game/p_weapon.c
+@@ -42,6 +42,58 @@ static void P_ProjectSource (gclient_t *client, vec3_t point, vec3_t distance, v
+ 	G_ProjectSource (point, _distance, forward, right, result);
+ }
+ 
++/*
++===============
++P_AutoAim
++
++Nothing looks up and down on the DS: like in DOOM, a shot from start along
++forward that wouldn't hit a monster goes up or down to the one in sight
++nearest to its direction seen from above, within 21.6 degrees to the side
++(a cosine of 0.93 like Quake's aim), at any height
++===============
++*/
++static void P_AutoAim (edict_t *ent, vec3_t start, vec3_t forward)
++{
++	edict_t	*check, *best = NULL;
++	vec3_t	flat, dir, end, center, bestcenter;
++	float	dot, bestdot = 0.93f, dist;
++	trace_t	tr;
++	int		i, j;
++
++	VectorMA (start, 8192, forward, end);
++	tr = gi.trace (start, NULL, NULL, end, ent, MASK_SHOT);
++	if (tr.ent && tr.ent->svflags & SVF_MONSTER)
++		return;
++
++	VectorSet (flat, forward[0], forward[1], 0);
++	if (VectorNormalize (flat) == 0)
++		return;
++	for (i = 1, check = g_edicts + 1; i < globals.num_edicts; i++, check++)
++	{
++		if (!check->inuse || !(check->svflags & SVF_MONSTER) || check->health <= 0)
++			continue;
++		for (j = 0; j < 3; j++)
++			center[j] = check->s.origin[j] + 0.5f * (check->mins[j] + check->maxs[j]);
++		VectorSet (dir, center[0] - start[0], center[1] - start[1], 0);
++		if (VectorNormalize (dir) == 0 || (dot = DotProduct (dir, flat)) < bestdot)
++			continue;
++		tr = gi.trace (start, NULL, NULL, center, ent, MASK_SHOT);
++		if (tr.ent != check)
++			continue;
++		bestdot = dot;
++		best = check;
++		VectorCopy (center, bestcenter);
++	}
++	if (!best)
++		return;
++
++	// the same direction seen from above, at the height of its center
++	VectorSubtract (bestcenter, start, dir);
++	dist = sqrtf (dir[0] * dir[0] + dir[1] * dir[1]);
++	VectorSet (forward, flat[0] * dist, flat[1] * dist, dir[2]);
++	VectorNormalize (forward);
++}
++
+ 
+ /*
+ ===============
+@@ -780,6 +832,7 @@ void Weapon_RocketLauncher_Fire (edict_t *ent)
+ 
+ 	VectorSet(offset, 8, 8, ent->viewheight-8);
+ 	P_ProjectSource (ent->client, ent->s.origin, offset, forward, right, start);
++	P_AutoAim (ent, start, forward);
+ 	fire_rocket (ent, start, forward, damage, 650, damage_radius, radius_damage);
+ 
+ 	// send muzzle flash
+@@ -829,6 +882,7 @@ void Blaster_Fire (edict_t *ent, vec3_t g_offset, int damage, qboolean hyper, in
+ 	VectorScale (forward, -2, ent->client->kick_origin);
+ 	ent->client->kick_angles[0] = -1;
+ 
++	P_AutoAim (ent, start, forward);
+ 	fire_blaster (ent, start, forward, damage, 1000, effect, hyper);
+ 
+ 	// send muzzle flash
+@@ -1011,6 +1065,7 @@ void Machinegun_Fire (edict_t *ent)
+ 	AngleVectors (angles, forward, right, NULL);
+ 	VectorSet(offset, 0, 8, ent->viewheight-8);
+ 	P_ProjectSource (ent->client, ent->s.origin, offset, forward, right, start);
++	P_AutoAim (ent, start, forward);
+ 	fire_bullet (ent, start, forward, damage, kick, DEFAULT_BULLET_HSPREAD, DEFAULT_BULLET_VSPREAD, MOD_MACHINEGUN);
+ 
+ 	gi.WriteByte (svc_muzzleflash);
+@@ -1148,6 +1203,7 @@ void Chaingun_Fire (edict_t *ent)
+ 		VectorSet(offset, 0, r, u + ent->viewheight-8);
+ 		P_ProjectSource (ent->client, ent->s.origin, offset, forward, right, start);
+ 
++		P_AutoAim (ent, start, forward);
+ 		fire_bullet (ent, start, forward, damage, kick, DEFAULT_BULLET_HSPREAD, DEFAULT_BULLET_VSPREAD, MOD_CHAINGUN);
+ 	}
+ 
+@@ -1209,6 +1265,7 @@ void weapon_shotgun_fire (edict_t *ent)
+ 		kick *= 4;
+ 	}
+ 
++	P_AutoAim (ent, start, forward);
+ 	if (deathmatch->value)
+ 		fire_shotgun (ent, start, forward, damage, kick, 500, 500, DEFAULT_DEATHMATCH_SHOTGUN_COUNT, MOD_SHOTGUN);
+ 	else
+@@ -1263,9 +1320,11 @@ void weapon_supershotgun_fire (edict_t *ent)
+ 	v[YAW]   = ent->client->v_angle[YAW] - 5;
+ 	v[ROLL]  = ent->client->v_angle[ROLL];
+ 	AngleVectors (v, forward, NULL, NULL);
++	P_AutoAim (ent, start, forward);
+ 	fire_shotgun (ent, start, forward, damage, kick, DEFAULT_SHOTGUN_HSPREAD, DEFAULT_SHOTGUN_VSPREAD, DEFAULT_SSHOTGUN_COUNT/2, MOD_SSHOTGUN);
+ 	v[YAW]   = ent->client->v_angle[YAW] + 5;
+ 	AngleVectors (v, forward, NULL, NULL);
++	P_AutoAim (ent, start, forward);
+ 	fire_shotgun (ent, start, forward, damage, kick, DEFAULT_SHOTGUN_HSPREAD, DEFAULT_SHOTGUN_VSPREAD, DEFAULT_SSHOTGUN_COUNT/2, MOD_SSHOTGUN);
+ 
+ 	// send muzzle flash
+@@ -1331,6 +1390,7 @@ void weapon_railgun_fire (edict_t *ent)
+ 
+ 	VectorSet(offset, 0, 7,  ent->viewheight-8);
+ 	P_ProjectSource (ent->client, ent->s.origin, offset, forward, right, start);
++	P_AutoAim (ent, start, forward);
+ 	fire_rail (ent, start, forward, damage, kick);
+ 
+ 	// send muzzle flash
+@@ -1412,6 +1472,7 @@ void weapon_bfg_fire (edict_t *ent)
+ 
+ 	VectorSet(offset, 8, 8, ent->viewheight-8);
+ 	P_ProjectSource (ent->client, ent->s.origin, offset, forward, right, start);
++	P_AutoAim (ent, start, forward);
+ 	fire_bfg (ent, start, forward, damage, 400, damage_radius);
+ 
+ 	ent->client->ps.gunframe++;

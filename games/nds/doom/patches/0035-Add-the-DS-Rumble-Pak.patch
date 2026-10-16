@@ -1,0 +1,418 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Sat, 10 Oct 2026 22:18:38 +0200
+Subject: [PATCH] Add the DS Rumble Pak
+
+A Rumble Pak in the GBA slot rumbles through I_Tactile, which Doom
+already called when the player takes damage, and now also when firing a
+weapon. The pak only moves while it is switched back and forth, a tick
+task does that at 60 Hz for as long as the rumble lasts. Without a pak,
+and on the DSi which has no GBA slot, nothing changes. The demos playing
+behind the menu don't rumble.
+
+Options always shows Rumble On/Off below Messages, kept as rumble in
+the config, it rumbles once turned on. There is no menu graphic for
+Rumble, so it is cut from the letters of others: the R of Read This!,
+the u, m, l and e of Sound Volume, the colon of Messages: and a b made
+of the top of the r of rough, its stem filling the notch, and the
+bottom of the d of Load. Graphics of other sizes than id's are not cut
+up, those get Rumble in the HUD font.
+---
+ doomgeneric/d_main.c          |   1 +
+ doomgeneric/doomgeneric_nds.c |   1 +
+ doomgeneric/doomgeneric_nds.h |   1 +
+ doomgeneric/i_ndsinput.c      |  43 +++++++++-
+ doomgeneric/i_system.c        |   6 --
+ doomgeneric/i_system.h        |   3 +
+ doomgeneric/m_config.c        |   6 ++
+ doomgeneric/m_menu.c          | 152 +++++++++++++++++++++++++++++++++-
+ doomgeneric/p_inter.c         |   3 +-
+ doomgeneric/p_pspr.c          |   5 ++
+ 10 files changed, 211 insertions(+), 10 deletions(-)
+
+diff --git a/doomgeneric/d_main.c b/doomgeneric/d_main.c
+index 5fa2eac..54e7232 100644
+--- a/doomgeneric/d_main.c
++++ b/doomgeneric/d_main.c
+@@ -375,6 +375,7 @@ void D_BindVariables(void)
+     M_BindVariable("vanilla_savegame_limit", &vanilla_savegame_limit);
+     M_BindVariable("vanilla_demo_limit",     &vanilla_demo_limit);
+     M_BindVariable("show_endoom",            &show_endoom);
++    M_BindVariable("rumble",                 &rumble);
+ 
+     // Multiplayer chat macros
+ 
+diff --git a/doomgeneric/doomgeneric_nds.c b/doomgeneric/doomgeneric_nds.c
+index d88634f..fbca5a0 100644
+--- a/doomgeneric/doomgeneric_nds.c
++++ b/doomgeneric/doomgeneric_nds.c
+@@ -565,6 +565,7 @@ void DG_Init(void)
+ 
+     tickTaskStart(&tick_task, TickNop, ticksFromHz(10), ticksFromHz(10));
+     keysSetRepeat(15, 4);
++    NDS_InitRumble();
+ 
+     // Default before the config file is loaded, X sends it
+     key_nextweapon = ']';
+diff --git a/doomgeneric/doomgeneric_nds.h b/doomgeneric/doomgeneric_nds.h
+index 3fd13c8..80ca80b 100644
+--- a/doomgeneric/doomgeneric_nds.h
++++ b/doomgeneric/doomgeneric_nds.h
+@@ -20,6 +20,7 @@ void I_NDS_ShowSplash(const byte *pixels, const byte *playpal);
+ // Draws a Doom patch into an 8bpp buffer, optionally through a color translation
+ void NDS_DrawPatch(byte *buf, int bw, int bh, int x, int y, const patch_t *patch, const byte *xlat);
+ 
++void NDS_InitRumble(void);
+ void NDS_PollInput(void);
+ void NDS_PostKey(evtype_t type, int key);
+ 
+diff --git a/doomgeneric/i_ndsinput.c b/doomgeneric/i_ndsinput.c
+index 7cd93b1..bb20ec8 100644
+--- a/doomgeneric/i_ndsinput.c
++++ b/doomgeneric/i_ndsinput.c
+@@ -1,11 +1,12 @@
+ //
+-// Nintendo DS buttons
++// Nintendo DS buttons and Rumble Pak
+ //
+ // The buttons send Doom keys, the ones of the game while playing and the menu
+ // keys in the menus. The key sent on press is kept, so the release always
+ // matches even if the menu opened or closed in between. Also where the
+ // console sleeps while the lid is closed and Doom quits on the DSi power
+-// button or L+R+START+SELECT.
++// button or L+R+START+SELECT. A Rumble Pak in the GBA slot rumbles on
++// Doom's tactile feedback, without one it is left alone.
+ //
+ 
+ #include <nds.h>
+@@ -44,6 +45,44 @@ static const button_binding_t bindings[] =
+ // opened or closed in between
+ static int held_keys[arrlen(bindings)];
+ 
++// The Rumble Pak only moves while it is switched back and forth, which a tick
++// task does at 60 Hz for as long as the rumble lasts. Only a DS has a GBA
++// slot, on a DSi gbacartOpen fails.
++#define RUMBLE_HZ 60
++
++int rumble = 1;
++
++static boolean rumble_inserted;
++static volatile int rumble_ticks;
++static TickTask rumble_task;
++
++static void RumbleTick(TickTask *task)
++{
++    if (rumble_ticks > 0)
++        --rumble_ticks;
++    rumbleSet(rumble_ticks & 1);
++}
++
++void NDS_InitRumble(void)
++{
++    if (!gbacartOpen())
++        return;
++    rumble_inserted = rumbleIsInserted();
++    if (rumble_inserted)
++        tickTaskStart(&rumble_task, RumbleTick, ticksFromHz(RUMBLE_HZ), ticksFromHz(RUMBLE_HZ));
++    else
++        gbacartClose();
++}
++
++// Rumbles for twice the total of Doom's tactile feedback in milliseconds
++void I_Tactile(int on, int off, int total)
++{
++    int ticks = total * 2 * RUMBLE_HZ / 1000;
++
++    if (rumble_inserted && rumble && ticks > rumble_ticks)
++        rumble_ticks = ticks;
++}
++
+ void NDS_PostKey(evtype_t type, int key)
+ {
+     event_t ev = { 0 };
+diff --git a/doomgeneric/i_system.c b/doomgeneric/i_system.c
+index 107c4a6..ca4ddbf 100644
+--- a/doomgeneric/i_system.c
++++ b/doomgeneric/i_system.c
+@@ -84,12 +84,6 @@ void I_AtExit(atexit_func_t func, boolean run_on_error)
+     exit_funcs = entry;
+ }
+ 
+-// Tactile feedback function, probably used for the Logitech Cyberman
+-
+-void I_Tactile(int on, int off, int total)
+-{
+-}
+-
+ // Memory left outside the zone for libc, file buffers and WAD directories
+ #define ZONE_RESERVE (512 * 1024)
+ 
+diff --git a/doomgeneric/i_system.h b/doomgeneric/i_system.h
+index 214e17a..2403c17 100644
+--- a/doomgeneric/i_system.h
++++ b/doomgeneric/i_system.h
+@@ -56,6 +56,9 @@ void I_Error (char *error, ...) __attribute__((noreturn));
+ 
+ void I_Tactile (int on, int off, int total);
+ 
++// Whether I_Tactile rumbles the Rumble Pak, when one is inserted
++extern int rumble;
++
+ boolean I_GetMemoryValue(unsigned int offset, void *value, int size);
+ 
+ // Schedule a function to be called when the program exits.
+diff --git a/doomgeneric/m_config.c b/doomgeneric/m_config.c
+index c016a6f..2f63684 100644
+--- a/doomgeneric/m_config.c
++++ b/doomgeneric/m_config.c
+@@ -827,6 +827,12 @@ static default_t extra_defaults_list[] =
+ 
+     CONFIG_VARIABLE_INT(show_endoom),
+ 
++    //!
++    // If non-zero, the Rumble Pak rumbles when it is inserted.
++    //
++
++    CONFIG_VARIABLE_INT(rumble),
++
+     //!
+     // If non-zero, save screenshots in PNG format.
+     //
+diff --git a/doomgeneric/m_menu.c b/doomgeneric/m_menu.c
+index 54e2c62..e620784 100644
+--- a/doomgeneric/m_menu.c
++++ b/doomgeneric/m_menu.c
+@@ -189,6 +189,7 @@ void M_ReadThis2(int choice);
+ void M_QuitDOOM(int choice);
+ 
+ void M_ChangeMessages(int choice);
++void M_ChangeRumble(int choice);
+ void M_ChangeSensitivity(int choice);
+ void M_SfxVol(int choice);
+ void M_MusicVol(int choice);
+@@ -337,16 +338,18 @@ menu_t  NewDef =
+ enum
+ {
+     messages,
++    rumbling,
+     soundvol,
+     opt_end
+ } options_e;
+ 
+ // No graphic detail or screen size, the view always fills the top screen
+ // at its resolution, no mouse sensitivity, there is no mouse, and End Game
+-// is in the main menu
++// is in the main menu. Rumble has no graphic, M_DrawOptions draws it.
+ menuitem_t OptionsMenu[]=
+ {
+     {1,"M_MESSG",	M_ChangeMessages,'m'},
++    {1,"",	M_ChangeRumble,'r'},
+     {1,"M_SVOL",	M_Sound,'s'}
+ };
+ 
+@@ -1017,14 +1020,151 @@ void M_Episode(int choice)
+ //
+ static char *msgNames[2] = {"M_MSGOFF","M_MSGON"};
+ 
++// Rumble has no menu graphic, it is cut from the letters of others. The
++// sizes of id's graphics make sure no other art is cut up, which gets the
++// HUD font instead.
++#define RUMBLE_WIDTH    90
++#define RUMBLE_HEIGHT   16
++
++static const struct
++{
++    char *name;
++    short width, height;
++} rumbleLumps[] =
++{
++    {"M_RDTHIS", 121, 15},
++    {"M_SVOL", 168, 15},
++    {"M_ROUGH", 248, 16},
++    {"M_LOADG", 125, 15},
++    {"M_MESSG", 118, 15}
++};
++
++// The rows y0 to y1 of columns x0 to x1 of a graphic, moved dy rows. A new
++// letter starts with a part as wide as it.
++static const struct
++{
++    byte lump, x0, x1, y0, y1;
++    signed char dy;
++    boolean letter;
++} rumbleParts[] =
++{
++    {0, 0, 16, 0, 16, 0, true},         // R of Read This!
++    {1, 124, 139, 0, 16, 0, true},      // u of Sound Volume
++    {1, 139, 155, 0, 16, 0, true},      // m
++    {2, 167, 182, 0, 9, 0, true},       // b: the top of the r of rough,
++    {2, 167, 173, 10, 12, -4, false},   // its stem filling the notch
++    {3, 45, 60, 9, 16, 0, false},       // and the bottom of the d of Load
++    {1, 114, 124, 0, 16, 0, true},      // l of Sound Volume
++    {1, 155, 168, 0, 16, 0, true},      // e
++    {4, 113, 118, 0, 16, 0, true}       // : of Messages:
++};
++
++static patch_t *M_BuildRumblePatch(void)
++{
++    patch_t *src[arrlen(rumbleLumps)], *patch;
++    byte pixels[RUMBLE_HEIGHT][RUMBLE_WIDTH];
++    boolean opaque[RUMBLE_HEIGHT][RUMBLE_WIDTH] = { 0 };
++    byte data[8 + RUMBLE_WIDTH * 4 + RUMBLE_WIDTH * (RUMBLE_HEIGHT * 3 + 1)];
++    byte *p;
++    unsigned int i;
++    int x, y, sx, width = 0;
++
++    for (i = 0; i < arrlen(rumbleLumps); ++i)
++    {
++        if (W_CheckNumForName(rumbleLumps[i].name) < 0)
++            return NULL;
++        src[i] = W_CacheLumpName(rumbleLumps[i].name, PU_CACHE);
++        if (SHORT(src[i]->width) != rumbleLumps[i].width
++         || SHORT(src[i]->height) != rumbleLumps[i].height)
++            return NULL;
++    }
++    // static now, caching the next one could purge them
++    for (i = 0; i < arrlen(rumbleLumps); ++i)
++        src[i] = W_CacheLumpName(rumbleLumps[i].name, PU_STATIC);
++
++    x = 0;
++    for (i = 0; i < arrlen(rumbleParts); ++i)
++    {
++        if (rumbleParts[i].letter)
++        {
++            x += width;
++            width = rumbleParts[i].x1 - rumbleParts[i].x0;
++        }
++        for (sx = rumbleParts[i].x0; sx < rumbleParts[i].x1; ++sx)
++        {
++            patch_t *s = src[rumbleParts[i].lump];
++            column_t *column = (column_t *) ((byte *) s + LONG(s->columnofs[sx]));
++
++            while (column->topdelta != 0xff)
++            {
++                for (y = column->topdelta; y < column->topdelta + column->length; ++y)
++                    if (y >= rumbleParts[i].y0 && y < rumbleParts[i].y1)
++                    {
++                        int dx = x + sx - rumbleParts[i].x0, dy = y + rumbleParts[i].dy;
++
++                        pixels[dy][dx] = ((byte *) column)[3 + y - column->topdelta];
++                        opaque[dy][dx] = true;
++                    }
++                column = (column_t *) ((byte *) column + column->length + 4);
++            }
++        }
++    }
++    for (i = 0; i < arrlen(rumbleLumps); ++i)
++        W_ReleaseLumpName(rumbleLumps[i].name);
++
++    // A post for each run of pixels in a column
++    patch = (patch_t *) data;
++    patch->width = SHORT(RUMBLE_WIDTH);
++    patch->height = SHORT(RUMBLE_HEIGHT);
++    patch->leftoffset = patch->topoffset = 0;
++    p = (byte *) &patch->columnofs[RUMBLE_WIDTH];
++    for (x = 0; x < RUMBLE_WIDTH; ++x)
++    {
++        patch->columnofs[x] = LONG(p - data);
++        for (y = 0; y < RUMBLE_HEIGHT; ++y)
++            if (opaque[y][x] && (y == 0 || !opaque[y - 1][x]))
++            {
++                byte *post = p;
++
++                post[0] = y;
++                post[2] = 0;
++                p += 3;
++                while (y < RUMBLE_HEIGHT && opaque[y][x])
++                    *p++ = pixels[y++][x];
++                post[1] = p - post - 3;
++                *p++ = 0;
++            }
++        *p++ = 0xff;
++    }
++    patch = Z_Malloc(p - data, PU_STATIC, NULL);
++    memcpy(patch, data, p - data);
++    return patch;
++}
++
+ void M_DrawOptions(void)
+ {
++    static patch_t *rumblePatch;
++    static boolean rumbleBuilt;
++
+     V_DrawPatchDirect(108, 15, W_CacheLumpName(DEH_String("M_OPTTTL"),
+                                                PU_CACHE));
+ 
+     V_DrawPatchDirect(OptionsDef.x + 120, OptionsDef.y + LINEHEIGHT * messages,
+                       W_CacheLumpName(DEH_String(msgNames[showMessages]),
+                                       PU_CACHE));
++
++    if (!rumbleBuilt)
++    {
++        rumblePatch = M_BuildRumblePatch();
++        rumbleBuilt = true;
++    }
++    if (rumblePatch != NULL)
++        V_DrawPatchDirect(OptionsDef.x, OptionsDef.y + LINEHEIGHT * rumbling, rumblePatch);
++    else
++        M_WriteText(OptionsDef.x, OptionsDef.y + LINEHEIGHT * rumbling + 4, "RUMBLE:");
++    V_DrawPatchDirect(OptionsDef.x + 120, OptionsDef.y + LINEHEIGHT * rumbling,
++                      W_CacheLumpName(DEH_String(msgNames[rumble]),
++                                      PU_CACHE));
+ }
+ 
+ void M_Options(int choice)
+@@ -1052,6 +1192,16 @@ void M_ChangeMessages(int choice)
+ }
+ 
+ 
++//
++//      Toggle the Rumble Pak on/off, it rumbles once turned on
++//
++void M_ChangeRumble(int choice)
++{
++    rumble = 1 - rumble;
++    I_Tactile(0, 0, 100);
++}
++
++
+ //
+ // M_EndGame
+ //
+diff --git a/doomgeneric/p_inter.c b/doomgeneric/p_inter.c
+index e599c15..5d8cc38 100644
+--- a/doomgeneric/p_inter.c
++++ b/doomgeneric/p_inter.c
+@@ -883,7 +883,8 @@ P_DamageMobj
+ 	
+ 	temp = damage < 100 ? damage : 100;
+ 
+-	if (player == &players[consoleplayer])
++	// the demos playing behind the menu don't rumble
++	if (player == &players[consoleplayer] && !demoplayback)
+ 	    I_Tactile (40,10,40+temp*2);
+     }
+     
+diff --git a/doomgeneric/p_pspr.c b/doomgeneric/p_pspr.c
+index e4774c7..758fa2e 100644
+--- a/doomgeneric/p_pspr.c
++++ b/doomgeneric/p_pspr.c
+@@ -23,6 +23,7 @@
+ 
+ #include "deh_misc.h"
+ 
++#include "i_system.h"
+ #include "m_random.h"
+ #include "p_local.h"
+ #include "s_sound.h"
+@@ -245,6 +246,10 @@ void P_FireWeapon (player_t* player)
+     newstate = weaponinfo[player->readyweapon].atkstate;
+     P_SetPsprite (player, ps_weapon, newstate);
+     P_NoiseAlert (player->mo, player->mo);
++
++    // the demos playing behind the menu don't rumble
++    if (player == &players[consoleplayer] && !demoplayback)
++	I_Tactile (0, 0, 50);
+ }
+ 
+ 

@@ -1,0 +1,83 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Sun, 4 Oct 2026 12:18:32 +0200
+Subject: [PATCH] Skip the digitized sounds the data lacks
+
+The shareware has no digitized sounds of the other episodes, which ended
+the game with "Sound reaches out of page file". SD_PrepareSound now
+reports that a sound is missing and InitDigiMap keeps playing those as
+AdLib sounds.
+---
+ id_sd.c   | 9 +++++++--
+ id_sd.h   | 2 +-
+ wl_main.c | 4 +++-
+ 3 files changed, 11 insertions(+), 4 deletions(-)
+
+diff --git a/id_sd.c b/id_sd.c
+index 1bd9163..5ea7ec6 100644
+--- a/id_sd.c
++++ b/id_sd.c
+@@ -404,19 +404,23 @@ Sint16 GetSample(float csample, byte *samples, int size)
+     return (Sint16) intval;
+ }
+ 
+-void SD_PrepareSound(int which)
++boolean SD_PrepareSound(int which)
+ {
+     int i;
+ 
+     if(DigiList == NULL)
+         Quit("SD_PrepareSound(%i): DigiList not initialized!\n", which);
+ 
++    // The shareware lacks the sounds of the other episodes
++    if(which >= NumDigi)
++        return false;
++
+     int page = DigiList[which].startpage;
+     int size = DigiList[which].length;
+ 
+     byte *origsamples = PM_GetSoundPage(page);
+     if(origsamples + size >= PM_GetPageEnd())
+-        Quit("SD_PrepareSound(%i): Sound reaches out of page file!\n", which);
++        return false;
+ 
+     int destsamples = (int) ((float) size * (float) param_samplerate
+         / (float) ORIGSAMPLERATE);
+@@ -449,6 +453,7 @@ void SD_PrepareSound(int which)
+     SoundChunks[which] = Mix_LoadWAV_RW(temp, 1);
+ 
+     free(wavebuffer);
++    return true;
+ }
+ 
+ int SD_PlayDigitized(word which,int leftpos,int rightpos)
+diff --git a/id_sd.h b/id_sd.h
+index 3ad8049..e280274 100644
+--- a/id_sd.h
++++ b/id_sd.h
+@@ -154,7 +154,7 @@ extern  boolean SD_SetMusicMode(byte mode);
+ extern  word    SD_SoundPlaying(void);
+ 
+ extern  void    SD_SetDigiDevice(byte);
+-extern  void	SD_PrepareSound(int which);
++extern  boolean	SD_PrepareSound(int which);
+ extern  int     SD_PlayDigitized(word which,int leftpos,int rightpos);
+ extern  void    SD_StopDigitized(void);
+ 
+diff --git a/wl_main.c b/wl_main.c
+index 840c6de..e88c4e2 100644
+--- a/wl_main.c
++++ b/wl_main.c
+@@ -1030,9 +1030,11 @@ void InitDigiMap (void)
+ 
+     for (map = wolfdigimap; *map != LASTSOUND; map += 3)
+     {
++        // Missing ones stay AdLib sounds
++        if (!SD_PrepareSound(map[1]))
++            continue;
+         DigiMap[map[0]] = map[1];
+         DigiChannel[map[1]] = map[2];
+-        SD_PrepareSound(map[1]);
+     }
+ }
+ 

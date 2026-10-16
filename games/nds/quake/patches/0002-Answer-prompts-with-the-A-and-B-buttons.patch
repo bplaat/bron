@@ -1,0 +1,83 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Tue, 6 Oct 2026 07:09:52 +0200
+Subject: [PATCH] Answer prompts with the A and B buttons
+
+A gamepad has no Y and N keys, so enter (the A button) also confirms
+the quit and new game prompts, and the quit messages ask for A and B.
+SCR_ModalMessage only takes a key that is pressed, otherwise the
+release of the enter that picked the menu item would answer right away.
+---
+ WinQuake/menu.c   | 11 ++++++-----
+ WinQuake/screen.c | 10 ++++++++--
+ 2 files changed, 14 insertions(+), 7 deletions(-)
+
+diff --git a/WinQuake/menu.c b/WinQuake/menu.c
+index c3c7ebd..a2fa76f 100644
+--- a/WinQuake/menu.c
++++ b/WinQuake/menu.c
+@@ -1601,22 +1601,22 @@ char *quitMessage [] =
+ 
+   " Man, I oughta smack you",
+   "   for trying to quit!  ",
+-  "     Press Y to get     ",
++  "     Press A to get     ",
+   "      smacked out.      ",
+  
+-  " Press Y to quit like a ",
++  " Press A to quit like a ",
+   "   big loser in life.   ",
+-  "  Press N to stay proud ",
++  "  Press B to stay proud ",
+   "    and successful!     ",
+  
+-  "   If you press Y to    ",
++  "   If you press A to    ",
+   "  quit, I will summon   ",
+   "  Satan all over your   ",
+   "      hard drive!       ",
+  
+   "  Um, Asmodeus dislikes ",
+   " his children trying to ",
+-  " quit. Press Y to return",
++  " quit. Press A to return",
+   "   to your Tinkertoys.  ",
+  
+   "  If you quit now, I'll ",
+@@ -1660,6 +1660,7 @@ void M_Quit_Key (int key)
+ 
+ 	case 'Y':
+ 	case 'y':
++	case K_ENTER:
+ 		key_dest = key_console;
+ 		Host_Quit_f ();
+ 		break;
+diff --git a/WinQuake/screen.c b/WinQuake/screen.c
+index b39be67..99733e4 100644
+--- a/WinQuake/screen.c
++++ b/WinQuake/screen.c
+@@ -758,16 +758,22 @@ int SCR_ModalMessage (char *text)
+ 	
+ 	S_ClearBuffer ();		// so dma doesn't loop current sound
+ 
++	extern qboolean	keydown[256];
++
++	// enter also answers yes for gamepads: only a key pressed now answers,
++	// not the release of the one that opened this
++	key_lastpress = 0;
+ 	do
+ 	{
+ 		key_count = -1;		// wait for a key down and up
+ 		Sys_SendKeyEvents ();
+-	} while (key_lastpress != 'y' && key_lastpress != 'n' && key_lastpress != K_ESCAPE);
++	} while (!keydown[key_lastpress] || (key_lastpress != 'y' && key_lastpress != 'n'
++		&& key_lastpress != K_ENTER && key_lastpress != K_ESCAPE));
+ 
+ 	scr_fullupdate = 0;
+ 	SCR_UpdateScreen ();
+ 
+-	return key_lastpress == 'y';
++	return key_lastpress == 'y' || key_lastpress == K_ENTER;
+ }
+ 
+ 

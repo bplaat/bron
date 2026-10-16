@@ -1,0 +1,268 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Tue, 6 Oct 2026 07:09:58 +0200
+Subject: [PATCH] Add a Nintendo DS build
+
+Makefile.nds builds a DSi enhanced .nds with the toolchain of the ports
+(clang, calico and libnds), with int sized enums like Quake expects and
+common symbols for the globals it defines in headers. The collision code
+and compiler-rt's software floating point, which Quake uses everywhere as
+the ARM9 has no floating point unit, run from ITCM as ARM code: the
+floating point objects are taken out of compiler-rt and renamed for ITCM,
+they are linked before it. Constants are single precision, so expressions
+like x * 0.5 don't go through double precision. HOT_CODE puts single
+functions in ITCM, the rest is Thumb code in main RAM: the QuakeC
+interpreter, BoxOnPlaneSide, Mod_PointInLeaf, RecursiveLightPoint and
+R_DrawParticles. The float comparisons come from fcmp_nds.s instead of
+compiler-rt, whose comparisons take two calls.
+---
+ WinQuake/.gitignore   |  4 ++
+ WinQuake/Makefile.nds | 41 +++++++++++++++++++
+ WinQuake/fcmp_nds.s   | 94 +++++++++++++++++++++++++++++++++++++++++++
+ WinQuake/mathlib.c    |  2 +-
+ WinQuake/model.c      |  2 +-
+ WinQuake/pr_exec.c    |  2 +-
+ WinQuake/quakedef.h   |  3 ++
+ WinQuake/r_light.c    |  2 +-
+ WinQuake/r_part.c     |  2 +-
+ 9 files changed, 147 insertions(+), 5 deletions(-)
+ create mode 100644 WinQuake/.gitignore
+ create mode 100644 WinQuake/Makefile.nds
+ create mode 100644 WinQuake/fcmp_nds.s
+
+diff --git a/WinQuake/.gitignore b/WinQuake/.gitignore
+new file mode 100644
+index 0000000..fc74557
+--- /dev/null
++++ b/WinQuake/.gitignore
+@@ -0,0 +1,4 @@
++/build/
++/quake.elf
++/quake.nds
++/quake.lst
+diff --git a/WinQuake/Makefile.nds b/WinQuake/Makefile.nds
+new file mode 100644
+index 0000000..77d6345
+--- /dev/null
++++ b/WinQuake/Makefile.nds
+@@ -0,0 +1,41 @@
++# Nintendo DS build of Quake with the nds-ports toolchain
++#   make -f Makefile.nds TOOLCHAIN=<toolchain> ICON=<icon.bmp> [NITRO_DIR=<dir>]
++
++NAME := quake
++GAME_TITLE := Quake
++GAME_SUBTITLE1 := id Software (1996)
++GAME_SUBTITLE2 := Quake NDS port
++
++SOURCES := cl_demo cl_input cl_main cl_parse cl_tent chase cmd common console crc cvar draw \
++	host host_cmd keys menu mathlib model net_loop net_main net_none net_vcr \
++	pr_cmds pr_edict pr_exec r_light r_efrag r_part screen sbar sv_main sv_phys sv_move sv_user \
++	zone view wad cd_null snd_dma snd_mem \
++	sys_nds vid_nds in_nds sbar_nds snd_nds r_nds
++
++# Hot code runs from ITCM
++ITCM_SOURCES := world fcmp_nds
++
++# The ARM9 has no floating point unit, compiler-rt's software floating
++# point, which Quake uses all the time, runs from ITCM too: its objects are
++# taken out of the library and renamed for ITCM, they are linked before it.
++# fcmp_nds.s has faster float comparisons.
++SOFTFLOAT := arm_addsf3 arm_mulsf3 arm_divsf3 arm_fixsfsi arm_floatsisf arm_floatunsisf \
++	arm_adddf3 builtins_muldf3 builtins_divdf3 arm_cmpdf2 arm_gedf2 arm_aeabi_dcmp \
++	arm_extendsfdf2 arm_truncdfsf2 arm_fixdfsi arm_floatsidf
++OFILES := $(addprefix build/softfloat/,$(addsuffix .itcm.o,$(SOFTFLOAT)))
++
++include $(TOOLCHAIN)/nds.mk
++
++# Quake reads files straight into structs with enums and keeps flag masks in
++# qbooleans, so enums are int sized like on x86, not only as big as their
++# values. Its globals are defined in headers, which needs common symbols.
++# Constants are single precision, clang's OpenCL option for that works for
++# C too.
++CFLAGS += -Wno-dangling-else -Wno-unused-variable -Wno-unused-but-set-variable \
++	-Wno-misleading-indentation -Wno-pointer-sign -Wno-trigraphs -Wno-absolute-value \
++	-Wno-format-security -Wno-deprecated-non-prototype \
++	-fno-strict-aliasing -fno-short-enums -fcommon -cl-single-precision-constant -std=gnu17
++
++$(BUILD)/softfloat/%.itcm.o: $(TOOLCHAIN_TARGET)/libcompiler-rt9.a
++	@mkdir -p $(dir $@)
++	cd $(dir $@) && $(AR) x $(abspath $<) $*.o && mv $*.o $(notdir $@)
+diff --git a/WinQuake/fcmp_nds.s b/WinQuake/fcmp_nds.s
+new file mode 100644
+index 0000000..20dae45
+--- /dev/null
++++ b/WinQuake/fcmp_nds.s
+@@ -0,0 +1,94 @@
++@ fcmp_nds.s -- single precision float comparisons for the ARM9
++@
++@ compiler-rt's take two calls for a comparison, which Quake's physics and
++@ BSP code do all the time. These give the same results: a float's bits are
++@ an integer of the same order once the negative ones are turned around, +0
++@ and -0 are equal and a NaN is unordered with everything. They replace
++@ compiler-rt's float comparisons and run from ITCM.
++
++	.arm
++	.syntax unified
++	.text
++
++@ Turns the floats in \a and \b into integer keys of the same order,
++@ comparing them as signed integers, unless one is a NaN: then it branches
++@ to \unordered with \t (scratch) still holding 0xff000000
++.macro	KEYS	a, b, t, unordered
++	mov	\t, #0xff000000
++	cmp	\t, \a, lsl #1
++	cmpcs	\t, \b, lsl #1
++	bcc	\unordered
++	cmp	\a, #0
++	rsblt	\a, \a, #0x80000000
++	cmp	\b, #0
++	rsblt	\b, \b, #0x80000000
++.endm
++
++.macro	FUNC	name
++	.global	\name
++	.type	\name, %function
++\name:
++.endm
++
++@ The flags of an unsigned comparison of a and b: Z when equal, C clear when
++@ a < b, C set and Z clear when unordered. All registers are kept.
++FUNC	__aeabi_cfrcmple
++	push	{r0, r1}
++	KEYS	r1, r0, ip, 1f
++	eor	r1, r1, #0x80000000
++	eor	r0, r0, #0x80000000
++	cmp	r1, r0
++	pop	{r0, r1}
++	bx	lr
++
++FUNC	__aeabi_cfcmple
++FUNC	__aeabi_cfcmpeq
++	push	{r0, r1}
++	KEYS	r0, r1, ip, 1f
++	eor	r0, r0, #0x80000000
++	eor	r1, r1, #0x80000000
++	cmp	r0, r1
++	pop	{r0, r1}
++	bx	lr
++1:	cmp	ip, #0		@ C set, Z clear
++	pop	{r0, r1}
++	bx	lr
++
++@ 1 when the comparison holds, 0 when not or unordered
++.macro	FCMP	name, true, false
++FUNC	\name
++	KEYS	r0, r1, ip, 2f
++	cmp	r0, r1
++	mov\true	r0, #1
++	mov\false	r0, #0
++	bx	lr
++.endm
++
++	FCMP	__aeabi_fcmpeq, eq, ne
++	FCMP	__aeabi_fcmplt, lt, ge
++	FCMP	__aeabi_fcmple, le, gt
++	FCMP	__aeabi_fcmpge, ge, lt
++	FCMP	__aeabi_fcmpgt, gt, le
++2:	mov	r0, #0
++	bx	lr
++
++@ -1, 0 or 1 for a less than, equal to or greater than b, unordered is
++@ greater for these and less for __gesf2 and __gtsf2
++FUNC	__gesf2
++FUNC	__gtsf2
++	mvn	r3, #0
++	b	3f
++FUNC	__cmpsf2
++FUNC	__eqsf2
++FUNC	__nesf2
++FUNC	__lesf2
++FUNC	__ltsf2
++	mov	r3, #1
++3:	KEYS	r0, r1, ip, 4f
++	cmp	r0, r1
++	mvnlt	r0, #0
++	movgt	r0, #1
++	moveq	r0, #0
++	bx	lr
++4:	mov	r0, r3
++	bx	lr
+diff --git a/WinQuake/mathlib.c b/WinQuake/mathlib.c
+index aae774c..b3cc126 100644
+--- a/WinQuake/mathlib.c
++++ b/WinQuake/mathlib.c
+@@ -186,7 +186,7 @@ BoxOnPlaneSide
+ Returns 1, 2, or 1 + 2
+ ==================
+ */
+-int BoxOnPlaneSide (vec3_t emins, vec3_t emaxs, mplane_t *p)
++HOT_CODE int BoxOnPlaneSide (vec3_t emins, vec3_t emaxs, mplane_t *p)
+ {
+ 	float	dist1, dist2;
+ 	int		sides;
+diff --git a/WinQuake/model.c b/WinQuake/model.c
+index 210d82c..104c15b 100644
+--- a/WinQuake/model.c
++++ b/WinQuake/model.c
+@@ -87,7 +87,7 @@ void *Mod_Extradata (model_t *mod)
+ Mod_PointInLeaf
+ ===============
+ */
+-mleaf_t *Mod_PointInLeaf (vec3_t p, model_t *model)
++HOT_CODE mleaf_t *Mod_PointInLeaf (vec3_t p, model_t *model)
+ {
+ 	mnode_t		*node;
+ 	mplane_t	*plane;
+diff --git a/WinQuake/pr_exec.c b/WinQuake/pr_exec.c
+index 4f2aa36..fd74952 100644
+--- a/WinQuake/pr_exec.c
++++ b/WinQuake/pr_exec.c
+@@ -358,7 +358,7 @@ int PR_LeaveFunction (void)
+ PR_ExecuteProgram
+ ====================
+ */
+-void PR_ExecuteProgram (func_t fnum)
++HOT_CODE void PR_ExecuteProgram (func_t fnum)
+ {
+ 	eval_t	*a, *b, *c;
+ 	int			s;
+diff --git a/WinQuake/quakedef.h b/WinQuake/quakedef.h
+index 7886ad8..a72b2dd 100644
+--- a/WinQuake/quakedef.h
++++ b/WinQuake/quakedef.h
+@@ -78,6 +78,9 @@ void	VID_UnlockBuffer (void);
+ 
+ #define UNUSED(x)	(x = x)	// for pesky compiler / lint warnings
+ 
++// A hot function run from ITCM, the DS ARM9's fast code memory, as ARM code
++#define	HOT_CODE	__attribute__((section(".itcm"), target("arm"), noinline))
++
+ // The server runs at most at this rate on the DS, the client interpolates
+ #define	SERVER_FPS				20
+ 
+diff --git a/WinQuake/r_light.c b/WinQuake/r_light.c
+index f735d50..deeb858 100644
+--- a/WinQuake/r_light.c
++++ b/WinQuake/r_light.c
+@@ -138,7 +138,7 @@ LIGHT SAMPLING
+ =============================================================================
+ */
+ 
+-int RecursiveLightPoint (mnode_t *node, vec3_t start, vec3_t end)
++HOT_CODE int RecursiveLightPoint (mnode_t *node, vec3_t start, vec3_t end)
+ {
+ 	int			r;
+ 	float		front, back, frac;
+diff --git a/WinQuake/r_part.c b/WinQuake/r_part.c
+index f949418..ab789fa 100644
+--- a/WinQuake/r_part.c
++++ b/WinQuake/r_part.c
+@@ -646,7 +646,7 @@ R_DrawParticles
+ */
+ extern	cvar_t	sv_gravity;
+ 
+-void R_DrawParticles (void)
++HOT_CODE void R_DrawParticles (void)
+ {
+ 	particle_t		*p, *kill;
+ 	float			grav;

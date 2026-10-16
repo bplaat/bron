@@ -1,0 +1,36 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Sun, 4 Oct 2026 12:18:32 +0200
+Subject: [PATCH] Size the output of itoa and ltoa right
+
+itoa and ltoa sized their output by the old contents of the buffer, so
+numbers were cut short or written past the end.
+---
+ wl_def.h | 8 ++------
+ 1 file changed, 2 insertions(+), 6 deletions(-)
+
+diff --git a/wl_def.h b/wl_def.h
+index a45a551..538c811 100644
+--- a/wl_def.h
++++ b/wl_def.h
+@@ -1488,18 +1488,14 @@ void GP2X_ButtonUp (int button);
+ #ifndef _WIN32
+     static inline char *itoa (int value, char *string, int radix)
+     {
+-        int len = strlen(string) + 1;
+-
+-	    snprintf (string,len,"%d",value);
++	    sprintf (string,"%d",value);
+ 
+ 	    return string;
+     }
+ 
+     static inline char *ltoa (long value, char *string, int radix)
+     {
+-        int len = strlen(string) + 1;
+-
+-	    snprintf (string,len,"%ld",value);
++	    sprintf (string,"%ld",value);
+ 
+ 	    return string;
+     }

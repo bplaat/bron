@@ -1,0 +1,91 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Sun, 11 Oct 2026 14:08:32 +0200
+Subject: [PATCH] Align the PC of LDM^ by the T bit of the SPSR
+
+An LDM with the S bit and R15 in the list returns from an exception: the
+CPSR becomes the SPSR, so the loaded PC is aligned for the state in the
+SPSR, it doesn't interwork. Aligning it by bit 0 of the loaded value
+cleared bit 1 of Thumb return addresses, so an interrupt of Thumb code at
+an address that isn't a multiple of 4 returned to the instruction before,
+running it again, like calico's IRQ handler does.
+---
+ desmume/src/arm_instructions.cpp | 16 ++++++++--------
+ 1 file changed, 8 insertions(+), 8 deletions(-)
+
+diff --git a/desmume/src/arm_instructions.cpp b/desmume/src/arm_instructions.cpp
+index b1da7bd..673e790 100644
+--- a/desmume/src/arm_instructions.cpp
++++ b/desmume/src/arm_instructions.cpp
+@@ -5173,7 +5173,7 @@ TEMPLATE static u32 DESMUME_FASTCALL  OP_LDMIA2(const u32 i)
+     
+ 		u32 tmp = READ32(cpu->mem_if->data, start);
+ 		Status_Reg SPSR;
+-		cpu->R[15] = tmp & (0XFFFFFFFC | (BIT0(tmp)<<1));
++		cpu->R[15] = tmp & (cpu->SPSR.bits.T ? 0xFFFFFFFE : 0xFFFFFFFC);
+ 		SPSR = cpu->SPSR;
+ 		armcpu_switchMode(cpu, SPSR.bits.mode);
+ 		cpu->CPSR=SPSR;
+@@ -5235,7 +5235,7 @@ TEMPLATE static u32 DESMUME_FASTCALL  OP_LDMIB2(const u32 i)
+ 		Status_Reg SPSR;
+ 		start += 4;
+ 		tmp = READ32(cpu->mem_if->data, start);
+-		registres[15] = tmp & (0XFFFFFFFC | (BIT0(tmp)<<1));
++		registres[15] = tmp & (cpu->SPSR.bits.T ? 0xFFFFFFFE : 0xFFFFFFFC);
+ 		SPSR = cpu->SPSR;
+ 		armcpu_switchMode(cpu, SPSR.bits.mode);
+ 		cpu->CPSR=SPSR;
+@@ -5274,7 +5274,7 @@ TEMPLATE static u32 DESMUME_FASTCALL  OP_LDMDA2(const u32 i)
+ 	if(BIT15(i))
+ 	{
+ 		u32 tmp = READ32(cpu->mem_if->data, start);
+-		registres[15] = tmp & (0XFFFFFFFC | (BIT0(tmp)<<1));
++		registres[15] = tmp & (cpu->SPSR.bits.T ? 0xFFFFFFFE : 0xFFFFFFFC);
+ 		cpu->CPSR = cpu->SPSR;
+ 		armcpu_changeCPSR();
+ 		c += MMU_memAccessCycles<PROCNUM,32,MMU_AD_READ>(start);
+@@ -5339,7 +5339,7 @@ TEMPLATE static u32 DESMUME_FASTCALL  OP_LDMDB2(const u32 i)
+ 		u32 tmp;
+ 		start -= 4;
+ 		tmp = READ32(cpu->mem_if->data, start);
+-		registres[15] = tmp & (0XFFFFFFFC | (BIT0(tmp)<<1));
++		registres[15] = tmp & (cpu->SPSR.bits.T ? 0xFFFFFFFE : 0xFFFFFFFC);
+ 		cpu->CPSR = cpu->SPSR;
+ 		armcpu_changeCPSR();
+ 		cpu->next_instruction = registres[15];
+@@ -5428,7 +5428,7 @@ TEMPLATE static u32 DESMUME_FASTCALL  OP_LDMIA2_W(const u32 i)
+ 	if (!BIT_N(i, REG_POS(i,16)))
+ 		registres[REG_POS(i,16)] = start + 4;
+ 	tmp = READ32(cpu->mem_if->data, start);
+-	registres[15] = tmp & (0XFFFFFFFC | (BIT0(tmp)<<1));
++	registres[15] = tmp & (cpu->SPSR.bits.T ? 0xFFFFFFFE : 0xFFFFFFFC);
+ 	SPSR = cpu->SPSR;
+ 	armcpu_switchMode(cpu, SPSR.bits.mode);
+ 	cpu->CPSR=SPSR;
+@@ -5485,7 +5485,7 @@ TEMPLATE static u32 DESMUME_FASTCALL  OP_LDMIB2_W(const u32 i)
+ 	if (!BIT_N(i, REG_POS(i,16)))
+ 		registres[REG_POS(i,16)] = start + 4;
+ 	tmp = READ32(cpu->mem_if->data, start + 4);
+-	registres[15] = tmp & (0XFFFFFFFC | (BIT0(tmp)<<1));
++	registres[15] = tmp & (cpu->SPSR.bits.T ? 0xFFFFFFFE : 0xFFFFFFFC);
+ 	cpu->CPSR = cpu->SPSR;
+ 	armcpu_changeCPSR();
+ 	cpu->next_instruction = registres[15];
+@@ -5519,7 +5519,7 @@ TEMPLATE static u32 DESMUME_FASTCALL  OP_LDMDA2_W(const u32 i)
+ 	{
+ 		if (BIT_N(i, REG_POS(i,16))) printf("error1_1\n");
+ 		u32 tmp = READ32(cpu->mem_if->data, start);
+-		registres[15] = tmp & (0XFFFFFFFC | (BIT0(tmp)<<1));
++		registres[15] = tmp & (cpu->SPSR.bits.T ? 0xFFFFFFFE : 0xFFFFFFFC);
+ 		c += MMU_memAccessCycles<PROCNUM,32,MMU_AD_READ>(start);
+ 		start -= 4;
+ 		cpu->next_instruction = registres[15];
+@@ -5581,7 +5581,7 @@ TEMPLATE static u32 DESMUME_FASTCALL  OP_LDMDB2_W(const u32 i)
+ 		start -= 4;
+ 		tmp = READ32(cpu->mem_if->data, start);
+ 		c += MMU_memAccessCycles<PROCNUM,32,MMU_AD_READ>(start);
+-		registres[15] = tmp & (0XFFFFFFFC | (BIT0(tmp)<<1));
++		registres[15] = tmp & (cpu->SPSR.bits.T ? 0xFFFFFFFE : 0xFFFFFFFC);
+ 		cpu->CPSR = cpu->SPSR;
+ 		armcpu_changeCPSR();
+ 		cpu->next_instruction = registres[15];

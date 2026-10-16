@@ -1,0 +1,35 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Tue, 6 Oct 2026 07:09:58 +0200
+Subject: [PATCH] Leave freed hunk memory as it is
+
+Freeing hunk memory cleared it, also each time a temporary file buffer
+went back while a level loads. Every allocation clears its memory and
+the cache fills its own, so freeing no longer does.
+---
+ WinQuake/zone.c | 5 ++---
+ 1 file changed, 2 insertions(+), 3 deletions(-)
+
+diff --git a/WinQuake/zone.c b/WinQuake/zone.c
+index 3ad16fa..4d53778 100644
+--- a/WinQuake/zone.c
++++ b/WinQuake/zone.c
+@@ -445,7 +445,7 @@ void Hunk_FreeToLowMark (int mark)
+ {
+ 	if (mark < 0 || mark > hunk_low_used)
+ 		Sys_Error ("Hunk_FreeToLowMark: bad mark %i", mark);
+-	memset (hunk_base + mark, 0, hunk_low_used - mark);
++	// not cleared, an allocation clears its memory and the cache fills its own
+ 	hunk_low_used = mark;
+ }
+ 
+@@ -469,8 +469,7 @@ void Hunk_FreeToHighMark (int mark)
+ 	}
+ 	if (mark < 0 || mark > hunk_high_used)
+ 		Sys_Error ("Hunk_FreeToHighMark: bad mark %i", mark);
+-	memset (hunk_base + hunk_size - hunk_high_used, 0, hunk_high_used - mark);
+-	hunk_high_used = mark;
++	hunk_high_used = mark;	// not cleared, like Hunk_FreeToLowMark
+ }
+ 
+ 

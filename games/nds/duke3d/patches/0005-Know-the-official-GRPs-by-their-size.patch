@@ -1,0 +1,93 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Wed, 7 Oct 2026 12:00:00 +0200
+Subject: [PATCH] Know the official GRPs by their size
+
+The whole GRP was read at startup for its CRC32, which tells the
+shareware, full and Atomic versions apart, through a buffer of 1 MiB.
+From the DS' storage that takes many seconds, and the buffer a quarter of
+its RAM. The official GRPs are known by their size, others are still
+read, in pieces of 16 KiB.
+---
+ Engine/src/filesystem.c | 25 ++++++++++++++-----------
+ Engine/src/filesystem.h |  1 +
+ Game/src/global.c       | 11 +++++++++++
+ 3 files changed, 26 insertions(+), 11 deletions(-)
+
+diff --git a/Engine/src/filesystem.c b/Engine/src/filesystem.c
+index 6688fe9..84fd427 100644
+--- a/Engine/src/filesystem.c
++++ b/Engine/src/filesystem.c
+@@ -47,7 +47,8 @@ typedef struct grpSet_s{
+ static grpSet_t grpSet;
+ 
+ 
+-uint8_t         crcBuffer[ 1 << 20]     ;
++#define CRC_BUFFER_SIZE 16384
++
+ int32_t initgroupfile(const char  *filename)
+ {
+ 	uint8_t         buf[16]                 ;
+@@ -129,16 +130,18 @@ int32_t initgroupfile(const char  *filename)
+     //archive->fileOffsets[archive->numFiles-1] = j;
+ 	
+     
+-	// Compute CRC32 of the whole grp and implicitely caches the GRP in memory through windows caching service.
+-    // Rewind the fileDescriptor
+-	lseek(archive->fileDescriptor, 0, SEEK_SET);
+-    
+-	//i = 1000000;
+-	//groupfil_memory[numgroupfiles] = malloc(i);
+-    
+-    //Load the full GRP in RAM.
+-	while((j=read(archive->fileDescriptor, crcBuffer, sizeof(crcBuffer)))){
+-		archive->crc32 = crc32_update(crcBuffer,j,archive->crc32);
++	// The official GRPs are known by their size, reading a whole GRP for its
++	// CRC32 takes long. Others are read in small pieces, to keep memory free.
++	archive->crc32 = getKnownGRPcrc32(filelength(archive->fileDescriptor));
++	if (archive->crc32 == 0)
++	{
++		uint8_t *crcBuffer = kmalloc(CRC_BUFFER_SIZE);
++
++		lseek(archive->fileDescriptor, 0, SEEK_SET);
++		while((j=read(archive->fileDescriptor, crcBuffer, CRC_BUFFER_SIZE)) > 0){
++			archive->crc32 = crc32_update(crcBuffer,j,archive->crc32);
++		}
++		kfree(crcBuffer);
+ 	}
+     
+     // The game layer seems to absolutely need to access an array int[4] groupefil_crc32
+diff --git a/Engine/src/filesystem.h b/Engine/src/filesystem.h
+index 55f1a5e..b48374f 100644
+--- a/Engine/src/filesystem.h
++++ b/Engine/src/filesystem.h
+@@ -20,6 +20,7 @@
+ extern int32_t groupefil_crc32[MAXGROUPFILES];
+ 
+ int32_t  initgroupfile(const char  *filename);
++uint32_t getKnownGRPcrc32(int32_t size);
+ void     uninitgroupfile(void);
+ uint16_t crc16(uint8_t  *data_p, uint16_t length);
+ uint32_t crc32_update(uint8_t  *buf, uint32_t length, uint32_t crc_to_update);
+diff --git a/Game/src/global.c b/Game/src/global.c
+index ddbdb1a..adc23be 100644
+--- a/Game/src/global.c
++++ b/Game/src/global.c
+@@ -46,6 +46,17 @@ crc32_t crc32lookup[] = {
+ 		{ 0,							"HACK/UNKNOWN  ", 0}
+ 	};
+ 
++// The CRC32 of an official GRP of this size, 0 if there is none
++uint32_t getKnownGRPcrc32(int32_t size)
++{
++	int i;
++
++	for(i=0; i<MAX_KNOWN_GRP; i++)
++		if(crc32lookup[i].size == size)
++			return crc32lookup[i].crc32;
++	return 0;
++}
++
+ uint8_t  conVersion = 13;
+ uint8_t  grpVersion = 0;
+ 

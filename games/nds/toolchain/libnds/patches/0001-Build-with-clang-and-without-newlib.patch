@@ -1,0 +1,70 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Sat, 10 Oct 2026 20:08:54 +0200
+Subject: [PATCH] Build with clang and without newlib
+
+newlib's _ansi.h isn't needed for sassert.h, clang doesn't know the GCC
+warning about sqrtf32 being a builtin and has no long_call attribute for
+ITCM_CODE: lld adds a stub to calls that are out of range.
+---
+ include/nds/arm9/math.h    | 5 +++++
+ include/nds/arm9/sassert.h | 2 --
+ include/nds/ndstypes.h     | 5 +++++
+ 3 files changed, 10 insertions(+), 2 deletions(-)
+
+diff --git a/include/nds/arm9/math.h b/include/nds/arm9/math.h
+index a572a86..7b28d2a 100644
+--- a/include/nds/arm9/math.h
++++ b/include/nds/arm9/math.h
+@@ -109,8 +109,11 @@ s32 mulf32(s32 a, s32 b)
+ 	return (s32)(result >> 12);
+ }
+ 
++// GCC knows sqrtf32 as a builtin, clang doesn't
++#ifndef __clang__
+ #pragma GCC diagnostic push
+ #pragma GCC diagnostic ignored "-Wbuiltin-declaration-mismatch"
++#endif
+ static inline
+ /**
+ *   \brief Fixed point sqrt
+@@ -129,7 +132,9 @@ s32 sqrtf32(s32 a)
+ 
+ 	return REG_SQRT_RESULT;
+ }
++#ifndef __clang__
+ #pragma GCC diagnostic pop
++#endif
+ 
+ //  Integer versions
+ 
+diff --git a/include/nds/arm9/sassert.h b/include/nds/arm9/sassert.h
+index 2ba4ea8..0b6d51b 100644
+--- a/include/nds/arm9/sassert.h
++++ b/include/nds/arm9/sassert.h
+@@ -38,8 +38,6 @@
+ extern "C" {
+ #endif
+ 
+-#include "_ansi.h"
+-
+ #undef sassert
+ 
+ #ifdef NDEBUG            /* required by ANSI standard */
+diff --git a/include/nds/ndstypes.h b/include/nds/ndstypes.h
+index fedd5bf..9952244 100644
+--- a/include/nds/ndstypes.h
++++ b/include/nds/ndstypes.h
+@@ -38,7 +38,12 @@
+ //---------------------------------------------------------------------------------
+ // libgba compatible section macros
+ //---------------------------------------------------------------------------------
++// clang has no long_call, lld adds a stub to calls that are out of range
++#ifdef __clang__
++#define ITCM_CODE	__attribute__((section(".itcm")))
++#else
+ #define ITCM_CODE	__attribute__((section(".itcm"), long_call))
++#endif
+ 
+ #define DTCM_DATA	__attribute__((section(".dtcm")))
+ #define DTCM_BSS	__attribute__((section(".sbss")))

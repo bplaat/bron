@@ -1,0 +1,982 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Sun, 11 Oct 2026 20:56:22 +0200
+Subject: [PATCH] Use single precision math
+
+---
+ client/cl_ents.c  |  4 ++--
+ client/cl_fx.c    | 46 +++++++++++++++++++++++-----------------------
+ client/cl_newfx.c | 42 +++++++++++++++++++++---------------------
+ client/cl_tent.c  | 28 ++++++++++++++--------------
+ client/cl_view.c  |  4 ++--
+ client/menu.c     |  4 ++--
+ client/snd_mix.c  |  2 +-
+ game/g_combat.c   |  4 ++--
+ game/g_func.c     | 36 ++++++++++++++++++------------------
+ game/g_monster.c  |  4 ++--
+ game/g_phys.c     |  6 +++---
+ game/g_spawn.c    |  2 +-
+ game/g_turret.c   | 12 ++++++------
+ game/g_utils.c    |  8 ++++----
+ game/g_weapon.c   |  2 +-
+ game/m_medic.c    |  2 +-
+ game/m_move.c     |  8 ++++----
+ game/m_parasite.c |  2 +-
+ game/m_soldier.c  |  2 +-
+ game/p_client.c   |  2 +-
+ game/p_view.c     |  8 ++++----
+ game/p_weapon.c   |  4 ++--
+ game/q_shared.c   | 32 +++++++++++++++-----------------
+ qcommon/cmodel.c  |  6 +++---
+ qcommon/pmove.c   |  4 ++--
+ server/sv_world.c |  4 ++--
+ 26 files changed, 138 insertions(+), 140 deletions(-)
+
+diff --git a/client/cl_ents.c b/client/cl_ents.c
+index 5f2f16b..47121df 100644
+--- a/client/cl_ents.c
++++ b/client/cl_ents.c
+@@ -1228,7 +1228,7 @@ void CL_AddPacketEntities (frame_t *frame)
+ 				{
+ 					float intensity;
+ 
+-					intensity = 50 + (500 * (sin(cl.time/500.0) + 1.0));
++					intensity = 50 + (500 * (sinf(cl.time/500.0) + 1.0));
+ 					// FIXME - check out this effect in rendition
+ 					if(vidref_val == VIDREF_GL)
+ 						V_AddLight (ent.origin, intensity, -1.0, -1.0, -1.0);
+@@ -1366,7 +1366,7 @@ void CL_CalcViewValues (void)
+ 	ops = &oldframe->playerstate;
+ 
+ 	// see if the player entity was teleported this frame
+-	if ( fabs(ops->pmove.origin[0] - ps->pmove.origin[0]) > 256*8
++	if ( fabsf(ops->pmove.origin[0] - ps->pmove.origin[0]) > 256*8
+ 		|| abs(ops->pmove.origin[1] - ps->pmove.origin[1]) > 256*8
+ 		|| abs(ops->pmove.origin[2] - ps->pmove.origin[2]) > 256*8)
+ 		ops = ps;		// don't interpolate
+diff --git a/client/cl_fx.c b/client/cl_fx.c
+index 32c7dec..fd1a178 100644
+--- a/client/cl_fx.c
++++ b/client/cl_fx.c
+@@ -1214,13 +1214,13 @@ void CL_BigTeleportParticles (vec3_t org)
+ 
+ 		angle = M_PI*2*(rand()&1023)/1023.0;
+ 		dist = rand()&31;
+-		p->org[0] = org[0] + cos(angle)*dist;
+-		p->vel[0] = cos(angle)*(70+(rand()&63));
+-		p->accel[0] = -cos(angle)*100;
++		p->org[0] = org[0] + cosf(angle)*dist;
++		p->vel[0] = cosf(angle)*(70+(rand()&63));
++		p->accel[0] = -cosf(angle)*100;
+ 
+-		p->org[1] = org[1] + sin(angle)*dist;
+-		p->vel[1] = sin(angle)*(70+(rand()&63));
+-		p->accel[1] = -sin(angle)*100;
++		p->org[1] = org[1] + sinf(angle)*dist;
++		p->vel[1] = sinf(angle)*(70+(rand()&63));
++		p->accel[1] = -sinf(angle)*100;
+ 
+ 		p->org[2] = org[2] + 8 + (rand()%90);
+ 		p->vel[2] = -100 + (rand()&31);
+@@ -1644,8 +1644,8 @@ void CL_RailTrail (vec3_t start, vec3_t end)
+ 		VectorClear (p->accel);
+ 
+ 		d = i * 0.1;
+-		c = cos(d);
+-		s = sin(d);
++		c = cosf(d);
++		s = sinf(d);
+ 
+ 		VectorScale (right, c, dir);
+ 		VectorMA (dir, s, up, dir);
+@@ -1841,14 +1841,14 @@ void CL_FlyParticles (vec3_t origin, int count)
+ 	for (i=0 ; i<count ; i+=2)
+ 	{
+ 		angle = ltime * avelocities[i][0];
+-		sy = sin(angle);
+-		cy = cos(angle);
++		sy = sinf(angle);
++		cy = cosf(angle);
+ 		angle = ltime * avelocities[i][1];
+-		sp = sin(angle);
+-		cp = cos(angle);
++		sp = sinf(angle);
++		cp = cosf(angle);
+ 		angle = ltime * avelocities[i][2];
+-		sr = sin(angle);
+-		cr = cos(angle);
++		sr = sinf(angle);
++		cr = cosf(angle);
+ 	
+ 		forward[0] = cp*cy;
+ 		forward[1] = cp*sy;
+@@ -1863,7 +1863,7 @@ void CL_FlyParticles (vec3_t origin, int count)
+ 
+ 		p->time = cl.time;
+ 
+-		dist = sin(ltime + i)*64;
++		dist = sinf(ltime + i)*64;
+ 		p->org[0] = origin[0] + bytedirs[i][0]*dist + forward[0]*BEAMLENGTH;
+ 		p->org[1] = origin[1] + bytedirs[i][1]*dist + forward[1]*BEAMLENGTH;
+ 		p->org[2] = origin[2] + bytedirs[i][2]*dist + forward[2]*BEAMLENGTH;
+@@ -1940,14 +1940,14 @@ void CL_BfgParticles (entity_t *ent)
+ 	for (i=0 ; i<NUMVERTEXNORMALS ; i++)
+ 	{
+ 		angle = ltime * avelocities[i][0];
+-		sy = sin(angle);
+-		cy = cos(angle);
++		sy = sinf(angle);
++		cy = cosf(angle);
+ 		angle = ltime * avelocities[i][1];
+-		sp = sin(angle);
+-		cp = cos(angle);
++		sp = sinf(angle);
++		cp = cosf(angle);
+ 		angle = ltime * avelocities[i][2];
+-		sr = sin(angle);
+-		cr = cos(angle);
++		sr = sinf(angle);
++		cr = cosf(angle);
+ 	
+ 		forward[0] = cp*cy;
+ 		forward[1] = cp*sy;
+@@ -1962,7 +1962,7 @@ void CL_BfgParticles (entity_t *ent)
+ 
+ 		p->time = cl.time;
+ 
+-		dist = sin(ltime + i)*64;
++		dist = sinf(ltime + i)*64;
+ 		p->org[0] = ent->origin[0] + bytedirs[i][0]*dist + forward[0]*BEAMLENGTH;
+ 		p->org[1] = ent->origin[1] + bytedirs[i][1]*dist + forward[1]*BEAMLENGTH;
+ 		p->org[2] = ent->origin[2] + bytedirs[i][2]*dist + forward[2]*BEAMLENGTH;
+@@ -1972,7 +1972,7 @@ void CL_BfgParticles (entity_t *ent)
+ 
+ 		VectorSubtract (p->org, ent->origin, v);
+ 		dist = VectorLength(v) / 90.0;
+-		p->color = floor (0xd0 + dist * 7);
++		p->color = floorf(0xd0 + dist * 7);
+ 		p->colorvel = 0;
+ 
+ 		p->alpha = 1.0 - dist;
+diff --git a/client/cl_newfx.c b/client/cl_newfx.c
+index 5ad92b6..8491c91 100644
+--- a/client/cl_newfx.c
++++ b/client/cl_newfx.c
+@@ -51,7 +51,7 @@ void vectoangles2 (vec3_t value1, vec3_t angles)
+ 	{
+ 	// PMM - fixed to correct for pitch of 0
+ 		if (value1[0])
+-			yaw = (atan2(value1[1], value1[0]) * 180 / M_PI);
++			yaw = (atan2f(value1[1], value1[0]) * 180 / M_PI);
+ 		else if (value1[1] > 0)
+ 			yaw = 90;
+ 		else
+@@ -60,8 +60,8 @@ void vectoangles2 (vec3_t value1, vec3_t angles)
+ 		if (yaw < 0)
+ 			yaw += 360;
+ 
+-		forward = sqrt (value1[0]*value1[0] + value1[1]*value1[1]);
+-		pitch = (atan2(value1[2], forward) * 180 / M_PI);
++		forward = sqrtf(value1[0]*value1[0] + value1[1]*value1[1]);
++		pitch = (atan2f(value1[2], forward) * 180 / M_PI);
+ 		if (pitch < 0)
+ 			pitch += 360;
+ 	}
+@@ -466,9 +466,9 @@ void CL_Heatbeam (vec3_t start, vec3_t end)
+ //	for (i=0 ; i<len ; i++)
+ 	for (i=0 ; i<len ; i+=step)
+ 	{
+-		d = i * 0.1 - fmod(ltime,16.0)*M_PI;
+-		c = cos(d)/1.75;
+-		s = sin(d)/1.75;
++		d = i * 0.1 - fmodf(ltime,16.0)*M_PI;
++		c = cosf(d)/1.75;
++		s = sinf(d)/1.75;
+ #ifdef DOUBLE_SCREW		
+ 		for (k=-1; k<2; k+=2)
+ 		{
+@@ -558,7 +558,7 @@ void CL_Heatbeam (vec3_t start, vec3_t forward)
+ 	// otherwise assume SOFT
+ 
+ 	ltime = (float) cl.time/1000.0;
+-	start_pt = fmod(ltime*96.0,step);
++	start_pt = fmodf(ltime*96.0,step);
+ 	VectorMA (move, start_pt, vec, move);
+ 
+ 	VectorScale (vec, step, vec);
+@@ -583,13 +583,13 @@ void CL_Heatbeam (vec3_t start, vec3_t forward)
+ 			
+ 			p->time = cl.time;
+ 			VectorClear (p->accel);
+-//			rot+= fmod(ltime, 12.0)*M_PI;
+-//			c = cos(rot)/2.0;
+-//			s = sin(rot)/2.0;
++//			rot+= fmodf(ltime, 12.0)*M_PI;
++//			c = cosf(rot)/2.0;
++//			s = sinf(rot)/2.0;
+ //			variance = 0.4 + ((float)rand()/(float)RAND_MAX) *0.2;
+ 			variance = 0.5;
+-			c = cos(rot)*variance;
+-			s = sin(rot)*variance;
++			c = cosf(rot)*variance;
++			s = sinf(rot)*variance;
+ 			
+ 			// trim it so it looks like it's starting at the origin
+ 			if (i < 10)
+@@ -661,8 +661,8 @@ void CL_Heatbeam (vec3_t start, vec3_t end)
+ 		VectorClear (p->accel);
+ 		
+ 		d = crand()*M_PI;
+-		c = cos(d)*30;
+-		s = sin(d)*30;
++		c = cosf(d)*30;
++		s = sinf(d)*30;
+ 
+ 		p->alpha = 1.0;
+ 		p->alphavel = -5.0 / (1+frand());
+@@ -679,7 +679,7 @@ void CL_Heatbeam (vec3_t start, vec3_t end)
+ /*
+ 
+ 	ltime = (float) cl.time/1000.0;
+-	start_pt = fmod(ltime*16.0,step);
++	start_pt = fmodf(ltime*16.0,step);
+ 	VectorMA (move, start_pt, vec, move);
+ 
+ 	VectorScale (vec, step, vec);
+@@ -703,11 +703,11 @@ void CL_Heatbeam (vec3_t start, vec3_t end)
+ 			
+ 			p->time = cl.time;
+ 			VectorClear (p->accel);
+-//			rot+= fmod(ltime, 12.0)*M_PI;
+-//			c = cos(rot)/2.0;
+-//			s = sin(rot)/2.0;
+-			c = cos(rot)/1.5;
+-			s = sin(rot)/1.5;
++//			rot+= fmodf(ltime, 12.0)*M_PI;
++//			c = cosf(rot)/2.0;
++//			s = sinf(rot)/2.0;
++			c = cosf(rot)/1.5;
++			s = sinf(rot)/1.5;
+ 			
+ 			// trim it so it looks like it's starting at the origin
+ 			if (i < 10)
+@@ -882,7 +882,7 @@ void CL_TrackerTrail (vec3_t start, vec3_t end, int particleColor)
+ 		p->alphavel = -2.0;
+ 		p->color = particleColor;
+ 		dist = DotProduct(move, forward);
+-		VectorMA(move, 8 * cos(dist), up, p->org);
++		VectorMA(move, 8 * cosf(dist), up, p->org);
+ 		for (j=0 ; j<3 ; j++)
+ 		{
+ //			p->org[j] = move[j] + crand();
+diff --git a/client/cl_tent.c b/client/cl_tent.c
+index c039b49..4a93ce5 100644
+--- a/client/cl_tent.c
++++ b/client/cl_tent.c
+@@ -802,10 +802,10 @@ void CL_ParseTEnt (void)
+ 
+ 		ex = CL_AllocExplosion ();
+ 		VectorCopy (pos, ex->ent.origin);
+-		ex->ent.angles[0] = acos(dir[2])/M_PI*180;
++		ex->ent.angles[0] = acosf(dir[2])/M_PI*180;
+ 	// PMM - fixed to correct for pitch of 0
+ 		if (dir[0])
+-			ex->ent.angles[1] = atan2(dir[1], dir[0])/M_PI*180;
++			ex->ent.angles[1] = atan2f(dir[1], dir[0])/M_PI*180;
+ 		else if (dir[1] > 0)
+ 			ex->ent.angles[1] = 90;
+ 		else if (dir[1] < 0)
+@@ -1010,10 +1010,10 @@ void CL_ParseTEnt (void)
+ 
+ 		ex = CL_AllocExplosion ();
+ 		VectorCopy (pos, ex->ent.origin);
+-		ex->ent.angles[0] = acos(dir[2])/M_PI*180;
++		ex->ent.angles[0] = acosf(dir[2])/M_PI*180;
+ 	// PMM - fixed to correct for pitch of 0
+ 		if (dir[0])
+-			ex->ent.angles[1] = atan2(dir[1], dir[0])/M_PI*180;
++			ex->ent.angles[1] = atan2f(dir[1], dir[0])/M_PI*180;
+ 		else if (dir[1] > 0)
+ 			ex->ent.angles[1] = 90;
+ 		else if (dir[1] < 0)
+@@ -1244,7 +1244,7 @@ void CL_AddBeams (void)
+ 		{
+ 	// PMM - fixed to correct for pitch of 0
+ 			if (dist[0])
+-				yaw = (atan2(dist[1], dist[0]) * 180 / M_PI);
++				yaw = (atan2f(dist[1], dist[0]) * 180 / M_PI);
+ 			else if (dist[1] > 0)
+ 				yaw = 90;
+ 			else
+@@ -1252,8 +1252,8 @@ void CL_AddBeams (void)
+ 			if (yaw < 0)
+ 				yaw += 360;
+ 	
+-			forward = sqrt (dist[0]*dist[0] + dist[1]*dist[1]);
+-			pitch = (atan2(dist[2], forward) * -180.0 / M_PI);
++			forward = sqrtf(dist[0]*dist[0] + dist[1]*dist[1]);
++			pitch = (atan2f(dist[2], forward) * -180.0 / M_PI);
+ 			if (pitch < 0)
+ 				pitch += 360.0;
+ 		}
+@@ -1271,7 +1271,7 @@ void CL_AddBeams (void)
+ 		{
+ 			model_length = 30.0;
+ 		}
+-		steps = ceil(d/model_length);
++		steps = ceilf(d/model_length);
+ 		len = (d-model_length)/(steps-1);
+ 
+ 		// PMM - special case for lightning model .. if the real length is shorter than the model,
+@@ -1328,7 +1328,7 @@ void CL_AddBeams (void)
+ //				Com_Printf ("Act View Angles: %f %f %f\n", cl.refdef.viewangles[0], cl.refdef.viewangles[1], cl.refdef.viewangles[2]);
+ //				VectorCopy (cl.predicted_origin, b->start);
+ //				b->start[2] += 22;	// adjust for view height
+-//				if (fabs(cl.refdef.vieworg[2] - b->start[2]) >= 10) {
++//				if (fabsf(cl.refdef.vieworg[2] - b->start[2]) >= 10) {
+ //					b->start[2] = cl.refdef.vieworg[2];
+ //				}
+ 
+@@ -1459,7 +1459,7 @@ void CL_AddPlayerBeams (void)
+ 		{
+ 	// PMM - fixed to correct for pitch of 0
+ 			if (dist[0])
+-				yaw = (atan2(dist[1], dist[0]) * 180 / M_PI);
++				yaw = (atan2f(dist[1], dist[0]) * 180 / M_PI);
+ 			else if (dist[1] > 0)
+ 				yaw = 90;
+ 			else
+@@ -1467,8 +1467,8 @@ void CL_AddPlayerBeams (void)
+ 			if (yaw < 0)
+ 				yaw += 360;
+ 	
+-			forward = sqrt (dist[0]*dist[0] + dist[1]*dist[1]);
+-			pitch = (atan2(dist[2], forward) * -180.0 / M_PI);
++			forward = sqrtf(dist[0]*dist[0] + dist[1]*dist[1]);
++			pitch = (atan2f(dist[2], forward) * -180.0 / M_PI);
+ 			if (pitch < 0)
+ 				pitch += 360.0;
+ 		}
+@@ -1527,7 +1527,7 @@ void CL_AddPlayerBeams (void)
+ 		{
+ 			model_length = 30.0;
+ 		}
+-		steps = ceil(d/model_length);
++		steps = ceilf(d/model_length);
+ 		len = (d-model_length)/(steps-1);
+ 
+ 		// PMM - special case for lightning model .. if the real length is shorter than the model,
+@@ -1608,7 +1608,7 @@ void CL_AddExplosions (void)
+ 		if (ex->type == ex_free)
+ 			continue;
+ 		frac = (cl.time - ex->start)/100.0;
+-		f = floor(frac);
++		f = floorf(frac);
+ 
+ 		ent = &ex->ent;
+ 
+diff --git a/client/cl_view.c b/client/cl_view.c
+index 4b75809..62cab48 100644
+--- a/client/cl_view.c
++++ b/client/cl_view.c
+@@ -368,9 +368,9 @@ float CalcFov (float fov_x, float width, float height)
+ 	if (fov_x < 1 || fov_x > 179)
+ 		Com_Error (ERR_DROP, "Bad fov: %f", fov_x);
+ 
+-	x = width/tan(fov_x/360*M_PI);
++	x = width/tanf(fov_x/360*M_PI);
+ 
+-	a = atan (height/x);
++	a = atanf(height/x);
+ 
+ 	a = a*360/M_PI;
+ 
+diff --git a/client/menu.c b/client/menu.c
+index eb954ba..9bec68d 100644
+--- a/client/menu.c
++++ b/client/menu.c
+@@ -1117,11 +1117,11 @@ static void InvertMouseFunc( void *unused )
+ {
+ 	if ( s_options_invertmouse_box.curvalue == 0 )
+ 	{
+-		Cvar_SetValue( "m_pitch", fabs( m_pitch->value ) );
++		Cvar_SetValue( "m_pitch", fabsf( m_pitch->value ) );
+ 	}
+ 	else
+ 	{
+-		Cvar_SetValue( "m_pitch", -fabs( m_pitch->value ) );
++		Cvar_SetValue( "m_pitch", -fabsf( m_pitch->value ) );
+ 	}
+ }
+ 
+diff --git a/client/snd_mix.c b/client/snd_mix.c
+index 00f201d..34af5ec 100644
+--- a/client/snd_mix.c
++++ b/client/snd_mix.c
+@@ -160,7 +160,7 @@ void S_TransferPaintBuffer(int endtime)
+ 		// write a fixed sine wave
+ 		count = (endtime - paintedtime);
+ 		for (i=0 ; i<count ; i++)
+-			paintbuffer[i].left = paintbuffer[i].right = sin((paintedtime+i)*0.1)*20000*256;
++			paintbuffer[i].left = paintbuffer[i].right = sinf((paintedtime+i)*0.1)*20000*256;
+ 	}
+ 
+ 
+diff --git a/game/g_combat.c b/game/g_combat.c
+index a921bdb..4b79932 100644
+--- a/game/g_combat.c
++++ b/game/g_combat.c
+@@ -277,9 +277,9 @@ static int CheckArmor (edict_t *ent, vec3_t point, vec3_t normal, int damage, in
+ 	armor = GetItemByIndex (index);
+ 
+ 	if (dflags & DAMAGE_ENERGY)
+-		save = ceil(((gitem_armor_t *)armor->info)->energy_protection*damage);
++		save = ceilf(((gitem_armor_t *)armor->info)->energy_protection*damage);
+ 	else
+-		save = ceil(((gitem_armor_t *)armor->info)->normal_protection*damage);
++		save = ceilf(((gitem_armor_t *)armor->info)->normal_protection*damage);
+ 	if (save >= client->pers.inventory[index])
+ 		save = client->pers.inventory[index];
+ 
+diff --git a/game/g_func.c b/game/g_func.c
+index 48703a3..7d629e0 100644
+--- a/game/g_func.c
++++ b/game/g_func.c
+@@ -103,7 +103,7 @@ void Move_Begin (edict_t *ent)
+ 		return;
+ 	}
+ 	VectorScale (ent->moveinfo.dir, ent->moveinfo.speed, ent->velocity);
+-	frames = floor((ent->moveinfo.remaining_distance / ent->moveinfo.speed) / FRAMETIME);
++	frames = floorf((ent->moveinfo.remaining_distance / ent->moveinfo.speed) / FRAMETIME);
+ 	ent->moveinfo.remaining_distance -= frames * ent->moveinfo.speed * FRAMETIME;
+ 	ent->nextthink = level.time + (frames * FRAMETIME);
+ 	ent->think = Move_Final;
+@@ -196,7 +196,7 @@ void AngleMove_Begin (edict_t *ent)
+ 		return;
+ 	}
+ 
+-	frames = floor(traveltime / FRAMETIME);
++	frames = floorf(traveltime / FRAMETIME);
+ 
+ 	// scale the destdelta vector by the time spent traveling to get velocity
+ 	VectorScale (destdelta, 1.0 / traveltime, ent->avelocity);
+@@ -253,7 +253,7 @@ void plat_CalcAcceleratedMove(moveinfo_t *moveinfo)
+ 		float	f;
+ 
+ 		f = (moveinfo->accel + moveinfo->decel) / (moveinfo->accel * moveinfo->decel);
+-		moveinfo->move_speed = (-2 + sqrt(4 - 4 * f * (-2 * moveinfo->remaining_distance))) / (2 * f);
++		moveinfo->move_speed = (-2 + sqrtf(4 - 4 * f * (-2 * moveinfo->remaining_distance))) / (2 * f);
+ 		decel_dist = AccelerationDistance (moveinfo->move_speed, moveinfo->decel);
+ 	}
+ 
+@@ -786,9 +786,9 @@ void SP_func_button (edict_t *ent)
+ 		st.lip = 4;
+ 
+ 	VectorCopy (ent->s.origin, ent->pos1);
+-	abs_movedir[0] = fabs(ent->movedir[0]);
+-	abs_movedir[1] = fabs(ent->movedir[1]);
+-	abs_movedir[2] = fabs(ent->movedir[2]);
++	abs_movedir[0] = fabsf(ent->movedir[0]);
++	abs_movedir[1] = fabsf(ent->movedir[1]);
++	abs_movedir[2] = fabsf(ent->movedir[2]);
+ 	dist = abs_movedir[0] * ent->size[0] + abs_movedir[1] * ent->size[1] + abs_movedir[2] * ent->size[2] - st.lip;
+ 	VectorMA (ent->pos1, dist, ent->movedir, ent->pos2);
+ 
+@@ -1008,10 +1008,10 @@ void Think_CalcMoveSpeed (edict_t *self)
+ 		return;		// only the team master does this
+ 
+ 	// find the smallest distance any member of the team will be moving
+-	min = fabs(self->moveinfo.distance);
++	min = fabsf(self->moveinfo.distance);
+ 	for (ent = self->teamchain; ent; ent = ent->teamchain)
+ 	{
+-		dist = fabs(ent->moveinfo.distance);
++		dist = fabsf(ent->moveinfo.distance);
+ 		if (dist < min)
+ 			min = dist;
+ 	}
+@@ -1021,7 +1021,7 @@ void Think_CalcMoveSpeed (edict_t *self)
+ 	// adjust speeds so they will all complete at the same time
+ 	for (ent = self; ent; ent = ent->teamchain)
+ 	{
+-		newspeed = fabs(ent->moveinfo.distance) / time;
++		newspeed = fabsf(ent->moveinfo.distance) / time;
+ 		ratio = newspeed / ent->moveinfo.speed;
+ 		if (ent->moveinfo.accel == ent->moveinfo.speed)
+ 			ent->moveinfo.accel = newspeed;
+@@ -1173,9 +1173,9 @@ void SP_func_door (edict_t *ent)
+ 
+ 	// calculate second position
+ 	VectorCopy (ent->s.origin, ent->pos1);
+-	abs_movedir[0] = fabs(ent->movedir[0]);
+-	abs_movedir[1] = fabs(ent->movedir[1]);
+-	abs_movedir[2] = fabs(ent->movedir[2]);
++	abs_movedir[0] = fabsf(ent->movedir[0]);
++	abs_movedir[1] = fabsf(ent->movedir[1]);
++	abs_movedir[2] = fabsf(ent->movedir[2]);
+ 	ent->moveinfo.distance = abs_movedir[0] * ent->size[0] + abs_movedir[1] * ent->size[1] + abs_movedir[2] * ent->size[2] - st.lip;
+ 	VectorMA (ent->pos1, ent->moveinfo.distance, ent->movedir, ent->pos2);
+ 
+@@ -1402,9 +1402,9 @@ void SP_func_water (edict_t *self)
+ 
+ 	// calculate second position
+ 	VectorCopy (self->s.origin, self->pos1);
+-	abs_movedir[0] = fabs(self->movedir[0]);
+-	abs_movedir[1] = fabs(self->movedir[1]);
+-	abs_movedir[2] = fabs(self->movedir[2]);
++	abs_movedir[0] = fabsf(self->movedir[0]);
++	abs_movedir[1] = fabsf(self->movedir[1]);
++	abs_movedir[2] = fabsf(self->movedir[2]);
+ 	self->moveinfo.distance = abs_movedir[0] * self->size[0] + abs_movedir[1] * self->size[1] + abs_movedir[2] * self->size[2] - st.lip;
+ 	VectorMA (self->pos1, self->moveinfo.distance, self->movedir, self->pos2);
+ 
+@@ -2003,10 +2003,10 @@ void SP_func_door_secret (edict_t *ent)
+ 	VectorClear (ent->s.angles);
+ 	side = 1.0 - (ent->spawnflags & SECRET_1ST_LEFT);
+ 	if (ent->spawnflags & SECRET_1ST_DOWN)
+-		width = fabs(DotProduct(up, ent->size));
++		width = fabsf(DotProduct(up, ent->size));
+ 	else
+-		width = fabs(DotProduct(right, ent->size));
+-	length = fabs(DotProduct(forward, ent->size));
++		width = fabsf(DotProduct(right, ent->size));
++	length = fabsf(DotProduct(forward, ent->size));
+ 	if (ent->spawnflags & SECRET_1ST_DOWN)
+ 		VectorMA (ent->s.origin, -1 * width, up, ent->pos1);
+ 	else
+diff --git a/game/g_monster.c b/game/g_monster.c
+index c7b954b..02ca034 100644
+--- a/game/g_monster.c
++++ b/game/g_monster.c
+@@ -231,7 +231,7 @@ void M_WorldEffects (edict_t *ent)
+ 			{	// drown!
+ 				if (ent->pain_debounce_time < level.time)
+ 				{
+-					dmg = 2 + 2 * floor(level.time - ent->air_finished);
++					dmg = 2 + 2 * floorf(level.time - ent->air_finished);
+ 					if (dmg > 15)
+ 						dmg = 15;
+ 					T_Damage (ent, world, world, vec3_origin, ent->s.origin, vec3_origin, dmg, 0, DAMAGE_NO_ARMOR, MOD_WATER);
+@@ -249,7 +249,7 @@ void M_WorldEffects (edict_t *ent)
+ 			{	// suffocate!
+ 				if (ent->pain_debounce_time < level.time)
+ 				{
+-					dmg = 2 + 2 * floor(level.time - ent->air_finished);
++					dmg = 2 + 2 * floorf(level.time - ent->air_finished);
+ 					if (dmg > 15)
+ 						dmg = 15;
+ 					T_Damage (ent, world, world, vec3_origin, ent->s.origin, vec3_origin, dmg, 0, DAMAGE_NO_ARMOR, MOD_WATER);
+diff --git a/game/g_phys.c b/game/g_phys.c
+index 8cbd1bc..fe02d66 100644
+--- a/game/g_phys.c
++++ b/game/g_phys.c
+@@ -854,7 +854,7 @@ void SV_Physics_Step (edict_t *ent)
+ 	// friction for flying monsters that have been given vertical velocity
+ 	if ((ent->flags & FL_FLY) && (ent->velocity[2] != 0))
+ 	{
+-		speed = fabs(ent->velocity[2]);
++		speed = fabsf(ent->velocity[2]);
+ 		control = speed < sv_stopspeed ? sv_stopspeed : speed;
+ 		friction = sv_friction/3;
+ 		newspeed = speed - (FRAMETIME * control * friction);
+@@ -867,7 +867,7 @@ void SV_Physics_Step (edict_t *ent)
+ 	// friction for flying monsters that have been given vertical velocity
+ 	if ((ent->flags & FL_SWIM) && (ent->velocity[2] != 0))
+ 	{
+-		speed = fabs(ent->velocity[2]);
++		speed = fabsf(ent->velocity[2]);
+ 		control = speed < sv_stopspeed ? sv_stopspeed : speed;
+ 		newspeed = speed - (FRAMETIME * control * sv_waterfriction * ent->waterlevel);
+ 		if (newspeed < 0)
+@@ -884,7 +884,7 @@ void SV_Physics_Step (edict_t *ent)
+ 			if (!(ent->health <= 0.0 && !M_CheckBottom(ent)))
+ 			{
+ 				vel = ent->velocity;
+-				speed = sqrt(vel[0]*vel[0] +vel[1]*vel[1]);
++				speed = sqrtf(vel[0]*vel[0] +vel[1]*vel[1]);
+ 				if (speed)
+ 				{
+ 					friction = sv_friction;
+diff --git a/game/g_spawn.c b/game/g_spawn.c
+index c6084e9..6898763 100644
+--- a/game/g_spawn.c
++++ b/game/g_spawn.c
+@@ -525,7 +525,7 @@ void SpawnEntities (char *mapname, char *entities, char *spawnpoint)
+ 	int			i;
+ 	float		skill_level;
+ 
+-	skill_level = floor (skill->value);
++	skill_level = floorf(skill->value);
+ 	if (skill_level < 0)
+ 		skill_level = 0;
+ 	if (skill_level > 3)
+diff --git a/game/g_turret.c b/game/g_turret.c
+index 0153fd9..075487f 100644
+--- a/game/g_turret.c
++++ b/game/g_turret.c
+@@ -116,17 +116,17 @@ void turret_breach_think (edict_t *self)
+ 	{
+ 		float	dmin, dmax;
+ 
+-		dmin = fabs(self->pos1[YAW] - self->move_angles[YAW]);
++		dmin = fabsf(self->pos1[YAW] - self->move_angles[YAW]);
+ 		if (dmin < -180)
+ 			dmin += 360;
+ 		else if (dmin > 180)
+ 			dmin -= 360;
+-		dmax = fabs(self->pos2[YAW] - self->move_angles[YAW]);
++		dmax = fabsf(self->pos2[YAW] - self->move_angles[YAW]);
+ 		if (dmax < -180)
+ 			dmax += 360;
+ 		else if (dmax > 180)
+ 			dmax -= 360;
+-		if (fabs(dmin) < fabs(dmax))
++		if (fabsf(dmin) < fabsf(dmax))
+ 			self->move_angles[YAW] = self->pos1[YAW];
+ 		else
+ 			self->move_angles[YAW] = self->pos2[YAW];
+@@ -175,8 +175,8 @@ void turret_breach_think (edict_t *self)
+ 		// x & y
+ 		angle = self->s.angles[1] + self->owner->move_origin[1];
+ 		angle *= (M_PI*2 / 360);
+-		target[0] = SnapToEights(self->s.origin[0] + cos(angle) * self->owner->move_origin[0]);
+-		target[1] = SnapToEights(self->s.origin[1] + sin(angle) * self->owner->move_origin[0]);
++		target[0] = SnapToEights(self->s.origin[0] + cosf(angle) * self->owner->move_origin[0]);
++		target[1] = SnapToEights(self->s.origin[1] + sinf(angle) * self->owner->move_origin[0]);
+ 		target[2] = self->owner->s.origin[2];
+ 
+ 		VectorSubtract (target, self->owner->s.origin, dir);
+@@ -185,7 +185,7 @@ void turret_breach_think (edict_t *self)
+ 
+ 		// z
+ 		angle = self->s.angles[PITCH] * (M_PI*2 / 360);
+-		target_z = SnapToEights(self->s.origin[2] + self->owner->move_origin[0] * tan(angle) + self->owner->move_origin[2]);
++		target_z = SnapToEights(self->s.origin[2] + self->owner->move_origin[0] * tanf(angle) + self->owner->move_origin[2]);
+ 
+ 		diff = target_z - self->owner->s.origin[2];
+ 		self->owner->velocity[2] = diff * 1.0 / FRAMETIME;
+diff --git a/game/g_utils.c b/game/g_utils.c
+index af2e645..33f42bb 100644
+--- a/game/g_utils.c
++++ b/game/g_utils.c
+@@ -344,7 +344,7 @@ float vectoyaw (vec3_t vec)
+ 	} 
+ 	else
+ 	{
+-		yaw = (int) (atan2(vec[YAW], vec[PITCH]) * 180 / M_PI);
++		yaw = (int) (atan2f(vec[YAW], vec[PITCH]) * 180 / M_PI);
+ 		if (yaw < 0)
+ 			yaw += 360;
+ 	}
+@@ -369,7 +369,7 @@ void vectoangles (vec3_t value1, vec3_t angles)
+ 	else
+ 	{
+ 		if (value1[0])
+-			yaw = (int) (atan2(value1[1], value1[0]) * 180 / M_PI);
++			yaw = (int) (atan2f(value1[1], value1[0]) * 180 / M_PI);
+ 		else if (value1[1] > 0)
+ 			yaw = 90;
+ 		else
+@@ -377,8 +377,8 @@ void vectoangles (vec3_t value1, vec3_t angles)
+ 		if (yaw < 0)
+ 			yaw += 360;
+ 
+-		forward = sqrt (value1[0]*value1[0] + value1[1]*value1[1]);
+-		pitch = (int) (atan2(value1[2], forward) * 180 / M_PI);
++		forward = sqrtf(value1[0]*value1[0] + value1[1]*value1[1]);
++		pitch = (int) (atan2f(value1[2], forward) * 180 / M_PI);
+ 		if (pitch < 0)
+ 			pitch += 360;
+ 	}
+diff --git a/game/g_weapon.c b/game/g_weapon.c
+index de985cf..cfb548b 100644
+--- a/game/g_weapon.c
++++ b/game/g_weapon.c
+@@ -744,7 +744,7 @@ void bfg_explode (edict_t *self)
+ 			VectorMA (ent->s.origin, 0.5, v, v);
+ 			VectorSubtract (self->s.origin, v, v);
+ 			dist = VectorLength(v);
+-			points = self->radius_dmg * (1.0 - sqrt(dist/self->dmg_radius));
++			points = self->radius_dmg * (1.0 - sqrtf(dist/self->dmg_radius));
+ 			if (ent == self->owner)
+ 				points = points * 0.5;
+ 
+diff --git a/game/m_medic.c b/game/m_medic.c
+index 7607f82..78b0507 100644
+--- a/game/m_medic.c
++++ b/game/m_medic.c
+@@ -597,7 +597,7 @@ void medic_cable_attack (edict_t *self)
+ 	vectoangles (dir, angles);
+ 	if (angles[0] < -180)
+ 		angles[0] += 360;
+-	if (fabs(angles[0]) > 45)
++	if (fabsf(angles[0]) > 45)
+ 		return;
+ 
+ 	tr = gi.trace (start, NULL, NULL, self->enemy->s.origin, self, MASK_SHOT);
+diff --git a/game/m_move.c b/game/m_move.c
+index 229cfcd..042a253 100644
+--- a/game/m_move.c
++++ b/game/m_move.c
+@@ -359,8 +359,8 @@ qboolean SV_StepDirection (edict_t *ent, float yaw, float dist)
+ 	M_ChangeYaw (ent);
+ 	
+ 	yaw = yaw*M_PI*2 / 360;
+-	move[0] = cos(yaw)*dist;
+-	move[1] = sin(yaw)*dist;
++	move[0] = cosf(yaw)*dist;
++	move[1] = sinf(yaw)*dist;
+ 	move[2] = 0;
+ 
+ 	VectorCopy (ent->s.origin, oldorigin);
+@@ -548,8 +548,8 @@ qboolean M_walkmove (edict_t *ent, float yaw, float dist)
+ 
+ 	yaw = yaw*M_PI*2 / 360;
+ 	
+-	move[0] = cos(yaw)*dist;
+-	move[1] = sin(yaw)*dist;
++	move[0] = cosf(yaw)*dist;
++	move[1] = sinf(yaw)*dist;
+ 	move[2] = 0;
+ 
+ 	return SV_movestep(ent, move, true);
+diff --git a/game/m_parasite.c b/game/m_parasite.c
+index 3478750..bc2bfcf 100644
+--- a/game/m_parasite.c
++++ b/game/m_parasite.c
+@@ -307,7 +307,7 @@ static qboolean parasite_drain_attack_ok (vec3_t start, vec3_t end)
+ 	vectoangles (dir, angles);
+ 	if (angles[0] < -180)
+ 		angles[0] += 360;
+-	if (fabs(angles[0]) > 30)
++	if (fabsf(angles[0]) > 30)
+ 		return false;
+ 
+ 	return true;
+diff --git a/game/m_soldier.c b/game/m_soldier.c
+index dae6d61..6ff2c86 100644
+--- a/game/m_soldier.c
++++ b/game/m_soldier.c
+@@ -1172,7 +1172,7 @@ void soldier_die (edict_t *self, edict_t *inflictor, edict_t *attacker, int dama
+ 	else // (self->s.skinnum == 5)
+ 		gi.sound (self, CHAN_VOICE, sound_death_ss, 1, ATTN_NORM, 0);
+ 
+-	if (fabs((self->s.origin[2] + self->viewheight) - point[2]) <= 4)
++	if (fabsf((self->s.origin[2] + self->viewheight) - point[2]) <= 4)
+ 	{
+ 		// head shot
+ 		self->monsterinfo.currentmove = &soldier_move_death3;
+diff --git a/game/p_client.c b/game/p_client.c
+index 80e444d..fcb261a 100644
+--- a/game/p_client.c
++++ b/game/p_client.c
+@@ -479,7 +479,7 @@ void LookAtKiller (edict_t *self, edict_t *inflictor, edict_t *attacker)
+ 	}
+ 
+ 	if (dir[0])
+-		self->client->killer_yaw = 180/M_PI*atan2(dir[1], dir[0]);
++		self->client->killer_yaw = 180/M_PI*atan2f(dir[1], dir[0]);
+ 	else {
+ 		self->client->killer_yaw = 0;
+ 		if (dir[1] > 0)
+diff --git a/game/p_view.c b/game/p_view.c
+index 04ba7c6..8903f39 100644
+--- a/game/p_view.c
++++ b/game/p_view.c
+@@ -31,7 +31,7 @@ float	xyspeed;
+ 
+ float	bobmove;
+ int		bobcycle;		// odd cycles are right foot going forward
+-float	bobfracsin;		// sin(bobfrac*M_PI)
++float	bobfracsin;		// sinf(bobfrac*M_PI)
+ 
+ /*
+ ===============
+@@ -47,7 +47,7 @@ float SV_CalcRoll (vec3_t angles, vec3_t velocity)
+ 	
+ 	side = DotProduct (velocity, right);
+ 	sign = side < 0 ? -1 : 1;
+-	side = fabs(side);
++	side = fabsf(side);
+ 	
+ 	value = sv_rollangle->value;
+ 
+@@ -1011,7 +1011,7 @@ void ClientEndServerFrame (edict_t *ent)
+ 	// calculate speed and cycle to be used for
+ 	// all cyclic walking effects
+ 	//
+-	xyspeed = sqrt(ent->velocity[0]*ent->velocity[0] + ent->velocity[1]*ent->velocity[1]);
++	xyspeed = sqrtf(ent->velocity[0]*ent->velocity[0] + ent->velocity[1]*ent->velocity[1]);
+ 
+ 	if (xyspeed < 5)
+ 	{
+@@ -1034,7 +1034,7 @@ void ClientEndServerFrame (edict_t *ent)
+ 		bobtime *= 4;
+ 
+ 	bobcycle = (int)bobtime;
+-	bobfracsin = fabs(sin(bobtime*M_PI));
++	bobfracsin = fabsf(sinf(bobtime*M_PI));
+ 
+ 	// detect hitting the floor
+ 	P_FallingDamage (ent);
+diff --git a/game/p_weapon.c b/game/p_weapon.c
+index dc418f3..e90282b 100644
+--- a/game/p_weapon.c
++++ b/game/p_weapon.c
+@@ -892,9 +892,9 @@ void Weapon_HyperBlaster_Fire (edict_t *ent)
+ 		else
+ 		{
+ 			rotation = (ent->client->ps.gunframe - 5) * 2*M_PI/6;
+-			offset[0] = -4 * sin(rotation);
++			offset[0] = -4 * sinf(rotation);
+ 			offset[1] = 0;
+-			offset[2] = 4 * cos(rotation);
++			offset[2] = 4 * cosf(rotation);
+ 
+ 			if ((ent->client->ps.gunframe == 6) || (ent->client->ps.gunframe == 9))
+ 				effect = EF_HYPERBLASTER;
+diff --git a/game/q_shared.c b/game/q_shared.c
+index 9f640a3..90b376f 100644
+--- a/game/q_shared.c
++++ b/game/q_shared.c
+@@ -70,10 +70,10 @@ void RotatePointAroundVector( vec3_t dst, const vec3_t dir, const vec3_t point,
+ 	memset( zrot, 0, sizeof( zrot ) );
+ 	zrot[0][0] = zrot[1][1] = zrot[2][2] = 1.0F;
+ 
+-	zrot[0][0] = cos( DEG2RAD( degrees ) );
+-	zrot[0][1] = sin( DEG2RAD( degrees ) );
+-	zrot[1][0] = -sin( DEG2RAD( degrees ) );
+-	zrot[1][1] = cos( DEG2RAD( degrees ) );
++	zrot[0][0] = cosf( DEG2RAD( degrees ) );
++	zrot[0][1] = sinf( DEG2RAD( degrees ) );
++	zrot[1][0] = -sinf( DEG2RAD( degrees ) );
++	zrot[1][1] = cosf( DEG2RAD( degrees ) );
+ 
+ 	R_ConcatRotations( m, zrot, tmpmat );
+ 	R_ConcatRotations( tmpmat, im, rot );
+@@ -97,14 +97,14 @@ void AngleVectors (vec3_t angles, vec3_t forward, vec3_t right, vec3_t up)
+ 	// static to help MS compiler fp bugs
+ 
+ 	angle = angles[YAW] * (M_PI*2 / 360);
+-	sy = sin(angle);
+-	cy = cos(angle);
++	sy = sinf(angle);
++	cy = cosf(angle);
+ 	angle = angles[PITCH] * (M_PI*2 / 360);
+-	sp = sin(angle);
+-	cp = cos(angle);
++	sp = sinf(angle);
++	cp = cosf(angle);
+ 	angle = angles[ROLL] * (M_PI*2 / 360);
+-	sr = sin(angle);
+-	cr = cos(angle);
++	sr = sinf(angle);
++	cr = cosf(angle);
+ 
+ 	if (forward)
+ 	{
+@@ -161,10 +161,10 @@ void PerpendicularVector( vec3_t dst, const vec3_t src )
+ 	*/
+ 	for ( pos = 0, i = 0; i < 3; i++ )
+ 	{
+-		if ( fabs( src[i] ) < minelem )
++		if ( fabsf( src[i] ) < minelem )
+ 		{
+ 			pos = i;
+-			minelem = fabs( src[i] );
++			minelem = fabsf( src[i] );
+ 		}
+ 	}
+ 	tempvec[0] = tempvec[1] = tempvec[2] = 0.0F;
+@@ -683,7 +683,7 @@ vec_t VectorNormalize (vec3_t v)
+ 	float	length, ilength;
+ 
+ 	length = v[0]*v[0] + v[1]*v[1] + v[2]*v[2];
+-	length = sqrt (length);		// FIXME
++	length = sqrtf(length);		// FIXME
+ 
+ 	if (length)
+ 	{
+@@ -702,7 +702,7 @@ vec_t VectorNormalize2 (vec3_t v, vec3_t out)
+ 	float	length, ilength;
+ 
+ 	length = v[0]*v[0] + v[1]*v[1] + v[2]*v[2];
+-	length = sqrt (length);		// FIXME
++	length = sqrtf(length);		// FIXME
+ 
+ 	if (length)
+ 	{
+@@ -757,8 +757,6 @@ void CrossProduct (vec3_t v1, vec3_t v2, vec3_t cross)
+ 	cross[2] = v1[0]*v2[1] - v1[1]*v2[0];
+ }
+ 
+-double sqrt(double x);
+-
+ vec_t VectorLength(vec3_t v)
+ {
+ 	int		i;
+@@ -767,7 +765,7 @@ vec_t VectorLength(vec3_t v)
+ 	length = 0;
+ 	for (i=0 ; i< 3 ; i++)
+ 		length += v[i]*v[i];
+-	length = sqrt (length);		// FIXME
++	length = sqrtf(length);		// FIXME
+ 
+ 	return length;
+ }
+diff --git a/qcommon/cmodel.c b/qcommon/cmodel.c
+index 7fc6879..09b1b24 100644
+--- a/qcommon/cmodel.c
++++ b/qcommon/cmodel.c
+@@ -1266,9 +1266,9 @@ void CM_RecursiveHullCheck (int num, float p1f, float p2f, vec3_t p1, vec3_t p2)
+ 		if (trace_ispoint)
+ 			offset = 0;
+ 		else
+-			offset = fabs(trace_extents[0]*plane->normal[0]) +
+-				fabs(trace_extents[1]*plane->normal[1]) +
+-				fabs(trace_extents[2]*plane->normal[2]);
++			offset = fabsf(trace_extents[0]*plane->normal[0]) +
++				fabsf(trace_extents[1]*plane->normal[1]) +
++				fabsf(trace_extents[2]*plane->normal[2]);
+ 	}
+ 
+ 
+diff --git a/qcommon/pmove.c b/qcommon/pmove.c
+index d597e27..7ad17ef 100644
+--- a/qcommon/pmove.c
++++ b/qcommon/pmove.c
+@@ -351,7 +351,7 @@ void PM_Friction (void)
+ 	
+ 	vel = pml.velocity;
+ 	
+-	speed = sqrt(vel[0]*vel[0] +vel[1]*vel[1] + vel[2]*vel[2]);
++	speed = sqrtf(vel[0]*vel[0] +vel[1]*vel[1] + vel[2]*vel[2]);
+ 	if (speed < 1)
+ 	{
+ 		vel[0] = 0;
+@@ -444,7 +444,7 @@ void PM_AddCurrents (vec3_t	wishvel)
+ 	// account for ladders
+ 	//
+ 
+-	if (pml.ladder && fabs(pml.velocity[2]) <= 200)
++	if (pml.ladder && fabsf(pml.velocity[2]) <= 200)
+ 	{
+ 		if ((pm->viewangles[PITCH] <= -15) && (pm->cmd.forwardmove > 0))
+ 			wishvel[2] = 200;
+diff --git a/server/sv_world.c b/server/sv_world.c
+index ded791e..6d9cd1e 100644
+--- a/server/sv_world.c
++++ b/server/sv_world.c
+@@ -226,10 +226,10 @@ void SV_LinkEdict (edict_t *ent)
+ 		max = 0;
+ 		for (i=0 ; i<3 ; i++)
+ 		{
+-			v =fabs( ent->mins[i]);
++			v =fabsf( ent->mins[i]);
+ 			if (v > max)
+ 				max = v;
+-			v =fabs( ent->maxs[i]);
++			v =fabsf( ent->maxs[i]);
+ 			if (v > max)
+ 				max = v;
+ 		}

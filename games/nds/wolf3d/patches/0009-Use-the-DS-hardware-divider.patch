@@ -1,0 +1,57 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Sun, 4 Oct 2026 12:18:33 +0200
+Subject: [PATCH] Use the DS hardware divider
+
+The ARM9 has no divide instruction, so FixedDiv and the height of every
+wall column use the DS hardware divider instead of dividing in software.
+---
+ wl_draw.c  | 3 ++-
+ wl_utils.c | 6 +++---
+ 2 files changed, 5 insertions(+), 4 deletions(-)
+
+diff --git a/wl_draw.c b/wl_draw.c
+index 5dd58a5..da92948 100644
+--- a/wl_draw.c
++++ b/wl_draw.c
+@@ -4,6 +4,7 @@
+ #include "wl_cloudsky.h"
+ #include "wl_atmos.h"
+ #include "wl_shade.h"
++#include <nds/arm9/math.h>
+ 
+ /*
+ =============================================================================
+@@ -279,7 +280,7 @@ int16_t CalcHeight (void)
+     if (nx < MINDIST)
+         nx = MINDIST;             // don't let divide overflow
+ 
+-    height = (int16_t)(heightnumerator / (nx >> 8));
++    height = (int16_t)div32(heightnumerator, nx >> 8);
+ #endif
+ 
+     return height;
+diff --git a/wl_utils.c b/wl_utils.c
+index 1e46362..fe14d16 100644
+--- a/wl_utils.c
++++ b/wl_utils.c
+@@ -1,6 +1,7 @@
+ // WL_UTILS.C
+ 
+ #include "wl_utils.h"
++#include <nds/arm9/math.h>
+ 
+ 
+ /*
+@@ -33,9 +34,8 @@ fixed FixedMul (fixed a, fixed b)
+ 
+ fixed FixedDiv (fixed a, fixed b)
+ {
+-	int64_t c = ((int64_t)a << FRACBITS) / (int64_t)b;
+-
+-	return (fixed)c;
++	// The ARM9 has no divide instruction, use the DS hardware divider
++	return div64((int64_t)a << FRACBITS, b);
+ }
+ 
+ uint16_t ReadShort (void *ptr)

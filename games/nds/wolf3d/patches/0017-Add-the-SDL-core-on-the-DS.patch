@@ -1,0 +1,324 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Sun, 4 Oct 2026 12:18:34 +0200
+Subject: [PATCH] Add the SDL core on the DS
+
+SDL.h, SDL_mixer.h and SDL_syswm.h declare the subset of SDL 2 and
+SDL_mixer that Wolf4SDL uses, sdl.c initializes it, keeps the time (the
+tick counter only runs with a tick task) and shows message boxes on the
+touch screen.
+---
+ nds/SDL.h       | 235 ++++++++++++++++++++++++++++++++++++++++++++++++
+ nds/SDL_syswm.h |   1 +
+ nds/sdl.c       |  52 +++++++++++
+ 3 files changed, 288 insertions(+)
+ create mode 100644 nds/SDL.h
+ create mode 100644 nds/SDL_syswm.h
+ create mode 100644 nds/sdl.c
+
+diff --git a/nds/SDL.h b/nds/SDL.h
+new file mode 100644
+index 0000000..cfacdf9
+--- /dev/null
++++ b/nds/SDL.h
+@@ -0,0 +1,235 @@
++//
++// The subset of SDL 2 that Wolf4SDL uses, implemented for the Nintendo DS
++// in sdl.c, sdl_video.c and sdl_input.c: 8-bit surfaces shown through the
++// hardware palette, the buttons as a joystick, no mouse and a millisecond
++// timer
++//
++
++#ifndef SDL_NDS_H
++#define SDL_NDS_H
++
++#include <stdint.h>
++
++typedef uint8_t  Uint8;
++typedef uint16_t Uint16;
++typedef uint32_t Uint32;
++typedef int8_t   Sint8;
++typedef int16_t  Sint16;
++typedef int32_t  Sint32;
++
++// Wolf4SDL has its own bool
++typedef enum
++{
++    SDL_FALSE,
++    SDL_TRUE
++} SDL_bool;
++
++#define SDL_INIT_VIDEO      0x0020
++#define SDL_INIT_AUDIO      0x0010
++#define SDL_INIT_JOYSTICK   0x0200
++
++int  SDL_Init (Uint32 flags);
++void SDL_Quit (void);
++const char *SDL_GetError (void);
++void SDL_SetHint (const char *name, const char *value);
++
++Uint32 SDL_GetTicks (void);
++void   SDL_Delay (Uint32 ms);
++
++// ---------------------------------------------------------------------------
++// Video
++// ---------------------------------------------------------------------------
++
++#define SDL_ALPHA_OPAQUE                255
++#define SDL_WINDOWPOS_UNDEFINED         0
++#define SDL_WINDOW_FULLSCREEN           0x01
++#define SDL_WINDOW_OPENGL               0x02
++#define SDL_PIXELFORMAT_ARGB8888        0x16362004
++#define SDL_RENDERER_ACCELERATED        0x02
++#define SDL_RENDERER_PRESENTVSYNC       0x04
++#define SDL_TEXTUREACCESS_STREAMING     1
++#define SDL_BLENDMODE_BLEND             1
++#define SDL_HINT_RENDER_SCALE_QUALITY   "SDL_RENDER_SCALE_QUALITY"
++#define SDL_DISABLE                     0
++#define SDL_MUSTLOCK(surface)           0
++
++typedef struct
++{
++    Uint8 r, g, b, a;
++} SDL_Color;
++
++typedef struct
++{
++    int ncolors;
++    SDL_Color *colors;
++} SDL_Palette;
++
++typedef struct
++{
++    SDL_Palette *palette;
++    Uint8 BitsPerPixel;
++    Uint8 BytesPerPixel;
++} SDL_PixelFormat;
++
++typedef struct
++{
++    Uint32 flags;
++    SDL_PixelFormat *format;
++    int w, h;
++    int pitch;
++    void *pixels;
++} SDL_Surface;
++
++typedef struct
++{
++    int x, y, w, h;
++} SDL_Rect;
++
++typedef struct SDL_Window SDL_Window;
++typedef struct SDL_Renderer SDL_Renderer;
++typedef struct SDL_Texture SDL_Texture;
++
++SDL_Window *SDL_CreateWindow (const char *title, int x, int y, int w, int h, Uint32 flags);
++void SDL_DestroyWindow (SDL_Window *window);
++SDL_Renderer *SDL_CreateRenderer (SDL_Window *window, int index, Uint32 flags);
++void SDL_DestroyRenderer (SDL_Renderer *renderer);
++int  SDL_SetRenderDrawBlendMode (SDL_Renderer *renderer, int mode);
++SDL_Texture *SDL_CreateTexture (SDL_Renderer *renderer, Uint32 format, int access, int w, int h);
++void SDL_DestroyTexture (SDL_Texture *texture);
++int  SDL_UpdateTexture (SDL_Texture *texture, const SDL_Rect *rect, const void *pixels, int pitch);
++int  SDL_RenderCopy (SDL_Renderer *renderer, SDL_Texture *texture, const SDL_Rect *src, const SDL_Rect *dst);
++void SDL_RenderPresent (SDL_Renderer *renderer);
++int  SDL_ShowCursor (int toggle);
++
++// The DS shows 8-bit paletted frames, so that is the "best" format
++SDL_bool SDL_PixelFormatEnumToMasks (Uint32 format, int *bpp, Uint32 *r, Uint32 *g, Uint32 *b, Uint32 *a);
++SDL_Surface *SDL_CreateRGBSurface (Uint32 flags, int w, int h, int depth, Uint32 r, Uint32 g, Uint32 b, Uint32 a);
++void SDL_FreeSurface (SDL_Surface *surface);
++int  SDL_SetPaletteColors (SDL_Palette *palette, const SDL_Color *colors, int first, int ncolors);
++int  SDL_BlitSurface (SDL_Surface *src, const SDL_Rect *srcrect, SDL_Surface *dst, SDL_Rect *dstrect);
++int  SDL_FillRect (SDL_Surface *dst, const SDL_Rect *rect, Uint32 color);
++Uint32 SDL_MapRGBA (const SDL_PixelFormat *format, Uint8 r, Uint8 g, Uint8 b, Uint8 a);
++int  SDL_LockSurface (SDL_Surface *surface);
++void SDL_UnlockSurface (SDL_Surface *surface);
++int  SDL_SaveBMP (SDL_Surface *surface, const char *file);
++
++#define SDL_MESSAGEBOX_ERROR        0x10
++#define SDL_MESSAGEBOX_INFORMATION  0x40
++
++int SDL_ShowSimpleMessageBox (Uint32 flags, const char *title, const char *message, SDL_Window *window);
++
++// ---------------------------------------------------------------------------
++// Input
++// ---------------------------------------------------------------------------
++
++typedef enum
++{
++    SDL_SCANCODE_UNKNOWN = 0,
++    SDL_SCANCODE_A = 4, SDL_SCANCODE_B, SDL_SCANCODE_C, SDL_SCANCODE_D, SDL_SCANCODE_E,
++    SDL_SCANCODE_F, SDL_SCANCODE_G, SDL_SCANCODE_H, SDL_SCANCODE_I, SDL_SCANCODE_J,
++    SDL_SCANCODE_K, SDL_SCANCODE_L, SDL_SCANCODE_M, SDL_SCANCODE_N, SDL_SCANCODE_O,
++    SDL_SCANCODE_P, SDL_SCANCODE_Q, SDL_SCANCODE_R, SDL_SCANCODE_S, SDL_SCANCODE_T,
++    SDL_SCANCODE_U, SDL_SCANCODE_V, SDL_SCANCODE_W, SDL_SCANCODE_X, SDL_SCANCODE_Y,
++    SDL_SCANCODE_Z,
++    SDL_SCANCODE_1, SDL_SCANCODE_2, SDL_SCANCODE_3, SDL_SCANCODE_4, SDL_SCANCODE_5,
++    SDL_SCANCODE_6, SDL_SCANCODE_7, SDL_SCANCODE_8, SDL_SCANCODE_9, SDL_SCANCODE_0,
++    SDL_SCANCODE_RETURN = 40, SDL_SCANCODE_ESCAPE, SDL_SCANCODE_BACKSPACE, SDL_SCANCODE_TAB,
++    SDL_SCANCODE_SPACE, SDL_SCANCODE_MINUS, SDL_SCANCODE_EQUALS,
++    SDL_SCANCODE_CAPSLOCK = 57,
++    SDL_SCANCODE_F1, SDL_SCANCODE_F2, SDL_SCANCODE_F3, SDL_SCANCODE_F4, SDL_SCANCODE_F5,
++    SDL_SCANCODE_F6, SDL_SCANCODE_F7, SDL_SCANCODE_F8, SDL_SCANCODE_F9, SDL_SCANCODE_F10,
++    SDL_SCANCODE_F11, SDL_SCANCODE_F12,
++    SDL_SCANCODE_SCROLLLOCK = 71, SDL_SCANCODE_PAUSE, SDL_SCANCODE_INSERT, SDL_SCANCODE_HOME,
++    SDL_SCANCODE_PAGEUP, SDL_SCANCODE_DELETE, SDL_SCANCODE_END, SDL_SCANCODE_PAGEDOWN,
++    SDL_SCANCODE_RIGHT, SDL_SCANCODE_LEFT, SDL_SCANCODE_DOWN, SDL_SCANCODE_UP,
++    SDL_SCANCODE_KP_ENTER = 88, SDL_SCANCODE_KP_2 = 90, SDL_SCANCODE_KP_4 = 92,
++    SDL_SCANCODE_KP_5, SDL_SCANCODE_KP_6, SDL_SCANCODE_KP_8 = 96,
++    SDL_SCANCODE_LCTRL = 224, SDL_SCANCODE_LSHIFT, SDL_SCANCODE_LALT,
++    SDL_SCANCODE_RCTRL = 228, SDL_SCANCODE_RSHIFT, SDL_SCANCODE_RALT,
++    SDL_NUM_SCANCODES = 512
++} SDL_Scancode;
++
++#define KMOD_NUM 0x1000
++int SDL_GetModState (void);
++
++#define SDL_TEXTINPUTEVENT_TEXT_SIZE 32
++
++enum
++{
++    SDL_QUIT = 0x100,
++    SDL_KEYDOWN = 0x300,
++    SDL_KEYUP,
++    SDL_TEXTINPUT = 0x303,
++    SDL_MOUSEMOTION = 0x400,
++    SDL_JOYHATMOTION = 0x602,
++    SDL_JOYBUTTONDOWN,
++    SDL_JOYBUTTONUP
++};
++
++typedef struct
++{
++    Uint32 type;
++    struct
++    {
++        SDL_Scancode scancode;
++    } keysym;
++} SDL_KeyboardEvent;
++
++typedef struct
++{
++    Uint32 type;
++    char text[SDL_TEXTINPUTEVENT_TEXT_SIZE];
++} SDL_TextInputEvent;
++
++typedef struct
++{
++    Uint32 type;
++    Uint8 button;
++} SDL_JoyButtonEvent;
++
++typedef union
++{
++    Uint32 type;
++    SDL_KeyboardEvent key;
++    SDL_TextInputEvent text;
++    SDL_JoyButtonEvent jbutton;
++} SDL_Event;
++
++#define SDL_IGNORE 0
++
++int SDL_PollEvent (SDL_Event *event);
++int SDL_WaitEvent (SDL_Event *event);
++Uint8 SDL_EventState (Uint32 type, int state);
++
++// There is no mouse, it never moves
++#define SDL_BUTTON(x)       (1 << ((x) - 1))
++#define SDL_BUTTON_LEFT     1
++#define SDL_BUTTON_MIDDLE   2
++#define SDL_BUTTON_RIGHT    3
++
++Uint32 SDL_GetMouseState (int *x, int *y);
++Uint32 SDL_GetRelativeMouseState (int *x, int *y);
++void SDL_WarpMouseInWindow (SDL_Window *window, int x, int y);
++void SDL_SetWindowGrab (SDL_Window *window, SDL_bool grabbed);
++int  SDL_SetRelativeMouseMode (SDL_bool enabled);
++
++// The buttons are joystick 0: the d-pad is its axes, the other buttons are
++// SDL_NDS_JOY_BUTTONS (START is the escape key)
++typedef struct SDL_Joystick SDL_Joystick;
++
++#define SDL_HAT_UP      0x01
++#define SDL_HAT_RIGHT   0x02
++#define SDL_HAT_DOWN    0x04
++#define SDL_HAT_LEFT    0x08
++
++int SDL_NumJoysticks (void);
++SDL_Joystick *SDL_JoystickOpen (int index);
++void SDL_JoystickClose (SDL_Joystick *joystick);
++void SDL_JoystickUpdate (void);
++int  SDL_JoystickNumButtons (SDL_Joystick *joystick);
++int  SDL_JoystickNumHats (SDL_Joystick *joystick);
++Sint16 SDL_JoystickGetAxis (SDL_Joystick *joystick, int axis);
++Uint8 SDL_JoystickGetHat (SDL_Joystick *joystick, int hat);
++Uint8 SDL_JoystickGetButton (SDL_Joystick *joystick, int button);
++
++#endif
+diff --git a/nds/SDL_syswm.h b/nds/SDL_syswm.h
+new file mode 100644
+index 0000000..f377577
+--- /dev/null
++++ b/nds/SDL_syswm.h
+@@ -0,0 +1 @@
++// Wolf4SDL includes this, nothing of it is needed on the DS
+diff --git a/nds/sdl.c b/nds/sdl.c
+new file mode 100644
+index 0000000..df0fea4
+--- /dev/null
++++ b/nds/sdl.c
+@@ -0,0 +1,52 @@
++//
++// The subset of SDL 2 and SDL_mixer that Wolf4SDL uses, on the Nintendo DS:
++// initialization, time and message boxes. The video is in sdl_video.c, the
++// input in sdl_input.c and the audio in sdl_mixer.c.
++//
++
++#include <nds.h>
++
++#include "SDL.h"
++#include "wl_nds.h"
++
++static TickTask tick_task;
++
++static void TickNoop (TickTask *task)
++{
++}
++
++int SDL_Init (Uint32 flags)
++{
++    // The tick counter only runs while a tick task is scheduled
++    tickTaskStart (&tick_task, TickNoop, ticksFromHz (1), ticksFromHz (1));
++    return 0;
++}
++
++void SDL_Quit (void)
++{
++}
++
++const char *SDL_GetError (void)
++{
++    return "unsupported on the Nintendo DS";
++}
++
++void SDL_SetHint (const char *name, const char *value)
++{
++}
++
++Uint32 SDL_GetTicks (void)
++{
++    return (Uint32) (tickGetCount () * 1000 / TICK_FREQ);
++}
++
++void SDL_Delay (Uint32 ms)
++{
++    threadSleep (ms * 1000);
++}
++
++int SDL_ShowSimpleMessageBox (Uint32 flags, const char *title, const char *message, SDL_Window *window)
++{
++    NDS_ShowMessage (title, message);
++    return 0;
++}

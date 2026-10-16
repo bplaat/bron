@@ -1,0 +1,92 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Sat, 3 Oct 2026 11:04:44 +0200
+Subject: [PATCH] Add a Nintendo DS build
+
+Makefile.nds builds a DSi enhanced .nds with the toolchain of the ports
+(clang, calico and libnds). The renderer, sight checks and fixed point
+math run from ITCM as ARM code, the rest is Thumb code in main RAM. The
+32-bit DG_ScreenBuffer and SDL_mixer are left out, and .gitignore no
+longer hides the doomgeneric/ source directory.
+---
+ .gitignore                |  6 +++++-
+ doomgeneric/Makefile.nds  | 25 +++++++++++++++++++++++++
+ doomgeneric/doomgeneric.c |  2 --
+ doomgeneric/i_sound.c     |  4 ----
+ 4 files changed, 30 insertions(+), 7 deletions(-)
+ create mode 100644 doomgeneric/Makefile.nds
+
+diff --git a/.gitignore b/.gitignore
+index 4ac2545..4a77b25 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -9,5 +9,9 @@
+ Debug/
+ Release/
+ Build/
+-doomgeneric
++/doomgeneric/doomgeneric
++/doomgeneric/build/
++/doomgeneric/doom.elf
++/doomgeneric/doom.nds
++/doomgeneric/doom.lst
+ doomgeneric.map
+diff --git a/doomgeneric/Makefile.nds b/doomgeneric/Makefile.nds
+new file mode 100644
+index 0000000..1878052
+--- /dev/null
++++ b/doomgeneric/Makefile.nds
+@@ -0,0 +1,25 @@
++# Nintendo DS build of doomgeneric with the nds-ports toolchain
++#   make -f Makefile.nds TOOLCHAIN=<toolchain> ICON=<icon.bmp> [NITRO_DIR=<dir>]
++
++NAME := doom
++GAME_TITLE := DOOM
++GAME_SUBTITLE1 := id Software (1993)
++GAME_SUBTITLE2 := doomgeneric NDS port
++
++SOURCES := dummy am_map doomdef doomstat dstrings d_event d_items d_iwad d_loop d_main d_mode d_net \
++	f_finale f_wipe g_game hu_lib hu_stuff info i_cdmus i_endoom i_joystick i_scale i_sound \
++	i_system i_timer memio m_argv m_bbox m_cheat m_config m_controls m_menu m_misc m_random p_ceilng \
++	p_doors p_enemy p_floor p_inter p_lights p_map p_maputl p_mobj p_plats p_pspr p_saveg p_setup \
++	p_spec p_switch p_telept p_tick p_user r_data r_sky sha1 \
++	sounds statdump st_lib st_stuff s_sound tables v_video wi_stuff w_checksum w_file w_main w_wad \
++	z_zone w_file_stdc doomgeneric doomgeneric_nds i_ndsvideo i_ndsinput i_ndstouch \
++	i_ndssound i_ndsmusic
++
++# Hot code (the renderer, sight checks, fixed point math) runs from ITCM, other hot functions
++# are marked HOT_CODE
++ITCM_SOURCES := r_draw r_plane r_segs r_bsp r_main r_things p_sight m_fixed
++
++include $(TOOLCHAIN)/nds.mk
++
++CFLAGS += -Wno-unused -Wno-pointer-sign -Wno-absolute-value -fno-strict-aliasing \
++	-DNORMALUNIX -DLINUX -DFEATURE_SOUND -DCMAP256
+diff --git a/doomgeneric/doomgeneric.c b/doomgeneric/doomgeneric.c
+index 881d700..98591e3 100644
+--- a/doomgeneric/doomgeneric.c
++++ b/doomgeneric/doomgeneric.c
+@@ -18,8 +18,6 @@ void doomgeneric_Create(int argc, char **argv)
+ 
+ 	M_FindResponseFile();
+ 
+-	DG_ScreenBuffer = malloc(DOOMGENERIC_RESX * DOOMGENERIC_RESY * 4);
+-
+ 	DG_Init();
+ 
+ 	D_DoomMain ();
+diff --git a/doomgeneric/i_sound.c b/doomgeneric/i_sound.c
+index c80a9d1..a90cd3d 100644
+--- a/doomgeneric/i_sound.c
++++ b/doomgeneric/i_sound.c
+@@ -18,10 +18,6 @@
+ #include <stdio.h>
+ #include <stdlib.h>
+ 
+-#if defined(FEATURE_SOUND) && !defined(__DJGPP__)
+-#include <SDL_mixer.h>
+-#endif
+-
+ #include "config.h"
+ #include "doomfeatures.h"
+ #include "doomtype.h"

@@ -1,0 +1,76 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Tue, 6 Oct 2026 07:09:58 +0200
+Subject: [PATCH] Compare with the planes instead of subtracting
+
+To find the side of a plane a point is on, SV_HullPointContents and
+Mod_PointInLeaf subtracted the plane's distance and compared the
+difference with 0. Comparing with the distance gives the same side with
+a floating point operation less for every node of the BSP tree, which
+without a floating point unit is a call into software. Mod_PointInLeaf
+also takes the shortcut for axial planes that the hull code has.
+---
+ WinQuake/model.c |  9 ++++-----
+ WinQuake/world.c | 12 +++++-------
+ 2 files changed, 9 insertions(+), 12 deletions(-)
+
+diff --git a/WinQuake/model.c b/WinQuake/model.c
+index 75501bd..210d82c 100644
+--- a/WinQuake/model.c
++++ b/WinQuake/model.c
+@@ -90,7 +90,6 @@ Mod_PointInLeaf
+ mleaf_t *Mod_PointInLeaf (vec3_t p, model_t *model)
+ {
+ 	mnode_t		*node;
+-	float		d;
+ 	mplane_t	*plane;
+ 	
+ 	if (!model || !model->nodes)
+@@ -102,11 +101,11 @@ mleaf_t *Mod_PointInLeaf (vec3_t p, model_t *model)
+ 		if (node->contents < 0)
+ 			return (mleaf_t *)node;
+ 		plane = node->plane;
+-		d = DotProduct (p,plane->normal) - plane->dist;
+-		if (d > 0)
+-			node = node->children[0];
++		// like SV_HullPointContents, the side without the difference
++		if (plane->type < 3)
++			node = node->children[!(p[plane->type] > plane->dist)];
+ 		else
+-			node = node->children[1];
++			node = node->children[!(DotProduct (p,plane->normal) > plane->dist)];
+ 	}
+ 	
+ 	return NULL;	// never reached
+diff --git a/WinQuake/world.c b/WinQuake/world.c
+index e1acfea..2c2e38f 100644
+--- a/WinQuake/world.c
++++ b/WinQuake/world.c
+@@ -490,7 +490,6 @@ SV_HullPointContents
+ */
+ int SV_HullPointContents (hull_t *hull, int num, vec3_t p)
+ {
+-	float		d;
+ 	dclipnode_t	*node;
+ 	mplane_t	*plane;
+ 
+@@ -502,14 +501,13 @@ int SV_HullPointContents (hull_t *hull, int num, vec3_t p)
+ 		node = hull->clipnodes + num;
+ 		plane = hull->planes + node->planenum;
+ 		
++		// comparing with the distance gives the side without working out
++		// the difference, a float subtraction less without a floating
++		// point unit
+ 		if (plane->type < 3)
+-			d = p[plane->type] - plane->dist;
++			num = node->children[p[plane->type] < plane->dist];
+ 		else
+-			d = DotProduct (plane->normal, p) - plane->dist;
+-		if (d < 0)
+-			num = node->children[1];
+-		else
+-			num = node->children[0];
++			num = node->children[DotProduct (plane->normal, p) < plane->dist];
+ 	}
+ 	
+ 	return num;

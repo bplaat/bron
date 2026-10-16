@@ -1,0 +1,4 @@
+target/
+/*/assets/
+setup_*.exe
+.DS_Store

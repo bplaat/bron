@@ -1,0 +1,26 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Mon, 12 Oct 2026 18:09:00 +0200
+Subject: [PATCH] Don't sort the entities by model
+
+The entities were sorted by model every frame for GL, which binds
+textures slowly. Binding one costs the DS little, sorting them a lot.
+---
+ client/cl_view.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/client/cl_view.c b/client/cl_view.c
+index 6e160f0..8d4fa67 100644
+--- a/client/cl_view.c
++++ b/client/cl_view.c
+@@ -529,8 +529,8 @@ void V_RenderView( float stereo_separation )
+ 
+ 		cl.refdef.rdflags = cl.frame.playerstate.rdflags;
+ 
+-		// sort entities for better cache locality
+-        qsort( cl.refdef.entities, cl.refdef.num_entities, sizeof( cl.refdef.entities[0] ), (int (*)(const void *, const void *))entitycmpfnc );
++		// the entities aren't sorted by model like for GL, binding a texture
++		// costs the DS little and sorting them a lot
+ 	}
+ 
+ 	re.RenderFrame (&cl.refdef);

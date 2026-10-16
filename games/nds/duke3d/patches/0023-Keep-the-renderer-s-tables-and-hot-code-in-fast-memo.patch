@@ -1,0 +1,229 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Wed, 7 Oct 2026 12:00:00 +0200
+Subject: [PATCH] Keep the renderer's tables and hot code in fast memory
+
+The shade tables of the palettes other than the first, about 200 KB, and
+the 64 KB translucency table are only read once made, they go to free
+VRAM, which takes no byte writes, so they are made in main RAM first. The
+first shade table, read for most pixels, is in DTCM, and the renderer's
+hottest functions run from ITCM.
+---
+ Engine/src/engine.c | 67 +++++++++++++++++++++++++++++----------------
+ 1 file changed, 43 insertions(+), 24 deletions(-)
+
+diff --git a/Engine/src/engine.c b/Engine/src/engine.c
+index ae52aee..75128b4 100644
+--- a/Engine/src/engine.c
++++ b/Engine/src/engine.c
+@@ -35,6 +35,10 @@ int32_t stereomode = 0, visualpage, activepage, whiteband, blackband;
+ uint8_t  oa1, o3c2, ortca, ortcb, overtbits, laststereoint;
+ 
+ #include "display.h"
++#include "duke3d_nds.h"
++
++/* The hottest parts of the renderer run from ITCM, the drawers are there too */
++#define HOT_CODE __attribute__((section(".itcm.text"), noinline))
+ 
+ #define MAXCLIPNUM 512
+ #define MAXPERMS 512
+@@ -331,7 +335,7 @@ unsigned int _swap32(unsigned int D)
+  Scan through sectors using portals (a portal is wall with a nextsector attribute >= 0).
+  Flood is prevented if a portal does not face the POV.
+  */
+-static void scansector (short sectnum)
++HOT_CODE static void scansector (short sectnum)
+ {
+     walltype *wal, *wal2;
+     spritetype *spr;
+@@ -556,7 +560,7 @@ skipitaddwall:
+  param 2: Only used to lookup the xrepeat attribute of the wall.
+  
+ */
+-static void prepwall(int32_t z, walltype *wal)
++HOT_CODE static void prepwall(int32_t z, walltype *wal)
+ {
+     int32_t i, l=0, ol=0, splc, sinc, x, topinc, top, botinc, bot, walxrepeat;
+     vector_t* wallCoo = pvWalls[z].cameraSpaceCoo;
+@@ -661,7 +665,7 @@ static int32_t getpalookup(int32_t davis, int32_t dashade)
+ }
+ 
+ 
+-static void hline (int32_t xr, int32_t yp)
++HOT_CODE static void hline (int32_t xr, int32_t yp)
+ {
+     int32_t xl, r, s;
+ 
+@@ -1220,7 +1224,7 @@ static void florscan (int32_t x1, int32_t x2, int32_t sectnum)
+  *
+  *  --ryan.
+  */
+-static void wallscan(int32_t x1, int32_t x2,
++HOT_CODE static void wallscan(int32_t x1, int32_t x2,
+                      int16_t *uwal, int16_t *dwal,
+                      int32_t *swal, int32_t *lwal)
+ {
+@@ -1410,7 +1414,7 @@ static void wallscan(int32_t x1, int32_t x2,
+ 
+ 
+ /* this renders masking sprites. See wallscan(). --ryan. */
+-static void maskwallscan(int32_t x1, int32_t x2,
++HOT_CODE static void maskwallscan(int32_t x1, int32_t x2,
+                          short *uwal, short *dwal,
+                          int32_t *swal, int32_t *lwal)
+ {
+@@ -1721,7 +1725,7 @@ static void parascan(int32_t dax1, int32_t dax2, int32_t sectnum,uint8_t  dastat
+ 
+ 
+ #define BITSOFPRECISION 3  /* Don't forget to change this in A.ASM also! */
+-static void grouscan (int32_t dax1, int32_t dax2, int32_t sectnum, uint8_t  dastat)
++HOT_CODE static void grouscan (int32_t dax1, int32_t dax2, int32_t sectnum, uint8_t  dastat)
+ {
+     int32_t i, j, l, x, y, dx, dy, wx, wy, y1, y2, daz;
+     int32_t daslope, dasqr;
+@@ -1922,7 +1926,7 @@ static void grouscan (int32_t dax1, int32_t dax2, int32_t sectnum, uint8_t  dast
+ }
+ 
+ 
+-static int owallmost(short *mostbuf, int32_t w, int32_t z)
++HOT_CODE static int owallmost(short *mostbuf, int32_t w, int32_t z)
+ {
+     int32_t bad, inty, xcross, y, yinc;
+     int32_t s1, s2, s3, s4, ix1, ix2, iy1, iy2, t;
+@@ -2012,7 +2016,7 @@ static int owallmost(short *mostbuf, int32_t w, int32_t z)
+ }
+ 
+ 
+-static int wallmost(short *mostbuf, int32_t w, int32_t sectnum, uint8_t  dastat)
++HOT_CODE static int wallmost(short *mostbuf, int32_t w, int32_t sectnum, uint8_t  dastat)
+ {
+     int32_t bad, i, j, t, y, z, inty, intz, xcross, yinc, fw;
+     int32_t x1, y1, z1, x2, y2, z2, xv, yv, dx, dy, dasqr, oz1, oz2;
+@@ -2638,7 +2642,7 @@ static void dosetaspect(void)
+ 
+   Return: pvWallID1 in the potentially visible wall list is in front of pvWallID2 (in the same potentially visible list)
+ */
+-int wallfront(int32_t pvWallID1, int32_t pvWallID2)
++HOT_CODE int wallfront(int32_t pvWallID1, int32_t pvWallID2)
+ {
+     walltype *wal;
+     int32_t x11, y11, x21, y21, x12, y12, x22, y22, dx, dy, t1, t2;
+@@ -2727,7 +2731,7 @@ int wallfront(int32_t pvWallID1, int32_t pvWallID2)
+ 
+ 
+ //Return 1 if bunch firstBunchID is in from of bunch secondBunchID.
+-static int bunchfront(int32_t firstBunchID, int32_t secondBunchID)
++HOT_CODE static int bunchfront(int32_t firstBunchID, int32_t secondBunchID)
+ {
+     int32_t x1b1, x2b1, x1b2, x2b2;
+ 
+@@ -3028,7 +3032,7 @@ void drawrooms(int32_t daposx, int32_t daposy, int32_t daposz,short daang, int32
+ }
+ 
+ 
+-static int spritewallfront (spritetype *s, int32_t w)
++HOT_CODE static int spritewallfront (spritetype *s, int32_t w)
+ {
+     walltype *wal;
+     int32_t x1, y1;
+@@ -3555,6 +3559,8 @@ static void initfastcolorlookup(int32_t rscale, int32_t gscale, int32_t bscale)
+ 
+ static void loadpalette(void)
+ {
++    /* The shade table of the first palette, read for most pixels, in DTCM */
++    static uint8_t palookup0[32<<8] __attribute__((section(".sbss"), aligned(4)));
+     int32_t k, fil;
+     
+ 
+@@ -3575,12 +3581,13 @@ static void loadpalette(void)
+     //CODE EXPLORATION
+     //printf("Num palettes lookup: %d.\n",numpalookups);
+     
+-    if ((palookup[0] = (uint8_t  *)kkmalloc(numpalookups<<8)) == NULL)
++    if ((numpalookups<<8) <= sizeof(palookup0))
++        palookup[0] = palookup0;
++    else if ((palookup[0] = (uint8_t  *)kkmalloc(numpalookups<<8)) == NULL)
+         allocache(&palookup[0],numpalookups<<8,&permanentlock);
+     
+-    //Transluctent pallete is 65KB.
+-    if ((transluc = (uint8_t  *)kkmalloc(65536)) == NULL)
+-        allocache(&transluc,65536,&permanentlock);
++    //Transluctent pallete is 65KB, in VRAM, only read once it's loaded.
++    transluc = NDS_AllocVRAM(65536);
+ 
+     globalpalwritten = palookup[0];
+     globalpal = 0;
+@@ -3591,9 +3598,16 @@ static void loadpalette(void)
+     kread(fil,palookup[globalpal],numpalookups<<8);
+ 
+ 
+-    /*kread(fil,transluc,65536);*/
+-    for (k = 0; k < (65536 / 4); k++)
+-        kread32(fil, ((int32_t *) transluc) + k);
++    /* VRAM takes no byte writes, the file is read in pieces through main RAM */
++    {
++        uint8_t piece[1024] __attribute__((aligned(4)));
++
++        for (k = 0; k < 65536; k += sizeof(piece))
++        {
++            kread(fil, piece, sizeof(piece));
++            memcpy(transluc + k, piece, sizeof(piece));
++        }
++    }
+ 
+ 
+     
+@@ -8192,27 +8206,30 @@ void makepalookup(int32_t palnum, uint8_t  *remapbuf, int8_t r,
+                   int8_t g, int8_t b, uint8_t  dastat)
+ {
+     int32_t i, j, palscale;
+-    uint8_t  *ptr, *ptr2;
++    uint8_t  *ptr, *ptr2, *table;
+ 
+     if (paletteloaded == 0)
+         return;
+ 
+     if (palookup[palnum] == NULL)
+     {
+-        /* Allocate palookup buffer */
+-        if ((palookup[palnum] = (uint8_t  *)kkmalloc(numpalookups<<8)) == NULL)
+-            allocache((int32_t *)&palookup[palnum],numpalookups<<8,&permanentlock);
++        /* Allocate palookup buffer, in VRAM, only read once it's made */
++        palookup[palnum] = NDS_AllocVRAM(numpalookups<<8);
+     }
+ 
+     if (dastat == 0) return;
+     if ((r|g|b|63) != 63) return;
+ 
++    /* VRAM takes no byte writes, the table is made in main RAM */
++    if ((table = (uint8_t  *)kkmalloc(numpalookups<<8)) == NULL)
++        return;
++
+     if ((r|g|b) == 0)
+     {
+         for(i=0; i<256; i++)
+         {
+             ptr = (uint8_t  *)(FP_OFF(palookup[0])+remapbuf[i]);
+-            ptr2 = (uint8_t  *)(FP_OFF(palookup[palnum])+i);
++            ptr2 = table+i;
+             for(j=0; j<numpalookups; j++)
+             {
+                 *ptr2 = *ptr;
+@@ -8223,7 +8240,7 @@ void makepalookup(int32_t palnum, uint8_t  *remapbuf, int8_t r,
+     }
+     else
+     {
+-        ptr2 = (uint8_t  *)FP_OFF(palookup[palnum]);
++        ptr2 = table;
+         for(i=0; i<numpalookups; i++)
+         {
+             palscale = divscale16(i,numpalookups);
+@@ -8236,6 +8253,8 @@ void makepalookup(int32_t palnum, uint8_t  *remapbuf, int8_t r,
+             }
+         }
+     }
++    memcpy(palookup[palnum], table, numpalookups<<8);
++    kkfree(table);
+ }
+ 
+ 

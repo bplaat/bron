@@ -1,0 +1,397 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Sun, 4 Oct 2026 12:18:34 +0200
+Subject: [PATCH] Add DS video
+
+sdl_video.c makes surfaces of 8 bits with the pitch of the backgrounds
+and shows the screen surface from one of two 8bpp bitmap backgrounds in
+VRAM, page flipped on vblank. DMA copies the frame to VRAM a row at a
+time, each row started from the interrupt of the last (from ITCM, as the
+DMA has the main RAM bus), while the game draws the next one. While the
+screen shows the view only it is copied and shown at 1:1, and when the
+game drew a whole new view, the frame goes to the screen surface by
+swapping their pixels instead of a copy. Other frames
+are scaled to the top screen by the affine background hardware, smoothed
+by a half pixel offset second layer that is alpha blended on top. The
+palette of the screen surface is the hardware palette, so fades and
+flashes cost nothing. NDS_ShowSplash shows a picture before the game
+shows its first frame.
+---
+ nds/sdl_video.c | 368 ++++++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 368 insertions(+)
+ create mode 100644 nds/sdl_video.c
+
+diff --git a/nds/sdl_video.c b/nds/sdl_video.c
+new file mode 100644
+index 0000000..24d44cc
+--- /dev/null
++++ b/nds/sdl_video.c
+@@ -0,0 +1,368 @@
++//
++// SDL video on the Nintendo DS
++//
++// Surfaces are 8-bit with the pitch of the backgrounds, the window shows the
++// screen surface. Each frame is copied by DMA into one of two 8bpp bitmap
++// backgrounds in VRAM banks A/B and page flipped on vblank. While the game
++// shows the view (NDS_ViewOnScreen), only that part of the frame is copied
++// and shown at 1:1. Other frames, the menus and pictures made for 320x200,
++// are scaled to the 256x192 top screen by the affine background hardware,
++// smoothed by a second background sampling half a pixel further that is
++// alpha blended on top. The palette of the screen surface is the hardware
++// palette, so fades cost nothing.
++//
++
++#include <nds.h>
++#include <malloc.h>
++#include <stdlib.h>
++#include <string.h>
++
++#include "SDL.h"
++#include "wl_nds.h"
++
++// The surface the window shows, from id_vl.c
++extern SDL_Surface *screen;
++
++#define FB_STRIDE   512
++#define FB_PAGE(n)  ((u8 *) BG_BMP_RAM ((n) * 8))
++
++static u16 hw_palette[256] __attribute__((aligned(4)));
++static volatile bool palette_dirty;
++static volatile int shown_page, pending_page = -1;
++static volatile bool shown_scaled = true, pending_scaled = true;
++static int frame_w = 320, frame_h = 200;
++
++// DMA copies a frame to VRAM a row at a time, each row started from the
++// interrupt of the last, while the game goes on with the next frame
++#define COPY_DMA 2
++static const u8 *copy_src;
++static u8 *copy_dst;
++static int copy_width, copy_page;
++static volatile int copy_rows;
++
++// Shows the view at 1:1, or the whole frame scaled, in 8.8 fixed point
++static void SetTransform (bool scaled)
++{
++    int dx = scaled ? (frame_w << 8) / SCREEN_WIDTH : 1 << 8;
++    int dy = scaled ? (frame_h << 8) / SCREEN_HEIGHT : 1 << 8;
++
++    REG_BG3PA = REG_BG2PA = dx;
++    REG_BG3PB = REG_BG2PB = 0;
++    REG_BG3PC = REG_BG2PC = 0;
++    REG_BG3PD = REG_BG2PD = dy;
++    REG_BG3X = REG_BG3Y = 0;
++    // The smoothing layer samples half an output pixel further, at 1:1 it
++    // isn't shown
++    REG_BG2X = dx / 2;
++    REG_BG2Y = dy / 2;
++    if (scaled)
++    {
++        REG_DISPCNT |= DISPLAY_BG2_ACTIVE;
++        REG_BLDCNT = BLEND_ALPHA | BLEND_SRC_BG2 | BLEND_DST_BG3;
++        REG_BLDALPHA = 8 | (8 << 8);
++    }
++    else
++    {
++        REG_DISPCNT &= ~DISPLAY_BG2_ACTIVE;
++        REG_BLDCNT = BLEND_NONE;
++    }
++}
++
++// From ITCM, so the interrupts don't fetch code from main RAM while the
++// DMA has the bus
++ITCM_CODE static void StartRowCopy (void)
++{
++    DMA_SRC (COPY_DMA) = (u32) copy_src;
++    DMA_DEST (COPY_DMA) = (u32) copy_dst;
++    DMA_CR (COPY_DMA) = DMA_COPY_WORDS | DMA_IRQ_REQ | (copy_width >> 2);
++}
++
++ITCM_CODE static void CopyRowDone (void)
++{
++    if (--copy_rows > 0)
++    {
++        copy_src += FB_STRIDE;
++        copy_dst += FB_STRIDE;
++        StartRowCopy ();
++    }
++    else
++        pending_page = copy_page;
++}
++
++// The copy reads the screen surface, drawing into it waits
++static void WaitForCopy (void)
++{
++    while (copy_rows > 0)
++        ;
++}
++
++static void VBlankHandler (void)
++{
++    NDS_SubScreenVBlank ();
++    // A CPU copy, DMA would miss palette writes still in the data cache
++    if (palette_dirty)
++    {
++        memcpy (BG_PALETTE, hw_palette, sizeof(hw_palette));
++        palette_dirty = false;
++    }
++    if (pending_page < 0)
++        return;
++    REG_BG2CNT = (REG_BG2CNT & ~(31 << MAP_BASE_SHIFT)) | BG_MAP_BASE (pending_page * 8);
++    REG_BG3CNT = (REG_BG3CNT & ~(31 << MAP_BASE_SHIFT)) | BG_MAP_BASE (pending_page * 8);
++    if (pending_scaled != shown_scaled)
++    {
++        SetTransform (pending_scaled);
++        shown_scaled = pending_scaled;
++    }
++    shown_page = pending_page;
++    pending_page = -1;
++}
++
++// Once, the splash may have set it up already
++static void InitVideo (void)
++{
++    static bool ready;
++    int bg;
++
++    if (ready)
++        return;
++    ready = true;
++    videoSetMode (MODE_5_2D);
++    vramSetBankA (VRAM_A_MAIN_BG_0x06000000);
++    vramSetBankB (VRAM_B_MAIN_BG_0x06020000);
++    memset (BG_GFX, 0, 2 * FB_STRIDE * 256);
++    for (bg = 2; bg <= 3; ++bg)
++        bgSetPriority (bgInit (bg, BgType_Bmp8, BgSize_B8_512x256, 0, 0), bg == 2 ? 0 : 1);
++    SetTransform (true);
++
++    irqSet (IRQ_VBLANK, VBlankHandler);
++    irqEnable (IRQ_VBLANK);
++    irqSet (IRQ_DMA0 << COPY_DMA, CopyRowDone);
++    irqEnable (IRQ_DMA0 << COPY_DMA);
++}
++
++void NDS_ShowSplash (const Uint8 *pixels, const SDL_Color *palette)
++{
++    int i, y;
++
++    InitVideo ();
++    for (i = 0; i < 256; ++i)
++        BG_PALETTE[i] = RGB15 (palette[i].r >> 3, palette[i].g >> 3, palette[i].b >> 3);
++    for (y = 0; y < frame_h; ++y)
++        memcpy (FB_PAGE (0) + y * FB_STRIDE, pixels + y * frame_w, frame_w);
++}
++
++struct SDL_Window { int unused; };
++struct SDL_Renderer { int unused; };
++struct SDL_Texture { int unused; };
++
++static SDL_Window the_window;
++static SDL_Renderer the_renderer;
++static SDL_Texture the_texture;
++
++SDL_Window *SDL_CreateWindow (const char *title, int x, int y, int w, int h, Uint32 flags)
++{
++    frame_w = w;
++    frame_h = h;
++    InitVideo ();
++    return &the_window;
++}
++
++void SDL_DestroyWindow (SDL_Window *window)
++{
++    WaitForCopy ();
++    irqClear (IRQ_VBLANK);
++    irqClear (IRQ_DMA0 << COPY_DMA);
++}
++
++SDL_Renderer *SDL_CreateRenderer (SDL_Window *window, int index, Uint32 flags)
++{
++    return &the_renderer;
++}
++
++void SDL_DestroyRenderer (SDL_Renderer *renderer)
++{
++}
++
++int SDL_SetRenderDrawBlendMode (SDL_Renderer *renderer, int mode)
++{
++    return 0;
++}
++
++SDL_Texture *SDL_CreateTexture (SDL_Renderer *renderer, Uint32 format, int access, int w, int h)
++{
++    return &the_texture;
++}
++
++void SDL_DestroyTexture (SDL_Texture *texture)
++{
++}
++
++// Copies the frame (a surface, so with the pitch of the backgrounds) into
++// the back page, which is shown on the vblank after the copy: the view, or
++// the whole frame when it's shown scaled
++int SDL_UpdateTexture (SDL_Texture *texture, const SDL_Rect *rect, const void *pixels, int pitch)
++{
++    int rows;
++
++    // Wait until the last frame is shown, the back page is then free
++    WaitForCopy ();
++    while (pending_page >= 0)
++        threadWaitForVBlank ();
++
++    pending_scaled = !NDS_ViewOnScreen (&copy_width, &rows);
++    if (pending_scaled)
++    {
++        copy_width = frame_w;
++        rows = frame_h;
++    }
++    copy_page = shown_page ^ 1;
++    copy_src = pixels;
++    copy_dst = FB_PAGE (copy_page);
++    // The DMA reads main RAM, the whole 4 KiB data cache is quicker to write
++    // back than the frame
++    DC_FlushAll ();
++    copy_rows = rows;
++    StartRowCopy ();
++    return 0;
++}
++
++int SDL_RenderCopy (SDL_Renderer *renderer, SDL_Texture *texture, const SDL_Rect *src, const SDL_Rect *dst)
++{
++    return 0;
++}
++
++void SDL_RenderPresent (SDL_Renderer *renderer)
++{
++    NDS_UpdateSubScreen ();
++}
++
++int SDL_ShowCursor (int toggle)
++{
++    return 0;
++}
++
++SDL_bool SDL_PixelFormatEnumToMasks (Uint32 format, int *bpp, Uint32 *r, Uint32 *g, Uint32 *b, Uint32 *a)
++{
++    *bpp = 8;
++    *r = *g = *b = *a = 0;
++    return SDL_TRUE;
++}
++
++SDL_Surface *SDL_CreateRGBSurface (Uint32 flags, int w, int h, int depth, Uint32 r, Uint32 g, Uint32 b, Uint32 a)
++{
++    struct
++    {
++        SDL_Surface surface;
++        SDL_PixelFormat format;
++        SDL_Palette palette;
++        SDL_Color colors[256];
++    } *s;
++
++    // Surfaces are frames, with the pitch of the backgrounds
++    const int pitch = FB_STRIDE;
++
++    if (depth != 8 || w > FB_STRIDE || h > 256 || (s = calloc (1, sizeof(*s))) == NULL)
++        return NULL;
++    s->surface.pixels = memalign (32, pitch * h);
++    if (s->surface.pixels == NULL)
++    {
++        free (s);
++        return NULL;
++    }
++    memset (s->surface.pixels, 0, pitch * h);
++    s->surface.format = &s->format;
++    s->surface.w = w;
++    s->surface.h = h;
++    s->surface.pitch = pitch;
++    s->format.palette = &s->palette;
++    s->format.BitsPerPixel = 8;
++    s->format.BytesPerPixel = 1;
++    s->palette.ncolors = 256;
++    s->palette.colors = s->colors;
++    return &s->surface;
++}
++
++void SDL_FreeSurface (SDL_Surface *surface)
++{
++    if (surface == NULL)
++        return;
++    free (surface->pixels);
++    free (surface);
++}
++
++int SDL_SetPaletteColors (SDL_Palette *palette, const SDL_Color *colors, int first, int ncolors)
++{
++    int i;
++
++    memcpy (palette->colors + first, colors, ncolors * sizeof(*colors));
++    if (screen == NULL || palette != screen->format->palette)
++        return 0;
++    for (i = first; i < first + ncolors; ++i)
++        hw_palette[i] = RGB15 (colors[i - first].r >> 3, colors[i - first].g >> 3, colors[i - first].b >> 3);
++    palette_dirty = true;
++    return 0;
++}
++
++// Only whole surfaces of the same size are blitted, of the view only what
++// the top screen shows. A whole new view goes to the screen by swapping the
++// pixels of the two instead, the game then draws the next one into the
++// last.
++int SDL_BlitSurface (SDL_Surface *src, const SDL_Rect *srcrect, SDL_Surface *dst, SDL_Rect *dstrect)
++{
++    const Uint8 *from = src->pixels;
++    Uint8 *to = dst->pixels;
++    int w, h, y;
++
++    if (src->w != dst->w || src->h != dst->h)
++        return -1;
++    // The last frame may still be copied out of it
++    WaitForCopy ();
++    if (!NDS_ViewOnScreen (&w, &h))
++    {
++        w = src->w;
++        h = src->h;
++    }
++    else if (dst == screen && NDS_NewViewDrawn ())
++    {
++        dst->pixels = src->pixels;
++        src->pixels = to;
++        return 0;
++    }
++    for (y = 0; y < h; ++y, from += src->pitch, to += dst->pitch)
++        memcpy (to, from, w);
++    return 0;
++}
++
++int SDL_FillRect (SDL_Surface *dst, const SDL_Rect *rect, Uint32 color)
++{
++    int y;
++
++    if (rect == NULL)
++    {
++        memset (dst->pixels, color, dst->pitch * dst->h);
++        return 0;
++    }
++    for (y = rect->y; y < rect->y + rect->h; ++y)
++        memset ((Uint8 *) dst->pixels + y * dst->pitch + rect->x, color, rect->w);
++    return 0;
++}
++
++Uint32 SDL_MapRGBA (const SDL_PixelFormat *format, Uint8 r, Uint8 g, Uint8 b, Uint8 a)
++{
++    return 0;
++}
++
++int SDL_LockSurface (SDL_Surface *surface)
++{
++    return 0;
++}
++
++void SDL_UnlockSurface (SDL_Surface *surface)
++{
++}
++
++int SDL_SaveBMP (SDL_Surface *surface, const char *file)
++{
++    return -1;
++}

@@ -1,0 +1,57 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Tue, 6 Oct 2026 07:09:58 +0200
+Subject: [PATCH] Keep the QuakeC program loaded
+
+Every level read progs.dat again, 400 KiB, and went through all of it to
+check and byte swap it, half a second on the DS. It's loaded by the
+first level and stays below the host's hunk level, a new level only
+reads its globals again. The demos before the first level still have
+its memory for their models.
+---
+ WinQuake/pr_edict.c | 19 +++++++++++++++++++
+ 1 file changed, 19 insertions(+)
+
+diff --git a/WinQuake/pr_edict.c b/WinQuake/pr_edict.c
+index 3478094..f958446 100644
+--- a/WinQuake/pr_edict.c
++++ b/WinQuake/pr_edict.c
+@@ -984,12 +984,27 @@ PR_LoadProgs
+ */
+ void PR_LoadProgs (void)
+ {
++	extern int	host_hunklevel;
+ 	int		i;
++	FILE	*f;
+ 
+ // flush the non-C variable lookup cache
+ 	for (i=0 ; i<GEFV_CACHESIZE ; i++)
+ 		gefvCache[i].field[0] = 0;
+ 
++// loaded by the first level, a new level only reads the globals again
++	if (progs)
++	{
++		if (COM_FOpenFile ("progs.dat", &f) < 0)
++			Sys_Error ("PR_LoadProgs: couldn't load progs.dat");
++		fseek (f, progs->ofs_globals, SEEK_CUR);
++		fread (pr_globals, 4, progs->numglobals, f);
++		fclose (f);
++		for (i=0 ; i<progs->numglobals ; i++)
++			((int *)pr_globals)[i] = LittleLong (((int *)pr_globals)[i]);
++		return;
++	}
++
+ 	CRC_Init (&pr_crc);
+ 
+ 	progs = (dprograms_t *)COM_LoadHunkFile ("progs.dat");
+@@ -1057,6 +1072,10 @@ void PR_LoadProgs (void)
+ 
+ 	for (i=0 ; i<progs->numglobals ; i++)
+ 		((int *)pr_globals)[i] = LittleLong (((int *)pr_globals)[i]);
++
++// it stays loaded below the host's hunk level, which the first level moves
++// up for it, the demos before have the memory
++	host_hunklevel = Hunk_LowMark ();
+ }
+ 
+ 

@@ -1,0 +1,116 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Sun, 11 Oct 2026 20:51:05 +0200
+Subject: [PATCH] Add the Memory Expansion Pak
+
+---
+ include/nds.h             |  2 ++
+ include/nds/arm9/rampak.h | 31 ++++++++++++++++++++++++++++++
+ source/arm9/rampak.c      | 40 +++++++++++++++++++++++++++++++++++++++
+ 3 files changed, 73 insertions(+)
+ create mode 100644 include/nds/arm9/rampak.h
+ create mode 100644 source/arm9/rampak.c
+
+diff --git a/include/nds.h b/include/nds.h
+index d263ba1..fedc763 100644
+--- a/include/nds.h
++++ b/include/nds.h
+@@ -84,6 +84,7 @@
+ 
+  \section peripheral_api Custom Peripherals
+  - \ref rumble.h "Rumble Pack"
++ - \ref rampak.h "Memory Expansion Pak"
+  - \ref piano.h "DS Easy Piano Controller"
+ 
+  \section debug_api Debugging
+@@ -264,6 +265,7 @@ extern "C" {
+ #include "nds/arm9/paddle.h"
+ #include "nds/arm9/pcx.h"
+ #include "nds/arm9/piano.h"
++#include "nds/arm9/rampak.h"
+ #include "nds/arm9/rumble.h"
+ #include "nds/arm9/sassert.h"
+ #include "nds/arm9/sound.h"
+diff --git a/include/nds/arm9/rampak.h b/include/nds/arm9/rampak.h
+new file mode 100644
+index 0000000..881f320
+--- /dev/null
++++ b/include/nds/arm9/rampak.h
+@@ -0,0 +1,31 @@
++/*! \file rampak.h
++    \brief Memory Expansion Pak support, the 8 MiB RAM option pak of the DS Browser.
++*/
++#ifndef RAMPAK_HEADER_INCLUDE
++#define RAMPAK_HEADER_INCLUDE
++
++#include <stddef.h>
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++//! Where the RAM of the Memory Expansion Pak is mapped
++#define RAM_PAK_BASE	((void *)0x09000000)
++//! The size of the RAM of the Memory Expansion Pak
++#define RAM_PAK_SIZE	(8 * 1024 * 1024)
++
++/*! \fn size_t ramPakInit(void);
++	\brief Unlocks the RAM of a Memory Expansion Pak and maps it at \ref RAM_PAK_BASE.
++	\return \ref RAM_PAK_SIZE if the cart in the GBA slot is a Memory Expansion Pak, else 0.
++
++	The GBA slot must be open (gbacartOpen) and stay open while the RAM is used. The RAM is
++	data cached (write-back) through MPU region 3, flush it before DMA reads it.
++*/
++size_t ramPakInit(void);
++
++#ifdef __cplusplus
++}
++#endif
++
++#endif
+diff --git a/source/arm9/rampak.c b/source/arm9/rampak.c
+new file mode 100644
+index 0000000..6cab740
+--- /dev/null
++++ b/source/arm9/rampak.c
+@@ -0,0 +1,40 @@
++// The Memory Expansion Pak of the DS Browser has 8 MiB of RAM at 0x09000000 behind the GBA slot,
++// locked against writes until 1 is written to 0x08240000. Its header has a fixed pattern at
++// 0x080000b0 (0x080000b2 reads 0x96 only some time after it is inserted, so it isn't checked).
++
++#include <nds/ndstypes.h>
++#include <nds/arm9/rampak.h>
++#include <calico/arm/mpu.h>
++#include <calico/nds/gbacart.h>
++
++#define RAM_PAK_LOCK	(*(vu16 *)0x08240000)
++#define RAM_PAK_HEADER	((vu16 *)0x080000b0)
++
++static const u16 ramPakHeader[8] = { 0xffff, 0, 0x2400, 0x2424, 0xffff, 0xffff, 0xffff, 0x7fff };
++
++//---------------------------------------------------------------------------------
++size_t ramPakInit(void) {
++//---------------------------------------------------------------------------------
++	if (!gbacartIsOpen()) return 0;
++
++	for (int i = 0; i < 8; i++)
++		if (i != 1 && RAM_PAK_HEADER[i] != ramPakHeader[i]) return 0;
++
++	// The RAM shows through the uncached GBA slot region while it is tested: a word at its start
++	// and middle must keep their own values, without mirroring
++	gbacartSetTiming(GBA_WAIT_ROM_MASK, GBA_WAIT_ROM_N_10 | GBA_WAIT_ROM_S_6);
++	RAM_PAK_LOCK = 1;
++	vu32 *ram = (vu32 *)RAM_PAK_BASE;
++	ram[0] = 0x12345678;
++	ram[RAM_PAK_SIZE / 8] = 0x9abcdef0;
++	if (ram[0] != 0x12345678 || ram[RAM_PAK_SIZE / 8] != 0x9abcdef0) {
++		RAM_PAK_LOCK = 0;
++		return 0;
++	}
++
++	armMpuSetRegionDataPerm(3, CP15_PU_PERM_RW);
++	armMpuSetRegionDCacheEnable(3, true);
++	armMpuSetRegionWrBufEnable(3, true);
++	armMpuSetRegionAddrSize(3, (uptr)RAM_PAK_BASE, CP15_PU_8M);
++	return RAM_PAK_SIZE;
++}

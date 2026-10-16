@@ -1,0 +1,246 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Sat, 3 Oct 2026 11:04:43 +0200
+Subject: [PATCH] Speed up the column and span drawers
+
+- The drawers keep the source, colormap and translation in locals: the
+  byte stores into the frame may alias the globals, so the compiler
+  loaded them again for every pixel.
+- The column drawer draws four pixels at a time in an assembly loop: the
+  texels, then their colors, then the stores, so no load waits for the
+  one before, and the position steps once a pixel. It keeps the texture
+  row in the top 7 bits of its position: the wrap around 128 is free and
+  the texel load takes the shifted position as its index.
+- The span drawer stores four pixels as one word, a single write to main
+  RAM instead of four, in an assembly loop too: the compiler stepped the
+  position four times more.
+
+The frames drawn are the same.
+---
+ doomgeneric/r_draw.c | 145 +++++++++++++++++++++++++++++++++----------
+ 1 file changed, 113 insertions(+), 32 deletions(-)
+
+diff --git a/doomgeneric/r_draw.c b/doomgeneric/r_draw.c
+index 7ba0a1c..c712077 100644
+--- a/doomgeneric/r_draw.c
++++ b/doomgeneric/r_draw.c
+@@ -103,8 +103,11 @@ void R_DrawColumn (void)
+ { 
+     int			count; 
+     byte*		dest; 
++    byte*		source;
++    lighttable_t*	colormap;
+     fixed_t		frac;
+     fixed_t		fracstep;	 
++    unsigned		tfrac, tstep;
+  
+     count = dc_yh - dc_yl; 
+ 
+@@ -131,17 +134,52 @@ void R_DrawColumn (void)
+ 
+     // Inner loop that does the actual texture mapping,
+     //  e.g. a DDA-lile scaling.
+-    // This is as fast as it gets.
+-    do 
++    // The texture row is in the top 7 bits of tfrac, the wrap around
++    //  128 then costs nothing. Four pixels at a time in assembly: the
++    //  texels, then their colors, then the stores, so no load waits
++    //  for the one before, and the position steps once a pixel.
++    source = dc_source;
++    colormap = dc_colormap;
++    tfrac = (unsigned) frac << (16 - 7);
++    tstep = (unsigned) fracstep << (16 - 7);
++    count++;
++    if (count >= 4)
+     {
+-	// Re-map color indices from wall texture column
+-	//  using a lighting/special effects LUT.
+-	*dest = dc_colormap[dc_source[(frac>>FRACBITS)&127]];
+-	
++	int n = count & ~3, a, b, c, d;
++
++	__asm__ volatile (
++	    "1:\n\t"
++	    "ldrb	%[a], [%[src], %[frac], lsr #25]\n\t"
++	    "add	%[frac], %[frac], %[step]\n\t"
++	    "ldrb	%[b], [%[src], %[frac], lsr #25]\n\t"
++	    "add	%[frac], %[frac], %[step]\n\t"
++	    "ldrb	%[c], [%[src], %[frac], lsr #25]\n\t"
++	    "add	%[frac], %[frac], %[step]\n\t"
++	    "ldrb	%[d], [%[src], %[frac], lsr #25]\n\t"
++	    "add	%[frac], %[frac], %[step]\n\t"
++	    "ldrb	%[a], [%[cmap], %[a]]\n\t"
++	    "ldrb	%[b], [%[cmap], %[b]]\n\t"
++	    "ldrb	%[c], [%[cmap], %[c]]\n\t"
++	    "ldrb	%[d], [%[cmap], %[d]]\n\t"
++	    "strb	%[a], [%[dest]], %[pitch]\n\t"
++	    "strb	%[b], [%[dest]], %[pitch]\n\t"
++	    "strb	%[c], [%[dest]], %[pitch]\n\t"
++	    "strb	%[d], [%[dest]], %[pitch]\n\t"
++	    "subs	%[n], %[n], #4\n\t"
++	    "bgt	1b"
++	    : [dest] "+r" (dest), [n] "+r" (n), [frac] "+r" (tfrac),
++	      [a] "=&r" (a), [b] "=&r" (b), [c] "=&r" (c), [d] "=&r" (d)
++	    : [src] "r" (source), [cmap] "r" (colormap), [step] "r" (tstep),
++	      [pitch] "i" (SCREENWIDTH)
++	    : "cc", "memory");
++	count &= 3;
++    }
++    for (; count > 0; count--)
++    {
++	*dest = colormap[source[tfrac >> 25]];
+ 	dest += SCREENWIDTH; 
+-	frac += fracstep;
+-	
+-    } while (count--); 
++	tfrac += tstep;
++    }
+ } 
+ 
+ 
+@@ -286,6 +324,8 @@ void R_DrawFuzzColumn (void)
+     byte*		dest; 
+     fixed_t		frac;
+     fixed_t		fracstep;	 
++    int			pos = fuzzpos;
++    lighttable_t*	colormap = colormaps + 6*256;
+ 
+     // Adjust borders. Low... 
+     if (!dc_yl) 
+@@ -325,16 +365,18 @@ void R_DrawFuzzColumn (void)
+ 	//  a pixel that is either one column
+ 	//  left or right of the current one.
+ 	// Add index from colormap to index.
+-	*dest = colormaps[6*256+dest[fuzzoffset[fuzzpos]]]; 
++	*dest = colormap[dest[fuzzoffset[pos]]];
+ 
+ 	// Clamp table lookup index.
+-	if (++fuzzpos == FUZZTABLE) 
+-	    fuzzpos = 0;
++	if (++pos == FUZZTABLE)
++	    pos = 0;
+ 	
+ 	dest += SCREENWIDTH;
+ 
+ 	frac += fracstep; 
+     } while (count--); 
++
++    fuzzpos = pos;
+ } 
+ 
+ // low detail mode version
+@@ -427,6 +469,9 @@ void R_DrawTranslatedColumn (void)
+     byte*		dest; 
+     fixed_t		frac;
+     fixed_t		fracstep;	 
++    byte*		source = dc_source;
++    lighttable_t*	colormap = dc_colormap;
++    byte*		translation = dc_translation;
+  
+     count = dc_yh - dc_yl; 
+     if (count < 0) 
+@@ -458,7 +503,7 @@ void R_DrawTranslatedColumn (void)
+ 	//  used with PLAY sprites.
+ 	// Thus the "green" ramp of the player 0 sprite
+ 	//  is mapped to gray, red, black/indigo. 
+-	*dest = dc_colormap[dc_translation[dc_source[frac>>FRACBITS]]];
++	*dest = colormap[translation[source[frac>>FRACBITS]]];
+ 	dest += SCREENWIDTH;
+ 	
+ 	frac += fracstep; 
+@@ -585,6 +630,11 @@ byte*			ds_source;
+ int			dscount;
+ 
+ 
++// The flat pixel at a span position: the texture index in u,v, re-indexed
++// using light/colormap
++#define SPANPIXEL(position) \
++    colormap[source[(((position) >> 4) & 0x0fc0) | ((position) >> 26)]]
++
+ //
+ // Draws the actual span.
+ void R_DrawSpan (void) 
+@@ -592,8 +642,9 @@ void R_DrawSpan (void)
+     unsigned int position, step;
+     byte *dest;
+     int count;
+-    int spot;
+-    unsigned int xtemp, ytemp;
++    unsigned int p0, p1, p2, p3;
++    byte *source = ds_source;
++    lighttable_t *colormap = ds_colormap;
+ 
+ #ifdef RANGECHECK
+     if (ds_x2 < ds_x1
+@@ -618,24 +669,54 @@ void R_DrawSpan (void)
+          | ((ds_ystep >> 6)  & 0x0000ffff);
+ 
+     dest = ylookup[ds_y] + columnofs[ds_x1];
+-
+-    // We do not check for zero spans here?
+-    count = ds_x2 - ds_x1;
+-
+-    do
++    count = ds_x2 - ds_x1 + 1;
++
++    // Single pixels up to a word boundary, then four at a time stored as
++    // one (little endian) word: a single write to main RAM instead of four
++    for (; count > 0 && ((uintptr_t) dest & 3); count--, position += step)
++	*dest++ = SPANPIXEL(position);
++    // In assembly, the compiler stepped the position four times more
++    if (count >= 4)
+     {
+-	// Calculate current texture index in u,v.
+-        ytemp = (position >> 4) & 0x0fc0;
+-        xtemp = (position >> 26);
+-        spot = xtemp | ytemp;
+-
+-	// Lookup pixel from flat texture tile,
+-	//  re-index using light/colormap.
+-	*dest++ = ds_colormap[ds_source[spot]];
+-
+-        position += step;
+-
+-    } while (count--);
++	int n = count & ~3;
++
++	__asm__ volatile (
++	    "1:\n\t"
++	    "and	%[p0], %[mask], %[pos], lsr #4\n\t"
++	    "orr	%[p0], %[p0], %[pos], lsr #26\n\t"
++	    "add	%[pos], %[pos], %[step]\n\t"
++	    "and	%[p1], %[mask], %[pos], lsr #4\n\t"
++	    "orr	%[p1], %[p1], %[pos], lsr #26\n\t"
++	    "add	%[pos], %[pos], %[step]\n\t"
++	    "and	%[p2], %[mask], %[pos], lsr #4\n\t"
++	    "orr	%[p2], %[p2], %[pos], lsr #26\n\t"
++	    "add	%[pos], %[pos], %[step]\n\t"
++	    "and	%[p3], %[mask], %[pos], lsr #4\n\t"
++	    "orr	%[p3], %[p3], %[pos], lsr #26\n\t"
++	    "add	%[pos], %[pos], %[step]\n\t"
++	    "ldrb	%[p0], [%[src], %[p0]]\n\t"
++	    "ldrb	%[p1], [%[src], %[p1]]\n\t"
++	    "ldrb	%[p2], [%[src], %[p2]]\n\t"
++	    "ldrb	%[p3], [%[src], %[p3]]\n\t"
++	    "ldrb	%[p0], [%[cmap], %[p0]]\n\t"
++	    "ldrb	%[p1], [%[cmap], %[p1]]\n\t"
++	    "ldrb	%[p2], [%[cmap], %[p2]]\n\t"
++	    "ldrb	%[p3], [%[cmap], %[p3]]\n\t"
++	    "orr	%[p0], %[p0], %[p1], lsl #8\n\t"
++	    "orr	%[p0], %[p0], %[p2], lsl #16\n\t"
++	    "orr	%[p0], %[p0], %[p3], lsl #24\n\t"
++	    "str	%[p0], [%[dest]], #4\n\t"
++	    "subs	%[n], %[n], #4\n\t"
++	    "bgt	1b"
++	    : [dest] "+r" (dest), [n] "+r" (n), [pos] "+r" (position),
++	      [p0] "=&r" (p0), [p1] "=&r" (p1), [p2] "=&r" (p2), [p3] "=&r" (p3)
++	    : [src] "r" (source), [cmap] "r" (colormap), [step] "r" (step),
++	      [mask] "r" (0x0fc0)
++	    : "cc", "memory");
++	count &= 3;
++    }
++    for (; count > 0; count--, position += step)
++	*dest++ = SPANPIXEL(position);
+ }
+ 
+ 

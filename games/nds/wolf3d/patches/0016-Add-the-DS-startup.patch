@@ -1,0 +1,447 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Sun, 4 Oct 2026 12:18:34 +0200
+Subject: [PATCH] Add the DS startup
+
+wl_nds.c switches the ARM9 to 134 MHz in DSi mode, finds the game data
+in /data/wolf3d/ on the SD card, next to the .nds, at the root of the SD
+card or embedded in the ROM, the full game before the shareware, and
+keeps the config and savegames in /data/wolf3d/<extension>/, or in the ROM without
+an SD card. Extra arguments are read from args.txt there. While it
+starts the touch screen shows the title in blue, like DOOM's in red and
+Quake's in brown, whether there is an SD card, which game loads, the
+full game or the shareware, and a row of dots like DOOM's, a third for
+each step. As soon as the
+data is found the title picture shows on the top screen while the game
+loads: only its chunk is read and expanded. Invalid Huffman nodes and
+incomplete title pictures are rejected. Errors are shown on the
+touch screen console, failed assertions too. wl_nds.h is the glue
+between the SDL implementation and the game.
+---
+ nds/wl_nds.c | 343 +++++++++++++++++++++++++++++++++++++++++++++++++++
+ nds/wl_nds.h |  45 +++++++
+ wl_main.c    |   2 +
+ 3 files changed, 390 insertions(+)
+ create mode 100644 nds/wl_nds.c
+ create mode 100644 nds/wl_nds.h
+
+diff --git a/nds/wl_nds.c b/nds/wl_nds.c
+new file mode 100644
+index 0000000..86bafa4
+--- /dev/null
++++ b/nds/wl_nds.c
+@@ -0,0 +1,343 @@
++//
++// Starts Wolf4SDL on the Nintendo DS
++//
++// Finds the game data in the data folder on the SD card, next to the .nds or
++// embedded in the ROM (NitroFS), the full game before the shareware, keeps
++// the config and savegames in /data/wolf3d/<extension>/ and reads extra
++// arguments from /data/wolf3d/args.txt. Errors are shown on the touch screen console.
++//
++
++// libnds and Wolf4SDL both have a Keyboard and a SoundMode
++#define Keyboard NDS_Keyboard
++#define SoundMode NDS_SoundMode
++#include <nds.h>
++#undef Keyboard
++#undef SoundMode
++#include <fat.h>
++#include <filesystem.h>
++#include <ctype.h>
++#include <stdarg.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <sys/stat.h>
++#include <unistd.h>
++
++// Wolf4SDL has its own bool
++#undef bool
++#undef true
++#undef false
++#include "wl_def.h"
++#include "wl_nds.h"
++
++// Config, savegames and game data live in the usual homebrew data folder
++#define DATA_DIR "/data/wolf3d"
++#define MAX_ARGS 32
++
++static PrintConsole console;
++
++static void ConsoleMode (void)
++{
++    videoSetModeSub (MODE_0_2D);
++    vramSetBankC (VRAM_C_SUB_BG);
++    consoleInit (&console, 0, BgType_Text4bpp, BgSize_T_256x256, 31, 0, false, true);
++    consoleSelect (&console);
++    // a lighter blue (34) than the console's, which is hard to read on black
++    BG_PALETTE_SUB[4 * 16 + 15] = RGB15 (6, 9, 16);
++    BG_PALETTE_SUB[12 * 16 + 15] = RGB15 (12, 18, 31);
++}
++
++// The loading dots fill a row like DOOM's, with two columns of margin on
++// both sides like the text, a third for each step of the startup, which has
++// no log to count
++#define LOADING_DOTS 28
++#define LOADING_STEPS 3
++
++static void LoadingStep (void)
++{
++    static int step, dots;
++
++    for (++step; dots < LOADING_DOTS * step / LOADING_STEPS; ++dots)
++        putchar ('.');
++    fflush (stdout);
++}
++
++static void WaitForStart (void)
++{
++    do
++    {
++        threadWaitForVBlank ();
++        scanKeys ();
++    } while (!(keysDown () & KEY_START));
++}
++
++void NDS_ShowMessage (const char *title, const char *message)
++{
++    ConsoleMode ();
++    consoleClear ();
++    printf ("\x1b[34;1m%s\x1b[39;0m\n\n%s\n\n\x1b[30;1mPress START to exit\x1b[39;0m\n", title, message);
++    WaitForStart ();
++}
++
++// A failed assertion shows like the other errors
++void __assert_func (const char *file, int line, const char *func, const char *expr)
++{
++    char message[256];
++
++    snprintf (message, sizeof(message), "%s\n\nin %s, %s line %d", expr, func, file, line);
++    NDS_ShowMessage ("Assertion failed", message);
++    exit (1);
++}
++
++static bool FileExists (const char *path)
++{
++    struct stat st;
++    return stat (path, &st) == 0 && S_ISREG (st.st_mode);
++}
++
++// Reads a file, or part of it, into memory
++static void *ReadFile (const char *name, long offset, long *len)
++{
++    FILE *f = fopen (name, "rb");
++    void *data = NULL;
++
++    if (f == NULL)
++        return NULL;
++    if (*len < 0)
++    {
++        fseek (f, 0, SEEK_END);
++        *len = ftell (f) - offset;
++    }
++    fseek (f, offset, SEEK_SET);
++    if (*len <= 0 || (data = malloc (*len)) == NULL || fread (data, 1, *len, f) != (size_t) *len)
++    {
++        free (data);
++        data = NULL;
++    }
++    fclose (f);
++    return data;
++}
++
++// Shows the title picture as soon as the game data is found, long before
++// the game has loaded it: only its chunk of vgagraph is read and expanded
++// with the Huffman dictionary, like CAL_HuffExpand
++static void ShowTitle (const char *ext)
++{
++    char name[16];
++    long headlen = -1, dictlen = 1020, len;
++    byte *head, *dict = NULL, *chunk = NULL, *pixels = NULL;
++    int32_t start, end;
++    int pic = TITLEPIC, i;
++
++    snprintf (name, sizeof(name), "vgahead.%s", ext);
++    if ((head = ReadFile (name, 0, &headlen)) == NULL)
++        return;
++    // The GT/id/Activision data lacks 12 pictures before the title (see
++    // CAL_SetupGrFile)
++    if (headlen / 3 == NUMCHUNKS + 1 - 12)
++        pic -= 12;
++    if ((pic + 2) * 3 > headlen)
++        goto done;
++    start = head[pic * 3] | (head[pic * 3 + 1] << 8) | (head[pic * 3 + 2] << 16);
++    end = head[pic * 3 + 3] | (head[pic * 3 + 4] << 8) | (head[pic * 3 + 5] << 16);
++    snprintf (name, sizeof(name), "vgadict.%s", ext);
++    dict = ReadFile (name, 0, &dictlen);
++    snprintf (name, sizeof(name), "vgagraph.%s", ext);
++    len = end - start;
++    if (dict == NULL || len <= 4 || (chunk = ReadFile (name, start, &len)) == NULL
++        || (chunk[0] | (chunk[1] << 8) | (chunk[2] << 16) | ((uint32_t) chunk[3] << 24)) != 320 * 200 || (pixels = malloc (320 * 200)) == NULL)
++        goto done;
++
++    // Pictures are stored in four planes of every fourth pixel, so each
++    // plane is expanded into every fourth pixel from its own start
++    {
++        const byte *src = chunk + 4, *src_end = chunk + len;
++        byte *dst = pixels, *plane_end = pixels + 320 * 200;
++        uint16_t nodes[255][2];
++        int node = 254, plane = 0;
++
++        for (i = 0; i < 255; ++i)
++        {
++            nodes[i][0] = dict[i * 4] | (dict[i * 4 + 1] << 8);
++            nodes[i][1] = dict[i * 4 + 2] | (dict[i * 4 + 3] << 8);
++        }
++        while (plane < 4 && src < src_end)
++        {
++            unsigned bits;
++
++            for (bits = *src++ | 0x100; bits != 1 && plane < 4; bits >>= 1)
++            {
++                unsigned value = nodes[node][bits & 1];
++
++                if (value >= 256)
++                {
++                    node = value - 256;
++                    if (node >= 255)
++                        goto done;
++                    continue;
++                }
++                *dst = value;
++                if (dst >= plane_end - 4)
++                    dst = pixels + ++plane;
++                else
++                    dst += 4;
++                node = 254;
++            }
++        }
++        if (plane < 4)
++            goto done;
++    }
++    NDS_ShowSplash (pixels, gamepal);
++
++done:
++    free (pixels);
++    free (chunk);
++    free (dict);
++    free (head);
++}
++
++// Splits a file into arguments
++static void ReadArgs (const char *path, int *argc, char **argv)
++{
++    static char buf[512];
++    FILE *f = fopen (path, "r");
++    size_t len;
++    char *s;
++
++    if (f == NULL)
++        return;
++    len = fread (buf, 1, sizeof(buf) - 1, f);
++    fclose (f);
++    buf[len] = '\0';
++    for (s = strtok (buf, " \t\r\n"); s != NULL && *argc < MAX_ARGS - 1; s = strtok (NULL, " \t\r\n"))
++        argv[(*argc)++] = s;
++}
++
++void NDS_Init (int *argc, char ***argv)
++{
++    // The names fit in the 32 columns of the touch screen
++    static const struct { const char *ext, *title; } games[] =
++    {
++        { "wl6", "Wolfenstein 3D" },
++        { "wl3", "Wolfenstein 3D" },
++        { "wl1", "Wolf3D Shareware" },
++    };
++    static char *args[MAX_ARGS];
++    static char dirs[4][256], datadir[256], configdir[300];
++    int num_dirs = 0, i, j, n = 0;
++
++    // In DSi mode the ARM9 runs at twice the speed of the DS
++    if (isDSiMode ())
++        setCpuClock (true);
++
++    // A black top screen until the title shows
++    videoSetMode (MODE_0_2D);
++    setBackdropColor (0);
++    ConsoleMode ();
++    printf ("\x1b[34;1m  Wolfenstein 3D\x1b[39;0m for %s\n", isDSiMode () ? "NDSi" : "NDS");
++    printf ("\x1b[34m--------------------------------\x1b[39m");
++
++    // The data folder, the folder of the .nds and the root of the SD card,
++    // then the ROM, which also is the config folder without an SD card
++    if (fatInitDefault ())
++    {
++        char root[64], *slash;
++
++        // Keep only the SD volume prefix, never the launcher's directory.
++        // Save paths still refer to the SD card after chdir to NitroFS.
++        if (getcwd (root, sizeof(root)) == NULL)
++            root[0] = '\0';
++        slash = strchr (root, ':');
++        if (slash != NULL)
++            slash[1] = '\0';
++        else
++            root[0] = '\0';
++        snprintf (datadir, sizeof(datadir), "%s/data", root);
++        mkdir (datadir, 0777);
++        snprintf (datadir, sizeof(datadir), "%s" DATA_DIR, root);
++        mkdir (datadir, 0777);
++        snprintf (dirs[num_dirs++], 256, "%s/", datadir);
++        if (*argc > 0 && (slash = strrchr ((*argv)[0], '/')) != NULL && slash - (*argv)[0] < 255)
++            snprintf (dirs[num_dirs++], 256, "%.*s", (int) (slash - (*argv)[0] + 1), (*argv)[0]);
++        snprintf (dirs[num_dirs++], 256, "%s/", root);
++    }
++    else
++    {
++        printf ("\x1b[33;1m  No SD card, saving is off\x1b[39;0m\n");
++        strcpy (datadir, "nitro:");
++    }
++    nitroFSInit (NULL);
++    strcpy (dirs[num_dirs++], "nitro:/");
++
++    // The full game first, it has the shareware episode too
++    for (i = 0; i < (int) lengthof(games); ++i)
++    {
++        for (j = 0; j < num_dirs; ++j)
++        {
++            char path[300];
++
++            snprintf (path, sizeof(path), "%svswap.%s", dirs[j], games[i].ext);
++            if (FileExists (path))
++            {
++                chdir (dirs[j]);
++                goto found;
++            }
++        }
++    }
++    NDS_ShowMessage ("No game data found!", "Copy the *.wl6 files of\nWolfenstein 3D to\n" DATA_DIR "/ on the SD card,\nor embed them in the ROM at\nbuild time (see README).");
++    exit (1);
++
++found:
++    printf ("\n  Loading %s\n\n  ", games[i].title);
++    LoadingStep ();
++    ShowTitle (games[i].ext);
++    LoadingStep ();
++    args[n++] = *argc > 0 ? (*argv)[0] : "wolf3d";
++    // NitroFS is read-only and has no folder per version, Wolf4SDL quits when it can't make one
++    if (strcmp (datadir, "nitro:") == 0)
++        strcpy (configdir, "nitro:/");
++    else
++    {
++        snprintf (configdir, sizeof(configdir), "%s/%s", datadir, games[i].ext);
++        mkdir (configdir, 0777);
++    }
++    args[n++] = "--configdir";
++    args[n++] = configdir;
++    // Extra arguments (eg. --tedlevel 3 --hard) from args.txt
++    {
++        char path[300];
++
++        snprintf (path, sizeof(path), "%s/args.txt", datadir);
++        ReadArgs (path, &n, args);
++    }
++    args[n] = NULL;
++    *argc = n;
++    *argv = args;
++    LoadingStep ();
++}
++
++void NDS_PlayerName (char *name, size_t size)
++{
++    size_t i, n = 0;
++
++    for (i = 0; i < PersonalData->nameLen && i < 10 && n + 1 < size; i++)
++        name[n++] = PersonalData->name[i] >= ' ' && PersonalData->name[i] < 127 ? PersonalData->name[i] : '?';
++    name[n] = 0;
++    if (!n)
++        snprintf (name, size, "Player");
++}
++
++bool NDS_ViewOnScreen (int *width, int *height)
++{
++    *width = TOPSCREENWIDTH;
++    *height = TOPSCREENHEIGHT;
++    return viewonscreen;
++}
++
++bool NDS_NewViewDrawn (void)
++{
++    bool drawn = viewdrawn;
++
++    viewdrawn = false;
++    return drawn;
++}
+diff --git a/nds/wl_nds.h b/nds/wl_nds.h
+new file mode 100644
+index 0000000..bdf6ccb
+--- /dev/null
++++ b/nds/wl_nds.h
+@@ -0,0 +1,45 @@
++//
++// Nintendo DS platform glue between the SDL implementation (sdl*.c) and the
++// game: its startup (wl_nds.c) and the touch screen (wl_touch.c)
++//
++
++#ifndef WL_NDS_H
++#define WL_NDS_H
++
++#include "SDL.h"
++
++// Hardware channels: digitized sounds on 0-5 (MIX_CHANNELS), the PC
++// speaker stream on 6 and the OPL2 channels on 7-15 (opl_nds.h)
++#define NDS_STREAM_CHANNEL  6
++
++// Sets up the file systems, finds the game data and adds the arguments
++void NDS_Init (int *argc, char ***argv);
++
++// The user name of the DS settings in ASCII, "Player" when it has none
++void NDS_PlayerName (char *name, size_t size);
++
++// Shows a message on the touch screen until START is pressed
++void NDS_ShowMessage (const char *title, const char *message);
++
++// Shows a 320x200 picture in the game palette on the top screen, scaled,
++// until the game shows its first frame
++void NDS_ShowSplash (const Uint8 *pixels, const SDL_Color *palette);
++
++// Whether the frame shows the view, which the top screen shows at 1:1 from
++// the top left corner of the frame, and its size
++bool NDS_ViewOnScreen (int *width, int *height);
++
++// Whether the game drew a whole new view since the last call
++bool NDS_NewViewDrawn (void);
++
++// Draws the touch screen after every frame shown, and scrolls its map on
++// vblank
++void NDS_UpdateSubScreen (void);
++void NDS_SubScreenVBlank (void);
++
++// Handles the stylus and the buttons outside the joystick, called by the
++// event pump with the keys that went down
++void NDS_PollInput (uint32_t down, uint32_t held);
++void NDS_PushKey (SDL_Scancode scancode, int down);
++
++#endif
+diff --git a/wl_main.c b/wl_main.c
+index 9337c5d..e65e957 100644
+--- a/wl_main.c
++++ b/wl_main.c
+@@ -9,6 +9,7 @@
+ #include "wl_def.h"
+ #include "wl_atmos.h"
+ #include <SDL_syswm.h>
++#include "wl_nds.h"
+ 
+ 
+ /*
+@@ -1776,6 +1777,7 @@ void CheckParameters(int argc, char *argv[])
+ 
+ int main (int argc, char *argv[])
+ {
++    NDS_Init(&argc, &argv);
+ #if defined(_arch_dreamcast)
+     DC_Init();
+ #else

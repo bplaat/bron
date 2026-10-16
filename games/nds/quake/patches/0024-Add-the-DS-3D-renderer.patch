@@ -1,0 +1,3352 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Tue, 6 Oct 2026 07:09:59 +0200
+Subject: [PATCH] Add the DS 3D renderer
+
+r_nds.c replaces the software renderer with one on the DS geometry
+engine, which draws the world, brush and alias models, sprites and
+particles on the top screen.
+
+- Vertices are 16-bit fixed point world coordinates, surfaces are drawn
+  as quad strips zig-zagging across their polygons, half as many
+  polygons as triangles.
+- Textures stay 8-bit in VRAM banks A, B and D, uploaded at the largest
+  mip level that fits when a map loads, with the texture coordinates
+  scaled to their size by the texture matrix. The world leaves 32 KiB to
+  the brush models loaded after it, the ammo and health boxes, which
+  share the textures with the same name. The palette goes to the
+  texture palette, so palette shifts stay free. It's twice as bright,
+  so the vertex light can overbright like in the software renderer.
+- Light maps become vertex light per light style, so styles animate.
+- T-junctions, a vertex of one face in the middle of an edge of another,
+  left the hardware cracks along those edges: the vertices on the edges
+  of a polygon are added to it, found through a hash of the positions.
+  The hardware tells the side a polygon faces from its first three
+  vertices and with the wrong one leaves the edges that run more across
+  than down unfilled, so the strip of a surface starts where they aren't
+  in a line for any of its quads. Surfaces are drawn until the eye is 1.5
+  units behind them, the integer plane tests and the matrices round the
+  eye differently, and only after both sides of their node, whose leaves
+  mark them, so one seen edge on leaves no crack either.
+  Dynamic lights (muzzle flashes, rockets, explosions) light the
+  vertices of the surfaces R_PushDlights marked. R_LightPoint uses the
+  vertex light of the nearest vertex.
+- The sky has both layers, with texture coordinates following the
+  direction from the eye like GLQuake, the front layer is drawn on the
+  back one with the depth test for equal.
+- Alias models are joined into triangle strips when a map loads, like
+  GLQuake's gl_mesh.c without fans, which the hardware lacks, finding
+  the next triangle of a strip through a table of the edges, and their
+  byte vertices go doubled as 10-bit vertices, one write instead of two.
+  Their light is cached until they move. Every texel of a skin its
+  triangles don't cover, worked out at full size, takes the color of a
+  covered one, as the resampled skin is sampled a little outside them,
+  like the blue around the shotguns.
+- The hardware data of a surface is its vertex and style counts followed
+  by its texture coordinates, vertex indices and light, without pointers.
+  Textures are resampled in fixed point. When a map has loaded the
+  temporary memory is freed, so the cache has all the room there is.
+- Alias models are placed relative to the eye, the view model in finer
+  units, so their position isn't the difference of two rounded ones and
+  the gun doesn't wobble while turning. The depth is w, to a 4096th of
+  the distance, where z / w let monsters right behind doors show through
+  them, so the near plane can be 1 unit away. Swimming, the eye is kept a
+  near plane away from the surface, which would be cut out of view.
+  The world's w is 3 times the gun's, like the software renderer's depth
+  scale for it, so the gun doesn't poke into walls. The crosshair is drawn
+  in whole pixels of the screen, 7 by 7, its edges rounded the way the
+  hardware truncates them. The view is dimmed behind the menu and its questions.
+  Translations are rounded to the hardware's fixed point, the projection
+  is only worked out again when the field of view changes.
+- The world is traversed in fixed point with frustum clip flags, it and
+  the culling, surface lighting, alias models and particles run from
+  ITCM as ARM code. The vertex colors of the world's surfaces are worked
+  out before any of them goes to the hardware, which takes no more than
+  a FIFO full of commands until it showed the last frame, so this work
+  fills that wait. They are in VRAM bank H and the skins and sprite
+  frames a map loads are listed in bank I, both otherwise unused, as
+  the RAM is short.
+- When a map loads, the file of each alias model is read once: its skins
+  are uploaded from it and the model is loaded from it, of a model still
+  in the cache only the part up to its triangles is read.
+---
+ WinQuake/anorm_dots_nds.h |  164 +++
+ WinQuake/model.c          |   17 +
+ WinQuake/model.h          |   15 +-
+ WinQuake/r_light.c        |   77 +-
+ WinQuake/r_nds.c          | 2826 +++++++++++++++++++++++++++++++++++++
+ WinQuake/vid.h            |    3 +
+ WinQuake/view.c           |    7 -
+ 7 files changed, 3052 insertions(+), 57 deletions(-)
+ create mode 100644 WinQuake/anorm_dots_nds.h
+ create mode 100644 WinQuake/r_nds.c
+
+diff --git a/WinQuake/anorm_dots_nds.h b/WinQuake/anorm_dots_nds.h
+new file mode 100644
+index 0000000..ba28dc2
+--- /dev/null
++++ b/WinQuake/anorm_dots_nds.h
+@@ -0,0 +1,164 @@
++// anorm_dots_nds.h -- anorm_dots.h of the 162 normals in 8.8 fixed point,
++// the shading of alias model vertices for the 16 yaw angles of the light
++{
++{
++314,332,376,345,399,437,350,353,407,409,458,504,481,491,458,261,238,273,
++209,222,225,240,245,291,284,209,212,227,227,220,240,232,256,309,250,378,
++332,401,245,273,291,409,412,358,350,440,455,458,494,509,486,430,437,476,
++409,430,455,476,494,509,504,368,312,381,238,253,253,314,312,368,381,227,
++227,248,232,250,304,209,194,209,181,184,186,194,202,220,212,184,194,194,
++227,209,227,209,227,232,212,245,291,248,358,304,250,240,256,273,350,309,
++378,332,401,412,350,220,212,232,209,209,225,227,245,291,250,222,238,240,
++261,332,273,345,353,284,399,491,458,458,407,409,440,486,458,204,217,202,
++238,204,217,197,189,184,197,189,184,179,179,181,194,186,202,202,186,194},
++{
++322,322,378,314,384,437,291,304,353,373,419,496,478,471,437,261,235,256,
++202,217,215,232,230,250,253,197,197,212,209,202,220,215,235,253,232,317,
++263,340,225,240,248,360,355,302,284,386,412,407,460,488,450,394,422,450,
++435,435,473,473,504,509,494,327,279,355,235,248,253,302,322,389,378,212,
++217,230,225,238,256,197,186,199,184,181,189,192,202,220,207,192,207,202,
++245,225,240,220,238,235,217,276,340,268,396,335,258,268,325,335,409,376,
++435,394,450,450,401,238,230,253,225,225,243,248,284,355,307,235,248,258,
++281,355,312,386,404,337,419,504,473,488,453,445,481,509,488,202,220,204,
++240,215,225,189,189,181,209,197,194,179,186,184,186,179,189,217,197,209},
++{
++343,325,391,299,373,437,250,268,307,343,378,476,465,437,414,279,240,253,
++202,217,209,230,222,238,245,194,189,202,194,189,202,199,217,235,217,256,
++238,271,207,220,227,296,286,248,243,327,353,345,409,453,401,340,384,404,
++432,417,465,445,488,491,460,266,248,309,230,238,248,268,309,378,350,197,
++204,215,217,225,235,186,181,189,189,181,192,186,202,215,199,202,220,207,
++268,240,253,230,243,235,220,317,368,291,407,343,261,325,384,381,460,432,
++476,440,478,460,432,256,250,314,243,245,279,296,350,417,373,253,281,320,
++317,386,360,427,453,396,440,499,483,506,488,476,504,509,496,207,227,217,
++250,230,240,192,199,186,227,212,209,184,197,194,184,179,181,232,212,227},
++{
++373,343,409,296,373,437,240,253,268,322,340,445,450,401,394,314,250,268,
++212,227,215,235,222,232,245,199,189,202,184,184,192,194,204,225,212,240,
++222,243,194,204,209,248,245,227,225,276,284,281,350,407,350,273,325,343,
++401,371,432,396,453,458,409,238,230,253,220,222,238,245,273,345,302,186,
++194,197,207,209,217,179,181,184,199,186,197,186,202,209,194,212,230,215,
++302,250,263,235,243,230,220,337,371,294,391,325,253,363,422,404,494,468,
++496,463,481,445,435,304,299,368,284,294,348,360,412,463,427,312,343,384,
++363,422,412,465,488,448,460,483,483,506,509,496,506,491,478,220,243,235,
++291,250,263,202,215,197,248,230,227,194,209,209,189,184,181,250,227,248},
++{
++409,368,430,312,381,437,238,253,253,314,312,409,430,368,381,358,291,304,
++227,245,227,248,227,232,250,209,194,209,181,184,186,194,202,220,212,232,
++212,227,184,194,194,227,227,209,209,250,245,248,291,358,304,240,256,273,
++350,309,378,332,401,412,350,220,212,232,209,209,225,227,245,291,250,179,
++184,186,197,194,202,179,184,181,209,197,204,189,202,204,189,222,238,217,
++314,261,261,238,238,222,217,332,345,273,353,284,240,376,437,399,504,481,
++491,458,458,407,409,332,345,399,350,353,407,409,458,491,458,378,401,440,
++412,455,458,494,509,486,476,455,476,494,509,504,486,458,440,240,273,256,
++350,309,332,220,232,212,291,250,245,209,225,227,202,194,186,273,240,284},
++{
++445,401,450,340,394,437,240,268,253,322,296,373,409,343,373,407,350,350,
++248,284,245,281,243,240,276,227,209,225,184,194,192,204,204,225,222,232,
++212,222,184,194,189,212,215,199,202,245,227,235,250,314,268,220,235,243,
++284,250,312,263,343,363,291,202,197,215,199,194,209,209,227,248,230,179,
++181,181,186,184,189,186,194,184,220,207,209,194,202,197,186,230,243,220,
++302,263,250,235,230,212,215,304,299,250,294,248,227,363,422,368,494,468,
++463,427,412,348,360,337,371,404,401,391,445,435,481,496,463,432,453,478,
++458,483,491,506,509,506,483,422,460,465,488,496,448,412,384,273,343,325,
++409,371,396,238,253,230,345,302,273,222,238,245,217,209,197,294,253,325},
++{
++476,437,465,378,414,437,250,307,268,343,299,343,391,325,373,453,409,401,
++296,353,286,345,271,256,327,248,227,243,194,207,202,220,217,235,238,238,
++217,222,189,199,189,202,209,194,202,245,217,230,240,279,253,207,217,227,
++243,230,253,240,281,317,250,192,186,199,189,184,197,194,209,227,212,186,
++181,181,181,179,184,197,204,189,230,217,215,199,202,192,186,235,243,220,
++268,253,240,230,220,202,207,256,250,232,245,227,212,325,384,314,460,432,
++417,373,350,279,296,317,368,381,432,407,460,432,478,476,440,465,488,496,
++491,499,509,506,488,504,483,386,440,427,453,476,396,360,320,340,404,384,
++460,417,445,266,309,248,378,350,309,238,248,268,235,225,215,291,261,343},
++{
++496,471,478,419,437,437,291,353,304,373,314,322,378,322,384,488,460,450,
++360,412,355,407,340,317,386,302,248,284,209,225,220,240,235,253,263,250,
++232,230,202,215,197,202,215,197,212,253,217,232,235,261,256,202,204,220,
++225,215,235,225,248,281,240,189,181,189,184,179,186,184,194,209,197,197,
++186,189,181,179,186,212,217,199,235,225,220,207,202,189,192,235,238,217,
++245,240,225,220,207,192,202,238,230,217,225,209,197,268,325,253,409,376,
++355,307,284,243,248,276,340,335,435,396,450,401,450,435,394,473,504,488,
++509,504,509,488,453,481,473,355,419,386,404,445,337,312,258,394,450,422,
++494,435,473,327,355,279,389,378,322,248,253,302,256,238,230,268,258,335},
++{
++504,491,481,458,458,437,350,407,353,409,345,314,376,332,399,509,494,486,
++409,455,412,458,401,378,440,358,291,350,227,245,240,273,256,309,332,291,
++250,245,220,232,212,209,225,209,227,284,222,240,238,261,273,204,202,217,
++209,204,222,217,238,261,238,197,184,189,181,179,179,181,184,197,189,209,
++194,202,184,186,194,227,227,209,238,232,220,212,202,186,194,232,227,212,
++227,227,209,209,194,184,194,220,212,202,209,194,186,240,256,232,350,309,
++291,250,245,225,227,245,291,273,409,358,412,350,401,378,332,455,494,458,
++509,491,486,458,407,440,458,332,399,345,353,409,284,273,240,430,476,437,
++504,430,476,368,381,312,368,381,312,253,253,314,304,250,248,248,250,304},
++{
++496,504,478,488,473,437,409,453,404,445,386,322,378,355,419,509,504,509,
++435,473,450,488,450,435,481,396,340,401,245,276,268,335,325,376,394,355,
++307,284,238,253,230,225,243,225,248,337,235,258,248,281,312,215,204,225,
++202,202,217,220,235,261,240,209,194,197,184,186,179,184,181,189,189,225,
++207,217,192,197,209,240,238,220,235,235,220,217,202,189,202,225,217,207,
++209,212,197,199,186,181,192,202,197,189,197,186,179,220,235,215,291,253,
++250,232,230,215,212,225,248,240,360,302,355,284,340,317,263,412,460,407,
++488,471,450,419,353,386,437,322,384,314,304,373,253,256,232,435,473,422,
++494,394,450,389,378,322,327,355,279,253,248,302,335,258,268,230,238,256},
++{
++476,499,465,506,483,437,460,488,453,476,427,343,391,386,440,491,488,509,
++432,465,460,496,478,476,504,407,368,432,268,317,325,381,384,432,440,417,
++373,350,256,314,250,243,279,245,296,396,253,320,281,317,360,230,217,240,
++202,207,217,227,240,279,250,227,209,212,189,197,184,194,186,192,199,240,
++220,232,202,212,227,253,243,230,230,235,215,220,202,192,207,217,204,199,
++194,197,186,189,181,181,186,189,189,181,194,184,179,202,217,199,250,235,
++238,217,222,209,202,207,227,220,296,248,286,243,271,256,238,353,409,345,
++453,437,401,378,307,327,414,325,373,299,268,343,245,253,230,417,445,384,
++460,340,404,378,350,309,266,309,248,248,238,268,343,261,291,215,225,235},
++{
++445,483,450,506,483,437,494,509,488,496,465,373,409,422,460,458,453,491,
++401,432,445,478,481,496,506,391,371,435,302,337,363,404,422,468,463,463,
++427,412,304,368,299,284,348,294,360,448,312,384,343,363,412,250,235,263,
++212,220,227,243,250,314,291,248,227,230,199,209,194,209,197,202,215,250,
++230,250,212,227,248,263,243,235,220,230,209,220,202,197,215,207,194,194,
++184,186,179,184,181,186,186,184,189,181,199,189,184,192,204,194,240,225,
++232,212,222,215,202,194,209,204,248,227,245,225,243,240,222,284,350,281,
++407,401,350,340,268,276,394,343,373,296,253,322,245,268,235,371,396,325,
++409,273,343,345,302,273,238,253,230,238,222,245,325,253,294,197,209,217},
++{
++409,455,430,494,476,437,504,509,509,504,494,409,430,455,476,412,401,458,
++350,378,407,440,458,491,486,353,345,409,314,332,376,399,437,481,458,491,
++458,458,332,399,345,350,407,353,409,486,378,440,401,412,458,309,256,332,
++227,240,245,273,291,358,350,291,245,250,209,225,209,227,212,220,232,261,
++238,273,222,240,284,261,238,238,209,222,204,217,202,204,217,197,184,189,
++181,179,179,181,184,197,189,184,194,186,209,202,194,186,202,194,238,220,
++232,212,227,227,209,184,194,194,227,209,227,209,227,232,212,245,291,248,
++358,368,304,312,253,250,381,368,381,312,253,314,250,304,248,309,332,256,
++350,240,273,291,250,245,220,232,212,225,209,227,284,240,273,186,194,202},
++{
++373,422,409,465,460,437,494,488,509,496,506,445,450,483,483,363,343,412,
++284,312,348,384,412,463,448,294,299,360,302,304,363,368,422,468,427,496,
++463,481,337,404,371,401,445,391,435,506,432,478,453,458,491,371,325,396,
++248,273,284,343,350,407,409,345,273,302,220,238,222,245,230,238,253,263,
++243,294,230,253,325,250,230,235,199,212,197,215,202,209,220,186,181,186,
++184,179,186,184,194,207,194,194,209,197,227,217,209,192,204,204,240,225,
++240,222,243,245,225,184,189,194,212,199,215,202,222,232,212,227,250,235,
++314,343,268,296,253,245,373,401,394,340,268,322,276,350,281,250,263,235,
++291,220,243,248,230,227,202,215,197,209,194,209,248,227,250,181,184,189},
++{
++343,386,391,427,440,437,460,453,488,476,506,476,465,499,483,317,281,360,
++243,253,279,320,350,417,396,245,250,296,268,256,325,314,384,432,373,476,
++440,478,317,381,368,432,460,407,432,504,465,496,488,491,509,417,384,445,
++296,340,353,404,409,453,460,378,309,350,230,248,238,268,248,266,309,253,
++243,291,235,261,343,240,220,230,189,202,192,207,202,215,220,181,181,186,
++194,186,197,189,204,217,199,207,227,215,248,235,225,202,217,220,250,235,
++256,238,271,286,243,189,189,199,202,194,209,202,222,238,217,217,240,230,
++279,325,253,299,268,245,373,437,414,378,307,343,327,401,345,230,240,217,
++250,207,227,227,212,209,192,199,186,197,184,194,227,212,232,181,179,184},
++{
++322,355,378,386,419,437,409,404,453,445,488,496,478,504,473,281,248,312,
++225,235,243,258,284,355,337,225,230,248,245,238,268,253,325,376,307,435,
++394,450,276,335,340,435,450,396,401,481,473,488,504,509,509,435,422,473,
++360,394,412,450,460,488,494,389,322,378,235,253,248,302,279,327,355,240,
++238,268,235,258,335,225,207,220,184,192,189,202,202,220,217,181,186,192,
++209,197,212,199,217,225,207,225,248,230,302,256,238,220,235,240,291,253,
++317,263,340,355,284,202,197,215,202,197,215,212,230,250,232,217,235,232,
++261,322,256,314,304,253,384,471,437,419,353,373,386,450,407,215,225,204,
++240,202,220,209,197,194,189,189,181,186,179,184,209,197,217,189,179,186},
++}
+diff --git a/WinQuake/model.c b/WinQuake/model.c
+index 104c15b..14c3b21 100644
+--- a/WinQuake/model.c
++++ b/WinQuake/model.c
+@@ -177,6 +177,7 @@ void Mod_ClearAll (void)
+ 
+ 	for (i=0 , mod=mod_known ; i<mod_numknown ; i++, mod++) {
+ 		mod->needload = NL_UNREFERENCED;
++		mod->gxalias = NULL;	// on the hunk, also of models the next map doesn't precache
+ //FIX FOR CACHE_ALLOC ERRORS:
+ 		if (mod->type == mod_sprite) mod->cache.data = NULL;
+ 	}
+@@ -334,6 +335,22 @@ model_t *Mod_LoadModel (model_t *mod, qboolean crash)
+ 	return mod;
+ }
+ 
++/*
++==================
++Mod_LoadAliasFile
++
++Loads an alias model from its whole file in temporary memory, which it
++frees, for the renderer that read it for the skins
++==================
++*/
++void Mod_LoadAliasFile (model_t *mod, void *buffer)
++{
++	loadmodel = mod;
++	COM_FileBase (mod->name, loadname);
++	mod->needload = NL_PRESENT;
++	Mod_LoadAliasModel (mod, buffer);
++}
++
+ /*
+ ==================
+ Mod_ForName
+diff --git a/WinQuake/model.h b/WinQuake/model.h
+index be9b165..910c73c 100644
+--- a/WinQuake/model.h
++++ b/WinQuake/model.h
+@@ -63,6 +63,9 @@ typedef struct mplane_s
+ 	byte	type;			// for texture axis selection and fast side tests
+ 	byte	signbits;		// signx + signy<<1 + signz<<1
+ 	byte	pad[2];
++	// fixed point for the renderer: side = inormal * origin * 8 - idist
++	int		inormal[3];		// normal * 16384
++	int		idist;			// dist * 8 * 16384
+ } mplane_t;
+ 
+ typedef struct texture_s
+@@ -74,6 +77,10 @@ typedef struct texture_s
+ 	struct texture_s *anim_next;		// in the animation sequence
+ 	struct texture_s *alternate_anims;	// bmodels in frmae 1 use these
+ 	unsigned	offsets[MIPLEVELS];		// four mip maps stored
++	// the pixels are in VRAM, offsets are where the mip maps are in the lump
++	unsigned	gxparam[2];		// hardware texture, sky has a second layer
++	int			gxscale[2];		// texture matrix scale to the VRAM size
++	struct msurface_s	*texturechain;	// surfaces to draw this frame
+ } texture_t;
+ 
+ 
+@@ -94,6 +101,8 @@ typedef struct
+ typedef struct
+ {
+ 	float		vecs[2][4];
++	// fixed point for the light points: s = (ivecs * origin * 8 + ivecs[3]) / 32768
++	int			ivecs[2][4];
+ 	float		mipadjust;
+ 	texture_t	*texture;
+ 	int			flags;
+@@ -113,7 +122,8 @@ typedef struct msurface_s
+ 	int			numedges;	// are backwards edges
+ 	
+ // surface generation data
+-	struct surfcache_s	*cachespots[MIPLEVELS];
++	struct gxsurf_s		*gx;		// vertices for the 3D hardware
++	struct msurface_s	*texturechain;
+ 
+ 	short		texturemins[2];
+ 	short		extents[2];
+@@ -330,6 +340,8 @@ typedef struct model_s
+ 
+ 	int			numvertexes;
+ 	mvertex_t	*vertexes;
++	unsigned	*gxvertexes;	// numvertexes packed XY, Z pairs
++	struct gxalias_s	*gxalias;	// alias skins in VRAM and more, R_NewMap sets it
+ 
+ 	int			numedges;
+ 	medge_t		*edges;
+@@ -374,6 +386,7 @@ void	Mod_Init (void);
+ void	Mod_ClearAll (void);
+ model_t *Mod_ForName (char *name, qboolean crash);
+ void	*Mod_Extradata (model_t *mod);	// handles caching
++void	Mod_LoadAliasFile (model_t *mod, void *buffer);
+ void	Mod_TouchModel (char *name);
+ 
+ mleaf_t *Mod_PointInLeaf (float *p, model_t *model);
+diff --git a/WinQuake/r_light.c b/WinQuake/r_light.c
+index deeb858..1baa3ee 100644
+--- a/WinQuake/r_light.c
++++ b/WinQuake/r_light.c
+@@ -22,6 +22,10 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
+ #include "quakedef.h"
+ #include "r_local.h"
+ 
++#include <nds.h>
++
++int R_SurfaceLight (msurface_t *surf, int ds, int dt);
++
+ int	r_dlightframecount;
+ 
+ 
+@@ -138,39 +142,38 @@ LIGHT SAMPLING
+ =============================================================================
+ */
+ 
+-HOT_CODE int RecursiveLightPoint (mnode_t *node, vec3_t start, vec3_t end)
++// In fixed point, without the soft float of the original for every node the
++// line crosses: the points are world units times 8 like the renderer's planes,
++// the plane distances are shifted down so their difference fits in 32 bits
++HOT_CODE static int RecursiveLightPoint (mnode_t *node, const int *start, const int *end)
+ {
+ 	int			r;
+-	float		front, back, frac;
++	int			front, back;
+ 	int			side;
+ 	mplane_t	*plane;
+-	vec3_t		mid;
++	int			mid[3];
+ 	msurface_t	*surf;
+ 	int			s, t, ds, dt;
+ 	int			i;
+ 	mtexinfo_t	*tex;
+-	byte		*lightmap;
+-	unsigned	scale;
+-	int			maps;
+ 
+ 	if (node->contents < 0)
+ 		return -1;		// didn't hit anything
+ 	
+ // calculate mid point
+ 
+-// FIXME: optimize for axial
+ 	plane = node->plane;
+-	front = DotProduct (start, plane->normal) - plane->dist;
+-	back = DotProduct (end, plane->normal) - plane->dist;
++	front = (plane->inormal[0] * start[0] + plane->inormal[1] * start[1] +
++		plane->inormal[2] * start[2] - plane->idist) >> 4;
++	back = (plane->inormal[0] * end[0] + plane->inormal[1] * end[1] +
++		plane->inormal[2] * end[2] - plane->idist) >> 4;
+ 	side = front < 0;
+ 	
+ 	if ( (back < 0) == side)
+ 		return RecursiveLightPoint (node->children[side], start, end);
+ 	
+-	frac = front / (front-back);
+-	mid[0] = start[0] + (end[0] - start[0])*frac;
+-	mid[1] = start[1] + (end[1] - start[1])*frac;
+-	mid[2] = start[2] + (end[2] - start[2])*frac;
++	for (i = 0; i < 3; i++)
++		mid[i] = start[i] + div64 ((s64) (end[i] - start[i]) * front, front - back);
+ 	
+ // go down front side	
+ 	r = RecursiveLightPoint (node->children[side], start, mid);
+@@ -190,8 +193,10 @@ HOT_CODE int RecursiveLightPoint (mnode_t *node, vec3_t start, vec3_t end)
+ 
+ 		tex = surf->texinfo;
+ 		
+-		s = DotProduct (mid, tex->vecs[0]) + tex->vecs[0][3];
+-		t = DotProduct (mid, tex->vecs[1]) + tex->vecs[1][3];;
++		s = ((s64) tex->ivecs[0][0] * mid[0] + (s64) tex->ivecs[0][1] * mid[1] +
++			(s64) tex->ivecs[0][2] * mid[2] + tex->ivecs[0][3]) >> 15;
++		t = ((s64) tex->ivecs[1][0] * mid[0] + (s64) tex->ivecs[1][1] * mid[1] +
++			(s64) tex->ivecs[1][2] * mid[2] + tex->ivecs[1][3]) >> 15;
+ 
+ 		if (s < surf->texturemins[0] ||
+ 		t < surf->texturemins[1])
+@@ -203,32 +208,8 @@ HOT_CODE int RecursiveLightPoint (mnode_t *node, vec3_t start, vec3_t end)
+ 		if ( ds > surf->extents[0] || dt > surf->extents[1] )
+ 			continue;
+ 
+-		if (!surf->samples)
+-			return 0;
+-
+-		ds >>= 4;
+-		dt >>= 4;
+-
+-		lightmap = surf->samples;
+-		r = 0;
+-		if (lightmap)
+-		{
+-
+-			lightmap += dt * ((surf->extents[0]>>4)+1) + ds;
+-
+-			for (maps = 0 ; maps < MAXLIGHTMAPS && surf->styles[maps] != 255 ;
+-					maps++)
+-			{
+-				scale = d_lightstylevalue[surf->styles[maps]];
+-				r += *lightmap * scale;
+-				lightmap += ((surf->extents[0]>>4)+1) *
+-						((surf->extents[1]>>4)+1);
+-			}
+-			
+-			r >>= 8;
+-		}
+-		
+-		return r;
++		// the light maps became vertex light
++		return R_SurfaceLight (surf, ds, dt);
+ 	}
+ 
+ // go down back side
+@@ -237,17 +218,15 @@ HOT_CODE int RecursiveLightPoint (mnode_t *node, vec3_t start, vec3_t end)
+ 
+ int R_LightPoint (vec3_t p)
+ {
+-	vec3_t		end;
++	int			start[3], end[3];
+ 	int			r;
+ 	
+-	if (!cl.worldmodel->lightdata)
+-		return 255;
+-	
+-	end[0] = p[0];
+-	end[1] = p[1];
+-	end[2] = p[2] - 2048;
++	start[0] = end[0] = p[0] * 8;
++	start[1] = end[1] = p[1] * 8;
++	start[2] = p[2] * 8;
++	end[2] = start[2] - 2048 * 8;
+ 	
+-	r = RecursiveLightPoint (cl.worldmodel->nodes, p, end);
++	r = RecursiveLightPoint (cl.worldmodel->nodes, start, end);
+ 	
+ 	if (r == -1)
+ 		r = 0;
+diff --git a/WinQuake/r_nds.c b/WinQuake/r_nds.c
+new file mode 100644
+index 0000000..783a744
+--- /dev/null
++++ b/WinQuake/r_nds.c
+@@ -0,0 +1,2826 @@
++/*
++Copyright (C) 1996-1997 Id Software, Inc.
++
++This program is free software; you can redistribute it and/or
++modify it under the terms of the GNU General Public License
++as published by the Free Software Foundation; either version 2
++of the License, or (at your option) any later version.
++
++This program is distributed in the hope that it will be useful,
++but WITHOUT ANY WARRANTY; without even the implied warranty of
++MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
++
++See the GNU General Public License for more details.
++
++You should have received a copy of the GNU General Public License
++along with this program; if not, write to the Free Software
++Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
++
++*/
++// r_nds.c -- renderer for the Nintendo DS 3D hardware
++//
++// The world, brush and alias models, sprites and particles are drawn by the
++// geometry engine on the top screen, the 2D drawing stays in software on the
++// touch screen (vid_nds.c).
++//
++// - Vertices are 16-bit fixed point world coordinates times 8, the matrices
++//   work in units of 512 world units, so maps up to 4096 units fit.
++// - Textures stay 8-bit with Quake's palette in the texture palette, so the
++//   palette shifts for damage and pickups are free. They go to VRAM when a
++//   map loads, at the largest mip level that fits, with texture coordinates
++//   scaled to their size by the texture matrix. Nothing stays in main RAM.
++// - Light maps become vertex light, one sample per style for each vertex, so
++//   the light styles still animate.
++// - Surfaces are polygons, drawn as quad strips zig-zagging across them,
++//   which needs half as many polygons as triangles.
++
++#include "quakedef.h"
++#include "r_local.h"
++
++#include <nds.h>
++
++// Texture VRAM: banks A and B for brush models, D for skins and sprites
++#define	TEXMEM_WORLD		0x00000
++#define	TEXMEM_MODELS		0x40000
++#define	TEXMEM_END			0x60000
++#define	TEXMEM_NOTEXTURE	256		// the checkerboard stays at the start
++#define	TEXMEM_INSTANCES	(32 * 1024)	// kept for brush models after the world
++
++#define	MAX_TEXSIZE			256
++#define	MAX_SKINSIZE		128
++
++// Vertex coordinates are world units times 8, the matrices are in 1/512
++#define	VERTEX_SCALE		8
++#define	MATRIX_SCALE_W		(1.0 / 512)
++
++// The view model's matrix is relative to the eye in 1/32 world units: in the
++// 1/512 of the world its position and axes were rounded so much that the gun
++// wobbled while turning
++#define	VIEWMODEL_UNITS		16
++
++// The depth buffer holds w, the distance, to at least a 4096th of the
++// largest one of a polygon, 1/8 unit at 512 units. z / w had 15 bits for all
++// of it, 2 units at 512 and 8 at 1024: monsters right behind doors showed
++// through them. The world's projection scales w to 3 times the gun's per
++// world unit, so the gun stays in front of walls like with the software
++// renderer's depth scale for it
++#define	WORLD_W_SCALE		(VIEWMODEL_UNITS * 3)
++
++// w of the rectangles drawn on the screen, in front of the near planes, 384
++// for the world and 512 for the gun. The least w with whole pixels across,
++// rows are rounded down the screen, the hardware truncates to whole pixels
++#define	SCREEN_W			128
++
++// How dark the view gets behind the menu, the alpha of black of 31
++#define	DIM_ALPHA			14
++
++// Poly format bit for the depth test for equal instead of less
++#define	POLY_DEPTH_EQUAL	(1 << 14)
++
++// Brush texture coordinates are stored in 1/8 texels, the hardware reads 1/16
++#define	ST_SCALE			8
++
++// The texture palette is twice as bright, so vertex light can go up to
++// double like the software renderer's overbright light
++#define	GX_NORMAL_LIGHT		15
++
++// Surfaces are left out when the eye is this far behind them: the integer
++// plane tests are up to a unit off for slanted planes far from the origin,
++// the eye of the matrices 1/8, so a surface seen edge on could face the one
++// and not the other, a crack. The back of one is hidden behind its solid.
++#define	BACKFACE_DIST		1.5
++#define	BACKFACE_DIST_I		((int) (BACKFACE_DIST * VERTEX_SCALE * 16384))	// for the planes' inormal and idist
++
++// The near plane is closer than the 4 units of GLQuake, which z / w needed:
++// swimming, the eye gets that close to the surface of the liquid. The gun
++// keeps 4 units
++#define	NEAR_PLANE			(1.0 / 512)
++#define	VIEWMODEL_NEAR		(4.0 / 512)
++#define	FAR_PLANE			(8192.0 / 512)
++
++#define	MAX_SURFVERTS		128
++#define	MAX_PARTICLES_DRAWN	512
++// The vertex colors of the world surfaces drawn in a frame, in VRAM bank H
++// that nothing else uses, the RAM is short
++#define	MAX_WORLDCOLORS		(32768 / sizeof(u16))
++#define	world_colors		((u16 *) VRAM_H)
++// A frame takes at most 2048 polygons and 6144 vertices, the particles get
++// what is left, keeping some for the screen rectangles drawn after them and
++// the commands still waiting in the FIFO
++#define	GX_POLYGONS			2048
++#define	GX_VERTICES			6144
++#define	GX_RESERVE			64
++
++#define	F32(x)				((int) ((x) * 4096))
++#define	MIN(a,b)			((a) < (b) ? (a) : (b))
++#define	MAX(a,b)			((a) > (b) ? (a) : (b))
++#define	CLAMP(lo,x,hi)		((x) < (lo) ? (lo) : (x) > (hi) ? (hi) : (x))
++#define	GRAY(c)				((c) | ((c) << 5) | ((c) << 10))
++
++#define	MAX_MODELTEXTURES	256
++#define	LIGHTCACHE_SIZE		128
++#define	LIGHTCACHE_FRAMES	8
++#define	NUMVERTEXNORMALS	162
++#define	SHADEDOT_QUANT		16
++
++extern cvar_t	crosshair, cl_crossx, cl_crossy;
++extern qboolean	scr_drawdialog;
++
++
++// The hardware data of a surface: the packed texture coordinates, then the
++// vertex indices into the model's gxvertexes, word aligned, then the light
++// samples, [numstyles][numverts]
++typedef struct gxsurf_s
++{
++	byte			numverts;
++	byte			numstyles;		// light samples per vertex
++	unsigned short	pad;
++	unsigned		st[];
++} gxsurf_t;
++
++#define	GX_VERTS(gx)	((unsigned short *) ((gx)->st + (gx)->numverts))
++#define	GX_LIGHT(gx)	((byte *) GX_VERTS (gx) + (((gx)->numverts * 2 + 3) & ~3))
++
++// Hardware textures of a skin or sprite frame
++typedef struct
++{
++	unsigned	param;
++	int			scale[2];
++} gxtex_t;
++
++// What the hardware needs of an alias model: the uploaded skins, by their
++// offset in the model file, and the packed texture coordinates of the front
++// and back sides of the seam. It lives until the next map, the model itself
++// may be evicted from the cache and reloaded meanwhile.
++typedef struct gxalias_s
++{
++	unsigned	*st;		// [2][numverts], the back adds half the skin width on the seam
++	u16			*strips;	// vertex count, front side, the vertices, ..., 0
++	int			numskins;
++	struct
++	{
++		int		offset;
++		gxtex_t	tex;
++	} skins[1];		// variable sized
++} gxalias_t;
++
++// Light of an alias model, only looked up again when it moved or a while ago
++typedef struct
++{
++	entity_t	*entity;
++	vec3_t		origin;
++	int			light;
++	int			framecount;
++} lightcache_t;
++
++// A skin or sprite frame to upload, planned by R_UploadModelTextures
++typedef struct
++{
++	model_t			*model;
++	int				skin;		// offset of the skin pixels, -1 for sprites
++	mspriteframe_t	*frame;
++	int				width, height;
++	int				maxsize;	// VRAM size limit, lowered until all fit
++	int				stverts;	// offset of a skin's texture coordinates in the file
++	gxtex_t			tex;		// a skin's texture once uploaded
++} modeltex_t;
++
++//
++// view origin
++//
++refdef_t	r_refdef;
++vec3_t		r_origin, vpn, vright, vup;
++vec3_t		modelorg, r_entorigin;
++mplane_t	frustum[4];
++
++static int	frustum_i[4][4];		// normal * 16384, dist * 16384 in world units
++static int	modelorg_i[3];			// modelorg * 8
++static int	particle_vpn[3], particle_up[3], particle_right[3];	// * 16384
++
++entity_t	r_worldentity;
++entity_t	*currententity;
++
++int			r_framecount = 1;	// so frame counts initialized to 0 don't match
++int			r_visframecount;
++mleaf_t		*r_viewleaf, *r_oldviewleaf;
++texture_t	*r_notexture_mip;
++qboolean	r_cache_thrash;
++int			r_pixbytes = 1;
++int			d_lightstylevalue[256];	// 8.8 fraction of base light value
++
++// shared with r_part.c, which draws with D_DrawParticle
++vec3_t		r_pright, r_pup, r_ppn;
++float		xscaleshrink = 1, yscaleshrink = 1;
++
++float	r_avertexnormals[NUMVERTEXNORMALS][3] = {
++#include "anorms.h"
++};
++
++cvar_t	r_draworder = {"r_draworder","0"};
++cvar_t	r_speeds = {"r_speeds","0"};
++cvar_t	r_timegraph = {"r_timegraph","0"};
++cvar_t	r_graphheight = {"r_graphheight","10"};
++cvar_t	r_clearcolor = {"r_clearcolor","2"};
++cvar_t	r_waterwarp = {"r_waterwarp","1"};
++cvar_t	r_fullbright = {"r_fullbright","0"};
++cvar_t	r_drawentities = {"r_drawentities","1"};
++cvar_t	r_drawviewmodel = {"r_drawviewmodel","1"};
++cvar_t	r_aliasstats = {"r_polymodelstats","0"};
++cvar_t	r_dspeeds = {"r_dspeeds","0"};
++cvar_t	r_drawflat = {"r_drawflat", "0"};
++cvar_t	r_ambient = {"r_ambient", "0"};
++cvar_t	r_reportsurfout = {"r_reportsurfout", "0"};
++cvar_t	r_maxsurfs = {"r_maxsurfs", "0"};
++cvar_t	r_numsurfs = {"r_numsurfs", "0"};
++cvar_t	r_reportedgeout = {"r_reportedgeout", "0"};
++cvar_t	r_maxedges = {"r_maxedges", "0"};
++cvar_t	r_numedges = {"r_numedges", "0"};
++cvar_t	r_aliastransbase = {"r_aliastransbase", "200"};
++cvar_t	r_aliastransadj = {"r_aliastransadj", "100"};
++cvar_t	r_novis = {"r_novis", "0"};
++
++static int		tex_world, tex_models;		// next free texture VRAM
++
++// The textures of the brush models after the world, the ammo and health
++// boxes share some, a texture is uploaded once
++#define	MAX_SHARED_TEXTURES	64
++static texture_t	*shared_textures[MAX_SHARED_TEXTURES];
++static int		num_shared_textures;
++static qboolean	tex_mapped;					// VRAM banks mapped for the CPU
++static byte		tex_black;					// darkest color that isn't 0
++// in VRAM bank I that nothing else uses, the RAM is short, all its fields
++// are words
++#define	modeltex		((modeltex_t *) VRAM_I)
++_Static_assert (MAX_MODELTEXTURES * sizeof(modeltex_t) <= 16 * 1024, "modeltex must fit in VRAM bank I");
++static int		nummodeltex;
++static u16		gx_light[512];				// vertex light to color
++static const u16	gx_dots[SHADEDOT_QUANT][NUMVERTEXNORMALS] =	// 8.8
++#include "anorm_dots_nds.h"
++;
++static int		gx_particles;				// how many more can be drawn
++static u16		alias_color[MAXALIASVERTS];
++static unsigned	alias_xyz[MAXALIASVERTS];	// as 10-bit vertices, 4.6 fixed point
++static lightcache_t	lightcache[LIGHTCACHE_SIZE];
++static dlight_t	*r_dlights[MAX_DLIGHTS];	// the ones alive this frame
++static int		r_numdlights;
++static int		r_dlight_i[MAX_DLIGHTS][4];	// origin and radius in world units
++
++static int		c_brush_polys, c_alias_polys;
++
++/*
++===============================================================================
++
++TEXTURES
++
++===============================================================================
++*/
++
++// Nearest power of two, where the sizes Quake has in between round down
++// F32 rounded to nearest, for translations, the error of F32 would be up to
++// 1/8 of a world unit
++static inline int R_RoundF32 (float x)
++{
++	x *= 4096;
++	return x < 0 ? (int) (x - 0.5f) : (int) (x + 0.5f);
++}
++
++static int R_TexSize (int size, int max)
++{
++	int	p;
++
++	for (p = 8; p < max && p * 3 / 2 < size; p <<= 1)
++		;
++	return p;
++}
++
++static int R_Log2 (int n)
++{
++	int	i;
++
++	for (i = 0; (1 << i) < n; i++)
++		;
++	return i;
++}
++
++static void R_MapTextures (qboolean cpu)
++{
++	if (tex_mapped == cpu)
++		return;
++	tex_mapped = cpu;
++	if (cpu)
++	{
++		vramSetBankA (VRAM_A_LCD);
++		vramSetBankB (VRAM_B_LCD);
++		vramSetBankD (VRAM_D_LCD);
++	}
++	else
++	{
++		vramSetBankA (VRAM_A_TEXTURE_SLOT0);
++		vramSetBankB (VRAM_B_TEXTURE_SLOT1);
++		vramSetBankD (VRAM_D_TEXTURE_SLOT2);
++	}
++}
++
++// Address of texture memory while it's mapped for the CPU
++static u16 *R_TexVRAM (int offset)
++{
++	return offset < TEXMEM_MODELS ? VRAM_A + offset / 2 : VRAM_D + (offset - TEXMEM_MODELS) / 2;
++}
++
++/*
++================
++R_UploadTexture
++
++Resamples a width x height 8-bit image with the given row stride to w x h in
++VRAM at *mem, returns the texture parameters. With transparent set the
++index 255 of sprites becomes the hardware's transparent 0.
++================
++*/
++static unsigned R_UploadTexture (const byte *pixels, int stride, int width, int height,
++	int w, int h, int *mem, qboolean transparent)
++{
++	int			x, y, offset, u, ustep;
++	const byte	*row;
++	byte		p[2];
++	u16			*dst;
++
++	offset = *mem;
++	*mem += w * h;
++
++	// in 16.16 fixed point, the ARM9 would divide for every pixel
++	ustep = (width << 16) / w;
++	R_MapTextures (true);
++	dst = R_TexVRAM (offset);
++	for (y = 0; y < h; y++)
++	{
++		row = pixels + (y * height / h) * stride;
++		for (x = 0, u = 0; x < w; x += 2, u += 2 * ustep)
++		{
++			p[0] = row[u >> 16];
++			p[1] = row[(u + ustep) >> 16];
++			if (transparent)
++			{
++				p[0] = p[0] == 255 ? 0 : p[0] ? p[0] : tex_black;
++				p[1] = p[1] == 255 ? 0 : p[1] ? p[1] : tex_black;
++			}
++			*dst++ = p[0] | (p[1] << 8);
++		}
++	}
++
++	return (offset >> 3) | GL_TEXTURE_WRAP_S | GL_TEXTURE_WRAP_T |
++		((R_Log2 (w) - 3) << 20) | ((R_Log2 (h) - 3) << 23) | (GL_RGB256 << 26) |
++		(transparent ? GL_TEXTURE_COLOR0_TRANSPARENT : 0) | TEXGEN_TEXCOORD;
++}
++
++// Size in VRAM of a brush texture at a mip level
++static int R_BrushTexSize (texture_t *tx, int mip)
++{
++	int	w = tx->width >> mip, h = tx->height >> mip;
++
++	// the sky has two layers side by side
++	if (!Q_strncmp (tx->name, "sky", 3))
++		return 2 * R_TexSize (w >> 1, MAX_TEXSIZE) * R_TexSize (h, MAX_TEXSIZE);
++	return R_TexSize (w, MAX_TEXSIZE) * R_TexSize (h, MAX_TEXSIZE);
++}
++
++/*
++================
++R_LoadTextures
++
++Called by Mod_LoadTextures, reads the textures of a brush model from its
++lump and uploads them at the largest mip levels that fit
++================
++*/
++void R_LoadTextures (texture_t **textures, int numtextures, lump_t *l)
++{
++	int			i, j, mip[MAX_MAP_TEXTURES], total, avail, largest, w, h, gw, gh;
++	byte		*pixels;
++	texture_t	*tx, *shared[MAX_MAP_TEXTURES];
++	qboolean	instance;
++
++	if (numtextures > MAX_MAP_TEXTURES)
++		Sys_Error ("R_LoadTextures: too many textures");
++
++	// the world leaves some room for the brush models loaded after it
++	instance = tex_world != TEXMEM_NOTEXTURE;
++	avail = TEXMEM_MODELS - tex_world;
++	if (!instance)
++	{
++		avail -= TEXMEM_INSTANCES;
++		num_shared_textures = 0;
++	}
++
++	total = 0;
++	for (i = 0; i < numtextures; i++)
++	{
++		mip[i] = 0;
++		shared[i] = NULL;
++		if (!textures[i])
++			continue;
++		if (instance)
++			for (j = 0; j < num_shared_textures; j++)
++				if (!strcmp (shared_textures[j]->name, textures[i]->name)
++					&& shared_textures[j]->width == textures[i]->width
++					&& shared_textures[j]->height == textures[i]->height)
++					shared[i] = shared_textures[j];
++		if (!shared[i])
++			total += R_BrushTexSize (textures[i], 0);
++	}
++
++	// halve the largest texture until everything fits
++	while (total > avail)
++	{
++		largest = -1;
++		for (i = 0; i < numtextures; i++)
++			if (textures[i] && !shared[i] && mip[i] < MIPLEVELS - 1 && (largest < 0 ||
++				R_BrushTexSize (textures[i], mip[i]) > R_BrushTexSize (textures[largest], mip[largest])))
++				largest = i;
++		if (largest < 0)
++			break;
++		total -= R_BrushTexSize (textures[largest], mip[largest]);
++		mip[largest]++;
++		total += R_BrushTexSize (textures[largest], mip[largest]);
++	}
++
++	for (i = 0; i < numtextures; i++)
++	{
++		tx = textures[i];
++		if (!tx)
++			continue;
++		if (shared[i])
++		{
++			memcpy (tx->gxparam, shared[i]->gxparam, sizeof(tx->gxparam));
++			memcpy (tx->gxscale, shared[i]->gxscale, sizeof(tx->gxscale));
++			continue;
++		}
++
++		w = tx->width >> mip[i];
++		h = tx->height >> mip[i];
++		if (total > avail || tex_world + R_BrushTexSize (tx, mip[i]) > TEXMEM_MODELS)
++		{
++			// out of VRAM, use the checkerboard
++			tx->gxparam[0] = tx->gxparam[1] = r_notexture_mip->gxparam[0];
++			tx->gxscale[0] = r_notexture_mip->gxscale[0] * 16 / tx->width;
++			tx->gxscale[1] = r_notexture_mip->gxscale[1] * 16 / tx->height;
++			continue;
++		}
++
++		pixels = Hunk_TempAlloc (w * h);
++		if (!pixels)
++			Sys_Error ("R_LoadTextures: not enough memory");
++		Mod_ReadLump (l, tx->offsets[mip[i]], pixels, w * h);
++
++		if (!Q_strncmp (tx->name, "sky", 3))
++		{
++			// the solid back layer on the right, the front on the left
++			// with index 0 transparent, their coordinates are in 1/16 texels
++			gw = R_TexSize (w / 2, MAX_TEXSIZE);
++			gh = R_TexSize (h, MAX_TEXSIZE);
++			tx->gxparam[0] = R_UploadTexture (pixels + w / 2, w, w / 2, h, gw, gh, &tex_world, false);
++			tx->gxparam[1] = R_UploadTexture (pixels, w, w / 2, h, gw, gh, &tex_world, false) |
++				GL_TEXTURE_COLOR0_TRANSPARENT;
++			tx->gxscale[0] = (gw << 12) / (tx->width / 2);
++			tx->gxscale[1] = (gh << 12) / tx->height;
++			continue;
++		}
++		gw = R_TexSize (w, MAX_TEXSIZE);
++		gh = R_TexSize (h, MAX_TEXSIZE);
++		tx->gxparam[0] = tx->gxparam[1] = R_UploadTexture (pixels, w, w, h, gw, gh, &tex_world, false);
++		tx->gxscale[0] = (2 * gw << 12) / tx->width;
++		tx->gxscale[1] = (2 * gh << 12) / tx->height;
++		if (instance && num_shared_textures < MAX_SHARED_TEXTURES)
++			shared_textures[num_shared_textures++] = tx;
++	}
++	R_MapTextures (false);
++}
++
++/*
++================
++R_InitTextures
++
++The checkerboard for missing textures, uploaded by R_Init
++================
++*/
++void R_InitTextures (void)
++{
++	r_notexture_mip = Hunk_AllocName (sizeof(texture_t), "notexture");
++	strcpy (r_notexture_mip->name, "notexture");
++	r_notexture_mip->width = r_notexture_mip->height = 16;
++}
++
++static void R_UploadNoTexture (void)
++{
++	byte	pixels[16 * 16];
++	int		x, y, mem = TEXMEM_WORLD;
++
++	for (y = 0; y < 16; y++)
++		for (x = 0; x < 16; x++)
++			pixels[y * 16 + x] = (x < 8) ^ (y < 8) ? 0 : 15;
++	r_notexture_mip->gxparam[0] = r_notexture_mip->gxparam[1] =
++		R_UploadTexture (pixels, 16, 16, 16, 16, 16, &mem, false);
++	r_notexture_mip->gxscale[0] = r_notexture_mip->gxscale[1] = 2 << 12;
++	R_MapTextures (false);
++}
++
++/*
++================
++D_FlushCaches
++
++Called by Host_ClearMemory before a new map, frees all textures
++================
++*/
++void D_FlushCaches (void)
++{
++	tex_world = TEXMEM_NOTEXTURE;
++	tex_models = TEXMEM_MODELS;
++}
++
++static void R_AddModelTexture (model_t *mod, int skin, mspriteframe_t *frame, int width, int height)
++{
++	modeltex_t	*t;
++
++	if (nummodeltex == MAX_MODELTEXTURES)
++		return;
++	t = &modeltex[nummodeltex++];
++	t->model = mod;
++	t->skin = skin;
++	t->frame = frame;
++	t->width = width;
++	t->height = height;
++	t->maxsize = MAX_SKINSIZE;
++}
++
++// The skins of an alias model from its file, without loading the model: the
++// type of each and the offset of its pixels, which the loaded model has too
++static void R_AddAliasSkins (model_t *mod)
++{
++	FILE	*f;
++	mdl_t	header;
++	int		i, j, base, pos, size, numskins, type, groupskins, first = nummodeltex;
++
++	if (COM_FOpenFile (mod->name, &f) < 0)
++		Sys_Error ("R_AddAliasSkins: can't open %s", mod->name);
++	base = ftell (f);
++	fread (&header, 1, sizeof(header), f);
++	numskins = LittleLong (header.numskins);
++	size = LittleLong (header.skinwidth) * LittleLong (header.skinheight);
++	for (i = 0, pos = sizeof(header); i < numskins; i++)
++	{
++		fseek (f, base + pos, SEEK_SET);
++		fread (&type, 1, sizeof(type), f);
++		pos += sizeof(type);
++		if (LittleLong (type) == ALIAS_SKIN_SINGLE)
++			groupskins = 1;
++		else
++		{
++			// the number of skins and their intervals before the pixels
++			fread (&groupskins, 1, sizeof(groupskins), f);
++			groupskins = LittleLong (groupskins);
++			pos += sizeof(daliasskingroup_t) + groupskins * sizeof(daliasskininterval_t);
++		}
++		for (j = 0; j < groupskins; j++, pos += size)
++			R_AddModelTexture (mod, pos, NULL, LittleLong (header.skinwidth), LittleLong (header.skinheight));
++	}
++	// the texture coordinates follow the skins
++	for (i = first; i < nummodeltex; i++)
++		modeltex[i].stverts = pos;
++	fclose (f);
++}
++
++static void R_AddSprite (model_t *mod)
++{
++	msprite_t		*psprite = mod->cache.data;
++	mspritegroup_t	*pgroup;
++	int				i, j;
++
++	for (i = 0; i < psprite->numframes; i++)
++	{
++		if (psprite->frames[i].type == SPR_SINGLE)
++		{
++			R_AddModelTexture (mod, -1, psprite->frames[i].frameptr,
++				psprite->frames[i].frameptr->width, psprite->frames[i].frameptr->height);
++			continue;
++		}
++		pgroup = (mspritegroup_t *)psprite->frames[i].frameptr;
++		for (j = 0; j < pgroup->numframes; j++)
++			R_AddModelTexture (mod, -1, pgroup->frames[j], pgroup->frames[j]->width, pgroup->frames[j]->height);
++	}
++}
++
++// Allocates the hardware data of an alias model and packs its texture coordinates
++// Triangle strips through the triangles of an alias model, like GLQuake's
++// gl_mesh.c without fans, which the hardware doesn't have: a strip takes the
++// triangles that share its last edge, on the same side of the skin seam.
++// The vertices go to the hardware once per strip instead of three times per
++// triangle. Returns the size of the strips, written to out when not NULL.
++#define	MAXSTRIPTRIS	1024
++
++// The triangle edges by their vertices, to find the next triangle of a strip
++// without searching them all
++#define	EDGE_HASH			1024
++#define	EDGE_KEY(a,b)		(((a) * 31 + (b)) & (EDGE_HASH - 1))
++
++// What building the strips works with, for models of up to MAXSTRIPTRIS
++// triangles, Quake's have less than 500
++typedef struct
++{
++	byte	used[MAXSTRIPTRIS];
++	short	edge_first[EDGE_HASH], edge_next[MAXSTRIPTRIS * 3];
++	u16		verts[MAXSTRIPTRIS + 2], striptris[MAXSTRIPTRIS];
++	u16		bestverts[MAXSTRIPTRIS + 2], besttris[MAXSTRIPTRIS];
++} stripwork_t;
++
++static void R_HashEdges (stripwork_t *w, mtriangle_t *tris, int numtris)
++{
++	int	i, k, key;
++
++	memset (w->edge_first, -1, sizeof(w->edge_first));
++	// in reverse, so each chain lists the triangles in order
++	for (i = numtris - 1; i >= 0; i--)
++		for (k = 2; k >= 0; k--)
++		{
++			key = EDGE_KEY (tris[i].vertindex[k], tris[i].vertindex[(k + 1) % 3]);
++			w->edge_next[i * 3 + k] = w->edge_first[key];
++			w->edge_first[key] = i * 3 + k;
++		}
++}
++
++static int R_StripLength (stripwork_t *w, mtriangle_t *tris, int numtris, int start, int startv)
++{
++	byte		*used = w->used;
++	u16			*verts = w->verts, *striptris = w->striptris;
++	mtriangle_t	*last = &tris[start], *check;
++	int			m1, m2, e, j, k, count = 1;
++
++	used[start] = 2;
++	verts[0] = last->vertindex[startv % 3];
++	verts[1] = last->vertindex[(startv + 1) % 3];
++	verts[2] = last->vertindex[(startv + 2) % 3];
++	striptris[0] = start;
++	m1 = last->vertindex[(startv + 2) % 3];
++	m2 = last->vertindex[(startv + 1) % 3];
++next:
++	// the first triangle after the start with the strip's last edge
++	for (e = w->edge_first[EDGE_KEY (m1, m2)]; e >= 0; e = w->edge_next[e])
++	{
++		j = e / 3;
++		k = e % 3;
++		check = &tris[j];
++		if (j <= start || check->facesfront != last->facesfront
++			|| check->vertindex[k] != m1 || check->vertindex[(k + 1) % 3] != m2)
++			continue;
++		if (used[j])
++			goto done;
++		// the new edge alternates sides, like the strip
++		if (count & 1)
++			m2 = check->vertindex[(k + 2) % 3];
++		else
++			m1 = check->vertindex[(k + 2) % 3];
++		verts[count + 2] = check->vertindex[(k + 2) % 3];
++		striptris[count] = j;
++		count++;
++		used[j] = 2;
++		goto next;
++	}
++done:
++	for (j = 0; j < count; j++)
++		used[striptris[j]] = 0;
++	return count;
++}
++
++static int R_BuildStrips (mtriangle_t *tris, int numtris, u16 *out)
++{
++	static stripwork_t	w;
++	int			i, j, startv, len, bestlen, size = 1;
++
++	memset (w.used, 0, numtris);
++	R_HashEdges (&w, tris, numtris);
++	for (i = 0; i < numtris; i++)
++	{
++		if (w.used[i])
++			continue;
++		bestlen = 0;
++		for (startv = 0; startv < 3; startv++)
++		{
++			len = R_StripLength (&w, tris, numtris, i, startv);
++			if (len > bestlen)
++			{
++				bestlen = len;
++				memcpy (w.bestverts, w.verts, (len + 2) * sizeof(w.verts[0]));
++				memcpy (w.besttris, w.striptris, len * sizeof(w.striptris[0]));
++			}
++		}
++		for (j = 0; j < bestlen; j++)
++			w.used[w.besttris[j]] = 1;
++		if (out)
++		{
++			out[size - 1] = bestlen + 2;
++			out[size] = tris[i].facesfront;
++			memcpy (out + size + 1, w.bestverts, (bestlen + 2) * sizeof(w.verts[0]));
++		}
++		size += bestlen + 4;
++	}
++	if (out)
++		out[size - 1] = 0;
++	return size;
++}
++
++static void R_SetupAliasModel (model_t *mod, int numskins)
++{
++	aliashdr_t	*paliashdr;
++	mdl_t		*pmdl;
++	stvert_t	*stverts;
++	gxalias_t	*gx;
++	int			i, s, t, strips;
++
++	paliashdr = Mod_Extradata (mod);
++	pmdl = (mdl_t *)((byte *)paliashdr + paliashdr->model);
++	strips = pmdl->numtris <= MAXSTRIPTRIS ?
++		R_BuildStrips ((mtriangle_t *)((byte *)paliashdr + paliashdr->triangles), pmdl->numtris, NULL) : 0;
++	gx = Hunk_AllocName (sizeof(gxalias_t) + numskins * sizeof(gx->skins[0]) +
++		pmdl->numverts * 2 * sizeof(unsigned) + strips * sizeof(u16), "gxalias");
++	gx->st = (unsigned *)&gx->skins[numskins];
++	gx->strips = strips ? (u16 *)(gx->st + pmdl->numverts * 2) : NULL;
++	mod->gxalias = gx;
++
++	// the hunk allocation may have evicted the model, the texture
++	// coordinates are 16.16 fixed point, the hardware takes 12.4
++	paliashdr = Mod_Extradata (mod);
++	pmdl = (mdl_t *)((byte *)paliashdr + paliashdr->model);
++	stverts = (stvert_t *)((byte *)paliashdr + paliashdr->stverts);
++	for (i = 0; i < pmdl->numverts; i++)
++	{
++		s = (stverts[i].s >> 12) + 8;
++		t = (stverts[i].t >> 12) + 8;
++		gx->st[i] = TEXTURE_PACK (s, t);
++		if (stverts[i].onseam)
++			s += pmdl->skinwidth << 3;
++		gx->st[pmdl->numverts + i] = TEXTURE_PACK (s, t);
++	}
++	if (gx->strips)
++		R_BuildStrips ((mtriangle_t *)((byte *)paliashdr + paliashdr->triangles), pmdl->numtris, gx->strips);
++}
++
++/*
++================
++R_SkinCoverage
++
++Marks the texels of a skin the triangles of its model cover, their middles
++inside a triangle, from the texture coordinates and triangles in the file. The texels around them aren't painted or have the
++background, like the blue around the shotguns.
++================
++*/
++__attribute__((target("arm")))
++static void R_SkinCoverage (byte *file, int stverts, byte *mask, int w, int h)
++{
++	mdl_t		*header = (mdl_t *)file;
++	stvert_t	*st = (stvert_t *)(file + stverts);
++	dtriangle_t	*tri = (dtriangle_t *)(st + LittleLong (header->numverts));
++	int			i, j, k, y, y0, y1, s[3], t[3], miny, maxy;
++	int			x0[MAX_LBM_HEIGHT], x1[MAX_LBM_HEIGHT];	// the span of each row
++	int			dt, step, q, r, sign, numtris = LittleLong (header->numtris);
++
++	// the spans between the edges at the middles of the rows, in half texels
++	memset (mask, 0, w * h);
++	for (i = 0; i < numtris; i++, tri++)
++	{
++		for (j = 0; j < 3; j++)
++		{
++			k = LittleLong (tri->vertindex[j]);
++			s[j] = 2 * (LittleLong (st[k].s) + (!LittleLong (tri->facesfront) && LittleLong (st[k].onseam) ? w / 2 : 0));
++			t[j] = 2 * LittleLong (st[k].t);
++		}
++		miny = MAX (MIN (t[0], MIN (t[1], t[2])) / 2, 0);
++		maxy = MIN (MAX (t[0], MAX (t[1], t[2])) / 2, h - 1);
++		for (y = miny; y <= maxy; y++)
++		{
++			x0[y] = 0x7fffffff;
++			x1[y] = -1;
++		}
++		for (j = 0; j < 3; j++)
++		{
++			// the edge at the rows with their middle, 2 * y + 1, in its
++			// span: s[j] + (s[k] - s[j]) * (2 * y + 1 - t[j]) / (t[k] - t[j]),
++			// stepped as the quotient q and remainder r of |s[k] - s[j]| *
++			// |2 * y + 1 - t[j]| / |t[k] - t[j]| for its sign
++			k = j == 2 ? 0 : j + 1;
++			if (t[j] == t[k])
++				continue;
++			y0 = MAX (MIN (t[j], t[k]) / 2, miny);	// 2 * y + 1 >= the smaller
++			y1 = MIN ((MAX (t[j], t[k]) - 1) / 2, maxy);	// 2 * y + 1 <= the larger
++			if (MAX (t[j], t[k]) < 1 || y0 > y1)
++				continue;
++			dt = abs (t[k] - t[j]);
++			sign = s[k] < s[j] ? -1 : 1;
++			step = 2 * abs (s[k] - s[j]);
++			q = abs (s[k] - s[j]) * abs (2 * y0 + 1 - t[j]);
++			r = q % dt;
++			q /= dt;
++			for (y = y0; ; y++)
++			{
++				x0[y] = MIN (x0[y], s[j] + sign * q);
++				x1[y] = MAX (x1[y], s[j] + sign * q);
++				if (y == y1)
++					break;
++				// |2 * y + 1 - t[j]| grows away from t[j] and shrinks towards it
++				if (t[k] > t[j])
++				{
++					q += step / dt;
++					r += step % dt;
++					if (r >= dt)
++					{
++						r -= dt;
++						q++;
++					}
++				}
++				else
++				{
++					q -= step / dt;
++					r -= step % dt;
++					if (r < 0)
++					{
++						r += dt;
++						q--;
++					}
++				}
++			}
++		}
++		for (y = miny; y <= maxy; y++)
++		{
++			// the texels with their middle, 2 * x + 1, in the span
++			x0[y] = MAX (x0[y] / 2, 0);
++			x1[y] = MIN ((x1[y] - 1) / 2, w - 1);
++			if (x0[y] <= x1[y])
++				memset (mask + y * w + x0[y], 1, x1[y] - x0[y] + 1);
++		}
++	}
++}
++
++/*
++================
++R_FillSkin
++
++Every texel of a skin, resampled to the size of its hardware texture, that
++isn't covered takes the color of a covered one along its row, then along
++its column for the rows without any, from both ends: the edges of the
++triangles sample next to what's painted, triangles thinner than a texel
++cover none.
++================
++*/
++__attribute__((target("arm")))
++static void R_FillSkin (byte *pixels, byte *mask, int w, int h)
++{
++	int		i, j, k, last, step, len, pass;
++	byte	*p, *m;
++
++	for (pass = 0; pass < 2; pass++)
++		for (i = 0; i < (pass ? w : h); i++)
++			for (step = -1; step <= 1; step += 2)
++			{
++				len = pass ? h : w;
++				p = pass ? pixels + i : pixels + i * w;
++				m = pass ? mask + i : mask + i * w;
++				k = pass ? w : 1;
++				if (step < 0)
++				{
++					p += (len - 1) * k;
++					m += (len - 1) * k;
++					k = -k;
++				}
++				for (j = 0, last = -1; j < len; j++, p += k, m += k)
++				{
++					if (*m && *m <= pass + 1)
++						last = j;
++					else if (!*m && last >= 0)
++					{
++						*p = p[-k * (j - last)];
++						*m = pass + 2;
++					}
++				}
++			}
++}
++
++static int R_ModelTexSize (modeltex_t *t)
++{
++	return R_TexSize (t->width, t->maxsize) * R_TexSize (t->height, t->maxsize);
++}
++
++/*
++================
++R_UploadSkins
++
++Uploads the n skins of an alias model from its file, which loads the model
++too when it's not in the cache: a level's models don't all fit in it, each
++is loaded once for its skins and hardware data. Each skin and the texels its
++triangles cover are resampled to the texture size together and filled in
++there. Returns false when VRAM is full.
++================
++*/
++static qboolean R_UploadSkins (model_t *mod, modeltex_t *skins, int n)
++{
++	int			i, k, x, y, u, ustep, w, h, gw, gh, len, mark;
++	aliashdr_t	*cached = Cache_Check (&mod->cache);
++	mdl_t		*pmdl;
++	modeltex_t	*t;
++	gxalias_t	*gx;
++	byte		*file, *pixels, *mask, *skin;
++	FILE		*f;
++
++	// a model in the cache only needs its skins, texture coordinates and
++	// triangles, from the start of the file
++	len = COM_FOpenFile (mod->name, &f);
++	if (len < 0)
++		Sys_Error ("R_UploadSkins: can't open %s", mod->name);
++	if (cached)
++	{
++		pmdl = (mdl_t *)((byte *)cached + cached->model);
++		len = skins->stverts + pmdl->numverts * sizeof(stvert_t) + pmdl->numtris * sizeof(dtriangle_t);
++	}
++	file = Hunk_TempAlloc (len);
++	if (!file)
++		Sys_Error ("R_UploadSkins: not enough memory for %s", mod->name);
++	fread (file, 1, len, f);
++	fclose (f);
++
++	for (i = 0, t = skins; i < n; i++, t++)
++	{
++		w = t->width;
++		h = t->height;
++		gw = R_TexSize (w, t->maxsize);
++		gh = R_TexSize (h, t->maxsize);
++		if (tex_models + gw * gh > TEXMEM_END)
++			break;
++		mark = Hunk_LowMark ();
++		mask = Hunk_AllocName (w * h + gw * gh * 2, "skin");
++		skin = mask + w * h;
++		pixels = file + t->skin;
++		R_SkinCoverage (file, t->stverts, mask, w, h);
++		ustep = (w << 16) / gw;	// 16.16 fixed point, the middles of the texels
++		for (y = 0; y < gh; y++)
++		{
++			k = ((2 * y + 1) * h / (2 * gh)) * w;
++			for (x = 0, u = ustep / 2; x < gw; x++, u += ustep)
++			{
++				skin[y * gw + x] = pixels[k + (u >> 16)];
++				skin[gw * gh + y * gw + x] = mask[k + (u >> 16)];
++			}
++		}
++		R_FillSkin (skin, skin + gw * gh, gw, gh);
++		t->tex.param = R_UploadTexture (skin, gw, gw, gh, gw, gh, &tex_models, false);
++		t->tex.scale[0] = (gw << 12) / w;
++		t->tex.scale[1] = (gh << 12) / h;
++		Hunk_FreeToLowMark (mark);
++	}
++
++	if (cached)
++		Hunk_FreeTemp ();
++	else
++		Mod_LoadAliasFile (mod, file);
++	if (i)
++	{
++		R_SetupAliasModel (mod, i);
++		gx = mod->gxalias;
++		for (k = 0; k < i; k++)
++		{
++			gx->skins[k].offset = skins[k].skin;
++			gx->skins[k].tex = skins[k].tex;
++		}
++		gx->numskins = i;
++	}
++	return i == n;
++}
++
++/*
++================
++R_UploadModelTextures
++
++Uploads the skins of all alias models and the frames of all sprites of the
++map, halving the largest until they fit in their part of VRAM
++================
++*/
++static void R_UploadModelTextures (void)
++{
++	int			i, j, total, gw, gh;
++	model_t		*mod;
++	modeltex_t	*t, *largest;
++	gxtex_t		*tex;
++
++	nummodeltex = 0;
++	for (i = 1; i < MAX_MODELS && cl.model_precache[i]; i++)
++	{
++		mod = cl.model_precache[i];
++		if (mod->type == mod_alias)
++			R_AddAliasSkins (mod);
++		else if (mod->type == mod_sprite)
++			R_AddSprite (mod);
++	}
++
++	for (;;)
++	{
++		total = 0;
++		largest = NULL;
++		for (i = 0, t = modeltex; i < nummodeltex; i++, t++)
++		{
++			total += R_ModelTexSize (t);
++			if (t->maxsize > 8 && (!largest || R_ModelTexSize (t) > R_ModelTexSize (largest)))
++				largest = t;
++		}
++		if (total <= TEXMEM_END - TEXMEM_MODELS || !largest)
++			break;
++		largest->maxsize >>= 1;
++	}
++
++	tex_models = TEXMEM_MODELS;
++	for (i = 0; i < nummodeltex; i = j)
++	{
++		t = &modeltex[i];
++		for (j = i + 1; j < nummodeltex && t->skin >= 0 && modeltex[j].model == t->model; j++)
++			;
++		if (t->skin >= 0)
++		{
++			if (!R_UploadSkins (t->model, t, j - i))
++				break;
++			continue;
++		}
++		gw = R_TexSize (t->width, t->maxsize);
++		gh = R_TexSize (t->height, t->maxsize);
++		if (tex_models + gw * gh > TEXMEM_END)
++			break;
++		tex = Hunk_AllocName (sizeof(*tex), "gxsprite");
++		t->frame->pcachespot = tex;
++		tex->param = R_UploadTexture (t->frame->pixels, t->width, t->width, t->height, gw, gh, &tex_models, true);
++		tex->scale[0] = (gw << 12) / t->width;
++		tex->scale[1] = (gh << 12) / t->height;
++	}
++	R_MapTextures (false);
++}
++
++static void R_BindTexture (unsigned param, const int *scale)
++{
++	GFX_TEX_FORMAT = param;
++	MATRIX_CONTROL = GL_TEXTURE;
++	MATRIX_IDENTITY = 0;
++	MATRIX_SCALE = scale[0];
++	MATRIX_SCALE = scale[1];
++	MATRIX_SCALE = 1 << 12;
++	MATRIX_CONTROL = GL_MODELVIEW;
++}
++
++/*
++===============================================================================
++
++BRUSH MODELS
++
++===============================================================================
++*/
++
++static int R_SurfaceStyles (msurface_t *surf)
++{
++	int	numstyles = 0;
++
++	if (surf->samples && !(surf->flags & SURF_DRAWTILED))
++		while (numstyles < MAXLIGHTMAPS && surf->styles[numstyles] != 255)
++			numstyles++;
++	return numstyles;
++}
++
++// gxsurf_t, texture coordinates, vertex indices and light, word aligned
++static int R_SurfaceSize (msurface_t *surf, int n)
++{
++	return (sizeof(gxsurf_t) + n * 4 + ((n * 2 + 3) & ~3) + R_SurfaceStyles (surf) * n + 3) & ~3;
++}
++
++#define	TJ_CELL			7		// 16 units in 1/8 units
++#define	TJ_CELLOF(x)	(((x) + 64) >> TJ_CELL)	// half a cell off the walls on the 16 unit grid
++#define	TJ_HASH			8192
++#define	TJ_MAXINSERT	32		// vertices added to an edge
++
++static int R_TJHash (int cx, int cy, int cz)
++{
++	return (cx * 73856093 ^ cy * 19349663 ^ cz * 83492791) & (TJ_HASH - 1);
++}
++
++/*
++================
++R_EdgeTJunctions
++
++A vertex of one face in the middle of an edge of another is a T-junction,
++the hardware leaves a crack along that edge. The vertices on each edge, at
++most 1/8 unit off it, are found through a hash of the vertex positions by
++16 unit cells. Returns them for R_SurfaceVerts, at offset ecache[edge] the
++number of them, then the vertices from v[0] to v[1]. In high hunk memory,
++freed with the rest of the geometry.
++================
++*/
++#define	TJ_END		0xffff
++
++// ARM code, the loading time is mostly spent here
++__attribute__((target("arm")))
++static unsigned short *R_EdgeTJunctions (model_t *mod, unsigned short **ecache)
++{
++	unsigned short	*head, *next, *elist, *ec;
++	int				i, k, a, b, v, n, total, max, x[3], lo[3], hi[3], c[3], ins[TJ_MAXINSERT];
++	int				d[3], w[3], dot, len2, len, cr, sh, at[TJ_MAXINSERT];
++
++	// positions from the hardware vertices
++#define	TJ_POS(v, k)	((k) == 2 ? (short) (mod->gxvertexes[(v) * 2 + 1] & 0xffff) : \
++						 (short) (mod->gxvertexes[(v) * 2] >> ((k) * 16)))
++
++	head = Hunk_HighAllocName (TJ_HASH * sizeof(*head), "tjhash");
++	next = Hunk_HighAllocName (mod->numvertexes * sizeof(*next), "tjnext");
++	for (i = 0; i < TJ_HASH; i++)
++		head[i] = TJ_END;
++	for (i = 0; i < mod->numvertexes; i++)
++	{
++		k = R_TJHash (TJ_CELLOF (TJ_POS (i, 0)), TJ_CELLOF (TJ_POS (i, 1)), TJ_CELLOF (TJ_POS (i, 2)));
++		next[i] = head[k];
++		head[k] = i;
++	}
++
++	ec = *ecache = Hunk_HighAllocName (mod->numedges * sizeof(*ec), "tjedges");
++	max = MIN (mod->numedges * 2, TJ_END);
++	elist = Hunk_HighAllocName (max * sizeof(*elist), "tjins");
++	total = 0;
++	for (i = 0; i < mod->numedges; i++)
++	{
++		if (total >= max)
++		{
++			ec[i] = TJ_END;
++			continue;
++		}
++		a = mod->edges[i].v[0];
++		b = mod->edges[i].v[1];
++		for (k = 0; k < 3; k++)
++		{
++			x[k] = TJ_POS (a, k);
++			lo[k] = MIN (x[k], TJ_POS (b, k)) - 1;
++			hi[k] = MAX (x[k], TJ_POS (b, k)) + 1;
++			d[k] = TJ_POS (b, k) - x[k];
++		}
++		// in 32 bits, longer edges than 2048 units are worked out in
++		// coarser steps
++		n = 0;
++		for (sh = 0; MAX (abs (d[0]), MAX (abs (d[1]), abs (d[2]))) >> sh >= 16384; sh++)
++			;
++		for (k = 0; k < 3; k++)
++			d[k] >>= sh;
++		len2 = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
++		len = sqrt32 (len2);
++		for (c[2] = TJ_CELLOF (lo[2]); c[2] <= TJ_CELLOF (hi[2]); c[2]++)
++			for (c[1] = TJ_CELLOF (lo[1]); c[1] <= TJ_CELLOF (hi[1]); c[1]++)
++				for (c[0] = TJ_CELLOF (lo[0]); c[0] <= TJ_CELLOF (hi[0]); c[0]++)
++					for (v = head[R_TJHash (c[0], c[1], c[2])]; v != TJ_END; v = next[v])
++					{
++						if (v == a || v == b)
++							continue;
++						for (k = 0; k < 3; k++)
++						{
++							w[k] = TJ_POS (v, k);
++							if (w[k] < lo[k] || w[k] > hi[k] || TJ_CELLOF (w[k]) != c[k])
++								break;
++							w[k] = (w[k] - x[k]) >> sh;
++						}
++						if (k < 3)
++							continue;
++						dot = d[0] * w[0] + d[1] * w[1] + d[2] * w[2];
++						if (dot <= 0 || dot >= len2)
++							continue;
++						// the distance to the edge is |d x w| / |d|
++						cr = abs (d[1] * w[2] - d[2] * w[1]) + abs (d[2] * w[0] - d[0] * w[2])
++							+ abs (d[0] * w[1] - d[1] * w[0]);
++						if (cr > len + len)
++							continue;
++						for (k = 0; k < n && at[k] != dot; k++)
++							;
++						if (k < n)
++							continue;	// a vertex at the same place
++						for (k = n; k > 0 && at[k - 1] > dot; k--)
++							if (k < TJ_MAXINSERT)
++							{
++								ins[k] = ins[k - 1];
++								at[k] = at[k - 1];
++							}
++						if (k < TJ_MAXINSERT)
++						{
++							ins[k] = v;
++							at[k] = dot;
++							n = MIN (n + 1, TJ_MAXINSERT);
++						}
++					}
++		n = MIN (n, max - total - 1);
++		ec[i] = total;
++		elist[total++] = n;
++		for (k = 0; k < n; k++)
++			elist[total++] = ins[k];
++	}
++#undef	TJ_POS
++	return elist;
++}
++
++// The vertices of a surface with those of its T-junctions, into out unless
++// it's NULL, returns how many
++static int R_SurfaceVerts (model_t *mod, msurface_t *surf, unsigned short *elist, unsigned short *ecache,
++	unsigned short *out)
++{
++	int				j, k, e, n = 0, num;
++	unsigned short	*ins;
++
++	for (j = 0; j < surf->numedges && n < MAX_SURFVERTS; j++)
++	{
++		e = mod->surfedges[surf->firstedge + j];
++		if (out)
++			out[n] = e >= 0 ? mod->edges[e].v[0] : mod->edges[-e].v[1];
++		n++;
++		if (ecache[abs (e)] == TJ_END)
++			continue;
++		ins = elist + ecache[abs (e)];
++		num = *ins++;
++		// backwards on a face that has the edge the other way around
++		for (k = 0; k < num && n < MAX_SURFVERTS; k++, n++)
++			if (out)
++				out[n] = ins[e >= 0 ? k : num - 1 - k];
++	}
++	return n;
++}
++
++/*
++================
++R_StripStart
++
++The 3D hardware tells the side a polygon faces from its first three
++vertices, i, j and j' of each quad of R_EmitSurface's strip. In a line it
++can get that wrong, then it leaves the edges that run more across than down
++unfilled. Returns the first vertex to start the strip at that keeps them a
++unit from a line, a T-junction is in a line with its edge. The vertices are
++there twice, one after the other.
++================
++*/
++__attribute__((target("arm")))
++static int R_StripStart (model_t *mod, msurface_t *surf, unsigned short *verts, int n)
++{
++	int			r, k, j, a0, a1, d[3][2];
++	long long	c;
++	unsigned	*pos;
++
++	// in the plane seen along the axis it's most across, in the 1/8 units of
++	// the vertices: the cross product over the larger side of j to j' is 8
++	// times the distance of i from their line
++	a0 = (surf->plane->type + 1) % 3;
++	a1 = (surf->plane->type + 2) % 3;
++	for (r = 0; r < n; r++)
++	{
++		for (k = 0; k < (n - 1) / 2; k++)
++		{
++			for (j = 0; j < 3; j++)
++			{
++				pos = mod->gxvertexes + verts[j ? r + n - k - j + 1 : r + k + 1] * 2;
++				d[j][0] = a0 == 2 ? (short) pos[1] : (short) (pos[0] >> (a0 * 16));
++				d[j][1] = a1 == 2 ? (short) pos[1] : (short) (pos[0] >> (a1 * 16));
++			}
++			c = (long long) (d[0][0] - d[1][0]) * (d[2][1] - d[1][1]) -
++				(long long) (d[0][1] - d[1][1]) * (d[2][0] - d[1][0]);
++			if ((c < 0 ? -c : c) < MAX (abs (d[2][0] - d[1][0]), abs (d[2][1] - d[1][1])) * VERTEX_SCALE)
++				break;
++		}
++		if (k == (n - 1) / 2)
++			return r;
++	}
++	return 0;
++}
++
++/*
++================
++R_BuildSurfaces
++
++Called by Mod_LoadBrushModel once the faces are loaded, packs the vertices,
++texture coordinates and light samples for the 3D hardware
++================
++*/
++void R_BuildSurfaces (model_t *mod)
++{
++	int			i, j, k, n, x, y, z, numstyles, smax, tmax, ls, lt, size;
++	unsigned short	*elist, *ecache;
++	byte		*data;
++	msurface_t	*surf;
++	mvertex_t	*v;
++	mtexinfo_t	*tex;
++	gxsurf_t	*gx;
++	float		st[MAX_SURFVERTS][2], mins[2], base[2];
++	unsigned	*out;
++	unsigned short	*verts, start[MAX_SURFVERTS * 2];
++	byte		*light;
++
++	for (i = 0; i < mod->numplanes; i++)
++	{
++		for (j = 0; j < 3; j++)
++			mod->planes[i].inormal[j] = mod->planes[i].normal[j] * 16384;
++		mod->planes[i].idist = mod->planes[i].dist * (VERTEX_SCALE * 16384);
++	}
++	for (i = 0, tex = mod->texinfo; i < mod->numtexinfo; i++, tex++)
++	{
++		for (j = 0; j < 2; j++)
++		{
++			for (k = 0; k < 3; k++)
++				tex->ivecs[j][k] = tex->vecs[j][k] * (32768 / VERTEX_SCALE);
++			tex->ivecs[j][3] = tex->vecs[j][3] * 32768;
++		}
++	}
++
++	out = mod->gxvertexes = Hunk_AllocName (mod->numvertexes * 8, "gxverts");
++	for (i = 0, v = mod->vertexes; i < mod->numvertexes; i++, v++)
++	{
++		x = CLAMP (-32768, (int) (v->position[0] * VERTEX_SCALE), 32767);
++		y = CLAMP (-32768, (int) (v->position[1] * VERTEX_SCALE), 32767);
++		z = CLAMP (-32768, (int) (v->position[2] * VERTEX_SCALE), 32767);
++		*out++ = VERTEX_PACK (x, y);
++		*out++ = z & 0xffff;
++	}
++
++	elist = R_EdgeTJunctions (mod, &ecache);
++
++	// all surfaces in one allocation, the hunk rounds each up to 16 bytes
++	size = 0;
++	for (i = 0, surf = mod->surfaces; i < mod->numsurfaces; i++, surf++)
++		size += R_SurfaceSize (surf, R_SurfaceVerts (mod, surf, elist, ecache, NULL));
++	data = Hunk_AllocName (size, "gxsurf");
++
++	for (i = 0, surf = mod->surfaces; i < mod->numsurfaces; i++, surf++)
++	{
++		n = R_SurfaceVerts (mod, surf, elist, ecache, NULL);
++		tex = surf->texinfo;
++		numstyles = R_SurfaceStyles (surf);
++
++		gx = surf->gx = (gxsurf_t *)data;
++		data += R_SurfaceSize (surf, n);
++		gx->numverts = n;
++		gx->numstyles = numstyles;
++		verts = GX_VERTS (gx);
++		light = GX_LIGHT (gx);
++
++		mins[0] = mins[1] = 999999;
++		R_SurfaceVerts (mod, surf, elist, ecache, start);
++		memcpy (start + n, start, n * sizeof(*start));
++		k = R_StripStart (mod, surf, start, n);
++		memcpy (verts, start + k, n * sizeof(*verts));
++		for (j = 0; j < n; j++)
++		{
++			v = &mod->vertexes[verts[j]];
++			for (k = 0; k < 2; k++)
++			{
++				st[j][k] = DotProduct (v->position, tex->vecs[k]) + tex->vecs[k][3];
++				if (st[j][k] < mins[k])
++					mins[k] = st[j][k];
++			}
++		}
++
++		// start near 0, the hardware only takes 12 bits of texels
++		base[0] = floorf (mins[0] / tex->texture->width) * tex->texture->width;
++		base[1] = floorf (mins[1] / tex->texture->height) * tex->texture->height;
++
++		smax = (surf->extents[0] >> 4) + 1;
++		tmax = (surf->extents[1] >> 4) + 1;
++		for (j = 0; j < n; j++)
++		{
++			x = CLAMP (-32768, (int) ((st[j][0] - base[0]) * ST_SCALE), 32767);
++			y = CLAMP (-32768, (int) ((st[j][1] - base[1]) * ST_SCALE), 32767);
++			gx->st[j] = TEXTURE_PACK (x, y);
++
++			ls = CLAMP (0, (int) ((st[j][0] - surf->texturemins[0]) * (1.0f / 16) + 0.5f), smax - 1);
++			lt = CLAMP (0, (int) ((st[j][1] - surf->texturemins[1]) * (1.0f / 16) + 0.5f), tmax - 1);
++			for (k = 0; k < numstyles; k++)
++				light[k * n + j] = surf->samples[k * smax * tmax + lt * smax + ls];
++		}
++	}
++}
++
++/*
++================
++R_SurfaceLight
++
++Called by RecursiveLightPoint for the light at texture position ds, dt of
++a world surface: the vertex light of its nearest vertex
++================
++*/
++int R_SurfaceLight (msurface_t *surf, int ds, int dt)
++{
++	gxsurf_t	*gx = surf->gx;
++	mtexinfo_t	*tex = surf->texinfo;
++	unsigned	*pos;
++	vec3_t		v;
++	float		s, t, d, best = 1e30;
++	int			i, k, nearest = 0, l = 0;
++
++	if (!gx->numstyles)
++		return 0;
++
++	for (i = 0; i < gx->numverts; i++)
++	{
++		pos = cl.worldmodel->gxvertexes + GX_VERTS (gx)[i] * 2;
++		v[0] = (short) (pos[0] & 0xffff) * (1.0f / VERTEX_SCALE);
++		v[1] = (short) (pos[0] >> 16) * (1.0f / VERTEX_SCALE);
++		v[2] = (short) (pos[1] & 0xffff) * (1.0f / VERTEX_SCALE);
++		s = DotProduct (v, tex->vecs[0]) + tex->vecs[0][3] - surf->texturemins[0] - ds;
++		t = DotProduct (v, tex->vecs[1]) + tex->vecs[1][3] - surf->texturemins[1] - dt;
++		d = s * s + t * t;
++		if (d < best)
++		{
++			best = d;
++			nearest = i;
++		}
++	}
++
++	for (k = 0; k < gx->numstyles; k++)
++		l += GX_LIGHT (gx)[k * gx->numverts + nearest] * d_lightstylevalue[surf->styles[k]];
++	return l >> 8;
++}
++
++/*
++===============
++R_TextureAnimation
++
++Returns the proper texture for a given time and base texture
++===============
++*/
++texture_t *R_TextureAnimation (texture_t *base)
++{
++	int		reletive;
++	int		count;
++
++	if (currententity->frame)
++	{
++		if (base->alternate_anims)
++			base = base->alternate_anims;
++	}
++
++	if (!base->anim_total)
++		return base;
++
++	reletive = (int)(cl.time*10) % base->anim_total;
++
++	count = 0;
++	while (base->anim_min > reletive || base->anim_max <= reletive)
++	{
++		base = base->anim_next;
++		if (!base)
++			Sys_Error ("R_TextureAnimation: broken cycle");
++		if (++count > 100)
++			Sys_Error ("R_TextureAnimation: infinite cycle");
++	}
++
++	return base;
++}
++
++HOT_CODE static int R_Sqrt (int n)
++{
++	int	root = 0, bit = 1 << 30;
++
++	while (bit > n)
++		bit >>= 2;
++	for (; bit; bit >>= 2)
++	{
++		if (n >= root + bit)
++		{
++			n -= root + bit;
++			root = (root >> 1) + bit;
++		}
++		else
++			root >>= 1;
++	}
++	return root;
++}
++
++// Adds the dynamic lights that touch a surface to its vertex light
++HOT_CODE static void R_AddDynamicLights (model_t *mod, msurface_t *surf, int *vlight)
++{
++	gxsurf_t	*gx = surf->gx;
++	unsigned short	*verts = GX_VERTS (gx);
++	unsigned	*pos;
++	int			i, k, x, y, z, d, *dl;
++
++	for (k = 0; k < MAX_DLIGHTS; k++)
++	{
++		if (!(surf->dlightbits & (1 << k)))
++			continue;
++		dl = r_dlight_i[k];
++		for (i = 0; i < gx->numverts; i++)
++		{
++			pos = mod->gxvertexes + verts[i] * 2;
++			x = ((short) (pos[0] & 0xffff) >> 3) - dl[0];
++			y = ((short) (pos[0] >> 16) >> 3) - dl[1];
++			z = ((short) (pos[1] & 0xffff) >> 3) - dl[2];
++			d = x * x + y * y + z * z;
++			if (d < dl[3] * dl[3])
++				vlight[i] += dl[3] - R_Sqrt (d);
++		}
++	}
++}
++
++static void R_EmitSurface (model_t *mod, gxsurf_t *gx, u16 *color, unsigned *st);
++
++// r_fullbright for this frame, without a float compare for every surface
++static qboolean r_fullbright_on;
++
++// The vertex colors of a surface from its light styles and the dynamic lights.
++// Most have one style and no dynamic light, their light goes to the color
++// table straight away.
++HOT_CODE static void R_SurfaceColors (model_t *mod, msurface_t *surf, u16 *color)
++{
++	gxsurf_t	*gx = surf->gx;
++	int			n = gx->numverts, i, k, l, sv[MAXLIGHTMAPS], vlight[MAX_SURFVERTS];
++	byte		*light = GX_LIGHT (gx);
++	// the world's surfaces are marked by R_PushDlights
++	qboolean	dlit = surf->dlightframe == r_framecount && mod == cl.worldmodel;
++
++	if (surf->flags & SURF_DRAWTILED || r_fullbright_on)
++	{
++		for (i = 0; i < n; i++)
++			color[i] = GRAY (GX_NORMAL_LIGHT);
++		return;
++	}
++	for (k = 0; k < gx->numstyles; k++)
++		sv[k] = d_lightstylevalue[surf->styles[k]];
++	if (gx->numstyles == 1 && !dlit)
++	{
++		for (i = 0; i < n; i++)
++			color[i] = gx_light[MIN (light[i] * sv[0] >> 8, 511)];
++		return;
++	}
++	for (i = 0; i < n; i++)
++	{
++		for (k = 0, l = 0; k < gx->numstyles; k++)
++			l += light[k * n + i] * sv[k];
++		vlight[i] = l >> 8;
++	}
++	if (dlit)
++		R_AddDynamicLights (mod, surf, vlight);
++	for (i = 0; i < n; i++)
++		color[i] = gx_light[MIN (vlight[i], 511)];
++}
++
++static void R_DrawGXSurface (model_t *mod, msurface_t *surf)
++{
++	u16	color[MAX_SURFVERTS];
++
++	R_SurfaceColors (mod, surf, color);
++	R_EmitSurface (mod, surf->gx, color, surf->gx->st);
++}
++
++// The polygon of a surface as a quad strip zig-zagging across it: 1 0, 2 n-1,
++// 3 n-2, ... with an odd number of vertices the last quad is a triangle
++HOT_CODE static void R_EmitSurface (model_t *mod, gxsurf_t *gx, u16 *color, unsigned *st)
++{
++	int				i, j, n = gx->numverts;
++	unsigned short	*verts = GX_VERTS (gx);
++
++#define EMIT(v) \
++	GFX_COLOR = color[v]; \
++	GFX_TEX_COORD = st[v]; \
++	GFX_VERTEX16 = mod->gxvertexes[verts[v] * 2]; \
++	GFX_VERTEX16 = mod->gxvertexes[verts[v] * 2 + 1];
++
++	GFX_BEGIN = GL_QUAD_STRIP;
++	for (i = 1, j = 0; ; )
++	{
++		EMIT (i);
++		EMIT (j);
++		i++;
++		j = j ? j - 1 : n - 1;
++		if (i > j)
++			break;
++		if (i == j)
++		{
++			EMIT (i);
++			EMIT (i);
++			break;
++		}
++	}
++#undef EMIT
++
++	c_brush_polys += (n - 1) / 2;
++}
++
++/*
++================
++R_DrawSkySurfaces
++
++The two sky layers like GLQuake: the texture coordinates follow the
++direction from the eye to each vertex on a flattened sphere, the front
++layer is drawn on the back one with the depth test for equal
++================
++*/
++static void R_DrawSkySurfaces (model_t *mod, texture_t *t)
++{
++	msurface_t	*surf;
++	gxsurf_t	*gx;
++	unsigned	*pos, st[2][MAX_SURFVERTS];
++	u16			color[MAX_SURFVERTS];
++	int			i, x, y, z, len, layer, speed[2];
++
++	for (layer = 0; layer < 2; layer++)
++	{
++		speed[layer] = (int) (realtime * (layer ? 16 : 8)) & 127;
++		speed[layer] <<= 4;
++	}
++	for (i = 0; i < MAX_SURFVERTS; i++)
++		color[i] = GRAY (GX_NORMAL_LIGHT);
++
++	for (surf = t->texturechain; surf; surf = surf->texturechain)
++	{
++		gx = surf->gx;
++		for (i = 0; i < gx->numverts; i++)
++		{
++			pos = mod->gxvertexes + GX_VERTS (gx)[i] * 2;
++			x = ((short) (pos[0] & 0xffff) - modelorg_i[0]) >> 3;
++			y = ((short) (pos[0] >> 16) - modelorg_i[1]) >> 3;
++			z = (((short) (pos[1] & 0xffff) - modelorg_i[2]) >> 3) * 3;
++			// 6*63 texels out on the sphere, in 1/16 texels, with one division
++			len = sqrt32 (x * x + y * y + z * z);
++			len = (6 * 63 * 16 << 12) / (len ? len : 1);
++			x = (x * len) >> 12;
++			y = (y * len) >> 12;
++			st[0][i] = TEXTURE_PACK (speed[0] + x, speed[0] + y);
++			st[1][i] = TEXTURE_PACK (speed[1] + x, speed[1] + y);
++		}
++		for (layer = 0; layer < 2; layer++)
++		{
++			R_BindTexture (t->gxparam[layer], t->gxscale);
++			GFX_POLY_FORMAT = POLY_ALPHA (31) | POLY_CULL_NONE | (layer ? POLY_DEPTH_EQUAL : 0);
++			R_EmitSurface (mod, gx, color, st[layer]);
++		}
++	}
++	GFX_POLY_FORMAT = POLY_ALPHA (31) | POLY_CULL_NONE;
++}
++
++static void R_BindBrushTexture (texture_t *t, msurface_t *surf)
++{
++	R_BindTexture (t->gxparam[0], t->gxscale);
++	if (surf->flags & SURF_DRAWTURB)
++	{
++		// liquids flow slowly, the time wraps at whole repeats of the
++		// texture before the fixed point overflows
++		float	flow = fmodf (cl.time, 256);
++
++		MATRIX_CONTROL = GL_TEXTURE;
++		MATRIX_TRANSLATE = F32 (flow * 2 * 16);
++		MATRIX_TRANSLATE = F32 (flow * 16);
++		MATRIX_TRANSLATE = 0;
++		MATRIX_CONTROL = GL_MODELVIEW;
++	}
++}
++
++static void R_LoadMatrix (float m[4][3], qboolean multiply)
++{
++	int	i, j;
++
++	for (i = 0; i < 4; i++)
++		for (j = 0; j < 3; j++)
++		{
++			if (multiply)
++				MATRIX_MULT4x3 = i < 3 ? F32 (m[i][j]) : R_RoundF32 (m[i][j]);
++			else
++				MATRIX_LOAD4x3 = i < 3 ? F32 (m[i][j]) : R_RoundF32 (m[i][j]);
++		}
++}
++
++// Model to world matrix, for brush models in their scaled vertex units
++static void R_EntityMatrix (entity_t *e, vec3_t angles, float m[4][3])
++{
++	vec3_t	forward, right, up;
++	int		i;
++
++	AngleVectors (angles, forward, right, up);
++	for (i = 0; i < 3; i++)
++	{
++		m[0][i] = forward[i];
++		m[1][i] = -right[i];
++		m[2][i] = up[i];
++		m[3][i] = e->origin[i] * MATRIX_SCALE_W;
++	}
++}
++
++qboolean R_CullBox (vec3_t mins, vec3_t maxs)
++{
++	int		i;
++
++	for (i=0 ; i<4 ; i++)
++		if (BoxOnPlaneSide (mins, maxs, &frustum[i]) == 2)
++			return true;
++	return false;
++}
++
++static void R_DrawBrushModel (entity_t *e)
++{
++	int			i;
++	vec3_t		mins, maxs, temp, forward, right, up;
++	msurface_t	*psurf;
++	float		dot, m[4][3];
++	model_t		*clmodel = e->model;
++	qboolean	rotated;
++	texture_t	*t, *bound;
++
++	rotated = e->angles[0] || e->angles[1] || e->angles[2];
++	if (rotated)
++	{
++		for (i=0 ; i<3 ; i++)
++		{
++			mins[i] = e->origin[i] - clmodel->radius;
++			maxs[i] = e->origin[i] + clmodel->radius;
++		}
++	}
++	else
++	{
++		VectorAdd (e->origin, clmodel->mins, mins);
++		VectorAdd (e->origin, clmodel->maxs, maxs);
++	}
++	if (R_CullBox (mins, maxs))
++		return;
++
++	VectorSubtract (r_origin, e->origin, modelorg);
++	if (rotated)
++	{
++		VectorCopy (modelorg, temp);
++		AngleVectors (e->angles, forward, right, up);
++		modelorg[0] = DotProduct (temp, forward);
++		modelorg[1] = -DotProduct (temp, right);
++		modelorg[2] = DotProduct (temp, up);
++	}
++
++	MATRIX_PUSH = 0;
++	R_EntityMatrix (e, e->angles, m);
++	R_LoadMatrix (m, true);
++
++	psurf = &clmodel->surfaces[clmodel->firstmodelsurface];
++	for (i=0, bound=NULL ; i<clmodel->nummodelsurfaces ; i++, psurf++)
++	{
++		dot = DotProduct (modelorg, psurf->plane->normal) - psurf->plane->dist;
++		if ((psurf->flags & SURF_PLANEBACK) ? dot < BACKFACE_DIST : dot > -BACKFACE_DIST)
++		{
++			// the texture only when it changes, liquids move theirs
++			t = R_TextureAnimation (psurf->texinfo->texture);
++			if (t != bound || (psurf->flags & SURF_DRAWTURB))
++				R_BindBrushTexture (t, psurf);
++			bound = t;
++			R_DrawGXSurface (clmodel, psurf);
++		}
++	}
++
++	MATRIX_POP = 1;
++}
++
++/*
++===============================================================================
++
++WORLD MODEL
++
++===============================================================================
++*/
++
++static void R_MarkLeaves (void)
++{
++	byte	*vis;
++	mnode_t	*node;
++	int		i;
++	static byte	solid[MAX_MAP_LEAFS/8];
++
++	if (r_oldviewleaf == r_viewleaf && !r_novis.value)
++		return;
++
++	r_visframecount++;
++	r_oldviewleaf = r_viewleaf;
++
++	if (r_novis.value)
++	{
++		vis = solid;
++		memset (solid, 0xff, (cl.worldmodel->numleafs+7)>>3);
++	}
++	else
++		vis = Mod_LeafPVS (r_viewleaf, cl.worldmodel);
++
++	for (i=0 ; i<cl.worldmodel->numleafs ; i++)
++	{
++		if (vis[i>>3] & (1<<(i&7)))
++		{
++			node = (mnode_t *)&cl.worldmodel->leafs[i+1];
++			do
++			{
++				if (node->visframe == r_visframecount)
++					break;
++				node->visframe = r_visframecount;
++				node = node->parent;
++			} while (node);
++		}
++	}
++}
++
++/*
++================
++R_CullNode
++
++Frustum test of a node's bounding box in fixed point. Returns the planes its
++children still need testing against, as a node inside a plane is too, or -1
++when it's outside.
++================
++*/
++HOT_CODE static int R_CullNode (mnode_t *node, int clipflags)
++{
++	int		i, *f;
++	short	*mins = node->minmaxs, *maxs = node->minmaxs + 3;
++
++	for (i = 0, f = frustum_i[0]; i < 4; i++, f += 4)
++	{
++		if (!(clipflags & (1 << i)))
++			continue;
++		// the corner furthest along the normal is outside, the whole box is
++		if ((f[0] >= 0 ? maxs[0] : mins[0]) * f[0] + (f[1] >= 0 ? maxs[1] : mins[1]) * f[1] +
++			(f[2] >= 0 ? maxs[2] : mins[2]) * f[2] < f[3])
++			return -1;
++		// the nearest corner is inside, the whole box is
++		if ((f[0] >= 0 ? mins[0] : maxs[0]) * f[0] + (f[1] >= 0 ? mins[1] : maxs[1]) * f[1] +
++			(f[2] >= 0 ? mins[2] : maxs[2]) * f[2] >= f[3])
++			clipflags &= ~(1 << i);
++	}
++	return clipflags;
++}
++
++HOT_CODE static void R_RecursiveWorldNode (mnode_t *node, int clipflags)
++{
++	int			c, dot, front, back;
++	mplane_t	*plane;
++	msurface_t	*surf, **mark;
++	mleaf_t		*pleaf;
++	texture_t	*t;
++	byte		*seen;
++
++	if (node->contents == CONTENTS_SOLID)
++		return;		// solid
++
++	if (node->visframe != r_visframecount)
++		return;
++	if (clipflags && (clipflags = R_CullNode (node, clipflags)) < 0)
++		return;
++
++// if a leaf node, draw stuff
++	if (node->contents < 0)
++	{
++		pleaf = (mleaf_t *)node;
++
++		mark = pleaf->firstmarksurface;
++		c = pleaf->nummarksurfaces;
++
++		if (c)
++		{
++			do
++			{
++				(*mark)->visframe = r_framecount;
++				mark++;
++			} while (--c);
++		}
++
++	// deal with model fragments in this leaf
++		if (pleaf->efrags)
++			R_StoreEfrags (&pleaf->efrags);
++
++		return;
++	}
++
++// node is just a decision point, so go down both sides
++	R_RecursiveWorldNode (node->children[0], clipflags);
++	R_RecursiveWorldNode (node->children[1], clipflags);
++
++// add the surfaces facing us to their texture chain, after the leaves below
++// marked them: one in reach of BACKFACE_DIST has them on the other side
++	c = node->numsurfaces;
++	if (c)
++	{
++		plane = node->plane;
++		dot = plane->inormal[0] * modelorg_i[0] + plane->inormal[1] * modelorg_i[1] +
++			plane->inormal[2] * modelorg_i[2] - plane->idist;
++		front = dot > -BACKFACE_DIST_I;
++		back = dot < BACKFACE_DIST_I;
++		surf = cl.worldmodel->surfaces + node->firstsurface;
++		seen = cl.worldmodel->mapseen + node->firstsurface;
++		for ( ; c ; c--, surf++, seen++)
++		{
++			if (surf->visframe != r_framecount)
++				continue;
++			if (!((surf->flags & SURF_PLANEBACK) ? back : front))
++				continue;		// wrong side
++			*seen = 1;		// for the map
++			t = surf->texinfo->texture;
++			surf->texturechain = t->texturechain;
++			t->texturechain = surf;
++		}
++	}
++}
++
++// The texture of the next world surface chain to draw, the sky's are drawn
++// apart
++static texture_t *R_NextWorldTexture (model_t *mod, int *i)
++{
++	texture_t	*t;
++
++	while (*i <= mod->numtextures)
++	{
++		t = *i < mod->numtextures ? mod->textures[*i] : r_notexture_mip;
++		(*i)++;
++		if (t && t->texturechain)
++			return t;
++	}
++	return NULL;
++}
++
++static void R_DrawWorld (void)
++{
++	int			i, n, numcolors;
++	model_t		*mod = cl.worldmodel;
++	texture_t	*t, *anim;
++	msurface_t	*s;
++	gxsurf_t	*gx;
++
++	currententity = &r_worldentity;
++	VectorCopy (r_origin, modelorg);
++
++	for (i = 0; i < mod->numtextures; i++)
++		if (mod->textures[i])
++			mod->textures[i]->texturechain = NULL;
++	r_notexture_mip->texturechain = NULL;
++
++	for (i = 0; i < 3; i++)
++		modelorg_i[i] = modelorg[i] * VERTEX_SCALE;
++	R_RecursiveWorldNode (mod->nodes, 15);
++
++	// The vertex colors before any surface goes to the hardware: until it
++	// showed the last frame it takes no more than a FIFO full of commands,
++	// this work fills that wait
++	numcolors = 0;
++	for (i = 0; (t = R_NextWorldTexture (mod, &i)); )
++	{
++		if (t->texturechain->flags & SURF_DRAWSKY)
++			continue;
++		for (s = t->texturechain; s; s = s->texturechain)
++		{
++			if (numcolors + s->gx->numverts > MAX_WORLDCOLORS)
++				goto colored;	// the rest work them out as they go
++			R_SurfaceColors (mod, s, world_colors + numcolors);
++			numcolors += s->gx->numverts;
++		}
++	}
++colored:
++
++	for (i = 0, n = 0; (t = R_NextWorldTexture (mod, &i)); )
++	{
++		if (t->texturechain->flags & SURF_DRAWSKY)
++		{
++			R_DrawSkySurfaces (mod, t);
++			continue;
++		}
++		anim = R_TextureAnimation (t);
++		R_BindBrushTexture (anim, t->texturechain);
++		for (s = t->texturechain; s; s = s->texturechain)
++		{
++			gx = s->gx;
++			if (n + gx->numverts <= numcolors)
++				R_EmitSurface (mod, gx, world_colors + n, gx->st);
++			else
++				R_DrawGXSurface (mod, s);
++			n += gx->numverts;
++		}
++	}
++}
++
++/*
++===============================================================================
++
++ALIAS MODELS
++
++===============================================================================
++*/
++
++static trivertx_t *R_AliasFrame (aliashdr_t *paliashdr, mdl_t *pmdl, entity_t *e)
++{
++	int				frame, i, numframes;
++	maliasgroup_t	*paliasgroup;
++	float			*pintervals, fullinterval, targettime, time;
++
++	frame = e->frame;
++	if ((frame >= pmdl->numframes) || (frame < 0))
++		frame = 0;
++
++	if (paliashdr->frames[frame].type == ALIAS_SINGLE)
++		return (trivertx_t *)((byte *)paliashdr + paliashdr->frames[frame].frame);
++
++	paliasgroup = (maliasgroup_t *)((byte *)paliashdr + paliashdr->frames[frame].frame);
++	pintervals = (float *)((byte *)paliashdr + paliasgroup->intervals);
++	numframes = paliasgroup->numframes;
++	fullinterval = pintervals[numframes-1];
++
++	time = cl.time + e->syncbase;
++	targettime = time - ((int)(time / fullinterval)) * fullinterval;
++	for (i=0 ; i<(numframes-1) ; i++)
++		if (pintervals[i] > targettime)
++			break;
++
++	return (trivertx_t *)((byte *)paliashdr + paliasgroup->frames[i].frame);
++}
++
++static int R_AliasSkin (aliashdr_t *paliashdr, mdl_t *pmdl, entity_t *e)
++{
++	int					skinnum, i, numskins;
++	maliasskindesc_t	*pskindesc;
++	maliasskingroup_t	*paliasskingroup;
++	float				*pskinintervals, fullskininterval, skintargettime, skintime;
++
++	skinnum = e->skinnum;
++	if ((skinnum >= pmdl->numskins) || (skinnum < 0))
++		skinnum = 0;
++
++	pskindesc = ((maliasskindesc_t *)((byte *)paliashdr + paliashdr->skindesc)) + skinnum;
++	if (pskindesc->type == ALIAS_SKIN_GROUP)
++	{
++		paliasskingroup = (maliasskingroup_t *)((byte *)paliashdr + pskindesc->skin);
++		pskinintervals = (float *)((byte *)paliashdr + paliasskingroup->intervals);
++		numskins = paliasskingroup->numskins;
++		fullskininterval = pskinintervals[numskins-1];
++		skintime = cl.time + e->syncbase;
++		skintargettime = skintime - ((int)(skintime / fullskininterval)) * fullskininterval;
++		for (i=0 ; i<(numskins-1) ; i++)
++			if (pskinintervals[i] > skintargettime)
++				break;
++		pskindesc = &paliasskingroup->skindescs[i];
++	}
++	return pskindesc->skin;
++}
++
++// R_LightPoint, looked up again when the model moved or a while ago
++static int R_AliasLight (entity_t *e)
++{
++	lightcache_t	*c = &lightcache[((unsigned) e >> 3) % LIGHTCACHE_SIZE];
++
++	if (c->entity != e || !VectorCompare (c->origin, e->origin) ||
++		r_framecount - c->framecount >= LIGHTCACHE_FRAMES)
++	{
++		c->entity = e;
++		VectorCopy (e->origin, c->origin);
++		c->light = R_LightPoint (e->origin);
++		c->framecount = r_framecount;
++	}
++	return c->light;
++}
++
++HOT_CODE static void R_DrawAliasModel (entity_t *e, int minlight)
++{
++	model_t		*clmodel = e->model;
++	aliashdr_t	*paliashdr;
++	mdl_t		*pmdl;
++	trivertx_t	*verts, *v;
++	mtriangle_t	*tris;
++	gxalias_t	*gx;
++	gxtex_t		*tex = NULL;
++	vec3_t		mins, maxs, angles, forward, right, up, dist;
++	float		m[4][3], add, units, *eye;
++	int			i, j, skin, lnum, light, shade, n;
++	unsigned	*st;
++	const u16	*dots;
++
++	paliashdr = Mod_Extradata (clmodel);
++	pmdl = (mdl_t *)((byte *)paliashdr + paliashdr->model);
++
++	for (i = 0; i < 3; i++)
++	{
++		mins[i] = e->origin[i] - pmdl->boundingradius;
++		maxs[i] = e->origin[i] + pmdl->boundingradius;
++	}
++	if (minlight == 0 && R_CullBox (mins, maxs))
++		return;
++
++	gx = clmodel->gxalias;
++	if (!gx || pmdl->numverts > MAXALIASVERTS)
++		return;
++	skin = R_AliasSkin (paliashdr, pmdl, e);
++	for (i = 0; i < gx->numskins; i++)
++		if (gx->skins[i].offset == skin)
++			tex = &gx->skins[i].tex;
++	if (!tex)
++		return;
++
++	// lighting like the software renderer, shaded by the normals like GLQuake
++	light = R_AliasLight (e);
++	if (light < minlight)
++		light = minlight;
++	for (lnum = 0; lnum < r_numdlights; lnum++)
++	{
++		VectorSubtract (e->origin, r_dlights[lnum]->origin, dist);
++		add = r_dlights[lnum]->radius;
++		if (DotProduct (dist, dist) < add * add)
++			light += add - Length (dist);
++	}
++	if (light > 192)
++		light = 192;
++	// 1.0 at 200 like GLQuake, times the 8.8 normal dots
++	shade = light * GX_NORMAL_LIGHT * 256 / 200;
++	dots = gx_dots[((int)(e->angles[1] * (SHADEDOT_QUANT / 360.0))) & (SHADEDOT_QUANT - 1)];
++
++	// the vertices are bytes scaled by the model, sent doubled as 10-bit
++	// vertices, a 64th of the 16-bit ones with one write instead of two. The
++	// "stupid quake bug" flips the pitch of alias models
++	angles[0] = -e->angles[0];
++	angles[1] = e->angles[1];
++	angles[2] = e->angles[2];
++	AngleVectors (angles, forward, right, up);
++	for (i = 0; i < 3; i++)
++	{
++		m[0][i] = forward[i] * pmdl->scale[0] * 32;
++		m[1][i] = -right[i] * pmdl->scale[1] * 32;
++		m[2][i] = up[i] * pmdl->scale[2] * 32;
++		m[3][i] = e->origin[i] + forward[i] * pmdl->scale_origin[0] -
++			right[i] * pmdl->scale_origin[1] + up[i] * pmdl->scale_origin[2];
++	}
++	// straight to eye space, x right, y up, looking down -z, so the position
++	// relative to the eye isn't the difference of two rounded positions. The
++	// gun stays with the view when R_AwayFromLiquid moved the eye
++	units = (e == &cl.viewent ? VIEWMODEL_UNITS : 1) * MATRIX_SCALE_W;
++	eye = e == &cl.viewent ? r_refdef.vieworg : r_origin;
++	VectorSubtract (m[3], eye, m[3]);
++	for (i = 0; i < 4; i++)
++	{
++		VectorCopy (m[i], dist);
++		m[i][0] = DotProduct (dist, vright) * units;
++		m[i][1] = DotProduct (dist, vup) * units;
++		m[i][2] = -DotProduct (dist, vpn) * units;
++	}
++	MATRIX_PUSH = 0;
++	R_LoadMatrix (m, false);
++
++	R_BindTexture (tex->param, tex->scale);
++	GFX_POLY_FORMAT = POLY_ALPHA (31) | POLY_CULL_FRONT;
++
++	// each vertex once, then the triangles
++	verts = R_AliasFrame (paliashdr, pmdl, e);
++	for (i = 0, v = verts; i < pmdl->numverts; i++, v++)
++	{
++		alias_color[i] = GRAY (MIN ((dots[v->lightnormalindex] * shade) >> 16, 31));
++		alias_xyz[i] = (v->v[0] << 1) | (v->v[1] << 11) | (v->v[2] << 21);
++	}
++
++	if (gx->strips)
++	{
++		const u16	*cmd = gx->strips;
++
++		while ((j = *cmd++))
++		{
++			st = *cmd++ ? gx->st : gx->st + pmdl->numverts;
++			GFX_BEGIN = GL_TRIANGLE_STRIP;
++			for (; j; j--)
++			{
++				n = *cmd++;
++				GFX_COLOR = alias_color[n];
++				GFX_TEX_COORD = st[n];
++				GFX_VERTEX10 = alias_xyz[n];
++			}
++		}
++	}
++	else
++	{
++		tris = (mtriangle_t *)((byte *)paliashdr + paliashdr->triangles);
++		GFX_BEGIN = GL_TRIANGLES;
++		for (i = 0; i < pmdl->numtris; i++, tris++)
++		{
++			st = tris->facesfront ? gx->st : gx->st + pmdl->numverts;
++			for (j = 0; j < 3; j++)
++			{
++				n = tris->vertindex[j];
++				GFX_COLOR = alias_color[n];
++				GFX_TEX_COORD = st[n];
++				GFX_VERTEX10 = alias_xyz[n];
++			}
++		}
++	}
++	c_alias_polys += pmdl->numtris;
++
++	GFX_POLY_FORMAT = POLY_ALPHA (31) | POLY_CULL_NONE;
++	MATRIX_POP = 1;
++}
++
++/*
++===============================================================================
++
++SPRITES
++
++===============================================================================
++*/
++
++static mspriteframe_t *R_GetSpriteFrame (entity_t *e)
++{
++	msprite_t		*psprite;
++	mspritegroup_t	*pspritegroup;
++	int				i, numframes, frame;
++	float			*pintervals, fullinterval, targettime, time;
++
++	psprite = e->model->cache.data;
++	frame = e->frame;
++	if ((frame >= psprite->numframes) || (frame < 0))
++		frame = 0;
++
++	if (psprite->frames[frame].type == SPR_SINGLE)
++		return psprite->frames[frame].frameptr;
++
++	pspritegroup = (mspritegroup_t *)psprite->frames[frame].frameptr;
++	pintervals = pspritegroup->intervals;
++	numframes = pspritegroup->numframes;
++	fullinterval = pintervals[numframes-1];
++	time = cl.time + e->syncbase;
++	targettime = time - ((int)(time / fullinterval)) * fullinterval;
++	for (i=0 ; i<(numframes-1) ; i++)
++		if (pintervals[i] > targettime)
++			break;
++	return pspritegroup->frames[i];
++}
++
++static void R_SpriteVertex (vec3_t org, vec3_t up, float u, vec3_t right, float r, int s, int t)
++{
++	int	x, y, z;
++
++	x = (org[0] + up[0] * u + right[0] * r) * VERTEX_SCALE;
++	y = (org[1] + up[1] * u + right[1] * r) * VERTEX_SCALE;
++	z = (org[2] + up[2] * u + right[2] * r) * VERTEX_SCALE;
++	GFX_TEX_COORD = TEXTURE_PACK (s, t);
++	GFX_VERTEX16 = VERTEX_PACK (x, y);
++	GFX_VERTEX16 = z & 0xffff;
++}
++
++static void R_DrawSpriteModel (entity_t *e)
++{
++	mspriteframe_t	*frame;
++	msprite_t		*psprite;
++	gxtex_t			*tex;
++	vec3_t			forward, right, up;
++	int				w, h;
++
++	frame = R_GetSpriteFrame (e);
++	tex = frame->pcachespot;
++	if (!tex)
++		return;
++
++	psprite = e->model->cache.data;
++	if (psprite->type == SPR_ORIENTED)
++		AngleVectors (e->angles, forward, right, up);
++	else
++	{
++		VectorCopy (vup, up);
++		VectorCopy (vright, right);
++	}
++
++	R_BindTexture (tex->param, tex->scale);
++	w = frame->width << 4;
++	h = frame->height << 4;
++	GFX_COLOR = GRAY (GX_NORMAL_LIGHT);
++	GFX_BEGIN = GL_QUADS;
++	R_SpriteVertex (e->origin, up, frame->down, right, frame->left, 0, h);
++	R_SpriteVertex (e->origin, up, frame->up, right, frame->left, 0, 0);
++	R_SpriteVertex (e->origin, up, frame->up, right, frame->right, w, 0);
++	R_SpriteVertex (e->origin, up, frame->down, right, frame->right, w, h);
++}
++
++/*
++===============================================================================
++
++PARTICLES
++
++===============================================================================
++*/
++
++void D_StartParticles (void)
++{
++	int	i;
++
++	for (i = 0; i < 3; i++)
++	{
++		particle_vpn[i] = vpn[i] * 16384;
++		particle_up[i] = vup[i] * 16384;
++		particle_right[i] = vright[i] * 16384;
++	}
++	gx_particles = MIN (MAX_PARTICLES_DRAWN, MIN (GX_POLYGONS - GFX_POLYGON_RAM_USAGE,
++		(GX_VERTICES - GFX_VERTEX_RAM_USAGE) / 3) - GX_RESERVE);
++	GFX_TEX_FORMAT = 0;
++	GFX_BEGIN = GL_TRIANGLES;
++}
++
++HOT_CODE void D_DrawParticle (particle_t *p)
++{
++	int		x, y, z, ux, uy, uz, rx, ry, rz, depth, scale;
++
++	if (gx_particles-- <= 0)
++		return;
++
++	x = p->org[0] * VERTEX_SCALE;
++	y = p->org[1] * VERTEX_SCALE;
++	z = p->org[2] * VERTEX_SCALE;
++
++	// hack a scale up to keep particles from disapearing: 1.5 units and
++	// 0.006 per unit of distance, in 1/8 units times 1.14. Like the software
++	// renderer the ones closer than 8 units are left out and the others are
++	// at most about 4 pixels, close to the eye they would cover the screen.
++	depth = ((x - modelorg_i[0]) * particle_vpn[0] + (y - modelorg_i[1]) * particle_vpn[1] +
++		(z - modelorg_i[2]) * particle_vpn[2]) >> 14;
++	if (depth < 8 * VERTEX_SCALE)
++		return;
++	scale = depth < 20 * VERTEX_SCALE ? 12 : 12 + ((depth * 393) >> 16);	// 0.006 per unit
++	if (scale > depth >> 5)
++		scale = depth >> 5;
++	ux = (particle_up[0] * scale) >> 14;
++	uy = (particle_up[1] * scale) >> 14;
++	uz = (particle_up[2] * scale) >> 14;
++	rx = (particle_right[0] * scale) >> 14;
++	ry = (particle_right[1] * scale) >> 14;
++	rz = (particle_right[2] * scale) >> 14;
++
++	GFX_COLOR = d_8to16table[(int)p->color & 255];
++	GFX_VERTEX16 = VERTEX_PACK (x, y);
++	GFX_VERTEX16 = z & 0xffff;
++	GFX_VERTEX16 = VERTEX_PACK (x + ux, y + uy);
++	GFX_VERTEX16 = (z + uz) & 0xffff;
++	GFX_VERTEX16 = VERTEX_PACK (x + rx, y + ry);
++	GFX_VERTEX16 = (z + rz) & 0xffff;
++}
++
++void D_EndParticles (void)
++{
++}
++
++/*
++===============================================================================
++
++FRAME
++
++===============================================================================
++*/
++
++static int SignbitsForPlane (mplane_t *out)
++{
++	int	bits, j;
++
++	// for fast box on planeside test
++	bits = 0;
++	for (j=0 ; j<3 ; j++)
++	{
++		if (out->normal[j] < 0)
++			bits |= 1<<j;
++	}
++	return bits;
++}
++
++static void R_SetFrustum (void)
++{
++	int		i, j;
++	float	a, sx, cx, sy, cy;
++
++	// the side planes lean in by half the field of view
++	a = r_refdef.fov_x * (float)(M_PI / 360);
++	sx = sinf (a);
++	cx = cosf (a);
++	a = r_refdef.fov_y * (float)(M_PI / 360);
++	sy = sinf (a);
++	cy = cosf (a);
++	for (j = 0; j < 3; j++)
++	{
++		frustum[0].normal[j] = vpn[j] * sx + vright[j] * cx;
++		frustum[1].normal[j] = vpn[j] * sx - vright[j] * cx;
++		frustum[2].normal[j] = vpn[j] * sy + vup[j] * cy;
++		frustum[3].normal[j] = vpn[j] * sy - vup[j] * cy;
++	}
++
++	for (i=0 ; i<4 ; i++)
++	{
++		frustum[i].type = PLANE_ANYZ;
++		frustum[i].dist = DotProduct (r_origin, frustum[i].normal);
++		frustum[i].signbits = SignbitsForPlane (&frustum[i]);
++		frustum_i[i][0] = frustum[i].normal[0] * 16384;
++		frustum_i[i][1] = frustum[i].normal[1] * 16384;
++		frustum_i[i][2] = frustum[i].normal[2] * 16384;
++		frustum_i[i][3] = frustum[i].dist * 16384;
++	}
++}
++
++/*
++================
++R_SetProjection
++
++The perspective, a transposed OpenGL matrix times scale, for eye space in
++units / 512 world units and the near plane at near
++================
++*/
++static void R_SetProjection (float scale, float units, float near)
++{
++	static float	fov_y = -1, f;
++	float			a, b;
++
++	if (r_refdef.fov_y != fov_y)
++	{
++		fov_y = r_refdef.fov_y;
++		f = 1 / tan (fov_y * (float)(M_PI / 360));
++	}
++	a = (FAR_PLANE + near) / (near - FAR_PLANE);
++	b = 2 * FAR_PLANE * near / (near - FAR_PLANE) * units;
++	MATRIX_CONTROL = GL_PROJECTION;
++	MATRIX_LOAD4x4 = F32 (f * 192 / 256 * scale);
++	MATRIX_LOAD4x4 = 0;
++	MATRIX_LOAD4x4 = 0;
++	MATRIX_LOAD4x4 = 0;
++	MATRIX_LOAD4x4 = 0;
++	MATRIX_LOAD4x4 = F32 (f * scale);
++	MATRIX_LOAD4x4 = 0;
++	MATRIX_LOAD4x4 = 0;
++	MATRIX_LOAD4x4 = 0;
++	MATRIX_LOAD4x4 = 0;
++	MATRIX_LOAD4x4 = F32 (a * scale);
++	MATRIX_LOAD4x4 = F32 (-scale);
++	MATRIX_LOAD4x4 = 0;
++	MATRIX_LOAD4x4 = 0;
++	MATRIX_LOAD4x4 = F32 (b * scale);
++	MATRIX_LOAD4x4 = 0;
++	MATRIX_CONTROL = GL_MODELVIEW;
++}
++
++#define	IS_LIQUID(c)	((c) <= CONTENTS_WATER && (c) >= CONTENTS_LAVA)
++
++/*
++================
++R_AwayFromLiquid
++
++Swimming, the eye gets as close as the 1/32 unit view.c keeps it to the
++surface of the liquid. Looking along it the near plane would cut out of
++view all of it below the middle, so the eye goes up or down to dist from
++it: the near plane over the cosine of half the vertical field of view, how
++close the top or bottom edge of the view gets to it, pitched either way.
++Returns whether it moved the eye.
++================
++*/
++static qboolean R_AwayFromLiquid (mleaf_t *leaf, float dist)
++{
++	vec3_t	p;
++	int		dir, i, c;
++	float	lo, hi, mid;
++	qboolean	liquid = IS_LIQUID (leaf->contents);
++
++	// the surface is a side of the leaf, a unit within its bounds
++	if (leaf->minmaxs[2] < r_origin[2] - dist - 1 && leaf->minmaxs[5] > r_origin[2] + dist + 1)
++		return false;
++	for (dir = -1; dir <= 1; dir += 2)
++	{
++		VectorCopy (r_origin, p);
++		p[2] += dir * dist;
++		c = Mod_PointInLeaf (p, cl.worldmodel)->contents;
++		if (c == CONTENTS_SOLID || IS_LIQUID (c) == liquid)
++			continue;
++		// the surface is between lo and hi
++		for (i = 0, lo = 0, hi = dist; i < 6; i++)
++		{
++			mid = (lo + hi) / 2;
++			p[2] = r_origin[2] + dir * mid;
++			if (IS_LIQUID (Mod_PointInLeaf (p, cl.worldmodel)->contents) == liquid)
++				lo = mid;
++			else
++				hi = mid;
++		}
++		r_origin[2] -= dir * (dist - lo);
++		return true;
++	}
++	return false;
++}
++
++void R_SetupFrame (void)
++{
++	static float	fov_x = -1, fov_y, liquid_dist;
++	float	m[4][3];
++	int		i;
++
++	R_AnimateLight ();
++	r_framecount++;
++
++	// the top screen is 4:3, whatever the 2D view rectangle
++	if (r_refdef.fov_x != fov_x)
++	{
++		fov_x = r_refdef.fov_x;
++		fov_y = atan (tan (fov_x * M_PI / 360) * 192 / 256) * 360 / M_PI;
++		liquid_dist = NEAR_PLANE * 512 / cos (fov_y * M_PI / 360) + 0.125f;
++	}
++	r_refdef.fov_y = fov_y;
++
++	VectorCopy (r_refdef.vieworg, r_origin);
++	AngleVectors (r_refdef.viewangles, vpn, vright, vup);
++
++	r_oldviewleaf = r_viewleaf;
++	r_viewleaf = Mod_PointInLeaf (r_origin, cl.worldmodel);
++	if (R_AwayFromLiquid (r_viewleaf, liquid_dist))
++		r_viewleaf = Mod_PointInLeaf (r_origin, cl.worldmodel);
++	V_SetContentsColor (r_viewleaf->contents);
++
++	R_SetProjection (WORLD_W_SCALE, 1, NEAR_PLANE);
++
++	// world to eye space: x right, y up, looking down -z
++	MATRIX_CONTROL = GL_MODELVIEW;
++	for (i = 0; i < 3; i++)
++	{
++		m[i][0] = vright[i];
++		m[i][1] = vup[i];
++		m[i][2] = -vpn[i];
++	}
++	m[3][0] = -DotProduct (r_origin, vright) * MATRIX_SCALE_W;
++	m[3][1] = -DotProduct (r_origin, vup) * MATRIX_SCALE_W;
++	m[3][2] = DotProduct (r_origin, vpn) * MATRIX_SCALE_W;
++	R_LoadMatrix (m, false);
++
++	GFX_POLY_FORMAT = POLY_ALPHA (31) | POLY_CULL_NONE;
++	GFX_PAL_FORMAT = 0;
++
++	r_numdlights = 0;
++	for (i = 0; i < MAX_DLIGHTS; i++)
++		if (cl_dlights[i].die >= cl.time && cl_dlights[i].radius)
++		{
++			r_dlights[r_numdlights++] = &cl_dlights[i];
++			r_dlight_i[i][0] = cl_dlights[i].origin[0];
++			r_dlight_i[i][1] = cl_dlights[i].origin[1];
++			r_dlight_i[i][2] = cl_dlights[i].origin[2];
++			r_dlight_i[i][3] = cl_dlights[i].radius;
++		}
++
++	c_brush_polys = 0;
++	c_alias_polys = 0;
++}
++
++static void R_DrawEntitiesOnList (void)
++{
++	int	i;
++
++	if (!r_drawentities.value)
++		return;
++
++	for (i=0 ; i<cl_numvisedicts ; i++)
++	{
++		currententity = cl_visedicts[i];
++		if (currententity == &cl_entities[cl.viewentity])
++			continue;	// don't draw the player
++
++		switch (currententity->model->type)
++		{
++		case mod_brush:
++			R_DrawBrushModel (currententity);
++			break;
++		case mod_alias:
++			R_DrawAliasModel (currententity, 0);
++			break;
++		case mod_sprite:
++			R_DrawSpriteModel (currententity);
++			break;
++		default:
++			break;
++		}
++	}
++	currententity = &r_worldentity;
++}
++
++// Starts drawing rectangles on the screen, in front of everything
++static void R_BeginScreen (unsigned polyformat, u16 color)
++{
++	int	i;
++
++	// the identity, but with w SCREEN_W
++	MATRIX_CONTROL = GL_PROJECTION;
++	for (i = 0; i < 16; i++)
++		MATRIX_LOAD4x4 = i == 15 ? SCREEN_W : i % 5 ? 0 : 4096;
++	MATRIX_CONTROL = GL_MODELVIEW;
++	MATRIX_IDENTITY = 0;
++	GFX_TEX_FORMAT = 0;
++	GFX_POLY_FORMAT = polyformat;
++	GFX_COLOR = color;
++	GFX_BEGIN = GL_QUADS;
++}
++
++// A rectangle of whole pixels of the top screen, x and y the top left one
++static void R_ScreenRect (int x, int y, int w, int h)
++{
++	int	x1 = x * SCREEN_W / 128 - SCREEN_W, x2 = (x + w) * SCREEN_W / 128 - SCREEN_W;
++	int	y1 = SCREEN_W - (y * SCREEN_W + 95) / 96, y2 = SCREEN_W - ((y + h) * SCREEN_W + 95) / 96;
++
++	GFX_VERTEX16 = VERTEX_PACK (x1, y1);
++	GFX_VERTEX16 = 0;
++	GFX_VERTEX16 = VERTEX_PACK (x2, y1);
++	GFX_VERTEX16 = 0;
++	GFX_VERTEX16 = VERTEX_PACK (x2, y2);
++	GFX_VERTEX16 = 0;
++	GFX_VERTEX16 = VERTEX_PACK (x1, y2);
++	GFX_VERTEX16 = 0;
++}
++
++static void R_DrawViewModel (void)
++{
++	if (!r_drawviewmodel.value || !r_drawentities.value || chase_active.value)
++		return;
++	if (cl.items & IT_INVISIBILITY)
++		return;
++	if (cl.stats[STAT_HEALTH] <= 0)
++		return;
++	currententity = &cl.viewent;
++	if (!currententity->model)
++		return;
++	// always give some light on gun, in the finer units of its matrix
++	R_SetProjection (1, VIEWMODEL_UNITS, VIEWMODEL_NEAR);
++	R_DrawAliasModel (currententity, 24);
++	R_SetProjection (WORLD_W_SCALE, 1, NEAR_PLANE);
++	currententity = &r_worldentity;
++}
++
++/*
++================
++R_DrawCrosshair
++
++A cross of 7 by 7 pixels around the pixel right below the middle of the
++view, in front of everything. It's translucent, though as good as opaque,
++the edge marking would outline it.
++================
++*/
++static void R_DrawCrosshair (void)
++{
++	int	x = 256 / 2 + (int) cl_crossx.value, y = 192 / 2 + (int) cl_crossy.value;
++
++	if (!crosshair.value)
++		return;
++
++	R_BeginScreen (POLY_ALPHA (30) | POLY_CULL_NONE | POLY_ID (2), RGB15 (31, 31, 31));
++	R_ScreenRect (x - 3, y, 7, 1);
++	R_ScreenRect (x, y - 3, 1, 3);
++	R_ScreenRect (x, y + 1, 1, 3);
++}
++
++/*
++================
++R_RenderView
++
++r_refdef must be set before the first call
++================
++*/
++// The menu is on the top screen over the view, which is darker behind it
++static void R_DimView (void)
++{
++	R_BeginScreen (POLY_ALPHA (DIM_ALPHA) | POLY_CULL_NONE | POLY_ID (1), 0);
++	R_ScreenRect (0, 0, 256, 192);
++}
++
++void R_RenderView (void)
++{
++	double	time1 = 0;
++
++	if (!r_worldentity.model || !cl.worldmodel)
++		Sys_Error ("R_RenderView: NULL worldmodel");
++	r_fullbright_on = r_fullbright.value != 0;
++
++	if (r_speeds.value)
++		time1 = Sys_FloatTime ();
++
++	R_SetupFrame ();
++	R_SetFrustum ();
++	R_MarkLeaves ();
++	R_DrawWorld ();
++	R_DrawEntitiesOnList ();
++	// the particles are left out first when a frame has too many polygons
++	R_DrawViewModel ();
++	R_DrawParticles ();
++	R_DrawCrosshair ();
++	if (key_dest == key_menu || scr_drawdialog)
++		R_DimView ();
++	VID_Flush3D ();
++
++	if (r_speeds.value)
++		Con_Printf ("%3i ms  %4i wpoly %4i epoly\n", (int)((Sys_FloatTime () - time1)*1000),
++			c_brush_polys, c_alias_polys);
++}
++
++/*
++===============================================================================
++
++INIT
++
++===============================================================================
++*/
++
++void R_Init (void)
++{
++	int		i, j;
++	float	c;
++
++	Cmd_AddCommand ("pointfile", R_ReadPointFile_f);
++
++	Cvar_RegisterVariable (&r_draworder);
++	Cvar_RegisterVariable (&r_speeds);
++	Cvar_RegisterVariable (&r_timegraph);
++	Cvar_RegisterVariable (&r_graphheight);
++	Cvar_RegisterVariable (&r_drawflat);
++	Cvar_RegisterVariable (&r_ambient);
++	Cvar_RegisterVariable (&r_clearcolor);
++	Cvar_RegisterVariable (&r_waterwarp);
++	Cvar_RegisterVariable (&r_fullbright);
++	Cvar_RegisterVariable (&r_drawentities);
++	Cvar_RegisterVariable (&r_drawviewmodel);
++	Cvar_RegisterVariable (&r_aliasstats);
++	Cvar_RegisterVariable (&r_dspeeds);
++	Cvar_RegisterVariable (&r_reportsurfout);
++	Cvar_RegisterVariable (&r_maxsurfs);
++	Cvar_RegisterVariable (&r_numsurfs);
++	Cvar_RegisterVariable (&r_reportedgeout);
++	Cvar_RegisterVariable (&r_maxedges);
++	Cvar_RegisterVariable (&r_numedges);
++	Cvar_RegisterVariable (&r_aliastransbase);
++	Cvar_RegisterVariable (&r_aliastransadj);
++	Cvar_RegisterVariable (&r_novis);
++
++	R_InitParticles ();
++	vramSetBankH (VRAM_H_LCD);	// world_colors
++	vramSetBankI (VRAM_I_LCD);	// modeltex
++
++	// light 128 is the texture as it is, up to twice as bright
++	for (i = 0; i < 512; i++)
++	{
++		j = MIN (i * GX_NORMAL_LIGHT / 128, 31);
++		gx_light[i] = RGB15 (j, j, j);
++	}
++
++	// the sprites' black can't be the hardware's transparent 0
++	c = 1e9;
++	for (i = 1; i < 256; i++)
++	{
++		j = host_basepal[i * 3] + host_basepal[i * 3 + 1] + host_basepal[i * 3 + 2];
++		if (j < c)
++		{
++			c = j;
++			tex_black = i;
++		}
++	}
++
++	D_FlushCaches ();
++	R_UploadNoTexture ();
++}
++
++void R_InitSky (texture_t *mt)
++{
++}
++
++/*
++===============
++R_NewMap
++===============
++*/
++void R_NewMap (void)
++{
++	int		i;
++
++	for (i=0 ; i<256 ; i++)
++		d_lightstylevalue[i] = 264;		// normal light value
++
++	memset (&r_worldentity, 0, sizeof(r_worldentity));
++	r_worldentity.model = cl.worldmodel;
++
++	// clear out efrags in case the level hasn't been reloaded
++	for (i=0 ; i<cl.worldmodel->numleafs ; i++)
++		cl.worldmodel->leafs[i].efrags = NULL;
++
++	r_viewleaf = NULL;
++	r_oldviewleaf = NULL;
++	R_ClearParticles ();
++
++	R_UploadModelTextures ();
++	// the temporary memory the skins were read into goes to the cache
++	Hunk_FreeTemp ();
++}
++
++/*
++================
++R_SetVrect
++
++The 3D view is on the top screen, on the touch screen all of the 2D drawing
++below the status bar is the view, the touch screen keeps it drawn
++================
++*/
++void R_SetVrect (vrect_t *pvrectin, vrect_t *pvrect, int lineadj)
++{
++	pvrect->x = 0;
++	pvrect->y = lineadj;
++	pvrect->width = pvrectin->width;
++	pvrect->height = pvrectin->height - lineadj;
++}
++
++void R_ViewChanged (vrect_t *pvrect, int lineadj, float aspect)
++{
++	R_SetVrect (pvrect, &r_refdef.vrect, lineadj);
++}
++
++void D_EnableBackBufferAccess (void)
++{
++}
++
++void D_DisableBackBufferAccess (void)
++{
++}
++
++void D_UpdateRects (vrect_t *prect)
++{
++}
+diff --git a/WinQuake/vid.h b/WinQuake/vid.h
+index 5fb7e0e..eeb4139 100644
+--- a/WinQuake/vid.h
++++ b/WinQuake/vid.h
+@@ -70,6 +70,9 @@ void	VID_Init (unsigned char *palette);
+ // the palette data will go away after the call, so it must be copied off if
+ // the video driver will need it again
+ 
++void	VID_Flush3D (void);
++// shows the 3D frame on the top screen from the next vblank
++
+ // the text layer of the top screen, for messages and center prints
+ #define	TEXT_WIDTH		256
+ #define	TEXT_HEIGHT		192
+diff --git a/WinQuake/view.c b/WinQuake/view.c
+index ececf8c..a0d4434 100644
+--- a/WinQuake/view.c
++++ b/WinQuake/view.c
+@@ -1052,13 +1052,6 @@ void V_RenderView (void)
+ 	{
+ 		R_RenderView ();
+ 	}
+-
+-#ifndef GLQUAKE
+-	if (crosshair.value)
+-		Draw_Character (scr_vrect.x + scr_vrect.width/2 + cl_crossx.value, 
+-			scr_vrect.y + scr_vrect.height/2 + cl_crossy.value, '+');
+-#endif
+-		
+ }
+ 
+ //============================================================================

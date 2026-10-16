@@ -1,0 +1,51 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Sat, 3 Oct 2026 11:04:39 +0200
+Subject: [PATCH] Answer prompts with the A and B buttons
+
+Prompts ask for the A and B buttons instead of the Y and N keys, and
+yes/no prompts also accept Enter and Backspace, which the buttons send.
+---
+ doomgeneric/d_englsh.h | 4 ++--
+ doomgeneric/m_menu.c   | 6 ++++++
+ 2 files changed, 8 insertions(+), 2 deletions(-)
+
+diff --git a/doomgeneric/d_englsh.h b/doomgeneric/d_englsh.h
+index cfb0572..740cce6 100644
+--- a/doomgeneric/d_englsh.h
++++ b/doomgeneric/d_englsh.h
+@@ -34,7 +34,7 @@
+ //	M_Menu.C
+ //
+ #define PRESSKEY 	"press a key."
+-#define PRESSYN 	"press y or n."
++#define PRESSYN 	"press a or b."
+ #define QUITMSG	"are you sure you want to\nquit this great game?"
+ #define LOADNET 	"you can't do load while in a net game!\n\n"PRESSKEY
+ #define QLOADNET	"you can't quickload during a netgame!\n\n"PRESSKEY
+@@ -60,7 +60,7 @@
+ #define NETEND	"you can't end a netgame!\n\n"PRESSKEY
+ #define ENDGAME	"are you sure you want to end the game?\n\n"PRESSYN
+ 
+-#define DOSY		"(press y to quit to dos.)"
++#define DOSY		"(press a to quit.)"
+ 
+ #define DETAILHI	"High detail"
+ #define DETAILLO	"Low detail"
+diff --git a/doomgeneric/m_menu.c b/doomgeneric/m_menu.c
+index 6df9655..356fe5a 100644
+--- a/doomgeneric/m_menu.c
++++ b/doomgeneric/m_menu.c
+@@ -1626,6 +1626,12 @@ boolean M_Responder (event_t* ev)
+     {
+ 	if (messageNeedsInput)
+         {
++            // Let pads answer prompts with their confirm and back buttons
++            if (key == KEY_ENTER)
++                key = key_menu_confirm;
++            else if (key == KEY_BACKSPACE)
++                key = key_menu_abort;
++
+             if (key != ' ' && key != KEY_ESCAPE
+              && key != key_menu_confirm && key != key_menu_abort)
+             {

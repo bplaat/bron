@@ -1,0 +1,349 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Sat, 3 Oct 2026 11:04:45 +0200
+Subject: [PATCH] Add DS video
+
+The 320x200 frame is rendered into main RAM and shown from one of two
+8bpp bitmap backgrounds in VRAM, page flipped on vblank. The top screen
+shows the middle 256x192 of it 1:1, frames with a picture for the whole
+screen are scaled by the affine background hardware instead, smoothed by
+a half pixel offset second layer that is alpha blended on top. Doom's
+palette lives in the hardware palette, latched with the page flip.
+
+DMA copies the frame to VRAM a row at a time, each row started from the
+interrupt of the last (from ITCM, as the DMA has the main RAM bus),
+while the game runs its next tic. The page flips once the copy is done.
+I_StartDisplay(), called before D_Display and every wipe step draws,
+waits for the copies of both screens. The data cache is written back
+first, DMA reads main RAM.
+---
+ doomgeneric/d_main.c     |   3 +
+ doomgeneric/i_ndsvideo.c | 283 +++++++++++++++++++++++++++++++++++++++
+ doomgeneric/i_video.h    |   3 +
+ 3 files changed, 289 insertions(+)
+ create mode 100644 doomgeneric/i_ndsvideo.c
+
+diff --git a/doomgeneric/d_main.c b/doomgeneric/d_main.c
+index 34a26af..5fa2eac 100644
+--- a/doomgeneric/d_main.c
++++ b/doomgeneric/d_main.c
+@@ -184,6 +184,8 @@ void D_Display (void)
+ 
+     if (nodrawers)
+     	return;                    // for comparative timing / profiling
++
++    I_StartDisplay ();
+ 		
+     redrawsbar = false;
+     
+@@ -325,6 +327,7 @@ void D_Display (void)
+ 	} while (tics <= 0);
+         
+ 	wipestart = nowtime;
++	I_StartDisplay ();
+ 	done = wipe_ScreenWipe(wipe_Melt
+ 			       , 0, 0, SCREENWIDTH, SCREENHEIGHT, tics);
+ 	I_UpdateNoBlit ();
+diff --git a/doomgeneric/i_ndsvideo.c b/doomgeneric/i_ndsvideo.c
+new file mode 100644
+index 0000000..0353795
+--- /dev/null
++++ b/doomgeneric/i_ndsvideo.c
+@@ -0,0 +1,283 @@
++//
++// Nintendo DS video backend
++//
++// The 320x200 Doom frame is rendered into main RAM, copied into one of two
++// 8bpp bitmap backgrounds in VRAM banks A/B and page flipped on vblank. The
++// top screen shows the middle 256x192 of it at 1:1 (V_VISIBLE*): the view
++// fills that part at its resolution, menus and texts are drawn into it.
++// Frames with a picture for the whole screen (title, intermission maps, end
++// pictures) are scaled to the top screen by the affine background hardware
++// instead, smoothed by a second background sampling half a pixel further
++// and alpha blended on top. Doom's palette lives in the hardware palette,
++// latched with the page flip, so palette effects cost nothing.
++//
++
++#include <nds.h>
++#include <string.h>
++
++#include "i_video.h"
++#include "m_config.h"
++#include "tables.h"
++#include "v_video.h"
++#include "z_zone.h"
++
++#include "doomgeneric_nds.h"
++
++#define FB_STRIDE 512
++
++// Scale factors in 8.8 fixed point: 320 -> 256 and 200 -> 192
++#define SCALE_X ((SCREENWIDTH << 8) / 256)
++#define SCALE_Y ((SCREENHEIGHT << 8) / 192)
++
++byte *I_VideoBuffer = NULL;
++boolean screenvisible = true;
++boolean screensaver_mode = false;
++int usegamma = 0;
++int usemouse = 1;
++float mouse_acceleration = 1.0f;
++int mouse_threshold = 0;
++
++// The palette Doom sets, and the one shown with the next page
++static u16 palette[256] __attribute__((aligned(4)));
++static u16 page_palette[256] __attribute__((aligned(4)));
++static volatile boolean palette_set, page_palette_dirty;
++static volatile int shown_page, pending_page = -1;
++static volatile boolean shown_scaled = true, pending_scaled = true;
++
++// DMA copies a frame to VRAM a row at a time, each row started from the
++// interrupt of the last, while the game goes on with the next frame
++#define COPY_DMA 2
++static const byte *copy_src;
++static byte *copy_dst;
++static int copy_width, copy_page;
++static volatile int copy_rows;
++
++// Shows the visible part at 1:1, or the whole frame scaled, in 8.8 fixed point
++static void SetTransform(boolean scaled)
++{
++    int dx = scaled ? SCALE_X : 1 << 8;
++    int dy = scaled ? SCALE_Y : 1 << 8;
++    int x = scaled ? 0 : V_VISIBLEX << 8;
++    int y = scaled ? 0 : V_VISIBLEY << 8;
++
++    REG_BG3PA = REG_BG2PA = dx;
++    REG_BG3PB = REG_BG2PB = 0;
++    REG_BG3PC = REG_BG2PC = 0;
++    REG_BG3PD = REG_BG2PD = dy;
++    REG_BG3X = x;
++    REG_BG3Y = y;
++    // The smoothing layer samples half an output pixel further, at 1:1 it
++    // isn't shown
++    REG_BG2X = x + dx / 2;
++    REG_BG2Y = y + dy / 2;
++    if (scaled)
++    {
++        REG_DISPCNT |= DISPLAY_BG2_ACTIVE;
++        REG_BLDCNT = BLEND_ALPHA | BLEND_SRC_BG2 | BLEND_DST_BG3;
++        REG_BLDALPHA = 8 | (8 << 8);
++    }
++    else
++    {
++        REG_DISPCNT &= ~DISPLAY_BG2_ACTIVE;
++        REG_BLDCNT = BLEND_NONE;
++    }
++}
++
++// From ITCM, so the interrupts don't fetch code from main RAM while the
++// DMA has the bus
++HOT_CODE static void StartRowCopy(void)
++{
++    DMA_SRC(COPY_DMA) = (u32) copy_src;
++    DMA_DEST(COPY_DMA) = (u32) copy_dst;
++    DMA_CR(COPY_DMA) = DMA_COPY_WORDS | DMA_IRQ_REQ | (copy_width >> 2);
++}
++
++HOT_CODE static void CopyRowDone(void)
++{
++    if (--copy_rows > 0)
++    {
++        copy_src += SCREENWIDTH;
++        copy_dst += FB_STRIDE;
++        StartRowCopy();
++    }
++    else
++        pending_page = copy_page;
++}
++
++// The copy reads the visible part of I_VideoBuffer, drawing into it waits
++static void WaitForCopy(void)
++{
++    while (copy_rows > 0)
++        ;
++}
++
++static void VBlankHandler(void)
++{
++    if (pending_page < 0)
++        return;
++    // A CPU copy, DMA would miss palette writes still in the data cache
++    if (page_palette_dirty)
++    {
++        memcpy(BG_PALETTE, page_palette, sizeof(page_palette));
++        page_palette_dirty = false;
++    }
++    REG_BG2CNT = (REG_BG2CNT & ~(31 << MAP_BASE_SHIFT)) | BG_MAP_BASE(pending_page * 8);
++    REG_BG3CNT = (REG_BG3CNT & ~(31 << MAP_BASE_SHIFT)) | BG_MAP_BASE(pending_page * 8);
++    if (pending_scaled != shown_scaled)
++    {
++        SetTransform(pending_scaled);
++        shown_scaled = pending_scaled;
++    }
++    shown_page = pending_page;
++    pending_page = -1;
++}
++
++// Sets up the top screen, also used for the splash before Doom starts
++void I_NDS_InitVideo(void)
++{
++    int bg;
++
++    videoSetMode(MODE_5_2D);
++    vramSetBankA(VRAM_A_MAIN_BG_0x06000000);
++    vramSetBankB(VRAM_B_MAIN_BG_0x06020000);
++    memset(BG_GFX, 0, 2 * FB_STRIDE * 256);
++    for (bg = 2; bg <= 3; ++bg)
++        bgSetPriority(bgInit(bg, BgType_Bmp8, BgSize_B8_512x256, 0, 0), bg == 2 ? 0 : 1);
++    SetTransform(true);
++}
++
++// Shows a 320x200 Doom palette image on the top screen, scaled
++void I_NDS_ShowSplash(const byte *pixels, const byte *playpal)
++{
++    int y, i;
++
++    for (i = 0; i < 256; ++i)
++        BG_PALETTE[i] = RGB15(playpal[i * 3] >> 3, playpal[i * 3 + 1] >> 3, playpal[i * 3 + 2] >> 3);
++    for (y = 0; y < SCREENHEIGHT; ++y)
++        memcpy((byte *) BG_BMP_RAM(0) + y * FB_STRIDE, pixels + y * SCREENWIDTH, SCREENWIDTH);
++}
++
++void I_InitGraphics(void)
++{
++    I_VideoBuffer = Z_Malloc(SCREENWIDTH * SCREENHEIGHT, PU_STATIC, NULL);
++    memset(I_VideoBuffer, 0, SCREENWIDTH * SCREENHEIGHT);
++
++    I_NDS_InitVideo();
++    irqSet(IRQ_VBLANK, VBlankHandler);
++    irqEnable(IRQ_VBLANK);
++    irqSet(IRQ_DMA0 << COPY_DMA, CopyRowDone);
++    irqEnable(IRQ_DMA0 << COPY_DMA);
++
++    NDS_InitSubScreen();
++}
++
++void I_ShutdownGraphics(void)
++{
++    WaitForCopy();
++    irqClear(IRQ_VBLANK);
++    irqClear(IRQ_DMA0 << COPY_DMA);
++}
++
++void I_StartFrame(void)
++{
++}
++
++void I_StartTic(void)
++{
++    NDS_PollInput();
++}
++
++// Drawing waits until the last frames are copied to VRAM
++void I_StartDisplay(void)
++{
++    WaitForCopy();
++    NDS_WaitSubScreen();
++}
++
++void I_UpdateNoBlit(void)
++{
++}
++
++void I_FinishUpdate(void)
++{
++    int y, x;
++
++    // Wait until the last frame is shown, the back buffer is then free
++    WaitForCopy();
++    while (pending_page >= 0)
++        threadWaitForVBlank();
++
++    if (palette_set)
++    {
++        memcpy(page_palette, palette, sizeof(palette));
++        palette_set = false;
++        page_palette_dirty = true;
++    }
++    pending_scaled = v_fullscreenpicture;
++
++    // The visible part, or everything when it's shown scaled, is flipped to
++    // once copied. The DMA reads main RAM, the data cache is written back.
++    copy_page = shown_page ^ 1;
++    x = v_fullscreenpicture ? 0 : V_VISIBLEX;
++    y = v_fullscreenpicture ? 0 : V_VISIBLEY;
++    copy_width = v_fullscreenpicture ? SCREENWIDTH : V_VISIBLEW;
++    copy_src = I_VideoBuffer + y * SCREENWIDTH + x;
++    copy_dst = (byte *) BG_BMP_RAM(copy_page * 8) + y * FB_STRIDE + x;
++    DC_FlushAll();
++    copy_rows = v_fullscreenpicture ? SCREENHEIGHT : V_VISIBLEH;
++    StartRowCopy();
++
++    NDS_UpdateSubScreen();
++}
++
++void I_ReadScreen(byte *scr)
++{
++    memcpy(scr, I_VideoBuffer, SCREENWIDTH * SCREENHEIGHT);
++}
++
++void I_SetPalette(byte *doompalette)
++{
++    int i;
++
++    for (i = 0; i < 256; ++i)
++    {
++        int r = gammatable[usegamma][*doompalette++];
++        int g = gammatable[usegamma][*doompalette++];
++        int b = gammatable[usegamma][*doompalette++];
++        palette[i] = RGB15(r >> 3, g >> 3, b >> 3);
++    }
++    palette_set = true;
++}
++
++int I_GetPaletteIndex(int r, int g, int b)
++{
++    int i, best = 0, best_diff = INT_MAX;
++
++    for (i = 0; i < 256; ++i)
++    {
++        int dr = r - ((palette[i] & 31) << 3);
++        int dg = g - (((palette[i] >> 5) & 31) << 3);
++        int db = b - (((palette[i] >> 10) & 31) << 3);
++        int diff = dr * dr + dg * dg + db * db;
++
++        if (diff < best_diff)
++        {
++            best = i;
++            best_diff = diff;
++        }
++    }
++    return best;
++}
++
++void I_BeginRead(void) {}
++void I_EndRead(void) {}
++void I_SetWindowTitle(char *title) {}
++void I_GraphicsCheckCommandLine(void) {}
++void I_SetGrabMouseCallback(grabmouse_callback_t func) {}
++void I_EnableLoadingDisk(void) {}
++void I_DisplayFPSDots(boolean dots_on) {}
++void I_CheckIsScreensaver(void) {}
++
++void I_BindVideoVariables(void)
++{
++}
+diff --git a/doomgeneric/i_video.h b/doomgeneric/i_video.h
+index c8565f4..b98fbc7 100644
+--- a/doomgeneric/i_video.h
++++ b/doomgeneric/i_video.h
+@@ -104,6 +104,9 @@ void I_ShutdownGraphics(void);
+ void I_SetPalette (byte* palette);
+ int I_GetPaletteIndex(int r, int g, int b);
+ 
++// Called before a frame is drawn, the last one may still be read from the
++// screen buffer
++void I_StartDisplay (void);
+ void I_UpdateNoBlit (void);
+ void I_FinishUpdate (void);
+ 

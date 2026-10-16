@@ -1,0 +1,529 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Tue, 6 Oct 2026 07:09:56 +0200
+Subject: [PATCH] Fit in the 4 MiB of the DS
+
+The DS has 4 MiB of RAM in total, so the minimum memory is 2 MiB. It has
+no network play, so there is one client slot instead of at least four,
+512 particles instead of 2048, and with less than 8 MiB the server has
+448 edicts instead of 600, still plenty for the id maps, ED_Alloc checks
+that limit. The pack
+directory, up to 128 KiB, is read into temporary hunk memory instead of
+onto the stack.
+
+The cache holds less than the models of a level, which made it push out
+what was in use:
+
+- The hunk growing into the cache threw out the data in its way, often a
+  model drawn every frame. That data now moves away, what was used the
+  longest ago goes instead when there is no room.
+- An alias model took three times its size while it loaded: the file,
+  the model built from it and its copy in the cache. The file is freed
+  before the copy, else the model pushed out another one drawn every
+  frame, which pushed it out again, e1m3 ran at 2 fps.
+- A driver that loads the sounds that play every frame can let them wait
+  (S_LoadSoundUnused), they and the files they are read from only push
+  out data that wasn't used in the last 10 frames (Cache_AllocUnused,
+  Cache_RoomUnused). A driver that plays straight from
+  the cache is told when data is freed or moved (cache_freehook).
+- The server and client asked for the models of a level one after the
+  other, reading each again as it had been pushed out by the others. For
+  them only the header of an alias model is read (Mod_LoadAliasHeader),
+  what they use is in its model_t, its frames are read when it's drawn.
+  A level loads up to 40% faster.
+---
+ WinQuake/common.c   |  4 +-
+ WinQuake/host.c     |  3 +-
+ WinQuake/model.c    | 71 +++++++++++++++++++++++++--------
+ WinQuake/pr_edict.c |  2 +-
+ WinQuake/quakedef.h |  3 +-
+ WinQuake/r_part.c   |  3 +-
+ WinQuake/snd_mem.c  | 34 +++++++++++++++-
+ WinQuake/sv_main.c  |  3 ++
+ WinQuake/zone.c     | 95 ++++++++++++++++++++++++++++++++++++++-------
+ WinQuake/zone.h     |  4 ++
+ 10 files changed, 183 insertions(+), 39 deletions(-)
+
+diff --git a/WinQuake/common.c b/WinQuake/common.c
+index 6a21f32..38f631c 100644
+--- a/WinQuake/common.c
++++ b/WinQuake/common.c
+@@ -1626,7 +1626,7 @@ pack_t *COM_LoadPackFile (char *packfile)
+ 	int                             numpackfiles;
+ 	pack_t                  *pack;
+ 	int                             packhandle;
+-	dpackfile_t             info[MAX_FILES_IN_PACK];
++	dpackfile_t             *info;
+ 	unsigned short          crc;
+ 
+ 	if (Sys_FileOpenRead (packfile, &packhandle) == -1)
+@@ -1651,6 +1651,8 @@ pack_t *COM_LoadPackFile (char *packfile)
+ 
+ 	newfiles = Hunk_AllocName (numpackfiles * sizeof(packfile_t), "packfile");
+ 
++	// the directory can be 128 KiB, too much for the stack
++	info = Hunk_TempAlloc (header.dirlen);
+ 	Sys_FileSeek (packhandle, header.dirofs);
+ 	Sys_FileRead (packhandle, (void *)info, header.dirlen);
+ 
+diff --git a/WinQuake/host.c b/WinQuake/host.c
+index 603f6b3..6eeafa8 100644
+--- a/WinQuake/host.c
++++ b/WinQuake/host.c
+@@ -189,9 +189,8 @@ void	Host_FindMaxClients (void)
+ 	else if (svs.maxclients > MAX_SCOREBOARD)
+ 		svs.maxclients = MAX_SCOREBOARD;
+ 
++	// the DS has no network play, no slots are kept for more players
+ 	svs.maxclientslimit = svs.maxclients;
+-	if (svs.maxclientslimit < 4)
+-		svs.maxclientslimit = 4;
+ 	svs.clients = Hunk_AllocName (svs.maxclientslimit*sizeof(client_t), "clients");
+ 
+ 	if (svs.maxclients > 1)
+diff --git a/WinQuake/model.c b/WinQuake/model.c
+index ffd9997..75501bd 100644
+--- a/WinQuake/model.c
++++ b/WinQuake/model.c
+@@ -30,6 +30,7 @@ char	loadname[32];	// for hunk tags
+ 
+ void Mod_LoadSpriteModel (model_t *mod, void *buffer);
+ void Mod_LoadBrushModel (model_t *mod, void *buffer);
++void Mod_LoadAliasHeader (model_t *mod, mdl_t *pinmodel);
+ void Mod_LoadAliasModel (model_t *mod, void *buffer);
+ model_t *Mod_LoadModel (model_t *mod, qboolean crash);
+ 
+@@ -38,6 +39,7 @@ byte	mod_novis[MAX_MAP_LEAFS/8];
+ FILE	*mod_file;		// the brush model being loaded
+ int		mod_filebase;
+ byte	*mod_aliasfile;	// the alias model being loaded
++static qboolean	mod_headeronly;	// Mod_ForName needs only the header of an alias model
+ 
+ #define	MAX_MOD_KNOWN	256
+ model_t	mod_known[MAX_MOD_KNOWN];
+@@ -306,6 +308,12 @@ model_t *Mod_LoadModel (model_t *mod, qboolean crash)
+ 	switch (LittleLong(*(unsigned *)stackbuf))
+ 	{
+ 	case IDPOLYHEADER:
++		if (mod_headeronly)
++		{
++			Mod_LoadAliasHeader (mod, (mdl_t *)stackbuf);
++			fclose (mod_file);
++			break;
++		}
+ 	case IDSPRITEHEADER:
+ 		// the others are small, load them in one piece
+ 		fclose (mod_file);
+@@ -340,7 +348,20 @@ model_t *Mod_ForName (char *name, qboolean crash)
+ 
+ 	mod = Mod_FindName (name);
+ 
+-	return Mod_LoadModel (mod, crash);
++// an alias model only needs its header here, what the server and client
++// use is in its model_t, its frames are read when it's drawn (Mod_Extradata):
++// a level's models are more than the cache holds while it loads, so reading
++// them here as well pushed out the ones read just before, every time
++	if (mod->type == mod_alias && mod->needload != NL_NEEDS_LOADED)
++	{
++		mod->needload = NL_PRESENT;
++		return mod;
++	}
++
++	mod_headeronly = true;
++	mod = Mod_LoadModel (mod, crash);
++	mod_headeronly = false;
++	return mod;
+ }
+ 
+ 
+@@ -1479,6 +1500,32 @@ void * Mod_LoadAliasSkinGroup (void * pin, int *pskinindex, int skinsize,
+ }
+ 
+ 
++/*
++=================
++Mod_LoadAliasHeader
++
++What the server and client use of an alias model, in its model_t
++=================
++*/
++void Mod_LoadAliasHeader (model_t *mod, mdl_t *pinmodel)
++{
++	int		version;
++
++	version = LittleLong (pinmodel->version);
++	if (version != ALIAS_VERSION)
++		Sys_Error ("%s has wrong version number (%i should be %i)",
++				 mod->name, version, ALIAS_VERSION);
++
++	mod->type = mod_alias;
++	mod->flags = LittleLong (pinmodel->flags);
++	mod->synctype = LittleLong (pinmodel->synctype);
++	mod->numframes = LittleLong (pinmodel->numframes);
++
++// FIXME: do this right
++	mod->mins[0] = mod->mins[1] = mod->mins[2] = -16;
++	mod->maxs[0] = mod->maxs[1] = mod->maxs[2] = 16;
++}
++
+ /*
+ =================
+ Mod_LoadAliasModel
+@@ -1492,7 +1539,7 @@ void Mod_LoadAliasModel (model_t *mod, void *buffer)
+ 	aliashdr_t			*pheader;
+ 	mtriangle_t			*ptri;
+ 	dtriangle_t			*pintriangles;
+-	int					version, numframes, numskins;
++	int					numframes, numskins;
+ 	int					size;
+ 	daliasframetype_t	*pframetype;
+ 	daliasskintype_t	*pskintype;
+@@ -1505,10 +1552,7 @@ void Mod_LoadAliasModel (model_t *mod, void *buffer)
+ 	mod_aliasfile = buffer;
+ 	pinmodel = (mdl_t *)buffer;
+ 
+-	version = LittleLong (pinmodel->version);
+-	if (version != ALIAS_VERSION)
+-		Sys_Error ("%s has wrong version number (%i should be %i)",
+-				 mod->name, version, ALIAS_VERSION);
++	Mod_LoadAliasHeader (mod, pinmodel);
+ 
+ //
+ // allocate space for a working header, plus all the data except the frames,
+@@ -1526,7 +1570,6 @@ void Mod_LoadAliasModel (model_t *mod, void *buffer)
+ 			 sizeof (pheader->frames[0]));
+ 	
+ //	mod->cache.data = pheader;
+-	mod->flags = LittleLong (pinmodel->flags);
+ 
+ //
+ // endian-adjust and copy the data, starting with the alias model header
+@@ -1555,8 +1598,6 @@ void Mod_LoadAliasModel (model_t *mod, void *buffer)
+ 
+ 	pmodel->numframes = LittleLong (pinmodel->numframes);
+ 	pmodel->size = LittleFloat (pinmodel->size) * ALIAS_BASE_SIZE_RATIO;
+-	mod->synctype = LittleLong (pinmodel->synctype);
+-	mod->numframes = pmodel->numframes;
+ 
+ 	for (i=0 ; i<3 ; i++)
+ 	{
+@@ -1685,18 +1726,16 @@ void Mod_LoadAliasModel (model_t *mod, void *buffer)
+ 		}
+ 	}
+ 
+-	mod->type = mod_alias;
+-
+-// FIXME: do this right
+-	mod->mins[0] = mod->mins[1] = mod->mins[2] = -16;
+-	mod->maxs[0] = mod->maxs[1] = mod->maxs[2] = 16;
+-
+ //
+ // move the complete, relocatable alias model to the cache
+ //	
+ 	end = Hunk_LowMark ();
+ 	total = end - start;
+-	
++
++// the file is no longer needed, its temporary memory makes room for the
++// copy, else loading a model took three times its size and pushed out
++// another one drawn every frame, which pushed it out again
++	Hunk_FreeTemp ();
+ 	Cache_Alloc (&mod->cache, total, loadname);
+ 	if (!mod->cache.data)
+ 		return;
+diff --git a/WinQuake/pr_edict.c b/WinQuake/pr_edict.c
+index 544e01a..3478094 100644
+--- a/WinQuake/pr_edict.c
++++ b/WinQuake/pr_edict.c
+@@ -101,7 +101,7 @@ edict_t *ED_Alloc (void)
+ 		}
+ 	}
+ 	
+-	if (i == MAX_EDICTS)
++	if (i == sv.max_edicts)
+ 		Sys_Error ("ED_Alloc: no free edicts");
+ 		
+ 	sv.num_edicts++;
+diff --git a/WinQuake/quakedef.h b/WinQuake/quakedef.h
+index 42cb2bf..4ba1d85 100644
+--- a/WinQuake/quakedef.h
++++ b/WinQuake/quakedef.h
+@@ -78,7 +78,8 @@ void	VID_UnlockBuffer (void);
+ 
+ #define UNUSED(x)	(x = x)	// for pesky compiler / lint warnings
+ 
+-#define	MINIMUM_MEMORY			0x550000
++// The DS has 4 MiB of RAM in total, Quake fits with less than it asks for
++#define	MINIMUM_MEMORY			0x200000
+ #define	MINIMUM_MEMORY_LEVELPAK	(MINIMUM_MEMORY + 0x100000)
+ 
+ #define MAX_NUM_ARGVS	50
+diff --git a/WinQuake/r_part.c b/WinQuake/r_part.c
+index 72af953..529f757 100644
+--- a/WinQuake/r_part.c
++++ b/WinQuake/r_part.c
+@@ -21,8 +21,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
+ #include "quakedef.h"
+ #include "r_local.h"
+ 
+-#define MAX_PARTICLES			2048	// default max # of particles at one
+-										//  time
++#define MAX_PARTICLES			512		// the DS has little RAM and a small screen
+ #define ABSOLUTE_MIN_PARTICLES	512		// no fewer than this no matter what's
+ 										//  on the command line
+ 
+diff --git a/WinQuake/snd_mem.c b/WinQuake/snd_mem.c
+index 71e32aa..9708608 100644
+--- a/WinQuake/snd_mem.c
++++ b/WinQuake/snd_mem.c
+@@ -94,7 +94,7 @@ void ResampleSfx (sfx_t *sfx, int inrate, int inwidth, byte *data)
+ S_LoadSound
+ ==============
+ */
+-sfxcache_t *S_LoadSound (sfx_t *s)
++static sfxcache_t *S_LoadSoundWith (sfx_t *s, void *(*alloc) (cache_user_t *c, int size, char *name))
+ {
+     char	namebuffer[256];
+ 	byte	*data;
+@@ -128,6 +128,7 @@ sfxcache_t *S_LoadSound (sfx_t *s)
+ 	if (info.channels != 1)
+ 	{
+ 		Con_Printf ("%s is a stereo sample\n",s->name);
++		Hunk_FreeTemp ();
+ 		return NULL;
+ 	}
+ 
+@@ -136,9 +137,12 @@ sfxcache_t *S_LoadSound (sfx_t *s)
+ 
+ 	len = len * info.width * info.channels;
+ 
+-	sc = Cache_Alloc ( &s->cache, len + sizeof(sfxcache_t), s->name);
++	sc = alloc ( &s->cache, len + sizeof(sfxcache_t), s->name);
+ 	if (!sc)
++	{
++		Hunk_FreeTemp ();
+ 		return NULL;
++	}
+ 	
+ 	sc->length = info.samples;
+ 	sc->loopstart = info.loopstart;
+@@ -147,10 +151,36 @@ sfxcache_t *S_LoadSound (sfx_t *s)
+ 	sc->stereo = info.channels;
+ 
+ 	ResampleSfx (s, sc->speed, sc->width, data + info.dataofs);
++	Hunk_FreeTemp ();
+ 
+ 	return sc;
+ }
+ 
++sfxcache_t *S_LoadSound (sfx_t *s)
++{
++	return S_LoadSoundWith (s, Cache_Alloc);
++}
++
++// For a driver that loads what plays every frame: the sound waits until
++// there's room instead of pushing out what was just used, also for the
++// file, which is read into temporary memory first
++sfxcache_t *S_LoadSoundUnused (sfx_t *s)
++{
++	char	namebuffer[256];
++	int		len, h;
++
++	if (!Cache_Check (&s->cache))
++	{
++		sprintf (namebuffer, "sound/%s", s->name);
++		len = COM_OpenFile (namebuffer, &h);
++		if (h != -1)
++			COM_CloseFile (h);
++		if (!Cache_RoomUnused (2 * len + 1024))
++			return NULL;
++	}
++	return S_LoadSoundWith (s, Cache_AllocUnused);
++}
++
+ 
+ 
+ /*
+diff --git a/WinQuake/sv_main.c b/WinQuake/sv_main.c
+index deda690..2c84dfd 100644
+--- a/WinQuake/sv_main.c
++++ b/WinQuake/sv_main.c
+@@ -1097,6 +1097,9 @@ void SV_SpawnServer (char *server)
+ 
+ // allocate server memory
+ 	sv.max_edicts = MAX_EDICTS;
++	// the 4 MiB of the DS have room for fewer, still plenty for the id maps
++	if (host_parms.memsize < 0x800000)
++		sv.max_edicts = 448;
+ 	
+ 	sv.edicts = Hunk_AllocName (sv.max_edicts*pr_edict_size, "edicts");
+ 
+diff --git a/WinQuake/zone.c b/WinQuake/zone.c
+index 63c7c9c..3ad16fa 100644
+--- a/WinQuake/zone.c
++++ b/WinQuake/zone.c
+@@ -577,12 +577,20 @@ typedef struct cache_system_s
+ 	char					name[16];
+ 	struct cache_system_s	*prev, *next;
+ 	struct cache_system_s	*lru_prev, *lru_next;	// for LRU flushing	
++	int						lastused;	// host_framecount
+ } cache_system_t;
+ 
+ cache_system_t *Cache_TryAlloc (int size, qboolean nobottom);
++static void *Cache_AllocSpare (cache_user_t *c, int size, char *name, int spare);
++
++#define	CACHE_SPARE_FRAMES	10
++void Cache_UnlinkLRU (cache_system_t *cs);
+ 
+ cache_system_t	cache_head;
+ 
++// told about data that is freed or moved, for drivers that play from it
++void	(*cache_freehook) (void *data);
++
+ /*
+ ===========
+ Cache_Move
+@@ -593,23 +601,31 @@ void Cache_Move ( cache_system_t *c)
+ 	cache_system_t		*new;
+ 
+ // we are clearing up space at the bottom, so only allocate it late
+-	new = Cache_TryAlloc (c->size, true);
+-	if (new)
++// without room, what was used the longest ago goes instead of this one,
++// which may be in use: a model read in temporary memory at the top would
++// push out the models drawn every frame, and those the next ones
++	while (!(new = Cache_TryAlloc (c->size, true)))
+ 	{
+-//		Con_Printf ("cache_move ok\n");
+-
+-		Q_memcpy ( new+1, c+1, c->size - sizeof(cache_system_t) );
+-		new->user = c->user;
+-		Q_memcpy (new->name, c->name, sizeof(new->name));
+-		Cache_Free (c->user);
+-		new->user->data = (void *)(new+1);
++		if (cache_head.lru_prev == c)
++		{
++			Cache_Free (c->user);		// tough luck...
++			return;
++		}
++		Cache_Free (cache_head.lru_prev->user);
+ 	}
+-	else
+-	{
+-//		Con_Printf ("cache_move failed\n");
+ 
+-		Cache_Free (c->user);		// tough luck...
+-	}
++	Q_memcpy ( new+1, c+1, c->size - sizeof(cache_system_t) );
++	new->user = c->user;
++	Q_memcpy (new->name, c->name, sizeof(new->name));
++	new->lastused = c->lastused;
++// it keeps its place in the LRU order
++	Cache_UnlinkLRU (new);
++	new->lru_prev = c->lru_prev;
++	new->lru_next = c;
++	c->lru_prev->lru_next = new;
++	c->lru_prev = new;
++	Cache_Free (c->user);
++	new->user->data = (void *)(new+1);
+ }
+ 
+ /*
+@@ -846,6 +862,8 @@ void Cache_Free (cache_user_t *c)
+ 
+ 	cs = ((cache_system_t *)c->data) - 1;
+ 
++	if (cache_freehook)
++		cache_freehook (c->data);
+ 	cs->prev->next = cs->next;
+ 	cs->next->prev = cs->prev;
+ 	cs->next = cs->prev = NULL;
+@@ -874,17 +892,64 @@ void *Cache_Check (cache_user_t *c)
+ // move to head of LRU
+ 	Cache_UnlinkLRU (cs);
+ 	Cache_MakeLRU (cs);
++	cs->lastused = host_framecount;
+ 	
+ 	return c->data;
+ }
+ 
+ 
++/*
++==============
++Cache_AllocUnused
++
++Like Cache_Alloc, but only pushes out data that wasn't used in the last
++frames, else returns NULL: data that can wait, like a sound, would push out
++a model drawn every frame, which would push it out again, every frame
++==============
++*/
++void *Cache_AllocUnused (cache_user_t *c, int size, char *name)
++{
++	return Cache_AllocSpare (c, size, name, CACHE_SPARE_FRAMES);
++}
++
++/*
++==============
++Cache_RoomUnused
++
++Whether size bytes fit in the cache without pushing out data used in the
++last frames, roughly: the free space may not be in one piece
++==============
++*/
++qboolean Cache_RoomUnused (int size)
++{
++	cache_system_t	*cs;
++	int				room = hunk_size - hunk_low_used - hunk_high_used;
++
++	for (cs = cache_head.next ; cs != &cache_head ; cs = cs->next)
++		if (host_framecount - cs->lastused < CACHE_SPARE_FRAMES)
++			room -= cs->size;
++	return room >= size;
++}
++
+ /*
+ ==============
+ Cache_Alloc
+ ==============
+ */
+ void *Cache_Alloc (cache_user_t *c, int size, char *name)
++{
++	return Cache_AllocSpare (c, size, name, 0);
++}
++
++/*
++==============
++Cache_AllocSpare
++
++Pushes out the least recently used data until size fits, none used in the
++last spare frames
++==============
++*/
++static void *Cache_AllocSpare (cache_user_t *c, int size, char *name, int spare)
+ {
+ 	cache_system_t	*cs;
+ 
+@@ -912,6 +977,8 @@ void *Cache_Alloc (cache_user_t *c, int size, char *name)
+ 		if (cache_head.lru_prev == &cache_head)
+ 			Sys_Error ("Cache_Alloc: out of memory");
+ 													// not enough memory at all
++		if (spare && host_framecount - cache_head.lru_prev->lastused < spare)
++			return NULL;
+ 		Cache_Free ( cache_head.lru_prev->user );
+ 	} 
+ 	
+diff --git a/WinQuake/zone.h b/WinQuake/zone.h
+index e4fc171..6249b03 100644
+--- a/WinQuake/zone.h
++++ b/WinQuake/zone.h
+@@ -123,6 +123,10 @@ void *Cache_Check (cache_user_t *c);
+ void Cache_Free (cache_user_t *c);
+ 
+ void *Cache_Alloc (cache_user_t *c, int size, char *name);
++void *Cache_AllocUnused (cache_user_t *c, int size, char *name);
++qboolean Cache_RoomUnused (int size);
++extern void (*cache_freehook) (void *data);
++// told about data that is freed or moved, for drivers that play from it
+ // Returns NULL if all purgable data was tossed and there still
+ // wasn't enough room.
+ 

@@ -1,0 +1,201 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Sun, 11 Oct 2026 08:43:05 +0200
+Subject: [PATCH] Add Always Run
+
+Control gets Always Run below Rumble Enabled, the run button (Y) then
+walks. It is kept at the end of the config with the rumble setting,
+older configs don't run. The controls on the touch screen say Y walks
+while always running.
+---
+ foreign.h      |  1 +
+ nds/wl_touch.c | 12 ++++++++++--
+ wl_def.h       |  2 +-
+ wl_main.c      |  5 ++++-
+ wl_menu.c      | 22 ++++++++++++++++++----
+ wl_menu.h      |  2 +-
+ wl_play.c      |  6 +++++-
+ 7 files changed, 40 insertions(+), 10 deletions(-)
+
+diff --git a/foreign.h b/foreign.h
+index 4c25222..72840bb 100644
+--- a/foreign.h
++++ b/foreign.h
+@@ -52,6 +52,7 @@
+ #define	STR_MOUSEEN	"Mouse Enabled"
+ #define	STR_JOYEN	"Joystick Enabled"
+ #define	STR_RUMBLEEN	"Rumble Enabled"
++#define	STR_ALWAYSRUN	"Always Run"
+ #define	STR_PORT2	"Use joystick port 2"
+ #define	STR_GAMEPAD	"Gravis GamePad Enabled"
+ #define	STR_SENS	"Mouse Sensitivity"
+diff --git a/nds/wl_touch.c b/nds/wl_touch.c
+index 8db97b4..1c19a55 100644
+--- a/nds/wl_touch.c
++++ b/nds/wl_touch.c
+@@ -700,10 +700,14 @@ static unsigned TextsHash (void)
+ // ---------------------------------------------------------------------------
+ 
+ #define HELP_LINES  8
++#define HELP_RUN    4
++
++// Whether the controls were drawn always running
++static bool help_alwaysrun;
+ 
+ static void DrawHelpScreen (void)
+ {
+-    static const char *const help[HELP_LINES][2] =
++    static const char *help[HELP_LINES][2] =
+     {
+         { "D-Pad",  "Move and turn" },
+         { "A",      "Fire / select" },
+@@ -717,6 +721,10 @@ static void DrawHelpScreen (void)
+     const char *title = "Wolfenstein 3D";
+     int i, y = 52;
+ 
++    // Always running, Y walks
++    help[HELP_RUN][1] = alwaysrun ? "Walk (hold)" : "Run (hold)";
++    help_alwaysrun = alwaysrun;
++
+     FillRect (0, 0, SUB_WIDTH, SUB_HEIGHT, COL_TEAL);
+     // BJ and the title in a box of the status bar
+     DrawBox (MAP_X, 3, MAP_W, 38, COL_BLUE, COL_BLUE_HI, COL_BLUE_LO, true);
+@@ -751,7 +759,7 @@ void NDS_UpdateSubScreen (void)
+     // Also while dying, which happens after the level ended
+     if (player == NULL || !(ingame || (playstate == ex_died && gamestate.lives >= 0)))
+     {
+-        if (sub_shows != SHOWS_HELP)
++        if (sub_shows != SHOWS_HELP || help_alwaysrun != alwaysrun)
+         {
+             REG_DISPCNT_SUB &= ~DISPLAY_BG2_ACTIVE;
+             DrawHelpScreen ();
+diff --git a/wl_def.h b/wl_def.h
+index 23400a9..4885869 100644
+--- a/wl_def.h
++++ b/wl_def.h
+@@ -1092,7 +1092,7 @@ extern  int         lastgamemusicoffset;
+ //
+ // control info
+ //
+-extern  boolean     mouseenabled,joystickenabled,rumbleenabled;
++extern  boolean     mouseenabled,joystickenabled,rumbleenabled,alwaysrun;
+ extern  int         dirscan[4];
+ extern  int         buttonscan[NUMBUTTONS];
+ extern  int         buttonmouse[4];
+diff --git a/wl_main.c b/wl_main.c
+index 44b8d70..a164a97 100644
+--- a/wl_main.c
++++ b/wl_main.c
+@@ -172,8 +172,9 @@ void ReadConfig(void)
+ 
+         fread (&viewsize,sizeof(viewsize),1,file);
+         fread (&mouseadjustment,sizeof(mouseadjustment),1,file);
+-        // Older configs end before it and keep it on
++        // Older configs end before these and keep their defaults
+         fread (&rumbleenabled,sizeof(rumbleenabled),1,file);
++        fread (&alwaysrun,sizeof(alwaysrun),1,file);
+ 
+         fclose (file);
+ 
+@@ -199,6 +200,7 @@ void ReadConfig(void)
+         if(mouseenabled) mouseenabled=true;
+         if(joystickenabled) joystickenabled=true;
+         if(rumbleenabled) rumbleenabled=true;
++        if(alwaysrun) alwaysrun=true;
+ 
+         if (!MousePresent)
+             mouseenabled = false;
+@@ -301,6 +303,7 @@ void WriteConfig(void)
+         fwrite (&viewsize,sizeof(viewsize),1,file);
+         fwrite (&mouseadjustment,sizeof(mouseadjustment),1,file);
+         fwrite (&rumbleenabled,sizeof(rumbleenabled),1,file);
++        fwrite (&alwaysrun,sizeof(alwaysrun),1,file);
+ 
+         fclose (file);
+     }
+diff --git a/wl_menu.c b/wl_menu.c
+index 20592dc..9c1642e 100644
+--- a/wl_menu.c
++++ b/wl_menu.c
+@@ -111,12 +111,14 @@ CP_itemtype SndMenu[] = {
+     {1, STR_ENABLED, 0}
+ };
+ 
+-// Only the Rumble Pak, the buttons are the joystick, without mouse or
+-// keyboard, and customizing them captured the B button that leaves the screen
+-enum { CTL_RUMBLEENABLE };
++// Only the Rumble Pak and Always Run, the buttons are the joystick, without
++// mouse or keyboard, and customizing them captured the B button that leaves
++// the screen
++enum { CTL_RUMBLEENABLE, CTL_ALWAYSRUN };
+ 
+ CP_itemtype CtlMenu[] = {
+-    {1, STR_RUMBLEEN, 0}
++    {1, STR_RUMBLEEN, 0},
++    {1, STR_ALWAYSRUN, 0}
+ };
+ 
+ #ifndef SPEAR
+@@ -1533,6 +1535,12 @@ CP_Control (int blank)
+                 DrawCtlScreen ();
+                 ShootSnd ();
+                 break;
++
++            case CTL_ALWAYSRUN:
++                alwaysrun ^= 1;
++                DrawCtlScreen ();
++                ShootSnd ();
++                break;
+         }
+         // HandleMenu sees a held button as pressed again
+         WaitKeyUp ();
+@@ -1701,6 +1709,12 @@ DrawCtlScreen (void)
+     else
+         VWB_DrawPic (x, y, C_NOTSELECTEDPIC);
+ 
++    y = CTL_Y + 16;
++    if (alwaysrun)
++        VWB_DrawPic (x, y, C_SELECTEDPIC);
++    else
++        VWB_DrawPic (x, y, C_NOTSELECTEDPIC);
++
+     //
+     // PICK FIRST AVAILABLE SPOT
+     //
+diff --git a/wl_menu.h b/wl_menu.h
+index 03e7fce..3bcc58c 100644
+--- a/wl_menu.h
++++ b/wl_menu.h
+@@ -76,7 +76,7 @@
+ #define CTL_Y   86
+ #endif
+ #define CTL_W   284
+-#define CTL_H   13+8
++#define CTL_H   2*13+8
+ 
+ #define LSM_X   85
+ #define LSM_Y   55
+diff --git a/wl_play.c b/wl_play.c
+index f0deb8b..9589ef0 100644
+--- a/wl_play.c
++++ b/wl_play.c
+@@ -53,7 +53,7 @@ unsigned tics;
+ //
+ // control info
+ //
+-boolean mouseenabled, joystickenabled, rumbleenabled = true;
++boolean mouseenabled, joystickenabled, rumbleenabled = true, alwaysrun;
+ int dirscan[4] = { sc_UpArrow, sc_RightArrow, sc_DownArrow, sc_LeftArrow };
+ int buttonscan[NUMBUTTONS] = { sc_Control, sc_Alt, sc_LShift, sc_Space, sc_1, sc_2, sc_3, sc_4 };
+ int buttonmouse[4] = { bt_attack, bt_strafe, bt_use, bt_nobutton };
+@@ -467,6 +467,10 @@ void PollControls (void)
+     if (joystickenabled)
+         PollJoystickButtons ();
+ 
++    // Always running, the run button walks
++    if (alwaysrun)
++        buttonstate[bt_run] = !buttonstate[bt_run];
++
+ //
+ // get movements
+ //

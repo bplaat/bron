@@ -1,0 +1,88 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Tue, 6 Oct 2026 07:09:53 +0200
+Subject: [PATCH] Start in the main menu
+
+The demo loop starts with the main menu open, and the menu no longer
+stops the demos, they keep playing behind it. B (escape) leaves the main
+menu back to the demos. In a game Quit ends it after asking, back to the
+main menu over the demos, like End Game in DOOM and Wolf3D.
+---
+ WinQuake/host_cmd.c |  3 +++
+ WinQuake/menu.c     | 21 +++++++++++----------
+ 2 files changed, 14 insertions(+), 10 deletions(-)
+
+diff --git a/WinQuake/host_cmd.c b/WinQuake/host_cmd.c
+index e658cd4..fe2c19f 100644
+--- a/WinQuake/host_cmd.c
++++ b/WinQuake/host_cmd.c
+@@ -33,6 +33,7 @@ Host_Quit_f
+ */
+ 
+ extern void M_Menu_Quit_f (void);
++extern void M_Menu_Main_f (void);
+ 
+ void Host_Quit_f (void)
+ {
+@@ -1829,6 +1830,8 @@ void Host_Startdemos_f (void)
+ 	{
+ 		cls.demonum = 0;
+ 		CL_NextDemo ();
++		// the game starts in the main menu, the demos play behind it
++		M_Menu_Main_f ();
+ 	}
+ 	else
+ 		cls.demonum = -1;
+diff --git a/WinQuake/menu.c b/WinQuake/menu.c
+index 74c584f..e2929f8 100644
+--- a/WinQuake/menu.c
++++ b/WinQuake/menu.c
+@@ -163,8 +163,6 @@ void M_DrawTextBox (int x, int y, int width, int lines)
+ 
+ //=============================================================================
+ 
+-int m_save_demonum;
+-
+ /*
+ ================
+ M_ToggleMenu_f
+@@ -225,11 +223,7 @@ static const struct
+ 
+ void M_Menu_Main_f (void)
+ {
+-	if (key_dest != key_menu)
+-	{
+-		m_save_demonum = cls.demonum;
+-		cls.demonum = -1;
+-	}
++	// the demos keep playing behind it
+ 	key_dest = key_menu;
+ 	m_state = m_main;
+ 	m_entersound = true;
+@@ -293,9 +287,6 @@ void M_Main_Key (int key)
+ 	case K_ESCAPE:
+ 		key_dest = key_game;
+ 		m_state = m_none;
+-		cls.demonum = m_save_demonum;
+-		if (cls.demonum != -1 && !cls.demoplayback && cls.state != ca_connected)
+-			CL_NextDemo ();
+ 		break;
+ 
+ 	case K_DOWNARROW:
+@@ -339,6 +330,16 @@ void M_Main_Key (int key)
+ 			break;
+ 
+ 		case 4:
++			// in a game Quit ends it, back to the main menu over the demos
++			if (sv.active)
++			{
++				if (SCR_ModalMessage("Are you sure you want to\nend the game?\n"))
++				{
++					Cbuf_AddText ("demos\n");
++					m_main_cursor = 0;
++				}
++				break;
++			}
+ 			M_Menu_Quit_f ();
+ 			break;
+ 		}

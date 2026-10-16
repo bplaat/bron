@@ -1,0 +1,38 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Mon, 12 Oct 2026 16:53:52 +0200
+Subject: [PATCH] Play the animations without unaligned halfwords
+
+The animations were decoded with halfwords read at any byte, which the
+ARM reads from the even byte below, so the run lengths were wrong and
+the decoder wrote past the frame, the Atomic Edition's logo hung.
+---
+ Game/src/animlib.c | 8 ++++++--
+ 1 file changed, 6 insertions(+), 2 deletions(-)
+
+diff --git a/Game/src/animlib.c b/Game/src/animlib.c
+index 511842c..d89112c 100644
+--- a/Game/src/animlib.c
++++ b/Game/src/animlib.c
+@@ -153,7 +153,7 @@ run:
+ 
+    goto nextOp;
+ longOp:
+-   wordCnt = *((uint16 *)srcP);
++   wordCnt = srcP[0] | srcP[1] << 8;          /* records start at any byte */
+    srcP += sizeof(uint16);
+    if ((int16)wordCnt <= 0)
+       goto notLongSkip;       /* Do SIGNED test. */
+@@ -215,7 +215,11 @@ void renderframe (uint16 framenumber, uint16 *pagepointer)
+ 
+    ppointer+=anim->curlp.nRecords*2+offset;
+    if(ppointer[1])
+-      ppointer += (4 + (((uint16 *)ppointer)[1] + (((uint16 *)ppointer)[1] & 1)));
++      {
++      /* The records start at any byte, the ARM reads halfwords at even ones */
++      uint16 size = ppointer[2] | ppointer[3] << 8;
++      ppointer += 4 + size + (size & 1);
++      }
+    else
+       ppointer+=4;
+ 

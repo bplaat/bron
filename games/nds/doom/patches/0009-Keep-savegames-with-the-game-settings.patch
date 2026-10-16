@@ -1,0 +1,24 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Sat, 3 Oct 2026 11:04:41 +0200
+Subject: [PATCH] Keep savegames with the game settings
+
+Savegames go directly in the config directory. The DS startup selects
+a separate directory for each game or mod, keeping their slots apart.
+---
+ doomgeneric/m_config.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/doomgeneric/m_config.c b/doomgeneric/m_config.c
+index 865e168..fb7c59d 100644
+--- a/doomgeneric/m_config.c
++++ b/doomgeneric/m_config.c
+@@ -2115,7 +2115,7 @@ char *M_GetSaveGameDir(char *iwadname)
+ 
+         free(topdir);
+ #else
+-        savegamedir = M_StringJoin(configdir, DIR_SEPARATOR_S, ".savegame/", NULL);
++        savegamedir = M_StringJoin(configdir, DIR_SEPARATOR_S, NULL);
+ 
+         M_MakeDirectory(savegamedir);
+ 

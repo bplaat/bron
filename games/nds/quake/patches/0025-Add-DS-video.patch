@@ -1,0 +1,785 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Tue, 6 Oct 2026 07:10:00 +0200
+Subject: [PATCH] Add DS video
+
+vid_nds.c shows the 3D view on the top screen with a text layer over it
+for the messages: Quake's font as 8bpp tiles in VRAM bank F and a 32x24
+map in bank E, with the tiles of the loading plaque, which shows on black
+while a level loads, with menu layers hidden and game text cleared. The
+touch screen keeps the startup console until the first level is ready. Edge marking
+makes the hardware fill the edges of the
+3D polygons, which it leaves gaps along otherwise, all with the same
+polygon ID so none is marked, antialiasing blended them with the
+background. The frame is depth tested on w.
+
+The touch screen shows the rest of Quake's 2D drawing in a 320x200
+buffer, copied into an 8bpp bitmap background in VRAM bank C and scaled
+to 256x192 by the affine background hardware, smoothed by a second layer
+half a pixel further that is alpha blended on top (vid_smooth). The menu
+draws into the same buffer, its rows get back what the touch screen shows
+from VRAM when something draws there again: it's cut into 8x8 tiles for
+the same layers on the top screen, scrolled to center it, its 255
+transparent and Quake's black moved there. Only the tiles with something
+on them take VRAM, the rest of bank E, the texture palette moved to bank
+G for it. A tile keeps its slot while it shows the same picture, changed
+ones go to slots the shown map doesn't use and the new map shows at the
+next vblank, so no tile is seen while it's written. The draw functions mark the rows they
+change, only those are copied, and the touch screen can keep rows drawn,
+VID_BeginUI tells it when something else drew over them. The palette
+goes to both screens, the texture palette and the particle colors, so
+palette shifts for damage and pickups tint everything for free. vid_showfps shows the frame
+rate.
+---
+ WinQuake/draw.c    |  11 +-
+ WinQuake/vid.h     |   8 +
+ WinQuake/vid_nds.c | 639 +++++++++++++++++++++++++++++++++++++++++++++
+ 3 files changed, 656 insertions(+), 2 deletions(-)
+ create mode 100644 WinQuake/vid_nds.c
+
+diff --git a/WinQuake/draw.c b/WinQuake/draw.c
+index f98ee96..9fcc2d8 100644
+--- a/WinQuake/draw.c
++++ b/WinQuake/draw.c
+@@ -149,6 +149,7 @@ void Draw_Character (int x, int y, int num)
+ 	}
+ 	if (y <= -8)
+ 		return;			// totally off screen
++	VID_MarkRows (y, 8);
+ 
+ #ifdef PARANOID
+ 	if (y > vid.height - 8 || x < 0 || x > vid.width - 8)
+@@ -304,6 +305,7 @@ void Draw_Pic (int x, int y, qpic_t *pic)
+ 	{
+ 		Sys_Error ("Draw_Pic: bad coordinates");
+ 	}
++	VID_MarkRows (y, pic->height);
+ 
+ 	source = pic->data;
+ 
+@@ -353,6 +355,7 @@ void Draw_TransPic (int x, int y, qpic_t *pic)
+ 	{
+ 		Sys_Error ("Draw_TransPic: bad coordinates");
+ 	}
++	VID_MarkRows (y, pic->height);
+ 		
+ 	source = pic->data;
+ 
+@@ -440,6 +443,7 @@ void Draw_TransPicTranslate (int x, int y, qpic_t *pic, byte *translation)
+ 	{
+ 		Sys_Error ("Draw_TransPic: bad coordinates");
+ 	}
++	VID_MarkRows (y, pic->height);
+ 		
+ 	source = pic->data;
+ 
+@@ -551,6 +555,7 @@ void Draw_ConsoleBackground (int lines)
+ 	char			ver[100];
+ 
+ 	conback = Draw_CachePic ("gfx/conback.lmp");
++	VID_MarkRows (0, lines);
+ 
+ // hack the version number directly into the pic
+ #ifdef _WIN32
+@@ -752,6 +757,7 @@ void Draw_TileClear (int x, int y, int w, int h)
+ 	r_rectdesc.rect.y = y;
+ 	r_rectdesc.rect.width = w;
+ 	r_rectdesc.rect.height = h;
++	VID_MarkRows (y, h);
+ 
+ 	vr.y = r_rectdesc.rect.y;
+ 	height = r_rectdesc.rect.height;
+@@ -821,12 +827,12 @@ void Draw_Fill (int x, int y, int w, int h, int c)
+ 	unsigned		uc;
+ 	int				u, v;
+ 
++	VID_MarkRows (y, h);
+ 	if (r_pixbytes == 1)
+ 	{
+ 		dest = vid.buffer + y*vid.rowbytes + x;
+ 		for (v=0 ; v<h ; v++, dest += vid.rowbytes)
+-			for (u=0 ; u<w ; u++)
+-				dest[u] = c;
++			memset (dest, c, w);	// the toolchain keeps loops from becoming memset
+ 	}
+ 	else
+ 	{
+@@ -854,6 +860,7 @@ void Draw_FadeScreen (void)
+ 	VID_UnlockBuffer ();
+ 	S_ExtraUpdate ();
+ 	VID_LockBuffer ();
++	VID_MarkRows (0, vid.height);
+ 
+ 	for (y=0 ; y<vid.height ; y++)
+ 	{
+diff --git a/WinQuake/vid.h b/WinQuake/vid.h
+index eeb4139..2f35961 100644
+--- a/WinQuake/vid.h
++++ b/WinQuake/vid.h
+@@ -73,6 +73,9 @@ void	VID_Init (unsigned char *palette);
+ void	VID_Flush3D (void);
+ // shows the 3D frame on the top screen from the next vblank
+ 
++void	VID_MarkRows (int y, int height);
++// the 2D drawing changed these rows, only they are copied to the touch screen
++
+ // the text layer of the top screen, for messages and center prints
+ #define	TEXT_WIDTH		256
+ #define	TEXT_HEIGHT		192
+@@ -82,6 +85,11 @@ void	VID_TextCharacter (int x, int y, int num);
+ // while vid_textlayer is set, Draw_Character draws on the text layer, at
+ // pixel coordinates of the top screen
+ 
++qboolean	VID_BeginUI (int top, int bottom);
++void		VID_EndUI (void);
++// the touch screen keeps rows top to bottom drawn, BeginUI returns true when
++// something else drew there since the last time
++
+ void	VID_BeginMenu (void);
+ void	VID_EndMenu (void);
+ // the menu draws between them on a transparent background (255), it shows on
+diff --git a/WinQuake/vid_nds.c b/WinQuake/vid_nds.c
+new file mode 100644
+index 0000000..2985b81
+--- /dev/null
++++ b/WinQuake/vid_nds.c
+@@ -0,0 +1,639 @@
++/*
++Copyright (C) 1996-1997 Id Software, Inc.
++
++This program is free software; you can redistribute it and/or
++modify it under the terms of the GNU General Public License
++as published by the Free Software Foundation; either version 2
++of the License, or (at your option) any later version.
++
++This program is distributed in the hope that it will be useful,
++but WITHOUT ANY WARRANTY; without even the implied warranty of
++MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
++
++See the GNU General Public License for more details.
++
++You should have received a copy of the GNU General Public License
++along with this program; if not, write to the Free Software
++Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
++
++*/
++// vid_nds.c -- Nintendo DS video driver
++//
++// The top screen shows the 3D hardware (r_nds.c) with a text layer over it
++// for the messages and center prints: Quake's font as 8bpp tiles in VRAM
++// bank F and a 32x24 map in bank E, drawn while vid_textlayer is set. The
++// tiles of the loading plaque are in bank E too, the plaque shows on black
++// while a level loads.
++//
++// The touch screen shows the rest of Quake's 2D drawing: status bar,
++// console and intermission go into a 320x200 buffer in main RAM, copied into
++// an 8bpp bitmap background in VRAM bank C and scaled to 256x192 by the
++// affine background hardware. A second affine layer samples it half a pixel
++// further and is alpha blended on top, a cheap hardware bilinear-like filter
++// (vid_smooth). The menu draws into the same buffer, which then goes back to
++// what the touch screen shows: it's cut into 8x8 tiles for the same layers
++// on the top screen, as tiles only the parts with something on them take
++// VRAM, the rest of bank E. 255 is transparent there, over the view, which
++// the renderer dims. The palette goes to both screens and the texture
++// palette in bank G, so the palette shifts for damage and pickups tint all
++// of them for free. The texture palette is twice as bright, so the vertex
++// light can go up to double like the software renderer.
++
++#include "quakedef.h"
++#include "d_local.h"
++
++#include <nds.h>
++
++#define	min(a,b)	((a) < (b) ? (a) : (b))
++#define	max(a,b)	((a) > (b) ? (a) : (b))
++
++#define	BASEWIDTH	320
++#define	BASEHEIGHT	200
++#define	FB_STRIDE	512
++
++// The DS screens are darker than the CRTs Quake was made for
++#define	SCREEN_GAMMA	0.7
++
++// Scale factors in 8.8 fixed point: 320 -> 256 and 200 -> 192
++#define	SCALE_X		((BASEWIDTH << 8) / 256)
++#define	SCALE_Y		(((BASEHEIGHT << 8) + 191) / 192)	// rounded up, the last row shows
++
++// Bank E on the top screen: the menu's tiles, its 64x64 map, the tiles of
++// the loading plaque and the text map. The text layer's tiles start at
++// 48 KiB, with the plaque at 128 and the font in bank F at 256.
++#define	MENU_TILES		768		// 48 KiB, tile 0 stays empty
++#define	MENU_MAP_BASE	24		// in 2 KiB
++#define	MENU_COLS		(BASEWIDTH / 8)
++#define	MENU_ROWS		(BASEHEIGHT / 8)
++#define	TEXT_TILE_BASE	3		// in 16 KiB
++#define	TEXT_MAP_BASE	31
++#define	TEXT_COLS		(TEXT_WIDTH / 8)
++#define	TEXT_ROWS		(TEXT_HEIGHT / 8)
++#define	PLAQUE_TILE		128
++#define	PLAQUE_TILES	96
++#define	FONT_TILE		256
++
++extern byte	*draw_chars;
++extern qboolean	scr_drawloading, scr_drawdialog;
++
++unsigned short	d_8to16table[256];
++unsigned	d_8to24table[256];
++
++static cvar_t	vid_smooth = {"vid_smooth", "1", true};
++static cvar_t	vid_showfps = {"vid_showfps", "0"};	// 2 also logs to no$gba
++
++static u16		palette[256] __attribute__((aligned(4)));
++static u16		texpalette[256] __attribute__((aligned(4)));	// twice as bright
++static volatile qboolean	palette_dirty;
++// For VID_VBlank to copy the palettes, the compiler mustn't move the stores
++// to them past it
++#define	PALETTE_CHANGED()	do { __asm__ volatile ("" ::: "memory"); palette_dirty = true; } while (0)
++static int		smoothing = -1;
++static byte		screengamma[256];
++
++// Rows changed this frame, to copy to VRAM
++static byte		copyrows[BASEHEIGHT];
++
++// Rows the menu drew over, they get back what the touch screen shows when
++// something draws there
++static byte		menurows[BASEHEIGHT];
++
++// Rows the touch screen keeps drawn (sbar_nds.c), it redraws them when
++// something else drew there
++static int		ui_top, ui_bottom;
++static qboolean	ui_drawing, ui_overdrawn;
++static byte		vid_buffer[BASEWIDTH * BASEHEIGHT] __attribute__((aligned(32)));
++
++// The menu on the top screen: Quake's black is 255 there, 0 is transparent
++static qboolean	touchscreen;	// the startup is over, the touch screen is Quake's
++static qboolean	menu_shown, menu_drawing;
++static byte		menu_colors[256];
++
++qboolean		vid_textlayer;
++static u16		textmap[TEXT_COLS * TEXT_ROWS] __attribute__((aligned(4)));
++static u16		shownmap[TEXT_COLS * TEXT_ROWS] __attribute__((aligned(4)));
++static qboolean	font;		// the font is in VRAM
++static int		plaque_w, plaque_h;	// in tiles, 0 until they are in VRAM
++
++// The menu's map on the top screen and the next one, which VID_VBlank shows
++// when nothing is drawn (VID_EndMenu)
++static u16		menumap[MENU_ROWS][MENU_COLS];
++static u16		nextmap[MENU_ROWS][MENU_COLS];
++static volatile qboolean	nextmap_ready;
++
++static void VID_VBlank (void)
++{
++	// A CPU copy, DMA would miss palette writes still in the data cache
++	if (palette_dirty)
++	{
++		// first the texture palette, the 3D engine starts drawing the next
++		// frame 22 lines into the vertical blank
++		vramSetBankG (VRAM_G_LCD);
++		memcpy (VRAM_G, texpalette, sizeof(texpalette));
++		vramSetBankG (VRAM_G_TEX_PALETTE_SLOT0);
++		memcpy (BG_PALETTE, palette, sizeof(palette));
++		BG_PALETTE[255] = 0;
++		// the text console of the startup has its own
++		if (touchscreen)
++			memcpy (BG_PALETTE_SUB, palette, sizeof(palette));
++		palette_dirty = false;
++	}
++	if (nextmap_ready)
++	{
++		int	ty;
++
++		for (ty = 0; ty < MENU_ROWS; ty++)
++			memcpy ((u16 *) BG_MAP_RAM (MENU_MAP_BASE) + ty * 64, nextmap[ty], sizeof(nextmap[ty]));
++		memcpy (menumap, nextmap, sizeof(menumap));
++		nextmap_ready = false;
++	}
++	// Writing the reference point of an affine layer while the screen is
++	// drawn restarts its picture from that line
++	bgUpdate ();
++}
++
++// Shows the menu on the top screen and the 2D drawing on the touch screen,
++// both smoothed by the half pixel offset layer
++static void VID_SetLayers (void)
++{
++	int	smooth = smoothing ? DISPLAY_BG2_ACTIVE : 0;
++
++	if (menu_shown)
++		REG_DISPCNT = (REG_DISPCNT & ~DISPLAY_BG2_ACTIVE) | DISPLAY_BG3_ACTIVE | smooth;
++	else
++		REG_DISPCNT &= ~(DISPLAY_BG2_ACTIVE | DISPLAY_BG3_ACTIVE);
++	REG_BLDCNT = smoothing && menu_shown ? BLEND_ALPHA | BLEND_SRC_BG2 | BLEND_DST_BG3 : BLEND_NONE;
++	REG_BLDALPHA = 8 | (8 << 8);
++	REG_DISPCNT_SUB = MODE_5_2D | DISPLAY_BG3_ACTIVE | smooth;
++	REG_BLDCNT_SUB = smoothing ? BLEND_ALPHA | BLEND_SRC_BG2 | BLEND_DST_BG3 : BLEND_NONE;
++	REG_BLDALPHA_SUB = 8 | (8 << 8);
++}
++
++// The 256 characters of Quake's font as 8x8 tiles, 0 is transparent
++static void VID_UploadFont (void)
++{
++	byte	tile[64] __attribute__((aligned(4)));
++	int		num, y;
++
++	for (num = 0; num < 256; num++)
++	{
++		for (y = 0; y < 8; y++)
++			memcpy (tile + y * 8, draw_chars + (num >> 4) * 8 * 128 + y * 128 + (num & 15) * 8, 8);
++		memcpy ((byte *) BG_TILE_RAM (TEXT_TILE_BASE) + (FONT_TILE + num) * sizeof(tile), tile, sizeof(tile));
++	}
++}
++
++// The loading plaque as tiles of the text layer, its black as the 255 of
++// the top screen
++static void VID_UploadPlaque (void)
++{
++	byte	tile[64] __attribute__((aligned(4)));
++	qpic_t	*pic = Draw_CachePic ("gfx/loading.lmp");
++	int		t, x, y;
++
++	for (t = 0; t < (pic->width / 8) * (pic->height / 8) && t < PLAQUE_TILES; t++)
++	{
++		for (y = 0; y < 8; y++)
++			for (x = 0; x < 8; x++)
++				tile[y * 8 + x] = menu_colors[pic->data[(t / (pic->width / 8) * 8 + y) * pic->width
++					+ t % (pic->width / 8) * 8 + x]];
++		memcpy ((byte *) BG_TILE_RAM (TEXT_TILE_BASE) + (PLAQUE_TILE + t) * sizeof(tile), tile, sizeof(tile));
++	}
++	plaque_w = pic->width / 8;
++	plaque_h = min (pic->height / 8, PLAQUE_TILES / plaque_w);
++}
++
++/*
++================
++VID_ClearText
++
++Empties the text layer, the messages draw it again every frame
++================
++*/
++static void VID_ClearText (void)
++{
++	int	i;
++
++	for (i = 0; i < TEXT_COLS * TEXT_ROWS; i++)
++		textmap[i] = FONT_TILE + ' ';
++}
++
++/*
++================
++VID_TextCharacter
++
++Draw_Character while vid_textlayer is set: a character of the text layer at
++its pixel x, y, rounded to the 8x8 grid
++================
++*/
++void VID_TextCharacter (int x, int y, int num)
++{
++	int	col = (x + 4) >> 3, row = (y + 4) >> 3;
++
++	if (col >= 0 && col < TEXT_COLS && row >= 0 && row < TEXT_ROWS)
++		textmap[row * TEXT_COLS + col] = FONT_TILE + num;
++}
++
++/*
++================
++VID_UpdateText
++
++Shows the text drawn this frame, and the loading plaque on black while a
++level loads or none runs
++================
++*/
++static void VID_UpdateText (void)
++{
++	int			x, y;
++	qboolean	loading = scr_drawloading || (con_forcedup && !menu_shown);
++
++	if (!font && draw_chars)
++	{
++		VID_UploadFont ();
++		font = true;
++	}
++	if (loading)
++	{
++		// The plaque owns this layer while loading; discard game text.
++		VID_ClearText ();
++		if (!plaque_w)
++			VID_UploadPlaque ();
++		for (y = 0; y < plaque_h; y++)
++			for (x = 0; x < plaque_w; x++)
++				textmap[((TEXT_ROWS - plaque_h) / 2 + y) * TEXT_COLS + (TEXT_COLS - plaque_w) / 2 + x] =
++					PLAQUE_TILE + y * plaque_w + x;
++	}
++	if (memcmp (shownmap, textmap, sizeof(textmap)))
++	{
++		memcpy (BG_MAP_RAM (TEXT_MAP_BASE), textmap, sizeof(textmap));
++		memcpy (shownmap, textmap, sizeof(textmap));
++	}
++	VID_ClearText ();
++
++	// no view while a level loads
++	if (loading || !cl.worldmodel || cls.signon != SIGNONS)
++		REG_DISPCNT &= ~DISPLAY_BG0_ACTIVE;
++	else
++		REG_DISPCNT |= DISPLAY_BG0_ACTIVE;
++}
++
++void VID_SetPalette (unsigned char *pal)
++{
++	int	i;
++
++	int	r, g, b;
++
++	for (i = 0; i < 256; i++, pal += 3)
++	{
++		r = screengamma[pal[0]];
++		g = screengamma[pal[1]];
++		b = screengamma[pal[2]];
++		palette[i] = d_8to16table[i] = RGB15(r >> 3, g >> 3, b >> 3);	// for the particles too
++		texpalette[i] = RGB15(min (r >> 2, 31), min (g >> 2, 31), min (b >> 2, 31));
++	}
++	PALETTE_CHANGED ();
++}
++
++void VID_ShiftPalette (unsigned char *pal)
++{
++	VID_SetPalette (pal);
++}
++
++void VID_Init (unsigned char *pal)
++{
++	int	bg, i;
++
++	Cvar_RegisterVariable (&vid_smooth);
++	Cvar_RegisterVariable (&vid_showfps);
++	for (i = 0; i < 256; i++)
++		screengamma[i] = pow (i / 255.0, SCREEN_GAMMA) * 255 + 0.5;
++
++	vid.maxwarpwidth = vid.width = vid.conwidth = BASEWIDTH;
++	vid.maxwarpheight = vid.height = vid.conheight = BASEHEIGHT;
++	vid.aspect = ((float) vid.height / vid.width) * (320.0 / 240.0);
++	vid.numpages = 1;
++	vid.colormap = host_colormap;
++	vid.fullbright = 256 - LittleLong (*((int *)vid.colormap + 2048));
++	vid.buffer = vid.conbuffer = vid_buffer;
++	vid.rowbytes = vid.conrowbytes = BASEWIDTH;
++
++	for (i = 0; i < 256; i++)
++		menu_colors[i] = i;
++	menu_colors[0] = 255;
++	menu_colors[255] = 0;
++
++	// top screen: 3D, textures in banks A, B and D, palette in G, the text
++	// layer in E and F over it, the menu in E between them
++	videoSetMode (MODE_5_3D | DISPLAY_BG1_ACTIVE);
++	vramSetBankE (VRAM_E_MAIN_BG);
++	vramSetBankF (VRAM_F_MAIN_BG_0x06010000);
++	memset (BG_GFX, 0, 64 * 1024);
++	REG_BG0CNT = BG_PRIORITY (3);
++	REG_BG1CNT = BG_32x32 | BG_COLOR_256 | BG_MAP_BASE (TEXT_MAP_BASE) | BG_TILE_BASE (TEXT_TILE_BASE)
++		| BG_PRIORITY (0);
++	VID_ClearText ();
++	memcpy (BG_MAP_RAM (TEXT_MAP_BASE), textmap, sizeof(textmap));
++	memcpy (shownmap, textmap, sizeof(textmap));
++	for (bg = 2; bg <= 3; bg++)
++	{
++		int top = bgInit (bg, BgType_ExRotation, BgSize_ER_512x512, MENU_MAP_BASE, 0);
++
++		bgSetPriority (top, bg == 2 ? 1 : 2);
++		bgSetScale (top, SCALE_X, SCALE_Y);
++	}
++	VID_MoveMenu (0, 0);
++	REG_DISPCNT &= ~(DISPLAY_BG2_ACTIVE | DISPLAY_BG3_ACTIVE);
++	glInit ();
++	// Edge marking instead of antialiasing: with either the hardware fills
++	// the edges of the polygons, which it otherwise leaves gaps along, but
++	// antialiasing blends them with what is behind, the background where two
++	// polygons meet. All opaque polygons and the background have ID 0, so no
++	// edge is marked, not even at the border of the screen.
++	glEnable (GL_TEXTURE_2D | GL_OUTLINE | GL_BLEND);
++	glClearColor (0, 0, 0, 31);
++	glClearPolyID (0);
++	glClearDepth (GL_MAX_DEPTH);
++	glViewport (0, 0, 255, 191);
++	vramSetBankA (VRAM_A_TEXTURE_SLOT0);
++	vramSetBankB (VRAM_B_TEXTURE_SLOT1);
++	vramSetBankD (VRAM_D_TEXTURE_SLOT2);
++	vramSetBankG (VRAM_G_TEX_PALETTE_SLOT0);
++	smoothing = vid_smooth.value != 0;
++
++	VID_SetPalette (pal);
++	irqSet (IRQ_VBLANK, VID_VBlank);
++	irqEnable (IRQ_VBLANK);
++}
++
++/*
++================
++VID_InitTouchScreen
++
++The touch screen keeps the text console of the startup until a level or
++the demos run, or the menu is open without them, then shows the 2D drawing
++in bank C, the same layers as the menu on the top screen
++================
++*/
++static void VID_InitTouchScreen (void)
++{
++	int	bg;
++
++	Sys_EndTextConsole ();
++	videoSetModeSub (MODE_5_2D);
++	vramSetBankC (VRAM_C_SUB_BG);
++	memset (BG_GFX_SUB, 0, FB_STRIDE * 256);
++	for (bg = 2; bg <= 3; bg++)
++	{
++		int sub = bgInitSub (bg, BgType_Bmp8, BgSize_B8_512x256, 0, 0);
++
++		bgSetPriority (sub, bg == 2 ? 0 : 1);
++		bgSetScale (sub, SCALE_X, SCALE_Y);
++		if (bg == 2)
++			bgSetScrollf (sub, SCALE_X / 2, SCALE_Y / 2);
++	}
++	touchscreen = true;
++	PALETTE_CHANGED ();
++	VID_SetLayers ();
++	memset (copyrows, 1, sizeof(copyrows));
++	ui_overdrawn = true;	// the touch screen draws all of it again
++}
++
++void VID_Shutdown (void)
++{
++	irqClear (IRQ_VBLANK);
++}
++
++void VID_MarkRows (int y, int height)
++{
++	int	bottom = min (y + height, BASEHEIGHT), i;
++
++	if (menu_drawing)
++		return;
++	y = max (y, 0);
++	for (i = y; i < bottom; i++)
++		if (menurows[i])
++		{
++			memcpy (vid.buffer + i * BASEWIDTH, (byte *) BG_BMP_RAM_SUB (0) + i * FB_STRIDE, BASEWIDTH);
++			menurows[i] = false;
++		}
++	if (!ui_drawing && y < ui_bottom && bottom > ui_top)
++		ui_overdrawn = true;
++	memset (copyrows + y, 1, max (bottom - y, 0));
++}
++
++qboolean VID_BeginUI (int top, int bottom)
++{
++	qboolean	overdrawn = ui_overdrawn;
++
++	ui_top = top;
++	ui_bottom = bottom;
++	ui_overdrawn = false;
++	ui_drawing = true;
++	return overdrawn;
++}
++
++void VID_EndUI (void)
++{
++	ui_drawing = false;
++}
++
++// Copies the rows that changed to the touch screen
++static void VID_CopyRows (void)
++{
++	u32	*src = (u32 *) vid.buffer, *dst = (u32 *) BG_BMP_RAM_SUB (0);
++	int	y;
++
++	for (y = 0; y < BASEHEIGHT; y++, src += BASEWIDTH / 4, dst += FB_STRIDE / 4)
++		if (copyrows[y])
++			memcpy (dst, src, BASEWIDTH);
++	memset (copyrows, 0, sizeof(copyrows));
++}
++
++/*
++================
++VID_BeginMenu
++
++The menu draws into the 2D buffer on a transparent background, once the
++touch screen has what it shows
++================
++*/
++void VID_BeginMenu (void)
++{
++	if (touchscreen)
++		VID_CopyRows ();
++	menu_drawing = true;
++	memset (vid.buffer, 255, BASEWIDTH * BASEHEIGHT);
++}
++
++void VID_MoveMenu (int dx, int dy)
++{
++	int	bg;
++
++	// the blend layer samples half an output pixel further
++	for (bg = 2; bg <= 3; bg++)
++		bgSetScrollf (bg, (bg == 2 ? SCALE_X / 2 : 0) - (dx << 8), (bg == 2 ? SCALE_Y / 2 : 0) - (dy << 8));
++}
++
++/*
++================
++VID_EndMenu
++
++Cuts the menu into the tiles of the top screen, with Quake's black as 255
++and 0 transparent, the tiles with nothing on them are tile 0. A tile keeps
++its slot in VRAM while it shows the same picture, a changed one goes to a
++slot the shown map doesn't use and the new map is shown at the next
++vblank, so the screen never shows a tile while it's written. The rows of
++the 2D buffer get back what the touch screen shows when drawn again.
++================
++*/
++// Thumb code, calico's inline functions don't go into the ARM code below
++static void VID_WaitForMenuMap (void)
++{
++	while (nextmap_ready)
++		threadWaitForVBlank ();
++}
++
++__attribute__((target("arm")))
++void VID_EndMenu (void)
++{
++	static u32	tilehash[MENU_TILES];
++	static byte	used[MENU_TILES];
++	u16		*tiles = (u16 *) BG_TILE_RAM (0);
++	byte	*row;
++	u32		*p, all, hash;
++	int		tx, ty, x, y, slot, free = 1;
++
++	// the slots of the shown map stay as they are
++	VID_WaitForMenuMap ();
++	memset (used, 0, sizeof(used));
++	for (ty = 0; ty < MENU_ROWS; ty++)
++		for (tx = 0; tx < MENU_COLS; tx++)
++			used[menumap[ty][tx]] = true;
++
++	for (ty = 0; ty < MENU_ROWS; ty++)
++	{
++		row = vid.buffer + ty * 8 * BASEWIDTH;
++		for (tx = 0; tx < MENU_COLS; tx++)
++		{
++			all = 0xffffffff;
++			hash = 0;
++			for (y = 0; y < 8; y++)
++			{
++				p = (u32 *) (row + y * BASEWIDTH + tx * 8);
++				all &= p[0] & p[1];
++				hash = (hash * 0x9e3779b1 + p[0]) * 0x9e3779b1 + p[1];
++			}
++			slot = menumap[ty][tx];
++			if (all == 0xffffffff)
++				slot = 0;
++			else if (!slot || tilehash[slot] != hash)
++			{
++				// a changed tile goes to a free slot, without one it's empty
++				while (free < MENU_TILES && used[free])
++					free++;
++				slot = free < MENU_TILES ? free : 0;
++				if (slot)
++				{
++					used[slot] = true;
++					tilehash[slot] = hash;
++					for (y = 0; y < 8; y++)
++						for (x = 0; x < 8; x += 2)
++							tiles[slot * 32 + y * 4 + x / 2] = menu_colors[row[y * BASEWIDTH + tx * 8 + x]]
++								| (menu_colors[row[y * BASEWIDTH + tx * 8 + x + 1]] << 8);
++				}
++			}
++			nextmap[ty][tx] = slot;
++		}
++	}
++	// for VID_VBlank, the compiler mustn't move the stores to the map after this
++	__asm__ volatile ("" ::: "memory");
++	nextmap_ready = true;
++	menu_drawing = false;
++
++	if (touchscreen)
++		memset (menurows, true, sizeof(menurows));
++	else
++		memset (vid.buffer, 0, BASEWIDTH * BASEHEIGHT);
++}
++
++/*
++================
++VID_Flush3D
++
++Swaps the 3D buffers at the next vblank, the next 3D command waits for it.
++The frame is depth tested on w (r_nds.c)
++================
++*/
++void VID_Flush3D (void)
++{
++	GFX_FLUSH = 2;
++}
++
++// Frames per second of the last second, in the top right corner
++static void VID_DrawFPS (void)
++{
++	static double	lasttime;
++	static int		frames, totalframes;
++	static char		text[16];
++	char			log[48];
++
++	frames++;
++	totalframes++;
++	if (realtime - lasttime >= 1)
++	{
++		snprintf (text, sizeof(text), "%.0f fps", frames / (realtime - lasttime));
++		if (vid_showfps.value > 1)
++		{
++			snprintf (log, sizeof(log), "FPS %d %.3f\n", totalframes, realtime);
++			nocashMessage (log);
++		}
++		frames = 0;
++		lasttime = realtime;
++	}
++	vid_textlayer = true;
++	Draw_String (TEXT_WIDTH - strlen (text) * 8, 0, text);
++	vid_textlayer = false;
++}
++
++void VID_Update (vrect_t *rects)
++{
++	qboolean showmenu = !scr_drawloading && (key_dest == key_menu || scr_drawdialog);
++
++	if (!touchscreen && ((!con_forcedup && !scr_drawloading)
++		|| (key_dest == key_menu && cls.state == ca_disconnected && cls.demonum == -1)))
++		VID_InitTouchScreen ();
++	if (touchscreen && showmenu != menu_shown)
++	{
++		menu_shown = showmenu;
++		VID_SetLayers ();
++	}
++	if (vid_showfps.value)
++		VID_DrawFPS ();
++	VID_UpdateText ();
++
++	if (smoothing != (vid_smooth.value != 0) && touchscreen)
++	{
++		smoothing = vid_smooth.value != 0;
++		VID_SetLayers ();
++	}
++	if (touchscreen)
++		VID_CopyRows ();
++}
++
++/*
++================
++D_BeginDirectRect
++================
++*/
++void D_BeginDirectRect (int x, int y, byte *pbitmap, int width, int height)
++{
++}
++
++/*
++================
++D_EndDirectRect
++================
++*/
++void D_EndDirectRect (int x, int y, int width, int height)
++{
++}

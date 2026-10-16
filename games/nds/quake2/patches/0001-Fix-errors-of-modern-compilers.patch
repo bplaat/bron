@@ -1,0 +1,75 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Sun, 11 Oct 2026 20:56:14 +0200
+Subject: [PATCH] Fix errors of modern compilers
+
+---
+ client/keys.c   | 1 +
+ client/menu.c   | 3 ++-
+ game/g_items.c  | 6 +++---
+ game/m_boss31.c | 2 +-
+ 4 files changed, 7 insertions(+), 5 deletions(-)
+
+diff --git a/client/keys.c b/client/keys.c
+index 6f6728a..c5ce4b4 100644
+--- a/client/keys.c
++++ b/client/keys.c
+@@ -17,6 +17,7 @@ along with this program; if not, write to the Free Software
+ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
+ 
+ */
++#include <ctype.h>
+ #include "client.h"
+ 
+ /*
+diff --git a/client/menu.c b/client/menu.c
+index 1835a86..eb954ba 100644
+--- a/client/menu.c
++++ b/client/menu.c
+@@ -1826,7 +1826,7 @@ void M_Menu_Credits_f( void )
+ 	int		isdeveloper = 0;
+ 
+ 	creditsBuffer = NULL;
+-	count = FS_LoadFile ("credits", &creditsBuffer);
++	count = FS_LoadFile ("credits", (void **)&creditsBuffer);
+ 	if (count != -1)
+ 	{
+ 		p = creditsBuffer;
+@@ -3577,6 +3577,7 @@ static qboolean PlayerConfig_ScanDirectories( void )
+ 	}
+ 	if ( dirnames )
+ 		FreeFileList( dirnames, ndirs );
++	return s_numplayermodels != 0;
+ }
+ 
+ static int pmicmpfnc( const void *_a, const void *_b )
+diff --git a/game/g_items.c b/game/g_items.c
+index e81e835..8091238 100644
+--- a/game/g_items.c
++++ b/game/g_items.c
+@@ -40,9 +40,9 @@ gitem_armor_t jacketarmor_info	= { 25,  50, .30, .00, ARMOR_JACKET};
+ gitem_armor_t combatarmor_info	= { 50, 100, .60, .30, ARMOR_COMBAT};
+ gitem_armor_t bodyarmor_info	= {100, 200, .80, .60, ARMOR_BODY};
+ 
+-static int	jacket_armor_index;
+-static int	combat_armor_index;
+-static int	body_armor_index;
++int		jacket_armor_index;
++int		combat_armor_index;
++int		body_armor_index;
+ static int	power_screen_index;
+ static int	power_shield_index;
+ 
+diff --git a/game/m_boss31.c b/game/m_boss31.c
+index 7c91d99..9ade47c 100644
+--- a/game/m_boss31.c
++++ b/game/m_boss31.c
+@@ -28,7 +28,7 @@ jorg
+ #include "g_local.h"
+ #include "m_boss31.h"
+ 
+-extern SP_monster_makron (edict_t *self);
++extern void SP_monster_makron (edict_t *self);
+ qboolean visible (edict_t *self, edict_t *other);
+ 
+ static int	sound_pain1;

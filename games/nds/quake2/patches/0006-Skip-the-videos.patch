@@ -1,0 +1,28 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Mon, 12 Oct 2026 08:10:12 +0200
+Subject: [PATCH] Skip the videos
+
+The DS doesn't play the videos, they end right away: decoding a frame
+takes 134 KiB of stack.
+---
+ client/cl_cin.c | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/client/cl_cin.c b/client/cl_cin.c
+index 18ea81a..3b98632 100644
+--- a/client/cl_cin.c
++++ b/client/cl_cin.c
+@@ -606,6 +606,12 @@ void SCR_PlayCinematic (char *arg)
+ 		return;
+ 	}
+ 
++	// the DS doesn't play the videos, they end right away, decoding a frame
++	// takes 134 KiB of stack
++	SCR_FinishCinematic ();
++	cl.cinematictime = 0;
++	return;
++
+ 	Com_sprintf (name, sizeof(name), "video/%s", arg);
+ 	FS_FOpenFile (name, &cl.cinematic_file);
+ 	if (!cl.cinematic_file)

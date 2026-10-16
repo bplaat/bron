@@ -1,0 +1,560 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Mon, 12 Oct 2026 07:54:52 +0200
+Subject: [PATCH] Add the DS system layer
+
+---
+ nds/net_nds.c | 126 ++++++++++++++++
+ nds/sys_nds.c | 410 ++++++++++++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 536 insertions(+)
+ create mode 100644 nds/net_nds.c
+ create mode 100644 nds/sys_nds.c
+
+diff --git a/nds/net_nds.c b/nds/net_nds.c
+new file mode 100644
+index 0000000..6588b84
+--- /dev/null
++++ b/nds/net_nds.c
+@@ -0,0 +1,126 @@
++/*
++Copyright (C) 1997-2001 Id Software, Inc.
++
++This program is free software; you can redistribute it and/or
++modify it under the terms of the GNU General Public License
++as published by the Free Software Foundation; either version 2
++of the License, or (at your option) any later version.
++
++This program is distributed in the hope that it will be useful,
++but WITHOUT ANY WARRANTY; without even the implied warranty of
++MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
++
++See the GNU General Public License for more details.
++
++You should have received a copy of the GNU General Public License
++along with this program; if not, write to the Free Software
++Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
++
++*/
++// net_nds.c -- Nintendo DS network driver
++//
++// There is no network play, the client and server of the single player game
++// talk through the loopback buffers of net_udp.c
++
++#include "../qcommon/qcommon.h"
++
++#define	MAX_LOOPBACK	4
++
++typedef struct
++{
++	byte	data[MAX_MSGLEN];
++	int		datalen;
++} loopmsg_t;
++
++typedef struct
++{
++	loopmsg_t	msgs[MAX_LOOPBACK];
++	int			get, send;
++} loopback_t;
++
++static loopback_t	loopbacks[2];
++
++qboolean NET_CompareAdr (netadr_t a, netadr_t b)
++{
++	return a.type == b.type;
++}
++
++qboolean NET_CompareBaseAdr (netadr_t a, netadr_t b)
++{
++	return a.type == b.type;
++}
++
++char *NET_AdrToString (netadr_t a)
++{
++	return "loopback";
++}
++
++qboolean NET_StringToAdr (char *s, netadr_t *a)
++{
++	if (strcmp (s, "localhost"))
++		return false;
++	memset (a, 0, sizeof(*a));
++	a->type = NA_LOOPBACK;
++	return true;
++}
++
++qboolean NET_IsLocalAddress (netadr_t adr)
++{
++	return adr.type == NA_LOOPBACK;
++}
++
++qboolean NET_GetPacket (netsrc_t sock, netadr_t *net_from, sizebuf_t *net_message)
++{
++	int			i;
++	loopback_t	*loop;
++
++	loop = &loopbacks[sock];
++
++	if (loop->send - loop->get > MAX_LOOPBACK)
++		loop->get = loop->send - MAX_LOOPBACK;
++
++	if (loop->get >= loop->send)
++		return false;
++
++	i = loop->get & (MAX_LOOPBACK-1);
++	loop->get++;
++
++	memcpy (net_message->data, loop->msgs[i].data, loop->msgs[i].datalen);
++	net_message->cursize = loop->msgs[i].datalen;
++	memset (net_from, 0, sizeof(*net_from));
++	net_from->type = NA_LOOPBACK;
++	return true;
++}
++
++void NET_SendPacket (netsrc_t sock, int length, void *data, netadr_t to)
++{
++	int			i;
++	loopback_t	*loop;
++
++	if (to.type != NA_LOOPBACK)
++		return;
++
++	loop = &loopbacks[sock^1];
++
++	i = loop->send & (MAX_LOOPBACK-1);
++	loop->send++;
++
++	memcpy (loop->msgs[i].data, data, length);
++	loop->msgs[i].datalen = length;
++}
++
++void NET_Init (void)
++{
++}
++
++void NET_Shutdown (void)
++{
++}
++
++void NET_Config (qboolean multiplayer)
++{
++}
++
++void NET_Sleep (int msec)
++{
++}
+diff --git a/nds/sys_nds.c b/nds/sys_nds.c
+new file mode 100644
+index 0000000..ecbe502
+--- /dev/null
++++ b/nds/sys_nds.c
+@@ -0,0 +1,410 @@
++/*
++Copyright (C) 1997-2001 Id Software, Inc.
++
++This program is free software; you can redistribute it and/or
++modify it under the terms of the GNU General Public License
++as published by the Free Software Foundation; either version 2
++of the License, or (at your option) any later version.
++
++This program is distributed in the hope that it will be useful,
++but WITHOUT ANY WARRANTY; without even the implied warranty of
++MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
++
++See the GNU General Public License for more details.
++
++You should have received a copy of the GNU General Public License
++along with this program; if not, write to the Free Software
++Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
++
++*/
++// sys_nds.c -- Nintendo DS system driver
++//
++// Quake II runs in its own thread, the ARM9 main stack lives in the 16 KiB
++// DTCM and Quake II keeps big arrays on the stack. A DS has 4 MiB of RAM,
++// too little for Quake II, the 8 MiB of the Memory Expansion Pak of the DS
++// Browser in the GBA slot become the far heap for the data that is used
++// least often. A DSi has 16 MiB and no GBA slot. Game data comes from
++// /data/quake2/ on the SD card, which also gets the config and savegames,
++// and NitroFS (embedded in the ROM). The player is named after the DS user.
++
++#include "../qcommon/qcommon.h"
++
++#include <nds.h>
++#include <ctype.h>
++#include <fat.h>
++#include <filesystem.h>
++#include <dirent.h>
++#include <malloc.h>
++#include <sys/stat.h>
++
++#define DATA_DIR			"/data/quake2"
++#define QUAKE2_STACK_SIZE	(128 * 1024)
++#define MAX_ARGS			32
++
++static Thread	quake2_thread;
++static TickTask	tick_task;
++static qboolean	textconsole = true;	// the touch screen shows the text console
++static qboolean	loadingdots = true;	// with a dot for some lines of the log
++static int		loglines;
++
++#define LOG_LINES_PER_DOT	7		// the startup fills about a row, like DOOM's
++#define LOG_DOTS			28		// a row with two columns of margin on both sides
++#define LOG_ROWS			2
++
++// The tick counter behind Sys_Milliseconds only runs while a tick task is
++// scheduled, this one keeps it going
++static void Sys_TickTask (TickTask *t)
++{
++}
++
++/*
++===============================================================================
++
++SYSTEM IO
++
++===============================================================================
++*/
++
++// Prints Quake II text on the touch screen console and to the no$gba debug
++// output of emulators: the high bit selects the green font and the low
++// characters are graphics, like the separator lines
++static void Sys_PrintText (const char *text)
++{
++	static char	plain[1024];	// emulators can't read it from the DTCM stack
++	char		*out = plain;
++	int			c, dot;
++
++	for (; *text && out < plain + sizeof(plain) - 1; text++)
++	{
++		c = *text & 0x7f;
++		if (c >= 29 && c <= 31)
++			c = '-';
++		if (c >= ' ' || c == '\n')
++			*out++ = c;
++	}
++	*out = 0;
++	// while Quake II starts, a dot for every few lines on the touch screen,
++	// in rows as wide as the text, its log is far too wide for the 32 column
++	// console
++	if (textconsole && loadingdots)
++	{
++		for (out = plain; *out; out++)
++			if (*out == '\n' && !(++loglines % LOG_LINES_PER_DOT)
++				&& loglines <= LOG_ROWS * LOG_DOTS * LOG_LINES_PER_DOT)
++			{
++				dot = loglines / LOG_LINES_PER_DOT;
++				if (dot > 1 && (dot - 1) % LOG_DOTS == 0)
++					fputs ("\n  ", stdout);
++				putchar ('.');
++			}
++	}
++	else if (textconsole)
++		fputs (plain, stdout);
++	nocashMessage (plain);
++}
++
++// The text console of the touch screen, its red (31) is Quake II's green
++static void Sys_TextConsole (void)
++{
++	consoleDemoInit ();
++	BG_PALETTE_SUB[1 * 16 + 15] = RGB15 (9, 13, 4);
++	BG_PALETTE_SUB[9 * 16 + 15] = RGB15 (17, 25, 8);
++}
++
++void Sys_EndTextConsole (void)
++{
++	textconsole = false;
++}
++
++void Sys_ConsoleOutput (char *string)
++{
++	Sys_PrintText (string);
++}
++
++char *Sys_ConsoleInput (void)
++{
++	return NULL;
++}
++
++void Sys_Error (char *error, ...)
++{
++	va_list	argptr;
++	char	text[1024];
++
++	va_start (argptr, error);
++	vsnprintf (text, sizeof(text), error, argptr);
++	va_end (argptr);
++
++	CL_Shutdown ();
++	if (!textconsole)
++	{
++		Sys_TextConsole ();
++		textconsole = true;
++	}
++	loadingdots = false;
++	printf ("\n\n\x1b[31;1m  Quake II had to stop\x1b[39;0m\n\n");
++	Sys_PrintText (text);
++	printf ("\n\n\x1b[30;1m  Press START to exit\x1b[39;0m\n");
++	do
++	{
++		threadWaitForVBlank ();
++		scanKeys ();
++	} while (pmMainLoop () && !(keysDown () & KEY_START));
++	exit (1);
++}
++
++void Sys_Quit (void)
++{
++	CL_Shutdown ();
++	Qcommon_Shutdown ();
++	exit (0);
++}
++
++void Sys_Init (void)
++{
++}
++
++void Sys_AppActivate (void)
++{
++}
++
++char *Sys_GetClipboardData (void)
++{
++	return NULL;
++}
++
++void Sys_CopyProtect (void)
++{
++}
++
++/*
++===============================================================================
++
++TIME AND FILES
++
++===============================================================================
++*/
++
++int	curtime;
++
++int Sys_Milliseconds (void)
++{
++	curtime = (int) ((u64) tickGetCount () * 1000 / TICK_FREQ);
++	return curtime;
++}
++
++void Sys_Mkdir (char *path)
++{
++	mkdir (path, 0777);
++}
++
++static char	findbase[MAX_OSPATH];
++static char	findpath[MAX_OSPATH];
++static char	findpattern[MAX_OSPATH];
++static DIR	*fdir;
++
++// Matches a file name with a pattern of * and ?, case insensitive
++static qboolean Sys_MatchPattern (const char *pattern, const char *name)
++{
++	for (; *pattern; pattern++, name++)
++	{
++		if (*pattern == '*')
++		{
++			for (; *name; name++)
++				if (Sys_MatchPattern (pattern + 1, name))
++					return true;
++			return Sys_MatchPattern (pattern + 1, name);
++		}
++		if (!*name || (*pattern != '?' && tolower (*pattern) != tolower (*name)))
++			return false;
++	}
++	return !*name;
++}
++
++static char *Sys_FindMatch (unsigned musthave, unsigned canthave)
++{
++	struct dirent	*d;
++	struct stat		st;
++
++	if (!fdir)
++		return NULL;
++	while ((d = readdir (fdir)))
++	{
++		if (!strcmp (d->d_name, ".") || !strcmp (d->d_name, "..")
++			|| !Sys_MatchPattern (findpattern, d->d_name))
++			continue;
++		Com_sprintf (findpath, sizeof(findpath), "%s/%s", findbase, d->d_name);
++		if (stat (findpath, &st))
++			continue;
++		if ((S_ISDIR (st.st_mode) && (canthave & SFF_SUBDIR))
++			|| (!S_ISDIR (st.st_mode) && (musthave & SFF_SUBDIR)))
++			continue;
++		return findpath;
++	}
++	return NULL;
++}
++
++char *Sys_FindFirst (char *path, unsigned musthave, unsigned canthave)
++{
++	char	*p;
++
++	if (fdir)
++		Sys_Error ("Sys_BeginFind without close");
++
++	Com_sprintf (findbase, sizeof(findbase), "%s", path);
++	if ((p = strrchr (findbase, '/')))
++	{
++		*p = 0;
++		Com_sprintf (findpattern, sizeof(findpattern), "%s", p + 1);
++	}
++	else
++		strcpy (findpattern, "*");
++	if (!strcmp (findpattern, "*.*"))
++		strcpy (findpattern, "*");
++
++	fdir = opendir (findbase);
++	return Sys_FindMatch (musthave, canthave);
++}
++
++char *Sys_FindNext (unsigned musthave, unsigned canthave)
++{
++	return Sys_FindMatch (musthave, canthave);
++}
++
++void Sys_FindClose (void)
++{
++	if (fdir)
++		closedir (fdir);
++	fdir = NULL;
++}
++
++/*
++===============================================================================
++
++GAME
++
++===============================================================================
++*/
++
++// The game is linked in, not loaded from a library
++void *GetGameAPI (void *import);
++
++void *Sys_GetGameAPI (void *parms)
++{
++	return GetGameAPI (parms);
++}
++
++void Sys_UnloadGame (void)
++{
++}
++
++//=============================================================================
++
++// Extra command line options (eg. +map base2) can be put in
++// /data/quake2/args.txt, separated by whitespace
++static void Sys_ReadArgs (int *argc, char **argv)
++{
++	static char	text[512];
++	char		*p;
++	FILE		*f;
++	int			len;
++
++	if (!(f = fopen (DATA_DIR "/args.txt", "r")))
++		return;
++	len = fread (text, 1, sizeof(text) - 1, f);
++	fclose (f);
++	text[len] = 0;
++
++	for (p = strtok (text, " \t\r\n"); p && *argc < MAX_ARGS; p = strtok (NULL, " \t\r\n"))
++		argv[(*argc)++] = p;
++}
++
++// The user name of the DS settings is the player's name, after the config
++static void Sys_SetPlayerName (void)
++{
++	char	name[16];
++	int		i, n = 0;
++
++	for (i = 0; i < PersonalData->nameLen && i < 10; i++)
++		if (PersonalData->name[i] >= ' ' && PersonalData->name[i] < 127 && PersonalData->name[i] != '"')
++			name[n++] = PersonalData->name[i];
++	name[n] = 0;
++	if (n)
++		Cvar_Set ("name", name);
++}
++
++typedef struct
++{
++	int		argc;
++	char	**argv;
++} sysargs_t;
++
++static int Sys_Quake2Main (void *arg)
++{
++	sysargs_t	*args = arg;
++	int			time, oldtime, newtime;
++
++	Qcommon_Init (args->argc, args->argv);
++	Sys_SetPlayerName ();
++	oldtime = Sys_Milliseconds ();
++	for (;;)
++	{
++		do
++		{
++			newtime = Sys_Milliseconds ();
++			time = newtime - oldtime;
++		} while (time < 1);
++		Qcommon_Frame (time);
++		oldtime = newtime;
++	}
++	return 0;
++}
++
++int main (int argc, char **argv)
++{
++	static char		*quake2_argv[MAX_ARGS + 1] = { "quake2", "+set", "basedir", DATA_DIR, "+set", "cddir", "nitro:" };
++	static sysargs_t	args = { 7, quake2_argv };
++	void			*stack;
++
++	// In DSi mode the ARM9 runs at twice the speed of the DS
++	if (isDSiMode ())
++		setCpuClock (true);
++
++	tickTaskStart (&tick_task, Sys_TickTask, ticksFromHz (1), ticksFromHz (1));
++	Sys_TextConsole ();
++	printf ("\x1b[31;1m  Quake II\x1b[39;0m for Nintendo %s\n", isDSiMode () ? "DSi" : "DS");
++	printf ("\x1b[31m--------------------------------\x1b[39m");
++
++	// A DS needs the Memory Expansion Pak, the GBA slot stays open while
++	// its RAM is used
++	if (!isDSiMode ())
++	{
++		if (!gbacartOpen () || !ramPakInit ())
++			Sys_Error ("On a DS Quake II needs the\nMemory Expansion Pak of the DS\nBrowser in the GBA slot");
++		far_heap_init (RAM_PAK_BASE, RAM_PAK_SIZE);
++		printf ("  With the Memory Expansion Pak\n");
++	}
++
++	nitroFSInit (NULL);
++	if (fatInitDefault ())
++	{
++		Sys_Mkdir ("/data");
++		Sys_Mkdir (DATA_DIR);
++		Sys_Mkdir (DATA_DIR "/" BASEDIRNAME);
++		Sys_ReadArgs (&args.argc, quake2_argv);
++	}
++	else
++	{
++		// Without an SD card everything comes from the ROM and nothing is saved
++		printf ("\x1b[33;1m  No SD card, saving is off\x1b[39;0m\n");
++		quake2_argv[3] = "nitro:";
++		args.argc = 4;
++	}
++	printf ("\n  Loading Quake II\n\n  ");
++
++	if (!(stack = malloc (QUAKE2_STACK_SIZE)))
++		Sys_Error ("Unable to allocate the stack");
++	threadPrepare (&quake2_thread, Sys_Quake2Main, &args, (char *) stack + QUAKE2_STACK_SIZE, MAIN_THREAD_PRIO);
++	threadStart (&quake2_thread);
++	return threadJoin (&quake2_thread);
++}

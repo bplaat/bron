@@ -1,0 +1,95 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Wed, 7 Oct 2026 12:00:00 +0200
+Subject: [PATCH] Fit in the 4 MiB of the DS
+
+The screen arrays are sized for 320x320 at most, the size of the tilted
+view when the player dies, instead of 1600x1200. The unused 72 KB music
+buffer is gone. The tile cache takes all the art when it fits, else all
+free memory, found in steps of 4 KB, but 192 KB for the music, the files
+and the rest of the game.
+---
+ Engine/src/build.h |  4 ++--
+ Engine/src/tiles.c | 16 +++++++++++++---
+ Game/src/duke3d.h  |  1 -
+ Game/src/global.c  |  1 -
+ 4 files changed, 15 insertions(+), 7 deletions(-)
+
+diff --git a/Engine/src/build.h b/Engine/src/build.h
+index f0389e5..d926b56 100644
+--- a/Engine/src/build.h
++++ b/Engine/src/build.h
+@@ -20,8 +20,8 @@
+ 
+ #define MAXSTATUS 1024
+ #define MAXPLAYERS 16
+-#define MAXXDIM 1600
+-#define MAXYDIM 1200
++#define MAXXDIM 320
++#define MAXYDIM 320
+ #define MAXPALOOKUPS 256
+ #define MAXPSKYTILES 256
+ #define MAXSPRITESONSCREEN 1024
+diff --git a/Engine/src/tiles.c b/Engine/src/tiles.c
+index 2a256a6..ea8da2a 100644
+--- a/Engine/src/tiles.c
++++ b/Engine/src/tiles.c
+@@ -11,6 +11,10 @@
+ #include "draw.h"
+ #include "filesystem.h"
+ 
++/* Heap left free when the art doesn't fit in the cache, for the music, up
++   to 100 KB, the files and the rest of the game */
++#define CACHE_HEAP_RESERVE (192*1024)
++
+ char  artfilename[20];
+ 
+ tile_t tiles[MAXTILES];
+@@ -265,14 +269,20 @@ int loadpics(char  *filename, char * gamedir)
+     
+     clearbuf(gotpic,(MAXTILES+31)>>5,0L);
+     
+-    /* try dpmi_DETERMINEMAXREALALLOC! */
+-    
++    /* All the art if it fits, else all free memory but some for the music,
++       files and the rest of the game */
+     cachesize = max(artsize,1048576);
+     while ((pic = (uint8_t  *)kkmalloc(cachesize)) == NULL)
+     {
+-        cachesize -= 65536L;
++        cachesize -= 4096L;
+         if (cachesize < 65536) return(-1);
+     }
++    if (cachesize < artsize)
++    {
++        kkfree(pic);
++        cachesize -= CACHE_HEAP_RESERVE;
++        if (cachesize < 65536 || (pic = (uint8_t  *)kkmalloc(cachesize)) == NULL) return(-1);
++    }
+     initcache(pic,cachesize);
+     
+     for(i=0; i<MAXTILES; i++)
+diff --git a/Game/src/duke3d.h b/Game/src/duke3d.h
+index 9399329..4c31cd7 100644
+--- a/Game/src/duke3d.h
++++ b/Game/src/duke3d.h
+@@ -372,7 +372,6 @@ extern short numanimwalls,probey,lastprobey;
+ char  *mymembuf;
+ extern uint8_t  typebuflen;
+ char typebuf[41];
+-extern uint8_t  MusicPtr[72000];
+ extern int32_t msx[2048],msy[2048];
+ extern short cyclers[MAXCYCLERS][6],numcyclers;
+ extern char  myname[2048];
+diff --git a/Game/src/global.c b/Game/src/global.c
+index adc23be..fb5766e 100644
+--- a/Game/src/global.c
++++ b/Game/src/global.c
+@@ -33,7 +33,6 @@ Prepared for public release: 03/21/2003 - Charlie Wiederhold, 3D Realms
+ #include "duke3d.h"
+ 
+ char  *mymembuf;
+-uint8_t  MusicPtr[72000];
+ 
+ 
+ crc32_t crc32lookup[] = {

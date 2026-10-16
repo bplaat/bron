@@ -1,0 +1,50 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Sun, 11 Oct 2026 20:51:41 +0200
+Subject: [PATCH] Insert the Memory Expansion Pak from the interface
+
+desmume_insert_expansion_pak puts the 8 MiB RAM pak of the DS Browser
+in the GBA slot.
+---
+ desmume/src/frontend/interface/interface.cpp | 6 ++++++
+ desmume/src/frontend/interface/interface.h   | 3 +++
+ 2 files changed, 9 insertions(+)
+
+diff --git a/desmume/src/frontend/interface/interface.cpp b/desmume/src/frontend/interface/interface.cpp
+index 90a6af0..45e8499 100644
+--- a/desmume/src/frontend/interface/interface.cpp
++++ b/desmume/src/frontend/interface/interface.cpp
+@@ -31,6 +31,7 @@
+ #include "../../mc.h"
+ #include "../../firmware.h"
+ #include "../../armcpu.h"
++#include "../../slot2.h"
+ #include "../posix/shared/sndsdl.h"
+ #include "../posix/shared/ctrlssdl.h"
+ #include <locale>
+@@ -561,6 +562,11 @@ EXPORTED void desmume_wav_end(void)
+ 	WAV_End();
+ }
+ 
++EXPORTED BOOL desmume_insert_expansion_pak(void)
++{
++	return slot2_Change(NDS_SLOT2_EXPMEMORY);
++}
++
+ EXPORTED void desmume_screenshot(char *screenshot_buffer)
+ {
+     u16 *gpuFramebuffer = GPU->GetDisplayInfo().masterNativeBuffer16;
+diff --git a/desmume/src/frontend/interface/interface.h b/desmume/src/frontend/interface/interface.h
+index e4142c3..28491c3 100644
+--- a/desmume/src/frontend/interface/interface.h
++++ b/desmume/src/frontend/interface/interface.h
+@@ -195,6 +195,9 @@ EXPORTED void desmume_profile_stop(void);
+ EXPORTED BOOL desmume_wav_begin(const char *file_name);
+ EXPORTED void desmume_wav_end(void);
+ 
++// Puts the Memory Expansion Pak of the DS Browser in the GBA slot
++EXPORTED BOOL desmume_insert_expansion_pak(void);
++
+ // For automatic input processing with the SDL window, see desmume_draw_sdl_input.
+ EXPORTED BOOL desmume_input_joy_init(void);
+ EXPORTED void desmume_input_joy_uninit(void);

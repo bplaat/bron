@@ -1,0 +1,464 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Wed, 7 Oct 2026 12:00:00 +0200
+Subject: [PATCH] Add DS video
+
+display_nds.c replaces the SDL driver: BUILD renders the 256x192 top
+screen at its own resolution, scaling the menus and HUD as it does at any
+resolution, into main RAM, and DMA copies each frame into one of two 8bpp
+VRAM pages a few rows at a time, chained by interrupts, while the game
+goes on. Pages and palette are flipped on vblank, a palette set on a still
+screen, such as the end of a fade, is shown on its own. The 120 Hz timer
+counts from the hardware tick counter, the buttons come as keyboard
+scancodes. Banks C, D and E hold tables that are only read once made.
+---
+ Engine/src/engine.c |   2 -
+ nds/display_nds.c   | 419 ++++++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 419 insertions(+), 2 deletions(-)
+ create mode 100644 nds/display_nds.c
+
+diff --git a/Engine/src/engine.c b/Engine/src/engine.c
+index 5d264c6..ae52aee 100644
+--- a/Engine/src/engine.c
++++ b/Engine/src/engine.c
+@@ -3553,7 +3553,6 @@ static void initfastcolorlookup(int32_t rscale, int32_t gscale, int32_t bscale)
+     colscan[26] = i;
+ }
+ 
+-extern uint8_t lastPalette[768];
+ static void loadpalette(void)
+ {
+     int32_t k, fil;
+@@ -3569,7 +3568,6 @@ static void loadpalette(void)
+     
+     //CODE EXPLORATION
+     //WritePaletteToFile(palette,"palette.tga",16, 16);
+-    memcpy(lastPalette, palette, 768);
+     
+     
+     kread16(fil,&numpalookups);
+diff --git a/nds/display_nds.c b/nds/display_nds.c
+new file mode 100644
+index 0000000..ff7db72
+--- /dev/null
++++ b/nds/display_nds.c
+@@ -0,0 +1,419 @@
++//
++// Nintendo DS video and timer driver for the BUILD engine
++//
++// BUILD renders the 256x192 top screen at its own resolution into a frame
++// in main RAM. DMA copies each frame into one of two 8bpp bitmap pages in
++// VRAM bank A, a few rows at a time chained by interrupts so the game can
++// go on, and the pages are flipped on vblank together with the palette, so
++// palette effects cost nothing. The timer counts BUILD's 120 Hz totalclock
++// from the hardware tick counter.
++//
++
++#include <nds.h>
++#include <string.h>
++
++#include "platform.h"
++#include "build.h"
++#include "display.h"
++#include "engine.h"
++#include "draw.h"
++
++#include "duke3d_nds.h"
++
++void Error(int errorType, char *error, ...);
++
++int32_t xres, yres, bytesperline, imageSize, maxpages;
++uint8_t *frameplace, *frameoffset;
++uint8_t *screen, vesachecked;
++int32_t buffermode, origbuffermode, linearmode;
++uint8_t permanentupdate = 0, vgacompatible;
++
++static uint8_t frame[NDS_SCREEN_W * NDS_SCREEN_H] __attribute__((aligned(32)));
++
++// The palette BUILD sets, and the one shown with the next page
++static u16 hw_palette[256] __attribute__((aligned(4)));
++static volatile bool palette_set, page_palette_dirty;
++static u16 page_palette[256] __attribute__((aligned(4)));
++static volatile int shown_page, pending_page = -1;
++// A palette set on a still screen, such as the end of a fade, is shown
++// after this many vblanks without a new page
++#define STILL_VBLANKS   6
++static int still_vblanks;
++static volatile u32 vblank_count;
++
++// DMA copies a frame to VRAM in blocks of rows, each started from the
++// interrupt of the last, while the game goes on with the next frame
++#define COPY_DMA        2
++#define COPY_ROWS       8
++#define COPY_BLOCK      (NDS_SCREEN_W * COPY_ROWS)
++static const uint8_t *copy_src;
++static uint8_t *copy_dst;
++static int copy_page;
++static volatile int copy_blocks;
++
++// From ITCM, so the interrupts don't fetch code from main RAM while the
++// DMA has the bus
++ITCM_CODE static void StartBlockCopy(void)
++{
++    DMA_SRC(COPY_DMA) = (u32) copy_src;
++    DMA_DEST(COPY_DMA) = (u32) copy_dst;
++    DMA_CR(COPY_DMA) = DMA_COPY_WORDS | DMA_IRQ_REQ | (COPY_BLOCK >> 2);
++}
++
++ITCM_CODE static void CopyBlockDone(void)
++{
++    if (--copy_blocks > 0)
++    {
++        copy_src += COPY_BLOCK;
++        copy_dst += COPY_BLOCK;
++        StartBlockCopy();
++    }
++    else
++        pending_page = copy_page;
++}
++
++static void WaitForCopy(void)
++{
++    while (copy_blocks > 0)
++        ;
++}
++
++static void VBlankHandler(void)
++{
++    ++vblank_count;
++    if (pending_page < 0)
++    {
++        if (palette_set && copy_blocks == 0 && ++still_vblanks >= STILL_VBLANKS)
++        {
++            memcpy(BG_PALETTE, hw_palette, sizeof(hw_palette));
++            palette_set = false;
++        }
++        return;
++    }
++    still_vblanks = 0;
++    // A CPU copy, DMA would miss palette writes still in the data cache
++    if (page_palette_dirty)
++    {
++        memcpy(BG_PALETTE, page_palette, sizeof(page_palette));
++        page_palette_dirty = false;
++    }
++    REG_BG3CNT = (REG_BG3CNT & ~(31 << MAP_BASE_SHIFT)) | BG_MAP_BASE(pending_page * 4);
++    shown_page = pending_page;
++    pending_page = -1;
++}
++
++// Banks C, D and E in a row hold tables that are only read once made: the
++// translucency table and the shade tables of the palettes
++#define VRAM_ARENA_START    ((uint8_t *) VRAM_C)
++#define VRAM_ARENA_END      ((uint8_t *) VRAM_E + 64 * 1024)
++static uint8_t *vram_next = VRAM_ARENA_START;
++
++uint32_t NDS_VBlankCount(void)
++{
++    return vblank_count;
++}
++
++void *NDS_AllocVRAM(int size)
++{
++    uint8_t *p = vram_next;
++
++    if (p + size > VRAM_ARENA_END)
++        Error(EXIT_FAILURE, "Out of VRAM for tables\n");
++    vram_next += (size + 3) & ~3;
++    return p;
++}
++
++// Sets up the top screen, also used for the splash before the game starts
++void NDS_InitVideo(void)
++{
++    videoSetMode(MODE_5_2D);
++    vramSetBankA(VRAM_A_MAIN_BG_0x06000000);
++    vramSetBankC(VRAM_C_LCD);
++    vramSetBankD(VRAM_D_LCD);
++    vramSetBankE(VRAM_E_LCD);
++    memset(BG_GFX, 0, 2 * NDS_SCREEN_W * 256);
++    bgInit(3, BgType_Bmp8, BgSize_B8_256x256, 0, 0);
++}
++
++// Shows a 256x192 picture on the top screen with a 6-bit RGB palette
++void NDS_ShowSplash(const uint8_t *pixels, const uint8_t *pal)
++{
++    int i;
++
++    for (i = 0; i < 256; ++i)
++        BG_PALETTE[i] = RGB15(pal[i * 3] >> 1, pal[i * 3 + 1] >> 1, pal[i * 3 + 2] >> 1);
++    if (pixels != NULL)
++        dmaCopy(pixels, BG_BMP_RAM(shown_page * 4), NDS_SCREEN_W * NDS_SCREEN_H);
++}
++
++void _platform_init(int argc, char **argv, const char *title, const char *iconName)
++{
++    _argc = argc;
++    _argv = argv;
++    irqSet(IRQ_VBLANK, VBlankHandler);
++    irqEnable(IRQ_VBLANK);
++    irqSet(IRQ_DMA0 << COPY_DMA, CopyBlockDone);
++    irqEnable(IRQ_DMA0 << COPY_DMA);
++}
++
++// The only mode is the top screen
++void getvalidvesamodes(void)
++{
++    validmodecnt = 1;
++    validmodexdim[0] = NDS_SCREEN_W;
++    validmodeydim[0] = NDS_SCREEN_H;
++}
++
++int _setgamemode(uint8_t davidoption, int32_t daxdim, int32_t daydim)
++{
++    int32_t i, j;
++
++    getvalidvesamodes();
++    vidoption = 1;
++    xdim = xres = NDS_SCREEN_W;
++    ydim = yres = NDS_SCREEN_H;
++    bytesperline = NDS_SCREEN_W;
++    imageSize = NDS_SCREEN_W * NDS_SCREEN_H;
++    vesachecked = vgacompatible = linearmode = 1;
++    activepage = visualpage = 0;
++    frameoffset = frameplace = frame;
++
++    // Room for horizlookup and horizlookup2
++    j = ydim * 4 * sizeof(int32_t);
++    free(horizlookup);
++    free(horizlookup2);
++    horizlookup = malloc(j);
++    horizlookup2 = malloc(j);
++    for (i = 0, j = 0; i <= ydim; ++i, j += bytesperline)
++        ylookup[i] = j;
++    horizycent = (ydim * 4) >> 1;
++
++    // Makes drawrooms work out the aspect again
++    oxyaspect = oxdimen = oviewingrange = -1;
++    setBytesPerLine(bytesperline);
++    setview(0, 0, xdim - 1, ydim - 1);
++    setbrightness(curbrightness, palette);
++    if (searchx < 0)
++    {
++        searchx = halfxdimen;
++        searchy = ydimen >> 1;
++    }
++    qsetmode = 200;
++    return 0;
++}
++
++// BUILD's palette entries are blue, green and red with 6 bits, and a pad byte
++int VBE_setPalette(uint8_t *palettebuffer)
++{
++    int i;
++
++    for (i = 0; i < 256; ++i, palettebuffer += 4)
++        hw_palette[i] = RGB15(palettebuffer[2] >> 1, palettebuffer[1] >> 1, palettebuffer[0] >> 1);
++    palette_set = true;
++    return 1;
++}
++
++int VBE_getPalette(int32_t start, int32_t num, uint8_t *palettebuffer)
++{
++    uint8_t *p = palettebuffer + start * 4;
++    int i;
++
++    for (i = start; i < start + num; ++i)
++    {
++        *p++ = ((hw_palette[i] >> 10) & 31) << 1;
++        *p++ = ((hw_palette[i] >> 5) & 31) << 1;
++        *p++ = (hw_palette[i] & 31) << 1;
++        *p++ = 0;
++    }
++    return 1;
++}
++
++void _uninitengine(void)
++{
++    WaitForCopy();
++}
++
++void _nextpage(void)
++{
++    // Wait until the last frame is shown, the back page is then free
++    WaitForCopy();
++    while (pending_page >= 0)
++        threadWaitForVBlank();
++
++    if (palette_set)
++    {
++        memcpy(page_palette, hw_palette, sizeof(hw_palette));
++        palette_set = false;
++        page_palette_dirty = true;
++    }
++
++    // The DMA reads main RAM, the data cache is written back first
++    copy_page = shown_page ^ 1;
++    copy_src = frame;
++    copy_dst = (uint8_t *) BG_BMP_RAM(copy_page * 4);
++    DC_FlushRange(frame, sizeof(frame));
++    copy_blocks = NDS_SCREEN_H / COPY_ROWS;
++    StartBlockCopy();
++
++    NDS_UpdateSubScreen();
++    _handle_events();
++}
++
++void _updateScreenRect(int32_t x, int32_t y, int32_t w, int32_t h)
++{
++}
++
++void *_getVideoBase(void)
++{
++    return frame;
++}
++
++uint8_t readpixel(uint8_t *location)
++{
++    return *location;
++}
++
++void drawpixel(uint8_t *location, uint8_t pixel)
++{
++    *location = pixel;
++}
++
++// The 2D editor modes don't exist on the DS
++void setcolor16(uint8_t color) {}
++void drawpixel16(int32_t offset) {}
++void fillscreen16(int32_t offset, int32_t color, int32_t blocksize) {}
++void drawline16(int32_t XStart, int32_t YStart, int32_t XEnd, int32_t YEnd, uint8_t Color) {}
++void clear2dscreen(void) {}
++void setvmode(int mode) {}
++
++int screencapture(char *filename, uint8_t inverseit)
++{
++    return 0;
++}
++
++// ---------------------------------------------------------------------------
++// Input, read from the DS buttons in duke3d_input.c
++// ---------------------------------------------------------------------------
++
++static uint8_t lastkey;
++
++uint8_t _readlastkeyhit(void)
++{
++    return lastkey;
++}
++
++// Sends a PC scancode press or release to the keyboard handler, extended
++// keys (0xe0xx) as their two bytes
++void NDS_PostScancode(int scancode, bool pressed)
++{
++    if (scancode >> 8)
++    {
++        lastkey = scancode >> 8;
++        keyhandler();
++    }
++    lastkey = (scancode & 0xff) | (pressed ? 0 : 0x80);
++    keyhandler();
++}
++
++void _handle_events(void)
++{
++    NDS_PollInput();
++    NDS_UpdateSound();
++}
++
++void _idle(void)
++{
++    threadWaitForVBlank();
++    _handle_events();
++}
++
++void initkeys(void) {}
++void uninitkeys(void) {}
++
++int setupmouse(void)
++{
++    moustat = 0;
++    return 0;
++}
++
++void readmousexy(short *x, short *y)
++{
++    if (x)
++        *x = 0;
++    if (y)
++        *y = 0;
++}
++
++void readmousebstatus(short *bstatus)
++{
++    if (bstatus)
++        *bstatus = 0;
++}
++
++void _joystick_init(void) {}
++void _joystick_deinit(void) {}
++int _joystick_update(void) { return 0; }
++int _joystick_axis(int axis) { return 0; }
++int _joystick_hat(int hat) { return -1; }
++int _joystick_button(int button) { return 0; }
++
++// ---------------------------------------------------------------------------
++// Timer
++// ---------------------------------------------------------------------------
++
++static bool timer_on;
++static int timer_hz;
++// Hardware ticks since the last count, times timer_hz
++static u32 timer_last, timer_rest;
++
++// The tick counter only counts while a tick task is scheduled
++static void TickNop(TickTask *task)
++{
++}
++
++int inittimer(int tickspersecond)
++{
++    static TickTask tick_task;
++
++    if (timer_on)
++        return 0;
++    tickTaskStart(&tick_task, TickNop, ticksFromHz(10), ticksFromHz(10));
++    timer_hz = tickspersecond;
++    timer_last = (u32) tickGetCount();
++    timer_rest = 0;
++    timer_on = true;
++    return 0;
++}
++
++void uninittimer(void)
++{
++    timer_on = false;
++}
++
++void sampletimer(void)
++{
++    u32 now, n;
++
++    if (!timer_on)
++        return;
++    // 32-bit, with a constant divisor, whole seconds apart so long gaps
++    // don't overflow
++    now = (u32) tickGetCount();
++    n = now - timer_last;
++    totalclock += n / TICK_FREQ * timer_hz;
++    timer_rest += n % TICK_FREQ * timer_hz;
++    timer_last = now;
++    n = timer_rest / TICK_FREQ;
++    timer_rest -= n * TICK_FREQ;
++    totalclock += n;
++}
++
++uint32_t getticks(void)
++{
++    return (uint32_t) (tickGetCount() * 1000 / TICK_FREQ);
++}
++
++int gettimerfreq(void)
++{
++    return timer_hz;
++}

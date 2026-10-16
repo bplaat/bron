@@ -1,0 +1,294 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Sun, 4 Oct 2026 12:18:34 +0200
+Subject: [PATCH] Add DS buttons
+
+sdl_input.c makes START the escape key and A, B, X, Y, L and R joystick
+0, with the d-pad as its axes. Wolfenstein's joystick bindings put them
+on fire, use, next weapon, run and strafing. The joystick is always
+enabled, a config can't turn the buttons off. There is no mouse.
+
+The d-pad turns a bit slower than it moves, and at half that
+for the first 12 tics so a tap can aim, like DOOM. Turning at the move
+speed made the player hard to control on the hardware.
+---
+ nds/sdl_input.c | 185 ++++++++++++++++++++++++++++++++++++++++++++++++
+ wl_def.h        |   5 +-
+ wl_main.c       |   4 +-
+ wl_play.c       |  27 +++++--
+ 4 files changed, 211 insertions(+), 10 deletions(-)
+ create mode 100644 nds/sdl_input.c
+
+diff --git a/nds/sdl_input.c b/nds/sdl_input.c
+new file mode 100644
+index 0000000..4300f62
+--- /dev/null
++++ b/nds/sdl_input.c
+@@ -0,0 +1,185 @@
++//
++// SDL input on the Nintendo DS
++//
++// START is the escape key, the other buttons are joystick 0 with the d-pad
++// as its axes. The stylus taps the touch screen (see wl_touch.c).
++//
++
++#include <nds.h>
++#include <stdio.h>
++
++#include "SDL.h"
++#include "wl_nds.h"
++
++#define EVENT_QUEUE_SIZE 32
++
++static const u32 joy_buttons[] = { KEY_A, KEY_B, KEY_X, KEY_Y, KEY_L, KEY_R };
++
++static SDL_Event event_queue[EVENT_QUEUE_SIZE];
++static int event_head, event_count;
++static u32 keys_held;
++
++static void PushEvent (const SDL_Event *event)
++{
++    if (event_count == EVENT_QUEUE_SIZE)
++        return;
++    event_queue[(event_head + event_count++) % EVENT_QUEUE_SIZE] = *event;
++}
++
++void NDS_PushKey (SDL_Scancode scancode, int down)
++{
++    SDL_Event event = { 0 };
++
++    event.key.type = down ? SDL_KEYDOWN : SDL_KEYUP;
++    event.key.keysym.scancode = scancode;
++    PushEvent (&event);
++}
++
++// Wolf4SDL ignores these, but they end waits for events
++static void PushJoystickEvents (u32 down, u32 up)
++{
++    SDL_Event event = { 0 };
++    unsigned i;
++
++    for (i = 0; i < sizeof(joy_buttons) / sizeof(joy_buttons[0]); ++i)
++    {
++        if (!((down | up) & joy_buttons[i]))
++            continue;
++        event.jbutton.type = down & joy_buttons[i] ? SDL_JOYBUTTONDOWN : SDL_JOYBUTTONUP;
++        event.jbutton.button = i;
++        PushEvent (&event);
++    }
++    if ((down | up) & (KEY_UP | KEY_DOWN | KEY_LEFT | KEY_RIGHT))
++    {
++        event.type = SDL_JOYHATMOTION;
++        PushEvent (&event);
++    }
++}
++
++static void PumpEvents (void)
++{
++    u32 held, down, up;
++
++    scanKeys ();
++    held = keysHeld ();
++    down = held & ~keys_held;
++    up = keys_held & ~held;
++    keys_held = held;
++
++    if (down & KEY_START)
++        NDS_PushKey (SDL_SCANCODE_ESCAPE, true);
++    if (up & KEY_START)
++        NDS_PushKey (SDL_SCANCODE_ESCAPE, false);
++    PushJoystickEvents (down, up);
++    NDS_PollInput (down, held);
++}
++
++int SDL_PollEvent (SDL_Event *event)
++{
++    if (event_count == 0)
++        PumpEvents ();
++    if (event_count == 0)
++        return 0;
++    if (event != NULL)
++    {
++        *event = event_queue[event_head];
++        event_head = (event_head + 1) % EVENT_QUEUE_SIZE;
++        event_count--;
++    }
++    return 1;
++}
++
++int SDL_WaitEvent (SDL_Event *event)
++{
++    while (!SDL_PollEvent (event))
++        threadWaitForVBlank ();
++    return 1;
++}
++
++Uint8 SDL_EventState (Uint32 type, int state)
++{
++    return 0;
++}
++
++int SDL_GetModState (void)
++{
++    return 0;
++}
++
++Uint32 SDL_GetMouseState (int *x, int *y)
++{
++    if (x != NULL)
++        *x = 0;
++    if (y != NULL)
++        *y = 0;
++    return 0;
++}
++
++Uint32 SDL_GetRelativeMouseState (int *x, int *y)
++{
++    *x = *y = 0;
++    return 0;
++}
++
++void SDL_WarpMouseInWindow (SDL_Window *window, int x, int y)
++{
++}
++
++void SDL_SetWindowGrab (SDL_Window *window, SDL_bool grabbed)
++{
++}
++
++int SDL_SetRelativeMouseMode (SDL_bool enabled)
++{
++    return 0;
++}
++
++struct SDL_Joystick { int unused; };
++static SDL_Joystick the_joystick;
++
++int SDL_NumJoysticks (void)
++{
++    return 1;
++}
++
++SDL_Joystick *SDL_JoystickOpen (int index)
++{
++    return index == 0 ? &the_joystick : NULL;
++}
++
++void SDL_JoystickClose (SDL_Joystick *joystick)
++{
++}
++
++void SDL_JoystickUpdate (void)
++{
++    PumpEvents ();
++}
++
++int SDL_JoystickNumButtons (SDL_Joystick *joystick)
++{
++    return sizeof(joy_buttons) / sizeof(joy_buttons[0]);
++}
++
++int SDL_JoystickNumHats (SDL_Joystick *joystick)
++{
++    return 1;
++}
++
++Sint16 SDL_JoystickGetAxis (SDL_Joystick *joystick, int axis)
++{
++    u32 neg = axis == 0 ? KEY_LEFT : KEY_UP, pos = axis == 0 ? KEY_RIGHT : KEY_DOWN;
++
++    return keys_held & neg ? -32768 : keys_held & pos ? 32767 : 0;
++}
++
++Uint8 SDL_JoystickGetHat (SDL_Joystick *joystick, int hat)
++{
++    return (keys_held & KEY_UP ? SDL_HAT_UP : 0) | (keys_held & KEY_RIGHT ? SDL_HAT_RIGHT : 0)
++        | (keys_held & KEY_DOWN ? SDL_HAT_DOWN : 0) | (keys_held & KEY_LEFT ? SDL_HAT_LEFT : 0);
++}
++
++Uint8 SDL_JoystickGetButton (SDL_Joystick *joystick, int button)
++{
++    return button >= 0 && button < SDL_JoystickNumButtons (joystick) && (keys_held & joy_buttons[button]);
++}
+diff --git a/wl_def.h b/wl_def.h
+index 094ff04..90dfee5 100644
+--- a/wl_def.h
++++ b/wl_def.h
+@@ -1057,8 +1057,9 @@ void    UpdateSoundLoc (void);
+ 
+ #define BASEMOVE    35
+ #define RUNMOVE     70
+-#define BASETURN    35
+-#define RUNTURN     70
++#define BASETURN    31
++#define RUNTURN     62
++#define SLOWTURNTICS 12
+ 
+ #define JOYSCALE    2
+ 
+diff --git a/wl_main.c b/wl_main.c
+index e65e957..36f19be 100644
+--- a/wl_main.c
++++ b/wl_main.c
+@@ -199,8 +199,8 @@ void ReadConfig(void)
+ 
+         if (!MousePresent)
+             mouseenabled = false;
+-        if (!IN_JoyPresent())
+-            joystickenabled = false;
++        // The DS buttons are the joystick
++        joystickenabled = true;
+ 
+         if(mouseadjustment<0) mouseadjustment=0;
+         else if(mouseadjustment>9) mouseadjustment=9;
+diff --git a/wl_play.c b/wl_play.c
+index 4bc2a13..98cf24b 100644
+--- a/wl_play.c
++++ b/wl_play.c
+@@ -61,8 +61,9 @@ int buttonjoy[32] = {
+     bt_attack, bt_strafe, bt_use, bt_run, bt_esc, bt_prevweapon, bt_nobutton, bt_nextweapon,
+     bt_pause, bt_strafeleft, bt_straferight, bt_nobutton, bt_nobutton, bt_nobutton, bt_nobutton, bt_nobutton,
+ #else
+-    bt_attack, bt_strafe, bt_use, bt_run, bt_strafeleft, bt_straferight, bt_esc, bt_pause,
+-    bt_prevweapon, bt_nextweapon, bt_nobutton, bt_nobutton, bt_nobutton, bt_nobutton, bt_nobutton, bt_nobutton,
++    // The DS buttons A, B, X, Y, L and R
++    bt_attack, bt_use, bt_nextweapon, bt_run, bt_strafeleft, bt_straferight, bt_nobutton, bt_nobutton,
++    bt_nobutton, bt_nobutton, bt_nobutton, bt_nobutton, bt_nobutton, bt_nobutton, bt_nobutton, bt_nobutton,
+ #endif
+     bt_nobutton, bt_nobutton, bt_nobutton, bt_nobutton, bt_nobutton, bt_nobutton, bt_nobutton, bt_nobutton,
+     bt_nobutton, bt_nobutton, bt_nobutton, bt_nobutton, bt_nobutton, bt_nobutton, bt_nobutton, bt_nobutton
+@@ -352,16 +353,30 @@ void PollMouseMove (void)
+ 
+ void PollJoystickMove (void)
+ {
++    static unsigned turnheld;
+     int joyx, joyy;
+ 
+     IN_GetJoyDelta (&joyx, &joyy);
+ 
+     int delta = buttonstate[bt_run] ? RUNMOVE * tics : BASEMOVE * tics;
++    int right = joyx > 64 || buttonstate[bt_turnright];
++    int left = joyx < -64 || buttonstate[bt_turnleft];
++    int turn = delta;
+ 
+-    if (joyx > 64 || buttonstate[bt_turnright])
+-        controlx += delta;
+-    else if (joyx < -64  || buttonstate[bt_turnleft])
+-        controlx -= delta;
++    // The d-pad turns slower than it strafes, at half speed for the first
++    // tics like DOOM so a tap can aim
++    if (!buttonstate[bt_strafe])
++    {
++        turnheld = right || left ? turnheld + tics : 0;
++        turn = (buttonstate[bt_run] ? RUNTURN : BASETURN) * tics;
++        if (turnheld < SLOWTURNTICS)
++            turn /= 2;
++    }
++
++    if (right)
++        controlx += turn;
++    else if (left)
++        controlx -= turn;
+     if (joyy > 64 || buttonstate[bt_movebackward])
+         controly += delta;
+     else if (joyy < -64 || buttonstate[bt_moveforward])

@@ -1,0 +1,371 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Sat, 10 Oct 2026 22:18:38 +0200
+Subject: [PATCH] Add the DS Rumble Pak
+
+A Rumble Pak in the GBA slot rumbles when the player takes damage,
+longer for more damage, and when firing a gun. The pak only moves while
+it is switched back and forth, a tick task does that at 60 Hz for as
+long as the rumble lasts. Without a pak, and on the DSi which has no
+GBA slot, nothing changes. The demos don't rumble.
+
+The main menu has Control again, between Sound and Quit, with only
+Rumble Enabled, always shown, which rumbles once enabled. It is kept at
+the end of the config right away, older configs keep it on.
+---
+ foreign.h    |  1 +
+ nds/wl_nds.c | 39 +++++++++++++++++++++++++++++
+ nds/wl_nds.h |  6 ++++-
+ wl_agent.c   |  5 ++++
+ wl_def.h     |  2 +-
+ wl_main.c    |  4 +++
+ wl_menu.c    | 71 ++++++++++++----------------------------------------
+ wl_menu.h    |  5 ++--
+ wl_play.c    |  2 +-
+ 9 files changed, 75 insertions(+), 60 deletions(-)
+
+diff --git a/foreign.h b/foreign.h
+index 3cd1bea..4c25222 100644
+--- a/foreign.h
++++ b/foreign.h
+@@ -51,6 +51,7 @@
+ 
+ #define	STR_MOUSEEN	"Mouse Enabled"
+ #define	STR_JOYEN	"Joystick Enabled"
++#define	STR_RUMBLEEN	"Rumble Enabled"
+ #define	STR_PORT2	"Use joystick port 2"
+ #define	STR_GAMEPAD	"Gravis GamePad Enabled"
+ #define	STR_SENS	"Mouse Sensitivity"
+diff --git a/nds/wl_nds.c b/nds/wl_nds.c
+index 86bafa4..2f13be2 100644
+--- a/nds/wl_nds.c
++++ b/nds/wl_nds.c
+@@ -5,6 +5,7 @@
+ // embedded in the ROM (NitroFS), the full game before the shareware, keeps
+ // the config and savegames in /data/wolf3d/<extension>/ and reads extra
+ // arguments from /data/wolf3d/args.txt. Errors are shown on the touch screen console.
++// Also rumbles a Rumble Pak in the GBA slot, without one it is left alone.
+ //
+ 
+ // libnds and Wolf4SDL both have a Keyboard and a SoundMode
+@@ -213,6 +214,42 @@ static void ReadArgs (const char *path, int *argc, char **argv)
+         argv[(*argc)++] = s;
+ }
+ 
++// The Rumble Pak only moves while it is switched back and forth, which a tick
++// task does at 60 Hz for as long as the rumble lasts. Only a DS has a GBA
++// slot, on a DSi gbacartOpen fails.
++#define RUMBLE_HZ     60
++#define RUMBLE_MAX_MS 500
++
++static bool rumble_inserted;
++static volatile int rumble_ticks;
++static TickTask rumble_task;
++
++static void RumbleTick (TickTask *task)
++{
++    if (rumble_ticks > 0)
++        rumble_ticks--;
++    rumbleSet (rumble_ticks & 1);
++}
++
++static void InitRumble (void)
++{
++    if (!gbacartOpen ())
++        return;
++    rumble_inserted = rumbleIsInserted ();
++    if (rumble_inserted)
++        tickTaskStart (&rumble_task, RumbleTick, ticksFromHz (RUMBLE_HZ), ticksFromHz (RUMBLE_HZ));
++    else
++        gbacartClose ();
++}
++
++void NDS_Rumble (int ms)
++{
++    int ticks = (ms < RUMBLE_MAX_MS ? ms : RUMBLE_MAX_MS) * RUMBLE_HZ / 1000;
++
++    if (rumble_inserted && rumbleenabled && !demoplayback && ticks > rumble_ticks)
++        rumble_ticks = ticks;
++}
++
+ void NDS_Init (int *argc, char ***argv)
+ {
+     // The names fit in the 32 columns of the touch screen
+@@ -230,6 +267,8 @@ void NDS_Init (int *argc, char ***argv)
+     if (isDSiMode ())
+         setCpuClock (true);
+ 
++    InitRumble ();
++
+     // A black top screen until the title shows
+     videoSetMode (MODE_0_2D);
+     setBackdropColor (0);
+diff --git a/nds/wl_nds.h b/nds/wl_nds.h
+index bdf6ccb..f19d9ae 100644
+--- a/nds/wl_nds.h
++++ b/nds/wl_nds.h
+@@ -1,6 +1,6 @@
+ //
+ // Nintendo DS platform glue between the SDL implementation (sdl*.c) and the
+-// game: its startup (wl_nds.c) and the touch screen (wl_touch.c)
++// game: its startup and Rumble Pak (wl_nds.c) and the touch screen (wl_touch.c)
+ //
+ 
+ #ifndef WL_NDS_H
+@@ -15,6 +15,10 @@
+ // Sets up the file systems, finds the game data and adds the arguments
+ void NDS_Init (int *argc, char ***argv);
+ 
++// Rumbles the Rumble Pak for ms milliseconds when one is inserted and rumble
++// is enabled, the demos don't rumble
++void NDS_Rumble (int ms);
++
+ // The user name of the DS settings in ASCII, "Player" when it has none
+ void NDS_PlayerName (char *name, size_t size);
+ 
+diff --git a/wl_agent.c b/wl_agent.c
+index b85841e..28a062f 100644
+--- a/wl_agent.c
++++ b/wl_agent.c
+@@ -1,6 +1,7 @@
+ // WL_AGENT.C
+ 
+ #include "wl_def.h"
++#include "wl_nds.h"
+ 
+ /*
+ =============================================================================
+@@ -423,7 +424,10 @@ void TakeDamage (int points,objtype *attacker)
+         points>>=2;
+ 
+     if (!godmode)
++    {
+         gamestate.health -= points;
++        NDS_Rumble (80 + points * 4);
++    }
+ 
+     if (gamestate.health<=0)
+     {
+@@ -1260,6 +1264,7 @@ void    GunAttack (objtype *ob)
+             SD_PlaySound (ATKGATLINGSND);
+             break;
+     }
++    NDS_Rumble (100);
+ 
+     madenoise = true;
+ 
+diff --git a/wl_def.h b/wl_def.h
+index 47c6859..23400a9 100644
+--- a/wl_def.h
++++ b/wl_def.h
+@@ -1092,7 +1092,7 @@ extern  int         lastgamemusicoffset;
+ //
+ // control info
+ //
+-extern  boolean     mouseenabled,joystickenabled;
++extern  boolean     mouseenabled,joystickenabled,rumbleenabled;
+ extern  int         dirscan[4];
+ extern  int         buttonscan[NUMBUTTONS];
+ extern  int         buttonmouse[4];
+diff --git a/wl_main.c b/wl_main.c
+index 9285b92..44b8d70 100644
+--- a/wl_main.c
++++ b/wl_main.c
+@@ -172,6 +172,8 @@ void ReadConfig(void)
+ 
+         fread (&viewsize,sizeof(viewsize),1,file);
+         fread (&mouseadjustment,sizeof(mouseadjustment),1,file);
++        // Older configs end before it and keep it on
++        fread (&rumbleenabled,sizeof(rumbleenabled),1,file);
+ 
+         fclose (file);
+ 
+@@ -196,6 +198,7 @@ void ReadConfig(void)
+ 
+         if(mouseenabled) mouseenabled=true;
+         if(joystickenabled) joystickenabled=true;
++        if(rumbleenabled) rumbleenabled=true;
+ 
+         if (!MousePresent)
+             mouseenabled = false;
+@@ -297,6 +300,7 @@ void WriteConfig(void)
+ 
+         fwrite (&viewsize,sizeof(viewsize),1,file);
+         fwrite (&mouseadjustment,sizeof(mouseadjustment),1,file);
++        fwrite (&rumbleenabled,sizeof(rumbleenabled),1,file);
+ 
+         fclose (file);
+     }
+diff --git a/wl_menu.c b/wl_menu.c
+index d67ff9d..20592dc 100644
+--- a/wl_menu.c
++++ b/wl_menu.c
+@@ -15,6 +15,7 @@
+ #endif
+ 
+ #include "wl_def.h"
++#include "wl_nds.h"
+ 
+ //
+ // PRIVATE PROTOTYPES
+@@ -55,6 +56,7 @@ CP_itemtype MainMenu[] = {
+     {1, "", CP_ViewScores},
+     {1, "", 0},
+     {1, "", CP_Sound},
++    {1, "", CP_Control},
+     {1, "", 0}
+ #else
+ 
+@@ -64,6 +66,7 @@ CP_itemtype MainMenu[] = {
+     {1, STR_VS, CP_ViewScores},
+     {1, STR_BD, 0},
+     {1, STR_SD, CP_Sound},
++    {1, STR_CL, CP_Control},
+     {1, STR_QT, 0}
+ #endif
+ };
+@@ -108,26 +111,12 @@ CP_itemtype SndMenu[] = {
+     {1, STR_ENABLED, 0}
+ };
+ 
+-#ifdef JAPAN
+-enum { CTL_MOUSEENABLE, CTL_JOYENABLE, CTL_JOY2BUTTONUNKNOWN, CTL_GAMEPADUNKONWN, CTL_MOUSESENS, CTL_CUSTOMIZE };
+-#else
+-enum { CTL_MOUSEENABLE, CTL_MOUSESENS, CTL_JOYENABLE, CTL_CUSTOMIZE };
+-#endif
++// Only the Rumble Pak, the buttons are the joystick, without mouse or
++// keyboard, and customizing them captured the B button that leaves the screen
++enum { CTL_RUMBLEENABLE };
+ 
+ CP_itemtype CtlMenu[] = {
+-#ifdef JAPAN
+-    {0, "", 0},
+-    {0, "", 0},
+-    {0, "", 0},
+-    {0, "", 0},
+-    {0, "", MouseSensitivity},
+-    {1, "", CustomControls}
+-#else
+-    {0, STR_MOUSEEN, 0},
+-    {0, STR_SENS, MouseSensitivity},
+-    {0, STR_JOYEN, 0},
+-    {1, STR_CUSTOM, CustomControls}
+-#endif
++    {1, STR_RUMBLEEN, 0}
+ };
+ 
+ #ifndef SPEAR
+@@ -1537,31 +1526,21 @@ CP_Control (int blank)
+         which = HandleMenu (&CtlItems, CtlMenu, NULL);
+         switch (which)
+         {
+-            case CTL_MOUSEENABLE:
+-                mouseenabled ^= 1;
+-                IN_CenterMouse ();
+-                DrawCtlScreen ();
+-                CusItems.curpos = -1;
+-                ShootSnd ();
+-                break;
+-
+-            case CTL_JOYENABLE:
+-                joystickenabled ^= 1;
++            // It rumbles once enabled
++            case CTL_RUMBLEENABLE:
++                rumbleenabled ^= 1;
++                NDS_Rumble (200);
+                 DrawCtlScreen ();
+-                CusItems.curpos = -1;
+                 ShootSnd ();
+                 break;
+-
+-            case CTL_MOUSESENS:
+-            case CTL_CUSTOMIZE:
+-                DrawCtlScreen ();
+-                MenuFadeIn ();
+-                WaitKeyUp ();
+-                break;
+         }
++        // HandleMenu sees a held button as pressed again
++        WaitKeyUp ();
+     }
+     while (which >= 0);
+ 
++    // The setting is kept right away, a handheld is often just switched off
++    WriteConfig ();
+     MenuFadeOut ();
+ 
+     return 0;
+@@ -1713,29 +1692,11 @@ DrawCtlScreen (void)
+     WindowW = 320;
+     SETFONTCOLOR (TEXTCOLOR, BKGDCOLOR);
+ 
+-    if (IN_JoyPresent())
+-        CtlMenu[CTL_JOYENABLE].active = 1;
+-
+-    if (MousePresent)
+-    {
+-        CtlMenu[CTL_MOUSESENS].active = CtlMenu[CTL_MOUSEENABLE].active = 1;
+-    }
+-
+-    CtlMenu[CTL_MOUSESENS].active = mouseenabled;
+-
+-
+     DrawMenu (&CtlItems, CtlMenu);
+ 
+-
+     x = CTL_X + CtlItems.indent - 24;
+     y = CTL_Y + 3;
+-    if (mouseenabled)
+-        VWB_DrawPic (x, y, C_SELECTEDPIC);
+-    else
+-        VWB_DrawPic (x, y, C_NOTSELECTEDPIC);
+-
+-    y = CTL_Y + 29;
+-    if (joystickenabled)
++    if (rumbleenabled)
+         VWB_DrawPic (x, y, C_SELECTEDPIC);
+     else
+         VWB_DrawPic (x, y, C_NOTSELECTEDPIC);
+diff --git a/wl_menu.h b/wl_menu.h
+index 5884f9b..03e7fce 100644
+--- a/wl_menu.h
++++ b/wl_menu.h
+@@ -51,7 +51,7 @@
+ #define MENU_W  178
+ #ifndef SPEAR
+ #ifndef GOODTIMES
+-#define MENU_H  13*7+6
++#define MENU_H  13*8+6
+ #else
+ #define MENU_H  13*9+6
+ #endif
+@@ -76,7 +76,7 @@
+ #define CTL_Y   86
+ #endif
+ #define CTL_W   284
+-#define CTL_H   60
++#define CTL_H   13+8
+ 
+ #define LSM_X   85
+ #define LSM_Y   55
+@@ -214,6 +214,7 @@ enum menuitems
+         viewscores,
+         backtodemo,
+         soundmenu,
++        control,
+         quit
+ };
+ 
+diff --git a/wl_play.c b/wl_play.c
+index 541e65e..f0deb8b 100644
+--- a/wl_play.c
++++ b/wl_play.c
+@@ -53,7 +53,7 @@ unsigned tics;
+ //
+ // control info
+ //
+-boolean mouseenabled, joystickenabled;
++boolean mouseenabled, joystickenabled, rumbleenabled = true;
+ int dirscan[4] = { sc_UpArrow, sc_RightArrow, sc_DownArrow, sc_LeftArrow };
+ int buttonscan[NUMBUTTONS] = { sc_Control, sc_Alt, sc_LShift, sc_Space, sc_1, sc_2, sc_3, sc_4 };
+ int buttonmouse[4] = { bt_attack, bt_strafe, bt_use, bt_nobutton };

@@ -1,0 +1,24 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Mon, 12 Oct 2026 07:54:52 +0200
+Subject: [PATCH] Leave the crosshair to the refresh
+
+The 2D drawing isn't over the view on the DS, the refresh draws the
+crosshair on the view itself.
+---
+ client/cl_view.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/client/cl_view.c b/client/cl_view.c
+index 62cab48..6e160f0 100644
+--- a/client/cl_view.c
++++ b/client/cl_view.c
+@@ -544,7 +544,7 @@ void V_RenderView( float stereo_separation )
+ 	SCR_AddDirtyPoint (scr_vrect.x+scr_vrect.width-1,
+ 		scr_vrect.y+scr_vrect.height-1);
+ 
+-	SCR_DrawCrosshair ();
++	// the refresh draws the crosshair on the view, on the other screen
+ }
+ 
+ 

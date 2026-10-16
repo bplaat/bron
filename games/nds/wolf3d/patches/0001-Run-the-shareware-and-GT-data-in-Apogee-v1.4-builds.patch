@@ -1,0 +1,107 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Sun, 4 Oct 2026 12:18:32 +0200
+Subject: [PATCH] Run the shareware and GT data in Apogee v1.4 builds
+
+The Apogee v1.4 graphics layout is a superset of the others: the GT, id
+and Activision v1.4 data (also the one sold today) lacks twelve "Read
+This!" pictures and the shareware the end texts of episodes 2 to 6.
+Their chunks are now marked missing when the header is shorter, so one
+build plays all of them. The pictable only covers the pictures the data
+has, the ones after the missing pictures move to their place.
+---
+ id_ca.c | 53 ++++++++++++++++++++++++++++++++++++++++++++++-------
+ 1 file changed, 46 insertions(+), 7 deletions(-)
+
+diff --git a/id_ca.c b/id_ca.c
+index e81502b..bcde0e2 100644
+--- a/id_ca.c
++++ b/id_ca.c
+@@ -87,6 +87,17 @@ static const char aheadname[] = "audiohed.";
+ static const char afilename[] = "audiot.";
+ 
+ static int32_t  grstarts[NUMCHUNKS + 1];
++
++//
++// The Apogee v1.4 graphics layout fits more data: the GT, id and Activision
++// v1.4 data (also the one sold today) lacks these "Read This!" pictures, the
++// shareware the end texts of episodes 2 to 6 at the end
++//
++static const int gtmissing[] =
++{
++    H_KEYBOARDPIC, H_JOYPIC, H_HEALPIC, H_TREASUREPIC, H_GUNPIC, H_KEYPIC,
++    H_WEAPON1234PIC, H_WOLFLOGOPIC, H_VISAPIC, H_MCPIC, H_IDLOGOPIC, H_SPEARADPIC
++};
+ static int32_t* audiostarts; // array of offsets in audio / audiot
+ 
+ #ifdef GRHEADERLINKED
+@@ -471,24 +482,36 @@ void CAL_SetupGrFile (void)
+     fseek (file,0,SEEK_SET);
+ 
+ 	int expectedsize = lengthof(grstarts);
++    int numstarts = headersize / 3;
+ 
+-    if(!param_ignorenumchunks && headersize / 3 != expectedsize)
++    boolean gtgraphics = numstarts == expectedsize - (int) lengthof(gtmissing);
++    if(numstarts > expectedsize || (numstarts < expectedsize && !gtgraphics && numstarts <= T_ENDART1 + 1))
+         Quit("Wolf4SDL was not compiled for these data files:\n"
+             "%s contains a wrong number of offsets (%i instead of %i)!\n\n"
+             "Please check whether you are using the right executable!\n"
+             "(For mod developers: perhaps you forgot to update NUMCHUNKS?)",
+-            fname, headersize / 3, expectedsize);
++            fname, numstarts, expectedsize);
++    if(numstarts > expectedsize)
++        numstarts = expectedsize;
+ 
+     byte data[lengthof(grstarts) * 3];
+-    fread (data,sizeof(data),1,file);
++    fread (data,numstarts * 3,1,file);
+     fclose (file);
+ 
+     byte *d = data;
+-    int32_t* i;
+-    for (i = grstarts; i != endof(grstarts); ++i)
++    int chunk, missing = 0;
++    for (chunk = 0; chunk < expectedsize; chunk++)
+     {
++        // Missing chunks are sparse, the end of the file stays last
++        if ((gtgraphics && missing < (int) lengthof(gtmissing) && chunk == gtmissing[missing])
++            || (!gtgraphics && chunk >= numstarts - 1 && chunk < expectedsize - 1))
++        {
++            grstarts[chunk] = -1;
++            missing++;
++            continue;
++        }
+         int32_t val = d[0] | (d[1] << 8) | (d[2] << 16);
+-        *i = (val == 0x00FFFFFF ? -1 : val);
++        grstarts[chunk] = (val == 0x00FFFFFF ? -1 : val);
+         d += 3;
+     }
+ 
+@@ -509,9 +532,25 @@ void CAL_SetupGrFile (void)
+     CAL_GetGrChunkLength (file,STRUCTPIC);                // position file pointer
+     compseg = SafeMalloc(chunkcomplen);
+     fread (compseg,chunkcomplen,1,file);
+-    CAL_HuffExpand(compseg, (byte*)pictable, NUMPICS * sizeof(*pictable), grhuffman);
++    CAL_HuffExpand(compseg, (byte*)pictable, MIN(chunkexplen, NUMPICS * (int32_t) sizeof(*pictable)), grhuffman);
+     free(compseg);
+ 
++    // Move the pictures after the missing ones to their place
++    if (gtgraphics)
++    {
++        int pic = NUMPICS - 1, src = NUMPICS - 1 - lengthof(gtmissing);
++        for (missing = lengthof(gtmissing) - 1; pic >= 0; pic--)
++        {
++            if (missing >= 0 && pic == gtmissing[missing] - STARTPICS)
++            {
++                pictable[pic].width = pictable[pic].height = 0;
++                missing--;
++            }
++            else
++                pictable[pic] = pictable[src--];
++        }
++    }
++
+     CA_CacheGrChunks (file);
+ 
+     fclose (file);

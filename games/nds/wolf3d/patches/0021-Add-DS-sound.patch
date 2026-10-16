@@ -1,0 +1,400 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Sun, 4 Oct 2026 12:18:34 +0200
+Subject: [PATCH] Add DS sound
+
+sdl_mixer.c plays the digitized sounds on hardware channels 0-5, which
+do the resampling at their own rate, the volume and the positional
+stereo, so SD_PrepareSound only converts the samples to signed in place.
+A 700 Hz thread fills a stream on channel 6 with the music hook, which
+sequences the AdLib music and sounds, and the PC speaker.
+---
+ id_sd.c         |  37 +------
+ nds/SDL_mixer.h |  47 +++++++++
+ nds/sdl_mixer.c | 268 ++++++++++++++++++++++++++++++++++++++++++++++++
+ 3 files changed, 319 insertions(+), 33 deletions(-)
+ create mode 100644 nds/SDL_mixer.h
+ create mode 100644 nds/sdl_mixer.c
+
+diff --git a/id_sd.c b/id_sd.c
+index 4ad0be6..4667fc3 100644
+--- a/id_sd.c
++++ b/id_sd.c
+@@ -415,8 +415,6 @@ Sint16 GetSample(float csample, byte *samples, int size)
+ 
+ boolean SD_PrepareSound(int which)
+ {
+-    int i;
+-
+     if(DigiList == NULL)
+         Quit("SD_PrepareSound(%i): DigiList not initialized!\n", which);
+ 
+@@ -431,37 +429,10 @@ boolean SD_PrepareSound(int which)
+     if(origsamples + size >= PM_GetPageEnd())
+         return false;
+ 
+-    int destsamples = (int) ((float) size * (float) param_samplerate
+-        / (float) ORIGSAMPLERATE);
+-
+-    byte *wavebuffer = SafeMalloc(sizeof(headchunk) + sizeof(wavechunk)
+-        + destsamples * 2);     // dest are 16-bit samples
+-
+-    headchunk head = {{'R','I','F','F'}, 0, {'W','A','V','E'},
+-        {'f','m','t',' '}, 0x10, 0x0001, 1, (longword) param_samplerate, (longword) (param_samplerate*2), 2, 16};
+-    wavechunk dhead = {{'d', 'a', 't', 'a'}, (longword) (destsamples*2)};
+-    head.filelenminus8 = sizeof(head) + destsamples*2;  // (sizeof(dhead)-8 = 0)
+-    memcpy(wavebuffer, &head, sizeof(head));
+-    memcpy(wavebuffer+sizeof(head), &dhead, sizeof(dhead));
+-
+-    // alignment is correct, as wavebuffer comes from malloc
+-    // and sizeof(headchunk) % 4 == 0 and sizeof(wavechunk) % 4 == 0
+-    Sint16 *newsamples = (Sint16 *)(void *) (wavebuffer + sizeof(headchunk)
+-        + sizeof(wavechunk));
+-    float cursample = 0.F;
+-    float samplestep = (float) ORIGSAMPLERATE / (float) param_samplerate;
+-    for(i=0; i<destsamples; i++, cursample+=samplestep)
+-    {
+-        newsamples[i] = GetSample((float)size * (float)i / (float)destsamples,
+-            origsamples, size);
+-    }
+-
+-    SDL_RWops* temp = SDL_RWFromMem(wavebuffer,
+-        sizeof(headchunk) + sizeof(wavechunk) + destsamples * 2);
+-
+-    SoundChunks[which] = Mix_LoadWAV_RW(temp, 1);
+-
+-    free(wavebuffer);
++    // The DS hardware plays the original samples as they are, converted in
++    // place (sounds can be prepared more than once)
++    if(!SoundChunks[which])
++        SoundChunks[which] = Mix_QuickLoad_RAW(origsamples, size);
+     return true;
+ }
+ 
+diff --git a/nds/SDL_mixer.h b/nds/SDL_mixer.h
+new file mode 100644
+index 0000000..f175b47
+--- /dev/null
++++ b/nds/SDL_mixer.h
+@@ -0,0 +1,47 @@
++//
++// The subset of SDL_mixer that Wolf4SDL uses, implemented for the Nintendo DS
++// in sdl_mixer.c: chunks play on hardware channels 0-5, which do the
++// resampling, volume and panning, the music hook (which drives the OPL2 of
++// opl.c) and the post mix (the PC speaker) fill a mono stream on hardware
++// channel 6
++//
++
++#ifndef SDL_MIXER_NDS_H
++#define SDL_MIXER_NDS_H
++
++#include "SDL.h"
++
++#define MIX_CHANNELS 6
++#define AUDIO_S16 0x8010
++#define SDL_AUDIO_ALLOW_FREQUENCY_CHANGE 0x01
++
++// Wolfenstein's digitized sounds: unsigned 8-bit mono at 7042 Hz
++#define MIX_NDS_CHUNK_RATE 7042
++
++typedef struct
++{
++    Uint8 *abuf;
++    Uint32 alen;
++} Mix_Chunk;
++
++int  Mix_OpenAudioDevice (int frequency, Uint16 format, int channels, int chunksize, const char *device, int allowed_changes);
++int  Mix_QuerySpec (int *frequency, Uint16 *format, int *channels);
++const char *Mix_GetError (void);
++
++// Converts the samples in place to the signed format of the hardware
++Mix_Chunk *Mix_QuickLoad_RAW (Uint8 *mem, Uint32 len);
++void Mix_FreeChunk (Mix_Chunk *chunk);
++
++int  Mix_ReserveChannels (int num);
++int  Mix_GroupChannels (int from, int to, int tag);
++int  Mix_GroupAvailable (int tag);
++int  Mix_GroupOldest (int tag);
++int  Mix_PlayChannel (int channel, Mix_Chunk *chunk, int loops);
++int  Mix_HaltChannel (int channel);
++int  Mix_SetPanning (int channel, Uint8 left, Uint8 right);
++void Mix_ChannelFinished (void (*channel_finished)(int channel));
++
++void Mix_HookMusic (void (*mix_func)(void *udata, Uint8 *stream, int len), void *arg);
++void Mix_SetPostMix (void (*mix_func)(void *udata, Uint8 *stream, int len), void *arg);
++
++#endif
+diff --git a/nds/sdl_mixer.c b/nds/sdl_mixer.c
+new file mode 100644
+index 0000000..c55227f
+--- /dev/null
++++ b/nds/sdl_mixer.c
+@@ -0,0 +1,268 @@
++//
++// SDL_mixer on the Nintendo DS
++//
++// Chunks play on hardware channels 0-5, which do the resampling, volume and
++// panning. A 700 Hz thread fills a mono ring buffer that loops on hardware
++// channel 6 with the music hook and the post mix: the music and AdLib sound
++// sequencer, which plays the OPL2 on the other hardware channels (opl.c),
++// and the PC speaker.
++//
++
++#include <nds.h>
++#include <stdlib.h>
++#include <string.h>
++
++#include "SDL.h"
++#include "SDL_mixer.h"
++#include "wl_nds.h"
++
++// An exact multiple of the 700 Hz music tick (and the 140 Hz PC speaker)
++#define STREAM_RATE     14000
++#define STREAM_FRAMES   4096            // a power of two
++#define STREAM_AHEAD    (STREAM_RATE / 30)
++#define STREAM_CHUNK    256
++#define AUDIO_HZ        700             // the music tick
++
++typedef void (*mix_func_t)(void *udata, Uint8 *stream, int len);
++
++typedef struct
++{
++    u64 start, end;     // in ticks, end is 0 when stopped
++    unsigned volume, pan;
++} mix_channel_t;
++
++static s16 stream_buffer[STREAM_FRAMES] __attribute__((aligned(32)));
++static unsigned stream_timer;
++static u64 stream_start, stream_written;
++static mix_func_t music_hook, post_mix;
++static void *music_arg, *post_mix_arg;
++
++static mix_channel_t mix_channels[MIX_CHANNELS];
++static int group_from, group_to = MIX_CHANNELS - 1;
++static void (*channel_finished)(int channel);
++
++static Thread audio_thread;
++static u8 audio_stack[8192] __attribute__((aligned(8)));
++
++// Mixes the stream up to a little ahead of the play position
++static void FillStream (void)
++{
++    // Ticks run at SYSTEM_CLOCK / 64, a sample lasts stream_timer SYSTEM_CLOCK / 2 cycles
++    u64 played = (tickGetCount () - stream_start) * 32 / stream_timer;
++    s16 mix[STREAM_CHUNK * 2];
++
++    if (stream_written < played)
++        stream_written = played;
++    while (stream_written < played + STREAM_AHEAD)
++    {
++        unsigned pos = stream_written & (STREAM_FRAMES - 1), i;
++        unsigned frames = STREAM_FRAMES - pos;
++
++        if (frames > STREAM_CHUNK)
++            frames = STREAM_CHUNK;
++        if (frames > played + STREAM_AHEAD - stream_written)
++            frames = played + STREAM_AHEAD - stream_written;
++
++        memset (mix, 0, frames * 4);
++        if (music_hook != NULL)
++            music_hook (music_arg, (Uint8 *) mix, frames * 4);
++        if (post_mix != NULL)
++            post_mix (post_mix_arg, (Uint8 *) mix, frames * 4);
++        // Both channels are the same, the OPL2 and the PC speaker are mono
++        for (i = 0; i < frames; ++i)
++            stream_buffer[pos + i] = mix[i * 2];
++        DC_FlushRange (stream_buffer + pos, frames * 2);
++        stream_written += frames;
++    }
++}
++
++static void CheckFinishedChannels (void)
++{
++    u64 now = tickGetCount ();
++    int i;
++
++    for (i = 0; i < MIX_CHANNELS; ++i)
++    {
++        if (mix_channels[i].end == 0 || now < mix_channels[i].end)
++            continue;
++        mix_channels[i].end = 0;
++        if (channel_finished != NULL)
++            channel_finished (i);
++    }
++}
++
++static int AudioThreadMain (void *arg)
++{
++    TickTask task;
++
++    threadTimerStart (&task, AUDIO_HZ);
++    for (;;)
++    {
++        threadTimerWait (&task);
++        FillStream ();
++        CheckFinishedChannels ();
++    }
++    return 0;
++}
++
++int Mix_OpenAudioDevice (int frequency, Uint16 format, int channels, int chunksize, const char *device, int allowed_changes)
++{
++    int i;
++
++    for (i = 0; i < MIX_CHANNELS; ++i)
++        Mix_SetPanning (i, 255, 255);
++    soundInit ();
++    soundPowerOn ();
++    soundSetMixerVolume (127);
++
++    // Primed with silence, the thread keeps it ahead of the play position
++    memset (stream_buffer, 0, sizeof(stream_buffer));
++    DC_FlushRange (stream_buffer, sizeof(stream_buffer));
++    stream_timer = soundTimerFromHz (STREAM_RATE);
++    soundPreparePcm (NDS_STREAM_CHANNEL | SOUND_START, 127 << 4, 64, stream_timer, SoundMode_Repeat, SoundFmt_Pcm16,
++        stream_buffer, 0, sizeof(stream_buffer) / 4);
++    stream_start = tickGetCount ();
++    stream_written = 0;
++
++    threadPrepare (&audio_thread, AudioThreadMain, NULL, audio_stack + sizeof(audio_stack), MAIN_THREAD_PRIO - 1);
++    threadAttachLocalStorage (&audio_thread, NULL);
++    threadStart (&audio_thread);
++    return 0;
++}
++
++int Mix_QuerySpec (int *frequency, Uint16 *format, int *channels)
++{
++    if (frequency != NULL)
++        *frequency = STREAM_RATE;
++    if (format != NULL)
++        *format = AUDIO_S16;
++    if (channels != NULL)
++        *channels = 2;
++    return 1;
++}
++
++const char *Mix_GetError (void)
++{
++    return SDL_GetError ();
++}
++
++Mix_Chunk *Mix_QuickLoad_RAW (Uint8 *mem, Uint32 len)
++{
++    Mix_Chunk *chunk = malloc (sizeof(*chunk));
++    Uint32 i;
++
++    if (chunk == NULL)
++        return NULL;
++    for (i = 0; i < len; ++i)
++        mem[i] ^= 0x80;
++    DC_FlushRange (mem, len);
++    chunk->abuf = mem;
++    chunk->alen = len;
++    return chunk;
++}
++
++void Mix_FreeChunk (Mix_Chunk *chunk)
++{
++    free (chunk);
++}
++
++int Mix_ReserveChannels (int num)
++{
++    return num;
++}
++
++int Mix_GroupChannels (int from, int to, int tag)
++{
++    group_from = from;
++    group_to = to;
++    return to - from + 1;
++}
++
++int Mix_GroupAvailable (int tag)
++{
++    int i;
++
++    for (i = group_from; i <= group_to; ++i)
++        if (mix_channels[i].end == 0)
++            return i;
++    return -1;
++}
++
++int Mix_GroupOldest (int tag)
++{
++    int i, oldest = -1;
++
++    for (i = group_from; i <= group_to; ++i)
++        if (mix_channels[i].end != 0 && (oldest < 0 || mix_channels[i].start < mix_channels[oldest].start))
++            oldest = i;
++    return oldest;
++}
++
++int Mix_PlayChannel (int channel, Mix_Chunk *chunk, int loops)
++{
++    mix_channel_t *ch;
++    // The hardware plays whole words from a word aligned address
++    uintptr_t start = (uintptr_t) chunk->abuf & ~3;
++    Uint32 words = ((uintptr_t) chunk->abuf + chunk->alen - start + 3) / 4;
++
++    if (channel < 0 || channel >= MIX_CHANNELS)
++        return -1;
++    ch = &mix_channels[channel];
++    ch->start = tickGetCount ();
++    ch->end = ch->start + (u64) chunk->alen * TICK_FREQ / MIX_NDS_CHUNK_RATE + 1;
++    soundPreparePcm (channel | SOUND_START, ch->volume, ch->pan, soundTimerFromHz (MIX_NDS_CHUNK_RATE),
++        SoundMode_OneShot, SoundFmt_Pcm8, (const void *) start, 0, words);
++    return channel;
++}
++
++int Mix_HaltChannel (int channel)
++{
++    int i;
++
++    for (i = 0; i < MIX_CHANNELS; ++i)
++    {
++        if ((channel >= 0 && i != channel) || mix_channels[i].end == 0)
++            continue;
++        soundStop (BIT (i));
++        mix_channels[i].end = 0;
++        if (channel_finished != NULL)
++            channel_finished (i);
++    }
++    return 0;
++}
++
++// SDL_mixer plays both sides at full volume in the center, the DS halves
++// them, so the stream is centered too to keep the balance
++int Mix_SetPanning (int channel, Uint8 left, Uint8 right)
++{
++    mix_channel_t *ch;
++
++    if (channel < 0 || channel >= MIX_CHANNELS)
++        return 0;
++    ch = &mix_channels[channel];
++    ch->volume = (left + right) * 2047 / 510;
++    ch->pan = left + right > 0 ? right * 127 / (left + right) : 64;
++    if (ch->end != 0)
++    {
++        soundChSetVolume (channel, ch->volume);
++        soundChSetPan (channel, ch->pan);
++    }
++    return 1;
++}
++
++void Mix_ChannelFinished (void (*func)(int channel))
++{
++    channel_finished = func;
++}
++
++void Mix_HookMusic (void (*mix_func)(void *udata, Uint8 *stream, int len), void *arg)
++{
++    music_hook = mix_func;
++    music_arg = arg;
++}
++
++void Mix_SetPostMix (void (*mix_func)(void *udata, Uint8 *stream, int len), void *arg)
++{
++    post_mix = mix_func;
++    post_mix_arg = arg;
++}

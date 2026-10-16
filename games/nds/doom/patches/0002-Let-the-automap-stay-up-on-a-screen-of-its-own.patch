@@ -1,0 +1,53 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Sat, 3 Oct 2026 11:04:39 +0200
+Subject: [PATCH] Let the automap stay up on a screen of its own
+
+AM_Start() is exported to show the automap all the time on its own
+screen, and am_skipdraw skips drawing it, to redraw it less often than
+every frame.
+---
+ doomgeneric/am_map.c | 5 ++++-
+ doomgeneric/am_map.h | 6 ++++++
+ 2 files changed, 10 insertions(+), 1 deletion(-)
+
+diff --git a/doomgeneric/am_map.c b/doomgeneric/am_map.c
+index 459f578..2525041 100644
+--- a/doomgeneric/am_map.c
++++ b/doomgeneric/am_map.c
+@@ -432,6 +432,9 @@ void AM_SetFramebuffer(byte *buffer, int width, int height)
+     finit_height = height;
+ }
+ 
++// Set by the owner of a screen of its own, to redraw the map less often
++boolean am_skipdraw;
++
+ boolean AM_HasOwnScreen(void)
+ {
+     return am_fb != NULL;
+@@ -1394,7 +1397,7 @@ void AM_drawCrosshair(int color)
+ 
+ void AM_Drawer (void)
+ {
+-    if (!automapactive) return;
++    if (!automapactive || am_skipdraw) return;
+ 
+     AM_clearFB(BACKGROUND);
+     if (grid)
+diff --git a/doomgeneric/am_map.h b/doomgeneric/am_map.h
+index be38995..3e4b870 100644
+--- a/doomgeneric/am_map.h
++++ b/doomgeneric/am_map.h
+@@ -47,6 +47,12 @@ boolean AM_HasOwnScreen(void);
+ // if the level is completed while it is up.
+ void AM_Stop (void);
+ 
++// Starts showing the automap, eg. on a screen of its own all the time
++void AM_Start (void);
++
++// Skips drawing the automap on a screen of its own, to draw it less often
++extern boolean am_skipdraw;
++
+ 
+ extern cheatseq_t cheat_amap;
+ 

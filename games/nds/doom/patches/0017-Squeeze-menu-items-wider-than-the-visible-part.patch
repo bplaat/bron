@@ -1,0 +1,105 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Sat, 3 Oct 2026 11:04:43 +0200
+Subject: [PATCH] Squeeze menu items wider than the visible part
+
+V_DrawPatchSqueezed() draws a patch at a narrower width, the three menu
+items wider than the visible part of the screen are squeezed into it.
+---
+ doomgeneric/m_menu.c  |  8 ++++++-
+ doomgeneric/v_video.c | 49 +++++++++++++++++++++++++++++++++++++++++++
+ doomgeneric/v_video.h |  2 ++
+ 3 files changed, 58 insertions(+), 1 deletion(-)
+
+diff --git a/doomgeneric/m_menu.c b/doomgeneric/m_menu.c
+index 385018c..d63b2bb 100644
+--- a/doomgeneric/m_menu.c
++++ b/doomgeneric/m_menu.c
+@@ -2102,7 +2102,13 @@ void M_Drawer (void)
+ 
+ 	if (name[0])
+ 	{
+-	    V_DrawPatchDirect (x, y, W_CacheLumpName(name, PU_CACHE));
++	    patch_t *patch = W_CacheLumpName(name, PU_CACHE);
++
++	    // items wider than the visible part are squeezed into it
++	    if (x + SHORT(patch->width) > V_VISIBLEX + V_VISIBLEW)
++		V_DrawPatchSqueezed (x, y, V_VISIBLEX + V_VISIBLEW - x, patch);
++	    else
++		V_DrawPatchDirect (x, y, patch);
+ 	}
+ 	y += LINEHEIGHT;
+     }
+diff --git a/doomgeneric/v_video.c b/doomgeneric/v_video.c
+index 60f9fc1..273e008 100644
+--- a/doomgeneric/v_video.c
++++ b/doomgeneric/v_video.c
+@@ -222,6 +222,55 @@ void V_DrawFullscreenPatch(int x, int y, patch_t *patch)
+     v_fullscreenpicture = true;
+ }
+ 
++//
++// V_DrawPatchSqueezed
++// A patch squeezed to a narrower width, every column takes the patch column
++// it covers.
++//
++void V_DrawPatchSqueezed(int x, int y, int width, patch_t *patch)
++{
++    int col, w, dx;
++    column_t *column;
++    byte *source, *dest;
++
++    y -= SHORT(patch->topoffset);
++    x -= SHORT(patch->leftoffset);
++    w = SHORT(patch->width);
++
++    y += v_offsety;
++    if (v_measuring)
++    {
++        if (y < v_measuretop)
++            v_measuretop = y;
++        if (y + SHORT(patch->height) > v_measurebottom)
++            v_measurebottom = y + SHORT(patch->height);
++        return;
++    }
++
++    V_MarkRect(x, y, width, SHORT(patch->height));
++
++    for (dx = 0; dx < width; dx++)
++    {
++        col = dx * w / width;
++        column = (column_t *)((byte *)patch + LONG(patch->columnofs[col]));
++
++        // step through the posts in a column
++        while (column->topdelta != 0xff)
++        {
++            int count = column->length;
++
++            source = (byte *)column + 3;
++            dest = dest_screen + (y + column->topdelta) * SCREENWIDTH + x + dx;
++            while (count--)
++            {
++                *dest = *source++;
++                dest += SCREENWIDTH;
++            }
++            column = (column_t *)((byte *)column + column->length + 4);
++        }
++    }
++}
++
+ //
+ // V_DrawPatchFlipped
+ // Masks a column based masked pic to the screen.
+diff --git a/doomgeneric/v_video.h b/doomgeneric/v_video.h
+index 68af4ff..78de19f 100644
+--- a/doomgeneric/v_video.h
++++ b/doomgeneric/v_video.h
+@@ -76,6 +76,8 @@ void V_DrawFullscreenPatch(int x, int y, patch_t *patch);
+ // Set when a frame has a picture for the whole screen, cleared every frame
+ extern boolean v_fullscreenpicture;
+ 
++// Draws a patch squeezed to a width, for one wider than the visible part
++void V_DrawPatchSqueezed(int x, int y, int width, patch_t *patch);
+ void V_DrawPatchFlipped(int x, int y, patch_t *patch);
+ void V_DrawTLPatch(int x, int y, patch_t *patch);
+ void V_DrawAltTLPatch(int x, int y, patch_t * patch);

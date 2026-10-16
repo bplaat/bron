@@ -1,0 +1,379 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Tue, 6 Oct 2026 07:09:54 +0200
+Subject: [PATCH] Put the menus on the top screen
+
+The menus and their questions are drawn on their own, between
+VID_BeginMenu and VID_EndMenu, on a transparent background (255), which
+the video driver shows on the top screen over the view, which the
+renderer dims, instead of fading the screen behind them, so the screen
+isn't drawn again under them every frame. A page is only drawn again
+when it changes: M_PageChanged first runs M_Draw with the draw functions
+hashing what they would draw. Every page is shown in the middle of the
+screen (VID_MoveMenu), like DOOM's menus on the DS, leaving out the
+cursor, which moves and spins, so the page doesn't wobble with it. The
+Quake plaque on the left is left out. The quit question over a menu
+leaves that menu where it is and goes in the middle of the screen.
+---
+ WinQuake/menu.c   | 165 +++++++++++++++++++++++++++++++++++++++-------
+ WinQuake/menu.h   |   2 +
+ WinQuake/screen.c |  22 +++++--
+ WinQuake/vid.h    |   7 ++
+ 4 files changed, 167 insertions(+), 29 deletions(-)
+
+diff --git a/WinQuake/menu.c b/WinQuake/menu.c
+index e2929f8..3a3cdae 100644
+--- a/WinQuake/menu.c
++++ b/WinQuake/menu.c
+@@ -64,6 +64,18 @@ qboolean	m_recursiveDraw;
+ 
+ extern cvar_t	crosshair;
+ 
++// While M_PageChanged measures the page the draw functions only hash what
++// they would draw
++static qboolean	m_measuring;
++static unsigned	m_pagehash;
++
++static qboolean M_Measured (int x, int y, unsigned what)
++{
++	if (m_measuring)
++		m_pagehash = ((m_pagehash * 31 + x) * 31 + y) * 31 + what;
++	return m_measuring;
++}
++
+ /*
+ ================
+ M_DrawCharacter
+@@ -73,6 +85,8 @@ Draws one solid graphics character
+ */
+ void M_DrawCharacter (int cx, int line, int num)
+ {
++	if (M_Measured (cx, line, num))
++		return;
+ 	Draw_Character ( cx + ((vid.width - 320)>>1), line, num);
+ }
+ 
+@@ -98,11 +112,36 @@ void M_PrintWhite (int cx, int cy, char *str)
+ 
+ void M_DrawTransPic (int x, int y, qpic_t *pic)
+ {
++	if (M_Measured (x, y, (unsigned) pic))
++		return;
+ 	Draw_TransPic (x + ((vid.width - 320)>>1), y, pic);
+ }
+ 
++// The cursor, left out when M_CenterPage finds the page: it moves and
++// spins, the page would wobble with it
++static int	cursor_x, cursor_y, cursor_w, cursor_h;
++
++static void M_DrawCursorPic (int x, int y, qpic_t *pic)
++{
++	M_DrawTransPic (x, y, pic);
++	cursor_x = x + ((vid.width - 320)>>1);
++	cursor_y = y;
++	cursor_w = pic->width;
++	cursor_h = pic->height;
++}
++
++static void M_DrawCursorCharacter (int cx, int line)
++{
++	M_DrawCharacter (cx, line, 12+((int)(realtime*4)&1));
++	cursor_x = cx + ((vid.width - 320)>>1);
++	cursor_y = line;
++	cursor_w = cursor_h = 8;
++}
++
+ void M_DrawPic (int x, int y, qpic_t *pic)
+ {
++	if (M_Measured (x, y, (unsigned) pic + 1))
++		return;
+ 	Draw_Pic (x + ((vid.width - 320)>>1), y, pic);
+ }
+ 
+@@ -269,14 +308,13 @@ void M_Main_Draw (void)
+ 	int		f;
+ 	qpic_t	*p;
+ 
+-	M_DrawTransPic (16, 4, Draw_CachePic ("gfx/qplaque.lmp") );
+ 	p = Draw_CachePic ("gfx/ttl_main.lmp");
+ 	M_DrawPic (72, 4, p);
+ 	M_DrawTransPic (72, MAIN_Y, M_MainMenuPic ());
+ 
+ 	f = (int)(host_time * 10)%6;
+ 
+-	M_DrawTransPic (54, MAIN_Y + m_main_cursor * 20,Draw_CachePic( va("gfx/menudot%i.lmp", f+1 ) ) );
++	M_DrawCursorPic (54, MAIN_Y + m_main_cursor * 20,Draw_CachePic( va("gfx/menudot%i.lmp", f+1 ) ) );
+ }
+ 
+ 
+@@ -366,14 +404,13 @@ void M_SinglePlayer_Draw (void)
+ 	int		f;
+ 	qpic_t	*p;
+ 
+-	M_DrawTransPic (16, 4, Draw_CachePic ("gfx/qplaque.lmp") );
+ 	p = Draw_CachePic ("gfx/ttl_sgl.lmp");
+ 	M_DrawPic ( (320-p->width)/2, 4, p);
+ 	M_DrawTransPic (72, 32, Draw_CachePic ("gfx/sp_menu.lmp") );
+ 
+ 	f = (int)(host_time * 10)%6;
+ 
+-	M_DrawTransPic (54, 32 + m_singleplayer_cursor * 20,Draw_CachePic( va("gfx/menudot%i.lmp", f+1 ) ) );
++	M_DrawCursorPic (54, 32 + m_singleplayer_cursor * 20,Draw_CachePic( va("gfx/menudot%i.lmp", f+1 ) ) );
+ }
+ 
+ 
+@@ -497,7 +534,7 @@ void M_Load_Draw (void)
+ 		M_Print (16, 32 + 8*i, m_filenames[i]);
+ 
+ // line cursor
+-	M_DrawCharacter (8, 32 + load_cursor*8, 12+((int)(realtime*4)&1));
++	M_DrawCursorCharacter (8, 32 + load_cursor*8);
+ }
+ 
+ 
+@@ -513,7 +550,7 @@ void M_Save_Draw (void)
+ 		M_Print (16, 32 + 8*i, m_filenames[i]);
+ 
+ // line cursor
+-	M_DrawCharacter (8, 32 + load_cursor*8, 12+((int)(realtime*4)&1));
++	M_DrawCursorCharacter (8, 32 + load_cursor*8);
+ }
+ 
+ 
+@@ -679,7 +716,6 @@ void M_Options_Draw (void)
+ 	float		r;
+ 	qpic_t	*p;
+ 
+-	M_DrawTransPic (16, 4, Draw_CachePic ("gfx/qplaque.lmp") );
+ 	p = Draw_CachePic ("gfx/p_option.lmp");
+ 	M_DrawPic ( (320-p->width)/2, 4, p);
+ 
+@@ -700,7 +736,7 @@ void M_Options_Draw (void)
+ 	M_DrawCheckbox (220, 64, crosshair.value);
+ 
+ // cursor
+-	M_DrawCharacter (200, 32 + options_cursor*8, 12+((int)(realtime*4)&1));
++	M_DrawCursorCharacter (200, 32 + options_cursor*8);
+ }
+ 
+ 
+@@ -1023,6 +1059,10 @@ int		msgNumber;
+ int		m_quit_prevstate;
+ qboolean	wasInMenus;
+ 
++// Where M_CenterPage moved the page, a quit question over a menu leaves
++// that menu where it is and is drawn in the middle of the screen
++static int	m_pagedx, m_pagedy;
++
+ #ifndef	_WIN32
+ char *quitMessage [] = 
+ {
+@@ -1117,6 +1157,8 @@ void M_Quit_Key (int key)
+ 
+ void M_Quit_Draw (void)
+ {
++	int	dx, dy;
++
+ 	if (wasInMenus)
+ 	{
+ 		m_state = m_quit_prevstate;
+@@ -1149,11 +1191,13 @@ void M_Quit_Draw (void)
+ 	M_PrintWhite (16, 172, "Nothing Interactive, Inc. All rights\n");
+ 	M_PrintWhite (16, 180, "reserved. Press y to exit\n");
+ #else
+-	M_DrawTextBox (56, 76, 24, 4);
+-	M_Print (64, 84,  quitMessage[msgNumber*4+0]);
+-	M_Print (64, 92,  quitMessage[msgNumber*4+1]);
+-	M_Print (64, 100, quitMessage[msgNumber*4+2]);
+-	M_Print (64, 108, quitMessage[msgNumber*4+3]);
++	dx = wasInMenus ? -m_pagedx : 0;
++	dy = wasInMenus ? (vid.height - 200) / 2 - m_pagedy : 0;
++	M_DrawTextBox (56 + dx, 76 + dy, 24, 4);
++	M_Print (64 + dx, 84 + dy,  quitMessage[msgNumber*4+0]);
++	M_Print (64 + dx, 92 + dy,  quitMessage[msgNumber*4+1]);
++	M_Print (64 + dx, 100 + dy, quitMessage[msgNumber*4+2]);
++	M_Print (64 + dx, 108 + dy, quitMessage[msgNumber*4+3]);
+ #endif
+ }
+ 
+@@ -1177,6 +1221,88 @@ void M_Init (void)
+ }
+ 
+ 
++static inline qboolean M_OnPage (byte *row, int x, int y)
++{
++	return row[x] != 255 && (x < cursor_x || x >= cursor_x + cursor_w
++		|| y < cursor_y || y >= cursor_y + cursor_h);
++}
++
++/*
++================
++M_CenterPage
++
++Shows the page the menu drew on its transparent background (255) in the
++middle of the screen, like DOOM's menus on the DS, the cursor moves along
++================
++*/
++void M_CenterPage (void)
++{
++	int		x, y, top = -1, bottom = 0, left = vid.width, right = 0;
++	byte	*row;
++
++	if (m_state == m_quit && wasInMenus)
++		return;
++
++	// the first and last pixel of the page on each row, over the background
++	// four at a time
++	for (y = 0, row = vid.buffer ; y < vid.height ; y++, row += vid.rowbytes)
++	{
++		for (x = 0 ; x < vid.width ; x++)
++			if (!(x & 3) && *(unsigned *)(row + x) == 0xffffffff)
++				x += 3;
++			else if (M_OnPage (row, x, y))
++				break;
++		if (x >= vid.width)
++			continue;
++		if (top < 0)
++			top = y;
++		bottom = y;
++		if (x < left)
++			left = x;
++		for (x = vid.width - 1 ; x > right ; x--)
++			if ((x & 3) == 3 && *(unsigned *)(row + x - 3) == 0xffffffff)
++				x -= 3;
++			else if (M_OnPage (row, x, y))
++				break;
++		if (x > right)
++			right = x;
++	}
++	cursor_w = cursor_h = 0;
++	if (top < 0)
++		m_pagedx = m_pagedy = 0;
++	else
++	{
++		m_pagedx = (vid.width - (right - left + 1)) / 2 - left;
++		m_pagedy = (vid.height - (bottom - top + 1)) / 2 - top;
++	}
++	VID_MoveMenu (m_pagedx, m_pagedy);
++}
++
++/*
++================
++M_PageChanged
++
++Whether M_Draw would draw another page than it did the last frame, it runs
++it without drawing
++================
++*/
++qboolean M_PageChanged (void)
++{
++	static unsigned	lasthash;
++	static int		lastframe = -2;
++	qboolean		changed;
++
++	m_measuring = true;
++	m_pagehash = 0;
++	M_Draw ();
++	m_measuring = false;
++	cursor_w = cursor_h = 0;
++	changed = m_pagehash != lasthash || host_framecount != lastframe + 1;
++	lasthash = m_pagehash;
++	lastframe = host_framecount;
++	return changed;
++}
++
+ void M_Draw (void)
+ {
+ 	if (m_state == m_none || key_dest != key_menu)
+@@ -1186,17 +1312,8 @@ void M_Draw (void)
+ 	{
+ 		scr_copyeverything = 1;
+ 
+-		if (scr_con_current)
+-		{
+-			Draw_ConsoleBackground (vid.height);
+-			VID_UnlockBuffer ();
+-			S_ExtraUpdate ();
+-			VID_LockBuffer ();
+-		}
+-		else
+-			Draw_FadeScreen ();
+-
+-		scr_fullupdate = 0;
++		// the menu is on the top screen, the renderer dims the view and the
++		// touch screen keeps what it shows
+ 	}
+ 	else
+ 	{
+diff --git a/WinQuake/menu.h b/WinQuake/menu.h
+index 616de3f..804370e 100644
+--- a/WinQuake/menu.h
++++ b/WinQuake/menu.h
+@@ -33,6 +33,8 @@ extern	int	m_activenet;
+ void M_Init (void);
+ void M_Keydown (int key);
+ void M_Draw (void);
++void M_CenterPage (void);
++qboolean M_PageChanged (void);
+ void M_ToggleMenu_f (void);
+ 
+ 
+diff --git a/WinQuake/screen.c b/WinQuake/screen.c
+index 62fd94c..8b1c6dc 100644
+--- a/WinQuake/screen.c
++++ b/WinQuake/screen.c
+@@ -943,9 +943,11 @@ void SCR_UpdateScreen (void)
+ 
+ 	if (scr_drawdialog)
+ 	{
+-		Sbar_Draw ();
+-		Draw_FadeScreen ();
++		// on the top screen like the menu
++		VID_BeginMenu ();
+ 		SCR_DrawNotifyString ();
++		M_CenterPage ();
++		VID_EndMenu ();
+ 		scr_copyeverything = true;
+ 	}
+ 	else if (scr_drawloading)
+@@ -973,9 +975,19 @@ void SCR_UpdateScreen (void)
+ 		SCR_DrawTurtle ();
+ 		SCR_DrawPause ();
+ 		SCR_CheckDrawCenterString ();
+-		Sbar_Draw ();
+-		SCR_DrawConsole ();
+-		M_Draw ();
++		if (key_dest == key_menu)
++		{
++			// on the top screen, drawn again when it changes
++			if (M_PageChanged ())
++			{
++				VID_BeginMenu ();
++				M_Draw ();
++				M_CenterPage ();
++				VID_EndMenu ();
++			}
++		}
++		else
++			SCR_DrawConsole ();
+ 	}
+ 
+ 	D_DisableBackBufferAccess ();	// for adapters that can't stay mapped in
+diff --git a/WinQuake/vid.h b/WinQuake/vid.h
+index d66dfd9..5fb7e0e 100644
+--- a/WinQuake/vid.h
++++ b/WinQuake/vid.h
+@@ -79,6 +79,13 @@ void	VID_TextCharacter (int x, int y, int num);
+ // while vid_textlayer is set, Draw_Character draws on the text layer, at
+ // pixel coordinates of the top screen
+ 
++void	VID_BeginMenu (void);
++void	VID_EndMenu (void);
++// the menu draws between them on a transparent background (255), it shows on
++// the top screen, the touch screen keeps what it showed
++void	VID_MoveMenu (int dx, int dy);
++// shows the menu dx, dy pixels further
++
+ void	VID_Shutdown (void);
+ // Called at shutdown
+ 

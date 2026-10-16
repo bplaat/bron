@@ -1,0 +1,333 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Sat, 3 Oct 2026 11:04:42 +0200
+Subject: [PATCH] Wrap texts at words in the visible part of the screen
+
+HUD messages, menu messages and the finale texts are drawn inside the
+visible part and wrap at words where they are wider. A wrapped finale
+text taller than the visible part has its lines set closer, so it never
+runs off the bottom: the longest, E4's and DOOM II's second, take 21
+lines.
+---
+ doomgeneric/f_finale.c | 109 ++++++++++++++++++++++++++++-------------
+ doomgeneric/hu_lib.c   |  34 +++++++++++--
+ doomgeneric/m_menu.c   |  55 +++++++++++++++++----
+ doomgeneric/m_menu.h   |   3 ++
+ 4 files changed, 152 insertions(+), 49 deletions(-)
+
+diff --git a/doomgeneric/f_finale.c b/doomgeneric/f_finale.c
+index 5126aad..dadea2d 100644
+--- a/doomgeneric/f_finale.c
++++ b/doomgeneric/f_finale.c
+@@ -221,20 +221,80 @@ void F_Ticker (void)
+ //
+ 
+ #include "hu_stuff.h"
++#include "m_menu.h"
+ extern	patch_t *hu_font[HU_FONTSIZE];
+ 
+ 
++// The width of the word that starts at s, in the HUD font
++static int F_WordWidth (const char *s)
++{
++    int w = 0;
++
++    for ( ; *s && *s != ' ' && *s != '\n'; s++)
++	w += M_CharWidth(*s);
++    return w;
++}
++
++// Lays out the first count characters of the finale text (all of it when
++// negative) from cy down, lines lineheight apart, drawing them when draw is
++// set. Returns the number of lines.
++static int F_LayoutText (signed int count, int cy, int lineheight, boolean draw)
++{
++    boolean	wrap = V_VISIBLEW < SCREENWIDTH;
++    int		left = V_VISIBLEX + (wrap ? 6 : 10);
++    int		right = V_VISIBLEX + V_VISIBLEW - (wrap ? 6 : 0);
++    int		cx = left;
++    int		lines = 1;
++    char*	ch = finaletext;
++    int		c, w;
++
++    for ( ; count ; count-- )
++    {
++	c = *ch++;
++	if (!c)
++	    break;
++	// a visible part narrower than the screen wraps the text again: a
++	// single newline is a space and a word that doesn't fit goes on the
++	// next line
++	if (wrap && c == '\n' && *ch != '\n' && (ch - 2 < finaletext || ch[-2] != '\n'))
++	    c = ' ';
++	if (c == '\n' || (wrap && c == ' ' && cx + 4 + F_WordWidth(ch) > right))
++	{
++	    cx = left;
++	    cy += lineheight;
++	    lines++;
++	    continue;
++	}
++
++	c = toupper(c) - HU_FONTSTART;
++	if (c < 0 || c> HU_FONTSIZE)
++	{
++	    cx += 4;
++	    continue;
++	}
++
++	w = SHORT (hu_font[c]->width);
++	if (cx+w > right)
++	    break;
++	if (draw)
++	    V_DrawPatch(cx, cy, hu_font[c]);
++	cx+=w;
++    }
++    return lines;
++}
++
++// Characters of the HUD font are up to 8 pixels tall
++#define TEXTHEIGHT	8
++
+ void F_TextWrite (void)
+ {
+     byte*	src;
+     byte*	dest;
+     
+-    int		x,y,w;
++    int		x,y;
+     signed int	count;
+-    char*	ch;
+-    int		c;
+-    int		cx;
+-    int		cy;
++    int		lines;
++    int		lineheight;
+     
+     // erase the entire screen to a tiled background
+     src = W_CacheLumpName ( finaleflat , PU_CACHE);
+@@ -256,40 +316,19 @@ void F_TextWrite (void)
+ 
+     V_MarkRect (0, 0, SCREENWIDTH, SCREENHEIGHT);
+     
++    // wrapped texts take more lines, the lines of one taller than the
++    // visible part move closer and up
++    lines = F_LayoutText(-1, 0, 0, false);
++    lineheight = 11;
++    if (lines > 1 && (V_VISIBLEH - 2 - TEXTHEIGHT) / (lines - 1) < lineheight)
++	lineheight = (V_VISIBLEH - 2 - TEXTHEIGHT) / (lines - 1);
++    y = V_VISIBLEH - TEXTHEIGHT - (lines - 1) * lineheight;
++
+     // draw some of the text onto the screen
+-    cx = 10;
+-    cy = 10;
+-    ch = finaletext;
+-	
+     count = ((signed int) finalecount - 10) / TEXTSPEED;
+     if (count < 0)
+ 	count = 0;
+-    for ( ; count ; count-- )
+-    {
+-	c = *ch++;
+-	if (!c)
+-	    break;
+-	if (c == '\n')
+-	{
+-	    cx = 10;
+-	    cy += 11;
+-	    continue;
+-	}
+-		
+-	c = toupper(c) - HU_FONTSTART;
+-	if (c < 0 || c> HU_FONTSIZE)
+-	{
+-	    cx += 4;
+-	    continue;
+-	}
+-		
+-	w = SHORT (hu_font[c]->width);
+-	if (cx+w > SCREENWIDTH)
+-	    break;
+-	V_DrawPatch(cx, cy, hu_font[c]);
+-	cx+=w;
+-    }
+-	
++    F_LayoutText(count, V_VISIBLEY + (y < 10 ? y : 10), lineheight, true);
+ }
+ 
+ //
+diff --git a/doomgeneric/hu_lib.c b/doomgeneric/hu_lib.c
+index 04e34ba..264fe9a 100644
+--- a/doomgeneric/hu_lib.c
++++ b/doomgeneric/hu_lib.c
+@@ -91,6 +91,20 @@ boolean HUlib_delCharFromTextLine(hu_textline_t* t)
+ 
+ }
+ 
++// The width of the word starting at character i of a line
++static int HUlib_wordWidth(hu_textline_t *l, int i)
++{
++    int w = 0;
++    unsigned char c;
++
++    for ( ; i < l->len && l->l[i] != ' '; i++)
++    {
++	c = toupper((int)l->l[i]);
++	w += c >= l->sc && c <= '_' ? SHORT(l->f[c - l->sc]->width) : 4;
++    }
++    return w;
++}
++
+ void
+ HUlib_drawTextLine
+ ( hu_textline_t*	l,
+@@ -100,10 +114,13 @@ HUlib_drawTextLine
+     int			i;
+     int			w;
+     int			x;
++    int			y;
++    int			right = V_VISIBLEX + V_VISIBLEW;
+     unsigned char	c;
+ 
+     // draw the new stuff
+     x = l->x;
++    y = l->y;
+     for (i=0;i<l->len;i++)
+     {
+ 	c = toupper((int)l->l[i]);
+@@ -112,24 +129,31 @@ HUlib_drawTextLine
+ 	    && c <= '_')
+ 	{
+ 	    w = SHORT(l->f[c - l->sc]->width);
+-	    if (x+w > SCREENWIDTH)
++	    if (x+w > right)
+ 		break;
+-	    V_DrawPatchDirect(x, l->y, l->f[c - l->sc]);
++	    V_DrawPatchDirect(x, y, l->f[c - l->sc]);
+ 	    x += w;
+ 	}
+ 	else
+ 	{
+ 	    x += 4;
+-	    if (x >= SCREENWIDTH)
++	    // a visible part narrower than the screen wraps long lines
++	    if (V_VISIBLEW < SCREENWIDTH && c == ' '
++	     && x + HUlib_wordWidth(l, i + 1) > right)
++	    {
++		x = l->x;
++		y += SHORT(l->f[0]->height) + 1;
++	    }
++	    if (x >= right)
+ 		break;
+ 	}
+     }
+ 
+     // draw the cursor if requested
+     if (drawcursor
+-	&& x + SHORT(l->f['_' - l->sc]->width) <= SCREENWIDTH)
++	&& x + SHORT(l->f['_' - l->sc]->width) <= right)
+     {
+-	V_DrawPatchDirect(x, l->y, l->f['_' - l->sc]);
++	V_DrawPatchDirect(x, y, l->f['_' - l->sc]);
+     }
+ }
+ 
+diff --git a/doomgeneric/m_menu.c b/doomgeneric/m_menu.c
+index 6054318..385018c 100644
+--- a/doomgeneric/m_menu.c
++++ b/doomgeneric/m_menu.c
+@@ -1302,6 +1302,43 @@ M_DrawSelCell
+ }
+ 
+ 
++//
++// M_WrapMessage
++// Breaks lines wider than the visible part at spaces
++//
++static char *M_WrapMessage(char *string)
++{
++    static char wrapped[512];
++    char *p, *space = NULL;
++    int w = 0, wspace = 0;
++
++    if (V_VISIBLEW == SCREENWIDTH)
++	return string;
++    M_StringCopy(wrapped, string, sizeof(wrapped));
++    for (p = wrapped; *p; p++)
++    {
++	if (*p == '\n')
++	{
++	    w = 0;
++	    space = NULL;
++	    continue;
++	}
++	w += M_CharWidth(*p);
++	if (*p == ' ')
++	{
++	    space = p;
++	    wspace = w;
++	}
++	else if (w > V_VISIBLEW - 8 && space)
++	{
++	    *space = '\n';
++	    w -= wspace;
++	    space = NULL;
++	}
++    }
++    return wrapped;
++}
++
+ void
+ M_StartMessage
+ ( char*		string,
+@@ -1310,7 +1347,7 @@ M_StartMessage
+ {
+     messageLastMenuActive = menuactive;
+     messageToPrint = 1;
+-    messageString = string;
++    messageString = M_WrapMessage(string);
+     messageRoutine = routine;
+     messageNeedsInput = input;
+     menuactive = true;
+@@ -1329,20 +1366,20 @@ void M_StopMessage(void)
+ //
+ // Find string width from hu_font chars
+ //
++int M_CharWidth(char ch)
++{
++    int c = toupper(ch) - HU_FONTSTART;
++
++    return c < 0 || c >= HU_FONTSIZE ? 4 : SHORT (hu_font[c]->width);
++}
++
+ int M_StringWidth(char* string)
+ {
+     size_t             i;
+     int             w = 0;
+-    int             c;
+ 	
+     for (i = 0;i < strlen(string);i++)
+-    {
+-	c = toupper(string[i]) - HU_FONTSTART;
+-	if (c < 0 || c >= HU_FONTSIZE)
+-	    w += 4;
+-	else
+-	    w += SHORT (hu_font[c]->width);
+-    }
++	w += M_CharWidth(string[i]);
+ 		
+     return w;
+ }
+diff --git a/doomgeneric/m_menu.h b/doomgeneric/m_menu.h
+index ce41db3..2aaec90 100644
+--- a/doomgeneric/m_menu.h
++++ b/doomgeneric/m_menu.h
+@@ -47,6 +47,9 @@ void M_Drawer (void);
+ // loads the config file.
+ void M_Init (void);
+ 
++// The width of a character in the HUD font
++int M_CharWidth (char ch);
++
+ // Called by intro code to force menu up upon a keypress,
+ // does nothing if menu is already up.
+ void M_StartControlPanel (void);

@@ -1,0 +1,55 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Sun, 4 Oct 2026 12:18:33 +0200
+Subject: [PATCH] Show a message when a savegame can't be written
+
+Without an SD card nothing can be written, saving then plays the "no
+way" sound and shows a message instead of crashing on a NULL file. The
+slot keeps its old name and state.
+---
+ wl_menu.c | 18 +++++++++++++++---
+ 1 file changed, 15 insertions(+), 3 deletions(-)
+
+diff --git a/wl_menu.c b/wl_menu.c
+index 24950b6..0cce49e 100644
+--- a/wl_menu.c
++++ b/wl_menu.c
+@@ -1529,6 +1529,8 @@ CP_SaveGame (int quick)
+ 
+             unlink (savepath);
+             file = fopen (savepath, "wb");
++            if (!file)
++                return 0;
+ 
+             snprintf (SaveGameNames[which],sizeof(SaveGameNames[which]),"%s",input);
+ 
+@@ -1578,9 +1580,6 @@ CP_SaveGame (int quick)
+ 
+             name[7] = which + '0';
+ 
+-            SaveGamesAvail[which] = 1;
+-            snprintf (SaveGameNames[which],sizeof(SaveGameNames[which]),"%s",input);
+-
+             if (configdir[0])
+                 snprintf (savepath, sizeof(savepath), "%s/%s", configdir, name);
+             else
+@@ -1588,6 +1587,19 @@ CP_SaveGame (int quick)
+ 
+             unlink (savepath);
+             file = fopen (savepath, "wb");
++            if (!file)
++            {
++                SD_PlaySound (NOWAYSND);
++                Message ("Unable to save the game!");
++                IN_ClearKeysDown ();
++                IN_Ack ();
++                DrawLoadSaveScreen (1);
++                continue;
++            }
++
++            SaveGamesAvail[which] = 1;
++            snprintf (SaveGameNames[which],sizeof(SaveGameNames[which]),"%s",input);
++
+             fwrite (input, 32, 1, file);
+             fseek (file, 32, SEEK_SET);
+ 

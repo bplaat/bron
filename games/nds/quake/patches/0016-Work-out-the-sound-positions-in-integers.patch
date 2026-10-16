@@ -1,0 +1,123 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Tue, 6 Oct 2026 07:09:57 +0200
+Subject: [PATCH] Work out the sound positions in integers
+
+SND_Spatialize runs for every channel every frame, with software
+floating point it was the costliest part of the sound. It works in
+integers now, with the DS square root and divider units: the distance
+fades the volume to 0 at 1 / dist_mult and the stereo separation is the
+listener's right vector in fixed point.
+---
+ WinQuake/snd_dma.c | 73 +++++++++++++++++++++++++---------------------
+ 1 file changed, 39 insertions(+), 34 deletions(-)
+
+diff --git a/WinQuake/snd_dma.c b/WinQuake/snd_dma.c
+index 4240a12..a261f12 100644
+--- a/WinQuake/snd_dma.c
++++ b/WinQuake/snd_dma.c
+@@ -20,6 +20,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
+ // snd_dma.c -- main control for any streaming sound output device
+ 
+ #include "quakedef.h"
++#include <nds/arm9/math.h>
+ 
+ #ifdef _WIN32
+ #include "winquake.h"
+@@ -395,13 +396,25 @@ channel_t *SND_PickChannel(int entnum, int entchannel)
+ SND_Spatialize
+ =================
+ */
++// The listener in integers, the ARM9 has no floating point unit
++static int	listener_int[3], listener_right_int[3];	// right in 2.10 fixed point
++
++static void SND_SetListenerInt (void)
++{
++	int	i;
++
++	for (i = 0; i < 3; i++)
++	{
++		listener_int[i] = listener_origin[i];
++		listener_right_int[i] = listener_right[i] * 1024;
++	}
++}
++
++// In integers with the DS square root and divider units instead of floating
++// point: the distance fades the volume to 0 at 1 / dist_mult
+ void SND_Spatialize(channel_t *ch)
+ {
+-    vec_t dot;
+-    vec_t ldist, rdist, dist;
+-    vec_t lscale, rscale, scale;
+-    vec3_t source_vec;
+-	sfx_t *snd;
++	int	dx, dy, dz, dist, dot, fade, scale;
+ 
+ // anything coming from the view entity will allways be full volume
+ 	if (ch->entnum == cl.viewentity)
+@@ -411,37 +424,28 @@ void SND_Spatialize(channel_t *ch)
+ 		return;
+ 	}
+ 
+-// calculate stereo seperation and distance attenuation
+-
+-	snd = ch->sfx;
+-	VectorSubtract(ch->origin, listener_origin, source_vec);
+-	
+-	dist = VectorNormalize(source_vec) * ch->dist_mult;
+-	
+-	dot = DotProduct(listener_right, source_vec);
+-
+-	if (shm->channels == 1)
+-	{
+-		rscale = 1.0;
+-		lscale = 1.0;
+-	}
+-	else
++	dx = (int) ch->origin[0] - listener_int[0];
++	dy = (int) ch->origin[1] - listener_int[1];
++	dz = (int) ch->origin[2] - listener_int[2];
++	dist = sqrt32 (dx * dx + dy * dy + dz * dz);
++	// 1.0 is 65536, dist_mult is about 1 / 1000
++	fade = 65536 - ((dist * (int) (ch->dist_mult * (1 << 24))) >> 8);
++	if (fade <= 0)
+ 	{
+-		rscale = 1.0 + dot;
+-		lscale = 1.0 - dot;
++		ch->leftvol = ch->rightvol = 0;
++		return;
+ 	}
+-
+-// add in distance effect
+-	scale = (1.0 - dist) * rscale;
+-	ch->rightvol = (int) (ch->master_vol * scale);
+-	if (ch->rightvol < 0)
+-		ch->rightvol = 0;
+-
+-	scale = (1.0 - dist) * lscale;
+-	ch->leftvol = (int) (ch->master_vol * scale);
+-	if (ch->leftvol < 0)
+-		ch->leftvol = 0;
+-}           
++	dot = dist ? div32 ((listener_right_int[0] * dx + listener_right_int[1] * dy + listener_right_int[2] * dz) << 6, dist) : 0;
++	if (dot > 65536)
++		dot = 65536;
++	else if (dot < -65536)
++		dot = -65536;
++
++	scale = (fade >> 8) * ((65536 + dot) >> 8);
++	ch->rightvol = (ch->master_vol * scale) >> 16;
++	scale = (fade >> 8) * ((65536 - dot) >> 8);
++	ch->leftvol = (ch->master_vol * scale) >> 16;
++}
+ 
+ 
+ // =======================================================================
+@@ -732,6 +736,7 @@ void S_Update(vec3_t origin, vec3_t forward, vec3_t right, vec3_t up)
+ 	VectorCopy(forward, listener_forward);
+ 	VectorCopy(right, listener_right);
+ 	VectorCopy(up, listener_up);
++	SND_SetListenerInt ();
+ 	
+ // update general area ambient sound sources
+ 	S_UpdateAmbientSounds ();

@@ -1,0 +1,193 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Sat, 3 Oct 2026 11:04:42 +0200
+Subject: [PATCH] Draw menus and messages in the visible part of the screen
+
+The DS top screen shows the middle 256x192 of the 320x200 frame 1:1
+(V_VISIBLE*). Messages go in its corner, and the menu title, skill
+picture and items are moved inside it. Every menu page is centered
+vertically in it: M_Drawer draws the page once only measuring the rows
+its patches cover (v_measuring), then moved down by v_offsety.
+---
+ doomgeneric/hu_stuff.c |  1 +
+ doomgeneric/hu_stuff.h |  5 +++--
+ doomgeneric/m_menu.c   | 35 ++++++++++++++++++++++++++++++-----
+ doomgeneric/v_video.c  | 14 ++++++++++++++
+ doomgeneric/v_video.h  | 15 +++++++++++++++
+ 5 files changed, 63 insertions(+), 7 deletions(-)
+
+diff --git a/doomgeneric/hu_stuff.c b/doomgeneric/hu_stuff.c
+index 897f1f5..21e71c5 100644
+--- a/doomgeneric/hu_stuff.c
++++ b/doomgeneric/hu_stuff.c
+@@ -26,6 +26,7 @@
+ #include "deh_main.h"
+ #include "i_swap.h"
+ #include "i_video.h"
++#include "v_video.h"
+ 
+ #include "am_map.h"
+ #include "hu_stuff.h"
+diff --git a/doomgeneric/hu_stuff.h b/doomgeneric/hu_stuff.h
+index bb58e0f..cce0bc3 100644
+--- a/doomgeneric/hu_stuff.h
++++ b/doomgeneric/hu_stuff.h
+@@ -32,8 +32,9 @@
+ 
+ #define HU_BROADCAST	5
+ 
+-#define HU_MSGX		0
+-#define HU_MSGY		0
++// The top screen only shows the view, messages go in its corner
++#define HU_MSGX		(V_VISIBLEX + 2)
++#define HU_MSGY		(V_VISIBLEY + 2)
+ #define HU_MSGWIDTH	64	// in characters
+ #define HU_MSGHEIGHT	1	// in lines
+ 
+diff --git a/doomgeneric/m_menu.c b/doomgeneric/m_menu.c
+index de68d5a..6054318 100644
+--- a/doomgeneric/m_menu.c
++++ b/doomgeneric/m_menu.c
+@@ -119,7 +119,9 @@ char			saveOldString[SAVESTRINGSIZE];
+ boolean			inhelpscreens;
+ boolean			menuactive;
+ 
+-#define SKULLXOFF		-32
++// the visible 256 columns leave less room left of the widest items
++#define SKULLXOFF		-24
++#define MENUWIDEX		56
+ #define LINEHEIGHT		16
+ 
+ extern boolean		sendpause;
+@@ -291,7 +293,7 @@ menu_t  EpiDef =
+     &MainDef,		// previous menu
+     EpisodeMenu,	// menuitem_t ->
+     M_DrawEpisode,	// drawing routine ->
+-    48,63,              // x,y
++    MENUWIDEX,63,       // x,y
+     ep1			// lastOn
+ };
+ 
+@@ -323,7 +325,7 @@ menu_t  NewDef =
+     &EpiDef,		// previous menu
+     NewGameMenu,	// menuitem_t ->
+     M_DrawNewGame,	// drawing routine ->
+-    48,63,              // x,y
++    MENUWIDEX,63,       // x,y
+     hurtme		// lastOn
+ };
+ 
+@@ -911,7 +913,7 @@ void M_MusicVol(int choice)
+ //
+ void M_DrawMainMenu(void)
+ {
+-    V_DrawPatchDirect(94, 2,
++    V_DrawPatchDirect(94, V_VISIBLEY + 2,
+                       W_CacheLumpName(DEH_String("M_DOOM"), PU_CACHE));
+ }
+ 
+@@ -923,8 +925,12 @@ void M_DrawMainMenu(void)
+ //
+ void M_DrawNewGame(void)
+ {
++    patch_t *skill;
++
+     V_DrawPatchDirect(96, 14, W_CacheLumpName(DEH_String("M_NEWG"), PU_CACHE));
+-    V_DrawPatchDirect(54, 38, W_CacheLumpName(DEH_String("M_SKILL"), PU_CACHE));
++    skill = W_CacheLumpName(DEH_String("M_SKILL"), PU_CACHE);
++    // centered when the visible part is narrower than the screen
++    V_DrawPatchDirect(V_VISIBLEX ? (SCREENWIDTH - SHORT(skill->width)) / 2 : 54, 38, skill);
+ }
+ 
+ void M_NewGame(int choice)
+@@ -1968,6 +1974,7 @@ static void M_DrawOPLDev(void)
+ //
+ void M_Drawer (void)
+ {
++    static boolean	centering;
+     static short	x;
+     static short	y;
+     unsigned int	i;
+@@ -2026,6 +2033,24 @@ void M_Drawer (void)
+     if (!menuactive)
+ 	return;
+ 
++    // The page is centered in the visible part, measured by drawing it
++    // once without drawing anything
++    if (!centering)
++    {
++        centering = true;
++        v_measuring = true;
++        v_measuretop = SCREENHEIGHT;
++        v_measurebottom = 0;
++        M_Drawer();
++        v_measuring = false;
++        if (v_measurebottom > v_measuretop)
++            v_offsety = V_VISIBLEY + (V_VISIBLEH - (v_measurebottom - v_measuretop)) / 2 - v_measuretop;
++        M_Drawer();
++        v_offsety = 0;
++        centering = false;
++        return;
++    }
++
+     if (currentMenu->routine)
+ 	currentMenu->routine();         // call Draw routine
+     
+diff --git a/doomgeneric/v_video.c b/doomgeneric/v_video.c
+index 6db28aa..67e4e67 100644
+--- a/doomgeneric/v_video.c
++++ b/doomgeneric/v_video.c
+@@ -136,6 +136,10 @@ void V_SetPatchClipCallback(vpatchclipfunc_t func)
+ // Masks a column based masked pic to the screen. 
+ //
+ 
++int v_offsety;
++boolean v_measuring;
++int v_measuretop, v_measurebottom;
++
+ void V_DrawPatch(int x, int y, patch_t *patch)
+ { 
+     int count;
+@@ -149,6 +153,16 @@ void V_DrawPatch(int x, int y, patch_t *patch)
+     y -= SHORT(patch->topoffset);
+     x -= SHORT(patch->leftoffset);
+ 
++    y += v_offsety;
++    if (v_measuring)
++    {
++        if (y < v_measuretop)
++            v_measuretop = y;
++        if (y + SHORT(patch->height) > v_measurebottom)
++            v_measurebottom = y + SHORT(patch->height);
++        return;
++    }
++
+     // haleyjd 08/28/10: Strife needs silent error checking here.
+     if(patchclip_callback)
+     {
+diff --git a/doomgeneric/v_video.h b/doomgeneric/v_video.h
+index a970c71..1df3186 100644
+--- a/doomgeneric/v_video.h
++++ b/doomgeneric/v_video.h
+@@ -55,6 +55,21 @@ void V_CopyRect(int srcx, int srcy, byte *source,
+                 int destx, int desty);
+ 
+ void V_DrawPatch(int x, int y, patch_t *patch);
++
++// The part of the screen that is shown at 1:1, the Nintendo DS shows the
++// middle 256x192. Frames with a picture for the whole screen are scaled.
++#define V_VISIBLEX	32
++#define V_VISIBLEY	4
++#define V_VISIBLEW	256
++#define V_VISIBLEH	192
++
++// Menu pages are centered in the visible part: drawn once with v_measuring
++// set, patches only extend the rows v_measuretop to v_measurebottom, then
++// moved down by v_offsety
++extern int v_offsety;
++extern boolean v_measuring;
++extern int v_measuretop, v_measurebottom;
++
+ void V_DrawPatchFlipped(int x, int y, patch_t *patch);
+ void V_DrawTLPatch(int x, int y, patch_t *patch);
+ void V_DrawAltTLPatch(int x, int y, patch_t * patch);

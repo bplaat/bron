@@ -1,0 +1,162 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Tue, 6 Oct 2026 07:09:54 +0200
+Subject: [PATCH] Show a loading screen
+
+The loading plaque only showed while a game was running, so a game
+started from the menu or a level loaded at startup showed the screen as
+it was, then the console, until the level was there. The loading screen
+now always shows: the video driver puts the plaque on the top screen,
+the touch screen keeps the startup console for the first load, then shows
+the brown console background with the version until the level is ready.
+The plaque temporarily replaces the menu while demos change.
+A level, savegame or demo that
+can't be loaded ends it again, it no longer waits for a level, and the
+demo loop only shows it when there is a demo to play. The status bar
+isn't drawn while a level loads. The view behind the plaque is only drawn
+while there is a level: a savegame loaded from the console draws it after
+the old level is gone.
+---
+ WinQuake/cl_demo.c  |  1 +
+ WinQuake/cl_main.c  |  5 +++--
+ WinQuake/host_cmd.c |  7 ++++++-
+ WinQuake/screen.c   | 24 ++++++++++--------------
+ 4 files changed, 20 insertions(+), 17 deletions(-)
+
+diff --git a/WinQuake/cl_demo.c b/WinQuake/cl_demo.c
+index 550368e..bd5aeaa 100644
+--- a/WinQuake/cl_demo.c
++++ b/WinQuake/cl_demo.c
+@@ -297,6 +297,7 @@ void CL_PlayDemo_f (void)
+ 	{
+ 		Con_Printf ("ERROR: couldn't open.\n");
+ 		cls.demonum = -1;		// stop demo loop
++		SCR_EndLoadingPlaque ();
+ 		return;
+ 	}
+ 
+diff --git a/WinQuake/cl_main.c b/WinQuake/cl_main.c
+index 5812143..1024160 100644
+--- a/WinQuake/cl_main.c
++++ b/WinQuake/cl_main.c
+@@ -223,8 +223,6 @@ void CL_NextDemo (void)
+ 	if (cls.demonum == -1)
+ 		return;		// don't play demos
+ 
+-	SCR_BeginLoadingPlaque ();
+-
+ 	if (!cls.demos[cls.demonum][0] || cls.demonum == MAX_DEMOS)
+ 	{
+ 		cls.demonum = 0;
+@@ -236,6 +234,9 @@ void CL_NextDemo (void)
+ 		}
+ 	}
+ 
++	// the loading plaque always shows now, only when there is a demo to play
++	SCR_BeginLoadingPlaque ();
++
+ 	sprintf (str,"playdemo %s\n", cls.demos[cls.demonum]);
+ 	Cbuf_InsertText (str);
+ 	cls.demonum++;
+diff --git a/WinQuake/host_cmd.c b/WinQuake/host_cmd.c
+index fe2c19f..cd09f80 100644
+--- a/WinQuake/host_cmd.c
++++ b/WinQuake/host_cmd.c
+@@ -286,7 +286,10 @@ void Host_Map_f (void)
+ 	SV_SpawnServer (name);
+ #endif
+ 	if (!sv.active)
++	{
++		SCR_EndLoadingPlaque ();
+ 		return;
++	}
+ 	
+ 	if (cls.state != ca_dedicated)
+ 	{
+@@ -594,7 +597,7 @@ void Host_Loadgame_f (void)
+ 	f = fopen (name, "r");
+ 	if (!f)
+ 	{
+-		Con_Printf ("ERROR: couldn't open.\n");
++		SCR_EndLoadingPlaque ();
+ 		return;
+ 	}
+ 
+@@ -603,6 +606,7 @@ void Host_Loadgame_f (void)
+ 	{
+ 		fclose (f);
+ 		Con_Printf ("Savegame is version %i, not %i\n", version, SAVEGAME_VERSION);
++		SCR_EndLoadingPlaque ();
+ 		return;
+ 	}
+ 	fscanf (f, "%s\n", str);
+@@ -632,6 +636,7 @@ void Host_Loadgame_f (void)
+ 	if (!sv.active)
+ 	{
+ 		Con_Printf ("Couldn't load map\n");
++		SCR_EndLoadingPlaque ();
+ 		return;
+ 	}
+ 	sv.paused = true;		// pause until all clients connect
+diff --git a/WinQuake/screen.c b/WinQuake/screen.c
+index 8b1c6dc..db253ab 100644
+--- a/WinQuake/screen.c
++++ b/WinQuake/screen.c
+@@ -462,14 +462,12 @@ SCR_DrawLoading
+ */
+ void SCR_DrawLoading (void)
+ {
+-	qpic_t	*pic;
+-
+ 	if (!scr_drawloading)
+ 		return;
+-		
+-	pic = Draw_CachePic ("gfx/loading.lmp");
+-	Draw_Pic ( (vid.width - pic->width)/2, 
+-		(vid.height - 48 - pic->height)/2, pic);
++
++// the top screen shows only the plaque, the touch screen keeps Quake's
++// brown console background while the level or demo loads
++	Draw_ConsoleBackground (vid.height);
+ }
+ 
+ 
+@@ -486,11 +484,14 @@ void SCR_SetUpToDrawConsole (void)
+ {
+ 	Con_CheckResize ();
+ 	
++// also with the loading plaque, which a load from the console draws after
++// the old map is gone
++	con_forcedup = !cl.worldmodel || cls.signon != SIGNONS;
++
+ 	if (scr_drawloading)
+ 		return;		// never a console with loading plaque
+ 		
+ // decide on the height of the console
+-	con_forcedup = !cl.worldmodel || cls.signon != SIGNONS;
+ 
+ 	if (con_forcedup)
+ 	{
+@@ -703,12 +704,8 @@ void SCR_BeginLoadingPlaque (void)
+ {
+ 	S_StopAllSounds (true);
+ 
+-	if (cls.state != ca_connected)
+-		return;
+-	if (cls.signon != SIGNONS)
+-		return;
+-	
+-// redraw with no console and the loading plaque
++// redraw with no console and the loading plaque, also when a game starts
++// from the menu or the console
+ 	Con_ClearNotify ();
+ 	scr_centertime_off = 0;
+ 	scr_con_current = 0;
+@@ -953,7 +950,6 @@ void SCR_UpdateScreen (void)
+ 	else if (scr_drawloading)
+ 	{
+ 		SCR_DrawLoading ();
+-		Sbar_Draw ();
+ 	}
+ 	else if (cl.intermission == 1 && key_dest == key_game)
+ 	{

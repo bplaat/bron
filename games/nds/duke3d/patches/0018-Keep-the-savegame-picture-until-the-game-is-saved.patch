@@ -1,0 +1,41 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Wed, 7 Oct 2026 12:00:00 +0200
+Subject: [PATCH] Keep the savegame picture until the game is saved
+
+The picture of the view saved with a game was left to the cache, which
+could drop it before a slot was picked, and saving then copied from a
+null pointer. It stays locked until the game is saved, and a lost one is
+saved black.
+---
+ Game/src/menues.c | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/Game/src/menues.c b/Game/src/menues.c
+index 66ef960..8f5e5c6 100644
+--- a/Game/src/menues.c
++++ b/Game/src/menues.c
+@@ -608,7 +608,14 @@ int saveplayer(int8_t spot)
+          dfwrite(&ud.volume_number,sizeof(ud.volume_number),1,fil);
+      dfwrite(&ud.level_number,sizeof(ud.level_number),1,fil);
+          dfwrite(&ud.player_skill,sizeof(ud.player_skill),1,fil);
++     if (tiles[MAXTILES-1].data == NULL)
++     {
++         tiles[MAXTILES-1].lock = 254;
++         allocache(&tiles[MAXTILES-1].data,160*100,&tiles[MAXTILES-1].lock);
++         clearbufbyte(tiles[MAXTILES-1].data,160*100,0L);
++     }
+      dfwrite(tiles[MAXTILES-1].data,160,100,fil);
++     tiles[MAXTILES-1].lock = 1;
+ 
+          dfwrite(&numwalls,2,1,fil);
+      dfwrite(&wall[0],sizeof(walltype),MAXWALLS,fil);
+@@ -3088,6 +3095,8 @@ else
+             displayrooms(myconnectindex,65536);
+             savetemp("duke3d.tmp",tiles[MAXTILES-1].data,160*100);
+             screencapt = 0;
++            // The cache could drop the picture before a slot is picked
++            tiles[MAXTILES-1].lock = 254;
+             break;
+ 
+         case 360:

@@ -1,0 +1,144 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Wed, 7 Oct 2026 12:00:00 +0200
+Subject: [PATCH] Don't wait for sounds and answers that never come
+
+Starting a new game and the end of episode 3 waited in empty loops for a
+voice to end, which the sound callback reports. The compiler may read the
+lock once, which is why upstream built premap.c unoptimized, and on the DS
+the callback comes from the polling the loops never did, so New Game hung
+on the skill menu. The waits let the game poll now. The questions about
+an unknown GRP and external CON files of another version, asked on the
+console, are answered without a keyboard: carry on, and use the GRP's
+own CON files.
+---
+ Engine/src/filesystem.c |  3 +--
+ Game/src/game.c         | 23 +++++++----------------
+ Game/src/gamedef.c      | 12 +++---------
+ Game/src/premap.c       |  5 ++++-
+ 4 files changed, 15 insertions(+), 28 deletions(-)
+
+diff --git a/Engine/src/filesystem.c b/Engine/src/filesystem.c
+index 84fd427..0c66853 100644
+--- a/Engine/src/filesystem.c
++++ b/Engine/src/filesystem.c
+@@ -76,8 +76,7 @@ int32_t initgroupfile(const char  *filename)
+     
+     if (archive->fileDescriptor < 0){
+         printf("Error: Unable to open file %s.\n",filename);
+-        getchar();
+-        exit(0);
++        return(-1);
+     }
+     
+     
+diff --git a/Game/src/game.c b/Game/src/game.c
+index d80d954..7874ad4 100644
+--- a/Game/src/game.c
++++ b/Game/src/game.c
+@@ -7201,9 +7201,7 @@ void checkcommandline(int argc,char  **argv)
+ 						"AutoAim OFF like in modern FPS.\n\n"
+ 						"Do you authorize the HOST to turn your AutoAim OFF (Y/N)? ");
+ 
+-				do
+-					kbdKey = getch()|' ';
+-				while(kbdKey != 'n' && kbdKey != 'y');
++				kbdKey = 'y';	// no keyboard to ask with
+ 
+ 				printf("%c \n", kbdKey);
+ 
+@@ -8221,14 +8219,7 @@ int main(int argc,char  **argv)
+ 			printf("%s -> CRC32=%X  Size=%d bytes\n", crc32lookup[i].name, crc32lookup[i].crc32, crc32lookup[i].size);
+ 
+ 		printf(	"\nYou should try to get one of these GRP only as a base GRP\n"
+-				"Do you want to continue anyway? (Y/N): ");
+-		do
+-			kbdKey = getch() | ' ';
+-		while(kbdKey != 'y' && kbdKey != 'n');
+-		printf("%c\n", kbdKey);
+-
+-		if(kbdKey == 'n')
+-			Error(EXIT_SUCCESS,"");
++				"Continuing anyway, there is no keyboard to ask with.\n");
+ 	}
+ 
+ 	// computing exe crc
+@@ -9945,19 +9936,19 @@ void dobonus(uint8_t  bonusonly)
+             if( ud.lockout == 0 && !KB_KeyWaiting() )
+             {
+                 sound(ENDSEQVOL3SND5);
+-                while(Sound[ENDSEQVOL3SND5].lock>=200) getpackets();
++                while(Sound[ENDSEQVOL3SND5].lock>=200) _idle();
+                 if(KB_KeyWaiting()) goto ENDANM;
+                 sound(ENDSEQVOL3SND6);
+-                while(Sound[ENDSEQVOL3SND6].lock>=200) getpackets();
++                while(Sound[ENDSEQVOL3SND6].lock>=200) _idle();
+                 if(KB_KeyWaiting()) goto ENDANM;
+                 sound(ENDSEQVOL3SND7);
+-                while(Sound[ENDSEQVOL3SND7].lock>=200) getpackets();
++                while(Sound[ENDSEQVOL3SND7].lock>=200) _idle();
+                 if(KB_KeyWaiting()) goto ENDANM;
+                 sound(ENDSEQVOL3SND8);
+-                while(Sound[ENDSEQVOL3SND8].lock>=200) getpackets();
++                while(Sound[ENDSEQVOL3SND8].lock>=200) _idle();
+                 if(KB_KeyWaiting()) goto ENDANM;
+                 sound(ENDSEQVOL3SND9);
+-                while(Sound[ENDSEQVOL3SND9].lock>=200) getpackets();
++                while(Sound[ENDSEQVOL3SND9].lock>=200) _idle();
+             }
+ 
+             KB_FlushKeyboardQueue();
+diff --git a/Game/src/gamedef.c b/Game/src/gamedef.c
+index 6b93c64..152c3be 100644
+--- a/Game/src/gamedef.c
++++ b/Game/src/gamedef.c
+@@ -1616,9 +1616,7 @@ void loadefs(char  *filenam, char  *mptr, int readfromGRP)
+ 					"Out Of Synch errors. You can safely delete those files so xDuke will\n"
+ 					"always use the GRP internal CON files.\n"
+ 					"\nReload normal GRP internal *.CON files? (Y/N) : ");
+-			do
+-				kbdKey = getch() | ' ';
+-			while(kbdKey != 'y' && kbdKey != 'n');
++			kbdKey = 'y';	// no keyboard to ask with
+ 			printf("%c\n", kbdKey);
+ 
+ 			if(kbdKey == 'y')
+@@ -1634,9 +1632,7 @@ void loadefs(char  *filenam, char  *mptr, int readfromGRP)
+ 					"Out Of Synch errors. You can safely delete those files so xDuke will\n"
+ 					"always use the GRP internal CON files.\n"
+ 					"\nReload normal GRP internal *.CON files? (Y/N) : ");
+-			do
+-				kbdKey = getch() | ' ';
+-			while(kbdKey != 'y' && kbdKey != 'n');
++			kbdKey = 'y';	// no keyboard to ask with
+ 			printf("%c\n", kbdKey);
+ 
+ 			if(kbdKey == 'y')
+@@ -1650,9 +1646,7 @@ void loadefs(char  *filenam, char  *mptr, int readfromGRP)
+ 					"Out Of Synch errors. You can safely delete those files so xDuke will\n"
+ 					"always use the GRP internal CON files.\n"
+ 					"\nReload normal GRP internal *.CON files? (Y/N) : ");
+-			do
+-				kbdKey = getch() | ' ';
+-			while(kbdKey != 'y' && kbdKey != 'n');
++			kbdKey = 'y';	// no keyboard to ask with
+ 			printf("%c\n", kbdKey);
+ 
+ 			if(kbdKey == 'y')
+diff --git a/Game/src/premap.c b/Game/src/premap.c
+index c28f39e..26f4cbb 100644
+--- a/Game/src/premap.c
++++ b/Game/src/premap.c
+@@ -992,8 +992,11 @@ void newgame(uint8_t  vn,uint8_t  ln,uint8_t  sk)
+     struct player_struct *p = &ps[0];
+     short i;
+ 
++    // The lock drops when the sound ends, which the input and sound
++    // polling of _idle() report
+     if(globalskillsound >= 0)
+-        while(Sound[globalskillsound].lock>=200);
++        while(Sound[globalskillsound].lock>=200)
++            _idle();
+     globalskillsound = -1;
+ 
+     waitforeverybody();

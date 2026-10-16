@@ -1,0 +1,903 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Sun, 4 Oct 2026 12:18:34 +0200
+Subject: [PATCH] Add the DS touch screen
+
+wl_touch.c draws the touch screen in the look of the status bar: the
+status bar, a map of the explored level with the walls in the colors of
+their textures, the doors in the colors of their keys and the items seen,
+with the floor, time and the kills, treasure and secrets, and a cell for
+each weapon with its sprite in color, the machine guns as picked up, the
+knife and pistol as held, dark until it is picked up. The map is a
+bitmap background of its own below the rest, which is scrolled on vblank
+to follow the player and shown in its panel by a window, only the tiles
+that change are drawn into it. The tiles in view are merged into it a
+half of the level a frame, both maps don't fit in the data cache. DMA
+copies the other parts that changed.
+Tapping a cell selects the weapon. Outside of a game it shows BJ and the
+controls. The lid puts the DS to sleep, the DSi power button or
+L+R+START+SELECT quit.
+---
+ nds/wl_touch.c | 858 +++++++++++++++++++++++++++++++++++++++++++++++++
+ wl_play.c      |   3 +-
+ 2 files changed, 860 insertions(+), 1 deletion(-)
+ create mode 100644 nds/wl_touch.c
+
+diff --git a/nds/wl_touch.c b/nds/wl_touch.c
+new file mode 100644
+index 0000000..8db97b4
+--- /dev/null
++++ b/nds/wl_touch.c
+@@ -0,0 +1,858 @@
++//
++// The Nintendo DS touch screen for Wolf4SDL
++//
++// In the look of the status bar: the status bar itself, a map of the
++// explored level with the floor, time and ratios, and cells for the four
++// weapons, which are tapped to select them. Outside of a game BJ and the
++// controls.
++//
++
++// libnds and Wolf4SDL both have a Keyboard and a SoundMode
++#define Keyboard NDS_Keyboard
++#define SoundMode NDS_SoundMode
++#include <nds.h>
++#undef Keyboard
++#undef SoundMode
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++
++// Wolf4SDL has its own bool
++#undef bool
++#undef true
++#undef false
++#include "wl_def.h"
++#include "wl_nds.h"
++
++#define SUB_WIDTH   256
++#define SUB_HEIGHT  192
++
++// The map panel, recessed into the frame below the status bar
++#define MAP_X       8
++#define MAP_Y       (STATUSLINES + 1)
++#define MAP_W       (SUB_WIDTH - 16)
++#define MAP_H       112
++#define MAP_TEXT_H  12          // the lines over the top and bottom of the map
++#define MAP_ZOOM    4           // pixels per tile, a word of VRAM per row
++#define MAP_ARROW_X (MAP_X + MAP_W / 2)
++#define MAP_ARROW_Y (MAP_Y + MAP_H / 2)
++
++// The weapon cells, raised boxes like those of the status bar
++#define CELLS_Y     (MAP_Y + MAP_H + 2)
++#define CELL_W      (MAP_W / 4)
++#define CELL_H      (SUB_HEIGHT - 3 - CELLS_Y)
++
++// Colors of the game palette, the ones of the status bar first
++#define COL_BLACK       0x00
++#define COL_TEAL        0x7f
++#define COL_TEAL_HI     0x7c
++#define COL_BLUE        0x97
++#define COL_BLUE_HI     0x8b
++#define COL_BLUE_LO     0x9f
++#define COL_WHITE       0x0f
++#define COL_GRAY        0x16
++#define COL_DARKGRAY    0x1b
++#define COL_FLOOR       0x1d
++#define COL_GOLD        0x47
++#define COL_SILVER      0x12
++#define COL_RED         0x20
++#define COL_GREEN       0x63
++#define COL_DOOR        0x79
++
++// The touch screen is drawn here and copied to a bitmap background, color 0
++// is transparent. The whole level map is a 256x256 bitmap background below
++// it, scrolled to follow the player and shown in the map panel only by a
++// window. Only the tiles that change are drawn into it.
++static byte sub_fb[SUB_WIDTH * SUB_HEIGHT] __attribute__((aligned(32)));
++#define MAP_VRAM    ((u32 *) BG_BMP_RAM_SUB (4))
++static bool sub_ready;
++static enum { SHOWS_NOTHING, SHOWS_HELP, SHOWS_GAME } sub_shows;
++static unsigned status_hash, cells_hash, texts_hash;
++static int touch_cell = -1;
++
++// Tiles seen this level, and the level they belong to. The tile arrays are
++// compared a word at a time, so they're word aligned like spotvis.
++static bool seen[MAPSIZE][MAPSIZE] __attribute__((aligned(4)));
++static int seen_level = -1;
++static int32_t seen_time;
++
++// What the map shows: the colors of the items on the tiles, how far the
++// doors are open, the statics, whether the pushwall moved and where the
++// player looks, -1 when not shown yet
++static byte items[MAPSIZE][MAPSIZE] __attribute__((aligned(4)));
++static int8_t door_open[MAXDOORS];
++static short stat_shapes[MAXSTATS];
++static int stat_count = -1, pwall_shown = -1, arrow_angle = -1;
++static bool map_viewed;
++// The scroll of the map, set on vblank: written while the screen is drawn
++// the rest of it would be offset by the lines drawn already
++static volatile s32 map_scroll_x, map_scroll_y;
++
++static byte wall_colors[64];
++static byte dark_xlat[256];
++
++// DMA copies rows to VRAM while the game goes on, after they are written
++// back from the data cache. Drawing waits for the last copy.
++#define VRAM_DMA 3
++
++static void CopyToVRAM (int y, int h)
++{
++    const byte *src = sub_fb + y * SUB_WIDTH;
++
++    dmaBusyWait (VRAM_DMA);
++    DC_FlushRange (src, h * SUB_WIDTH);
++    dmaCopyWordsAsynch (VRAM_DMA, src, (byte *) BG_BMP_RAM_SUB (0) + y * SUB_WIDTH, h * SUB_WIDTH);
++}
++
++static byte NearestColor (int r, int g, int b)
++{
++    int i, best = 0, best_diff = 1 << 30;
++
++    for (i = 0; i < 256; ++i)
++    {
++        int dr = r - gamepal[i].r, dg = g - gamepal[i].g, db = b - gamepal[i].b;
++        int diff = dr * dr + dg * dg + db * db;
++
++        if (diff < best_diff)
++        {
++            best = i;
++            best_diff = diff;
++        }
++    }
++    return best;
++}
++
++// The touch screen is dark while it switches from the console to the
++// bitmaps, until they hold the first screen
++static void InitSubScreen (void)
++{
++    int i;
++
++    setBrightness (2, -16);
++    for (i = 0; i < 256; ++i)
++    {
++        BG_PALETTE_SUB[i] = RGB15 (gamepal[i].r >> 3, gamepal[i].g >> 3, gamepal[i].b >> 3);
++        dark_xlat[i] = NearestColor (gamepal[i].r / 3, gamepal[i].g / 3, gamepal[i].b / 3);
++    }
++    videoSetModeSub (MODE_5_2D);
++    vramSetBankC (VRAM_C_SUB_BG);
++    bgSetPriority (bgInitSub (3, BgType_Bmp8, BgSize_B8_256x256, 0, 0), 0);
++    bgSetPriority (bgInitSub (2, BgType_Bmp8, BgSize_B8_256x256, 4, 0), 1);
++    REG_BG2PA_SUB = REG_BG2PD_SUB = 1 << 8;
++    REG_BG2PB_SUB = REG_BG2PC_SUB = 0;
++    SUB_WIN0_X0 = MAP_X;
++    SUB_WIN0_X1 = MAP_X + MAP_W;
++    SUB_WIN0_Y0 = MAP_Y;
++    SUB_WIN0_Y1 = MAP_Y + MAP_H;
++    SUB_WIN_IN = BIT (2) | BIT (3);
++    SUB_WIN_OUT = BIT (3);
++    REG_DISPCNT_SUB = (REG_DISPCNT_SUB & ~DISPLAY_BG2_ACTIVE) | DISPLAY_WIN0_ON;
++    sub_ready = true;
++}
++
++static void ShowSubScreen (void)
++{
++    static bool shown;
++
++    if (shown)
++        return;
++    dmaBusyWait (VRAM_DMA);
++    setBrightness (2, 0);
++    shown = true;
++}
++
++static void FillRect (int x, int y, int w, int h, byte color)
++{
++    for (; h > 0; --h, ++y)
++        memset (sub_fb + y * SUB_WIDTH + x, color, w);
++}
++
++// A box with a bevel, raised (light top left) or recessed
++static void DrawBox (int x, int y, int w, int h, byte fill, byte hi, byte lo, bool raised)
++{
++    FillRect (x, y, w, h, fill);
++    FillRect (x, y, w, 1, raised ? hi : lo);
++    FillRect (x, y, 1, h, raised ? hi : lo);
++    FillRect (x, y + h - 1, w, 1, raised ? lo : hi);
++    FillRect (x + w - 1, y, 1, h, raised ? lo : hi);
++}
++
++// Draws columns sx to sx + w of a picture at x, y, optionally recolored
++static void DrawPicPart (int x, int y, int pic, int sx, int w, const byte *xlat)
++{
++    const pictabletype *size = &pictable[pic - STARTPICS];
++    const byte *src = grsegs[pic];
++    int row, col;
++
++    for (row = 0; row < size->height && y + row < SUB_HEIGHT; ++row)
++    {
++        const byte *line = src + row * size->width + sx;
++        byte *dest = sub_fb + (y + row) * SUB_WIDTH + x;
++
++        for (col = 0; col < w && x + col < SUB_WIDTH; ++col)
++            dest[col] = xlat ? xlat[line[col]] : line[col];
++    }
++}
++
++static void DrawPic (int x, int y, int pic, const byte *xlat)
++{
++    DrawPicPart (x, y, pic, 0, pictable[pic - STARTPICS].width, xlat);
++}
++
++static int TextWidth (const char *s, int font)
++{
++    const fontstruct *f = (const fontstruct *) grsegs[STARTFONT + font];
++    int w = 0;
++
++    for (; *s; ++s)
++        w += f->width[(byte) *s];
++    return w;
++}
++
++// Text in a font of the game, up to max_x
++static void DrawText (int x, int y, const char *s, int font, byte color, int max_x)
++{
++    const fontstruct *f = (const fontstruct *) grsegs[STARTFONT + font];
++
++    for (; *s && x + f->width[(byte) *s] <= max_x; ++s)
++    {
++        const byte *src = (const byte *) f + f->location[(byte) *s];
++        int w = f->width[(byte) *s], row, col;
++
++        for (row = 0; row < f->height; ++row)
++            for (col = 0; col < w; ++col)
++                if (src[row * w + col])
++                    sub_fb[(y + row) * SUB_WIDTH + x + col] = color;
++        x += w;
++    }
++}
++
++// ---------------------------------------------------------------------------
++// The status bar
++// ---------------------------------------------------------------------------
++
++// The face the status bar shows, like DrawFace
++static int FacePic (void)
++{
++    if (SD_SoundPlaying () == GETGATLINGSND)
++        return GOTGATLINGPIC;
++    if (gamestate.health)
++        return FACE1APIC + 3 * ((100 - gamestate.health) / 16) + gamestate.faceframe;
++    if (LastAttacker && LastAttacker->obclass == needleobj)
++        return MUTANTBJPIC;
++    return FACE8APIC;
++}
++
++// A right aligned number in the status bar font, like LatchNumber
++static void DrawNumber (int x, int y, int width, int32_t number)
++{
++    char str[12];
++    int len = snprintf (str, sizeof(str), "%ld", (long) number), i;
++
++    for (i = 0; i < width; ++i)
++    {
++        int c = len - width + i;
++        DrawPic (x + i * 8, y, c < 0 ? N_BLANKPIC : N_0PIC + str[c] - '0', NULL);
++    }
++}
++
++// The status bar without the weapon box, which the cells replace, fits
++// the touch screen: up to the keys, then its right end
++static void DrawStatusBar (void)
++{
++    DrawPicPart (0, 0, STATUSBARPIC, 0, 248, NULL);
++    DrawPicPart (248, 0, STATUSBARPIC, 311, 8, NULL);
++    DrawNumber (16, 16, 2, gamestate.mapon + 1);
++    DrawNumber (48, 16, 6, gamestate.score);
++    DrawNumber (112, 16, 1, gamestate.lives);
++    DrawPic (136, 4, FacePic (), NULL);
++    DrawNumber (168, 16, 3, gamestate.health);
++    DrawNumber (216, 16, 2, gamestate.ammo);
++    DrawPic (240, 4, gamestate.keys & 1 ? GOLDKEYPIC : NOKEYPIC, NULL);
++    DrawPic (240, 20, gamestate.keys & 2 ? SILVERKEYPIC : NOKEYPIC, NULL);
++}
++
++static unsigned StatusHash (void)
++{
++    unsigned h = FacePic ();
++
++    h = h * 33 + gamestate.mapon;
++    h = h * 33 + gamestate.score;
++    h = h * 33 + gamestate.lives;
++    h = h * 33 + gamestate.health;
++    h = h * 33 + gamestate.ammo;
++    h = h * 33 + gamestate.keys;
++    return h | 1;
++}
++
++// ---------------------------------------------------------------------------
++// The weapon cells
++// ---------------------------------------------------------------------------
++
++// The weapons in color, from their sprites: the machine guns as picked up,
++// the knife (as it starts to stab, which shows its handle) and pistol, which
++// can't be, as held, at the bottom of the cell.
++// They fit inside the bevels, at most twice as big, keeping their
++// proportions.
++#define ICON_W  (CELL_W - 6)
++#define ICON_H  (CELL_H - 6)
++
++typedef struct
++{
++    int w, h;
++    bool held;
++    byte pixels[ICON_W * ICON_H];
++    bool opaque[ICON_W * ICON_H];
++} weapon_icon_t;
++
++static weapon_icon_t weapon_icons[4];
++
++static void BuildWeaponIcon (weapon_icon_t *icon, int shapenum, bool held)
++{
++    static byte pixels[TEXTURESIZE][TEXTURESIZE];
++    static bool opaque[TEXTURESIZE][TEXTURESIZE];
++    const byte *shape = PM_GetSpritePage (shapenum);
++    const compshape_t *comp = (const compshape_t *) shape;
++    int x0 = TEXTURESIZE, x1 = 0, y0 = TEXTURESIZE, y1 = 0, x, y, w, h;
++    fixed scale;
++
++    // The posts of the columns, like ScaleLine
++    memset (opaque, 0, sizeof(opaque));
++    for (x = comp->leftpix; x <= comp->rightpix; ++x)
++    {
++        const byte *cmds = shape + comp->dataofs[x - comp->leftpix];
++        int end;
++
++        for (; (end = ReadShort ((void *) cmds) >> 1) != 0; cmds += 6)
++        {
++            int16_t top = ReadShort ((void *) (cmds + 2));
++
++            for (y = ReadShort ((void *) (cmds + 4)) >> 1; y < end; ++y)
++            {
++                pixels[y][x] = shape[(uint16_t) (top + y)];
++                opaque[y][x] = true;
++                x0 = MIN (x0, x);
++                x1 = MAX (x1, x + 1);
++                y0 = MIN (y0, y);
++                y1 = MAX (y1, y + 1);
++            }
++        }
++    }
++    icon->held = held;
++    if (x0 >= x1)
++    {
++        icon->w = icon->h = 0;
++        return;
++    }
++    w = x1 - x0;
++    h = y1 - y0;
++    scale = MIN (MIN (FixedDiv (ICON_W, w), FixedDiv (ICON_H, h)), 2 << FRACBITS);
++    icon->w = (w * scale) >> FRACBITS;
++    icon->h = (h * scale) >> FRACBITS;
++    // Sampled at the middle of each pixel
++    for (y = 0; y < icon->h; ++y)
++    {
++        for (x = 0; x < icon->w; ++x)
++        {
++            int sx = x0 + (2 * x + 1) * w / (2 * icon->w), sy = y0 + (2 * y + 1) * h / (2 * icon->h);
++
++            icon->pixels[y * ICON_W + x] = pixels[sy][sx];
++            icon->opaque[y * ICON_W + x] = opaque[sy][sx];
++        }
++    }
++}
++
++static void BuildWeaponIcons (void)
++{
++    BuildWeaponIcon (&weapon_icons[0], SPR_KNIFEATK1, true);
++    BuildWeaponIcon (&weapon_icons[1], SPR_PISTOLREADY, true);
++    BuildWeaponIcon (&weapon_icons[2], SPR_STAT_27, false);
++    BuildWeaponIcon (&weapon_icons[3], SPR_STAT_28, false);
++}
++
++static void DrawCell (int i)
++{
++    const weapon_icon_t *icon = &weapon_icons[i];
++    int x = MAP_X + i * CELL_W, y = CELLS_Y, ix, iy, row, col;
++    bool owned = i <= gamestate.bestweapon, pressed = i == touch_cell;
++    char num[2] = { '1' + i, 0 };
++
++    DrawBox (x, y, CELL_W, CELL_H, COL_BLUE, COL_BLUE_HI, COL_BLUE_LO, !pressed);
++    ix = x + (CELL_W - icon->w) / 2 + pressed;
++    iy = y + (icon->held ? CELL_H - 3 - icon->h : (CELL_H - icon->h) / 2) + pressed;
++    for (row = 0; row < icon->h; ++row)
++        for (col = 0; col < icon->w; ++col)
++            if (icon->opaque[row * ICON_W + col])
++            {
++                byte c = icon->pixels[row * ICON_W + col];
++                sub_fb[(iy + row) * SUB_WIDTH + ix + col] = owned ? c : dark_xlat[c];
++            }
++    DrawText (x + 3, y + 2, num, 0, owned ? COL_WHITE : COL_DARKGRAY, x + CELL_W);
++    // The weapon in hand in a gold frame
++    if (i == gamestate.weapon)
++    {
++        FillRect (x, y, CELL_W, 2, COL_GOLD);
++        FillRect (x, y + CELL_H - 2, CELL_W, 2, COL_GOLD);
++        FillRect (x, y, 2, CELL_H, COL_GOLD);
++        FillRect (x + CELL_W - 2, y, 2, CELL_H, COL_GOLD);
++    }
++}
++
++static unsigned CellsHash (void)
++{
++    return ((touch_cell + 2) * 33 + gamestate.weapon * 7 + gamestate.bestweapon) | 1;
++}
++
++// ---------------------------------------------------------------------------
++// The map
++// ---------------------------------------------------------------------------
++
++static byte WallColor (int tile)
++{
++    // The average color of the wall texture
++    if (!wall_colors[tile])
++    {
++        const byte *src = PM_GetPage ((tile - 1) * 2);
++        int r = 0, g = 0, b = 0, i;
++
++        for (i = 0; i < TEXTURESIZE * TEXTURESIZE; ++i)
++        {
++            r += gamepal[src[i]].r;
++            g += gamepal[src[i]].g;
++            b += gamepal[src[i]].b;
++        }
++        wall_colors[tile] = NearestColor (r / (TEXTURESIZE * TEXTURESIZE), g / (TEXTURESIZE * TEXTURESIZE),
++            b / (TEXTURESIZE * TEXTURESIZE));
++        // 0 means not yet known
++        if (!wall_colors[tile])
++            wall_colors[tile] = COL_DARKGRAY;
++    }
++    return wall_colors[tile];
++}
++
++static bool Seen (int x, int y)
++{
++    return x >= 0 && x < MAPSIZE && y >= 0 && y < MAPSIZE && seen[x][y];
++}
++
++// A rectangle in a tile, x and y in pixels of the tile
++static void TileRect (u32 *rows, int x, int y, int w, int h, byte color)
++{
++    for (; h > 0; --h, ++y)
++        memset ((byte *) &rows[y] + x, color, w);
++}
++
++// Draws a tile into the map: walls in the colors of their textures, doors in
++// the colors of their keys, the floor and the items seen
++static void DrawTile (int tx, int ty)
++{
++    const int z = MAP_ZOOM;
++    int tile = tilemap[tx][ty], y;
++    bool near = Seen (tx, ty) || Seen (tx - 1, ty) || Seen (tx + 1, ty) || Seen (tx, ty - 1) || Seen (tx, ty + 1);
++    u32 rows[MAP_ZOOM] = { 0 };
++    u32 *dest = MAP_VRAM + ty * z * (SUB_WIDTH / 4) + tx;
++
++    if (tile & BIT_DOOR)
++    {
++        const doorobj_t *door = &doorobjlist[tile & ~BIT_DOOR];
++        byte color = door->lock == dr_lock1 ? COL_GOLD : door->lock == dr_lock2 ? COL_SILVER : COL_DOOR;
++        // remembered to see when it moved
++        int open = door_open[tile & ~BIT_DOOR] = z * door->position >> 16;
++
++        if (near)
++        {
++            TileRect (rows, 0, 0, z, z, COL_FLOOR);
++            // A bar across the tile, shorter as the door opens
++            if (door->vertical)
++                TileRect (rows, z / 2 - z / 8 - 1, 0, MAX (z / 4, 1) + 1, z - open, color);
++            else
++                TileRect (rows, 0, z / 2 - z / 8 - 1, z - open, MAX (z / 4, 1) + 1, color);
++        }
++    }
++    else if (tile)
++    {
++        if (near)
++            TileRect (rows, 0, 0, z, z, WallColor (tile == BIT_WALL ? pwalltile : tile & ~BIT_WALL));
++    }
++    else if (seen[tx][ty])
++        TileRect (rows, 0, 0, z, z, COL_FLOOR);
++
++    if (items[tx][ty] && seen[tx][ty])
++        TileRect (rows, (z - (z / 4 + 1)) / 2, (z - (z / 4 + 1)) / 2, z / 4 + 1, z / 4 + 1, items[tx][ty]);
++
++    for (y = 0; y < z; ++y, dest += SUB_WIDTH / 4)
++        *dest = rows[y];
++}
++
++static void DrawTileAndAround (int tx, int ty)
++{
++    int x, y;
++
++    for (x = MAX (tx - 1, 0); x <= MIN (tx + 1, MAPSIZE - 1); ++x)
++        for (y = MAX (ty - 1, 0); y <= MIN (ty + 1, MAPSIZE - 1); ++y)
++            DrawTile (x, y);
++}
++
++// The color of an item on the map: treasure gold, health green, keys in
++// their colors, ammo and weapons gray, extra lives blue
++static int ItemColor (int item)
++{
++    switch (item)
++    {
++        case bo_cross: case bo_chalice: case bo_bible: case bo_crown:
++            return COL_GOLD;
++        case bo_alpo: case bo_firstaid: case bo_food:
++            return COL_GREEN;
++        case bo_key1: case bo_key3:
++            return COL_GOLD;
++        case bo_key2: case bo_key4:
++            return COL_SILVER;
++        case bo_clip: case bo_clip2: case bo_25clip: case bo_machinegun: case bo_chaingun:
++            return COL_GRAY;
++        case bo_fullheal:
++            return COL_BLUE_HI;
++        default:
++            return 0;
++    }
++}
++
++// Draws the tiles whose items were picked up or dropped
++static void UpdateItems (void)
++{
++    static byte shown[MAPSIZE][MAPSIZE] __attribute__((aligned(4)));
++    const u32 *old = (const u32 *) shown, *now = (const u32 *) items;
++    statobj_t *stat;
++    int i, b;
++
++    // Items picked up get no shape, dropped ones take a free place or
++    // lengthen the list
++    if (laststatobj - statobjlist == stat_count)
++    {
++        for (stat = &statobjlist[0]; stat != laststatobj; ++stat)
++            if (stat->shapenum != stat_shapes[stat - statobjlist])
++                break;
++        if (stat == laststatobj)
++            return;
++    }
++
++    memcpy (shown, items, sizeof(items));
++    memset (items, 0, sizeof(items));
++    for (stat = &statobjlist[0]; stat != laststatobj; ++stat)
++    {
++        stat_shapes[stat - statobjlist] = stat->shapenum;
++        if (stat->shapenum >= 0 && (stat->flags & FL_BONUS))
++            items[stat->tilex][stat->tiley] = ItemColor (stat->itemnumber);
++    }
++    stat_count = laststatobj - statobjlist;
++
++    for (i = 0; i < MAPAREA / 4; ++i)
++        if (old[i] != now[i])
++            for (b = 0; b < 4; ++b)
++                if (((const byte *) &old[i])[b] != ((const byte *) &now[i])[b])
++                    DrawTile ((i * 4 + b) / MAPSIZE, (i * 4 + b) % MAPSIZE);
++}
++
++// Adds the tiles in view and draws the new ones and the walls around them
++static void UpdateSeen (void)
++{
++    static int seen_half;
++    int level = gamestate.episode * 10 + gamestate.mapon;
++    u32 *dest = (u32 *) seen;
++    const u32 *src = (const u32 *) spotvis;
++    int i, b;
++
++    // A new level, or the same one again: an empty map
++    if (level != seen_level || gamestate.TimeCount < seen_time)
++    {
++        memset (seen, 0, sizeof(seen));
++        memset (items, 0, sizeof(items));
++        memset (door_open, -1, sizeof(door_open));
++        stat_count = -1;
++        memset (MAP_VRAM, 0, MAPSIZE * MAP_ZOOM * SUB_WIDTH);
++        seen_level = level;
++    }
++    seen_time = gamestate.TimeCount;
++    if (!seen[player->tilex][player->tiley])
++    {
++        seen[player->tilex][player->tiley] = true;
++        DrawTileAndAround (player->tilex, player->tiley);
++    }
++    // Half the map a frame, the two arrays are twice the data cache: what
++    // is in view stays in view longer than a frame
++    seen_half ^= 1;
++    for (i = seen_half * MAPAREA / 8; i < (seen_half + 1) * MAPAREA / 8; ++i)
++    {
++        u32 added = src[i] & ~dest[i];
++
++        if (!added)
++            continue;
++        dest[i] |= added;
++        for (b = 0; b < 4; ++b)
++            if (((const byte *) &added)[b])
++                DrawTileAndAround ((i * 4 + b) / MAPSIZE, (i * 4 + b) % MAPSIZE);
++    }
++}
++
++// Draws the doors that moved and the tiles the pushwall moves through
++static void UpdateMoving (void)
++{
++    doorobj_t *door;
++    int x, y;
++
++    for (door = &doorobjlist[0]; door != lastdoorobj; ++door)
++        if (MAP_ZOOM * door->position >> 16 != door_open[door - doorobjlist])
++            DrawTile (door->tilex, door->tiley);
++
++    if (pwallstate || pwall_shown >= 0)
++    {
++        for (x = MAX (pwallx - 2, 0); x <= MIN (pwallx + 2, MAPSIZE - 1); ++x)
++            for (y = MAX (pwally - 2, 0); y <= MIN (pwally + 2, MAPSIZE - 1); ++y)
++                DrawTile (x, y);
++        pwall_shown = pwallstate ? 1 : -1;
++    }
++}
++
++// The player in the middle of the map, an arrowhead about a tile and a half
++// long pointing where they look
++static void DrawPlayerArrow (void)
++{
++    fixed c = costable[player->angle], sn = sintable[player->angle];
++    int y, x;
++
++    FillRect (MAP_ARROW_X - MAP_ZOOM, MAP_ARROW_Y - MAP_ZOOM, 2 * MAP_ZOOM + 1, 2 * MAP_ZOOM + 1, 0);
++    for (y = -MAP_ZOOM; y <= MAP_ZOOM; ++y)
++    {
++        for (x = -MAP_ZOOM; x <= MAP_ZOOM; ++x)
++        {
++            // Into the player's view: forward f, sideways s (y grows down)
++            fixed f = x * c - y * sn, s = x * sn + y * c;
++            int len = MAP_ZOOM << 16;
++
++            if (f > len || f < -len * 3 / 5)
++                continue;
++            // narrowing to the tip
++            if (abs (s) * 2 > len - f)
++                continue;
++            sub_fb[(MAP_ARROW_Y + y) * SUB_WIDTH + MAP_ARROW_X + x] = abs (s) * 4 > len - f ? COL_GOLD : COL_RED;
++        }
++    }
++}
++
++// The floor and time over the top of the map, the ratios over its bottom
++static void DrawMapTexts (void)
++{
++    char buf[48];
++    int32_t secs = gamestate.TimeCount / 70;
++    int time_x, y = MAP_Y + MAP_H - MAP_TEXT_H, i;
++
++    FillRect (MAP_X, MAP_Y, MAP_W, MAP_TEXT_H, 0);
++    FillRect (MAP_X, y, MAP_W, MAP_TEXT_H, 0);
++    snprintf (buf, sizeof(buf), "%ld:%02ld", (long) (secs / 60), (long) (secs % 60));
++    time_x = MAP_X + MAP_W - 4 - TextWidth (buf, 0);
++    DrawText (time_x, MAP_Y + 2, buf, 0, COL_WHITE, MAP_X + MAP_W);
++    snprintf (buf, sizeof(buf), "Episode %d  Floor %d", gamestate.episode + 1, gamestate.mapon + 1);
++    DrawText (MAP_X + 4, MAP_Y + 2, buf, 0, COL_GOLD, time_x - 4);
++
++    // The three ratios of the intermission, spread over the width
++    {
++        static const char *const labels[3] = { "Kills", "Treasure", "Secrets" };
++        const short counts[3][2] =
++        {
++            { gamestate.killcount, gamestate.killtotal },
++            { gamestate.treasurecount, gamestate.treasuretotal },
++            { gamestate.secretcount, gamestate.secrettotal },
++        };
++        char values[3][16];
++        int widths[3], total = 0, x = MAP_X + 4;
++
++        for (i = 0; i < 3; ++i)
++        {
++            snprintf (values[i], sizeof(values[i]), "%d%%",
++                      counts[i][1] ? counts[i][0] * 100 / counts[i][1] : 100);
++            widths[i] = TextWidth (labels[i], 0) + 3 + TextWidth (values[i], 0);
++            total += widths[i];
++        }
++        for (i = 0; i < 3; ++i)
++        {
++            DrawText (x, y, labels[i], 0, COL_GOLD, MAP_X + MAP_W);
++            DrawText (x + widths[i] - TextWidth (values[i], 0), y, values[i], 0, COL_WHITE, MAP_X + MAP_W);
++            x += widths[i] + (MAP_W - 8 - total) / 2;
++        }
++    }
++}
++
++static unsigned TextsHash (void)
++{
++    unsigned h = gamestate.TimeCount / 70;
++
++    h = h * 33 + gamestate.episode * 10 + gamestate.mapon;
++    h = h * 33 + gamestate.killcount;
++    h = h * 33 + gamestate.killtotal;
++    h = h * 33 + gamestate.treasurecount;
++    h = h * 33 + gamestate.treasuretotal;
++    h = h * 33 + gamestate.secretcount;
++    h = h * 33 + gamestate.secrettotal;
++    return h | 1;
++}
++
++// ---------------------------------------------------------------------------
++// The controls, outside of a game
++// ---------------------------------------------------------------------------
++
++#define HELP_LINES  8
++
++static void DrawHelpScreen (void)
++{
++    static const char *const help[HELP_LINES][2] =
++    {
++        { "D-Pad",  "Move and turn" },
++        { "A",      "Fire / select" },
++        { "B",      "Open / back" },
++        { "X",      "Next weapon" },
++        { "Y",      "Run (hold)" },
++        { "L R",    "Strafe" },
++        { "START",  "Menu" },
++        { "Stylus", "Tap a weapon" },
++    };
++    const char *title = "Wolfenstein 3D";
++    int i, y = 52;
++
++    FillRect (0, 0, SUB_WIDTH, SUB_HEIGHT, COL_TEAL);
++    // BJ and the title in a box of the status bar
++    DrawBox (MAP_X, 3, MAP_W, 38, COL_BLUE, COL_BLUE_HI, COL_BLUE_LO, true);
++    DrawPic (MAP_X + 8, 6, FACE1APIC, NULL);
++    DrawText (MAP_X + 40 + (MAP_W - 40 - TextWidth (title, 1)) / 2, 14, title, 1, COL_GOLD, MAP_X + MAP_W);
++    // The controls in a recessed panel
++    DrawBox (MAP_X, 46, MAP_W, SUB_HEIGHT - 49, COL_BLACK, COL_TEAL_HI, COL_BLACK, false);
++    for (i = 0; i < HELP_LINES; ++i, y += 17)
++    {
++        DrawText (MAP_X + 10, y, help[i][0], 0, COL_GOLD, MAP_X + 70);
++        DrawText (MAP_X + 72, y, help[i][1], 0, COL_WHITE, MAP_X + MAP_W - 4);
++    }
++}
++
++// ---------------------------------------------------------------------------
++
++void NDS_UpdateSubScreen (void)
++{
++    unsigned hash;
++    int i;
++
++    // The game data is loaded once the game shows anything
++    if (!sub_ready)
++    {
++        if (grsegs[STATUSBARPIC] == NULL)
++            return;
++        InitSubScreen ();
++        BuildWeaponIcons ();
++    }
++
++    dmaBusyWait (VRAM_DMA);
++    // Also while dying, which happens after the level ended
++    if (player == NULL || !(ingame || (playstate == ex_died && gamestate.lives >= 0)))
++    {
++        if (sub_shows != SHOWS_HELP)
++        {
++            REG_DISPCNT_SUB &= ~DISPLAY_BG2_ACTIVE;
++            DrawHelpScreen ();
++            CopyToVRAM (0, SUB_HEIGHT);
++            sub_shows = SHOWS_HELP;
++        }
++        ShowSubScreen ();
++        return;
++    }
++    if (sub_shows != SHOWS_GAME)
++    {
++        // The frame around the map and cells
++        FillRect (0, STATUSLINES, SUB_WIDTH, SUB_HEIGHT - STATUSLINES, COL_TEAL);
++        DrawBox (MAP_X - 1, MAP_Y - 1, MAP_W + 2, MAP_H + 2, COL_BLACK, COL_TEAL_HI, COL_BLACK, false);
++        CopyToVRAM (STATUSLINES, SUB_HEIGHT - STATUSLINES);
++        REG_DISPCNT_SUB |= DISPLAY_BG2_ACTIVE;
++        sub_shows = SHOWS_GAME;
++        status_hash = cells_hash = texts_hash = 0;
++        arrow_angle = -1;
++    }
++
++    // The map follows the player. Loading a game changes the level under the
++    // tiles drawn already, so all of them are drawn anew as the view comes
++    // on screen.
++    UpdateSeen ();
++    if (viewonscreen && !map_viewed)
++    {
++        int tx, ty;
++
++        for (tx = 0; tx < MAPSIZE; ++tx)
++            for (ty = 0; ty < MAPSIZE; ++ty)
++                DrawTile (tx, ty);
++    }
++    map_viewed = viewonscreen;
++    UpdateItems ();
++    UpdateMoving ();
++    map_scroll_x = (((player->x * MAP_ZOOM) >> TILESHIFT) - MAP_ARROW_X) << 8;
++    map_scroll_y = (((player->y * MAP_ZOOM) >> TILESHIFT) - MAP_ARROW_Y) << 8;
++    if (player->angle != arrow_angle)
++    {
++        arrow_angle = player->angle;
++        DrawPlayerArrow ();
++        CopyToVRAM (MAP_ARROW_Y - MAP_ZOOM, 2 * MAP_ZOOM + 1);
++    }
++    if ((hash = TextsHash ()) != texts_hash)
++    {
++        texts_hash = hash;
++        DrawMapTexts ();
++        CopyToVRAM (MAP_Y, MAP_TEXT_H);
++        CopyToVRAM (MAP_Y + MAP_H - MAP_TEXT_H, MAP_TEXT_H);
++    }
++
++    if ((hash = StatusHash ()) != status_hash)
++    {
++        status_hash = hash;
++        DrawStatusBar ();
++        CopyToVRAM (0, STATUSLINES);
++    }
++    if ((hash = CellsHash ()) != cells_hash)
++    {
++        cells_hash = hash;
++        for (i = 0; i < 4; ++i)
++            DrawCell (i);
++        CopyToVRAM (CELLS_Y, CELL_H);
++    }
++    ShowSubScreen ();
++}
++
++void NDS_SubScreenVBlank (void)
++{
++    REG_BG2X_SUB = map_scroll_x;
++    REG_BG2Y_SUB = map_scroll_y;
++}
++
++// ---------------------------------------------------------------------------
++// Input
++// ---------------------------------------------------------------------------
++
++void NDS_PollInput (uint32_t down, uint32_t held)
++{
++    touchPosition touch;
++
++    // Sleeps while the lid is closed, quits on the DSi power button or
++    // L+R+START+SELECT
++    if (!pmMainLoop ())
++        Quit (NULL);
++
++    // The weapon cells are the number keys
++    if (!(held & KEY_TOUCH))
++    {
++        if (touch_cell >= 0)
++            NDS_PushKey (SDL_SCANCODE_1 + touch_cell, false);
++        touch_cell = -1;
++        return;
++    }
++    if (!(down & KEY_TOUCH))
++        return;
++    touchRead (&touch);
++    if (touch.py >= CELLS_Y && touch.px >= MAP_X && touch.px < MAP_X + 4 * CELL_W)
++    {
++        touch_cell = (touch.px - MAP_X) / CELL_W;
++        NDS_PushKey (SDL_SCANCODE_1 + touch_cell, true);
++    }
++}
+diff --git a/wl_play.c b/wl_play.c
+index 98cf24b..541e65e 100644
+--- a/wl_play.c
++++ b/wl_play.c
+@@ -37,7 +37,8 @@ boolean singlestep,godmode,noclip,ammocheat,mapreveal;
+ int     extravbls;
+ 
+ tiletype tilemap[MAPSIZE][MAPSIZE]; // wall values only
+-bool     spotvis[MAPSIZE][MAPSIZE];
++// word aligned, the DS touch screen compares it a word at a time
++bool     spotvis[MAPSIZE][MAPSIZE] __attribute__((aligned(4)));
+ objtype *actorat[MAPSIZE][MAPSIZE];
+ #ifdef REVEALMAP
+ bool     mapseen[MAPSIZE][MAPSIZE];

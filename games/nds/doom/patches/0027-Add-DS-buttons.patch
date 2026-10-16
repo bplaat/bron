@@ -1,0 +1,112 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Sat, 3 Oct 2026 11:04:46 +0200
+Subject: [PATCH] Add DS buttons
+
+The buttons send Doom keys, the ones of the game while playing and the
+menu keys in the menus. The key sent on press is kept, so the release
+always matches even if the menu opened or closed in between. Every tic
+also runs calico's power management: the console sleeps while the lid is
+closed, and Doom quits on the DSi power button or L+R+START+SELECT.
+---
+ doomgeneric/i_ndsinput.c | 91 ++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 91 insertions(+)
+ create mode 100644 doomgeneric/i_ndsinput.c
+
+diff --git a/doomgeneric/i_ndsinput.c b/doomgeneric/i_ndsinput.c
+new file mode 100644
+index 0000000..7cd93b1
+--- /dev/null
++++ b/doomgeneric/i_ndsinput.c
+@@ -0,0 +1,91 @@
++//
++// Nintendo DS buttons
++//
++// The buttons send Doom keys, the ones of the game while playing and the menu
++// keys in the menus. The key sent on press is kept, so the release always
++// matches even if the menu opened or closed in between. Also where the
++// console sleeps while the lid is closed and Doom quits on the DSi power
++// button or L+R+START+SELECT.
++//
++
++#include <nds.h>
++
++#include "d_event.h"
++#include "doomkeys.h"
++#include "doomstat.h"
++#include "i_system.h"
++#include "m_controls.h"
++
++#include "doomgeneric_nds.h"
++
++typedef struct
++{
++    u32 button;
++    int game_key;
++    int menu_key;
++} button_binding_t;
++
++static const button_binding_t bindings[] =
++{
++    { KEY_UP,     KEY_UPARROW,    KEY_UPARROW },
++    { KEY_DOWN,   KEY_DOWNARROW,  KEY_DOWNARROW },
++    { KEY_LEFT,   KEY_LEFTARROW,  KEY_LEFTARROW },
++    { KEY_RIGHT,  KEY_RIGHTARROW, KEY_RIGHTARROW },
++    { KEY_A,      KEY_FIRE,       KEY_ENTER },
++    { KEY_B,      KEY_USE,        KEY_BACKSPACE },
++    { KEY_X,      ']',            0 },
++    { KEY_Y,      KEY_RSHIFT,     0 },
++    { KEY_L,      KEY_STRAFE_L,   0 },
++    { KEY_R,      KEY_STRAFE_R,   0 },
++    { KEY_START,  KEY_ESCAPE,     KEY_ESCAPE },
++};
++
++// Doom key sent on press, so the release always matches even if the menu
++// opened or closed in between
++static int held_keys[arrlen(bindings)];
++
++void NDS_PostKey(evtype_t type, int key)
++{
++    event_t ev = { 0 };
++
++    ev.type = type;
++    ev.data1 = key;
++    ev.data2 = type == ev_keydown ? key : 0;
++    D_PostEvent(&ev);
++}
++
++void NDS_PollInput(void)
++{
++    u32 down, up;
++    unsigned i;
++
++    if (!pmMainLoop())
++        I_Quit();
++    scanKeys();
++    down = keysDown();
++    up = keysUp();
++    // Held d-pad keys repeat in menus
++    if (menuactive)
++        down |= keysDownRepeat() & (KEY_UP | KEY_DOWN | KEY_LEFT | KEY_RIGHT);
++
++    for (i = 0; i < arrlen(bindings); ++i)
++    {
++        if ((up & bindings[i].button) && held_keys[i])
++        {
++            NDS_PostKey(ev_keyup, held_keys[i]);
++            held_keys[i] = 0;
++        }
++        if (down & bindings[i].button)
++        {
++            int key = menuactive ? bindings[i].menu_key : bindings[i].game_key;
++
++            if (key != 0)
++            {
++                NDS_PostKey(ev_keydown, key);
++                held_keys[i] = key;
++            }
++        }
++    }
++
++    NDS_PollTouch(down, keysHeld());
++}

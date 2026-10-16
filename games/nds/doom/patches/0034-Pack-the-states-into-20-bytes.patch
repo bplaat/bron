@@ -1,0 +1,37 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Tue, 6 Oct 2026 19:00:00 +0200
+Subject: [PATCH] Pack the states into 20 bytes
+
+The frame, tics and offset fields of state_t hold small values, as shorts
+the 967 states take 20 bytes each instead of 28, 7.6 KiB less ROM and RAM.
+---
+ doomgeneric/info.h | 9 +++++----
+ 1 file changed, 5 insertions(+), 4 deletions(-)
+
+diff --git a/doomgeneric/info.h b/doomgeneric/info.h
+index 648b518..366a1c1 100644
+--- a/doomgeneric/info.h
++++ b/doomgeneric/info.h
+@@ -1141,16 +1141,17 @@ typedef enum
+ } statenum_t;
+ 
+ 
++// The fields are as narrow as their values, 20 bytes a state instead of 28
+ typedef struct
+ {
+     spritenum_t sprite;
+-    int frame;
+-    int tics;
++    unsigned short frame;
++    short tics;
+     // void (*action) ();
+     actionf_t action;
+     statenum_t nextstate;
+-    int misc1;
+-    int misc2;
++    short misc1;
++    short misc2;
+ } state_t;
+ 
+ extern state_t	states[NUMSTATES];

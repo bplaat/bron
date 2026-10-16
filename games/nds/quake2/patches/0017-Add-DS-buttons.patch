@@ -1,0 +1,141 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Mon, 12 Oct 2026 07:54:52 +0200
+Subject: [PATCH] Add DS buttons
+
+---
+ nds/in_nds.c | 125 +++++++++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 125 insertions(+)
+ create mode 100644 nds/in_nds.c
+
+diff --git a/nds/in_nds.c b/nds/in_nds.c
+new file mode 100644
+index 0000000..5b8db09
+--- /dev/null
++++ b/nds/in_nds.c
+@@ -0,0 +1,125 @@
++/*
++Copyright (C) 1997-2001 Id Software, Inc.
++
++This program is free software; you can redistribute it and/or
++modify it under the terms of the GNU General Public License
++as published by the Free Software Foundation; either version 2
++of the License, or (at your option) any later version.
++
++This program is distributed in the hope that it will be useful,
++but WITHOUT ANY WARRANTY; without even the implied warranty of
++MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
++
++See the GNU General Public License for more details.
++
++You should have received a copy of the GNU General Public License
++along with this program; if not, write to the Free Software
++Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
++
++*/
++// in_nds.c -- Nintendo DS buttons
++//
++// The buttons send the keys of Quake II's default bindings in game and the
++// menu keys everywhere else, so they can still be rebound. A tap on the
++// touch screen runs the command of what it shows there (hud_nds.c).
++
++#include "../client/client.h"
++
++#include <nds.h>
++
++typedef struct
++{
++	u32	button;
++	int	game_key;	// bound by default.cfg
++	int	menu_key;
++} buttonmap_t;
++
++static const buttonmap_t buttonmap[] =
++{
++	{KEY_UP,		K_UPARROW,		K_UPARROW},		// +forward
++	{KEY_DOWN,		K_DOWNARROW,	K_DOWNARROW},	// +back
++	{KEY_LEFT,		K_LEFTARROW,	K_LEFTARROW},	// +left
++	{KEY_RIGHT,		K_RIGHTARROW,	K_RIGHTARROW},	// +right
++	{KEY_A,			K_CTRL,			K_ENTER},		// +attack
++	{KEY_B,			K_SPACE,		K_ESCAPE},		// +moveup (jump)
++	{KEY_X,			'/',			K_BACKSPACE},	// weapnext
++	{KEY_Y,			K_SHIFT,		K_SHIFT},		// +speed
++	{KEY_L,			',',			K_PGUP},		// +moveleft
++	{KEY_R,			'.',			K_PGDN},		// +moveright
++	{KEY_START,		K_ESCAPE,		K_ESCAPE},		// togglemenu
++	{KEY_SELECT,	K_F1,			K_F1},			// help, the objectives
++};
++
++#define NUM_BUTTONS	(sizeof(buttonmap) / sizeof(buttonmap[0]))
++
++// The key sent for each held button, released even when key_dest changed
++static int	held_key[NUM_BUTTONS];
++
++unsigned	sys_frame_time;
++cvar_t		*in_joystick;
++
++void Com_Quit (void);
++
++void IN_Init (void)
++{
++	in_joystick = Cvar_Get ("in_joystick", "0", CVAR_ARCHIVE);
++}
++
++void IN_Shutdown (void)
++{
++}
++
++void Sys_SendKeyEvents (void)
++{
++	u32				down, up;
++	int				i;
++	touchPosition	touch;
++	char			*command;
++
++	// sleeps while the lid is closed, quits on the DSi power button or
++	// L+R+START+SELECT, keeping the config like the quit command
++	if (!pmMainLoop ())
++		Com_Quit ();
++
++	sys_frame_time = Sys_Milliseconds ();
++	scanKeys ();
++	down = keysDown ();
++	up = keysUp ();
++	for (i = 0; i < NUM_BUTTONS; i++)
++	{
++		if ((up & buttonmap[i].button) && held_key[i])
++		{
++			Key_Event (held_key[i], false, sys_frame_time);
++			held_key[i] = 0;
++		}
++		if (down & buttonmap[i].button)
++		{
++			held_key[i] = cls.key_dest == key_game ? buttonmap[i].game_key : buttonmap[i].menu_key;
++			Key_Event (held_key[i], true, sys_frame_time);
++		}
++	}
++	// the touch screen shows the 2D drawing's 320x240 scaled to 256x192
++	if (down & KEY_TOUCH)
++	{
++		touchRead (&touch);
++		command = HUD_TouchCommand (touch.px * 5 / 4, touch.py * 5 / 4);
++		if (command)
++			Cbuf_AddText (command);
++	}
++}
++
++void IN_Commands (void)
++{
++}
++
++void IN_Frame (void)
++{
++}
++
++void IN_Move (usercmd_t *cmd)
++{
++}
++
++void IN_Activate (qboolean active)
++{
++}

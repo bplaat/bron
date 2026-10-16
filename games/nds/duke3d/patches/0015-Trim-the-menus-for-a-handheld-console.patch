@@ -1,0 +1,487 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Wed, 7 Oct 2026 12:00:00 +0200
+Subject: [PATCH] Trim the menus for a handheld console
+
+Options has Game Options, Setup Sound and Setup Video, without keyboard
+and mouse setup or demo recording. Setup Video keeps Brightness and Show
+FPS, Setup Sound loses the multiplayer opponent sound, and the parental
+lock turns Adult Mode on and off without a password. The main menu has
+Load Game and Options above Credits, and neither it nor the in-game menu
+has Help or How To Order: their full screen pictures are scaled down to
+the DS screen, where their text can't be read.
+---
+ Game/src/menues.c | 291 +++++++++-------------------------------------
+ 1 file changed, 58 insertions(+), 233 deletions(-)
+
+diff --git a/Game/src/menues.c b/Game/src/menues.c
+index 92d3929..87d4d2c 100644
+--- a/Game/src/menues.c
++++ b/Game/src/menues.c
+@@ -30,11 +30,9 @@ Prepared for public release: 03/21/2003 - Charlie Wiederhold, 3D Realms
+ #include "control.h"
+ 
+ #include "filesystem.h"
+-#include "SDL.h"
+ #include "premap.h"
+ #include "display.h"
+ 
+-extern SDL_Surface *surface;
+ extern short inputloc;
+ extern int recfilep;
+ extern uint8_t  vgacompatible;
+@@ -1505,11 +1503,7 @@ void menus(void)
+             gametext(160,104-8,"YOU ORDER THE COMPLETE VERSION AND",0,2+8+16);
+             gametext(160,113-8,"GET THE FINAL TWO EPISODES.",0,2+8+16);
+ 
+-            gametext(160,113+8,"PLEASE READ THE 'HOW TO ORDER' ITEM",0,2+8+16);
+-            gametext(160,122+8,"ON THE MAIN MENU IF YOU WISH TO",0,2+8+16);
+-            gametext(160,131+8,"UPGRADE TO THE FULL REGISTERED",0,2+8+16);
+-            gametext(160,140+8,"VERSION OF DUKE NUKEM 3D.",0,2+8+16);
+-            gametext(160,149+16,"PRESS ANY KEY...",0,2+8+16);
++            gametext(160,113+16,"PRESS ANY KEY...",0,2+8+16);
+ 
+             if( x >= -1 ) cmenu(100);
+             break;
+@@ -2051,7 +2045,7 @@ void menus(void)
+             rotatesprite(c<<16,28<<16,65536L,0,INGAMEDUKETHREEDEE,0,0,10,0,0,xdim-1,ydim-1);
+             rotatesprite((c+100)<<16,36<<16,65536L,0,PLUTOPAKSPRITE+2,(sintable[(totalclock<<4)&2047]>>11),0,2+8,0,0,xdim-1,ydim-1);
+             
+-			x = probe(c,67,16,6);
++			x = probe(c,67,16,5);
+ 
+             if(x >= 0)
+             {
+@@ -2071,15 +2065,14 @@ void menus(void)
+                         case 0:
+                             cmenu(100);
+                             break;
+-                        case 1: cmenu(200);break;
+-                        case 2:
++                        case 1:
+                             if(movesperpacket == 4 && connecthead != myconnectindex)
+                                 break;
+                             cmenu(300);
+                             break;
+-                        case 3: KB_FlushKeyboardQueue();cmenu(400);break;  // help
+-                        case 4: cmenu(990);break;  // credit
+-                        case 5: cmenu(501);break;  // quit
++                        case 2: cmenu(200);break;
++                        case 3: cmenu(990);break;  // credit
++                        case 4: cmenu(501);break;  // quit
+ 
+                     }
+                 }
+@@ -2104,20 +2097,15 @@ void menus(void)
+             else
+                 menutext(c,67,SHX(-2),PHX(-2),"NEW GAME");
+ 
+-            menutext(c,67+16,SHX(-3),PHX(-3),"OPTIONS");
+-
+             if(movesperpacket == 4 && connecthead != myconnectindex)
+-                menutext(c,67+16+16,SHX(-4),1,"LOAD GAME");
+-            else menutext(c,67+16+16,SHX(-4),PHX(-4),"LOAD GAME");
++                menutext(c,67+16,SHX(-3),1,"LOAD GAME");
++            else menutext(c,67+16,SHX(-3),PHX(-3),"LOAD GAME");
+ 
+-if(VOLUMEONE)
+-            menutext(c,67+16+16+16,SHX(-5),PHX(-5),"HOW TO ORDER");
+-else
+-            menutext(c,67+16+16+16,SHX(-5),PHX(-5),"HELP");
++            menutext(c,67+16+16,SHX(-4),PHX(-4),"OPTIONS");
+ 
+-            menutext(c,67+16+16+16+16,SHX(-6),PHX(-6),"CREDITS");
++            menutext(c,67+16+16+16,SHX(-5),PHX(-5),"CREDITS");
+ 
+-            menutext(c,67+16+16+16+16+16,SHX(-7),PHX(-7),"QUIT");
++            menutext(c,67+16+16+16+16,SHX(-6),PHX(-6),"QUIT");
+ 
+             break;
+ // CTW END - MODIFICATION
+@@ -2126,7 +2114,7 @@ else
+             c = (320>>1);
+             rotatesprite(c<<16,32<<16,65536L,0,INGAMEDUKETHREEDEE,0,0,10,0,0,xdim-1,ydim-1);
+             rotatesprite((c+100)<<16,36<<16,65536L,0,PLUTOPAKSPRITE+2,(sintable[(totalclock<<4)&2047]>>11),0,2+8,0,0,xdim-1,ydim-1);
+-            x = probe(c,67,16,7);
++            x = probe(c,67,16,6);
+             switch(x)
+             {
+                 case 0:
+@@ -2161,19 +2149,14 @@ else
+                     cmenu(200);
+                     break;
+                 case 4:
+-                    last_fifty = 4;
+-                    KB_FlushKeyboardQueue();
+-                    cmenu(400);
+-                    break;
+-                case 5:
+                     if(numplayers < 2)
+                     {
+-                        last_fifty = 5;
++                        last_fifty = 4;
+                         cmenu(503);
+                     }
+                     break;
+-                case 6:
+-                    last_fifty = 6;
++                case 5:
++                    last_fifty = 5;
+                     cmenu(502);
+                     break;
+                 case -1:
+@@ -2203,15 +2186,11 @@ else
+             }
+ 
+             menutext(c,67+16*3 ,SHX(-5),PHX(-5),"OPTIONS");
+-if(VOLUMEONE)
+-            menutext(c,67+16*4 ,SHX(-6),PHX(-6),"HOW TO ORDER");
+-else
+-            menutext(c,67+16*4 ,SHX(-6),PHX(-6)," HELP");
+ 
+             if(numplayers > 1)
+-                menutext(c,67+16*5 ,SHX(-7),1,"QUIT TO TITLE");
+-            else menutext(c,67+16*5 ,SHX(-7),PHX(-7),"QUIT TO TITLE");
+-            menutext(c,67+16*6,SHX(-8),PHX(-8),"QUIT GAME");
++                menutext(c,67+16*4 ,SHX(-6),1,"QUIT TO TITLE");
++            else menutext(c,67+16*4 ,SHX(-6),PHX(-6),"QUIT TO TITLE");
++            menutext(c,67+16*5,SHX(-7),PHX(-7),"QUIT GAME");
+ 
+             break;
+ 
+@@ -2422,7 +2401,7 @@ else
+ 
+             c = (320>>1)-120;
+ 
+-            x = probe(c+6,43,16,6);
++            x = probe(c+6,43,16,3);
+ 
+             if(x == -1)
+                 { if(ps[myconnectindex].gm&MODE_GAME) cmenu(50);else cmenu(0); }
+@@ -2433,68 +2412,20 @@ else
+ 					cmenu(702); // game options
+ 					break;
+ 
+-                case 1:
+-                    cmenu(703); // keybaord setup
+-					probey = 7;
+-                    break;
+-
+-                case 2:
+-                    cmenu(701); // mouse setup
+-                    break;
+-
+-				case 3:
++				case 1:
+                     cmenu(700);  // sound setup
+                     break;
+ 
+-				case 4:  
++				case 2:
+ 					cmenu(706); // Video setup
+-					lastkeysetup = 0;
+-					current_resolution = 0; // in case we don't find it
+-					for(i=0; i<validmodecnt; i++)
+-					{
+-						if(validmodexdim[i] == xdim && validmodeydim[i] == ydim)
+-							current_resolution = i;
+-					}
+ 					break;
+-
+-                case 5: // record on/off
+-                    if( (ps[myconnectindex].gm&MODE_GAME) )
+-                    {
+-                        closedemowrite();
+-                        break;
+-                    }
+-                    ud.m_recstat = !ud.m_recstat;
+-                    break;
+-
+-				//case -7:
+-				//	gametext(320>>1,43+16*6,"*** DISABLED. WILL BE FIXED SOON***",0,2+8+16); // center-i
+-				//	break;
+-
+ 			}
+ 
+ 			menutext(c,43,SHX(-6),PHX(-6),"GAME OPTIONS");
+ 
+-			menutext(c,43+16,SHX(-6),PHX(-6),"SETUP KEYBOARD");
+-
+-			menutext(c,43+16+16,SHX(-6),PHX(-6),"SETUP MOUSE");
++            menutext(c,43+16,SHX(-8),PHX(-8),"SETUP SOUND");
+ 
+-            menutext(c,43+16+16+16,SHX(-8),PHX(-8),"SETUP SOUND");
+-
+-            menutext(c,43+16+16+16+16,SHX(-8),PHX(-8),"SETUP VIDEO");
+-
+-            if( (ps[myconnectindex].gm&MODE_GAME) && ud.m_recstat != 1 )
+-            {
+-                menutext(c,43+16+16+16+16+16,SHX(-10),1,"RECORD");
+-                menutext(c+160+40,43+16+16+16+16+16,SHX(-10),1,"OFF");
+-            }
+-            else
+-            {
+-                menutext(c,43+16+16+16+16+16,SHX(-10),PHX(-10),"RECORD");
+-
+-                if(ud.m_recstat == 1)
+-                    menutext(c+160+40,43+16+16+16+16+16,SHX(-10),PHX(-10),"ON");
+-                else menutext(c+160+40,43+16+16+16+16+16,SHX(-10),PHX(-10),"OFF");
+-            }
++            menutext(c,43+16+16,SHX(-8),PHX(-8),"SETUP VIDEO");
+ 
+             break;
+ 
+@@ -2505,13 +2436,13 @@ else
+             menutext(320>>1,24,0,0,"SETUP SOUNDS");
+             onbar = ((probey == 2)&&SoundToggle) || ((probey == 3)&&MusicToggle) ;
+ 
+-            x = probe(c+6,43,16,8);
++            x = probe(c+6,43,16,7);
+ 
+             switch(x)
+             {
+                 case -1:
+ 					cmenu(200);
+-					probey = 3;
++					probey = 1;
+                     break;
+ 
+                 case 0:
+@@ -2561,13 +2492,6 @@ else
+ 					}
+                     break;
+ 
+-				case 7: // xduke: 1.3d sound style - hear opponent
+-					if(SoundToggle && (FXDevice != NumSoundCards))
+-                    {
+-                        OpponentSoundToggle = 1-OpponentSoundToggle;
+-                    }
+-					break;
+-
+                 default:
+                     break;
+             }
+@@ -2621,9 +2545,6 @@ else
+             if(ReverseStereo) menutext(c+160+40,43+16+16+16+16+16+16,0,(FXDevice==NumSoundCards)||SoundToggle==0,"ON");
+             else menutext(c+160+40,43+16+16+16+16+16+16,0,(FXDevice==NumSoundCards)||SoundToggle==0,"OFF");
+ 
+-            menutext(c,43+16+16+16+16+16+16+16,SHX(-9),(FXDevice==NumSoundCards)||SoundToggle==0,"OPPONENT SOUND");
+-			if(OpponentSoundToggle) menutext(c+160+40,43+16+16+16+16+16+16+16,0,(FXDevice==NumSoundCards)||SoundToggle==0,"ON");
+-			else menutext(c+160+40,43+16+16+16+16+16+16+16,0,(FXDevice==NumSoundCards)||SoundToggle==0,"OFF");
+ 
+             break;
+ 
+@@ -2679,20 +2600,6 @@ else
+ 					}
+                     break;
+ 
+-				case 5:
+-
+-					if (SDL_WM_GrabInput(SDL_GRAB_QUERY)==SDL_GRAB_ON) 
+-					{
+-						SDL_WM_GrabInput(SDL_GRAB_OFF);
+-						SDL_ShowCursor(1);
+-					}
+-					else
+-					{
+-						SDL_WM_GrabInput(SDL_GRAB_ON);
+-						SDL_ShowCursor(0);
+-					}
+-					break;
+-
+ 				case 6:
+ 					cmenu(704); // Button setup
+                     break;
+@@ -2732,10 +2639,6 @@ else
+ 
+ 
+ 			menutext(c,43+16*5,SHX(-7),PHX(-7),"MOUSE CURSOR");
+-			if(SDL_WM_GrabInput(SDL_GRAB_QUERY)==SDL_GRAB_ON)
+-				menutext(c+160+40,43+16*5,SHX(-7),PHX(-7),"TAKEN");
+-			else
+-				menutext(c+160+40,43+16*5,SHX(-7),PHX(-7),"FREE'D");
+ 
+ 			menutext(c,43+16*6,SHX(-7),PHX(-7),"BUTTON SETUP...");
+ 		
+@@ -2784,9 +2687,29 @@ else
+ 						ud.auto_aim = ((ud.auto_aim-1)%2)+1; // 2 = normal = full; 1 = bullet only
+ 					}					
+ 					break;
+-                case 6: // parental
++                case 6: // parental, without a password, there's no keyboard
+ #ifndef AUSTRALIA
+-                    cmenu(10000); 
++                    {
++                        int w;
++
++                        // The walls of the level change with it, like in the parental menu
++                        ud.lockout = !ud.lockout;
++                        for(w=0;w<numanimwalls;w++)
++                        {
++                            walltype *wal = &wall[animwall[w].wallnum];
++
++                            if(ud.lockout)
++                            {
++                                if(wal->picnum == FEMPIC1)
++                                    wal->picnum = BLANKSCREEN;
++                                else if(wal->picnum == FEMPIC2 || wal->picnum == FEMPIC3)
++                                    wal->picnum = SCREENBREAK6;
++                            }
++                            else if(wal->picnum != W_SCREENBREAK && wal->picnum != W_SCREENBREAK+1 &&
++                                    wal->picnum != W_SCREENBREAK+2 && wal->extra >= 0)
++                                wal->picnum = wal->extra;
++                        }
++                    }
+ #endif
+                     break;
+ 
+@@ -2828,10 +2751,11 @@ else
+             }
+ 
+ #ifndef AUSTRALIA
+-            menutext(c,43+16*6,SHX(-9),PHX(-9),"PARENTAL LOCK");
++            menutext(c,43+16*6,SHX(-9),PHX(-9),"ADULT MODE");
+ #else
+-            menutext(c,43+16*6,SHX(-9),1,"PARENTAL LOCK");
++            menutext(c,43+16*6,SHX(-9),1,"ADULT MODE");
+ #endif
++            menutext(c+160+40,43+16*6,0,0,ud.lockout?"OFF":"ON");
+ 
+ 
+ 			break;
+@@ -3129,127 +3053,28 @@ else
+             rotatesprite(320<<15,19<<16,65536L,0,MENUBAR,16,0,10,0,0,xdim-1,ydim-1);
+             menutext(320>>1,24,0,0,"VIDEO SETUP");
+ 
+-			onbar = (probey == 3 || probey == 4);
+-			x = probe(c+6,43,16,6);
++			onbar = (probey == 0);
++			x = probe(c+6,43,16,2);
+ 			
+ 			switch(x)
+ 			{
+-				case -7: // cursor idle on the FPS option (5)
+-					gametext(320>>1,43+16*7,"*** SHORTCUT: TYPE DNRATE ***",0,2+8+16); // center-i
+-					
+-					break;
+-
+-				case -3: // cursor idle on the togglefullscreen option (1)
+-					gametext(320>>1,43+16*7,"*** SHORTCUT: ALT-ENTER ***",0,2+8+16); // center-i
+-
+-					break;
+-
+-				case -2: // cursor idle on the resolution option (0)
+-					if ( KB_KeyPressed( sc_kpad_4 ) || KB_KeyPressed( sc_LeftArrow ) )
+-					{
+-						current_resolution--;
+-						if(current_resolution == -1) 
+-							current_resolution = 0;
+-						lastkeysetup = 1; // indicates we changed
+-						KB_ClearKeyDown( sc_kpad_4 );
+-						KB_ClearKeyDown( sc_LeftArrow );
+-						sound(PISTOL_BODYHIT);
+-					}
+-					else if ( KB_KeyPressed( sc_kpad_6 ) || KB_KeyPressed( sc_RightArrow ) )
+-					{
+-						current_resolution++; // reversed;
+-						if(current_resolution == validmodecnt) 
+-							current_resolution = validmodecnt-1;
+-						lastkeysetup = 1; // indicates we changed
+-						KB_ClearKeyDown( sc_kpad_6 );
+-						KB_ClearKeyDown( sc_RightArrow );
+-						sound(PISTOL_BODYHIT);
+-					}
+-
+-					if(lastkeysetup)
+-						gametext(320>>1,43+16*7,"*** HIT ENTER TO VALIDATE ***",0,2+8+16); // center-i
+-					else
+-						gametext(320>>1,43+16*7,"*** LEFT/RIGHT ARROW TO SELECT ***",0,2+8+16); // center-i
+-
+-					break;
+-
+ 				case -1:
+ 					cmenu(200);
+-					probey = 4; // back to the general option menu
+-					break;
+-
+-				case 0:
+-					if(lastkeysetup)
+-						setgamemode(ScreenMode,validmodexdim[current_resolution],validmodeydim[current_resolution]);
+-					lastkeysetup = 0; // indicating changes are done
++					probey = 2; // back to the general option menu
+ 					break;
+ 
+ 				case 1:
+-					BFullScreen = !BFullScreen;
+-					SDL_QuitSubSystem(SDL_INIT_VIDEO);
+-					_platform_init(0, NULL, "Duke Nukem 3D", "Duke3D");
+-					_setgamemode(ScreenMode,validmodexdim[current_resolution],validmodeydim[current_resolution]);
+-					break;
+-
+-                case 2:
+-                    ud.detail = 1-ud.detail;
+-                    break;
+-
+-				case 5:
+ 					ud.tickrate ^= 1;
+ 					vscrn(); // FIX_00056: Refresh issue w/FPS, small Weapon and custom FTA, when screen resized down
+ 					break;
+ 			}
+-				
+-			menutext(c,43,0,0,"RESOLUTION");
+-			sprintf(text, "%d x %d", validmodexdim[current_resolution],validmodeydim[current_resolution]);
+-			if (lastkeysetup == 0 || (totalclock%64 < 32)) // blink color after change
+-				menutext(c+150,43,0,0,text);
+-			else
+-				menutext(c+150,43,0,1,text);
+-
+-			menutext(c,43+16*1,SHX(-3),PHX(-3),"FULLSCREEN");
+-			menutext(c+160+40,43+16*1,0,0,BFullScreen?"ON":"OFF");
+-			
+-			menutext(c,43+16*2,SHX(-2),PHX(-2),"DETAIL");
+-			menutext(c+160+40,43+16*2,0,0,ud.detail?"HIGH":"LOW");
+-			{
+-				int32 screen_size = ud.screen_size;
+-
+-				// FIX_00027: Added an extra small statusbar (HUD)
+-	            menutext(c,43+16*3,SHX(-5),PHX(-5),"SCREEN SIZE");
+-	            bar(c+167+40,43+16*3,(short *)&screen_size,-4,x==3,SHX(-5),PHX(-5));
+-				if(ud.screen_size==4)
+-				{
+-					if(screen_size==0)
+-					{
+-						ud.extended_screen_size++;
+-						if(ud.extended_screen_size==2)
+-						{
+-							ud.extended_screen_size = 1;
+-							ud.screen_size -= 4;
+-						}
+-					}
+-					else if(screen_size==8)
+-					{
+-						ud.extended_screen_size--;
+-						if(ud.extended_screen_size<0)
+-						{
+-							ud.extended_screen_size=0;
+-							ud.screen_size += 4;
+-						}
+-					}
+-				}
+-				else
+-					ud.screen_size = screen_size;
+-			}
+ 
+-            menutext(c,43+16*4,SHX(-6),PHX(-6),"BRIGHTNESS");
+-            bar(c+167+40,43+16*4,(short *)&ud.brightness,8,x==4,SHX(-6),PHX(-6));
+-            if(x==4) setbrightness(ud.brightness>>2,&ps[myconnectindex].palette[0]);
++            menutext(c,43,SHX(-6),PHX(-6),"BRIGHTNESS");
++            bar(c+167+40,43,(short *)&ud.brightness,8,x==0,SHX(-6),PHX(-6));
++            if(x==0) setbrightness(ud.brightness>>2,&ps[myconnectindex].palette[0]);
+ 
+-			menutext(c,43+16*5,SHX(-2),PHX(-2),"SHOW FPS");
+-			menutext(c+160+40,43+16*5,0,0,(ud.tickrate&1)?"ON":"OFF");
++			menutext(c,43+16,SHX(-2),PHX(-2),"SHOW FPS");
++			menutext(c+160+40,43+16,0,0,(ud.tickrate&1)?"ON":"OFF");
+ 
+ 			break;
+ 

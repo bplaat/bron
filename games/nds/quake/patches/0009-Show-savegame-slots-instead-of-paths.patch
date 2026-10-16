@@ -1,0 +1,86 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Tue, 6 Oct 2026 07:09:55 +0200
+Subject: [PATCH] Show savegame slots instead of paths
+
+Saving and loading said "Saving game to /data/quake/id1/s0.sav...", the
+messages name the slot of the menu now, eg. "Game saved in slot 1", and
+saving without an SD card says so. The packs found at startup are named
+without their directory.
+---
+ WinQuake/common.c   |  2 +-
+ WinQuake/host_cmd.c | 21 +++++++++++++++++----
+ 2 files changed, 18 insertions(+), 5 deletions(-)
+
+diff --git a/WinQuake/common.c b/WinQuake/common.c
+index a958d95..6a21f32 100644
+--- a/WinQuake/common.c
++++ b/WinQuake/common.c
+@@ -1675,7 +1675,7 @@ pack_t *COM_LoadPackFile (char *packfile)
+ 	pack->numfiles = numpackfiles;
+ 	pack->files = newfiles;
+ 	
+-	Con_Printf ("Added packfile %s (%i files)\n", packfile, numpackfiles);
++	Con_Printf ("Added packfile %s (%i files)\n", COM_SkipPath (packfile), numpackfiles);
+ 	return pack;
+ }
+ 
+diff --git a/WinQuake/host_cmd.c b/WinQuake/host_cmd.c
+index cd09f80..8b76bfe 100644
+--- a/WinQuake/host_cmd.c
++++ b/WinQuake/host_cmd.c
+@@ -466,6 +466,20 @@ void Host_SavegameComment (char *text)
+ Host_Savegame_f
+ ===============
+ */
++/*
++===============
++Host_SaveSlot
++
++The slot of the menu a savegame name like s0 is in, without its path
++===============
++*/
++char *Host_SaveSlot (char *savename)
++{
++	if (savename[0] == 's' && savename[1] >= '0' && savename[1] <= '9')
++		return va ("slot %i", atoi (savename + 1) + 1);
++	return COM_SkipPath (savename);
++}
++
+ void Host_Savegame_f (void)
+ {
+ 	char	name[256];
+@@ -518,11 +532,10 @@ void Host_Savegame_f (void)
+ 	sprintf (name, "%s/%s", com_gamedir, Cmd_Argv(1));
+ 	COM_DefaultExtension (name, ".sav");
+ 	
+-	Con_Printf ("Saving game to %s...\n", name);
+ 	f = fopen (name, "w");
+ 	if (!f)
+ 	{
+-		Con_Printf ("ERROR: couldn't open.\n");
++		Con_Printf ("Can't save the game without an SD card\n");
+ 		return;
+ 	}
+ 	
+@@ -553,7 +566,7 @@ void Host_Savegame_f (void)
+ 		fflush (f);
+ 	}
+ 	fclose (f);
+-	Con_Printf ("done.\n");
++	Con_Printf ("Game saved in %s\n", Host_SaveSlot (Cmd_Argv(1)));
+ }
+ 
+ 
+@@ -593,10 +606,10 @@ void Host_Loadgame_f (void)
+ // been used.  The menu calls it before stuffing loadgame command
+ //	SCR_BeginLoadingPlaque ();
+ 
+-	Con_Printf ("Loading game from %s...\n", name);
+ 	f = fopen (name, "r");
+ 	if (!f)
+ 	{
++		Con_Printf ("There is no game in %s\n", Host_SaveSlot (Cmd_Argv(1)));
+ 		SCR_EndLoadingPlaque ();
+ 		return;
+ 	}

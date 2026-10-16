@@ -1,0 +1,50 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Tue, 6 Oct 2026 07:09:59 +0200
+Subject: [PATCH] Stop loading broken savegames safely
+
+A savegame whose light styles are cut short, or with more entities than
+the console has room for, stops loading with an error that returns to
+the menu, instead of reading past its end or writing past the entities.
+A savegame whose map fails to load is closed.
+---
+ WinQuake/host_cmd.c | 12 +++++++++++-
+ 1 file changed, 11 insertions(+), 1 deletion(-)
+
+diff --git a/WinQuake/host_cmd.c b/WinQuake/host_cmd.c
+index 8b76bfe..1d3f5ea 100644
+--- a/WinQuake/host_cmd.c
++++ b/WinQuake/host_cmd.c
+@@ -648,6 +648,7 @@ void Host_Loadgame_f (void)
+ #endif
+ 	if (!sv.active)
+ 	{
++		fclose (f);
+ 		Con_Printf ("Couldn't load map\n");
+ 		SCR_EndLoadingPlaque ();
+ 		return;
+@@ -659,7 +660,11 @@ void Host_Loadgame_f (void)
+ 
+ 	for (i=0 ; i<MAX_LIGHTSTYLES ; i++)
+ 	{
+-		fscanf (f, "%s\n", str);
++		if (fscanf (f, "%s\n", str) != 1)
++		{
++			fclose (f);
++			Host_Error ("Loadgame is truncated");
++		}
+ 		sv.lightstyles[i] = Hunk_Alloc (strlen(str)+1);
+ 		strcpy (sv.lightstyles[i], str);
+ 	}
+@@ -697,6 +702,11 @@ void Host_Loadgame_f (void)
+ 		else
+ 		{	// parse an edict
+ 
++			if (entnum >= sv.max_edicts)
++			{
++				fclose (f);
++				Host_Error ("Loadgame has too many entities for this console");
++			}
+ 			ent = EDICT_NUM(entnum);
+ 			memset (&ent->v, 0, progs->entityfields * 4);
+ 			ent->free = false;

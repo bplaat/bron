@@ -1,0 +1,193 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Sat, 3 Oct 2026 11:04:42 +0200
+Subject: [PATCH] Scale frames with a picture for the whole screen
+
+Frames with a picture made for the whole screen (title, credits, the
+intermission maps, end pictures) set v_fullscreenpicture, so the
+platform can show them scaled instead of only their middle part 1:1.
+Every frame decides again in D_Display, after a wipe looked at the last
+one. A wipe between such a frame and one shown at 1:1 scales the picture
+into the visible part and runs at 1:1 throughout, so the view doesn't
+jump between both ways of showing the screen.
+---
+ doomgeneric/d_main.c   |  6 +++++-
+ doomgeneric/f_finale.c |  5 +++--
+ doomgeneric/f_wipe.c   | 31 +++++++++++++++++++++++++++++++
+ doomgeneric/v_video.c  | 14 ++++++++++++++
+ doomgeneric/v_video.h  |  6 ++++++
+ doomgeneric/wi_stuff.c |  2 +-
+ 6 files changed, 60 insertions(+), 4 deletions(-)
+
+diff --git a/doomgeneric/d_main.c b/doomgeneric/d_main.c
+index eef0c68..34a26af 100644
+--- a/doomgeneric/d_main.c
++++ b/doomgeneric/d_main.c
+@@ -204,6 +204,10 @@ void D_Display (void)
+     else
+     	wipe = false;
+ 
++    // every frame decides again whether it has a picture for the whole
++    // screen, the wipe looked at the last one
++    v_fullscreenpicture = false;
++
+     if (gamestate == GS_LEVEL && gametic)
+     	HU_Erase();
+     
+@@ -486,7 +490,7 @@ void D_PageTicker (void)
+ //
+ void D_PageDrawer (void)
+ {
+-    V_DrawPatch (0, 0, W_CacheLumpName(pagename, PU_CACHE));
++    V_DrawFullscreenPatch (0, 0, W_CacheLumpName(pagename, PU_CACHE));
+ }
+ 
+ 
+diff --git a/doomgeneric/f_finale.c b/doomgeneric/f_finale.c
+index ca6775e..5126aad 100644
+--- a/doomgeneric/f_finale.c
++++ b/doomgeneric/f_finale.c
+@@ -547,7 +547,7 @@ void F_CastDrawer (void)
+     patch_t*		patch;
+     
+     // erase the entire screen to a background
+-    V_DrawPatch (0, 0, W_CacheLumpName (DEH_String("BOSSBACK"), PU_CACHE));
++    V_DrawFullscreenPatch (0, 0, W_CacheLumpName (DEH_String("BOSSBACK"), PU_CACHE));
+ 
+     F_CastPrint (DEH_String(castorder[castnum].name));
+     
+@@ -617,6 +617,7 @@ void F_BunnyScroll (void)
+     p2 = W_CacheLumpName (DEH_String("PFUB1"), PU_LEVEL);
+ 
+     V_MarkRect (0, 0, SCREENWIDTH, SCREENHEIGHT);
++    v_fullscreenpicture = true;
+ 	
+     scrolled = (320 - ((signed int) finalecount-230)/2);
+     if (scrolled > 320)
+@@ -692,7 +693,7 @@ static void F_ArtScreenDrawer(void)
+ 
+         lumpname = DEH_String(lumpname);
+ 
+-        V_DrawPatch (0, 0, W_CacheLumpName(lumpname, PU_CACHE));
++        V_DrawFullscreenPatch (0, 0, W_CacheLumpName(lumpname, PU_CACHE));
+     }
+ }
+ 
+diff --git a/doomgeneric/f_wipe.c b/doomgeneric/f_wipe.c
+index 05852fd..7c9975d 100644
+--- a/doomgeneric/f_wipe.c
++++ b/doomgeneric/f_wipe.c
+@@ -38,6 +38,32 @@ static byte*	wipe_scr_start;
+ static byte*	wipe_scr_end;
+ static byte*	wipe_scr;
+ 
++// Whether the start screen, and the whole wipe, are shown scaled
++// (v_fullscreenpicture)
++static boolean	wipe_start_fullscreen;
++static boolean	wipe_fullscreen;
++
++// Scales a screen with a picture for the whole screen into the visible
++// part, like it is shown, so a wipe to or from a screen shown at 1:1 runs
++// at 1:1 without jumping
++static void wipe_ScaleIntoVisible(byte *scr)
++{
++    byte *copy = Z_Malloc(SCREENWIDTH * SCREENHEIGHT, PU_STATIC, NULL);
++    int x, y;
++
++    memcpy(copy, scr, SCREENWIDTH * SCREENHEIGHT);
++    memset(scr, 0, SCREENWIDTH * SCREENHEIGHT);
++    for (y = 0; y < V_VISIBLEH; y++)
++    {
++        const byte *src = copy + (2 * y + 1) * SCREENHEIGHT / (2 * V_VISIBLEH) * SCREENWIDTH;
++        byte *dest = scr + (V_VISIBLEY + y) * SCREENWIDTH + V_VISIBLEX;
++
++        for (x = 0; x < V_VISIBLEW; x++)
++            dest[x] = src[(2 * x + 1) * SCREENWIDTH / (2 * V_VISIBLEW)];
++    }
++    Z_Free(copy);
++}
++
+ 
+ void
+ wipe_shittyColMajorXform
+@@ -236,6 +262,7 @@ wipe_StartScreen
+ {
+     wipe_scr_start = Z_Malloc(SCREENWIDTH * SCREENHEIGHT, PU_STATIC, NULL);
+     I_ReadScreen(wipe_scr_start);
++    wipe_start_fullscreen = v_fullscreenpicture;
+     return 0;
+ }
+ 
+@@ -248,6 +275,9 @@ wipe_EndScreen
+ {
+     wipe_scr_end = Z_Malloc(SCREENWIDTH * SCREENHEIGHT, PU_STATIC, NULL);
+     I_ReadScreen(wipe_scr_end);
++    if (wipe_start_fullscreen != v_fullscreenpicture)
++        wipe_ScaleIntoVisible(wipe_start_fullscreen ? wipe_scr_start : wipe_scr_end);
++    wipe_fullscreen = wipe_start_fullscreen && v_fullscreenpicture;
+     V_DrawBlock(x, y, width, height, wipe_scr_start); // restore start scr.
+     return 0;
+ }
+@@ -279,6 +309,7 @@ wipe_ScreenWipe
+ 
+     // do a piece of wipe-in
+     V_MarkRect(0, 0, width, height);
++    v_fullscreenpicture = wipe_fullscreen;
+     rc = (*wipes[wipeno*3+1])(width, height, ticks);
+     //  V_DrawBlock(x, y, 0, width, height, wipe_scr); // DEBUG
+ 
+diff --git a/doomgeneric/v_video.c b/doomgeneric/v_video.c
+index 67e4e67..60f9fc1 100644
+--- a/doomgeneric/v_video.c
++++ b/doomgeneric/v_video.c
+@@ -208,6 +208,20 @@ void V_DrawPatch(int x, int y, patch_t *patch)
+     }
+ }
+ 
++//
++// V_DrawFullscreenPatch
++// Draws a picture made for the whole screen, like the title screen and the
++// intermission maps. A frame with one is shown scaled to fit when only part
++// of the screen is visible at 1:1.
++//
++boolean v_fullscreenpicture;
++
++void V_DrawFullscreenPatch(int x, int y, patch_t *patch)
++{
++    V_DrawPatch(x, y, patch);
++    v_fullscreenpicture = true;
++}
++
+ //
+ // V_DrawPatchFlipped
+ // Masks a column based masked pic to the screen.
+diff --git a/doomgeneric/v_video.h b/doomgeneric/v_video.h
+index 1df3186..68af4ff 100644
+--- a/doomgeneric/v_video.h
++++ b/doomgeneric/v_video.h
+@@ -70,6 +70,12 @@ extern int v_offsety;
+ extern boolean v_measuring;
+ extern int v_measuretop, v_measurebottom;
+ 
++// Draws a picture for the whole screen, the frame is then shown scaled
++void V_DrawFullscreenPatch(int x, int y, patch_t *patch);
++
++// Set when a frame has a picture for the whole screen, cleared every frame
++extern boolean v_fullscreenpicture;
++
+ void V_DrawPatchFlipped(int x, int y, patch_t *patch);
+ void V_DrawTLPatch(int x, int y, patch_t *patch);
+ void V_DrawAltTLPatch(int x, int y, patch_t * patch);
+diff --git a/doomgeneric/wi_stuff.c b/doomgeneric/wi_stuff.c
+index ddb9a66..102e414 100644
+--- a/doomgeneric/wi_stuff.c
++++ b/doomgeneric/wi_stuff.c
+@@ -401,7 +401,7 @@ static patch_t *background;
+ // slam background
+ void WI_slamBackground(void)
+ {
+-    V_DrawPatch(0, 0, background);
++    V_DrawFullscreenPatch(0, 0, background);
+ }
+ 
+ // The ticker is used to detect keys

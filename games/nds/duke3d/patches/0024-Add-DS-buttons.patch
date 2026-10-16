@@ -1,0 +1,142 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Wed, 7 Oct 2026 12:00:00 +0200
+Subject: [PATCH] Add DS buttons
+
+input_nds.c maps the buttons to the keys of the game functions while
+playing and to the menu keys elsewhere, SELECT uses the inventory item.
+The game aims up and down itself, there is no looking up and down. The
+key sent on press is kept, so the release always matches.
+---
+ nds/input_nds.c | 122 ++++++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 122 insertions(+)
+ create mode 100644 nds/input_nds.c
+
+diff --git a/nds/input_nds.c b/nds/input_nds.c
+new file mode 100644
+index 0000000..5d1a4a5
+--- /dev/null
++++ b/nds/input_nds.c
+@@ -0,0 +1,122 @@
++//
++// Nintendo DS buttons
++//
++// The buttons send PC scancodes: while playing the keys of the game
++// functions they stand for (the default key setup, which the game always
++// uses), in the menus and on the other screens the keys that work those.
++// While playing SELECT uses the inventory item, the game aims up and down
++// itself.
++// The scancode sent on press is kept, so the release always matches even if
++// a menu opened or closed in between. Also where the console sleeps while
++// the lid is closed and the game quits on the DSi power button or
++// L+R+START+SELECT.
++//
++
++#include <nds.h>
++
++#include "duke3d.h"
++
++#include "duke3d_nds.h"
++
++#define SC_EXT(code) (0xe000 | (code))
++
++typedef struct
++{
++    u32 button;
++    int game_key;
++    int menu_key;
++} button_binding_t;
++
++static const button_binding_t bindings[] =
++{
++    { KEY_UP,     SC_EXT(0x48),    SC_EXT(0x48) },  // Move_Forward / up
++    { KEY_DOWN,   SC_EXT(0x50),    SC_EXT(0x50) },  // Move_Backward / down
++    { KEY_LEFT,   SC_EXT(0x4b),    SC_EXT(0x4b) },  // Turn_Left / left
++    { KEY_RIGHT,  SC_EXT(0x4d),    SC_EXT(0x4d) },  // Turn_Right / right
++    { KEY_A,      sc_LeftControl,  sc_Return    },  // Fire / select
++    { KEY_B,      sc_Space,        sc_Escape    },  // Open / back
++    { KEY_X,      sc_A,            sc_Y         },  // Jump / yes
++    { KEY_Y,      sc_Z,            sc_N         },  // Crouch / no
++    { KEY_L,      sc_Comma,        0            },  // Strafe_Left
++    { KEY_R,      sc_Period,       0            },  // Strafe_Right
++    { KEY_START,  sc_Escape,       sc_Escape    },  // menu
++};
++
++#define NUM_BINDINGS (sizeof(bindings) / sizeof(bindings[0]))
++
++static int held_keys[NUM_BINDINGS];
++
++// A key tapped on the touch screen or with SELECT, held for a tenth of a
++// second so the game sees it
++static int tap_key;
++static u64 tap_end;
++
++void NDS_TapScancode(int scancode)
++{
++    if (tap_key)
++        NDS_PostScancode(tap_key, false);
++    tap_key = scancode;
++    tap_end = tickGetCount() + TICK_FREQ / 10;
++    NDS_PostScancode(scancode, true);
++}
++
++// Playing: in a level, no menu or typing
++static bool Playing(void)
++{
++    int32_t gm = ps[myconnectindex].gm;
++
++    return (gm & MODE_GAME) && !(gm & (MODE_MENU | MODE_TYPE));
++}
++
++void NDS_PollInput(void)
++{
++    static uint32_t scanned;
++    u32 down = 0, up = 0;
++    bool playing;
++    unsigned i;
++
++    if (!pmMainLoop())
++        exit(0);
++    playing = Playing();
++    // The buttons are read once a frame, which the key repeat counts in.
++    // Held d-pad keys repeat in menus, the menus clear each press they see
++    if (scanned != NDS_VBlankCount())
++    {
++        scanned = NDS_VBlankCount();
++        scanKeys();
++        down = keysDown();
++        up = keysUp();
++        if (!playing)
++            down |= keysDownRepeat() & (KEY_UP | KEY_DOWN | KEY_LEFT | KEY_RIGHT);
++    }
++
++    if ((down & KEY_SELECT) && playing)
++        NDS_TapScancode(sc_Return);
++
++    for (i = 0; i < NUM_BINDINGS; ++i)
++    {
++        if ((up & bindings[i].button) && held_keys[i])
++        {
++            NDS_PostScancode(held_keys[i], false);
++            held_keys[i] = 0;
++        }
++        if (down & bindings[i].button)
++        {
++            int key = playing ? bindings[i].game_key : bindings[i].menu_key;
++
++            if (held_keys[i])
++                NDS_PostScancode(held_keys[i], false);
++            held_keys[i] = key;
++            if (key != 0)
++                NDS_PostScancode(key, true);
++        }
++    }
++
++    if (tap_key && tickGetCount() >= tap_end)
++    {
++        NDS_PostScancode(tap_key, false);
++        tap_key = 0;
++    }
++    NDS_PollTouch(down);
++}
++

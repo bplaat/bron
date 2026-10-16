@@ -1,0 +1,183 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Sat, 3 Oct 2026 11:04:41 +0200
+Subject: [PATCH] Keep Doom's proportions on square pixels
+
+Doom's 320x200 had pixels 1.2 times taller than wide on a 4:3 monitor,
+so on the square pixels of the DS the vertical projection is 1.2 times
+the horizontal one (R_PIXELASPECT): walls, sprites, the weapon, floors
+and the sky keep their proportions with the same 90 degree field of
+view, without cropping or stretching. Walls are lit by their horizontal
+scale, like sprites.
+---
+ doomgeneric/r_main.c   | 8 ++++++--
+ doomgeneric/r_main.h   | 7 +++++++
+ doomgeneric/r_plane.c  | 2 +-
+ doomgeneric/r_segs.c   | 6 +++---
+ doomgeneric/r_things.c | 9 ++++++---
+ doomgeneric/r_things.h | 2 ++
+ 6 files changed, 25 insertions(+), 9 deletions(-)
+
+diff --git a/doomgeneric/r_main.c b/doomgeneric/r_main.c
+index 22278fe..dcd1741 100644
+--- a/doomgeneric/r_main.c
++++ b/doomgeneric/r_main.c
+@@ -59,6 +59,7 @@ int			centery;
+ fixed_t			centerxfrac;
+ fixed_t			centeryfrac;
+ fixed_t			projection;
++fixed_t			projectiony;
+ 
+ // just for profiling purposes
+ int			framecount;	
+@@ -479,7 +480,7 @@ fixed_t R_ScaleFromGlobalAngle (angle_t visangle)
+     // both sines are allways positive
+     sinea = finesine[anglea>>ANGLETOFINESHIFT];	
+     sineb = finesine[angleb>>ANGLETOFINESHIFT];
+-    num = FixedMul(projection,sineb)<<detailshift;
++    num = FixedMul(projectiony,sineb)<<detailshift;
+     den = FixedMul(rw_distance,sinea);
+ 
+     if (den > num>>16)
+@@ -694,6 +695,7 @@ void R_ExecuteSetViewSize (void)
+     centerxfrac = centerx<<FRACBITS;
+     centeryfrac = centery<<FRACBITS;
+     projection = centerxfrac;
++    projectiony = FixedMul(projection, R_PIXELASPECT);
+ 
+     if (!detailshift)
+     {
+@@ -717,6 +719,8 @@ void R_ExecuteSetViewSize (void)
+     // psprite scales
+     pspritescale = FRACUNIT*viewwidth/SCREENWIDTH;
+     pspriteiscale = FRACUNIT*SCREENWIDTH/viewwidth;
++    pspritescaley = FixedMul(pspritescale, R_PIXELASPECT);
++    pspriteiscaley = FixedDiv(pspriteiscale, R_PIXELASPECT);
+     
+     // thing clipping
+     for (i=0 ; i<viewwidth ; i++)
+@@ -727,7 +731,7 @@ void R_ExecuteSetViewSize (void)
+     {
+ 	dy = ((i-viewheight/2)<<FRACBITS)+FRACUNIT/2;
+ 	dy = abs(dy);
+-	yslope[i] = FixedDiv ( (viewwidth<<detailshift)/2*FRACUNIT, dy);
++	yslope[i] = FixedDiv (FixedMul((viewwidth<<detailshift)/2*FRACUNIT, R_PIXELASPECT), dy);
+     }
+ 	
+     for (i=0 ; i<viewwidth ; i++)
+diff --git a/doomgeneric/r_main.h b/doomgeneric/r_main.h
+index c05a9a0..0786274 100644
+--- a/doomgeneric/r_main.h
++++ b/doomgeneric/r_main.h
+@@ -43,6 +43,13 @@ extern int		centery;
+ extern fixed_t		centerxfrac;
+ extern fixed_t		centeryfrac;
+ extern fixed_t		projection;
++extern fixed_t		projectiony;	// vertical, taller for square pixels
++
++// Doom's 320x200 had pixels 1.2 times taller than wide, a 4:3 screen with
++// square pixels needs projections that much taller to keep the proportions
++#define R_PIXELASPECT	(FRACUNIT*6/5)
++// The light of walls goes by their horizontal scale, like sprites
++#define R_LIGHTSCALE(scale)	FixedMul(scale, FRACUNIT*5/6)
+ 
+ extern int		validcount;
+ 
+diff --git a/doomgeneric/r_plane.c b/doomgeneric/r_plane.c
+index ea1611c..33f7c33 100644
+--- a/doomgeneric/r_plane.c
++++ b/doomgeneric/r_plane.c
+@@ -389,7 +389,7 @@ void R_DrawPlanes (void)
+ 	// sky flat
+ 	if (pl->picnum == skyflatnum)
+ 	{
+-	    dc_iscale = pspriteiscale>>detailshift;
++	    dc_iscale = pspriteiscaley>>detailshift;
+ 	    
+ 	    // Sky is allways drawn full bright,
+ 	    //  i.e. colormaps[0] is used.
+diff --git a/doomgeneric/r_segs.c b/doomgeneric/r_segs.c
+index 7e583e6..5108210 100644
+--- a/doomgeneric/r_segs.c
++++ b/doomgeneric/r_segs.c
+@@ -176,7 +176,7 @@ R_RenderMaskedSegRange
+ 	{
+ 	    if (!fixedcolormap)
+ 	    {
+-		index = spryscale>>LIGHTSCALESHIFT;
++		index = R_LIGHTSCALE(spryscale)>>LIGHTSCALESHIFT;
+ 
+ 		if (index >=  MAXLIGHTSCALE )
+ 		    index = MAXLIGHTSCALE-1;
+@@ -277,7 +277,7 @@ void R_RenderSegLoop (void)
+ 	    texturecolumn = rw_offset-FixedMul(finetangent[angle],rw_distance);
+ 	    texturecolumn >>= FRACBITS;
+ 	    // calculate lighting
+-	    index = rw_scale>>LIGHTSCALESHIFT;
++	    index = R_LIGHTSCALE(rw_scale)>>LIGHTSCALESHIFT;
+ 
+ 	    if (index >=  MAXLIGHTSCALE )
+ 		index = MAXLIGHTSCALE-1;
+@@ -456,7 +456,7 @@ R_StoreWallRange
+ 			
+ 	    gxt = FixedMul(trx,viewcos); 
+ 	    gyt = -FixedMul(try,viewsin); 
+-	    ds_p->scale1 = FixedDiv(projection, gxt-gyt)<<detailshift;
++	    ds_p->scale1 = FixedDiv(projectiony, gxt-gyt)<<detailshift;
+ 	}
+ #endif
+ 	ds_p->scale2 = ds_p->scale1;
+diff --git a/doomgeneric/r_things.c b/doomgeneric/r_things.c
+index 74e7369..407d5fe 100644
+--- a/doomgeneric/r_things.c
++++ b/doomgeneric/r_things.c
+@@ -67,6 +67,8 @@ typedef struct
+ //
+ fixed_t		pspritescale;
+ fixed_t		pspriteiscale;
++fixed_t		pspritescaley;		// vertical, taller for square pixels
++fixed_t		pspriteiscaley;
+ 
+ lighttable_t**	spritelights;
+ 
+@@ -413,7 +415,8 @@ R_DrawVisSprite
+ 	    ( (vis->mobjflags & MF_TRANSLATION) >> (MF_TRANSSHIFT-8) );
+     }
+ 	
+-    dc_iscale = abs(vis->xiscale)>>detailshift;
++    // the vertical step, the horizontal one with the pixel aspect
++    dc_iscale = FixedDiv(abs(vis->xiscale), R_PIXELASPECT)>>detailshift;
+     dc_texturemid = vis->texturemid;
+     frac = vis->startfrac;
+     spryscale = vis->scale;
+@@ -541,7 +544,7 @@ void R_ProjectSprite (mobj_t* thing)
+     // store information in a vissprite
+     vis = R_NewVisSprite ();
+     vis->mobjflags = thing->flags;
+-    vis->scale = xscale<<detailshift;
++    vis->scale = FixedMul(xscale, R_PIXELASPECT)<<detailshift;
+     vis->gx = thing->x;
+     vis->gy = thing->y;
+     vis->gz = thing->z;
+@@ -687,7 +690,7 @@ void R_DrawPSprite (pspdef_t* psp)
+     vis->texturemid = (BASEYCENTER<<FRACBITS)+FRACUNIT/2-(psp->sy-spritetopoffset[lump]);
+     vis->x1 = x1 < 0 ? 0 : x1;
+     vis->x2 = x2 >= viewwidth ? viewwidth-1 : x2;	
+-    vis->scale = pspritescale<<detailshift;
++    vis->scale = pspritescaley<<detailshift;
+     
+     if (flip)
+     {
+diff --git a/doomgeneric/r_things.h b/doomgeneric/r_things.h
+index 256a5eb..8dcc0d6 100644
+--- a/doomgeneric/r_things.h
++++ b/doomgeneric/r_things.h
+@@ -41,6 +41,8 @@ extern fixed_t		sprtopscreen;
+ 
+ extern fixed_t		pspritescale;
+ extern fixed_t		pspriteiscale;
++extern fixed_t		pspritescaley;
++extern fixed_t		pspriteiscaley;
+ 
+ 
+ void R_DrawMaskedColumn (column_t* column);

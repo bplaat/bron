@@ -1,0 +1,51 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Sat, 3 Oct 2026 11:04:39 +0200
+Subject: [PATCH] Name savegames after the level
+
+Savegames are named after the level, eg. "E1M3: Toxin Refinery",
+without asking for a name, there is no keyboard to type one. Both normal
+saves and quicksave overwrites update the name to the current level.
+---
+ doomgeneric/m_menu.c | 15 +++++----------
+ 1 file changed, 5 insertions(+), 10 deletions(-)
+
+diff --git a/doomgeneric/m_menu.c b/doomgeneric/m_menu.c
+index 356fe5a..d4e1ceb 100644
+--- a/doomgeneric/m_menu.c
++++ b/doomgeneric/m_menu.c
+@@ -617,10 +617,12 @@ void M_DrawSave(void)
+ }
+ 
+ //
+-// M_Responder calls this when user is finished
++// Save the selected slot with the current level name
+ //
+ void M_DoSave(int slot)
+ {
++    // Every save uses the current level, including quicksave overwrites
++    M_StringCopy(savegamestrings[slot], HU_LevelTitle(), SAVESTRINGSIZE);
+     G_SaveGame (slot,savegamestrings[slot]);
+     M_ClearMenus ();
+ 
+@@ -630,18 +632,11 @@ void M_DoSave(int slot)
+ }
+ 
+ //
+-// User wants to save. Start string input for M_Responder
++// Save the selected slot without asking for a name
+ //
+ void M_SaveSelect(int choice)
+ {
+-    // we are going to be intercepting all chars
+-    saveStringEnter = 1;
+-    
+-    saveSlot = choice;
+-    M_StringCopy(saveOldString,savegamestrings[choice], SAVESTRINGSIZE);
+-    if (!strcmp(savegamestrings[choice], EMPTYSTRING))
+-	savegamestrings[choice][0] = 0;
+-    saveCharIndex = strlen(savegamestrings[choice]);
++    M_DoSave(choice);
+ }
+ 
+ //

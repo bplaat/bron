@@ -1,0 +1,723 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Sat, 3 Oct 2026 11:04:45 +0200
+Subject: [PATCH] Add the DS game picker
+
+Switches the ARM9 to 134 MHz in DSi mode, then indexes every IWAD and
+mod (PWAD) in NitroFS and on the SD card in a picker on the bottom
+screen console that shows each game's title picture, runs mods on a
+matching IWAD, shows a loading screen and keeps config and saves in
+/data/doom/<wad name>/. A title picture is only drawn when it is a patch with all
+of its columns inside the lump, picker lines are cut to one row so a tap
+picks the game it is on. The picker sleeps while the lid is closed and
+exits on the DSi power button or L+R+START+SELECT. Doom then runs in a
+thread with a 64 KiB stack in main RAM: DTCM is mostly taken by the
+light tables, and Doom's deepest recursion grows with the size of a map.
+Also the doomgeneric interface: timing from the calico tick counter.
+---
+ doomgeneric/doomgeneric_nds.c | 657 ++++++++++++++++++++++++++++++++++
+ doomgeneric/doomgeneric_nds.h |  31 ++
+ 2 files changed, 688 insertions(+)
+ create mode 100644 doomgeneric/doomgeneric_nds.c
+ create mode 100644 doomgeneric/doomgeneric_nds.h
+
+diff --git a/doomgeneric/doomgeneric_nds.c b/doomgeneric/doomgeneric_nds.c
+new file mode 100644
+index 0000000..d88634f
+--- /dev/null
++++ b/doomgeneric/doomgeneric_nds.c
+@@ -0,0 +1,657 @@
++//
++// Nintendo DS platform layer for doomgeneric
++//
++// - Game picker and loading screen on the bottom screen console, listing every
++//   IWAD and mod (PWAD) found in NitroFS (embedded in the ROM) and on the SD card
++// - The doomgeneric interface: timing, the rest is in i_nds*.c
++//
++
++#include <nds.h>
++#include <ctype.h>
++#include <fat.h>
++#include <filesystem.h>
++#include <stdio.h>
++#include <string.h>
++#include <dirent.h>
++#include <stdlib.h>
++#include <sys/iosupport.h>
++#include <sys/stat.h>
++#include <unistd.h>
++
++#include "doomgeneric.h"
++#include "i_swap.h"
++#include "i_video.h"
++#include "m_controls.h"
++#include "v_patch.h"
++
++#include "doomgeneric_nds.h"
++
++int vanilla_keyboard_mapping = 1;
++
++// Draws a Doom patch into an 8bpp buffer, optionally through a color translation
++HOT_CODE void NDS_DrawPatch(byte *buf, int bw, int bh, int x, int y, const patch_t *patch, const byte *xlat)
++{
++    int col, w = SHORT(patch->width);
++
++    x -= SHORT(patch->leftoffset);
++    y -= SHORT(patch->topoffset);
++    for (col = 0; col < w; ++col)
++    {
++        const column_t *column;
++        int sx = x + col;
++
++        if (sx < 0 || sx >= bw)
++            continue;
++        column = (const column_t *) ((const byte *) patch + LONG(patch->columnofs[col]));
++        while (column->topdelta != 0xff)
++        {
++            const byte *src = (const byte *) column + 3;
++            int i, sy = y + column->topdelta;
++
++            for (i = 0; i < column->length; ++i, ++sy)
++                if (sy >= 0 && sy < bh)
++                    buf[sy * bw + sx] = xlat != NULL ? xlat[src[i]] : src[i];
++            column = (const column_t *) ((const byte *) column + column->length + 4);
++        }
++    }
++}
++
++
++// ---------------------------------------------------------------------------
++// Bottom screen console
++// ---------------------------------------------------------------------------
++
++static PrintConsole console;
++
++// Doom's startup log is far too wide for the 32 column console, so while
++// loading every log line only prints a progress dot, in rows with the same
++// two columns of margin on both sides as the text
++#define LOADING_DOTS 28
++
++static const devoptab_t *console_out;
++static devoptab_t loading_out;
++
++static ssize_t LoadingWrite(struct _reent *r, void *fd, const char *ptr, size_t len)
++{
++    static int dots;
++    size_t i;
++
++    for (i = 0; i < len; ++i)
++        if (ptr[i] == '\n')
++        {
++            if (dots && dots % LOADING_DOTS == 0)
++                console_out->write_r(r, fd, "\n  ", 3);
++            console_out->write_r(r, fd, ".", 1);
++            ++dots;
++        }
++    return len;
++}
++
++static void SetLoadingOutput(boolean loading)
++{
++    if (console_out == NULL)
++    {
++        console_out = devoptab_list[STD_OUT];
++        loading_out = *console_out;
++        loading_out.write_r = LoadingWrite;
++    }
++    devoptab_list[STD_OUT] = devoptab_list[STD_ERR] = loading ? &loading_out : console_out;
++}
++
++static void ConsoleMode(void)
++{
++    videoSetModeSub(MODE_5_2D);
++    vramSetBankC(VRAM_C_SUB_BG);
++    consoleInit(&console, 0, BgType_Text4bpp, BgSize_T_256x256, 30, 4, false, true);
++    consoleSelect(&console);
++}
++
++// Waits for the next frame and reads the buttons, sleeps while the lid is
++// closed, exits on the DSi power button or L+R+START+SELECT
++static void NextFrame(void)
++{
++    if (!pmMainLoop())
++        exit(0);
++    threadWaitForVBlank();
++    scanKeys();
++}
++
++void I_NDS_ErrorBox(const char *msg)
++{
++    SetLoadingOutput(false);
++    NDS_WaitSubScreen();
++    ConsoleMode();
++    consoleClear();
++    printf("\x1b[31;1m  DOOM had to stop\x1b[39;0m\n\n%s\n\n\x1b[30;1m  Press START to exit\x1b[39;0m\n", msg);
++    do
++        NextFrame();
++    while (!(keysDown() & KEY_START));
++}
++
++// ---------------------------------------------------------------------------
++// WAD discovery and game picker
++// ---------------------------------------------------------------------------
++
++#define MAX_WADS 32
++
++static const struct
++{
++    const char *name;
++    const char *title;
++} known_iwads[] =
++{
++    { "doom2.wad",     "DOOM II" },
++    { "plutonia.wad",  "Final DOOM: Plutonia" },
++    { "tnt.wad",       "Final DOOM: TNT Evilution" },
++    { "doom.wad",      "DOOM" },
++    { "doom1.wad",     "DOOM Shareware" },
++    { "chex.wad",      "Chex Quest" },
++    { "hacx.wad",      "HACX" },
++};
++
++typedef struct
++{
++    char path[256];
++    char title[32];
++    boolean iwad;
++    boolean has_maps;     // has levels at all
++    boolean commercial;   // MAPxx levels (DOOM II) instead of ExMy
++    int known;            // index in known_iwads, or arrlen(known_iwads)
++    int base;             // IWAD a PWAD runs on, -1 if none fits
++} wad_entry_t;
++
++// WADs, config and saves live in the usual homebrew data folder on the SD card
++#define DATA_DIR "/data/doom"
++
++static wad_entry_t wads[MAX_WADS];
++static int num_wads;
++static boolean have_fat;
++
++static void MakeDataDir(void)
++{
++    mkdir("/data", 0777);
++    mkdir(DATA_DIR, 0777);
++}
++
++static boolean FileExists(const char *path)
++{
++    struct stat st;
++    return stat(path, &st) == 0 && S_ISREG(st.st_mode);
++}
++
++// Reads the header and directory of a WAD, returns the lump count or -1
++static int ReadWadDirectory(FILE *f, boolean *iwad, byte **dir)
++{
++    int32_t header[3];      // words, the ARM9 can't load them unaligned
++    int numlumps, dirofs;
++
++    if (fread(header, 1, sizeof(header), f) != sizeof(header)
++     || (memcmp(header, "IWAD", 4) && memcmp(header, "PWAD", 4)))
++        return -1;
++    *iwad = *(char *) header == 'I';
++    numlumps = LONG(header[1]);
++    dirofs = LONG(header[2]);
++    if (numlumps < 0 || numlumps > 65536 || (*dir = malloc(numlumps * 16 + 1)) == NULL)
++        return -1;
++    if (fseek(f, dirofs, SEEK_SET) != 0 || fread(*dir, 16, numlumps, f) != (size_t) numlumps)
++    {
++        free(*dir);
++        return -1;
++    }
++    return numlumps;
++}
++
++// Reads one lump from a WAD before the engine is up, for the splash screen
++static byte *ReadLump(const char *path, const char *name, int *len)
++{
++    FILE *f = fopen(path, "rb");
++    byte *dir, *data = NULL;
++    boolean iwad;
++    int numlumps, i;
++
++    if (f == NULL)
++        return NULL;
++    numlumps = ReadWadDirectory(f, &iwad, &dir);
++    for (i = numlumps - 1; i >= 0; --i)
++    {
++        byte *entry = dir + i * 16;
++
++        if (strncasecmp((char *) entry + 8, name, 8) != 0)
++            continue;
++        *len = LONG(*(int32_t *) (entry + 4));
++        data = malloc(*len);
++        if (data != NULL && (fseek(f, LONG(*(int32_t *) entry), SEEK_SET) != 0
++                             || fread(data, 1, *len, f) != (size_t) *len))
++        {
++            free(data);
++            data = NULL;
++        }
++        break;
++    }
++    if (numlumps >= 0)
++        free(dir);
++    fclose(f);
++    return data;
++}
++
++static void AddWad(const char *dir, const char *name)
++{
++    wad_entry_t *w = &wads[num_wads];
++    size_t len = strlen(name);
++    byte *lumps;
++    FILE *f;
++    int i, numlumps;
++
++    if (num_wads == MAX_WADS || len < 5 || strcasecmp(name + len - 4, ".wad") != 0)
++        return;
++    // The first copy of a file name wins, the ROM is searched first
++    for (i = 0; i < num_wads; ++i)
++        if (strcasecmp(strrchr(wads[i].path, '/') + 1, name) == 0)
++            return;
++
++    snprintf(w->path, sizeof(w->path), "%s%s%s", dir, dir[strlen(dir) - 1] == '/' ? "" : "/", name);
++    if ((f = fopen(w->path, "rb")) == NULL)
++        return;
++    numlumps = ReadWadDirectory(f, &w->iwad, &lumps);
++    fclose(f);
++    if (numlumps < 0)
++        return;
++
++    w->has_maps = w->commercial = false;
++    for (i = 0; i < numlumps; ++i)
++    {
++        const char *lump = (const char *) lumps + i * 16 + 8;
++
++        if (!strncasecmp(lump, "MAP", 3) && isdigit((unsigned char) lump[3]) && isdigit((unsigned char) lump[4]))
++            w->has_maps = w->commercial = true;
++        else if (toupper((unsigned char) lump[0]) == 'E' && isdigit((unsigned char) lump[1])
++              && toupper((unsigned char) lump[2]) == 'M' && isdigit((unsigned char) lump[3]))
++            w->has_maps = true;
++    }
++    free(lumps);
++
++    for (w->known = 0; w->known < (int) arrlen(known_iwads); ++w->known)
++        if (strcasecmp(known_iwads[w->known].name, name) == 0)
++            break;
++    if (w->iwad && w->known < (int) arrlen(known_iwads))
++        snprintf(w->title, sizeof(w->title), "%s", known_iwads[w->known].title);
++    else
++        snprintf(w->title, sizeof(w->title), "%.*s", (int) len - 4, name);
++    ++num_wads;
++}
++
++static void ScanDir(const char *path)
++{
++    DIR *dir = opendir(path);
++    struct dirent *entry;
++
++    if (dir == NULL)
++        return;
++    while ((entry = readdir(dir)) != NULL)
++        if (entry->d_type != DT_DIR)
++            AddWad(path, entry->d_name);
++    closedir(dir);
++}
++
++// IWADs first in the known order, then mods by name
++static int CompareWads(const void *pa, const void *pb)
++{
++    const wad_entry_t *a = pa, *b = pb;
++
++    if (a->iwad != b->iwad)
++        return a->iwad ? -1 : 1;
++    if (a->known != b->known)
++        return a->known - b->known;
++    return strcasecmp(a->title, b->title);
++}
++
++static boolean IsShareware(const wad_entry_t *w)
++{
++    return strcasecmp(strrchr(w->path, '/') + 1, "doom1.wad") == 0;
++}
++
++static void FindWads(void)
++{
++    char cwd[128] = "";
++    int i, j;
++
++    // The ROM, the directory the .nds was launched from, the data folder and the SD root
++    ScanDir("nitro:/");
++    if (have_fat)
++    {
++        if (getcwd(cwd, sizeof(cwd)) != NULL)
++            ScanDir(cwd);
++        ScanDir(DATA_DIR);
++        ScanDir("/");
++    }
++    qsort(wads, num_wads, sizeof(wad_entry_t), CompareWads);
++
++    // Mods run on the first IWAD with the same kind of levels, the
++    // shareware version refuses to load mods
++    for (i = 0; i < num_wads; ++i)
++    {
++        wads[i].base = wads[i].iwad ? i : -1;
++        for (j = 0; j < num_wads && wads[i].base < 0; ++j)
++            if (wads[j].iwad && !IsShareware(&wads[j])
++             && (!wads[i].has_maps || wads[j].commercial == wads[i].commercial))
++                wads[i].base = j;
++    }
++}
++
++// Whether a lump is a picture in the patch format that fits the screen, all
++// of its columns inside the lump: a mod's TITLEPIC may be in another format
++static boolean IsScreenPatch(const byte *lump, int len)
++{
++    const patch_t *patch = (const patch_t *) lump;
++    int col, w, ofs;
++
++    if (lump == NULL || len < 8)
++        return false;
++    w = SHORT(patch->width);
++    if (w <= 0 || w > SCREENWIDTH || SHORT(patch->height) > SCREENHEIGHT || 8 + w * 4 > len)
++        return false;
++    for (col = 0; col < w; ++col)
++    {
++        for (ofs = LONG(patch->columnofs[col]); ofs >= 0 && ofs < len && lump[ofs] != 0xff;
++             ofs += lump[ofs + 1] + 4)
++        {
++            if (ofs + 1 >= len || ofs + lump[ofs + 1] + 4 > len)
++                return false;
++        }
++        if (ofs < 0 || ofs >= len)
++            return false;
++    }
++    return true;
++}
++
++// Shows the game's own title picture on the top screen, a mod's if it has one
++static void ShowTitle(const wad_entry_t *w)
++{
++    static byte black[768];
++    const char *base = w->base >= 0 ? wads[w->base].path : w->path;
++    int title_len = 0, pal_len = 0;
++    byte *title = ReadLump(w->path, "TITLEPIC", &title_len);
++    byte *pal = ReadLump(w->path, "PLAYPAL", &pal_len);
++    byte *pixels = calloc(SCREENWIDTH, SCREENHEIGHT);
++
++    if (title == NULL)
++        title = ReadLump(base, "TITLEPIC", &title_len);
++    if (pal == NULL)
++        pal = ReadLump(base, "PLAYPAL", &pal_len);
++    if (pixels != NULL)
++    {
++        if (pal != NULL && pal_len >= 768 && IsScreenPatch(title, title_len))
++            NDS_DrawPatch(pixels, SCREENWIDTH, SCREENHEIGHT, 0, 0, (patch_t *) title, NULL);
++        I_NDS_ShowSplash(pixels, pal != NULL && pal_len >= 768 ? pal : black);
++    }
++    free(title);
++    free(pal);
++    free(pixels);
++}
++
++static void PrintHeader(void)
++{
++    consoleClear();
++    printf("\x1b[31;1m  DOOM\x1b[39;0m for Nintendo %s\n", isDSiMode() ? "DSi" : "DS");
++    printf("\x1b[31m--------------------------------\x1b[39m");
++}
++
++#define LAST_WAD_FILE  DATA_DIR "/last-wad.txt"
++#define PICKER_ROW     5
++#define PICKER_ROWS    15
++// A line filling all 32 columns wraps into the next row before its newline
++#define PICKER_COLS    31
++
++// The game played last time, else the first one that can be played
++static int LastWad(void)
++{
++    char buf[256] = "";
++    FILE *f = fopen(LAST_WAD_FILE, "r");
++    int i;
++
++    if (f != NULL)
++    {
++        if (fgets(buf, sizeof(buf), f) == NULL)
++            buf[0] = '\0';
++        fclose(f);
++    }
++    for (i = 0; i < num_wads; ++i)
++        if (strcmp(buf, wads[i].path) == 0 && wads[i].base >= 0)
++            return i;
++    for (i = 0; i < num_wads; ++i)
++        if (wads[i].base >= 0)
++            return i;
++    return -1;
++}
++
++static void SaveLastWad(int index)
++{
++    FILE *f;
++
++    MakeDataDir();
++    if ((f = fopen(LAST_WAD_FILE, "w")) != NULL)
++    {
++        fputs(wads[index].path, f);
++        fclose(f);
++    }
++}
++
++static void DrawPicker(int selected, int top)
++{
++    int i;
++
++    PrintHeader();
++    printf("\n  Choose your game:\n\n");
++    for (i = top; i < num_wads && i < top + PICKER_ROWS; ++i)
++    {
++        const wad_entry_t *w = &wads[i];
++        const char *color = i == selected ? "\x1b[33;1m" : w->base < 0 ? "\x1b[30;1m" : "";
++        char name[48], note[48] = "";
++        int left;
++
++        // Cut to one row, a wrapped line would shift the rows touch picks from
++        snprintf(name, sizeof(name), "  %c %s%s", i == selected ? '>' : ' ', w->iwad ? "" : "+ ", w->title);
++        if (w->base < 0)
++            snprintf(note, sizeof(note), " (needs %s)", w->commercial ? "DOOM II" : "DOOM");
++        else if (!w->iwad)
++            snprintf(note, sizeof(note), " (%s)", wads[w->base].title);
++        left = PICKER_COLS - (int) strlen(name);
++        printf("%s%.*s%s%.*s\x1b[39;0m\n", color, PICKER_COLS, name,
++               w->base >= 0 && !w->iwad ? "\x1b[30;1m" : "", left > 0 ? left : 0, note);
++    }
++    printf("\x1b[22;0H\x1b[31m--------------------------------\x1b[39m");
++    printf("\x1b[30;1m  UP/DOWN pick   A or tap: play\x1b[39;0m");
++}
++
++static const wad_entry_t *PickWad(void)
++{
++    int selected, top = 0, i;
++
++    FindWads();
++    selected = LastWad();
++    if (selected < 0)
++    {
++        PrintHeader();
++        printf("\n\n\x1b[31;1m  No game data found!\x1b[39;0m\n\n"
++               "  Copy doom.wad, doom2.wad,\n"
++               "  tnt.wad or plutonia.wad\n"
++               "  to /data/doom/ on the SD card\n"
++               "  or embed one in the ROM at\n"
++               "  build time (see README).\n"
++               "  Mods need one of them too.\n\n"
++               "  Press START to exit\n");
++        do
++            NextFrame();
++        while (!(keysDown() & KEY_START));
++        exit(1);
++    }
++
++    ShowTitle(&wads[selected]);
++    if (num_wads == 1)
++        return &wads[selected];
++
++    for (;;)
++    {
++        u32 down;
++        int prev = selected;
++
++        if (selected < top)
++            top = selected;
++        else if (selected >= top + PICKER_ROWS)
++            top = selected - PICKER_ROWS + 1;
++        DrawPicker(selected, top);
++        do
++        {
++            NextFrame();
++            down = keysDown();
++            if ((down & (KEY_A | KEY_START)) && wads[selected].base >= 0)
++                goto chosen;
++            if (down & KEY_TOUCH)
++            {
++                touchPosition touch;
++
++                touchRead(&touch);
++                i = top + touch.py / 8 - PICKER_ROW;
++                if (i >= top && i < num_wads && i < top + PICKER_ROWS && wads[i].base >= 0)
++                {
++                    selected = i;
++                    goto chosen;
++                }
++            }
++            if (down & KEY_UP)
++                selected = (selected + num_wads - 1) % num_wads;
++            if (down & KEY_DOWN)
++                selected = (selected + 1) % num_wads;
++        } while (selected == prev);
++        ShowTitle(&wads[selected]);
++    }
++
++chosen:
++    SaveLastWad(selected);
++    ShowTitle(&wads[selected]);
++    return &wads[selected];
++}
++
++// Each game or mod keeps its config and savegames in its own SD card folder
++static void EnterDataDir(const wad_entry_t *wad)
++{
++    char path[sizeof(wad->path) + sizeof(DATA_DIR)];
++    const char *name = strrchr(wad->path, '/');
++
++    if (!have_fat)
++    {
++        printf("\x1b[33;1m  No SD card, saving is off\x1b[39;0m\n");
++        return;
++    }
++    MakeDataDir();
++    snprintf(path, sizeof(path), "%s/%s", DATA_DIR, name != NULL ? name + 1 : wad->path);
++    mkdir(path, 0777);
++    if (chdir(path) != 0)
++        printf("\x1b[33;1m  Can't write the SD card,\n  saving is off\x1b[39;0m\n");
++}
++
++// ---------------------------------------------------------------------------
++// doomgeneric interface
++// ---------------------------------------------------------------------------
++
++// The tick counter only counts while a tick task is scheduled
++static void TickNop(TickTask *task)
++{
++}
++
++void DG_Init(void)
++{
++    static TickTask tick_task;
++
++    tickTaskStart(&tick_task, TickNop, ticksFromHz(10), ticksFromHz(10));
++    keysSetRepeat(15, 4);
++
++    // Default before the config file is loaded, X sends it
++    key_nextweapon = ']';
++}
++
++void DG_DrawFrame(void)
++{
++}
++
++void DG_SleepMs(uint32_t ms)
++{
++    threadSleep(ms * 1000);
++}
++
++uint32_t DG_GetTicksMs(void)
++{
++    return (uint32_t) (tickGetCount() * 1000 / TICK_FREQ);
++}
++
++int DG_GetKey(int *pressed, unsigned char *key)
++{
++    return 0;
++}
++
++void DG_SetWindowTitle(const char *title)
++{
++}
++
++// ---------------------------------------------------------------------------
++// Entry point
++// ---------------------------------------------------------------------------
++
++// Doom runs in a thread of its own, with its stack in main RAM: DTCM is
++// mostly used by the light tables (r_data.c), and Doom's deepest recursion
++// grows with the size of a map
++static char *doom_argv[8] = { "doom", "-iwad" };
++static int doom_argc = 3;
++static u64 doom_stack[64 * 1024 / sizeof(u64)];
++
++static int DoomMain(void *arg)
++{
++    doomgeneric_Create(doom_argc, doom_argv);
++    for (;;)
++        doomgeneric_Tick();
++    return 0;
++}
++
++int main(int argc, char **argv)
++{
++    static Thread doom_thread;
++    const wad_entry_t *wad;
++
++    // In DSi mode the ARM9 runs at twice the speed of the DS
++    if (isDSiMode())
++        setCpuClock(true);
++
++    I_NDS_InitVideo();
++    ConsoleMode();
++    PrintHeader();
++
++    have_fat = fatInitDefault();
++    nitroFSInit(NULL);
++    // Paths without a device need a current device, use the ROM if there is no SD card
++    if (!have_fat)
++        chdir("nitro:/");
++
++    // A mod runs as -file on top of its IWAD
++    wad = PickWad();
++    doom_argv[2] = wads[wad->base].path;
++    if (!wad->iwad)
++    {
++        doom_argv[doom_argc++] = "-file";
++        doom_argv[doom_argc++] = (char *) wad->path;
++    }
++    PrintHeader();
++    EnterDataDir(wad);
++    printf("\n  Loading %s\n\n  ", wad->title);
++    fflush(stdout);
++    SetLoadingOutput(true);
++
++    // Extra command line options (eg. -skill 4 -warp 1 3) can be put in
++    // /data/doom/args.txt, expanded as a Doom response file
++    if (have_fat && FileExists(DATA_DIR "/args.txt"))
++        doom_argv[doom_argc++] = "@" DATA_DIR "/args.txt";
++
++    threadPrepare(&doom_thread, DoomMain, NULL, (byte *) doom_stack + sizeof(doom_stack), MAIN_THREAD_PRIO);
++    threadAttachLocalStorage(&doom_thread, NULL);
++    threadStart(&doom_thread);
++    return threadJoin(&doom_thread);
++}
+diff --git a/doomgeneric/doomgeneric_nds.h b/doomgeneric/doomgeneric_nds.h
+new file mode 100644
+index 0000000..3fd13c8
+--- /dev/null
++++ b/doomgeneric/doomgeneric_nds.h
+@@ -0,0 +1,31 @@
++//
++// Nintendo DS platform glue shared between the NDS backend files
++//
++
++#ifndef DOOMGENERIC_NDS_H
++#define DOOMGENERIC_NDS_H
++
++#include "d_event.h"
++#include "doomtype.h"
++#include "v_patch.h"
++
++// Bottom screen framebuffer (Doom palette, 256x192)
++#define SUB_WIDTH   256
++#define SUB_HEIGHT  192
++
++void I_NDS_InitVideo(void);
++void I_NDS_ErrorBox(const char *msg);
++void I_NDS_ShowSplash(const byte *pixels, const byte *playpal);
++
++// Draws a Doom patch into an 8bpp buffer, optionally through a color translation
++void NDS_DrawPatch(byte *buf, int bw, int bh, int x, int y, const patch_t *patch, const byte *xlat);
++
++void NDS_PollInput(void);
++void NDS_PostKey(evtype_t type, int key);
++
++void NDS_InitSubScreen(void);
++void NDS_UpdateSubScreen(void);
++void NDS_WaitSubScreen(void);
++void NDS_PollTouch(uint32_t down, uint32_t held);
++
++#endif

@@ -1,0 +1,27 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Wed, 7 Oct 2026 18:46:52 +0200
+Subject: [PATCH] Turn slower when running
+
+Running doubles the speed of turning with the arrow keys, which goes
+round in under three seconds. The d-pad always runs, so that is the speed
+the DS gets, too fast to aim with. Running turns half as fast again as
+walking instead.
+---
+ Game/src/player.c | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/Game/src/player.c b/Game/src/player.c
+index 1bb1d30..89baba2 100644
+--- a/Game/src/player.c
++++ b/Game/src/player.c
+@@ -2016,7 +2016,8 @@ void getinput(short snum)
+ 
+     if (running)
+     {
+-        turnamount = NORMALTURN<<1;
++        // Half as fast again instead of twice, the d-pad always runs
++        turnamount = NORMALTURN + (NORMALTURN>>1);
+         keymove = NORMALKEYMOVE<<1;
+     }
+     else

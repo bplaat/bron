@@ -1,0 +1,48 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Sun, 11 Oct 2026 16:02:33 +0200
+Subject: [PATCH] Record the sound to a WAV file from the interface
+
+desmume_wav_begin records the output of the sound core, every frame,
+until desmume_wav_end.
+---
+ desmume/src/frontend/interface/interface.cpp | 10 ++++++++++
+ desmume/src/frontend/interface/interface.h   |  4 ++++
+ 2 files changed, 14 insertions(+)
+
+diff --git a/desmume/src/frontend/interface/interface.cpp b/desmume/src/frontend/interface/interface.cpp
+index 73c81d4..90a6af0 100644
+--- a/desmume/src/frontend/interface/interface.cpp
++++ b/desmume/src/frontend/interface/interface.cpp
+@@ -551,6 +551,16 @@ EXPORTED void desmume_profile_stop(void)
+ 	profile9 = NULL;
+ }
+ 
++EXPORTED BOOL desmume_wav_begin(const char *file_name)
++{
++	return WAV_Begin(file_name);
++}
++
++EXPORTED void desmume_wav_end(void)
++{
++	WAV_End();
++}
++
+ EXPORTED void desmume_screenshot(char *screenshot_buffer)
+ {
+     u16 *gpuFramebuffer = GPU->GetDisplayInfo().masterNativeBuffer16;
+diff --git a/desmume/src/frontend/interface/interface.h b/desmume/src/frontend/interface/interface.h
+index 7d436b9..e4142c3 100644
+--- a/desmume/src/frontend/interface/interface.h
++++ b/desmume/src/frontend/interface/interface.h
+@@ -191,6 +191,10 @@ EXPORTED void desmume_screenshot(char *screenshot_buffer);
+ EXPORTED u32 *desmume_profile_start(void);
+ EXPORTED void desmume_profile_stop(void);
+ 
++// Records the sound to a WAV file until the recording ends
++EXPORTED BOOL desmume_wav_begin(const char *file_name);
++EXPORTED void desmume_wav_end(void);
++
+ // For automatic input processing with the SDL window, see desmume_draw_sdl_input.
+ EXPORTED BOOL desmume_input_joy_init(void);
+ EXPORTED void desmume_input_joy_uninit(void);

@@ -1,0 +1,567 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Sat, 10 Oct 2026 20:15:33 +0200
+Subject: [PATCH] Link with lld
+
+lld doesn't know ALIGN_WITH_INPUT and aligns the load address of every
+section it places with AT>, while the startup code copies ITCM, DTCM,
+main RAM and TLS from one contiguous load image. So the load addresses
+are explicit AT() expressions: right after the previous section, or at
+the same offset from the start of the block as in memory. NOLOAD
+sections take no room in the load image, and BSS sections start 8 byte
+aligned, the thread stacks in them need that. lld works out the thread
+pointer offsets of TLS variables with a PT_TLS segment.
+---
+ share/ds7.ld |  76 ++++++++++++++++++------------------
+ share/ds9.ld | 107 ++++++++++++++++++++++++++-------------------------
+ 2 files changed, 92 insertions(+), 91 deletions(-)
+
+diff --git a/share/ds7.ld b/share/ds7.ld
+index 06d6968..c721ccd 100644
+--- a/share/ds7.ld
++++ b/share/ds7.ld
+@@ -63,7 +63,7 @@ SECTIONS {
+ 	} >lma7 :crt0 = 0xff
+ 
+ 	/* DSi exclusive code/read-only data section */
+-	.twl : {
++	.twl : AT(ORIGIN(lma7i)) {
+ 		*(.twl .twl.*
+ 			/* Miscellaneous functions that are intended to be DSi exclusive */
+ 			.text.irqSet2
+@@ -74,14 +74,14 @@ SECTIONS {
+ 		*.twl.* (.rodata .rodata.* .gnu.linkonce.r.*)
+ 		*.twl.* (.rodata1)
+ 		. = ALIGN(4);
+-	} >twlwram AT>lma7i :twlwram = 0xff
++	} >twlwram :twlwram = 0xff
+ 
+ 	/* DSi exclusive data section */
+-	.twl.rw : ALIGN_WITH_INPUT {
++	.twl.rw : AT(LOADADDR(.twl) + ADDR(.twl.rw) - ADDR(.twl)) {
+ 		*.twl.* (.data .data.* .gnu.linkonce.d.*)
+ 		*.twl.* (.data1)
+ 		. = ALIGN(4);
+-	} >twlwram AT>lma7i :twlwram = 0xff
++	} >twlwram :twlwram = 0xff
+ 
+ 	/* Load information for the DSi exclusive section */
+ 	PROVIDE_HIDDEN( __twl_lma   = LOADADDR(.twl)            );
+@@ -89,20 +89,20 @@ SECTIONS {
+ 	PROVIDE_HIDDEN( __twl_end   = ADDR(.twl) + SIZEOF(.twl) );
+ 
+ 	/* DSi exclusive BSS area */
+-	.twl.bss . (NOLOAD) : {
++	.twl.bss ALIGN(8) (NOLOAD) : {
+ 		*(.twl_bss .twl_bss.*)
+ 		*.twl.* (.dynbss)
+ 		*.twl.* (.bss .bss.* .gnu.linkonce.b.*)
+ 		*.twl.* (COMMON)
+ 		. = ALIGN(4);
+-	} >twlwram AT>lma7i :twlwram
++	} >twlwram :twlwram
+ 
+ 	/* Information for DSi exclusive BSS area */
+ 	PROVIDE_HIDDEN( __twl_bss_start = ADDR(.twl.bss)                    );
+ 	PROVIDE_HIDDEN( __twl_bss_end   = ADDR(.twl.bss) + SIZEOF(.twl.bss) );
+ 
+ 	/* Main RAM code/read-only data section */
+-	.main : {
++	.main : AT(LOADADDR(.crt0) + SIZEOF(.crt0)) {
+ 		KEEP( *(SORT_NONE(.init)) )
+ 		*(.main .main.*
+ 			/* libc functions that do not really need to be in fast ARM7 WRAM */
+@@ -123,75 +123,75 @@ SECTIONS {
+ 		*.16.o (.rodata .rodata.* .gnu.linkonce.r.*)
+ 		*.16.o (.rodata1)
+ 		. = ALIGN(4);
+-	} >main AT>lma7 :main = 0xff
++	} >main :main = 0xff
+ 
+ 	/* Main RAM data section */
+-	.main.rw : ALIGN_WITH_INPUT {
++	.main.rw : AT(LOADADDR(.main) + ADDR(.main.rw) - ADDR(.main)) {
+ 		*(.data._impure_data) /* Likewise for this */
+ 		*.16.o (.data .data.* .gnu.linkonce.d.*)
+ 		*.16.o (.data1)
+ 		*(.igot.plt)
+ 		. = ALIGN(4);
+-	} >main AT>lma7 :main = 0xff
++	} >main :main = 0xff
+ 
+ 	/* ARM exception table */
+-	.ARM.extab : ALIGN_WITH_INPUT {
++	.ARM.extab : AT(LOADADDR(.main) + ADDR(.ARM.extab) - ADDR(.main)) {
+ 		*(.ARM.extab* .gnu.linkonce.armextab.*)
+-	} >main AT>lma7 :main = 0xff
++	} >main :main = 0xff
+ 
+ 	/* ARM exception index table (replaces .eh_frame on AArch32) */
+-	.ARM.exidx : ALIGN_WITH_INPUT {
++	.ARM.exidx : AT(LOADADDR(.main) + ADDR(.ARM.exidx) - ADDR(.main)) {
+ 		*(.ARM.exidx* .gnu.linkonce.armexidx.*)
+-	} >main AT>lma7 :main = 0xff
++	} >main :main = 0xff
+ 
+ 	/* Symbols needed by exception unwind code */
+ 	PROVIDE_HIDDEN( __exidx_start = ADDR(.ARM.exidx)                      );
+ 	PROVIDE_HIDDEN( __exidx_end   = ADDR(.ARM.exidx) + SIZEOF(.ARM.exidx) );
+ 
+ 	/* Exception frame header (not used on AArch32) */
+-	.eh_frame_hdr : ALIGN_WITH_INPUT {
++	.eh_frame_hdr : AT(LOADADDR(.main) + ADDR(.eh_frame_hdr) - ADDR(.main)) {
+ 		*(.eh_frame_hdr)
+ 		*(.eh_frame_entry .eh_frame_entry.*)
+-	} >main AT>lma7 :main = 0xff
++	} >main :main = 0xff
+ 
+ 	/* Exception frame information (not used on AArch32) */
+-	.eh_frame : ALIGN_WITH_INPUT {
++	.eh_frame : AT(LOADADDR(.main) + ADDR(.eh_frame) - ADDR(.main)) {
+ 		KEEP( *(.eh_frame) )
+ 		*(.eh_frame.*)
+-	} >main AT>lma7 :main = 0xff
++	} >main :main = 0xff
+ 
+ 	/* GCC language agnostic exception table (not used on AArch32?) */
+-	.gcc_except_table : ALIGN_WITH_INPUT {
++	.gcc_except_table : AT(LOADADDR(.main) + ADDR(.gcc_except_table) - ADDR(.main)) {
+ 		*(.gcc_except_table .gcc_except_table.*)
+-	} >main AT>lma7 :main = 0xff
++	} >main :main = 0xff
+ 
+ 	/* GNU exception table (not used on AArch32?) */
+-	.gnu_extab : ALIGN_WITH_INPUT {
++	.gnu_extab : AT(LOADADDR(.main) + ADDR(.gnu_extab) - ADDR(.main)) {
+ 		*(.gnu_extab*)
+-	} >main AT>lma7 :main = 0xff
++	} >main :main = 0xff
+ 
+ 	/* Table of special constructors that run before _init */
+-	.preinit_array : ALIGN_WITH_INPUT {
++	.preinit_array : AT(LOADADDR(.main) + ADDR(.preinit_array) - ADDR(.main)) {
+ 		PROVIDE_HIDDEN( __preinit_array_start = . );
+ 		KEEP( *(.preinit_array) )
+ 		PROVIDE_HIDDEN( __preinit_array_end = . );
+-	} >main AT>lma7 :main = 0xff
++	} >main :main = 0xff
+ 
+ 	/* Table of global constructors (runs after _init) */
+-	.init_array : ALIGN_WITH_INPUT {
++	.init_array : AT(LOADADDR(.main) + ADDR(.init_array) - ADDR(.main)) {
+ 		PROVIDE_HIDDEN( __init_array_start = . );
+ 		KEEP( *(SORT_BY_INIT_PRIORITY(.init_array.*) SORT_BY_INIT_PRIORITY(.ctors.*)) )
+ 		KEEP( *(.init_array .ctors) )
+ 		PROVIDE_HIDDEN( __init_array_end = . );
+-	} >main AT>lma7 :main = 0xff
++	} >main :main = 0xff
+ 
+ 	/* Table of global destructors (runs before _fini) */
+-	.fini_array : ALIGN_WITH_INPUT {
++	.fini_array : AT(LOADADDR(.main) + ADDR(.fini_array) - ADDR(.main)) {
+ 		PROVIDE_HIDDEN( __fini_array_start = . );
+ 		KEEP( *(SORT_BY_INIT_PRIORITY(.fini_array.*) SORT_BY_INIT_PRIORITY(.dtors.*)) )
+ 		KEEP( *(.fini_array .dtors) )
+ 		PROVIDE_HIDDEN( __fini_array_end = . );
+-	} >main AT>lma7 :main = 0xff
++	} >main :main = 0xff
+ 
+ 	/* Load information for main RAM */
+ 	PROVIDE_HIDDEN( __main_lma   = LOADADDR(.main)                         );
+@@ -199,13 +199,13 @@ SECTIONS {
+ 	PROVIDE_HIDDEN( __main_end   = ADDR(.fini_array) + SIZEOF(.fini_array) );
+ 
+ 	/* Main RAM BSS area */
+-	.main.bss . (NOLOAD) : {
++	.main.bss ALIGN(8) (NOLOAD) : {
+ 		*(.sbss .sbss.*)
+ 		*.16.o (.dynbss)
+ 		*.16.o (.bss .bss.* .gnu.linkonce.b.*)
+ 		*.16.o (COMMON)
+ 		. = ALIGN(4);
+-	} >main AT>lma7 :main
++	} >main :main
+ 
+ 	/* Information for main RAM BSS */
+ 	PROVIDE_HIDDEN( __main_bss_start = ADDR(.main.bss)                     );
+@@ -217,7 +217,7 @@ SECTIONS {
+ 	PROVIDE_HIDDEN( __heap_end   = ORIGIN(main) + LENGTH(main) );
+ 
+ 	/* WRAM code/read-only data section */
+-	.wram : {
++	.wram : AT(LOADADDR(.fini_array) + SIZEOF(.fini_array)) {
+ 		*(.text.unlikely .text.*_unlikely .text.unlikely.*)
+ 		*(.text.exit .text.exit.*)
+ 		*(.text.startup .text.startup.*)
+@@ -228,15 +228,15 @@ SECTIONS {
+ 		*(.rodata .rodata.* .gnu.linkonce.r.*)
+ 		*(.rodata1)
+ 		. = ALIGN(4);
+-	} >wram AT>lma7 :wram = 0xff
++	} >wram :wram = 0xff
+ 
+ 	/* WRAM data section */
+-	.wram.rw : ALIGN_WITH_INPUT {
++	.wram.rw : AT(LOADADDR(.wram) + ADDR(.wram.rw) - ADDR(.wram)) {
+ 		*(.data .data.* .gnu.linkonce.d.*)
+ 		*(.data1)
+ 		SORT(CONSTRUCTORS)
+ 		. = ALIGN(4);
+-	} >wram AT>lma7 :wram = 0xff
++	} >wram :wram = 0xff
+ 
+ 	/* Load information for code/data on ARM7 RAM */
+ 	PROVIDE_HIDDEN( __wram_lma   = LOADADDR(.wram)                   );
+@@ -244,19 +244,19 @@ SECTIONS {
+ 	PROVIDE_HIDDEN( __wram_end   = ADDR(.wram.rw) + SIZEOF(.wram.rw) );
+ 
+ 	/* WRAM BSS area */
+-	.wram.bss . (NOLOAD) : {
++	.wram.bss ALIGN(8) (NOLOAD) : {
+ 		*(.dynbss)
+ 		*(.bss .bss.* .gnu.linkonce.b.*)
+ 		*(COMMON)
+ 		. = ALIGN(4);
+-	} >wram AT>lma7 :wram
++	} >wram :wram
+ 
+ 	/* Information for BSS */
+ 	PROVIDE_HIDDEN( __wram_bss_start = ADDR(.wram.bss)                     );
+ 	PROVIDE_HIDDEN( __wram_bss_end   = ADDR(.wram.bss) + SIZEOF(.wram.bss) );
+ 
+ 	/* Craft a loadlist */
+-	.loadlist : {
++	.loadlist : AT(LOADADDR(.wram.rw) + SIZEOF(.wram.rw)) {
+ 		LONG(__main_start)
+ 		LONG(__main_end)
+ 		LONG(__main_bss_end)
+@@ -271,7 +271,7 @@ SECTIONS {
+ 	PROVIDE_HIDDEN( __loadlist_end   = LOADADDR(.loadlist) + SIZEOF(.loadlist) );
+ 
+ 	/* Craft a loadlist for DSi exclusive sections */
+-	.twl.loadlist : {
++	.twl.loadlist : AT(LOADADDR(.twl.rw) + SIZEOF(.twl.rw)) {
+ 		LONG(__twl_start)
+ 		LONG(__twl_end)
+ 		LONG(__twl_bss_end)
+diff --git a/share/ds9.ld b/share/ds9.ld
+index 64d9ca5..04712f4 100644
+--- a/share/ds9.ld
++++ b/share/ds9.ld
+@@ -31,6 +31,7 @@ PHDRS {
+ 	dtcm    PT_LOAD FLAGS(7);
+ 	main    PT_LOAD FLAGS(7);
+ 	tls     PT_LOAD FLAGS(7);
++	tlsinit PT_TLS; /* lld works out the thread pointer offsets with it */
+ 	bss     PT_LOAD FLAGS(7);
+ 	ldlist  PT_LOAD FLAGS(7);
+ 
+@@ -61,26 +62,26 @@ PROVIDE_HIDDEN( __end__ = 0 );
+ SECTIONS {
+ 
+ 	/* Secure area (2K) */
+-	.secure : {
++	.secure : AT(ORIGIN(lma9)) {
+ 		. += 2K - 4;
+ 		LONG(0)
+-	} >stub AT>lma9 :stub = 0
++	} >stub :stub = 0
+ 
+ 	/* Small bootstub that copies crt0 into the scratch boot memory */
+-	.bootstub : {
++	.bootstub : AT(LOADADDR(.secure) + SIZEOF(.secure)) {
+ 		KEEP( *(.bootstub .bootstub.*) )
+ 		. = ALIGN(4);
+-	} >stub AT>lma9 :stub = 0
++	} >stub :stub = 0
+ 
+ 	/* Initialization code section (crt0) */
+-	.crt0 : {
++	.crt0 : AT(LOADADDR(.bootstub) + SIZEOF(.bootstub)) {
+ 		*(.crt0 .crt0.*)
+ 		*.crt0.* (.text .stub .text.* .gnu.linkonce.t.*)
+ 		*.crt0.* (.glue_7t .glue_7 .vfp11_veneer .v4_bx)
+ 		*.crt0.* (.rodata .rodata.* .gnu.linkonce.r.*)
+ 		*.crt0.* (.rodata1)
+ 		. = ALIGN(32);
+-	} >main AT>lma9 :crt0 = 0xff
++	} >main :crt0 = 0xff
+ 
+ 	/* Load information for crt0 */
+ 	PROVIDE_HIDDEN( __crt0_lma   = LOADADDR(.crt0)             );
+@@ -92,19 +93,19 @@ SECTIONS {
+ 		"Error: crt0 section overlaps initial bootstrap" )
+ 
+ 	/* DLDI area (copied to ARM7) */
+-	.dldi : {
++	.dldi : AT(LOADADDR(.crt0) + SIZEOF(.crt0)) {
+ 		KEEP( *(.dldi) )
+-	} >dldi AT>lma9 :dldi = 0x00
++	} >dldi :dldi = 0x00
+ 
+ 	PROVIDE_HIDDEN( __dldi_lma = SIZEOF(.dldi) ? LOADADDR(.dldi) : 0 );
+ 
+ 	/* ARM exception vectors (start of ITCM) */
+-	.vectors : {
++	.vectors : AT(LOADADDR(.dldi) + SIZEOF(.dldi)) {
+ 		KEEP( *(.vectors) )
+-	} >vectors AT>lma9 :vectors = 0xff
++	} >vectors :vectors = 0xff
+ 
+ 	/* ITCM section */
+-	.itcm : {
++	.itcm : AT(LOADADDR(.vectors) + SIZEOF(.vectors)) {
+ 		*(.itcm .itcm.*)
+ 		*.itcm.* (.text .stub .text.* .gnu.linkonce.t.*)
+ 		*.32.o (.text .stub .text.* .gnu.linkonce.t.*)
+@@ -115,7 +116,7 @@ SECTIONS {
+ 		*.itcm.* (.rodata1)
+ 		*.32.o (.rodata1)
+ 		. = ALIGN(4);
+-	} >itcm AT>lma9 :itcm = 0xff
++	} >itcm :itcm = 0xff
+ 
+ 	/* Load information for ITCM */
+ 	PROVIDE_HIDDEN( __itcm_lma   = LOADADDR(.vectors)             );
+@@ -124,12 +125,12 @@ SECTIONS {
+ 	ASSERT( __itcm_lma + SIZEOF(.vectors) == LOADADDR(.itcm), "Error: gap between vectors and itcm" )
+ 
+ 	/* DTCM section */
+-	.dtcm : {
++	.dtcm : AT(LOADADDR(.itcm) + SIZEOF(.itcm)) {
+ 		*(.dtcm .dtcm.*)
+ 		*.32.o (.data .data.* .gnu.linkonce.d.*)
+ 		*.32.o (.data1)
+ 		. = ALIGN(4);
+-	} >dtcm AT>lma9 :dtcm = 0xff
++	} >dtcm :dtcm = 0xff
+ 
+ 	/* Load information for DTCM */
+ 	PROVIDE_HIDDEN( __dtcm_lma   = LOADADDR(.dtcm)             );
+@@ -137,13 +138,13 @@ SECTIONS {
+ 	PROVIDE_HIDDEN( __dtcm_end   = ADDR(.dtcm) + SIZEOF(.dtcm) );
+ 
+ 	/* DTCM BSS area */
+-	.dtcm.bss . (NOLOAD) : {
++	.dtcm.bss ALIGN(8) (NOLOAD) : {
+ 		*(.sbss .sbss.*)
+ 		*.32.o (.dynbss)
+ 		*.32.o (.bss .bss.* .gnu.linkonce.b.*)
+ 		*.32.o (COMMON)
+ 		. = ALIGN(4);
+-	} >dtcm AT>lma9 :dtcm
++	} >dtcm :dtcm
+ 
+ 	/* Information for DTCM BSS */
+ 	PROVIDE_HIDDEN( __dtcm_bss_start = ADDR(.dtcm.bss)                     );
+@@ -154,7 +155,7 @@ SECTIONS {
+ 	/* ================= */
+ 
+ 	/* Main user code/read-only data section */
+-	.main : {
++	.main : AT(LOADADDR(.dtcm) + SIZEOF(.dtcm)) {
+ 		KEEP( *(SORT_NONE(.init)) )
+ 		EXCLUDE_FILE(*.twl.*) *(.text.unlikely .text.*_unlikely .text.unlikely.*)
+ 		EXCLUDE_FILE(*.twl.*) *(.text.exit .text.exit.*)
+@@ -167,84 +168,84 @@ SECTIONS {
+ 		EXCLUDE_FILE(*.twl.*) *(.rodata .rodata.* .gnu.linkonce.r.*)
+ 		EXCLUDE_FILE(*.twl.*) *(.rodata1)
+ 		. = ALIGN(4);
+-	} >main AT>lma9 :main = 0xff
++	} >main :main = 0xff
+ 
+ 	/* Main user data section */
+-	.main.rw : ALIGN_WITH_INPUT {
++	.main.rw : AT(LOADADDR(.main) + ADDR(.main.rw) - ADDR(.main)) {
+ 		EXCLUDE_FILE(*.twl.*) *(.data .data.* .gnu.linkonce.d.*)
+ 		EXCLUDE_FILE(*.twl.*) *(.data1)
+ 		EXCLUDE_FILE(*.twl.*) *(.igot.plt)
+ 		SORT(CONSTRUCTORS)
+ 		. = ALIGN(4);
+-	} >main AT>lma9 :main = 0xff
++	} >main :main = 0xff
+ 
+ 	/* ARM exception table */
+-	.ARM.extab : ALIGN_WITH_INPUT {
++	.ARM.extab : AT(LOADADDR(.main) + ADDR(.ARM.extab) - ADDR(.main)) {
+ 		*(.ARM.extab* .gnu.linkonce.armextab.*)
+-	} >main AT>lma9 :main = 0xff
++	} >main :main = 0xff
+ 
+ 	/* ARM exception index table (replaces .eh_frame on AArch32) */
+-	.ARM.exidx : ALIGN_WITH_INPUT {
++	.ARM.exidx : AT(LOADADDR(.main) + ADDR(.ARM.exidx) - ADDR(.main)) {
+ 		*(.ARM.exidx* .gnu.linkonce.armexidx.*)
+-	} >main AT>lma9 :main = 0xff
++	} >main :main = 0xff
+ 
+ 	/* Symbols needed by exception unwind code */
+ 	PROVIDE_HIDDEN( __exidx_start = ADDR(.ARM.exidx)                      );
+ 	PROVIDE_HIDDEN( __exidx_end   = ADDR(.ARM.exidx) + SIZEOF(.ARM.exidx) );
+ 
+ 	/* Exception frame header (not used on AArch32) */
+-	.eh_frame_hdr : ALIGN_WITH_INPUT {
++	.eh_frame_hdr : AT(LOADADDR(.main) + ADDR(.eh_frame_hdr) - ADDR(.main)) {
+ 		*(.eh_frame_hdr)
+ 		*(.eh_frame_entry .eh_frame_entry.*)
+-	} >main AT>lma9 :main = 0xff
++	} >main :main = 0xff
+ 
+ 	/* Exception frame information (not used on AArch32) */
+-	.eh_frame : ALIGN_WITH_INPUT {
++	.eh_frame : AT(LOADADDR(.main) + ADDR(.eh_frame) - ADDR(.main)) {
+ 		KEEP( *(.eh_frame) )
+ 		*(.eh_frame.*)
+-	} >main AT>lma9 :main = 0xff
++	} >main :main = 0xff
+ 
+ 	/* GCC language agnostic exception table (not used on AArch32?) */
+-	.gcc_except_table : ALIGN_WITH_INPUT {
++	.gcc_except_table : AT(LOADADDR(.main) + ADDR(.gcc_except_table) - ADDR(.main)) {
+ 		*(.gcc_except_table .gcc_except_table.*)
+-	} >main AT>lma9 :main = 0xff
++	} >main :main = 0xff
+ 
+ 	/* GNU exception table (not used on AArch32?) */
+-	.gnu_extab : ALIGN_WITH_INPUT {
++	.gnu_extab : AT(LOADADDR(.main) + ADDR(.gnu_extab) - ADDR(.main)) {
+ 		*(.gnu_extab*)
+-	} >main AT>lma9 :main = 0xff
++	} >main :main = 0xff
+ 
+ 	/* TLS metadata */
+-	.tinfo : ALIGN_WITH_INPUT SUBALIGN(4) {
++	.tinfo : AT(LOADADDR(.main) + ADDR(.tinfo) - ADDR(.main)) SUBALIGN(4) {
+ 		LONG(__tls_start)
+ 		LONG(SIZEOF(.main.tls))
+ 		LONG(SIZEOF(.tdata))
+-	} >main AT>lma9 :main = 0xff
++	} >main :main = 0xff
+ 
+ 	PROVIDE_HIDDEN( __tls_info = ADDR(.tinfo) );
+ 
+ 	/* Table of special constructors that run before _init */
+-	.preinit_array : ALIGN_WITH_INPUT {
++	.preinit_array : AT(LOADADDR(.main) + ADDR(.preinit_array) - ADDR(.main)) {
+ 		PROVIDE_HIDDEN( __preinit_array_start = . );
+ 		KEEP( *(.preinit_array) )
+ 		PROVIDE_HIDDEN( __preinit_array_end = . );
+-	} >main AT>lma9 :main = 0xff
++	} >main :main = 0xff
+ 
+ 	/* Table of global constructors (runs after _init) */
+-	.init_array : ALIGN_WITH_INPUT {
++	.init_array : AT(LOADADDR(.main) + ADDR(.init_array) - ADDR(.main)) {
+ 		PROVIDE_HIDDEN( __init_array_start = . );
+ 		KEEP( *(SORT_BY_INIT_PRIORITY(.init_array.*) SORT_BY_INIT_PRIORITY(.ctors.*)) )
+ 		KEEP( *(.init_array .ctors) )
+ 		PROVIDE_HIDDEN( __init_array_end = . );
+-	} >main AT>lma9 :main = 0xff
++	} >main :main = 0xff
+ 
+ 	/* Table of global destructors (runs before _fini) */
+-	.fini_array : ALIGN_WITH_INPUT {
++	.fini_array : AT(LOADADDR(.main) + ADDR(.fini_array) - ADDR(.main)) {
+ 		PROVIDE_HIDDEN( __fini_array_start = . );
+ 		KEEP( *(SORT_BY_INIT_PRIORITY(.fini_array.*) SORT_BY_INIT_PRIORITY(.dtors.*)) )
+ 		KEEP( *(.fini_array .dtors) )
+ 		PROVIDE_HIDDEN( __fini_array_end = . );
+-	} >main AT>lma9 :main = 0xff
++	} >main :main = 0xff
+ 
+ 	/* Load information for code/data on main RAM */
+ 	PROVIDE_HIDDEN( __main_lma   = LOADADDR(.main)                         );
+@@ -252,17 +253,17 @@ SECTIONS {
+ 	PROVIDE_HIDDEN( __main_end   = ADDR(.fini_array) + SIZEOF(.fini_array) );
+ 
+ 	/* TLS static data area */
+-	.tdata : {
++	.tdata : AT(LOADADDR(.fini_array) + SIZEOF(.fini_array)) {
+ 		*(.tdata .tdata.* .gnu.linkonce.td.*)
+ 		. = ALIGN(4);
+-	} >tls AT>lma9 :tls = 0xff
++	} >tls :tls :tlsinit = 0xff
+ 
+ 	/* TLS BSS area */
+ 	.tbss (NOLOAD) : {
+ 		*(.tbss .tbss.* .gnu.linkonce.tb.*)
+ 		*(.tcommon)
+ 		. = ALIGN(4);
+-	} >tls AT>lma9 :tls
++	} >tls :tls :tlsinit
+ 
+ 	/* TLS sanity checks */
+ 	ASSERT( ALIGNOF(.tdata) <= 8 || ALIGNOF(.tbss) <= 8,
+@@ -300,21 +301,21 @@ SECTIONS {
+ 	ASSERT( . <= 0x2380000, "Error: DS-mode sections overflow DS ARM9 memory size (3.5 MB)" )
+ 
+ 	/* DSi exclusive code/read-only data section */
+-	.twl ALIGN(32) : {
++	.twl ALIGN(32) : AT(ORIGIN(lma9i)) {
+ 		*(.twl .twl.*)
+ 		*.twl.* (.text .stub .text.* .gnu.linkonce.t.*)
+ 		*.twl.* (.glue_7t .glue_7 .vfp11_veneer .v4_bx)
+ 		*.twl.* (.rodata .rodata.* .gnu.linkonce.r.*)
+ 		*.twl.* (.rodata1)
+ 		. = ALIGN(4);
+-	} >main AT>lma9i :twl = 0xff
++	} >main :twl = 0xff
+ 
+ 	/* DSi exclusive data section */
+-	.twl.rw . : ALIGN_WITH_INPUT {
++	.twl.rw . : AT(LOADADDR(.twl) + ADDR(.twl.rw) - ADDR(.twl)) {
+ 		*.twl.* (.data .data.* .gnu.linkonce.d.*)
+ 		*.twl.* (.data1)
+ 		. = ALIGN(4);
+-	} >main AT>lma9i :twl = 0xff
++	} >main :twl = 0xff
+ 
+ 	/* Load information for the DSi exclusive section */
+ 	PROVIDE_HIDDEN( __twl_lma   = LOADADDR(.twl)                  );
+@@ -322,13 +323,13 @@ SECTIONS {
+ 	PROVIDE_HIDDEN( __twl_end   = ADDR(.twl.rw) + SIZEOF(.twl.rw) );
+ 
+ 	/* DSi exclusive BSS area */
+-	.twl.bss . (NOLOAD) : {
++	.twl.bss ALIGN(8) (NOLOAD) : {
+ 		*(.twl_bss .twl_bss.*)
+ 		*.twl.* (.dynbss)
+ 		*.twl.* (.bss .bss.* .gnu.linkonce.b.*)
+ 		*.twl.* (COMMON)
+ 		. = ALIGN(4);
+-	} >main AT>lma9i :twl
++	} >main :twl
+ 
+ 	/* Information for DSi exclusive BSS area */
+ 	PROVIDE_HIDDEN( __twl_bss_start = ADDR(.twl.bss)                    );
+@@ -339,7 +340,7 @@ SECTIONS {
+ 	PROVIDE_HIDDEN( __heap_start_twl = . );
+ 
+ 	/* Craft a loadlist */
+-	.loadlist : {
++	.loadlist : AT(LOADADDR(.tdata) + SIZEOF(.tdata)) {
+ 		LONG(__itcm_start)
+ 		LONG(__itcm_end)
+ 		LONG(__itcm_end)
+@@ -355,18 +356,18 @@ SECTIONS {
+ 		LONG(__tls_start)
+ 		LONG(__tls_end)
+ 		LONG(__main_bss_end)
+-	} >stub AT>lma9 :ldlist = 0xff
++	} >stub :ldlist = 0xff
+ 
+ 	PROVIDE_HIDDEN( __loadlist_lma   = __itcm_lma );
+ 	PROVIDE_HIDDEN( __loadlist_start = LOADADDR(.loadlist)                     );
+ 	PROVIDE_HIDDEN( __loadlist_end   = LOADADDR(.loadlist) + SIZEOF(.loadlist) );
+ 
+ 	/* Craft a loadlist for DSi exclusive sections */
+-	.twl.loadlist : {
++	.twl.loadlist : AT(LOADADDR(.twl.rw) + SIZEOF(.twl.rw)) {
+ 		LONG(__twl_start)
+ 		LONG(__twl_end)
+ 		LONG(__twl_bss_end)
+-	} >stub AT>lma9i :twlld = 0xff
++	} >stub :twlld = 0xff
+ 
+ 	PROVIDE_HIDDEN( __twl_loadlist_lma   = __twl_lma );
+ 	PROVIDE_HIDDEN( __twl_loadlist_start = LOADADDR(.twl.loadlist)                         );

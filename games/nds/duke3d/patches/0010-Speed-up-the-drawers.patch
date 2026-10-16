@@ -1,0 +1,560 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Wed, 7 Oct 2026 12:00:00 +0200
+Subject: [PATCH] Speed up the drawers
+
+The C versions of the assembly drawers kept everything in globals and
+counted every pixel for a debugging feature. They keep their state in
+registers now, the wall drawer does two columns at a time with a halfword
+per row, the floor drawer two pixels a loop with one shift less for each,
+and the pixel counter is gone. Drawers given no pixels to draw draw none.
+
+Ken's reciprocals read the exponent and mantissa of an integer turned
+into a float, which the ARM can only do in software: floatbits() works
+out the same bits with a count of leading zeros, rounded like the
+conversion. The depth of the sloped floor drawer is an integer again,
+like in Ken's C version, instead of a float added to every 8 pixels.
+---
+ Engine/src/draw.c   | 273 +++++++++++++++++++++++---------------------
+ Engine/src/draw.h   |  29 ++++-
+ Engine/src/engine.c |   6 +-
+ 3 files changed, 170 insertions(+), 138 deletions(-)
+
+diff --git a/Engine/src/draw.c b/Engine/src/draw.c
+index 00ca069..a530b80 100644
+--- a/Engine/src/draw.c
++++ b/Engine/src/draw.c
+@@ -10,8 +10,6 @@
+ #include "build.h"
+ #include "draw.h"
+ 
+-int32_t pixelsAllowed = 10000000000;
+-
+ uint8_t  *transluc = NULL;
+ 
+ static int transrev = 0;
+@@ -56,34 +54,52 @@ void sethlinesizes(int32_t i1, int32_t _bits, uint8_t * textureAddress)
+ //Draw a line from destination in the framebuffer to framebuffer-numPixels
+ void hlineasm4(int32_t numPixels, int32_t shade, uint32_t i4, uint32_t i5, uint8_t *dest){
+ 
+-    int32_t shifter = ((256-machxbits_al) & 0x1f);
+-    uint32_t source;
+-    
+-    uint8_t * texture = textureSetup;
+-    uint8_t bits = bitsSetup;
+-    
+-    shade = shade & 0xffffff00;
++    const uint8_t *texture = textureSetup;
++    const uint8_t *pal = globalpalwritten + (shade & 0xffffff00);
++    const int32_t shifter = ((256-machxbits_al) & 0x1f);
++    const int32_t bits = bitsSetup;
++    const uint32_t inc5 = asm1, inc4 = asm2;
++
++    // Two pixels a loop in assembly, the loop took a third of the time and
++    // the compiler kept nothing in registers. The texel is at x << bits | y,
++    // x the top bits of i5 and y those of i4: x << bits is i5 shifted right
++    // by shifter - bits with its low bits masked off, as shifter is 32 minus
++    // the bits of x, unless x has none
+     numPixels++;
+-    
+-	if (!RENDER_DRAW_CEILING_AND_FLOOR)
+-		return;
+-
+-    while (numPixels) {
+-
+-	    source = i5 >> shifter;
+-	    source = shld(source,i4,bits);
+-	    source = texture[source];
+-        
+-		if (pixelsAllowed-- > 0)
+-			*dest = globalpalwritten[shade|source];
+-        
+-	    dest--;
+-        
+-	    i5 -= asm1;
+-	    i4 -= asm2;
+-        
+-	    numPixels--;
+-		
++    if (numPixels >= 2 && shifter >= bits) {
++        int32_t n = numPixels & ~1, a, b;
++
++        __asm__ volatile (
++            "1:\n\t"
++            "mov    %[a], %[i5], lsr %[xs]\n\t"
++            "sub    %[i5], %[i5], %[inc5]\n\t"
++            "mov    %[b], %[i5], lsr %[xs]\n\t"
++            "sub    %[i5], %[i5], %[inc5]\n\t"
++            "and    %[a], %[a], %[mask]\n\t"
++            "and    %[b], %[b], %[mask]\n\t"
++            "add    %[a], %[a], %[i4], lsr %[ys]\n\t"
++            "sub    %[i4], %[i4], %[inc4]\n\t"
++            "add    %[b], %[b], %[i4], lsr %[ys]\n\t"
++            "sub    %[i4], %[i4], %[inc4]\n\t"
++            "ldrb   %[a], [%[tex], %[a]]\n\t"
++            "ldrb   %[b], [%[tex], %[b]]\n\t"
++            "ldrb   %[a], [%[pal], %[a]]\n\t"
++            "ldrb   %[b], [%[pal], %[b]]\n\t"
++            "strb   %[a], [%[dest]], #-1\n\t"
++            "strb   %[b], [%[dest]], #-1\n\t"
++            "subs   %[n], %[n], #2\n\t"
++            "bgt    1b"
++            : [dest] "+r" (dest), [n] "+r" (n), [i4] "+r" (i4), [i5] "+r" (i5),
++              [a] "=&r" (a), [b] "=&r" (b)
++            : [tex] "r" (texture), [pal] "r" (pal), [inc4] "r" (inc4), [inc5] "r" (inc5),
++              [xs] "r" (shifter - bits), [ys] "r" (32 - bits), [mask] "r" (-1 << bits)
++            : "cc", "memory");
++        numPixels &= 1;
++    }
++    for (; numPixels > 0; numPixels--) {
++        *dest-- = pal[texture[shld(i5 >> shifter, i4, bits)]];
++        i5 -= inc5;
++        i4 -= inc4;
+     }
+ }
+ 
+@@ -128,7 +144,6 @@ void rhlineasm4(int32_t i1, uint8_t* texture, int32_t i3, uint32_t i4, uint32_t
+ 	    ebp &= rmach_esi;
+ 	    i1 = ((i1&0xffffff00)|(((uint8_t *)i3)[rmach_edx]));
+ 
+-		if (pixelsAllowed-- > 0)
+ 			 ((uint8_t *)rmach6b)[numPixels] = (i1&0xff);
+ 
+ 	    texture -= ebp;
+@@ -180,7 +195,6 @@ void rmhlineasm4(int32_t i1, intptr_t shade, int32_t colorIndex, int32_t i4, int
+         
+         //Check if this colorIndex is the transparent color (255).
+ 	    if ((colorIndex&0xff) != 255) {
+-			if (pixelsAllowed-- > 0)
+ 			{
+ 				i1 = ((i1&0xffffff00)|(((uint8_t  *)colorIndex)[rmmach_edx]));
+ 				((uint8_t  *)rmach6b)[numPixels] = (i1&0xff);
+@@ -220,7 +234,6 @@ int32_t prevlineasm1(int32_t i1, uint8_t* palette, int32_t i3, int32_t i4, uint8
+         i4 = ((uint32_t)i4) >> mach3_al;
+ 	    i4 = (i4&0xffffff00) | source[i4];
+ 
+-		if (pixelsAllowed-- > 0)
+ 			*dest = palette[i4];
+ 
+ 		
+@@ -235,26 +248,15 @@ int32_t prevlineasm1(int32_t i1, uint8_t* palette, int32_t i3, int32_t i4, uint8
+ //FCS: This is used to draw wall border vertical lines
+ int32_t vlineasm1(int32_t vince, uint8_t* palookupoffse, int32_t numPixels, int32_t vplce, uint8_t* texture, uint8_t* dest)
+ {
+-    uint32_t temp;
+-
+-    if (!RENDER_DRAW_WALL_BORDERS)
+-		return vplce;
++    const int32_t shift = mach3_al, pitch = bytesperline;
++    uint32_t v = vplce;
+ 
+-    numPixels++;
+-    while (numPixels)
+-    {
+-	    temp = ((uint32_t)vplce) >> mach3_al;
+-        
+-	    temp = texture[temp];
+-      
+-		if (pixelsAllowed-- > 0)
+-			*dest = palookupoffse[temp];
+-	    
+-		vplce += vince;
+-	    dest += bytesperline;
+-	    numPixels--;
++    for (numPixels++; numPixels > 0; numPixels--) {
++        *dest = palookupoffse[texture[v >> shift]];
++        v += vince;
++        dest += pitch;
+     }
+-    return vplce;
++    return v;
+ } 
+ 
+ 
+@@ -280,7 +282,6 @@ int32_t tvlineasm1(int32_t i1, uint8_t  * texture, int32_t numPixels, int32_t i4
+ 			if (transrev) 
+ 				colorIndex = ((colorIndex>>8)|(colorIndex<<8));
+             
+-			if (pixelsAllowed-- > 0)
+ 				*dest = transluc[colorIndex];
+ 		}
+         
+@@ -334,7 +335,6 @@ void tvlineasm2(uint32_t i1, uint32_t i2, uintptr_t i3, uintptr_t i4, uint32_t i
+ 				if (transrev) 
+ 					val = ((val>>8)|(val<<8));
+ 
+-				if (pixelsAllowed-- > 0)
+ 					((uint8_t  *)i6)[tran2edi1] = transluc[val];
+ 			}
+ 		} else if (i4 == 255) { // skipdraw2
+@@ -345,7 +345,6 @@ void tvlineasm2(uint32_t i1, uint32_t i2, uintptr_t i3, uintptr_t i4, uint32_t i
+ 			if (transrev) 
+                 val = ((val>>8)|(val<<8));
+ 
+-			if (pixelsAllowed-- > 0)
+ 				((uint8_t  *)i6)[tran2edi] = transluc[val];
+ 		} else {
+ 			uint16_t l = ((uint8_t  *)i6)[tran2edi]<<8;
+@@ -356,11 +355,9 @@ void tvlineasm2(uint32_t i1, uint32_t i2, uintptr_t i3, uintptr_t i4, uint32_t i
+ 				l = ((l>>8)|(l<<8));
+ 				r = ((r>>8)|(r<<8));
+ 			}
+-			if (pixelsAllowed-- > 0)
+ 			{
+ 				((uint8_t  *)i6)[tran2edi] = transluc[l];
+ 				((uint8_t  *)i6)[tran2edi1] =transluc[r];
+-				pixelsAllowed--;
+ 			}
+ 		}
+ 		i6 += bytesperline;
+@@ -374,23 +371,19 @@ void tvlineasm2(uint32_t i1, uint32_t i2, uintptr_t i3, uintptr_t i4, uint32_t i
+ static uint8_t  machmv;
+ int32_t mvlineasm1(int32_t vince, uint8_t* palookupoffse, int32_t i3, int32_t vplce, uint8_t* texture, uint8_t  *dest)
+ {
+-    uint32_t temp;
++    const int32_t shift = machmv, pitch = bytesperline;
++    uint32_t v = vplce;
+ 
+     for(;i3>=0;i3--)
+     {
+-		temp = ((uint32_t)vplce) >> machmv;
+-	    temp = texture[temp];
++        uint32_t temp = texture[v >> shift];
+ 
+-	    if (temp != 255) 
+-		{
+-			if (pixelsAllowed-- > 0)
+-			*dest = palookupoffse[temp];
+-		}
+-
+-	    vplce += vince;
+-	    dest += bytesperline;
++        if (temp != 255)
++            *dest = palookupoffse[temp];
++        v += vince;
++        dest += pitch;
+     }
+-    return vplce;
++    return v;
+ }
+ 
+ 
+@@ -400,36 +393,65 @@ void setupvlineasm(int32_t i1)
+ }
+ 
+ //FCS This is used to fill the inside of a wall (so it draws VERTICAL column, always).
+-void vlineasm4(int32_t columnIndex, intptr_t framebuffer)
++//Two columns at a time, a halfword per row. The loop is assembly: its 14 values
++//only fit in the registers without the compiler keeping any for itself.
++typedef struct
+ {
++    const uint8_t *b0, *b1, *p0, *p1;   // textures and palettes of both columns
++    uint32_t v0, v1;                    // texture positions, written back
++    int32_t i0, i1, shift;              // their steps and the shift to a texel
++} vline2_t;
+ 
+-	if (!RENDER_DRAW_WALL_INSIDE)
+-		return ;
++__attribute__((naked)) static void vline2(uint16_t *dest, uint16_t *end, int32_t pitch, vline2_t *c)
++{
++    __asm__ volatile (
++        "push   {r3-r11, lr}\n"
++        "ldr    r12, [r3, #32]\n"
++        "ldmia  r3, {r4-r11}\n"
++        "1:\n"
++        "mov    r3, r8, lsr r12\n"
++        "mov    lr, r9, lsr r12\n"
++        "ldrb   r3, [r4, r3]\n"
++        "ldrb   lr, [r5, lr]\n"
++        "add    r8, r8, r10\n"
++        "add    r9, r9, r11\n"
++        "ldrb   r3, [r6, r3]\n"
++        "ldrb   lr, [r7, lr]\n"
++        "orr    r3, r3, lr, lsl #8\n"
++        "strh   r3, [r0], r2\n"
++        "cmp    r0, r1\n"
++        "bne    1b\n"
++        "pop    {r3}\n"
++        "str    r8, [r3, #16]\n"
++        "str    r9, [r3, #20]\n"
++        "pop    {r4-r11, pc}\n");
++}
++
++static inline void vlineasm2(int32_t numRows, uint16_t *dest, int32_t i)
++{
++    vline2_t c = { (const uint8_t *)bufplce[i], (const uint8_t *)bufplce[i + 1],
++                   palookupoffse[i], palookupoffse[i + 1], vplce[i], vplce[i + 1],
++                   vince[i], vince[i + 1], mach3_al };
+ 
++    vline2(dest, dest + numRows * (bytesperline >> 1), bytesperline, &c);
++    vplce[i] = c.v0;
++    vplce[i + 1] = c.v1;
++}
++
++void vlineasm4(int32_t numRows, intptr_t framebuffer)
++{
++    int i;
++
++    // Walls are halfword aligned, sprites drawn by rotatesprite may not be
++    if (((framebuffer | bytesperline) & 1) == 0)
+     {
+-        int i;
+-        uint32_t temp;
+-        
+-        uintptr_t index = (framebuffer + ylookup[columnIndex]);
+-        uint8_t  *dest= (uint8_t *)(-ylookup[columnIndex]);
+-        //uint8_t  *dest= (uint8_t *)framebuffer;
+-        
+-        //uint32_t index = 0;
+-        do {
+-            for (i = 0; i < 4; i++)
+-            {
+-				
+-        	    temp = ((uint32_t)vplce[i]) >> mach3_al;
+-        	    temp = (((uint8_t *)(bufplce[i]))[temp]);
+-                
+-				if (pixelsAllowed-- > 0)
+-        			dest[index+i] = palookupoffse [i] [temp];
+-                
+-	            vplce[i] += vince[i];
+-            }
+-            dest += bytesperline;
+-        } while (((uint32_t)dest - bytesperline) < ((uint32_t)dest));
++        vlineasm2(numRows, (uint16_t *)framebuffer, 0);
++        vlineasm2(numRows, (uint16_t *)framebuffer + 1, 2);
++        return;
+     }
++    for (i = 0; i < 4; i++)
++        vplce[i] = vlineasm1(vince[i], palookupoffse[i], numRows - 1, vplce[i],
++                             (uint8_t *)bufplce[i], (uint8_t *)framebuffer + i);
+ } 
+ 
+ 
+@@ -440,33 +462,30 @@ void setupmvlineasm(int32_t i1)
+ } 
+ 
+ 
+-void mvlineasm4(int32_t column, intptr_t framebufferOffset)
++//Four columns of a masked wall, 255 is transparent
++void mvlineasm4(int32_t numRows, intptr_t framebufferOffset)
+ {
+     int i;
+-    uint32_t temp;
+-    uintptr_t index = (framebufferOffset + ylookup[column]);
+-    uint8_t  *dest = (uint8_t *)(-ylookup[column]);
+-
+-    do {
+ 
+-		if (pixelsAllowed <= 0)
+-			return;
+-
+-        for (i = 0; i < 4; i++)
+-        {
+-			
+-	      temp = ((uint32_t)vplce[i]) >> machmv;
+-	      temp = (((uint8_t *)(bufplce[i]))[temp]);
+-	      if (temp != 255)
+-		  {
+-			  if (pixelsAllowed-- > 0)
+-				dest[index+i] = palookupoffse[i][temp];
+-		  }
+-	      vplce[i] += vince[i];
+-        }
+-        dest += bytesperline;
++    for (i = 0; i < 4; i++)
++    {
++        // The pitch is read once, the stores could change the global
++        const int32_t shift = machmv, inc = vince[i], pitch = bytesperline;
++        const uint8_t *texture = (const uint8_t *)bufplce[i], *pal = palookupoffse[i];
++        uint32_t v = vplce[i];
++        uint8_t *dest = (uint8_t *)framebufferOffset + i;
++        int32_t n = numRows;
+ 
+-    } while (((uint32_t)dest - bytesperline) < ((uint32_t)dest));
++        do {
++            uint32_t temp = texture[v >> shift];
++
++            if (temp != 255)
++                *dest = pal[temp];
++            v += inc;
++            dest += pitch;
++        } while (--n);
++        vplce[i] = v;
++    }
+ } 
+ /* END ---------------  WALLS RENDERING METHOD (USED TO BE HIGHLY OPTIMIZED ASSEMBLY) ----------------------------*/
+ 
+@@ -531,7 +550,6 @@ setup:
+         
+         i1 = (i1&0xffffff00) | (((uint8_t  *)spal_eax)[i1]&0xff);
+         
+-        if (pixelsAllowed-- > 0)
+             *dest = i1;
+         
+         dest += bytesperline;
+@@ -591,7 +609,6 @@ setup:
+         {
+             colorIndex = (colorIndex&0xffffff00) | (((uint8_t  *)spal_eax)[colorIndex]&0xff);
+             
+-            if (pixelsAllowed-- > 0)
+                 *dest = colorIndex;
+         }
+    
+@@ -671,7 +688,6 @@ void DrawSpriteVerticalLine(int32_t i2, int32_t numPixels, uint32_t i4, uint8_t
+ 
+ 				colorIndex = transluc[val];
+ 
+-				if (pixelsAllowed-- > 0)
+ 					*dest = colorIndex;
+ 			}
+             
+@@ -743,7 +759,6 @@ void mhlineskipmodify( uint32_t i2, int32_t numPixels, int32_t i5, uint8_t* dest
+ 
+         //Skip transparent color.
+ 		if ((colorIndex&0xff) != 0xff){
+-            if (pixelsAllowed-- > 0)
+ 				*dest = mmach_asm3[colorIndex];
+         }
+ 	    i2 += mmach_asm1;
+@@ -797,7 +812,6 @@ void thlineskipmodify(int32_t i1, uint32_t i2, uint32_t i3, int32_t i4, int32_t
+ 		    if (transrev) 
+ 				val = ((val>>8)|(val<<8));
+ 
+-			if (pixelsAllowed-- > 0)
+ 			 *i6 = transluc[val];
+ 	    }
+ 
+@@ -826,19 +840,18 @@ static int32_t slopemach_ecx;
+ static int32_t slopemach_edx;
+ static uint8_t  slopemach_ah1;
+ static uint8_t  slopemach_ah2;
+-static float asm2_f;
+-typedef union { unsigned int i; float f; } bitwisef2i;
++// The depth slopevlin starts at and adds every 8 pixels, kept in integers
++// like in Ken's C version, not as a float
++static int32_t slopemach_inc;
+ void setupslopevlin(int32_t i1, intptr_t i2, int32_t i3)
+ {
+-    bitwisef2i c;
+     slopemach_ebx = i2;
+     slopemach_ecx = i3;
+     slopemach_edx = (1<<(i1&0x1f)) - 1;
+     slopemach_edx <<= ((i1&0x1f00)>>8);
+     slopemach_ah1 = 32-((i1&0x1f00)>>8);
+     slopemach_ah2 = (slopemach_ah1 - (i1&0x1f)) & 0x1f;
+-    c.f = asm2_f = (float)asm1;
+-    asm2 = c.i;
++    slopemach_inc = asm1;
+ }
+ 
+ extern int32_t reciptable[2048];
+@@ -850,10 +863,8 @@ extern int32_t fpuasm;
+ //FCS: Render RENDER_SLOPPED_CEILING_AND_FLOOR
+ void slopevlin(intptr_t i1, uint32_t i2, int32_t i3, int32_t i4, int32_t i5, int32_t i6)
+ {
+-    bitwisef2i c;
+     uint32_t ecx,eax,ebx,edx,esi,edi;
+-//This is so bad to cast asm3 to int then float :( !!!
+-    float a = (float)(int32_t) asm3 + asm2_f;
++    int32_t a = (int32_t) asm3 + slopemach_inc;
+     i1 -= slopemach_ecx;
+     esi = i5 + low32((__int64)globalx3 * (__int64)(i2<<3));
+     edi = i6 + low32((__int64)globaly3 * (__int64)(i2<<3));
+@@ -865,8 +876,7 @@ void slopevlin(intptr_t i1, uint32_t i2, int32_t i3, int32_t i4, int32_t i5, int
+     do {
+ 	    // -------------
+ 	    // All this is calculating a fixed point approx. of 1/a
+-	    c.f = a;
+-	    fpuasm = eax = c.i;
++	    fpuasm = eax = floatbits(a);
+ 	    edx = (((int32_t)eax) < 0) ? 0xffffffff : 0;
+ 	    eax = eax << 1;
+ 	    ecx = (eax>>24);	//  exponent
+@@ -881,7 +891,7 @@ void slopevlin(intptr_t i1, uint32_t i2, int32_t i3, int32_t i4, int32_t i5, int
+ 	    eax -= edx;
+ 	    ecx = low32((__int64)globalx3 * (__int64)eax);
+ 	    eax = low32((__int64)globaly3 * (__int64)eax);
+-	    a += asm2_f;
++	    a += slopemach_inc;
+ 
+ 	    asm4 = ebx;
+ 	    ecx = ((ecx&0xffffff00)|(ebx&0xff));
+@@ -903,7 +913,6 @@ void slopevlin(intptr_t i1, uint32_t i2, int32_t i3, int32_t i4, int32_t i5, int
+ 		    eax = ((eax&0xffffff00)|(*((uint8_t  *)(ebx+edx))));
+ 		    ebx = esi;
+ 
+-			if (pixelsAllowed-- > 0)
+ 				*((uint8_t  *)i1) = (eax&0xff);
+ 
+ 		    edx = edi;
+diff --git a/Engine/src/draw.h b/Engine/src/draw.h
+index 0f2a656..4d062dd 100644
+--- a/Engine/src/draw.h
++++ b/Engine/src/draw.h
+@@ -14,6 +14,34 @@
+    #include <inttypes.h>
+ #endif
+ 
++/*
++ * The bits of (float)i, which Ken's reciprocals read the exponent and the top
++ * of the mantissa from, worked out in integers: the ARM has no floating point
++ * unit but counts leading zeros. Rounded to nearest even like the conversion.
++ */
++static inline int32_t floatbits(int32_t i)
++{
++    uint32_t a = i < 0 ? -(uint32_t)i : (uint32_t)i, m;
++    int32_t e;
++
++    if (a == 0)
++        return 0;
++    e = 31 - __builtin_clz(a);
++    if (e <= 23)
++        m = a << (23 - e);
++    else
++    {
++        uint32_t shift = e - 23, rest = a & ((1u << shift) - 1), half = 1u << (shift - 1);
++
++        m = a >> shift;
++        if (rest > half || (rest == half && (m & 1)))
++            m++;
++        if (m == 1u << 24)
++            m >>= 1, e++;
++    }
++    return (int32_t)((i < 0 ? 0x80000000u : 0) | ((uint32_t)(127 + e) << 23) | (m & 0x7fffff));
++}
++
+ 
+ //C++ linker friendly
+ #ifdef __cplusplus
+@@ -81,7 +109,6 @@ void settrans(int32_t type);
+ //VISUALIZE RENDERER
+ 
+ #define MAX_PIXEL_RENDERERED ((1600*1200)+20000 )
+-extern int32_t pixelsAllowed;
+ 
+ #define RENDER_DRAW_WALL_BORDERS 1
+ #define RENDER_DRAW_WALL_INSIDE 1
+diff --git a/Engine/src/engine.c b/Engine/src/engine.c
+index b910987..5d264c6 100644
+--- a/Engine/src/engine.c
++++ b/Engine/src/engine.c
+@@ -296,8 +296,7 @@ static __inline int32_t nsqrtasm(uint32_t  param)
+ 
+ static __inline int32_t krecipasm(int32_t i)
+ {   // Ken did this
+-    float f = (float)i;
+-    i = *(int32_t *)&f;
++    i = floatbits(i);
+     return((reciptable[(i>>12)&2047]>>(((i-0x3f800000)>>23)&31))^(i>>31));
+ }
+ 
+@@ -2807,9 +2806,6 @@ void drawrooms(int32_t daposx, int32_t daposy, int32_t daposz,short daang, int32
+ 	if (pixelRenderable >= MAX_PIXEL_RENDERERED)
+ 		pixelRenderable =  0 ;
+ 
+-	//pixelsAllowed = pixelRenderable;
+-	pixelsAllowed = 100000000;
+-	//printf("%d\n",pixelsAllowed);
+ 
+     beforedrawrooms = 0;
+ 

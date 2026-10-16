@@ -1,0 +1,138 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Mon, 12 Oct 2026 07:54:52 +0200
+Subject: [PATCH] Add DS video
+
+---
+ nds/vid_nds.c | 122 ++++++++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 122 insertions(+)
+ create mode 100644 nds/vid_nds.c
+
+diff --git a/nds/vid_nds.c b/nds/vid_nds.c
+new file mode 100644
+index 0000000..21d7037
+--- /dev/null
++++ b/nds/vid_nds.c
+@@ -0,0 +1,122 @@
++/*
++Copyright (C) 1997-2001 Id Software, Inc.
++
++This program is free software; you can redistribute it and/or
++modify it under the terms of the GNU General Public License
++as published by the Free Software Foundation; either version 2
++of the License, or (at your option) any later version.
++
++This program is distributed in the hope that it will be useful,
++but WITHOUT ANY WARRANTY; without even the implied warranty of
++MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
++
++See the GNU General Public License for more details.
++
++You should have received a copy of the GNU General Public License
++along with this program; if not, write to the Free Software
++Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
++
++*/
++// vid_nds.c -- Nintendo DS video driver
++//
++// The refresh (ref_nds) has a single video mode, the brightness is in the
++// options menu.
++
++#include "../client/client.h"
++
++refexport_t	re;
++
++// The refresh is linked in, not loaded from a library
++refexport_t GetRefAPI (refimport_t rimp);
++
++viddef_t	viddef;
++
++void VID_Printf (int print_level, char *fmt, ...)
++{
++	va_list	argptr;
++	char	msg[1024];
++
++	va_start (argptr, fmt);
++	vsnprintf (msg, sizeof(msg), fmt, argptr);
++	va_end (argptr);
++
++	if (print_level == PRINT_DEVELOPER)
++		Com_DPrintf ("%s", msg);
++	else
++		Com_Printf ("%s", msg);
++}
++
++void VID_Error (int err_level, char *fmt, ...)
++{
++	va_list	argptr;
++	char	msg[1024];
++
++	va_start (argptr, fmt);
++	vsnprintf (msg, sizeof(msg), fmt, argptr);
++	va_end (argptr);
++
++	Com_Error (err_level, "%s", msg);
++}
++
++qboolean VID_GetModeInfo (int *width, int *height, int mode)
++{
++	return false;
++}
++
++void VID_NewWindow (int width, int height)
++{
++	viddef.width = width;
++	viddef.height = height;
++}
++
++void VID_Init (void)
++{
++	refimport_t	ri;
++
++	ri.Cmd_AddCommand = Cmd_AddCommand;
++	ri.Cmd_RemoveCommand = Cmd_RemoveCommand;
++	ri.Cmd_Argc = Cmd_Argc;
++	ri.Cmd_Argv = Cmd_Argv;
++	ri.Cmd_ExecuteText = Cbuf_ExecuteText;
++	ri.Con_Printf = VID_Printf;
++	ri.Sys_Error = VID_Error;
++	ri.FS_LoadFile = FS_LoadFile;
++	ri.FS_FreeFile = FS_FreeFile;
++	ri.FS_Gamedir = FS_Gamedir;
++	ri.Cvar_Get = Cvar_Get;
++	ri.Cvar_Set = Cvar_Set;
++	ri.Cvar_SetValue = Cvar_SetValue;
++	ri.Vid_GetModeInfo = VID_GetModeInfo;
++	ri.Vid_MenuInit = VID_MenuInit;
++	ri.Vid_NewWindow = VID_NewWindow;
++
++	// The particles and shells are drawn like GL does
++	vidref_val = VIDREF_GL;
++	re = GetRefAPI (ri);
++	if (!re.Init (NULL, NULL))
++		Com_Error (ERR_FATAL, "Couldn't start the refresh");
++}
++
++void VID_Shutdown (void)
++{
++	if (re.Shutdown)
++		re.Shutdown ();
++}
++
++void VID_CheckChanges (void)
++{
++}
++
++// The brightness is in the options menu, the video menu is that one
++void VID_MenuInit (void)
++{
++}
++
++void VID_MenuDraw (void)
++{
++}
++
++const char *VID_MenuKey (int key)
++{
++	return NULL;
++}

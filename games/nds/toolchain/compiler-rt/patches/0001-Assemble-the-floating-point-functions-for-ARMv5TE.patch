@@ -1,0 +1,65 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Sat, 10 Oct 2026 20:14:17 +0200
+Subject: [PATCH] Assemble the floating point functions for ARMv5TE
+
+The DS's ARM946E-S has neither bfc, movw nor mls, which need ARMv6T2.
+---
+ compiler-rt/lib/builtins/arm/adddf3.S | 4 ++--
+ compiler-rt/lib/builtins/arm/addsf3.S | 3 ++-
+ compiler-rt/lib/builtins/arm/divsf3.S | 6 ++++--
+ 3 files changed, 8 insertions(+), 5 deletions(-)
+
+diff --git a/compiler-rt/lib/builtins/arm/adddf3.S b/compiler-rt/lib/builtins/arm/adddf3.S
+index 8c1a53a..47c7c66 100644
+--- a/compiler-rt/lib/builtins/arm/adddf3.S
++++ b/compiler-rt/lib/builtins/arm/adddf3.S
+@@ -494,8 +494,8 @@ LOCAL_LABEL(add_inf):
+ 
+ LOCAL_LABEL(addsub_return_nan):
+   // Return the default NaN, in the case of adding +inf to -inf.
+-  movw    xh, 0x7ff8
+-  lsls    xh, xh, #16        // 0x7ff80000 is the high word of the default NaN
++  mov     xh, #0x7f000000    // 0x7ff80000 is the high word of the default NaN
++  orr     xh, xh, #0x00f80000
+   mov     xl, #0             // and the low word is 0
+   bx      lr
+ 
+diff --git a/compiler-rt/lib/builtins/arm/addsf3.S b/compiler-rt/lib/builtins/arm/addsf3.S
+index 07a4b3c..4a44900 100644
+--- a/compiler-rt/lib/builtins/arm/addsf3.S
++++ b/compiler-rt/lib/builtins/arm/addsf3.S
+@@ -223,7 +223,8 @@ LOCAL_LABEL(add_roundeven_ovf):
+   // field of the number is exactly 0xff. So all we have to do is clear the
+   // mantissa, to make it into an infinity of the output sign.
+ LOCAL_LABEL(add_ovf):
+-  bfc     r0, #0, #23
++  lsr     r0, r0, #23  // clear the mantissa (bfc needs ARMv6T2)
++  lsl     r0, r0, #23
+   bx      lr
+ 
+ LOCAL_LABEL(add_uncommon):
+diff --git a/compiler-rt/lib/builtins/arm/divsf3.S b/compiler-rt/lib/builtins/arm/divsf3.S
+index faabd82..9606101 100644
+--- a/compiler-rt/lib/builtins/arm/divsf3.S
++++ b/compiler-rt/lib/builtins/arm/divsf3.S
+@@ -203,7 +203,8 @@ LOCAL_LABEL(div):
+   mul     r12, r14, r12         // make the quotient approximation
+   mov     r1, r1, lsl #11       // shift numerator left, ready for subtraction
+   mov     r3, r12, lsr #20      // make first 12-bit block of quotient bits
+-  mls     r1, r0, r3, r1        // subtract that multiple of den from num
++  mul     r12, r0, r3           // subtract that multiple of den from num
++  sub     r1, r1, r12           //   (mls needs ARMv6T2, r12 is free here)
+ 
+   add     r2, r2, #0x7D0000     //   exponent setup [#3] in the MLS delay slot
+ 
+@@ -217,7 +218,8 @@ LOCAL_LABEL(div):
+   mul     r12, r14, r12         // make the quotient approximation
+   mov     r1, r1, lsl #12       // shift numerator left, ready for subtraction
+   mov     r12, r12, lsr #19     // make second 11-bit block of quotient
+-  mls     r1, r0, r12, r1       // subtract that multiple of den from num
++  mul     r14, r0, r12          // subtract that multiple of den from num
++  sub     r1, r1, r14           //   (mls needs ARMv6T2, r14 is free here)
+ 
+   adc     r2, r2, r2, asr #16   //   exponent setup [#4] in the MLS delay slot
+ 

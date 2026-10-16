@@ -1,0 +1,121 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Sun, 4 Oct 2026 12:18:34 +0200
+Subject: [PATCH] Add a Nintendo DS build
+
+Makefile.nds builds a .nds with the toolchain of the ports (clang,
+calico and libnds), with the Apogee v1.4 graphics layout, the game data
+from NITRO_DIR embedded through NitroFS and ICON as the icon. The ray
+caster, the scaler and the fixed point math run from ITCM as ARM code,
+the rest is Thumb code in main RAM. Enums keep the size of an int,
+savegames hold structs with them. The signon screen isn't shown, so its
+64 KiB picture isn't built in, and the Tab debug keys are left out, there
+is no keyboard to press them. The cold code (startup, config and
+savegames, the menus, the intermission and the help texts) is optimized
+for size. The screen is the 320x200 frame of 8 bits, the DS has no
+sys/uio.h.
+---
+ .gitignore   |  4 ++++
+ Makefile.nds | 34 ++++++++++++++++++++++++++++++++++
+ id_ca.c      |  3 +--
+ id_vl.c      |  6 +++---
+ version.h    |  2 +-
+ 5 files changed, 43 insertions(+), 6 deletions(-)
+ create mode 100644 Makefile.nds
+
+diff --git a/.gitignore b/.gitignore
+index ed406f8..74e32b2 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -79,3 +79,7 @@ Makefile.win
+ ##############
+ /.vscode
+ /build
++/build-nds/
++/wolf3d.elf
++/wolf3d.nds
++/wolf3d.lst
+diff --git a/Makefile.nds b/Makefile.nds
+new file mode 100644
+index 0000000..49c6b73
+--- /dev/null
++++ b/Makefile.nds
+@@ -0,0 +1,34 @@
++# Nintendo DS build of Wolf4SDL with the nds-ports toolchain
++#   make -f Makefile.nds TOOLCHAIN=<toolchain> ICON=<icon.bmp> [NITRO_DIR=<dir>]
++
++NAME := wolf3d
++GAME_TITLE := Wolfenstein 3D
++GAME_SUBTITLE1 := id Software (1992)
++GAME_SUBTITLE2 := Wolf4SDL NDS port
++HEADER_TITLE := WOLF3D
++BUILD := build-nds
++
++SOURCES := id_ca id_in id_pm id_sd id_us id_vh id_vl wl_act1 wl_act2 wl_agent wl_atmos \
++	wl_cloudsky wl_debug wl_game wl_inter wl_main wl_menu wl_parallax wl_plane wl_play wl_shade \
++	wl_state wl_text nds/opl nds/sdl nds/sdl_input nds/sdl_mixer nds/sdl_video nds/wl_nds nds/wl_touch
++
++# Hot code (the ray caster, the scaler and the fixed point math) runs from ITCM
++ITCM_SOURCES := wl_draw wl_scale wl_utils
++
++# The ARM7 plays the AdLib
++ARM7_SOURCES := nds/opl7
++
++# Cold code (startup, config and savegames, the menus, the intermission and
++# the help texts) is optimized for size
++COLD_SOURCES := wl_inter wl_main wl_menu wl_text
++
++include $(TOOLCHAIN)/nds.mk
++
++# Savegames hold structs with enums, int sized like on the PC instead of only
++# as big as their values. The Apogee v1.4 layout also runs the shareware and
++# GT data.
++CFLAGS += -Wno-unused -Wno-pointer-sign -Wno-parentheses -Wno-char-subscripts -Wno-format \
++	-Wno-misleading-indentation -Wno-pragma-pack \
++	-Wno-missing-braces -fno-strict-aliasing -fno-short-enums -std=gnu99 \
++	-DVERSIONALREADYCHOSEN -DCARMACIZED -Inds -I.
++$(addprefix $(BUILD)/,$(addsuffix .o,$(COLD_SOURCES))): CFLAGS += -Os
+diff --git a/id_ca.c b/id_ca.c
+index bcde0e2..b206eee 100644
+--- a/id_ca.c
++++ b/id_ca.c
+@@ -16,8 +16,7 @@ Id Software Caching Manager
+ #elif defined _arch_dreamcast
+     #include <unistd.h>
+ #else
+-    #include <sys/uio.h>
+-    #include <unistd.h>
++    #include <unistd.h>         // the DS has no sys/uio.h
+ #endif
+ 
+ #include "wl_def.h"
+diff --git a/id_vl.c b/id_vl.c
+index 9c3c9a3..ca55f61 100644
+--- a/id_vl.c
++++ b/id_vl.c
+@@ -28,9 +28,9 @@ int      screenBits = 8;
+ int      screenBits = 16;
+ #endif
+ #else
+-int16_t  screenWidth = 640;
+-int16_t  screenHeight = 400;
+-int      screenBits = -1;      // use "best" color depth according to libSDL
++int16_t  screenWidth = 320;    // the frame of the DS
++int16_t  screenHeight = 200;
++int      screenBits = 8;
+ #endif
+ 
+ SDL_Surface *screen = NULL;
+diff --git a/version.h b/version.h
+index 791e595..cac05b7 100644
+--- a/version.h
++++ b/version.h
+@@ -48,7 +48,7 @@
+ //#define VIEWMAP             // Enables the overhead map
+ //#define REVEALMAP           // Enables showing only the areas of the overhead map that have been seen
+ 
+-#define DEBUGKEYS             // Comment this out to compile without the Tab debug keys
++//#define DEBUGKEYS           // Comment this out to compile without the Tab debug keys
+ #define ARTSEXTERN
+ #define DEMOSEXTERN
+ #define PLAYDEMOLIKEORIGINAL  // When playing or recording demos, several bug fixes do not take

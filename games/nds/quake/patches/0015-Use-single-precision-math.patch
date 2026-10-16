@@ -1,0 +1,105 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Tue, 6 Oct 2026 07:09:57 +0200
+Subject: [PATCH] Use single precision math
+
+The ARM9 has no floating point unit, the float versions of the math
+functions are a lot cheaper in software than the double ones, which the
+small C library of the DS toolchain leaves out. They are used everywhere:
+VectorNormalize and Length for the physics, AngleVectors for every
+entity, the view bob and the monster movement. R_DrawParticles converts
+the double client time to a float once instead of for every particle.
+---
+ WinQuake/mathlib.c |  8 +++-----
+ WinQuake/mathlib.h | 12 ++++++++++++
+ WinQuake/r_part.c  |  6 ++++--
+ 3 files changed, 19 insertions(+), 7 deletions(-)
+
+diff --git a/WinQuake/mathlib.c b/WinQuake/mathlib.c
+index 9f5d644..aae774c 100644
+--- a/WinQuake/mathlib.c
++++ b/WinQuake/mathlib.c
+@@ -294,13 +294,13 @@ void AngleVectors (vec3_t angles, vec3_t forward, vec3_t right, vec3_t up)
+ 	float		angle;
+ 	float		sr, sp, sy, cr, cp, cy;
+ 	
+-	angle = angles[YAW] * (M_PI*2 / 360);
++	angle = angles[YAW] * (float)(M_PI*2 / 360);
+ 	sy = sin(angle);
+ 	cy = cos(angle);
+-	angle = angles[PITCH] * (M_PI*2 / 360);
++	angle = angles[PITCH] * (float)(M_PI*2 / 360);
+ 	sp = sin(angle);
+ 	cp = cos(angle);
+-	angle = angles[ROLL] * (M_PI*2 / 360);
++	angle = angles[ROLL] * (float)(M_PI*2 / 360);
+ 	sr = sin(angle);
+ 	cr = cos(angle);
+ 
+@@ -367,8 +367,6 @@ void CrossProduct (vec3_t v1, vec3_t v2, vec3_t cross)
+ 	cross[2] = v1[0]*v2[1] - v1[1]*v2[0];
+ }
+ 
+-double sqrt(double x);
+-
+ vec_t Length(vec3_t v)
+ {
+ 	int		i;
+diff --git a/WinQuake/mathlib.h b/WinQuake/mathlib.h
+index b5506e2..5e63000 100644
+--- a/WinQuake/mathlib.h
++++ b/WinQuake/mathlib.h
+@@ -31,6 +31,18 @@ typedef	int	fixed16_t;
+ #define M_PI		3.14159265358979323846	// matches value in gcc v2 math.h
+ #endif
+ 
++// without an FPU the float versions are a lot cheaper than the double ones
++#define	sqrt(x)		sqrtf(x)
++#define	sin(x)		sinf(x)
++#define	cos(x)		cosf(x)
++#define	tan(x)		tanf(x)
++#define	atan(x)		atanf(x)
++#define	atan2(y,x)	atan2f(y,x)
++#define	floor(x)	floorf(x)
++#define	ceil(x)		ceilf(x)
++#define	pow(x,y)	powf(x,y)
++#define	fabs(x)		fabsf(x)
++
+ struct mplane_s;
+ 
+ extern vec3_t vec3_origin;
+diff --git a/WinQuake/r_part.c b/WinQuake/r_part.c
+index 529f757..f949418 100644
+--- a/WinQuake/r_part.c
++++ b/WinQuake/r_part.c
+@@ -655,6 +655,7 @@ void R_DrawParticles (void)
+ 	float			time1;
+ 	float			dvel;
+ 	float			frametime;
++	float			time;
+ 	
+ #ifdef GLQUAKE
+ 	vec3_t			up, right;
+@@ -680,11 +681,12 @@ void R_DrawParticles (void)
+ 	time1 = frametime * 5;
+ 	grav = frametime * sv_gravity.value * 0.05;
+ 	dvel = 4*frametime;
++	time = cl.time;		// converted once instead of for every particle
+ 	
+ 	for ( ;; ) 
+ 	{
+ 		kill = active_particles;
+-		if (kill && kill->die < cl.time)
++		if (kill && kill->die < time)
+ 		{
+ 			active_particles = kill->next;
+ 			kill->next = free_particles;
+@@ -699,7 +701,7 @@ void R_DrawParticles (void)
+ 		for ( ;; )
+ 		{
+ 			kill = p->next;
+-			if (kill && kill->die < cl.time)
++			if (kill && kill->die < time)
+ 			{
+ 				p->next = kill->next;
+ 				kill->next = free_particles;

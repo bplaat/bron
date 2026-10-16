@@ -1,0 +1,175 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Sun, 4 Oct 2026 12:18:33 +0200
+Subject: [PATCH] Fill the DS top screen with the view
+
+The view always has the 256x192 size of the DS top screen, in the top
+left corner of the 320x200 screen, without status bar or border, so it
+is shown at 1:1. viewonscreen tells the platform that the screen shows
+the view, from the first frame of it until the screen fades out; menus,
+intermissions and pictures, made for 320x200, are shown scaled. Get
+Psyched is drawn in the view too, without the status bar under it. The
+"Let's see that again!" of the death cam is as wide as the screen.
+---
+ id_vl.c    |  5 +++++
+ id_vl.h    |  1 +
+ wl_act2.c  |  1 +
+ wl_def.h   |  5 +++++
+ wl_draw.c  |  1 +
+ wl_game.c  |  2 +-
+ wl_inter.c | 12 +++++++-----
+ wl_main.c  | 19 ++++---------------
+ 8 files changed, 25 insertions(+), 21 deletions(-)
+
+diff --git a/id_vl.c b/id_vl.c
+index e19cb31..9c3c9a3 100644
+--- a/id_vl.c
++++ b/id_vl.c
+@@ -46,6 +46,10 @@ SDL_Texture *texture = NULL;
+ int      scaleFactor;
+ 
+ boolean	 screenfaded;
++
++// The screen shows the view, in its top left corner, from the first frame of
++// it until the screen fades out
++boolean	 viewonscreen;
+ unsigned bordercolor;
+ 
+ uint32_t *ylookup;
+@@ -344,6 +348,7 @@ void VL_FadeOut (int start, int end, int red, int green, int blue, int steps)
+ 	VL_FillPalette (red,green,blue);
+ 
+ 	screenfaded = true;
++	viewonscreen = false;
+ }
+ 
+ 
+diff --git a/id_vl.h b/id_vl.h
+index 8fb4851..c33f099 100644
+--- a/id_vl.h
++++ b/id_vl.h
+@@ -24,6 +24,7 @@ extern  int      screenBits;
+ extern  int      scaleFactor;
+ 
+ extern	boolean  screenfaded;
++extern	boolean  viewonscreen;
+ extern	unsigned bordercolor;
+ 
+ extern  uint32_t *ylookup;
+diff --git a/wl_act2.c b/wl_act2.c
+index 0678042..7ba957d 100644
+--- a/wl_act2.c
++++ b/wl_act2.c
+@@ -3841,6 +3841,7 @@ void    A_StartDeathCam (objtype *ob)
+ #endif
+     }
+ 
++    viewonscreen = false;       // the text is as wide as the screen
+     VW_UpdateScreen ();
+ 
+     IN_UserInput(300);
+diff --git a/wl_def.h b/wl_def.h
+index fc0be48..02c3902 100644
+--- a/wl_def.h
++++ b/wl_def.h
+@@ -185,6 +185,11 @@ typedef uint8_t tiletype;
+ 
+ #define HEIGHTRATIO     0.50
+ 
++// The DS top screen shows the view at 1:1 in the top left corner of the
++// screen buffer, menus and pictures are shown scaled
++#define TOPSCREENWIDTH  256
++#define TOPSCREENHEIGHT 192
++
+ // The 320x200 screen was shown on 4:3 monitors with pixels 1.2 times taller
+ // than wide, on square pixels heights are 1.2 times the widths
+ #define PIXELASPECT(x)  ((x) * 6 / 5)
+diff --git a/wl_draw.c b/wl_draw.c
+index da92948..f0cbe74 100644
+--- a/wl_draw.c
++++ b/wl_draw.c
+@@ -1537,6 +1537,7 @@ void ThreeDRefresh (void)
+ // show screen and time last cycle
+ //
+ 
++    viewonscreen = true;
+     if (fizzlein)
+     {
+         FizzleFade(screenBuffer, 0, 0, screenWidth, screenHeight, 20, false);
+diff --git a/wl_game.c b/wl_game.c
+index 6cab64e..70b7697 100644
+--- a/wl_game.c
++++ b/wl_game.c
+@@ -899,7 +899,7 @@ void DrawPlayBorder (void)
+             statusborderw+px*8, px*STATUSLINES, bordercol);
+     }
+ 
+-    if(viewheight == screenHeight) return;
++    if(viewsize == 21) return;
+ 
+     VWB_BarScaledCoord (0,0,screenWidth,screenHeight-px*STATUSLINES,bordercol);
+ 
+diff --git a/wl_inter.c b/wl_inter.c
+index 6c6ee7d..b372b61 100644
+--- a/wl_inter.c
++++ b/wl_inter.c
+@@ -947,15 +947,17 @@ PreloadGraphics (void)
+     DrawLevel ();
+     ClearSplitVWB ();           // set up for double buffering in split screen
+ 
+-    VWB_BarScaledCoord (0, 0, screenWidth, screenHeight - scaleFactor * (STATUSLINES - 1), bordercol);
+-    VWB_DrawPicScaledCoord (((screenWidth-scaleFactor*224)/16) * 8,
+-        (screenHeight-scaleFactor*(STATUSLINES+48))/2, GETPSYCHEDPIC);
++    // In the view, shown at 1:1 like the view after it
++    VWB_BarScaledCoord (0, 0, viewwidth, viewheight, bordercol);
++    VWB_DrawPicScaledCoord (((viewwidth-scaleFactor*224)/16) * 8,
++        (viewheight-scaleFactor*48)/2, GETPSYCHEDPIC);
+ 
+-    WindowX = (screenWidth - scaleFactor*224)/2;
+-    WindowY = (screenHeight - scaleFactor*(STATUSLINES+48))/2;
++    WindowX = (viewwidth - scaleFactor*224)/2;
++    WindowY = (viewheight - scaleFactor*48)/2;
+     WindowW = scaleFactor * 28 * 8;
+     WindowH = scaleFactor * 48;
+ 
++    viewonscreen = true;
+     VW_UpdateScreen ();
+     VW_FadeIn ();
+ 
+diff --git a/wl_main.c b/wl_main.c
+index 9de9b73..9337c5d 100644
+--- a/wl_main.c
++++ b/wl_main.c
+@@ -1321,14 +1321,7 @@ boolean SetViewSize (unsigned width, unsigned height)
+     centerx = viewwidth/2-1;
+     centery = viewheight / 2;
+     shootdelta = viewwidth/10;
+-    if (viewheight == screenHeight)
+-        viewscreenx = viewscreeny = screenofs = 0;
+-    else
+-    {
+-        viewscreenx = (screenWidth-viewwidth) / 2;
+-        viewscreeny = (screenHeight-scaleFactor*STATUSLINES-viewheight)/2;
+-        screenofs = viewscreeny*screenWidth+viewscreenx;
+-    }
++    viewscreenx = viewscreeny = screenofs = 0;
+ 
+ //
+ // calculate trace angles and projection constants
+@@ -1372,13 +1365,9 @@ void ShowViewSize (int width)
+ 
+ void NewViewSize (int width)
+ {
+-    viewsize = width;
+-    if(viewsize == 21)
+-        SetViewSize(screenWidth, screenHeight);
+-    else if(viewsize == 20)
+-        SetViewSize(screenWidth, screenHeight - scaleFactor * STATUSLINES);
+-    else
+-        SetViewSize(width*16*screenWidth/320, (unsigned) (width*16*HEIGHTRATIO*screenHeight/200));
++    // The view always fills the top screen
++    viewsize = 21;
++    SetViewSize(TOPSCREENWIDTH, TOPSCREENHEIGHT);
+ }
+ 
+ 

@@ -1,0 +1,82 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Wed, 7 Oct 2026 12:00:00 +0200
+Subject: [PATCH] Read and write savegames without unaligned words
+
+The LZW codes of the compressed savegame data are bit fields at any
+byte, which the code read and wrote as 32-bit words at that byte. The
+ARM can't, so savegames came out garbled. They are read and written a
+byte at a time.
+---
+ Engine/src/filesystem.c | 28 ++++++++++++++++++++--------
+ 1 file changed, 20 insertions(+), 8 deletions(-)
+
+diff --git a/Engine/src/filesystem.c b/Engine/src/filesystem.c
+index f7166ee..6688fe9 100644
+--- a/Engine/src/filesystem.c
++++ b/Engine/src/filesystem.c
+@@ -467,9 +467,24 @@ static short *lzwbuf2, *lzwbuf3;
+ 
+ 
+ 
++/* The codes are bit fields at any byte, read and written a byte at a time
++   as the ARM can't access unaligned words */
++static uint32_t lzwget(const uint8_t *p)
++{
++	return p[0] | (p[1] << 8) | (p[2] << 16) | ((uint32_t)p[3] << 24);
++}
++
++static void lzwor(uint8_t *p, uint32_t v)
++{
++	p[0] |= v;
++	p[1] |= v >> 8;
++	p[2] |= v >> 16;
++	p[3] |= v >> 24;
++}
++
+ int32_t compress(uint8_t  *lzwinbuf, int32_t uncompleng, uint8_t  *lzwoutbuf)
+ {
+-	int32_t i, addr, newaddr, addrcnt, zx, *longptr;
++	int32_t i, addr, newaddr, addrcnt, zx;
+ 	int32_t bytecnt1, bitcnt, numbits, oneupnumbits;
+ 	short *shortptr;
+     
+@@ -501,8 +516,7 @@ int32_t compress(uint8_t  *lzwinbuf, int32_t uncompleng, uint8_t  *lzwoutbuf)
+ 		lzwbuf2[addrcnt] = -1;
+ 		lzwbuf3[addrcnt] = -1;
+         
+-		longptr = (int32_t *)&lzwoutbuf[bitcnt>>3];
+-		longptr[0] |= (addr<<(bitcnt&7));
++		lzwor(&lzwoutbuf[bitcnt>>3],addr<<(bitcnt&7));
+ 		bitcnt += numbits;
+ 		if ((addr&((oneupnumbits>>1)-1)) > ((addrcnt-1)&((oneupnumbits>>1)-1)))
+ 			bitcnt--;
+@@ -511,8 +525,7 @@ int32_t compress(uint8_t  *lzwinbuf, int32_t uncompleng, uint8_t  *lzwoutbuf)
+ 		if (addrcnt > oneupnumbits) { numbits++; oneupnumbits <<= 1; }
+ 	} while ((bytecnt1 < uncompleng) && (bitcnt < (uncompleng<<3)));
+     
+-	longptr = (int32_t *)&lzwoutbuf[bitcnt>>3];
+-	longptr[0] |= (addr<<(bitcnt&7));
++	lzwor(&lzwoutbuf[bitcnt>>3],addr<<(bitcnt&7));
+ 	bitcnt += numbits;
+ 	if ((addr&((oneupnumbits>>1)-1)) > ((addrcnt-1)&((oneupnumbits>>1)-1)))
+ 		bitcnt--;
+@@ -532,7 +545,7 @@ int32_t compress(uint8_t  *lzwinbuf, int32_t uncompleng, uint8_t  *lzwoutbuf)
+ int32_t uncompress(uint8_t  *lzwinbuf, int32_t compleng, uint8_t  *lzwoutbuf)
+ {
+ 	int32_t strtot, currstr, numbits, oneupnumbits;
+-	int32_t i, dat, leng, bitcnt, outbytecnt, *longptr;
++	int32_t i, dat, leng, bitcnt, outbytecnt;
+ 	short *shortptr;
+     
+ 	shortptr = (short *)lzwinbuf;
+@@ -547,8 +560,7 @@ int32_t uncompress(uint8_t  *lzwinbuf, int32_t compleng, uint8_t  *lzwoutbuf)
+ 	numbits = 8; oneupnumbits = (1<<8);
+ 	do
+ 	{
+-		longptr = (int32_t *)&lzwinbuf[bitcnt>>3];
+-		dat = ((longptr[0]>>(bitcnt&7)) & (oneupnumbits-1));
++		dat = ((lzwget(&lzwinbuf[bitcnt>>3])>>(bitcnt&7)) & (oneupnumbits-1));
+ 		bitcnt += numbits;
+ 		if ((dat&((oneupnumbits>>1)-1)) > ((currstr-1)&((oneupnumbits>>1)-1)))
+         { dat &= ((oneupnumbits>>1)-1); bitcnt--; }

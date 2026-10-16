@@ -1,0 +1,106 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Tue, 6 Oct 2026 07:09:57 +0200
+Subject: [PATCH] Run the local server at 20 Hz
+
+In single player the server ran every frame, its physics and QuakeC are
+half of what the DS spends on a frame. It now runs at 20 Hz and the
+client interpolates the entities in between, like in network games. A
+server frame runs at most 0.1 s of physics, like Host_FilterTime. It
+takes the buttons held in any of the moves since the last one, else a
+short press of fire or jump got lost.
+---
+ WinQuake/cl_main.c  |  3 ++-
+ WinQuake/host.c     | 17 ++++++++++++++++-
+ WinQuake/quakedef.h |  3 +++
+ WinQuake/sv_user.c  |  7 ++++++-
+ 4 files changed, 27 insertions(+), 3 deletions(-)
+
+diff --git a/WinQuake/cl_main.c b/WinQuake/cl_main.c
+index 1024160..47cd7c7 100644
+--- a/WinQuake/cl_main.c
++++ b/WinQuake/cl_main.c
+@@ -395,7 +395,8 @@ float	CL_LerpPoint (void)
+ 
+ 	f = cl.mtime[0] - cl.mtime[1];
+ 	
+-	if (!f || cl_nolerp.value || cls.timedemo || sv.active)
++	// the local server runs at a lower rate than the client
++	if (!f || cl_nolerp.value || cls.timedemo)
+ 	{
+ 		cl.time = cl.mtime[0];
+ 		return 1;
+diff --git a/WinQuake/host.c b/WinQuake/host.c
+index 6eeafa8..fbf055f 100644
+--- a/WinQuake/host.c
++++ b/WinQuake/host.c
+@@ -671,7 +671,22 @@ void _Host_Frame (float time)
+ 	Host_GetConsoleCommands ();
+ 	
+ 	if (sv.active)
+-		Host_ServerFrame ();
++	{
++		// the server runs at a lower rate, the client interpolates the
++		// entities in between
++		static double	server_time;
++		double			frametime = host_frametime;
++
++		server_time += host_frametime;
++		if (server_time >= 1.0 / SERVER_FPS)
++		{
++			// at most 0.1 s of physics at once, like Host_FilterTime
++			host_frametime = server_time > 0.1 ? 0.1 : server_time;
++			server_time = 0;
++			Host_ServerFrame ();
++			host_frametime = frametime;
++		}
++	}
+ 
+ //-------------------
+ //
+diff --git a/WinQuake/quakedef.h b/WinQuake/quakedef.h
+index 4ba1d85..7886ad8 100644
+--- a/WinQuake/quakedef.h
++++ b/WinQuake/quakedef.h
+@@ -78,6 +78,9 @@ void	VID_UnlockBuffer (void);
+ 
+ #define UNUSED(x)	(x = x)	// for pesky compiler / lint warnings
+ 
++// The server runs at most at this rate on the DS, the client interpolates
++#define	SERVER_FPS				20
++
+ // The DS has 4 MiB of RAM in total, Quake fits with less than it asks for
+ #define	MINIMUM_MEMORY			0x200000
+ #define	MINIMUM_MEMORY_LEVELPAK	(MINIMUM_MEMORY + 0x100000)
+diff --git a/WinQuake/sv_user.c b/WinQuake/sv_user.c
+index 1163949..68b0e18 100644
+--- a/WinQuake/sv_user.c
++++ b/WinQuake/sv_user.c
+@@ -430,6 +430,10 @@ void SV_ClientThink (void)
+ }
+ 
+ 
++// The buttons held in any move since the last server frame, the client
++// sends several moves for each one and a short press is in just one of them
++static int	sv_buttons;
++
+ /*
+ ===================
+ SV_ReadClientMove
+@@ -458,7 +462,7 @@ void SV_ReadClientMove (usercmd_t *move)
+ 	move->upmove = MSG_ReadShort ();
+ 	
+ // read buttons
+-	bits = MSG_ReadByte ();
++	bits = sv_buttons |= MSG_ReadByte ();
+ 	host_client->edict->v.button0 = bits & 1;
+ 	host_client->edict->v.button2 = (bits & 2)>>1;
+ 
+@@ -485,6 +489,7 @@ qboolean SV_ReadClientMessage (void)
+ 	int		cmd;
+ 	char		*s;
+ 	
++	sv_buttons = 0;
+ 	do
+ 	{
+ nextmsg:

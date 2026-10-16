@@ -1,0 +1,120 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Tue, 6 Oct 2026 04:26:37 +0200
+Subject: [PATCH] Keep the settings in default.cfg
+
+doomgeneric left reading and writing the config files out, so the
+settings were gone every time. They are read from default.cfg and
+doomgenericdoom.cfg in the config directory again and written whenever
+the menu closes, not only on quitting: a handheld is often just switched
+off. Without an SD card there is nothing to write them to, which isn't
+complained about. The file names get a separator after the config
+directory. Key codes without a scancode, which the DS buttons use for
+fire, use and strafing, are read back as written instead of unbinding
+those keys from the second start on.
+---
+ doomgeneric/m_config.c | 16 ++++++++--------
+ doomgeneric/m_menu.c   |  3 +++
+ 2 files changed, 11 insertions(+), 8 deletions(-)
+
+diff --git a/doomgeneric/m_config.c b/doomgeneric/m_config.c
+index fb7c59d..c016a6f 100644
+--- a/doomgeneric/m_config.c
++++ b/doomgeneric/m_config.c
+@@ -1608,7 +1608,6 @@ static const int scantokey[128] =
+ 
+ static void SaveDefaultCollection(default_collection_t *collection)
+ {
+-#if ORIGCODE
+     default_t *defaults;
+     int i, v;
+     FILE *f;
+@@ -1708,7 +1707,6 @@ static void SaveDefaultCollection(default_collection_t *collection)
+     }
+ 
+     fclose (f);
+-#endif
+ }
+ 
+ // Parses integer values in the configuration file
+@@ -1749,11 +1747,15 @@ static void SetVariable(default_t *def, char *value)
+ 
+             intparm = ParseIntParameter(value);
+             def->untranslated = intparm;
++
++            // Keys without a scancode, like the DS buttons' KEY_FIRE, are
++            // written as Doom key codes (128-255) and kept as they are
++
+             if (intparm >= 0 && intparm < 128)
+             {
+                 intparm = scantokey[intparm];
+             }
+-            else
++            else if (intparm < 128 || intparm > 255)
+             {
+                 intparm = 0;
+             }
+@@ -1770,7 +1772,6 @@ static void SetVariable(default_t *def, char *value)
+ 
+ static void LoadDefaultCollection(default_collection_t *collection)
+ {
+-#if ORIGCODE
+     FILE *f;
+     default_t *def;
+     char defname[80];
+@@ -1811,7 +1812,7 @@ static void LoadDefaultCollection(default_collection_t *collection)
+         // Strip off trailing non-printable characters (\r characters
+         // from DOS text files)
+ 
+-        while (strlen(strparm) > 0 && !isprint(strparm[strlen(strparm)-1]))
++        while (strlen(strparm) > 0 && !isprint((unsigned char) strparm[strlen(strparm)-1]))
+         {
+             strparm[strlen(strparm)-1] = '\0';
+         }
+@@ -1828,7 +1829,6 @@ static void LoadDefaultCollection(default_collection_t *collection)
+     }
+ 
+     fclose (f);
+-#endif
+ }
+ 
+ // Set the default filenames to use for configuration files.
+@@ -1902,7 +1902,7 @@ void M_LoadDefaults (void)
+     else
+     {
+         doom_defaults.filename
+-            = M_StringJoin(configdir, default_main_config, NULL);
++            = M_StringJoin(configdir, DIR_SEPARATOR_S, default_main_config, NULL);
+     }
+ 
+     printf("saving config in %s\n", doom_defaults.filename);
+@@ -1925,7 +1925,7 @@ void M_LoadDefaults (void)
+     else
+     {
+         extra_defaults.filename
+-            = M_StringJoin(configdir, default_extra_config, NULL);
++            = M_StringJoin(configdir, DIR_SEPARATOR_S, default_extra_config, NULL);
+     }
+ 
+     LoadDefaultCollection(&doom_defaults);
+diff --git a/doomgeneric/m_menu.c b/doomgeneric/m_menu.c
+index a5ad56e..de68d5a 100644
+--- a/doomgeneric/m_menu.c
++++ b/doomgeneric/m_menu.c
+@@ -57,6 +57,7 @@
+ // Data.
+ #include "sounds.h"
+ 
++#include "m_config.h"
+ #include "m_menu.h"
+ 
+ 
+@@ -2058,6 +2059,8 @@ void M_Drawer (void)
+ void M_ClearMenus (void)
+ {
+     menuactive = 0;
++    // the settings are kept right away, a handheld is often just switched off
++    M_SaveDefaults();
+     // if (!netgame && usergame && paused)
+     //       sendpause = true;
+ }

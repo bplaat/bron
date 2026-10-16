@@ -1,0 +1,169 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Tue, 6 Oct 2026 07:09:53 +0200
+Subject: [PATCH] Put the messages and center prints on the top screen
+
+The notify lines and the center prints are drawn on the top screen, over
+the 3D view, like on a monitor: while vid_textlayer is set Draw_Character
+puts the character in a text layer of the video driver, which is 32
+columns wide (TEXT_WIDTH). A notify line too long for it goes on at its
+last word on the next line. Nothing has to be cleared on the touch
+screen when a notify line goes away.
+---
+ WinQuake/console.c | 29 ++++++++++++++++++++++++-----
+ WinQuake/draw.c    |  5 +++++
+ WinQuake/screen.c  | 25 +++++++++++++++----------
+ WinQuake/vid.h     |  9 +++++++++
+ 4 files changed, 53 insertions(+), 15 deletions(-)
+
+diff --git a/WinQuake/console.c b/WinQuake/console.c
+index cad58f8..fef7c20 100644
+--- a/WinQuake/console.c
++++ b/WinQuake/console.c
+@@ -519,7 +519,7 @@ Draws the last few lines of output transparently over the game top
+ */
+ void Con_DrawNotify (void)
+ {
+-	int		x, v;
++	int		x, v, len, start, end;
+ 	char	*text;
+ 	int		i;
+ 	float	time;
+@@ -541,10 +541,29 @@ void Con_DrawNotify (void)
+ 		clearnotify = 0;
+ 		scr_copytop = 1;
+ 
+-		for (x = 0 ; x < con_linewidth ; x++)
+-			Draw_Character ( (x+1)<<3, v, text[x]);
+-
+-		v += 8;
++	// the lines are on the top screen, which is narrower than the console,
++	// a long one goes on at its last word
++		len = con_linewidth;
++		while (len > 0 && text[len-1] == ' ')
++			len--;
++		for (start = 0 ; start < len ; )
++		{
++			end = start + TEXT_WIDTH/8 - 2;
++			if (end >= len)
++				end = len;
++			else
++			{
++				for (x = end ; x > start && text[x] != ' ' ; x--)
++					;
++				if (x > start)
++					end = x;
++			}
++			for (x = start ; x < end ; x++)
++				Draw_Character ( (x-start+1)<<3, v, text[x]);
++			v += 8;
++			for (start = end ; start < len && text[start] == ' ' ; start++)
++				;
++		}
+ 	}
+ 
+ 
+diff --git a/WinQuake/draw.c b/WinQuake/draw.c
+index 00ee0b4..f98ee96 100644
+--- a/WinQuake/draw.c
++++ b/WinQuake/draw.c
+@@ -142,6 +142,11 @@ void Draw_Character (int x, int y, int num)
+ 
+ 	num &= 255;
+ 	
++	if (vid_textlayer)
++	{
++		VID_TextCharacter (x, y, num);
++		return;
++	}
+ 	if (y <= -8)
+ 		return;			// totally off screen
+ 
+diff --git a/WinQuake/screen.c b/WinQuake/screen.c
+index 99733e4..93544b4 100644
+--- a/WinQuake/screen.c
++++ b/WinQuake/screen.c
+@@ -139,18 +139,21 @@ void SCR_DrawCenterString (void)
+ 	scr_erase_center = 0;
+ 	start = scr_centerstring;
+ 
++// it is text on the top screen
+ 	if (scr_center_lines <= 4)
+-		y = vid.height*0.35;
++		y = TEXT_HEIGHT*0.35;
+ 	else
+-		y = 48;
++		y = (TEXT_HEIGHT - scr_center_lines*8)/2;
++	if (y < 0)
++		y = 0;
+ 
+ 	do	
+ 	{
+ 	// scan the width of the line
+-		for (l=0 ; l<40 ; l++)
++		for (l=0 ; l<TEXT_WIDTH/8 ; l++)
+ 			if (start[l] == '\n' || !start[l])
+ 				break;
+-		x = (vid.width - l*8)/2;
++		x = (TEXT_WIDTH - l*8)/2;
+ 		for (j=0 ; j<l ; j++, x+=8)
+ 		{
+ 			Draw_Character (x, y, start[j]);	
+@@ -182,7 +185,9 @@ void SCR_CheckDrawCenterString (void)
+ 	if (key_dest != key_game)
+ 		return;
+ 
++	vid_textlayer = true;
+ 	SCR_DrawCenterString ();
++	vid_textlayer = false;
+ }
+ 
+ //=============================================================================
+@@ -483,13 +488,8 @@ void SCR_SetUpToDrawConsole (void)
+ 		Draw_TileClear (0,(int)scr_con_current,vid.width, vid.height - (int)scr_con_current);
+ 		Sbar_Changed ();
+ 	}
+-	else if (clearnotify++ < vid.numpages)
+-	{
+-		scr_copytop = 1;
+-		Draw_TileClear (0,0,vid.width, con_notifylines);
+-	}
+ 	else
+-		con_notifylines = 0;
++		con_notifylines = 0;	// they are on the top screen
+ }
+ 	
+ /*
+@@ -508,7 +508,12 @@ void SCR_DrawConsole (void)
+ 	else
+ 	{
+ 		if (key_dest == key_game || key_dest == key_message)
++		{
++			// the messages are on the top screen
++			vid_textlayer = true;
+ 			Con_DrawNotify ();	// only draw notify in game
++			vid_textlayer = false;
++		}
+ 	}
+ }
+ 
+diff --git a/WinQuake/vid.h b/WinQuake/vid.h
+index 1708ba8..d66dfd9 100644
+--- a/WinQuake/vid.h
++++ b/WinQuake/vid.h
+@@ -70,6 +70,15 @@ void	VID_Init (unsigned char *palette);
+ // the palette data will go away after the call, so it must be copied off if
+ // the video driver will need it again
+ 
++// the text layer of the top screen, for messages and center prints
++#define	TEXT_WIDTH		256
++#define	TEXT_HEIGHT		192
++
++extern qboolean	vid_textlayer;
++void	VID_TextCharacter (int x, int y, int num);
++// while vid_textlayer is set, Draw_Character draws on the text layer, at
++// pixel coordinates of the top screen
++
+ void	VID_Shutdown (void);
+ // Called at shutdown
+ 
