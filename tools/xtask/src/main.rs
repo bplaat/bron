@@ -84,8 +84,7 @@ impl Xtask {
             "check-shared" => self.check_shared(),
             "check-rust" => self.check_rust(),
             "check-e2e" => self.check_e2e(),
-            "check-nds" => self.check_nds(),
-            "check-macos" => self.check_macos(),
+            "check-macos-examples" => self.check_macos_examples(),
             "check-others" => self.check_others(),
             "configure-vscode" => self.configure_vscode(),
             "coverage" => self.coverage(),
@@ -112,9 +111,8 @@ impl Xtask {
         println!("  check-shared     Run platform-independent checks");
         println!("  check-rust       Format, lint, and test Rust code");
         println!("  check-e2e        Run PlaatNotes browser tests");
-        println!("  check-nds        Build Nintendo DS toolchain and test ROM");
-        println!("  check-macos      Build macOS application examples");
-        println!("  check-others     Build assembly and DS examples and run Wii toolchain tests");
+        println!("  check-macos-examples      Build native macOS examples");
+        println!("  check-others     Build Linux-hosted examples and games; run console tests");
         println!("  configure-vscode Configure VS Code for the current platform");
         println!("  coverage         Generate Rust coverage");
         println!("  build-pages      Build GitHub Pages artifacts");

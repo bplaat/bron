@@ -57,7 +57,7 @@ threads and timers, and a texture converted by `gxtexconv`. The program writes i
 `/tmp/test.txt` on Dolphin's NAND after every group, the script prints them and fails when a check
 failed or the program didn't finish.
 
-From the repository root, `cargo xtask check-others` builds the Windows examples with NASM and runs this test. `cargo xtask check` includes both checks.
+From the repository root on Linux, `cargo xtask check-others` builds the assembly examples, Empires, and the Nintendo DS test ROM, then runs this test. On macOS, `cargo xtask check-macos-examples` builds the native macOS applications. `cargo xtask check` includes these platform checks.
 
 ## Patches
 

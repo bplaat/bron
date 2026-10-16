@@ -31,7 +31,7 @@ impl Xtask {
         self.check_rust_deps()?;
         self.check_e2e()?;
         if self.os == Os::Macos {
-            self.check_macos()?;
+            self.check_macos_examples()?;
         }
         self.check_others()
     }
@@ -121,6 +121,7 @@ impl Xtask {
             "tools/bob/examples",
             "examples/macos",
             "examples/wii",
+            "games/empires",
             "tools/nds-toolchain",
             "tools/wii-toolchain",
         ] {
@@ -367,25 +368,28 @@ impl Xtask {
         run(Command::new(npm_program(self.os)).args(["test", "--workspace", "plaatnotes"]))
     }
 
-    pub(crate) fn check_macos(&self) -> Result<()> {
+    pub(crate) fn check_macos_examples(&self) -> Result<()> {
         println!("Building macOS application examples...");
         run(Command::new("sh").args(["examples/macos/build.sh", "native"]))
     }
 
-    pub(crate) fn check_nds(&self) -> Result<()> {
-        println!("Building Nintendo DS toolchain and test ROM...");
-        run(Command::new("bash").arg("tools/nds-toolchain/build.sh"))?;
-        run(Command::new("make").args(["-C", "tools/nds-toolchain/test"]))
-    }
-
     pub(crate) fn check_others(&self) -> Result<()> {
+        if self.os != Os::Linux {
+            return Ok(());
+        }
+
         println!("Building Windows examples...");
         run(Command::new("sh").arg("examples/windows/build.sh"))?;
 
         println!("Building macOS assembly examples...");
         run(Command::new("sh").arg("examples/macos/build.sh"))?;
 
-        self.check_nds()?;
+        println!("Building Empires and the DRS viewer...");
+        run(Command::new("make").args(["-C", "games/empires"]))?;
+
+        println!("Building Nintendo DS toolchain and test ROM...");
+        run(Command::new("bash").arg("tools/nds-toolchain/build.sh"))?;
+        run(Command::new("make").args(["-C", "tools/nds-toolchain/test"]))?;
 
         println!("Running Wii toolchain tests...");
         run(Command::new("bash").args(["tools/wii-toolchain/build.sh", "test"]))

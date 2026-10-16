@@ -80,4 +80,4 @@ to write the commits back.
 - compiler-rt: the optimized float functions for ARMv5TE, divisions that return to Thumb on
   ARMv4T
 
-From the repository root, `cargo xtask check-nds` builds the toolchain and its test ROM without starting an emulator. `cargo xtask check-others` includes this build in Linux CI. Run `tools/nds-toolchain/build.sh test` to execute the tests in melonDS.
+From the repository root, `cargo xtask check-others` includes the toolchain and test ROM build on Linux without starting an emulator. To build only the DS test ROM, run `tools/nds-toolchain/build.sh` followed by `make -C tools/nds-toolchain/test`. Run `tools/nds-toolchain/build.sh test` to execute the tests in melonDS.
