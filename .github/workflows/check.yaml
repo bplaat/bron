@@ -132,17 +132,17 @@ jobs:
           reporter: java-junit
           fail-on-error: 'false'
 
-  # MARK: Check Wii
-  check-wii:
+  # MARK: Check others
+  check-others:
     runs-on: ubuntu-26.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
-      - name: Install Wii toolchain and headless Dolphin
+      - name: Install NASM, Wii toolchain and headless Dolphin
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang lld llvm make libfreeimage-dev dolphin-emu xvfb xauth libgl1-mesa-dri
-      - name: Run Wii toolchain tests
+          sudo apt-get install -y nasm clang lld llvm make libfreeimage-dev dolphin-emu xvfb xauth libgl1-mesa-dri
+      - name: Build Windows examples and run Wii toolchain tests
         env:
           LIBGL_ALWAYS_SOFTWARE: 'true'
-        run: xvfb-run --auto-servernum cargo xtask check-wii
+        run: xvfb-run --auto-servernum cargo xtask check-others

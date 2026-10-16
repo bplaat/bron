@@ -57,7 +57,7 @@ threads and timers, and a texture converted by `gxtexconv`. The program writes i
 `/tmp/test.txt` on Dolphin's NAND after every group, the script prints them and fails when a check
 failed or the program didn't finish.
 
-From the repository root, `cargo xtask check-wii` runs this test, and `cargo xtask check` includes it.
+From the repository root, `cargo xtask check-others` builds the Windows examples with NASM and runs this test. `cargo xtask check` includes both checks.
 
 ## Patches
 
