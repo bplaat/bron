@@ -1,0 +1,66 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Fri, 16 Oct 2026 20:53:28 +0200
+Subject: [PATCH] Check virtual FAT entries by their host path
+
+---
+ desmume/src/utils/vfat.cpp | 15 +++++++--------
+ 1 file changed, 7 insertions(+), 8 deletions(-)
+
+diff --git a/desmume/src/utils/vfat.cpp b/desmume/src/utils/vfat.cpp
+index 717ed6a..8b0534f 100644
+--- a/desmume/src/utils/vfat.cpp
++++ b/desmume/src/utils/vfat.cpp
+@@ -66,12 +66,12 @@ static void list_files(const char *filepath, ListCallback list_callback)
+ 			break;
+ 
+ 		const char* fname2 = retro_dirent_get_name(rdir);
++		std::string subdir = (std::string)filepath + path_default_slash() + fname2;
+ 		list_callback(rdir,EListCallbackArg_Item);
+ 		printf("cflash added %s\n", fname2);
+ 
+-		if (retro_dirent_is_dir(rdir, fname2) && (strcmp(fname2, ".")) && strcmp(fname2, ".."))
++		if (retro_dirent_is_dir(rdir, subdir.c_str()) && (strcmp(fname2, ".")) && strcmp(fname2, ".."))
+ 		{
+-			std::string subdir = (std::string)filepath + path_default_slash() + fname2;
+ 			list_files(subdir.c_str(), list_callback);
+ 			list_callback(rdir, EListCallbackArg_Pop);
+ 		}
+@@ -110,7 +110,8 @@ static void DirectoryListCallback(RDIR* rdir, EListCallbackArg arg)
+ 		return;
+ 	}
+ 
+-	if(retro_dirent_is_dir(rdir,currVirtPath.c_str()))
++	std::string hostPath = currPath + path_default_slash() + fname;
++	if(retro_dirent_is_dir(rdir,hostPath.c_str()))
+ 	{
+ 		if(!strcmp(fname,".")) return;
+ 		if(!strcmp(fname,"..")) return;
+@@ -132,16 +133,14 @@ static void DirectoryListCallback(RDIR* rdir, EListCallbackArg arg)
+ 			dataSectors++; //directories take one sector
+ 		}
+ 
+-		currPath = currPath + path_default_slash() + fname;
++		currPath = hostPath;
+ 		return;
+ 	}
+ 	else
+ 	{
+-		std::string path = currPath + path_default_slash() + fname;
+-
+ 		if(callbackType == eCallbackType_Build)
+ 		{
+-			FILE* inf = fopen(path.c_str(),"rb");
++			FILE* inf = fopen(hostPath.c_str(),"rb");
+ 			if(inf)
+ 			{
+ 				fseek(inf,0,SEEK_END);
+@@ -162,7 +161,7 @@ static void DirectoryListCallback(RDIR* rdir, EListCallbackArg arg)
+ 		else
+ 		{
+ 			//allocate sectors for file
+-			int32_t fileSize = path_get_size(path.c_str());
++			int32_t fileSize = path_get_size(hostPath.c_str());
+ 			if(fileSize == -1) { count_failed = true; dataSectors = 0; }
+ 			else dataSectors += (fileSize+511)/512 + 1;
+ 		}

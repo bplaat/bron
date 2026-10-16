@@ -1,0 +1,49 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Fri, 16 Oct 2026 12:00:00 +0200
+Subject: [PATCH] Make the bundled R4 driver return through BX on ARM7
+
+---
+diff --git a/desmume/src/utils/dlditool.cpp b/desmume/src/utils/dlditool.cpp
+--- a/desmume/src/utils/dlditool.cpp
++++ b/desmume/src/utils/dlditool.cpp
+@@ -634,7 +634,7 @@
+     0x00, 0x00, 0x00, 0x00, 
+ }; //unsigned char mpcf_dldi[1876]
+ 
+-data_t r4_dldi[2276] =
++data_t r4_dldi[2360] =
+ {
+ 	0xED, 0xA5, 0x8D, 0xBF, 0x20, 0x43, 0x68, 0x69, 0x73, 0x68, 0x6D, 0x00, 0x01, 0x0D, 0x0E, 0x00, 
+ 	0x52, 0x34, 0x28, 0x44, 0x53, 0x29, 0x20, 0x2D, 0x20, 0x52, 0x65, 0x76, 0x6F, 0x6C, 0x75, 0x74, 
+@@ -790,6 +790,30 @@
+ 	if (patchOffset < 0)
+ 		return false;
+ 
++	// The bundled R4 driver assumes ARMv5 POP-to-PC interworking. Calico runs DLDI
++	// on the ARM7 (ARMv4T), so return through BX instead. Keep the existing BSS.
++	static bool r4Patched = false;
++	if (device != 0 && !r4Patched) {
++		const unsigned returns[] = {0x542, 0x580, 0x5B8, 0x5F4, 0x62C, 0x644, 0x666, 0x75C, 0x7EC};
++		unsigned next = 0x900;
++		for (unsigned offset : returns) {
++			unsigned registers = r4_dldi[offset];
++			unsigned branch = 0xE000 | ((next - offset - 4) / 2);
++			r4_dldi[offset] = branch;
++			r4_dldi[offset + 1] = branch >> 8;
++			if (registers) {
++				r4_dldi[next++] = registers; // POP saved low registers
++				r4_dldi[next++] = 0xBC;
++			}
++			r4_dldi[next++] = 0x08; // POP {r3}
++			r4_dldi[next++] = 0xBC;
++			r4_dldi[next++] = 0x18; // BX r3
++			r4_dldi[next++] = 0x47;
++		}
++		writeAddr(r4_dldi, DO_data_end, readAddr(r4_dldi, DO_text_start) + next);
++		r4Patched = true;
++	}
++
+ 	data_t *pDH = device == 0?mpcf_dldi:r4_dldi;
+ 	data_t *pAH = (data_t*)data + patchOffset;
+ 

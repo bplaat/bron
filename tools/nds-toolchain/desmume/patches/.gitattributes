@@ -1,0 +1,2 @@
+# Patches of DeSmuME's CRLF sources must keep their line endings to apply
+*.patch -text

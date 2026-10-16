@@ -76,7 +76,10 @@ to write the commits back.
   like calico does with `ldm sp!, {..., pc}^`, ran the instruction before it again, the ARM9
   cycles are counted per instruction address for `profile` of the runner and the sound can be
   recorded for `wav`, the runner can put a Memory Expansion Pak in the GBA slot for `pak`, which
-  ignores byte writes like in melonDS
+  ignores byte writes like in melonDS, the runner can put an R4 card with the files of a directory
+  in the card slot for `--fat`, whose driver returns with `bx`, so calico can run it on the ARM7,
+  and whose directory is listed by host paths, so it also works on Linux, and the microphone is
+  never captured, it only gets emulated samples
 - compiler-rt: the optimized float functions for ARMv5TE, divisions that return to Thumb on
   ARMv4T
 
