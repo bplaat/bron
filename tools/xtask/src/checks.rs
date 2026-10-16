@@ -121,6 +121,7 @@ impl Xtask {
             "tools/bob/examples",
             "examples/macos",
             "examples/wii",
+            "tools/nds-toolchain",
             "tools/wii-toolchain",
         ] {
             collect_source_files(&self.root.join(directory), &mut files)?;
@@ -371,12 +372,20 @@ impl Xtask {
         run(Command::new("sh").args(["examples/macos/build.sh", "native"]))
     }
 
+    pub(crate) fn check_nds(&self) -> Result<()> {
+        println!("Building Nintendo DS toolchain and test ROM...");
+        run(Command::new("bash").arg("tools/nds-toolchain/build.sh"))?;
+        run(Command::new("make").args(["-C", "tools/nds-toolchain/test"]))
+    }
+
     pub(crate) fn check_others(&self) -> Result<()> {
         println!("Building Windows examples...");
         run(Command::new("sh").arg("examples/windows/build.sh"))?;
 
         println!("Building macOS assembly examples...");
         run(Command::new("sh").arg("examples/macos/build.sh"))?;
+
+        self.check_nds()?;
 
         println!("Running Wii toolchain tests...");
         run(Command::new("bash").args(["tools/wii-toolchain/build.sh", "test"]))
