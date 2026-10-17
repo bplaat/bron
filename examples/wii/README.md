@@ -6,19 +6,19 @@ Wii homebrew example programs written in both C and Rust.
 
 The examples build with a normal LLVM toolchain (clang, lld and llvm-ar). The [Wii toolchain](../../tools/wii-toolchain/)
 script clones upstream libogc, devkitPro's tools and LLVM's compiler-rt builtins, patches and builds
-them the first time you build an example. Install LLVM, FreeImage (for the texture converter) and the
+them the first time you build an example. Install LLVM and the
 [Dolphin](https://dolphin-emu.org/) emulator:
 
 ```sh
 # macOS
-brew install llvm lld freeimage
+brew install llvm lld
 brew install --cask dolphin
 
 # Debian / Ubuntu
-sudo apt install clang lld llvm make git libfreeimage-dev libgl-dev dolphin-emu
+sudo apt install clang lld llvm make git dolphin-emu
 ```
 
-The Rust examples also need [rustup](https://rustup.rs/), it installs the nightly toolchain by itself.
+The toolchain builds its texture converter with Cargo, so all examples need [rustup](https://rustup.rs/). The Rust examples install the nightly toolchain by themselves.
 
 From the Bron repository root, build and run a C example with make, the program ends up in `target/<name>.dol`:
 
@@ -34,7 +34,7 @@ cd examples/wii/triangles/rust
 cargo run --release
 ```
 
-The Rust examples are standalone nightly projects, separate from Bron's main Cargo workspace.
+The Rust examples are standalone nightly projects, separate from main Cargo workspace.
 Run Cargo from the example directory so it loads the Wii target and runner configuration.
 
 ## Triangles

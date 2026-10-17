@@ -1,5 +1,12 @@
 [workspace]
-members = ["apps/*/*", "games/*", "lib/*/*", "lib/*/*/examples/*", "tools/*"]
+members = [
+    "apps/*/*",
+    "games/*",
+    "lib/*/*",
+    "lib/*/*/examples/*",
+    "tools/*",
+    "tools/wii-toolchain/gxtexconv",
+]
 exclude = [
     "examples/macos",
     "examples/wii",

@@ -18,7 +18,13 @@ pub fn build(toolchain: impl AsRef<Path>) -> PathBuf {
         .expect("failed to run build.sh");
     assert!(status.success(), "failed to build the toolchain");
     for path in [
-        "build.rs", "build.sh", "libc", "libogc", "wii.ld", "wii.json",
+        "build.rs",
+        "build.sh",
+        "gxtexconv",
+        "libc",
+        "libogc",
+        "wii.ld",
+        "wii.json",
     ] {
         println!("cargo:rerun-if-changed={}", toolchain.join(path).display());
     }

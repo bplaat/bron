@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Builds the Wii toolchain in the repository target/wii-toolchain/: fetches libogc, gamecube-tools and LLVM's compiler-rt,
 # applies libogc/patches/ and builds libogc.a, libc.a (our tiny libc), libcompiler-rt.a,
-# elf2dol and gxtexconv.
+# elf2dol and our gxtexconv/.
 # The example Makefiles and Rust build.rs files run this before they build.
 #
 # Usage: ./build.sh [command]...
@@ -23,7 +23,8 @@ llvm_version='llvmorg-23.1.3'
 llvm_commit='0d261d1ca552c95a8f007e061c787ac7132fbcbc'
 
 TOOLCHAIN_DIR="$PWD"
-BUILD_DIR="$(cd ../.. && pwd)/target/wii-toolchain"
+ROOT_DIR="$(cd ../.. && pwd)"
+BUILD_DIR="$ROOT_DIR/target/wii-toolchain"
 LIBOGC_DIR="$BUILD_DIR/libogc"
 TOOLS_DIR="$BUILD_DIR/gamecube-tools"
 COMPILER_RT_DIR="$BUILD_DIR/compiler-rt"
@@ -205,21 +206,20 @@ build_libraries() {
     fi
 }
 
-# elf2dol and gxtexconv from gamecube-tools run on the host, gxtexconv needs FreeImage
+# elf2dol from gamecube-tools and our gxtexconv/ run on the host
 build_tools() {
     if outdated "$BUILD_DIR/elf2dol" "$TOOLS_DIR/elftool"; then
         msg "Building elf2dol"
         cc -O2 "$TOOLS_DIR/elftool/elf2dol.c" -o "$BUILD_DIR/elf2dol"
     fi
-    if outdated "$BUILD_DIR/gxtexconv" "$TOOLS_DIR/gxtool"; then
+    if outdated "$BUILD_DIR/gxtexconv" "$TOOLCHAIN_DIR/gxtexconv" "$ROOT_DIR/lib/graphics/image"; then
         msg "Building gxtexconv"
-        local flags=()
-        if command -v brew > /dev/null; then
-            flags=(-I"$(brew --prefix)/include" -L"$(brew --prefix)/lib")
-        fi
-        (cd "$TOOLS_DIR" && c++ -O2 -w -DPACKAGE_VERSION="\"${tools_version#v}\"" ${flags[@]+"${flags[@]}"} \
-            -Idxtn/source -Isquish/source gxtool/*.cpp squish/source/*.cpp -x c dxtn/source/*.c \
-            -lfreeimage -o "$BUILD_DIR/gxtexconv") || die "Failed to build gxtexconv, is FreeImage installed?"
+        # The Rust examples run this from their build.rs, so leave out their toolchain and target
+        env -u RUSTUP_TOOLCHAIN -u RUSTC -u RUSTC_WRAPPER -u RUSTC_WORKSPACE_WRAPPER \
+            -u CARGO_ENCODED_RUSTFLAGS -u CARGO_BUILD_TARGET \
+            cargo build -q --release -p gxtexconv --manifest-path "$ROOT_DIR/Cargo.toml" \
+            --target-dir "$ROOT_DIR/target" || die "Failed to build gxtexconv"
+        cp "$ROOT_DIR/target/release/gxtexconv" "$BUILD_DIR/gxtexconv"
     fi
 }
 

@@ -5,6 +5,9 @@ name = "blocks"
 version = "0.1.0"
 edition = "2024"
 
+[build-dependencies]
+gxtexconv = { path = "../../../../tools/wii-toolchain/gxtexconv" }
+
 # Unoptimized code is too slow for the Wii
 [profile.dev]
 opt-level = "s"
