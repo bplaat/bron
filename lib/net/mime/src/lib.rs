@@ -7,8 +7,9 @@
 //! A minimal replacement for the [mime](https://crates.io/crates/mime) crate
 
 #![allow(missing_docs)]
+#![cfg_attr(not(test), no_std)]
 
-use std::fmt::{self, Display, Formatter};
+use core::fmt::{self, Display, Formatter};
 
 // MARK: Mime
 /// A MIME type

@@ -6,6 +6,8 @@
 
 //! A minimal replacement for the [digest](https://crates.io/crates/digest) crate
 
+#![cfg_attr(not(test), no_std)]
+
 // MARK: Digest
 /// A trait for cryptographic hash functions.
 pub trait Digest: Default {

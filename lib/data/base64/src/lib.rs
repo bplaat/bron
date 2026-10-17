@@ -6,6 +6,13 @@
 
 //! A minimal replacement for the [base64](https://crates.io/crates/base64) crate
 
+#![cfg_attr(not(test), no_std)]
+
+extern crate alloc;
+
+use alloc::string::String;
+use alloc::vec::Vec;
+
 // MARK: Engine
 /// Trait for base64 encoding and decoding engines.
 pub trait Engine {
@@ -19,13 +26,13 @@ pub trait Engine {
 #[derive(Debug)]
 pub struct DecodeError;
 
-impl std::fmt::Display for DecodeError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Display for DecodeError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "invalid base64")
     }
 }
 
-impl std::error::Error for DecodeError {}
+impl core::error::Error for DecodeError {}
 
 // MARK: GeneralPurpose
 /// A general-purpose base64 engine with configurable alphabet and padding.

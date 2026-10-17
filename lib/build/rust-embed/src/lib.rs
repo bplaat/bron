@@ -6,7 +6,11 @@
 
 //! A minimal replacement for the [rust-embed](https://crates.io/crates/rust-embed) crate
 
-use std::borrow::Cow;
+#![cfg_attr(not(test), no_std)]
+
+extern crate alloc;
+
+use alloc::borrow::Cow;
 
 pub use rust_embed_impl::Embed;
 

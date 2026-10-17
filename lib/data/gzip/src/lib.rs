@@ -6,6 +6,12 @@
 
 //! Decode a single gzip member into memory.
 
+#![cfg_attr(not(test), no_std)]
+
+extern crate alloc;
+
+use alloc::vec::Vec;
+
 use crc::{CRC_32_ISO_HDLC, Crc};
 
 const MAX_OUTPUT_SIZE: usize = 1024 * 1024 * 1024;
