@@ -5,10 +5,20 @@
  */
 
 //! A minimal replacement for the [uuid](https://crates.io/crates/uuid) crate
+//!
+//! The base API supports `no_std`; `serde` requires `alloc`, and `v4`/`v7` require `std`.
 
-use std::error::Error;
-use std::fmt::{self, Debug, Display, Formatter, Write};
-use std::str::FromStr;
+#![cfg_attr(not(any(test, feature = "std")), no_std)]
+
+#[cfg(feature = "serde")]
+extern crate alloc;
+
+#[cfg(feature = "serde")]
+use alloc::string::{String, ToString};
+
+use core::error::Error;
+use core::fmt::{self, Debug, Display, Formatter, Write};
+use core::str::FromStr;
 
 // MARK: Uuid
 /// UUID
