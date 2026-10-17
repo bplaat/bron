@@ -7,7 +7,6 @@
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
-
 use core::error::Error;
 use core::fmt::{self, Display, Formatter};
 

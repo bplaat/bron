@@ -15,7 +15,6 @@ extern crate alloc;
 
 #[cfg(feature = "serde")]
 use alloc::string::{String, ToString};
-
 use core::error::Error;
 use core::fmt::{self, Debug, Display, Formatter, Write};
 use core::str::FromStr;
