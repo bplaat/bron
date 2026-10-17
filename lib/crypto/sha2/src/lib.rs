@@ -612,7 +612,11 @@ fn has_sha_acceleration() -> bool {
 ))]
 const fn has_sha_acceleration() -> bool {
     cfg_select! {
-        target_arch = "x86_64" => cfg!(all(target_feature = "sha", target_feature = "ssse3", target_feature = "sse4.1")),
+        target_arch = "x86_64" => cfg!(all(
+            target_feature = "sha",
+            target_feature = "ssse3",
+            target_feature = "sse4.1"
+        )),
         target_arch = "aarch64" => cfg!(target_feature = "sha2"),
     }
 }

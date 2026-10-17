@@ -15,7 +15,6 @@
 extern crate alloc;
 
 use alloc::vec::Vec;
-
 use core::fmt::{self, Display, Formatter};
 use core::str::FromStr;
 

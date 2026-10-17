@@ -6,7 +6,6 @@
 
 #[cfg(feature = "serde")]
 use alloc::string::{String, ToString};
-
 use core::fmt::{self, Debug, Display, Formatter};
 use core::ops::{Add, Sub};
 use core::str::FromStr;
