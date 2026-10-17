@@ -20,4 +20,5 @@ syn = "3.0"
 interpolate-folder-path = []
 
 [dev-dependencies]
+rust-embed = "8.12"
 trybuild = "1.0"
