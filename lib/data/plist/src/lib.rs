@@ -11,6 +11,8 @@ use std::collections::BTreeMap;
 use std::io::Write;
 use std::path::Path;
 
+use base64::prelude::*;
+
 // MARK: Types
 /// A plist dictionary (ordered by key).
 pub type Dictionary = BTreeMap<String, Value>;
@@ -460,7 +462,10 @@ fn parse_value(tokens: &[Token], pos: &mut usize) -> Result<Value, Error> {
                         consume_close(tokens, pos, "data");
                         let clean: String =
                             text.chars().filter(|c| !c.is_ascii_whitespace()).collect();
-                        Ok(Value::Data(base64_decode(clean.as_bytes())))
+                        BASE64_STANDARD
+                            .decode(clean)
+                            .map(Value::Data)
+                            .map_err(|e| Error(e.to_string()))
                     }
                     other => Err(Error(format!("Unknown plist element: {other}"))),
                 };
@@ -545,40 +550,6 @@ fn xml_unescape(s: &str) -> String {
         .replace("&gt;", ">")
         .replace("&quot;", "\"")
         .replace("&apos;", "'")
-}
-
-fn base64_decode(input: &[u8]) -> Vec<u8> {
-    const TABLE: [u8; 256] = {
-        let mut t = [0xFFu8; 256];
-        let chars = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-        let mut i = 0usize;
-        while i < 64 {
-            t[chars[i] as usize] = i as u8;
-            i += 1;
-        }
-        t
-    };
-
-    let mut out = Vec::new();
-    let mut buf = 0u32;
-    let mut bits = 0u32;
-    for &b in input {
-        if b == b'=' {
-            break;
-        }
-        let val = TABLE[b as usize];
-        if val == 0xFF {
-            continue;
-        }
-        buf = (buf << 6) | val as u32;
-        bits += 6;
-        if bits >= 8 {
-            bits -= 8;
-            out.push((buf >> bits) as u8);
-            buf &= (1 << bits) - 1;
-        }
-    }
-    out
 }
 
 // MARK: Tests
@@ -752,6 +723,20 @@ mod tests {
             panic!("expected data");
         };
         assert_eq!(d, b"hello");
+    }
+
+    #[test]
+    fn test_xml_data_whitespace() {
+        let xml = "<plist><data>\n\taGVs\n\tbG8=\n</data></plist>";
+        let Value::Data(d) = parse_value(&tokenize(xml), &mut 0).expect("parse") else {
+            panic!("expected data");
+        };
+        assert_eq!(d, b"hello");
+    }
+
+    #[test]
+    fn test_xml_data_invalid() {
+        assert!(parse_value(&tokenize("<plist><data>aGV!sbG8=</data></plist>"), &mut 0).is_err());
     }
 
     #[test]
