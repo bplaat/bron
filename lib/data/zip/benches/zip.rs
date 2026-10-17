@@ -9,20 +9,11 @@
 use std::hint::black_box;
 use std::io::Cursor;
 
+use crc::{CRC_32_ISO_HDLC, Crc};
 use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use zip::ZipArchive;
 
-fn crc32(data: &[u8]) -> u32 {
-    let mut crc = u32::MAX;
-    for &byte in data {
-        crc ^= u32::from(byte);
-        for _ in 0..8 {
-            let mask = (crc & 1).wrapping_neg();
-            crc = (crc >> 1) ^ (0xedb8_8320 & mask);
-        }
-    }
-    !crc
-}
+static CRC32: Crc<u32> = Crc::<u32>::new(&CRC_32_ISO_HDLC);
 
 fn archive(data: &[u8], compressed: bool) -> Vec<u8> {
     let name = b"payload.bin";
@@ -32,7 +23,7 @@ fn archive(data: &[u8], compressed: bool) -> Vec<u8> {
         data.to_vec()
     };
     let method = if compressed { 8u16 } else { 0 };
-    let checksum = crc32(data);
+    let checksum = CRC32.checksum(data);
     let mut bytes = Vec::new();
     bytes.extend_from_slice(b"PK\x03\x04");
     bytes.extend_from_slice(&20u16.to_le_bytes());

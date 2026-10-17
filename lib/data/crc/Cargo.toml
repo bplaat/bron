@@ -1,0 +1,17 @@
+[package]
+name = "crc"
+version = "3.4.0+patch"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dev-dependencies]
+criterion = "0.7"
+
+[[bench]]
+name = "crc"
+harness = false
+
+[lints]
+workspace = true
