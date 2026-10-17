@@ -4,6 +4,10 @@
  * SPDX-License-Identifier: MIT
  */
 
+#![no_std]
+
+extern crate std;
+
 use rust_embed::{Embed, RustEmbed};
 
 #[derive(Embed)]

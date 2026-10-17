@@ -119,7 +119,7 @@ pub fn validate_derive(input: TokenStream) -> TokenStream {
             let (file_path, const_ident) = to_const_name(path);
             quote! {
                 #file_path => Some(rust_embed::EmbeddedFile {
-                    data: std::borrow::Cow::Borrowed(#const_ident),
+                    data: rust_embed::Cow::Borrowed(#const_ident),
                 }),
             }
         })
@@ -142,7 +142,7 @@ pub fn validate_derive(input: TokenStream) -> TokenStream {
                 <Self as rust_embed::RustEmbed>::get(file_path)
             }
 
-            fn iter() -> impl Iterator<Item = std::borrow::Cow<'static, str>> + 'static {
+            fn iter() -> impl Iterator<Item = rust_embed::Cow<'static, str>> + 'static {
                 <Self as rust_embed::RustEmbed>::iter()
             }
         }
@@ -155,8 +155,8 @@ pub fn validate_derive(input: TokenStream) -> TokenStream {
                 }
             }
 
-            fn iter() -> impl Iterator<Item = std::borrow::Cow<'static, str>> + 'static {
-                [#(std::borrow::Cow::Borrowed(#file_paths),)*].into_iter()
+            fn iter() -> impl Iterator<Item = rust_embed::Cow<'static, str>> + 'static {
+                [#(rust_embed::Cow::Borrowed(#file_paths),)*].into_iter()
             }
         }
     })

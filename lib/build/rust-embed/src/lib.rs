@@ -10,7 +10,8 @@
 
 extern crate alloc;
 
-use alloc::borrow::Cow;
+#[doc(hidden)]
+pub use alloc::borrow::Cow;
 
 pub use rust_embed_impl::Embed;
 
