@@ -4,8 +4,7 @@
  * SPDX-License-Identifier: MIT
  */
 
-//! A minimal replacement for devkitPro's gxtexconv, converts the images of a `.scf` script to
-//! GX textures in the RGBA8 or CMPR format and writes them to a `.tpl` texture file.
+#![doc = include_str!("../README.md")]
 
 use std::fmt::{self, Display, Formatter};
 use std::fs;

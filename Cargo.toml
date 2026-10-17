@@ -5,7 +5,6 @@ members = [
     "lib/*/*",
     "lib/*/*/examples/*",
     "tools/*",
-    "tools/wii-toolchain/gxtexconv",
 ]
 exclude = [
     "examples/macos",

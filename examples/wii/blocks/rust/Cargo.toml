@@ -6,7 +6,7 @@ version = "0.1.0"
 edition = "2024"
 
 [build-dependencies]
-gxtexconv = { path = "../../../../tools/wii-toolchain/gxtexconv" }
+gxtexconv = { path = "../../../../lib/graphics/gxtexconv" }
 
 # Unoptimized code is too slow for the Wii
 [profile.dev]

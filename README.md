@@ -119,6 +119,7 @@ Most of these libraries are intended primarily for personal use, but can still b
 **Graphics**
 
 - [bcanvas](lib/graphics/bcanvas) Native 2D canvas content, without a browser dependency
+- [gxtexconv](lib/graphics/gxtexconv) A GameCube / Wii TPL texture converter library and CLI, replacing devkitPro's gxtexconv
 - [image](lib/graphics/image) A minimal JPEG, PNG/APNG, GIF, BMP, and QOI image decoder crate
 - [vector](lib/graphics/vector) SVG (subset) and TinyVG decoders with a backend-neutral display list
 - [wgpu](lib/graphics/wgpu) A native GPU rendering library for bwindow

@@ -20,7 +20,7 @@ pub fn build(toolchain: impl AsRef<Path>) -> PathBuf {
     for path in [
         "build.rs",
         "build.sh",
-        "gxtexconv",
+        "../../lib/graphics/gxtexconv",
         "libc",
         "libogc",
         "wii.ld",

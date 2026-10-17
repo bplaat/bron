@@ -10,7 +10,7 @@ you:
 - Builds our tiny C library in `libc/` to `../../target/wii-toolchain/libc.a`
 - Clones devkitPro's [gamecube-tools](https://github.com/devkitPro/gamecube-tools) v1.0.7 and
   builds `elf2dol` (`.elf` to `.dol`)
-- Builds `gxtexconv/` with Cargo to `../../target/wii-toolchain/gxtexconv`
+- Builds [gxtexconv](../../lib/graphics/gxtexconv) with Cargo to `../../target/wii-toolchain/gxtexconv`
 - Checks out only the builtins of LLVM's [compiler-rt](https://github.com/llvm/llvm-project/tree/main/compiler-rt/lib/builtins)
   llvmorg-23.1.3 and builds the 64-bit integer math and conversions the PowerPC 750 can't do in
   instructions to `../../target/wii-toolchain/libcompiler-rt.a`, the C examples link it (Rust has its own)
@@ -36,8 +36,7 @@ C projects include `wii.mk` from their Makefile. Rust projects select `wii.json`
 `.cargo/config.toml`, then call the shared `build.rs` helper to build the libraries and configure
 the linker with an absolute path to `wii.ld`. Each example keeps its own build output in `target/`.
 
-The toolchain and examples build separately from main Cargo workspace, only `gxtexconv/`
-is a workspace member so it gets the shared lints and tests. The existing
+The toolchain and examples build separately from main Cargo workspace. The existing
 `games/plaatcraft/wii` port still uses its original devkitPPC build.
 
 ## Files
@@ -46,9 +45,6 @@ is a workspace member so it gets the shared lints and tests. The existing
   fills use `dcbz` on cached memory), a first-fit `malloc` over the MEM1 and MEM2 arenas, float
   math accurate to about 1e-6, a `printf` family without floats and the startup code that calls
   `main`
-- `gxtexconv/` is a minimal Rust replacement for devkitPro's `gxtexconv`, also usable as a library
-  from `build.rs`. It converts any image our [image](../../lib/graphics/image) crate reads to RGBA8
-  (`colfmt="6"`) or CMPR (`colfmt="14"`) textures, with a better CMPR compressor than the original
 - `wii.mk` has the make rules for the C examples, `wii.ld` is the linker script
 - `wii.json` is the Rust target; `build.rs` builds and links `../../target/wii-toolchain/libogc.a` and `../../target/wii-toolchain/libc.a`
 - `run.sh` converts a program to a `.dol` and starts it in Dolphin, extra arguments go to Dolphin
