@@ -119,7 +119,7 @@ pub fn validate_derive(input: TokenStream) -> TokenStream {
             let (file_path, const_ident) = to_const_name(path);
             quote! {
                 #file_path => Some(rust_embed::EmbeddedFile {
-                    data: rust_embed::Cow::Borrowed(#const_ident),
+                    data: alloc::borrow::Cow::Borrowed(#const_ident),
                 }),
             }
         })
@@ -135,29 +135,33 @@ pub fn validate_derive(input: TokenStream) -> TokenStream {
         .collect();
 
     TokenStream::from(quote! {
-        #(#embed_files)*
+        const _: () = {
+            extern crate alloc;
 
-        impl #name {
-            fn get(file_path: &str) -> Option<rust_embed::EmbeddedFile> {
-                <Self as rust_embed::RustEmbed>::get(file_path)
-            }
+            #(#embed_files)*
 
-            fn iter() -> impl Iterator<Item = rust_embed::Cow<'static, str>> + 'static {
-                <Self as rust_embed::RustEmbed>::iter()
-            }
-        }
+            impl #name {
+                fn get(file_path: &str) -> Option<rust_embed::EmbeddedFile> {
+                    <Self as rust_embed::RustEmbed>::get(file_path)
+                }
 
-        impl rust_embed::RustEmbed for #name {
-            fn get(file_path: &str) -> Option<rust_embed::EmbeddedFile> {
-                match file_path {
-                    #(#embed_mapping)*
-                    _ => None,
+                fn iter() -> impl Iterator<Item = alloc::borrow::Cow<'static, str>> + 'static {
+                    <Self as rust_embed::RustEmbed>::iter()
                 }
             }
 
-            fn iter() -> impl Iterator<Item = rust_embed::Cow<'static, str>> + 'static {
-                [#(rust_embed::Cow::Borrowed(#file_paths),)*].into_iter()
+            impl rust_embed::RustEmbed for #name {
+                fn get(file_path: &str) -> Option<rust_embed::EmbeddedFile> {
+                    match file_path {
+                        #(#embed_mapping)*
+                        _ => None,
+                    }
+                }
+
+                fn iter() -> impl Iterator<Item = alloc::borrow::Cow<'static, str>> + 'static {
+                    [#(alloc::borrow::Cow::Borrowed(#file_paths),)*].into_iter()
+                }
             }
-        }
+        };
     })
 }
