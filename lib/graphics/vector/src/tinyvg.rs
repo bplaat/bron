@@ -9,7 +9,7 @@
 use std::mem::size_of;
 use std::{error, fmt};
 
-use crate::ColorSpace;
+use crate::{Color, ColorSpace, Point, Size};
 
 const MAX_ELEMENTS: usize = 1_000_000;
 const MAX_BYTES: usize = 256 * 1024 * 1024;
@@ -21,26 +21,6 @@ pub(crate) struct Document {
     pub size: Size,
     /// Absolute drawing commands in file order.
     pub commands: Vec<Command>,
-}
-
-/// A two-dimensional size.
-#[derive(Clone, Copy, Debug, PartialEq)]
-#[repr(C)]
-pub(crate) struct Size {
-    /// The horizontal extent.
-    pub width: f64,
-    /// The vertical extent.
-    pub height: f64,
-}
-
-/// A point in TinyVG's absolute, top-left-origin coordinate system.
-#[derive(Clone, Copy, Debug, PartialEq)]
-#[repr(C)]
-pub(crate) struct Point {
-    /// The horizontal coordinate.
-    pub x: f64,
-    /// The vertical coordinate.
-    pub y: f64,
 }
 
 /// A normalized drawing command.
@@ -138,21 +118,6 @@ pub(crate) enum PathOperation {
     },
     /// Close the current subpath.
     Close,
-}
-
-/// A straight-alpha RGBA color.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct Color {
-    /// Red component.
-    pub red: f64,
-    /// Green component.
-    pub green: f64,
-    /// Blue component.
-    pub blue: f64,
-    /// Alpha component.
-    pub alpha: f64,
-    /// The interpretation of the RGB components.
-    pub color_space: ColorSpace,
 }
 
 /// A shape paint style with resolved colors.
