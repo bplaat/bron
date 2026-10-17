@@ -5,6 +5,11 @@
  */
 
 //! A minimal replacement for the [sha1](https://crates.io/crates/sha1) crate
+//!
+//! Disable default features for `no_std` support. CPU acceleration then uses compile-time
+//! target features instead of runtime detection.
+
+#![cfg_attr(not(any(test, feature = "std")), no_std)]
 
 /// SHA-1 hasher
 pub struct Sha1 {
@@ -47,7 +52,7 @@ impl Sha1 {
             data = &data[to_copy..];
             if buffer_len + to_copy == 64 {
                 let block = self.buffer;
-                self.process_blocks(std::slice::from_ref(&block));
+                self.process_blocks(core::slice::from_ref(&block));
             }
         }
         let (blocks, remaining) = data.as_chunks::<64>();
@@ -81,12 +86,12 @@ impl Sha1 {
             block[..used].copy_from_slice(&self.buffer[..used]);
             block[used] = 0x80;
             if used >= 56 {
-                self.process_blocks(std::slice::from_ref(&block));
+                self.process_blocks(core::slice::from_ref(&block));
                 block.fill(0);
             }
         }
         block[56..].copy_from_slice(&length_bits.to_be_bytes());
-        self.process_blocks(std::slice::from_ref(&block));
+        self.process_blocks(core::slice::from_ref(&block));
         let mut result = [0u8; 20];
         for (i, chunk) in result.chunks_mut(4).enumerate() {
             chunk.copy_from_slice(&self.state[i].to_be_bytes());
@@ -114,21 +119,18 @@ impl Sha1 {
         }
         cfg_select! {
             target_arch = "x86_64" => {
-                if is_x86_feature_detected!("sha")
-                    && is_x86_feature_detected!("ssse3")
-                    && is_x86_feature_detected!("sse4.1")
-                {
+                if has_sha_acceleration() {
                     for block in blocks {
-                        // SAFETY: Runtime detection confirmed every required CPU feature.
+                        // SAFETY: CPU feature detection confirmed every required CPU feature.
                         unsafe { self.process_block_x86_sha(block) }
                     }
                     return;
                 }
             }
             target_arch = "aarch64" => {
-                if std::arch::is_aarch64_feature_detected!("sha2") {
+                if has_sha_acceleration() {
                     for block in blocks {
-                        // SAFETY: Runtime detection confirmed the sha2 CPU feature.
+                        // SAFETY: CPU feature detection confirmed the sha2 CPU feature.
                         unsafe { self.process_block_aarch64_sha(block) }
                     }
                     return;
@@ -199,7 +201,7 @@ impl Sha1 {
     unsafe fn process_block_x86_sha(&mut self, block: &[u8; 64]) {
         // SAFETY: The caller verified sha/sse2/ssse3/sse4.1 feature availability; self.state and block are properly initialized.
         unsafe {
-            use std::arch::x86_64::*;
+            use core::arch::x86_64::*;
 
             let mask = _mm_set_epi64x(0x0001_0203_0405_0607, 0x0809_0a0b_0c0d_0e0f_u64 as i64);
 
@@ -382,7 +384,7 @@ impl Sha1 {
     unsafe fn process_block_aarch64_sha(&mut self, block: &[u8; 64]) {
         // SAFETY: The caller verified sha2 feature availability; self.state and block are properly initialized.
         unsafe {
-            use std::arch::aarch64::*;
+            use core::arch::aarch64::*;
 
             // Load state
             let mut abcd = vld1q_u32(self.state.as_ptr());
@@ -589,6 +591,33 @@ impl digest::Digest for Sha1 {
 
     fn finalize(self) -> Self::Output {
         Sha1::finalize(self)
+    }
+}
+
+// MARK: CPU features
+#[cfg(all(
+    any(target_arch = "x86_64", target_arch = "aarch64"),
+    any(test, feature = "std")
+))]
+fn has_sha_acceleration() -> bool {
+    cfg_select! {
+        target_arch = "x86_64" => {
+            std::arch::is_x86_feature_detected!("sha")
+                && std::arch::is_x86_feature_detected!("ssse3")
+                && std::arch::is_x86_feature_detected!("sse4.1")
+        }
+        target_arch = "aarch64" => std::arch::is_aarch64_feature_detected!("sha2"),
+    }
+}
+
+#[cfg(all(
+    any(target_arch = "x86_64", target_arch = "aarch64"),
+    not(any(test, feature = "std"))
+))]
+const fn has_sha_acceleration() -> bool {
+    cfg_select! {
+        target_arch = "x86_64" => cfg!(all(target_feature = "sha", target_feature = "ssse3", target_feature = "sse4.1")),
+        target_arch = "aarch64" => cfg!(target_feature = "sha2"),
     }
 }
 
