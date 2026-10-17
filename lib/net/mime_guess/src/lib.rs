@@ -5,14 +5,29 @@
  */
 
 //! A minimal replacement for the [mime_guess](https://crates.io/crates/mime_guess) crate
+//!
+//! Disable default features to use extension lookup with `no_std` and `alloc`. Path helpers require `std`.
 
+#![cfg_attr(not(any(test, feature = "std")), no_std)]
+
+extern crate alloc;
+
+use alloc::string::{String, ToString};
+
+#[cfg(feature = "std")]
 use std::path::Path;
 
 use mime::Mime;
 
 /// Create a new `MimeGuess` from a file path
+#[cfg(feature = "std")]
 pub fn from_path(path: impl AsRef<Path>) -> MimeGuess {
     MimeGuess::from_path(path.as_ref())
+}
+
+/// Create a new `MimeGuess` from a file extension without a leading dot.
+pub fn from_ext(extension: &str) -> MimeGuess {
+    MimeGuess::from_ext(extension)
 }
 
 /// MimeGuess
@@ -21,7 +36,15 @@ pub struct MimeGuess {
 }
 
 impl MimeGuess {
+    /// Create a new `MimeGuess` from a file extension without a leading dot.
+    pub fn from_ext(extension: &str) -> Self {
+        Self {
+            extension: extension.to_string(),
+        }
+    }
+
     /// Create a new `MimeGuess` from a file path
+    #[cfg(feature = "std")]
     pub fn from_path(path: impl AsRef<Path>) -> Self {
         let extension = path
             .as_ref()
@@ -89,7 +112,17 @@ mod test {
     use super::*;
 
     #[test]
+    fn test_from_ext() {
+        assert_eq!(from_ext("png").first_or_octet_stream(), mime::IMAGE_PNG);
+        assert_eq!(
+            MimeGuess::from_ext("unknown").first_or_octet_stream(),
+            mime::APPLICATION_OCTET_STREAM
+        );
+    }
+
+    #[test]
     #[rustfmt::skip]
+    #[cfg(feature = "std")]
     fn test_guess() {
         // Text / markup
         assert_eq!(MimeGuess::from_path("index.html").first_or_octet_stream(), mime::TEXT_HTML);

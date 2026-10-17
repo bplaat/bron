@@ -23,7 +23,7 @@ dotenvy = "0.15.7"
 from_derive = { path = "../../../lib/data/from_derive" }
 log = "0.4.34"
 maxminddb = "0.30.3"
-mime_guess = { version = "2.0", default-features = false }
+mime_guess = { version = "2.0", default-features = false, features = ["std"] }
 pbkdf2 = { path = "../../../lib/crypto/pbkdf2" }
 rust-embed = { version = "8.12", features = ["interpolate-folder-path"] }
 serde = { version = "1.0", features = ["derive"] }
