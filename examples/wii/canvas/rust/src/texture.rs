@@ -8,7 +8,6 @@ use core::ffi::c_void;
 
 use crate::libogc::{GX_CLAMP, GX_FALSE, GX_InitTexObj, GX_TF_RGBA8, GXTexObj};
 use crate::memory::AlignedBuffer;
-use crate::png;
 
 pub struct Texture {
     object: GXTexObj,
@@ -17,10 +16,11 @@ pub struct Texture {
 
 impl Texture {
     pub fn from_png(bytes: &[u8]) -> Result<Self, ()> {
-        let image = png::decode(bytes).map_err(|_| ())?;
-        let width = image.width;
-        let height = image.height;
-        if width == 0 || height == 0 || width > 1024 || height > 1024 {
+        let image = image::decode(bytes).map_err(|_| ())?;
+        let width = image.width() as usize;
+        let height = image.height() as usize;
+        let rgba = image.pixels();
+        if width > 1024 || height > 1024 {
             return Err(());
         }
 
@@ -39,8 +39,8 @@ impl Texture {
                                 let py = tile_y + y;
                                 if px < width && py < height {
                                     let i = (py * width + px) * 4;
-                                    data[out] = image.rgba[i + if plane == 0 { 3 } else { 1 }];
-                                    data[out + 1] = image.rgba[i + if plane == 0 { 0 } else { 2 }];
+                                    data[out] = rgba[i + if plane == 0 { 3 } else { 1 }];
+                                    data[out + 1] = rgba[i + if plane == 0 { 0 } else { 2 }];
                                 }
                                 out += 2;
                             }

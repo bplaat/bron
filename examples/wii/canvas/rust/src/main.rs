@@ -21,7 +21,6 @@ use crate::texture::Texture;
 mod font;
 mod libogc;
 mod memory;
-mod png;
 mod render;
 mod texture;
 
