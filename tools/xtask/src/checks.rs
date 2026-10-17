@@ -374,10 +374,6 @@ impl Xtask {
     }
 
     pub(crate) fn check_others(&self) -> Result<()> {
-        if self.os != Os::Linux {
-            return Ok(());
-        }
-
         println!("Building Windows examples...");
         run(Command::new("sh").arg("examples/windows/build.sh"))?;
 
