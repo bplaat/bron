@@ -99,7 +99,10 @@ fn perform_titlebar_double_click(window: *mut Object) {
 }
 
 // MARK: WindowDelegate
-type WindowDelegateIvars = std::rc::Rc<crate::content::ContentHost>;
+struct WindowDelegateIvars {
+    host: std::rc::Rc<crate::content::ContentHost>,
+    traffic_light_position: Option<NSPoint>,
+}
 
 define_class!(
     #[unsafe(super(NSObject))]
@@ -111,23 +114,25 @@ define_class!(
         fn appearance_changed(&self, _: *mut Object, window: *mut Object, _: *mut Object, _: *mut std::ffi::c_void) {
             let appearance: *mut Object = unsafe { msg_send![window, effectiveAppearance] };
             let name: NSString = unsafe { msg_send![appearance, name] };
-            self.ivars().theme_changed(if name.to_string().contains("Dark") { Theme::Dark } else { Theme::Light });
+            self.ivars().host.theme_changed(if name.to_string().contains("Dark") { Theme::Dark } else { Theme::Light });
         }
         #[unsafe(method(windowDidBecomeKey:))]
-        fn _window_did_become_key(&self, _: *mut Object) {
-            send_event(crate::Event::Window(self.ivars().id(), WindowEvent::Focus));
+        fn _window_did_become_key(&self, notification: *mut Object) {
+            self.layout_window_buttons(notification);
+            send_event(crate::Event::Window(self.ivars().host.id(), WindowEvent::Focus));
         }
 
         #[unsafe(method(windowDidResignKey:))]
-        fn _window_did_resign_key(&self, _: *mut Object) {
-            send_event(crate::Event::Window(self.ivars().id(), WindowEvent::Blur));
+        fn _window_did_resign_key(&self, notification: *mut Object) {
+            self.layout_window_buttons(notification);
+            send_event(crate::Event::Window(self.ivars().host.id(), WindowEvent::Blur));
         }
 
         #[unsafe(method(windowShouldClose:))]
         fn _window_should_close(&self, window: *mut Object) -> Bool { self.window_should_close(window) }
 
         #[unsafe(method(windowWillClose:))]
-        fn _window_will_close(&self, _: *mut Object) { self.ivars().close(); }
+        fn _window_will_close(&self, _: *mut Object) { self.ivars().host.close(); }
 
         #[unsafe(method(windowDidMove:))]
         fn _window_did_move(&self, notification: *mut Object) { self.window_did_move(notification); }
@@ -169,15 +174,23 @@ define_class!(
 );
 
 impl WindowDelegate {
+    /// AppKit lays out the window buttons again on focus, title and size changes
+    fn layout_window_buttons(&self, notification: *mut Object) {
+        if let Some(position) = self.ivars().traffic_light_position {
+            let window: *mut Object = unsafe { msg_send![notification, object] };
+            layout_window_buttons(window, position);
+        }
+    }
+
     fn window_should_close(&self, window: *mut Object) -> Bool {
         let Some(window) = (unsafe { Retained::retain(window) }) else {
             return Bool::NO;
         };
         let request = CloseRequest::new();
-        let host = self.ivars().clone();
+        let host = self.ivars().host.clone();
         crate::dispatch::send_then(
             crate::Event::Window(
-                self.ivars().id(),
+                self.ivars().host.id(),
                 WindowEvent::CloseRequested(request.clone()),
             ),
             move || {
@@ -194,7 +207,7 @@ impl WindowDelegate {
         let window: *mut Object = unsafe { msg_send![notification, object] };
         let frame: NSRect = unsafe { msg_send![window, frame] };
         send_event(crate::Event::Window(
-            self.ivars().id(),
+            self.ivars().host.id(),
             WindowEvent::Move(LogicalPoint::new(
                 frame.origin.x as f32,
                 frame.origin.y as f32,
@@ -207,7 +220,8 @@ impl WindowDelegate {
         let content_view: *mut Object = unsafe { msg_send![window, contentView] };
         let frame: NSRect = unsafe { msg_send![content_view, frame] };
         let scale: f64 = unsafe { msg_send![window, backingScaleFactor] };
-        let host = self.ivars().clone();
+        self.layout_window_buttons(notification);
+        let host = self.ivars().host.clone();
         host.resize(
             (frame.size.width * scale).round() as u32,
             (frame.size.height * scale).round() as u32,
@@ -228,14 +242,14 @@ impl WindowDelegate {
         let window: *mut Object = unsafe { msg_send![notification, object] };
         set_drag_view_hidden(window, true);
         send_event(crate::Event::Window(
-            self.ivars().id(),
+            self.ivars().host.id(),
             WindowEvent::MacosFullscreenChange(true),
         ));
     }
 
     fn window_will_exit_fullscreen(&self) {
         send_event(crate::Event::Window(
-            self.ivars().id(),
+            self.ivars().host.id(),
             WindowEvent::MacosFullscreenChange(false),
         ));
     }
@@ -243,13 +257,14 @@ impl WindowDelegate {
     fn window_did_exit_fullscreen(&self, notification: *mut Object) {
         let window: *mut Object = unsafe { msg_send![notification, object] };
         set_drag_view_hidden(window, false);
+        self.layout_window_buttons(notification);
     }
 
     fn window_did_fail_to_enter_fullscreen(&self, notification: *mut Object) {
         let window: *mut Object = unsafe { msg_send![notification, object] };
         set_drag_view_hidden(window, false);
         send_event(crate::Event::Window(
-            self.ivars().id(),
+            self.ivars().host.id(),
             WindowEvent::MacosFullscreenChange(false),
         ));
     }
@@ -258,7 +273,7 @@ impl WindowDelegate {
         let window: *mut Object = unsafe { msg_send![notification, object] };
         set_drag_view_hidden(window, true);
         send_event(crate::Event::Window(
-            self.ivars().id(),
+            self.ivars().host.id(),
             WindowEvent::MacosFullscreenChange(true),
         ));
     }
@@ -273,6 +288,11 @@ fn set_drag_view_hidden(window: *mut Object, hidden: bool) {
     let subviews: *mut Object = unsafe { msg_send![content_view, subviews] };
     let drag_view: *mut Object = unsafe { msg_send![subviews, lastObject] };
     if drag_view.is_null() {
+        return;
+    }
+    let class = DraggableView::class().cast::<objc2::runtime::AnyClass>();
+    let is_drag_view: Bool = unsafe { msg_send![drag_view, isKindOfClass:class] };
+    if is_drag_view == Bool::NO {
         return;
     }
     let hidden = if hidden { Bool::YES } else { Bool::NO };
@@ -300,12 +320,67 @@ fn add_drag_view(window: *mut Object, content_view: *mut Object) {
     let _: () = unsafe { msg_send![content_view, addSubview:drag_view.as_ptr()] };
 }
 
+fn window_buttons(window: *mut Object) -> Option<[*mut Object; 3]> {
+    let buttons: [*mut Object; 3] = [
+        unsafe { msg_send![window, standardWindowButton:NS_WINDOW_CLOSE_BUTTON] },
+        unsafe { msg_send![window, standardWindowButton:NS_WINDOW_MINIATURIZE_BUTTON] },
+        unsafe { msg_send![window, standardWindowButton:NS_WINDOW_ZOOM_BUTTON] },
+    ];
+    (!buttons.iter().any(|button| button.is_null())).then_some(buttons)
+}
+
+/// Titlebar height that keeps the window buttons at the same distance from the top and bottom
+fn traffic_light_titlebar_height(window: *mut Object, position: NSPoint) -> Option<f64> {
+    let buttons = window_buttons(window)?;
+    let close_frame: NSRect = unsafe { msg_send![buttons[0], frame] };
+    Some(position.y * 2.0 + close_frame.size.height)
+}
+
+/// Move the window buttons to a position from the top left corner of the window
+fn layout_window_buttons(window: *mut Object, position: NSPoint) {
+    let style_mask: u64 = unsafe { msg_send![window, styleMask] };
+    if style_mask & NS_WINDOW_STYLE_MASK_FULLSCREEN != 0 {
+        return;
+    }
+    let (Some(buttons), Some(titlebar_height)) = (
+        window_buttons(window),
+        traffic_light_titlebar_height(window, position),
+    ) else {
+        return;
+    };
+    let titlebar_view: *mut Object = unsafe { msg_send![buttons[0], superview] };
+    let container_view: *mut Object = unsafe { msg_send![titlebar_view, superview] };
+    if container_view.is_null() {
+        return;
+    }
+
+    // Resize the titlebar container to fit the buttons, anchored at the top of the window
+    let window_frame: NSRect = unsafe { msg_send![window, frame] };
+    let mut container_frame: NSRect = unsafe { msg_send![container_view, frame] };
+    container_frame.size.height = titlebar_height;
+    container_frame.origin.y = window_frame.size.height - titlebar_height;
+    let _: () = unsafe { msg_send![container_view, setFrame:container_frame] };
+    let _: () = unsafe {
+        msg_send![titlebar_view, setFrame:NSRect::new(NSPoint::new(0.0, 0.0), container_frame.size)]
+    };
+
+    let close_frame: NSRect = unsafe { msg_send![buttons[0], frame] };
+    let miniaturize_frame: NSRect = unsafe { msg_send![buttons[1], frame] };
+    let spacing = miniaturize_frame.origin.x - close_frame.origin.x;
+    for (index, button) in buttons.into_iter().enumerate() {
+        let _: () = unsafe {
+            msg_send![button, setFrameOrigin:NSPoint::new(position.x + spacing * index as f64, position.y)]
+        };
+    }
+}
+
 pub(super) struct PlatformWindowData {
     host: std::rc::Rc<crate::content::ContentHost>,
     pub(super) window_id: crate::WindowId,
     pub(super) window: Retained<Object>,
     _delegate: Retained<Object>,
     pub(super) background_color: Option<u32>,
+    traffic_light_position: Option<NSPoint>,
     #[cfg(feature = "file_drop")]
     pub(super) allow_file_drop: bool,
 }
@@ -325,11 +400,26 @@ impl PlatformWindow {
         let _: () =
             unsafe { msg_send![class!(NSWindow), setAllowsAutomaticWindowTabbing:Bool::NO] };
 
+        // Custom positioned window buttons are only supported with a transparent or hidden titlebar
+        let has_custom_titlebar = builder.macos_titlebar_style == MacosTitlebarStyle::Transparent
+            || builder.macos_titlebar_style == MacosTitlebarStyle::Hidden;
+        let traffic_light_position = builder
+            .macos_traffic_light_position
+            .filter(|_| has_custom_titlebar)
+            .map(|position| NSPoint::new(position.x.into(), position.y.into()));
+
         // Create WindowDelegate instance
         let delegate: Allocated<WindowDelegate> =
             unsafe { msg_send![WindowDelegate::class(), alloc] };
-        let window_delegate: Retained<Object> =
-            unsafe { msg_send![super(delegate.set_ivars(host.clone())), init] };
+        let window_delegate: Retained<Object> = unsafe {
+            msg_send![
+                super(delegate.set_ivars(WindowDelegateIvars {
+                    host: host.clone(),
+                    traffic_light_position,
+                })),
+                init
+            ]
+        };
 
         // Create window
         let screen_rect: NSRect = if let Some(monitor) = builder.monitor {
@@ -423,12 +513,14 @@ impl PlatformWindow {
             window
         };
 
-        if !builder.should_fullscreen
-            && (builder.macos_titlebar_style == MacosTitlebarStyle::Transparent
-                || builder.macos_titlebar_style == MacosTitlebarStyle::Hidden)
-        {
-            let content_view: *mut Object = unsafe { msg_send![&window, contentView] };
-            add_drag_view(window.as_ptr(), content_view);
+        if !builder.should_fullscreen && has_custom_titlebar {
+            // With custom positioned window buttons the content draws the titlebar and starts window drags
+            if let Some(position) = traffic_light_position {
+                layout_window_buttons(window.as_ptr(), position);
+            } else {
+                let content_view: *mut Object = unsafe { msg_send![&window, contentView] };
+                add_drag_view(window.as_ptr(), content_view);
+            }
         }
         host.set_handle(crate::NativeWindowHandle::AppKit(window.as_ptr().cast()));
         unsafe {
@@ -440,6 +532,7 @@ impl PlatformWindow {
             window,
             _delegate: window_delegate,
             background_color: builder.background_color,
+            traffic_light_position,
             #[cfg(feature = "file_drop")]
             allow_file_drop: builder.allow_file_drop,
         }))
@@ -464,7 +557,10 @@ impl crate::WindowInterface for PlatformWindow {
     }
 
     fn set_title(&mut self, title: impl AsRef<str>) {
-        unsafe { msg_send![&self.0.window, setTitle:&*NSString::new(title)] }
+        let _: () = unsafe { msg_send![&self.0.window, setTitle:&*NSString::new(title)] };
+        if let Some(position) = self.0.traffic_light_position {
+            layout_window_buttons(self.0.window.as_ptr(), position);
+        }
     }
 
     fn position(&self) -> LogicalPoint {
@@ -528,6 +624,13 @@ impl crate::WindowInterface for PlatformWindow {
 
     fn macos_titlebar_size(&self) -> LogicalSize {
         let window_frame: NSRect = unsafe { msg_send![&self.0.window, frame] };
+        if let Some(titlebar_height) = self
+            .0
+            .traffic_light_position
+            .and_then(|position| traffic_light_titlebar_height(self.0.window.as_ptr(), position))
+        {
+            return LogicalSize::new(window_frame.size.width as f32, titlebar_height as f32);
+        }
         let content_layout_rect: NSRect = unsafe { msg_send![&self.0.window, contentLayoutRect] };
         LogicalSize::new(
             window_frame.size.width as f32,
@@ -537,6 +640,23 @@ impl crate::WindowInterface for PlatformWindow {
 
     fn macos_set_document_edited(&mut self, edited: bool) {
         let _: () = unsafe { msg_send![&self.0.window, setDocumentEdited:edited] };
+    }
+
+    fn macos_start_window_drag(&mut self) {
+        let event: *mut Object = unsafe { msg_send![NSApp, currentEvent] };
+        if event.is_null() {
+            return;
+        }
+        let event_type: u64 = unsafe { msg_send![event, type] };
+        if event_type == NS_EVENT_TYPE_LEFT_MOUSE_DOWN
+            || event_type == NS_EVENT_TYPE_LEFT_MOUSE_DRAGGED
+        {
+            let _: () = unsafe { msg_send![&self.0.window, performWindowDragWithEvent:event] };
+        }
+    }
+
+    fn macos_perform_titlebar_double_click(&mut self) {
+        perform_titlebar_double_click(self.0.window.as_ptr());
     }
 }
 
@@ -553,7 +673,7 @@ pub(super) fn window_id(window: *mut Object) -> Option<crate::WindowId> {
     if is_ours == Bool::NO {
         return None;
     }
-    let host = unsafe { &*delegate.cast::<WindowDelegate>() }.ivars();
+    let host = &unsafe { &*delegate.cast::<WindowDelegate>() }.ivars().host;
     (!host.is_closed()).then(|| host.id())
 }
 
