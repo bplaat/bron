@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: MIT
  */
 
+#[cfg(feature = "now")]
 use std::time::SystemTime;
 
 /// A timezone

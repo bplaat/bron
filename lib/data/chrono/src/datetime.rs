@@ -4,11 +4,14 @@
  * SPDX-License-Identifier: MIT
  */
 
-use std::fmt::{self, Debug, Display, Formatter};
-use std::marker::PhantomData;
-use std::ops::{Add, Sub};
-use std::str::FromStr;
-use std::time::Duration;
+use alloc::format;
+use alloc::string::{String, ToString};
+
+use core::fmt::{self, Debug, Display, Formatter};
+use core::marker::PhantomData;
+use core::ops::{Add, Sub};
+use core::str::FromStr;
+use core::time::Duration;
 
 use crate::consts::{DAY_NAMES, DAYS_IN_WEEK, MONTH_NAMES, SECS_IN_DAY, SECS_IN_HOUR, SECS_IN_MIN};
 use crate::utils::timestamp_to_ymd;
