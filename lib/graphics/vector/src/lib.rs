@@ -543,13 +543,7 @@ pub(crate) fn decode_tinyvg(data: &[u8]) -> Result<VectorImage, VectorDecodeErro
             VectorDecodeError::InvalidData
         }
     })?;
-    let mut image = VectorImage::new(
-        VectorFormat::TinyVg,
-        Size {
-            width: document.size.width,
-            height: document.size.height,
-        },
-    );
+    let mut image = VectorImage::new(VectorFormat::TinyVg, document.size);
     let command_capacity = document
         .commands
         .iter()
@@ -737,7 +731,7 @@ impl TinyVgStrokeBuilder {
                 .ok_or(VectorDecodeError::InvalidData)?
                 .start;
             builder.reserve(1)?;
-            builder.output.push(PathSegment::MoveTo(point(start)));
+            builder.output.push(PathSegment::MoveTo(start));
         }
         Ok(builder.output)
     }
@@ -747,13 +741,13 @@ impl TinyVgStrokeBuilder {
         subpath: &tinyvg::Subpath,
         initial_width: f64,
     ) -> Result<(), VectorDecodeError> {
-        let mut current = point(subpath.start);
+        let mut current = subpath.start;
         let start = current;
         let mut width = initial_width;
         for node in &subpath.nodes {
             let next_width = node.line_width.unwrap_or(width);
             self.append_operation(current, start, width, next_width, &node.operation)?;
-            current = point(operation_end(subpath.start, &node.operation));
+            current = operation_end(subpath.start, &node.operation);
             width = next_width;
         }
         Ok(())
@@ -767,14 +761,10 @@ impl TinyVgStrokeBuilder {
         next_width: f64,
         operation: &tinyvg::PathOperation,
     ) -> Result<(), VectorDecodeError> {
-        match operation {
-            tinyvg::PathOperation::LineTo(to) => {
-                self.append_capsule(from, point(*to), width, next_width)
-            }
+        match *operation {
+            tinyvg::PathOperation::LineTo(to) => self.append_capsule(from, to, width, next_width),
             tinyvg::PathOperation::Close => self.append_capsule(from, start, width, next_width),
             tinyvg::PathOperation::QuadraticTo { control, to } => {
-                let control = point(*control);
-                let to = point(*to);
                 self.append_curve(from, width, next_width, Self::CURVE_STEPS, |t| {
                     let u = 1.0 - t;
                     Point {
@@ -787,26 +777,21 @@ impl TinyVgStrokeBuilder {
                 control_0,
                 control_1,
                 to,
-            } => {
-                let control_0 = point(*control_0);
-                let control_1 = point(*control_1);
-                let to = point(*to);
-                self.append_curve(from, width, next_width, Self::CURVE_STEPS, |t| {
-                    let u = 1.0 - t;
-                    let uu = u * u;
-                    let tt = t * t;
-                    Point {
-                        x: uu * u * from.x
-                            + 3.0 * uu * t * control_0.x
-                            + 3.0 * u * tt * control_1.x
-                            + tt * t * to.x,
-                        y: uu * u * from.y
-                            + 3.0 * uu * t * control_0.y
-                            + 3.0 * u * tt * control_1.y
-                            + tt * t * to.y,
-                    }
-                })
-            }
+            } => self.append_curve(from, width, next_width, Self::CURVE_STEPS, |t| {
+                let u = 1.0 - t;
+                let uu = u * u;
+                let tt = t * t;
+                Point {
+                    x: uu * u * from.x
+                        + 3.0 * uu * t * control_0.x
+                        + 3.0 * u * tt * control_1.x
+                        + tt * t * to.x,
+                    y: uu * u * from.y
+                        + 3.0 * uu * t * control_0.y
+                        + 3.0 * u * tt * control_1.y
+                        + tt * t * to.y,
+                }
+            }),
             tinyvg::PathOperation::ArcTo {
                 radius_x,
                 radius_y,
@@ -815,17 +800,16 @@ impl TinyVgStrokeBuilder {
                 sweep,
                 to,
             } => {
-                let to = point(*to);
                 self.arc.clear();
                 append_arc(
                     &mut self.arc,
                     from,
                     to,
-                    *radius_x,
-                    *radius_y,
-                    *rotation,
-                    *large_arc,
-                    !*sweep,
+                    radius_x,
+                    radius_y,
+                    rotation,
+                    large_arc,
+                    !sweep,
                 );
                 let part_count = self.arc.len();
                 let mut part_start = from;
@@ -1089,28 +1073,9 @@ const fn tinyvg_stroke(width: f64) -> StrokeStyle {
 }
 
 #[cfg(feature = "tinyvg")]
-const fn point(value: tinyvg::Point) -> Point {
-    Point {
-        x: value.x,
-        y: value.y,
-    }
-}
-
-#[cfg(feature = "tinyvg")]
-const fn color(value: tinyvg::Color) -> Color {
-    Color {
-        red: value.red,
-        green: value.green,
-        blue: value.blue,
-        alpha: value.alpha,
-        color_space: value.color_space,
-    }
-}
-
-#[cfg(feature = "tinyvg")]
 fn convert_paint(style: tinyvg::Style) -> Result<Paint, VectorDecodeError> {
     Ok(match style {
-        tinyvg::Style::Solid(value) => Paint::Solid(color(value)),
+        tinyvg::Style::Solid(value) => Paint::Solid(value),
         tinyvg::Style::LinearGradient {
             start,
             end,
@@ -1124,16 +1089,16 @@ fn convert_paint(style: tinyvg::Style) -> Result<Paint, VectorDecodeError> {
             stops.extend([
                 GradientStop {
                     offset: 0.0,
-                    color: color(start_color),
+                    color: start_color,
                 },
                 GradientStop {
                     offset: 1.0,
-                    color: color(end_color),
+                    color: end_color,
                 },
             ]);
             Paint::LinearGradient {
-                start: point(start),
-                end: point(end),
+                start,
+                end,
                 stops,
                 spread: SpreadMethod::Pad,
                 transform: Transform::IDENTITY,
@@ -1152,16 +1117,16 @@ fn convert_paint(style: tinyvg::Style) -> Result<Paint, VectorDecodeError> {
             stops.extend([
                 GradientStop {
                     offset: 0.0,
-                    color: color(center_color),
+                    color: center_color,
                 },
                 GradientStop {
                     offset: 1.0,
-                    color: color(edge_color),
+                    color: edge_color,
                 },
             ]);
             Paint::RadialGradient {
-                center: point(center),
-                focal: point(center),
+                center,
+                focal: center,
                 radius: (edge.x - center.x).hypot(edge.y - center.y),
                 stops,
                 spread: SpreadMethod::Pad,
@@ -1189,7 +1154,7 @@ fn convert_path(path: &tinyvg::Path) -> Result<Vec<PathSegment>, VectorDecodeErr
         .try_reserve_exact(capacity)
         .map_err(|_| VectorDecodeError::ResourceLimit)?;
     for subpath in &path.subpaths {
-        output.push(PathSegment::MoveTo(point(subpath.start)));
+        output.push(PathSegment::MoveTo(subpath.start));
         let mut current = subpath.start;
         for node in &subpath.nodes {
             append_tinyvg_operation(&mut output, current, subpath.start, &node.operation);
@@ -1200,7 +1165,7 @@ fn convert_path(path: &tinyvg::Path) -> Result<Vec<PathSegment>, VectorDecodeErr
 }
 
 #[cfg(feature = "tinyvg")]
-const fn operation_end(start: tinyvg::Point, operation: &tinyvg::PathOperation) -> tinyvg::Point {
+const fn operation_end(start: Point, operation: &tinyvg::PathOperation) -> Point {
     match operation {
         tinyvg::PathOperation::LineTo(to)
         | tinyvg::PathOperation::CubicTo { to, .. }
@@ -1213,26 +1178,23 @@ const fn operation_end(start: tinyvg::Point, operation: &tinyvg::PathOperation) 
 #[cfg(feature = "tinyvg")]
 fn append_tinyvg_operation(
     output: &mut Vec<PathSegment>,
-    current: tinyvg::Point,
-    start: tinyvg::Point,
+    current: Point,
+    start: Point,
     operation: &tinyvg::PathOperation,
 ) {
-    match operation {
-        tinyvg::PathOperation::LineTo(to) => output.push(PathSegment::LineTo(point(*to))),
+    match *operation {
+        tinyvg::PathOperation::LineTo(to) => output.push(PathSegment::LineTo(to)),
         tinyvg::PathOperation::QuadraticTo { control, to } => {
-            output.push(PathSegment::QuadraticTo {
-                control: point(*control),
-                to: point(*to),
-            })
+            output.push(PathSegment::QuadraticTo { control, to })
         }
         tinyvg::PathOperation::CubicTo {
             control_0,
             control_1,
             to,
         } => output.push(PathSegment::CubicTo {
-            control_0: point(*control_0),
-            control_1: point(*control_1),
-            to: point(*to),
+            control_0,
+            control_1,
+            to,
         }),
         tinyvg::PathOperation::ArcTo {
             radius_x,
@@ -1242,14 +1204,7 @@ fn append_tinyvg_operation(
             sweep,
             to,
         } => append_arc(
-            output,
-            point(current),
-            point(*to),
-            *radius_x,
-            *radius_y,
-            *rotation,
-            *large_arc,
-            !*sweep,
+            output, current, to, radius_x, radius_y, rotation, large_arc, !sweep,
         ),
         tinyvg::PathOperation::Close => {
             let _ = start;
