@@ -7,10 +7,9 @@
 #![allow(unused_variables)]
 
 use std::collections::HashSet;
-use std::fs::OpenOptions;
 use std::io::{self, IsTerminal};
 use std::path::Path;
-use std::process::{Command, Stdio, exit};
+use std::process::{Command, exit};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
@@ -19,6 +18,7 @@ use std::{env, fs, thread};
 use sha1::Sha1;
 use threadpool::ThreadPool;
 
+use crate::artifacts::{add_dex, download_jar, extract_jar, valid_jar};
 use crate::log::{Log, LogEntry};
 
 // MARK: Task
@@ -36,12 +36,20 @@ pub(crate) enum TaskAction {
     Phony(String),
     Copy(String, String),
     Download(String, String, String),
+    ExtractJar(String, String),
+    AddDex(String, String, String),
     Command(String),
     Multiple(Vec<TaskAction>),
 }
 
 impl Task {
     fn have_inputs_change(&self, log: &Log) -> bool {
+        if let TaskAction::Download(_, destination, _) = &self.action
+            && !valid_jar(destination)
+        {
+            return true;
+        }
+
         // Check if inputs have changed
         for input in &self.inputs {
             // Get input modified time
@@ -206,43 +214,25 @@ impl TaskAction {
                 format!("cp {src} {dst}")
             }
             TaskAction::Download(url, destination, lock_file) => {
-                let lock = OpenOptions::new()
-                    .read(true)
-                    .write(true)
-                    .create(true)
-                    .truncate(false)
-                    .open(lock_file)
-                    .unwrap_or_else(|error| {
-                        eprintln!("Failed to open download lock {lock_file}: {error}");
-                        exit(1)
-                    });
-                lock.lock().unwrap_or_else(|error| {
-                    eprintln!("Failed to lock {lock_file}: {error}");
-                    exit(1)
+                download_jar(url, destination, lock_file).unwrap_or_else(|error| {
+                    eprintln!("Failed to download {url}: {error}");
+                    exit(1);
                 });
-
-                if !Path::new(destination).exists() {
-                    let temporary = format!("{destination}.part");
-                    let status = Command::new("wget")
-                        .args([url, "-O", &temporary])
-                        .stderr(Stdio::null())
-                        .status()
-                        .unwrap_or_else(|error| {
-                            eprintln!("Failed to download {url}: {error}");
-                            exit(1)
-                        });
-                    if !status.success() {
-                        _ = fs::remove_file(&temporary);
-                        eprintln!("Failed to download {url}: {status}");
-                        exit(1);
-                    }
-                    fs::rename(&temporary, destination).unwrap_or_else(|error| {
-                        _ = fs::remove_file(&temporary);
-                        eprintln!("Failed to store download at {destination}: {error}");
-                        exit(1)
-                    });
-                }
-                format!("wget {url} -O {destination}")
+                format!("download {url} to {destination}")
+            }
+            TaskAction::ExtractJar(source, destination) => {
+                extract_jar(source, destination).unwrap_or_else(|error| {
+                    eprintln!("Failed to extract {source}: {error}");
+                    exit(1);
+                });
+                format!("extract classes from {source} to {destination}")
+            }
+            TaskAction::AddDex(source, dex, destination) => {
+                add_dex(source, dex, destination).unwrap_or_else(|error| {
+                    eprintln!("Failed to add {dex} to {source}: {error}");
+                    exit(1);
+                });
+                format!("add {dex} to {destination}")
             }
             TaskAction::Command(command) => {
                 let status = if cfg!(windows) {
@@ -593,7 +583,9 @@ mod tests {
         fs::create_dir_all(&directory).expect("create test directory");
         let destination = directory.join("dependency.jar");
         let lock_file = directory.join("download.lock");
-        fs::write(&destination, "existing").expect("write existing download");
+        let mut jar = b"PK\x05\x06".to_vec();
+        jar.extend_from_slice(&[0; 18]);
+        fs::write(&destination, &jar).expect("write existing download");
 
         let action = TaskAction::Download(
             "invalid://unused".to_owned(),
@@ -602,10 +594,7 @@ mod tests {
         );
         action.execute();
 
-        assert_eq!(
-            fs::read_to_string(destination).expect("read existing download"),
-            "existing"
-        );
+        assert_eq!(fs::read(destination).expect("read existing download"), jar);
         assert!(lock_file.exists());
         fs::remove_dir_all(directory).expect("remove test directory");
     }

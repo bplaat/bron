@@ -8,7 +8,7 @@ use std::path::Path;
 use std::process::{Command, exit};
 use std::{env, fs};
 
-use crate::executor::ExecutorBuilder;
+use crate::executor::{ExecutorBuilder, TaskAction};
 use crate::manifest::AndroidMetadata;
 use crate::tasks::jvm::{
     find_jdk_home, find_modules, get_class_name, get_java_major_version, jdk_bin,
@@ -454,13 +454,11 @@ pub(crate) fn generate_android_final_apk_tasks(bobje: &Bobje, executor: &mut Exe
     // Add classes.dex to zip
     let unaligned_apk = format!("{}/{}-unaligned.apk", bobje.out_dir(), bobje.name);
     let apk_with_classes = format!("{}/{}-with-classes.apk", bobje.out_dir(), bobje.name);
-    executor.add_task_cmd(
-        format!(
-            "cp {} {} && cd {} && zip -j {}-with-classes.apk classes.dex > /dev/null",
-            unaligned_apk,
-            apk_with_classes,
-            bobje.out_dir(),
-            bobje.name
+    executor.add_task(
+        TaskAction::AddDex(
+            unaligned_apk.clone(),
+            format!("{}/classes.dex", bobje.out_dir()),
+            apk_with_classes.clone(),
         ),
         vec![
             unaligned_apk.clone(),
@@ -615,8 +613,10 @@ mod tests {
         let decimal_jar = decimal_platform.join("android.jar");
         fs::write(&decimal_jar, []).expect("create decimal platform jar");
         assert_eq!(
-            find_platform_jar(android_home, 37).as_deref(),
-            decimal_jar.to_str()
+            find_platform_jar(android_home, 37)
+                .as_deref()
+                .map(Path::new),
+            Some(decimal_jar.as_path())
         );
         assert_eq!(find_platform_jar(android_home, 36), None);
 
@@ -625,8 +625,10 @@ mod tests {
         let integer_jar = integer_platform.join("android.jar");
         fs::write(&integer_jar, []).expect("create integer platform jar");
         assert_eq!(
-            find_platform_jar(android_home, 37).as_deref(),
-            integer_jar.to_str()
+            find_platform_jar(android_home, 37)
+                .as_deref()
+                .map(Path::new),
+            Some(integer_jar.as_path())
         );
         fs::remove_dir_all(directory).expect("remove temporary SDK");
     }

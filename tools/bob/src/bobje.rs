@@ -133,7 +133,7 @@ impl Bobje {
 
         // Add Kotlin stdlib when Kotlin is used
         if detect_kotlin(&source_files) {
-            // Manual dependency in https://repo1.maven.org/maven2/org/jetbrains/kotlin/kotlin-stdlib/2.0.0/kotlin-stdlib-2.0.0.pom
+            // Manual dependency in https://repo.maven.apache.org/maven2/org/jetbrains/kotlin/kotlin-stdlib/2.0.0/kotlin-stdlib-2.0.0.pom
             // FIXME: Automatically resolve maven dependency trees by fetching and parsing pom.xml
             manifest.dependencies.insert(
                 "kotlin-stdlib".to_string(),
@@ -160,7 +160,7 @@ impl Bobje {
                 );
             }
             if detect_java_kotlin(&source_files) {
-                // https://repo1.maven.org/maven2/junit/junit/4.13.2/junit-4.13.2.pom
+                // https://repo.maven.apache.org/maven2/junit/junit/4.13.2/junit-4.13.2.pom
                 manifest.dependencies.insert(
                     "junit".to_string(),
                     Dependency::Maven {
@@ -208,7 +208,7 @@ impl Bobje {
                 };
 
                 let url = format!(
-                    "https://repo1.maven.org/maven2/{}/{name}/{version}/{name}-{version}.jar",
+                    "https://repo.maven.apache.org/maven2/{}/{name}/{version}/{name}-{version}.jar",
                     package.replace(".", "/")
                 );
                 let jar = JarDependency {

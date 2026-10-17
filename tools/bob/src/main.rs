@@ -22,6 +22,7 @@ use crate::tasks::jvm::{detect_jar, detect_java_kotlin, run_jar, run_java_class,
 use crate::utils::{cache_dir, format_bytes, index_files};
 
 mod args;
+mod artifacts;
 mod bobje;
 mod executor;
 mod log;

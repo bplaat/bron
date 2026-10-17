@@ -137,12 +137,15 @@ dependencies = [
  "directories",
  "dotenvy",
  "enable-ansi-support",
+ "native-tls",
  "plist",
  "regex",
  "serde",
  "sha1",
+ "small-http",
  "terminal_size",
  "threadpool",
+ "zip",
 ]
 
 [[package]]

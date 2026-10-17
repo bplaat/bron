@@ -5,11 +5,13 @@
  */
 
 use std::collections::HashMap;
+use std::fmt::Write;
 use std::path::Path;
 use std::process::{Command, exit};
 use std::{env, fs};
 
 use regex::{Regex, regex};
+use sha1::Sha1;
 
 use crate::Bobje;
 use crate::args::Profile;
@@ -207,13 +209,18 @@ pub(crate) fn download_extract_jar_tasks(
 ) {
     // Add download task
     let cache_dir = cache_dir();
-    let lock_file = format!("{}/.lock", cache_dir.display());
+    let source = jar.url.as_deref().or(jar.path.as_deref()).unwrap_or("");
+    let mut cache_key = String::new();
+    for byte in Sha1::digest(source.as_bytes()) {
+        write!(&mut cache_key, "{byte:02x}").expect("write cache key");
+    }
     let downloaded_jar = format!(
-        "{}/jar-cache/{}-{}.jar",
+        "{}/jar-cache/{cache_key}-{}-{}.jar",
         cache_dir.display(),
         bobje.name,
         bobje.version
     );
+    let lock_file = format!("{downloaded_jar}.lock");
     if let Some(path) = &jar.path {
         executor.add_task_cp(path.clone(), downloaded_jar.clone());
     }
@@ -227,8 +234,8 @@ pub(crate) fn download_extract_jar_tasks(
 
     // Add extract task
     let classes_dir = format!("{}/classes", bobje.out_dir());
-    executor.add_task_cmd(
-        format!("cd {classes_dir} && unzip {downloaded_jar} *.class -x META-INF/* > /dev/null 2> /dev/null"),
+    executor.add_task(
+        TaskAction::ExtractJar(downloaded_jar.clone(), classes_dir.clone()),
         vec![downloaded_jar],
         vec![format!(
             "{}/{}",
