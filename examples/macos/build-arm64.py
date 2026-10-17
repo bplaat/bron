@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 # A build script for ARM64 Mach-O assembly executables that ad-hoc signs the output.
 
+from __future__ import annotations
+
 import argparse
 import hashlib
 import os
