@@ -4,10 +4,13 @@
  * SPDX-License-Identifier: MIT
  */
 
-use std::fmt::{self, Debug, Display, Formatter};
-use std::ops::{Add, Sub};
-use std::str::FromStr;
-use std::time::Duration;
+#[cfg(feature = "serde")]
+use alloc::string::{String, ToString};
+
+use core::fmt::{self, Debug, Display, Formatter};
+use core::ops::{Add, Sub};
+use core::str::FromStr;
+use core::time::Duration;
 
 use crate::consts::{SECS_IN_DAY, SECS_IN_HOUR, SECS_IN_MIN};
 use crate::utils::timestamp_to_ymd;

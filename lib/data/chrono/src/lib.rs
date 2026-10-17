@@ -5,9 +5,15 @@
  */
 
 //! A minimal replacement for the [chrono](https://crates.io/crates/chrono) crate
+//!
+//! Disable default features for `no_std` support with `alloc`. The `now` feature requires `std`.
 
-use std::error::Error;
-use std::fmt::{self, Display, Formatter};
+#![cfg_attr(not(any(test, feature = "now")), no_std)]
+
+extern crate alloc;
+
+use core::error::Error;
+use core::fmt::{self, Display, Formatter};
 
 pub use crate::datetime::DateTime;
 pub use crate::naive::date::NaiveDate;
