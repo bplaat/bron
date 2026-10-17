@@ -10,8 +10,14 @@
 //!
 //! Adapted to safe Rust. Search is bounded and cancellable.
 
-use std::fmt::{self, Display, Formatter};
-use std::str::FromStr;
+#![cfg_attr(not(test), no_std)]
+
+extern crate alloc;
+
+use alloc::vec::Vec;
+
+use core::fmt::{self, Display, Formatter};
+use core::str::FromStr;
 
 const BOARD_CELLS: usize = 64;
 const DIRECTIONS: usize = 8;
@@ -500,7 +506,7 @@ mod tests {
             .compute_move_with_budget(Player::Black, 64, 1)
             .expect("fallback");
         assert!(board.is_valid_move(Player::Black, movement));
-        let visits = std::cell::Cell::new(0);
+        let visits = core::cell::Cell::new(0);
         let result = board.compute_move_cancellable(Player::Black, 64, 500_000, &|| {
             visits.set(visits.get() + 1);
             visits.get() > 20
