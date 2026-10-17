@@ -840,6 +840,7 @@ dependencies = [
 name = "objc2-proc-macros"
 version = "0.2.0+patch"
 dependencies = [
+ "objc2",
  "quote",
  "syn 3.0.4",
  "trybuild",
