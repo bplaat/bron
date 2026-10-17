@@ -173,7 +173,8 @@ patch() {
     # A patch that failed to apply leaves git am half done, start over
     git -C "$dir" am --abort > /dev/null 2>&1 || true
     git -C "$dir" reset -q --hard upstream
-    if ! git -C "$dir" am -q --keep-cr --whitespace=nowarn "$TOOLCHAIN_DIR/$name"/patches/*.patch; then
+    # Preserve intentional CRLF in MIME-encoded patches without warning about it.
+    if ! git -C "$dir" am -q --keep-cr --quoted-cr=nowarn --whitespace=nowarn "$TOOLCHAIN_DIR/$name"/patches/*.patch; then
         git -C "$dir" am --abort
         rm -f "$dir/.patched"
         die "Failed to apply the $name patches"
