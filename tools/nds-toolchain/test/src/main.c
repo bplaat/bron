@@ -35,7 +35,8 @@ static int failures;
 static void report(const char* format, ...) {
     va_list args;
     va_start(args, format);
-    int length = vsnprintf(test_results.text + results_length, sizeof(test_results.text) - results_length, format, args);
+    int length =
+        vsnprintf(test_results.text + results_length, sizeof(test_results.text) - results_length, format, args);
     va_end(args);
     if (length > 0)
         results_length += length;
