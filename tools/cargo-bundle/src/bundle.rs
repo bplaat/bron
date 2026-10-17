@@ -12,7 +12,8 @@ use copy_dir::copy_dir;
 
 use crate::manifest::{BundleMetadata, Manifest, Package};
 use crate::support::{
-    assert_file_name, compile_universal, remove_empty_directory, remove_path_if_exists,
+    assert_file_name, bundle_info, cargo_build, codesign, compile_universal,
+    remove_empty_directory, remove_path_if_exists,
 };
 
 pub(crate) fn build(path: &str, target_dir: &str, manifest: &Manifest) {
@@ -91,31 +92,12 @@ fn generate_resources(path: &str, target_dir: &str, manifest: &Manifest) {
 
 fn write_info_plist(path: &str, target_dir: &str, manifest: &Manifest) {
     let bundle = &manifest.package.metadata.bundle;
-    let mut info = plist::Dictionary::new();
-    info.insert("CFBundleInfoDictionaryVersion".into(), "6.0".into());
-    info.insert("CFBundlePackageType".into(), "APPL".into());
-    info.insert("CFBundleName".into(), bundle.name.clone().into());
-    info.insert("CFBundleDisplayName".into(), bundle.name.clone().into());
-    info.insert(
-        "CFBundleIdentifier".into(),
-        bundle.identifier.clone().into(),
-    );
-    info.insert(
-        "CFBundleVersion".into(),
-        manifest.package.version.clone().into(),
-    );
-    info.insert(
-        "CFBundleShortVersionString".into(),
-        manifest.package.version.clone().into(),
-    );
-    info.insert("CFBundleExecutable".into(), bundle.name.clone().into());
-    info.insert(
-        "LSMinimumSystemVersion".into(),
-        bundle
-            .minimal_os_version
-            .clone()
-            .unwrap_or_else(|| String::from("11.0"))
-            .into(),
+    let mut info = bundle_info(
+        &bundle.name,
+        &bundle.identifier,
+        &manifest.package.version,
+        "APPL",
+        bundle.minimal_os_version.as_deref().unwrap_or("11.0"),
     );
     if let Some(copyright) = &bundle.copyright {
         info.insert("NSHumanReadableCopyright".into(), copyright.clone().into());
@@ -158,13 +140,7 @@ fn compile_binary(path: &str, target_dir: &str, package: &Package) -> String {
         compile_universal(path, &package.name, &output);
         output
     } else {
-        let status = Command::new("cargo")
-            .args([
-                "build",
-                "--release",
-                "--manifest-path",
-                &format!("{path}/Cargo.toml"),
-            ])
+        let status = cargo_build(path)
             .status()
             .expect("Failed to run cargo build");
         assert!(status.success(), "cargo build failed");
@@ -220,15 +196,13 @@ pub(crate) fn sign(path: &str, target_dir: &str, bundle: &BundleMetadata) {
     let has_entitlements = Path::new(&entitlements).exists();
     let hardened_runtime = bundle.hardened_runtime.unwrap_or(has_entitlements);
 
-    let mut command = Command::new("codesign");
-    command.args(["--force", "--sign", "-"]);
-    if hardened_runtime {
-        command.args(["--options", "runtime"]);
-    }
-    if has_entitlements {
-        command.args(["--entitlements", &entitlements]);
-    }
-    let status = command.arg(app).status().expect("Failed to run codesign");
+    let status = codesign(
+        &app,
+        has_entitlements.then_some(entitlements.as_str()),
+        hardened_runtime,
+    )
+    .status()
+    .expect("Failed to run codesign");
     assert!(status.success(), "codesign failed");
 }
 

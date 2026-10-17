@@ -9,17 +9,58 @@ use std::io::ErrorKind;
 use std::path::{Component, Path};
 use std::process::Command;
 
+pub(crate) fn cargo_build(path: &str) -> Command {
+    let mut command = Command::new("cargo");
+    command.args([
+        "build",
+        "--release",
+        "--manifest-path",
+        &format!("{path}/Cargo.toml"),
+    ]);
+    command
+}
+
+pub(crate) fn codesign(bundle: &str, entitlements: Option<&str>, runtime: bool) -> Command {
+    let mut command = Command::new("codesign");
+    command.args(["--force", "--sign", "-"]);
+    if runtime {
+        command.args(["--options", "runtime"]);
+    }
+    if let Some(entitlements) = entitlements {
+        command.args(["--entitlements", entitlements]);
+    }
+    command.arg(bundle);
+    command
+}
+
+pub(crate) fn bundle_info(
+    name: &str,
+    identifier: &str,
+    version: &str,
+    package_type: &str,
+    minimum_os: &str,
+) -> plist::Dictionary {
+    let mut info = plist::Dictionary::new();
+    for (key, value) in [
+        ("CFBundleInfoDictionaryVersion", "6.0"),
+        ("CFBundlePackageType", package_type),
+        ("CFBundleName", name),
+        ("CFBundleDisplayName", name),
+        ("CFBundleIdentifier", identifier),
+        ("CFBundleVersion", version),
+        ("CFBundleShortVersionString", version),
+        ("CFBundleExecutable", name),
+        ("LSMinimumSystemVersion", minimum_os),
+    ] {
+        info.insert(key.into(), value.into());
+    }
+    info
+}
+
 pub(crate) fn compile_universal(path: &str, binary: &str, output: &str) {
     for target in ["x86_64-apple-darwin", "aarch64-apple-darwin"] {
-        let status = Command::new("cargo")
-            .args([
-                "build",
-                "--release",
-                "--manifest-path",
-                &format!("{path}/Cargo.toml"),
-                "--target",
-                target,
-            ])
+        let status = cargo_build(path)
+            .args(["--target", target])
             .status()
             .expect("Failed to run cargo build");
         assert!(status.success(), "cargo build failed for {target}");

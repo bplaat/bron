@@ -5,10 +5,12 @@
  */
 
 use std::fs;
-use std::process::{Command, exit};
+use std::process::exit;
 
 use crate::manifest::{AppexMetadata, BundleMetadata, Manifest};
-use crate::support::{assert_file_name, compile_universal, remove_empty_directory};
+use crate::support::{
+    assert_file_name, bundle_info, cargo_build, codesign, compile_universal, remove_empty_directory,
+};
 
 pub(crate) fn build_all(path: &str, target_dir: &str, manifest: &Manifest) {
     let bundle = &manifest.package.metadata.bundle;
@@ -25,31 +27,12 @@ pub(crate) fn build_all(path: &str, target_dir: &str, manifest: &Manifest) {
 }
 
 fn write_info_plist(path: &str, target_dir: &str, manifest: &Manifest, extension: &AppexMetadata) {
-    let mut info = plist::Dictionary::new();
-    info.insert("CFBundleInfoDictionaryVersion".into(), "6.0".into());
-    info.insert("CFBundlePackageType".into(), "XPC!".into());
-    info.insert("CFBundleName".into(), extension.name.clone().into());
-    info.insert("CFBundleDisplayName".into(), extension.name.clone().into());
-    info.insert(
-        "CFBundleIdentifier".into(),
-        extension.identifier.clone().into(),
-    );
-    info.insert(
-        "CFBundleVersion".into(),
-        manifest.package.version.clone().into(),
-    );
-    info.insert(
-        "CFBundleShortVersionString".into(),
-        manifest.package.version.clone().into(),
-    );
-    info.insert("CFBundleExecutable".into(), extension.name.clone().into());
-    info.insert(
-        "LSMinimumSystemVersion".into(),
-        extension
-            .minimal_os_version
-            .clone()
-            .unwrap_or_else(|| String::from("12.0"))
-            .into(),
+    let mut info = bundle_info(
+        &extension.name,
+        &extension.identifier,
+        &manifest.package.version,
+        "XPC!",
+        extension.minimal_os_version.as_deref().unwrap_or("12.0"),
     );
 
     let custom_info = format!("{path}/{}", extension.info_plist);
@@ -82,13 +65,7 @@ fn compile(
     if bundle.lipo.unwrap_or(true) {
         compile_universal(&package, &extension.binary, &output);
     } else {
-        let status = Command::new("cargo")
-            .args([
-                "build",
-                "--release",
-                "--manifest-path",
-                &format!("{package}/Cargo.toml"),
-            ])
+        let status = cargo_build(&package)
             .status()
             .expect("Failed to build app extension");
         assert!(status.success(), "cargo build failed for app extension");
@@ -122,13 +99,11 @@ fn create(
 }
 
 fn sign(path: &str, extension: &AppexMetadata, appex: &str) {
-    let mut command = Command::new("codesign");
-    command.args(["--force", "--sign", "-", "--options", "runtime"]);
-    if let Some(entitlements) = &extension.entitlements {
-        command.args(["--entitlements", &format!("{path}/{entitlements}")]);
-    }
-    let status = command
-        .arg(appex)
+    let entitlements = extension
+        .entitlements
+        .as_ref()
+        .map(|name| format!("{path}/{name}"));
+    let status = codesign(appex, entitlements.as_deref(), true)
         .status()
         .expect("Failed to run codesign for app extension");
     assert!(status.success(), "codesign failed for app extension");
