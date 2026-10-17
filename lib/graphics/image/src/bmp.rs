@@ -4,6 +4,8 @@
  * SPDX-License-Identifier: MIT
  */
 
+use alloc::vec::Vec;
+
 use super::{Bitmap, Budget, DecodeError, EncodeError, Format, Image, Reader, Result, pixel_len};
 
 // MARK: Decoder
@@ -585,7 +587,7 @@ fn bmp_palette_slot(lookup: &[u64; 512], key: u32) -> usize {
     slot
 }
 
-pub(super) fn encode(bitmap: &Bitmap) -> std::result::Result<Vec<u8>, EncodeError> {
+pub(super) fn encode(bitmap: &Bitmap) -> core::result::Result<Vec<u8>, EncodeError> {
     let width = i32::try_from(bitmap.width).map_err(|_| EncodeError::InvalidDimensions)?;
     let height = i32::try_from(bitmap.height).map_err(|_| EncodeError::InvalidDimensions)?;
     let opaque = bitmap.data.as_chunks::<4>().0.iter().all(|p| p[3] == 255);
@@ -998,7 +1000,7 @@ mod tests {
                 &[],
                 &[1, 2, 3, 128],
             );
-            data.splice(70..70, std::iter::repeat_n(0, (header_len - 56) as usize));
+            data.splice(70..70, core::iter::repeat_n(0, (header_len - 56) as usize));
             let len = data.len() as u32;
             data[2..6].copy_from_slice(&len.to_le_bytes());
             data[10..14].copy_from_slice(&(14 + header_len).to_le_bytes());
@@ -1010,7 +1012,7 @@ mod tests {
         }
 
         let mut data = bitmap(1, 1, 32, 0, &[], &[], &[1, 2, 3, 128]);
-        data.splice(54..54, std::iter::repeat_n(0, 84));
+        data.splice(54..54, core::iter::repeat_n(0, 84));
         let len = data.len() as u32;
         data[2..6].copy_from_slice(&len.to_le_bytes());
         data[10..14].copy_from_slice(&138u32.to_le_bytes());

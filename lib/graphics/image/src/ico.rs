@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: MIT
  */
 
-use std::time::Duration;
+use core::time::Duration;
 
 use super::{DecodeError, Format, Image, LoopCount, Reader, Result, bmp, png};
 

@@ -4,6 +4,9 @@
  * SPDX-License-Identifier: MIT
  */
 
+use alloc::vec;
+use alloc::vec::Vec;
+
 use super::{
     Bitmap, Budget, DecodeError, EncodeError, EncodingStyle, Format, Image, Reader, Result,
     pixel_len,
@@ -210,7 +213,7 @@ impl Tap {
                 Self {
                     near,
                     far: (near + 1).min(last),
-                    weight: (position.fract() * 256.0).round() as u32,
+                    weight: libm::roundf((position - libm::truncf(position)) * 256.0) as u32,
                 }
             })
             .collect())
@@ -676,7 +679,7 @@ impl Jpeg {
             let stride = c.blocks_w * 8;
             let mut plane = budget.zeroed::<u8>(stride * c.blocks_h * 8)?;
             let table = idct_table(&c.quant.ok_or(DecodeError::InvalidData)?);
-            let coefficients = std::mem::take(&mut c.coefficients);
+            let coefficients = core::mem::take(&mut c.coefficients);
             for by in 0..c.blocks_h {
                 for bx in 0..c.blocks_w {
                     let offset = (by * c.blocks_w + bx) * 64;
@@ -904,12 +907,12 @@ const AAN_SCALE: [f32; 8] = [
 
 /// Folds the AAN scale factors and the final division by 8 into a dequantization table.
 fn idct_table(quant: &[u16; 64]) -> [f32; 64] {
-    std::array::from_fn(|i| f32::from(quant[i]) * AAN_SCALE[i / 8] * AAN_SCALE[i % 8] / 8.0)
+    core::array::from_fn(|i| f32::from(quant[i]) * AAN_SCALE[i / 8] * AAN_SCALE[i % 8] / 8.0)
 }
 
 // The AAN 8-point inverse DCT butterfly, as in libjpeg's jidctflt.
 fn idct_1d(v: [f32; 8]) -> [f32; 8] {
-    use std::f32::consts::SQRT_2;
+    use core::f32::consts::SQRT_2;
     let tmp10 = v[0] + v[4];
     let tmp11 = v[0] - v[4];
     let tmp13 = v[2] + v[6];
@@ -942,7 +945,7 @@ fn idct_1d(v: [f32; 8]) -> [f32; 8] {
 fn idct(block: &[i32], table: &[f32; 64], dest: &mut [u8], stride: usize) {
     // Float-to-u8 casts saturate, which clamps every output sample to 0..=255.
     if block[1..].iter().all(|v| *v == 0) {
-        let value = (block[0] as f32 * table[0] + 128.0).round() as u8;
+        let value = libm::roundf(block[0] as f32 * table[0] + 128.0) as u8;
         for row in dest.chunks_mut(stride).take(8) {
             row[..8].fill(value);
         }
@@ -950,7 +953,7 @@ fn idct(block: &[i32], table: &[f32; 64], dest: &mut [u8], stride: usize) {
     }
     let mut columns = [[0.0f32; 8]; 8];
     for (x, column) in columns.iter_mut().enumerate() {
-        let input = std::array::from_fn(|y| block[y * 8 + x] as f32 * table[y * 8 + x]);
+        let input = core::array::from_fn(|y| block[y * 8 + x] as f32 * table[y * 8 + x]);
         *column = if input[1..].iter().all(|v| *v == 0.0) {
             [input[0]; 8]
         } else {
@@ -958,9 +961,9 @@ fn idct(block: &[i32], table: &[f32; 64], dest: &mut [u8], stride: usize) {
         };
     }
     for (y, dest) in dest.chunks_mut(stride).take(8).enumerate() {
-        let row = idct_1d(std::array::from_fn(|x| columns[x][y]));
+        let row = idct_1d(core::array::from_fn(|x| columns[x][y]));
         for (dest, value) in dest.iter_mut().zip(row) {
-            *dest = (value + 128.0).round() as u8;
+            *dest = libm::roundf(value + 128.0) as u8;
         }
     }
 }
@@ -1287,12 +1290,12 @@ fn jpeg_aan(d: [f32; 8]) -> [f32; 8] {
     let (tmp3, tmp4) = (d[3] + d[4], d[3] - d[4]);
     let (tmp10, tmp13) = (tmp0 + tmp3, tmp0 - tmp3);
     let (tmp11, tmp12) = (tmp1 + tmp2, tmp1 - tmp2);
-    let z1 = (tmp12 + tmp13) * std::f32::consts::FRAC_1_SQRT_2;
+    let z1 = (tmp12 + tmp13) * core::f32::consts::FRAC_1_SQRT_2;
     let (odd10, odd11, odd12) = (tmp4 + tmp5, tmp5 + tmp6, tmp6 + tmp7);
     let z5 = (odd10 - odd12) * 0.382_683_43;
     let z2 = odd10 * 0.541_196_1 + z5;
     let z4 = odd12 * 1.306_563 + z5;
-    let z3 = odd11 * std::f32::consts::FRAC_1_SQRT_2;
+    let z3 = odd11 * core::f32::consts::FRAC_1_SQRT_2;
     let (z11, z13) = (tmp7 + z3, tmp7 - z3);
     [
         tmp10 + tmp11,
@@ -1310,15 +1313,15 @@ fn jpeg_fdct(plane: &[u8], stride: usize, scale: &[f32; 64]) -> [i16; 64] {
     let mut data = [[0.0f32; 8]; 8];
     for (y, row) in data.iter_mut().enumerate() {
         let samples = &plane[y * stride..y * stride + 8];
-        *row = jpeg_aan(std::array::from_fn(|x| f32::from(samples[x]) - 128.0));
+        *row = jpeg_aan(core::array::from_fn(|x| f32::from(samples[x]) - 128.0));
     }
     for x in 0..8 {
-        let column = jpeg_aan(std::array::from_fn(|y| data[y][x]));
+        let column = jpeg_aan(core::array::from_fn(|y| data[y][x]));
         for (row, value) in data.iter_mut().zip(column) {
             row[x] = value;
         }
     }
-    std::array::from_fn(|index| (data[index / 8][index % 8] * scale[index]).round() as i16)
+    core::array::from_fn(|index| libm::roundf(data[index / 8][index % 8] * scale[index]) as i16)
 }
 
 fn jpeg_amplitude(value: i16) -> (u8, u16) {
@@ -1449,7 +1452,7 @@ fn jpeg_optimized_huffman(mut frequencies: [u32; 257]) -> JpegOptimizedHuffman {
         .expect("Huffman tree has a code");
     counts[longest] -= 1; // Remove the pseudo-symbol reserved to avoid all-ones codes.
 
-    let lengths = std::array::from_fn(|index| counts[index + 1] as u8);
+    let lengths = core::array::from_fn(|index| counts[index + 1] as u8);
     let mut values = Vec::new();
     for size in 1..sizes.len() {
         for (symbol, &actual) in sizes[..256].iter().enumerate() {
@@ -1470,7 +1473,7 @@ pub(super) fn encode(
     bitmap: &Bitmap,
     quality: u8,
     style: EncodingStyle,
-) -> std::result::Result<Vec<u8>, EncodeError> {
+) -> core::result::Result<Vec<u8>, EncodeError> {
     if !(1..=100).contains(&quality) {
         return Err(EncodeError::InvalidQuality);
     }
@@ -1528,7 +1531,7 @@ impl JpegTables {
             0.275_899_38,
         ];
         let reciprocals = |quant: &[u8; 64]| {
-            std::array::from_fn(|index| {
+            core::array::from_fn(|index| {
                 1.0 / (f32::from(quant[index]) * AAN[index / 8] * AAN[index % 8] * 8.0)
             })
         };
@@ -1571,7 +1574,7 @@ fn jpeg_optimized_tables(
     jpeg_symbols(blocks, gray, sampling, |table, symbol, _, _| {
         frequencies[table][symbol] += 1;
     });
-    std::array::from_fn(|index| {
+    core::array::from_fn(|index| {
         if frequencies[index].iter().all(|&count| count == 0) {
             frequencies[index][0] = 1;
         }
@@ -1695,7 +1698,7 @@ mod tests {
         let symbols = [15u8, 0, 9, 8, 10, 3, 14, 1];
         let mut stream = Vec::new();
         for &symbol in &symbols {
-            stream.extend(std::iter::repeat_n(1, symbol as usize));
+            stream.extend(core::iter::repeat_n(1, symbol as usize));
             stream.push(0);
         }
         stream.resize(stream.len().next_multiple_of(8), 1);
@@ -1742,7 +1745,7 @@ mod tests {
                     let (u, v) = ((k % 8) as f64, (k / 8) as f64);
                     let scale = |n: f64| {
                         if n == 0.0 {
-                            std::f64::consts::FRAC_1_SQRT_2
+                            core::f64::consts::FRAC_1_SQRT_2
                         } else {
                             1.0
                         }
@@ -1750,8 +1753,8 @@ mod tests {
                     sum += scale(u)
                         * scale(v)
                         * f64::from(value * i32::from(quant[k]))
-                        * ((2.0 * x + 1.0) * u * std::f64::consts::PI / 16.0).cos()
-                        * ((2.0 * y + 1.0) * v * std::f64::consts::PI / 16.0).cos();
+                        * ((2.0 * x + 1.0) * u * core::f64::consts::PI / 16.0).cos()
+                        * ((2.0 * y + 1.0) * v * core::f64::consts::PI / 16.0).cos();
                 }
                 let expected = (sum / 4.0 + 128.0).round().clamp(0.0, 255.0) as u8;
                 assert!(actual.abs_diff(expected) <= 1, "{actual} vs {expected}");

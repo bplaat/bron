@@ -572,7 +572,9 @@ dependencies = [
 name = "image"
 version = "0.1.0"
 dependencies = [
+ "crc",
  "criterion",
+ "libm",
  "miniz_oxide",
 ]
 
