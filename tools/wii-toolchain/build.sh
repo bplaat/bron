@@ -106,9 +106,17 @@ clone() {
 }
 
 fetch() {
-    clone "$libogc_url" "$libogc_version" "$libogc_commit" "$LIBOGC_DIR"
-    clone "$tools_url" "$tools_version" "$tools_commit" "$TOOLS_DIR"
-    clone "$llvm_url" "$llvm_version" "$llvm_commit" "$COMPILER_RT_DIR" /compiler-rt/lib/builtins/
+    local pids=() pid failed=0
+    clone "$libogc_url" "$libogc_version" "$libogc_commit" "$LIBOGC_DIR" &
+    pids+=($!)
+    clone "$tools_url" "$tools_version" "$tools_commit" "$TOOLS_DIR" &
+    pids+=($!)
+    clone "$llvm_url" "$llvm_version" "$llvm_commit" "$COMPILER_RT_DIR" /compiler-rt/lib/builtins/ &
+    pids+=($!)
+    for pid in "${pids[@]}"; do
+        wait "$pid" || failed=1
+    done
+    [ "$failed" = 0 ] || die "Failed to clone Wii toolchain dependencies"
 }
 
 # Applies the patches as commits on top of the upstream tag, again when they changed
