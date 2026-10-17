@@ -167,6 +167,7 @@ dependencies = [
 name = "bsql_derive"
 version = "0.1.1"
 dependencies = [
+ "bsql",
  "quote",
  "syn 3.0.4",
  "trybuild",
@@ -933,6 +934,9 @@ dependencies = [
 [[package]]
 name = "plist"
 version = "1.10.0+patch"
+dependencies = [
+ "base64",
+]
 
 [[package]]
 name = "proc-macro2"
@@ -1021,6 +1025,7 @@ name = "rust-embed-impl"
 version = "8.12.0+patch"
 dependencies = [
  "quote",
+ "rust-embed",
  "syn 3.0.4",
  "trybuild",
 ]
@@ -1386,6 +1391,7 @@ dependencies = [
  "quote",
  "syn 3.0.4",
  "trybuild",
+ "validate",
 ]
 
 [[package]]

@@ -9,6 +9,8 @@
 #[test]
 fn ui() {
     let tests = trybuild::TestCases::new();
+    // The pass tests use the objc2 runtime crate, which only exists on Apple targets
+    #[cfg(target_vendor = "apple")]
     tests.pass("tests/ui/pass/*.rs");
     tests.compile_fail("tests/ui/fail/*.rs");
 }

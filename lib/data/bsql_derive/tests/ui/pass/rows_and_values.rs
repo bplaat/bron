@@ -4,77 +4,7 @@
  * SPDX-License-Identifier: MIT
  */
 
-extern crate self as bsql;
-
-use bsql_derive::{FromRow, FromValue};
-
-enum Value {
-    Null,
-    Integer(i64),
-    Text(String),
-}
-
-struct ValueError;
-impl ValueError {
-    fn new(_: impl Into<String>) -> Self {
-        Self
-    }
-}
-
-struct StatementError;
-struct RawStatement;
-impl RawStatement {
-    fn bind_value(&mut self, _: i32, _: Value) -> Result<(), StatementError> {
-        Ok(())
-    }
-
-    fn column_value(&mut self, _: i32) -> Value {
-        Value::Null
-    }
-}
-
-trait Bind {
-    fn bind(self, statement: &mut RawStatement) -> Result<(), StatementError>;
-}
-
-trait FromRow: Sized {
-    fn from_row(statement: &mut RawStatement) -> Result<Self, ValueError>;
-}
-
-impl From<String> for Value {
-    fn from(value: String) -> Self {
-        Self::Text(value)
-    }
-}
-
-impl TryFrom<Value> for String {
-    type Error = ValueError;
-
-    fn try_from(value: Value) -> Result<Self, Self::Error> {
-        match value {
-            Value::Text(value) => Ok(value),
-            _ => Err(ValueError),
-        }
-    }
-}
-
-impl From<Option<String>> for Value {
-    fn from(value: Option<String>) -> Self {
-        value.map_or(Self::Null, Self::Text)
-    }
-}
-
-impl TryFrom<Value> for Option<String> {
-    type Error = ValueError;
-
-    fn try_from(value: Value) -> Result<Self, Self::Error> {
-        match value {
-            Value::Null => Ok(None),
-            Value::Text(value) => Ok(Some(value)),
-            _ => Err(ValueError),
-        }
-    }
-}
+use bsql::{FromRow, FromValue, Value, ValueError};
 
 #[derive(Default, FromRow)]
 struct User<T>

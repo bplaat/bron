@@ -4,48 +4,15 @@
  * SPDX-License-Identifier: MIT
  */
 
-extern crate self as validate;
-
-use std::collections::HashMap;
 use std::marker::PhantomData;
-use validate_derive::Validate;
 
-#[derive(Default)]
-struct Report(HashMap<String, Vec<String>>);
-
-impl Report {
-    fn new() -> Self {
-        Self::default()
-    }
-
-    fn is_empty(&self) -> bool {
-        self.0.is_empty()
-    }
-
-    fn insert_error(&mut self, field: impl Into<String>, error: impl Into<String>) {
-        self.0.entry(field.into()).or_default().push(error.into());
-    }
-}
-
-struct Error(String);
-
-impl Error {
-    fn message(&self) -> &str {
-        &self.0
-    }
-}
-
-trait Validate {
-    type Context;
-
-    fn validate_with(&self, context: &Self::Context) -> Result<(), Report>;
-}
+use validate::{Error, Validate};
 
 struct Context;
 
 fn allowed(value: &String, _context: &Context) -> Result<(), Error> {
     if value.is_empty() {
-        Err(Error("empty".into()))
+        Err(Error::new("empty"))
     } else {
         Ok(())
     }

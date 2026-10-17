@@ -33,9 +33,21 @@ enum Expected {
     CompileFail,
 }
 
+type Dependencies = BTreeMap<String, serde_json::Value>;
+
 #[derive(Deserialize)]
 struct SourceManifest {
     package: SourcePackage,
+    #[serde(default, rename = "dev-dependencies")]
+    dev_dependencies: Dependencies,
+    #[serde(default)]
+    target: BTreeMap<String, SourceTarget>,
+}
+
+#[derive(Deserialize)]
+struct SourceTarget {
+    #[serde(default, rename = "dev-dependencies")]
+    dev_dependencies: Dependencies,
 }
 
 #[derive(Deserialize)]
@@ -56,6 +68,8 @@ enum Edition {
 struct WorkspaceManifest {
     #[serde(default)]
     workspace: Workspace,
+    #[serde(default)]
+    patch: BTreeMap<String, Dependencies>,
 }
 
 #[derive(Deserialize, Default)]
@@ -72,10 +86,19 @@ struct WorkspacePackage {
 #[derive(Serialize)]
 struct TestManifest {
     package: TestPackage,
-    dependencies: BTreeMap<String, Dependency>,
+    dependencies: Dependencies,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    target: BTreeMap<String, TestTarget>,
     #[serde(rename = "bin")]
     bins: Vec<Bin>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    patch: BTreeMap<String, Dependencies>,
     workspace: Empty,
+}
+
+#[derive(Serialize)]
+struct TestTarget {
+    dependencies: Dependencies,
 }
 
 #[derive(Serialize)]
@@ -84,13 +107,6 @@ struct TestPackage {
     version: &'static str,
     edition: String,
     publish: bool,
-}
-
-#[derive(Serialize)]
-struct Dependency {
-    path: PathBuf,
-    #[serde(rename = "default-features")]
-    default_features: bool,
 }
 
 #[derive(Serialize)]
@@ -154,8 +170,9 @@ impl TestCases {
         let source = read_source_manifest(&source_dir)?;
         let edition = resolve_edition(&source_dir, source.package.edition)?;
         let tests = expand_tests(&source_dir, &self.tests.borrow())?;
-        let project_dir = target_dir(&source_dir)?
-            .join("tests/trybuild")
+        let workspace_dir = workspace_root(&source_dir)?;
+        let project_dir = workspace_dir
+            .join("target/tests/trybuild")
             .join(&source.package.name);
 
         fs::create_dir_all(&project_dir).map_err(|error| error.to_string())?;
@@ -174,13 +191,29 @@ impl TestCases {
             path: test.path.clone(),
         }))
         .collect();
-        let dependencies = BTreeMap::from([(
+        // Like upstream, the tests can use the crate, its dev-dependencies and the workspace patches
+        let mut dependencies = absolute_paths(source.dev_dependencies, &source_dir);
+        dependencies.insert(
             source.package.name.clone(),
-            Dependency {
-                path: source_dir.clone(),
-                default_features: false,
-            },
-        )]);
+            serde_json::json!({ "path": source_dir, "default-features": false }),
+        );
+        let target = source
+            .target
+            .into_iter()
+            .filter(|(_, target)| !target.dev_dependencies.is_empty())
+            .map(|(cfg, target)| {
+                let dependencies = absolute_paths(target.dev_dependencies, &source_dir);
+                (cfg, TestTarget { dependencies })
+            })
+            .collect();
+        let workspace_manifest = fs::read_to_string(workspace_dir.join("Cargo.toml"))
+            .map_err(|error| error.to_string())?;
+        let patch = basic_toml::from_str::<WorkspaceManifest>(&workspace_manifest)
+            .map_err(|error| error.to_string())?
+            .patch
+            .into_iter()
+            .map(|(registry, patches)| (registry, absolute_paths(patches, &workspace_dir)))
+            .collect();
         let manifest = TestManifest {
             package: TestPackage {
                 name: format!("{}-tests", source.package.name),
@@ -189,7 +222,9 @@ impl TestCases {
                 publish: false,
             },
             dependencies,
+            target,
             bins,
+            patch,
             workspace: Empty {},
         };
         let manifest = basic_toml::to_string(&manifest).map_err(|error| error.to_string())?;
@@ -270,15 +305,31 @@ fn resolve_edition(source_dir: &Path, edition: Option<Edition>) -> Result<String
     }
 }
 
-fn target_dir(source_dir: &Path) -> Result<PathBuf, String> {
-    for directory in source_dir.ancestors() {
-        if fs::read_to_string(directory.join("Cargo.toml"))
-            .is_ok_and(|contents| contents.contains("[workspace]"))
+fn workspace_root(source_dir: &Path) -> Result<PathBuf, String> {
+    source_dir
+        .ancestors()
+        .find(|directory| {
+            fs::read_to_string(directory.join("Cargo.toml"))
+                .is_ok_and(|contents| contents.contains("[workspace]"))
+        })
+        .map(Path::to_path_buf)
+        .ok_or_else(|| "workspace root not found".to_string())
+}
+
+/// Write dependencies as tables, as TOML needs them after plain values, and resolve relative
+/// `path` dependencies against the manifest directory they come from
+fn absolute_paths(mut dependencies: Dependencies, base: &Path) -> Dependencies {
+    for dependency in dependencies.values_mut() {
+        if dependency.is_string() {
+            *dependency = serde_json::json!({ "version": dependency });
+        }
+        if let Some(path) = dependency.get_mut("path")
+            && let Some(relative) = path.as_str()
         {
-            return Ok(directory.join("target"));
+            *path = base.join(relative).to_string_lossy().into();
         }
     }
-    Err("workspace root not found".to_string())
+    dependencies
 }
 
 fn expand_tests(source_dir: &Path, tests: &[Test]) -> Result<Vec<ExpandedTest>, String> {

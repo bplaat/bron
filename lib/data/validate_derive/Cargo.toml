@@ -21,4 +21,5 @@ email = []
 url = []
 
 [dev-dependencies]
+validate = { path = "../validate" }
 trybuild = "1.0"
