@@ -6,9 +6,12 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-miniz_oxide = { version = "0.9.1", default-features = false, features = [
-    "with-alloc",
+image = { path = "../../../../lib/graphics/image", default-features = false, features = [
+    "png",
 ] }
+
+[patch.crates-io]
+crc = { path = "../../../../lib/data/crc" }
 
 # Unoptimized code is too slow for the Wii
 [profile.dev]
