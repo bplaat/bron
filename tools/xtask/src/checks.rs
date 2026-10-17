@@ -152,6 +152,21 @@ impl Xtask {
                 &format!("clang-format --dry-run --Werror ({} files)", files.len()),
             )?;
         }
+
+        println!("Checking Swift formatting...");
+        let files = self.source_files(&["swift"])?;
+        let mut command = Command::new("swift");
+        command.args(["format", "lint", "--strict"]);
+        for files in command_batches(&files, command_argument_budget(&command, self.os)?, self.os)?
+        {
+            let mut command = Command::new("swift");
+            command.args(["format", "lint", "--strict"]);
+            command.args(files);
+            run_named(
+                &mut command,
+                &format!("swift format lint --strict ({} files)", files.len()),
+            )?;
+        }
         Ok(())
     }
 
