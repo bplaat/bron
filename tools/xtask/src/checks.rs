@@ -101,7 +101,10 @@ impl Xtask {
                     && !relative.ends_with(".min.js")
             })
             .collect::<Vec<_>>();
-        for files in command_batches(&files, prettier_argument_budget(self.os)?, self.os)? {
+        let mut command = Command::new(npx_program(self.os));
+        command.args(["--no-install", "prettier", "--check"]);
+        for files in command_batches(&files, command_argument_budget(&command, self.os)?, self.os)?
+        {
             let mut command = Command::new(npx_program(self.os));
             command.args(["--no-install", "prettier", "--check"]);
             command.args(files);
@@ -137,7 +140,10 @@ impl Xtask {
                     })
         });
         files.sort();
-        for files in files.chunks(100) {
+        let mut command = Command::new("clang-format");
+        command.args(["--dry-run", "--Werror"]);
+        for files in command_batches(&files, command_argument_budget(&command, self.os)?, self.os)?
+        {
             let mut command = Command::new("clang-format");
             command.args(["--dry-run", "--Werror"]);
             command.args(files);
@@ -409,10 +415,19 @@ impl Xtask {
     }
 }
 
-fn prettier_argument_budget(os: Os) -> Result<usize> {
-    // npx.cmd runs through cmd.exe, which accepts at most 8191 characters.
+fn command_argument_budget(command: &Command, os: Os) -> Result<usize> {
+    // Batch scripts run through cmd.exe; native programs use CreateProcessW.
     #[cfg(windows)]
-    let limit = 8191usize;
+    let limit = if Path::new(command.get_program())
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            extension.eq_ignore_ascii_case("cmd") || extension.eq_ignore_ascii_case("bat")
+        }) {
+        8191usize
+    } else {
+        32_767usize
+    };
     #[cfg(unix)]
     let limit = unix_arg_max()?;
     let environment = if os == Os::Windows {
@@ -422,12 +437,15 @@ fn prettier_argument_budget(os: Os) -> Result<usize> {
             .map(|(key, value)| key.to_string_lossy().len() + value.to_string_lossy().len() + 18)
             .sum()
     };
-    let fixed_args = npx_program(os).len() + " --no-install prettier --check".len();
+    let fixed_args = std::iter::once(command.get_program())
+        .chain(command.get_args())
+        .map(|arg| command_argument_size(Path::new(arg), os))
+        .sum::<usize>();
     // Leave room for the command interpreter on Windows and argv overhead on Unix.
     let reserve = if os == Os::Windows { 1024 } else { 4096 };
     limit
         .checked_sub(environment + fixed_args + reserve)
-        .context("environment leaves no room for Prettier arguments")
+        .context("environment leaves no room for command arguments")
 }
 
 #[cfg(unix)]
@@ -448,10 +466,7 @@ fn command_batches(files: &[PathBuf], budget: usize, os: Os) -> Result<Vec<&[Pat
     for (index, file) in files.iter().enumerate() {
         let size = command_argument_size(file, os);
         if size > budget {
-            bail!(
-                "path is too long for a Prettier command: {}",
-                file.display()
-            );
+            bail!("path is too long for a command: {}", file.display());
         }
         if used + size > budget {
             batches.push(&files[start..index]);
@@ -502,24 +517,27 @@ mod tests {
     use super::*;
 
     #[test]
-    fn prettier_batches_fit_the_command_budget() -> Result<()> {
+    fn batches_fit_the_command_budget() -> Result<()> {
         let files = [
             PathBuf::from("short.json"),
             PathBuf::from("a/deeply/nested/file.json"),
             PathBuf::from("another/deeply/nested/file.json"),
         ];
-        let budget = command_argument_size(&files[0], Os::Windows)
-            + command_argument_size(&files[1], Os::Windows);
-        let batches = command_batches(&files, budget, Os::Windows)?;
-        assert_eq!(batches, [&files[..2], &files[2..]]);
-        assert!(batches.iter().all(|batch| {
-            batch
-                .iter()
-                .map(|file| command_argument_size(file, Os::Windows))
-                .sum::<usize>()
-                <= budget
-        }));
-        assert!(command_batches(&files, 1, Os::Windows).is_err());
+        for os in [Os::Linux, Os::Macos, Os::Windows] {
+            let budget =
+                command_argument_size(&files[0], os) + command_argument_size(&files[1], os);
+            let batches = command_batches(&files, budget, os)?;
+            assert_eq!(batches, [&files[..2], &files[2..]]);
+            assert!(batches.iter().all(|batch| {
+                batch
+                    .iter()
+                    .map(|file| command_argument_size(file, os))
+                    .sum::<usize>()
+                    <= budget
+            }));
+            assert!(command_batches(&files, 1, os).is_err());
+            assert!(command_batches(&[], budget, os)?.is_empty());
+        }
         Ok(())
     }
 
