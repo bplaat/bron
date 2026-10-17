@@ -39,10 +39,14 @@ impl AndroidVars {
             .clone()
             .unwrap_or_default();
         let android_home = env::var("ANDROID_HOME").expect("$ANDROID_HOME env var must be set");
-        let platform_jar = format!(
-            "{}/platforms/android-{}/android.jar",
-            android_home, android_metadata.target_sdk_version
-        );
+        let platform_jar = find_platform_jar(&android_home, android_metadata.target_sdk_version)
+            .unwrap_or_else(|| {
+                eprintln!(
+                    "No platform found for target_sdk_version {} in {android_home}/platforms",
+                    android_metadata.target_sdk_version
+                );
+                exit(1);
+            });
 
         // Determine command_line_tools_path: prefer 'latest', else pick highest versioned folder
         let cmdline_tools_dir = format!("{android_home}/cmdline-tools");
@@ -126,6 +130,16 @@ impl AndroidVars {
             platform_jar,
         }
     }
+}
+
+fn find_platform_jar(android_home: &str, target_sdk_version: u16) -> Option<String> {
+    [
+        format!("{target_sdk_version}"),
+        format!("{target_sdk_version}.0"),
+    ]
+    .into_iter()
+    .map(|version| format!("{android_home}/platforms/android-{version}/android.jar"))
+    .find(|path| Path::new(path).is_file())
 }
 
 // Returns a JDK 17 (or else JDK 21) JAVA_HOME for Android tooling, or `None` when the
@@ -582,4 +596,38 @@ pub(crate) fn run_android_apk(bobje: &Bobje) -> ! {
 fn parse_version_to_code(version: &str) -> u32 {
     let version = Version::parse(version).expect("Can't parse numeric version");
     (version.major as u32) * 1_000_000 + (version.minor as u32) * 1_000 + (version.patch as u32)
+}
+
+// MARK: Tests
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn finds_integer_and_decimal_platform_directories() {
+        let directory = env::temp_dir().join(format!("bob-platform-test-{}", std::process::id()));
+        let android_home = directory.to_str().expect("temporary directory path");
+        fs::create_dir_all(&directory).expect("create temporary SDK");
+        assert_eq!(find_platform_jar(android_home, 37), None);
+
+        let decimal_platform = directory.join("platforms/android-37.0");
+        fs::create_dir_all(&decimal_platform).expect("create decimal platform");
+        let decimal_jar = decimal_platform.join("android.jar");
+        fs::write(&decimal_jar, []).expect("create decimal platform jar");
+        assert_eq!(
+            find_platform_jar(android_home, 37).as_deref(),
+            decimal_jar.to_str()
+        );
+        assert_eq!(find_platform_jar(android_home, 36), None);
+
+        let integer_platform = directory.join("platforms/android-37");
+        fs::create_dir_all(&integer_platform).expect("create integer platform");
+        let integer_jar = integer_platform.join("android.jar");
+        fs::write(&integer_jar, []).expect("create integer platform jar");
+        assert_eq!(
+            find_platform_jar(android_home, 37).as_deref(),
+            integer_jar.to_str()
+        );
+        fs::remove_dir_all(directory).expect("remove temporary SDK");
+    }
 }

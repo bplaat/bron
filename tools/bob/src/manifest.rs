@@ -94,7 +94,7 @@ impl Default for AndroidMetadata {
     fn default() -> Self {
         Self {
             min_sdk_version: 21,
-            target_sdk_version: 36,
+            target_sdk_version: 37,
             main_activity: ".MainActivity".to_string(),
             keystore_file: "keystore.jks".to_string(),
             key_alias: "android".to_string(),
