@@ -7,6 +7,7 @@ authors.workspace = true
 repository.workspace = true
 
 [dependencies]
+crc = "3"
 miniz_oxide = "0.9.1"
 
 [dev-dependencies]

@@ -10,6 +10,8 @@ use std::fmt;
 use std::io::{self, Cursor, Read, Seek, SeekFrom};
 use std::time::SystemTime;
 
+use crc::{CRC_32_ISO_HDLC, Crc};
+
 use crate::metadata::{dos_timestamp, extra_timestamp};
 
 mod metadata;
@@ -20,6 +22,8 @@ const MAX_UNCOMPRESSED_SIZE: usize = 128 * 1024 * 1024;
 const MAX_COMPRESSED_SIZE: usize = 128 * 1024 * 1024;
 const MAX_TOTAL_UNCOMPRESSED_SIZE: usize = 256 * 1024 * 1024;
 const MAX_ARCHIVE_SIZE: usize = 512 * 1024 * 1024;
+
+static CRC32: Crc<u32> = Crc::<u32>::new(&CRC_32_ISO_HDLC);
 
 bitflags::bitflags! {
     #[derive(Clone, Copy, PartialEq, Eq)]
@@ -415,7 +419,7 @@ impl<R: Read + Seek> ZipArchive<R> {
                 "uncompressed data size does not match directory",
             ));
         }
-        if crc32(&data) != expected_crc32 {
+        if CRC32.checksum(&data) != expected_crc32 {
             return Err(ZipError::InvalidZip(
                 "entry checksum does not match directory",
             ));
@@ -477,18 +481,6 @@ fn read_limited(reader: &mut impl Read, limit: usize) -> Result<Vec<u8>, ZipErro
         return Err(ZipError::InvalidZip("archive size exceeds limit"));
     }
     Ok(bytes)
-}
-
-fn crc32(data: &[u8]) -> u32 {
-    let mut crc = u32::MAX;
-    for byte in data {
-        crc ^= u32::from(*byte);
-        for _ in 0..8 {
-            let mask = (crc & 1).wrapping_neg();
-            crc = (crc >> 1) ^ (0xedb8_8320 & mask);
-        }
-    }
-    !crc
 }
 
 // MARK: Error

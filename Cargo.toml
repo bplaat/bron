@@ -45,6 +45,7 @@ bsql = { path = "lib/data/bsql" }
 bsql_derive = { path = "lib/data/bsql_derive" }
 chrono = { path = "lib/data/chrono" }
 copy_dir = { path = "lib/sys/copy_dir" }
+crc = { path = "lib/data/crc" }
 criterion = { path = "lib/test/criterion" }
 digest = { path = "lib/crypto/digest" }
 directories = { path = "lib/sys/directories" }
@@ -88,6 +89,9 @@ panic = "abort"
 overflow-checks = false
 
 [profile.release.package.reversi-engine]
+opt-level = 3
+
+[profile.release.package.crc]
 opt-level = 3
 
 [profile.release.package.image]

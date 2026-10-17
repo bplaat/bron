@@ -7,8 +7,8 @@
 use std::io::{Read, Seek, SeekFrom, Write};
 
 use crate::{
-    MAX_ARCHIVE_SIZE, MAX_TOTAL_UNCOMPRESSED_SIZE, MAX_UNCOMPRESSED_SIZE, ZipArchive, ZipError,
-    crc32,
+    CRC32, MAX_ARCHIVE_SIZE, MAX_TOTAL_UNCOMPRESSED_SIZE, MAX_UNCOMPRESSED_SIZE, ZipArchive,
+    ZipError,
 };
 
 /// Appends a file to a single-disk, non-ZIP64 archive, preserving existing entries verbatim.
@@ -66,7 +66,7 @@ pub fn append_file<R: Read + Write + Seek>(
         (0u16, data)
     };
     let compressed_size = payload.len() as u32;
-    let checksum = crc32(data);
+    let checksum = CRC32.checksum(data);
     let mut header = Vec::new();
     // Version, UTF-8 flag, compression, and a fixed DOS date (1980-01-01).
     for value in [20u16, 0x800, method, 0, 0x21] {
