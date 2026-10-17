@@ -10,9 +10,15 @@
 //! implement the full WHATWG URL Standard, internationalized domain names, or relative URL
 //! resolution.
 
-use std::error::Error;
-use std::fmt::{self, Display, Formatter};
-use std::str::FromStr;
+#![cfg_attr(not(test), no_std)]
+
+extern crate alloc;
+
+use alloc::format;
+use alloc::string::{String, ToString};
+use core::error::Error;
+use core::fmt::{self, Display, Formatter};
+use core::str::FromStr;
 
 // MARK: URL
 /// Url
@@ -59,7 +65,7 @@ impl Url {
     /// Get the URL domain
     pub fn domain(&self) -> Option<&str> {
         self.authority.as_ref().and_then(|auth| {
-            (!auth.is_ipv6 && auth.host.parse::<std::net::Ipv4Addr>().is_err())
+            (!auth.is_ipv6 && auth.host.parse::<core::net::Ipv4Addr>().is_err())
                 .then_some(auth.host.as_str())
         })
     }
@@ -158,7 +164,7 @@ fn parse_authority(authority: &str) -> Result<Authority, ParseError> {
         let host = &address[..closing];
         let suffix = &address[closing + 1..];
         let address = host
-            .parse::<std::net::Ipv6Addr>()
+            .parse::<core::net::Ipv6Addr>()
             .map_err(|_| ParseError("Invalid IPv6 host".to_string()))?;
         let port = parse_port_suffix(suffix)?;
         (address.to_string(), port, true)

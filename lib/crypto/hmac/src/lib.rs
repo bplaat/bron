@@ -6,6 +6,13 @@
 
 //! A minimal replacement for the [hmac](https://crates.io/crates/hmac) crate
 
+#![cfg_attr(not(test), no_std)]
+
+extern crate alloc;
+
+use alloc::vec;
+use alloc::vec::Vec;
+
 use digest::Digest;
 
 fn key_block<D: Digest>(key: &[u8]) -> Vec<u8> {
