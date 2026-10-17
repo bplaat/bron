@@ -18,7 +18,13 @@ export default defineConfig({
     reporter: process.env.CI ? [['list'], ['junit', { outputFile: 'test-results/junit.xml' }]] : 'list',
     projects: [
         { name: 'chromium', use: { ...devices['Desktop Chrome'] } },
-        { name: 'firefox', use: { ...devices['Desktop Firefox'] } },
+        {
+            name: 'firefox',
+            use: { ...devices['Desktop Firefox'] },
+            // TODO: Re-enable Firefox on macOS once its startup hang is fixed upstream.
+            // https://github.com/microsoft/playwright/issues/42082
+            testIgnore: process.platform === 'darwin' ? '**/*' : undefined,
+        },
         { name: 'webkit', use: { ...devices['Desktop Safari'] } },
     ],
     expect: {

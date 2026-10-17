@@ -10,18 +10,18 @@
         "test": "npm exec --node-options=--no-deprecation -- playwright test"
     },
     "dependencies": {
-        "plaatui": "file:../../../../lib/ui/plaatui",
         "@preact/signals": "^2.3.1",
         "@types/dompurify": "^3.0.5",
         "@types/turndown": "^5.0.6",
         "dompurify": "^3.3.3",
         "marked": "^17.0.3",
+        "plaatui": "file:../../../../lib/ui/plaatui",
         "preact": "^10.26.9",
         "turndown": "^7.2.2",
         "wouter-preact": "^3.9.0"
     },
     "devDependencies": {
-        "@playwright/test": "1.60.0",
+        "@playwright/test": "1.64.1",
         "@preact/preset-vite": "^2.10.1",
         "@types/node": "^26.1.0",
         "baseline-browser-mapping": "^2.10.0",
