@@ -7,8 +7,9 @@
 //! A minimal replacement for the [libsqlite3-sys](https://crates.io/crates/libsqlite3-sys) crate.
 
 #![allow(non_camel_case_types, non_snake_case, missing_docs)]
+#![cfg_attr(not(test), no_std)]
 
-use std::ffi::{c_char, c_int, c_void};
+use core::ffi::{c_char, c_int, c_void};
 
 pub type sqlite3 = c_void;
 pub type sqlite3_stmt = c_void;
@@ -33,7 +34,7 @@ pub const SQLITE_NULL: i32 = 5;
 #[allow(unsafe_code)]
 pub fn SQLITE_TRANSIENT() -> sqlite3_destructor_type {
     // SAFETY: The SQLite docs say that the value of `SQLITE_TRANSIENT` is -1.
-    Some(unsafe { std::mem::transmute::<isize, unsafe extern "C" fn(*mut c_void)>(-1) })
+    Some(unsafe { core::mem::transmute::<isize, unsafe extern "C" fn(*mut c_void)>(-1) })
 }
 
 #[allow(unsafe_code)]
