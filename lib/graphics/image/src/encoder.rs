@@ -4,7 +4,8 @@
  * SPDX-License-Identifier: MIT
  */
 
-use std::fmt::{self, Display, Formatter};
+use alloc::vec::Vec;
+use core::fmt::{self, Display, Formatter};
 
 use super::{Bitmap, Format, Frame, LoopCount};
 
@@ -72,7 +73,7 @@ impl Display for EncodeError {
     }
 }
 
-impl std::error::Error for EncodeError {}
+impl core::error::Error for EncodeError {}
 
 pub(super) fn validate_pixels(width: u32, height: u32, data: &[u8]) -> Result<(), EncodeError> {
     if width == 0 || height == 0 {
@@ -327,11 +328,11 @@ mod tests {
         let frames = [
             Frame::new(
                 Bitmap::new(1, 1, vec![255, 0, 0, 255]).unwrap(),
-                std::time::Duration::from_millis(100),
+                core::time::Duration::from_millis(100),
             ),
             Frame::new(
                 Bitmap::new(1, 1, vec![0, 255, 0, 255]).unwrap(),
-                std::time::Duration::from_millis(200),
+                core::time::Duration::from_millis(200),
             ),
         ];
         for format in [

@@ -15,14 +15,18 @@ path = "src/mod.rs"
 [features]
 default = ["qoi", "jpeg", "png", "gif", "bmp", "ico"]
 qoi = []
-jpeg = []
-png = ["dep:miniz_oxide"]
-gif = []
+jpeg = ["dep:libm"]
+png = ["dep:crc", "dep:miniz_oxide"]
+gif = ["dep:libm"]
 bmp = []
 ico = ["bmp", "png"]
 
 [dependencies]
-miniz_oxide = { version = "0.9.1", optional = true }
+crc = { version = "3", optional = true }
+libm = { version = "0.2", optional = true }
+miniz_oxide = { version = "0.9.1", default-features = false, features = [
+    "with-alloc",
+], optional = true }
 
 [dev-dependencies]
 criterion = "0.7"

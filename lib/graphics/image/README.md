@@ -48,7 +48,8 @@ selects the largest image in an ICO file. HDR, streaming, and ICC color
 management are not supported. Decoding has a cumulative 1 GiB allocation limit.
 
 All formats are enabled by default. You can enable only the codecs you need
-with the `qoi`, `jpeg`, `png`, `gif`, `bmp`, and `ico` Cargo features.
+with the `qoi`, `jpeg`, `png`, `gif`, `bmp`, and `ico` Cargo features. The crate
+is `no_std` and only needs `alloc`.
 
 ## Tests and benchmarks
 

@@ -4,6 +4,8 @@
  * SPDX-License-Identifier: MIT
  */
 
+use alloc::vec::Vec;
+
 use super::{Bitmap, Budget, ColorSpace, DecodeError, EncodeError, Format, Image};
 
 const HEADER_LEN: usize = 14;

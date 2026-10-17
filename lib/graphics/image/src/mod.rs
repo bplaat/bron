@@ -5,9 +5,13 @@
  */
 
 #![doc = include_str!("../README.md")]
+#![cfg_attr(not(test), no_std)]
 
-use std::fmt::{self, Display, Formatter};
-use std::time::Duration;
+extern crate alloc;
+
+use alloc::vec::Vec;
+use core::fmt::{self, Display, Formatter};
+use core::time::Duration;
 
 mod encoder;
 pub use encoder::{
@@ -91,7 +95,7 @@ pub struct Bitmap {
 
 impl Bitmap {
     /// Creates a bitmap from tightly packed RGBA8 pixels.
-    pub fn new(width: u32, height: u32, data: Vec<u8>) -> std::result::Result<Self, EncodeError> {
+    pub fn new(width: u32, height: u32, data: Vec<u8>) -> core::result::Result<Self, EncodeError> {
         encoder::validate_pixels(width, height, &data)?;
         Ok(Self {
             width,
@@ -157,7 +161,7 @@ pub struct Image {
 
 impl Image {
     /// Encodes the image in the requested raster format.
-    pub fn encode(&self, format: Format) -> std::result::Result<Vec<u8>, EncodeError> {
+    pub fn encode(&self, format: Format) -> core::result::Result<Vec<u8>, EncodeError> {
         self.encode_with_options(format, EncodeOptions::default())
     }
 
@@ -166,7 +170,7 @@ impl Image {
         &self,
         format: Format,
         options: EncodeOptions,
-    ) -> std::result::Result<Vec<u8>, EncodeError> {
+    ) -> core::result::Result<Vec<u8>, EncodeError> {
         if self.is_animated {
             encode_animation_with_options(format, &self.frames, self.loop_count, options)
         } else {
@@ -219,7 +223,7 @@ impl Image {
         Self {
             format,
             color_space: ColorSpace::Srgb,
-            frames: vec![Frame {
+            frames: alloc::vec![Frame {
                 bitmap: Bitmap {
                     width,
                     height,
@@ -260,9 +264,9 @@ impl Display for DecodeError {
     }
 }
 
-impl std::error::Error for DecodeError {}
+impl core::error::Error for DecodeError {}
 
-type Result<T> = std::result::Result<T, DecodeError>;
+type Result<T> = core::result::Result<T, DecodeError>;
 
 /// Decodes a complete image within 1 GiB, excluding uncommon JPEG/BMP variants.
 #[cfg_attr(

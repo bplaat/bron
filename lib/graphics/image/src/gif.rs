@@ -4,8 +4,10 @@
  * SPDX-License-Identifier: MIT
  */
 
-use std::mem;
-use std::time::Duration;
+use alloc::vec;
+use alloc::vec::Vec;
+use core::mem;
+use core::time::Duration;
 
 use super::{
     Area, Bitmap, Budget, ColorSpace, DecodeError, EncodeError, EncodingStyle, Format, Frame,
@@ -446,7 +448,7 @@ impl<'a> GifFrames<'a> {
 pub(super) fn encode_bitmap(
     bitmap: &Bitmap,
     style: EncodingStyle,
-) -> std::result::Result<Vec<u8>, EncodeError> {
+) -> core::result::Result<Vec<u8>, EncodeError> {
     encode_frames(GifFrames::Still(bitmap), LoopCount::Finite(1), style)
 }
 
@@ -454,7 +456,7 @@ pub(super) fn encode(
     frames: &[Frame],
     loop_count: LoopCount,
     style: EncodingStyle,
-) -> std::result::Result<Vec<u8>, EncodeError> {
+) -> core::result::Result<Vec<u8>, EncodeError> {
     encode_frames(GifFrames::Animated(frames), loop_count, style)
 }
 
@@ -462,7 +464,7 @@ fn encode_frames(
     frames: GifFrames<'_>,
     loop_count: LoopCount,
     style: EncodingStyle,
-) -> std::result::Result<Vec<u8>, EncodeError> {
+) -> core::result::Result<Vec<u8>, EncodeError> {
     let first = frames.get(0).bitmap;
     let width = u16::try_from(first.width).map_err(|_| EncodeError::InvalidDimensions)?;
     let height = u16::try_from(first.height).map_err(|_| EncodeError::InvalidDimensions)?;
@@ -606,7 +608,10 @@ struct GifCell {
 
 fn gif_distance(a: [f64; 3], b: [f64; 3]) -> f64 {
     (0..3)
-        .map(|channel| (a[channel] - b[channel]).powi(2))
+        .map(|channel| {
+            let delta = a[channel] - b[channel];
+            delta * delta
+        })
         .sum()
 }
 
@@ -633,7 +638,7 @@ fn gif_error(cells: &[GifCell]) -> f64 {
 
 fn gif_mean(cells: &[GifCell]) -> [f64; 3] {
     let count: f64 = cells.iter().map(|cell| cell.count).sum();
-    std::array::from_fn(|channel| {
+    core::array::from_fn(|channel| {
         cells
             .iter()
             .map(|cell| cell.count * cell.color[channel])
@@ -691,7 +696,10 @@ fn gif_quantize(
                 let spread = |channel: usize| {
                     slice
                         .iter()
-                        .map(|cell| cell.count * (cell.color[channel] - mean[channel]).powi(2))
+                        .map(|cell| {
+                            let delta = cell.color[channel] - mean[channel];
+                            cell.count * delta * delta
+                        })
                         .sum::<f64>()
                 };
                 spread(a).total_cmp(&spread(b))
@@ -748,7 +756,7 @@ fn gif_quantize(
     colors.extend(
         palette
             .iter()
-            .map(|color| color.map(|value| value.round().clamp(0.0, 255.0) as u8)),
+            .map(|color| color.map(|value| libm::round(value).clamp(0.0, 255.0) as u8)),
     );
     let palette: Vec<_> = colors.iter().map(|color| color.map(f64::from)).collect();
     let opaque = &palette[reserved..];
@@ -791,12 +799,12 @@ fn gif_diffuse(
             if pixel[3] < 128 {
                 continue;
             }
-            let wanted: [f32; 3] = std::array::from_fn(|channel| {
+            let wanted: [f32; 3] = core::array::from_fn(|channel| {
                 (f32::from(pixel[channel]) + current[x + 1][channel]).clamp(0.0, 255.0)
             });
             let index = lookup(wanted);
             indices[y * width + x] = index as u8;
-            let error: [f32; 3] = std::array::from_fn(|channel| {
+            let error: [f32; 3] = core::array::from_fn(|channel| {
                 (wanted[channel] - palette[index][channel] as f32).clamp(-64.0, 64.0) * strength
             });
             let (ahead, behind) = if reverse { (x, x + 2) } else { (x + 2, x) };
@@ -948,7 +956,7 @@ mod tests {
             } else {
                 state as usize % 8 + 1
             };
-            data.extend(std::iter::repeat_n((state >> 8) as u8 & 3, run));
+            data.extend(core::iter::repeat_n((state >> 8) as u8 & 3, run));
         }
         for min in [2, 8] {
             let encoded = lzw_encode(&data, min);

@@ -4,7 +4,11 @@
  * SPDX-License-Identifier: MIT
  */
 
-use std::time::Duration;
+use alloc::vec;
+use alloc::vec::Vec;
+use core::time::Duration;
+
+use crc::{CRC_32_ISO_HDLC, Crc};
 
 use super::{
     Area, Bitmap, Budget, ColorSpace, DecodeError, EncodeError, EncodingStyle, Format, Frame,
@@ -249,7 +253,7 @@ impl PngState {
             }
         }
         let pixels = if last {
-            std::mem::take(&mut self.canvas)
+            core::mem::take(&mut self.canvas)
         } else {
             budget.copy(&self.canvas)?
         };
@@ -506,58 +510,19 @@ fn chunk<'a>(r: &mut Reader<'a>) -> Result<(&'a [u8], &'a [u8])> {
     }
     let bytes = r.take(len)?;
     let expected = r.be32()?;
-    if !crc32(crc32(!0, kind), bytes) != expected {
+    if chunk_crc(kind, bytes) != expected {
         return Err(DecodeError::InvalidData);
     }
     Ok((kind, bytes))
 }
 
-// Slicing-by-8 tables: `CRC_TABLES[k][i]` advances the CRC of byte `i` by `k` zero bytes.
-const CRC_TABLES: [[u32; 256]; 8] = {
-    let mut tables = [[0; 256]; 8];
-    let mut i = 0;
-    while i < 256 {
-        let mut c = i as u32;
-        let mut j = 0;
-        while j < 8 {
-            c = (c >> 1) ^ (0xedb8_8320 & 0u32.wrapping_sub(c & 1));
-            j += 1;
-        }
-        tables[0][i] = c;
-        i += 1;
-    }
-    let mut k = 1;
-    while k < 8 {
-        let mut i = 0;
-        while i < 256 {
-            let previous = tables[k - 1][i];
-            tables[k][i] = (previous >> 8) ^ tables[0][(previous & 0xff) as usize];
-            i += 1;
-        }
-        k += 1;
-    }
-    tables
-};
+static CRC32: Crc<u32> = Crc::<u32>::new(&CRC_32_ISO_HDLC);
 
-fn crc32(mut crc: u32, bytes: &[u8]) -> u32 {
-    let t = &CRC_TABLES;
-    let (chunks, rest) = bytes.as_chunks::<8>();
-    for chunk in chunks {
-        let low = crc ^ u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
-        let high = u32::from_le_bytes([chunk[4], chunk[5], chunk[6], chunk[7]]);
-        crc = t[7][(low & 0xff) as usize]
-            ^ t[6][(low >> 8 & 0xff) as usize]
-            ^ t[5][(low >> 16 & 0xff) as usize]
-            ^ t[4][(low >> 24) as usize]
-            ^ t[3][(high & 0xff) as usize]
-            ^ t[2][(high >> 8 & 0xff) as usize]
-            ^ t[1][(high >> 16 & 0xff) as usize]
-            ^ t[0][(high >> 24) as usize];
-    }
-    for &byte in rest {
-        crc = t[0][((crc as u8) ^ byte) as usize] ^ (crc >> 8);
-    }
-    crc
+fn chunk_crc(kind: &[u8], data: &[u8]) -> u32 {
+    let mut digest = CRC32.digest();
+    digest.update(kind);
+    digest.update(data);
+    digest.finalize()
 }
 
 fn over(d: &mut [u8], s: &[u8]) {
@@ -696,7 +661,7 @@ impl Header {
             }
             (ColorType::TruecolorAlpha, _) => {
                 for (p, s) in dest.zip(scan.as_chunks::<8>().0) {
-                    *p = std::array::from_fn(|i| scale_16_to_8(sample16(s, i)));
+                    *p = core::array::from_fn(|i| scale_16_to_8(sample16(s, i)));
                 }
             }
             (ColorType::Truecolor, 8) => {
@@ -707,7 +672,7 @@ impl Header {
             }
             (ColorType::Truecolor, _) => {
                 for (p, s) in dest.zip(scan.as_chunks::<6>().0) {
-                    let samples = std::array::from_fn(|i| sample16(s, i));
+                    let samples = core::array::from_fn(|i| sample16(s, i));
                     let [r, g, b] = samples.map(scale_16_to_8);
                     *p = [r, g, b, alpha(transparency == Some(samples))];
                 }
@@ -867,7 +832,7 @@ fn write_chunk(
     out: &mut Vec<u8>,
     kind: &[u8; 4],
     data: &[u8],
-) -> std::result::Result<(), EncodeError> {
+) -> core::result::Result<(), EncodeError> {
     let len = u32::try_from(data.len()).map_err(|_| EncodeError::ImageTooLarge)?;
     out.try_reserve(
         data.len()
@@ -878,8 +843,7 @@ fn write_chunk(
     out.extend_from_slice(&len.to_be_bytes());
     out.extend_from_slice(kind);
     out.extend_from_slice(data);
-    let crc = crc32(crc32(!0, kind), data);
-    out.extend_from_slice(&(!crc).to_be_bytes());
+    out.extend_from_slice(&chunk_crc(kind, data).to_be_bytes());
     Ok(())
 }
 
@@ -1129,7 +1093,7 @@ fn png_filtered(
     row_len: usize,
     bpp: usize,
     mut choose: impl FnMut(&[u8], &[u8], &[u8]) -> u8,
-) -> std::result::Result<Vec<u8>, EncodeError> {
+) -> core::result::Result<Vec<u8>, EncodeError> {
     let mut output = Vec::new();
     output
         .try_reserve_exact(raw.len())
@@ -1195,7 +1159,7 @@ fn compressed_frame(
     color: PngColor,
     palette_lookup: Option<&[u64; 512]>,
     style: EncodingStyle,
-) -> std::result::Result<Vec<u8>, EncodeError> {
+) -> core::result::Result<Vec<u8>, EncodeError> {
     let source_stride = bitmap.width as usize * 4;
     let row_len = if let PngColor::Gray(depth) | PngColor::Indexed(depth) = color
         && depth < 8
@@ -1269,7 +1233,7 @@ pub(super) fn encode(
     bitmap: &Bitmap,
     animation: Option<(LoopCount, &[Frame])>,
     style: EncodingStyle,
-) -> std::result::Result<Vec<u8>, EncodeError> {
+) -> core::result::Result<Vec<u8>, EncodeError> {
     let best = encode_layouts(bitmap, animation, style)?;
     if style == EncodingStyle::NormalCompression {
         return Ok(best);
@@ -1329,7 +1293,7 @@ fn encode_layouts(
     bitmap: &Bitmap,
     animation: Option<(LoopCount, &[Frame])>,
     style: EncodingStyle,
-) -> std::result::Result<Vec<u8>, EncodeError> {
+) -> core::result::Result<Vec<u8>, EncodeError> {
     let bitmaps: Vec<_> = match animation {
         Some((_, frames)) => frames.iter().map(|frame| &frame.bitmap).collect(),
         None => vec![bitmap],
@@ -1369,7 +1333,7 @@ fn encode_png_variant(
     style: EncodingStyle,
     palette: Option<&[[u8; 4]]>,
     transparent_key: Option<[u8; 3]>,
-) -> std::result::Result<Vec<u8>, EncodeError> {
+) -> core::result::Result<Vec<u8>, EncodeError> {
     let color = if let Some(palette) = palette {
         PngColor::Indexed(png_palette_depth(palette.len()))
     } else if let Some((_, frames)) = animation {
@@ -1378,7 +1342,7 @@ fn encode_png_variant(
             transparent_key.is_some(),
         )
     } else {
-        png_color(std::iter::once(bitmap), transparent_key.is_some())
+        png_color(core::iter::once(bitmap), transparent_key.is_some())
     };
     let palette_lookup = palette.map(png_palette_lookup);
     let mut out = b"\x89PNG\r\n\x1a\n".to_vec();
@@ -1495,7 +1459,7 @@ pub(super) fn encode_animation(
     frames: &[Frame],
     loop_count: LoopCount,
     style: EncodingStyle,
-) -> std::result::Result<Vec<u8>, EncodeError> {
+) -> core::result::Result<Vec<u8>, EncodeError> {
     encode(&frames[0].bitmap, Some((loop_count, frames)), style)
 }
 
@@ -1526,7 +1490,7 @@ mod tests {
             }
         }
         let bitmap = Bitmap::new(16, 16, pixels).unwrap();
-        let palette = png_palette(std::iter::once(&bitmap)).unwrap();
+        let palette = png_palette(core::iter::once(&bitmap)).unwrap();
         assert_eq!(palette.len(), 256);
         let encoded = encode_png_variant(
             &bitmap,
@@ -1568,7 +1532,7 @@ mod tests {
         assert_eq!(crate::decode(&encoded).unwrap().pixels(), gray.data());
 
         let collision = Bitmap::new(2, 1, vec![85, 85, 85, 0, 85, 85, 85, 255]).unwrap();
-        assert_eq!(png_transparent_key(std::iter::once(&collision)), None);
+        assert_eq!(png_transparent_key(core::iter::once(&collision)), None);
 
         let mut second = bitmap.data().to_vec();
         second[4..8].copy_from_slice(&[255, 0, 0, 255]);
@@ -1613,18 +1577,7 @@ mod tests {
         out.extend_from_slice(&(data.len() as u32).to_be_bytes());
         out.extend_from_slice(kind);
         out.extend_from_slice(data);
-        let mut crc = !0u32;
-        for byte in kind.iter().chain(data) {
-            crc ^= u32::from(*byte);
-            for _ in 0..8 {
-                crc = if crc & 1 != 0 {
-                    (crc >> 1) ^ 0xedb8_8320
-                } else {
-                    crc >> 1
-                };
-            }
-        }
-        out.extend_from_slice(&(!crc).to_be_bytes());
+        out.extend_from_slice(&chunk_crc(kind, data).to_be_bytes());
     }
 
     fn png_header(width: u32, height: u32, depth: u8, color: u8) -> Vec<u8> {
