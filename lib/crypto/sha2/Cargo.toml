@@ -10,6 +10,8 @@ repository.workspace = true
 digest = "0.11.3"
 
 [features]
+default = ["std"]
+std = []
 disable-software = []
 disable-simd = []
 
@@ -22,3 +24,7 @@ harness = false
 
 [lints]
 workspace = true
+
+[[bin]]
+name = "sha256sum"
+required-features = ["std"]
