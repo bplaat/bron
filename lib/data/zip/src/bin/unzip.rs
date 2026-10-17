@@ -52,6 +52,7 @@ fn apply_metadata(file: &File, mode: Option<u32>, modified: Option<SystemTime>) 
 struct PendingLink {
     relative: PathBuf,
     target: PathBuf,
+    #[cfg(unix)]
     modified: Option<SystemTime>,
 }
 
@@ -255,6 +256,7 @@ fn run() -> Result<(), String> {
                     links.push(PendingLink {
                         relative: relative.to_path_buf(),
                         target: link_target(&mut entry)?,
+                        #[cfg(unix)]
                         modified: entry.last_modified(),
                     });
                 } else if entry.is_file() {
