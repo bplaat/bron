@@ -4,14 +4,16 @@
  * SPDX-License-Identifier: MIT
  */
 
-//! List or extract a ZIP archive.
+//! List or extract a ZIP archive, restoring ordinary permissions and modification times.
 
-use std::ffi::OsStr;
-use std::fs::{self, File, OpenOptions};
-use std::path::{Component, Path};
+use std::collections::{HashMap, VecDeque};
+use std::ffi::{OsStr, OsString};
+use std::fs::{self, File, FileTimes, OpenOptions};
+use std::path::{Component, Path, PathBuf};
+use std::time::SystemTime;
 use std::{env, io};
 
-use zip::ZipArchive;
+use zip::{ZipArchive, ZipFile};
 
 fn ensure_directory(root: &Path, relative: &Path) -> Result<(), String> {
     let mut path = root.to_path_buf();
@@ -30,6 +32,176 @@ fn ensure_directory(root: &Path, relative: &Path) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+fn apply_metadata(file: &File, mode: Option<u32>, modified: Option<SystemTime>) -> io::Result<()> {
+    if let Some(modified) = modified {
+        file.set_times(FileTimes::new().set_modified(modified))?;
+    }
+    #[cfg(unix)]
+    if let Some(mode) = mode {
+        use std::os::unix::fs::PermissionsExt;
+        // Ownership and special permission bits are intentionally not restored.
+        file.set_permissions(fs::Permissions::from_mode(mode & 0o777))?;
+    }
+    #[cfg(not(unix))]
+    let _ = mode;
+    Ok(())
+}
+
+struct PendingLink {
+    relative: PathBuf,
+    target: PathBuf,
+    modified: Option<SystemTime>,
+}
+
+fn target_components(target: &Path) -> Result<VecDeque<OsString>, String> {
+    if target.as_os_str().is_empty() {
+        return Err("empty symlink target".into());
+    }
+    target
+        .components()
+        .map(|component| match component {
+            Component::Normal(name) => Ok(name.to_os_string()),
+            Component::ParentDir => Ok(OsString::from("..")),
+            Component::CurDir => Ok(OsString::from(".")),
+            _ => Err(format!("absolute symlink target: {}", target.display())),
+        })
+        .collect()
+}
+
+fn validate_link(
+    root: &Path,
+    link: &PendingLink,
+    links: &HashMap<PathBuf, PathBuf>,
+) -> Result<(), String> {
+    let mut path = link
+        .relative
+        .parent()
+        .unwrap_or(Path::new(""))
+        .to_path_buf();
+    let mut components = target_components(&link.target)?;
+    let mut followed = 0;
+    while let Some(component) = components.pop_front() {
+        if component == OsStr::new(".") {
+            continue;
+        }
+        if component == OsStr::new("..") {
+            if !path.pop() {
+                return Err(format!(
+                    "symlink target escapes destination: {}",
+                    link.relative.display()
+                ));
+            }
+            continue;
+        }
+        path.push(component);
+        let target = if let Some(target) = links.get(&path) {
+            Some(target.clone())
+        } else {
+            match fs::symlink_metadata(root.join(&path)) {
+                Ok(metadata) if metadata.file_type().is_symlink() => {
+                    Some(fs::read_link(root.join(&path)).map_err(|error| error.to_string())?)
+                }
+                Ok(_) => None,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+                Err(error) => return Err(error.to_string()),
+            }
+        };
+        if let Some(target) = target {
+            followed += 1;
+            if followed > 40 {
+                return Err("symlink cycle or excessive link depth".into());
+            }
+            path.pop();
+            let mut target = target_components(&target)?;
+            target.append(&mut components);
+            components = target;
+        }
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+#[allow(unsafe_code)]
+fn create_link(root: &Path, link: &PendingLink) -> io::Result<()> {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::fs::symlink;
+    use std::time::UNIX_EPOCH;
+
+    let path = root.join(&link.relative);
+    symlink(&link.target, &path)?;
+    if let Some(modified) = link.modified {
+        let (seconds, nanos) = match modified.duration_since(UNIX_EPOCH) {
+            Ok(duration) => (duration.as_secs() as i64, duration.subsec_nanos()),
+            Err(error) => {
+                let duration = error.duration();
+                if duration.subsec_nanos() == 0 {
+                    (-(duration.as_secs() as i64), 0)
+                } else {
+                    (
+                        -(duration.as_secs() as i64) - 1,
+                        1_000_000_000 - duration.subsec_nanos(),
+                    )
+                }
+            }
+        };
+        let times = [
+            libc::timespec {
+                tv_sec: 0,
+                tv_nsec: libc::UTIME_OMIT,
+            },
+            libc::timespec {
+                tv_sec: seconds as libc::time_t,
+                tv_nsec: nanos.into(),
+            },
+        ];
+        let path = CString::new(path.as_os_str().as_bytes()).map_err(io::Error::other)?;
+        // SAFETY: path is NUL-terminated, times has two initialized elements, and
+        // AT_SYMLINK_NOFOLLOW updates the link itself without touching its target.
+        if unsafe {
+            libc::utimensat(
+                libc::AT_FDCWD,
+                path.as_ptr(),
+                times.as_ptr(),
+                libc::AT_SYMLINK_NOFOLLOW,
+            )
+        } != 0
+        {
+            let error = io::Error::last_os_error();
+            _ = fs::remove_file(root.join(&link.relative));
+            return Err(error);
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn create_link(_root: &Path, _link: &PendingLink) -> io::Result<()> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "symlink extraction is supported only on Unix",
+    ))
+}
+
+fn link_target(entry: &mut ZipFile) -> Result<PathBuf, String> {
+    let mut bytes = Vec::new();
+    io::Read::read_to_end(entry, &mut bytes).map_err(|error| error.to_string())?;
+    if bytes.contains(&0) {
+        return Err("NUL-containing symlink target".into());
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStringExt;
+        Ok(PathBuf::from(OsString::from_vec(bytes)))
+    }
+    #[cfg(not(unix))]
+    {
+        String::from_utf8(bytes)
+            .map(PathBuf::from)
+            .map_err(|error| error.to_string())
+    }
 }
 
 fn run() -> Result<(), String> {
@@ -53,11 +225,14 @@ fn run() -> Result<(), String> {
             .map_err(|error| format!("{}: {error}", directory.display()))?;
         Some(fs::canonicalize(directory).map_err(|error| error.to_string())?)
     };
+    let mut directories = HashMap::new();
+    let mut links = Vec::new();
     for index in 0..archive.len() {
         let mut entry = archive.by_index(index).map_err(|error| error.to_string())?;
         let name = entry.name().to_owned();
         let relative = Path::new(&name);
-        if relative.components().next().is_none()
+        if name.contains(['\\', ':'])
+            || relative.components().next().is_none()
             || relative
                 .components()
                 .any(|component| !matches!(component, Component::Normal(_)))
@@ -65,26 +240,106 @@ fn run() -> Result<(), String> {
             return Err(format!("unsafe archive path: {name}"));
         }
         if let Some(root) = &root {
-            if name.ends_with('/') {
+            let path = root.join(relative);
+            if entry.is_dir() {
                 ensure_directory(root, relative)?;
+                directories.insert(
+                    relative.to_path_buf(),
+                    (entry.unix_mode(), entry.last_modified()),
+                );
             } else {
                 if let Some(parent) = relative.parent() {
                     ensure_directory(root, parent)?;
                 }
-                let path = root.join(relative);
-                let mut output = OpenOptions::new()
-                    .write(true)
-                    .create_new(true)
-                    .open(&path)
-                    .map_err(|error| format!("{}: {error}", path.display()))?;
-                if let Err(error) = io::copy(&mut entry, &mut output) {
-                    drop(output);
-                    let _ = fs::remove_file(&path);
-                    return Err(format!("{}: {error}", path.display()));
+                if entry.is_symlink() {
+                    links.push(PendingLink {
+                        relative: relative.to_path_buf(),
+                        target: link_target(&mut entry)?,
+                        modified: entry.last_modified(),
+                    });
+                } else if entry.is_file() {
+                    let mut output = OpenOptions::new()
+                        .write(true)
+                        .create_new(true)
+                        .open(&path)
+                        .map_err(|error| format!("{}: {error}", path.display()))?;
+                    let result = io::copy(&mut entry, &mut output).and_then(|_| {
+                        apply_metadata(&output, entry.unix_mode(), entry.last_modified())
+                    });
+                    if let Err(error) = result {
+                        drop(output);
+                        _ = fs::remove_file(&path);
+                        return Err(format!("{}: {error}", path.display()));
+                    }
+                } else {
+                    return Err(format!("unsupported special file: {name}"));
                 }
             }
         }
         println!("{name}");
+    }
+    if let Some(root) = &root {
+        let targets: HashMap<PathBuf, PathBuf> = links
+            .iter()
+            .map(|link| (link.relative.clone(), link.target.clone()))
+            .collect();
+        if links.len() != targets.len() {
+            return Err("duplicate symlink entries".into());
+        }
+        for link in &links {
+            if fs::symlink_metadata(root.join(&link.relative)).is_ok() {
+                return Err(format!("{} already exists", link.relative.display()));
+            }
+        }
+        for link in &links {
+            validate_link(root, link, &targets)?;
+        }
+        // Links are created after regular entries, so extraction never writes through them.
+        let mut created = Vec::new();
+        let result = (|| {
+            for link in &links {
+                if let Some(parent) = link.relative.parent() {
+                    ensure_directory(root, parent)?;
+                }
+                create_link(root, link)
+                    .map_err(|error| format!("{}: {error}", link.relative.display()))?;
+                created.push(root.join(&link.relative));
+            }
+            // Resolve actual links as well, including aliases on case-insensitive filesystems.
+            let actual = HashMap::new();
+            for link in &links {
+                validate_link(root, link, &actual)?;
+            }
+            Ok::<_, String>(())
+        })();
+        if let Err(error) = result {
+            for path in created {
+                _ = fs::remove_file(path);
+            }
+            return Err(error);
+        }
+        let mut directories = directories
+            .into_iter()
+            .map(|(path, (mode, time))| (path, mode, time))
+            .collect::<Vec<_>>();
+        directories.sort_by_key(|(path, _, _)| std::cmp::Reverse(path.components().count()));
+        for (path, mode, modified) in directories {
+            ensure_directory(root, &path)?;
+            let path = root.join(path);
+            #[cfg(windows)]
+            let file = {
+                use std::os::windows::fs::OpenOptionsExt;
+                OpenOptions::new()
+                    .read(true)
+                    .access_mode(0x100)
+                    .custom_flags(0x02000000)
+                    .open(&path)
+            };
+            #[cfg(not(windows))]
+            let file = File::open(&path);
+            let file = file.map_err(|error| error.to_string())?;
+            apply_metadata(&file, mode, modified).map_err(|error| error.to_string())?;
+        }
     }
     Ok(())
 }

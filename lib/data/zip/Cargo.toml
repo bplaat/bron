@@ -13,6 +13,9 @@ workspace = true
 bitflags = "2.13"
 miniz_oxide = "0.9.1"
 
+[target.'cfg(any(unix, windows))'.dependencies]
+libc = "0.2.189"
+
 [dev-dependencies]
 criterion = "0.7"
 

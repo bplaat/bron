@@ -1609,6 +1609,7 @@ version = "8.6.0+patch"
 dependencies = [
  "bitflags",
  "criterion",
+ "libc",
  "miniz_oxide",
 ]
 
