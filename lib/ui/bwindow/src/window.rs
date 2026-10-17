@@ -81,6 +81,8 @@ pub struct WindowBuilder<'a> {
     pub(crate) should_fullscreen: bool,
     #[cfg(target_os = "macos")]
     pub(crate) macos_titlebar_style: MacosTitlebarStyle,
+    #[cfg(target_os = "macos")]
+    pub(crate) macos_traffic_light_position: Option<LogicalPoint>,
 }
 
 impl<'a> Default for WindowBuilder<'a> {
@@ -106,6 +108,8 @@ impl<'a> Default for WindowBuilder<'a> {
             should_fullscreen: false,
             #[cfg(target_os = "macos")]
             macos_titlebar_style: MacosTitlebarStyle::Default,
+            #[cfg(target_os = "macos")]
+            macos_traffic_light_position: None,
         }
     }
 }
@@ -197,6 +201,15 @@ impl<'a> WindowBuilder<'a> {
         self
     }
 
+    /// Set the macOS window buttons (traffic lights) position from the top left corner for
+    /// transparent or hidden titlebars. The content then draws the titlebar itself and starts
+    /// window drags with [`Window::macos_start_window_drag`].
+    #[cfg(target_os = "macos")]
+    pub const fn macos_traffic_light_position(mut self, position: LogicalPoint) -> Self {
+        self.macos_traffic_light_position = Some(position);
+        self
+    }
+
     /// Build window
     pub fn build(self) -> Window {
         #[cfg(feature = "file_drop")]
@@ -240,6 +253,10 @@ pub(crate) trait WindowInterface {
     fn macos_titlebar_size(&self) -> LogicalSize;
     #[cfg(target_os = "macos")]
     fn macos_set_document_edited(&mut self, edited: bool);
+    #[cfg(target_os = "macos")]
+    fn macos_start_window_drag(&mut self);
+    #[cfg(target_os = "macos")]
+    fn macos_perform_titlebar_double_click(&mut self);
     #[cfg(all(windows, feature = "progress_bar"))]
     fn windows_set_progress_bar(&mut self, progress: Option<f32>, state: WindowsProgressBarState);
 }
@@ -396,6 +413,25 @@ impl Window {
             return;
         }
         self.platform.macos_set_document_edited(edited)
+    }
+
+    /// Start dragging the macOS window with the current mouse down event, used by content
+    /// that draws its own titlebar
+    #[cfg(target_os = "macos")]
+    pub fn macos_start_window_drag(&mut self) {
+        if self.is_closed() {
+            return;
+        }
+        self.platform.macos_start_window_drag()
+    }
+
+    /// Perform the user's titlebar double click action (zoom or minimize)
+    #[cfg(target_os = "macos")]
+    pub fn macos_perform_titlebar_double_click(&mut self) {
+        if self.is_closed() {
+            return;
+        }
+        self.platform.macos_perform_titlebar_double_click()
     }
 
     /// Set Windows taskbar progress for this window, or hide it with `None`
