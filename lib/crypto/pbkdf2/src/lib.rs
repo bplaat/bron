@@ -5,14 +5,24 @@
  */
 
 #![doc = include_str!("../README.md")]
+//!
+//! Disable default features for `no_std` support with `alloc`. Automatic salt generation requires `std`.
+#![cfg_attr(not(any(test, feature = "std")), no_std)]
+
+extern crate alloc;
+
+use alloc::vec::Vec;
 
 use hmac::Hmac;
 use sha2::Sha256;
 
 pub use crate::utils::{
-    DEFAULT_SAFE_ITERATIONS, MAX_PASSWORD_HASH_ITERATIONS, PasswordHashDecodeError, password_hash,
+    DEFAULT_SAFE_ITERATIONS, MAX_PASSWORD_HASH_ITERATIONS, PasswordHashDecodeError,
     password_hash_customized, password_verify,
 };
+
+#[cfg(feature = "std")]
+pub use crate::utils::password_hash;
 
 mod utils;
 

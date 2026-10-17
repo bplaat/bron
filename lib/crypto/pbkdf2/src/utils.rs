@@ -4,8 +4,12 @@
  * SPDX-License-Identifier: MIT
  */
 
-use std::error::Error;
-use std::fmt::{self, Display, Formatter};
+use alloc::format;
+use alloc::string::String;
+use alloc::vec::Vec;
+
+use core::error::Error;
+use core::fmt::{self, Display, Formatter};
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD_NO_PAD as BASE64_NO_PAD;
@@ -23,6 +27,7 @@ const MAX_SALT_LENGTH: usize = 64;
 const HASH_LENGTH: usize = 32;
 
 /// Hash password using PBKDF2-HMAC-SHA256 returns string in PHC standard (https://github.com/P-H-C/phc-string-format/blob/master/phc-sf-spec.md)
+#[cfg(feature = "std")]
 pub fn password_hash(password: &str) -> String {
     let mut salt = [0u8; 16];
     getrandom::fill(&mut salt).expect("Can't get random bytes");
@@ -97,18 +102,21 @@ mod test {
     use super::*;
 
     #[test]
+    #[cfg(feature = "std")]
     fn test_hash_and_verify_password() {
         let hashed = password_hash("my_secure_password");
         assert!(password_verify("my_secure_password", &hashed).unwrap());
     }
 
     #[test]
+    #[cfg(feature = "std")]
     fn test_verify_incorrect_password() {
         let hashed = password_hash("my_secure_password");
         assert!(!password_verify("wrong_password", &hashed).unwrap());
     }
 
     #[test]
+    #[cfg(feature = "std")]
     fn test_hash_is_different_for_same_password() {
         let hashed1 = password_hash("my_secure_password");
         let hashed2 = password_hash("my_secure_password");
