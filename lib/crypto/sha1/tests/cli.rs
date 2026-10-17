@@ -6,6 +6,8 @@
 
 //! Command-line behavior for the sha1sum binary.
 
+#![cfg(feature = "std")]
+
 use std::io::Write;
 use std::process::{Command, Stdio};
 
