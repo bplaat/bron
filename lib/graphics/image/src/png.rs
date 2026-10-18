@@ -1246,11 +1246,10 @@ pub(super) fn encode(
 // Crunching is slow, so it runs once on the image data streams of the chosen candidate.
 fn crunch_streams(png: &[u8]) -> core::result::Result<Vec<u8>, EncodeError> {
     let mut out = png[..8].to_vec();
-    let mut pos = 8;
-    while pos < png.len() {
-        let len = u32::from_be_bytes(*png[pos..].first_chunk().expect("chunk length")) as usize;
-        let kind = png[pos + 4..].first_chunk::<4>().expect("chunk type");
-        let data = &png[pos + 8..pos + 8 + len];
+    let mut r = Reader::new(&png[8..]);
+    loop {
+        let (kind, data) = chunk(&mut r).expect("encoded chunk");
+        let kind = kind.first_chunk().expect("chunk type");
         // An fdAT stream follows its sequence number.
         let prefix = match kind {
             b"IDAT" => Some(0),
@@ -1260,15 +1259,13 @@ fn crunch_streams(png: &[u8]) -> core::result::Result<Vec<u8>, EncodeError> {
         let crunched = prefix.and_then(|prefix| {
             let raw = deflate::zlib_decompress(&data[prefix..], usize::MAX).ok()?;
             let stream = deflate::zlib_compress(&raw, Level::Crunch);
-            (prefix + stream.len() < len).then(|| [&data[..prefix], &stream].concat())
+            (prefix + stream.len() < data.len()).then(|| [&data[..prefix], &stream].concat())
         });
-        match crunched {
-            Some(data) => write_chunk(&mut out, kind, &data)?,
-            None => out.extend_from_slice(&png[pos..pos + 12 + len]),
+        write_chunk(&mut out, kind, crunched.as_deref().unwrap_or(data))?;
+        if kind == b"IEND" {
+            return Ok(out);
         }
-        pos += 12 + len;
     }
-    Ok(out)
 }
 
 fn encode_smallest(
