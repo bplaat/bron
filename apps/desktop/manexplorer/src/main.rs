@@ -94,8 +94,8 @@ const fn background_color(theme: Theme) -> u32 {
 }
 
 fn main() {
-    if !cfg!(any(target_os = "linux", target_os = "macos")) {
-        eprintln!("ManExplorer can only be run on Linux and macOS");
+    if !cfg!(unix) {
+        eprintln!("ManExplorer can only be run on Unix systems");
         exit(1);
     }
 
