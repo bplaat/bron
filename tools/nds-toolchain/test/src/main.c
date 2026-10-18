@@ -91,11 +91,19 @@ static void check_string(const char* actual, const char* expected, int line) {
 // Runs a group of checks and saves the results after it
 static void run(const char* name, void (*test)(void)) {
     int before = failures;
-    report("%s\n", name);
     test();
-    if (failures == before)
-        report("  ok\n");
+    report("%s %s\n", failures == before ? "ok  " : "FAIL", name);
     save_results();
+}
+
+// Startup: the loader's arguments and the file systems
+static int start_argc;
+static char** start_argv;
+static bool nitro;
+
+static void test_startup(void) {
+    CHECK(start_argc == 1 && strstr(start_argv[0], "test.nds"));
+    CHECK(nitro);
 }
 
 // Volatile, so the compiler can't work the results out itself
@@ -593,25 +601,25 @@ static void test_nitrofs(void) {
 int main(int argc, char** argv) {
     console = consoleDemoInit();
     printf("Toolchain test\n");
+    start_argc = argc;
+    start_argv = argv;
     bool fat = fatInitDefault();
-    bool nitro = nitroFSInit(NULL);
+    nitro = nitroFSInit(NULL);
     // The results go next to the program, where fatInitDefault() changed to
     if (!fat || !getcwd(results_path, sizeof(results_path) - 16)) {
         report("No SD card\n");
         test_results.status = 2;
     } else {
         strcat(results_path, results_path[strlen(results_path) - 1] == '/' ? "test.txt" : "/test.txt");
-        report("argc %d, argv[0] %s\n", argc, argc > 0 ? argv[0] : "-");
-        CHECK(nitro);
-        save_results();
-        run("format", test_format);
-        run("stdlib", test_stdlib);
+        run("startup", test_startup);
+        run("printf and scanf", test_format);
+        run("stdlib and strings", test_stdlib);
         run("memory", test_memory);
         run("math", test_math);
         run("compiler-rt", test_compiler_rt);
-        run("runtime", test_runtime);
-        run("heap", test_heap);
-        run("threads", test_threads);
+        run("setjmp and constructors", test_runtime);
+        run("malloc", test_heap);
+        run("threads and time", test_threads);
         run("files", test_files);
         run("console", test_console);
         if (nitro)
