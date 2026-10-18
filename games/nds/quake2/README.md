@@ -90,7 +90,7 @@ downloaded when that fails.
 The 4 MiB of the DS hold the code, Quake II's own state, the collision map,
 which every trace walks, and the sounds, which the sound hardware can only
 read from main RAM. The Memory Expansion Pak, the far heap of the
-[toolchain](../../../tools/nds-toolchain)'s C library, holds what is read less often: the
+[toolchain](../../../tools/nds-toolchain)'s picolibc, holds what is read less often: the
 game's edicts, the client's entities, the PVS, the converted world, the
 models and the files while they are read. On a DSi it all comes from main
 RAM. Textures go to 384 KiB of VRAM. Sounds take at most 768 KiB of main

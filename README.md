@@ -97,7 +97,7 @@ Various tools and websites. For the deployed sites, go to [bron.bplaat.nl](https
 - [ccontinue](tools/ccontinue) A transpiler that translates an OOP extension for the C programming language back to C
 - [cargo-bundle](tools/cargo-bundle) A simple Cargo plugin that builds macOS app bundles
 - [plaatnotes](apps/web/plaatnotes) A self-hosted note-taking web app with rich Markdown support
-- [nds-toolchain](tools/nds-toolchain/) An LLVM-based Nintendo DS toolchain with a small C library and a test ROM
+- [nds-toolchain](tools/nds-toolchain/) An LLVM-based Nintendo DS toolchain with picolibc and a test ROM
 - [wii-toolchain](tools/wii-toolchain/) An LLVM-based Wii toolchain with picolibc, libogc, and Dolphin emulator tests
 
 ### Examples

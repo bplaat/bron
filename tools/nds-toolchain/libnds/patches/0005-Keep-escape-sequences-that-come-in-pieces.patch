@@ -1,0 +1,266 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Sun, 18 Oct 2026 22:35:23 +0200
+Subject: [PATCH] Keep escape sequences that come in pieces
+
+picolibc writes an unbuffered stream, like the console's stdout, a
+character at a time, so the console never saw a whole escape sequence
+in one write and peeked past the end of the buffer for its '['. The
+sequence is now kept between writes and ends at its letter.
+---
+ source/arm9/console.c | 235 +++++++++++++++++++++---------------------
+ 1 file changed, 117 insertions(+), 118 deletions(-)
+
+diff --git a/source/arm9/console.c b/source/arm9/console.c
+index dd917e5..b957f0b 100644
+--- a/source/arm9/console.c
++++ b/source/arm9/console.c
+@@ -204,131 +204,130 @@ ssize_t nocash_write(struct _reent *r, void *fd, const char *ptr, size_t len) {
+ }
+ 
+ 
++// The escape sequence being received, from its '[', or -1 outside one. It's kept between
++// writes, an unbuffered stream writes a character at a time.
++static char escapeseq[32];
++static int escapelen = -1;
++
++//---------------------------------------------------------------------------------
++static void consoleEscape(char chr) {
++//---------------------------------------------------------------------------------
++	int parameter = 0, intensity = 0;
++
++	switch (chr) {
++		/////////////////////////////////////////
++		// Cursor directional movement
++		/////////////////////////////////////////
++		case 'A':
++			sscanf(escapeseq,"[%dA", &parameter);
++			currentConsole->cursorY  =  (currentConsole->cursorY  - parameter) < 0 ? 0 : currentConsole->cursorY  - parameter;
++			break;
++		case 'B':
++			sscanf(escapeseq,"[%dB", &parameter);
++			currentConsole->cursorY  =  (currentConsole->cursorY  + parameter) > currentConsole->windowHeight - 1 ? currentConsole->windowHeight - 1 : currentConsole->cursorY  + parameter;
++			break;
++		case 'C':
++			sscanf(escapeseq,"[%dC", &parameter);
++			currentConsole->cursorX  =  (currentConsole->cursorX  + parameter) > currentConsole->windowWidth - 1 ? currentConsole->windowWidth - 1 : currentConsole->cursorX  + parameter;
++			break;
++		case 'D':
++			sscanf(escapeseq,"[%dD", &parameter);
++			currentConsole->cursorX  =  (currentConsole->cursorX  - parameter) < 0 ? 0 : currentConsole->cursorX  - parameter;
++			break;
++			/////////////////////////////////////////
++			// Cursor position movement
++			/////////////////////////////////////////
++		case 'H':
++		case 'f':
++			sscanf(escapeseq,"[%d;%df", &currentConsole->cursorY , &currentConsole->cursorX );
++			break;
++			/////////////////////////////////////////
++			// Screen clear
++			/////////////////////////////////////////
++		case 'J':
++			consoleCls(escapeseq[escapelen-2]);
++			break;
++			/////////////////////////////////////////
++			// Line clear
++			/////////////////////////////////////////
++		case 'K':
++			consoleClearLine(escapeseq[escapelen-2]);
++			break;
++			/////////////////////////////////////////
++			// Save cursor position
++			/////////////////////////////////////////
++		case 's':
++			currentConsole->prevCursorX  = currentConsole->cursorX ;
++			currentConsole->prevCursorY  = currentConsole->cursorY ;
++			break;
++			/////////////////////////////////////////
++			// Load cursor position
++			/////////////////////////////////////////
++		case 'u':
++			currentConsole->cursorX  = currentConsole->prevCursorX ;
++			currentConsole->cursorY  = currentConsole->prevCursorY ;
++			break;
++			/////////////////////////////////////////
++			// Color scan codes
++			/////////////////////////////////////////
++		case 'm':
++			sscanf(escapeseq,"[%d;%dm", &parameter, &intensity);
++
++			//only handle 30-37,39 and intensity for the color changes
++			parameter -= 30;
++
++			//39 is the reset code
++			if(parameter == 9){
++				parameter = 15;
++			}
++			else if(parameter > 8){
++				parameter -= 2;
++			}
++			else if(intensity){
++				parameter += 8;
++			}
++			if(parameter < 16 && parameter >= 0){
++				currentConsole->fontCurPal = parameter << 12;
++			}
++
++			break;
++	}
++}
++
+ //---------------------------------------------------------------------------------
+ ssize_t con_write(struct _reent *r,void *fd,const char *ptr, size_t len) {
+ //---------------------------------------------------------------------------------
+ 
+-	char chr;
+-
+-	int i, count = 0;
+-	char *tmp = (char*)ptr;
+-	int intensity = 0;
+-
+-	if(!tmp || len<=0) return -1;
+-
+-	i = 0;
+-
+-	while(i<len) {
+-
+-		chr = *(tmp++);
+-		i++; count++;
+-
+-		if ( chr == 0x1b && *tmp == '[' ) {
+-			bool escaping = true;
+-			char *escapeseq	= tmp;
+-			int escapelen = 0;
+-
+-			do {
+-				chr = *(tmp++);
+-				i++; count++; escapelen++;
+-				int parameter;
+-
+-				switch (chr) {
+-					/////////////////////////////////////////
+-					// Cursor directional movement
+-					/////////////////////////////////////////
+-					case 'A':
+-						sscanf(escapeseq,"[%dA", &parameter);
+-						currentConsole->cursorY  =  (currentConsole->cursorY  - parameter) < 0 ? 0 : currentConsole->cursorY  - parameter;
+-						escaping = false;
+-						break;
+-					case 'B':
+-						sscanf(escapeseq,"[%dB", &parameter);
+-						currentConsole->cursorY  =  (currentConsole->cursorY  + parameter) > currentConsole->windowHeight - 1 ? currentConsole->windowHeight - 1 : currentConsole->cursorY  + parameter;
+-						escaping = false;
+-						break;
+-					case 'C':
+-						sscanf(escapeseq,"[%dC", &parameter);
+-						currentConsole->cursorX  =  (currentConsole->cursorX  + parameter) > currentConsole->windowWidth - 1 ? currentConsole->windowWidth - 1 : currentConsole->cursorX  + parameter;
+-						escaping = false;
+-						break;
+-					case 'D':
+-						sscanf(escapeseq,"[%dD", &parameter);
+-						currentConsole->cursorX  =  (currentConsole->cursorX  - parameter) < 0 ? 0 : currentConsole->cursorX  - parameter;
+-						escaping = false;
+-						break;
+-						/////////////////////////////////////////
+-						// Cursor position movement
+-						/////////////////////////////////////////
+-					case 'H':
+-					case 'f':
+-						sscanf(escapeseq,"[%d;%df", &currentConsole->cursorY , &currentConsole->cursorX );
+-						escaping = false;
+-						break;
+-						/////////////////////////////////////////
+-						// Screen clear
+-						/////////////////////////////////////////
+-					case 'J':
+-						consoleCls(escapeseq[escapelen-2]);
+-						escaping = false;
+-						break;
+-						/////////////////////////////////////////
+-						// Line clear
+-						/////////////////////////////////////////
+-					case 'K':
+-						consoleClearLine(escapeseq[escapelen-2]);
+-						escaping = false;
+-						break;
+-						/////////////////////////////////////////
+-						// Save cursor position
+-						/////////////////////////////////////////
+-					case 's':
+-						currentConsole->prevCursorX  = currentConsole->cursorX ;
+-						currentConsole->prevCursorY  = currentConsole->cursorY ;
+-						escaping = false;
+-						break;
+-						/////////////////////////////////////////
+-						// Load cursor position
+-						/////////////////////////////////////////
+-					case 'u':
+-						currentConsole->cursorX  = currentConsole->prevCursorX ;
+-						currentConsole->cursorY  = currentConsole->prevCursorY ;
+-						escaping = false;
+-						break;
+-						/////////////////////////////////////////
+-						// Color scan codes
+-						/////////////////////////////////////////
+-					case 'm':
+-						sscanf(escapeseq,"[%d;%dm", &parameter, &intensity);
+-
+-						//only handle 30-37,39 and intensity for the color changes
+-						parameter -= 30;
+-
+-						//39 is the reset code
+-						if(parameter == 9){
+-							parameter = 15;
+-						}
+-						else if(parameter > 8){
+-							parameter -= 2;
+-						}
+-						else if(intensity){
+-							parameter += 8;
+-						}
+-						if(parameter < 16 && parameter >= 0){
+-							currentConsole->fontCurPal = parameter << 12;
+-						}
+-
+-						escaping = false;
+-						break;
+-				}
+-			} while (escaping && i < len);
+-			continue;
+-		}
++	if(!ptr || len<=0) return -1;
+ 
+-		consolePrintChar(chr);
++	for (size_t i = 0; i < len; i++) {
++		char chr = ptr[i];
++
++		if (escapelen < 0) {
++			if (chr == 0x1b) {
++				escapelen = 0;
++			} else {
++				consolePrintChar(chr);
++			}
++		} else if (escapelen == 0 && chr != '[') {
++			// Not an escape sequence after all
++			escapelen = -1;
++			consolePrintChar(0x1b);
++			consolePrintChar(chr);
++		} else {
++			if (escapelen < (int)sizeof(escapeseq) - 1) {
++				escapeseq[escapelen++] = chr;
++				escapeseq[escapelen] = '\0';
++			}
++			// A letter after the '[' ends the sequence
++			if (escapelen > 1 && ((chr >= 'A' && chr <= 'Z') || (chr >= 'a' && chr <= 'z'))) {
++				consoleEscape(chr);
++				escapelen = -1;
++			}
++		}
+ 	}
+ 
+-	return count;
++	return len;
+ }
+ 
+ static const devoptab_t dotab_stdout = {

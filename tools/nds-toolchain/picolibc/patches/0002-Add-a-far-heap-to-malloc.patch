@@ -1,0 +1,214 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Sun, 18 Oct 2026 22:15:00 +0200
+Subject: [PATCH] Add a far heap to malloc
+
+Memory that sbrk doesn't give, like the RAM of a Memory Expansion Pak
+in the GBA slot of a Nintendo DS, which ignores byte writes, becomes a
+far heap with its own free list. far_malloc takes from it first and
+then like malloc, which never takes from it. free and realloc put a
+chunk back in the list it came from.
+---
+ libc/include/malloc.h      |  6 ++++
+ libc/stdlib/CMakeLists.txt |  1 +
+ libc/stdlib/far-malloc.c   | 66 ++++++++++++++++++++++++++++++++++++++
+ libc/stdlib/free.c         |  2 +-
+ libc/stdlib/local-malloc.h | 18 +++++++++++
+ libc/stdlib/malloc.c       |  4 +++
+ libc/stdlib/meson.build    |  1 +
+ libc/stdlib/realloc.c      |  4 +--
+ 8 files changed, 99 insertions(+), 3 deletions(-)
+ create mode 100644 libc/stdlib/far-malloc.c
+
+diff --git a/libc/include/malloc.h b/libc/include/malloc.h
+index e68c944..735b3e8 100644
+--- a/libc/include/malloc.h
++++ b/libc/include/malloc.h
+@@ -75,6 +75,12 @@ __warn_unused_result __alloc_size(2) __nothrow __picolibc_export;
+ void *memalign(size_t __alignment, size_t __size) __malloc_like __warn_unused_result __alloc_size(2)
+ __nothrow __picolibc_export;
+ 
++/* Memory sbrk doesn't give, like the RAM of a Memory Expansion Pak on a
++   Nintendo DS, as a far heap: far_malloc takes from it first, then like
++   malloc, which never takes from it. free and realloc take both. */
++void  far_heap_init(void *__start, size_t __size) __picolibc_export;
++void *far_malloc(size_t __size) __malloc_like __warn_unused_result __alloc_size(1) __nothrow __picolibc_export;
++
+ struct mallinfo mallinfo(void) __picolibc_export;
+ void            malloc_stats(void) __picolibc_export;
+ int             mallopt(int, int) __picolibc_export;
+diff --git a/libc/stdlib/CMakeLists.txt b/libc/stdlib/CMakeLists.txt
+index b6b909f..8fae8fc 100644
+--- a/libc/stdlib/CMakeLists.txt
++++ b/libc/stdlib/CMakeLists.txt
+@@ -125,6 +125,7 @@ picolibc_sources(
+ if(ENABLE_MALLOC)
+   picolibc_sources(
+     calloc.c
++    far-malloc.c
+     free.c
+     getpagesize.c
+     mallinfo.c
+diff --git a/libc/stdlib/far-malloc.c b/libc/stdlib/far-malloc.c
+new file mode 100644
+index 0000000..9f0d12c
+--- /dev/null
++++ b/libc/stdlib/far-malloc.c
+@@ -0,0 +1,66 @@
++/*
++ * SPDX-License-Identifier: BSD-3-Clause
++ *
++ * Copyright (c) 2026 Bastiaan van der Plaat
++ */
++
++#include "local-malloc.h"
++
++/* Gives the memory to the far heap, free puts it in the far free list */
++void
++far_heap_init(void *start, size_t size)
++{
++    char *blob = (char *)__align_up((uintptr_t)start + MALLOC_HEAD_SIZE, MALLOC_CHUNK_ALIGN) - MALLOC_HEAD_SIZE;
++    char *end = (char *)start + size;
++
++    if (end < blob + MALLOC_CHUNK_MIN)
++        return;
++    size = (size_t)(end - blob) & ~(size_t)(MALLOC_CHUNK_ALIGN - 1);
++    MALLOC_LOCK;
++    __malloc_far_start = blob;
++    __malloc_far_end = blob + size;
++    MALLOC_UNLOCK;
++    make_free_chunk(blob_to_chunk(blob), size);
++}
++
++/* Takes the first free chunk of the far heap that fits, else memory like malloc */
++void *
++far_malloc(size_t s)
++{
++    chunk_t **p, *c;
++
++    if (s > MALLOC_ALLOC_MAX) {
++        errno = ENOMEM;
++        return NULL;
++    }
++
++    size_t alloc_size = chunk_size(s);
++
++    MALLOC_LOCK;
++    for (p = &__malloc_far_free_list; (c = *p) != NULL; p = &c->next) {
++        if (_size(c) >= alloc_size) {
++            size_t rem = _size(c) - alloc_size;
++
++            if (rem >= MALLOC_CHUNK_MIN) {
++                /* Split off the rest, which stays free */
++                chunk_t *r = (chunk_t *)((char *)c + alloc_size);
++                _set_size(c, alloc_size);
++                _set_size(r, rem);
++                _mark_free(r);
++                r->next = c->next;
++                *p = r;
++            } else {
++                *p = c->next;
++            }
++            break;
++        }
++    }
++    MALLOC_UNLOCK;
++
++    if (c == NULL)
++        return malloc(s);
++
++    _mark_busy(c);
++    memset(chunk_to_ptr(c), '\0', _size(c) - MALLOC_HEAD_SIZE);
++    return chunk_to_ptr(c);
++}
+diff --git a/libc/stdlib/free.c b/libc/stdlib/free.c
+index c57444a..9e581b0 100644
+--- a/libc/stdlib/free.c
++++ b/libc/stdlib/free.c
+@@ -79,7 +79,7 @@ __malloc_free(void *free_p)
+     }
+ #endif
+ 
+-    for (p = &__malloc_free_list; (c = *p) != NULL; p = &c->next) {
++    for (p = __malloc_free_list_of(p_to_free); (c = *p) != NULL; p = &c->next) {
+         /* Insert in address order */
+         if (p_to_free <= c) {
+ 
+diff --git a/libc/stdlib/local-malloc.h b/libc/stdlib/local-malloc.h
+index e171a16..847f11a 100644
+--- a/libc/stdlib/local-malloc.h
++++ b/libc/stdlib/local-malloc.h
+@@ -207,6 +207,24 @@ extern chunk_t *__malloc_free_list;
+ extern char    *__malloc_sbrk_start;
+ extern char    *__malloc_sbrk_top;
+ 
++/* The far heap of far_malloc, memory sbrk doesn't give, with its own free list */
++extern chunk_t *__malloc_far_free_list;
++extern char    *__malloc_far_start;
++extern char    *__malloc_far_end;
++
++static inline bool
++__malloc_is_far(void *ptr)
++{
++    return (char *)ptr >= __malloc_far_start && (char *)ptr < __malloc_far_end;
++}
++
++/* The free list a chunk goes back to */
++static inline chunk_t **
++__malloc_free_list_of(chunk_t *c)
++{
++    return __malloc_is_far(c) ? &__malloc_far_free_list : &__malloc_free_list;
++}
++
+ #ifdef MALLOC_MAX_BUCKET_POT
+ 
+ /* Every power-of-two bucket gets padded by this amount */
+diff --git a/libc/stdlib/malloc.c b/libc/stdlib/malloc.c
+index d155d10..901e0a6 100644
+--- a/libc/stdlib/malloc.c
++++ b/libc/stdlib/malloc.c
+@@ -39,6 +39,10 @@ chunk_t *__malloc_bucket_list[NUM_BUCKET_POT];
+ char *__malloc_sbrk_start;
+ char *__malloc_sbrk_top;
+ 
++chunk_t *__malloc_far_free_list;
++char    *__malloc_far_start;
++char    *__malloc_far_end;
++
+ /*
+  * Algorithm:
+  *   Use sbrk() to obtain more memory and ensure the storage is
+diff --git a/libc/stdlib/meson.build b/libc/stdlib/meson.build
+index 821ec5b..2a295b1 100644
+--- a/libc/stdlib/meson.build
++++ b/libc/stdlib/meson.build
+@@ -34,6 +34,7 @@
+ #
+ malloc_srcs_stdlib = [
+   'calloc.c',
++  'far-malloc.c',
+   'free.c',
+   'getpagesize.c',
+   'mallinfo.c',
+diff --git a/libc/stdlib/realloc.c b/libc/stdlib/realloc.c
+index b4bc8f0..3c73825 100644
+--- a/libc/stdlib/realloc.c
++++ b/libc/stdlib/realloc.c
+@@ -90,7 +90,7 @@ realloc(void *ptr, size_t size)
+             /* Check to see if there's a chunk_t of free space just past
+              * the current chunk, merge it in in case that's useful
+              */
+-            for (p = &__malloc_free_list; (r = *p) != NULL; p = &r->next) {
++            for (p = __malloc_free_list_of(p_to_realloc); (r = *p) != NULL; p = &r->next) {
+                 if (r == chunk_e) {
+                     size_t r_size = _size(r);
+ 
+@@ -130,7 +130,7 @@ realloc(void *ptr, size_t size)
+     }
+     /* No short cuts, allocate new memory and copy */
+ 
+-    mem = malloc(size);
++    mem = __malloc_is_far(ptr) ? far_malloc(size) : malloc(size);
+     if (!mem)
+         return NULL;
+ 

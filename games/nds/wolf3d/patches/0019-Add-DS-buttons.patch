@@ -211,7 +211,7 @@ index 0000000..4300f62
 +    return button >= 0 && button < SDL_JoystickNumButtons (joystick) && (keys_held & joy_buttons[button]);
 +}
 diff --git a/wl_def.h b/wl_def.h
-index 094ff04..90dfee5 100644
+index 0b44937..8e0b4ec 100644
 --- a/wl_def.h
 +++ b/wl_def.h
 @@ -1057,8 +1057,9 @@ void    UpdateSoundLoc (void);

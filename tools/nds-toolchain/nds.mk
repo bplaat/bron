@@ -26,22 +26,24 @@ AR := $(LLVM)llvm-ar
 LD := ld.lld
 
 # The ARM9 is an ARM946E-S (ARMv5TE) without floating point unit, there is no OS so no standard
-# library from the host. -O3 unrolls and inlines the renderers' loops, DOOM runs 10% faster. Calls
-# to memcpy, memmove and memset stay calls to the libc's, which are VRAM safe: inlined, a copy to
-# VRAM through a byte pointer writes bytes, which VRAM ignores
-CFLAGS := --target=armv5te-none-eabi -mcpu=arm946e-s -mthumb -DARM9 -D__NDS__ -nostdlibinc \
-	-ffunction-sections -fdata-sections -g -O3 -fno-builtin-memcpy -fno-builtin-memmove \
-	-fno-builtin-memset -Wall -I$(TOOLCHAIN)/libc/include \
+# library from the host but picolibc, which also declares its POSIX and BSD functions with
+# _DEFAULT_SOURCE. -O3 unrolls and inlines the renderers' loops, DOOM runs 10% faster. Calls to
+# memcpy, memmove and memset stay calls to picolibc's, which are VRAM safe: inlined, a copy to VRAM
+# through a byte pointer writes bytes, which VRAM ignores
+CFLAGS := --target=armv5te-none-eabi -mcpu=arm946e-s -mthumb -DARM9 -D__NDS__ -D_DEFAULT_SOURCE \
+	-nostdlibinc -ffunction-sections -fdata-sections -g -O3 -fno-builtin-memcpy \
+	-fno-builtin-memmove -fno-builtin-memset -Wall -I$(TOOLCHAIN_TARGET)/sysroot9/include \
 	-I$(TOOLCHAIN_TARGET)/calico/include -I$(TOOLCHAIN_TARGET)/libnds/include \
 	-I$(TOOLCHAIN_TARGET)/libdvm/include
-LIBS := $(addprefix $(TOOLCHAIN_TARGET)/,libnds9.a libdvm.a libcalico9.a libc9.a libcompiler-rt9.a)
+LIBS := $(addprefix $(TOOLCHAIN_TARGET)/,libnds9.a libdvm.a libcalico9.a sysroot9/lib/libc.a \
+	libcompiler-rt9.a)
 
 # The ARM7 is an ARM7TDMI (ARMv4T), which can't switch between ARM and Thumb code in a direct call,
 # so its calls are long calls through a register
 ARM7_CFLAGS := --target=armv4t-none-eabi -mcpu=arm7tdmi -marm -mlong-calls -DARM7 -D__NDS__ \
-	-nostdlibinc -ffunction-sections -fdata-sections -g -O2 -Wall -I$(TOOLCHAIN)/libc/include \
-	-I$(TOOLCHAIN_TARGET)/calico/include
-ARM7_LIBS := $(addprefix $(TOOLCHAIN_TARGET)/,libcalico7.a libc7.a libcompiler-rt7.a)
+	-D_DEFAULT_SOURCE -nostdlibinc -ffunction-sections -fdata-sections -g -O2 -Wall \
+	-I$(TOOLCHAIN_TARGET)/sysroot7/include -I$(TOOLCHAIN_TARGET)/calico/include
+ARM7_LIBS := $(addprefix $(TOOLCHAIN_TARGET)/,libcalico7.a sysroot7/lib/libc.a libcompiler-rt7.a)
 ARM7_OFILES := $(addprefix $(BUILD)/,$(addsuffix .arm7.o,$(ARM7_SOURCES)))
 ARM7_ELF := $(if $(ARM7_SOURCES),$(NAME)7.elf,$(TOOLCHAIN_TARGET)/ds7.elf)
 
@@ -60,7 +62,8 @@ $(NAME).elf: $(OFILES) $(LIBS)
 
 $(NAME)7.elf: $(TOOLCHAIN_TARGET)/objects/ds7/arm7_main.o $(ARM7_OFILES) $(ARM7_LIBS)
 	$(LD) -T $(TOOLCHAIN_TARGET)/calico/share/ds7.ld --gc-sections --nmagic --section-start=.main=0x02ff0000 \
-		$(TOOLCHAIN_TARGET)/objects/ds7/arm7_main.o $(ARM7_OFILES) $(ARM7_LIBS) -o $@
+		$(TOOLCHAIN_TARGET)/objects/ds7/arm7_main.o $(ARM7_OFILES) --start-group $(ARM7_LIBS) \
+		--end-group -o $@
 
 $(BUILD)/%.arm7.o: %.c
 	@mkdir -p $(dir $@)

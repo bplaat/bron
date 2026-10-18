@@ -17,7 +17,7 @@ right away, not only on quitting, a handheld is often just switched off.
  3 files changed, 30 insertions(+), 67 deletions(-)
 
 diff --git a/wl_def.h b/wl_def.h
-index b5c4b98..95d7888 100644
+index 723893b..559036b 100644
 --- a/wl_def.h
 +++ b/wl_def.h
 @@ -994,6 +994,7 @@ boolean         LoadTheGame (FILE *file, int x, int y);

@@ -1,0 +1,105 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Sun, 18 Oct 2026 22:15:07 +0200
+Subject: [PATCH] Use the standard printf and scanf names
+
+picolibc has no newlib names for the integer only printf and scanf.
+---
+ include/nds/arm9/console.h |  2 +-
+ source/arm9/console.c      | 14 +++++++-------
+ source/arm9/sassert.c      |  4 ++--
+ 3 files changed, 10 insertions(+), 10 deletions(-)
+
+diff --git a/include/nds/arm9/console.h b/include/nds/arm9/console.h
+index 61849e4..d30a438 100644
+--- a/include/nds/arm9/console.h
++++ b/include/nds/arm9/console.h
+@@ -227,7 +227,7 @@ PrintConsole* consoleInit(PrintConsole* console, int layer, BgType type, BgSize
+ */
+ PrintConsole* consoleDemoInit(void);
+ 
+-//! Clears the screan by using iprintf("\x1b[2J");
++//! Clears the screan by using printf("\x1b[2J");
+ void consoleClear(void);
+ 
+ /*!	\brief Initializes debug console output on stderr to the specified device
+diff --git a/source/arm9/console.c b/source/arm9/console.c
+index fc24557..dd917e5 100644
+--- a/source/arm9/console.c
++++ b/source/arm9/console.c
+@@ -238,22 +238,22 @@ ssize_t con_write(struct _reent *r,void *fd,const char *ptr, size_t len) {
+ 					// Cursor directional movement
+ 					/////////////////////////////////////////
+ 					case 'A':
+-						siscanf(escapeseq,"[%dA", &parameter);
++						sscanf(escapeseq,"[%dA", &parameter);
+ 						currentConsole->cursorY  =  (currentConsole->cursorY  - parameter) < 0 ? 0 : currentConsole->cursorY  - parameter;
+ 						escaping = false;
+ 						break;
+ 					case 'B':
+-						siscanf(escapeseq,"[%dB", &parameter);
++						sscanf(escapeseq,"[%dB", &parameter);
+ 						currentConsole->cursorY  =  (currentConsole->cursorY  + parameter) > currentConsole->windowHeight - 1 ? currentConsole->windowHeight - 1 : currentConsole->cursorY  + parameter;
+ 						escaping = false;
+ 						break;
+ 					case 'C':
+-						siscanf(escapeseq,"[%dC", &parameter);
++						sscanf(escapeseq,"[%dC", &parameter);
+ 						currentConsole->cursorX  =  (currentConsole->cursorX  + parameter) > currentConsole->windowWidth - 1 ? currentConsole->windowWidth - 1 : currentConsole->cursorX  + parameter;
+ 						escaping = false;
+ 						break;
+ 					case 'D':
+-						siscanf(escapeseq,"[%dD", &parameter);
++						sscanf(escapeseq,"[%dD", &parameter);
+ 						currentConsole->cursorX  =  (currentConsole->cursorX  - parameter) < 0 ? 0 : currentConsole->cursorX  - parameter;
+ 						escaping = false;
+ 						break;
+@@ -262,7 +262,7 @@ ssize_t con_write(struct _reent *r,void *fd,const char *ptr, size_t len) {
+ 						/////////////////////////////////////////
+ 					case 'H':
+ 					case 'f':
+-						siscanf(escapeseq,"[%d;%df", &currentConsole->cursorY , &currentConsole->cursorX );
++						sscanf(escapeseq,"[%d;%df", &currentConsole->cursorY , &currentConsole->cursorX );
+ 						escaping = false;
+ 						break;
+ 						/////////////////////////////////////////
+@@ -299,7 +299,7 @@ ssize_t con_write(struct _reent *r,void *fd,const char *ptr, size_t len) {
+ 						// Color scan codes
+ 						/////////////////////////////////////////
+ 					case 'm':
+-						siscanf(escapeseq,"[%d;%dm", &parameter, &intensity);
++						sscanf(escapeseq,"[%d;%dm", &parameter, &intensity);
+ 
+ 						//only handle 30-37,39 and intensity for the color changes
+ 						parameter -= 30;
+@@ -674,7 +674,7 @@ void consolePrintChar(char c) {
+ //---------------------------------------------------------------------------------
+ void consoleClear(void) {
+ //---------------------------------------------------------------------------------
+-	iprintf("\x1b[2J");
++	printf("\x1b[2J");
+ }
+ 
+ //---------------------------------------------------------------------------------
+diff --git a/source/arm9/sassert.c b/source/arm9/sassert.c
+index 1ef904c..6702297 100644
+--- a/source/arm9/sassert.c
++++ b/source/arm9/sassert.c
+@@ -37,7 +37,7 @@ void __sassert(const char *fileName, int lineNumber, const char* conditionString
+ 
+     consoleDemoInit();
+ 
+-    iprintf("\x1b[j"               /* clear screen */
++    printf("\x1b[j"               /* clear screen */
+             "\x1b[42mAssertion!\n" /* print in green? */
+             "\x1b[39mFile: \n"     /* print in default color */
+             "%s\n\n"               /* print filename */
+@@ -48,7 +48,7 @@ void __sassert(const char *fileName, int lineNumber, const char* conditionString
+             fileName, lineNumber, conditionString);
+ 
+     va_start(ap, format);
+-    viprintf(format, ap);
++    vprintf(format, ap);
+     va_end(ap);
+ 
+     //todo: exit properly

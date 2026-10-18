@@ -193,7 +193,7 @@ index 7ba957d..e7bbdcf 100644
      //
      // try to position as close as possible without being in a wall
 diff --git a/wl_def.h b/wl_def.h
-index 90dfee5..47c6859 100644
+index 8e0b4ec..d7ed029 100644
 --- a/wl_def.h
 +++ b/wl_def.h
 @@ -183,7 +183,7 @@ typedef uint8_t tiletype;

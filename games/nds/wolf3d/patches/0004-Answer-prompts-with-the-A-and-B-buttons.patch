@@ -10,7 +10,7 @@ Prompts name the A and B buttons, which answer them as joystick buttons
  1 file changed, 3 insertions(+), 6 deletions(-)
 
 diff --git a/wl_def.h b/wl_def.h
-index 9197234..b5c4b98 100644
+index 538c811..723893b 100644
 --- a/wl_def.h
 +++ b/wl_def.h
 @@ -38,12 +38,9 @@

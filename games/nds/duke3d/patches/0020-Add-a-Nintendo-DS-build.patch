@@ -8,11 +8,15 @@ Makefile.nds builds a DSi enhanced .nds with the toolchain of the ports
 whose DS versions are in nds/. The engine is ARM code, its drawers run
 from ITCM, the game is Thumb code, the parts that don't run every frame
 optimized for size. The warnings about the old code mixing pointers and
-integers and redefining libnds' types are left out.
+integers and redefining libnds' types are left out. The DS has no
+sys/uio.h, its picolibc has strlwr, strupr and itoa and only defines the
+byte order in sys/types.h.
 ---
- .gitignore   |  6 ++++++
- Makefile.nds | 41 +++++++++++++++++++++++++++++++++++++++++
- 2 files changed, 47 insertions(+)
+ .gitignore               |  6 ++++++
+ Engine/src/unix_compat.h |  2 ++
+ Game/src/global.c        |  4 ++++
+ Makefile.nds             | 41 ++++++++++++++++++++++++++++++++++++++++
+ 4 files changed, 53 insertions(+)
  create mode 100644 Makefile.nds
 
 diff --git a/.gitignore b/.gitignore
@@ -29,6 +33,49 @@ index 19b2068..f603c47 100644
 +/duke3d.elf
 +/duke3d.nds
 +/duke3d.map
+diff --git a/Engine/src/unix_compat.h b/Engine/src/unix_compat.h
+index 811e99e..b1521dd 100644
+--- a/Engine/src/unix_compat.h
++++ b/Engine/src/unix_compat.h
+@@ -56,7 +56,9 @@
+ #include <assert.h>
+ #include <sys/types.h>
+ #include <sys/stat.h>
++#ifndef __NDS__  /* the DS has no sys/uio.h */
+ #include <sys/uio.h>
++#endif
+ #include <unistd.h>
+ #include <fcntl.h>
+ #include <dirent.h>
+diff --git a/Game/src/global.c b/Game/src/global.c
+index fb5766e..ab54e9d 100644
+--- a/Game/src/global.c
++++ b/Game/src/global.c
+@@ -29,6 +29,7 @@ Prepared for public release: 03/21/2003 - Charlie Wiederhold, 3D Realms
+ #include <string.h>
+ #include <stdarg.h>
+ #include <errno.h>
++#include <sys/types.h> /* the byte order and integer types for global.h */
+ #include "global.h"
+ #include "duke3d.h"
+ 
+@@ -791,6 +792,7 @@ void SwapIntelShortArray(short *s, int num)
+  */
+  
+ #if PLATFORM_UNIX
++#ifndef __NDS__ /* the DS's picolibc has strlwr, strupr and itoa */
+ uint8_t  *strlwr(uint8_t  *s)
+ {
+ 	uint8_t  *p = s;
+@@ -832,6 +834,8 @@ uint8_t  *itoa(int value, uint8_t  *string, int radix)
+ 	return string;
+ }
+ 
++#endif
++
+ uint8_t  *ltoa(int32_t value, uint8_t  *string, int radix)
+ {
+ 	switch (radix) {
 diff --git a/Makefile.nds b/Makefile.nds
 new file mode 100644
 index 0000000..060fb65
