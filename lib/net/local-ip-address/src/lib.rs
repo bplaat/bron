@@ -16,9 +16,59 @@ use std::net::IpAddr;
 pub fn local_ip() -> Result<IpAddr, std::io::Error> {
     cfg_select! {
         unix => {
-            let mut ifaddrs: *mut libc::ifaddrs = std::ptr::null_mut();
+            use std::ffi::{c_char, c_int, c_uint};
+
+            const IFF_UP: c_uint = 0x1;
+            const IFF_LOOPBACK: c_uint = 0x8;
+            const IFF_RUNNING: c_uint = 0x40;
+
+            // Only the leading fields are declared; every Unix lays them out the same way.
+            #[repr(C)]
+            struct ifaddrs {
+                ifa_next: *mut ifaddrs,
+                _ifa_name: *mut c_char,
+                ifa_flags: c_uint,
+                ifa_addr: *mut sockaddr_in,
+            }
+
+            // BSD-derived systems start socket addresses with a length byte and a byte family.
+            cfg_select! {
+                any(
+                    target_vendor = "apple",
+                    target_os = "freebsd",
+                    target_os = "dragonfly",
+                    target_os = "openbsd",
+                    target_os = "netbsd"
+                ) => {
+                    type sa_family_t = u8;
+                    #[repr(C)]
+                    struct sockaddr_in {
+                        _sin_len: u8,
+                        sin_family: sa_family_t,
+                        _sin_port: u16,
+                        sin_addr: u32,
+                    }
+                }
+                _ => {
+                    type sa_family_t = u16;
+                    #[repr(C)]
+                    struct sockaddr_in {
+                        sin_family: sa_family_t,
+                        _sin_port: u16,
+                        sin_addr: u32,
+                    }
+                }
+            }
+            const AF_INET: sa_family_t = 2;
+
+            unsafe extern "C" {
+                fn getifaddrs(ifap: *mut *mut ifaddrs) -> c_int;
+                fn freeifaddrs(ifa: *mut ifaddrs);
+            }
+
+            let mut ifaddrs: *mut ifaddrs = std::ptr::null_mut();
             // SAFETY: ifaddrs is a valid out-pointer; getifaddrs will initialize it on success.
-            if unsafe { libc::getifaddrs(&mut ifaddrs) } != 0 {
+            if unsafe { getifaddrs(&mut ifaddrs) } != 0 {
                 return Err(std::io::Error::last_os_error());
             }
             let mut result = Err(std::io::Error::new(
@@ -33,26 +83,16 @@ pub fn local_ip() -> Result<IpAddr, std::io::Error> {
                 // SAFETY: current is non-null, as above.
                 let flags = unsafe { (*current).ifa_flags };
                 if !addr.is_null()
-                    // SAFETY: addr is non-null (checked above), pointing to a valid sockaddr.
-                    && unsafe { (*addr).sa_family } as u32 == libc::AF_INET as u32
-                    && (flags & libc::IFF_LOOPBACK as u32 == 0)
-                    && (flags & libc::IFF_UP as u32 != 0)
-                    && (flags & libc::IFF_RUNNING as u32 != 0)
+                    // SAFETY: addr is non-null (checked above); every socket address starts
+                    // with the family field.
+                    && unsafe { (*addr).sin_family } == AF_INET
+                    && (flags & IFF_LOOPBACK == 0)
+                    && (flags & IFF_UP != 0)
+                    && (flags & IFF_RUNNING != 0)
                 {
-                    let mut addr_in = std::mem::MaybeUninit::<libc::sockaddr_in>::uninit();
-                    // SAFETY: addr points to a valid sockaddr_in (verified via AF_INET family check); addr_in is a correctly sized MaybeUninit target.
-                    unsafe {
-                        std::ptr::copy_nonoverlapping(
-                            addr as *const u8,
-                            addr_in.as_mut_ptr() as *mut u8,
-                            size_of::<libc::sockaddr_in>(),
-                        )
-                    };
-                    // SAFETY: addr_in was fully initialized by copy_nonoverlapping above.
-                    let addr_in = unsafe { addr_in.assume_init() };
-                    result = Ok(IpAddr::V4(std::net::Ipv4Addr::from(u32::from_be(
-                        addr_in.sin_addr.s_addr,
-                    ))));
+                    // SAFETY: the AF_INET family check above guarantees addr is a sockaddr_in.
+                    let sin_addr = unsafe { (*addr).sin_addr };
+                    result = Ok(IpAddr::V4(std::net::Ipv4Addr::from(u32::from_be(sin_addr))));
                     break;
                 }
                 // SAFETY: current is non-null; ifa_next is a valid pointer to the next node or null.
@@ -60,7 +100,7 @@ pub fn local_ip() -> Result<IpAddr, std::io::Error> {
             }
 
             // SAFETY: ifaddrs was obtained from a successful getifaddrs call and has not been freed yet.
-            unsafe { libc::freeifaddrs(ifaddrs) };
+            unsafe { freeifaddrs(ifaddrs) };
             result
         }
         windows => {
