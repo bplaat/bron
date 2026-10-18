@@ -562,6 +562,8 @@ impl Area {
 }
 
 // MARK: Rounding
+// FIXME: Use `f32::round`, `f32::trunc` and `f64::round` once the `core_float_math` feature
+// brings them to `core` on stable Rust.
 // `core` has no float rounding; codecs only round values far inside the `i64` range, where
 // truncation is an integer cast.
 

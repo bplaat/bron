@@ -756,7 +756,7 @@ fn gif_quantize(
     colors.extend(
         palette
             .iter()
-            .map(|color| color.map(|value| round(value).clamp(0.0, 255.0) as u8)),
+            .map(|color| color.map(|value| round(value) as u8)),
     );
     let palette: Vec<_> = colors.iter().map(|color| color.map(f64::from)).collect();
     let opaque = &palette[reserved..];
