@@ -1,0 +1,28 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Sun, 18 Oct 2026 22:30:27 +0200
+Subject: [PATCH] Count clock in milliseconds on the Nintendo DS
+
+clock_t is 32 bits, in microseconds clock wraps after 36 minutes,
+which loops waiting for clock to pass a time don't survive.
+---
+ libc/include/time.h | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/libc/include/time.h b/libc/include/time.h
+index 73f6f08..4ca67de 100644
+--- a/libc/include/time.h
++++ b/libc/include/time.h
+@@ -51,6 +51,12 @@ _BEGIN_STD_C
+ 
+ #define __STDC_VERSION_TIME_H__ 202311L
+ 
++/* The 32-bit clock() of the Nintendo DS counts milliseconds, so it wraps after
++   24 days instead of 36 minutes */
++#if !defined(_CLOCKS_PER_SEC_) && defined(__NDS__)
++#define _CLOCKS_PER_SEC_ 1000
++#endif
++
+ #ifndef _CLOCKS_PER_SEC_
+ #define _CLOCKS_PER_SEC_ 1000000
+ #endif

@@ -70,7 +70,7 @@ index 8db97b4..1c19a55 100644
              REG_DISPCNT_SUB &= ~DISPLAY_BG2_ACTIVE;
              DrawHelpScreen ();
 diff --git a/wl_def.h b/wl_def.h
-index 23400a9..4885869 100644
+index b563f6d..639bc9f 100644
 --- a/wl_def.h
 +++ b/wl_def.h
 @@ -1092,7 +1092,7 @@ extern  int         lastgamemusicoffset;

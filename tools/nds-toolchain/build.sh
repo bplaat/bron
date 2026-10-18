@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Builds the Nintendo DS toolchain in ../../target/nds-toolchain/: fetches calico, libnds, libdvm, FatFs, the default
-# ARM7 program, ndstool and LLVM's compiler-rt, applies the patches in <name>/patches/ and builds
-# the libraries, our tiny libc, the ARM7 program and ndstool.
+# ARM7 program, picolibc, ndstool and LLVM's compiler-rt, applies the patches in <name>/patches/ and
+# builds the libraries, picolibc (the C library) in sysroot9/ and sysroot7/, the ARM7 program and
+# ndstool.
 # The port build scripts run this before they build.
 #
 # Usage: ./build.sh [command]...
@@ -20,6 +21,7 @@ REPOS=(
     'libdvm https://github.com/devkitPro/libdvm.git v2.1.0 3006b93714b2cac7e052dbc44903b3ef29d2965a'
     'fatfs https://github.com/devkitPro/fatfs-mod.git v0.15.3 6d3e8f89202223bf70e957357dd31405b17d1f95'
     'default-arm7 https://github.com/devkitPro/default-arm7.git v0.8.4 90736cff9026e8f45b87c1b2edd59e197a09828a'
+    'picolibc https://github.com/picolibc/picolibc.git 1.8.12 2ae376c6cdf4fef90ca2388ecf7a07457fa63cff'
     'ndstool https://github.com/devkitPro/ndstool.git v2.3.1 76e8b681bb225d945a48852821e03114e6c7ce1c'
     'compiler-rt https://github.com/llvm/llvm-project.git llvmorg-23.1.3 0d261d1ca552c95a8f007e061c787ac7132fbcbc /compiler-rt/lib/builtins/'
 )
@@ -34,6 +36,7 @@ CALICO_DIR="$BUILD_DIR/calico"
 LIBNDS_DIR="$BUILD_DIR/libnds"
 LIBDVM_DIR="$BUILD_DIR/libdvm"
 FATFS_DIR="$BUILD_DIR/fatfs"
+PICOLIBC_DIR="$BUILD_DIR/picolibc"
 BUILTINS_DIR="$BUILD_DIR/compiler-rt/compiler-rt/lib/builtins"
 
 # Apple's clang can't target ARM bare metal, so prefer Homebrew's LLVM when it's installed
@@ -46,19 +49,22 @@ done
 # point unit. There is no OS, so no standard library from the host. Code is Thumb unless the file
 # is named *.32.c (calico's convention for ARM code), the linker script puts those in fast memory.
 # ARMv4T can't switch between ARM and Thumb code in a direct call, so ARM7 calls are long calls
-# through a register: lld's stubs for them can end up in the DSi only memory.
-COMMON_CFLAGS=(-nostdlibinc -ffunction-sections -fdata-sections -g -D__NDS__
-    -I"$TOOLCHAIN_DIR/libc/include" -I"$CALICO_DIR/include")
-ARM9_CFLAGS=(--target=armv5te-none-eabi -mcpu=arm946e-s -mthumb -DARM9 -O2 "${COMMON_CFLAGS[@]}")
-ARM7_CFLAGS=(--target=armv4t-none-eabi -mcpu=arm7tdmi -mthumb -mlong-calls -DARM7 -Os "${COMMON_CFLAGS[@]}")
+# through a register: lld's stubs for them can end up in the DSi only memory. Each CPU has its own
+# picolibc build, _DEFAULT_SOURCE makes it also declare its POSIX and BSD functions.
+ARM9_TARGET=(--target=armv5te-none-eabi -mcpu=arm946e-s -mthumb)
+ARM7_TARGET=(--target=armv4t-none-eabi -mcpu=arm7tdmi -mthumb -mlong-calls)
+COMMON_CFLAGS=(-ffunction-sections -fdata-sections -g -D__NDS__)
+ARM9_LIBC_CFLAGS=("${COMMON_CFLAGS[@]}" -DARM9 -O2)
+ARM7_LIBC_CFLAGS=("${COMMON_CFLAGS[@]}" -DARM7 -Os)
+ARM9_CFLAGS=("${ARM9_TARGET[@]}" "${ARM9_LIBC_CFLAGS[@]}" -nostdlibinc -D_DEFAULT_SOURCE
+    -I"$BUILD_DIR/sysroot9/include" -I"$CALICO_DIR/include")
+ARM7_CFLAGS=("${ARM7_TARGET[@]}" "${ARM7_LIBC_CFLAGS[@]}" -nostdlibinc -D_DEFAULT_SOURCE
+    -I"$BUILD_DIR/sysroot7/include" -I"$CALICO_DIR/include")
 LIB_CFLAGS=(-std=gnu17 -w -I"$LIBNDS_DIR/include" -I"$LIBDVM_DIR/include"
     -I"$FATFS_DIR/source")
-# The libc is our own code, so it gets strict warnings, and no builtins: the compiler would turn
-# the loops of memcpy and memset into calls to themselves
-LIBC_CFLAGS=(-std=c23 -Wall -Wextra -ffreestanding)
 
 CALICO_SOURCES=(
-    system/{irq,tick,thread_cold,thread_hot.32,mutex,mailbox,dietprint,newlib_syscalls}.c
+    system/{irq,tick,thread_cold,thread_hot.32,mutex,mailbox,dietprint,newlib_syscalls,iosupport}.c
     arm/{arm-copy-fill.32,arm-context.32,arm-readtp.32}.s arm/arm-shims.32.c
     dev/fugu.32.c
     nds/{startup.crt0,tlnc.twl,pxi,smutex.32,keypad,pm,netbuf,gbacart,ntrcard,nitrorom}.c
@@ -92,8 +98,7 @@ BUILTINS_SOURCES=(
     {ashldi3,ashrdi3,lshrdi3,muldi3,negdi2,cmpdi2,ucmpdi2,mulodi4,mulosi4}.c
     {divdi3,moddi3,divmoddi4,udivdi3,umoddi3,udivmoddi4,ctzsi2,ctzdi2,clzdi2,popcountsi2}.c
     arm/{divsi3,udivsi3,modsi3,umodsi3,divmodsi4,udivmodsi4,clzsi2}.S
-    arm/{aeabi_idivmod,aeabi_uidivmod,aeabi_ldivmod,aeabi_uldivmod}.S
-    arm/{aeabi_memcmp,aeabi_memcpy,aeabi_memmove,aeabi_memset}.S arm/aeabi_div0.c
+    arm/{aeabi_idivmod,aeabi_uidivmod,aeabi_ldivmod,aeabi_uldivmod}.S arm/aeabi_div0.c
 )
 FLOAT_SOURCES=(
     arm/{addsf3,mulsf3,divsf3,adddf3,cmpsf2,cmpdf2,gesf2,gedf2,unordsf2,unorddf2}.S
@@ -210,6 +215,56 @@ export_patches() {
     done
 }
 
+# Quotes the arguments as a meson array
+meson_array() {
+    local arg out=''
+    for arg in "$@"; do out+="'$arg', "; done
+    echo "[${out%, }]"
+}
+
+# Builds picolibc with meson for a CPU (9 or 7) and installs its headers and libc.a, which
+# includes the math library, in target/sysroot<cpu>/
+build_picolibc() {
+    local cpu="$1" sysroot="$BUILD_DIR/sysroot$1" build="$BUILD_DIR/objects/picolibc$1" target cflags
+    if [ "$cpu" = 9 ]; then
+        target=("${ARM9_TARGET[@]}") cflags=("${ARM9_LIBC_CFLAGS[@]}")
+    else
+        target=("${ARM7_TARGET[@]}") cflags=("${ARM7_LIBC_CFLAGS[@]}")
+    fi
+    # The sources are checked too, so edits in target/ get built
+    outdated "$sysroot/lib/libc.a" "$PICOLIBC_DIR"/{.patched,libc,libm,meson.build} "$TOOLCHAIN_DIR/build.sh" ||
+        return 0
+    msg "Building picolibc for the ARM$cpu"
+    mkdir -p "$BUILD_DIR/objects"
+    cat > "$build.txt" << CROSS
+[binaries]
+c = $(meson_array "${LLVM}clang" "${target[@]}" -nostdlib)
+c_ld = 'lld'
+ar = '${LLVM}llvm-ar'
+nm = '${LLVM}llvm-nm'
+strip = '${LLVM}llvm-strip'
+
+[host_machine]
+system = 'none'
+cpu_family = 'arm'
+cpu = '$([ "$cpu" = 9 ] && echo arm946e-s || echo arm7tdmi)'
+endian = 'little'
+
+[properties]
+skip_sanity_check = true
+CROSS
+    rm -rf "$build" "$sysroot"
+    # calico starts the program and runs threads without thread-local storage, so picolibc gets a
+    # global errno and calico's locks. stdin, stdout and stderr are the file descriptors 0 to 2 of
+    # the devoptab devices.
+    meson setup "$build" "$PICOLIBC_DIR" --cross-file "$build.txt" --prefix "$sysroot" \
+        --includedir include --libdir lib --buildtype plain -Dc_args="$(meson_array "${cflags[@]}")" \
+        -Dmultilib=false -Dpicocrt=false -Dsemihost=false -Dtests=false -Dspecsdir=none \
+        -Dthread-local-storage=false -Dposix-console=true -Dfast-bufio=true -Dstdio-exit-flush=true \
+        -Dformat-default=double -Dio-long-long=true > /dev/null || die "Failed to configure picolibc"
+    meson install -C "$build" > /dev/null || die "Failed to build picolibc"
+}
+
 # Compiles sources at the same time and archives them to target/<library>, objects keep the
 # suffixes of their source (like .32 and .twl) the linker scripts look for,
 # usage: build_archive <library> <flags>... -- <sources>...
@@ -249,16 +304,19 @@ build_archive() {
 }
 
 build_libraries() {
-    local calico=("${CALICO_SOURCES[@]/#/$CALICO_DIR/source/}") libc=("$TOOLCHAIN_DIR"/libc/*.[cS])
+    local calico=("${CALICO_SOURCES[@]/#/$CALICO_DIR/source/}")
     local builtins=("${BUILTINS_SOURCES[@]/#/$BUILTINS_DIR/}") floats=("${FLOAT_SOURCES[@]/#/$BUILTINS_DIR/}")
+    build_picolibc 9
+    build_picolibc 7
     # The library sources are checked too, so edits in target/ get built
-    outdated "$BUILD_DIR/libcalico9.a" "$CALICO_DIR"/{source,include} "$TOOLCHAIN_DIR"/{libc/include,build.sh} &&
-        build_archive libcalico9.a "${ARM9_CFLAGS[@]}" "${LIB_CFLAGS[@]}" -- \
+    outdated "$BUILD_DIR/libcalico9.a" "$CALICO_DIR"/{source,include} "$BUILD_DIR/sysroot9/lib/libc.a" \
+        "$TOOLCHAIN_DIR/build.sh" && build_archive libcalico9.a "${ARM9_CFLAGS[@]}" "${LIB_CFLAGS[@]}" -- \
             "${calico[@]}" "${CALICO9_SOURCES[@]/#/$CALICO_DIR/source/}"
-    outdated "$BUILD_DIR/libcalico7.a" "$CALICO_DIR"/{source,include} "$TOOLCHAIN_DIR"/{libc/include,build.sh} &&
-        build_archive libcalico7.a "${ARM7_CFLAGS[@]}" "${LIB_CFLAGS[@]}" -- \
+    outdated "$BUILD_DIR/libcalico7.a" "$CALICO_DIR"/{source,include} "$BUILD_DIR/sysroot7/lib/libc.a" \
+        "$TOOLCHAIN_DIR/build.sh" && build_archive libcalico7.a "${ARM7_CFLAGS[@]}" "${LIB_CFLAGS[@]}" -- \
             "${calico[@]}" "${CALICO7_SOURCES[@]/#/$CALICO_DIR/source/}"
-    if outdated "$BUILD_DIR/libnds9.a" "$LIBNDS_DIR"/{source,include} "$TOOLCHAIN_DIR"/{libc/include,build.sh}; then
+    if outdated "$BUILD_DIR/libnds9.a" "$LIBNDS_DIR"/{source,include} "$BUILD_DIR/sysroot9/lib/libc.a" \
+        "$TOOLCHAIN_DIR/build.sh"; then
         # The console font is embedded as it is
         mkdir -p "$BUILD_DIR/generated"
         echo 'extern const unsigned char default_font_bin[];' > "$BUILD_DIR/generated/default_font_bin.h"
@@ -268,15 +326,11 @@ build_libraries() {
             "${LIBNDS_SOURCES[@]/#/$LIBNDS_DIR/source/}" "$BUILD_DIR/generated/default_font.s"
     fi
     outdated "$BUILD_DIR/libdvm.a" "$LIBDVM_DIR"/{source,include} "$FATFS_DIR/source" \
-        "$TOOLCHAIN_DIR"/{libc/include,build.sh} &&
+        "$BUILD_DIR/sysroot9/lib/libc.a" "$TOOLCHAIN_DIR/build.sh" &&
         build_archive libdvm.a "${ARM9_CFLAGS[@]}" "${LIB_CFLAGS[@]}" -DLIBDVM_BUFFER_ALIGN=32 \
             -DLIBDVM_WITH_CACHE_COPY -DLIBDVM_WITH_ALIGNED_ACCESS -- \
             "$LIBDVM_DIR"/source/{dvm_disc,dvm_cache,dvm_volume,dvm_prober,fat_wrappers,fat_driver}.c \
             "$LIBDVM_DIR"/source/{dvm_calico,nitrofs}.c "$FATFS_DIR"/source/{ff,ffunicode}.c
-    outdated "$BUILD_DIR/libc9.a" "$CALICO_DIR/include" "$TOOLCHAIN_DIR"/{libc,build.sh} &&
-        build_archive libc9.a "${ARM9_CFLAGS[@]}" "${LIBC_CFLAGS[@]}" -- "${libc[@]}"
-    outdated "$BUILD_DIR/libc7.a" "$CALICO_DIR/include" "$TOOLCHAIN_DIR"/{libc,build.sh} &&
-        build_archive libc7.a "${ARM7_CFLAGS[@]}" "${LIBC_CFLAGS[@]}" -- "${libc[@]}"
     outdated "$BUILD_DIR/libcompiler-rt9.a" "$BUILTINS_DIR" "$TOOLCHAIN_DIR/build.sh" &&
         build_archive libcompiler-rt9.a "${ARM9_CFLAGS[@]}" -marm -std=gnu11 -w -- "${builtins[@]}" "${floats[@]}"
     outdated "$BUILD_DIR/libcompiler-rt7.a" "$BUILTINS_DIR" "$TOOLCHAIN_DIR/build.sh" &&
@@ -288,14 +342,15 @@ build_libraries() {
 # the ports and talks to it through calico
 build_arm7() {
     local objects_dir="$BUILD_DIR/objects/ds7"
-    outdated "$BUILD_DIR/ds7.elf" "$BUILD_DIR"/lib{calico7,c7,compiler-rt7}.a "$BUILD_DIR/default-arm7" \
-        "$CALICO_DIR/share/ds7.ld" || return 0
+    outdated "$BUILD_DIR/ds7.elf" "$BUILD_DIR"/lib{calico7,compiler-rt7}.a "$BUILD_DIR/sysroot7/lib/libc.a" \
+        "$BUILD_DIR/default-arm7" "$CALICO_DIR/share/ds7.ld" || return 0
     msg "Building ds7.elf"
     mkdir -p "$objects_dir"
     "${LLVM}clang" "${ARM7_CFLAGS[@]}" -Wall -DENABLE_BLKDEV -DENABLE_SOUND \
         -c "$BUILD_DIR/default-arm7/arm7_main.c" -o "$objects_dir/arm7_main.o"
     ld.lld -T "$CALICO_DIR/share/ds7.ld" --gc-sections --nmagic --section-start=.main=0x02ff0000 \
-        "$objects_dir/arm7_main.o" "$BUILD_DIR"/lib{calico7,c7,compiler-rt7}.a -o "$BUILD_DIR/ds7.elf"
+        "$objects_dir/arm7_main.o" --start-group "$BUILD_DIR/libcalico7.a" "$BUILD_DIR/sysroot7/lib/libc.a" \
+        "$BUILD_DIR/libcompiler-rt7.a" --end-group -o "$BUILD_DIR/ds7.elf"
 }
 
 # ndstool runs on the host, it puts the ARM9 and ARM7 programs, the icon and NitroFS in a .nds

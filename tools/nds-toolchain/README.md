@@ -9,7 +9,9 @@ What the ports share to build Nintendo DS programs with plain clang and lld, wit
   [FatFs](https://github.com/devkitPro/fatfs-mod) v0.15.3 and the
   [default ARM7 program](https://github.com/devkitPro/default-arm7) v0.8.4, with their
   `<name>/patches/`, to `../../target/nds-toolchain/lib*.a` and `../../target/nds-toolchain/ds7.elf`
-- our C library in `libc/` to `../../target/nds-toolchain/libc9.a` and `../../target/nds-toolchain/libc7.a`
+- [picolibc](https://github.com/picolibc/picolibc) 1.8.12 with `picolibc/patches/`, built with meson
+  as the C library for each CPU, its headers and `libc.a` with the math library go to
+  `../../target/nds-toolchain/sysroot9/` and `../../target/nds-toolchain/sysroot7/`
 - [ndstool](https://github.com/devkitPro/ndstool) v2.3.1 to `../../target/nds-toolchain/bin/ndstool`
 - the builtins of LLVM's [compiler-rt](https://github.com/llvm/llvm-project/tree/main/compiler-rt/lib/builtins)
   llvmorg-23.1.3 (64-bit integer math, division and software floating point) to
@@ -20,22 +22,16 @@ What the ports share to build Nintendo DS programs with plain clang and lld, wit
 ./build.sh clean           # remove ../../target/nds-toolchain/
 ./build.sh export-patches  # write the commits in ../../target/nds-toolchain/<name>/ back to <name>/patches/
 ./build.sh test            # build test/ and run it headless in DeSmuME
-./build.sh desmume         # build ../../target/nds-toolchain/bin/desmume-runner, needs meson and ninja
+./build.sh desmume         # build ../../target/nds-toolchain/bin/desmume-runner
 ```
 
-The ARM9 (ARMv5TE) and ARM7 (ARMv4T) have no floating point unit. Code is Thumb, except objects
-named `*.32.o` or `*.itcm.o` (a port's `ITCM_SOURCES`), which are ARM code in fast memory.
+Building picolibc and DeSmuME needs meson and ninja. The ARM9 (ARMv5TE) and ARM7 (ARMv4T) have no
+floating point unit, picolibc's float math is single precision. Code is Thumb, except objects named
+`*.32.o` or `*.itcm.o` (a port's `ITCM_SOURCES`), which are ARM code in fast memory. Code is
+compiled with `_DEFAULT_SOURCE`, so picolibc also declares its POSIX and BSD functions.
 
 ## Files
 
-- `libc/` replaces newlib: word copying `memcpy`/`memset`/`memcmp` in ITCM (`memset` stores 32
-  bytes per two `stm`), which write the bytes at their ends with their halfword in VRAM and the GBA
-  slot, they ignore byte writes, a first-fit `malloc` with a far heap for memory outside the main
-  RAM, like a Memory Expansion Pak's (`far_heap_init`, `far_malloc`), buffered `stdio` on the
-  devoptab devices (SD card, NitroFS, console), which only reads straight into main RAM, the
-  `printf` and `scanf` families, `strtof`, float math, time and `setjmp`. Floats are single
-  precision throughout, `strtod` and `atof` too, nothing does double precision math. `stdin` is
-  always empty. It only uses the calico functions in `libc/calico.h`.
 - `nds.mk` has the make rules for the ports' `Makefile.nds`, at `-O3`. A port's own ARM7 code
   (`ARM7_SOURCES`) is linked with the default ARM7 program, which calls its `arm7PortInit`
 - `run.sh` starts a program in melonDS, `make run` uses it
@@ -62,7 +58,7 @@ named `*.32.o` or `*.itcm.o` (a port's `ITCM_SOURCES`), which are ARM code in fa
     returning an error on failed tests or a frame timeout.
 
 - `test/` is a DS program that checks the startup code, the C library, compiler-rt, threads, ITCM,
-  FAT and NitroFS. `./build.sh test` builds DeSmuME and runs it headless with a writable R4 card
+  FAT, NitroFS and the console's escape sequences. `./build.sh test` builds DeSmuME and runs it headless with a writable R4 card
   initialized from `test/target/sd/`. It prints the results and fails when a check fails or the ROM does not
   finish within 3600 emulated frames. The ROM also saves `test.txt` on the emulated card.
 
@@ -71,10 +67,19 @@ named `*.32.o` or `*.itcm.o` (a port's `ITCM_SOURCES`), which are ARM code in fa
 Edit and commit in `../../target/nds-toolchain/<name>/`, run `./build.sh` to try it and `./build.sh export-patches`
 to write the commits back.
 
-- calico: unified assembly syntax for LLVM, no newlib glue, linker scripts that work with lld
+- calico: unified assembly syntax for LLVM, no newlib glue, linker scripts that work with lld, and
+  the system functions picolibc leaves to the platform: the POSIX file functions on the devoptab
+  devices (SD card, NitroFS, console) in `sys/iosupport.h`, which read into memory outside main RAM
+  through main RAM, `stdin` is always empty, `sbrk`, locks on calico mutexes, time and sleeping
 - libnds: builds with clang and without newlib, with a pregenerated `libversion.h`, and
   `ramPakInit` in `nds/arm9/rampak.h` unlocks the 8 MiB RAM of the DS Browser's Memory Expansion
-  Pak in the GBA slot and maps it data cached
+  Pak in the GBA slot and maps it data cached, the standard `printf` names, and the console keeps
+  escape sequences between writes, picolibc writes the unbuffered `stdout` a character at a time
+- picolibc: `memcpy`, `memmove` and `memset` that write the bytes at their ends with their
+  halfword in VRAM and the GBA slot, which ignore byte writes, as ARM code in ITCM (`memset`
+  stores 32 bytes per two `stm`), and a far heap in `malloc.h` for memory outside the main RAM,
+  like a Memory Expansion Pak's (`far_heap_init`, `far_malloc`), and `clock` counts milliseconds,
+  so its 32 bits wrap after 24 days
 - default-arm7: calls `arm7PortInit`, which does nothing by default, before its main loop
 - desmume: returning from an interrupt to Thumb code at an address that isn't a multiple of 4,
   like calico does with `ldm sp!, {..., pc}^`, ran the instruction before it again, the ARM9

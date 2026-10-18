@@ -76,17 +76,17 @@ data extension (`wl1`, `wl3` or `wl6`). Shared startup files such as
 
 The ports build with a normal LLVM toolchain (clang 18 or newer, lld and llvm-ar). The
 [toolchain](../../tools/nds-toolchain) script clones calico, libnds, libdvm, FatFs, the
-default ARM7 program, ndstool and LLVM's compiler-rt builtins, patches and
-builds them the first time you build a port. Install LLVM and the
-[melonDS](https://melonds.kuribo64.net/) emulator:
+default ARM7 program, picolibc, ndstool and LLVM's compiler-rt builtins, patches and
+builds them the first time you build a port. Install LLVM, meson and ninja (to build
+picolibc) and the [melonDS](https://melonds.kuribo64.net/) emulator:
 
 ```sh
 # macOS
-brew install llvm lld innoextract
+brew install llvm lld meson ninja innoextract
 brew install --cask melonds
 
 # Ubuntu 24.04 or newer, older releases need a newer clang from apt.llvm.org
-sudo apt install clang lld llvm g++ make git curl unzip innoextract melonds
+sudo apt install clang lld llvm g++ make git curl unzip meson ninja-build innoextract melonds
 ```
 
 - Build a port with its `build.sh`, the ROM ends up in `target/<port>.nds`,

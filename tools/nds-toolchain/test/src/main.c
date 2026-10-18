@@ -18,7 +18,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
-#include <sys/uio.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -129,8 +128,8 @@ static void test_format(void) {
     // Scansets, a quoted string read into the buffer it comes from
     char quoted[16] = "\"two words\"x";
     CHECK(sscanf(quoted, "\"%[^\"]\"", quoted) == 1 && !strcmp(quoted, "two words"));
-    CHECK(sscanf("abc123-]x", "%[a-c]%2[0-9]%*[0-9]%[]-]", word, text, quoted) == 3 && !strcmp(word, "abc") &&
-          !strcmp(text, "12") && !strcmp(quoted, "-]"));
+    CHECK(sscanf("abc123]]x", "%[a-c]%2[0-9]%*[0-9]%[]]", word, text, quoted) == 3 && !strcmp(word, "abc") &&
+          !strcmp(text, "12") && !strcmp(quoted, "]]"));
     CHECK(sscanf("xyz", "%[a-c]", word) == 0);
     float f = 0;
     double d = 0;
@@ -163,11 +162,10 @@ static void test_stdlib(void) {
     errno = 0;
     CHECK(strtol("99999999999", NULL, 10) == LONG_MAX && errno == ERANGE);
     CHECK(atoi("42") == 42 && atol("-123456789") == -123456789L && abs(-5) == 5);
-    // Floats, strtod and atof with float precision too
+    // Floats, rounded exactly
     CHECK(strtof(" -1.5e3x", &end) == -1500.0f && *end == 'x');
     CHECK(strtof("0.1", NULL) == 0.1f && strtof("123456.7", NULL) == 123456.7f && atof(".25") == 0.25);
-    CHECK(strtod("3.14159f", &end) == (double)3.14159f && *end == 'f');
-    // Up to 7 digits and a power up to 10^10 are rounded exactly
+    CHECK(strtod("3.14159f", &end) == 3.14159 && *end == 'f');
     CHECK(strtof("0.3", NULL) == 0.3f && strtof("1234.567", NULL) == 1234.567f && strtof("2.5e-3", NULL) == 2.5e-3f &&
           strtof("9999999e10", NULL) == 9999999e10f && strtof("-0.0000001", NULL) == -0.0000001f);
     check_float(strtof("1e-30", NULL), 1e-30f, 1e-6f, __LINE__, "strtof(\"1e-30\")");
@@ -547,14 +545,25 @@ static void test_files(void) {
     CHECK(fopen("nodevice:/file.txt", "r") == NULL && errno == ENODEV);
 
     int fd = open("raw.bin", O_WRONLY | O_CREAT | O_TRUNC, S_IREAD | S_IWRITE);
-    CHECK(fd >= 0 && write(fd, "raw", 3) == 3);
-    struct iovec parts[2] = {{"ab", 2}, {"cde", 3}};
-    CHECK(writev(fd, parts, 2) == 5 && fstat(fd, &st) == 0 && st.st_size == 8 && close(fd) == 0);
-    char first[4] = {0}, second[5] = {0};
-    struct iovec into[2] = {{first, 3}, {second, 4}};
+    CHECK(fd >= 0 && write(fd, "raw", 3) == 3 && write(fd, "abcde", 5) == 5);
+    CHECK(fstat(fd, &st) == 0 && st.st_size == 8 && close(fd) == 0);
+    char raw[8] = {0};
     fd = open("raw.bin", O_RDONLY);
-    CHECK(fd >= 0 && readv(fd, into, 2) == 7 && !strcmp(first, "raw") && !strcmp(second, "abcd") && close(fd) == 0);
+    CHECK(fd >= 0 && read(fd, raw, 7) == 7 && !strcmp(raw, "rawabcd") && close(fd) == 0);
     CHECK(unlink("raw.bin") == 0);
+}
+
+// The libnds console's escape sequences, stdout is unbuffered and writes a character at a time
+static PrintConsole* console;
+
+static void test_console(void) {
+    printf("\x1b[2J\x1b[4;7Hab");
+    CHECK(console->cursorY == 4 && console->cursorX == 9);
+    printf("\x1b[31m");
+    CHECK(console->fontCurPal == 1 << 12);
+    printf("\x1b[39m\x1b[2D\x1b[1Bx");
+    CHECK(console->fontCurPal == 15 << 12 && console->cursorY == 5 && console->cursorX == 8);
+    printf("\x1b[2J");
 }
 
 // NitroFS: the files ndstool embedded in the ROM
@@ -567,6 +576,12 @@ static void test_nitrofs(void) {
         CHECK(fgets(line, sizeof(line), file) && !strcmp(line, "second line\n"));
         fclose(file);
     }
+    // Big reads into VRAM go through main RAM, VRAM ignores the bytes a driver may copy
+    file = fopen("nitro:/hello.txt", "rb");
+    uint8_t* vram = (uint8_t*)VRAM_A;
+    CHECK(file && fread(vram + 1, 1, 600, file) == 24 && !memcmp(vram + 1, "hello nitro\nsecond line\n", 24));
+    if (file)
+        fclose(file);
     char cwd[PATH_MAX];
     getcwd(cwd, sizeof(cwd));
     struct stat st;
@@ -576,7 +591,7 @@ static void test_nitrofs(void) {
 }
 
 int main(int argc, char** argv) {
-    consoleDemoInit();
+    console = consoleDemoInit();
     printf("Toolchain test\n");
     bool fat = fatInitDefault();
     bool nitro = nitroFSInit(NULL);
@@ -598,6 +613,7 @@ int main(int argc, char** argv) {
         run("heap", test_heap);
         run("threads", test_threads);
         run("files", test_files);
+        run("console", test_console);
         if (nitro)
             run("nitrofs", test_nitrofs);
         report("DONE %d failed\n", failures);

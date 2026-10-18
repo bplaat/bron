@@ -1,0 +1,282 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Sun, 18 Oct 2026 22:14:12 +0200
+Subject: [PATCH] Write the bytes at the ends with their halfword on the
+ Nintendo DS
+
+VRAM and the RAM of the GBA slot ignore byte writes, so the generic
+memcpy, memmove and memset lose the bytes at the ends of copies and
+fills there. The DS versions move words, eight at a time, or halfwords
+and write those bytes with their halfword. They are ARM code, which
+the ARM9 runs from ITCM.
+---
+ libc/machine/arm/CMakeLists.txt |   1 +
+ libc/machine/arm/memcpy.c       |   3 +-
+ libc/machine/arm/memmove.c      |   4 +
+ libc/machine/arm/memset.c       |   3 +-
+ libc/machine/arm/meson.build    |   1 +
+ libc/machine/arm/nds-memory.c   | 185 ++++++++++++++++++++++++++++++++
+ 6 files changed, 195 insertions(+), 2 deletions(-)
+ create mode 100644 libc/machine/arm/nds-memory.c
+
+diff --git a/libc/machine/arm/CMakeLists.txt b/libc/machine/arm/CMakeLists.txt
+index cb98b97..791a7be 100644
+--- a/libc/machine/arm/CMakeLists.txt
++++ b/libc/machine/arm/CMakeLists.txt
+@@ -46,6 +46,7 @@ picolibc_sources_flags("-fno-builtin"
+   memmove.c
+   memset.c
+   memset.S
++  nds-memory.c
+   read_tp.S
+   set_tls.c
+   setjmp.S
+diff --git a/libc/machine/arm/memcpy.c b/libc/machine/arm/memcpy.c
+index ec963ab..ed56132 100644
+--- a/libc/machine/arm/memcpy.c
++++ b/libc/machine/arm/memcpy.c
+@@ -41,7 +41,8 @@
+ #define MEMCPY_FALLBACK
+ #endif
+ 
+-#ifdef MEMCPY_FALLBACK
++/* The Nintendo DS has its own in nds-memory.c */
++#if defined(MEMCPY_FALLBACK) && !defined(__NDS__)
+ #include "../../string/memcpy.c"
+ 
+ __weak_reference(memcpy, __aeabi_memcpy4);
+diff --git a/libc/machine/arm/memmove.c b/libc/machine/arm/memmove.c
+index 669fa73..3dac920 100644
+--- a/libc/machine/arm/memmove.c
++++ b/libc/machine/arm/memmove.c
+@@ -35,6 +35,8 @@
+ 
+ #include <picolibc.h>
+ 
++/* The Nintendo DS has its own in nds-memory.c */
++#ifndef __NDS__
+ #include "../../string/memmove.c"
+ 
+ /* Support the alias for the __aeabi_memmove which may
+@@ -42,3 +44,5 @@
+ __weak_reference(memmove, __aeabi_memmove4);
+ __weak_reference(memmove, __aeabi_memmove8);
+ __weak_reference(memmove, __aeabi_memmove);
++
++#endif
+diff --git a/libc/machine/arm/memset.c b/libc/machine/arm/memset.c
+index e61b579..252f27f 100644
+--- a/libc/machine/arm/memset.c
++++ b/libc/machine/arm/memset.c
+@@ -46,6 +46,7 @@
+ 
+ /* Defined in memset-soft.S.  */
+ 
+-#else
++/* The Nintendo DS has its own in nds-memory.c */
++#elif !defined(__NDS__)
+ #include "../../string/memset.c"
+ #endif
+diff --git a/libc/machine/arm/meson.build b/libc/machine/arm/meson.build
+index efb298a..6fe14c2 100644
+--- a/libc/machine/arm/meson.build
++++ b/libc/machine/arm/meson.build
+@@ -46,6 +46,7 @@ srcs_machine = [
+   'memmove.c',
+   'memset.c',
+   'memset.S',
++  'nds-memory.c',
+   'read_tp.S',
+   'set_tls.c',
+   'strlen.c',
+diff --git a/libc/machine/arm/nds-memory.c b/libc/machine/arm/nds-memory.c
+new file mode 100644
+index 0000000..5480e5c
+--- /dev/null
++++ b/libc/machine/arm/nds-memory.c
+@@ -0,0 +1,185 @@
++/*
++ * SPDX-License-Identifier: BSD-3-Clause
++ *
++ * Copyright (c) 2026 Bastiaan van der Plaat
++ */
++
++/*
++ * memcpy, memmove and memset for the Nintendo DS (__NDS__): they move words,
++ * eight at a time, or halfwords when only those line up. VRAM and the RAM of
++ * the GBA slot, like a Memory Expansion Pak's, ignore byte writes, so the
++ * bytes at the ends of a copy or fill are written with their halfword there.
++ * They are ARM code, which the ARM9 runs from ITCM, its fast memory.
++ */
++
++#include <picolibc.h>
++
++#include <stdint.h>
++#include <string.h>
++
++#ifdef __NDS__
++
++#ifdef ARM9
++#define __nds_code(name) __attribute__((__section__(".itcm." #name), __target__("arm")))
++#else
++#define __nds_code(name) __attribute__((__target__("arm")))
++#endif
++
++typedef uint32_t __attribute__((__may_alias__)) __word_t;
++typedef uint16_t __attribute__((__may_alias__)) __half_t;
++
++/* A byte in main RAM, or with the other byte of its halfword in VRAM and the GBA slot */
++static inline __nds_code(__nds_put_byte) void
++__nds_put_byte(uint8_t *p, uint8_t value)
++{
++    if ((uintptr_t)p < 0x04000000) {
++        *p = value;
++        return;
++    }
++    /* volatile, else the compiler sees it's a byte and stores that */
++    volatile __half_t *h = (volatile __half_t *)((uintptr_t)p & ~1u);
++    *h = (uintptr_t)p & 1 ? (__half_t)((*h & 0x00ff) | value << 8) : (__half_t)((*h & 0xff00) | value);
++}
++
++#undef memcpy
++#undef memmove
++#undef memset
++
++void * __no_builtin __nds_code(memcpy)
++memcpy(void * __restrict dst, const void * __restrict src, size_t n)
++{
++    uint8_t       *d = dst;
++    const uint8_t *s = src;
++    if ((((uintptr_t)d ^ (uintptr_t)s) & 1) == 0) {
++        if ((uintptr_t)d & 1 && n) {
++            __nds_put_byte(d++, *s++);
++            n--;
++        }
++        if ((((uintptr_t)d ^ (uintptr_t)s) & 3) == 0) {
++            if ((uintptr_t)d & 2 && n >= 2) {
++                *(__half_t *)d = *(const __half_t *)s;
++                d += 2, s += 2, n -= 2;
++            }
++            __word_t       *dw = (__word_t *)d;
++            const __word_t *sw = (const __word_t *)s;
++            for (; n >= 32; n -= 32, dw += 8, sw += 8) {
++                __word_t a = sw[0], b = sw[1], c = sw[2], e = sw[3];
++                __word_t f = sw[4], g = sw[5], h = sw[6], i = sw[7];
++                dw[0] = a, dw[1] = b, dw[2] = c, dw[3] = e;
++                dw[4] = f, dw[5] = g, dw[6] = h, dw[7] = i;
++            }
++            for (; n >= 4; n -= 4)
++                *dw++ = *sw++;
++            d = (uint8_t *)dw;
++            s = (const uint8_t *)sw;
++        }
++        for (; n >= 2; n -= 2, d += 2, s += 2)
++            *(__half_t *)d = *(const __half_t *)s;
++    } else {
++        /* Only one of them is odd: the halfwords are put together from bytes */
++        if ((uintptr_t)d & 1 && n) {
++            __nds_put_byte(d++, *s++);
++            n--;
++        }
++        for (; n >= 2; n -= 2, d += 2, s += 2)
++            *(__half_t *)d = (__half_t)(s[0] | s[1] << 8);
++    }
++    while (n--)
++        __nds_put_byte(d++, *s++);
++    return dst;
++}
++
++/* Copies from the end down, for when the destination overlaps the end of the source */
++void * __no_builtin __nds_code(memmove)
++memmove(void *dst, const void *src, size_t n)
++{
++    if ((uintptr_t)dst <= (uintptr_t)src || (uintptr_t)dst >= (uintptr_t)src + n)
++        return memcpy(dst, src, n);
++    uint8_t       *d = (uint8_t *)dst + n;
++    const uint8_t *s = (const uint8_t *)src + n;
++    if ((((uintptr_t)d ^ (uintptr_t)s) & 1) == 0) {
++        if ((uintptr_t)d & 1 && n) {
++            __nds_put_byte(--d, *--s);
++            n--;
++        }
++        if ((((uintptr_t)d ^ (uintptr_t)s) & 3) == 0) {
++            if ((uintptr_t)d & 2 && n >= 2) {
++                d -= 2, s -= 2, n -= 2;
++                *(__half_t *)d = *(const __half_t *)s;
++            }
++            __word_t       *dw = (__word_t *)d;
++            const __word_t *sw = (const __word_t *)s;
++            for (; n >= 4; n -= 4)
++                *--dw = *--sw;
++            d = (uint8_t *)dw;
++            s = (const uint8_t *)sw;
++        }
++        for (; n >= 2; n -= 2) {
++            d -= 2, s -= 2;
++            *(__half_t *)d = *(const __half_t *)s;
++        }
++    } else {
++        if ((uintptr_t)d & 1 && n) {
++            __nds_put_byte(--d, *--s);
++            n--;
++        }
++        for (; n >= 2; n -= 2) {
++            d -= 2, s -= 2;
++            *(__half_t *)d = (__half_t)(s[0] | s[1] << 8);
++        }
++    }
++    while (n--) {
++        --d;
++        __nds_put_byte(d, *--s);
++    }
++    return dst;
++}
++
++void * __no_builtin __nds_code(memset)
++memset(void *dst, int c, size_t n)
++{
++    uint8_t *d = dst;
++    __word_t fill = (uint8_t)c * 0x01010101u;
++    if ((uintptr_t)d & 1 && n) {
++        __nds_put_byte(d++, (uint8_t)c);
++        n--;
++    }
++    if ((uintptr_t)d & 2 && n >= 2) {
++        *(__half_t *)d = (__half_t)fill;
++        d += 2, n -= 2;
++    }
++    __word_t *dw = (__word_t *)d;
++    if (n >= 32) {
++        /*
++         * Two stm of four registers store 32 bytes, the compiler would keep the
++         * fill in one register and store a word at a time. The registers are
++         * outputs too, so they aren't set again for every loop.
++         */
++        register __word_t a __asm__("r4") = fill, b __asm__("r5") = fill;
++        register __word_t e __asm__("r6") = fill, f __asm__("r7") = fill;
++        for (; n >= 32; n -= 32)
++            __asm__ volatile("stmia %0!, {%1, %2, %3, %4}\n\tstmia %0!, {%1, %2, %3, %4}"
++                             : "+r"(dw), "+r"(a), "+r"(b), "+r"(e), "+r"(f)
++                             :
++                             : "memory");
++    }
++    for (; n >= 4; n -= 4)
++        *dw++ = fill;
++    d = (uint8_t *)dw;
++    if (n >= 2) {
++        *(__half_t *)d = (__half_t)fill;
++        d += 2, n -= 2;
++    }
++    if (n)
++        __nds_put_byte(d, (uint8_t)c);
++    return dst;
++}
++
++__weak_reference(memcpy, __aeabi_memcpy);
++__weak_reference(memcpy, __aeabi_memcpy4);
++__weak_reference(memcpy, __aeabi_memcpy8);
++__weak_reference(memmove, __aeabi_memmove);
++__weak_reference(memmove, __aeabi_memmove4);
++__weak_reference(memmove, __aeabi_memmove8);
++
++#endif

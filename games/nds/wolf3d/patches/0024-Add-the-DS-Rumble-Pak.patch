@@ -155,7 +155,7 @@ index b85841e..28a062f 100644
      madenoise = true;
  
 diff --git a/wl_def.h b/wl_def.h
-index 47c6859..23400a9 100644
+index d7ed029..b563f6d 100644
 --- a/wl_def.h
 +++ b/wl_def.h
 @@ -1092,7 +1092,7 @@ extern  int         lastgamemusicoffset;
