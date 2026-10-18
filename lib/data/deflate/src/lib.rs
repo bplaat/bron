@@ -148,14 +148,18 @@ mod tests {
 
     const LEVELS: [Level; 4] = [Level::Fast, Level::Default, Level::Best, Level::Crunch];
 
-    fn samples() -> Vec<Vec<u8>> {
-        let mut state = 0x1234_5678u32;
-        let mut random = || {
+    /// A deterministic xorshift generator for test data.
+    fn xorshift(mut state: u32) -> impl FnMut() -> u32 {
+        move || {
             state ^= state << 13;
             state ^= state >> 17;
             state ^= state << 5;
             state
-        };
+        }
+    }
+
+    fn samples() -> Vec<Vec<u8>> {
+        let mut random = xorshift(0x1234_5678);
         let text = b"The quick brown fox jumps over the lazy dog. ".repeat(500);
         let noise: Vec<u8> = (0..70_000).map(|_| random() as u8).collect();
         let pixels: Vec<u8> = (0..40_000u32)
@@ -218,13 +222,8 @@ mod tests {
 
     #[test]
     fn roundtrips_random_inputs() {
-        let mut state = 0x9e37_79b9u32;
-        let mut random = move || {
-            state ^= state << 13;
-            state ^= state >> 17;
-            state ^= state << 5;
-            state as usize
-        };
+        let mut next = xorshift(0x9e37_79b9);
+        let mut random = || next() as usize;
         for _ in 0..200 {
             // Vary the size, alphabet and repetition to reach every block type.
             let len = random() % 3000;
@@ -338,9 +337,9 @@ mod tests {
     fn survives_corrupted_input() {
         let data = &samples()[6];
         let compressed = compress(data, Level::Best);
-        let mut state = 99u32;
+        let mut random = xorshift(99);
         for _ in 0..2000 {
-            state = state.wrapping_mul(1_103_515_245).wrapping_add(12345);
+            let state = random();
             let mut corrupt = compressed.clone();
             let index = (state >> 8) as usize % corrupt.len();
             corrupt[index] ^= 1 << (state % 8);
