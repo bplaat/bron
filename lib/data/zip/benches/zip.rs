@@ -18,7 +18,7 @@ static CRC32: Crc<u32> = Crc::<u32>::new(&CRC_32_ISO_HDLC);
 fn archive(data: &[u8], compressed: bool) -> Vec<u8> {
     let name = b"payload.bin";
     let payload = if compressed {
-        miniz_oxide::deflate::compress_to_vec(data, 6)
+        deflate::compress(data, deflate::Level::Default)
     } else {
         data.to_vec()
     };
