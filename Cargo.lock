@@ -577,7 +577,6 @@ dependencies = [
  "crc",
  "criterion",
  "deflate",
- "libm",
 ]
 
 [[package]]
