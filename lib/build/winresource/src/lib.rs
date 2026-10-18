@@ -128,10 +128,10 @@ impl WindowsResource {
             ));
         }
 
-        let version = semver::Version::parse(
-            &env::var("CARGO_PKG_VERSION").expect("CARGO_PKG_VERSION not set"),
-        )
-        .expect("Can't parse version semver");
+        let version = |part: &str| {
+            let name = format!("CARGO_PKG_VERSION_{part}");
+            env::var(&name).unwrap_or_else(|_| panic!("{name} not set"))
+        };
         rc_content.push_str(&format!(
             "1 VERSIONINFO\r\n\
         FILEVERSION {maj},{min},{pat},0\r\n\
@@ -146,9 +146,9 @@ impl WindowsResource {
           BEGIN\r\n\
             BLOCK \"040904B0\"\r\n\
             BEGIN\r\n",
-            maj = version.major,
-            min = version.minor,
-            pat = version.patch
+            maj = version("MAJOR"),
+            min = version("MINOR"),
+            pat = version("PATCH")
         ));
         for (k, v) in &self.version_fields {
             rc_content.push_str(&format!(
