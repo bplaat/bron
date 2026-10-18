@@ -19,12 +19,26 @@ use std::rc::{Rc, Weak};
 pub use crate::surface::*;
 pub use crate::types::*;
 
-#[cfg(any(target_os = "linux", test))]
+#[cfg(any(
+    target_os = "linux",
+    target_os = "freebsd",
+    target_os = "dragonfly",
+    target_os = "openbsd",
+    target_os = "netbsd",
+    test
+))]
 mod allocation;
 #[cfg(target_os = "macos")]
 #[path = "platforms/macos/mod.rs"]
 mod platform;
-#[cfg(target_os = "linux")]
+// GTK with Vulkan, on Linux and the BSDs.
+#[cfg(any(
+    target_os = "linux",
+    target_os = "freebsd",
+    target_os = "dragonfly",
+    target_os = "openbsd",
+    target_os = "netbsd"
+))]
 #[path = "platforms/linux/mod.rs"]
 mod platform;
 #[cfg(target_os = "windows")]
@@ -34,8 +48,16 @@ mod platform;
 mod surface;
 mod types;
 
-#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
-compile_error!("This crate supports macOS, Linux, and Windows only");
+#[cfg(not(any(
+    target_os = "macos",
+    target_os = "linux",
+    target_os = "freebsd",
+    target_os = "dragonfly",
+    target_os = "openbsd",
+    target_os = "netbsd",
+    target_os = "windows"
+)))]
+compile_error!("This crate supports macOS, Linux, the BSDs, and Windows only");
 
 #[cfg(not(any(feature = "image", feature = "window")))]
 compile_error!("Enable the `image` feature, the `window` feature, or both");

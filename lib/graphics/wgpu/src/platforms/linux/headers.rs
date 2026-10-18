@@ -1830,7 +1830,8 @@ pub type CmdDraw = unsafe extern "system" fn(
     first_instance: u32,
 );
 
-#[link(name = "dl")]
+// The BSDs provide the dynamic loader functions in libc.
+#[cfg_attr(target_os = "linux", link(name = "dl"))]
 unsafe extern "C" {
     pub(super) fn dlopen(path: *const c_char, flags: i32) -> *mut c_void;
     pub(super) fn dlsym(library: *mut c_void, name: *const c_char) -> *mut c_void;
@@ -1928,7 +1929,12 @@ unsafe extern "C" {
 }
 
 #[cfg(feature = "window")]
-#[link(name = "libcairo.so.2", kind = "dylib", modifiers = "+verbatim")]
+// The BSDs only ship versioned library names, which the linker resolves from `cairo`.
+#[cfg_attr(
+    target_os = "linux",
+    link(name = "libcairo.so.2", kind = "dylib", modifiers = "+verbatim")
+)]
+#[cfg_attr(not(target_os = "linux"), link(name = "cairo"))]
 unsafe extern "C" {
     pub(super) fn cairo_region_subtract(region: *mut c_void, other: *mut c_void) -> i32;
     pub(super) fn cairo_region_destroy(region: *mut c_void);

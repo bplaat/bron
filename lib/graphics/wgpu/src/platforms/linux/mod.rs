@@ -73,10 +73,12 @@ const fn format(value: TextureFormat) -> u32 {
 impl Instance {
     fn new(platform: Option<&CStr>) -> Result<Rc<Self>> {
         unsafe {
-            let library = dlopen(c"libvulkan.so.1".as_ptr(), 2);
-            if library.is_null() {
-                return Err(Error("Cannot load libvulkan.so.1".into()));
-            }
+            // OpenBSD has no `.so.1` name; its loader resolves the unversioned one.
+            let library = [c"libvulkan.so.1", c"libvulkan.so"]
+                .iter()
+                .map(|name| dlopen(name.as_ptr(), 2))
+                .find(|library| !library.is_null())
+                .ok_or_else(|| Error("Cannot load the Vulkan loader".into()))?;
             let get = dlsym(library, c"vkGetInstanceProcAddr".as_ptr());
             if get.is_null() {
                 dlclose(library);
