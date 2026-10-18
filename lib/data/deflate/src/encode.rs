@@ -134,21 +134,28 @@ struct Histogram {
 }
 
 impl Histogram {
+    const EMPTY: Self = Self {
+        litlen: [0; 286],
+        dist: [0; 30],
+    };
+
+    /// Counts the symbols of a block, including its end code.
     fn new(symbols: &[Symbol]) -> Self {
-        let mut histogram = Self {
-            litlen: [0; 286],
-            dist: [0; 30],
-        };
+        let mut histogram = Self::EMPTY;
         for &symbol in symbols {
-            if symbol.len == 0 {
-                histogram.litlen[symbol.dist as usize] += 1;
-            } else {
-                histogram.litlen[257 + LEN_SYMBOL[symbol.len as usize] as usize] += 1;
-                histogram.dist[dist_symbol(symbol.dist as usize)] += 1;
-            }
+            histogram.add(symbol);
         }
         histogram.litlen[256] = 1;
         histogram
+    }
+
+    const fn add(&mut self, symbol: Symbol) {
+        if symbol.len == 0 {
+            self.litlen[symbol.dist as usize] += 1;
+        } else {
+            self.litlen[257 + LEN_SYMBOL[symbol.len as usize] as usize] += 1;
+            self.dist[dist_symbol(symbol.dist as usize)] += 1;
+        }
     }
 
     fn extra_bits(&self) -> u64 {
@@ -441,25 +448,32 @@ fn data_bits(histogram: &Histogram, litlen: &[u8], dist: &[u8]) -> u64 {
         + histogram.extra_bits()
 }
 
+/// Sizes in bits of a block with its dynamic code and with the fixed code, excluding the
+/// block header.
+fn huffman_bits(histogram: &Histogram, code: &DynamicCode) -> (u64, u64) {
+    (
+        code.header_bits + data_bits(histogram, &code.litlen, &code.dist),
+        data_bits(histogram, &FIXED_LITLEN, &FIXED_DIST),
+    )
+}
+
 /// Size in bits of the smaller Huffman encoding of a block.
 fn block_bits(histogram: &Histogram) -> u64 {
-    let code = DynamicCode::new(histogram);
-    let dynamic = code.header_bits + data_bits(histogram, &code.litlen, &code.dist);
-    3 + dynamic.min(data_bits(histogram, &FIXED_LITLEN, &FIXED_DIST))
+    let (dynamic, fixed) = huffman_bits(histogram, &DynamicCode::new(histogram));
+    3 + dynamic.min(fixed)
 }
 
 /// Approximate size in bits of a block from symbol entropy, much cheaper than building
 /// its Huffman codes.
 fn estimated_bits(histogram: &Histogram) -> u64 {
-    let mut bits = 0.0;
-    let mut used = 0;
-    for freqs in [&histogram.litlen[..], &histogram.dist[..]] {
-        let total = log2(freqs.iter().sum::<u32>().max(1) as f32);
-        for &freq in freqs.iter().filter(|&&freq| freq > 0) {
-            bits += freq as f32 * (total - log2(freq as f32));
-            used += 1;
-        }
-    }
+    let litlen = entropy(&histogram.litlen).into_iter().zip(histogram.litlen);
+    let dist = entropy(&histogram.dist).into_iter().zip(histogram.dist);
+    let (bits, used) = litlen
+        .chain(dist)
+        .filter(|&(_, freq)| freq > 0)
+        .fold((0.0, 0), |(bits, used), (cost, freq)| {
+            (bits + cost * freq as f32, used + 1)
+        });
     // Each used symbol costs about four header bits for its code length.
     bits as u64 + histogram.extra_bits() + 4 * used + 32
 }
@@ -495,8 +509,7 @@ impl BitWriter<'_> {
 fn write_block(writer: &mut BitWriter, symbols: &[Symbol], raw: &[u8], last: bool) {
     let histogram = Histogram::new(symbols);
     let code = DynamicCode::new(&histogram);
-    let dynamic = code.header_bits + data_bits(&histogram, &code.litlen, &code.dist);
-    let fixed = data_bits(&histogram, &FIXED_LITLEN, &FIXED_DIST);
+    let (dynamic, fixed) = huffman_bits(&histogram, &code);
     let stored = (raw.len().div_ceil(0xffff) * 40 + raw.len() * 8) as u64;
     if stored < dynamic.min(fixed) {
         let chunks = raw.chunks(0xffff).count();
@@ -564,15 +577,20 @@ fn write_block(writer: &mut BitWriter, symbols: &[Symbol], raw: &[u8], last: boo
 }
 
 // MARK: Match finders
-fn hash4(data: &[u8], pos: usize) -> usize {
-    let value = u32::from_le_bytes(*data[pos..].first_chunk().expect("four bytes"));
+const fn hash_value(value: u32) -> usize {
     (value.wrapping_mul(0x9e37_79b1) >> (32 - HASH_BITS)) as usize
 }
 
+fn hash4(data: &[u8], pos: usize) -> usize {
+    hash_value(u32::from_le_bytes(
+        *data[pos..].first_chunk().expect("four bytes"),
+    ))
+}
+
 fn hash(data: &[u8], pos: usize) -> usize {
-    let value =
-        u32::from(data[pos]) | u32::from(data[pos + 1]) << 8 | u32::from(data[pos + 2]) << 16;
-    (value.wrapping_mul(0x9e37_79b1) >> (32 - HASH_BITS)) as usize
+    hash_value(
+        u32::from(data[pos]) | u32::from(data[pos + 1]) << 8 | u32::from(data[pos + 2]) << 16,
+    )
 }
 
 /// Length of the common prefix of `a` and `b`, up to `max`.
@@ -647,17 +665,30 @@ impl HashChains {
         let mut best_dist = 0;
         // The two bytes ending at `best` must match for a candidate to be longer.
         let mut tail = u16::from_le_bytes([current[best - 1], current[best]]);
-        if best == MIN_MATCH - 1 {
+        // Distances run from 1 up to the window size or the start of the data.
+        let in_window = |dist: usize| dist.wrapping_sub(1) < WINDOW.min(pos);
+        // Tries the match `dist` back, returning whether it ends the search.
+        let mut try_match = |dist: usize| {
+            let start = pos - dist;
+            let ends = &data[start + best - 1..start + best + 1];
+            if u16::from_le_bytes([ends[0], ends[1]]) != tail {
+                return false;
+            }
+            let len = common_prefix(&data[start..], current, max);
+            if len <= best {
+                return false;
+            }
+            (best, best_dist) = (len, dist);
+            if len >= nice || len == max {
+                return true;
+            }
+            tail = u16::from_le_bytes([current[best - 1], current[best]]);
+            false
+        };
+        if shorter < MIN_MATCH {
             let dist = (pos as u32).wrapping_sub(self.head3[hash(data, pos)]) as usize;
-            if dist.wrapping_sub(1) < WINDOW.min(pos) {
-                let len = common_prefix(&data[pos - dist..], current, max);
-                if len >= MIN_MATCH {
-                    (best, best_dist) = (len, dist);
-                    if len >= nice || len == max {
-                        return (best, best_dist);
-                    }
-                    tail = u16::from_le_bytes([current[best - 1], current[best]]);
-                }
+            if in_window(dist) && try_match(dist) {
+                return (best, best_dist);
             }
         }
         let mut candidate = if max >= 4 {
@@ -666,24 +697,11 @@ impl HashChains {
             u32::MAX
         };
         for _ in 0..depth {
-            // Distances run from 1 up to the window size or the start of the data.
             let dist = (pos as u32).wrapping_sub(candidate) as usize;
-            if dist.wrapping_sub(1) >= WINDOW.min(pos) {
+            if !in_window(dist) || try_match(dist) {
                 break;
             }
-            let start = pos - dist;
-            let ends = &data[start + best - 1..start + best + 1];
-            if u16::from_le_bytes([ends[0], ends[1]]) == tail {
-                let len = common_prefix(&data[start..], current, max);
-                if len > best {
-                    (best, best_dist) = (len, dist);
-                    if len >= nice || len == max {
-                        break;
-                    }
-                    tail = u16::from_le_bytes([current[best - 1], current[best]]);
-                }
-            }
-            candidate = self.prev[start & (WINDOW - 1)];
+            candidate = self.prev[(pos - dist) & (WINDOW - 1)];
         }
         // Short matches far away usually cost more than their literals.
         if best_dist == 0 || (best == MIN_MATCH && best_dist > 8192) {
@@ -870,19 +888,21 @@ struct Costs {
     dist: [f32; 30],
 }
 
+/// Bits per symbol under the entropy of `freqs`.
+fn entropy<const N: usize>(freqs: &[u32; N]) -> [f32; N] {
+    let total = log2(freqs.iter().sum::<u32>().max(1) as f32);
+    // Unused symbols cost a bit more than a symbol seen once.
+    freqs.map(|freq| {
+        if freq == 0 {
+            total + 1.0
+        } else {
+            total - log2(freq as f32)
+        }
+    })
+}
+
 impl Costs {
     fn new(histogram: &Histogram) -> Self {
-        fn entropy<const N: usize>(freqs: &[u32; N]) -> [f32; N] {
-            let total = log2(freqs.iter().sum::<u32>().max(1) as f32);
-            // Unused symbols cost a bit more than a symbol seen once.
-            freqs.map(|freq| {
-                if freq == 0 {
-                    total + 1.0
-                } else {
-                    total - log2(freq as f32)
-                }
-            })
-        }
         let litlen = entropy(&histogram.litlen);
         let dist = entropy(&histogram.dist);
         let mut costs = Self {
@@ -1038,32 +1058,20 @@ fn split_blocks(symbols: &[Symbol], max_blocks: usize, exact: bool) -> Vec<usize
         return vec![0, symbols.len()];
     }
     // Cumulative histograms per grain make any range histogram a subtraction.
-    let mut prefix = vec![[0u32; 316]; grains + 1];
+    let mut prefix = vec![Histogram::EMPTY; grains + 1];
     for (grain, chunk) in symbols.chunks(SPLIT_GRAIN).enumerate() {
-        let mut counts = prefix[grain];
+        let mut counts = prefix[grain].clone();
         for &symbol in chunk {
-            if symbol.len == 0 {
-                counts[symbol.dist as usize] += 1;
-            } else {
-                counts[257 + LEN_SYMBOL[symbol.len as usize] as usize] += 1;
-                counts[286 + dist_symbol(symbol.dist as usize)] += 1;
-            }
+            counts.add(symbol);
         }
         prefix[grain + 1] = counts;
     }
     let cost = |a: usize, b: usize| {
+        let (from, to) = (&prefix[a], &prefix[b]);
         let mut histogram = Histogram {
-            litlen: [0; 286],
-            dist: [0; 30],
+            litlen: core::array::from_fn(|i| to.litlen[i] - from.litlen[i]),
+            dist: core::array::from_fn(|i| to.dist[i] - from.dist[i]),
         };
-        for (i, count) in histogram
-            .litlen
-            .iter_mut()
-            .chain(&mut histogram.dist)
-            .enumerate()
-        {
-            *count = prefix[b][i] - prefix[a][i];
-        }
         histogram.litlen[256] = 1;
         if exact {
             block_bits(&histogram)
@@ -1104,6 +1112,11 @@ fn split_blocks(symbols: &[Symbol], max_blocks: usize, exact: bool) -> Vec<usize
 }
 
 // MARK: Compression
+/// Number of input bytes covered by `symbols`.
+fn symbols_len(symbols: &[Symbol]) -> usize {
+    symbols.iter().map(|symbol| symbol.bytes()).sum()
+}
+
 fn emit(
     writer: &mut BitWriter,
     data: &[u8],
@@ -1115,7 +1128,7 @@ fn emit(
     let mut pos = start;
     for (index, block) in points.windows(2).enumerate() {
         let block = &symbols[block[0]..block[1]];
-        let len: usize = block.iter().map(|symbol| symbol.bytes()).sum();
+        let len = symbols_len(block);
         write_block(
             writer,
             block,
@@ -1157,7 +1170,7 @@ fn compress_optimal(writer: &mut BitWriter, data: &[u8], p: &Params) {
             let mut pos = start;
             for block in split.windows(2) {
                 let block = &symbols[block[0]..block[1]];
-                let len: usize = block.iter().map(|symbol| symbol.bytes()).sum();
+                let len = symbols_len(block);
                 next.extend(optimize(
                     data,
                     &matches,
