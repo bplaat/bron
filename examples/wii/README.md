@@ -5,17 +5,17 @@ Wii homebrew example programs written in both C and Rust.
 ## Getting Started
 
 The examples build with a normal LLVM toolchain (clang, lld and llvm-ar). The [Wii toolchain](../../tools/wii-toolchain/)
-script clones upstream libogc, devkitPro's tools and LLVM's compiler-rt builtins, patches and builds
-them the first time you build an example. Install LLVM and the
-[Dolphin](https://dolphin-emu.org/) emulator:
+script clones upstream libogc, picolibc, devkitPro's tools and LLVM's compiler-rt builtins, patches
+and builds them the first time you build an example. Install LLVM, meson and ninja (to build
+picolibc) and the [Dolphin](https://dolphin-emu.org/) emulator:
 
 ```sh
 # macOS
-brew install llvm lld
+brew install llvm lld meson ninja
 brew install --cask dolphin
 
 # Debian / Ubuntu
-sudo apt install clang lld llvm make git dolphin-emu
+sudo apt install clang lld llvm make git meson ninja-build dolphin-emu
 ```
 
 The toolchain builds its texture converter with Cargo, so all examples need [rustup](https://rustup.rs/). The Rust examples install the nightly toolchain by themselves.

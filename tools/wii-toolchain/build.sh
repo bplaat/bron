@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
-# Builds the Wii toolchain in the repository target/wii-toolchain/: fetches libogc, gamecube-tools and LLVM's compiler-rt,
-# applies libogc/patches/ and builds libogc.a, libc.a (our tiny libc), libcompiler-rt.a,
-# elf2dol and our lib/graphics/gxtexconv.
+# Builds the Wii toolchain in the repository target/wii-toolchain/: fetches libogc, picolibc,
+# gamecube-tools and LLVM's compiler-rt, applies libogc/patches/ and picolibc/patches/ and builds
+# libogc.a, picolibc (the C library) in sysroot/, libcompiler-rt.a, elf2dol and our
+# lib/graphics/gxtexconv.
 # The example Makefiles and Rust build.rs files run this before they build.
 #
 # Usage: ./build.sh [command]...
 #   (none)          fetch, patch and build
-#   export-patches  write the commits in ../../target/wii-toolchain/libogc/ back to libogc/patches/
+#   export-patches  write the commits in ../../target/wii-toolchain/<name>/ back to <name>/patches/
 #   test            build test/ and run it in Dolphin
 #   clean           remove ../../target/wii-toolchain/
 set -euo pipefail
@@ -15,6 +16,9 @@ cd "$(dirname "$0")"
 libogc_url='https://github.com/devkitPro/libogc.git'
 libogc_version='v2.11.0'
 libogc_commit='7a2c05b8d78cf3a5ae2606874ef3e4a117273bf9'
+picolibc_url='https://github.com/picolibc/picolibc.git'
+picolibc_version='1.8.12'
+picolibc_commit='2ae376c6cdf4fef90ca2388ecf7a07457fa63cff'
 tools_url='https://github.com/devkitPro/gamecube-tools.git'
 tools_version='v1.0.7'
 tools_commit='3b7f914df771d4b779d88607ceed2ec9264ff93a'
@@ -26,6 +30,8 @@ TOOLCHAIN_DIR="$PWD"
 ROOT_DIR="$(cd ../.. && pwd)"
 BUILD_DIR="$ROOT_DIR/target/wii-toolchain"
 LIBOGC_DIR="$BUILD_DIR/libogc"
+PICOLIBC_DIR="$BUILD_DIR/picolibc"
+SYSROOT="$BUILD_DIR/sysroot"
 TOOLS_DIR="$BUILD_DIR/gamecube-tools"
 COMPILER_RT_DIR="$BUILD_DIR/compiler-rt"
 
@@ -38,18 +44,17 @@ done
 # The Wii has a PowerPC 750 CPU and there is no OS, so no standard library from the host.
 # All code is optimized for size, like the Rust examples (opt-level = "s").
 WII_CFLAGS=(--target=powerpc-none-eabi -mcpu=750 -ffreestanding -nostdlibinc
-    -ffunction-sections -fdata-sections -DGEKKO -DHW_RVL -Os -g
-    -I"$TOOLCHAIN_DIR/libc/include" -I"$LIBOGC_DIR/gc" -I"$LIBOGC_DIR/gc/ogc"
+    -ffunction-sections -fdata-sections -DGEKKO -DHW_RVL -D_DEFAULT_SOURCE -Os -g
+    -I"$SYSROOT/include" -I"$LIBOGC_DIR/gc" -I"$LIBOGC_DIR/gc/ogc"
     -I"$LIBOGC_DIR/gc/ogc/machine" -I"$LIBOGC_DIR/gc/bte" -I"$LIBOGC_DIR/gc/wiiuse")
 LIBOGC_CFLAGS=("${WII_CFLAGS[@]}" -std=gnu17 -fno-strict-aliasing -I"$LIBOGC_DIR/libogc"
     -Wall -Wno-parentheses -Wno-unused)
-LIBC_CFLAGS=("${WII_CFLAGS[@]}" -std=c23 -Wall -Wextra)
 
 # The parts of libogc we build, audio, DVD, memory cards, SD cards, networking and the console
 # are left out because the examples don't use them and most need newlib
 LIBOGC_SOURCES=(
     # Startup, interrupts, exceptions and caches
-    libogc/{argv,cache,decrementer,exception,irq,system,sys_state,timesupp}.c
+    libogc/{argv,cache,decrementer,exception,irq,sbrk,system,sys_report,sys_state,timesupp}.c
     libogc/{cache_asm,decrementer_handler,exception_handler,irq_handler,ogc_crt0,system_asm}.S
     # Threads
     libogc/{cond,lwp,lwp_heap,lwp_messages,lwp_mutex,lwp_objmgr,lwp_priority,lwp_queue}.c
@@ -77,7 +82,6 @@ COMPILER_RT_SOURCES=(
 
 msg() { printf '\033[1;34m[toolchain]\033[0m %s\n' "$*"; }
 die() { printf '\033[1;31m[toolchain]\033[0m %s\n' "$*" >&2; exit 1; }
-git_libogc() { git -C "$LIBOGC_DIR" "$@"; }
 
 # True when $1 doesn't exist or any of the other paths changed after it
 outdated() {
@@ -94,13 +98,14 @@ clone() {
     [ -d "$dir" ] && return
     msg "Cloning $url $version"
     rm -rf "$dir.part"
+    # Annotated release tags make git warn that the tag "is not a commit", which it is
     if [ $# -gt 0 ]; then
-        # LLVM's annotated release tags make git warn that the tag "is not a commit", which it is
         git -c advice.detachedHead=false clone -q --depth 1 --branch "$version" --filter=blob:none \
             --sparse "$url" "$dir.part" 2>&1 | grep -v 'is not a commit' >&2 || true
         git -C "$dir.part" sparse-checkout set --no-cone "$@"
     else
-        git -c advice.detachedHead=false clone -q --depth 1 --branch "$version" "$url" "$dir.part"
+        git -c advice.detachedHead=false clone -q --depth 1 --branch "$version" "$url" "$dir.part" \
+            2>&1 | grep -v 'is not a commit' >&2 || true
     fi
     [ "$(git -C "$dir.part" rev-parse HEAD)" = "$commit" ] || die "Unexpected commit for $url $version"
     mv "$dir.part" "$dir"
@@ -109,6 +114,8 @@ clone() {
 fetch() {
     local pids=() pid failed=0
     clone "$libogc_url" "$libogc_version" "$libogc_commit" "$LIBOGC_DIR" &
+    pids+=($!)
+    clone "$picolibc_url" "$picolibc_version" "$picolibc_commit" "$PICOLIBC_DIR" &
     pids+=($!)
     clone "$tools_url" "$tools_version" "$tools_commit" "$TOOLS_DIR" &
     pids+=($!)
@@ -120,42 +127,84 @@ fetch() {
     [ "$failed" = 0 ] || die "Failed to clone Wii toolchain dependencies"
 }
 
-# Applies the patches as commits on top of the upstream tag, again when they changed
+# Applies the patches of a repo as commits on top of its upstream tag, again when they changed
 patch() {
-    outdated "$LIBOGC_DIR/.patched" "$TOOLCHAIN_DIR"/libogc/patches || return 0
-    # Applying resets ../../target/wii-toolchain/libogc/, so stop when it has work that isn't exported yet
-    if [ -s "$LIBOGC_DIR/.patched" ] && { [ -n "$(git_libogc status --porcelain --untracked-files=no)" ] ||
-        [ "$(git_libogc rev-parse HEAD)" != "$(cat "$LIBOGC_DIR/.patched")" ]; }; then
-        die "../../target/wii-toolchain/libogc/ has changes that aren't in libogc/patches/, run ./build.sh export-patches or remove ../../target/wii-toolchain/libogc/"
+    local name="$1" commit="$2" dir="$BUILD_DIR/$1"
+    outdated "$dir/.patched" "$TOOLCHAIN_DIR/$name/patches" || return 0
+    # Applying resets ../../target/wii-toolchain/<name>/, so stop when it has work that isn't exported yet
+    if [ -s "$dir/.patched" ] && { [ -n "$(git -C "$dir" status --porcelain --untracked-files=no)" ] ||
+        [ "$(git -C "$dir" rev-parse HEAD)" != "$(cat "$dir/.patched")" ]; }; then
+        die "../../target/wii-toolchain/$name/ has changes that aren't in $name/patches/, run ./build.sh export-patches or remove ../../target/wii-toolchain/$name/"
     fi
-    msg "Applying patches"
+    msg "Applying $name patches"
     # git am keeps the authors of the patches, but needs a committer identity
-    if [ -z "$(git_libogc config user.email || true)" ]; then
-        git_libogc config user.name wii-toolchain
-        git_libogc config user.email wii-toolchain@localhost
+    if [ -z "$(git -C "$dir" config user.email || true)" ]; then
+        git -C "$dir" config user.name wii-toolchain
+        git -C "$dir" config user.email wii-toolchain@localhost
     fi
-    git_libogc config commit.gpgsign false
-    git_libogc tag -f upstream "$libogc_commit" > /dev/null
+    git -C "$dir" config commit.gpgsign false
+    git -C "$dir" tag -f upstream "$commit" > /dev/null
     # A patch that failed to apply leaves git am half done, start over
-    git_libogc am --abort > /dev/null 2>&1 || true
-    git_libogc reset -q --hard upstream
-    if ! git_libogc am -q --keep-cr --whitespace=nowarn "$TOOLCHAIN_DIR"/libogc/patches/*.patch; then
-        git_libogc am --abort
-        rm -f "$LIBOGC_DIR/.patched"
-        die "Failed to apply the patches"
+    git -C "$dir" am --abort > /dev/null 2>&1 || true
+    git -C "$dir" reset -q --hard upstream
+    if ! git -C "$dir" am -q --keep-cr --whitespace=nowarn "$TOOLCHAIN_DIR/$name"/patches/*.patch; then
+        git -C "$dir" am --abort
+        rm -f "$dir/.patched"
+        die "Failed to apply the $name patches"
     fi
     # Remembers the applied commit, so the check above sees new work
-    git_libogc rev-parse HEAD > "$LIBOGC_DIR/.patched"
+    git -C "$dir" rev-parse HEAD > "$dir/.patched"
 }
 
-# Writes the commits on top of upstream back to libogc/patches/
+# Writes the commits on top of upstream back to <name>/patches/ for every patched repo
 export_patches() {
-    [ -d "$LIBOGC_DIR/.git" ] || die "No patched libogc, run ./build.sh first"
-    rm -f "$TOOLCHAIN_DIR"/libogc/patches/*.patch
-    git_libogc format-patch -q --no-numbered --zero-commit --no-signature \
-        -o "$TOOLCHAIN_DIR/libogc/patches" upstream..HEAD
-    git_libogc rev-parse HEAD > "$LIBOGC_DIR/.patched"
-    msg "Exported $(git_libogc rev-list --count upstream..HEAD) patches"
+    local name dir
+    for name in libogc picolibc; do
+        dir="$BUILD_DIR/$name"
+        [ -d "$dir/.git" ] || die "No patched $name, run ./build.sh first"
+        rm -f "$TOOLCHAIN_DIR/$name"/patches/*.patch
+        git -C "$dir" format-patch -q --no-numbered --zero-commit --no-signature \
+            -o "$TOOLCHAIN_DIR/$name/patches" upstream..HEAD
+        git -C "$dir" rev-parse HEAD > "$dir/.patched"
+        msg "Exported $(git -C "$dir" rev-list --count upstream..HEAD) $name patches"
+    done
+}
+
+# Builds picolibc with meson and installs its headers and libc.a, which includes the math
+# library, in ../../target/wii-toolchain/sysroot/
+build_picolibc() {
+    # The sources are checked too, so edits in dev mode get built
+    outdated "$SYSROOT/lib/libc.a" "$PICOLIBC_DIR/.patched" "$PICOLIBC_DIR"/{libc,libm,meson.build} \
+        "$TOOLCHAIN_DIR/build.sh" || return 0
+    msg "Building picolibc"
+    # Meson calls the 32-bit PowerPC CPU family ppc
+    cat > "$BUILD_DIR/picolibc-cross.txt" << CROSS
+[binaries]
+c = ['${LLVM}clang', '--target=powerpc-none-eabi', '-mcpu=750', '-nostdlib']
+c_ld = 'lld'
+ar = '${LLVM}llvm-ar'
+nm = '${LLVM}llvm-nm'
+strip = '${LLVM}llvm-strip'
+
+[host_machine]
+system = 'none'
+cpu_family = 'ppc'
+cpu = '750'
+endian = 'big'
+
+[properties]
+skip_sanity_check = true
+CROSS
+    rm -rf "$BUILD_DIR/picolibc-build" "$SYSROOT"
+    # libogc starts the program and has no thread-local storage, so picolibc gets neither.
+    # The minsize build type means -Oz with clang, -Os like everything else unrolls the copy loops.
+    meson setup "$BUILD_DIR/picolibc-build" "$PICOLIBC_DIR" \
+        --cross-file "$BUILD_DIR/picolibc-cross.txt" --prefix "$SYSROOT" --includedir include \
+        --libdir lib --buildtype plain -Dc_args="['-ffunction-sections', '-fdata-sections', '-DHW_RVL', '-Os', '-g']" \
+        -Dmultilib=false -Dpicocrt=false -Dsemihost=false -Dtests=false -Dspecsdir=none \
+        -Dthread-local-storage=false > /dev/null ||
+        die "Failed to configure picolibc"
+    meson install -C "$BUILD_DIR/picolibc-build" > /dev/null || die "Failed to build picolibc"
 }
 
 # Compiles sources at the same time and archives them to the build directory,
@@ -193,12 +242,8 @@ build_archive() {
 build_libraries() {
     # The libogc sources are checked too, so edits in dev mode get built
     if outdated "$BUILD_DIR/libogc.a" "$LIBOGC_DIR/.patched" "$LIBOGC_DIR"/{gc,libogc,lwbt,wiiuse} \
-        "$TOOLCHAIN_DIR/libc/include" "$TOOLCHAIN_DIR/build.sh"; then
+        "$SYSROOT/lib/libc.a" "$TOOLCHAIN_DIR/build.sh"; then
         build_archive libogc.a "${LIBOGC_CFLAGS[@]}" -- "${LIBOGC_SOURCES[@]/#/$LIBOGC_DIR/}"
-    fi
-    if outdated "$BUILD_DIR/libc.a" "$LIBOGC_DIR/.patched" "$LIBOGC_DIR/gc" "$TOOLCHAIN_DIR/libc" \
-        "$TOOLCHAIN_DIR/build.sh"; then
-        build_archive libc.a "${LIBC_CFLAGS[@]}" -- "$TOOLCHAIN_DIR"/libc/*.c
     fi
     if outdated "$BUILD_DIR/libcompiler-rt.a" "$TOOLCHAIN_DIR/build.sh"; then
         build_archive libcompiler-rt.a "${WII_CFLAGS[@]}" -std=gnu11 -- \
@@ -275,7 +320,8 @@ lock() {
 [ $# -gt 0 ] || set -- all
 for command in "$@"; do
     case "$command" in
-        all) lock; fetch; patch; build_libraries; build_tools ;;
+        all) lock; fetch; patch libogc "$libogc_commit"; patch picolibc "$picolibc_commit"
+            build_picolibc; build_libraries; build_tools ;;
         export-patches) export_patches ;;
         test) run_test ;;
         clean) rm -rf "$BUILD_DIR" ;;
