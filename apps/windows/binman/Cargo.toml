@@ -20,7 +20,6 @@ workspace = true
 anyhow = "1"
 bwindow = { path = "../../../lib/ui/bwindow", features = ["progress_bar"] }
 bwebview = { path = "../../../lib/ui/bwebview", features = [ "rust-embed"] }
-glob = "0.3"
 rust-embed = "8.12"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

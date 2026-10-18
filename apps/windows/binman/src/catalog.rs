@@ -8,8 +8,9 @@ use std::collections::HashSet;
 use std::path::{Component, Path, PathBuf};
 
 use anyhow::{Result, anyhow, bail};
-use glob::Pattern;
 use serde::{Deserialize, Serialize};
+
+use crate::pattern;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -199,7 +200,7 @@ fn validate_relative_pattern(value: &str) -> Result<()> {
     {
         bail!("cleanup patterns may not escape their root");
     }
-    Pattern::new(value).map_err(|error| anyhow!("invalid cleanup pattern: {error}"))?;
+    pattern::validate(value).map_err(|error| anyhow!("invalid cleanup pattern: {error}"))?;
     Ok(())
 }
 
