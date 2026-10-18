@@ -11,11 +11,9 @@ workspace = true
 
 [dependencies]
 bitflags = "2.13"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
 crc = "3"
 deflate = { path = "../deflate" }
-
-[target.'cfg(any(unix, windows))'.dependencies]
-libc = "0.2.189"
 
 [dev-dependencies]
 criterion = "0.7"

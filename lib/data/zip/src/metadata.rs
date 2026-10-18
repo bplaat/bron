@@ -6,6 +6,8 @@
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use chrono::{Local, TimeZone};
+
 use crate::{ZipError, read_u16_le, read_u32_le};
 
 pub(crate) fn extra_timestamp(mut extra: &[u8]) -> Result<Option<SystemTime>, ZipError> {
@@ -80,54 +82,14 @@ pub(crate) fn unix_time(seconds: i64) -> Option<SystemTime> {
 }
 
 // DOS timestamps are local wall-clock times, without a stored time zone.
-#[cfg(any(unix, windows))]
-#[allow(unsafe_code)]
 pub(crate) fn dos_timestamp(date: u16, time: u16) -> Option<SystemTime> {
-    let year = i32::from(date >> 9) + 1980;
-    let month = i32::from((date >> 5) & 15);
-    let day = i32::from(date & 31);
-    let hour = i32::from(time >> 11);
-    let minute = i32::from((time >> 5) & 63);
-    let second = i32::from(time & 31) * 2;
-    let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
-    let days = match month {
-        2 if leap => 29,
-        2 => 28,
-        4 | 6 | 9 | 11 => 30,
-        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
-        _ => return None,
-    };
-    if !(1..=days).contains(&day) || hour > 23 || minute > 59 || second > 59 {
-        return None;
-    }
-    // SAFETY: All-zero bytes form a valid C tm; every calendar input is set below.
-    let mut calendar: libc::tm = unsafe { std::mem::zeroed() };
-    calendar.tm_year = year - 1900;
-    calendar.tm_mon = month - 1;
-    calendar.tm_mday = day;
-    calendar.tm_hour = hour;
-    calendar.tm_min = minute;
-    calendar.tm_sec = second;
-    calendar.tm_isdst = -1;
-    #[cfg(unix)]
-    // SAFETY: calendar points to a valid, initialized tm owned by this call.
-    let seconds = unsafe { libc::mktime(&mut calendar) } as i64;
-    #[cfg(windows)]
-    let seconds = {
-        unsafe extern "C" {
-            fn _mktime64(calendar: *mut libc::tm) -> i64;
-        }
-        // SAFETY: calendar points to a valid, initialized tm owned by this call.
-        unsafe { _mktime64(&mut calendar) }
-    };
-    if seconds == -1 {
-        None
-    } else {
-        unix_time(seconds)
-    }
-}
-
-#[cfg(not(any(unix, windows)))]
-pub(crate) fn dos_timestamp(_date: u16, _time: u16) -> Option<SystemTime> {
-    None
+    let local = Local.with_ymd_and_hms(
+        i32::from(date >> 9) + 1980,
+        u32::from((date >> 5) & 15),
+        u32::from(date & 31),
+        u32::from(time >> 11),
+        u32::from((time >> 5) & 63),
+        u32::from(time & 31) * 2,
+    );
+    unix_time(local.single()?.timestamp())
 }

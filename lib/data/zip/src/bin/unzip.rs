@@ -124,56 +124,15 @@ fn validate_link(
 }
 
 #[cfg(unix)]
-#[allow(unsafe_code)]
 fn create_link(root: &Path, link: &PendingLink) -> io::Result<()> {
-    use std::ffi::CString;
-    use std::os::unix::ffi::OsStrExt;
-    use std::os::unix::fs::symlink;
-    use std::time::UNIX_EPOCH;
-
     let path = root.join(&link.relative);
-    symlink(&link.target, &path)?;
-    if let Some(modified) = link.modified {
-        let (seconds, nanos) = match modified.duration_since(UNIX_EPOCH) {
-            Ok(duration) => (duration.as_secs() as i64, duration.subsec_nanos()),
-            Err(error) => {
-                let duration = error.duration();
-                if duration.subsec_nanos() == 0 {
-                    (-(duration.as_secs() as i64), 0)
-                } else {
-                    (
-                        -(duration.as_secs() as i64) - 1,
-                        1_000_000_000 - duration.subsec_nanos(),
-                    )
-                }
-            }
-        };
-        let times = [
-            libc::timespec {
-                tv_sec: 0,
-                tv_nsec: libc::UTIME_OMIT,
-            },
-            libc::timespec {
-                tv_sec: seconds as libc::time_t,
-                tv_nsec: nanos.into(),
-            },
-        ];
-        let path = CString::new(path.as_os_str().as_bytes()).map_err(io::Error::other)?;
-        // SAFETY: path is NUL-terminated, times has two initialized elements, and
-        // AT_SYMLINK_NOFOLLOW updates the link itself without touching its target.
-        if unsafe {
-            libc::utimensat(
-                libc::AT_FDCWD,
-                path.as_ptr(),
-                times.as_ptr(),
-                libc::AT_SYMLINK_NOFOLLOW,
-            )
-        } != 0
-        {
-            let error = io::Error::last_os_error();
-            _ = fs::remove_file(root.join(&link.relative));
-            return Err(error);
-        }
+    std::os::unix::fs::symlink(&link.target, &path)?;
+    // Set the time of the link itself, never of its target.
+    if let Some(modified) = link.modified
+        && let Err(error) = fs::set_times_nofollow(&path, FileTimes::new().set_modified(modified))
+    {
+        _ = fs::remove_file(&path);
+        return Err(error);
     }
     Ok(())
 }

@@ -1603,10 +1603,10 @@ name = "zip"
 version = "8.6.0+patch"
 dependencies = [
  "bitflags",
+ "chrono",
  "crc",
  "criterion",
  "deflate",
- "libc",
 ]
 
 [[package]]
