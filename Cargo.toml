@@ -100,9 +100,6 @@ opt-level = 3
 [profile.release.package.deflate]
 opt-level = 3
 
-[profile.release.package.miniz_oxide]
-opt-level = 3
-
 [profile.release.package.pbkdf2]
 opt-level = 3
 

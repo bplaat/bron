@@ -16,17 +16,15 @@ path = "src/mod.rs"
 default = ["qoi", "jpeg", "png", "gif", "bmp", "ico"]
 qoi = []
 jpeg = ["dep:libm"]
-png = ["dep:crc", "dep:miniz_oxide"]
+png = ["dep:crc", "dep:deflate"]
 gif = ["dep:libm"]
 bmp = []
 ico = ["bmp", "png"]
 
 [dependencies]
 crc = { version = "3", optional = true }
+deflate = { path = "../../data/deflate", optional = true }
 libm = { version = "0.2", optional = true }
-miniz_oxide = { version = "0.9.1", default-features = false, features = [
-    "with-alloc",
-], optional = true }
 
 [dev-dependencies]
 criterion = "0.7"
