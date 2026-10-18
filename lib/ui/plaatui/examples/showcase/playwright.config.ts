@@ -21,7 +21,7 @@ export default defineConfig({
         {
             name: 'firefox',
             use: { ...devices['Desktop Firefox'] },
-            // TODO: Re-enable Firefox on macOS once its startup hang is fixed upstream.
+            // FIXME: Re-enable Firefox on macOS once its startup hang is fixed upstream.
             // https://github.com/microsoft/playwright/issues/42082
             testIgnore: process.platform === 'darwin' ? '**/*' : undefined,
         },
