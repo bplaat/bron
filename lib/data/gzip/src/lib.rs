@@ -25,7 +25,7 @@ fn skip_c_string(data: &[u8], offset: &mut usize) -> Option<()> {
 
 /// Compress bytes into a single gzip member.
 pub fn compress(data: &[u8]) -> Vec<u8> {
-    let payload = miniz_oxide::deflate::compress_to_vec(data, 6);
+    let payload = deflate::compress(data, deflate::Level::Default);
     let mut output = Vec::with_capacity(18 + payload.len());
     output.extend_from_slice(&[0x1f, 0x8b, 0x08, 0, 0, 0, 0, 0, 0, 255]);
     output.extend_from_slice(&payload);
@@ -60,8 +60,7 @@ pub fn decompress(data: &[u8]) -> Option<Vec<u8>> {
         offset += 2;
     }
     let compressed = data.get(offset..footer)?;
-    let output =
-        miniz_oxide::inflate::decompress_to_vec_with_limit(compressed, MAX_OUTPUT_SIZE).ok()?;
+    let output = deflate::decompress(compressed, MAX_OUTPUT_SIZE).ok()?;
     let expected_crc = u32::from_le_bytes(data.get(footer..footer + 4)?.try_into().ok()?);
     let expected_size = u32::from_le_bytes(data.get(footer + 4..)?.try_into().ok()?);
     (CRC32.checksum(&output) == expected_crc && output.len() as u32 == expected_size)
