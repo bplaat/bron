@@ -97,6 +97,9 @@ opt-level = 3
 [profile.release.package.image]
 opt-level = 3
 
+[profile.release.package.deflate]
+opt-level = 3
+
 [profile.release.package.miniz_oxide]
 opt-level = 3
 
