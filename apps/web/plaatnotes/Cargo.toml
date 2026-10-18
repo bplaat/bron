@@ -40,7 +40,7 @@ zeroize = "1.9"
 
 [target.'cfg(not(any(target_os = "macos", windows)))'.dependencies]
 bsql = { version = "0.1.2", features = ["uuid", "chrono", "sqlite-bundled"] }
-native-tls = { version = "0.2.18", features = ["vendored"] }
+small-http = { version = "0.2.1", features = ["tls-vendored"] }
 
 [build-dependencies]
 copy_dir = "0.1.3"
