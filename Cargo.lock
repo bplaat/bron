@@ -637,9 +637,6 @@ dependencies = [
 [[package]]
 name = "local-ip-address"
 version = "0.6.13+patch"
-dependencies = [
- "libc",
-]
 
 [[package]]
 name = "log"
