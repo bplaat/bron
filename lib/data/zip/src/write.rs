@@ -59,7 +59,7 @@ pub fn append_file<R: Read + Write + Seek>(
     reader.seek(SeekFrom::Start(end.directory_offset as u64))?;
     reader.read_exact(&mut directory)?;
     let offset = u32::try_from(length).map_err(|_| ZipError::InvalidZip("archive too large"))?;
-    let compressed = miniz_oxide::deflate::compress_to_vec(data, 6);
+    let compressed = deflate::compress(data, deflate::Level::Default);
     let (method, payload) = if compressed.len() < data.len() {
         (8u16, compressed.as_slice())
     } else {

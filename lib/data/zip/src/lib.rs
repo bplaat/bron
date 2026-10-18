@@ -409,7 +409,7 @@ impl<R: Read + Seek> ZipArchive<R> {
                         "uncompressed entry size exceeds limit",
                     ));
                 }
-                miniz_oxide::inflate::decompress_to_vec_with_limit(&compressed, uncompressed_size)
+                deflate::decompress(&compressed, uncompressed_size)
                     .map_err(|_| ZipError::DecompressError)?
             }
             m => return Err(ZipError::UnsupportedCompressionMethod(m)),

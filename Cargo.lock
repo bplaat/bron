@@ -1644,8 +1644,8 @@ dependencies = [
  "bitflags",
  "crc",
  "criterion",
+ "deflate",
  "libc",
- "miniz_oxide",
 ]
 
 [[package]]
