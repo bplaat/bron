@@ -11,7 +11,7 @@ use core::time::Duration;
 
 use super::{
     Area, Bitmap, Budget, ColorSpace, DecodeError, EncodeError, EncodingStyle, Format, Frame,
-    Image, LoopCount, Reader, Result, pixel_len,
+    Image, LoopCount, Reader, Result, pixel_len, round,
 };
 
 // MARK: Decoder
@@ -756,7 +756,7 @@ fn gif_quantize(
     colors.extend(
         palette
             .iter()
-            .map(|color| color.map(|value| libm::round(value).clamp(0.0, 255.0) as u8)),
+            .map(|color| color.map(|value| round(value).clamp(0.0, 255.0) as u8)),
     );
     let palette: Vec<_> = colors.iter().map(|color| color.map(f64::from)).collect();
     let opaque = &palette[reserved..];

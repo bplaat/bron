@@ -9,7 +9,7 @@ use alloc::vec::Vec;
 
 use super::{
     Bitmap, Budget, DecodeError, EncodeError, EncodingStyle, Format, Image, Reader, Result,
-    pixel_len,
+    pixel_len, roundf, truncf,
 };
 
 const ZIGZAG: [usize; 64] = [
@@ -213,7 +213,7 @@ impl Tap {
                 Self {
                     near,
                     far: (near + 1).min(last),
-                    weight: libm::roundf((position - libm::truncf(position)) * 256.0) as u32,
+                    weight: roundf((position - truncf(position)) * 256.0) as u32,
                 }
             })
             .collect())
@@ -945,7 +945,7 @@ fn idct_1d(v: [f32; 8]) -> [f32; 8] {
 fn idct(block: &[i32], table: &[f32; 64], dest: &mut [u8], stride: usize) {
     // Float-to-u8 casts saturate, which clamps every output sample to 0..=255.
     if block[1..].iter().all(|v| *v == 0) {
-        let value = libm::roundf(block[0] as f32 * table[0] + 128.0) as u8;
+        let value = roundf(block[0] as f32 * table[0] + 128.0) as u8;
         for row in dest.chunks_mut(stride).take(8) {
             row[..8].fill(value);
         }
@@ -963,7 +963,7 @@ fn idct(block: &[i32], table: &[f32; 64], dest: &mut [u8], stride: usize) {
     for (y, dest) in dest.chunks_mut(stride).take(8).enumerate() {
         let row = idct_1d(core::array::from_fn(|x| columns[x][y]));
         for (dest, value) in dest.iter_mut().zip(row) {
-            *dest = libm::roundf(value + 128.0) as u8;
+            *dest = roundf(value + 128.0) as u8;
         }
     }
 }
@@ -1321,7 +1321,7 @@ fn jpeg_fdct(plane: &[u8], stride: usize, scale: &[f32; 64]) -> [i16; 64] {
             row[x] = value;
         }
     }
-    core::array::from_fn(|index| libm::roundf(data[index / 8][index % 8] * scale[index]) as i16)
+    core::array::from_fn(|index| roundf(data[index / 8][index % 8] * scale[index]) as i16)
 }
 
 fn jpeg_amplitude(value: i16) -> (u8, u16) {

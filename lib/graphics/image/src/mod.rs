@@ -561,6 +561,38 @@ impl Area {
     }
 }
 
+// MARK: Rounding
+// `core` has no float rounding; codecs only round values far inside the `i64` range, where
+// truncation is an integer cast.
+
+/// Rounds toward zero, like `f32::trunc`.
+#[cfg(feature = "jpeg")]
+const fn truncf(x: f32) -> f32 {
+    x as i64 as f32
+}
+
+/// Rounds half away from zero, like `f32::round`.
+#[cfg(feature = "jpeg")]
+fn roundf(x: f32) -> f32 {
+    let truncated = truncf(x);
+    if (x - truncated).abs() >= 0.5 {
+        truncated + 1f32.copysign(x)
+    } else {
+        truncated
+    }
+}
+
+/// Rounds half away from zero, like `f64::round`.
+#[cfg(feature = "gif")]
+fn round(x: f64) -> f64 {
+    let truncated = x as i64 as f64;
+    if (x - truncated).abs() >= 0.5 {
+        truncated + 1f64.copysign(x)
+    } else {
+        truncated
+    }
+}
+
 // MARK: Tests
 #[cfg(all(
     test,
@@ -575,6 +607,26 @@ impl Area {
 ))]
 mod tests {
     use super::*;
+
+    #[cfg(any(feature = "jpeg", feature = "gif"))]
+    #[test]
+    fn rounding_matches_std() {
+        // Exact halves, values beside them, and signs of both.
+        let values = (-2000..=2000).flat_map(|i| {
+            let half = f64::from(i) / 2.0;
+            [half, half + 1e-6, half - 1e-6, f64::from(i) / 7.0]
+        });
+        for value in values {
+            #[cfg(feature = "gif")]
+            assert_eq!(round(value), value.round(), "{value}");
+            #[cfg(feature = "jpeg")]
+            {
+                let value = value as f32;
+                assert_eq!(roundf(value), value.round(), "{value}");
+                assert_eq!(truncf(value), value.trunc(), "{value}");
+            }
+        }
+    }
 
     #[cfg(feature = "qoi")]
     #[test]
