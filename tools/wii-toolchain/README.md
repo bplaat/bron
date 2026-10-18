@@ -7,7 +7,9 @@ you:
 - Clones upstream [libogc](https://github.com/devkitPro/libogc) v2.11.0 and applies
   `libogc/patches/` as commits, then builds the parts we use (listed in `build.sh`) to
   `../../target/wii-toolchain/libogc.a`
-- Builds our tiny C library in `libc/` to `../../target/wii-toolchain/libc.a`
+- Clones [picolibc](https://github.com/picolibc/picolibc) 1.8.12 and applies `picolibc/patches/`,
+  then builds it with meson as the C library, its headers and `libc.a` with the math library go
+  to `../../target/wii-toolchain/sysroot/`
 - Clones devkitPro's [gamecube-tools](https://github.com/devkitPro/gamecube-tools) v1.0.7 and
   builds `elf2dol` (`.elf` to `.dol`)
 - Builds [gxtexconv](../../lib/graphics/gxtexconv) with Cargo to `../../target/wii-toolchain/gxtexconv`
@@ -19,13 +21,14 @@ you:
 cd tools/wii-toolchain
 ./build.sh                 # fetch, patch and build
 ./build.sh clean           # remove ../../target/wii-toolchain/
-./build.sh export-patches  # write the commits in ../../target/wii-toolchain/libogc/ back to libogc/patches/
+./build.sh export-patches  # write the commits in ../../target/wii-toolchain/<name>/ back to <name>/patches/
 ./build.sh test            # build test/ and run it in Dolphin
 ```
 
 All code is compiled for the PowerPC 750 (`-mcpu=750`) and optimized for size with `-Os`, like
 the Rust examples (`opt-level = "s"`). LTO doesn't work with libogc: it waits for interrupts in
-loops on plain variables, which LTO can optimize into endless loops.
+loops on plain variables, which LTO can optimize into endless loops. Code is compiled with
+`_DEFAULT_SOURCE`, so picolibc also declares its POSIX and BSD functions under `-std=c23`.
 
 ## Integration
 
@@ -41,12 +44,9 @@ The toolchain and examples build separately from main Cargo workspace. The exist
 
 ## Files
 
-- `libc/` is a tiny C library that replaces newlib: word-sized `memcpy`/`memmove`/`memset` (zero
-  fills use `dcbz` on cached memory), a first-fit `malloc` over the MEM1 and MEM2 arenas, float
-  math accurate to about 1e-6, a `printf` family without floats and the startup code that calls
-  `main`
 - `wii.mk` has the make rules for the C examples, `wii.ld` is the linker script
-- `wii.json` is the Rust target; `build.rs` builds and links `../../target/wii-toolchain/libogc.a` and `../../target/wii-toolchain/libc.a`
+- `wii.json` is the Rust target; `build.rs` builds and links `../../target/wii-toolchain/libogc.a`
+  and picolibc's `../../target/wii-toolchain/sysroot/lib/libc.a`
 - `run.sh` converts a program to a `.dol` and starts it in Dolphin, extra arguments go to Dolphin
 - `test/` is a Wii program that tests the toolchain, see below
 
@@ -64,10 +64,14 @@ From the repository root on Linux, `cargo xtask check-others` builds the assembl
 
 ## Patches
 
-libogc needs newlib and GNU as, the patches make it build with our libc and LLVM. To change them,
-edit and commit in `../../target/wii-toolchain/libogc/`, run `./build.sh` to try it and `./build.sh export-patches` to
-write the commits back. The build stops instead of applying changed patches over commits or edits
-in `../../target/wii-toolchain/libogc/` that aren't exported yet.
+libogc needs newlib and GNU as, its patches make it build with picolibc and LLVM. picolibc's
+patches make its PowerPC port build with clang and patch in faster variants of some functions.
+To change them, edit and commit in `../../target/wii-toolchain/<name>/`, run `./build.sh` to try
+it and `./build.sh export-patches` to write the commits back. The build stops instead of applying
+changed patches over commits or edits in `../../target/wii-toolchain/<name>/` that aren't
+exported yet.
+
+The libogc patches:
 
 - `0002` uses standard C headers and removes unused POSIX header dependencies
 - `0001` to `0007` remove the newlib glue: reent structs, devoptab, malloc locks, time hooks,
@@ -75,4 +79,5 @@ in `../../target/wii-toolchain/libogc/` that aren't exported yet.
 - `0008` to `0010` add assembler macros for the Gekko / Broadway paired single instructions,
   which LLVM doesn't know, so the fast paired single matrix code keeps working
 - `0011` and `0012` stop using small data sections, which clang doesn't support
-- `0013` does the float math of the IR cursor and spotlights in single precision
+- `0013` implements the system functions picolibc leaves to the platform, like `sbrk` and `stdout`
+  to Dolphin's debug UART

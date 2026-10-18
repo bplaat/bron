@@ -20,12 +20,12 @@ LD := ld.lld
 # The Wii has a PowerPC 750 CPU and there is no OS, so no standard library from the host.
 # All code is optimized for size, like the Rust examples (opt-level = "s").
 CFLAGS := --target=powerpc-none-eabi -mcpu=750 -ffreestanding -nostdlibinc \
-	-ffunction-sections -fdata-sections -DGEKKO -DHW_RVL -Os -g -std=c23 -Wall -Wextra \
-	-I$(TOOLCHAIN)/libc/include -I$(LIBOGC)/gc -I$(LIBOGC)/gc/ogc -I$(LIBOGC)/gc/ogc/machine \
+	-ffunction-sections -fdata-sections -DGEKKO -DHW_RVL -D_DEFAULT_SOURCE -Os -g -std=c23 -Wall -Wextra \
+	-I$(TOOLCHAIN_BUILD)/sysroot/include -I$(LIBOGC)/gc -I$(LIBOGC)/gc/ogc -I$(LIBOGC)/gc/ogc/machine \
 	-I$(LIBOGC)/gc/bte -I$(LIBOGC)/gc/wiiuse
 
 OBJECTS := $(patsubst src/%.c,$(BUILD)/%.o,$(wildcard src/*.c))
-LIBRARIES := $(addprefix $(TOOLCHAIN_BUILD)/,libogc.a libc.a libcompiler-rt.a)
+LIBRARIES := $(addprefix $(TOOLCHAIN_BUILD)/,libogc.a sysroot/lib/libc.a libcompiler-rt.a)
 
 $(BUILD)/$(NAME).dol: $(BUILD)/$(NAME).elf
 	$(ELF2DOL) $< $@
@@ -40,7 +40,7 @@ $(BUILD)/%.o: src/%.c | $(TOOLCHAIN_BUILD)/libogc.a
 # The toolchain script knows itself when it needs to rebuild, one run builds all libraries
 $(TOOLCHAIN_BUILD)/libogc.a: FORCE
 	@$(TOOLCHAIN)/build.sh
-$(TOOLCHAIN_BUILD)/libc.a $(TOOLCHAIN_BUILD)/libcompiler-rt.a: $(TOOLCHAIN_BUILD)/libogc.a ;
+$(TOOLCHAIN_BUILD)/sysroot/lib/libc.a $(TOOLCHAIN_BUILD)/libcompiler-rt.a: $(TOOLCHAIN_BUILD)/libogc.a ;
 
 run: $(BUILD)/$(NAME).elf
 	$(TOOLCHAIN)/run.sh $<

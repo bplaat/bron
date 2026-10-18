@@ -1,0 +1,214 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Sun, 18 Oct 2026 21:48:33 +0200
+Subject: [PATCH] Copy and set words in the PowerPC memory functions
+
+The size optimized generic memcpy, memmove and memset loop over bytes.
+Copy and set 4 byte words instead, and on the Wii (HW_RVL) zero big
+blocks of cached memory a cache line at a time with dcbz.
+---
+ libc/machine/powerpc/CMakeLists.txt |  3 ++
+ libc/machine/powerpc/memcopy.h      | 58 +++++++++++++++++++++++++++++
+ libc/machine/powerpc/memcpy.c       | 16 ++++++++
+ libc/machine/powerpc/memmove.c      | 19 ++++++++++
+ libc/machine/powerpc/memset.c       | 48 ++++++++++++++++++++++++
+ libc/machine/powerpc/meson.build    |  3 ++
+ 6 files changed, 147 insertions(+)
+ create mode 100644 libc/machine/powerpc/memcopy.h
+ create mode 100644 libc/machine/powerpc/memcpy.c
+ create mode 100644 libc/machine/powerpc/memmove.c
+ create mode 100644 libc/machine/powerpc/memset.c
+
+diff --git a/libc/machine/powerpc/CMakeLists.txt b/libc/machine/powerpc/CMakeLists.txt
+index 8fe60fd..9e94859 100644
+--- a/libc/machine/powerpc/CMakeLists.txt
++++ b/libc/machine/powerpc/CMakeLists.txt
+@@ -37,6 +37,9 @@ add_subdirectory(machine)
+ 
+ picolibc_sources_flags("-fno-builtin"
+   hwcap.c
++  memcpy.c
++  memmove.c
++  memset.c
+   setjmp.S
+   tls.c
+   )
+diff --git a/libc/machine/powerpc/memcopy.h b/libc/machine/powerpc/memcopy.h
+new file mode 100644
+index 0000000..4c01cc4
+--- /dev/null
++++ b/libc/machine/powerpc/memcopy.h
+@@ -0,0 +1,58 @@
++/*
++ * SPDX-License-Identifier: BSD-3-Clause
++ *
++ * Copyright (c) 2026 Bastiaan van der Plaat
++ */
++
++/*
++ * Word copies shared by memcpy and memmove, 4 times fewer loads and stores than
++ * the byte loops of the size optimized generic code. The floating point
++ * registers aren't used, because interrupt handlers may not save them.
++ */
++
++#include <stdint.h>
++#include <string.h>
++
++typedef uint32_t __attribute__((__may_alias__)) __word_t;
++
++static inline void
++__copy_forward(uint8_t *d, const uint8_t *s, size_t n)
++{
++    if (n >= 16 && (((uintptr_t)d ^ (uintptr_t)s) & 3) == 0) {
++        for (; (uintptr_t)d & 3; n--)
++            *d++ = *s++;
++        __word_t       *dw = (__word_t *)d;
++        const __word_t *sw = (const __word_t *)s;
++        for (; n >= 16; n -= 16, dw += 4, sw += 4) {
++            dw[0] = sw[0];
++            dw[1] = sw[1];
++            dw[2] = sw[2];
++            dw[3] = sw[3];
++        }
++        for (; n >= 4; n -= 4)
++            *dw++ = *sw++;
++        d = (uint8_t *)dw;
++        s = (const uint8_t *)sw;
++    }
++    while (n--)
++        *d++ = *s++;
++}
++
++static inline void
++__copy_backward(uint8_t *d, const uint8_t *s, size_t n)
++{
++    d += n;
++    s += n;
++    if (n >= 16 && (((uintptr_t)d ^ (uintptr_t)s) & 3) == 0) {
++        for (; (uintptr_t)d & 3; n--)
++            *--d = *--s;
++        __word_t       *dw = (__word_t *)d;
++        const __word_t *sw = (const __word_t *)s;
++        for (; n >= 4; n -= 4)
++            *--dw = *--sw;
++        d = (uint8_t *)dw;
++        s = (const uint8_t *)sw;
++    }
++    while (n--)
++        *--d = *--s;
++}
+diff --git a/libc/machine/powerpc/memcpy.c b/libc/machine/powerpc/memcpy.c
+new file mode 100644
+index 0000000..b3a9691
+--- /dev/null
++++ b/libc/machine/powerpc/memcpy.c
+@@ -0,0 +1,16 @@
++/*
++ * SPDX-License-Identifier: BSD-3-Clause
++ *
++ * Copyright (c) 2026 Bastiaan van der Plaat
++ */
++
++#include "memcopy.h"
++
++#undef memcpy
++
++void * __no_builtin
++memcpy(void * __restrict dst, const void * __restrict src, size_t n)
++{
++    __copy_forward(dst, src, n);
++    return dst;
++}
+diff --git a/libc/machine/powerpc/memmove.c b/libc/machine/powerpc/memmove.c
+new file mode 100644
+index 0000000..7a5fe3f
+--- /dev/null
++++ b/libc/machine/powerpc/memmove.c
+@@ -0,0 +1,19 @@
++/*
++ * SPDX-License-Identifier: BSD-3-Clause
++ *
++ * Copyright (c) 2026 Bastiaan van der Plaat
++ */
++
++#include "memcopy.h"
++
++#undef memmove
++
++void * __no_builtin
++memmove(void *dst, const void *src, size_t n)
++{
++    if ((uintptr_t)dst <= (uintptr_t)src || (uintptr_t)dst >= (uintptr_t)src + n)
++        __copy_forward(dst, src, n);
++    else
++        __copy_backward(dst, src, n);
++    return dst;
++}
+diff --git a/libc/machine/powerpc/memset.c b/libc/machine/powerpc/memset.c
+new file mode 100644
+index 0000000..600805d
+--- /dev/null
++++ b/libc/machine/powerpc/memset.c
+@@ -0,0 +1,48 @@
++/*
++ * SPDX-License-Identifier: BSD-3-Clause
++ *
++ * Copyright (c) 2026 Bastiaan van der Plaat
++ */
++
++/*
++ * Sets words instead of the bytes of the size optimized generic code. On the
++ * Wii (HW_RVL) big zero fills of cached memory zero whole cache lines with
++ * dcbz, which skips reading them from memory first.
++ */
++
++#include <stdint.h>
++#include <string.h>
++
++#undef memset
++
++typedef uint32_t __attribute__((__may_alias__)) __word_t;
++
++void * __no_builtin
++memset(void *dst, int c, size_t n)
++{
++    uint8_t *d = dst;
++    uint8_t  byte = (uint8_t)c;
++    if (n >= 16) {
++        for (; (uintptr_t)d & 3; n--)
++            *d++ = byte;
++        __word_t  fill = byte * 0x01010101u;
++        __word_t *dw = (__word_t *)d;
++#ifdef HW_RVL
++        /* dcbz only works on cached memory: MEM1 at 0x8... and MEM2 at 0x9... */
++        if (fill == 0 && n >= 64 && ((uintptr_t)dw >> 28 == 0x8 || (uintptr_t)dw >> 28 == 0x9)) {
++            for (; (uintptr_t)dw & 31; n -= 4)
++                *dw++ = 0;
++            for (; n >= 32; n -= 32, dw += 8)
++                __asm__ volatile("dcbz 0,%0" : : "b"(dw) : "memory");
++        }
++#endif
++        for (; n >= 16; n -= 16, dw += 4)
++            dw[0] = dw[1] = dw[2] = dw[3] = fill;
++        for (; n >= 4; n -= 4)
++            *dw++ = fill;
++        d = (uint8_t *)dw;
++    }
++    while (n--)
++        *d++ = byte;
++    return dst;
++}
+diff --git a/libc/machine/powerpc/meson.build b/libc/machine/powerpc/meson.build
+index c23032d..15fa392 100644
+--- a/libc/machine/powerpc/meson.build
++++ b/libc/machine/powerpc/meson.build
+@@ -40,6 +40,9 @@ srcs_machine = [
+ #  'atoufix32.c',
+ #  'atoufix64.c',
+   'hwcap.c',
++  'memcpy.c',
++  'memmove.c',
++  'memset.c',
+   'setjmp.S',
+   'tls.c',
+ #  'strtosfix16.c',

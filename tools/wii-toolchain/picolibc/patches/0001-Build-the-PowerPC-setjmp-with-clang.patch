@@ -1,0 +1,39 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Sun, 18 Oct 2026 21:08:28 +0200
+Subject: [PATCH] Build the PowerPC setjmp with clang
+
+clang has no ppc-asm.h and doesn't accept the bclr+ 4,2 form, define the two
+macros used here and spell the return as bnelr+.
+---
+ libc/machine/powerpc/setjmp.S | 9 ++++++++-
+ 1 file changed, 8 insertions(+), 1 deletion(-)
+
+diff --git a/libc/machine/powerpc/setjmp.S b/libc/machine/powerpc/setjmp.S
+index 56f6945..cf98d87 100644
+--- a/libc/machine/powerpc/setjmp.S
++++ b/libc/machine/powerpc/setjmp.S
+@@ -21,7 +21,14 @@ WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE.
+ 
+ #include <picolibc.h>
+ 
++#ifdef __clang__
++/* clang has no ppc-asm.h, these are its only macros used here */
++#define FUNC_START(name) \
++	.text; .globl name; .type name, @function; .p2align 2; name:
++#define FUNC_END(name) .size name, . - name
++#else
+ #include "ppc-asm.h"
++#endif
+ 
+ FUNC_START(setjmp)
+ #ifdef __ALTIVEC__
+@@ -399,7 +406,7 @@ FUNC_START(longjmp)
+ #endif
+ 
+ 	mr.	3,4
+-	bclr+	4,2
++	bnelr+		# bclr+ 4,2, which clang does not accept
+ 	li	3,1
+ 	blr
+ FUNC_END(longjmp)

@@ -3,10 +3,8 @@ From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
 Date: Sat, 10 Oct 2026 12:35:54 +0200
 Subject: [PATCH] Remove the newlib system call glue
 
-libogc is built with a tiny C library instead of newlib, so the reent
-structs, malloc locks, sbrk hook and gettimeofday hook are gone. The C
-library calls the __syscall_exit and __syscall_nanosleep hooks that stay,
-like newlib does.
+libogc is built with picolibc instead of newlib, so the reent structs,
+malloc locks, sbrk hook and gettimeofday hook are gone.
 ---
  gc/ogc/lwp_threads.h |  1 -
  libogc/lwp_threads.c | 19 -------------------

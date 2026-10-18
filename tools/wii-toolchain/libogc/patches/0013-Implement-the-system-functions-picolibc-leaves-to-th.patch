@@ -1,0 +1,344 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Sun, 18 Oct 2026 21:49:57 +0200
+Subject: [PATCH] Implement the system functions picolibc leaves to the
+ platform
+
+picolibc's malloc grows the heap with sbrk, which keeps moving from
+MEM1 into MEM2. stdin, stdout and stderr are a stream to the Dolphin
+debug UART, which SYS_Report also writes to. _exit, nanosleep and
+usleep take the place of the newlib hooks, abort crashes with a trap
+for the red screen, and build_argv and __crtmain start main.
+---
+ libogc/argv.c       |  20 ++++++-
+ libogc/exception.c  |   5 ++
+ libogc/sbrk.c       |  16 ++----
+ libogc/sys_report.c | 132 +++++++++++++++-----------------------------
+ libogc/system.c     |  20 ++++++-
+ 5 files changed, 93 insertions(+), 100 deletions(-)
+
+diff --git a/libogc/argv.c b/libogc/argv.c
+index 6dea388..588bddf 100644
+--- a/libogc/argv.c
++++ b/libogc/argv.c
+@@ -29,7 +29,25 @@ distribution.
+ 
+ extern u8 __Arena1Lo[];
+ extern char *__argvArena1Lo;
+-void build_argv (struct __argv* argstruct );
++
++// Splits the null separated command line into argv, behind it in the arena
++void build_argv(struct __argv *argstruct)
++{
++	char **argv = (char **)(((u32)argstruct->commandLine + argstruct->length + 3) & ~3);
++	char *arg = argstruct->commandLine;
++	int argc = 0;
++
++	for (int len = argstruct->length; len > 0;) {
++		int size = strlen(arg) + 1;
++		argv[argc++] = arg;
++		arg += size;
++		len -= size;
++	}
++	argv[argc] = NULL;
++	argstruct->argc = argc;
++	argstruct->argv = argv;
++	argstruct->endARGV = &argv[argc + 1];
++}
+ 
+ void __CheckARGV() {
+ 
+diff --git a/libogc/exception.c b/libogc/exception.c
+index ad98361..422769a 100644
+--- a/libogc/exception.c
++++ b/libogc/exception.c
+@@ -50,6 +50,11 @@ distribution.
+ 
+ #include "ogc/video_types.h"
+ 
++void abort(void)
++{
++	__builtin_trap();
++}
++
+ //#define _EXC_DEBUG
+ 
+ #define CPU_STACK_TRACE_DEPTH		10
+diff --git a/libogc/sbrk.c b/libogc/sbrk.c
+index dd58abf..5f893d1 100644
+--- a/libogc/sbrk.c
++++ b/libogc/sbrk.c
+@@ -1,9 +1,5 @@
+-#include <_ansi.h>
+-#include <_syslist.h>
+-#include <stdlib.h>
+-#include <unistd.h>
+-#include <reent.h>
+ #include <errno.h>
++#include <unistd.h>
+ 
+ #include "asm.h"
+ #include "processor.h"
+@@ -13,7 +9,7 @@
+ u32 MALLOC_MEM2 __attribute__((weak)) = 1;
+ #endif
+ 
+-void* _sbrk_r( struct _reent *ptr, ptrdiff_t incr)
++void* sbrk(ptrdiff_t incr)
+ {
+ 	u32 level;
+ 	char *heap_end = 0;
+@@ -35,11 +31,11 @@ void* _sbrk_r( struct _reent *ptr, ptrdiff_t incr)
+ 			// we're in MEM2
+ 			if((heap_end+incr)>(char*)SYS_GetArena2Hi()) {
+ 				// out of MEM2 case
+-				ptr->_errno = ENOMEM;
++				errno = ENOMEM;
+ 				prev_heap = (char *)-1;
+ 			} else if ((heap_end+incr) < mem2_start) {
+ 				// trying to sbrk() back below the MEM2 start barrier
+-				ptr->_errno = EINVAL;
++				errno = EINVAL;
+ 				prev_heap = (char *)-1;
+ 			} else {
+ 				// success case
+@@ -54,7 +50,7 @@ void* _sbrk_r( struct _reent *ptr, ptrdiff_t incr)
+ 				// out of MEM1, transition into MEM2
+ 				if(((char*)SYS_GetArena2Lo() + incr) > (char*)SYS_GetArena2Hi()) {
+ 					// this increment doesn't fit in available MEM2
+-					ptr->_errno = ENOMEM;
++					errno = ENOMEM;
+ 					prev_heap = (char *)-1;
+ 				} else {
+ 					// MEM2 is available, move into it
+@@ -73,7 +69,7 @@ void* _sbrk_r( struct _reent *ptr, ptrdiff_t incr)
+ 
+ 		if((heap_end+incr)>(char*)SYS_GetArenaHi()) {
+ 
+-			ptr->_errno = ENOMEM;
++			errno = ENOMEM;
+ 			prev_heap = (char *)-1;
+ 
+ 		} else {
+diff --git a/libogc/sys_report.c b/libogc/sys_report.c
+index 87c9125..34ff489 100644
+--- a/libogc/sys_report.c
++++ b/libogc/sys_report.c
+@@ -26,115 +26,73 @@ distribution.
+ 
+ -------------------------------------------------------------*/
+ 
+-#include <stddef.h>
+-#include <sys/iosupport.h>
+ #include <stdio.h>
+ #include <stdarg.h>
+-#include <malloc.h>
+ 
+ #include "exi.h"
++#include "processor.h"
+ 
++// stdin, stdout and stderr write to the UART, stdin is empty. Threads share the line,
++// so it's only touched with interrupts off, the EXI transfer polls.
++static char __uart_line[256];
++static size_t __uart_len;
+ 
+-static ssize_t __uart_write(const char *buffer,size_t len)
++static void __uart_write_line(void)
+ {
+-	u32 cmd,ret;
+-
+-	if(EXI_Lock(EXI_CHANNEL_0,EXI_DEVICE_1,NULL)==0) return 0;
+-	if(EXI_Select(EXI_CHANNEL_0,EXI_DEVICE_1,EXI_SPEED8MHZ)==0) {
++	u32 cmd;
++
++	if(__uart_len > 0 && EXI_Lock(EXI_CHANNEL_0,EXI_DEVICE_1,NULL)) {
++		if(EXI_Select(EXI_CHANNEL_0,EXI_DEVICE_1,EXI_SPEED8MHZ)) {
++			cmd = 0xa0010000;
++			EXI_Imm(EXI_CHANNEL_0,&cmd,4,EXI_WRITE,NULL);
++			EXI_Sync(EXI_CHANNEL_0);
++			EXI_ImmEx(EXI_CHANNEL_0,__uart_line,__uart_len,EXI_WRITE);
++			EXI_Deselect(EXI_CHANNEL_0);
++		}
+ 		EXI_Unlock(EXI_CHANNEL_0);
+-		return len;
+ 	}
+-
+-	ret = 0;
+-	cmd = 0xa0010000;
+-	if(EXI_Imm(EXI_CHANNEL_0,&cmd,4,EXI_WRITE,NULL)==0) ret |= 0x01;
+-	if(EXI_Sync(EXI_CHANNEL_0)==0) ret |= 0x02;
+-	if(EXI_ImmEx(EXI_CHANNEL_0,(void *)buffer,len,EXI_WRITE)==0) ret |= 0x04;
+-	if(EXI_Deselect(EXI_CHANNEL_0)==0) ret |= 0x08;
+-	if(EXI_Unlock(EXI_CHANNEL_0)==0) ret |= 0x10;
+-
+-	return len;
++	__uart_len = 0;
+ }
+ 
+-#define __outsz 256
+-
+-static ssize_t __uart_stdio_write(struct _reent *r, void *fd, const char *ptr, size_t len)
++static int __uart_flush(FILE *file)
+ {
+-	// translate \n and \r\n to \r for Dolphin handling
+-	char *p = (char*)ptr;
+-	char *buf = (char*)ptr;
+-	size_t send_len = len;
+-
+-	for(size_t i = 0; i <= send_len; i++)
+-	{
+-		char ch = *p++;
+-		//skip the one of the 2 win newline bytes
+-		if(ch=='\r' && *p == '\n')
+-		{
+-			send_len--;
+-			continue;
+-		}
+-
+-		//newline should be converted to carriage return
+-		if (ch=='\n') 
+-			ch = '\r';
++	u32 level;
+ 
+-		*buf++ = ch;
+-	}
+-	
+-	__uart_write(ptr, send_len);
++	_CPU_ISR_Disable(level);
++	__uart_write_line();
++	_CPU_ISR_Restore(level);
++	return 0;
++}
+ 
+-	return len;
++static int __uart_put(char c, FILE *file)
++{
++	u32 level;
++
++	_CPU_ISR_Disable(level);
++	// newline should be converted to carriage return for Dolphin handling
++	__uart_line[__uart_len++] = c == '\n' ? '\r' : c;
++	if(c == '\n' || __uart_len == sizeof(__uart_line))
++		__uart_write_line();
++	_CPU_ISR_Restore(level);
++	return (unsigned char)c;
+ }
+-static const devoptab_t dotab_uart = {
+-	.name    = "uart",
+-	.write_r = __uart_stdio_write,
+-};
+ 
++static FILE __uart = FDEV_SETUP_STREAM(__uart_put, NULL, __uart_flush, _FDEV_SETUP_WRITE);
++FILE *const stdin = &__uart;
++FILE *const stdout = &__uart;
++FILE *const stderr = &__uart;
++
++// stdout and stderr always write to the UART
+ void SYS_STDIO_Report(bool use_stdout)
+ {
+-	fflush(stderr);
+-	devoptab_list[STD_ERR] = &dotab_uart;
+-	setvbuf(stderr, NULL, _IONBF, 0);
+-	if(use_stdout)
+-	{
+-		fflush(stdout);
+-		devoptab_list[STD_OUT] = &dotab_uart;
+-		setvbuf(stdout, NULL, _IONBF, 0);
+-	}
+ }
+ 
+ void SYS_Report (char const *const fmt_, ...)
+ {
+-	ssize_t len = 0;
+-	char* buffer = NULL;
+ 	va_list args;
+-	size_t write_len = __outsz;
+-	while(true)
+-	{
+-		char* tmp = (char*)realloc(buffer, write_len);
+-		if(tmp == NULL)
+-			break;
+-
+-		buffer = tmp;
+-
+-		va_start(args, fmt_);
+-		len = vsnprintf(buffer, write_len, fmt_, args);
+-		va_end(args);
+-		if(len > 0 && len >= write_len)
+-		{
+-			write_len = len+1;
+-			continue;
+-		}
+-		
+-		break;
+-	}
+-
+-	//only output if we have data to send and no error occured
+-	if(buffer != NULL && len > 0)
+-		__uart_stdio_write(NULL, 0, buffer, len);
+ 
+-	if(buffer)
+-		free(buffer);	
++	va_start(args, fmt_);
++	vfprintf(stderr, fmt_, args);
++	va_end(args);
++	fflush(stderr);
+ }
+-
+diff --git a/libogc/system.c b/libogc/system.c
+index 3822125..8164bc4 100644
+--- a/libogc/system.c
++++ b/libogc/system.c
+@@ -34,6 +34,7 @@ distribution.
+ #include <stdio.h>
+ #include <malloc.h>
+ #include <time.h>
++#include <unistd.h>
+ 
+ #include "asm.h"
+ #include "irq.h"
+@@ -273,7 +274,7 @@ void __reload(void)
+ 	SYS_ResetSystem(SYS_RETURNTOMENU, 0, 0);
+ }
+ 
+-void __syscall_exit(int status)
++void _exit(int status)
+ {
+ 	if(__stub_found()) {
+ 		SYS_ResetSystem(SYS_SHUTDOWN,0,0);
+@@ -284,12 +285,18 @@ void __syscall_exit(int status)
+ #else
+ 	SYS_ResetSystem(SYS_RETURNTOMENU, 0, 0);
+ #endif
++	for(;;);
+ }
+ 
+-int __syscall_nanosleep(const struct timespec *req, struct timespec *rem){
++int nanosleep(const struct timespec *req, struct timespec *rem){
+ 	return __libogc_nanosleep(req, rem);
+ }
+ 
++int usleep(useconds_t us){
++	struct timespec req = { us / 1000000, (us % 1000000) * 1000 };
++	return nanosleep(&req, NULL);
++}
++
+ static alarm_st* __lwp_syswd_allocate(void)
+ {
+ 	alarm_st *alarm;
+@@ -1094,6 +1101,15 @@ void SYS_PreMain(void)
+ 	__SYS_SetBootTime();
+ }
+ 
++// The main thread runs this, libogc's crt0 has set up the system
++extern int main(int argc, char **argv);
++
++void __crtmain(void)
++{
++	SYS_PreMain();
++	exit(main(__system_argv->argc, __system_argv->argv));
++}
++
+ u32 SYS_ResetButtonDown(void)
+ {
+ 	return (!(_piReg[0]&0x00010000));

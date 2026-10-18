@@ -21,8 +21,8 @@ pub fn build(toolchain: impl AsRef<Path>) -> PathBuf {
         "build.rs",
         "build.sh",
         "../../lib/graphics/gxtexconv",
-        "libc",
         "libogc",
+        "picolibc",
         "wii.ld",
         "wii.json",
     ] {
@@ -33,6 +33,11 @@ pub fn build(toolchain: impl AsRef<Path>) -> PathBuf {
         toolchain.join("wii.ld").display()
     );
     let build_dir = toolchain.join("../../target/wii-toolchain");
+    // picolibc's libc.a comes first, so an old libc.a in the build directory is never used
+    println!(
+        "cargo:rustc-link-search=native={}",
+        build_dir.join("sysroot/lib").display()
+    );
     println!("cargo:rustc-link-search=native={}", build_dir.display());
     println!("cargo:rustc-link-lib=static=ogc");
     println!("cargo:rustc-link-lib=static=c");

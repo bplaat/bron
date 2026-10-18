@@ -3,14 +3,13 @@ From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
 Date: Sat, 10 Oct 2026 12:35:54 +0200
 Subject: [PATCH] Remove the newlib clock and gettimeofday hooks
 
-They need newlib's reent struct and are left to the C library. The
-nanosleep hook stays for the C library's nanosleep.
+They need newlib's reent struct and are left to the C library.
 ---
  libogc/timesupp.c | 24 ------------------------
  1 file changed, 24 deletions(-)
 
 diff --git a/libogc/timesupp.c b/libogc/timesupp.c
-index 8c505e5..153b0f2 100644
+index c8b02e2..527cc26 100644
 --- a/libogc/timesupp.c
 +++ b/libogc/timesupp.c
 @@ -1,6 +1,3 @@

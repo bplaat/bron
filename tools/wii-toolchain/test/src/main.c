@@ -128,6 +128,10 @@ static bool same(const uint8_t* a, const uint8_t* b, size_t size) {
     return true;
 }
 
+static int compare_ints(const void* a, const void* b) {
+    return *(const int*)a - *(const int*)b;
+}
+
 static void test_memory(void) {
     static uint8_t source[192], buffer[192], expected[192];
     for (int i = 0; i < 192; i++)
@@ -184,6 +188,12 @@ static void test_memory(void) {
     const char* hello = "hello";
     CHECK(strchr(hello, 'l') == hello + 2);
     CHECK(strchr(hello, 'x') == NULL);
+
+    int numbers[] = {5, -2, 9, 0, 3};
+    qsort(numbers, 5, sizeof(int), compare_ints);
+    CHECK(numbers[0] == -2 && numbers[2] == 3 && numbers[4] == 9);
+    CHECK(strtol("-0x1f", NULL, 16) == -31);
+    CHECK(strtod("2.5e3", NULL) == 2500.0);
 }
 
 static void test_malloc(void) {
@@ -251,7 +261,11 @@ static void test_printf(void) {
     CHECK_FORMAT("-0000000000000000000000001", "%.25d", -1);
     CHECK_FORMAT("    -0000000000000000000000001", "%030.25d", -1);
     CHECK_FORMAT("-0000000000000000000000001    ", "%-30.25d", -1);
+    // The left adjustment wins over zero padding, which the compiler warns about
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wformat"
     CHECK_FORMAT("-42  ", "%-05d", -42);
+#pragma clang diagnostic pop
     CHECK_FORMAT("", "%.0d", 0);
     CHECK_FORMAT("   ", "%3.0d", 0);
     CHECK(snprintf(text, 5, "%.25d", 1) == 25);
@@ -266,6 +280,7 @@ static void test_printf(void) {
     CHECK_FORMAT("wii|wi|(null)", "%s|%.2s|%s", "wii", "wii", (char*)NULL);
     CHECK(snprintf(text, 5, "hello world") == 11);
     check_string(text, "hell", __LINE__);
+    CHECK_FORMAT("3.14 -2.5e+10 0.001 1e+100", "%.2f %g %g %g", 3.14159, -2.5e10, 0.001, 1e100);
 }
 
 static void test_math(void) {
@@ -289,15 +304,21 @@ static void test_math(void) {
     CHECK(isnan(hypotf(zero, nan)));
     CHECK(isnan(hypotf(nan, zero)));
     CHECK(hypotf(inf, nan) == inf);
-    CHECK(exp2f(-127.0f) == 0x1p-127f);
-    CHECK(exp2f(-149.0f) == 0x1p-149f);
+    // libogc runs the FPU in non-IEEE mode, which flushes subnormal results to zero
+    CHECK(exp2f(-126.0f) == 0x1p-126f);
+    CHECK(exp2f(-127.0f) == 0.0f);
+    CHECK(exp2f(-149.0f) == 0.0f);
     CHECK(exp2f(-150.0f) == 0.0f);
-    CHECK(exp2f(-149.5f) == 0x1p-149f);
     CHECK(exp2f(-inf) == 0.0f);
     CHECK(exp2f(inf) == inf);
     CHECK(float_bits(powf(negzero, 3.0f)) == 0x80000000u);
     CHECK(float_bits(powf(negzero, -3.0f)) == 0xff800000u);
     CHECK(float_bits(powf(negzero, 2.0f)) == 0);
+    // Double precision, which the 750 does in hardware
+    volatile double half_pi = 1.5707963267948966;
+    CHECK(sin(half_pi) == 1.0 && fabs(cos(half_pi)) < 1e-16);
+    CHECK(fabs(pow(2.0, 0.5) - 1.4142135623730951) < 1e-16);
+    CHECK(fabs(log(exp(10.0)) - 10.0) < 1e-14);
     CHECK(isnan(powf(zero, nan)));
     CHECK(powf(-1.0f, inf) == 1.0f);
     CHECK(powf(2.0f, inf) == inf);
@@ -316,10 +337,17 @@ static void test_math(void) {
     CHECK_EXACT(sqrtf(0.0f), 0.0f);
     CHECK(isnan(sqrtf(-1.0f)));
     CHECK(isinf(sqrtf(__builtin_inff())));
+    // sqrt rounds correctly, so squares come back exact
     bool squares = true;
     for (int i = 1; i <= 1000; i++)
-        squares &= fabsf(sqrtf((float)(i * i)) - i) <= i * 2e-7f;
+        squares &= sqrtf((float)(i * i)) == i && sqrt((double)i * i) == i;
     CHECK(squares);
+    volatile double two = 2.0, below_four = 0x1.fffffffffffffp+1, min_subnormal = 0x1p-1074;
+    CHECK(float_bits(sqrtf((float)two)) == 0x3fb504f3u);
+    CHECK(sqrt(two) == 0x1.6a09e667f3bcdp+0);
+    CHECK(sqrt(below_four) == 0x1.fffffffffffffp+0);
+    CHECK(sqrt(min_subnormal) == 0x1p-537);
+    CHECK(isnan(sqrt(-two)));
 
     CHECK_FLOAT(sinf(PI / 6.0f), 0.5f);
     CHECK_FLOAT(cosf(PI / 3.0f), 0.5f);
