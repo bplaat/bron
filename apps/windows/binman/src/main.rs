@@ -22,6 +22,7 @@ mod catalog;
 mod elevation;
 mod engine;
 mod ipc;
+mod pattern;
 mod win32;
 mod worker;
 

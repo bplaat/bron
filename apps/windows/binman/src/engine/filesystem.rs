@@ -10,10 +10,9 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, SystemTime};
 
-use glob::{MatchOptions, Pattern, glob_with};
-
 use super::CleanupResult;
 use crate::catalog::PathRule;
+use crate::pattern;
 
 #[derive(Default)]
 pub(super) struct ScanStats {
@@ -54,34 +53,17 @@ fn expand_rule(rule: &PathRule) -> Result<Vec<PathBuf>, String> {
         .root
         .resolve()
         .ok_or_else(|| format!("Environment root is unavailable for {}", rule.path))?;
-    let escaped_base = Pattern::escape(&base.to_string_lossy());
-    let pattern_text = format!(
-        "{escaped_base}{}{path}",
-        std::path::MAIN_SEPARATOR,
-        path = rule.path
-    );
-    let options = MatchOptions {
-        case_sensitive: false,
-        require_literal_separator: true,
-        require_literal_leading_dot: false,
-    };
-    let mut paths = Vec::new();
-    let entries = glob_with(&pattern_text, options).map_err(|error| error.to_string())?;
-    for entry in entries {
-        match entry {
-            Ok(path) if is_safe_resolved_path(&base, &path) => paths.push(path),
-            Ok(path) => {
-                return Err(format!(
-                    "Skipped unsafe path outside or linked through {}: {}",
-                    base.display(),
-                    path.display()
-                ));
-            }
-            Err(error) => return Err(error.to_string()),
-        }
+    let paths = pattern::expand(&base, &rule.path).map_err(|error| error.to_string())?;
+    if let Some(path) = paths
+        .iter()
+        .find(|path| !is_safe_resolved_path(&base, path))
+    {
+        return Err(format!(
+            "Skipped unsafe path outside or linked through {}: {}",
+            base.display(),
+            path.display()
+        ));
     }
-    paths.sort();
-    paths.dedup();
     Ok(paths)
 }
 

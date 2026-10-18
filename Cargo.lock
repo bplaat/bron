@@ -88,7 +88,6 @@ dependencies = [
  "anyhow",
  "bwebview",
  "bwindow",
- "glob",
  "rust-embed",
  "serde",
  "serde_json",
@@ -497,12 +496,6 @@ dependencies = [
 [[package]]
 name = "getrandom"
 version = "0.4.3+patch"
-
-[[package]]
-name = "glob"
-version = "0.3.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e4eba85ea1d0a966a983acd07deee566e67395d2d96b6fb39e62b5a833f1eb0b"
 
 [[package]]
 name = "granit-parser"
