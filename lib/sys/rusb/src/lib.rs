@@ -25,9 +25,7 @@ cfg_select! {
         target_os = "freebsd",
         target_os = "dragonfly",
         target_os = "openbsd",
-        target_os = "netbsd",
-        target_os = "illumos",
-        target_os = "solaris"
+        target_os = "netbsd"
     ) => {
         use crate::unix as backend;
         mod unix;
@@ -308,9 +306,7 @@ const fn validate_write_request_type(request_type: u8) -> Result<(), Error> {
     target_os = "freebsd",
     target_os = "dragonfly",
     target_os = "openbsd",
-    target_os = "netbsd",
-    target_os = "illumos",
-    target_os = "solaris"
+    target_os = "netbsd"
 ))]
 fn collect_initialized<T, E>(
     count: usize,
@@ -330,9 +326,7 @@ fn collect_initialized<T, E>(
     target_os = "freebsd",
     target_os = "dragonfly",
     target_os = "openbsd",
-    target_os = "netbsd",
-    target_os = "illumos",
-    target_os = "solaris"
+    target_os = "netbsd"
 ))]
 fn release_reverse<T>(values: &mut Vec<T>, mut release: impl FnMut(T)) {
     for value in values.drain(..).rev() {
