@@ -115,7 +115,14 @@ fn search_dirs() -> Vec<PathBuf> {
             push_unique(&mut search_dirs, PathBuf::from("/lib").join(multiarch));
         }
     }
-    for path in ["/usr/local/lib", "/usr/lib64", "/lib64", "/usr/lib", "/lib"] {
+    for path in [
+        "/usr/local/lib",
+        "/usr/pkg/lib",
+        "/usr/lib64",
+        "/lib64",
+        "/usr/lib",
+        "/lib",
+    ] {
         push_unique(&mut search_dirs, PathBuf::from(path));
     }
     search_dirs
