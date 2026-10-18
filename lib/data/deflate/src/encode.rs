@@ -873,7 +873,8 @@ fn find_matches(
     Matches { starts, list }
 }
 
-fn log2(x: f32) -> f32 {
+/// Approximates `log2(x)` for positive `x`; cost estimates tolerate the small error.
+fn approx_log2(x: f32) -> f32 {
     // Exponent plus a quadratic fit of the mantissa, accurate to about 0.005.
     let bits = x.to_bits();
     let exponent = ((bits >> 23) & 0xff) as i32 - 128;
@@ -890,13 +891,13 @@ struct Costs {
 
 /// Bits per symbol under the entropy of `freqs`.
 fn entropy<const N: usize>(freqs: &[u32; N]) -> [f32; N] {
-    let total = log2(freqs.iter().sum::<u32>().max(1) as f32);
+    let total = approx_log2(freqs.iter().sum::<u32>().max(1) as f32);
     // Unused symbols cost a bit more than a symbol seen once.
     freqs.map(|freq| {
         if freq == 0 {
             total + 1.0
         } else {
-            total - log2(freq as f32)
+            total - approx_log2(freq as f32)
         }
     })
 }
