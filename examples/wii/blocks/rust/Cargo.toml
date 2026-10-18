@@ -8,6 +8,9 @@ edition = "2024"
 [build-dependencies]
 gxtexconv = { path = "../../../../lib/graphics/gxtexconv" }
 
+[patch.crates-io]
+crc = { path = "../../../../lib/data/crc" }
+
 # Unoptimized code is too slow for the Wii
 [profile.dev]
 opt-level = "s"
