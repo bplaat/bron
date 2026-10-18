@@ -9,6 +9,7 @@ use alloc::vec::Vec;
 use core::time::Duration;
 
 use crc::{CRC_32_ISO_HDLC, Crc};
+use deflate::Level;
 
 use super::{
     Area, Bitmap, Budget, ColorSpace, DecodeError, EncodeError, EncodingStyle, Format, Frame,
@@ -585,22 +586,23 @@ impl Header {
             }
         }
         budget.claim(expected)?;
-        // Decompress into an exactly sized, fallibly allocated buffer; no unbounded growth.
-        let mut raw = Vec::new();
-        raw.try_reserve_exact(expected)
-            .map_err(|_| DecodeError::ImageTooLarge)?;
-        raw.resize(expected, 0);
-        let mut inflater = miniz_oxide::inflate::core::DecompressorOxide::new();
-        // Chunk CRCs already cover the compressed stream, so skip the redundant Adler-32.
-        let flags = miniz_oxide::inflate::core::inflate_flags::TINFL_FLAG_PARSE_ZLIB_HEADER
-            | miniz_oxide::inflate::core::inflate_flags::TINFL_FLAG_USING_NON_WRAPPING_OUTPUT_BUF
-            | miniz_oxide::inflate::core::inflate_flags::TINFL_FLAG_IGNORE_ADLER32;
-        let (status, consumed, written) =
-            miniz_oxide::inflate::core::decompress(&mut inflater, compressed, &mut raw, 0, flags);
-        if status != miniz_oxide::inflate::TINFLStatus::Done
-            || consumed != compressed.len()
-            || written != expected
-        {
+        // Chunk CRCs already cover the compressed stream, so the Adler-32 trailer must be
+        // present but is not verified.
+        let [cmf, flg, ..] = *compressed else {
+            return Err(DecodeError::InvalidData);
+        };
+        let body = compressed
+            .get(2..compressed.len().wrapping_sub(4))
+            .ok_or(DecodeError::InvalidData)?;
+        if cmf & 0x0f != 8 || flg & 0x20 != 0 || u16::from_be_bytes([cmf, flg]) % 31 != 0 {
+            return Err(DecodeError::InvalidData);
+        }
+        // Decompression allocates fallibly and never beyond the expected size.
+        let mut raw = deflate::decompress(body, expected).map_err(|error| match error {
+            deflate::Error::OutOfMemory => DecodeError::ImageTooLarge,
+            _ => DecodeError::InvalidData,
+        })?;
+        if raw.len() != expected {
             return Err(DecodeError::InvalidData);
         }
         let mut pixels = budget.zeroed(pixel_len(width as u32, height as u32)?)?;
@@ -1083,7 +1085,7 @@ fn png_brute_filter(
             trial.clear();
             trial.extend_from_slice(context);
             trial.extend_from_slice(scratch);
-            miniz_oxide::deflate::compress_to_vec(trial, 3).len()
+            deflate::compress(trial, Level::Fast).len()
         })
         .expect("PNG has filters")
 }
@@ -1187,8 +1189,10 @@ fn compressed_frame(
         color.channels()
     };
     let mut best: Option<Vec<u8>> = None;
-    let mut consider = |data: &[u8], level| {
-        let candidate = miniz_oxide::deflate::compress_to_vec_zlib(data, level);
+    // Candidates compete at the default level; max compression crunches only the final
+    // winner in `encode`.
+    let mut consider = |data: &[u8]| {
+        let candidate = deflate::zlib_compress(data, Level::Default);
         if best
             .as_ref()
             .is_none_or(|best| candidate.len() < best.len())
@@ -1198,25 +1202,22 @@ fn compressed_frame(
     };
     let msad = |row: &[u8], previous: &[u8], _: &[u8]| png_best_filter(row, previous, bpp);
     if style == EncodingStyle::NormalCompression {
-        consider(&raw, 6);
+        consider(&raw);
         // Palette and packed samples rarely benefit from prediction. Unfiltered rows
         // also often win on screenshots, whose repeated content deflate matches directly.
         if color.depth() == 8 && !matches!(color, PngColor::Indexed(_)) {
-            consider(&png_filtered(&raw, row_len, bpp, msad)?, 6);
+            consider(&png_filtered(&raw, row_len, bpp, msad)?);
         }
         return Ok(best.expect("PNG has a candidate"));
     }
-    // Level 10 usually wins, but level 6 occasionally parses the likeliest candidates better.
-    consider(&raw, 10);
-    let filtered = png_filtered(&raw, row_len, bpp, msad)?;
-    consider(&filtered, 6);
-    consider(&filtered, 10);
+    consider(&raw);
+    consider(&png_filtered(&raw, row_len, bpp, msad)?);
     let mut scratch = Vec::with_capacity(row_len + 1);
     let mut trial = Vec::new();
     let brute = png_filtered(&raw, row_len, bpp, |row, previous, output| {
         png_brute_filter(row, previous, bpp, output, &mut scratch, &mut trial)
     })?;
-    consider(&brute, 10);
+    consider(&brute);
     Ok(best.expect("PNG has a candidate"))
 }
 
@@ -1230,6 +1231,47 @@ const fn png_palette_depth(len: usize) -> u8 {
 }
 
 pub(super) fn encode(
+    bitmap: &Bitmap,
+    animation: Option<(LoopCount, &[Frame])>,
+    style: EncodingStyle,
+) -> core::result::Result<Vec<u8>, EncodeError> {
+    let png = encode_smallest(bitmap, animation, style)?;
+    if style == EncodingStyle::MaxCompression {
+        crunch_streams(&png)
+    } else {
+        Ok(png)
+    }
+}
+
+// Crunching is slow, so it runs once on the image data streams of the chosen candidate.
+fn crunch_streams(png: &[u8]) -> core::result::Result<Vec<u8>, EncodeError> {
+    let mut out = png[..8].to_vec();
+    let mut pos = 8;
+    while pos < png.len() {
+        let len = u32::from_be_bytes(*png[pos..].first_chunk().expect("chunk length")) as usize;
+        let kind = png[pos + 4..].first_chunk::<4>().expect("chunk type");
+        let data = &png[pos + 8..pos + 8 + len];
+        // An fdAT stream follows its sequence number.
+        let prefix = match kind {
+            b"IDAT" => Some(0),
+            b"fdAT" => Some(4),
+            _ => None,
+        };
+        let crunched = prefix.and_then(|prefix| {
+            let raw = deflate::zlib_decompress(&data[prefix..], usize::MAX).ok()?;
+            let stream = deflate::zlib_compress(&raw, Level::Crunch);
+            (prefix + stream.len() < len).then(|| [&data[..prefix], &stream].concat())
+        });
+        match crunched {
+            Some(data) => write_chunk(&mut out, kind, &data)?,
+            None => out.extend_from_slice(&png[pos..pos + 12 + len]),
+        }
+        pos += 12 + len;
+    }
+    Ok(out)
+}
+
+fn encode_smallest(
     bitmap: &Bitmap,
     animation: Option<(LoopCount, &[Frame])>,
     style: EncodingStyle,
@@ -1505,14 +1547,20 @@ mod tests {
 
     #[test]
     fn max_png_uses_transparent_color_without_an_alpha_channel() {
+        // Varied colors make an alpha channel cost more than a tRNS chunk.
         let mut pixels = Vec::new();
-        for y in 0..32u8 {
-            for x in 0..32u8 {
-                pixels.extend_from_slice(&[x * 8, y * 8, x ^ y, 255]);
+        for y in 0..64u8 {
+            for x in 0..64u8 {
+                pixels.extend_from_slice(&[
+                    x.wrapping_mul(37) ^ y.wrapping_mul(11),
+                    x.wrapping_mul(y),
+                    x ^ y,
+                    255,
+                ]);
             }
         }
         pixels[3] = 0;
-        let bitmap = Bitmap::new(32, 32, pixels).unwrap();
+        let bitmap = Bitmap::new(64, 64, pixels).unwrap();
         let normal = encode(&bitmap, Format::Png).unwrap();
         let max = encode_with_options(&bitmap, Format::Png, smallest()).unwrap();
         assert!(max.windows(4).any(|bytes| bytes == b"tRNS"));
@@ -1539,7 +1587,7 @@ mod tests {
         let frames = [
             Frame::new(bitmap, Duration::from_millis(100)),
             Frame::new(
-                Bitmap::new(32, 32, second).unwrap(),
+                Bitmap::new(64, 64, second).unwrap(),
                 Duration::from_millis(100),
             ),
         ];
@@ -1603,7 +1651,7 @@ mod tests {
         chunk(
             &mut out,
             b"IDAT",
-            &miniz_oxide::deflate::compress_to_vec_zlib(scanlines, 6),
+            &deflate::zlib_compress(scanlines, Level::Default),
         );
         chunk(&mut out, b"IEND", &[]);
         out
@@ -1726,7 +1774,7 @@ mod tests {
             let mut out = png_header(2, 1, 8, 6);
             chunk(&mut out, b"acTL", &[0, 0, 0, 4, 0, 0, 0, 2]);
             let compressed =
-                miniz_oxide::deflate::compress_to_vec_zlib(&[0, 255, 0, 0, 255, 255, 0, 0, 255], 6);
+                deflate::zlib_compress(&[0, 255, 0, 0, 255, 255, 0, 0, 255], Level::Default);
             if excluded {
                 chunk(&mut out, b"IDAT", &compressed);
             }
@@ -1743,25 +1791,25 @@ mod tests {
             frame_control(&mut out, seq, [1, 1, 0, 0], 2, 1);
             seq += 1;
             let mut bytes = seq.to_be_bytes().to_vec();
-            bytes.extend_from_slice(&miniz_oxide::deflate::compress_to_vec_zlib(
+            bytes.extend_from_slice(&deflate::zlib_compress(
                 &[0, 0, 0, 255, 128],
-                6,
+                Level::Default,
             ));
             chunk(&mut out, b"fdAT", &bytes);
             seq += 1;
             frame_control(&mut out, seq, [1, 1, 1, 0], 1, 0);
             seq += 1;
             let mut bytes = seq.to_be_bytes().to_vec();
-            bytes.extend_from_slice(&miniz_oxide::deflate::compress_to_vec_zlib(
+            bytes.extend_from_slice(&deflate::zlib_compress(
                 &[0, 0, 255, 0, 255],
-                6,
+                Level::Default,
             ));
             chunk(&mut out, b"fdAT", &bytes);
             seq += 1;
             frame_control(&mut out, seq, [1, 1, 0, 0], 0, 1);
             seq += 1;
             let mut bytes = seq.to_be_bytes().to_vec();
-            bytes.extend_from_slice(&miniz_oxide::deflate::compress_to_vec_zlib(&[0; 5], 6));
+            bytes.extend_from_slice(&deflate::zlib_compress(&[0; 5], Level::Default));
             chunk(&mut out, b"fdAT", &bytes);
             chunk(&mut out, b"IEND", &[]);
             let image = decode(&out).expect("APNG");
@@ -1805,7 +1853,7 @@ mod tests {
 
     #[test]
     fn zlib_trailer_is_required_but_its_checksum_is_not_verified() {
-        let mut zlib = miniz_oxide::deflate::compress_to_vec_zlib(&[0, 1, 2, 3, 4], 6);
+        let mut zlib = deflate::zlib_compress(&[0, 1, 2, 3, 4], Level::Default);
         let len = zlib.len();
         zlib[len - 1] ^= 0xff;
         let png = |zlib: &[u8]| {
@@ -2047,7 +2095,7 @@ mod tests {
             write_chunk(
                 &mut png,
                 b"IDAT",
-                &miniz_oxide::deflate::compress_to_vec_zlib(&filtered, 6),
+                &deflate::zlib_compress(&filtered, Level::Default),
             )
             .unwrap();
             write_chunk(&mut png, b"IEND", &[]).unwrap();
