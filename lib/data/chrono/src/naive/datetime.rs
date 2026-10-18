@@ -90,7 +90,7 @@ impl FromStr for NaiveDateTime {
             .ok_or(ParseError)?
             .parse()
             .map_err(|_| ParseError)?;
-        if time_parts.next().is_some() || hour >= 24 || minute >= 60 || second >= 60 {
+        if time_parts.next().is_some() {
             return Err(ParseError);
         }
 

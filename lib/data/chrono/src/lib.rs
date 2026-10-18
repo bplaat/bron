@@ -6,7 +6,8 @@
 
 //! A minimal replacement for the [chrono](https://crates.io/crates/chrono) crate
 //!
-//! Disable default features for `no_std` support with `alloc`. The `now` feature requires `std`.
+//! Disable default features for `no_std` support with `alloc`. The `now` feature requires `std`,
+//! and the `clock` feature adds the [Local] timezone through the C library.
 
 #![cfg_attr(not(any(test, feature = "now")), no_std)]
 
@@ -18,11 +19,15 @@ use core::fmt::{self, Display, Formatter};
 pub use crate::datetime::DateTime;
 pub use crate::naive::date::NaiveDate;
 pub use crate::naive::datetime::NaiveDateTime;
-pub use crate::timezone::{TimeZone, Utc};
+#[cfg(feature = "clock")]
+pub use crate::timezone::Local;
+pub use crate::timezone::{LocalResult, TimeZone, Utc};
 
 mod consts;
 mod datetime;
 mod naive;
+#[cfg(feature = "clock")]
+mod sys;
 mod timezone;
 mod utils;
 

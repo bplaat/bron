@@ -15,4 +15,5 @@ serde = { version = "1.0", default-features = false, features = ["alloc", "deriv
 [features]
 default = ["now"]
 now = []
+clock = ["now"]
 serde = ["dep:serde"]
