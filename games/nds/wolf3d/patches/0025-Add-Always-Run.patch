@@ -90,7 +90,7 @@ index 44b8d70..a164a97 100644
  
          fread (&viewsize,sizeof(viewsize),1,file);
          fread (&mouseadjustment,sizeof(mouseadjustment),1,file);
--        // Older configs end before it and keep it on
+-        // Older configs end before it and keep it off
 +        // Older configs end before these and keep their defaults
          fread (&rumbleenabled,sizeof(rumbleenabled),1,file);
 +        fread (&alwaysrun,sizeof(alwaysrun),1,file);
@@ -183,8 +183,8 @@ index f0deb8b..9589ef0 100644
  //
  // control info
  //
--boolean mouseenabled, joystickenabled, rumbleenabled = true;
-+boolean mouseenabled, joystickenabled, rumbleenabled = true, alwaysrun;
+-boolean mouseenabled, joystickenabled, rumbleenabled;
++boolean mouseenabled, joystickenabled, rumbleenabled, alwaysrun;
  int dirscan[4] = { sc_UpArrow, sc_RightArrow, sc_DownArrow, sc_LeftArrow };
  int buttonscan[NUMBUTTONS] = { sc_Control, sc_Alt, sc_LShift, sc_Space, sc_1, sc_2, sc_3, sc_4 };
  int buttonmouse[4] = { bt_attack, bt_strafe, bt_use, bt_nobutton };

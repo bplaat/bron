@@ -34,7 +34,8 @@ Messages, Rumble and Sound Volume, with sliders for effects and music, which
 start at full volume; the DS volume slider sets the loudness.
 
 A Rumble Pak in the GBA slot of a DS rumbles when you take damage and when
-you fire, unless Rumble is turned off. Without one nothing changes.
+you fire once Rumble is turned on, it is off by default. Without one nothing
+changes.
 
 ## Building
 
@@ -237,6 +238,6 @@ of main RAM on a 16-bit bus at half its clock.
 - [0035](patches/0035-Add-the-DS-Rumble-Pak.patch): `i_ndsinput.c`
   rumbles a Rumble Pak in the GBA slot through `I_Tactile`, on taking
   damage and firing, switching it at 60 Hz from a tick task. Options gets
-  Rumble On/Off, kept as `rumble` in the config. Its label is cut from the
-  letters of other menu graphics, with a b pieced together from an r and a
-  d.
+  Rumble On/Off, kept as `rumble` in the config, off by default. Its label
+  is cut from the letters of other menu graphics, with a b pieced together
+  from an r and a d.

@@ -11,12 +11,12 @@ and on the DSi which has no GBA slot, nothing changes. The demos playing
 behind the menu don't rumble.
 
 Options always shows Rumble On/Off below Messages, kept as rumble in
-the config, it rumbles once turned on. There is no menu graphic for
-Rumble, so it is cut from the letters of others: the R of Read This!,
-the u, m, l and e of Sound Volume, the colon of Messages: and a b made
-of the top of the r of rough, its stem filling the notch, and the
-bottom of the d of Load. Graphics of other sizes than id's are not cut
-up, those get Rumble in the HUD font.
+the config, off by default, it rumbles once turned on. There is no
+menu graphic for Rumble, so it is cut from the letters of others: the R
+of Read This!, the u, m, l and e of Sound Volume, the colon of Messages:
+and a b made of the top of the r of rough, its stem filling the notch,
+and the bottom of the d of Load. Graphics of other sizes than id's are
+not cut up, those get Rumble in the HUD font.
 ---
  doomgeneric/d_main.c          |   1 +
  doomgeneric/doomgeneric_nds.c |   1 +
@@ -94,7 +94,7 @@ index 7cd93b1..bb20ec8 100644
 +// slot, on a DSi gbacartOpen fails.
 +#define RUMBLE_HZ 60
 +
-+int rumble = 1;
++int rumble = 0;
 +
 +static boolean rumble_inserted;
 +static volatile int rumble_ticks;

@@ -37,8 +37,8 @@ settings are kept as soon as Options is left. Nothing asks you to type:
 savegames are named after the level, also when they replace an older one.
 
 Game Options also has Rumble. A Rumble Pak in the GBA slot of a DS rumbles
-when you take damage and when you fire, unless Rumble is turned off, without
-one nothing changes.
+when you take damage and when you fire once Rumble is turned on, it is off by
+default, without one nothing changes.
 
 While the game loads the top screen shows its title screen, with the Duke
 Nukem 3D logo, and the touch screen the version it loads, the shareware,
@@ -224,4 +224,5 @@ of main RAM on a 16-bit bus at half its clock.
 - [0028](patches/0028-Add-the-DS-Rumble-Pak.patch): `input_nds.c` rumbles
   a Rumble Pak in the GBA slot on taking damage, watching the health of your
   sprite, and in `shoot` on firing, switching it at 60 Hz from a tick task.
-  Game Options gets Rumble On/Off, kept as `Rumble` in the config.
+  Game Options gets Rumble On/Off, kept as `Rumble` in the config,
+  off by default.
