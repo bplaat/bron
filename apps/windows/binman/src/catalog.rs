@@ -8,6 +8,7 @@ use std::collections::HashSet;
 use std::path::{Component, Path, PathBuf};
 
 use anyhow::{Result, anyhow, bail};
+use directories::BaseDirs;
 use serde::{Deserialize, Serialize};
 
 use crate::pattern;
@@ -103,22 +104,25 @@ pub(crate) enum PathRoot {
 impl PathRoot {
     pub(crate) fn resolve(self) -> Option<PathBuf> {
         let name = match self {
-            Self::UserProfile => "USERPROFILE",
-            Self::LocalAppData => "LOCALAPPDATA",
-            Self::RoamingAppData => "APPDATA",
+            Self::UserProfile => return absolute(BaseDirs::new()?.home_dir()),
+            Self::LocalAppData => return absolute(BaseDirs::new()?.data_local_dir()),
+            Self::RoamingAppData => return absolute(BaseDirs::new()?.data_dir()),
             Self::ProgramData => "ProgramData",
             Self::Windows => "WINDIR",
             Self::SystemDrive => "SystemDrive",
             Self::ProgramFiles => "ProgramFiles",
             Self::ProgramFilesX86 => "ProgramFiles(x86)",
         };
-        let value = std::env::var_os(name)?;
+        let mut value = std::env::var_os(name)?;
         if matches!(self, Self::SystemDrive) {
-            Some(PathBuf::from(format!("{}\\", value.to_string_lossy())))
-        } else {
-            Some(PathBuf::from(value))
+            value.push("\\");
         }
+        absolute(PathBuf::from(value))
     }
+}
+
+fn absolute(path: PathBuf) -> Option<PathBuf> {
+    path.is_absolute().then_some(path)
 }
 
 impl Catalog {

@@ -89,6 +89,7 @@ dependencies = [
  "basic-toml",
  "bwebview",
  "bwindow",
+ "directories",
  "rust-embed",
  "serde",
  "serde_json",
