@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: MIT
  */
 
+use std::fmt::Write;
 use std::rc::Rc;
 
 use crate::Window;
@@ -209,21 +210,46 @@ impl Webview {
 
     /// Send IPC message
     pub fn send_ipc_message(&mut self, message: impl AsRef<str>) {
-        let mut json = String::with_capacity(message.as_ref().len() + 2);
-        json.push('"');
-        for c in message.as_ref().chars() {
-            match c {
-                '"' => json.push_str("\\\""),
-                '\\' => json.push_str("\\\\"),
-                '\n' => json.push_str("\\n"),
-                '\r' => json.push_str("\\r"),
-                '\t' => json.push_str("\\t"),
-                c => json.push(c),
-            }
-        }
-        json.push('"');
+        let json = json_string(message.as_ref());
         self.evaluate_script(format!(
             "window.ipc.dispatchEvent(new MessageEvent('message',{{data:{json}}}));",
         ));
+    }
+}
+
+/// Encode a string as a JSON string literal that is also safe inside a JavaScript script
+fn json_string(value: &str) -> String {
+    let mut json = String::with_capacity(value.len() + 2);
+    json.push('"');
+    for c in value.chars() {
+        match c {
+            '"' => json.push_str("\\\""),
+            '\\' => json.push_str("\\\\"),
+            '\n' => json.push_str("\\n"),
+            '\r' => json.push_str("\\r"),
+            '\t' => json.push_str("\\t"),
+            // Other control characters are invalid in JSON, U+2028 and U+2029 end a line in
+            // older JavaScript
+            '\0'..='\x1f' | '\u{2028}' | '\u{2029}' => _ = write!(json, "\\u{:04x}", c as u32),
+            c => json.push(c),
+        }
+    }
+    json.push('"');
+    json
+}
+
+// MARK: Tests
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_json_string() {
+        assert_eq!(json_string("a\"b\\c"), r#""a\"b\\c""#);
+        assert_eq!(json_string("\n\r\t"), r#""\n\r\t""#);
+        assert_eq!(
+            json_string("\0\x1b\u{2028}\u{2029}é"),
+            r#""\u0000\u001b\u2028\u2029é""#
+        );
     }
 }
