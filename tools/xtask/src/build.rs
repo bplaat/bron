@@ -4,11 +4,12 @@
  * SPDX-License-Identifier: MIT
  */
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
 use std::{env, fs};
 
 use anyhow::{Context, Result, bail};
+use directories::{BaseDirs, UserDirs};
 use serde_json::Value;
 
 use crate::metadata::{InstallableApp, has_target_kind, packages, supports_os};
@@ -218,9 +219,9 @@ impl Xtask {
                 }
             }
             Os::Windows => {
-                let desktop = env::home_dir()
+                let desktop = UserDirs::new()
                     .context("home directory is not available")?
-                    .join("Desktop");
+                    .desktop_dir();
                 for app in apps {
                     run(Command::new("cargo").args(["build", "--release", "--bin", &app.package]))?;
                     fs::copy(
@@ -231,12 +232,11 @@ impl Xtask {
                 }
             }
             Os::Linux => {
-                let home = env::home_dir().context("home directory is not available")?;
-                let data = env::var_os("XDG_DATA_HOME")
-                    .filter(|data| !data.is_empty())
-                    .map(PathBuf::from)
-                    .unwrap_or_else(|| home.join(".local/share"));
-                let bin = home.join(".local/bin");
+                let base_dirs = BaseDirs::new().context("home directory is not available")?;
+                let data = base_dirs.data_dir();
+                let bin = base_dirs
+                    .executable_dir()
+                    .context("executable directory is not available")?;
                 let applications = data.join("applications");
                 let icons = data.join("icons/hicolor");
                 let mime_packages = data.join("mime/packages");
