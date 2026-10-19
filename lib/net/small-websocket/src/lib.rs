@@ -144,11 +144,7 @@ impl WebSocket {
             .headers
             .get("Sec-WebSocket-Accept")
             .ok_or(ConnectError)?;
-        let mut sha1 = Sha1::new();
-        sha1.update(random_key.as_bytes());
-        sha1.update(b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11");
-        let expected_accept = BASE64_STANDARD.encode(sha1.finalize());
-        if *websocket_accept != expected_accept {
+        if *websocket_accept != accept_key(&random_key) {
             return Err(ConnectError);
         }
 
@@ -487,6 +483,14 @@ fn build_frame(opcode: u8, payload: &[u8], role: Role) -> io::Result<Vec<u8>> {
     Ok(frame)
 }
 
+/// Compute the Sec-WebSocket-Accept value for a Sec-WebSocket-Key (RFC 6455 section 4.2.2)
+fn accept_key(key: &str) -> String {
+    let mut sha1 = Sha1::new();
+    sha1.update(key.as_bytes());
+    sha1.update(b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11");
+    BASE64_STANDARD.encode(sha1.finalize())
+}
+
 fn header_contains_token(value: Option<&str>, expected: &str) -> bool {
     value.is_some_and(|value| {
         value
@@ -537,12 +541,9 @@ pub fn upgrade(request: &Request, handler: impl FnOnce(WebSocket) + Send + 'stat
     let mut res = Response::with_status(Status::SwitchingProtocols)
         .header("Upgrade", "websocket")
         .header("Connection", "Upgrade");
-    let mut hasher = Sha1::new();
-    hasher.update(key.expect("checked above").as_bytes());
-    hasher.update(b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11");
     res = res.header(
         "Sec-WebSocket-Accept",
-        BASE64_STANDARD.encode(hasher.finalize()),
+        accept_key(key.expect("checked above")),
     );
     res = res.takeover(|reader| {
         let read_buffer = reader.buffer().to_vec();
@@ -677,10 +678,7 @@ mod test {
                 }
             }
 
-            let mut hasher = Sha1::new();
-            hasher.update(key.unwrap().as_bytes());
-            hasher.update(b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11");
-            let accept = BASE64_STANDARD.encode(hasher.finalize());
+            let accept = accept_key(&key.unwrap());
             let mut response = format!(
                 "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {accept}\r\n\r\n"
             )
