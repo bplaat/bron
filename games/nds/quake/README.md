@@ -29,13 +29,13 @@ The main menu has New Game, Load, Save, Options and Quit, which in a game ends
 it and goes back to the main menu, like End Game in DOOM. Options has Reset to
 defaults, Brightness, Sound Volume, Always Run, Crosshair and Rumble. A
 Rumble Pak in the GBA slot of a DS rumbles when you take damage and when you
-fire, unless Rumble is turned off, without one nothing changes. While a menu is
-open the touch screen keeps showing the game, with the options and while no
-game runs it shows the controls, centered on the console background. While
-Quake starts the touch screen shows its title in brown and loading dots like
-DOOM and Wolf3D, and the top screen the loading plaque, which also shows
-whenever a level loads, replacing the menu and game text until loading ends.
-The first load keeps this startup screen. Later loads show the brown console
+fire once Rumble is turned on, it is off by default, without one nothing
+changes. While a menu is open the touch screen keeps showing the game, with the
+options and while no game runs it shows the controls, centered on the console
+background. While Quake starts the touch screen shows its title in brown and
+loading dots like DOOM and Wolf3D, and the top screen the loading plaque, which
+also shows whenever a level loads, replacing the menu and game text until
+loading ends. The first load keeps this startup screen. Later loads show the brown console
 background and version on the bottom screen. Nothing asks you to type: savegames are named after
 the level and kills, and the player after the user name of the DS settings.
 
@@ -296,4 +296,4 @@ with 32 KiB of ITCM for code and 16 KiB of DTCM for data at full speed.
 - [0030](patches/0030-Add-the-DS-Rumble-Pak.patch): `in_nds.c` rumbles a
   Rumble Pak in the GBA slot on taking damage and on the kick of firing,
   switching it at 60 Hz from a tick task. Options gets Rumble, kept as the
-  `rumble` cvar in `config.cfg`.
+  `rumble` cvar in `config.cfg`, off by default.

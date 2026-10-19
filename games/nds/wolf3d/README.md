@@ -26,9 +26,9 @@ Disabled or Enabled, all enabled by default, the DS volume slider sets the
 loudness.
 
 Control has Rumble Enabled and Always Run. A Rumble Pak in the GBA slot of a
-DS rumbles when you take damage and when you fire a gun, unless Rumble
-Enabled is turned off, without one nothing changes. With Always Run, holding
-Y walks.
+DS rumbles when you take damage and when you fire a gun once Rumble
+Enabled is turned on, it is off by default, without one nothing changes.
+With Always Run, holding Y walks.
 
 The top screen shows the view at 1:1, the menus and pictures are scaled to
 fit. The touch screen looks like the status bar: the status bar itself at the
@@ -235,6 +235,7 @@ it uses, in `nds/`, so its own code is barely changed.
 - [0024](patches/0024-Add-the-DS-Rumble-Pak.patch): `wl_nds.c` rumbles a
   Rumble Pak in the GBA slot on taking damage and firing a gun, switching it
   at 60 Hz from a tick task. The main menu has Control again, between Sound
-  and Quit, with only Rumble Enabled, kept at the end of the config.
+  and Quit, with only Rumble Enabled, kept at the end of the config, off by
+  default.
 - [0025](patches/0025-Add-Always-Run.patch): Control gets Always Run, the
   run button then walks, also kept at the end of the config.

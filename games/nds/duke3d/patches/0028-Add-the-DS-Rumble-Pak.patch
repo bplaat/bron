@@ -12,7 +12,7 @@ pak, and on the DSi which has no GBA slot, nothing changes. The demos
 playing behind the menu don't rumble.
 
 Game Options has Rumble On/Off below Adult Mode, kept as Rumble in the
-config, it rumbles once turned on.
+config, off by default, it rumbles once turned on.
 ---
  Game/src/config.c |  3 +++
  Game/src/menues.c | 10 ++++++++-
@@ -175,7 +175,7 @@ index 5d1a4a5..b1e53e4 100644
 +#define RUMBLE_HZ       60
 +#define RUMBLE_MAX_MS   500
 +
-+int32_t nds_rumble = 1;
++int32_t nds_rumble = 0;
 +
 +static bool rumble_inserted;
 +static volatile int rumble_ticks;

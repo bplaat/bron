@@ -11,7 +11,7 @@ which has no GBA slot, nothing changes. The demos playing behind the
 menu don't rumble.
 
 Options always shows Rumble below Crosshair, kept as the rumble cvar in
-config.cfg, it rumbles once turned on.
+config.cfg, off by default, it rumbles once turned on.
 ---
  WinQuake/cl_parse.c |  7 +++++++
  WinQuake/in_nds.c   | 42 ++++++++++++++++++++++++++++++++++++++++--
@@ -81,7 +81,7 @@ index abb69c2..74c6f1e 100644
 +#define RUMBLE_HZ	60
 +#define RUMBLE_MAX_MS	500
 +
-+cvar_t	rumble = {"rumble", "1", true};
++cvar_t	rumble = {"rumble", "0", true};
 +
 +static qboolean	rumble_inserted;
 +static volatile int	rumble_ticks;

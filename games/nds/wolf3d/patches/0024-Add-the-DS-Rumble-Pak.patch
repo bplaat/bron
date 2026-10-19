@@ -11,7 +11,7 @@ GBA slot, nothing changes. The demos don't rumble.
 
 The main menu has Control again, between Sound and Quit, with only
 Rumble Enabled, always shown, which rumbles once enabled. It is kept at
-the end of the config right away, older configs keep it on.
+the end of the config right away, older configs keep it off.
 ---
  foreign.h    |  1 +
  nds/wl_nds.c | 39 +++++++++++++++++++++++++++++
@@ -175,7 +175,7 @@ index 9285b92..44b8d70 100644
  
          fread (&viewsize,sizeof(viewsize),1,file);
          fread (&mouseadjustment,sizeof(mouseadjustment),1,file);
-+        // Older configs end before it and keep it on
++        // Older configs end before it and keep it off
 +        fread (&rumbleenabled,sizeof(rumbleenabled),1,file);
  
          fclose (file);
@@ -365,7 +365,7 @@ index 541e65e..f0deb8b 100644
  // control info
  //
 -boolean mouseenabled, joystickenabled;
-+boolean mouseenabled, joystickenabled, rumbleenabled = true;
++boolean mouseenabled, joystickenabled, rumbleenabled;
  int dirscan[4] = { sc_UpArrow, sc_RightArrow, sc_DownArrow, sc_LeftArrow };
  int buttonscan[NUMBUTTONS] = { sc_Control, sc_Alt, sc_LShift, sc_Space, sc_1, sc_2, sc_3, sc_4 };
  int buttonmouse[4] = { bt_attack, bt_strafe, bt_use, bt_nobutton };
