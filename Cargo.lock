@@ -130,7 +130,6 @@ dependencies = [
  "directories",
  "dotenvy",
  "enable-ansi-support",
- "native-tls",
  "plist",
  "regex",
  "serde",
@@ -138,6 +137,7 @@ dependencies = [
  "small-http",
  "terminal_size",
  "threadpool",
+ "url",
  "zip",
 ]
 
