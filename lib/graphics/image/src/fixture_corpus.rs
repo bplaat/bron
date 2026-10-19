@@ -4,6 +4,9 @@
  * SPDX-License-Identifier: MIT
  */
 
+// Test fixtures under the including crate's tests/images and tests/reference, shared with the
+// vector crate through a #[path] module.
+
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -29,10 +32,8 @@ impl FixtureCorpus {
         files_with_extension(&self.references, extension)
     }
 
-    #[cfg(feature = "tinyvg")]
     pub(crate) fn reference_for(&self, image: &Path, suffix: &str) -> PathBuf {
-        let relative = self.relative_name(image);
-        let mut name = relative.as_os_str().to_owned();
+        let mut name = self.relative_name(image).as_os_str().to_owned();
         name.push(suffix);
         self.references.join(name)
     }

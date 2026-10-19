@@ -14,7 +14,8 @@ mod svg;
 #[cfg(feature = "tinyvg")]
 mod tinyvg;
 
-#[cfg(all(test, any(feature = "svg", feature = "tinyvg")))]
+#[cfg(all(test, feature = "tinyvg"))]
+#[path = "../../image/src/fixture_corpus.rs"]
 mod test_support;
 
 /// The interpretation of color channels. Alpha is always linear.
