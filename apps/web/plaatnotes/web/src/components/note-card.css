@@ -94,10 +94,7 @@ html.dark .note-action:hover {
     background-color: rgba(255, 255, 255, 0.15);
 }
 .note-action.is-pinned {
-    color: #eab308;
-}
-html.dark .note-action.is-pinned {
-    color: #facc15;
+    color: var(--color-highlight);
 }
 .note-action.is-hover-neutral:hover {
     color: var(--color-text-heading);
