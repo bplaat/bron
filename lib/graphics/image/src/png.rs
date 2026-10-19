@@ -587,21 +587,14 @@ impl Header {
         }
         budget.claim(expected)?;
         // Chunk CRCs already cover the compressed stream, so the Adler-32 trailer must be
-        // present but is not verified.
-        let [cmf, flg, ..] = *compressed else {
-            return Err(DecodeError::InvalidData);
-        };
-        let body = compressed
-            .get(2..compressed.len().wrapping_sub(4))
-            .ok_or(DecodeError::InvalidData)?;
-        if cmf & 0x0f != 8 || flg & 0x20 != 0 || u16::from_be_bytes([cmf, flg]) % 31 != 0 {
-            return Err(DecodeError::InvalidData);
-        }
-        // Decompression allocates fallibly and never beyond the expected size.
-        let mut raw = deflate::decompress(body, expected).map_err(|error| match error {
-            deflate::Error::OutOfMemory => DecodeError::ImageTooLarge,
-            _ => DecodeError::InvalidData,
-        })?;
+        // present but is not verified. Decompression allocates fallibly and never beyond the
+        // expected size.
+        let mut raw = deflate::zlib_decompress_unchecked(compressed, expected).map_err(
+            |error| match error {
+                deflate::Error::OutOfMemory => DecodeError::ImageTooLarge,
+                _ => DecodeError::InvalidData,
+            },
+        )?;
         if raw.len() != expected {
             return Err(DecodeError::InvalidData);
         }
