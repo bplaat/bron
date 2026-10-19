@@ -27,6 +27,7 @@ export type IpcType = 'ipc' | 'websocket';
 export class Ipc {
     type: IpcType;
     ws?: WebSocket;
+    pending = new Map<string, Promise<object>>();
 
     constructor() {
         if ('ipc' in window) {
@@ -80,13 +81,19 @@ export class Ipc {
         };
     }
 
+    // Requests of the same type are sent one at a time, so each response matches its request
     request(type: string, data: { [key: string]: any } = {}) {
-        return new Promise((resolve) => {
-            const listener = this.on(`${type}Response`, (data) => {
-                listener.remove();
-                resolve(data);
-            });
-            this.send(type, data);
-        });
+        const response = (this.pending.get(type) ?? Promise.resolve()).then(
+            () =>
+                new Promise<object>((resolve) => {
+                    const listener = this.on(`${type}Response`, (data) => {
+                        listener.remove();
+                        resolve(data);
+                    });
+                    this.send(type, data);
+                }),
+        );
+        this.pending.set(type, response);
+        return response;
     }
 }
