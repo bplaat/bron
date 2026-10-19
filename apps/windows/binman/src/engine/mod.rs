@@ -304,6 +304,18 @@ mod tests {
             rustup::toolchain_channel("[toolchain]\nprofile = \"default\"\nchannel = \"1.98\"\n"),
             Some("1.98".to_string())
         );
+        assert_eq!(
+            rustup::toolchain_channel("# pinned\n[toolchain]\nchannel = \"nightly\" # comment\n"),
+            Some("nightly".to_string())
+        );
+        assert_eq!(
+            rustup::toolchain_channel("stable\n"),
+            Some("stable".to_string())
+        );
+        assert_eq!(
+            rustup::toolchain_channel("[other]\nchannel = \"1.98\"\n"),
+            None
+        );
     }
 
     #[test]

@@ -18,6 +18,7 @@ workspace = true
 
 [dependencies]
 anyhow = "1"
+basic-toml = "0.1.10"
 bwindow = { path = "../../../lib/ui/bwindow", features = ["progress_bar"] }
 bwebview = { path = "../../../lib/ui/bwebview", features = [ "rust-embed"] }
 rust-embed = "8.12"

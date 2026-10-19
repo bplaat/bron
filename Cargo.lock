@@ -86,6 +86,7 @@ name = "binman"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "basic-toml",
  "bwebview",
  "bwindow",
  "rust-embed",
