@@ -37,10 +37,7 @@
     color: var(--color-text-subtle);
 }
 .save-status .is-saving {
-    color: #eab308;
-}
-html.dark .save-status .is-saving {
-    color: #facc15;
+    color: var(--color-highlight);
 }
 .save-status .is-saved {
     color: var(--color-success);

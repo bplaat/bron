@@ -32,6 +32,7 @@
     --color-accent-background-hover: #eab308;
     --color-accent-fg: #ffffff;
     --color-accent-text: #a16207;
+    --color-highlight: #eab308;
     --color-accent-soft-background: #fefce8;
     --color-badge-background: #fef9c3;
     --color-focus-ring: rgba(250, 204, 21, 0.55);
@@ -66,6 +67,7 @@ html.dark {
     --color-accent-background-hover: rgba(113, 63, 18, 0.6);
     --color-accent-fg: #facc15;
     --color-accent-text: #facc15;
+    --color-highlight: #facc15;
     --color-accent-soft-background: rgba(113, 63, 18, 0.3);
     --color-badge-background: rgba(113, 63, 18, 0.4);
     --color-focus-ring: rgba(234, 179, 8, 0.5);
@@ -150,10 +152,7 @@ a {
     color: var(--color-text-subtle);
 }
 .is-active {
-    color: #eab308;
-}
-html.dark .is-active {
-    color: #facc15;
+    color: var(--color-highlight);
 }
 .is-active-danger {
     color: var(--color-danger);
