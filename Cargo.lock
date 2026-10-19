@@ -1355,6 +1355,7 @@ version = "0.1.0"
 dependencies = [
  "regex",
  "serde",
+ "url",
  "validate_derive",
 ]
 

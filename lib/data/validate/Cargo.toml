@@ -12,11 +12,12 @@ workspace = true
 [dependencies]
 serde = { version = "1.0", features = ["derive"], optional = true }
 regex = { version = "1.13", default-features = false, optional = true }
+url = { version = "2.5", optional = true }
 validate_derive = { path = "../validate_derive", optional = true }
 
 [features]
 default = ["derive"]
 derive = ["dep:validate_derive"]
 email = ["dep:regex", "validate_derive?/email"]
-url = ["dep:regex", "validate_derive?/url"]
+url = ["dep:url", "validate_derive?/url"]
 serde = ["dep:serde"]
