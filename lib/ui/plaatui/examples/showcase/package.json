@@ -5,8 +5,8 @@
     "type": "module",
     "scripts": {
         "dev": "vite",
-        "build-debug": "tsc -p tsconfig.app.json --noEmit && vite build --base=/plaatui/ --minify=false",
-        "build-release": "tsc -p tsconfig.app.json --noEmit && vite build --base=/plaatui/",
+        "build-debug": "tsc -b && vite build --base=/plaatui/ --minify=false",
+        "build-release": "tsc -b && vite build --base=/plaatui/",
         "test": "npm exec --node-options=--no-deprecation -- playwright test"
     },
     "dependencies": {
