@@ -105,6 +105,21 @@ pub fn zlib_compress(data: &[u8], level: Level) -> Vec<u8> {
 
 /// Decompress a zlib stream that fills `data` exactly, producing at most `limit` bytes.
 pub fn zlib_decompress(data: &[u8], limit: usize) -> Result<Vec<u8>, Error> {
+    let (out, checksum) = zlib_inflate(data, limit)?;
+    if checksum != adler32(&out).to_be_bytes() {
+        return Err(Error::InvalidData);
+    }
+    Ok(out)
+}
+
+/// Decompress a zlib stream like [`zlib_decompress`], without verifying its Adler-32 checksum, for
+/// formats that already checksum the compressed stream, like PNG.
+pub fn zlib_decompress_unchecked(data: &[u8], limit: usize) -> Result<Vec<u8>, Error> {
+    zlib_inflate(data, limit).map(|(out, _)| out)
+}
+
+/// Decompress a zlib stream, returning the output and the 4-byte Adler-32 trailer.
+fn zlib_inflate(data: &[u8], limit: usize) -> Result<(Vec<u8>, [u8; 4]), Error> {
     let [cmf, flg, ..] = *data else {
         return Err(Error::InvalidData);
     };
@@ -117,11 +132,11 @@ pub fn zlib_decompress(data: &[u8], limit: usize) -> Result<Vec<u8>, Error> {
     }
     let mut out = Vec::new();
     let consumed = 2 + decode::decompress(&data[2..], limit, &mut out)?;
-    let checksum = data.get(consumed..).ok_or(Error::InvalidData)?;
-    if checksum != adler32(&out).to_be_bytes() {
-        return Err(Error::InvalidData);
-    }
-    Ok(out)
+    let checksum = data
+        .get(consumed..)
+        .and_then(|checksum| checksum.try_into().ok())
+        .ok_or(Error::InvalidData)?;
+    Ok((out, checksum))
 }
 
 /// Compute the Adler-32 checksum used by zlib.
