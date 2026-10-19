@@ -9,6 +9,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use serde::Deserialize;
+
 use super::system::trusted_executable;
 use super::{CleanupResult, cancellable_output, command};
 use crate::catalog::PathRoot::UserProfile;
@@ -17,39 +19,23 @@ fn executable() -> Option<PathBuf> {
     trusted_executable(UserProfile.resolve()?.join(".cargo/bin/rustup.exe"))
 }
 
-pub(super) fn toolchain_channel(contents: &str) -> Option<String> {
-    let contents = contents.trim();
-    if !contents.starts_with('[') {
-        return contents
-            .lines()
-            .next()
-            .map(str::trim)
-            .filter(|line| !line.is_empty())
-            .map(str::to_string);
-    }
+#[derive(Deserialize)]
+struct ToolchainFile {
+    toolchain: Toolchain,
+}
 
-    let mut in_toolchain = false;
-    for line in contents.lines() {
-        let line = line.split('#').next()?.trim();
-        if line.starts_with('[') {
-            in_toolchain = line == "[toolchain]";
-            continue;
-        }
-        if !in_toolchain {
-            continue;
-        }
-        let Some((key, value)) = line.split_once('=') else {
-            continue;
-        };
-        if key.trim() == "channel" {
-            return value
-                .trim()
-                .strip_prefix('"')
-                .and_then(|value| value.strip_suffix('"'))
-                .map(str::to_string);
-        }
+#[derive(Deserialize)]
+struct Toolchain {
+    channel: Option<String>,
+}
+
+pub(super) fn toolchain_channel(contents: &str) -> Option<String> {
+    if let Ok(file) = basic_toml::from_str::<ToolchainFile>(contents) {
+        return file.toolchain.channel;
     }
-    None
+    // Legacy rust-toolchain files only contain the channel name
+    let channel = contents.trim();
+    (!channel.is_empty() && !channel.contains(['\n', '[', '='])).then(|| channel.to_string())
 }
 
 pub(super) fn protect_channel(
