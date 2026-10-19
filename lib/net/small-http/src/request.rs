@@ -469,7 +469,7 @@ impl Request {
     }
 
     /// Write request to TCP stream
-    pub fn write_to_stream(mut self, stream: &mut dyn Write, keep_alive: bool) {
+    pub fn write_to_stream(&mut self, stream: &mut dyn Write, keep_alive: bool) {
         // Finish headers
         let host = self.url.host().expect("No host in URL");
         self.headers.insert(
@@ -532,7 +532,7 @@ impl Request {
     pub fn fetch(mut self) -> Result<Response, FetchError> {
         for _ in 0..=MAX_REDIRECTS {
             let mut stream = MaybeHttpsStream::connect(&self.url)?;
-            self.clone().write_to_stream(&mut stream, false);
+            self.write_to_stream(&mut stream, false);
             let res =
                 Response::read_from_stream(&mut stream).map_err(|e| FetchError(e.to_string()))?;
             if !matches!(
@@ -787,7 +787,7 @@ mod test {
 
     #[test]
     fn test_write_to_stream() {
-        let request = Request::get("http://localhost/").header("Host", "localhost");
+        let mut request = Request::get("http://localhost/").header("Host", "localhost");
 
         let mut buffer = Vec::new();
         request.write_to_stream(&mut buffer, false);
@@ -796,7 +796,7 @@ mod test {
 
     #[test]
     fn test_write_to_stream_preserves_connection_header() {
-        let request = Request::get("http://localhost/").header("Connection", "Upgrade");
+        let mut request = Request::get("http://localhost/").header("Connection", "Upgrade");
         let mut buffer = Vec::new();
 
         request.write_to_stream(&mut buffer, false);
@@ -808,7 +808,7 @@ mod test {
 
     #[test]
     fn test_write_to_stream_with_body() {
-        let request = Request::post("http://localhost/")
+        let mut request = Request::post("http://localhost/")
             .header("Host", "localhost")
             .body("Hello, world!");
 
@@ -852,7 +852,7 @@ mod test {
 
     #[test]
     fn test_write_to_stream_has_one_automatic_content_length() {
-        let request = Request::post("http://localhost/")
+        let mut request = Request::post("http://localhost/")
             .header("content-length", "999")
             .body("test");
         let mut buffer = Vec::new();
