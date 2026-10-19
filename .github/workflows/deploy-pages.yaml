@@ -23,7 +23,10 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
+      # Deploy the commit that the check run passed, not the latest master
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
       - uses: actions/cache@v5
         id: cache-rust-toolchain
         with:
