@@ -1224,6 +1224,7 @@ version = "0.2.1"
 dependencies = [
  "anyhow",
  "log",
+ "percent-encoding",
  "small-http",
 ]
 
