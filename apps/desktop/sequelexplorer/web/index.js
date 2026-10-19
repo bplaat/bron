@@ -56,7 +56,7 @@ function ipcRequest(type, data = {}) {
     });
 }
 
-function formatSqlValue(cell) {
+function formatSqlValue(cell, isMysql) {
     if (cell.kind === 'null') return 'NULL';
     if (cell.kind === 'integer' || cell.kind === 'float') return String(cell.value);
     if (cell.kind === 'blob') {
@@ -66,7 +66,9 @@ function formatSqlValue(cell) {
             .join('');
         return `X'${hex.toUpperCase()}'`;
     }
-    return `'${String(cell.value).replace(/'/g, "''")}'`;
+    // MySQL treats backslashes in string literals as escapes by default
+    const value = isMysql ? String(cell.value).replace(/\\/g, '\\\\') : String(cell.value);
+    return `'${value.replace(/'/g, "''")}'`;
 }
 
 function formatCellValue(cell, isBlob) {
@@ -492,7 +494,7 @@ PetiteVue.createApp({
     },
 
     formatSqlValue(cell) {
-        return formatSqlValue(cell);
+        return formatSqlValue(cell, this.connectionKind === 'mysql');
     },
 
     quoteIdentifier(identifier) {
