@@ -12,6 +12,7 @@ use std::error::Error;
 use std::sync::Arc;
 
 use anyhow::Result;
+use percent_encoding::percent_decode_str;
 use small_http::{Method, Request, Response, Status};
 
 // MARK: Handler
@@ -94,45 +95,25 @@ impl<T> Route<T> {
             .collect()
     }
 
-    fn is_match(&self, path: &str) -> bool {
-        let mut path_parts = path.split('/').filter(|part| !part.is_empty());
-        for part in &self.parts {
-            match part {
-                RoutePart::Static(expected) => {
-                    if let Some(actual) = path_parts.next() {
-                        if actual != *expected {
-                            return false;
-                        }
-                    } else {
-                        return false;
-                    }
-                }
-                RoutePart::Param(_) => {
-                    if path_parts.next().is_none() {
-                        return false;
-                    }
-                }
-            }
-        }
-        path_parts.next().is_none()
-    }
-
-    fn match_path(&self, path: &str) -> HashMap<String, String> {
+    /// Match a request path, returning the percent-decoded parameters
+    fn match_path(&self, path: &str) -> Option<HashMap<String, String>> {
         let mut path_parts = path.split('/').filter(|part| !part.is_empty());
         let mut params = HashMap::new();
         for part in &self.parts {
+            let actual = path_parts.next()?;
             match part {
-                RoutePart::Static(_) => {
-                    path_parts.next();
+                RoutePart::Static(expected) => {
+                    if actual != expected {
+                        return None;
+                    }
                 }
                 RoutePart::Param(name) => {
-                    if let Some(value) = path_parts.next() {
-                        params.insert(name.clone(), value.to_string());
-                    }
+                    let value = percent_decode_str(actual).decode_utf8_lossy();
+                    params.insert(name.clone(), value.into_owned());
                 }
             }
         }
-        params
+        path_parts.next().is_none().then_some(params)
     }
 
     fn has_same_shape(&self, other: &Self) -> bool {
@@ -444,20 +425,27 @@ impl<T: Clone> InnerRouter<T> {
     fn handle_inner(&self, req: &Request, ctx: &mut T) -> Result<Response> {
         // Match routes
         let path = req.url.path();
-        if let Some(first_match) = self.routes.iter().find(|route| route.is_match(path)) {
+        if let Some((first_match, params)) = self
+            .routes
+            .iter()
+            .find_map(|route| Some((route, route.match_path(path)?)))
+        {
             // Find a matching method among routes with the same parsed path shape. Parameter names
             // may differ between method-specific route registrations.
+            let mut req = req.clone();
             if let Some(route) = self.routes.iter().find(|route| {
                 route.has_same_shape(first_match) && route.methods.contains(&req.method)
             }) {
-                let mut req = req.clone();
-                req.params = route.match_path(path);
+                req.params = if std::ptr::eq(route, first_match) {
+                    params
+                } else {
+                    route.match_path(path).unwrap_or_default()
+                };
                 return route.handler.call(&req, ctx);
             }
 
             // Or run not allowed method handler
-            let mut req = req.clone();
-            req.params = first_match.match_path(path);
+            req.params = params;
             return self.not_allowed_method_handler.call(&req, ctx);
         }
 
@@ -593,6 +581,17 @@ mod test {
         let post = router.handle(&Request::post("http://localhost/users/20"));
         assert_eq!(post.status, Status::Ok);
         assert_eq!(post.body, b"20");
+    }
+
+    #[test]
+    fn test_parameters_are_percent_decoded() {
+        let router = RouterBuilder::new().get("/hello/:name", hello).build();
+        let res = router.handle(&Request::get(
+            "http://localhost/hello/Bassie%20van%20der%20Plaat",
+        ));
+        assert_eq!(res.body, b"Hello, Bassie van der Plaat!");
+        let res = router.handle(&Request::get("http://localhost/hello/caf%C3%A9"));
+        assert_eq!(res.body, "Hello, café!".as_bytes());
     }
 
     #[test]
