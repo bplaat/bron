@@ -6,13 +6,12 @@
 
 use std::fs::{File, OpenOptions};
 use std::io::{self, Cursor, Read, Write};
-use std::net::{TcpStream, ToSocketAddrs};
 use std::path::{Component, Path};
 use std::time::Duration;
 use std::{fs, thread};
 
-use native_tls::TlsConnector;
 use small_http::{Request, Response};
+use url::Url;
 use zip::ZipArchive;
 
 pub(crate) fn validate_jar(reader: impl Read + io::Seek) -> io::Result<()> {
@@ -116,85 +115,15 @@ fn download_urls(url: &str) -> Vec<String> {
 }
 
 fn fetch(url: &str) -> io::Result<Response> {
-    let mut current = url.to_owned();
-    for _ in 0..6 {
-        let request = Request::new()
-            .url(current.parse().map_err(io::Error::other)?)
-            .header("User-Agent", concat!("bob/", env!("CARGO_PKG_VERSION")));
-        let scheme = request.url.scheme();
-        if !matches!(scheme, "http" | "https") || request.url.userinfo().is_some() {
-            return Err(io::Error::other(
-                "expected an HTTP(S) URL without credentials",
-            ));
-        }
-        let host = request
-            .url
-            .host()
-            .ok_or_else(|| io::Error::other("URL has no host"))?;
-        let port = request
-            .url
-            .port()
-            .unwrap_or(if scheme == "https" { 443 } else { 80 });
-        let mut connected = Err(io::Error::other("host has no addresses"));
-        for address in (host, port).to_socket_addrs()? {
-            connected = TcpStream::connect_timeout(&address, Duration::from_secs(10));
-            if connected.is_ok() {
-                break;
-            }
-        }
-        let tcp = connected?;
-        tcp.set_read_timeout(Some(Duration::from_secs(30)))?;
-        tcp.set_write_timeout(Some(Duration::from_secs(30)))?;
-        let mut wire_request = Vec::new();
-        request.clone().write_to_stream(&mut wire_request, false);
-        let response = if scheme == "https" {
-            let mut stream = TlsConnector::new()
-                .map_err(io::Error::other)?
-                .connect(host, tcp)
-                .map_err(io::Error::other)?;
-            stream.write_all(&wire_request)?;
-            Response::read_from_stream(&mut stream)
-        } else {
-            let mut stream = tcp;
-            stream.write_all(&wire_request)?;
-            Response::read_from_stream(&mut stream)
-        }
-        .map_err(io::Error::other)?;
-        if !matches!(response.status as u16, 301 | 302 | 303 | 307 | 308) {
-            return Ok(response);
-        }
-        let location = response
-            .headers
-            .get("Location")
-            .ok_or_else(|| io::Error::other("redirect has no Location"))?;
-        let origin = current
-            .split_once("://")
-            .and_then(|(scheme, rest)| {
-                rest.split('/')
-                    .next()
-                    .map(|authority| format!("{scheme}://{authority}"))
-            })
-            .ok_or_else(|| io::Error::other("invalid redirect origin"))?;
-        let next = if location.starts_with("//") {
-            format!("{scheme}:{location}")
-        } else if location.starts_with('/') {
-            format!("{origin}{location}")
-        } else if location.contains("://") {
-            location.to_owned()
-        } else {
-            let directory = request
-                .url
-                .path()
-                .rsplit_once('/')
-                .map_or("", |(path, _)| path);
-            format!("{origin}{directory}/{location}")
-        };
-        if scheme == "https" && !next.starts_with("https://") {
-            return Err(io::Error::other("refusing HTTPS downgrade redirect"));
-        }
-        current = next;
+    let url: Url = url.parse().map_err(io::Error::other)?;
+    if url.userinfo().is_some() {
+        return Err(io::Error::other("expected a URL without credentials"));
     }
-    Err(io::Error::other("too many redirects"))
+    Request::new()
+        .url(url)
+        .header("User-Agent", concat!("bob/", env!("CARGO_PKG_VERSION")))
+        .fetch()
+        .map_err(io::Error::other)
 }
 
 pub(crate) fn extract_jar(source: &str, destination: &str) -> io::Result<()> {
