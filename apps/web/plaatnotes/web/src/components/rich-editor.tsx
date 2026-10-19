@@ -149,18 +149,11 @@ export function RichEditor({ value, onInput, placeholder, class: className, auto
         if (url) execCmd('createLink', url);
     }
 
-    function handleInlineCode() {
-        const sel = window.getSelection();
-        const text = sel?.toString() || 'code';
-        document.execCommand('insertHTML', false, `<code>${text}</code>`);
-        emit();
-    }
-
-    function handleCodeBlock() {
-        const sel = window.getSelection();
-        const text = sel?.toString() || 'code';
-        document.execCommand('insertHTML', false, `<pre><code>${text}</code></pre>`);
-        emit();
+    function insertCode(block: boolean) {
+        // Serialize through the DOM so the selected text is escaped, not parsed as HTML
+        const code = document.createElement('code');
+        code.textContent = window.getSelection()?.toString() || 'code';
+        execCmd('insertHTML', block ? `<pre>${code.outerHTML}</pre>` : code.outerHTML);
     }
 
     function togglePlainMode() {
@@ -216,10 +209,10 @@ export function RichEditor({ value, onInput, placeholder, class: className, auto
                             <FormatListNumberedIcon class="is-sm" />
                         </ToolbarButton>
                         <ToolbarSep />
-                        <ToolbarButton onClick={handleInlineCode} title={t('editor.code')}>
+                        <ToolbarButton onClick={() => insertCode(false)} title={t('editor.code')}>
                             <CodeTagsIcon class="is-sm" />
                         </ToolbarButton>
-                        <ToolbarButton onClick={handleCodeBlock} title={t('editor.code_block')}>
+                        <ToolbarButton onClick={() => insertCode(true)} title={t('editor.code_block')}>
                             <CodeBracesIcon class="is-sm" />
                         </ToolbarButton>
                         <ToolbarSep />
