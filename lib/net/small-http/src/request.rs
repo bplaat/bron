@@ -7,16 +7,17 @@
 use std::collections::HashMap;
 use std::error::Error;
 use std::fmt::{self, Display, Formatter};
-use std::io::{BufRead, Read, Write};
-use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream};
+use std::io::{self, BufRead, Read, Write};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::str::{self, FromStr};
 
 use url::Url;
 
-use crate::KEEP_ALIVE_TIMEOUT;
-use crate::enums::{Method, Version};
+use crate::client::MaybeHttpsStream;
+use crate::enums::{Method, Status, Version};
 use crate::header_map::HeaderMap;
 use crate::response::Response;
+use crate::{KEEP_ALIVE_TIMEOUT, MAX_REDIRECTS};
 
 // MARK: Request
 /// HTTP request
@@ -189,7 +190,7 @@ impl Request {
     /// Returns `Status::UnsupportedMediaType` if the Content-Type is missing or unsupported.
     /// Returns `Status::BadRequest` if the body cannot be deserialized.
     #[cfg(any(feature = "json", feature = "form"))]
-    pub fn parse_body<T: serde::de::DeserializeOwned>(&self) -> Result<T, crate::Status> {
+    pub fn parse_body<T: serde::de::DeserializeOwned>(&self) -> Result<T, Status> {
         let content_type = self
             .headers
             .get("Content-Type")
@@ -204,14 +205,12 @@ impl Request {
 
         match content_type.as_str() {
             #[cfg(feature = "json")]
-            "application/json" => {
-                serde_json::from_slice(body).map_err(|_| crate::Status::BadRequest)
-            }
+            "application/json" => serde_json::from_slice(body).map_err(|_| Status::BadRequest),
             #[cfg(feature = "form")]
             "application/x-www-form-urlencoded" => {
-                serde_urlencoded::from_bytes(body).map_err(|_| crate::Status::BadRequest)
+                serde_urlencoded::from_bytes(body).map_err(|_| Status::BadRequest)
             }
-            _ => Err(crate::Status::UnsupportedMediaType),
+            _ => Err(Status::UnsupportedMediaType),
         }
     }
 }
@@ -396,7 +395,7 @@ impl Request {
             }
             if content_length > 0 {
                 let mut buffer = vec![0; content_length];
-                std::io::stdin().read_exact(&mut buffer).map_err(|_| {
+                io::stdin().read_exact(&mut buffer).map_err(|_| {
                     InvalidRequestError(
                         "Can't read Content-Length amount of bytes from stdin".to_string(),
                     )
@@ -529,31 +528,52 @@ impl Request {
         }
     }
 
-    /// Fetch request with http client
-    pub fn fetch(self) -> Result<Response, FetchError> {
-        let host = self.url.host().ok_or(FetchError)?;
-        let is_https = self.url.scheme() == "https";
-        let port = self.url.port().unwrap_or(if is_https { 443 } else { 80 });
+    /// Fetch request with http client, following redirects
+    pub fn fetch(mut self) -> Result<Response, FetchError> {
+        for _ in 0..=MAX_REDIRECTS {
+            let mut stream = MaybeHttpsStream::connect(&self.url)?;
+            self.clone().write_to_stream(&mut stream, false);
+            let res =
+                Response::read_from_stream(&mut stream).map_err(|e| FetchError(e.to_string()))?;
+            if !matches!(
+                res.status,
+                Status::MovedPermanently
+                    | Status::Found
+                    | Status::SeeOther
+                    | Status::TemporaryRedirect
+                    | Status::PermanentRedirect
+            ) {
+                return Ok(res);
+            }
 
-        let tcp_address = if host.contains(':') {
-            format!("[{host}]:{port}")
-        } else {
-            format!("{host}:{port}")
-        };
-        let tcp = TcpStream::connect(tcp_address).map_err(|_| FetchError)?;
-
-        #[cfg(feature = "tls")]
-        if is_https {
-            use native_tls::TlsConnector;
-            let connector = TlsConnector::new().map_err(|_| FetchError)?;
-            let mut tls = connector.connect(host, tcp).map_err(|_| FetchError)?;
-            self.write_to_stream(&mut tls, false);
-            return Response::read_from_stream(&mut tls).map_err(|_| FetchError);
+            let location = res
+                .headers
+                .get("Location")
+                .ok_or_else(|| FetchError("Redirect has no Location header".to_string()))?;
+            let url = self
+                .url
+                .join(location)
+                .map_err(|e| FetchError(e.to_string()))?;
+            if self.url.scheme() == "https" && url.scheme() != "https" {
+                return Err(FetchError("Refusing HTTPS to HTTP redirect".to_string()));
+            }
+            if (url.scheme(), url.host(), url.port())
+                != (self.url.scheme(), self.url.host(), self.url.port())
+            {
+                self.headers.remove("Authorization");
+                self.headers.remove("Cookie");
+            }
+            if res.status == Status::SeeOther
+                || (matches!(res.status, Status::MovedPermanently | Status::Found)
+                    && self.method == Method::Post)
+            {
+                self.method = Method::Get;
+                self.body = None;
+                self.headers.remove("Content-Type");
+            }
+            self.url = url;
         }
-
-        let mut stream = tcp;
-        self.write_to_stream(&mut stream, false);
-        Response::read_from_stream(&mut stream).map_err(|_| FetchError)
+        Err(FetchError("Too many redirects".to_string()))
     }
 }
 
@@ -613,12 +633,19 @@ impl Display for InvalidRequestError {
 impl Error for InvalidRequestError {}
 
 // MARK: FetchError
+/// HTTP client fetch error
 #[derive(Debug)]
-pub struct FetchError;
+pub struct FetchError(pub(crate) String);
 
 impl Display for FetchError {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "Fetch error")
+        write!(f, "Fetch error: {}", self.0)
+    }
+}
+
+impl From<io::Error> for FetchError {
+    fn from(err: io::Error) -> Self {
+        Self(err.to_string())
     }
 }
 
@@ -632,7 +659,6 @@ mod test {
     use std::thread;
 
     use super::*;
-    use crate::enums::Status;
 
     fn fetch_from_local_server(response: &'static [u8]) -> Response {
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
@@ -641,7 +667,7 @@ mod test {
             .name("test-http-server".to_string())
             .spawn(move || {
                 let (stream, client_addr) = listener.accept().unwrap();
-                let mut reader = std::io::BufReader::new(stream);
+                let mut reader = io::BufReader::new(stream);
                 Request::read_from_reader(&mut reader, client_addr).unwrap();
                 let mut stream = reader.into_inner();
                 stream.write_all(response).unwrap();
@@ -696,7 +722,7 @@ mod test {
     #[test]
     fn test_read_chunked_request_trailers_before_pipelined_request() {
         let input = b"POST /first HTTP/1.1\r\nHost: localhost\r\nTransfer-Encoding: chunked\r\n\r\n4\r\ntest\r\n0\r\nX-Checksum: valid\r\n\r\nGET /second HTTP/1.1\r\nHost: localhost\r\n\r\n";
-        let mut reader = std::io::BufReader::new(&input[..]);
+        let mut reader = io::BufReader::new(&input[..]);
         let client_addr = (Ipv4Addr::LOCALHOST, 12345).into();
 
         let first = Request::read_from_reader(&mut reader, client_addr).unwrap();
@@ -855,5 +881,46 @@ mod test {
         );
         assert_eq!(res.status, Status::Ok);
         assert_eq!(res.body, "test".as_bytes());
+    }
+
+    #[test]
+    fn test_fetch_follows_redirects() {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = thread::Builder::new()
+            .name("test-http-server".to_string())
+            .spawn(move || {
+                let responses = [
+                    "HTTP/1.1 303 See Other\r\nLocation: next\r\nContent-Length: 0\r\n\r\n".to_string(),
+                    format!(
+                        "HTTP/1.1 307 Temporary Redirect\r\nLocation: http://localhost:{port}/final\r\nContent-Length: 0\r\n\r\n"
+                    ),
+                    "HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\ndone".to_string(),
+                ];
+                responses
+                    .map(|response| {
+                        let (stream, client_addr) = listener.accept().unwrap();
+                        let mut reader = io::BufReader::new(stream);
+                        let req = Request::read_from_reader(&mut reader, client_addr).unwrap();
+                        reader.into_inner().write_all(response.as_bytes()).unwrap();
+                        req
+                    })
+            })
+            .expect("Failed to spawn test HTTP server thread");
+
+        let res = Request::post(format!("http://127.0.0.1:{port}/start"))
+            .header("Authorization", "Bearer secret")
+            .body("data")
+            .fetch()
+            .unwrap();
+        assert_eq!(res.body, b"done");
+
+        let [start, next, last] = server.join().unwrap();
+        assert_eq!((start.method, start.url.path()), (Method::Post, "/start"));
+        assert_eq!((next.method, next.url.path()), (Method::Get, "/next"));
+        assert_eq!(next.body, None);
+        assert_eq!(next.headers.get("Authorization"), Some("Bearer secret"));
+        assert_eq!(last.url.path(), "/final");
+        assert_eq!(last.headers.get("Authorization"), None);
     }
 }

@@ -39,6 +39,9 @@ fn main() {
 }
 ```
 
+`Request::fetch` uses connect and read/write timeouts and follows up to 5 redirects. It refuses
+HTTPS to HTTP downgrades and drops `Authorization` and `Cookie` headers on cross-origin redirects.
+
 See the [examples](examples/) for many more examples.
 
 The multi-threaded server uses a scalable thread pool by default. Use
