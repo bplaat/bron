@@ -915,6 +915,7 @@ name = "plist"
 version = "1.10.0+patch"
 dependencies = [
  "base64",
+ "xmlparser",
 ]
 
 [[package]]

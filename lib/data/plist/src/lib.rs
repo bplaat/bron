@@ -12,6 +12,7 @@ use std::io::Write;
 use std::path::Path;
 
 use base64::prelude::*;
+use xmlparser::{ElementEnd, Token as XmlToken, Tokenizer};
 
 // MARK: Types
 /// A plist dictionary (ordered by key).
@@ -93,8 +94,7 @@ impl Value {
             return Err(Error("Reading binary plist is not supported".to_string()));
         }
         let text = std::str::from_utf8(&bytes).map_err(|e| Error(e.to_string()))?;
-        let tokens = tokenize(text);
-        parse_value(&tokens, &mut 0)
+        parse_value(&tokenize(text)?, &mut 0)
     }
 
     /// Write this value to a file as a binary plist.
@@ -340,90 +340,37 @@ enum Token {
     Text(String),
 }
 
-fn tokenize(input: &str) -> Vec<Token> {
+fn tokenize(input: &str) -> Result<Vec<Token>, Error> {
     let mut tokens = Vec::new();
-    let bytes = input.as_bytes();
-    let mut i = 0;
-
-    while i < bytes.len() {
-        if bytes[i] == b'<' {
-            i += 1;
-            if i >= bytes.len() {
-                break;
-            }
-
-            // Skip comments <!-- ... --> and declarations <!...>
-            if bytes[i] == b'!' {
-                if bytes[i..].starts_with(b"!--") {
-                    i += 3;
-                    while i + 2 < bytes.len() && !bytes[i..].starts_with(b"-->") {
-                        i += 1;
-                    }
-                    i += 3;
-                } else {
-                    while i < bytes.len() && bytes[i] != b'>' {
-                        i += 1;
-                    }
-                    i += 1;
-                }
-                continue;
-            }
-
-            // Skip processing instructions <?...?>
-            if bytes[i] == b'?' {
-                while i + 1 < bytes.len() && !bytes[i..].starts_with(b"?>") {
-                    i += 1;
-                }
-                i += 2;
-                continue;
-            }
-
-            let is_close = bytes[i] == b'/';
-            if is_close {
-                i += 1;
-            }
-
-            let start = i;
-            while i < bytes.len()
-                && bytes[i] != b'>'
-                && bytes[i] != b'/'
-                && !bytes[i].is_ascii_whitespace()
-            {
-                i += 1;
-            }
-            let name = input[start..i].to_string();
-
-            let mut is_self_close = false;
-            while i < bytes.len() && bytes[i] != b'>' {
-                if bytes[i] == b'/' {
-                    is_self_close = true;
-                }
-                i += 1;
-            }
-            if i < bytes.len() {
-                i += 1; // consume '>'
-            }
-
-            if is_close {
-                tokens.push(Token::Close(name));
-            } else if is_self_close {
-                tokens.push(Token::SelfClose(name));
-            } else {
-                tokens.push(Token::Open(name));
-            }
-        } else {
-            let start = i;
-            while i < bytes.len() && bytes[i] != b'<' {
-                i += 1;
-            }
-            let text = input[start..i].trim();
-            if !text.is_empty() {
-                tokens.push(Token::Text(xml_unescape(text)));
+    let mut name = "";
+    let mut text = String::new();
+    for token in Tokenizer::from(input) {
+        let token = token.map_err(|e| Error(e.to_string()))?;
+        // Flush text at element boundaries, dropping whitespace between elements
+        if matches!(
+            token,
+            XmlToken::ElementStart { .. } | XmlToken::ElementEnd { .. }
+        ) {
+            let text = std::mem::take(&mut text);
+            if !text.trim().is_empty() {
+                tokens.push(Token::Text(text));
             }
         }
+        match token {
+            XmlToken::ElementStart { local, .. } => name = local.as_str(),
+            XmlToken::ElementEnd { end, .. } => match end {
+                ElementEnd::Open => tokens.push(Token::Open(name.to_string())),
+                ElementEnd::Empty => tokens.push(Token::SelfClose(name.to_string())),
+                ElementEnd::Close(_, local) => {
+                    tokens.push(Token::Close(local.as_str().to_string()))
+                }
+            },
+            XmlToken::Text { text: t } => text.push_str(&xml_unescape(t.as_str())?),
+            XmlToken::Cdata { text: t, .. } => text.push_str(t.as_str()),
+            _ => {}
+        }
     }
-
-    tokens
+    Ok(tokens)
 }
 
 fn parse_value(tokens: &[Token], pos: &mut usize) -> Result<Value, Error> {
@@ -438,12 +385,12 @@ fn parse_value(tokens: &[Token], pos: &mut usize) -> Result<Value, Error> {
                     "array" => parse_array(tokens, pos),
                     "string" => {
                         let text = read_text(tokens, pos);
-                        consume_close(tokens, pos, "string");
+                        consume_close(tokens, pos, "string")?;
                         Ok(Value::String(text))
                     }
                     "integer" => {
                         let text = read_text(tokens, pos);
-                        consume_close(tokens, pos, "integer");
+                        consume_close(tokens, pos, "integer")?;
                         text.trim()
                             .parse::<i64>()
                             .map(Value::Integer)
@@ -451,7 +398,7 @@ fn parse_value(tokens: &[Token], pos: &mut usize) -> Result<Value, Error> {
                     }
                     "real" => {
                         let text = read_text(tokens, pos);
-                        consume_close(tokens, pos, "real");
+                        consume_close(tokens, pos, "real")?;
                         text.trim()
                             .parse::<f64>()
                             .map(Value::Real)
@@ -459,7 +406,7 @@ fn parse_value(tokens: &[Token], pos: &mut usize) -> Result<Value, Error> {
                     }
                     "data" => {
                         let text = read_text(tokens, pos);
-                        consume_close(tokens, pos, "data");
+                        consume_close(tokens, pos, "data")?;
                         let clean: String =
                             text.chars().filter(|c| !c.is_ascii_whitespace()).collect();
                         BASE64_STANDARD
@@ -499,11 +446,11 @@ fn parse_dict(tokens: &[Token], pos: &mut usize) -> Result<Value, Error> {
             Some(Token::Open(name)) if name == "key" => {
                 *pos += 1;
                 let key = read_text(tokens, pos);
-                consume_close(tokens, pos, "key");
+                consume_close(tokens, pos, "key")?;
                 let value = parse_value(tokens, pos)?;
                 dict.insert(key, value);
             }
-            None => break,
+            None => return Err(Error("Unexpected end of plist".to_string())),
             _ => {
                 *pos += 1;
             }
@@ -520,7 +467,7 @@ fn parse_array(tokens: &[Token], pos: &mut usize) -> Result<Value, Error> {
                 *pos += 1;
                 break;
             }
-            None => break,
+            None => return Err(Error("Unexpected end of plist".to_string())),
             _ => arr.push(parse_value(tokens, pos)?),
         }
     }
@@ -538,24 +485,53 @@ fn read_text(tokens: &[Token], pos: &mut usize) -> String {
     }
 }
 
-fn consume_close(tokens: &[Token], pos: &mut usize, tag: &str) {
-    if matches!(tokens.get(*pos), Some(Token::Close(n)) if n == tag) {
-        *pos += 1;
+fn consume_close(tokens: &[Token], pos: &mut usize, tag: &str) -> Result<(), Error> {
+    match tokens.get(*pos) {
+        Some(Token::Close(name)) if name == tag => {
+            *pos += 1;
+            Ok(())
+        }
+        _ => Err(Error(format!("Expected closing tag: {tag}"))),
     }
 }
 
-fn xml_unescape(s: &str) -> String {
-    s.replace("&amp;", "&")
-        .replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&quot;", "\"")
-        .replace("&apos;", "'")
+fn xml_unescape(s: &str) -> Result<String, Error> {
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(amp) = rest.find('&') {
+        out.push_str(&rest[..amp]);
+        let semi = rest[amp..]
+            .find(';')
+            .ok_or_else(|| Error("Unterminated entity reference".to_string()))?;
+        let entity = &rest[amp + 1..amp + semi];
+        let c = match entity {
+            "amp" => Some('&'),
+            "lt" => Some('<'),
+            "gt" => Some('>'),
+            "quot" => Some('"'),
+            "apos" => Some('\''),
+            _ => entity
+                .strip_prefix("#x")
+                .map(|hex| u32::from_str_radix(hex, 16))
+                .or_else(|| entity.strip_prefix('#').map(str::parse))
+                .and_then(Result::ok)
+                .and_then(char::from_u32),
+        };
+        out.push(c.ok_or_else(|| Error(format!("Unknown entity reference: &{entity};")))?);
+        rest = &rest[amp + semi + 1..];
+    }
+    out.push_str(rest);
+    Ok(out)
 }
 
 // MARK: Tests
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn parse(xml: &str) -> Result<Value, Error> {
+        parse_value(&tokenize(xml)?, &mut 0)
+    }
 
     fn write_binary(value: &Value) -> Vec<u8> {
         let mut bytes = Vec::new();
@@ -675,7 +651,7 @@ mod tests {
     <key>Flag</key><true/>
     <key>Count</key><integer>42</integer>
 </dict></plist>"#;
-        let Value::Dictionary(dict) = parse_value(&tokenize(xml), &mut 0).expect("parse") else {
+        let Value::Dictionary(dict) = parse(xml).expect("parse") else {
             panic!("expected dict");
         };
         assert_eq!(dict["Name"], Value::String("TestApp".to_string()));
@@ -687,7 +663,7 @@ mod tests {
     #[test]
     fn test_xml_false() {
         assert_eq!(
-            parse_value(&tokenize(r#"<plist><false/></plist>"#), &mut 0).expect("parse"),
+            parse(r#"<plist><false/></plist>"#).expect("parse"),
             Value::Boolean(false)
         );
     }
@@ -695,7 +671,7 @@ mod tests {
     #[test]
     fn test_xml_real() {
         let xml = format!(r#"<plist><real>{}</real></plist>"#, std::f64::consts::PI);
-        let Value::Real(f) = parse_value(&tokenize(&xml), &mut 0).expect("parse") else {
+        let Value::Real(f) = parse(&xml).expect("parse") else {
             panic!("expected real");
         };
         assert!((f - std::f64::consts::PI).abs() < 1e-10);
@@ -704,7 +680,7 @@ mod tests {
     #[test]
     fn test_xml_array() {
         let xml = r#"<plist><array><string>a</string><integer>3</integer><false/></array></plist>"#;
-        let Value::Array(arr) = parse_value(&tokenize(xml), &mut 0).expect("parse") else {
+        let Value::Array(arr) = parse(xml).expect("parse") else {
             panic!("expected array");
         };
         assert_eq!(arr.len(), 3);
@@ -716,9 +692,7 @@ mod tests {
     #[test]
     fn test_xml_data() {
         // "hello" in base64 = "aGVsbG8="
-        let Value::Data(d) =
-            parse_value(&tokenize(r#"<plist><data>aGVsbG8=</data></plist>"#), &mut 0)
-                .expect("parse")
+        let Value::Data(d) = parse(r#"<plist><data>aGVsbG8=</data></plist>"#).expect("parse")
         else {
             panic!("expected data");
         };
@@ -728,7 +702,7 @@ mod tests {
     #[test]
     fn test_xml_data_whitespace() {
         let xml = "<plist><data>\n\taGVs\n\tbG8=\n</data></plist>";
-        let Value::Data(d) = parse_value(&tokenize(xml), &mut 0).expect("parse") else {
+        let Value::Data(d) = parse(xml).expect("parse") else {
             panic!("expected data");
         };
         assert_eq!(d, b"hello");
@@ -736,7 +710,7 @@ mod tests {
 
     #[test]
     fn test_xml_data_invalid() {
-        assert!(parse_value(&tokenize("<plist><data>aGV!sbG8=</data></plist>"), &mut 0).is_err());
+        assert!(parse("<plist><data>aGV!sbG8=</data></plist>").is_err());
     }
 
     #[test]
@@ -744,7 +718,7 @@ mod tests {
         let xml = r#"<plist><dict>
             <key>inner</key><dict><key>x</key><integer>42</integer></dict>
         </dict></plist>"#;
-        let Value::Dictionary(outer) = parse_value(&tokenize(xml), &mut 0).expect("parse") else {
+        let Value::Dictionary(outer) = parse(xml).expect("parse") else {
             panic!("expected dict");
         };
         let Value::Dictionary(inner) = &outer["inner"] else {
@@ -755,10 +729,34 @@ mod tests {
 
     #[test]
     fn test_xml_unescape() {
-        assert_eq!(xml_unescape("a &amp; b"), "a & b");
-        assert_eq!(xml_unescape("&lt;tag&gt;"), "<tag>");
-        assert_eq!(xml_unescape("&quot;hi&quot;"), "\"hi\"");
-        assert_eq!(xml_unescape("&apos;x&apos;"), "'x'");
+        assert_eq!(xml_unescape("a &amp; b").expect("unescape"), "a & b");
+        assert_eq!(xml_unescape("&lt;tag&gt;").expect("unescape"), "<tag>");
+        assert_eq!(xml_unescape("&quot;hi&quot;").expect("unescape"), "\"hi\"");
+        assert_eq!(xml_unescape("&apos;x&apos;").expect("unescape"), "'x'");
+        assert_eq!(
+            xml_unescape("&#65;&#x42;&#x1F600;").expect("unescape"),
+            "AB\u{1F600}"
+        );
+        assert!(xml_unescape("&bogus;").is_err());
+        assert!(xml_unescape("a & b").is_err());
+    }
+
+    #[test]
+    fn test_xml_text() {
+        let xml = "<plist><array><string> a &amp; <![CDATA[<b>]]> </string><string></string></array></plist>";
+        assert_eq!(
+            parse(xml).expect("parse"),
+            Value::Array(vec![
+                Value::String(" a & <b> ".to_string()),
+                Value::String(String::new()),
+            ])
+        );
+    }
+
+    #[test]
+    fn test_xml_malformed() {
+        assert!(parse("<plist><string>a</plist>").is_err());
+        assert!(parse("<plist><string>a").is_err());
     }
 
     #[test]
@@ -812,7 +810,7 @@ mod tests {
         std::fs::remove_file(&path).ok();
         assert!(output.status.success(), "plutil conversion failed");
         let xml = std::str::from_utf8(&output.stdout).expect("utf8");
-        parse_value(&tokenize(xml), &mut 0).expect("parse xml")
+        parse(xml).expect("parse xml")
     }
 
     #[cfg(target_os = "macos")]
