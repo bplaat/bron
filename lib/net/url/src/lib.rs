@@ -6,9 +6,9 @@
 
 //! A minimal replacement for the [url](https://crates.io/crates/url) crate.
 //!
-//! This parser supports RFC 3986-style absolute URLs with an authority. It intentionally does not
-//! implement the full WHATWG URL Standard, internationalized domain names, or relative URL
-//! resolution.
+//! This parser supports RFC 3986-style absolute URLs with an authority and resolves relative
+//! references against them. It intentionally does not implement the full WHATWG URL Standard or
+//! internationalized domain names.
 
 #![cfg_attr(not(test), no_std)]
 
@@ -16,6 +16,7 @@ extern crate alloc;
 
 use alloc::format;
 use alloc::string::{String, ToString};
+use alloc::vec::Vec;
 use core::error::Error;
 use core::fmt::{self, Display, Formatter};
 use core::str::FromStr;
@@ -89,6 +90,56 @@ impl Url {
     pub fn fragment(&self) -> Option<&str> {
         self.fragment.as_deref()
     }
+
+    /// Resolve a URL reference against this URL (RFC 3986 section 5.2)
+    pub fn join(&self, input: &str) -> Result<Self, ParseError> {
+        let scheme_end = input.find([':', '/', '?', '#']);
+        if scheme_end.is_some_and(|end| {
+            input[end..].starts_with(':') && validate_scheme(&input[..end]).is_ok()
+        }) {
+            return input.parse();
+        }
+        if input.starts_with("//") {
+            return format!("{}:{input}", self.scheme).parse();
+        }
+
+        let mut origin = format!("{}://", self.scheme);
+        if let Some(authority) = &self.authority {
+            origin.push_str(&authority.to_string());
+        }
+        let query = self
+            .query
+            .as_ref()
+            .map_or(String::new(), |query| format!("?{query}"));
+        let reference = match input.chars().next() {
+            None => format!("{}{query}", self.path),
+            Some('#') => format!("{}{query}{input}", self.path),
+            Some('?') => format!("{}{input}", self.path),
+            Some('/') => input.to_string(),
+            Some(_) => {
+                let directory = self.path.rsplit_once('/').map_or("", |(path, _)| path);
+                format!("{directory}/{input}")
+            }
+        };
+        let (path, rest) =
+            reference.split_at(reference.find(['?', '#']).unwrap_or(reference.len()));
+        format!("{origin}{}{rest}", remove_dot_segments(path)).parse()
+    }
+}
+
+fn remove_dot_segments(path: &str) -> String {
+    let mut segments = Vec::new();
+    for segment in path.split('/').skip(1) {
+        match segment {
+            "." => {}
+            ".." => _ = segments.pop(),
+            segment => segments.push(segment),
+        }
+    }
+    if path.ends_with("/.") || path.ends_with("/..") {
+        segments.push("");
+    }
+    format!("/{}", segments.join("/"))
 }
 
 impl FromStr for Url {
@@ -322,17 +373,7 @@ impl Display for Url {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "{}://", self.scheme)?;
         if let Some(authority) = &self.authority {
-            if let Some(userinfo) = &authority.userinfo {
-                write!(f, "{userinfo}@")?;
-            }
-            if authority.is_ipv6 {
-                write!(f, "[{}]", authority.host)?;
-            } else {
-                write!(f, "{}", authority.host)?;
-            }
-            if let Some(port) = authority.port {
-                write!(f, ":{port}")?;
-            }
+            write!(f, "{authority}")?;
         }
         write!(f, "{}", self.path)?;
         if let Some(query) = &self.query {
@@ -340,6 +381,23 @@ impl Display for Url {
         }
         if let Some(fragment) = &self.fragment {
             write!(f, "#{fragment}")?;
+        }
+        Ok(())
+    }
+}
+
+impl Display for Authority {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        if let Some(userinfo) = &self.userinfo {
+            write!(f, "{userinfo}@")?;
+        }
+        if self.is_ipv6 {
+            write!(f, "[{}]", self.host)?;
+        } else {
+            write!(f, "{}", self.host)?;
+        }
+        if let Some(port) = self.port {
+            write!(f, ":{port}")?;
         }
         Ok(())
     }
@@ -407,6 +465,39 @@ mod test {
         ];
         for input in urls {
             assert!(Url::from_str(input).is_ok(), "URL should parse: {input}");
+        }
+    }
+
+    #[test]
+    fn joins_relative_references() {
+        // Examples from RFC 3986 section 5.4
+        let base = Url::parse("http://a/b/c/d;p?q").unwrap();
+        let cases = [
+            ("g:h", None),
+            ("https://example.com/x", Some("https://example.com/x")),
+            ("g", Some("http://a/b/c/g")),
+            ("./g", Some("http://a/b/c/g")),
+            ("g/", Some("http://a/b/c/g/")),
+            ("/g", Some("http://a/g")),
+            ("//g", Some("http://g/")),
+            ("?y", Some("http://a/b/c/d;p?y")),
+            ("g?y", Some("http://a/b/c/g?y")),
+            ("#s", Some("http://a/b/c/d;p?q#s")),
+            ("g#s", Some("http://a/b/c/g#s")),
+            ("", Some("http://a/b/c/d;p?q")),
+            (".", Some("http://a/b/c/")),
+            ("./", Some("http://a/b/c/")),
+            ("..", Some("http://a/b/")),
+            ("../g", Some("http://a/b/g")),
+            ("../..", Some("http://a/")),
+            ("../../../g", Some("http://a/g")),
+            ("/./g", Some("http://a/g")),
+            ("g/../h", Some("http://a/b/c/h")),
+            ("g?y/./x", Some("http://a/b/c/g?y/./x")),
+        ];
+        for (input, expected) in cases {
+            let joined = base.join(input).ok().map(|url| url.to_string());
+            assert_eq!(joined.as_deref(), expected, "join: {input}");
         }
     }
 
