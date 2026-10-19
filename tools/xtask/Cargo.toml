@@ -11,6 +11,7 @@ workspace = true
 
 [dependencies]
 anyhow = "1.0"
+directories = "6.0"
 regex = { version = "1.13", default-features = false, features = [
     "unicode-perl",
 ] }
