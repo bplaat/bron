@@ -76,6 +76,7 @@ pub struct Image {
     size: Size,
     pixel_size: Option<Size>,
     is_vector: bool,
+    is_animated: bool,
 }
 
 impl Image {
@@ -92,6 +93,146 @@ impl Image {
     /// Returns the dimensions of the largest bitmap representation, or `None` for vector images.
     pub const fn pixel_size(&self) -> Option<Size> {
         self.pixel_size
+    }
+
+    /// Returns whether the image is a still bitmap, whose pixels can be edited.
+    pub const fn is_editable(&self) -> bool {
+        !self.is_vector && !self.is_animated && self.pixel_size.is_some()
+    }
+
+    /// Wraps an initialized `NSImage`, such as one read from the pasteboard.
+    ///
+    /// # Safety
+    ///
+    /// `image` must be a valid, initialized `NSImage`.
+    pub unsafe fn from_native(image: Retained<Object>) -> Self {
+        // SAFETY: The caller guarantees image is a valid NSImage.
+        unsafe { finish_image(image) }
+    }
+
+    /// Creates a bitmap image from straight-alpha sRGB RGBA8 pixels.
+    pub fn from_pixels(width: u32, height: u32, pixels: &[u8]) -> Option<Self> {
+        Self::from_pixels_with_size(
+            width,
+            height,
+            pixels,
+            Size {
+                width: f64::from(width),
+                height: f64::from(height),
+            },
+        )
+    }
+
+    /// Creates a bitmap image from straight-alpha sRGB RGBA8 pixels that is shown at `size`, so a
+    /// smaller preview of an image can stand in for it.
+    pub fn from_pixels_with_size(
+        width: u32,
+        height: u32,
+        pixels: &[u8],
+        size: Size,
+    ) -> Option<Self> {
+        let native_image = make_image(width, height, image::ColorSpace::Srgb, pixels)?;
+        // SAFETY: make_image returns an owned, initialized NSImage.
+        let mut image = unsafe { finish_image(native_image) };
+        // SAFETY: The image owns its single representation.
+        let _: () = unsafe { msg_send![image.as_ptr(), setSize: size] };
+        image.size = size;
+        image.pixel_size = Some(size);
+        Some(image)
+    }
+
+    /// Renders the largest bitmap representation into straight-alpha sRGB RGBA8 pixels.
+    pub fn to_pixels(&self) -> Option<(u32, u32, Vec<u8>)> {
+        // SAFETY: The image owns its representations and their CGImages for this call. The bitmap
+        // context draws into the Rust buffer, which outlives it, and is released before return.
+        unsafe {
+            let cg_image = self.largest_cg_image();
+            if cg_image.is_null() {
+                return None;
+            }
+            let width = CGImageGetWidth(cg_image);
+            let height = CGImageGetHeight(cg_image);
+            let mut pixels = vec![0u8; width.checked_mul(height)?.checked_mul(4)?];
+            let color_space = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
+            if color_space.is_null() {
+                return None;
+            }
+            // kCGImageAlphaPremultipliedLast is 1: Core Graphics only draws premultiplied RGBA.
+            let context = CGBitmapContextCreate(
+                pixels.as_mut_ptr().cast(),
+                width,
+                height,
+                8,
+                width * 4,
+                color_space,
+                1,
+            );
+            CGColorSpaceRelease(color_space);
+            if context.is_null() {
+                return None;
+            }
+            let bounds = Rect {
+                origin: Point { x: 0.0, y: 0.0 },
+                size: Size {
+                    width: width as f64,
+                    height: height as f64,
+                },
+            };
+            CGContextDrawImage(context, bounds, cg_image);
+            CGContextRelease(context);
+            unpremultiply(&mut pixels);
+            Some((
+                u32::try_from(width).ok()?,
+                u32::try_from(height).ok()?,
+                pixels,
+            ))
+        }
+    }
+
+    // Returns the CGImage of the largest bitmap representation, owned by the image.
+    unsafe fn largest_cg_image(&self) -> *const c_void {
+        // SAFETY: The image owns its representations, which own the returned CGImage.
+        unsafe {
+            let representations: *mut Object = msg_send![self.as_ptr(), representations];
+            let count: usize = msg_send![representations, count];
+            let mut largest = (0, null());
+            for index in 0..count {
+                let representation: *mut Object = msg_send![representations, objectAtIndex: index];
+                let exposes_cg_image: Bool =
+                    msg_send![representation, respondsToSelector: sel!(CGImage)];
+                if !exposes_cg_image.as_bool() {
+                    continue;
+                }
+                let width: isize = msg_send![representation, pixelsWide];
+                let height: isize = msg_send![representation, pixelsHigh];
+                let area = width.max(0) * height.max(0);
+                if area > largest.0 {
+                    let cg_image: *const c_void = msg_send![representation, CGImage];
+                    largest = (area, cg_image);
+                }
+            }
+            if largest.1.is_null() {
+                msg_send![self.as_ptr(),
+                    CGImageForProposedRect: null::<c_void>(),
+                    context: null::<Object>(),
+                    hints: null::<Object>()
+                ]
+            } else {
+                largest.1
+            }
+        }
+    }
+}
+
+// Converts premultiplied RGBA8 pixels back to straight alpha.
+fn unpremultiply(pixels: &mut [u8]) {
+    for pixel in pixels.as_chunks_mut::<4>().0 {
+        let alpha = u32::from(pixel[3]);
+        if alpha != 0 && alpha != 255 {
+            for channel in &mut pixel[..3] {
+                *channel = ((u32::from(*channel) * 255 + alpha / 2) / alpha).min(255) as u8;
+            }
+        }
     }
 }
 
@@ -298,10 +439,11 @@ unsafe fn finish_image(image: Retained<Object>) -> Image {
     let size = unsafe { msg_send![&*image, size] };
     // SAFETY: image owns its representations. Asking for CGImage realizes existing pixel storage
     // on this worker without copying.
-    let pixel_size = unsafe {
+    let (pixel_size, is_animated) = unsafe {
         let representations: *mut Object = msg_send![&*image, representations];
         let count: usize = msg_send![representations, count];
         let mut pixel_size = None;
+        let mut is_animated = false;
         for index in 0..count {
             let representation: *mut Object = msg_send![representations, objectAtIndex: index];
             let width: isize = msg_send![representation, pixelsWide];
@@ -322,14 +464,26 @@ unsafe fn finish_image(image: Retained<Object>) -> Image {
             if exposes_cg_image.as_bool() {
                 let _: *const c_void = msg_send![representation, CGImage];
             }
+            let has_properties: Bool =
+                msg_send![representation, respondsToSelector: sel!(valueForProperty:)];
+            if has_properties.as_bool() {
+                let frames: *mut Object = msg_send![representation,
+                    valueForProperty: ns_string!("NSImageFrameCount")
+                ];
+                if !frames.is_null() {
+                    let frames: usize = msg_send![frames, unsignedIntegerValue];
+                    is_animated |= frames > 1;
+                }
+            }
         }
-        pixel_size
+        (pixel_size, is_animated)
     };
     Image {
         image,
         size,
         pixel_size,
         is_vector: false,
+        is_animated,
     }
 }
 
@@ -596,6 +750,49 @@ mod tests {
                 }
             });
         }
+    }
+
+    #[test]
+    fn pixels_round_trip_through_a_native_image() {
+        autoreleasepool(|_| {
+            let pixels = [
+                255, 0, 0, 255, 0, 255, 0, 128, 0, 0, 255, 0, 10, 20, 30, 255,
+            ];
+            let image = Image::from_pixels(2, 2, &pixels).expect("pixels should make an image");
+            assert!(image.is_editable());
+            let (width, height, actual) = image.to_pixels().expect("image should render");
+            assert_eq!((width, height), (2, 2));
+            for (actual, expected) in actual
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .zip(pixels.as_chunks::<4>().0)
+            {
+                assert_eq!(actual[3], expected[3]);
+                if expected[3] != 0 {
+                    for channel in 0..3 {
+                        assert!(actual[channel].abs_diff(expected[channel]) <= 2);
+                    }
+                }
+            }
+        });
+    }
+
+    #[test]
+    fn only_still_bitmaps_are_editable() {
+        autoreleasepool(|_| {
+            let still = decode_image(include_bytes!("../tests/fixtures/rgb.png").to_vec())
+                .expect("still image should decode");
+            assert!(still.is_editable());
+            let animated = decode_image(include_bytes!("../tests/fixtures/animated.gif").to_vec())
+                .expect("animation should decode");
+            assert!(!animated.is_editable());
+            let vector = decode_vector_image(
+                br#"<svg xmlns="http://www.w3.org/2000/svg" width="4" height="4"/>"#,
+            )
+            .expect("vector should decode");
+            assert!(!vector.is_editable());
+        });
     }
 
     #[test]

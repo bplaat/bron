@@ -25,14 +25,24 @@ use objc2::{class, define_class, msg_send, sel};
 
 use crate::browse::{file_url, neighbour_path, url_path};
 use crate::checkerboard::create_checkerboard_view;
+use crate::edit::Preset;
+use crate::editing::{EditState, can_paste_image, open_pasted_image};
+use crate::editor::ASPECT_RATIOS;
 use crate::headers::*;
 use crate::scroll_view::create_scroll_view;
-use crate::window_controller::{create_window_controller, show_media};
+use crate::window_controller::{create_window_controller, ours, show_media};
 
 mod browse;
 mod checkerboard;
+mod dialogs;
+mod edit;
+mod edit_panel;
+mod editing;
+mod editor;
 mod headers;
 mod scroll_view;
+mod selection_view;
+mod toolbar;
 mod window_controller;
 
 struct DocumentIvars {
@@ -40,15 +50,17 @@ struct DocumentIvars {
     content_version: Cell<Option<ContentVersion>>,
     browse_generation: Cell<u64>,
     reload_generation: Cell<u64>,
+    edit: RefCell<EditState>,
 }
 
 impl DocumentIvars {
-    const fn new() -> Self {
+    fn new() -> Self {
         Self {
             media: RefCell::new(None),
             content_version: Cell::new(None),
             browse_generation: Cell::new(0),
             reload_generation: Cell::new(0),
+            edit: RefCell::new(EditState::default()),
         }
     }
 }
@@ -120,12 +132,110 @@ define_class!(
 
         #[unsafe(method(nextImage:))]
         fn _next_image(&self, _: *mut Object) {
-            self.show_sibling(1);
+            self.browse(1);
         }
 
         #[unsafe(method(previousImage:))]
         fn _previous_image(&self, _: *mut Object) {
-            self.show_sibling(-1);
+            self.browse(-1);
+        }
+
+        // Browses on after the user saved or discarded the edits of the open image.
+        #[unsafe(method(document:shouldBrowse:contextInfo:))]
+        fn _document_should_browse(&self, _: *mut Object, should: Bool, offset: *mut c_void) {
+            if should.as_bool() {
+                self.show_sibling(offset as isize);
+            }
+        }
+
+        #[unsafe(method(dataOfType:error:))]
+        fn _data_of_type(&self, type_name: *mut Object, error: *mut c_void) -> *mut Object {
+            self.data_of_type(type_name, error)
+        }
+
+        #[unsafe(method(writableTypesForSaveOperation:))]
+        fn _writable_types_for_save_operation(&self, _: u64) -> *mut Object {
+            self.writable_types()
+        }
+
+        #[unsafe(method(fileNameExtensionForType:saveOperation:))]
+        fn _file_name_extension_for_type(&self, type_name: *mut Object, operation: u64) -> *mut Object {
+            let extension = Self::file_name_extension(type_name);
+            if extension.is_null() {
+                // SAFETY: NSDocument implements this method with the same signature.
+                unsafe {
+                    msg_send![super(self), fileNameExtensionForType: type_name, saveOperation: operation]
+                }
+            } else {
+                extension
+            }
+        }
+
+        // The save panel gets the format menu and quality slider of MacView instead.
+        #[unsafe(method(shouldRunSavePanelWithAccessoryView))]
+        const fn _should_run_save_panel_with_accessory_view(&self) -> Bool {
+            Bool::NO
+        }
+
+        #[unsafe(method(prepareSavePanel:))]
+        fn _prepare_save_panel(&self, panel: *mut Object) -> Bool {
+            // SAFETY: NSDocument implements this method.
+            let prepared: Bool = unsafe { msg_send![super(self), prepareSavePanel: panel] };
+            if prepared.as_bool() {
+                self.add_save_accessory(panel);
+            }
+            prepared
+        }
+
+        #[unsafe(method(saveFormatChanged:))]
+        fn _save_format_changed(&self, popup: *mut Object) {
+            self.save_format_changed(popup);
+        }
+
+        #[unsafe(method(fileTypeFromLastRunSavePanel))]
+        fn _file_type_from_last_run_save_panel(&self) -> *mut Object {
+            let chosen = self.save_panel_type();
+            if chosen.is_null() {
+                // SAFETY: NSDocument implements this method.
+                unsafe { msg_send![super(self), fileTypeFromLastRunSavePanel] }
+            } else {
+                chosen
+            }
+        }
+
+        // Saving an image in a format MacView cannot write asks where and how to save it.
+        #[unsafe(method(saveDocument:))]
+        fn _save_document(&self, sender: *mut Object) {
+            // SAFETY: NSDocument implements both save actions.
+            unsafe {
+                let file_type: *mut Object = msg_send![self, fileType];
+                if self.is_writable_type(file_type) {
+                    let _: () = msg_send![super(self), saveDocument: sender];
+                } else {
+                    let _: () = msg_send![self, saveDocumentAs: sender];
+                }
+            }
+        }
+
+        #[unsafe(method(revertToContentsOfURL:ofType:error:))]
+        fn _revert(&self, url: *mut Object, type_name: *mut Object, error: *mut c_void) -> Bool {
+            self.reset_editing();
+            self.ivars().content_version.set(None);
+            // SAFETY: NSDocument implements this method, which reads the file again.
+            unsafe { msg_send![super(self), revertToContentsOfURL: url, ofType: type_name, error: error] }
+        }
+
+        #[unsafe(method(validateUserInterfaceItem:))]
+        fn _validate_user_interface_item(&self, item: *mut Object) -> Bool {
+            // SAFETY: AppKit passes a live item and NSDocument validates its own actions.
+            unsafe {
+                let action: objc2::runtime::Sel = msg_send![item, action];
+                let saves = [sel!(saveDocument:), sel!(saveDocumentAs:), sel!(saveDocumentTo:)];
+                if saves.contains(&action) && !self.is_editable() {
+                    return Bool::NO;
+                }
+                msg_send![super(self), validateUserInterfaceItem: item]
+            }
         }
 
         #[unsafe(method(printOperationWithSettings:error:))]
@@ -166,7 +276,9 @@ impl Document {
         let prepared = unsafe {
             let this = self as *const Self as *mut Object;
             let url: *mut Object = msg_send![this, fileURL];
-            if url.is_null() {
+            let edited: Bool = msg_send![this, isDocumentEdited];
+            // Keep unsaved edits instead of replacing them with the changed file.
+            if url.is_null() || edited.as_bool() {
                 None
             } else {
                 let generation = self.ivars().reload_generation.get().wrapping_add(1);
@@ -203,6 +315,7 @@ impl Document {
                     if document.ivars().content_version.get() == Some(version) {
                         return;
                     }
+                    document.reset_editing();
                     document.install_media(media, version);
                     document.refresh_windows(false);
                 }
@@ -258,6 +371,25 @@ impl Document {
 
     fn is_current_browse(&self, generation: u64) -> bool {
         self.ivars().browse_generation.get() == generation
+    }
+
+    // Browses to a neighbouring image, first asking to save the edits of this one.
+    fn browse(&self, offset: isize) {
+        // SAFETY: AppKit calls actions on the main thread with a live document, and the selector
+        // matches the `document:shouldBrowse:contextInfo:` method of the document.
+        unsafe {
+            let this = self as *const Self as *mut Object;
+            let edited: Bool = msg_send![this, isDocumentEdited];
+            if edited.as_bool() {
+                let _: () = msg_send![this,
+                    canCloseDocumentWithDelegate: this,
+                    shouldCloseSelector: sel!(document:shouldBrowse:contextInfo:),
+                    contextInfo: offset as *mut c_void
+                ];
+            } else {
+                self.show_sibling(offset);
+            }
+        }
     }
 
     fn show_sibling(&self, offset: isize) {
@@ -339,6 +471,7 @@ impl Document {
                     if document.is_current_browse(generation) {
                         match result {
                             Ok((media, kind, version)) => {
+                                document.reset_editing();
                                 document.install_media(media, version);
                                 let _: () = msg_send![this, setFileURL: url];
                                 let _: () = msg_send![this, setFileType: kind.as_ptr()];
@@ -369,11 +502,8 @@ impl Document {
     //
     // The returned view owns one retain count.
     fn create_media_view(&self, frame: Rect) -> Retained<Object> {
-        let media = self.ivars().media.borrow();
-        let image = media
-            .as_ref()
-            .expect("cannot create a view without loaded media");
-        create_image_view(frame, image)
+        self.with_displayed_image(|image| create_image_view(frame, image))
+            .expect("cannot create a view without loaded media")
     }
 
     // Returns the size the window title shows, which is the stored size of a bitmap.
@@ -391,6 +521,7 @@ impl Document {
             return;
         };
         let title_size = self.title_size(media_size);
+        let canvas_size = self.canvas_size();
         // SAFETY: The document owns its window controllers, and each media view is released after
         // the scroll view of a window retains it.
         unsafe {
@@ -403,7 +534,13 @@ impl Document {
                     origin: Point { x: 0.0, y: 0.0 },
                     size: media_size,
                 });
-                show_media(controller, view.as_ptr(), title_size, zoom_to_fit);
+                show_media(
+                    controller,
+                    view.as_ptr(),
+                    title_size,
+                    zoom_to_fit,
+                    canvas_size,
+                );
             }
         }
     }
@@ -458,6 +595,12 @@ impl Document {
             let _: () = msg_send![&*window, setContentView: checkerboard.as_ptr()];
 
             let controller = create_window_controller(window.as_ptr(), title_size);
+            if let Some(controller) = ours(controller.as_ptr()) {
+                controller.install_overlay(media_view.as_ptr(), self.canvas_size());
+            }
+            // The clip view takes the keys that switch tools.
+            let clip_view: *mut Object = msg_send![&*scroll_view, contentView];
+            let _: Bool = msg_send![&*window, makeFirstResponder: clip_view];
             let this = self as *const Self as *mut Object;
             let _: () = msg_send![this, addWindowController: controller.as_ptr()];
         }
@@ -711,6 +854,18 @@ define_class!(
         const fn _should_terminate_after_last_window(&self, _: *mut Object) -> Bool {
             Bool::NO
         }
+
+        #[unsafe(method(newFromClipboard:))]
+        fn _new_from_clipboard(&self, _: *mut Object) {
+            open_pasted_image();
+        }
+
+        #[unsafe(method(validateMenuItem:))]
+        fn _validate_menu_item(&self, item: *mut Object) -> Bool {
+            // SAFETY: AppKit passes a live menu item.
+            let action: objc2::runtime::Sel = unsafe { msg_send![item, action] };
+            objc_bool(action != sel!(newFromClipboard:) || can_paste_image())
+        }
     }
 );
 
@@ -824,6 +979,93 @@ fn add_open_recent_menu(menu: &Object) {
     }
 }
 
+// Adds an item whose tag tells its action which entry of a list it stands for.
+fn add_tagged_item(menu: &Object, title: &str, action: objc2::runtime::Sel, tag: usize) {
+    // SAFETY: menu is a valid NSMenu and retains the item.
+    unsafe {
+        let item = menu_item(title, action, "", 0, null_mut());
+        let _: () = msg_send![&*item, setTag: tag as isize];
+        let _: () = msg_send![menu, addItem: item.as_ptr()];
+    }
+}
+
+// Adds the Image menu with the edits that change the whole image.
+fn create_image_menu(main_menu: &Object) {
+    let menu = add_menu(main_menu, "Image");
+    let command = NS_EVENT_MODIFIER_FLAG_COMMAND;
+    let command_option = NS_EVENT_MODIFIER_FLAG_COMMAND | NS_EVENT_MODIFIER_FLAG_OPTION;
+    for (title, action, key, modifiers) in [
+        (
+            "Adjust Light & Color...",
+            sel!(showAdjustments:),
+            "c",
+            command_option,
+        ),
+        ("Effects...", sel!(showEffects:), "e", command_option),
+    ] {
+        add_item(&menu, title, action, key, modifiers, null_mut());
+    }
+    let filters = add_menu(&menu, "Filters");
+    for (tag, preset) in Preset::ALL.iter().enumerate() {
+        add_tagged_item(&filters, preset.name(), sel!(applyPreset:), tag);
+    }
+    add_item(&menu, "Grayscale", sel!(applyGrayscale:), "", 0, null_mut());
+    add_item(
+        &menu,
+        "Invert Colors",
+        sel!(applyInvert:),
+        "",
+        0,
+        null_mut(),
+    );
+    add_separator(&menu);
+    for (title, action, key, modifiers) in [
+        ("Rotate Left", sel!(rotateLeft:), "l", command),
+        ("Rotate Right", sel!(rotateRight:), "r", command),
+        ("Rotate 180\u{b0}", sel!(rotateHalf:), "", 0),
+        ("Rotate by Angle...", sel!(rotateByAngle:), "", 0),
+        ("Straighten...", sel!(straighten:), "", 0),
+        ("Flip Horizontal", sel!(flipHorizontal:), "", 0),
+        ("Flip Vertical", sel!(flipVertical:), "", 0),
+    ] {
+        add_item(&menu, title, action, key, modifiers, null_mut());
+    }
+    add_separator(&menu);
+    add_item(
+        &menu,
+        "Crop to Selection",
+        sel!(cropToSelection:),
+        "k",
+        command,
+        null_mut(),
+    );
+    add_item(
+        &menu,
+        "Resize Image...",
+        sel!(resizeImage:),
+        "i",
+        command_option,
+        null_mut(),
+    );
+    add_item(
+        &menu,
+        "Resize Canvas...",
+        sel!(resizeCanvas:),
+        "",
+        0,
+        null_mut(),
+    );
+    add_separator(&menu);
+    add_item(
+        &menu,
+        "Reset to Original",
+        sel!(resetToOriginal:),
+        "",
+        0,
+        null_mut(),
+    );
+}
+
 fn add_separator(menu: &Object) {
     // SAFETY: menu is a valid NSMenu and separatorItem returns a valid shared menu item.
     unsafe {
@@ -898,12 +1140,11 @@ fn create_menu(application: *mut Object) {
             null_mut(),
         );
         add_open_recent_menu(&file_menu);
-        add_separator(&file_menu);
         add_item(
             &file_menu,
-            "Print...",
-            sel!(printDocument:),
-            "p",
+            "New from Clipboard",
+            sel!(newFromClipboard:),
+            "n",
             NS_EVENT_MODIFIER_FLAG_COMMAND,
             null_mut(),
         );
@@ -913,6 +1154,47 @@ fn create_menu(application: *mut Object) {
             "Close Window",
             sel!(performClose:),
             "w",
+            NS_EVENT_MODIFIER_FLAG_COMMAND,
+            null_mut(),
+        );
+        add_item(
+            &file_menu,
+            "Save",
+            sel!(saveDocument:),
+            "s",
+            NS_EVENT_MODIFIER_FLAG_COMMAND,
+            null_mut(),
+        );
+        add_item(
+            &file_menu,
+            "Save As...",
+            sel!(saveDocumentAs:),
+            "s",
+            NS_EVENT_MODIFIER_FLAG_COMMAND | NS_EVENT_MODIFIER_FLAG_SHIFT,
+            null_mut(),
+        );
+        add_item(
+            &file_menu,
+            "Export...",
+            sel!(saveDocumentTo:),
+            "e",
+            NS_EVENT_MODIFIER_FLAG_COMMAND | NS_EVENT_MODIFIER_FLAG_SHIFT,
+            null_mut(),
+        );
+        add_item(
+            &file_menu,
+            "Revert to Saved",
+            sel!(revertDocumentToSaved:),
+            "",
+            0,
+            null_mut(),
+        );
+        add_separator(&file_menu);
+        add_item(
+            &file_menu,
+            "Print...",
+            sel!(printDocument:),
+            "p",
             NS_EVENT_MODIFIER_FLAG_COMMAND,
             null_mut(),
         );
@@ -967,6 +1249,44 @@ fn create_menu(application: *mut Object) {
             NS_EVENT_MODIFIER_FLAG_COMMAND,
             null_mut(),
         );
+        add_item(
+            &edit_menu,
+            "Deselect",
+            sel!(deselectAll:),
+            "a",
+            NS_EVENT_MODIFIER_FLAG_COMMAND | NS_EVENT_MODIFIER_FLAG_SHIFT,
+            null_mut(),
+        );
+        let ratio_menu = add_menu(&edit_menu, "Select Aspect Ratio");
+        for (tag, (title, _)) in ASPECT_RATIOS.iter().enumerate() {
+            add_tagged_item(&ratio_menu, title, sel!(selectAspectRatio:), tag);
+        }
+        add_separator(&edit_menu);
+        add_item(
+            &edit_menu,
+            "Move Tool",
+            sel!(usePanTool:),
+            "",
+            0,
+            null_mut(),
+        );
+        add_item(
+            &edit_menu,
+            "Rectangular Selection",
+            sel!(useRectangleSelection:),
+            "",
+            0,
+            null_mut(),
+        );
+        add_item(
+            &edit_menu,
+            "Elliptical Selection",
+            sel!(useEllipseSelection:),
+            "",
+            0,
+            null_mut(),
+        );
+        create_image_menu(&main_menu);
         let view_menu = add_menu(&main_menu, "View");
         add_item(
             &view_menu,
@@ -1019,7 +1339,32 @@ fn create_menu(application: *mut Object) {
             null_mut(),
         );
         add_separator(&view_menu);
-        // AppKit renames the item to Exit Full Screen while a window is in full screen itself.
+        add_item(
+            &view_menu,
+            "Compare with Original",
+            sel!(toggleCompare:),
+            "y",
+            NS_EVENT_MODIFIER_FLAG_COMMAND,
+            null_mut(),
+        );
+        add_separator(&view_menu);
+        // AppKit renames these items to Hide Toolbar and Exit Full Screen when they apply.
+        add_item(
+            &view_menu,
+            "Show Toolbar",
+            sel!(toggleToolbarShown:),
+            "t",
+            NS_EVENT_MODIFIER_FLAG_COMMAND | NS_EVENT_MODIFIER_FLAG_OPTION,
+            null_mut(),
+        );
+        add_item(
+            &view_menu,
+            "Customize Toolbar...",
+            sel!(runToolbarCustomizationPalette:),
+            "",
+            0,
+            null_mut(),
+        );
         add_item(
             &view_menu,
             "Enter Full Screen",
@@ -1059,6 +1404,13 @@ fn main() {
         let _: Bool = msg_send![application,
             setActivationPolicy: NS_APPLICATION_ACTIVATION_POLICY_REGULAR
         ];
+        let defaults: *mut Object = msg_send![class!(NSUserDefaults), standardUserDefaults];
+        let quality: *mut Object = msg_send![class!(NSNumber), numberWithInteger: 90isize];
+        let registered: *mut Object = msg_send![class!(NSDictionary),
+            dictionaryWithObject: quality,
+            forKey: ns_string("JPEGQuality")
+        ];
+        let _: () = msg_send![defaults, registerDefaults: registered];
         let delegate: Retained<Object> = msg_send![AppDelegate::class(), new];
         let _: () = msg_send![application, setDelegate: delegate.as_ptr()];
         create_menu(application);

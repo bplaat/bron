@@ -86,6 +86,7 @@ fn strip_modifiers(s: &str) -> &str {
 // - Leading ObjC type modifiers (`r`=const, etc.) are stripped before comparison.
 // - Exact match (after stripping) always passes.
 // - `^v` matches any pointer (`^...`) and vice versa.
+// - Objects, blocks and classes (`@`, `@?`, `#`) match each other.
 // - Signed/unsigned variants of same-width integers are interchangeable.
 fn enc_match(actual: &str, expected: &str) -> bool {
     let actual = strip_modifiers(actual);
@@ -93,9 +94,10 @@ fn enc_match(actual: &str, expected: &str) -> bool {
     if actual == expected {
         return true;
     }
-    // Blocks and objects share a pointer ABI. Keep this leniency for untyped Cocoa APIs that
-    // expose blocks as objects.
-    if (actual == "@?" || actual == "@") && (expected == "@?" || expected == "@") {
+    // Blocks, classes and objects share a pointer ABI. Keep this leniency for untyped Cocoa APIs
+    // that expose blocks as objects, and for `class!`, which returns classes as objects.
+    let is_object = |encoding: &str| matches!(encoding, "@" | "@?" | "#");
+    if is_object(actual) && is_object(expected) {
         return true;
     }
     // Relax void-pointer: ^v matches any ^T and vice versa
@@ -273,6 +275,8 @@ mod test {
     fn test_enc_match_relaxed_rules() {
         assert!(enc_match("r^i", "^v"));
         assert!(enc_match("@?", "@"));
+        assert!(enc_match("#", "@"));
+        assert!(!enc_match("#", ":"));
         assert!(enc_match("Q", "q"));
         assert!(!enc_match("i", "d"));
         // BOOL must match the current target. Rust bool cannot accept every i8 bit pattern.

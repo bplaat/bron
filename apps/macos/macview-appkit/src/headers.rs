@@ -151,7 +151,6 @@ unsafe extern "C" {
 
     pub(crate) fn CGColorSpaceCreateWithName(name: *const c_void) -> *const c_void;
     pub(crate) fn CGColorSpaceRelease(color_space: *const c_void);
-    #[cfg(test)]
     pub(crate) fn CGBitmapContextCreate(
         data: *mut c_void,
         width: usize,
@@ -193,8 +192,8 @@ unsafe extern "C" {
     pub fn CGContextFillRect(context: *mut c_void, rectangle: Rect);
     pub(crate) fn CGContextReplacePathWithStrokedPath(context: *mut c_void);
     pub(crate) fn CGContextRestoreGState(context: *mut c_void);
-    #[cfg(test)]
     pub(crate) fn CGContextRelease(context: *mut c_void);
+    pub(crate) fn CGContextDrawImage(context: *mut c_void, rectangle: Rect, image: *const c_void);
     pub(crate) fn CGContextSaveGState(context: *mut c_void);
     pub(crate) fn CGContextScaleCTM(context: *mut c_void, x: f64, y: f64);
     pub(crate) fn CGContextSetLineCap(context: *mut c_void, line_cap: i32);
@@ -240,6 +239,8 @@ unsafe extern "C" {
         should_interpolate: bool,
         rendering_intent: i32,
     ) -> *const c_void;
+    pub(crate) fn CGImageGetHeight(image: *const c_void) -> usize;
+    pub(crate) fn CGImageGetWidth(image: *const c_void) -> usize;
     pub(crate) fn CGImageRelease(image: *const c_void);
     pub(crate) fn CGPathAddCurveToPoint(
         path: *mut c_void,

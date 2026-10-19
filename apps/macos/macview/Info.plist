@@ -8,7 +8,7 @@
             <key>CFBundleTypeName</key>
             <string>BMP Image</string>
             <key>CFBundleTypeRole</key>
-            <string>Viewer</string>
+            <string>Editor</string>
             <key>LSHandlerRank</key>
             <string>Alternate</string>
             <key>LSItemContentTypes</key>
@@ -22,7 +22,7 @@
             <key>CFBundleTypeName</key>
             <string>JFIF Image</string>
             <key>CFBundleTypeRole</key>
-            <string>Viewer</string>
+            <string>Editor</string>
             <key>LSHandlerRank</key>
             <string>Alternate</string>
             <key>LSItemContentTypes</key>
@@ -50,7 +50,7 @@
             <key>CFBundleTypeName</key>
             <string>QOI Image</string>
             <key>CFBundleTypeRole</key>
-            <string>Viewer</string>
+            <string>Editor</string>
             <key>LSHandlerRank</key>
             <string>Alternate</string>
             <key>LSItemContentTypes</key>
@@ -70,6 +70,48 @@
             <key>LSItemContentTypes</key>
             <array>
                 <string>org.tinyvg.tvg</string>
+            </array>
+            <key>NSDocumentClass</key>
+            <string>MacViewDocument</string>
+        </dict>
+        <dict>
+            <key>CFBundleTypeName</key>
+            <string>PNG Image</string>
+            <key>CFBundleTypeRole</key>
+            <string>Editor</string>
+            <key>LSHandlerRank</key>
+            <string>Alternate</string>
+            <key>LSItemContentTypes</key>
+            <array>
+                <string>public.png</string>
+            </array>
+            <key>NSDocumentClass</key>
+            <string>MacViewDocument</string>
+        </dict>
+        <dict>
+            <key>CFBundleTypeName</key>
+            <string>JPEG Image</string>
+            <key>CFBundleTypeRole</key>
+            <string>Editor</string>
+            <key>LSHandlerRank</key>
+            <string>Alternate</string>
+            <key>LSItemContentTypes</key>
+            <array>
+                <string>public.jpeg</string>
+            </array>
+            <key>NSDocumentClass</key>
+            <string>MacViewDocument</string>
+        </dict>
+        <dict>
+            <key>CFBundleTypeName</key>
+            <string>GIF Image</string>
+            <key>CFBundleTypeRole</key>
+            <string>Editor</string>
+            <key>LSHandlerRank</key>
+            <string>Alternate</string>
+            <key>LSItemContentTypes</key>
+            <array>
+                <string>com.compuserve.gif</string>
             </array>
             <key>NSDocumentClass</key>
             <string>MacViewDocument</string>
