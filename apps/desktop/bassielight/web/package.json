@@ -4,8 +4,8 @@
     "version": "0.1.0",
     "type": "module",
     "scripts": {
-        "build-debug": "tsc -p tsconfig.app.json --noEmit && vite build --mode debug --minify=false",
-        "build-release": "tsc -p tsconfig.app.json --noEmit && vite build --mode release"
+        "build-debug": "tsc -b && vite build --mode debug --minify=false",
+        "build-release": "tsc -b && vite build --mode release"
     },
     "dependencies": {
         "@mdi/js": "^7.4.47",
