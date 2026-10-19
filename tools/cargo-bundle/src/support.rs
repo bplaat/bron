@@ -17,6 +17,8 @@ pub(crate) fn cargo_build(path: &str) -> Command {
         "--manifest-path",
         &format!("{path}/Cargo.toml"),
     ]);
+    // Lets build scripts skip work the bundle already does, like embedding Info.plist
+    command.env("CARGO_BUNDLE", "1");
     command
 }
 

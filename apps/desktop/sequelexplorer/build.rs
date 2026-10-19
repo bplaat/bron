@@ -7,8 +7,20 @@
 #![doc = include_str!("README.md")]
 
 fn main() {
+    let target_os = std::env::var("CARGO_CFG_TARGET_OS").expect("CARGO_CFG_TARGET_OS not set");
+
+    // Embed Info.plist so unbundled runs (e.g. cargo run) still know the document types
+    println!("cargo:rerun-if-env-changed=CARGO_BUNDLE");
+    if target_os == "macos" && std::env::var_os("CARGO_BUNDLE").is_none() {
+        println!("cargo:rerun-if-changed=meta/macos/Info.plist");
+        println!(
+            "cargo:rustc-link-arg-bins=-Wl,-sectcreate,__TEXT,__info_plist,{}/meta/macos/Info.plist",
+            env!("CARGO_MANIFEST_DIR")
+        );
+    }
+
     // Compile Windows resources
-    if std::env::var("CARGO_CFG_TARGET_OS").expect("CARGO_CFG_TARGET_OS not set") == "windows" {
+    if target_os == "windows" {
         let manifest = format!(
             r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <assembly xmlns="urn:schemas-microsoft-com:asm.v1" xmlns:asmv3="urn:schemas-microsoft-com:asm.v3" manifestVersion="1.0">
