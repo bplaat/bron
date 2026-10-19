@@ -122,7 +122,7 @@ impl WebSocket {
         let mut random_key = [0u8; 16];
         getrandom::fill(&mut random_key).map_err(|_| ConnectError)?;
         let random_key = BASE64_STANDARD.encode(random_key);
-        let req = Request::get(url.as_ref())
+        let mut req = Request::get(url.as_ref())
             .header("Upgrade", "websocket")
             .header("Connection", "Upgrade")
             .header("Sec-WebSocket-Version", "13")
