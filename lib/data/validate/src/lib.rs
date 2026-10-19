@@ -99,7 +99,7 @@ pub fn is_valid_email(email: &str) -> bool {
 /// Validate url
 #[cfg(feature = "url")]
 pub fn is_valid_url(url: &str) -> bool {
-    regex::regex!(r"(https?://[\w./?=&-]+)").is_match(url)
+    url::Url::parse(url).is_ok_and(|url| matches!(url.scheme(), "http" | "https"))
 }
 
 // MARK: Tests
@@ -143,5 +143,7 @@ mod test {
         assert!(!is_valid_url("example"));
         assert!(!is_valid_url("example.com"));
         assert!(!is_valid_url("http://"));
+        assert!(!is_valid_url("foo http://example.com"));
+        assert!(!is_valid_url("ftp://example.com"));
     }
 }
