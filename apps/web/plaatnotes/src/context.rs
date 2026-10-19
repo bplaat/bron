@@ -16,6 +16,7 @@ use uuid::Uuid;
 use zeroize::Zeroizing;
 
 use crate::models::{Note, Session, User, UserRole};
+use crate::utils::password_hash;
 
 // MARK: Context
 #[derive(Clone)]
@@ -167,7 +168,7 @@ fn database_seed(database: &Connection) -> Result<()> {
             first_name: "Admin".to_string(),
             last_name: "Admin".to_string(),
             email: admin_email,
-            password: pbkdf2::password_hash(&admin_password),
+            password: password_hash(&admin_password),
             role: UserRole::Admin,
             ..Default::default()
         };
