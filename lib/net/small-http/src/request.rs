@@ -529,52 +529,61 @@ impl Request {
     }
 
     /// Fetch request with http client, following redirects
-    pub fn fetch(mut self) -> Result<Response, FetchError> {
-        for _ in 0..=MAX_REDIRECTS {
-            let mut stream = MaybeHttpsStream::connect(&self.url)?;
-            self.write_to_stream(&mut stream, false);
-            let res =
-                Response::read_from_stream(&mut stream).map_err(|e| FetchError(e.to_string()))?;
-            if !matches!(
-                res.status,
-                Status::MovedPermanently
-                    | Status::Found
-                    | Status::SeeOther
-                    | Status::TemporaryRedirect
-                    | Status::PermanentRedirect
-            ) {
-                return Ok(res);
-            }
-
-            let location = res
-                .headers
-                .get("Location")
-                .ok_or_else(|| FetchError("Redirect has no Location header".to_string()))?;
-            let url = self
-                .url
-                .join(location)
-                .map_err(|e| FetchError(e.to_string()))?;
-            if self.url.scheme() == "https" && url.scheme() != "https" {
-                return Err(FetchError("Refusing HTTPS to HTTP redirect".to_string()));
-            }
-            if (url.scheme(), url.host(), url.port())
-                != (self.url.scheme(), self.url.host(), self.url.port())
-            {
-                self.headers.remove("Authorization");
-                self.headers.remove("Cookie");
-            }
-            if res.status == Status::SeeOther
-                || (matches!(res.status, Status::MovedPermanently | Status::Found)
-                    && self.method == Method::Post)
-            {
-                self.method = Method::Get;
-                self.body = None;
-                self.headers.remove("Content-Type");
-            }
-            self.url = url;
-        }
-        Err(FetchError("Too many redirects".to_string()))
+    pub fn fetch(self) -> Result<Response, FetchError> {
+        fetch_with_redirects(self, |request| {
+            let mut stream = MaybeHttpsStream::connect(&request.url)?;
+            request.write_to_stream(&mut stream, false);
+            Response::read_from_stream(&mut stream).map_err(|e| FetchError(e.to_string()))
+        })
     }
+}
+
+/// Fetch a request with `fetch_once`, following redirects
+pub(crate) fn fetch_with_redirects(
+    mut request: Request,
+    mut fetch_once: impl FnMut(&mut Request) -> Result<Response, FetchError>,
+) -> Result<Response, FetchError> {
+    for _ in 0..=MAX_REDIRECTS {
+        let res = fetch_once(&mut request)?;
+        if !matches!(
+            res.status,
+            Status::MovedPermanently
+                | Status::Found
+                | Status::SeeOther
+                | Status::TemporaryRedirect
+                | Status::PermanentRedirect
+        ) {
+            return Ok(res);
+        }
+
+        let location = res
+            .headers
+            .get("Location")
+            .ok_or_else(|| FetchError("Redirect has no Location header".to_string()))?;
+        let url = request
+            .url
+            .join(location)
+            .map_err(|e| FetchError(e.to_string()))?;
+        if request.url.scheme() == "https" && url.scheme() != "https" {
+            return Err(FetchError("Refusing HTTPS to HTTP redirect".to_string()));
+        }
+        if (url.scheme(), url.host(), url.port())
+            != (request.url.scheme(), request.url.host(), request.url.port())
+        {
+            request.headers.remove("Authorization");
+            request.headers.remove("Cookie");
+        }
+        if res.status == Status::SeeOther
+            || (matches!(res.status, Status::MovedPermanently | Status::Found)
+                && request.method == Method::Post)
+        {
+            request.method = Method::Get;
+            request.body = None;
+            request.headers.remove("Content-Type");
+        }
+        request.url = url;
+    }
+    Err(FetchError("Too many redirects".to_string()))
 }
 
 fn read_trailers(

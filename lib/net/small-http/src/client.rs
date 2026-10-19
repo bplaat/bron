@@ -15,7 +15,7 @@ use native_tls::TlsStream;
 use url::Url;
 
 use crate::header_map::HeaderMap;
-use crate::request::{FetchError, Request};
+use crate::request::{FetchError, Request, fetch_with_redirects};
 use crate::response::Response;
 use crate::{CONNECT_TIMEOUT, IO_TIMEOUT, KEEP_ALIVE_TIMEOUT};
 
@@ -131,11 +131,13 @@ impl Client {
         }
     }
 
-    /// Fetch a request
+    /// Fetch a request, following redirects
     pub fn fetch(&mut self, mut request: Request) -> Result<Response, FetchError> {
-        // Add client headers to request
         self.apply_default_headers(&mut request);
+        fetch_with_redirects(request, |request| self.fetch_once(request))
+    }
 
+    fn fetch_once(&mut self, request: &mut Request) -> Result<Response, FetchError> {
         // Build connection key
         let host = request
             .url
@@ -264,5 +266,34 @@ mod test {
                 .fetch(Request::get(format!("http://{server_addr}/")))
                 .unwrap();
         }
+    }
+
+    #[test]
+    fn test_client_follows_redirects() {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let server_addr = listener.local_addr().unwrap();
+        let server = thread::Builder::new()
+            .name("test-http-server".to_string())
+            .spawn(move || {
+                let (stream, client_addr) = listener.accept().unwrap();
+                let mut reader = BufReader::new(stream);
+                let mut paths = Vec::new();
+                for response in [
+                    &b"HTTP/1.1 302 Found\r\nLocation: /next\r\nContent-Length: 0\r\n\r\n"[..],
+                    &b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\ndone"[..],
+                ] {
+                    let req = Request::read_from_reader(&mut reader, client_addr).unwrap();
+                    paths.push(req.url.path().to_string());
+                    reader.get_mut().write_all(response).unwrap();
+                }
+                paths
+            })
+            .expect("Failed to spawn test HTTP server thread");
+
+        let res = Client::new()
+            .fetch(Request::get(format!("http://{server_addr}/start")))
+            .unwrap();
+        assert_eq!(res.body, b"done");
+        assert_eq!(server.join().unwrap(), ["/start", "/next"]);
     }
 }
