@@ -48,25 +48,32 @@ function ipcSend(type, data = {}) {
     window.ipc.postMessage(JSON.stringify({ type, ...data }));
 }
 
-async function ipcRequest(type, data = {}) {
-    return new Promise((resolve, reject) => {
-        const listener = (event) => {
-            let message;
-            try {
-                message = JSON.parse(event.data);
-            } catch (e) {
-                window.ipc.removeEventListener('message', listener);
-                reject(e);
-                return;
-            }
-            if (message.type === `${type}Response`) {
-                window.ipc.removeEventListener('message', listener);
-                resolve(message);
-            }
-        };
-        window.ipc.addEventListener('message', listener);
-        ipcSend(type, data);
-    });
+// Requests of the same type are sent one at a time, so each response matches its request
+const pendingRequests = {};
+function ipcRequest(type, data = {}) {
+    const response = (pendingRequests[type] || Promise.resolve()).then(
+        () =>
+            new Promise((resolve, reject) => {
+                const listener = (event) => {
+                    let message;
+                    try {
+                        message = JSON.parse(event.data);
+                    } catch (e) {
+                        window.ipc.removeEventListener('message', listener);
+                        reject(e);
+                        return;
+                    }
+                    if (message.type === `${type}Response`) {
+                        window.ipc.removeEventListener('message', listener);
+                        resolve(message);
+                    }
+                };
+                window.ipc.addEventListener('message', listener);
+                ipcSend(type, data);
+            }),
+    );
+    pendingRequests[type] = response.catch(() => {});
+    return response;
 }
 
 // Font helpers
