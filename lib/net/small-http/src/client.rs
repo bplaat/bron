@@ -6,17 +6,18 @@
 
 use std::collections::HashMap;
 use std::io::{self, BufReader, Read, Write};
-use std::net::TcpStream;
+use std::net::{TcpStream, ToSocketAddrs};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 #[cfg(feature = "tls")]
 use native_tls::TlsStream;
+use url::Url;
 
-use crate::KEEP_ALIVE_TIMEOUT;
 use crate::header_map::HeaderMap;
 use crate::request::{FetchError, Request};
 use crate::response::Response;
+use crate::{CONNECT_TIMEOUT, IO_TIMEOUT, KEEP_ALIVE_TIMEOUT};
 
 // MARK: MaybeHttpsStream
 #[allow(clippy::large_enum_variant)]
@@ -27,6 +28,44 @@ pub(crate) enum MaybeHttpsStream {
 }
 
 impl MaybeHttpsStream {
+    /// Connect to the host of an HTTP(S) URL, trying each resolved address with a timeout
+    pub(crate) fn connect(url: &Url) -> Result<Self, FetchError> {
+        let host = url
+            .host()
+            .ok_or_else(|| FetchError("URL has no host".to_string()))?;
+        let is_https = match url.scheme() {
+            "http" => false,
+            "https" => true,
+            scheme => return Err(FetchError(format!("Unsupported URL scheme: {scheme}"))),
+        };
+        let port = url.port().unwrap_or(if is_https { 443 } else { 80 });
+
+        let mut result = Err(io::Error::other("Host has no addresses"));
+        for address in (host, port).to_socket_addrs()? {
+            result = TcpStream::connect_timeout(&address, CONNECT_TIMEOUT);
+            if result.is_ok() {
+                break;
+            }
+        }
+        let tcp = result?;
+        tcp.set_read_timeout(Some(IO_TIMEOUT))?;
+        tcp.set_write_timeout(Some(IO_TIMEOUT))?;
+
+        if is_https {
+            #[cfg(feature = "tls")]
+            {
+                let tls = native_tls::TlsConnector::new()
+                    .map_err(|e| FetchError(e.to_string()))?
+                    .connect(host, tcp)
+                    .map_err(|e| FetchError(e.to_string()))?;
+                return Ok(Self::Tls(tls));
+            }
+            #[cfg(not(feature = "tls"))]
+            return Err(FetchError("HTTPS requires the tls feature".to_string()));
+        }
+        Ok(Self::Plain(tcp))
+    }
+
     pub(crate) fn set_read_timeout(&self, dur: Option<Duration>) -> io::Result<()> {
         match self {
             Self::Plain(s) => s.set_read_timeout(dur),
@@ -97,31 +136,32 @@ impl Client {
         // Add client headers to request
         self.apply_default_headers(&mut request);
 
-        // Build connection key and address
-        let host = request.url.host().ok_or(FetchError)?.to_string();
+        // Build connection key
+        let host = request
+            .url
+            .host()
+            .ok_or_else(|| FetchError("URL has no host".to_string()))?;
         let is_https = request.url.scheme() == "https";
         let port = request
             .url
             .port()
             .unwrap_or(if is_https { 443 } else { 80 });
-        let tcp_addr = socket_address(&host, port);
-        let conn_key = format!("{}://{tcp_addr}", request.url.scheme());
+        let conn_key = format!("{}://{}", request.url.scheme(), socket_address(host, port));
 
         // Get or create connection
         let mut stream = self
             .connection_pool
             .lock()
             .expect("Can't lock connection pool")
-            .take_connection(&conn_key, &tcp_addr, is_https, &host)
-            .ok_or(FetchError)?;
+            .take_connection(&conn_key, &request.url)?;
         stream
             .get_ref()
-            .set_read_timeout(Some(KEEP_ALIVE_TIMEOUT))
-            .map_err(|_| FetchError)?;
+            .set_read_timeout(Some(KEEP_ALIVE_TIMEOUT))?;
 
         // Send request and read response
         request.write_to_stream(stream.get_mut(), true);
-        let res = Response::read_from_buffered_stream(&mut stream).map_err(|_| FetchError)?;
+        let res = Response::read_from_buffered_stream(&mut stream)
+            .map_err(|e| FetchError(e.to_string()))?;
 
         // Return connection
         self.connection_pool
@@ -150,42 +190,19 @@ impl ConnectionPool {
     fn take_connection(
         &mut self,
         key: &str,
-        tcp_addr: &str,
-        is_https: bool,
-        host: &str,
-    ) -> Option<BufReader<MaybeHttpsStream>> {
-        if !self.connections.contains_key(key) {
-            self.connections.insert(key.to_string(), Vec::new());
+        url: &Url,
+    ) -> Result<BufReader<MaybeHttpsStream>, FetchError> {
+        if let Some(conn) = self.connections.get_mut(key).and_then(Vec::pop) {
+            return Ok(conn);
         }
-
-        if let Some(connections) = self.connections.get_mut(key) {
-            if let Some(conn) = connections.pop() {
-                return Some(conn);
-            }
-
-            let tcp = TcpStream::connect(tcp_addr).ok()?;
-
-            #[cfg(feature = "tls")]
-            if is_https {
-                use native_tls::TlsConnector;
-                let connector = TlsConnector::new().ok()?;
-                let tls = connector.connect(host, tcp).ok()?;
-                return Some(BufReader::new(MaybeHttpsStream::Tls(tls)));
-            }
-            // Suppress unused warnings when tls feature is disabled
-            let _ = is_https;
-            let _ = host;
-
-            return Some(BufReader::new(MaybeHttpsStream::Plain(tcp)));
-        }
-
-        None
+        Ok(BufReader::new(MaybeHttpsStream::connect(url)?))
     }
 
     fn return_connection(&mut self, key: &str, conn: BufReader<MaybeHttpsStream>) {
-        if let Some(connections) = self.connections.get_mut(key) {
-            connections.push(conn);
-        }
+        self.connections
+            .entry(key.to_string())
+            .or_default()
+            .push(conn);
     }
 }
 
