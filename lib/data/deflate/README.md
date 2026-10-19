@@ -49,7 +49,8 @@ inputs.
 
 Decompression takes an output size limit and allocates fallibly, returning an error
 instead of aborting when the limit is exceeded or memory runs out. A stream must use
-all of its input, and zlib streams must have a correct Adler-32 checksum.
+all of its input, and zlib streams must have a correct Adler-32 checksum, except with
+`zlib_decompress_unchecked` for formats that already checksum the stream.
 
 ## Tests and benchmarks
 
