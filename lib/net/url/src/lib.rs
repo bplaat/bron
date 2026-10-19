@@ -297,18 +297,8 @@ fn normalize_component(
     while index < bytes.len() {
         let byte = bytes[index];
         if byte == b'%' {
-            if bytes
-                .get(index + 1)
-                .is_none_or(|byte| !byte.is_ascii_hexdigit())
-                || bytes
-                    .get(index + 2)
-                    .is_none_or(|byte| !byte.is_ascii_hexdigit())
-            {
-                return Err(ParseError(format!("Invalid percent escape in {name}")));
-            }
-            normalized.push('%');
-            normalized.push(bytes[index + 1] as char);
-            normalized.push(bytes[index + 2] as char);
+            check_percent_escape(bytes, index, name)?;
+            normalized.push_str(&value[index..index + 3]);
             index += 3;
         } else if byte.is_ascii() && is_allowed(byte) {
             normalized.push(byte as char);
@@ -335,15 +325,7 @@ fn validate_component(
     while index < bytes.len() {
         let byte = bytes[index];
         if byte == b'%' {
-            if bytes
-                .get(index + 1)
-                .is_none_or(|byte| !byte.is_ascii_hexdigit())
-                || bytes
-                    .get(index + 2)
-                    .is_none_or(|byte| !byte.is_ascii_hexdigit())
-            {
-                return Err(ParseError(format!("Invalid percent escape in {name}")));
-            }
+            check_percent_escape(bytes, index, name)?;
             index += 3;
         } else if byte.is_ascii() && is_allowed(byte) {
             index += 1;
@@ -352,6 +334,18 @@ fn validate_component(
         }
     }
     Ok(())
+}
+
+/// Check that the `%` at `index` is followed by two hex digits
+fn check_percent_escape(bytes: &[u8], index: usize, name: &str) -> Result<(), ParseError> {
+    if bytes
+        .get(index + 1..index + 3)
+        .is_some_and(|hex| hex.iter().all(u8::is_ascii_hexdigit))
+    {
+        Ok(())
+    } else {
+        Err(ParseError(format!("Invalid percent escape in {name}")))
+    }
 }
 
 const fn is_unreserved(byte: u8) -> bool {
