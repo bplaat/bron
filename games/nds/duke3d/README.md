@@ -153,7 +153,8 @@ of main RAM on a 16-bit bus at half its clock.
 - [0011](patches/0011-Clear-and-copy-buffers-a-word-at-a-time.patch):
   `clearbufbyte` and `copybufbyte` work by words.
 - [0012](patches/0012-Use-the-DS-hardware-divider.patch): `scale` and
-  `divscale`, 64 by 32 bit divisions, use the DS hardware divider.
+  `divscale`, 64 by 32 bit divisions, use libnds' `div64` with the DS hardware
+  divider.
 
 ### Menus, controls and savegames
 

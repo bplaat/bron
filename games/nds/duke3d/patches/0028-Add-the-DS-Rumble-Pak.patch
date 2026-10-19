@@ -14,28 +14,27 @@ playing behind the menu don't rumble.
 Game Options has Rumble On/Off below Adult Mode, kept as Rumble in the
 config, it rumbles once turned on.
 ---
- Game/src/config.c |  4 ++++
+ Game/src/config.c |  3 +++
  Game/src/menues.c | 10 ++++++++-
  Game/src/player.c |  6 +++++
  nds/duke3d_nds.c  |  1 +
  nds/duke3d_nds.h  |  5 +++++
  nds/input_nds.c   | 57 +++++++++++++++++++++++++++++++++++++++++++++--
- 6 files changed, 80 insertions(+), 3 deletions(-)
+ 6 files changed, 79 insertions(+), 3 deletions(-)
 
 diff --git a/Game/src/config.c b/Game/src/config.c
-index 556e124..7748a43 100644
+index 556e124..089780d 100644
 --- a/Game/src/config.c
 +++ b/Game/src/config.c
-@@ -43,6 +43,8 @@ Prepared for public release: 03/21/2003 - Charlie Wiederhold, 3D Realms
+@@ -43,6 +43,7 @@ Prepared for public release: 03/21/2003 - Charlie Wiederhold, 3D Realms
  // as well as setting up function mappings
  
  #include "_functio.h"
-+// After scriplib.h, which names parameters bool
 +#include "duke3d_nds.h"
  
  //
  // Sound variables
-@@ -662,6 +664,7 @@ void CONFIG_ReadSetup( void )
+@@ -662,6 +663,7 @@ void CONFIG_ReadSetup( void )
     SCRIPT_GetNumber( scripthandle, "Misc", "Executions",&ud.executions);
     ud.executions++;
     SCRIPT_GetNumber( scripthandle, "Misc", "RunMode",&ud.auto_run);
@@ -43,7 +42,7 @@ index 556e124..7748a43 100644
     SCRIPT_GetNumber( scripthandle, "Misc", "Crosshairs",&ud.crosshair);
     SCRIPT_GetNumber( scripthandle, "Misc", "ShowCinematics",&ud.showcinematics);
     SCRIPT_GetNumber( scripthandle, "Misc", "WeaponAutoSwitch",&ud.weaponautoswitch);
-@@ -824,6 +827,7 @@ void CONFIG_WriteSetup( void )
+@@ -824,6 +826,7 @@ void CONFIG_WriteSetup( void )
     SCRIPT_PutNumber( scripthandle, "Screen Setup", "ScreenGamma",ud.brightness,false,false);
     SCRIPT_PutNumber( scripthandle, "Misc", "Executions",ud.executions,false,false);
     SCRIPT_PutNumber( scripthandle, "Misc", "RunMode",ud.auto_run,false,false);
