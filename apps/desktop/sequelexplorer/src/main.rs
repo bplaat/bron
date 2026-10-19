@@ -1373,7 +1373,6 @@ fn main() {
         bwebview::InjectionTime::DocumentStart,
     );
 
-    #[cfg(target_os = "macos")]
     let mut page_ready = false;
     #[cfg(target_os = "macos")]
     let mut pending_menu_action: Option<String> = None;
@@ -1383,7 +1382,6 @@ fn main() {
         Event::Window(_, bwindow::WindowEvent::ThemeChanged(theme)) => {
             window.set_background_color(background_color(theme));
         }
-        #[cfg(target_os = "macos")]
         Event::UserEvent(AppEvent::Webview(_window_id, WebviewEvent::PageLoadStart)) => {
             page_ready = false
         }
@@ -1416,12 +1414,15 @@ fn main() {
             }
         }
         Event::Window(_, bwindow::WindowEvent::DroppedFile(path)) => {
-            webview.send_ipc_message(
-                serde_json::to_string(&IpcMessage::OpenFile {
-                    path: path.to_string_lossy().into_owned(),
-                })
-                .expect("Failed to serialize open file message"),
-            );
+            let path = path.to_string_lossy().into_owned();
+            if page_ready {
+                webview.send_ipc_message(
+                    serde_json::to_string(&IpcMessage::OpenFile { path })
+                        .expect("Failed to serialize open file message"),
+                );
+            } else {
+                pending_open_path = Some(path);
+            }
         }
         #[cfg(target_os = "macos")]
         Event::Window(_, bwindow::WindowEvent::MacosFullscreenChange(is_fullscreen)) => {
@@ -1442,24 +1443,19 @@ fn main() {
             };
             match message {
                 IpcMessage::Ready => {
-                    #[cfg(target_os = "macos")]
-                    {
-                        page_ready = true;
+                    page_ready = true;
+                    if let Some(path) = pending_open_path.take() {
+                        webview.send_ipc_message(
+                            serde_json::to_string(&IpcMessage::OpenFile { path })
+                                .expect("Failed to serialize open file message"),
+                        );
+                    } else if !initial_restore_sent {
+                        webview.send_ipc_message(
+                            serde_json::to_string(&IpcMessage::RestoreLastFile)
+                                .expect("Failed to serialize restore last file message"),
+                        );
                     }
-                    if !initial_restore_sent {
-                        initial_restore_sent = true;
-                        if let Some(path) = pending_open_path.take() {
-                            webview.send_ipc_message(
-                                serde_json::to_string(&IpcMessage::OpenFile { path })
-                                    .expect("Failed to serialize open file message"),
-                            );
-                        } else {
-                            webview.send_ipc_message(
-                                serde_json::to_string(&IpcMessage::RestoreLastFile)
-                                    .expect("Failed to serialize restore last file message"),
-                            );
-                        }
-                    }
+                    initial_restore_sent = true;
                     #[cfg(target_os = "macos")]
                     if let Some(action) = pending_menu_action.take() {
                         webview.send_ipc_message(
