@@ -151,7 +151,9 @@ impl BaseDirs {
     /// Returns the path to the user's cache directory
     pub fn cache_dir(&self) -> PathBuf {
         cfg_select! {
-            all(unix, not(target_os = "macos")) => xdg_dir("XDG_CACHE_HOME", self.home_dir.join(".cache")),
+            all(unix, not(target_os = "macos")) => {
+                xdg_dir("XDG_CACHE_HOME", self.home_dir.join(".cache"))
+            }
             target_os = "macos" => self.home_dir.join("Library").join("Caches"),
             windows => windows::get_known_folder_path(&windows::FOLDERID_LOCAL_APPDATA),
             _ => unreachable!(),
@@ -161,7 +163,9 @@ impl BaseDirs {
     /// Returns the path to the user's config directory
     pub fn config_dir(&self) -> PathBuf {
         cfg_select! {
-            all(unix, not(target_os = "macos")) => xdg_dir("XDG_CONFIG_HOME", self.home_dir.join(".config")),
+            all(unix, not(target_os = "macos")) => {
+                xdg_dir("XDG_CONFIG_HOME", self.home_dir.join(".config"))
+            }
             target_os = "macos" => self.home_dir.join("Library").join("Application Support"),
             windows => windows::get_known_folder_path(&windows::FOLDERID_ROAMING_APPDATA),
             _ => unreachable!(),
@@ -171,7 +175,9 @@ impl BaseDirs {
     /// Returns the path to the user's data directory
     pub fn data_dir(&self) -> PathBuf {
         cfg_select! {
-            all(unix, not(target_os = "macos")) => xdg_dir("XDG_DATA_HOME", self.home_dir.join(".local").join("share")),
+            all(unix, not(target_os = "macos")) => {
+                xdg_dir("XDG_DATA_HOME", self.home_dir.join(".local").join("share"))
+            }
             target_os = "macos" => self.home_dir.join("Library").join("Application Support"),
             windows => windows::get_known_folder_path(&windows::FOLDERID_ROAMING_APPDATA),
             _ => unreachable!(),
@@ -191,7 +197,10 @@ impl BaseDirs {
     #[allow(clippy::missing_const_for_fn)]
     pub fn executable_dir(&self) -> Option<PathBuf> {
         cfg_select! {
-            all(unix, not(target_os = "macos")) => Some(xdg_dir("XDG_BIN_HOME", self.home_dir.join(".local").join("bin"))),
+            all(unix, not(target_os = "macos")) => Some(xdg_dir(
+                "XDG_BIN_HOME",
+                self.home_dir.join(".local").join("bin"),
+            )),
             _ => None,
         }
     }
@@ -208,8 +217,12 @@ impl ProjectDirs {
     /// Creates a ProjectDirs struct from values describing the project
     pub fn from(qualifier: &str, organization: &str, application: &str) -> Option<Self> {
         Self::from_path(cfg_select! {
-            all(unix, not(target_os = "macos")) => PathBuf::from(application),
-            target_os = "macos" => PathBuf::from(format!("{qualifier}.{organization}.{application}")),
+            all(unix, not(target_os = "macos")) => {
+                PathBuf::from(application)
+            }
+            target_os = "macos" => {
+                PathBuf::from(format!("{qualifier}.{organization}.{application}"))
+            }
             windows => PathBuf::from(organization).join(application),
             _ => unreachable!(),
         })
