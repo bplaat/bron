@@ -119,13 +119,14 @@ fn main() {
     let context = if args.subcommand == Subcommand::ServeE2e {
         use crate::context::DatabaseHelpers;
         use crate::models::{User, UserRole};
+        use crate::utils::password_hash;
         let ctx = Context::with_e2e_database().expect("Can't create E2E test database");
         ctx.database
             .insert_user(User {
                 first_name: "Test".to_string(),
                 last_name: "User".to_string(),
                 email: "test@example.com".to_string(),
-                password: pbkdf2::password_hash("password"),
+                password: password_hash("password"),
                 role: UserRole::Normal,
                 ..Default::default()
             })
@@ -135,7 +136,7 @@ fn main() {
                 first_name: "Test".to_string(),
                 last_name: "Admin".to_string(),
                 email: "testadmin@example.com".to_string(),
-                password: pbkdf2::password_hash("password"),
+                password: password_hash("password"),
                 role: UserRole::Admin,
                 ..Default::default()
             })
