@@ -29,6 +29,65 @@ pub(super) struct WebviewData {
 
 pub(crate) struct PlatformWebview(pub(super) Rc<WebviewData>);
 
+const EDIT_COMMANDS: [&CStr; 6] = [c"Undo", c"Redo", c"Cut", c"Copy", c"Paste", c"SelectAll"];
+
+unsafe fn install_edit_actions(view: *mut WebKitWebView) {
+    extern "C" fn activate(action: *mut GSimpleAction, _: *mut GVariant, view: *mut WebKitWebView) {
+        unsafe { webkit_web_view_execute_editing_command(view, g_action_get_name(action)) };
+    }
+    extern "C" fn changed(state: *mut WebKitEditorState, view: *mut WebKitWebView) {
+        unsafe {
+            let group = gtk_widget_get_action_group(view.cast(), c"bwindow-edit".as_ptr());
+            for (name, enabled) in EDIT_COMMANDS.into_iter().zip([
+                webkit_editor_state_is_undo_available(state),
+                webkit_editor_state_is_redo_available(state),
+                webkit_editor_state_is_cut_available(state),
+                webkit_editor_state_is_copy_available(state),
+                webkit_editor_state_is_paste_available(state),
+                1,
+            ]) {
+                g_simple_action_set_enabled(
+                    g_action_map_lookup_action(group, name.as_ptr()),
+                    enabled,
+                );
+            }
+        }
+    }
+    unsafe {
+        let group = g_simple_action_group_new();
+        for name in EDIT_COMMANDS {
+            let action = g_simple_action_new(name.as_ptr(), null());
+            g_signal_connect_object(
+                action.cast(),
+                c"activate".as_ptr(),
+                activate as *const c_void,
+                view.cast(),
+                G_CONNECT_DEFAULT,
+            );
+            g_action_map_add_action(group, action);
+            g_object_unref(action.cast());
+        }
+        gtk_widget_insert_action_group(view.cast(), c"bwindow-edit".as_ptr(), group);
+        g_object_unref(group.cast());
+        // Older WebKit versions have no editor-state change notification.
+        let state = webkit_web_view_get_editor_state(view);
+        if g_signal_lookup(
+            c"changed".as_ptr(),
+            g_type_from_name(c"WebKitEditorState".as_ptr()),
+        ) != 0
+        {
+            changed(state, view);
+            g_signal_connect_object(
+                state.cast(),
+                c"changed".as_ptr(),
+                changed as *const c_void,
+                view.cast(),
+                G_CONNECT_DEFAULT,
+            );
+        }
+    }
+}
+
 impl PlatformWebview {
     pub(crate) fn new(attachment: crate::WindowAttachment) -> Self {
         let Some(crate::NativeWindowHandle::Gtk(window)) = (unsafe { attachment.native_handle() })
@@ -214,6 +273,7 @@ impl PlatformWebview {
         };
 
         data.webview.set(webview);
+        unsafe { install_edit_actions(webview) };
         unsafe { g_object_ref(webview.cast()) };
 
         // Show the native window but keep partial WebKit paints hidden
