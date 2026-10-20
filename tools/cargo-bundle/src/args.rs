@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025 Bastiaan van der Plaat
+ * Copyright (c) 2025-2026 Bastiaan van der Plaat
  *
  * SPDX-License-Identifier: MIT
  */
@@ -70,8 +70,8 @@ pub(crate) fn help() {
 
 Options:
   -p <dir>, --path <dir>    Build crate in <dir>
-  --zip                     Also create a zip archive
-  --dmg                     Also create a DMG installer
+  --zip                     Also create a zip archive (macOS)
+  --dmg                     Also create a DMG installer (macOS)
   -h, --help                Print this help message
   -v, --version             Print the version number
 "
