@@ -39,6 +39,16 @@ impl PlatformEventLoop {
         let application = unsafe {
             if let Some(ref id) = app_id_name {
                 g_set_prgname(id.as_ptr());
+                let name = CString::new(
+                    builder
+                        .app_id
+                        .as_ref()
+                        .expect("application id")
+                        .application
+                        .as_str(),
+                )
+                .expect("application name contains NUL");
+                g_set_application_name(name.as_ptr());
             }
             let application = gtk_application_new(
                 gtk_id.as_ref().map_or(null(), |id| id.as_ptr()),
@@ -80,8 +90,11 @@ impl PlatformEventLoop {
                 gtk_window_set_default_icon_name(id.as_ptr());
             }
             #[cfg(feature = "menu")]
-            super::menu::register(application, builder.menu.as_ref());
+            let menu = builder.menu;
+            #[cfg(not(feature = "menu"))]
+            let menu = None;
             APPLICATION.set(application);
+            super::menu::register(application, menu);
             APP_ID = builder.app_id;
             application
         };

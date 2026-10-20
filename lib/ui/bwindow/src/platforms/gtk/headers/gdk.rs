@@ -10,6 +10,7 @@
 use std::ffi::{c_char, c_void};
 
 // MARK: GDK
+pub const GDK_WINDOW_STATE_FULLSCREEN: u32 = 1 << 4;
 #[repr(C)]
 pub struct GdkDisplay([u8; 0]);
 #[repr(C)]
@@ -47,6 +48,7 @@ pub struct GdkKeymapKey {
     pub level: i32,
 }
 unsafe extern "C" {
+    pub fn gdk_window_get_state(window: *mut c_void) -> u32;
     pub fn gdk_keymap_get_for_display(display: *mut GdkDisplay) -> *mut GdkKeymap;
     pub fn gdk_keymap_get_entries_for_keyval(
         keymap: *mut GdkKeymap,

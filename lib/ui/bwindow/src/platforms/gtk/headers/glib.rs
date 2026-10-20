@@ -13,6 +13,7 @@ use std::ffi::{c_char, c_void};
 #[repr(C)]
 pub struct GObject([u8; 0]);
 pub const G_CONNECT_DEFAULT: i32 = 0;
+pub const G_CONNECT_AFTER: i32 = 1;
 unsafe extern "C" {
     #[cfg(test)]
     pub fn g_object_notify(object: *mut GObject, property: *const c_char);
@@ -21,6 +22,17 @@ unsafe extern "C" {
         first_property_name: *const c_char,
         ...
     ) -> *mut GObject;
+    pub fn g_object_get_data(object: *mut GObject, key: *const c_char) -> *mut c_void;
+    pub fn g_object_set_data(object: *mut GObject, key: *const c_char, data: *mut c_void);
+    pub fn g_signal_connect_object(
+        instance: *mut GObject,
+        detailed_signal: *const c_char,
+        handler: *const c_void,
+        object: *mut GObject,
+        flags: i32,
+    );
+    pub fn g_signal_lookup(name: *const c_char, type_: usize) -> u32;
+    pub fn g_signal_emit_by_name(instance: *mut GObject, signal: *const c_char, ...);
     pub fn g_object_get(instance: *mut GObject, first_property_name: *const c_char, ...);
     pub fn g_object_set(instance: *mut GObject, first_property_name: *const c_char, ...);
     pub fn g_signal_connect_data(
@@ -58,11 +70,19 @@ pub struct GVariantBuilder([u8; 0]);
 #[repr(C)]
 pub struct GVariantType([u8; 0]);
 #[repr(C)]
+pub struct GList {
+    pub data: *mut c_void,
+    pub next: *mut GList,
+    pub prev: *mut GList,
+}
+#[repr(C)]
 pub struct GSList {
     pub data: *mut c_void,
     pub next: *mut GSList,
 }
 unsafe extern "C" {
+    pub fn g_set_application_name(name: *const c_char);
+    pub fn g_get_application_name() -> *const c_char;
     pub fn g_set_prgname(prgname: *const c_char);
     pub fn g_idle_add_full(
         priority: i32,
@@ -125,6 +145,7 @@ unsafe extern "C" {
     pub fn g_variant_builder_unref(builder: *mut GVariantBuilder);
     pub fn g_variant_new(format_string: *const c_char, ...) -> *mut GVariant;
     pub fn g_variant_new_boolean(value: i32) -> *mut GVariant;
+    pub fn g_variant_get_boolean(value: *mut GVariant) -> i32;
     pub fn g_variant_new_double(value: f64) -> *mut GVariant;
     pub fn g_variant_ref_sink(value: *mut GVariant) -> *mut GVariant;
     pub fn g_variant_unref(value: *mut GVariant);
@@ -189,12 +210,27 @@ unsafe extern "C" {
     ) -> i32;
     pub fn g_application_quit(application: *mut GApplication);
     pub fn g_file_get_path(file: *mut GFile) -> *mut c_char;
+    pub fn g_simple_action_group_new() -> *mut c_void;
+    pub fn g_action_get_name(action: *mut GSimpleAction) -> *const c_char;
+    pub fn g_action_group_get_action_enabled(group: *mut c_void, name: *const c_char) -> i32;
+    pub fn g_action_group_activate_action(
+        group: *mut c_void,
+        name: *const c_char,
+        parameter: *mut GVariant,
+    );
+    pub fn g_action_map_lookup_action(map: *mut c_void, name: *const c_char) -> *mut GSimpleAction;
+    pub fn g_simple_action_set_enabled(action: *mut GSimpleAction, enabled: i32);
+    pub fn g_simple_action_new_stateful(
+        name: *const c_char,
+        parameter_type: *const GVariantType,
+        state: *mut GVariant,
+    ) -> *mut GSimpleAction;
+    pub fn g_simple_action_set_state(action: *mut GSimpleAction, state: *mut GVariant);
     pub fn g_simple_action_new(
         name: *const c_char,
         parameter_type: *const GVariantType,
     ) -> *mut GSimpleAction;
     pub fn g_action_map_add_action(map: *mut c_void, action: *mut GSimpleAction);
-    #[cfg(test)]
     pub fn g_menu_model_get_n_items(model: *mut GMenuModel) -> i32;
     pub fn g_menu_new() -> *mut GMenu;
     pub fn g_menu_append_section(menu: *mut GMenu, label: *const c_char, section: *mut GMenuModel);

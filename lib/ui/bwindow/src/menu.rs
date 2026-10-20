@@ -78,7 +78,7 @@ impl MenuBuilder {
 }
 
 /// Application commands and shortcuts, merged into the native menu bar on macOS.
-/// GTK exports the menu for compatible global menu bars and hides it inside the
+/// GTK merges standard commands, exports the menu for global bars and hides it inside the
 /// window. Windows registers shortcuts without displaying a menu bar.
 #[derive(Default)]
 pub struct MenuBarBuilder {
