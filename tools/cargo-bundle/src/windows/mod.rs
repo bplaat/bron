@@ -5,6 +5,7 @@
  */
 
 use std::fs;
+use std::path::Path;
 use std::process::exit;
 
 use crate::args::Args;
@@ -54,25 +55,8 @@ pub(crate) fn bundle(args: &Args, target_dir: &str, manifest: &Manifest) {
         assert!(status.success(), "cargo build failed for {target}");
     }
 
-    // Windows ignores reinstalls of the same version, so the revision changes with the contents
     let publisher = publisher_name(&args.path, manifest);
     let assets = windows.assets.as_deref().unwrap_or("meta/windows");
-    let mut hash = Fnv1a::default();
-    for (target, _) in ARCHITECTURES {
-        hash.write(
-            &fs::read(format!("target/{target}/release/{executable}"))
-                .expect("Failed to read executable"),
-        );
-    }
-    for logo in LOGOS {
-        hash.write(
-            &fs::read(format!("{}/{assets}/{logo}", args.path))
-                .unwrap_or_else(|error| panic!("Failed to read {assets}/{logo}: {error}")),
-        );
-    }
-    hash.write(appx_manifest(manifest, &windows, &publisher, &executable, HOST_ARCH, 0).as_bytes());
-    let revision = hash.revision();
-
     let msix_dir = format!("{target_dir}/msix");
     let packages = format!("{msix_dir}/packages");
     remove_path_if_exists(&msix_dir);
@@ -90,14 +74,28 @@ pub(crate) fn bundle(args: &Args, target_dir: &str, manifest: &Manifest) {
                 format!("{}/{assets}/{logo}", args.path),
                 format!("{layout}/Assets/{logo}"),
             )
-            .expect("Failed to copy logo");
+            .unwrap_or_else(|error| panic!("Failed to copy {assets}/{logo}: {error}"));
         }
+        fs::write(
+            format!("{layout}/AppxManifest.xml"),
+            appx_manifest(manifest, &windows, &publisher, &executable, arch, 0),
+        )
+        .expect("Failed to write AppxManifest.xml");
+    }
+
+    // Windows ignores reinstalls of the same version, so the revision hashes all packaged files
+    let mut hash = Fnv1a::default();
+    for (_, arch) in ARCHITECTURES {
+        hash_directory(&mut hash, Path::new(&format!("{msix_dir}/{arch}")));
+    }
+    let revision = hash.revision();
+    for (_, arch) in ARCHITECTURES {
+        let layout = format!("{msix_dir}/{arch}");
         fs::write(
             format!("{layout}/AppxManifest.xml"),
             appx_manifest(manifest, &windows, &publisher, &executable, arch, revision),
         )
         .expect("Failed to write AppxManifest.xml");
-
         makeappx::pack(&layout, &format!("{packages}/{}_{arch}.msix", bundle.name));
     }
 
@@ -111,6 +109,22 @@ pub(crate) fn bundle(args: &Args, target_dir: &str, manifest: &Manifest) {
         &package_version(&manifest.package.version, revision),
     );
     println!("Created {msix_bundle}");
+}
+
+fn hash_directory(hash: &mut Fnv1a, directory: &Path) {
+    let mut entries: Vec<_> = fs::read_dir(directory)
+        .expect("Failed to read MSIX layout")
+        .map(|entry| entry.expect("Failed to read MSIX layout entry").path())
+        .collect();
+    entries.sort();
+    for path in entries {
+        hash.write(path.file_name().unwrap_or_default().as_encoded_bytes());
+        if path.is_dir() {
+            hash_directory(hash, &path);
+        } else {
+            hash.write(&fs::read(&path).expect("Failed to read MSIX layout file"));
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
