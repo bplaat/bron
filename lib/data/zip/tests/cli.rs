@@ -170,8 +170,21 @@ fn restores_unix_modes_timestamps_and_safe_symlinks() {
 
 #[test]
 fn restores_dos_local_and_ntfs_timestamps() {
+    #[cfg(unix)]
+    let dos_seconds = 1582979696;
+    // Windows ignores TZ and always uses the system time zone.
+    #[cfg(windows)]
+    let dos_seconds = {
+        use chrono::{Local, TimeZone};
+        let local = Local.with_ymd_and_hms(2020, 2, 29, 12, 34, 56);
+        local.single().unwrap().timestamp() as u64
+    };
     for (bytes, seconds, nanos) in [
-        (include_bytes!("fixtures/dos.zip").as_slice(), 1582979696, 0),
+        (
+            include_bytes!("fixtures/dos.zip").as_slice(),
+            dos_seconds,
+            0,
+        ),
         (
             include_bytes!("fixtures/ntfs.zip").as_slice(),
             1700000000,
