@@ -23,6 +23,15 @@ pub fn fill(buf: &mut [u8]) -> Result<(), Error> {
                 }
             }
         }
+        target_os = "ios" => {
+            unsafe extern "C" {
+                fn CCRandomGenerateBytes(bytes: *mut u8, count: usize) -> i32;
+            }
+            // SAFETY: buf is a valid mutable byte slice; CCRandomGenerateBytes fills it.
+            if unsafe { CCRandomGenerateBytes(buf.as_mut_ptr(), buf.len()) } != 0 {
+                return Err(Error::other("CCRandomGenerateBytes failed"));
+            }
+        }
         any(
             all(target_os = "linux", target_env = "musl"),
             target_os = "freebsd",
