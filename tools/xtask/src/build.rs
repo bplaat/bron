@@ -50,6 +50,8 @@ fn cargo_install_path(path: &str) -> Result<()> {
     run(&mut online)
 }
 
+const ERROR_CANCELLED: i32 = 1223;
+
 fn powershell_quote(path: &Path) -> String {
     format!("'{}'", path.display().to_string().replace('\'', "''"))
 }
@@ -325,19 +327,24 @@ impl Xtask {
         let elevate = format!(
             "try {{ $process = Start-Process powershell.exe -Verb RunAs -Wait -PassThru \
              -WindowStyle Hidden -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File','\"{}\"' }} \
-             catch {{ exit 1 }}; exit $process.ExitCode",
+             catch {{ exit {ERROR_CANCELLED} }}; exit $process.ExitCode",
             script.display().to_string().replace('\'', "''")
         );
         let status = Command::new("powershell.exe")
             .args(["-NoProfile", "-Command", &elevate])
             .status()
             .context("failed to start PowerShell")?;
-        if !status.success() {
-            let error =
-                fs::read_to_string(&log).unwrap_or_else(|_| "the UAC prompt was declined".into());
-            bail!("failed to install MSIX packages: {}", error.trim());
+        match status.code() {
+            Some(0) => Ok(()),
+            Some(ERROR_CANCELLED) => {
+                bail!("failed to install MSIX packages: the UAC prompt was declined")
+            }
+            code => {
+                let error = fs::read_to_string(&log)
+                    .unwrap_or_else(|_| format!("elevated PowerShell exited with {code:?}"));
+                bail!("failed to install MSIX packages: {}", error.trim())
+            }
         }
-        Ok(())
     }
 
     fn installable_apps(&self, bundle_only: bool) -> Result<Vec<InstallableApp>> {
