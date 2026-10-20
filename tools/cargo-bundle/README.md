@@ -4,12 +4,14 @@ A simple Cargo plugin that builds macOS and iOS app bundles and Windows MSIX pac
 
 ## Usage
 
-Add app bundle metadata to your `Cargo.toml`:
+Bundle metadata is optional. By default, the bundle name is `package.name` and the
+identifier is `nl.bplaat.<package.name>`. Override these defaults or configure resources
+in your `Cargo.toml`:
 
 ```toml
 [package.metadata.bundle]
-name = "ExampleApp"
-identifier = "com.example.App"
+name = "ExampleApp" # optional, defaults to package.name
+identifier = "com.example.App" # optional, defaults to nl.bplaat.<package.name>
 copyright = "Copyright © 2025 Anonymous" # optional
 icon = "path/to/icon.icon" # optional, Icon Composer icon for macOS and iOS
 resources_dir = "resources" # optional
