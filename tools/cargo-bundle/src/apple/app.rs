@@ -6,11 +6,14 @@
 
 use std::fs;
 use std::path::Path;
-use std::process::{Command, exit};
+use std::process::Command;
 
 use copy_dir::copy_dir;
 
-use crate::macos::support::{bundle_info, codesign, compile_universal, remove_empty_directory};
+use crate::apple::support::{
+    bundle_info, codesign, compile_icon, compile_universal, merge_custom_info,
+    remove_empty_directory,
+};
 use crate::manifest::{BundleMetadata, Manifest, Package};
 use crate::support::{assert_file_name, cargo_build, remove_path_if_exists};
 
@@ -29,7 +32,7 @@ fn generate_resources(path: &str, target_dir: &str, manifest: &Manifest) {
     let bundle = &manifest.package.metadata.bundle;
     fs::create_dir_all(target_dir).expect("Failed to create target directory");
 
-    if let Some(iconset) = &bundle.iconset {
+    if let Some(iconset) = &bundle.macos.iconset {
         let status = Command::new("iconutil")
             .args([
                 "-c",
@@ -44,43 +47,16 @@ fn generate_resources(path: &str, target_dir: &str, manifest: &Manifest) {
     }
 
     if let Some(icon) = &bundle.icon {
-        let icon = fs::canonicalize(format!("{path}/{icon}"))
-            .expect("Failed to resolve icon path")
-            .to_string_lossy()
-            .into_owned();
-        let target = fs::canonicalize(target_dir)
-            .expect("Failed to resolve target directory")
-            .to_string_lossy()
-            .into_owned();
-        let partial_plist = format!("{target}/partial.plist");
-        let output = Command::new("actool")
-            .args([
-                &icon,
-                "--compile",
-                &target,
-                "--platform",
-                "macosx",
-                "--minimum-deployment-target",
-                bundle.minimal_os_version.as_deref().unwrap_or("11.0"),
-                "--target-device",
-                "mac",
-                "--app-icon",
-                "icon",
-                "--include-all-app-icons",
-                "--output-partial-info-plist",
-                &partial_plist,
-            ])
-            .output()
-            .expect("Failed to run actool");
-        if !output.status.success() {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            eprintln!("actool failed:\n{stdout}{stderr}");
-            exit(1);
-        }
+        compile_icon(
+            &format!("{path}/{icon}"),
+            target_dir,
+            "macosx",
+            &["mac"],
+            bundle.macos.minimal_os_version.as_deref().unwrap_or("11.0"),
+        );
     }
 
-    if let Some(icns) = &bundle.icns {
+    if let Some(icns) = &bundle.macos.icns {
         fs::copy(format!("{path}/{icns}"), format!("{target_dir}/icon.icns"))
             .expect("Failed to copy icon.icns");
     }
@@ -95,7 +71,15 @@ fn write_info_plist(path: &str, target_dir: &str, manifest: &Manifest) {
         &bundle.identifier,
         &manifest.package.version,
         "APPL",
-        bundle.minimal_os_version.as_deref().unwrap_or("11.0"),
+    );
+    info.insert(
+        "LSMinimumSystemVersion".into(),
+        bundle
+            .macos
+            .minimal_os_version
+            .as_deref()
+            .unwrap_or("11.0")
+            .into(),
     );
     if let Some(copyright) = &bundle.copyright {
         info.insert("NSHumanReadableCopyright".into(), copyright.clone().into());
@@ -108,23 +92,7 @@ fn write_info_plist(path: &str, target_dir: &str, manifest: &Manifest) {
     }
     info.insert("NSHighResolutionCapable".into(), true.into());
 
-    let custom_info = bundle
-        .info_plist
-        .as_deref()
-        .map(|name| format!("{path}/{name}"))
-        .unwrap_or_else(|| format!("{path}/Info.plist"));
-    if Path::new(&custom_info).exists() {
-        let plist::Value::Dictionary(custom) = plist::Value::from_file(&custom_info)
-            .unwrap_or_else(|error| {
-                eprintln!("Invalid Info.plist file {custom_info}: {error}");
-                exit(1);
-            })
-        else {
-            eprintln!("Invalid Info.plist file: root value must be a dictionary");
-            exit(1);
-        };
-        info.extend(custom);
-    }
+    merge_custom_info(&mut info, path, bundle, bundle.macos.info_plist.as_deref());
 
     plist::Value::Dictionary(info)
         .to_file_binary(format!("{target_dir}/Info.plist"))
@@ -133,7 +101,7 @@ fn write_info_plist(path: &str, target_dir: &str, manifest: &Manifest) {
 
 fn compile_binary(path: &str, target_dir: &str, package: &Package) -> String {
     let bundle = &package.metadata.bundle;
-    if bundle.lipo.unwrap_or(true) {
+    if bundle.macos.lipo.unwrap_or(true) {
         let output = format!("{target_dir}/{}", bundle.name);
         compile_universal(path, &package.name, &output);
         output
@@ -187,20 +155,18 @@ fn create(path: &str, target_dir: &str, bundle: &BundleMetadata, binary: &str) {
 pub(crate) fn sign(path: &str, target_dir: &str, bundle: &BundleMetadata) {
     let app = format!("{target_dir}/{}.app", bundle.name);
     let entitlements = bundle
+        .macos
         .entitlements
-        .as_deref()
-        .map(|name| format!("{path}/{name}"))
-        .unwrap_or_else(|| format!("{path}/Entitlements.plist"));
-    let has_entitlements = Path::new(&entitlements).exists();
-    let hardened_runtime = bundle.hardened_runtime.unwrap_or(has_entitlements);
+        .as_ref()
+        .map(|name| format!("{path}/{name}"));
+    let hardened_runtime = bundle
+        .macos
+        .hardened_runtime
+        .unwrap_or(entitlements.is_some());
 
-    let status = codesign(
-        &app,
-        has_entitlements.then_some(entitlements.as_str()),
-        hardened_runtime,
-    )
-    .status()
-    .expect("Failed to run codesign");
+    let status = codesign(&app, entitlements.as_deref(), hardened_runtime)
+        .status()
+        .expect("Failed to run codesign");
     assert!(status.success(), "codesign failed");
 }
 
@@ -261,7 +227,7 @@ pub(crate) fn create_dmg(target_dir: &str, bundle: &BundleMetadata) {
 }
 
 const fn has_icon(bundle: &BundleMetadata) -> bool {
-    bundle.iconset.is_some() || bundle.icns.is_some() || bundle.icon.is_some()
+    bundle.macos.iconset.is_some() || bundle.macos.icns.is_some() || bundle.icon.is_some()
 }
 
 fn contents_dir(target_dir: &str, bundle: &BundleMetadata) -> String {

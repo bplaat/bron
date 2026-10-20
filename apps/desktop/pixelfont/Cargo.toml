@@ -11,6 +11,8 @@ name = "Pixel Font Editor"
 identifier = "nl.bplaat.PixelFontEditor"
 copyright = "Copyright © 2026 Bastiaan van der Plaat"
 icon = "meta/macos/icon.icon"
+
+[package.metadata.bundle.macos]
 info_plist = "meta/macos/Info.plist"
 entitlements = "meta/macos/Entitlements.plist"
 

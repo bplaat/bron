@@ -11,6 +11,8 @@ name = "BassieLight"
 identifier = "nl.bplaat.BassieLight"
 copyright = "Copyright © 2025 Bastiaan van der Plaat"
 icon = "meta/macos/icon.icon"
+
+[package.metadata.bundle.macos]
 entitlements = "meta/macos/Entitlements.plist"
 
 [package.metadata.bundle.windows]

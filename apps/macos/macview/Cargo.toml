@@ -14,9 +14,11 @@ name = "MacView"
 identifier = "nl.bplaat.MacView"
 copyright = "Copyright (c) 2026 Bastiaan van der Plaat"
 icon = "meta/macos/icon.icon"
+
+[package.metadata.bundle.macos]
 hardened_runtime = true
 
-[[package.metadata.bundle.appex]]
+[[package.metadata.bundle.macos.appex]]
 name = "MacView Preview"
 identifier = "nl.bplaat.MacView.Preview"
 package = "../macview-preview"
@@ -24,7 +26,7 @@ binary = "macview-preview"
 info_plist = "../macview-preview/Info.plist"
 entitlements = "../macview-preview/Entitlements.plist"
 
-[[package.metadata.bundle.appex]]
+[[package.metadata.bundle.macos.appex]]
 name = "MacView Thumbnail"
 identifier = "nl.bplaat.MacView.Thumbnail"
 package = "../macview-thumbnail"

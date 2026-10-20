@@ -39,16 +39,13 @@ pub(crate) struct BundleMetadata {
     pub name: String,
     pub identifier: String,
     pub copyright: Option<String>,
-    pub minimal_os_version: Option<String>,
-    pub lipo: Option<bool>,
     pub resources_dir: Option<String>,
-    pub iconset: Option<String>,
-    pub icns: Option<String>,
     pub icon: Option<String>,
     pub info_plist: Option<String>,
-    pub entitlements: Option<String>,
-    pub hardened_runtime: Option<bool>,
-    pub appex: Option<Vec<AppexMetadata>>,
+    #[serde(default)]
+    pub macos: MacosMetadata,
+    #[serde(default)]
+    pub ios: IosMetadata,
     #[cfg_attr(not(windows), allow(dead_code))]
     pub windows: Option<WindowsMetadata>,
 }
@@ -62,6 +59,26 @@ pub(crate) struct AppexMetadata {
     pub binary: String,
     pub minimal_os_version: Option<String>,
     pub info_plist: String,
+    pub entitlements: Option<String>,
+}
+
+#[derive(Clone, Default, Deserialize)]
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub(crate) struct MacosMetadata {
+    pub minimal_os_version: Option<String>,
+    pub lipo: Option<bool>,
+    pub iconset: Option<String>,
+    pub icns: Option<String>,
+    pub info_plist: Option<String>,
+    pub entitlements: Option<String>,
+    pub hardened_runtime: Option<bool>,
+    pub appex: Option<Vec<AppexMetadata>>,
+}
+
+#[derive(Clone, Default, Deserialize)]
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub(crate) struct IosMetadata {
+    pub info_plist: Option<String>,
     pub entitlements: Option<String>,
 }
 

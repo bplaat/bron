@@ -13,6 +13,7 @@ pub(crate) struct Args {
     pub path: String,
     pub zip: bool,
     pub dmg: bool,
+    pub ios: bool,
 }
 
 impl Default for Args {
@@ -23,6 +24,7 @@ impl Default for Args {
             path: ".".to_string(),
             zip: false,
             dmg: false,
+            ios: false,
         }
     }
 }
@@ -55,6 +57,9 @@ pub(crate) fn parse_args() -> Args {
             "--dmg" => {
                 args.dmg = true;
             }
+            "--ios" => {
+                args.ios = true;
+            }
             _ => {
                 eprintln!("Unknown argument: {arg}");
                 exit(1);
@@ -72,6 +77,7 @@ Options:
   -p <dir>, --path <dir>    Build crate in <dir>
   --zip                     Also create a zip archive (macOS)
   --dmg                     Also create a DMG installer (macOS)
+  --ios                     Build an iOS app instead (macOS)
   -h, --help                Print this help message
   -v, --version             Print the version number
 "

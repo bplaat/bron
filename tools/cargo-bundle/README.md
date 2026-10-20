@@ -1,6 +1,6 @@
 # cargo-bundle
 
-A simple Cargo plugin that builds macOS app bundles and Windows MSIX packages.
+A simple Cargo plugin that builds macOS and iOS app bundles and Windows MSIX packages.
 
 ## Usage
 
@@ -10,8 +10,22 @@ Add app bundle metadata to your `Cargo.toml`:
 [package.metadata.bundle]
 name = "ExampleApp"
 identifier = "com.example.App"
-copyright = "Copyright © 2025 Anonymous"
-iconset = "path/to/icon.iconset" # optional
+copyright = "Copyright © 2025 Anonymous" # optional
+icon = "path/to/icon.icon" # optional, Icon Composer icon for macOS and iOS
+resources_dir = "resources" # optional
+info_plist = "Info.plist" # optional, merged into the macOS and iOS Info.plist
+
+[package.metadata.bundle.macos]
+minimal_os_version = "11.0" # optional
+lipo = true # optional, build a universal x86_64 and arm64 binary
+iconset = "path/to/icon.iconset" # optional, or icns = "path/to/icon.icns"
+info_plist = "macos/Info.plist" # optional, merged into the macOS Info.plist
+entitlements = "macos/Entitlements.plist" # optional
+hardened_runtime = true # optional, defaults to whether there are entitlements
+
+[package.metadata.bundle.ios]
+info_plist = "ios/Info.plist" # optional, merged into the iOS Info.plist
+entitlements = "ios/Entitlements.plist" # optional
 
 [package.metadata.bundle.windows]
 # Square44x44Logo.png, Square150x150Logo.png, StoreLogo.png and their qualified variants, like
@@ -33,6 +47,28 @@ cargo bundle --path path/to/your/crate
 This builds your crate for x86_64 and arm64, links both architectures into a universal binary,
 creates an `.icns` file from the optional iconset, and creates a macOS app bundle in the
 `target/bundle` directory.
+
+### iOS
+
+On macOS, `cargo bundle --ios` builds your crate for the iOS Simulator and creates an ad-hoc
+signed app bundle in the `target/bundle/<crate>/ios` directory. The optional `icon` is compiled
+for iPhone and iPad. Install and launch it on the booted simulator with:
+
+```sh
+xcrun simctl install booted target/bundle/example/ios/ExampleApp.app
+xcrun simctl launch booted com.example.App
+```
+
+The generated iOS Info.plist supports iPhone and iPad, portrait and landscape on iPhone, and all
+orientations on iPad. Override these keys in the iOS Info.plist, for example to only allow portrait
+on iPhone:
+
+```xml
+<key>UISupportedInterfaceOrientations</key>
+<array>
+    <string>UIInterfaceOrientationPortrait</string>
+</array>
+```
 
 ### Windows
 
