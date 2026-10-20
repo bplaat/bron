@@ -84,7 +84,7 @@ pub(crate) fn compile_shader(path: &Path, out: &Path, name: &str, target: &str) 
             .as_ref()
             .map_err(|e| format!("{}: HLSL entry point {}: {e}", path.display(), entry.name))?;
         let native = match target {
-            "macos" => metal_name,
+            "macos" | "ios" => metal_name,
             "windows" => hlsl_name,
             _ => &entry.name,
         };
@@ -220,10 +220,10 @@ fn write_outputs(
     write_if_changed(&metal_path, metal_source.as_bytes())?;
     write_if_changed(&hlsl_path, hlsl.as_bytes())?;
     let data = match target {
-        "macos" => {
+        "macos" | "ios" => {
             let air_path = out.join(format!("{name}.air"));
             let library_path = out.join(format!("{name}.metallib"));
-            metal::compile(&metal_path, &air_path, &library_path)?;
+            metal::compile(&metal_path, &air_path, &library_path, target)?;
             let include = format!("/{name}.metallib");
             format!(
                 "wgpu::ShaderSource::Binary(&[(\"\", include_bytes!(concat!(env!(\"OUT_DIR\"), {include:?})))])"

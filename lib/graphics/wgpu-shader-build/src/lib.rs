@@ -48,11 +48,12 @@ impl Builder {
         let out = env::var_os("OUT_DIR").ok_or("Missing OUT_DIR; run from a Cargo build script")?;
         let target = env::var("CARGO_CFG_TARGET_OS")?;
         println!("cargo:rerun-if-env-changed=MACOSX_DEPLOYMENT_TARGET");
+        println!("cargo:rerun-if-env-changed=IPHONEOS_DEPLOYMENT_TARGET");
         self.compile_to(Path::new(&manifest), Path::new(&out), &target)
     }
 
     fn compile_to(self, manifest: &Path, out: &Path, target: &str) -> Result<()> {
-        if !matches!(target, "macos" | "linux" | "windows") {
+        if !matches!(target, "macos" | "ios" | "linux" | "windows") {
             return Err(format!("Unsupported graphics target: {target}").into());
         }
         if self.shaders.is_empty() {

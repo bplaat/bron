@@ -12,13 +12,46 @@ use std::{env, fs};
 use crate::Result;
 use crate::output::write_if_changed;
 
-pub(crate) fn compile(source: &Path, air: &Path, library: &Path) -> Result<()> {
+pub(crate) fn compile(source: &Path, air: &Path, library: &Path, target: &str) -> Result<()> {
     let temporary_air = TemporaryFile::new(air);
     let temporary_library = TemporaryFile::new(library);
     let mut compiler = Command::new("xcrun");
-    compiler.args(["-sdk", "macosx", "metal", "-std=macos-metal2.1"]);
-    if let Some(target) = env::var_os("MACOSX_DEPLOYMENT_TARGET") {
-        let mut argument = OsString::from("-mmacosx-version-min=");
+    let ios = target == "ios";
+    let simulator = env::var("TARGET")
+        .is_ok_and(|target| target.ends_with("-sim") || target.starts_with("x86_64-"));
+    let sdk = if ios {
+        if simulator {
+            "iphonesimulator"
+        } else {
+            "iphoneos"
+        }
+    } else {
+        "macosx"
+    };
+    compiler.args([
+        "-sdk",
+        sdk,
+        "metal",
+        if ios {
+            "-std=ios-metal2.1"
+        } else {
+            "-std=macos-metal2.1"
+        },
+    ]);
+    if let Some(target) = env::var_os(if ios {
+        "IPHONEOS_DEPLOYMENT_TARGET"
+    } else {
+        "MACOSX_DEPLOYMENT_TARGET"
+    }) {
+        let mut argument = OsString::from(if ios {
+            if simulator {
+                "-mios-simulator-version-min="
+            } else {
+                "-miphoneos-version-min="
+            }
+        } else {
+            "-mmacosx-version-min="
+        });
         argument.push(target);
         compiler.arg(argument);
     }
@@ -30,7 +63,7 @@ pub(crate) fn compile(source: &Path, air: &Path, library: &Path) -> Result<()> {
     run(&mut compiler, "Metal AIR compilation")?;
     run(
         Command::new("xcrun")
-            .args(["-sdk", "macosx", "metallib"])
+            .args(["-sdk", sdk, "metallib"])
             .arg(&temporary_air.0)
             .arg("-o")
             .arg(&temporary_library.0),
