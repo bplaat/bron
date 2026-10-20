@@ -13,8 +13,10 @@ workspace = true
 name = "Reversi"
 identifier = "nl.bplaat.Reversi"
 copyright = "Copyright (c) 2026 Bastiaan van der Plaat"
-icon = "meta/macos/icon.icon"
-entitlements = "meta/macos/Entitlements.plist"
+icon = "meta/apple/icon.icon"
+
+[package.metadata.bundle.macos]
+entitlements = "meta/apple/macos/Entitlements.plist"
 
 [package.metadata.bundle.windows]
 assets = "meta/windows"

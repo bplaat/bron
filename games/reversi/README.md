@@ -8,7 +8,7 @@ A native Reversi game built with [bwindow](../../lib/ui/bwindow) and [bcanvas](.
 - Legal-move hints and pointer feedback
 - Light and dark themes following system appearance
 - Resizable board with a fixed aspect ratio
-- Native windowing and drawing on macOS, Windows, and Linux
+- Native windowing and drawing on macOS, iOS, Windows, and Linux
 
 ## Screenshot
 

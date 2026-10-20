@@ -46,6 +46,28 @@ const RESTART_WIDTH: f32 = 176.0;
 const RESTART_HEIGHT: f32 = 52.0;
 const RESTART_X: f32 = BOARD_BACKGROUND_X + (BOARD_BACKGROUND_SIZE - RESTART_WIDTH) / 2.0;
 const RESTART_Y: f32 = BOARD_BACKGROUND_Y + (BOARD_BACKGROUND_SIZE - RESTART_HEIGHT) / 2.0;
+// On iOS the visible area is the board with its labels and status line plus a small margin,
+// so it fills more of the screen; desktop windows show the whole design area.
+#[cfg(target_os = "ios")]
+const STATUS_HEIGHT: f32 = 20.0;
+#[cfg(target_os = "ios")]
+const VIEW_MARGIN: f32 = 8.0;
+#[cfg(target_os = "ios")]
+const VIEW_X: f32 = GRID_OFFSET - VIEW_MARGIN;
+#[cfg(target_os = "ios")]
+const VIEW_Y: f32 = GRID_OFFSET - VIEW_MARGIN;
+#[cfg(target_os = "ios")]
+const VIEW_WIDTH: f32 = WINDOW_WIDTH - VIEW_X * 2.0;
+#[cfg(target_os = "ios")]
+const VIEW_HEIGHT: f32 = STATUS_Y + STATUS_HEIGHT / 2.0 + VIEW_MARGIN - VIEW_Y;
+#[cfg(not(target_os = "ios"))]
+const VIEW_X: f32 = 0.0;
+#[cfg(not(target_os = "ios"))]
+const VIEW_Y: f32 = 0.0;
+#[cfg(not(target_os = "ios"))]
+const VIEW_WIDTH: f32 = WINDOW_WIDTH;
+#[cfg(not(target_os = "ios"))]
+const VIEW_HEIGHT: f32 = WINDOW_HEIGHT;
 
 // MARK: Palette
 #[derive(Clone, Copy)]
@@ -261,13 +283,13 @@ struct GameLayout {
 
 impl GameLayout {
     fn new(size: LogicalSize) -> Self {
-        let scale = (size.width / WINDOW_WIDTH)
-            .min(size.height / WINDOW_HEIGHT)
+        let scale = (size.width / VIEW_WIDTH)
+            .min(size.height / VIEW_HEIGHT)
             .max(0.01);
         Self {
             scale,
-            offset_x: (size.width - WINDOW_WIDTH * scale) / 2.0,
-            offset_y: (size.height - WINDOW_HEIGHT * scale) / 2.0,
+            offset_x: (size.width - VIEW_WIDTH * scale) / 2.0 - VIEW_X * scale,
+            offset_y: (size.height - VIEW_HEIGHT * scale) / 2.0 - VIEW_Y * scale,
             size,
         }
     }
@@ -275,7 +297,8 @@ impl GameLayout {
     fn game_point(self, point: LogicalPoint) -> Option<(f32, f32)> {
         let x = (point.x - self.offset_x) / self.scale;
         let y = (point.y - self.offset_y) / self.scale;
-        ((0.0..WINDOW_WIDTH).contains(&x) && (0.0..WINDOW_HEIGHT).contains(&y)).then_some((x, y))
+        ((VIEW_X..VIEW_X + VIEW_WIDTH).contains(&x) && (VIEW_Y..VIEW_Y + VIEW_HEIGHT).contains(&y))
+            .then_some((x, y))
     }
 
     fn hit_test(self, point: LogicalPoint, game_over: bool) -> Hover {
