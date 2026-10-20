@@ -87,9 +87,9 @@ pub enum Event<T = ()> {
     UserEvent(T),
     /// Files opened through the operating system.
     OpenFiles(Vec<PathBuf>),
-    /// A custom macOS menu item was selected
-    #[cfg(all(target_os = "macos", feature = "menu"))]
-    MacosMenuItem(String),
+    /// An application command was invoked by a menu or keyboard shortcut.
+    #[cfg(feature = "menu")]
+    Action(String),
 }
 
 pub(crate) type NativeEvent = Event<Box<dyn std::any::Any + Send>>;
@@ -101,8 +101,8 @@ impl<T> Event<T> {
             Self::UserEvent(value) => Event::UserEvent(map(value)),
             Self::LoopExiting => Event::LoopExiting,
             Self::OpenFiles(paths) => Event::OpenFiles(paths),
-            #[cfg(all(target_os = "macos", feature = "menu"))]
-            Self::MacosMenuItem(action) => Event::MacosMenuItem(action),
+            #[cfg(feature = "menu")]
+            Self::Action(action) => Event::Action(action),
         }
     }
 }

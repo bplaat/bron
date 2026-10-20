@@ -15,7 +15,7 @@ pub use crate::dialog::*;
 pub use crate::event::*;
 pub use crate::event_loop::*;
 pub use crate::input::*;
-#[cfg(all(target_os = "macos", feature = "menu"))]
+#[cfg(feature = "menu")]
 pub use crate::menu::*;
 pub use crate::sizes::*;
 pub use crate::window::*;
@@ -28,7 +28,7 @@ mod event;
 mod event_loop;
 mod input;
 mod mailbox;
-#[cfg(all(target_os = "macos", feature = "menu"))]
+#[cfg(feature = "menu")]
 mod menu;
 mod platforms;
 mod sizes;

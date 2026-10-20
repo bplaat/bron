@@ -21,6 +21,8 @@ mod event_loop;
 mod file_drop;
 pub(crate) mod headers;
 pub(crate) mod input;
+#[cfg(feature = "menu")]
+mod menu;
 #[cfg(feature = "progress_bar")]
 mod progress_bar;
 mod window;

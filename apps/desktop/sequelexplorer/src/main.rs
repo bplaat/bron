@@ -18,7 +18,10 @@ use bsql::{
     ColumnType, Connection, MysqlTransport, PoolOptions, SqliteMode, StatementError, Value,
 };
 use bwebview::{WebviewBuilder, WebviewEvent};
-use bwindow::{Event, EventLoopBuilder, FileDialog, LogicalSize, Theme, WindowBuilder};
+use bwindow::{
+    Accelerator, Event, EventLoopBuilder, FileDialog, KeyCode, LogicalSize, MenuBarBuilder,
+    MenuBuilder, MenuItem, Modifiers, Theme, WindowBuilder,
+};
 use keyring::{Entry as CredentialEntry, Error as CredentialError};
 use rust_embed::Embed;
 use serde::{Deserialize, Serialize};
@@ -1285,22 +1288,17 @@ fn main() {
         None
     };
     let state: State = Arc::new(Mutex::new(DatabaseState::default()));
-    #[allow(unused_mut)]
-    let mut event_loop_builder = EventLoopBuilder::new()
+    let event_loop = EventLoopBuilder::new()
         .with_user_event::<AppEvent>()
         .app_id("nl", "bplaat", "SequelExplorer")
-        .single_instance(false);
-    #[cfg(target_os = "macos")]
-    {
-        use bwindow::{Accelerator, KeyCode, MenuBarBuilder, MenuBuilder, MenuItem, Modifiers};
-
-        event_loop_builder = event_loop_builder.macos_set_menu(
+        .single_instance(false)
+        .menu(
             MenuBarBuilder::new()
                 .menu(
                     MenuBuilder::new("File")
                         .item(
                             MenuItem::new("Connect to Database...", "open")
-                                .accelerator(Accelerator::new(Modifiers::COMMAND, KeyCode::KeyO)),
+                                .accelerator(Accelerator::new(Modifiers::PRIMARY, KeyCode::KeyO)),
                         )
                         .separator(),
                 )
@@ -1308,27 +1306,26 @@ fn main() {
                     MenuBuilder::new("View")
                         .item(
                             MenuItem::new("Data", "showData")
-                                .accelerator(Accelerator::new(Modifiers::COMMAND, KeyCode::Digit1)),
+                                .accelerator(Accelerator::new(Modifiers::PRIMARY, KeyCode::Digit1)),
                         )
                         .item(
                             MenuItem::new("Schema", "showSchema")
-                                .accelerator(Accelerator::new(Modifiers::COMMAND, KeyCode::Digit2)),
+                                .accelerator(Accelerator::new(Modifiers::PRIMARY, KeyCode::Digit2)),
                         ),
                 )
                 .menu(
                     MenuBuilder::new("Query")
                         .item(
                             MenuItem::new("Run Query", "runQuery")
-                                .accelerator(Accelerator::new(Modifiers::COMMAND, KeyCode::Enter)),
+                                .accelerator(Accelerator::new(Modifiers::PRIMARY, KeyCode::Enter)),
                         )
                         .item(
                             MenuItem::new("Clear Query", "clearQuery")
-                                .accelerator(Accelerator::new(Modifiers::COMMAND, KeyCode::KeyK)),
+                                .accelerator(Accelerator::new(Modifiers::PRIMARY, KeyCode::KeyK)),
                         ),
                 ),
-        );
-    }
-    let event_loop = event_loop_builder.build();
+        )
+        .build();
 
     let router = RouterBuilder::<State>::with(Arc::clone(&state))
         .get("/api/databases", db_databases)
@@ -1378,7 +1375,6 @@ fn main() {
     );
 
     let mut page_ready = false;
-    #[cfg(target_os = "macos")]
     let mut pending_menu_action: Option<String> = None;
     let mut pending_open_path = startup_path;
     let mut initial_restore_sent = false;
@@ -1405,8 +1401,7 @@ fn main() {
         Event::UserEvent(AppEvent::Webview(_window_id, WebviewEvent::PageTitleChange(title))) => {
             window.set_title(title)
         }
-        #[cfg(target_os = "macos")]
-        Event::MacosMenuItem(action) => {
+        Event::Action(action) => {
             if page_ready {
                 webview.send_ipc_message(
                     serde_json::to_string(&IpcMessage::MenuAction { action })
@@ -1459,7 +1454,6 @@ fn main() {
                         );
                     }
                     initial_restore_sent = true;
-                    #[cfg(target_os = "macos")]
                     if let Some(action) = pending_menu_action.take() {
                         webview.send_ipc_message(
                             serde_json::to_string(&IpcMessage::MenuAction { action })

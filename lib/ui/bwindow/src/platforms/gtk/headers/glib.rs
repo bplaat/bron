@@ -162,9 +162,18 @@ pub struct GInputStream([u8; 0]);
 pub struct GApplication([u8; 0]);
 #[repr(C)]
 pub struct GFile([u8; 0]);
+#[repr(C)]
+pub struct GSimpleAction([u8; 0]);
 pub const G_APPLICATION_HANDLES_OPEN: u32 = 1 << 2;
 pub const G_APPLICATION_NON_UNIQUE: u32 = 1 << 5;
 
+#[repr(C)]
+pub struct GMenu([u8; 0]);
+#[repr(C)]
+pub struct GMenuModel([u8; 0]);
+
+#[repr(C)]
+pub struct GMenuItem([u8; 0]);
 unsafe extern "C" {
     pub fn g_application_id_is_valid(id: *const c_char) -> i32;
     pub fn g_application_register(
@@ -180,6 +189,24 @@ unsafe extern "C" {
     ) -> i32;
     pub fn g_application_quit(application: *mut GApplication);
     pub fn g_file_get_path(file: *mut GFile) -> *mut c_char;
+    pub fn g_simple_action_new(
+        name: *const c_char,
+        parameter_type: *const GVariantType,
+    ) -> *mut GSimpleAction;
+    pub fn g_action_map_add_action(map: *mut c_void, action: *mut GSimpleAction);
+    #[cfg(test)]
+    pub fn g_menu_model_get_n_items(model: *mut GMenuModel) -> i32;
+    pub fn g_menu_new() -> *mut GMenu;
+    pub fn g_menu_append_section(menu: *mut GMenu, label: *const c_char, section: *mut GMenuModel);
+    pub fn g_menu_append_submenu(menu: *mut GMenu, label: *const c_char, submenu: *mut GMenuModel);
+    pub fn g_menu_item_new(label: *const c_char, action: *const c_char) -> *mut GMenuItem;
+    pub fn g_menu_item_set_attribute(
+        item: *mut GMenuItem,
+        attribute: *const c_char,
+        format: *const c_char,
+        ...
+    );
+    pub fn g_menu_append_item(menu: *mut GMenu, item: *mut GMenuItem);
     pub fn g_bus_get_sync(
         bus_type: i32,
         cancellable: *mut c_void,

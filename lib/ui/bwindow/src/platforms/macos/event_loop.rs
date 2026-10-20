@@ -156,7 +156,7 @@ impl AppDelegate {
     #[cfg(feature = "menu")]
     fn menu_item_selected(&self, sender: *mut Object) {
         let action: NSString = unsafe { msg_send![sender, representedObject] };
-        send_event(Event::MacosMenuItem(action.to_string()));
+        send_event(Event::Action(action.to_string()));
     }
 }
 

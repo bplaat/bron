@@ -23,6 +23,8 @@ pub(crate) struct PlatformEventLoop {
     theme: Theme,
     mailbox: Arc<Mailbox>,
     message_window: HWND,
+    #[cfg(feature = "menu")]
+    _accelerators: super::menu::Accelerators,
 }
 
 impl PlatformEventLoop {
@@ -97,6 +99,11 @@ impl PlatformEventLoop {
                 theme: system_theme(),
                 mailbox,
                 message_window,
+                #[cfg(feature = "menu")]
+                _accelerators: super::menu::Accelerators::new(
+                    message_window,
+                    builder.menu.as_ref(),
+                ),
             }
         }
     }
@@ -192,6 +199,10 @@ impl crate::EventLoopInterface for PlatformEventLoop {
                 if result == 0 {
                     return msg.wParam as i32;
                 }
+                #[cfg(feature = "menu")]
+                if super::menu::translate(&mut msg) {
+                    continue;
+                }
                 TranslateMessage(&msg);
                 DispatchMessageW(&msg);
             }
@@ -231,6 +242,17 @@ unsafe extern "system" fn message_window_proc(
     if msg == WM_NCCREATE {
         let create = unsafe { &*(l as *const CREATESTRUCTW) };
         unsafe { SetWindowLong(hwnd, GWL_USERDATA, create.lpCreateParams as isize) };
+    }
+    #[cfg(feature = "menu")]
+    if msg == 0x0111 && w >> 16 == 1 {
+        // Defer application callbacks until synchronous WebView2 input handling returns.
+        unsafe { PostMessageW(hwnd, WM_USER + 2, w & 0xffff, 0) };
+        return 0;
+    }
+    #[cfg(feature = "menu")]
+    if msg == WM_USER + 2 {
+        super::menu::activate(w);
+        return 0;
     }
     if msg == WM_WAKE {
         let mailbox = unsafe { &*(GetWindowLong(hwnd, GWL_USERDATA) as *const Mailbox) };

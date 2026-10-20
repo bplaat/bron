@@ -38,7 +38,32 @@ pub struct GdkScreen([u8; 0]);
 #[repr(C)]
 pub struct GdkMonitor([u8; 0]);
 
+#[repr(C)]
+pub struct GdkKeymap([u8; 0]);
+#[repr(C)]
+pub struct GdkKeymapKey {
+    pub keycode: u32,
+    pub group: i32,
+    pub level: i32,
+}
 unsafe extern "C" {
+    pub fn gdk_keymap_get_for_display(display: *mut GdkDisplay) -> *mut GdkKeymap;
+    pub fn gdk_keymap_get_entries_for_keyval(
+        keymap: *mut GdkKeymap,
+        keyval: u32,
+        keys: *mut *mut GdkKeymapKey,
+        count: *mut i32,
+    ) -> i32;
+    pub fn gdk_keymap_translate_keyboard_state(
+        keymap: *mut GdkKeymap,
+        keycode: u32,
+        state: u32,
+        group: i32,
+        keyval: *mut u32,
+        effective_group: *mut i32,
+        level: *mut i32,
+        consumed: *mut u32,
+    ) -> i32;
     pub fn gdk_event_get_event_type(event: *const GdkEvent) -> i32;
     pub fn gdk_event_get_keycode(event: *const GdkEvent, code: *mut u16) -> i32;
     pub fn gdk_event_get_keyval(event: *const GdkEvent, keyval: *mut u32) -> i32;

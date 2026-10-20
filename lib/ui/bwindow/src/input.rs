@@ -73,6 +73,12 @@ impl Modifiers {
     pub const META: Self = Self(1 << 0);
     /// Command key (alias for Meta).
     pub const COMMAND: Self = Self::META;
+    /// Command on macOS, Control on other platforms.
+    pub const PRIMARY: Self = if cfg!(target_os = "macos") {
+        Self::COMMAND
+    } else {
+        Self::CONTROL
+    };
     /// Control key
     pub const CONTROL: Self = Self(1 << 1);
     /// Alt key (Option on macOS).

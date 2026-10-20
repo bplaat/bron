@@ -6,6 +6,7 @@
 
 pub(crate) use crate::platforms::windows::webview::PlatformWebview;
 
+mod accelerators;
 mod callback;
 #[cfg(feature = "file_drop")]
 mod file_drop;

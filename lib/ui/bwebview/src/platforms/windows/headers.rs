@@ -216,7 +216,13 @@ pub(crate) struct ICoreWebView2ControllerVtbl {
     padding2: [usize; 1],
     put_Bounds:
         unsafe extern "system" fn(This: *mut ICoreWebView2Controller, bounds: RECT) -> HRESULT,
-    padding3: [usize; 17],
+    padding3: [usize; 12],
+    pub(super) add_AcceleratorKeyPressed: unsafe extern "system" fn(
+        This: *mut ICoreWebView2Controller,
+        handler: *mut c_void,
+        token: *mut EventRegistrationToken,
+    ) -> HRESULT,
+    padding4: [usize; 4],
     Close: unsafe extern "system" fn(This: *mut ICoreWebView2Controller) -> HRESULT,
     get_CoreWebView2: unsafe extern "system" fn(
         This: *mut ICoreWebView2Controller,

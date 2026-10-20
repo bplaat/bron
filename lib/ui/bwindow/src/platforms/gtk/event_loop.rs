@@ -79,6 +79,8 @@ impl PlatformEventLoop {
             if let Some(ref id) = app_id_name {
                 gtk_window_set_default_icon_name(id.as_ptr());
             }
+            #[cfg(feature = "menu")]
+            super::menu::register(application, builder.menu.as_ref());
             APPLICATION.set(application);
             APP_ID = builder.app_id;
             application

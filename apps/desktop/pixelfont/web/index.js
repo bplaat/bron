@@ -8,40 +8,26 @@ window.addEventListener('contextmenu', (e) => e.preventDefault());
 
 const isMacosBwebview = navigator.userAgent.includes('bwebview') && navigator.userAgent.includes('Macintosh');
 
-// Every action the user can trigger, keyed by the action id used in the macOS menu bar.
-// `method` is the app method that performs it, `key`/`shift`/`alt` are the Command-chord
-// fallback for platforms without a menu bar. Keep the ids and chords in sync with main.rs.
 const ACTIONS = {
-    new: { method: 'newFile', key: 'n' },
-    open: { method: 'openFile', key: 'o' },
-    save: { method: 'saveFile', key: 's' },
-    saveAs: { method: 'saveFileAs', key: 's', shift: true },
-    exportAsm: { method: 'exportAsm', key: 'a', alt: true },
-    exportC: { method: 'exportC', key: 'c', alt: true },
-    copy: { method: 'copyChar', key: 'c' },
-    paste: { method: 'pasteChar', key: 'v' },
-    clear: { method: 'opClear', key: 'Backspace' },
-    invert: { method: 'opInvert', key: 'i' },
-    rotate: { method: 'opRotate', key: 'r' },
-    mirrorH: { method: 'opMirrorH', key: 'h', shift: true },
-    mirrorV: { method: 'opMirrorV', key: 'v', shift: true },
-    clearAll: { method: 'opClearAll', key: 'Backspace', alt: true },
-    invertAll: { method: 'opInvertAll', key: 'i', alt: true },
-    rotateAll: { method: 'opRotateAll', key: 'r', alt: true },
-    mirrorHAll: { method: 'opMirrorHAll', key: 'h', alt: true, shift: true },
-    mirrorVAll: { method: 'opMirrorVAll', key: 'v', alt: true, shift: true },
+    new: 'newFile',
+    open: 'openFile',
+    save: 'saveFile',
+    saveAs: 'saveFileAs',
+    exportAsm: 'exportAsm',
+    exportC: 'exportC',
+    copy: 'copyChar',
+    paste: 'pasteChar',
+    clear: 'opClear',
+    invert: 'opInvert',
+    rotate: 'opRotate',
+    mirrorH: 'opMirrorH',
+    mirrorV: 'opMirrorV',
+    clearAll: 'opClearAll',
+    invertAll: 'opInvertAll',
+    rotateAll: 'opRotateAll',
+    mirrorHAll: 'opMirrorHAll',
+    mirrorVAll: 'opMirrorVAll',
 };
-
-// Returns the id of the action this key event triggers, or null when it is not a shortcut
-function matchShortcut(event) {
-    if (!event.metaKey && !event.ctrlKey) return null;
-    const pressed = event.key.toLowerCase();
-    const match = Object.entries(ACTIONS).find(
-        ([, { key, shift = false, alt = false }]) =>
-            key.toLowerCase() === pressed && event.shiftKey === shift && event.altKey === alt,
-    );
-    return match ? match[0] : null;
-}
 
 // IPC helpers
 function ipcSend(type, data = {}) {
@@ -209,17 +195,6 @@ PetiteVue.createApp({
         });
 
         window.addEventListener('keydown', (e) => {
-            // On macOS the native menu bar already claims these chords and delivers them over IPC,
-            // so only the other platforms need to resolve them here
-            if (!isMacosBwebview) {
-                const action = matchShortcut(e);
-                if (action) {
-                    e.preventDefault();
-                    this.performAction(action);
-                    return;
-                }
-            }
-
             // Unmodified arrow keys walk the character grid
             if (e.metaKey || e.ctrlKey || e.altKey) return;
             let next = this.selectedChar;
@@ -242,10 +217,9 @@ PetiteVue.createApp({
         });
     },
 
-    // Runs an action by id, coming from the macOS menu bar or from a keyboard shortcut
     performAction(id) {
         const action = ACTIONS[id];
-        if (action) this[action.method]();
+        if (action) this[action]();
     },
 
     // File operations

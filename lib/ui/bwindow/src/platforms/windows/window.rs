@@ -570,3 +570,8 @@ pub(crate) fn config_dir() -> PathBuf {
     .expect("Can't get dirs");
     project_dirs.config_dir()
 }
+
+#[cfg(feature = "menu")]
+pub(super) fn is_app_window(window: HWND) -> bool {
+    !window.is_null() && unsafe { GetWindowLong(window, -4) } == window_proc as *const () as isize
+}

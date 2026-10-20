@@ -35,10 +35,28 @@ pub const GTK_MESSAGE_WARNING: i32 = 1;
 pub const GTK_MESSAGE_ERROR: i32 = 3;
 pub const GTK_BUTTONS_NONE: i32 = 0;
 unsafe extern "C" {
+    #[cfg(test)]
+    pub fn gtk_application_window_get_show_menubar(window: *mut GtkWindow) -> i32;
+    #[cfg(test)]
+    pub fn gtk_application_get_menubar(
+        application: *mut GtkApplication,
+    ) -> *mut super::glib::GMenuModel;
     pub fn gtk_application_new(application_id: *const c_char, flags: u32) -> *mut GtkApplication;
     pub fn gtk_application_get_active_window(application: *mut GtkApplication) -> *mut GtkWindow;
+    pub fn gtk_application_set_accels_for_action(
+        application: *mut GtkApplication,
+        action: *const c_char,
+        accels: *const *const c_char,
+    );
     pub fn gtk_window_present(window: *mut GtkWindow);
+    pub fn gtk_application_set_menubar(
+        application: *mut GtkApplication,
+        menu: *mut super::glib::GMenuModel,
+    );
     pub fn gtk_application_window_new(application: *mut GtkApplication) -> *mut GtkWindow;
+    pub fn gtk_application_window_set_show_menubar(window: *mut GtkWindow, show: i32);
+    pub fn gtk_accelerator_parse(accelerator: *const c_char, key: *mut u32, modifiers: *mut u32);
+    pub fn gtk_accelerator_name(key: u32, modifiers: u32) -> *mut c_char;
     pub fn gtk_widget_destroy(widget: *mut GtkWidget);
     pub fn gtk_widget_get_allocated_width(widget: *mut GtkWidget) -> i32;
     pub fn gtk_widget_get_allocated_height(widget: *mut GtkWidget) -> i32;
