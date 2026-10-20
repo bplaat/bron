@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025 Bastiaan van der Plaat
+ * Copyright (c) 2025-2026 Bastiaan van der Plaat
  *
  * SPDX-License-Identifier: MIT
  */
@@ -15,7 +15,17 @@ pub(crate) struct Manifest {
 pub(crate) struct Package {
     pub name: String,
     pub version: String,
+    #[cfg_attr(not(windows), allow(dead_code))]
+    pub authors: Option<Authors>,
     pub metadata: PackageMetadata,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) enum Authors {
+    List(Vec<String>),
+    Workspace { workspace: bool },
 }
 
 #[derive(Deserialize)]
@@ -24,6 +34,7 @@ pub(crate) struct PackageMetadata {
 }
 
 #[derive(Clone, Deserialize)]
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub(crate) struct BundleMetadata {
     pub name: String,
     pub identifier: String,
@@ -38,9 +49,12 @@ pub(crate) struct BundleMetadata {
     pub entitlements: Option<String>,
     pub hardened_runtime: Option<bool>,
     pub appex: Option<Vec<AppexMetadata>>,
+    #[cfg_attr(not(windows), allow(dead_code))]
+    pub windows: Option<WindowsMetadata>,
 }
 
 #[derive(Clone, Deserialize)]
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub(crate) struct AppexMetadata {
     pub name: String,
     pub identifier: String,
@@ -49,4 +63,21 @@ pub(crate) struct AppexMetadata {
     pub minimal_os_version: Option<String>,
     pub info_plist: String,
     pub entitlements: Option<String>,
+}
+
+#[derive(Clone, Default, Deserialize)]
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) struct WindowsMetadata {
+    pub assets: Option<String>,
+    pub sandbox: Option<bool>,
+    pub virtualization: Option<bool>,
+    pub capabilities: Option<Vec<String>>,
+    pub file_types: Option<Vec<FileTypeMetadata>>,
+}
+
+#[derive(Clone, Deserialize)]
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) struct FileTypeMetadata {
+    pub name: String,
+    pub extensions: Vec<String>,
 }

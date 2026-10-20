@@ -16,6 +16,8 @@ mod args;
 mod macos;
 mod manifest;
 mod support;
+#[cfg(windows)]
+mod windows;
 
 fn read_manifest(path: &str) -> Manifest {
     let manifest_path = format!("{path}/Cargo.toml");
@@ -50,5 +52,7 @@ fn main() -> ExitCode {
     let target_dir = format!("target/bundle/{}", manifest.package.name);
     #[cfg(target_os = "macos")]
     macos::bundle(&args, &target_dir, &manifest);
+    #[cfg(windows)]
+    windows::bundle(&args, &target_dir, &manifest);
     ExitCode::SUCCESS
 }
