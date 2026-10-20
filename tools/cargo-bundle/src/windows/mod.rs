@@ -15,14 +15,12 @@ use crate::windows::appx_manifest::{appx_manifest, package_version};
 use crate::windows::publisher::publisher_name;
 
 mod appx_manifest;
-mod makeappx;
 mod publisher;
+mod sdk;
 
-const LOGOS: [&str; 3] = [
-    "Square44x44Logo.png",
-    "Square150x150Logo.png",
-    "StoreLogo.png",
-];
+// Logos referenced by the manifest, qualified variants like `.targetsize-88_altform-unplated.png`
+// next to them are indexed by `resources.pri`
+const LOGOS: [&str; 3] = ["Square44x44Logo", "Square150x150Logo", "StoreLogo"];
 
 // Rust targets and their MSIX architectures, the bundle lets Windows install the matching one
 const ARCHITECTURES: [(&str, &str); 2] = [
@@ -57,6 +55,7 @@ pub(crate) fn bundle(args: &Args, target_dir: &str, manifest: &Manifest) {
 
     let publisher = publisher_name(&args.path, manifest);
     let assets = windows.assets.as_deref().unwrap_or("meta/windows");
+    let logos = logo_files(&format!("{}/{assets}", args.path));
     let msix_dir = format!("{target_dir}/msix");
     let packages = format!("{msix_dir}/packages");
     remove_path_if_exists(&msix_dir);
@@ -69,7 +68,7 @@ pub(crate) fn bundle(args: &Args, target_dir: &str, manifest: &Manifest) {
             format!("{layout}/{executable}"),
         )
         .expect("Failed to copy executable");
-        for logo in LOGOS {
+        for logo in &logos {
             fs::copy(
                 format!("{}/{assets}/{logo}", args.path),
                 format!("{layout}/Assets/{logo}"),
@@ -83,7 +82,8 @@ pub(crate) fn bundle(args: &Args, target_dir: &str, manifest: &Manifest) {
         .expect("Failed to write AppxManifest.xml");
     }
 
-    // Windows ignores reinstalls of the same version, so the revision hashes all packaged files
+    // Windows ignores reinstalls of the same version, so the revision hashes all packaged files,
+    // the resource index is created afterwards from these same files
     let mut hash = Fnv1a::default();
     for (_, arch) in ARCHITECTURES {
         hash_directory(&mut hash, Path::new(&format!("{msix_dir}/{arch}")));
@@ -96,19 +96,43 @@ pub(crate) fn bundle(args: &Args, target_dir: &str, manifest: &Manifest) {
             appx_manifest(manifest, &windows, &publisher, &executable, arch, revision),
         )
         .expect("Failed to write AppxManifest.xml");
-        makeappx::pack(&layout, &format!("{packages}/{}_{arch}.msix", bundle.name));
+        sdk::make_pri(&format!("{msix_dir}/priconfig.xml"), &layout);
+        sdk::pack(&layout, &format!("{packages}/{}_{arch}.msix", bundle.name));
     }
 
     let msix_bundle = format!("{target_dir}/{}.msixbundle", bundle.name);
     remove_path_if_exists(&msix_bundle);
     // Remove the single architecture package of older versions
     remove_path_if_exists(&format!("{target_dir}/{}.msix", bundle.name));
-    makeappx::bundle(
+    sdk::bundle(
         &packages,
         &msix_bundle,
         &package_version(&manifest.package.version, revision),
     );
     println!("Created {msix_bundle}");
+}
+
+fn logo_files(assets: &str) -> Vec<String> {
+    let mut logos: Vec<_> = fs::read_dir(assets)
+        .unwrap_or_else(|error| panic!("Failed to read {assets}: {error}"))
+        .filter_map(|entry| entry.ok()?.file_name().into_string().ok())
+        .filter(|name| is_logo_file(name))
+        .collect();
+    logos.sort();
+    for logo in LOGOS {
+        assert!(
+            logos.contains(&format!("{logo}.png")),
+            "Missing {assets}/{logo}.png"
+        );
+    }
+    logos
+}
+
+fn is_logo_file(name: &str) -> bool {
+    LOGOS.iter().any(|logo| {
+        name.strip_prefix(logo)
+            .is_some_and(|rest| rest.starts_with('.') && rest.ends_with(".png"))
+    })
 }
 
 fn hash_directory(hash: &mut Fnv1a, directory: &Path) {
@@ -152,6 +176,18 @@ impl Fnv1a {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn logo_files_include_qualified_variants() {
+        assert!(is_logo_file("Square44x44Logo.png"));
+        assert!(is_logo_file(
+            "Square44x44Logo.targetsize-88_altform-unplated.png"
+        ));
+        assert!(is_logo_file("StoreLogo.scale-200.png"));
+        assert!(!is_logo_file("icon.ico"));
+        assert!(!is_logo_file("Square44x44LogoOld.png"));
+        assert!(!is_logo_file("Square44x44Logo.svg"));
+    }
 
     #[test]
     fn revision_changes_with_contents() {
