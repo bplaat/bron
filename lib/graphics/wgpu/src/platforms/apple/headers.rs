@@ -14,9 +14,9 @@ use objc2::runtime::AnyObject;
 use objc2::{Encode, Encoding};
 
 pub(super) type Object = Retained<AnyObject>;
-#[cfg(feature = "window")]
+#[cfg(all(feature = "window", target_os = "macos"))]
 pub(super) type CVDisplayLinkRef = *mut c_void;
-#[cfg(feature = "window")]
+#[cfg(all(feature = "window", target_os = "macos"))]
 pub(super) type CVDisplayLinkOutputCallback = unsafe extern "C" fn(
     CVDisplayLinkRef,
     *const c_void,
@@ -26,7 +26,7 @@ pub(super) type CVDisplayLinkOutputCallback = unsafe extern "C" fn(
     *mut c_void,
 ) -> i32;
 
-#[cfg(feature = "window")]
+#[cfg(all(feature = "window", target_os = "macos"))]
 #[link(name = "CoreVideo", kind = "framework")]
 unsafe extern "C" {
     pub(super) fn CVDisplayLinkCreateWithActiveCGDisplays(
@@ -80,3 +80,9 @@ structure!(MOrigin, "?", x: usize, y: usize, z: usize);
 structure!(Viewport, "?", x: f64, y: f64, width: f64, height: f64, near: f64, far: f64);
 structure!(Scissor, "?", x: usize, y: usize, width: usize, height: usize);
 structure!(Clear, "?", r: f64, g: f64, b: f64, a: f64);
+
+#[cfg(all(feature = "window", target_os = "ios"))]
+#[link(name = "Foundation", kind = "framework")]
+unsafe extern "C" {
+    pub(super) static NSRunLoopCommonModes: *mut AnyObject;
+}

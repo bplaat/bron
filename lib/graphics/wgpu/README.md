@@ -1,7 +1,7 @@
 # wgpu Rust library
 
 A native GPU rendering library for [bwindow](../../ui/bwindow) and offscreen bitmaps,
-backed by Metal on macOS, Vulkan on Linux, and Direct3D 12 on Windows.
+backed by Metal on macOS and iOS, Vulkan on Linux, and Direct3D 12 on Windows.
 
 Despite sharing its name and part of its API with upstream `wgpu`, this crate is
 not API-compatible with it and is not a replacement. It currently supports the
@@ -23,7 +23,7 @@ code.
 | Operating system | Backends               | Fallback                                              |
 | ---------------- | ---------------------- | ----------------------------------------------------- |
 | Windows          | Direct3D 12 (fl 11_0+) | D3D12 hardware, then the D3D12 WARP software renderer |
-| macOS            | Metal                  | None                                                  |
+| macOS / iOS      | Metal                  | None                                                  |
 | Linux            | Vulkan 1.1+            | A software Vulkan implementation, when installed      |
 
 ## Getting Started
@@ -48,7 +48,7 @@ obtain an `image::Bitmap`. The read waits for the GPU to finish. Encode it with
 WGSL shaders are compiled at build time with
 [wgpu-shader-build](../wgpu-shader-build) and embedded as Metal libraries,
 SPIR-V, or Direct3D bytecode. Native GPU objects remain on their creating
-thread, and surface creation must happen on the main thread on macOS.
+thread, and surface creation must happen on the main thread on macOS and iOS.
 
 ## Examples
 
@@ -70,3 +70,15 @@ See [wgpu-triangle](examples/triangle),
 Copyright © 2026 [Bastiaan van der Plaat](https://github.com/bplaat)
 
 Licensed under the [MIT](../../../LICENSE) license.
+
+## iOS Simulator
+
+From the workspace root on macOS, build, install and launch the blocks example with:
+
+```sh
+cargo run -p cargo-bundle -- bundle --path lib/graphics/wgpu/examples/blocks --ios --run
+```
+
+This requires the Xcode iOS Simulator SDK and runtime, the Metal compiler, and the
+`aarch64-apple-ios-sim` Rust target. Add `--device <name-or-UDID>` to select a simulator.
+The iOS surface uses a CAMetalLayer and on-demand CADisplayLink animation callbacks.
