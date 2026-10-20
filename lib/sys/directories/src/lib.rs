@@ -20,6 +20,7 @@ pub(crate) mod windows {
     use super::*;
 
     #[repr(C)]
+    #[derive(PartialEq, Eq)]
     pub(crate) struct Guid {
         data1: u32,
         data2: u16,
@@ -119,6 +120,100 @@ pub(crate) mod windows {
         };
         PathBuf::from(path.to_string())
     }
+
+    const TOKEN_QUERY: u32 = 0x0008;
+    const TOKEN_IS_APP_CONTAINER: u32 = 29;
+    const ERROR_SUCCESS: i32 = 0;
+    const ERROR_INSUFFICIENT_BUFFER: i32 = 122;
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn GetCurrentProcess() -> *mut std::ffi::c_void;
+        fn CloseHandle(handle: *mut std::ffi::c_void) -> i32;
+        fn GetCurrentPackageFamilyName(length: *mut u32, name: *mut u16) -> i32;
+    }
+    #[link(name = "advapi32")]
+    unsafe extern "system" {
+        fn OpenProcessToken(
+            process: *mut std::ffi::c_void,
+            access: u32,
+            token: *mut *mut std::ffi::c_void,
+        ) -> i32;
+        fn GetTokenInformation(
+            token: *mut std::ffi::c_void,
+            class: u32,
+            information: *mut std::ffi::c_void,
+            length: u32,
+            return_length: *mut u32,
+        ) -> i32;
+    }
+
+    fn is_app_container() -> bool {
+        let mut token = std::ptr::null_mut();
+        // SAFETY: GetCurrentProcess returns a pseudo-handle and token points to writable storage.
+        if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) } == 0 {
+            return false;
+        }
+        let mut is_app_container = 0u32;
+        let mut length = 0;
+        // SAFETY: token is a valid token handle and is_app_container is a writable u32 buffer.
+        let success = unsafe {
+            GetTokenInformation(
+                token,
+                TOKEN_IS_APP_CONTAINER,
+                (&raw mut is_app_container).cast(),
+                size_of::<u32>() as u32,
+                &mut length,
+            )
+        } != 0;
+        // SAFETY: token is an owned handle returned by OpenProcessToken and is closed once.
+        unsafe { CloseHandle(token) };
+        success && is_app_container != 0
+    }
+
+    fn package_family_name() -> Option<String> {
+        let mut length = 0;
+        // SAFETY: Querying the required length with a null buffer is allowed.
+        if unsafe { GetCurrentPackageFamilyName(&mut length, std::ptr::null_mut()) }
+            != ERROR_INSUFFICIENT_BUFFER
+        {
+            return None;
+        }
+        let mut name = vec![0u16; length as usize];
+        // SAFETY: name has room for length code units including the null terminator.
+        if unsafe { GetCurrentPackageFamilyName(&mut length, name.as_mut_ptr()) } != ERROR_SUCCESS {
+            return None;
+        }
+        Some(String::from_utf16_lossy(
+            &name[..length.saturating_sub(1) as usize],
+        ))
+    }
+
+    /// Returns the AppData folder, sandboxed MSIX apps can only write in their own package folders
+    pub(crate) fn get_app_data_path(folder_id: &Guid) -> PathBuf {
+        static PACKAGE_DIR: std::sync::OnceLock<Option<PathBuf>> = std::sync::OnceLock::new();
+        let package_dir = PACKAGE_DIR.get_or_init(|| {
+            if !is_app_container() {
+                return None;
+            }
+            package_family_name().map(|name| {
+                // Inside an AppContainer the local AppData folder already points to the
+                // package's AC folder
+                let local = get_known_folder_path(&FOLDERID_LOCAL_APPDATA);
+                let package_dir = std::path::Path::new("Packages").join(name);
+                match local.parent() {
+                    Some(parent) if local.ends_with(package_dir.join("AC")) => parent.to_owned(),
+                    _ => local.join(package_dir),
+                }
+            })
+        });
+        match package_dir {
+            Some(package_dir) if *folder_id == FOLDERID_ROAMING_APPDATA => {
+                package_dir.join("RoamingState")
+            }
+            Some(package_dir) => package_dir.join("LocalState"),
+            None => get_known_folder_path(folder_id),
+        }
+    }
 }
 
 #[cfg(all(unix, not(target_os = "macos")))]
@@ -155,7 +250,7 @@ impl BaseDirs {
                 xdg_dir("XDG_CACHE_HOME", self.home_dir.join(".cache"))
             }
             target_os = "macos" => self.home_dir.join("Library").join("Caches"),
-            windows => windows::get_known_folder_path(&windows::FOLDERID_LOCAL_APPDATA),
+            windows => windows::get_app_data_path(&windows::FOLDERID_LOCAL_APPDATA),
             _ => unreachable!(),
         }
     }
@@ -167,7 +262,7 @@ impl BaseDirs {
                 xdg_dir("XDG_CONFIG_HOME", self.home_dir.join(".config"))
             }
             target_os = "macos" => self.home_dir.join("Library").join("Application Support"),
-            windows => windows::get_known_folder_path(&windows::FOLDERID_ROAMING_APPDATA),
+            windows => windows::get_app_data_path(&windows::FOLDERID_ROAMING_APPDATA),
             _ => unreachable!(),
         }
     }
@@ -179,7 +274,7 @@ impl BaseDirs {
                 xdg_dir("XDG_DATA_HOME", self.home_dir.join(".local").join("share"))
             }
             target_os = "macos" => self.home_dir.join("Library").join("Application Support"),
-            windows => windows::get_known_folder_path(&windows::FOLDERID_ROAMING_APPDATA),
+            windows => windows::get_app_data_path(&windows::FOLDERID_ROAMING_APPDATA),
             _ => unreachable!(),
         }
     }
@@ -187,7 +282,7 @@ impl BaseDirs {
     /// Returns the path to the user's local data directory
     pub fn data_local_dir(&self) -> PathBuf {
         cfg_select! {
-            windows => windows::get_known_folder_path(&windows::FOLDERID_LOCAL_APPDATA),
+            windows => windows::get_app_data_path(&windows::FOLDERID_LOCAL_APPDATA),
             _ => self.data_dir(),
         }
     }
