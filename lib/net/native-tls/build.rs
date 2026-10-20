@@ -13,11 +13,12 @@ fn main() {
     println!("cargo::rustc-check-cfg=cfg(openssl_v4xx)");
 
     let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    let target_vendor = std::env::var("CARGO_CFG_TARGET_VENDOR").unwrap_or_default();
     let vendored = std::env::var("CARGO_FEATURE_VENDORED").is_ok();
 
     // On Linux/other without vendored: dynamically link the system OpenSSL.
     // With vendored: rustls handles everything in pure Rust; no linker flags needed.
-    if target_os != "macos" && target_os != "windows" && !vendored {
+    if target_vendor != "apple" && target_os != "windows" && !vendored {
         link_openssl(&target_os);
     }
 }
