@@ -8,6 +8,7 @@
 <html>
     <head>
         <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no, viewport-fit=cover" />
         <title>2048</title>
         <link rel="stylesheet" href="/index.css" />
     </head>
@@ -74,6 +75,9 @@
         <script>
             if (navigator.userAgent.includes('bwebview') && navigator.userAgent.includes('Macintosh')) {
                 document.body.classList.add('is-bwebview-macos');
+            }
+            if (navigator.userAgent.includes('bwebview') && /iPhone|iPad/.test(navigator.userAgent)) {
+                document.body.classList.add('is-bwebview-ios');
             }
         </script>
         <script src="/js/keyboard_input_manager.js"></script>
