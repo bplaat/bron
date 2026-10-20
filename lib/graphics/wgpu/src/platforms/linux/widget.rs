@@ -193,13 +193,14 @@ extern "C" fn blur(_: *mut c_void, _: *const GdkEvent, pointer: *const Widget) -
 mod tests {
     use std::time::{Duration, Instant};
 
-    use bwindow::ffi::{g_idle_add, gtk_main, gtk_widget_get_scale_factor, gtk_widget_hide};
+    use bwindow::ffi::{g_idle_add, gtk_widget_get_scale_factor, gtk_widget_hide};
     use bwindow::{EventLoop, LogicalSize, NativeWindowHandle, WindowBuilder};
 
     use super::*;
 
     unsafe extern "C" {
         fn g_main_context_iteration(context: *mut c_void, may_block: i32) -> i32;
+        fn gtk_main();
         fn gtk_window_resize(window: *mut c_void, width: i32, height: i32);
         fn gtk_widget_queue_draw(widget: *mut c_void);
     }
