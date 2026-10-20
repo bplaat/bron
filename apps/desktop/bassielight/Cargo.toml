@@ -13,6 +13,9 @@ copyright = "Copyright © 2025 Bastiaan van der Plaat"
 icon = "meta/macos/icon.icon"
 entitlements = "meta/macos/Entitlements.plist"
 
+[package.metadata.bundle.windows]
+assets = "meta/windows"
+
 [lints]
 workspace = true
 

@@ -14,6 +14,10 @@ icon = "meta/macos/icon.icon"
 info_plist = "meta/macos/Info.plist"
 hardened_runtime = true
 
+[package.metadata.bundle.windows]
+assets = "meta/windows"
+file_types = [{ name = "SQLite Database", extensions = ["db"] }]
+
 [lints]
 workspace = true
 
