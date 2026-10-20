@@ -54,12 +54,21 @@ creates an `.icns` file from the optional iconset, and creates a macOS app bundl
 
 On macOS, `cargo bundle --ios` builds your crate for the iOS Simulator and creates an ad-hoc
 signed app bundle in the `target/bundle/<crate>/ios` directory. The optional `icon` is compiled
-for iPhone and iPad. Install and launch it on the booted simulator with:
+for iPhone and iPad. Build, install and launch with console output in one command:
 
 ```sh
-xcrun simctl install booted target/bundle/example/ios/ExampleApp.app
-xcrun simctl launch booted com.example.App
+cargo bundle --path path/to/your/crate --ios --run
 ```
+
+Running requires Xcode selected with `xcode-select`, an installed iOS Simulator runtime and
+`rustup target add aarch64-apple-ios-sim`. The runner reuses a booted iOS simulator, or boots
+an available one, and opens Simulator.app. Use `--device <name-or-UDID>` to select a device;
+use a UDID if names are ambiguous. An existing instance of the app is replaced on launch.
+
+`--run` uses a debug build; add `--release` for an optimized build. Bundling without `--run`
+still uses release mode. Use `--bin <name>` for packages with multiple binaries. Cargo's
+reported executable path is used, including when `CARGO_TARGET_DIR` is configured.
+The application and its dependencies must support iOS; the runner does not translate desktop APIs.
 
 The generated iOS Info.plist supports iPhone and iPad, portrait and landscape on iPhone, and all
 orientations on iPad. Override these keys in the iOS Info.plist, for example to only allow portrait
