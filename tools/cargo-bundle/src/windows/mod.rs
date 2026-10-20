@@ -10,7 +10,7 @@ use std::process::exit;
 use crate::args::Args;
 use crate::manifest::Manifest;
 use crate::support::{assert_file_name, cargo_build, remove_path_if_exists};
-use crate::windows::appx_manifest::appx_manifest;
+use crate::windows::appx_manifest::{appx_manifest, package_version};
 use crate::windows::publisher::publisher_name;
 
 mod appx_manifest;
@@ -23,12 +23,18 @@ const LOGOS: [&str; 3] = [
     "StoreLogo.png",
 ];
 
+// Rust targets and their MSIX architectures, the bundle lets Windows install the matching one
+const ARCHITECTURES: [(&str, &str); 2] = [
+    ("x86_64-pc-windows-msvc", "x64"),
+    ("aarch64-pc-windows-msvc", "arm64"),
+];
+
 #[cfg(target_arch = "x86_64")]
-const ARCH: &str = "x64";
+const HOST_ARCH: &str = "x64";
 #[cfg(target_arch = "x86")]
-const ARCH: &str = "x86";
+const HOST_ARCH: &str = "x86";
 #[cfg(target_arch = "aarch64")]
-const ARCH: &str = "arm64";
+const HOST_ARCH: &str = "arm64";
 
 pub(crate) fn bundle(args: &Args, target_dir: &str, manifest: &Manifest) {
     if args.zip || args.dmg {
@@ -39,48 +45,72 @@ pub(crate) fn bundle(args: &Args, target_dir: &str, manifest: &Manifest) {
     let bundle = &manifest.package.metadata.bundle;
     assert_file_name(&bundle.name, "bundle name");
     let windows = bundle.windows.clone().unwrap_or_default();
-    let layout = format!("{target_dir}/msix");
-    remove_path_if_exists(&layout);
-    fs::create_dir_all(format!("{layout}/Assets")).expect("Failed to create MSIX layout");
-
-    let status = cargo_build(&args.path)
-        .status()
-        .expect("Failed to run cargo build");
-    assert!(status.success(), "cargo build failed");
     let executable = format!("{}.exe", manifest.package.name);
-    fs::copy(
-        format!("target/release/{executable}"),
-        format!("{layout}/{executable}"),
-    )
-    .expect("Failed to copy executable");
-
-    let assets = windows.assets.as_deref().unwrap_or("meta/windows");
-    for logo in LOGOS {
-        fs::copy(
-            format!("{}/{assets}/{logo}", args.path),
-            format!("{layout}/Assets/{logo}"),
-        )
-        .unwrap_or_else(|error| panic!("Failed to copy {assets}/{logo}: {error}"));
+    for (target, _) in ARCHITECTURES {
+        let status = cargo_build(&args.path)
+            .args(["--target", target])
+            .status()
+            .expect("Failed to run cargo build");
+        assert!(status.success(), "cargo build failed for {target}");
     }
 
     // Windows ignores reinstalls of the same version, so the revision changes with the contents
     let publisher = publisher_name(&args.path, manifest);
+    let assets = windows.assets.as_deref().unwrap_or("meta/windows");
     let mut hash = Fnv1a::default();
-    hash.write(&fs::read(format!("{layout}/{executable}")).expect("Failed to read executable"));
-    for logo in LOGOS {
-        hash.write(&fs::read(format!("{layout}/Assets/{logo}")).expect("Failed to read logo"));
+    for (target, _) in ARCHITECTURES {
+        hash.write(
+            &fs::read(format!("target/{target}/release/{executable}"))
+                .expect("Failed to read executable"),
+        );
     }
-    hash.write(appx_manifest(manifest, &windows, &publisher, &executable, 0).as_bytes());
-    fs::write(
-        format!("{layout}/AppxManifest.xml"),
-        appx_manifest(manifest, &windows, &publisher, &executable, hash.revision()),
-    )
-    .expect("Failed to write AppxManifest.xml");
+    for logo in LOGOS {
+        hash.write(
+            &fs::read(format!("{}/{assets}/{logo}", args.path))
+                .unwrap_or_else(|error| panic!("Failed to read {assets}/{logo}: {error}")),
+        );
+    }
+    hash.write(appx_manifest(manifest, &windows, &publisher, &executable, HOST_ARCH, 0).as_bytes());
+    let revision = hash.revision();
 
-    let msix = format!("{target_dir}/{}.msix", bundle.name);
-    remove_path_if_exists(&msix);
-    makeappx::pack(&layout, &msix);
-    println!("Created {msix}");
+    let msix_dir = format!("{target_dir}/msix");
+    let packages = format!("{msix_dir}/packages");
+    remove_path_if_exists(&msix_dir);
+    fs::create_dir_all(&packages).expect("Failed to create MSIX packages directory");
+    for (target, arch) in ARCHITECTURES {
+        let layout = format!("{msix_dir}/{arch}");
+        fs::create_dir_all(format!("{layout}/Assets")).expect("Failed to create MSIX layout");
+        fs::copy(
+            format!("target/{target}/release/{executable}"),
+            format!("{layout}/{executable}"),
+        )
+        .expect("Failed to copy executable");
+        for logo in LOGOS {
+            fs::copy(
+                format!("{}/{assets}/{logo}", args.path),
+                format!("{layout}/Assets/{logo}"),
+            )
+            .expect("Failed to copy logo");
+        }
+        fs::write(
+            format!("{layout}/AppxManifest.xml"),
+            appx_manifest(manifest, &windows, &publisher, &executable, arch, revision),
+        )
+        .expect("Failed to write AppxManifest.xml");
+
+        makeappx::pack(&layout, &format!("{packages}/{}_{arch}.msix", bundle.name));
+    }
+
+    let msix_bundle = format!("{target_dir}/{}.msixbundle", bundle.name);
+    remove_path_if_exists(&msix_bundle);
+    // Remove the single architecture package of older versions
+    remove_path_if_exists(&format!("{target_dir}/{}.msix", bundle.name));
+    makeappx::bundle(
+        &packages,
+        &msix_bundle,
+        &package_version(&manifest.package.version, revision),
+    );
+    println!("Created {msix_bundle}");
 }
 
 #[derive(Clone, Copy)]

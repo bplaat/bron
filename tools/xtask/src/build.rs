@@ -230,7 +230,7 @@ impl Xtask {
                     self.build_bundles(&apps)?;
                     let packages = apps
                         .iter()
-                        .map(|app| self.bundle_output(app, "msix"))
+                        .map(|app| self.bundle_output(app, "msixbundle"))
                         .collect::<Result<Vec<_>>>()?;
                     self.install_msix_packages(&packages)?;
                 }
