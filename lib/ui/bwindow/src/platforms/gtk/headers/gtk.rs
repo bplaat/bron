@@ -35,12 +35,14 @@ pub const GTK_MESSAGE_WARNING: i32 = 1;
 pub const GTK_MESSAGE_ERROR: i32 = 3;
 pub const GTK_BUTTONS_NONE: i32 = 0;
 unsafe extern "C" {
-    pub fn gtk_init(argc: *mut i32, argv: *mut *mut *mut c_char);
-    pub fn gtk_main();
-    pub fn gtk_main_quit();
-    pub fn gtk_main_level() -> u32;
+    pub fn gtk_application_new(application_id: *const c_char, flags: u32) -> *mut GtkApplication;
+    pub fn gtk_application_get_active_window(application: *mut GtkApplication) -> *mut GtkWindow;
+    pub fn gtk_window_present(window: *mut GtkWindow);
+    pub fn gtk_application_window_new(application: *mut GtkApplication) -> *mut GtkWindow;
+    pub fn gtk_widget_destroy(widget: *mut GtkWidget);
+    pub fn gtk_widget_get_scale_factor(widget: *mut GtkWidget) -> i32;
     pub fn gtk_window_new(r#type: i32) -> *mut GtkWindow;
-    pub fn gtk_window_set_default_icon_name(name: *const c_char) -> bool;
+    pub fn gtk_window_set_default_icon_name(name: *const c_char);
     pub fn gtk_widget_set_size_request(widget: *mut GtkWidget, width: i32, height: i32);
     pub fn gtk_window_fullscreen(window: *mut GtkWindow);
     pub fn gtk_container_add(container: *mut GtkWidget, widget: *mut GtkWidget);
@@ -98,6 +100,7 @@ unsafe extern "C" {
 
 // MARK: GTK Message Dialog
 unsafe extern "C" {
+    pub fn gtk_dialog_run(dialog: *mut GtkDialog) -> i32;
     pub fn gtk_message_dialog_new(
         parent: *mut GtkWindow,
         flags: i32,
@@ -148,9 +151,6 @@ unsafe extern "C" {
         first_button_text: *const c_char,
         ...
     ) -> *mut GtkWidget;
-    pub fn gtk_dialog_run(dialog: *mut GtkDialog) -> i32;
-    pub fn gtk_widget_destroy(widget: *mut GtkWidget);
-    pub fn gtk_widget_get_scale_factor(widget: *mut GtkWidget) -> i32;
 
     // GTK 3.20+
     pub fn gtk_file_chooser_native_new(

@@ -145,7 +145,7 @@ impl AppDelegate {
             }
         }
         if !paths.is_empty() {
-            send_event(Event::MacosOpenFiles(paths));
+            send_event(Event::OpenFiles(paths));
         }
     }
 

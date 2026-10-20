@@ -31,6 +31,8 @@ unsafe extern "C" {
     );
     pub fn g_object_unref(object: *mut GObject);
     pub fn g_object_ref(object: *mut GObject) -> *mut GObject;
+    pub fn g_type_from_name(name: *const c_char) -> usize;
+    pub fn g_type_check_instance_is_a(instance: *mut c_void, type_: usize) -> i32;
     pub fn g_signal_handlers_disconnect_matched(
         instance: *mut GObject,
         mask: u32,
@@ -154,7 +156,28 @@ pub struct GDBusInterfaceVTable {
 }
 #[repr(C)]
 pub struct GInputStream([u8; 0]);
+#[repr(C)]
+pub struct GApplication([u8; 0]);
+#[repr(C)]
+pub struct GFile([u8; 0]);
+pub const G_APPLICATION_HANDLES_OPEN: u32 = 1 << 2;
+pub const G_APPLICATION_NON_UNIQUE: u32 = 1 << 5;
+
 unsafe extern "C" {
+    pub fn g_application_id_is_valid(id: *const c_char) -> i32;
+    pub fn g_application_register(
+        application: *mut GApplication,
+        cancellable: *mut c_void,
+        error: *mut *mut GError,
+    ) -> i32;
+    pub fn g_application_get_is_remote(application: *mut GApplication) -> i32;
+    pub fn g_application_run(
+        application: *mut GApplication,
+        argc: i32,
+        argv: *mut *mut c_char,
+    ) -> i32;
+    pub fn g_application_quit(application: *mut GApplication);
+    pub fn g_file_get_path(file: *mut GFile) -> *mut c_char;
     pub fn g_bus_get_sync(
         bus_type: i32,
         cancellable: *mut c_void,

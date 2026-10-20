@@ -100,7 +100,11 @@ const fn background_color(theme: Theme) -> u32 {
 }
 
 fn main() {
-    let startup_path = std::env::args().nth(1);
+    let startup_path = if cfg!(any(target_os = "macos", windows)) {
+        std::env::args().nth(1)
+    } else {
+        None
+    };
     #[allow(unused_mut)]
     let mut event_loop_builder = EventLoopBuilder::new()
         .with_user_event::<AppEvent>()
@@ -241,8 +245,7 @@ fn main() {
         {
             page_ready = false;
         }
-        #[cfg(target_os = "macos")]
-        if let Event::MacosOpenFiles(paths) = &event
+        if let Event::OpenFiles(paths) = &event
             && let Some(path) = paths.first()
         {
             let path = path.to_string_lossy().into_owned();

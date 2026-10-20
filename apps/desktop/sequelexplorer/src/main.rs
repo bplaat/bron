@@ -1279,7 +1279,11 @@ const fn background_color(theme: Theme) -> u32 {
 }
 
 fn main() {
-    let startup_path = std::env::args().nth(1);
+    let startup_path = if cfg!(any(target_os = "macos", windows)) {
+        std::env::args().nth(1)
+    } else {
+        None
+    };
     let state: State = Arc::new(Mutex::new(DatabaseState::default()));
     #[allow(unused_mut)]
     let mut event_loop_builder = EventLoopBuilder::new()
@@ -1385,8 +1389,7 @@ fn main() {
         Event::UserEvent(AppEvent::Webview(_window_id, WebviewEvent::PageLoadStart)) => {
             page_ready = false
         }
-        #[cfg(target_os = "macos")]
-        Event::MacosOpenFiles(paths) => {
+        Event::OpenFiles(paths) => {
             if let Some(path) = paths.first() {
                 let path = path.to_string_lossy().into_owned();
                 if page_ready {
