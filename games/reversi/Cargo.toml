@@ -18,6 +18,8 @@ icon = "meta/apple/icon.icon"
 [package.metadata.bundle.macos]
 entitlements = "meta/apple/macos/Entitlements.plist"
 
+[package.metadata.bundle.ios]
+
 [package.metadata.bundle.windows]
 assets = "meta/windows"
 sandbox = true

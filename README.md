@@ -259,6 +259,13 @@ Most of these libraries are intended primarily for personal use, but can still b
     cargo xtask install
     ```
 
+- To build and install the iOS applications on the booted iOS simulators:
+
+    ```sh
+    rustup target add aarch64-apple-ios-sim
+    cargo xtask install-ios
+    ```
+
 ## Goals
 
 This project is driven by three main goals:

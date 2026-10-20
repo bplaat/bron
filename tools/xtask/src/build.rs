@@ -13,7 +13,7 @@ use directories::{BaseDirs, UserDirs};
 use serde_json::Value;
 
 use crate::metadata::{InstallableApp, has_target_kind, packages, supports_os};
-use crate::process::{npm_program, run};
+use crate::process::{capture, npm_program, run};
 use crate::utils::{
     collect_paths, copy_directory, copy_directory_contents, relative_slash,
     remove_directory_except, remove_path, remove_path_if_exists,
@@ -166,10 +166,10 @@ impl Xtask {
 
     pub(crate) fn build_bundle(&self) -> Result<()> {
         let apps = self.installable_apps(true)?;
-        self.build_bundles(&apps)
+        self.build_bundles(&apps, &[])
     }
 
-    fn build_bundles(&self, apps: &[InstallableApp]) -> Result<()> {
+    fn build_bundles(&self, apps: &[InstallableApp], args: &[&str]) -> Result<()> {
         // Run the workspace version, `cargo bundle` could pick a stale cargo-bundle from PATH
         for app in apps {
             run(Command::new("cargo")
@@ -182,6 +182,7 @@ impl Xtask {
                     "--",
                     "bundle",
                 ])
+                .args(args)
                 .arg("--path")
                 .arg(&app.directory))?;
         }
@@ -212,10 +213,10 @@ impl Xtask {
         match self.os {
             Os::Macos => {
                 if !apps.is_empty() {
-                    self.build_bundles(&apps)?;
+                    self.build_bundles(&apps, &[])?;
                 }
                 for app in apps {
-                    let source = self.bundle_output(&app, "app")?;
+                    let source = self.bundle_output(&app, "", "app")?;
                     let destination = Path::new("/Applications").join(
                         source
                             .file_name()
@@ -227,10 +228,10 @@ impl Xtask {
             }
             Os::Windows => {
                 if !apps.is_empty() {
-                    self.build_bundles(&apps)?;
+                    self.build_bundles(&apps, &[])?;
                     let packages = apps
                         .iter()
-                        .map(|app| self.bundle_output(app, "msixbundle"))
+                        .map(|app| self.bundle_output(app, "", "msixbundle"))
                         .collect::<Result<Vec<_>>>()?;
                     self.install_msix_packages(&packages)?;
                 }
@@ -297,8 +298,59 @@ impl Xtask {
         Ok(())
     }
 
-    fn bundle_output(&self, app: &InstallableApp, extension: &str) -> Result<PathBuf> {
-        let bundle_directory = self.root.join(format!("target/bundle/{}", app.package));
+    pub(crate) fn install_ios(&self, selected: Option<&str>) -> Result<()> {
+        if self.os != Os::Macos {
+            bail!("iOS apps can only be installed on macOS");
+        }
+        let apps: Vec<_> = self
+            .installable_apps(true)?
+            .into_iter()
+            .filter(|app| app.ios && selected.is_none_or(|selected| app.package == selected))
+            .collect();
+        if let Some(selected) = selected
+            && apps.is_empty()
+        {
+            bail!("no iOS application bundle: {selected}");
+        }
+
+        let output =
+            capture(Command::new("xcrun").args(["simctl", "list", "devices", "booted", "--json"]))?;
+        let devices: Value = serde_json::from_slice(&output.stdout)?;
+        let simulators: Vec<_> = devices
+            .get("devices")
+            .and_then(Value::as_object)
+            .into_iter()
+            .flat_map(|runtimes| runtimes.values())
+            .filter_map(Value::as_array)
+            .flatten()
+            .filter_map(|device| device.get("udid").and_then(Value::as_str))
+            .collect();
+        if simulators.is_empty() {
+            bail!("no booted iOS simulator, start one with Simulator.app");
+        }
+
+        self.build_bundles(&apps, &["--ios"])?;
+        for app in apps {
+            let source = self.bundle_output(&app, "ios", "app")?;
+            for simulator in &simulators {
+                run(Command::new("xcrun")
+                    .args(["simctl", "install", simulator])
+                    .arg(&source))?;
+            }
+        }
+        Ok(())
+    }
+
+    fn bundle_output(
+        &self,
+        app: &InstallableApp,
+        subdirectory: &str,
+        extension: &str,
+    ) -> Result<PathBuf> {
+        let bundle_directory = self
+            .root
+            .join(format!("target/bundle/{}", app.package))
+            .join(subdirectory);
         fs::read_dir(&bundle_directory)?
             .filter_map(|entry| entry.ok().map(|entry| entry.path()))
             .find(|path| path.extension().is_some_and(|ext| ext == extension))
@@ -416,6 +468,7 @@ function Install-Bundle($Path) {{
                 directory: package_directory.to_path_buf(),
                 identifier,
                 name,
+                ios: bundle.is_some_and(|bundle| bundle.get("ios").is_some()),
             });
         }
         Ok(apps)

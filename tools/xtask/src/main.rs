@@ -72,7 +72,7 @@ impl Xtask {
     }
 
     fn run(&self, task: &str, package: Option<&str>) -> Result<()> {
-        if package.is_some() && task != "install" {
+        if package.is_some() && !matches!(task, "install" | "install-ios") {
             bail!("task {task} does not accept a package");
         }
         match task {
@@ -89,6 +89,7 @@ impl Xtask {
             "configure-vscode" => self.configure_vscode(),
             "coverage" => self.coverage(),
             "install" => self.install(package),
+            "install-ios" => self.install_ios(package),
             "help" | "--help" | "-h" => {
                 Self::print_help();
                 Ok(())
@@ -119,6 +120,7 @@ impl Xtask {
         println!("  build-bundle     Build native application bundles");
         println!("  clean            Remove generated files");
         println!("  install [name]   Install all applications or only the named package");
+        println!("  install-ios [name]        Install iOS applications on the booted simulators");
     }
 
     fn ensure_npm_deps(&self) -> Result<()> {
