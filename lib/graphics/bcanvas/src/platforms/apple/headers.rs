@@ -8,10 +8,15 @@ use std::ffi::c_void;
 
 use bwindow::ffi::CGRect;
 
+#[cfg(target_os = "macos")]
 pub(super) const NS_BOLD_FONT_MASK: usize = 1 << 1;
+#[cfg(target_os = "ios")]
+pub(super) const UI_FONT_DESCRIPTOR_TRAIT_BOLD: u32 = 1 << 1;
 
 pub(super) type CGContextRef = *mut c_void;
+#[cfg(target_os = "macos")]
 pub(super) type CVDisplayLinkRef = *mut c_void;
+#[cfg(target_os = "macos")]
 pub(super) type CVDisplayLinkOutputCallback = unsafe extern "C" fn(
     CVDisplayLinkRef,
     *const c_void,
@@ -21,6 +26,7 @@ pub(super) type CVDisplayLinkOutputCallback = unsafe extern "C" fn(
     *mut c_void,
 ) -> i32;
 
+#[cfg(target_os = "macos")]
 #[link(name = "CoreVideo", kind = "framework")]
 unsafe extern "C" {
     pub(super) fn CVDisplayLinkCreateWithActiveCGDisplays(
@@ -38,6 +44,14 @@ unsafe extern "C" {
     pub(super) fn CVDisplayLinkStart(display_link: CVDisplayLinkRef) -> i32;
     pub(super) fn CVDisplayLinkStop(display_link: CVDisplayLinkRef) -> i32;
     pub(super) fn CVDisplayLinkRelease(display_link: CVDisplayLinkRef);
+}
+
+#[cfg(target_os = "ios")]
+#[link(name = "UIKit", kind = "framework")]
+unsafe extern "C" {
+    pub(super) fn UIGraphicsGetCurrentContext() -> CGContextRef;
+    pub(super) fn UIGraphicsPushContext(context: CGContextRef);
+    pub(super) fn UIGraphicsPopContext();
 }
 
 #[link(name = "CoreGraphics", kind = "framework")]

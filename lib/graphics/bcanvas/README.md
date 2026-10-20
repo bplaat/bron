@@ -1,7 +1,7 @@
 # Bassie Canvas Rust library
 
 Cross-platform 2D drawing for [bwindow](../../ui/bwindow) windows using the system-native
-graphics API: Core Graphics on macOS, Direct2D on Windows, and Cairo on Linux.
+graphics API: Core Graphics on macOS and iOS, Direct2D on Windows, and Cairo on Linux.
 
 ## Features
 

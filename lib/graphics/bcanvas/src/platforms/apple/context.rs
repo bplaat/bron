@@ -197,17 +197,17 @@ impl PlatformCanvasContext {
         unsafe {
             let attrs = self.text_attributes(s);
             let string = NSString::new(text);
-            let measured: NSSize = msg_send![&*string, sizeWithAttributes:attrs];
+            let measured: CGSize = msg_send![&*string, sizeWithAttributes:attrs];
             let (x, y) =
                 aligned_text_position(s, x, y, measured.width as f32, measured.height as f32);
-            let _: () = msg_send![&*string, drawAtPoint:NSPoint::new(x.into(),y.into()), withAttributes:attrs];
+            let _: () = msg_send![&*string, drawAtPoint:CGPoint::new(x.into(),y.into()), withAttributes:attrs];
         }
     }
     pub(crate) fn measure_text(&mut self, s: &CanvasState, text: &str) -> f32 {
         unsafe {
             let attrs = self.text_attributes(s);
             let string = NSString::new(text);
-            let size: NSSize = msg_send![&*string,sizeWithAttributes:attrs];
+            let size: CGSize = msg_send![&*string,sizeWithAttributes:attrs];
             size.width as f32
         }
     }
@@ -266,23 +266,45 @@ fn rect(x: f32, y: f32, w: f32, h: f32) -> CGRect {
 }
 
 unsafe fn create_text_attributes(s: &CanvasState) -> Retained<Object> {
+    #[cfg(target_os = "macos")]
+    let (font_class, color_class) = (class!(NSFont), class!(NSColor));
+    #[cfg(target_os = "ios")]
+    let (font_class, color_class) = (class!(UIFont), class!(UIColor));
     let family = NSString::new(&s.font_family);
     let mut font: *mut Object =
-        unsafe { msg_send![class!(NSFont),fontWithName:family,size:s.font_size as f64] };
+        unsafe { msg_send![font_class,fontWithName:family,size:s.font_size as f64] };
     if font.is_null() {
-        font = unsafe { msg_send![class!(NSFont),systemFontOfSize:s.font_size as f64] };
+        font = unsafe { msg_send![font_class,systemFontOfSize:s.font_size as f64] };
     }
     if s.font_weight == FontWeight::Bold {
-        let manager: *mut Object = unsafe { msg_send![class!(NSFontManager), sharedFontManager] };
-        font = unsafe { msg_send![manager, convertFont:font, toHaveTrait:NS_BOLD_FONT_MASK] };
+        font = unsafe { bold_font(font) };
     }
     let (r, g, b, a) = s.fill.components(s.alpha);
     let color: *mut Object =
-        unsafe { msg_send![class!(NSColor),colorWithRed:r,green:g,blue:b,alpha:a] };
+        unsafe { msg_send![color_class,colorWithRed:r,green:g,blue:b,alpha:a] };
     let attrs: Retained<Object> = unsafe { msg_send![class!(NSMutableDictionary), new] };
     let _: () = unsafe { msg_send![&*attrs, setObject:font, forKey:ns_string!("NSFont")] };
     let _: () = unsafe { msg_send![&*attrs, setObject:color, forKey:ns_string!("NSColor")] };
     attrs
+}
+
+#[cfg(target_os = "macos")]
+unsafe fn bold_font(font: *mut Object) -> *mut Object {
+    let manager: *mut Object = unsafe { msg_send![class!(NSFontManager), sharedFontManager] };
+    unsafe { msg_send![manager, convertFont:font, toHaveTrait:NS_BOLD_FONT_MASK] }
+}
+
+#[cfg(target_os = "ios")]
+unsafe fn bold_font(font: *mut Object) -> *mut Object {
+    unsafe {
+        let descriptor: *mut Object = msg_send![font, fontDescriptor];
+        let descriptor: *mut Object =
+            msg_send![descriptor, fontDescriptorWithSymbolicTraits:UI_FONT_DESCRIPTOR_TRAIT_BOLD];
+        if descriptor.is_null() {
+            return font;
+        }
+        msg_send![class!(UIFont), fontWithDescriptor:descriptor, size:0.0f64]
+    }
 }
 
 fn aligned_text_position(s: &CanvasState, mut x: f32, mut y: f32, w: f32, h: f32) -> (f32, f32) {
@@ -304,6 +326,7 @@ fn aligned_text_position(s: &CanvasState, mut x: f32, mut y: f32, w: f32, h: f32
 mod tests {
     use super::*;
 
+    #[cfg(target_os = "macos")]
     #[test]
     fn bold_text_preserves_the_requested_family() {
         objc2::rc::autoreleasepool(|_| unsafe {

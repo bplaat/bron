@@ -11,7 +11,8 @@ use std::path::{Path, PathBuf};
 
 fn main() {
     let target = env::var("CARGO_CFG_TARGET_OS").expect("target OS");
-    if target != "macos" && target != "windows" {
+    let vendor = env::var("CARGO_CFG_TARGET_VENDOR").expect("target vendor");
+    if vendor != "apple" && target != "windows" {
         let directories = search_dirs();
         link_library(&require_library(&directories, "cairo"));
     }

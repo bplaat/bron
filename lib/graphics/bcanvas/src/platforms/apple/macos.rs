@@ -17,14 +17,9 @@ use objc2::rc::{Allocated, Retained, autoreleasepool};
 use objc2::runtime::{AnyObject as Object, Bool};
 use objc2::{class, define_class, msg_send, sel};
 
+use super::context::PlatformCanvasContext;
+use super::headers::*;
 use crate::CanvasRenderingContext2d;
-pub(crate) use crate::platforms::macos::context::PlatformCanvasContext;
-use crate::platforms::macos::headers::*;
-pub(crate) use crate::platforms::macos::offscreen::PlatformOffscreenCanvas;
-
-mod context;
-mod headers;
-mod offscreen;
 
 #[derive(Clone, Copy)]
 struct Frame {
