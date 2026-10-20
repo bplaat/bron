@@ -1,8 +1,8 @@
 # Bassie Window Rust library
 
 Cross-platform native windows and a main event loop for Rust, using AppKit on macOS,
-Win32 on Windows, and GTK 3 on Linux. Add [bcanvas](../../graphics/bcanvas) for native 2D
-drawing or [bwebview](../bwebview) for web content.
+UIKit on iOS, Win32 on Windows, and GTK 3 on Linux. Add [bcanvas](../../graphics/bcanvas) for
+native 2D drawing or [bwebview](../bwebview) for web content.
 
 ## Getting Started
 
@@ -80,6 +80,12 @@ Use `request_redraw()` after state changes. For animation, call
 - `file_drop`: native file-drop events.
 - `menu`: custom macOS menus.
 - `progress_bar`: Windows taskbar and GTK launcher progress.
+
+## iOS
+
+Windows always fill the screen, so size, position and resizing options are ignored. Menus and
+file drops are ignored, the `dialog` feature is not supported, and touches are delivered as left
+mouse button events.
 
 ## Linux
 

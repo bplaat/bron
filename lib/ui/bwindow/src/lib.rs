@@ -36,10 +36,12 @@ mod window;
 #[doc(hidden)]
 #[allow(missing_docs)]
 pub mod ffi {
-    #[cfg(all(not(any(target_os = "macos", windows)), feature = "file_drop"))]
+    #[cfg(all(not(any(target_vendor = "apple", windows)), feature = "file_drop"))]
     pub use crate::platforms::gtk::file_drop::*;
-    #[cfg(not(any(target_os = "macos", windows)))]
+    #[cfg(not(any(target_vendor = "apple", windows)))]
     pub use crate::platforms::gtk::input::*;
+    #[cfg(target_os = "ios")]
+    pub use crate::platforms::ios::input::*;
     #[cfg(all(target_os = "macos", feature = "file_drop"))]
     pub use crate::platforms::macos::file_drop::{perform_file_drop, register_dragged_types};
     #[cfg(target_os = "macos")]

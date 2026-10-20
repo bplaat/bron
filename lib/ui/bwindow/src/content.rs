@@ -15,6 +15,8 @@ use crate::{WindowEvent, WindowId};
 pub enum NativeWindowHandle {
     /// An AppKit NSWindow pointer.
     AppKit(*mut c_void),
+    /// A UIKit UIView pointer that content is added to.
+    UIKit(*mut c_void),
     /// A Win32 HWND.
     Win32(*mut c_void),
     /// A GTK 3 GtkWindow pointer.

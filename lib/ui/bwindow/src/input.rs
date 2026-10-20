@@ -74,7 +74,7 @@ impl Modifiers {
     /// Command key (alias for Meta).
     pub const COMMAND: Self = Self::META;
     /// Command on macOS, Control on other platforms.
-    pub const PRIMARY: Self = if cfg!(target_os = "macos") {
+    pub const PRIMARY: Self = if cfg!(target_vendor = "apple") {
         Self::COMMAND
     } else {
         Self::CONTROL
