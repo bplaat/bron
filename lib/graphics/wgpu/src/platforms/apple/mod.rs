@@ -22,6 +22,7 @@ use crate::platform::headers::*;
 
 mod headers;
 #[cfg(feature = "window")]
+#[cfg_attr(target_os = "ios", path = "ios.rs")]
 mod surface;
 
 // SAFETY: Callers choose owned() only for +1 Objective-C results and retained()

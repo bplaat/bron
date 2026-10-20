@@ -28,7 +28,7 @@ pub use crate::types::*;
     test
 ))]
 mod allocation;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 #[path = "platforms/apple/mod.rs"]
 mod platform;
 // GTK with Vulkan, on Linux and the BSDs.
@@ -50,6 +50,7 @@ mod types;
 
 #[cfg(not(any(
     target_os = "macos",
+    target_os = "ios",
     target_os = "linux",
     target_os = "freebsd",
     target_os = "dragonfly",
@@ -57,7 +58,7 @@ mod types;
     target_os = "netbsd",
     target_os = "windows"
 )))]
-compile_error!("This crate supports macOS, Linux, the BSDs, and Windows only");
+compile_error!("This crate supports macOS, iOS, Linux, the BSDs, and Windows only");
 
 #[cfg(not(any(feature = "image", feature = "window")))]
 compile_error!("Enable the `image` feature, the `window` feature, or both");
@@ -374,7 +375,7 @@ impl ShaderModule {
             .1
     }
 
-    #[cfg(any(target_os = "macos", test))]
+    #[cfg(any(target_os = "macos", target_os = "ios", test))]
     fn binary(&self, name: Option<&str>) -> Option<&[u8]> {
         let NativeSource::Binary(binaries) = &self.source else {
             return None;
