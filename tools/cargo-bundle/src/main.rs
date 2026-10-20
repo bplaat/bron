@@ -11,9 +11,9 @@ use std::process::{ExitCode, exit};
 
 use crate::manifest::Manifest;
 
-mod appex;
 mod args;
-mod bundle;
+#[cfg(target_os = "macos")]
+mod macos;
 mod manifest;
 mod support;
 
@@ -48,15 +48,7 @@ fn main() -> ExitCode {
     );
 
     let target_dir = format!("target/bundle/{}", manifest.package.name);
-    bundle::build(&args.path, &target_dir, &manifest);
-    appex::build_all(&args.path, &target_dir, &manifest);
-    bundle::sign(&args.path, &target_dir, bundle_metadata);
-
-    if args.zip {
-        bundle::create_zip(&target_dir, bundle_metadata);
-    }
-    if args.dmg {
-        bundle::create_dmg(&target_dir, bundle_metadata);
-    }
+    #[cfg(target_os = "macos")]
+    macos::bundle(&args, &target_dir, &manifest);
     ExitCode::SUCCESS
 }
