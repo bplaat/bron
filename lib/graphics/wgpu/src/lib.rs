@@ -29,7 +29,7 @@ pub use crate::types::*;
 ))]
 mod allocation;
 #[cfg(target_os = "macos")]
-#[path = "platforms/macos/mod.rs"]
+#[path = "platforms/apple/mod.rs"]
 mod platform;
 // GTK with Vulkan, on Linux and the BSDs.
 #[cfg(any(
