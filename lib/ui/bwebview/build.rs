@@ -16,7 +16,9 @@ fn main() {
     println!("cargo::rustc-check-cfg=cfg(webkit2gtk_4_1)");
     println!("cargo::rustc-check-cfg=cfg(webkit2gtk_4_0)");
     println!("cargo::rustc-check-cfg=cfg(webkit2gtk_4_0_jsc_glib)");
-    if target_os != "macos" && target_os != "windows" {
+    let target_vendor =
+        env::var("CARGO_CFG_TARGET_VENDOR").expect("CARGO_CFG_TARGET_VENDOR not set");
+    if target_vendor != "apple" && target_os != "windows" {
         let search_dirs = search_dirs();
         gtk_cfgs(&search_dirs);
         if let Some(webkit) = find_library(&search_dirs, "webkit2gtk-4.1") {
