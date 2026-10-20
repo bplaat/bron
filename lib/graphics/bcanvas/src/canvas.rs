@@ -345,7 +345,7 @@ impl OffscreenCanvas {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(target_vendor = "apple"))]
 pub(crate) fn copy_bgra_premultiplied_to_rgba(source: &[u8], output: &mut [u8]) {
     let (source, source_remainder) = source.as_chunks::<4>();
     let (output, output_remainder) = output.as_chunks_mut::<4>();
@@ -359,7 +359,7 @@ pub(crate) fn copy_bgra_premultiplied_to_rgba(source: &[u8], output: &mut [u8]) 
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(target_vendor = "apple")]
 pub(crate) fn copy_rgba_premultiplied_to_straight(source: &[u8], output: &mut [u8]) {
     let (source, source_remainder) = source.as_chunks::<4>();
     let (output, output_remainder) = output.as_chunks_mut::<4>();

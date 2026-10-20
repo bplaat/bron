@@ -4,7 +4,9 @@
  * SPDX-License-Identifier: MIT
  */
 
+#[cfg(target_os = "macos")]
 use objc2::runtime::{AnyObject as Object, Bool};
+#[cfg(target_os = "macos")]
 use objc2::{class, msg_send};
 
 use super::context::PlatformCanvasContext;
@@ -44,6 +46,20 @@ impl PlatformOffscreenCanvas {
         }
     }
 
+    #[cfg(target_os = "ios")]
+    pub(crate) fn begin_draw(&mut self) -> PlatformCanvasContext {
+        unsafe {
+            UIGraphicsPushContext(self.context);
+            PlatformCanvasContext::new(self.context)
+        }
+    }
+
+    #[cfg(target_os = "ios")]
+    pub(crate) fn end_draw(&mut self) {
+        unsafe { UIGraphicsPopContext() };
+    }
+
+    #[cfg(target_os = "macos")]
     pub(crate) fn begin_draw(&mut self) -> PlatformCanvasContext {
         unsafe {
             let _: () = msg_send![class!(NSGraphicsContext), saveGraphicsState];
@@ -58,6 +74,7 @@ impl PlatformOffscreenCanvas {
         }
     }
 
+    #[cfg(target_os = "macos")]
     pub(crate) fn end_draw(&mut self) {
         unsafe {
             let _: () = msg_send![class!(NSGraphicsContext), restoreGraphicsState];
