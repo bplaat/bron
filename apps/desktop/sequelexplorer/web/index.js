@@ -14,27 +14,13 @@ window.addEventListener('contextmenu', (e) => e.preventDefault());
 const PAGE_SIZE = 100;
 const supportsUnixSocket = !navigator.userAgent.includes('Windows');
 
-// Every action the user can trigger, keyed by the action id used in the macOS menu bar.
-// `method` is the app method that performs it, `key`/`shift`/`alt` are the Command-chord
-// fallback for platforms without a menu bar. Keep the ids and chords in sync with main.rs.
 const ACTIONS = {
-    open: { method: 'openDatabase', key: 'o' },
-    showData: { method: 'showData', key: '1' },
-    showSchema: { method: 'showSchema', key: '2' },
-    runQuery: { method: 'runQuery', key: 'Enter' },
-    clearQuery: { method: 'clearQuery', key: 'k' },
+    open: 'openDatabase',
+    showData: 'showData',
+    showSchema: 'showSchema',
+    runQuery: 'runQuery',
+    clearQuery: 'clearQuery',
 };
-
-// Returns the id of the action this key event triggers, or null when it is not a shortcut
-function matchShortcut(event) {
-    if (!event.metaKey && !event.ctrlKey) return null;
-    const pressed = event.key.toLowerCase();
-    const match = Object.entries(ACTIONS).find(
-        ([, { key, shift = false, alt = false }]) =>
-            key.toLowerCase() === pressed && event.shiftKey === shift && event.altKey === alt,
-    );
-    return match ? match[0] : null;
-}
 
 function ipcSend(type, data = {}) {
     window.ipc.postMessage(JSON.stringify({ type, ...data }));
@@ -150,16 +136,6 @@ PetiteVue.createApp({
             }
             if (message.type === 'menuAction') this.performAction(message.action);
         });
-        // On macOS the native menu bar already claims these chords and delivers them over IPC,
-        // so only the other platforms need to resolve them here
-        if (!isMacosBwebview) {
-            window.addEventListener('keydown', (event) => {
-                const action = matchShortcut(event);
-                if (!action) return;
-                event.preventDefault();
-                this.performAction(action);
-            });
-        }
         const observer = new IntersectionObserver(
             (entries) => {
                 if (entries[0].isIntersecting && this.currentTable && !this.isCustomQuery) {
@@ -178,10 +154,9 @@ PetiteVue.createApp({
         }
     },
 
-    // Runs an action by id, coming from the macOS menu bar or from a keyboard shortcut
     performAction(id) {
         const action = ACTIONS[id];
-        if (action) this[action.method]();
+        if (action) this[action]();
     },
 
     showData() {

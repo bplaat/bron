@@ -86,6 +86,25 @@ pub fn windows_key_event(key: u32, lparam: isize, state: ButtonState) -> Keyboar
     }
 }
 
+/// Translate a WebView2 accelerator using the application's native shortcut table.
+/// Call on the owning UI thread with the live parent window handle.
+pub fn windows_translate_accelerator(
+    window: *mut std::ffi::c_void,
+    key: u32,
+    lparam: isize,
+    system: bool,
+) -> bool {
+    #[cfg(feature = "menu")]
+    {
+        super::menu::translate_webview(window, key, lparam, system)
+    }
+    #[cfg(not(feature = "menu"))]
+    {
+        let _ = (window, key, lparam, system);
+        false
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

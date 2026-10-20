@@ -312,8 +312,18 @@ pub const SWP_NOZORDER: u32 = 0x0004;
 pub const SWP_NOACTIVATE: u32 = 0x0010;
 pub const SWP_NOREPOSITION: u32 = 0x0200;
 
+#[repr(C)]
+pub struct ACCEL {
+    pub fVirt: u8,
+    pub key: u16,
+    pub cmd: u16,
+}
 #[link(name = "user32")]
 unsafe extern "system" {
+    pub fn CreateAcceleratorTableW(accels: *const ACCEL, count: i32) -> HANDLE;
+    pub fn DestroyAcceleratorTable(table: HANDLE) -> BOOL;
+    pub fn TranslateAcceleratorW(window: HWND, table: HANDLE, message: *mut MSG) -> i32;
+    pub fn VkKeyScanW(character: u16) -> i16;
     pub fn GetKeyState(key: i32) -> i16;
     pub fn GetKeyboardState(state: *mut u8) -> i32;
     pub fn GetKeyboardLayout(thread: u32) -> isize;

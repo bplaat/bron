@@ -12,11 +12,9 @@ use std::f32::consts::TAU;
 use bcanvas::{
     CanvasBuilder, CanvasRenderingContext2d, Color, CursorIcon, FontWeight, TextAlign, TextBaseline,
 };
-#[cfg(target_os = "macos")]
-use bwindow::{Accelerator, KeyCode, MenuBarBuilder, MenuBuilder, MenuItem, Modifiers};
 use bwindow::{
-    Event, EventLoopBuilder, Key, LogicalPoint, LogicalSize, MouseButton, MouseEvent, Theme,
-    WindowBuilder, WindowEvent,
+    Accelerator, Event, EventLoopBuilder, Key, KeyCode, LogicalPoint, LogicalSize, MenuBarBuilder,
+    MenuBuilder, MenuItem, Modifiers, MouseButton, MouseEvent, Theme, WindowBuilder, WindowEvent,
 };
 use reversi_engine::{CellState, Move, Othello, Player};
 
@@ -249,19 +247,18 @@ enum AppEvent {
 
 fn main() {
     let smoke = std::env::args().any(|arg| arg == "--smoke");
-    let event_loop_builder = EventLoopBuilder::new()
+    let event_loop = EventLoopBuilder::new()
         .with_user_event::<AppEvent>()
-        .app_id("nl", "bplaat", "Reversi");
-    #[cfg(target_os = "macos")]
-    let event_loop_builder = event_loop_builder.macos_set_menu(
-        MenuBarBuilder::new().menu(
-            MenuBuilder::new("File").item(
-                MenuItem::new("New Game", "game.new")
-                    .accelerator(Accelerator::new(Modifiers::COMMAND, KeyCode::KeyN)),
+        .app_id("nl", "bplaat", "Reversi")
+        .menu(
+            MenuBarBuilder::new().menu(
+                MenuBuilder::new("File").item(
+                    MenuItem::new("New Game", "game.new")
+                        .accelerator(Accelerator::new(Modifiers::PRIMARY, KeyCode::KeyN)),
+                ),
             ),
-        ),
-    );
-    let event_loop = event_loop_builder.build();
+        )
+        .build();
     let worker = AiWorker::new(event_loop.create_proxy());
     let theme = event_loop.theme();
     let window_builder = WindowBuilder::new()
@@ -389,8 +386,7 @@ fn main() {
                 worker.cancel(game.revision);
                 window.request_redraw();
             }
-            #[cfg(target_os = "macos")]
-            Event::MacosMenuItem(action) if action == "game.new" => {
+            Event::Action(action) if action == "game.new" => {
                 game.reset();
                 worker.cancel(game.revision);
                 window.request_redraw();

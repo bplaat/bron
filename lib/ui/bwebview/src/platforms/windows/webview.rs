@@ -369,6 +369,7 @@ extern "system" fn controller_created(
         }
         (*controller).AddRef();
         _self.controller.set(Some(controller));
+        super::accelerators::register(controller, owner.clone());
 
         // Keep partial WebView2 paints hidden behind the native backing surface.
         (*controller).put_IsVisible(FALSE);

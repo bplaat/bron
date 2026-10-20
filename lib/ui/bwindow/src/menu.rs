@@ -6,7 +6,7 @@
 
 use crate::{KeyCode, Modifiers};
 
-/// Typed macOS menu keyboard accelerator
+/// Application keyboard accelerator
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Accelerator {
     pub(crate) modifiers: Modifiers,
@@ -20,7 +20,7 @@ impl Accelerator {
     }
 }
 
-/// macOS menu item builder
+/// Application command, optionally displayed in a native or desktop global menu.
 pub struct MenuItem {
     pub(crate) title: String,
     pub(crate) action: String,
@@ -49,7 +49,7 @@ pub(crate) enum MenuBuilderEntry {
     Separator,
 }
 
-/// Builder for one macOS menu
+/// Builder for a group of application commands.
 pub struct MenuBuilder {
     pub(crate) title: String,
     pub(crate) entries: Vec<MenuBuilderEntry>,
@@ -77,7 +77,9 @@ impl MenuBuilder {
     }
 }
 
-/// Builds custom macOS entries merged by name into bwindow's default menu bar.
+/// Application commands and shortcuts, merged into the native menu bar on macOS.
+/// GTK exports the menu for compatible global menu bars and hides it inside the
+/// window. Windows registers shortcuts without displaying a menu bar.
 #[derive(Default)]
 pub struct MenuBarBuilder {
     pub(crate) menus: Vec<MenuBuilder>,
@@ -93,5 +95,14 @@ impl MenuBarBuilder {
     pub fn menu(mut self, menu: MenuBuilder) -> Self {
         self.menus.push(menu);
         self
+    }
+    pub(crate) fn items(&self) -> impl Iterator<Item = &MenuItem> {
+        self.menus
+            .iter()
+            .flat_map(|menu| &menu.entries)
+            .filter_map(|entry| match entry {
+                MenuBuilderEntry::Item(item) => Some(item),
+                MenuBuilderEntry::Separator => None,
+            })
     }
 }

@@ -9,8 +9,9 @@
 
 use bwebview::{WebviewBuilder, WebviewEvent};
 use bwindow::{
-    Event, EventLoopBuilder, FileDialog, LogicalSize, MessageButtons, MessageDialog,
-    MessageDialogResult, MessageLevel, Theme, WindowBuilder, WindowEvent,
+    Accelerator, Event, EventLoopBuilder, FileDialog, KeyCode, LogicalSize, MenuBarBuilder,
+    MenuBuilder, MenuItem, MessageButtons, MessageDialog, MessageDialogResult, MessageLevel,
+    Modifiers, Theme, WindowBuilder, WindowEvent,
 };
 use rust_embed::Embed;
 use serde::{Deserialize, Serialize};
@@ -105,34 +106,29 @@ fn main() {
     } else {
         None
     };
-    #[allow(unused_mut)]
-    let mut event_loop_builder = EventLoopBuilder::new()
+    let event_loop = EventLoopBuilder::new()
         .with_user_event::<AppEvent>()
         .app_id("nl", "bplaat", "PixelFontEditor")
-        .single_instance(false);
-    #[cfg(target_os = "macos")]
-    {
-        use bwindow::{Accelerator, KeyCode, MenuBarBuilder, MenuBuilder, MenuItem, Modifiers};
-
-        event_loop_builder = event_loop_builder.macos_set_menu(
+        .single_instance(false)
+        .menu(
             MenuBarBuilder::new()
                 .menu(
                     MenuBuilder::new("File")
                         .item(
                             MenuItem::new("New", "new")
-                                .accelerator(Accelerator::new(Modifiers::COMMAND, KeyCode::KeyN)),
+                                .accelerator(Accelerator::new(Modifiers::PRIMARY, KeyCode::KeyN)),
                         )
                         .item(
                             MenuItem::new("Open…", "open")
-                                .accelerator(Accelerator::new(Modifiers::COMMAND, KeyCode::KeyO)),
+                                .accelerator(Accelerator::new(Modifiers::PRIMARY, KeyCode::KeyO)),
                         )
                         .item(
                             MenuItem::new("Save", "save")
-                                .accelerator(Accelerator::new(Modifiers::COMMAND, KeyCode::KeyS)),
+                                .accelerator(Accelerator::new(Modifiers::PRIMARY, KeyCode::KeyS)),
                         )
                         .item(
                             MenuItem::new("Save As…", "saveAs").accelerator(Accelerator::new(
-                                Modifiers::COMMAND | Modifiers::SHIFT,
+                                Modifiers::PRIMARY | Modifiers::SHIFT,
                                 KeyCode::KeyS,
                             )),
                         )
@@ -140,13 +136,13 @@ fn main() {
                         .item(
                             MenuItem::new("Export as Assembly…", "exportAsm").accelerator(
                                 Accelerator::new(
-                                    Modifiers::COMMAND | Modifiers::OPTION,
+                                    Modifiers::PRIMARY | Modifiers::OPTION,
                                     KeyCode::KeyA,
                                 ),
                             ),
                         )
                         .item(MenuItem::new("Export as C Header…", "exportC").accelerator(
-                            Accelerator::new(Modifiers::COMMAND | Modifiers::OPTION, KeyCode::KeyC),
+                            Accelerator::new(Modifiers::PRIMARY | Modifiers::OPTION, KeyCode::KeyC),
                         ))
                         .separator(),
                 )
@@ -154,52 +150,52 @@ fn main() {
                     MenuBuilder::new("Edit")
                         .item(
                             MenuItem::new("Copy", "copy")
-                                .accelerator(Accelerator::new(Modifiers::COMMAND, KeyCode::KeyC)),
+                                .accelerator(Accelerator::new(Modifiers::PRIMARY, KeyCode::KeyC)),
                         )
                         .item(
                             MenuItem::new("Paste", "paste")
-                                .accelerator(Accelerator::new(Modifiers::COMMAND, KeyCode::KeyV)),
+                                .accelerator(Accelerator::new(Modifiers::PRIMARY, KeyCode::KeyV)),
                         ),
                 )
                 .menu(
                     MenuBuilder::new("Character")
                         .item(
                             MenuItem::new("Clear", "clear").accelerator(Accelerator::new(
-                                Modifiers::COMMAND,
+                                Modifiers::PRIMARY,
                                 KeyCode::Backspace,
                             )),
                         )
                         .item(
                             MenuItem::new("Invert", "invert")
-                                .accelerator(Accelerator::new(Modifiers::COMMAND, KeyCode::KeyI)),
+                                .accelerator(Accelerator::new(Modifiers::PRIMARY, KeyCode::KeyI)),
                         )
                         .item(
                             MenuItem::new("Rotate", "rotate")
-                                .accelerator(Accelerator::new(Modifiers::COMMAND, KeyCode::KeyR)),
+                                .accelerator(Accelerator::new(Modifiers::PRIMARY, KeyCode::KeyR)),
                         )
                         .item(MenuItem::new("Mirror Horizontally", "mirrorH").accelerator(
-                            Accelerator::new(Modifiers::COMMAND | Modifiers::SHIFT, KeyCode::KeyH),
+                            Accelerator::new(Modifiers::PRIMARY | Modifiers::SHIFT, KeyCode::KeyH),
                         ))
                         .item(MenuItem::new("Mirror Vertically", "mirrorV").accelerator(
-                            Accelerator::new(Modifiers::COMMAND | Modifiers::SHIFT, KeyCode::KeyV),
+                            Accelerator::new(Modifiers::PRIMARY | Modifiers::SHIFT, KeyCode::KeyV),
                         ))
                         .separator()
                         .item(
                             MenuItem::new("Clear All", "clearAll").accelerator(Accelerator::new(
-                                Modifiers::COMMAND | Modifiers::OPTION,
+                                Modifiers::PRIMARY | Modifiers::OPTION,
                                 KeyCode::Backspace,
                             )),
                         )
                         .item(MenuItem::new("Invert All", "invertAll").accelerator(
-                            Accelerator::new(Modifiers::COMMAND | Modifiers::OPTION, KeyCode::KeyI),
+                            Accelerator::new(Modifiers::PRIMARY | Modifiers::OPTION, KeyCode::KeyI),
                         ))
                         .item(MenuItem::new("Rotate All", "rotateAll").accelerator(
-                            Accelerator::new(Modifiers::COMMAND | Modifiers::OPTION, KeyCode::KeyR),
+                            Accelerator::new(Modifiers::PRIMARY | Modifiers::OPTION, KeyCode::KeyR),
                         ))
                         .item(
                             MenuItem::new("Mirror All Horizontally", "mirrorHAll").accelerator(
                                 Accelerator::new(
-                                    Modifiers::COMMAND | Modifiers::OPTION | Modifiers::SHIFT,
+                                    Modifiers::PRIMARY | Modifiers::OPTION | Modifiers::SHIFT,
                                     KeyCode::KeyH,
                                 ),
                             ),
@@ -207,15 +203,14 @@ fn main() {
                         .item(
                             MenuItem::new("Mirror All Vertically", "mirrorVAll").accelerator(
                                 Accelerator::new(
-                                    Modifiers::COMMAND | Modifiers::OPTION | Modifiers::SHIFT,
+                                    Modifiers::PRIMARY | Modifiers::OPTION | Modifiers::SHIFT,
                                     KeyCode::KeyV,
                                 ),
                             ),
                         ),
                 ),
-        );
-    }
-    let event_loop = event_loop_builder.build();
+        )
+        .build();
 
     #[allow(unused_mut)]
     let mut window = WindowBuilder::new()
@@ -235,7 +230,6 @@ fn main() {
 
     let mut page_ready = false;
     let mut pending_open_path = startup_path;
-    #[cfg(target_os = "macos")]
     let mut pending_menu_action: Option<String> = None;
     event_loop.run(move |event| {
         if let Event::Window(_, WindowEvent::ThemeChanged(theme)) = &event {
@@ -265,8 +259,7 @@ fn main() {
         {
             window.set_title(title);
         }
-        #[cfg(target_os = "macos")]
-        if let Event::MacosMenuItem(action) = &event {
+        if let Event::Action(action) = &event {
             if page_ready {
                 webview.send_ipc_message(
                     serde_json::to_string(&IpcMessage::MenuAction {
@@ -322,7 +315,6 @@ fn main() {
                                 .expect("Failed to serialize restore last file message"),
                         );
                     }
-                    #[cfg(target_os = "macos")]
                     if let Some(action) = pending_menu_action.take() {
                         webview.send_ipc_message(
                             serde_json::to_string(&IpcMessage::MenuAction { action })

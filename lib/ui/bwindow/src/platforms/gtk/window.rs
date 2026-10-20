@@ -75,6 +75,7 @@ impl PlatformWindow {
         // Create window
         let window = unsafe {
             let window = gtk_application_window_new(super::event_loop::application());
+            gtk_application_window_set_show_menubar(window, 0);
             g_object_ref(window.cast());
             #[cfg(feature = "file_drop")]
             if builder.allow_file_drop {
@@ -398,20 +399,34 @@ impl Drop for PlatformWindow {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "menu"))]
 mod tests {
     use std::cell::Cell;
     use std::rc::Rc;
 
     use super::*;
-    use crate::{Event, EventLoopBuilder, EventLoopInterface, EventLoopProxyInterface};
+    use crate::{
+        Event, EventLoopBuilder, EventLoopInterface, EventLoopProxyInterface, MenuBarBuilder,
+        MenuBuilder, MenuItem,
+    };
 
     #[test]
     #[ignore = "requires a display and session bus"]
-    fn application_window_updates_content_before_scale_event() {
-        let event_loop = super::super::event_loop::PlatformEventLoop::new(EventLoopBuilder::new());
+    fn application_window_exports_hidden_menu_and_updates_content_before_scale_event() {
+        let event_loop = super::super::event_loop::PlatformEventLoop::new(
+            EventLoopBuilder::new().menu(
+                MenuBarBuilder::new()
+                    .menu(MenuBuilder::new("File").item(MenuItem::new("New", "file.new"))),
+            ),
+        );
         let mut window = WindowBuilder::new().build();
         let native = window.platform.0.window;
+        unsafe {
+            assert_eq!(gtk_application_window_get_show_menubar(native), 0);
+            let model = gtk_application_get_menubar(super::super::event_loop::application());
+            assert!(!model.is_null());
+            assert_eq!(g_menu_model_get_n_items(model), 1);
+        }
         let content = window.attach_content().expect("empty window");
         let resized = Rc::new(Cell::new(None));
         let result = resized.clone();

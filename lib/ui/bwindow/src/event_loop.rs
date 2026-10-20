@@ -23,8 +23,8 @@ pub struct EventLoopBuilder<T = ()> {
     user_event: PhantomData<fn(T)>,
     pub(crate) app_id: Option<AppId>,
     pub(crate) single_instance: bool,
-    #[cfg(all(target_os = "macos", feature = "menu"))]
-    pub(crate) macos_menu: Option<crate::MenuBarBuilder>,
+    #[cfg(feature = "menu")]
+    pub(crate) menu: Option<crate::MenuBarBuilder>,
 }
 
 impl<T> Default for EventLoopBuilder<T> {
@@ -33,8 +33,8 @@ impl<T> Default for EventLoopBuilder<T> {
             user_event: PhantomData,
             app_id: None,
             single_instance: true,
-            #[cfg(all(target_os = "macos", feature = "menu"))]
-            macos_menu: None,
+            #[cfg(feature = "menu")]
+            menu: None,
         }
     }
 }
@@ -53,8 +53,8 @@ impl<T: Send + 'static> EventLoopBuilder<T> {
             user_event: PhantomData,
             app_id: self.app_id,
             single_instance: self.single_instance,
-            #[cfg(all(target_os = "macos", feature = "menu"))]
-            macos_menu: self.macos_menu,
+            #[cfg(feature = "menu")]
+            menu: self.menu,
         }
     }
 
@@ -79,10 +79,12 @@ impl<T: Send + 'static> EventLoopBuilder<T> {
         self
     }
 
-    /// Add custom macOS menus to the default application menu bar
-    #[cfg(all(target_os = "macos", feature = "menu"))]
-    pub fn macos_set_menu(mut self, menu: crate::MenuBarBuilder) -> Self {
-        self.macos_menu = Some(menu);
+    /// Set menus and application shortcuts.
+    /// macOS displays a native menu bar; GTK exports it for compatible global menus
+    /// while hiding it inside the window. Windows registers shortcuts only.
+    #[cfg(feature = "menu")]
+    pub fn menu(mut self, menu: crate::MenuBarBuilder) -> Self {
+        self.menu = Some(menu);
         self
     }
 
