@@ -216,7 +216,7 @@ pub(crate) mod windows {
     }
 }
 
-#[cfg(all(unix, not(target_os = "macos")))]
+#[cfg(all(unix, not(target_vendor = "apple")))]
 fn xdg_dir(name: &str, fallback: PathBuf) -> PathBuf {
     std::env::var_os(name)
         .map(PathBuf::from)
@@ -246,10 +246,10 @@ impl BaseDirs {
     /// Returns the path to the user's cache directory
     pub fn cache_dir(&self) -> PathBuf {
         cfg_select! {
-            all(unix, not(target_os = "macos")) => {
+            all(unix, not(target_vendor = "apple")) => {
                 xdg_dir("XDG_CACHE_HOME", self.home_dir.join(".cache"))
             }
-            target_os = "macos" => self.home_dir.join("Library").join("Caches"),
+            target_vendor = "apple" => self.home_dir.join("Library").join("Caches"),
             windows => windows::get_app_data_path(&windows::FOLDERID_LOCAL_APPDATA),
             _ => unreachable!(),
         }
@@ -258,10 +258,10 @@ impl BaseDirs {
     /// Returns the path to the user's config directory
     pub fn config_dir(&self) -> PathBuf {
         cfg_select! {
-            all(unix, not(target_os = "macos")) => {
+            all(unix, not(target_vendor = "apple")) => {
                 xdg_dir("XDG_CONFIG_HOME", self.home_dir.join(".config"))
             }
-            target_os = "macos" => self.home_dir.join("Library").join("Application Support"),
+            target_vendor = "apple" => self.home_dir.join("Library").join("Application Support"),
             windows => windows::get_app_data_path(&windows::FOLDERID_ROAMING_APPDATA),
             _ => unreachable!(),
         }
@@ -270,10 +270,10 @@ impl BaseDirs {
     /// Returns the path to the user's data directory
     pub fn data_dir(&self) -> PathBuf {
         cfg_select! {
-            all(unix, not(target_os = "macos")) => {
+            all(unix, not(target_vendor = "apple")) => {
                 xdg_dir("XDG_DATA_HOME", self.home_dir.join(".local").join("share"))
             }
-            target_os = "macos" => self.home_dir.join("Library").join("Application Support"),
+            target_vendor = "apple" => self.home_dir.join("Library").join("Application Support"),
             windows => windows::get_app_data_path(&windows::FOLDERID_ROAMING_APPDATA),
             _ => unreachable!(),
         }
@@ -292,7 +292,7 @@ impl BaseDirs {
     #[allow(clippy::missing_const_for_fn)]
     pub fn executable_dir(&self) -> Option<PathBuf> {
         cfg_select! {
-            all(unix, not(target_os = "macos")) => Some(xdg_dir(
+            all(unix, not(target_vendor = "apple")) => Some(xdg_dir(
                 "XDG_BIN_HOME",
                 self.home_dir.join(".local").join("bin"),
             )),
@@ -312,10 +312,10 @@ impl ProjectDirs {
     /// Creates a ProjectDirs struct from values describing the project
     pub fn from(qualifier: &str, organization: &str, application: &str) -> Option<Self> {
         Self::from_path(cfg_select! {
-            all(unix, not(target_os = "macos")) => {
+            all(unix, not(target_vendor = "apple")) => {
                 PathBuf::from(application)
             }
-            target_os = "macos" => {
+            target_vendor = "apple" => {
                 PathBuf::from(format!("{qualifier}.{organization}.{application}"))
             }
             windows => PathBuf::from(organization).join(application),
@@ -366,11 +366,11 @@ impl UserDirs {
     /// Returns the path to the user's audio directory
     pub fn audio_dir(&self) -> PathBuf {
         cfg_select! {
-            all(unix, not(target_os = "macos")) => {
+            all(unix, not(target_vendor = "apple")) => {
                 let xdg_music = std::env::var("XDG_MUSIC_DIR").map(PathBuf::from);
                 xdg_music.unwrap_or_else(|_| self.home_dir.join("Music"))
             }
-            target_os = "macos" => self.home_dir.join("Music"),
+            target_vendor = "apple" => self.home_dir.join("Music"),
             windows => windows::get_known_folder_path(&windows::FOLDERID_MUSIC),
             _ => unreachable!(),
         }
