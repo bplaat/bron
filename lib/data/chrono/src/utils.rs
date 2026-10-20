@@ -4,8 +4,10 @@
  * SPDX-License-Identifier: MIT
  */
 
+use crate::ParseError;
 use crate::consts::{
     DAYS_IN_MONTHS, DAYS_IN_MONTHS_LEAP, DAYS_IN_YEAR, DAYS_IN_YEAR_LEAP, EPOCH_YEAR, SECS_IN_DAY,
+    SECS_IN_HOUR, SECS_IN_MIN,
 };
 
 pub(crate) const fn is_leap_year(year: u32) -> bool {
@@ -51,4 +53,34 @@ pub(crate) fn timestamp_to_ymd(timestamp: i64) -> (u32, u32, u32) {
     }
 
     (year, month, day as u32 + 1)
+}
+
+/// Parse a `HH:MM:SS` time, range checks are left to the caller
+pub(crate) fn parse_hms(s: &str) -> Result<(u32, u32, u32), ParseError> {
+    let mut parts = s
+        .split(':')
+        .map(|part| part.parse().map_err(|_| ParseError));
+    match (parts.next(), parts.next(), parts.next(), parts.next()) {
+        (Some(hour), Some(minute), Some(second), None) => Ok((hour?, minute?, second?)),
+        _ => Err(ParseError),
+    }
+}
+
+/// Parse a `+HH:MM` or `-HH:MM` timezone offset to seconds
+pub(crate) fn parse_offset(s: &str) -> Result<i64, ParseError> {
+    let sign = match s.as_bytes().first() {
+        Some(b'+') => 1,
+        Some(b'-') => -1,
+        _ => return Err(ParseError),
+    };
+    let (hours, minutes) = s[1..].split_once(':').ok_or(ParseError)?;
+    if hours.len() != 2 || minutes.len() != 2 {
+        return Err(ParseError);
+    }
+    let hours: i64 = hours.parse().map_err(|_| ParseError)?;
+    let minutes: i64 = minutes.parse().map_err(|_| ParseError)?;
+    if hours >= 24 || minutes >= 60 {
+        return Err(ParseError);
+    }
+    Ok(sign * (hours * SECS_IN_HOUR + minutes * SECS_IN_MIN))
 }

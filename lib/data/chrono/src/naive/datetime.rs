@@ -12,7 +12,7 @@ use core::str::FromStr;
 use core::time::Duration;
 
 use crate::consts::{SECS_IN_DAY, SECS_IN_HOUR, SECS_IN_MIN};
-use crate::utils::timestamp_to_ymd;
+use crate::utils::{parse_hms, timestamp_to_ymd};
 use crate::{DateTime, NaiveDate, ParseError, Utc};
 
 // MARK: NaiveDateTime
@@ -31,6 +31,36 @@ impl NaiveDateTime {
     /// Get the [NaiveDate] of the date and time
     pub const fn date(&self) -> NaiveDate {
         NaiveDate::from_timestamp(self.0)
+    }
+
+    /// Get the year
+    pub fn year(&self) -> i32 {
+        self.date().year()
+    }
+
+    /// Get the month, starting at 1
+    pub fn month(&self) -> u32 {
+        self.date().month()
+    }
+
+    /// Get the day of the month, starting at 1
+    pub fn day(&self) -> u32 {
+        self.date().day()
+    }
+
+    /// Get the hour
+    pub const fn hour(&self) -> u32 {
+        (self.0.rem_euclid(SECS_IN_DAY) / SECS_IN_HOUR) as u32
+    }
+
+    /// Get the minute
+    pub const fn minute(&self) -> u32 {
+        (self.0.rem_euclid(SECS_IN_HOUR) / SECS_IN_MIN) as u32
+    }
+
+    /// Get the second
+    pub const fn second(&self) -> u32 {
+        self.0.rem_euclid(SECS_IN_MIN) as u32
     }
 
     /// Get the [DateTime] in UTC timezone
@@ -67,33 +97,8 @@ impl FromStr for NaiveDateTime {
     type Err = ParseError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let mut datetime_parts = s.split(' ');
-        let date_part = datetime_parts.next().ok_or(ParseError)?;
-        let time_part = datetime_parts.next().ok_or(ParseError)?;
-        if datetime_parts.next().is_some() {
-            return Err(ParseError);
-        }
-
-        let mut time_parts = time_part.split(':');
-        let hour: u32 = time_parts
-            .next()
-            .ok_or(ParseError)?
-            .parse()
-            .map_err(|_| ParseError)?;
-        let minute: u32 = time_parts
-            .next()
-            .ok_or(ParseError)?
-            .parse()
-            .map_err(|_| ParseError)?;
-        let second: u32 = time_parts
-            .next()
-            .ok_or(ParseError)?
-            .parse()
-            .map_err(|_| ParseError)?;
-        if time_parts.next().is_some() {
-            return Err(ParseError);
-        }
-
+        let (date_part, time_part) = s.split_once(' ').ok_or(ParseError)?;
+        let (hour, minute, second) = parse_hms(time_part)?;
         NaiveDate::from_str(date_part)?
             .and_hms_opt(hour, minute, second)
             .ok_or(ParseError)
@@ -119,7 +124,7 @@ impl Display for NaiveDateTime {
 
 impl Debug for NaiveDateTime {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        f.write_str("NaiveDate(")?;
+        f.write_str("NaiveDateTime(")?;
         Display::fmt(self, f)?;
         f.write_str(")")
     }
@@ -170,6 +175,28 @@ mod test {
         assert!("2020-02-29 12:00:60".parse::<NaiveDateTime>().is_err());
         assert!("2021-02-29 12:00:00".parse::<NaiveDateTime>().is_err());
         assert!("2019-04-31 12:00:00".parse::<NaiveDateTime>().is_err());
+    }
+
+    #[test]
+    fn test_accessors() {
+        let datetime: NaiveDateTime = "2020-02-29 12:34:56".parse().unwrap();
+        assert_eq!(
+            (datetime.year(), datetime.month(), datetime.day()),
+            (2020, 2, 29)
+        );
+        assert_eq!(
+            (datetime.hour(), datetime.minute(), datetime.second()),
+            (12, 34, 56)
+        );
+        let datetime: NaiveDateTime = "1969-12-20 10:13:20".parse().unwrap();
+        assert_eq!(
+            (datetime.hour(), datetime.minute(), datetime.second()),
+            (10, 13, 20)
+        );
+        assert_eq!(
+            format!("{datetime:?}"),
+            "NaiveDateTime(1969-12-20 10:13:20)"
+        );
     }
 
     #[test]

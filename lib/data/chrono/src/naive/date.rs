@@ -51,6 +51,21 @@ impl NaiveDate {
         Some(Self::from_timestamp(days_epoch_diff * SECS_IN_DAY))
     }
 
+    /// Get the year
+    pub fn year(&self) -> i32 {
+        timestamp_to_ymd(self.0).0 as i32
+    }
+
+    /// Get the month, starting at 1
+    pub fn month(&self) -> u32 {
+        timestamp_to_ymd(self.0).1
+    }
+
+    /// Get the day of the month, starting at 1
+    pub fn day(&self) -> u32 {
+        timestamp_to_ymd(self.0).2
+    }
+
     /// Create a [NaiveDateTime] from date with hour, minute and second
     pub const fn and_hms_opt(&self, hour: u32, minute: u32, second: u32) -> Option<NaiveDateTime> {
         if hour >= 24 || minute >= 60 || second >= 60 {
@@ -171,6 +186,14 @@ mod test {
         assert!("2019-13-01".parse::<NaiveDate>().is_err());
         assert!("2019-02".parse::<NaiveDate>().is_err());
         assert!("2019--02-29".parse::<NaiveDate>().is_err());
+    }
+
+    #[test]
+    fn test_accessors() {
+        let date: NaiveDate = "2020-02-29".parse().unwrap();
+        assert_eq!((date.year(), date.month(), date.day()), (2020, 2, 29));
+        let date: NaiveDate = "1969-12-20".parse().unwrap();
+        assert_eq!((date.year(), date.month(), date.day()), (1969, 12, 20));
     }
 
     #[test]

@@ -38,7 +38,7 @@ pub struct ParseError;
 
 impl Display for ParseError {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "URL parse error")
+        write!(f, "Date and time parse error")
     }
 }
 

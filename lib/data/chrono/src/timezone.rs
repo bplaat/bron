@@ -36,6 +36,9 @@ pub trait TimeZone: Sized {
     #[allow(clippy::wrong_self_convention, reason = "matches the chrono API")]
     fn from_local_datetime(&self, local: &NaiveDateTime) -> LocalResult<DateTime<Self>>;
 
+    /// Get the offset in seconds of this timezone's wall-clock time from UTC at a unix timestamp
+    fn offset_secs(timestamp: i64) -> i64;
+
     /// Get the [DateTime] of a wall-clock year, month, day, hour, minute and second in this
     /// timezone
     fn with_ymd_and_hms(
@@ -75,6 +78,10 @@ impl TimeZone for Utc {
     fn from_local_datetime(&self, local: &NaiveDateTime) -> LocalResult<DateTime<Self>> {
         LocalResult::Single(local.and_utc())
     }
+
+    fn offset_secs(_timestamp: i64) -> i64 {
+        0
+    }
 }
 
 impl Utc {
@@ -101,6 +108,11 @@ impl TimeZone for Local {
             Some(datetime) => LocalResult::Single(datetime),
             None => LocalResult::None,
         }
+    }
+
+    /// Falls back to UTC when the C library can't convert the timestamp.
+    fn offset_secs(timestamp: i64) -> i64 {
+        crate::sys::utc_offset(timestamp).unwrap_or(0)
     }
 }
 
@@ -145,5 +157,23 @@ mod test {
         // Time zones range from UTC-12 to UTC+14.
         assert!((-14 * 3600..=12 * 3600).contains(&(local.timestamp() - utc.timestamp())));
         assert!((Local::now().timestamp() - Utc::now().timestamp()).abs() <= 1);
+    }
+
+    #[cfg(feature = "clock")]
+    #[test]
+    fn test_local_round_trips_wall_clock() {
+        let local = Local
+            .with_ymd_and_hms(2024, 7, 1, 12, 0, 0)
+            .single()
+            .unwrap();
+        assert_eq!(local.naive_local().to_string(), "2024-07-01 12:00:00");
+        assert_eq!(
+            local.timestamp() + Local::offset_secs(local.timestamp()),
+            local.naive_local().and_utc().timestamp()
+        );
+        assert!(local.to_rfc3339().starts_with("2024-07-01T12:00:00"));
+        let parsed: DateTime<Utc> = local.to_rfc3339().parse().unwrap();
+        assert_eq!(parsed.timestamp(), local.timestamp());
+        assert_eq!(local.with_timezone(&Utc).timestamp(), local.timestamp());
     }
 }
