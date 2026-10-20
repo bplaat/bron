@@ -14,7 +14,7 @@ use objc2::rc::{Allocated, Retained};
 use objc2::runtime::{AnyObject as Object, Bool};
 use objc2::{class, define_class, msg_send};
 
-#[cfg(feature = "file_drop")]
+#[cfg(all(target_os = "macos", feature = "file_drop"))]
 use super::file_drop::droppable_webview_class;
 use super::headers::*;
 use crate::{InjectionTime, WebviewBuilder, WebviewEvent};
@@ -103,8 +103,7 @@ impl WebviewDelegate {
             if target_frame.is_null() {
                 let request: *mut Object = msg_send![navigation_action, request];
                 let url: *mut Object = msg_send![request, URL];
-                let workspace: *mut Object = msg_send![class!(NSWorkspace), sharedWorkspace];
-                let _: Bool = msg_send![workspace, openURL:url];
+                open_external_url(url);
                 decision_handler.call((WK_NAVIGATION_ACTION_POLICY_CANCEL,));
             } else {
                 decision_handler.call((WK_NAVIGATION_ACTION_POLICY_ALLOW,));
@@ -155,7 +154,15 @@ pub(crate) struct PlatformWebview(pub(super) Box<WebviewData>);
 
 impl PlatformWebview {
     pub(crate) fn new(attachment: crate::WindowAttachment) -> Self {
+        #[cfg(target_os = "macos")]
         let Some(crate::NativeWindowHandle::AppKit(window)) =
+            (unsafe { attachment.native_handle() })
+        else {
+            panic!("invalid native window handle");
+        };
+        // On iOS the window handle is the root view that content is added to.
+        #[cfg(target_os = "ios")]
+        let Some(crate::NativeWindowHandle::UIKit(window)) =
             (unsafe { attachment.native_handle() })
         else {
             panic!("invalid native window handle");
@@ -211,35 +218,51 @@ impl PlatformWebview {
             }
 
             // Get content view rect
+            #[cfg(target_os = "macos")]
             let content_view: *mut Object = msg_send![&self.0.window, contentView];
-            let webview_rect: NSRect = msg_send![content_view, bounds];
+            #[cfg(target_os = "ios")]
+            let content_view: *mut Object = self.0.window.as_ptr();
+            let webview_rect: CGRect = msg_send![content_view, bounds];
 
             // Create webview
-            #[cfg(feature = "file_drop")]
+            #[cfg(all(target_os = "macos", feature = "file_drop"))]
             let webview_class = if self.0.attachment.allow_file_drop() {
                 droppable_webview_class()
             } else {
                 class!(WKWebView)
             };
-            #[cfg(not(feature = "file_drop"))]
+            #[cfg(not(all(target_os = "macos", feature = "file_drop")))]
             let webview_class = class!(WKWebView);
             let webview: Allocated<Object> = msg_send![webview_class, alloc];
             let webview: Retained<Object> = msg_send![webview, initWithFrame:webview_rect, configuration:webview_config.as_ptr()];
-            #[cfg(feature = "file_drop")]
+            #[cfg(all(target_os = "macos", feature = "file_drop"))]
             if self.0.attachment.allow_file_drop() {
                 register_dragged_types(webview.as_ptr());
             }
             let _: () = msg_send![&webview, setHidden:Bool::YES];
             let _: () = msg_send![&webview, setNavigationDelegate:webview_delegate.as_ptr()];
+            #[cfg(target_os = "macos")]
             let _: () = msg_send![content_view, addSubview:webview.as_ptr(), positioned:NS_WINDOW_BELOW, relativeTo:null_mut::<Object>()];
+            #[cfg(target_os = "ios")]
+            let _: () = msg_send![content_view, insertSubview:webview.as_ptr(), atIndex:0usize];
+            #[cfg(target_os = "macos")]
             let _: () = msg_send![&webview, setAutoresizingMask: NS_VIEW_WIDTH_SIZABLE | NS_VIEW_HEIGHT_SIZABLE];
+            #[cfg(target_os = "ios")]
+            let _: () = msg_send![&webview, setAutoresizingMask: UI_VIEW_AUTORESIZING_FLEXIBLE_WIDTH | UI_VIEW_AUTORESIZING_FLEXIBLE_HEIGHT];
             if self.0.background_color.is_some() {
-                let value: *mut Object = msg_send![class!(NSNumber), numberWithBool:Bool::NO];
-                let _: () =
-                    msg_send![&webview, setValue:value, forKey:ns_string!("drawsBackground")];
+                set_transparent_background(&webview);
             }
+            // The device model is iPhone or iPad on iOS
+            #[cfg(target_os = "ios")]
+            let device = {
+                let device: *mut Object = msg_send![class!(UIDevice), currentDevice];
+                let model: NSString = msg_send![device, model];
+                model.to_string()
+            };
+            #[cfg(target_os = "macos")]
+            let device = "Macintosh";
             let useragent = format!(
-                "Mozilla/5.0 (Macintosh; {}) bwebview/{}",
+                "Mozilla/5.0 ({device}; {}) bwebview/{}",
                 std::env::consts::ARCH,
                 env!("CARGO_PKG_VERSION"),
             );
@@ -259,6 +282,16 @@ impl PlatformWebview {
             if let Some(html) = builder.should_load_html {
                 let _: *mut Object = msg_send![&webview, loadHTMLString:&*NSString::new(html), baseURL:null::<Object>()];
             }
+            // isInspectable is available since iOS 16.4
+            #[cfg(target_os = "ios")]
+            if cfg!(debug_assertions) {
+                let inspectable: Bool =
+                    msg_send![&webview, respondsToSelector:objc2::sel!(setInspectable:)];
+                if inspectable.as_bool() {
+                    let _: () = msg_send![&webview, setInspectable:Bool::YES];
+                }
+            }
+            #[cfg(target_os = "macos")]
             if cfg!(debug_assertions) {
                 let webview_configuration: *mut Object = msg_send![&webview, configuration];
                 let webview_preferences: *mut Object =
@@ -374,11 +407,42 @@ impl crate::WebviewInterface for PlatformWebview {
         }
         self.0.background_color = Some(color);
         if let Some(webview) = &self.0.webview {
-            unsafe {
-                let value: *mut Object = msg_send![class!(NSNumber), numberWithBool:Bool::NO];
-                let _: () =
-                    msg_send![webview, setValue:value, forKey:ns_string!("drawsBackground")];
-            }
+            set_transparent_background(webview);
+        }
+    }
+}
+
+/// Let the window background color show through the webview
+fn set_transparent_background(webview: &Object) {
+    unsafe {
+        #[cfg(target_os = "macos")]
+        {
+            let value: *mut Object = msg_send![class!(NSNumber), numberWithBool:Bool::NO];
+            let _: () = msg_send![webview, setValue:value, forKey:ns_string!("drawsBackground")];
+        }
+        #[cfg(target_os = "ios")]
+        {
+            let clear: *mut Object = msg_send![class!(UIColor), clearColor];
+            let _: () = msg_send![webview, setOpaque:Bool::NO];
+            let _: () = msg_send![webview, setBackgroundColor:clear];
+            let scroll_view: *mut Object = msg_send![webview, scrollView];
+            let _: () = msg_send![scroll_view, setBackgroundColor:clear];
+        }
+    }
+}
+
+fn open_external_url(url: *mut Object) {
+    unsafe {
+        #[cfg(target_os = "macos")]
+        {
+            let workspace: *mut Object = msg_send![class!(NSWorkspace), sharedWorkspace];
+            let _: Bool = msg_send![workspace, openURL:url];
+        }
+        #[cfg(target_os = "ios")]
+        {
+            let application: *mut Object = msg_send![class!(UIApplication), sharedApplication];
+            let options: *mut Object = msg_send![class!(NSDictionary), dictionary];
+            let _: () = msg_send![application, openURL:url, options:options, completionHandler:null_mut::<c_void>()];
         }
     }
 }

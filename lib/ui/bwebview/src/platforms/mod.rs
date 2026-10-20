@@ -19,9 +19,9 @@ cfg_select! {
         pub(crate) use crate::platforms::gtk::*;
         mod gtk;
     }
-    target_os = "macos" => {
-        pub(crate) use crate::platforms::macos::*;
-        mod macos;
+    target_vendor = "apple" => {
+        pub(crate) use crate::platforms::apple::*;
+        mod apple;
     }
     windows => {
         pub(crate) use crate::platforms::windows::*;
