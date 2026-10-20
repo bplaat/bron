@@ -16,6 +16,10 @@ copyright = "Copyright © 2014 Gabriele Cirulli\nCopyright © 2025 Bastiaan van 
 icon = "meta/macos/icon.icon"
 entitlements = "meta/macos/Entitlements.plist"
 
+[package.metadata.bundle.windows]
+assets = "meta/windows"
+sandbox = true
+
 [dependencies]
 bwindow = { path = "../../lib/ui/bwindow" }
 bwebview = { path = "../../lib/ui/bwebview", features = ["rust-embed"] }

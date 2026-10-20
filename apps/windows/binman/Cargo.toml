@@ -10,8 +10,15 @@ build = "build.rs"
 [package.metadata]
 platforms = ["windows"]
 
-[package.metadata.app]
+[package.metadata.bundle]
 name = "Binman"
+identifier = "nl.bplaat.Binman"
+copyright = "Copyright © 2026 Bastiaan van der Plaat"
+
+[package.metadata.bundle.windows]
+assets = "meta/windows"
+virtualization = false
+capabilities = ["allowElevation"]
 
 [lints]
 workspace = true

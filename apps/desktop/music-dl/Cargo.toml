@@ -12,6 +12,9 @@ identifier = "nl.bplaat.MusicDownloader"
 copyright = "Copyright (c) 2026 Bastiaan van der Plaat"
 icon = "meta/macos/icon.icon"
 
+[package.metadata.bundle.windows]
+assets = "meta/windows"
+
 [lints]
 workspace = true
 

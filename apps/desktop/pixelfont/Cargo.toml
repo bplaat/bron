@@ -14,6 +14,10 @@ icon = "meta/macos/icon.icon"
 info_plist = "meta/macos/Info.plist"
 entitlements = "meta/macos/Entitlements.plist"
 
+[package.metadata.bundle.windows]
+assets = "meta/windows"
+file_types = [{ name = "Pixel Font", extensions = ["pf"] }]
+
 [lints]
 workspace = true
 
