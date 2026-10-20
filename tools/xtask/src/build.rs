@@ -311,17 +311,31 @@ impl Xtask {
         let log = self.root.join("target/bundle/install-msix.log");
         let script = self.root.join("target/bundle/install-msix.ps1");
         remove_path_if_exists(&log)?;
+        // Windows fails to reinstall a bundle with the installed version, while the version only
+        // stays the same when the contents didn't change, so those bundles are skipped
         let mut contents = format!(
-            "$ErrorActionPreference = 'Stop'\r\ntrap {{ $_ | Out-File -LiteralPath {} -Encoding utf8; exit 1 }}\r\n",
+            r"$ErrorActionPreference = 'Stop'
+trap {{ $_ | Out-File -LiteralPath {} -Encoding utf8; exit 1 }}
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+function Install-Bundle($Path) {{
+    $zip = [IO.Compression.ZipFile]::OpenRead($Path)
+    try {{
+        $reader = New-Object IO.StreamReader($zip.GetEntry('AppxMetadata/AppxBundleManifest.xml').Open())
+        $identity = ([xml]$reader.ReadToEnd()).Bundle.Identity
+    }} finally {{
+        $zip.Dispose()
+    }}
+    if ((Get-AppxPackage -Name $identity.Name).Version -ne $identity.Version) {{
+        Add-AppxPackage -Path $Path -AllowUnsigned -ForceApplicationShutdown -ForceUpdateFromAnyVersion
+    }}
+}}
+",
             powershell_quote(&log)
         );
         for package in packages {
-            contents.push_str(&format!(
-                "Add-AppxPackage -Path {} -AllowUnsigned -ForceApplicationShutdown -ForceUpdateFromAnyVersion\r\n",
-                powershell_quote(package)
-            ));
+            contents.push_str(&format!("Install-Bundle {}\n", powershell_quote(package)));
         }
-        fs::write(&script, contents)?;
+        fs::write(&script, contents.replace('\n', "\r\n"))?;
 
         println!("Installing MSIX packages, accept the UAC prompt to continue...");
         let elevate = format!(
