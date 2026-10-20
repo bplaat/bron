@@ -137,6 +137,18 @@ define_class!(
         #[unsafe(method(windowDidMove:))]
         fn _window_did_move(&self, notification: *mut Object) { self.window_did_move(notification); }
 
+        #[unsafe(method(windowDidChangeBackingProperties:))]
+        fn _window_did_change_backing_properties(&self, notification: *mut Object) {
+            let host = self.ivars().host.clone();
+            self.window_did_resize(notification);
+            if !host.is_closed() {
+                let window: *mut Object = unsafe { msg_send![notification, object] };
+                let scale: f64 = unsafe { msg_send![window, backingScaleFactor] };
+                send_event(crate::Event::Window(host.id(), WindowEvent::ScaleFactorChanged(scale as f32)));
+                host.request_redraw();
+            }
+        }
+
         #[unsafe(method(windowDidResize:))]
         fn _window_did_resize(&self, notification: *mut Object) { self.window_did_resize(notification); }
 

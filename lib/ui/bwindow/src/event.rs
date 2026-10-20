@@ -34,6 +34,8 @@ impl CloseRequest {
 pub enum WindowEvent {
     /// The window's effective light/dark appearance changed.
     ThemeChanged(crate::Theme),
+    /// The backing scale changed; content sizes have already been updated.
+    ScaleFactorChanged(f32),
     /// Paint the window's content. Native drawing is scoped to this callback.
     RedrawRequested,
     /// The window gained keyboard focus.

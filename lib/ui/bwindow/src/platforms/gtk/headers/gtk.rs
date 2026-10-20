@@ -40,6 +40,8 @@ unsafe extern "C" {
     pub fn gtk_window_present(window: *mut GtkWindow);
     pub fn gtk_application_window_new(application: *mut GtkApplication) -> *mut GtkWindow;
     pub fn gtk_widget_destroy(widget: *mut GtkWidget);
+    pub fn gtk_widget_get_allocated_width(widget: *mut GtkWidget) -> i32;
+    pub fn gtk_widget_get_allocated_height(widget: *mut GtkWidget) -> i32;
     pub fn gtk_widget_get_scale_factor(widget: *mut GtkWidget) -> i32;
     pub fn gtk_window_new(r#type: i32) -> *mut GtkWindow;
     pub fn gtk_window_set_default_icon_name(name: *const c_char);

@@ -176,6 +176,14 @@ impl PlatformWindow {
                 G_CONNECT_DEFAULT,
             );
             g_signal_connect_data(
+                window.cast(),
+                c"notify::scale-factor".as_ptr(),
+                window_on_scale_changed as *const c_void,
+                window_data.as_mut() as *mut _ as *const c_void,
+                null(),
+                G_CONNECT_DEFAULT,
+            );
+            g_signal_connect_data(
                 window as *mut GObject,
                 c"delete-event".as_ptr(),
                 window_on_close as *const c_void,
@@ -354,6 +362,24 @@ extern "C" fn window_on_close(
     true
 }
 
+extern "C" fn window_on_scale_changed(window: *mut GtkWidget, _: *mut c_void, data: &WindowData) {
+    let host = data.host.clone();
+    if host.is_closed() {
+        return;
+    }
+    let scale = unsafe { gtk_widget_get_scale_factor(window) };
+    let width = unsafe { gtk_widget_get_allocated_width(window) };
+    let height = unsafe { gtk_widget_get_allocated_height(window) };
+    host.resize((width * scale) as u32, (height * scale) as u32);
+    if !host.is_closed() {
+        send_event(crate::Event::Window(
+            host.id(),
+            WindowEvent::ScaleFactorChanged(scale as f32),
+        ));
+        host.request_redraw();
+    }
+}
+
 impl Drop for PlatformWindow {
     fn drop(&mut self) {
         // A native window can outlive its Rust handle during recursive close callbacks.
@@ -369,5 +395,45 @@ impl Drop for PlatformWindow {
             );
             g_object_unref(self.0.window.cast());
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    use super::*;
+    use crate::{Event, EventLoopBuilder, EventLoopInterface, EventLoopProxyInterface};
+
+    #[test]
+    #[ignore = "requires a display and session bus"]
+    fn application_window_updates_content_before_scale_event() {
+        let event_loop = super::super::event_loop::PlatformEventLoop::new(EventLoopBuilder::new());
+        let mut window = WindowBuilder::new().build();
+        let native = window.platform.0.window;
+        let content = window.attach_content().expect("empty window");
+        let resized = Rc::new(Cell::new(None));
+        let result = resized.clone();
+        content.on_resize(move |width, height| result.set(Some((width, height))));
+        let seen = Rc::new(Cell::new(false));
+        let result = seen.clone();
+        assert!(event_loop.create_proxy().send_user_event(Box::new(())));
+        event_loop.run(move |event| {
+            let _keep_alive = &content;
+            match event {
+                Event::UserEvent(_) => {
+                    unsafe { g_object_notify(native.cast(), c"scale-factor".as_ptr()) };
+                    window.close();
+                }
+                Event::Window(_, WindowEvent::ScaleFactorChanged(scale)) => {
+                    let (width, height) = resized.get().expect("content was not resized");
+                    assert!(width > 0 && height > 0 && scale >= 1.0);
+                    result.set(true);
+                }
+                _ => {}
+            }
+        });
+        assert!(seen.get(), "scale notification was not delivered");
     }
 }

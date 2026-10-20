@@ -21,8 +21,6 @@ unsafe extern "C" {
     pub(super) fn gtk_widget_grab_focus(widget: *mut GtkWidget);
     pub(super) fn gtk_widget_add_events(widget: *mut GtkWidget, events: i32);
     pub(super) fn gtk_widget_queue_draw(widget: *mut GtkWidget);
-    pub(super) fn gtk_widget_get_allocated_width(widget: *mut GtkWidget) -> i32;
-    pub(super) fn gtk_widget_get_allocated_height(widget: *mut GtkWidget) -> i32;
     pub(super) fn gtk_widget_add_tick_callback(
         widget: *mut GtkWidget,
         callback: extern "C" fn(*mut GtkWidget, *mut c_void, *mut c_void) -> i32,

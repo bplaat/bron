@@ -14,6 +14,8 @@ use std::ffi::{c_char, c_void};
 pub struct GObject([u8; 0]);
 pub const G_CONNECT_DEFAULT: i32 = 0;
 unsafe extern "C" {
+    #[cfg(test)]
+    pub fn g_object_notify(object: *mut GObject, property: *const c_char);
     pub fn g_object_new(
         object_type: *mut c_void,
         first_property_name: *const c_char,
