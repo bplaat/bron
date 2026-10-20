@@ -208,7 +208,7 @@ impl TestCases {
             .collect();
         let workspace_manifest = fs::read_to_string(workspace_dir.join("Cargo.toml"))
             .map_err(|error| error.to_string())?;
-        let patch = basic_toml::from_str::<WorkspaceManifest>(&workspace_manifest)
+        let patch = toml::from_str::<WorkspaceManifest>(&workspace_manifest)
             .map_err(|error| error.to_string())?
             .patch
             .into_iter()
@@ -227,7 +227,7 @@ impl TestCases {
             patch,
             workspace: Empty {},
         };
-        let manifest = basic_toml::to_string(&manifest).map_err(|error| error.to_string())?;
+        let manifest = toml::to_string(&manifest).map_err(|error| error.to_string())?;
         fs::write(project_dir.join("Cargo.toml"), manifest).map_err(|error| error.to_string())?;
 
         let mut failures = 0;
@@ -278,7 +278,7 @@ struct ExpandedTest {
 fn read_source_manifest(source_dir: &Path) -> Result<SourceManifest, String> {
     let contents =
         fs::read_to_string(source_dir.join("Cargo.toml")).map_err(|error| error.to_string())?;
-    basic_toml::from_str(&contents).map_err(|error| error.to_string())
+    toml::from_str(&contents).map_err(|error| error.to_string())
 }
 
 fn resolve_edition(source_dir: &Path, edition: Option<Edition>) -> Result<String, String> {
@@ -290,7 +290,7 @@ fn resolve_edition(source_dir: &Path, edition: Option<Edition>) -> Result<String
                 let Ok(contents) = fs::read_to_string(path) else {
                     continue;
                 };
-                let Ok(manifest) = basic_toml::from_str::<WorkspaceManifest>(&contents) else {
+                let Ok(manifest) = toml::from_str::<WorkspaceManifest>(&contents) else {
                     continue;
                 };
                 if let Some(edition) = manifest.workspace.package.edition {
