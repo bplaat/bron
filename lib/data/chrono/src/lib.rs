@@ -7,7 +7,7 @@
 //! A minimal replacement for the [chrono](https://crates.io/crates/chrono) crate
 //!
 //! Disable default features for `no_std` support with `alloc`. The `now` feature requires `std`,
-//! and the `clock` feature adds the [Local] timezone through the C library.
+//! and the `clock` feature adds the system's [Local] timezone.
 
 #![cfg_attr(not(any(test, feature = "now")), no_std)]
 

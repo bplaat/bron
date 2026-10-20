@@ -93,14 +93,14 @@ impl Utc {
 }
 
 // MARK: Local
-/// The system's local timezone, as configured for the C library
+/// The system's local timezone
 #[cfg(feature = "clock")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Local;
 
 #[cfg(feature = "clock")]
 impl TimeZone for Local {
-    /// Daylight saving time transitions resolve like C `mktime`.
+    /// Daylight saving time transitions resolve as the system does.
     fn from_local_datetime(&self, local: &NaiveDateTime) -> LocalResult<DateTime<Self>> {
         match crate::sys::local_to_timestamp(local.and_utc().timestamp())
             .and_then(DateTime::from_timestamp_secs)
@@ -110,7 +110,7 @@ impl TimeZone for Local {
         }
     }
 
-    /// Falls back to UTC when the C library can't convert the timestamp.
+    /// Falls back to UTC when the system can't convert the timestamp.
     fn offset_secs(timestamp: i64) -> i64 {
         crate::sys::utc_offset(timestamp).unwrap_or(0)
     }
