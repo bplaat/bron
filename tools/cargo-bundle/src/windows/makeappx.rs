@@ -8,11 +8,28 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, exit};
 
-use crate::windows::ARCH;
+use crate::windows::HOST_ARCH;
 
 pub(crate) fn pack(layout: &str, msix: &str) {
+    run(&["pack", "/o", "/d", layout, "/p", msix]);
+}
+
+pub(crate) fn bundle(packages: &str, msix_bundle: &str, version: &str) {
+    run(&[
+        "bundle",
+        "/o",
+        "/bv",
+        version,
+        "/d",
+        packages,
+        "/p",
+        msix_bundle,
+    ]);
+}
+
+fn run(args: &[&str]) {
     let output = Command::new(find_makeappx())
-        .args(["pack", "/o", "/d", layout, "/p", msix])
+        .args(args)
         .output()
         .expect("Failed to run MakeAppx");
     if !output.status.success() {
@@ -35,7 +52,7 @@ fn find_makeappx() -> PathBuf {
         .into_iter()
         .flatten()
         .filter_map(|entry| entry.ok().map(|entry| entry.path()))
-        .filter(|path| path.join(ARCH).join("makeappx.exe").exists())
+        .filter(|path| path.join(HOST_ARCH).join("makeappx.exe").exists())
         .collect();
     versions.sort_by_key(|path| {
         path.file_name()
@@ -51,5 +68,5 @@ fn find_makeappx() -> PathBuf {
         eprintln!("MakeAppx not found, install the Windows SDK");
         exit(1);
     };
-    version.join(ARCH).join("makeappx.exe")
+    version.join(HOST_ARCH).join("makeappx.exe")
 }

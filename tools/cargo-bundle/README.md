@@ -34,13 +34,15 @@ creates an `.icns` file from the optional iconset, and creates a macOS app bundl
 
 ### Windows
 
-This builds your crate and creates an unsigned `.msix` package in the `target/bundle` directory
-with `MakeAppx` from the Windows SDK. The package publisher is the first package author with the
+This builds your crate for x64 and arm64, packs an unsigned `.msix` package for each architecture
+and combines them into a `.msixbundle` in the `target/bundle` directory with `MakeAppx` from the
+Windows SDK, so Windows installs the package for its own architecture. The package publisher is
+the first package author with the
 [unsigned package](https://learn.microsoft.com/en-us/windows/msix/package/unsigned-package) OID,
 so it can be installed on Windows 11 from an administrator PowerShell:
 
 ```powershell
-Add-AppxPackage -Path ExampleApp.msix -AllowUnsigned -ForceUpdateFromAnyVersion
+Add-AppxPackage -Path ExampleApp.msixbundle -AllowUnsigned -ForceUpdateFromAnyVersion
 ```
 
 ## License

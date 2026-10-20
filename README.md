@@ -245,10 +245,11 @@ Most of these libraries are intended primarily for personal use, but can still b
     cargo xtask build-pages
     ```
 
-- To build macOS app bundles on macOS, install the targets below; on Windows this builds MSIX packages with the Windows SDK instead:
+- To build app bundles, install the targets below, on Windows this builds MSIX bundles with the Windows SDK and MSVC build tools for x64 and ARM64:
 
     ```sh
-    rustup target add aarch64-apple-darwin x86_64-apple-darwin
+    rustup target add aarch64-apple-darwin x86_64-apple-darwin # macOS
+    rustup target add aarch64-pc-windows-msvc x86_64-pc-windows-msvc # Windows
     cargo xtask build-bundle
     ```
 

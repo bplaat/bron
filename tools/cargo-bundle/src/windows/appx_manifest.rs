@@ -7,7 +7,6 @@
 use std::fmt::Write as _;
 
 use crate::manifest::{Manifest, WindowsMetadata};
-use crate::windows::ARCH;
 
 // Marks the package as unsigned so it can only be installed with `Add-AppxPackage -AllowUnsigned`
 // https://learn.microsoft.com/en-us/windows/msix/package/unsigned-package
@@ -22,6 +21,7 @@ pub(crate) fn appx_manifest(
     windows: &WindowsMetadata,
     publisher: &str,
     executable: &str,
+    arch: &str,
     revision: u16,
 ) -> String {
     let bundle = &manifest.package.metadata.bundle;
@@ -52,7 +52,7 @@ pub(crate) fn appx_manifest(
 "#);
     _ = writeln!(
         xml,
-        r#"    <Identity Name="{}" Publisher="CN={}, {UNSIGNED_PUBLISHER_OID}" Version="{}" ProcessorArchitecture="{ARCH}"/>"#,
+        r#"    <Identity Name="{}" Publisher="CN={}, {UNSIGNED_PUBLISHER_OID}" Version="{}" ProcessorArchitecture="{arch}"/>"#,
         xml_escape(&bundle.identifier),
         xml_escape(publisher),
         package_version(&manifest.package.version, revision),
@@ -179,7 +179,7 @@ fn file_type_id(name: &str) -> String {
         .collect()
 }
 
-fn package_version(version: &str, revision: u16) -> String {
+pub(crate) fn package_version(version: &str, revision: u16) -> String {
     let release = version.split(['-', '+']).next().unwrap_or(version);
     let mut parts: Vec<_> = release.split('.').collect();
     assert!(parts.len() <= 3, "Package version has too many parts");
