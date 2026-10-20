@@ -16,7 +16,7 @@ cfg_select! {
         use crate::imp_rustls as imp;
         mod imp_rustls;
     }
-    target_os = "macos" => {
+    target_vendor = "apple" => {
         use crate::imp_macos as imp;
         mod imp_macos;
     }

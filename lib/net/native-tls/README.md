@@ -26,7 +26,7 @@ Without the `vendored` feature, the platform's native TLS library is used:
 | Platform    | Backend                              | TLS 1.2 | TLS 1.3 |
 | ----------- | ------------------------------------ | ------- | ------- |
 | Windows     | SChannel (OS built-in)               | Yes     | Yes     |
-| macOS       | SecureTransport (Security.framework) | Yes     | No¹     |
+| macOS / iOS | SecureTransport (Security.framework) | Yes     | No¹     |
 | Linux/other | OpenSSL 1.0.2+ / 1.1.x / 3.x / 4.x   | Yes     | Yes²    |
 
 With the `vendored` feature, rustls is used on all platforms instead:
