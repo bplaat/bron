@@ -16,7 +16,6 @@ pub(crate) struct SoupMessageHeaders([u8; 0]);
 pub(crate) const SOUP_MESSAGE_HEADERS_RESPONSE: i32 = 1;
 // WebKitGTK 4.0 uses libsoup 2.4; WebKitGTK 4.1 uses libsoup 3.0.
 unsafe extern "C" {
-    pub(crate) fn webkit_web_view_stop_loading(webview: *mut WebKitWebView);
     pub(crate) fn soup_message_headers_new(r#type: i32) -> *mut SoupMessageHeaders;
     pub(crate) fn soup_message_headers_foreach(
         headers: *mut SoupMessageHeaders,
@@ -31,6 +30,8 @@ unsafe extern "C" {
 }
 
 // MARK: WebKitGTK
+#[repr(C)]
+pub(crate) struct WebKitEditorState([u8; 0]);
 #[repr(C)]
 pub(crate) struct WebKitWebContext([u8; 0]);
 #[repr(C)]
@@ -73,6 +74,19 @@ unsafe extern "C" {
     pub(crate) fn webkit_uri_scheme_request_get_uri(
         request: *mut WebKitURISchemeRequest,
     ) -> *const c_char;
+    pub(crate) fn webkit_web_view_stop_loading(webview: *mut WebKitWebView);
+    pub(crate) fn webkit_web_view_get_editor_state(
+        webview: *mut WebKitWebView,
+    ) -> *mut WebKitEditorState;
+    pub(crate) fn webkit_editor_state_is_undo_available(state: *mut WebKitEditorState) -> i32;
+    pub(crate) fn webkit_editor_state_is_redo_available(state: *mut WebKitEditorState) -> i32;
+    pub(crate) fn webkit_editor_state_is_cut_available(state: *mut WebKitEditorState) -> i32;
+    pub(crate) fn webkit_editor_state_is_copy_available(state: *mut WebKitEditorState) -> i32;
+    pub(crate) fn webkit_editor_state_is_paste_available(state: *mut WebKitEditorState) -> i32;
+    pub(crate) fn webkit_web_view_execute_editing_command(
+        webview: *mut WebKitWebView,
+        command: *const c_char,
+    );
     pub(crate) fn webkit_web_view_get_type() -> *mut c_void;
     pub(crate) fn webkit_web_view_get_settings(web_view: *mut WebKitWebView)
     -> *mut WebkitSettings;
