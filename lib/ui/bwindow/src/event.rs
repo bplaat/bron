@@ -79,6 +79,8 @@ pub enum WindowEvent {
 pub enum Event<T = ()> {
     /// Window event
     Window(crate::WindowId, WindowEvent),
+    /// The event loop is shutting down. No further events will be delivered.
+    LoopExiting,
     /// User event
     UserEvent(T),
     /// Files opened through macOS Launch Services
@@ -96,6 +98,7 @@ impl<T> Event<T> {
         match self {
             Self::Window(id, event) => Event::Window(id, event),
             Self::UserEvent(value) => Event::UserEvent(map(value)),
+            Self::LoopExiting => Event::LoopExiting,
             #[cfg(target_os = "macos")]
             Self::MacosOpenFiles(paths) => Event::MacosOpenFiles(paths),
             #[cfg(all(target_os = "macos", feature = "menu"))]

@@ -180,13 +180,18 @@ impl crate::EventLoopInterface for PlatformEventLoop {
         monitors
     }
 
-    fn run(self, event_handler: impl FnMut(Event) + 'static) {
+    fn run(self, event_handler: impl FnMut(Event) + 'static) -> i32 {
         crate::dispatch::start(event_handler);
 
         // Start message loop
         unsafe {
             let mut msg = mem::zeroed();
-            while GetMessageW(&mut msg, null_mut(), 0, 0) > 0 {
+            loop {
+                let result = GetMessageW(&mut msg, null_mut(), 0, 0);
+                assert!(result >= 0, "GetMessageW failed");
+                if result == 0 {
+                    return msg.wParam as i32;
+                }
                 TranslateMessage(&msg);
                 DispatchMessageW(&msg);
             }
