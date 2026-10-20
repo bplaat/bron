@@ -7,13 +7,13 @@
 use std::fs;
 use std::process::exit;
 
-use crate::macos::support::{bundle_info, codesign, compile_universal, remove_empty_directory};
+use crate::apple::support::{bundle_info, codesign, compile_universal, remove_empty_directory};
 use crate::manifest::{AppexMetadata, BundleMetadata, Manifest};
 use crate::support::{assert_file_name, cargo_build};
 
 pub(crate) fn build_all(path: &str, target_dir: &str, manifest: &Manifest) {
     let bundle = &manifest.package.metadata.bundle;
-    let Some(extensions) = &bundle.appex else {
+    let Some(extensions) = &bundle.macos.appex else {
         return;
     };
     for extension in extensions {
@@ -31,7 +31,14 @@ fn write_info_plist(path: &str, target_dir: &str, manifest: &Manifest, extension
         &extension.identifier,
         &manifest.package.version,
         "XPC!",
-        extension.minimal_os_version.as_deref().unwrap_or("12.0"),
+    );
+    info.insert(
+        "LSMinimumSystemVersion".into(),
+        extension
+            .minimal_os_version
+            .as_deref()
+            .unwrap_or("12.0")
+            .into(),
     );
 
     let custom_info = format!("{path}/{}", extension.info_plist);
@@ -61,7 +68,7 @@ fn compile(
 ) -> String {
     let package = format!("{path}/{}", extension.package);
     let output = format!("{}/{}", metadata_dir(target_dir, extension), extension.name);
-    if bundle.lipo.unwrap_or(true) {
+    if bundle.macos.lipo.unwrap_or(true) {
         compile_universal(&package, &extension.binary, &output);
     } else {
         let status = cargo_build(&package)

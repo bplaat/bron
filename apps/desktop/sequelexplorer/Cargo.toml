@@ -11,6 +11,8 @@ name = "Sequel Explorer"
 identifier = "nl.bplaat.SequelExplorer"
 copyright = "Copyright © 2026 Bastiaan van der Plaat"
 icon = "meta/macos/icon.icon"
+
+[package.metadata.bundle.macos]
 info_plist = "meta/macos/Info.plist"
 hardened_runtime = true
 

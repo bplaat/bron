@@ -11,9 +11,9 @@ use std::process::{ExitCode, exit};
 
 use crate::manifest::Manifest;
 
-mod args;
 #[cfg(target_os = "macos")]
-mod macos;
+mod apple;
+mod args;
 mod manifest;
 mod support;
 #[cfg(windows)]
@@ -51,7 +51,7 @@ fn main() -> ExitCode {
 
     let target_dir = format!("target/bundle/{}", manifest.package.name);
     #[cfg(target_os = "macos")]
-    macos::bundle(&args, &target_dir, &manifest);
+    apple::bundle(&args, &target_dir, &manifest);
     #[cfg(windows)]
     windows::bundle(&args, &target_dir, &manifest);
     ExitCode::SUCCESS
