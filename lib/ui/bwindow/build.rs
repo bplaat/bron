@@ -13,7 +13,9 @@ fn main() {
     println!("cargo::rustc-check-cfg=cfg(gtk3_20)");
     println!("cargo::rustc-check-cfg=cfg(gtk3_22)");
     let target_os = env::var("CARGO_CFG_TARGET_OS").expect("CARGO_CFG_TARGET_OS not set");
-    if target_os != "macos" && target_os != "windows" {
+    let target_vendor =
+        env::var("CARGO_CFG_TARGET_VENDOR").expect("CARGO_CFG_TARGET_VENDOR not set");
+    if target_vendor != "apple" && target_os != "windows" {
         let search_dirs = search_dirs();
         let gtk = require_library(&search_dirs, "gtk-3");
         let gdk = require_library(&search_dirs, "gdk-3");

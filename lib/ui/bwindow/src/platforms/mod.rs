@@ -19,6 +19,10 @@ cfg_select! {
         pub(crate) use crate::platforms::macos::*;
         pub(crate) mod macos;
     }
+    target_os = "ios" => {
+        pub(crate) use crate::platforms::ios::*;
+        pub(crate) mod ios;
+    }
     windows => {
         pub(crate) use crate::platforms::windows::*;
         pub(crate) mod windows;
