@@ -468,6 +468,8 @@ unsafe extern "system" fn window_proc(
         }
         WM_DPICHANGED => {
             _self.dpi = (w_param >> 16) as u32;
+            let host = _self.host.clone();
+            let scale = _self.dpi as f32 / USER_DEFAULT_SCREEN_DPI as f32;
             let window_rect = unsafe { &*(l_param as *const RECT) };
             unsafe {
                 SetWindowPos(
@@ -480,6 +482,13 @@ unsafe extern "system" fn window_proc(
                     SWP_NOZORDER | SWP_NOACTIVATE,
                 )
             };
+            if !host.is_closed() {
+                send_event(crate::Event::Window(
+                    host.id(),
+                    WindowEvent::ScaleFactorChanged(scale),
+                ));
+                host.request_redraw();
+            }
             0
         }
         WM_GETMINMAXINFO => {
