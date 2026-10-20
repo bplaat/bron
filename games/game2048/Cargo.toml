@@ -13,8 +13,13 @@ workspace = true
 name = "2048"
 identifier = "nl.bplaat.2048"
 copyright = "Copyright © 2014 Gabriele Cirulli\nCopyright © 2025 Bastiaan van der Plaat"
-icon = "meta/macos/icon.icon"
-entitlements = "meta/macos/Entitlements.plist"
+icon = "meta/apple/icon.icon"
+
+[package.metadata.bundle.macos]
+entitlements = "meta/apple/macos/Entitlements.plist"
+
+[package.metadata.bundle.ios]
+info_plist = "meta/apple/ios/Info.plist"
 
 [package.metadata.bundle.windows]
 assets = "meta/windows"
