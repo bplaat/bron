@@ -131,8 +131,13 @@ impl<E> Dispatcher<E> {
         drop(pending);
     }
 
-    fn shutdown(&self, mailbox: &crate::mailbox::Mailbox) {
+    fn shutdown(&self, mailbox: &crate::mailbox::Mailbox, final_event: Option<E>) {
         let pending = mailbox.close();
+        self.closed.set(true);
+        let handler = self.handler.borrow_mut().take();
+        if let (Some(mut handler), Some(event)) = (handler, final_event) {
+            handler(event);
+        }
         self.stop();
         drop(pending);
     }
@@ -149,7 +154,7 @@ pub(crate) fn start(handler: impl FnMut(NativeEvent) + 'static) {
 // Disable both delivery paths before dropping payloads, then let the backend
 // release its native wake resources. Also used when a loop is dropped before run.
 pub(crate) fn shutdown(mailbox: &crate::mailbox::Mailbox) {
-    DISPATCHER.with(|dispatcher| dispatcher.shutdown(mailbox));
+    DISPATCHER.with(|dispatcher| dispatcher.shutdown(mailbox, Some(crate::Event::LoopExiting)));
 }
 
 pub(crate) fn send(event: NativeEvent) {
@@ -261,10 +266,32 @@ mod tests {
             let _keep_alive = &guard;
             panic!("event delivered during shutdown");
         });
-        dispatcher.shutdown(&mailbox);
-        dispatcher.shutdown(&mailbox);
+        dispatcher.shutdown(&mailbox, None);
+        dispatcher.shutdown(&mailbox, None);
         assert!(dropped.get());
         assert!(dispatcher.handler.borrow().is_none());
+    }
+
+    #[test]
+    fn shutdown_delivers_one_final_event_after_closing_both_event_sources() {
+        let dispatcher = Rc::new(Dispatcher::new());
+        let mailbox = std::sync::Arc::new(crate::mailbox::Mailbox::new());
+        let sender = mailbox.clone();
+        let nested = dispatcher.clone();
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let output = seen.clone();
+        dispatcher.start(move |event| {
+            output.borrow_mut().push(event);
+            assert!(!sender.send(crate::mailbox::Message::Exit, || panic!(
+                "wake during shutdown"
+            )));
+            nested.send(2);
+        });
+        dispatcher.shutdown(&mailbox, Some(1));
+        dispatcher.shutdown(&mailbox, Some(1));
+        assert_eq!(*seen.borrow(), [1]);
+        assert!(dispatcher.handler.borrow().is_none());
+        assert!(dispatcher.pending.borrow().is_empty());
     }
 
     #[test]

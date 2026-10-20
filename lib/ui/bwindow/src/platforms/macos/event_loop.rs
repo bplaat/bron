@@ -258,13 +258,14 @@ impl crate::EventLoopInterface for PlatformEventLoop {
         monitors
     }
 
-    fn run(self, event_handler: impl FnMut(Event) + 'static) {
+    fn run(self, event_handler: impl FnMut(Event) + 'static) -> i32 {
         crate::dispatch::start(event_handler);
         autoreleasepool(|_| unsafe {
             if !EXIT_REQUESTED.get() {
                 let _: () = msg_send![&self.application, run];
             }
         });
+        0
     }
 
     fn create_proxy(&self) -> PlatformEventLoopProxy {

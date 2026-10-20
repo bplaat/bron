@@ -284,7 +284,6 @@ fn main() {
     let mut canvas = CanvasBuilder::new(&window).build();
     let mut game = Game::new(theme, 0.0);
     let completed = std::rc::Rc::new(std::cell::Cell::new(false));
-    let result = completed.clone();
     let mut smoke_started = false;
     let mut smoke_ai_done = false;
     let mut showed_progress_cursor = false;
@@ -402,6 +401,9 @@ fn main() {
                     window.request_redraw();
                 }
             }
+            Event::LoopExiting if smoke => {
+                assert!(completed.get(), "Reversi smoke test did not finish");
+            }
             _ => {}
         }
         if !window.is_closed()
@@ -414,9 +416,6 @@ fn main() {
         canvas.set_cursor(cursor);
         showed_progress_cursor |= cursor == CursorIcon::Progress;
     });
-    if smoke {
-        assert!(result.get(), "Reversi smoke test did not finish");
-    }
 }
 
 fn board_cell(event: &LogicalPoint, layout: GameLayout) -> Option<(usize, usize)> {

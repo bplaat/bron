@@ -98,7 +98,7 @@ pub(crate) trait EventLoopInterface {
     fn primary_monitor(&self) -> PlatformMonitor;
     fn available_monitors(&self) -> Vec<PlatformMonitor>;
     fn create_proxy(&self) -> PlatformEventLoopProxy;
-    fn run(self, event_handler: impl FnMut(NativeEvent) + 'static);
+    fn run(self, event_handler: impl FnMut(NativeEvent) + 'static) -> i32;
 }
 
 /// Event loop
@@ -149,15 +149,19 @@ impl<T: Send + 'static> EventLoop<T> {
         EventLoopProxy::new(self.platform.create_proxy())
     }
 
-    /// Run the event loop
-    pub fn run(self, mut event_handler: impl FnMut(Event<T>) + 'static) {
-        self.platform.run(move |event| {
+    /// Run until shutdown, release event-loop resources, then exit the process.
+    ///
+    /// This never returns. Move resources requiring cleanup into the handler.
+    /// `Event::LoopExiting` is delivered before the handler is dropped.
+    pub fn run(self, mut event_handler: impl FnMut(Event<T>) + 'static) -> ! {
+        let status = self.platform.run(move |event| {
             event_handler(event.map_user_event(|value| {
                 *value
                     .downcast::<T>()
                     .expect("event proxy payload type mismatch")
             }));
         });
+        std::process::exit(status);
     }
 }
 

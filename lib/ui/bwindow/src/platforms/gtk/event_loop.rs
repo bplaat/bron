@@ -160,13 +160,14 @@ impl crate::EventLoopInterface for PlatformEventLoop {
         }
     }
 
-    fn run(self, event_handler: impl FnMut(Event) + 'static) {
+    fn run(self, event_handler: impl FnMut(Event) + 'static) -> i32 {
         crate::dispatch::start(event_handler);
 
         // Start event loop
         if !EXIT_REQUESTED.get() {
             unsafe { gtk_main() };
         }
+        0
     }
 
     fn create_proxy(&self) -> PlatformEventLoopProxy {
