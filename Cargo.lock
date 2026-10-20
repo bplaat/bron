@@ -196,6 +196,7 @@ dependencies = [
  "copy_dir",
  "plist",
  "serde",
+ "serde_json",
  "toml",
 ]
 

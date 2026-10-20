@@ -20,7 +20,7 @@ pub(crate) fn bundle(args: &Args, target_dir: &str, manifest: &Manifest) {
             eprintln!("--zip and --dmg are not supported for iOS bundles");
             exit(1);
         }
-        ios::bundle(&args.path, target_dir, manifest);
+        ios::bundle(args, target_dir, manifest);
         return;
     }
     let bundle_metadata = &manifest.package.metadata.bundle;

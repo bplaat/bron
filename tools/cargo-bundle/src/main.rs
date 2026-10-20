@@ -42,6 +42,18 @@ fn main() -> ExitCode {
         return ExitCode::SUCCESS;
     }
 
+    if (args.run || args.device.is_some() || args.bin.is_some() || args.release) && !args.ios {
+        eprintln!("--run, --device, --bin and --release require --ios");
+        return ExitCode::FAILURE;
+    }
+    if args.device.is_some() && !args.run {
+        eprintln!("--device requires --run");
+        return ExitCode::FAILURE;
+    }
+    if args.ios && !cfg!(target_os = "macos") {
+        eprintln!("iOS bundles require macOS with Xcode and an iOS Simulator runtime");
+        return ExitCode::FAILURE;
+    }
     let manifest = read_manifest(&args.path);
     let bundle_metadata = &manifest.package.metadata.bundle;
     println!(
