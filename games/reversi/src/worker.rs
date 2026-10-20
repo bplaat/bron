@@ -24,55 +24,64 @@ pub(crate) struct AiResult {
     pub(crate) movement: Option<Move>,
 }
 
+/// State shared between the UI thread and the worker thread.
+#[derive(Default)]
+struct Shared {
+    revision: AtomicU64,
+    stop: AtomicBool,
+}
+
+impl Shared {
+    fn is_cancelled(&self, job: &AiJob) -> bool {
+        self.stop.load(Ordering::Relaxed) || self.revision.load(Ordering::Relaxed) != job.revision
+    }
+}
+
 pub(crate) struct AiWorker {
     sender: Option<mpsc::Sender<AiJob>>,
-    revision: Arc<AtomicU64>,
-    stop: Arc<AtomicBool>,
+    shared: Arc<Shared>,
     thread: Option<JoinHandle<()>>,
 }
 
 impl AiWorker {
     pub(crate) fn new(proxy: EventLoopProxy<AppEvent>) -> Self {
         let (sender, receiver) = mpsc::channel::<AiJob>();
-        let revision = Arc::new(AtomicU64::new(0));
-        let stop = Arc::new(AtomicBool::new(false));
-        let current = revision.clone();
-        let stopping = stop.clone();
+        let shared = Arc::new(Shared::default());
         let thread = thread::Builder::new()
-            .name("ai-worker".to_string())
-            .spawn(move || {
-                while let Ok(mut job) = receiver.recv() {
-                    // Only search the newest queued position after a reset.
-                    for newer in receiver.try_iter() {
-                        job = newer;
-                    }
-                    let cancelled = || {
-                        stopping.load(Ordering::Relaxed)
-                            || current.load(Ordering::Relaxed) != job.revision
-                    };
-                    if stopping.load(Ordering::Relaxed) {
-                        break;
-                    }
-                    if cancelled() {
-                        continue;
-                    }
-                    let movement =
-                        job.board
-                            .compute_move_cancellable(Player::White, 64, 500_000, &cancelled);
-                    if !cancelled()
-                        && proxy
-                            .send_user_event(AppEvent::Ai(AiResult { job, movement }))
-                            .is_err()
-                    {
-                        break;
+            .name("ai-worker".into())
+            .spawn({
+                let shared = shared.clone();
+                move || {
+                    while let Ok(job) = receiver.recv() {
+                        // Only search the newest queued position after a reset.
+                        let job = receiver.try_iter().last().unwrap_or(job);
+                        if shared.stop.load(Ordering::Relaxed) {
+                            break;
+                        }
+                        let cancelled = || shared.is_cancelled(&job);
+                        if cancelled() {
+                            continue;
+                        }
+                        let movement = job.board.compute_move_cancellable(
+                            Player::White,
+                            64,
+                            500_000,
+                            &cancelled,
+                        );
+                        if !cancelled()
+                            && proxy
+                                .send_user_event(AppEvent::Ai(AiResult { job, movement }))
+                                .is_err()
+                        {
+                            break;
+                        }
                     }
                 }
             })
             .expect("Can't spawn AI worker thread");
         Self {
             sender: Some(sender),
-            revision,
-            stop,
+            shared,
             thread: Some(thread),
         }
     }
@@ -86,15 +95,17 @@ impl AiWorker {
             .expect("AI worker stopped");
     }
 
+    /// Cancel every search that is not for the given revision.
     pub(crate) fn cancel(&self, revision: u64) {
-        self.revision.store(revision, Ordering::Relaxed);
+        self.shared.revision.store(revision, Ordering::Relaxed);
     }
 }
 
 impl Drop for AiWorker {
     fn drop(&mut self) {
-        self.stop.store(true, Ordering::Relaxed);
-        self.sender.take();
+        self.shared.stop.store(true, Ordering::Relaxed);
+        // Closing the channel wakes the worker so it can exit
+        drop(self.sender.take());
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
         }
