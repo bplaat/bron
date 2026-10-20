@@ -19,6 +19,8 @@ pub(crate) struct InstallableApp {
     pub(crate) directory: PathBuf,
     pub(crate) name: String,
     pub(crate) identifier: String,
+    /// Has a [package.metadata.bundle.ios] table
+    pub(crate) ios: bool,
 }
 
 pub(crate) fn packages(metadata: &Value) -> Result<&[Value]> {
