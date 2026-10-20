@@ -19,7 +19,31 @@ pub fn fill(buf: &mut [u8]) -> Result<(), Error> {
             for chunk in buf.chunks_mut(256) {
                 // SAFETY: chunk is a valid mutable byte slice with length <= 256, satisfying getentropy's requirements.
                 if unsafe { getentropy(chunk.as_mut_ptr(), chunk.len()) } != 0 {
-                    return Err(Error::other("getentropy failed"));
+                    return Err(Error::last_os_error());
+                }
+            }
+        }
+        any(
+            all(target_os = "linux", target_env = "musl"),
+            target_os = "freebsd",
+            target_os = "dragonfly",
+        ) => {
+            unsafe extern "C" {
+                fn getrandom(buf: *mut u8, buflen: usize, flags: u32) -> isize;
+            }
+            let mut buf = buf;
+            while !buf.is_empty() {
+                // SAFETY: buf is a valid mutable byte slice.
+                let n = unsafe { getrandom(buf.as_mut_ptr(), buf.len(), 0) };
+                match n {
+                    1.. => buf = &mut buf[n as usize..],
+                    0 => return Err(Error::other("getrandom returned no bytes")),
+                    _ => {
+                        let error = Error::last_os_error();
+                        if error.kind() != std::io::ErrorKind::Interrupted {
+                            return Err(error);
+                        }
+                    }
                 }
             }
         }
@@ -27,7 +51,6 @@ pub fn fill(buf: &mut [u8]) -> Result<(), Error> {
             type GetrandomFn = unsafe extern "C" fn(*mut u8, usize, u32) -> isize;
             fn resolve_getrandom() -> Option<GetrandomFn> {
                 const RTLD_DEFAULT: *mut std::ffi::c_void = std::ptr::null_mut();
-                #[cfg_attr(target_os = "linux", link(name = "dl"))]
                 unsafe extern "C" {
                     fn dlsym(
                         handle: *mut std::ffi::c_void,
@@ -55,10 +78,7 @@ pub fn fill(buf: &mut [u8]) -> Result<(), Error> {
             }
 
             use std::io::Read;
-            let mut file = std::fs::File::open("/dev/urandom")
-                .map_err(|_| Error::other("failed to open /dev/urandom"))?;
-            file.read_exact(buf)
-                .map_err(|_| Error::other("failed to read /dev/urandom"))?;
+            std::fs::File::open("/dev/urandom")?.read_exact(buf)?;
         }
         windows => {
             #[cfg_attr(
@@ -100,5 +120,17 @@ mod test {
         fill(&mut buf2).unwrap();
 
         assert_ne!(buf1, buf2);
+    }
+
+    #[test]
+    fn test_empty() {
+        fill(&mut []).unwrap();
+    }
+
+    #[test]
+    fn test_large() {
+        let mut buf = vec![0u8; 1024 * 1024];
+        fill(&mut buf).unwrap();
+        assert!(buf.chunks(256).all(|chunk| chunk.iter().any(|&b| b != 0)));
     }
 }
