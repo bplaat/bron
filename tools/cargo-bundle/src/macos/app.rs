@@ -10,11 +10,9 @@ use std::process::{Command, exit};
 
 use copy_dir::copy_dir;
 
+use crate::macos::support::{bundle_info, codesign, compile_universal, remove_empty_directory};
 use crate::manifest::{BundleMetadata, Manifest, Package};
-use crate::support::{
-    assert_file_name, bundle_info, cargo_build, codesign, compile_universal,
-    remove_empty_directory, remove_path_if_exists,
-};
+use crate::support::{assert_file_name, cargo_build, remove_path_if_exists};
 
 pub(crate) fn build(path: &str, target_dir: &str, manifest: &Manifest) {
     assert_file_name(&manifest.package.metadata.bundle.name, "bundle name");

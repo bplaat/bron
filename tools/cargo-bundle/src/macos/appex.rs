@@ -7,10 +7,9 @@
 use std::fs;
 use std::process::exit;
 
+use crate::macos::support::{bundle_info, codesign, compile_universal, remove_empty_directory};
 use crate::manifest::{AppexMetadata, BundleMetadata, Manifest};
-use crate::support::{
-    assert_file_name, bundle_info, cargo_build, codesign, compile_universal, remove_empty_directory,
-};
+use crate::support::{assert_file_name, cargo_build};
 
 pub(crate) fn build_all(path: &str, target_dir: &str, manifest: &Manifest) {
     let bundle = &manifest.package.metadata.bundle;
