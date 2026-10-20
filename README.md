@@ -95,7 +95,7 @@ Various tools and websites. For the deployed sites, go to [bron.bplaat.nl](https
 - [baksteen](apps/web/baksteen/) A brick-laying robot simulator
 - [bob](tools/bob) A simple build system for my projects, because I like the simplicity of Cargo
 - [ccontinue](tools/ccontinue) A transpiler that translates an OOP extension for the C programming language back to C
-- [cargo-bundle](tools/cargo-bundle) A simple Cargo plugin that builds macOS app bundles
+- [cargo-bundle](tools/cargo-bundle) A simple Cargo plugin that builds macOS app bundles and Windows MSIX packages
 - [plaatnotes](apps/web/plaatnotes) A self-hosted note-taking web app with rich Markdown support
 - [nds-toolchain](tools/nds-toolchain/) An LLVM-based Nintendo DS toolchain with picolibc and a test ROM
 - [wii-toolchain](tools/wii-toolchain/) An LLVM-based Wii toolchain with picolibc, libogc, and Dolphin emulator tests
@@ -245,14 +245,14 @@ Most of these libraries are intended primarily for personal use, but can still b
     cargo xtask build-pages
     ```
 
-- To build macOS app bundles, only on macOS, install targets:
+- To build macOS app bundles on macOS, install the targets below; on Windows this builds MSIX packages with the Windows SDK instead:
 
     ```sh
     rustup target add aarch64-apple-darwin x86_64-apple-darwin
     cargo xtask build-bundle
     ```
 
-- To build and install bins and GUI applications to your system:
+- To build and install bins and GUI applications to your system, on Windows this installs the MSIX packages after one UAC prompt:
 
     ```sh
     cargo xtask install
@@ -272,7 +272,7 @@ Rather than pulling in large, general-purpose dependencies, this repo grows a cu
 
 **3. Tools and a custom build system for complex multi-language projects**
 
-Building projects that span multiple languages and artifact types (Rust, JavaScript, WASM, native bundles) requires coordination that general-purpose build systems handle poorly. [bob](tools/bob) is a minimal build system inspired by `Cargo`'s simplicity, designed to describe and orchestrate such projects cleanly. [cargo-bundle](tools/cargo-bundle) handles macOS `.app` bundle packaging from within the `Cargo` ecosystem. Together with the [xtask](tools/xtask) crate these tools keep the build pipeline typed, cross-platform and easy to follow.
+Building projects that span multiple languages and artifact types (Rust, JavaScript, WASM, native bundles) requires coordination that general-purpose build systems handle poorly. [bob](tools/bob) is a minimal build system inspired by `Cargo`'s simplicity, designed to describe and orchestrate such projects cleanly. [cargo-bundle](tools/cargo-bundle) handles macOS `.app` bundle and Windows `.msix` packaging from within the `Cargo` ecosystem. Together with the [xtask](tools/xtask) crate these tools keep the build pipeline typed, cross-platform and easy to follow.
 
 ### Repo organization
 
