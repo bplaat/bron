@@ -10,7 +10,11 @@ use std::ffi::c_void;
 use std::ptr;
 use std::rc::Rc;
 
-use bwindow::ffi::*;
+use bwindow::ffi::{
+    G_CONNECT_DEFAULT, GdkEvent, g_object_unref, g_signal_connect_data,
+    g_signal_handlers_disconnect_matched, gdk_event_get_event_type, gdk_event_get_keycode,
+    gtk_container_add, gtk_input_event, gtk_widget_destroy, gtk_widget_show,
+};
 use bwindow::{WindowEvent, WindowEventSender};
 
 use super::headers::*;
@@ -189,7 +193,7 @@ extern "C" fn blur(_: *mut c_void, _: *const GdkEvent, pointer: *const Widget) -
 mod tests {
     use std::time::{Duration, Instant};
 
-    use bwindow::ffi::gtk_widget_get_scale_factor;
+    use bwindow::ffi::{g_idle_add, gtk_main, gtk_widget_get_scale_factor, gtk_widget_hide};
     use bwindow::{EventLoop, LogicalSize, NativeWindowHandle, WindowBuilder};
 
     use super::*;
