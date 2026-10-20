@@ -9,7 +9,6 @@ use std::ffi::{c_char, c_void};
 use bwindow::ffi::{GObject, GtkWidget};
 
 unsafe extern "C" {
-    pub(super) fn gtk_widget_get_window(widget: *mut GtkWidget) -> *mut c_void;
     pub(super) fn gdk_window_get_display(window: *mut c_void) -> *mut c_void;
     pub(super) fn gdk_cursor_new_from_name(
         display: *mut c_void,

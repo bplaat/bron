@@ -48,6 +48,36 @@ unsafe extern "C" {
         action: *const c_char,
         accels: *const *const c_char,
     );
+    pub fn gtk_application_get_windows(application: *mut GtkApplication)
+    -> *mut super::glib::GList;
+    #[cfg(test)]
+    pub fn gtk_entry_new() -> *mut GtkWidget;
+    #[cfg(test)]
+    pub fn gtk_entry_set_text(entry: *mut GtkWidget, text: *const c_char);
+    #[cfg(test)]
+    pub fn gtk_entry_get_text(entry: *mut GtkWidget) -> *const c_char;
+    #[cfg(test)]
+    pub fn gtk_window_set_focus(window: *mut GtkWindow, focus: *mut GtkWidget);
+    pub fn gtk_window_close(window: *mut GtkWindow);
+    pub fn gtk_window_get_focus(window: *mut GtkWindow) -> *mut GtkWidget;
+    pub fn gtk_window_iconify(window: *mut GtkWindow);
+    pub fn gtk_window_unmaximize(window: *mut GtkWindow);
+    pub fn gtk_window_unfullscreen(window: *mut GtkWindow);
+    pub fn gtk_window_get_resizable(window: *mut GtkWindow) -> i32;
+    pub fn gtk_widget_get_window(widget: *mut GtkWidget) -> *mut c_void;
+    pub fn gtk_widget_get_action_group(
+        widget: *mut GtkWidget,
+        prefix: *const c_char,
+    ) -> *mut c_void;
+    pub fn gtk_widget_insert_action_group(
+        widget: *mut GtkWidget,
+        prefix: *const c_char,
+        group: *mut c_void,
+    );
+    pub fn gtk_editable_select_region(editable: *mut GtkWidget, start: i32, end: i32);
+    pub fn gtk_editable_get_editable(editable: *mut GtkWidget) -> i32;
+    pub fn gtk_text_view_get_editable(view: *mut GtkWidget) -> i32;
+    pub fn gtk_show_about_dialog(parent: *mut GtkWindow, first_property: *const c_char, ...);
     pub fn gtk_window_present(window: *mut GtkWindow);
     pub fn gtk_application_set_menubar(
         application: *mut GtkApplication,

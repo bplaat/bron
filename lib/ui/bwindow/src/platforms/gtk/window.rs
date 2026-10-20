@@ -196,6 +196,9 @@ impl PlatformWindow {
         };
 
         window_data.window = window;
+        unsafe {
+            super::menu::connect_window(window);
+        }
         host.set_handle(crate::NativeWindowHandle::Gtk(window.cast()));
         unsafe { gtk_widget_show_all(window.cast()) };
         send_event(crate::Event::Window(builder.window_id, WindowEvent::Create));
@@ -383,7 +386,6 @@ extern "C" fn window_on_scale_changed(window: *mut GtkWidget, _: *mut c_void, da
 
 impl Drop for PlatformWindow {
     fn drop(&mut self) {
-        // A native window can outlive its Rust handle during recursive close callbacks.
         unsafe {
             g_signal_handlers_disconnect_matched(
                 self.0.window.cast(),
@@ -412,34 +414,138 @@ mod tests {
 
     #[test]
     #[ignore = "requires a display and session bus"]
-    fn application_window_exports_hidden_menu_and_updates_content_before_scale_event() {
+    fn application_menu_exports_defaults_resizes_content_and_preserves_quit_cancellation() {
         let event_loop = super::super::event_loop::PlatformEventLoop::new(
             EventLoopBuilder::new().menu(
                 MenuBarBuilder::new()
-                    .menu(MenuBuilder::new("File").item(MenuItem::new("New", "file.new"))),
+                    .menu(MenuBuilder::new("File").item(MenuItem::new("New", "bwindow-quit"))),
             ),
         );
-        let mut window = WindowBuilder::new().build();
+        let app = super::super::event_loop::application().cast();
+        unsafe {
+            assert_eq!(
+                g_action_group_get_action_enabled(app, c"bwindow-close".as_ptr()),
+                0
+            );
+            assert_eq!(
+                g_action_group_get_action_enabled(app, c"bwindow-quit".as_ptr()),
+                0
+            );
+        }
+        let window = WindowBuilder::new().build();
         let native = window.platform.0.window;
         unsafe {
             assert_eq!(gtk_application_window_get_show_menubar(native), 0);
             let model = gtk_application_get_menubar(super::super::event_loop::application());
             assert!(!model.is_null());
-            assert_eq!(g_menu_model_get_n_items(model), 1);
+            assert_eq!(g_menu_model_get_n_items(model), 5);
         }
         let content = window.attach_content().expect("empty window");
+        let custom_count = Rc::new(Cell::new(0));
+        let custom_actions = custom_count.clone();
+        let undo_count = Rc::new(Cell::new(0u32));
+        let undone = undo_count.clone();
         let resized = Rc::new(Cell::new(None));
         let result = resized.clone();
         content.on_resize(move |width, height| result.set(Some((width, height))));
         let seen = Rc::new(Cell::new(false));
         let result = seen.clone();
-        assert!(event_loop.create_proxy().send_user_event(Box::new(())));
+        let close_requests = Rc::new(Cell::new(0));
+        let closed = close_requests.clone();
+        let proxy = event_loop.create_proxy();
+        assert!(proxy.send_user_event(Box::new(())));
         event_loop.run(move |event| {
-            let _keep_alive = &content;
+            let _keep_alive = (&content, &window);
             match event {
                 Event::UserEvent(_) => {
+                    if closed.get() == 0 {
+                        unsafe {
+                            let entry = gtk_entry_new();
+                            gtk_entry_set_text(entry, c"native selection".as_ptr());
+                            gtk_container_add(native.cast(), entry);
+                            gtk_widget_show(entry);
+                            gtk_window_set_focus(native, entry);
+                            let group = g_simple_action_group_new();
+                            let action = g_simple_action_new(c"Undo".as_ptr(), null());
+                            extern "C" fn undo(
+                                _: *mut GSimpleAction,
+                                _: *mut GVariant,
+                                count: &Cell<u32>,
+                            ) {
+                                count.set(count.get() + 1);
+                            }
+                            g_signal_connect_data(
+                                action.cast(),
+                                c"activate".as_ptr(),
+                                undo as *const c_void,
+                                Rc::as_ptr(&undone).cast(),
+                                null(),
+                                G_CONNECT_DEFAULT,
+                            );
+                            g_simple_action_set_enabled(action, 0);
+                            g_action_map_add_action(group, action);
+                            gtk_widget_insert_action_group(entry, c"bwindow-edit".as_ptr(), group);
+                            super::super::menu::update_actions();
+                            let app = super::super::event_loop::application().cast();
+                            gtk_window_set_resizable(native, false);
+                            assert_eq!(
+                                g_action_group_get_action_enabled(
+                                    app,
+                                    c"bwindow-maximize".as_ptr()
+                                ),
+                                0
+                            );
+                            gtk_window_set_resizable(native, true);
+                            assert_ne!(
+                                g_action_group_get_action_enabled(
+                                    app,
+                                    c"bwindow-maximize".as_ptr()
+                                ),
+                                0
+                            );
+                            g_action_group_activate_action(app, c"command0".as_ptr(), null_mut());
+                            assert_eq!(
+                                g_action_group_get_action_enabled(app, c"bwindow-undo".as_ptr()),
+                                0
+                            );
+                            g_simple_action_set_enabled(action, 1);
+                            assert_ne!(
+                                g_action_group_get_action_enabled(app, c"bwindow-undo".as_ptr()),
+                                0
+                            );
+                            g_action_group_activate_action(
+                                app,
+                                c"bwindow-undo".as_ptr(),
+                                null_mut(),
+                            );
+                            g_object_unref(action.cast());
+                            g_object_unref(group.cast());
+                            super::super::menu::edit(native, c"SelectAll");
+                            super::super::menu::edit(native, c"Cut");
+                            assert_eq!(std::ffi::CStr::from_ptr(gtk_entry_get_text(entry)), c"");
+                            gtk_widget_destroy(entry);
+                        }
+                    }
                     unsafe { g_object_notify(native.cast(), c"scale-factor".as_ptr()) };
-                    window.close();
+                    unsafe {
+                        g_action_group_activate_action(
+                            super::super::event_loop::application().cast(),
+                            c"bwindow-quit".as_ptr(),
+                            null_mut(),
+                        )
+                    };
+                }
+                Event::Action(action) => {
+                    assert_eq!(action, "bwindow-quit");
+                    custom_actions.set(custom_actions.get() + 1);
+                }
+                Event::Window(_, WindowEvent::CloseRequested(request)) => {
+                    let count = closed.get();
+                    closed.set(count + 1);
+                    if count == 0 {
+                        request.prevent_default();
+                        assert!(proxy.send_user_event(Box::new(())));
+                    }
                 }
                 Event::Window(_, WindowEvent::ScaleFactorChanged(scale)) => {
                     let (width, height) = resized.get().expect("content was not resized");
@@ -450,5 +556,12 @@ mod tests {
             }
         });
         assert!(seen.get(), "scale notification was not delivered");
+        assert_eq!(close_requests.get(), 2, "Quit bypassed close cancellation");
+        assert_eq!(undo_count.get(), 1, "focused widget action was not invoked");
+        assert_eq!(
+            custom_count.get(),
+            1,
+            "custom action collided with a default"
+        );
     }
 }
