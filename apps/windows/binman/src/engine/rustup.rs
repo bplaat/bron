@@ -30,7 +30,7 @@ struct Toolchain {
 }
 
 pub(super) fn toolchain_channel(contents: &str) -> Option<String> {
-    if let Ok(file) = basic_toml::from_str::<ToolchainFile>(contents) {
+    if let Ok(file) = toml::from_str::<ToolchainFile>(contents) {
         return file.toolchain.channel;
     }
     // Legacy rust-toolchain files only contain the channel name
