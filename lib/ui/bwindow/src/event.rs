@@ -83,9 +83,8 @@ pub enum Event<T = ()> {
     LoopExiting,
     /// User event
     UserEvent(T),
-    /// Files opened through macOS Launch Services
-    #[cfg(target_os = "macos")]
-    MacosOpenFiles(Vec<PathBuf>),
+    /// Files opened through the operating system.
+    OpenFiles(Vec<PathBuf>),
     /// A custom macOS menu item was selected
     #[cfg(all(target_os = "macos", feature = "menu"))]
     MacosMenuItem(String),
@@ -99,8 +98,7 @@ impl<T> Event<T> {
             Self::Window(id, event) => Event::Window(id, event),
             Self::UserEvent(value) => Event::UserEvent(map(value)),
             Self::LoopExiting => Event::LoopExiting,
-            #[cfg(target_os = "macos")]
-            Self::MacosOpenFiles(paths) => Event::MacosOpenFiles(paths),
+            Self::OpenFiles(paths) => Event::OpenFiles(paths),
             #[cfg(all(target_os = "macos", feature = "menu"))]
             Self::MacosMenuItem(action) => Event::MacosMenuItem(action),
         }

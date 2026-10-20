@@ -75,3 +75,12 @@ unsafe extern "C" {
     pub fn gdk_monitor_get_scale_factor(monitor: *mut GdkMonitor) -> i32;
     pub fn gdk_monitor_is_primary(monitor: *mut GdkMonitor) -> bool;
 }
+
+/// Whether a display uses the Wayland backend.
+///
+/// # Safety
+/// `display` must be a live GdkDisplay on its UI thread.
+pub unsafe fn gdk_display_is_wayland(display: *mut GdkDisplay) -> bool {
+    let type_ = unsafe { super::glib::g_type_from_name(c"GdkWaylandDisplay".as_ptr()) };
+    type_ != 0 && unsafe { super::glib::g_type_check_instance_is_a(display.cast(), type_) != 0 }
+}

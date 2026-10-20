@@ -59,11 +59,7 @@ impl PlatformWebview {
                 data.close();
             }
         });
-        let is_wayland = unsafe {
-            CStr::from_ptr(gdk_display_get_name(gdk_display_get_default()))
-                .to_string_lossy()
-                .contains("wayland")
-        };
+        let is_wayland = unsafe { gdk_display_is_wayland(gdk_display_get_default()) };
         let window = data.window;
 
         // Create webview web context

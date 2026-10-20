@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: MIT
  */
 
-use std::ffi::{CStr, CString, c_void};
+use std::ffi::{CString, c_void};
 use std::ptr::{null, null_mut};
 
 use super::event_loop::{primary_monitor_rect, send_event};
@@ -26,18 +26,8 @@ pub(super) struct WindowData {
     pub(super) allow_file_drop: bool,
 }
 
-thread_local! {
-    static WINDOW_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-}
-
 extern "C" fn window_on_destroy(_: *mut GtkWidget, data: &WindowData) {
     data.host.close();
-    WINDOW_COUNT.with(|count| {
-        count.set(count.get() - 1);
-        if count.get() == 0 {
-            super::event_loop::stop();
-        }
-    });
 }
 
 extern "C" fn window_on_style_updated(_: *mut GtkWidget, data: &WindowData) {
@@ -55,11 +45,7 @@ impl PlatformWindow {
         builder: &WindowBuilder,
         host: std::rc::Rc<crate::content::ContentHost>,
     ) -> Self {
-        let is_wayland = unsafe {
-            CStr::from_ptr(gdk_display_get_name(gdk_display_get_default()))
-                .to_string_lossy()
-                .contains("wayland")
-        };
+        let is_wayland = unsafe { gdk_display_is_wayland(gdk_display_get_default()) };
 
         let settings = unsafe { gtk_settings_get_default() };
 
@@ -88,7 +74,8 @@ impl PlatformWindow {
 
         // Create window
         let window = unsafe {
-            let window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
+            let window = gtk_application_window_new(super::event_loop::application());
+            g_object_ref(window.cast());
             #[cfg(feature = "file_drop")]
             if builder.allow_file_drop {
                 super::file_drop::gtk_connect_file_drop(window.cast(), host.event_sender());
@@ -199,7 +186,6 @@ impl PlatformWindow {
             window
         };
 
-        WINDOW_COUNT.with(|count| count.set(count.get() + 1));
         window_data.window = window;
         host.set_handle(crate::NativeWindowHandle::Gtk(window.cast()));
         unsafe { gtk_widget_show_all(window.cast()) };
@@ -366,4 +352,22 @@ extern "C" fn window_on_close(
         },
     );
     true
+}
+
+impl Drop for PlatformWindow {
+    fn drop(&mut self) {
+        // A native window can outlive its Rust handle during recursive close callbacks.
+        unsafe {
+            g_signal_handlers_disconnect_matched(
+                self.0.window.cast(),
+                16,
+                0,
+                0,
+                null_mut(),
+                null_mut(),
+                self.0.as_mut() as *mut _ as *mut c_void,
+            );
+            g_object_unref(self.0.window.cast());
+        }
+    }
 }

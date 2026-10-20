@@ -5,13 +5,12 @@
  */
 
 use std::cell::Cell;
+use std::env;
 use std::ffi::{CStr, CString, c_char, c_void};
-use std::fs::File;
 use std::mem::MaybeUninit;
 use std::process::exit;
 use std::ptr::{null, null_mut};
 use std::sync::{Arc, Mutex};
-use std::{env, fs, iter};
 
 use super::headers::*;
 use crate::mailbox::{Mailbox, Message};
@@ -21,6 +20,7 @@ use crate::{AppId, EventLoopBuilder, LogicalPoint, LogicalSize, NativeEvent as E
 pub(crate) struct PlatformEventLoop {
     theme: Theme,
     wake: Arc<Wake>,
+    application: *mut GtkApplication,
 }
 
 pub(super) static mut APP_ID: Option<AppId> = None;
@@ -35,51 +35,56 @@ impl PlatformEventLoop {
             .expect("Can't convert app id to CString")
         });
 
-        // Ensure single instance
-        // FIXME: Use GtkApplication for this
-        if let Some(app_id) = builder.app_id {
-            if builder.single_instance {
-                let lock_file = env::temp_dir()
-                    .join(format!(
-                        "{}.{}.{}",
-                        app_id.qualifier, app_id.organization, app_id.application
-                    ))
-                    .join(".lock");
-                if let Some(parent) = lock_file.parent() {
-                    fs::create_dir_all(parent).expect("Failed to create lock file directory");
-                }
-                let file = File::create(&lock_file).expect("Failed to open lock file");
-                if file.try_lock().is_err() {
-                    exit(0);
-                }
-                std::mem::forget(file);
+        let gtk_id = builder.app_id.as_ref().map(application_id);
+        let application = unsafe {
+            if let Some(ref id) = app_id_name {
+                g_set_prgname(id.as_ptr());
             }
-            unsafe { APP_ID = Some(app_id) };
-        }
-
-        // Init GTK
-        unsafe {
-            if let Some(ref app_id) = app_id_name {
-                g_set_prgname(app_id.as_ptr());
+            let application = gtk_application_new(
+                gtk_id.as_ref().map_or(null(), |id| id.as_ptr()),
+                G_APPLICATION_HANDLES_OPEN
+                    | if builder.single_instance {
+                        0
+                    } else {
+                        G_APPLICATION_NON_UNIQUE
+                    },
+            );
+            assert!(!application.is_null(), "could not create GtkApplication");
+            g_signal_connect_data(
+                application.cast(),
+                c"activate".as_ptr(),
+                activate as *const c_void,
+                null(),
+                null(),
+                G_CONNECT_DEFAULT,
+            );
+            g_signal_connect_data(
+                application.cast(),
+                c"open".as_ptr(),
+                open_files as *const c_void,
+                null(),
+                null(),
+                G_CONNECT_DEFAULT,
+            );
+            let mut error = null_mut();
+            assert!(
+                g_application_register(application.cast(), null_mut(), &mut error) != 0,
+                "could not register GtkApplication"
+            );
+            if g_application_get_is_remote(application.cast()) != 0 {
+                let status = run_application(application);
+                g_object_unref(application.cast());
+                exit(status);
             }
-
-            let args = env::args()
-                .map(|arg| CString::new(arg.as_str()).expect("Can't convert to CString"))
-                .collect::<Vec<CString>>();
-            let mut argc = args.len() as i32;
-            let mut argv: Vec<*mut c_char> = args
-                .iter()
-                .map(|arg| arg.as_ptr() as *mut c_char)
-                .chain(iter::once(null_mut()))
-                .collect();
-            let mut argv_ptr = argv.as_mut_ptr();
-            gtk_init(&mut argc, &mut argv_ptr);
-
-            if let Some(ref app_id) = app_id_name {
-                gtk_window_set_default_icon_name(app_id.as_ptr());
+            if let Some(ref id) = app_id_name {
+                gtk_window_set_default_icon_name(id.as_ptr());
             }
-        }
+            APPLICATION.set(application);
+            APP_ID = builder.app_id;
+            application
+        };
         Self {
+            application,
             theme: system_theme(),
             wake: Arc::new(Wake {
                 mailbox: Mailbox::new(),
@@ -87,6 +92,84 @@ impl PlatformEventLoop {
             }),
         }
     }
+}
+
+fn application_id(id: &AppId) -> CString {
+    let id = format!("{}.{}.{}", id.qualifier, id.organization, id.application);
+    let id = id
+        .split('.')
+        .map(|part| {
+            if part.starts_with(|c: char| c.is_ascii_digit()) {
+                format!("_{part}")
+            } else {
+                part.to_owned()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(".");
+    let id = CString::new(id).expect("application id contains NUL");
+    assert!(
+        unsafe { g_application_id_is_valid(id.as_ptr()) } != 0,
+        "invalid GTK application id"
+    );
+    id
+}
+
+pub(super) fn application() -> *mut GtkApplication {
+    APPLICATION.get()
+}
+
+// Registration has already run startup. GApplication performs initial activation/open
+// delivery and owns the main loop, including single-instance D-Bus requests.
+unsafe fn run_application(application: *mut GtkApplication) -> i32 {
+    let args = env::args_os()
+        .enumerate()
+        // Application-specific options and their values are not file requests.
+        .take_while(|(index, arg)| *index == 0 || !arg.as_encoded_bytes().starts_with(b"-"))
+        .map(|(_, arg)| arg)
+        .map(|arg| CString::new(arg.as_encoded_bytes()).expect("argument contains NUL"))
+        .collect::<Vec<_>>();
+    let mut argv = args
+        .iter()
+        .map(|arg| arg.as_ptr() as *mut c_char)
+        .collect::<Vec<_>>();
+    argv.push(null_mut());
+    unsafe { g_application_run(application.cast(), args.len() as i32, argv.as_mut_ptr()) }
+}
+
+extern "C" fn activate(application: *mut GtkApplication, _: *mut c_void) {
+    unsafe {
+        let window = gtk_application_get_active_window(application);
+        if !window.is_null() {
+            gtk_window_present(window);
+        }
+    }
+}
+
+extern "C" fn open_files(
+    application: *mut GtkApplication,
+    files: *const *mut GFile,
+    count: i32,
+    _: *const c_char,
+    _: *mut c_void,
+) {
+    let mut paths = Vec::new();
+    for index in 0..count {
+        unsafe {
+            let path = g_file_get_path(*files.add(index as usize));
+            if !path.is_null() {
+                use std::os::unix::ffi::OsStrExt;
+                paths.push(std::path::PathBuf::from(std::ffi::OsStr::from_bytes(
+                    CStr::from_ptr(path).to_bytes(),
+                )));
+                g_free(path.cast());
+            }
+        }
+    }
+    if !paths.is_empty() {
+        send_event(Event::OpenFiles(paths));
+    }
+    activate(application, null_mut());
 }
 
 // MARK: Theme
@@ -163,11 +246,11 @@ impl crate::EventLoopInterface for PlatformEventLoop {
     fn run(self, event_handler: impl FnMut(Event) + 'static) -> i32 {
         crate::dispatch::start(event_handler);
 
-        // Start event loop
         if !EXIT_REQUESTED.get() {
-            unsafe { gtk_main() };
+            unsafe { run_application(self.application) }
+        } else {
+            0
         }
-        0
     }
 
     fn create_proxy(&self) -> PlatformEventLoopProxy {
@@ -179,16 +262,17 @@ pub(crate) use crate::dispatch::send as send_event;
 
 thread_local! {
     static EXIT_REQUESTED: Cell<bool> = const { Cell::new(false) };
+    static APPLICATION: Cell<*mut GtkApplication> = const { Cell::new(null_mut()) };
 }
 
 pub(super) fn stop() {
     EXIT_REQUESTED.set(true);
-    // Startup callbacks can close the last window before gtk_main starts.
-    unsafe {
-        if gtk_main_level() != 0 {
-            gtk_main_quit();
+    APPLICATION.with(|application| {
+        let application = application.get();
+        if !application.is_null() {
+            unsafe { g_application_quit(application.cast()) };
         }
-    }
+    });
 }
 
 struct Wake {
@@ -199,6 +283,7 @@ struct Wake {
 impl Drop for PlatformEventLoop {
     fn drop(&mut self) {
         crate::dispatch::shutdown(&self.wake.mailbox);
+        APPLICATION.set(null_mut());
         if let Some(id) = self
             .wake
             .source
@@ -208,6 +293,7 @@ impl Drop for PlatformEventLoop {
         {
             unsafe { g_source_remove(id) };
         }
+        unsafe { g_object_unref(self.application.cast()) };
     }
 }
 
@@ -380,5 +466,25 @@ pub(super) fn primary_monitor_rect() -> GdkRectangle {
             gdk_screen_get_monitor_geometry(screen, idx, r.as_mut_ptr());
             r.assume_init()
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn application_ids_escape_numeric_components_for_dbus() {
+        for (application, expected) in [
+            ("Reversi", "nl.bplaat.Reversi"),
+            ("2048", "nl.bplaat._2048"),
+        ] {
+            let id = AppId {
+                qualifier: "nl".into(),
+                organization: "bplaat".into(),
+                application: application.into(),
+            };
+            assert_eq!(application_id(&id).to_str().expect("ASCII id"), expected);
+        }
     }
 }
