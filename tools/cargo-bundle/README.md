@@ -14,7 +14,9 @@ copyright = "Copyright © 2025 Anonymous"
 iconset = "path/to/icon.iconset" # optional
 
 [package.metadata.bundle.windows]
-assets = "meta/windows" # contains Square44x44Logo.png, Square150x150Logo.png and StoreLogo.png
+# Square44x44Logo.png, Square150x150Logo.png, StoreLogo.png and their qualified variants, like
+# Square44x44Logo.targetsize-88_altform-unplated.png for a transparent taskbar icon
+assets = "meta/windows"
 sandbox = true # optional, run in an AppContainer
 capabilities = ["internetClient"] # optional
 file_types = [{ name = "Example Document", extensions = ["example"] }] # optional
