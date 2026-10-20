@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: MIT
  */
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::{env, fs};
 
@@ -30,25 +30,28 @@ fn is_generated_database(root: &Path, path: &Path) -> bool {
             && path != root.join("lib/net/maxminddb/test-data/GeoLite2-City-Test.mmdb"))
 }
 
-fn cargo_install_path(path: &str, force: bool) -> Result<()> {
+fn cargo_install_path(path: &str) -> Result<()> {
     let mut offline = Command::new("cargo");
-    offline.args(["install", "--locked", "--offline"]);
-    if force {
-        offline.arg("--force");
-    }
-    offline.args(["--path", path]);
+    offline.args([
+        "install",
+        "--locked",
+        "--offline",
+        "--force",
+        "--path",
+        path,
+    ]);
     if run(&mut offline).is_ok() {
         return Ok(());
     }
 
     println!("Locked dependencies are not fully cached; retrying with network access...");
     let mut online = Command::new("cargo");
-    online.args(["install", "--locked"]);
-    if force {
-        online.arg("--force");
-    }
-    online.args(["--path", path]);
+    online.args(["install", "--locked", "--force", "--path", path]);
     run(&mut online)
+}
+
+fn powershell_quote(path: &Path) -> String {
+    format!("'{}'", path.display().to_string().replace('\'', "''"))
 }
 
 fn freedesktop_identity(path: &Path) -> Result<Option<(String, String)>> {
@@ -165,10 +168,18 @@ impl Xtask {
     }
 
     fn build_bundles(&self, apps: &[InstallableApp]) -> Result<()> {
-        cargo_install_path("tools/cargo-bundle", false)?;
+        // Run the workspace version, `cargo bundle` could pick a stale cargo-bundle from PATH
         for app in apps {
             run(Command::new("cargo")
-                .arg("bundle")
+                .args([
+                    "run",
+                    "--release",
+                    "--quiet",
+                    "-p",
+                    "cargo-bundle",
+                    "--",
+                    "bundle",
+                ])
                 .arg("--path")
                 .arg(&app.directory))?;
         }
@@ -192,7 +203,7 @@ impl Xtask {
 
         if selected.is_none() {
             for path in ["tools/bob", "tools/ccontinue", "apps/desktop/music-dl"] {
-                cargo_install_path(path, true)?;
+                cargo_install_path(path)?;
             }
         }
 
@@ -202,13 +213,7 @@ impl Xtask {
                     self.build_bundles(&apps)?;
                 }
                 for app in apps {
-                    let bundle_directory = self.root.join(format!("target/bundle/{}", app.package));
-                    let source = fs::read_dir(&bundle_directory)?
-                        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
-                        .find(|path| path.extension().is_some_and(|extension| extension == "app"))
-                        .with_context(|| {
-                            format!("no .app found in {}", bundle_directory.display())
-                        })?;
+                    let source = self.bundle_output(&app, "app")?;
                     let destination = Path::new("/Applications").join(
                         source
                             .file_name()
@@ -219,16 +224,21 @@ impl Xtask {
                 }
             }
             Os::Windows => {
+                if !apps.is_empty() {
+                    self.build_bundles(&apps)?;
+                    let packages = apps
+                        .iter()
+                        .map(|app| self.bundle_output(app, "msix"))
+                        .collect::<Result<Vec<_>>>()?;
+                    self.install_msix_packages(&packages)?;
+                }
+                // Remove executables that older versions of this task copied to the desktop
                 let desktop = UserDirs::new()
                     .context("home directory is not available")?
-                    .desktop_dir();
+                    .desktop_dir()
+                    .to_owned();
                 for app in apps {
-                    run(Command::new("cargo").args(["build", "--release", "--bin", &app.package]))?;
-                    fs::copy(
-                        self.root
-                            .join(format!("target/release/{}.exe", app.package)),
-                        desktop.join(format!("{}.exe", app.name)),
-                    )?;
+                    remove_path_if_exists(&desktop.join(format!("{}.exe", app.name)))?;
                 }
             }
             Os::Linux => {
@@ -285,6 +295,51 @@ impl Xtask {
         Ok(())
     }
 
+    fn bundle_output(&self, app: &InstallableApp, extension: &str) -> Result<PathBuf> {
+        let bundle_directory = self.root.join(format!("target/bundle/{}", app.package));
+        fs::read_dir(&bundle_directory)?
+            .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+            .find(|path| path.extension().is_some_and(|ext| ext == extension))
+            .with_context(|| format!("no .{extension} found in {}", bundle_directory.display()))
+    }
+
+    fn install_msix_packages(&self, packages: &[PathBuf]) -> Result<()> {
+        // Unsigned packages with executables can only be installed by an administrator, so all
+        // packages are installed from one elevated PowerShell to only show one UAC prompt
+        let log = self.root.join("target/bundle/install-msix.log");
+        let script = self.root.join("target/bundle/install-msix.ps1");
+        remove_path_if_exists(&log)?;
+        let mut contents = format!(
+            "$ErrorActionPreference = 'Stop'\r\ntrap {{ $_ | Out-File -LiteralPath {} -Encoding utf8; exit 1 }}\r\n",
+            powershell_quote(&log)
+        );
+        for package in packages {
+            contents.push_str(&format!(
+                "Add-AppxPackage -Path {} -AllowUnsigned -ForceApplicationShutdown -ForceUpdateFromAnyVersion\r\n",
+                powershell_quote(package)
+            ));
+        }
+        fs::write(&script, contents)?;
+
+        println!("Installing MSIX packages, accept the UAC prompt to continue...");
+        let elevate = format!(
+            "try {{ $process = Start-Process powershell.exe -Verb RunAs -Wait -PassThru \
+             -WindowStyle Hidden -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File','\"{}\"' }} \
+             catch {{ exit 1 }}; exit $process.ExitCode",
+            script.display().to_string().replace('\'', "''")
+        );
+        let status = Command::new("powershell.exe")
+            .args(["-NoProfile", "-Command", &elevate])
+            .status()
+            .context("failed to start PowerShell")?;
+        if !status.success() {
+            let error =
+                fs::read_to_string(&log).unwrap_or_else(|_| "the UAC prompt was declined".into());
+            bail!("failed to install MSIX packages: {}", error.trim());
+        }
+        Ok(())
+    }
+
     fn installable_apps(&self, bundle_only: bool) -> Result<Vec<InstallableApp>> {
         let metadata = self.cargo_metadata()?;
         let mut apps = Vec::new();
@@ -331,17 +386,10 @@ impl Xtask {
                 .unwrap_or_default();
             let identity =
                 freedesktop_identity(&package_directory.join("meta/freedesktop/.desktop"))?;
-            let (mut name, identifier) = identity.unwrap_or_else(|| {
+            let (name, identifier) = identity.unwrap_or_else(|| {
                 let identifier = package_name.to_owned();
                 (default_name, identifier)
             });
-            if let Some(app_name) = package
-                .pointer("/metadata/app/name")
-                .and_then(Value::as_str)
-                .filter(|name| !name.trim().is_empty())
-            {
-                name = app_name.to_owned();
-            }
             apps.push(InstallableApp {
                 package: package_name.to_owned(),
                 directory: package_directory.to_path_buf(),
