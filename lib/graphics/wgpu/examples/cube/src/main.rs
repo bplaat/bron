@@ -414,11 +414,14 @@ impl Gpu {
         };
 
         // Update per-frame resources
+        let aspect = self.config.width as f32 / self.config.height as f32;
+        // Pull back in portrait so the cube fits the narrower horizontal field of view.
+        let distance = 4.5 / aspect.min(1.0);
         let values = [
             0.4,
             0.25,
-            4.5,
-            self.config.width as f32 / self.config.height as f32,
+            distance,
+            aspect,
             0.,
             0.,
             elapsed * 0.55,

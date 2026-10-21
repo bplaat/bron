@@ -45,19 +45,22 @@ struct Out {
     let world = data.position.xyz + vec3(0.5) + offset;
     let angle = scene.settings.x * 0.16;
     let center = vec3(32.0, 21.76, 32.0);
-    let eye = center + vec3(sin(angle) * 88.0, 58.0, cos(angle) * 88.0);
+    // Preserve the desktop orbit, pulling back for the narrower portrait field of view.
+    let camera_scale = 1.0 / min(scene.settings.y, 1.0);
+    let eye = center + vec3(sin(angle) * 88.0, 58.0, cos(angle) * 88.0) * camera_scale;
     let forward = normalize(center - eye);
     let right = normalize(cross(forward, vec3(0.0, 1.0, 0.0)));
     let up = cross(right, forward);
     let relative = world - eye;
     let depth = dot(relative, forward);
     let focal = 2.1445069;
+    let far = 500.0 * camera_scale;
     var out: Out;
     out.position = vec4(dot(relative, right) * focal / scene.settings.y,
-        dot(relative, up) * focal, (500.0 * depth - 500.0) / 499.0, depth);
+        dot(relative, up) * focal, (far * depth - far) / (far - 1.0), depth);
     out.uv = vec2(select(0.0, 1.0, corner == 1u || corner == 2u), select(1.0, 0.0, corner >= 2u));
     out.shade = (0.42 + 0.58 * max(dot(normal, normalize(vec3(0.45, 0.78, 0.30))), 0.0)) * data.position.w / 255.0;
-    out.fog = clamp((length(relative) - 120.0) / 180.0, 0.0, 1.0);
+    out.fog = clamp((length(relative) / camera_scale - 120.0) / 180.0, 0.0, 1.0);
     out.layer = data.data.y;
     out.water = data.data.z;
     return out;
