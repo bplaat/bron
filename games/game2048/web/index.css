@@ -424,7 +424,7 @@ hr {
         inset 0 0 0 1px rgba(255, 255, 255, 0.14286);
     font-size: 45px;
 }
-.is-bwebview-ios .tile.tile-128 .tile-inner {
+.is-bwebview-mobile .tile.tile-128 .tile-inner {
     font-size: 25px;
 }
 
@@ -436,7 +436,7 @@ hr {
         inset 0 0 0 1px rgba(255, 255, 255, 0.19048);
     font-size: 45px;
 }
-.is-bwebview-ios .tile.tile-256 .tile-inner {
+.is-bwebview-mobile .tile.tile-256 .tile-inner {
     font-size: 25px;
 }
 
@@ -448,7 +448,7 @@ hr {
         inset 0 0 0 1px rgba(255, 255, 255, 0.2381);
     font-size: 45px;
 }
-.is-bwebview-ios .tile.tile-512 .tile-inner {
+.is-bwebview-mobile .tile.tile-512 .tile-inner {
     font-size: 25px;
 }
 
@@ -460,7 +460,7 @@ hr {
         inset 0 0 0 1px rgba(255, 255, 255, 0.28571);
     font-size: 35px;
 }
-.is-bwebview-ios .tile.tile-1024 .tile-inner {
+.is-bwebview-mobile .tile.tile-1024 .tile-inner {
     font-size: 15px;
 }
 
@@ -472,7 +472,7 @@ hr {
         inset 0 0 0 1px rgba(255, 255, 255, 0.33333);
     font-size: 35px;
 }
-.is-bwebview-ios .tile.tile-2048 .tile-inner {
+.is-bwebview-mobile .tile.tile-2048 .tile-inner {
     font-size: 15px;
 }
 
@@ -481,7 +481,7 @@ hr {
     background: var(--tile-super);
     font-size: 30px;
 }
-.is-bwebview-ios .tile.tile-super .tile-inner {
+.is-bwebview-mobile .tile.tile-super .tile-inner {
     font-size: 10px;
 }
 
@@ -550,7 +550,7 @@ hr {
     margin-top: 30px;
 }
 
-body.is-bwebview-ios {
+body.is-bwebview-mobile {
     font-size: 15px;
     box-sizing: border-box;
     display: flex;
@@ -560,36 +560,36 @@ body.is-bwebview-ios {
     padding: max(20px, env(safe-area-inset-top)) 20px max(20px, env(safe-area-inset-bottom));
 }
 
-.is-bwebview-ios h1.title {
+.is-bwebview-mobile h1.title {
     font-size: 27px;
     margin-top: 15px;
 }
 
-.is-bwebview-ios .container {
+.is-bwebview-mobile .container {
     width: 100%;
     max-width: 500px;
     container-type: inline-size;
 }
 
-.is-bwebview-ios .score-container,
-.is-bwebview-ios .best-container {
+.is-bwebview-mobile .score-container,
+.is-bwebview-mobile .best-container {
     margin-top: 0;
     padding: 15px 10px;
     min-width: 40px;
 }
 
-.is-bwebview-ios .heading {
+.is-bwebview-mobile .heading {
     margin-bottom: 10px;
 }
 
-.is-bwebview-ios .game-intro {
+.is-bwebview-mobile .game-intro {
     width: 55%;
     display: block;
     box-sizing: border-box;
     line-height: 1.65;
 }
 
-.is-bwebview-ios .restart-button {
+.is-bwebview-mobile .restart-button {
     width: 42%;
     padding: 0;
     display: block;
@@ -597,7 +597,7 @@ body.is-bwebview-ios {
     margin-top: 2px;
 }
 
-.is-bwebview-ios .game-container {
+.is-bwebview-mobile .game-container {
     margin-top: 17px;
     position: relative;
     padding: 10px;
@@ -614,7 +614,7 @@ body.is-bwebview-ios {
     --step: calc(var(--cell) + 10px);
     box-sizing: border-box;
 }
-.is-bwebview-ios .game-container .game-message {
+.is-bwebview-mobile .game-container .game-message {
     display: none;
     position: absolute;
     top: 0;
@@ -627,18 +627,18 @@ body.is-bwebview-ios {
     animation: fade-in 800ms ease 1200ms;
     animation-fill-mode: both;
 }
-.is-bwebview-ios .game-container .game-message p {
+.is-bwebview-mobile .game-container .game-message p {
     font-size: 60px;
     font-weight: bold;
     height: 60px;
     line-height: 60px;
     margin-top: 222px;
 }
-.is-bwebview-ios .game-container .game-message .lower {
+.is-bwebview-mobile .game-container .game-message .lower {
     display: block;
     margin-top: 59px;
 }
-.is-bwebview-ios .game-container .game-message a {
+.is-bwebview-mobile .game-container .game-message a {
     display: inline-block;
     background: #8f7a66;
     border-radius: 3px;
@@ -649,39 +649,39 @@ body.is-bwebview-ios {
     line-height: 42px;
     margin-left: 9px;
 }
-.is-bwebview-ios .game-container .game-message a.keep-playing-button {
+.is-bwebview-mobile .game-container .game-message a.keep-playing-button {
     display: none;
 }
-.is-bwebview-ios .game-container .game-message.game-won {
+.is-bwebview-mobile .game-container .game-message.game-won {
     background: rgba(237, 194, 46, 0.5);
     color: #f9f6f2;
 }
-.is-bwebview-ios .game-container .game-message.game-won a.keep-playing-button {
+.is-bwebview-mobile .game-container .game-message.game-won a.keep-playing-button {
     display: inline-block;
 }
-.is-bwebview-ios .game-container .game-message.game-won,
-.is-bwebview-ios .game-container .game-message.game-over {
+.is-bwebview-mobile .game-container .game-message.game-won,
+.is-bwebview-mobile .game-container .game-message.game-over {
     display: block;
 }
 
-.is-bwebview-ios .grid-container {
+.is-bwebview-mobile .grid-container {
     position: absolute;
     z-index: 1;
 }
 
-.is-bwebview-ios .grid-row {
+.is-bwebview-mobile .grid-row {
     margin-bottom: 10px;
 }
-.is-bwebview-ios .grid-row:last-child {
+.is-bwebview-mobile .grid-row:last-child {
     margin-bottom: 0;
 }
-.is-bwebview-ios .grid-row:after {
+.is-bwebview-mobile .grid-row:after {
     content: '';
     display: block;
     clear: both;
 }
 
-.is-bwebview-ios .grid-cell {
+.is-bwebview-mobile .grid-cell {
     width: var(--cell);
     height: var(--cell);
     margin-right: 10px;
@@ -689,90 +689,90 @@ body.is-bwebview-ios {
     border-radius: 3px;
     background: var(--grid-cell);
 }
-.is-bwebview-ios .grid-cell:last-child {
+.is-bwebview-mobile .grid-cell:last-child {
     margin-right: 0;
 }
 
-.is-bwebview-ios .tile-container {
+.is-bwebview-mobile .tile-container {
     position: absolute;
     z-index: 2;
 }
 
-.is-bwebview-ios .tile,
-.is-bwebview-ios .tile .tile-inner {
+.is-bwebview-mobile .tile,
+.is-bwebview-mobile .tile .tile-inner {
     width: var(--cell);
     height: var(--cell);
     line-height: var(--cell);
 }
 
 /* Snappier moves for rapid swipes, new and merged tiles appear as soon as the slide ends */
-.is-bwebview-ios .tile {
+.is-bwebview-mobile .tile {
     transition-duration: 70ms;
 }
-.is-bwebview-ios .tile-new .tile-inner,
-.is-bwebview-ios .tile-merged .tile-inner {
+.is-bwebview-mobile .tile-new .tile-inner,
+.is-bwebview-mobile .tile-merged .tile-inner {
     animation-duration: 120ms;
     animation-delay: 70ms;
 }
-.is-bwebview-ios .tile.tile-position-1-1 {
+.is-bwebview-mobile .tile.tile-position-1-1 {
     transform: translate(0, 0);
 }
-.is-bwebview-ios .tile.tile-position-1-2 {
+.is-bwebview-mobile .tile.tile-position-1-2 {
     transform: translate(0, var(--step));
 }
-.is-bwebview-ios .tile.tile-position-1-3 {
+.is-bwebview-mobile .tile.tile-position-1-3 {
     transform: translate(0, calc(var(--step) * 2));
 }
-.is-bwebview-ios .tile.tile-position-1-4 {
+.is-bwebview-mobile .tile.tile-position-1-4 {
     transform: translate(0, calc(var(--step) * 3));
 }
-.is-bwebview-ios .tile.tile-position-2-1 {
+.is-bwebview-mobile .tile.tile-position-2-1 {
     transform: translate(var(--step), 0);
 }
-.is-bwebview-ios .tile.tile-position-2-2 {
+.is-bwebview-mobile .tile.tile-position-2-2 {
     transform: translate(var(--step), var(--step));
 }
-.is-bwebview-ios .tile.tile-position-2-3 {
+.is-bwebview-mobile .tile.tile-position-2-3 {
     transform: translate(var(--step), calc(var(--step) * 2));
 }
-.is-bwebview-ios .tile.tile-position-2-4 {
+.is-bwebview-mobile .tile.tile-position-2-4 {
     transform: translate(var(--step), calc(var(--step) * 3));
 }
-.is-bwebview-ios .tile.tile-position-3-1 {
+.is-bwebview-mobile .tile.tile-position-3-1 {
     transform: translate(calc(var(--step) * 2), 0);
 }
-.is-bwebview-ios .tile.tile-position-3-2 {
+.is-bwebview-mobile .tile.tile-position-3-2 {
     transform: translate(calc(var(--step) * 2), var(--step));
 }
-.is-bwebview-ios .tile.tile-position-3-3 {
+.is-bwebview-mobile .tile.tile-position-3-3 {
     transform: translate(calc(var(--step) * 2), calc(var(--step) * 2));
 }
-.is-bwebview-ios .tile.tile-position-3-4 {
+.is-bwebview-mobile .tile.tile-position-3-4 {
     transform: translate(calc(var(--step) * 2), calc(var(--step) * 3));
 }
-.is-bwebview-ios .tile.tile-position-4-1 {
+.is-bwebview-mobile .tile.tile-position-4-1 {
     transform: translate(calc(var(--step) * 3), 0);
 }
-.is-bwebview-ios .tile.tile-position-4-2 {
+.is-bwebview-mobile .tile.tile-position-4-2 {
     transform: translate(calc(var(--step) * 3), var(--step));
 }
-.is-bwebview-ios .tile.tile-position-4-3 {
+.is-bwebview-mobile .tile.tile-position-4-3 {
     transform: translate(calc(var(--step) * 3), calc(var(--step) * 2));
 }
-.is-bwebview-ios .tile.tile-position-4-4 {
+.is-bwebview-mobile .tile.tile-position-4-4 {
     transform: translate(calc(var(--step) * 3), calc(var(--step) * 3));
 }
 
-.is-bwebview-ios .tile .tile-inner {
+.is-bwebview-mobile .tile .tile-inner {
     font-size: 35px;
 }
 
-.is-bwebview-ios .game-message p {
+.is-bwebview-mobile .game-message p {
     font-size: 30px !important;
     height: 30px !important;
     line-height: 30px !important;
     margin-top: 90px !important;
 }
-.is-bwebview-ios .game-message .lower {
+.is-bwebview-mobile .game-message .lower {
     margin-top: 30px !important;
 }

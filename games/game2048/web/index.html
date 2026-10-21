@@ -76,8 +76,8 @@
             if (navigator.userAgent.includes('bwebview') && navigator.userAgent.includes('Macintosh')) {
                 document.body.classList.add('is-bwebview-macos');
             }
-            if (navigator.userAgent.includes('bwebview') && /iPhone|iPad/.test(navigator.userAgent)) {
-                document.body.classList.add('is-bwebview-ios');
+            if (navigator.userAgent.includes('bwebview') && /iPhone|iPad|Android/.test(navigator.userAgent)) {
+                document.body.classList.add('is-bwebview-mobile');
             }
         </script>
         <script src="/js/keyboard_input_manager.js"></script>

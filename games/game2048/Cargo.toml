@@ -25,6 +25,8 @@ info_plist = "meta/apple/ios/Info.plist"
 assets = "meta/windows"
 sandbox = true
 
+[package.metadata.bundle.android]
+
 [dependencies]
 bwindow = { path = "../../lib/ui/bwindow" }
 bwebview = { path = "../../lib/ui/bwebview", features = ["rust-embed"] }
