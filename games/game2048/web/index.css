@@ -4,12 +4,66 @@
  * SPDX-License-Identifier: MIT
  */
 
+html {
+    --background: #faf8ef;
+    --text: #776e65;
+    --board: #bbada0;
+    --grid-cell: rgba(238, 228, 218, 0.35);
+    --overlay: rgba(238, 228, 218, 0.5);
+    --divider: #d8d4d0;
+    --score-label: #eee4da;
+    --score-addition: rgba(119, 110, 101, 0.9);
+    --tile-text: #776e65;
+    --tile-2: #eee4da;
+    --tile-4: #ede0c8;
+    --tile-8: #f2b179;
+    --tile-16: #f59563;
+    --tile-32: #f67c5f;
+    --tile-64: #f65e3b;
+    --tile-128: #edcf72;
+    --tile-256: #edcc61;
+    --tile-512: #edc850;
+    --tile-1024: #edc53f;
+    --tile-2048: #edc22e;
+    --glow: 1;
+    --tile-super: #3c3a32;
+    --tile-super-text: #f9f6f2;
+}
+
+@media (prefers-color-scheme: dark) {
+    html {
+        --background: #1b1814;
+        --text: #cdbfae;
+        --board: #3b322a;
+        --grid-cell: #4a3f35;
+        --overlay: rgba(27, 24, 20, 0.73);
+        --divider: #3b322a;
+        --score-label: #ab9b89;
+        --score-addition: rgba(205, 191, 174, 0.9);
+        --tile-text: #f6ede2;
+        --tile-2: #6e5f50;
+        --tile-4: #85694b;
+        --tile-8: #e0995f;
+        --tile-16: #e2814f;
+        --tile-32: #e2684a;
+        --tile-64: #e04f2e;
+        --tile-128: #d9bb5f;
+        --tile-256: #d8b650;
+        --tile-512: #d7b143;
+        --tile-1024: #d6ab36;
+        --tile-2048: #d4a629;
+        --glow: 0.45;
+        --tile-super: #f3ece4;
+        --tile-super-text: #3c3a32;
+    }
+}
+
 html,
 body {
     margin: 0;
     padding: 0;
-    background: #faf8ef;
-    color: #776e65;
+    background: var(--background);
+    color: var(--text);
     font-family:
         system-ui,
         -apple-system,
@@ -30,7 +84,7 @@ body {
 }
 
 html {
-    color-scheme: light;
+    color-scheme: light dark;
     font-synthesis: none;
     text-rendering: optimizeLegibility;
     -webkit-font-smoothing: antialiased;
@@ -83,7 +137,7 @@ h1.title {
 .best-container {
     position: relative;
     display: inline-block;
-    background: #bbada0;
+    background: var(--board);
     padding: 15px 25px;
     font-size: 25px;
     height: 25px;
@@ -104,17 +158,16 @@ h1.title {
     font-size: 13px;
     line-height: 13px;
     text-align: center;
-    color: #eee4da;
+    color: var(--score-label);
 }
 .score-container .score-addition,
 .best-container .score-addition {
     position: absolute;
     right: 30px;
-    color: red;
     font-size: 25px;
     line-height: 25px;
     font-weight: bold;
-    color: rgba(119, 110, 101, 0.9);
+    color: var(--score-addition);
     z-index: 100;
     animation: move-up 600ms ease-in;
     animation-fill-mode: both;
@@ -135,7 +188,7 @@ p {
 }
 
 a {
-    color: #776e65;
+    color: var(--text);
     font-weight: bold;
     text-decoration: underline;
     cursor: pointer;
@@ -148,7 +201,7 @@ strong.important {
 
 hr {
     border: none;
-    border-bottom: 1px solid #d8d4d0;
+    border-bottom: 1px solid var(--divider);
     margin-top: 20px;
     margin-bottom: 30px;
 }
@@ -176,7 +229,7 @@ hr {
     -webkit-touch-callout: none;
     -webkit-user-select: none;
     touch-action: none;
-    background: #bbada0;
+    background: var(--board);
     border-radius: 6px;
     width: 500px;
     height: 500px;
@@ -189,7 +242,7 @@ hr {
     right: 0;
     bottom: 0;
     left: 0;
-    background: rgba(238, 228, 218, 0.5);
+    background: var(--overlay);
     z-index: 100;
     text-align: center;
     animation: fade-in 800ms ease 1200ms;
@@ -255,7 +308,7 @@ hr {
     margin-right: 15px;
     float: left;
     border-radius: 3px;
-    background: rgba(238, 228, 218, 0.35);
+    background: var(--grid-cell);
 }
 .grid-cell:last-child {
     margin-right: 0;
@@ -328,45 +381,46 @@ hr {
 }
 .tile .tile-inner {
     border-radius: 3px;
-    background: #eee4da;
+    background: var(--tile-2);
+    color: var(--tile-text);
     text-align: center;
     font-weight: bold;
     z-index: 10;
     font-size: 55px;
 }
 .tile.tile-2 .tile-inner {
-    background: #eee4da;
+    background: var(--tile-2);
     box-shadow:
         0 0 30px 10px rgba(243, 215, 116, 0),
         inset 0 0 0 1px rgba(255, 255, 255, 0);
 }
 .tile.tile-4 .tile-inner {
-    background: #ede0c8;
+    background: var(--tile-4);
     box-shadow:
         0 0 30px 10px rgba(243, 215, 116, 0),
         inset 0 0 0 1px rgba(255, 255, 255, 0);
 }
 .tile.tile-8 .tile-inner {
     color: #f9f6f2;
-    background: #f2b179;
+    background: var(--tile-8);
 }
 .tile.tile-16 .tile-inner {
     color: #f9f6f2;
-    background: #f59563;
+    background: var(--tile-16);
 }
 .tile.tile-32 .tile-inner {
     color: #f9f6f2;
-    background: #f67c5f;
+    background: var(--tile-32);
 }
 .tile.tile-64 .tile-inner {
     color: #f9f6f2;
-    background: #f65e3b;
+    background: var(--tile-64);
 }
 .tile.tile-128 .tile-inner {
     color: #f9f6f2;
-    background: #edcf72;
+    background: var(--tile-128);
     box-shadow:
-        0 0 30px 10px rgba(243, 215, 116, 0.2381),
+        0 0 30px 10px rgba(243, 215, 116, calc(0.2381 * var(--glow))),
         inset 0 0 0 1px rgba(255, 255, 255, 0.14286);
     font-size: 45px;
 }
@@ -376,9 +430,9 @@ hr {
 
 .tile.tile-256 .tile-inner {
     color: #f9f6f2;
-    background: #edcc61;
+    background: var(--tile-256);
     box-shadow:
-        0 0 30px 10px rgba(243, 215, 116, 0.31746),
+        0 0 30px 10px rgba(243, 215, 116, calc(0.31746 * var(--glow))),
         inset 0 0 0 1px rgba(255, 255, 255, 0.19048);
     font-size: 45px;
 }
@@ -388,9 +442,9 @@ hr {
 
 .tile.tile-512 .tile-inner {
     color: #f9f6f2;
-    background: #edc850;
+    background: var(--tile-512);
     box-shadow:
-        0 0 30px 10px rgba(243, 215, 116, 0.39683),
+        0 0 30px 10px rgba(243, 215, 116, calc(0.39683 * var(--glow))),
         inset 0 0 0 1px rgba(255, 255, 255, 0.2381);
     font-size: 45px;
 }
@@ -400,9 +454,9 @@ hr {
 
 .tile.tile-1024 .tile-inner {
     color: #f9f6f2;
-    background: #edc53f;
+    background: var(--tile-1024);
     box-shadow:
-        0 0 30px 10px rgba(243, 215, 116, 0.47619),
+        0 0 30px 10px rgba(243, 215, 116, calc(0.47619 * var(--glow))),
         inset 0 0 0 1px rgba(255, 255, 255, 0.28571);
     font-size: 35px;
 }
@@ -412,9 +466,9 @@ hr {
 
 .tile.tile-2048 .tile-inner {
     color: #f9f6f2;
-    background: #edc22e;
+    background: var(--tile-2048);
     box-shadow:
-        0 0 30px 10px rgba(243, 215, 116, 0.55556),
+        0 0 30px 10px rgba(243, 215, 116, calc(0.55556 * var(--glow))),
         inset 0 0 0 1px rgba(255, 255, 255, 0.33333);
     font-size: 35px;
 }
@@ -423,8 +477,8 @@ hr {
 }
 
 .tile.tile-super .tile-inner {
-    color: #f9f6f2;
-    background: #3c3a32;
+    color: var(--tile-super-text);
+    background: var(--tile-super);
     font-size: 30px;
 }
 .is-bwebview-ios .tile.tile-super .tile-inner {
@@ -551,7 +605,7 @@ body.is-bwebview-ios {
     -webkit-touch-callout: none;
     -webkit-user-select: none;
     touch-action: none;
-    background: #bbada0;
+    background: var(--board);
     border-radius: 6px;
     width: 100%;
     height: auto;
@@ -567,7 +621,7 @@ body.is-bwebview-ios {
     right: 0;
     bottom: 0;
     left: 0;
-    background: rgba(238, 228, 218, 0.5);
+    background: var(--overlay);
     z-index: 100;
     text-align: center;
     animation: fade-in 800ms ease 1200ms;
@@ -633,7 +687,7 @@ body.is-bwebview-ios {
     margin-right: 10px;
     float: left;
     border-radius: 3px;
-    background: rgba(238, 228, 218, 0.35);
+    background: var(--grid-cell);
 }
 .is-bwebview-ios .grid-cell:last-child {
     margin-right: 0;

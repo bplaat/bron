@@ -8,12 +8,19 @@
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
 use bwebview::WebviewBuilder;
-use bwindow::{EventLoopBuilder, LogicalSize, Theme, WindowBuilder};
+use bwindow::{Event, EventLoopBuilder, LogicalSize, Theme, WindowBuilder, WindowEvent};
 use rust_embed::Embed;
 
 #[derive(Embed)]
 #[folder = "web"]
 struct WebAssets;
+
+const fn background_color(theme: Theme) -> u32 {
+    match theme {
+        Theme::Light => 0xfaf8ef,
+        Theme::Dark => 0x1b1814,
+    }
+}
 
 fn main() {
     let event_loop = EventLoopBuilder::new()
@@ -25,15 +32,14 @@ fn main() {
         .title("2048")
         .size(LogicalSize::new(600.0, 850.0))
         .resizable(false)
-        .theme(Theme::Light)
-        .background_color(0xfaf8ef)
+        .background_color(background_color(event_loop.theme()))
         .center()
         .remember_window_state();
     #[cfg(target_os = "macos")]
     {
         window_builder = window_builder.macos_titlebar_style(bwindow::MacosTitlebarStyle::Hidden);
     }
-    let window = window_builder.build();
+    let mut window = window_builder.build();
 
     #[allow(unused)]
     let mut webview = WebviewBuilder::new(&window)
@@ -49,5 +55,9 @@ fn main() {
         bwebview::InjectionTime::DocumentStart,
     );
 
-    event_loop.run(move |_event| {});
+    event_loop.run(move |event| {
+        if let Event::Window(_, WindowEvent::ThemeChanged(theme)) = event {
+            window.set_background_color(background_color(theme));
+        }
+    });
 }
