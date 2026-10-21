@@ -21,7 +21,9 @@ Ownership, setuid/setgid/sticky bits, ACLs, and extended attributes are not rest
 
 The library exposes `unix_mode()`, `is_file()`, `is_dir()`, `is_symlink()`, and
 `last_modified()` on entries. `append_file()` preserves existing archive entries
-and metadata while appending one regular file.
+and metadata while appending one regular file, `append_stored_file()` does the same
+without compression. Zero padding in extra fields, which aapt2 and zipalign add for
+alignment, is accepted.
 
 Python-generated interoperability fixtures and their regeneration script live in
 `tests/fixtures/`. Running the Rust tests does not require Python.

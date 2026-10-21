@@ -14,6 +14,10 @@ pub(crate) fn extra_timestamp(mut extra: &[u8]) -> Result<Option<SystemTime>, Zi
     let mut timestamp = None;
     while !extra.is_empty() {
         if extra.len() < 4 {
+            // Tools like aapt2 and zipalign pad the extra field with zeros for alignment.
+            if extra.iter().all(|byte| *byte == 0) {
+                break;
+            }
             return Err(ZipError::InvalidZip("truncated extra field header"));
         }
         let id = read_u16_le(extra, 0);
@@ -92,4 +96,17 @@ pub(crate) fn dos_timestamp(date: u16, time: u16) -> Option<SystemTime> {
         u32::from(time & 31) * 2,
     );
     unix_time(local.single()?.timestamp())
+}
+
+// MARK: Tests
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn accepts_zero_alignment_padding_but_rejects_truncated_headers() {
+        assert!(matches!(extra_timestamp(&[0]), Ok(None)));
+        assert!(matches!(extra_timestamp(&[0, 0, 0]), Ok(None)));
+        assert!(extra_timestamp(&[1, 0]).is_err());
+    }
 }
