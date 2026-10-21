@@ -10,7 +10,7 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
-granit-parser = "1.1"
+granit-parser = "2.0"
 serde = "1.0"
 
 [dev-dependencies]
