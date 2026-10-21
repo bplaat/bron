@@ -20,8 +20,8 @@ mod window;
 pub(crate) mod ffi {
     pub use super::activity::{android_activity, android_run_on_ui_thread};
     pub use super::event_loop::{
-        android_content_rect, android_density, android_post, android_post_frame,
-        android_post_local, android_surface,
+        android_content_rect, android_density, android_native_window, android_post,
+        android_post_frame, android_post_local, android_surface,
     };
     pub use super::jni::{DexClassLoader, GlobalRef, JniEnv, native_method};
     pub use super::window::{android_back_pressed, android_default_background};

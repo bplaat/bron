@@ -129,7 +129,7 @@ use JNI. Android 8.0 (API 26) is the minimum.
 - stdout, stderr, and panics are written to logcat with the binary name as tag.
 - The `dialog`, `file_drop`, `menu`, and `progress_bar` features are unsupported.
 - Content backends that need Java, like bwebview, embed their own dex and load it with
-  `DexClassLoader`.
+  `DexClassLoader`. Native backends, like wgpu, present to `android_native_window()`.
 
 ## License
 
