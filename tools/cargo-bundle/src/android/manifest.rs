@@ -136,6 +136,11 @@ pub(super) fn version_code(version: &str) -> u32 {
     part() * 1_000_000 + part() * 1_000 + part()
 }
 
+/// Convert bundle identifier dashes to underscores for Android application ids.
+pub(super) fn normalize_identifier(identifier: &str) -> String {
+    identifier.replace('-', "_")
+}
+
 /// Check that an identifier is a valid Android application id.
 pub(super) fn is_valid_identifier(identifier: &str) -> bool {
     let segments = identifier.split('.').collect::<Vec<_>>();
@@ -228,6 +233,20 @@ mod tests {
             application.children[1].get("android:name"),
             Some("nl.bplaat.Other")
         );
+    }
+
+    #[test]
+    fn normalizes_bundle_identifiers() {
+        let manifest: crate::manifest::Manifest =
+            toml::from_str("[package]\nname = \"example-bcanvas-showcase\"\nversion = \"0.1.0\"\n")
+                .expect("valid manifest");
+        let identifier = normalize_identifier(&manifest.package.metadata.bundle.identifier);
+        assert_eq!(identifier, "nl.bplaat.example_bcanvas_showcase");
+        assert!(is_valid_identifier(&identifier));
+        assert_eq!(normalize_identifier("com.example.App"), "com.example.App");
+        assert!(!is_valid_identifier(&normalize_identifier(
+            "nl.bplaat.2048"
+        )));
     }
 
     #[test]

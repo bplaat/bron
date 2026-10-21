@@ -110,7 +110,9 @@ cargo bundle --path path/to/your/crate --android --run
 ```
 
 The app must use [bwindow](../../lib/ui/bwindow). The bundle identifier is the Android package
-name, so every segment must start with a letter. All Android settings are optional:
+name, with dashes converted to underscores, so every segment must start with a letter.
+For example, `nl.bplaat.example-bcanvas-showcase` becomes `nl.bplaat.example_bcanvas_showcase`.
+All Android settings are optional:
 
 ```toml
 [package.metadata.bundle.android]
