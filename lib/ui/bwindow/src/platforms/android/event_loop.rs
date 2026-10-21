@@ -19,7 +19,9 @@ use super::headers::*;
 use super::jni::{GlobalRef, JniEnv};
 use super::{input, window};
 use crate::mailbox::{Mailbox, Message};
-use crate::{EventLoopBuilder, LogicalPoint, LogicalSize, NativeEvent as Event, Theme};
+use crate::{
+    EventLoopBuilder, LogicalInsets, LogicalPoint, LogicalSize, NativeEvent as Event, Theme,
+};
 
 // MARK: Shared state
 // Written by the Android UI thread, read by the Rust main thread.
@@ -48,26 +50,28 @@ pub fn android_density() -> f32 {
     f32::from_bits(DISPLAY.density.load(Ordering::Relaxed))
 }
 
-/// The window content area inside the system bars, as `(x, y, width, height)` in native pixels.
-pub fn android_content_rect() -> (u32, u32, u32, u32) {
-    let [left, top, right, bottom] = DISPLAY
-        .insets
-        .each_ref()
-        .map(|inset| inset.load(Ordering::Relaxed));
-    let width = DISPLAY.window_width.load(Ordering::Relaxed);
-    let height = DISPLAY.window_height.load(Ordering::Relaxed);
+/// The window size, which the content fills, as `(width, height)` in native pixels.
+pub fn android_window_size() -> (u32, u32) {
     (
-        left,
-        top,
-        width.saturating_sub(left + right),
-        height.saturating_sub(top + bottom),
+        DISPLAY.window_width.load(Ordering::Relaxed),
+        DISPLAY.window_height.load(Ordering::Relaxed),
     )
 }
 
 pub(super) fn content_size() -> LogicalSize {
-    let (_, _, width, height) = android_content_rect();
+    let (width, height) = android_window_size();
     let density = android_density();
     LogicalSize::new(width as f32 / density, height as f32 / density)
+}
+
+/// The system bar and display cutout insets.
+pub(super) fn safe_area() -> LogicalInsets {
+    let density = android_density();
+    let [left, top, right, bottom] = DISPLAY
+        .insets
+        .each_ref()
+        .map(|inset| inset.load(Ordering::Relaxed) as f32 / density);
+    LogicalInsets::new(top, right, bottom, left)
 }
 
 pub(super) fn system_theme() -> Theme {
@@ -427,11 +431,10 @@ unsafe fn handle_input(env: JniEnv, event: *mut AInputEvent) -> bool {
     unsafe {
         match AInputEvent_getType(event) {
             AINPUT_EVENT_TYPE_MOTION => {
-                let (left, top, _, _) = android_content_rect();
                 let density = android_density();
                 let position = LogicalPoint::new(
-                    (AMotionEvent_getX(event, 0) - left as f32) / density,
-                    (AMotionEvent_getY(event, 0) - top as f32) / density,
+                    AMotionEvent_getX(event, 0) / density,
+                    AMotionEvent_getY(event, 0) / density,
                 );
                 let mouse = AMotionEvent_getToolType(event, 0) == AMOTION_EVENT_TOOL_TYPE_MOUSE;
                 let scroll = (

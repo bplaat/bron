@@ -61,8 +61,9 @@ ignored on Android.
 
 Frames draw directly into the window surface from the Rust main thread with a hardware
 accelerated `android.graphics.Canvas`, through JNI calls with cached method IDs and reused
-paints, and are scheduled with the display choreographer. `clear_rect` reveals the window
-background color. `OffscreenCanvas` draws into an Android bitmap.
+paints, and are scheduled with the display choreographer. Frames cover the whole window, also
+under the system bars, see the bwindow safe area. `clear_rect` reveals the window background
+color. `OffscreenCanvas` draws into an Android bitmap.
 
 ## Offscreen drawing
 

@@ -73,6 +73,14 @@ Use `request_redraw()` after state changes. For animation, call
 - Web content: attach `bwebview::WebviewBuilder` and map browser notifications into
   your application's typed events with `on_event(proxy, mapper)`.
 
+## Safe Area
+
+Content fills the whole window, also under the status bar, display cutouts and the home
+indicator on iOS and Android. `window.safe_area()` returns the `LogicalInsets` from each
+window edge to the area that is not covered by system UI, keep text and controls inside it
+and let backgrounds fill the window. Changes, like rotating the device, send
+`WindowEvent::SafeAreaChanged`. Desktop windows have no insets.
+
 ## Features
 
 - `remember_window_state` (default): persist native window placement.
@@ -83,9 +91,9 @@ Use `request_redraw()` after state changes. For animation, call
 
 ## iOS
 
-Windows always fill the screen, so size, position and resizing options are ignored. Menus and
-file drops are ignored, the `dialog` feature is not supported, and touches are delivered as left
-mouse button events.
+Windows always fill the screen, so size, position and resizing options are ignored. The safe
+area is the view's `safeAreaInsets`. Menus and file drops are ignored, the `dialog` feature is
+not supported, and touches are delivered as left mouse button events.
 
 ## Linux
 
@@ -115,8 +123,8 @@ runs the `main` function on a dedicated "main" thread with its own looper, where
 event loop run. The few framework calls without an NDK API, like insets and system bar icons,
 use JNI. Android 8.0 (API 26) is the minimum.
 
-- One window per app. It fills the activity, padded by the system bar and cutout
-  insets; `Resize` reports that content area in dp.
+- One window per app. It fills the activity, also under the system bars, `Resize` reports
+  its size in dp. The safe area is the system bar and display cutout insets.
 - Title, position, size, minimum size, resizable, center, and window state calls
   are no-ops. `background_color` fills the window when no content draws and picks
   matching light or dark system bar icons. `set_theme` forces the app night mode on

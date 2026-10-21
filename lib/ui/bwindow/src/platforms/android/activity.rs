@@ -158,14 +158,17 @@ unsafe extern "C" fn on_input_queue_destroyed(_: *mut ANativeActivity, queue: *m
 
 unsafe extern "C" fn on_content_rect_changed(activity: *mut ANativeActivity, _: *const ARect) {
     if unsafe { update_insets(activity) } {
-        android_post(window::resized);
+        android_post(window::safe_area_changed);
     }
 }
 
 unsafe extern "C" fn on_configuration_changed(activity: *mut ANativeActivity) {
     let density_changed = unsafe { update_configuration(activity) };
     let insets_changed = unsafe { update_insets(activity) };
-    android_post(move || window::configuration_changed(density_changed || insets_changed));
+    // The insets are in dp, so a density change also changes them.
+    android_post(move || {
+        window::configuration_changed(density_changed, density_changed || insets_changed);
+    });
 }
 
 // MARK: Utils
@@ -238,7 +241,7 @@ unsafe fn window_and_decor_view(env: JniEnv) -> (jobject, jobject) {
     }
 }
 
-// Draw behind the system bars, the content is inset by update_insets.
+// Draw behind the system bars, update_insets reads the safe area.
 unsafe fn draw_behind_system_bars(env: JniEnv, sdk: i32) {
     const LAYOUT_STABLE_FULLSCREEN_HIDE_NAVIGATION: jint = 0x700;
     unsafe {

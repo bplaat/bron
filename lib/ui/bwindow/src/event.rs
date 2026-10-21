@@ -8,7 +8,7 @@ use std::cell::Cell;
 use std::path::PathBuf;
 use std::rc::Rc;
 
-use crate::{LogicalPoint, LogicalSize};
+use crate::{LogicalInsets, LogicalPoint, LogicalSize};
 
 /// A close request that can be prevented by the event handler
 #[derive(Clone)]
@@ -67,6 +67,8 @@ pub enum WindowEvent {
     Move(LogicalPoint),
     /// Window resize
     Resize(LogicalSize),
+    /// The safe area insets changed, see [`Window::safe_area`](crate::Window::safe_area)
+    SafeAreaChanged(LogicalInsets),
     /// Window close requested; closes normally unless prevented
     CloseRequested(CloseRequest),
     /// File dropped
