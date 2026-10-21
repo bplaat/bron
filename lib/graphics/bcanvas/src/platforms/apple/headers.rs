@@ -86,7 +86,7 @@ unsafe extern "C" {
         radius: f64,
         start: f64,
         end: f64,
-        clockwise: bool,
+        clockwise: i32,
     );
     pub(super) fn CGContextAddQuadCurveToPoint(
         context: CGContextRef,
@@ -106,6 +106,7 @@ unsafe extern "C" {
     );
     pub(super) fn CGContextFillPath(context: CGContextRef);
     pub(super) fn CGContextStrokePath(context: CGContextRef);
+    pub(super) fn CGContextIsPathEmpty(context: CGContextRef) -> bool;
     pub(super) fn CGContextCopyPath(context: CGContextRef) -> *mut c_void;
     pub(super) fn CGContextAddPath(context: CGContextRef, path: *mut c_void);
     pub(super) fn CGPathRelease(path: *mut c_void);
@@ -115,7 +116,11 @@ unsafe extern "C" {
     pub(super) fn CGContextScaleCTM(context: CGContextRef, x: f64, y: f64);
     pub(super) fn CGContextConcatCTM(context: CGContextRef, transform: CGAffineTransform);
     pub(super) fn CGContextGetCTM(context: CGContextRef) -> CGAffineTransform;
-    pub(super) fn CGContextSetCTM(context: CGContextRef, transform: CGAffineTransform);
+    pub(super) fn CGAffineTransformInvert(transform: CGAffineTransform) -> CGAffineTransform;
+    pub(super) fn CGAffineTransformConcat(
+        t1: CGAffineTransform,
+        t2: CGAffineTransform,
+    ) -> CGAffineTransform;
 }
 
 #[derive(Clone, Copy)]
