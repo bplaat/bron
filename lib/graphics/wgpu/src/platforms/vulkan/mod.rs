@@ -12,10 +12,14 @@ use std::ffi::{CStr, c_void};
 use std::ptr;
 use std::rc::Rc;
 
+#[cfg(all(feature = "window", target_os = "android"))]
+pub(crate) use android::Surface;
+#[cfg(all(feature = "window", not(target_os = "android")))]
+pub(crate) use gtk::Surface;
+#[cfg(feature = "window")]
+pub(crate) use surface::Factory;
 #[cfg(feature = "window")]
 use surface::Swapchain;
-#[cfg(feature = "window")]
-pub(crate) use surface::{Factory, Surface};
 
 use super::*;
 use crate::platform::headers as vk;
@@ -29,10 +33,14 @@ macro_rules! call {
     }};
 }
 
+#[cfg(all(feature = "window", target_os = "android"))]
+mod android;
+#[cfg(all(feature = "window", not(target_os = "android")))]
+mod gtk;
 mod headers;
 #[cfg(feature = "window")]
 mod surface;
-#[cfg(feature = "window")]
+#[cfg(all(feature = "window", not(target_os = "android")))]
 mod widget;
 
 pub(super) struct Instance {
@@ -466,11 +474,11 @@ pub(super) struct Context {
 
 impl Context {
     pub(super) fn new() -> Result<Rc<Self>> {
-        Self::create(&Instance::new(None)?, None)
+        Self::create(&Instance::new(None)?, false, None)
     }
 
     /// Create a device on the first graphics queue, which must also present to `surface`.
-    fn create(instance: &Rc<Instance>, surface: Option<u64>) -> Result<Rc<Self>> {
+    fn create(instance: &Rc<Instance>, swapchain: bool, surface: Option<u64>) -> Result<Rc<Self>> {
         unsafe {
             let mut count = 0;
             check(call!(
@@ -542,7 +550,7 @@ impl Context {
                 s_type: 3,
                 queue_create_info_count: 1,
                 p_queue_create_infos: &queue_info,
-                enabled_extension_count: u32::from(surface.is_some()),
+                enabled_extension_count: u32::from(swapchain),
                 pp_enabled_extension_names: extensions.as_ptr(),
                 ..Default::default()
             };
