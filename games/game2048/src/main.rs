@@ -17,7 +17,7 @@ struct WebAssets;
 
 fn main() {
     let event_loop = EventLoopBuilder::new()
-        .app_id("nl", "bplaat", "2048")
+        .app_id("nl", "bplaat", "game2048")
         .build();
 
     #[allow(unused_mut)]
