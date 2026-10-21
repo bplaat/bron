@@ -78,9 +78,25 @@ KeyboardInputManager.prototype.listen = function () {
     this.bindButtonPress('.restart-button', this.restart);
     this.bindButtonPress('.keep-playing-button', this.keepPlaying);
 
-    // Respond to swipe events
+    // Respond to swipe events, moving as soon as the finger travels far enough instead of
+    // waiting until it lifts, short flicks still move when the finger lifts
     var touchStartClientX, touchStartClientY;
+    var swiped = false;
     var gameContainer = document.getElementsByClassName('game-container')[0];
+
+    function swipe(clientX, clientY, distance) {
+        var dx = clientX - touchStartClientX;
+        var absDx = Math.abs(dx);
+
+        var dy = clientY - touchStartClientY;
+        var absDy = Math.abs(dy);
+
+        if (!swiped && Math.max(absDx, absDy) > distance) {
+            swiped = true;
+            // (right : left) : (down : up)
+            self.emit('move', absDx > absDy ? (dx > 0 ? 1 : 3) : dy > 0 ? 2 : 0);
+        }
+    }
 
     gameContainer.addEventListener(this.eventTouchstart, function (event) {
         if ((!window.navigator.msPointerEnabled && event.touches.length > 1) || event.targetTouches.length > 1) {
@@ -94,12 +110,18 @@ KeyboardInputManager.prototype.listen = function () {
             touchStartClientX = event.touches[0].clientX;
             touchStartClientY = event.touches[0].clientY;
         }
+        swiped = false;
 
         event.preventDefault();
     });
 
     gameContainer.addEventListener(this.eventTouchmove, function (event) {
         event.preventDefault();
+        if (window.navigator.msPointerEnabled) {
+            swipe(event.pageX, event.pageY, 24);
+        } else if (event.touches.length === 1) {
+            swipe(event.touches[0].clientX, event.touches[0].clientY, 24);
+        }
     });
 
     gameContainer.addEventListener(this.eventTouchend, function (event) {
@@ -107,26 +129,13 @@ KeyboardInputManager.prototype.listen = function () {
             return; // Ignore if still touching with one or more fingers
         }
 
-        var touchEndClientX, touchEndClientY;
-
         if (window.navigator.msPointerEnabled) {
-            touchEndClientX = event.pageX;
-            touchEndClientY = event.pageY;
+            swipe(event.pageX, event.pageY, 10);
         } else {
-            touchEndClientX = event.changedTouches[0].clientX;
-            touchEndClientY = event.changedTouches[0].clientY;
+            swipe(event.changedTouches[0].clientX, event.changedTouches[0].clientY, 10);
         }
-
-        var dx = touchEndClientX - touchStartClientX;
-        var absDx = Math.abs(dx);
-
-        var dy = touchEndClientY - touchStartClientY;
-        var absDy = Math.abs(dy);
-
-        if (Math.max(absDx, absDy) > 10) {
-            // (right : left) : (down : up)
-            self.emit('move', absDx > absDy ? (dx > 0 ? 1 : 3) : dy > 0 ? 2 : 0);
-        }
+        // End the gesture, pointer move events also fire while hovering
+        swiped = true;
     });
 };
 

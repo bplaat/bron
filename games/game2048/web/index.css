@@ -704,6 +704,16 @@ body.is-bwebview-ios {
     height: var(--cell);
     line-height: var(--cell);
 }
+
+/* Snappier moves for rapid swipes, new and merged tiles appear as soon as the slide ends */
+.is-bwebview-ios .tile {
+    transition-duration: 70ms;
+}
+.is-bwebview-ios .tile-new .tile-inner,
+.is-bwebview-ios .tile-merged .tile-inner {
+    animation-duration: 120ms;
+    animation-delay: 70ms;
+}
 .is-bwebview-ios .tile.tile-position-1-1 {
     transform: translate(0, 0);
 }
