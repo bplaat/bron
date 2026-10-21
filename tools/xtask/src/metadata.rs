@@ -21,6 +21,8 @@ pub(crate) struct InstallableApp {
     pub(crate) identifier: String,
     /// Has a [package.metadata.bundle.ios] table
     pub(crate) ios: bool,
+    /// Has a [package.metadata.bundle.android] table
+    pub(crate) android: bool,
 }
 
 pub(crate) fn packages(metadata: &Value) -> Result<&[Value]> {

@@ -266,6 +266,13 @@ Most of these libraries are intended primarily for personal use, but can still b
     cargo xtask install-ios
     ```
 
+- To build and install the Android applications on the first connected adb device or emulator, with the Android SDK, NDK and JDK 17 or 21 installed:
+
+    ```sh
+    rustup target add armv7-linux-androideabi aarch64-linux-android x86_64-linux-android
+    cargo xtask install-android
+    ```
+
 ## Goals
 
 This project is driven by three main goals:
