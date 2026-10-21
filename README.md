@@ -241,7 +241,7 @@ Most of these libraries are intended primarily for personal use, but can still b
 
     ```sh
     rustup target add wasm32-unknown-unknown
-    cargo binstall -y --locked wasm-bindgen-cli --version 0.2.127
+    cargo binstall -y --locked wasm-bindgen-cli --version 0.2.129
     cargo xtask build-pages
     ```
 
