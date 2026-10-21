@@ -1,6 +1,6 @@
 # 2048 Desktop App
 
-An offline desktop 2048 game app.
+An offline 2048 game app for macOS, iOS, Windows, Linux, and Android.
 
 ## Screenshot
 
