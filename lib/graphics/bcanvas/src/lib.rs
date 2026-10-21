@@ -10,7 +10,7 @@
 
 pub use crate::canvas::*;
 mod canvas;
-#[cfg(any(windows, test))]
-#[cfg_attr(not(windows), allow(dead_code))]
+#[cfg(any(windows, target_os = "android", test))]
+#[cfg_attr(not(any(windows, target_os = "android")), allow(dead_code))]
 mod path;
 mod platforms;

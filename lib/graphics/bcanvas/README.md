@@ -1,7 +1,8 @@
 # Bassie Canvas Rust library
 
 Cross-platform 2D drawing for [bwindow](../../ui/bwindow) windows using the system-native
-graphics API: Core Graphics on macOS and iOS, Direct2D on Windows, and Cairo on Linux.
+graphics API: Core Graphics on macOS and iOS, Direct2D on Windows, Cairo on Linux, and
+`android.graphics.Canvas` on Android.
 
 ## Features
 
@@ -53,7 +54,15 @@ method names in snake_case, with getter/setter pairs such as `fill_style()` /
 ## Cursors
 
 Set the cursor over the canvas with `canvas.set_cursor(CursorIcon::Pointer)`.
-`Progress` shows the arrow on macOS, which has no public busy cursor.
+`Progress` shows the arrow on macOS, which has no public busy cursor. Cursors are
+ignored on Android.
+
+## Android
+
+Frames draw directly into the window surface from the Rust main thread with a hardware
+accelerated `android.graphics.Canvas`, through JNI calls with cached method IDs and reused
+paints, and are scheduled with the display choreographer. `clear_rect` reveals the window
+background color. `OffscreenCanvas` draws into an Android bitmap.
 
 ## Offscreen drawing
 
