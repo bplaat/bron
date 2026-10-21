@@ -114,7 +114,7 @@ Options:
   --dmg                     Also create a DMG installer (macOS)
   --ios                     Build an iOS app instead (macOS)
   --android                 Build an Android APK instead
-  --run                     Install and launch on an iOS simulator or the connected Android device
+  --run                     Launch the macOS app, or install and launch on an iOS simulator or the connected Android device
   --device <name-or-UDID>    Select the simulator (with --ios --run)
   --bin <name>              Select the iOS application binary
   --release                 Use release mode with --ios --run (default: debug)

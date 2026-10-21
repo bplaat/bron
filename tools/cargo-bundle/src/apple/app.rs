@@ -6,7 +6,7 @@
 
 use std::fs;
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, exit};
 
 use copy_dir::copy_dir;
 
@@ -224,6 +224,15 @@ pub(crate) fn create_dmg(target_dir: &str, bundle: &BundleMetadata) {
         .status()
         .expect("Failed to run hdiutil");
     assert!(status.success(), "hdiutil failed to create DMG");
+}
+
+/// Run the app's executable in the foreground, attaching its console output.
+pub(crate) fn run(target_dir: &str, bundle: &BundleMetadata) -> ! {
+    let executable = format!("{}/MacOS/{}", contents_dir(target_dir, bundle), bundle.name);
+    let status = Command::new(&executable)
+        .status()
+        .unwrap_or_else(|error| panic!("Failed to run {executable}: {error}"));
+    exit(status.code().unwrap_or(1));
 }
 
 const fn has_icon(bundle: &BundleMetadata) -> bool {

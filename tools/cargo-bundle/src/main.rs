@@ -47,8 +47,8 @@ fn main() -> ExitCode {
         eprintln!("--ios and --android can't be combined");
         return ExitCode::FAILURE;
     }
-    if args.run && !args.ios && !args.android {
-        eprintln!("--run requires --ios or --android");
+    if args.run && !args.ios && !args.android && !cfg!(target_os = "macos") {
+        eprintln!("--run requires --ios or --android on this platform");
         return ExitCode::FAILURE;
     }
     if (args.device.is_some() || args.bin.is_some() || args.release) && !args.ios {
