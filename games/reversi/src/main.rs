@@ -46,28 +46,23 @@ const RESTART_WIDTH: f32 = 176.0;
 const RESTART_HEIGHT: f32 = 52.0;
 const RESTART_X: f32 = BOARD_BACKGROUND_X + (BOARD_BACKGROUND_SIZE - RESTART_WIDTH) / 2.0;
 const RESTART_Y: f32 = BOARD_BACKGROUND_Y + (BOARD_BACKGROUND_SIZE - RESTART_HEIGHT) / 2.0;
-// On iOS the visible area is the board with its labels and status line plus a small margin,
+// On mobile the visible area is the board with its labels and status line plus a small margin,
 // so it fills more of the screen; desktop windows show the whole design area.
-#[cfg(target_os = "ios")]
+const MOBILE: bool = cfg!(any(target_os = "ios", target_os = "android"));
 const STATUS_HEIGHT: f32 = 20.0;
-#[cfg(target_os = "ios")]
 const VIEW_MARGIN: f32 = 8.0;
-#[cfg(target_os = "ios")]
-const VIEW_X: f32 = GRID_OFFSET - VIEW_MARGIN;
-#[cfg(target_os = "ios")]
-const VIEW_Y: f32 = GRID_OFFSET - VIEW_MARGIN;
-#[cfg(target_os = "ios")]
+const VIEW_X: f32 = if MOBILE {
+    GRID_OFFSET - VIEW_MARGIN
+} else {
+    0.0
+};
+const VIEW_Y: f32 = VIEW_X;
 const VIEW_WIDTH: f32 = WINDOW_WIDTH - VIEW_X * 2.0;
-#[cfg(target_os = "ios")]
-const VIEW_HEIGHT: f32 = STATUS_Y + STATUS_HEIGHT / 2.0 + VIEW_MARGIN - VIEW_Y;
-#[cfg(not(target_os = "ios"))]
-const VIEW_X: f32 = 0.0;
-#[cfg(not(target_os = "ios"))]
-const VIEW_Y: f32 = 0.0;
-#[cfg(not(target_os = "ios"))]
-const VIEW_WIDTH: f32 = WINDOW_WIDTH;
-#[cfg(not(target_os = "ios"))]
-const VIEW_HEIGHT: f32 = WINDOW_HEIGHT;
+const VIEW_HEIGHT: f32 = if MOBILE {
+    STATUS_Y + STATUS_HEIGHT / 2.0 + VIEW_MARGIN - VIEW_Y
+} else {
+    WINDOW_HEIGHT
+};
 
 // MARK: Palette
 #[derive(Clone, Copy)]

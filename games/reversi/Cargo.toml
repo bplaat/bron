@@ -20,6 +20,8 @@ entitlements = "meta/apple/macos/Entitlements.plist"
 
 [package.metadata.bundle.ios]
 
+[package.metadata.bundle.android]
+
 [package.metadata.bundle.windows]
 assets = "meta/windows"
 sandbox = true
