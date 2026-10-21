@@ -49,7 +49,12 @@ cargo bundle --path path/to/your/crate
 
 This builds your crate for x86_64 and arm64, links both architectures into a universal binary,
 creates an `.icns` file from the optional iconset, and creates a macOS app bundle in the
-`target/bundle` directory.
+`target/bundle` directory. Add `--run` to launch the app afterwards with its console output
+attached:
+
+```sh
+cargo bundle --path path/to/your/crate --run
+```
 
 ### iOS
 

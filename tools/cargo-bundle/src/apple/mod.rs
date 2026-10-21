@@ -34,4 +34,7 @@ pub(crate) fn bundle(args: &Args, target_dir: &str, manifest: &Manifest) {
     if args.dmg {
         app::create_dmg(target_dir, bundle_metadata);
     }
+    if args.run {
+        app::run(target_dir, bundle_metadata);
+    }
 }
