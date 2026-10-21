@@ -29,13 +29,17 @@ impl PlatformOffscreenCanvas {
                 height as i32,
                 (width * 4) as i32,
             );
-            assert!(!surface.is_null(), "Could not create Cairo bitmap surface");
-            let context = cairo_create(surface);
             assert_eq!(
-                cairo_status(context),
+                cairo_surface_status(surface),
                 0,
-                "Could not create Cairo bitmap canvas"
+                "Could not create Cairo bitmap surface"
             );
+            let context = cairo_create(surface);
+            if cairo_status(context) != 0 {
+                cairo_destroy(context);
+                cairo_surface_destroy(surface);
+                panic!("Could not create Cairo bitmap canvas");
+            }
             Self {
                 surface,
                 context,
@@ -58,10 +62,10 @@ impl PlatformOffscreenCanvas {
             return &self.output;
         }
         unsafe { cairo_surface_flush(self.surface) };
-        let storage = unsafe {
-            std::slice::from_raw_parts(self.storage.as_ptr().cast::<u8>(), self.output.len())
-        };
-        copy_bgra_premultiplied_to_rgba(storage, &mut self.output);
+        // ARGB32 pixels are native-endian words, which are BGRA bytes in little-endian order.
+        for (pixel, output) in self.storage.iter().zip(self.output.as_chunks_mut::<4>().0) {
+            copy_bgra_premultiplied_to_rgba(&pixel.to_le_bytes(), output);
+        }
         self.dirty = false;
         &self.output
     }
