@@ -9,7 +9,9 @@
 use std::time::{Duration, Instant};
 
 use bcanvas::{Color, OffscreenCanvas, TextAlign, TextBaseline};
-use bwindow::{Event, EventLoop, KeyCode, LogicalSize, Theme, WindowBuilder, WindowEvent};
+use bwindow::{
+    Event, EventLoop, KeyCode, LogicalInsets, LogicalSize, Theme, WindowBuilder, WindowEvent,
+};
 
 const BACKGROUND_COLOR: u32 = 0x000000;
 
@@ -25,6 +27,8 @@ struct Gpu {
     overlay_texture: wgpu::Texture,
     overlay_canvas: OffscreenCanvas,
     displayed_fps: u32,
+    // The safe area top and right insets in pixels, which the FPS overlay stays inside.
+    overlay_inset: (f32, f32),
     uniforms: wgpu::Buffer,
     vertices: wgpu::Buffer,
     group: wgpu::BindGroup,
@@ -268,6 +272,7 @@ impl Gpu {
             overlay_texture,
             overlay_canvas,
             displayed_fps: u32::MAX,
+            overlay_inset: (0.0, 0.0),
             uniforms,
             vertices,
             group,
@@ -292,6 +297,11 @@ impl Gpu {
                 view_formats: &[],
             })
             .create_view(&Default::default())
+    }
+
+    fn set_safe_area(&mut self, safe_area: LogicalInsets, window_size: LogicalSize) {
+        let scale = self.surface.size().0 as f32 / window_size.width.max(1.0);
+        self.overlay_inset = (safe_area.top * scale, safe_area.right * scale);
     }
 
     fn resize(&mut self) {
@@ -468,9 +478,10 @@ impl Gpu {
 
             let overlay_width = self.overlay_canvas.width() as f32;
             let overlay_height = self.overlay_canvas.height() as f32;
+            let (top, right) = self.overlay_inset;
             pass.set_viewport(
-                self.config.width as f32 - overlay_width - 8.0,
-                8.0,
+                (self.config.width as f32 - overlay_width - right - 8.0).max(0.0),
+                top + 8.0,
                 overlay_width,
                 overlay_height,
                 0.0,
@@ -652,6 +663,7 @@ fn main() {
         .center()
         .build();
     let mut gpu = Gpu::new(window.attach_content().expect("Attach graphics surface"));
+    gpu.set_safe_area(window.safe_area(), window.size());
     let started = Instant::now();
     let mut frame_rate = FrameRate::default();
     let window_id = window.id();
@@ -664,8 +676,13 @@ fn main() {
                 window.request_animation_frame();
             }
         }
-        Event::Window(id, WindowEvent::Resize(_)) if id == window_id => {
+        Event::Window(id, WindowEvent::Resize(size)) if id == window_id => {
             gpu.resize();
+            gpu.set_safe_area(window.safe_area(), size);
+            window.request_animation_frame();
+        }
+        Event::Window(id, WindowEvent::SafeAreaChanged(safe_area)) if id == window_id => {
+            gpu.set_safe_area(safe_area, window.size());
             window.request_animation_frame();
         }
         Event::Window(id, WindowEvent::KeyDown(event))

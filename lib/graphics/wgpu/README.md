@@ -94,8 +94,8 @@ cargo run -p cargo-bundle -- bundle --path lib/graphics/wgpu/examples/blocks --a
 ```
 
 The surface presents to the whole activity window, under the system bars, so
-`surface.size()` is the window size in pixels. Animation frames are scheduled with the
-display choreographer. The framework replaces the native window when the app returns to the
-foreground: until it exists `get_current_texture` returns `Occluded`, afterwards `Outdated`,
-so configure the surface again on `Resize` or `Outdated`. Surfaces support `Rgba8Unorm` and
-`Rgba8UnormSrgb`.
+`surface.size()` is the window size in pixels. Keep overlays inside `window.safe_area()`.
+Animation frames are scheduled with the display choreographer. The framework replaces the
+native window when the app returns to the foreground: until it exists `get_current_texture`
+returns `Occluded`, afterwards `Outdated`, so configure the surface again on `Resize` or
+`Outdated`. Surfaces support `Rgba8Unorm` and `Rgba8UnormSrgb`.
