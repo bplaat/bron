@@ -13,7 +13,7 @@ use objc2::rc::{Allocated, Retained};
 use objc2::runtime::{AnyObject as Object, Bool};
 use objc2::{class, define_class, msg_send, sel};
 
-use super::context::PlatformCanvasContext;
+use super::context::{PlatformCanvasContext, TextStyleCache};
 use super::headers::*;
 use crate::CanvasRenderingContext2d;
 
@@ -76,9 +76,11 @@ define_class!(
 
         #[unsafe(method(displayFrame:))]
         fn _display_frame(&self, _: *mut Object) {
-            self.set_display_link_paused(true);
+            // Keep the display link running while frames keep being requested.
             if self.ivars().scheduled.get() {
                 self.deliver_animation_frame();
+            } else {
+                self.set_display_link_paused(true);
             }
         }
     }
@@ -105,9 +107,8 @@ impl CanvasView {
             return;
         }
         if !state.painting.get() {
-            if state.scheduled.replace(false) {
-                self.set_display_link_paused(true);
-            }
+            // A running display link pauses itself on its next callback.
+            state.scheduled.set(false);
             let _: () = unsafe { msg_send![self, setNeedsDisplay] };
             return;
         }
@@ -181,6 +182,7 @@ impl CanvasView {
 pub(crate) struct PlatformCanvas {
     view: Retained<CanvasView>,
     attachment: WindowAttachment,
+    text_styles: TextStyleCache,
 }
 
 impl PlatformCanvas {
@@ -222,7 +224,11 @@ impl PlatformCanvas {
             let close = view.clone();
             attachment.on_close(move || close.close());
             view.request_redraw();
-            Self { view, attachment }
+            Self {
+                view,
+                attachment,
+                text_styles: TextStyleCache::default(),
+            }
         }
     }
 
@@ -250,7 +256,7 @@ impl PlatformCanvas {
             return false;
         };
         let mut context = CanvasRenderingContext2d::new(
-            unsafe { PlatformCanvasContext::new(frame.context) },
+            unsafe { PlatformCanvasContext::new(frame.context, self.text_styles.clone()) },
             frame.width,
             frame.height,
             frame.scale,
