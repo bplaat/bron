@@ -78,10 +78,13 @@ pub(super) fn system_theme() -> Theme {
     }
 }
 
-// The window's `android.view.Surface`, only used on the Rust main thread.
+// The window's `android.view.Surface` and native window with its generation, only used on
+// the Rust main thread.
 thread_local! {
     #[allow(clippy::missing_const_for_thread_local, reason = "false positive without native TLS")]
     static SURFACE: RefCell<Option<GlobalRef>> = const { RefCell::new(None) };
+    #[allow(clippy::missing_const_for_thread_local, reason = "false positive without native TLS")]
+    static WINDOW: Cell<(*mut ANativeWindow, u64)> = const { Cell::new((null_mut(), 0)) };
 }
 
 /// The window's `android.view.Surface`, null while the window has no surface.
@@ -95,8 +98,17 @@ pub fn android_surface() -> jobject {
     })
 }
 
+/// The window's `ANativeWindow`, null while the window has no surface, and a generation
+/// that changes with every new native window. Must be called on the Rust main thread,
+/// the native window stays valid during the current task.
+pub fn android_native_window() -> (*mut c_void, u64) {
+    let (window, generation) = WINDOW.get();
+    (window.cast(), generation)
+}
+
 /// Use a new native window, or none when null.
 pub(super) fn set_window(window: *mut ANativeWindow) {
+    WINDOW.set((window, WINDOW.get().1 + 1));
     let env = JniEnv::current();
     let surface = (!window.is_null()).then(|| unsafe {
         update_window_size(window);
