@@ -19,8 +19,12 @@ fn main() {
     if target_os == "android" {
         // The WebView callbacks are Java classes, embedded as dex and loaded at runtime.
         let out_dir = PathBuf::from(env::var_os("OUT_DIR").expect("OUT_DIR not set"));
-        android_build::compile_dex(Path::new("android"), &out_dir, android_build::MIN_SDK)
-            .unwrap_or_else(|error| panic!("{error}"));
+        android_build::compile_dex(
+            Path::new("src/platforms/android"),
+            &out_dir,
+            android_build::MIN_SDK,
+        )
+        .unwrap_or_else(|error| panic!("{error}"));
     }
     let target_vendor =
         env::var("CARGO_CFG_TARGET_VENDOR").expect("CARGO_CFG_TARGET_VENDOR not set");
