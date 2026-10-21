@@ -234,6 +234,10 @@ extern "C" fn release_action(data: *mut c_void, _: *mut c_void) {
     drop(unsafe { Box::from_raw(data.cast::<String>()) });
 }
 
+#[cfg_attr(
+    not(feature = "menu"),
+    allow(clippy::missing_const_for_fn, reason = "a GTK signal callback")
+)]
 extern "C" fn activate_custom(_: *mut GSimpleAction, _: *mut GVariant, _data: *const String) {
     #[cfg(feature = "menu")]
     super::event_loop::send_event(crate::Event::Action(unsafe { &*_data }.clone()));

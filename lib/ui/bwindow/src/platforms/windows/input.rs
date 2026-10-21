@@ -88,6 +88,10 @@ pub fn windows_key_event(key: u32, lparam: isize, state: ButtonState) -> Keyboar
 
 /// Translate a WebView2 accelerator using the application's native shortcut table.
 /// Call on the owning UI thread with the live parent window handle.
+#[allow(
+    clippy::missing_const_for_fn,
+    reason = "only const without the menu feature"
+)]
 pub fn windows_translate_accelerator(
     window: *mut std::ffi::c_void,
     key: u32,
