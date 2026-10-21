@@ -272,7 +272,8 @@ public final class Bwebview {
     }
 
     // MARK: Responses
-    private record Response(int status, String reason, HashMap<String, String> headers, byte[] body) {}
+    private record Response(int status, String reason, HashMap<String, String> headers, byte[] body) {
+    }
 
     private static String header(HashMap<String, String> headers, String name) {
         for (var header : headers.entrySet()) {
