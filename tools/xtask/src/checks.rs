@@ -125,7 +125,7 @@ impl Xtask {
             "examples/macos",
             "examples/wii",
             "games/empires",
-            "lib/ui/bwebview/android",
+            "lib/ui/bwebview/src/platforms/android",
             "tools/nds-toolchain",
             "tools/wii-toolchain",
         ] {
