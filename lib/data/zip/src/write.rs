@@ -14,9 +14,28 @@ use crate::{
 /// Appends a file to a single-disk, non-ZIP64 archive, preserving existing entries verbatim.
 /// Returns an error if the name already exists. The reader must also support writing and seeking.
 pub fn append_file<R: Read + Write + Seek>(
+    reader: R,
+    name: &str,
+    data: &[u8],
+) -> Result<(), ZipError> {
+    append(reader, name, data, true)
+}
+
+/// Appends an uncompressed file like [`append_file`], for entries that are memory-mapped
+/// in place, like Android native libraries.
+pub fn append_stored_file<R: Read + Write + Seek>(
+    reader: R,
+    name: &str,
+    data: &[u8],
+) -> Result<(), ZipError> {
+    append(reader, name, data, false)
+}
+
+fn append<R: Read + Write + Seek>(
     mut reader: R,
     name: &str,
     data: &[u8],
+    compress: bool,
 ) -> Result<(), ZipError> {
     if name.is_empty()
         || name.starts_with(['/', '\\'])
@@ -59,11 +78,10 @@ pub fn append_file<R: Read + Write + Seek>(
     reader.seek(SeekFrom::Start(end.directory_offset as u64))?;
     reader.read_exact(&mut directory)?;
     let offset = u32::try_from(length).map_err(|_| ZipError::InvalidZip("archive too large"))?;
-    let compressed = deflate::compress(data, deflate::Level::Default);
-    let (method, payload) = if compressed.len() < data.len() {
-        (8u16, compressed.as_slice())
-    } else {
-        (0u16, data)
+    let compressed = compress.then(|| deflate::compress(data, deflate::Level::Default));
+    let (method, payload) = match &compressed {
+        Some(compressed) if compressed.len() < data.len() => (8u16, compressed.as_slice()),
+        _ => (0u16, data),
     };
     let compressed_size = payload.len() as u32;
     let checksum = CRC32.checksum(data);
@@ -153,6 +171,30 @@ mod tests {
         assert!(append_file(&mut archive, "classes.dex", b"duplicate").is_err());
         archive.set_position(0);
         assert!(append_file(&mut archive, "../escape", b"bad").is_err());
+    }
+
+    #[test]
+    fn stored_files_keep_their_bytes_uncompressed() {
+        let mut bytes = b"PK\x05\x06".to_vec();
+        bytes.extend_from_slice(&[0; 18]);
+        let mut archive = Cursor::new(bytes);
+        let data = vec![7; 4096];
+        append_stored_file(&mut archive, "lib/arm64-v8a/libapp.so", &data).unwrap();
+        assert!(
+            archive
+                .get_ref()
+                .windows(data.len())
+                .any(|window| window == data)
+        );
+        archive.set_position(0);
+        let mut extracted = Vec::new();
+        ZipArchive::new(&mut archive)
+            .unwrap()
+            .by_index(0)
+            .unwrap()
+            .read_to_end(&mut extracted)
+            .unwrap();
+        assert_eq!(extracted, data);
     }
 
     #[test]

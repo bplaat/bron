@@ -16,7 +16,7 @@ use crate::metadata::{dos_timestamp, extra_timestamp};
 
 mod metadata;
 mod write;
-pub use write::append_file;
+pub use write::{append_file, append_stored_file};
 
 const MAX_UNCOMPRESSED_SIZE: usize = 128 * 1024 * 1024;
 const MAX_COMPRESSED_SIZE: usize = 128 * 1024 * 1024;
