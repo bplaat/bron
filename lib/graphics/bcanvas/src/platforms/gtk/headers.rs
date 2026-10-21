@@ -53,6 +53,16 @@ pub(super) struct CairoTextExtents {
 }
 
 #[repr(C)]
+#[derive(Default)]
+pub(super) struct CairoFontExtents {
+    pub(super) ascent: f64,
+    pub(super) descent: f64,
+    pub(super) height: f64,
+    pub(super) max_x_advance: f64,
+    pub(super) max_y_advance: f64,
+}
+
+#[repr(C)]
 pub(super) struct CairoPath([u8; 0]);
 
 unsafe extern "C" {
@@ -79,6 +89,7 @@ unsafe extern "C" {
     pub(super) fn cairo_get_current_point(cr: *mut c_void, x: *mut f64, y: *mut f64);
     pub(super) fn cairo_has_current_point(cr: *mut c_void) -> i32;
     pub(super) fn cairo_clip(cr: *mut c_void);
+    pub(super) fn cairo_clip_preserve(cr: *mut c_void);
     pub(super) fn cairo_translate(cr: *mut c_void, x: f64, y: f64);
     pub(super) fn cairo_scale(cr: *mut c_void, x: f64, y: f64);
     pub(super) fn cairo_get_matrix(cr: *mut c_void, m: *mut CairoMatrix);
@@ -104,6 +115,7 @@ unsafe extern "C" {
         text: *const c_char,
         extents: *mut CairoTextExtents,
     );
+    pub(super) fn cairo_font_extents(cr: *mut c_void, extents: *mut CairoFontExtents);
     pub(super) fn cairo_show_text(cr: *mut c_void, text: *const c_char);
     #[cfg(test)]
     pub(super) fn cairo_image_surface_create(format: i32, width: i32, height: i32) -> *mut c_void;
@@ -116,6 +128,7 @@ unsafe extern "C" {
     ) -> *mut c_void;
     #[cfg(test)]
     pub(super) fn cairo_image_surface_get_data(surface: *mut c_void) -> *mut u8;
+    pub(super) fn cairo_surface_status(surface: *mut c_void) -> i32;
     pub(super) fn cairo_surface_flush(surface: *mut c_void);
     pub(super) fn cairo_surface_destroy(surface: *mut c_void);
     pub(super) fn cairo_create(surface: *mut c_void) -> *mut c_void;
