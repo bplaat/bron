@@ -72,7 +72,7 @@ impl Xtask {
     }
 
     fn run(&self, task: &str, package: Option<&str>) -> Result<()> {
-        if package.is_some() && !matches!(task, "install" | "install-ios") {
+        if package.is_some() && !matches!(task, "install" | "install-ios" | "install-android") {
             bail!("task {task} does not accept a package");
         }
         match task {
@@ -90,6 +90,7 @@ impl Xtask {
             "coverage" => self.coverage(),
             "install" => self.install(package),
             "install-ios" => self.install_ios(package),
+            "install-android" => self.install_android(package),
             "help" | "--help" | "-h" => {
                 Self::print_help();
                 Ok(())
@@ -121,6 +122,9 @@ impl Xtask {
         println!("  clean            Remove generated files");
         println!("  install [name]   Install all applications or only the named package");
         println!("  install-ios [name]        Install iOS applications on the booted simulators");
+        println!(
+            "  install-android [name]    Install Android applications on the first adb device"
+        );
     }
 
     fn ensure_npm_deps(&self) -> Result<()> {

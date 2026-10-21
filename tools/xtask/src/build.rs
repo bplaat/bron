@@ -341,6 +341,36 @@ impl Xtask {
         Ok(())
     }
 
+    pub(crate) fn install_android(&self, selected: Option<&str>) -> Result<()> {
+        let apps: Vec<_> = self
+            .installable_apps(true)?
+            .into_iter()
+            .filter(|app| app.android && selected.is_none_or(|selected| app.package == selected))
+            .collect();
+        if let Some(selected) = selected
+            && apps.is_empty()
+        {
+            bail!("no Android application bundle: {selected}");
+        }
+
+        let adb = android_build::adb();
+        let output = capture(Command::new(&adb).arg("devices"))?;
+        let device = String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .skip(1)
+            .find_map(|line| line.strip_suffix("\tdevice").map(str::to_owned))
+            .context("no Android device connected, start an emulator or connect a device")?;
+
+        self.build_bundles(&apps, &["--android"])?;
+        for app in apps {
+            let apk = self.bundle_output(&app, "", "apk")?;
+            run(Command::new(&adb)
+                .args(["-s", &device, "install", "-r"])
+                .arg(&apk))?;
+        }
+        Ok(())
+    }
+
     fn bundle_output(
         &self,
         app: &InstallableApp,
@@ -469,6 +499,7 @@ function Install-Bundle($Path) {{
                 identifier,
                 name,
                 ios: bundle.is_some_and(|bundle| bundle.get("ios").is_some()),
+                android: bundle.is_some_and(|bundle| bundle.get("android").is_some()),
             });
         }
         Ok(apps)
