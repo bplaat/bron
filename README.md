@@ -122,8 +122,8 @@ Most of these libraries are intended primarily for personal use, but can still b
 - [gxtexconv](lib/graphics/gxtexconv) A GameCube / Wii TPL texture converter library and CLI, replacing devkitPro's gxtexconv
 - [image](lib/graphics/image) A minimal JPEG, PNG/APNG, GIF, BMP, and QOI image decoder crate
 - [vector](lib/graphics/vector) SVG (subset) and TinyVG decoders with a backend-neutral display list
-- [wgpu](lib/graphics/wgpu) A native GPU rendering library for bwindow
-- [wgpu-shader-build](lib/graphics/wgpu-shader-build) Build-time native WGSL compilation for wgpu
+- [bwebgpu](lib/graphics/bwebgpu) A native GPU rendering library for bwindow
+- [bwebgpu-shader-build](lib/graphics/bwebgpu-shader-build) Build-time native WGSL compilation for bwebgpu
 
 **Apple**
 

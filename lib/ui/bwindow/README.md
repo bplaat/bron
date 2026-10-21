@@ -2,7 +2,8 @@
 
 Cross-platform native windows and a main event loop for Rust, using AppKit on macOS,
 UIKit on iOS, Win32 on Windows, GTK 3 on Linux, and an Activity on Android. Add
-[bcanvas](../../graphics/bcanvas) for native 2D drawing or [bwebview](../bwebview) for web content.
+[bcanvas](../../graphics/bcanvas) for native 2D drawing, [bwebgpu](../../graphics/bwebgpu)
+for native 3D drawing or [bwebview](../bwebview) for web content.
 
 ## Getting Started
 
@@ -137,7 +138,7 @@ use JNI. Android 8.0 (API 26) is the minimum.
 - stdout, stderr, and panics are written to logcat with the binary name as tag.
 - The `dialog`, `file_drop`, `menu`, and `progress_bar` features are unsupported.
 - Content backends that need Java, like bwebview, embed their own dex and load it with
-  `DexClassLoader`. Native backends, like wgpu, present to `android_native_window()`.
+  `DexClassLoader`. Native backends, like bwebgpu, present to `android_native_window()`.
 
 ## License
 
