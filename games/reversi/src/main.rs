@@ -14,8 +14,9 @@ use bcanvas::{
     CanvasBuilder, CanvasRenderingContext2d, Color, CursorIcon, FontWeight, TextAlign, TextBaseline,
 };
 use bwindow::{
-    Accelerator, Event, EventLoopBuilder, Key, KeyCode, LogicalPoint, LogicalSize, MenuBarBuilder,
-    MenuBuilder, MenuItem, Modifiers, MouseButton, MouseEvent, Theme, WindowBuilder, WindowEvent,
+    Accelerator, Event, EventLoopBuilder, Key, KeyCode, LogicalInsets, LogicalPoint, LogicalSize,
+    MenuBarBuilder, MenuBuilder, MenuItem, Modifiers, MouseButton, MouseEvent, Theme,
+    WindowBuilder, WindowEvent,
 };
 use reversi_engine::{CellState, Move, Othello, Player};
 
@@ -267,7 +268,7 @@ impl Game {
 }
 
 // MARK: Layout
-/// Maps the fixed size game coordinate space centered into the window.
+/// Maps the fixed size game coordinate space centered into the window's safe area.
 #[derive(Clone, Copy)]
 struct GameLayout {
     scale: f32,
@@ -277,14 +278,14 @@ struct GameLayout {
 }
 
 impl GameLayout {
-    fn new(size: LogicalSize) -> Self {
-        let scale = (size.width / VIEW_WIDTH)
-            .min(size.height / VIEW_HEIGHT)
-            .max(0.01);
+    fn new(size: LogicalSize, safe_area: LogicalInsets) -> Self {
+        let width = (size.width - safe_area.left - safe_area.right).max(0.0);
+        let height = (size.height - safe_area.top - safe_area.bottom).max(0.0);
+        let scale = (width / VIEW_WIDTH).min(height / VIEW_HEIGHT).max(0.01);
         Self {
             scale,
-            offset_x: (size.width - VIEW_WIDTH * scale) / 2.0 - VIEW_X * scale,
-            offset_y: (size.height - VIEW_HEIGHT * scale) / 2.0 - VIEW_Y * scale,
+            offset_x: safe_area.left + (width - VIEW_WIDTH * scale) / 2.0 - VIEW_X * scale,
+            offset_y: safe_area.top + (height - VIEW_HEIGHT * scale) / 2.0 - VIEW_Y * scale,
             size,
         }
     }
@@ -358,14 +359,16 @@ fn main() {
     let mut canvas = CanvasBuilder::new(&window).build();
 
     let mut game = Game::default();
-    let mut layout = GameLayout::new(LogicalSize::new(WINDOW_WIDTH, WINDOW_HEIGHT));
+    let mut layout = GameLayout::new(window.size(), window.safe_area());
     let mut smoke_test = smoke.then(|| SmokeTest::new(&event_loop));
     event_loop.run(move |event| {
         let mut changed = false;
         match event {
             Event::Window(id, WindowEvent::RedrawRequested) if id == window_id => {
+                let safe_area = window.safe_area();
                 assert!(canvas.draw(|context| {
-                    layout = GameLayout::new(LogicalSize::new(context.width(), context.height()));
+                    let size = LogicalSize::new(context.width(), context.height());
+                    layout = GameLayout::new(size, safe_area);
                     draw(context, &game, Palette::for_theme(theme), layout);
                 }));
                 if let Some(smoke_test) = &mut smoke_test {
@@ -373,8 +376,12 @@ fn main() {
                 }
             }
             Event::Window(_, WindowEvent::Resize(size)) => {
-                layout = GameLayout::new(size);
+                layout = GameLayout::new(size, window.safe_area());
                 game.hover = Hover::None;
+                window.request_redraw();
+            }
+            Event::Window(_, WindowEvent::SafeAreaChanged(safe_area)) => {
+                layout = GameLayout::new(window.size(), safe_area);
                 window.request_redraw();
             }
             Event::Window(_, WindowEvent::ThemeChanged(new_theme)) => {
@@ -707,7 +714,7 @@ mod tests {
 
     #[test]
     fn restart_button_only_activates_when_the_game_is_over() {
-        let layout = GameLayout::new(LogicalSize::new(900.0, 900.0));
+        let layout = GameLayout::new(LogicalSize::new(900.0, 900.0), LogicalInsets::default());
         let center = LogicalPoint::new(
             (RESTART_X + RESTART_WIDTH / 2.0) * 1.5,
             (RESTART_Y + RESTART_HEIGHT / 2.0) * 1.5,
@@ -733,7 +740,7 @@ mod tests {
 
     #[test]
     fn hit_testing_excludes_gutters_and_scales_with_the_board() {
-        let layout = GameLayout::new(LogicalSize::new(900.0, 900.0));
+        let layout = GameLayout::new(LogicalSize::new(900.0, 900.0), LogicalInsets::default());
         let point = LogicalPoint::new(
             (BOARD_X + 3.0 * CELL_STEP + CELL / 2.0) * 1.5,
             (BOARD_Y + 2.0 * CELL_STEP + CELL / 2.0) * 1.5,
@@ -814,13 +821,24 @@ mod tests {
 
     #[test]
     fn game_layout_centers_with_a_fixed_aspect_ratio() {
-        let wide = GameLayout::new(LogicalSize::new(1_000.0, 800.0));
+        let wide = GameLayout::new(LogicalSize::new(1_000.0, 800.0), LogicalInsets::default());
         assert_eq!(wide.scale, 4.0 / 3.0);
         assert_eq!((wide.offset_x, wide.offset_y), (100.0, 0.0));
 
-        let tall = GameLayout::new(LogicalSize::new(720.0, 1_000.0));
+        let tall = GameLayout::new(LogicalSize::new(720.0, 1_000.0), LogicalInsets::default());
         assert_eq!(tall.scale, 1.2);
         assert_eq!((tall.offset_x, tall.offset_y), (0.0, 140.0));
+    }
+
+    #[test]
+    fn game_layout_fits_inside_the_safe_area() {
+        let safe_area = LogicalInsets::new(60.0, 0.0, 40.0, 0.0);
+        let layout = GameLayout::new(LogicalSize::new(720.0, 1_000.0), safe_area);
+        assert_eq!(layout.scale, 1.2);
+        assert_eq!((layout.offset_x, layout.offset_y), (0.0, 150.0));
+        let inset = GameLayout::new(LogicalSize::new(1_000.0, 800.0), safe_area);
+        assert_eq!(inset.scale, 700.0 / VIEW_HEIGHT);
+        assert_eq!(inset.offset_y, 60.0 - VIEW_Y * inset.scale);
     }
 
     #[test]
