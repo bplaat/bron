@@ -1,6 +1,7 @@
 # cargo-bundle
 
-A simple Cargo plugin that builds macOS and iOS app bundles and Windows MSIX packages.
+A simple Cargo plugin that builds macOS and iOS app bundles, Windows MSIX packages and Android
+APKs.
 
 ## Usage
 
@@ -93,6 +94,45 @@ so it can be installed on Windows 11 from an administrator PowerShell:
 ```powershell
 Add-AppxPackage -Path ExampleApp.msixbundle -AllowUnsigned -ForceUpdateFromAnyVersion
 ```
+
+### Android
+
+Build a signed APK for armeabi-v7a, arm64-v8a and x86_64 with `--android`, add `--run` to install and
+start it on the connected device and follow its logcat output:
+
+```sh
+cargo bundle --path path/to/your/crate --android --run
+```
+
+The app must use [bwindow](../../lib/ui/bwindow). The bundle identifier is the Android package
+name, so every segment must start with a letter. All Android settings are optional:
+
+```toml
+[package.metadata.bundle.android]
+min_sdk_version = 26 # the default and the lowest supported level
+target_sdk_version = 37 # defaults to the highest installed platform
+manifest = "meta/android/AndroidManifest.xml"
+res_dir = "meta/android/res"
+```
+
+The SDK, NDK, and JDK are found with [android-build](../../lib/build/android-build): through
+`ANDROID_HOME` (default `~/Library/Android/sdk` on macOS and `~/Android/Sdk` on Linux), the
+newest platform and build-tools, the newest NDK or `ANDROID_NDK_HOME`, and JDK 17 or 21 for
+`apksigner` and `keytool`.
+The Rust targets are installed with
+`rustup target add armv7-linux-androideabi aarch64-linux-android x86_64-linux-android`.
+The bundler:
+
+1. Builds the binary as a shared library with the NDK clang, exporting only the
+   `ANativeActivity_onCreate` entry point of bwindow.
+2. Generates an `AndroidManifest.xml` without code that launches `android.app.NativeActivity`
+   with the library, then merges the
+   manifest file: its attributes on `<manifest>`, `<uses-sdk>`, `<application>`, and on
+   elements with the same `android:name` win, other elements are appended.
+3. Compiles and links the resources directory as-is with aapt2, a
+   `mipmap*/ic_launcher` resource becomes the app icon.
+4. Adds the uncompressed native libraries, aligns them to 16 KB pages,
+   and signs the APK with `~/.android/debug.keystore`, creating that keystore when missing.
 
 ## License
 

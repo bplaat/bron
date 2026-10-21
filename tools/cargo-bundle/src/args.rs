@@ -14,6 +14,7 @@ pub(crate) struct Args {
     pub zip: bool,
     pub dmg: bool,
     pub ios: bool,
+    pub android: bool,
     pub run: bool,
     pub release: bool,
     pub device: Option<String>,
@@ -29,6 +30,7 @@ impl Default for Args {
             zip: false,
             dmg: false,
             ios: false,
+            android: false,
             run: false,
             release: false,
             device: None,
@@ -73,6 +75,10 @@ fn parse(arguments: impl IntoIterator<Item = String>) -> Args {
                 args.help = false;
                 args.ios = true;
             }
+            "--android" => {
+                args.help = false;
+                args.android = true;
+            }
             "--run" => {
                 args.help = false;
                 args.run = true;
@@ -107,7 +113,8 @@ Options:
   --zip                     Also create a zip archive (macOS)
   --dmg                     Also create a DMG installer (macOS)
   --ios                     Build an iOS app instead (macOS)
-  --run                     Install and launch on an iOS simulator, attaching console output
+  --android                 Build an Android APK instead
+  --run                     Install and launch on an iOS simulator or the connected Android device
   --device <name-or-UDID>    Select the simulator (with --ios --run)
   --bin <name>              Select the iOS application binary
   --release                 Use release mode with --ios --run (default: debug)

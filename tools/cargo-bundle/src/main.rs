@@ -11,6 +11,7 @@ use std::process::{ExitCode, exit};
 
 use crate::manifest::Manifest;
 
+mod android;
 #[cfg(target_os = "macos")]
 mod apple;
 mod args;
@@ -42,8 +43,16 @@ fn main() -> ExitCode {
         return ExitCode::SUCCESS;
     }
 
-    if (args.run || args.device.is_some() || args.bin.is_some() || args.release) && !args.ios {
-        eprintln!("--run, --device, --bin and --release require --ios");
+    if args.ios && args.android {
+        eprintln!("--ios and --android can't be combined");
+        return ExitCode::FAILURE;
+    }
+    if args.run && !args.ios && !args.android {
+        eprintln!("--run requires --ios or --android");
+        return ExitCode::FAILURE;
+    }
+    if (args.device.is_some() || args.bin.is_some() || args.release) && !args.ios {
+        eprintln!("--device, --bin and --release require --ios");
         return ExitCode::FAILURE;
     }
     if args.device.is_some() && !args.run {
@@ -62,9 +71,18 @@ fn main() -> ExitCode {
     );
 
     let target_dir = format!("target/bundle/{}", manifest.package.name);
-    #[cfg(target_os = "macos")]
-    apple::bundle(&args, &target_dir, &manifest);
-    #[cfg(windows)]
-    windows::bundle(&args, &target_dir, &manifest);
+    if args.android {
+        android::bundle(&args, &target_dir, &manifest);
+    } else {
+        #[cfg(target_os = "macos")]
+        apple::bundle(&args, &target_dir, &manifest);
+        #[cfg(windows)]
+        windows::bundle(&args, &target_dir, &manifest);
+        #[cfg(not(any(target_os = "macos", windows)))]
+        {
+            eprintln!("Only --android bundles are supported on this platform");
+            return ExitCode::FAILURE;
+        }
+    }
     ExitCode::SUCCESS
 }
