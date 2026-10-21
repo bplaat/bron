@@ -1,7 +1,7 @@
 # wgpu Rust library
 
 A native GPU rendering library for [bwindow](../../ui/bwindow) and offscreen bitmaps,
-backed by Metal on macOS and iOS, Vulkan on Linux, and Direct3D 12 on Windows.
+backed by Metal on macOS and iOS, Direct3D 12 on Windows, and Vulkan on Linux.
 
 Despite sharing its name and part of its API with upstream `wgpu`, this crate is
 not API-compatible with it and is not a replacement. It currently supports the
@@ -22,8 +22,8 @@ code.
 
 | Operating system | Backends               | Fallback                                              |
 | ---------------- | ---------------------- | ----------------------------------------------------- |
-| Windows          | Direct3D 12 (fl 11_0+) | D3D12 hardware, then the D3D12 WARP software renderer |
 | macOS / iOS      | Metal                  | None                                                  |
+| Windows          | Direct3D 12 (fl 11_0+) | D3D12 hardware, then the D3D12 WARP software renderer |
 | Linux            | Vulkan 1.1+            | A software Vulkan implementation, when installed      |
 
 ## Getting Started

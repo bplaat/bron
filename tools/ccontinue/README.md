@@ -20,7 +20,7 @@ ccc [options] <file.cc>
 | `-r`        | Run the linked binary after building           |
 
 `ccc` uses the platform C compiler selected by the Rust `cc` crate (for example,
-GCC on Linux and MSVC on Windows). Set `CC` to select another C compiler, `LD`
+MSVC on Windows and GCC on Linux). Set `CC` to select another C compiler, `LD`
 to select the linker used by GNU-like compilers, `CFLAGS` to add compile flags,
 and `LDFLAGS` to add linker flags.
 
