@@ -51,8 +51,8 @@ fn main() -> ExitCode {
         eprintln!("--run requires --ios or --android on this platform");
         return ExitCode::FAILURE;
     }
-    if (args.device.is_some() || args.bin.is_some() || args.release) && !args.ios {
-        eprintln!("--device, --bin and --release require --ios");
+    if (args.device.is_some() || args.release) && !args.ios {
+        eprintln!("--device and --release require --ios");
         return ExitCode::FAILURE;
     }
     if args.device.is_some() && !args.run {

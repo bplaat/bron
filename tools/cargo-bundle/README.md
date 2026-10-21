@@ -72,8 +72,8 @@ an available one, and opens Simulator.app. Use `--device <name-or-UDID>` to sele
 use a UDID if names are ambiguous. An existing instance of the app is replaced on launch.
 
 `--run` uses a debug build; add `--release` for an optimized build. Bundling without `--run`
-still uses release mode. Use `--bin <name>` for packages with multiple binaries. Cargo's
-reported executable path is used, including when `CARGO_TARGET_DIR` is configured.
+still uses release mode. Cargo's reported executable path is used, including when
+`CARGO_TARGET_DIR` is configured.
 The application and its dependencies must support iOS; the runner does not translate desktop APIs.
 
 The generated iOS Info.plist supports iPhone and iPad, portrait and landscape on iPhone, and all

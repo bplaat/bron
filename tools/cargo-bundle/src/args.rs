@@ -18,7 +18,6 @@ pub(crate) struct Args {
     pub run: bool,
     pub release: bool,
     pub device: Option<String>,
-    pub bin: Option<String>,
 }
 
 impl Default for Args {
@@ -34,7 +33,6 @@ impl Default for Args {
             run: false,
             release: false,
             device: None,
-            bin: None,
         }
     }
 }
@@ -84,16 +82,12 @@ fn parse(arguments: impl IntoIterator<Item = String>) -> Args {
                 args.run = true;
             }
             "--release" => args.release = true,
-            "--device" | "--bin" => {
+            "--device" => {
                 let value = args_iter.next().unwrap_or_else(|| {
                     eprintln!("Expected value after {arg}");
                     exit(1);
                 });
-                if arg == "--device" {
-                    args.device = Some(value);
-                } else {
-                    args.bin = Some(value);
-                }
+                args.device = Some(value);
             }
             _ => {
                 eprintln!("Unknown argument: {arg}");
@@ -116,7 +110,6 @@ Options:
   --android                 Build an Android APK instead
   --run                     Launch the macOS app, or install and launch on an iOS simulator or the connected Android device
   --device <name-or-UDID>    Select the simulator (with --ios --run)
-  --bin <name>              Select the iOS application binary
   --release                 Use release mode with --ios --run (default: debug)
   -h, --help                Print this help message
   -v, --version             Print the version number
@@ -137,8 +130,6 @@ mod tests {
                 "--run",
                 "--device",
                 "iPhone",
-                "--bin",
-                "app",
                 "--release",
             ]
             .map(str::to_string),
@@ -146,6 +137,5 @@ mod tests {
         assert!(!args.help);
         assert!(args.ios && args.run && args.release);
         assert_eq!(args.device.as_deref(), Some("iPhone"));
-        assert_eq!(args.bin.as_deref(), Some("app"));
     }
 }

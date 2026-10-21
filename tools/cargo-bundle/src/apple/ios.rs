@@ -38,7 +38,7 @@ pub(crate) fn bundle(args: &Args, target_dir: &str, manifest: &Manifest) {
         fs::create_dir(&app).expect("Can't create bundle directory");
     }
 
-    let executable = build_executable(args);
+    let executable = build_executable(args, &package.name);
     fs::copy(executable, format!("{app}/{}", bundle.name)).expect("Failed to copy executable");
 
     let mut info = bundle_info(&bundle.name, &bundle.identifier, &package.version, "APPL");
@@ -203,13 +203,15 @@ fn prepare_simulator(selected: Option<&str>) -> String {
     device.udid
 }
 
-fn build_executable(args: &Args) -> String {
+fn build_executable(args: &Args, name: &str) -> String {
     let mut command = Command::new("cargo");
     command
         .args([
             "build",
             "--manifest-path",
             &format!("{}/Cargo.toml", args.path),
+            "--bin",
+            name,
             "--target",
             TARGET,
             "--message-format=json-render-diagnostics",
@@ -219,13 +221,8 @@ fn build_executable(args: &Args) -> String {
     if !args.run || args.release {
         command.arg("--release");
     }
-    if let Some(binary) = &args.bin {
-        command.args(["--bin", binary]);
-    } else {
-        command.arg("--bins");
-    }
     let mut child = command.spawn().expect("Failed to run cargo build");
-    let mut executables = Vec::new();
+    let mut executable = None;
     for line in BufReader::new(child.stdout.take().expect("Missing Cargo output")).lines() {
         let line = line.expect("Failed to read Cargo output");
         let message: serde_json::Value = serde_json::from_str(&line).expect("Invalid Cargo JSON");
@@ -237,21 +234,16 @@ fn build_executable(args: &Args) -> String {
             && message["target"]["kind"]
                 .as_array()
                 .is_some_and(|kinds| kinds.iter().any(|kind| kind == "bin"))
-            && let Some(executable) = message["executable"].as_str()
+            && let Some(path) = message["executable"].as_str()
         {
-            executables.push(executable.to_string());
+            executable = Some(path.to_string());
         }
     }
     assert!(
         child.wait().expect("Failed to wait for Cargo").success(),
         "iOS build failed; ensure rustup target add {TARGET} and the Xcode iOS SDK are installed"
     );
-    assert_eq!(
-        executables.len(),
-        1,
-        "Expected one application binary; select one with --bin <name>"
-    );
-    executables.pop().expect("Missing application executable")
+    executable.expect("Missing application executable")
 }
 
 #[cfg(test)]
