@@ -11,9 +11,7 @@ use std::ops::Deref;
 use std::ptr::{NonNull, null_mut};
 use std::rc::Rc;
 
-#[cfg(test)]
-use super::headers::GUID;
-use super::headers::IUnknownVtbl;
+use super::headers::{GUID, IUnknownVtbl};
 
 /// One owned COM reference. Canvas COM objects stay on the window thread.
 pub(crate) struct ComPtr<T> {
@@ -37,6 +35,30 @@ impl<T> ComPtr<T> {
 
     pub(crate) const fn as_ptr(&self) -> *mut T {
         self.pointer.as_ptr()
+    }
+
+    /// Share this reference as its base interface. Interface Deref impls only
+    /// reinterpret the same pointer, because COM bases are vtable prefixes.
+    pub(crate) fn upcast<U>(&self) -> ComPtr<U>
+    where
+        T: Deref<Target = U>,
+    {
+        let base = self.clone();
+        let pointer = NonNull::from(&**base);
+        std::mem::forget(base);
+        ComPtr {
+            pointer,
+            _thread: PhantomData,
+        }
+    }
+
+    /// The IID must identify interface U.
+    pub(crate) unsafe fn query<U>(&self, iid: &GUID) -> Result<ComPtr<U>, i32> {
+        unsafe {
+            ComPtr::create(|out: *mut *mut U| {
+                (self.unknown().QueryInterface)(self.as_ptr().cast(), iid, out.cast())
+            })
+        }
     }
 
     fn unknown(&self) -> &IUnknownVtbl {

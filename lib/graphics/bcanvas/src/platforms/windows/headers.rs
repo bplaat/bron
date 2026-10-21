@@ -10,6 +10,7 @@
 #![allow(clippy::too_many_arguments, clippy::upper_case_acronyms)]
 
 use std::ffi::c_void;
+use std::ops::Deref;
 
 pub(super) use bwindow::ffi::*;
 
@@ -52,7 +53,7 @@ struct ID2D1FactoryVtbl {
     CreateDCRenderTarget: unsafe extern "system" fn(
         *mut ID2D1Factory,
         *const D2D1_RENDER_TARGET_PROPERTIES,
-        *mut *mut ID2D1HwndRenderTarget,
+        *mut *mut ID2D1DCRenderTarget,
     ) -> i32,
 }
 
@@ -102,7 +103,7 @@ impl ID2D1Factory {
     pub(super) unsafe fn CreateDCRenderTarget(
         &self,
         properties: *const D2D1_RENDER_TARGET_PROPERTIES,
-    ) -> Result<ComPtr<ID2D1HwndRenderTarget>, i32> {
+    ) -> Result<ComPtr<ID2D1DCRenderTarget>, i32> {
         unsafe {
             ComPtr::create(|out| {
                 ((*self.lpVtbl).CreateDCRenderTarget)(
@@ -116,82 +117,76 @@ impl ID2D1Factory {
 }
 
 #[repr(C)]
-pub(super) struct ID2D1HwndRenderTarget {
-    lpVtbl: *const ID2D1HwndRenderTargetVtbl,
+pub(super) struct ID2D1RenderTarget {
+    lpVtbl: *const ID2D1RenderTargetVtbl,
 }
 
 #[repr(C)]
-struct ID2D1HwndRenderTargetVtbl {
+struct ID2D1RenderTargetVtbl {
     base: IUnknownVtbl,
     _unused_3_7: [*const c_void; 5],
     CreateSolidColorBrush: unsafe extern "system" fn(
-        *mut ID2D1HwndRenderTarget,
+        *mut ID2D1RenderTarget,
         *const D2D1_COLOR_F,
         *const c_void,
         *mut *mut ID2D1SolidColorBrush,
     ) -> i32,
     _unused_9_15: [*const c_void; 7],
     DrawRectangle: unsafe extern "system" fn(
-        *mut ID2D1HwndRenderTarget,
+        *mut ID2D1RenderTarget,
         *const D2D_RECT_F,
         *mut ID2D1SolidColorBrush,
         f32,
         *mut ID2D1StrokeStyle,
     ),
     FillRectangle: unsafe extern "system" fn(
-        *mut ID2D1HwndRenderTarget,
+        *mut ID2D1RenderTarget,
         *const D2D_RECT_F,
         *mut ID2D1SolidColorBrush,
     ),
     _unused_18_21: [*const c_void; 4],
     DrawGeometry: unsafe extern "system" fn(
-        *mut ID2D1HwndRenderTarget,
+        *mut ID2D1RenderTarget,
         *mut ID2D1PathGeometry,
         *mut ID2D1SolidColorBrush,
         f32,
         *mut ID2D1StrokeStyle,
     ),
     FillGeometry: unsafe extern "system" fn(
-        *mut ID2D1HwndRenderTarget,
+        *mut ID2D1RenderTarget,
         *mut ID2D1PathGeometry,
         *mut ID2D1SolidColorBrush,
         *mut ID2D1SolidColorBrush,
     ),
-    _unused_24_26: [*const c_void; 3],
-    DrawText: unsafe extern "system" fn(
-        *mut ID2D1HwndRenderTarget,
-        *const u16,
-        u32,
-        *mut IDWriteTextFormat,
-        *const D2D_RECT_F,
+    _unused_24_27: [*const c_void; 4],
+    DrawTextLayout: unsafe extern "system" fn(
+        *mut ID2D1RenderTarget,
+        D2D_POINT_2F,
+        *mut IDWriteTextLayout,
         *mut ID2D1SolidColorBrush,
         u32,
-        u32,
     ),
-    _unused_28_29: [*const c_void; 2],
-    SetTransform: unsafe extern "system" fn(*mut ID2D1HwndRenderTarget, *const D2D_MATRIX_3X2_F),
+    _unused_29_29: [*const c_void; 1],
+    SetTransform: unsafe extern "system" fn(*mut ID2D1RenderTarget, *const D2D_MATRIX_3X2_F),
     _unused_31_39: [*const c_void; 9],
     PushLayer: unsafe extern "system" fn(
-        *mut ID2D1HwndRenderTarget,
+        *mut ID2D1RenderTarget,
         *const D2D1_LAYER_PARAMETERS,
         *mut c_void,
     ),
-    PopLayer: unsafe extern "system" fn(*mut ID2D1HwndRenderTarget),
+    PopLayer: unsafe extern "system" fn(*mut ID2D1RenderTarget),
     _unused_42_44: [*const c_void; 3],
-    PushAxisAlignedClip:
-        unsafe extern "system" fn(*mut ID2D1HwndRenderTarget, *const D2D_RECT_F, u32),
-    PopAxisAlignedClip: unsafe extern "system" fn(*mut ID2D1HwndRenderTarget),
-    Clear: unsafe extern "system" fn(*mut ID2D1HwndRenderTarget, *const D2D1_COLOR_F),
-    BeginDraw: unsafe extern "system" fn(*mut ID2D1HwndRenderTarget),
-    EndDraw: unsafe extern "system" fn(*mut ID2D1HwndRenderTarget, *mut u64, *mut u64) -> i32,
+    PushAxisAlignedClip: unsafe extern "system" fn(*mut ID2D1RenderTarget, *const D2D_RECT_F, u32),
+    PopAxisAlignedClip: unsafe extern "system" fn(*mut ID2D1RenderTarget),
+    Clear: unsafe extern "system" fn(*mut ID2D1RenderTarget, *const D2D1_COLOR_F),
+    BeginDraw: unsafe extern "system" fn(*mut ID2D1RenderTarget),
+    EndDraw: unsafe extern "system" fn(*mut ID2D1RenderTarget, *mut u64, *mut u64) -> i32,
     _unused_50_50: [*const c_void; 1],
-    SetDpi: unsafe extern "system" fn(*mut ID2D1HwndRenderTarget, f32, f32),
+    SetDpi: unsafe extern "system" fn(*mut ID2D1RenderTarget, f32, f32),
     _unused_52_56: [*const c_void; 5],
-    BindDC: unsafe extern "system" fn(*mut ID2D1HwndRenderTarget, HDC, *const RECT) -> i32,
-    Resize: unsafe extern "system" fn(*mut ID2D1HwndRenderTarget, *const D2D_SIZE_U) -> i32,
 }
 
-impl ID2D1HwndRenderTarget {
+impl ID2D1RenderTarget {
     pub(super) unsafe fn CreateSolidColorBrush(
         &self,
         color: *const D2D1_COLOR_F,
@@ -264,26 +259,20 @@ impl ID2D1HwndRenderTarget {
             )
         }
     }
-    pub(super) unsafe fn DrawText(
+    pub(super) unsafe fn DrawTextLayout(
         &self,
-        text: *const u16,
-        length: u32,
-        format: *mut IDWriteTextFormat,
-        rect: *const D2D_RECT_F,
+        origin: D2D_POINT_2F,
+        layout: *mut IDWriteTextLayout,
         brush: *mut ID2D1SolidColorBrush,
         options: u32,
-        measuring_mode: u32,
     ) {
         unsafe {
-            ((*self.lpVtbl).DrawText)(
+            ((*self.lpVtbl).DrawTextLayout)(
                 self as *const Self as *mut Self,
-                text,
-                length,
-                format,
-                rect,
+                origin,
+                layout,
                 brush,
                 options,
-                measuring_mode,
             )
         }
     }
@@ -326,6 +315,21 @@ impl ID2D1HwndRenderTarget {
     pub(super) unsafe fn SetDpi(&self, x: f32, y: f32) {
         unsafe { ((*self.lpVtbl).SetDpi)(self as *const Self as *mut Self, x, y) }
     }
+}
+
+#[repr(C)]
+pub(super) struct ID2D1HwndRenderTarget {
+    lpVtbl: *const ID2D1HwndRenderTargetVtbl,
+}
+
+#[repr(C)]
+struct ID2D1HwndRenderTargetVtbl {
+    base: ID2D1RenderTargetVtbl,
+    _unused_57_57: [*const c_void; 1],
+    Resize: unsafe extern "system" fn(*mut ID2D1HwndRenderTarget, *const D2D_SIZE_U) -> i32,
+}
+
+impl ID2D1HwndRenderTarget {
     pub(super) unsafe fn Resize(&self, size: *const D2D_SIZE_U) -> Result<(), i32> {
         unsafe {
             check(((*self.lpVtbl).Resize)(
@@ -334,7 +338,20 @@ impl ID2D1HwndRenderTarget {
             ))
         }
     }
+}
 
+#[repr(C)]
+pub(super) struct ID2D1DCRenderTarget {
+    lpVtbl: *const ID2D1DCRenderTargetVtbl,
+}
+
+#[repr(C)]
+struct ID2D1DCRenderTargetVtbl {
+    base: ID2D1RenderTargetVtbl,
+    BindDC: unsafe extern "system" fn(*mut ID2D1DCRenderTarget, HDC, *const RECT) -> i32,
+}
+
+impl ID2D1DCRenderTarget {
     pub(super) unsafe fn BindDC(&self, dc: HDC, rect: *const RECT) -> Result<(), i32> {
         unsafe {
             check(((*self.lpVtbl).BindDC)(
@@ -343,6 +360,39 @@ impl ID2D1HwndRenderTarget {
                 rect,
             ))
         }
+    }
+}
+
+// Derived render targets begin with the ID2D1RenderTarget vtable.
+impl Deref for ID2D1HwndRenderTarget {
+    type Target = ID2D1RenderTarget;
+    fn deref(&self) -> &ID2D1RenderTarget {
+        unsafe { &*(self as *const Self).cast() }
+    }
+}
+impl Deref for ID2D1DCRenderTarget {
+    type Target = ID2D1RenderTarget;
+    fn deref(&self) -> &ID2D1RenderTarget {
+        unsafe { &*(self as *const Self).cast() }
+    }
+}
+
+/// Direct2D 1.1 interface, queried from a render target on Windows 8 and later.
+#[repr(C)]
+pub(super) struct ID2D1DeviceContext {
+    lpVtbl: *const ID2D1DeviceContextVtbl,
+}
+
+#[repr(C)]
+struct ID2D1DeviceContextVtbl {
+    base: ID2D1RenderTargetVtbl,
+    _unused_57_77: [*const c_void; 21],
+    SetPrimitiveBlend: unsafe extern "system" fn(*mut ID2D1DeviceContext, u32),
+}
+
+impl ID2D1DeviceContext {
+    pub(super) unsafe fn SetPrimitiveBlend(&self, blend: u32) {
+        unsafe { ((*self.lpVtbl).SetPrimitiveBlend)(self as *const Self as *mut Self, blend) }
     }
 }
 
@@ -532,11 +582,32 @@ pub(super) struct IDWriteTextLayout {
 #[repr(C)]
 struct IDWriteTextLayoutVtbl {
     base: IUnknownVtbl,
-    _unused_3_59: [*const c_void; 57],
+    _unused_3_58: [*const c_void; 56],
+    GetLineMetrics: unsafe extern "system" fn(
+        *mut IDWriteTextLayout,
+        *mut DWRITE_LINE_METRICS,
+        u32,
+        *mut u32,
+    ) -> i32,
     GetMetrics: unsafe extern "system" fn(*mut IDWriteTextLayout, *mut DWRITE_TEXT_METRICS) -> i32,
 }
 
 impl IDWriteTextLayout {
+    pub(super) unsafe fn GetLineMetrics(
+        &self,
+        metrics: *mut DWRITE_LINE_METRICS,
+        capacity: u32,
+        count: *mut u32,
+    ) -> Result<(), i32> {
+        unsafe {
+            check(((*self.lpVtbl).GetLineMetrics)(
+                self as *const Self as *mut Self,
+                metrics,
+                capacity,
+                count,
+            ))
+        }
+    }
     pub(super) unsafe fn GetMetrics(&self, metrics: *mut DWRITE_TEXT_METRICS) -> Result<(), i32> {
         unsafe {
             check(((*self.lpVtbl).GetMetrics)(
@@ -549,7 +620,20 @@ impl IDWriteTextLayout {
 
 #[repr(C)]
 pub(super) struct ID2D1SolidColorBrush {
-    _vtable: *const IUnknownVtbl,
+    lpVtbl: *const ID2D1SolidColorBrushVtbl,
+}
+
+#[repr(C)]
+struct ID2D1SolidColorBrushVtbl {
+    base: IUnknownVtbl,
+    _unused_3_7: [*const c_void; 5],
+    SetColor: unsafe extern "system" fn(*mut ID2D1SolidColorBrush, *const D2D1_COLOR_F),
+}
+
+impl ID2D1SolidColorBrush {
+    pub(super) unsafe fn SetColor(&self, color: *const D2D1_COLOR_F) {
+        unsafe { ((*self.lpVtbl).SetColor)(self as *const Self as *mut Self, color) }
+    }
 }
 
 #[repr(C)]
@@ -563,6 +647,12 @@ const IID_ID2D1_FACTORY: GUID = GUID {
     data2: 0x6f50,
     data3: 0x465a,
     data4: [0x92, 0x45, 0x11, 0x8b, 0xfd, 0x3b, 0x60, 0x07],
+};
+pub(super) const IID_ID2D1_DEVICE_CONTEXT: GUID = GUID {
+    data1: 0xe8f7fe7a,
+    data2: 0x191c,
+    data3: 0x466d,
+    data4: [0xad, 0x95, 0x97, 0x56, 0x78, 0xbd, 0xa9, 0x98],
 };
 const IID_IDWRITE_FACTORY: GUID = GUID {
     data1: 0xb859ee5a,
@@ -721,6 +811,17 @@ pub(super) struct DWRITE_TEXT_METRICS {
     pub(super) lineCount: u32,
 }
 
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub(super) struct DWRITE_LINE_METRICS {
+    pub(super) length: u32,
+    pub(super) trailingWhitespaceLength: u32,
+    pub(super) newlineLength: u32,
+    pub(super) height: f32,
+    pub(super) baseline: f32,
+    pub(super) isTrimmed: BOOL,
+}
+
 impl D2D_MATRIX_3X2_F {
     pub(super) const fn identity() -> Self {
         Self {
@@ -736,6 +837,7 @@ impl D2D_MATRIX_3X2_F {
 
 pub(super) const D2D1_ALPHA_MODE_UNKNOWN: u32 = 0;
 pub(super) const D2D1_ALPHA_MODE_PREMULTIPLIED: u32 = 1;
+pub(super) const D2D1_RENDER_TARGET_TYPE_SOFTWARE: u32 = 1;
 pub(super) const DXGI_FORMAT_UNKNOWN: u32 = 0;
 pub(super) const DXGI_FORMAT_B8G8R8A8_UNORM: u32 = 87;
 pub(super) const D2D1_ANTIALIAS_MODE_PER_PRIMITIVE: u32 = 0;
@@ -747,11 +849,12 @@ pub(super) const D2D1_FIGURE_END_CLOSED: u32 = 1;
 pub(super) const D2D1_CAP_STYLE_FLAT: u32 = 0;
 pub(super) const D2D1_CAP_STYLE_SQUARE: u32 = 1;
 pub(super) const D2D1_CAP_STYLE_ROUND: u32 = 2;
-pub(super) const D2D1_LINE_JOIN_MITER: u32 = 0;
 pub(super) const D2D1_LINE_JOIN_BEVEL: u32 = 1;
 pub(super) const D2D1_LINE_JOIN_ROUND: u32 = 2;
+pub(super) const D2D1_LINE_JOIN_MITER_OR_BEVEL: u32 = 3;
+pub(super) const D2D1_PRIMITIVE_BLEND_SOURCE_OVER: u32 = 0;
+pub(super) const D2D1_PRIMITIVE_BLEND_COPY: u32 = 1;
 pub(super) const D2D1_DRAW_TEXT_OPTIONS_NONE: u32 = 0;
-pub(super) const DWRITE_MEASURING_MODE_NATURAL: u32 = 0;
 pub(super) const DWRITE_FONT_WEIGHT_NORMAL: u32 = 400;
 pub(super) const DWRITE_FONT_WEIGHT_BOLD: u32 = 700;
 pub(super) const DWRITE_FONT_STYLE_NORMAL: u32 = 0;
@@ -766,23 +869,26 @@ const _: () = {
     assert!(std::mem::offset_of!(ID2D1FactoryVtbl, CreateStrokeStyle) == 11 * slot);
     assert!(std::mem::offset_of!(ID2D1FactoryVtbl, CreateHwndRenderTarget) == 14 * slot);
     assert!(std::mem::offset_of!(ID2D1FactoryVtbl, CreateDCRenderTarget) == 16 * slot);
-    assert!(std::mem::offset_of!(ID2D1HwndRenderTargetVtbl, CreateSolidColorBrush) == 8 * slot);
-    assert!(std::mem::offset_of!(ID2D1HwndRenderTargetVtbl, DrawRectangle) == 16 * slot);
-    assert!(std::mem::offset_of!(ID2D1HwndRenderTargetVtbl, FillRectangle) == 17 * slot);
-    assert!(std::mem::offset_of!(ID2D1HwndRenderTargetVtbl, DrawGeometry) == 22 * slot);
-    assert!(std::mem::offset_of!(ID2D1HwndRenderTargetVtbl, FillGeometry) == 23 * slot);
-    assert!(std::mem::offset_of!(ID2D1HwndRenderTargetVtbl, DrawText) == 27 * slot);
-    assert!(std::mem::offset_of!(ID2D1HwndRenderTargetVtbl, SetTransform) == 30 * slot);
-    assert!(std::mem::offset_of!(ID2D1HwndRenderTargetVtbl, PushLayer) == 40 * slot);
-    assert!(std::mem::offset_of!(ID2D1HwndRenderTargetVtbl, PopLayer) == 41 * slot);
-    assert!(std::mem::offset_of!(ID2D1HwndRenderTargetVtbl, PushAxisAlignedClip) == 45 * slot);
-    assert!(std::mem::offset_of!(ID2D1HwndRenderTargetVtbl, PopAxisAlignedClip) == 46 * slot);
-    assert!(std::mem::offset_of!(ID2D1HwndRenderTargetVtbl, Clear) == 47 * slot);
-    assert!(std::mem::offset_of!(ID2D1HwndRenderTargetVtbl, BeginDraw) == 48 * slot);
-    assert!(std::mem::offset_of!(ID2D1HwndRenderTargetVtbl, EndDraw) == 49 * slot);
-    assert!(std::mem::offset_of!(ID2D1HwndRenderTargetVtbl, SetDpi) == 51 * slot);
-    assert!(std::mem::offset_of!(ID2D1HwndRenderTargetVtbl, BindDC) == 57 * slot);
+    assert!(std::mem::offset_of!(ID2D1RenderTargetVtbl, CreateSolidColorBrush) == 8 * slot);
+    assert!(std::mem::offset_of!(ID2D1RenderTargetVtbl, DrawRectangle) == 16 * slot);
+    assert!(std::mem::offset_of!(ID2D1RenderTargetVtbl, FillRectangle) == 17 * slot);
+    assert!(std::mem::offset_of!(ID2D1RenderTargetVtbl, DrawGeometry) == 22 * slot);
+    assert!(std::mem::offset_of!(ID2D1RenderTargetVtbl, FillGeometry) == 23 * slot);
+    assert!(std::mem::offset_of!(ID2D1RenderTargetVtbl, DrawTextLayout) == 28 * slot);
+    assert!(std::mem::offset_of!(ID2D1RenderTargetVtbl, SetTransform) == 30 * slot);
+    assert!(std::mem::offset_of!(ID2D1RenderTargetVtbl, PushLayer) == 40 * slot);
+    assert!(std::mem::offset_of!(ID2D1RenderTargetVtbl, PopLayer) == 41 * slot);
+    assert!(std::mem::offset_of!(ID2D1RenderTargetVtbl, PushAxisAlignedClip) == 45 * slot);
+    assert!(std::mem::offset_of!(ID2D1RenderTargetVtbl, PopAxisAlignedClip) == 46 * slot);
+    assert!(std::mem::offset_of!(ID2D1RenderTargetVtbl, Clear) == 47 * slot);
+    assert!(std::mem::offset_of!(ID2D1RenderTargetVtbl, BeginDraw) == 48 * slot);
+    assert!(std::mem::offset_of!(ID2D1RenderTargetVtbl, EndDraw) == 49 * slot);
+    assert!(std::mem::offset_of!(ID2D1RenderTargetVtbl, SetDpi) == 51 * slot);
+    assert!(size_of::<ID2D1RenderTargetVtbl>() == 57 * slot);
     assert!(std::mem::offset_of!(ID2D1HwndRenderTargetVtbl, Resize) == 58 * slot);
+    assert!(std::mem::offset_of!(ID2D1DCRenderTargetVtbl, BindDC) == 57 * slot);
+    assert!(std::mem::offset_of!(ID2D1DeviceContextVtbl, SetPrimitiveBlend) == 78 * slot);
+    assert!(std::mem::offset_of!(ID2D1SolidColorBrushVtbl, SetColor) == 8 * slot);
     assert!(std::mem::offset_of!(ID2D1PathGeometryVtbl, Open) == 17 * slot);
     assert!(std::mem::offset_of!(ID2D1GeometrySinkVtbl, SetFillMode) == 3 * slot);
     assert!(std::mem::offset_of!(ID2D1GeometrySinkVtbl, BeginFigure) == 5 * slot);
@@ -795,6 +901,7 @@ const _: () = {
     assert!(std::mem::offset_of!(IDWriteFactoryVtbl, CreateTextLayout) == 18 * slot);
     assert!(std::mem::offset_of!(IDWriteTextFormatVtbl, SetTextAlignment) == 3 * slot);
     assert!(std::mem::offset_of!(IDWriteTextFormatVtbl, SetParagraphAlignment) == 4 * slot);
+    assert!(std::mem::offset_of!(IDWriteTextLayoutVtbl, GetLineMetrics) == 59 * slot);
     assert!(std::mem::offset_of!(IDWriteTextLayoutVtbl, GetMetrics) == 60 * slot);
     assert!(size_of::<D2D_POINT_2F>() == 8);
     assert!(size_of::<D2D_MATRIX_3X2_F>() == 24);
@@ -809,6 +916,7 @@ const _: () = {
     assert!(size_of::<D2D1_QUADRATIC_BEZIER_SEGMENT>() == 16);
     assert!(size_of::<D2D1_LAYER_PARAMETERS>() == if slot == 8 { 72 } else { 60 });
     assert!(size_of::<DWRITE_TEXT_METRICS>() == 36);
+    assert!(size_of::<DWRITE_LINE_METRICS>() == 24);
 };
 
 pub(super) const CS_VREDRAW: u32 = 0x0001;
@@ -951,6 +1059,13 @@ mod tests {
             layout.GetMetrics(&mut metrics).expect("metrics");
             assert!(metrics.width > 0.0 && metrics.height > 0.0);
             assert_eq!(metrics.lineCount, 1);
+            let mut line = DWRITE_LINE_METRICS::default();
+            let mut count = 0;
+            layout
+                .GetLineMetrics(&mut line, 1, &mut count)
+                .expect("line metrics");
+            assert_eq!(count, 1);
+            assert!(line.baseline > 0.0 && line.baseline < line.height);
         }
     }
 }
