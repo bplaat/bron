@@ -21,6 +21,7 @@ pub use crate::types::*;
 
 #[cfg(any(
     target_os = "linux",
+    target_os = "android",
     target_os = "freebsd",
     target_os = "dragonfly",
     target_os = "openbsd",
@@ -31,15 +32,16 @@ mod allocation;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 #[path = "platforms/apple/mod.rs"]
 mod platform;
-// GTK with Vulkan, on Linux and the BSDs.
+// Vulkan, with GTK on Linux and the BSDs.
 #[cfg(any(
     target_os = "linux",
+    target_os = "android",
     target_os = "freebsd",
     target_os = "dragonfly",
     target_os = "openbsd",
     target_os = "netbsd"
 ))]
-#[path = "platforms/linux/mod.rs"]
+#[path = "platforms/vulkan/mod.rs"]
 mod platform;
 #[cfg(target_os = "windows")]
 #[path = "platforms/windows/mod.rs"]
@@ -56,9 +58,10 @@ mod types;
     target_os = "dragonfly",
     target_os = "openbsd",
     target_os = "netbsd",
-    target_os = "windows"
+    target_os = "windows",
+    target_os = "android"
 )))]
-compile_error!("This crate supports macOS, iOS, Linux, the BSDs, and Windows only");
+compile_error!("This crate supports macOS, iOS, Windows, Linux, the BSDs, and Android only");
 
 #[cfg(not(any(feature = "image", feature = "window")))]
 compile_error!("Enable the `image` feature, the `window` feature, or both");

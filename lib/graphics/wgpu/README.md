@@ -1,7 +1,7 @@
 # wgpu Rust library
 
 A native GPU rendering library for [bwindow](../../ui/bwindow) and offscreen bitmaps,
-backed by Metal on macOS and iOS, Direct3D 12 on Windows, and Vulkan on Linux.
+backed by Metal on macOS and iOS, Direct3D 12 on Windows, and Vulkan on Linux and Android.
 
 Despite sharing its name and part of its API with upstream `wgpu`, this crate is
 not API-compatible with it and is not a replacement. It currently supports the
@@ -15,7 +15,7 @@ groups, shaders, pipelines, render passes, and bitmap readback.
   [image](../image) bitmaps
 
 At least one feature must be enabled. Disable default features and enable only
-`image` for headless rendering without any GTK, AppKit view, or Win32 window
+`image` for headless rendering without any GTK, AppKit view, Win32, or Android window
 code.
 
 ## Backends
@@ -25,6 +25,7 @@ code.
 | macOS / iOS      | Metal                  | None                                                  |
 | Windows          | Direct3D 12 (fl 11_0+) | D3D12 hardware, then the D3D12 WARP software renderer |
 | Linux            | Vulkan 1.1+            | A software Vulkan implementation, when installed      |
+| Android          | Vulkan 1.1+            | None                                                  |
 
 ## Getting Started
 
@@ -82,3 +83,19 @@ cargo run -p cargo-bundle -- bundle --path lib/graphics/wgpu/examples/blocks --i
 This requires the Xcode iOS Simulator SDK and runtime, the Metal compiler, and the
 `aarch64-apple-ios-sim` Rust target. Add `--device <name-or-UDID>` to select a simulator.
 The iOS surface uses a CAMetalLayer and on-demand CADisplayLink animation callbacks.
+
+## Android
+
+From the workspace root, build, install and launch the blocks example on the connected
+device or emulator with:
+
+```sh
+cargo run -p cargo-bundle -- bundle --path lib/graphics/wgpu/examples/blocks --android --run
+```
+
+The surface presents to the whole activity window, under the system bars, so
+`surface.size()` is the window size in pixels. Animation frames are scheduled with the
+display choreographer. The framework replaces the native window when the app returns to the
+foreground: until it exists `get_current_texture` returns `Occluded`, afterwards `Outdated`,
+so configure the surface again on `Resize` or `Outdated`. Surfaces support `Rgba8Unorm` and
+`Rgba8UnormSrgb`.

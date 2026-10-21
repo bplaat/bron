@@ -252,6 +252,21 @@ pub type wl_display = c_void;
 pub type wl_surface = c_void;
 #[repr(C)]
 #[derive(Clone, Copy)]
+pub struct AndroidSurfaceCreateInfoKHR {
+    pub s_type: StructureType,
+    pub p_next: *const c_void,
+    pub flags: AndroidSurfaceCreateFlagsKHR,
+    pub window: *mut ANativeWindow,
+}
+impl Default for AndroidSurfaceCreateInfoKHR {
+    fn default() -> Self {
+        unsafe { std::mem::zeroed() }
+    }
+}
+pub type AndroidSurfaceCreateFlagsKHR = u32;
+pub type ANativeWindow = c_void;
+#[repr(C)]
+#[derive(Clone, Copy)]
 pub struct SurfaceFormatKHR {
     pub format: Format,
     pub color_space: ColorSpaceKHR,
@@ -1453,6 +1468,12 @@ pub type CreateWaylandSurfaceKHR = unsafe extern "system" fn(
     p_allocator: *const AllocationCallbacks,
     p_surface: *mut SurfaceKHR,
 ) -> i32;
+pub type CreateAndroidSurfaceKHR = unsafe extern "system" fn(
+    instance: Instance,
+    p_create_info: *const AndroidSurfaceCreateInfoKHR,
+    p_allocator: *const AllocationCallbacks,
+    p_surface: *mut SurfaceKHR,
+) -> i32;
 pub type GetPhysicalDeviceSurfaceSupportKHR = unsafe extern "system" fn(
     physical_device: PhysicalDevice,
     queue_family_index: u32,
@@ -1838,7 +1859,7 @@ unsafe extern "C" {
     pub(super) fn dlclose(library: *mut c_void) -> i32;
 }
 
-#[cfg(feature = "window")]
+#[cfg(all(feature = "window", not(target_os = "android")))]
 unsafe extern "C" {
     pub(super) fn gtk_widget_get_window(widget: *mut c_void) -> *mut c_void;
     pub(super) fn gtk_widget_get_scale_factor(widget: *mut c_void) -> i32;
@@ -1887,7 +1908,7 @@ pub(super) struct WindowAttributes {
     pub type_hint: i32,
 }
 
-#[cfg(feature = "window")]
+#[cfg(all(feature = "window", not(target_os = "android")))]
 unsafe extern "C" {
     pub(super) fn gtk_drawing_area_new() -> *mut c_void;
     pub(super) fn g_object_ref_sink(object: *mut c_void) -> *mut c_void;
@@ -1917,7 +1938,7 @@ unsafe extern "C" {
     pub(super) fn g_type_check_instance_is_a(instance: *mut c_void, type_: usize) -> i32;
 }
 
-#[cfg(feature = "window")]
+#[cfg(all(feature = "window", not(target_os = "android")))]
 unsafe extern "C" {
     pub(super) fn g_object_get_data(object: *mut c_void, key: *const c_char) -> *mut c_void;
     pub(super) fn g_object_set_data(object: *mut c_void, key: *const c_char, data: *mut c_void);
@@ -1928,7 +1949,7 @@ unsafe extern "C" {
     pub(super) fn gdk_window_get_update_area(window: *mut c_void) -> *mut c_void;
 }
 
-#[cfg(feature = "window")]
+#[cfg(all(feature = "window", not(target_os = "android")))]
 // The BSDs only ship versioned library names, which the linker resolves from `cairo`.
 #[cfg_attr(
     target_os = "linux",
