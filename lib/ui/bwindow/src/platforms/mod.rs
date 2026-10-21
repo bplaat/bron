@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025 Bastiaan van der Plaat
+ * Copyright (c) 2025-2026 Bastiaan van der Plaat
  *
  * SPDX-License-Identifier: MIT
  */
@@ -27,7 +27,16 @@ cfg_select! {
         pub(crate) use crate::platforms::windows::*;
         pub(crate) mod windows;
     }
+    target_os = "android" => {
+        pub(crate) use crate::platforms::android::*;
+        pub(crate) mod android;
+    }
     _ => {
         compile_error!("Unsupported platform");
     }
 }
+
+// The input translation is plain Rust, so its tests also run on the host.
+#[cfg(all(test, not(target_os = "android")))]
+#[path = "android/input.rs"]
+mod android_input;

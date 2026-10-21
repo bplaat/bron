@@ -36,9 +36,14 @@ mod window;
 #[doc(hidden)]
 #[allow(missing_docs)]
 pub mod ffi {
-    #[cfg(all(not(any(target_vendor = "apple", windows)), feature = "file_drop"))]
+    #[cfg(target_os = "android")]
+    pub use crate::platforms::android::ffi::*;
+    #[cfg(all(
+        not(any(target_vendor = "apple", target_os = "android", windows)),
+        feature = "file_drop"
+    ))]
     pub use crate::platforms::gtk::file_drop::*;
-    #[cfg(not(any(target_vendor = "apple", windows)))]
+    #[cfg(not(any(target_vendor = "apple", target_os = "android", windows)))]
     pub use crate::platforms::gtk::input::*;
     #[cfg(target_os = "ios")]
     pub use crate::platforms::ios::input::*;

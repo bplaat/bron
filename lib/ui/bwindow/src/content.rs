@@ -21,6 +21,8 @@ pub enum NativeWindowHandle {
     Win32(*mut c_void),
     /// A GTK 3 GtkWindow pointer.
     Gtk(*mut c_void),
+    /// A JNI global reference to the `android.app.NativeActivity`.
+    Android(*mut c_void),
 }
 
 type ResizeHandler = Rc<dyn Fn(u32, u32)>;
@@ -73,6 +75,18 @@ impl ContentHost {
 
     pub(crate) fn set_background(&self, color: u32) {
         self.background.set(Some(color));
+    }
+
+    /// The configured background color.
+    #[cfg(target_os = "android")]
+    pub(crate) const fn background(&self) -> Option<u32> {
+        self.background.get()
+    }
+
+    /// Whether a content backend draws the window.
+    #[cfg(target_os = "android")]
+    pub(crate) fn draws_content(&self) -> bool {
+        self.redraw.borrow().is_some()
     }
 
     pub(crate) fn theme_changed(self: &Rc<Self>, theme: crate::Theme) {

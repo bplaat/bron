@@ -15,7 +15,7 @@ fn main() {
     let target_os = env::var("CARGO_CFG_TARGET_OS").expect("CARGO_CFG_TARGET_OS not set");
     let target_vendor =
         env::var("CARGO_CFG_TARGET_VENDOR").expect("CARGO_CFG_TARGET_VENDOR not set");
-    if target_vendor != "apple" && target_os != "windows" {
+    if target_vendor != "apple" && !matches!(target_os.as_str(), "windows" | "android") {
         let search_dirs = search_dirs();
         let gtk = require_library(&search_dirs, "gtk-3");
         let gdk = require_library(&search_dirs, "gdk-3");
