@@ -10,7 +10,7 @@ use std::process::{Command, exit};
 use std::thread::sleep;
 use std::time::Duration;
 
-use self::manifest::{ManifestInfo, is_valid_identifier};
+use self::manifest::{ManifestInfo, is_valid_identifier, normalize_identifier};
 use self::toolchain::Toolchain;
 use crate::args::Args;
 use crate::manifest::Manifest;
@@ -43,7 +43,8 @@ pub(crate) fn bundle(args: &Args, target_dir: &str, manifest: &Manifest) {
     let bundle = &package.metadata.bundle;
     assert_file_name(&bundle.name, "bundle name");
     let android = bundle.android.clone().unwrap_or_default();
-    let identifier = bundle.identifier.as_str();
+    let identifier = normalize_identifier(&bundle.identifier);
+    let identifier = identifier.as_str();
     if !is_valid_identifier(identifier) {
         fail(&format!(
             "Invalid bundle identifier {identifier} for Android: every segment must start with a \
