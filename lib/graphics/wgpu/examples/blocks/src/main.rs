@@ -10,7 +10,9 @@ use std::num::NonZeroU64;
 use std::time::{Duration, Instant};
 
 use bcanvas::{Color, OffscreenCanvas, TextAlign, TextBaseline};
-use bwindow::{Event, EventLoop, KeyCode, LogicalSize, Theme, WindowBuilder, WindowEvent};
+use bwindow::{
+    Event, EventLoop, KeyCode, LogicalInsets, LogicalSize, Theme, WindowBuilder, WindowEvent,
+};
 
 mod world;
 
@@ -44,6 +46,8 @@ struct Gpu {
     overlay_texture: wgpu::Texture,
     overlay_canvas: OffscreenCanvas,
     displayed_fps: u32,
+    // The safe area top and right insets in pixels, which the FPS overlay stays inside.
+    overlay_inset: (f32, f32),
     uniforms: wgpu::Buffer,
     opaque_count: u32,
     face_count: u32,
@@ -286,6 +290,7 @@ impl Gpu {
             overlay_texture,
             overlay_canvas,
             displayed_fps: u32::MAX,
+            overlay_inset: (0.0, 0.0),
             uniforms,
             opaque_count,
             face_count,
@@ -390,6 +395,11 @@ impl Gpu {
             .create_view(&Default::default())
     }
 
+    fn set_safe_area(&mut self, safe_area: LogicalInsets, window_size: LogicalSize) {
+        let scale = self.surface.size().0 as f32 / window_size.width.max(1.0);
+        self.overlay_inset = (safe_area.top * scale, safe_area.right * scale);
+    }
+
     fn resize(&mut self) {
         let (width, height) = self.surface.size();
         if width == 0 || height == 0 {
@@ -465,12 +475,13 @@ impl Gpu {
                 pass.set_pipeline(&self.water_pipeline);
                 pass.draw(0..6, self.opaque_count..self.face_count);
             }
-            if self.config.width >= self.overlay_canvas.width() + 8
-                && self.config.height >= self.overlay_canvas.height() + 8
-            {
+            let (top, right) = self.overlay_inset;
+            let x = self.config.width as f32 - self.overlay_canvas.width() as f32 - right - 8.0;
+            let y = top + 8.0;
+            if x >= 0.0 && y + self.overlay_canvas.height() as f32 <= self.config.height as f32 {
                 pass.set_viewport(
-                    self.config.width as f32 - self.overlay_canvas.width() as f32 - 8.0,
-                    8.0,
+                    x,
+                    y,
                     self.overlay_canvas.width() as f32,
                     self.overlay_canvas.height() as f32,
                     0.0,
@@ -749,6 +760,7 @@ fn main() {
         .center()
         .build();
     let mut gpu = Gpu::new(window.attach_content().expect("Attach graphics surface"));
+    gpu.set_safe_area(window.safe_area(), window.size());
     let started = Instant::now();
     let mut frame_rate = FrameRate::default();
     let window_id = window.id();
@@ -761,8 +773,13 @@ fn main() {
                 window.request_animation_frame();
             }
         }
-        Event::Window(id, WindowEvent::Resize(_)) if id == window_id => {
+        Event::Window(id, WindowEvent::Resize(size)) if id == window_id => {
             gpu.resize();
+            gpu.set_safe_area(window.safe_area(), size);
+            window.request_animation_frame();
+        }
+        Event::Window(id, WindowEvent::SafeAreaChanged(safe_area)) if id == window_id => {
+            gpu.set_safe_area(safe_area, window.size());
             window.request_animation_frame();
         }
         Event::Window(id, WindowEvent::KeyDown(event))
