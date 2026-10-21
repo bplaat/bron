@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025 Bastiaan van der Plaat
+ * Copyright (c) 2025-2026 Bastiaan van der Plaat
  *
  * SPDX-License-Identifier: MIT
  */
@@ -26,6 +26,10 @@ cfg_select! {
     windows => {
         pub(crate) use crate::platforms::windows::*;
         mod windows;
+    }
+    target_os = "android" => {
+        pub(crate) use crate::platforms::android::*;
+        mod android;
     }
     _ => {
         compile_error!("Unsupported platform");
