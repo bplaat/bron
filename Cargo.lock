@@ -198,11 +198,13 @@ dependencies = [
 name = "cargo-bundle"
 version = "0.1.0"
 dependencies = [
+ "android-build",
  "copy_dir",
  "plist",
  "serde",
  "serde_json",
  "toml",
+ "zip",
 ]
 
 [[package]]

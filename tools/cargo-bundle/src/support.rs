@@ -9,10 +9,15 @@ use std::io::ErrorKind;
 use std::path::{Component, Path};
 use std::process::Command;
 
+#[cfg_attr(not(any(target_os = "macos", windows)), allow(dead_code))]
 pub(crate) fn cargo_build(path: &str) -> Command {
+    cargo("build", path)
+}
+
+pub(crate) fn cargo(subcommand: &str, path: &str) -> Command {
     let mut command = Command::new("cargo");
     command.args([
-        "build",
+        subcommand,
         "--release",
         "--manifest-path",
         &format!("{path}/Cargo.toml"),

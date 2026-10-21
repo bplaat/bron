@@ -71,6 +71,15 @@ pub(crate) struct BundleMetadata {
     pub ios: IosMetadata,
     #[cfg_attr(not(windows), allow(dead_code))]
     pub windows: Option<WindowsMetadata>,
+    pub android: Option<AndroidMetadata>,
+}
+
+#[derive(Clone, Default, Deserialize)]
+pub(crate) struct AndroidMetadata {
+    pub min_sdk_version: Option<u32>,
+    pub target_sdk_version: Option<u32>,
+    pub manifest: Option<String>,
+    pub res_dir: Option<String>,
 }
 
 #[derive(Clone, Deserialize)]
