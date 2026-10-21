@@ -276,7 +276,7 @@ Rather than pulling in large, general-purpose dependencies, this repo grows a cu
 
 **2. A minimal Electron/Tauri-like desktop platform**
 
-[bwebview](lib/ui/bwebview) is a cross-platform native webview library that lets you ship desktop applications using web technologies, without the weight of bundling a full browser engine. It uses the system-native webview on each platform (WebKit on macOS/iOS, WebKitGTK on Linux, WebView2 on Windows) and exposes a small, clean Rust API. The [desktop apps](apps/desktop) and [games](games/) in this repo, like a SQLite and MySQL viewer, a pixel font editor, a man page browser and a 2048 game, show that this works in practice.
+[bwebview](lib/ui/bwebview) is a cross-platform native webview library that lets you ship desktop applications using web technologies, without the weight of bundling a full browser engine. It uses the system-native webview on each platform (WebKit on macOS/iOS, WebView2 on Windows, WebKitGTK on Linux, WebView on Android) and exposes a small, clean Rust API. The [desktop apps](apps/desktop) and [games](games/) in this repo, like a SQLite and MySQL viewer, a pixel font editor, a man page browser and a 2048 game, show that this works in practice.
 
 **3. Tools and a custom build system for complex multi-language projects**
 

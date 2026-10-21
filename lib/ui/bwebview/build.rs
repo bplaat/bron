@@ -16,9 +16,15 @@ fn main() {
     println!("cargo::rustc-check-cfg=cfg(webkit2gtk_4_1)");
     println!("cargo::rustc-check-cfg=cfg(webkit2gtk_4_0)");
     println!("cargo::rustc-check-cfg=cfg(webkit2gtk_4_0_jsc_glib)");
+    if target_os == "android" {
+        // The WebView callbacks are Java classes, embedded as dex and loaded at runtime.
+        let out_dir = PathBuf::from(env::var_os("OUT_DIR").expect("OUT_DIR not set"));
+        android_build::compile_dex(Path::new("android"), &out_dir, android_build::MIN_SDK)
+            .unwrap_or_else(|error| panic!("{error}"));
+    }
     let target_vendor =
         env::var("CARGO_CFG_TARGET_VENDOR").expect("CARGO_CFG_TARGET_VENDOR not set");
-    if target_vendor != "apple" && target_os != "windows" {
+    if target_vendor != "apple" && !matches!(target_os.as_str(), "windows" | "android") {
         let search_dirs = search_dirs();
         gtk_cfgs(&search_dirs);
         if let Some(webkit) = find_library(&search_dirs, "webkit2gtk-4.1") {

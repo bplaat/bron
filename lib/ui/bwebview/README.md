@@ -1,7 +1,8 @@
 # Bassie Webview Rust library
 
 A cross-platform webview library for Rust using WKWebView on macOS and iOS, WebView2 on
-Windows, and WebKitGTK on Linux. Windows and the main event loop are provided by
+Windows, WebKitGTK on Linux, and the system WebView on Android. Windows and the main event loop
+are provided by
 [bwindow](../bwindow).
 
 ## Getting Started
@@ -50,6 +51,19 @@ Fedora:
 ```sh
 sudo dnf install gtk3 webkit2gtk4.1
 ```
+
+## Android
+
+The WebView is shown in a panel window over the native activity window, padded by the
+system bars, display cutout, and keyboard. Its Java glue is compiled to dex by the build
+script with [android-build](../../build/android-build) and loaded at runtime, which needs
+JDK 17 or 21 and the Android SDK when building for Android.
+
+JavaScript and DOM storage are enabled and forced dark mode is disabled. Custom
+protocols are served from `https://{scheme}.appassets.androidplatform.net/`, so
+`app://index.html` loads `https://app.appassets.androidplatform.net/index.html`.
+Document start user scripts are inserted into custom protocol HTML pages, other
+pages run them when loading starts.
 
 ## Screenshots
 
