@@ -24,7 +24,6 @@ struct Frame {
     width: f32,
     height: f32,
     scale: f32,
-    offset: (f32, f32),
 }
 
 // Draws the window surface with a hardware accelerated android.graphics.Canvas on the
@@ -75,14 +74,13 @@ fn paint(state: &Weak<SurfaceState>) {
     if state.closed.get() || state.painting.get() || android_surface().is_null() {
         return;
     }
-    let (x, y, width, height) = android_content_rect();
+    let (width, height) = android_window_size();
     let scale = android_density();
     state.painting.set(true);
     state.frame.set(Some(Frame {
         width: width as f32 / scale,
         height: height as f32 / scale,
         scale,
-        offset: (x as f32, y as f32),
     }));
     if !state.sender.redraw(|| state.frame.set(None)) {
         state.frame.set(None);
@@ -170,7 +168,7 @@ impl PlatformCanvas {
             | 0xff00_0000;
         unsafe {
             let canvas = env.call_object(surface, jni.lock_hardware_canvas, &[]);
-            // Also fill the system bar areas around the content.
+            // Start every frame from the window background.
             env.call_void(
                 canvas,
                 jni.draw_color,
@@ -183,14 +181,7 @@ impl PlatformCanvas {
                     },
                 ],
             );
-            let base = Transform([
-                frame.scale,
-                0.0,
-                0.0,
-                frame.scale,
-                frame.offset.0,
-                frame.offset.1,
-            ]);
+            let base = Transform([frame.scale, 0.0, 0.0, frame.scale, 0.0, 0.0]);
             let mut context = CanvasRenderingContext2d::new(
                 PlatformCanvasContext::new(
                     canvas,

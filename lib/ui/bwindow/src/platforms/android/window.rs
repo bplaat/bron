@@ -9,15 +9,15 @@ use std::rc::Rc;
 
 use super::activity::{android_activity, set_dark_mode, set_system_bar_appearance};
 use super::event_loop::{
-    android_content_rect, android_post_local, android_surface, content_size, send_event, stop,
-    system_theme,
+    android_post_local, android_surface, android_window_size, content_size, safe_area, send_event,
+    stop, system_theme,
 };
 use super::headers::*;
 use super::jni::JniEnv;
 use crate::content::ContentHost;
 use crate::{
-    CloseRequest, Event, LogicalPoint, LogicalSize, NativeWindowHandle, Theme, WindowBuilder,
-    WindowEvent, WindowId,
+    CloseRequest, Event, LogicalInsets, LogicalPoint, LogicalSize, NativeWindowHandle, Theme,
+    WindowBuilder, WindowEvent, WindowId,
 };
 
 // An activity hosts exactly one window.
@@ -45,7 +45,7 @@ pub(super) fn send(event: WindowEvent) {
 
 pub(super) fn resized() {
     if let Some(host) = current() {
-        let (_, _, width, height) = android_content_rect();
+        let (width, height) = android_window_size();
         host.resize(width, height);
         host.event_sender()
             .send(WindowEvent::Resize(content_size()));
@@ -63,12 +63,19 @@ pub(super) fn redraw() {
     }
 }
 
-pub(super) fn configuration_changed(resized: bool) {
+pub(super) fn safe_area_changed() {
+    send(WindowEvent::SafeAreaChanged(safe_area()));
+}
+
+pub(super) fn configuration_changed(resized: bool, safe_area_changed: bool) {
     if let Some(host) = current() {
         host.theme_changed(system_theme());
     }
     if resized {
         self::resized();
+    }
+    if safe_area_changed {
+        self::safe_area_changed();
     }
 }
 
@@ -161,7 +168,10 @@ impl PlatformWindow {
         WINDOW.with(|window| *window.borrow_mut() = Some(host));
         send_event(Event::Window(builder.window_id, WindowEvent::Create));
         // Report the theme, and the size when the window surface exists already.
-        android_post_local(|| configuration_changed(!android_surface().is_null()));
+        android_post_local(|| {
+            let has_surface = !android_surface().is_null();
+            configuration_changed(has_surface, has_surface);
+        });
         window
     }
 }
@@ -180,6 +190,10 @@ impl crate::WindowInterface for PlatformWindow {
 
     fn size(&self) -> LogicalSize {
         content_size()
+    }
+
+    fn safe_area(&self) -> LogicalInsets {
+        safe_area()
     }
 
     fn set_position(&mut self, _point: LogicalPoint) {}

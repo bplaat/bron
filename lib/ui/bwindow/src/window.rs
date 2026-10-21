@@ -5,7 +5,7 @@
  */
 
 use crate::platforms::{PlatformMonitor, PlatformWindow};
-use crate::{LogicalPoint, LogicalSize};
+use crate::{LogicalInsets, LogicalPoint, LogicalSize};
 
 /// An opaque identifier that is unique for the lifetime of the process.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -238,6 +238,10 @@ pub(crate) trait WindowInterface {
     fn set_resizable(&mut self, resizable: bool);
     fn set_theme(&mut self, theme: Theme);
     fn set_background_color(&mut self, color: u32);
+    // Desktop windows have no system UI over their content.
+    fn safe_area(&self) -> LogicalInsets {
+        LogicalInsets::default()
+    }
     #[cfg(all(
         feature = "progress_bar",
         any(
@@ -327,6 +331,17 @@ impl Window {
             return LogicalSize::new(0.0, 0.0);
         }
         self.platform.size()
+    }
+
+    /// Get the insets from each window edge to the area that is not covered by system UI,
+    /// like the status bar, display cutouts and the home indicator on mobile, or zero after
+    /// close. Content fills the whole window, keep text and controls inside this area.
+    /// Changes send [`WindowEvent::SafeAreaChanged`](crate::WindowEvent::SafeAreaChanged).
+    pub fn safe_area(&self) -> LogicalInsets {
+        if self.is_closed() {
+            return LogicalInsets::default();
+        }
+        self.platform.safe_area()
     }
 
     /// Set position

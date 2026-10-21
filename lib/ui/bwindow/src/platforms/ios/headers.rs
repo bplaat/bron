@@ -65,6 +65,21 @@ unsafe impl Encode for CGRect {
     const ENCODING: Encoding = Encoding::Struct("CGRect", &[CGPoint::ENCODING, CGSize::ENCODING]);
 }
 
+#[derive(Clone, Copy)]
+#[repr(C)]
+pub struct UIEdgeInsets {
+    pub top: f64,
+    pub left: f64,
+    pub bottom: f64,
+    pub right: f64,
+}
+unsafe impl Encode for UIEdgeInsets {
+    const ENCODING: Encoding = Encoding::Struct(
+        "UIEdgeInsets",
+        &[f64::ENCODING, f64::ENCODING, f64::ENCODING, f64::ENCODING],
+    );
+}
+
 pub const NS_UTF8_STRING_ENCODING: u64 = 4;
 
 pub const NS_KEY_VALUE_OBSERVING_OPTION_NEW: u64 = 0x1;

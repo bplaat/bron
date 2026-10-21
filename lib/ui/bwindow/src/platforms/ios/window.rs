@@ -15,7 +15,7 @@ use objc2::{class, define_class, msg_send};
 use super::event_loop::{send_event, theme_from_traits};
 use super::headers::*;
 use crate::content::ContentHost;
-use crate::{LogicalPoint, LogicalSize, Theme, WindowBuilder, WindowEvent};
+use crate::{LogicalInsets, LogicalPoint, LogicalSize, Theme, WindowBuilder, WindowEvent};
 
 const UI_USER_INTERFACE_STYLE_LIGHT: isize = 1;
 const UI_USER_INTERFACE_STYLE_DARK: isize = 2;
@@ -42,6 +42,18 @@ define_class!(
     impl WindowViewController {
         #[unsafe(method(viewDidLayoutSubviews))]
         fn _view_did_layout_subviews(&self) { self.view_did_layout_subviews(); }
+
+        #[unsafe(method(viewSafeAreaInsetsDidChange))]
+        fn _view_safe_area_insets_did_change(&self) {
+            let _: () = unsafe { msg_send![super(self), viewSafeAreaInsetsDidChange] };
+            let host = &self.ivars().host;
+            if !host.is_closed() {
+                send_event(crate::Event::Window(
+                    host.id(),
+                    WindowEvent::SafeAreaChanged(self.safe_area()),
+                ));
+            }
+        }
 
         #[unsafe(method(traitCollectionDidChange:))]
         fn _trait_collection_did_change(&self, previous: *mut Object) {
@@ -79,6 +91,17 @@ impl WindowViewController {
                 )),
             ));
         }
+    }
+
+    fn safe_area(&self) -> LogicalInsets {
+        let view: *mut Object = unsafe { msg_send![self, view] };
+        let insets: UIEdgeInsets = unsafe { msg_send![view, safeAreaInsets] };
+        LogicalInsets::new(
+            insets.top as f32,
+            insets.right as f32,
+            insets.bottom as f32,
+            insets.left as f32,
+        )
     }
 
     fn update_theme(&self) {
@@ -211,6 +234,10 @@ impl crate::WindowInterface for PlatformWindow {
         let view: *mut Object = unsafe { msg_send![&self.0.controller, view] };
         let bounds: CGRect = unsafe { msg_send![view, bounds] };
         LogicalSize::new(bounds.size.width as f32, bounds.size.height as f32)
+    }
+
+    fn safe_area(&self) -> LogicalInsets {
+        self.0.controller.safe_area()
     }
 
     fn set_position(&mut self, _point: LogicalPoint) {}
