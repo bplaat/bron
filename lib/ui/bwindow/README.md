@@ -1,8 +1,8 @@
 # Bassie Window Rust library
 
 Cross-platform native windows and a main event loop for Rust, using AppKit on macOS,
-UIKit on iOS, Win32 on Windows, and GTK 3 on Linux. Add [bcanvas](../../graphics/bcanvas) for
-native 2D drawing or [bwebview](../bwebview) for web content.
+UIKit on iOS, Win32 on Windows, GTK 3 on Linux, and an Activity on Android. Add
+[bcanvas](../../graphics/bcanvas) for native 2D drawing or [bwebview](../bwebview) for web content.
 
 ## Getting Started
 
@@ -105,6 +105,31 @@ Fedora:
 ```sh
 sudo dnf install gtk3
 ```
+
+## Android
+
+Build an APK with [cargo-bundle](../../../tools/cargo-bundle) `--android`. The app's
+unchanged binary is linked as a shared library that the framework `android.app.NativeActivity`
+loads, so the APK has no Java code. bwindow implements the activity callbacks with the NDK and
+runs the `main` function on a dedicated "main" thread with its own looper, where input and the
+event loop run. The few framework calls without an NDK API, like insets and system bar icons,
+use JNI. Android 8.0 (API 26) is the minimum.
+
+- One window per app. It fills the activity, padded by the system bar and cutout
+  insets; `Resize` reports that content area in dp.
+- Title, position, size, minimum size, resizable, center, and window state calls
+  are no-ops. `background_color` fills the window when no content draws and picks
+  matching light or dark system bar icons. `set_theme` forces the app night mode on
+  Android 12+.
+- The system night mode is the theme, changes send `ThemeChanged`.
+- Touches report `MouseMove` and a left `MouseDown`, lifting the finger reports
+  `MouseUp` and `MouseLeave`. Hardware keys report `KeyDown` / `KeyUp`.
+- The back gesture sends `CloseRequested`; closing the window ends the event loop,
+  then the activity finishes and the process exits.
+- stdout, stderr, and panics are written to logcat with the binary name as tag.
+- The `dialog`, `file_drop`, `menu`, and `progress_bar` features are unsupported.
+- Content backends that need Java, like bwebview, embed their own dex and load it with
+  `DexClassLoader`.
 
 ## License
 
