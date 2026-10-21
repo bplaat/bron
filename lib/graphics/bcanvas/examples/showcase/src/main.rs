@@ -13,7 +13,7 @@ use bcanvas::{
     CanvasBuilder, CanvasRenderingContext2d, Color, FontWeight, LineCap, LineJoin, TextAlign,
     TextBaseline,
 };
-use bwindow::{Event, EventLoop, LogicalSize, Theme, WindowBuilder, WindowEvent};
+use bwindow::{Event, EventLoop, LogicalInsets, LogicalSize, Theme, WindowBuilder, WindowEvent};
 
 const WIDTH: f32 = 1_000.0;
 const HEIGHT: f32 = 720.0;
@@ -88,6 +88,7 @@ impl Palette {
 #[derive(Clone, Copy)]
 struct State {
     theme: Theme,
+    safe_area: LogicalInsets,
     pointer_x: f32,
     pointer_y: f32,
 }
@@ -132,6 +133,7 @@ fn main() {
     let mut canvas = CanvasBuilder::new(&window).build();
     let mut state = State {
         theme,
+        safe_area: window.safe_area(),
         pointer_x: WIDTH * 0.5,
         pointer_y: HEIGHT * 0.5,
     };
@@ -151,6 +153,9 @@ fn main() {
             state.pointer_x = position.x;
             state.pointer_y = position.y;
         }
+        Event::Window(window_id, WindowEvent::SafeAreaChanged(safe_area)) if window_id == id => {
+            state.safe_area = safe_area;
+        }
         Event::Window(window_id, WindowEvent::ThemeChanged(theme)) if window_id == id => {
             state.theme = theme;
             window.set_background_color(Palette::for_theme(theme).background);
@@ -161,9 +166,13 @@ fn main() {
 
 fn draw(ctx: &mut CanvasRenderingContext2d<'_>, state: State, fps: u32) {
     let palette = Palette::for_theme(state.theme);
-    let scale = (ctx.width() / WIDTH).min(ctx.height() / HEIGHT).max(0.01);
-    let offset_x = (ctx.width() - WIDTH * scale) * 0.5;
-    let offset_y = (ctx.height() - HEIGHT * scale) * 0.5;
+    // Fit the design inside the safe area, the background fills the whole window.
+    let safe_area = state.safe_area;
+    let width = (ctx.width() - safe_area.left - safe_area.right).max(0.0);
+    let height = (ctx.height() - safe_area.top - safe_area.bottom).max(0.0);
+    let scale = (width / WIDTH).min(height / HEIGHT).max(0.01);
+    let offset_x = safe_area.left + (width - WIDTH * scale) * 0.5;
+    let offset_y = safe_area.top + (height - HEIGHT * scale) * 0.5;
     let time = ctx.timestamp().as_secs_f32();
     let pointer_x = ((state.pointer_x - offset_x) / scale).clamp(0.0, WIDTH);
     let pointer_y = ((state.pointer_y - offset_y) / scale).clamp(0.0, HEIGHT);
