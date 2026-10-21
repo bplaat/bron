@@ -17,6 +17,7 @@ use bwindow::{
 use crate::CanvasRenderingContext2d;
 use crate::platforms::windows::com::ComPtr;
 pub(crate) use crate::platforms::windows::context::PlatformCanvasContext;
+use crate::platforms::windows::context::{DrawTarget, Resources};
 use crate::platforms::windows::headers::*;
 pub(crate) use crate::platforms::windows::offscreen::PlatformOffscreenCanvas;
 
@@ -29,9 +30,8 @@ struct CanvasData {
     cursor: Cell<crate::CursorIcon>,
     hwnd: Cell<Option<HWND>>,
     sender: WindowEventSender,
-    factory: ComPtr<ID2D1Factory>,
-    write: ComPtr<IDWriteFactory>,
-    target: RefCell<Option<ComPtr<ID2D1HwndRenderTarget>>>,
+    resources: Rc<Resources>,
+    target: RefCell<Option<DrawTarget<ID2D1HwndRenderTarget>>>,
     target_size: Cell<(u32, u32)>,
     target_dpi: Cell<u32>,
     frame: RefCell<Option<CanvasRenderingContext2d<'static>>>,
@@ -97,7 +97,7 @@ impl CanvasData {
         let cached = self.target.borrow().clone();
         let target = if let Some(target) = cached {
             if self.target_size.get() != (width, height) {
-                if unsafe { target.Resize(&size) }.is_err() {
+                if unsafe { target.native.Resize(&size) }.is_err() {
                     self.target.borrow_mut().take();
                     self.target_size.set((0, 0));
                     self.target_dpi.set(0);
@@ -109,12 +109,13 @@ impl CanvasData {
                 self.target_size.set((width, height));
             }
             if self.target_dpi.replace(dpi as u32) != dpi as u32 {
-                unsafe { target.SetDpi(dpi, dpi) };
+                unsafe { target.native.SetDpi(dpi, dpi) };
             }
             Some(target)
         } else {
             let target = unsafe {
-                self.factory
+                self.resources
+                    .factory
                     .CreateHwndRenderTarget(
                         &D2D1_RENDER_TARGET_PROPERTIES {
                             pixelFormat: D2D1_PIXEL_FORMAT {
@@ -131,6 +132,7 @@ impl CanvasData {
                             ..Default::default()
                         },
                     )
+                    .and_then(DrawTarget::new)
                     .ok()
             };
             if target.is_some() {
@@ -146,15 +148,18 @@ impl CanvasData {
             return;
         };
         *self.target.borrow_mut() = Some(target.clone());
-        unsafe { target.BeginDraw() }
+        unsafe { target.native.BeginDraw() }
         *self.frame.borrow_mut() = Some(CanvasRenderingContext2d::new(
-            PlatformCanvasContext::new(target.clone(), self.factory.clone(), self.write.clone()),
+            PlatformCanvasContext::new(&target, self.resources.clone()),
             width as f32 / scale,
             height as f32 / scale,
             scale,
         ));
-        if !self.sender.redraw(|| self.end_paint(hwnd, &paint, &target)) {
-            self.end_paint(hwnd, &paint, &target);
+        if !self
+            .sender
+            .redraw(|| self.end_paint(hwnd, &paint, &target.native))
+        {
+            self.end_paint(hwnd, &paint, &target.native);
             self.request_redraw();
         }
         self.painting.set(false);
@@ -165,7 +170,7 @@ impl CanvasData {
         let failed = unsafe { target.EndDraw(null_mut(), null_mut()) }.is_err();
         let _ = unsafe { EndPaint(hwnd, paint) };
         if failed {
-            // Brushes are frame-owned, so none survive a lost render target.
+            // The brush belongs to the lost render target and is recreated with it.
             self.target.borrow_mut().take();
             self.target_size.set((0, 0));
             self.target_dpi.set(0);
@@ -213,8 +218,7 @@ impl PlatformCanvas {
                 cursor: Cell::new(crate::CursorIcon::Default),
                 hwnd: Cell::new(None),
                 sender: attachment.event_sender(),
-                factory: ID2D1Factory::new().expect("Direct2D factory"),
-                write: IDWriteFactory::new().expect("DirectWrite factory"),
+                resources: Resources::new(),
                 target: RefCell::new(None),
                 target_size: Cell::new((0, 0)),
                 target_dpi: Cell::new(0),

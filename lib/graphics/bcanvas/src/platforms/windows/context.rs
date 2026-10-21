@@ -4,7 +4,8 @@
  * SPDX-License-Identifier: MIT
  */
 
-use std::collections::HashMap;
+use std::cell::RefCell;
+use std::ops::Deref;
 use std::ptr::{null, null_mut};
 use std::rc::Rc;
 
@@ -15,67 +16,160 @@ use super::headers::*;
 use crate::path::{Command, Path, Point, Transform};
 use crate::{CanvasState, Color, FontWeight, LineCap, LineJoin, TextAlign, TextBaseline};
 
-pub(crate) struct PlatformCanvasContext {
-    target: ComPtr<ID2D1HwndRenderTarget>,
-    factory: ComPtr<ID2D1Factory>,
+const TEXT_FORMATS: usize = 16;
+
+type TextFormatKey = (Rc<str>, u32, FontWeight);
+
+/// Device-independent objects shared by every frame of one canvas.
+pub(super) struct Resources {
+    pub(super) factory: ComPtr<ID2D1Factory>,
     write: ComPtr<IDWriteFactory>,
+    // Indexed by cap * 3 + join, in the order of stroke_style.
+    strokes: [ComPtr<ID2D1StrokeStyle>; 9],
+    formats: RefCell<Vec<(TextFormatKey, ComPtr<IDWriteTextFormat>)>>,
+    text: RefCell<Vec<u16>>,
+}
+
+impl Resources {
+    pub(super) fn new() -> Rc<Self> {
+        const CAPS: [u32; 3] = [
+            D2D1_CAP_STYLE_FLAT,
+            D2D1_CAP_STYLE_SQUARE,
+            D2D1_CAP_STYLE_ROUND,
+        ];
+        const JOINS: [u32; 3] = [
+            D2D1_LINE_JOIN_MITER_OR_BEVEL,
+            D2D1_LINE_JOIN_BEVEL,
+            D2D1_LINE_JOIN_ROUND,
+        ];
+        let factory = unsafe { ID2D1Factory::new() }.expect("Direct2D factory");
+        let strokes = std::array::from_fn(|index| {
+            let cap = CAPS[index / 3];
+            unsafe {
+                factory.CreateStrokeStyle(
+                    &D2D1_STROKE_STYLE_PROPERTIES {
+                        startCap: cap,
+                        endCap: cap,
+                        dashCap: cap,
+                        lineJoin: JOINS[index % 3],
+                        miterLimit: 10.0,
+                        ..Default::default()
+                    },
+                    null(),
+                    0,
+                )
+            }
+            .expect("Direct2D stroke style")
+        });
+        Rc::new(Self {
+            factory,
+            write: unsafe { IDWriteFactory::new() }.expect("DirectWrite factory"),
+            strokes,
+            formats: RefCell::new(Vec::new()),
+            text: RefCell::new(Vec::new()),
+        })
+    }
+}
+
+/// A render target with the one brush that every draw recolors.
+pub(super) struct DrawTarget<T> {
+    pub(super) native: ComPtr<T>,
+    brush: ComPtr<ID2D1SolidColorBrush>,
+}
+
+impl<T: Deref<Target = ID2D1RenderTarget>> DrawTarget<T> {
+    pub(super) fn new(native: ComPtr<T>) -> Result<Self, i32> {
+        let brush = unsafe { native.CreateSolidColorBrush(&D2D1_COLOR_F::default(), null()) }?;
+        Ok(Self { native, brush })
+    }
+}
+
+impl<T> Clone for DrawTarget<T> {
+    fn clone(&self) -> Self {
+        Self {
+            native: self.native.clone(),
+            brush: self.brush.clone(),
+        }
+    }
+}
+
+enum Clip {
+    Rect,
+    Layer,
+}
+
+pub(crate) struct PlatformCanvasContext {
+    target: ComPtr<ID2D1RenderTarget>,
+    brush: ComPtr<ID2D1SolidColorBrush>,
+    resources: Rc<Resources>,
     path: Path,
     transform: Transform,
     stack: Vec<(Transform, usize)>,
-    layers: usize,
-    brushes: HashMap<(Color, u32), ComPtr<ID2D1SolidColorBrush>>,
-    text_formats: HashMap<(Rc<str>, u32, FontWeight), ComPtr<IDWriteTextFormat>>,
-}
-
-struct PreparedText {
-    text: Vec<u16>,
-    format: ComPtr<IDWriteTextFormat>,
-    metrics: DWRITE_TEXT_METRICS,
+    clips: Vec<Clip>,
 }
 
 impl PlatformCanvasContext {
-    pub(super) fn new(
-        target: ComPtr<ID2D1HwndRenderTarget>,
-        factory: ComPtr<ID2D1Factory>,
-        write: ComPtr<IDWriteFactory>,
+    pub(super) fn new<T: Deref<Target = ID2D1RenderTarget>>(
+        target: &DrawTarget<T>,
+        resources: Rc<Resources>,
     ) -> Self {
-        unsafe { target.SetTransform(&D2D_MATRIX_3X2_F::identity()) };
+        let native = target.native.upcast();
+        unsafe { native.SetTransform(&D2D_MATRIX_3X2_F::identity()) };
         Self {
-            target,
-            factory,
-            write,
+            target: native,
+            brush: target.brush.clone(),
+            resources,
             path: Path::default(),
             transform: Transform::IDENTITY,
             stack: Vec::new(),
-            layers: 0,
-            brushes: HashMap::new(),
-            text_formats: HashMap::new(),
+            clips: Vec::new(),
         }
     }
 
     pub(crate) fn save(&mut self) {
-        self.stack.push((self.transform, self.layers));
+        self.stack.push((self.transform, self.clips.len()));
     }
 
     pub(crate) fn restore(&mut self) {
-        if let Some((transform, layers)) = self.stack.pop() {
-            self.pop_layers(layers);
+        if let Some((transform, clips)) = self.stack.pop() {
+            self.pop_clips(clips);
             self.transform = transform;
             self.apply_transform();
         }
     }
 
-    fn pop_layers(&mut self, depth: usize) {
-        while self.layers > depth {
-            unsafe { self.target.PopLayer() };
-            self.layers -= 1;
+    fn pop_clips(&mut self, depth: usize) {
+        while self.clips.len() > depth {
+            if matches!(self.clips.pop(), Some(Clip::Rect)) {
+                unsafe { self.target.PopAxisAlignedClip() };
+            } else {
+                unsafe { self.target.PopLayer() };
+            }
         }
     }
 
     pub(crate) fn clear_rect(&mut self, x: f32, y: f32, w: f32, h: f32) {
+        let rect = rect(x, y, w, h);
+        // An axis-aligned clip is the transformed bounding box, so rotated or skewed
+        // rects instead copy a transparent fill through the Direct2D 1.1 interface.
+        let [a, b, c, d, _, _] = self.transform.0;
+        if !((b == 0.0 && c == 0.0) || (a == 0.0 && d == 0.0))
+            && let Ok(context) = unsafe {
+                self.target
+                    .query::<ID2D1DeviceContext>(&IID_ID2D1_DEVICE_CONTEXT)
+            }
+        {
+            let brush = self.brush(Color::rgba(0, 0, 0, 0), 1.0);
+            unsafe {
+                context.SetPrimitiveBlend(D2D1_PRIMITIVE_BLEND_COPY);
+                self.target.FillRectangle(&rect, brush);
+                context.SetPrimitiveBlend(D2D1_PRIMITIVE_BLEND_SOURCE_OVER);
+            }
+            return;
+        }
         unsafe {
             self.target
-                .PushAxisAlignedClip(&rect(x, y, w, h), D2D1_ANTIALIAS_MODE_ALIASED);
+                .PushAxisAlignedClip(&rect, D2D1_ANTIALIAS_MODE_ALIASED);
             self.target.Clear(&D2D1_COLOR_F::default());
             self.target.PopAxisAlignedClip();
         }
@@ -83,7 +177,7 @@ impl PlatformCanvasContext {
 
     pub(crate) fn fill_rect(&mut self, state: &CanvasState, x: f32, y: f32, w: f32, h: f32) {
         let brush = self.brush(state.fill, state.alpha);
-        unsafe { self.target.FillRectangle(&rect(x, y, w, h), brush.as_ptr()) };
+        unsafe { self.target.FillRectangle(&rect(x, y, w, h), brush) };
     }
 
     pub(crate) fn stroke_rect(&mut self, state: &CanvasState, x: f32, y: f32, w: f32, h: f32) {
@@ -91,15 +185,19 @@ impl PlatformCanvasContext {
         unsafe {
             self.target.DrawRectangle(
                 &rect(x, y, w, h),
-                brush.as_ptr(),
+                brush,
                 state.line_width,
-                self.stroke_style(state).as_ptr(),
+                self.stroke_style(state),
             )
         };
     }
 
     pub(crate) fn begin_path(&mut self) {
+        // Keep the command buffer allocation for the next path.
+        let mut commands = std::mem::take(&mut self.path.commands);
+        commands.clear();
         self.path = Path::default();
+        self.path.commands = commands;
     }
     pub(crate) fn close_path(&mut self) {
         self.path.close();
@@ -131,7 +229,8 @@ impl PlatformCanvasContext {
     }
 
     fn geometry(&self, transform: Transform) -> ComPtr<ID2D1PathGeometry> {
-        let geometry = unsafe { self.factory.CreatePathGeometry() }.expect("Direct2D path");
+        let geometry =
+            unsafe { self.resources.factory.CreatePathGeometry() }.expect("Direct2D path");
         let sink = unsafe { geometry.Open() }.expect("Direct2D geometry sink");
         let mut open = false;
         let mut start = [0.0; 2];
@@ -185,7 +284,7 @@ impl PlatformCanvasContext {
         unsafe {
             self.target.SetTransform(&D2D_MATRIX_3X2_F::identity());
             self.target
-                .FillGeometry(geometry.as_ptr(), brush.as_ptr(), null_mut());
+                .FillGeometry(geometry.as_ptr(), brush, null_mut());
         }
         self.apply_transform();
     }
@@ -201,56 +300,49 @@ impl PlatformCanvasContext {
         unsafe {
             self.target.DrawGeometry(
                 geometry.as_ptr(),
-                brush.as_ptr(),
+                brush,
                 state.line_width,
-                self.stroke_style(state).as_ptr(),
+                self.stroke_style(state),
             )
         };
     }
 
     pub(crate) fn clip(&mut self) {
-        let geometry = self.geometry(Transform::IDENTITY);
-        let params = D2D1_LAYER_PARAMETERS {
-            contentBounds: rect(-1.0e10, -1.0e10, 2.0e10, 2.0e10),
-            geometricMask: geometry.as_ptr(),
-            maskAntialiasMode: D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
-            maskTransform: D2D_MATRIX_3X2_F::identity(),
-            opacity: 1.0,
-            ..Default::default()
-        };
-        unsafe {
-            self.target.SetTransform(&D2D_MATRIX_3X2_F::identity());
-            self.target.PushLayer(&params, null_mut());
+        unsafe { self.target.SetTransform(&D2D_MATRIX_3X2_F::identity()) };
+        if let Some(rect) = device_rect(&self.path.commands) {
+            unsafe {
+                self.target
+                    .PushAxisAlignedClip(&rect, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE)
+            };
+            self.clips.push(Clip::Rect);
+        } else {
+            let geometry = self.geometry(Transform::IDENTITY);
+            let params = D2D1_LAYER_PARAMETERS {
+                contentBounds: rect(-1.0e10, -1.0e10, 2.0e10, 2.0e10),
+                geometricMask: geometry.as_ptr(),
+                maskAntialiasMode: D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
+                maskTransform: D2D_MATRIX_3X2_F::identity(),
+                opacity: 1.0,
+                ..Default::default()
+            };
+            unsafe { self.target.PushLayer(&params, null_mut()) };
+            self.clips.push(Clip::Layer);
         }
-        self.layers += 1;
         self.apply_transform();
     }
 
-    fn stroke_style(&self, state: &CanvasState) -> ComPtr<ID2D1StrokeStyle> {
+    fn stroke_style(&self, state: &CanvasState) -> *mut ID2D1StrokeStyle {
         let cap = match state.line_cap {
-            LineCap::Butt => D2D1_CAP_STYLE_FLAT,
-            LineCap::Round => D2D1_CAP_STYLE_ROUND,
-            LineCap::Square => D2D1_CAP_STYLE_SQUARE,
+            LineCap::Butt => 0,
+            LineCap::Square => 1,
+            LineCap::Round => 2,
         };
-        unsafe {
-            self.factory.CreateStrokeStyle(
-                &D2D1_STROKE_STYLE_PROPERTIES {
-                    startCap: cap,
-                    endCap: cap,
-                    dashCap: cap,
-                    lineJoin: match state.line_join {
-                        LineJoin::Miter => D2D1_LINE_JOIN_MITER,
-                        LineJoin::Round => D2D1_LINE_JOIN_ROUND,
-                        LineJoin::Bevel => D2D1_LINE_JOIN_BEVEL,
-                    },
-                    miterLimit: 10.0,
-                    ..Default::default()
-                },
-                null(),
-                0,
-            )
-        }
-        .expect("Direct2D stroke style")
+        let join = match state.line_join {
+            LineJoin::Miter => 0,
+            LineJoin::Bevel => 1,
+            LineJoin::Round => 2,
+        };
+        self.resources.strokes[cap * 3 + join].as_ptr()
     }
 
     pub(crate) fn translate(&mut self, x: f32, y: f32) {
@@ -290,65 +382,59 @@ impl PlatformCanvasContext {
     }
 
     pub(crate) fn fill_text(&mut self, s: &CanvasState, text: &str, x: f32, y: f32) {
-        let Some(PreparedText {
-            text,
-            format,
-            metrics,
-        }) = self.prepare_text(s, text)
-        else {
+        let Some((layout, metrics)) = self.prepare_text(s, text) else {
             return;
         };
+        let mut line = DWRITE_LINE_METRICS::default();
+        let mut count = 0;
+        if unsafe { layout.GetLineMetrics(&mut line, 1, &mut count) }.is_err() {
+            return;
+        }
+        let width = metrics.widthIncludingTrailingWhitespace;
+        let origin = D2D_POINT_2F {
+            x: x - match s.text_align {
+                TextAlign::Center => width / 2.0,
+                TextAlign::Right | TextAlign::End => width,
+                _ => 0.0,
+            },
+            y: y - match s.text_baseline {
+                TextBaseline::Middle => line.height / 2.0,
+                TextBaseline::Bottom | TextBaseline::Ideographic => line.height,
+                TextBaseline::Alphabetic => line.baseline,
+                _ => 0.0,
+            },
+        };
+        let brush = self.brush(s.fill, s.alpha);
         unsafe {
-            let mut left = x;
-            let mut top = y;
-            match s.text_align {
-                TextAlign::Center => left -= metrics.widthIncludingTrailingWhitespace / 2.0,
-                TextAlign::Right | TextAlign::End => {
-                    left -= metrics.widthIncludingTrailingWhitespace;
-                }
-                _ => {}
-            }
-            match s.text_baseline {
-                TextBaseline::Middle => top -= metrics.height / 2.0,
-                TextBaseline::Bottom | TextBaseline::Ideographic => {
-                    top -= metrics.height;
-                }
-                TextBaseline::Alphabetic => top -= s.font_size * 0.8,
-                _ => {}
-            }
-            let layout = D2D_RECT_F {
-                left,
-                top,
-                right: left + metrics.widthIncludingTrailingWhitespace + s.font_size,
-                bottom: top + metrics.height + s.font_size,
-            };
-            let brush = self.brush(s.fill, s.alpha);
-            self.target.DrawText(
-                text.as_ptr(),
-                text.len() as u32,
-                format.as_ptr(),
-                &layout,
-                brush.as_ptr(),
-                D2D1_DRAW_TEXT_OPTIONS_NONE,
-                DWRITE_MEASURING_MODE_NATURAL,
-            )
+            self.target
+                .DrawTextLayout(origin, layout.as_ptr(), brush, D2D1_DRAW_TEXT_OPTIONS_NONE)
         }
     }
     pub(crate) fn measure_text(&mut self, s: &CanvasState, text: &str) -> f32 {
-        self.prepare_text(s, text).map_or(0.0, |prepared| {
-            prepared.metrics.widthIncludingTrailingWhitespace
-        })
+        self.prepare_text(s, text)
+            .map_or(0.0, |(_, metrics)| metrics.widthIncludingTrailingWhitespace)
     }
 
-    fn prepare_text(&mut self, s: &CanvasState, text: &str) -> Option<PreparedText> {
-        let text: Vec<u16> = text.encode_utf16().collect();
+    fn prepare_text(
+        &self,
+        s: &CanvasState,
+        text: &str,
+    ) -> Option<(ComPtr<IDWriteTextLayout>, DWRITE_TEXT_METRICS)> {
         let format = self.format(s);
+        let mut wide = self.resources.text.borrow_mut();
+        wide.clear();
+        // Canvas text is one line: line breaks render as spaces.
+        wide.extend(text.encode_utf16().map(|unit| match unit {
+            0x09..=0x0d | 0x85 | 0x2028 | 0x2029 => 0x20,
+            unit => unit,
+        }));
         unsafe {
             let layout = self
+                .resources
                 .write
                 .CreateTextLayout(
-                    text.as_ptr(),
-                    text.len() as u32,
+                    wide.as_ptr(),
+                    wide.len() as u32,
                     format.as_ptr(),
                     100000.0,
                     10000.0,
@@ -356,38 +442,27 @@ impl PlatformCanvasContext {
                 .ok()?;
             let mut metrics = DWRITE_TEXT_METRICS::default();
             layout.GetMetrics(&mut metrics).ok()?;
-            Some(PreparedText {
-                text,
-                format,
-                metrics,
-            })
+            Some((layout, metrics))
         }
     }
-    fn brush(&mut self, color: Color, alpha: f32) -> ComPtr<ID2D1SolidColorBrush> {
-        let key = (color, alpha.to_bits());
-        if let Some(brush) = self.brushes.get(&key) {
-            return brush.clone();
-        }
+    fn brush(&self, color: Color, alpha: f32) -> *mut ID2D1SolidColorBrush {
         let (r, g, b, a) = color.components(alpha);
-        let brush = unsafe {
-            self.target
-                .CreateSolidColorBrush(
-                    &D2D1_COLOR_F {
-                        r: r as f32,
-                        g: g as f32,
-                        b: b as f32,
-                        a: a as f32,
-                    },
-                    null(),
-                )
-                .expect("Direct2D brush")
+        unsafe {
+            self.brush.SetColor(&D2D1_COLOR_F {
+                r: r as f32,
+                g: g as f32,
+                b: b as f32,
+                a: a as f32,
+            })
         };
-        self.brushes.insert(key, brush.clone());
-        brush
+        self.brush.as_ptr()
     }
-    fn format(&mut self, s: &CanvasState) -> ComPtr<IDWriteTextFormat> {
-        let key = (s.font_family.clone(), s.font_size.to_bits(), s.font_weight);
-        if let Some(format) = self.text_formats.get(&key) {
+    fn format(&self, s: &CanvasState) -> ComPtr<IDWriteTextFormat> {
+        let size = s.font_size.to_bits();
+        let mut formats = self.resources.formats.borrow_mut();
+        if let Some((_, format)) = formats.iter().find(|((family, key_size, weight), _)| {
+            *family == s.font_family && *key_size == size && *weight == s.font_weight
+        }) {
             return format.clone();
         }
         let family = (match s.font_family.as_ref() {
@@ -399,7 +474,8 @@ impl PlatformCanvasContext {
         .to_wide_string();
         let locale = "en-us".to_wide_string();
         let format = unsafe {
-            self.write
+            self.resources
+                .write
                 .CreateTextFormat(
                     family.as_ptr(),
                     null_mut(),
@@ -418,17 +494,36 @@ impl PlatformCanvasContext {
             let _ = format.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
             let _ = format.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR);
         }
-        self.text_formats.insert(key, format.clone());
+        if formats.len() == TEXT_FORMATS {
+            formats.remove(0);
+        }
+        formats.push(((s.font_family.clone(), size, s.font_weight), format.clone()));
         format
     }
 }
 impl Drop for PlatformCanvasContext {
     fn drop(&mut self) {
-        self.pop_layers(0);
+        self.pop_clips(0);
     }
 }
 const fn vector([x, y]: Point) -> D2D_POINT_2F {
     D2D_POINT_2F { x, y }
+}
+/// The device bounds of a path that is exactly one axis-aligned rectangle.
+fn device_rect(commands: &[Command]) -> Option<D2D_RECT_F> {
+    let [
+        Command::Move(a),
+        Command::Line(b),
+        Command::Line(c),
+        Command::Line(d),
+        Command::Close,
+    ] = *commands
+    else {
+        return None;
+    };
+    let aligned = (a[1] == b[1] && b[0] == c[0] && c[1] == d[1] && d[0] == a[0])
+        || (a[0] == b[0] && b[1] == c[1] && c[0] == d[0] && d[1] == a[1]);
+    aligned.then(|| rect(a[0], a[1], c[0] - a[0], c[1] - a[1]))
 }
 fn rect(x: f32, y: f32, w: f32, h: f32) -> D2D_RECT_F {
     D2D_RECT_F {
