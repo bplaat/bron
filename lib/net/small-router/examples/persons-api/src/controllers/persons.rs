@@ -239,7 +239,7 @@ mod test {
         let router = router(ctx.clone());
 
         // Fetch /persons check if empty
-        let res = router.handle(&Request::get("http://localhost/persons"));
+        let res = router.handle(Request::get("http://localhost/persons"));
         assert_eq!(res.status, Status::Ok);
         let persons = serde_json::from_slice::<api::PersonIndexResponse>(&res.body)
             .unwrap()
@@ -256,7 +256,7 @@ mod test {
         ctx.database.insert_person(person.clone()).unwrap();
 
         // Fetch /persons check if person is there
-        let res = router.handle(&Request::get("http://localhost/persons"));
+        let res = router.handle(Request::get("http://localhost/persons"));
         assert_eq!(res.status, Status::Ok);
         let persons = serde_json::from_slice::<api::PersonIndexResponse>(&res.body)
             .unwrap()
@@ -285,7 +285,7 @@ mod test {
             .unwrap();
 
         // Search for "Alice" (preprocessed to "Alice*")
-        let res = router.handle(&Request::get("http://localhost/persons?q=Alice"));
+        let res = router.handle(Request::get("http://localhost/persons?q=Alice"));
         assert_eq!(res.status, Status::Ok);
         let response = serde_json::from_slice::<api::PersonIndexResponse>(&res.body).unwrap();
         assert_eq!(response.data.len(), 1);
@@ -323,26 +323,26 @@ mod test {
             .unwrap();
 
         // Prefix search (Al* preserved as-is)
-        let res = router.handle(&Request::get("http://localhost/persons?q=Al*"));
+        let res = router.handle(Request::get("http://localhost/persons?q=Al*"));
         assert_eq!(res.status, Status::Ok);
         let response = serde_json::from_slice::<api::PersonIndexResponse>(&res.body).unwrap();
         assert_eq!(response.data.len(), 2);
 
         // AND search
-        let res = router.handle(&Request::get("http://localhost/persons?q=Alice AND Smith"));
+        let res = router.handle(Request::get("http://localhost/persons?q=Alice AND Smith"));
         assert_eq!(res.status, Status::Ok);
         let response = serde_json::from_slice::<api::PersonIndexResponse>(&res.body).unwrap();
         assert_eq!(response.data.len(), 1);
         assert_eq!(response.data[0].name, "Alice Smith");
 
         // OR search
-        let res = router.handle(&Request::get("http://localhost/persons?q=Alice OR Bob"));
+        let res = router.handle(Request::get("http://localhost/persons?q=Alice OR Bob"));
         assert_eq!(res.status, Status::Ok);
         let response = serde_json::from_slice::<api::PersonIndexResponse>(&res.body).unwrap();
         assert_eq!(response.data.len(), 3);
 
         // NOT search
-        let res = router.handle(&Request::get("http://localhost/persons?q=Alice NOT Smith"));
+        let res = router.handle(Request::get("http://localhost/persons?q=Alice NOT Smith"));
         assert_eq!(res.status, Status::Ok);
         let response = serde_json::from_slice::<api::PersonIndexResponse>(&res.body).unwrap();
         assert_eq!(response.data.len(), 1);
@@ -354,13 +354,13 @@ mod test {
         let ctx = Context::with_test_database().expect("Can't create test database");
         let router = router(ctx.clone());
 
-        let res = router.handle(&Request::get("http://localhost/persons?page=0"));
+        let res = router.handle(Request::get("http://localhost/persons?page=0"));
         assert_eq!(res.status, Status::BadRequest);
 
-        let res = router.handle(&Request::get("http://localhost/persons?limit=0"));
+        let res = router.handle(Request::get("http://localhost/persons?limit=0"));
         assert_eq!(res.status, Status::BadRequest);
 
-        let res = router.handle(&Request::get("http://localhost/persons?limit=51"));
+        let res = router.handle(Request::get("http://localhost/persons?limit=51"));
         assert_eq!(res.status, Status::BadRequest);
     }
 
@@ -385,7 +385,7 @@ mod test {
         }
 
         // Fetch /persons with limit 5 and page 1
-        let res = router.handle(&Request::get("http://localhost/persons?limit=5&page=1"));
+        let res = router.handle(Request::get("http://localhost/persons?limit=5&page=1"));
         assert_eq!(res.status, Status::Ok);
         let response = serde_json::from_slice::<api::PersonIndexResponse>(&res.body).unwrap();
         assert_eq!(response.data.len(), 5);
@@ -408,7 +408,7 @@ mod test {
         );
 
         // Fetch /persons with limit 5 and page 2
-        let res = router.handle(&Request::get("http://localhost/persons?limit=5&page=2"));
+        let res = router.handle(Request::get("http://localhost/persons?limit=5&page=2"));
         assert_eq!(res.status, Status::Ok);
         let response = serde_json::from_slice::<api::PersonIndexResponse>(&res.body).unwrap();
         assert_eq!(response.data.len(), 5);
@@ -438,7 +438,7 @@ mod test {
 
         // Create person
         let res = router.handle(
-            &Request::post("http://localhost/persons")
+            Request::post("http://localhost/persons")
                 .json(json!({ "name": "Jan", "ageInYears": 40, "relation": "me" })),
         );
         assert_eq!(res.status, Status::Created);
@@ -447,7 +447,7 @@ mod test {
 
         // Create with invalid JSON
         let res = router.handle(
-            &Request::post("http://localhost/persons")
+            Request::post("http://localhost/persons")
                 .header("Content-Type", "application/json")
                 .body("not-json"),
         );
@@ -455,21 +455,21 @@ mod test {
 
         // Create with age too low
         let res = router.handle(
-            &Request::post("http://localhost/persons")
+            Request::post("http://localhost/persons")
                 .json(json!({ "name": "Jan", "ageInYears": 5, "relation": "me" })),
         );
         assert_eq!(res.status, Status::BadRequest);
 
         // Create with name too short
         let res = router.handle(
-            &Request::post("http://localhost/persons")
+            Request::post("http://localhost/persons")
                 .json(json!({ "name": "Jo", "ageInYears": 40, "relation": "me" })),
         );
         assert_eq!(res.status, Status::BadRequest);
 
         // Create with forbidden name
         let res = router.handle(
-            &Request::post("http://localhost/persons")
+            Request::post("http://localhost/persons")
                 .json(json!({ "name": "Bastiaan", "ageInYears": 40, "relation": "me" })),
         );
         assert_eq!(res.status, Status::BadRequest);
@@ -490,7 +490,7 @@ mod test {
         ctx.database.insert_person(person.clone()).unwrap();
 
         // Fetch /persons/:personId check if person is there
-        let res = router.handle(&Request::get(format!(
+        let res = router.handle(Request::get(format!(
             "http://localhost/persons/{}",
             person.id
         )));
@@ -499,7 +499,7 @@ mod test {
         assert_eq!(person.name, "Jan");
 
         // Fetch other person by random id should be 404 Not Found
-        let res = router.handle(&Request::get(format!(
+        let res = router.handle(Request::get(format!(
             "http://localhost/persons/{}",
             Uuid::now_v7()
         )));
@@ -522,7 +522,7 @@ mod test {
 
         // Update person
         let res = router.handle(
-            &Request::put(format!("http://localhost/persons/{}", person.id)).urlencoded(&[
+            Request::put(format!("http://localhost/persons/{}", person.id)).urlencoded(&[
                 ("name", "Jan"),
                 ("ageInYears", "41"),
                 ("relation", "me"),
@@ -534,7 +534,7 @@ mod test {
 
         // Update person with validation errors
         let res = router.handle(
-            &Request::put(format!("http://localhost/persons/{}", person.id)).urlencoded(&[
+            Request::put(format!("http://localhost/persons/{}", person.id)).urlencoded(&[
                 ("name", "Bastiaan"),
                 ("ageInYears", "41"),
                 ("relation", "wrong"),
@@ -558,14 +558,14 @@ mod test {
         ctx.database.insert_person(person.clone()).unwrap();
 
         // Delete person
-        let res = router.handle(&Request::delete(format!(
+        let res = router.handle(Request::delete(format!(
             "http://localhost/persons/{}",
             person.id
         )));
         assert_eq!(res.status, Status::NoContent);
 
         // Fetch /persons check if empty
-        let res = router.handle(&Request::get("http://localhost/persons"));
+        let res = router.handle(Request::get("http://localhost/persons"));
         assert_eq!(res.status, Status::Ok);
         let persons = serde_json::from_slice::<api::PersonIndexResponse>(&res.body)
             .unwrap()

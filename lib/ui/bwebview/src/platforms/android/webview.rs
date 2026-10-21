@@ -373,7 +373,7 @@ fn handle_request(protocols: &[crate::CustomProtocol], values: &[String]) -> Opt
     let protocol = protocols
         .iter()
         .find(|protocol| host.strip_suffix(HOST_SUFFIX) == Some(protocol.scheme.as_str()))?;
-    let response = (protocol.handler)(&request);
+    let response = (protocol.handler)(request);
     let mut bytes = format!("{}\n", response.status).into_bytes();
     // Line breaks in headers would break the line based response format.
     let line = |value: &str| value.replace(['\r', '\n'], " ");
@@ -381,6 +381,7 @@ fn handle_request(protocols: &[crate::CustomProtocol], values: &[String]) -> Opt
         bytes.extend_from_slice(format!("{}: {}\n", line(name), line(value)).as_bytes());
     }
     bytes.push(b'\n');
+    bytes.reserve_exact(response.body.len());
     bytes.extend_from_slice(&response.body);
     Some(bytes)
 }

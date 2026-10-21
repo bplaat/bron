@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: MIT
  */
 
+use std::cell::RefCell;
 use std::marker::PhantomData;
 use std::rc::Rc;
 use std::sync::OnceLock;
@@ -93,26 +94,42 @@ mod tests {
     }
 
     #[test]
+    fn font_families_share_interned_storage() {
+        let first = super::CanvasState::default();
+        let second = super::CanvasState::default();
+        assert!(super::Rc::ptr_eq(&first.font_family, &second.font_family));
+        assert!(super::Rc::ptr_eq(
+            &super::font_family("serif"),
+            &super::font_family(&String::from("serif"))
+        ));
+    }
+
+    #[test]
     fn color_from_packed_rgb_uses_rrggbb_order() {
         assert_eq!(Color::from_rgb(0x12_34_56), Color::rgb(0x12, 0x34, 0x56));
         assert_eq!(Color::from_rgb(0), Color::rgba(0, 0, 0, 255));
     }
 
     #[test]
-    fn offscreen_canvas_returns_straight_rgba_pixels() {
+    fn offscreen_canvas_returns_premultiplied_rgba_pixels() {
         let mut canvas = super::OffscreenCanvas::new(2, 1);
         canvas.draw(|context| {
             context.set_fill_style(Color::rgba(120, 80, 40, 128));
             context.fill_rect(0.0, 0.0, 1.0, 1.0);
         });
         let pixels = canvas.pixels();
-        assert!((i16::from(pixels[0]) - 120).abs() <= 2);
-        assert!((i16::from(pixels[1]) - 80).abs() <= 2);
-        assert!((i16::from(pixels[2]) - 40).abs() <= 2);
+        assert!((i16::from(pixels[0]) - 60).abs() <= 2);
+        assert!((i16::from(pixels[1]) - 40).abs() <= 2);
+        assert!((i16::from(pixels[2]) - 20).abs() <= 2);
         assert_eq!(pixels[3], 128);
         assert_eq!(&pixels[4..8], &[0, 0, 0, 0]);
         let previous = pixels.to_vec();
         assert_eq!(canvas.pixels(), previous);
+        let bitmap = canvas.to_bitmap().expect("valid bitmap");
+        assert!((i16::from(bitmap.data()[0]) - 120).abs() <= 4);
+        assert!((i16::from(bitmap.data()[1]) - 80).abs() <= 4);
+        assert!((i16::from(bitmap.data()[2]) - 40).abs() <= 4);
+        assert_eq!(bitmap.data()[3], 128);
         canvas.draw(|context| {
             context.clear_rect(0.0, 0.0, 2.0, 1.0);
             context.set_fill_style(Color::rgb(1, 2, 3));
@@ -217,13 +234,33 @@ impl Default for CanvasState {
             line_width: 1.0,
             line_cap: LineCap::Butt,
             line_join: LineJoin::Miter,
-            font_family: "sans-serif".into(),
+            font_family: font_family("sans-serif"),
             font_size: 10.0,
             font_weight: FontWeight::Normal,
             text_align: TextAlign::Start,
             text_baseline: TextBaseline::Alphabetic,
         }
     }
+}
+
+/// Return the shared storage for a font family, so per-frame state and font changes do not allocate.
+fn font_family(family: &str) -> Rc<str> {
+    const MAX_FONT_FAMILIES: usize = 16;
+    thread_local! {
+        #[allow(clippy::missing_const_for_thread_local, reason = "false positive without native TLS")]
+        static FONT_FAMILIES: RefCell<Vec<Rc<str>>> = const { RefCell::new(Vec::new()) };
+    }
+    FONT_FAMILIES.with_borrow_mut(|families| {
+        if let Some(interned) = families.iter().find(|interned| interned.as_ref() == family) {
+            return interned.clone();
+        }
+        if families.len() == MAX_FONT_FAMILIES {
+            families.remove(0);
+        }
+        let interned: Rc<str> = family.into();
+        families.push(interned.clone());
+        interned
+    })
 }
 
 /// Builder for one native 2D canvas attached to a window.
@@ -283,7 +320,7 @@ impl Canvas {
     }
 }
 
-/// A thread-bound native 2D canvas backed by tightly packed, straight-alpha RGBA8 pixels.
+/// A thread-bound native 2D canvas backed by tightly packed, premultiplied-alpha RGBA8 pixels.
 pub struct OffscreenCanvas {
     platform: PlatformOffscreenCanvas,
     width: u32,
@@ -334,42 +371,31 @@ impl OffscreenCanvas {
         self.platform.end_draw();
     }
 
-    /// Return tightly packed pixels in RGBA byte order with straight alpha.
+    /// Return tightly packed pixels in RGBA byte order with premultiplied alpha.
     pub fn pixels(&mut self) -> &[u8] {
         self.platform.pixels()
     }
 
-    /// Copy the current pixels into an image bitmap for encoding or further processing.
+    /// Copy the current pixels into a straight-alpha image bitmap for encoding or further processing.
     pub fn to_bitmap(&mut self) -> Result<image::Bitmap, image::EncodeError> {
-        image::Bitmap::new(self.width, self.height, self.pixels().to_vec())
+        let mut data = self.pixels().to_vec();
+        for pixel in data.as_chunks_mut::<4>().0 {
+            let alpha = pixel[3];
+            for component in &mut pixel[..3] {
+                *component = unpremultiply(*component, alpha);
+            }
+        }
+        image::Bitmap::new(self.width, self.height, data)
     }
 }
 
 #[cfg(not(any(target_vendor = "apple", target_os = "android")))]
-pub(crate) fn copy_bgra_premultiplied_to_rgba(source: &[u8], output: &mut [u8]) {
+pub(crate) fn copy_bgra_to_rgba(source: &[u8], output: &mut [u8]) {
     let (source, source_remainder) = source.as_chunks::<4>();
     let (output, output_remainder) = output.as_chunks_mut::<4>();
     debug_assert!(source_remainder.is_empty() && output_remainder.is_empty());
     for (source, output) in source.iter().zip(output) {
-        let alpha = source[3];
-        output[0] = unpremultiply(source[2], alpha);
-        output[1] = unpremultiply(source[1], alpha);
-        output[2] = unpremultiply(source[0], alpha);
-        output[3] = alpha;
-    }
-}
-
-#[cfg(any(target_vendor = "apple", target_os = "android"))]
-pub(crate) fn copy_rgba_premultiplied_to_straight(source: &[u8], output: &mut [u8]) {
-    let (source, source_remainder) = source.as_chunks::<4>();
-    let (output, output_remainder) = output.as_chunks_mut::<4>();
-    debug_assert!(source_remainder.is_empty() && output_remainder.is_empty());
-    for (source, output) in source.iter().zip(output) {
-        let alpha = source[3];
-        output[0] = unpremultiply(source[0], alpha);
-        output[1] = unpremultiply(source[1], alpha);
-        output[2] = unpremultiply(source[2], alpha);
-        output[3] = alpha;
+        *output = [source[2], source[1], source[0], source[3]];
     }
 }
 
@@ -502,13 +528,13 @@ impl<'a> CanvasRenderingContext2d<'a> {
     }
     /// Set text font family and size in logical pixels, rather than a CSS font string.
     /// Non-finite, zero, and negative sizes leave both properties unchanged.
-    pub fn set_font(&mut self, family: impl Into<String>, size: f32) {
+    pub fn set_font(&mut self, family: impl AsRef<str>, size: f32) {
         if !size.is_finite() || size <= 0.0 {
             return;
         }
-        let family = family.into();
+        let family = family.as_ref();
         if self.state.font_family.as_ref() != family {
-            self.state.font_family = family.into();
+            self.state.font_family = font_family(family);
         }
         self.state.font_size = size;
     }

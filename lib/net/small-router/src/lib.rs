@@ -95,25 +95,30 @@ impl<T> Route<T> {
             .collect()
     }
 
-    /// Match a request path, returning the percent-decoded parameters
-    fn match_path(&self, path: &str) -> Option<HashMap<String, String>> {
+    /// Check whether a request path matches, without allocating
+    fn matches(&self, path: &str) -> bool {
         let mut path_parts = path.split('/').filter(|part| !part.is_empty());
-        let mut params = HashMap::new();
-        for part in &self.parts {
-            let actual = path_parts.next()?;
-            match part {
-                RoutePart::Static(expected) => {
-                    if actual != expected {
-                        return None;
-                    }
-                }
-                RoutePart::Param(name) => {
-                    let value = percent_decode_str(actual).decode_utf8_lossy();
-                    params.insert(name.clone(), value.into_owned());
-                }
-            }
-        }
-        path_parts.next().is_none().then_some(params)
+        self.parts.iter().all(|part| {
+            path_parts.next().is_some_and(|actual| match part {
+                RoutePart::Static(expected) => actual == expected,
+                RoutePart::Param(_) => true,
+            })
+        }) && path_parts.next().is_none()
+    }
+
+    /// Percent-decoded parameters of a path this route matches
+    fn params(&self, path: &str) -> HashMap<String, String> {
+        self.parts
+            .iter()
+            .zip(path.split('/').filter(|part| !part.is_empty()))
+            .filter_map(|(part, actual)| match part {
+                RoutePart::Param(name) => Some((
+                    name.clone(),
+                    percent_decode_str(actual).decode_utf8_lossy().into_owned(),
+                )),
+                RoutePart::Static(_) => None,
+            })
+            .collect()
     }
 
     fn has_same_shape(&self, other: &Self) -> bool {
@@ -414,43 +419,38 @@ struct InnerRouter<T: Clone> {
 }
 
 impl<T: Clone> InnerRouter<T> {
-    fn handle(&self, req: &Request) -> Response {
+    fn handle(&self, mut req: Request) -> Response {
         let mut ctx = self.ctx.clone();
-        match self.handle_inner(req, &mut ctx) {
+        match self.handle_inner(&mut req, &mut ctx) {
             Ok(res) => res,
-            Err(err) => (self.error_handler)(req, &mut ctx, &*err),
+            Err(err) => (self.error_handler)(&req, &mut ctx, &*err),
         }
     }
 
-    fn handle_inner(&self, req: &Request, ctx: &mut T) -> Result<Response> {
+    fn handle_inner(&self, req: &mut Request, ctx: &mut T) -> Result<Response> {
         // Match routes
-        let path = req.url.path();
-        if let Some((first_match, params)) = self
+        let Some(first_match) = self
             .routes
             .iter()
-            .find_map(|route| Some((route, route.match_path(path)?)))
-        {
-            // Find a matching method among routes with the same parsed path shape. Parameter names
-            // may differ between method-specific route registrations.
-            let mut req = req.clone();
-            if let Some(route) = self.routes.iter().find(|route| {
-                route.has_same_shape(first_match) && route.methods.contains(&req.method)
-            }) {
-                req.params = if std::ptr::eq(route, first_match) {
-                    params
-                } else {
-                    route.match_path(path).unwrap_or_default()
-                };
-                return route.handler.call(&req, ctx);
-            }
+            .find(|route| route.matches(req.url.path()))
+        else {
+            // Or run fallback handler
+            return self.fallback_handler.call(req, ctx);
+        };
 
+        // Find a matching method among routes with the same parsed path shape. Parameter names
+        // may differ between method-specific route registrations. The router owns the request, so
+        // the parameters are added without copying its headers and body.
+        let route = self
+            .routes
+            .iter()
+            .find(|route| route.has_same_shape(first_match) && route.methods.contains(&req.method));
+        req.params = route.unwrap_or(first_match).params(req.url.path());
+        match route {
+            Some(route) => route.handler.call(req, ctx),
             // Or run not allowed method handler
-            req.params = params;
-            return self.not_allowed_method_handler.call(&req, ctx);
+            None => self.not_allowed_method_handler.call(req, ctx),
         }
-
-        // Or run fallback handler
-        self.fallback_handler.call(req, ctx)
     }
 }
 
@@ -460,8 +460,8 @@ impl<T: Clone> InnerRouter<T> {
 pub struct Router<T: Clone>(Arc<InnerRouter<T>>);
 
 impl<T: Clone> Router<T> {
-    /// Handle request
-    pub fn handle(&self, req: &Request) -> Response {
+    /// Handle request, adding its path parameters
+    pub fn handle(&self, req: Request) -> Response {
         self.0.handle(req)
     }
 }
@@ -498,35 +498,35 @@ mod test {
             .build();
 
         // Test home route
-        let res = router.handle(&Request::get("http://localhost/"));
+        let res = router.handle(Request::get("http://localhost/"));
         assert_eq!(res.status, Status::Ok);
-        assert_eq!(res.body, b"Hello, World!");
+        assert_eq!(&*res.body, b"Hello, World!");
 
         // Test fallback route
-        let res = router.handle(&Request::get("http://localhost/unknown"));
+        let res = router.handle(Request::get("http://localhost/unknown"));
         assert_eq!(res.status, Status::NotFound);
-        assert_eq!(res.body, b"404 Not Found");
+        assert_eq!(&*res.body, b"404 Not Found");
 
         // Test route with params
-        let res = router.handle(&Request::get("http://localhost/hello/Bassie"));
+        let res = router.handle(Request::get("http://localhost/hello/Bassie"));
         assert_eq!(res.status, Status::Ok);
-        assert_eq!(res.body, b"Hello, Bassie!");
+        assert_eq!(&*res.body, b"Hello, Bassie!");
 
         // Test route with multiple params
-        let res = router.handle(&Request::get(
+        let res = router.handle(Request::get(
             "http://localhost/hello/Bassie/i/handle/so/much",
         ));
         assert_eq!(res.status, Status::Ok);
 
         // Test wrong method
-        let res = router.handle(&Request::options("http://localhost/"));
+        let res = router.handle(Request::options("http://localhost/"));
         assert_eq!(res.status, Status::MethodNotAllowed);
-        assert_eq!(res.body, b"405 Method Not Allowed");
+        assert_eq!(&*res.body, b"405 Method Not Allowed");
 
         // Test error route
-        let res = router.handle(&Request::get("http://localhost/error"));
+        let res = router.handle(Request::get("http://localhost/error"));
         assert_eq!(res.status, Status::InternalServerError);
-        assert_eq!(res.body, b"500 Internal Server Error");
+        assert_eq!(&*res.body, b"500 Internal Server Error");
     }
 
     #[test]
@@ -553,13 +553,13 @@ mod test {
             })
             .build();
 
-        let res = router.handle(&Request::get("http://localhost/"));
+        let res = router.handle(Request::get("http://localhost/"));
         assert_eq!(res.status, Status::Ok);
-        assert_eq!(res.body, b"Hello from a closure");
+        assert_eq!(&*res.body, b"Hello from a closure");
 
-        let res = router.handle(&Request::get("http://localhost/blocked"));
+        let res = router.handle(Request::get("http://localhost/blocked"));
         assert_eq!(res.status, Status::InternalServerError);
-        assert_eq!(res.body, b"Layer failed: blocked by pre-layer");
+        assert_eq!(&*res.body, b"Layer failed: blocked by pre-layer");
         assert_eq!(pre_layer_calls.load(Ordering::Relaxed), 2);
     }
 
@@ -574,23 +574,23 @@ mod test {
             })
             .build();
 
-        let get = router.handle(&Request::get("http://localhost/users/10"));
+        let get = router.handle(Request::get("http://localhost/users/10"));
         assert_eq!(get.status, Status::Ok);
-        assert_eq!(get.body, b"10");
+        assert_eq!(&*get.body, b"10");
 
-        let post = router.handle(&Request::post("http://localhost/users/20"));
+        let post = router.handle(Request::post("http://localhost/users/20"));
         assert_eq!(post.status, Status::Ok);
-        assert_eq!(post.body, b"20");
+        assert_eq!(&*post.body, b"20");
     }
 
     #[test]
     fn test_parameters_are_percent_decoded() {
         let router = RouterBuilder::new().get("/hello/:name", hello).build();
-        let res = router.handle(&Request::get(
+        let res = router.handle(Request::get(
             "http://localhost/hello/Bassie%20van%20der%20Plaat",
         ));
-        assert_eq!(res.body, b"Hello, Bassie van der Plaat!");
-        let res = router.handle(&Request::get("http://localhost/hello/caf%C3%A9"));
+        assert_eq!(&*res.body, b"Hello, Bassie van der Plaat!");
+        let res = router.handle(Request::get("http://localhost/hello/caf%C3%A9"));
         assert_eq!(res.body, "Hello, café!".as_bytes());
     }
 
@@ -601,7 +601,7 @@ mod test {
             .post("/users/:id", |_, _| Ok(Response::with_body("parameter")))
             .build();
 
-        let response = router.handle(&Request::post("http://localhost/users/current"));
+        let response = router.handle(Request::post("http://localhost/users/current"));
         assert_eq!(response.status, Status::MethodNotAllowed);
     }
 }

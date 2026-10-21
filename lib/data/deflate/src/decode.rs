@@ -6,7 +6,6 @@
 
 //! DEFLATE decompression with two-level Huffman lookup tables.
 
-use alloc::vec;
 use alloc::vec::Vec;
 
 use crate::{CODE_LENGTH_ORDER, DIST_BASE, DIST_EXTRA, Error, LEN_BASE, LEN_EXTRA};
@@ -49,6 +48,10 @@ const fn code_length_entry(symbol: usize) -> Option<u32> {
 }
 
 // MARK: Tables
+/// The most codes in one table: the 288 fixed literal and length codes.
+const MAX_CODES: usize = 288;
+
+#[derive(Default)]
 struct Table {
     entries: Vec<u32>,
     bits: u32,
@@ -57,6 +60,19 @@ struct Table {
 impl Table {
     /// Builds a lookup table for canonical codes, rejecting over-subscribed code lengths.
     fn new(lens: &[u8], bits: u32, symbol: fn(usize) -> Option<u32>) -> Result<Self, Error> {
+        let mut table = Self::default();
+        table.build(lens, bits, symbol)?;
+        Ok(table)
+    }
+
+    /// Rebuilds the table in place, reusing its entry storage across blocks.
+    fn build(
+        &mut self,
+        lens: &[u8],
+        bits: u32,
+        symbol: fn(usize) -> Option<u32>,
+    ) -> Result<(), Error> {
+        debug_assert!(lens.len() <= MAX_CODES && bits <= LITLEN_BITS);
         let mut count = [0u32; 16];
         for &len in lens {
             count[len as usize] += 1;
@@ -72,7 +88,8 @@ impl Table {
         for len in 1..16 {
             next[len] = (next[len - 1] + count[len - 1] * u32::from(len > 1)) << 1;
         }
-        let mut codes = vec![0u32; lens.len()];
+        let mut codes = [0u32; MAX_CODES];
+        let codes = &mut codes[..lens.len()];
         for (code, &len) in codes.iter_mut().zip(lens) {
             if len > 0 {
                 *code = next[len as usize].reverse_bits() >> (32 - len);
@@ -82,7 +99,8 @@ impl Table {
 
         // Codes longer than the primary table share a subtable per primary prefix.
         let primary = 1usize << bits;
-        let mut sub_bits = vec![0u32; primary];
+        let mut sub_bits = [0u32; 1 << LITLEN_BITS];
+        let sub_bits = &mut sub_bits[..primary];
         for (&code, &len) in codes.iter().zip(lens) {
             let len = u32::from(len);
             if len > bits {
@@ -90,7 +108,9 @@ impl Table {
                 sub_bits[prefix] = sub_bits[prefix].max(len - bits);
             }
         }
-        let mut entries = vec![0u32; primary];
+        let entries = &mut self.entries;
+        entries.clear();
+        entries.resize(primary, 0);
         for (prefix, &sub) in sub_bits.iter().enumerate() {
             if sub > 0 {
                 entries[prefix] = entry(KIND_LINK, entries.len() as u32, 0) | sub << 4;
@@ -118,7 +138,8 @@ impl Table {
                 }
             }
         }
-        Ok(Self { entries, bits })
+        self.bits = bits;
+        Ok(())
     }
 
     fn decode(&self, input: &mut Bits) -> Result<u32, Error> {
@@ -245,7 +266,15 @@ fn inflate_block(
     }
 }
 
-fn read_dynamic_tables(input: &mut Bits) -> Result<(Table, Table), Error> {
+/// Tables rebuilt for every dynamic block, kept to reuse their storage.
+#[derive(Default)]
+struct DynamicTables {
+    code_length: Table,
+    litlen: Table,
+    dist: Table,
+}
+
+fn read_dynamic_tables(input: &mut Bits, tables: &mut DynamicTables) -> Result<(), Error> {
     input.refill()?;
     let hlit = input.take(5) as usize + 257;
     let hdist = input.take(5) as usize + 1;
@@ -258,13 +287,15 @@ fn read_dynamic_tables(input: &mut Bits) -> Result<(Table, Table), Error> {
         input.refill()?;
         code_lengths[symbol] = input.take(3) as u8;
     }
-    let code_length_table = Table::new(&code_lengths, CODE_LENGTH_BITS, code_length_entry)?;
+    tables
+        .code_length
+        .build(&code_lengths, CODE_LENGTH_BITS, code_length_entry)?;
     let mut lens = [0u8; 286 + 30];
     let total = hlit + hdist;
     let mut index = 0;
     while index < total {
         input.refill()?;
-        let symbol = code_length_table.decode(input)? >> 16;
+        let symbol = tables.code_length.decode(input)? >> 16;
         let (value, repeat) = match symbol {
             0..16 => (symbol as u8, 1),
             16 if index > 0 => (lens[index - 1], 3 + input.take(2) as usize),
@@ -281,10 +312,10 @@ fn read_dynamic_tables(input: &mut Bits) -> Result<(Table, Table), Error> {
     if lens[256] == 0 {
         return Err(Error::InvalidData);
     }
-    Ok((
-        Table::new(&lens[..hlit], LITLEN_BITS, litlen_entry)?,
-        Table::new(&lens[hlit..total], DIST_BITS, dist_entry)?,
-    ))
+    tables
+        .litlen
+        .build(&lens[..hlit], LITLEN_BITS, litlen_entry)?;
+    tables.dist.build(&lens[hlit..total], DIST_BITS, dist_entry)
 }
 
 fn fixed_tables() -> Result<(Table, Table), Error> {
@@ -299,7 +330,10 @@ fn fixed_tables() -> Result<(Table, Table), Error> {
 
 /// Decompresses one DEFLATE stream and returns the number of input bytes it used.
 pub(crate) fn decompress(data: &[u8], limit: usize, out: &mut Vec<u8>) -> Result<usize, Error> {
-    reserve(out, data.len().saturating_mul(4).min(limit), limit)?;
+    // Keep an exact capacity reserved from a size hint, otherwise guess from the input size.
+    if out.capacity() == 0 {
+        reserve(out, data.len().saturating_mul(4).min(limit), limit)?;
+    }
     let mut input = Bits {
         data,
         pos: 0,
@@ -307,6 +341,7 @@ pub(crate) fn decompress(data: &[u8], limit: usize, out: &mut Vec<u8>) -> Result
         count: 0,
     };
     let mut fixed = None;
+    let mut dynamic = DynamicTables::default();
     loop {
         input.refill()?;
         let last = input.take(1) == 1;
@@ -341,8 +376,8 @@ pub(crate) fn decompress(data: &[u8], limit: usize, out: &mut Vec<u8>) -> Result
                 }
             }
             2 => {
-                let (litlen, dist) = read_dynamic_tables(&mut input)?;
-                inflate_block(&mut input, &litlen, &dist, out, limit)?;
+                read_dynamic_tables(&mut input, &mut dynamic)?;
+                inflate_block(&mut input, &dynamic.litlen, &dynamic.dist, out, limit)?;
             }
             _ => return Err(Error::InvalidData),
         }

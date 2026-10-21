@@ -717,7 +717,7 @@ extern "system" fn web_resource_requested(
 
     for custom_protocol in &_self.custom_protocols {
         if http_request.url.host() == Some(&format!("{}.localhost", custom_protocol.scheme)) {
-            let response = (custom_protocol.handler)(&http_request);
+            let response = (custom_protocol.handler)(http_request);
 
             let webview2_response = http_response_to_webview2_response(
                 response,

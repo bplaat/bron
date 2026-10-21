@@ -71,15 +71,16 @@ pub(super) struct Context {
     queue: Object,
     frames: RefCell<[Option<Frame>; 2]>,
     slot: Cell<usize>,
-    staging_pool: RefCell<[Vec<Object>; 2]>,
+    // One shared-memory upload buffer per frame slot, grown on demand and reused.
+    staging: RefCell<[Option<Object>; 2]>,
+    pub(crate) pool: RefCell<Pool>,
 }
 
 struct Frame {
     command: Object,
     presentation: Option<Object>,
-    _uploads: Vec<Upload>,
-    _passes: Vec<Pass>,
-    _staging: Vec<Object>,
+    uploads: Vec<Upload>,
+    passes: Vec<Pass>,
 }
 
 pub(super) struct Buffer {
@@ -112,7 +113,8 @@ impl Context {
                 queue,
                 frames: RefCell::new([None, None]),
                 slot: Cell::new(0),
-                staging_pool: RefCell::new([Vec::new(), Vec::new()]),
+                staging: RefCell::new([None, None]),
+                pool: RefCell::default(),
             }))
         }
     }
@@ -127,27 +129,26 @@ impl Context {
                         return Err(error(msg_send![&**command, error]));
                     }
                 }
-                self.staging_pool.borrow_mut()[slot] = frame._staging;
             }
+            self.pool.borrow_mut().retire(frame.uploads, frame.passes);
         }
         Ok(())
     }
 
+    /// Copy the upload arena into the current slot's staging buffer, which the GPU finished with.
     fn stage(&self, data: &[u8]) -> Result<Object> {
         unsafe {
-            let source = match self.staging_pool.borrow_mut()[self.slot.get()].pop() {
-                Some(buffer)
-                    if {
-                        let length: usize = msg_send![&*buffer, length];
-                        length >= data.len()
-                    } =>
-                {
-                    buffer
-                }
-                _ => owned(
-                    msg_send![&*self.device, newBufferWithLength: data.len(), options: 0usize],
-                )?,
-            };
+            let mut staging = self.staging.borrow_mut();
+            let slot = &mut staging[self.slot.get()];
+            let length: usize = slot
+                .as_ref()
+                .map_or(0, |buffer| msg_send![&**buffer, length]);
+            if length < data.len() {
+                *slot = Some(owned(
+                    msg_send![&*self.device, newBufferWithLength: data.len().next_power_of_two(), options: 0usize],
+                )?);
+            }
+            let source = slot.clone().expect("staging buffer");
             let contents: *mut c_void = msg_send![&*source, contents];
             ptr::copy_nonoverlapping(data.as_ptr(), contents.cast(), data.len());
             Ok(source)
@@ -251,9 +252,11 @@ impl Context {
             let attachment: *mut AnyObject =
                 msg_send![attachments, objectAtIndexedSubscript: 0usize];
             let _: () = msg_send![attachment, setPixelFormat: format(color.format)];
-            if color.blend.is_some() {
+            if let Some(blend) = color.blend {
+                // MTLBlendFactorOne for premultiplied sources, otherwise MTLBlendFactorSourceAlpha.
+                let source = if blend.premultiplied { 1usize } else { 4usize };
                 let _: () = msg_send![attachment, setBlendingEnabled: Bool::YES];
-                let _: () = msg_send![attachment, setSourceRGBBlendFactor: 4usize];
+                let _: () = msg_send![attachment, setSourceRGBBlendFactor: source];
                 let _: () = msg_send![attachment, setDestinationRGBBlendFactor: 5usize];
                 let _: () = msg_send![attachment, setSourceAlphaBlendFactor: 1usize];
                 let _: () = msg_send![attachment, setDestinationAlphaBlendFactor: 5usize];
@@ -315,12 +318,17 @@ impl Context {
         })
     }
 
-    pub(super) fn submit(&self, uploads: Vec<Upload>, passes: Vec<Pass>) -> Result<()> {
+    pub(super) fn submit(
+        &self,
+        uploads: Vec<Upload>,
+        data: &[u8],
+        passes: Vec<Pass>,
+    ) -> Result<()> {
         self.wait(self.slot.get())?;
         autoreleasepool(|_| unsafe {
             let command = retained(msg_send![&*self.queue, commandBuffer])?;
-            let mut staging = Vec::new();
             if !uploads.is_empty() {
+                let source = self.stage(data)?;
                 let blit = retained(msg_send![&*command, blitCommandEncoder])?;
                 for upload in &uploads {
                     match upload {
@@ -329,9 +337,7 @@ impl Context {
                             offset,
                             data,
                         } => {
-                            let source = self.stage(data)?;
-                            let _: () = msg_send![&*blit, copyFromBuffer: &*source, sourceOffset: 0usize, toBuffer: &*buffer.inner.native.object, destinationOffset: *offset as usize, size: data.len()];
-                            staging.push(source);
+                            let _: () = msg_send![&*blit, copyFromBuffer: &*source, sourceOffset: data.start, toBuffer: &*buffer.inner.native.object, destinationOffset: *offset as usize, size: data.len()];
                         }
                         Upload::Texture {
                             texture,
@@ -341,19 +347,10 @@ impl Context {
                             data,
                         } => {
                             let row = size.width as usize * 4;
-                            let pitch = (row + 255) & !255;
-                            let image = pitch * size.height as usize;
-                            let mut padded = vec![0u8; image * size.depth_or_array_layers as usize];
-                            for (src, dst) in
-                                data.chunks_exact(row).zip(padded.chunks_exact_mut(pitch))
-                            {
-                                dst[..row].copy_from_slice(src);
-                            }
-                            let source = self.stage(&padded)?;
+                            let image = row * size.height as usize;
                             for layer in 0..size.depth_or_array_layers {
-                                let _: () = msg_send![&*blit, copyFromBuffer: &*source, sourceOffset: layer as usize * image, sourceBytesPerRow: pitch, sourceBytesPerImage: image, sourceSize: MSize { width: size.width as usize, height: size.height as usize, depth: 1 }, toTexture: &*texture.inner.native.object, destinationSlice: (origin.z + layer) as usize, destinationLevel: *mip as usize, destinationOrigin: MOrigin { x: origin.x as usize, y: origin.y as usize, z: 0 }];
+                                let _: () = msg_send![&*blit, copyFromBuffer: &*source, sourceOffset: data.start + layer as usize * image, sourceBytesPerRow: row, sourceBytesPerImage: image, sourceSize: MSize { width: size.width as usize, height: size.height as usize, depth: 1 }, toTexture: &*texture.inner.native.object, destinationSlice: (origin.z + layer) as usize, destinationLevel: *mip as usize, destinationOrigin: MOrigin { x: origin.x as usize, y: origin.y as usize, z: 0 }];
                             }
-                            staging.push(source);
                         }
                     }
                 }
@@ -424,13 +421,11 @@ impl Context {
                 let _: () = msg_send![&*render, endEncoding];
             }
             let _: () = msg_send![&*command, commit];
-            self.staging_pool.borrow_mut()[self.slot.get()].clear();
             self.frames.borrow_mut()[self.slot.get()] = Some(Frame {
                 command,
                 presentation: None,
-                _uploads: uploads,
-                _passes: passes,
-                _staging: staging,
+                uploads,
+                passes,
             });
             Ok(())
         })
@@ -479,7 +474,7 @@ mod tests {
     fn gpu() -> (Device, Queue) {
         let shared = Rc::new(Shared {
             native: Context::new().expect("Metal device required"),
-            uploads: RefCell::new(Vec::new()),
+            uploads: RefCell::default(),
         });
         (
             Device {
@@ -517,7 +512,7 @@ mod tests {
     }
 
     #[test]
-    fn native_render_without_bindings_or_depth() {
+    fn native_render_without_bindings_or_depth_blends() {
         let (device, queue) = gpu();
         let color = device.create_texture(&TextureDescriptor {
             label: None,
@@ -544,62 +539,75 @@ mod tests {
                     const float2 points[] = { float2(-1,-1), float2(3,-1), float2(-1,3) };
                     return float4(points[index], 0, 1);
                 }
-                fragment float4 fs() { return float4(0, 1, 0, 1); }
+                fragment float4 fs() { return float4(0, 0.5, 0, 0.5); }
                 "#,
             ),
         });
-        let pipeline = device.create_render_pipeline(&RenderPipelineDescriptor {
-            label: None,
-            layout: None,
-            vertex: VertexState {
-                module: &shader,
-                entry_point: Some("vs"),
-                compilation_options: Default::default(),
-                buffers: &[],
-            },
-            primitive: Default::default(),
-            depth_stencil: None,
-            multisample: Default::default(),
-            fragment: Some(FragmentState {
-                module: &shader,
-                entry_point: Some("fs"),
-                compilation_options: Default::default(),
-                targets: &[Some(ColorTargetState {
-                    format: TextureFormat::Rgba8Unorm,
-                    blend: None,
-                    write_mask: ColorWrites::ALL,
-                })],
-            }),
-            multiview_mask: None,
-            cache: None,
-        });
-        let view = color.create_view(&Default::default());
-        let mut encoder = device.create_command_encoder(&Default::default());
-        {
-            let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
+        // A half-transparent green source over opaque red, as straight and premultiplied alpha.
+        for (blend, expected) in [
+            (None, [0, 128, 0, 128]),
+            (Some(BlendState::ALPHA_BLENDING), [128, 64, 0, 255]),
+            (
+                Some(BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+                [128, 128, 0, 255],
+            ),
+        ] {
+            let pipeline = device.create_render_pipeline(&RenderPipelineDescriptor {
                 label: None,
-                color_attachments: &[Some(RenderPassColorAttachment {
-                    view: &view,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: Operations {
-                        load: LoadOp::Clear(Color::BLACK),
-                        store: StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
+                layout: None,
+                vertex: VertexState {
+                    module: &shader,
+                    entry_point: Some("vs"),
+                    compilation_options: Default::default(),
+                    buffers: &[],
+                },
+                primitive: Default::default(),
+                depth_stencil: None,
+                multisample: Default::default(),
+                fragment: Some(FragmentState {
+                    module: &shader,
+                    entry_point: Some("fs"),
+                    compilation_options: Default::default(),
+                    targets: &[Some(ColorTargetState {
+                        format: TextureFormat::Rgba8Unorm,
+                        blend,
+                        write_mask: ColorWrites::ALL,
+                    })],
+                }),
+                multiview_mask: None,
+                cache: None,
             });
-            pass.set_pipeline(&pipeline);
-            pass.draw(0..3, 0..1);
+            let view = color.create_view(&Default::default());
+            let mut encoder = device.create_command_encoder(&Default::default());
+            {
+                let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
+                    label: None,
+                    color_attachments: &[Some(RenderPassColorAttachment {
+                        view: &view,
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: Operations {
+                            load: LoadOp::Clear(Color {
+                                r: 1.,
+                                g: 0.,
+                                b: 0.,
+                                a: 1.,
+                            }),
+                            store: StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                });
+                pass.set_pipeline(&pipeline);
+                pass.draw(0..3, 0..1);
+            }
+            queue.submit([encoder.finish()]);
+            for pixel in pixels(&device, &color).as_chunks::<4>().0 {
+                for (actual, expected) in pixel.iter().zip(expected) {
+                    assert!(actual.abs_diff(expected) <= 1, "{pixel:?} != {expected:?}");
+                }
+            }
         }
-        queue.submit([encoder.finish()]);
-        assert!(
-            pixels(&device, &color)
-                .as_chunks::<4>()
-                .0
-                .iter()
-                .all(|pixel| *pixel == [0, 255, 0, 255])
-        );
     }
 
     #[test]

@@ -4,6 +4,8 @@
  * SPDX-License-Identifier: MIT
  */
 
+#[cfg(feature = "custom_protocol")]
+use std::borrow::Cow;
 use std::cell::Cell;
 use std::ffi::c_void;
 use std::ptr::{null, null_mut};
@@ -502,8 +504,9 @@ impl CustomProtocolDelegate {
         let custom_protocol = &self.ivars().custom_protocol;
         let ns_request: *mut Object = unsafe { msg_send![url_scheme_task, request] };
         let req = ns_request_to_http_request(ns_request);
-        let res = (custom_protocol.handler)(&req);
-        let (ns_response, ns_data) = http_response_to_ns_response(&res, &req);
+        let (url, version) = (req.url.to_string(), req.version.to_string());
+        let res = (custom_protocol.handler)(req);
+        let (ns_response, ns_data) = http_response_to_ns_response(&res, &url, &version);
         unsafe {
             let _: () = msg_send![url_scheme_task, didReceiveResponse:ns_response.as_ptr()];
             let _: () = msg_send![url_scheme_task, didReceiveData:ns_data.as_ptr()];
@@ -557,11 +560,11 @@ fn ns_request_to_http_request(ns_request: *mut Object) -> small_http::Request {
 #[cfg(feature = "custom_protocol")]
 fn http_response_to_ns_response(
     res: &small_http::Response,
-    req: &small_http::Request,
+    url: &str,
+    version: &str,
 ) -> (Retained<Object>, Retained<Object>) {
     let ns_response: Retained<Object> = unsafe {
-        let url: *mut Object =
-            msg_send![class!(NSURL), URLWithString:&*NSString::new(req.url.to_string())];
+        let url: *mut Object = msg_send![class!(NSURL), URLWithString:&*NSString::new(url)];
 
         let headers: *mut Object = msg_send![class!(NSMutableDictionary), dictionary];
         for (key, value) in &res.headers {
@@ -574,13 +577,21 @@ fn http_response_to_ns_response(
             ns_response,
             initWithURL:url,
             statusCode:res.status as i64,
-            HTTPVersion:&*NSString::new(req.version.to_string()),
+            HTTPVersion:&*NSString::new(version),
             headerFields:headers
         ];
         ns_response
     };
+    // Static bodies such as embedded assets outlive the response, so WebKit can read them in place.
     let ns_data: Retained<Object> = unsafe {
-        msg_send![class!(NSData), dataWithBytes:res.body.as_ptr() as *const c_void, length:res.body.len()]
+        match &res.body {
+            Cow::Borrowed(body) => {
+                msg_send![class!(NSData), dataWithBytesNoCopy:body.as_ptr() as *mut c_void, length:body.len(), freeWhenDone:Bool::NO]
+            }
+            Cow::Owned(body) => {
+                msg_send![class!(NSData), dataWithBytes:body.as_ptr() as *const c_void, length:body.len()]
+            }
+        }
     };
     (ns_response, ns_data)
 }

@@ -333,7 +333,20 @@ impl JniEnv {
 
     /// Create a Java string from UTF-8 text.
     pub fn new_string(self, value: &str) -> jstring {
-        let chars = value.encode_utf16().collect::<Vec<_>>();
+        // UTF-16 never has more units than UTF-8 has bytes, so short text is encoded on the stack.
+        let mut buffer = [0u16; 256];
+        let heap;
+        let chars = if value.len() <= buffer.len() {
+            let mut length = 0;
+            for unit in value.encode_utf16() {
+                buffer[length] = unit;
+                length += 1;
+            }
+            &buffer[..length]
+        } else {
+            heap = value.encode_utf16().collect::<Vec<_>>();
+            &heap[..]
+        };
         let string =
             unsafe { ((**self.0).NewString)(self.0, chars.as_ptr(), chars.len() as jsize) };
         self.check_exception();

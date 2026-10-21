@@ -11,14 +11,14 @@ use std::net::{Ipv4Addr, TcpListener};
 use small_http::{Request, Response, Status};
 use small_websocket::Message;
 
-fn handler(request: &Request) -> Response {
+fn handler(request: Request) -> Response {
     if request.url.path() != "/ws" {
         return Response::with_status(Status::NotFound)
             .header("Content-Type", "text/html")
             .body("<h1>404 Not Found</h1>");
     }
 
-    small_websocket::upgrade(request, |mut websocket| {
+    small_websocket::upgrade(&request, |mut websocket| {
         println!(
             "Client connected: {}",
             websocket.peer_addr().expect("Can't get client address")

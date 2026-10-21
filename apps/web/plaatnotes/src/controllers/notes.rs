@@ -478,7 +478,7 @@ mod test {
         let (user, token) = create_test_user_with_session(&ctx);
 
         let res = router.handle(
-            &Request::get(format!("http://localhost/api/users/{}/notes", user.id))
+            Request::get(format!("http://localhost/api/users/{}/notes", user.id))
                 .header("Authorization", format!("Bearer {token}")),
         );
         assert_eq!(res.status, Status::Ok);
@@ -497,7 +497,7 @@ mod test {
         );
 
         let res = router.handle(
-            &Request::get(format!("http://localhost/api/users/{}/notes", user.id))
+            Request::get(format!("http://localhost/api/users/{}/notes", user.id))
                 .header("Authorization", format!("Bearer {token}")),
         );
         assert_eq!(res.status, Status::Ok);
@@ -515,7 +515,7 @@ mod test {
         let (_, token) = create_test_user_with_session(&ctx);
 
         let res = router.handle(
-            &Request::get("http://localhost/api/notes")
+            Request::get("http://localhost/api/notes")
                 .header("Authorization", format!("Bearer {token}")),
         );
         assert_eq!(res.status, Status::Forbidden);
@@ -539,7 +539,7 @@ mod test {
             .unwrap();
 
         let res = router.handle(
-            &Request::get(format!("http://localhost/api/users/{}/notes", user.id))
+            Request::get(format!("http://localhost/api/users/{}/notes", user.id))
                 .header("Authorization", format!("Bearer {token}")),
         );
         assert_eq!(res.status, Status::Ok);
@@ -569,7 +569,7 @@ mod test {
 
         // Search by body
         let res = router.handle(
-            &Request::get(format!(
+            Request::get(format!(
                 "http://localhost/api/users/{}/notes?q=meeting",
                 user.id
             ))
@@ -582,7 +582,7 @@ mod test {
 
         // Search by title
         let res = router.handle(
-            &Request::get(format!(
+            Request::get(format!(
                 "http://localhost/api/users/{}/notes?q=Shopping",
                 user.id
             ))
@@ -604,7 +604,7 @@ mod test {
         insert_test_note(&ctx, user.id, None, "Some other content");
 
         let res = router.handle(
-            &Request::get(format!(
+            Request::get(format!(
                 "http://localhost/api/users/{}/notes?q=ProjectAlpha",
                 user.id
             ))
@@ -631,7 +631,7 @@ mod test {
 
         // Prefix search
         let res = router.handle(
-            &Request::get(format!("{base}?q=Al*"))
+            Request::get(format!("{base}?q=Al*"))
                 .header("Authorization", format!("Bearer {token}")),
         );
         assert_eq!(res.status, Status::Ok);
@@ -645,7 +645,7 @@ mod test {
 
         // AND search
         let res = router.handle(
-            &Request::get(format!("{base}?q=Alice AND Smith"))
+            Request::get(format!("{base}?q=Alice AND Smith"))
                 .header("Authorization", format!("Bearer {token}")),
         );
         assert_eq!(res.status, Status::Ok);
@@ -655,7 +655,7 @@ mod test {
 
         // OR search
         let res = router.handle(
-            &Request::get(format!("{base}?q=Alice OR Bob"))
+            Request::get(format!("{base}?q=Alice OR Bob"))
                 .header("Authorization", format!("Bearer {token}")),
         );
         assert_eq!(res.status, Status::Ok);
@@ -669,7 +669,7 @@ mod test {
 
         // NOT search
         let res = router.handle(
-            &Request::get(format!("{base}?q=Alice NOT Smith"))
+            Request::get(format!("{base}?q=Alice NOT Smith"))
                 .header("Authorization", format!("Bearer {token}")),
         );
         assert_eq!(res.status, Status::Ok);
@@ -679,7 +679,7 @@ mod test {
 
         // Phrase search
         let res = router.handle(
-            &Request::get(format!("{base}?q=\"Alice Smith\""))
+            Request::get(format!("{base}?q=\"Alice Smith\""))
                 .header("Authorization", format!("Bearer {token}")),
         );
         assert_eq!(res.status, Status::Ok);
@@ -689,7 +689,7 @@ mod test {
 
         // Column-scoped search (body field only)
         let res = router.handle(
-            &Request::get(format!("{base}?q=body:Carol"))
+            Request::get(format!("{base}?q=body:Carol"))
                 .header("Authorization", format!("Bearer {token}")),
         );
         assert_eq!(res.status, Status::Ok);
@@ -716,7 +716,7 @@ mod test {
         let base = format!("http://localhost/api/users/{}/notes", user.id);
 
         let res = router.handle(
-            &Request::get(format!("{base}?limit=10&page=1"))
+            Request::get(format!("{base}?limit=10&page=1"))
                 .header("Authorization", format!("Bearer {token}")),
         );
         assert_eq!(res.status, Status::Ok);
@@ -727,7 +727,7 @@ mod test {
         assert_eq!(response.pagination.total, 30);
 
         let res = router.handle(
-            &Request::get(format!("{base}?limit=5&page=2"))
+            Request::get(format!("{base}?limit=5&page=2"))
                 .header("Authorization", format!("Bearer {token}")),
         );
         assert_eq!(res.status, Status::Ok);
@@ -745,7 +745,7 @@ mod test {
         let (user, token) = create_test_user_with_session(&ctx);
 
         let res = router.handle(
-            &Request::post(format!("http://localhost/api/users/{}/notes", user.id))
+            Request::post(format!("http://localhost/api/users/{}/notes", user.id))
                 .header("Authorization", format!("Bearer {token}"))
                 .header("Content-Type", "application/json")
                 .body(r#"{"title":"Test Note","body":"This is a new note","isPinned":false}"#),
@@ -764,7 +764,7 @@ mod test {
         let (user, token) = create_test_user_with_session(&ctx);
 
         let res = router.handle(
-            &Request::post("http://localhost/api/notes")
+            Request::post("http://localhost/api/notes")
                 .header("Authorization", format!("Bearer {token}"))
                 .header("Content-Type", "application/json")
                 .body(format!(r#"{{"userId":"{}","body":"test"}}"#, user.id)),
@@ -779,8 +779,7 @@ mod test {
         let (_admin, admin_token) = create_test_user_with_session_and_role(&ctx, UserRole::Admin);
         let (target_user, _) = create_test_user_with_session(&ctx);
 
-        let res = router.handle(
-            &Request::post("http://localhost/api/notes")
+        let res = router.handle(Request::post("http://localhost/api/notes")
                 .header("Authorization", format!("Bearer {admin_token}"))
                 .header("Content-Type", "application/json")
                 .body(format!(
@@ -801,7 +800,7 @@ mod test {
         let (_admin, admin_token) = create_test_user_with_session_and_role(&ctx, UserRole::Admin);
 
         let res = router.handle(
-            &Request::post("http://localhost/api/notes")
+            Request::post("http://localhost/api/notes")
                 .header("Authorization", format!("Bearer {admin_token}"))
                 .header("Content-Type", "application/json")
                 .body(format!(
@@ -820,7 +819,7 @@ mod test {
         let note = insert_test_note(&ctx, user.id, Some("Important"), "My important note");
 
         let res = router.handle(
-            &Request::get(format!("http://localhost/api/notes/{}", note.id))
+            Request::get(format!("http://localhost/api/notes/{}", note.id))
                 .header("Authorization", format!("Bearer {token}")),
         );
         assert_eq!(res.status, Status::Ok);
@@ -835,7 +834,7 @@ mod test {
         let (_, token) = create_test_user_with_session(&ctx);
 
         let res = router.handle(
-            &Request::get(format!("http://localhost/api/notes/{}", Uuid::now_v7()))
+            Request::get(format!("http://localhost/api/notes/{}", Uuid::now_v7()))
                 .header("Authorization", format!("Bearer {token}")),
         );
         assert_eq!(res.status, Status::NotFound);
@@ -853,8 +852,7 @@ mod test {
             "Original note content",
         );
 
-        let res = router.handle(
-            &Request::put(format!("http://localhost/api/notes/{}", note.id))
+        let res = router.handle(Request::put(format!("http://localhost/api/notes/{}", note.id))
                 .header("Authorization", format!("Bearer {token}"))
                 .header("Content-Type", "application/json")
                 .body(r#"{"title":"Updated Title","body":"Updated note content","isPinned":false,"isArchived":false,"isTrashed":false}"#),
@@ -877,8 +875,7 @@ mod test {
             "Original note content",
         );
 
-        let res = router.handle(
-            &Request::put(format!("http://localhost/api/notes/{}", note.id))
+        let res = router.handle(Request::put(format!("http://localhost/api/notes/{}", note.id))
                 .header("Authorization", format!("Bearer {token}"))
                 .header("Content-Type", "application/json")
                 .body(r#"{"title":"Test","body":"","isPinned":false,"isArchived":false,"isTrashed":false}"#),
@@ -894,13 +891,13 @@ mod test {
         let note = insert_test_note(&ctx, user.id, Some("To Delete"), "Note to be deleted");
 
         let res = router.handle(
-            &Request::delete(format!("http://localhost/api/notes/{}", note.id))
+            Request::delete(format!("http://localhost/api/notes/{}", note.id))
                 .header("Authorization", format!("Bearer {token}")),
         );
         assert_eq!(res.status, Status::NoContent);
 
         let res = router.handle(
-            &Request::get(format!("http://localhost/api/users/{}/notes", user.id))
+            Request::get(format!("http://localhost/api/users/{}/notes", user.id))
                 .header("Authorization", format!("Bearer {token}")),
         );
         assert_eq!(res.status, Status::Ok);
@@ -924,7 +921,7 @@ mod test {
         insert_test_note(&ctx, user2.id, Some("User 2 Note"), "User 2's note");
 
         let res = router.handle(
-            &Request::get("http://localhost/api/notes")
+            Request::get("http://localhost/api/notes")
                 .header("Authorization", format!("Bearer {admin_token}")),
         );
         assert_eq!(res.status, Status::Ok);
@@ -946,7 +943,7 @@ mod test {
         let note = insert_test_note(&ctx, user.id, Some("Private Note"), "User's private note");
 
         let res = router.handle(
-            &Request::get(format!("http://localhost/api/notes/{}", note.id))
+            Request::get(format!("http://localhost/api/notes/{}", note.id))
                 .header("Authorization", format!("Bearer {admin_token}")),
         );
         assert_eq!(res.status, Status::Ok);
@@ -963,8 +960,7 @@ mod test {
         let (user, _) = create_test_user_with_session(&ctx);
         let note = insert_test_note(&ctx, user.id, Some("Original Title"), "Original content");
 
-        let res = router.handle(
-            &Request::put(format!("http://localhost/api/notes/{}", note.id))
+        let res = router.handle(Request::put(format!("http://localhost/api/notes/{}", note.id))
                 .header("Authorization", format!("Bearer {admin_token}"))
                 .header("Content-Type", "application/json")
                 .body(r#"{"title":"Admin Title","body":"Admin updated this","isPinned":false,"isArchived":false,"isTrashed":false}"#),
@@ -983,8 +979,7 @@ mod test {
         let (user2, _) = create_test_user_with_session(&ctx);
         let note = insert_test_note(&ctx, user1.id, Some("Title"), "content");
 
-        let res = router.handle(
-            &Request::put(format!("http://localhost/api/notes/{}", note.id))
+        let res = router.handle(Request::put(format!("http://localhost/api/notes/{}", note.id))
                 .header("Authorization", format!("Bearer {admin_token}"))
                 .header("Content-Type", "application/json")
                 .body(format!(
@@ -1005,8 +1000,7 @@ mod test {
         let (user2, _) = create_test_user_with_session(&ctx);
         let note = insert_test_note(&ctx, user1.id, Some("Title"), "content");
 
-        let res = router.handle(
-            &Request::put(format!("http://localhost/api/notes/{}", note.id))
+        let res = router.handle(Request::put(format!("http://localhost/api/notes/{}", note.id))
                 .header("Authorization", format!("Bearer {token1}"))
                 .header("Content-Type", "application/json")
                 .body(format!(
@@ -1026,13 +1020,13 @@ mod test {
         let note = insert_test_note(&ctx, user.id, Some("To Delete"), "Note to delete");
 
         let res = router.handle(
-            &Request::delete(format!("http://localhost/api/notes/{}", note.id))
+            Request::delete(format!("http://localhost/api/notes/{}", note.id))
                 .header("Authorization", format!("Bearer {admin_token}")),
         );
         assert_eq!(res.status, Status::NoContent);
 
         let res = router.handle(
-            &Request::get(format!("http://localhost/api/notes/{}", note.id))
+            Request::get(format!("http://localhost/api/notes/{}", note.id))
                 .header("Authorization", format!("Bearer {admin_token}")),
         );
         assert_eq!(res.status, Status::NotFound);
@@ -1050,7 +1044,7 @@ mod test {
 
         // User 1 should only see their own notes via user-scoped route
         let res = router.handle(
-            &Request::get(format!("http://localhost/api/users/{}/notes", user1.id))
+            Request::get(format!("http://localhost/api/users/{}/notes", user1.id))
                 .header("Authorization", format!("Bearer {token1}")),
         );
         assert_eq!(res.status, Status::Ok);
@@ -1063,7 +1057,7 @@ mod test {
 
         // User 2 should only see their own notes via user-scoped route
         let res = router.handle(
-            &Request::get(format!("http://localhost/api/users/{}/notes", user2.id))
+            Request::get(format!("http://localhost/api/users/{}/notes", user2.id))
                 .header("Authorization", format!("Bearer {token2}")),
         );
         assert_eq!(res.status, Status::Ok);
@@ -1076,7 +1070,7 @@ mod test {
 
         // User 1 cannot see User 2's notes via user-scoped route
         let res = router.handle(
-            &Request::get(format!("http://localhost/api/users/{}/notes", user2.id))
+            Request::get(format!("http://localhost/api/users/{}/notes", user2.id))
                 .header("Authorization", format!("Bearer {token1}")),
         );
         assert_eq!(res.status, Status::Forbidden);
@@ -1097,14 +1091,14 @@ mod test {
 
         // User 2 should not be able to access User 1's note
         let res = router.handle(
-            &Request::get(format!("http://localhost/api/notes/{}", note1.id))
+            Request::get(format!("http://localhost/api/notes/{}", note1.id))
                 .header("Authorization", format!("Bearer {token2}")),
         );
         assert_eq!(res.status, Status::NotFound);
 
         // User 1 should still be able to access their own note
         let res = router.handle(
-            &Request::get(format!("http://localhost/api/notes/{}", note1.id))
+            Request::get(format!("http://localhost/api/notes/{}", note1.id))
                 .header("Authorization", format!("Bearer {token1}")),
         );
         assert_eq!(res.status, Status::Ok);
@@ -1133,7 +1127,7 @@ mod test {
         );
 
         let res = router.handle(
-            &Request::get(format!(
+            Request::get(format!(
                 "http://localhost/api/users/{}/notes/pinned",
                 user.id
             ))
@@ -1164,7 +1158,7 @@ mod test {
         insert_test_note(&ctx, user.id, Some("Active Note"), "This is an active note");
 
         let res = router.handle(
-            &Request::get(format!(
+            Request::get(format!(
                 "http://localhost/api/users/{}/notes/archived",
                 user.id
             ))
@@ -1195,7 +1189,7 @@ mod test {
         insert_test_note(&ctx, user.id, Some("Kept Note"), "This is a kept note");
 
         let res = router.handle(
-            &Request::get(format!(
+            Request::get(format!(
                 "http://localhost/api/users/{}/notes/trashed",
                 user.id
             ))
@@ -1238,7 +1232,7 @@ mod test {
         let base = format!("http://localhost/api/users/{}/notes/pinned", user.id);
 
         let res = router.handle(
-            &Request::get(format!("{base}?q=alpha"))
+            Request::get(format!("{base}?q=alpha"))
                 .header("Authorization", format!("Bearer {token}")),
         );
         assert_eq!(res.status, Status::Ok);
@@ -1248,7 +1242,7 @@ mod test {
         assert_eq!(response.data[0].title, Some("Pinned Alpha".to_string()));
 
         let res = router.handle(
-            &Request::get(format!("{base}?q=beta"))
+            Request::get(format!("{base}?q=beta"))
                 .header("Authorization", format!("Bearer {token}")),
         );
         assert_eq!(res.status, Status::Ok);
@@ -1257,7 +1251,7 @@ mod test {
         assert_eq!(response.data[0].title, Some("Pinned Beta".to_string()));
 
         let res =
-            router.handle(&Request::get(base).header("Authorization", format!("Bearer {token}")));
+            router.handle(Request::get(base).header("Authorization", format!("Bearer {token}")));
         assert_eq!(res.status, Status::Ok);
         assert_eq!(
             serde_json::from_slice::<api::NoteIndexResponse>(&res.body)
@@ -1298,7 +1292,7 @@ mod test {
         let base = format!("http://localhost/api/users/{}/notes/archived", user.id);
 
         let res = router.handle(
-            &Request::get(format!("{base}?q=recipe"))
+            Request::get(format!("{base}?q=recipe"))
                 .header("Authorization", format!("Bearer {token}")),
         );
         assert_eq!(res.status, Status::Ok);
@@ -1308,7 +1302,7 @@ mod test {
         assert_eq!(response.data[0].title, Some("Archived Recipe".to_string()));
 
         let res = router.handle(
-            &Request::get(format!("{base}?q=paris"))
+            Request::get(format!("{base}?q=paris"))
                 .header("Authorization", format!("Bearer {token}")),
         );
         assert_eq!(res.status, Status::Ok);
@@ -1317,7 +1311,7 @@ mod test {
         assert_eq!(response.data[0].title, Some("Archived Travel".to_string()));
 
         let res = router.handle(
-            &Request::get(format!("{base}?q=zzznomatch"))
+            Request::get(format!("{base}?q=zzznomatch"))
                 .header("Authorization", format!("Bearer {token}")),
         );
         assert_eq!(res.status, Status::Ok);
@@ -1365,7 +1359,7 @@ mod test {
         let base = format!("http://localhost/api/users/{}/notes/trashed", user.id);
 
         let res = router.handle(
-            &Request::get(format!("{base}?q=invoice"))
+            Request::get(format!("{base}?q=invoice"))
                 .header("Authorization", format!("Bearer {token}")),
         );
         assert_eq!(res.status, Status::Ok);
@@ -1375,7 +1369,7 @@ mod test {
         assert_eq!(response.data[0].title, Some("Trashed Invoice".to_string()));
 
         let res = router.handle(
-            &Request::get(format!("{base}?q=draft"))
+            Request::get(format!("{base}?q=draft"))
                 .header("Authorization", format!("Bearer {token}")),
         );
         assert_eq!(res.status, Status::Ok);
@@ -1384,7 +1378,7 @@ mod test {
         assert_eq!(response.data[0].title, Some("Trashed Draft".to_string()));
 
         let res = router.handle(
-            &Request::get(format!("{base}?q=zzznomatch"))
+            Request::get(format!("{base}?q=zzznomatch"))
                 .header("Authorization", format!("Bearer {token}")),
         );
         assert_eq!(res.status, Status::Ok);
@@ -1424,7 +1418,7 @@ mod test {
         insert_test_note(&ctx, user.id, Some("Active"), "Non-trashed note");
 
         let res = router.handle(
-            &Request::delete(format!(
+            Request::delete(format!(
                 "http://localhost/api/users/{}/notes/trashed/clear",
                 user.id
             ))
@@ -1433,7 +1427,7 @@ mod test {
         assert_eq!(res.status, Status::NoContent);
 
         let res = router.handle(
-            &Request::get(format!(
+            Request::get(format!(
                 "http://localhost/api/users/{}/notes/trashed",
                 user.id
             ))
@@ -1449,7 +1443,7 @@ mod test {
 
         // Non-trashed note must still exist
         let res = router.handle(
-            &Request::get(format!("http://localhost/api/users/{}/notes", user.id))
+            Request::get(format!("http://localhost/api/users/{}/notes", user.id))
                 .header("Authorization", format!("Bearer {token}")),
         );
         assert_eq!(res.status, Status::Ok);
@@ -1486,7 +1480,7 @@ mod test {
 
         // User-scoped clear only deletes user1's trashed notes
         let res = router.handle(
-            &Request::delete(format!(
+            Request::delete(format!(
                 "http://localhost/api/users/{}/notes/trashed/clear",
                 user1.id
             ))
@@ -1537,7 +1531,7 @@ mod test {
 
         // Reorder: 3, 1, 2
         let res = router.handle(
-            &Request::put(format!(
+            Request::put(format!(
                 "http://localhost/api/users/{}/notes/reorder",
                 user.id
             ))
@@ -1553,7 +1547,7 @@ mod test {
         let notes = serde_json::from_slice::<api::NoteIndexResponse>(
             &router
                 .handle(
-                    &Request::get(format!("http://localhost/api/users/{}/notes", user.id))
+                    Request::get(format!("http://localhost/api/users/{}/notes", user.id))
                         .header("Authorization", format!("Bearer {token}")),
                 )
                 .body,
@@ -1607,7 +1601,7 @@ mod test {
 
         // Reorder only first page: swap note1 and note2
         let res = router.handle(
-            &Request::put(format!(
+            Request::put(format!(
                 "http://localhost/api/users/{}/notes/reorder",
                 user.id
             ))
@@ -1620,7 +1614,7 @@ mod test {
         let notes = serde_json::from_slice::<api::NoteIndexResponse>(
             &router
                 .handle(
-                    &Request::get(format!("http://localhost/api/users/{}/notes", user.id))
+                    Request::get(format!("http://localhost/api/users/{}/notes", user.id))
                         .header("Authorization", format!("Bearer {token}")),
                 )
                 .body,
@@ -1640,7 +1634,7 @@ mod test {
         let router = router(ctx.clone());
 
         let res = router.handle(
-            &Request::put("http://localhost/api/notes/reorder")
+            Request::put("http://localhost/api/notes/reorder")
                 .header("Content-Type", "application/json")
                 .body(r#"{"ids":[]}"#),
         );
@@ -1671,7 +1665,7 @@ mod test {
 
         // User 1 tries to include user 2's note - should be silently ignored
         let res = router.handle(
-            &Request::put(format!(
+            Request::put(format!(
                 "http://localhost/api/users/{}/notes/reorder",
                 user1.id
             ))
@@ -1684,7 +1678,7 @@ mod test {
         let notes = serde_json::from_slice::<api::NoteIndexResponse>(
             &router
                 .handle(
-                    &Request::get(format!("http://localhost/api/users/{}/notes", user1.id))
+                    Request::get(format!("http://localhost/api/users/{}/notes", user1.id))
                         .header("Authorization", format!("Bearer {token1}")),
                 )
                 .body,
@@ -1727,7 +1721,7 @@ mod test {
 
         // Swap pinned2 before pinned1
         let res = router.handle(
-            &Request::put(format!(
+            Request::put(format!(
                 "http://localhost/api/users/{}/notes/pinned/reorder",
                 user.id
             ))
@@ -1740,7 +1734,7 @@ mod test {
         let pinned = serde_json::from_slice::<api::NoteIndexResponse>(
             &router
                 .handle(
-                    &Request::get(format!(
+                    Request::get(format!(
                         "http://localhost/api/users/{}/notes/pinned",
                         user.id
                     ))
@@ -1758,7 +1752,7 @@ mod test {
         let normal = serde_json::from_slice::<api::NoteIndexResponse>(
             &router
                 .handle(
-                    &Request::get(format!("http://localhost/api/users/{}/notes", user.id))
+                    Request::get(format!("http://localhost/api/users/{}/notes", user.id))
                         .header("Authorization", format!("Bearer {token}")),
                 )
                 .body,
@@ -1784,7 +1778,7 @@ mod test {
         ctx.database.insert_note(note1.clone()).unwrap();
 
         let res = router.handle(
-            &Request::put(format!("http://localhost/api/notes/{}", note1.id))
+            Request::put(format!("http://localhost/api/notes/{}", note1.id))
                 .header("Authorization", format!("Bearer {token}"))
                 .header("Content-Type", "application/json")
                 .body(r#"{"body":"Note 1","isPinned":false,"isArchived":false,"isTrashed":true}"#),

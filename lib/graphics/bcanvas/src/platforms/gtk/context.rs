@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: MIT
  */
 
-use std::ffi::{CString, c_void};
+use std::ffi::{CString, c_char, c_void};
 use std::rc::Rc;
 
 use super::headers::*;
@@ -285,12 +285,14 @@ impl PlatformCanvasContext {
         if self.degenerate {
             return;
         }
-        let Ok(text) = CString::new(text) else { return };
+        with_c_str(text, |text| self.show_text(s, text, x, y));
+    }
+    fn show_text(&mut self, s: &CanvasState, text: *const c_char, x: f32, y: f32) {
         self.select_font(s);
         let (mut x, mut y) = (f64::from(x), f64::from(y));
         match s.text_align {
-            TextAlign::Center => x -= self.text_extents(&text).x_advance / 2.0,
-            TextAlign::Right | TextAlign::End => x -= self.text_extents(&text).x_advance,
+            TextAlign::Center => x -= self.text_extents(text).x_advance / 2.0,
+            TextAlign::Right | TextAlign::End => x -= self.text_extents(text).x_advance,
             TextAlign::Left | TextAlign::Start => {}
         }
         if s.text_baseline != TextBaseline::Alphabetic {
@@ -308,16 +310,16 @@ impl PlatformCanvasContext {
         self.fill_style(s);
         unsafe {
             cairo_move_to(self.cr, x, y);
-            cairo_show_text(self.cr, text.as_ptr())
+            cairo_show_text(self.cr, text)
         }
         self.restore_path(path);
     }
     pub(crate) fn measure_text(&mut self, s: &CanvasState, text: &str) -> f32 {
-        let Ok(text) = CString::new(text) else {
-            return 0.0;
-        };
-        self.select_font(s);
-        self.text_extents(&text).x_advance as f32
+        with_c_str(text, |text| {
+            self.select_font(s);
+            self.text_extents(text).x_advance as f32
+        })
+        .unwrap_or(0.0)
     }
     fn fill_style(&self, s: &CanvasState) {
         let (r, g, b, a) = s.fill.components(s.alpha);
@@ -370,9 +372,9 @@ impl PlatformCanvasContext {
         }
         self.font = Some((s.font_family.clone(), s.font_weight, s.font_size));
     }
-    fn text_extents(&self, text: &CString) -> CairoTextExtents {
+    fn text_extents(&self, text: *const c_char) -> CairoTextExtents {
         let mut ext = CairoTextExtents::default();
-        unsafe { cairo_text_extents(self.cr, text.as_ptr(), &mut ext) };
+        unsafe { cairo_text_extents(self.cr, text, &mut ext) };
         ext
     }
     fn take_path(&self) -> *mut CairoPath {
@@ -395,6 +397,18 @@ impl PlatformCanvasContext {
             }
         }
     }
+}
+
+/// Call `f` with `text` as a NUL-terminated string, on the stack when it is short enough.
+/// Text with interior NUL bytes cannot be passed to Cairo and returns `None`.
+fn with_c_str<R>(text: &str, f: impl FnOnce(*const c_char) -> R) -> Option<R> {
+    let mut buffer = [0u8; 256];
+    if text.len() < buffer.len() && !text.contains('\0') {
+        buffer[..text.len()].copy_from_slice(text.as_bytes());
+        return Some(f(buffer.as_ptr().cast()));
+    }
+    let text = CString::new(text).ok()?;
+    Some(f(text.as_ptr()))
 }
 
 impl Drop for PlatformCanvasContext {

@@ -34,7 +34,7 @@ mod test {
         let ctx = Context::with_test_database().expect("Can't create test database");
         let router = router(ctx.clone());
 
-        let res = router.handle(&Request::get("http://localhost/"));
+        let res = router.handle(Request::get("http://localhost/"));
         assert_eq!(res.status, Status::Ok);
         assert!(res.body.starts_with(b"Persons v"));
     }

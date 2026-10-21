@@ -88,6 +88,10 @@ impl MetadataService {
     }
 
     pub(crate) fn download(&mut self, cover_url: &str) -> Result<Vec<u8>> {
-        Ok(self.client.fetch(Request::get(cover_url))?.body)
+        Ok(self
+            .client
+            .fetch(Request::get(cover_url))?
+            .body
+            .into_owned())
     }
 }

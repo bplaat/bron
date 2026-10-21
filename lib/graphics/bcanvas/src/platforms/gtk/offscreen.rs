@@ -8,7 +8,7 @@ use std::ffi::c_void;
 
 use super::context::PlatformCanvasContext;
 use super::headers::*;
-use crate::copy_bgra_premultiplied_to_rgba;
+use crate::copy_bgra_to_rgba;
 
 pub(crate) struct PlatformOffscreenCanvas {
     surface: *mut c_void,
@@ -64,7 +64,7 @@ impl PlatformOffscreenCanvas {
         unsafe { cairo_surface_flush(self.surface) };
         // ARGB32 pixels are native-endian words, which are BGRA bytes in little-endian order.
         for (pixel, output) in self.storage.iter().zip(self.output.as_chunks_mut::<4>().0) {
-            copy_bgra_premultiplied_to_rgba(&pixel.to_le_bytes(), output);
+            copy_bgra_to_rgba(&pixel.to_le_bytes(), output);
         }
         self.dirty = false;
         &self.output

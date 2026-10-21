@@ -4,15 +4,16 @@
  * SPDX-License-Identifier: MIT
  */
 
+use std::borrow::Cow;
 use std::error::Error;
 use std::fmt::{self, Display, Formatter};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
 
-use crate::KEEP_ALIVE_TIMEOUT;
 use crate::enums::{Status, Version};
 use crate::header_map::HeaderMap;
 use crate::request::Request;
+use crate::{IntoBody, KEEP_ALIVE_TIMEOUT};
 
 // MARK: Response
 /// HTTP response
@@ -22,8 +23,8 @@ pub struct Response {
     pub status: Status,
     /// Headers
     pub headers: HeaderMap,
-    /// Body
-    pub body: Vec<u8>,
+    /// Body, borrowed for static data such as embedded assets
+    pub body: Cow<'static, [u8]>,
     pub(crate) takeover: Option<Box<dyn FnOnce(BufReader<TcpStream>) + Send + 'static>>,
 }
 
@@ -59,16 +60,16 @@ impl Response {
     }
 
     /// Create new response with body
-    pub fn with_body(body: impl Into<Vec<u8>>) -> Self {
+    pub fn with_body(body: impl IntoBody) -> Self {
         Self {
-            body: body.into(),
+            body: body.into_body(),
             ..Default::default()
         }
     }
 
     /// Set body
-    pub fn body(mut self, body: impl Into<Vec<u8>>) -> Self {
-        self.body = body.into();
+    pub fn body(mut self, body: impl IntoBody) -> Self {
+        self.body = body.into_body();
         self
     }
 
@@ -83,7 +84,7 @@ impl Response {
     pub fn json(mut self, value: impl serde::Serialize) -> Self {
         self.headers
             .insert("Content-Type".to_string(), "application/json".to_string());
-        self.body = serde_json::to_string(&value)
+        self.body = serde_json::to_vec(&value)
             .expect("Can't serialize json")
             .into();
         self
@@ -127,9 +128,10 @@ impl Response {
     pub fn read_from_buffered_stream(
         reader: &mut dyn BufRead,
     ) -> Result<Self, InvalidResponseError> {
-        // Read first line
+        // Read first line, reusing one line buffer for the whole head
+        let mut line = String::new();
         let mut res = {
-            let line = read_http_line(reader)?;
+            read_http_line(reader, &mut line)?;
             let mut parts = line.splitn(3, ' ');
             let http_version = parts.next().ok_or(InvalidResponseError)?;
             if !matches!(http_version, "HTTP/1.0" | "HTTP/1.1") {
@@ -146,7 +148,7 @@ impl Response {
 
         // Read headers
         loop {
-            let line = read_http_line(reader)?;
+            read_http_line(reader, &mut line)?;
             if line == "\r\n" {
                 break;
             }
@@ -176,11 +178,11 @@ impl Response {
             let mut body = Vec::new();
             loop {
                 // Read chunk size line; strip optional chunk extensions (;...)
-                let size_line = read_http_line(reader)?;
-                let hex = size_line.split(';').next().unwrap_or("").trim();
+                read_http_line(reader, &mut line)?;
+                let hex = line.split(';').next().unwrap_or("").trim();
                 let size = usize::from_str_radix(hex, 16).map_err(|_| InvalidResponseError)?;
                 if size == 0 {
-                    read_trailers(reader, &mut res.headers)?;
+                    read_trailers(reader, &mut line, &mut res.headers)?;
                     break;
                 }
                 if body.len().saturating_add(size) > crate::MAX_RESPONSE_BODY {
@@ -188,11 +190,7 @@ impl Response {
                 }
 
                 // Read chunk data
-                let prev_len = body.len();
-                body.resize(prev_len + size, 0);
-                reader
-                    .read_exact(&mut body[prev_len..])
-                    .map_err(|_| InvalidResponseError)?;
+                crate::read_body(reader, &mut body, size).map_err(|_| InvalidResponseError)?;
 
                 // Read trailing CRLF after chunk data
                 let mut crlf = [0; 2];
@@ -203,7 +201,7 @@ impl Response {
                     return Err(InvalidResponseError);
                 }
             }
-            res.body = body;
+            res.body = Cow::Owned(body);
             return Ok(res);
         }
         if let Some(content_length) = res.headers.get("Content-Length") {
@@ -212,10 +210,10 @@ impl Response {
                 return Err(InvalidResponseError);
             }
             if content_length > 0 {
-                res.body = vec![0; content_length];
-                reader
-                    .read_exact(&mut res.body)
+                let mut body = Vec::new();
+                crate::read_body(reader, &mut body, content_length)
                     .map_err(|_| InvalidResponseError)?;
+                res.body = Cow::Owned(body);
             }
         }
         Ok(res)
@@ -224,20 +222,26 @@ impl Response {
     pub(crate) fn write_to_stream(
         &mut self,
         stream: &mut dyn Write,
-        req: &Request,
+        req: RequestHead,
         keep_alive: bool,
     ) {
         self.finish_headers(req, keep_alive);
 
-        _ = write!(stream, "{} {}\r\n", req.version, self.status);
+        // Buffer the head so it is sent in one write instead of one per header
+        let mut head = Vec::with_capacity(256);
+        _ = write!(head, "{} {}\r\n", req.version, self.status);
         for (name, value) in &self.headers {
-            let safe_name = name.replace(['\r', '\n'], "");
-            let safe_value = value.replace(['\r', '\n'], "");
-            _ = write!(stream, "{safe_name}: {safe_value}\r\n");
+            _ = write!(
+                head,
+                "{}: {}\r\n",
+                strip_newlines(name),
+                strip_newlines(value)
+            );
         }
-        _ = write!(stream, "\r\n");
+        head.extend_from_slice(b"\r\n");
+        _ = stream.write_all(&head);
         // HEAD responses must not include a message body
-        if req.method != crate::enums::Method::Head {
+        if !req.is_head {
             _ = stream.write_all(&self.body);
         }
     }
@@ -246,22 +250,25 @@ impl Response {
     pub(crate) fn write_to_cgi_stdout(&self, stdout: &mut dyn Write) {
         _ = writeln!(stdout, "Status: {}", self.status);
         for (name, value) in &self.headers {
-            let safe_name = name.replace(['\r', '\n'], "");
-            let safe_value = value.replace(['\r', '\n'], "");
-            _ = writeln!(stdout, "{safe_name}: {safe_value}");
+            _ = writeln!(
+                stdout,
+                "{}: {}",
+                strip_newlines(name),
+                strip_newlines(value)
+            );
         }
         _ = writeln!(stdout);
         _ = stdout.write_all(&self.body);
     }
 
-    fn finish_headers(&mut self, req: &Request, keep_alive: bool) {
+    fn finish_headers(&mut self, req: RequestHead, keep_alive: bool) {
         #[cfg(feature = "date")]
         self.headers
             .insert("Date".to_string(), chrono::Utc::now().to_rfc2822());
         self.headers
             .insert("Content-Length".to_string(), self.body.len().to_string());
         if req.version == Version::Http1_1 {
-            if keep_alive && req.headers.get("Connection") != Some("close") {
+            if keep_alive && !req.close {
                 if self.headers.get("Connection").is_none() {
                     self.headers
                         .insert("Connection".to_string(), "keep-alive".to_string());
@@ -278,12 +285,40 @@ impl Response {
     }
 }
 
+/// The parts of a request its response depends on, kept so the handler can own the request.
+#[derive(Clone, Copy)]
+pub(crate) struct RequestHead {
+    pub version: Version,
+    pub is_head: bool,
+    pub close: bool,
+}
+
+impl From<&Request> for RequestHead {
+    fn from(req: &Request) -> Self {
+        Self {
+            version: req.version,
+            is_head: req.method == crate::enums::Method::Head,
+            close: req.headers.get("Connection") == Some("close"),
+        }
+    }
+}
+
+/// Remove CR and LF so a header cannot inject more header lines, allocating only when needed.
+pub(crate) fn strip_newlines(value: &str) -> Cow<'_, str> {
+    if value.contains(['\r', '\n']) {
+        Cow::Owned(value.replace(['\r', '\n'], ""))
+    } else {
+        Cow::Borrowed(value)
+    }
+}
+
 fn read_trailers(
     reader: &mut dyn BufRead,
+    line: &mut String,
     headers: &mut HeaderMap,
 ) -> Result<(), InvalidResponseError> {
     loop {
-        let line = read_http_line(reader)?;
+        read_http_line(reader, line)?;
         if line == "\r\n" {
             return Ok(());
         }
@@ -301,16 +336,17 @@ fn read_trailers(
     }
 }
 
-fn read_http_line(reader: &mut dyn BufRead) -> Result<String, InvalidResponseError> {
-    let mut line = String::new();
+/// Read one CRLF-terminated line into `line`, replacing its previous contents.
+fn read_http_line(reader: &mut dyn BufRead, line: &mut String) -> Result<(), InvalidResponseError> {
+    line.clear();
     let bytes_read = reader
         .take(crate::MAX_HEADER_LINE + 1)
-        .read_line(&mut line)
+        .read_line(line)
         .map_err(|_| InvalidResponseError)?;
     if bytes_read == 0 || bytes_read as u64 > crate::MAX_HEADER_LINE || !line.ends_with("\r\n") {
         return Err(InvalidResponseError);
     }
-    Ok(line)
+    Ok(())
 }
 
 // MARK: InvalidResponseError
@@ -332,6 +368,15 @@ mod test {
     use super::*;
 
     #[test]
+    fn test_static_bodies_and_clean_headers_are_borrowed() {
+        static ASSET: &[u8] = b"<html></html>";
+        let res = Response::with_body(Cow::Borrowed(ASSET));
+        assert!(matches!(res.body, Cow::Borrowed(body) if body.as_ptr() == ASSET.as_ptr()));
+        assert!(matches!(strip_newlines("text/html"), Cow::Borrowed(_)));
+        assert_eq!(strip_newlines("a\r\nb"), "ab");
+    }
+
+    #[test]
     fn test_parse_response() {
         let mut response_stream =
             "HTTP/1.1 200 OK\r\nContent-Length: 13\r\n\r\nHello, world!".as_bytes();
@@ -339,7 +384,7 @@ mod test {
 
         assert_eq!(response.status, Status::Ok);
         assert_eq!(response.headers.get("Content-Length").unwrap(), "13");
-        assert_eq!(response.body, b"Hello, world!");
+        assert_eq!(&*response.body, b"Hello, world!");
     }
 
     #[test]
@@ -408,7 +453,7 @@ mod test {
             Response::with_status(Status::SwitchingProtocols).header("Connection", "Upgrade");
         let mut buffer = Vec::new();
 
-        response.write_to_stream(&mut buffer, &request, false);
+        response.write_to_stream(&mut buffer, RequestHead::from(&request), false);
 
         let response = String::from_utf8(buffer).unwrap();
         assert!(response.contains("\r\nConnection: Upgrade\r\n"));
@@ -425,7 +470,7 @@ mod test {
             response.headers.get("Transfer-Encoding").unwrap(),
             "chunked"
         );
-        assert_eq!(response.body, b"Bastiaan");
+        assert_eq!(&*response.body, b"Bastiaan");
     }
 
     #[test]
@@ -434,7 +479,7 @@ mod test {
         let mut reader = BufReader::new(&input[..]);
 
         let first = Response::read_from_buffered_stream(&mut reader).unwrap();
-        assert_eq!(first.body, b"test");
+        assert_eq!(&*first.body, b"test");
         assert_eq!(first.headers.get("X-Checksum"), Some("valid"));
 
         let second = Response::read_from_buffered_stream(&mut reader).unwrap();
@@ -460,7 +505,7 @@ mod test {
             response.headers.get("Content-Type").unwrap(),
             "application/json"
         );
-        assert_eq!(response.body, b"{\"key\":\"value\"}");
+        assert_eq!(&*response.body, b"{\"key\":\"value\"}");
 
         let json_value: serde_json::Value = response.into_json().unwrap();
         assert_eq!(json_value["key"], "value");
@@ -476,7 +521,7 @@ mod test {
             version: Version::Http1_1,
             ..Default::default()
         };
-        response.write_to_stream(&mut response_stream, &request, true);
+        response.write_to_stream(&mut response_stream, RequestHead::from(&request), true);
 
         let response_text = String::from_utf8(response_stream).unwrap();
         assert!(response_text.contains("HTTP/1.1 200 OK"));
@@ -494,7 +539,7 @@ mod test {
             version: Version::Http1_1,
             ..Default::default()
         };
-        response.write_to_stream(&mut response_stream, &request, true);
+        response.write_to_stream(&mut response_stream, RequestHead::from(&request), true);
 
         let response_text = String::from_utf8(response_stream).unwrap();
         assert!(response_text.contains("HTTP/1.1 404 Not Found"));
@@ -509,7 +554,7 @@ mod test {
         let mut response_stream = Vec::new();
         let request = Request::default();
 
-        response.write_to_stream(&mut response_stream, &request, false);
+        response.write_to_stream(&mut response_stream, RequestHead::from(&request), false);
 
         let response_text = String::from_utf8(response_stream).unwrap();
         let content_lengths = response_text
@@ -528,7 +573,7 @@ mod test {
             version: Version::Http1_1,
             ..Default::default()
         };
-        response.write_to_stream(&mut response_stream, &request, true);
+        response.write_to_stream(&mut response_stream, RequestHead::from(&request), true);
 
         let response_text = String::from_utf8(response_stream).unwrap();
         assert!(response_text.contains("HTTP/1.1 200 OK"));

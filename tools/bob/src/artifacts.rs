@@ -75,7 +75,7 @@ fn download_candidates(urls: &[String]) -> io::Result<Vec<u8>> {
                     return Err(io::Error::new(kind, format!("HTTP {status}")));
                 }
                 validate_jar(Cursor::new(&response.body))?;
-                Ok(response.body)
+                Ok(response.body.into_owned())
             });
             match result {
                 Ok(bytes) => return Ok(bytes),

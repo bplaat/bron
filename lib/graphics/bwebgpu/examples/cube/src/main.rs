@@ -207,7 +207,7 @@ impl Gpu {
                 compilation_options: Default::default(),
                 targets: &[Some(bwebgpu::ColorTargetState {
                     format: config.format,
-                    blend: Some(bwebgpu::BlendState::ALPHA_BLENDING),
+                    blend: Some(bwebgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
                     write_mask: bwebgpu::ColorWrites::ALL,
                 })],
             }),
@@ -225,7 +225,7 @@ impl Gpu {
             mip_level_count: 1,
             sample_count: 1,
             dimension: bwebgpu::TextureDimension::D2,
-            format: bwebgpu::TextureFormat::Rgba8UnormSrgb,
+            format: bwebgpu::TextureFormat::Rgba8Unorm,
             usage: bwebgpu::TextureUsages::TEXTURE_BINDING | bwebgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });

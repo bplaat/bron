@@ -16,7 +16,7 @@ use url::Url;
 use crate::client::MaybeHttpsStream;
 use crate::enums::{Method, Status, Version};
 use crate::header_map::HeaderMap;
-use crate::response::Response;
+use crate::response::{Response, strip_newlines};
 use crate::{KEEP_ALIVE_TIMEOUT, MAX_REDIRECTS};
 
 // MARK: Request
@@ -220,18 +220,21 @@ impl Request {
         reader: &mut dyn BufRead,
         client_addr: SocketAddr,
     ) -> Result<Request, InvalidRequestError> {
-        // Read first line
+        // Read first line, reusing one line buffer for the whole head
+        let mut line = String::new();
         let (method, path, version) = {
-            let line = read_http_line(reader, "first line")?;
-            let parts = line.trim_end_matches("\r\n").split(' ').collect::<Vec<_>>();
-            let [method, path, version] = parts.as_slice() else {
+            read_http_line(reader, &mut line, "first line")?;
+            let mut parts = line.trim_end_matches("\r\n").split(' ');
+            let (Some(method), Some(path), Some(version), None) =
+                (parts.next(), parts.next(), parts.next(), parts.next())
+            else {
                 return Err(InvalidRequestError("Invalid request line".to_string()));
             };
             (
                 method
                     .parse()
                     .map_err(|_| InvalidRequestError("Can't parse method".to_string()))?,
-                (*path).to_string(),
+                path.to_string(),
                 version
                     .parse()
                     .map_err(|_| InvalidRequestError("Can't parse HTTP version".to_string()))?,
@@ -241,7 +244,7 @@ impl Request {
         // Read headers
         let mut headers = HeaderMap::new();
         loop {
-            let line = read_http_line(reader, "header line")?;
+            read_http_line(reader, &mut line, "header line")?;
             if line == "\r\n" {
                 break;
             }
@@ -271,26 +274,23 @@ impl Request {
 
         // Read body
         let mut body = None;
-        let transfer_encoding = headers.get("Transfer-Encoding").map(|s| s.to_lowercase());
-        if transfer_encoding.as_deref() == Some("chunked") {
+        let transfer_encoding = headers.get("Transfer-Encoding");
+        if transfer_encoding.is_some_and(|encoding| encoding.eq_ignore_ascii_case("chunked")) {
             let mut chunks: Vec<u8> = Vec::new();
             loop {
-                let size_line = read_http_line(reader, "chunk size")?;
+                read_http_line(reader, &mut line, "chunk size")?;
                 // Strip optional chunk extensions (;...) and whitespace
-                let hex = size_line.split(';').next().unwrap_or("").trim();
+                let hex = line.split(';').next().unwrap_or("").trim();
                 let chunk_size = usize::from_str_radix(hex, 16)
                     .map_err(|_| InvalidRequestError("Can't parse chunk size".to_string()))?;
                 if chunk_size == 0 {
-                    read_trailers(reader, &mut headers)?;
+                    read_trailers(reader, &mut line, &mut headers)?;
                     break;
                 }
                 if chunks.len().saturating_add(chunk_size) > crate::MAX_REQUEST_BODY {
                     return Err(InvalidRequestError("Chunked body too large".to_string()));
                 }
-                let prev_len = chunks.len();
-                chunks.resize(prev_len + chunk_size, 0);
-                reader
-                    .read_exact(&mut chunks[prev_len..])
+                crate::read_body(reader, &mut chunks, chunk_size)
                     .map_err(|_| InvalidRequestError("Can't read chunk data".to_string()))?;
                 // Consume trailing CRLF after chunk data
                 let mut crlf = [0u8; 2];
@@ -316,8 +316,8 @@ impl Request {
                 return Err(InvalidRequestError("Content-Length too large".to_string()));
             }
             if content_length > 0 {
-                let mut buffer = vec![0; content_length];
-                reader.read_exact(&mut buffer).map_err(|_| {
+                let mut buffer = Vec::new();
+                crate::read_body(reader, &mut buffer, content_length).map_err(|_| {
                     InvalidRequestError(
                         "Can't read Content-Length amount of bytes from stream".to_string(),
                     )
@@ -394,8 +394,8 @@ impl Request {
                 return Err(InvalidRequestError("Content-Length too large".to_string()));
             }
             if content_length > 0 {
-                let mut buffer = vec![0; content_length];
-                io::stdin().read_exact(&mut buffer).map_err(|_| {
+                let mut buffer = Vec::new();
+                crate::read_body(&mut io::stdin(), &mut buffer, content_length).map_err(|_| {
                     InvalidRequestError(
                         "Can't read Content-Length amount of bytes from stdin".to_string(),
                     )
@@ -516,13 +516,19 @@ impl Request {
         } else {
             path.to_string()
         };
-        _ = write!(stream, "{} {} HTTP/1.1\r\n", self.method, path);
+        // Buffer the head so it is sent in one write, and one TLS record, instead of one per header
+        let mut head = Vec::with_capacity(256);
+        _ = write!(head, "{} {} HTTP/1.1\r\n", self.method, path);
         for (name, value) in &self.headers {
-            let safe_name = name.replace(['\r', '\n'], "");
-            let safe_value = value.replace(['\r', '\n'], "");
-            _ = write!(stream, "{safe_name}: {safe_value}\r\n");
+            _ = write!(
+                head,
+                "{}: {}\r\n",
+                strip_newlines(name),
+                strip_newlines(value)
+            );
         }
-        _ = write!(stream, "\r\n");
+        head.extend_from_slice(b"\r\n");
+        _ = stream.write_all(&head);
         if let Some(body) = &self.body {
             _ = stream.write_all(body);
         }
@@ -588,10 +594,11 @@ pub(crate) fn fetch_with_redirects(
 
 fn read_trailers(
     reader: &mut dyn BufRead,
+    line: &mut String,
     headers: &mut HeaderMap,
 ) -> Result<(), InvalidRequestError> {
     loop {
-        let line = read_http_line(reader, "chunk trailer")?;
+        read_http_line(reader, line, "chunk trailer")?;
         if line == "\r\n" {
             return Ok(());
         }
@@ -614,19 +621,21 @@ fn read_trailers(
     }
 }
 
+/// Read one CRLF-terminated line into `line`, replacing its previous contents.
 fn read_http_line(
     reader: &mut dyn BufRead,
+    line: &mut String,
     description: &str,
-) -> Result<String, InvalidRequestError> {
-    let mut line = String::new();
+) -> Result<(), InvalidRequestError> {
+    line.clear();
     let bytes_read = reader
         .take(crate::MAX_HEADER_LINE + 1)
-        .read_line(&mut line)
+        .read_line(line)
         .map_err(|_| InvalidRequestError(format!("Can't read {description}")))?;
     if bytes_read == 0 || bytes_read as u64 > crate::MAX_HEADER_LINE || !line.ends_with("\r\n") {
         return Err(InvalidRequestError(format!("Invalid {description}")));
     }
-    Ok(line)
+    Ok(())
 }
 
 // MARK: InvalidRequestError
@@ -713,6 +722,23 @@ mod test {
         assert_eq!(request.version, Version::Http1_1);
         assert_eq!(request.headers.get("Host").unwrap(), "localhost");
         assert_eq!(request.body.unwrap(), b"Hello, world!");
+    }
+
+    #[test]
+    fn test_declared_body_is_not_allocated_before_it_arrives() {
+        // A peer that declares the maximum body but sends a few bytes is rejected, and the read
+        // only ever holds the bytes that arrived.
+        let head = format!(
+            "POST / HTTP/1.1\r\nHost: localhost\r\nContent-Length: {}\r\n\r\nshort",
+            crate::MAX_REQUEST_BODY
+        );
+        let mut stream = head.as_bytes();
+        assert!(
+            Request::read_from_reader(&mut stream, (Ipv4Addr::LOCALHOST, 12345).into()).is_err()
+        );
+        let mut body = Vec::new();
+        assert!(crate::read_body(&mut &b"short"[..], &mut body, crate::MAX_REQUEST_BODY).is_err());
+        assert!(body.capacity() < 1024);
     }
 
     #[test]
@@ -922,7 +948,7 @@ mod test {
             .body("data")
             .fetch()
             .unwrap();
-        assert_eq!(res.body, b"done");
+        assert_eq!(&*res.body, b"done");
 
         let [start, next, last] = server.join().unwrap();
         assert_eq!((start.method, start.url.path()), (Method::Post, "/start"));

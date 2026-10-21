@@ -26,7 +26,7 @@ pub(crate) fn cors_pre_layer(req: &Request, ctx: &mut Context) -> Result<Option<
     if req.method == Method::Options && req.headers.get("Access-Control-Request-Method").is_some() {
         Ok(Some(
             Response::with_status(Status::NoContent)
-                .header("Access-Control-Allow-Origin", ctx.server_origin.clone())
+                .header("Access-Control-Allow-Origin", ctx.server_origin.as_ref())
                 .header(
                     "Access-Control-Allow-Methods",
                     "GET, POST, PUT, PATCH, DELETE, OPTIONS",
@@ -43,7 +43,7 @@ pub(crate) fn cors_post_layer(req: &Request, ctx: &Context, res: Response) -> Re
     if !(req.method == Method::Options
         && req.headers.get("Access-Control-Request-Method").is_some())
     {
-        Ok(res.header("Access-Control-Allow-Origin", ctx.server_origin.clone()))
+        Ok(res.header("Access-Control-Allow-Origin", ctx.server_origin.as_ref()))
     } else {
         Ok(res)
     }
@@ -60,7 +60,7 @@ mod test {
         let ctx = Context::with_test_database().expect("Can't create test database");
         let router = router(ctx.clone());
 
-        let res = router.handle(&Request::get("http://localhost/"));
+        let res = router.handle(Request::get("http://localhost/"));
         assert_eq!(res.headers.get("Access-Control-Allow-Origin"), Some("*"));
     }
 
@@ -70,7 +70,7 @@ mod test {
         let router = router(ctx.clone());
 
         let res = router.handle(
-            &Request::options("http://localhost/").header("Access-Control-Request-Method", "POST"),
+            Request::options("http://localhost/").header("Access-Control-Request-Method", "POST"),
         );
         assert_eq!(res.headers.get("Access-Control-Allow-Origin"), Some("*"));
         assert_eq!(

@@ -67,9 +67,10 @@ color. `OffscreenCanvas` draws into an Android bitmap.
 
 ## Offscreen drawing
 
-`OffscreenCanvas` draws without a window into straight-alpha RGBA8 pixels, for
-example to upload with `bwebgpu::Queue::write_texture` or encode with the
-[image](../image) crate:
+`OffscreenCanvas` draws without a window into premultiplied-alpha RGBA8 pixels, for
+example to upload with `bwebgpu::Queue::write_texture` and blend with
+`BlendState::PREMULTIPLIED_ALPHA_BLENDING`. `to_bitmap` converts them to a straight-alpha
+bitmap to encode with the [image](../image) crate:
 
 ```rust
 use bcanvas::{Color, OffscreenCanvas};

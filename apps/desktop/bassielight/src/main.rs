@@ -91,7 +91,7 @@ fn main() {
                 }
 
                 if req.url.path() == "/ipc" {
-                    return small_websocket::upgrade(req, |mut ws| {
+                    return small_websocket::upgrade(&req, |mut ws| {
                         if let Err(error) = ws.set_write_timeout(Some(Duration::from_millis(250))) {
                             warn!("Can't configure WebSocket write timeout: {error}");
                             return;

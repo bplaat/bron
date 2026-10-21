@@ -97,7 +97,7 @@ pub struct Adapter {
 
 struct Shared {
     native: Rc<platform::Context>,
-    uploads: RefCell<Vec<Upload>>,
+    uploads: RefCell<Uploads>,
 }
 
 pub struct Device {
@@ -130,7 +130,7 @@ impl Adapter {
         Self {
             shared: Rc::new(Shared {
                 native,
-                uploads: RefCell::new(Vec::new()),
+                uploads: RefCell::default(),
             }),
             #[cfg(feature = "window")]
             formats: Vec::new(),
@@ -232,11 +232,14 @@ impl Buffer {
         require(self.inner.mapped.replace(false), "Buffer is not mapped");
         if !data.is_empty() {
             let shared = self.inner.owner.upgrade().expect("Device has been dropped");
-            shared.uploads.borrow_mut().push(Upload::Buffer {
+            let mut uploads = shared.uploads.borrow_mut();
+            let range = uploads.push_data(|arena| arena.extend_from_slice(&data));
+            uploads.list.push(Upload::Buffer {
                 buffer: self.clone(),
                 offset: 0,
-                data: std::mem::take(&mut *data),
+                data: range,
             });
+            *data = Vec::new();
         }
     }
 }
@@ -739,7 +742,14 @@ impl Device {
     pub fn create_command_encoder(&self, _: &CommandEncoderDescriptor) -> CommandEncoder {
         CommandEncoder {
             owner: Rc::downgrade(&self.shared),
-            passes: Vec::new(),
+            passes: self
+                .shared
+                .native
+                .pool
+                .borrow_mut()
+                .passes
+                .pop()
+                .unwrap_or_default(),
         }
     }
 }
@@ -753,19 +763,65 @@ impl Shared {
     }
 }
 
+/// Queue writes waiting for the next submit, with their bytes packed into one reused arena.
+#[derive(Default)]
+struct Uploads {
+    list: Vec<Upload>,
+    data: Vec<u8>,
+}
+
+impl Uploads {
+    /// Append bytes at a four-byte aligned arena offset, as copy commands require.
+    fn push_data(&mut self, write: impl FnOnce(&mut Vec<u8>)) -> Range<usize> {
+        self.data.resize(self.data.len().next_multiple_of(4), 0);
+        let start = self.data.len();
+        write(&mut self.data);
+        start..self.data.len()
+    }
+}
+
+/// A queue write whose bytes live in the submitted arena.
 enum Upload {
     Buffer {
         buffer: Buffer,
         offset: u64,
-        data: Vec<u8>,
+        data: Range<usize>,
     },
     Texture {
         texture: Texture,
         mip: u32,
         origin: Origin3d,
         size: Extent3d,
-        data: Vec<u8>,
+        data: Range<usize>,
     },
+}
+
+/// Emptied command lists from finished frames, reused so steady-state frames do not allocate.
+#[derive(Default)]
+pub(crate) struct Pool {
+    uploads: Vec<Vec<Upload>>,
+    passes: Vec<Vec<Pass>>,
+    draws: Vec<Vec<Draw>>,
+}
+
+impl Pool {
+    /// Release the resources a finished frame referenced and keep its list allocations.
+    fn retire(&mut self, mut uploads: Vec<Upload>, mut passes: Vec<Pass>) {
+        uploads.clear();
+        if uploads.capacity() > 0 {
+            self.uploads.push(uploads);
+        }
+        for pass in passes.drain(..) {
+            let mut draws = pass.draws;
+            draws.clear();
+            if draws.capacity() > 0 {
+                self.draws.push(draws);
+            }
+        }
+        if passes.capacity() > 0 {
+            self.passes.push(passes);
+        }
+    }
 }
 
 impl Queue {
@@ -784,10 +840,12 @@ impl Queue {
             "Buffer write out of bounds",
         );
         if !data.is_empty() {
-            self.shared.uploads.borrow_mut().push(Upload::Buffer {
+            let mut uploads = self.shared.uploads.borrow_mut();
+            let range = uploads.push_data(|arena| arena.extend_from_slice(data));
+            uploads.list.push(Upload::Buffer {
                 buffer: buffer.clone(),
                 offset,
-                data: data.into(),
+                data: range,
             });
         }
     }
@@ -820,31 +878,42 @@ impl Queue {
                     <= u64::from(texture.size.depth_or_array_layers),
             "Texture write out of bounds",
         );
-        let packed = pack_texture(data, &layout, size);
-        self.shared.uploads.borrow_mut().push(Upload::Texture {
+        let mut uploads = self.shared.uploads.borrow_mut();
+        let range = uploads.push_data(|arena| pack_texture(arena, data, &layout, size));
+        uploads.list.push(Upload::Texture {
             texture: dest.texture.clone(),
             mip: dest.mip_level,
             origin: dest.origin,
             size,
-            data: packed,
+            data: range,
         });
     }
 
     pub fn submit(&self, commands: impl IntoIterator<Item = CommandBuffer>) {
         let mut passes = Vec::new();
-        for command in commands {
+        for mut command in commands {
             self.shared.check(&command.owner);
-            passes.extend(command.passes);
+            if passes.is_empty() {
+                std::mem::swap(&mut passes, &mut command.passes);
+            } else {
+                passes.append(&mut command.passes);
+            }
         }
-        let uploads = std::mem::take(&mut *self.shared.uploads.borrow_mut());
-        self.shared
-            .native
-            .submit(uploads, passes)
+        let native = &self.shared.native;
+        let mut uploads = self.shared.uploads.borrow_mut();
+        let list = std::mem::replace(
+            &mut uploads.list,
+            native.pool.borrow_mut().uploads.pop().unwrap_or_default(),
+        );
+        native
+            .submit(list, &uploads.data, passes)
             .expect("Submit graphics commands");
+        uploads.data.clear();
     }
 }
 
-fn pack_texture(data: &[u8], layout: &TexelCopyBufferLayout, size: Extent3d) -> Vec<u8> {
+/// Append the rows of a texture write to the arena, tightly packed.
+fn pack_texture(packed: &mut Vec<u8>, data: &[u8], layout: &TexelCopyBufferLayout, size: Extent3d) {
     let row = usize::try_from(u64::from(size.width) * 4).expect("Texture row overflow");
     let pitch = layout.bytes_per_row.map_or(row, |n| n as usize);
     let rows = layout.rows_per_image.unwrap_or(size.height) as usize;
@@ -856,7 +925,7 @@ fn pack_texture(data: &[u8], layout: &TexelCopyBufferLayout, size: Extent3d) -> 
         .checked_mul(size.height as usize)
         .and_then(|n| n.checked_mul(size.depth_or_array_layers as usize))
         .expect("Texture upload overflow");
-    let mut packed = Vec::with_capacity(total);
+    packed.reserve(total);
     let offset = usize::try_from(layout.offset).expect("Texture offset overflow");
     for layer in 0..size.depth_or_array_layers as usize {
         for y in 0..size.height as usize {
@@ -870,7 +939,6 @@ fn pack_texture(data: &[u8], layout: &TexelCopyBufferLayout, size: Extent3d) -> 
             packed.extend_from_slice(data.get(start..end).expect("Texture upload data too short"));
         }
     }
-    packed
 }
 
 pub struct CommandEncoder {
@@ -1010,7 +1078,13 @@ impl CommandEncoder {
                 clear,
                 clear_depth,
                 store_depth: depth_ops.is_some_and(|ops| matches!(ops.store, StoreOp::Store)),
-                draws: Vec::new(),
+                draws: owner
+                    .native
+                    .pool
+                    .borrow_mut()
+                    .draws
+                    .pop()
+                    .unwrap_or_default(),
             },
             pipeline: None,
             group: None,
@@ -1201,12 +1275,19 @@ mod tests {
 
     #[cfg(all(target_os = "macos", feature = "image"))]
     #[test]
-    fn headless_bitmap_readback() {
+    fn headless_bitmap_readback_recycles_frame_lists() {
         let instance = Instance::default();
         let adapter = instance.request_adapter(&Default::default()).unwrap();
         let (device, queue) = adapter.request_device(&Default::default()).unwrap();
         let target = device.create_bitmap_target(2, 2);
         let view = target.create_view();
+        let buffer = device.create_buffer(&BufferDescriptor {
+            label: None,
+            size: 4,
+            usage: BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        queue.write_buffer(&buffer, 0, &[1, 2, 3, 4]);
         let mut encoder = device.create_command_encoder(&Default::default());
         {
             let _pass = encoder.begin_render_pass(&RenderPassDescriptor {
@@ -1231,6 +1312,11 @@ mod tests {
         queue.submit([encoder.finish()]);
         let bitmap = target.read(&queue).unwrap();
         assert_eq!(bitmap.data(), [255, 0, 0, 255].repeat(4));
+        // The finished frame returns its lists for reuse, and the arena keeps its capacity.
+        let uploads = queue.shared.uploads.borrow();
+        assert!(uploads.data.is_empty() && uploads.data.capacity() >= 4);
+        let pool = device.shared.native.pool.borrow();
+        assert_eq!((pool.uploads.len(), pool.passes.len()), (1, 1));
     }
 
     #[test]
@@ -1284,23 +1370,29 @@ mod tests {
     }
 
     #[test]
-    fn padded_texture_rows_and_layers() {
+    fn padded_texture_rows_and_layers_pack_into_aligned_arena() {
         let bytes: Vec<u8> = (0..64).collect();
-        let result = pack_texture(
-            &bytes,
-            &TexelCopyBufferLayout {
-                offset: 4,
-                bytes_per_row: Some(8),
-                rows_per_image: Some(3),
-            },
-            Extent3d {
-                width: 1,
-                height: 2,
-                depth_or_array_layers: 2,
-            },
-        );
+        let mut uploads = Uploads::default();
+        assert_eq!(uploads.push_data(|arena| arena.push(1)), 0..1);
+        let range = uploads.push_data(|arena| {
+            pack_texture(
+                arena,
+                &bytes,
+                &TexelCopyBufferLayout {
+                    offset: 4,
+                    bytes_per_row: Some(8),
+                    rows_per_image: Some(3),
+                },
+                Extent3d {
+                    width: 1,
+                    height: 2,
+                    depth_or_array_layers: 2,
+                },
+            );
+        });
+        assert_eq!(range, 4..20);
         assert_eq!(
-            result,
+            uploads.data[range],
             [4, 5, 6, 7, 12, 13, 14, 15, 28, 29, 30, 31, 36, 37, 38, 39]
         );
     }
@@ -1309,6 +1401,7 @@ mod tests {
     #[should_panic(expected = "too short")]
     fn short_texture_data_rejected() {
         pack_texture(
+            &mut Vec::new(),
             &[0; 3],
             &TexelCopyBufferLayout {
                 offset: 0,

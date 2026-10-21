@@ -21,5 +21,9 @@ struct Out {
 }
 
 @fragment fn fs_main(in: Out) -> @location(0) vec4<f32> {
-    return textureSample(overlay, overlay_sampler, in.uv);
+    // Canvas pixels are premultiplied sRGB, so linearize the color and premultiply it again.
+    let color = textureSample(overlay, overlay_sampler, in.uv);
+    let srgb = color.rgb / max(color.a, 1e-6);
+    let linear = select(pow((srgb + 0.055) / 1.055, vec3(2.4)), srgb / 12.92, srgb <= vec3(0.04045));
+    return vec4(linear * color.a, color.a);
 }

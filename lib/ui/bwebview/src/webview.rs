@@ -16,7 +16,7 @@ use crate::platforms::PlatformWebview;
 #[cfg(feature = "custom_protocol")]
 pub(crate) struct CustomProtocol {
     pub scheme: String,
-    pub handler: Box<dyn Fn(&small_http::Request) -> small_http::Response + Send + 'static>,
+    pub handler: Box<dyn Fn(small_http::Request) -> small_http::Response + Send + 'static>,
 }
 
 // MARK: InjectionTime
@@ -32,7 +32,7 @@ pub enum InjectionTime {
 // MARK: WebviewBuilder
 #[cfg(feature = "rust-embed")]
 type EmbedCustomHandler =
-    dyn Fn(&small_http::Request) -> Option<small_http::Response> + Send + 'static;
+    dyn Fn(small_http::Request) -> Option<small_http::Response> + Send + 'static;
 
 /// Webview builder
 pub struct WebviewBuilder<'a> {
@@ -83,7 +83,7 @@ impl<'a> WebviewBuilder<'a> {
     pub fn with_custom_protocol(
         mut self,
         scheme: impl Into<String>,
-        handler: impl Fn(&small_http::Request) -> small_http::Response + Send + 'static,
+        handler: impl Fn(small_http::Request) -> small_http::Response + Send + 'static,
     ) -> Self {
         self.custom_protocols.push(CustomProtocol {
             scheme: scheme.into(),
@@ -115,7 +115,7 @@ impl<'a> WebviewBuilder<'a> {
     #[cfg(feature = "rust-embed")]
     pub fn load_rust_embed_with_custom_handler<A: rust_embed::RustEmbed>(
         mut self,
-        handler: impl Fn(&small_http::Request) -> Option<small_http::Response> + Send + 'static,
+        handler: impl Fn(small_http::Request) -> Option<small_http::Response> + Send + 'static,
     ) -> Self {
         self.embed_assets_get = Some(A::get);
         self.embed_custom_handler = Some(Box::new(handler));

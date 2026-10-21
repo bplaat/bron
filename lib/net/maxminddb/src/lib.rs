@@ -14,7 +14,8 @@
 //! use maxminddb::{Reader, geoip2};
 //! use std::net::IpAddr;
 //!
-//! let reader = Reader::open_readfile("/path/to/GeoLite2-City.mmdb").unwrap();
+//! // Map the database so it is paged in on demand instead of copied into memory
+//! let reader = Reader::open_mmap("/path/to/GeoLite2-City.mmdb").unwrap();
 //! let ip: IpAddr = "89.160.20.128".parse().unwrap();
 //! let result = reader.lookup(ip).unwrap();
 //! if let Some(city) = result.decode::<geoip2::City>().unwrap() {
@@ -24,6 +25,7 @@
 
 pub use crate::error::MaxMindDbError;
 pub use crate::metadata::Metadata;
+pub use crate::mmap::Mmap;
 pub use crate::reader::{LookupResult, Reader};
 
 pub mod geoip2;
@@ -31,6 +33,7 @@ pub mod geoip2;
 mod decoder;
 mod error;
 mod metadata;
+mod mmap;
 mod reader;
 
 // MARK: Tests
@@ -94,6 +97,21 @@ mod tests {
             let _ = city.location.longitude;
             let _ = city.location.time_zone;
             let _ = city.continent.code;
+        }
+    }
+
+    #[test]
+    fn test_open_mmap_matches_readfile() {
+        let mapped = Reader::open_mmap(test_db_path()).expect("failed to map database");
+        let read = Reader::open_readfile(test_db_path()).expect("failed to open database");
+        assert_eq!(mapped.metadata().node_count, read.metadata().node_count);
+        for ip in ["89.160.20.128", "81.2.69.142", "192.0.2.1"] {
+            let ip: IpAddr = ip.parse().unwrap();
+            let decode = |result: LookupResult| result.decode::<geoip2::City>().unwrap();
+            assert_eq!(
+                decode(mapped.lookup(ip).unwrap()).map(|city| city.country.iso_code),
+                decode(read.lookup(ip).unwrap()).map(|city| city.country.iso_code)
+            );
         }
     }
 

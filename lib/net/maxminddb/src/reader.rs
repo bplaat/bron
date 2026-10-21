@@ -13,6 +13,7 @@ use serde::de::DeserializeOwned;
 use crate::decoder::{Value, decode_value_at, from_value};
 use crate::error::MaxMindDbError;
 use crate::metadata::Metadata;
+use crate::mmap::Mmap;
 
 // MARK: Reader
 
@@ -30,6 +31,13 @@ impl Reader<Vec<u8>> {
     pub fn open_readfile(path: impl AsRef<Path>) -> Result<Self, MaxMindDbError> {
         let buf = std::fs::read(path)?;
         Self::from_source(buf)
+    }
+}
+
+impl Reader<Mmap> {
+    /// Open a MaxMind DB database file by memory mapping it, so it is paged in on demand.
+    pub fn open_mmap(path: impl AsRef<Path>) -> Result<Self, MaxMindDbError> {
+        Self::from_source(Mmap::open(path)?)
     }
 }
 

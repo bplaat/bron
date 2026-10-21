@@ -55,7 +55,7 @@ mod test {
         let ctx = Context::with_test_database().expect("Can't create test database");
         let router = router(ctx.clone());
 
-        let res = router.handle(&Request::get("http://localhost/"));
+        let res = router.handle(Request::get("http://localhost/"));
         assert_eq!(res.headers.get("Access-Control-Allow-Origin"), Some("*"));
     }
 
@@ -65,7 +65,7 @@ mod test {
         let router = router(ctx.clone());
 
         let res = router.handle(
-            &Request::options("http://localhost/").header("Access-Control-Request-Method", "POST"),
+            Request::options("http://localhost/").header("Access-Control-Request-Method", "POST"),
         );
         assert_eq!(res.headers.get("Access-Control-Allow-Origin"), Some("*"));
         assert_eq!(

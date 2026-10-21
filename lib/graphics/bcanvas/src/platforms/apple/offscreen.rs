@@ -15,12 +15,10 @@ use objc2::{class, msg_send};
 
 use super::context::{PlatformCanvasContext, TextStyleCache};
 use super::headers::*;
-use crate::copy_rgba_premultiplied_to_straight;
 
 pub(crate) struct PlatformOffscreenCanvas {
     context: CGContextRef,
     storage: Vec<u8>,
-    output: Vec<u8>,
     dirty: bool,
     pool: *mut c_void,
     text_styles: TextStyleCache,
@@ -48,7 +46,6 @@ impl PlatformOffscreenCanvas {
             Self {
                 context,
                 storage,
-                output: vec![0; length],
                 dirty: false,
                 pool: null_mut(),
                 text_styles: TextStyleCache::default(),
@@ -103,12 +100,10 @@ impl PlatformOffscreenCanvas {
     }
 
     pub(crate) fn pixels(&mut self) -> &[u8] {
-        if self.dirty {
-            self.dirty = false;
+        if std::mem::take(&mut self.dirty) {
             unsafe { CGContextFlush(self.context) };
-            copy_rgba_premultiplied_to_straight(&self.storage, &mut self.output);
         }
-        &self.output
+        &self.storage
     }
 }
 

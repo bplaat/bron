@@ -118,6 +118,11 @@ impl Bitmap {
     pub fn data(&self) -> &[u8] {
         &self.data
     }
+
+    /// Takes the row-major, straight-alpha RGBA8 pixels without copying them.
+    pub fn into_data(self) -> Vec<u8> {
+        self.data
+    }
 }
 
 /// A complete displayed frame, after animation blending and before disposal.
@@ -141,6 +146,11 @@ impl Frame {
     /// Returns canvas-sized, row-major, straight-alpha RGBA8 pixels.
     pub fn pixels(&self) -> &[u8] {
         self.bitmap.data()
+    }
+
+    /// Takes the complete displayed bitmap without copying it.
+    pub fn into_bitmap(self) -> Bitmap {
+        self.bitmap
     }
 
     /// Returns the encoded display duration; static images have zero duration.
@@ -201,6 +211,11 @@ impl Image {
     /// Returns one or more fully composited frames.
     pub fn frames(&self) -> &[Frame] {
         &self.frames
+    }
+
+    /// Takes the fully composited frames without copying their pixels.
+    pub fn into_frames(self) -> Vec<Frame> {
+        self.frames
     }
 
     /// Returns the first displayed frame's RGBA8 pixels.
@@ -609,6 +624,25 @@ fn round(x: f64) -> f64 {
 ))]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "png")]
+    #[test]
+    fn owned_accessors_take_pixels_without_copying() {
+        let bitmap = Bitmap::new(1, 1, vec![1, 2, 3, 4]).unwrap();
+        let pixels = bitmap.data().as_ptr();
+        let image = Image {
+            format: Format::Png,
+            color_space: ColorSpace::Srgb,
+            frames: vec![Frame::new(bitmap, Duration::ZERO)],
+            is_animated: false,
+            loop_count: LoopCount::Infinite,
+        };
+        let data = image.into_frames().remove(0).into_bitmap().into_data();
+        assert_eq!(
+            (data.as_ptr(), data.as_slice()),
+            (pixels, [1, 2, 3, 4].as_slice())
+        );
+    }
 
     #[cfg(any(feature = "jpeg", feature = "gif"))]
     #[test]

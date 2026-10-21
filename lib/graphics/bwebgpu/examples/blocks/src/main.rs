@@ -27,7 +27,7 @@ struct MaterialAssets;
 struct PipelineOptions {
     cull: bool,
     depth_write: bool,
-    blend: bool,
+    blend: Option<bwebgpu::BlendState>,
     depth_test: bool,
 }
 
@@ -181,7 +181,7 @@ impl Gpu {
             PipelineOptions {
                 cull: false,
                 depth_write: false,
-                blend: false,
+                blend: None,
                 depth_test: false,
             },
         );
@@ -193,7 +193,7 @@ impl Gpu {
             PipelineOptions {
                 cull: true,
                 depth_write: true,
-                blend: false,
+                blend: None,
                 depth_test: true,
             },
         );
@@ -205,7 +205,7 @@ impl Gpu {
             PipelineOptions {
                 cull: true,
                 depth_write: false,
-                blend: true,
+                blend: Some(bwebgpu::BlendState::ALPHA_BLENDING),
                 depth_test: true,
             },
         );
@@ -240,7 +240,7 @@ impl Gpu {
             PipelineOptions {
                 cull: false,
                 depth_write: false,
-                blend: true,
+                blend: Some(bwebgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
                 depth_test: false,
             },
         );
@@ -255,7 +255,7 @@ impl Gpu {
             mip_level_count: 1,
             sample_count: 1,
             dimension: bwebgpu::TextureDimension::D2,
-            format: bwebgpu::TextureFormat::Rgba8UnormSrgb,
+            format: bwebgpu::TextureFormat::Rgba8Unorm,
             usage: bwebgpu::TextureUsages::TEXTURE_BINDING | bwebgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });
@@ -346,11 +346,7 @@ impl Gpu {
                 compilation_options: Default::default(),
                 targets: &[Some(bwebgpu::ColorTargetState {
                     format,
-                    blend: if options.blend {
-                        Some(bwebgpu::BlendState::ALPHA_BLENDING)
-                    } else {
-                        None
-                    },
+                    blend: options.blend,
                     write_mask: bwebgpu::ColorWrites::ALL,
                 })],
             }),
@@ -659,34 +655,38 @@ fn upload_materials(
                 MATERIAL_SIZE,
                 "Unexpected height for {name}"
             );
-            image.pixels().to_vec()
+            image.into_frames().swap_remove(0).into_bitmap().into_data()
         })
         .collect::<Vec<_>>();
 
-    // Upload every generated mip level as one texture-array write
+    // Upload every generated mip level, one array layer at a time, without joining the layers
     let mut width = MATERIAL_SIZE;
     let mut height = MATERIAL_SIZE;
     for mip_level in 0..MATERIAL_MIP_COUNT {
-        let pixels = layers.iter().flatten().copied().collect::<Vec<_>>();
-        queue.write_texture(
-            bwebgpu::TexelCopyTextureInfo {
-                texture: &texture,
-                mip_level,
-                origin: Default::default(),
-                aspect: bwebgpu::TextureAspect::All,
-            },
-            &pixels,
-            bwebgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(width * 4),
-                rows_per_image: Some(height),
-            },
-            bwebgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: layer_count,
-            },
-        );
+        for (layer, pixels) in layers.iter().enumerate() {
+            queue.write_texture(
+                bwebgpu::TexelCopyTextureInfo {
+                    texture: &texture,
+                    mip_level,
+                    origin: bwebgpu::Origin3d {
+                        z: layer as u32,
+                        ..Default::default()
+                    },
+                    aspect: bwebgpu::TextureAspect::All,
+                },
+                pixels,
+                bwebgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(width * 4),
+                    rows_per_image: Some(height),
+                },
+                bwebgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
+            );
+        }
         if width > 1 || height > 1 {
             layers = layers
                 .iter()

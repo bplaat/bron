@@ -21,13 +21,14 @@ use crate::utils::password_hash;
 // MARK: Context
 #[derive(Clone)]
 pub(crate) struct Context {
-    pub server_origin: String,
+    // Shared, because the router clones the context for every request
+    pub server_origin: Arc<str>,
     pub database: Connection,
     pub auth_session: Option<Session>,
     pub auth_user: Option<User>,
     pub update_target_user_id: Option<Uuid>,
     pub login_attempts: Arc<Mutex<HashMap<String, (u32, Instant)>>>,
-    pub maxminddb_reader: Arc<OnceLock<maxminddb::Reader<Vec<u8>>>>,
+    pub maxminddb_reader: Arc<OnceLock<maxminddb::Reader<maxminddb::Mmap>>>,
     pub trusted_proxies: Arc<[IpAddr]>,
     pub is_e2e: bool,
 }
@@ -44,7 +45,7 @@ impl Context {
         run_migrations!(database, "src/migrations")?;
         database_seed(&database)?;
         Ok(Self {
-            server_origin,
+            server_origin: server_origin.into(),
             database,
             auth_session: None,
             auth_user: None,
@@ -63,7 +64,7 @@ impl Context {
         log::info!("Running database migrations...");
         run_migrations!(database, "src/migrations")?;
         Ok(Self {
-            server_origin: "*".to_string(),
+            server_origin: Arc::from("*"),
             database,
             auth_session: None,
             auth_user: None,
@@ -82,7 +83,7 @@ impl Context {
         run_migrations!(database, "src/migrations")?;
         database_seed(&database)?;
         Ok(Self {
-            server_origin: "*".to_string(),
+            server_origin: Arc::from("*"),
             database,
             auth_session: None,
             auth_user: None,

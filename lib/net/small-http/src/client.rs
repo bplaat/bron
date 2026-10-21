@@ -293,7 +293,7 @@ mod test {
         let res = Client::new()
             .fetch(Request::get(format!("http://{server_addr}/start")))
             .unwrap();
-        assert_eq!(res.body, b"done");
+        assert_eq!(&*res.body, b"done");
         assert_eq!(server.join().unwrap(), ["/start", "/next"]);
     }
 }

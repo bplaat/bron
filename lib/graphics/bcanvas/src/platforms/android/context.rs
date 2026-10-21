@@ -243,7 +243,7 @@ pub(crate) struct Resources {
     path: GlobalRef,
     matrix: GlobalRef,
     values: GlobalRef,
-    typefaces: RefCell<HashMap<(String, bool), GlobalRef>>,
+    typefaces: RefCell<HashMap<(Rc<str>, bool), GlobalRef>>,
 }
 
 impl Resources {
@@ -295,13 +295,13 @@ impl Resources {
         }
     }
 
-    fn typeface(&self, env: JniEnv, jni: &Jni, family: &str, bold: bool) -> jobject {
+    fn typeface(&self, env: JniEnv, jni: &Jni, family: &Rc<str>, bold: bool) -> jobject {
         const BOLD: jint = 1;
         let mut typefaces = self.typefaces.borrow_mut();
         typefaces
-            .entry((family.to_string(), bold))
+            .entry((family.clone(), bold))
             .or_insert_with(|| unsafe {
-                let name = env.new_string(family);
+                let name = env.new_string(family.as_ref());
                 let typeface = env.call_static_object(
                     jni.typeface_class.as_raw(),
                     jni.typeface_create,

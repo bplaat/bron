@@ -4,6 +4,8 @@
  * SPDX-License-Identifier: MIT
  */
 
+#[cfg(feature = "custom_protocol")]
+use std::borrow::Cow;
 use std::cell::{Cell, RefCell};
 use std::env;
 use std::ffi::{CStr, CString, c_char, c_void};
@@ -583,7 +585,7 @@ extern "C" fn webview_custom_uri_scheme(
 ) {
     let custom_protocol = unsafe { &mut *custom_protocol };
     let req = webkit_uri_scheme_request_to_http_request(uri_scheme_request);
-    let res = (custom_protocol.handler)(&req);
+    let res = (custom_protocol.handler)(req);
     webkit_finish_uri_scheme_response(uri_scheme_request, res);
 }
 
@@ -661,23 +663,35 @@ fn webkit_uri_scheme_request_to_http_request(
 #[cfg(feature = "custom_protocol")]
 fn webkit_finish_uri_scheme_response(
     uri_scheme_request: *mut WebKitURISchemeRequest,
-    res: small_http::Response,
+    mut res: small_http::Response,
 ) {
-    extern "C" fn body_data_destroy(data: *mut c_void) {
-        drop(unsafe { Box::from_raw(data as *mut u8) });
+    extern "C" fn body_destroy(body: *mut c_void) {
+        drop(unsafe { Box::from_raw(body.cast::<Vec<u8>>()) });
     }
-    let stream = unsafe {
-        g_memory_input_stream_new_from_data(
-            Box::into_raw(res.body.clone().into_boxed_slice()) as *const c_void,
-            res.body.len(),
-            body_data_destroy as *const c_void,
-        )
+    // Hand the body to GLib without copying: static bodies are borrowed, and owned bodies are
+    // freed through their box once WebKit has read them.
+    let body_len = res.body.len();
+    let bytes = match std::mem::take(&mut res.body) {
+        Cow::Borrowed(body) => unsafe { g_bytes_new_static(body.as_ptr().cast(), body.len()) },
+        Cow::Owned(body) => {
+            let body = Box::new(body);
+            unsafe {
+                g_bytes_new_with_free_func(
+                    body.as_ptr().cast(),
+                    body.len(),
+                    body_destroy as *const c_void,
+                    Box::into_raw(body).cast(),
+                )
+            }
+        }
     };
+    let stream = unsafe { g_memory_input_stream_new_from_bytes(bytes) };
+    unsafe { g_bytes_unref(bytes) };
 
     cfg_select! {
         webkit2gtk_4_1 => {
             let uri_scheme_response =
-                unsafe { webkit_uri_scheme_response_new(stream, res.body.len() as i64) };
+                unsafe { webkit_uri_scheme_response_new(stream, body_len as i64) };
             unsafe {
                 webkit_uri_scheme_response_set_status(
                     uri_scheme_response,
@@ -721,7 +735,7 @@ fn webkit_finish_uri_scheme_response(
                 webkit_uri_scheme_request_finish(
                     uri_scheme_request,
                     stream,
-                    res.body.len() as i64,
+                    body_len as i64,
                     content_type.as_ref().map_or(null(), |ct| ct.as_ptr()),
                 );
                 g_object_unref(stream as *mut GObject);

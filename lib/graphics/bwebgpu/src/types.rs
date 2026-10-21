@@ -307,11 +307,18 @@ pub struct PrimitiveState {
     pub cull_mode: Option<Face>,
 }
 
-#[derive(Clone, Copy)]
-pub struct BlendState;
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BlendState {
+    pub(crate) premultiplied: bool,
+}
 
 impl BlendState {
-    pub const ALPHA_BLENDING: Self = Self;
+    pub const ALPHA_BLENDING: Self = Self {
+        premultiplied: false,
+    };
+    pub const PREMULTIPLIED_ALPHA_BLENDING: Self = Self {
+        premultiplied: true,
+    };
 }
 
 #[derive(Clone, Copy)]

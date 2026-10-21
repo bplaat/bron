@@ -18,16 +18,26 @@ fn try_download_mmdb(mmdb_path: &str) {
         let url = format!("https://download.db-ip.com/free/dbip-city-lite-{y}-{m:02}.mmdb.gz");
         log::info!("Downloading DB-IP city lite database from {url}...");
         match small_http::Request::get(&url).fetch() {
-            Ok(res) if res.status == small_http::Status::Ok => match gzip::decompress(&res.body) {
-                Some(decompressed) => match std::fs::write(mmdb_path, &decompressed) {
+            Ok(res) if res.status == small_http::Status::Ok => {
+                // Free the compressed download before writing the decompressed database
+                let decompressed = gzip::decompress(&res.body);
+                drop(res);
+                let Some(decompressed) = decompressed else {
+                    log::warn!("Failed to decompress DB-IP database");
+                    continue;
+                };
+                // Rename a complete file into place, so a mapped database is never truncated
+                let partial_path = format!("{mmdb_path}.partial");
+                match std::fs::write(&partial_path, &decompressed)
+                    .and_then(|()| std::fs::rename(&partial_path, mmdb_path))
+                {
                     Ok(()) => {
                         log::info!("DB-IP city lite database saved to {mmdb_path}");
                         return;
                     }
                     Err(e) => log::warn!("Failed to write DB-IP database to {mmdb_path}: {e}"),
-                },
-                None => log::warn!("Failed to decompress DB-IP database"),
-            },
+                }
+            }
             Ok(_) => log::warn!("Unexpected HTTP response when downloading DB-IP database"),
             Err(_) => log::warn!("Failed to connect to download.db-ip.com"),
         }
@@ -46,7 +56,8 @@ pub(crate) fn run(mmdb_path: String, ctx: Context) {
         .map(|m| m.len() > 0)
         .unwrap_or(false);
     if is_nonempty {
-        match maxminddb::Reader::open_readfile(&mmdb_path) {
+        // Map the database so it is paged in on demand instead of held in memory
+        match maxminddb::Reader::open_mmap(&mmdb_path) {
             Ok(reader) => {
                 log::info!("Using DB-IP city lite database at {mmdb_path}");
                 let _ = ctx.maxminddb_reader.set(reader);

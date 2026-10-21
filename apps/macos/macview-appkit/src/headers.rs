@@ -134,16 +134,6 @@ macro_rules! ns_string {
     }};
 }
 
-#[link(name = "CoreFoundation", kind = "framework")]
-unsafe extern "C" {
-    pub(crate) fn CFDataCreate(
-        allocator: *const c_void,
-        bytes: *const u8,
-        length: isize,
-    ) -> *const c_void;
-    pub(crate) fn CFRelease(object: *const c_void);
-}
-
 #[link(name = "CoreGraphics", kind = "framework")]
 unsafe extern "C" {
     pub(crate) static kCGColorSpaceSRGB: *const c_void;
@@ -225,7 +215,12 @@ unsafe extern "C" {
         alpha: f64,
     );
     pub(crate) fn CGContextTranslateCTM(context: *mut c_void, x: f64, y: f64);
-    pub(crate) fn CGDataProviderCreateWithCFData(data: *const c_void) -> *const c_void;
+    pub(crate) fn CGDataProviderCreateWithData(
+        info: *mut c_void,
+        data: *const c_void,
+        size: usize,
+        release_data: *const c_void,
+    ) -> *const c_void;
     pub(crate) fn CGDataProviderRelease(provider: *const c_void);
     pub(crate) fn CGImageCreate(
         width: usize,

@@ -335,22 +335,18 @@ fn do_handshake<S: Read + Write>(
                 // Only read from the network when there is no leftover data from
                 // SECBUFFER_EXTRA; if there is, loop immediately with that data.
                 if in_data.is_empty() {
-                    let mut chunk = vec![0u8; 16384];
-                    let n = stream.read(&mut chunk).map_err(|e| Error(e.to_string()))?;
+                    let n = read_more(stream, &mut in_data).map_err(|e| Error(e.to_string()))?;
                     if n == 0 {
                         return Err(Error("Connection closed during TLS handshake".to_string()));
                     }
-                    in_data.extend_from_slice(&chunk[..n]);
                 }
             }
             SEC_E_INCOMPLETE_MESSAGE => {
                 // Need more data - append to existing buffer
-                let mut chunk = vec![0u8; 4096];
-                let n = stream.read(&mut chunk).map_err(|e| Error(e.to_string()))?;
+                let n = read_more(stream, &mut in_data).map_err(|e| Error(e.to_string()))?;
                 if n == 0 {
                     return Err(Error("Connection closed during TLS handshake".to_string()));
                 }
-                in_data.extend_from_slice(&chunk[..n]);
             }
             _ => {
                 if !ctx.is_invalid() {
@@ -434,6 +430,8 @@ impl TlsConnector {
             sizes,
             enc_buf,
             dec_buf: Vec::new(),
+            dec_pos: 0,
+            write_buf: Vec::new(),
         })
     }
 }
@@ -452,7 +450,19 @@ pub struct TlsStream<S> {
     stream: S,
     sizes: SecPkgContextStreamSizes,
     enc_buf: Vec<u8>, // buffered ciphertext read from stream
-    dec_buf: Vec<u8>, // leftover plaintext after a decrypt
+    dec_buf: Vec<u8>, // leftover plaintext after a decrypt, read from dec_pos
+    dec_pos: usize,
+    write_buf: Vec<u8>, // reused record buffer for encryption
+}
+
+/// Read once from `stream` into the spare end of `buffer`, reusing its capacity.
+fn read_more(stream: &mut impl Read, buffer: &mut Vec<u8>) -> io::Result<usize> {
+    const CHUNK: usize = 16384;
+    let len = buffer.len();
+    buffer.resize(len + CHUNK, 0);
+    let read = stream.read(&mut buffer[len..]);
+    buffer.truncate(len + *read.as_ref().unwrap_or(&0));
+    read
 }
 
 impl<S> TlsStream<S> {
@@ -469,11 +479,12 @@ impl<S> TlsStream<S> {
 
 impl<S: Read + Write> Read for TlsStream<S> {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        // Drain any leftover plaintext
-        if !self.dec_buf.is_empty() {
-            let n = buf.len().min(self.dec_buf.len());
-            buf[..n].copy_from_slice(&self.dec_buf[..n]);
-            self.dec_buf.drain(..n);
+        // Return leftover plaintext, advancing a cursor instead of shifting the buffer
+        if self.dec_pos < self.dec_buf.len() {
+            let leftover = &self.dec_buf[self.dec_pos..];
+            let n = buf.len().min(leftover.len());
+            buf[..n].copy_from_slice(&leftover[..n]);
+            self.dec_pos += n;
             return Ok(n);
         }
 
@@ -514,38 +525,34 @@ impl<S: Read + Write> Read for TlsStream<S> {
 
                 match status {
                     SEC_E_OK => {
-                        // Extract decrypted data and leftover extra data.
-                        // SECBUFFER_DATA and SECBUFFER_EXTRA pv_buffers point into self.enc_buf
-                        // (DecryptMessage operates in-place), so we copy before replacing enc_buf.
-                        let mut dec_data = Vec::new();
-                        let mut extra_data = Vec::new();
-                        for b in &bufs {
-                            if b.buffer_type == SECBUFFER_DATA && !b.pv_buffer.is_null() {
-                                // SAFETY: pv_buffer points into enc_buf (in-place decryption); cb_buffer bytes are valid.
-                                dec_data.extend_from_slice(unsafe {
-                                    slice::from_raw_parts(
-                                        b.pv_buffer as *const u8,
-                                        b.cb_buffer as usize,
-                                    )
-                                });
-                            }
-                            if b.buffer_type == SECBUFFER_EXTRA && !b.pv_buffer.is_null() {
-                                // SAFETY: pv_buffer points into enc_buf; cb_buffer bytes are unconsumed ciphertext.
-                                extra_data.extend_from_slice(unsafe {
-                                    slice::from_raw_parts(
-                                        b.pv_buffer as *const u8,
-                                        b.cb_buffer as usize,
-                                    )
-                                });
-                            }
-                        }
-                        self.enc_buf = extra_data;
+                        // DecryptMessage works in place, so the SECBUFFER_DATA plaintext and
+                        // the SECBUFFER_EXTRA unconsumed ciphertext are ranges of enc_buf.
+                        let base = self.enc_buf.as_ptr() as usize;
+                        let range = |b: &SecBuffer| {
+                            let start = b.pv_buffer as usize - base;
+                            start..start + b.cb_buffer as usize
+                        };
+                        let data = bufs
+                            .iter()
+                            .find(|b| b.buffer_type == SECBUFFER_DATA && !b.pv_buffer.is_null())
+                            .map_or(0..0, range);
+                        let extra = bufs
+                            .iter()
+                            .find(|b| b.buffer_type == SECBUFFER_EXTRA && !b.pv_buffer.is_null())
+                            .map(range);
 
-                        let n = buf.len().min(dec_data.len());
-                        buf[..n].copy_from_slice(&dec_data[..n]);
-                        if dec_data.len() > n {
-                            self.dec_buf.extend_from_slice(&dec_data[n..]);
+                        let n = buf.len().min(data.len());
+                        buf[..n].copy_from_slice(&self.enc_buf[data.start..data.start + n]);
+                        self.dec_buf.clear();
+                        self.dec_buf
+                            .extend_from_slice(&self.enc_buf[data.start + n..data.end]);
+                        self.dec_pos = 0;
+                        // Keep the unconsumed ciphertext at the front of the reused buffer
+                        let extra_len = extra.as_ref().map_or(0, |extra| extra.len());
+                        if let Some(extra) = extra {
+                            self.enc_buf.copy_within(extra, 0);
                         }
+                        self.enc_buf.truncate(extra_len);
                         return Ok(n);
                     }
                     SEC_E_INCOMPLETE_MESSAGE => {
@@ -561,12 +568,9 @@ impl<S: Read + Write> Read for TlsStream<S> {
             }
 
             // Read more ciphertext from the underlying stream
-            let mut chunk = vec![0u8; 16384];
-            let n = self.stream.read(&mut chunk)?;
-            if n == 0 {
+            if read_more(&mut self.stream, &mut self.enc_buf)? == 0 {
                 return Ok(0);
             }
-            self.enc_buf.extend_from_slice(&chunk[..n]);
         }
     }
 }
@@ -580,7 +584,9 @@ impl<S: Read + Write> Write for TlsStream<S> {
         let header_sz = self.sizes.cb_header as usize;
         let trailer_sz = self.sizes.cb_trailer as usize;
         let total = header_sz + chunk_len + trailer_sz;
-        let mut enc_buf = vec![0u8; total];
+        let enc_buf = &mut self.write_buf;
+        enc_buf.clear();
+        enc_buf.resize(total, 0);
 
         // Copy plaintext after the header area
         enc_buf[header_sz..header_sz + chunk_len].copy_from_slice(chunk);

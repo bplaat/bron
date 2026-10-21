@@ -9,7 +9,6 @@ use std::rc::Rc;
 use bwindow::ffi::*;
 
 use super::context::{Clear, Jni, PlatformCanvasContext, Resources};
-use crate::copy_rgba_premultiplied_to_straight;
 use crate::path::Transform;
 
 /// Draws with an android.graphics.Canvas into its own premultiplied RGBA bitmap.
@@ -18,7 +17,7 @@ pub(crate) struct PlatformOffscreenCanvas {
     canvas: GlobalRef,
     resources: Rc<Resources>,
     storage: Vec<u8>,
-    output: Vec<u8>,
+    dirty: bool,
 }
 
 impl PlatformOffscreenCanvas {
@@ -57,12 +56,13 @@ impl PlatformOffscreenCanvas {
                 canvas: GlobalRef::from_local(env, canvas),
                 resources: Resources::new(env),
                 storage: vec![0; length],
-                output: vec![0; length],
+                dirty: false,
             }
         }
     }
 
     pub(crate) fn begin_draw(&mut self) -> PlatformCanvasContext {
+        self.dirty = true;
         PlatformCanvasContext::new(
             self.canvas.as_raw(),
             self.resources.clone(),
@@ -78,6 +78,9 @@ impl PlatformOffscreenCanvas {
     pub(crate) fn end_draw(&mut self) {}
 
     pub(crate) fn pixels(&mut self) -> &[u8] {
+        if !std::mem::take(&mut self.dirty) {
+            return &self.storage;
+        }
         let env = JniEnv::current();
         unsafe {
             let buffer = env.new_direct_byte_buffer(self.storage.as_mut_ptr(), self.storage.len());
@@ -89,7 +92,6 @@ impl PlatformOffscreenCanvas {
             );
             env.delete_local_ref(buffer);
         }
-        copy_rgba_premultiplied_to_straight(&self.storage, &mut self.output);
-        &self.output
+        &self.storage
     }
 }

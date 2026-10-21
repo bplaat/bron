@@ -118,7 +118,7 @@ mod test {
         let ctx = Context::with_test_database().expect("Can't create test database");
         let router = router(ctx.clone());
 
-        let res = router.handle(&Request::with_url("http://localhost/api/auth/validate"));
+        let res = router.handle(Request::with_url("http://localhost/api/auth/validate"));
         assert_eq!(res.status, Status::Unauthorized);
     }
 
@@ -133,7 +133,7 @@ mod test {
         // Add Authorization header to request
         let req = Request::with_url("http://localhost/api/auth/validate")
             .header("Authorization", format!("Bearer {token}"));
-        let res = router.handle(&req);
+        let res = router.handle(req);
         assert_eq!(res.status, Status::Ok);
     }
 
@@ -157,7 +157,7 @@ mod test {
 
         // Trigger the auth layer via any authed endpoint
         let res = router.handle(
-            &Request::with_url("http://localhost/api/auth/validate")
+            Request::with_url("http://localhost/api/auth/validate")
                 .header("Authorization", format!("Bearer {token}")),
         );
         assert_eq!(res.status, Status::Ok);
@@ -193,7 +193,7 @@ mod test {
 
         let req = Request::with_url("http://localhost/api/auth/validate")
             .header("Authorization", "Bearer test-token");
-        let res = router.handle(&req);
+        let res = router.handle(req);
 
         assert_eq!(res.status, Status::InternalServerError);
     }

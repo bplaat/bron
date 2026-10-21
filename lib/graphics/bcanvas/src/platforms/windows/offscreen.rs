@@ -10,7 +10,7 @@ use std::rc::Rc;
 
 use super::context::{DrawTarget, PlatformCanvasContext, Resources};
 use super::headers::*;
-use crate::copy_bgra_premultiplied_to_rgba;
+use crate::copy_bgra_to_rgba;
 
 #[repr(C)]
 #[derive(Default)]
@@ -149,7 +149,7 @@ impl PlatformOffscreenCanvas {
     pub(crate) fn pixels(&mut self) -> &[u8] {
         if std::mem::take(&mut self.dirty) {
             let storage = unsafe { std::slice::from_raw_parts(self.storage.as_ptr(), self.length) };
-            copy_bgra_premultiplied_to_rgba(storage, &mut self.output);
+            copy_bgra_to_rgba(storage, &mut self.output);
         }
         &self.output
     }

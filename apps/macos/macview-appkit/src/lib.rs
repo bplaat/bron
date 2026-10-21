@@ -237,8 +237,10 @@ pub fn decode_image(bytes: Vec<u8>) -> Result<Image, String> {
     if vector::vector_format(&bytes).is_some() {
         return decode_vector_image(&bytes);
     }
-    if let Some(image) = decode_custom_image(&bytes)? {
-        return Ok(image);
+    if let Some(decoded) = decode_raster(&bytes)? {
+        // Free the encoded file before the decoded pixels are handed to Core Graphics
+        drop(bytes);
+        return raster_image(decoded);
     }
 
     // Copy the bytes, Quick Look keeps the NSImage alive after this wrapper is dropped.
@@ -273,8 +275,8 @@ pub unsafe fn decode_image_data(data: *mut Object) -> Result<Image, String> {
     if vector::vector_format(bytes).is_some() {
         return decode_vector_image(bytes);
     }
-    if let Some(image) = decode_custom_image(bytes)? {
-        return Ok(image);
+    if let Some(decoded) = decode_raster(bytes)? {
+        return raster_image(decoded);
     }
     // SAFETY: NSImage's data initializer takes responsibility for any data it needs after return.
     unsafe { decode_native_image(data) }
@@ -349,28 +351,31 @@ pub fn create_image_view(frame: Rect, image: &Image) -> Retained<Object> {
     }
 }
 
-fn decode_custom_image(bytes: &[u8]) -> Result<Option<Image>, String> {
+// Decodes a still raster with the local decoders. NSImageView plays animated NSBitmapImageRep
+// natively, so animations are left to AppKit.
+fn decode_raster(bytes: &[u8]) -> Result<Option<image::Image>, String> {
     let decoded = image::decode(bytes).map_err(|error| error.to_string())?;
-    // NSImageView plays animated NSBitmapImageRep natively, so leave animations to AppKit.
-    if decoded.is_animated() {
-        return Ok(None);
-    }
-    let frame = &decoded.frames()[0];
-    let native_image = make_image(
-        decoded.width(),
-        decoded.height(),
-        decoded.color_space(),
-        frame.pixels(),
-    )
-    .ok_or_else(|| String::from("Could not create the decoded image"))?;
+    Ok((!decoded.is_animated()).then_some(decoded))
+}
+
+// Moves a decoded still raster into an NSImage without copying its pixels.
+fn raster_image(decoded: image::Image) -> Result<Image, String> {
+    let (width, height, color_space) = (decoded.width(), decoded.height(), decoded.color_space());
+    let pixels = decoded
+        .into_frames()
+        .swap_remove(0)
+        .into_bitmap()
+        .into_data();
+    let native_image = make_image(width, height, color_space, pixels)
+        .ok_or_else(|| String::from("Could not create the decoded image"))?;
     // SAFETY: The frame was constructed as an owned, initialized NSImage.
     let mut image = unsafe { finish_image(native_image) };
     // NSImage may report Retina backing pixels, so use the decoded size.
     image.pixel_size = Some(Size {
-        width: f64::from(decoded.width()),
-        height: f64::from(decoded.height()),
+        width: f64::from(width),
+        height: f64::from(height),
     });
-    Ok(Some(image))
+    Ok(image)
 }
 
 /// Creates an autoreleased `NSError` that carries `description` as its localized description.
@@ -411,24 +416,33 @@ pub fn extension_main() -> ! {
     unreachable!("NSExtensionMain does not return");
 }
 
-// Creates an `NSImage` with one owned retain count from straight-alpha RGBA8 pixels.
+// Creates an `NSImage` with one owned retain count from straight-alpha RGBA8 pixels. The image
+// takes ownership of the pixels instead of copying them.
 fn make_image(
     width: u32,
     height: u32,
     color_space: image::ColorSpace,
-    pixels: &[u8],
+    pixels: Vec<u8>,
 ) -> Option<Retained<Object>> {
-    // SAFETY: Core Foundation copies the decoded bytes. Each create call is checked, and every
-    // owned Core Foundation/Core Graphics object is released after ownership is transferred.
-    unsafe {
-        let data = CFDataCreate(null(), pixels.as_ptr(), pixels.len() as isize);
-        if data.is_null() {
-            return None;
-        }
+    extern "C" fn release_pixels(info: *mut c_void, _: *const c_void, _: usize) {
+        // SAFETY: info is the boxed pixel buffer given to CGDataProviderCreateWithData, which
+        // calls this exactly once when the image no longer needs it.
+        drop(unsafe { Box::from_raw(info.cast::<Vec<u8>>()) });
+    }
 
-        let provider = CGDataProviderCreateWithCFData(data);
-        CFRelease(data);
+    // SAFETY: The data provider owns the boxed pixels until its release callback. Each create
+    // call is checked, and every owned Core Graphics object is released after ownership is
+    // transferred.
+    unsafe {
+        let pixels = Box::into_raw(Box::new(pixels));
+        let provider = CGDataProviderCreateWithData(
+            pixels.cast(),
+            (*pixels).as_ptr().cast(),
+            (*pixels).len(),
+            release_pixels as *const c_void,
+        );
         if provider.is_null() {
+            drop(Box::from_raw(pixels));
             return None;
         }
         let color_space_name = match color_space {

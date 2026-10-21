@@ -575,7 +575,7 @@ mod test {
             .name("test-websocket-server".to_string())
             .spawn(move || {
                 small_http::serve(listener, |req| {
-                    upgrade(req, |mut ws| {
+                    upgrade(&req, |mut ws| {
                         loop {
                             if let Message::Text(text) =
                                 ws.recv().expect("Failed to receive message")

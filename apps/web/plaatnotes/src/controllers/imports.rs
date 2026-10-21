@@ -53,7 +53,7 @@ mod test {
         zip: &[u8],
     ) -> Response {
         router.handle(
-            &Request::post("http://localhost/api/imports/google-keep")
+            Request::post("http://localhost/api/imports/google-keep")
                 .header("Authorization", format!("Bearer {token}"))
                 .header("Content-Type", "application/zip")
                 .body(zip.to_vec()),
@@ -116,7 +116,7 @@ mod test {
         let (_, token) = create_test_user_with_session(&ctx);
 
         let res = router.handle(
-            &Request::post("http://localhost/api/imports/google-keep")
+            Request::post("http://localhost/api/imports/google-keep")
                 .header("Authorization", format!("Bearer {token}"))
                 .header("Content-Type", "application/zip"),
         );
@@ -129,7 +129,7 @@ mod test {
         let router = router(ctx.clone());
 
         let res = router.handle(
-            &Request::post("http://localhost/api/imports/google-keep")
+            Request::post("http://localhost/api/imports/google-keep")
                 .header("Content-Type", "application/zip")
                 .body(TWO_NOTES_ZIP.to_vec()),
         );

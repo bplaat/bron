@@ -84,12 +84,48 @@ pub fn compress(data: &[u8], level: Level) -> Vec<u8> {
 
 /// Decompress a raw DEFLATE stream that fills `data` exactly, producing at most `limit` bytes.
 pub fn decompress(data: &[u8], limit: usize) -> Result<Vec<u8>, Error> {
+    decompress_with_size_hint(data, limit, 0)
+}
+
+/// Decompress like [`decompress`], reserving the output size a container records, such as the
+/// gzip or ZIP size field, so the output is allocated once. The hint is not trusted: it is capped
+/// by `limit` and by how far `data` can expand, and a wrong hint only costs a reallocation.
+pub fn decompress_with_size_hint(
+    data: &[u8],
+    limit: usize,
+    size_hint: usize,
+) -> Result<Vec<u8>, Error> {
     let mut out = Vec::new();
+    reserve_hint(&mut out, data, limit, size_hint)?;
     let consumed = decode::decompress(data, limit, &mut out)?;
     if consumed != data.len() {
         return Err(Error::InvalidData);
     }
-    Ok(out)
+    Ok(fit(out))
+}
+
+/// The most a DEFLATE stream expands: a 258 byte match coded in about two bits.
+const MAX_EXPANSION: usize = 1032;
+
+fn reserve_hint(
+    out: &mut Vec<u8>,
+    data: &[u8],
+    limit: usize,
+    size_hint: usize,
+) -> Result<(), Error> {
+    let size_hint = size_hint
+        .min(limit)
+        .min(data.len().saturating_mul(MAX_EXPANSION));
+    out.try_reserve_exact(size_hint)
+        .map_err(|_| Error::OutOfMemory)
+}
+
+/// Release growth slack, so a long-lived output does not hold up to twice its size.
+fn fit(mut out: Vec<u8>) -> Vec<u8> {
+    if out.capacity() - out.len() > out.len() / 8 {
+        out.shrink_to_fit();
+    }
+    out
 }
 
 // MARK: zlib
@@ -109,13 +145,13 @@ pub fn zlib_decompress(data: &[u8], limit: usize) -> Result<Vec<u8>, Error> {
     if checksum != adler32(&out).to_be_bytes() {
         return Err(Error::InvalidData);
     }
-    Ok(out)
+    Ok(fit(out))
 }
 
 /// Decompress a zlib stream like [`zlib_decompress`], without verifying its Adler-32 checksum, for
 /// formats that already checksum the compressed stream, like PNG.
 pub fn zlib_decompress_unchecked(data: &[u8], limit: usize) -> Result<Vec<u8>, Error> {
-    zlib_inflate(data, limit).map(|(out, _)| out)
+    zlib_inflate(data, limit).map(|(out, _)| fit(out))
 }
 
 /// Decompress a zlib stream, returning the output and the 4-byte Adler-32 trailer.
@@ -160,6 +196,24 @@ mod tests {
     use alloc::vec;
 
     use super::*;
+
+    #[test]
+    fn size_hints_allocate_once_and_are_not_trusted() {
+        let data = alloc::vec![42u8; 100_000];
+        let compressed = compress(&data, Level::Fast);
+        let out = decompress_with_size_hint(&compressed, usize::MAX, data.len()).unwrap();
+        assert_eq!(
+            (out.as_slice(), out.capacity()),
+            (data.as_slice(), data.len())
+        );
+        // A hint beyond what the input can expand to is capped instead of allocated.
+        let out = decompress_with_size_hint(&compressed, usize::MAX, usize::MAX / 2).unwrap();
+        assert_eq!(out, data);
+        assert!(out.capacity() <= compressed.len() * MAX_EXPANSION);
+        // Without a hint, growth slack is released.
+        let out = decompress(&compressed, usize::MAX).unwrap();
+        assert!(out.capacity() - out.len() <= out.len() / 8);
+    }
 
     const LEVELS: [Level; 4] = [Level::Fast, Level::Default, Level::Best, Level::Crunch];
 

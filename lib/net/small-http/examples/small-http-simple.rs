@@ -10,7 +10,7 @@ use std::net::{Ipv4Addr, TcpListener};
 
 use small_http::{Request, Response};
 
-fn handler(_req: &Request) -> Response {
+fn handler(_req: Request) -> Response {
     Response::with_body("Hello World!")
 }
 

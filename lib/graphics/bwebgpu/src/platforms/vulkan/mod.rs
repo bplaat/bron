@@ -7,7 +7,7 @@
 //! Vulkan 1.1, one graphics/present queue, with explicit uploads and synchronization.
 
 use std::cell::Cell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ffi::{CStr, c_void};
 use std::ptr;
 use std::rc::Rc;
@@ -460,10 +460,17 @@ struct Frame {
     framebuffers: Vec<u64>,
 }
 
+/// A bind group's entries and the set layout it was written for.
+type DescriptorSetKey = (*const Vec<(u32, Resource)>, vk::DescriptorSetLayout);
+
 pub(super) struct Context {
     device: Rc<NativeDevice>,
     frames: RefCell<Vec<Frame>>,
     slot: Cell<usize>,
+    pub(crate) pool: RefCell<Pool>,
+    // Per-submit lookups, cleared and reused so their capacity survives across frames.
+    sets: RefCell<HashMap<DescriptorSetKey, vk::DescriptorSet>>,
+    written: RefCell<HashSet<vk::Buffer>>,
     #[cfg(feature = "window")]
     acquired: RefCell<Option<(Rc<Swapchain>, usize)>>,
     #[cfg(feature = "window")]
@@ -587,6 +594,9 @@ impl Context {
                 device,
                 frames: RefCell::new(Vec::new()),
                 slot: Cell::new(0),
+                pool: RefCell::default(),
+                sets: RefCell::default(),
+                written: RefCell::default(),
                 #[cfg(feature = "window")]
                 acquired: RefCell::new(None),
                 #[cfg(feature = "window")]
@@ -732,8 +742,10 @@ impl Context {
                     ptr::null()
                 );
             }
-            frame.passes.clear();
-            frame.uploads.clear();
+            self.pool.borrow_mut().retire(
+                std::mem::take(&mut frame.uploads),
+                std::mem::take(&mut frame.passes),
+            );
             check(call!(d.instance, ResetCommandPool, d.handle, frame.pool, 0))?;
             check(call!(
                 d.instance,
@@ -1190,7 +1202,12 @@ impl Context {
             };
             let blend_attachment = vk::PipelineColorBlendAttachmentState {
                 blend_enable: u32::from(color.blend.is_some()),
-                src_color_blend_factor: 6,
+                // VK_BLEND_FACTOR_ONE for premultiplied sources, otherwise VK_BLEND_FACTOR_SRC_ALPHA.
+                src_color_blend_factor: if color.blend.is_some_and(|blend| blend.premultiplied) {
+                    1
+                } else {
+                    6
+                },
                 dst_color_blend_factor: 7,
                 src_alpha_blend_factor: 1,
                 dst_alpha_blend_factor: 7,
@@ -1284,7 +1301,12 @@ impl Context {
         }
     }
 
-    pub(super) fn submit(&self, uploads: Vec<Upload>, passes: Vec<Pass>) -> Result<()> {
+    pub(super) fn submit(
+        &self,
+        uploads: Vec<Upload>,
+        data: &[u8],
+        passes: Vec<Pass>,
+    ) -> Result<()> {
         unsafe {
             let d = &self.device;
             let mut frames = self.frames.borrow_mut();
@@ -1317,18 +1339,10 @@ impl Context {
                 0,
                 ptr::null()
             );
-            let total: usize = uploads
-                .iter()
-                .map(|u| match u {
-                    Upload::Buffer { data, .. } | Upload::Texture { data, .. } => {
-                        (data.len() + 3) & !3
-                    }
-                })
-                .sum();
-            if total > 0 {
+            if !uploads.is_empty() {
                 let staging = match frame.staging.pop() {
-                    Some(buffer) if buffer.capacity >= total as u64 => buffer,
-                    _ => d.buffer(total as u64, true)?,
+                    Some(buffer) if buffer.capacity >= data.len() as u64 => buffer,
+                    _ => d.buffer(data.len().next_power_of_two() as u64, true)?,
                 };
                 let mut mapped = ptr::null_mut();
                 check(call!(
@@ -1341,22 +1355,16 @@ impl Context {
                     0,
                     &mut mapped
                 ))?;
-                let mut offset = 0;
-                let mut written = std::collections::HashSet::new();
+                // The arena already holds every upload at an aligned offset, so copy it once.
+                ptr::copy_nonoverlapping(data.as_ptr(), mapped.cast::<u8>(), data.len());
+                let mut written = self.written.borrow_mut();
+                written.clear();
                 for upload in &uploads {
-                    let data = match upload {
-                        Upload::Buffer { data, .. } | Upload::Texture { data, .. } => data,
-                    };
-                    ptr::copy_nonoverlapping(
-                        data.as_ptr(),
-                        mapped.cast::<u8>().add(offset),
-                        data.len(),
-                    );
                     match upload {
                         Upload::Buffer {
                             buffer,
                             offset: destination,
-                            ..
+                            data,
                         } => {
                             if !written.insert(buffer.inner.native.handle) {
                                 call!(
@@ -1375,7 +1383,7 @@ impl Context {
                                 );
                             }
                             let region = vk::BufferCopy {
-                                src_offset: offset as u64,
+                                src_offset: data.start as u64,
                                 dst_offset: *destination,
                                 size: data.len() as u64,
                             };
@@ -1394,11 +1402,11 @@ impl Context {
                             mip,
                             origin,
                             size,
-                            ..
+                            data,
                         } => {
                             self.transition(frame.command, &texture.inner.native, 7);
                             let region = vk::BufferImageCopy {
-                                buffer_offset: offset as u64,
+                                buffer_offset: data.start as u64,
                                 image_subresource: vk::ImageSubresourceLayers {
                                     aspect_mask: 1,
                                     mip_level: *mip,
@@ -1429,7 +1437,6 @@ impl Context {
                             );
                         }
                     }
-                    offset += (data.len() + 3) & !3;
                 }
                 call!(d.instance, UnmapMemory, d.handle, staging.memory.handle);
                 frame.staging.push(staging);
@@ -1448,7 +1455,8 @@ impl Context {
                 0,
                 ptr::null()
             );
-            let mut sets = HashMap::new();
+            let mut sets = self.sets.borrow_mut();
+            sets.clear();
             for pass in &passes {
                 call!(
                     d.instance,
@@ -1486,15 +1494,18 @@ impl Context {
                 if let Some(depth) = &pass.depth {
                     self.transition(frame.command, &depth.texture.inner.native, 3);
                 }
-                let mut views = vec![pass.color.texture.inner.native.view];
-                if let Some(depth) = &pass.depth {
-                    views.push(depth.texture.inner.native.view);
-                }
+                let views = [
+                    pass.color.texture.inner.native.view,
+                    pass.depth
+                        .as_ref()
+                        .map_or(0, |depth| depth.texture.inner.native.view),
+                ];
+                let view_count = 1 + u32::from(pass.depth.is_some());
                 let size = pass.color.texture.inner.size;
                 let info = vk::FramebufferCreateInfo {
                     s_type: 37,
                     render_pass: render,
-                    attachment_count: views.len() as u32,
+                    attachment_count: view_count,
                     p_attachments: views.as_ptr(),
                     width: size.width,
                     height: size.height,
@@ -1541,7 +1552,7 @@ impl Context {
                             height: size.height,
                         },
                     },
-                    clear_value_count: views.len() as u32,
+                    clear_value_count: view_count,
                     p_clear_values: clears.as_ptr(),
                     ..Default::default()
                 };

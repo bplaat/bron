@@ -14,6 +14,9 @@ for frame in image.frames() {
 }
 ```
 
+To keep the pixels without copying them, take ownership with `Image::into_frames`,
+`Frame::into_bitmap`, and `Bitmap::into_data`.
+
 To write an image, create a `Bitmap` from RGBA pixels and call `encode`.
 Use `Image::encode` to save a decoded image in another format.
 

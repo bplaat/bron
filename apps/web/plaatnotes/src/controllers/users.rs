@@ -568,7 +568,7 @@ mod test {
 
         // Fetch /users - should contain just the test user
         let res = router.handle(
-            &Request::get("http://localhost/api/users")
+            Request::get("http://localhost/api/users")
                 .header("Authorization", format!("Bearer {token}")),
         );
         assert_eq!(res.status, Status::Ok);
@@ -584,7 +584,7 @@ mod test {
 
         // Fetch /users - should now contain both users
         let res = router.handle(
-            &Request::get("http://localhost/api/users")
+            Request::get("http://localhost/api/users")
                 .header("Authorization", format!("Bearer {token}")),
         );
         assert_eq!(res.status, Status::Ok);
@@ -604,7 +604,7 @@ mod test {
         insert_test_user(&ctx, "Bob", "Jones", "bob@example.com");
 
         let res = router.handle(
-            &Request::get("http://localhost/api/users?q=Alice")
+            Request::get("http://localhost/api/users?q=Alice")
                 .header("Authorization", format!("Bearer {token}")),
         );
         assert_eq!(res.status, Status::Ok);
@@ -626,7 +626,7 @@ mod test {
 
         // Prefix search
         let res = router.handle(
-            &Request::get("http://localhost/api/users?q=Al*")
+            Request::get("http://localhost/api/users?q=Al*")
                 .header("Authorization", format!("Bearer {token}")),
         );
         assert_eq!(res.status, Status::Ok);
@@ -635,7 +635,7 @@ mod test {
 
         // AND search
         let res = router.handle(
-            &Request::get("http://localhost/api/users?q=Alice AND Smith")
+            Request::get("http://localhost/api/users?q=Alice AND Smith")
                 .header("Authorization", format!("Bearer {token}")),
         );
         assert_eq!(res.status, Status::Ok);
@@ -646,7 +646,7 @@ mod test {
 
         // OR search
         let res = router.handle(
-            &Request::get("http://localhost/api/users?q=Alice OR Bob")
+            Request::get("http://localhost/api/users?q=Alice OR Bob")
                 .header("Authorization", format!("Bearer {token}")),
         );
         assert_eq!(res.status, Status::Ok);
@@ -655,7 +655,7 @@ mod test {
 
         // NOT search
         let res = router.handle(
-            &Request::get("http://localhost/api/users?q=Alice NOT Smith")
+            Request::get("http://localhost/api/users?q=Alice NOT Smith")
                 .header("Authorization", format!("Bearer {token}")),
         );
         assert_eq!(res.status, Status::Ok);
@@ -665,7 +665,7 @@ mod test {
 
         // Phrase search
         let res = router.handle(
-            &Request::get(r#"http://localhost/api/users?q="Alice Smith""#)
+            Request::get(r#"http://localhost/api/users?q="Alice Smith""#)
                 .header("Authorization", format!("Bearer {token}")),
         );
         assert_eq!(res.status, Status::Ok);
@@ -676,7 +676,7 @@ mod test {
 
         // Column-scoped search (email field only)
         let res = router.handle(
-            &Request::get("http://localhost/api/users?q=email:carol")
+            Request::get("http://localhost/api/users?q=email:carol")
                 .header("Authorization", format!("Bearer {token}")),
         );
         assert_eq!(res.status, Status::Ok);
@@ -702,7 +702,7 @@ mod test {
         }
 
         let res = router.handle(
-            &Request::get("http://localhost/api/users?limit=10&page=1")
+            Request::get("http://localhost/api/users?limit=10&page=1")
                 .header("Authorization", format!("Bearer {token}")),
         );
         assert_eq!(res.status, Status::Ok);
@@ -713,7 +713,7 @@ mod test {
         assert_eq!(response.pagination.total, 30);
 
         let res = router.handle(
-            &Request::get("http://localhost/api/users?limit=5&page=2")
+            Request::get("http://localhost/api/users?limit=5&page=2")
                 .header("Authorization", format!("Bearer {token}")),
         );
         assert_eq!(res.status, Status::Ok);
@@ -730,8 +730,7 @@ mod test {
         let router = router(ctx.clone());
         let (_, token) = create_test_user_with_session_and_role(&ctx, UserRole::Admin);
 
-        let res = router.handle(
-            &Request::post("http://localhost/api/users")
+        let res = router.handle(Request::post("http://localhost/api/users")
                 .header("Authorization", format!("Bearer {token}"))
                 .header("Content-Type", "application/json")
                 .body(
@@ -751,8 +750,7 @@ mod test {
         let router = router(ctx.clone());
         let (_, token) = create_test_user_with_session_and_role(&ctx, UserRole::Admin);
 
-        let res = router.handle(
-            &Request::post("http://localhost/api/users")
+        let res = router.handle(Request::post("http://localhost/api/users")
                 .header("Authorization", format!("Bearer {token}"))
                 .header("Content-Type", "application/json")
                 .body(
@@ -762,8 +760,7 @@ mod test {
         assert_eq!(res.status, Status::Created);
 
         // Same email again - should fail
-        let res = router.handle(
-            &Request::post("http://localhost/api/users")
+        let res = router.handle(Request::post("http://localhost/api/users")
                 .header("Authorization", format!("Bearer {token}"))
                 .header("Content-Type", "application/json")
                 .body(
@@ -783,7 +780,7 @@ mod test {
         let user = insert_test_user(&ctx, "John", "Doe", "john@example.com");
 
         let res = router.handle(
-            &Request::get(format!("http://localhost/api/users/{}", user.id))
+            Request::get(format!("http://localhost/api/users/{}", user.id))
                 .header("Authorization", format!("Bearer {token}")),
         );
         assert_eq!(res.status, Status::Ok);
@@ -798,7 +795,7 @@ mod test {
         let (_, token) = create_test_user_with_session_and_role(&ctx, UserRole::Admin);
 
         let res = router.handle(
-            &Request::get(format!("http://localhost/api/users/{}", Uuid::now_v7()))
+            Request::get(format!("http://localhost/api/users/{}", Uuid::now_v7()))
                 .header("Authorization", format!("Bearer {token}")),
         );
         assert_eq!(res.status, Status::NotFound);
@@ -811,8 +808,7 @@ mod test {
         let (_, token) = create_test_user_with_session_and_role(&ctx, UserRole::Admin);
         let user = insert_test_user(&ctx, "John", "Doe", "john@example.com");
 
-        let res = router.handle(
-            &Request::put(format!("http://localhost/api/users/{}", user.id))
+        let res = router.handle(Request::put(format!("http://localhost/api/users/{}", user.id))
                 .header("Authorization", format!("Bearer {token}"))
                 .header("Content-Type", "application/json")
                 .body(r#"{"firstName":"John","lastName":"Smith","email":"john.smith@example.com","theme":"system","language":"en","role":"normal"}"#),
@@ -831,8 +827,7 @@ mod test {
         let user1 = insert_test_user(&ctx, "John", "Doe", "john@example.com");
         let user2 = insert_test_user(&ctx, "Jane", "Smith", "jane@example.com");
 
-        let res = router.handle(
-            &Request::put(format!("http://localhost/api/users/{}", user2.id))
+        let res = router.handle(Request::put(format!("http://localhost/api/users/{}", user2.id))
                 .header("Authorization", format!("Bearer {token}"))
                 .header("Content-Type", "application/json")
                 .body(r#"{"firstName":"Jane","lastName":"Smith","email":"john@example.com","theme":"system","language":"en","role":"normal"}"#),
@@ -852,8 +847,7 @@ mod test {
         let user = insert_test_user(&ctx, "John", "Doe", "john@example.com");
 
         // Updating with the same email should succeed
-        let res = router.handle(
-            &Request::put(format!("http://localhost/api/users/{}", user.id))
+        let res = router.handle(Request::put(format!("http://localhost/api/users/{}", user.id))
                 .header("Authorization", format!("Bearer {token}"))
                 .header("Content-Type", "application/json")
                 .body(r#"{"firstName":"John","lastName":"Doe","email":"john@example.com","theme":"system","language":"en","role":"normal"}"#),
@@ -871,7 +865,7 @@ mod test {
         let user = insert_test_user(&ctx, "John", "Doe", "john@example.com");
 
         let res = router.handle(
-            &Request::put(format!("http://localhost/api/users/{}", user.id))
+            Request::put(format!("http://localhost/api/users/{}", user.id))
                 .header("Authorization", format!("Bearer {token}"))
                 .header("Content-Type", "application/json")
                 .body(r#"{"firstName":"","lastName":"Smith","email":"invalid-email"}"#),
@@ -888,7 +882,7 @@ mod test {
         insert_test_session(&ctx, user.id, "john-session");
 
         let res = router.handle(
-            &Request::post(format!(
+            Request::post(format!(
                 "http://localhost/api/users/{}/change-password",
                 user.id
             ))
@@ -922,7 +916,7 @@ mod test {
         insert_test_session(&ctx, user.id, "john-session");
 
         let res = router.handle(
-            &Request::post(format!(
+            Request::post(format!(
                 "http://localhost/api/users/{}/change-password",
                 user.id
             ))
@@ -942,7 +936,7 @@ mod test {
         let user = insert_test_user(&ctx, "John", "Doe", "john@example.com");
 
         let res = router.handle(
-            &Request::post(format!(
+            Request::post(format!(
                 "http://localhost/api/users/{}/change-password",
                 user.id
             ))
@@ -963,14 +957,14 @@ mod test {
         insert_test_note(&ctx, user.id, None, "Deleted user's note");
 
         let res = router.handle(
-            &Request::delete(format!("http://localhost/api/users/{}", user.id))
+            Request::delete(format!("http://localhost/api/users/{}", user.id))
                 .header("Authorization", format!("Bearer {token}")),
         );
         assert_eq!(res.status, Status::NoContent);
 
         // Only the original test admin user should remain
         let res = router.handle(
-            &Request::get("http://localhost/api/users")
+            Request::get("http://localhost/api/users")
                 .header("Authorization", format!("Bearer {token}")),
         );
         assert_eq!(res.status, Status::Ok);
@@ -998,8 +992,7 @@ mod test {
         let router = router(ctx.clone());
         let (_, token) = create_test_user_with_session_and_role(&ctx, UserRole::Admin);
 
-        let res = router.handle(
-            &Request::post("http://localhost/api/users")
+        let res = router.handle(Request::post("http://localhost/api/users")
                 .header("Authorization", format!("Bearer {token}"))
                 .header("Content-Type", "application/json")
                 .body(r#"{"firstName":"Test","lastName":"User","email":"test2@example.com","password":"MyP@ssw0rd1!","role":"normal"}"#),
@@ -1032,7 +1025,7 @@ mod test {
         let user = insert_test_user(&ctx, "John", "Doe", "john@example.com");
 
         let res = router.handle(
-            &Request::post(format!("http://localhost/api/users/{}/login", user.id))
+            Request::post(format!("http://localhost/api/users/{}/login", user.id))
                 .header("Authorization", format!("Bearer {token}")),
         );
         assert_eq!(res.status, Status::Ok);
@@ -1042,7 +1035,7 @@ mod test {
 
         // The returned token must authenticate as the target user
         let res = router.handle(
-            &Request::get("http://localhost/api/auth/validate")
+            Request::get("http://localhost/api/auth/validate")
                 .header("Authorization", format!("Bearer {}", response.token)),
         );
         assert_eq!(res.status, Status::Ok);
@@ -1059,7 +1052,7 @@ mod test {
         let user = insert_test_user(&ctx, "John", "Doe", "john@example.com");
 
         let res = router.handle(
-            &Request::post(format!("http://localhost/api/users/{}/login", user.id))
+            Request::post(format!("http://localhost/api/users/{}/login", user.id))
                 .header("Authorization", format!("Bearer {token}")),
         );
         assert_eq!(res.status, Status::Forbidden);
@@ -1072,7 +1065,7 @@ mod test {
         let (_, token) = create_test_user_with_session_and_role(&ctx, UserRole::Admin);
 
         let res = router.handle(
-            &Request::post(format!(
+            Request::post(format!(
                 "http://localhost/api/users/{}/login",
                 Uuid::now_v7()
             ))
@@ -1089,7 +1082,7 @@ mod test {
 
         // User should have no notes initially
         let res = router.handle(
-            &Request::get(format!("http://localhost/api/users/{}/notes", user.id))
+            Request::get(format!("http://localhost/api/users/{}/notes", user.id))
                 .header("Authorization", format!("Bearer {token}")),
         );
         assert_eq!(res.status, Status::Ok);
@@ -1103,7 +1096,7 @@ mod test {
         let note = insert_test_note(&ctx, user.id, None, "My first note");
 
         let res = router.handle(
-            &Request::get(format!("http://localhost/api/users/{}/notes", user.id))
+            Request::get(format!("http://localhost/api/users/{}/notes", user.id))
                 .header("Authorization", format!("Bearer {token}")),
         );
         assert_eq!(res.status, Status::Ok);
@@ -1140,7 +1133,7 @@ mod test {
             .unwrap();
 
         let res = router.handle(
-            &Request::get(format!("http://localhost/api/users/{}/notes", user.id))
+            Request::get(format!("http://localhost/api/users/{}/notes", user.id))
                 .header("Authorization", format!("Bearer {token}")),
         );
         assert_eq!(res.status, Status::Ok);
@@ -1160,7 +1153,7 @@ mod test {
         }
 
         let res = router.handle(
-            &Request::get(format!(
+            Request::get(format!(
                 "http://localhost/api/users/{}/notes?limit=10&page=1",
                 user.id
             ))
@@ -1174,7 +1167,7 @@ mod test {
         assert_eq!(response.pagination.total, 30);
 
         let res = router.handle(
-            &Request::get(format!(
+            Request::get(format!(
                 "http://localhost/api/users/{}/notes?limit=10&page=2",
                 user.id
             ))
@@ -1196,7 +1189,7 @@ mod test {
         insert_test_note(&ctx, user.id, None, "Shopping list for tomorrow");
 
         let res = router.handle(
-            &Request::get(format!(
+            Request::get(format!(
                 "http://localhost/api/users/{}/notes?q=meeting",
                 user.id
             ))
@@ -1218,7 +1211,7 @@ mod test {
         insert_test_note(&ctx, user.id, None, "Other content");
 
         let res = router.handle(
-            &Request::get(format!(
+            Request::get(format!(
                 "http://localhost/api/users/{}/notes?q=ProjectBeta",
                 user.id
             ))
@@ -1240,7 +1233,7 @@ mod test {
         insert_test_note(&ctx, user.id, None, "User's private note");
 
         let res = router.handle(
-            &Request::get(format!("http://localhost/api/users/{}/notes", user.id))
+            Request::get(format!("http://localhost/api/users/{}/notes", user.id))
                 .header("Authorization", format!("Bearer {admin_token}")),
         );
         assert_eq!(res.status, Status::Ok);
@@ -1261,7 +1254,7 @@ mod test {
         insert_test_note(&ctx, user2.id, None, "User2's private note");
 
         let res = router.handle(
-            &Request::get(format!("http://localhost/api/users/{}/notes", user2.id))
+            Request::get(format!("http://localhost/api/users/{}/notes", user2.id))
                 .header("Authorization", format!("Bearer {user1_token}")),
         );
         assert_eq!(res.status, Status::Forbidden);
@@ -1274,7 +1267,7 @@ mod test {
         let (_, token) = create_test_user_with_session_and_role(&ctx, UserRole::Admin);
 
         let res = router.handle(
-            &Request::get(format!(
+            Request::get(format!(
                 "http://localhost/api/users/{}/notes",
                 Uuid::now_v7()
             ))
@@ -1306,7 +1299,7 @@ mod test {
         );
 
         let res = router.handle(
-            &Request::get(format!(
+            Request::get(format!(
                 "http://localhost/api/users/{}/notes/pinned",
                 user.id
             ))
@@ -1341,7 +1334,7 @@ mod test {
         );
 
         let res = router.handle(
-            &Request::get(format!(
+            Request::get(format!(
                 "http://localhost/api/users/{}/notes/archived",
                 user.id
             ))
@@ -1371,7 +1364,7 @@ mod test {
         insert_test_note(&ctx, user.id, Some("User Kept Note"), "User's kept note");
 
         let res = router.handle(
-            &Request::get(format!(
+            Request::get(format!(
                 "http://localhost/api/users/{}/notes/trashed",
                 user.id
             ))
@@ -1391,8 +1384,7 @@ mod test {
         let user = insert_test_user(&ctx, "John", "Doe", "john@example.com");
         insert_test_session(&ctx, user.id, "john-session");
 
-        let res = router.handle(
-            &Request::put(format!("http://localhost/api/users/{}", user.id))
+        let res = router.handle(Request::put(format!("http://localhost/api/users/{}", user.id))
                 .header("Authorization", format!("Bearer {token}"))
                 .header("Content-Type", "application/json")
                 .body(r#"{"firstName":"John","lastName":"Doe","email":"john.new@example.com","theme":"system","language":"en","role":"normal","password":"NewP@ssw0rd9!"}"#),
@@ -1419,8 +1411,7 @@ mod test {
         let router = router(ctx.clone());
         let (user, token) = create_test_user_with_session_and_role(&ctx, UserRole::Normal);
 
-        let res = router.handle(
-            &Request::put(format!("http://localhost/api/users/{}", user.id))
+        let res = router.handle(Request::put(format!("http://localhost/api/users/{}", user.id))
                 .header("Authorization", format!("Bearer {token}"))
                 .header("Content-Type", "application/json")
                 .body(r#"{"firstName":"Test","lastName":"User","email":"test@example.com","theme":"system","language":"en","role":"normal","password":"NewP@ssw0rd9!"}"#),
@@ -1448,8 +1439,7 @@ mod test {
         let (_, token) = create_test_user_with_session_and_role(&ctx, UserRole::Admin);
         let user = insert_test_user(&ctx, "John", "Doe", "john@example.com");
 
-        let res = router.handle(
-            &Request::put(format!("http://localhost/api/users/{}", user.id))
+        let res = router.handle(Request::put(format!("http://localhost/api/users/{}", user.id))
                 .header("Authorization", format!("Bearer {token}"))
                 .header("Content-Type", "application/json")
                 .body(r#"{"firstName":"John","lastName":"Doe","email":"john@example.com","theme":"system","language":"en","role":"normal","password":"short"}"#),

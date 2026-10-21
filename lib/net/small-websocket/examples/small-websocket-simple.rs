@@ -11,12 +11,12 @@ use std::net::{Ipv4Addr, TcpListener};
 use small_http::{Request, Response, Status};
 use small_websocket::Message;
 
-fn handler(req: &Request) -> Response {
+fn handler(req: Request) -> Response {
     let path = req.url.path();
     println!("{} {}", req.method, path);
 
     if path == "/ws" {
-        return small_websocket::upgrade(req, |mut ws| {
+        return small_websocket::upgrade(&req, |mut ws| {
             println!(
                 "Client connected: {}",
                 ws.peer_addr().expect("Can't get client addr")

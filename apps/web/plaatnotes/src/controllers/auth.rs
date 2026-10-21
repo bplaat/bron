@@ -266,7 +266,7 @@ mod test {
         insert_test_user(&ctx, "John", "Doe", "john@example.com");
 
         let res = router.handle(
-            &Request::post("http://localhost/api/auth/login")
+            Request::post("http://localhost/api/auth/login")
                 .header("Content-Type", "application/json")
                 .body(r#"{"email":"john@example.com","password":"password123"}"#),
         );
@@ -282,7 +282,7 @@ mod test {
         insert_test_user(&ctx, "John", "Doe", "john@example.com");
 
         let res = router.handle(
-            &Request::post("http://localhost/api/auth/login")
+            Request::post("http://localhost/api/auth/login")
                 .header("Content-Type", "application/json")
                 .body(r#"{"email":"john@example.com","password":"wrongpassword"}"#),
         );
@@ -295,7 +295,7 @@ mod test {
         let router = router(ctx.clone());
 
         let res = router.handle(
-            &Request::post("http://localhost/api/auth/login")
+            Request::post("http://localhost/api/auth/login")
                 .header("Content-Type", "application/json")
                 .body(r#"{"email":"notfound@example.com","password":"password123"}"#),
         );
@@ -310,7 +310,7 @@ mod test {
         insert_test_session(&ctx, user.id, "test-token-123");
 
         let res = router.handle(
-            &Request::post("http://localhost/api/auth/logout")
+            Request::post("http://localhost/api/auth/logout")
                 .header("Authorization", "Bearer test-token-123"),
         );
         assert_eq!(res.status, Status::NoContent);
@@ -340,7 +340,7 @@ mod test {
         insert_test_session(&ctx, user.id, "valid-token-456");
 
         let res = router.handle(
-            &Request::get("http://localhost/api/auth/validate")
+            Request::get("http://localhost/api/auth/validate")
                 .header("Authorization", "Bearer valid-token-456"),
         );
         assert_eq!(res.status, Status::Ok);
@@ -352,7 +352,7 @@ mod test {
         let router = router(ctx.clone());
 
         let res = router.handle(
-            &Request::get("http://localhost/api/auth/validate")
+            Request::get("http://localhost/api/auth/validate")
                 .header("Authorization", "Bearer invalid-token"),
         );
         assert_eq!(res.status, Status::Unauthorized);
@@ -375,7 +375,7 @@ mod test {
             .unwrap();
 
         let res = router.handle(
-            &Request::get("http://localhost/api/auth/validate")
+            Request::get("http://localhost/api/auth/validate")
                 .header("Authorization", "Bearer expired-token-789"),
         );
         assert_eq!(res.status, Status::Unauthorized);
@@ -390,7 +390,7 @@ mod test {
         // The first LOGIN_RATE_LIMIT_MAX_ATTEMPTS attempts should proceed (wrong password returns 401)
         for _ in 0..LOGIN_RATE_LIMIT_MAX_ATTEMPTS {
             let res = router.handle(
-                &Request::post("http://localhost/api/auth/login")
+                Request::post("http://localhost/api/auth/login")
                     .header("Content-Type", "application/json")
                     .body(r#"{"email":"jane@example.com","password":"wrongpassword"}"#),
             );
@@ -399,7 +399,7 @@ mod test {
 
         // The next attempt must be rejected with 429 before even checking credentials
         let res = router.handle(
-            &Request::post("http://localhost/api/auth/login")
+            Request::post("http://localhost/api/auth/login")
                 .header("Content-Type", "application/json")
                 .body(r#"{"email":"jane@example.com","password":"password123"}"#),
         );

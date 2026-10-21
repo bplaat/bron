@@ -16,7 +16,7 @@ struct GreetBody {
     name: String,
 }
 
-fn handler(req: &Request) -> Response {
+fn handler(req: Request) -> Response {
     let path = req.url.path();
     println!("{} {}", req.method, path);
 

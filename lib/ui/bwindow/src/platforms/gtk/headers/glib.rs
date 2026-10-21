@@ -180,6 +180,8 @@ pub struct GDBusInterfaceVTable {
 #[repr(C)]
 pub struct GInputStream([u8; 0]);
 #[repr(C)]
+pub struct GBytes([u8; 0]);
+#[repr(C)]
 pub struct GApplication([u8; 0]);
 #[repr(C)]
 pub struct GFile([u8; 0]);
@@ -291,6 +293,15 @@ unsafe extern "C" {
         info: *mut GDBusNodeInfo,
         name: *const c_char,
     ) -> *mut GDBusInterfaceInfo;
+    pub fn g_bytes_new_static(data: *const c_void, size: usize) -> *mut GBytes;
+    pub fn g_bytes_new_with_free_func(
+        data: *const c_void,
+        size: usize,
+        free_func: *const c_void,
+        user_data: *mut c_void,
+    ) -> *mut GBytes;
+    pub fn g_bytes_unref(bytes: *mut GBytes);
+    pub fn g_memory_input_stream_new_from_bytes(bytes: *mut GBytes) -> *mut GInputStream;
     pub fn g_memory_input_stream_new_from_data(
         data: *const c_void,
         len: usize,

@@ -11,12 +11,12 @@ use std::net::TcpListener;
 use std::time::Duration;
 
 use crate::request::Request;
-use crate::response::Response;
+use crate::response::{RequestHead, Response};
 
 /// Start HTTP server single threaded
 pub fn serve_single_threaded(
     listener: TcpListener,
-    handler: impl Fn(&Request) -> Response + 'static,
+    handler: impl Fn(Request) -> Response + 'static,
 ) {
     // Listen for incoming tcp clients
     for stream in listener.incoming() {
@@ -34,8 +34,9 @@ pub fn serve_single_threaded(
         match Request::read_from_reader(&mut reader, client_addr) {
             Ok(request) => {
                 // Handle request and write response
-                let mut response = handler(&request);
-                response.write_to_stream(reader.get_mut(), &request, false);
+                let head = RequestHead::from(&request);
+                let mut response = handler(request);
+                response.write_to_stream(reader.get_mut(), head, false);
 
                 // If the response has a takeover function, start thread and move tcp stream
                 if let Some(takeover) = response.takeover.take() {
@@ -61,7 +62,7 @@ pub fn serve_single_threaded(
 #[cfg(feature = "multi-threaded")]
 pub fn serve(
     listener: TcpListener,
-    handler: impl Fn(&Request) -> Response + Clone + Send + 'static,
+    handler: impl Fn(Request) -> Response + Clone + Send + 'static,
 ) {
     serve_with_options(listener, threadpool::Options::default(), handler);
 }
@@ -71,7 +72,7 @@ pub fn serve(
 pub fn serve_with_options(
     listener: TcpListener,
     thread_pool_options: threadpool::Options,
-    handler: impl Fn(&Request) -> Response + Clone + Send + 'static,
+    handler: impl Fn(Request) -> Response + Clone + Send + 'static,
 ) {
     // Create a scalable thread pool for incoming connections
     let pool = threadpool::ThreadPool::new_with_options(thread_pool_options);
@@ -114,8 +115,9 @@ pub fn serve_with_options(
                 match Request::read_from_reader(&mut reader, client_addr) {
                     Ok(request) => {
                         // Handle request and write response
-                        let mut response = handler(&request);
-                        response.write_to_stream(reader.get_mut(), &request, true);
+                        let head = RequestHead::from(&request);
+                        let mut response = handler(request);
+                        response.write_to_stream(reader.get_mut(), head, true);
 
                         // If the response has a takeover function, start thread and move tcp stream
                         if let Some(takeover) = response.takeover.take() {
@@ -127,9 +129,7 @@ pub fn serve_with_options(
                         }
 
                         // Close connection if HTTP/1.0 or Connection: close
-                        if request.version == crate::enums::Version::Http1_0
-                            || request.headers.get("Connection") == Some("close")
-                        {
+                        if head.version == crate::enums::Version::Http1_0 || head.close {
                             return;
                         }
                     }
@@ -150,7 +150,7 @@ pub fn serve_with_options(
 
 /// Serve CGI requests
 #[cfg(feature = "cgi")]
-pub fn serve_cgi(handler: impl Fn(&Request) -> Response) {
+pub fn serve_cgi(handler: impl Fn(Request) -> Response) {
     let request = match Request::from_cgi_env() {
         Ok(req) => req,
         Err(_) => {
@@ -159,7 +159,7 @@ pub fn serve_cgi(handler: impl Fn(&Request) -> Response) {
             return;
         }
     };
-    let response = handler(&request);
+    let response = handler(request);
     let mut stdout = std::io::stdout().lock();
     response.write_to_cgi_stdout(&mut stdout);
     _ = stdout.flush();
@@ -285,9 +285,9 @@ mod test {
         let mut reader = BufReader::new(stream);
 
         let first = Response::read_from_buffered_stream(&mut reader).unwrap();
-        assert_eq!(first.body, b"/first");
+        assert_eq!(&*first.body, b"/first");
         let second = Response::read_from_buffered_stream(&mut reader).unwrap();
-        assert_eq!(second.body, b"/second");
+        assert_eq!(&*second.body, b"/second");
     }
 
     #[test]

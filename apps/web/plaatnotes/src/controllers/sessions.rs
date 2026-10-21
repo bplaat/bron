@@ -273,7 +273,7 @@ mod test {
 
         // Search by client_name
         let res = router.handle(
-            &Request::get("http://localhost/api/sessions?q=Firefox")
+            Request::get("http://localhost/api/sessions?q=Firefox")
                 .header("Authorization", format!("Bearer {token1}")),
         );
         assert_eq!(res.status, Status::Ok);
@@ -283,7 +283,7 @@ mod test {
 
         // Search by ip_country
         let res = router.handle(
-            &Request::get("http://localhost/api/sessions?q=Netherlands")
+            Request::get("http://localhost/api/sessions?q=Netherlands")
                 .header("Authorization", format!("Bearer {token1}")),
         );
         assert_eq!(res.status, Status::Ok);
@@ -301,7 +301,7 @@ mod test {
         insert_test_session(&ctx, user2.id, "token-jane");
 
         let res = router.handle(
-            &Request::get("http://localhost/api/sessions")
+            Request::get("http://localhost/api/sessions")
                 .header("Authorization", format!("Bearer {token1}")),
         );
         assert_eq!(res.status, Status::Ok);
@@ -317,7 +317,7 @@ mod test {
 
         // Normal user gets Forbidden on /api/sessions
         let res = router.handle(
-            &Request::get("http://localhost/api/sessions")
+            Request::get("http://localhost/api/sessions")
                 .header("Authorization", format!("Bearer {token1}")),
         );
         assert_eq!(res.status, Status::Forbidden);
@@ -332,7 +332,7 @@ mod test {
         let session = insert_test_session(&ctx, user.id, "token-jane");
 
         let res = router.handle(
-            &Request::get(format!("http://localhost/api/sessions/{}", session.id))
+            Request::get(format!("http://localhost/api/sessions/{}", session.id))
                 .header("Authorization", format!("Bearer {token_admin}")),
         );
         assert_eq!(res.status, Status::Ok);
@@ -348,7 +348,7 @@ mod test {
         let session = insert_test_session(&ctx, user.id, "token-other");
 
         let res = router.handle(
-            &Request::get(format!("http://localhost/api/sessions/{}", session.id))
+            Request::get(format!("http://localhost/api/sessions/{}", session.id))
                 .header("Authorization", format!("Bearer {token}")),
         );
         assert_eq!(res.status, Status::Ok);
@@ -365,7 +365,7 @@ mod test {
         let session2 = insert_test_session(&ctx, user2.id, "token-jane");
 
         let res = router.handle(
-            &Request::get(format!("http://localhost/api/sessions/{}", session2.id))
+            Request::get(format!("http://localhost/api/sessions/{}", session2.id))
                 .header("Authorization", format!("Bearer {token_user1}")),
         );
         assert_eq!(res.status, Status::Forbidden);
@@ -379,7 +379,7 @@ mod test {
         let session = insert_test_session(&ctx, user.id, "token-to-revoke");
 
         let res = router.handle(
-            &Request::delete(format!("http://localhost/api/sessions/{}", session.id))
+            Request::delete(format!("http://localhost/api/sessions/{}", session.id))
                 .header("Authorization", format!("Bearer {token}")),
         );
         assert_eq!(res.status, Status::NoContent);
@@ -411,7 +411,7 @@ mod test {
         let session = insert_test_session(&ctx, user.id, "token-to-delete");
 
         let res = router.handle(
-            &Request::delete(format!("http://localhost/api/sessions/{}", session.id))
+            Request::delete(format!("http://localhost/api/sessions/{}", session.id))
                 .header("Authorization", format!("Bearer {token}")),
         );
         assert_eq!(res.status, Status::NoContent);
@@ -427,7 +427,7 @@ mod test {
         let session2 = insert_test_session(&ctx, user2.id, "token-jane");
 
         let res = router.handle(
-            &Request::delete(format!("http://localhost/api/sessions/{}", session2.id))
+            Request::delete(format!("http://localhost/api/sessions/{}", session2.id))
                 .header("Authorization", format!("Bearer {token_user1}")),
         );
         assert_eq!(res.status, Status::Forbidden);
@@ -459,7 +459,7 @@ mod test {
         }
 
         let res = router.handle(
-            &Request::get(format!("http://localhost/api/users/{}/sessions", user.id))
+            Request::get(format!("http://localhost/api/users/{}/sessions", user.id))
                 .header("Authorization", format!("Bearer {token_admin}")),
         );
         assert_eq!(res.status, Status::Ok);
@@ -476,7 +476,7 @@ mod test {
         insert_test_session(&ctx, user.id, "token-second");
 
         let res = router.handle(
-            &Request::get(format!("http://localhost/api/users/{}/sessions", user.id))
+            Request::get(format!("http://localhost/api/users/{}/sessions", user.id))
                 .header("Authorization", format!("Bearer {token}")),
         );
         assert_eq!(res.status, Status::Ok);
@@ -492,7 +492,7 @@ mod test {
         let (user2, _) = create_test_user_with_session_and_role(&ctx, UserRole::Normal);
 
         let res = router.handle(
-            &Request::get(format!("http://localhost/api/users/{}/sessions", user2.id))
+            Request::get(format!("http://localhost/api/users/{}/sessions", user2.id))
                 .header("Authorization", format!("Bearer {token_user1}")),
         );
         assert_eq!(res.status, Status::Forbidden);
@@ -505,7 +505,7 @@ mod test {
         let (_, token) = create_test_user_with_session_and_role(&ctx, UserRole::Admin);
 
         let res = router.handle(
-            &Request::get(format!(
+            Request::get(format!(
                 "http://localhost/api/users/{}/sessions",
                 Uuid::now_v7()
             ))
@@ -531,7 +531,7 @@ mod test {
             .unwrap();
 
         let res = router.handle(
-            &Request::get(format!("http://localhost/api/users/{}/sessions", user.id))
+            Request::get(format!("http://localhost/api/users/{}/sessions", user.id))
                 .header("Authorization", format!("Bearer {token}")),
         );
         assert_eq!(res.status, Status::Ok);

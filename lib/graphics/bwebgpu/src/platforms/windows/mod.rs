@@ -190,6 +190,10 @@ pub(crate) struct Context {
     frames: RefCell<Vec<Frame>>,
     slot: Cell<usize>,
     serial: Cell<u64>,
+    pub(crate) pool: RefCell<Pool>,
+    // Per-submit lookups, cleared and reused so their capacity survives across frames.
+    touched: RefCell<HashMap<*const BufferInner, crate::Buffer>>,
+    groups: RefCell<HashMap<*const Vec<(u32, Resource)>, u32>>,
     #[cfg(feature = "window")]
     acquired: Cell<bool>,
 }
@@ -257,6 +261,9 @@ impl Context {
                     frames: RefCell::new(Vec::new()),
                     slot: Cell::new(0),
                     serial: Cell::new(0),
+                    pool: RefCell::default(),
+                    touched: RefCell::default(),
+                    groups: RefCell::default(),
                     #[cfg(feature = "window")]
                     acquired: Cell::new(false),
                 });
@@ -534,9 +541,26 @@ impl Context {
 
     fn wait(&self, frame: &mut Frame) -> Result<()> {
         self.wait_value(frame.fence)?;
-        frame.uploads.clear();
-        frame.passes.clear();
+        self.pool.borrow_mut().retire(
+            std::mem::take(&mut frame.uploads),
+            std::mem::take(&mut frame.passes),
+        );
         Ok(())
+    }
+
+    /// Staging offset of an upload placed at `start`, and the end of its staging footprint.
+    /// Texture rows use D3D12's 256-byte pitch, and each layer starts 512-byte aligned.
+    fn staging_footprint(upload: &Upload, start: usize) -> (usize, usize) {
+        let offset = start.div_ceil(512) * 512;
+        let end = match upload {
+            Upload::Buffer { data, .. } => offset + data.len(),
+            Upload::Texture { size, .. } => {
+                let pitch = (size.width as usize * 4).div_ceil(256) * 256;
+                let image = (pitch * size.height as usize).div_ceil(512) * 512;
+                offset + image * size.depth_or_array_layers as usize
+            }
+        };
+        (offset, end)
     }
 
     fn signal(&self) -> Result<u64> {
@@ -693,7 +717,12 @@ impl Context {
             .collect::<Vec<_>>();
         let blend = D3D12_RENDER_TARGET_BLEND_DESC {
             BlendEnable: i32::from(color.blend.is_some()),
-            SrcBlend: 5,
+            // D3D12_BLEND_ONE for premultiplied sources, otherwise D3D12_BLEND_SRC_ALPHA.
+            SrcBlend: if color.blend.is_some_and(|blend| blend.premultiplied) {
+                2
+            } else {
+                5
+            },
             DestBlend: 6,
             BlendOp: 1,
             SrcBlendAlpha: 2,
@@ -807,7 +836,12 @@ impl Context {
         }
     }
 
-    pub(super) fn submit(&self, uploads: Vec<Upload>, passes: Vec<Pass>) -> Result<()> {
+    pub(super) fn submit(
+        &self,
+        uploads: Vec<Upload>,
+        data: &[u8],
+        passes: Vec<Pass>,
+    ) -> Result<()> {
         unsafe {
             let mut frames = self.frames.borrow_mut();
             let frame = &mut frames[self.slot.get()];
@@ -819,35 +853,15 @@ impl Context {
                 ptr::null_mut(),
             ))?;
             let list = &frame.list;
-            let mut touched = HashMap::new();
-            let mut staging_data = Vec::new();
-            let mut offsets = Vec::new();
-            for upload in &uploads {
-                let offset = staging_data.len().div_ceil(512) * 512;
-                staging_data.resize(offset, 0);
-                offsets.push(offset as u64);
-                match upload {
-                    Upload::Buffer { data, .. } => staging_data.extend_from_slice(data),
-                    Upload::Texture { size, data, .. } => {
-                        let row = size.width as usize * 4;
-                        let pitch = row.div_ceil(256) * 256;
-                        for layer in 0..size.depth_or_array_layers as usize {
-                            let start = staging_data.len().div_ceil(512) * 512;
-                            staging_data.resize(start + pitch * size.height as usize, 0);
-                            for y in 0..size.height as usize {
-                                let src = (layer * size.height as usize + y) * row;
-                                staging_data[start + y * pitch..start + y * pitch + row]
-                                    .copy_from_slice(&data[src..src + row]);
-                            }
-                        }
-                    }
-                }
-            }
-            if !staging_data.is_empty() {
+            let mut touched = self.touched.borrow_mut();
+            let total = uploads
+                .iter()
+                .fold(0, |end, upload| Self::staging_footprint(upload, end).1);
+            if total > 0 {
                 let staging = match frame.staging.pop() {
-                    Some(buffer) if frame.staging_capacity >= staging_data.len() as u64 => buffer,
+                    Some(buffer) if frame.staging_capacity >= total as u64 => buffer,
                     _ => {
-                        frame.staging_capacity = staging_data.len() as u64;
+                        frame.staging_capacity = total.next_power_of_two() as u64;
                         Self::resource(
                             &self.device,
                             &Self::buffer_desc(frame.staging_capacity),
@@ -862,9 +876,45 @@ impl Context {
                     &D3D12_RANGE::default(),
                     &mut mapped,
                 ))?;
-                ptr::copy_nonoverlapping(staging_data.as_ptr(), mapped.cast(), staging_data.len());
+                // Copy each upload from the arena straight into its staging footprint.
+                let mapped = mapped.cast::<u8>();
+                let mut end = 0;
+                for upload in &uploads {
+                    let (offset, next) = Self::staging_footprint(upload, end);
+                    end = next;
+                    match upload {
+                        Upload::Buffer { data: range, .. } => {
+                            ptr::copy_nonoverlapping(
+                                data[range.clone()].as_ptr(),
+                                mapped.add(offset),
+                                range.len(),
+                            );
+                        }
+                        Upload::Texture {
+                            size, data: range, ..
+                        } => {
+                            let row = size.width as usize * 4;
+                            let pitch = row.div_ceil(256) * 256;
+                            let image = (pitch * size.height as usize).div_ceil(512) * 512;
+                            for (index, source) in data[range.clone()].chunks_exact(row).enumerate()
+                            {
+                                let (layer, y) =
+                                    (index / size.height as usize, index % size.height as usize);
+                                ptr::copy_nonoverlapping(
+                                    source.as_ptr(),
+                                    mapped.add(offset + layer * image + y * pitch),
+                                    row,
+                                );
+                            }
+                        }
+                    }
+                }
                 Resource_Unmap(staging.0, 0, ptr::null());
-                for (upload, &offset) in uploads.iter().zip(&offsets) {
+                let mut end = 0;
+                for upload in &uploads {
+                    let (offset, next) = Self::staging_footprint(upload, end);
+                    end = next;
+                    let offset = offset as u64;
                     match upload {
                         Upload::Buffer {
                             buffer,
@@ -947,7 +997,8 @@ impl Context {
             let heaps = [frame.resources.object.0, frame.samplers.object.0];
             GraphicsCommandList_SetDescriptorHeaps(list.0, 2, heaps.as_ptr());
             self.initialize_descriptors(frame, 0);
-            let mut groups = HashMap::new();
+            let mut groups = self.groups.borrow_mut();
+            groups.clear();
             require(passes.len() <= 16, "Too many render passes");
             for (pass_index, pass) in passes.iter().enumerate() {
                 let color = &pass.color.texture.inner.native;
@@ -1170,6 +1221,7 @@ impl Context {
             for buffer in touched.values() {
                 buffer.inner.native.state.set(0);
             }
+            touched.clear();
             frame.fence = self.signal()?;
             frame.uploads = uploads;
             frame.passes = passes;

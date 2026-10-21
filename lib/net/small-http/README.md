@@ -10,7 +10,8 @@ A simple example that opens an HTTP server and serves a response:
 use std::net::{Ipv4Addr, TcpListener};
 use small_http::{Request, Response};
 
-fn handler(_req: &Request) -> Response {
+// The handler owns the request, so a router can add path parameters without copying it.
+fn handler(_req: Request) -> Response {
     Response::with_body("Hello World!")
 }
 
@@ -20,6 +21,9 @@ fn main() {
     small_http::serve(listener, handler);
 }
 ```
+
+Response bodies are a `Cow<'static, [u8]>`, so static data such as embedded assets is served
+without copying. Pass a `Cow::Borrowed` slice to `Response::body`.
 
 A simple example of an HTTPS client that fetches a JSON response. This needs the `tls` feature:
 

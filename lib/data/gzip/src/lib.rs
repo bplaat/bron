@@ -60,9 +60,12 @@ pub fn decompress(data: &[u8]) -> Option<Vec<u8>> {
         offset += 2;
     }
     let compressed = data.get(offset..footer)?;
-    let output = deflate::decompress(compressed, MAX_OUTPUT_SIZE).ok()?;
     let expected_crc = u32::from_le_bytes(data.get(footer..footer + 4)?.try_into().ok()?);
     let expected_size = u32::from_le_bytes(data.get(footer + 4..)?.try_into().ok()?);
+    // The trailer records the size, so the output is allocated once at its exact size.
+    let output =
+        deflate::decompress_with_size_hint(compressed, MAX_OUTPUT_SIZE, expected_size as usize)
+            .ok()?;
     (CRC32.checksum(&output) == expected_crc && output.len() as u32 == expected_size)
         .then_some(output)
 }
