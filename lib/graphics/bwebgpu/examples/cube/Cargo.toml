@@ -1,0 +1,21 @@
+[package]
+name = "example-bwebgpu-cube"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+bcanvas = { path = "../../../bcanvas" }
+bwindow = { path = "../../../../ui/bwindow", default-features = false }
+bwebgpu = { path = "../.." }
+image = { path = "../../../image", default-features = false, features = [
+    "jpeg",
+] }
+
+[build-dependencies]
+bwebgpu-shader-build = { path = "../../../bwebgpu-shader-build" }
+
+[lints]
+workspace = true

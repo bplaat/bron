@@ -68,7 +68,7 @@ color. `OffscreenCanvas` draws into an Android bitmap.
 ## Offscreen drawing
 
 `OffscreenCanvas` draws without a window into straight-alpha RGBA8 pixels, for
-example to upload with `wgpu::Queue::write_texture` or encode with the
+example to upload with `bwebgpu::Queue::write_texture` or encode with the
 [image](../image) crate:
 
 ```rust

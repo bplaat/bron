@@ -1,0 +1,13 @@
+[package]
+name = "bwebgpu-shader-build"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+naga = { version = "=30.0.1", default-features = false, features = ["wgsl-in", "msl-out", "spv-out", "hlsl-out"] }

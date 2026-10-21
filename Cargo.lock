@@ -170,6 +170,23 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72f5acc6cb2ba439de613abc23857ec3d78374d8ed5ac84e9d11336e87da8649"
 
 [[package]]
+name = "bwebgpu"
+version = "0.1.0"
+dependencies = [
+ "bitflags",
+ "bwindow",
+ "image",
+ "objc2",
+]
+
+[[package]]
+name = "bwebgpu-shader-build"
+version = "0.1.0"
+dependencies = [
+ "naga",
+]
+
+[[package]]
 name = "bwebview"
 version = "0.1.0"
 dependencies = [
@@ -323,6 +340,47 @@ dependencies = [
 ]
 
 [[package]]
+name = "example-bwebgpu-blocks"
+version = "0.1.0"
+dependencies = [
+ "bcanvas",
+ "bwebgpu",
+ "bwebgpu-shader-build",
+ "bwindow",
+ "image",
+ "rust-embed",
+]
+
+[[package]]
+name = "example-bwebgpu-cube"
+version = "0.1.0"
+dependencies = [
+ "bcanvas",
+ "bwebgpu",
+ "bwebgpu-shader-build",
+ "bwindow",
+ "image",
+]
+
+[[package]]
+name = "example-bwebgpu-headless"
+version = "0.1.0"
+dependencies = [
+ "bwebgpu",
+ "bwebgpu-shader-build",
+ "image",
+]
+
+[[package]]
+name = "example-bwebgpu-triangle"
+version = "0.1.0"
+dependencies = [
+ "bwebgpu",
+ "bwebgpu-shader-build",
+ "bwindow",
+]
+
+[[package]]
 name = "example-http-simple"
 version = "0.1.0"
 dependencies = [
@@ -364,47 +422,6 @@ dependencies = [
  "serde",
  "serde_json",
  "uuid",
-]
-
-[[package]]
-name = "example-wgpu-blocks"
-version = "0.1.0"
-dependencies = [
- "bcanvas",
- "bwindow",
- "image",
- "rust-embed",
- "wgpu",
- "wgpu-shader-build",
-]
-
-[[package]]
-name = "example-wgpu-cube"
-version = "0.1.0"
-dependencies = [
- "bcanvas",
- "bwindow",
- "image",
- "wgpu",
- "wgpu-shader-build",
-]
-
-[[package]]
-name = "example-wgpu-headless"
-version = "0.1.0"
-dependencies = [
- "image",
- "wgpu",
- "wgpu-shader-build",
-]
-
-[[package]]
-name = "example-wgpu-triangle"
-version = "0.1.0"
-dependencies = [
- "bwindow",
- "wgpu",
- "wgpu-shader-build",
 ]
 
 [[package]]
@@ -1503,23 +1520,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1c1c8e20c8a38fc7d65abfe74eb7280e4aa667e8eec8bc84996d2874810748d9"
 dependencies = [
  "rustls-pki-types",
-]
-
-[[package]]
-name = "wgpu"
-version = "0.1.0"
-dependencies = [
- "bitflags",
- "bwindow",
- "image",
- "objc2",
-]
-
-[[package]]
-name = "wgpu-shader-build"
-version = "0.1.0"
-dependencies = [
- "naga",
 ]
 
 [[package]]
