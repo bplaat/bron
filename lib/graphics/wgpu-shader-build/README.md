@@ -5,7 +5,7 @@ uses Naga to translate each registered shader, then embeds the target-native
 output:
 
 - macOS and iOS: MSL is compiled to AIR and linked into a Metal library with `xcrun`.
-- Linux: Naga emits SPIR-V directly.
+- Linux and Android: Naga emits SPIR-V directly.
 - Windows: HLSL is compiled to DXBC with `d3dcompiler_47.dll`.
 
 Native compilation uses the host platform toolchain; cross-compilation is not

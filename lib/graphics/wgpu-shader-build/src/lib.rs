@@ -53,7 +53,7 @@ impl Builder {
     }
 
     fn compile_to(self, manifest: &Path, out: &Path, target: &str) -> Result<()> {
-        if !matches!(target, "macos" | "ios" | "linux" | "windows") {
+        if !matches!(target, "macos" | "ios" | "linux" | "windows" | "android") {
             return Err(format!("Unsupported graphics target: {target}").into());
         }
         if self.shaders.is_empty() {
