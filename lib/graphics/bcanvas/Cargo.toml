@@ -13,6 +13,9 @@ workspace = true
 bwindow = { path = "../../ui/bwindow", default-features = false, optional = true }
 image = { path = "../image", default-features = false }
 
+[target.'cfg(target_os = "android")'.dependencies]
+jni = "0.22.4"
+
 [target.'cfg(target_vendor = "apple")'.dependencies]
 objc2 = { version = "0.6.4", optional = true }
 

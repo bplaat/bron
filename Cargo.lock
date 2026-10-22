@@ -73,6 +73,7 @@ version = "0.1.0"
 dependencies = [
  "bwindow",
  "image",
+ "jni",
  "objc2",
 ]
 
@@ -193,6 +194,7 @@ dependencies = [
  "android-build",
  "block2",
  "bwindow",
+ "jni",
  "log",
  "mime_guess",
  "objc2",
@@ -208,6 +210,7 @@ version = "0.1.0"
 dependencies = [
  "block2",
  "directories",
+ "jni",
  "objc2",
 ]
 

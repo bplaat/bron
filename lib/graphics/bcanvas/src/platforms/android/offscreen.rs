@@ -6,16 +6,17 @@
 
 use std::rc::Rc;
 
-use bwindow::ffi::*;
+use jni::sys::jvalue;
+use jni::{JValue, jni_sig, jni_str};
 
-use super::context::{Clear, Jni, PlatformCanvasContext, Resources};
+use super::context::{Clear, GlobalObject, Jni, PlatformCanvasContext, Resources, with_env};
 use crate::copy_rgba_premultiplied_to_straight;
 use crate::path::Transform;
 
 /// Draws with an android.graphics.Canvas into its own premultiplied RGBA bitmap.
 pub(crate) struct PlatformOffscreenCanvas {
-    bitmap: GlobalRef,
-    canvas: GlobalRef,
+    bitmap: GlobalObject,
+    canvas: GlobalObject,
     resources: Rc<Resources>,
     storage: Vec<u8>,
     output: Vec<u8>,
@@ -23,52 +24,61 @@ pub(crate) struct PlatformOffscreenCanvas {
 
 impl PlatformOffscreenCanvas {
     pub(crate) fn new(width: u32, height: u32, length: usize) -> Self {
-        let env = JniEnv::current();
-        let jni = Jni::get(env);
-        unsafe {
-            let class = env.find_class(c"android/graphics/Bitmap");
-            let config_class = env.find_class(c"android/graphics/Bitmap$Config");
-            let config = env.static_object_field(
-                config_class,
-                c"ARGB_8888",
-                c"Landroid/graphics/Bitmap$Config;",
-            );
-            let create = env.static_method(
-                class,
-                c"createBitmap",
-                c"(IILandroid/graphics/Bitmap$Config;)Landroid/graphics/Bitmap;",
-            );
-            let bitmap = env.call_static_object(
-                class,
-                create,
-                &[
-                    jvalue { i: width as jint },
-                    jvalue { i: height as jint },
-                    jvalue { l: config },
-                ],
-            );
-            let canvas =
-                env.new_object(jni.canvas_class(), jni.canvas_new, &[jvalue { l: bitmap }]);
-            for object in [config, config_class, class] {
-                env.delete_local_ref(object);
-            }
-            Self {
-                bitmap: GlobalRef::from_local(env, bitmap),
-                canvas: GlobalRef::from_local(env, canvas),
-                resources: Resources::new(env),
-                storage: vec![0; length],
-                output: vec![0; length],
-            }
+        let (bitmap, canvas, resources) = with_env(|env| {
+            let jni = Jni::get(env)?;
+            let config_class = env.find_class(jni_str!("android/graphics/Bitmap$Config"))?;
+            let config = env
+                .get_static_field(
+                    &config_class,
+                    jni_str!("ARGB_8888"),
+                    jni_sig!("Landroid/graphics/Bitmap$Config;"),
+                )?
+                .l()?;
+            let class = env.find_class(jni_str!("android/graphics/Bitmap"))?;
+            let bitmap = env
+                .call_static_method(
+                    &class,
+                    jni_str!("createBitmap"),
+                    jni_sig!("(IILandroid/graphics/Bitmap$Config;)Landroid/graphics/Bitmap;"),
+                    &[
+                        JValue::Int(width as i32),
+                        JValue::Int(height as i32),
+                        (&config).into(),
+                    ],
+                )?
+                .l()?;
+            let canvas = unsafe {
+                env.new_object_unchecked(
+                    &jni.canvas_class,
+                    jni.canvas_new,
+                    &[jvalue { l: bitmap.as_raw() }],
+                )
+            }?;
+            Ok((
+                env.new_global_ref(&bitmap)?,
+                env.new_global_ref(&canvas)?,
+                Resources::new(env)?,
+            ))
+        });
+        Self {
+            bitmap,
+            canvas,
+            resources,
+            storage: vec![0; length],
+            output: vec![0; length],
         }
     }
 
     pub(crate) fn begin_draw(&mut self) -> PlatformCanvasContext {
-        PlatformCanvasContext::new(
-            self.canvas.as_raw(),
-            self.resources.clone(),
-            Transform::IDENTITY,
-            Clear::Transparent,
-        )
+        with_env(|env| {
+            PlatformCanvasContext::new(
+                env,
+                &self.canvas,
+                self.resources.clone(),
+                Transform::IDENTITY,
+                Clear::Transparent,
+            )
+        })
     }
 
     #[allow(
@@ -78,17 +88,18 @@ impl PlatformOffscreenCanvas {
     pub(crate) fn end_draw(&mut self) {}
 
     pub(crate) fn pixels(&mut self) -> &[u8] {
-        let env = JniEnv::current();
-        unsafe {
-            let buffer = env.new_direct_byte_buffer(self.storage.as_mut_ptr(), self.storage.len());
-            env.call_void_method(
-                self.bitmap.as_raw(),
-                c"copyPixelsToBuffer",
-                c"(Ljava/nio/Buffer;)V",
-                &[jvalue { l: buffer }],
-            );
-            env.delete_local_ref(buffer);
-        }
+        let (storage, bitmap) = (&mut self.storage, &self.bitmap);
+        with_env(|env| {
+            let buffer =
+                unsafe { env.new_direct_byte_buffer(storage.as_mut_ptr(), storage.len()) }?;
+            env.call_method(
+                bitmap,
+                jni_str!("copyPixelsToBuffer"),
+                jni_sig!("(Ljava/nio/Buffer;)V"),
+                &[(&buffer).into()],
+            )?
+            .v()
+        });
         copy_rgba_premultiplied_to_straight(&self.storage, &mut self.output);
         &self.output
     }

@@ -6,222 +6,298 @@
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
-use std::ffi::CStr;
 use std::rc::Rc;
 use std::sync::OnceLock;
 
-use bwindow::ffi::*;
+use jni::errors::Result;
+use jni::objects::{Global, JClass, JFloatArray, JMethodID, JObject, JStaticMethodID};
+use jni::signature::{FieldSignature, Primitive, ReturnType};
+use jni::strings::JNIStr;
+use jni::sys::{jint, jvalue};
+use jni::vm::JavaVM;
+use jni::{Env, JValue, jni_sig, jni_str};
 
 use crate::path::{Command, Path, Transform};
 use crate::{CanvasState, Color, FontWeight, LineCap, LineJoin, TextAlign, TextBaseline};
 
+/// Run `f` with the JNI environment of the current thread in a new local reference frame.
+/// Java exceptions and JNI errors panic.
+pub(super) fn with_env<T>(f: impl FnOnce(&mut Env) -> Result<T>) -> T {
+    JavaVM::singleton()
+        .and_then(|vm| vm.attach_current_thread(f))
+        .expect("JNI call failed")
+}
+
+// A global object reference.
+pub(super) type GlobalObject = Global<JObject<'static>>;
+
+const VOID: ReturnType = ReturnType::Primitive(Primitive::Void);
+const BOOLEAN: ReturnType = ReturnType::Primitive(Primitive::Boolean);
+const INT: ReturnType = ReturnType::Primitive(Primitive::Int);
+const FLOAT: ReturnType = ReturnType::Primitive(Primitive::Float);
+pub(super) const OBJECT: ReturnType = ReturnType::Object;
+
+/// Call a cached void method.
+///
+/// # Safety
+/// `method` must be a void method of `object` that takes `args`.
+pub(super) unsafe fn call_void(
+    env: &mut Env,
+    object: &JObject,
+    method: JMethodID,
+    args: &[jvalue],
+) -> Result<()> {
+    unsafe { env.call_method_unchecked(object, method, VOID, args) }?.v()
+}
+
 // MARK: JNI classes
 // Framework classes and methods, looked up once and valid on every thread.
 pub(super) struct Jni {
-    canvas_class: GlobalRef,
-    pub canvas_new: jmethodID,
-    save: jmethodID,
-    restore: jmethodID,
-    pub restore_to_count: jmethodID,
-    set_matrix: jmethodID,
-    clip_rect: jmethodID,
-    clip_path: jmethodID,
-    pub draw_color: jmethodID,
-    draw_rect: jmethodID,
-    draw_path: jmethodID,
-    draw_text: jmethodID,
-    paint_class: GlobalRef,
-    paint_new: jmethodID,
-    set_color: jmethodID,
-    set_style: jmethodID,
-    set_stroke_width: jmethodID,
-    set_stroke_cap: jmethodID,
-    set_stroke_join: jmethodID,
-    set_stroke_miter: jmethodID,
-    set_text_size: jmethodID,
-    set_typeface: jmethodID,
-    set_text_align: jmethodID,
-    measure_text: jmethodID,
-    ascent: jmethodID,
-    descent: jmethodID,
-    path_class: GlobalRef,
-    path_new: jmethodID,
-    rewind: jmethodID,
-    move_to: jmethodID,
-    line_to: jmethodID,
-    quad_to: jmethodID,
-    cubic_to: jmethodID,
-    close: jmethodID,
-    matrix_class: GlobalRef,
-    matrix_new: jmethodID,
-    set_values: jmethodID,
-    typeface_class: GlobalRef,
-    typeface_create: jmethodID,
-    pub lock_hardware_canvas: jmethodID,
-    pub unlock_canvas_and_post: jmethodID,
-    pub mode_src: GlobalRef,
-    pub mode_clear: GlobalRef,
-    style_stroke: GlobalRef,
-    caps: [GlobalRef; 3],
-    joins: [GlobalRef; 3],
-    aligns: [GlobalRef; 3],
+    pub canvas_class: Global<JClass<'static>>,
+    pub canvas_new: JMethodID,
+    save: JMethodID,
+    restore: JMethodID,
+    restore_to_count: JMethodID,
+    set_matrix: JMethodID,
+    clip_rect: JMethodID,
+    clip_path: JMethodID,
+    pub draw_color: JMethodID,
+    draw_rect: JMethodID,
+    draw_path: JMethodID,
+    draw_text: JMethodID,
+    paint_class: Global<JClass<'static>>,
+    paint_new: JMethodID,
+    set_color: JMethodID,
+    set_style: JMethodID,
+    set_stroke_width: JMethodID,
+    set_stroke_cap: JMethodID,
+    set_stroke_join: JMethodID,
+    set_stroke_miter: JMethodID,
+    set_text_size: JMethodID,
+    set_typeface: JMethodID,
+    set_text_align: JMethodID,
+    measure_text: JMethodID,
+    ascent: JMethodID,
+    descent: JMethodID,
+    path_class: Global<JClass<'static>>,
+    path_new: JMethodID,
+    rewind: JMethodID,
+    move_to: JMethodID,
+    line_to: JMethodID,
+    quad_to: JMethodID,
+    cubic_to: JMethodID,
+    close: JMethodID,
+    matrix_class: Global<JClass<'static>>,
+    matrix_new: JMethodID,
+    set_values: JMethodID,
+    typeface_class: Global<JClass<'static>>,
+    typeface_create: JStaticMethodID,
+    #[cfg(feature = "window")]
+    pub lock_hardware_canvas: JMethodID,
+    #[cfg(feature = "window")]
+    pub unlock_canvas_and_post: JMethodID,
+    #[cfg_attr(not(feature = "window"), allow(dead_code))]
+    pub mode_src: GlobalObject,
+    mode_clear: GlobalObject,
+    style_stroke: GlobalObject,
+    caps: [GlobalObject; 3],
+    joins: [GlobalObject; 3],
+    aligns: [GlobalObject; 3],
 }
 
-// SAFETY: Global references and method IDs are valid on every attached thread.
-unsafe impl Send for Jni {}
-// SAFETY: See above, the values are immutable.
-unsafe impl Sync for Jni {}
+fn class(env: &mut Env, name: &JNIStr) -> Result<Global<JClass<'static>>> {
+    let class = env.find_class(name)?;
+    env.new_global_ref(&class)
+}
+
+// Read the enum constants `names` of `class`.
+fn constants<const N: usize>(
+    env: &mut Env,
+    class: &JNIStr,
+    sig: impl AsRef<FieldSignature<'static>>,
+    names: [&JNIStr; N],
+) -> Result<[GlobalObject; N]> {
+    let class = env.find_class(class)?;
+    let mut values = Vec::with_capacity(N);
+    for name in names {
+        let value = env.get_static_field(&class, name, &sig)?.l()?;
+        values.push(env.new_global_ref(&value)?);
+    }
+    Ok(values.try_into().unwrap_or_else(|_| unreachable!()))
+}
 
 impl Jni {
-    pub(super) fn get(env: JniEnv) -> &'static Self {
+    pub(super) fn get(env: &mut Env) -> Result<&'static Self> {
         static JNI: OnceLock<Jni> = OnceLock::new();
-        JNI.get_or_init(|| unsafe { Self::new(env) })
-    }
-
-    unsafe fn new(env: JniEnv) -> Self {
-        unsafe {
-            let class = |name: &CStr| GlobalRef::from_local(env, env.find_class(name));
-            let canvas = class(c"android/graphics/Canvas");
-            let paint = class(c"android/graphics/Paint");
-            let path = class(c"android/graphics/Path");
-            let matrix = class(c"android/graphics/Matrix");
-            let typeface = class(c"android/graphics/Typeface");
-            let surface = class(c"android/view/Surface");
-            let method = |class: &GlobalRef, name: &CStr, signature: &CStr| {
-                env.method(class.as_raw(), name, signature)
-            };
-            let constants = |class: &CStr, signature: &CStr, names: &[&CStr]| {
-                let class = env.find_class(class);
-                let values = names
-                    .iter()
-                    .map(|name| {
-                        GlobalRef::from_local(env, env.static_object_field(class, name, signature))
-                    })
-                    .collect::<Vec<_>>();
-                env.delete_local_ref(class);
-                values
-            };
-            let [mode_src, mode_clear]: [GlobalRef; 2] = constants(
-                c"android/graphics/PorterDuff$Mode",
-                c"Landroid/graphics/PorterDuff$Mode;",
-                &[c"SRC", c"CLEAR"],
-            )
-            .try_into()
-            .unwrap_or_else(|_| unreachable!());
-            let [style_stroke]: [GlobalRef; 1] = constants(
-                c"android/graphics/Paint$Style",
-                c"Landroid/graphics/Paint$Style;",
-                &[c"STROKE"],
-            )
-            .try_into()
-            .unwrap_or_else(|_| unreachable!());
-            let triple = |class: &CStr, signature: &CStr, names: [&CStr; 3]| -> [GlobalRef; 3] {
-                constants(class, signature, &names)
-                    .try_into()
-                    .unwrap_or_else(|_| unreachable!())
-            };
-            Self {
-                canvas_new: method(&canvas, c"<init>", c"(Landroid/graphics/Bitmap;)V"),
-                save: method(&canvas, c"save", c"()I"),
-                restore: method(&canvas, c"restore", c"()V"),
-                restore_to_count: method(&canvas, c"restoreToCount", c"(I)V"),
-                set_matrix: method(&canvas, c"setMatrix", c"(Landroid/graphics/Matrix;)V"),
-                clip_rect: method(&canvas, c"clipRect", c"(FFFF)Z"),
-                clip_path: method(&canvas, c"clipPath", c"(Landroid/graphics/Path;)Z"),
-                draw_color: method(
-                    &canvas,
-                    c"drawColor",
-                    c"(ILandroid/graphics/PorterDuff$Mode;)V",
-                ),
-                draw_rect: method(&canvas, c"drawRect", c"(FFFFLandroid/graphics/Paint;)V"),
-                draw_path: method(
-                    &canvas,
-                    c"drawPath",
-                    c"(Landroid/graphics/Path;Landroid/graphics/Paint;)V",
-                ),
-                draw_text: method(
-                    &canvas,
-                    c"drawText",
-                    c"(Ljava/lang/String;FFLandroid/graphics/Paint;)V",
-                ),
-                paint_new: method(&paint, c"<init>", c"(I)V"),
-                set_color: method(&paint, c"setColor", c"(I)V"),
-                set_style: method(&paint, c"setStyle", c"(Landroid/graphics/Paint$Style;)V"),
-                set_stroke_width: method(&paint, c"setStrokeWidth", c"(F)V"),
-                set_stroke_cap: method(&paint, c"setStrokeCap", c"(Landroid/graphics/Paint$Cap;)V"),
-                set_stroke_join: method(
-                    &paint,
-                    c"setStrokeJoin",
-                    c"(Landroid/graphics/Paint$Join;)V",
-                ),
-                set_stroke_miter: method(&paint, c"setStrokeMiter", c"(F)V"),
-                set_text_size: method(&paint, c"setTextSize", c"(F)V"),
-                set_typeface: method(
-                    &paint,
-                    c"setTypeface",
-                    c"(Landroid/graphics/Typeface;)Landroid/graphics/Typeface;",
-                ),
-                set_text_align: method(
-                    &paint,
-                    c"setTextAlign",
-                    c"(Landroid/graphics/Paint$Align;)V",
-                ),
-                measure_text: method(&paint, c"measureText", c"(Ljava/lang/String;)F"),
-                ascent: method(&paint, c"ascent", c"()F"),
-                descent: method(&paint, c"descent", c"()F"),
-                path_new: method(&path, c"<init>", c"()V"),
-                rewind: method(&path, c"rewind", c"()V"),
-                move_to: method(&path, c"moveTo", c"(FF)V"),
-                line_to: method(&path, c"lineTo", c"(FF)V"),
-                quad_to: method(&path, c"quadTo", c"(FFFF)V"),
-                cubic_to: method(&path, c"cubicTo", c"(FFFFFF)V"),
-                close: method(&path, c"close", c"()V"),
-                matrix_new: method(&matrix, c"<init>", c"()V"),
-                set_values: method(&matrix, c"setValues", c"([F)V"),
-                lock_hardware_canvas: method(
-                    &surface,
-                    c"lockHardwareCanvas",
-                    c"()Landroid/graphics/Canvas;",
-                ),
-                unlock_canvas_and_post: method(
-                    &surface,
-                    c"unlockCanvasAndPost",
-                    c"(Landroid/graphics/Canvas;)V",
-                ),
-                typeface_create: env.static_method(
-                    typeface.as_raw(),
-                    c"create",
-                    c"(Ljava/lang/String;I)Landroid/graphics/Typeface;",
-                ),
-                mode_src,
-                mode_clear,
-                style_stroke,
-                caps: triple(
-                    c"android/graphics/Paint$Cap",
-                    c"Landroid/graphics/Paint$Cap;",
-                    [c"BUTT", c"ROUND", c"SQUARE"],
-                ),
-                joins: triple(
-                    c"android/graphics/Paint$Join",
-                    c"Landroid/graphics/Paint$Join;",
-                    [c"MITER", c"ROUND", c"BEVEL"],
-                ),
-                aligns: triple(
-                    c"android/graphics/Paint$Align",
-                    c"Landroid/graphics/Paint$Align;",
-                    [c"LEFT", c"CENTER", c"RIGHT"],
-                ),
-                canvas_class: canvas,
-                paint_class: paint,
-                path_class: path,
-                matrix_class: matrix,
-                typeface_class: typeface,
-            }
+        if let Some(jni) = JNI.get() {
+            return Ok(jni);
         }
+        let jni = Self::new(env)?;
+        Ok(JNI.get_or_init(|| jni))
     }
 
-    pub(super) const fn canvas_class(&self) -> jclass {
-        self.canvas_class.as_raw()
+    fn new(env: &mut Env) -> Result<Self> {
+        let canvas = class(env, jni_str!("android/graphics/Canvas"))?;
+        let paint = class(env, jni_str!("android/graphics/Paint"))?;
+        let path = class(env, jni_str!("android/graphics/Path"))?;
+        let matrix = class(env, jni_str!("android/graphics/Matrix"))?;
+        let typeface = class(env, jni_str!("android/graphics/Typeface"))?;
+        #[cfg(feature = "window")]
+        let surface = class(env, jni_str!("android/view/Surface"))?;
+        let [mode_src, mode_clear] = constants(
+            env,
+            jni_str!("android/graphics/PorterDuff$Mode"),
+            jni_sig!("Landroid/graphics/PorterDuff$Mode;"),
+            [jni_str!("SRC"), jni_str!("CLEAR")],
+        )?;
+        let [style_stroke] = constants(
+            env,
+            jni_str!("android/graphics/Paint$Style"),
+            jni_sig!("Landroid/graphics/Paint$Style;"),
+            [jni_str!("STROKE")],
+        )?;
+        Ok(Self {
+            canvas_new: env.get_method_id(
+                &canvas,
+                jni_str!("<init>"),
+                jni_sig!("(Landroid/graphics/Bitmap;)V"),
+            )?,
+            save: env.get_method_id(&canvas, jni_str!("save"), jni_sig!("()I"))?,
+            restore: env.get_method_id(&canvas, jni_str!("restore"), jni_sig!("()V"))?,
+            restore_to_count: env.get_method_id(
+                &canvas,
+                jni_str!("restoreToCount"),
+                jni_sig!("(I)V"),
+            )?,
+            set_matrix: env.get_method_id(
+                &canvas,
+                jni_str!("setMatrix"),
+                jni_sig!("(Landroid/graphics/Matrix;)V"),
+            )?,
+            clip_rect: env.get_method_id(&canvas, jni_str!("clipRect"), jni_sig!("(FFFF)Z"))?,
+            clip_path: env.get_method_id(
+                &canvas,
+                jni_str!("clipPath"),
+                jni_sig!("(Landroid/graphics/Path;)Z"),
+            )?,
+            draw_color: env.get_method_id(
+                &canvas,
+                jni_str!("drawColor"),
+                jni_sig!("(ILandroid/graphics/PorterDuff$Mode;)V"),
+            )?,
+            draw_rect: env.get_method_id(
+                &canvas,
+                jni_str!("drawRect"),
+                jni_sig!("(FFFFLandroid/graphics/Paint;)V"),
+            )?,
+            draw_path: env.get_method_id(
+                &canvas,
+                jni_str!("drawPath"),
+                jni_sig!("(Landroid/graphics/Path;Landroid/graphics/Paint;)V"),
+            )?,
+            draw_text: env.get_method_id(
+                &canvas,
+                jni_str!("drawText"),
+                jni_sig!("(Ljava/lang/String;FFLandroid/graphics/Paint;)V"),
+            )?,
+            paint_new: env.get_method_id(&paint, jni_str!("<init>"), jni_sig!("(I)V"))?,
+            set_color: env.get_method_id(&paint, jni_str!("setColor"), jni_sig!("(I)V"))?,
+            set_style: env.get_method_id(
+                &paint,
+                jni_str!("setStyle"),
+                jni_sig!("(Landroid/graphics/Paint$Style;)V"),
+            )?,
+            set_stroke_width: env.get_method_id(
+                &paint,
+                jni_str!("setStrokeWidth"),
+                jni_sig!("(F)V"),
+            )?,
+            set_stroke_cap: env.get_method_id(
+                &paint,
+                jni_str!("setStrokeCap"),
+                jni_sig!("(Landroid/graphics/Paint$Cap;)V"),
+            )?,
+            set_stroke_join: env.get_method_id(
+                &paint,
+                jni_str!("setStrokeJoin"),
+                jni_sig!("(Landroid/graphics/Paint$Join;)V"),
+            )?,
+            set_stroke_miter: env.get_method_id(
+                &paint,
+                jni_str!("setStrokeMiter"),
+                jni_sig!("(F)V"),
+            )?,
+            set_text_size: env.get_method_id(&paint, jni_str!("setTextSize"), jni_sig!("(F)V"))?,
+            set_typeface: env.get_method_id(
+                &paint,
+                jni_str!("setTypeface"),
+                jni_sig!("(Landroid/graphics/Typeface;)Landroid/graphics/Typeface;"),
+            )?,
+            set_text_align: env.get_method_id(
+                &paint,
+                jni_str!("setTextAlign"),
+                jni_sig!("(Landroid/graphics/Paint$Align;)V"),
+            )?,
+            measure_text: env.get_method_id(
+                &paint,
+                jni_str!("measureText"),
+                jni_sig!("(Ljava/lang/String;)F"),
+            )?,
+            ascent: env.get_method_id(&paint, jni_str!("ascent"), jni_sig!("()F"))?,
+            descent: env.get_method_id(&paint, jni_str!("descent"), jni_sig!("()F"))?,
+            path_new: env.get_method_id(&path, jni_str!("<init>"), jni_sig!("()V"))?,
+            rewind: env.get_method_id(&path, jni_str!("rewind"), jni_sig!("()V"))?,
+            move_to: env.get_method_id(&path, jni_str!("moveTo"), jni_sig!("(FF)V"))?,
+            line_to: env.get_method_id(&path, jni_str!("lineTo"), jni_sig!("(FF)V"))?,
+            quad_to: env.get_method_id(&path, jni_str!("quadTo"), jni_sig!("(FFFF)V"))?,
+            cubic_to: env.get_method_id(&path, jni_str!("cubicTo"), jni_sig!("(FFFFFF)V"))?,
+            close: env.get_method_id(&path, jni_str!("close"), jni_sig!("()V"))?,
+            matrix_new: env.get_method_id(&matrix, jni_str!("<init>"), jni_sig!("()V"))?,
+            set_values: env.get_method_id(&matrix, jni_str!("setValues"), jni_sig!("([F)V"))?,
+            typeface_create: env.get_static_method_id(
+                &typeface,
+                jni_str!("create"),
+                jni_sig!("(Ljava/lang/String;I)Landroid/graphics/Typeface;"),
+            )?,
+            #[cfg(feature = "window")]
+            lock_hardware_canvas: env.get_method_id(
+                &surface,
+                jni_str!("lockHardwareCanvas"),
+                jni_sig!("()Landroid/graphics/Canvas;"),
+            )?,
+            #[cfg(feature = "window")]
+            unlock_canvas_and_post: env.get_method_id(
+                &surface,
+                jni_str!("unlockCanvasAndPost"),
+                jni_sig!("(Landroid/graphics/Canvas;)V"),
+            )?,
+            mode_src,
+            mode_clear,
+            style_stroke,
+            caps: constants(
+                env,
+                jni_str!("android/graphics/Paint$Cap"),
+                jni_sig!("Landroid/graphics/Paint$Cap;"),
+                [jni_str!("BUTT"), jni_str!("ROUND"), jni_str!("SQUARE")],
+            )?,
+            joins: constants(
+                env,
+                jni_str!("android/graphics/Paint$Join"),
+                jni_sig!("Landroid/graphics/Paint$Join;"),
+                [jni_str!("MITER"), jni_str!("ROUND"), jni_str!("BEVEL")],
+            )?,
+            aligns: constants(
+                env,
+                jni_str!("android/graphics/Paint$Align"),
+                jni_sig!("Landroid/graphics/Paint$Align;"),
+                [jni_str!("LEFT"), jni_str!("CENTER"), jni_str!("RIGHT")],
+            )?,
+            canvas_class: canvas,
+            paint_class: paint,
+            path_class: path,
+            matrix_class: matrix,
+            typeface_class: typeface,
+        })
     }
 }
 
@@ -229,9 +305,9 @@ impl Jni {
 /// The paints, path, and matrix one canvas draws with, reused for every frame. The last
 /// state set on each paint is remembered, so unchanged state costs no JNI calls.
 pub(crate) struct Resources {
-    fill: GlobalRef,
-    stroke: GlobalRef,
-    text: GlobalRef,
+    fill: GlobalObject,
+    stroke: GlobalObject,
+    text: GlobalObject,
     fill_color: Cell<Option<u32>>,
     stroke_color: Cell<Option<u32>>,
     text_color: Cell<Option<u32>>,
@@ -240,82 +316,92 @@ pub(crate) struct Resources {
     // Typeface reference and font size bits.
     text_font: Cell<Option<(usize, u32)>>,
     text_align: Cell<Option<usize>>,
-    path: GlobalRef,
-    matrix: GlobalRef,
-    values: GlobalRef,
-    typefaces: RefCell<HashMap<(String, bool), GlobalRef>>,
+    path: GlobalObject,
+    matrix: GlobalObject,
+    values: Global<JFloatArray<'static>>,
+    typefaces: RefCell<HashMap<(String, bool), Rc<GlobalObject>>>,
 }
 
 impl Resources {
-    pub(super) fn new(env: JniEnv) -> Rc<Self> {
+    pub(super) fn new(env: &mut Env) -> Result<Rc<Self>> {
         const ANTI_ALIAS_FLAG: jint = 1;
         // The HTML canvas default, Android defaults to 4.
         const MITER_LIMIT: f32 = 10.0;
-        let jni = Jni::get(env);
+        let jni = Jni::get(env)?;
+        let mut new = |class: &Global<JClass<'static>>, constructor, args: &[jvalue]| {
+            let object = unsafe { env.new_object_unchecked(class, constructor, args) }?;
+            env.new_global_ref(&object)
+        };
+        let paint_args = [jvalue { i: ANTI_ALIAS_FLAG }];
+        let fill = new(&jni.paint_class, jni.paint_new, &paint_args)?;
+        let stroke = new(&jni.paint_class, jni.paint_new, &paint_args)?;
+        let text = new(&jni.paint_class, jni.paint_new, &paint_args)?;
+        let path = new(&jni.path_class, jni.path_new, &[])?;
+        let matrix = new(&jni.matrix_class, jni.matrix_new, &[])?;
         unsafe {
-            let paint = || {
-                let paint = env.new_object(
-                    jni.paint_class.as_raw(),
-                    jni.paint_new,
-                    &[jvalue { i: ANTI_ALIAS_FLAG }],
-                );
-                GlobalRef::from_local(env, paint)
-            };
-            let (fill, stroke, text) = (paint(), paint(), paint());
-            env.call_void(
-                stroke.as_raw(),
+            call_void(
+                env,
+                &stroke,
                 jni.set_style,
                 &[jvalue {
                     l: jni.style_stroke.as_raw(),
                 }],
-            );
-            env.call_void(
-                stroke.as_raw(),
+            )?;
+            call_void(
+                env,
+                &stroke,
                 jni.set_stroke_miter,
                 &[jvalue { f: MITER_LIMIT }],
-            );
-            let new = |class: &GlobalRef, constructor| {
-                GlobalRef::from_local(env, env.new_object(class.as_raw(), constructor, &[]))
-            };
-            Rc::new(Self {
-                fill,
-                stroke,
-                text,
-                fill_color: Cell::new(None),
-                stroke_color: Cell::new(None),
-                text_color: Cell::new(None),
-                stroke_style: Cell::new(None),
-                text_font: Cell::new(None),
-                text_align: Cell::new(None),
-                path: new(&jni.path_class, jni.path_new),
-                matrix: new(&jni.matrix_class, jni.matrix_new),
-                values: GlobalRef::from_local(env, env.new_float_array(9)),
-                typefaces: RefCell::new(HashMap::new()),
-            })
+            )?;
         }
+        let values = env.new_float_array(9)?;
+        Ok(Rc::new(Self {
+            fill,
+            stroke,
+            text,
+            fill_color: Cell::new(None),
+            stroke_color: Cell::new(None),
+            text_color: Cell::new(None),
+            stroke_style: Cell::new(None),
+            text_font: Cell::new(None),
+            text_align: Cell::new(None),
+            path,
+            matrix,
+            values: env.new_global_ref(&values)?,
+            typefaces: RefCell::new(HashMap::new()),
+        }))
     }
 
-    fn typeface(&self, env: JniEnv, jni: &Jni, family: &str, bold: bool) -> jobject {
+    fn typeface(
+        &self,
+        env: &mut Env,
+        jni: &Jni,
+        family: &str,
+        bold: bool,
+    ) -> Result<Rc<GlobalObject>> {
         const BOLD: jint = 1;
-        let mut typefaces = self.typefaces.borrow_mut();
-        typefaces
-            .entry((family.to_string(), bold))
-            .or_insert_with(|| unsafe {
-                let name = env.new_string(family);
-                let typeface = env.call_static_object(
-                    jni.typeface_class.as_raw(),
-                    jni.typeface_create,
-                    &[
-                        jvalue { l: name },
-                        jvalue {
-                            i: if bold { BOLD } else { 0 },
-                        },
-                    ],
-                );
-                env.delete_local_ref(name);
-                GlobalRef::from_local(env, typeface)
-            })
-            .as_raw()
+        let key = (family.to_string(), bold);
+        if let Some(typeface) = self.typefaces.borrow().get(&key) {
+            return Ok(typeface.clone());
+        }
+        let name = env.new_string(family)?;
+        let typeface = unsafe {
+            env.call_static_method_unchecked(
+                &jni.typeface_class,
+                jni.typeface_create,
+                OBJECT,
+                &[
+                    JValue::from(&name).as_jni(),
+                    jvalue {
+                        i: if bold { BOLD } else { 0 },
+                    },
+                ],
+            )
+        }?
+        .l()?;
+        let typeface = Rc::new(env.new_global_ref(&typeface)?);
+        self.typefaces.borrow_mut().insert(key, typeface.clone());
+        Ok(typeface)
     }
 }
 
@@ -323,15 +409,16 @@ impl Resources {
 /// What `clear_rect` fills with: an opaque window background, or transparency.
 #[derive(Clone, Copy)]
 pub(super) enum Clear {
+    // Only window frames clear to an opaque background.
+    #[cfg_attr(not(feature = "window"), allow(dead_code))]
     Color(u32),
     Transparent,
 }
 
 /// Draws directly into an `android.graphics.Canvas`, in logical pixels mapped by `base`.
 pub(crate) struct PlatformCanvasContext {
-    env: JniEnv,
     jni: &'static Jni,
-    canvas: jobject,
+    canvas: GlobalObject,
     resources: Rc<Resources>,
     base: Transform,
     clear: Clear,
@@ -346,13 +433,14 @@ pub(crate) struct PlatformCanvasContext {
 
 impl Drop for PlatformCanvasContext {
     fn drop(&mut self) {
-        unsafe {
-            self.env.call_void(
-                self.canvas,
+        with_env(|env| unsafe {
+            call_void(
+                env,
+                &self.canvas,
                 self.jni.restore_to_count,
                 &[jvalue { i: self.count }],
-            );
-        }
+            )
+        });
     }
 }
 
@@ -362,20 +450,19 @@ fn changed<T: Copy + PartialEq>(cache: &Cell<Option<T>>, value: T) -> bool {
 }
 
 impl PlatformCanvasContext {
-    /// Draw into `canvas`, which must stay valid until the context is dropped.
+    /// Draw into `canvas`, which must stay locked until the context is dropped.
     pub(super) fn new(
-        canvas: jobject,
+        env: &mut Env,
+        canvas: &JObject,
         resources: Rc<Resources>,
         base: Transform,
         clear: Clear,
-    ) -> Self {
-        let env = JniEnv::current();
-        let jni = Jni::get(env);
-        let count = unsafe { env.call_int(canvas, jni.save, &[]) };
+    ) -> Result<Self> {
+        let jni = Jni::get(env)?;
+        let count = unsafe { env.call_method_unchecked(canvas, jni.save, INT, &[]) }?.i()?;
         let mut context = Self {
-            env,
             jni,
-            canvas,
+            canvas: env.new_global_ref(canvas)?,
             resources,
             base,
             clear,
@@ -386,21 +473,23 @@ impl PlatformCanvasContext {
             synced: Transform::IDENTITY,
         };
         context.set_matrix(Transform::IDENTITY);
-        context
+        Ok(context)
     }
 
     fn set_matrix(&mut self, transform: Transform) {
         let Transform([a, b, c, d, e, f]) = self.base.concat(transform);
-        unsafe {
-            let values = self.resources.values.as_raw();
-            self.env
-                .set_float_array(values, &[a, c, e, b, d, f, 0.0, 0.0, 1.0]);
-            let matrix = self.resources.matrix.as_raw();
-            self.env
-                .call_void(matrix, self.jni.set_values, &[jvalue { l: values }]);
-            self.env
-                .call_void(self.canvas, self.jni.set_matrix, &[jvalue { l: matrix }]);
-        }
+        let (jni, resources) = (self.jni, &self.resources);
+        with_env(|env| unsafe {
+            env.set_float_array_region(&*resources.values, 0, &[a, c, e, b, d, f, 0.0, 0.0, 1.0])?;
+            let (values, matrix) = (resources.values.as_raw(), &resources.matrix);
+            call_void(env, matrix, jni.set_values, &[jvalue { l: values }])?;
+            call_void(
+                env,
+                &self.canvas,
+                jni.set_matrix,
+                &[jvalue { l: matrix.as_raw() }],
+            )
+        });
         self.synced = transform;
     }
 
@@ -410,7 +499,7 @@ impl PlatformCanvasContext {
         }
     }
 
-    fn set_color(&self, paint: &GlobalRef, cache: &Cell<Option<u32>>, color: Color, alpha: f32) {
+    fn set_color(&self, paint: &JObject, cache: &Cell<Option<u32>>, color: Color, alpha: f32) {
         let (red, green, blue, alpha) = color.components(alpha);
         let [red, green, blue, alpha] =
             [red, green, blue, alpha].map(|c| (c * 255.0).round() as u32);
@@ -418,18 +507,18 @@ impl PlatformCanvasContext {
         if !changed(cache, argb) {
             return;
         }
-        unsafe {
-            self.env.call_void(
-                paint.as_raw(),
+        with_env(|env| unsafe {
+            call_void(
+                env,
+                paint,
                 self.jni.set_color,
                 &[jvalue { i: argb as jint }],
-            );
-        }
+            )
+        });
     }
 
-    fn stroke_paint(&self, state: &CanvasState) -> jobject {
+    fn stroke_paint(&self, state: &CanvasState) -> &JObject<'static> {
         let resources = &self.resources;
-        let paint = resources.stroke.as_raw();
         self.set_color(
             &resources.stroke,
             &resources.stroke_color,
@@ -450,113 +539,148 @@ impl PlatformCanvasContext {
             &resources.stroke_style,
             (state.line_width.to_bits(), cap, join),
         ) {
-            let (env, jni) = (self.env, self.jni);
-            unsafe {
-                env.call_void(
+            let (jni, paint) = (self.jni, &resources.stroke);
+            with_env(|env| unsafe {
+                call_void(
+                    env,
                     paint,
                     jni.set_stroke_width,
                     &[jvalue {
                         f: state.line_width,
                     }],
-                );
-                env.call_void(
+                )?;
+                call_void(
+                    env,
                     paint,
                     jni.set_stroke_cap,
                     &[jvalue {
                         l: jni.caps[cap].as_raw(),
                     }],
-                );
-                env.call_void(
+                )?;
+                call_void(
+                    env,
                     paint,
                     jni.set_stroke_join,
                     &[jvalue {
                         l: jni.joins[join].as_raw(),
                     }],
-                );
-            }
+                )
+            });
         }
-        paint
+        &resources.stroke
     }
 
-    fn text_paint(&self, state: &CanvasState) -> jobject {
-        let resources = &self.resources;
-        let text = resources.text.as_raw();
-        let typeface = resources.typeface(
-            self.env,
-            self.jni,
-            &state.font_family,
-            state.font_weight == FontWeight::Bold,
-        );
-        if changed(
-            &resources.text_font,
-            (typeface as usize, state.font_size.to_bits()),
-        ) {
-            unsafe {
-                self.env
-                    .call_object(text, self.jni.set_typeface, &[jvalue { l: typeface }]);
-                self.env.call_void(
-                    text,
-                    self.jni.set_text_size,
-                    &[jvalue { f: state.font_size }],
-                );
+    fn text_paint(&self, state: &CanvasState) -> &JObject<'static> {
+        let (jni, resources) = (self.jni, &self.resources);
+        let text = &resources.text;
+        with_env(|env| {
+            let typeface = resources.typeface(
+                env,
+                jni,
+                &state.font_family,
+                state.font_weight == FontWeight::Bold,
+            )?;
+            if changed(
+                &resources.text_font,
+                (typeface.as_raw() as usize, state.font_size.to_bits()),
+            ) {
+                unsafe {
+                    env.call_method_unchecked(
+                        text,
+                        jni.set_typeface,
+                        OBJECT,
+                        &[jvalue {
+                            l: typeface.as_raw(),
+                        }],
+                    )?;
+                    call_void(
+                        env,
+                        text,
+                        jni.set_text_size,
+                        &[jvalue { f: state.font_size }],
+                    )?;
+                }
             }
-        }
+            Ok(())
+        });
         text
     }
 
     // Paths capture their construction transform, map them back into the current user space
-    // so the canvas draws them, and scales strokes, with the current transform.
-    fn build_path(&mut self) -> Option<jobject> {
-        let inverse = self.transform.inverse()?;
-        self.sync_transform();
-        let (env, jni) = (self.env, self.jni);
-        let path = self.resources.path.as_raw();
-        let point = |method, points: &[[f32; 2]]| unsafe {
-            let mut args = [jvalue { f: 0.0 }; 6];
-            for (pair, &point) in args.as_chunks_mut::<2>().0.iter_mut().zip(points) {
-                *pair = inverse.point(point).map(|f| jvalue { f });
-            }
-            env.call_void(path, method, &args[..points.len() * 2]);
+    // so the canvas draws them, and scales strokes, with the current transform. Returns
+    // whether the path was built.
+    fn build_path(&mut self) -> bool {
+        let Some(inverse) = self.transform.inverse() else {
+            return false;
         };
-        unsafe { env.call_void(path, jni.rewind, &[]) };
-        for command in &self.path.commands {
-            match *command {
-                Command::Move(to) => point(jni.move_to, &[to]),
-                Command::Line(to) => point(jni.line_to, &[to]),
-                Command::Quadratic(control, to) => point(jni.quad_to, &[control, to]),
-                Command::Cubic(a, b, to) => point(jni.cubic_to, &[a, b, to]),
-                Command::Close => unsafe { env.call_void(path, jni.close, &[]) },
+        self.sync_transform();
+        let (jni, path) = (self.jni, &self.resources.path);
+        with_env(|env| unsafe {
+            let mut point = |method, points: &[[f32; 2]]| {
+                let mut args = [jvalue { f: 0.0 }; 6];
+                for (pair, &point) in args.as_chunks_mut::<2>().0.iter_mut().zip(points) {
+                    *pair = inverse.point(point).map(|f| jvalue { f });
+                }
+                call_void(env, path, method, &args[..points.len() * 2])
+            };
+            point(jni.rewind, &[])?;
+            for command in &self.path.commands {
+                match *command {
+                    Command::Move(to) => point(jni.move_to, &[to])?,
+                    Command::Line(to) => point(jni.line_to, &[to])?,
+                    Command::Quadratic(control, to) => point(jni.quad_to, &[control, to])?,
+                    Command::Cubic(a, b, to) => point(jni.cubic_to, &[a, b, to])?,
+                    Command::Close => point(jni.close, &[])?,
+                }
             }
-        }
-        Some(path)
+            Ok(())
+        });
+        true
     }
 
-    fn draw_rect(&mut self, paint: jobject, x: f32, y: f32, w: f32, h: f32) {
+    fn draw_rect(&mut self, paint: &JObject, x: f32, y: f32, w: f32, h: f32) {
         self.sync_transform();
-        unsafe {
-            self.env.call_void(
-                self.canvas,
+        with_env(|env| unsafe {
+            call_void(
+                env,
+                &self.canvas,
                 self.jni.draw_rect,
                 &[
                     jvalue { f: x },
                     jvalue { f: y },
                     jvalue { f: x + w },
                     jvalue { f: y + h },
-                    jvalue { l: paint },
+                    jvalue { l: paint.as_raw() },
                 ],
-            );
-        }
+            )
+        });
+    }
+
+    // Draw the built path with `paint`.
+    fn draw_path(&self, paint: &JObject) {
+        let path = self.resources.path.as_raw();
+        with_env(|env| unsafe {
+            call_void(
+                env,
+                &self.canvas,
+                self.jni.draw_path,
+                &[jvalue { l: path }, jvalue { l: paint.as_raw() }],
+            )
+        });
     }
 
     pub(crate) fn save(&mut self) {
         self.stack.push((self.transform, self.synced));
-        unsafe { self.env.call_int(self.canvas, self.jni.save, &[]) };
+        with_env(|env| unsafe {
+            env.call_method_unchecked(&self.canvas, self.jni.save, INT, &[])?;
+            Ok(())
+        });
     }
     pub(crate) fn restore(&mut self) {
         if let Some((transform, synced)) = self.stack.pop() {
             self.transform = transform;
             self.synced = synced;
-            unsafe { self.env.call_void(self.canvas, self.jni.restore, &[]) };
+            with_env(|env| unsafe { call_void(env, &self.canvas, self.jni.restore, &[]) });
         }
     }
     pub(crate) fn clear_rect(&mut self, x: f32, y: f32, w: f32, h: f32) {
@@ -565,35 +689,38 @@ impl PlatformCanvasContext {
             Clear::Color(color) => (color | 0xff00_0000, &self.jni.mode_src),
             Clear::Transparent => (0, &self.jni.mode_clear),
         };
-        let (env, jni, canvas) = (self.env, self.jni, self.canvas);
-        unsafe {
-            env.call_int(canvas, jni.save, &[]);
-            env.call_bool(
+        let (jni, canvas) = (self.jni, &self.canvas);
+        with_env(|env| unsafe {
+            env.call_method_unchecked(canvas, jni.save, INT, &[])?;
+            env.call_method_unchecked(
                 canvas,
                 jni.clip_rect,
+                BOOLEAN,
                 &[
                     jvalue { f: x },
                     jvalue { f: y },
                     jvalue { f: x + w },
                     jvalue { f: y + h },
                 ],
-            );
-            env.call_void(
+            )?;
+            call_void(
+                env,
                 canvas,
                 jni.draw_color,
                 &[jvalue { i: color as jint }, jvalue { l: mode.as_raw() }],
-            );
-            env.call_void(canvas, jni.restore, &[]);
-        }
+            )?;
+            call_void(env, canvas, jni.restore, &[])
+        });
     }
     pub(crate) fn fill_rect(&mut self, s: &CanvasState, x: f32, y: f32, w: f32, h: f32) {
-        let resources = &self.resources;
+        let resources = self.resources.clone();
         self.set_color(&resources.fill, &resources.fill_color, s.fill, s.alpha);
-        self.draw_rect(self.resources.fill.as_raw(), x, y, w, h);
+        self.draw_rect(&resources.fill, x, y, w, h);
     }
     pub(crate) fn stroke_rect(&mut self, s: &CanvasState, x: f32, y: f32, w: f32, h: f32) {
-        let paint = self.stroke_paint(s);
-        self.draw_rect(paint, x, y, w, h);
+        let resources = self.resources.clone();
+        self.stroke_paint(s);
+        self.draw_rect(&resources.stroke, x, y, w, h);
     }
     pub(crate) fn begin_path(&mut self) {
         self.path = Path::default();
@@ -627,44 +754,31 @@ impl PlatformCanvasContext {
         self.path.cubic(self.transform, [a, b], [c, d], [x, y]);
     }
     pub(crate) fn fill(&mut self, s: &CanvasState) {
-        if let Some(path) = self.build_path() {
-            let paint = &self.resources.fill;
-            self.set_color(paint, &self.resources.fill_color, s.fill, s.alpha);
-            unsafe {
-                self.env.call_void(
-                    self.canvas,
-                    self.jni.draw_path,
-                    &[jvalue { l: path }, jvalue { l: paint.as_raw() }],
-                );
-            }
+        if self.build_path() {
+            let resources = &self.resources;
+            self.set_color(&resources.fill, &resources.fill_color, s.fill, s.alpha);
+            self.draw_path(&resources.fill);
         }
     }
     pub(crate) fn stroke(&mut self, s: &CanvasState) {
-        if let Some(path) = self.build_path() {
-            let paint = self.stroke_paint(s);
-            unsafe {
-                self.env.call_void(
-                    self.canvas,
-                    self.jni.draw_path,
-                    &[jvalue { l: path }, jvalue { l: paint }],
-                );
-            }
+        if self.build_path() {
+            self.draw_path(self.stroke_paint(s));
         }
     }
     pub(crate) fn clip(&mut self) {
-        unsafe {
-            match self.build_path() {
-                Some(path) => {
-                    self.env
-                        .call_bool(self.canvas, self.jni.clip_path, &[jvalue { l: path }]);
-                }
+        let built = self.build_path();
+        let (jni, canvas) = (self.jni, &self.canvas);
+        let path = self.resources.path.as_raw();
+        with_env(|env| unsafe {
+            if built {
+                env.call_method_unchecked(canvas, jni.clip_path, BOOLEAN, &[jvalue { l: path }])?;
+            } else {
                 // A path under a non-invertible transform is empty, so nothing stays visible.
-                None => {
-                    let empty = [jvalue { f: 0.0 }; 4];
-                    self.env.call_bool(self.canvas, self.jni.clip_rect, &empty);
-                }
+                let empty = [jvalue { f: 0.0 }; 4];
+                env.call_method_unchecked(canvas, jni.clip_rect, BOOLEAN, &empty)?;
             }
-        }
+            Ok(())
+        });
     }
     pub(crate) fn translate(&mut self, x: f32, y: f32) {
         self.transform = self.transform.concat(Transform([1.0, 0.0, 0.0, 1.0, x, y]));
@@ -693,31 +807,31 @@ impl PlatformCanvasContext {
     pub(crate) fn fill_text(&mut self, s: &CanvasState, text: &str, x: f32, y: f32) {
         self.sync_transform();
         let paint = self.text_paint(s);
-        self.set_color(
-            &self.resources.text,
-            &self.resources.text_color,
-            s.fill,
-            s.alpha,
-        );
+        self.set_color(paint, &self.resources.text_color, s.fill, s.alpha);
         let align = match s.text_align {
             TextAlign::Start | TextAlign::Left => 0,
             TextAlign::Center => 1,
             TextAlign::End | TextAlign::Right => 2,
         };
-        let (env, jni) = (self.env, self.jni);
-        unsafe {
+        let jni = self.jni;
+        with_env(|env| unsafe {
             if changed(&self.resources.text_align, align) {
-                env.call_void(
+                call_void(
+                    env,
                     paint,
                     jni.set_text_align,
                     &[jvalue {
                         l: jni.aligns[align].as_raw(),
                     }],
-                );
+                )?;
             }
             // Offset from the requested baseline to the alphabetic baseline Android draws at.
-            let ascent = env.call_float(paint, jni.ascent, &[]);
-            let descent = env.call_float(paint, jni.descent, &[]);
+            let ascent = env
+                .call_method_unchecked(paint, jni.ascent, FLOAT, &[])?
+                .f()?;
+            let descent = env
+                .call_method_unchecked(paint, jni.descent, FLOAT, &[])?
+                .f()?;
             let offset = match s.text_baseline {
                 TextBaseline::Top => -ascent,
                 TextBaseline::Hanging => -ascent * 0.8,
@@ -725,29 +839,31 @@ impl PlatformCanvasContext {
                 TextBaseline::Alphabetic => 0.0,
                 TextBaseline::Ideographic | TextBaseline::Bottom => -descent,
             };
-            let text = env.new_string(text);
-            env.call_void(
-                self.canvas,
+            let text = env.new_string(text)?;
+            call_void(
+                env,
+                &self.canvas,
                 jni.draw_text,
                 &[
-                    jvalue { l: text },
+                    jvalue { l: text.as_raw() },
                     jvalue { f: x },
                     jvalue { f: y + offset },
-                    jvalue { l: paint },
+                    jvalue { l: paint.as_raw() },
                 ],
-            );
-            env.delete_local_ref(text);
-        }
+            )
+        });
     }
     pub(crate) fn measure_text(&mut self, s: &CanvasState, text: &str) -> f32 {
         let paint = self.text_paint(s);
-        unsafe {
-            let text = self.env.new_string(text);
-            let width = self
-                .env
-                .call_float(paint, self.jni.measure_text, &[jvalue { l: text }]);
-            self.env.delete_local_ref(text);
-            width
-        }
+        with_env(|env| unsafe {
+            let text = env.new_string(text)?;
+            env.call_method_unchecked(
+                paint,
+                self.jni.measure_text,
+                FLOAT,
+                &[jvalue { l: text.as_raw() }],
+            )?
+            .f()
+        })
     }
 }

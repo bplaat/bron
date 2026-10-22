@@ -11,12 +11,15 @@ use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::os::fd::FromRawFd;
 use std::ptr::{null, null_mut};
+use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicPtr, AtomicU32, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 
-use super::activity::android_activity;
+use jni::objects::{Global, JObject};
+use jni::{JValue, jni_sig, jni_str};
+
+use super::activity::{ACTIVITY_OBJECT, android_with_env};
 use super::headers::*;
-use super::jni::{GlobalRef, JniEnv};
 use super::{input, window};
 use crate::mailbox::{Mailbox, Message};
 use crate::{
@@ -86,20 +89,15 @@ pub(super) fn system_theme() -> Theme {
 // the Rust main thread.
 thread_local! {
     #[allow(clippy::missing_const_for_thread_local, reason = "false positive without native TLS")]
-    static SURFACE: RefCell<Option<GlobalRef>> = const { RefCell::new(None) };
+    static SURFACE: RefCell<Option<Rc<Global<JObject<'static>>>>> = const { RefCell::new(None) };
     #[allow(clippy::missing_const_for_thread_local, reason = "false positive without native TLS")]
     static WINDOW: Cell<(*mut ANativeWindow, u64)> = const { Cell::new((null_mut(), 0)) };
 }
 
-/// The window's `android.view.Surface`, null while the window has no surface.
-/// Must be called on the Rust main thread, the reference stays valid during the current task.
-pub fn android_surface() -> jobject {
-    SURFACE.with(|surface| {
-        surface
-            .borrow()
-            .as_ref()
-            .map_or(null_mut(), GlobalRef::as_raw)
-    })
+/// The window's `android.view.Surface`, none while the window has no surface.
+/// Must be called on the Rust main thread, release it before the current task ends.
+pub fn android_surface() -> Option<Rc<Global<JObject<'static>>>> {
+    SURFACE.with(|surface| surface.borrow().clone())
 }
 
 /// The window's `ANativeWindow`, null while the window has no surface, and a generation
@@ -113,14 +111,21 @@ pub fn android_native_window() -> (*mut c_void, u64) {
 /// Use a new native window, or none when null.
 pub(super) fn set_window(window: *mut ANativeWindow) {
     WINDOW.set((window, WINDOW.get().1 + 1));
-    let env = JniEnv::current();
-    let surface = (!window.is_null()).then(|| unsafe {
+    let surface = (!window.is_null()).then(|| {
         update_window_size(window);
-        GlobalRef::from_local(env, ANativeWindow_toSurface(env.as_raw(), window))
+        android_with_env(|env| {
+            let surface = unsafe { ANativeWindow_toSurface(env.get_raw(), window) };
+            Ok(Rc::new(env.new_global_ref(unsafe {
+                JObject::from_raw(env, surface)
+            })?))
+        })
     });
     let previous = SURFACE.with(|current| current.replace(surface));
     if let Some(previous) = previous {
-        unsafe { env.call_void_method(previous.as_raw(), c"release", c"()V", &[]) };
+        android_with_env(|env| {
+            env.call_method(previous.as_obj(), jni_str!("release"), jni_sig!("()V"), &[])?
+                .v()
+        });
     }
 }
 
@@ -192,10 +197,9 @@ impl Queue {
         let queue = unsafe { &*data.cast::<Self>() };
         let mut value = 0u64;
         unsafe { read(fd, (&raw mut value).cast(), size_of::<u64>()) };
-        let env = JniEnv::current();
         let tasks = std::mem::take(&mut *queue.tasks.lock().expect("task queue poisoned"));
         for task in tasks {
-            env.with_local_frame(task);
+            task();
         }
         1
     }
@@ -243,7 +247,7 @@ pub fn android_post_local(task: impl FnOnce() + 'static) {
 pub fn android_post_frame(task: impl FnOnce() + 'static) {
     unsafe extern "C" fn frame(_: c_long, data: *mut c_void) {
         let task = unsafe { Box::from_raw(data.cast::<Box<dyn FnOnce()>>()) };
-        JniEnv::current().with_local_frame(task);
+        task();
     }
     let task: Box<Box<dyn FnOnce()>> = Box::new(Box::new(task));
     unsafe {
@@ -261,9 +265,8 @@ pub(super) fn stop() {
 
 // Serve the looper until a local task is pending or the loop should stop.
 fn poll() {
-    let env = JniEnv::current();
     while let Some(task) = LOCAL_TASKS.with(|tasks| tasks.borrow_mut().pop_front()) {
-        env.with_local_frame(task);
+        task();
         if EXIT_REQUESTED.get() {
             return;
         }
@@ -279,7 +282,7 @@ pub(crate) struct PlatformEventLoop {
 impl PlatformEventLoop {
     pub(crate) fn new(_builder: EventLoopBuilder) -> Self {
         assert!(
-            !android_activity().is_null(),
+            ACTIVITY_OBJECT.get().is_some(),
             "the event loop must be created by the main function the activity runs"
         );
         Self {
@@ -414,20 +417,19 @@ pub(super) fn detach_input(queue: *mut AInputQueue) {
 
 unsafe extern "C" fn read_input(_: c_int, _: c_int, _: *mut c_void) -> c_int {
     let queue = INPUT_QUEUE.load(Ordering::Acquire);
-    let env = JniEnv::current();
     let mut event = null_mut();
     while !queue.is_null() && unsafe { AInputQueue_getEvent(queue, &mut event) } >= 0 {
         // The input method gets the first chance to handle the event.
         if unsafe { AInputQueue_preDispatchEvent(queue, event) } != 0 {
             continue;
         }
-        let handled = env.with_local_frame(|| unsafe { handle_input(env, event) });
+        let handled = unsafe { handle_input(event) };
         unsafe { AInputQueue_finishEvent(queue, event, c_int::from(handled)) };
     }
     1
 }
 
-unsafe fn handle_input(env: JniEnv, event: *mut AInputEvent) -> bool {
+unsafe fn handle_input(event: *mut AInputEvent) -> bool {
     unsafe {
         match AInputEvent_getType(event) {
             AINPUT_EVENT_TYPE_MOTION => {
@@ -469,7 +471,7 @@ unsafe fn handle_input(env: JniEnv, event: *mut AInputEvent) -> bool {
                 window::send(input::key_event(
                     action == AKEY_EVENT_ACTION_DOWN,
                     key_code,
-                    unicode_char(env, AInputEvent_getDeviceId(event), key_code, meta_state),
+                    unicode_char(AInputEvent_getDeviceId(event), key_code, meta_state),
                     AKeyEvent_getRepeatCount(event),
                     meta_state,
                 ));
@@ -482,46 +484,49 @@ unsafe fn handle_input(env: JniEnv, event: *mut AInputEvent) -> bool {
 
 // The NDK has no character mapping, so ask the device's android.view.KeyCharacterMap.
 // KeyCharacterMap.load throws for removed devices, InputDevice.getDevice returns null instead.
-unsafe fn unicode_char(env: JniEnv, device: i32, key_code: i32, meta_state: i32) -> i32 {
+fn unicode_char(device: i32, key_code: i32, meta_state: i32) -> i32 {
     const META_SHIFT_MASK: i32 = 0xc1;
     const META_CAPS_LOCK_ON: i32 = 0x0010_0000;
     const VIRTUAL_KEYBOARD: i32 = -1;
-    unsafe {
-        let input_device = env.find_class(c"android/view/InputDevice");
-        let get_device =
-            env.static_method(input_device, c"getDevice", c"(I)Landroid/view/InputDevice;");
-        let input_device =
-            env.call_static_object(input_device, get_device, &[jvalue { i: device }]);
-        let class = env.find_class(c"android/view/KeyCharacterMap");
+    android_with_env(|env| {
+        let input_device = env.find_class(jni_str!("android/view/InputDevice"))?;
+        let input_device = env
+            .call_static_method(
+                &input_device,
+                jni_str!("getDevice"),
+                jni_sig!("(I)Landroid/view/InputDevice;"),
+                &[JValue::Int(device)],
+            )?
+            .l()?;
         let map = if input_device.is_null() {
-            let load = env.static_method(class, c"load", c"(I)Landroid/view/KeyCharacterMap;");
-            env.call_static_object(
-                class,
-                load,
-                &[jvalue {
-                    i: VIRTUAL_KEYBOARD,
-                }],
-            )
+            let class = env.find_class(jni_str!("android/view/KeyCharacterMap"))?;
+            env.call_static_method(
+                &class,
+                jni_str!("load"),
+                jni_sig!("(I)Landroid/view/KeyCharacterMap;"),
+                &[JValue::Int(VIRTUAL_KEYBOARD)],
+            )?
+            .l()?
         } else {
-            env.call_object_method(
-                input_device,
-                c"getKeyCharacterMap",
-                c"()Landroid/view/KeyCharacterMap;",
+            env.call_method(
+                &input_device,
+                jni_str!("getKeyCharacterMap"),
+                jni_sig!("()Landroid/view/KeyCharacterMap;"),
                 &[],
-            )
+            )?
+            .l()?
         };
-        let get = env.method(class, c"get", c"(II)I");
-        env.call_int(
-            map,
-            get,
+        env.call_method(
+            &map,
+            jni_str!("get"),
+            jni_sig!("(II)I"),
             &[
-                jvalue { i: key_code },
-                jvalue {
-                    i: meta_state & (META_SHIFT_MASK | META_CAPS_LOCK_ON),
-                },
+                JValue::Int(key_code),
+                JValue::Int(meta_state & (META_SHIFT_MASK | META_CAPS_LOCK_ON)),
             ],
-        )
-    }
+        )?
+        .i()
+    })
 }
 
 // MARK: Main thread

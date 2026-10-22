@@ -6,13 +6,17 @@
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
-use std::ffi::{CStr, c_void};
-use std::ptr::null_mut;
+use std::ffi::c_void;
 use std::rc::{Rc, Weak};
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use bwindow::ffi::*;
+use bwindow::ffi::{android_back_pressed, android_post, android_with_env};
+use jni::errors::{Result, ThrowRuntimeExAndDefault};
+use jni::objects::{Global, JByteArray, JClass, JObject, JObjectArray, JString};
+use jni::strings::JNIStr;
+use jni::sys::{jint, jlong};
+use jni::{Env, EnvUnowned, JValue, NativeMethod, jni_sig, jni_str};
 
 use crate::{InjectionTime, WebviewBuilder, WebviewEvent};
 
@@ -22,33 +26,62 @@ const HOST_SUFFIX: &str = ".appassets.androidplatform.net";
 // The Java WebView glue, compiled by the build script.
 static DEX: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/classes.dex"));
 
-// The nl.bplaat.bwebview.Bwebview class with its native methods registered.
-fn bwebview_class(env: JniEnv) -> jclass {
-    static CLASS: OnceLock<(DexClassLoader, GlobalRef)> = OnceLock::new();
-    let (_, class) = CLASS.get_or_init(|| {
-        let loader = DexClassLoader::new(DEX);
-        let class = loader.find_class(env, "nl.bplaat.bwebview.Bwebview");
-        unsafe {
-            env.register_natives(
-                class,
-                &[
-                    native_method(
-                        c"nativeEvent",
-                        c"(JLjava/lang/String;Ljava/lang/String;)V",
-                        native_event as *mut c_void,
-                    ),
-                    native_method(
-                        c"nativeRequest",
-                        c"(J[Ljava/lang/String;)[B",
-                        native_request as *mut c_void,
-                    ),
-                    native_method(c"nativeBack", c"()V", native_back as *mut c_void),
-                ],
-            );
-            (loader, GlobalRef::from_local(env, class))
-        }
-    });
-    class.as_raw()
+// The nl.bplaat.bwebview.Bwebview class with its native methods registered, loaded from the
+// dex code with the class loader of the activity as parent, the class keeps its loader alive.
+fn bwebview_class(env: &mut Env, activity: &JObject) -> Result<&'static Global<JClass<'static>>> {
+    static CLASS: OnceLock<Global<JClass<'static>>> = OnceLock::new();
+    if let Some(class) = CLASS.get() {
+        return Ok(class);
+    }
+    let parent = env
+        .call_method(
+            activity,
+            jni_str!("getClassLoader"),
+            jni_sig!("()Ljava/lang/ClassLoader;"),
+            &[],
+        )?
+        .l()?;
+    let dex = unsafe { env.new_direct_byte_buffer(DEX.as_ptr().cast_mut(), DEX.len())? };
+    let loader_class = env.find_class(jni_str!("dalvik/system/InMemoryDexClassLoader"))?;
+    let loader = env.new_object(
+        &loader_class,
+        jni_sig!("(Ljava/nio/ByteBuffer;Ljava/lang/ClassLoader;)V"),
+        &[(&dex).into(), (&parent).into()],
+    )?;
+    let name = env.new_string("nl.bplaat.bwebview.Bwebview")?;
+    let class = env
+        .call_method(
+            &loader,
+            jni_str!("loadClass"),
+            jni_sig!("(Ljava/lang/String;)Ljava/lang/Class;"),
+            &[(&name).into()],
+        )?
+        .l()?;
+    let class = unsafe { JClass::from_raw(env, class.into_raw()) };
+    unsafe {
+        env.register_native_methods(
+            &class,
+            &[
+                NativeMethod::from_raw_parts(
+                    jni_str!("nativeEvent"),
+                    jni_str!("(JLjava/lang/String;Ljava/lang/String;)V"),
+                    native_event as *mut c_void,
+                ),
+                NativeMethod::from_raw_parts(
+                    jni_str!("nativeRequest"),
+                    jni_str!("(J[Ljava/lang/String;)[B"),
+                    native_request as *mut c_void,
+                ),
+                NativeMethod::from_raw_parts(
+                    jni_str!("nativeBack"),
+                    jni_str!("()V"),
+                    native_back as *mut c_void,
+                ),
+            ],
+        )?;
+    }
+    let class = env.new_global_ref(&class)?;
+    Ok(CLASS.get_or_init(|| class))
 }
 
 // Custom protocols by webview id, requests arrive on a WebView background thread.
@@ -74,7 +107,7 @@ pub(crate) struct PlatformWebview {
     closed: Rc<Cell<bool>>,
     state: Rc<WebviewState>,
     schemes: Vec<String>,
-    java: Option<Rc<GlobalRef>>,
+    java: Option<Rc<Global<JObject<'static>>>>,
 }
 
 impl PlatformWebview {
@@ -121,36 +154,30 @@ impl PlatformWebview {
                 .insert(id, builder.custom_protocols);
         }
 
-        let env = JniEnv::current();
-        let java = unsafe {
-            let user_agent = env.new_string(&format!("bwebview/{}", env!("CARGO_PKG_VERSION")));
-            let schemes =
-                env.new_string_array(&self.schemes.iter().map(String::as_str).collect::<Vec<_>>());
-            let class = bwebview_class(env);
-            let constructor = env.method(
-                class,
-                c"<init>",
-                c"(Landroid/app/Activity;JILjava/lang/String;[Ljava/lang/String;)V",
-            );
+        // Transparent means no background color, others are opaque.
+        let background = self.attachment.background_color().map_or(0, opaque);
+        let java = android_with_env(|env| {
+            let activity = unsafe { JObject::from_raw(env, activity.cast()) };
+            let class = bwebview_class(env, &activity)?;
+            let user_agent = env.new_string(format!("bwebview/{}", env!("CARGO_PKG_VERSION")))?;
+            let schemes = JObjectArray::<JString>::new(env, self.schemes.len(), JString::null())?;
+            for (index, scheme) in self.schemes.iter().enumerate() {
+                let scheme = env.new_string(scheme)?;
+                schemes.set_element(env, index, &scheme)?;
+            }
             let object = env.new_object(
                 class,
-                constructor,
+                jni_sig!("(Landroid/app/Activity;JILjava/lang/String;[Ljava/lang/String;)V"),
                 &[
-                    jvalue { l: activity },
-                    jvalue { j: id as jlong },
-                    // Transparent means no background color, others are opaque.
-                    jvalue {
-                        i: self.attachment.background_color().map_or(0, opaque),
-                    },
-                    jvalue { l: user_agent },
-                    jvalue { l: schemes },
+                    (&activity).into(),
+                    JValue::Long(id as jlong),
+                    JValue::Int(background),
+                    (&user_agent).into(),
+                    (&schemes).into(),
                 ],
-            );
-            for local in [schemes, user_agent] {
-                env.delete_local_ref(local);
-            }
-            Rc::new(GlobalRef::from_local(env, object))
-        };
+            )?;
+            Ok(Rc::new(env.new_global_ref(&object)?))
+        });
         self.java = Some(java.clone());
 
         crate::WebviewInterface::add_user_script(
@@ -173,21 +200,26 @@ impl PlatformWebview {
         });
     }
 
-    fn call(&self, name: &CStr, signature: &CStr, args: &[jvalue]) {
+    fn call(&self, f: impl FnOnce(&mut Env, &JObject<'static>) -> Result<()>) {
         if self.closed.get() {
             return;
         }
-        let Some(java) = &self.java else {
-            return;
-        };
-        unsafe { JniEnv::current().call_void_method(java.as_raw(), name, signature, args) };
+        if let Some(java) = &self.java {
+            android_with_env(|env| f(env, java.as_obj()));
+        }
     }
 
-    fn call_with_string(&self, name: &CStr, value: &str) {
-        let env = JniEnv::current();
-        let string = env.new_string(value);
-        self.call(name, c"(Ljava/lang/String;)V", &[jvalue { l: string }]);
-        unsafe { env.delete_local_ref(string) };
+    fn call_with_string(&self, name: &'static JNIStr, value: &str) {
+        self.call(|env, java| {
+            let value = env.new_string(value)?;
+            env.call_method(
+                java,
+                name,
+                jni_sig!("(Ljava/lang/String;)V"),
+                &[(&value).into()],
+            )?
+            .v()
+        });
     }
 }
 
@@ -198,39 +230,43 @@ impl crate::WebviewInterface for PlatformWebview {
 
     fn load_url(&mut self, url: impl AsRef<str>) {
         let url = rewrite_custom_protocol(url.as_ref(), &self.schemes);
-        self.call_with_string(c"loadUrl", &url);
+        self.call_with_string(jni_str!("loadUrl"), &url);
     }
 
     fn load_html(&mut self, html: impl AsRef<str>) {
-        self.call_with_string(c"loadHtml", html.as_ref());
+        self.call_with_string(jni_str!("loadHtml"), html.as_ref());
     }
 
     fn evaluate_script(&mut self, script: impl AsRef<str>) {
-        self.call_with_string(c"evaluateScript", script.as_ref());
+        self.call_with_string(jni_str!("evaluateScript"), script.as_ref());
     }
 
     fn add_user_script(&mut self, script: impl AsRef<str>, injection_time: InjectionTime) {
-        let env = JniEnv::current();
-        let script = env.new_string(script.as_ref());
-        self.call(
-            c"addUserScript",
-            c"(Ljava/lang/String;Z)V",
-            &[
-                jvalue { l: script },
-                jvalue {
-                    z: (injection_time == InjectionTime::DocumentStart).into(),
-                },
-            ],
-        );
-        unsafe { env.delete_local_ref(script) };
+        self.call(|env, java| {
+            let script = env.new_string(script)?;
+            env.call_method(
+                java,
+                jni_str!("addUserScript"),
+                jni_sig!("(Ljava/lang/String;Z)V"),
+                &[
+                    (&script).into(),
+                    JValue::Bool(injection_time == InjectionTime::DocumentStart),
+                ],
+            )?
+            .v()
+        });
     }
 
     fn set_background_color(&mut self, color: u32) {
-        self.call(
-            c"setBackgroundColor",
-            c"(I)V",
-            &[jvalue { i: opaque(color) }],
-        );
+        self.call(|env, java| {
+            env.call_method(
+                java,
+                jni_str!("setBackgroundColor"),
+                jni_sig!("(I)V"),
+                &[JValue::Int(opaque(color))],
+            )?
+            .v()
+        });
     }
 }
 
@@ -250,7 +286,7 @@ const fn opaque(color: u32) -> jint {
     (color | 0xff00_0000) as jint
 }
 
-fn close(id: u64, java: &GlobalRef) {
+fn close(id: u64, java: &Global<JObject<'static>>) {
     WEBVIEWS.with(|webviews| webviews.borrow_mut().remove(&id));
     #[cfg(feature = "custom_protocol")]
     if let Some(protocols) = PROTOCOLS
@@ -260,45 +296,79 @@ fn close(id: u64, java: &GlobalRef) {
     {
         protocols.remove(&id);
     }
-    unsafe { JniEnv::current().call_void_method(java.as_raw(), c"close", c"()V", &[]) };
+    android_with_env(|env| {
+        env.call_method(java.as_obj(), jni_str!("close"), jni_sig!("()V"), &[])?
+            .v()
+    });
 }
 
 // MARK: Native methods
-extern "C" fn native_event(env: *mut JNIEnv, _: jclass, id: jlong, kind: jstring, value: jstring) {
-    let env = unsafe { JniEnv::from_raw(env) };
-    let (kind, value) = unsafe { (env.string(kind), env.string(value)) };
-    android_post(move || dispatch_event(id as u64, &kind, &value));
-}
-
-#[cfg_attr(
-    not(feature = "custom_protocol"),
-    allow(clippy::missing_const_for_fn, reason = "a JNI entry point")
-)]
-extern "C" fn native_request(
-    env: *mut JNIEnv,
-    _: jclass,
-    id: jlong,
-    request: jobjectArray,
-) -> jbyteArray {
-    #[cfg(feature = "custom_protocol")]
-    {
-        let env = unsafe { JniEnv::from_raw(env) };
-        let values = unsafe { env.string_array(request) };
-        let protocols = PROTOCOLS.lock().expect("custom protocols poisoned");
-        if let Some(response) = protocols
-            .as_ref()
-            .and_then(|protocols| protocols.get(&(id as u64)))
-            .and_then(|protocols| handle_request(protocols, &values))
-        {
-            return env.new_byte_array(&response);
-        }
+// Read a Java string, null reads as an empty string.
+fn string(env: &Env, string: &JString) -> Result<String> {
+    if string.is_null() {
+        Ok(String::new())
+    } else {
+        string.try_to_string(env)
     }
-    #[cfg(not(feature = "custom_protocol"))]
-    let _ = (env, id, request);
-    null_mut()
 }
 
-extern "C" fn native_back(_: *mut JNIEnv, _: jclass) {
+extern "system" fn native_event<'local>(
+    mut env: EnvUnowned<'local>,
+    _: JClass<'local>,
+    id: jlong,
+    kind: JString<'local>,
+    value: JString<'local>,
+) {
+    env.with_env(|env| -> Result<()> {
+        let (kind, value) = (string(env, &kind)?, string(env, &value)?);
+        android_post(move || dispatch_event(id as u64, &kind, &value));
+        Ok(())
+    })
+    .resolve::<ThrowRuntimeExAndDefault>();
+}
+
+extern "system" fn native_request<'local>(
+    mut env: EnvUnowned<'local>,
+    _: JClass<'local>,
+    id: jlong,
+    request: JObjectArray<'local, JString<'local>>,
+) -> JByteArray<'local> {
+    env.with_env(|env| response(env, id as u64, &request))
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+#[cfg(feature = "custom_protocol")]
+fn response<'local>(
+    env: &mut Env<'local>,
+    id: u64,
+    request: &JObjectArray<JString>,
+) -> Result<JByteArray<'local>> {
+    let mut values = Vec::new();
+    for index in 0..request.len(env)? {
+        let value = request.get_element(env, index)?;
+        values.push(string(env, &value)?);
+    }
+    let protocols = PROTOCOLS.lock().expect("custom protocols poisoned");
+    match protocols
+        .as_ref()
+        .and_then(|protocols| protocols.get(&id))
+        .and_then(|protocols| handle_request(protocols, &values))
+    {
+        Some(response) => env.byte_array_from_slice(&response),
+        None => Ok(JByteArray::default()),
+    }
+}
+
+#[cfg(not(feature = "custom_protocol"))]
+fn response<'local>(
+    _: &mut Env<'local>,
+    _: u64,
+    _: &JObjectArray<JString>,
+) -> Result<JByteArray<'local>> {
+    Ok(JByteArray::default())
+}
+
+extern "system" fn native_back<'local>(_: EnvUnowned<'local>, _: JClass<'local>) {
     android_back_pressed();
 }
 
