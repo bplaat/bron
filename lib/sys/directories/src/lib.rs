@@ -216,7 +216,34 @@ pub(crate) mod windows {
     }
 }
 
-#[cfg(all(unix, not(target_vendor = "apple")))]
+// MARK: Android
+#[cfg(target_os = "android")]
+#[allow(unsafe_code)]
+pub(crate) mod android {
+    use super::*;
+
+    unsafe extern "C" {
+        fn getuid() -> u32;
+    }
+
+    // Every Android user profile has its own range of app user ids
+    const PER_USER_RANGE: u32 = 100_000;
+
+    /// Returns the private data directory of the app, like Context.getDataDir()
+    pub(crate) fn data_dir() -> Option<PathBuf> {
+        let cmdline = std::fs::read("/proc/self/cmdline").ok()?;
+        // The process name is the package name, other app processes add a :name suffix
+        let name = cmdline.split(|&byte| byte == 0 || byte == b':').next()?;
+        let package = std::str::from_utf8(name)
+            .ok()
+            .filter(|name| !name.is_empty())?;
+        // SAFETY: getuid has no preconditions and always succeeds.
+        let user = unsafe { getuid() } / PER_USER_RANGE;
+        Some(PathBuf::from(format!("/data/user/{user}/{package}")))
+    }
+}
+
+#[cfg(all(unix, not(target_vendor = "apple"), not(target_os = "android")))]
 fn xdg_dir(name: &str, fallback: PathBuf) -> PathBuf {
     std::env::var_os(name)
         .map(PathBuf::from)
@@ -234,11 +261,15 @@ impl BaseDirs {
     /// Creates a BaseDirs struct which holds the paths to user-invisible directories
     pub fn new() -> Option<Self> {
         Some(Self {
-            home_dir: std::env::home_dir()?,
+            home_dir: cfg_select! {
+                target_os = "android" => android::data_dir()?,
+                _ => std::env::home_dir()?,
+            },
         })
     }
 
-    /// Returns the path to the user's home directory
+    /// Returns the path to the user's home directory, not available on sandboxed Android and iOS
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
     pub fn home_dir(&self) -> PathBuf {
         self.home_dir.clone()
     }
@@ -246,6 +277,7 @@ impl BaseDirs {
     /// Returns the path to the user's cache directory
     pub fn cache_dir(&self) -> PathBuf {
         cfg_select! {
+            target_os = "android" => self.home_dir.join("cache"),
             all(unix, not(target_vendor = "apple")) => {
                 xdg_dir("XDG_CACHE_HOME", self.home_dir.join(".cache"))
             }
@@ -258,6 +290,7 @@ impl BaseDirs {
     /// Returns the path to the user's config directory
     pub fn config_dir(&self) -> PathBuf {
         cfg_select! {
+            target_os = "android" => self.home_dir.join("files"),
             all(unix, not(target_vendor = "apple")) => {
                 xdg_dir("XDG_CONFIG_HOME", self.home_dir.join(".config"))
             }
@@ -270,6 +303,7 @@ impl BaseDirs {
     /// Returns the path to the user's data directory
     pub fn data_dir(&self) -> PathBuf {
         cfg_select! {
+            target_os = "android" => self.home_dir.join("files"),
             all(unix, not(target_vendor = "apple")) => {
                 xdg_dir("XDG_DATA_HOME", self.home_dir.join(".local").join("share"))
             }
@@ -287,9 +321,11 @@ impl BaseDirs {
         }
     }
 
-    /// Returns the path to the user's executable directory, only available on Linux
+    /// Returns the path to the user's executable directory, only available on Linux and BSD,
+    /// not available on sandboxed Android and iOS
     // Const-compatible on macOS and Windows, but reads the environment on Linux.
     #[allow(clippy::missing_const_for_fn)]
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
     pub fn executable_dir(&self) -> Option<PathBuf> {
         cfg_select! {
             all(unix, not(target_vendor = "apple")) => Some(xdg_dir(
@@ -312,6 +348,10 @@ impl ProjectDirs {
     /// Creates a ProjectDirs struct from values describing the project
     pub fn from(qualifier: &str, organization: &str, application: &str) -> Option<Self> {
         Self::from_path(cfg_select! {
+            // Mobile apps are sandboxed, so their directories already belong to the app
+            any(target_os = "android", target_os = "ios") => {
+                PathBuf::new()
+            }
             all(unix, not(target_vendor = "apple")) => {
                 PathBuf::from(application)
             }
@@ -343,11 +383,13 @@ impl ProjectDirs {
 }
 
 // MARK: UserDirs
-/// Provides paths of user-facing standard directories
+/// Provides paths of user-facing standard directories, not available on sandboxed Android and iOS
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub struct UserDirs {
     home_dir: PathBuf,
 }
 
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 impl UserDirs {
     /// Creates a UserDirs struct which holds the paths to user-facing directories
     pub fn new() -> Option<Self> {
