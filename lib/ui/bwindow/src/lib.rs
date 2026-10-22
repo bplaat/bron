@@ -9,6 +9,9 @@
 #![allow(unsafe_code)]
 #![allow(clippy::undocumented_unsafe_blocks)]
 
+#[cfg(all(feature = "dialog", any(target_os = "ios", target_os = "android")))]
+compile_error!("The `dialog` feature is unsupported on iOS and Android");
+
 pub use crate::content::*;
 #[cfg(feature = "dialog")]
 pub use crate::dialog::*;
