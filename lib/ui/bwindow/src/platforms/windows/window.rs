@@ -46,6 +46,14 @@ thread_local! {
 
 pub(crate) struct PlatformWindow(pub(super) Box<WindowData>);
 
+fn logical_to_physical(value: f32, dpi: u32) -> i32 {
+    (value * dpi as f32 / USER_DEFAULT_SCREEN_DPI as f32).round() as i32
+}
+
+fn physical_to_logical(value: i32, dpi: u32) -> f32 {
+    value as f32 * USER_DEFAULT_SCREEN_DPI as f32 / dpi.max(1) as f32
+}
+
 fn calculate_window_rect(
     builder: &WindowBuilder,
     monitor_rect: &RECT,
@@ -55,12 +63,12 @@ fn calculate_window_rect(
     let mut position_set = false;
     let mut x = 0;
     let mut y = 0;
-    let mut width = (builder.size.width as i32 * dpi as i32) / USER_DEFAULT_SCREEN_DPI as i32;
-    let mut height = (builder.size.height as i32 * dpi as i32) / USER_DEFAULT_SCREEN_DPI as i32;
+    let mut width = logical_to_physical(builder.size.width, dpi);
+    let mut height = logical_to_physical(builder.size.height, dpi);
     if let Some(position) = builder.position {
         position_set = true;
-        x = monitor_rect.left + (position.x as i32 * dpi as i32) / USER_DEFAULT_SCREEN_DPI as i32;
-        y = monitor_rect.top + (position.y as i32 * dpi as i32) / USER_DEFAULT_SCREEN_DPI as i32;
+        x = monitor_rect.left + logical_to_physical(position.x, dpi);
+        y = monitor_rect.top + logical_to_physical(position.y, dpi);
     }
     if builder.should_fullscreen {
         position_set = true;
@@ -74,8 +82,8 @@ fn calculate_window_rect(
         y = monitor_rect.top + ((monitor_rect.bottom - monitor_rect.top) - height) / 2;
     } else if !position_set && builder.monitor.is_some() {
         position_set = true;
-        x = monitor_rect.left + (64 * dpi as i32) / USER_DEFAULT_SCREEN_DPI as i32;
-        y = monitor_rect.top + (64 * dpi as i32) / USER_DEFAULT_SCREEN_DPI as i32;
+        x = monitor_rect.left + logical_to_physical(64.0, dpi);
+        y = monitor_rect.top + logical_to_physical(64.0, dpi);
     }
     let mut rect = RECT {
         left: x,
@@ -86,6 +94,22 @@ fn calculate_window_rect(
     // SAFETY: rect is valid and style is a supported window style.
     unsafe { AdjustWindowRectExForDpi(&mut rect, style, FALSE, 0, dpi) };
     (rect, position_set)
+}
+
+impl WindowData {
+    fn client_rect(&self, size: LogicalSize) -> RECT {
+        let mut rect = RECT {
+            left: 0,
+            top: 0,
+            right: logical_to_physical(size.width, self.dpi),
+            bottom: logical_to_physical(size.height, self.dpi),
+        };
+        unsafe {
+            let style = GetWindowLongPtrW(self.hwnd, GWL_STYLE) as u32;
+            AdjustWindowRectExForDpi(&mut rect, style, FALSE, 0, self.dpi);
+        }
+        rect
+    }
 }
 
 impl PlatformWindow {
@@ -276,17 +300,17 @@ impl crate::WindowInterface for PlatformWindow {
         let mut rect = RECT::default();
         unsafe { GetWindowRect(self.0.hwnd, &mut rect) };
         LogicalPoint::new(
-            (rect.left * USER_DEFAULT_SCREEN_DPI as i32 / self.0.dpi as i32) as f32,
-            (rect.top * USER_DEFAULT_SCREEN_DPI as i32 / self.0.dpi as i32) as f32,
+            physical_to_logical(rect.left, self.0.dpi),
+            physical_to_logical(rect.top, self.0.dpi),
         )
     }
 
     fn size(&self) -> LogicalSize {
         let mut rect = RECT::default();
-        unsafe { GetWindowRect(self.0.hwnd, &mut rect) };
+        unsafe { GetClientRect(self.0.hwnd, &mut rect) };
         LogicalSize::new(
-            ((rect.right - rect.left) * USER_DEFAULT_SCREEN_DPI as i32 / self.0.dpi as i32) as f32,
-            ((rect.bottom - rect.top) * USER_DEFAULT_SCREEN_DPI as i32 / self.0.dpi as i32) as f32,
+            physical_to_logical(rect.right - rect.left, self.0.dpi),
+            physical_to_logical(rect.bottom - rect.top, self.0.dpi),
         )
     }
 
@@ -295,8 +319,8 @@ impl crate::WindowInterface for PlatformWindow {
             SetWindowPos(
                 self.0.hwnd,
                 null_mut(),
-                point.x as i32 * self.0.dpi as i32 / USER_DEFAULT_SCREEN_DPI as i32,
-                point.y as i32 * self.0.dpi as i32 / USER_DEFAULT_SCREEN_DPI as i32,
+                logical_to_physical(point.x, self.0.dpi),
+                logical_to_physical(point.y, self.0.dpi),
                 0,
                 0,
                 SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
@@ -305,15 +329,16 @@ impl crate::WindowInterface for PlatformWindow {
     }
 
     fn set_size(&mut self, size: LogicalSize) {
+        let rect = self.0.client_rect(size);
         unsafe {
             SetWindowPos(
                 self.0.hwnd,
                 null_mut(),
                 0,
                 0,
-                size.width as i32 * self.0.dpi as i32 / USER_DEFAULT_SCREEN_DPI as i32,
-                size.height as i32 * self.0.dpi as i32 / USER_DEFAULT_SCREEN_DPI as i32,
-                SWP_NOREPOSITION | SWP_NOZORDER | SWP_NOACTIVATE,
+                rect.right - rect.left,
+                rect.bottom - rect.top,
+                SWP_NOREPOSITION | SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOMOVE,
             )
         };
     }
@@ -461,8 +486,8 @@ unsafe extern "system" fn window_proc(
             send_event(crate::Event::Window(
                 _self.window_id,
                 WindowEvent::Move(LogicalPoint::new(
-                    (x * USER_DEFAULT_SCREEN_DPI as i32 / _self.dpi as i32) as f32,
-                    (y * USER_DEFAULT_SCREEN_DPI as i32 / _self.dpi as i32) as f32,
+                    physical_to_logical(x, _self.dpi),
+                    physical_to_logical(y, _self.dpi),
                 )),
             ));
             0
@@ -481,8 +506,8 @@ unsafe extern "system" fn window_proc(
             send_event(crate::Event::Window(
                 id,
                 WindowEvent::Resize(LogicalSize::new(
-                    (width * USER_DEFAULT_SCREEN_DPI as i32 / dpi as i32) as f32,
-                    (height * USER_DEFAULT_SCREEN_DPI as i32 / dpi as i32) as f32,
+                    physical_to_logical(width, dpi),
+                    physical_to_logical(height, dpi),
                 )),
             ));
             0
@@ -515,14 +540,11 @@ unsafe extern "system" fn window_proc(
         }
         WM_GETMINMAXINFO => {
             if let Some(min_size) = _self.min_size {
-                let min_width =
-                    min_size.width as i32 * _self.dpi as i32 / USER_DEFAULT_SCREEN_DPI as i32;
-                let min_height =
-                    min_size.height as i32 * _self.dpi as i32 / USER_DEFAULT_SCREEN_DPI as i32;
+                let rect = _self.client_rect(min_size);
                 unsafe {
                     let minmax_info: *mut MINMAXINFO = l_param as *mut MINMAXINFO;
-                    (*minmax_info).ptMinTrackSize.x = min_width;
-                    (*minmax_info).ptMinTrackSize.y = min_height;
+                    (*minmax_info).ptMinTrackSize.x = rect.right - rect.left;
+                    (*minmax_info).ptMinTrackSize.y = rect.bottom - rect.top;
                 }
             }
             0
@@ -596,4 +618,18 @@ pub(crate) fn config_dir() -> PathBuf {
 #[cfg(feature = "menu")]
 pub(super) fn is_app_window(window: HWND) -> bool {
     !window.is_null() && unsafe { GetWindowLong(window, -4) } == window_proc as *const () as isize
+}
+
+#[cfg(test)]
+mod dpi_tests {
+    use super::*;
+
+    #[test]
+    fn dpi_conversion_preserves_fractional_logical_coordinates() {
+        assert!((physical_to_logical(101, 144) - 67.333_336).abs() < 0.000_01);
+        assert_eq!(physical_to_logical(-3, 192), -1.5);
+        assert_eq!(logical_to_physical(1.5, 192), 3);
+        assert_eq!(logical_to_physical(-1.5, 192), -3);
+        assert_eq!(logical_to_physical(1.5, 144), 2);
+    }
 }
