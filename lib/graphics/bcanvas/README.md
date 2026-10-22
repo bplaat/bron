@@ -33,7 +33,8 @@ event_loop.run(move |event| {
 ```
 
 Drawing state resets each frame. Drawing after the window closes returns `false`.
-Images and IME text editing are not supported.
+For animation, call `canvas.request_animation_frame()` after drawing. Images and IME
+text editing are not supported.
 
 ## Canvas 2D API
 
@@ -54,19 +55,15 @@ method names in snake_case, with getter/setter pairs such as `fill_style()` /
   exceptions. `round_rect` preserves winding when width or height is negative.
 - `save()` / `restore()` do not include the current path.
 
-## Interaction
+## Input
 
-The window delivers keyboard, pointer, scroll, focus and file drop events of the canvas
-as `WindowEvent`s, the canvas only draws. Set the cursor over it with
-`window.set_cursor(CursorIcon::Pointer)`, see the bwindow README.
+Keyboard, pointer and file drop events over the canvas arrive as `WindowEvent`s of its
+window, see [bwindow](../../ui/bwindow).
 
 ## Android
 
-Frames draw directly into the window surface from the Rust main thread with a hardware
-accelerated `android.graphics.Canvas`, through JNI calls with cached method IDs and reused
-paints, and are scheduled with the display choreographer. Frames cover the whole window, also
-under the system bars, see the bwindow safe area. `clear_rect` reveals the window background
-color. `OffscreenCanvas` draws into an Android bitmap.
+The canvas covers the whole window, also under the system bars, so keep content inside
+`window.safe_area()`. `clear_rect` reveals the window background color.
 
 ## Offscreen drawing
 

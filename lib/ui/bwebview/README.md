@@ -1,9 +1,8 @@
 # Bassie Webview Rust library
 
 A cross-platform webview library for Rust using WKWebView on macOS and iOS, WebView2 on
-Windows, WebKitGTK on Linux, and the system WebView on Android. Windows and the main event loop
-are provided by
-[bwindow](../bwindow).
+Windows, WebKitGTK on Linux, and the system WebView on Android. Windows and the main event
+loop are provided by [bwindow](../bwindow).
 
 ## Getting Started
 
