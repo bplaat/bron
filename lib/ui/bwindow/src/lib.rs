@@ -51,7 +51,6 @@ pub mod ffi {
     pub use crate::platforms::macos::file_drop::{perform_file_drop, register_dragged_types};
     #[cfg(target_os = "macos")]
     pub use crate::platforms::macos::input::*;
-    pub use crate::platforms::native_headers::*;
     #[cfg(windows)]
     pub use crate::platforms::windows::input::*;
 }

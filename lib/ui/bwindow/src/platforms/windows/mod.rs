@@ -9,7 +9,6 @@ pub(crate) use crate::platforms::windows::dialog::{PlatformFileDialog, PlatformM
 pub(crate) use crate::platforms::windows::event_loop::{
     PlatformEventLoop, PlatformEventLoopProxy, PlatformMonitor,
 };
-pub(crate) use crate::platforms::windows::headers as native_headers;
 pub(crate) use crate::platforms::windows::window::{
     PlatformWindow, config_dir as windows_config_dir, post_content_redraw,
 };

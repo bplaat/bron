@@ -15,21 +15,13 @@ use objc2::runtime::AnyObject as Object;
 use objc2::{Encode, Encoding, class, msg_send};
 
 #[link(name = "Foundation", kind = "framework")]
-unsafe extern "C" {
-    pub static __CFConstantStringClassReference: Object;
-    pub static NSKeyValueChangeNewKey: *const Object;
-}
+unsafe extern "C" {}
 
 #[derive(Clone, Copy)]
 #[repr(C)]
-pub struct CGPoint {
-    pub x: f64,
-    pub y: f64,
-}
-impl CGPoint {
-    pub const fn new(x: f64, y: f64) -> Self {
-        Self { x, y }
-    }
+pub(crate) struct CGPoint {
+    pub(crate) x: f64,
+    pub(crate) y: f64,
 }
 unsafe impl Encode for CGPoint {
     const ENCODING: Encoding = Encoding::Struct("CGPoint", &[f64::ENCODING, f64::ENCODING]);
@@ -37,12 +29,12 @@ unsafe impl Encode for CGPoint {
 
 #[derive(Clone, Copy)]
 #[repr(C)]
-pub struct CGSize {
-    pub width: f64,
-    pub height: f64,
+pub(crate) struct CGSize {
+    pub(crate) width: f64,
+    pub(crate) height: f64,
 }
 impl CGSize {
-    pub const fn new(width: f64, height: f64) -> Self {
+    pub(crate) const fn new(width: f64, height: f64) -> Self {
         Self { width, height }
     }
 }
@@ -52,14 +44,9 @@ unsafe impl Encode for CGSize {
 
 #[derive(Clone, Copy)]
 #[repr(C)]
-pub struct CGRect {
-    pub origin: CGPoint,
-    pub size: CGSize,
-}
-impl CGRect {
-    pub const fn new(origin: CGPoint, size: CGSize) -> Self {
-        Self { origin, size }
-    }
+pub(crate) struct CGRect {
+    pub(crate) origin: CGPoint,
+    pub(crate) size: CGSize,
 }
 unsafe impl Encode for CGRect {
     const ENCODING: Encoding = Encoding::Struct("CGRect", &[CGPoint::ENCODING, CGSize::ENCODING]);
@@ -67,11 +54,11 @@ unsafe impl Encode for CGRect {
 
 #[derive(Clone, Copy)]
 #[repr(C)]
-pub struct UIEdgeInsets {
-    pub top: f64,
-    pub left: f64,
-    pub bottom: f64,
-    pub right: f64,
+pub(crate) struct UIEdgeInsets {
+    pub(crate) top: f64,
+    pub(crate) left: f64,
+    pub(crate) bottom: f64,
+    pub(crate) right: f64,
 }
 unsafe impl Encode for UIEdgeInsets {
     const ENCODING: Encoding = Encoding::Struct(
@@ -80,15 +67,10 @@ unsafe impl Encode for UIEdgeInsets {
     );
 }
 
-pub const NS_UTF8_STRING_ENCODING: u64 = 4;
-
-pub const NS_KEY_VALUE_OBSERVING_OPTION_NEW: u64 = 0x1;
-
-pub const UI_VIEW_AUTORESIZING_FLEXIBLE_WIDTH: u64 = 1 << 1;
-pub const UI_VIEW_AUTORESIZING_FLEXIBLE_HEIGHT: u64 = 1 << 4;
+pub(crate) const NS_UTF8_STRING_ENCODING: u64 = 4;
 
 #[repr(transparent)]
-pub struct NSString(Retained<Object>);
+pub(crate) struct NSString(Retained<Object>);
 
 unsafe impl Encode for NSString {
     const ENCODING: Encoding = Encoding::Object;
@@ -100,7 +82,7 @@ unsafe impl Encode for NSString {
 }
 
 impl NSString {
-    pub fn new(str: impl AsRef<str>) -> Self {
+    pub(crate) fn new(str: impl AsRef<str>) -> Self {
         let str = str.as_ref();
         unsafe {
             let ns_string: Allocated<Object> = msg_send![class!(NSString), alloc];
@@ -134,71 +116,3 @@ impl Display for NSString {
         })
     }
 }
-
-// CFConstString mirrors the layout of Apple's __CFConstantString (CFRuntimeBase + data + len).
-// Statics of this type placed in __DATA,__cfstring are recognised by dyld as NSString literals,
-// equivalent to Clang's @"..." syntax. The ISA is fixed up at load time via
-// __CFConstantStringClassReference (provided by CoreFoundation, transitively linked via Foundation).
-// cfinfo 0x07C8 = ASCII, immutable, not inline, not freed, has NUL terminator.
-#[repr(C)]
-pub struct CFConstString {
-    pub isa: *const c_void,
-    pub cfinfo: u32,
-    #[cfg(target_pointer_width = "64")]
-    pub _rc: u32,
-    pub data: *const u8,
-    pub len: usize,
-}
-unsafe impl Send for CFConstString {}
-unsafe impl Sync for CFConstString {}
-
-// Creates a zero-cost NSString literal equivalent to Clang's @"..." syntax.
-// The string must be ASCII with no interior NUL bytes; this is checked at compile time.
-// Returns *mut Object pointing to a static CFConstString in __DATA,__cfstring.
-// NOTE: Do not call inside closures or trait methods - rustc may split the static
-// definition into a separate CGU with internal linkage, making it invisible to the
-// linker. Hoist the call to an ordinary free function instead (known rustc bug:
-// madsmtm/objc2#258).
-/// Internal native string literal.
-#[doc(hidden)]
-#[macro_export]
-macro_rules! ns_string {
-    ($s:expr) => {{
-        const INPUT: &str = $s;
-        const BYTES: &[u8] = INPUT.as_bytes();
-        const _: () = {
-            let mut i = 0usize;
-            while i < BYTES.len() {
-                if !BYTES[i].is_ascii() || BYTES[i] == b'\0' {
-                    panic!("ns_string! only supports ASCII strings without NUL bytes");
-                }
-                i += 1;
-            }
-        };
-        #[unsafe(link_section = "__TEXT,__cstring,cstring_literals")]
-        static DATA: [u8; BYTES.len() + 1] = {
-            let mut arr = [0u8; BYTES.len() + 1];
-            let mut i = 0usize;
-            while i < BYTES.len() {
-                arr[i] = BYTES[i];
-                i += 1;
-            }
-            arr
-        };
-        #[unsafe(link_section = "__DATA,__cfstring")]
-        static CFSTRING: $crate::ffi::CFConstString = unsafe {
-            $crate::ffi::CFConstString {
-                isa: &$crate::ffi::__CFConstantStringClassReference
-                    as *const objc2::runtime::AnyObject
-                    as *const ::std::ffi::c_void,
-                cfinfo: 0x07C8,
-                #[cfg(target_pointer_width = "64")]
-                _rc: 0,
-                data: DATA.as_ptr(),
-                len: BYTES.len(),
-            }
-        };
-        &CFSTRING as *const $crate::ffi::CFConstString as *mut objc2::runtime::AnyObject
-    }};
-}
-pub use ns_string;

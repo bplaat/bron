@@ -7,9 +7,7 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-// Shadow the plain Core Graphics geometry from the headers with the Objective-C encodable one.
-use bwindow::ffi::CGRect;
-use bwindow::ffi::*;
+use bwindow::ffi::ios_touch_event;
 use bwindow::{ButtonState, NativeWindowHandle, WindowAttachment, WindowEvent, WindowEventSender};
 use objc2::rc::{Allocated, Retained};
 use objc2::runtime::{AnyObject as Object, Bool};
@@ -20,6 +18,8 @@ use super::headers::*;
 use crate::CanvasRenderingContext2d;
 
 const UI_VIEW_CONTENT_MODE_REDRAW: i64 = 3;
+const UI_VIEW_AUTORESIZING_FLEXIBLE_WIDTH: u64 = 1 << 1;
+const UI_VIEW_AUTORESIZING_FLEXIBLE_HEIGHT: u64 = 1 << 4;
 
 #[link(name = "Foundation", kind = "framework")]
 unsafe extern "C" {

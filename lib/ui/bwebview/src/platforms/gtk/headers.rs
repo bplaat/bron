@@ -8,7 +8,131 @@
 
 use std::ffi::{c_char, c_void};
 
-pub(crate) use bwindow::ffi::*;
+// MARK: GTK
+#[repr(C)]
+pub(crate) struct GError([u8; 0]);
+#[repr(C)]
+pub(crate) struct GVariantType([u8; 0]);
+#[repr(C)]
+pub(crate) struct GdkDisplay([u8; 0]);
+#[repr(C)]
+pub(crate) struct GInputStream([u8; 0]);
+#[repr(C)]
+pub(crate) struct GObject([u8; 0]);
+#[repr(C)]
+pub(crate) struct GSimpleAction([u8; 0]);
+#[repr(C)]
+pub(crate) struct GVariant([u8; 0]);
+pub(crate) const G_CONNECT_DEFAULT: i32 = 0;
+#[repr(C)]
+pub(crate) struct GdkDragContext([u8; 0]);
+#[repr(C)]
+pub(crate) struct GdkRGBA {
+    pub(crate) red: f64,
+    pub(crate) green: f64,
+    pub(crate) blue: f64,
+    pub(crate) alpha: f64,
+}
+#[repr(C)]
+pub(crate) struct GtkSelectionData([u8; 0]);
+#[repr(C)]
+pub(crate) struct GtkWidget([u8; 0]);
+#[repr(C)]
+pub(crate) struct GtkWindow([u8; 0]);
+
+unsafe extern "C" {
+    pub(crate) fn g_action_get_name(action: *mut GSimpleAction) -> *const c_char;
+    pub(crate) fn g_action_map_add_action(map: *mut c_void, action: *mut GSimpleAction);
+    pub(crate) fn g_action_map_lookup_action(
+        map: *mut c_void,
+        name: *const c_char,
+    ) -> *mut GSimpleAction;
+    pub(crate) fn g_input_stream_read_all(
+        stream: *mut GInputStream,
+        buffer: *mut c_void,
+        count: usize,
+        bytes_read: *mut usize,
+        cancellable: *mut c_void,
+        error: *mut *mut GError,
+    ) -> bool;
+    pub(crate) fn g_memory_input_stream_new_from_data(
+        data: *const c_void,
+        len: usize,
+        destroy: *const c_void,
+    ) -> *mut GInputStream;
+    pub(crate) fn g_object_new(
+        object_type: *mut c_void,
+        first_property_name: *const c_char,
+        ...
+    ) -> *mut GObject;
+    pub(crate) fn g_object_ref(object: *mut GObject) -> *mut GObject;
+    pub(crate) fn g_object_unref(object: *mut GObject);
+    pub(crate) fn g_signal_connect_data(
+        instance: *mut GObject,
+        detailed_signal: *const c_char,
+        c_handler: *const c_void,
+        data: *const c_void,
+        destroy_data: *const c_void,
+        connect_flags: i32,
+    );
+    pub(crate) fn g_signal_connect_object(
+        instance: *mut GObject,
+        detailed_signal: *const c_char,
+        handler: *const c_void,
+        object: *mut GObject,
+        flags: i32,
+    );
+    pub(crate) fn g_signal_handlers_disconnect_matched(
+        instance: *mut GObject,
+        mask: u32,
+        signal_id: u32,
+        detail: u32,
+        closure: *mut c_void,
+        func: *mut c_void,
+        data: *mut c_void,
+    ) -> u32;
+    pub(crate) fn g_signal_lookup(name: *const c_char, type_: usize) -> u32;
+    pub(crate) fn g_simple_action_group_new() -> *mut c_void;
+    pub(crate) fn g_simple_action_new(
+        name: *const c_char,
+        parameter_type: *const GVariantType,
+    ) -> *mut GSimpleAction;
+    pub(crate) fn g_simple_action_set_enabled(action: *mut GSimpleAction, enabled: i32);
+    pub(crate) fn g_type_from_name(name: *const c_char) -> usize;
+    pub(crate) fn g_type_check_instance_is_a(instance: *mut c_void, type_: usize) -> i32;
+    pub(crate) fn gdk_display_get_default() -> *mut GdkDisplay;
+    pub(crate) fn gtk_container_add(container: *mut GtkWidget, widget: *mut GtkWidget);
+    pub(crate) fn gtk_drag_finish(
+        context: *mut GdkDragContext,
+        success: i32,
+        delete: i32,
+        time: u32,
+    );
+    pub(crate) fn gtk_show_uri_on_window(
+        parent: *mut GtkWindow,
+        uri: *const c_char,
+        timestamp: u32,
+        error: *mut *mut GError,
+    );
+    pub(crate) fn gtk_widget_destroy(widget: *mut GtkWidget);
+    pub(crate) fn gtk_widget_get_action_group(
+        widget: *mut GtkWidget,
+        prefix: *const c_char,
+    ) -> *mut c_void;
+    pub(crate) fn gtk_widget_hide(widget: *mut GtkWidget);
+    pub(crate) fn gtk_widget_insert_action_group(
+        widget: *mut GtkWidget,
+        prefix: *const c_char,
+        group: *mut c_void,
+    );
+    pub(crate) fn gtk_widget_show_all(window: *mut GtkWidget);
+    pub(crate) fn gtk_widget_show(widget: *mut GtkWidget);
+}
+
+pub(crate) unsafe fn gdk_display_is_wayland(display: *mut GdkDisplay) -> bool {
+    let type_ = unsafe { g_type_from_name(c"GdkWaylandDisplay".as_ptr()) };
+    type_ != 0 && unsafe { g_type_check_instance_is_a(display.cast(), type_) != 0 }
+}
 
 // MARK: Soup
 #[repr(C)]

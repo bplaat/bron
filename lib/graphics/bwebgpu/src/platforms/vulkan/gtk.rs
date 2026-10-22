@@ -75,7 +75,7 @@ impl Drop for Surface {
     fn drop(&mut self) {
         unsafe {
             if !self.startup_clock.is_null() {
-                bwindow::ffi::g_signal_handlers_disconnect_matched(
+                vk::g_signal_handlers_disconnect_matched(
                     self.startup_clock.cast(),
                     16, // G_SIGNAL_MATCH_DATA
                     0,
@@ -84,14 +84,14 @@ impl Drop for Surface {
                     ptr::null_mut(),
                     Rc::as_ptr(&self.redraw) as *mut c_void,
                 );
-                bwindow::ffi::g_object_unref(self.startup_clock.cast());
+                vk::g_object_unref(self.startup_clock.cast());
             }
             let window = gtk_widget_get_window(self.widget);
             if !window.is_null() {
                 vk::gdk_window_set_invalidate_handler(window, None);
                 vk::g_object_set_data(window, c"bplaat-bwebgpu-redraw".as_ptr(), ptr::null_mut());
             }
-            bwindow::ffi::g_signal_handlers_disconnect_matched(
+            vk::g_signal_handlers_disconnect_matched(
                 self.widget.cast(),
                 16, // G_SIGNAL_MATCH_DATA
                 0,
@@ -263,8 +263,8 @@ impl Surface {
             // can merge Vulkan FIFO timestamps and cause a fatal protocol error.
             let startup_clock = if wayland {
                 let clock = vk::gtk_widget_get_frame_clock(parent);
-                bwindow::ffi::g_object_ref(clock.cast());
-                bwindow::ffi::g_signal_connect_data(
+                vk::g_object_ref(clock.cast());
+                vk::g_signal_connect_data(
                     clock.cast(),
                     c"after-paint".as_ptr(),
                     surface_after_paint as *const c_void,
@@ -288,13 +288,13 @@ impl Surface {
             if !pending.is_null() {
                 vk::cairo_region_destroy(pending);
             }
-            bwindow::ffi::g_signal_connect_data(
+            vk::g_signal_connect_data(
                 widget.cast(),
                 c"draw".as_ptr(),
                 surface_draw as *const c_void,
                 Rc::as_ptr(&redraw).cast(),
                 ptr::null(),
-                bwindow::ffi::G_CONNECT_DEFAULT,
+                vk::G_CONNECT_DEFAULT,
             );
             Ok(Self {
                 owner: Rc::new(SurfaceOwner {

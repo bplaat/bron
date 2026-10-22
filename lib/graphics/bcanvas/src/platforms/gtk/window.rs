@@ -10,13 +10,51 @@ use std::ffi::{c_char, c_void};
 use std::ptr::{null, null_mut};
 use std::rc::Rc;
 
-use bwindow::ffi::*;
+#[cfg(feature = "file_drop")]
+use bwindow::ffi::gtk_connect_file_drop;
+use bwindow::ffi::gtk_input_event;
 use bwindow::{NativeWindowHandle, WindowAttachment, WindowEvent, WindowEventSender};
 
 use crate::CanvasRenderingContext2d;
 use crate::platforms::gtk::context::PlatformCanvasContext;
 
+#[repr(C)]
+struct GObject([u8; 0]);
+#[repr(C)]
+struct GtkWidget([u8; 0]);
+#[repr(C)]
+struct GdkEvent([u8; 0]);
+
+const G_CONNECT_DEFAULT: i32 = 0;
+
 unsafe extern "C" {
+    fn g_signal_connect_data(
+        instance: *mut GObject,
+        detailed_signal: *const c_char,
+        c_handler: *const c_void,
+        data: *const c_void,
+        destroy_data: *const c_void,
+        connect_flags: i32,
+    );
+    fn g_signal_handlers_disconnect_matched(
+        instance: *mut GObject,
+        mask: u32,
+        signal_id: u32,
+        detail: u32,
+        closure: *mut c_void,
+        func: *mut c_void,
+        data: *mut c_void,
+    ) -> u32;
+    fn g_object_unref(object: *mut GObject);
+    fn gdk_event_get_event_type(event: *const GdkEvent) -> i32;
+    fn gdk_event_get_keycode(event: *const GdkEvent, code: *mut u16) -> i32;
+    fn gtk_container_add(container: *mut GtkWidget, widget: *mut GtkWidget);
+    fn gtk_widget_show(widget: *mut GtkWidget);
+    fn gtk_widget_destroy(widget: *mut GtkWidget);
+    fn gtk_widget_get_window(widget: *mut GtkWidget) -> *mut c_void;
+    fn gtk_widget_get_allocated_width(widget: *mut GtkWidget) -> i32;
+    fn gtk_widget_get_allocated_height(widget: *mut GtkWidget) -> i32;
+    fn gtk_widget_get_scale_factor(widget: *mut GtkWidget) -> i32;
     fn gdk_window_get_display(window: *mut c_void) -> *mut c_void;
     fn gdk_cursor_new_from_name(display: *mut c_void, name: *const c_char) -> *mut GObject;
     fn gdk_window_set_cursor(window: *mut c_void, cursor: *mut GObject);
@@ -202,7 +240,7 @@ impl PlatformCanvas {
             }
             #[cfg(feature = "file_drop")]
             if attachment.allow_file_drop() {
-                gtk_connect_file_drop(widget, attachment.event_sender());
+                gtk_connect_file_drop(widget.cast(), attachment.event_sender());
             }
             gtk_container_add(window.cast(), widget);
             let redraw = Rc::downgrade(&data);
@@ -319,7 +357,7 @@ extern "C" fn input_event(
     if kind == 4 {
         unsafe { gtk_widget_grab_focus(widget) };
     }
-    if let Some(event) = unsafe { gtk_input_event(event, repeat) } {
+    if let Some(event) = unsafe { gtk_input_event(event.cast(), repeat) } {
         data.sender.send(event);
         return 1;
     }

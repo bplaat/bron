@@ -8,9 +8,7 @@ use std::cell::{Cell, RefCell};
 use std::ptr::{null, null_mut};
 use std::rc::Rc;
 
-use bwindow::ffi::*;
-// Prefer the bwindow Win32 types over the identical Direct2D header ones.
-use bwindow::ffi::{BOOL, HWND, RECT};
+use bwindow::ffi::{windows_key_event, windows_modifiers};
 use bwindow::{
     ButtonState, LogicalPoint, MouseButton, NativeWindowHandle, ScrollDelta, WindowAttachment,
     WindowEvent, WindowEventSender,
@@ -21,12 +19,19 @@ use crate::platforms::windows::com::ComPtr;
 use crate::platforms::windows::context::{DrawTarget, PlatformCanvasContext, Resources};
 use crate::platforms::windows::headers::*;
 
+const GWL_USERDATA: i32 = -21;
+const SWP_NOZORDER: u32 = 0x0004;
+const SWP_NOACTIVATE: u32 = 0x0010;
+const WM_NCCREATE: u32 = 0x0081;
 const CS_VREDRAW: u32 = 0x0001;
 const CS_HREDRAW: u32 = 0x0002;
 const WS_CHILD: u32 = 0x40000000;
 const WS_VISIBLE: u32 = 0x10000000;
 const WS_TABSTOP: u32 = 0x00010000;
+const WM_SIZE: u32 = 0x0005;
 const WM_SETFOCUS: u32 = 0x0007;
+const WM_PAINT: u32 = 0x000f;
+const WM_ERASEBKGND: u32 = 0x0014;
 const WM_KILLFOCUS: u32 = 0x0008;
 const WM_SETCURSOR: u32 = 0x0020;
 const WM_NCDESTROY: u32 = 0x0082;
@@ -45,6 +50,7 @@ const WM_MOUSEWHEEL: u32 = 0x020a;
 const WM_XBUTTONDOWN: u32 = 0x020b;
 const WM_XBUTTONUP: u32 = 0x020c;
 const WM_MOUSEHWHEEL: u32 = 0x020e;
+const WM_DROPFILES: u32 = 0x0233;
 const WM_MOUSELEAVE: u32 = 0x02a3;
 const HTCLIENT: u16 = 1;
 const TME_LEAVE: u32 = 2;
@@ -52,32 +58,16 @@ const IDC_ARROW: *const u16 = 32512usize as *const u16;
 const IDC_HAND: *const u16 = 32649usize as *const u16;
 const IDC_APPSTARTING: *const u16 = 32650usize as *const u16;
 
-#[repr(C)]
-#[derive(Default)]
-#[allow(non_snake_case, clippy::upper_case_acronyms)]
-struct TRACKMOUSEEVENT {
-    cbSize: u32,
-    dwFlags: u32,
-    hwndTrack: HWND,
-    dwHoverTime: u32,
-}
-
-const _: () = {
-    let wide = size_of::<HWND>() == 8;
-    assert!(size_of::<TRACKMOUSEEVENT>() == if wide { 24 } else { 16 });
+// "BCanvas" as a null terminated UTF-16 string.
+const CLASS_NAME: [u16; 8] = {
+    let mut name = [0; 8];
+    let mut i = 0;
+    while i < 7 {
+        name[i] = b"BCanvas"[i] as u16;
+        i += 1;
+    }
+    name
 };
-
-#[link(name = "user32")]
-unsafe extern "system" {
-    fn GetCursorPos(point: *mut POINT) -> BOOL;
-    fn WindowFromPoint(point: POINT) -> HWND;
-    fn SetCursor(cursor: HCURSOR) -> HCURSOR;
-    fn LoadCursorW(instance: HMODULE, name: *const u16) -> HCURSOR;
-    fn SetFocus(hwnd: HWND) -> HWND;
-    fn SetCapture(hwnd: HWND) -> HWND;
-    fn ReleaseCapture() -> BOOL;
-    fn TrackMouseEvent(event: *mut TRACKMOUSEEVENT) -> BOOL;
-}
 
 struct CanvasData {
     cursor: Cell<crate::CursorIcon>,
@@ -250,7 +240,7 @@ impl PlatformCanvas {
         unsafe {
             let instance = GetModuleHandleW(null());
             assert!(!instance.is_null(), "application module");
-            let class = wide!("BCanvas").as_ptr();
+            let class = CLASS_NAME.as_ptr();
             let mut existing = WNDCLASSEXW::default();
             if GetClassInfoExW(instance, class, &mut existing) == FALSE {
                 assert_ne!(
@@ -288,7 +278,7 @@ impl PlatformCanvas {
             let hwnd = CreateWindowExW(
                 0,
                 class,
-                wide!("").as_ptr(),
+                null(),
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP,
                 0,
                 0,

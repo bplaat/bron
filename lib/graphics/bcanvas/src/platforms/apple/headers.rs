@@ -50,6 +50,25 @@ pub(super) struct CGRect {
     pub(super) size: CGSize,
 }
 
+// Window views pass the geometry through Objective-C messages.
+#[cfg(feature = "window")]
+mod encode {
+    use objc2::{Encode, Encoding};
+
+    use super::{CGPoint, CGRect, CGSize};
+
+    unsafe impl Encode for CGPoint {
+        const ENCODING: Encoding = Encoding::Struct("CGPoint", &[f64::ENCODING, f64::ENCODING]);
+    }
+    unsafe impl Encode for CGSize {
+        const ENCODING: Encoding = Encoding::Struct("CGSize", &[f64::ENCODING, f64::ENCODING]);
+    }
+    unsafe impl Encode for CGRect {
+        const ENCODING: Encoding =
+            Encoding::Struct("CGRect", &[CGPoint::ENCODING, CGSize::ENCODING]);
+    }
+}
+
 #[cfg(all(feature = "window", target_os = "macos"))]
 #[link(name = "CoreVideo", kind = "framework")]
 unsafe extern "C" {

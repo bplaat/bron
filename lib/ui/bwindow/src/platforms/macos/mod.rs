@@ -9,7 +9,6 @@ pub(crate) use crate::platforms::macos::dialog::{PlatformFileDialog, PlatformMes
 pub(crate) use crate::platforms::macos::event_loop::{
     PlatformEventLoop, PlatformEventLoopProxy, PlatformMonitor,
 };
-pub(crate) use crate::platforms::macos::headers as native_headers;
 pub(crate) use crate::platforms::macos::window::PlatformWindow;
 
 #[cfg(feature = "dialog")]

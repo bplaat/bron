@@ -11,7 +11,9 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
 
-use bwindow::ffi::*;
+use bwindow::ffi::{macos_key_event, macos_pointer_event, macos_scroll_event};
+#[cfg(feature = "file_drop")]
+use bwindow::ffi::{perform_file_drop, register_dragged_types};
 use bwindow::{NativeWindowHandle, WindowAttachment, WindowEventSender};
 use objc2::rc::{Allocated, Retained, autoreleasepool};
 use objc2::runtime::{AnyObject as Object, Bool};
@@ -20,6 +22,10 @@ use objc2::{class, define_class, msg_send, sel};
 use super::context::{PlatformCanvasContext, TextStyleCache};
 use super::headers::*;
 use crate::CanvasRenderingContext2d;
+
+const NS_VIEW_WIDTH_SIZABLE: u64 = 2;
+const NS_VIEW_HEIGHT_SIZABLE: u64 = 16;
+const NS_DRAG_OPERATION_COPY: u64 = 1;
 
 #[derive(Clone, Copy)]
 struct Frame {
@@ -85,7 +91,7 @@ define_class!(
                     crate::CursorIcon::Default | crate::CursorIcon::Progress => msg_send![class!(NSCursor), arrowCursor],
                 }
             };
-            let bounds: NSRect = unsafe { msg_send![self, bounds] };
+            let bounds: CGRect = unsafe { msg_send![self, bounds] };
             let _: () = unsafe { msg_send![self, addCursorRect:bounds, cursor:cursor] };
         }
         #[unsafe(method(mouseDown:))]
@@ -173,7 +179,7 @@ define_class!(
         const fn _accepts_first_responder(&self) -> Bool { Bool::YES }
 
         #[unsafe(method(drawRect:))]
-        fn _draw_rect(&self, _: NSRect) { self.paint(); }
+        fn _draw_rect(&self, _: CGRect) { self.paint(); }
 
         #[unsafe(method(displayFrame:))]
         fn _display_frame(&self, _: *mut Object) {
@@ -246,8 +252,9 @@ impl CanvasView {
                 return;
             }
             let description: *mut Object = msg_send![screen, deviceDescription];
-            let key = NSString::new("NSScreenNumber");
-            let number: *mut Object = msg_send![description, objectForKey:&*key];
+            let key: *mut Object =
+                msg_send![class!(NSString), stringWithUTF8String:c"NSScreenNumber".as_ptr()];
+            let number: *mut Object = msg_send![description, objectForKey:key];
             if number.is_null() {
                 return;
             }
@@ -304,7 +311,7 @@ impl CanvasView {
             if context.is_null() {
                 return;
             }
-            let bounds: NSRect = msg_send![self, bounds];
+            let bounds: CGRect = msg_send![self, bounds];
             let window: *mut Object = msg_send![self, window];
             let scale: f64 = msg_send![window, backingScaleFactor];
             state.painting.set(true);
@@ -338,7 +345,7 @@ impl PlatformCanvas {
         unsafe {
             let window = window.cast::<Object>();
             let content: *mut Object = msg_send![window, contentView];
-            let bounds: NSRect = msg_send![content, bounds];
+            let bounds: CGRect = msg_send![content, bounds];
             let signal = Arc::new(DisplayLinkSignal {
                 target: AtomicPtr::new(null_mut()),
                 posted: AtomicBool::new(false),

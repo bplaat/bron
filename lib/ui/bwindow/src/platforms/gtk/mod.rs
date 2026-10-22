@@ -9,7 +9,6 @@ pub(crate) use crate::platforms::gtk::dialog::{PlatformFileDialog, PlatformMessa
 pub(crate) use crate::platforms::gtk::event_loop::{
     PlatformEventLoop, PlatformEventLoopProxy, PlatformMonitor,
 };
-pub(crate) use crate::platforms::gtk::headers as native_headers;
 pub(crate) use crate::platforms::gtk::window::PlatformWindow;
 
 #[cfg(feature = "dialog")]

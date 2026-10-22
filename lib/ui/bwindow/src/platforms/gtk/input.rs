@@ -4,6 +4,8 @@
  * SPDX-License-Identifier: MIT
  */
 
+use std::ffi::c_void;
+
 use super::headers::*;
 use crate::{
     Key, KeyboardEvent, LogicalPoint, Modifiers, MouseButton, NamedKey, ScrollDelta, WindowEvent,
@@ -32,7 +34,8 @@ pub const fn gtk_modifiers(state: u32) -> Modifiers {
 ///
 /// # Safety
 /// `event` must be a live GdkEvent on the GTK UI thread.
-pub unsafe fn gtk_input_event(event: *const GdkEvent, repeat: bool) -> Option<WindowEvent> {
+pub unsafe fn gtk_input_event(event: *const c_void, repeat: bool) -> Option<WindowEvent> {
+    let event = event.cast::<GdkEvent>();
     let kind = unsafe { gdk_event_get_event_type(event) };
     let mut state = 0;
     unsafe { gdk_event_get_state(event, &mut state) };

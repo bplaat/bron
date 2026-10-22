@@ -7,6 +7,8 @@
 use std::ffi::c_void;
 use std::rc::Rc;
 
+use bwindow::ffi::windows_translate_accelerator;
+
 use super::callback::{self, CallbackHandle};
 use super::headers::*;
 use super::webview::WebviewData;
