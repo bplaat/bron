@@ -141,6 +141,26 @@ impl WebviewDelegate {
     }
 }
 
+pub(super) struct WebviewInit {
+    event_handler: Option<crate::EventHandler>,
+    should_load_url: Option<String>,
+    should_load_html: Option<String>,
+    #[cfg(feature = "custom_protocol")]
+    custom_protocols: Vec<crate::CustomProtocol>,
+}
+
+impl From<WebviewBuilder<'_>> for WebviewInit {
+    fn from(builder: WebviewBuilder<'_>) -> Self {
+        Self {
+            event_handler: builder.event_handler,
+            should_load_url: builder.should_load_url,
+            should_load_html: builder.should_load_html,
+            #[cfg(feature = "custom_protocol")]
+            custom_protocols: builder.custom_protocols,
+        }
+    }
+}
+
 pub(super) struct WebviewData {
     attachment: bwindow::WindowAttachment,
     closed: Rc<Cell<bool>>,
@@ -181,13 +201,28 @@ impl PlatformWebview {
         }))
     }
 
+    #[cfg(target_os = "ios")]
+    pub(super) fn is_ready(&self) -> bool {
+        self.0.attachment.is_ready()
+    }
+
+    #[cfg(target_os = "ios")]
+    pub(super) fn on_ready(&self, handler: impl FnOnce() + 'static) {
+        self.0.attachment.on_ready(handler);
+    }
+
     fn webview(&self) -> &Retained<Object> {
         self.0.webview.as_ref().expect("webview is not initialized")
     }
 }
 
 impl PlatformWebview {
-    pub(crate) fn init_webview(&mut self, mut builder: WebviewBuilder<'_>) {
+    #[cfg(target_os = "macos")]
+    pub(crate) fn init_webview(&mut self, builder: WebviewBuilder<'_>) {
+        self.initialize(builder.into());
+    }
+
+    pub(super) fn initialize(&mut self, mut builder: WebviewInit) {
         // Create WebviewDelegate instance (registers class lazily on first call)
         let delegate: Allocated<WebviewDelegate> =
             unsafe { msg_send![WebviewDelegate::class(), alloc] };
