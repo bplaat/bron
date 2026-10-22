@@ -52,6 +52,8 @@ pub(crate) fn bundle(args: &Args, target_dir: &str, manifest: &Manifest) {
         "UIDeviceFamily".into(),
         plist::Value::Array(vec![1.into(), 2.into()]),
     );
+    // Allow display frames above 60 Hz on ProMotion iPhones
+    info.insert("CADisableMinimumFrameDurationOnPhone".into(), true.into());
     info.insert(
         "UILaunchScreen".into(),
         plist::Value::Dictionary(plist::Dictionary::new()),
