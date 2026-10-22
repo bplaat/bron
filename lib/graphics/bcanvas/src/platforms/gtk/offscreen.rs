@@ -50,12 +50,18 @@ impl PlatformOffscreenCanvas {
         }
     }
 
-    pub(crate) fn begin_draw(&mut self) -> PlatformCanvasContext {
+    pub(crate) fn begin_draw(&mut self, scale: f32) -> PlatformCanvasContext {
         self.dirty = true;
-        unsafe { PlatformCanvasContext::new(self.context) }
+        unsafe {
+            cairo_save(self.context);
+            cairo_scale(self.context, f64::from(scale), f64::from(scale));
+            PlatformCanvasContext::new(self.context)
+        }
     }
 
-    pub(crate) const fn end_draw(&mut self) {}
+    pub(crate) fn end_draw(&mut self) {
+        unsafe { cairo_restore(self.context) };
+    }
 
     pub(crate) fn pixels(&mut self) -> &[u8] {
         if !self.dirty {

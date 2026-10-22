@@ -69,13 +69,13 @@ impl PlatformOffscreenCanvas {
         }
     }
 
-    pub(crate) fn begin_draw(&mut self) -> PlatformCanvasContext {
+    pub(crate) fn begin_draw(&mut self, scale: f32) -> PlatformCanvasContext {
         with_env(|env| {
             PlatformCanvasContext::new(
                 env,
                 &self.canvas,
                 self.resources.clone(),
-                Transform::IDENTITY,
+                Transform([scale, 0.0, 0.0, scale, 0.0, 0.0]),
                 Clear::Transparent,
             )
         })

@@ -340,7 +340,6 @@ impl ID2D1RenderTarget {
             ))
         }
     }
-    #[cfg(feature = "window")]
     pub(super) unsafe fn SetDpi(&self, x: f32, y: f32) {
         unsafe { ((*self.lpVtbl).SetDpi)(self as *const Self as *mut Self, x, y) }
     }

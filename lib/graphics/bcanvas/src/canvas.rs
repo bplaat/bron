@@ -90,6 +90,40 @@ mod tests {
     }
 
     #[test]
+    fn offscreen_canvas_scales_drawing_and_preserves_scale_across_frames() {
+        let mut canvas = super::OffscreenCanvas::with_scale_factor(4, 2, 2.625);
+        assert_eq!((canvas.width(), canvas.height()), (11, 6));
+        for _ in 0..2 {
+            canvas.draw(|context| {
+                assert_eq!((context.width(), context.height()), (4.0, 2.0));
+                assert_eq!(context.scale_factor(), 2.625);
+                context.clear_rect(0.0, 0.0, 4.0, 2.0);
+                context.scale(3.0, 3.0);
+                context.reset_transform();
+                context.set_transform(1.0, 0.0, 0.0, 1.0, 0.0, 0.0);
+                context.set_fill_style(Color::rgb(255, 0, 0));
+                context.fill_rect(0.0, 0.0, 2.0, 2.0);
+            });
+            let pixels = canvas.pixels();
+            // The interior spans five native pixels, not two logical pixels.
+            assert_eq!(&pixels[4 * 4..5 * 4], &[255, 0, 0, 255]);
+            assert_eq!(&pixels[7 * 4..8 * 4], &[0, 0, 0, 0]);
+        }
+    }
+
+    #[test]
+    fn offscreen_canvas_rejects_invalid_scale_factors() {
+        for scale in [0.0, -1.0, f32::NAN, f32::INFINITY] {
+            assert!(
+                std::panic::catch_unwind(|| {
+                    super::OffscreenCanvas::with_scale_factor(4, 2, scale);
+                })
+                .is_err()
+            );
+        }
+    }
+
+    #[test]
     fn offscreen_canvas_returns_straight_rgba_pixels() {
         let mut canvas = super::OffscreenCanvas::new(2, 1);
         canvas.draw(|context| {
@@ -399,11 +433,31 @@ pub struct OffscreenCanvas {
     platform: PlatformOffscreenCanvas,
     width: u32,
     height: u32,
+    scale_factor: f32,
+    logical_size: (u32, u32),
 }
 
 impl OffscreenCanvas {
     /// Create a transparent offscreen canvas with one logical pixel per output pixel.
     pub fn new(width: u32, height: u32) -> Self {
+        Self::with_scale_factor(width, height, 1.0)
+    }
+
+    /// Create a canvas with logical dimensions and a native pixel scale.
+    /// Bitmap dimensions are rounded up; drawing coordinates remain logical pixels.
+    pub fn with_scale_factor(width: u32, height: u32, scale_factor: f32) -> Self {
+        assert!(
+            scale_factor.is_finite() && scale_factor > 0.0,
+            "invalid canvas scale factor"
+        );
+        let logical_size = (width, height);
+        let width = (f64::from(width) * f64::from(scale_factor)).ceil();
+        let height = (f64::from(height) * f64::from(scale_factor)).ceil();
+        assert!(
+            width <= f64::from(i32::MAX) && height <= f64::from(i32::MAX),
+            "canvas dimensions are too large"
+        );
+        let (width, height) = (width as u32, height as u32);
         assert!(
             width > 0 && height > 0 && width <= i32::MAX as u32 && height <= i32::MAX as u32,
             "canvas dimensions must be nonzero and fit in i32"
@@ -417,7 +471,14 @@ impl OffscreenCanvas {
             platform: PlatformOffscreenCanvas::new(width, height, length),
             width,
             height,
+            scale_factor,
+            logical_size,
         }
+    }
+
+    /// Native pixels per logical pixel.
+    pub const fn scale_factor(&self) -> f32 {
+        self.scale_factor
     }
 
     /// Width in pixels.
@@ -437,9 +498,13 @@ impl OffscreenCanvas {
 
     /// Draw into the bitmap with the same API as a window canvas.
     pub fn draw(&mut self, draw: impl for<'frame> FnOnce(&mut CanvasRenderingContext2d<'frame>)) {
-        let platform = self.platform.begin_draw();
-        let mut context =
-            CanvasRenderingContext2d::new(platform, self.width as f32, self.height as f32, 1.0);
+        let platform = self.platform.begin_draw(self.scale_factor);
+        let mut context = CanvasRenderingContext2d::new(
+            platform,
+            self.logical_size.0 as f32,
+            self.logical_size.1 as f32,
+            self.scale_factor,
+        );
         draw(&mut context);
         drop(context);
         self.platform.end_draw();
