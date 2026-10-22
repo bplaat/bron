@@ -12,13 +12,6 @@ use std::sync::atomic::{AtomicU32, Ordering, fence};
 use super::headers::*;
 use super::webview::WebviewData;
 
-const IID_IUNKNOWN: GUID = GUID {
-    data1: 0,
-    data2: 0,
-    data3: 0,
-    data4: [0xc0, 0, 0, 0, 0, 0, 0, 0x46],
-};
-
 // All WebView2 handler interfaces have the same COM prefix. WebView2 invokes
 // these callbacks on the creating STA; Rust state stays on that thread.
 #[repr(C)]

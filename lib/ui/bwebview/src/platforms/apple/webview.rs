@@ -142,7 +142,7 @@ impl WebviewDelegate {
 }
 
 pub(super) struct WebviewData {
-    attachment: crate::WindowAttachment,
+    attachment: bwindow::WindowAttachment,
     closed: Rc<Cell<bool>>,
     pub(super) window: Retained<Object>,
     pub(super) background_color: Option<u32>,
@@ -155,16 +155,16 @@ pub(super) struct WebviewData {
 pub(crate) struct PlatformWebview(pub(super) Box<WebviewData>);
 
 impl PlatformWebview {
-    pub(crate) fn new(attachment: crate::WindowAttachment) -> Self {
+    pub(crate) fn new(attachment: bwindow::WindowAttachment) -> Self {
         #[cfg(target_os = "macos")]
-        let Some(crate::NativeWindowHandle::AppKit(window)) =
+        let Some(bwindow::NativeWindowHandle::AppKit(window)) =
             (unsafe { attachment.window_handle() })
         else {
             panic!("invalid native window handle");
         };
         // On iOS the window handle is the root view that content is added to.
         #[cfg(target_os = "ios")]
-        let Some(crate::NativeWindowHandle::UIKit(window)) =
+        let Some(bwindow::NativeWindowHandle::UIKit(window)) =
             (unsafe { attachment.window_handle() })
         else {
             panic!("invalid native window handle");

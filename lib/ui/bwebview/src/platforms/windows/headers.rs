@@ -378,6 +378,12 @@ pub(crate) struct ICoreWebView2EnvironmentOptions {
     pub(crate) lpVtbl: *const c_void,
 }
 
+pub(crate) const IID_IUNKNOWN: GUID = GUID {
+    data1: 0,
+    data2: 0,
+    data3: 0,
+    data4: [0xc0, 0, 0, 0, 0, 0, 0, 0x46],
+};
 pub(crate) const IID_ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler: GUID = GUID {
     data1: 0x4e8a3389,
     data2: 0xc9d8,

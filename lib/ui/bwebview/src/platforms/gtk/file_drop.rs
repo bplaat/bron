@@ -8,11 +8,11 @@ use std::ffi::c_void;
 use std::path::PathBuf;
 use std::ptr::null;
 
+use bwindow::WindowEvent;
 use bwindow::ffi::gtk_dropped_paths;
 
 use super::headers::*;
 use super::webview::WebviewData;
-use crate::WindowEvent;
 
 /// The paths of the drag in progress, collected before the drop is confirmed
 #[derive(Default)]

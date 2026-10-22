@@ -4,7 +4,9 @@
  * SPDX-License-Identifier: MIT
  */
 
-use std::cell::{Cell, RefCell};
+use std::cell::Cell;
+#[cfg(feature = "file_drop")]
+use std::cell::RefCell;
 use std::ffi::c_void;
 use std::ptr::{null, null_mut};
 use std::rc::Rc;
@@ -20,7 +22,7 @@ use crate::CustomProtocol;
 use crate::{InjectionTime, WebviewBuilder, WebviewEvent};
 
 pub(super) struct WebviewData {
-    pub(super) attachment: crate::WindowAttachment,
+    pub(super) attachment: bwindow::WindowAttachment,
     handler: Option<crate::EventHandler>,
     closed: Cell<bool>,
     pub(super) hwnd: HWND,
@@ -43,8 +45,8 @@ pub(crate) struct PlatformWebview {
 }
 
 impl PlatformWebview {
-    pub(crate) fn new(attachment: crate::WindowAttachment) -> Self {
-        let Some(crate::NativeWindowHandle::Win32(window)) =
+    pub(crate) fn new(attachment: bwindow::WindowAttachment) -> Self {
+        let Some(bwindow::NativeWindowHandle::Win32(window)) =
             (unsafe { attachment.window_handle() })
         else {
             panic!("invalid native window handle");

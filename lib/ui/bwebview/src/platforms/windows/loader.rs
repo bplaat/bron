@@ -15,10 +15,7 @@ use std::path::PathBuf;
 use std::ptr::null_mut;
 
 use super::headers::{
-    ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler,
-    ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandlerVtbl,
-    ICoreWebView2EnvironmentOptions,
-    IID_ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler, *,
+    ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler, ICoreWebView2EnvironmentOptions, *,
 };
 
 const STABLE_RUNTIME_KEY: &str =
@@ -44,12 +41,6 @@ type CreateEnvironment = unsafe extern "system" fn(
 ) -> HRESULT;
 
 const INSTALLED_RUNTIME: i32 = 0;
-const IID_IUNKNOWN: GUID = GUID {
-    data1: 0,
-    data2: 0,
-    data3: 0,
-    data4: [0xc0, 0, 0, 0, 0, 0, 0, 0x46],
-};
 
 pub(super) const WEBVIEW2_RUNTIME_NOT_FOUND: HRESULT = hresult_from_win32(ERROR_FILE_NOT_FOUND);
 
