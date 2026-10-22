@@ -114,6 +114,127 @@ mod tests {
         assert_eq!((bitmap.width(), bitmap.height()), (2, 1));
         assert_eq!(bitmap.data(), &[0, 0, 0, 0, 1, 2, 3, 255]);
     }
+
+    #[test]
+    fn rounded_rectangles_preserve_winding_for_negative_dimensions() {
+        for (width, height) in [(24.0, 24.0), (-24.0, 24.0), (24.0, -24.0), (-24.0, -24.0)] {
+            let mut canvas = super::OffscreenCanvas::new(48, 48);
+            canvas.draw(|ctx| {
+                ctx.rect(2.0, 2.0, 44.0, 44.0);
+                ctx.round_rect(
+                    if width < 0.0 { 36.0 } else { 12.0 },
+                    if height < 0.0 { 36.0 } else { 12.0 },
+                    width,
+                    height,
+                    6.0,
+                );
+                ctx.fill();
+            });
+            let pixels = canvas.pixels();
+            let alpha = |x: usize, y: usize| pixels[(y * 48 + x) * 4 + 3];
+            assert_eq!(alpha(24, 24), if width * height < 0.0 { 0 } else { 255 });
+            assert_eq!(alpha(4, 4), 255);
+            assert_eq!(alpha(0, 0), 0);
+        }
+    }
+
+    #[test]
+    fn rounded_rectangle_clamps_radius_and_preserves_transform() {
+        let mut canvas = super::OffscreenCanvas::new(48, 32);
+        canvas.draw(|ctx| {
+            ctx.translate(8.0, 4.0);
+            ctx.round_rect(0.0, 0.0, 24.0, 24.0, 100.0);
+            ctx.fill();
+            ctx.fill_rect(32.0, 0.0, 4.0, 4.0);
+        });
+        let pixels = canvas.pixels();
+        let alpha = |x: usize, y: usize| pixels[(y * 48 + x) * 4 + 3];
+        assert_eq!(alpha(8, 4), 0);
+        assert_eq!(alpha(20, 16), 255);
+        assert_eq!(alpha(42, 6), 255);
+        assert_eq!(alpha(34, 2), 0);
+    }
+
+    #[test]
+    fn rounded_rectangle_leaves_current_point_at_its_origin() {
+        let mut canvas = super::OffscreenCanvas::new(40, 40);
+        canvas.draw(|ctx| {
+            ctx.round_rect(20.0, 20.0, 12.0, 12.0, 6.0);
+            ctx.line_to(20.0, 4.0);
+            ctx.line_to(4.0, 4.0);
+            ctx.close_path();
+            ctx.fill();
+        });
+        assert_eq!(canvas.pixels()[(16 * 40 + 18) * 4 + 3], 255);
+    }
+
+    #[test]
+    fn nonfinite_arguments_leave_path_and_transform_usable() {
+        for invalid in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            let mut canvas = super::OffscreenCanvas::new(8, 4);
+            canvas.draw(|ctx| {
+                ctx.rect(0.0, 0.0, 2.0, 2.0);
+                ctx.move_to(invalid, 0.0);
+                ctx.line_to(0.0, invalid);
+                ctx.rect(0.0, 0.0, invalid, 4.0);
+                ctx.round_rect(0.0, 0.0, 4.0, 4.0, invalid);
+                ctx.round_rect(invalid, 0.0, 4.0, 4.0, -1.0);
+                ctx.arc(0.0, 0.0, invalid, 0.0, 1.0, false);
+                ctx.arc(invalid, 0.0, -1.0, 0.0, 1.0, false);
+                ctx.ellipse(0.0, 0.0, invalid, 1.0);
+                ctx.ellipse(invalid, 0.0, -1.0, 1.0);
+                ctx.quadratic_curve_to(0.0, invalid, 1.0, 1.0);
+                ctx.bezier_curve_to(0.0, 0.0, 1.0, invalid, 2.0, 2.0);
+                ctx.translate(invalid, 0.0);
+                ctx.rotate(invalid);
+                ctx.scale(1.0, invalid);
+                ctx.set_transform(1.0, 0.0, 0.0, 1.0, invalid, 0.0);
+                ctx.fill();
+                ctx.fill_rect(0.0, 0.0, invalid, 4.0);
+                ctx.stroke_rect(invalid, 0.0, 4.0, 4.0);
+                ctx.clear_rect(0.0, 0.0, 8.0, invalid);
+                ctx.fill_text("ignored", invalid, 0.0);
+                ctx.fill_rect(6.0, 2.0, 2.0, 2.0);
+            });
+            let pixels = canvas.pixels();
+            for y in 0..4 {
+                for x in 0..8 {
+                    assert_eq!(
+                        pixels[(y * 8 + x) * 4 + 3],
+                        if (x < 2 && y < 2) || (x >= 6 && y >= 2) {
+                            255
+                        } else {
+                            0
+                        }
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "rounded rectangle radius must be nonnegative")]
+    fn rounded_rectangle_rejects_negative_radius() {
+        super::OffscreenCanvas::new(4, 4).draw(|ctx| ctx.round_rect(0.0, 0.0, 4.0, 4.0, -1.0));
+    }
+
+    #[test]
+    #[should_panic(expected = "arc radius must be nonnegative")]
+    fn arc_rejects_negative_radius() {
+        super::OffscreenCanvas::new(4, 4).draw(|ctx| ctx.arc(0.0, 0.0, -1.0, 0.0, 1.0, false));
+    }
+
+    #[test]
+    #[should_panic(expected = "ellipse radii must be nonnegative")]
+    fn ellipse_rejects_negative_horizontal_radius() {
+        super::OffscreenCanvas::new(4, 4).draw(|ctx| ctx.ellipse(0.0, 0.0, -1.0, 1.0));
+    }
+
+    #[test]
+    #[should_panic(expected = "ellipse radii must be nonnegative")]
+    fn ellipse_rejects_negative_vertical_radius() {
+        super::OffscreenCanvas::new(4, 4).draw(|ctx| ctx.ellipse(0.0, 0.0, 1.0, -1.0));
+    }
 }
 
 /// Canvas line cap style.
@@ -528,14 +649,23 @@ impl<'a> CanvasRenderingContext2d<'a> {
     }
     /// Clear a rectangle.
     pub fn clear_rect(&mut self, x: f32, y: f32, width: f32, height: f32) {
+        if ![x, y, width, height].iter().all(|v| v.is_finite()) {
+            return;
+        }
         self.platform.clear_rect(x, y, width, height);
     }
     /// Fill a rectangle.
     pub fn fill_rect(&mut self, x: f32, y: f32, width: f32, height: f32) {
+        if ![x, y, width, height].iter().all(|v| v.is_finite()) {
+            return;
+        }
         self.platform.fill_rect(&self.state, x, y, width, height);
     }
     /// Stroke a rectangle.
     pub fn stroke_rect(&mut self, x: f32, y: f32, width: f32, height: f32) {
+        if ![x, y, width, height].iter().all(|v| v.is_finite()) {
+            return;
+        }
         self.platform.stroke_rect(&self.state, x, y, width, height);
     }
     /// Begin a new path.
@@ -548,26 +678,98 @@ impl<'a> CanvasRenderingContext2d<'a> {
     }
     /// Move the current point.
     pub fn move_to(&mut self, x: f32, y: f32) {
+        if ![x, y].iter().all(|v| v.is_finite()) {
+            return;
+        }
         self.platform.move_to(x, y);
     }
     /// Add a line segment.
     pub fn line_to(&mut self, x: f32, y: f32) {
+        if ![x, y].iter().all(|v| v.is_finite()) {
+            return;
+        }
         self.platform.line_to(x, y);
     }
     /// Add a rectangle to the path.
     pub fn rect(&mut self, x: f32, y: f32, width: f32, height: f32) {
+        if ![x, y, width, height].iter().all(|v| v.is_finite()) {
+            return;
+        }
         self.platform.rect(x, y, width, height);
     }
     /// Add a rounded rectangle to the current path.
+    /// Negative dimensions reverse the corresponding axis. Non-finite arguments are ignored.
+    ///
+    /// # Panics
+    /// Panics if the radius is negative and all arguments are finite.
     pub fn round_rect(&mut self, x: f32, y: f32, width: f32, height: f32, radius: f32) {
-        self.platform.round_rect(x, y, width, height, radius);
+        if ![x, y, width, height, radius].iter().all(|v| v.is_finite()) {
+            return;
+        }
+        assert!(
+            radius >= 0.0,
+            "rounded rectangle radius must be nonnegative"
+        );
+        let radius = radius.min(width.abs() / 2.0).min(height.abs() / 2.0);
+        let rx = radius.copysign(width);
+        let ry = radius.copysign(height);
+        // Cubic approximation of a quarter circle, shared by every native backend.
+        let k = 4.0 / 3.0 * (std::f32::consts::FRAC_PI_2 / 4.0).tan();
+        let (right, bottom) = (x + width, y + height);
+        self.move_to(x + rx, y);
+        self.line_to(right - rx, y);
+        self.bezier_curve_to(
+            right - rx + k * rx,
+            y,
+            right,
+            y + ry - k * ry,
+            right,
+            y + ry,
+        );
+        self.line_to(right, bottom - ry);
+        self.bezier_curve_to(
+            right,
+            bottom - ry + k * ry,
+            right - rx + k * rx,
+            bottom,
+            right - rx,
+            bottom,
+        );
+        self.line_to(x + rx, bottom);
+        self.bezier_curve_to(
+            x + rx - k * rx,
+            bottom,
+            x,
+            bottom - ry + k * ry,
+            x,
+            bottom - ry,
+        );
+        self.line_to(x, y + ry);
+        self.bezier_curve_to(x, y + ry - k * ry, x + rx - k * rx, y, x + rx, y);
+        self.close_path();
+        self.move_to(x, y);
     }
     /// Add a complete, axis-aligned ellipse to the current path.
     /// Unlike browser Canvas 2D, this does not accept rotation or arc angles.
+    /// Non-finite arguments are ignored.
+    ///
+    /// # Panics
+    /// Panics if either radius is negative and all arguments are finite.
     pub fn ellipse(&mut self, x: f32, y: f32, radius_x: f32, radius_y: f32) {
+        if ![x, y, radius_x, radius_y].iter().all(|v| v.is_finite()) {
+            return;
+        }
+        assert!(
+            radius_x >= 0.0 && radius_y >= 0.0,
+            "ellipse radii must be nonnegative"
+        );
         self.platform.ellipse(x, y, radius_x, radius_y);
     }
     /// Add a circular arc, with angles in radians.
+    /// Non-finite arguments are ignored.
+    ///
+    /// # Panics
+    /// Panics if the radius is negative and all arguments are finite.
     pub fn arc(
         &mut self,
         x: f32,
@@ -577,15 +779,25 @@ impl<'a> CanvasRenderingContext2d<'a> {
         end: f32,
         counterclockwise: bool,
     ) {
+        if ![x, y, radius, start, end].iter().all(|v| v.is_finite()) {
+            return;
+        }
+        assert!(radius >= 0.0, "arc radius must be nonnegative");
         self.platform
             .arc(x, y, radius, start, end, counterclockwise);
     }
     /// Add a quadratic Bezier segment.
     pub fn quadratic_curve_to(&mut self, cpx: f32, cpy: f32, x: f32, y: f32) {
+        if ![cpx, cpy, x, y].iter().all(|v| v.is_finite()) {
+            return;
+        }
         self.platform.quadratic_curve_to(cpx, cpy, x, y);
     }
     /// Add a cubic Bezier segment.
     pub fn bezier_curve_to(&mut self, cp1x: f32, cp1y: f32, cp2x: f32, cp2y: f32, x: f32, y: f32) {
+        if ![cp1x, cp1y, cp2x, cp2y, x, y].iter().all(|v| v.is_finite()) {
+            return;
+        }
         self.platform.bezier_curve_to(cp1x, cp1y, cp2x, cp2y, x, y);
     }
     /// Fill the current path without consuming it.
@@ -602,18 +814,30 @@ impl<'a> CanvasRenderingContext2d<'a> {
     }
     /// Translate the current transform.
     pub fn translate(&mut self, x: f32, y: f32) {
+        if ![x, y].iter().all(|v| v.is_finite()) {
+            return;
+        }
         self.platform.translate(x, y);
     }
     /// Rotate the current transform by radians.
     pub fn rotate(&mut self, angle: f32) {
+        if !angle.is_finite() {
+            return;
+        }
         self.platform.rotate(angle);
     }
     /// Scale the current transform.
     pub fn scale(&mut self, x: f32, y: f32) {
+        if ![x, y].iter().all(|v| v.is_finite()) {
+            return;
+        }
         self.platform.scale(x, y);
     }
     /// Replace the current affine transform.
     pub fn set_transform(&mut self, a: f32, b: f32, c: f32, d: f32, e: f32, f: f32) {
+        if ![a, b, c, d, e, f].iter().all(|v| v.is_finite()) {
+            return;
+        }
         self.platform.set_transform(a, b, c, d, e, f);
     }
     /// Reset the current transform.
@@ -622,6 +846,9 @@ impl<'a> CanvasRenderingContext2d<'a> {
     }
     /// Draw filled text.
     pub fn fill_text(&mut self, text: impl AsRef<str>, x: f32, y: f32) {
+        if ![x, y].iter().all(|v| v.is_finite()) {
+            return;
+        }
         self.platform.fill_text(&self.state, text.as_ref(), x, y);
     }
     /// Measure text width in logical pixels.

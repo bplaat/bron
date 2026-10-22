@@ -49,6 +49,9 @@ method names in snake_case, with getter/setter pairs such as `fill_style()` /
   one corner radius.
 - Text is left-to-right only; baselines approximate browser typography.
 - Invalid alpha and line-width values are ignored.
+- Drawing and transform methods ignore non-finite numeric arguments. Negative finite
+  radii in `arc`, `ellipse`, and `round_rect` panic instead of throwing JavaScript
+  exceptions. `round_rect` preserves winding when width or height is negative.
 - `save()` / `restore()` do not include the current path.
 
 ## Interaction

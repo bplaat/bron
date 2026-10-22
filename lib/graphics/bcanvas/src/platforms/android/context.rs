@@ -737,9 +737,6 @@ impl PlatformCanvasContext {
     pub(crate) fn rect(&mut self, x: f32, y: f32, w: f32, h: f32) {
         self.path.rect(self.transform, x, y, w, h);
     }
-    pub(crate) fn round_rect(&mut self, x: f32, y: f32, w: f32, h: f32, r: f32) {
-        self.path.round_rect(self.transform, x, y, w, h, r);
-    }
     pub(crate) fn ellipse(&mut self, x: f32, y: f32, rx: f32, ry: f32) {
         self.path.ellipse(self.transform, [x, y], [rx, ry]);
     }
