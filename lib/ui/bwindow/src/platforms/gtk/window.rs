@@ -26,8 +26,6 @@ pub(super) struct WindowData {
     pub(super) background_color: Option<u32>,
     #[cfg(feature = "remember_window_state")]
     pub(super) remember_window_state: bool,
-    #[cfg(feature = "file_drop")]
-    pub(super) allow_file_drop: bool,
 }
 
 extern "C" fn window_on_destroy(_: *mut GtkWidget, data: &WindowData) {
@@ -73,8 +71,6 @@ impl PlatformWindow {
             background_color: builder.background_color,
             #[cfg(feature = "remember_window_state")]
             remember_window_state: builder.remember_window_state,
-            #[cfg(feature = "file_drop")]
-            allow_file_drop: builder.allow_file_drop,
         });
 
         // Create window

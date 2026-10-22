@@ -323,7 +323,7 @@ impl PlatformEventLoopProxy {
                 let data = Arc::into_raw(self.0.clone()) as *mut c_void;
                 let id = unsafe { g_idle_add_full(0, wake_callback, data, drop_wake) };
                 if id == 0 {
-                    unsafe { drop_wake(data) };
+                    drop_wake(data);
                     return false;
                 }
                 *source = Some(id);

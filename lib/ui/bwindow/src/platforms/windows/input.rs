@@ -6,7 +6,7 @@
 
 use super::headers::{GetKeyState, GetKeyboardLayout, GetKeyboardState, ToUnicodeEx};
 use crate::input::set1_key_code as physical_key;
-use crate::{ButtonState, Key, KeyCode, KeyboardEvent, Modifiers, NamedKey};
+use crate::{ButtonState, Key, KeyboardEvent, Modifiers, NamedKey};
 
 /// Current Win32 keyboard modifiers on the calling UI thread.
 pub(super) fn windows_modifiers() -> Modifiers {
@@ -112,6 +112,7 @@ pub fn windows_translate_accelerator(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::KeyCode;
 
     #[test]
     fn physical_keys_use_scan_codes_not_virtual_layout_keys() {

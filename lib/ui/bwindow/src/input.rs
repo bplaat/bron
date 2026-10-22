@@ -6,6 +6,8 @@
 
 use std::ops::{BitOr, BitOrAssign};
 
+// Scan code set 1, which Windows and the evdev codes of GTK report.
+#[cfg(not(any(target_vendor = "apple", target_os = "android")))]
 pub(crate) const fn set1_key_code(scan: u32, extended: bool) -> Option<KeyCode> {
     Some(match (scan, extended) {
         (0x01, _) => KeyCode::Escape,

@@ -521,5 +521,7 @@ pub(super) unsafe fn create_menu_bar(
     let menu_bar = MenuBar::with_defaults(&app_name.to_string());
     #[cfg(feature = "menu")]
     let menu_bar = menu_bar.merge(builder.menu.take());
+    #[cfg(not(feature = "menu"))]
+    let _ = builder;
     unsafe { menu_bar.create_native(application, app_delegate) };
 }

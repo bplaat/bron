@@ -6,7 +6,7 @@
 
 use std::ffi::{CStr, CString, c_char, c_void};
 use std::path::PathBuf;
-use std::ptr::{null, null_mut};
+use std::ptr::null_mut;
 
 use super::headers::*;
 

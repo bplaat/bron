@@ -13,7 +13,6 @@ use objc2::rc::{Allocated, Retained};
 use objc2::runtime::AnyObject as Object;
 use objc2::{define_class, msg_send};
 
-use super::headers::*;
 use super::input::ios_touch_event;
 use crate::{ButtonState, WindowEvent, WindowEventSender};
 

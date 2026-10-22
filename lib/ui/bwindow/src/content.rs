@@ -110,13 +110,17 @@ impl ContentHost {
     }
 
     /// Set the content host that exists for the whole window lifetime.
+    #[cfg(any(target_vendor = "apple", target_os = "android", windows))]
     pub(crate) fn set_content(&self, content: NativeContentHandle) {
         self.content.set(Some(content));
     }
 
     /// Create the content host on first use, for hosts that alternative window children
     /// like a web view must not get.
-    #[allow(dead_code, reason = "only GTK creates its content host on demand")]
+    #[cfg_attr(
+        any(target_vendor = "apple", target_os = "android", windows),
+        allow(dead_code, reason = "only GTK creates its content host on demand")
+    )]
     pub(crate) fn set_content_factory(
         &self,
         factory: impl FnOnce() -> Option<NativeContentHandle> + 'static,

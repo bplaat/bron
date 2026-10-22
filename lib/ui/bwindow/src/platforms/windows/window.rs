@@ -36,8 +36,6 @@ pub(super) struct WindowData {
     interaction: Interaction,
     #[cfg(feature = "remember_window_state")]
     pub(super) remember_window_state: bool,
-    #[cfg(feature = "file_drop")]
-    pub(super) allow_file_drop: bool,
     #[cfg(feature = "progress_bar")]
     progress_bar: ProgressBar,
 }
@@ -111,8 +109,6 @@ impl PlatformWindow {
             interaction: Interaction::default(),
             #[cfg(feature = "remember_window_state")]
             remember_window_state: builder.remember_window_state,
-            #[cfg(feature = "file_drop")]
-            allow_file_drop: builder.allow_file_drop,
             #[cfg(feature = "progress_bar")]
             progress_bar: ProgressBar::default(),
         });

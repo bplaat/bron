@@ -52,6 +52,10 @@ impl<E> Dispatcher<E> {
         self.enqueue(event, Some(Box::new(before)), None);
     }
 
+    #[cfg_attr(
+        target_os = "ios",
+        allow(dead_code, reason = "iOS windows never close")
+    )]
     fn send_then(&self, event: E, after: impl FnOnce() + 'static) {
         self.enqueue(event, None, Some(Box::new(after)));
     }
@@ -171,6 +175,7 @@ pub(crate) fn try_paint(event: NativeEvent, complete: impl FnOnce()) -> bool {
 }
 
 // Close decisions run after the application has had a chance to cancel them.
+#[cfg(not(target_os = "ios"))]
 pub(crate) fn send_then(event: NativeEvent, after: impl FnOnce() + 'static) {
     DISPATCHER.with(|dispatcher| dispatcher.send_then(event, after));
 }

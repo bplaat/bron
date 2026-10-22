@@ -387,15 +387,12 @@ fn layout_window_buttons(window: *mut Object, position: NSPoint) {
 }
 
 pub(super) struct PlatformWindowData {
-    host: std::rc::Rc<crate::content::ContentHost>,
     pub(super) window_id: crate::WindowId,
     pub(super) window: Retained<Object>,
     content_view: Retained<ContentView>,
     _delegate: Retained<Object>,
     pub(super) background_color: Option<u32>,
     traffic_light_position: Option<NSPoint>,
-    #[cfg(feature = "file_drop")]
-    pub(super) allow_file_drop: bool,
 }
 
 pub(crate) struct PlatformWindow(pub(super) Box<PlatformWindowData>);
@@ -558,15 +555,12 @@ impl PlatformWindow {
             let _: () = msg_send![&window, addObserver:window_delegate.as_ptr(), forKeyPath:ns_string!("effectiveAppearance"), options:5usize, context:null_mut::<std::ffi::c_void>()];
         }
         PlatformWindow(Box::new(PlatformWindowData {
-            host: host.clone(),
             window_id: builder.window_id,
             window,
             content_view,
             _delegate: window_delegate,
             background_color: builder.background_color,
             traffic_light_position,
-            #[cfg(feature = "file_drop")]
-            allow_file_drop: builder.allow_file_drop,
         }))
     }
 }

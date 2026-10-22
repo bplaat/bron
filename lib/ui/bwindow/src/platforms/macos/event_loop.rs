@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: MIT
  */
 
-use std::cell::{Cell, RefCell};
+use std::cell::Cell;
 use std::path::PathBuf;
 use std::ptr::null;
 use std::rc::Rc;
@@ -285,7 +285,6 @@ pub(super) fn allow_termination_if_last_window(closing_window: *mut Object) {
     if is_ours == Bool::NO {
         return;
     }
-    let app_delegate = unsafe { &*(app_delegate as *const AppDelegate) };
     let windows: *mut Object = unsafe { msg_send![NSApp, windows] };
     let count: usize = unsafe { msg_send![windows, count] };
     let has_other_window = (0..count).any(|index| unsafe {
