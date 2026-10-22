@@ -29,7 +29,7 @@ struct Out {
 @vertex fn vs_main(@builtin(vertex_index) vertex: u32, @builtin(instance_index) instance: u32) -> Out {
     let data = faces[instance];
     let face = data.data.x;
-    let corner = array(0u, 1u, 2u, 0u, 2u, 3u)[vertex];
+    let corner = vertex;
     let horizontal = select(-0.5, 0.5, corner == 1u || corner == 2u);
     let vertical = select(-0.5, 0.5, corner >= 2u);
     var offset: vec3<f32>;

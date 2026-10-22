@@ -35,6 +35,7 @@ unsafe fn retained(value: *mut AnyObject) -> Result<Object> {
 }
 
 // Fill `layer` with `view`, without implicit animations.
+#[cfg(feature = "window")]
 unsafe fn layout_layer(view: &AnyObject, layer: &AnyObject) {
     unsafe {
         let bounds: Rect = msg_send![view, bounds];
@@ -111,6 +112,22 @@ pub(super) struct Pipeline {
     object: Object,
     depth: Option<Object>,
     cull: bool,
+}
+
+const fn blend_factor(value: BlendFactor) -> usize {
+    match value {
+        BlendFactor::Zero => 0,
+        BlendFactor::One => 1,
+        BlendFactor::Src => 2,
+        BlendFactor::OneMinusSrc => 3,
+        BlendFactor::SrcAlpha => 4,
+        BlendFactor::OneMinusSrcAlpha => 5,
+        BlendFactor::Dst => 6,
+        BlendFactor::OneMinusDst => 7,
+        BlendFactor::DstAlpha => 8,
+        BlendFactor::OneMinusDstAlpha => 9,
+        BlendFactor::SrcAlphaSaturated => 10,
+    }
 }
 
 impl Context {
@@ -206,6 +223,9 @@ impl Context {
             let descriptor = owned(msg_send![class!(MTLSamplerDescriptor), new])?;
             let _: () = msg_send![&*descriptor, setSAddressMode: if desc.address_mode_u == AddressMode::Repeat { 2usize } else { 0usize }];
             let _: () = msg_send![&*descriptor, setTAddressMode: if desc.address_mode_v == AddressMode::Repeat { 2usize } else { 0usize }];
+            let _: () = msg_send![&*descriptor, setRAddressMode: if desc.address_mode_w == AddressMode::Repeat { 2usize } else { 0usize }];
+            let _: () = msg_send![&*descriptor, setLodMinClamp: desc.lod_min_clamp];
+            let _: () = msg_send![&*descriptor, setLodMaxClamp: desc.lod_max_clamp];
             let _: () = msg_send![&*descriptor, setMagFilter: usize::from(desc.mag_filter == FilterMode::Linear)];
             let _: () = msg_send![&*descriptor, setMinFilter: usize::from(desc.min_filter == FilterMode::Linear)];
             let _: () = msg_send![&*descriptor, setMipFilter: if desc.mipmap_filter == FilterMode::Linear { 2usize } else { 1usize }];
@@ -262,12 +282,16 @@ impl Context {
             let attachment: *mut AnyObject =
                 msg_send![attachments, objectAtIndexedSubscript: 0usize];
             let _: () = msg_send![attachment, setPixelFormat: format(color.format)];
-            if color.blend.is_some() {
+            if let Some(blend) = color.blend {
                 let _: () = msg_send![attachment, setBlendingEnabled: Bool::YES];
-                let _: () = msg_send![attachment, setSourceRGBBlendFactor: 4usize];
-                let _: () = msg_send![attachment, setDestinationRGBBlendFactor: 5usize];
-                let _: () = msg_send![attachment, setSourceAlphaBlendFactor: 1usize];
-                let _: () = msg_send![attachment, setDestinationAlphaBlendFactor: 5usize];
+                let _: () = msg_send![attachment, setSourceRGBBlendFactor: blend_factor(blend.color.src_factor)];
+                let _: () = msg_send![attachment, setDestinationRGBBlendFactor: blend_factor(blend.color.dst_factor)];
+                let _: () =
+                    msg_send![attachment, setRgbBlendOperation: blend.color.operation as usize];
+                let _: () = msg_send![attachment, setSourceAlphaBlendFactor: blend_factor(blend.alpha.src_factor.for_alpha())];
+                let _: () = msg_send![attachment, setDestinationAlphaBlendFactor: blend_factor(blend.alpha.dst_factor.for_alpha())];
+                let _: () =
+                    msg_send![attachment, setAlphaBlendOperation: blend.alpha.operation as usize];
             }
             if desc.depth_stencil.is_some() {
                 let _: () = msg_send![&*descriptor, setDepthAttachmentPixelFormat: 252usize];
@@ -284,6 +308,10 @@ impl Context {
                         VertexFormat::Float32x2 => 29usize,
                         VertexFormat::Float32x3 => 30usize,
                         VertexFormat::Uint32x2 => 37usize,
+                        VertexFormat::Float32x4 => 31usize,
+                        VertexFormat::Uint8x4 => 3usize,
+                        VertexFormat::Unorm8x4 => 9usize,
+                        VertexFormat::Sint16x4 => 18usize,
                     };
                     let _: () = msg_send![native, setFormat: format];
                     let _: () = msg_send![native, setOffset: attribute.offset as usize];
@@ -308,7 +336,7 @@ impl Context {
                 .depth_stencil
                 .map(|depth| -> Result<Object> {
                     let descriptor = owned(msg_send![class!(MTLDepthStencilDescriptor), new])?;
-                    let _: () = msg_send![&*descriptor, setDepthCompareFunction: if depth.depth_compare == Some(CompareFunction::Always) { 7usize } else { 3usize }];
+                    let _: () = msg_send![&*descriptor, setDepthCompareFunction: depth.depth_compare.unwrap_or(CompareFunction::LessEqual) as usize - 1];
                     let write_enabled = if depth.depth_write_enabled.unwrap_or(false) {
                         Bool::YES
                     } else {
@@ -430,7 +458,20 @@ impl Context {
                     let _: () = msg_send![&*render, setViewport: Viewport { x: v[0] as f64, y: v[1] as f64, width: v[2] as f64, height: v[3] as f64, near: v[4] as f64, far: v[5] as f64 }];
                     let s = draw.scissor;
                     let _: () = msg_send![&*render, setScissorRect: Scissor { x: s[0] as usize, y: s[1] as usize, width: s[2] as usize, height: s[3] as usize }];
-                    let _: () = msg_send![&*render, drawPrimitives: 3usize, vertexStart: draw.vertices.start as usize, vertexCount: draw.vertices.len(), instanceCount: draw.instances.len(), baseInstance: draw.instances.start as usize];
+                    match &draw.kind {
+                        DrawKind::Direct(vertices) => {
+                            let _: () = msg_send![&*render, drawPrimitives: 3usize, vertexStart: vertices.start as usize, vertexCount: vertices.len(), instanceCount: draw.instances.len(), baseInstance: draw.instances.start as usize];
+                        }
+                        DrawKind::Indexed {
+                            indices,
+                            base_vertex,
+                            binding,
+                        } => {
+                            let offset = binding.range.start
+                                + u64::from(indices.start) * binding.format.byte_size();
+                            let _: () = msg_send![&*render, drawIndexedPrimitives: 3usize, indexCount: indices.len(), indexType: usize::from(binding.format == IndexFormat::Uint32), indexBuffer: &*binding.buffer.inner.native.object, indexBufferOffset: offset as usize, instanceCount: draw.instances.len(), baseVertex: *base_vertex as isize, baseInstance: draw.instances.start as usize];
+                        }
+                    }
                 }
                 let _: () = msg_send![&*render, endEncoding];
             }
@@ -614,9 +655,452 @@ mod tests {
     }
 
     #[test]
+    fn native_depth_comparisons_and_custom_blending() {
+        let (device, queue) = gpu();
+        let descriptor = TextureDescriptor {
+            label: None,
+            size: Extent3d {
+                width: 4,
+                height: 4,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: TextureDimension::D2,
+            format: TextureFormat::Rgba8Unorm,
+            usage: TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        };
+        let color = device.create_texture(&descriptor);
+        let depth = device.create_texture(&TextureDescriptor {
+            format: TextureFormat::Depth32Float,
+            ..descriptor
+        });
+        let color_view = color.create_view(&Default::default());
+        let depth_view = depth.create_view(&Default::default());
+        let shader = device.create_shader_module(ShaderModuleDescriptor {
+            label: None,
+            entries: &[("vs", "vs"), ("fs", "fs")],
+            source: ShaderSource::Text(
+                r#"
+                #include <metal_stdlib>
+                using namespace metal;
+                vertex float4 vs(uint index [[vertex_id]]) {
+                    const float2 points[] = { float2(-1,-1), float2(3,-1), float2(-1,3) };
+                    return float4(points[index], 0.5, 1);
+                }
+                fragment float4 fs() { return float4(1, 0, 0, 0.5); }
+            "#,
+            ),
+        });
+        let pipeline = |compare: Option<CompareFunction>, blend| {
+            device.create_render_pipeline(&RenderPipelineDescriptor {
+                label: None,
+                layout: None,
+                vertex: VertexState {
+                    module: &shader,
+                    entry_point: Some("vs"),
+                    compilation_options: Default::default(),
+                    buffers: &[],
+                },
+                primitive: Default::default(),
+                depth_stencil: compare.map(|compare| DepthStencilState {
+                    format: TextureFormat::Depth32Float,
+                    depth_write_enabled: Some(false),
+                    depth_compare: Some(compare),
+                    stencil: Default::default(),
+                    bias: Default::default(),
+                }),
+                multisample: Default::default(),
+                fragment: Some(FragmentState {
+                    module: &shader,
+                    entry_point: Some("fs"),
+                    compilation_options: Default::default(),
+                    targets: &[Some(ColorTargetState {
+                        format: TextureFormat::Rgba8Unorm,
+                        blend,
+                        write_mask: ColorWrites::ALL,
+                    })],
+                }),
+                multiview_mask: None,
+                cache: None,
+            })
+        };
+        let render = |pipeline: &RenderPipeline, clear_depth: Option<f32>| {
+            let mut encoder = device.create_command_encoder(&Default::default());
+            {
+                let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
+                    label: None,
+                    color_attachments: &[Some(RenderPassColorAttachment {
+                        view: &color_view,
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: Operations {
+                            load: LoadOp::Clear(Color::BLACK),
+                            store: StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: clear_depth.map(|value| {
+                        RenderPassDepthStencilAttachment {
+                            view: &depth_view,
+                            depth_ops: Some(Operations {
+                                load: LoadOp::Clear(value),
+                                store: StoreOp::Discard,
+                            }),
+                            stencil_ops: None,
+                        }
+                    }),
+                });
+                pass.set_pipeline(pipeline);
+                pass.draw(0..3, 0..1);
+            }
+            queue.submit([encoder.finish()]);
+            pixels(&device, &color)
+        };
+        for operation in [BlendOperation::Min, BlendOperation::Max] {
+            for invalid_alpha in [false, true] {
+                let component = BlendComponent {
+                    operation,
+                    ..BlendComponent::REPLACE
+                };
+                let blend = if invalid_alpha {
+                    BlendState {
+                        alpha: component,
+                        ..BlendState::REPLACE
+                    }
+                } else {
+                    BlendState {
+                        color: component,
+                        ..BlendState::REPLACE
+                    }
+                };
+                assert!(
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| pipeline(
+                        None,
+                        Some(blend)
+                    )))
+                    .is_err()
+                );
+            }
+        }
+        for compare in [
+            CompareFunction::Never,
+            CompareFunction::Less,
+            CompareFunction::Equal,
+            CompareFunction::LessEqual,
+            CompareFunction::Greater,
+            CompareFunction::NotEqual,
+            CompareFunction::GreaterEqual,
+            CompareFunction::Always,
+        ] {
+            let pipeline = pipeline(Some(compare), None);
+            for value in [0.25, 0.5, 0.75] {
+                let passes = match compare {
+                    CompareFunction::Never => false,
+                    CompareFunction::Less => 0.5 < value,
+                    CompareFunction::Equal => 0.5 == value,
+                    CompareFunction::LessEqual => 0.5 <= value,
+                    CompareFunction::Greater => 0.5 > value,
+                    CompareFunction::NotEqual => 0.5 != value,
+                    CompareFunction::GreaterEqual => 0.5 >= value,
+                    CompareFunction::Always => true,
+                };
+                assert!(
+                    render(&pipeline, Some(value))
+                        .as_chunks::<4>()
+                        .0
+                        .iter()
+                        .all(|pixel| pixel[0] == if passes { 255 } else { 0 }),
+                    "{compare:?}, clear depth {value}"
+                );
+            }
+        }
+        for (blend, red, alpha) in [
+            (
+                BlendState {
+                    color: BlendComponent {
+                        src_factor: BlendFactor::One,
+                        dst_factor: BlendFactor::One,
+                        operation: BlendOperation::Min,
+                    },
+                    ..BlendState::REPLACE
+                },
+                0i16,
+                128i16,
+            ),
+            (
+                BlendState {
+                    color: BlendComponent {
+                        src_factor: BlendFactor::One,
+                        dst_factor: BlendFactor::One,
+                        operation: BlendOperation::Max,
+                    },
+                    ..BlendState::REPLACE
+                },
+                255,
+                128,
+            ),
+            (BlendState::ALPHA_BLENDING, 128i16, 255i16),
+            (BlendState::PREMULTIPLIED_ALPHA_BLENDING, 255, 255),
+            (
+                BlendState {
+                    alpha: BlendComponent {
+                        src_factor: BlendFactor::SrcAlpha,
+                        ..BlendComponent::OVER
+                    },
+                    ..BlendState::ALPHA_BLENDING
+                },
+                128,
+                191,
+            ),
+            (
+                BlendState {
+                    color: BlendComponent {
+                        operation: BlendOperation::ReverseSubtract,
+                        ..BlendComponent::OVER
+                    },
+                    ..BlendState::REPLACE
+                },
+                0,
+                128,
+            ),
+        ] {
+            let pipeline = pipeline(None, Some(blend));
+            assert!(
+                render(&pipeline, None)
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .all(|pixel| (i16::from(pixel[0]) - red).abs() <= 1
+                        && pixel[1] == 0
+                        && pixel[2] == 0
+                        && (i16::from(pixel[3]) - alpha).abs() <= 1),
+                "{blend:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn indexed_rendering_preserves_offsets_instances_and_vertex_formats() {
+        let (device, queue) = gpu();
+        let color = device.create_texture(&TextureDescriptor {
+            label: None,
+            size: Extent3d {
+                width: 4,
+                height: 4,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: TextureDimension::D2,
+            format: TextureFormat::Rgba8Unorm,
+            usage: TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        });
+        let shader = device.create_shader_module(ShaderModuleDescriptor {
+            label: None,
+            entries: &[("vs", "vs"), ("fs", "fs")],
+            source: ShaderSource::Text(
+                r#"
+                #include <metal_stdlib>
+                using namespace metal;
+                struct In {
+                    float4 position [[attribute(0)]];
+                    float4 color [[attribute(1)]];
+                    uint4 flags [[attribute(2)]];
+                    int4 values [[attribute(3)]];
+                };
+                struct Out { float4 position [[position]]; float4 color; };
+                vertex Out vs(In in [[stage_in]], uint instance [[instance_id]]) {
+                    bool valid = all(in.flags == uint4(1, 2, 3, 4))
+                        && all(in.values == int4(-1, -2, -3, -4)) && instance == 2;
+                    return { in.position, valid ? in.color : float4(1, 0, 0, 1) };
+                }
+                fragment float4 fs(Out in [[stage_in]]) { return in.color; }
+            "#,
+            ),
+        });
+        let create_pipeline = |array_stride, attributes: &[VertexAttribute]| {
+            device.create_render_pipeline(&RenderPipelineDescriptor {
+                label: None,
+                layout: None,
+                vertex: VertexState {
+                    module: &shader,
+                    entry_point: Some("vs"),
+                    compilation_options: Default::default(),
+                    buffers: &[Some(VertexBufferLayout {
+                        array_stride,
+                        step_mode: VertexStepMode::Vertex,
+                        attributes,
+                    })],
+                },
+                primitive: Default::default(),
+                depth_stencil: None,
+                multisample: Default::default(),
+                fragment: Some(FragmentState {
+                    module: &shader,
+                    entry_point: Some("fs"),
+                    compilation_options: Default::default(),
+                    targets: &[Some(ColorTargetState {
+                        format: TextureFormat::Rgba8Unorm,
+                        blend: None,
+                        write_mask: ColorWrites::ALL,
+                    })],
+                }),
+                multiview_mask: None,
+                cache: None,
+            })
+        };
+        let pipeline = create_pipeline(
+            36,
+            &vertex_attr_array![0 => Float32x4, 1 => Unorm8x4, 2 => Uint8x4, 3 => Sint16x4],
+        );
+        for (stride, offset) in [(33, 0), (36, 1), (u64::from(u32::MAX) + 1, 0)] {
+            let attributes = [VertexAttribute {
+                format: VertexFormat::Float32x4,
+                offset,
+                shader_location: 0,
+            }];
+            assert!(
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| create_pipeline(
+                    stride,
+                    &attributes
+                )))
+                .is_err()
+            );
+        }
+        let mut bytes: Vec<u8> = [[-1f32, -1., 0., 1.], [3., -1., 0., 1.], [-1., 3., 0., 1.]]
+            .into_iter()
+            .flat_map(|position| {
+                position
+                    .into_iter()
+                    .flat_map(f32::to_ne_bytes)
+                    .chain([0, 255, 0, 255, 1, 2, 3, 4])
+                    .chain([-1i16, -2, -3, -4].into_iter().flat_map(i16::to_ne_bytes))
+                    .chain([0; 4])
+            })
+            .collect();
+        // Only the fetched attributes of the last vertex need to be present.
+        bytes.truncate(bytes.len() - 4);
+        let vertices = device.create_buffer(&BufferDescriptor {
+            label: None,
+            size: bytes.len() as u64,
+            usage: BufferUsages::VERTEX,
+            mapped_at_creation: true,
+        });
+        vertices
+            .slice(..)
+            .get_mapped_range_mut()
+            .unwrap()
+            .copy_from_slice(&bytes);
+        vertices.unmap();
+        let view = color.create_view(&Default::default());
+        for format in [None, Some(IndexFormat::Uint16), Some(IndexFormat::Uint32)] {
+            let indexed = format.is_some();
+            let format = format.unwrap_or(IndexFormat::Uint16);
+            let bytes: Vec<u8> = [99u32, 99, 4, 5, 6, 99]
+                .into_iter()
+                .flat_map(|index| match format {
+                    IndexFormat::Uint16 => (index as u16).to_ne_bytes().to_vec(),
+                    IndexFormat::Uint32 => index.to_ne_bytes().to_vec(),
+                })
+                .collect();
+            let indices = device.create_buffer(&BufferDescriptor {
+                label: None,
+                size: bytes.len() as u64,
+                usage: BufferUsages::INDEX,
+                mapped_at_creation: true,
+            });
+            indices
+                .slice(..)
+                .get_mapped_range_mut()
+                .unwrap()
+                .copy_from_slice(&bytes);
+            indices.unmap();
+            let lifetime = Rc::downgrade(&indices.inner);
+            let mut encoder = device.create_command_encoder(&Default::default());
+            {
+                let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
+                    label: None,
+                    color_attachments: &[Some(RenderPassColorAttachment {
+                        view: &view,
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: Operations {
+                            load: LoadOp::Clear(Color::BLACK),
+                            store: StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                });
+                pass.set_pipeline(&pipeline);
+                use std::panic::{AssertUnwindSafe, catch_unwind};
+                assert!(
+                    catch_unwind(AssertUnwindSafe(
+                        || pass.set_vertex_buffer(0, vertices.slice(1..))
+                    ))
+                    .is_err()
+                );
+                pass.set_vertex_buffer(0, vertices.slice(..));
+                assert!(
+                    catch_unwind(AssertUnwindSafe(
+                        || pass.set_index_buffer(vertices.slice(..), format)
+                    ))
+                    .is_err()
+                );
+                assert!(
+                    catch_unwind(AssertUnwindSafe(
+                        || pass.set_index_buffer(indices.slice(1..), format)
+                    ))
+                    .is_err()
+                );
+                pass.set_index_buffer(
+                    indices.slice(format.byte_size()..5 * format.byte_size()),
+                    format,
+                );
+                assert!(
+                    catch_unwind(AssertUnwindSafe(|| pass.draw_indexed(0..5, 0, 0..1))).is_err()
+                );
+                if indexed {
+                    pass.draw_indexed(1..4, -4, 2..3);
+                } else {
+                    pass.draw(0..3, 2..3);
+                }
+            }
+            drop(indices);
+            assert!(lifetime.upgrade().is_some());
+            queue.submit([encoder.finish()]);
+            assert!(
+                pixels(&device, &color)
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .all(|pixel| *pixel == [0, 255, 0, 255])
+            );
+        }
+    }
+
+    #[test]
     fn invalid_upload_alignment_and_attachment_feedback_are_rejected() {
         use std::panic::{AssertUnwindSafe, catch_unwind};
         let (device, _) = gpu();
+        for (min, max) in [
+            (f32::NAN, 1.0),
+            (0.0, f32::INFINITY),
+            (-1.0, 1.0),
+            (2.0, 1.0),
+        ] {
+            assert!(
+                catch_unwind(AssertUnwindSafe(|| device.create_sampler(
+                    &SamplerDescriptor {
+                        lod_min_clamp: min,
+                        lod_max_clamp: max,
+                        ..Default::default()
+                    }
+                )))
+                .is_err()
+            );
+        }
         assert!(
             catch_unwind(AssertUnwindSafe(|| device.create_buffer(
                 &BufferDescriptor {

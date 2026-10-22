@@ -411,10 +411,17 @@ impl ShaderModule {
 pub struct RenderPipeline {
     native: Rc<platform::Pipeline>,
     layout: PipelineLayout,
-    vertex: Option<(u64, VertexStepMode)>,
+    vertex: Option<VertexLayout>,
     format: TextureFormat,
     depth: bool,
     owner: Weak<Shared>,
+}
+
+#[derive(Clone, Copy)]
+struct VertexLayout {
+    stride: u64,
+    last_stride: u64,
+    step_mode: VertexStepMode,
 }
 
 impl Device {
@@ -445,8 +452,8 @@ impl Device {
             !desc.usage.contains(BufferUsages::UNIFORM)
                 || !desc
                     .usage
-                    .intersects(BufferUsages::VERTEX | BufferUsages::STORAGE),
-            "Uniform buffers cannot also be vertex or storage buffers",
+                    .intersects(BufferUsages::VERTEX | BufferUsages::STORAGE | BufferUsages::INDEX),
+            "Uniform buffers cannot also be vertex, storage or index buffers",
         );
         require(
             !desc.mapped_at_creation || desc.size.is_multiple_of(4),
@@ -501,6 +508,13 @@ impl Device {
     }
 
     pub fn create_sampler(&self, desc: &SamplerDescriptor<'_>) -> Sampler {
+        require(
+            desc.lod_min_clamp.is_finite()
+                && desc.lod_max_clamp.is_finite()
+                && desc.lod_min_clamp >= 0.0
+                && desc.lod_max_clamp >= desc.lod_min_clamp,
+            "Invalid sampler LOD clamps",
+        );
         Sampler {
             native: Rc::new(self.shared.native.sampler(desc).expect("Create sampler")),
             owner: Rc::downgrade(&self.shared),
@@ -687,6 +701,18 @@ impl Device {
             "Exactly one color target required",
         );
         let color = fragment.targets[0].expect("Color target required");
+        if let Some(blend) = color.blend {
+            for component in [blend.color, blend.alpha] {
+                require(
+                    !matches!(
+                        component.operation,
+                        BlendOperation::Min | BlendOperation::Max
+                    ) || (component.src_factor == BlendFactor::One
+                        && component.dst_factor == BlendFactor::One),
+                    "Min/max blending requires both factors to be One",
+                );
+            }
+        }
         require(
             color.write_mask == ColorWrites::ALL,
             "Partial color write masks unsupported",
@@ -704,9 +730,12 @@ impl Device {
         let vertex = desc.vertex.buffers.first().map(|b| {
             let b = b.as_ref().expect("Missing vertex layout");
             require(
-                !b.attributes.is_empty()
+                b.array_stride.is_multiple_of(4)
+                    && b.array_stride <= u64::from(u32::MAX)
+                    && !b.attributes.is_empty()
                     && b.attributes.iter().all(|attribute| {
                         attribute.shader_location < 16
+                            && attribute.offset.is_multiple_of(4)
                             && attribute
                                 .offset
                                 .checked_add(attribute.format.size())
@@ -719,7 +748,16 @@ impl Device {
                     }),
                 "Unsupported vertex layout",
             );
-            (b.array_stride, b.step_mode)
+            VertexLayout {
+                stride: b.array_stride,
+                last_stride: b
+                    .attributes
+                    .iter()
+                    .map(|attribute| attribute.offset + attribute.format.size())
+                    .max()
+                    .expect("Vertex attributes validated"),
+                step_mode: b.step_mode,
+            }
         });
         RenderPipeline {
             native: Rc::new(
@@ -896,10 +934,26 @@ struct Draw {
     pipeline: RenderPipeline,
     group: Option<BindGroup>,
     vertex: Option<(Buffer, Range<u64>)>,
-    vertices: Range<u32>,
+    kind: DrawKind,
     instances: Range<u32>,
     viewport: [f32; 6],
     scissor: [u32; 4],
+}
+
+#[derive(Clone)]
+struct IndexBinding {
+    buffer: Buffer,
+    range: Range<u64>,
+    format: IndexFormat,
+}
+
+enum DrawKind {
+    Direct(Range<u32>),
+    Indexed {
+        indices: Range<u32>,
+        base_vertex: i32,
+        binding: IndexBinding,
+    },
 }
 
 pub struct RenderPass<'a> {
@@ -908,6 +962,7 @@ pub struct RenderPass<'a> {
     pipeline: Option<RenderPipeline>,
     group: Option<BindGroup>,
     vertex: Option<(Buffer, Range<u64>)>,
+    index: Option<IndexBinding>,
     viewport: [f32; 6],
     scissor: [u32; 4],
 }
@@ -1015,6 +1070,7 @@ impl CommandEncoder {
             pipeline: None,
             group: None,
             vertex: None,
+            index: None,
             viewport: [0., 0., size.width as f32, size.height as f32, 0., 1.],
             scissor: [0, 0, size.width, size.height],
         }
@@ -1066,7 +1122,8 @@ impl RenderPass<'_> {
         require(
             slot == 0
                 && slice.buffer.inner.usage.contains(BufferUsages::VERTEX)
-                && !slice.buffer.inner.mapped.get(),
+                && !slice.buffer.inner.mapped.get()
+                && slice.range.start.is_multiple_of(4),
             "Invalid vertex buffer",
         );
         self.encoder
@@ -1075,6 +1132,26 @@ impl RenderPass<'_> {
             .expect("device has been dropped")
             .check(&slice.buffer.inner.owner);
         self.vertex = Some((slice.buffer.clone(), slice.range));
+    }
+
+    pub fn set_index_buffer(&mut self, slice: BufferSlice<'_>, format: IndexFormat) {
+        require(
+            slice.buffer.inner.usage.contains(BufferUsages::INDEX)
+                && !slice.buffer.inner.mapped.get()
+                && slice.range.start.is_multiple_of(format.byte_size())
+                && slice.range.end.is_multiple_of(format.byte_size()),
+            "Invalid index buffer",
+        );
+        self.encoder
+            .owner
+            .upgrade()
+            .expect("device has been dropped")
+            .check(&slice.buffer.inner.owner);
+        self.index = Some(IndexBinding {
+            buffer: slice.buffer.clone(),
+            range: slice.range,
+            format,
+        });
     }
 
     pub fn set_viewport(
@@ -1113,11 +1190,35 @@ impl RenderPass<'_> {
     }
 
     pub fn draw(&mut self, vertices: Range<u32>, instances: Range<u32>) {
-        if vertices.is_empty()
-            || instances.is_empty()
-            || self.scissor[2] == 0
-            || self.scissor[3] == 0
-        {
+        if vertices.is_empty() {
+            return;
+        }
+        self.record_draw(DrawKind::Direct(vertices), instances);
+    }
+
+    pub fn draw_indexed(&mut self, indices: Range<u32>, base_vertex: i32, instances: Range<u32>) {
+        if indices.is_empty() || instances.is_empty() {
+            return;
+        }
+        let binding = self.index.as_ref().expect("Index buffer not set");
+        require(!binding.buffer.inner.mapped.get(), "Index buffer is mapped");
+        require(
+            u64::from(indices.end) * binding.format.byte_size()
+                <= binding.range.end - binding.range.start,
+            "Index data out of bounds",
+        );
+        self.record_draw(
+            DrawKind::Indexed {
+                indices,
+                base_vertex,
+                binding: binding.clone(),
+            },
+            instances,
+        );
+    }
+
+    fn record_draw(&mut self, kind: DrawKind, instances: Range<u32>) {
+        if instances.is_empty() || self.scissor[2] == 0 || self.scissor[3] == 0 {
             return;
         }
         let pipeline = self.pipeline.as_ref().expect("Pipeline not set");
@@ -1138,14 +1239,19 @@ impl RenderPass<'_> {
                 }
             }
         }
-        if let Some((stride, step_mode)) = pipeline.vertex {
-            let (_, range) = self.vertex.as_ref().expect("Vertex buffer not set");
-            let end = match step_mode {
-                VertexStepMode::Vertex => vertices.end,
+        if let Some(layout) = pipeline.vertex {
+            let (buffer, range) = self.vertex.as_ref().expect("Vertex buffer not set");
+            require(!buffer.inner.mapped.get(), "Vertex buffer is mapped");
+            let end = match layout.step_mode {
+                VertexStepMode::Vertex => match &kind {
+                    DrawKind::Direct(vertices) => vertices.end,
+                    // Index values are consumed by the GPU; require at least one complete vertex.
+                    DrawKind::Indexed { .. } => 1,
+                },
                 VertexStepMode::Instance => instances.end,
             };
             require(
-                u64::from(end) * stride <= range.end - range.start,
+                u64::from(end - 1) * layout.stride + layout.last_stride <= range.end - range.start,
                 "Vertex data out of bounds",
             );
         }
@@ -1153,7 +1259,7 @@ impl RenderPass<'_> {
             pipeline: pipeline.clone(),
             group: self.group.clone(),
             vertex: self.vertex.clone(),
-            vertices,
+            kind,
             instances,
             viewport: self.viewport,
             scissor: self.scissor,
@@ -1186,12 +1292,22 @@ macro_rules! include_wgsl {
 
 #[macro_export]
 macro_rules! vertex_attr_array {
-    ($location:literal => $format:ident) => {
-        [$crate::VertexAttribute {
-            format: $crate::VertexFormat::$format,
-            offset: 0,
-            shader_location: $location,
-        }]
+    ($($location:literal => $format:ident),* $(,)?) => {
+        const {
+            let mut offset = 0;
+            let attributes = [$({
+                let format = $crate::VertexFormat::$format;
+                let attribute = $crate::VertexAttribute {
+                    format,
+                    offset,
+                    shader_location: $location,
+                };
+                offset += format.size();
+                attribute
+            }),*];
+            let _ = offset;
+            attributes
+        }
     };
 }
 

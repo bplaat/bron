@@ -1851,6 +1851,21 @@ pub type CmdDraw = unsafe extern "system" fn(
     first_instance: u32,
 );
 
+pub type CmdBindIndexBuffer = unsafe extern "system" fn(
+    command_buffer: CommandBuffer,
+    buffer: Buffer,
+    offset: DeviceSize,
+    index_type: u32,
+);
+pub type CmdDrawIndexed = unsafe extern "system" fn(
+    command_buffer: CommandBuffer,
+    index_count: u32,
+    instance_count: u32,
+    first_index: u32,
+    vertex_offset: i32,
+    first_instance: u32,
+);
+
 // The BSDs provide the dynamic loader functions in libc.
 #[cfg_attr(target_os = "linux", link(name = "dl"))]
 unsafe extern "C" {

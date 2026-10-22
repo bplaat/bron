@@ -273,7 +273,11 @@ impl NativeDevice {
             let info = vk::BufferCreateInfo {
                 s_type: 12,
                 size,
-                usage: if staging { 1 | 2 } else { 2 | 16 | 32 | 128 },
+                usage: if staging {
+                    1 | 2
+                } else {
+                    2 | 16 | 32 | 64 | 128
+                },
                 ..Default::default()
             };
             let mut handle = 0;
@@ -470,6 +474,22 @@ pub(super) struct Context {
     acquisition_waited: Cell<bool>,
     #[cfg(feature = "window")]
     surface_status: Cell<i32>,
+}
+
+const fn blend_factor(value: BlendFactor) -> u32 {
+    match value {
+        BlendFactor::Zero => 0,
+        BlendFactor::One => 1,
+        BlendFactor::Src => 2,
+        BlendFactor::OneMinusSrc => 3,
+        BlendFactor::SrcAlpha => 6,
+        BlendFactor::OneMinusSrcAlpha => 7,
+        BlendFactor::Dst => 4,
+        BlendFactor::OneMinusDst => 5,
+        BlendFactor::DstAlpha => 8,
+        BlendFactor::OneMinusDstAlpha => 9,
+        BlendFactor::SrcAlphaSaturated => 10,
+    }
 }
 
 impl Context {
@@ -892,8 +912,13 @@ impl Context {
             } else {
                 2
             },
-            address_mode_w: 2,
-            max_lod: 32.,
+            address_mode_w: if desc.address_mode_w == AddressMode::Repeat {
+                0
+            } else {
+                2
+            },
+            min_lod: desc.lod_min_clamp,
+            max_lod: desc.lod_max_clamp,
             ..Default::default()
         };
         let mut handle = 0;
@@ -1133,6 +1158,10 @@ impl Context {
                         VertexFormat::Float32x2 => 103,
                         VertexFormat::Float32x3 => 106,
                         VertexFormat::Uint32x2 => 101,
+                        VertexFormat::Float32x4 => 109,
+                        VertexFormat::Uint8x4 => 41,
+                        VertexFormat::Unorm8x4 => 37,
+                        VertexFormat::Sint16x4 => 96,
                     },
                     offset: attribute.offset as u32,
                 })
@@ -1179,23 +1208,22 @@ impl Context {
                 depth_write_enable: u32::from(
                     depth.is_some_and(|depth| depth.depth_write_enabled.unwrap_or(false)),
                 ),
-                depth_compare_op: if depth
-                    .is_some_and(|depth| depth.depth_compare == Some(CompareFunction::Always))
-                {
-                    7
-                } else {
-                    3
-                },
+                depth_compare_op: depth
+                    .and_then(|depth| depth.depth_compare)
+                    .unwrap_or(CompareFunction::LessEqual) as u32
+                    - 1,
                 ..Default::default()
             };
+            let state = color.blend.unwrap_or(BlendState::REPLACE);
             let blend_attachment = vk::PipelineColorBlendAttachmentState {
                 blend_enable: u32::from(color.blend.is_some()),
-                src_color_blend_factor: 6,
-                dst_color_blend_factor: 7,
-                src_alpha_blend_factor: 1,
-                dst_alpha_blend_factor: 7,
+                src_color_blend_factor: blend_factor(state.color.src_factor),
+                dst_color_blend_factor: blend_factor(state.color.dst_factor),
+                color_blend_op: state.color.operation as u32,
+                src_alpha_blend_factor: blend_factor(state.alpha.src_factor.for_alpha()),
+                dst_alpha_blend_factor: blend_factor(state.alpha.dst_factor.for_alpha()),
+                alpha_blend_op: state.alpha.operation as u32,
                 color_write_mask: 15,
-                ..Default::default()
             };
             let blend = vk::PipelineColorBlendStateCreateInfo {
                 s_type: 26,
@@ -1677,15 +1705,41 @@ impl Context {
                         },
                     };
                     call!(d.instance, CmdSetScissor, frame.command, 0, 1, &scissor);
-                    call!(
-                        d.instance,
-                        CmdDraw,
-                        frame.command,
-                        draw.vertices.len() as u32,
-                        draw.instances.len() as u32,
-                        draw.vertices.start,
-                        draw.instances.start
-                    );
+                    match &draw.kind {
+                        DrawKind::Direct(vertices) => call!(
+                            d.instance,
+                            CmdDraw,
+                            frame.command,
+                            vertices.len() as u32,
+                            draw.instances.len() as u32,
+                            vertices.start,
+                            draw.instances.start
+                        ),
+                        DrawKind::Indexed {
+                            indices,
+                            base_vertex,
+                            binding,
+                        } => {
+                            call!(
+                                d.instance,
+                                CmdBindIndexBuffer,
+                                frame.command,
+                                binding.buffer.inner.native.handle,
+                                binding.range.start,
+                                u32::from(binding.format == IndexFormat::Uint32)
+                            );
+                            call!(
+                                d.instance,
+                                CmdDrawIndexed,
+                                frame.command,
+                                indices.len() as u32,
+                                draw.instances.len() as u32,
+                                indices.start,
+                                *base_vertex,
+                                draw.instances.start
+                            );
+                        }
+                    }
                 }
                 call!(d.instance, CmdEndRenderPass, frame.command);
                 #[cfg(feature = "window")]

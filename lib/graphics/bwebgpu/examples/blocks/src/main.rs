@@ -49,6 +49,7 @@ struct Gpu {
     // The safe area top and right insets in pixels, which the FPS overlay stays inside.
     overlay_inset: (f32, f32),
     uniforms: bwebgpu::Buffer,
+    indices: bwebgpu::Buffer,
     opaque_count: u32,
     face_count: u32,
 }
@@ -94,6 +95,16 @@ impl Gpu {
             bwebgpu::BufferUsages::STORAGE,
             &bytes,
         );
+        let bytes: Vec<u8> = [0u16, 1, 2, 0, 2, 3]
+            .into_iter()
+            .flat_map(u16::to_ne_bytes)
+            .collect();
+        let indices = Self::mapped_buffer(
+            &device,
+            "face indices",
+            bwebgpu::BufferUsages::INDEX,
+            &bytes,
+        );
         let uniforms = device.create_buffer(&bwebgpu::BufferDescriptor {
             label: Some("scene uniforms"),
             size: 16,
@@ -106,6 +117,7 @@ impl Gpu {
             mag_filter: bwebgpu::FilterMode::Nearest,
             min_filter: bwebgpu::FilterMode::Linear,
             mipmap_filter: bwebgpu::FilterMode::Linear,
+            lod_max_clamp: (MATERIAL_MIP_COUNT - 1) as f32,
             ..Default::default()
         });
         let scene_layout = device.create_bind_group_layout(&bwebgpu::BindGroupLayoutDescriptor {
@@ -296,6 +308,7 @@ impl Gpu {
             displayed_fps: u32::MAX,
             overlay_inset: (0.0, 0.0),
             uniforms,
+            indices,
             opaque_count,
             face_count,
         }
@@ -332,7 +345,7 @@ impl Gpu {
                 format: bwebgpu::TextureFormat::Depth32Float,
                 depth_write_enabled: Some(options.depth_write),
                 depth_compare: Some(if options.depth_test {
-                    bwebgpu::CompareFunction::LessEqual
+                    bwebgpu::CompareFunction::Less
                 } else {
                     bwebgpu::CompareFunction::Always
                 }),
@@ -347,7 +360,13 @@ impl Gpu {
                 targets: &[Some(bwebgpu::ColorTargetState {
                     format,
                     blend: if options.blend {
-                        Some(bwebgpu::BlendState::ALPHA_BLENDING)
+                        Some(bwebgpu::BlendState {
+                            alpha: bwebgpu::BlendComponent {
+                                src_factor: bwebgpu::BlendFactor::SrcAlpha,
+                                ..bwebgpu::BlendComponent::OVER
+                            },
+                            ..bwebgpu::BlendState::ALPHA_BLENDING
+                        })
                     } else {
                         None
                     },
@@ -474,10 +493,11 @@ impl Gpu {
             pass.draw(0..3, 0..1);
             pass.set_bind_group(0, &self.scene_group, &[]);
             pass.set_pipeline(&self.opaque_pipeline);
-            pass.draw(0..6, 0..self.opaque_count);
+            pass.set_index_buffer(self.indices.slice(..), bwebgpu::IndexFormat::Uint16);
+            pass.draw_indexed(0..6, 0, 0..self.opaque_count);
             if self.face_count > self.opaque_count {
                 pass.set_pipeline(&self.water_pipeline);
-                pass.draw(0..6, self.opaque_count..self.face_count);
+                pass.draw_indexed(0..6, 0, self.opaque_count..self.face_count);
             }
             let (top, right) = self.overlay_inset;
             let x = self.config.width as f32 - self.overlay_canvas.width() as f32 - right - 8.0;

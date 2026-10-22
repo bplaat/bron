@@ -14,6 +14,7 @@ bitflags::bitflags! {
         const VERTEX = 2;
         const UNIFORM = 4;
         const STORAGE = 8;
+        const INDEX = 16;
     }
 
     /// Supported texture usages.
@@ -94,9 +95,31 @@ pub enum Face {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
 pub enum CompareFunction {
-    Always,
+    Never = 1,
+    Less,
+    Equal,
     LessEqual,
+    Greater,
+    NotEqual,
+    GreaterEqual,
+    Always,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum IndexFormat {
+    Uint16,
+    Uint32,
+}
+
+impl IndexFormat {
+    pub const fn byte_size(self) -> u64 {
+        match self {
+            Self::Uint16 => 2,
+            Self::Uint32 => 4,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -109,7 +132,11 @@ pub enum VertexStepMode {
 pub enum VertexFormat {
     Float32x2,
     Float32x3,
+    Float32x4,
     Uint32x2,
+    Uint8x4,
+    Unorm8x4,
+    Sint16x4,
 }
 
 impl VertexFormat {
@@ -117,7 +144,10 @@ impl VertexFormat {
         match self {
             Self::Float32x2 => 8,
             Self::Float32x3 => 12,
+            Self::Float32x4 => 16,
             Self::Uint32x2 => 8,
+            Self::Uint8x4 | Self::Unorm8x4 => 4,
+            Self::Sint16x4 => 8,
         }
     }
 }
@@ -186,14 +216,33 @@ pub struct TextureViewDescriptor {
     pub dimension: Option<TextureViewDimension>,
 }
 
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy)]
 pub struct SamplerDescriptor<'a> {
     pub label: Option<&'a str>,
     pub address_mode_u: AddressMode,
     pub address_mode_v: AddressMode,
+    pub address_mode_w: AddressMode,
     pub mag_filter: FilterMode,
     pub min_filter: FilterMode,
     pub mipmap_filter: MipmapFilterMode,
+    pub lod_min_clamp: f32,
+    pub lod_max_clamp: f32,
+}
+
+impl Default for SamplerDescriptor<'_> {
+    fn default() -> Self {
+        Self {
+            label: None,
+            address_mode_u: AddressMode::default(),
+            address_mode_v: AddressMode::default(),
+            address_mode_w: AddressMode::default(),
+            mag_filter: FilterMode::default(),
+            min_filter: FilterMode::default(),
+            mipmap_filter: MipmapFilterMode::default(),
+            lod_min_clamp: 0.0,
+            lod_max_clamp: 32.0,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -307,11 +356,94 @@ pub struct PrimitiveState {
     pub cull_mode: Option<Face>,
 }
 
-#[derive(Clone, Copy)]
-pub struct BlendState;
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum BlendFactor {
+    #[default]
+    Zero,
+    One,
+    Src,
+    OneMinusSrc,
+    SrcAlpha,
+    OneMinusSrcAlpha,
+    Dst,
+    OneMinusDst,
+    DstAlpha,
+    OneMinusDstAlpha,
+    SrcAlphaSaturated,
+}
+
+impl BlendFactor {
+    pub(crate) const fn for_alpha(self) -> Self {
+        match self {
+            Self::Src => Self::SrcAlpha,
+            Self::OneMinusSrc => Self::OneMinusSrcAlpha,
+            Self::Dst => Self::DstAlpha,
+            Self::OneMinusDst => Self::OneMinusDstAlpha,
+            Self::SrcAlphaSaturated => Self::One,
+            other => other,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[repr(u8)]
+pub enum BlendOperation {
+    #[default]
+    Add,
+    Subtract,
+    ReverseSubtract,
+    Min,
+    Max,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BlendComponent {
+    pub src_factor: BlendFactor,
+    pub dst_factor: BlendFactor,
+    pub operation: BlendOperation,
+}
+
+impl BlendComponent {
+    pub const REPLACE: Self = Self {
+        src_factor: BlendFactor::One,
+        dst_factor: BlendFactor::Zero,
+        operation: BlendOperation::Add,
+    };
+    pub const OVER: Self = Self {
+        src_factor: BlendFactor::One,
+        dst_factor: BlendFactor::OneMinusSrcAlpha,
+        operation: BlendOperation::Add,
+    };
+}
+
+impl Default for BlendComponent {
+    fn default() -> Self {
+        Self::REPLACE
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct BlendState {
+    pub color: BlendComponent,
+    pub alpha: BlendComponent,
+}
 
 impl BlendState {
-    pub const ALPHA_BLENDING: Self = Self;
+    pub const REPLACE: Self = Self {
+        color: BlendComponent::REPLACE,
+        alpha: BlendComponent::REPLACE,
+    };
+    pub const ALPHA_BLENDING: Self = Self {
+        color: BlendComponent {
+            src_factor: BlendFactor::SrcAlpha,
+            ..BlendComponent::OVER
+        },
+        alpha: BlendComponent::OVER,
+    };
+    pub const PREMULTIPLIED_ALPHA_BLENDING: Self = Self {
+        color: BlendComponent::OVER,
+        alpha: BlendComponent::OVER,
+    };
 }
 
 #[derive(Clone, Copy)]

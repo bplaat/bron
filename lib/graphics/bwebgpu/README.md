@@ -51,6 +51,29 @@ WGSL shaders are compiled at build time with
 SPIR-V, or Direct3D bytecode. Native GPU objects remain on their creating
 thread, and surface creation must happen on the main thread on macOS and iOS.
 
+## Rendering API
+
+Draw commands follow upstream `wgpu`: `draw(vertices, instances)` and
+`draw_indexed(indices, base_vertex, instances)` take ranges. Create index buffers
+with `BufferUsages::INDEX`, then bind a buffer slice with
+`set_index_buffer(slice, IndexFormat::Uint16)` or `IndexFormat::Uint32`.
+Buffer slice offsets, index ranges, signed base vertices and starting instances
+are preserved on all backends. The pass retains its buffers until the GPU finishes.
+Invalid usages, alignment and index ranges panic.
+
+Vertex layouts support `Float32x2`, `Float32x3`, `Float32x4`, `Uint32x2`,
+`Uint8x4`, `Unorm8x4` and `Sint16x4`. `vertex_attr_array!` accepts multiple
+`location => Format` entries and computes their packed byte offsets.
+
+`CompareFunction` provides all eight depth comparisons. `BlendState` has separate
+color and alpha `BlendComponent`s, with configurable factors and operations, plus
+`REPLACE`, `ALPHA_BLENDING` and `PREMULTIPLIED_ALPHA_BLENDING` presets.
+Samplers expose U/V/W addressing and `lod_min_clamp` / `lod_max_clamp`.
+
+The API remains a subset: one vertex buffer, one bind group with fixed binding
+roles, and one color target are supported. Compute, MSAA, stencil, anisotropic
+filtering and GPU mipmap generation are not implemented.
+
 ## Examples
 
 ```sh
@@ -65,6 +88,12 @@ See [bwebgpu-triangle](examples/triangle),
 [bwebgpu-blocks](examples/blocks), and
 [bwebgpu-headless](examples/headless). The headless example writes
 `frame.png` in the current directory.
+
+The triangle uses interleaved position and RGBA vertex attributes. The cube uses
+24 vertices and 36 indices. Blocks uses an indexed quad for each face instance,
+strict `Less` depth testing and separate water color/alpha blend components,
+matching the native Metal and OpenGL examples' draw structure. Its mipmaps are
+generated on the CPU and uploaded once.
 
 ## License
 

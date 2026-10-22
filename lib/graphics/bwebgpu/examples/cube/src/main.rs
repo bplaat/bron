@@ -31,8 +31,9 @@ struct Gpu {
     overlay_inset: (f32, f32),
     uniforms: bwebgpu::Buffer,
     vertices: bwebgpu::Buffer,
+    indices: bwebgpu::Buffer,
     group: bwebgpu::BindGroup,
-    vertex_count: u32,
+    index_count: u32,
 }
 
 impl Gpu {
@@ -136,7 +137,7 @@ impl Gpu {
             depth_stencil: Some(bwebgpu::DepthStencilState {
                 format: bwebgpu::TextureFormat::Depth32Float,
                 depth_write_enabled: Some(true),
-                depth_compare: Some(bwebgpu::CompareFunction::LessEqual),
+                depth_compare: Some(bwebgpu::CompareFunction::Less),
                 stencil: Default::default(),
                 bias: Default::default(),
             }),
@@ -258,7 +259,7 @@ impl Gpu {
             mapped_at_creation: false,
         });
         let mesh = cube();
-        let (vertices, group) = Self::upload(&device, &queue, &layout, &uniforms, &mesh);
+        let (vertices, indices, group) = Self::upload(&device, &queue, &layout, &uniforms, &mesh);
 
         Self {
             surface,
@@ -275,8 +276,9 @@ impl Gpu {
             overlay_inset: (0.0, 0.0),
             uniforms,
             vertices,
+            indices,
             group,
-            vertex_count: mesh.vertices.len() as u32,
+            index_count: mesh.indices.len() as u32,
         }
     }
 
@@ -325,7 +327,7 @@ impl Gpu {
         layout: &bwebgpu::BindGroupLayout,
         uniforms: &bwebgpu::Buffer,
         mesh: &Mesh,
-    ) -> (bwebgpu::Buffer, bwebgpu::BindGroup) {
+    ) -> (bwebgpu::Buffer, bwebgpu::Buffer, bwebgpu::BindGroup) {
         // Upload vertex data
         let bytes = mesh.bytes();
         let vertices = device.create_buffer(&bwebgpu::BufferDescriptor {
@@ -340,6 +342,24 @@ impl Gpu {
             .expect("Mapped vertex buffer")
             .copy_from_slice(&bytes);
         vertices.unmap();
+
+        let bytes: Vec<u8> = mesh
+            .indices
+            .iter()
+            .flat_map(|index| index.to_ne_bytes())
+            .collect();
+        let indices = device.create_buffer(&bwebgpu::BufferDescriptor {
+            label: Some("cube indices"),
+            size: bytes.len() as u64,
+            usage: bwebgpu::BufferUsages::INDEX,
+            mapped_at_creation: true,
+        });
+        indices
+            .slice(..)
+            .get_mapped_range_mut()
+            .expect("Mapped indices")
+            .copy_from_slice(&bytes);
+        indices.unmap();
 
         // Upload the material texture
         let texture_width = mesh.texture.width();
@@ -406,7 +426,7 @@ impl Gpu {
             ],
         });
 
-        (vertices, group)
+        (vertices, indices, group)
     }
 
     fn render(&mut self, elapsed: f32, fps: u32) -> bool {
@@ -477,7 +497,8 @@ impl Gpu {
             pass.set_pipeline(&self.pipeline);
             pass.set_bind_group(0, &self.group, &[]);
             pass.set_vertex_buffer(0, self.vertices.slice(..));
-            pass.draw(0..self.vertex_count, 0..1);
+            pass.set_index_buffer(self.indices.slice(..), bwebgpu::IndexFormat::Uint16);
+            pass.draw_indexed(0..self.index_count, 0, 0..1);
 
             let overlay_width = self.overlay_canvas.width() as f32;
             let overlay_height = self.overlay_canvas.height() as f32;
@@ -572,6 +593,7 @@ struct Vertex {
 
 struct Mesh {
     vertices: Vec<Vertex>,
+    indices: Vec<u16>,
     texture: image::Image,
 }
 
@@ -599,6 +621,7 @@ impl Mesh {
 
 fn cube() -> Mesh {
     let mut vertices = Vec::new();
+    let mut indices = Vec::new();
     for (normal, corners) in [
         (
             [0., 0., 1.],
@@ -640,7 +663,9 @@ fn cube() -> Mesh {
             ],
         ),
     ] {
-        for index in [0, 1, 2, 0, 2, 3] {
+        let base = vertices.len() as u16;
+        indices.extend([0, 1, 2, 0, 2, 3].map(|index| base + index));
+        for index in 0..4 {
             vertices.push(Vertex {
                 position: corners[index],
                 normal,
@@ -651,6 +676,7 @@ fn cube() -> Mesh {
 
     Mesh {
         vertices,
+        indices,
         texture: image::decode(include_bytes!("../assets/crate.jpg"))
             .expect("Decode bundled crate JPEG"),
     }
@@ -700,6 +726,31 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn indexed_cube_preserves_outward_winding() {
+        let mesh = cube();
+        assert_eq!(mesh.vertices.len(), 24);
+        assert_eq!(mesh.indices.len(), 36);
+        for triangle in mesh.indices.as_chunks::<3>().0 {
+            let [a, b, c] = triangle.map(|index| &mesh.vertices[usize::from(index)]);
+            let ab = std::array::from_fn::<_, 3, _>(|i| b.position[i] - a.position[i]);
+            let ac = std::array::from_fn::<_, 3, _>(|i| c.position[i] - a.position[i]);
+            let cross = [
+                ab[1] * ac[2] - ab[2] * ac[1],
+                ab[2] * ac[0] - ab[0] * ac[2],
+                ab[0] * ac[1] - ab[1] * ac[0],
+            ];
+            assert!(
+                cross
+                    .iter()
+                    .zip(a.normal)
+                    .map(|(value, normal)| value * normal)
+                    .sum::<f32>()
+                    > 0.0
+            );
+        }
+    }
 
     #[test]
     fn frame_rate_updates_after_one_second() {

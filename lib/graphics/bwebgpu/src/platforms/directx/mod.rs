@@ -194,6 +194,22 @@ pub(crate) struct Context {
     acquired: Cell<bool>,
 }
 
+const fn blend_factor(value: BlendFactor) -> i32 {
+    match value {
+        BlendFactor::Zero => 1,
+        BlendFactor::One => 2,
+        BlendFactor::Src => 3,
+        BlendFactor::OneMinusSrc => 4,
+        BlendFactor::SrcAlpha => 5,
+        BlendFactor::OneMinusSrcAlpha => 6,
+        BlendFactor::Dst => 9,
+        BlendFactor::OneMinusDst => 10,
+        BlendFactor::DstAlpha => 7,
+        BlendFactor::OneMinusDstAlpha => 8,
+        BlendFactor::SrcAlphaSaturated => 11,
+    }
+}
+
 impl Context {
     pub(super) fn new() -> Result<Rc<Self>> {
         match Self::with_driver(false) {
@@ -394,6 +410,17 @@ impl Context {
                         },
                     },
                     ShaderVisibility: 5,
+                },
+                D3D12_ROOT_PARAMETER {
+                    ParameterType: 1,
+                    Anonymous: D3D12_ROOT_PARAMETER_0 {
+                        Constants: D3D12_ROOT_CONSTANTS {
+                            ShaderRegister: 5,
+                            RegisterSpace: 0,
+                            Num32BitValues: 3,
+                        },
+                    },
+                    ShaderVisibility: 1,
                 },
             ];
             let desc = D3D12_ROOT_SIGNATURE_DESC {
@@ -648,10 +675,15 @@ impl Context {
                 } else {
                     3
                 },
-                AddressW: 3,
+                AddressW: if desc.address_mode_w == AddressMode::Repeat {
+                    1
+                } else {
+                    3
+                },
                 MaxAnisotropy: 1,
                 ComparisonFunc: 8,
-                MaxLOD: f32::MAX,
+                MinLOD: desc.lod_min_clamp,
+                MaxLOD: desc.lod_max_clamp,
                 ..Default::default()
             },
         })
@@ -680,6 +712,10 @@ impl Context {
                     VertexFormat::Float32x2 => 16,
                     VertexFormat::Float32x3 => 6,
                     VertexFormat::Uint32x2 => 17,
+                    VertexFormat::Float32x4 => 2,
+                    VertexFormat::Uint8x4 => 30,
+                    VertexFormat::Unorm8x4 => 28,
+                    VertexFormat::Sint16x4 => 14,
                 },
                 AlignedByteOffset: attribute.offset as u32,
                 InputSlotClass: i32::from(
@@ -691,14 +727,15 @@ impl Context {
                 ..Default::default()
             })
             .collect::<Vec<_>>();
+        let state = color.blend.unwrap_or(BlendState::REPLACE);
         let blend = D3D12_RENDER_TARGET_BLEND_DESC {
             BlendEnable: i32::from(color.blend.is_some()),
-            SrcBlend: 5,
-            DestBlend: 6,
-            BlendOp: 1,
-            SrcBlendAlpha: 2,
-            DestBlendAlpha: 6,
-            BlendOpAlpha: 1,
+            SrcBlend: blend_factor(state.color.src_factor),
+            DestBlend: blend_factor(state.color.dst_factor),
+            BlendOp: state.color.operation as i32 + 1,
+            SrcBlendAlpha: blend_factor(state.alpha.src_factor.for_alpha()),
+            DestBlendAlpha: blend_factor(state.alpha.dst_factor.for_alpha()),
+            BlendOpAlpha: state.alpha.operation as i32 + 1,
             LogicOp: 5,
             RenderTargetWriteMask: 15,
             ..Default::default()
@@ -736,13 +773,10 @@ impl Context {
                     DepthWriteMask: i32::from(
                         depth.is_some_and(|depth| depth.depth_write_enabled.unwrap_or(false)),
                     ),
-                    DepthFunc: if depth
-                        .is_some_and(|depth| depth.depth_compare == Some(CompareFunction::Always))
-                    {
-                        8
-                    } else {
-                        4
-                    },
+                    DepthFunc: depth
+                        .and_then(|depth| depth.depth_compare)
+                        .unwrap_or(CompareFunction::LessEqual)
+                        as i32,
                     FrontFace: D3D12_DEPTH_STENCILOP_DESC {
                         StencilFailOp: 1,
                         StencilDepthFailOp: 1,
@@ -1119,7 +1153,7 @@ impl Context {
                             }
                         }
                     }
-                    if let Some((stride, _)) = draw.pipeline.vertex {
+                    if let Some(layout) = draw.pipeline.vertex {
                         let (buffer, range) =
                             draw.vertex.as_ref().expect("vertex buffer validated");
                         let native = &buffer.inner.native;
@@ -1130,7 +1164,7 @@ impl Context {
                                 + range.start,
                             SizeInBytes: u32::try_from(range.end - range.start)
                                 .expect("Vertex buffer too large"),
-                            StrideInBytes: stride as u32,
+                            StrideInBytes: layout.stride as u32,
                         };
                         GraphicsCommandList_IASetVertexBuffers(list.0, 0, 1, &view);
                     }
@@ -1152,13 +1186,57 @@ impl Context {
                         bottom: (s[1] + s[3]) as i32,
                     };
                     GraphicsCommandList_RSSetScissorRects(list.0, 1, &rect);
-                    GraphicsCommandList_DrawInstanced(
+                    let first_vertex = match &draw.kind {
+                        DrawKind::Direct(vertices) => vertices.start,
+                        DrawKind::Indexed { base_vertex, .. } => *base_vertex as u32,
+                    };
+                    let offsets = [first_vertex, draw.instances.start, 0];
+                    GraphicsCommandList_SetGraphicsRoot32BitConstants(
                         list.0,
-                        draw.vertices.len() as u32,
-                        draw.instances.len() as u32,
-                        draw.vertices.start,
-                        draw.instances.start,
+                        5,
+                        3,
+                        offsets.as_ptr().cast(),
+                        0,
                     );
+                    match &draw.kind {
+                        DrawKind::Direct(vertices) => GraphicsCommandList_DrawInstanced(
+                            list.0,
+                            vertices.len() as u32,
+                            draw.instances.len() as u32,
+                            vertices.start,
+                            draw.instances.start,
+                        ),
+                        DrawKind::Indexed {
+                            indices,
+                            base_vertex,
+                            binding,
+                        } => {
+                            let native = &binding.buffer.inner.native;
+                            Self::transition(list, &native.object, &native.state, 195);
+                            touched
+                                .insert(Rc::as_ptr(&binding.buffer.inner), binding.buffer.clone());
+                            let view = D3D12_INDEX_BUFFER_VIEW {
+                                BufferLocation: Resource_GetGPUVirtualAddress(native.object.0)
+                                    + binding.range.start,
+                                SizeInBytes: u32::try_from(binding.range.end - binding.range.start)
+                                    .expect("Index buffer too large"),
+                                Format: if binding.format == IndexFormat::Uint16 {
+                                    57
+                                } else {
+                                    42
+                                },
+                            };
+                            GraphicsCommandList_IASetIndexBuffer(list.0, &view);
+                            GraphicsCommandList_DrawIndexedInstanced(
+                                list.0,
+                                indices.len() as u32,
+                                draw.instances.len() as u32,
+                                indices.start,
+                                *base_vertex,
+                                draw.instances.start,
+                            );
+                        }
+                    }
                 }
                 if color.index.is_some() {
                     Self::transition(list, &color.object, &color.state, 0);

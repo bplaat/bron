@@ -1121,6 +1121,46 @@ pub(super) unsafe fn GraphicsCommandList_DrawInstanced(
         function(a0, a1, a2, a3, a4)
     }
 }
+
+#[repr(C)]
+pub(super) struct D3D12_INDEX_BUFFER_VIEW {
+    pub(super) BufferLocation: u64,
+    pub(super) SizeInBytes: u32,
+    pub(super) Format: i32,
+}
+
+pub(super) unsafe fn GraphicsCommandList_DrawIndexedInstanced(
+    command: *mut c_void,
+    index_count: u32,
+    instance_count: u32,
+    first_index: u32,
+    base_vertex: i32,
+    first_instance: u32,
+) {
+    unsafe {
+        let function: unsafe extern "system" fn(*mut c_void, u32, u32, u32, i32, u32) =
+            vtable_method!(command, 13);
+        function(
+            command,
+            index_count,
+            instance_count,
+            first_index,
+            base_vertex,
+            first_instance,
+        );
+    }
+}
+
+pub(super) unsafe fn GraphicsCommandList_IASetIndexBuffer(
+    command: *mut c_void,
+    view: *const D3D12_INDEX_BUFFER_VIEW,
+) {
+    unsafe {
+        let function: unsafe extern "system" fn(*mut c_void, *const D3D12_INDEX_BUFFER_VIEW) =
+            vtable_method!(command, 43);
+        function(command, view);
+    }
+}
 pub(super) unsafe fn GraphicsCommandList_CopyBufferRegion(
     a0: *mut c_void,
     a1: *mut c_void,
@@ -1261,6 +1301,20 @@ pub(super) unsafe fn GraphicsCommandList_SetGraphicsRootShaderResourceView(
     unsafe {
         let function: unsafe extern "system" fn(*mut c_void, u32, u64) = vtable_method!(a0, 40);
         function(a0, a1, a2)
+    }
+}
+
+pub(super) unsafe fn GraphicsCommandList_SetGraphicsRoot32BitConstants(
+    command: *mut c_void,
+    parameter: u32,
+    count: u32,
+    values: *const c_void,
+    offset: u32,
+) {
+    unsafe {
+        let function: unsafe extern "system" fn(*mut c_void, u32, u32, *const c_void, u32) =
+            vtable_method!(command, 36);
+        function(command, parameter, count, values, offset);
     }
 }
 pub(super) unsafe fn GraphicsCommandList_IASetVertexBuffers(

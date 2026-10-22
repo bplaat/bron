@@ -9,12 +9,10 @@ struct Out {
     @location(0) color: vec4<f32>,
 }
 
-@vertex fn vs_main(@builtin(vertex_index) index: u32) -> Out {
-    let positions = array(vec2(0.0, 0.75), vec2(-0.7, -0.6), vec2(0.7, -0.6));
-    let colors = array(vec4(1.0, 0.1, 0.1, 1.0), vec4(0.1, 1.0, 0.2, 1.0), vec4(0.1, 0.3, 1.0, 1.0));
+@vertex fn vs_main(@location(0) position: vec2<f32>, @location(1) color: vec4<f32>) -> Out {
     var out: Out;
-    out.position = vec4(positions[index], 0.0, 1.0);
-    out.color = colors[index];
+    out.position = vec4(position, 0.0, 1.0);
+    out.color = color;
     return out;
 }
 
