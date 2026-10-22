@@ -1,4 +1,4 @@
-# bwebgpu Rust library
+# Bassie WebGPU Rust library
 
 A native GPU rendering library for [bwindow](../../ui/bwindow) and offscreen bitmaps,
 backed by Metal on macOS and iOS, Direct3D 12 on Windows, and Vulkan on Linux and Android.
@@ -89,18 +89,6 @@ See [bwebgpu-triangle](examples/triangle),
 [bwebgpu-headless](examples/headless). The headless example writes
 `frame.png` in the current directory.
 
-The triangle uses interleaved position and RGBA vertex attributes. The cube uses
-24 vertices and 36 indices. Blocks uses an indexed quad for each face instance,
-strict `Less` depth testing and separate water color/alpha blend components,
-matching the native Metal and OpenGL examples' draw structure. Its mipmaps are
-generated on the CPU and uploaded once.
-
-## License
-
-Copyright © 2026 [Bastiaan van der Plaat](https://github.com/bplaat)
-
-Licensed under the [MIT](../../../LICENSE) license.
-
 ## iOS Simulator
 
 From the workspace root on macOS, build, install and launch the blocks example with:
@@ -111,7 +99,6 @@ cargo run -p cargo-bundle -- bundle --path lib/graphics/bwebgpu/examples/blocks 
 
 This requires the Xcode iOS Simulator SDK and runtime, the Metal compiler, and the
 `aarch64-apple-ios-sim` Rust target. Add `--device <name-or-UDID>` to select a simulator.
-The iOS surface uses a CAMetalLayer and on-demand CADisplayLink animation callbacks.
 
 ## Android
 
@@ -122,9 +109,14 @@ device or emulator with:
 cargo run -p cargo-bundle -- bundle --path lib/graphics/bwebgpu/examples/blocks --android --run
 ```
 
-The surface presents to the whole activity window, under the system bars, so
-`surface.size()` is the window size in pixels. Keep overlays inside `window.safe_area()`.
-Animation frames are scheduled with the display choreographer. The framework replaces the
-native window when the app returns to the foreground: until it exists `get_current_texture`
-returns `Occluded`, afterwards `Outdated`, so configure the surface again on `Resize` or
-`Outdated`. Surfaces support `Rgba8Unorm` and `Rgba8UnormSrgb`.
+The surface covers the whole window, also under the system bars, so `surface.size()` is
+the window size in pixels. Keep overlays inside `window.safe_area()`. Android replaces the
+window surface when the app returns to the foreground: until it exists
+`get_current_texture` returns `Occluded`, afterwards `Outdated`, so configure the surface
+again on `Resize` or `Outdated`. Surfaces support `Rgba8Unorm` and `Rgba8UnormSrgb`.
+
+## License
+
+Copyright © 2026 [Bastiaan van der Plaat](https://github.com/bplaat)
+
+Licensed under the [MIT](../../../LICENSE) license.

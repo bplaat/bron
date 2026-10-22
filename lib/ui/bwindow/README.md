@@ -71,7 +71,8 @@ on touch screens and over a web view, which shows its own cursors.
 
 Use `request_redraw()` after state changes. For animation, call
 `request_animation_frame()` and request the next frame from its
-`RedrawRequested` callback.
+`RedrawRequested` callback. Frames follow the refresh rate of the display the window
+is on, and repeated requests coalesce into one frame.
 
 ## Window Content
 
@@ -81,18 +82,11 @@ Use `request_redraw()` after state changes. For animation, call
 - Web content: attach `bwebview::WebviewBuilder` and map browser notifications into
   your application's typed events with `on_event(proxy, mapper)`.
 
-A window has one exclusive content attachment, `window.attach_content()`. The window owns
-the native content host and its interaction, the attached backend only draws and presents:
-
-- `WindowAttachment::content_handle()` is the host renderers draw into: the client area of
-  the HWND on Windows, a shared layer-backed NSView or UIView on macOS and iOS, a shared
-  GtkDrawingArea on GTK (created on first use) and the window surface of the activity on
-  Android. `window_handle()` is the top-level window, for content that adds its own window
-  child, like a web view.
-- `on_resize`, `on_scale_factor_changed`, `on_redraw`, `on_animation_frame` and `on_close`
-  are the explicit hooks, `windows_on_paint` runs the paint pass of `WM_PAINT` after the
-  window validated it. All run on the main thread and are disconnected when the window
-  closes, also during a callback.
+A window has one content attachment, taken with `window.attach_content()`. The window
+keeps handling input and pacing frames, the attached content only draws. Content draws
+into `WindowAttachment::content_handle()`: the client area of the window on Windows, a
+layer-backed view on macOS and iOS, a drawing area on GTK and the window surface on
+Android.
 
 ## Safe Area
 
@@ -107,7 +101,7 @@ and let backgrounds fill the window. Changes, like rotating the device, send
 - `remember_window_state` (default): persist native window placement.
 - `dialog`: native message and file dialogs.
 - `file_drop`: native file-drop events.
-- `menu`: custom macOS menus.
+- `menu`: custom application menus and their keyboard shortcuts.
 - `progress_bar`: Windows taskbar and GTK launcher progress.
 
 ## iOS
@@ -137,12 +131,9 @@ sudo dnf install gtk3
 
 ## Android
 
-Build an APK with [cargo-bundle](../../../tools/cargo-bundle) `--android`. The app's
-unchanged binary is linked as a shared library that the framework `android.app.NativeActivity`
-loads, so the APK has no Java code. bwindow implements the activity callbacks with the NDK and
-runs the `main` function on a dedicated "main" thread with its own looper, where input and the
-event loop run. The few framework calls without an NDK API, like insets and system bar icons,
-use JNI. Android 8.0 (API 26) is the minimum.
+Build an APK with [cargo-bundle](../../../tools/cargo-bundle) `--android`. The app runs
+in the framework `android.app.NativeActivity`, so the APK needs no Java code. Android 8.0
+(API 26) is the minimum.
 
 - One window per app. It fills the activity, also under the system bars, `Resize` reports
   its size in dp. The safe area is the system bar and display cutout insets.
@@ -157,8 +148,6 @@ use JNI. Android 8.0 (API 26) is the minimum.
   then the activity finishes and the process exits.
 - stdout, stderr, and panics are written to logcat with the binary name as tag.
 - The `dialog`, `file_drop`, `menu`, and `progress_bar` features are unsupported.
-- Content backends that need Java, like bwebview, embed their own dex and load it with
-  `DexClassLoader`. Native backends, like bwebgpu, present to `android_native_window()`.
 
 ## License
 
