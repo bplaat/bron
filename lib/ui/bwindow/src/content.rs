@@ -67,6 +67,8 @@ pub(crate) struct ContentHost {
     content_factory: RefCell<Option<ContentFactory>>,
     scale_factor: Cell<f32>,
     attached: Cell<bool>,
+    ready: Cell<bool>,
+    ready_handler: RefCell<Option<CloseHandler>>,
     closed: Cell<bool>,
     background: Cell<Option<u32>>,
     theme: Cell<Option<crate::Theme>>,
@@ -90,6 +92,8 @@ impl ContentHost {
             content_factory: RefCell::new(None),
             scale_factor: Cell::new(1.0),
             attached: Cell::new(false),
+            ready: Cell::new(!cfg!(target_os = "ios")),
+            ready_handler: RefCell::new(None),
             closed: Cell::new(false),
             background: Cell::new(background),
             theme: Cell::new(None),
@@ -103,6 +107,17 @@ impl ContentHost {
             frames: RefCell::new(None),
             animation_frame_pending: Cell::new(false),
         })
+    }
+
+    #[cfg(any(target_os = "ios", test))]
+    pub(crate) fn ready(&self) {
+        if self.closed.get() || self.ready.replace(true) {
+            return;
+        }
+        let handler = self.ready_handler.borrow_mut().take();
+        if let Some(handler) = handler {
+            handler();
+        }
     }
 
     pub(crate) fn set_handle(&self, handle: NativeWindowHandle) {
@@ -228,6 +243,8 @@ impl ContentHost {
 
     // Take the hooks out before dropping them, their destructors can register hooks again.
     fn disconnect(&self) -> Option<CloseHandler> {
+        let ready = self.ready_handler.borrow_mut().take();
+        drop(ready);
         let redraw = self.redraw.borrow_mut().take();
         drop(redraw);
         #[cfg(windows)]
@@ -367,6 +384,23 @@ impl WindowAttachment {
         self.0.allow_file_drop
     }
 
+    /// Whether native content can be created for this window.
+    pub fn is_ready(&self) -> bool {
+        self.0.ready.get() && !self.is_closed()
+    }
+
+    /// Run once when native content can be created, immediately if already ready.
+    /// Pending callbacks are canceled when the attachment disconnects.
+    pub fn on_ready(&self, handler: impl FnOnce() + 'static) {
+        assert!(!self.is_closed(), "window is closed");
+        if self.0.ready.get() {
+            handler();
+        } else {
+            let previous = self.0.ready_handler.borrow_mut().replace(Box::new(handler));
+            drop(previous);
+        }
+    }
+
     /// Register a callback for native client-area size changes in physical pixels.
     pub fn on_resize(&self, handler: impl Fn(u32, u32) + 'static) {
         assert!(!self.is_closed(), "window is closed");
@@ -493,6 +527,41 @@ impl WindowEventSender {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn readiness_runs_once_and_late_registration_runs_immediately() {
+        let host = ContentHost::new(WindowId::new(), None, false);
+        host.ready.set(false);
+        let attachment = host.attach().expect("attachment");
+        let calls = Rc::new(Cell::new(0));
+        let output = calls.clone();
+        attachment.on_ready(move || output.set(output.get() + 1));
+        assert_eq!(calls.get(), 0);
+        host.ready();
+        host.ready();
+        assert_eq!(calls.get(), 1);
+        assert!(attachment.is_ready());
+        let output = calls.clone();
+        attachment.on_ready(move || output.set(output.get() + 1));
+        assert_eq!(calls.get(), 2);
+    }
+
+    #[test]
+    fn pending_readiness_is_canceled_on_disconnect_or_close() {
+        for close in [false, true] {
+            let host = ContentHost::new(WindowId::new(), None, false);
+            host.ready.set(false);
+            let attachment = host.attach().expect("attachment");
+            attachment.on_ready(|| panic!("canceled readiness callback"));
+            if close {
+                host.close();
+                assert!(!attachment.is_ready());
+            } else {
+                drop(attachment);
+            }
+            host.ready();
+        }
+    }
 
     #[test]
     fn replacing_hooks_allows_captured_destructors_to_register_again() {

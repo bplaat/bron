@@ -154,6 +154,7 @@ fn show_window(scene: *mut Object, controller: &WindowViewController) {
         window
     };
     controller.ivars().window.replace(Some(window));
+    controller.ivars().host.ready();
     if !controller.ivars().created.replace(true) {
         send_event(crate::Event::Window(
             controller.ivars().host.id(),
