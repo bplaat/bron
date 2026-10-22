@@ -11,6 +11,7 @@ use std::thread::sleep;
 use std::time::Duration;
 
 use self::manifest::{ManifestInfo, is_valid_identifier, normalize_identifier};
+use self::native::Abi;
 use self::toolchain::Toolchain;
 use crate::args::Args;
 use crate::manifest::Manifest;
@@ -30,7 +31,7 @@ fn fail(message: &str) -> ! {
     exit(1);
 }
 
-/// Build a signed APK for every ABI and optionally install and run it.
+/// Build a signed APK and optionally install and run it, which only builds the ABI of the device.
 pub(crate) fn bundle(args: &Args, target_dir: &str, manifest: &Manifest) {
     if cfg!(windows) {
         fail("Android bundles can only be built on macOS and Linux");
@@ -59,10 +60,22 @@ pub(crate) fn bundle(args: &Args, target_dir: &str, manifest: &Manifest) {
         ));
     }
     let toolchain = Toolchain::find(android.target_sdk_version);
+    let abis = if args.run {
+        vec![device_abi()]
+    } else {
+        native::ABIS.to_vec()
+    };
 
     let android_dir = format!("{target_dir}/android");
     fs::create_dir_all(&android_dir).expect("Failed to create Android build directory");
-    native::build(path, &android_dir, &package.name, &toolchain, min_sdk);
+    native::build(
+        path,
+        &android_dir,
+        &package.name,
+        &toolchain,
+        min_sdk,
+        &abis,
+    );
 
     let res_dir = Path::new(path).join(android.res_dir.as_deref().unwrap_or("meta/android/res"));
     let extension = Path::new(path).join(
@@ -92,6 +105,7 @@ pub(crate) fn bundle(args: &Args, target_dir: &str, manifest: &Manifest) {
         &toolchain,
         min_sdk,
         &package.name,
+        &abis,
         &apk,
     );
     println!("Created {}", apk.display());
@@ -101,6 +115,26 @@ pub(crate) fn bundle(args: &Args, target_dir: &str, manifest: &Manifest) {
 }
 
 // MARK: Run
+/// The most preferred ABI of the connected device or emulator that the bundle supports.
+fn device_abi() -> Abi {
+    let output = Command::new(android_build::adb())
+        .args(["shell", "getprop", "ro.product.cpu.abilist"])
+        .output()
+        .unwrap_or_else(|error| fail(&format!("Failed to run adb: {error}")));
+    if !output.status.success() {
+        fail(&format!(
+            "No connected Android device or emulator:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+    let abilist = String::from_utf8_lossy(&output.stdout);
+    let abilist = abilist.trim();
+    abilist
+        .split(',')
+        .find_map(|name| native::ABIS.into_iter().find(|(abi, _, _)| *abi == name))
+        .unwrap_or_else(|| fail(&format!("The device ABIs {abilist} are not supported")))
+}
+
 fn install_and_run(apk: &Path, identifier: &str) -> ! {
     let adb_path = android_build::adb();
     let adb = |args: &[&str]| {

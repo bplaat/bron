@@ -24,8 +24,11 @@ pub(crate) fn bundle(args: &Args, target_dir: &str, manifest: &Manifest) {
         return;
     }
     let bundle_metadata = &manifest.package.metadata.bundle;
-    app::build(&args.path, target_dir, manifest);
-    appex::build_all(&args.path, target_dir, manifest);
+    // Running only needs the host architecture, the zip and DMG archives stay universal.
+    let universal =
+        bundle_metadata.macos.lipo.unwrap_or(true) && (!args.run || args.zip || args.dmg);
+    app::build(&args.path, target_dir, manifest, universal);
+    appex::build_all(&args.path, target_dir, manifest, universal);
     app::sign(&args.path, target_dir, bundle_metadata);
 
     if args.zip {

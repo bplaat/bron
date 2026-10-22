@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use super::fail;
-use super::native::ABIS;
+use super::native::Abi;
 use super::toolchain::Toolchain;
 use crate::support::remove_path_if_exists;
 
@@ -34,6 +34,7 @@ pub(super) fn package(
     toolchain: &Toolchain,
     min_sdk: u32,
     lib_name: &str,
+    abis: &[Abi],
     output: &Path,
 ) {
     let build_tools = &toolchain.sdk.build_tools;
@@ -66,7 +67,7 @@ pub(super) fn package(
         .write(true)
         .open(&unaligned)
         .expect("Failed to open unaligned.apk");
-    for (abi, _, _) in ABIS {
+    for (abi, _, _) in abis {
         let name = format!("lib/{abi}/lib{lib_name}.so");
         let library =
             fs::read(format!("{target_dir}/{name}")).expect("Failed to read native library");
