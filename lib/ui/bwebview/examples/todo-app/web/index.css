@@ -74,11 +74,23 @@ html {
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
     overscroll-behavior: none;
+    touch-action: pan-x pan-y;
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+    -webkit-tap-highlight-color: transparent;
+    -webkit-touch-callout: none;
     cursor: default;
     -webkit-user-select: none;
     user-select: none;
     scrollbar-width: thin;
     scrollbar-color: var(--color-scrollbar) transparent;
+}
+
+input,
+textarea {
+    -webkit-user-select: text;
+    user-select: text;
+    -webkit-touch-callout: default;
 }
 
 ::-webkit-scrollbar {
@@ -101,6 +113,7 @@ body {
 
 .app {
     height: 100vh;
+    height: 100dvh;
 }
 
 /*
