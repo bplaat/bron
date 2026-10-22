@@ -22,4 +22,3 @@ objc2 = { version = "0.6.4", optional = true }
 [features]
 default = ["window"]
 window = ["dep:bwindow", "dep:objc2"]
-file_drop = ["window", "bwindow/file_drop"]
