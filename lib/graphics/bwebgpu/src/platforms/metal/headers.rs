@@ -14,38 +14,6 @@ use objc2::runtime::AnyObject;
 use objc2::{Encode, Encoding};
 
 pub(super) type Object = Retained<AnyObject>;
-#[cfg(all(feature = "window", target_os = "macos"))]
-pub(super) type CVDisplayLinkRef = *mut c_void;
-#[cfg(all(feature = "window", target_os = "macos"))]
-pub(super) type CVDisplayLinkOutputCallback = unsafe extern "C" fn(
-    CVDisplayLinkRef,
-    *const c_void,
-    *const c_void,
-    u64,
-    *mut u64,
-    *mut c_void,
-) -> i32;
-
-#[cfg(all(feature = "window", target_os = "macos"))]
-#[link(name = "CoreVideo", kind = "framework")]
-unsafe extern "C" {
-    pub(super) fn CVDisplayLinkCreateWithActiveCGDisplays(
-        display_link: *mut CVDisplayLinkRef,
-    ) -> i32;
-    pub(super) fn CVDisplayLinkSetOutputCallback(
-        display_link: CVDisplayLinkRef,
-        callback: CVDisplayLinkOutputCallback,
-        user_info: *mut c_void,
-    ) -> i32;
-    pub(super) fn CVDisplayLinkSetCurrentCGDisplay(
-        display_link: CVDisplayLinkRef,
-        display_id: u32,
-    ) -> i32;
-    pub(super) fn CVDisplayLinkStart(display_link: CVDisplayLinkRef) -> i32;
-    pub(super) fn CVDisplayLinkStop(display_link: CVDisplayLinkRef) -> i32;
-    pub(super) fn CVDisplayLinkRelease(display_link: CVDisplayLinkRef);
-}
-
 #[link(name = "Metal", kind = "framework")]
 unsafe extern "C" {
     pub(super) fn MTLCreateSystemDefaultDevice() -> *mut AnyObject;
@@ -80,9 +48,3 @@ structure!(MOrigin, "?", x: usize, y: usize, z: usize);
 structure!(Viewport, "?", x: f64, y: f64, width: f64, height: f64, near: f64, far: f64);
 structure!(Scissor, "?", x: usize, y: usize, width: usize, height: usize);
 structure!(Clear, "?", r: f64, g: f64, b: f64, a: f64);
-
-#[cfg(all(feature = "window", target_os = "ios"))]
-#[link(name = "Foundation", kind = "framework")]
-unsafe extern "C" {
-    pub(super) static NSRunLoopCommonModes: *mut AnyObject;
-}

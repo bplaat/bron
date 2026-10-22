@@ -4,23 +4,18 @@
  * SPDX-License-Identifier: MIT
  */
 
-use std::cell::{Cell, RefCell};
+use std::cell::Cell;
 use std::ptr::null_mut;
 use std::rc::Rc;
 
 use bwindow::{NativeContentHandle, WindowAttachment, WindowEventSender};
 use objc2::rc::{Allocated, Retained};
 use objc2::runtime::{AnyObject as Object, Bool};
-use objc2::{class, define_class, msg_send, sel};
+use objc2::{class, define_class, msg_send};
 
 use super::context::{PlatformCanvasContext, TextStyleCache};
 use super::headers::*;
 use crate::CanvasRenderingContext2d;
-
-#[link(name = "Foundation", kind = "framework")]
-unsafe extern "C" {
-    static NSRunLoopCommonModes: *mut Object;
-}
 
 #[derive(Clone, Copy)]
 struct Frame {
@@ -31,7 +26,7 @@ struct Frame {
 }
 
 // Draws a CALayer at the bottom of the shared window content view with Core Graphics, the
-// window delivers the interaction. Animation frames follow the display with a display link.
+// window delivers the interaction and paces the animation frames.
 struct LayerState {
     view: Retained<Object>,
     layer: Retained<Object>,
@@ -39,8 +34,6 @@ struct LayerState {
     frame: Cell<Option<Frame>>,
     closed: Cell<bool>,
     painting: Cell<bool>,
-    scheduled: Cell<bool>,
-    display_link: RefCell<Option<Retained<Object>>>,
 }
 
 type DelegateIvars = Rc<LayerState>;
@@ -61,59 +54,20 @@ define_class!(
         fn _action_for_layer(&self, _: *mut Object, _: *mut Object) -> *mut Object {
             unsafe { msg_send![class!(NSNull), null] }
         }
-
-        #[unsafe(method(displayFrame:))]
-        fn _display_frame(&self, _: *mut Object) {
-            // Keep the display link running while frames keep being requested.
-            if self.ivars().scheduled.get() {
-                self.deliver_animation_frame();
-            } else {
-                self.set_display_link_paused(true);
-            }
-        }
     }
 );
 
 impl LayerDelegate {
-    fn set_needs_display(&self) {
-        let _: () = unsafe { msg_send![&*self.ivars().layer, setNeedsDisplay] };
-    }
-
-    fn deliver_animation_frame(&self) {
-        self.ivars().scheduled.set(false);
-        if !self.ivars().closed.get() {
-            self.set_needs_display();
-        }
-    }
-
     fn request_redraw(&self) {
         let state = self.ivars();
         if state.closed.get() {
             return;
         }
-        if !state.painting.get() {
-            // A running display link pauses itself on its next callback.
-            state.scheduled.set(false);
-            self.set_needs_display();
-            return;
-        }
-        if !state.scheduled.replace(true) {
-            self.set_display_link_paused(false);
-        }
-    }
-
-    fn request_animation_frame(&self) {
-        let state = self.ivars();
-        if state.closed.get() || state.scheduled.replace(true) {
-            return;
-        }
-        self.set_display_link_paused(false);
-    }
-
-    fn set_display_link_paused(&self, paused: bool) {
-        if let Some(display_link) = &*self.ivars().display_link.borrow() {
-            let paused = if paused { Bool::YES } else { Bool::NO };
-            let _: () = unsafe { msg_send![display_link, setPaused:paused] };
+        // Redraws requested while painting wait for the next display frame.
+        if state.painting.get() {
+            state.sender.request_animation_frame();
+        } else {
+            let _: () = unsafe { msg_send![&*state.layer, setNeedsDisplay] };
         }
     }
 
@@ -137,12 +91,7 @@ impl LayerDelegate {
             return;
         }
         state.frame.set(None);
-        state.scheduled.set(false);
         unsafe {
-            // The display link retains its target, so invalidate it to release the delegate.
-            if let Some(display_link) = state.display_link.take() {
-                let _: () = msg_send![&display_link, invalidate];
-            }
             // The layer delegate is non-owning, so clear it before the delegate is released.
             let _: () = msg_send![&*state.layer, setDelegate:null_mut::<Object>()];
             let _: () = msg_send![&*state.layer, removeFromSuperlayer];
@@ -203,18 +152,9 @@ impl PlatformCanvas {
                     frame: Cell::new(None),
                     closed: Cell::new(false),
                     painting: Cell::new(false),
-                    scheduled: Cell::new(false),
-                    display_link: RefCell::new(None),
                 }))),
                 init
             ];
-            let display_link: Retained<Object> = msg_send![class!(CADisplayLink),
-                displayLinkWithTarget:&*delegate, selector:sel!(displayFrame:)];
-            let _: () = msg_send![&display_link, setPaused:Bool::YES];
-            let run_loop: *mut Object = msg_send![class!(NSRunLoop), mainRunLoop];
-            let _: () =
-                msg_send![&display_link, addToRunLoop:run_loop, forMode:NSRunLoopCommonModes];
-            delegate.ivars().display_link.replace(Some(display_link));
 
             // Transparent canvas pixels show the window background.
             let _: () = msg_send![&*layer, setOpaque:Bool::NO];
@@ -233,8 +173,6 @@ impl PlatformCanvas {
             attachment.on_scale_factor_changed(move |factor| scale.layout(factor));
             let redraw = delegate.clone();
             attachment.on_redraw(move || redraw.request_redraw());
-            let animation_frame = delegate.clone();
-            attachment.on_animation_frame(move || animation_frame.request_animation_frame());
             let close = delegate.clone();
             attachment.on_close(move || close.close());
             Self {
@@ -250,7 +188,7 @@ impl PlatformCanvas {
     }
 
     pub(crate) fn request_animation_frame(&self) {
-        self.delegate.request_animation_frame();
+        self.attachment.request_animation_frame();
     }
 
     pub(crate) fn draw(

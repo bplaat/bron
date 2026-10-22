@@ -8,8 +8,8 @@ use std::cell::Cell;
 use std::rc::{Rc, Weak};
 
 use bwindow::ffi::{
-    android_default_background, android_density, android_post_frame, android_post_local,
-    android_surface, android_window_size,
+    android_default_background, android_density, android_post_local, android_surface,
+    android_window_size,
 };
 use bwindow::{NativeContentHandle, WindowAttachment, WindowEventSender};
 use jni::sys::{jint, jvalue};
@@ -28,7 +28,7 @@ struct Frame {
 }
 
 // Draws the window surface with a hardware accelerated android.graphics.Canvas on the
-// Rust main thread, frames are scheduled with the display choreographer.
+// Rust main thread, the window paces the animation frames.
 struct SurfaceState {
     sender: WindowEventSender,
     resources: Rc<Resources>,
@@ -36,7 +36,6 @@ struct SurfaceState {
     closed: Cell<bool>,
     painting: Cell<bool>,
     scheduled: Cell<bool>,
-    animation_frame: Cell<bool>,
 }
 
 impl SurfaceState {
@@ -46,24 +45,11 @@ impl SurfaceState {
         }
         // Redraws requested while painting wait for the next display frame.
         if self.painting.get() {
-            self.request_animation_frame();
+            self.sender.request_animation_frame();
         } else if !self.scheduled.replace(true) {
             let state = Rc::downgrade(self);
             android_post_local(move || paint(&state));
         }
-    }
-
-    fn request_animation_frame(self: &Rc<Self>) {
-        if self.closed.get() || self.animation_frame.replace(true) {
-            return;
-        }
-        let state = Rc::downgrade(self);
-        android_post_frame(move || {
-            if let Some(state) = state.upgrade() {
-                state.animation_frame.set(false);
-            }
-            paint(&state);
-        });
     }
 }
 
@@ -85,7 +71,7 @@ fn paint(state: &Weak<SurfaceState>) {
     }));
     if !state.sender.redraw(|| state.frame.set(None)) {
         state.frame.set(None);
-        state.request_animation_frame();
+        state.sender.request_animation_frame();
     }
     state.painting.set(false);
 }
@@ -107,18 +93,11 @@ impl PlatformCanvas {
             closed: Cell::new(false),
             painting: Cell::new(false),
             scheduled: Cell::new(false),
-            animation_frame: Cell::new(false),
         });
         let redraw = Rc::downgrade(&state);
         attachment.on_redraw(move || {
             if let Some(state) = redraw.upgrade() {
                 state.request_redraw();
-            }
-        });
-        let animation_frame = Rc::downgrade(&state);
-        attachment.on_animation_frame(move || {
-            if let Some(state) = animation_frame.upgrade() {
-                state.request_animation_frame();
             }
         });
         let resize = Rc::downgrade(&state);
@@ -142,7 +121,7 @@ impl PlatformCanvas {
     }
 
     pub(crate) fn request_animation_frame(&self) {
-        self.state.request_animation_frame();
+        self.attachment.request_animation_frame();
     }
 
     pub(crate) fn draw(

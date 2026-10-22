@@ -1879,13 +1879,6 @@ unsafe extern "C" {
     pub(super) fn gtk_widget_get_window(widget: *mut c_void) -> *mut c_void;
     pub(super) fn gtk_widget_get_scale_factor(widget: *mut c_void) -> i32;
     pub(super) fn gtk_widget_get_frame_clock(widget: *mut c_void) -> *mut c_void;
-    pub(super) fn gtk_widget_add_tick_callback(
-        widget: *mut c_void,
-        callback: extern "C" fn(*mut c_void, *mut c_void, *mut c_void) -> i32,
-        data: *mut c_void,
-        notify: extern "C" fn(*mut c_void),
-    ) -> u32;
-    pub(super) fn gtk_widget_remove_tick_callback(widget: *mut c_void, id: u32);
     pub(super) fn gdk_window_get_display(window: *mut c_void) -> *mut c_void;
     pub(super) fn gdk_x11_display_get_xdisplay(display: *mut c_void) -> *mut c_void;
     pub(super) fn gdk_x11_window_get_xid(window: *mut c_void) -> c_ulong;

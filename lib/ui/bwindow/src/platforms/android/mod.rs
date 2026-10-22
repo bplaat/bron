@@ -7,10 +7,12 @@
 pub(crate) use crate::platforms::android::event_loop::{
     PlatformEventLoop, PlatformEventLoopProxy, PlatformMonitor,
 };
+pub(crate) use crate::platforms::android::frame::FrameSource;
 pub(crate) use crate::platforms::android::window::PlatformWindow;
 
 mod activity;
 mod event_loop;
+mod frame;
 pub(crate) mod headers;
 pub(crate) mod input;
 mod window;
@@ -18,8 +20,8 @@ mod window;
 pub(crate) mod ffi {
     pub use super::activity::{android_activity, android_run_on_ui_thread, android_with_env};
     pub use super::event_loop::{
-        android_density, android_native_window, android_post, android_post_frame,
-        android_post_local, android_surface, android_window_size,
+        android_density, android_native_window, android_post, android_post_local, android_surface,
+        android_window_size,
     };
     pub use super::window::{android_back_pressed, android_default_background};
 }

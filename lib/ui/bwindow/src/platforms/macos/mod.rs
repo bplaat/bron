@@ -9,6 +9,7 @@ pub(crate) use crate::platforms::macos::dialog::{PlatformFileDialog, PlatformMes
 pub(crate) use crate::platforms::macos::event_loop::{
     PlatformEventLoop, PlatformEventLoopProxy, PlatformMonitor,
 };
+pub(crate) use crate::platforms::macos::frame::FrameSource;
 pub(crate) use crate::platforms::macos::window::PlatformWindow;
 
 mod content;
@@ -17,6 +18,7 @@ mod dialog;
 mod event_loop;
 #[cfg(feature = "file_drop")]
 pub(crate) mod file_drop;
+mod frame;
 pub(crate) mod headers;
 mod input;
 mod menu;

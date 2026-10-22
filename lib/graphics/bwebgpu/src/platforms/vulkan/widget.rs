@@ -242,7 +242,6 @@ mod tests {
                 _ => panic!("mixed backends"),
             }
             gtk_widget_queue_draw(child);
-            assert!(surface.native.redraw.callback.get().is_some());
             let damage = gdk_window_get_update_area(gtk_widget_get_window(child));
             if !damage.is_null() {
                 assert_ne!(
@@ -327,7 +326,7 @@ mod tests {
         assert!(surface.native.is_lost());
         // Dropping the renderer must cancel any outstanding callback before its
         // widget and callback data are freed, even while the parent stays open.
-        surface.native.request_animation_frame();
+        surface.native.redraw.sender.request_animation_frame();
         drop(surface);
         settle();
         window.close();

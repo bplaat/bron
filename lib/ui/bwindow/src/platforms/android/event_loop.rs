@@ -244,7 +244,7 @@ pub fn android_post_local(task: impl FnOnce() + 'static) {
 
 /// Run `task` on the Rust main thread at the next display frame.
 /// Must be called on the Rust main thread.
-pub fn android_post_frame(task: impl FnOnce() + 'static) {
+pub(super) fn android_post_frame(task: impl FnOnce() + 'static) {
     unsafe extern "C" fn frame(_: c_long, data: *mut c_void) {
         let task = unsafe { Box::from_raw(data.cast::<Box<dyn FnOnce()>>()) };
         task();

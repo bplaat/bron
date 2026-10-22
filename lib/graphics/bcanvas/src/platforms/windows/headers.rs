@@ -780,6 +780,9 @@ pub(super) struct D2D1_RENDER_TARGET_PROPERTIES {
     pub(super) minLevel: u32,
 }
 
+#[cfg(feature = "window")]
+pub(super) const D2D1_PRESENT_OPTIONS_IMMEDIATELY: u32 = 2;
+
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
 pub(super) struct D2D1_HWND_RENDER_TARGET_PROPERTIES {

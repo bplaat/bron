@@ -26,22 +26,18 @@ struct CanvasData {
     target_dpi: Cell<u32>,
     frame: RefCell<Option<CanvasRenderingContext2d<'static>>>,
     painting: Cell<bool>,
-    scheduled: Cell<bool>,
 }
 
 impl CanvasData {
     fn request_redraw(&self) {
-        if let Some(hwnd) = self.hwnd.get() {
-            self.scheduled.set(false);
-            let _ = unsafe { InvalidateRect(hwnd, null(), FALSE) };
-        }
-    }
-
-    fn request_animation_frame(&self) {
+        let Some(hwnd) = self.hwnd.get() else {
+            return;
+        };
+        // Redraws requested while painting wait for the next display frame.
         if self.painting.get() {
-            self.scheduled.set(true);
+            self.sender.request_animation_frame();
         } else {
-            self.request_redraw();
+            let _ = unsafe { InvalidateRect(hwnd, null(), FALSE) };
         }
     }
 
@@ -92,8 +88,8 @@ impl CanvasData {
             height as f32 / scale,
             scale,
         ));
-        if !self.sender.redraw(|| self.end_draw(hwnd, &target.native)) {
-            self.end_draw(hwnd, &target.native);
+        if !self.sender.redraw(|| self.end_draw(&target.native)) {
+            self.end_draw(&target.native);
             self.request_redraw();
         }
         self.painting.set(false);
@@ -132,10 +128,11 @@ impl CanvasData {
                         dpiY: dpi,
                         ..Default::default()
                     },
+                    // The window paces the frames, so presenting never waits for the display.
                     &D2D1_HWND_RENDER_TARGET_PROPERTIES {
                         hwnd,
                         pixelSize: size,
-                        ..Default::default()
+                        presentOptions: D2D1_PRESENT_OPTIONS_IMMEDIATELY,
                     },
                 )
                 .and_then(DrawTarget::new)
@@ -147,14 +144,10 @@ impl CanvasData {
         Some(target)
     }
 
-    fn end_draw(&self, hwnd: HWND, target: &ComPtr<ID2D1HwndRenderTarget>) {
+    fn end_draw(&self, target: &ComPtr<ID2D1HwndRenderTarget>) {
         self.frame.borrow_mut().take();
         if unsafe { target.EndDraw(null_mut(), null_mut()) }.is_err() {
             self.lose_target();
-        } else if self.scheduled.replace(false) {
-            // The HWND render target's default presentation mode already waits for
-            // display refresh. Queue the next coalesced WM_PAINT after that present.
-            let _ = unsafe { InvalidateRect(hwnd, null(), FALSE) };
         }
     }
 }
@@ -179,7 +172,6 @@ impl PlatformCanvas {
             target_dpi: Cell::new(0),
             frame: RefCell::new(None),
             painting: Cell::new(false),
-            scheduled: Cell::new(false),
         });
         let paint = Rc::downgrade(&data);
         attachment.windows_on_paint(move || {
@@ -199,12 +191,6 @@ impl PlatformCanvas {
                 data.request_redraw();
             }
         });
-        let animation_frame = Rc::downgrade(&data);
-        attachment.on_animation_frame(move || {
-            if let Some(data) = animation_frame.upgrade() {
-                data.request_animation_frame();
-            }
-        });
         let close = data.clone();
         attachment.on_close(move || close.close());
         data.request_redraw();
@@ -216,7 +202,7 @@ impl PlatformCanvas {
     }
 
     pub(crate) fn request_animation_frame(&self) {
-        self.data.request_animation_frame();
+        self.attachment.request_animation_frame();
     }
 
     pub(crate) fn draw(

@@ -5,7 +5,6 @@
  */
 
 use std::env;
-use std::ffi::c_void;
 use std::path::PathBuf;
 use std::ptr::{null, null_mut};
 
@@ -45,10 +44,6 @@ pub(super) struct WindowData {
 
 thread_local! {
     static WINDOW_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-}
-
-pub(crate) fn post_content_redraw(window: *mut c_void) -> bool {
-    unsafe { InvalidateRect(window, null(), FALSE) != FALSE }
 }
 
 pub(crate) struct PlatformWindow(pub(super) Box<WindowData>);
@@ -408,6 +403,11 @@ unsafe extern "system" fn window_proc(
         return result;
     }
     match msg {
+        super::frame::WM_ANIMATION_FRAME => {
+            let host = _self.host.clone();
+            host.animation_frame();
+            0
+        }
         WM_PAINT => {
             // Validate the update region first, so content that requests another frame
             // during its paint pass gets exactly one more WM_PAINT and never a loop.
