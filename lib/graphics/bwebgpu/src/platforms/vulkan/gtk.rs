@@ -189,16 +189,19 @@ extern "C" fn release_redraw(data: *mut c_void) {
 
 impl Surface {
     pub(crate) fn new(
-        window: bwindow::NativeWindowHandle,
-        sender: bwindow::WindowEventSender,
+        attachment: &bwindow::WindowAttachment,
         factory: &mut Option<Factory>,
     ) -> Result<Self> {
         unsafe {
-            let bwindow::NativeWindowHandle::Gtk(widget) = window else {
+            let sender = attachment.event_sender();
+            let (
+                Some(bwindow::NativeWindowHandle::Gtk(parent)),
+                Some(bwindow::NativeContentHandle::Gtk(area)),
+            ) = (attachment.window_handle(), attachment.content_handle())
+            else {
                 return Err(Error("Vulkan requires a GTK window".into()));
             };
-            let content = widget::Widget::new(widget, sender.clone());
-            let parent = widget;
+            let content = widget::Widget::new(area, parent);
             let widget = content.handle;
             let window = platform_window(bwindow::NativeWindowHandle::Gtk(widget))?;
             let wayland = matches!(window, PlatformWindow::Wayland { .. });

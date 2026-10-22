@@ -59,6 +59,13 @@ event_loop.run(|event| {
 - Wheel deltas are in pixels or lines; positive values scroll right/down.
 - Only close requests can be cancelled, with `prevent_default()`.
 - IME text input is not supported.
+- Input reaches the window the same way for empty, canvas and GPU windows. A web view
+  handles its own input; keys and pointer events it handles are not reported again.
+- `Focus` / `Blur` follow window activation.
+
+Set the cursor over the window content with `window.set_cursor(CursorIcon::Pointer)`.
+`Progress` shows the arrow on macOS, which has no public busy cursor. Cursors are ignored
+on touch screens and over a web view, which shows its own cursors.
 
 ## Redrawing
 
@@ -73,6 +80,19 @@ Use `request_redraw()` after state changes. For animation, call
   `RedrawRequested` callback.
 - Web content: attach `bwebview::WebviewBuilder` and map browser notifications into
   your application's typed events with `on_event(proxy, mapper)`.
+
+A window has one exclusive content attachment, `window.attach_content()`. The window owns
+the native content host and its interaction, the attached backend only draws and presents:
+
+- `WindowAttachment::content_handle()` is the host renderers draw into: the client area of
+  the HWND on Windows, a shared layer-backed NSView or UIView on macOS and iOS, a shared
+  GtkDrawingArea on GTK (created on first use) and the window surface of the activity on
+  Android. `window_handle()` is the top-level window, for content that adds its own window
+  child, like a web view.
+- `on_resize`, `on_scale_factor_changed`, `on_redraw`, `on_animation_frame` and `on_close`
+  are the explicit hooks, `windows_on_paint` runs the paint pass of `WM_PAINT` after the
+  window validated it. All run on the main thread and are disconnected when the window
+  closes, also during a callback.
 
 ## Safe Area
 

@@ -84,18 +84,18 @@ define_class!(
 pub(crate) struct Surface {
     view: Object,
     layer: Object,
-    previous: Option<Object>,
-    wanted_layer: Bool,
     redraw: Retained<RedrawTarget>,
 }
 
 impl Surface {
     pub(crate) fn new(
-        window: bwindow::NativeWindowHandle,
-        sender: bwindow::WindowEventSender,
+        attachment: &bwindow::WindowAttachment,
         _: &mut Option<Factory>,
     ) -> Result<Self> {
-        let bwindow::NativeWindowHandle::AppKit(window) = window else {
+        let sender = attachment.event_sender();
+        let Some(bwindow::NativeContentHandle::AppKit(view)) =
+            (unsafe { attachment.content_handle() })
+        else {
             return Err(Error("Metal requires an AppKit window".into()));
         };
         // AppKit layer operations must run on the main thread.
@@ -106,9 +106,7 @@ impl Surface {
             ));
         }
         autoreleasepool(|_| unsafe {
-            let window = window.cast::<AnyObject>();
-            let view: *mut AnyObject = msg_send![window, contentView];
-            let view = retained(view)?;
+            let view = retained(view.cast())?;
             let signal = Arc::new(DisplayLinkSignal {
                 target: AtomicPtr::new(ptr::null_mut()),
                 posted: AtomicBool::new(false),
@@ -146,20 +144,24 @@ impl Surface {
                 )));
             }
             redraw.ivars().display_link.set(display_link);
-            let old: *mut AnyObject = msg_send![&*view, layer];
-            let previous = Retained::retain(old);
-            let wanted_layer = msg_send![&*view, wantsLayer];
+            // A sublayer at the bottom of the shared content view, below its children.
             let layer = owned(msg_send![class!(CAMetalLayer), new])?;
-            let _: () = msg_send![&*view, setWantsLayer: Bool::YES];
-            let _: () = msg_send![&*view, setLayer: &*layer];
             let _: () = msg_send![&*layer, setOpaque: Bool::YES];
             let _: () = msg_send![&*layer, setMaximumDrawableCount: 3usize];
             let _: () = msg_send![&*layer, setAllowsNextDrawableTimeout: Bool::YES];
+            let _: () = msg_send![&*layer, setContentsScale: f64::from(attachment.scale_factor())];
+            let backing: *mut AnyObject = msg_send![&*view, layer];
+            let _: () = msg_send![backing, insertSublayer: &*layer, atIndex: 0u32];
+            layout_layer(&view, &layer);
+            let (resize_view, resize_layer) = (view.clone(), layer.clone());
+            attachment.on_resize(move |_, _| layout_layer(&resize_view, &resize_layer));
+            let scale_layer = layer.clone();
+            attachment.on_scale_factor_changed(move |scale| {
+                let _: () = msg_send![&*scale_layer, setContentsScale: f64::from(scale)];
+            });
             Ok(Self {
                 view,
                 layer,
-                previous,
-                wanted_layer,
                 redraw,
             })
         })
@@ -241,15 +243,7 @@ impl Drop for Surface {
             if !display_link.is_null() {
                 CVDisplayLinkRelease(display_link);
             }
-            let current: *mut AnyObject = msg_send![&*self.view, layer];
-            if ptr::eq(current, &*self.layer) {
-                let previous = self
-                    .previous
-                    .as_deref()
-                    .map_or(ptr::null(), |p| p as *const AnyObject);
-                let _: () = msg_send![&*self.view, setLayer: previous];
-                let _: () = msg_send![&*self.view, setWantsLayer: self.wanted_layer];
-            }
+            let _: () = msg_send![&*self.layer, removeFromSuperlayer];
         }
     }
 }

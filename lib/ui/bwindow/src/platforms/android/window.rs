@@ -162,6 +162,10 @@ impl PlatformWindow {
         host.set_handle(NativeWindowHandle::Android(
             android_activity().as_raw().cast(),
         ));
+        // Renderers draw into the window surface of the activity, which receives the input.
+        host.set_content(crate::NativeContentHandle::Android(
+            android_activity().as_raw().cast(),
+        ));
         let mut window = Self {
             id: builder.window_id,
             host: host.clone(),

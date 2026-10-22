@@ -37,11 +37,13 @@ struct FrameTimer {
 
 impl Surface {
     pub(crate) fn new(
-        window: bwindow::NativeWindowHandle,
-        sender: bwindow::WindowEventSender,
+        attachment: &bwindow::WindowAttachment,
         factory: &mut Option<Factory>,
     ) -> Result<Self> {
-        let bwindow::NativeWindowHandle::Android(_) = window else {
+        let sender = attachment.event_sender();
+        let Some(bwindow::NativeContentHandle::Android(_)) =
+            (unsafe { attachment.content_handle() })
+        else {
             return Err(Error("Vulkan requires an Android window".into()));
         };
         let instance = if let Some(instance) = factory {

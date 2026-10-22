@@ -12,7 +12,7 @@ use crate::{
 };
 
 /// Translate GDK modifier flags.
-pub const fn gtk_modifiers(state: u32) -> Modifiers {
+pub(super) const fn gtk_modifiers(state: u32) -> Modifiers {
     let mut bits = 0;
     if state & 1 != 0 {
         bits |= 8;
@@ -34,7 +34,7 @@ pub const fn gtk_modifiers(state: u32) -> Modifiers {
 ///
 /// # Safety
 /// `event` must be a live GdkEvent on the GTK UI thread.
-pub unsafe fn gtk_input_event(event: *const c_void, repeat: bool) -> Option<WindowEvent> {
+pub(super) unsafe fn gtk_input_event(event: *const c_void, repeat: bool) -> Option<WindowEvent> {
     let event = event.cast::<GdkEvent>();
     let kind = unsafe { gdk_event_get_event_type(event) };
     let mut state = 0;

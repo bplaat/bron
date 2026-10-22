@@ -10,12 +10,14 @@ use objc2::rc::{Allocated, Retained};
 use objc2::runtime::{AnyObject as Object, Bool};
 use objc2::{class, define_class, msg_send};
 
+use super::content::ContentView;
 use super::event_loop::{allow_termination_if_last_window, send_event};
 #[cfg(feature = "file_drop")]
 use super::file_drop::{perform_file_drop, register_dragged_types};
 use super::headers::*;
 use crate::{
-    CloseRequest, LogicalPoint, LogicalSize, MacosTitlebarStyle, Theme, WindowBuilder, WindowEvent,
+    CloseRequest, CursorIcon, LogicalPoint, LogicalSize, MacosTitlebarStyle, Theme, WindowBuilder,
+    WindowEvent,
 };
 
 define_class!(
@@ -144,6 +146,7 @@ define_class!(
             if !host.is_closed() {
                 let window: *mut Object = unsafe { msg_send![notification, object] };
                 let scale: f64 = unsafe { msg_send![window, backingScaleFactor] };
+                host.scale_factor_changed(scale as f32);
                 send_event(crate::Event::Window(host.id(), WindowEvent::ScaleFactorChanged(scale as f32)));
                 host.request_redraw();
             }
@@ -311,23 +314,20 @@ fn set_drag_view_hidden(window: *mut Object, hidden: bool) {
     let _: () = unsafe { msg_send![drag_view, setHidden:hidden] };
 }
 
+// Add a titlebar drag view at the top of the flipped content view, above all content.
 fn add_drag_view(window: *mut Object, content_view: *mut Object) {
     let drag_view: Retained<Object> = unsafe { msg_send![DraggableView::class(), new] };
     let bounds: NSRect = unsafe { msg_send![content_view, bounds] };
     let content_layout_rect: NSRect = unsafe { msg_send![window, contentLayoutRect] };
-    let content_layout_rect: NSRect = unsafe {
-        msg_send![content_view, convertRect:content_layout_rect, fromView:null_mut::<Object>()]
-    };
-    let titlebar_height =
-        bounds.size.height - content_layout_rect.origin.y - content_layout_rect.size.height;
+    let titlebar_height = bounds.size.height - content_layout_rect.size.height;
     let _: () = unsafe {
         msg_send![&drag_view, setFrame:NSRect::new(
-            NSPoint::new(bounds.origin.x, bounds.origin.y + bounds.size.height - titlebar_height),
+            bounds.origin,
             NSSize::new(bounds.size.width, titlebar_height),
         )]
     };
     let _: () = unsafe {
-        msg_send![&drag_view, setAutoresizingMask:NS_VIEW_WIDTH_SIZABLE | NS_VIEW_MIN_Y_MARGIN]
+        msg_send![&drag_view, setAutoresizingMask:NS_VIEW_WIDTH_SIZABLE | NS_VIEW_MAX_Y_MARGIN]
     };
     let _: () = unsafe { msg_send![content_view, addSubview:drag_view.as_ptr()] };
 }
@@ -390,6 +390,7 @@ pub(super) struct PlatformWindowData {
     host: std::rc::Rc<crate::content::ContentHost>,
     pub(super) window_id: crate::WindowId,
     pub(super) window: Retained<Object>,
+    content_view: Retained<ContentView>,
     _delegate: Retained<Object>,
     pub(super) background_color: Option<u32>,
     traffic_light_position: Option<NSPoint>,
@@ -525,16 +526,34 @@ impl PlatformWindow {
             window
         };
 
+        // The shared content view renderers draw into, it receives the interaction.
+        let content_view = unsafe {
+            let initial: *mut Object = msg_send![&window, contentView];
+            let frame: NSRect = msg_send![initial, frame];
+            let content_view = ContentView::new(
+                NSRect::new(NSPoint::new(0.0, 0.0), frame.size),
+                host.event_sender(),
+            );
+            let _: () = msg_send![&window, setContentView:&*content_view];
+            let _: Bool = msg_send![&window, makeFirstResponder:&*content_view];
+            let _: () = msg_send![&window, setAcceptsMouseMovedEvents:Bool::YES];
+            let scale: f64 = msg_send![&window, backingScaleFactor];
+            host.scale_factor_changed(scale as f32);
+            content_view
+        };
+
         if !builder.should_fullscreen && has_custom_titlebar {
             // With custom positioned window buttons the content draws the titlebar and starts window drags
             if let Some(position) = traffic_light_position {
                 layout_window_buttons(window.as_ptr(), position);
             } else {
-                let content_view: *mut Object = unsafe { msg_send![&window, contentView] };
-                add_drag_view(window.as_ptr(), content_view);
+                add_drag_view(window.as_ptr(), content_view.as_ptr().cast());
             }
         }
         host.set_handle(crate::NativeWindowHandle::AppKit(window.as_ptr().cast()));
+        host.set_content(crate::NativeContentHandle::AppKit(
+            content_view.as_ptr().cast(),
+        ));
         unsafe {
             let _: () = msg_send![&window, addObserver:window_delegate.as_ptr(), forKeyPath:ns_string!("effectiveAppearance"), options:5usize, context:null_mut::<std::ffi::c_void>()];
         }
@@ -542,6 +561,7 @@ impl PlatformWindow {
             host: host.clone(),
             window_id: builder.window_id,
             window,
+            content_view,
             _delegate: window_delegate,
             background_color: builder.background_color,
             traffic_light_position,
@@ -632,6 +652,10 @@ impl crate::WindowInterface for PlatformWindow {
                 blue:(color & 0xFF) as f64 / 255.0, alpha:1.0];
             let _: () = msg_send![&self.0.window, setBackgroundColor:color_obj];
         }
+    }
+
+    fn set_cursor(&mut self, cursor: CursorIcon) {
+        self.0.content_view.set_cursor(cursor);
     }
 
     fn macos_titlebar_size(&self) -> LogicalSize {

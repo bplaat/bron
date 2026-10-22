@@ -81,6 +81,7 @@ pub(crate) const NS_UTF8_STRING_ENCODING: u64 = 4;
 
 pub(crate) const NS_VIEW_WIDTH_SIZABLE: u64 = 2;
 pub(crate) const NS_VIEW_MIN_Y_MARGIN: u64 = 8;
+pub(crate) const NS_VIEW_MAX_Y_MARGIN: u64 = 32;
 
 pub(crate) const NS_WINDOW_CLOSE_BUTTON: u64 = 0;
 pub(crate) const NS_WINDOW_MINIATURIZE_BUTTON: u64 = 1;

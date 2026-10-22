@@ -90,7 +90,7 @@ unsafe fn install_edit_actions(view: *mut WebKitWebView) {
 
 impl PlatformWebview {
     pub(crate) fn new(attachment: crate::WindowAttachment) -> Self {
-        let Some(crate::NativeWindowHandle::Gtk(window)) = (unsafe { attachment.native_handle() })
+        let Some(crate::NativeWindowHandle::Gtk(window)) = (unsafe { attachment.window_handle() })
         else {
             panic!("invalid native window handle");
         };

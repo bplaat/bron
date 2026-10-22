@@ -11,11 +11,11 @@ use std::cmp::Ordering;
 use std::f32::consts::TAU;
 
 use bcanvas::{
-    CanvasBuilder, CanvasRenderingContext2d, Color, CursorIcon, FontWeight, TextAlign, TextBaseline,
+    CanvasBuilder, CanvasRenderingContext2d, Color, FontWeight, TextAlign, TextBaseline,
 };
 use bwindow::{
-    Accelerator, Event, EventLoopBuilder, Key, KeyCode, LogicalInsets, LogicalPoint, LogicalSize,
-    MenuBarBuilder, MenuBuilder, MenuItem, Modifiers, MouseButton, MouseEvent, Theme,
+    Accelerator, CursorIcon, Event, EventLoopBuilder, Key, KeyCode, LogicalInsets, LogicalPoint,
+    LogicalSize, MenuBarBuilder, MenuBuilder, MenuItem, Modifiers, MouseButton, MouseEvent, Theme,
     WindowBuilder, WindowEvent,
 };
 use reversi_engine::{CellState, Move, Othello, Player};
@@ -450,7 +450,7 @@ fn main() {
             window.request_redraw();
         }
         let cursor = game.cursor();
-        canvas.set_cursor(cursor);
+        window.set_cursor(cursor);
         if let Some(smoke_test) = &mut smoke_test {
             smoke_test.cursor_set(cursor);
         }

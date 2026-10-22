@@ -30,17 +30,18 @@ struct Swapchain {
 
 impl Surface {
     pub(crate) fn new(
-        window: bwindow::NativeWindowHandle,
-        sender: bwindow::WindowEventSender,
+        attachment: &bwindow::WindowAttachment,
         _: &mut Option<Factory>,
     ) -> Result<Self> {
-        let bwindow::NativeWindowHandle::Win32(window) = window else {
+        let Some(bwindow::NativeContentHandle::Win32(window)) =
+            (unsafe { attachment.content_handle() })
+        else {
             return Err(Error("D3D12 requires a Win32 window".into()));
         };
         Ok(Self {
             window,
             swap: RefCell::new(None),
-            sender,
+            sender: attachment.event_sender(),
         })
     }
 

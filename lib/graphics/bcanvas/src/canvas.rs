@@ -16,19 +16,6 @@ use bwindow::Window;
 use crate::platforms::PlatformCanvas;
 use crate::platforms::{PlatformCanvasContext, PlatformOffscreenCanvas};
 
-/// Cursor shown over a canvas; native window decorations retain their own cursors.
-#[cfg(feature = "window")]
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum CursorIcon {
-    /// Standard arrow.
-    #[default]
-    Default,
-    /// Pointing hand for an interactive target.
-    Pointer,
-    /// Background work in progress.
-    Progress,
-}
-
 /// A portable RGBA color.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Color {
@@ -264,11 +251,6 @@ pub struct Canvas {
 
 #[cfg(feature = "window")]
 impl Canvas {
-    /// Set the cursor over this canvas. Has no effect after the window closes.
-    pub fn set_cursor(&mut self, cursor: CursorIcon) {
-        self.platform.set_cursor(cursor);
-    }
-
     /// Schedule a repaint. Repeated requests coalesce.
     pub fn request_redraw(&self) {
         self.platform.request_redraw();

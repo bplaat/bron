@@ -38,8 +38,7 @@ impl Context {
             };
             #[cfg(target_os = "ios")]
             let scale: f64 = msg_send![&*surface.view, contentScaleFactor];
-            let bounds: Rect = msg_send![&*surface.view, bounds];
-            let _: () = msg_send![&*surface.layer, setFrame: bounds];
+            layout_layer(&surface.view, &surface.layer);
             let _: () = msg_send![&*surface.layer, setContentsScale: scale];
             let _: () = msg_send![&*surface.layer, setDrawableSize: Size { width: config.width as f64, height: config.height as f64 }];
         }

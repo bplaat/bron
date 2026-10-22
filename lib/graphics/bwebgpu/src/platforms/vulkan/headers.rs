@@ -1910,12 +1910,10 @@ pub(super) struct WindowAttributes {
 
 #[cfg(all(feature = "window", not(target_os = "android")))]
 unsafe extern "C" {
-    pub(super) fn gtk_drawing_area_new() -> *mut c_void;
-    pub(super) fn g_object_ref_sink(object: *mut c_void) -> *mut c_void;
-    pub(super) fn gtk_widget_set_can_focus(widget: *mut c_void, focus: i32);
-    pub(super) fn gtk_widget_add_events(widget: *mut c_void, events: i32);
-    pub(super) fn gtk_widget_grab_focus(widget: *mut c_void);
     pub(super) fn gtk_widget_realize(widget: *mut c_void);
+    pub(super) fn gtk_widget_unrealize(widget: *mut c_void);
+    pub(super) fn gtk_widget_get_realized(widget: *mut c_void) -> i32;
+    pub(super) fn gtk_widget_hide(widget: *mut c_void);
     pub(super) fn gtk_container_check_resize(widget: *mut c_void);
     pub(super) fn gtk_widget_get_allocated_width(widget: *mut c_void) -> i32;
     pub(super) fn gtk_widget_get_allocated_height(widget: *mut c_void) -> i32;
@@ -1962,11 +1960,7 @@ unsafe extern "C" {
         func: *mut c_void,
         data: *mut c_void,
     ) -> u32;
-    pub(super) fn gtk_container_add(container: *mut c_void, widget: *mut c_void);
     pub(super) fn gtk_widget_show(widget: *mut c_void);
-    pub(super) fn gtk_widget_destroy(widget: *mut c_void);
-    pub(super) fn gdk_event_get_event_type(event: *const c_void) -> i32;
-    pub(super) fn gdk_event_get_keycode(event: *const c_void, code: *mut u16) -> i32;
     pub(super) fn g_object_get_data(object: *mut c_void, key: *const c_char) -> *mut c_void;
     pub(super) fn g_object_set_data(object: *mut c_void, key: *const c_char, data: *mut c_void);
     pub(super) fn gdk_window_set_invalidate_handler(

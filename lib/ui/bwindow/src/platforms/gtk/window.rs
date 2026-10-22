@@ -7,18 +7,22 @@
 use std::ffi::{CString, c_void};
 use std::ptr::{null, null_mut};
 
+use super::content::Content;
 use super::event_loop::{primary_monitor_rect, send_event};
 use super::headers::*;
 #[cfg(feature = "progress_bar")]
 use super::progress_bar::update_progress_bar;
 #[cfg(feature = "remember_window_state")]
 use super::window_state::{load_window_state, save_window_state};
-use crate::{CloseRequest, LogicalPoint, LogicalSize, Theme, WindowBuilder, WindowEvent};
+use crate::{
+    CloseRequest, CursorIcon, LogicalPoint, LogicalSize, Theme, WindowBuilder, WindowEvent,
+};
 
 pub(super) struct WindowData {
     host: std::rc::Rc<crate::content::ContentHost>,
     pub(crate) window_id: crate::WindowId,
     pub(super) window: *mut GtkWindow,
+    content: Content,
     pub(super) background_color: Option<u32>,
     #[cfg(feature = "remember_window_state")]
     pub(super) remember_window_state: bool,
@@ -65,6 +69,7 @@ impl PlatformWindow {
             host: host.clone(),
             window_id: builder.window_id,
             window: null_mut(),
+            content: Content::new(host.event_sender()),
             background_color: builder.background_color,
             #[cfg(feature = "remember_window_state")]
             remember_window_state: builder.remember_window_state,
@@ -199,7 +204,16 @@ impl PlatformWindow {
         unsafe {
             super::menu::connect_window(window);
         }
+        window_data.content.connect(window);
         host.set_handle(crate::NativeWindowHandle::Gtk(window.cast()));
+        // The boxed window data keeps its address and outlives the open window.
+        let content = &window_data.content as *const Content;
+        host.set_content_factory(move || {
+            Some(crate::NativeContentHandle::Gtk(
+                unsafe { &*content }.area().cast(),
+            ))
+        });
+        host.scale_factor_changed(unsafe { gtk_widget_get_scale_factor(window.cast()) } as f32);
         unsafe { gtk_widget_show_all(window.cast()) };
         send_event(crate::Event::Window(builder.window_id, WindowEvent::Create));
         PlatformWindow(window_data)
@@ -292,6 +306,10 @@ impl crate::WindowInterface for PlatformWindow {
         }
     }
 
+    fn set_cursor(&mut self, cursor: CursorIcon) {
+        self.0.content.set_cursor(cursor);
+    }
+
     #[cfg(feature = "progress_bar")]
     fn gtk_set_progress_bar(&mut self, progress: Option<f32>) {
         update_progress_bar(progress);
@@ -374,6 +392,7 @@ extern "C" fn window_on_scale_changed(window: *mut GtkWidget, _: *mut c_void, da
     let scale = unsafe { gtk_widget_get_scale_factor(window) };
     let width = unsafe { gtk_widget_get_allocated_width(window) };
     let height = unsafe { gtk_widget_get_allocated_height(window) };
+    host.scale_factor_changed(scale as f32);
     host.resize((width * scale) as u32, (height * scale) as u32);
     if !host.is_closed() {
         send_event(crate::Event::Window(
@@ -386,6 +405,7 @@ extern "C" fn window_on_scale_changed(window: *mut GtkWidget, _: *mut c_void, da
 
 impl Drop for PlatformWindow {
     fn drop(&mut self) {
+        self.0.content.disconnect();
         unsafe {
             g_signal_handlers_disconnect_matched(
                 self.0.window.cast(),

@@ -158,14 +158,14 @@ impl PlatformWebview {
     pub(crate) fn new(attachment: crate::WindowAttachment) -> Self {
         #[cfg(target_os = "macos")]
         let Some(crate::NativeWindowHandle::AppKit(window)) =
-            (unsafe { attachment.native_handle() })
+            (unsafe { attachment.window_handle() })
         else {
             panic!("invalid native window handle");
         };
         // On iOS the window handle is the root view that content is added to.
         #[cfg(target_os = "ios")]
         let Some(crate::NativeWindowHandle::UIKit(window)) =
-            (unsafe { attachment.native_handle() })
+            (unsafe { attachment.window_handle() })
         else {
             panic!("invalid native window handle");
         };

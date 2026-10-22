@@ -20,6 +20,7 @@ mod event_loop;
 mod file_drop;
 pub(crate) mod headers;
 pub(crate) mod input;
+mod interaction;
 #[cfg(feature = "menu")]
 mod menu;
 #[cfg(feature = "progress_bar")]

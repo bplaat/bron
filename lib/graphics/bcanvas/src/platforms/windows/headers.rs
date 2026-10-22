@@ -1044,169 +1044,19 @@ mod tests {
 }
 
 // MARK: Window
-// The Win32 API the canvas child window uses.
+// The Win32 API the canvas draws the window client area with.
 #[cfg(feature = "window")]
 mod window {
-    use std::ffi::c_void;
-
-    use super::{BOOL, HANDLE, HDC, HWND, RECT};
-
-    pub(crate) type HCURSOR = HANDLE;
-    pub(crate) type HDROP = HANDLE;
-    pub(crate) type HMODULE = *const c_void;
-    pub(crate) type WPARAM = usize;
-    pub(crate) type LPARAM = isize;
-    pub(crate) type LRESULT = isize;
+    use super::{BOOL, HWND, RECT};
 
     pub(crate) const TRUE: BOOL = 1;
     pub(crate) const FALSE: BOOL = 0;
 
-    #[repr(C)]
-    pub(crate) struct POINT {
-        pub(crate) x: i32,
-        pub(crate) y: i32,
-    }
-
-    #[repr(C)]
-    #[derive(Default)]
-    pub(crate) struct WNDCLASSEXW {
-        pub(crate) cbSize: u32,
-        pub(crate) style: u32,
-        pub(crate) lpfnWndProc:
-            Option<unsafe extern "system" fn(HWND, u32, WPARAM, LPARAM) -> LRESULT>,
-        pub(crate) cbClsExtra: i32,
-        pub(crate) cbWndExtra: i32,
-        pub(crate) hInstance: HMODULE,
-        pub(crate) hIcon: HANDLE,
-        pub(crate) hCursor: HCURSOR,
-        pub(crate) hbrBackground: usize,
-        pub(crate) lpszMenuName: *const u16,
-        pub(crate) lpszClassName: *const u16,
-        pub(crate) hIconSm: HANDLE,
-    }
-
-    #[repr(C)]
-    pub(crate) struct CREATESTRUCTW {
-        pub(crate) lpCreateParams: *mut c_void,
-        pub(crate) hInstance: HMODULE,
-        pub(crate) hMenu: HANDLE,
-        pub(crate) hwndParent: HWND,
-        pub(crate) cy: i32,
-        pub(crate) cx: i32,
-        pub(crate) y: i32,
-        pub(crate) x: i32,
-        pub(crate) style: i32,
-        pub(crate) lpszName: *const u16,
-        pub(crate) lpszClass: *const u16,
-        pub(crate) dwExStyle: u32,
-    }
-
-    #[repr(C)]
-    #[derive(Default)]
-    pub(crate) struct PAINTSTRUCT {
-        pub(crate) hdc: HDC,
-        pub(crate) fErase: BOOL,
-        pub(crate) rcPaint: RECT,
-        pub(crate) fRestore: BOOL,
-        pub(crate) fIncUpdate: BOOL,
-        pub(crate) rgbReserved: [u8; 32],
-    }
-
-    #[repr(C)]
-    #[derive(Default)]
-    pub(crate) struct TRACKMOUSEEVENT {
-        pub(crate) cbSize: u32,
-        pub(crate) dwFlags: u32,
-        pub(crate) hwndTrack: HWND,
-        pub(crate) dwHoverTime: u32,
-    }
-
-    const _: () = {
-        let wide = size_of::<HWND>() == 8;
-        assert!(size_of::<TRACKMOUSEEVENT>() == if wide { 24 } else { 16 });
-        assert!(size_of::<PAINTSTRUCT>() == if wide { 72 } else { 64 });
-    };
-
-    #[link(name = "kernel32")]
-    unsafe extern "system" {
-        pub(crate) fn GetModuleHandleW(name: *const u16) -> HMODULE;
-    }
-
-    #[link(name = "shell32")]
-    unsafe extern "system" {
-        pub(crate) fn DragAcceptFiles(hwnd: HWND, accept: BOOL);
-        pub(crate) fn DragQueryFileW(
-            drop: HDROP,
-            file: u32,
-            buffer: *mut u16,
-            buffer_size: u32,
-        ) -> u32;
-        pub(crate) fn DragFinish(drop: HDROP);
-    }
-
     #[link(name = "user32")]
     unsafe extern "system" {
-        pub(crate) fn GetClassInfoExW(
-            instance: HMODULE,
-            class: *const u16,
-            class_info: *mut WNDCLASSEXW,
-        ) -> BOOL;
-        pub(crate) fn RegisterClassExW(class_info: *const WNDCLASSEXW) -> u16;
-        pub(crate) fn CreateWindowExW(
-            ex_style: u32,
-            class: *const u16,
-            name: *const u16,
-            style: u32,
-            x: i32,
-            y: i32,
-            width: i32,
-            height: i32,
-            parent: HWND,
-            menu: HANDLE,
-            instance: HMODULE,
-            param: LPARAM,
-        ) -> HWND;
-        pub(crate) fn DestroyWindow(hwnd: HWND) -> BOOL;
-        pub(crate) fn DefWindowProcW(
-            hwnd: HWND,
-            message: u32,
-            wparam: WPARAM,
-            lparam: LPARAM,
-        ) -> LRESULT;
         pub(crate) fn GetClientRect(hwnd: HWND, rect: *mut RECT) -> BOOL;
-        pub(crate) fn SetWindowPos(
-            hwnd: HWND,
-            insert_after: HWND,
-            x: i32,
-            y: i32,
-            cx: i32,
-            cy: i32,
-            flags: u32,
-        ) -> BOOL;
-        pub(crate) fn BeginPaint(hwnd: HWND, paint: *mut PAINTSTRUCT) -> HDC;
-        pub(crate) fn EndPaint(hwnd: HWND, paint: *const PAINTSTRUCT) -> BOOL;
         pub(crate) fn InvalidateRect(hwnd: HWND, rect: *const RECT, erase: BOOL) -> BOOL;
         pub(crate) fn GetDpiForWindow(hwnd: HWND) -> u32;
-        #[cfg(target_pointer_width = "64")]
-        #[link_name = "GetWindowLongPtrW"]
-        pub(crate) fn GetWindowLong(hwnd: HWND, index: i32) -> isize;
-        #[cfg(target_pointer_width = "64")]
-        #[link_name = "SetWindowLongPtrW"]
-        pub(crate) fn SetWindowLong(hwnd: HWND, index: i32, value: isize) -> isize;
-        #[cfg(target_pointer_width = "32")]
-        #[link_name = "GetWindowLongW"]
-        pub(crate) fn GetWindowLong(hwnd: HWND, index: i32) -> isize;
-        #[cfg(target_pointer_width = "32")]
-        #[link_name = "SetWindowLongW"]
-        pub(crate) fn SetWindowLong(hwnd: HWND, index: i32, value: isize) -> isize;
-        pub(crate) fn GetCursorPos(point: *mut POINT) -> BOOL;
-        pub(crate) fn WindowFromPoint(point: POINT) -> HWND;
-        pub(crate) fn SetCursor(cursor: HCURSOR) -> HCURSOR;
-        pub(crate) fn LoadCursorW(instance: HMODULE, name: *const u16) -> HCURSOR;
-        pub(crate) fn SetFocus(hwnd: HWND) -> HWND;
-        pub(crate) fn SetCapture(hwnd: HWND) -> HWND;
-        pub(crate) fn ReleaseCapture() -> BOOL;
-        pub(crate) fn TrackMouseEvent(event: *mut TRACKMOUSEEVENT) -> BOOL;
     }
 }
 #[cfg(feature = "window")]

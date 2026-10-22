@@ -125,7 +125,7 @@ impl PlatformWebview {
 
     pub(crate) fn init_webview(&mut self, builder: WebviewBuilder<'_>) {
         let Some(crate::NativeWindowHandle::Android(activity)) =
-            (unsafe { self.attachment.native_handle() })
+            (unsafe { self.attachment.window_handle() })
         else {
             panic!("invalid native window handle");
         };

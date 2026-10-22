@@ -44,12 +44,11 @@ impl Instance {
         &self,
         attachment: bwindow::WindowAttachment,
     ) -> Result<Surface<'static>> {
-        let handle = unsafe { attachment.native_handle() }
-            .ok_or_else(|| Error("The bwindow window is closed".into()))?;
-        let sender = attachment.event_sender();
+        if attachment.is_closed() {
+            return Err(Error("The bwindow window is closed".into()));
+        }
         let native = Rc::new(platform::Surface::new(
-            handle,
-            sender,
+            &attachment,
             &mut self.factory.borrow_mut(),
         )?);
         let redraw = Rc::downgrade(&native);

@@ -44,7 +44,7 @@ pub unsafe fn gtk_dropped_paths(selection: *mut c_void) -> Vec<PathBuf> {
 ///
 /// # Safety
 /// `widget` must be a live GtkWidget on the GTK UI thread.
-pub unsafe fn gtk_connect_file_drop(widget: *mut c_void, sender: WindowEventSender) {
+pub(crate) unsafe fn gtk_connect_file_drop(widget: *mut c_void, sender: WindowEventSender) {
     let widget = widget.cast::<GtkWidget>();
     unsafe {
         gtk_drag_dest_set(widget, 7, null(), 0, 2);

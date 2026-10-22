@@ -4,81 +4,54 @@
  * SPDX-License-Identifier: MIT
  */
 
-use std::cell::{Cell, RefCell};
-use std::collections::HashSet;
+use std::cell::Cell;
 use std::ffi::c_void;
 use std::ptr;
 use std::rc::Rc;
 
-use bwindow::ffi::gtk_input_event;
-use bwindow::{WindowEvent, WindowEventSender};
-
 use super::headers::*;
 
+/// The shared drawing area of the window as a native window for Vulkan to present into,
+/// the window delivers its interaction.
 pub(super) struct Widget {
     pub(super) handle: *mut c_void,
-    sender: WindowEventSender,
-    keys: RefCell<HashSet<u16>>,
     pub(super) lost: Cell<bool>,
 }
 
 impl Widget {
-    pub(super) fn new(parent: *mut c_void, sender: WindowEventSender) -> Rc<Self> {
+    pub(super) fn new(area: *mut c_void, parent: *mut c_void) -> Rc<Self> {
         unsafe {
-            let handle = gtk_drawing_area_new();
-            g_object_ref_sink(handle);
-            gtk_widget_set_can_focus(handle, 1);
-            gtk_widget_add_events(
-                handle,
-                (1 << 1)
-                    | (1 << 2)
-                    | (1 << 8)
-                    | (1 << 9)
-                    | (1 << 10)
-                    | (1 << 11)
-                    | (1 << 12)
-                    | (1 << 13)
-                    | (1 << 14)
-                    | (1 << 21)
-                    | (1 << 23),
-            );
+            g_object_ref(area);
             let widget = Rc::new(Self {
-                handle,
-                sender,
-                keys: RefCell::new(HashSet::new()),
+                handle: area,
                 lost: Cell::new(false),
             });
-            for (signal, callback) in [
-                (c"realize", realize as *const c_void),
-                (c"event", input as *const c_void),
-                (c"focus-in-event", focus as *const c_void),
-                (c"focus-out-event", blur as *const c_void),
-                (c"unmap", unmap as *const c_void),
-            ] {
-                g_signal_connect_data(
-                    handle.cast(),
-                    signal.as_ptr(),
-                    callback,
-                    Rc::as_ptr(&widget).cast(),
-                    ptr::null(),
-                    G_CONNECT_DEFAULT,
-                );
+            let data = Rc::as_ptr(&widget).cast();
+            g_signal_connect_data(
+                area.cast(),
+                c"realize".as_ptr(),
+                realize as *const c_void,
+                data,
+                ptr::null(),
+                G_CONNECT_DEFAULT,
+            );
+            // Realize the area again so it gets a native window.
+            if gtk_widget_get_realized(area) != 0 {
+                gtk_widget_hide(area);
+                gtk_widget_unrealize(area);
+                gtk_widget_show(area);
             }
-            gtk_container_add(parent.cast(), handle.cast());
-            // Allocate the content before creating the swapchain; GTK otherwise
-            // leaves a newly attached drawing area at its initial 1x1 allocation.
-            gtk_widget_show(handle.cast());
+            gtk_widget_realize(area);
             gtk_container_check_resize(parent);
-            gtk_widget_realize(handle);
-            gtk_widget_grab_focus(handle);
+            g_signal_connect_data(
+                area.cast(),
+                c"unmap".as_ptr(),
+                unmap as *const c_void,
+                data,
+                ptr::null(),
+                G_CONNECT_DEFAULT,
+            );
             widget
-        }
-    }
-
-    unsafe fn retain(pointer: *const Self) -> Rc<Self> {
-        unsafe {
-            Rc::increment_strong_count(pointer);
-            Rc::from_raw(pointer)
         }
     }
 }
@@ -95,7 +68,6 @@ impl Drop for Widget {
                 ptr::null_mut(),
                 self as *mut Self as *mut c_void,
             );
-            gtk_widget_destroy(self.handle.cast());
             g_object_unref(self.handle.cast());
         }
     }
@@ -142,47 +114,7 @@ extern "C" fn realize(widget: *mut c_void, _: *const Widget) {
 extern "C" fn unmap(_: *mut c_void, pointer: *const Widget) {
     // GDK destroys the wl_surface when hiding a Wayland window. A later map
     // creates a new handle; the existing Vulkan surface cannot be reused.
-    let data = unsafe { Widget::retain(pointer) };
-    data.lost.set(true);
-    data.keys.borrow_mut().clear();
-}
-
-extern "C" fn input(widget: *mut c_void, event: *const c_void, pointer: *const Widget) -> i32 {
-    let data = unsafe { Widget::retain(pointer) };
-    let kind = unsafe { gdk_event_get_event_type(event) };
-    let repeat = if kind == 8 || kind == 9 {
-        let mut code = 0;
-        unsafe { gdk_event_get_keycode(event, &mut code) };
-        if kind == 8 {
-            !data.keys.borrow_mut().insert(code)
-        } else {
-            data.keys.borrow_mut().remove(&code);
-            false
-        }
-    } else {
-        false
-    };
-    if kind == 4 {
-        unsafe { gtk_widget_grab_focus(widget) };
-    }
-    if let Some(event) = unsafe { gtk_input_event(event, repeat) } {
-        data.sender.send(event);
-        return 1;
-    }
-    0
-}
-
-extern "C" fn focus(_: *mut c_void, _: *const c_void, pointer: *const Widget) -> i32 {
-    let data = unsafe { Widget::retain(pointer) };
-    data.sender.send(WindowEvent::Focus);
-    0
-}
-
-extern "C" fn blur(_: *mut c_void, _: *const c_void, pointer: *const Widget) -> i32 {
-    let data = unsafe { Widget::retain(pointer) };
-    data.keys.borrow_mut().clear();
-    data.sender.send(WindowEvent::Blur);
-    0
+    unsafe { &*pointer }.lost.set(true);
 }
 
 #[cfg(test)]
@@ -195,7 +127,6 @@ mod tests {
 
     unsafe extern "C" {
         fn g_idle_add(function: extern "C" fn(*mut c_void) -> i32, data: *mut c_void) -> u32;
-        fn gtk_widget_hide(widget: *mut c_void);
         fn g_main_context_iteration(context: *mut c_void, may_block: i32) -> i32;
         fn gtk_main();
         fn gtk_window_resize(window: *mut c_void, width: i32, height: i32);
@@ -256,7 +187,7 @@ mod tests {
             .resizable(true)
             .build();
         let attachment = window.attach_content().expect("attach");
-        let Some(NativeWindowHandle::Gtk(parent)) = (unsafe { attachment.native_handle() }) else {
+        let Some(NativeWindowHandle::Gtk(parent)) = (unsafe { attachment.window_handle() }) else {
             panic!("expected GTK");
         };
         let surface = crate::Instance::default()
