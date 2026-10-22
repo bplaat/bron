@@ -110,8 +110,21 @@ impl WindowViewController {
         self.ivars().host.theme_changed(theme_from_traits(traits));
         // Also report display scale changes, like moving to an external display.
         let scale: f64 = unsafe { msg_send![traits, displayScale] };
-        if scale > 0.0 {
-            self.ivars().host.scale_factor_changed(scale as f32);
+        let host = &self.ivars().host;
+        if scale > 0.0 && host.scale_factor_changed(scale as f32) {
+            let view: *mut Object = unsafe { msg_send![self, view] };
+            let bounds: CGRect = unsafe { msg_send![view, bounds] };
+            host.resize(
+                (bounds.size.width * scale).round() as u32,
+                (bounds.size.height * scale).round() as u32,
+            );
+            if !host.is_closed() {
+                send_event(crate::Event::Window(
+                    host.id(),
+                    WindowEvent::ScaleFactorChanged(scale as f32),
+                ));
+                host.request_redraw();
+            }
         }
     }
 }
