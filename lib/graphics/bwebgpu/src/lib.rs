@@ -30,7 +30,7 @@ pub use crate::types::*;
 ))]
 mod allocation;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
-#[path = "platforms/apple/mod.rs"]
+#[path = "platforms/metal/mod.rs"]
 mod platform;
 // Vulkan, with GTK on Linux and the BSDs.
 #[cfg(any(
@@ -44,7 +44,7 @@ mod platform;
 #[path = "platforms/vulkan/mod.rs"]
 mod platform;
 #[cfg(target_os = "windows")]
-#[path = "platforms/windows/mod.rs"]
+#[path = "platforms/directx/mod.rs"]
 mod platform;
 #[cfg(feature = "window")]
 mod surface;
