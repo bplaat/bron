@@ -17,14 +17,14 @@ use crate::apple::support::{
 use crate::manifest::{BundleMetadata, Manifest, Package};
 use crate::support::{assert_file_name, cargo_build, remove_path_if_exists};
 
-pub(crate) fn build(path: &str, target_dir: &str, manifest: &Manifest) {
+pub(crate) fn build(path: &str, target_dir: &str, manifest: &Manifest, universal: bool) {
     assert_file_name(&manifest.package.metadata.bundle.name, "bundle name");
     remove_path_if_exists(&format!(
         "{target_dir}/{}.app",
         manifest.package.metadata.bundle.name
     ));
     generate_resources(path, target_dir, manifest);
-    let binary = compile_binary(path, target_dir, &manifest.package);
+    let binary = compile_binary(path, target_dir, &manifest.package, universal);
     create(path, target_dir, &manifest.package.metadata.bundle, &binary);
 }
 
@@ -99,10 +99,9 @@ fn write_info_plist(path: &str, target_dir: &str, manifest: &Manifest) {
         .expect("Failed to write binary Info.plist");
 }
 
-fn compile_binary(path: &str, target_dir: &str, package: &Package) -> String {
-    let bundle = &package.metadata.bundle;
-    if bundle.macos.lipo.unwrap_or(true) {
-        let output = format!("{target_dir}/{}", bundle.name);
+fn compile_binary(path: &str, target_dir: &str, package: &Package, universal: bool) -> String {
+    if universal {
+        let output = format!("{target_dir}/{}", package.metadata.bundle.name);
         compile_universal(path, &package.name, &output);
         output
     } else {

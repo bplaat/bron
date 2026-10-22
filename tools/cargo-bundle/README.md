@@ -50,7 +50,7 @@ cargo bundle --path path/to/your/crate
 This builds your crate for x86_64 and arm64, links both architectures into a universal binary,
 creates an `.icns` file from the optional iconset, and creates a macOS app bundle in the
 `target/bundle` directory. Add `--run` to launch the app afterwards with its console output
-attached:
+attached, which only builds the host architecture unless `--zip` or `--dmg` is also given:
 
 ```sh
 cargo bundle --path path/to/your/crate --run
@@ -103,7 +103,8 @@ Add-AppxPackage -Path ExampleApp.msixbundle -AllowUnsigned -ForceUpdateFromAnyVe
 ### Android
 
 Build a signed APK for armeabi-v7a, arm64-v8a and x86_64 with `--android`, add `--run` to install and
-start it on the connected device and follow its logcat output:
+start it on the connected device or emulator and follow its logcat output. Running only builds the
+first ABI of the device that the bundle supports, read with `adb shell getprop ro.product.cpu.abilist`:
 
 ```sh
 cargo bundle --path path/to/your/crate --android --run

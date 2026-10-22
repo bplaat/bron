@@ -10,8 +10,11 @@ use std::path::Path;
 use super::toolchain::Toolchain;
 use crate::support::cargo;
 
-/// Android ABIs with their Rust target triple and NDK clang target prefix.
-pub(super) const ABIS: [(&str, &str, &str); 3] = [
+/// An Android ABI with its Rust target triple and NDK clang target prefix.
+pub(super) type Abi = (&'static str, &'static str, &'static str);
+
+/// The Android ABIs a bundle supports.
+pub(super) const ABIS: [Abi; 3] = [
     (
         "armeabi-v7a",
         "armv7-linux-androideabi",
@@ -28,13 +31,20 @@ pub(super) const ABIS: [(&str, &str, &str); 3] = [
 // Only the entry point NativeActivity calls is exported.
 const EXPORTS: &str = "{ global: ANativeActivity_onCreate; local: *; };\n";
 
-/// Build the binary as a shared library for every ABI into `<target_dir>/lib/<abi>/lib<name>.so`.
-pub(super) fn build(path: &str, target_dir: &str, name: &str, toolchain: &Toolchain, min_sdk: u32) {
+/// Build the binary as a shared library for the ABIs into `<target_dir>/lib/<abi>/lib<name>.so`.
+pub(super) fn build(
+    path: &str,
+    target_dir: &str,
+    name: &str,
+    toolchain: &Toolchain,
+    min_sdk: u32,
+    abis: &[Abi],
+) {
     let exports = Path::new(target_dir).join("exports.map");
     fs::write(&exports, EXPORTS).expect("Failed to write exports.map");
     let exports = fs::canonicalize(exports).expect("Failed to resolve exports.map");
     let ar = toolchain.ndk_bin.join("llvm-ar");
-    for (abi, triple, clang_target) in ABIS {
+    for &(abi, triple, clang_target) in abis {
         let clang = toolchain.clang(clang_target, min_sdk);
         let variable = triple.replace('-', "_");
         let linker = format!("CARGO_TARGET_{}_LINKER", variable.to_uppercase());

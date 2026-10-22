@@ -11,7 +11,7 @@ use crate::apple::support::{bundle_info, codesign, compile_universal, remove_emp
 use crate::manifest::{AppexMetadata, BundleMetadata, Manifest};
 use crate::support::{assert_file_name, cargo_build};
 
-pub(crate) fn build_all(path: &str, target_dir: &str, manifest: &Manifest) {
+pub(crate) fn build_all(path: &str, target_dir: &str, manifest: &Manifest, universal: bool) {
     let bundle = &manifest.package.metadata.bundle;
     let Some(extensions) = &bundle.macos.appex else {
         return;
@@ -19,7 +19,7 @@ pub(crate) fn build_all(path: &str, target_dir: &str, manifest: &Manifest) {
     for extension in extensions {
         assert_file_name(&extension.name, "app extension name");
         write_info_plist(path, target_dir, manifest, extension);
-        let binary = compile(path, target_dir, bundle, extension);
+        let binary = compile(path, target_dir, extension, universal);
         let appex = create(target_dir, bundle, extension, &binary);
         sign(path, extension, &appex);
     }
@@ -60,15 +60,10 @@ fn write_info_plist(path: &str, target_dir: &str, manifest: &Manifest, extension
         .expect("Failed to write app extension Info.plist");
 }
 
-fn compile(
-    path: &str,
-    target_dir: &str,
-    bundle: &BundleMetadata,
-    extension: &AppexMetadata,
-) -> String {
+fn compile(path: &str, target_dir: &str, extension: &AppexMetadata, universal: bool) -> String {
     let package = format!("{path}/{}", extension.package);
     let output = format!("{}/{}", metadata_dir(target_dir, extension), extension.name);
-    if bundle.macos.lipo.unwrap_or(true) {
+    if universal {
         compile_universal(&package, &extension.binary, &output);
     } else {
         let status = cargo_build(&package)
