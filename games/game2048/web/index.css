@@ -91,6 +91,11 @@ html {
     -moz-osx-font-smoothing: grayscale;
 
     overscroll-behavior: none;
+    touch-action: pan-x pan-y;
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+    -webkit-tap-highlight-color: transparent;
+    -webkit-touch-callout: none;
     cursor: default;
     -webkit-user-select: none;
     user-select: none;
@@ -551,13 +556,16 @@ hr {
 }
 
 body.is-bwebview-mobile {
+    overflow-y: auto;
     font-size: 15px;
     box-sizing: border-box;
     display: flex;
     flex-direction: column;
     justify-content: center;
     min-height: 100vh;
-    padding: max(20px, env(safe-area-inset-top)) 20px max(20px, env(safe-area-inset-bottom));
+    min-height: 100dvh;
+    padding: max(20px, env(safe-area-inset-top)) max(20px, env(safe-area-inset-right))
+        max(20px, env(safe-area-inset-bottom)) max(20px, env(safe-area-inset-left));
 }
 
 .is-bwebview-mobile h1.title {
