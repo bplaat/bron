@@ -108,12 +108,6 @@ unsafe extern "C" {
     pub(super) fn CGContextAddLineToPoint(context: CGContextRef, x: f64, y: f64);
     pub(super) fn CGContextAddRect(context: CGContextRef, rect: CGRect);
     pub(super) fn CGContextAddEllipseInRect(context: CGContextRef, rect: CGRect);
-    pub(super) fn CGPathCreateWithRoundedRect(
-        rect: CGRect,
-        corner_width: f64,
-        corner_height: f64,
-        transform: *const CGAffineTransform,
-    ) -> *mut c_void;
     pub(super) fn CGContextAddArc(
         context: CGContextRef,
         x: f64,

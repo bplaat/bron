@@ -173,53 +173,6 @@ impl Path {
             );
         }
     }
-
-    pub(crate) fn round_rect(
-        &mut self,
-        transform: Transform,
-        x: f32,
-        y: f32,
-        w: f32,
-        h: f32,
-        r: f32,
-    ) {
-        let (x, y, w, h) = (x.min(x + w), y.min(y + h), w.abs(), h.abs());
-        let r = r.max(0.0).min(w / 2.0).min(h / 2.0);
-        self.move_to(transform, [x + r, y]);
-        self.arc(
-            transform,
-            [x + w - r, y + r],
-            [r, r],
-            -FRAC_PI_2,
-            0.0,
-            false,
-        );
-        self.arc(
-            transform,
-            [x + w - r, y + h - r],
-            [r, r],
-            0.0,
-            FRAC_PI_2,
-            false,
-        );
-        self.arc(
-            transform,
-            [x + r, y + h - r],
-            [r, r],
-            FRAC_PI_2,
-            2.0 * FRAC_PI_2,
-            false,
-        );
-        self.arc(
-            transform,
-            [x + r, y + r],
-            [r, r],
-            2.0 * FRAC_PI_2,
-            3.0 * FRAC_PI_2,
-            false,
-        );
-        self.close();
-    }
 }
 
 #[cfg(test)]

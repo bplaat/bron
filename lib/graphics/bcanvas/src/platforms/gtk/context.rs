@@ -104,48 +104,6 @@ impl PlatformCanvasContext {
     pub(crate) fn rect(&mut self, x: f32, y: f32, w: f32, h: f32) {
         unsafe { cairo_rectangle(self.cr, x.into(), y.into(), w.into(), h.into()) }
     }
-    pub(crate) fn round_rect(&mut self, x: f32, y: f32, w: f32, h: f32, r: f32) {
-        let (x, w) = if w < 0.0 { (x + w, -w) } else { (x, w) };
-        let (y, h) = if h < 0.0 { (y + h, -h) } else { (y, h) };
-        let r = r.max(0.0).min(w * 0.5).min(h * 0.5) as f64;
-        let (x, y, w, h) = (x as f64, y as f64, w as f64, h as f64);
-        unsafe {
-            cairo_new_sub_path(self.cr);
-            cairo_arc(
-                self.cr,
-                x + w - r,
-                y + r,
-                r,
-                -std::f64::consts::FRAC_PI_2,
-                0.0,
-            );
-            cairo_arc(
-                self.cr,
-                x + w - r,
-                y + h - r,
-                r,
-                0.0,
-                std::f64::consts::FRAC_PI_2,
-            );
-            cairo_arc(
-                self.cr,
-                x + r,
-                y + h - r,
-                r,
-                std::f64::consts::FRAC_PI_2,
-                std::f64::consts::PI,
-            );
-            cairo_arc(
-                self.cr,
-                x + r,
-                y + r,
-                r,
-                std::f64::consts::PI,
-                std::f64::consts::PI * 1.5,
-            );
-            cairo_close_path(self.cr);
-        }
-    }
     pub(crate) fn ellipse(&mut self, x: f32, y: f32, rx: f32, ry: f32) {
         if ![x, y, rx, ry].iter().all(|v| v.is_finite()) || rx <= 0.0 || ry <= 0.0 {
             return;

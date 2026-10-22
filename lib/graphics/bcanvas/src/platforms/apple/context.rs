@@ -117,15 +117,6 @@ impl PlatformCanvasContext {
     pub(crate) fn rect(&mut self, x: f32, y: f32, w: f32, h: f32) {
         unsafe { CGContextAddRect(self.context, rect(x, y, w, h)) }
     }
-    pub(crate) fn round_rect(&mut self, x: f32, y: f32, w: f32, h: f32, r: f32) {
-        let radius = r.max(0.0).min(w.abs() * 0.5).min(h.abs() * 0.5);
-        unsafe {
-            let path =
-                CGPathCreateWithRoundedRect(rect(x, y, w, h), radius.into(), radius.into(), null());
-            CGContextAddPath(self.context, path);
-            CGPathRelease(path);
-        }
-    }
     pub(crate) fn ellipse(&mut self, x: f32, y: f32, rx: f32, ry: f32) {
         unsafe { CGContextAddEllipseInRect(self.context, rect(x - rx, y - ry, rx * 2.0, ry * 2.0)) }
     }
