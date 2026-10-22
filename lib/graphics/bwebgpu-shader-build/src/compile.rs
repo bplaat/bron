@@ -162,6 +162,11 @@ fn configure_bindings(
 }
 
 fn configure_hlsl(options: &mut hlsl::Options) {
+    // D3D system IDs exclude the draw's vertex and instance offsets.
+    options.special_constants_binding = Some(hlsl::BindTarget {
+        register: 5,
+        ..Default::default()
+    });
     // Each draw binds a one-entry sampler table and an index buffer containing zero.
     options.sampler_buffer_binding_map.insert(
         hlsl::SamplerIndexBufferKey { group: 0 },
@@ -260,6 +265,30 @@ fn write_outputs(
 #[cfg(test)]
 mod tests {
     use super::{configure_hlsl, single_sampler_tables};
+
+    #[test]
+    fn d3d12_shader_ids_include_draw_offsets() {
+        let module = naga::front::wgsl::parse_str(
+            "@vertex fn main(@builtin(vertex_index) vertex: u32, @builtin(instance_index) instance: u32) -> @builtin(position) vec4<f32> {\n\
+                return vec4<f32>(f32(vertex), f32(instance), 0.0, 1.0);\n\
+            }",
+        ).expect("parse shader IDs");
+        let info = naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::empty(),
+        )
+        .validate(&module)
+        .expect("validate shader IDs");
+        let mut options = naga::back::hlsl::Options::default();
+        configure_hlsl(&mut options);
+        let mut output = String::new();
+        naga::back::hlsl::Writer::new(&mut output, &options, &Default::default())
+            .write(&module, &info, None)
+            .expect("translate shader IDs");
+        assert!(output.contains("register(b5)"));
+        assert!(output.contains("_NagaConstants.first_vertex + vertex"));
+        assert!(output.contains("_NagaConstants.first_instance + instance"));
+    }
 
     #[test]
     fn generated_sampler_table_fits_tier_one() {

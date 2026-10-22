@@ -16,6 +16,7 @@ struct Gpu {
     queue: bwebgpu::Queue,
     config: bwebgpu::SurfaceConfiguration,
     pipeline: bwebgpu::RenderPipeline,
+    vertices: bwebgpu::Buffer,
 }
 
 impl Gpu {
@@ -46,6 +47,27 @@ impl Gpu {
 
         // Create the triangle pipeline
         let shader = device.create_shader_module(bwebgpu::include_wgsl!("triangle.wgsl"));
+        let bytes: Vec<u8> = [
+            [0.0f32, 0.75, 1.0, 0.1, 0.1, 1.0],
+            [-0.7, -0.6, 0.1, 1.0, 0.2, 1.0],
+            [0.7, -0.6, 0.1, 0.3, 1.0, 1.0],
+        ]
+        .into_iter()
+        .flatten()
+        .flat_map(f32::to_ne_bytes)
+        .collect();
+        let vertices = device.create_buffer(&bwebgpu::BufferDescriptor {
+            label: Some("triangle vertices"),
+            size: bytes.len() as u64,
+            usage: bwebgpu::BufferUsages::VERTEX,
+            mapped_at_creation: true,
+        });
+        vertices
+            .slice(..)
+            .get_mapped_range_mut()
+            .expect("Mapped vertices")
+            .copy_from_slice(&bytes);
+        vertices.unmap();
         let pipeline = device.create_render_pipeline(&bwebgpu::RenderPipelineDescriptor {
             label: None,
             layout: None,
@@ -53,7 +75,11 @@ impl Gpu {
                 module: &shader,
                 entry_point: Some("vs_main"),
                 compilation_options: Default::default(),
-                buffers: &[],
+                buffers: &[Some(bwebgpu::VertexBufferLayout {
+                    array_stride: 24,
+                    step_mode: bwebgpu::VertexStepMode::Vertex,
+                    attributes: &bwebgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x4],
+                })],
             },
             primitive: Default::default(),
             depth_stencil: None,
@@ -78,6 +104,7 @@ impl Gpu {
             queue,
             config,
             pipeline,
+            vertices,
         }
     }
 
@@ -129,6 +156,7 @@ impl Gpu {
                 depth_stencil_attachment: None,
             });
             pass.set_pipeline(&self.pipeline);
+            pass.set_vertex_buffer(0, self.vertices.slice(..));
             pass.draw(0..3, 0..1);
         }
 
