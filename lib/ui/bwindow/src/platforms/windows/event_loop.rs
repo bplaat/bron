@@ -328,16 +328,18 @@ impl crate::MonitorInterface for PlatformMonitor {
     }
 
     fn position(&self) -> LogicalPoint {
+        let scale = self.scale_factor();
         LogicalPoint::new(
-            self.info.rcMonitor.left as f32,
-            self.info.rcMonitor.top as f32,
+            self.info.rcMonitor.left as f32 / scale,
+            self.info.rcMonitor.top as f32 / scale,
         )
     }
 
     fn size(&self) -> LogicalSize {
+        let scale = self.scale_factor();
         LogicalSize::new(
-            (self.info.rcMonitor.right - self.info.rcMonitor.left) as f32,
-            (self.info.rcMonitor.bottom - self.info.rcMonitor.top) as f32,
+            (self.info.rcMonitor.right - self.info.rcMonitor.left) as f32 / scale,
+            (self.info.rcMonitor.bottom - self.info.rcMonitor.top) as f32 / scale,
         )
     }
 
