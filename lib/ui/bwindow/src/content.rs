@@ -159,10 +159,10 @@ impl ContentHost {
         self.background.get()
     }
 
-    /// Whether a content backend draws the window.
+    /// Whether a content backend draws the window, it owns the window surface once attached.
     #[cfg(target_os = "android")]
-    pub(crate) fn draws_content(&self) -> bool {
-        self.redraw.borrow().is_some()
+    pub(crate) const fn draws_content(&self) -> bool {
+        self.attached.get()
     }
 
     pub(crate) fn theme_changed(self: &Rc<Self>, theme: crate::Theme) {
