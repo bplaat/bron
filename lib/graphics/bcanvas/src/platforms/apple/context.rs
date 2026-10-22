@@ -6,13 +6,8 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::ptr::null;
+use std::ptr::{null, null_mut};
 use std::rc::Rc;
-
-use bwindow::ffi::*;
-use objc2::rc::Retained;
-use objc2::runtime::AnyObject as Object;
-use objc2::{class, msg_send};
 
 use super::headers::*;
 use crate::{CanvasState, Color, FontWeight, LineCap, LineJoin, TextAlign, TextBaseline};
@@ -31,32 +26,28 @@ type StrokeStyle = (Color, u32, u32, LineCap, LineJoin);
 
 /// Text attributes shared by all frames of one canvas.
 #[derive(Default, Clone)]
-pub(super) struct TextStyleCache(Rc<RefCell<HashMap<TextStyleKey, TextStyle>>>);
+pub(super) struct TextStyleCache(Rc<RefCell<HashMap<TextStyleKey, Rc<TextStyle>>>>);
 
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub(super) struct TextStyleKey {
     family: Rc<str>,
     size: u32,
     weight: FontWeight,
-    color: Color,
-    alpha: u32,
 }
 
-#[derive(Clone)]
+/// Core Text attributes, the text color comes from the context fill color.
 struct TextStyle {
-    attributes: Retained<Object>,
-    ascender: f32,
-    descender: f32,
+    attributes: CFObject,
+    ascent: f32,
+    descent: f32,
 }
 
 impl TextStyleCache {
-    fn get(&self, s: &CanvasState) -> TextStyle {
+    fn get(&self, s: &CanvasState) -> Rc<TextStyle> {
         let key = TextStyleKey {
             family: s.font_family.clone(),
             size: s.font_size.to_bits(),
             weight: s.font_weight,
-            color: s.fill,
-            alpha: s.alpha.to_bits(),
         };
         let mut styles = self.0.borrow_mut();
         if !styles.contains_key(&key) && styles.len() >= MAX_TEXT_STYLES {
@@ -64,7 +55,7 @@ impl TextStyleCache {
         }
         styles
             .entry(key)
-            .or_insert_with(|| unsafe { create_text_style(s) })
+            .or_insert_with(|| Rc::new(create_text_style(s)))
             .clone()
     }
 }
@@ -204,30 +195,40 @@ impl PlatformCanvasContext {
         self.set_ctm(self.initial_transform);
     }
     pub(crate) fn fill_text(&mut self, s: &CanvasState, text: &str, x: f32, y: f32) {
-        // AppKit text drawing can change native graphics state.
-        self.invalidate_styles();
+        self.fill_style(s);
         let style = self.text_styles.get(s);
-        let string = NSString::new(text);
+        let line = text_line(text, &style);
         let x = match s.text_align {
-            TextAlign::Center => x - text_width(&string, &style) / 2.0,
-            TextAlign::Right | TextAlign::End => x - text_width(&string, &style),
+            TextAlign::Center => x - line_width(&line) / 2.0,
+            TextAlign::Right | TextAlign::End => x - line_width(&line),
             _ => x,
         };
-        // Text is drawn from the top of its line, so offset by the font metrics.
+        // Core Text draws from the alphabetic baseline, so offset by the font metrics.
         let y = match s.text_baseline {
-            TextBaseline::Middle => y - (style.ascender - style.descender) / 2.0,
-            TextBaseline::Bottom | TextBaseline::Ideographic => {
-                y - (style.ascender - style.descender)
-            }
-            TextBaseline::Alphabetic => y - style.ascender,
-            _ => y,
+            TextBaseline::Middle => y + (style.ascent - style.descent) / 2.0,
+            TextBaseline::Bottom | TextBaseline::Ideographic => y - style.descent,
+            TextBaseline::Alphabetic => y,
+            _ => y + style.ascent,
         };
-        let _: () = unsafe {
-            msg_send![&*string, drawAtPoint:CGPoint::new(x.into(), y.into()), withAttributes:&*style.attributes]
-        };
+        unsafe {
+            // The context is flipped, so flip the glyphs back upright.
+            CGContextSetTextMatrix(
+                self.context,
+                CGAffineTransform {
+                    a: 1.0,
+                    b: 0.0,
+                    c: 0.0,
+                    d: -1.0,
+                    tx: 0.0,
+                    ty: 0.0,
+                },
+            );
+            CGContextSetTextPosition(self.context, x.into(), y.into());
+            CTLineDraw(line.as_ptr(), self.context);
+        }
     }
     pub(crate) fn measure_text(&mut self, s: &CanvasState, text: &str) -> f32 {
-        text_width(&NSString::new(text), &self.text_styles.get(s))
+        line_width(&text_line(text, &self.text_styles.get(s)))
     }
     const fn invalidate_styles(&mut self) {
         self.fill_color = None;
@@ -300,62 +301,104 @@ impl PlatformCanvasContext {
 }
 
 fn rect(x: f32, y: f32, w: f32, h: f32) -> CGRect {
-    CGRect::new(
-        CGPoint::new(x.into(), y.into()),
-        CGSize::new(w.into(), h.into()),
-    )
-}
-
-fn text_width(string: &NSString, style: &TextStyle) -> f32 {
-    let size: CGSize = unsafe { msg_send![&**string, sizeWithAttributes:&*style.attributes] };
-    size.width as f32
-}
-
-unsafe fn create_text_style(s: &CanvasState) -> TextStyle {
-    #[cfg(target_os = "macos")]
-    let (font_class, color_class) = (class!(NSFont), class!(NSColor));
-    #[cfg(target_os = "ios")]
-    let (font_class, color_class) = (class!(UIFont), class!(UIColor));
-    let family = NSString::new(&s.font_family);
-    let mut font: *mut Object =
-        unsafe { msg_send![font_class,fontWithName:family,size:s.font_size as f64] };
-    if font.is_null() {
-        font = unsafe { msg_send![font_class,systemFontOfSize:s.font_size as f64] };
-    }
-    if s.font_weight == FontWeight::Bold {
-        font = unsafe { bold_font(font) };
-    }
-    let (r, g, b, a) = s.fill.components(s.alpha);
-    let color: *mut Object =
-        unsafe { msg_send![color_class,colorWithRed:r,green:g,blue:b,alpha:a] };
-    let attrs: Retained<Object> = unsafe { msg_send![class!(NSMutableDictionary), new] };
-    let _: () = unsafe { msg_send![&*attrs, setObject:font, forKey:ns_string!("NSFont")] };
-    let _: () = unsafe { msg_send![&*attrs, setObject:color, forKey:ns_string!("NSColor")] };
-    let ascender: f64 = unsafe { msg_send![font, ascender] };
-    let descender: f64 = unsafe { msg_send![font, descender] };
-    TextStyle {
-        attributes: attrs,
-        ascender: ascender as f32,
-        descender: descender as f32,
+    CGRect {
+        origin: CGPoint {
+            x: x.into(),
+            y: y.into(),
+        },
+        size: CGSize {
+            width: w.into(),
+            height: h.into(),
+        },
     }
 }
 
-#[cfg(target_os = "macos")]
-unsafe fn bold_font(font: *mut Object) -> *mut Object {
-    let manager: *mut Object = unsafe { msg_send![class!(NSFontManager), sharedFontManager] };
-    unsafe { msg_send![manager, convertFont:font, toHaveTrait:NS_BOLD_FONT_MASK] }
-}
-
-#[cfg(target_os = "ios")]
-unsafe fn bold_font(font: *mut Object) -> *mut Object {
+fn text_line(text: &str, style: &TextStyle) -> CFObject {
+    let string = CFObject::string(text);
     unsafe {
-        let descriptor: *mut Object = msg_send![font, fontDescriptor];
-        let descriptor: *mut Object =
-            msg_send![descriptor, fontDescriptorWithSymbolicTraits:UI_FONT_DESCRIPTOR_TRAIT_BOLD];
-        if descriptor.is_null() {
-            return font;
+        let attributed = CFObject::from_create(CFAttributedStringCreate(
+            null(),
+            string.as_ptr(),
+            style.attributes.as_ptr(),
+        ))
+        .expect("Could not create attributed string");
+        CFObject::from_create(CTLineCreateWithAttributedString(attributed.as_ptr()))
+            .expect("Could not create text line")
+    }
+}
+
+fn line_width(line: &CFObject) -> f32 {
+    unsafe { CTLineGetTypographicBounds(line.as_ptr(), null_mut(), null_mut(), null_mut()) as f32 }
+}
+
+fn create_text_style(s: &CanvasState) -> TextStyle {
+    let size = f64::from(s.font_size);
+    let mut font = named_font(&s.font_family, size).unwrap_or_else(|| unsafe {
+        CFObject::from_create(CTFontCreateUIFontForLanguage(
+            K_CT_FONT_UI_FONT_SYSTEM,
+            size,
+            null(),
+        ))
+        .expect("Could not create system font")
+    });
+    if s.font_weight == FontWeight::Bold {
+        // Fonts without a bold face keep their regular face.
+        if let Some(bold) = unsafe {
+            CFObject::from_create(CTFontCreateCopyWithSymbolicTraits(
+                font.as_ptr(),
+                0.0,
+                null(),
+                K_CT_FONT_BOLD_TRAIT,
+                K_CT_FONT_BOLD_TRAIT,
+            ))
+        } {
+            font = bold;
         }
-        msg_send![class!(UIFont), fontWithDescriptor:descriptor, size:0.0f64]
+    }
+    unsafe {
+        let keys = [
+            kCTFontAttributeName,
+            kCTForegroundColorFromContextAttributeName,
+        ];
+        let values = [font.as_ptr(), kCFBooleanTrue];
+        let attributes = CFObject::from_create(CFDictionaryCreate(
+            null(),
+            keys.as_ptr(),
+            values.as_ptr(),
+            keys.len() as isize,
+            &raw const kCFTypeDictionaryKeyCallBacks,
+            &raw const kCFTypeDictionaryValueCallBacks,
+        ))
+        .expect("Could not create text attributes");
+        TextStyle {
+            attributes,
+            ascent: CTFontGetAscent(font.as_ptr()) as f32,
+            descent: CTFontGetDescent(font.as_ptr()) as f32,
+        }
+    }
+}
+
+/// Core Text substitutes a fallback font for unknown names, so only accept a font that
+/// matches the requested family, full or PostScript name.
+fn named_font(family: &str, size: f64) -> Option<CFObject> {
+    let name = CFObject::string(family);
+    unsafe {
+        let font = CFObject::from_create(CTFontCreateWithName(name.as_ptr(), size, null()))?;
+        [
+            CTFontCopyFamilyName,
+            CTFontCopyFullName,
+            CTFontCopyPostScriptName,
+        ]
+        .into_iter()
+        .filter_map(|copy| CFObject::from_create(copy(font.as_ptr())))
+        .any(|candidate| {
+            CFStringCompare(
+                name.as_ptr(),
+                candidate.as_ptr(),
+                K_CF_COMPARE_CASE_INSENSITIVE,
+            ) == 0
+        })
+        .then_some(font)
     }
 }
 
@@ -363,35 +406,59 @@ unsafe fn bold_font(font: *mut Object) -> *mut Object {
 mod tests {
     use super::*;
 
-    #[cfg(target_os = "macos")]
     #[test]
     fn bold_text_preserves_the_requested_family() {
-        objc2::rc::autoreleasepool(|_| unsafe {
-            let state = CanvasState {
-                font_family: Rc::from("Menlo"),
-                font_size: 18.0,
-                ..CanvasState::default()
-            };
-            let normal = create_text_style(&state).attributes;
-            let bold = create_text_style(&CanvasState {
-                font_weight: FontWeight::Bold,
-                ..state
-            })
-            .attributes;
-            let key = NSString::new("NSFont");
-            let normal_font: *mut Object = msg_send![&*normal, objectForKey:&*key];
-            let bold_font: *mut Object = msg_send![&*bold, objectForKey:&*key];
-            let normal_family: *mut Object = msg_send![normal_font, familyName];
-            let bold_family: *mut Object = msg_send![bold_font, familyName];
-            let same_family: objc2::runtime::Bool =
-                msg_send![normal_family, isEqualToString:bold_family];
-            assert!(same_family.as_bool());
-            let manager: *mut Object = msg_send![class!(NSFontManager), sharedFontManager];
-            let traits: usize = msg_send![manager, traitsOfFont:bold_font];
-            assert_ne!(traits & NS_BOLD_FONT_MASK, 0);
-            let size: f64 = msg_send![bold_font, pointSize];
-            assert_eq!(size, 18.0);
+        let state = CanvasState {
+            font_family: Rc::from("Menlo"),
+            font_size: 18.0,
+            ..CanvasState::default()
+        };
+        let normal = create_text_style(&state);
+        let bold = create_text_style(&CanvasState {
+            font_weight: FontWeight::Bold,
+            ..state
         });
+        unsafe {
+            let normal_font =
+                CFDictionaryGetValue(normal.attributes.as_ptr(), kCTFontAttributeName);
+            let bold_font = CFDictionaryGetValue(bold.attributes.as_ptr(), kCTFontAttributeName);
+            let normal_family =
+                CFObject::from_create(CTFontCopyFamilyName(normal_font)).expect("family name");
+            let bold_family =
+                CFObject::from_create(CTFontCopyFamilyName(bold_font)).expect("family name");
+            assert_eq!(
+                CFStringCompare(normal_family.as_ptr(), bold_family.as_ptr(), 0),
+                0
+            );
+            assert_ne!(CTFontGetSymbolicTraits(bold_font) & K_CT_FONT_BOLD_TRAIT, 0);
+            assert_eq!(CTFontGetSize(bold_font), 18.0);
+        }
+    }
+
+    #[test]
+    fn unknown_font_family_falls_back_to_the_system_font() {
+        assert!(named_font("sans-serif", 12.0).is_none());
+        assert!(named_font("menlo", 12.0).is_some());
+    }
+
+    #[test]
+    fn text_is_drawn_upright_above_the_alphabetic_baseline() {
+        let mut canvas = crate::OffscreenCanvas::new(40, 40);
+        canvas.draw(|context| {
+            context.set_font("Menlo", 20.0);
+            context.set_fill_style(Color::rgb(255, 0, 0));
+            context.fill_text("T", 10.0, 30.0);
+        });
+        let pixels = canvas.pixels();
+        let ink = |y: usize| (0..40).any(|x| pixels[(y * 40 + x) * 4 + 3] > 128);
+        // The crossbar of an upright T sits near the top of its glyph box.
+        let top = (0..40).find(|&y| ink(y)).expect("text was drawn");
+        assert!((10..20).contains(&top));
+        assert!(!(31..40).any(ink));
+        let red = (0..40 * 40)
+            .find(|i| pixels[i * 4 + 3] == 255)
+            .expect("opaque ink");
+        assert_eq!(&pixels[red * 4..][..4], [255, 0, 0, 255]);
     }
 
     #[test]

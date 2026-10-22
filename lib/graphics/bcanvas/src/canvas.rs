@@ -9,11 +9,15 @@ use std::rc::Rc;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
+#[cfg(feature = "window")]
 use bwindow::Window;
 
-use crate::platforms::{PlatformCanvas, PlatformCanvasContext, PlatformOffscreenCanvas};
+#[cfg(feature = "window")]
+use crate::platforms::PlatformCanvas;
+use crate::platforms::{PlatformCanvasContext, PlatformOffscreenCanvas};
 
 /// Cursor shown over a canvas; native window decorations retain their own cursors.
+#[cfg(feature = "window")]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum CursorIcon {
     /// Standard arrow.
@@ -227,10 +231,12 @@ impl Default for CanvasState {
 }
 
 /// Builder for one native 2D canvas attached to a window.
+#[cfg(feature = "window")]
 pub struct CanvasBuilder<'a> {
     window: &'a Window,
 }
 
+#[cfg(feature = "window")]
 impl<'a> CanvasBuilder<'a> {
     /// Create a canvas builder.
     pub const fn new(window: &'a Window) -> Self {
@@ -251,10 +257,12 @@ impl<'a> CanvasBuilder<'a> {
 }
 
 /// A native 2D canvas. All access is confined to the main thread.
+#[cfg(feature = "window")]
 pub struct Canvas {
     platform: PlatformCanvas,
 }
 
+#[cfg(feature = "window")]
 impl Canvas {
     /// Set the cursor over this canvas. Has no effect after the window closes.
     pub fn set_cursor(&mut self, cursor: CursorIcon) {

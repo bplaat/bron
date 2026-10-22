@@ -4,15 +4,6 @@
  * SPDX-License-Identifier: MIT
  */
 
-use std::ffi::c_void;
-use std::ptr::null_mut;
-
-use objc2::ffi::{objc_autoreleasePoolPop, objc_autoreleasePoolPush};
-#[cfg(target_os = "macos")]
-use objc2::runtime::{AnyObject as Object, Bool};
-#[cfg(target_os = "macos")]
-use objc2::{class, msg_send};
-
 use super::context::{PlatformCanvasContext, TextStyleCache};
 use super::headers::*;
 use crate::copy_rgba_premultiplied_to_straight;
@@ -22,7 +13,6 @@ pub(crate) struct PlatformOffscreenCanvas {
     storage: Vec<u8>,
     output: Vec<u8>,
     dirty: bool,
-    pool: *mut c_void,
     text_styles: TextStyleCache,
 }
 
@@ -50,57 +40,17 @@ impl PlatformOffscreenCanvas {
                 storage,
                 output: vec![0; length],
                 dirty: false,
-                pool: null_mut(),
                 text_styles: TextStyleCache::default(),
             }
         }
     }
 
     pub(crate) fn begin_draw(&mut self) -> PlatformCanvasContext {
-        // Offscreen drawing can run outside an event loop, so drain its autoreleased text objects.
-        self.pool = unsafe { objc_autoreleasePoolPush() };
         self.dirty = true;
-        unsafe {
-            self.push_graphics_context();
-            PlatformCanvasContext::new(self.context, self.text_styles.clone())
-        }
+        unsafe { PlatformCanvasContext::new(self.context, self.text_styles.clone()) }
     }
 
-    pub(crate) fn end_draw(&mut self) {
-        unsafe {
-            self.pop_graphics_context();
-            objc_autoreleasePoolPop(self.pool);
-        }
-    }
-
-    #[cfg(target_os = "ios")]
-    unsafe fn push_graphics_context(&self) {
-        unsafe { UIGraphicsPushContext(self.context) };
-    }
-
-    #[cfg(target_os = "ios")]
-    unsafe fn pop_graphics_context(&self) {
-        unsafe { UIGraphicsPopContext() };
-    }
-
-    #[cfg(target_os = "macos")]
-    unsafe fn push_graphics_context(&self) {
-        unsafe {
-            let _: () = msg_send![class!(NSGraphicsContext), saveGraphicsState];
-            let graphics: *mut Object = msg_send![class!(NSGraphicsContext),
-                graphicsContextWithCGContext:self.context, flipped:Bool::YES];
-            assert!(
-                !graphics.is_null(),
-                "Could not create bitmap graphics context"
-            );
-            let _: () = msg_send![class!(NSGraphicsContext), setCurrentContext:graphics];
-        }
-    }
-
-    #[cfg(target_os = "macos")]
-    unsafe fn pop_graphics_context(&self) {
-        let _: () = unsafe { msg_send![class!(NSGraphicsContext), restoreGraphicsState] };
-    }
+    pub(crate) const fn end_draw(&mut self) {}
 
     pub(crate) fn pixels(&mut self) -> &[u8] {
         if self.dirty {

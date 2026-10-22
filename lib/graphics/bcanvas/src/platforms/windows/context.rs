@@ -9,8 +9,6 @@ use std::ops::Deref;
 use std::ptr::{null, null_mut};
 use std::rc::Rc;
 
-use bwindow::ffi::ToWideString;
-
 use super::com::ComPtr;
 use super::headers::*;
 use crate::path::{Command, Path, Point, Transform};
@@ -465,14 +463,13 @@ impl PlatformCanvasContext {
         }) {
             return format.clone();
         }
-        let family = (match s.font_family.as_ref() {
+        let family = wide_string(match s.font_family.as_ref() {
             "sans-serif" => "Segoe UI",
             "serif" => "Times New Roman",
             "monospace" => "Consolas",
             name => name,
-        })
-        .to_wide_string();
-        let locale = "en-us".to_wide_string();
+        });
+        let locale = wide_string("en-us");
         let format = unsafe {
             self.resources
                 .write
