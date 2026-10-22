@@ -195,15 +195,16 @@ impl ContentHost {
         }
     }
 
-    /// Report a display scale change of the window content.
-    pub(crate) fn scale_factor_changed(&self, scale_factor: f32) {
+    /// Report a display scale change, returning whether the value changed.
+    pub(crate) fn scale_factor_changed(&self, scale_factor: f32) -> bool {
         if self.closed.get() || self.scale_factor.replace(scale_factor) == scale_factor {
-            return;
+            return false;
         }
         let handler = self.scale.borrow().clone();
         if let Some(handler) = handler {
             handler(scale_factor);
         }
+        true
     }
 
     /// Run the content's native paint pass, returns false when no content paints.
@@ -605,8 +606,8 @@ mod tests {
         let count = Rc::new(Cell::new(0));
         let output = count.clone();
         attachment.on_scale_factor_changed(move |_| output.set(output.get() + 1));
-        host.scale_factor_changed(2.0);
-        host.scale_factor_changed(2.0);
+        assert!(host.scale_factor_changed(2.0));
+        assert!(!host.scale_factor_changed(2.0));
         assert_eq!(attachment.scale_factor(), 2.0);
         assert_eq!(count.get(), 1);
     }
