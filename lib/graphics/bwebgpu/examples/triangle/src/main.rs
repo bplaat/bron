@@ -191,7 +191,9 @@ fn main() {
                 window.request_animation_frame();
             }
         }
-        Event::Window(id, WindowEvent::Resize(_)) if id == window_id => {
+        Event::Window(id, WindowEvent::Resize(_) | WindowEvent::ScaleFactorChanged(_))
+            if id == window_id =>
+        {
             gpu.resize();
             window.request_redraw();
         }
