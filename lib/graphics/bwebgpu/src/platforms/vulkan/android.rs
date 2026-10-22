@@ -6,11 +6,11 @@
 
 //! Vulkan surfaces for the bwindow Android activity window.
 
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::ptr;
 use std::rc::Rc;
 
-use bwindow::ffi::{android_native_window, android_post_frame};
+use bwindow::ffi::android_native_window;
 
 use super::surface::{SurfaceOwner, Swapchain};
 use super::*;
@@ -27,12 +27,6 @@ pub(crate) struct Surface {
     pub(super) instance: Rc<Instance>,
     current: RefCell<Option<(Rc<SurfaceOwner>, u64)>>,
     pub(super) swap: RefCell<Option<Rc<Swapchain>>>,
-    frames: Rc<FrameTimer>,
-}
-
-struct FrameTimer {
-    sender: bwindow::WindowEventSender,
-    scheduled: Cell<bool>,
 }
 
 impl Surface {
@@ -40,7 +34,6 @@ impl Surface {
         attachment: &bwindow::WindowAttachment,
         factory: &mut Option<Factory>,
     ) -> Result<Self> {
-        let sender = attachment.event_sender();
         let Some(bwindow::NativeContentHandle::Android(_)) =
             (unsafe { attachment.content_handle() })
         else {
@@ -57,31 +50,7 @@ impl Surface {
             instance,
             current: RefCell::new(None),
             swap: RefCell::new(None),
-            frames: Rc::new(FrameTimer {
-                sender,
-                scheduled: Cell::new(false),
-            }),
         })
-    }
-
-    pub(crate) fn request_redraw(&self) {
-        self.frames
-            .sender
-            .send(bwindow::WindowEvent::RedrawRequested);
-    }
-
-    /// Redraw on the next display frame.
-    pub(crate) fn request_animation_frame(&self) {
-        if self.frames.scheduled.replace(true) {
-            return;
-        }
-        let frames = Rc::downgrade(&self.frames);
-        android_post_frame(move || {
-            if let Some(frames) = frames.upgrade() {
-                frames.scheduled.set(false);
-                frames.sender.send(bwindow::WindowEvent::RedrawRequested);
-            }
-        });
     }
 
     /// The size of the whole native window, the swapchain draws under the system bars.

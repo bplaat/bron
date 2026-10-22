@@ -9,6 +9,7 @@ pub(crate) use crate::platforms::gtk::dialog::{PlatformFileDialog, PlatformMessa
 pub(crate) use crate::platforms::gtk::event_loop::{
     PlatformEventLoop, PlatformEventLoopProxy, PlatformMonitor,
 };
+pub(crate) use crate::platforms::gtk::frame::FrameSource;
 pub(crate) use crate::platforms::gtk::window::PlatformWindow;
 
 mod content;
@@ -17,6 +18,7 @@ mod dialog;
 mod event_loop;
 #[cfg(feature = "file_drop")]
 pub(crate) mod file_drop;
+mod frame;
 pub(crate) mod headers;
 mod input;
 mod menu;

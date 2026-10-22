@@ -45,57 +45,34 @@ unsafe extern "C" {
     fn gtk_widget_get_allocated_height(widget: *mut GtkWidget) -> i32;
     fn gtk_widget_get_scale_factor(widget: *mut GtkWidget) -> i32;
     fn gtk_widget_queue_draw(widget: *mut GtkWidget);
-    fn gtk_widget_add_tick_callback(
-        widget: *mut GtkWidget,
-        callback: extern "C" fn(*mut GtkWidget, *mut c_void, *mut c_void) -> i32,
-        data: *mut c_void,
-        notify: extern "C" fn(*mut c_void),
-    ) -> u32;
-    fn gtk_widget_remove_tick_callback(widget: *mut GtkWidget, id: u32);
 }
 
 // Draws the shared drawing area of the window with Cairo in its draw signal, the window
-// delivers the interaction. Animation frames follow the GTK frame clock.
+// delivers the interaction and paces the animation frames.
 struct CanvasData {
     widget: *mut GtkWidget,
     sender: WindowEventSender,
     closed: Cell<bool>,
     painting: Cell<bool>,
     frame: RefCell<Option<CanvasRenderingContext2d<'static>>>,
-    source: Cell<Option<u32>>,
 }
 
 impl CanvasData {
-    fn request_redraw(self: &Rc<Self>) {
+    fn request_redraw(&self) {
         if self.closed.get() {
             return;
         }
-        if !self.painting.get() {
-            if let Some(source) = self.source.take() {
-                unsafe { gtk_widget_remove_tick_callback(self.widget, source) };
-            }
+        // Redraws requested while painting wait for the next display frame.
+        if self.painting.get() {
+            self.sender.request_animation_frame();
+        } else {
             unsafe { gtk_widget_queue_draw(self.widget) };
-            return;
         }
-        self.request_animation_frame();
-    }
-
-    fn request_animation_frame(self: &Rc<Self>) {
-        if self.closed.get() || self.source.get().is_some() {
-            return;
-        }
-        let pointer = Rc::into_raw(self.clone()) as *mut c_void;
-        let source =
-            unsafe { gtk_widget_add_tick_callback(self.widget, redraw, pointer, release_source) };
-        self.source.set(Some(source));
     }
 
     fn close(&self) {
         if self.closed.replace(true) {
             return;
-        }
-        if let Some(source) = self.source.take() {
-            unsafe { gtk_widget_remove_tick_callback(self.widget, source) };
         }
         self.frame.borrow_mut().take();
         unsafe {
@@ -127,19 +104,6 @@ impl Drop for CanvasData {
     }
 }
 
-extern "C" fn redraw(_: *mut GtkWidget, _: *mut c_void, pointer: *mut c_void) -> i32 {
-    let data = unsafe { &*pointer.cast::<CanvasData>() };
-    data.source.set(None);
-    if !data.closed.get() {
-        unsafe { gtk_widget_queue_draw(data.widget) };
-    }
-    0
-}
-
-extern "C" fn release_source(pointer: *mut c_void) {
-    drop(unsafe { Rc::from_raw(pointer.cast::<CanvasData>()) });
-}
-
 pub(crate) struct PlatformCanvas {
     data: Rc<CanvasData>,
     attachment: WindowAttachment,
@@ -160,7 +124,6 @@ impl PlatformCanvas {
                 closed: Cell::new(false),
                 painting: Cell::new(false),
                 frame: RefCell::new(None),
-                source: Cell::new(None),
             });
             g_signal_connect_data(
                 widget.cast(),
@@ -176,12 +139,6 @@ impl PlatformCanvas {
                     data.request_redraw();
                 }
             });
-            let animation_frame = Rc::downgrade(&data);
-            attachment.on_animation_frame(move || {
-                if let Some(data) = animation_frame.upgrade() {
-                    data.request_animation_frame();
-                }
-            });
             let close = data.clone();
             attachment.on_close(move || close.close());
             data.request_redraw();
@@ -193,7 +150,7 @@ impl PlatformCanvas {
     }
 
     pub(crate) fn request_animation_frame(&self) {
-        self.data.request_animation_frame();
+        self.attachment.request_animation_frame();
     }
 
     pub(crate) fn draw(

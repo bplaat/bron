@@ -12,17 +12,6 @@ pub(super) type CFTypeRef = *const c_void;
 pub(super) type CFStringRef = *const c_void;
 pub(super) type CFDictionaryRef = *const c_void;
 pub(super) type CTFontRef = *const c_void;
-#[cfg(all(feature = "window", target_os = "macos"))]
-pub(super) type CVDisplayLinkRef = *mut c_void;
-#[cfg(all(feature = "window", target_os = "macos"))]
-pub(super) type CVDisplayLinkOutputCallback = unsafe extern "C" fn(
-    CVDisplayLinkRef,
-    *const c_void,
-    *const c_void,
-    u64,
-    *mut u64,
-    *mut c_void,
-) -> i32;
 
 pub(super) const K_CF_STRING_ENCODING_UTF8: u32 = 0x0800_0100;
 pub(super) const K_CF_COMPARE_CASE_INSENSITIVE: usize = 1;
@@ -67,26 +56,6 @@ mod encode {
         const ENCODING: Encoding =
             Encoding::Struct("CGRect", &[CGPoint::ENCODING, CGSize::ENCODING]);
     }
-}
-
-#[cfg(all(feature = "window", target_os = "macos"))]
-#[link(name = "CoreVideo", kind = "framework")]
-unsafe extern "C" {
-    pub(super) fn CVDisplayLinkCreateWithActiveCGDisplays(
-        display_link: *mut CVDisplayLinkRef,
-    ) -> i32;
-    pub(super) fn CVDisplayLinkSetOutputCallback(
-        display_link: CVDisplayLinkRef,
-        callback: CVDisplayLinkOutputCallback,
-        user_info: *mut c_void,
-    ) -> i32;
-    pub(super) fn CVDisplayLinkSetCurrentCGDisplay(
-        display_link: CVDisplayLinkRef,
-        display_id: u32,
-    ) -> i32;
-    pub(super) fn CVDisplayLinkStart(display_link: CVDisplayLinkRef) -> i32;
-    pub(super) fn CVDisplayLinkStop(display_link: CVDisplayLinkRef) -> i32;
-    pub(super) fn CVDisplayLinkRelease(display_link: CVDisplayLinkRef);
 }
 
 #[link(name = "CoreGraphics", kind = "framework")]

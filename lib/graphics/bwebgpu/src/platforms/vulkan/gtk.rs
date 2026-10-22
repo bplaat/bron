@@ -15,8 +15,8 @@ use super::surface::{SurfaceOwner, Swapchain};
 use super::*;
 use crate::platform::headers::{
     gdk_wayland_display_get_wl_display, gdk_wayland_window_get_wl_surface, gdk_window_get_display,
-    gdk_x11_display_get_xdisplay, gdk_x11_window_get_xid, gtk_widget_add_tick_callback,
-    gtk_widget_get_scale_factor, gtk_widget_get_window, gtk_widget_remove_tick_callback,
+    gdk_x11_display_get_xdisplay, gdk_x11_window_get_xid, gtk_widget_get_scale_factor,
+    gtk_widget_get_window,
 };
 
 pub(super) enum PlatformWindow {
@@ -67,7 +67,7 @@ pub(crate) struct Surface {
     pub(super) swap: RefCell<Option<Rc<Swapchain>>>,
     content: Rc<widget::Widget>,
     pub(super) widget: *mut c_void,
-    pub(super) redraw: Rc<RedrawTimer>,
+    pub(super) redraw: Rc<Repaint>,
     pub(super) startup_clock: *mut c_void,
 }
 
@@ -101,46 +101,19 @@ impl Drop for Surface {
                 Rc::as_ptr(&self.redraw) as *mut c_void,
             );
         }
-        if let Some(id) = self.redraw.callback.take() {
-            unsafe { gtk_widget_remove_tick_callback(self.widget, id) };
-        }
     }
 }
 
-pub(super) struct RedrawTimer {
-    widget: *mut c_void,
-    sender: bwindow::WindowEventSender,
-    pub(super) callback: Cell<Option<u32>>,
+// Repaints of the Vulkan window wait for the next display frame of the bwindow window.
+pub(super) struct Repaint {
+    pub(super) sender: bwindow::WindowEventSender,
     ready: Cell<bool>,
 }
 
-extern "C" fn surface_after_paint(_: *mut c_void, data: *const RedrawTimer) {
-    let timer = unsafe {
-        Rc::increment_strong_count(data);
-        Rc::from_raw(data)
-    };
-    if !timer.ready.replace(true) {
-        timer.request_animation_frame();
-    }
-}
-
-impl Drop for RedrawTimer {
-    fn drop(&mut self) {
-        if let Some(id) = self.callback.take() {
-            unsafe { gtk_widget_remove_tick_callback(self.widget, id) };
-        }
-    }
-}
-
-impl RedrawTimer {
-    fn request_animation_frame(self: &Rc<Self>) {
-        if self.callback.get().is_some() {
-            return;
-        }
-        let data = Rc::into_raw(self.clone()) as *mut c_void;
-        let id =
-            unsafe { gtk_widget_add_tick_callback(self.widget, redraw_tick, data, release_redraw) };
-        self.callback.set(Some(id));
+extern "C" fn surface_after_paint(_: *mut c_void, data: *const Repaint) {
+    let repaint = unsafe { &*data };
+    if !repaint.ready.replace(true) {
+        repaint.sender.request_animation_frame();
     }
 }
 
@@ -149,42 +122,19 @@ extern "C" fn surface_invalidate(window: *mut c_void, region: *mut c_void) {
         // This native window belongs to Vulkan. Preserve the repaint request,
         // but remove its Cairo damage so GDK cannot attach a competing buffer.
         let pointer =
-            vk::g_object_get_data(window, c"bplaat-bwebgpu-redraw".as_ptr()).cast::<RedrawTimer>();
+            vk::g_object_get_data(window, c"bplaat-bwebgpu-redraw".as_ptr()).cast::<Repaint>();
         if !pointer.is_null() {
-            Rc::increment_strong_count(pointer);
-            let timer = Rc::from_raw(pointer);
-            timer.request_animation_frame();
+            (*pointer).sender.request_animation_frame();
         }
         vk::cairo_region_subtract(region, region);
     }
 }
 
-extern "C" fn surface_draw(_: *mut c_void, _: *mut c_void, data: *const RedrawTimer) -> i32 {
+extern "C" fn surface_draw(_: *mut c_void, _: *mut c_void, data: *const Repaint) -> i32 {
     // GTK flushes its backing buffer after this signal, which can overwrite a
-    // Vulkan presentation. Repaint on the next tick, after GTK finishes drawing.
-    let timer = unsafe {
-        Rc::increment_strong_count(data);
-        Rc::from_raw(data)
-    };
-    timer.request_animation_frame();
+    // Vulkan presentation. Repaint on the next frame, after GTK finishes drawing.
+    unsafe { (*data).sender.request_animation_frame() };
     1
-}
-
-extern "C" fn redraw_tick(_: *mut c_void, _: *mut c_void, data: *mut c_void) -> i32 {
-    // The application can close the window (removing this callback) while
-    // handling the redraw. Retain the callback data across that delivery.
-    let timer = unsafe {
-        let pointer = data.cast::<RedrawTimer>();
-        Rc::increment_strong_count(pointer);
-        Rc::from_raw(pointer)
-    };
-    timer.callback.set(None);
-    timer.sender.send(bwindow::WindowEvent::RedrawRequested);
-    0
-}
-
-extern "C" fn release_redraw(data: *mut c_void) {
-    drop(unsafe { Rc::from_raw(data.cast::<RedrawTimer>()) });
 }
 
 impl Surface {
@@ -255,10 +205,8 @@ impl Surface {
                     ))?;
                 }
             }
-            let redraw = Rc::new(RedrawTimer {
-                widget,
+            let redraw = Rc::new(Repaint {
                 sender,
-                callback: Cell::new(None),
                 ready: Cell::new(!wayland),
             });
             // GDK keeps a new Wayland subsurface synchronized until the parent
@@ -313,16 +261,6 @@ impl Surface {
                 startup_clock,
             })
         }
-    }
-
-    pub(crate) fn request_redraw(&self) {
-        self.redraw
-            .sender
-            .send(bwindow::WindowEvent::RedrawRequested);
-    }
-
-    pub(crate) fn request_animation_frame(&self) {
-        self.redraw.request_animation_frame();
     }
 
     pub(crate) fn size(&self) -> (u32, u32) {

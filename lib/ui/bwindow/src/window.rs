@@ -280,8 +280,7 @@ impl Window {
         self.host.is_closed()
     }
 
-    /// Schedule a repaint of attached drawable content. Repeated requests coalesce.
-    /// Does nothing after close or when the content has no repaint scheduler.
+    /// Schedule a repaint, delivered as `RedrawRequested`. Does nothing after close.
     pub fn request_redraw(&self) {
         self.host.request_redraw();
     }

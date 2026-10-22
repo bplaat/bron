@@ -51,18 +51,6 @@ impl Instance {
             &attachment,
             &mut self.factory.borrow_mut(),
         )?);
-        let redraw = Rc::downgrade(&native);
-        attachment.on_redraw(move || {
-            if let Some(surface) = redraw.upgrade() {
-                surface.request_redraw();
-            }
-        });
-        let animation_frame = Rc::downgrade(&native);
-        attachment.on_animation_frame(move || {
-            if let Some(surface) = animation_frame.upgrade() {
-                surface.request_animation_frame();
-            }
-        });
         // The surface retains the attachment for the lifetime of all native presentation objects.
         Ok(Surface {
             native,

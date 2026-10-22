@@ -4,36 +4,19 @@
  * SPDX-License-Identifier: MIT
  */
 
-//! UIKit Metal presentation with on-demand display-link callbacks.
+//! CAMetalLayer presentation for bwindow UIKit content views.
 
-use objc2::rc::{Allocated, Retained, autoreleasepool};
+use objc2::rc::autoreleasepool;
 use objc2::runtime::{AnyObject, Bool};
-use objc2::{class, define_class, msg_send, sel};
+use objc2::{class, msg_send};
 
 use super::*;
 
 pub(crate) type Factory = ();
 
-define_class!(
-    #[unsafe(super(NSObject))]
-    #[name = "BwebgpuIOSRedrawTarget"]
-    #[ivars = bwindow::WindowEventSender]
-    struct RedrawTarget;
-
-    impl RedrawTarget {
-        #[unsafe(method(drawFrame:))]
-        fn draw_frame(&self, link: *mut AnyObject) {
-            let _: () = unsafe { msg_send![link, setPaused:Bool::YES] };
-            self.ivars().send(bwindow::WindowEvent::RedrawRequested);
-        }
-    }
-);
-
 pub(crate) struct Surface {
     view: Object,
     layer: Object,
-    redraw: Retained<RedrawTarget>,
-    display_link: Object,
 }
 
 impl Surface {
@@ -41,7 +24,6 @@ impl Surface {
         attachment: &bwindow::WindowAttachment,
         _: &mut Option<Factory>,
     ) -> Result<Self> {
-        let sender = attachment.event_sender();
         let Some(bwindow::NativeContentHandle::UIKit(view)) =
             (unsafe { attachment.content_handle() })
         else {
@@ -70,32 +52,8 @@ impl Surface {
             attachment.on_scale_factor_changed(move |scale| {
                 let _: () = msg_send![&*scale_layer, setContentsScale:f64::from(scale)];
             });
-            let redraw: Allocated<RedrawTarget> = msg_send![RedrawTarget::class(), alloc];
-            let redraw: Retained<RedrawTarget> = msg_send![super(redraw.set_ivars(sender)), init];
-            let display_link = retained(
-                msg_send![class!(CADisplayLink), displayLinkWithTarget:&*redraw, selector:sel!(drawFrame:)],
-            )?;
-            let _: () = msg_send![&*display_link, setPaused:Bool::YES];
-            let run_loop: *mut AnyObject = msg_send![class!(NSRunLoop), mainRunLoop];
-            let _: () =
-                msg_send![&*display_link, addToRunLoop:run_loop, forMode:NSRunLoopCommonModes];
-            Ok(Self {
-                view,
-                layer,
-                redraw,
-                display_link,
-            })
+            Ok(Self { view, layer })
         })
-    }
-
-    pub(crate) fn request_redraw(&self) {
-        self.redraw
-            .ivars()
-            .send(bwindow::WindowEvent::RedrawRequested);
-    }
-
-    pub(crate) fn request_animation_frame(&self) {
-        let _: () = unsafe { msg_send![&*self.display_link, setPaused:Bool::NO] };
     }
 
     pub(crate) fn size(&self) -> (u32, u32) {
@@ -112,10 +70,7 @@ impl Surface {
 
 impl Drop for Surface {
     fn drop(&mut self) {
-        unsafe {
-            let _: () = msg_send![&*self.display_link, invalidate];
-            let _: () = msg_send![&*self.layer, removeFromSuperlayer];
-        }
+        let _: () = unsafe { msg_send![&*self.layer, removeFromSuperlayer] };
     }
 }
 

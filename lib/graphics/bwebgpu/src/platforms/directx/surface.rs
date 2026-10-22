@@ -17,7 +17,6 @@ pub(crate) type Factory = ();
 pub(crate) struct Surface {
     window: HWND,
     swap: RefCell<Option<Swapchain>>,
-    sender: bwindow::WindowEventSender,
 }
 
 struct Swapchain {
@@ -41,20 +40,7 @@ impl Surface {
         Ok(Self {
             window,
             swap: RefCell::new(None),
-            sender: attachment.event_sender(),
         })
-    }
-
-    pub(crate) fn request_redraw(&self) {
-        self.sender.send(bwindow::WindowEvent::RedrawRequested);
-    }
-
-    pub(crate) fn request_animation_frame(&self) {
-        // Yield through the native message queue before the next synchronized present.
-        // This keeps input, resize, and close messages responsive during animation.
-        if !self.sender.post_redraw() {
-            self.sender.send(bwindow::WindowEvent::RedrawRequested);
-        }
     }
 
     pub(crate) fn size(&self) -> (u32, u32) {

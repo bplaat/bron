@@ -9,8 +9,9 @@ pub(crate) use crate::platforms::windows::dialog::{PlatformFileDialog, PlatformM
 pub(crate) use crate::platforms::windows::event_loop::{
     PlatformEventLoop, PlatformEventLoopProxy, PlatformMonitor,
 };
+pub(crate) use crate::platforms::windows::frame::FrameSource;
 pub(crate) use crate::platforms::windows::window::{
-    PlatformWindow, config_dir as windows_config_dir, post_content_redraw,
+    PlatformWindow, config_dir as windows_config_dir,
 };
 
 #[cfg(feature = "dialog")]
@@ -18,6 +19,7 @@ mod dialog;
 mod event_loop;
 #[cfg(feature = "file_drop")]
 mod file_drop;
+mod frame;
 pub(crate) mod headers;
 pub(crate) mod input;
 mod interaction;
