@@ -8,6 +8,8 @@ use std::ffi::c_void;
 use std::path::PathBuf;
 use std::ptr::null;
 
+use bwindow::ffi::gtk_dropped_paths;
+
 use super::headers::*;
 use super::webview::WebviewData;
 use crate::WindowEvent;
@@ -104,7 +106,7 @@ extern "C" fn webview_on_drag_data_received(
         return;
     }
 
-    let paths = unsafe { gtk_dropped_paths(selection_data) };
+    let paths = unsafe { gtk_dropped_paths(selection_data.cast()) };
     data.file_drop.borrow_mut().paths = Some(paths);
     data.file_drop.borrow_mut().leaving = false;
 }

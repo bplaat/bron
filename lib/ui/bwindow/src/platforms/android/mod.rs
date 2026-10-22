@@ -7,7 +7,6 @@
 pub(crate) use crate::platforms::android::event_loop::{
     PlatformEventLoop, PlatformEventLoopProxy, PlatformMonitor,
 };
-pub(crate) use crate::platforms::android::headers as native_headers;
 pub(crate) use crate::platforms::android::window::PlatformWindow;
 
 mod activity;

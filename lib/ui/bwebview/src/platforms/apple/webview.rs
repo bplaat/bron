@@ -10,6 +10,8 @@ use std::ptr::{null, null_mut};
 use std::rc::Rc;
 
 use block2::Block;
+#[cfg(all(target_os = "macos", feature = "file_drop"))]
+use bwindow::ffi::register_dragged_types;
 use objc2::rc::{Allocated, Retained};
 use objc2::runtime::{AnyObject as Object, Bool};
 use objc2::{class, define_class, msg_send};

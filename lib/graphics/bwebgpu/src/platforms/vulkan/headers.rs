@@ -1939,7 +1939,34 @@ unsafe extern "C" {
 }
 
 #[cfg(all(feature = "window", not(target_os = "android")))]
+pub(super) const G_CONNECT_DEFAULT: i32 = 0;
+
+#[cfg(all(feature = "window", not(target_os = "android")))]
 unsafe extern "C" {
+    pub(super) fn g_object_ref(object: *mut c_void) -> *mut c_void;
+    pub(super) fn g_object_unref(object: *mut c_void);
+    pub(super) fn g_signal_connect_data(
+        instance: *mut c_void,
+        detailed_signal: *const c_char,
+        c_handler: *const c_void,
+        data: *const c_void,
+        destroy_data: *const c_void,
+        connect_flags: i32,
+    );
+    pub(super) fn g_signal_handlers_disconnect_matched(
+        instance: *mut c_void,
+        mask: u32,
+        signal_id: u32,
+        detail: u32,
+        closure: *mut c_void,
+        func: *mut c_void,
+        data: *mut c_void,
+    ) -> u32;
+    pub(super) fn gtk_container_add(container: *mut c_void, widget: *mut c_void);
+    pub(super) fn gtk_widget_show(widget: *mut c_void);
+    pub(super) fn gtk_widget_destroy(widget: *mut c_void);
+    pub(super) fn gdk_event_get_event_type(event: *const c_void) -> i32;
+    pub(super) fn gdk_event_get_keycode(event: *const c_void, code: *mut u16) -> i32;
     pub(super) fn g_object_get_data(object: *mut c_void, key: *const c_char) -> *mut c_void;
     pub(super) fn g_object_set_data(object: *mut c_void, key: *const c_char, data: *mut c_void);
     pub(super) fn gdk_window_set_invalidate_handler(

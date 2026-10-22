@@ -10,11 +10,7 @@ use std::ffi::c_void;
 use std::ptr;
 use std::rc::Rc;
 
-use bwindow::ffi::{
-    G_CONNECT_DEFAULT, GdkEvent, g_object_unref, g_signal_connect_data,
-    g_signal_handlers_disconnect_matched, gdk_event_get_event_type, gdk_event_get_keycode,
-    gtk_container_add, gtk_input_event, gtk_widget_destroy, gtk_widget_show,
-};
+use bwindow::ffi::gtk_input_event;
 use bwindow::{WindowEvent, WindowEventSender};
 
 use super::headers::*;
@@ -151,7 +147,7 @@ extern "C" fn unmap(_: *mut c_void, pointer: *const Widget) {
     data.keys.borrow_mut().clear();
 }
 
-extern "C" fn input(widget: *mut c_void, event: *const GdkEvent, pointer: *const Widget) -> i32 {
+extern "C" fn input(widget: *mut c_void, event: *const c_void, pointer: *const Widget) -> i32 {
     let data = unsafe { Widget::retain(pointer) };
     let kind = unsafe { gdk_event_get_event_type(event) };
     let repeat = if kind == 8 || kind == 9 {
@@ -176,13 +172,13 @@ extern "C" fn input(widget: *mut c_void, event: *const GdkEvent, pointer: *const
     0
 }
 
-extern "C" fn focus(_: *mut c_void, _: *const GdkEvent, pointer: *const Widget) -> i32 {
+extern "C" fn focus(_: *mut c_void, _: *const c_void, pointer: *const Widget) -> i32 {
     let data = unsafe { Widget::retain(pointer) };
     data.sender.send(WindowEvent::Focus);
     0
 }
 
-extern "C" fn blur(_: *mut c_void, _: *const GdkEvent, pointer: *const Widget) -> i32 {
+extern "C" fn blur(_: *mut c_void, _: *const c_void, pointer: *const Widget) -> i32 {
     let data = unsafe { Widget::retain(pointer) };
     data.keys.borrow_mut().clear();
     data.sender.send(WindowEvent::Blur);
@@ -193,12 +189,13 @@ extern "C" fn blur(_: *mut c_void, _: *const GdkEvent, pointer: *const Widget) -
 mod tests {
     use std::time::{Duration, Instant};
 
-    use bwindow::ffi::{g_idle_add, gtk_widget_get_scale_factor, gtk_widget_hide};
     use bwindow::{EventLoop, LogicalSize, NativeWindowHandle, WindowBuilder};
 
     use super::*;
 
     unsafe extern "C" {
+        fn g_idle_add(function: extern "C" fn(*mut c_void) -> i32, data: *mut c_void) -> u32;
+        fn gtk_widget_hide(widget: *mut c_void);
         fn g_main_context_iteration(context: *mut c_void, may_block: i32) -> i32;
         fn gtk_main();
         fn gtk_window_resize(window: *mut c_void, width: i32, height: i32);

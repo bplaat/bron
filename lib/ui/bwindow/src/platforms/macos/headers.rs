@@ -16,107 +16,102 @@ use objc2::{Encode, Encoding, class, msg_send};
 
 #[link(name = "Foundation", kind = "framework")]
 unsafe extern "C" {
-    pub static __CFConstantStringClassReference: Object;
+    pub(crate) static __CFConstantStringClassReference: Object;
 }
 
 #[link(name = "Cocoa", kind = "framework")]
 unsafe extern "C" {
-    pub static NSApp: *mut Object;
-    pub static NSAppearanceNameAqua: *const Object;
-    pub static NSAppearanceNameDarkAqua: *const Object;
-    pub static NSFilenamesPboardType: *mut Object;
-    pub static NSKeyValueChangeNewKey: *const Object;
+    pub(crate) static NSApp: *mut Object;
+    pub(crate) static NSAppearanceNameAqua: *const Object;
+    pub(crate) static NSAppearanceNameDarkAqua: *const Object;
+    pub(crate) static NSFilenamesPboardType: *mut Object;
 }
 
 #[derive(Clone, Copy)]
 #[repr(C)]
-pub struct CGPoint {
-    pub x: f64,
-    pub y: f64,
+pub(crate) struct CGPoint {
+    pub(crate) x: f64,
+    pub(crate) y: f64,
 }
 impl CGPoint {
-    pub const fn new(x: f64, y: f64) -> Self {
+    pub(crate) const fn new(x: f64, y: f64) -> Self {
         Self { x, y }
     }
 }
 unsafe impl Encode for CGPoint {
     const ENCODING: Encoding = Encoding::Struct("CGPoint", &[f64::ENCODING, f64::ENCODING]);
 }
-pub type NSPoint = CGPoint;
+pub(crate) type NSPoint = CGPoint;
 
 #[derive(Clone, Copy)]
 #[repr(C)]
-pub struct CGSize {
-    pub width: f64,
-    pub height: f64,
+pub(crate) struct CGSize {
+    pub(crate) width: f64,
+    pub(crate) height: f64,
 }
 impl CGSize {
-    pub const fn new(width: f64, height: f64) -> Self {
+    pub(crate) const fn new(width: f64, height: f64) -> Self {
         Self { width, height }
     }
 }
 unsafe impl Encode for CGSize {
     const ENCODING: Encoding = Encoding::Struct("CGSize", &[f64::ENCODING, f64::ENCODING]);
 }
-pub type NSSize = CGSize;
+pub(crate) type NSSize = CGSize;
 
 #[derive(Clone, Copy)]
 #[repr(C)]
-pub struct CGRect {
-    pub origin: CGPoint,
-    pub size: CGSize,
+pub(crate) struct CGRect {
+    pub(crate) origin: CGPoint,
+    pub(crate) size: CGSize,
 }
 impl CGRect {
-    pub const fn new(origin: CGPoint, size: CGSize) -> Self {
+    pub(crate) const fn new(origin: CGPoint, size: CGSize) -> Self {
         Self { origin, size }
     }
 }
 unsafe impl Encode for CGRect {
     const ENCODING: Encoding = Encoding::Struct("CGRect", &[CGPoint::ENCODING, CGSize::ENCODING]);
 }
-pub type NSRect = CGRect;
+pub(crate) type NSRect = CGRect;
 
-pub const NS_APPLICATION_ACTIVATION_POLICY_REGULAR: i64 = 0;
+pub(crate) const NS_APPLICATION_ACTIVATION_POLICY_REGULAR: i64 = 0;
 
-pub const NS_UTF8_STRING_ENCODING: u64 = 4;
+pub(crate) const NS_UTF8_STRING_ENCODING: u64 = 4;
 
-pub const NS_VIEW_WIDTH_SIZABLE: u64 = 2;
-pub const NS_VIEW_MIN_Y_MARGIN: u64 = 8;
-pub const NS_VIEW_HEIGHT_SIZABLE: u64 = 16;
+pub(crate) const NS_VIEW_WIDTH_SIZABLE: u64 = 2;
+pub(crate) const NS_VIEW_MIN_Y_MARGIN: u64 = 8;
 
-pub const NS_WINDOW_CLOSE_BUTTON: u64 = 0;
-pub const NS_WINDOW_MINIATURIZE_BUTTON: u64 = 1;
-pub const NS_WINDOW_ZOOM_BUTTON: u64 = 2;
-pub const NS_EVENT_TYPE_LEFT_MOUSE_DOWN: u64 = 1;
-pub const NS_EVENT_TYPE_LEFT_MOUSE_DRAGGED: u64 = 6;
-pub const NS_WINDOW_STYLE_MASK_TITLED: u64 = 1 << 0;
-pub const NS_WINDOW_STYLE_MASK_CLOSABLE: u64 = 1 << 1;
-pub const NS_WINDOW_STYLE_MASK_MINIATURIZABLE: u64 = 1 << 2;
-pub const NS_WINDOW_STYLE_MASK_RESIZABLE: u64 = 1 << 3;
-pub const NS_WINDOW_STYLE_MASK_FULLSCREEN: u64 = 1 << 14;
-pub const NS_WINDOW_STYLE_MASK_FULL_SIZE_CONTENT_VIEW: u64 = 1 << 15;
+pub(crate) const NS_WINDOW_CLOSE_BUTTON: u64 = 0;
+pub(crate) const NS_WINDOW_MINIATURIZE_BUTTON: u64 = 1;
+pub(crate) const NS_WINDOW_ZOOM_BUTTON: u64 = 2;
+pub(crate) const NS_EVENT_TYPE_LEFT_MOUSE_DOWN: u64 = 1;
+pub(crate) const NS_EVENT_TYPE_LEFT_MOUSE_DRAGGED: u64 = 6;
+pub(crate) const NS_WINDOW_STYLE_MASK_TITLED: u64 = 1 << 0;
+pub(crate) const NS_WINDOW_STYLE_MASK_CLOSABLE: u64 = 1 << 1;
+pub(crate) const NS_WINDOW_STYLE_MASK_MINIATURIZABLE: u64 = 1 << 2;
+pub(crate) const NS_WINDOW_STYLE_MASK_RESIZABLE: u64 = 1 << 3;
+pub(crate) const NS_WINDOW_STYLE_MASK_FULLSCREEN: u64 = 1 << 14;
+pub(crate) const NS_WINDOW_STYLE_MASK_FULL_SIZE_CONTENT_VIEW: u64 = 1 << 15;
 
-pub const NS_BACKING_STORE_BUFFERED: u64 = 2;
+pub(crate) const NS_BACKING_STORE_BUFFERED: u64 = 2;
 
-pub const NS_WINDOW_TITLE_VISIBILITY_HIDDEN: i64 = 1;
-pub const NS_WINDOW_BELOW: i64 = -1;
+pub(crate) const NS_WINDOW_TITLE_VISIBILITY_HIDDEN: i64 = 1;
 
-pub const NS_EVENT_MODIFIER_FLAG_SHIFT: u64 = 1 << 17;
-pub const NS_EVENT_MODIFIER_FLAG_CONTROL: u64 = 1 << 18;
-pub const NS_EVENT_MODIFIER_FLAG_OPTION: u64 = 1 << 19;
-pub const NS_EVENT_MODIFIER_FLAG_COMMAND: u64 = 1 << 20;
+pub(crate) const NS_EVENT_MODIFIER_FLAG_SHIFT: u64 = 1 << 17;
+pub(crate) const NS_EVENT_MODIFIER_FLAG_CONTROL: u64 = 1 << 18;
+pub(crate) const NS_EVENT_MODIFIER_FLAG_OPTION: u64 = 1 << 19;
+pub(crate) const NS_EVENT_MODIFIER_FLAG_COMMAND: u64 = 1 << 20;
 
-pub const NS_KEY_VALUE_OBSERVING_OPTION_NEW: u64 = 0x1;
-
-pub const NS_MODAL_RESPONSE_OK: i64 = 1;
-pub const NS_ALERT_STYLE_WARNING: i64 = 0;
-pub const NS_ALERT_STYLE_INFORMATIONAL: i64 = 1;
-pub const NS_ALERT_STYLE_CRITICAL: i64 = 2;
-pub const NS_ALERT_FIRST_BUTTON_RETURN: i64 = 1000;
-pub const NS_DRAG_OPERATION_COPY: u64 = 1;
+pub(crate) const NS_MODAL_RESPONSE_OK: i64 = 1;
+pub(crate) const NS_ALERT_STYLE_WARNING: i64 = 0;
+pub(crate) const NS_ALERT_STYLE_INFORMATIONAL: i64 = 1;
+pub(crate) const NS_ALERT_STYLE_CRITICAL: i64 = 2;
+pub(crate) const NS_ALERT_FIRST_BUTTON_RETURN: i64 = 1000;
+pub(crate) const NS_DRAG_OPERATION_COPY: u64 = 1;
 
 #[repr(transparent)]
-pub struct NSString(Retained<Object>);
+pub(crate) struct NSString(Retained<Object>);
 
 unsafe impl Encode for NSString {
     const ENCODING: Encoding = Encoding::Object;
@@ -128,7 +123,7 @@ unsafe impl Encode for NSString {
 }
 
 impl NSString {
-    pub fn new(str: impl AsRef<str>) -> Self {
+    pub(crate) fn new(str: impl AsRef<str>) -> Self {
         let str = str.as_ref();
         unsafe {
             let ns_string: Allocated<Object> = msg_send![class!(NSString), alloc];
@@ -169,13 +164,13 @@ impl Display for NSString {
 // __CFConstantStringClassReference (provided by CoreFoundation, transitively linked via Cocoa).
 // cfinfo 0x07C8 = ASCII, immutable, not inline, not freed, has NUL terminator.
 #[repr(C)]
-pub struct CFConstString {
-    pub isa: *const c_void,
-    pub cfinfo: u32,
+pub(crate) struct CFConstString {
+    pub(crate) isa: *const c_void,
+    pub(crate) cfinfo: u32,
     #[cfg(target_pointer_width = "64")]
-    pub _rc: u32,
-    pub data: *const u8,
-    pub len: usize,
+    pub(crate) _rc: u32,
+    pub(crate) data: *const u8,
+    pub(crate) len: usize,
 }
 unsafe impl Send for CFConstString {}
 unsafe impl Sync for CFConstString {}
@@ -188,8 +183,6 @@ unsafe impl Sync for CFConstString {}
 // linker. Hoist the call to an ordinary free function instead (known rustc bug:
 // madsmtm/objc2#258).
 /// Internal native string literal.
-#[doc(hidden)]
-#[macro_export]
 macro_rules! ns_string {
     ($s:expr) => {{
         const INPUT: &str = $s;
@@ -214,9 +207,9 @@ macro_rules! ns_string {
             arr
         };
         #[unsafe(link_section = "__DATA,__cfstring")]
-        static CFSTRING: $crate::ffi::CFConstString = unsafe {
-            $crate::ffi::CFConstString {
-                isa: &$crate::ffi::__CFConstantStringClassReference
+        static CFSTRING: $crate::platforms::macos::headers::CFConstString = unsafe {
+            $crate::platforms::macos::headers::CFConstString {
+                isa: &$crate::platforms::macos::headers::__CFConstantStringClassReference
                     as *const objc2::runtime::AnyObject
                     as *const ::std::ffi::c_void,
                 cfinfo: 0x07C8,
@@ -226,10 +219,11 @@ macro_rules! ns_string {
                 len: BYTES.len(),
             }
         };
-        &CFSTRING as *const $crate::ffi::CFConstString as *mut objc2::runtime::AnyObject
+        &CFSTRING as *const $crate::platforms::macos::headers::CFConstString
+            as *mut objc2::runtime::AnyObject
     }};
 }
-pub use ns_string;
+pub(crate) use ns_string;
 
 #[cfg(test)]
 mod tests {
