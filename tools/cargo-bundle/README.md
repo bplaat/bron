@@ -77,8 +77,8 @@ still uses release mode. Cargo's reported executable path is used, including whe
 The application and its dependencies must support iOS; the runner does not translate desktop APIs.
 
 The generated iOS Info.plist supports iPhone and iPad, portrait and landscape on iPhone, and all
-orientations on iPad. Override these keys in the iOS Info.plist, for example to only allow portrait
-on iPhone:
+orientations on iPad, and allows frame rates above 60 Hz on ProMotion iPhones. Override these keys
+in the iOS Info.plist, for example to only allow portrait on iPhone:
 
 ```xml
 <key>UISupportedInterfaceOrientations</key>
