@@ -14,8 +14,8 @@ use super::activity::{
     android_activity, android_with_env, set_dark_mode, set_system_bar_appearance,
 };
 use super::event_loop::{
-    android_post_local, android_surface, android_window_size, content_size, safe_area, send_event,
-    stop, system_theme,
+    android_density, android_post_local, android_surface, android_window_size, content_size,
+    safe_area, send_event, stop, system_theme,
 };
 use crate::content::ContentHost;
 use crate::{
@@ -73,6 +73,11 @@ pub(super) fn safe_area_changed() {
 pub(super) fn configuration_changed(resized: bool, safe_area_changed: bool) {
     if let Some(host) = current() {
         host.theme_changed(system_theme());
+        if resized {
+            host.scale_factor_changed(android_density());
+            host.event_sender()
+                .send(WindowEvent::ScaleFactorChanged(android_density()));
+        }
     }
     if resized {
         self::resized();
@@ -166,6 +171,7 @@ impl PlatformWindow {
         host.set_content(crate::NativeContentHandle::Android(
             android_activity().as_raw().cast(),
         ));
+        host.scale_factor_changed(android_density());
         let mut window = Self {
             id: builder.window_id,
             host: host.clone(),
