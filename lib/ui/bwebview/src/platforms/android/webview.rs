@@ -103,7 +103,7 @@ thread_local! {
 
 pub(crate) struct PlatformWebview {
     id: u64,
-    attachment: crate::WindowAttachment,
+    attachment: bwindow::WindowAttachment,
     closed: Rc<Cell<bool>>,
     state: Rc<WebviewState>,
     schemes: Vec<String>,
@@ -111,7 +111,7 @@ pub(crate) struct PlatformWebview {
 }
 
 impl PlatformWebview {
-    pub(crate) fn new(attachment: crate::WindowAttachment) -> Self {
+    pub(crate) fn new(attachment: bwindow::WindowAttachment) -> Self {
         static NEXT_ID: AtomicU64 = AtomicU64::new(1);
         Self {
             id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
@@ -124,7 +124,7 @@ impl PlatformWebview {
     }
 
     pub(crate) fn init_webview(&mut self, builder: WebviewBuilder<'_>) {
-        let Some(crate::NativeWindowHandle::Android(activity)) =
+        let Some(bwindow::NativeWindowHandle::Android(activity)) =
             (unsafe { self.attachment.window_handle() })
         else {
             panic!("invalid native window handle");

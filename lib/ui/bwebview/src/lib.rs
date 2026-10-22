@@ -5,11 +5,8 @@
  */
 
 #![doc = include_str!("../README.md")]
-#![allow(unused)]
 #![allow(unsafe_code)]
 #![allow(clippy::undocumented_unsafe_blocks)]
-
-use bwindow::{NativeWindowHandle, Window, WindowAttachment, WindowEvent, WindowId};
 
 pub use crate::event::*;
 pub use crate::webview::*;

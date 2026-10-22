@@ -13,10 +13,10 @@ use std::rc::Rc;
 #[cfg(feature = "file_drop")]
 use super::file_drop::{FileDropState, connect_signals};
 use super::headers::*;
-use crate::{InjectionTime, WebviewBuilder, WebviewEvent, WindowEvent};
+use crate::{InjectionTime, WebviewBuilder, WebviewEvent};
 
 pub(super) struct WebviewData {
-    pub(super) attachment: crate::WindowAttachment,
+    pub(super) attachment: bwindow::WindowAttachment,
     closed: Cell<bool>,
     handler: RefCell<Option<crate::EventHandler>>,
     manager: Cell<*mut WebKitUserContentManager>,
@@ -89,8 +89,9 @@ unsafe fn install_edit_actions(view: *mut WebKitWebView) {
 }
 
 impl PlatformWebview {
-    pub(crate) fn new(attachment: crate::WindowAttachment) -> Self {
-        let Some(crate::NativeWindowHandle::Gtk(window)) = (unsafe { attachment.window_handle() })
+    pub(crate) fn new(attachment: bwindow::WindowAttachment) -> Self {
+        let Some(bwindow::NativeWindowHandle::Gtk(window)) =
+            (unsafe { attachment.window_handle() })
         else {
             panic!("invalid native window handle");
         };

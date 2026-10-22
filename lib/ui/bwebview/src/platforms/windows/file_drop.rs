@@ -11,9 +11,10 @@ use std::path::PathBuf;
 use std::ptr::null_mut;
 use std::sync::atomic::{AtomicU32, Ordering};
 
+use bwindow::WindowEvent;
+
 use super::headers::*;
 use super::webview::WebviewData;
-use crate::WindowEvent;
 
 /// The COM drop target registered on each WebView2 child window
 #[repr(C)]
@@ -35,12 +36,6 @@ static FILE_DROP_TARGET_VTBL: IDropTargetVtbl = IDropTargetVtbl {
     Drop: file_drop,
 };
 
-const IID_IUNKNOWN: GUID = GUID {
-    data1: 0,
-    data2: 0,
-    data3: 0,
-    data4: [0xc0, 0, 0, 0, 0, 0, 0, 0x46],
-};
 const IID_IDROP_TARGET: GUID = GUID {
     data1: 0x00000122,
     data2: 0,

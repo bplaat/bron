@@ -5,8 +5,8 @@
  */
 
 use bwindow::ffi::perform_file_drop;
+use objc2::define_class;
 use objc2::runtime::{AnyObject as Object, Bool};
-use objc2::{class, define_class};
 
 use super::headers::*;
 define_class!(

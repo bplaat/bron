@@ -7,7 +7,7 @@
 use std::fmt::Write;
 use std::rc::Rc;
 
-use crate::Window;
+use bwindow::Window;
 
 pub(crate) type EventHandler = Rc<dyn Fn(crate::WebviewEvent)>;
 use crate::platforms::PlatformWebview;
