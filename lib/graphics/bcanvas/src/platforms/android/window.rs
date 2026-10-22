@@ -11,7 +11,7 @@ use bwindow::ffi::{
     android_default_background, android_density, android_post_frame, android_post_local,
     android_surface, android_window_size,
 };
-use bwindow::{WindowAttachment, WindowEventSender};
+use bwindow::{NativeContentHandle, WindowAttachment, WindowEventSender};
 use jni::sys::{jint, jvalue};
 
 use crate::CanvasRenderingContext2d;
@@ -97,6 +97,9 @@ pub(crate) struct PlatformCanvas {
 
 impl PlatformCanvas {
     pub(crate) fn new(attachment: WindowAttachment) -> Self {
+        let Some(NativeContentHandle::Android(_)) = (unsafe { attachment.content_handle() }) else {
+            panic!("expected an open Android window");
+        };
         let state = Rc::new(SurfaceState {
             sender: attachment.event_sender(),
             resources: with_env(Resources::new),
@@ -141,13 +144,6 @@ impl PlatformCanvas {
     pub(crate) fn request_animation_frame(&self) {
         self.state.request_animation_frame();
     }
-
-    // Phones have no pointer cursor.
-    #[allow(
-        clippy::missing_const_for_fn,
-        reason = "keeps Canvas::set_cursor non-const"
-    )]
-    pub(crate) fn set_cursor(&mut self, _cursor: crate::CursorIcon) {}
 
     pub(crate) fn draw(
         &mut self,

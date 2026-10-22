@@ -38,11 +38,13 @@ pub(crate) struct Surface {
 
 impl Surface {
     pub(crate) fn new(
-        window: bwindow::NativeWindowHandle,
-        sender: bwindow::WindowEventSender,
+        attachment: &bwindow::WindowAttachment,
         _: &mut Option<Factory>,
     ) -> Result<Self> {
-        let bwindow::NativeWindowHandle::UIKit(view) = window else {
+        let sender = attachment.event_sender();
+        let Some(bwindow::NativeContentHandle::UIKit(view)) =
+            (unsafe { attachment.content_handle() })
+        else {
             return Err(Error("Metal requires a UIKit content view".into()));
         };
         let is_main_thread: Bool = unsafe { msg_send![class!(NSThread), isMainThread] };
@@ -57,8 +59,17 @@ impl Surface {
             let _: () = msg_send![&*layer, setOpaque:Bool::YES];
             let _: () = msg_send![&*layer, setMaximumDrawableCount:3usize];
             let _: () = msg_send![&*layer, setAllowsNextDrawableTimeout:Bool::YES];
+            let _: () = msg_send![&*layer, setContentsScale:f64::from(attachment.scale_factor())];
+            // A sublayer at the bottom of the shared content view, below its children.
             let parent: *mut AnyObject = msg_send![&*view, layer];
-            let _: () = msg_send![parent, addSublayer:&*layer];
+            let _: () = msg_send![parent, insertSublayer:&*layer, atIndex:0u32];
+            layout_layer(&view, &layer);
+            let (resize_view, resize_layer) = (view.clone(), layer.clone());
+            attachment.on_resize(move |_, _| layout_layer(&resize_view, &resize_layer));
+            let scale_layer = layer.clone();
+            attachment.on_scale_factor_changed(move |scale| {
+                let _: () = msg_send![&*scale_layer, setContentsScale:f64::from(scale)];
+            });
             let redraw: Allocated<RedrawTarget> = msg_send![RedrawTarget::class(), alloc];
             let redraw: Retained<RedrawTarget> = msg_send![super(redraw.set_ivars(sender)), init];
             let display_link = retained(

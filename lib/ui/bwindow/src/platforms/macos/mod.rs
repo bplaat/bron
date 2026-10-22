@@ -11,12 +11,13 @@ pub(crate) use crate::platforms::macos::event_loop::{
 };
 pub(crate) use crate::platforms::macos::window::PlatformWindow;
 
+mod content;
 #[cfg(feature = "dialog")]
 mod dialog;
 mod event_loop;
 #[cfg(feature = "file_drop")]
 pub(crate) mod file_drop;
 pub(crate) mod headers;
-pub(crate) mod input;
+mod input;
 mod menu;
 mod window;

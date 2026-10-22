@@ -7,7 +7,7 @@ graphics API: Core Graphics on macOS and iOS, Direct2D on Windows, Cairo on Linu
 ## Features
 
 - Paths, clipping, transforms, solid RGBA colors, and text
-- Logical pixel coordinates and native pointer cursors
+- Logical pixel coordinates
 - One event loop shared with window and webview content
 
 ## Getting Started
@@ -51,11 +51,11 @@ method names in snake_case, with getter/setter pairs such as `fill_style()` /
 - Invalid alpha and line-width values are ignored.
 - `save()` / `restore()` do not include the current path.
 
-## Cursors
+## Interaction
 
-Set the cursor over the canvas with `canvas.set_cursor(CursorIcon::Pointer)`.
-`Progress` shows the arrow on macOS, which has no public busy cursor. Cursors are
-ignored on Android.
+The window delivers keyboard, pointer, scroll, focus and file drop events of the canvas
+as `WindowEvent`s, the canvas only draws. Set the cursor over it with
+`window.set_cursor(CursorIcon::Pointer)`, see the bwindow README.
 
 ## Android
 

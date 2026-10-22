@@ -42,15 +42,9 @@ pub mod ffi {
         not(any(target_vendor = "apple", target_os = "android", windows)),
         feature = "file_drop"
     ))]
-    pub use crate::platforms::gtk::file_drop::*;
-    #[cfg(not(any(target_vendor = "apple", target_os = "android", windows)))]
-    pub use crate::platforms::gtk::input::*;
-    #[cfg(target_os = "ios")]
-    pub use crate::platforms::ios::input::*;
+    pub use crate::platforms::gtk::file_drop::gtk_dropped_paths;
     #[cfg(all(target_os = "macos", feature = "file_drop"))]
     pub use crate::platforms::macos::file_drop::{perform_file_drop, register_dragged_types};
-    #[cfg(target_os = "macos")]
-    pub use crate::platforms::macos::input::*;
     #[cfg(windows)]
-    pub use crate::platforms::windows::input::*;
+    pub use crate::platforms::windows::input::windows_translate_accelerator;
 }

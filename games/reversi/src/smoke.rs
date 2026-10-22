@@ -9,10 +9,9 @@ use std::rc::Rc;
 use std::thread;
 use std::time::Duration;
 
-use bcanvas::CursorIcon;
 #[cfg(target_os = "macos")]
 use bwindow::Theme;
-use bwindow::{EventLoop, Window};
+use bwindow::{CursorIcon, EventLoop, Window};
 use reversi_engine::{Move, Player};
 
 use crate::worker::AiWorker;

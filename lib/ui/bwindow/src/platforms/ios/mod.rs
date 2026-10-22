@@ -9,7 +9,8 @@ pub(crate) use crate::platforms::ios::event_loop::{
 };
 pub(crate) use crate::platforms::ios::window::PlatformWindow;
 
+mod content;
 mod event_loop;
 pub(crate) mod headers;
-pub(crate) mod input;
+mod input;
 mod window;

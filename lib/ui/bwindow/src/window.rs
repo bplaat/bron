@@ -5,7 +5,7 @@
  */
 
 use crate::platforms::{PlatformMonitor, PlatformWindow};
-use crate::{LogicalInsets, LogicalPoint, LogicalSize};
+use crate::{CursorIcon, LogicalInsets, LogicalPoint, LogicalSize};
 
 /// An opaque identifier that is unique for the lifetime of the process.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -238,6 +238,8 @@ pub(crate) trait WindowInterface {
     fn set_resizable(&mut self, resizable: bool);
     fn set_theme(&mut self, theme: Theme);
     fn set_background_color(&mut self, color: u32);
+    // Touch screens have no pointer cursor.
+    fn set_cursor(&mut self, _cursor: CursorIcon) {}
     // Desktop windows have no system UI over their content.
     fn safe_area(&self) -> LogicalInsets {
         LogicalInsets::default()
@@ -391,6 +393,15 @@ impl Window {
         }
         self.host.set_background(color);
         self.platform.set_background_color(color)
+    }
+
+    /// Set the cursor shown over the window content, has no effect on touch screens or
+    /// over content that shows its own cursors like a web view
+    pub fn set_cursor(&mut self, cursor: CursorIcon) {
+        if self.is_closed() {
+            return;
+        }
+        self.platform.set_cursor(cursor)
     }
 
     /// Set GTK application launcher progress, use a value above `1.0` for indeterminate progress,

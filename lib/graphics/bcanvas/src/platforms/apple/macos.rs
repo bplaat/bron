@@ -11,10 +11,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
 
-use bwindow::ffi::{macos_key_event, macos_pointer_event, macos_scroll_event};
-#[cfg(feature = "file_drop")]
-use bwindow::ffi::{perform_file_drop, register_dragged_types};
-use bwindow::{NativeWindowHandle, WindowAttachment, WindowEventSender};
+use bwindow::{NativeContentHandle, WindowAttachment, WindowEventSender};
 use objc2::rc::{Allocated, Retained, autoreleasepool};
 use objc2::runtime::{AnyObject as Object, Bool};
 use objc2::{class, define_class, msg_send, sel};
@@ -22,10 +19,6 @@ use objc2::{class, define_class, msg_send, sel};
 use super::context::{PlatformCanvasContext, TextStyleCache};
 use super::headers::*;
 use crate::CanvasRenderingContext2d;
-
-const NS_VIEW_WIDTH_SIZABLE: u64 = 2;
-const NS_VIEW_HEIGHT_SIZABLE: u64 = 16;
-const NS_DRAG_OPERATION_COPY: u64 = 1;
 
 #[derive(Clone, Copy)]
 struct Frame {
@@ -35,8 +28,11 @@ struct Frame {
     scale: f32,
 }
 
-struct ViewState {
-    cursor: Cell<crate::CursorIcon>,
+// Draws a CALayer at the bottom of the shared window content view with Core Graphics, the
+// window delivers the interaction. Animation frames follow the display with a display link.
+struct LayerState {
+    view: Retained<Object>,
+    layer: Retained<Object>,
     sender: WindowEventSender,
     frame: Cell<Option<Frame>>,
     closed: Cell<bool>,
@@ -48,7 +44,7 @@ struct ViewState {
     signal: Arc<DisplayLinkSignal>,
 }
 
-type ViewIvars = Rc<ViewState>;
+type DelegateIvars = Rc<LayerState>;
 
 struct DisplayLinkSignal {
     target: AtomicPtr<Object>,
@@ -78,108 +74,20 @@ unsafe extern "C" fn display_link_callback(
 }
 
 define_class!(
-    #[unsafe(super(NSView))]
-    #[ivars = ViewIvars]
-    struct CanvasView;
+    #[unsafe(super(NSObject))]
+    #[name = "BcanvasLayerDelegate"]
+    #[ivars = DelegateIvars]
+    struct LayerDelegate;
 
-    impl CanvasView {
-        #[unsafe(method(resetCursorRects))]
-        fn reset_cursor_rects(&self) {
-            let cursor: *mut Object = unsafe {
-                match self.ivars().cursor.get() {
-                    crate::CursorIcon::Pointer => msg_send![class!(NSCursor), pointingHandCursor],
-                    crate::CursorIcon::Default | crate::CursorIcon::Progress => msg_send![class!(NSCursor), arrowCursor],
-                }
-            };
-            let bounds: CGRect = unsafe { msg_send![self, bounds] };
-            let _: () = unsafe { msg_send![self, addCursorRect:bounds, cursor:cursor] };
-        }
-        #[unsafe(method(mouseDown:))]
-        fn _mouse_down(&self, event: *mut Object) {
-            self.ivars().sender.send(unsafe { macos_pointer_event(self as *const Self as *mut Object, event, Some(bwindow::ButtonState::Pressed)) });
-        }
-        #[unsafe(method(mouseUp:))]
-        fn _mouse_up(&self, event: *mut Object) {
-            self.ivars().sender.send(unsafe { macos_pointer_event(self as *const Self as *mut Object, event, Some(bwindow::ButtonState::Released)) });
-        }
-        #[unsafe(method(rightMouseDown:))]
-        fn _right_mouse_down(&self, event: *mut Object) {
-            self.ivars().sender.send(unsafe { macos_pointer_event(self as *const Self as *mut Object, event, Some(bwindow::ButtonState::Pressed)) });
-        }
-        #[unsafe(method(rightMouseUp:))]
-        fn _right_mouse_up(&self, event: *mut Object) {
-            self.ivars().sender.send(unsafe { macos_pointer_event(self as *const Self as *mut Object, event, Some(bwindow::ButtonState::Released)) });
-        }
-        #[unsafe(method(otherMouseDown:))]
-        fn _other_mouse_down(&self, event: *mut Object) {
-            self.ivars().sender.send(unsafe { macos_pointer_event(self as *const Self as *mut Object, event, Some(bwindow::ButtonState::Pressed)) });
-        }
-        #[unsafe(method(otherMouseUp:))]
-        fn _other_mouse_up(&self, event: *mut Object) {
-            self.ivars().sender.send(unsafe { macos_pointer_event(self as *const Self as *mut Object, event, Some(bwindow::ButtonState::Released)) });
-        }
-        #[unsafe(method(mouseMoved:))]
-        fn _mouse_moved(&self, event: *mut Object) {
-            self.ivars().sender.send(unsafe { macos_pointer_event(self as *const Self as *mut Object, event, None) });
-        }
-        #[unsafe(method(mouseDragged:))]
-        fn _mouse_dragged(&self, event: *mut Object) {
-            self.ivars().sender.send(unsafe { macos_pointer_event(self as *const Self as *mut Object, event, None) });
-        }
-        #[unsafe(method(rightMouseDragged:))]
-        fn _right_mouse_dragged(&self, event: *mut Object) {
-            self.ivars().sender.send(unsafe { macos_pointer_event(self as *const Self as *mut Object, event, None) });
-        }
-        #[unsafe(method(otherMouseDragged:))]
-        fn _other_mouse_dragged(&self, event: *mut Object) {
-            self.ivars().sender.send(unsafe { macos_pointer_event(self as *const Self as *mut Object, event, None) });
-        }
-        #[unsafe(method(mouseExited:))]
-        fn _mouse_exited(&self, _: *mut Object) {
-            self.ivars().sender.send(bwindow::WindowEvent::MouseLeave);
-        }
+    impl LayerDelegate {
+        #[unsafe(method(drawLayer:inContext:))]
+        fn _draw_layer(&self, _: *mut Object, context: CGContextRef) { self.paint(context); }
 
-        #[unsafe(method(scrollWheel:))]
-        fn _scroll_wheel(&self, event: *mut Object) {
-            self.ivars().sender.send(unsafe { macos_scroll_event(event) });
+        // Resize and redisplay the layer at once, without implicit animations.
+        #[unsafe(method(actionForLayer:forKey:))]
+        fn _action_for_layer(&self, _: *mut Object, _: *mut Object) -> *mut Object {
+            unsafe { msg_send![class!(NSNull), null] }
         }
-
-        #[unsafe(method(keyDown:))]
-        fn _key_down(&self, event: *mut Object) {
-            self.ivars().sender.send(bwindow::WindowEvent::KeyDown(unsafe {
-                macos_key_event(event, bwindow::ButtonState::Pressed)
-            }));
-        }
-
-        #[unsafe(method(keyUp:))]
-        fn _key_up(&self, event: *mut Object) {
-            self.ivars().sender.send(bwindow::WindowEvent::KeyUp(unsafe {
-                macos_key_event(event, bwindow::ButtonState::Released)
-            }));
-        }
-
-        #[cfg(feature = "file_drop")]
-        #[unsafe(method(draggingEntered:))]
-        const fn _dragging_entered(&self, _: *mut Object) -> u64 { NS_DRAG_OPERATION_COPY }
-
-        #[cfg(feature = "file_drop")]
-        #[unsafe(method(prepareForDragOperation:))]
-        const fn _prepare_for_drag_operation(&self, _: *mut Object) -> Bool { Bool::YES }
-
-        #[cfg(feature = "file_drop")]
-        #[unsafe(method(performDragOperation:))]
-        fn _perform_drag_operation(&self, sender: *mut Object) -> Bool {
-            unsafe { perform_file_drop(sender) }
-        }
-
-        #[unsafe(method(isFlipped))]
-        const fn _is_flipped(&self) -> Bool { Bool::YES }
-
-        #[unsafe(method(acceptsFirstResponder))]
-        const fn _accepts_first_responder(&self) -> Bool { Bool::YES }
-
-        #[unsafe(method(drawRect:))]
-        fn _draw_rect(&self, _: CGRect) { self.paint(); }
 
         #[unsafe(method(displayFrame:))]
         fn _display_frame(&self, _: *mut Object) {
@@ -194,11 +102,15 @@ define_class!(
     }
 );
 
-impl CanvasView {
+impl LayerDelegate {
+    fn set_needs_display(&self) {
+        let _: () = unsafe { msg_send![&*self.ivars().layer, setNeedsDisplay] };
+    }
+
     fn deliver_animation_frame(&self) {
         self.ivars().scheduled.set(false);
         if !self.ivars().closed.get() {
-            let _: () = unsafe { msg_send![self, setNeedsDisplay:Bool::YES] };
+            self.set_needs_display();
         }
     }
 
@@ -210,7 +122,7 @@ impl CanvasView {
         if !state.painting.get() {
             // A running display link stops itself on its next callback.
             state.scheduled.set(false);
-            let _: () = unsafe { msg_send![self, setNeedsDisplay:Bool::YES] };
+            self.set_needs_display();
             return;
         }
         if state.scheduled.replace(true) {
@@ -243,7 +155,7 @@ impl CanvasView {
     fn synchronize_display_link(&self) {
         let state = self.ivars();
         unsafe {
-            let window: *mut Object = msg_send![self, window];
+            let window: *mut Object = msg_send![&*state.view, window];
             if window.is_null() {
                 return;
             }
@@ -274,31 +186,45 @@ impl CanvasView {
         }
     }
 
+    // Fill the layer with the content view and match its display scale.
+    fn layout(&self, scale: f32) {
+        let state = self.ivars();
+        unsafe {
+            let bounds: CGRect = msg_send![&*state.view, bounds];
+            let _: () = msg_send![class!(CATransaction), begin];
+            let _: () = msg_send![class!(CATransaction), setDisableActions:Bool::YES];
+            let _: () = msg_send![&*state.layer, setFrame:bounds];
+            let _: () = msg_send![&*state.layer, setContentsScale:f64::from(scale)];
+            let _: () = msg_send![class!(CATransaction), commit];
+        }
+        self.request_redraw();
+    }
+
     fn close(&self) {
-        if self.ivars().closed.replace(true) {
+        let state = self.ivars();
+        if state.closed.replace(true) {
             return;
         }
-        self.ivars().frame.set(None);
-        self.ivars().scheduled.set(false);
+        state.frame.set(None);
+        state.scheduled.set(false);
         self.stop_display_link();
-        self.ivars()
-            .signal
-            .target
-            .store(null_mut(), Ordering::Release);
+        state.signal.target.store(null_mut(), Ordering::Release);
         unsafe {
-            let display_link = self.ivars().display_link.replace(null_mut());
+            let display_link = state.display_link.replace(null_mut());
             if !display_link.is_null() {
                 CVDisplayLinkRelease(display_link);
             }
-            let _: () = msg_send![self, removeFromSuperview];
+            // The layer delegate is non-owning, so clear it before the delegate is released.
+            let _: () = msg_send![&*state.layer, setDelegate:null_mut::<Object>()];
+            let _: () = msg_send![&*state.layer, removeFromSuperlayer];
         }
     }
 
-    fn paint(&self) {
-        if self.ivars().closed.get() {
+    fn paint(&self, context: CGContextRef) {
+        if self.ivars().closed.get() || context.is_null() {
             return;
         }
-        // Application code can drop its canvas or close the parent during paint.
+        // Application code can drop its canvas or close the window during paint.
         let retained: Retained<Self> = unsafe { msg_send![self, retain] };
         let state = retained.ivars();
         if state.painting.get() {
@@ -306,14 +232,15 @@ impl CanvasView {
             return;
         }
         unsafe {
-            let graphics: *mut Object = msg_send![class!(NSGraphicsContext), currentContext];
-            let context: CGContextRef = msg_send![graphics, CGContext];
-            if context.is_null() {
-                return;
+            let bounds: CGRect = msg_send![&*state.layer, bounds];
+            let scale: f64 = msg_send![&*state.layer, contentsScale];
+            // Canvases draw top-down. The layer of the flipped content view shows its
+            // contents flipped already, otherwise flip the bottom-left origin context.
+            let flipped: Bool = msg_send![&*state.layer, contentsAreFlipped];
+            if !flipped.as_bool() {
+                CGContextTranslateCTM(context, 0.0, bounds.size.height);
+                CGContextScaleCTM(context, 1.0, -1.0);
             }
-            let bounds: CGRect = msg_send![self, bounds];
-            let window: *mut Object = msg_send![self, window];
-            let scale: f64 = msg_send![window, backingScaleFactor];
             state.painting.set(true);
             state.frame.set(Some(Frame {
                 context,
@@ -331,31 +258,32 @@ impl CanvasView {
 }
 
 pub(crate) struct PlatformCanvas {
-    view: Retained<CanvasView>,
+    delegate: Retained<LayerDelegate>,
     attachment: WindowAttachment,
     text_styles: TextStyleCache,
 }
 
 impl PlatformCanvas {
     pub(crate) fn new(attachment: WindowAttachment) -> Self {
-        let Some(NativeWindowHandle::AppKit(window)) = (unsafe { attachment.native_handle() })
+        let Some(NativeContentHandle::AppKit(view)) = (unsafe { attachment.content_handle() })
         else {
             panic!("expected an open AppKit window");
         };
         unsafe {
-            let window = window.cast::<Object>();
-            let content: *mut Object = msg_send![window, contentView];
-            let bounds: CGRect = msg_send![content, bounds];
+            let view = Retained::retain(view.cast::<Object>()).expect("content view");
+            let layer: Retained<Object> = msg_send![class!(CALayer), new];
             let signal = Arc::new(DisplayLinkSignal {
                 target: AtomicPtr::new(null_mut()),
                 posted: AtomicBool::new(false),
             });
-            let view: Allocated<CanvasView> = msg_send![CanvasView::class(), alloc];
-            let view: Retained<CanvasView> = msg_send![
-                super(view.set_ivars(Rc::new(ViewState {
-                    cursor: Cell::new(crate::CursorIcon::Default),
+            let delegate: Allocated<LayerDelegate> = msg_send![LayerDelegate::class(), alloc];
+            let delegate: Retained<LayerDelegate> = msg_send![
+                super(delegate.set_ivars(Rc::new(LayerState {
+                    view: view.clone(),
+                    layer: layer.clone(),
                     sender: attachment.event_sender(),
-                    frame: Cell::new(None), closed: Cell::new(false),
+                    frame: Cell::new(None),
+                    closed: Cell::new(false),
                     painting: Cell::new(false),
                     scheduled: Cell::new(false),
                     display_link: Cell::new(null_mut()),
@@ -363,9 +291,11 @@ impl PlatformCanvas {
                     screen: Cell::new(null_mut()),
                     signal: signal.clone(),
                 }))),
-                initWithFrame:bounds
+                init
             ];
-            signal.target.store(view.as_ptr().cast(), Ordering::Release);
+            signal
+                .target
+                .store(delegate.as_ptr().cast(), Ordering::Release);
             let mut display_link = null_mut();
             let result = CVDisplayLinkCreateWithActiveCGDisplays(&mut display_link);
             assert_eq!(
@@ -381,29 +311,31 @@ impl PlatformCanvas {
                 CVDisplayLinkRelease(display_link);
                 panic!("Could not configure Core Video display link: {result}");
             }
-            view.ivars().display_link.set(display_link);
-            let _: () = msg_send![&*view, setAutoresizingMask:NS_VIEW_WIDTH_SIZABLE | NS_VIEW_HEIGHT_SIZABLE];
-            let _: () = msg_send![content, addSubview:&*view];
-            let tracking: Allocated<Object> = msg_send![class!(NSTrackingArea), alloc];
-            let tracking: Retained<Object> = msg_send![tracking,
-                initWithRect:bounds, options:((1u64 << 0) | (1 << 1) | (1 << 5) | (1 << 9) | (1 << 10)),
-                owner:&*view, userInfo:null_mut::<Object>()];
-            let _: () = msg_send![&*view, addTrackingArea:&*tracking];
-            #[cfg(feature = "file_drop")]
-            if attachment.allow_file_drop() {
-                register_dragged_types(&*view as *const CanvasView as *mut Object);
-            }
-            let _: Bool = msg_send![window, makeFirstResponder:&*view];
-            let _: () = msg_send![window, setAcceptsMouseMovedEvents:Bool::YES];
-            let redraw = view.clone();
+            delegate.ivars().display_link.set(display_link);
+
+            // Transparent canvas pixels show the window background.
+            let _: () = msg_send![&*layer, setOpaque:Bool::NO];
+            let _: () = msg_send![&*layer, setNeedsDisplayOnBoundsChange:Bool::YES];
+            let _: () = msg_send![&*layer, setDelegate:&*delegate];
+            let backing: *mut Object = msg_send![&*view, layer];
+            let _: () = msg_send![backing, insertSublayer:&*layer, atIndex:0u32];
+            delegate.layout(attachment.scale_factor());
+
+            let resize = delegate.clone();
+            attachment.on_resize(move |_, _| {
+                let scale: f64 = msg_send![&*resize.ivars().layer, contentsScale];
+                resize.layout(scale as f32);
+            });
+            let scale = delegate.clone();
+            attachment.on_scale_factor_changed(move |factor| scale.layout(factor));
+            let redraw = delegate.clone();
             attachment.on_redraw(move || redraw.request_redraw());
-            let animation_frame = view.clone();
+            let animation_frame = delegate.clone();
             attachment.on_animation_frame(move || animation_frame.request_animation_frame());
-            let close = view.clone();
+            let close = delegate.clone();
             attachment.on_close(move || close.close());
-            view.request_redraw();
             Self {
-                view,
+                delegate,
                 attachment,
                 text_styles: TextStyleCache::default(),
             }
@@ -411,21 +343,11 @@ impl PlatformCanvas {
     }
 
     pub(crate) fn request_redraw(&self) {
-        self.view.request_redraw();
+        self.delegate.request_redraw();
     }
 
     pub(crate) fn request_animation_frame(&self) {
-        self.view.request_animation_frame();
-    }
-
-    pub(crate) fn set_cursor(&mut self, cursor: crate::CursorIcon) {
-        if self.attachment.is_closed() || self.view.ivars().cursor.replace(cursor) == cursor {
-            return;
-        }
-        unsafe {
-            let window: *mut Object = msg_send![&*self.view, window];
-            let _: () = msg_send![window, invalidateCursorRectsForView:&*self.view];
-        }
+        self.delegate.request_animation_frame();
     }
 
     pub(crate) fn draw(
@@ -435,7 +357,7 @@ impl PlatformCanvas {
         if self.attachment.is_closed() {
             return false;
         }
-        let Some(frame) = self.view.ivars().frame.take() else {
+        let Some(frame) = self.delegate.ivars().frame.take() else {
             return false;
         };
         let mut context = CanvasRenderingContext2d::new(
@@ -452,6 +374,6 @@ impl PlatformCanvas {
 impl Drop for PlatformCanvas {
     fn drop(&mut self) {
         self.attachment.disconnect();
-        self.view.close();
+        self.delegate.close();
     }
 }

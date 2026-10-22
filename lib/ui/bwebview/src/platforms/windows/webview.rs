@@ -45,7 +45,7 @@ pub(crate) struct PlatformWebview {
 impl PlatformWebview {
     pub(crate) fn new(attachment: crate::WindowAttachment) -> Self {
         let Some(crate::NativeWindowHandle::Win32(window)) =
-            (unsafe { attachment.native_handle() })
+            (unsafe { attachment.window_handle() })
         else {
             panic!("invalid native window handle");
         };

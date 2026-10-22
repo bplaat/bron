@@ -16,7 +16,7 @@ use crate::{
 };
 
 /// Translate native modifier flags.
-pub const fn macos_modifiers(flags: u64) -> Modifiers {
+pub(super) const fn macos_modifiers(flags: u64) -> Modifiers {
     let mut bits = 0;
     if flags & NS_EVENT_MODIFIER_FLAG_COMMAND != 0 {
         bits |= 1;
@@ -37,7 +37,7 @@ pub const fn macos_modifiers(flags: u64) -> Modifiers {
 ///
 /// # Safety
 /// Both pointers must refer to live AppKit objects of the stated types on the main thread.
-pub unsafe fn macos_pointer_event(
+pub(super) unsafe fn macos_pointer_event(
     view: *mut Object,
     event: *mut Object,
     state: Option<ButtonState>,
@@ -77,7 +77,7 @@ pub unsafe fn macos_pointer_event(
 ///
 /// # Safety
 /// `event` must be a live NSEvent on the main thread.
-pub unsafe fn macos_scroll_event(event: *mut Object) -> WindowEvent {
+pub(super) unsafe fn macos_scroll_event(event: *mut Object) -> WindowEvent {
     let precise: Bool = unsafe { msg_send![event, hasPreciseScrollingDeltas] };
     let x: f64 = unsafe { msg_send![event, scrollingDeltaX] };
     let y: f64 = unsafe { msg_send![event, scrollingDeltaY] };
@@ -94,7 +94,7 @@ pub unsafe fn macos_scroll_event(event: *mut Object) -> WindowEvent {
 ///
 /// # Safety
 /// `event` must be a live NSEvent key event on the main thread.
-pub unsafe fn macos_key_event(event: *mut Object, state: ButtonState) -> KeyboardEvent {
+pub(super) unsafe fn macos_key_event(event: *mut Object, state: ButtonState) -> KeyboardEvent {
     let code: u16 = unsafe { msg_send![event, keyCode] };
     let flags: u64 = unsafe { msg_send![event, modifierFlags] };
     let repeat: Bool = unsafe { msg_send![event, isARepeat] };

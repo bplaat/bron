@@ -89,12 +89,6 @@ unsafe extern "C" {
     pub(super) fn CVDisplayLinkRelease(display_link: CVDisplayLinkRef);
 }
 
-#[cfg(all(feature = "window", target_os = "ios"))]
-#[link(name = "UIKit", kind = "framework")]
-unsafe extern "C" {
-    pub(super) fn UIGraphicsGetCurrentContext() -> CGContextRef;
-}
-
 #[link(name = "CoreGraphics", kind = "framework")]
 unsafe extern "C" {
     pub(super) fn CGContextSaveGState(context: CGContextRef);

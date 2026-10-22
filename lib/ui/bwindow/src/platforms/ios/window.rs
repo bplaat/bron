@@ -12,6 +12,7 @@ use objc2::rc::{Allocated, Retained};
 use objc2::runtime::{AnyObject as Object, Bool};
 use objc2::{class, define_class, msg_send};
 
+use super::content::ContentView;
 use super::event_loop::{send_event, theme_from_traits};
 use super::headers::*;
 use crate::content::ContentHost;
@@ -107,6 +108,11 @@ impl WindowViewController {
     fn update_theme(&self) {
         let traits: *mut Object = unsafe { msg_send![self, traitCollection] };
         self.ivars().host.theme_changed(theme_from_traits(traits));
+        // Also report display scale changes, like moving to an external display.
+        let scale: f64 = unsafe { msg_send![traits, displayScale] };
+        if scale > 0.0 {
+            self.ivars().host.scale_factor_changed(scale as f32);
+        }
     }
 }
 
@@ -187,7 +193,10 @@ impl PlatformWindow {
                 init
             ]
         };
-        let view: *mut Object = unsafe { msg_send![&controller, view] };
+        // The shared content view renderers draw into, it receives the interaction.
+        let content = ContentView::new(host.event_sender());
+        let _: () = unsafe { msg_send![&controller, setView:&*content] };
+        let view: *mut Object = content.as_ptr().cast();
         unsafe {
             let _: () = msg_send![&controller, setTitle:&*NSString::new(&builder.title)];
             if let Some(color) = builder.background_color {
@@ -198,6 +207,11 @@ impl PlatformWindow {
             }
         }
         host.set_handle(crate::NativeWindowHandle::UIKit(view.cast()));
+        host.set_content(crate::NativeContentHandle::UIKit(view.cast()));
+        // Until the first layout reports the scale of its screen, assume the main screen.
+        let screen: *mut Object = unsafe { msg_send![class!(UIScreen), mainScreen] };
+        let scale: f64 = unsafe { msg_send![screen, scale] };
+        host.scale_factor_changed(scale as f32);
 
         CONTROLLERS.with_borrow_mut(|controllers| controllers.push(controller.clone()));
         let scene = SCENE.get();

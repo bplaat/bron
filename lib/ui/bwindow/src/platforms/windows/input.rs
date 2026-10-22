@@ -9,7 +9,7 @@ use crate::input::set1_key_code as physical_key;
 use crate::{ButtonState, Key, KeyCode, KeyboardEvent, Modifiers, NamedKey};
 
 /// Current Win32 keyboard modifiers on the calling UI thread.
-pub fn windows_modifiers() -> Modifiers {
+pub(super) fn windows_modifiers() -> Modifiers {
     let mut modifiers = Modifiers::NONE;
     for (key, modifier) in [
         (0x10, Modifiers::SHIFT),
@@ -27,7 +27,7 @@ pub fn windows_modifiers() -> Modifiers {
 
 /// Translate WM_KEYDOWN/UP parameters on the window's UI thread.
 /// This reports keys, not composed text or IME input.
-pub fn windows_key_event(key: u32, lparam: isize, state: ButtonState) -> KeyboardEvent {
+pub(super) fn windows_key_event(key: u32, lparam: isize, state: ButtonState) -> KeyboardEvent {
     let scan = ((lparam >> 16) & 0xff) as u32;
     let named = match key {
         0x08 => Some(NamedKey::Backspace),

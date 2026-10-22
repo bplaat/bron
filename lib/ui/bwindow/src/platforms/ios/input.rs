@@ -14,7 +14,7 @@ use crate::{ButtonState, LogicalPoint, Modifiers, MouseButton, MouseEvent, Windo
 ///
 /// # Safety
 /// `view` must be a live UIView and `touches` a live NSSet of UITouch on the main thread.
-pub unsafe fn ios_touch_event(
+pub(super) unsafe fn ios_touch_event(
     view: *mut Object,
     touches: *mut Object,
     state: Option<ButtonState>,

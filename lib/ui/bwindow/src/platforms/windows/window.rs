@@ -15,13 +15,16 @@ use super::event_loop::{APP_ID, send_event, system_theme};
 #[cfg(feature = "file_drop")]
 use super::file_drop::handle_file_drop;
 use super::headers::*;
+use super::interaction::Interaction;
 #[cfg(feature = "progress_bar")]
 use super::progress_bar::ProgressBar;
 #[cfg(feature = "remember_window_state")]
 use super::window_state::{restore_window_state, save_window_state};
 #[cfg(feature = "progress_bar")]
 use crate::WindowsProgressBarState;
-use crate::{CloseRequest, LogicalPoint, LogicalSize, Theme, WindowBuilder, WindowEvent};
+use crate::{
+    CloseRequest, CursorIcon, LogicalPoint, LogicalSize, Theme, WindowBuilder, WindowEvent,
+};
 
 pub(super) struct WindowData {
     host: std::rc::Rc<crate::content::ContentHost>,
@@ -31,6 +34,7 @@ pub(super) struct WindowData {
     pub(super) min_size: Option<LogicalSize>,
     pub(super) background_color: Option<u32>,
     theme: Option<Theme>,
+    interaction: Interaction,
     #[cfg(feature = "remember_window_state")]
     pub(super) remember_window_state: bool,
     #[cfg(feature = "file_drop")]
@@ -109,6 +113,7 @@ impl PlatformWindow {
             min_size: builder.min_size,
             background_color: builder.background_color,
             theme: builder.theme,
+            interaction: Interaction::default(),
             #[cfg(feature = "remember_window_state")]
             remember_window_state: builder.remember_window_state,
             #[cfg(feature = "file_drop")]
@@ -215,6 +220,8 @@ impl PlatformWindow {
             );
             window_data.hwnd = hwnd;
             host.set_handle(crate::NativeWindowHandle::Win32(hwnd));
+            // Renderers draw into the client area, which receives the interaction.
+            host.set_content(crate::NativeContentHandle::Win32(hwnd));
             #[cfg(feature = "file_drop")]
             if builder.allow_file_drop {
                 DragAcceptFiles(hwnd, TRUE);
@@ -232,6 +239,7 @@ impl PlatformWindow {
                 window_dpi
             };
             window_data.dpi = dpi;
+            host.scale_factor_changed(dpi as f32 / USER_DEFAULT_SCREEN_DPI as f32);
             if !restored_window_state && dpi != initial_dpi {
                 let (rect, position_set) =
                     calculate_window_rect(builder, &monitor_rect, style, dpi);
@@ -350,6 +358,10 @@ impl crate::WindowInterface for PlatformWindow {
         unsafe { InvalidateRect(self.0.hwnd, null_mut(), TRUE) };
     }
 
+    fn set_cursor(&mut self, cursor: CursorIcon) {
+        self.0.interaction.set_cursor(self.0.hwnd, cursor);
+    }
+
     #[cfg(feature = "progress_bar")]
     fn windows_set_progress_bar(&mut self, progress: Option<f32>, state: WindowsProgressBarState) {
         self.0.progress_bar.set(self.0.hwnd, progress, state);
@@ -388,15 +400,26 @@ unsafe extern "system" fn window_proc(
         };
         window_data
     };
+    if let Some(result) = unsafe {
+        _self
+            .interaction
+            .handle(hwnd, _self.window_id, _self.dpi, msg, w_param, l_param)
+    } {
+        return result;
+    }
     match msg {
         WM_PAINT => {
+            // Validate the update region first, so content that requests another frame
+            // during its paint pass gets exactly one more WM_PAINT and never a loop.
             let mut paint = PAINTSTRUCT::default();
             unsafe { BeginPaint(hwnd, &mut paint) };
             unsafe { EndPaint(hwnd, &paint) };
-            // Redraw delivery can run application code and destroy this window.
+            // Painting can run application code and destroy this window.
             // End the raw WindowData borrow before entering that callback.
             let host = _self.host.clone();
-            host.request_redraw();
+            if !host.paint() {
+                host.request_redraw();
+            }
             0
         }
         // WM_SETTINGCHANGE and WM_THEMECHANGED, including the application's color mode.
@@ -417,6 +440,8 @@ unsafe extern "system" fn window_proc(
             send_event(crate::Event::Window(_self.window_id, WindowEvent::Create));
             0
         }
+        // Content painting the client area draws the background itself, erasing would flicker.
+        WM_ERASEBKGND if _self.host.has_paint() => 1,
         WM_ERASEBKGND => {
             if let Some(color) = _self.background_color {
                 let hdc = w_param as HDC;
@@ -482,6 +507,7 @@ unsafe extern "system" fn window_proc(
                     SWP_NOZORDER | SWP_NOACTIVATE,
                 )
             };
+            host.scale_factor_changed(scale);
             if !host.is_closed() {
                 send_event(crate::Event::Window(
                     host.id(),

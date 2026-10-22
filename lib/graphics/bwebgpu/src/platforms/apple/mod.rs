@@ -34,6 +34,17 @@ unsafe fn retained(value: *mut AnyObject) -> Result<Object> {
     unsafe { Retained::retain(value) }.ok_or_else(|| Error("Metal returned nil".into()))
 }
 
+// Fill `layer` with `view`, without implicit animations.
+unsafe fn layout_layer(view: &AnyObject, layer: &AnyObject) {
+    unsafe {
+        let bounds: Rect = msg_send![view, bounds];
+        let _: () = msg_send![class!(CATransaction), begin];
+        let _: () = msg_send![class!(CATransaction), setDisableActions: Bool::YES];
+        let _: () = msg_send![layer, setFrame: bounds];
+        let _: () = msg_send![class!(CATransaction), commit];
+    }
+}
+
 fn string(value: &str) -> Object {
     unsafe {
         let object: *mut AnyObject = msg_send![class!(NSString), alloc];

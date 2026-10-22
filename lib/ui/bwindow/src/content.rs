@@ -25,20 +25,58 @@ pub enum NativeWindowHandle {
     Android(*mut c_void),
 }
 
+/// The native content host that renderers draw into. The window owns it, delivers its
+/// keyboard, pointer, scroll, focus, cursor and file-drop interaction, and lays it out
+/// to fill the content area.
+#[derive(Clone, Copy, Debug)]
+pub enum NativeContentHandle {
+    /// The shared bwindow NSView filling the window content area.
+    AppKit(*mut c_void),
+    /// The shared bwindow UIView filling the window.
+    UIKit(*mut c_void),
+    /// The client area of the top-level HWND.
+    Win32(*mut c_void),
+    /// The shared GtkDrawingArea filling the GtkWindow.
+    Gtk(*mut c_void),
+    /// A JNI global reference to the `android.app.NativeActivity`, whose window surface
+    /// renderers draw into.
+    Android(*mut c_void),
+}
+
+/// A cursor shown over window content; native window decorations retain their own cursors.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum CursorIcon {
+    /// Standard arrow.
+    #[default]
+    Default,
+    /// Pointing hand for an interactive target.
+    Pointer,
+    /// Background work in progress.
+    Progress,
+}
+
 type ResizeHandler = Rc<dyn Fn(u32, u32)>;
+type ScaleHandler = Rc<dyn Fn(f32)>;
 type CloseHandler = Box<dyn FnOnce()>;
+type ContentFactory = Box<dyn FnOnce() -> Option<NativeContentHandle>>;
 
 pub(crate) struct ContentHost {
     id: WindowId,
     handle: Cell<Option<NativeWindowHandle>>,
+    content: Cell<Option<NativeContentHandle>>,
+    content_factory: RefCell<Option<ContentFactory>>,
+    scale_factor: Cell<f32>,
     attached: Cell<bool>,
     closed: Cell<bool>,
     background: Cell<Option<u32>>,
     theme: Cell<Option<crate::Theme>>,
     allow_file_drop: bool,
     resize: RefCell<Option<ResizeHandler>>,
+    scale: RefCell<Option<ScaleHandler>>,
     close: RefCell<Option<CloseHandler>>,
     redraw: RefCell<Option<Rc<dyn Fn()>>>,
+    #[cfg(windows)]
+    paint: RefCell<Option<Rc<dyn Fn()>>>,
     animation_frame: RefCell<Option<Rc<dyn Fn()>>>,
     animation_frame_pending: Cell<bool>,
 }
@@ -48,14 +86,20 @@ impl ContentHost {
         Rc::new(Self {
             id,
             handle: Cell::new(None),
+            content: Cell::new(None),
+            content_factory: RefCell::new(None),
+            scale_factor: Cell::new(1.0),
             attached: Cell::new(false),
             closed: Cell::new(false),
             background: Cell::new(background),
             theme: Cell::new(None),
             allow_file_drop,
             resize: RefCell::new(None),
+            scale: RefCell::new(None),
             close: RefCell::new(None),
             redraw: RefCell::new(None),
+            #[cfg(windows)]
+            paint: RefCell::new(None),
             animation_frame: RefCell::new(None),
             animation_frame_pending: Cell::new(false),
         })
@@ -63,6 +107,34 @@ impl ContentHost {
 
     pub(crate) fn set_handle(&self, handle: NativeWindowHandle) {
         self.handle.set(Some(handle));
+    }
+
+    /// Set the content host that exists for the whole window lifetime.
+    pub(crate) fn set_content(&self, content: NativeContentHandle) {
+        self.content.set(Some(content));
+    }
+
+    /// Create the content host on first use, for hosts that alternative window children
+    /// like a web view must not get.
+    #[allow(dead_code, reason = "only GTK creates its content host on demand")]
+    pub(crate) fn set_content_factory(
+        &self,
+        factory: impl FnOnce() -> Option<NativeContentHandle> + 'static,
+    ) {
+        *self.content_factory.borrow_mut() = Some(Box::new(factory));
+    }
+
+    fn content_handle(&self) -> Option<NativeContentHandle> {
+        if self.closed.get() {
+            return None;
+        }
+        if self.content.get().is_none() {
+            let factory = self.content_factory.borrow_mut().take();
+            if let Some(factory) = factory {
+                self.content.set(factory());
+            }
+        }
+        self.content.get()
     }
 
     pub(crate) const fn id(&self) -> WindowId {
@@ -119,20 +191,64 @@ impl ContentHost {
         }
     }
 
+    /// Report a display scale change of the window content.
+    pub(crate) fn scale_factor_changed(&self, scale_factor: f32) {
+        if self.closed.get() || self.scale_factor.replace(scale_factor) == scale_factor {
+            return;
+        }
+        let handler = self.scale.borrow().clone();
+        if let Some(handler) = handler {
+            handler(scale_factor);
+        }
+    }
+
+    /// Run the content's native paint pass, returns false when no content paints.
+    #[cfg(windows)]
+    pub(crate) fn paint(&self) -> bool {
+        if self.closed.get() {
+            return false;
+        }
+        let paint = self.paint.borrow().clone();
+        paint.is_some_and(|paint| {
+            paint();
+            true
+        })
+    }
+
+    /// Whether content paints the client area itself.
+    #[cfg(windows)]
+    pub(crate) fn has_paint(&self) -> bool {
+        self.paint.borrow().is_some()
+    }
+
+    // Take the hooks out before dropping them, their destructors can register hooks again.
+    fn disconnect(&self) -> Option<CloseHandler> {
+        let redraw = self.redraw.borrow_mut().take();
+        drop(redraw);
+        #[cfg(windows)]
+        {
+            let paint = self.paint.borrow_mut().take();
+            drop(paint);
+        }
+        let animation_frame = self.animation_frame.borrow_mut().take();
+        drop(animation_frame);
+        self.animation_frame_pending.set(false);
+        let resize = self.resize.borrow_mut().take();
+        drop(resize);
+        let scale = self.scale.borrow_mut().take();
+        drop(scale);
+        self.close.borrow_mut().take()
+    }
+
     pub(crate) fn close(&self) {
         if self.closed.replace(true) {
             return;
         }
         self.handle.set(None);
-        let redraw = self.redraw.borrow_mut().take();
-        drop(redraw);
-        let animation_frame = self.animation_frame.borrow_mut().take();
-        drop(animation_frame);
-        self.animation_frame_pending.set(false);
-        let resize = self.resize.borrow_mut().take();
-        let close = self.close.borrow_mut().take();
-        drop(resize);
-        if let Some(close) = close {
+        self.content.set(None);
+        let factory = self.content_factory.borrow_mut().take();
+        drop(factory);
+        if let Some(close) = self.disconnect() {
             close();
         }
     }
@@ -194,13 +310,29 @@ impl WindowAttachment {
         self.0.closed.get()
     }
 
-    /// Access the native window when initializing or updating a content backend.
+    /// Access the native top-level window, for content that adds its own window child
+    /// like a web view.
     ///
     /// # Safety
     /// Use the handle only on the main thread while this attachment is open.
     /// Do not destroy the native window or replace its delegate/user data.
-    pub unsafe fn native_handle(&self) -> Option<NativeWindowHandle> {
+    pub unsafe fn window_handle(&self) -> Option<NativeWindowHandle> {
         self.0.handle.get()
+    }
+
+    /// Access the native content host that renderers draw into, creating it on first use.
+    /// The window delivers its interaction, so renderers only draw and present.
+    ///
+    /// # Safety
+    /// Use the handle only on the main thread while this attachment is open.
+    /// Do not destroy the host, replace its delegate/user data, or handle its input.
+    pub unsafe fn content_handle(&self) -> Option<NativeContentHandle> {
+        self.0.content_handle()
+    }
+
+    /// Native pixels per logical pixel of the window content.
+    pub fn scale_factor(&self) -> f32 {
+        self.0.scale_factor.get()
     }
 
     /// The window's configured backing color.
@@ -220,6 +352,13 @@ impl WindowAttachment {
         drop(previous);
     }
 
+    /// Register a callback for display scale changes of the window content.
+    pub fn on_scale_factor_changed(&self, handler: impl Fn(f32) + 'static) {
+        assert!(!self.is_closed(), "window is closed");
+        let previous = self.0.scale.borrow_mut().replace(Rc::new(handler));
+        drop(previous);
+    }
+
     /// Register teardown to run once when the owning window closes.
     pub fn on_close(&self, handler: impl FnOnce() + 'static) {
         assert!(!self.is_closed(), "window is closed");
@@ -231,6 +370,16 @@ impl WindowAttachment {
     pub fn on_redraw(&self, handler: impl Fn() + 'static) {
         assert!(!self.is_closed(), "window is closed");
         let previous = self.0.redraw.borrow_mut().replace(Rc::new(handler));
+        drop(previous);
+    }
+
+    /// Register the native paint pass for content drawing into the client area of the
+    /// top-level window. It runs for every WM_PAINT after the window validated the
+    /// update region, so it must not invalidate the window unless it wants another frame.
+    #[cfg(windows)]
+    pub fn windows_on_paint(&self, handler: impl Fn() + 'static) {
+        assert!(!self.is_closed(), "window is closed");
+        let previous = self.0.paint.borrow_mut().replace(Rc::new(handler));
         drop(previous);
     }
 
@@ -252,14 +401,7 @@ impl WindowAttachment {
 
     /// Disconnect callbacks before releasing the native content resources.
     pub fn disconnect(&self) {
-        let redraw = self.0.redraw.borrow_mut().take();
-        drop(redraw);
-        let animation_frame = self.0.animation_frame.borrow_mut().take();
-        drop(animation_frame);
-        self.0.animation_frame_pending.set(false);
-        let resize = self.0.resize.borrow_mut().take();
-        let close = self.0.close.borrow_mut().take();
-        drop(resize);
+        let close = self.0.disconnect();
         drop(close);
     }
 
@@ -351,7 +493,7 @@ mod tests {
             }
         }
 
-        for kind in 0..4 {
+        for kind in 0..5 {
             let host = ContentHost::new(WindowId::new(), None, false);
             let attachment = Rc::new(host.attach().expect("attachment"));
             let weak = Rc::downgrade(&attachment);
@@ -363,6 +505,7 @@ mod tests {
                     0 => attachment.on_resize(|_, _| {}),
                     1 => attachment.on_close(|| {}),
                     2 => attachment.on_redraw(|| {}),
+                    3 => attachment.on_scale_factor_changed(|_| {}),
                     _ => attachment.on_animation_frame(|| {}),
                 }
                 output.set(true);
@@ -385,6 +528,12 @@ mod tests {
                         let _keep_alive = &guard;
                     });
                     attachment.on_redraw(|| {});
+                }
+                3 => {
+                    attachment.on_scale_factor_changed(move |_| {
+                        let _keep_alive = &guard;
+                    });
+                    attachment.on_scale_factor_changed(|_| {});
                 }
                 _ => {
                     attachment.on_animation_frame(move || {
@@ -432,6 +581,36 @@ mod tests {
         host.animation_frame_pending.set(false);
         host.request_animation_frame();
         assert_eq!(count.get(), 2);
+    }
+
+    #[test]
+    fn scale_changes_notify_once_per_value() {
+        let host = ContentHost::new(WindowId::new(), None, false);
+        let attachment = host.attach().expect("attachment");
+        let count = Rc::new(Cell::new(0));
+        let output = count.clone();
+        attachment.on_scale_factor_changed(move |_| output.set(output.get() + 1));
+        host.scale_factor_changed(2.0);
+        host.scale_factor_changed(2.0);
+        assert_eq!(attachment.scale_factor(), 2.0);
+        assert_eq!(count.get(), 1);
+    }
+
+    #[test]
+    fn content_host_is_created_once_on_first_use() {
+        let host = ContentHost::new(WindowId::new(), None, false);
+        let count = Rc::new(Cell::new(0));
+        let output = count.clone();
+        host.set_content_factory(move || {
+            output.set(output.get() + 1);
+            Some(NativeContentHandle::Gtk(std::ptr::null_mut()))
+        });
+        let attachment = host.attach().expect("attachment");
+        assert!(unsafe { attachment.content_handle() }.is_some());
+        assert!(unsafe { attachment.content_handle() }.is_some());
+        assert_eq!(count.get(), 1);
+        host.close();
+        assert!(unsafe { attachment.content_handle() }.is_none());
     }
 
     #[test]
