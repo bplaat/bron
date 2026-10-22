@@ -7,6 +7,8 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
+// Shadow the plain Core Graphics geometry from the headers with the Objective-C encodable one.
+use bwindow::ffi::CGRect;
 use bwindow::ffi::*;
 use bwindow::{ButtonState, NativeWindowHandle, WindowAttachment, WindowEvent, WindowEventSender};
 use objc2::rc::{Allocated, Retained};

@@ -4,22 +4,18 @@
  * SPDX-License-Identifier: MIT
  */
 
+#[cfg(feature = "window")]
+pub(crate) use platform::PlatformCanvas;
+pub(crate) use platform::{PlatformCanvasContext, PlatformOffscreenCanvas};
+
 #[cfg(target_os = "android")]
-pub(crate) use crate::platforms::android::{
-    PlatformCanvas, PlatformCanvasContext, PlatformOffscreenCanvas,
-};
+use crate::platforms::android as platform;
 #[cfg(target_vendor = "apple")]
-pub(crate) use crate::platforms::apple::{
-    PlatformCanvas, PlatformCanvasContext, PlatformOffscreenCanvas,
-};
+use crate::platforms::apple as platform;
 #[cfg(not(any(target_vendor = "apple", target_os = "android", windows)))]
-pub(crate) use crate::platforms::gtk::{
-    PlatformCanvas, PlatformCanvasContext, PlatformOffscreenCanvas,
-};
+use crate::platforms::gtk as platform;
 #[cfg(windows)]
-pub(crate) use crate::platforms::windows::{
-    PlatformCanvas, PlatformCanvasContext, PlatformOffscreenCanvas,
-};
+use crate::platforms::windows as platform;
 
 #[cfg(target_os = "android")]
 mod android;

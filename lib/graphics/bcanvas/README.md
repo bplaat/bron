@@ -89,6 +89,14 @@ Run `cargo run -p example-bcanvas-headless` to draw and save `frame.png`
 without creating a window. The [example](examples/headless) enables
 the image crate's PNG feature and calls `image::encode`.
 
+Disable default features to drop the `window` feature and with it `Canvas`, bwindow
+and the windowing frameworks. On macOS and iOS an offscreen-only build then links
+just Core Graphics, Core Text and Core Foundation:
+
+```toml
+bcanvas = { path = "../bcanvas", default-features = false }
+```
+
 ## License
 
 Copyright © 2026 [Bastiaan van der Plaat](https://github.com/bplaat)

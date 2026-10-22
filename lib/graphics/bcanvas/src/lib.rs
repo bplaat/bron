@@ -4,7 +4,12 @@
  * SPDX-License-Identifier: MIT
  */
 
-#![doc = include_str!("../README.md")]
+// The README examples need the default `window` feature.
+#![cfg_attr(feature = "window", doc = include_str!("../README.md"))]
+#![cfg_attr(
+    not(feature = "window"),
+    doc = "Cross-platform native 2D drawing into offscreen canvases."
+)]
 #![allow(unsafe_code)]
 #![allow(clippy::undocumented_unsafe_blocks)]
 

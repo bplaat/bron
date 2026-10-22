@@ -48,6 +48,7 @@ unsafe extern "system" {
     ) -> HANDLE;
     fn SelectObject(dc: HDC, object: HANDLE) -> HANDLE;
     fn DeleteDC(dc: HDC) -> BOOL;
+    fn DeleteObject(object: HANDLE) -> BOOL;
     fn GdiFlush() -> BOOL;
 }
 

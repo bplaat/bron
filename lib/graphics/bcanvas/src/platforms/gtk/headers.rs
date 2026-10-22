@@ -6,30 +6,6 @@
 
 use std::ffi::{c_char, c_void};
 
-use bwindow::ffi::{GObject, GtkWidget};
-
-unsafe extern "C" {
-    pub(super) fn gdk_window_get_display(window: *mut c_void) -> *mut c_void;
-    pub(super) fn gdk_cursor_new_from_name(
-        display: *mut c_void,
-        name: *const c_char,
-    ) -> *mut GObject;
-    pub(super) fn gdk_window_set_cursor(window: *mut c_void, cursor: *mut GObject);
-    pub(super) fn gtk_drawing_area_new() -> *mut GtkWidget;
-    pub(super) fn gtk_widget_set_can_focus(widget: *mut GtkWidget, can_focus: i32);
-    pub(super) fn gtk_widget_grab_focus(widget: *mut GtkWidget);
-    pub(super) fn gtk_widget_add_events(widget: *mut GtkWidget, events: i32);
-    pub(super) fn gtk_widget_queue_draw(widget: *mut GtkWidget);
-    pub(super) fn gtk_widget_add_tick_callback(
-        widget: *mut GtkWidget,
-        callback: extern "C" fn(*mut GtkWidget, *mut c_void, *mut c_void) -> i32,
-        data: *mut c_void,
-        notify: extern "C" fn(*mut c_void),
-    ) -> u32;
-    pub(super) fn gtk_widget_remove_tick_callback(widget: *mut GtkWidget, id: u32);
-    pub(super) fn g_object_ref_sink(object: *mut GObject) -> *mut GObject;
-}
-
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub(super) struct CairoMatrix {
