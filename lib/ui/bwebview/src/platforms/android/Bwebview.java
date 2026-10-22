@@ -152,11 +152,17 @@ public final class Bwebview {
                 var bars = insets.getInsets(
                     WindowInsets.Type.systemBars() | WindowInsets.Type.displayCutout() | WindowInsets.Type.ime());
                 setPadding(bars.left, bars.top, bars.right, bars.bottom);
+                // The panel already applied these insets; WebView must not apply them again.
+                return WindowInsets.CONSUMED;
             } else {
                 setPadding(insets.getSystemWindowInsetLeft(), insets.getSystemWindowInsetTop(),
                     insets.getSystemWindowInsetRight(), insets.getSystemWindowInsetBottom());
+                var remaining = insets.consumeSystemWindowInsets().consumeStableInsets();
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                    remaining = remaining.consumeDisplayCutout();
+                }
+                return remaining;
             }
-            return insets;
         }
 
         @Override
