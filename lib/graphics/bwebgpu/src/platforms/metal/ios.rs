@@ -59,7 +59,7 @@ impl Surface {
     pub(crate) fn size(&self) -> (u32, u32) {
         unsafe {
             let bounds: Rect = msg_send![&*self.view, bounds];
-            let scale: f64 = msg_send![&*self.view, contentScaleFactor];
+            let scale: f64 = msg_send![&*self.layer, contentsScale];
             (
                 (bounds.size.width * scale).round().max(0.0) as u32,
                 (bounds.size.height * scale).round().max(0.0) as u32,

@@ -27,19 +27,8 @@ impl Context {
             let _: () = msg_send![&*surface.layer, setFramebufferOnly: Bool::YES];
             #[cfg(target_os = "macos")]
             let _: () = msg_send![&*surface.layer, setDisplaySyncEnabled: Bool::YES];
-            #[cfg(target_os = "macos")]
-            let scale: f64 = {
-                let window: *mut AnyObject = msg_send![&*surface.view, window];
-                if window.is_null() {
-                    1.0
-                } else {
-                    msg_send![window, backingScaleFactor]
-                }
-            };
-            #[cfg(target_os = "ios")]
-            let scale: f64 = msg_send![&*surface.view, contentScaleFactor];
+            // The attachment supplies the layer's display scale, including live changes.
             layout_layer(&surface.view, &surface.layer);
-            let _: () = msg_send![&*surface.layer, setContentsScale: scale];
             let _: () = msg_send![&*surface.layer, setDrawableSize: Size { width: config.width as f64, height: config.height as f64 }];
         }
         Ok(())
