@@ -91,8 +91,9 @@ unsafe extern "C" fn ANativeActivity_onCreate(
         ACTIVITY.store(activity, Ordering::Release);
         UI_QUEUE.attach();
 
-        // NativeActivity defaults to a 16-bit RGB_565 window.
-        ANativeActivity_setWindowFormat(activity, WINDOW_FORMAT_RGBA_8888);
+        // NativeActivity defaults to a 16-bit RGB_565 window, an opaque 32-bit window
+        // makes the compositor ignore the alpha that renderers leave in the surface.
+        ANativeActivity_setWindowFormat(activity, WINDOW_FORMAT_RGBX_8888);
     }
     // Follow the system theme until the app calls set_theme, also after a crash.
     set_night_mode(NIGHT_MODE_AUTO);

@@ -95,7 +95,7 @@ pub(crate) type AChoreographer_frameCallback = unsafe extern "C" fn(c_long, *mut
 pub(crate) const ALOOPER_PREPARE_ALLOW_NON_CALLBACKS: c_int = 1;
 pub(crate) const ALOOPER_POLL_CALLBACK: c_int = -2;
 pub(crate) const ALOOPER_EVENT_INPUT: c_int = 1;
-pub(crate) const WINDOW_FORMAT_RGBA_8888: i32 = 1;
+pub(crate) const WINDOW_FORMAT_RGBX_8888: i32 = 2;
 
 pub(crate) const AINPUT_EVENT_TYPE_KEY: i32 = 1;
 pub(crate) const AINPUT_EVENT_TYPE_MOTION: i32 = 2;
