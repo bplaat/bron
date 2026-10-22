@@ -26,7 +26,7 @@ pub(super) static ACTIVITY_OBJECT: OnceLock<Global<JObject<'static>>> = OnceLock
 static UI_QUEUE: Queue = Queue::new();
 
 /// The running `android.app.NativeActivity`.
-pub fn android_activity() -> &'static JObject<'static> {
+pub(super) fn android_activity() -> &'static JObject<'static> {
     ACTIVITY_OBJECT
         .get()
         .expect("the activity is not created")
@@ -42,7 +42,7 @@ pub fn android_with_env<T>(f: impl FnOnce(&mut Env) -> Result<T>) -> T {
 }
 
 /// Run `task` on the Android UI thread, callable from every thread.
-pub fn android_run_on_ui_thread(task: impl FnOnce() + Send + 'static) {
+pub(super) fn android_run_on_ui_thread(task: impl FnOnce() + Send + 'static) {
     UI_QUEUE.post(Box::new(task));
 }
 
