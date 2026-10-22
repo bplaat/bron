@@ -7,7 +7,7 @@
 use block2::RcBlock;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject as Object, Bool};
-use objc2::{class, msg_send, sel};
+use objc2::{class, msg_send};
 
 use super::headers::*;
 
@@ -168,11 +168,11 @@ unsafe fn run_panel_modal(
         if !parent.is_null() {
             // Show as a sheet attached to the active window
             let block = RcBlock::new(move |response: i64| {
-                let _: () = unsafe { msg_send![NSApp, stopModalWithCode: response] };
+                let _: () = msg_send![NSApp, stopModalWithCode: response];
             });
             let _: () =
                 msg_send![panel, beginSheetModalForWindow: parent, completionHandler: &*block];
-            unsafe { msg_send![NSApp, runModalForWindow: panel] }
+            msg_send![NSApp, runModalForWindow: panel]
         } else {
             msg_send![panel, runModal]
         }

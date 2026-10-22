@@ -15,6 +15,10 @@ use crate::{LogicalInsets, LogicalPoint, LogicalSize};
 pub struct CloseRequest(Rc<Cell<bool>>);
 
 impl CloseRequest {
+    #[cfg_attr(
+        target_os = "ios",
+        allow(dead_code, reason = "iOS windows never close")
+    )]
     pub(crate) fn new() -> Self {
         Self(Rc::new(Cell::new(false)))
     }

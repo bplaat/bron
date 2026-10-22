@@ -198,7 +198,7 @@ impl crate::FileDialogInterface for PlatformFileDialog {
             let hwnd = dialog
                 .parent
                 .map(|window| window.0.hwnd)
-                .unwrap_or_else(|| unsafe { GetActiveWindow() });
+                .unwrap_or_else(|| GetActiveWindow());
             let path = if dlg.Show(hwnd) == S_OK {
                 let mut item: *mut IShellItem = null_mut();
                 if dlg.GetResult(&mut item) == S_OK {
@@ -249,7 +249,7 @@ impl crate::FileDialogInterface for PlatformFileDialog {
             let hwnd = dialog
                 .parent
                 .map(|window| window.0.hwnd)
-                .unwrap_or_else(|| unsafe { GetActiveWindow() });
+                .unwrap_or_else(|| GetActiveWindow());
             let paths = if dlg.Show(hwnd) == S_OK {
                 let mut items: *mut IShellItemArray = null_mut();
                 if dlg.GetResults(&mut items) == S_OK {
@@ -325,7 +325,7 @@ impl crate::FileDialogInterface for PlatformFileDialog {
             let hwnd = dialog
                 .parent
                 .map(|window| window.0.hwnd)
-                .unwrap_or_else(|| unsafe { GetActiveWindow() });
+                .unwrap_or_else(|| GetActiveWindow());
             let path = if dlg.Show(hwnd) == S_OK {
                 let mut item: *mut IShellItem = null_mut();
                 if dlg.GetResult(&mut item) == S_OK {

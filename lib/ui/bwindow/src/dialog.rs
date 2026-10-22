@@ -55,6 +55,7 @@ pub enum MessageDialogResult {
     Custom(String),
 }
 
+#[cfg(not(windows))]
 pub(crate) fn message_button_labels(buttons: &MessageButtons) -> Vec<&str> {
     match buttons {
         MessageButtons::Ok => vec!["OK"],
@@ -151,6 +152,10 @@ impl<'a> MessageDialog<'a> {
 
 // MARK: File dialogs
 pub(crate) struct FileDialogFilter {
+    #[cfg_attr(
+        target_os = "macos",
+        allow(dead_code, reason = "AppKit only filters on extensions")
+    )]
     pub(crate) name: String,
     pub(crate) extensions: Vec<String>,
 }

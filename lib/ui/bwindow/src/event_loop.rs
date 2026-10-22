@@ -11,10 +11,14 @@ use crate::platforms::{PlatformEventLoop, PlatformEventLoopProxy, PlatformMonito
 use crate::{Event, LogicalPoint, LogicalSize, NativeEvent, Theme};
 
 // MARK: AppId
+#[cfg_attr(
+    any(target_vendor = "apple", target_os = "android", windows),
+    allow(dead_code, reason = "only GTK names the application")
+)]
 pub(crate) struct AppId {
-    pub qualifier: String,
-    pub organization: String,
-    pub application: String,
+    pub(crate) qualifier: String,
+    pub(crate) organization: String,
+    pub(crate) application: String,
 }
 
 // MARK: EventLoopBuilder

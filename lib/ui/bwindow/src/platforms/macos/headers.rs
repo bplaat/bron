@@ -24,6 +24,7 @@ unsafe extern "C" {
     pub(crate) static NSApp: *mut Object;
     pub(crate) static NSAppearanceNameAqua: *const Object;
     pub(crate) static NSAppearanceNameDarkAqua: *const Object;
+    #[cfg(feature = "file_drop")]
     pub(crate) static NSFilenamesPboardType: *mut Object;
 }
 
@@ -80,7 +81,6 @@ pub(crate) const NS_APPLICATION_ACTIVATION_POLICY_REGULAR: i64 = 0;
 pub(crate) const NS_UTF8_STRING_ENCODING: u64 = 4;
 
 pub(crate) const NS_VIEW_WIDTH_SIZABLE: u64 = 2;
-pub(crate) const NS_VIEW_MIN_Y_MARGIN: u64 = 8;
 pub(crate) const NS_VIEW_MAX_Y_MARGIN: u64 = 32;
 
 pub(crate) const NS_WINDOW_CLOSE_BUTTON: u64 = 0;
@@ -104,11 +104,17 @@ pub(crate) const NS_EVENT_MODIFIER_FLAG_CONTROL: u64 = 1 << 18;
 pub(crate) const NS_EVENT_MODIFIER_FLAG_OPTION: u64 = 1 << 19;
 pub(crate) const NS_EVENT_MODIFIER_FLAG_COMMAND: u64 = 1 << 20;
 
+#[cfg(feature = "dialog")]
 pub(crate) const NS_MODAL_RESPONSE_OK: i64 = 1;
+#[cfg(feature = "dialog")]
 pub(crate) const NS_ALERT_STYLE_WARNING: i64 = 0;
+#[cfg(feature = "dialog")]
 pub(crate) const NS_ALERT_STYLE_INFORMATIONAL: i64 = 1;
+#[cfg(feature = "dialog")]
 pub(crate) const NS_ALERT_STYLE_CRITICAL: i64 = 2;
+#[cfg(feature = "dialog")]
 pub(crate) const NS_ALERT_FIRST_BUTTON_RETURN: i64 = 1000;
+#[cfg(feature = "file_drop")]
 pub(crate) const NS_DRAG_OPERATION_COPY: u64 = 1;
 
 #[repr(transparent)]

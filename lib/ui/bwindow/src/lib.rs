@@ -5,7 +5,6 @@
  */
 
 #![doc = include_str!("../README.md")]
-#![allow(unused)]
 #![allow(unsafe_code)]
 #![allow(clippy::undocumented_unsafe_blocks)]
 
@@ -30,6 +29,18 @@ mod event;
 mod event_loop;
 mod input;
 mod mailbox;
+// GTK always builds its menus from the menu types, macOS with the menu feature only and
+// Windows only uses their accelerators.
+#[cfg_attr(
+    not(any(
+        all(target_os = "macos", feature = "menu"),
+        not(any(target_vendor = "apple", target_os = "android", windows))
+    )),
+    allow(
+        dead_code,
+        reason = "the menu types are partially used on this platform"
+    )
+)]
 mod menu;
 mod platforms;
 mod sizes;

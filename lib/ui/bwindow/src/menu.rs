@@ -96,6 +96,11 @@ impl MenuBarBuilder {
         self.menus.push(menu);
         self
     }
+    // Windows registers the accelerators of all items, GTK tests its merged menus.
+    #[cfg(any(
+        windows,
+        all(test, not(any(target_vendor = "apple", target_os = "android")))
+    ))]
     pub(crate) fn items(&self) -> impl Iterator<Item = &MenuItem> {
         self.menus
             .iter()

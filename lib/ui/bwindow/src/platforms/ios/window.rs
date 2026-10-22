@@ -166,7 +166,6 @@ const fn ui_user_interface_style(theme: Theme) -> isize {
 
 // MARK: PlatformWindow
 pub(super) struct PlatformWindowData {
-    host: Rc<ContentHost>,
     window_id: crate::WindowId,
     controller: Retained<WindowViewController>,
 }
@@ -219,7 +218,6 @@ impl PlatformWindow {
             show_window(scene, &controller);
         }
         PlatformWindow(Box::new(PlatformWindowData {
-            host,
             window_id: builder.window_id,
             controller,
         }))
