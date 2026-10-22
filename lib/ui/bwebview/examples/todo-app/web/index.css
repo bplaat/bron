@@ -188,6 +188,7 @@ MARK: Components
 
 .field.has-addons .input {
     flex: 1;
+    min-width: 0;
 }
 
 .placeholder {
@@ -209,6 +210,8 @@ MARK: Application
 */
 .app {
     overflow: auto;
+    padding: calc(1rem + env(safe-area-inset-top)) calc(1rem + env(safe-area-inset-right))
+        calc(1rem + env(safe-area-inset-bottom)) calc(1rem + env(safe-area-inset-left));
 }
 
 /* Add todo form */
