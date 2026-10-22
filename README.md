@@ -177,6 +177,7 @@ Most of these libraries are intended primarily for personal use, but can still b
 - [copy_dir](lib/sys/copy_dir) A minimal replacement for the [copy_dir](https://crates.io/crates/copy_dir) crate
 - [directories](lib/sys/directories) A minimal replacement for the [directories](https://crates.io/crates/directories) crate
 - [enable-ansi-support](lib/sys/enable-ansi-support) A minimal replacement for the [enable-ansi-support](https://crates.io/crates/enable-ansi-support) crate
+- [jni](lib/sys/jni) A minimal replacement for the [jni](https://crates.io/crates/jni) crate
 - [keyring](lib/sys/keyring) A minimal replacement for the [keyring](https://crates.io/crates/keyring) crate
 - [rusb](lib/sys/rusb) A minimal replacement for the [rusb](https://crates.io/crates/rusb) crate
 - [simple_logger](lib/sys/simple_logger) A minimal replacement for the [simple_logger](https://crates.io/crates/simple_logger) crate
