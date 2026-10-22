@@ -127,9 +127,12 @@ impl PlatformOffscreenCanvas {
         }
     }
 
-    pub(crate) fn begin_draw(&mut self) -> PlatformCanvasContext {
+    pub(crate) fn begin_draw(&mut self, scale: f32) -> PlatformCanvasContext {
         let target = self.target.as_ref().expect("live bitmap target");
-        unsafe { target.native.BeginDraw() };
+        unsafe {
+            target.native.SetDpi(96.0 * scale, 96.0 * scale);
+            target.native.BeginDraw();
+        }
         PlatformCanvasContext::new(target, self.resources.clone())
     }
 

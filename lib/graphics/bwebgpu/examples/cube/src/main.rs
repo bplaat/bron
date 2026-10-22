@@ -26,6 +26,7 @@ struct Gpu {
     overlay_group: bwebgpu::BindGroup,
     overlay_texture: bwebgpu::Texture,
     overlay_canvas: OffscreenCanvas,
+    overlay_layout: bwebgpu::BindGroupLayout,
     displayed_fps: u32,
     // The safe area top and right insets in pixels, which the FPS overlay stays inside.
     overlay_inset: (f32, f32),
@@ -39,6 +40,7 @@ struct Gpu {
 impl Gpu {
     fn new(attachment: bwindow::WindowAttachment) -> Self {
         // Configure the surface and device
+        let scale = attachment.scale_factor();
         let instance = bwebgpu::Instance::default();
         let surface = instance.create_surface(attachment).expect("Create surface");
         let adapter = instance
@@ -215,41 +217,8 @@ impl Gpu {
             multiview_mask: None,
             cache: None,
         });
-        let overlay_canvas = OffscreenCanvas::new(120, 36);
-        let overlay_texture = device.create_texture(&bwebgpu::TextureDescriptor {
-            label: None,
-            size: bwebgpu::Extent3d {
-                width: overlay_canvas.width(),
-                height: overlay_canvas.height(),
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: bwebgpu::TextureDimension::D2,
-            format: bwebgpu::TextureFormat::Rgba8UnormSrgb,
-            usage: bwebgpu::TextureUsages::TEXTURE_BINDING | bwebgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
-        });
-        let overlay_view = overlay_texture.create_view(&Default::default());
-        let overlay_sampler = device.create_sampler(&bwebgpu::SamplerDescriptor {
-            mag_filter: bwebgpu::FilterMode::Linear,
-            min_filter: bwebgpu::FilterMode::Linear,
-            ..Default::default()
-        });
-        let overlay_group = device.create_bind_group(&bwebgpu::BindGroupDescriptor {
-            label: None,
-            layout: &overlay_layout,
-            entries: &[
-                bwebgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: bwebgpu::BindingResource::TextureView(&overlay_view),
-                },
-                bwebgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: bwebgpu::BindingResource::Sampler(&overlay_sampler),
-                },
-            ],
-        });
+        let (overlay_canvas, overlay_texture, overlay_group) =
+            Self::create_overlay(&device, &overlay_layout, scale);
 
         // Upload the cube mesh and texture
         let uniforms = device.create_buffer(&bwebgpu::BufferDescriptor {
@@ -272,6 +241,7 @@ impl Gpu {
             overlay_group,
             overlay_texture,
             overlay_canvas,
+            overlay_layout,
             displayed_fps: u32::MAX,
             overlay_inset: (0.0, 0.0),
             uniforms,
@@ -304,9 +274,64 @@ impl Gpu {
             .create_view(&Default::default())
     }
 
+    fn create_overlay(
+        device: &bwebgpu::Device,
+        overlay_layout: &bwebgpu::BindGroupLayout,
+        scale: f32,
+    ) -> (OffscreenCanvas, bwebgpu::Texture, bwebgpu::BindGroup) {
+        let overlay_canvas = OffscreenCanvas::with_scale_factor(120, 36, scale);
+        let overlay_texture = device.create_texture(&bwebgpu::TextureDescriptor {
+            label: None,
+            size: bwebgpu::Extent3d {
+                width: overlay_canvas.width(),
+                height: overlay_canvas.height(),
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: bwebgpu::TextureDimension::D2,
+            format: bwebgpu::TextureFormat::Rgba8UnormSrgb,
+            usage: bwebgpu::TextureUsages::TEXTURE_BINDING | bwebgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let overlay_view = overlay_texture.create_view(&Default::default());
+        let overlay_sampler = device.create_sampler(&bwebgpu::SamplerDescriptor {
+            mag_filter: bwebgpu::FilterMode::Linear,
+            min_filter: bwebgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+        let overlay_group = device.create_bind_group(&bwebgpu::BindGroupDescriptor {
+            label: None,
+            layout: overlay_layout,
+            entries: &[
+                bwebgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: bwebgpu::BindingResource::TextureView(&overlay_view),
+                },
+                bwebgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: bwebgpu::BindingResource::Sampler(&overlay_sampler),
+                },
+            ],
+        });
+        (overlay_canvas, overlay_texture, overlay_group)
+    }
+
     fn set_safe_area(&mut self, safe_area: LogicalInsets, window_size: LogicalSize) {
-        let scale = self.surface.size().0 as f32 / window_size.width.max(1.0);
+        let width = self.surface.size().0;
+        if width == 0 || window_size.width <= 0.0 {
+            return;
+        }
+        let scale = width as f32 / window_size.width;
         self.overlay_inset = (safe_area.top * scale, safe_area.right * scale);
+        if (self.overlay_canvas.scale_factor() - scale).abs() > 0.001 {
+            (
+                self.overlay_canvas,
+                self.overlay_texture,
+                self.overlay_group,
+            ) = Self::create_overlay(&self.device, &self.overlay_layout, scale);
+            self.displayed_fps = u32::MAX;
+        }
     }
 
     fn resize(&mut self) {
@@ -502,10 +527,11 @@ impl Gpu {
 
             let overlay_width = self.overlay_canvas.width() as f32;
             let overlay_height = self.overlay_canvas.height() as f32;
+            let padding = 8.0 * self.overlay_canvas.scale_factor();
             let (top, right) = self.overlay_inset;
             pass.set_viewport(
-                (self.config.width as f32 - overlay_width - right - 8.0).max(0.0),
-                top + 8.0,
+                (self.config.width as f32 - overlay_width - right - padding).max(0.0),
+                top + padding,
                 overlay_width,
                 overlay_height,
                 0.0,
@@ -534,7 +560,7 @@ impl Gpu {
         self.overlay_canvas.draw(|ctx| {
             ctx.clear_rect(0.0, 0.0, ctx.width(), ctx.height());
             ctx.set_fill_style(Color::rgb(255, 255, 255));
-            ctx.set_font("sans-serif", 18.0);
+            ctx.set_font("sans-serif", 16.0);
             ctx.set_text_align(TextAlign::Right);
             ctx.set_text_baseline(TextBaseline::Top);
             ctx.fill_text(format!("{fps} FPS"), ctx.width() - 8.0, 8.0);
@@ -708,6 +734,11 @@ fn main() {
         Event::Window(id, WindowEvent::Resize(size)) if id == window_id => {
             gpu.resize();
             gpu.set_safe_area(window.safe_area(), size);
+            window.request_animation_frame();
+        }
+        Event::Window(id, WindowEvent::ScaleFactorChanged(_)) if id == window_id => {
+            gpu.resize();
+            gpu.set_safe_area(window.safe_area(), window.size());
             window.request_animation_frame();
         }
         Event::Window(id, WindowEvent::SafeAreaChanged(safe_area)) if id == window_id => {

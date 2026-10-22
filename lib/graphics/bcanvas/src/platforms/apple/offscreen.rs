@@ -45,12 +45,18 @@ impl PlatformOffscreenCanvas {
         }
     }
 
-    pub(crate) fn begin_draw(&mut self) -> PlatformCanvasContext {
+    pub(crate) fn begin_draw(&mut self, scale: f32) -> PlatformCanvasContext {
         self.dirty = true;
-        unsafe { PlatformCanvasContext::new(self.context, self.text_styles.clone()) }
+        unsafe {
+            CGContextSaveGState(self.context);
+            CGContextScaleCTM(self.context, f64::from(scale), f64::from(scale));
+            PlatformCanvasContext::new(self.context, self.text_styles.clone())
+        }
     }
 
-    pub(crate) const fn end_draw(&mut self) {}
+    pub(crate) fn end_draw(&mut self) {
+        unsafe { CGContextRestoreGState(self.context) };
+    }
 
     pub(crate) fn pixels(&mut self) -> &[u8] {
         if self.dirty {
