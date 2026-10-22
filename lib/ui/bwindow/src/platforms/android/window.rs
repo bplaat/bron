@@ -7,13 +7,16 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use super::activity::{android_activity, set_dark_mode, set_system_bar_appearance};
+use jni::sys::jint;
+use jni::{JValue, jni_sig, jni_str};
+
+use super::activity::{
+    android_activity, android_with_env, set_dark_mode, set_system_bar_appearance,
+};
 use super::event_loop::{
     android_post_local, android_surface, android_window_size, content_size, safe_area, send_event,
     stop, system_theme,
 };
-use super::headers::*;
-use super::jni::JniEnv;
 use crate::content::ContentHost;
 use crate::{
     CloseRequest, Event, LogicalInsets, LogicalPoint, LogicalSize, NativeWindowHandle, Theme,
@@ -110,35 +113,37 @@ pub fn android_default_background() -> u32 {
 
 // Fill the window surface, with the same hardware canvas producer bcanvas draws with.
 fn paint_background(host: &ContentHost) {
-    let surface = android_surface();
-    if surface.is_null() || host.is_closed() {
+    let Some(surface) = android_surface() else {
+        return;
+    };
+    if host.is_closed() {
         return;
     }
     let color = host.background().unwrap_or_else(android_default_background);
-    let env = JniEnv::current();
-    unsafe {
-        let canvas = env.call_object_method(
-            surface,
-            c"lockHardwareCanvas",
-            c"()Landroid/graphics/Canvas;",
-            &[],
-        );
-        env.call_void_method(
-            canvas,
-            c"drawColor",
-            c"(I)V",
-            &[jvalue {
-                i: (color | 0xff00_0000) as jint,
-            }],
-        );
-        env.call_void_method(
-            surface,
-            c"unlockCanvasAndPost",
-            c"(Landroid/graphics/Canvas;)V",
-            &[jvalue { l: canvas }],
-        );
-        env.delete_local_ref(canvas);
-    }
+    android_with_env(|env| {
+        let canvas = env
+            .call_method(
+                surface.as_obj(),
+                jni_str!("lockHardwareCanvas"),
+                jni_sig!("()Landroid/graphics/Canvas;"),
+                &[],
+            )?
+            .l()?;
+        env.call_method(
+            &canvas,
+            jni_str!("drawColor"),
+            jni_sig!("(I)V"),
+            &[JValue::Int((color | 0xff00_0000) as jint)],
+        )?
+        .v()?;
+        env.call_method(
+            surface.as_obj(),
+            jni_str!("unlockCanvasAndPost"),
+            jni_sig!("(Landroid/graphics/Canvas;)V"),
+            &[(&canvas).into()],
+        )?
+        .v()
+    });
 }
 
 // MARK: Window
@@ -154,7 +159,9 @@ impl PlatformWindow {
 
     pub(crate) fn new(builder: &WindowBuilder, host: Rc<ContentHost>) -> Self {
         assert!(current().is_none(), "Android supports only one open window");
-        host.set_handle(NativeWindowHandle::Android(android_activity()));
+        host.set_handle(NativeWindowHandle::Android(
+            android_activity().as_raw().cast(),
+        ));
         let mut window = Self {
             id: builder.window_id,
             host: host.clone(),
@@ -169,7 +176,7 @@ impl PlatformWindow {
         send_event(Event::Window(builder.window_id, WindowEvent::Create));
         // Report the theme, and the size when the window surface exists already.
         android_post_local(|| {
-            let has_surface = !android_surface().is_null();
+            let has_surface = android_surface().is_some();
             configuration_changed(has_surface, has_surface);
         });
         window

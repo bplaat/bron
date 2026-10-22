@@ -6,22 +6,39 @@
 
 use std::ffi::{CStr, CString, c_int, c_void};
 use std::ptr::null_mut;
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicPtr, Ordering};
+
+use jni::errors::Result;
+use jni::objects::{Global, JObject};
+use jni::sys::jint;
+use jni::vm::JavaVM;
+use jni::{Env, JValue, jni_sig, jni_str};
 
 use super::event_loop::{self, DISPLAY, Queue, android_post, post_and_wait};
 use super::headers::*;
-use super::jni::{self, JniEnv};
 use super::window;
 
 // The framework android.app.NativeActivity hosts the single window, its callbacks run on
 // the Android UI thread. The process runs one Rust main and exits with the activity.
 static ACTIVITY: AtomicPtr<ANativeActivity> = AtomicPtr::new(null_mut());
-static ACTIVITY_OBJECT: AtomicPtr<c_void> = AtomicPtr::new(null_mut());
+pub(super) static ACTIVITY_OBJECT: OnceLock<Global<JObject<'static>>> = OnceLock::new();
 static UI_QUEUE: Queue = Queue::new();
 
-/// The JNI global reference to the running `android.app.NativeActivity`.
-pub fn android_activity() -> jobject {
-    ACTIVITY_OBJECT.load(Ordering::Acquire)
+/// The running `android.app.NativeActivity`.
+pub fn android_activity() -> &'static JObject<'static> {
+    ACTIVITY_OBJECT
+        .get()
+        .expect("the activity is not created")
+        .as_obj()
+}
+
+/// Run `f` with the JNI environment of the current thread in a new local reference frame,
+/// attaching the thread when needed. Java exceptions and JNI errors panic.
+pub fn android_with_env<T>(f: impl FnOnce(&mut Env) -> Result<T>) -> T {
+    JavaVM::singleton()
+        .and_then(|vm| vm.attach_current_thread(f))
+        .expect("JNI call failed")
 }
 
 /// Run `task` on the Android UI thread, callable from every thread.
@@ -35,6 +52,10 @@ pub(super) fn finish() {
     if !activity.is_null() {
         unsafe { ANativeActivity_finish(activity) };
     }
+}
+
+fn sdk_version() -> i32 {
+    unsafe { (*ACTIVITY.load(Ordering::Acquire)).sdkVersion }
 }
 
 // Exported to the framework NativeActivity, which loads the library named by its
@@ -63,20 +84,21 @@ unsafe extern "C" fn ANativeActivity_onCreate(
         callbacks.onContentRectChanged = Some(on_content_rect_changed);
         callbacks.onConfigurationChanged = Some(on_configuration_changed);
 
-        let env = JniEnv::from_raw((*activity).env);
-        jni::init((*activity).vm, env, (*activity).clazz);
-        ACTIVITY_OBJECT.store(env.new_global_ref((*activity).clazz), Ordering::Release);
+        JavaVM::from_raw((*activity).vm);
+        let clazz = (*activity).clazz;
+        let object = android_with_env(|env| env.new_global_ref(JObject::from_raw(env, clazz)));
+        let _ = ACTIVITY_OBJECT.set(object);
         ACTIVITY.store(activity, Ordering::Release);
         UI_QUEUE.attach();
 
         // NativeActivity defaults to a 16-bit RGB_565 window.
         ANativeActivity_setWindowFormat(activity, WINDOW_FORMAT_RGBA_8888);
-        // Follow the system theme until the app calls set_theme, also after a crash.
-        set_night_mode(env, NIGHT_MODE_AUTO);
-        draw_behind_system_bars(env, (*activity).sdkVersion);
-        update_configuration(activity);
-        event_loop::start(binary_name());
     }
+    // Follow the system theme until the app calls set_theme, also after a crash.
+    set_night_mode(NIGHT_MODE_AUTO);
+    draw_behind_system_bars();
+    update_configuration();
+    event_loop::start(binary_name());
 }
 
 // MARK: Callbacks
@@ -85,10 +107,7 @@ unsafe extern "C" fn on_destroy(activity: *mut ANativeActivity) {
         return;
     }
     // The system persists the application night mode, don't leak set_theme into the next launch.
-    set_night_mode(
-        unsafe { JniEnv::from_raw((*activity).env) },
-        NIGHT_MODE_AUTO,
-    );
+    set_night_mode(NIGHT_MODE_AUTO);
     // The Rust main function runs once per process, start a fresh process next time.
     std::process::exit(0);
 }
@@ -156,15 +175,15 @@ unsafe extern "C" fn on_input_queue_destroyed(_: *mut ANativeActivity, queue: *m
     });
 }
 
-unsafe extern "C" fn on_content_rect_changed(activity: *mut ANativeActivity, _: *const ARect) {
-    if unsafe { update_insets(activity) } {
+unsafe extern "C" fn on_content_rect_changed(_: *mut ANativeActivity, _: *const ARect) {
+    if update_insets() {
         android_post(window::safe_area_changed);
     }
 }
 
-unsafe extern "C" fn on_configuration_changed(activity: *mut ANativeActivity) {
-    let density_changed = unsafe { update_configuration(activity) };
-    let insets_changed = unsafe { update_insets(activity) };
+unsafe extern "C" fn on_configuration_changed(_: *mut ANativeActivity) {
+    let density_changed = update_configuration();
+    let insets_changed = update_insets();
     // The insets are in dp, so a density change also changes them.
     android_post(move || {
         window::configuration_changed(density_changed, density_changed || insets_changed);
@@ -196,76 +215,80 @@ fn binary_name() -> CString {
 /// Force the light or dark theme for this app, callable from every thread.
 pub(super) fn set_dark_mode(dark: bool) {
     android_run_on_ui_thread(move || {
-        set_night_mode(
-            JniEnv::current(),
-            if dark { NIGHT_MODE_YES } else { NIGHT_MODE_NO },
-        );
+        set_night_mode(if dark { NIGHT_MODE_YES } else { NIGHT_MODE_NO });
     });
 }
 
 // The application night mode exists since Android 12, older versions follow the system.
-fn set_night_mode(env: JniEnv, mode: jint) {
-    let activity = ACTIVITY.load(Ordering::Acquire);
-    if unsafe { (*activity).sdkVersion } < ANDROID_S {
+fn set_night_mode(mode: jint) {
+    if sdk_version() < ANDROID_S {
         return;
     }
-    unsafe {
-        let name = env.new_string("uimode");
-        let manager = env.call_object_method(
-            android_activity(),
-            c"getSystemService",
-            c"(Ljava/lang/String;)Ljava/lang/Object;",
-            &[jvalue { l: name }],
-        );
-        env.call_void_method(
-            manager,
-            c"setApplicationNightMode",
-            c"(I)V",
-            &[jvalue { i: mode }],
-        );
-        env.delete_local_ref(manager);
-        env.delete_local_ref(name);
-    }
+    android_with_env(|env| {
+        let name = env.new_string("uimode")?;
+        let manager = env
+            .call_method(
+                android_activity(),
+                jni_str!("getSystemService"),
+                jni_sig!("(Ljava/lang/String;)Ljava/lang/Object;"),
+                &[(&name).into()],
+            )?
+            .l()?;
+        env.call_method(
+            &manager,
+            jni_str!("setApplicationNightMode"),
+            jni_sig!("(I)V"),
+            &[JValue::Int(mode)],
+        )?
+        .v()
+    });
 }
 
-unsafe fn window_and_decor_view(env: JniEnv) -> (jobject, jobject) {
-    unsafe {
-        let window = env.call_object_method(
+fn window_and_decor_view<'local>(
+    env: &mut Env<'local>,
+) -> Result<(JObject<'local>, JObject<'local>)> {
+    let window = env
+        .call_method(
             android_activity(),
-            c"getWindow",
-            c"()Landroid/view/Window;",
+            jni_str!("getWindow"),
+            jni_sig!("()Landroid/view/Window;"),
             &[],
-        );
-        let decor = env.call_object_method(window, c"getDecorView", c"()Landroid/view/View;", &[]);
-        (window, decor)
-    }
+        )?
+        .l()?;
+    let decor = env
+        .call_method(
+            &window,
+            jni_str!("getDecorView"),
+            jni_sig!("()Landroid/view/View;"),
+            &[],
+        )?
+        .l()?;
+    Ok((window, decor))
 }
 
 // Draw behind the system bars, update_insets reads the safe area.
-unsafe fn draw_behind_system_bars(env: JniEnv, sdk: i32) {
+fn draw_behind_system_bars() {
     const LAYOUT_STABLE_FULLSCREEN_HIDE_NAVIGATION: jint = 0x700;
-    unsafe {
-        let (window, decor) = window_and_decor_view(env);
-        if sdk >= ANDROID_R {
-            env.call_void_method(
-                window,
-                c"setDecorFitsSystemWindows",
-                c"(Z)V",
-                &[jvalue { z: 0 }],
-            );
+    android_with_env(|env| {
+        let (window, decor) = window_and_decor_view(env)?;
+        if sdk_version() >= ANDROID_R {
+            env.call_method(
+                &window,
+                jni_str!("setDecorFitsSystemWindows"),
+                jni_sig!("(Z)V"),
+                &[JValue::Bool(false)],
+            )?
+            .v()
         } else {
-            env.call_void_method(
-                decor,
-                c"setSystemUiVisibility",
-                c"(I)V",
-                &[jvalue {
-                    i: LAYOUT_STABLE_FULLSCREEN_HIDE_NAVIGATION,
-                }],
-            );
+            env.call_method(
+                &decor,
+                jni_str!("setSystemUiVisibility"),
+                jni_sig!("(I)V"),
+                &[JValue::Int(LAYOUT_STABLE_FULLSCREEN_HIDE_NAVIGATION)],
+            )?
+            .v()
         }
-        env.delete_local_ref(decor);
-        env.delete_local_ref(window);
-    }
+    });
 }
 
 /// Use light or dark system bar icons for a window background color, callable from every thread.
@@ -275,146 +298,159 @@ pub(super) fn set_system_bar_appearance(color: u32) {
     android_run_on_ui_thread(move || {
         const APPEARANCE_LIGHT_BARS: jint = 0x8 | 0x10;
         const LIGHT_STATUS_AND_NAVIGATION_BAR: jint = 0x2000 | 0x10;
-        let env = JniEnv::current();
-        let sdk = unsafe { (*ACTIVITY.load(Ordering::Acquire)).sdkVersion };
-        unsafe {
-            let (window, decor) = window_and_decor_view(env);
-            if sdk >= ANDROID_R {
-                let controller = env.call_object_method(
-                    window,
-                    c"getInsetsController",
-                    c"()Landroid/view/WindowInsetsController;",
-                    &[],
-                );
-                if !controller.is_null() {
-                    env.call_void_method(
-                        controller,
-                        c"setSystemBarsAppearance",
-                        c"(II)V",
-                        &[
-                            jvalue {
-                                i: if light { APPEARANCE_LIGHT_BARS } else { 0 },
-                            },
-                            jvalue {
-                                i: APPEARANCE_LIGHT_BARS,
-                            },
-                        ],
-                    );
+        android_with_env(|env| {
+            let (window, decor) = window_and_decor_view(env)?;
+            if sdk_version() >= ANDROID_R {
+                let controller = env
+                    .call_method(
+                        &window,
+                        jni_str!("getInsetsController"),
+                        jni_sig!("()Landroid/view/WindowInsetsController;"),
+                        &[],
+                    )?
+                    .l()?;
+                if controller.is_null() {
+                    return Ok(());
                 }
+                env.call_method(
+                    &controller,
+                    jni_str!("setSystemBarsAppearance"),
+                    jni_sig!("(II)V"),
+                    &[
+                        JValue::Int(if light { APPEARANCE_LIGHT_BARS } else { 0 }),
+                        JValue::Int(APPEARANCE_LIGHT_BARS),
+                    ],
+                )?
+                .v()
             } else {
-                let class = env.object_class(decor);
-                let get = env.method(class, c"getSystemUiVisibility", c"()I");
-                let visibility = env.call_int(decor, get, &[]);
+                let visibility = env
+                    .call_method(
+                        &decor,
+                        jni_str!("getSystemUiVisibility"),
+                        jni_sig!("()I"),
+                        &[],
+                    )?
+                    .i()?;
                 let visibility = if light {
                     visibility | LIGHT_STATUS_AND_NAVIGATION_BAR
                 } else {
                     visibility & !LIGHT_STATUS_AND_NAVIGATION_BAR
                 };
-                env.call_void_method(
-                    decor,
-                    c"setSystemUiVisibility",
-                    c"(I)V",
-                    &[jvalue { i: visibility }],
-                );
-                env.delete_local_ref(class);
+                env.call_method(
+                    &decor,
+                    jni_str!("setSystemUiVisibility"),
+                    jni_sig!("(I)V"),
+                    &[JValue::Int(visibility)],
+                )?
+                .v()
             }
-            env.delete_local_ref(decor);
-            env.delete_local_ref(window);
-        }
+        });
     });
 }
 
 // Read the density, screen size, and night mode, returns whether the density changed.
 // The activity configuration is current in onConfigurationChanged, unlike AConfiguration.
-unsafe fn update_configuration(activity: *mut ANativeActivity) -> bool {
+fn update_configuration() -> bool {
     const DENSITY_MEDIUM: f32 = 160.0;
     const UI_MODE_NIGHT_MASK: jint = 0x30;
     const UI_MODE_NIGHT_YES: jint = 0x20;
-    unsafe {
-        let env = JniEnv::from_raw((*activity).env);
-        let resources = env.call_object_method(
-            (*activity).clazz,
-            c"getResources",
-            c"()Landroid/content/res/Resources;",
-            &[],
-        );
-        let config = env.call_object_method(
-            resources,
-            c"getConfiguration",
-            c"()Landroid/content/res/Configuration;",
-            &[],
-        );
-        let field = |name: &CStr| env.int_field(config, name).max(0) as u32;
-        let density = field(c"densityDpi") as f32 / DENSITY_MEDIUM;
-        DISPLAY.dark.store(
-            env.int_field(config, c"uiMode") & UI_MODE_NIGHT_MASK == UI_MODE_NIGHT_YES,
-            Ordering::Relaxed,
-        );
-        DISPLAY
-            .screen_width_dp
-            .store(field(c"screenWidthDp"), Ordering::Relaxed);
-        DISPLAY
-            .screen_height_dp
-            .store(field(c"screenHeightDp"), Ordering::Relaxed);
-        env.delete_local_ref(config);
-        env.delete_local_ref(resources);
-        DISPLAY.density.swap(density.to_bits(), Ordering::Relaxed) != density.to_bits()
-    }
+    let [density_dpi, ui_mode, screen_width_dp, screen_height_dp] = android_with_env(|env| {
+        let resources = env
+            .call_method(
+                android_activity(),
+                jni_str!("getResources"),
+                jni_sig!("()Landroid/content/res/Resources;"),
+                &[],
+            )?
+            .l()?;
+        let config = env
+            .call_method(
+                &resources,
+                jni_str!("getConfiguration"),
+                jni_sig!("()Landroid/content/res/Configuration;"),
+                &[],
+            )?
+            .l()?;
+        let mut values = [0; 4];
+        for (value, name) in values.iter_mut().zip([
+            jni_str!("densityDpi"),
+            jni_str!("uiMode"),
+            jni_str!("screenWidthDp"),
+            jni_str!("screenHeightDp"),
+        ]) {
+            *value = env.get_field(&config, name, jni_sig!("I"))?.i()?;
+        }
+        Ok(values)
+    });
+    let density = density_dpi.max(0) as f32 / DENSITY_MEDIUM;
+    DISPLAY.dark.store(
+        ui_mode & UI_MODE_NIGHT_MASK == UI_MODE_NIGHT_YES,
+        Ordering::Relaxed,
+    );
+    DISPLAY
+        .screen_width_dp
+        .store(screen_width_dp.max(0) as u32, Ordering::Relaxed);
+    DISPLAY
+        .screen_height_dp
+        .store(screen_height_dp.max(0) as u32, Ordering::Relaxed);
+    DISPLAY.density.swap(density.to_bits(), Ordering::Relaxed) != density.to_bits()
 }
 
 // Read the system bar and display cutout insets, returns whether they changed.
-unsafe fn update_insets(activity: *mut ANativeActivity) -> bool {
-    unsafe {
-        let env = JniEnv::from_raw((*activity).env);
-        let (window, decor) = window_and_decor_view(env);
-        let insets = env.call_object_method(
-            decor,
-            c"getRootWindowInsets",
-            c"()Landroid/view/WindowInsets;",
-            &[],
-        );
-        let values = if insets.is_null() {
-            [0; 4]
-        } else if (*activity).sdkVersion >= ANDROID_R {
-            let types = env.find_class(c"android/view/WindowInsets$Type");
-            let type_mask = |name: &CStr| {
-                let method = env.static_method(types, name, c"()I");
-                env.call_static_int(types, method, &[])
-            };
-            let mask = type_mask(c"systemBars") | type_mask(c"displayCutout");
-            let rect = env.call_object_method(
-                insets,
-                c"getInsets",
-                c"(I)Landroid/graphics/Insets;",
-                &[jvalue { i: mask }],
-            );
-            let values =
-                [c"left", c"top", c"right", c"bottom"].map(|name| env.int_field(rect, name));
-            env.delete_local_ref(rect);
-            env.delete_local_ref(types);
-            values
-        } else {
-            let class = env.object_class(insets);
-            let values = [
-                c"getSystemWindowInsetLeft",
-                c"getSystemWindowInsetTop",
-                c"getSystemWindowInsetRight",
-                c"getSystemWindowInsetBottom",
-            ]
-            .map(|name| {
-                let method = env.method(class, name, c"()I");
-                env.call_int(insets, method, &[])
-            });
-            env.delete_local_ref(class);
-            values
-        };
-        env.delete_local_ref(insets);
-        env.delete_local_ref(decor);
-        env.delete_local_ref(window);
-        let mut changed = false;
-        for (inset, value) in DISPLAY.insets.iter().zip(values) {
-            changed |= inset.swap(value.max(0) as u32, Ordering::Relaxed) != value.max(0) as u32;
+fn update_insets() -> bool {
+    let values = android_with_env(|env| {
+        let (_, decor) = window_and_decor_view(env)?;
+        let insets = env
+            .call_method(
+                &decor,
+                jni_str!("getRootWindowInsets"),
+                jni_sig!("()Landroid/view/WindowInsets;"),
+                &[],
+            )?
+            .l()?;
+        let mut values = [0; 4];
+        if insets.is_null() {
+            return Ok(values);
         }
-        changed
+        if sdk_version() >= ANDROID_R {
+            let types = env.find_class(jni_str!("android/view/WindowInsets$Type"))?;
+            let mut mask = 0;
+            for name in [jni_str!("systemBars"), jni_str!("displayCutout")] {
+                mask |= env
+                    .call_static_method(&types, name, jni_sig!("()I"), &[])?
+                    .i()?;
+            }
+            let rect = env
+                .call_method(
+                    &insets,
+                    jni_str!("getInsets"),
+                    jni_sig!("(I)Landroid/graphics/Insets;"),
+                    &[JValue::Int(mask)],
+                )?
+                .l()?;
+            for (value, name) in values.iter_mut().zip([
+                jni_str!("left"),
+                jni_str!("top"),
+                jni_str!("right"),
+                jni_str!("bottom"),
+            ]) {
+                *value = env.get_field(&rect, name, jni_sig!("I"))?.i()?;
+            }
+        } else {
+            for (value, name) in values.iter_mut().zip([
+                jni_str!("getSystemWindowInsetLeft"),
+                jni_str!("getSystemWindowInsetTop"),
+                jni_str!("getSystemWindowInsetRight"),
+                jni_str!("getSystemWindowInsetBottom"),
+            ]) {
+                *value = env.call_method(&insets, name, jni_sig!("()I"), &[])?.i()?;
+            }
+        }
+        Ok(values)
+    });
+    let mut changed = false;
+    for (inset, value) in DISPLAY.insets.iter().zip(values) {
+        changed |= inset.swap(value.max(0) as u32, Ordering::Relaxed) != value.max(0) as u32;
     }
+    changed
 }
