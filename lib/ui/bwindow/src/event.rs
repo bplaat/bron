@@ -50,11 +50,15 @@ pub enum WindowEvent {
     MouseMove {
         /// Current position.
         position: LogicalPoint,
+        /// Movement since the previous event, analogous to DOM `movementX`/`movementY`.
+        movement: LogicalPoint,
         /// Active keyboard modifiers.
         modifiers: crate::Modifiers,
     },
     /// Pointer left the client area.
     MouseLeave,
+    /// The window's pointer-lock state changed, analogous to DOM `pointerlockchange`.
+    PointerLockChange,
     /// A mouse button was pressed.
     MouseDown(crate::MouseEvent),
     /// A mouse button was released.

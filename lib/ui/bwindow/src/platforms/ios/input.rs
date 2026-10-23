@@ -37,6 +37,7 @@ pub(super) unsafe fn ios_touch_event(
         }
         None => WindowEvent::MouseMove {
             position,
+            movement: LogicalPoint::default(),
             modifiers,
         },
     }

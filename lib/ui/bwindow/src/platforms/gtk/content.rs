@@ -16,7 +16,7 @@ use std::ptr::{null, null_mut};
 
 use super::headers::*;
 use super::input::gtk_input_event;
-use crate::{CursorIcon, WindowEvent, WindowEventSender};
+use crate::{CursorIcon, PointerLockError, WindowEvent, WindowEventSender};
 
 // Motion, buttons, key presses and releases, enter/leave, focus, scroll and smooth scroll.
 const INPUT_EVENTS: i32 = (1 << 2)
@@ -34,6 +34,8 @@ const G_SIGNAL_MATCH_DATA: u32 = 16;
 const GDK_BUTTON_PRESS: i32 = 4;
 const GDK_KEY_PRESS: i32 = 8;
 const GDK_KEY_RELEASE: i32 = 9;
+const GDK_SEAT_CAPABILITY_POINTER: u32 = 1;
+const GDK_BLANK_CURSOR: i32 = -2;
 
 unsafe extern "C" {
     fn gtk_drawing_area_new() -> *mut GtkWidget;
@@ -46,6 +48,19 @@ unsafe extern "C" {
     fn gdk_window_get_display(window: *mut c_void) -> *mut GdkDisplay;
     fn gdk_cursor_new_from_name(display: *mut GdkDisplay, name: *const c_char) -> *mut GObject;
     fn gdk_window_set_cursor(window: *mut c_void, cursor: *mut GObject);
+    fn gdk_display_get_default_seat(display: *mut GdkDisplay) -> *mut c_void;
+    fn gdk_cursor_new_for_display(display: *mut GdkDisplay, cursor_type: i32) -> *mut GObject;
+    fn gdk_seat_grab(
+        seat: *mut c_void,
+        window: *mut c_void,
+        capabilities: u32,
+        owner_events: i32,
+        cursor: *mut GObject,
+        event: *const GdkEvent,
+        prepare_func: *const c_void,
+        prepare_func_data: *mut c_void,
+    ) -> i32;
+    fn gdk_seat_ungrab(seat: *mut c_void);
 }
 
 /// The content host and interaction state of one window.
@@ -155,14 +170,58 @@ impl Content {
         }
     }
 
-    fn apply_cursor(&self) {
-        let widget = if self.area.get().is_null() {
+    /// Hide the pointer and grab it for the content.
+    pub(super) fn lock_pointer(&self) -> Result<(), PointerLockError> {
+        unsafe {
+            let window = gtk_widget_get_window(self.widget());
+            if window.is_null() {
+                return Err(PointerLockError("window is not realized".into()));
+            }
+            let display = gdk_window_get_display(window);
+            let seat = gdk_display_get_default_seat(display);
+            if seat.is_null() {
+                return Err(PointerLockError(
+                    "Could not access the native pointer device".into(),
+                ));
+            }
+            let cursor = gdk_cursor_new_for_display(display, GDK_BLANK_CURSOR);
+            if cursor.is_null() {
+                return Err(PointerLockError(
+                    "Could not create a hidden pointer cursor".into(),
+                ));
+            }
+            let status = gdk_seat_grab(
+                seat,
+                window,
+                GDK_SEAT_CAPABILITY_POINTER,
+                1,
+                cursor,
+                null(),
+                null(),
+                null_mut(),
+            );
+            g_object_unref(cursor);
+            if status != 0 {
+                return Err(PointerLockError(format!(
+                    "GDK pointer lock failed with status {status}"
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    // The widget that receives the content interaction.
+    fn widget(&self) -> *mut GtkWidget {
+        if self.area.get().is_null() {
             self.window.get().cast()
         } else {
             self.area.get()
-        };
+        }
+    }
+
+    fn apply_cursor(&self) {
         unsafe {
-            let window = gtk_widget_get_window(widget);
+            let window = gtk_widget_get_window(self.widget());
             if window.is_null() {
                 return;
             }
@@ -218,6 +277,20 @@ impl Content {
     fn has_key_focus(&self) -> bool {
         let focus = unsafe { gtk_window_get_focus(self.window.get()) };
         focus.is_null() || focus == self.area.get()
+    }
+}
+
+/// Release the pointer lock of any window.
+pub(crate) fn release_pointer_lock() {
+    unsafe {
+        let display = gdk_display_get_default();
+        if display.is_null() {
+            return;
+        }
+        let seat = gdk_display_get_default_seat(display);
+        if !seat.is_null() {
+            gdk_seat_ungrab(seat);
+        }
     }
 }
 

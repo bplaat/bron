@@ -28,6 +28,11 @@ unsafe extern "C" {
     pub(crate) static NSFilenamesPboardType: *mut Object;
 }
 
+#[link(name = "ApplicationServices", kind = "framework")]
+unsafe extern "C" {
+    pub(crate) fn CGAssociateMouseAndMouseCursorPosition(connected: u32) -> i32;
+}
+
 #[derive(Clone, Copy)]
 #[repr(C)]
 pub(crate) struct CGPoint {

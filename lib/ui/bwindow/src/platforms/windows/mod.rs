@@ -10,6 +10,7 @@ pub(crate) use crate::platforms::windows::event_loop::{
     PlatformEventLoop, PlatformEventLoopProxy, PlatformMonitor,
 };
 pub(crate) use crate::platforms::windows::frame::FrameSource;
+pub(crate) use crate::platforms::windows::interaction::release_pointer_lock;
 pub(crate) use crate::platforms::windows::window::{
     PlatformWindow, config_dir as windows_config_dir,
 };

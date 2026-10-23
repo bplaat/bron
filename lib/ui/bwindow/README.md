@@ -32,6 +32,7 @@ Native input uses DOM-like names with typed Rust payloads:
 | `KeyDown` / `KeyUp`        | `keydown` / `keyup`        |
 | `MouseDown` / `MouseUp`    | `mousedown` / `mouseup`    |
 | `MouseMove` / `MouseLeave` | `mousemove` / `mouseleave` |
+| `PointerLockChange`        | `pointerlockchange`        |
 | `Wheel`                    | `wheel`                    |
 | `Focus` / `Blur`           | `focus` / `blur`           |
 
@@ -56,6 +57,10 @@ event_loop.run(|event| {
 
 - `Modifiers::META` is Command on macOS and Windows/Super elsewhere.
 - Mouse positions are logical client-area pixels, like `clientX`/`clientY`.
+- `MouseMove::movement` is the relative motion, like `movementX`/`movementY`.
+- `window.request_pointer_lock()` hides and locks the pointer, like `requestPointerLock()`,
+  it is released with `window.exit_pointer_lock()` and `window.pointer_locked()` queries
+  it. Lock changes send `PointerLockChange`. Touch screens have no pointer to lock.
 - Wheel deltas are in pixels or lines; positive values scroll right/down.
 - Only close requests can be cancelled, with `prevent_default()`.
 - IME text input is not supported.

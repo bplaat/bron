@@ -1,13 +1,14 @@
 # Produced by Icon Composer on macOS
 apps/desktop/bassielight/meta/macos/icon.icon/icon.json
-games/game2048/meta/apple/icon.icon/icon.json
 apps/macos/macview/meta/macos/icon.icon/icon.json
 apps/desktop/manexplorer/meta/macos/icon.icon/icon.json
 apps/desktop/music-dl/meta/macos/icon.icon/icon.json
 apps/desktop/navidrome/meta/macos/icon.icon/icon.json
 apps/desktop/pixelfont/meta/macos/icon.icon/icon.json
-games/reversi/meta/apple/icon.icon/icon.json
 apps/desktop/sequelexplorer/meta/macos/icon.icon/icon.json
+games/game2048/meta/apple/icon.icon/icon.json
+games/plaatcraft/meta/macos/icon.icon/icon.json
+games/reversi/meta/apple/icon.icon/icon.json
 tools/bob/examples/bin/objc-bundle-xstreaks/icons/icon.icon/icon.json
 
 # External test fixture

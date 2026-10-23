@@ -1,0 +1,42 @@
+{
+    "fill": {
+        "linear-gradient": ["srgb:0.51765,0.82353,0.96471,1.00000", "srgb:0.22353,0.55294,0.80000,1.00000"],
+        "orientation": {
+            "start": { "x": 0.5, "y": 0 },
+            "stop": { "x": 0.5, "y": 1 }
+        }
+    },
+    "groups": [
+        {
+            "layers": [{ "image-name": "sky.svg", "name": "Sun" }],
+            "name": "Sky",
+            "shadow": { "kind": "neutral", "opacity": 0 },
+            "specular-specializations": [{ "value": false }],
+            "translucency": { "enabled": false, "value": 0.5 }
+        },
+        {
+            "layers": [
+                { "image-name": "details.svg", "name": "Block details" },
+                { "image-name": "block.svg", "name": "Voxel block" }
+            ],
+            "name": "Block",
+            "shadow-specializations": [
+                { "value": { "kind": "neutral", "opacity": 0.5 } },
+                { "appearance": "dark", "value": { "kind": "neutral", "opacity": 0.35 } }
+            ],
+            "specular-specializations": [{ "value": false }, { "appearance": "tinted", "value": true }],
+            "translucency-specializations": [
+                { "value": { "enabled": false, "value": 0.5 } },
+                { "appearance": "tinted", "value": { "enabled": true, "value": 0.15 } }
+            ]
+        },
+        {
+            "layers": [{ "image-name": "cloud.svg", "name": "Cloud" }],
+            "name": "Cloud",
+            "shadow": { "kind": "neutral", "opacity": 0 },
+            "specular-specializations": [{ "value": false }],
+            "translucency": { "enabled": false, "value": 0.5 }
+        }
+    ],
+    "supported-platforms": { "squares": ["macOS"] }
+}

@@ -1,0 +1,34 @@
+[package]
+name = "plaatcraft"
+version = "0.2.0"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "A first-person voxel sandbox rendered with bwebgpu"
+readme = "README.md"
+keywords = ["game", "voxel", "sandbox", "webgpu"]
+categories = ["games"]
+publish = false
+
+[package.metadata.bundle]
+name = "PlaatCraft"
+identifier = "nl.bplaat.PlaatCraft"
+copyright = "Copyright (c) 2026 Bastiaan van der Plaat"
+icon = "meta/macos/icon.icon"
+info_plist = "meta/macos/Info.plist"
+
+[dependencies]
+libsqlite3-sys = "0.38"
+miniz_oxide = "0.9"
+png = "0.18"
+rust-embed = "8.12"
+bwebgpu = { path = "../../lib/graphics/bwebgpu" }
+bwindow = { path = "../../lib/ui/bwindow", default-features = false }
+
+[build-dependencies]
+bwebgpu-shader-build = { path = "../../lib/graphics/bwebgpu-shader-build" }
+winresource = "0.1.31"
+
+[lints]
+workspace = true

@@ -240,6 +240,11 @@ pub(crate) trait WindowInterface {
     fn set_background_color(&mut self, color: u32);
     // Touch screens have no pointer cursor.
     fn set_cursor(&mut self, _cursor: CursorIcon) {}
+    // Touch screens have no pointer to lock.
+    fn request_pointer_lock(&mut self) -> Result<(), PointerLockError> {
+        Err(PointerLockError("pointer lock is not supported".into()))
+    }
+    fn exit_pointer_lock(&mut self) {}
     // Desktop windows have no system UI over their content.
     fn safe_area(&self) -> LogicalInsets {
         LogicalInsets::default()
@@ -266,6 +271,18 @@ pub(crate) trait WindowInterface {
     #[cfg(all(windows, feature = "progress_bar"))]
     fn windows_set_progress_bar(&mut self, progress: Option<f32>, state: WindowsProgressBarState);
 }
+
+/// The native window could not lock the pointer.
+#[derive(Debug)]
+pub struct PointerLockError(pub(crate) String);
+
+impl std::fmt::Display for PointerLockError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for PointerLockError {}
 
 // MARK: Window
 /// Window
@@ -306,6 +323,7 @@ impl Window {
         if self.host.is_closed() {
             return;
         }
+        self.exit_pointer_lock();
         self.host.close();
         self.platform.close()
     }
@@ -401,6 +419,33 @@ impl Window {
             return;
         }
         self.platform.set_cursor(cursor)
+    }
+
+    /// Lock and hide the pointer, analogous to DOM `requestPointerLock()`.
+    pub fn request_pointer_lock(&mut self) -> Result<(), PointerLockError> {
+        if self.is_closed() {
+            return Err(PointerLockError("window is closed".into()));
+        }
+        if self.host.pointer_locked() {
+            return Ok(());
+        }
+        self.platform.request_pointer_lock()?;
+        self.host.set_pointer_locked(true);
+        Ok(())
+    }
+
+    /// Release the pointer, analogous to DOM `document.exitPointerLock()`.
+    pub fn exit_pointer_lock(&mut self) {
+        if !self.host.pointer_locked() {
+            return;
+        }
+        self.platform.exit_pointer_lock();
+        self.host.set_pointer_locked(false);
+    }
+
+    /// Whether this window currently owns pointer lock.
+    pub fn pointer_locked(&self) -> bool {
+        self.host.pointer_locked()
     }
 
     /// Set GTK application launcher progress, use a value above `1.0` for indeterminate progress,

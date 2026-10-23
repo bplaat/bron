@@ -16,8 +16,8 @@ use super::event_loop::{allow_termination_if_last_window, send_event};
 use super::file_drop::{perform_file_drop, register_dragged_types};
 use super::headers::*;
 use crate::{
-    CloseRequest, CursorIcon, LogicalPoint, LogicalSize, MacosTitlebarStyle, Theme, WindowBuilder,
-    WindowEvent,
+    CloseRequest, CursorIcon, LogicalPoint, LogicalSize, MacosTitlebarStyle, PointerLockError,
+    Theme, WindowBuilder, WindowEvent,
 };
 
 define_class!(
@@ -652,6 +652,21 @@ impl crate::WindowInterface for PlatformWindow {
         self.0.content_view.set_cursor(cursor);
     }
 
+    fn request_pointer_lock(&mut self) -> Result<(), PointerLockError> {
+        let status = unsafe { CGAssociateMouseAndMouseCursorPosition(0) };
+        if status != 0 {
+            return Err(PointerLockError(format!(
+                "Core Graphics pointer lock failed with status {status}"
+            )));
+        }
+        let _: () = unsafe { msg_send![class!(NSCursor), hide] };
+        Ok(())
+    }
+
+    fn exit_pointer_lock(&mut self) {
+        release_pointer_lock();
+    }
+
     fn macos_titlebar_size(&self) -> LogicalSize {
         let window_frame: NSRect = unsafe { msg_send![&self.0.window, frame] };
         if let Some(titlebar_height) = self
@@ -688,6 +703,12 @@ impl crate::WindowInterface for PlatformWindow {
     fn macos_perform_titlebar_double_click(&mut self) {
         perform_titlebar_double_click(self.0.window.as_ptr());
     }
+}
+
+/// Release the pointer lock of any window.
+pub(crate) fn release_pointer_lock() {
+    let _ = unsafe { CGAssociateMouseAndMouseCursorPosition(1) };
+    let _: () = unsafe { msg_send![class!(NSCursor), unhide] };
 }
 
 pub(super) fn window_id(window: *mut Object) -> Option<crate::WindowId> {

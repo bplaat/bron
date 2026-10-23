@@ -8,7 +8,7 @@ use std::cell::{Cell, RefCell};
 use std::ffi::c_void;
 use std::rc::{Rc, Weak};
 
-use crate::{WindowEvent, WindowId};
+use crate::{LogicalPoint, WindowEvent, WindowId};
 
 /// A native top-level window for implementing a content backend.
 #[derive(Clone, Copy, Debug)]
@@ -81,6 +81,8 @@ pub(crate) struct ContentHost {
     paint: RefCell<Option<Rc<dyn Fn()>>>,
     frames: RefCell<Option<crate::platforms::FrameSource>>,
     animation_frame_pending: Cell<bool>,
+    pointer_locked: Cell<bool>,
+    pointer_position: Cell<Option<LogicalPoint>>,
 }
 
 impl ContentHost {
@@ -106,6 +108,8 @@ impl ContentHost {
             paint: RefCell::new(None),
             frames: RefCell::new(None),
             animation_frame_pending: Cell::new(false),
+            pointer_locked: Cell::new(false),
+            pointer_position: Cell::new(None),
         })
     }
 
@@ -162,6 +166,20 @@ impl ContentHost {
 
     pub(crate) const fn is_closed(&self) -> bool {
         self.closed.get()
+    }
+
+    pub(crate) const fn pointer_locked(&self) -> bool {
+        self.pointer_locked.get()
+    }
+
+    pub(crate) fn set_pointer_locked(self: &Rc<Self>, locked: bool) {
+        if self.pointer_locked.replace(locked) == locked {
+            return;
+        }
+        if !locked {
+            self.pointer_position.set(None);
+        }
+        self.event_sender().send(WindowEvent::PointerLockChange);
     }
 
     pub(crate) fn set_background(&self, color: u32) {
@@ -264,6 +282,11 @@ impl ContentHost {
         if self.closed.replace(true) {
             return;
         }
+        #[cfg(not(any(target_os = "ios", target_os = "android")))]
+        if self.pointer_locked.replace(false) {
+            crate::platforms::release_pointer_lock();
+        }
+        self.pointer_position.set(None);
         self.handle.set(None);
         self.content.set(None);
         let factory = self.content_factory.borrow_mut().take();
@@ -311,6 +334,45 @@ impl ContentHost {
     pub(crate) fn animation_frame(self: &Rc<Self>) {
         if !self.closed.get() && self.animation_frame_pending.replace(false) {
             self.request_redraw();
+        }
+    }
+
+    /// Fill in the pointer movement since the previous event. While locked the position
+    /// stays put and native relative motion is passed through.
+    fn track_pointer(&self, event: WindowEvent) -> WindowEvent {
+        match event {
+            WindowEvent::MouseMove {
+                mut position,
+                movement,
+                modifiers,
+            } => {
+                let previous = self.pointer_position.get();
+                let movement = if self.pointer_locked.get() && movement != LogicalPoint::default() {
+                    if let Some(previous) = previous {
+                        position = previous;
+                    }
+                    movement
+                } else {
+                    previous.map_or(LogicalPoint::default(), |previous| {
+                        LogicalPoint::new(position.x - previous.x, position.y - previous.y)
+                    })
+                };
+                self.pointer_position.set(Some(position));
+                WindowEvent::MouseMove {
+                    position,
+                    movement,
+                    modifiers,
+                }
+            }
+            WindowEvent::MouseDown(ref mouse) | WindowEvent::MouseUp(ref mouse) => {
+                self.pointer_position.set(Some(mouse.position));
+                event
+            }
+            WindowEvent::MouseLeave | WindowEvent::Blur => {
+                self.pointer_position.set(None);
+                event
+            }
+            _ => event,
         }
     }
 }
@@ -506,6 +568,7 @@ impl WindowEventSender {
         if let Some(host) = self.0.upgrade()
             && !host.closed.get()
         {
+            let event = host.track_pointer(event);
             let event = crate::Event::Window(host.id, event);
             if matches!(
                 &event,

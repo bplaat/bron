@@ -1,5 +1,0 @@
-.vscode/
-build/
-config.h
-*.db
-*.db-journal

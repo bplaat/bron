@@ -5,7 +5,7 @@
  */
 
 /// A point in device-independent pixels
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct LogicalPoint {
     /// X coordinate
     pub x: f32,

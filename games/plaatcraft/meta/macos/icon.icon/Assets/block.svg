@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+    <defs>
+        <linearGradient id="grass" x1="0" y1="0" x2="0.8" y2="1">
+            <stop stop-color="#98db55" />
+            <stop offset="1" stop-color="#51a33b" />
+        </linearGradient>
+    </defs>
+    <path d="m174 392 338 196v328L174 720Z" fill="#a76732" stroke="#55351f" stroke-width="18" stroke-linejoin="round" />
+    <path d="M850 392 512 588v328l338-196Z" fill="#79471f" stroke="#472a1a" stroke-width="18" stroke-linejoin="round" />
+    <path d="m180 394 332 194v78L180 472Z" fill="#55ad3e" />
+    <path d="M844 394 512 588v78l332-194Z" fill="#398b36" />
+    <path
+        d="m512 196 338 196-338 196-338-196Z"
+        fill="url(#grass)"
+        stroke="#285e32"
+        stroke-width="18"
+        stroke-linejoin="round"
+    />
+</svg>

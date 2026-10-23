@@ -33,6 +33,7 @@ pub(super) fn motion_events(
     };
     let moved = WindowEvent::MouseMove {
         position,
+        movement: LogicalPoint::default(),
         modifiers: Modifiers::NONE,
     };
     match action {
