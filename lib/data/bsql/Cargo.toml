@@ -32,7 +32,7 @@ mysql = ["dep:bitflags", "dep:sha2"]
 mysql-native-password = ["mysql", "dep:sha1"]
 mysql-tls = ["mysql", "dep:native-tls"]
 sqlite = ["dep:libsqlite3-sys"]
-sqlite-bundled = ["sqlite", "libsqlite3-sys/bundled"]
+sqlite-bundled = ["sqlite", "libsqlite3-sys/bundled-fts5"]
 uuid = ["dep:uuid"]
 
 [[example]]
