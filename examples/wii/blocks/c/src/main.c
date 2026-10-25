@@ -3,6 +3,7 @@
 
 #include <gccore.h>
 #include <malloc.h>
+#include <ogc/lwp_watchdog.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -10,6 +11,7 @@
 #include <wiiuse/wpad.h>
 
 #include "mesh.h"
+#include "scene.h"
 
 #define FIFO_SIZE (256 * 1024)
 #define CLEAR_COLOR ((GXColor){46, 84, 158, 255})
@@ -79,7 +81,7 @@ int main(void) {
         return 1;
     mesh_configure_pipeline();
 
-    WorldInstances world = world_build();
+    WorldInstances world = world_build((uint32_t)gettime());
     Mesh mesh = {0};
     if (!world.instances || !mesh_build(&mesh, &world))
         return 1;
@@ -88,17 +90,16 @@ int main(void) {
     Mtx44 projection;
     guPerspective(projection, 50.0f, aspect, 1.0f, 500.0f);
     GX_LoadProjectionMtx(projection, GX_PERSPECTIVE);
-    float angle = 0;
+    GX_SetFog(GX_FOG_LIN, 120.0f, 300.0f, 1.0f, 500.0f, CLEAR_COLOR);
+    uint64_t started = gettime();
     while (running) {
         WPAD_ScanPads();
         if (WPAD_ButtonsDown(0) & WPAD_BUTTON_HOME)
             break;
-        // Keep the angle small, so float precision doesn't make the rotation uneven over time
-        angle += 0.00267f;
-        if (angle > 2.0f * (float)M_PI)
-            angle -= 2.0f * (float)M_PI;
-        guVector eye = {32.0f + sinf(angle) * 88.0f, 79.0f, 32.0f + cosf(angle) * 88.0f};
-        guVector target = {32.0f, 21.76f, 32.0f};
+        double seconds = (double)(gettime() - started) / (double)secs_to_ticks(1);
+        BlocksCamera camera = blocks_camera(seconds, aspect);
+        guVector eye = {camera.eye[0], camera.eye[1], camera.eye[2]};
+        guVector target = {camera.target[0], camera.target[1], camera.target[2]};
         guVector up = {0, 1, 0};
         Mtx view;
         guLookAt(view, &eye, &up, &target);

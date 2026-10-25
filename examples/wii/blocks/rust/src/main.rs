@@ -7,7 +7,7 @@
 #![no_std]
 #![no_main]
 
-use core::f32::consts::TAU;
+use core::f64::consts::TAU;
 use core::ffi::{c_int, c_void};
 use core::ptr;
 use core::sync::atomic::{AtomicBool, Ordering};
@@ -74,7 +74,7 @@ struct Demo {
     _fifo: AlignedBuffer,
     materials: Materials,
     mesh: Mesh,
-    angle: f32,
+    started: u64,
 }
 
 impl Demo {
@@ -154,13 +154,14 @@ impl Demo {
             let mut projection = [[0.0; 4]; 4];
             guPerspective(&mut projection, 50.0, aspect, 1.0, 500.0);
             GX_LoadProjectionMtx(&projection, GX_PERSPECTIVE);
+            GX_SetFog(GX_FOG_LIN, 120.0, 300.0, 1.0, 500.0, CLEAR_COLOR);
 
             Some(Self {
                 display,
                 _fifo: fifo,
                 materials,
                 mesh,
-                angle: 0.0,
+                started: gettime(),
             })
         }
     }
@@ -172,15 +173,13 @@ impl Demo {
                 if WPAD_ButtonsDown(0) & WPAD_BUTTON_HOME != 0 {
                     break;
                 }
-                // Keep the angle small, so float precision doesn't make the rotation uneven over time
-                self.angle += 0.00267;
-                if self.angle > TAU {
-                    self.angle -= TAU;
-                }
-                let (sin, cos) = (sinf(self.angle), cosf(self.angle));
+                // Wii time-base ticks run at one quarter of the 243 MHz bus clock.
+                let seconds = (gettime() - self.started) as f64 / 60_750_000.0;
+                let angle = ((seconds * 0.16) % TAU) as f32;
+                let (sin, cos) = (sinf(angle), cosf(angle));
                 let eye = GuVector {
                     x: 32.0 + sin * 88.0,
-                    y: 79.0,
+                    y: 21.76 + 58.0,
                     z: 32.0 + cos * 88.0,
                 };
                 let up = GuVector {

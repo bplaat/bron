@@ -48,6 +48,7 @@ pub const GX_MODULATE: u8 = 0;
 pub const GX_PERSPECTIVE: u8 = 0;
 pub const GX_PNMTX0: u32 = 0;
 pub const GX_CULL_NONE: u8 = 0;
+pub const GX_FOG_LIN: u8 = 2;
 pub const GX_ALWAYS: u8 = 7;
 pub const GX_LEQUAL: u8 = 3;
 pub const GX_ZC_LINEAR: u8 = 0;
@@ -172,6 +173,7 @@ unsafe extern "C" {
     pub fn GX_SetTevOrder(stage: u8, coord: u8, map: u32, color: u8);
     pub fn GX_SetTevOp(stage: u8, mode: u8);
     pub fn GX_SetCullMode(mode: u8);
+    pub fn GX_SetFog(kind: u8, start: f32, end: f32, near: f32, far: f32, color: GXColor);
 
     // GX matrix loading
     pub fn GX_LoadProjectionMtx(matrix: *const Mtx44, projection_type: u8);

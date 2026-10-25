@@ -2,11 +2,11 @@
 
 #include <float.h>
 #include <math.h>
-#include <ogc/lwp_watchdog.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "materials.h"
 
@@ -419,8 +419,9 @@ static size_t world_emit_faces(VoxelInstance* instances, size_t count, bool tran
 // Generates the whole world and packs its visible faces into instances, with
 // the opaque ones first and the translucent water surface behind them. The
 // caller owns the returned buffer.
-static WorldInstances world_build(void) {
-    worldSeed = (uint32_t)gettime();
+static WorldInstances world_build(uint32_t seed) {
+    worldSeed = seed;
+    memset(worldVoxels, 0, sizeof(worldVoxels));
     world_generate_heights();
     world_generate_terrain();
     world_build_hut();

@@ -5,6 +5,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include "scene.h"
 #include "world.h"
 
 typedef struct {
@@ -18,16 +19,15 @@ static const uint8_t corners[6][4][3] = {
     {{1, 0, 1}, {1, 0, 0}, {1, 1, 0}, {1, 1, 1}}, {{0, 0, 0}, {0, 0, 1}, {0, 1, 1}, {0, 1, 0}},
     {{0, 1, 1}, {1, 1, 1}, {1, 1, 0}, {0, 1, 0}}, {{0, 0, 0}, {1, 0, 0}, {1, 0, 1}, {0, 0, 1}}};
 static const uint8_t uv[4][2] = {{0, 1}, {1, 1}, {1, 0}, {0, 0}};
-static const float face_light[6] = {0.85f, 0.55f, 0.75f, 0.60f, 1.0f, 0.48f};
 
 static void emit_face(const VoxelInstance* instance, bool water) {
     const uint8_t (*face)[3] = corners[instance->face];
-    uint8_t shade = (uint8_t)((0.38f + 0.62f * face_light[instance->face]) * (float)instance->occlusion);
+    uint8_t shade = (uint8_t)((0.42f + 0.58f * blocks_face_light(instance->face)) * (float)instance->occlusion);
     for (int corner = 0; corner < 4; corner++) {
         // The world fits in 0..64, so 8-bit integer positions are exact and a quarter of the size of floats
         GX_Position3u8((uint8_t)(instance->x + face[corner][0]), (uint8_t)(instance->y + face[corner][1]),
                        (uint8_t)(instance->z + face[corner][2]));
-        GX_Color4u8(shade, shade, shade, water ? 160 : 255);
+        GX_Color4u8(shade, shade, shade, water ? 153 : 255);
         GX_TexCoord2u8(uv[corner][0], uv[corner][1]);
     }
 }
