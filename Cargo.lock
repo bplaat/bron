@@ -930,11 +930,11 @@ dependencies = [
  "bwebgpu",
  "bwebgpu-shader-build",
  "bwindow",
+ "cargo-bundle-assets",
  "deflate",
  "directories",
  "image",
  "libsqlite3-sys",
- "rust-embed",
  "winresource",
 ]
 

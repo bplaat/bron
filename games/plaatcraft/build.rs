@@ -60,6 +60,8 @@ fn compile_windows_resources() {
 }
 
 fn main() -> bwebgpu_shader_build::Result<()> {
+    println!("cargo:rerun-if-changed=assets");
+
     compile_windows_resources();
 
     bwebgpu_shader_build::Builder::new()

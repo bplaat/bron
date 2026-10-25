@@ -29,6 +29,10 @@ cargo bundle --path games/plaatcraft --ios --run
 cargo bundle --path games/plaatcraft --android --run
 ```
 
+Textures use `cargo-bundle-assets`: normal Cargo builds embed them in the binary,
+while `cargo bundle` stores them as separate resource files. Universal macOS
+executables and multi-ABI Android APKs share one texture collection.
+
 The world is saved in `world.db` in the platform's app data directory.
 
 ## Controls

@@ -4,9 +4,9 @@
  * SPDX-License-Identifier: MIT
  */
 
-use rust_embed::Embed;
+use cargo_bundle_assets::Assets;
 
-#[derive(Embed)]
+#[derive(Assets)]
 #[folder = "assets"]
 struct Assets;
 
@@ -196,7 +196,7 @@ pub(crate) fn load(
         view_formats: &[],
     });
     for (layer, path) in TILES.into_iter().chain(SKY).enumerate() {
-        let file = Assets::get(path).expect("Embedded texture");
+        let file = Assets::get(path).expect("Texture asset");
         let image = decode(&file.data);
         let mut pixels = if layer < TILES.len() {
             assert_eq!((image.width, image.height), (SIZE, SIZE));
