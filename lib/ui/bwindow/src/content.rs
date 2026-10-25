@@ -8,7 +8,7 @@ use std::cell::{Cell, RefCell};
 use std::ffi::c_void;
 use std::rc::{Rc, Weak};
 
-use crate::{WindowEvent, WindowId};
+use crate::{LogicalPoint, WindowEvent, WindowId};
 
 /// A native top-level window for implementing a content backend.
 #[derive(Clone, Copy, Debug)]
@@ -81,6 +81,9 @@ pub(crate) struct ContentHost {
     paint: RefCell<Option<Rc<dyn Fn()>>>,
     frames: RefCell<Option<crate::platforms::FrameSource>>,
     animation_frame_pending: Cell<bool>,
+    pointer_locked: Cell<bool>,
+    pointer_position: Cell<Option<LogicalPoint>>,
+    touch_mouse: RefCell<crate::touch::TouchMouse>,
 }
 
 impl ContentHost {
@@ -106,6 +109,9 @@ impl ContentHost {
             paint: RefCell::new(None),
             frames: RefCell::new(None),
             animation_frame_pending: Cell::new(false),
+            pointer_locked: Cell::new(false),
+            pointer_position: Cell::new(None),
+            touch_mouse: RefCell::new(crate::touch::TouchMouse::default()),
         })
     }
 
@@ -162,6 +168,20 @@ impl ContentHost {
 
     pub(crate) const fn is_closed(&self) -> bool {
         self.closed.get()
+    }
+
+    pub(crate) const fn pointer_locked(&self) -> bool {
+        self.pointer_locked.get()
+    }
+
+    pub(crate) fn set_pointer_locked(self: &Rc<Self>, locked: bool) {
+        if self.pointer_locked.replace(locked) == locked {
+            return;
+        }
+        if !locked {
+            self.pointer_position.set(None);
+        }
+        self.event_sender().send(WindowEvent::PointerLockChange);
     }
 
     pub(crate) fn set_background(&self, color: u32) {
@@ -264,6 +284,11 @@ impl ContentHost {
         if self.closed.replace(true) {
             return;
         }
+        #[cfg(not(any(target_os = "ios", target_os = "android")))]
+        if self.pointer_locked.replace(false) {
+            crate::platforms::release_pointer_lock();
+        }
+        self.pointer_position.set(None);
         self.handle.set(None);
         self.content.set(None);
         let factory = self.content_factory.borrow_mut().take();
@@ -311,6 +336,45 @@ impl ContentHost {
     pub(crate) fn animation_frame(self: &Rc<Self>) {
         if !self.closed.get() && self.animation_frame_pending.replace(false) {
             self.request_redraw();
+        }
+    }
+
+    /// Fill in the pointer movement since the previous event. While locked the position
+    /// stays put and native relative motion is passed through.
+    fn track_pointer(&self, event: WindowEvent) -> WindowEvent {
+        match event {
+            WindowEvent::MouseMove {
+                mut position,
+                movement,
+                modifiers,
+            } => {
+                let previous = self.pointer_position.get();
+                let movement = if self.pointer_locked.get() {
+                    if let Some(previous) = previous {
+                        position = previous;
+                    }
+                    movement
+                } else {
+                    previous.map_or(LogicalPoint::default(), |previous| {
+                        LogicalPoint::new(position.x - previous.x, position.y - previous.y)
+                    })
+                };
+                self.pointer_position.set(Some(position));
+                WindowEvent::MouseMove {
+                    position,
+                    movement,
+                    modifiers,
+                }
+            }
+            WindowEvent::MouseDown(ref mouse) | WindowEvent::MouseUp(ref mouse) => {
+                self.pointer_position.set(Some(mouse.position));
+                event
+            }
+            WindowEvent::MouseLeave | WindowEvent::Blur => {
+                self.pointer_position.set(None);
+                event
+            }
+            _ => event,
         }
     }
 }
@@ -506,6 +570,34 @@ impl WindowEventSender {
         if let Some(host) = self.0.upgrade()
             && !host.closed.get()
         {
+            if matches!(
+                &event,
+                WindowEvent::TouchStart(_)
+                    | WindowEvent::TouchMove(_)
+                    | WindowEvent::TouchEnd(_)
+                    | WindowEvent::TouchCancel(_)
+            ) {
+                let touch = match &event {
+                    WindowEvent::TouchStart(touch) => WindowEvent::TouchStart(touch.clone()),
+                    WindowEvent::TouchMove(touch) => WindowEvent::TouchMove(touch.clone()),
+                    WindowEvent::TouchEnd(touch) => WindowEvent::TouchEnd(touch.clone()),
+                    WindowEvent::TouchCancel(touch) => WindowEvent::TouchCancel(touch.clone()),
+                    _ => unreachable!(),
+                };
+                let sender = self.clone();
+                crate::dispatch::send_then(crate::Event::Window(host.id, event), move || {
+                    if let Some(host) = sender.0.upgrade()
+                        && !host.closed.get()
+                    {
+                        let events = host.touch_mouse.borrow_mut().events(&touch);
+                        for event in events {
+                            sender.send(event);
+                        }
+                    }
+                });
+                return;
+            }
+            let event = host.track_pointer(event);
             let event = crate::Event::Window(host.id, event);
             if matches!(
                 &event,
@@ -527,6 +619,57 @@ impl WindowEventSender {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn locked_motion_keeps_the_position_even_when_relative_motion_is_zero() {
+        let host = ContentHost::new(WindowId::new(), None, false);
+        let at = LogicalPoint::new(10.0, 20.0);
+        let moved = |position, movement| WindowEvent::MouseMove {
+            position,
+            movement,
+            modifiers: crate::Modifiers::NONE,
+        };
+        host.track_pointer(moved(at, LogicalPoint::default()));
+        host.pointer_locked.set(true);
+        for movement in [LogicalPoint::new(3.0, -4.0), LogicalPoint::default()] {
+            let WindowEvent::MouseMove {
+                position,
+                movement: actual,
+                ..
+            } = host.track_pointer(moved(LogicalPoint::default(), movement))
+            else {
+                panic!("expected mouse move");
+            };
+            assert_eq!(position, at);
+            assert_eq!(actual, movement);
+        }
+        host.pointer_locked.set(false);
+    }
+
+    #[test]
+    fn queued_touch_start_can_cancel_compatibility_mouse_events() {
+        let host = ContentHost::new(WindowId::new(), None, false);
+        let sender = host.event_sender();
+        let calls = Rc::new(Cell::new(0));
+        let output = calls.clone();
+        // Queue before installing the handler so cancellation must be checked at delivery.
+        sender.send(WindowEvent::TouchStart(crate::TouchEvent {
+            changed_touches: vec![crate::Touch {
+                identifier: 1,
+                position: LogicalPoint::default(),
+            }],
+            ..crate::TouchEvent::default()
+        }));
+        crate::dispatch::start(move |event| {
+            if let crate::Event::Window(_, WindowEvent::TouchStart(touch)) = event {
+                touch.prevent_default();
+                output.set(output.get() + 1);
+            } else {
+                panic!("unexpected compatibility mouse event");
+            }
+        });
+        assert_eq!(calls.get(), 1);
+    }
 
     #[test]
     fn readiness_runs_once_and_late_registration_runs_immediately() {

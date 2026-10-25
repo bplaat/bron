@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: MIT
  */
 
+pub(crate) use crate::platforms::gtk::content::release_pointer_lock;
 #[cfg(feature = "dialog")]
 pub(crate) use crate::platforms::gtk::dialog::{PlatformFileDialog, PlatformMessageDialog};
 pub(crate) use crate::platforms::gtk::event_loop::{

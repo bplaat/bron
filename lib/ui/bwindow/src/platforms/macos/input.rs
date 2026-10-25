@@ -66,8 +66,11 @@ pub(super) unsafe fn macos_pointer_event(
             ButtonState::Released => WindowEvent::MouseUp(event),
         }
     } else {
+        let delta_x: f64 = unsafe { msg_send![event, deltaX] };
+        let delta_y: f64 = unsafe { msg_send![event, deltaY] };
         WindowEvent::MouseMove {
             position,
+            movement: LogicalPoint::new(delta_x as f32, delta_y as f32),
             modifiers,
         }
     }

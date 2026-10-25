@@ -7,7 +7,7 @@
 use std::ffi::{CString, c_void};
 use std::ptr::{null, null_mut};
 
-use super::content::Content;
+use super::content::{Content, release_pointer_lock};
 use super::event_loop::{primary_monitor_rect, send_event};
 use super::headers::*;
 #[cfg(feature = "progress_bar")]
@@ -15,7 +15,8 @@ use super::progress_bar::update_progress_bar;
 #[cfg(feature = "remember_window_state")]
 use super::window_state::{load_window_state, save_window_state};
 use crate::{
-    CloseRequest, CursorIcon, LogicalPoint, LogicalSize, Theme, WindowBuilder, WindowEvent,
+    CloseRequest, CursorIcon, LogicalPoint, LogicalSize, PointerLockError, Theme, WindowBuilder,
+    WindowEvent,
 };
 
 pub(super) struct WindowData {
@@ -304,6 +305,14 @@ impl crate::WindowInterface for PlatformWindow {
 
     fn set_cursor(&mut self, cursor: CursorIcon) {
         self.0.content.set_cursor(cursor);
+    }
+
+    fn request_pointer_lock(&mut self) -> Result<(), PointerLockError> {
+        self.0.content.lock_pointer()
+    }
+
+    fn exit_pointer_lock(&mut self) {
+        release_pointer_lock();
     }
 
     #[cfg(feature = "progress_bar")]

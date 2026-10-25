@@ -50,15 +50,27 @@ pub enum WindowEvent {
     MouseMove {
         /// Current position.
         position: LogicalPoint,
+        /// Movement since the previous event, analogous to DOM `movementX`/`movementY`.
+        movement: LogicalPoint,
         /// Active keyboard modifiers.
         modifiers: crate::Modifiers,
     },
     /// Pointer left the client area.
     MouseLeave,
+    /// The window's pointer-lock state changed, analogous to DOM `pointerlockchange`.
+    PointerLockChange,
     /// A mouse button was pressed.
     MouseDown(crate::MouseEvent),
     /// A mouse button was released.
     MouseUp(crate::MouseEvent),
+    /// Fingers touched the content, analogous to DOM `touchstart`.
+    TouchStart(crate::TouchEvent),
+    /// Fingers moved, analogous to DOM `touchmove`.
+    TouchMove(crate::TouchEvent),
+    /// Fingers lifted, analogous to DOM `touchend`.
+    TouchEnd(crate::TouchEvent),
+    /// The system canceled touches, analogous to DOM `touchcancel`.
+    TouchCancel(crate::TouchEvent),
     /// Wheel or trackpad scroll.
     Wheel(crate::ScrollDelta, crate::Modifiers),
     /// A keyboard key was pressed, including auto-repeat presses.

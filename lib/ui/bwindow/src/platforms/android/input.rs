@@ -6,7 +6,7 @@
 
 use crate::{
     Key, KeyCode, KeyboardEvent, LogicalPoint, Modifiers, MouseButton, MouseEvent, NamedKey,
-    ScrollDelta, WindowEvent,
+    ScrollDelta, Touch, TouchEvent, WindowEvent,
 };
 
 // The masked AMotionEvent actions.
@@ -33,6 +33,7 @@ pub(super) fn motion_events(
     };
     let moved = WindowEvent::MouseMove {
         position,
+        movement: LogicalPoint::default(),
         modifiers: Modifiers::NONE,
     };
     match action {
@@ -47,6 +48,26 @@ pub(super) fn motion_events(
         )],
         _ => Vec::new(),
     }
+}
+
+/// Translate changed fingers, using the action's pointer index for down/up events.
+pub(super) fn touch_event(action: i32, touches: Vec<Touch>) -> Option<WindowEvent> {
+    let kind = action & 0xff;
+    let changed_touches = match kind {
+        ACTION_DOWN | ACTION_UP | 5 | 6 => vec![*touches.get((action >> 8) as usize)?],
+        ACTION_MOVE | ACTION_CANCEL => touches,
+        _ => return None,
+    };
+    let event = TouchEvent {
+        changed_touches,
+        ..TouchEvent::default()
+    };
+    Some(match kind {
+        ACTION_DOWN | 5 => WindowEvent::TouchStart(event),
+        ACTION_UP | 6 => WindowEvent::TouchEnd(event),
+        ACTION_MOVE => WindowEvent::TouchMove(event),
+        _ => WindowEvent::TouchCancel(event),
+    })
 }
 
 /// Translate an Android key event.
@@ -207,6 +228,39 @@ const fn key_code_from_android(key_code: i32) -> Option<KeyCode> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn multitouch_actions_use_stable_ids_and_the_changed_pointer_index() {
+        let touches = vec![
+            Touch {
+                identifier: 7,
+                position: LogicalPoint::new(10.0, 20.0),
+            },
+            Touch {
+                identifier: 42,
+                position: LogicalPoint::new(30.0, 40.0),
+            },
+        ];
+        let Some(WindowEvent::TouchStart(start)) = touch_event(0x0105, touches.clone()) else {
+            panic!("expected secondary touch start");
+        };
+        assert_eq!(start.changed_touches, touches[1..]);
+        let Some(WindowEvent::TouchEnd(end)) = touch_event(0x0106, touches.clone()) else {
+            panic!("expected secondary touch end");
+        };
+        assert_eq!(end.changed_touches, touches[1..]);
+        let Some(WindowEvent::TouchMove(moved)) = touch_event(ACTION_MOVE, touches.clone()) else {
+            panic!("expected touch move");
+        };
+        assert_eq!(moved.changed_touches, touches);
+        let Some(WindowEvent::TouchCancel(cancel)) = touch_event(ACTION_CANCEL, touches.clone())
+        else {
+            panic!("expected touch cancel");
+        };
+        assert_eq!(cancel.changed_touches, touches);
+        assert!(touch_event(0x0205, touches.clone()).is_none());
+        assert!(touch_event(ACTION_HOVER_MOVE, touches).is_none());
+    }
 
     #[test]
     fn touches_leave_after_lifting_but_mice_stay() {
