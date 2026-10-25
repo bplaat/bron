@@ -5,6 +5,10 @@
 
 #import "world.h"
 
+#include "scene.h"
+
+#include <time.h>
+
 enum { EscapeKeyCode = 53 };
 
 static const vector_float3 skyColor = {0.18f, 0.33f, 0.62f};
@@ -304,7 +308,7 @@ static GLuint load_materials(void) {
     glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(quadIndices), quadIndices, GL_STATIC_DRAW);
 
     // Generate the world once and keep only its exposed faces on the GPU.
-    WorldInstances world = world_build();
+    WorldInstances world = world_build((uint32_t)clock_gettime_nsec_np(CLOCK_REALTIME));
     if (world.instances == NULL) {
         NSLog(@"Could not allocate the voxel faces");
         [NSApp terminate:nil];
@@ -336,10 +340,9 @@ static GLuint load_materials(void) {
     _cameraPositionLocation = glGetUniformLocation(_voxelProgram, "cameraPosition");
     glUniform1i(glGetUniformLocation(_voxelProgram, "materials"), 0);
     glUniform3f(glGetUniformLocation(_voxelProgram, "skyColor"), skyColor.x, skyColor.y, skyColor.z);
-    glUniform3f(glGetUniformLocation(_voxelProgram, "sunDirection"), 0.473f, 0.820f, 0.315f);
+    vector_float3 sun = simd_normalize((vector_float3){0.45f, 0.78f, 0.30f});
+    glUniform3f(glGetUniformLocation(_voxelProgram, "sunDirection"), sun.x, sun.y, sun.z);
     glUniform1f(glGetUniformLocation(_voxelProgram, "ambient"), 0.42f);
-    glUniform1f(glGetUniformLocation(_voxelProgram, "fogStart"), 120.0f);
-    glUniform1f(glGetUniformLocation(_voxelProgram, "fogEnd"), 300.0f);
     glUniform1f(glGetUniformLocation(_voxelProgram, "translucentAlpha"), 0.60f);
     glUseProgram(_skyProgram);
     glUniform3f(glGetUniformLocation(_skyProgram, "skyColor"), skyColor.x, skyColor.y, skyColor.z);
@@ -403,12 +406,13 @@ static GLuint load_materials(void) {
     }
 
     // Orbit the camera around the center of the diorama.
-    float angle = (float)_animationTime * 0.16f;
-    vector_float3 target = {WorldSize * 0.5f, WorldSize * 0.34f, WorldSize * 0.5f};
-    vector_float3 eye = {target.x + sinf(angle) * 88.0f, target.y + 58.0f, target.z + cosf(angle) * 88.0f};
+    float aspectRatio = (float)(NSWidth(bounds) / NSHeight(bounds));
+    BlocksCamera camera = blocks_camera(_animationTime, aspectRatio);
+    vector_float3 target = {camera.target[0], camera.target[1], camera.target[2]};
+    vector_float3 eye = {camera.eye[0], camera.eye[1], camera.eye[2]};
     matrix_float4x4 view = matrix_look_at(eye, target, (vector_float3){0, 1, 0});
     matrix_float4x4 projection =
-        matrix_perspective(50.0f * (float)M_PI / 180.0f, (float)(NSWidth(bounds) / NSHeight(bounds)), 1.0f, 500.0f);
+        matrix_perspective(50.0f * (float)M_PI / 180.0f, aspectRatio, 1.0f, 500.0f * camera.scale);
     matrix_float4x4 viewProjection = simd_mul(projection, view);
 
     // Draw the sky without depth testing, then depth test the solid terrain.
@@ -424,6 +428,8 @@ static GLuint load_materials(void) {
     glUseProgram(_voxelProgram);
     glUniformMatrix4fv(_viewProjectionLocation, 1, GL_FALSE, (const GLfloat*)&viewProjection);
     glUniform3f(_cameraPositionLocation, eye.x, eye.y, eye.z);
+    glUniform1f(glGetUniformLocation(_voxelProgram, "fogStart"), 120.0f * camera.scale);
+    glUniform1f(glGetUniformLocation(_voxelProgram, "fogEnd"), 300.0f * camera.scale);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D_ARRAY, _materials);
     glBindVertexArray(_opaqueArray);

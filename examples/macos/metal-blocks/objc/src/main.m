@@ -6,6 +6,10 @@
 #import "shader_types.h"
 #import "world.h"
 
+#include "scene.h"
+
+#include <time.h>
+
 static const unsigned char embeddedMetallib[] = {
 #embed "default.metallib"
 };
@@ -330,7 +334,7 @@ static id<MTLTexture> load_materials(id<MTLDevice> device, id<MTLCommandQueue> c
     _vertexBuffer = [device newBufferWithBytes:vertices length:sizeof(vertices) options:MTLResourceStorageModeShared];
     _indexBuffer = [device newBufferWithBytes:indices length:sizeof(indices) options:MTLResourceStorageModeShared];
 
-    WorldInstances world = world_build();
+    WorldInstances world = world_build((uint32_t)clock_gettime_nsec_np(CLOCK_REALTIME));
     if (world.instances == NULL) {
         NSLog(@"Could not allocate the voxel faces");
         return nil;
@@ -400,16 +404,13 @@ static id<MTLTexture> load_materials(id<MTLDevice> device, id<MTLCommandQueue> c
         }
 
         // Orbit the whole diorama around its vertical center.
-        float angle = (float)_animationTime * 0.16f;
-        vector_float3 target = {WorldSize * 0.5f, WorldSize * 0.34f, WorldSize * 0.5f};
-        vector_float3 eye = {
-            target.x + sinf(angle) * 88.0f,
-            target.y + 58.0f,
-            target.z + cosf(angle) * 88.0f,
-        };
+        float aspectRatio = (float)(size.width / size.height);
+        BlocksCamera camera = blocks_camera(_animationTime, aspectRatio);
+        vector_float3 target = {camera.target[0], camera.target[1], camera.target[2]};
+        vector_float3 eye = {camera.eye[0], camera.eye[1], camera.eye[2]};
         matrix_float4x4 viewMatrix = matrix_look_at(eye, target, (vector_float3){0, 1, 0});
         matrix_float4x4 projectionMatrix =
-            matrix_perspective(50.0f * (float)M_PI / 180.0f, (float)(size.width / size.height), 1.0f, 500.0f);
+            matrix_perspective(50.0f * (float)M_PI / 180.0f, aspectRatio, 1.0f, 500.0f * camera.scale);
         Uniforms uniforms = {
             .viewProjectionMatrix = simd_mul(projectionMatrix, viewMatrix),
             .cameraPosition = eye,
@@ -417,8 +418,8 @@ static id<MTLTexture> load_materials(id<MTLDevice> device, id<MTLCommandQueue> c
             .skyColor = skyColor,
             .ambient = 0.42f,
             .translucentAlpha = 0.60f,
-            .fogStart = 120.0f,
-            .fogEnd = 300.0f,
+            .fogStart = 120.0f * camera.scale,
+            .fogEnd = 300.0f * camera.scale,
         };
 
         id<MTLCommandBuffer> commandBuffer = [_commandQueue commandBuffer];
