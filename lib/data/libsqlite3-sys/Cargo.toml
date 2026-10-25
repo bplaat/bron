@@ -14,3 +14,4 @@ cc = { version = "1.4", optional = true }
 
 [features]
 bundled = ["dep:cc"]
+bundled-fts5 = ["bundled"]
