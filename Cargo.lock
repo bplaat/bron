@@ -228,6 +228,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "cargo-bundle-assets"
+version = "0.1.0"
+dependencies = [
+ "bwindow",
+ "cargo-bundle-assets-impl",
+ "rust-embed",
+]
+
+[[package]]
+name = "cargo-bundle-assets-impl"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "serde_json",
+ "syn 3.0.9",
+]
+
+[[package]]
 name = "cc"
 version = "1.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

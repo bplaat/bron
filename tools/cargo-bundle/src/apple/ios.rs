@@ -30,7 +30,7 @@ pub(crate) fn bundle(args: &Args, target_dir: &str, manifest: &Manifest) {
     let app = format!("{target_dir}/{}.app", bundle.name);
     remove_path_if_exists(&app);
     fs::create_dir_all(&target_dir).expect("Can't create target directory");
-    // iOS bundles are flat, so resources go in the bundle root
+    // Custom platform resources go in the bundle root
     if let Some(resources_dir) = &bundle.resources_dir {
         copy_dir(format!("{path}/{resources_dir}"), &app)
             .expect("Failed to copy resources directory");
@@ -39,6 +39,7 @@ pub(crate) fn bundle(args: &Args, target_dir: &str, manifest: &Manifest) {
     }
 
     let executable = build_executable(args, &package.name);
+    crate::assets::copy(&executable, format!("{app}/assets"));
     fs::copy(executable, format!("{app}/{}", bundle.name)).expect("Failed to copy executable");
 
     let mut info = bundle_info(&bundle.name, &bundle.identifier, &package.version, "APPL");
@@ -218,8 +219,8 @@ fn build_executable(args: &Args, name: &str) -> String {
             TARGET,
             "--message-format=json-render-diagnostics",
         ])
-        .env("CARGO_BUNDLE", "1")
         .stdout(Stdio::piped());
+    crate::assets::configure(&mut command);
     if !args.run || args.release {
         command.arg("--release");
     }

@@ -1,0 +1,1 @@
+cargo-bundle-assets fixture payload 8c447ac9

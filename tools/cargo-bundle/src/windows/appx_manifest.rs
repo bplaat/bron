@@ -156,6 +156,20 @@ pub(crate) fn appx_manifest(
     xml
 }
 
+// MakeAppx /r derives the neutral resource manifest from this main-package template.
+pub(crate) fn asset_manifest_template(
+    manifest: &Manifest,
+    windows: &WindowsMetadata,
+    publisher: &str,
+    executable: &str,
+    revision: u16,
+) -> String {
+    appx_manifest(manifest, windows, publisher, executable, "neutral", revision)
+        .replace("    xmlns:uap=", "    xmlns:uap6=\"http://schemas.microsoft.com/appx/manifest/uap/windows10/6\"\n    xmlns:uap=")
+        .replace("IgnorableNamespaces=\"uap ", "IgnorableNamespaces=\"uap6 uap ")
+        .replace("    <Properties>", "    <Properties>\n        <uap6:AllowExecution>false</uap6:AllowExecution>")
+}
+
 fn capability_namespace(capability: &str) -> &'static str {
     match capability {
         "runFullTrust" | "allowElevation" | "unvirtualizedResources" | "broadFileSystemAccess" => {
@@ -205,6 +219,45 @@ fn xml_escape(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn asset_template_preserves_family_and_version_without_enabling_execution() {
+        let manifest: Manifest = toml::from_str(
+            r#"
+[package]
+name = "example-game"
+version = "1.2.3"
+"#,
+        )
+        .expect("Manifest");
+        let windows = WindowsMetadata::default();
+        let main = appx_manifest(
+            &manifest,
+            &windows,
+            "Example & Publisher",
+            "game.exe",
+            "x64",
+            7,
+        );
+        let asset =
+            asset_manifest_template(&manifest, &windows, "Example & Publisher", "game.exe", 7);
+        for expected in [
+            "Name=\"nl.bplaat.example-game\"",
+            "Version=\"1.2.3.7\"",
+            "Publisher=\"CN=Example &amp; Publisher,",
+        ] {
+            assert!(main.contains(expected));
+            assert!(asset.contains(expected));
+        }
+        assert!(asset.contains("ProcessorArchitecture=\"neutral\""));
+        assert!(asset.contains("<uap6:AllowExecution>false</uap6:AllowExecution>"));
+        assert!(
+            asset.contains(
+                "xmlns:uap6=\"http://schemas.microsoft.com/appx/manifest/uap/windows10/6\""
+            )
+        );
+        assert!(!main.contains("AllowExecution"));
+    }
 
     #[test]
     fn package_version_has_four_parts() {

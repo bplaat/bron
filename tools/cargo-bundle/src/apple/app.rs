@@ -142,6 +142,7 @@ fn create(path: &str, target_dir: &str, bundle: &BundleMetadata, binary: &str) {
         )
         .expect("Failed to copy Assets.car");
     }
+    crate::assets::copy(binary, &resources);
     fs::copy(binary, format!("{contents}/MacOS/{}", bundle.name))
         .expect("Failed to copy executable");
     fs::copy(

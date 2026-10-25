@@ -86,6 +86,7 @@ fn create(
     fs::create_dir_all(format!("{contents}/MacOS"))
         .expect("Failed to create app extension executable directory");
     remove_empty_directory(&format!("{contents}/Resources"));
+    crate::assets::copy(binary, format!("{contents}/Resources"));
     fs::copy(binary, format!("{contents}/MacOS/{}", extension.name))
         .expect("Failed to copy app extension executable");
     fs::copy(

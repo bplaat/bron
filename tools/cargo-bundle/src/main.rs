@@ -15,9 +15,11 @@ mod android;
 #[cfg(target_os = "macos")]
 mod apple;
 mod args;
+mod assets;
 mod manifest;
 mod support;
-#[cfg(windows)]
+#[cfg(any(windows, test))]
+#[cfg_attr(not(windows), allow(dead_code))]
 mod windows;
 
 fn read_manifest(path: &str) -> Manifest {

@@ -23,7 +23,7 @@ pub(crate) fn cargo(subcommand: &str, path: &str) -> Command {
         &format!("{path}/Cargo.toml"),
     ]);
     // Lets build scripts skip work the bundle already does, like embedding Info.plist
-    command.env("CARGO_BUNDLE", "1");
+    crate::assets::configure(&mut command);
     command
 }
 
