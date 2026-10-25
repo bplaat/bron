@@ -49,6 +49,7 @@ unsafe extern "C" {
         flags: c_int,
         zVfs: *const c_char,
     ) -> c_int;
+    pub fn sqlite3_busy_timeout(db: *mut sqlite3, ms: c_int) -> c_int;
     pub fn sqlite3_exec(
         db: *mut sqlite3,
         sql: *const c_char,
