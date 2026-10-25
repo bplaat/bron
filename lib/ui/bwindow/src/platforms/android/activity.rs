@@ -33,6 +33,18 @@ pub(super) fn android_activity() -> &'static JObject<'static> {
         .as_obj()
 }
 
+/// Read a resource from the APK's shared assets directory.
+pub fn android_read_asset(name: &str) -> std::io::Result<Vec<u8>> {
+    let activity = ACTIVITY.load(Ordering::Acquire);
+    if activity.is_null() {
+        return Err(std::io::Error::other(
+            "The Android activity is not initialized",
+        ));
+    }
+    // SAFETY: the NativeActivity remains live until onDestroy terminates the process.
+    super::assets::read(unsafe { (*activity).assetManager }, name)
+}
+
 /// Run `f` with the JNI environment of the current thread in a new local reference frame,
 /// attaching the thread when needed. Java exceptions and JNI errors panic.
 pub fn android_with_env<T>(f: impl FnOnce(&mut Env) -> Result<T>) -> T {
