@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<vector
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108"
+>
+    <group android:translateX="21.232" android:translateY="21.232" android:scaleX="0.064" android:scaleY="0.064">
+        <!-- Sun -->
+        <path android:pathData="M812,204m-82,0a82,82 0,1 1,164 0a82,82 0,1 1,-164 0" android:fillColor="#ffffff" />
+        <!-- Block faces, separated by gaps so they read in a single color -->
+        <!-- The top face is cut back around the cloud in front of it -->
+        <path
+            android:pathData="M512,196L841.4,387L512,578L182.6,387L211.9,370H408V282H363.6Z"
+            android:fillColor="#ffffff"
+        />
+        <path
+            android:pathData="M174,402L504,593.4V659.9L174,468.5Z M850,402L520,593.4V659.9L850,468.5Z"
+            android:fillColor="#ffffff"
+        />
+        <path
+            android:pathData="M174,478.5L504,669.9V911.4L174,720Z"
+            android:fillColor="#ffffff"
+            android:fillAlpha="0.7"
+        />
+        <path
+            android:pathData="M850,478.5L520,669.9V911.4L850,720Z"
+            android:fillColor="#ffffff"
+            android:fillAlpha="0.45"
+        />
+        <!-- Cloud in front of the block -->
+        <path
+            android:pathData="M48,302h56v-44h54v-46h102v40h58v50h70v48H48Z"
+            android:fillColor="#ffffff"
+            android:fillAlpha="0.6"
+        />
+    </group>
+</vector>

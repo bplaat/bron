@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<vector
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108"
+>
+    <group android:translateX="21.232" android:translateY="21.232" android:scaleX="0.064" android:scaleY="0.064">
+        <path
+            android:pathData="M812,204m-108,0a108,108 0,1 1,216 0a108,108 0,1 1,-216 0"
+            android:fillColor="#33fff2a3"
+        />
+        <path android:pathData="M812,204m-82,0a82,82 0,1 1,164 0a82,82 0,1 1,-164 0" android:fillColor="#ffe477" />
+        <path
+            android:pathData="m174,392 l338,196v328L174,720Z"
+            android:fillColor="#a76732"
+            android:strokeColor="#55351f"
+            android:strokeWidth="18"
+            android:strokeLineJoin="round"
+        />
+        <path
+            android:pathData="M850,392 L512,588v328l338,-196Z"
+            android:fillColor="#79471f"
+            android:strokeColor="#472a1a"
+            android:strokeWidth="18"
+            android:strokeLineJoin="round"
+        />
+        <path android:pathData="m180,394 l332,194v78L180,472Z" android:fillColor="#55ad3e" />
+        <path android:pathData="M844,394 L512,588v78l332,-194Z" android:fillColor="#398b36" />
+        <path
+            android:pathData="m512,196 l338,196 -338,196 -338,-196Z"
+            android:strokeColor="#285e32"
+            android:strokeWidth="18"
+            android:strokeLineJoin="round"
+        >
+            <aapt:attr name="android:fillColor">
+                <gradient
+                    android:type="linear"
+                    android:startX="174"
+                    android:startY="196"
+                    android:endX="715"
+                    android:endY="588"
+                    android:startColor="#98db55"
+                    android:endColor="#51a33b"
+                />
+            </aapt:attr>
+        </path>
+        <path android:pathData="m234,548 l68,40v62l-68,-40Z M368,724 l68,40v76l-68,-40Z" android:fillColor="#c18043" />
+        <path android:pathData="m722,546 l70,-40v64l-70,40Z M578,720 l66,-38v78l-66,38Z" android:fillColor="#9a602e" />
+        <path
+            android:pathData="m336,316 l78,-46 50,30 -78,44Z M572,434 l82,-48 52,30 -82,48Z"
+            android:fillColor="#b4eb70"
+        />
+        <path
+            android:pathData="m630,356 l68,-40 44,26 -68,40Z M434,436 l54,-32 38,22 -56,32Z"
+            android:fillColor="#408e35"
+        />
+        <!-- The cloud floats in front of the block -->
+        <path android:pathData="M48,302h56v-44h54v-46h102v40h58v50h70v48H48Z" android:fillColor="#c2ffffff" />
+    </group>
+</vector>

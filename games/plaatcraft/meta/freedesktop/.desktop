@@ -1,0 +1,12 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=PlaatCraft
+GenericName=Voxel Sandbox
+Comment=Explore and build in a voxel world
+Exec="$BIN_DIR/PlaatCraft"
+Icon=nl.bplaat.PlaatCraft
+Terminal=false
+Categories=Game;Simulation;
+Keywords=voxel;sandbox;building;exploration;
+StartupNotify=true

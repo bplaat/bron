@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="utf-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+    <defs>
+        <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+            <stop stop-color="#84d2f6" />
+            <stop offset="1" stop-color="#398dcc" />
+        </linearGradient>
+        <linearGradient id="grass" x1="0" y1="0" x2="0.8" y2="1">
+            <stop stop-color="#98db55" />
+            <stop offset="1" stop-color="#51a33b" />
+        </linearGradient>
+        <clipPath id="squircle">
+            <path d="M0 256C0 64 64 0 256 0s256 64 256 256-64 256-256 256S0 448 0 256" />
+        </clipPath>
+    </defs>
+    <g clip-path="url(#squircle)">
+        <rect width="512" height="512" fill="url(#sky)" />
+        <circle cx="406" cy="102" r="54" fill="#fff2a3" fill-opacity=".2" />
+        <circle cx="406" cy="102" r="41" fill="#ffe477" />
+        <ellipse cx="256" cy="448" rx="155" ry="30" fill="#155782" fill-opacity=".2" />
+        <path d="m87 196 169 98v164L87 360Z" fill="#a76732" stroke="#55351f" stroke-width="9" stroke-linejoin="round" />
+        <path
+            d="m425 196-169 98v164l169-98Z"
+            fill="#79471f"
+            stroke="#472a1a"
+            stroke-width="9"
+            stroke-linejoin="round"
+        />
+        <path d="m90 197 166 97v39L90 236Z" fill="#55ad3e" />
+        <path d="m422 197-166 97v39l166-97Z" fill="#398b36" />
+        <path
+            d="m256 98 169 98-169 98-169-98Z"
+            fill="url(#grass)"
+            stroke="#285e32"
+            stroke-width="9"
+            stroke-linejoin="round"
+        />
+        <g fill="#c18043">
+            <path d="m117 274 34 20v31l-34-20Z" />
+            <path d="m184 362 34 20v38l-34-20Z" />
+        </g>
+        <g fill="#9a602e">
+            <path d="m361 273 35-20v32l-35 20Z" />
+            <path d="m289 360 33-19v39l-33 19Z" />
+        </g>
+        <g fill="#b4eb70">
+            <path d="m168 158 39-23 25 15-39 22Z" />
+            <path d="m286 217 41-24 26 15-41 24Z" />
+        </g>
+        <g fill="#408e35">
+            <path d="m315 178 34-20 22 13-34 20Z" />
+            <path d="m217 218 27-16 19 11-28 16Z" />
+        </g>
+        <path d="M24 151h28v-22h27v-23h51v20h29v25h35v24H24Z" fill="#fff" fill-opacity=".76" />
+    </g>
+</svg>

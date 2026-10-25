@@ -36,7 +36,6 @@ pub(crate) fn collect_source_files(directory: &Path, files: &mut Vec<PathBuf>) -
             if matches!(
                 name,
                 ".git"
-                    | "plaatcraft"
                     | "node_modules"
                     | "dist"
                     | "src-gen"
@@ -231,11 +230,9 @@ mod tests {
     fn collect_source_files_skips_generated_directories() -> Result<()> {
         let root = scratch("collect-src");
         fs::create_dir_all(root.join("src"))?;
-        fs::create_dir_all(root.join("plaatcraft/src"))?;
         fs::create_dir_all(root.join("target/debug"))?;
         fs::create_dir_all(root.join("node_modules/pkg"))?;
         fs::write(root.join("src/main.rs"), "")?;
-        fs::write(root.join("plaatcraft/src/main.c"), "")?;
         fs::write(root.join("target/debug/app"), "")?;
         fs::write(root.join("node_modules/pkg/index.js"), "")?;
         fs::write(root.join("README.md"), "")?;
@@ -249,7 +246,6 @@ mod tests {
 
         assert!(relative.contains("src/main.rs"));
         assert!(relative.contains("README.md"));
-        assert!(!relative.iter().any(|path| path.starts_with("plaatcraft/")));
         assert!(!relative.iter().any(|path| path.starts_with("target/")));
         assert!(
             !relative
