@@ -84,7 +84,7 @@ impl Mesh {
 
 fn emit_face(face: &Face, water: bool) {
     let corners = face.side.corners();
-    let shade = ((0.38 + 0.62 * face.side.light()) * f32::from(face.ambient_occlusion)) as u8;
+    let shade = ((0.42 + 0.58 * face.side.light()) * f32::from(face.ambient_occlusion)) as u8;
 
     unsafe {
         for (corner, uv) in corners.iter().zip(UV) {
@@ -95,7 +95,7 @@ fn emit_face(face: &Face, water: bool) {
             pipe_u8(shade);
             pipe_u8(shade);
             pipe_u8(shade);
-            pipe_u8(if water { 160 } else { 255 });
+            pipe_u8(if water { 153 } else { 255 });
             pipe_u8(uv[0]);
             pipe_u8(uv[1]);
         }

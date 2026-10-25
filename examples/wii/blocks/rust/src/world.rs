@@ -4,15 +4,17 @@
  * SPDX-License-Identifier: MIT
  */
 
+extern crate alloc;
+
 use alloc::vec::Vec;
 
 use crate::libogc::{floorf, powf};
 
-pub const SIZE: usize = 64;
+pub(crate) const SIZE: usize = 64;
 
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Material {
+pub(crate) enum Material {
     BrickRed,
     CactusSide,
     CactusTop,
@@ -35,7 +37,7 @@ pub enum Material {
 }
 
 impl Material {
-    pub const ALL: [Self; 19] = [
+    pub(crate) const ALL: [Self; 19] = [
         Self::BrickRed,
         Self::CactusSide,
         Self::CactusTop,
@@ -57,9 +59,9 @@ impl Material {
         Self::Wood,
     ];
 
-    pub const COUNT: usize = Self::ALL.len();
+    pub(crate) const COUNT: usize = Self::ALL.len();
 
-    pub const fn index(self) -> usize {
+    pub(crate) const fn index(self) -> usize {
         self as usize
     }
 }
@@ -120,7 +122,7 @@ impl Block {
 
 #[repr(u8)]
 #[derive(Clone, Copy, Debug)]
-pub enum FaceSide {
+pub(crate) enum FaceSide {
     Front,
     Back,
     Right,
@@ -151,7 +153,7 @@ impl FaceSide {
     }
 
     /// Offsets from the voxel's minimum corner
-    pub const fn corners(self) -> [[u8; 3]; 4] {
+    pub(crate) const fn corners(self) -> [[u8; 3]; 4] {
         match self {
             Self::Front => [[0, 0, 1], [1, 0, 1], [1, 1, 1], [0, 1, 1]],
             Self::Back => [[1, 0, 0], [0, 0, 0], [0, 1, 0], [1, 1, 0]],
@@ -162,26 +164,25 @@ impl FaceSide {
         }
     }
 
-    pub const fn light(self) -> f32 {
+    pub(crate) const fn light(self) -> f32 {
+        // max(dot(normal, normalize([0.45, 0.78, 0.30])), 0)
         match self {
-            Self::Front => 0.85,
-            Self::Back => 0.55,
-            Self::Right => 0.75,
-            Self::Left => 0.60,
-            Self::Top => 1.0,
-            Self::Bottom => 0.48,
+            Self::Front => 0.316_069_78,
+            Self::Right => 0.474_104_67,
+            Self::Top => 0.821_781_4,
+            Self::Back | Self::Left | Self::Bottom => 0.0,
         }
     }
 }
 
 #[derive(Clone, Copy, Debug)]
-pub struct Face {
-    pub position: [u8; 3],
-    pub ambient_occlusion: u8,
-    pub side: FaceSide,
+pub(crate) struct Face {
+    pub(crate) position: [u8; 3],
+    pub(crate) ambient_occlusion: u8,
+    pub(crate) side: FaceSide,
 }
 
-pub struct World {
+pub(crate) struct World {
     voxels: Vec<Block>,
     heights: Vec<u8>,
     seed: u32,
@@ -189,7 +190,7 @@ pub struct World {
 }
 
 impl World {
-    pub fn generate(seed: u32) -> Self {
+    pub(crate) fn generate(seed: u32) -> Self {
         let mut world = Self {
             voxels: alloc::vec![Block::Air; SIZE * SIZE * SIZE],
             heights: alloc::vec![0; SIZE * SIZE],
@@ -203,7 +204,7 @@ impl World {
         world
     }
 
-    pub fn faces_by_material(&self) -> [Vec<Face>; Material::COUNT] {
+    pub(crate) fn faces_by_material(&self) -> [Vec<Face>; Material::COUNT] {
         let mut faces = core::array::from_fn(|_| Vec::new());
         for water in [false, true] {
             for z in 0..SIZE {
@@ -243,11 +244,11 @@ impl World {
         faces
     }
 
-    fn index([x, y, z]: [usize; 3]) -> usize {
+    const fn index([x, y, z]: [usize; 3]) -> usize {
         (x * SIZE + y) * SIZE + z
     }
 
-    fn height_index(x: usize, z: usize) -> usize {
+    const fn height_index(x: usize, z: usize) -> usize {
         x * SIZE + z
     }
 
@@ -559,5 +560,89 @@ impl World {
             }
         }
         (255.0 * (1.0 - 0.45 * blocked as f32 / 26.0)) as u8
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn empty_world() -> World {
+        World {
+            voxels: alloc::vec![Block::Air; SIZE * SIZE * SIZE],
+            heights: alloc::vec![0; SIZE * SIZE],
+            seed: 0,
+            sea_level: 0,
+        }
+    }
+
+    #[test]
+    fn block_materials_match_the_face_direction() {
+        assert_eq!(Block::Grass.material(FaceSide::Front), Material::DirtGrass);
+        assert_eq!(Block::Grass.material(FaceSide::Top), Material::GrassTop);
+        assert_eq!(Block::Grass.material(FaceSide::Bottom), Material::Dirt);
+        assert_eq!(Block::Trunk.material(FaceSide::Top), Material::TrunkTop);
+        assert_eq!(Block::Trunk.material(FaceSide::Left), Material::TrunkSide);
+        assert_eq!(Block::Cactus.material(FaceSide::Top), Material::CactusTop);
+        assert_eq!(
+            Block::Cactus.material(FaceSide::Right),
+            Material::CactusSide
+        );
+    }
+
+    #[test]
+    fn ambient_occlusion_counts_only_opaque_neighbors() {
+        let mut world = empty_world();
+        assert_eq!(world.ambient_occlusion([32, 32, 32]), 255);
+        world.set([33, 32, 32], Block::Water);
+        assert_eq!(world.ambient_occlusion([32, 32, 32]), 255);
+        world.set([33, 32, 32], Block::Stone);
+        assert_eq!(world.ambient_occlusion([32, 32, 32]), 250);
+        for z in 31..=33 {
+            for y in 31..=33 {
+                for x in 31..=33 {
+                    if [x, y, z] != [32, 32, 32] {
+                        world.set([x, y, z], Block::Stone);
+                    }
+                }
+            }
+        }
+        assert_eq!(world.ambient_occlusion([32, 32, 32]), 140);
+    }
+
+    #[test]
+    fn water_hides_itself_but_keeps_adjacent_terrain_visible() {
+        let mut world = empty_world();
+        world.set([32, 32, 32], Block::Stone);
+        world.set([33, 32, 32], Block::Water);
+        let faces = world.faces_by_material();
+        assert_eq!(faces[Material::Stone.index()].len(), 6);
+        assert_eq!(faces[Material::Water.index()].len(), 5);
+        world.set([34, 32, 32], Block::Water);
+        let faces = world.faces_by_material();
+        assert_eq!(faces[Material::Stone.index()].len(), 6);
+        assert_eq!(faces[Material::Water.index()].len(), 9);
+    }
+
+    #[test]
+    fn face_winding_and_light_match_the_shader_normals() {
+        let sun_length = (0.45_f32 * 0.45 + 0.78 * 0.78 + 0.30 * 0.30).sqrt();
+        for side in FaceSide::ALL {
+            let corners = side.corners().map(|corner| corner.map(i32::from));
+            let a = core::array::from_fn::<_, 3, _>(|axis| corners[1][axis] - corners[0][axis]);
+            let b = core::array::from_fn::<_, 3, _>(|axis| corners[2][axis] - corners[0][axis]);
+            assert_eq!(
+                [
+                    a[1] * b[2] - a[2] * b[1],
+                    a[2] * b[0] - a[0] * b[2],
+                    a[0] * b[1] - a[1] * b[0]
+                ],
+                side.offset()
+            );
+            let normal = side.offset().map(|value| value as f32);
+            let expected =
+                ((normal[0] * 0.45 + normal[1] * 0.78 + normal[2] * 0.30) / sun_length).max(0.0);
+            assert!((side.light() - expected).abs() < 0.000_001);
+        }
     }
 }
