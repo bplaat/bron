@@ -6,7 +6,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>
-#include <time.h>
+#include <string.h>
 
 #include "materials.h"
 #include "shader_types.h"
@@ -96,10 +96,24 @@ static float voxel_mix(float from, float to, float weight) {
 }
 
 // Classic smoothed value noise over the integer lattice.
-static float voxel_noise(uint32_t seed, vector_float3 point) {
-    vector_float3 cell = {floorf(point.x), floorf(point.y), floorf(point.z)};
-    vector_float3 fraction = point - cell;
-    vector_float3 weight = fraction * fraction * (3.0f - 2.0f * fraction);
+typedef struct {
+    float x, y, z;
+} Vec3;
+
+static Vec3 vec3_scale(Vec3 v, float scale) {
+    return (Vec3){v.x * scale, v.y * scale, v.z * scale};
+}
+
+static Vec3 vec3_add(Vec3 v, float amount) {
+    return (Vec3){v.x + amount, v.y + amount, v.z + amount};
+}
+
+static float voxel_noise(uint32_t seed, Vec3 point) {
+    Vec3 cell = {floorf(point.x), floorf(point.y), floorf(point.z)};
+    Vec3 fraction = {point.x - cell.x, point.y - cell.y, point.z - cell.z};
+    Vec3 weight = {fraction.x * fraction.x * (3.0f - 2.0f * fraction.x),
+                   fraction.y * fraction.y * (3.0f - 2.0f * fraction.y),
+                   fraction.z * fraction.z * (3.0f - 2.0f * fraction.z)};
     int x = (int)cell.x, y = (int)cell.y, z = (int)cell.z;
     float front =
         voxel_mix(voxel_mix(voxel_hash(seed, x, y, z), voxel_hash(seed, x + 1, y, z), weight.x),
@@ -110,19 +124,19 @@ static float voxel_noise(uint32_t seed, vector_float3 point) {
     return voxel_mix(front, back, weight.z);
 }
 
-static float voxel_fractal_noise(uint32_t seed, vector_float3 point, int octaves) {
+static float voxel_fractal_noise(uint32_t seed, Vec3 point, int octaves) {
     float sum = 0, total = 0, amplitude = 1;
     for (int octave = 0; octave < octaves; octave++) {
         sum += amplitude * voxel_noise(seed + (uint32_t)octave * 7919u, point);
         total += amplitude;
         amplitude *= 0.5f;
-        point *= 2.0f;
+        point = vec3_scale(point, 2.0f);
     }
     return sum / total;
 }
 
 static uint8_t world_ore(int x, int y, int z) {
-    vector_float3 point = (vector_float3){(float)x, (float)y, (float)z} * 0.14f;
+    Vec3 point = vec3_scale((Vec3){(float)x, (float)y, (float)z}, 0.14f);
     if (y < 14 && voxel_noise(0x0d1a3f11u, point) > 0.80f) {
         return VoxelDiamond;
     }
@@ -147,9 +161,9 @@ static void world_generate_heights(void) {
     for (int z = 0; z < WorldSize; z++) {
         for (int x = 0; x < WorldSize; x++) {
             // Rolling continents with the occasional sharp mountain on top.
-            vector_float3 column = {(float)x, 0, (float)z};
-            float continents = voxel_fractal_noise(0x51a7b3c9u, column * 0.021f, 4);
-            float mountains = voxel_fractal_noise(0x2f8e11d5u, column * 0.045f + 17.0f, 3);
+            Vec3 column = {(float)x, 0, (float)z};
+            float continents = voxel_fractal_noise(0x51a7b3c9u, vec3_scale(column, 0.021f), 4);
+            float mountains = voxel_fractal_noise(0x2f8e11d5u, vec3_add(vec3_scale(column, 0.045f), 17.0f), 3);
             raw[x][z] = continents + powf(mountains, 4.5f) * 1.2f;
             lowest = raw[x][z] < lowest ? raw[x][z] : lowest;
             highest = raw[x][z] > highest ? raw[x][z] : highest;
@@ -182,8 +196,8 @@ static void world_generate_heights(void) {
 static void world_generate_terrain(void) {
     for (int z = 0; z < WorldSize; z++) {
         for (int x = 0; x < WorldSize; x++) {
-            vector_float3 column = {(float)x, 0, (float)z};
-            float desert = voxel_fractal_noise(0x7b3d90a1u, column * 0.017f - 31.0f, 2);
+            Vec3 column = {(float)x, 0, (float)z};
+            float desert = voxel_fractal_noise(0x7b3d90a1u, vec3_add(vec3_scale(column, 0.017f), -31.0f), 2);
             int height = worldHeights[x][z];
             bool beach = height <= worldSeaLevel + 1;
             bool dunes = desert > 0.63f;
@@ -206,7 +220,7 @@ static void world_generate_terrain(void) {
                 }
                 // Hollow out winding caverns well below the surface.
                 if (y > 4 && y < height - 2) {
-                    vector_float3 point = {(float)x * 0.075f, (float)y * 0.11f, (float)z * 0.075f};
+                    Vec3 point = {(float)x * 0.075f, (float)y * 0.11f, (float)z * 0.075f};
                     float cave = voxel_fractal_noise(0x3c9d7a15u, point, 2);
                     if (cave > 0.615f && cave < 0.715f) {
                         type = VoxelAir;
@@ -398,8 +412,9 @@ static size_t world_emit_faces(VoxelInstance* instances, size_t count, bool tran
 // Generates the whole world and packs its visible faces into instances, with
 // the opaque ones first and the translucent water surface behind them. The
 // caller owns the returned buffer.
-static WorldInstances world_build(void) {
-    worldSeed = (uint32_t)clock_gettime_nsec_np(CLOCK_REALTIME);
+static WorldInstances world_build(uint32_t seed) {
+    worldSeed = seed;
+    memset(worldVoxels, 0, sizeof(worldVoxels));
     world_generate_heights();
     world_generate_terrain();
     world_build_hut();
