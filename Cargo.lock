@@ -904,6 +904,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "plaatcraft"
+version = "0.2.0"
+dependencies = [
+ "bcanvas",
+ "bwebgpu",
+ "bwebgpu-shader-build",
+ "bwindow",
+ "deflate",
+ "directories",
+ "image",
+ "libsqlite3-sys",
+ "rust-embed",
+ "winresource",
+]
+
+[[package]]
 name = "plaatnotes"
 version = "0.1.3"
 dependencies = [
