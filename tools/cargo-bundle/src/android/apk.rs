@@ -74,6 +74,11 @@ pub(super) fn package(
         // Stored so the libraries can be mapped directly from the APK.
         zip::append_stored_file(&mut apk, &name, &library).expect("Failed to add native library");
     }
+    let binaries: Vec<_> = abis
+        .iter()
+        .map(|(abi, _, _)| PathBuf::from(format!("{target_dir}/lib/{abi}/lib{lib_name}.so")))
+        .collect();
+    crate::assets::append_apk(&mut apk, &binaries).expect("Failed to add APK assets");
     drop(apk);
 
     let aligned = format!("{target_dir}/aligned.apk");

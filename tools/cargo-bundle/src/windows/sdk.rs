@@ -14,6 +14,23 @@ pub(crate) fn pack(layout: &str, msix: &str) {
     run("makeappx.exe", &["pack", "/o", "/d", layout, "/p", msix]);
 }
 
+pub(crate) fn pack_assets(manifest: &Path, mapping: &Path, msix: &str) {
+    run(
+        "makeappx.exe",
+        &[
+            "pack",
+            "/o",
+            "/r",
+            "/m",
+            manifest.to_str().expect("UTF-8 manifest path"),
+            "/f",
+            mapping.to_str().expect("UTF-8 mapping path"),
+            "/p",
+            msix,
+        ],
+    );
+}
+
 pub(crate) fn bundle(packages: &str, msix_bundle: &str, version: &str) {
     run(
         "makeappx.exe",

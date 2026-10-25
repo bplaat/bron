@@ -15,6 +15,7 @@ use crate::windows::appx_manifest::{appx_manifest, package_version};
 use crate::windows::publisher::publisher_name;
 
 mod appx_manifest;
+mod assets;
 mod publisher;
 mod sdk;
 
@@ -82,11 +83,30 @@ pub(crate) fn bundle(args: &Args, target_dir: &str, manifest: &Manifest) {
         .expect("Failed to write AppxManifest.xml");
     }
 
+    let shared_layout = Path::new(&msix_dir).join("shared");
+    let binaries: Vec<_> = ARCHITECTURES
+        .iter()
+        .map(|(_, arch)| Path::new(&msix_dir).join(arch).join(&executable))
+        .collect();
+    let shared_files =
+        assets::stage(&binaries, &shared_layout).expect("Failed to stage shared MSIX assets");
+
+    if !shared_files.is_empty() {
+        fs::write(
+            shared_layout.join("AppxManifest.xml"),
+            appx_manifest::asset_manifest_template(manifest, &windows, &publisher, &executable, 0),
+        )
+        .expect("Failed to write shared asset manifest template");
+    }
+
     // Windows ignores reinstalls of the same version, so the revision hashes all packaged files,
     // the resource index is created afterwards from these same files
     let mut hash = Fnv1a::default();
     for (_, arch) in ARCHITECTURES {
         hash_directory(&mut hash, Path::new(&format!("{msix_dir}/{arch}")));
+    }
+    if !shared_files.is_empty() {
+        hash_directory(&mut hash, &shared_layout);
     }
     let revision = hash.revision();
     for (_, arch) in ARCHITECTURES {
@@ -98,6 +118,33 @@ pub(crate) fn bundle(args: &Args, target_dir: &str, manifest: &Manifest) {
         .expect("Failed to write AppxManifest.xml");
         sdk::make_pri(&format!("{msix_dir}/priconfig.xml"), &layout);
         sdk::pack(&layout, &format!("{packages}/{}_{arch}.msix", bundle.name));
+    }
+
+    if !shared_files.is_empty() {
+        let template = shared_layout.join("AppxManifest.xml");
+        let mapping = shared_layout.join("mapping.txt");
+        fs::write(
+            &template,
+            appx_manifest::asset_manifest_template(
+                manifest,
+                &windows,
+                &publisher,
+                &executable,
+                revision,
+            ),
+        )
+        .expect("Failed to write shared asset manifest template");
+        fs::write(
+            &mapping,
+            assets::mapping(&shared_layout, &shared_files)
+                .expect("Failed to map shared MSIX assets"),
+        )
+        .expect("Failed to write shared asset mapping");
+        sdk::pack_assets(
+            &template,
+            &mapping,
+            &format!("{packages}/{}_assets.msix", bundle.name),
+        );
     }
 
     let msix_bundle = format!("{target_dir}/{}.msixbundle", bundle.name);

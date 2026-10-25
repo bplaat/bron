@@ -191,6 +191,7 @@ Most of these libraries are intended primarily for personal use, but can still b
 **Build**
 
 - [openapi-generator](lib/build/openapi-generator) A simple OpenAPI code generator
+- [cargo-bundle-assets](lib/build/cargo-bundle-assets) Embed assets in standalone binaries or load files packaged by cargo-bundle
 - [rust-embed](lib/build/rust-embed) A minimal replacement for the [rust-embed](https://crates.io/crates/rust-embed) crate
 - [rust-embed-impl](lib/build/rust-embed-impl) A minimal replacement for the [rust-embed-impl](https://crates.io/crates/rust-embed-impl) crate
 - [winresource](lib/build/winresource) A minimal replacement for the [winresource](https://crates.io/crates/winresource) crate

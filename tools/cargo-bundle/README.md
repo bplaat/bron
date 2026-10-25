@@ -45,6 +45,18 @@ Then run `cargo bundle` with the path argument, when using a Cargo workspace run
 cargo bundle --path path/to/your/crate
 ```
 
+### Application assets
+
+Use [`cargo-bundle-assets`](../../lib/build/cargo-bundle-assets) to declare files
+with `#[derive(cargo_bundle_assets::Assets)]` and `#[folder = "assets"]`.
+Ordinary Cargo builds embed the bytes. Bundle builds copy declared files into
+macOS `Contents/Resources/<hash>/`, iOS `assets/<hash>/`, Windows
+MSIX asset packages containing `Assets/<hash>/`, or shared Android APK `assets/<hash>/` entries.
+Each collection has its own namespace, shared by all executable architectures.
+APK assets are stored without ZIP compression and read through the native asset
+manager. No runtime extraction, asset catalogs, build script, or pack format is
+required. Existing `rust-embed` and `include_bytes!` users retain their behavior.
+
 ### macOS
 
 This builds your crate for x86_64 and arm64, links both architectures into a universal binary,
@@ -91,7 +103,20 @@ in the iOS Info.plist, for example to only allow portrait on iPhone:
 
 This builds your crate for x64 and arm64, packs an unsigned `.msix` package for each architecture
 and combines them into a `.msixbundle` in the `target/bundle` directory with `MakeAppx` from the
-Windows SDK, so Windows installs the package for its own architecture. The package publisher is
+Windows SDK, so Windows installs the package for its own architecture.
+When the executables declare `cargo-bundle-assets` collections, the tool automatically
+adds one architecture-neutral `<name>_assets.msix` containing the combined collection
+files at `Assets/<hash>/`. Windows package folding makes those paths available beside
+the installed executable. Conflicting payloads across architectures fail bundling.
+Logos and `resources.pri` stay in each architecture package; the shared asset package
+contains neither executable code nor a resource index. Apps without declared assets
+keep their existing architecture-only bundle.
+
+Shared asset packages require an NTFS installation volume. Publishing them through
+the Microsoft Store requires approval from Windows developer support; see
+[Microsoft's asset package documentation](https://learn.microsoft.com/en-us/windows/msix/package/asset-packages).
+
+The package publisher is
 the first package author with the
 [unsigned package](https://learn.microsoft.com/en-us/windows/msix/package/unsigned-package) OID,
 so it can be installed on Windows 11 from an administrator PowerShell:
