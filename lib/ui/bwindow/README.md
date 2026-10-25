@@ -32,6 +32,9 @@ Native input uses DOM-like names with typed Rust payloads:
 | `KeyDown` / `KeyUp`        | `keydown` / `keyup`        |
 | `MouseDown` / `MouseUp`    | `mousedown` / `mouseup`    |
 | `MouseMove` / `MouseLeave` | `mousemove` / `mouseleave` |
+| `PointerLockChange`        | `pointerlockchange`        |
+| `TouchStart` / `TouchMove` | `touchstart` / `touchmove` |
+| `TouchEnd` / `TouchCancel` | `touchend` / `touchcancel` |
 | `Wheel`                    | `wheel`                    |
 | `Focus` / `Blur`           | `focus` / `blur`           |
 
@@ -56,8 +59,15 @@ event_loop.run(|event| {
 
 - `Modifiers::META` is Command on macOS and Windows/Super elsewhere.
 - Mouse positions are logical client-area pixels, like `clientX`/`clientY`.
+- `MouseMove::movement` is the relative motion, like `movementX`/`movementY`.
+- `window.request_pointer_lock()` hides and locks the pointer, like `requestPointerLock()`,
+  it is released with `window.exit_pointer_lock()` and `window.pointer_locked()` queries
+  it. Lock changes send `PointerLockChange`. Touch screens have no pointer to lock.
 - Wheel deltas are in pixels or lines; positive values scroll right/down.
-- Only close requests can be cancelled, with `prevent_default()`.
+- iOS and Android report every changed finger with a stable `Touch::identifier`.
+  The first finger also emulates a mouse. Call `TouchEvent::prevent_default()` on
+  `TouchStart` to suppress mouse input for that gesture.
+- Close requests can be cancelled with `prevent_default()`.
 - IME text input is not supported.
 - Input reaches the window the same way for empty, canvas and GPU windows. A web view
   handles its own input; keys and pointer events it handles are not reported again.

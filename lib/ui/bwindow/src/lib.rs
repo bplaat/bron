@@ -44,6 +44,7 @@ mod mailbox;
 mod menu;
 mod platforms;
 mod sizes;
+mod touch;
 mod window;
 
 /// Platform-specific native ABI declarations for implementing content backends.

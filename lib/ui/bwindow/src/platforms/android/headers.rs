@@ -157,6 +157,8 @@ unsafe extern "C" {
     pub(crate) fn AKeyEvent_getKeyCode(event: *const AInputEvent) -> i32;
     pub(crate) fn AKeyEvent_getRepeatCount(event: *const AInputEvent) -> i32;
     pub(crate) fn AKeyEvent_getMetaState(event: *const AInputEvent) -> i32;
+    pub(crate) fn AMotionEvent_getPointerCount(event: *const AInputEvent) -> usize;
+    pub(crate) fn AMotionEvent_getPointerId(event: *const AInputEvent, pointer: usize) -> i32;
     pub(crate) fn AMotionEvent_getAction(event: *const AInputEvent) -> i32;
     pub(crate) fn AMotionEvent_getToolType(event: *const AInputEvent, pointer: usize) -> i32;
     pub(crate) fn AMotionEvent_getX(event: *const AInputEvent, pointer: usize) -> f32;

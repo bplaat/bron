@@ -9,18 +9,21 @@
 //! own input, so their interaction is never delivered twice.
 
 use std::cell::Cell;
-use std::ptr::null;
+use std::ffi::c_void;
+use std::ptr::{null, null_mut};
+use std::rc::Rc;
 
 use super::headers::*;
 use super::input::{windows_key_event, windows_modifiers};
-use crate::dispatch::send as send_event;
+use crate::content::ContentHost;
 use crate::{
-    ButtonState, CursorIcon, Event, LogicalPoint, MouseButton, MouseEvent, ScrollDelta,
-    WindowEvent, WindowId,
+    ButtonState, CursorIcon, LogicalPoint, MouseButton, MouseEvent, PointerLockError, ScrollDelta,
+    WindowEvent,
 };
 
 const WM_ACTIVATE: u32 = 0x0006;
 const WM_SETCURSOR: u32 = 0x0020;
+const WM_INPUT: u32 = 0x00ff;
 const WM_KEYDOWN: u32 = 0x0100;
 const WM_KEYUP: u32 = 0x0101;
 const WM_SYSKEYDOWN: u32 = 0x0104;
@@ -44,6 +47,13 @@ const MK_BUTTONS: usize = 0x0001 | 0x0002 | 0x0010 | 0x0020 | 0x0040;
 const IDC_ARROW: *const w_char = 32512usize as *const w_char;
 const IDC_HAND: *const w_char = 32649usize as *const w_char;
 const IDC_APPSTARTING: *const w_char = 32650usize as *const w_char;
+const RID_INPUT: u32 = 0x10000003;
+const RIM_TYPEMOUSE: u32 = 0;
+const RIDEV_REMOVE: u32 = 0x00000001;
+const MOUSE_MOVE_ABSOLUTE: u16 = 0x0001;
+// The generic desktop mouse HID usage.
+const HID_USAGE_PAGE_GENERIC: u16 = 0x01;
+const HID_USAGE_GENERIC_MOUSE: u16 = 0x02;
 
 #[repr(C)]
 #[derive(Default)]
@@ -55,6 +65,42 @@ struct TRACKMOUSEEVENT {
     dwHoverTime: u32,
 }
 
+#[repr(C)]
+#[allow(non_snake_case, clippy::upper_case_acronyms)]
+struct RAWINPUTDEVICE {
+    usUsagePage: u16,
+    usUsage: u16,
+    dwFlags: u32,
+    hwndTarget: HWND,
+}
+
+#[repr(C)]
+#[allow(non_snake_case, clippy::upper_case_acronyms)]
+struct RAWINPUTHEADER {
+    dwType: u32,
+    dwSize: u32,
+    hDevice: HANDLE,
+    wParam: WPARAM,
+}
+
+#[repr(C)]
+#[allow(non_snake_case, clippy::upper_case_acronyms)]
+struct RAWMOUSE {
+    usFlags: u16,
+    ulButtons: u32,
+    ulRawButtons: u32,
+    lLastX: i32,
+    lLastY: i32,
+    ulExtraInformation: u32,
+}
+
+#[repr(C)]
+#[allow(non_snake_case, clippy::upper_case_acronyms)]
+struct RAWINPUT {
+    header: RAWINPUTHEADER,
+    mouse: RAWMOUSE,
+}
+
 #[link(name = "user32")]
 unsafe extern "system" {
     fn GetCursorPos(point: *mut POINT) -> BOOL;
@@ -64,6 +110,16 @@ unsafe extern "system" {
     fn SetCapture(hwnd: HWND) -> HWND;
     fn ReleaseCapture() -> BOOL;
     fn TrackMouseEvent(event: *mut TRACKMOUSEEVENT) -> BOOL;
+    fn ClipCursor(rect: *const RECT) -> BOOL;
+    fn ShowCursor(show: BOOL) -> i32;
+    fn RegisterRawInputDevices(devices: *const RAWINPUTDEVICE, count: u32, size: u32) -> BOOL;
+    fn GetRawInputData(
+        input: HANDLE,
+        command: u32,
+        data: *mut c_void,
+        size: *mut u32,
+        header_size: u32,
+    ) -> u32;
 }
 
 /// The interaction state of one window.
@@ -94,18 +150,50 @@ impl Interaction {
         unsafe { SetCursor(LoadCursorW(null(), name)) };
     }
 
+    /// Hide the pointer, confine it to its position and receive raw mouse motion.
+    pub(super) fn lock_pointer(&self, hwnd: HWND) -> Result<(), PointerLockError> {
+        if !register_raw_mouse(0, hwnd) {
+            return Err(PointerLockError(
+                "Could not register raw mouse input".into(),
+            ));
+        }
+        let mut point = POINT { x: 0, y: 0 };
+        if unsafe { GetCursorPos(&mut point) } == FALSE {
+            register_raw_mouse(RIDEV_REMOVE, null_mut());
+            return Err(PointerLockError(
+                "Could not read the pointer position".into(),
+            ));
+        }
+        let clip = RECT {
+            left: point.x,
+            top: point.y,
+            right: point.x + 1,
+            bottom: point.y + 1,
+        };
+        if unsafe { ClipCursor(&clip) } == FALSE {
+            register_raw_mouse(RIDEV_REMOVE, null_mut());
+            return Err(PointerLockError("Could not confine the pointer".into()));
+        }
+        unsafe {
+            ShowCursor(FALSE);
+            SetCapture(hwnd);
+        }
+        Ok(())
+    }
+
     /// Handle an interaction message of the client area, returns its result when handled.
     /// Events are sent last, their handlers can close the window and free this state.
     pub(super) unsafe fn handle(
         &self,
         hwnd: HWND,
-        id: WindowId,
+        host: &Rc<ContentHost>,
         dpi: u32,
         message: u32,
         wparam: WPARAM,
         lparam: LPARAM,
     ) -> Option<LRESULT> {
-        let send = |event| send_event(Event::Window(id, event));
+        let locked = host.pointer_locked();
+        let send = |event| host.event_sender().send(event);
         match message {
             WM_ACTIVATE => {
                 send(if wparam & 0xffff != 0 {
@@ -117,9 +205,23 @@ impl Interaction {
             }
             // The cursor over a window child or the frame is set by them.
             WM_SETCURSOR if wparam as HWND == hwnd && lparam as u16 == HTCLIENT => {
-                self.apply_cursor();
+                if !locked {
+                    self.apply_cursor();
+                }
                 Some(1)
             }
+            // The locked pointer stays put, the window reports its raw motion instead.
+            WM_INPUT => {
+                if locked && let Some(movement) = unsafe { raw_mouse_movement(lparam) } {
+                    send(WindowEvent::MouseMove {
+                        position: LogicalPoint::default(),
+                        movement,
+                        modifiers: windows_modifiers(),
+                    });
+                }
+                None
+            }
+            WM_MOUSEMOVE if locked => Some(0),
             WM_MOUSEMOVE => {
                 let mut track = TRACKMOUSEEVENT {
                     cbSize: size_of::<TRACKMOUSEEVENT>() as u32,
@@ -130,6 +232,7 @@ impl Interaction {
                 unsafe { TrackMouseEvent(&mut track) };
                 send(WindowEvent::MouseMove {
                     position: pointer_position(dpi, lparam),
+                    movement: LogicalPoint::default(),
                     modifiers: windows_modifiers(),
                 });
                 Some(0)
@@ -147,7 +250,7 @@ impl Interaction {
                 // Keep receiving pointer input while a button is held outside the window.
                 if pressed {
                     unsafe { SetCapture(hwnd) };
-                } else if wparam & MK_BUTTONS == 0 {
+                } else if wparam & MK_BUTTONS == 0 && !locked {
                     unsafe { ReleaseCapture() };
                 }
                 let event = MouseEvent {
@@ -196,6 +299,51 @@ impl Interaction {
             _ => None,
         }
     }
+}
+
+/// Release the pointer lock of any window.
+pub(crate) fn release_pointer_lock() {
+    unsafe {
+        ClipCursor(null());
+        ShowCursor(TRUE);
+        ReleaseCapture();
+    }
+    register_raw_mouse(RIDEV_REMOVE, null_mut());
+}
+
+fn register_raw_mouse(flags: u32, hwnd: HWND) -> bool {
+    let device = RAWINPUTDEVICE {
+        usUsagePage: HID_USAGE_PAGE_GENERIC,
+        usUsage: HID_USAGE_GENERIC_MOUSE,
+        dwFlags: flags,
+        hwndTarget: hwnd,
+    };
+    unsafe { RegisterRawInputDevices(&device, 1, size_of::<RAWINPUTDEVICE>() as u32) != FALSE }
+}
+
+// The relative motion of a raw mouse input message, absolute devices like tablets and
+// remote desktops report no motion.
+unsafe fn raw_mouse_movement(lparam: LPARAM) -> Option<LogicalPoint> {
+    let mut input = std::mem::MaybeUninit::<RAWINPUT>::uninit();
+    let mut size = size_of::<RAWINPUT>() as u32;
+    let read = unsafe {
+        GetRawInputData(
+            lparam as HANDLE,
+            RID_INPUT,
+            input.as_mut_ptr().cast(),
+            &mut size,
+            size_of::<RAWINPUTHEADER>() as u32,
+        )
+    };
+    if read == u32::MAX || (read as usize) < size_of::<RAWINPUT>() {
+        return None;
+    }
+    let input = unsafe { input.assume_init() };
+    let mouse = &input.mouse;
+    (input.header.dwType == RIM_TYPEMOUSE
+        && mouse.usFlags & MOUSE_MOVE_ABSOLUTE == 0
+        && (mouse.lLastX != 0 || mouse.lLastY != 0))
+        .then(|| LogicalPoint::new(mouse.lLastX as f32, mouse.lLastY as f32))
 }
 
 const fn mouse_button(message: u32, wparam: WPARAM) -> MouseButton {

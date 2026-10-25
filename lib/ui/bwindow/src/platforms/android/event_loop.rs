@@ -439,6 +439,23 @@ unsafe fn handle_input(event: *mut AInputEvent) -> bool {
                     AMotionEvent_getY(event, 0) / density,
                 );
                 let mouse = AMotionEvent_getToolType(event, 0) == AMOTION_EVENT_TOOL_TYPE_MOUSE;
+                if !mouse {
+                    let touches = (0..AMotionEvent_getPointerCount(event))
+                        .map(|index| crate::Touch {
+                            identifier: AMotionEvent_getPointerId(event, index) as u64,
+                            position: LogicalPoint::new(
+                                AMotionEvent_getX(event, index) / density,
+                                AMotionEvent_getY(event, index) / density,
+                            ),
+                        })
+                        .collect();
+                    if let Some(event) = input::touch_event(AMotionEvent_getAction(event), touches)
+                    {
+                        window::send(event);
+                        return true;
+                    }
+                    return false;
+                }
                 let scroll = (
                     AMotionEvent_getAxisValue(event, AMOTION_EVENT_AXIS_HSCROLL, 0),
                     -AMotionEvent_getAxisValue(event, AMOTION_EVENT_AXIS_VSCROLL, 0),

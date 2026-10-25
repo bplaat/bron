@@ -14,7 +14,7 @@ use super::event_loop::{APP_ID, send_event, system_theme};
 #[cfg(feature = "file_drop")]
 use super::file_drop::handle_file_drop;
 use super::headers::*;
-use super::interaction::Interaction;
+use super::interaction::{Interaction, release_pointer_lock};
 #[cfg(feature = "progress_bar")]
 use super::progress_bar::ProgressBar;
 #[cfg(feature = "remember_window_state")]
@@ -22,7 +22,8 @@ use super::window_state::{restore_window_state, save_window_state};
 #[cfg(feature = "progress_bar")]
 use crate::WindowsProgressBarState;
 use crate::{
-    CloseRequest, CursorIcon, LogicalPoint, LogicalSize, Theme, WindowBuilder, WindowEvent,
+    CloseRequest, CursorIcon, LogicalPoint, LogicalSize, PointerLockError, Theme, WindowBuilder,
+    WindowEvent,
 };
 
 pub(super) struct WindowData {
@@ -378,6 +379,14 @@ impl crate::WindowInterface for PlatformWindow {
         self.0.interaction.set_cursor(self.0.hwnd, cursor);
     }
 
+    fn request_pointer_lock(&mut self) -> Result<(), PointerLockError> {
+        self.0.interaction.lock_pointer(self.0.hwnd)
+    }
+
+    fn exit_pointer_lock(&mut self) {
+        release_pointer_lock();
+    }
+
     #[cfg(feature = "progress_bar")]
     fn windows_set_progress_bar(&mut self, progress: Option<f32>, state: WindowsProgressBarState) {
         self.0.progress_bar.set(self.0.hwnd, progress, state);
@@ -419,7 +428,7 @@ unsafe extern "system" fn window_proc(
     if let Some(result) = unsafe {
         _self
             .interaction
-            .handle(hwnd, _self.window_id, _self.dpi, msg, w_param, l_param)
+            .handle(hwnd, &_self.host, _self.dpi, msg, w_param, l_param)
     } {
         return result;
     }

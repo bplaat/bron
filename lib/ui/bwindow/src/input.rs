@@ -4,7 +4,38 @@
  * SPDX-License-Identifier: MIT
  */
 
+use std::cell::Cell;
 use std::ops::{BitOr, BitOrAssign};
+use std::rc::Rc;
+
+/// One finger in logical client-area pixels.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Touch {
+    /// Stable identifier until this finger lifts or is canceled.
+    pub identifier: u64,
+    /// Current position.
+    pub position: crate::LogicalPoint,
+}
+
+/// Changed fingers in a native touch event.
+#[derive(Clone, Default)]
+pub struct TouchEvent {
+    /// Fingers that started, moved, ended, or were canceled in this event.
+    pub changed_touches: Vec<Touch>,
+    pub(crate) prevented: Rc<Cell<bool>>,
+}
+
+impl TouchEvent {
+    /// Suppress compatibility mouse events for a gesture by canceling its start.
+    pub fn prevent_default(&self) {
+        self.prevented.set(true);
+    }
+
+    /// Whether compatibility mouse events were prevented for this event.
+    pub fn default_prevented(&self) -> bool {
+        self.prevented.get()
+    }
+}
 
 // Scan code set 1, which Windows and the evdev codes of GTK report.
 #[cfg(not(any(target_vendor = "apple", target_os = "android")))]
