@@ -380,6 +380,16 @@ impl ProjectDirs {
     pub fn config_dir(&self) -> PathBuf {
         self.base_dirs.config_dir().join(&self.project_path)
     }
+
+    /// Returns the path to the project's data directory
+    pub fn data_dir(&self) -> PathBuf {
+        self.base_dirs.data_dir().join(&self.project_path)
+    }
+
+    /// Returns the path to the project's local data directory
+    pub fn data_local_dir(&self) -> PathBuf {
+        self.base_dirs.data_local_dir().join(&self.project_path)
+    }
 }
 
 // MARK: UserDirs
