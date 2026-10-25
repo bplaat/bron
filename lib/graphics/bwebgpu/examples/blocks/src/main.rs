@@ -7,7 +7,7 @@
 //! Renders a 64x64x64 blocks diorama with bwebgpu.
 
 use std::num::NonZeroU64;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use bcanvas::{Color, OffscreenCanvas, TextAlign, TextBaseline};
 use bwindow::{
@@ -83,14 +83,16 @@ impl Gpu {
 
         let names = material_names();
         let materials = upload_materials(&device, &queue, &names);
-        let layers = block_materials(&names);
-        let (faces, opaque_count) = world::World::generate().faces(&layers);
-        let face_count = faces.len() as u32;
+        let seed = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("System time")
+            .subsec_nanos();
+        let faces = world::World::generate(seed).faces_by_material();
+        let (bytes, opaque_count, face_count) = world::face_bytes(&faces);
         println!(
             "Visible faces: {opaque_count} opaque, {} water",
             face_count - opaque_count
         );
-        let bytes = world::face_bytes(&faces);
         let storage = Self::mapped_buffer(
             &device,
             "voxel faces",
@@ -476,7 +478,7 @@ impl Gpu {
         };
         let mut uniform_bytes = [0; 16];
         for (index, value) in [
-            elapsed,
+            elapsed % (std::f32::consts::TAU / 0.16),
             self.config.width as f32 / self.config.height as f32,
             0.0,
             0.0,
@@ -593,44 +595,6 @@ impl Gpu {
     }
 }
 
-fn block_materials(names: &[String]) -> Vec<[u32; 3]> {
-    let same = |name| {
-        let layer = texture_layer(names, name);
-        [layer; 3]
-    };
-    vec![
-        [0; 3],
-        [
-            texture_layer(names, "dirt_grass.png"),
-            texture_layer(names, "grass_top.png"),
-            texture_layer(names, "dirt.png"),
-        ],
-        same("dirt.png"),
-        same("sand.png"),
-        same("stone.png"),
-        same("greystone.png"),
-        same("stone_coal.png"),
-        same("stone_iron.png"),
-        same("stone_gold.png"),
-        same("stone_diamond.png"),
-        same("lava.png"),
-        same("water.png"),
-        same("leaves.png"),
-        [
-            texture_layer(names, "trunk_side.png"),
-            texture_layer(names, "trunk_top.png"),
-            texture_layer(names, "trunk_top.png"),
-        ],
-        [
-            texture_layer(names, "cactus_side.png"),
-            texture_layer(names, "cactus_top.png"),
-            texture_layer(names, "cactus_top.png"),
-        ],
-        same("brick_red.png"),
-        same("wood.png"),
-    ]
-}
-
 #[derive(Default)]
 struct FrameRate {
     sample_start: Duration,
@@ -652,22 +616,10 @@ impl FrameRate {
 }
 
 fn material_names() -> Vec<String> {
-    let mut names = MaterialAssets::iter()
-        .filter(|name| name.ends_with(".png"))
-        .map(|name| name.into_owned())
-        .collect::<Vec<_>>();
-    names.sort_unstable();
-    assert!(!names.is_empty(), "Assets must contain at least one PNG");
-
-    names
-}
-
-fn texture_layer(material_names: &[String], name: &str) -> u32 {
-    material_names
-        .iter()
-        .position(|candidate| candidate == name)
-        .map(|index| index as u32)
-        .unwrap_or_else(|| panic!("Missing texture asset: {name}"))
+    world::Material::ALL
+        .into_iter()
+        .map(|material| material.file_name().to_owned())
+        .collect()
 }
 
 fn upload_materials(
@@ -853,18 +805,10 @@ mod tests {
     #[test]
     fn materials_match_world_voxel_types() {
         let names = material_names();
-        let layers = block_materials(&names);
-        assert_eq!(layers.len(), 17);
-        assert_eq!(
-            layers[1],
-            [
-                texture_layer(&names, "dirt_grass.png"),
-                texture_layer(&names, "grass_top.png"),
-                texture_layer(&names, "dirt.png"),
-            ]
-        );
-        assert_eq!(layers[13][1], texture_layer(&names, "trunk_top.png"));
-        assert_eq!(layers[14][0], texture_layer(&names, "cactus_side.png"));
+        assert_eq!(names.len(), world::Material::COUNT);
+        for material in world::Material::ALL {
+            assert_eq!(names[material.index()], material.file_name());
+        }
         for name in names {
             let asset = MaterialAssets::get(&name).expect("Embedded material");
             let image = image::decode(asset.data.as_ref()).expect("Decode material");
@@ -879,26 +823,19 @@ mod tests {
     #[test]
     fn world_faces_use_valid_materials() {
         let names = material_names();
-        let layers = block_materials(&names);
-        let (faces, opaque) = world::World::generate().faces(&layers);
-        assert!(!faces.is_empty());
-        assert!(opaque > 0 && opaque < faces.len() as u32);
-        assert!(
-            faces
-                .iter()
-                .all(|face| face.data[0] < 6 && face.data[1] < names.len() as u32)
-        );
-        assert!(
-            faces[..opaque as usize]
-                .iter()
-                .all(|face| face.data[2] == 0)
-        );
-        assert!(
-            faces[opaque as usize..]
-                .iter()
-                .all(|face| face.data[2] == 1)
-        );
-        assert_eq!(world::face_bytes(&faces).len(), faces.len() * 32);
+        let faces = world::World::generate(42).faces_by_material();
+        let (bytes, opaque, count) = world::face_bytes(&faces);
+        assert!(opaque > 0 && opaque < count);
+        assert_eq!(bytes.len(), count as usize * 32);
+        assert_eq!(faces.iter().map(Vec::len).sum::<usize>(), count as usize);
+        for (index, face) in bytes.as_chunks::<32>().0.iter().enumerate() {
+            let side = u32::from_ne_bytes(face[16..20].try_into().unwrap());
+            let layer = u32::from_ne_bytes(face[20..24].try_into().unwrap());
+            let water = u32::from_ne_bytes(face[24..28].try_into().unwrap());
+            assert!(side < 6 && layer < names.len() as u32);
+            assert_eq!(water, u32::from(index >= opaque as usize));
+            assert_eq!(layer == world::Material::Water as u32, water != 0);
+        }
     }
 
     #[test]
