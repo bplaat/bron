@@ -11,6 +11,7 @@ pub(crate) use crate::platforms::android::frame::FrameSource;
 pub(crate) use crate::platforms::android::window::PlatformWindow;
 
 mod activity;
+mod assets;
 mod event_loop;
 mod frame;
 pub(crate) mod headers;
@@ -18,7 +19,7 @@ pub(crate) mod input;
 mod window;
 
 pub(crate) mod ffi {
-    pub use super::activity::android_with_env;
+    pub use super::activity::{android_read_asset, android_with_env};
     pub use super::event_loop::{
         android_density, android_native_window, android_post, android_post_local, android_surface,
         android_window_size,
