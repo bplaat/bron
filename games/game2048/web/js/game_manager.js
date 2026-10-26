@@ -4,10 +4,10 @@
  * SPDX-License-Identifier: MIT
  */
 
-function GameManager(size, InputManager, Actuator, StorageManager) {
+function GameManager(size, InputManager, Actuator, storageManager) {
     this.size = size; // Size of the grid
     this.inputManager = new InputManager();
-    this.storageManager = new StorageManager();
+    this.storageManager = storageManager;
     this.actuator = new Actuator();
 
     this.startTiles = 2;
