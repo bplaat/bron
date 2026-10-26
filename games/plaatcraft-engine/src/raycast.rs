@@ -8,7 +8,7 @@
 
 #[cfg(not(feature = "std"))]
 use crate::math::Float;
-use crate::world;
+use crate::world::{self, Edit};
 
 /// A block hit by [`raycast`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -31,6 +31,46 @@ impl Hit {
             self.adjacent
         }
     }
+
+    /// The edit that breaks the hit block, bedrock can't be broken.
+    pub fn break_edit(self) -> Option<Edit> {
+        (self.material != world::BEDROCK && buildable(self.position)).then_some(Edit {
+            position: self.position,
+            material: 0,
+        })
+    }
+
+    /// The edit that places `item` for the player at `eye`, into air, water or a sprite
+    /// decoration that `block` returns for the placement position.
+    pub fn place_edit(
+        self,
+        item: u8,
+        eye: [f64; 3],
+        block: impl FnOnce([i64; 3]) -> Option<u8>,
+    ) -> Option<Edit> {
+        let position = self.placement_position()?;
+        let replaceable =
+            |material| matches!(material, 0 | world::WATER) || world::is_sprite(material);
+        if !buildable(position)
+            || overlaps_player(position, eye)
+            || !block(position).is_some_and(replaceable)
+        {
+            return None;
+        }
+        Some(Edit {
+            position,
+            material: world::placed_material(
+                item,
+                eye[0] - (position[0] as f64 + 0.5),
+                eye[2] - (position[2] as f64 + 0.5),
+            ),
+        })
+    }
+}
+
+// Nothing is built or broken in the bedrock layers.
+fn buildable(position: [i64; 3]) -> bool {
+    (3..world::HEIGHT as i64).contains(&position[1])
 }
 
 /// Finds the block the player aims at within reach, `block` returns `None` for
@@ -146,6 +186,35 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn edits_keep_bedrock_and_turn_ovens_toward_the_player() {
+        let hit = |material| Hit {
+            position: [0, 60, 0],
+            adjacent: Some([0, 61, 0]),
+            material,
+        };
+        assert_eq!(hit(world::BEDROCK).break_edit(), None);
+        assert_eq!(hit(3).break_edit().map(|edit| edit.material), Some(0));
+        let eye = [0.5, 63.6, 3.0];
+        let edit = hit(3).place_edit(36, eye, |_| Some(0)).unwrap();
+        assert_eq!((edit.position, edit.material), ([0, 61, 0], 36));
+        assert_eq!(
+            hit(3)
+                .place_edit(36, [3.0, 63.6, 0.5], |_| Some(0))
+                .unwrap()
+                .material,
+            75
+        );
+        assert_eq!(hit(3).place_edit(3, eye, |_| Some(3)), None);
+        assert_eq!(hit(3).place_edit(3, [0.5, 62.6, 0.5], |_| Some(0)), None);
+        let deep = Hit {
+            position: [0, 2, 0],
+            adjacent: Some([0, 2, 0]),
+            material: 0,
+        };
+        assert_eq!(deep.place_edit(3, eye, |_| Some(0)), None);
     }
 
     #[test]

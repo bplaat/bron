@@ -16,7 +16,7 @@ use bwindow::{
     Event, EventLoopBuilder, KeyCode, LogicalInsets, LogicalPoint, LogicalSize, Modifiers,
     MouseButton, Theme, Window, WindowBuilder, WindowEvent,
 };
-use plaatcraft_engine::{camera, raycast, world};
+use plaatcraft_engine::{camera, world};
 
 mod controls;
 mod database;
@@ -937,46 +937,32 @@ impl Game {
             }
             return;
         }
-        let (position, material) = match button {
-            MouseButton::Left => (hit.position, 0),
+        let edit = match button {
+            MouseButton::Left => hit.break_edit(),
             MouseButton::Right => {
-                let Some(position) = hit.placement_position() else {
-                    return;
-                };
-                if raycast::overlaps_player(position, self.camera.position) {
-                    return;
-                }
-                let block = self.interaction.block(&self.database, position, |coord| {
-                    self.chunks.contains_key(&coord)
-                });
-                if !block.is_some_and(|material| {
-                    matches!(material, 0 | world::WATER) || world::is_sprite(material)
-                }) {
-                    return;
-                }
-                let material = world::placed_material(
-                    self.hotbar.material(),
-                    self.camera.position[0] - (position[0] as f64 + 0.5),
-                    self.camera.position[2] - (position[2] as f64 + 0.5),
-                );
-                (position, material)
+                hit.place_edit(self.hotbar.material(), self.camera.position, |position| {
+                    self.interaction.block(&self.database, position, |coord| {
+                        self.chunks.contains_key(&coord)
+                    })
+                })
             }
-            _ => return,
+            _ => None,
         };
-        if !(3..world::HEIGHT as i64).contains(&position[1]) || hit.material == 23 && material == 0
-        {
+        let Some(edit) = edit else {
             return;
-        }
-        match self.database.edit(world::Edit { position, material }) {
+        };
+        match self.database.edit(edit) {
             Ok(revision) => {
-                let center = (position[0].div_euclid(16), position[2].div_euclid(16));
+                let center = (
+                    edit.position[0].div_euclid(16),
+                    edit.position[2].div_euclid(16),
+                );
                 for coord in self.stream.invalidate(center, revision) {
                     if self.chunks.contains_key(&coord) {
                         self.dirty.insert(coord);
                     }
                 }
-                self.interaction
-                    .apply_edit(world::Edit { position, material });
+                self.interaction.apply_edit(edit);
             }
             Err(error) => eprintln!("Could not save block edit: {error}"),
         }
