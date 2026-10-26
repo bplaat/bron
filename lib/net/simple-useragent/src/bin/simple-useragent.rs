@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: MIT
  */
 
-//! Inspect user-agent strings from the command line.
+#![doc = include_str!("../../README.md")]
 
 use std::process::ExitCode;
 

@@ -4,8 +4,7 @@
  * SPDX-License-Identifier: MIT
  */
 
-//! A DEFLATE and zlib compression library with an optimal parsing mode
-
+#![doc = include_str!("../README.md")]
 #![no_std]
 
 extern crate alloc;
