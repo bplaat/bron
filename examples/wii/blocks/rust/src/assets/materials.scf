@@ -1,19 +1,19 @@
-<filepath="brick_red.png" id="brick_red" colfmt="14" />
-<filepath="cactus_side.png" id="cactus_side" colfmt="14" />
-<filepath="cactus_top.png" id="cactus_top" colfmt="14" />
-<filepath="dirt.png" id="dirt" colfmt="14" />
-<filepath="dirt_grass.png" id="dirt_grass" colfmt="14" />
-<filepath="grass_top.png" id="grass_top" colfmt="14" />
-<filepath="greystone.png" id="greystone" colfmt="14" />
-<filepath="lava.png" id="lava" colfmt="14" />
-<filepath="leaves.png" id="leaves" colfmt="14" />
-<filepath="sand.png" id="sand" colfmt="14" />
-<filepath="stone.png" id="stone" colfmt="14" />
-<filepath="stone_coal.png" id="stone_coal" colfmt="14" />
-<filepath="stone_diamond.png" id="stone_diamond" colfmt="14" />
-<filepath="stone_gold.png" id="stone_gold" colfmt="14" />
-<filepath="stone_iron.png" id="stone_iron" colfmt="14" />
-<filepath="trunk_side.png" id="trunk_side" colfmt="14" />
-<filepath="trunk_top.png" id="trunk_top" colfmt="14" />
-<filepath="water.png" id="water" colfmt="14" />
-<filepath="wood.png" id="wood" colfmt="14" />
+<filepath="brick_red.png" id="brick_red" colfmt="14" mipmap="yes" maxlod="4" />
+<filepath="cactus_side.png" id="cactus_side" colfmt="14" mipmap="yes" maxlod="4" />
+<filepath="cactus_top.png" id="cactus_top" colfmt="14" mipmap="yes" maxlod="4" />
+<filepath="dirt.png" id="dirt" colfmt="14" mipmap="yes" maxlod="4" />
+<filepath="dirt_grass.png" id="dirt_grass" colfmt="14" mipmap="yes" maxlod="4" />
+<filepath="grass_top.png" id="grass_top" colfmt="14" mipmap="yes" maxlod="4" />
+<filepath="greystone.png" id="greystone" colfmt="14" mipmap="yes" maxlod="4" />
+<filepath="lava.png" id="lava" colfmt="14" mipmap="yes" maxlod="4" />
+<filepath="leaves.png" id="leaves" colfmt="14" mipmap="yes" maxlod="4" />
+<filepath="sand.png" id="sand" colfmt="14" mipmap="yes" maxlod="4" />
+<filepath="stone.png" id="stone" colfmt="14" mipmap="yes" maxlod="4" />
+<filepath="stone_coal.png" id="stone_coal" colfmt="14" mipmap="yes" maxlod="4" />
+<filepath="stone_diamond.png" id="stone_diamond" colfmt="14" mipmap="yes" maxlod="4" />
+<filepath="stone_gold.png" id="stone_gold" colfmt="14" mipmap="yes" maxlod="4" />
+<filepath="stone_iron.png" id="stone_iron" colfmt="14" mipmap="yes" maxlod="4" />
+<filepath="trunk_side.png" id="trunk_side" colfmt="14" mipmap="yes" maxlod="4" />
+<filepath="trunk_top.png" id="trunk_top" colfmt="14" mipmap="yes" maxlod="4" />
+<filepath="water.png" id="water" colfmt="14" mipmap="yes" maxlod="4" />
+<filepath="wood.png" id="wood" colfmt="14" mipmap="yes" maxlod="4" />
