@@ -103,7 +103,8 @@ const ORES: [u8; 14] = [
 ];
 /// The water material.
 pub const WATER: u8 = 22;
-const BEDROCK: u8 = 23;
+/// The unbreakable bottom layers.
+pub const BEDROCK: u8 = 23;
 /// The lava material.
 pub const LAVA: u8 = 24;
 const CACTUS: u8 = 25;
@@ -126,7 +127,7 @@ const OVEN_EAST: u8 = 75;
 pub const SEA_LEVEL: u8 = 48;
 
 /// A placed or removed block, material 0 is air.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Edit {
     /// The world position of the block.
     pub position: [i64; 3],

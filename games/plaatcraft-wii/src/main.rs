@@ -17,8 +17,8 @@ use core::sync::atomic::{AtomicBool, Ordering};
 use libogc_sys::*;
 use plaatcraft_engine::camera::Camera;
 use plaatcraft_engine::hotbar::{Hotbar, name};
-use plaatcraft_engine::raycast::{Hit, overlaps_player, raycast};
-use plaatcraft_engine::world::{self, Edit, HEIGHT, LAVA, WATER};
+use plaatcraft_engine::raycast::{Hit, raycast};
+use plaatcraft_engine::world::{self, LAVA, WATER};
 
 use crate::hud::{BUTTON_HEIGHT, BUTTON_WIDTH, Hud};
 use crate::input::{Button, Controller};
@@ -262,24 +262,18 @@ impl Game {
         let Some(hit) = self.target else {
             return;
         };
-        let (position, material) = if place {
-            let Some(position) = hit.adjacent else {
-                return;
-            };
-            if overlaps_player(position, self.camera.position)
-                || !matches!(self.stream.block(position), Some(0 | WATER))
-            {
-                return;
-            }
-            (position, self.hotbar.material())
+        let edit = if place {
+            let stream = &mut self.stream;
+            hit.place_edit(self.hotbar.material(), self.camera.position, |position| {
+                stream.block(position)
+            })
         } else {
-            (hit.position, 0)
+            hit.break_edit()
         };
-        // Bedrock can't be broken and nothing goes in the bedrock layers
-        if !(3..HEIGHT as i64).contains(&position[1]) || hit.material == 23 && material == 0 {
+        let Some(edit) = edit else {
             return;
-        }
-        self.stream.edit(Edit { position, material });
+        };
+        self.stream.edit(edit);
         self.aim();
     }
 
