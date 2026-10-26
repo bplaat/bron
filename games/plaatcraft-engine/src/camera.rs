@@ -4,37 +4,61 @@
  * SPDX-License-Identifier: MIT
  */
 
-use std::collections::HashSet;
+//! The first-person player: walking, swimming, and flying physics and the view frustum.
 
-use bwindow::{KeyCode, Modifiers};
-
+#[cfg(not(feature = "std"))]
+use crate::math::Float;
 use crate::world::{CHUNK_SIZE, Coord, HEIGHT};
 
 const SWIM_SPEED: f64 = 3.5;
 const SINK_SPEED: f64 = 2.0;
 
-pub(crate) struct Camera {
-    pub(crate) position: [f64; 3],
-    pub(crate) yaw: f32,
-    pub(crate) pitch: f32,
-    pub(crate) keys: HashSet<KeyCode>,
-    pub(crate) modifiers: Modifiers,
-    // Analog touch joystick, x to the right and y forward, combined with the keys.
-    pub(crate) stick: [f32; 2],
-    // Held touch button that descends while flying, like Shift.
-    pub(crate) descend: bool,
-    // Whether the body is in water or lava, set before each update.
-    pub(crate) in_liquid: bool,
-    pub(crate) flying: bool,
-    pub(crate) vertical_velocity: f64,
-    pub(crate) grounded: bool,
+/// The held movement controls, set by the platform before each update.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Input {
+    /// Digital movement like WASD or a D-pad, x to the right and y forward.
+    pub direction: [f32; 2],
+    /// An analog joystick, x to the right and y forward, pushing it far sprints.
+    pub stick: [f32; 2],
+    /// Jumps, swims up, and flies up, like Space.
+    pub jump: bool,
+    /// Sneaks and flies down, like Shift.
+    pub sneak: bool,
+    /// Runs and flies faster, like Ctrl.
+    pub fast: bool,
 }
 
-pub(crate) struct View {
-    eye: [f32; 3],
-    right: [f32; 3],
-    up: [f32; 3],
-    forward: [f32; 3],
+/// The player's position, orientation, and movement state.
+pub struct Camera {
+    /// The eye position in world coordinates.
+    pub position: [f64; 3],
+    /// The horizontal rotation in radians, 0 looks to negative z.
+    pub yaw: f32,
+    /// The vertical rotation in radians, positive looks up.
+    pub pitch: f32,
+    /// The held movement controls.
+    pub input: Input,
+    /// Whether the body is in water or lava, set before each update.
+    pub in_liquid: bool,
+    /// Whether the player flies instead of walking, see [`Camera::set_flying`].
+    pub flying: bool,
+    /// The vertical speed while walking or swimming.
+    pub vertical_velocity: f64,
+    /// Whether the player stands on a block.
+    pub grounded: bool,
+}
+
+/// The camera basis and frustum for rendering and culling, relative to the
+/// player's chunk.
+pub struct View {
+    /// The eye position relative to the player's chunk.
+    pub eye: [f32; 3],
+    /// The unit vector to the right of the view.
+    pub right: [f32; 3],
+    /// The unit vector up from the view.
+    pub up: [f32; 3],
+    /// The unit vector the view looks along.
+    pub forward: [f32; 3],
     horizontal: f32,
     vertical: f32,
     size: [f32; 2],
@@ -52,10 +76,7 @@ impl Default for Camera {
             position: [8.0, 116.0, 8.0],
             yaw: -0.7,
             pitch: -0.35,
-            keys: HashSet::new(),
-            modifiers: Modifiers::NONE,
-            stick: [0.0; 2],
-            descend: false,
+            input: Input::default(),
             in_liquid: false,
             flying: false,
             vertical_velocity: 0.0,
@@ -65,19 +86,22 @@ impl Default for Camera {
 }
 
 impl Camera {
-    pub(crate) fn chunk(&self) -> Coord {
+    /// The chunk the player is in.
+    pub fn chunk(&self) -> Coord {
         (
             (self.position[0] / CHUNK_SIZE as f64).floor() as i64,
             (self.position[2] / CHUNK_SIZE as f64).floor() as i64,
         )
     }
 
-    pub(crate) fn look(&mut self, dx: f64, dy: f64) {
-        self.yaw = (self.yaw + dx as f32 * 0.002).rem_euclid(std::f32::consts::TAU);
+    /// Turns the view like a mouse moving by `dx` and `dy` pixels.
+    pub fn look(&mut self, dx: f64, dy: f64) {
+        self.yaw = (self.yaw + dx as f32 * 0.002).rem_euclid(core::f32::consts::TAU);
         self.pitch = (self.pitch - dy as f32 * 0.002).clamp(-1.55, 1.55);
     }
 
-    pub(crate) const fn set_flying(&mut self, flying: bool) {
+    /// Starts or stops flying.
+    pub const fn set_flying(&mut self, flying: bool) {
         self.flying = flying;
         self.vertical_velocity = 0.0;
         self.grounded = false;
@@ -96,20 +120,23 @@ impl Camera {
         (min_z..=max_z).any(|z| (min_x..=max_x).any(|x| solid([x, y, z])))
     }
 
-    pub(crate) fn update(&mut self, dt: f32, mut solid: impl FnMut([i64; 3]) -> bool) {
+    /// Moves the player by the held input for `dt` seconds, `solid` tells which
+    /// blocks collide.
+    pub fn update(&mut self, dt: f32, mut solid: impl FnMut([i64; 3]) -> bool) {
         let dt = f64::from(dt.clamp(0.0, 0.05));
-        let pressed = |key| f32::from(u8::from(self.keys.contains(&key)));
-        let forward =
-            (pressed(KeyCode::KeyW) - pressed(KeyCode::KeyS) + self.stick[1]).clamp(-1.0, 1.0);
-        let right =
-            (pressed(KeyCode::KeyD) - pressed(KeyCode::KeyA) + self.stick[0]).clamp(-1.0, 1.0);
-        let shift = self.modifiers.contains(Modifiers::SHIFT) || self.descend;
+        let Input {
+            direction,
+            stick,
+            jump: space,
+            sneak: shift,
+            ..
+        } = self.input;
+        let forward = (direction[1] + stick[1]).clamp(-1.0, 1.0);
+        let right = (direction[0] + stick[0]).clamp(-1.0, 1.0);
         // Pushing the joystick far sprints while walking, like in the Welpen games.
-        let fast = self.modifiers.contains(Modifiers::CONTROL)
-            || !self.flying && self.stick[0].hypot(self.stick[1]) > 0.75;
-        let space = self.keys.contains(&KeyCode::Space);
+        let fast = self.input.fast || !self.flying && stick[0].hypot(stick[1]) > 0.75;
         let up = if self.flying {
-            pressed(KeyCode::Space) - f32::from(u8::from(shift))
+            f32::from(u8::from(space)) - f32::from(u8::from(shift))
         } else {
             0.0
         };
@@ -179,9 +206,9 @@ impl Camera {
                 let mut next = self.position;
                 next[axis] += delta;
                 let min: [i64; 3] =
-                    std::array::from_fn(|a| (next[a] + lower[a] + 1e-7).floor() as i64);
+                    core::array::from_fn(|a| (next[a] + lower[a] + 1e-7).floor() as i64);
                 let max: [i64; 3] =
-                    std::array::from_fn(|a| (next[a] + upper[a] - 1e-7).floor() as i64);
+                    core::array::from_fn(|a| (next[a] + upper[a] - 1e-7).floor() as i64);
                 for z in min[2]..=max[2] {
                     for y in min[1]..=max[1] {
                         for x in min[0]..=max[0] {
@@ -207,7 +234,8 @@ impl Camera {
         hit
     }
 
-    pub(crate) fn view(&self, width: u32, height: u32, radius: i64) -> View {
+    /// The view for a `width` by `height` viewport that sees `radius` chunks far.
+    pub fn view(&self, width: u32, height: u32, radius: i64) -> View {
         let (sin, cos) = self.yaw.sin_cos();
         let (sp, cp) = self.pitch.sin_cos();
         let center = self.chunk();
@@ -232,7 +260,8 @@ impl Camera {
 }
 
 impl View {
-    pub(crate) fn bytes(&self, time: f32, daylight: f32, eye_material: Option<u8>) -> [u8; 96] {
+    /// The camera uniform of the bwebgpu shaders.
+    pub fn bytes(&self, time: f32, daylight: f32, eye_material: Option<u8>) -> [u8; 96] {
         // environment.x distinguishes air, water, and lava without changing the uniform layout.
         let medium = match eye_material {
             Some(crate::world::WATER) => 1.0,
@@ -260,11 +289,13 @@ impl View {
         bytes
     }
 
-    pub(crate) fn visible(&self, offset: [f32; 3]) -> bool {
+    /// Whether a chunk at an offset from the player's chunk is in the frustum.
+    pub fn visible(&self, offset: [f32; 3]) -> bool {
         self.visible_height(offset, HEIGHT as f32)
     }
 
-    pub(crate) fn section_visible(&self, mut offset: [f32; 3], section: usize) -> bool {
+    /// Whether a chunk section is in the frustum.
+    pub fn section_visible(&self, mut offset: [f32; 3], section: usize) -> bool {
         offset[1] = (section * crate::world::SECTION_SIZE) as f32;
         self.visible_height(offset, crate::world::SECTION_SIZE as f32)
     }
@@ -272,7 +303,7 @@ impl View {
     fn visible_height(&self, offset: [f32; 3], height: f32) -> bool {
         let mut outside = [true; 6];
         for corner in 0..8 {
-            let p = std::array::from_fn(|axis| {
+            let p = core::array::from_fn(|axis| {
                 offset[axis]
                     + if corner & (1 << axis) == 0 {
                         0.0
@@ -344,7 +375,7 @@ mod tests {
         assert!((camera.position[1] - 2.7).abs() < 0.0001);
         assert!(camera.grounded);
         assert_eq!(camera.vertical_velocity, 0.0);
-        camera.keys.insert(KeyCode::Space);
+        camera.input.jump = true;
         let mut peak = camera.position[1];
         let mut jumps = 0;
         for _ in 0..120 {
@@ -357,7 +388,7 @@ mod tests {
         }
         assert!((4.0..4.05).contains(&peak));
         assert!(jumps >= 3);
-        camera.keys.remove(&KeyCode::Space);
+        camera.input.jump = false;
         for _ in 0..120 {
             camera.update(1.0 / 60.0, |p| p[1] < 1);
         }
@@ -369,10 +400,10 @@ mod tests {
     fn walking_leaves_ledges_and_ceiling_hits_stop_jumps() {
         let mut camera = Camera {
             position: [0.5, 2.7, 0.5],
-            yaw: std::f32::consts::FRAC_PI_2,
+            yaw: core::f32::consts::FRAC_PI_2,
             ..Camera::default()
         };
-        camera.keys.insert(KeyCode::KeyW);
+        camera.input.direction = [0.0, 1.0];
         for _ in 0..30 {
             camera.update(1.0 / 60.0, |p| p[0] < 1 && p[1] < 1);
         }
@@ -383,12 +414,12 @@ mod tests {
             position: [0.5, 2.7, 0.5],
             ..Camera::default()
         };
-        camera.keys.insert(KeyCode::Space);
+        camera.input.jump = true;
         for _ in 0..60 {
             camera.update(1.0 / 60.0, |p| p[1] < 1 || p[1] == 3);
             assert!(camera.position[1] <= 2.9 + 1e-7);
         }
-        camera.keys.remove(&KeyCode::Space);
+        camera.input.jump = false;
         for _ in 0..60 {
             camera.update(1.0 / 60.0, |p| p[1] < 1 || p[1] == 3);
         }
@@ -399,10 +430,11 @@ mod tests {
     fn holding_space_and_forward_climbs_one_block_steps() {
         let mut camera = Camera {
             position: [0.5, 2.7, 0.5],
-            yaw: std::f32::consts::FRAC_PI_2,
+            yaw: core::f32::consts::FRAC_PI_2,
             ..Camera::default()
         };
-        camera.keys.extend([KeyCode::Space, KeyCode::KeyW]);
+        camera.input.jump = true;
+        camera.input.direction = [0.0, 1.0];
         for _ in 0..240 {
             camera.update(1.0 / 60.0, |p| p[1] < 1 + p[0].div_euclid(2).clamp(0, 4));
         }
@@ -418,10 +450,10 @@ mod tests {
         };
         camera.update(0.05, |_| false);
         assert!(camera.vertical_velocity < 0.0);
-        camera.keys.insert(KeyCode::Space);
+        camera.input.jump = true;
         camera.update(0.05, |_| false);
         assert!(camera.vertical_velocity < -2.0);
-        camera.keys.clear();
+        camera.input = Input::default();
         camera.set_flying(true);
         let position = camera.position;
         camera.update(0.05, |_| false);
@@ -440,12 +472,14 @@ mod tests {
             yaw: 0.0,
             ..Camera::default()
         };
-        camera.keys.insert(KeyCode::KeyW);
-        camera.modifiers = Modifiers::CONTROL;
+        camera.input.direction = [0.0, 1.0];
+        camera.input.fast = true;
         camera.update(0.05, |p| p[2] == -2);
         assert!((camera.position[2] + 0.7).abs() < 0.0001);
-        camera.keys.clear();
-        camera.modifiers = Modifiers::SHIFT;
+        camera.input = Input {
+            sneak: true,
+            ..Input::default()
+        };
         camera.update(0.05, |p| p[1] < 10);
         assert!((camera.position[1] - 11.7).abs() < 0.0001);
         camera.update(0.05, |p| p[1] < 3);
@@ -465,7 +499,7 @@ mod tests {
     }
 
     #[test]
-    fn movement_is_normalized_and_keys_can_be_cleared() {
+    fn movement_is_normalized_and_input_can_be_cleared() {
         let mut straight = Camera {
             flying: true,
             ..Camera::default()
@@ -474,8 +508,8 @@ mod tests {
             flying: true,
             ..Camera::default()
         };
-        straight.keys.insert(KeyCode::KeyW);
-        diagonal.keys.extend([KeyCode::KeyW, KeyCode::KeyD]);
+        straight.input.direction = [0.0, 1.0];
+        diagonal.input.direction = [1.0, 1.0];
         let start = straight.position;
         straight.update(0.05, |_| false);
         diagonal.update(0.05, |_| false);
@@ -488,7 +522,7 @@ mod tests {
                 .sqrt()
         };
         assert!((distance(&straight) - distance(&diagonal)).abs() < 0.00001);
-        diagonal.keys.clear();
+        diagonal.input = Input::default();
         let stopped = diagonal.position;
         diagonal.update(0.05, |_| false);
         assert_eq!(diagonal.position, stopped);
@@ -499,7 +533,10 @@ mod tests {
         let distance = |stick| {
             let mut camera = Camera {
                 flying: true,
-                stick,
+                input: Input {
+                    stick,
+                    ..Input::default()
+                },
                 ..Camera::default()
             };
             let start = camera.position;
@@ -516,13 +553,16 @@ mod tests {
         assert!((distance([0.6, 0.8]) - distance([0.0, 1.0])).abs() < 0.00001);
 
         let mut camera = Camera {
-            stick: [0.0, 1.0],
+            input: Input {
+                stick: [0.0, 1.0],
+                ..Input::default()
+            },
             ..Camera::default()
         };
         let start = camera.position;
         camera.update(0.05, |position| position[1] < 100);
         let sprint = camera.position[2] - start[2];
-        camera.stick = [0.0, 0.5];
+        camera.input.stick = [0.0, 0.5];
         let start = camera.position;
         camera.update(0.05, |position| position[1] < 100);
         assert!(sprint.abs() > (camera.position[2] - start[2]).abs() * 2.0);
@@ -542,7 +582,7 @@ mod tests {
         let sunk = camera.position[1];
         assert!(sunk < 50.0 && sunk > 50.0 - SINK_SPEED * 2.0);
 
-        camera.keys.insert(KeyCode::Space);
+        camera.input.jump = true;
         for _ in 0..40 {
             camera.update(0.05, |_| false);
         }
@@ -564,7 +604,7 @@ mod tests {
             flying: true,
             ..Default::default()
         };
-        camera.modifiers = Modifiers::SHIFT;
+        camera.input.sneak = true;
         for _ in 0..200 {
             camera.update(0.05, |p| (p[1] as f64) < ground);
         }
@@ -584,6 +624,6 @@ mod tests {
         assert!(!view.visible([2000.0, 0.0, -32.0]));
         camera.look(100000.0, 100000.0);
         assert!(camera.pitch.abs() <= 1.55);
-        assert!(camera.yaw >= 0.0 && camera.yaw < std::f32::consts::TAU);
+        assert!(camera.yaw >= 0.0 && camera.yaw < core::f32::consts::TAU);
     }
 }

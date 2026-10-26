@@ -5,88 +5,13 @@
  */
 
 use cargo_bundle_assets::Assets;
-
-use crate::world;
+use plaatcraft_engine::tiles::{FACE_TILES, TILES};
+use plaatcraft_engine::world;
 
 #[derive(Assets)]
 #[folder = "assets"]
 struct Assets;
 
-const TILES: [&str; 73] = [
-    "tiles/grass_top.png",
-    "tiles/dirt_grass.png",
-    "tiles/dirt.png",
-    "tiles/stone.png",
-    "tiles/sand.png",
-    "tiles/snow.png",
-    "tiles/dirt_snow.png",
-    "tiles/trunk_side.png",
-    "tiles/trunk_top.png",
-    "tiles/trunk_white_side.png",
-    "tiles/trunk_white_top.png",
-    "tiles/leaves.png",
-    "tiles/leaves_orange.png",
-    "tiles/grass1.png",
-    "tiles/grass2.png",
-    "tiles/grass3.png",
-    "tiles/grass4.png",
-    "tiles/stone_coal.png",
-    "tiles/stone_gold.png",
-    "tiles/stone_diamond.png",
-    "tiles/stone_silver.png",
-    "tiles/water.png",
-    "tiles/lava.png",
-    "tiles/cactus_side.png",
-    "tiles/cactus_top.png",
-    "tiles/cactus_inside.png",
-    "tiles/brick_grey.png",
-    "tiles/brick_red.png",
-    "tiles/wood.png",
-    "tiles/wood_red.png",
-    "tiles/cotton_blue.png",
-    "tiles/cotton_green.png",
-    "tiles/cotton_red.png",
-    "tiles/cotton_white.png",
-    "tiles/gravel_dirt.png",
-    "tiles/gravel_stone.png",
-    "tiles/oven.png",
-    "tiles/redstone.png",
-    "tiles/greystone.png",
-    "tiles/cotton_tan.png",
-    "tiles/dirt_sand.png",
-    "tiles/greysand.png",
-    "tiles/greystone_ruby.png",
-    "tiles/greystone_ruby_alt.png",
-    "tiles/greystone_sand.png",
-    "tiles/ice.png",
-    "tiles/redsand.png",
-    "tiles/redstone_emerald.png",
-    "tiles/redstone_emerald_alt.png",
-    "tiles/redstone_sand.png",
-    "tiles/stone_iron.png",
-    "tiles/stone_iron_alt.png",
-    "tiles/stone_coal_alt.png",
-    "tiles/stone_diamond_alt.png",
-    "tiles/stone_dirt.png",
-    "tiles/stone_gold_alt.png",
-    "tiles/stone_grass.png",
-    "tiles/stone_sand.png",
-    "tiles/stone_silver_alt.png",
-    "tiles/stone_snow.png",
-    "tiles/table.png",
-    "tiles/glass.png",
-    "tiles/glass_frame.png",
-    "tiles/trunk_red_side.png",
-    "tiles/trunk_red_top.png",
-    "tiles/wood_white.png",
-    "tiles/grass_brown.png",
-    "tiles/grass_tan.png",
-    "tiles/mushroom_brown.png",
-    "tiles/mushroom_red.png",
-    "tiles/mushroom_tan.png",
-    "tiles/rock.png",
-    "tiles/rock_moss.png",
-];
 const SKY: [&str; 8] = [
     "sky/skybox_bottom.png",
     "sky/skybox_side.png",
@@ -103,16 +28,6 @@ const MATERIAL_COUNT: usize = 128;
 const MATERIAL_BYTES: usize = 48;
 /// The size of the material table at the start of the scene storage buffer.
 pub(crate) const MATERIAL_TABLE_BYTES: usize = MATERIAL_COUNT * MATERIAL_BYTES;
-
-/// The texture array layer of a tile, the sky layers come first so they never move.
-fn tile_layer(name: &str) -> u32 {
-    let path = format!("tiles/{name}.png");
-    let index = TILES
-        .iter()
-        .position(|&tile| tile == path)
-        .unwrap_or_else(|| panic!("Unknown tile {name}"));
-    (SKY.len() + index) as u32
-}
 
 /// Encode the per-material tint, flags and face layers the shaders look up by material ID.
 pub(crate) fn material_table() -> Vec<u8> {
@@ -131,13 +46,9 @@ pub(crate) fn material_table() -> Vec<u8> {
             *word = tint.to_bits();
         }
         words[3] = world::look_flags(material as u8);
-        let layers = look.faces.map(tile_layer);
-        // The two diagonal planes of sprites use the +z face tile.
-        for (word, layer) in words[4..]
-            .iter_mut()
-            .zip(layers.into_iter().chain([layers[4]; 2]))
-        {
-            *word = layer;
+        // The sky layers come first so they never move.
+        for (word, tile) in words[4..].iter_mut().zip(FACE_TILES[material]) {
+            *word = (SKY.len() + usize::from(tile)) as u32;
         }
         for (bytes, word) in entry.as_chunks_mut::<4>().0.iter_mut().zip(words) {
             *bytes = word.to_ne_bytes();
@@ -313,15 +224,8 @@ mod tests {
     fn every_material_resolves_its_tiles() {
         let table = material_table();
         assert_eq!(table.len(), MATERIAL_TABLE_BYTES);
-        let layers = SKY.len() as u32..(SKY.len() + TILES.len()) as u32;
         for &(material, name) in world::MATERIALS {
-            let look = world::look(material).unwrap_or_else(|| panic!("{name} has no look"));
-            assert!(
-                look.faces
-                    .map(tile_layer)
-                    .iter()
-                    .all(|layer| layers.contains(layer))
-            );
+            assert!(world::look(material).is_some(), "{name} has no look");
         }
         let unique: std::collections::HashSet<_> = TILES.iter().collect();
         assert_eq!(unique.len(), TILES.len());

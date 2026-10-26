@@ -4,6 +4,9 @@
  * SPDX-License-Identifier: MIT
  */
 
+#[cfg(not(feature = "std"))]
+use crate::math::Float;
+
 // Seeded two-dimensional Perlin noise, independent of world generation.
 pub(crate) struct Perlin {
     seed: u64,
@@ -20,7 +23,7 @@ impl Perlin {
         hash ^= hash >> 13;
         hash = hash.wrapping_mul(0x85eb_ca6b);
         hash ^= hash >> 16;
-        let diagonal = std::f64::consts::FRAC_1_SQRT_2;
+        let diagonal = core::f64::consts::FRAC_1_SQRT_2;
         match hash & 7 {
             0 => dx,
             1 => -dx,

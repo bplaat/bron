@@ -4,7 +4,9 @@
  * SPDX-License-Identifier: MIT
  */
 
-use std::collections::VecDeque;
+use alloc::collections::VecDeque;
+use alloc::vec;
+use alloc::vec::Vec;
 
 pub(crate) const MAX_LIGHT: u8 = 15;
 

@@ -36,6 +36,7 @@ deflate = { path = "../../lib/data/deflate" }
 image = { path = "../../lib/graphics/image", default-features = false, features = [
     "png",
 ] }
+plaatcraft-engine = { path = "../plaatcraft-engine" }
 
 # Android has no public system SQLite library
 [target.'cfg(target_os = "android")'.dependencies]

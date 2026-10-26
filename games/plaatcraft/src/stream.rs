@@ -6,7 +6,7 @@
 
 use std::ops::Range;
 
-use crate::world::{self, ChunkData, Coord};
+use plaatcraft_engine::world::{self, ChunkData, Coord};
 
 pub(crate) type SectionRanges = [[Range<u32>; 2]; world::SECTION_COUNT];
 use std::collections::{HashMap, HashSet, VecDeque};

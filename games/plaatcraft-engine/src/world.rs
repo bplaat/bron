@@ -4,22 +4,56 @@
  * SPDX-License-Identifier: MIT
  */
 
+//! Chunk generation, storage encoding, and greedy meshing.
+
+use alloc::collections::BTreeMap;
+use alloc::string::String;
+use alloc::vec;
+use alloc::vec::Vec;
+use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+
 use crate::biome::{Biome, Column, Terrain, smooth};
 
-pub(crate) const CHUNK_SIZE: usize = 16;
-pub(crate) const HEIGHT: usize = 128;
-pub(crate) const SECTION_SIZE: usize = 16;
-pub(crate) const SECTION_COUNT: usize = HEIGHT / SECTION_SIZE;
-pub(crate) const WORLD_SEED: u64 = 42;
-static SEED: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
-static TERRAIN: std::sync::OnceLock<Terrain> = std::sync::OnceLock::new();
+/// The width and depth of a chunk in blocks.
+pub const CHUNK_SIZE: usize = 16;
+/// The height of the world in blocks.
+pub const HEIGHT: usize = 128;
+/// The height of a chunk section, the unit of visibility culling.
+pub const SECTION_SIZE: usize = 16;
+/// The number of sections in a chunk.
+pub const SECTION_COUNT: usize = HEIGHT / SECTION_SIZE;
+/// The seed of new worlds.
+pub const WORLD_SEED: u64 = 42;
+// The Wii has no 64-bit atomics, so the seed is stored in two halves. The first read
+// or set locks it, so all chunks are generated with the same seed.
+static SEED: [AtomicU32; 2] = [
+    AtomicU32::new(WORLD_SEED as u32),
+    AtomicU32::new((WORLD_SEED >> 32) as u32),
+];
+static SEED_LOCKED: AtomicBool = AtomicBool::new(false);
 
-pub(crate) fn set_seed(seed: u64) {
-    assert_eq!(*SEED.get_or_init(|| seed), seed, "World seed changed");
+fn seed() -> u64 {
+    SEED_LOCKED.store(true, Ordering::Release);
+    u64::from(SEED[1].load(Ordering::Acquire)) << 32 | u64::from(SEED[0].load(Ordering::Acquire))
 }
-pub(crate) const QUAD_BYTES: usize = 8;
+
+/// Sets the world seed, before any chunk is generated.
+///
+/// # Panics
+///
+/// When a different seed was already used.
+pub fn set_seed(seed: u64) {
+    if !SEED_LOCKED.swap(true, Ordering::AcqRel) {
+        SEED[0].store(seed as u32, Ordering::Release);
+        SEED[1].store((seed >> 32) as u32, Ordering::Release);
+    }
+    assert_eq!(self::seed(), seed, "World seed changed");
+}
+/// The size of a packed quad in a chunk mesh.
+pub const QUAD_BYTES: usize = 8;
 const PADDED_SIZE: usize = CHUNK_SIZE + 2;
-pub(crate) type Coord = (i64, i64);
+/// The x and z coordinate of a chunk.
+pub type Coord = (i64, i64);
 
 // Material IDs are shared with the tile mapping in terrain.wgsl.
 const GRASS: u8 = 1;
@@ -67,9 +101,11 @@ const ORES: [u8; 14] = [
     DENSE_RUBY_ORE,
     DENSE_EMERALD_ORE,
 ];
-pub(crate) const WATER: u8 = 22;
+/// The water material.
+pub const WATER: u8 = 22;
 const BEDROCK: u8 = 23;
-pub(crate) const LAVA: u8 = 24;
+/// The lava material.
+pub const LAVA: u8 = 24;
 const CACTUS: u8 = 25;
 const GLASS: u8 = 62;
 const GLASS_FRAME: u8 = 63;
@@ -86,15 +122,20 @@ const OVEN: u8 = 36;
 const OVEN_WEST: u8 = 73;
 const OVEN_NORTH: u8 = 74;
 const OVEN_EAST: u8 = 75;
-pub(crate) const SEA_LEVEL: u8 = 48;
+/// The height of the sea surface.
+pub const SEA_LEVEL: u8 = 48;
 
+/// A placed or removed block, material 0 is air.
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct Edit {
-    pub(crate) position: [i64; 3],
-    pub(crate) material: u8,
+pub struct Edit {
+    /// The world position of the block.
+    pub position: [i64; 3],
+    /// The new material of the block.
+    pub material: u8,
 }
 
-pub(crate) const MATERIALS: &[(u8, &str)] = &[
+/// Every placeable material with its name.
+pub const MATERIALS: &[(u8, &str)] = &[
     (1, "Grass"),
     (2, "Dirt"),
     (3, "Stone"),
@@ -164,12 +205,13 @@ pub(crate) const MATERIALS: &[(u8, &str)] = &[
     (ROCK_MOSS, "Mossy rock"),
 ];
 
-pub(crate) fn valid_material(material: u8) -> bool {
+/// Whether a material can be placed or stored.
+pub fn valid_material(material: u8) -> bool {
     MATERIALS.iter().any(|&(id, _)| id == material) || matches!(material, OVEN_WEST..=OVEN_EAST)
 }
 
 /// The inventory item for a placed block.
-pub(crate) fn item_material(material: u8) -> Option<u8> {
+pub fn item_material(material: u8) -> Option<u8> {
     canonical_material(material).map(|material| match material {
         OVEN_WEST..=OVEN_EAST => OVEN,
         _ => material,
@@ -177,7 +219,7 @@ pub(crate) fn item_material(material: u8) -> Option<u8> {
 }
 
 /// The block to place for an item, an oven faces the player at `dx`, `dz` from its center.
-pub(crate) fn placed_material(material: u8, dx: f64, dz: f64) -> u8 {
+pub fn placed_material(material: u8, dx: f64, dz: f64) -> u8 {
     if material != OVEN {
         material
     } else if dx.abs() > dz.abs() {
@@ -189,7 +231,8 @@ pub(crate) fn placed_material(material: u8, dx: f64, dz: f64) -> u8 {
     }
 }
 
-pub(crate) fn canonical_material(material: u8) -> Option<u8> {
+/// Maps retired material IDs to their replacement, `None` for unknown materials.
+pub fn canonical_material(material: u8) -> Option<u8> {
     let material = match material {
         LEGACY_IRON_ORE => IRON_ORE,
         LEGACY_DENSE_IRON_ORE => DENSE_IRON_ORE,
@@ -199,9 +242,11 @@ pub(crate) fn canonical_material(material: u8) -> Option<u8> {
 }
 
 /// How a material is drawn: tile names for the +x, -x, +y, -y, +z and -z faces and a tint.
-pub(crate) struct Look {
-    pub(crate) faces: [&'static str; 6],
-    pub(crate) tint: [f32; 3],
+pub struct Look {
+    /// The tile names of the +x, -x, +y, -y, +z and -z faces.
+    pub faces: [&'static str; 6],
+    /// The color multiplied with the tiles.
+    pub tint: [f32; 3],
 }
 
 const fn all(tile: &'static str) -> Look {
@@ -236,7 +281,7 @@ const fn tinted(tile: &'static str, tint: [f32; 3]) -> Look {
 }
 
 /// The look of every drawable material, uploaded once to the GPU material table.
-pub(crate) const fn look(material: u8) -> Option<Look> {
+pub const fn look(material: u8) -> Option<Look> {
     Some(match material {
         GRASS => column("dirt_grass", "grass_top", "dirt"),
         DIRT => all("dirt"),
@@ -314,7 +359,7 @@ pub(crate) const fn look(material: u8) -> Option<Look> {
 }
 
 /// Material table flags for the shaders.
-pub(crate) const fn look_flags(material: u8) -> u32 {
+pub const fn look_flags(material: u8) -> u32 {
     const SPRITE: u32 = 1;
     const TRANSLUCENT: u32 = 2;
     const EMISSIVE: u32 = 4;
@@ -329,15 +374,18 @@ pub(crate) const fn look_flags(material: u8) -> u32 {
         | (if material == WATER { FLOWING } else { 0 })
 }
 
-pub(crate) const fn is_sprite(material: u8) -> bool {
+/// Whether a material is drawn as two crossed planes instead of a cube.
+pub const fn is_sprite(material: u8) -> bool {
     matches!(material, 12..=15 | GRASS_BROWN..=ROCK_MOSS)
 }
 
-pub(crate) const fn is_passable(material: u8) -> bool {
+/// Whether the player can move through a material.
+pub const fn is_passable(material: u8) -> bool {
     matches!(material, 0 | 12..=15 | GRASS_BROWN..=ROCK_MOSS | WATER | LAVA)
 }
 
-pub(crate) const fn quad_material(packed: u32) -> u32 {
+/// The material of a packed quad's first word.
+pub const fn quad_material(packed: u32) -> u32 {
     (packed >> 20) & 63 | (packed >> 31) << 6
 }
 
@@ -347,8 +395,9 @@ fn valid_stored_block(material: u8) -> bool {
         || canonical_material(material).is_some() && !is_sprite(material)
 }
 
-// A one-voxel halo includes terrain, ores and trees from neighboring chunks.
-pub(crate) struct ChunkData {
+/// The blocks and light of a chunk. A one-voxel halo includes terrain, ores and trees
+/// from neighboring chunks.
+pub struct ChunkData {
     heights: [u8; PADDED_SIZE * PADDED_SIZE],
     blocks: Vec<u8>,
     light: Vec<u8>,
@@ -377,7 +426,7 @@ fn hash(x: i64, y: i64, z: i64, seed: u64) -> u64 {
         ^ (y as u64).wrapping_mul(0xbf58_476d_1ce4_e5b9)
         ^ (z as u64).wrapping_mul(0x94d0_49bb_1331_11eb)
         ^ seed
-        ^ *SEED.get_or_init(|| WORLD_SEED);
+        ^ self::seed();
     value = (value ^ (value >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
     value = (value ^ (value >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
     value ^ (value >> 31)
@@ -389,9 +438,7 @@ pub(crate) fn ground_height(x: i64, z: i64) -> f64 {
 }
 
 fn terrain_column(x: i64, z: i64) -> Column {
-    TERRAIN
-        .get_or_init(|| Terrain::new(*SEED.get_or_init(|| WORLD_SEED)))
-        .sample(x, z)
+    Terrain::new(seed()).sample(x, z)
 }
 
 fn tree_at(cell_x: i64, cell_z: i64) -> Option<Tree> {
@@ -446,7 +493,8 @@ fn is_leaf(material: u32) -> bool {
     (u32::from(LEAVES)..=u32::from(PINE_LEAVES)).contains(&material)
 }
 
-pub(crate) const fn is_translucent(material: u32) -> bool {
+/// Whether a material is drawn blended after the opaque blocks.
+pub const fn is_translucent(material: u32) -> bool {
     matches!(material, 22 | 62 | 63)
 }
 
@@ -462,7 +510,8 @@ fn face_visible(material: u32, neighbor: u32) -> bool {
 }
 
 impl ChunkData {
-    pub(crate) fn encode(&self) -> Vec<u8> {
+    /// Encodes the chunk for storage.
+    pub fn encode(&self) -> Vec<u8> {
         let mut raw = Vec::new();
         raw.extend_from_slice(&self.heights);
         raw.extend_from_slice(&self.blocks);
@@ -487,7 +536,12 @@ impl ChunkData {
         encoded
     }
 
-    pub(crate) fn decode(encoded: &[u8]) -> Result<Self, String> {
+    /// Decodes and validates a stored chunk.
+    ///
+    /// # Errors
+    ///
+    /// When the data is truncated, corrupt, or has unknown materials.
+    pub fn decode(encoded: &[u8]) -> Result<Self, String> {
         const COLUMNS: usize = PADDED_SIZE * PADDED_SIZE;
         const BLOCKS: usize = COLUMNS * HEIGHT;
         const BASE: usize = COLUMNS + 2 * BLOCKS + 4;
@@ -558,19 +612,19 @@ impl ChunkData {
         })
     }
 
-    pub(crate) fn generate(coord: Coord) -> Self {
+    /// Generates and lights an unedited chunk.
+    pub fn generate(coord: Coord) -> Self {
         Self::generate_edited(coord, &[])
     }
 
-    pub(crate) fn generate_edited(coord: Coord, edits: &[Edit]) -> Self {
-        Self::rebuild(coord, std::collections::HashMap::new(), edits)
+    /// Generates and lights a chunk with the edits around it.
+    pub fn generate_edited(coord: Coord, edits: &[Edit]) -> Self {
+        Self::rebuild(coord, BTreeMap::new(), edits)
     }
 
-    pub(crate) fn rebuild(
-        coord: Coord,
-        mut bases: std::collections::HashMap<Coord, Self>,
-        edits: &[Edit],
-    ) -> Self {
+    /// Applies the edits to the unedited chunk and lights it. `bases` holds already
+    /// generated unedited chunks of it and its neighbors, the others are generated.
+    pub fn rebuild(coord: Coord, mut bases: BTreeMap<Coord, Self>, edits: &[Edit]) -> Self {
         let mut chunk = bases
             .remove(&coord)
             .unwrap_or_else(|| Self::generate_unlit(coord, false));
@@ -579,7 +633,8 @@ impl ChunkData {
         chunk
     }
 
-    pub(crate) fn voxel(&self, position: [i32; 3]) -> u8 {
+    /// The material at a position in the chunk, including plants, air outside it.
+    pub fn voxel(&self, position: [i32; 3]) -> u8 {
         if position[0] < 0
             || position[0] >= CHUNK_SIZE as i32
             || position[2] < 0
@@ -596,7 +651,8 @@ impl ChunkData {
             .map_or_else(|| self.block(position) as u8, |p| p[3])
     }
 
-    pub(crate) fn apply_edits(&mut self, coord: Coord, edits: &[Edit]) {
+    /// Applies the edits that fall in the chunk or its halo.
+    pub fn apply_edits(&mut self, coord: Coord, edits: &[Edit]) {
         for edit in edits {
             let [wx, y, wz] = edit.position;
             let x = wx - coord.0 * CHUNK_SIZE as i64;
@@ -621,7 +677,7 @@ impl ChunkData {
 
     fn generate_unlit(coord: Coord, lighting_only: bool) -> Self {
         let origin = (coord.0 * CHUNK_SIZE as i64, coord.1 * CHUNK_SIZE as i64);
-        let columns = std::array::from_fn(|index| {
+        let columns = core::array::from_fn(|index| {
             terrain_column(
                 origin.0 + (index % PADDED_SIZE) as i64 - 1,
                 origin.1 + (index / PADDED_SIZE) as i64 - 1,
@@ -695,8 +751,8 @@ impl ChunkData {
         }
     }
 
-    #[cfg(test)]
-    pub(crate) fn from_heights(heights: [u8; PADDED_SIZE * PADDED_SIZE]) -> Self {
+    /// A flat unlit chunk of terrain with the given column heights, for tests.
+    pub fn from_heights(heights: [u8; PADDED_SIZE * PADDED_SIZE]) -> Self {
         Self::from_columns(heights.map(|height| Column {
             height,
             biome: Biome::Plains,
@@ -915,12 +971,7 @@ impl ChunkData {
         }
     }
 
-    fn bake_light(
-        &mut self,
-        coord: Coord,
-        edits: &[Edit],
-        bases: &mut std::collections::HashMap<Coord, Self>,
-    ) {
+    fn bake_light(&mut self, coord: Coord, edits: &[Edit], bases: &mut BTreeMap<Coord, Self>) {
         // A 16-block margin covers the entire 15-level propagation radius, including
         // the mesh halo. No neighbor loading or later remeshing is necessary.
         const WIDTH: usize = CHUNK_SIZE * 3;
@@ -1096,7 +1147,9 @@ impl ChunkData {
         }
     }
 
-    pub(crate) fn mesh(&self) -> Vec<u8> {
+    /// The greedy meshed quads of the chunk sorted by section, opaque before
+    /// translucent. See [`QUAD_BYTES`] and `pack_quad` for the packed format.
+    pub fn mesh(&self) -> Vec<u8> {
         let mut bytes = Vec::with_capacity(256 * QUAD_BYTES);
         for section in 0..self.max_height.div_ceil(SECTION_SIZE) {
             let origin = [0, (section * SECTION_SIZE) as i32, 0];
@@ -1203,7 +1256,8 @@ impl ChunkData {
     }
 }
 
-pub(crate) const fn with_chunk_slot(quad: [u32; 2], slot: u32) -> [u32; 2] {
+/// Stores the GPU chunk slot in a packed quad, see `pack_quad`.
+pub const fn with_chunk_slot(quad: [u32; 2], slot: u32) -> [u32; 2] {
     debug_assert!(slot < 1 << 16);
     [
         quad[0] | (slot >> 14) << 10,

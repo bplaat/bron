@@ -4,6 +4,8 @@
  * SPDX-License-Identifier: MIT
  */
 
+#[cfg(not(feature = "std"))]
+use crate::math::Float;
 use crate::perlin::Perlin;
 use crate::world::{HEIGHT, SEA_LEVEL};
 
