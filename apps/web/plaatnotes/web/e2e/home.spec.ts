@@ -125,7 +125,8 @@ test.describe('Home - Note card actions', () => {
         await card.getByTitle('Pin').click();
 
         // Pinned section should now appear
-        await expect(page.getByText('Pinned')).toBeVisible();
+        await expect(page.getByRole('heading', { name: 'Pinned', exact: true })).toBeVisible();
+        await expect(card.getByTitle('Unpin', { exact: true })).toBeVisible();
 
         await deleteNote(page, note.id);
     });
