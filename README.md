@@ -179,6 +179,7 @@ Most of these libraries are intended primarily for personal use, but can still b
 - [enable-ansi-support](lib/sys/enable-ansi-support) A minimal replacement for the [enable-ansi-support](https://crates.io/crates/enable-ansi-support) crate
 - [jni](lib/sys/jni) A minimal replacement for the [jni](https://crates.io/crates/jni) crate
 - [keyring](lib/sys/keyring) A minimal replacement for the [keyring](https://crates.io/crates/keyring) crate
+- [preferences](lib/sys/preferences) Minimal native shared preferences for desktop and mobile
 - [rusb](lib/sys/rusb) A minimal replacement for the [rusb](https://crates.io/crates/rusb) crate
 - [simple_logger](lib/sys/simple_logger) A minimal replacement for the [simple_logger](https://crates.io/crates/simple_logger) crate
 - [terminal_size](lib/sys/terminal_size) A minimal replacement for the [terminal_size](https://crates.io/crates/terminal_size) crate
