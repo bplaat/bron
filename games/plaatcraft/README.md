@@ -11,6 +11,8 @@ and [bwebgpu](../../lib/graphics/bwebgpu) on Metal, Vulkan, or Direct3D 12.
 - Walking, swimming, and flying
 - Day and night with a layered skybox and voxel lighting
 - Your world, edits, and player are saved automatically
+- Settings with a 4-128 chunk Render Distance slider,
+  Show Debug Info toggle, and saved preferences
 - On-screen touch controls on iOS and Android
 
 ## Run
@@ -32,8 +34,6 @@ cargo bundle --path games/plaatcraft --android --run
 Textures use `cargo-bundle-assets`: normal Cargo builds embed them in the binary,
 while `cargo bundle` stores them as separate resource files. Universal macOS
 executables and multi-ABI Android APKs share one texture collection.
-
-The world is saved in `world.db` in the platform's app data directory.
 
 ## Controls
 

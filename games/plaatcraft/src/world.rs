@@ -1203,8 +1203,16 @@ impl ChunkData {
     }
 }
 
-// First word: x:5, local y:7, z:5, face:3, material low:6, reverse:1, section:4, material high:1.
-// Second word: width:5, height:5, sky:4, block light:4, GPU chunk slot:14.
+pub(crate) const fn with_chunk_slot(quad: [u32; 2], slot: u32) -> [u32; 2] {
+    debug_assert!(slot < 1 << 16);
+    [
+        quad[0] | (slot >> 14) << 10,
+        quad[1] | (slot & 0x3fff) << 18,
+    ]
+}
+
+// First word: x:5, local y:5, GPU chunk slot high:2, z:5, face:3, material low:6, reverse:1, section:4, material high:1.
+// Second word: width:5, height:5, sky:4, block light:4, GPU chunk slot low:14.
 const fn pack_quad(position: [i32; 3], face: u32, extent: [usize; 2], material: u32) -> [u32; 2] {
     [
         position[0] as u32
@@ -1299,7 +1307,7 @@ mod tests {
             assert_eq!(quads.len(), 4);
             for q in quads {
                 assert_eq!((q >> 27) & 15, 7);
-                assert_eq!((q >> 5) & 127, 15);
+                assert_eq!((q >> 5) & 31, 15);
                 assert!((q >> 17) & 7 >= 6);
             }
             let position = [i64::from(material - GRASS_BROWN), 127, 0];
@@ -1584,7 +1592,7 @@ mod tests {
             let packed = u32::from_ne_bytes(top[..4].try_into().unwrap());
             assert_eq!((packed >> 20) & 63, u32::from(liquid));
             assert_eq!(
-                ((packed >> 27) & 15) * SECTION_SIZE as u32 + ((packed >> 5) & 127),
+                ((packed >> 27) & 15) * SECTION_SIZE as u32 + ((packed >> 5) & 31),
                 u32::from(SEA_LEVEL)
             );
             assert!(!face_visible(u32::from(liquid), u32::from(liquid)));
@@ -1695,7 +1703,7 @@ mod tests {
             .iter()
             .map(|q| {
                 let a = u32::from_ne_bytes(q[..4].try_into().unwrap());
-                ((a >> 27) & 15) * SECTION_SIZE as u32 + ((a >> 5) & 127)
+                ((a >> 27) & 15) * SECTION_SIZE as u32 + ((a >> 5) & 31)
             })
             .collect();
         assert_eq!(tops, [0, HEIGHT as u32]);
@@ -1733,24 +1741,27 @@ mod tests {
 
     #[test]
     fn packed_quads_preserve_boundary_values() {
-        for position in [[0, 0, 0], [16, 64, 16]] {
+        for position in [[0, 0, 0], [16, 16, 16]] {
             for face in 0..8 {
                 for extent in [[1, 1], [16, 16]] {
                     for material in 1..=127 {
                         let [a, b] = pack_quad(position, face, extent, material);
                         assert_eq!(
-                            [a & 31, (a >> 5) & 127, (a >> 12) & 31],
+                            [a & 31, (a >> 5) & 31, (a >> 12) & 31],
                             position.map(|v| v as u32)
                         );
                         assert_eq!((a >> 17) & 7, face);
                         assert_eq!(quad_material(a), material);
                         assert_eq!([b & 31, (b >> 5) & 31], extent.map(|v| v as u32));
                         assert_eq!(b >> 10, 0);
-                        let lit = b | (0xab << 10) | (16383 << 18);
-                        assert_eq!(lit & 31, extent[0] as u32);
-                        assert_eq!((lit >> 5) & 31, extent[1] as u32);
-                        assert_eq!((lit >> 10) & 255, 0xab);
-                        assert_eq!(lit >> 18, 16383);
+                        for slot in [0, 16383, 16384, 65535] {
+                            let [position, lit] = with_chunk_slot([a, b | (0xab << 10)], slot);
+                            assert_eq!(position & !(3 << 10), a);
+                            assert_eq!(lit & 31, extent[0] as u32);
+                            assert_eq!((lit >> 5) & 31, extent[1] as u32);
+                            assert_eq!((lit >> 10) & 255, 0xab);
+                            assert_eq!((lit >> 18) | ((position >> 10) & 3) << 14, slot);
+                        }
                     }
                 }
             }
@@ -1920,7 +1931,7 @@ mod tests {
                 if (a >> 17) & 7 < 6 {
                     actual += u64::from((b & 31) * ((b >> 5) & 31));
                 }
-                assert!(a & 31 <= 16 && (a >> 5) & 127 <= 64 && (a >> 12) & 31 <= 16);
+                assert!(a & 31 <= 16 && (a >> 5) & 31 <= 16 && (a >> 12) & 31 <= 16);
             }
             let mut expected = 0;
             for z in 0..CHUNK_SIZE as i32 {

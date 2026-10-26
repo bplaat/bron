@@ -69,7 +69,7 @@ impl Database {
         version.row()?;
         let version_number = version.integer(0);
         drop(version);
-        if !matches!(version_number, 0 | 3) {
+        if !matches!(version_number, 0 | 3 | 4) {
             return Err(format!(
                 "Unsupported world database version {version_number}"
             ));
@@ -84,7 +84,9 @@ impl Database {
             CREATE TABLE IF NOT EXISTS hotbar (id INTEGER PRIMARY KEY CHECK(id=1), slots BLOB NOT NULL, selected INTEGER NOT NULL);
             CREATE TABLE IF NOT EXISTS edits (x INTEGER NOT NULL, y INTEGER NOT NULL, z INTEGER NOT NULL, material INTEGER NOT NULL, PRIMARY KEY(x,z,y)) WITHOUT ROWID;
             CREATE TABLE IF NOT EXISTS dirty_chunks (x INTEGER NOT NULL, z INTEGER NOT NULL, PRIMARY KEY(x,z)) WITHOUT ROWID;
-            PRAGMA user_version=3; COMMIT;")?;
+            DROP TABLE IF EXISTS window_state;
+            DROP TABLE IF EXISTS settings;
+            PRAGMA user_version=4; COMMIT;")?;
         let mut seed = db.prepare(c"INSERT OR IGNORE INTO metadata(id,seed) VALUES(1,?)")?;
         seed.bind_int(1, world::WORLD_SEED as i64)?;
         seed.done()?;
@@ -667,19 +669,21 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn legacy_window_state_is_removed_without_losing_game_state() {
+    fn legacy_tables_are_removed_without_losing_game_state() {
         let world = TestWorld::new();
         let camera = Camera::default();
         {
             let db = Database::open(&world.path).unwrap();
             db.save_state(&camera, true).unwrap();
             db.execute(c"CREATE TABLE window_state (id INTEGER PRIMARY KEY, x INTEGER, y INTEGER, width INTEGER, height INTEGER, maximized INTEGER);
-                INSERT INTO window_state VALUES(1,100,200,1100,700,1);")
+                INSERT INTO window_state VALUES(1,100,200,1100,700,1);
+                CREATE TABLE settings (id INTEGER PRIMARY KEY, data BLOB NOT NULL);
+                PRAGMA user_version=4;")
                 .unwrap();
         }
         let db = Database::open(&world.path).unwrap();
         let mut table = db
-            .prepare(c"SELECT name FROM sqlite_master WHERE type='table' AND name='window_state'")
+            .prepare(c"SELECT name FROM sqlite_master WHERE type='table' AND name IN ('window_state','settings')")
             .unwrap();
         assert!(!table.row().unwrap());
         let mut restored = Camera::default();

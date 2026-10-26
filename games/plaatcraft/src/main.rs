@@ -28,11 +28,15 @@ mod lighting;
 mod menu;
 mod perlin;
 mod scroll;
+mod settings;
 mod stream;
 mod textures;
 mod world;
 
 const TITLE: &str = "PlaatCraft";
+// Keep terrain uploads short so rendering and input take priority over loading.
+const CHUNK_UPLOAD_BUDGET: Duration = Duration::from_millis(1);
+const MAX_CHUNK_UPLOADS: usize = 32;
 const DIGITS: [KeyCode; inventory::SLOTS] = [
     KeyCode::Digit1,
     KeyCode::Digit2,
@@ -166,6 +170,9 @@ struct Game {
     // The mouse position over the window, for hovering the inventory.
     pointer: Option<LogicalPoint>,
     menu: menu::Menu,
+    settings: settings::Settings,
+    preferences: settings::Store,
+    gpu_radius: i64,
     // Touch screens have no pointer lock, so they track the menu themselves.
     paused: bool,
     selection_buffer: bwebgpu::Buffer,
@@ -198,6 +205,8 @@ impl Game {
         attachment: bwindow::WindowAttachment,
         database: database::Database,
     ) -> Self {
+        let preferences = settings::Store::new().expect("Open preferences");
+        let settings = preferences.settings();
         let scale = attachment.scale_factor();
         let instance = bwebgpu::Instance::default();
         let surface = instance.create_surface(attachment).expect("Create surface");
@@ -385,6 +394,9 @@ impl Game {
             scroll: scroll::Scroll::default(),
             pointer: None,
             menu: menu::Menu::default(),
+            settings,
+            preferences,
+            gpu_radius: 0,
             paused: true,
             selection_buffer,
             interaction,
@@ -428,7 +440,42 @@ impl Game {
     }
 
     fn menu_layout(&self) -> menu::Layout {
-        menu::Layout::new(self.window.size(), self.safe_area, self.touch.is_none())
+        menu::Layout::new(
+            self.window.size(),
+            self.safe_area,
+            self.touch.is_none(),
+            self.menu.page,
+        )
+    }
+
+    fn save_settings(&mut self) {
+        if let Err(error) = self.preferences.save(self.settings) {
+            eprintln!("Could not save settings: {error}");
+        }
+    }
+
+    fn menu_press(&mut self, position: LogicalPoint) {
+        use menu::Action;
+        match self.menu_layout().action_at(position) {
+            Some(Action::Play) => self.play(),
+            Some(Action::Settings) => self.menu.page = menu::Page::Settings,
+            Some(Action::Back) => self.menu.page = menu::Page::Main,
+            Some(action @ Action::Distance) => {
+                self.menu.dragging = Some(action);
+                self.menu_drag(position);
+            }
+            Some(Action::Stats) => self.settings.show_stats = !self.settings.show_stats,
+            Some(Action::Reset) => self.settings = settings::Settings::default(),
+            None => {}
+        }
+        self.save_settings();
+    }
+
+    fn menu_drag(&mut self, position: LogicalPoint) {
+        let layout = self.menu_layout();
+        if let Some(menu::Action::Distance) = self.menu.dragging {
+            self.settings.distance = layout.slider_value(position);
+        }
     }
 
     // Releases the touch controls and shows the menu on touch screens.
@@ -438,6 +485,9 @@ impl Game {
     }
 
     fn play(&mut self) {
+        self.menu.dragging = None;
+        self.menu.touch_id = None;
+        self.menu.page = menu::Page::Main;
         if self.touch.is_some() {
             self.paused = false;
         } else if let Err(error) = self.window.request_pointer_lock() {
@@ -514,15 +564,39 @@ impl Game {
 
     fn touch_event(&mut self, event: &WindowEvent) {
         if self.paused {
-            if let WindowEvent::TouchStart(event) = event {
-                event.prevent_default();
-                let layout = self.menu_layout();
-                if event
-                    .changed_touches
-                    .iter()
-                    .any(|touch| layout.button_at(touch.position))
-                {
-                    self.play();
+            match event {
+                WindowEvent::TouchStart(event) => {
+                    event.prevent_default();
+                    if self.menu.touch_id.is_none()
+                        && let Some(touch) = event.changed_touches.first()
+                    {
+                        self.menu.touch_id = Some(touch.identifier);
+                        self.menu_press(touch.position);
+                    }
+                }
+                WindowEvent::TouchMove(event) => {
+                    if let Some(touch) = event
+                        .changed_touches
+                        .iter()
+                        .find(|touch| Some(touch.identifier) == self.menu.touch_id)
+                    {
+                        self.menu_drag(touch.position);
+                    }
+                }
+                WindowEvent::TouchEnd(event) | WindowEvent::TouchCancel(event) => {
+                    if event
+                        .changed_touches
+                        .iter()
+                        .any(|touch| Some(touch.identifier) == self.menu.touch_id)
+                    {
+                        self.menu.touch_id = None;
+                        self.menu.dragging = None;
+                        self.save_settings();
+                    }
+                }
+                _ => {
+                    self.menu.dragging = None;
+                    self.menu.touch_id = None;
                 }
             }
             return;
@@ -633,21 +707,24 @@ impl Game {
         self.camera.view(
             self.config.width,
             self.config.height,
-            stream::RENDER_DISTANCE,
+            i64::from(self.settings.distance),
         )
     }
 
     fn update_chunks(&mut self) {
         let center = self.camera.chunk();
         let view = self.camera_view();
+        self.stream.radius = i64::from(self.settings.distance);
         self.stream
             .update(center, |coord| view.visible(offset(coord, center)));
-        let mut origins_changed = self.gpu_center != center;
+        let mut origins_changed =
+            self.gpu_center != center || self.gpu_radius != self.stream.radius;
         if origins_changed {
-            self.dirty
-                .retain(|&coord| stream::in_range(coord, center, stream::RENDER_DISTANCE));
+            self.dirty.retain(|&coord| {
+                stream::in_range(coord, center, i64::from(self.settings.distance))
+            });
             self.chunks.retain(|&coord, chunk| {
-                let keep = stream::in_range(coord, center, stream::RENDER_DISTANCE);
+                let keep = stream::in_range(coord, center, i64::from(self.settings.distance));
                 if !keep {
                     self.free_slots.push(chunk.slot);
                 }
@@ -659,6 +736,7 @@ impl Game {
                     .copy_from_slice(&offset_bytes(offset(coord, center)));
             }
             self.gpu_center = center;
+            self.gpu_radius = self.stream.radius;
         }
         // A time budget handles variable mesh sizes; the count cap bounds burst work.
         let upload_started = Instant::now();
@@ -689,10 +767,17 @@ impl Game {
                     .expect("Map new chunk buffer");
                 for (index, input) in cached.mesh.as_chunks::<8>().0.iter().enumerate() {
                     let mut output = *input;
-                    let extent =
-                        u32::from_ne_bytes(input[4..].try_into().expect("Packed quad extent"))
-                            | slot << 18;
-                    output[4..].copy_from_slice(&extent.to_ne_bytes());
+                    let quad = world::with_chunk_slot(
+                        [
+                            u32::from_ne_bytes(
+                                input[..4].try_into().expect("Packed quad position"),
+                            ),
+                            u32::from_ne_bytes(input[4..].try_into().expect("Packed quad extent")),
+                        ],
+                        slot,
+                    );
+                    output[..4].copy_from_slice(&quad[0].to_ne_bytes());
+                    output[4..].copy_from_slice(&quad[1].to_ne_bytes());
                     mapped
                         .slice(index * 8..index * 8 + 8)
                         .copy_from_slice(&output);
@@ -714,7 +799,7 @@ impl Game {
             self.stream.mark_uploaded(coord);
             self.dirty.remove(&coord);
             uploaded += 1;
-            if uploaded >= 32 || upload_started.elapsed() >= Duration::from_millis(1) {
+            if uploaded >= MAX_CHUNK_UPLOADS || upload_started.elapsed() >= CHUNK_UPLOAD_BUDGET {
                 break;
             }
         }
@@ -780,7 +865,7 @@ impl Game {
             format!("{} FPS - {x:.0}, {y:.0}, {z:.0}", self.fps),
             format!(
                 "{} chunks - {} visible / {} cached",
-                stream::RENDER_DISTANCE,
+                i64::from(self.settings.distance),
                 self.visible,
                 self.stream.cache.len()
             ),
@@ -880,6 +965,7 @@ impl Game {
     }
 
     fn save_session(&mut self) {
+        self.save_settings();
         if let Err(error) = self.database.save_state(&self.camera, self.night) {
             eprintln!("Could not save session: {error}");
         }
@@ -1013,9 +1099,11 @@ impl Game {
                 .write_buffer(&self.selection_buffer, 0, &offset_bytes(position)[..12]);
         }
         let scale = self.scale();
-        let lines = self.stats_lines();
-        self.stats
-            .update(&self.hud, &self.device, &self.queue, scale, lines);
+        if self.settings.show_stats {
+            let lines = self.stats_lines();
+            self.stats
+                .update(&self.hud, &self.device, &self.queue, scale, lines);
+        }
         let inventory_layout = self.inventory_layout();
         if self.inventory.open {
             self.inventory.hover(&inventory_layout, self.pointer);
@@ -1031,10 +1119,8 @@ impl Game {
         let menu_layout = self.menu_layout();
         let menu_open = self.menu_open();
         if menu_open {
-            let hovered = self
-                .pointer
-                .is_some_and(|pointer| menu_layout.button_at(pointer));
-            self.menu.prepare(&painter, &menu_layout, hovered);
+            self.menu
+                .prepare(&painter, &menu_layout, self.pointer, self.settings);
         }
         let icons = self.inventory.icons(&inventory_layout, &self.hotbar);
         let touch_layout = self.touch_layout();
@@ -1129,8 +1215,10 @@ impl Game {
                 if let Some(touch) = &self.touch {
                     touch.draw(&self.hud, &mut pass, &touch_layout, target);
                 }
-                self.stats
-                    .draw(&self.hud, &mut pass, self.safe_area, target);
+                if self.settings.show_stats {
+                    self.stats
+                        .draw(&self.hud, &mut pass, self.safe_area, target);
+                }
                 // The block icons go on top of the frames of their slots.
                 let (hotbar_icons, panel_icons) = icons.split_at(inventory::SLOTS);
                 self.inventory
@@ -1177,16 +1265,29 @@ fn main() {
 
     event_loop.run(move |event| match event {
         Event::Window(id, WindowEvent::CloseRequested(request)) if id == window_id => {
-            // The Android back gesture pauses to the menu first, like a game console.
-            if game.touch.is_some() && !game.paused {
-                request.prevent_default();
-                game.pause();
-                return;
+            // The Android back gesture leaves the settings, then pauses to the menu first, like
+            // a game console. Desktop close and quit requests always quit.
+            if game.touch.is_some() {
+                if game.menu_open() && game.menu.page == menu::Page::Settings {
+                    request.prevent_default();
+                    game.menu.page = menu::Page::Main;
+                    game.menu.dragging = None;
+                    game.save_settings();
+                    return;
+                }
+                if !game.paused {
+                    request.prevent_default();
+                    game.pause();
+                    return;
+                }
             }
             game.window.exit_pointer_lock();
             game.save_session();
         }
         Event::Window(id, WindowEvent::Blur) if id == window_id => {
+            game.menu.dragging = None;
+            game.menu.touch_id = None;
+            game.save_settings();
             game.window.exit_pointer_lock();
             // Touch screens pause when the app goes to the background.
             if game.touch.is_some() {
@@ -1221,12 +1322,16 @@ fn main() {
                 }
             } else if game.window.pointer_locked() {
                 game.click_block(event.button);
-            } else if event.button == MouseButton::Left
-                && game.menu_layout().button_at(event.position)
-            {
-                game.play();
+            } else if event.button == MouseButton::Left && game.menu_open() {
+                game.menu_press(event.position);
             }
         }
+        Event::Window(id, WindowEvent::MouseUp(event)) if id == window_id => {
+            if event.button == MouseButton::Left && game.menu.dragging.take().is_some() {
+                game.save_settings();
+            }
+        }
+
         Event::Window(
             id,
             WindowEvent::MouseMove {
@@ -1237,6 +1342,9 @@ fn main() {
         ) if id == window_id => {
             game.camera.modifiers = modifiers;
             game.pointer = Some(position);
+            if game.menu_open() {
+                game.menu_drag(position);
+            }
             if game.window.pointer_locked() {
                 game.camera
                     .look(f64::from(movement.x), f64::from(movement.y));
@@ -1244,6 +1352,9 @@ fn main() {
         }
         Event::Window(id, WindowEvent::MouseLeave) if id == window_id => {
             game.pointer = None;
+            if game.menu.dragging.take().is_some() {
+                game.save_settings();
+            }
         }
         Event::Window(id, WindowEvent::Wheel(delta, modifiers)) if id == window_id => {
             game.camera.modifiers = modifiers;
@@ -1265,7 +1376,17 @@ fn main() {
                     game.save_session();
                 } else if key == KeyCode::KeyN && !event.repeat {
                     game.night = !game.night;
-                } else if key == KeyCode::Enter && game.menu_open() {
+                } else if key == KeyCode::Escape
+                    && game.menu_open()
+                    && game.menu.page == menu::Page::Settings
+                {
+                    game.menu.page = menu::Page::Main;
+                    game.menu.dragging = None;
+                    game.save_settings();
+                } else if key == KeyCode::Enter
+                    && game.menu_open()
+                    && game.menu.page == menu::Page::Main
+                {
                     game.play();
                 } else if !event.repeat
                     && (key == KeyCode::KeyE && (game.playing() || game.inventory.open)

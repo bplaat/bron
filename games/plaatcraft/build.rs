@@ -6,8 +6,10 @@
 
 #![doc = include_str!("README.md")]
 
+use std::env;
+
 fn compile_windows_resources() {
-    if std::env::var("CARGO_CFG_TARGET_OS").expect("CARGO_CFG_TARGET_OS not set") != "windows" {
+    if env::var("CARGO_CFG_TARGET_OS").expect("CARGO_CFG_TARGET_OS not set") != "windows" {
         return;
     }
 
