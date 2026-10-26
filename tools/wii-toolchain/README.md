@@ -57,7 +57,7 @@ The toolchain and examples build separately from main Cargo workspace. The exist
 `./build.sh test` builds `test/` into the repository root's `target/wii-toolchain/test/` and runs it in Dolphin without its user
 interface, on Linux headless in `dolphin-emu-nogui` without video when it is installed. It checks
 the startup code, the C library, compiler-rt, libogc's paired single math, threads and timers, the
-C library locks, and a texture converted by `gxtexconv`. The program writes its results to
+C library locks, and RGBA8 and RGB5A3 textures converted by `gxtexconv`. The program writes its results to
 `/tmp/test.txt` on Dolphin's NAND after every group, the script prints them and fails when a check
 failed or the program didn't finish. The program keeps running after the last group, because
 returning reloads IOS, which clears `/tmp`.
