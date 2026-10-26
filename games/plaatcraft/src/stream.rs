@@ -440,6 +440,9 @@ mod tests {
         let mesh = terrain.mesh();
         db.save_chunk((0, 0), &terrain.encode()).unwrap();
         let mut stream = Stream::start(1, Some(world.path.clone()));
+        // Limit residency so unrelated generation cannot queue ahead of the reload.
+        stream.desired = vec![(0, 0)];
+        stream.loading = stream.desired.clone();
         wait_for_center(&mut stream, (0, 0));
         assert_eq!(stream.cache[&(0, 0)].mesh, mesh);
         stream.trim_cache(0, 0);
