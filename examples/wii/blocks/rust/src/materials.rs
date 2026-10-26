@@ -4,7 +4,8 @@
  * SPDX-License-Identifier: MIT
  */
 
-use crate::libogc::{DCFlushRange, GX_FALSE, GX_InitTexObj, GX_REPEAT, GX_TF_CMPR, GXTexObj};
+use libogc_sys::{DCFlushRange, GX_FALSE, GX_InitTexObj, GX_REPEAT, GX_TF_CMPR, GXTexObj};
+
 use crate::world::Material;
 
 const IMAGE_SIZE: usize = 128 * 128 / 2;

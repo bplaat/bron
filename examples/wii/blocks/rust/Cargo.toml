@@ -5,6 +5,9 @@ name = "blocks"
 version = "0.1.0"
 edition = "2024"
 
+[dependencies]
+libogc-sys = { path = "../../../../tools/wii-toolchain/libogc-sys" }
+
 [build-dependencies]
 gxtexconv = { path = "../../../../tools/wii-toolchain/gxtexconv" }
 

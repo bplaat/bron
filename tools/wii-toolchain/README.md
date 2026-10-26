@@ -37,7 +37,8 @@ Downloaded sources, compiled libraries and host tools stay in the repository roo
 
 C projects include `wii.mk` from their Makefile. Rust projects select `wii.json` and `run.sh` in
 `.cargo/config.toml`, then call the shared `build.rs` helper to build the libraries and configure
-the linker with an absolute path to `wii.ld`. Each example keeps its own build output in `target/`.
+the linker with an absolute path to `wii.ld`. They use the libogc and picolibc functions through
+the `libogc-sys` crate. Each project keeps its own build output in `target/`.
 
 The toolchain and examples build separately from main Cargo workspace. The existing
 `games/plaatcraft/wii` port still uses its original devkitPPC build.
@@ -49,6 +50,7 @@ The toolchain and examples build separately from main Cargo workspace. The exist
   and picolibc's `../../target/wii-toolchain/sysroot/lib/libc.a`
 - `gxtexconv/` converts images to GX textures, as a library for `build.rs` files and a CLI for
   the Makefiles
+- `libogc-sys/` has the Rust bindings for the libogc and picolibc functions the programs use
 - `run.sh` converts a program to a `.dol` and starts it in Dolphin, extra arguments go to Dolphin
 - `test/` is a Wii program that tests the toolchain, see below
 

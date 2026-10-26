@@ -13,13 +13,13 @@ use core::ffi::{c_int, c_void};
 use core::ptr;
 use core::sync::atomic::{AtomicBool, Ordering};
 
-use crate::libogc::*;
+use libogc_sys::*;
+
 use crate::memory::{AlignedBuffer, Framebuffer};
 use crate::render::*;
 use crate::texture::Texture;
 
 mod font;
-mod libogc;
 mod memory;
 mod render;
 mod texture;

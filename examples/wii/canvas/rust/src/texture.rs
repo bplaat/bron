@@ -6,7 +6,8 @@
 
 use core::ffi::c_void;
 
-use crate::libogc::{GX_CLAMP, GX_FALSE, GX_InitTexObj, GX_TF_RGBA8, GXTexObj};
+use libogc_sys::{GX_CLAMP, GX_FALSE, GX_InitTexObj, GX_TF_RGBA8, GXTexObj};
+
 use crate::memory::AlignedBuffer;
 
 pub struct Texture {
@@ -70,6 +71,6 @@ impl Texture {
     }
 
     pub unsafe fn bind(&self, map: u8) {
-        unsafe { crate::libogc::GX_LoadTexObj(&self.object, map) }
+        unsafe { libogc_sys::GX_LoadTexObj(&self.object, map) }
     }
 }

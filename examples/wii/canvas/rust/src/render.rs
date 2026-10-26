@@ -6,8 +6,9 @@
 
 use core::ffi::c_char;
 
+use libogc_sys::*;
+
 use crate::font::{FONT, FONT_RENDER_SIZE};
-use crate::libogc::*;
 use crate::texture::Texture;
 
 #[inline]

@@ -12,13 +12,13 @@ use core::ffi::{c_int, c_void};
 use core::ptr;
 use core::sync::atomic::{AtomicBool, Ordering};
 
-use crate::libogc::*;
+use libogc_sys::*;
+
 use crate::materials::Materials;
 use crate::memory::{AlignedBuffer, Framebuffer};
 use crate::mesh::Mesh;
 use crate::world::World;
 
-mod libogc;
 mod materials;
 mod memory;
 mod mesh;
