@@ -23,6 +23,7 @@ mod file_drop;
 mod frame;
 pub(crate) mod headers;
 pub(crate) mod input;
+mod instance;
 mod interaction;
 #[cfg(feature = "menu")]
 mod menu;

@@ -11,6 +11,7 @@ use std::ptr::{null, null_mut};
 use std::sync::Arc;
 
 use super::headers::*;
+use super::instance::SingleInstance;
 use crate::mailbox::{Mailbox, Message};
 use crate::{AppId, EventLoopBuilder, LogicalPoint, LogicalSize, NativeEvent as Event, Theme};
 
@@ -23,6 +24,7 @@ pub(crate) struct PlatformEventLoop {
     theme: Theme,
     mailbox: Arc<Mailbox>,
     message_window: HWND,
+    single_instance: Option<SingleInstance>,
     #[cfg(feature = "menu")]
     _accelerators: super::menu::Accelerators,
 }
@@ -30,27 +32,6 @@ pub(crate) struct PlatformEventLoop {
 impl PlatformEventLoop {
     pub(crate) fn new(builder: EventLoopBuilder) -> Self {
         unsafe {
-            // Ensure single instance
-            if let Some(app_id) = builder.app_id {
-                if builder.single_instance {
-                    let mutex_name = format!(
-                        "bwindow-{}.{}.{}",
-                        app_id.qualifier, app_id.organization, app_id.application
-                    );
-                    let mutex_name = mutex_name.to_wide_string();
-                    CreateMutexW(null_mut(), TRUE, mutex_name.as_ptr());
-                    if GetLastError() == ERROR_ALREADY_EXISTS {
-                        let hwnd = FindWindowW(mutex_name.as_ptr(), null());
-                        if !hwnd.is_null() {
-                            ShowWindow(hwnd, SW_RESTORE);
-                            SetForegroundWindow(hwnd);
-                        }
-                        exit(0);
-                    }
-                }
-                APP_ID = Some(app_id);
-            }
-
             // Initialize OLE (and COM as a single-threaded apartment). OLE
             // initialization is required for RegisterDragDrop to succeed.
             #[cfg(feature = "file_drop")]
@@ -95,10 +76,34 @@ impl PlatformEventLoop {
                 !message_window.is_null(),
                 "could not create event-loop message window"
             );
+            let single_instance = if builder.single_instance {
+                builder.app_id.as_ref().and_then(|app_id| {
+                    match SingleInstance::register(
+                        app_id,
+                        PlatformEventLoopProxy {
+                            mailbox: mailbox.clone(),
+                            hwnd: message_window as usize,
+                        },
+                    ) {
+                        Ok(Some(instance)) => Some(instance),
+                        Ok(None) => exit(0),
+                        Err(error) => {
+                            eprintln!(
+                                "Could not register or activate application instance: {error}"
+                            );
+                            exit(1);
+                        }
+                    }
+                })
+            } else {
+                None
+            };
+            APP_ID = builder.app_id;
             Self {
                 theme: system_theme(),
                 mailbox,
                 message_window,
+                single_instance,
                 #[cfg(feature = "menu")]
                 _accelerators: super::menu::Accelerators::new(
                     message_window,
@@ -221,6 +226,8 @@ pub(crate) use crate::dispatch::send as send_event;
 
 impl Drop for PlatformEventLoop {
     fn drop(&mut self) {
+        // Stop accepting activations before closing their mailbox and HWND.
+        self.single_instance.take();
         crate::dispatch::shutdown(&self.mailbox);
         unsafe { DestroyWindow(self.message_window) };
         #[cfg(feature = "file_drop")]
@@ -259,6 +266,7 @@ unsafe extern "system" fn message_window_proc(
         while let Some(message) = mailbox.pop() {
             match message {
                 Message::User(value) => send_event(Event::UserEvent(value)),
+                Message::Activate => super::window::activate(),
                 Message::Exit => {
                     unsafe { PostQuitMessage(0) };
                     break;
@@ -276,7 +284,7 @@ pub(crate) struct PlatformEventLoopProxy {
 }
 
 impl PlatformEventLoopProxy {
-    fn send(&self, message: Message) -> bool {
+    pub(super) fn send(&self, message: Message) -> bool {
         self.mailbox.send(message, || unsafe {
             PostMessageW(self.hwnd as HWND, WM_WAKE, 0, 0) != FALSE
         })
