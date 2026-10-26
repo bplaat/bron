@@ -12,8 +12,9 @@ use std::process::{Command, exit};
 use anyhow::Result;
 use bwebview::{WebviewBuilder, WebviewEvent};
 use bwindow::{Event, EventLoopBuilder, LogicalSize, Theme, WindowBuilder};
+use preferences::{Preferences, Value};
 use rust_embed::Embed;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use small_http::{Request, Response, Status};
 use small_router::RouterBuilder;
 
@@ -82,6 +83,17 @@ fn man_show(req: &Request, _ctx: &()) -> Result<Response> {
     )))
 }
 
+const LAST_HASH: &str = "last_hash";
+
+// MARK: IPC messages
+#[derive(Deserialize, Serialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+enum IpcMessage {
+    Ready,
+    HashChange { hash: String },
+    RestoreHash { hash: String },
+}
+
 pub(crate) enum AppEvent {
     Webview(bwindow::WindowId, WebviewEvent),
 }
@@ -123,6 +135,7 @@ fn main() {
     }
     let mut window = window_builder.build();
 
+    let prefs = Preferences::new("nl.bplaat.ManExplorer").expect("Failed to open preferences");
     #[allow(unused)]
     let mut webview = WebviewBuilder::new(&window)
         .on_event(event_loop.create_proxy(), AppEvent::Webview)
@@ -151,6 +164,24 @@ fn main() {
         }
         Event::UserEvent(AppEvent::Webview(_window_id, WebviewEvent::PageTitleChange(title))) => {
             window.set_title(title)
+        }
+        Event::UserEvent(AppEvent::Webview(_window_id, WebviewEvent::MessageReceive(message))) => {
+            match serde_json::from_str(&message) {
+                Ok(IpcMessage::Ready) => {
+                    if let Ok(Some(Value::String(hash))) = prefs.get(LAST_HASH) {
+                        webview.send_ipc_message(
+                            serde_json::to_string(&IpcMessage::RestoreHash { hash })
+                                .expect("Failed to serialize restore hash message"),
+                        );
+                    }
+                }
+                Ok(IpcMessage::HashChange { hash }) => {
+                    if let Err(error) = prefs.set(LAST_HASH, hash) {
+                        eprintln!("Failed to save last hash: {error}");
+                    }
+                }
+                _ => {}
+            }
         }
         #[cfg(target_os = "macos")]
         Event::Window(_, bwindow::WindowEvent::MacosFullscreenChange(is_fullscreen)) => {
