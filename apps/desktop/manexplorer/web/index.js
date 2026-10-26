@@ -40,8 +40,12 @@ PetiteVue.createApp({
 
         if (window.location.hash.length > 1) {
             this.handleHashChange();
-        } else if (localStorage.getItem('lastHash')) {
-            window.location.hash = localStorage.getItem('lastHash');
+        } else {
+            window.ipc.addEventListener('message', (event) => {
+                const message = JSON.parse(event.data);
+                if (message.type === 'restoreHash') window.location.hash = message.hash;
+            });
+            window.ipc.postMessage(JSON.stringify({ type: 'ready' }));
         }
     },
 
@@ -62,7 +66,7 @@ PetiteVue.createApp({
         this.currentPage = currentPage.page;
         this.entries = currentPage.names;
 
-        localStorage.setItem('lastHash', window.location.hash);
+        window.ipc.postMessage(JSON.stringify({ type: 'hashChange', hash: window.location.hash }));
 
         if (name !== undefined) {
             this.openManPage(currentPage.page, name);
