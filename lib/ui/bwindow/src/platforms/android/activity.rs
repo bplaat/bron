@@ -7,7 +7,7 @@
 use std::ffi::{CStr, CString, c_int, c_void};
 use std::ptr::null_mut;
 use std::sync::OnceLock;
-use std::sync::atomic::{AtomicPtr, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
 
 use jni::errors::Result;
 use jni::objects::{Global, JObject};
@@ -22,6 +22,7 @@ use super::window;
 // The framework android.app.NativeActivity hosts the single window, its callbacks run on
 // the Android UI thread. The process runs one Rust main and exits with the activity.
 static ACTIVITY: AtomicPtr<ANativeActivity> = AtomicPtr::new(null_mut());
+static FINISHING: AtomicBool = AtomicBool::new(false);
 pub(super) static ACTIVITY_OBJECT: OnceLock<Global<JObject<'static>>> = OnceLock::new();
 static UI_QUEUE: Queue = Queue::new();
 
@@ -62,8 +63,26 @@ pub(super) fn android_run_on_ui_thread(task: impl FnOnce() + Send + 'static) {
 pub(super) fn finish() {
     let activity = ACTIVITY.load(Ordering::Acquire);
     if !activity.is_null() {
+        FINISHING.store(true, Ordering::Release);
         unsafe { ANativeActivity_finish(activity) };
     }
+}
+
+/// Move the task to the background like the back gesture of a native root activity,
+/// callable from every thread.
+pub(super) fn move_task_to_back() {
+    android_run_on_ui_thread(|| {
+        android_with_env(|env| {
+            env.call_method(
+                android_activity(),
+                jni_str!("moveTaskToBack"),
+                jni_sig!("(Z)Z"),
+                &[JValue::Bool(true)],
+            )?
+            .z()
+            .map(drop)
+        });
+    });
 }
 
 fn sdk_version() -> i32 {
@@ -80,7 +99,12 @@ unsafe extern "C" fn ANativeActivity_onCreate(
 ) {
     unsafe {
         // The Rust main function runs once per process, so another instance only finishes.
+        // A relaunch while the previous activity finishes ends the process instead, the system
+        // then restarts the not yet resumed activity in a fresh process.
         if !ACTIVITY.load(Ordering::Acquire).is_null() {
+            if FINISHING.load(Ordering::Acquire) {
+                std::process::exit(0);
+            }
             ANativeActivity_finish(activity);
             return;
         }

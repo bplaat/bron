@@ -11,7 +11,7 @@ use jni::sys::jint;
 use jni::{JValue, jni_sig, jni_str};
 
 use super::activity::{
-    android_activity, android_with_env, set_dark_mode, set_system_bar_appearance,
+    android_activity, android_with_env, move_task_to_back, set_dark_mode, set_system_bar_appearance,
 };
 use super::event_loop::{
     android_density, android_post_local, android_surface, android_window_size, content_size,
@@ -100,9 +100,11 @@ pub(super) fn close_requested() {
     let request = CloseRequest::new();
     crate::dispatch::send_then(
         Event::Window(host.id(), WindowEvent::CloseRequested(request.clone())),
+        // Like a native root activity, an unhandled back gesture keeps the app running in the
+        // background instead of closing the window.
         move || {
             if !request.default_prevented() && !host.is_closed() {
-                destroy(&host);
+                move_task_to_back();
             }
         },
     );
