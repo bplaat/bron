@@ -6,7 +6,7 @@ version = "0.1.0"
 edition = "2024"
 
 [build-dependencies]
-gxtexconv = { path = "../../../../lib/graphics/gxtexconv" }
+gxtexconv = { path = "../../../../tools/wii-toolchain/gxtexconv" }
 
 [patch.crates-io]
 crc = { path = "../../../../lib/data/crc" }

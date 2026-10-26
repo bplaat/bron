@@ -98,7 +98,7 @@ Various tools and websites. For the deployed sites, go to [bron.bplaat.nl](https
 - [cargo-bundle](tools/cargo-bundle) A simple Cargo plugin that builds macOS and iOS app bundles, Windows MSIX packages and Android APKs
 - [plaatnotes](apps/web/plaatnotes) A self-hosted note-taking web app with rich Markdown support
 - [nds-toolchain](tools/nds-toolchain/) An LLVM-based Nintendo DS toolchain with picolibc and a test ROM
-- [wii-toolchain](tools/wii-toolchain/) An LLVM-based Wii toolchain with picolibc, libogc, and Dolphin emulator tests
+- [wii-toolchain](tools/wii-toolchain/) An LLVM-based Wii toolchain with picolibc, libogc, the [gxtexconv](tools/wii-toolchain/gxtexconv) texture converter, and Dolphin emulator tests
 
 ### Examples
 
@@ -119,7 +119,6 @@ Most of these libraries are intended primarily for personal use, but can still b
 **Graphics**
 
 - [bcanvas](lib/graphics/bcanvas) Native 2D canvas content, without a browser dependency
-- [gxtexconv](lib/graphics/gxtexconv) A GameCube / Wii TPL texture converter library and CLI, replacing devkitPro's gxtexconv
 - [image](lib/graphics/image) A minimal JPEG, PNG/APNG, GIF, BMP, and QOI image decoder crate
 - [vector](lib/graphics/vector) SVG (subset) and TinyVG decoders with a backend-neutral display list
 - [bwebgpu](lib/graphics/bwebgpu) A native GPU rendering library for bwindow

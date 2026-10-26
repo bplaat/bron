@@ -2,7 +2,7 @@
 # Builds the Wii toolchain in the repository target/wii-toolchain/: fetches libogc, picolibc,
 # gamecube-tools and LLVM's compiler-rt, applies libogc/patches/ and picolibc/patches/ and builds
 # libogc.a, picolibc (the C library) in sysroot/, libcompiler-rt.a, elf2dol and our
-# lib/graphics/gxtexconv.
+# gxtexconv/.
 # The example Makefiles and Rust build.rs files run this before they build.
 #
 # Usage: ./build.sh [command]...
@@ -251,13 +251,13 @@ build_libraries() {
     fi
 }
 
-# elf2dol from gamecube-tools and our lib/graphics/gxtexconv run on the host
+# elf2dol from gamecube-tools and our gxtexconv/ run on the host
 build_tools() {
     if outdated "$BUILD_DIR/elf2dol" "$TOOLS_DIR/elftool"; then
         msg "Building elf2dol"
         cc -O2 "$TOOLS_DIR/elftool/elf2dol.c" -o "$BUILD_DIR/elf2dol"
     fi
-    if outdated "$BUILD_DIR/gxtexconv" "$ROOT_DIR/lib/graphics/gxtexconv" "$ROOT_DIR/lib/graphics/image"; then
+    if outdated "$BUILD_DIR/gxtexconv" "$TOOLCHAIN_DIR/gxtexconv" "$ROOT_DIR/lib/graphics/image"; then
         msg "Building gxtexconv"
         # The Rust examples run this from their build.rs, so leave out their toolchain and target
         env -u RUSTUP_TOOLCHAIN -u RUSTC -u RUSTC_WRAPPER -u RUSTC_WORKSPACE_WRAPPER \
