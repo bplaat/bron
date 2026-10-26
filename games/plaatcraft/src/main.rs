@@ -16,22 +16,18 @@ use bwindow::{
     Event, EventLoopBuilder, KeyCode, LogicalInsets, LogicalPoint, LogicalSize, Modifiers,
     MouseButton, Theme, Window, WindowBuilder, WindowEvent,
 };
+use plaatcraft_engine::{camera, raycast, world};
 
-mod biome;
-mod camera;
 mod controls;
 mod database;
 mod hud;
 mod interaction;
 mod inventory;
-mod lighting;
 mod menu;
-mod perlin;
 mod scroll;
 mod settings;
 mod stream;
 mod textures;
-mod world;
 
 const TITLE: &str = "PlaatCraft";
 // Keep terrain uploads short so rendering and input take priority over loading.
@@ -185,6 +181,10 @@ struct Game {
     uniforms: bwebgpu::Buffer,
     depth: bwebgpu::TextureView,
     camera: camera::Camera,
+    // The held keys and modifiers, and the held touch button that descends like Shift.
+    keys: HashSet<KeyCode>,
+    modifiers: Modifiers,
+    descend: bool,
     night: bool,
     stream: stream::Stream,
     chunks: HashMap<world::Coord, GpuChunk>,
@@ -408,6 +408,9 @@ impl Game {
             uniforms,
             depth,
             camera,
+            keys: HashSet::new(),
+            modifiers: Modifiers::NONE,
+            descend: false,
             night,
             stream,
             chunks: HashMap::new(),
@@ -530,7 +533,7 @@ impl Game {
         if let Some(touch) = &mut self.touch {
             if self.inventory.open {
                 let actions = touch.reset();
-                self.camera.stick = [0.0; 2];
+                self.camera.input.stick = [0.0; 2];
                 self.touch_actions(actions);
             }
             return;
@@ -676,18 +679,18 @@ impl Game {
                     self.camera.look(f64::from(dx) * 1.5, f64::from(dy) * 1.5);
                 }
                 controls::Action::Press(controls::Button::Jump) => {
-                    self.camera.keys.insert(KeyCode::Space);
+                    self.keys.insert(KeyCode::Space);
                 }
                 controls::Action::Release(controls::Button::Jump) => {
-                    self.camera.keys.remove(&KeyCode::Space);
+                    self.keys.remove(&KeyCode::Space);
                 }
-                controls::Action::Press(controls::Button::Down) => self.camera.descend = true,
-                controls::Action::Release(controls::Button::Down) => self.camera.descend = false,
+                controls::Action::Press(controls::Button::Down) => self.descend = true,
+                controls::Action::Release(controls::Button::Down) => self.descend = false,
                 controls::Action::Break => self.click_block(MouseButton::Left),
                 controls::Action::Place => self.click_block(MouseButton::Right),
                 controls::Action::Press(controls::Button::Fly) => {
                     self.camera.set_flying(!self.camera.flying);
-                    self.camera.descend = false;
+                    self.descend = false;
                     self.save_session();
                 }
                 controls::Action::Press(controls::Button::Night) => self.night = !self.night,
@@ -698,9 +701,24 @@ impl Game {
     }
 
     fn pointer_lock_changed(&mut self) {
-        self.camera.keys.clear();
-        self.camera.modifiers = Modifiers::NONE;
+        self.keys.clear();
+        self.modifiers = Modifiers::NONE;
         self.scroll.reset();
+    }
+
+    // Combines the held keys with the touch joystick and buttons.
+    fn input(&self) -> camera::Input {
+        let pressed = |key| f32::from(u8::from(self.keys.contains(&key)));
+        camera::Input {
+            direction: [
+                pressed(KeyCode::KeyD) - pressed(KeyCode::KeyA),
+                pressed(KeyCode::KeyW) - pressed(KeyCode::KeyS),
+            ],
+            stick: self.camera.input.stick,
+            jump: self.keys.contains(&KeyCode::Space),
+            sneak: self.modifiers.contains(Modifiers::SHIFT) || self.descend,
+            fast: self.modifiers.contains(Modifiers::CONTROL),
+        }
     }
 
     fn camera_view(&self) -> camera::View {
@@ -925,7 +943,7 @@ impl Game {
                 let Some(position) = hit.placement_position() else {
                     return;
                 };
-                if interaction::overlaps_player(position, self.camera.position) {
+                if raycast::overlaps_player(position, self.camera.position) {
                     return;
                 }
                 let block = self.interaction.block(&self.database, position, |coord| {
@@ -1016,7 +1034,7 @@ impl Game {
         let dt = (now - self.last_frame).as_secs_f32();
         self.last_frame = now;
         if let Some(touch) = &mut self.touch {
-            self.camera.stick = touch.stick();
+            self.camera.input.stick = touch.stick();
             let actions = touch.update(now);
             self.touch_actions(actions);
         }
@@ -1024,6 +1042,7 @@ impl Game {
             self.chunks.contains_key(&coord)
         });
         if self.playing() {
+            self.camera.input = self.input();
             // The feet or waist in water or lava make the player swim.
             let [x, y, z] = self.camera.position;
             self.camera.in_liquid = [0.2, 0.9].into_iter().any(|offset| {
@@ -1310,7 +1329,7 @@ fn main() {
             game.pointer_lock_changed();
         }
         Event::Window(id, WindowEvent::MouseDown(event)) if id == window_id => {
-            game.camera.modifiers = event.modifiers;
+            game.modifiers = event.modifiers;
             if game.inventory.open {
                 let layout = game.inventory_layout();
                 if event.button == MouseButton::Left
@@ -1340,7 +1359,7 @@ fn main() {
                 modifiers,
             },
         ) if id == window_id => {
-            game.camera.modifiers = modifiers;
+            game.modifiers = modifiers;
             game.pointer = Some(position);
             if game.menu_open() {
                 game.menu_drag(position);
@@ -1357,7 +1376,7 @@ fn main() {
             }
         }
         Event::Window(id, WindowEvent::Wheel(delta, modifiers)) if id == window_id => {
-            game.camera.modifiers = modifiers;
+            game.modifiers = modifiers;
             let steps = game.scroll.steps(delta, Instant::now());
             if game.inventory.open {
                 let layout = game.inventory_layout();
@@ -1369,7 +1388,7 @@ fn main() {
             }
         }
         Event::Window(id, WindowEvent::KeyDown(event)) if id == window_id => {
-            game.camera.modifiers = event.modifiers;
+            game.modifiers = event.modifiers;
             if let Some(key) = event.code {
                 if key == KeyCode::KeyF && game.playing() && !event.repeat {
                     game.camera.set_flying(!game.camera.flying);
@@ -1400,14 +1419,14 @@ fn main() {
                 {
                     game.number_key(slot);
                 } else if game.playing() {
-                    game.camera.keys.insert(key);
+                    game.keys.insert(key);
                 }
             }
         }
         Event::Window(id, WindowEvent::KeyUp(event)) if id == window_id => {
-            game.camera.modifiers = event.modifiers;
+            game.modifiers = event.modifiers;
             if let Some(key) = event.code {
-                game.camera.keys.remove(&key);
+                game.keys.remove(&key);
             }
         }
         Event::Window(id, WindowEvent::Resize(_)) if id == window_id => {

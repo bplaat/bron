@@ -9,10 +9,10 @@ use std::ptr;
 use std::sync::OnceLock;
 
 use libsqlite3_sys as sql;
+use plaatcraft_engine::camera::Camera;
+use plaatcraft_engine::world::{self, ChunkData, Coord, Edit};
 
-use crate::camera::Camera;
 use crate::inventory::{self, Hotbar};
-use crate::world::{self, ChunkData, Coord, Edit};
 
 // App sandboxes have no writable working directory, so the world lives in the data directory.
 pub(crate) fn path() -> &'static str {
@@ -357,7 +357,7 @@ impl Database {
             let bases = bases
                 .into_iter()
                 .map(|(coord, data)| Ok((coord, ChunkData::decode(&data)?)))
-                .collect::<Result<std::collections::HashMap<_, _>>>()?;
+                .collect::<Result<std::collections::BTreeMap<_, _>>>()?;
             let terrain = ChunkData::rebuild(coord, bases, &edits);
             self.save_generated(coord, &terrain.encode(), revision)?;
             terrain

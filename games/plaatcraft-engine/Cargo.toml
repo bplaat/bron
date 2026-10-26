@@ -1,0 +1,15 @@
+[package]
+name = "plaatcraft-engine"
+version = "0.2.0"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+# Without std the float functions link to the C library, like picolibc on the Wii
+[features]
+default = ["std"]
+std = []
+
+[lints]
+workspace = true

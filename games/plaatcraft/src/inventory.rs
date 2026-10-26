@@ -12,12 +12,12 @@ use std::time::{Duration, Instant};
 
 use bcanvas::{CanvasRenderingContext2d, Color, TextAlign, TextBaseline};
 use bwindow::{LogicalInsets, LogicalPoint, LogicalSize};
+use plaatcraft_engine::hotbar::name;
+pub(crate) use plaatcraft_engine::hotbar::{Hotbar, SLOTS};
+use plaatcraft_engine::world;
 
 use crate::hud::{Cached, Hud, MARGIN, Painter};
-use crate::world;
 
-pub(crate) const SLOTS: usize = 9;
-const DEFAULT_SLOTS: [u8; SLOTS] = [1, 2, 3, 28, 27, 62, 6, 9, 4];
 const COLUMNS: usize = 9;
 const NAME_DURATION: Duration = Duration::from_secs(2);
 // Room around the slots for the selection frame.
@@ -25,56 +25,6 @@ const FRAME: f32 = 3.0;
 const TAP_DISTANCE: f32 = 8.0;
 const NAME_WIDTH: f32 = 240.0;
 const NAME_HEIGHT: f32 = 22.0;
-
-pub(crate) fn name(material: u8) -> &'static str {
-    world::MATERIALS
-        .iter()
-        .find(|&&(id, _)| id == material)
-        .map_or("Unknown", |&(_, name)| name)
-}
-
-// MARK: Hotbar
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct Hotbar {
-    pub(crate) slots: [u8; SLOTS],
-    pub(crate) selected: usize,
-}
-
-impl Default for Hotbar {
-    fn default() -> Self {
-        Self {
-            slots: DEFAULT_SLOTS,
-            selected: 0,
-        }
-    }
-}
-
-impl Hotbar {
-    pub(crate) const fn material(&self) -> u8 {
-        self.slots[self.selected]
-    }
-
-    // Scrolling down selects the next slot, like the mouse wheel in Minecraft.
-    pub(crate) const fn cycle(&mut self, steps: i64) {
-        self.selected = (self.selected as i64 - steps).rem_euclid(SLOTS as i64) as usize;
-    }
-
-    // Selects the slot holding a material, or puts it in the selected slot.
-    pub(crate) fn pick(&mut self, material: u8) {
-        match self.slots.iter().position(|&slot| slot == material) {
-            Some(slot) => self.selected = slot,
-            None => self.slots[self.selected] = material,
-        }
-    }
-
-    // Puts a material in a slot, a slot that already held it gets the replaced material.
-    pub(crate) fn assign(&mut self, slot: usize, material: u8) {
-        if let Some(other) = self.slots.iter().position(|&held| held == material) {
-            self.slots[other] = self.slots[slot];
-        }
-        self.slots[slot] = material;
-    }
-}
 
 // MARK: Layout
 struct Panel {
@@ -574,33 +524,6 @@ fn draw_panel(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn hotbar_cycles_picks_and_assigns_without_duplicates() {
-        let mut hotbar = Hotbar::default();
-        hotbar.cycle(-1);
-        assert_eq!(hotbar.selected, 1);
-        hotbar.cycle(2);
-        assert_eq!(hotbar.selected, SLOTS - 1);
-
-        hotbar.pick(DEFAULT_SLOTS[2]);
-        assert_eq!(hotbar.selected, 2);
-        hotbar.pick(world::WATER);
-        assert_eq!(hotbar.slots[2], world::WATER);
-
-        // Assigning a material that is already in another slot swaps the two slots.
-        hotbar.assign(0, world::WATER);
-        assert_eq!(hotbar.slots[0], world::WATER);
-        assert_eq!(hotbar.slots[2], DEFAULT_SLOTS[0]);
-        assert_eq!(
-            hotbar
-                .slots
-                .iter()
-                .filter(|&&slot| slot == world::WATER)
-                .count(),
-            1
-        );
-    }
 
     #[test]
     fn inventory_scrolls_and_clicks_blocks_into_the_selected_slot() {
