@@ -837,7 +837,7 @@ impl Game {
         let (position, material) = match button {
             MouseButton::Left => (hit.position, 0),
             MouseButton::Right => {
-                let Some(position) = hit.adjacent else {
+                let Some(position) = hit.placement_position() else {
                     return;
                 };
                 if interaction::overlaps_player(position, self.camera.position) {
@@ -846,7 +846,9 @@ impl Game {
                 let block = self.interaction.block(&self.database, position, |coord| {
                     self.chunks.contains_key(&coord)
                 });
-                if !matches!(block, Some(0 | world::WATER)) {
+                if !block.is_some_and(|material| {
+                    matches!(material, 0 | world::WATER) || world::is_sprite(material)
+                }) {
                     return;
                 }
                 let material = world::placed_material(

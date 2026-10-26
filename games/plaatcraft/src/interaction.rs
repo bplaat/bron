@@ -18,6 +18,16 @@ pub(crate) struct Hit {
     pub(crate) material: u8,
 }
 
+impl Hit {
+    pub(crate) const fn placement_position(self) -> Option<[i64; 3]> {
+        if world::is_sprite(self.material) {
+            Some(self.position)
+        } else {
+            self.adjacent
+        }
+    }
+}
+
 // Traverse crossed voxel boundaries exactly, including negative coordinates.
 pub(crate) fn raycast(
     eye: [f64; 3],
@@ -248,6 +258,39 @@ pub(crate) fn overlaps_player(block: [i64; 3], eye: [f64; 3]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn placement_replaces_sprite_decorations_and_uses_solid_block_faces() {
+        for &(material, _) in world::MATERIALS {
+            let hit = Hit {
+                position: [0, 60, 0],
+                adjacent: Some([0, 61, 0]),
+                material,
+            };
+            if world::is_sprite(material) {
+                assert_eq!(hit.placement_position(), Some(hit.position));
+                assert_eq!(
+                    Hit {
+                        adjacent: None,
+                        ..hit
+                    }
+                    .placement_position(),
+                    Some(hit.position)
+                );
+            } else {
+                assert_eq!(hit.placement_position(), hit.adjacent);
+                assert_eq!(
+                    Hit {
+                        adjacent: None,
+                        ..hit
+                    }
+                    .placement_position(),
+                    None
+                );
+            }
+        }
+    }
+
     #[test]
     fn removing_water_targets_the_surface_and_exposes_the_next_layer() {
         let world = crate::database::tests::TestWorld::new();
