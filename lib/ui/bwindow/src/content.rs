@@ -308,7 +308,17 @@ impl ContentHost {
         let redraw = self.redraw.borrow().clone();
         match redraw {
             Some(redraw) => redraw(),
-            None => self.event_sender().send(WindowEvent::RedrawRequested),
+            None => {
+                #[cfg(windows)]
+                if let Some(NativeWindowHandle::Win32(hwnd)) = self.handle.get() {
+                    // Posted animation messages precede hardware input. Render through
+                    // WM_PAINT so a slow continuous renderer cannot starve that input.
+                    use crate::platforms::windows::headers::{FALSE, InvalidateRect};
+                    unsafe { InvalidateRect(hwnd, std::ptr::null_mut(), FALSE) };
+                    return;
+                }
+                self.event_sender().send(WindowEvent::RedrawRequested);
+            }
         }
     }
 
