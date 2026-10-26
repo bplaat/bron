@@ -26,6 +26,22 @@ function ipcSend(type, data = {}) {
     window.ipc.postMessage(JSON.stringify({ type, ...data }));
 }
 
+// Preferences are stored natively by the Rust side, it sends them before restoring the last file
+const preferences = {
+    values: {},
+    get(key) {
+        return this.values[key] ?? null;
+    },
+    set(key, value) {
+        this.values[key] = value;
+        ipcSend('setPreference', { key, value });
+    },
+    remove(key) {
+        delete this.values[key];
+        ipcSend('setPreference', { key, value: null });
+    },
+};
+
 let nextRequestId = 1;
 function ipcRequest(type, data = {}) {
     const requestId = nextRequestId++;
@@ -125,9 +141,10 @@ PetiteVue.createApp({
     async init() {
         window.ipc.addEventListener('message', (event) => {
             const message = JSON.parse(event.data);
+            if (message.type === 'preferences') preferences.values = message.values;
             if (message.type === 'openFile') this._openDatabaseByPath(message.path);
             if (message.type === 'restoreLastFile') {
-                const lastDbPath = localStorage.getItem('lastDbPath');
+                const lastDbPath = preferences.get('dbPath');
                 if (lastDbPath) {
                     this._openDatabaseByPath(lastDbPath);
                 } else {
@@ -185,8 +202,8 @@ PetiteVue.createApp({
     async _openDatabaseByPath(path) {
         const { ok, error } = await ipcRequest('openDatabase', { path });
         if (!ok) {
-            if (localStorage.getItem('lastDbPath') === path) {
-                localStorage.removeItem('lastDbPath');
+            if (preferences.get('dbPath') === path) {
+                preferences.remove('dbPath');
             }
             await ipcRequest('showMessage', { title: 'Failed to open database', description: error });
             return;
@@ -198,20 +215,20 @@ PetiteVue.createApp({
         this.currentDatabase = this.dbFileName;
         this.activeDatabase = '';
         this.databases = [];
-        localStorage.setItem('lastDbPath', path);
+        preferences.set('dbPath', path);
         this.dbOpened = true;
         this.closeConnectionDialog();
         this.resetBrowser();
         document.title = `Sequel Explorer - ${this.dbFileName}`;
         await this.loadTables();
-        const lastTable = localStorage.getItem('lastTableName');
+        const lastTable = preferences.get('tableName');
         if (lastTable && this.tables.includes(lastTable)) {
             await this.selectTable(lastTable);
         }
     },
 
     async restoreMysqlConnection() {
-        const savedConnection = localStorage.getItem('lastMysqlConnection');
+        const savedConnection = preferences.get('mysqlConnection');
         if (!savedConnection) return;
         try {
             const connection = JSON.parse(savedConnection);
@@ -220,7 +237,7 @@ PetiteVue.createApp({
             this.connectionTab = 'mysql';
             if (!(await this._openMysql(true))) this.$refs.connectionDialog.showModal();
         } catch (_error) {
-            localStorage.removeItem('lastMysqlConnection');
+            preferences.remove('mysqlConnection');
         }
     },
 
@@ -236,10 +253,10 @@ PetiteVue.createApp({
         try {
             let previousConnection = null;
             try {
-                const savedConnection = JSON.parse(localStorage.getItem('lastMysqlConnection'));
+                const savedConnection = JSON.parse(preferences.get('mysqlConnection'));
                 if (savedConnection?.transport && savedConnection?.user) previousConnection = savedConnection;
             } catch (_error) {
-                localStorage.removeItem('lastMysqlConnection');
+                preferences.remove('mysqlConnection');
             }
             response = await ipcRequest('openMysql', {
                 ...this.mysql,
@@ -257,9 +274,9 @@ PetiteVue.createApp({
         this.mysql.password = '';
         if (this.mysql.remember && response.credentialSaved) {
             const { transport, host, port, socket, user, tls } = this.mysql;
-            localStorage.setItem('lastMysqlConnection', JSON.stringify({ transport, host, port, socket, user, tls }));
+            preferences.set('mysqlConnection', JSON.stringify({ transport, host, port, socket, user, tls }));
         } else {
-            localStorage.removeItem('lastMysqlConnection');
+            preferences.remove('mysqlConnection');
         }
         if (response.credentialError) {
             await ipcRequest('showMessage', {
@@ -269,7 +286,7 @@ PetiteVue.createApp({
             });
         }
 
-        localStorage.removeItem('lastDbPath');
+        preferences.remove('dbPath');
         this.dbPath = '';
         this.dbFileName = this.mysql.transport === 'tcp' ? this.mysql.host : this.mysql.socket;
         this.connectionKind = 'mysql';
@@ -285,7 +302,7 @@ PetiteVue.createApp({
         document.title = `Sequel Explorer - ${this.connectionLabel}`;
         await this.loadDatabases();
 
-        const lastDatabase = localStorage.getItem('lastMysqlDatabase');
+        const lastDatabase = preferences.get('mysqlDatabase');
         const database = this.databases.includes(lastDatabase) ? lastDatabase : this.databases[0];
         if (database) await this.selectDatabase(database);
         return true;
@@ -328,11 +345,11 @@ PetiteVue.createApp({
         this.currentDatabase = database;
         this.activeDatabase = database;
         this.dbFileName = database;
-        localStorage.setItem('lastMysqlDatabase', database);
+        preferences.set('mysqlDatabase', database);
         this.resetBrowser();
         document.title = `Sequel Explorer - ${this.connectionLabel} - ${database}`;
         await this.loadTables();
-        const lastTable = localStorage.getItem('lastTableName');
+        const lastTable = preferences.get('tableName');
         if (lastTable && this.tables.includes(lastTable)) await this.selectTable(lastTable);
     },
 
@@ -383,7 +400,7 @@ PetiteVue.createApp({
         this.currentTable = name;
         this.isCustomQuery = false;
         this.queryText = '';
-        localStorage.setItem('lastTableName', name);
+        preferences.set('tableName', name);
         await this.openTableView(name);
     },
 

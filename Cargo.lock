@@ -1154,6 +1154,7 @@ dependencies = [
  "bwebview",
  "bwindow",
  "keyring",
+ "preferences",
  "rust-embed",
  "serde",
  "serde_json",
