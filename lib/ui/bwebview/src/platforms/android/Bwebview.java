@@ -24,6 +24,7 @@ import android.net.Uri;
 import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
+import android.view.ContextThemeWrapper;
 import android.view.KeyEvent;
 import android.view.View;
 import android.view.ViewGroup;
@@ -68,7 +69,12 @@ public final class Bwebview {
     @SuppressWarnings("deprecation")
     private void create(Activity activity, int backgroundColor, String userAgent) {
         this.activity = activity;
-        webView = new WebView(activity);
+        // The WebView reports prefers-color-scheme from its theme, a day night theme follows the
+        // system or app night mode also when the activity uses the default light theme.
+        var context = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q
+            ? new ContextThemeWrapper(activity, android.R.style.Theme_DeviceDefault_DayNight)
+            : activity;
+        webView = new WebView(context);
         var settings = webView.getSettings();
         settings.setJavaScriptEnabled(true);
         settings.setDomStorageEnabled(true);
