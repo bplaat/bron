@@ -918,6 +918,7 @@ version = "0.1.0"
 dependencies = [
  "bwebview",
  "bwindow",
+ "preferences",
  "rust-embed",
  "serde",
  "serde_json",

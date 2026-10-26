@@ -13,10 +13,12 @@ use bwindow::{
     MenuBuilder, MenuItem, MessageButtons, MessageDialog, MessageDialogResult, MessageLevel,
     Modifiers, Theme, WindowBuilder, WindowEvent,
 };
+use preferences::{Preferences, Value};
 use rust_embed::Embed;
 use serde::{Deserialize, Serialize};
 
 const FONT_SIZE: usize = 256 * 8;
+const LAST_FONT_PATH: &str = "last_font_path";
 
 #[derive(Embed)]
 #[folder = "web"]
@@ -35,7 +37,6 @@ enum IpcMessage {
     MenuAction {
         action: String,
     },
-    RestoreLastFile,
     OpenFile {
         path: String,
     },
@@ -91,6 +92,20 @@ enum IpcMessage {
     MacosDocumentEdited {
         edited: bool,
     },
+}
+
+// MARK: Preferences
+fn last_font_path(prefs: &Preferences) -> Option<String> {
+    match prefs.get(LAST_FONT_PATH) {
+        Ok(Some(Value::String(path))) => Some(path),
+        _ => None,
+    }
+}
+
+fn save_last_font_path(prefs: &Preferences, path: &str) {
+    if let Err(error) = prefs.set(LAST_FONT_PATH, path) {
+        eprintln!("Failed to save last font path: {error}");
+    }
 }
 
 // MARK: Main
@@ -228,6 +243,7 @@ fn main() {
         .allow_file_drop(true)
         .build();
 
+    let prefs = Preferences::new("nl.bplaat.PixelFontEditor").expect("Failed to open preferences");
     let mut webview = WebviewBuilder::new(&window)
         .on_event(event_loop.create_proxy(), AppEvent::Webview)
         .load_rust_embed::<WebAssets>()
@@ -309,15 +325,11 @@ fn main() {
             match ipc_message {
                 IpcMessage::Ready => {
                     page_ready = true;
-                    if let Some(path) = pending_open_path.take() {
+                    if let Some(path) = pending_open_path.take().or_else(|| last_font_path(&prefs))
+                    {
                         webview.send_ipc_message(
                             serde_json::to_string(&IpcMessage::OpenFile { path })
                                 .expect("Failed to serialize open file message"),
-                        );
-                    } else {
-                        webview.send_ipc_message(
-                            serde_json::to_string(&IpcMessage::RestoreLastFile)
-                                .expect("Failed to serialize restore last file message"),
                         );
                     }
                     if let Some(action) = pending_menu_action.take() {
@@ -327,7 +339,6 @@ fn main() {
                         );
                     }
                 }
-                IpcMessage::RestoreLastFile => {}
                 IpcMessage::ShowError { title, description } => {
                     MessageDialog::new()
                         .parent(&window)
@@ -370,6 +381,14 @@ fn main() {
                             error: Some(e.to_string()),
                         },
                     };
+                    // Forget the last font when it can no longer be opened
+                    if matches!(response, IpcMessage::OpenFontResponse { ok: true, .. }) {
+                        save_last_font_path(&prefs, &path);
+                    } else if last_font_path(&prefs).as_ref() == Some(&path)
+                        && let Err(error) = prefs.remove(LAST_FONT_PATH)
+                    {
+                        eprintln!("Failed to remove last font path: {error}");
+                    }
                     webview.send_ipc_message(
                         serde_json::to_string(&response).expect("Failed to serialize response"),
                     );
@@ -398,10 +417,13 @@ fn main() {
                         }
                     } else {
                         match std::fs::write(&path, &data) {
-                            Ok(()) => IpcMessage::SaveFontResponse {
-                                ok: true,
-                                error: None,
-                            },
+                            Ok(()) => {
+                                save_last_font_path(&prefs, &path);
+                                IpcMessage::SaveFontResponse {
+                                    ok: true,
+                                    error: None,
+                                }
+                            }
                             Err(e) => IpcMessage::SaveFontResponse {
                                 ok: false,
                                 error: Some(e.to_string()),

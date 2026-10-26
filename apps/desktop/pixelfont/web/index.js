@@ -182,10 +182,6 @@ PetiteVue.createApp({
         window.ipc.addEventListener('message', async (event) => {
             const message = JSON.parse(event.data);
             if (message.type === 'openFile') await this._openFont(message.path);
-            if (message.type === 'restoreLastFile') {
-                const lastFontPath = localStorage.getItem('lastFontPath');
-                if (lastFontPath) await this._openFont(lastFontPath);
-            }
             if (message.type === 'closeRequested') await this.closeWindow();
             if (message.type === 'menuAction') this.performAction(message.action);
         });
@@ -282,16 +278,12 @@ PetiteVue.createApp({
     async _loadFont(path) {
         const { ok, data, error } = await ipcRequest('openFont', { path });
         if (!ok) {
-            if (localStorage.getItem('lastFontPath') === path) {
-                localStorage.removeItem('lastFontPath');
-            }
             await ipcRequest('showError', { title: 'Failed to open font file', description: error });
             return false;
         }
         this.fontData = new Uint8Array(data);
         this.fontFilePath = path;
         this.fontFileName = path.replace(/.*[\\/]/, '');
-        localStorage.setItem('lastFontPath', path);
         this._setDirty(false);
 
         this.$nextTick(() => {
@@ -316,7 +308,6 @@ PetiteVue.createApp({
         if (saved) {
             this.fontFilePath = path;
             this.fontFileName = path.replace(/.*[\\/]/, '');
-            localStorage.setItem('lastFontPath', path);
             this._updateTitle();
         }
         return saved;
