@@ -659,7 +659,7 @@ impl ChunkData {
                 let column = columns[(z + 1) * PADDED_SIZE + x + 1];
                 let y = column.height;
                 let random = hash(origin.0 + x as i64, 0, origin.1 + z as i64, 9341);
-                let roll = random % 100;
+                let roll = random % 200;
                 let variant = (random >> 8) as usize;
                 let material = match column.biome {
                     Biome::Forest if roll < 6 => {
@@ -1313,6 +1313,23 @@ mod tests {
             assert_eq!(restored.voxel(position.map(|v| v as i32)), 0);
         }
         assert!(restored.plants.is_empty());
+    }
+
+    #[test]
+    fn plains_decorations_cover_about_a_quarter_of_eligible_ground() {
+        let columns = [Column {
+            height: 60,
+            biome: Biome::Plains,
+            ..Column::default()
+        }; PADDED_SIZE * PADDED_SIZE];
+        let mut count = 0;
+        for cx in 0..16 {
+            let mut chunk = ChunkData::from_columns(columns);
+            chunk.add_decorations(&columns, (cx * CHUNK_SIZE as i64, 0));
+            count += chunk.plants.len();
+        }
+        let coverage = count as f64 / (16 * CHUNK_SIZE * CHUNK_SIZE) as f64;
+        assert!((0.20..0.30).contains(&coverage), "Coverage: {coverage}");
     }
 
     #[test]
