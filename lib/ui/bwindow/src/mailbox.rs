@@ -11,6 +11,8 @@ use std::sync::Mutex;
 pub(crate) enum Message {
     User(Box<dyn Any + Send>),
     Exit,
+    #[cfg(windows)]
+    Activate,
 }
 
 pub(crate) struct Mailbox(Mutex<Option<VecDeque<Message>>>);

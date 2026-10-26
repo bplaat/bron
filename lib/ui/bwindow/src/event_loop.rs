@@ -77,7 +77,10 @@ impl<T: Send + 'static> EventLoopBuilder<T> {
         self
     }
 
-    /// Set whether only one instance of the application may run (enabled by default)
+    /// Set whether only one instance of the application may run (enabled by default).
+    /// Windows and GTK require an app ID. Windows restores and attempts to focus
+    /// an existing window when another instance is launched.
+    /// Other platforms rely on their native application lifecycle and ignore this option.
     pub const fn single_instance(mut self, single_instance: bool) -> Self {
         self.single_instance = single_instance;
         self

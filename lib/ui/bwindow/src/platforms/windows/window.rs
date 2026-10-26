@@ -624,9 +624,25 @@ pub(crate) fn config_dir() -> PathBuf {
     project_dirs.config_dir()
 }
 
-#[cfg(feature = "menu")]
 pub(super) fn is_app_window(window: HWND) -> bool {
     !window.is_null() && unsafe { GetWindowLong(window, -4) } == window_proc as *const () as isize
+}
+
+// Activation runs on the UI thread after initialization, even when another process
+// launched while the first window was still being built.
+pub(super) fn activate() {
+    unsafe extern "system" fn activate_window(window: HWND, _: LPARAM) -> BOOL {
+        if is_app_window(window) && unsafe { IsWindowVisible(window) } != FALSE {
+            if unsafe { IsIconic(window) } != FALSE {
+                unsafe { ShowWindow(window, SW_RESTORE) };
+            }
+            unsafe { SetForegroundWindow(window) };
+            FALSE
+        } else {
+            TRUE
+        }
+    }
+    unsafe { EnumThreadWindows(GetCurrentThreadId(), activate_window, 0) };
 }
 
 #[cfg(test)]

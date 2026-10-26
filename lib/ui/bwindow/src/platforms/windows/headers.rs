@@ -28,9 +28,54 @@ pub(crate) const ERROR_SUCCESS: i32 = 0;
 pub(crate) type HMODULE = *const c_void;
 
 pub(crate) const ERROR_ALREADY_EXISTS: u32 = 183;
+pub(crate) const WAIT_TIMEOUT: u32 = 258;
+pub(crate) const WAIT_ABANDONED: u32 = 128;
+pub(crate) const PAGE_READWRITE: u32 = 4;
+pub(crate) const FILE_MAP_READ: u32 = 4;
+pub(crate) const FILE_MAP_WRITE: u32 = 2;
+pub(crate) const SYNCHRONIZE: u32 = 0x0010_0000;
+pub(crate) const ERROR_INSUFFICIENT_BUFFER: i32 = 122;
+pub(crate) const ERROR_INVALID_PARAMETER: i32 = 87;
+pub(crate) const APPMODEL_ERROR_NO_PACKAGE: i32 = 15700;
 
 #[link(name = "kernel32")]
 unsafe extern "system" {
+    pub(crate) fn GetCurrentThreadId() -> u32;
+    pub(crate) fn ReleaseMutex(handle: HANDLE) -> i32;
+    pub(crate) fn CreateEventW(
+        attributes: *const c_void,
+        manual: i32,
+        initial: i32,
+        name: *const u16,
+    ) -> HANDLE;
+    pub(crate) fn SetEvent(event: HANDLE) -> i32;
+    pub(crate) fn ResetEvent(event: HANDLE) -> i32;
+    pub(crate) fn WaitForSingleObject(handle: HANDLE, milliseconds: u32) -> u32;
+    pub(crate) fn WaitForMultipleObjects(
+        count: u32,
+        handles: *const HANDLE,
+        all: i32,
+        milliseconds: u32,
+    ) -> u32;
+    pub(crate) fn GetCurrentProcessId() -> u32;
+    pub(crate) fn OpenProcess(access: u32, inherit: i32, pid: u32) -> HANDLE;
+    pub(crate) fn CreateFileMappingW(
+        file: HANDLE,
+        attributes: *const c_void,
+        protection: u32,
+        high: u32,
+        low: u32,
+        name: *const u16,
+    ) -> HANDLE;
+    pub(crate) fn MapViewOfFile(
+        mapping: HANDLE,
+        access: u32,
+        high: u32,
+        low: u32,
+        length: usize,
+    ) -> *mut c_void;
+    pub(crate) fn UnmapViewOfFile(address: *const c_void) -> i32;
+    pub(crate) fn GetCurrentPackageFamilyName(length: *mut u32, name: *mut u16) -> i32;
     pub(crate) fn GetModuleHandleW(lpModuleName: *const w_char) -> HMODULE;
     pub(crate) fn GetProcAddress(hModule: HMODULE, lpProcName: *const c_char) -> *const c_void;
     pub(crate) fn GetLastError() -> u32;
@@ -307,6 +352,14 @@ pub(crate) struct ACCEL {
 }
 #[link(name = "user32")]
 unsafe extern "system" {
+    pub(crate) fn EnumThreadWindows(
+        thread: u32,
+        callback: unsafe extern "system" fn(HWND, LPARAM) -> BOOL,
+        data: LPARAM,
+    ) -> BOOL;
+    pub(crate) fn IsWindowVisible(window: HWND) -> BOOL;
+    pub(crate) fn IsIconic(window: HWND) -> BOOL;
+    pub(crate) fn AllowSetForegroundWindow(pid: u32) -> i32;
     pub(crate) fn CreateAcceleratorTableW(accels: *const ACCEL, count: i32) -> HANDLE;
     pub(crate) fn DestroyAcceleratorTable(table: HANDLE) -> BOOL;
     pub(crate) fn TranslateAcceleratorW(window: HWND, table: HANDLE, message: *mut MSG) -> i32;

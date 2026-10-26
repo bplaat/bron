@@ -23,6 +23,31 @@ Use `EventLoopBuilder::new().with_user_event::<AppEvent>()` for typed worker and
 content events. Every window event includes a `WindowId`. Closing the last window
 or calling a proxy's `exit()` stops the event loop.
 
+## Single Instance
+
+Set `.app_id("nl", "example", "MyApp")` on the event loop builder to identify the
+application. Single-instance mode is enabled by default; `.single_instance(false)`
+allows independent processes on Windows and GTK.
+
+On Windows, one process owns a named mutex. Subsequent launches request that the running
+instance restore and focus an existing window, and wait up to five seconds for the
+request to be acknowledged. A background listener accepts requests even before the first
+window or event loop is ready. The UI thread performs the restore/focus operation once
+it starts processing messages. No application-level activation event is emitted, and
+arguments from subsequent launches are not forwarded.
+
+The Windows implementation follows the Windows App SDK's
+[AppInstance registration and redirection model](https://github.com/microsoft/WindowsAppSDK/blob/main/dev/AppLifecycle/AppInstance.cpp)
+using Win32 APIs, without an SDK runtime dependency. It recovers abandoned ownership,
+retains handles until shutdown, and exits a launcher with an error if registration or
+redirection fails. Installed MSIX packages include package identity in the instance key,
+separating them from unpackaged builds; AppContainer object namespaces remain isolated.
+Foreground activation is subject to Windows focus rules.
+
+GTK uses `GtkApplication` and the session bus to activate the existing instance and
+forward files as `Event::OpenFiles`. macOS, iOS and Android rely on their native launch
+behavior rather than enforcing this option inside bwindow.
+
 ## Input Events
 
 Native input uses DOM-like names with typed Rust payloads:
