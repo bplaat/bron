@@ -180,8 +180,10 @@ in the framework `android.app.NativeActivity`, so the APK needs no Java code. An
 - The system night mode is the theme, changes send `ThemeChanged`.
 - Touches report `MouseMove` and a left `MouseDown`, lifting the finger reports
   `MouseUp` and `MouseLeave`. Hardware keys report `KeyDown` / `KeyUp`.
-- The back gesture sends `CloseRequested`; closing the window ends the event loop,
-  then the activity finishes and the process exits.
+- The back gesture sends `CloseRequested`; when not prevented the app moves to the
+  background like a native root activity. Closing the window ends the event loop, then
+  the activity finishes and the process exits, a relaunch while finishing restarts the
+  app in a fresh process.
 - stdout, stderr, and panics are written to logcat with the binary name as tag.
 - The `dialog`, `file_drop`, `menu`, and `progress_bar` features are unsupported.
 

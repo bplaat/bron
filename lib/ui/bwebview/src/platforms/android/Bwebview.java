@@ -145,7 +145,8 @@ public final class Bwebview {
 
     // MARK: Panel
     // Fills the activity window, pads the WebView by the system bars, display cutout, and
-    // keyboard, and forwards the back key, which the panel window receives while focused.
+    // keyboard, and handles the back key, which the panel window receives while focused, by
+    // navigating back in the history or else forwarding it like the main window back gesture.
     private final class Panel extends FrameLayout {
         Panel(Context context) {
             super(context);
@@ -185,7 +186,11 @@ public final class Bwebview {
         public boolean dispatchKeyEvent(KeyEvent event) {
             if (event.getKeyCode() == KeyEvent.KEYCODE_BACK) {
                 if (event.getAction() == KeyEvent.ACTION_UP) {
-                    nativeBack();
+                    if (webView.canGoBack()) {
+                        webView.goBack();
+                    } else {
+                        nativeBack();
+                    }
                 }
                 return true;
             }
