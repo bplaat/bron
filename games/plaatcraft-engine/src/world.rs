@@ -1234,11 +1234,30 @@ impl ChunkData {
         }
     }
 
+    // Whether a section and the blocks around it are opaque, so it has no visible faces.
+    // Outside the world counts as air, so the bottom and top sections always have faces.
+    fn buried(&self, section: usize) -> bool {
+        let bottom = section * SECTION_SIZE;
+        let top = bottom + SECTION_SIZE;
+        if bottom == 0 || top >= HEIGHT {
+            return false;
+        }
+        self.blocks.as_chunks::<HEIGHT>().0.iter().all(|column| {
+            column[bottom - 1..=top].iter().all(|&block| {
+                let block = u32::from(block);
+                block != 0 && !is_translucent(block) && block != u32::from(LAVA)
+            })
+        })
+    }
+
     /// The greedy meshed quads of the chunk sorted by section, opaque before
     /// translucent. See [`QUAD_BYTES`] and `pack_quad` for the packed format.
     pub fn mesh(&self) -> Vec<u8> {
         let mut bytes = Vec::with_capacity(256 * QUAD_BYTES);
         for section in 0..self.max_height.div_ceil(SECTION_SIZE) {
+            if self.buried(section) {
+                continue;
+            }
             let origin = [0, (section * SECTION_SIZE) as i32, 0];
             let dimensions = [CHUNK_SIZE, SECTION_SIZE, CHUNK_SIZE];
             let mut mask = [0i32; CHUNK_SIZE * SECTION_SIZE];
@@ -1260,7 +1279,10 @@ impl ChunkData {
                             let left = self.block(a);
                             let right = self.block(b);
                             // Neighbors come from the whole world, but only this chunk owns its faces.
-                            mask[j * width + i] = if face_visible(left, right) && slice > 0 {
+                            // A material never shows a face to itself.
+                            mask[j * width + i] = if left == right {
+                                0
+                            } else if face_visible(left, right) && slice > 0 {
                                 self.face_key(left, b)
                             } else if face_visible(right, left) && slice < dimensions[axis] {
                                 -self.face_key(right, a)
