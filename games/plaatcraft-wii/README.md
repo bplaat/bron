@@ -39,6 +39,18 @@ position, a light palette index, and byte texture coordinates, so day and night 
 the palette. The block textures are converted to mipmapped CMPR or RGB5A3 textures during
 the build. Edits live as long as the game runs, there is no saving yet.
 
+## Benchmark
+
+`bench.sh` builds the port with the `bench` feature, which times the chunk pipeline instead of
+starting the game, runs it in Dolphin without its user interface and prints the milliseconds per
+chunk. Dolphin's time base counts emulated cycles, so the results are repeatable but only
+approximate the real Wii. `cargo run --release -p plaatcraft-engine --example bench` times the
+same chunks on the host.
+
+```sh
+./bench.sh
+```
+
 ## License
 
 Copyright © 2026 [Bastiaan van der Plaat](https://github.com/bplaat)

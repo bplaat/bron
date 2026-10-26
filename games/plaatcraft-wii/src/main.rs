@@ -9,6 +9,7 @@
 
 #![no_std]
 #![no_main]
+#![cfg_attr(feature = "bench", allow(dead_code))]
 
 use alloc::format;
 use core::ffi::c_int;
@@ -26,6 +27,8 @@ use crate::render::{Display, Renderer};
 use crate::stream::Stream;
 use crate::textures::Textures;
 
+#[cfg(feature = "bench")]
+mod bench;
 mod font;
 mod hud;
 mod input;
@@ -383,6 +386,13 @@ extern "C" fn wpad_poweroff(channel: c_int) {
     }
 }
 
+#[cfg(feature = "bench")]
+#[unsafe(export_name = "main")]
+pub extern "C" fn bench_main() -> c_int {
+    bench::run()
+}
+
+#[cfg(not(feature = "bench"))]
 #[unsafe(export_name = "main")]
 pub extern "C" fn app_main() -> c_int {
     let Some(mut game) = Game::new() else {
