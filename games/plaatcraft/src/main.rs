@@ -227,12 +227,14 @@ impl Game {
             usage: bwebgpu::BufferUsages::UNIFORM | bwebgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
+        // The material table followed by the chunk origins, the one storage binding.
         let origins = device.create_buffer(&bwebgpu::BufferDescriptor {
-            label: Some("Chunk origin table"),
-            size: (stream::RESIDENT_CAPACITY * 16) as u64,
+            label: Some("Material and chunk origin tables"),
+            size: (textures::MATERIAL_TABLE_BYTES + stream::RESIDENT_CAPACITY * 16) as u64,
             usage: bwebgpu::BufferUsages::STORAGE | bwebgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
+        queue.write_buffer(&origins, 0, &textures::material_table());
         let scene_layout = device.create_bind_group_layout(&bwebgpu::BindGroupLayoutDescriptor {
             label: Some("Scene layout"),
             entries: &[
@@ -717,8 +719,11 @@ impl Game {
             }
         }
         if origins_changed {
-            self.queue
-                .write_buffer(&self.origins, 0, &self.origin_bytes);
+            self.queue.write_buffer(
+                &self.origins,
+                textures::MATERIAL_TABLE_BYTES as u64,
+                &self.origin_bytes,
+            );
         }
         debug_assert_eq!(
             self.free_slots.len() + self.chunks.len(),
@@ -822,7 +827,7 @@ impl Game {
             return;
         };
         if button == MouseButton::Middle {
-            if let Some(material) = world::canonical_material(hit.material) {
+            if let Some(material) = world::item_material(hit.material) {
                 let mut hotbar = self.hotbar;
                 hotbar.pick(material);
                 self.set_hotbar(hotbar);
@@ -844,7 +849,12 @@ impl Game {
                 if !matches!(block, Some(0 | world::WATER)) {
                     return;
                 }
-                (position, self.hotbar.material())
+                let material = world::placed_material(
+                    self.hotbar.material(),
+                    self.camera.position[0] - (position[0] as f64 + 0.5),
+                    self.camera.position[2] - (position[2] as f64 + 0.5),
+                );
+                (position, material)
             }
             _ => return,
         };

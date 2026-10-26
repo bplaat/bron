@@ -54,21 +54,21 @@ fn sky(direction: vec3<f32>) -> vec3<f32> {
     let uv = cube_uv(direction);
     var color: vec3<f32>;
     if axis.y >= axis.x && axis.y >= axis.z {
-        let layer = select(75, 79, direction.y > 0.0);
+        let layer = select(0, 4, direction.y > 0.0);
         color = textureSample(sky_layers, sky_sampler, uv, layer).rgb;
         if direction.y > 0.0 {
             let clouds = textureSample(
                 sky_layers,
                 sky_sampler,
                 uv * 2.0 + camera.environment.y * vec2(0.0025, 0.00125),
-                80,
+                5,
             );
             color = over(color, clouds);
         }
     } else {
-        color = textureSample(sky_layers, sky_sampler, uv, 76).rgb;
-        color = over(color, textureSample(sky_layers, sky_sampler, uv, 78));
-        color = over(color, textureSample(sky_layers, sky_sampler, uv, 77));
+        color = textureSample(sky_layers, sky_sampler, uv, 1).rgb;
+        color = over(color, textureSample(sky_layers, sky_sampler, uv, 3));
+        color = over(color, textureSample(sky_layers, sky_sampler, uv, 2));
     }
 
     let night = color * vec3(0.06, 0.08, 0.16);
@@ -90,7 +90,7 @@ fn sky(direction: vec3<f32>) -> vec3<f32> {
         let local = vec2(dot(direction, right), dot(direction, up)) / facing;
         let sprite_uv = vec2(local.x, -local.y) / (2.0 * BODY_HALF_SIZE) + 0.5;
         if all(sprite_uv >= vec2(0.0)) && all(sprite_uv <= vec2(1.0)) {
-            let layer = select(82, 81, camera.environment.z > 0.5);
+            let layer = select(7, 6, camera.environment.z > 0.5);
             color = over(color, textureSample(sky_layers, sky_sampler, sprite_uv, layer));
         }
     }

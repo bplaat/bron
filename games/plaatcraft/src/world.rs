@@ -81,6 +81,11 @@ const MUSHROOM_RED: u8 = 69;
 const MUSHROOM_TAN: u8 = 70;
 const ROCK: u8 = 71;
 const ROCK_MOSS: u8 = 72;
+// Placed ovens turn their front toward the player, the inventory holds the south facing one.
+const OVEN: u8 = 36;
+const OVEN_WEST: u8 = 73;
+const OVEN_NORTH: u8 = 74;
+const OVEN_EAST: u8 = 75;
 pub(crate) const SEA_LEVEL: u8 = 48;
 
 #[derive(Clone, Copy, Debug)]
@@ -123,7 +128,7 @@ pub(crate) const MATERIALS: &[(u8, &str)] = &[
     (33, "White wool"),
     (34, "Dirt gravel"),
     (35, "Stone gravel"),
-    (36, "Oven"),
+    (OVEN, "Oven"),
     (37, "Red rock"),
     (38, "Gray stone"),
     (39, "Tan wool"),
@@ -160,7 +165,28 @@ pub(crate) const MATERIALS: &[(u8, &str)] = &[
 ];
 
 pub(crate) fn valid_material(material: u8) -> bool {
-    MATERIALS.iter().any(|&(id, _)| id == material)
+    MATERIALS.iter().any(|&(id, _)| id == material) || matches!(material, OVEN_WEST..=OVEN_EAST)
+}
+
+/// The inventory item for a placed block.
+pub(crate) fn item_material(material: u8) -> Option<u8> {
+    canonical_material(material).map(|material| match material {
+        OVEN_WEST..=OVEN_EAST => OVEN,
+        _ => material,
+    })
+}
+
+/// The block to place for an item, an oven faces the player at `dx`, `dz` from its center.
+pub(crate) fn placed_material(material: u8, dx: f64, dz: f64) -> u8 {
+    if material != OVEN {
+        material
+    } else if dx.abs() > dz.abs() {
+        if dx > 0.0 { OVEN_EAST } else { OVEN_WEST }
+    } else if dz < 0.0 {
+        OVEN_NORTH
+    } else {
+        OVEN
+    }
 }
 
 pub(crate) fn canonical_material(material: u8) -> Option<u8> {
@@ -172,7 +198,138 @@ pub(crate) fn canonical_material(material: u8) -> Option<u8> {
     valid_material(material).then_some(material)
 }
 
-const fn is_sprite(material: u8) -> bool {
+/// How a material is drawn: tile names for the +x, -x, +y, -y, +z and -z faces and a tint.
+pub(crate) struct Look {
+    pub(crate) faces: [&'static str; 6],
+    pub(crate) tint: [f32; 3],
+}
+
+const fn all(tile: &'static str) -> Look {
+    Look {
+        faces: [tile; 6],
+        tint: [1.0; 3],
+    }
+}
+
+const fn column(side: &'static str, top: &'static str, bottom: &'static str) -> Look {
+    Look {
+        faces: [side, side, top, bottom, side, side],
+        tint: [1.0; 3],
+    }
+}
+
+// An oven shows its front on one face and stone on the others.
+const fn oven(face: usize) -> Look {
+    let mut faces = ["stone"; 6];
+    faces[face] = "oven";
+    Look {
+        faces,
+        tint: [1.0; 3],
+    }
+}
+
+const fn tinted(tile: &'static str, tint: [f32; 3]) -> Look {
+    Look {
+        faces: [tile; 6],
+        tint,
+    }
+}
+
+/// The look of every drawable material, uploaded once to the GPU material table.
+pub(crate) const fn look(material: u8) -> Option<Look> {
+    Some(match material {
+        GRASS => column("dirt_grass", "grass_top", "dirt"),
+        DIRT => all("dirt"),
+        STONE => all("stone"),
+        SAND => all("sand"),
+        SNOW => column("dirt_snow", "snow", "dirt"),
+        OAK => column("trunk_side", "trunk_top", "trunk_top"),
+        BIRCH => column("trunk_white_side", "trunk_white_top", "trunk_white_top"),
+        PINE => column("trunk_red_side", "trunk_red_top", "trunk_red_top"),
+        LEAVES => all("leaves"),
+        AUTUMN_LEAVES => all("leaves_orange"),
+        PINE_LEAVES => tinted("leaves", [0.48, 0.68, 0.55]),
+        12 => all("grass1"),
+        13 => all("grass2"),
+        14 => all("grass3"),
+        15 => all("grass4"),
+        COAL_ORE => all("stone_coal"),
+        GOLD_ORE => all("stone_gold"),
+        DIAMOND_ORE => all("stone_diamond"),
+        SILVER_ORE => all("stone_silver"),
+        21 => all("wood_white"),
+        WATER => all("water"),
+        BEDROCK => tinted("stone", [0.25, 0.27, 0.30]),
+        LAVA => all("lava"),
+        CACTUS => column("cactus_side", "cactus_top", "cactus_inside"),
+        26 => all("brick_grey"),
+        27 => all("brick_red"),
+        28 => all("wood"),
+        29 => all("wood_red"),
+        30 => all("cotton_blue"),
+        31 => all("cotton_green"),
+        32 => all("cotton_red"),
+        33 => all("cotton_white"),
+        34 => all("gravel_dirt"),
+        35 => all("gravel_stone"),
+        OVEN => oven(4),
+        37 => all("redstone"),
+        38 => all("greystone"),
+        39 => all("cotton_tan"),
+        40 => column("dirt_sand", "sand", "dirt"),
+        41 => all("greysand"),
+        RUBY_ORE => all("greystone_ruby"),
+        DENSE_RUBY_ORE => all("greystone_ruby_alt"),
+        44 => column("greystone_sand", "greysand", "greystone"),
+        45 => all("ice"),
+        46 => all("redsand"),
+        EMERALD_ORE => all("redstone_emerald"),
+        DENSE_EMERALD_ORE => all("redstone_emerald_alt"),
+        49 => column("redstone_sand", "redsand", "redstone"),
+        IRON_ORE => all("stone_iron"),
+        DENSE_IRON_ORE => all("stone_iron_alt"),
+        DENSE_COAL_ORE => all("stone_coal_alt"),
+        DENSE_DIAMOND_ORE => all("stone_diamond_alt"),
+        54 => column("stone_dirt", "dirt", "stone"),
+        DENSE_GOLD_ORE => all("stone_gold_alt"),
+        56 => column("stone_grass", "grass_top", "stone"),
+        58 => column("stone_sand", "sand", "stone"),
+        DENSE_SILVER_ORE => all("stone_silver_alt"),
+        60 => column("stone_snow", "snow", "stone"),
+        61 => all("table"),
+        GLASS => all("glass"),
+        GLASS_FRAME => all("glass_frame"),
+        GRASS_BROWN => all("grass_brown"),
+        GRASS_TAN => all("grass_tan"),
+        MUSHROOM_BROWN => all("mushroom_brown"),
+        MUSHROOM_RED => all("mushroom_red"),
+        MUSHROOM_TAN => all("mushroom_tan"),
+        ROCK => all("rock"),
+        ROCK_MOSS => all("rock_moss"),
+        OVEN_WEST => oven(1),
+        OVEN_NORTH => oven(5),
+        OVEN_EAST => oven(0),
+        _ => return None,
+    })
+}
+
+/// Material table flags for the shaders.
+pub(crate) const fn look_flags(material: u8) -> u32 {
+    const SPRITE: u32 = 1;
+    const TRANSLUCENT: u32 = 2;
+    const EMISSIVE: u32 = 4;
+    const FLOWING: u32 = 8;
+    (if is_sprite(material) { SPRITE } else { 0 })
+        | (if is_translucent(material as u32) {
+            TRANSLUCENT
+        } else {
+            0
+        })
+        | (if material == LAVA { EMISSIVE } else { 0 })
+        | (if material == WATER { FLOWING } else { 0 })
+}
+
+pub(crate) const fn is_sprite(material: u8) -> bool {
     matches!(material, 12..=15 | GRASS_BROWN..=ROCK_MOSS)
 }
 
@@ -1085,6 +1242,23 @@ mod tests {
         }
         assert!(!valid_material(LEGACY_IRON_ORE));
         assert!(!valid_material(LEGACY_DENSE_IRON_ORE));
+    }
+
+    #[test]
+    fn ovens_face_the_player_and_pick_as_one_item() {
+        for (dx, dz, oven) in [
+            (0.0, 2.0, OVEN),
+            (-2.0, 0.5, OVEN_WEST),
+            (0.5, -2.0, OVEN_NORTH),
+            (2.0, -0.5, OVEN_EAST),
+        ] {
+            assert_eq!(placed_material(OVEN, dx, dz), oven);
+            assert!(valid_material(oven) && valid_stored_block(oven));
+            assert_eq!(canonical_material(oven), Some(oven));
+            assert_eq!(item_material(oven), Some(OVEN));
+        }
+        assert_eq!(placed_material(STONE, 2.0, 0.0), STONE);
+        assert!(MATERIALS.iter().all(|&(material, _)| material < OVEN_WEST));
     }
 
     #[test]

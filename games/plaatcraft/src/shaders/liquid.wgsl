@@ -17,14 +17,28 @@ struct Camera {
 @group(0) @binding(0) var<uniform> camera: Camera;
 @group(0) @binding(1) var tiles: texture_2d_array<f32>;
 @group(0) @binding(2) var tile_sampler: sampler;
-@group(0) @binding(3) var<storage, read> chunk_origins: array<vec4<f32>>;
+
+// Per-material tint, flags and texture layers for the six faces and two sprite planes, followed
+// by the chunk origins, see textures.rs.
+struct Material {
+    tint: vec3<f32>,
+    flags: u32,
+    layers: array<u32, 8>,
+}
+struct Scene {
+    materials: array<Material, 128>,
+    chunk_origins: array<vec4<f32>>,
+}
+@group(0) @binding(3) var<storage, read> scene: Scene;
+const FLOWING = 8u;
 
 struct VertexOutput {
     @builtin(position) position: vec4<f32>,
     @location(0) world: vec3<f32>,
-    @location(2) @interpolate(flat) material: u32,
+    @location(2) @interpolate(flat) layer: i32,
     @location(3) uv: vec2<f32>,
     @location(4) @interpolate(flat) illumination: vec3<f32>,
+    @location(5) @interpolate(flat) flags: u32,
 }
 
 @vertex
@@ -59,7 +73,8 @@ fn vs_liquid(@builtin(vertex_index) index: u32,
     out.position = vec4(dot(relative, camera.right.xyz) * camera.right.w,
         dot(relative, camera.up.xyz) * camera.up.w, far * (depth - near) / (far - near), depth);
     out.world = p;
-    out.material = material;
+    out.layer = i32(scene.materials[material].layers[face]);
+    out.flags = scene.materials[material].flags;
     out.uv = uv;
     let light = vec2(f32((packed.y >> 10u) & 15u), f32((packed.y >> 14u) & 15u)) / 15.0;
     let face_light = array(0.85, 0.85, 1.0, 0.65, 0.75, 0.75)[face];
@@ -78,19 +93,18 @@ fn fs_liquid(in: VertexOutput) -> @location(0) vec4<f32> {
         vec3(0.64, 0.79, 0.90),
         camera.environment.z,
     );
-    let water = in.material == 22u;
+    let flowing = (in.flags & FLOWING) != 0u;
     let uv = in.uv + select(
         vec2(0.0),
         camera.environment.y * vec2(0.0078125, 0.00390625),
-        water,
+        flowing,
     );
-    let layer = select(i32(in.material) + 1, 22, water);
-    let texel = textureSample(tiles, tile_sampler, uv, layer);
+    let texel = textureSample(tiles, tile_sampler, uv, in.layer);
     // A gently drifting tile keeps water close to the block texture style.
     let color = select(
         texel.rgb,
         mix(vec3(0.035, 0.25, 0.38), texel.rgb * vec3(0.15, 0.58, 0.75), 0.75),
-        water,
+        flowing,
     );
     let shaded = color * in.illumination;
     var result = shaded;
@@ -104,5 +118,5 @@ fn fs_liquid(in: VertexOutput) -> @location(0) vec4<f32> {
         result = mix(shaded * tint, glow,
             1.0 - exp(-length(relative) * select(0.065, 0.35, lava)));
     }
-    return vec4(result, select(texel.a, mix(0.62, 1.0, fog), water));
+    return vec4(result, select(texel.a, mix(0.62, 1.0, fog), flowing));
 }
