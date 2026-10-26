@@ -8,7 +8,7 @@ extern crate alloc;
 
 use alloc::vec::Vec;
 
-use crate::libogc::{floorf, powf};
+use libogc_sys::{floorf, powf};
 
 pub(crate) const SIZE: usize = 64;
 

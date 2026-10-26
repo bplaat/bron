@@ -7,6 +7,7 @@ name = "canvas"
 version = "0.1.0"
 dependencies = [
  "image",
+ "libogc-sys",
 ]
 
 [[package]]
@@ -24,3 +25,7 @@ dependencies = [
  "crc",
  "deflate",
 ]
+
+[[package]]
+name = "libogc-sys"
+version = "0.1.0"

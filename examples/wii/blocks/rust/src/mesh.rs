@@ -6,7 +6,8 @@
 
 use alloc::vec::Vec;
 
-use crate::libogc::*;
+use libogc_sys::*;
+
 use crate::materials::Materials;
 use crate::memory::AlignedBuffer;
 use crate::world::{Face, Material};

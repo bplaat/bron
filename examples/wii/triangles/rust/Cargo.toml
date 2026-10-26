@@ -5,6 +5,9 @@ name = "triangles"
 version = "0.1.0"
 edition = "2024"
 
+[dependencies]
+libogc-sys = { path = "../../../../tools/wii-toolchain/libogc-sys" }
+
 # Unoptimized code is too slow for the Wii
 [profile.dev]
 opt-level = "s"

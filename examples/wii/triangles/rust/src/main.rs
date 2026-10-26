@@ -12,9 +12,7 @@ use core::ptr;
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicBool, Ordering};
 
-use crate::libogc::*;
-
-mod libogc;
+use libogc_sys::*;
 
 const FIFO_SIZE: usize = 256 * 1024;
 const WPAD_CHANNEL_COUNT: c_int = 4;
@@ -276,7 +274,7 @@ pub extern "C" fn main() -> c_int {
         GX_SetVtxAttrFmt(0, GX_VA_CLR0 as u32, GX_CLR_RGBA, GX_RGBA8, 0);
         GX_SetNumChans(1);
         GX_SetChanCtrl(
-            GX_COLOR0A0,
+            GX_COLOR0A0 as i32,
             GX_DISABLE,
             GX_SRC_VTX,
             GX_SRC_VTX,
@@ -285,7 +283,7 @@ pub extern "C" fn main() -> c_int {
             GX_AF_NONE,
         );
         GX_SetNumTexGens(0);
-        GX_SetTevOrder(0, GX_TEXCOORD_NULL, GX_TEXMAP_NULL, GX_COLOR0A0 as u8);
+        GX_SetTevOrder(0, GX_TEXCOORDNULL, GX_TEXMAP_NULL, GX_COLOR0A0);
         GX_SetTevOp(0, GX_PASSCLR);
         GX_SetCullMode(GX_CULL_NONE);
         let mut scene = TriangleScene::new(aspect, TRIANGLE_LIST.prepare());
