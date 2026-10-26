@@ -1,0 +1,114 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Sun, 25 Oct 2026 20:00:00 +0100
+Subject: [PATCH] Implement the picolibc locks with LWP mutexes
+
+picolibc's default locks do nothing, which is only safe for programs
+with one thread. Threads that allocate memory at the same time would
+corrupt the heap, so the locks become LWP mutexes.
+---
+ libogc/lock.c | 95 +++++++++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 95 insertions(+)
+ create mode 100644 libogc/lock.c
+
+diff --git a/libogc/lock.c b/libogc/lock.c
+new file mode 100644
+index 0000000..dc67662
+--- /dev/null
++++ b/libogc/lock.c
+@@ -0,0 +1,95 @@
++/*-------------------------------------------------------------
++
++lock.c -- picolibc locks with LWP mutexes
++
++-------------------------------------------------------------*/
++
++#include <stdbool.h>
++#include <stdlib.h>
++#include <sys/lock.h>
++#include "mutex.h"
++#include "processor.h"
++
++// picolibc locks malloc and its other shared state with these, LWP mutexes make that safe
++// across threads. Each mutex is created on first use, so the static lock needs no setup.
++struct __lock {
++	mutex_t mutex;
++	bool recursive;
++};
++
++struct __lock __lock___libc_recursive_mutex = {LWP_MUTEX_NULL, true};
++
++static bool lock_ready(_LOCK_T lock)
++{
++	u32 level;
++
++	if (lock == NULL)
++		return false;
++	if (lock->mutex == LWP_MUTEX_NULL) {
++		_CPU_ISR_Disable(level);
++		if (lock->mutex == LWP_MUTEX_NULL && LWP_MutexInit(&lock->mutex, lock->recursive) < 0)
++			lock->mutex = LWP_MUTEX_NULL;
++		_CPU_ISR_Restore(level);
++	}
++	return lock->mutex != LWP_MUTEX_NULL;
++}
++
++static void lock_create(_LOCK_T *lock, bool recursive)
++{
++	*lock = malloc(sizeof(struct __lock));
++	if (*lock != NULL) {
++		(*lock)->mutex = LWP_MUTEX_NULL;
++		(*lock)->recursive = recursive;
++	}
++}
++
++static void lock_destroy(_LOCK_T lock)
++{
++	if (lock == NULL)
++		return;
++	if (lock->mutex != LWP_MUTEX_NULL)
++		LWP_MutexDestroy(lock->mutex);
++	free(lock);
++}
++
++void __retarget_lock_init(_LOCK_T *lock)
++{
++	lock_create(lock, false);
++}
++
++void __retarget_lock_init_recursive(_LOCK_T *lock)
++{
++	lock_create(lock, true);
++}
++
++void __retarget_lock_close(_LOCK_T lock)
++{
++	lock_destroy(lock);
++}
++
++void __retarget_lock_close_recursive(_LOCK_T lock)
++{
++	lock_destroy(lock);
++}
++
++void __retarget_lock_acquire(_LOCK_T lock)
++{
++	if (lock_ready(lock))
++		LWP_MutexLock(lock->mutex);
++}
++
++void __retarget_lock_acquire_recursive(_LOCK_T lock)
++{
++	__retarget_lock_acquire(lock);
++}
++
++void __retarget_lock_release(_LOCK_T lock)
++{
++	if (lock != NULL && lock->mutex != LWP_MUTEX_NULL)
++		LWP_MutexUnlock(lock->mutex);
++}
++
++void __retarget_lock_release_recursive(_LOCK_T lock)
++{
++	__retarget_lock_release(lock);
++}

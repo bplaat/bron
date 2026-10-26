@@ -10,6 +10,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/lock.h>
 #include <unistd.h>
 
 #define RESULTS_PATH "/tmp/test.txt"
@@ -406,6 +407,13 @@ static void* count_up(void* argument) {
     return &dummy;
 }
 
+static void* allocate(void* argument) {
+    volatile bool* done = argument;
+    free(malloc(64));
+    *done = true;
+    return NULL;
+}
+
 static void test_libogc(void) {
     // The paired single matrix functions must match the plain C ones
     Mtx a, b, c_result, ps_result, c_identity, ps_identity;
@@ -453,6 +461,16 @@ static void test_libogc(void) {
     LWP_JoinThread(thread, &result);
     CHECK(result == counter && *counter == 2000);
     LWP_MutexDestroy(mutex);
+
+    // malloc waits while another thread holds the C library lock
+    volatile bool allocated = false;
+    __LIBC_LOCK();
+    CHECK(LWP_CreateThread(&thread, allocate, (void*)&allocated, NULL, 16 * 1024, 100) == 0);
+    usleep(10000);
+    CHECK(!allocated);
+    __LIBC_UNLOCK();
+    LWP_JoinThread(thread, NULL);
+    CHECK(allocated);
 }
 
 // gxtexconv converted src/assets/test.png, its pixel (x, y) is (x * 32, y * 32, 128, 255)
@@ -470,6 +488,12 @@ static void test_texture(void) {
     int pixel = 2 * 4 + 1;
     CHECK(image[pixel * 2] == 255 && image[pixel * 2 + 1] == 32);
     CHECK(image[32 + pixel * 2] == 64 && image[32 + pixel * 2 + 1] == 128);
+
+    // RGB5A3 stores 4x4 tiles of 16-bit pixels, opaque ones are RGB555 with the top bit set
+    CHECK(TPL_GetTextureInfo(&tpl, 1, &format, &width, &height) == 0);
+    CHECK(format == GX_TF_RGB5A3 && width == 8 && height == 8);
+    image = test_tpl + ((const uint32_t*)(test_tpl + words[5]))[2];
+    CHECK(image[pixel * 2] == 0x91 && image[pixel * 2 + 1] == 0x10);
     TPL_CloseTPLFile(&tpl);
 }
 

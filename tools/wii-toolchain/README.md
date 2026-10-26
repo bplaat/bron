@@ -54,8 +54,8 @@ The toolchain and examples build separately from main Cargo workspace. The exist
 
 `./build.sh test` builds `test/` into the repository root's `target/wii-toolchain/test/` and runs it in Dolphin without its user
 interface, on Linux headless in `dolphin-emu-nogui` without video when it is installed. It checks
-the startup code, the C library, compiler-rt, libogc's paired single math, threads and timers, and
-a texture converted by `gxtexconv`. The program writes its results to
+the startup code, the C library, compiler-rt, libogc's paired single math, threads and timers, the
+C library locks, and a texture converted by `gxtexconv`. The program writes its results to
 `/tmp/test.txt` on Dolphin's NAND after every group, the script prints them and fails when a check
 failed or the program didn't finish. The program keeps running after the last group, because
 returning reloads IOS, which clears `/tmp`.
@@ -81,3 +81,4 @@ The libogc patches:
 - `0011` and `0012` stop using small data sections, which clang doesn't support
 - `0013` implements the system functions picolibc leaves to the platform, like `sbrk` and `stdout`
   to Dolphin's debug UART
+- `0014` implements picolibc's locks with LWP mutexes, so threads can share `malloc`

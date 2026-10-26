@@ -53,8 +53,8 @@ LIBOGC_CFLAGS=("${WII_CFLAGS[@]}" -std=gnu17 -fno-strict-aliasing -I"$LIBOGC_DIR
 # The parts of libogc we build, audio, DVD, memory cards, SD cards, networking and the console
 # are left out because the examples don't use them and most need newlib
 LIBOGC_SOURCES=(
-    # Startup, interrupts, exceptions and caches
-    libogc/{argv,cache,decrementer,exception,irq,sbrk,system,sys_report,sys_state,timesupp}.c
+    # Startup, interrupts, exceptions, caches and the C library locks
+    libogc/{argv,cache,decrementer,exception,irq,lock,sbrk,system,sys_report,sys_state,timesupp}.c
     libogc/{cache_asm,decrementer_handler,exception_handler,irq_handler,ogc_crt0,system_asm}.S
     # Threads
     libogc/{cond,lwp,lwp_heap,lwp_messages,lwp_mutex,lwp_objmgr,lwp_priority,lwp_queue}.c
