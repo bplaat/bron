@@ -67,6 +67,9 @@ pub(crate) struct ContentHost {
     content_factory: RefCell<Option<ContentFactory>>,
     scale_factor: Cell<f32>,
     attached: Cell<bool>,
+    // A renderer took the content host, so it draws the whole window surface.
+    #[cfg(target_os = "android")]
+    draws_content: Cell<bool>,
     ready: Cell<bool>,
     ready_handler: RefCell<Option<CloseHandler>>,
     closed: Cell<bool>,
@@ -95,6 +98,8 @@ impl ContentHost {
             content_factory: RefCell::new(None),
             scale_factor: Cell::new(1.0),
             attached: Cell::new(false),
+            #[cfg(target_os = "android")]
+            draws_content: Cell::new(false),
             ready: Cell::new(!cfg!(target_os = "ios")),
             ready_handler: RefCell::new(None),
             closed: Cell::new(false),
@@ -194,10 +199,11 @@ impl ContentHost {
         self.background.get()
     }
 
-    /// Whether a content backend draws the window, it owns the window surface once attached.
+    /// Whether a renderer draws the window surface, content in its own child window like a
+    /// web view leaves painting the background to the window.
     #[cfg(target_os = "android")]
     pub(crate) const fn draws_content(&self) -> bool {
-        self.attached.get()
+        self.draws_content.get()
     }
 
     pub(crate) fn theme_changed(self: &Rc<Self>, theme: crate::Theme) {
@@ -440,7 +446,12 @@ impl WindowAttachment {
     /// Use the handle only on the main thread while this attachment is open.
     /// Do not destroy the host, replace its delegate/user data, or handle its input.
     pub unsafe fn content_handle(&self) -> Option<NativeContentHandle> {
-        self.0.content_handle()
+        let handle = self.0.content_handle();
+        #[cfg(target_os = "android")]
+        if handle.is_some() {
+            self.0.draws_content.set(true);
+        }
+        handle
     }
 
     /// Native pixels per logical pixel of the window content.

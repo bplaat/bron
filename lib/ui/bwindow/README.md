@@ -173,8 +173,9 @@ in the framework `android.app.NativeActivity`, so the APK needs no Java code. An
 - One window per app. It fills the activity, also under the system bars, `Resize` reports
   its size in dp. The safe area is the system bar and display cutout insets.
 - Title, position, size, minimum size, resizable, center, and window state calls
-  are no-ops. `background_color` fills the window when no content draws and picks
-  matching light or dark system bar icons. `set_theme` forces the app night mode on
+  are no-ops. `background_color` fills the window when no renderer takes the content
+  host, also behind content in its own window like a web view, and picks matching
+  light or dark system bar icons. `set_theme` forces the app night mode on
   Android 12+.
 - The system night mode is the theme, changes send `ThemeChanged`.
 - Touches report `MouseMove` and a left `MouseDown`, lifting the finger reports
