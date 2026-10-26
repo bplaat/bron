@@ -229,3 +229,61 @@ impl Drop for PlatformCanvas {
         self.data.close();
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use bwindow::{Event, EventLoop, WindowBuilder, WindowEvent};
+
+    use super::*;
+    use crate::CanvasBuilder;
+
+    #[test]
+    fn startup_redraw_has_a_frame_and_draw_is_consumed_once() {
+        // EventLoop::run exits the process, so exercise the complete native loop in a child.
+        const CHILD: &str = "BCANVAS_FRAME_TEST_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let result = std::process::Command::new(std::env::current_exe().expect("test binary"))
+                .args([
+                    "--exact",
+                    "platforms::windows::window::tests::startup_redraw_has_a_frame_and_draw_is_consumed_once",
+                    "--nocapture",
+                ])
+                .env(CHILD, "1")
+                .output()
+                .expect("run native frame test");
+            assert!(
+                result.status.success(),
+                "{}",
+                String::from_utf8_lossy(&result.stderr)
+            );
+            return;
+        }
+        let event_loop = EventLoop::new();
+        let watchdog = event_loop.create_proxy();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_secs(5));
+            let _ = watchdog.exit();
+        });
+        let mut window = WindowBuilder::new().title("Canvas frame test").build();
+        let id = window.id();
+        let mut canvas = CanvasBuilder::new(&window).build();
+        assert!(!canvas.draw(|_| panic!("draw outside paint")));
+        let painted = Rc::new(Cell::new(false));
+        event_loop.run(move |event| {
+            if let Event::Window(window_id, WindowEvent::RedrawRequested) = event
+                && window_id == id
+            {
+                assert!(canvas.draw(|context| {
+                    assert!(context.width() > 0.0 && context.height() > 0.0);
+                    painted.set(true);
+                }));
+                assert!(!canvas.draw(|_| panic!("frame drawn twice")));
+                window.close();
+                assert!(!canvas.draw(|_| panic!("draw after close")));
+            }
+            if matches!(event, Event::LoopExiting) {
+                assert!(painted.get(), "startup never produced a drawable frame");
+            }
+        });
+    }
+}

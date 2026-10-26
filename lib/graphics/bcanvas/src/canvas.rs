@@ -419,7 +419,19 @@ impl Canvas {
     /// Paint once during this canvas window's RedrawRequested callback.
     ///
     /// Returns false outside a native paint callback, after close, or if this frame
-    /// was already drawn. The context cannot escape the closure.
+    /// was already drawn. The closure is not called in those cases. Native frame
+    /// scheduling and recovery are handled by the library; callers must not assume
+    /// that every redraw produced a completed draw. The context cannot escape the closure.
+    ///
+    /// Ignoring whether a frame was drawn is diagnosed by Rust:
+    ///
+    /// ```compile_fail
+    /// #![deny(unused_must_use)]
+    /// fn paint(canvas: &mut bcanvas::Canvas) {
+    ///     canvas.draw(|_| {});
+    /// }
+    /// ```
+    #[must_use = "only update frame-dependent state when the draw closure ran"]
     pub fn draw(
         &mut self,
         draw: impl for<'frame> FnOnce(&mut CanvasRenderingContext2d<'frame>),
@@ -558,6 +570,25 @@ fn unpremultiply(component: u8, alpha: u8) -> u8 {
 }
 
 /// A frame-scoped HTML5 Canvas 2D-like drawing context.
+///
+/// A borrowed context cannot be retained beyond its draw closure:
+///
+/// ```compile_fail
+/// let mut canvas = bcanvas::OffscreenCanvas::new(1, 1);
+/// let mut saved = None;
+/// canvas.draw(|context| saved = Some(context));
+/// ```
+///
+/// Drawing contexts cannot be sent to another thread, even within the frame:
+///
+/// ```compile_fail
+/// let mut canvas = bcanvas::OffscreenCanvas::new(1, 1);
+/// canvas.draw(|context| {
+///     std::thread::scope(|scope| {
+///         scope.spawn(move || context.fill_rect(0.0, 0.0, 1.0, 1.0));
+///     });
+/// });
+/// ```
 pub struct CanvasRenderingContext2d<'a> {
     pub(crate) platform: PlatformCanvasContext,
     pub(crate) state: CanvasState,

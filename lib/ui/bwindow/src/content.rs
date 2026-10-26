@@ -497,7 +497,8 @@ impl WindowAttachment {
     }
 
     /// Register the content backend's coalescing native repaint scheduler, without one
-    /// redraws are delivered directly as `RedrawRequested`.
+    /// redraws are delivered as `RedrawRequested`. Queued redraws also use this
+    /// scheduler if it is registered before delivery, so they cannot bypass a native frame.
     pub fn on_redraw(&self, handler: impl Fn() + 'static) {
         assert!(!self.is_closed(), "window is closed");
         let previous = self.0.redraw.borrow_mut().replace(Rc::new(handler));
@@ -614,10 +615,19 @@ impl WindowEventSender {
                 crate::Event::Window(_, WindowEvent::RedrawRequested)
             ) {
                 let weak = Rc::downgrade(&host);
-                crate::dispatch::send_before(event, move || {
-                    if let Some(host) = weak.upgrade() {
-                        host.animation_frame_pending.set(false);
+                crate::dispatch::send_if(event, move || {
+                    let Some(host) = weak.upgrade().filter(|host| !host.closed.get()) else {
+                        return false;
+                    };
+                    // Content may have attached since this event was queued. Only
+                    // its native paint callback can provide a valid borrowed frame.
+                    let redraw = host.redraw.borrow().clone();
+                    if let Some(redraw) = redraw {
+                        redraw();
+                        return false;
                     }
+                    host.animation_frame_pending.set(false);
+                    true
                 });
             } else {
                 crate::dispatch::send(event);
@@ -629,6 +639,42 @@ impl WindowEventSender {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn queued_redraw_uses_the_renderer_attached_before_delivery() {
+        let host = ContentHost::new(WindowId::new(), None, false);
+        host.request_redraw();
+        let attachment = host.attach().expect("attachment");
+        let scheduled = Rc::new(Cell::new(0));
+        let output = scheduled.clone();
+        attachment.on_redraw(move || output.set(output.get() + 1));
+        let painted = Rc::new(Cell::new(false));
+        let output = painted.clone();
+        crate::dispatch::start(move |event| {
+            assert!(matches!(
+                event,
+                crate::Event::Window(_, WindowEvent::RedrawRequested)
+            ));
+            output.set(true);
+        });
+        assert_eq!(scheduled.get(), 1);
+        assert!(!painted.get(), "queued redraw bypassed native paint");
+        assert!(attachment.event_sender().redraw(|| {}));
+        assert!(painted.get(), "native paint was not delivered");
+        assert_eq!(
+            scheduled.get(),
+            1,
+            "native paint must not reschedule itself"
+        );
+    }
+
+    #[test]
+    fn queued_redraw_is_discarded_after_close() {
+        let host = ContentHost::new(WindowId::new(), None, false);
+        host.request_redraw();
+        host.close();
+        crate::dispatch::start(|_| panic!("redraw delivered after close"));
+    }
 
     #[test]
     fn locked_motion_keeps_the_position_even_when_relative_motion_is_zero() {

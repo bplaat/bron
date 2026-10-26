@@ -13,7 +13,7 @@ type Handler<E> = Box<dyn FnMut(E)>;
 
 struct Pending<E> {
     event: E,
-    before: Option<Box<dyn FnOnce()>>,
+    before: Option<Box<dyn FnOnce() -> bool>>,
     after: Option<Box<dyn FnOnce()>>,
 }
 
@@ -48,7 +48,7 @@ impl<E> Dispatcher<E> {
         self.enqueue(event, None, None);
     }
 
-    fn send_before(&self, event: E, before: impl FnOnce() + 'static) {
+    fn send_if(&self, event: E, before: impl FnOnce() -> bool + 'static) {
         self.enqueue(event, Some(Box::new(before)), None);
     }
 
@@ -59,7 +59,7 @@ impl<E> Dispatcher<E> {
     fn enqueue(
         &self,
         event: E,
-        before: Option<Box<dyn FnOnce()>>,
+        before: Option<Box<dyn FnOnce() -> bool>>,
         after: Option<Box<dyn FnOnce()>>,
     ) {
         if self.closed.get() {
@@ -81,8 +81,14 @@ impl<E> Dispatcher<E> {
         while !self.closed.get() {
             let pending = self.pending.borrow_mut().pop_front();
             let Some(mut pending) = pending else { break };
-            if let Some(before) = pending.before.take() {
-                before();
+            if let Some(before) = pending.before.take()
+                && !before()
+            {
+                continue;
+            }
+            // The condition may run native callbacks or destructors that stop the loop.
+            if self.closed.get() {
+                break;
             }
             // No queue or handler borrow is held while application/native code runs.
             let mut handler = self
@@ -161,8 +167,8 @@ pub(crate) fn send(event: NativeEvent) {
     DISPATCHER.with(|dispatcher| dispatcher.send(event));
 }
 
-pub(crate) fn send_before(event: NativeEvent, before: impl FnOnce() + 'static) {
-    DISPATCHER.with(|dispatcher| dispatcher.send_before(event, before));
+pub(crate) fn send_if(event: NativeEvent, before: impl FnOnce() -> bool + 'static) {
+    DISPATCHER.with(|dispatcher| dispatcher.send_if(event, before));
 }
 
 // A borrowed native frame cannot be queued. Finish it before draining nested events.
@@ -338,11 +344,39 @@ mod tests {
     }
 
     #[test]
+    fn shutdown_inside_event_condition_does_not_call_a_missing_handler() {
+        let dispatcher = Rc::new(Dispatcher::new());
+        dispatcher.start(|_: i32| panic!("event delivered after shutdown"));
+        let nested = dispatcher.clone();
+        dispatcher.send_if(1, move || {
+            nested.stop();
+            true
+        });
+        assert!(dispatcher.closed.get());
+        assert!(dispatcher.handler.borrow().is_none());
+    }
+
+    #[test]
+    fn rejected_events_do_not_block_the_remaining_queue() {
+        let dispatcher = Dispatcher::new();
+        dispatcher.send_if(1, || false);
+        dispatcher.send(2);
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let output = seen.clone();
+        dispatcher.start(move |event| output.borrow_mut().push(event));
+        assert_eq!(*seen.borrow(), [2]);
+        dispatcher.stop();
+    }
+
+    #[test]
     fn queued_before_callback_runs_immediately_before_delivery() {
         let dispatcher = Rc::new(Dispatcher::new());
         let state = Rc::new(Cell::new(0));
         let before = state.clone();
-        dispatcher.send_before(7, move || before.set(1));
+        dispatcher.send_if(7, move || {
+            before.set(1);
+            true
+        });
         assert_eq!(state.get(), 0);
 
         let observed = state.clone();

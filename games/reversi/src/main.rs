@@ -366,12 +366,12 @@ fn main() {
         match event {
             Event::Window(id, WindowEvent::RedrawRequested) if id == window_id => {
                 let safe_area = window.safe_area();
-                assert!(canvas.draw(|context| {
+                let drawn = canvas.draw(|context| {
                     let size = LogicalSize::new(context.width(), context.height());
                     layout = GameLayout::new(size, safe_area);
                     draw(context, &game, Palette::for_theme(theme), layout);
-                }));
-                if let Some(smoke_test) = &mut smoke_test {
+                });
+                if drawn && let Some(smoke_test) = &mut smoke_test {
                     smoke_test.after_draw(&mut game, &worker, &mut window);
                 }
             }
