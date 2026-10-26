@@ -5,6 +5,7 @@
  */
 
 #![doc = include_str!("../README.md")]
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 #![allow(unsafe_code)]
 #![cfg_attr(test, allow(clippy::unwrap_used))]
 
