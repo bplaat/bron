@@ -12,7 +12,7 @@ you:
   to `../../target/wii-toolchain/sysroot/`
 - Clones devkitPro's [gamecube-tools](https://github.com/devkitPro/gamecube-tools) v1.0.7 and
   builds `elf2dol` (`.elf` to `.dol`)
-- Builds [gxtexconv](../../lib/graphics/gxtexconv) with Cargo to `../../target/wii-toolchain/gxtexconv`
+- Builds our [gxtexconv](gxtexconv) with Cargo to `../../target/wii-toolchain/gxtexconv`
 - Checks out only the builtins of LLVM's [compiler-rt](https://github.com/llvm/llvm-project/tree/main/compiler-rt/lib/builtins)
   llvmorg-23.1.3 and builds the 64-bit integer math and conversions the PowerPC 750 can't do in
   instructions to `../../target/wii-toolchain/libcompiler-rt.a`, the C examples link it (Rust has its own)
@@ -47,6 +47,8 @@ The toolchain and examples build separately from main Cargo workspace. The exist
 - `wii.mk` has the make rules for the C examples, `wii.ld` is the linker script
 - `wii.json` is the Rust target; `build.rs` builds and links `../../target/wii-toolchain/libogc.a`
   and picolibc's `../../target/wii-toolchain/sysroot/lib/libc.a`
+- `gxtexconv/` converts images to GX textures, as a library for `build.rs` files and a CLI for
+  the Makefiles
 - `run.sh` converts a program to a `.dol` and starts it in Dolphin, extra arguments go to Dolphin
 - `test/` is a Wii program that tests the toolchain, see below
 
