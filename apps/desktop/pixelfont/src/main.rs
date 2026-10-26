@@ -27,6 +27,11 @@ struct WebAssets;
 #[serde(tag = "type", rename_all = "camelCase")]
 enum IpcMessage {
     Ready,
+    ShowError {
+        title: String,
+        description: String,
+    },
+    ShowErrorResponse,
     MenuAction {
         action: String,
     },
@@ -323,6 +328,18 @@ fn main() {
                     }
                 }
                 IpcMessage::RestoreLastFile => {}
+                IpcMessage::ShowError { title, description } => {
+                    MessageDialog::new()
+                        .parent(&window)
+                        .title(title)
+                        .description(description)
+                        .level(MessageLevel::Error)
+                        .show();
+                    webview.send_ipc_message(
+                        serde_json::to_string(&IpcMessage::ShowErrorResponse)
+                            .expect("Failed to serialize response"),
+                    );
+                }
                 IpcMessage::OpenFileDialog => {
                     let path = FileDialog::new()
                         .parent(&window)

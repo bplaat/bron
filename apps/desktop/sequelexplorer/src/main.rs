@@ -20,7 +20,7 @@ use bsql::{
 use bwebview::{WebviewBuilder, WebviewEvent};
 use bwindow::{
     Accelerator, Event, EventLoopBuilder, FileDialog, KeyCode, LogicalSize, MenuBarBuilder,
-    MenuBuilder, MenuItem, Modifiers, Theme, WindowBuilder,
+    MenuBuilder, MenuItem, MessageDialog, MessageLevel, Modifiers, Theme, WindowBuilder,
 };
 use keyring::{Entry as CredentialEntry, Error as CredentialError};
 use rust_embed::Embed;
@@ -44,6 +44,16 @@ struct WebAssets;
 )]
 enum IpcMessage {
     Ready,
+    ShowMessage {
+        request_id: u64,
+        title: String,
+        description: String,
+        #[serde(default)]
+        warning: bool,
+    },
+    ShowMessageResponse {
+        request_id: u64,
+    },
     MenuAction {
         action: String,
     },
@@ -1462,6 +1472,27 @@ fn main() {
                     }
                 }
                 IpcMessage::RestoreLastFile => {}
+                IpcMessage::ShowMessage {
+                    request_id,
+                    title,
+                    description,
+                    warning,
+                } => {
+                    MessageDialog::new()
+                        .parent(&window)
+                        .title(title)
+                        .description(description)
+                        .level(if warning {
+                            MessageLevel::Warning
+                        } else {
+                            MessageLevel::Error
+                        })
+                        .show();
+                    webview.send_ipc_message(
+                        serde_json::to_string(&IpcMessage::ShowMessageResponse { request_id })
+                            .expect("Failed to serialize response"),
+                    );
+                }
                 IpcMessage::OpenFileDialog { request_id } => {
                     let path = FileDialog::new()
                         .parent(&window)

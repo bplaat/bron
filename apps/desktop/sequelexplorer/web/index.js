@@ -188,7 +188,7 @@ PetiteVue.createApp({
             if (localStorage.getItem('lastDbPath') === path) {
                 localStorage.removeItem('lastDbPath');
             }
-            alert('Failed to open database:\n' + error);
+            await ipcRequest('showMessage', { title: 'Failed to open database', description: error });
             return;
         }
         this.dbPath = path;
@@ -262,7 +262,11 @@ PetiteVue.createApp({
             localStorage.removeItem('lastMysqlConnection');
         }
         if (response.credentialError) {
-            alert(`Connected, but credentials could not be saved securely:\n${response.credentialError}`);
+            await ipcRequest('showMessage', {
+                title: 'Connected, but credentials could not be saved securely',
+                description: response.credentialError,
+                warning: true,
+            });
         }
 
         localStorage.removeItem('lastDbPath');
@@ -318,7 +322,7 @@ PetiteVue.createApp({
         }
         if (!response.ok) {
             this.currentDatabase = this.activeDatabase;
-            alert('Failed to open database:\n' + response.error);
+            await ipcRequest('showMessage', { title: 'Failed to open database', description: response.error });
             return;
         }
         this.currentDatabase = database;
