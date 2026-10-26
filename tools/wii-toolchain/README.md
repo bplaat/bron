@@ -40,8 +40,8 @@ C projects include `wii.mk` from their Makefile. Rust projects select `wii.json`
 the linker with an absolute path to `wii.ld`. They use the libogc and picolibc functions through
 the `libogc-sys` crate. Each project keeps its own build output in `target/`.
 
-The toolchain and examples build separately from main Cargo workspace. The existing
-`games/plaatcraft/wii` port still uses its original devkitPPC build.
+The toolchain, the examples and the [PlaatCraft Wii port](../../games/plaatcraft-wii) build
+separately from main Cargo workspace.
 
 ## Files
 
@@ -64,7 +64,7 @@ C library locks, and RGBA8 and RGB5A3 textures converted by `gxtexconv`. The pro
 failed or the program didn't finish. The program keeps running after the last group, because
 returning reloads IOS, which clears `/tmp`.
 
-From the repository root on Linux, `cargo xtask check-others` builds the assembly examples, Empires, and the Nintendo DS test ROM, then runs this test. On macOS, `cargo xtask check-macos-examples` builds the native macOS applications. `cargo xtask check` includes these platform checks.
+From the repository root on Linux, `cargo xtask check-others` builds the assembly examples, Empires, and the Nintendo DS test ROM, runs this test, then builds the PlaatCraft Wii port. On macOS, `cargo xtask check-macos-examples` builds the native macOS applications. `cargo xtask check` includes these platform checks.
 
 ## Patches
 

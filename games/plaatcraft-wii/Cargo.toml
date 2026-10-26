@@ -1,0 +1,29 @@
+cargo-features = ["panic-immediate-abort"]
+
+[package]
+name = "plaatcraft-wii"
+version = "0.2.0"
+edition = "2024"
+
+[dependencies]
+libogc-sys = { path = "../../tools/wii-toolchain/libogc-sys" }
+plaatcraft-engine = { path = "../plaatcraft-engine", default-features = false }
+
+[build-dependencies]
+gxtexconv = { path = "../../tools/wii-toolchain/gxtexconv" }
+image = { path = "../../lib/graphics/image", default-features = false, features = ["png"] }
+plaatcraft-engine = { path = "../plaatcraft-engine" }
+
+[patch.crates-io]
+crc = { path = "../../lib/data/crc" }
+
+# Unoptimized code is too slow for the Wii
+[profile.dev]
+opt-level = "s"
+panic = "immediate-abort"
+
+[profile.release]
+opt-level = "s"
+panic = "immediate-abort"
+lto = false
+codegen-units = 1
