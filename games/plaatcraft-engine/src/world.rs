@@ -686,10 +686,13 @@ impl ChunkData {
     fn generate_unlit(coord: Coord, lighting_only: bool) -> Self {
         let origin = (coord.0 * CHUNK_SIZE as i64, coord.1 * CHUNK_SIZE as i64);
         let columns = core::array::from_fn(|index| {
-            terrain_column(
-                origin.0 + (index % PADDED_SIZE) as i64 - 1,
-                origin.1 + (index / PADDED_SIZE) as i64 - 1,
-            )
+            let (x, z) = (index % PADDED_SIZE, index / PADDED_SIZE);
+            // Lighting only uses the inside of a neighbor, so its halo isn't sampled.
+            if lighting_only && (x % (PADDED_SIZE - 1) == 0 || z % (PADDED_SIZE - 1) == 0) {
+                Column::default()
+            } else {
+                terrain_column(origin.0 + x as i64 - 1, origin.1 + z as i64 - 1)
+            }
         });
         let mut chunk = Self::unlit(columns);
         if !lighting_only {
