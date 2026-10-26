@@ -85,6 +85,7 @@ Some desktop apps and games written with the [bwindow](lib/ui/bwindow), [bwebvie
 - [Navidrome](apps/desktop/navidrome) A [music.bplaat.nl](https://music.bplaat.nl/) webview wrapper
 - [Music Downloader](apps/desktop/music-dl) A tool that downloads complete albums with the correct metadata
 - [Pixel Font Editor](apps/desktop/pixelfont) An 8x8 pixel font editor
+- [PlaatCraft](games/plaatcraft) A Minecraft like voxel sandbox, also [ported to the Wii](games/plaatcraft-wii)
 - [Reversi](games/reversi) A native canvas board game with a background AI
 - [Sequel Explorer](apps/desktop/sequelexplorer) A read-only SQLite and MySQL database GUI viewer
 

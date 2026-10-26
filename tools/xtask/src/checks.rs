@@ -409,7 +409,14 @@ impl Xtask {
         run(Command::new("bash").args(["tools/nds-toolchain/build.sh", "test"]))?;
 
         println!("Running Wii toolchain tests...");
-        run(Command::new("bash").args(["tools/wii-toolchain/build.sh", "test"]))
+        run(Command::new("bash").args(["tools/wii-toolchain/build.sh", "test"]))?;
+
+        // The port selects its nightly toolchain itself, so drop the one cargo xtask runs with
+        println!("Building the PlaatCraft Wii port...");
+        run(Command::new("cargo")
+            .args(["build", "--release", "--locked"])
+            .current_dir("games/plaatcraft-wii")
+            .env_remove("RUSTUP_TOOLCHAIN"))
     }
 
     pub(crate) fn coverage(&self) -> Result<()> {

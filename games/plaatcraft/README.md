@@ -4,6 +4,9 @@ A Minecraft like voxel sandbox written in Rust for macOS, Linux, Windows, iOS, a
 Android. It's built with [bwindow](../../lib/ui/bwindow), [bcanvas](../../lib/graphics/bcanvas),
 and [bwebgpu](../../lib/graphics/bwebgpu) on Metal, Vulkan, or Direct3D 12.
 
+The world generation, lighting, meshing, and player physics live in the `no_std`
+[plaatcraft-engine](../plaatcraft-engine) crate, which the [Wii port](../plaatcraft-wii) shares.
+
 ## Features
 
 - Endless generated terrain with biomes, trees, plants, ores, water, and lava
