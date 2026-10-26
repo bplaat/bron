@@ -32,7 +32,9 @@ Hold the Wii Remote with the Nunchuk attached, like the original PlaatCraft Wii 
 ## How it works
 
 A worker thread generates, lights, and meshes the chunks around the player nearest first,
-and keeps each chunk's blocks compressed for collision and picking. Every vertex is a byte
+and keeps each chunk's blocks compressed for collision and picking. Lighting a chunk needs its
+neighbors, so the worker keeps the unlit chunks next to the ones it still has to build instead
+of generating every chunk again for each neighbor. Every vertex is a byte
 position, a light palette index, and byte texture coordinates, so day and night only update
 the palette. The block textures are converted to mipmapped CMPR or RGB5A3 textures during
 the build. Edits live as long as the game runs, there is no saving yet.

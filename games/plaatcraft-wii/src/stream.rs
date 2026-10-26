@@ -7,6 +7,9 @@
 //! Generates and meshes the chunks around the player on a worker thread. Loaded chunks
 //! keep their display list and their compressed blocks, the chunks next to the player
 //! are decoded for collision and picking. Edits only live as long as the game runs.
+//!
+//! Lighting a chunk needs its neighbors, so the worker keeps the unlit chunks next to the
+//! chunks it still has to build, instead of generating every chunk again for each neighbor.
 
 use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
@@ -197,9 +200,34 @@ impl Stream {
     }
 }
 
+/// Generates lit chunks and keeps the unlit chunks next to the chunks still to build.
+#[derive(Default)]
+pub struct Generator {
+    bases: BTreeMap<Coord, ChunkData>,
+}
+
+impl Generator {
+    /// Generates a chunk with the edits, `pending` are the chunks that are built later.
+    pub fn generate(&mut self, coord: Coord, edits: &[Edit], pending: &[Coord]) -> ChunkData {
+        let near = |(x, z): Coord, base: Coord| (x - base.0).abs() <= 1 && (z - base.1).abs() <= 1;
+        self.bases
+            .retain(|&base, _| near(coord, base) || pending.iter().any(|&coord| near(coord, base)));
+        for z in -1..=1 {
+            for x in -1..=1 {
+                let neighbor = (coord.0 + x, coord.1 + z);
+                self.bases
+                    .entry(neighbor)
+                    .or_insert_with(|| ChunkData::generate_base(neighbor));
+            }
+        }
+        ChunkData::rebuild(coord, &self.bases, edits)
+    }
+}
+
 fn work(worker: &Worker) {
+    let mut generator = Generator::default();
     loop {
-        let (coord, edits, revision) = {
+        let (coord, edits, revision, pending) = {
             let mut shared = worker.shared.lock();
             while shared.urgent.is_empty() && shared.queue.is_empty() {
                 shared = worker.wake.wait(shared);
@@ -215,9 +243,19 @@ fn work(worker: &Worker) {
                 shared.urgent.remove(0)
             };
             shared.building = Some(coord);
-            (coord, shared.edits.clone(), shared.revision)
+            // Edits rebuild the chunks around the player, so their bases are kept too
+            let center = shared.center;
+            let around = (-1..=1).flat_map(|z| (-1..=1).map(move |x| (center.0 + x, center.1 + z)));
+            let pending: Vec<Coord> = shared
+                .urgent
+                .iter()
+                .chain(&shared.queue)
+                .copied()
+                .chain(around)
+                .collect();
+            (coord, shared.edits.clone(), shared.revision, pending)
         };
-        let chunk = ChunkData::generate_edited(coord, &edits);
+        let chunk = generator.generate(coord, &edits, &pending);
         let built = Built {
             coord,
             revision,
