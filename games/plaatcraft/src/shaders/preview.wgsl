@@ -8,10 +8,29 @@
 @group(0) @binding(1) var tiles: texture_2d_array<f32>;
 @group(0) @binding(2) var tile_sampler: sampler;
 
+// Per-material tint, flags and texture layers for the six faces and two sprite planes, followed
+// by the chunk origins, see textures.rs.
+struct Material {
+    tint: vec3<f32>,
+    flags: u32,
+    layers: array<u32, 8>,
+}
+struct Scene {
+    materials: array<Material, 128>,
+    chunk_origins: array<vec4<f32>>,
+}
+@group(0) @binding(3) var<storage, read> scene: Scene;
+const SPRITE = 1u;
+const TRANSLUCENT = 2u;
+
+// Storage is only readable in the vertex stage, so it passes the material on.
 struct VertexOutput {
     @builtin(position) position: vec4<f32>,
     @location(0) point: vec2<f32>,
-    @location(1) @interpolate(flat) material: u32,
+    @location(1) @interpolate(flat) tint: vec3<f32>,
+    @location(2) @interpolate(flat) flags: u32,
+    @location(3) @interpolate(flat) layers: vec4<u32>,
+    @location(4) @interpolate(flat) more_layers: vec4<u32>,
 }
 
 @vertex
@@ -20,7 +39,15 @@ fn vs_screen(
     @builtin(instance_index) material: u32,
 ) -> VertexOutput {
     let p = array(vec2(-1.0, -1.0), vec2(3.0, -1.0), vec2(-1.0, 3.0));
-    return VertexOutput(vec4(p[index], 1.0, 1.0), p[index], material);
+    let look = scene.materials[material];
+    let l = look.layers;
+    return VertexOutput(vec4(p[index], 1.0, 1.0), p[index], look.tint, look.flags,
+        vec4(l[0], l[1], l[2], l[3]), vec4(l[4], l[5], l[6], l[7]));
+}
+
+fn layer(in: VertexOutput, face: u32) -> i32 {
+    if face >= 4u { return i32(in.more_layers[face - 4u]); }
+    return i32(in.layers[face]);
 }
 
 fn rotate_x(p: vec3<f32>, angle: f32) -> vec3<f32> {
@@ -35,34 +62,6 @@ fn rotate_y(p: vec3<f32>, angle: f32) -> vec3<f32> {
     return vec3(p.x * c + p.z * s, p.y, -p.x * s + p.z * c);
 }
 
-fn tile_layer(material: u32, normal: vec3<f32>) -> i32 {
-    var layer = i32(material);
-    if material == 1u {
-        layer = select(1, 0, normal.y > 0.5);
-        if normal.y < -0.5 { layer = 2; }
-    }
-    if material == 5u {
-        layer = select(6, 5, normal.y > 0.5);
-        if normal.y < -0.5 { layer = 2; }
-    }
-    if material == 6u { layer = select(7, 8, abs(normal.y) > 0.5); }
-    if material == 7u { layer = select(9, 10, abs(normal.y) > 0.5); }
-    if material == 8u { layer = select(65, 66, abs(normal.y) > 0.5); }
-    if material >= 9u { layer = i32(material) + 2; }
-    if material == 11u { layer = 11; }
-    if material >= 12u { layer = i32(material) + 1; }
-    if material == 22u { layer = 22; }
-    if material == 24u { layer = 23; }
-    if material == 25u {
-        layer = select(24, 25, normal.y > 0.5);
-        if normal.y < -0.5 { layer = 26; }
-    }
-    if material >= 26u { layer = i32(material) + 1; }
-    if material == 21u { layer = 67; }
-    if material >= 66u { layer = i32(material) + 2; }
-    return layer;
-}
-
 @fragment
 fn fs_preview(in: VertexOutput) -> @location(0) vec4<f32> {
     // A fixed corner-on view, like Minecraft's inventory icons.
@@ -75,13 +74,12 @@ fn fs_preview(in: VertexOutput) -> @location(0) vec4<f32> {
     origin = rotate_y(rotate_x(origin, -pitch), -yaw);
     direction = rotate_y(rotate_x(direction, -pitch), -yaw);
 
-    let material = in.material;
-    if (material >= 12u && material <= 15u) || material >= 66u {
+    if (in.flags & SPRITE) != 0u {
         // Plants are flat sprites, like item icons. The derivative is taken
         // before the branch, because the material is not uniform for the analysis.
         let level = log2(max(length(dpdx(in.point)) * 64.0, 1.0));
         let uv = vec2(in.point.x, -in.point.y) * 0.5 + 0.5;
-        let texel = textureSampleLevel(tiles, tile_sampler, uv, tile_layer(material, vec3(0.0)), level);
+        let texel = textureSampleLevel(tiles, tile_sampler, uv, layer(in, 6u), level);
         if texel.a < 0.5 { discard; }
         return vec4(texel.rgb, 1.0);
     }
@@ -98,22 +96,25 @@ fn fs_preview(in: VertexOutput) -> @location(0) vec4<f32> {
     let point = origin + direction * max(entry, 0.0);
     let axis = abs(point);
     var normal = vec3(0.0);
+    var face: u32;
     if axis.x > axis.y && axis.x > axis.z {
         normal.x = sign(point.x);
+        face = select(0u, 1u, point.x < 0.0);
     } else if axis.y > axis.z {
         normal.y = sign(point.y);
+        face = select(2u, 3u, point.y < 0.0);
     } else {
         normal.z = sign(point.z);
+        face = select(4u, 5u, point.z < 0.0);
     }
     // Texture rows go down while y goes up, so side faces flip v to keep grass on top.
     var uv = vec2(point.x, -point.y) / 1.44 + 0.5;
     if abs(normal.x) > 0.5 { uv = vec2(point.z, -point.y) / 1.44 + 0.5; }
     if abs(normal.y) > 0.5 { uv = point.xz / 1.44 + 0.5; }
 
-    let texel = textureSample(tiles, tile_sampler, uv, tile_layer(material, normal));
-    if material < 62u && texel.a < 0.5 { discard; }
-    var color = texel.rgb;
-    if material == 11u { color *= vec3(0.48, 0.68, 0.55); }
+    let texel = textureSample(tiles, tile_sampler, uv, layer(in, face));
+    if (in.flags & TRANSLUCENT) == 0u && texel.a < 0.5 { discard; }
+    let color = texel.rgb * in.tint;
     // Bright top, lighter left and darker right sides, like Minecraft's block icons.
     var light = 0.62;
     if abs(normal.y) > 0.5 { light = 1.0; } else if abs(normal.x) > 0.5 { light = 0.8; }
