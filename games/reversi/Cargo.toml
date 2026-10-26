@@ -18,18 +18,19 @@ icon = "meta/apple/icon.icon"
 [package.metadata.bundle.macos]
 entitlements = "meta/apple/macos/Entitlements.plist"
 
-[package.metadata.bundle.ios]
-
-[package.metadata.bundle.android]
-
 [package.metadata.bundle.windows]
 assets = "meta/windows"
 sandbox = true
+
+[package.metadata.bundle.ios]
+
+[package.metadata.bundle.android]
 
 [dependencies]
 bwindow = { path = "../../lib/ui/bwindow", features = ["menu"] }
 bcanvas = { path = "../../lib/graphics/bcanvas" }
 reversi-engine = { path = "../reversi-engine" }
+preferences = { path = "../../lib/sys/preferences" }
 
 [build-dependencies]
 winresource = "0.1.31"
