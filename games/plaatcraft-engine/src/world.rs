@@ -434,6 +434,23 @@ fn hash(x: i64, y: i64, z: i64, seed: u64) -> u64 {
     value ^ (value >> 31)
 }
 
+/// `value % divisor` for rolling a hash. On the Wii a 64-bit remainder is a slow library
+/// call, three 32-bit remainders give the same result for small divisors.
+fn roll(value: u64, divisor: u32) -> u32 {
+    if cfg!(all(target_arch = "powerpc", target_vendor = "nintendo")) {
+        roll_in_halves(value, divisor)
+    } else {
+        (value % u64::from(divisor)) as u32
+    }
+}
+
+fn roll_in_halves(value: u64, divisor: u32) -> u32 {
+    debug_assert!(divisor <= 1 << 16);
+    let high = (value >> 32) as u32 % divisor;
+    let middle = (high << 16 | (value >> 16) as u32 & 0xffff) % divisor;
+    (middle << 16 | value as u32 & 0xffff) % divisor
+}
+
 #[cfg(test)]
 pub(crate) fn ground_height(x: i64, z: i64) -> f64 {
     f64::from(terrain_column(x, z).height)
@@ -445,8 +462,8 @@ fn terrain_column(x: i64, z: i64) -> Column {
 
 fn tree_at(cell_x: i64, cell_z: i64) -> Option<Tree> {
     let random = hash(cell_x, 0, cell_z, 7183);
-    let x = cell_x * 10 + 2 + ((random >> 8) % 6) as i64;
-    let z = cell_z * 10 + 2 + ((random >> 12) % 6) as i64;
+    let x = cell_x * 10 + 2 + i64::from(roll(random >> 8, 6));
+    let z = cell_z * 10 + 2 + i64::from(roll(random >> 12, 6));
     let column = terrain_column(x, z);
     let ground = column.height;
     let density = match column.biome {
@@ -456,7 +473,7 @@ fn tree_at(cell_x: i64, cell_z: i64) -> Option<Tree> {
         Biome::Mountains if ground < 82 => 20,
         _ => 0,
     };
-    if random % 100 >= density
+    if u64::from(roll(random, 100)) >= density
         || ground <= SEA_LEVEL + 1
         || [(1, 0), (-1, 0), (0, 1), (0, -1)]
             .into_iter()
@@ -481,7 +498,7 @@ fn tree_at(cell_x: i64, cell_z: i64) -> Option<Tree> {
         TreeStyle::Birch => 7,
         TreeStyle::Pine => 8,
         TreeStyle::Autumn => 4,
-    } + ((random >> 20) % 3) as i32;
+    } + roll(random >> 20, 3) as i32;
     Some(Tree {
         x,
         z,
@@ -726,7 +743,7 @@ impl ChunkData {
                 let column = columns[(z + 1) * PADDED_SIZE + x + 1];
                 let y = column.height;
                 let random = hash(origin.0 + x as i64, 0, origin.1 + z as i64, 9341);
-                let roll = random % 200;
+                let roll = roll(random, 200);
                 let variant = (random >> 8) as usize;
                 let material = match column.biome {
                     Biome::Forest if roll < 6 => {
@@ -868,14 +885,14 @@ impl ChunkData {
             let wz = origin.1 + i64::from(z);
             // One jittered candidate per six-block cell keeps cacti apart across chunks.
             let random = hash(wx.div_euclid(6), 0, wz.div_euclid(6), 5821);
-            if random % 100 >= 5
+            if roll(random, 100) >= 5
                 || wx.rem_euclid(6) != 1 + ((random >> 8) % 4) as i64
                 || wz.rem_euclid(6) != 1 + ((random >> 16) % 4) as i64
             {
                 continue;
             }
             let ground = i32::from(column.height);
-            let height = 1 + ((random >> 24) % 3) as i32;
+            let height = 1 + roll(random >> 24, 3) as i32;
             if ground + height > HEIGHT as i32
                 || self.block([x, ground - 1, z]) != u32::from(SAND)
                 || (ground..ground + height).any(|y| self.block([x, y, z]) != 0)
@@ -959,7 +976,7 @@ impl ChunkData {
         for cz in (origin.1 - 3).div_euclid(32)..=(origin.1 + 18).div_euclid(32) {
             for cx in (origin.0 - 3).div_euclid(32)..=(origin.0 + 18).div_euclid(32) {
                 let random = hash(cx, 0, cz, 3167);
-                if !random.is_multiple_of(12) {
+                if roll(random, 12) != 0 {
                     continue;
                 }
                 let wx = cx * 32 + 8 + ((random >> 8) % 16) as i64;
@@ -1096,7 +1113,7 @@ impl ChunkData {
                 let dz = wz.rem_euclid(8) - 4;
                 let column = (z + 1) as usize * PADDED_SIZE + (x + 1) as usize;
                 let height = usize::from(self.heights[column]);
-                if random.is_multiple_of(9)
+                if roll(random, 9) == 0
                     && dx * dx + dz * dz <= 10
                     && (54..76).contains(&height)
                     && self.blocks[column * HEIGHT + height - 1] == GRASS
@@ -1120,9 +1137,9 @@ impl ChunkData {
                     if !random.is_multiple_of(4) {
                         continue;
                     }
-                    let x = cell_x * 6 + ((random >> 8) % 6) as i64 - origin.0;
-                    let y = (cell_y * 6 + ((random >> 12) % 6) as i64) as i32;
-                    let z = cell_z * 6 + ((random >> 16) % 6) as i64 - origin.1;
+                    let x = cell_x * 6 + i64::from(roll(random >> 8, 6)) - origin.0;
+                    let y = (cell_y * 6 + i64::from(roll(random >> 12, 6))) as i32;
+                    let z = cell_z * 6 + i64::from(roll(random >> 16, 6)) - origin.1;
                     let common = if y < 16 {
                         [
                             COAL_ORE,
@@ -1132,7 +1149,7 @@ impl ChunkData {
                             SILVER_ORE,
                             RUBY_ORE,
                             EMERALD_ORE,
-                        ][((random >> 20) % 7) as usize]
+                        ][roll(random >> 20, 7) as usize]
                     } else if y < 28 {
                         [
                             COAL_ORE,
@@ -1141,7 +1158,7 @@ impl ChunkData {
                             SILVER_ORE,
                             RUBY_ORE,
                             EMERALD_ORE,
-                        ][((random >> 20) % 6) as usize]
+                        ][roll(random >> 20, 6) as usize]
                     } else {
                         [COAL_ORE, IRON_ORE][((random >> 20) % 2) as usize]
                     };
@@ -1346,6 +1363,23 @@ mod tests {
         }
         assert!(!valid_material(LEGACY_IRON_ORE));
         assert!(!valid_material(LEGACY_DENSE_IRON_ORE));
+    }
+
+    #[test]
+    fn rolls_in_halves_match_64_bit_remainders() {
+        for divisor in [2, 3, 6, 7, 9, 12, 100, 200, 1 << 16] {
+            for shift in 0..64 {
+                let value = hash(i64::from(shift), 0, 0, u64::from(divisor)) >> shift;
+                assert_eq!(
+                    roll_in_halves(value, divisor),
+                    (value % u64::from(divisor)) as u32
+                );
+            }
+            assert_eq!(
+                roll_in_halves(u64::MAX, divisor),
+                (u64::MAX % u64::from(divisor)) as u32
+            );
+        }
     }
 
     #[test]
