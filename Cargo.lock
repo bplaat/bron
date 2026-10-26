@@ -1037,6 +1037,7 @@ version = "0.1.0"
 dependencies = [
  "bcanvas",
  "bwindow",
+ "preferences",
  "reversi-engine",
  "winresource",
 ]

@@ -20,9 +20,11 @@ use bwindow::{
 };
 use reversi_engine::{CellState, Move, Othello, Player};
 
+use crate::saver::GameSaver;
 use crate::smoke::SmokeTest;
 use crate::worker::{AiJob, AiResult, AiWorker};
 
+mod saver;
 mod smoke;
 mod worker;
 
@@ -322,6 +324,7 @@ fn board_cell(x: f32, y: f32) -> Option<Move> {
 // MARK: Main
 enum AppEvent {
     Ai(AiResult),
+    Save,
 }
 
 fn main() {
@@ -358,7 +361,9 @@ fn main() {
     }
     let mut canvas = CanvasBuilder::new(&window).build();
 
-    let mut game = Game::default();
+    // The smoke test always starts a new game and does not save it
+    let mut saver = (!smoke).then(|| GameSaver::new(event_loop.create_proxy()));
+    let mut game = saver.as_ref().map_or_else(Game::default, GameSaver::load);
     let mut layout = GameLayout::new(window.size(), window.safe_area());
     let mut smoke_test = smoke.then(|| SmokeTest::new(&event_loop));
     event_loop.run(move |event| {
@@ -428,7 +433,21 @@ fn main() {
                     smoke_test.ai_applied();
                 }
             }
+            Event::UserEvent(AppEvent::Save) => {
+                if let Some(saver) = &mut saver {
+                    saver.scheduled_save(&game);
+                }
+            }
+            // Save right away when the app may be suspended or killed
+            Event::Window(_, WindowEvent::Blur) => {
+                if let Some(saver) = &mut saver {
+                    saver.save(&game);
+                }
+            }
             Event::LoopExiting => {
+                if let Some(saver) = &mut saver {
+                    saver.save(&game);
+                }
                 if let Some(smoke_test) = &smoke_test {
                     assert!(
                         smoke_test.completed().get(),
@@ -442,6 +461,9 @@ fn main() {
             // Drop any search that was started for an older position
             worker.cancel(game.revision);
             window.request_redraw();
+            if let Some(saver) = &mut saver {
+                saver.schedule();
+            }
         }
         if !window.is_closed()
             && let Some(job) = game.take_ai_job()
