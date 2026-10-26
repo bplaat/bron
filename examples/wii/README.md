@@ -37,6 +37,14 @@ cargo run --release
 The Rust examples are standalone nightly projects, separate from main Cargo workspace.
 Run Cargo from the example directory so it loads the Wii target and runner configuration.
 
+To run the examples on a Wii, install them all and [PlaatCraft](../../games/plaatcraft-wii) on
+the connected SD card from the repository root. Each program gets a Homebrew Channel folder like
+`apps/blocks-rust/` with its `meta/` name, description and icon, or add a name to install one:
+
+```sh
+cargo xtask install-wii
+```
+
 ## Triangles
 
 A minimal program that draws a few triangles using a display list.

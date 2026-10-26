@@ -24,6 +24,7 @@ mod metadata;
 mod process;
 mod utils;
 mod vscode;
+mod wii;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Os {
@@ -72,12 +73,18 @@ impl Xtask {
     }
 
     fn run(&self, task: &str, package: Option<&str>) -> Result<()> {
-        if package.is_some() && !matches!(task, "install" | "install-ios" | "install-android") {
+        if package.is_some()
+            && !matches!(
+                task,
+                "install" | "install-ios" | "install-android" | "install-wii" | "build-wii-bundle"
+            )
+        {
             bail!("task {task} does not accept a package");
         }
         match task {
             "build-pages" => self.build_pages(),
             "build-bundle" => self.build_bundle(),
+            "build-wii-bundle" => self.build_wii_bundle(package),
             "clean" => self.clean(),
             "check" => self.check(),
             "check-editor" => self.check_editor(),
@@ -91,6 +98,7 @@ impl Xtask {
             "install" => self.install(package),
             "install-ios" => self.install_ios(package),
             "install-android" => self.install_android(package),
+            "install-wii" => self.install_wii(package),
             "help" | "--help" | "-h" => {
                 Self::print_help();
                 Ok(())
@@ -119,12 +127,14 @@ impl Xtask {
         println!("  coverage         Generate Rust coverage");
         println!("  build-pages      Build GitHub Pages artifacts");
         println!("  build-bundle     Build native application bundles");
+        println!("  build-wii-bundle [name]   Build Homebrew Channel bundles of the Wii programs");
         println!("  clean            Remove generated files");
         println!("  install [name]   Install all applications or only the named package");
         println!("  install-ios [name]        Install iOS applications on the booted simulators");
         println!(
             "  install-android [name]    Install Android applications on the first adb device"
         );
+        println!("  install-wii [name]        Install Wii programs on the connected SD card");
     }
 
     fn ensure_npm_deps(&self) -> Result<()> {

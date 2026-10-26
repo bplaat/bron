@@ -15,6 +15,15 @@ start it in Dolphin from this folder, `cargo run` also writes `target/wii/releas
 cargo run --release
 ```
 
+To play it on a Wii, run this from the repository root with the SD card connected. It builds the
+Homebrew Channel bundle with the name, description and icon in `meta/` and copies it to
+`apps/plaatcraft/` on the card, `cargo xtask build-wii-bundle plaatcraft` only builds it in
+`target/bundle/wii/apps/`:
+
+```sh
+cargo xtask install-wii plaatcraft
+```
+
 ## Controls
 
 Hold the Wii Remote with the Nunchuk attached, like the original PlaatCraft Wii port:
