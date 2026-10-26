@@ -33,7 +33,10 @@ static SEED: [AtomicU32; 2] = [
 static SEED_LOCKED: AtomicBool = AtomicBool::new(false);
 
 fn seed() -> u64 {
-    SEED_LOCKED.store(true, Ordering::Release);
+    // Only the first read writes, so the generator threads don't contend for the flag.
+    if !SEED_LOCKED.load(Ordering::Relaxed) {
+        SEED_LOCKED.store(true, Ordering::Release);
+    }
     u64::from(SEED[1].load(Ordering::Acquire)) << 32 | u64::from(SEED[0].load(Ordering::Acquire))
 }
 
