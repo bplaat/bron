@@ -358,7 +358,7 @@ impl Database {
                 .into_iter()
                 .map(|(coord, data)| Ok((coord, ChunkData::decode(&data)?)))
                 .collect::<Result<std::collections::BTreeMap<_, _>>>()?;
-            let terrain = ChunkData::rebuild(coord, bases, &edits);
+            let terrain = ChunkData::rebuild(coord, &bases, &edits);
             self.save_generated(coord, &terrain.encode(), revision)?;
             terrain
         };
