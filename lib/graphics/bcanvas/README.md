@@ -13,6 +13,8 @@ graphics API: Core Graphics on macOS and iOS, Direct2D on Windows, Cairo on Linu
 ## Getting Started
 
 ```rust,no_run
+# #[cfg(feature = "window")]
+# fn main() {
 use bcanvas::{CanvasBuilder, Color};
 use bwindow::{Event, EventLoopBuilder, WindowBuilder, WindowEvent};
 
@@ -23,16 +25,24 @@ let mut canvas = CanvasBuilder::new(&window).build();
 event_loop.run(move |event| {
     if let Event::Window(id, WindowEvent::RedrawRequested) = event {
         if id == window.id() {
-            canvas.draw(|ctx| {
+            if !canvas.draw(|ctx| {
                 ctx.set_fill_style(Color::rgb(30, 120, 200));
                 ctx.fill_rect(0.0, 0.0, ctx.width(), ctx.height());
-            });
+            }) {
+                return;
+            }
         }
     }
 });
+# }
+# #[cfg(not(feature = "window"))]
+# fn main() {}
 ```
 
-Drawing state resets each frame. Drawing after the window closes returns `false`.
+Drawing state resets each frame. `draw` returns whether its closure ran; handle that
+result before advancing frame-dependent state. It returns `false` outside a native paint
+callback, after close, or if the frame was already drawn. The library schedules native
+frames and retries unavailable paint passes; applications do not need platform-specific retries.
 For animation, call `canvas.request_animation_frame()` after drawing. Images and IME
 text editing are not supported.
 
