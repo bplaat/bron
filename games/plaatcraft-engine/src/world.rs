@@ -210,8 +210,15 @@ pub const MATERIALS: &[(u8, &str)] = &[
 ];
 
 /// Whether a material can be placed or stored.
-pub fn valid_material(material: u8) -> bool {
-    MATERIALS.iter().any(|&(id, _)| id == material) || matches!(material, OVEN_WEST..=OVEN_EAST)
+pub const fn valid_material(material: u8) -> bool {
+    let mut index = 0;
+    while index < MATERIALS.len() {
+        if MATERIALS[index].0 == material {
+            return true;
+        }
+        index += 1;
+    }
+    matches!(material, OVEN_WEST..=OVEN_EAST)
 }
 
 /// The inventory item for a placed block.
@@ -236,13 +243,17 @@ pub fn placed_material(material: u8, dx: f64, dz: f64) -> u8 {
 }
 
 /// Maps retired material IDs to their replacement, `None` for unknown materials.
-pub fn canonical_material(material: u8) -> Option<u8> {
+pub const fn canonical_material(material: u8) -> Option<u8> {
     let material = match material {
         LEGACY_IRON_ORE => IRON_ORE,
         LEGACY_DENSE_IRON_ORE => DENSE_IRON_ORE,
         _ => material,
     };
-    valid_material(material).then_some(material)
+    if valid_material(material) {
+        Some(material)
+    } else {
+        None
+    }
 }
 
 /// How a material is drawn: tile names for the +x, -x, +y, -y, +z and -z faces and a tint.
@@ -393,10 +404,26 @@ pub const fn quad_material(packed: u32) -> u32 {
     (packed >> 20) & 63 | (packed >> 31) << 6
 }
 
+// The canonical material of every block ID a stored chunk can hold, so decoding looks
+// each block up instead of searching the materials.
+const STORED_BLOCKS: [Option<u8>; 256] = {
+    let mut table = [None; 256];
+    let mut material = 0;
+    while material < table.len() {
+        let id = material as u8;
+        table[material] = match canonical_material(id) {
+            Some(canonical) if !is_sprite(id) => Some(canonical),
+            _ if id == 0 || id == BEDROCK => Some(id),
+            _ => None,
+        };
+        material += 1;
+    }
+    table
+};
+
+#[cfg(test)]
 fn valid_stored_block(material: u8) -> bool {
-    material == 0
-        || material == BEDROCK
-        || canonical_material(material).is_some() && !is_sprite(material)
+    STORED_BLOCKS[usize::from(material)].is_some()
 }
 
 /// The blocks and light of a chunk. A one-voxel halo includes terrain, ores and trees
@@ -600,14 +627,12 @@ impl ChunkData {
         if raw.len() != BASE + count * 4
             || max_height > HEIGHT
             || heights.iter().any(|&h| h == 0 || usize::from(h) > HEIGHT)
-            || blocks.iter().any(|&b| !valid_stored_block(b))
         {
             return Err("Invalid chunk dimensions or materials".into());
         }
         for material in &mut blocks {
-            if let Some(canonical) = canonical_material(*material) {
-                *material = canonical;
-            }
+            *material = STORED_BLOCKS[usize::from(*material)]
+                .ok_or("Invalid chunk dimensions or materials")?;
         }
         let mut plants: Vec<[u8; 4]> = raw[BASE..].as_chunks::<4>().0.to_vec();
         plants.retain(|p| !matches!(p[3], 64 | 65));
