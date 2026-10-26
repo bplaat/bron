@@ -398,6 +398,7 @@ fn valid_stored_block(material: u8) -> bool {
 
 /// The blocks and light of a chunk. A one-voxel halo includes terrain, ores and trees
 /// from neighboring chunks.
+#[derive(Clone)]
 pub struct ChunkData {
     heights: [u8; PADDED_SIZE * PADDED_SIZE],
     blocks: Vec<u8>,
@@ -620,17 +621,23 @@ impl ChunkData {
 
     /// Generates and lights a chunk with the edits around it.
     pub fn generate_edited(coord: Coord, edits: &[Edit]) -> Self {
-        Self::rebuild(coord, BTreeMap::new(), edits)
+        Self::rebuild(coord, &BTreeMap::new(), edits)
+    }
+
+    /// Generates the unedited chunk without light, a base for [`Self::rebuild`].
+    pub fn generate_base(coord: Coord) -> Self {
+        Self::generate_unlit(coord, false)
     }
 
     /// Applies the edits to the unedited chunk and lights it. `bases` holds already
     /// generated unedited chunks of it and its neighbors, the others are generated.
-    pub fn rebuild(coord: Coord, mut bases: BTreeMap<Coord, Self>, edits: &[Edit]) -> Self {
+    pub fn rebuild(coord: Coord, bases: &BTreeMap<Coord, Self>, edits: &[Edit]) -> Self {
         let mut chunk = bases
-            .remove(&coord)
+            .get(&coord)
+            .cloned()
             .unwrap_or_else(|| Self::generate_unlit(coord, false));
         chunk.apply_edits(coord, edits);
-        chunk.bake_light(coord, edits, &mut bases);
+        chunk.bake_light(coord, edits, bases);
         chunk
     }
 
@@ -684,7 +691,7 @@ impl ChunkData {
                 origin.1 + (index / PADDED_SIZE) as i64 - 1,
             )
         });
-        let mut chunk = Self::from_columns(columns);
+        let mut chunk = Self::unlit(columns);
         if !lighting_only {
             chunk.add_outcrops(origin);
             chunk.add_ores(origin);
@@ -762,6 +769,13 @@ impl ChunkData {
     }
 
     fn from_columns(columns: [Column; PADDED_SIZE * PADDED_SIZE]) -> Self {
+        let mut chunk = Self::unlit(columns);
+        chunk.light = vec![15; chunk.blocks.len()];
+        chunk
+    }
+
+    // Generated chunks get their light from `bake_light`.
+    fn unlit(columns: [Column; PADDED_SIZE * PADDED_SIZE]) -> Self {
         let heights = columns.map(|column| column.height);
         let mut blocks = vec![0; PADDED_SIZE * PADDED_SIZE * HEIGHT];
         for (index, column) in columns.iter().enumerate() {
@@ -807,7 +821,7 @@ impl ChunkData {
             usize::from((*heights.iter().max().expect("Chunk has columns")).max(SEA_LEVEL));
         Self {
             heights,
-            light: vec![15; blocks.len()],
+            light: Vec::new(),
             blocks,
             plants: Vec::new(),
             max_height,
@@ -972,24 +986,22 @@ impl ChunkData {
         }
     }
 
-    fn bake_light(&mut self, coord: Coord, edits: &[Edit], bases: &mut BTreeMap<Coord, Self>) {
+    fn bake_light(&mut self, coord: Coord, edits: &[Edit], bases: &BTreeMap<Coord, Self>) {
         // A 16-block margin covers the entire 15-level propagation radius, including
         // the mesh halo. No neighbor loading or later remeshing is necessary.
         const WIDTH: usize = CHUNK_SIZE * 3;
         let mut blocks = vec![0; WIDTH * WIDTH * HEIGHT];
         for dz in -1..=1 {
             for dx in -1..=1 {
-                let mut neighbor;
+                let neighbor = (coord.0 + dx, coord.1 + dz);
+                let generated;
                 let source = if dx == 0 && dz == 0 {
                     &*self
+                } else if let Some(base) = bases.get(&neighbor) {
+                    base
                 } else {
-                    neighbor = bases
-                        .remove(&(coord.0 + dx, coord.1 + dz))
-                        .unwrap_or_else(|| {
-                            Self::generate_unlit((coord.0 + dx, coord.1 + dz), true)
-                        });
-                    neighbor.apply_edits((coord.0 + dx, coord.1 + dz), edits);
-                    &neighbor
+                    generated = Self::generate_unlit(neighbor, true);
+                    &generated
                 };
                 for z in 0..CHUNK_SIZE {
                     for x in 0..CHUNK_SIZE {
@@ -1004,6 +1016,26 @@ impl ChunkData {
                 }
             }
         }
+        // The bases are unedited, so the edits go on the copy. Plants let light through.
+        let corner = (
+            (coord.0 - 1) * CHUNK_SIZE as i64,
+            (coord.1 - 1) * CHUNK_SIZE as i64,
+        );
+        for edit in edits {
+            let [x, y, z] = edit.position;
+            let (x, z) = (x - corner.0, z - corner.1);
+            if (0..WIDTH as i64).contains(&x)
+                && (0..WIDTH as i64).contains(&z)
+                && (0..HEIGHT as i64).contains(&y)
+            {
+                blocks[(z as usize * WIDTH + x as usize) * HEIGHT + y as usize] =
+                    if is_sprite(edit.material) {
+                        0
+                    } else {
+                        edit.material
+                    };
+            }
+        }
         let light = crate::lighting::bake::<WIDTH, HEIGHT>(
             &blocks,
             |material| match material {
@@ -1015,6 +1047,7 @@ impl ChunkData {
             },
             |material| if material == LAVA { 15 } else { 0 },
         );
+        self.light.resize(self.blocks.len(), 0);
         for z in 0..PADDED_SIZE {
             for x in 0..PADDED_SIZE {
                 let from = ((z + CHUNK_SIZE - 1) * WIDTH + x + CHUNK_SIZE - 1) * HEIGHT;
@@ -1303,6 +1336,30 @@ mod tests {
         }
         assert!(!valid_material(LEGACY_IRON_ORE));
         assert!(!valid_material(LEGACY_DENSE_IRON_ORE));
+    }
+
+    #[test]
+    fn rebuilding_from_generated_bases_matches_generating() {
+        let coord = (-4, 3);
+        let origin = [coord.0 * CHUNK_SIZE as i64, coord.1 * CHUNK_SIZE as i64];
+        let edits = [
+            (origin[0] + 5, 70, origin[1] + 2, GLASS),
+            (origin[0] - 1, 40, origin[1] + 15, 0),
+            (origin[0] + 20, 66, origin[1] - 3, LAVA),
+            (origin[0] + 3, 80, origin[1] + 3, FIRST_PLANT),
+        ]
+        .map(|(x, y, z, material)| Edit {
+            position: [x, y, z],
+            material,
+        });
+        let bases = (-1..=1)
+            .flat_map(|dz| (-1..=1).map(move |dx| (coord.0 + dx, coord.1 + dz)))
+            .map(|neighbor| (neighbor, ChunkData::generate_base(neighbor)))
+            .collect();
+        let rebuilt = ChunkData::rebuild(coord, &bases, &edits);
+        let generated = ChunkData::generate_edited(coord, &edits);
+        assert_eq!(rebuilt.encode(), generated.encode());
+        assert_eq!(rebuilt.mesh(), generated.mesh());
     }
 
     #[test]
