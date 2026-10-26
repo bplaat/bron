@@ -448,7 +448,7 @@ unsafe extern "system" fn window_proc(
             // End the raw WindowData borrow before entering that callback.
             let host = _self.host.clone();
             if !host.paint() {
-                host.request_redraw();
+                host.event_sender().send(WindowEvent::RedrawRequested);
             }
             0
         }
@@ -631,7 +631,44 @@ pub(super) fn is_app_window(window: HWND) -> bool {
 
 #[cfg(test)]
 mod dpi_tests {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
     use super::*;
+
+    #[test]
+    fn redraw_requests_coalesce_until_paint_and_allow_input_first() {
+        use crate::WindowInterface;
+
+        let builder = WindowBuilder::new().title("Redraw scheduling test");
+        let host = crate::content::ContentHost::new(builder.window_id, None, false);
+        let mut window = PlatformWindow::new(&builder, host.clone());
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let output = events.clone();
+        crate::dispatch::start(move |event| match event {
+            crate::Event::Window(_, WindowEvent::RedrawRequested) => {
+                output.borrow_mut().push("paint");
+            }
+            crate::Event::Window(_, WindowEvent::KeyDown(_)) => {
+                output.borrow_mut().push("key");
+            }
+            _ => {}
+        });
+        events.borrow_mut().clear();
+
+        host.request_redraw();
+        host.request_redraw();
+        assert!(events.borrow().is_empty(), "redraw must wait for WM_PAINT");
+        // Input delivered before the pending paint must reach the application first.
+        unsafe { window_proc(window.0.hwnd, 0x0100, 0x41, 0x001e0001) };
+        unsafe { UpdateWindow(window.0.hwnd) };
+        assert_eq!(*events.borrow(), ["key", "paint"]);
+        unsafe { UpdateWindow(window.0.hwnd) };
+        assert_eq!(events.borrow().len(), 2, "redraws must coalesce");
+
+        window.close();
+        crate::dispatch::shutdown(&crate::mailbox::Mailbox::new());
+    }
 
     #[test]
     fn dpi_conversion_preserves_fractional_logical_coordinates() {
