@@ -5,6 +5,10 @@ name = "plaatcraft-wii"
 version = "0.2.0"
 edition = "2024"
 
+# Runs the chunk pipeline benchmark instead of the game, see bench.sh
+[features]
+bench = []
+
 [dependencies]
 libogc-sys = { path = "../../tools/wii-toolchain/libogc-sys" }
 plaatcraft-engine = { path = "../plaatcraft-engine", default-features = false }

@@ -400,6 +400,7 @@ unsafe extern "C" {
 unsafe extern "C" {
     pub fn memalign(alignment: usize, size: usize) -> *mut c_void;
     pub fn free(pointer: *mut c_void);
+    pub fn puts(text: *const c_char) -> c_int;
     pub safe fn floor(x: f64) -> f64;
     pub safe fn floorf(x: f32) -> f32;
     pub safe fn powf(x: f32, y: f32) -> f32;
