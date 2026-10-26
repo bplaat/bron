@@ -285,7 +285,7 @@ PetiteVue.createApp({
             if (localStorage.getItem('lastFontPath') === path) {
                 localStorage.removeItem('lastFontPath');
             }
-            alert('Failed to open font file:\n' + error);
+            await ipcRequest('showError', { title: 'Failed to open font file', description: error });
             return false;
         }
         this.fontData = new Uint8Array(data);
@@ -326,7 +326,7 @@ PetiteVue.createApp({
         const data = Array.from(this.fontData);
         const { ok, error } = await ipcRequest('saveFont', { path, data });
         if (!ok) {
-            alert('Failed to save font file:\n' + error);
+            await ipcRequest('showError', { title: 'Failed to save font file', description: error });
             return false;
         }
         this._setDirty(false);
@@ -353,7 +353,7 @@ PetiteVue.createApp({
         if (!path) return;
         const text = this._generateAsm();
         const { ok, error } = await ipcRequest('exportFile', { path, text });
-        if (!ok) alert('Failed to export:\n' + error);
+        if (!ok) await ipcRequest('showError', { title: 'Failed to export', description: error });
     },
 
     async exportC() {
@@ -362,7 +362,7 @@ PetiteVue.createApp({
         if (!path) return;
         const text = this._generateC();
         const { ok, error } = await ipcRequest('exportFile', { path, text });
-        if (!ok) alert('Failed to export:\n' + error);
+        if (!ok) await ipcRequest('showError', { title: 'Failed to export', description: error });
     },
 
     _generateAsm() {
