@@ -46,11 +46,11 @@ fn vs_terrain(@builtin(vertex_index) index: u32,
     let corners = array(vec2(0.0, 0.0), vec2(1.0, 0.0), vec2(1.0, 1.0), vec2(0.0, 1.0));
     let positive = array(0u, 1u, 2u, 0u, 2u, 3u);
     let negative = array(0u, 2u, 1u, 0u, 3u, 2u);
-    let origin = vec3(f32(packed.x & 31u), f32((packed.x >> 5u) & 127u), f32((packed.x >> 12u) & 31u));
+    let origin = vec3(f32(packed.x & 31u), f32((packed.x >> 5u) & 31u), f32((packed.x >> 12u) & 31u));
     let face = (packed.x >> 17u) & 7u;
     let material = ((packed.x >> 20u) & 63u) | ((packed.x >> 31u) << 6u);
     let extent = vec2(f32(packed.y & 31u), f32((packed.y >> 5u) & 31u));
-    let chunk_origin = chunk_origins[packed.y >> 18u];
+    let chunk_origin = scene.chunk_origins[(packed.y >> 18u) | (((packed.x >> 10u) & 3u) << 14u)];
     let reverse = ((face & 1u) ^ ((packed.x >> 26u) & 1u)) != 0u;
     let corner = corners[select(positive[index], negative[index], reverse)];
     let axis = face / 2u;

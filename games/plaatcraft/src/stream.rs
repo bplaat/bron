@@ -16,14 +16,8 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-// Phones and tablets have less memory and GPU power, so they render half as far.
-pub(crate) const RENDER_DISTANCE: i64 = if cfg!(any(target_os = "ios", target_os = "android")) {
-    16
-} else {
-    32
-};
-pub(crate) const RESIDENT_CAPACITY: usize = resident_capacity(RENDER_DISTANCE);
-const _: () = assert!(RESIDENT_CAPACITY <= 1 << 14);
+pub(crate) const RESIDENT_CAPACITY: usize = resident_capacity(crate::settings::MAX_DISTANCE as i64);
+const _: () = assert!(RESIDENT_CAPACITY <= 1 << 16);
 const PRIORITY_INTERVAL: Duration = Duration::from_millis(100);
 
 pub(crate) const fn in_range(coord: Coord, center: Coord, radius: i64) -> bool {
@@ -80,11 +74,12 @@ pub(crate) struct Stream {
     cache_bytes: usize,
     workers: Vec<thread::JoinHandle<()>>,
     revision: u64,
+    pub(crate) radius: i64,
+    desired_radius: i64,
 }
 
-pub(crate) fn nearby(center: Coord) -> Vec<Coord> {
-    let radius = RENDER_DISTANCE;
-    let mut coords = Vec::with_capacity(RESIDENT_CAPACITY);
+pub(crate) fn nearby(center: Coord, radius: i64) -> Vec<Coord> {
+    let mut coords = Vec::with_capacity(resident_capacity(radius));
     for z in -radius..=radius {
         for x in -radius..=radius {
             let coord = (center.0 + x, center.1 + z);
@@ -250,6 +245,8 @@ impl Stream {
             cache_bytes: 0,
             workers,
             revision,
+            radius: i64::from(crate::settings::DEFAULT_DISTANCE),
+            desired_radius: i64::from(crate::settings::DEFAULT_DISTANCE),
         }
     }
 
@@ -304,12 +301,14 @@ impl Stream {
     }
 
     pub(crate) fn update(&mut self, center: Coord, visible: impl Fn(Coord) -> bool) {
-        let moved = self.desired.is_empty() || self.center != center;
+        let moved =
+            self.desired.is_empty() || self.center != center || self.radius != self.desired_radius;
         if moved {
             self.center = center;
-            self.desired = nearby(center);
+            self.desired_radius = self.radius;
+            self.desired = nearby(center, self.radius);
             self.uploaded
-                .retain(|&coord| in_range(coord, center, RENDER_DISTANCE));
+                .retain(|&coord| in_range(coord, center, self.radius));
         }
         if moved || self.last_priority.elapsed() >= PRIORITY_INTERVAL {
             let loading = load_order(&self.desired, center, visible);
@@ -378,6 +377,26 @@ mod tests {
             assert!(Instant::now() < deadline, "Terrain worker timed out");
             thread::sleep(Duration::from_millis(1));
         }
+    }
+
+    #[test]
+    fn changing_distance_rebuilds_residency_without_moving() {
+        let mut stream = Stream::with_workers(1);
+        let center = (-40, 73);
+        stream.radius = 4;
+        stream.update(center, |_| true);
+        assert_eq!(stream.desired.len(), resident_capacity(4));
+        stream.radius = i64::from(crate::settings::MAX_DISTANCE);
+        stream.update(center, |_| true);
+        assert_eq!(stream.desired.len(), RESIDENT_CAPACITY);
+        let distant = (center.0 + stream.radius, center.1);
+        assert!(stream.desired.contains(&distant));
+        stream.mark_uploaded(distant);
+        stream.radius = 4;
+        stream.update(center, |_| true);
+        assert!(!stream.uploaded.contains(&distant));
+        assert!(!stream.loading.contains(&distant));
+        assert_eq!(stream.desired.len(), resident_capacity(4));
     }
 
     #[test]
@@ -455,9 +474,9 @@ mod tests {
     fn residency_is_circular_and_translation_invariant() {
         assert_eq!(resident_capacity(24), 1793);
         assert_eq!(resident_capacity(48), 7213);
-        let radius = RENDER_DISTANCE;
+        let radius = i64::from(crate::settings::DEFAULT_DISTANCE);
         for center in [(0, 0), (-40, 73)] {
-            let coords = nearby(center);
+            let coords = nearby(center, radius);
             assert_eq!(coords.len(), resident_capacity(radius));
             assert!(coords.iter().all(|&coord| in_range(coord, center, radius)));
             assert!(coords.contains(&(center.0 + radius, center.1)));
@@ -472,7 +491,7 @@ mod tests {
 
     #[test]
     fn nearby_chunks_come_first_then_visible_chunks() {
-        let coords = nearby((0, 0));
+        let coords = nearby((0, 0), 32);
         let ordered = load_order(&coords, (0, 0), |(_, z)| z < 0);
         let index = |coord| ordered.iter().position(|&c| c == coord).unwrap();
         assert_eq!(ordered[0], (0, 0));
@@ -533,7 +552,7 @@ mod tests {
         stream.update((0, 0), |_| true);
         assert!(Arc::ptr_eq(&original, &stream.cache[&(0, 0)]));
         assert!(stream.cache.contains_key(&(-32, 12)));
-        assert_eq!(stream.desired.len(), RESIDENT_CAPACITY);
+        assert_eq!(stream.desired.len(), resident_capacity(stream.radius));
         assert_eq!(stream.desired[0], (0, 0));
     }
 }

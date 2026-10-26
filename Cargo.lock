@@ -941,6 +941,7 @@ dependencies = [
  "directories",
  "image",
  "libsqlite3-sys",
+ "preferences",
  "winresource",
 ]
 

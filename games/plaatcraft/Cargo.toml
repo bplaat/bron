@@ -5,10 +5,6 @@ edition.workspace = true
 license.workspace = true
 authors.workspace = true
 repository.workspace = true
-description = "A first-person voxel sandbox rendered with bwebgpu"
-keywords = ["game", "voxel", "sandbox", "webgpu"]
-categories = ["games"]
-publish = false
 
 [package.metadata.bundle]
 name = "PlaatCraft"
@@ -17,14 +13,14 @@ copyright = "Copyright (c) 2026 Bastiaan van der Plaat"
 icon = "meta/apple/icon.icon"
 info_plist = "meta/apple/Info.plist"
 
+[package.metadata.bundle.windows]
+assets = "meta/windows"
+sandbox = true
+
 [package.metadata.bundle.ios]
 info_plist = "meta/apple/ios/Info.plist"
 
 [package.metadata.bundle.android]
-
-[package.metadata.bundle.windows]
-assets = "meta/windows"
-sandbox = true
 
 [dependencies]
 directories = "6.0"
@@ -32,9 +28,14 @@ libsqlite3-sys = "0.38"
 cargo-bundle-assets = { path = "../../lib/build/cargo-bundle-assets" }
 bcanvas = { path = "../../lib/graphics/bcanvas", default-features = false }
 bwebgpu = { path = "../../lib/graphics/bwebgpu" }
-bwindow = { path = "../../lib/ui/bwindow", default-features = false, features = ["remember_window_state"] }
+bwindow = { path = "../../lib/ui/bwindow", default-features = false, features = [
+    "remember_window_state",
+] }
+preferences = { path = "../../lib/sys/preferences" }
 deflate = { path = "../../lib/data/deflate" }
-image = { path = "../../lib/graphics/image", default-features = false, features = ["png"] }
+image = { path = "../../lib/graphics/image", default-features = false, features = [
+    "png",
+] }
 
 # Android has no public system SQLite library
 [target.'cfg(target_os = "android")'.dependencies]
