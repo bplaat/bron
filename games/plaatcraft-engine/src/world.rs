@@ -1004,10 +1004,8 @@ impl ChunkData {
                 }
             }
         }
-        let light = crate::lighting::bake(
+        let light = crate::lighting::bake::<WIDTH, HEIGHT>(
             &blocks,
-            WIDTH,
-            HEIGHT,
             |material| match material {
                 0 => 0,
                 WATER => 2,
