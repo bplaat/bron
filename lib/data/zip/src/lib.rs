@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: MIT
  */
 
-//! A minimal replacement for the [zip](https://crates.io/crates/zip) crate
+#![doc = include_str!("../README.md")]
 
 use std::fmt;
 use std::io::{self, Cursor, Read, Seek, SeekFrom};

@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: MIT
  */
 
-//! Locates and links libsecret on Unix platforms.
+#![doc = include_str!("README.md")]
 
 use std::env;
 use std::path::{Path, PathBuf};

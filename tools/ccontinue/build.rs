@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: MIT
  */
 
-//! Generates and compiles the embedded cContinue standard library.
+#![doc = include_str!("README.md")]
 
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;

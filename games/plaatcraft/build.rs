@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: MIT
  */
 
-//! Compiles the game shaders and platform resources.
+#![doc = include_str!("README.md")]
 
 fn compile_windows_resources() {
     if std::env::var("CARGO_CFG_TARGET_OS").expect("CARGO_CFG_TARGET_OS not set") != "windows" {

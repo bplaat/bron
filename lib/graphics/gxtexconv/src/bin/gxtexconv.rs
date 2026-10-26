@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: MIT
  */
 
-//! The gxtexconv command line tool, converts a `.scf` script to a `.tpl` texture file.
+#![doc = include_str!("../../README.md")]
 
 use std::path::Path;
 use std::process::ExitCode;

@@ -5,8 +5,6 @@
  */
 
 #![doc = include_str!("../README.md")]
-//!
-//! Disable default features for `no_std` support with `alloc`. Automatic salt generation requires `std`.
 #![cfg_attr(not(any(test, feature = "std")), no_std)]
 
 extern crate alloc;

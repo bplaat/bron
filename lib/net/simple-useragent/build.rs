@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: MIT
  */
 
-//! An user agent parser library
+#![doc = include_str!("README.md")]
 
 use std::env;
 use std::fs::File;

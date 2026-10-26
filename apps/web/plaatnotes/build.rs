@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: MIT
  */
 
-//! A simple note-taking app
+#![doc = include_str!("README.md")]
 
 use std::env;
 use std::fs::OpenOptions;

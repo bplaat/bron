@@ -13,6 +13,8 @@ assert!(!pbkdf2::password_verify("wrong_password", &hash).unwrap());
 
 ## Features
 
+Disable default features for `no_std` support with `alloc`. Automatic salt generation requires `std`.
+
 - Generates random salts for password hashes
 - Encodes password hashes using the PHC string format
 - Verifies hashes using constant-time comparison

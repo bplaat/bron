@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: MIT
  */
 
-//! PlaatCraft, a first-person voxel sandbox rendered with bwebgpu and bwindow.
+#![doc = include_str!("../README.md")]
 #![allow(unsafe_code)]
 #![cfg_attr(test, allow(clippy::unwrap_used))]
 

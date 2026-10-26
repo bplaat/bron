@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: MIT
  */
 
-//! List or extract a ZIP archive, restoring ordinary permissions and modification times.
+#![doc = include_str!("../../README.md")]
 
 use std::collections::{HashMap, VecDeque};
 use std::ffi::{OsStr, OsString};
