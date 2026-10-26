@@ -189,7 +189,6 @@ struct Game {
     visible: u32,
     last_stats: Instant,
     database: database::Database,
-    window_state: database::WindowState,
     last_save: Instant,
 }
 
@@ -198,7 +197,6 @@ impl Game {
         window: Window,
         attachment: bwindow::WindowAttachment,
         database: database::Database,
-        saved_window: Option<database::WindowState>,
     ) -> Self {
         let scale = attachment.scale_factor();
         let instance = bwebgpu::Instance::default();
@@ -360,15 +358,6 @@ impl Game {
         let night = database
             .restore_state(&mut camera)
             .expect("Restore game state");
-        let position = window.position();
-        let size = window.size();
-        let window_state = saved_window.unwrap_or(database::WindowState {
-            x: position.x.round() as i32,
-            y: position.y.round() as i32,
-            width: size.width.round().max(1.0) as u32,
-            height: size.height.round().max(1.0) as u32,
-            maximized: false,
-        });
         let stream = stream::Stream::open(database::path());
         let depth = Self::create_depth(&device, &config);
         let safe_area = window.safe_area();
@@ -416,7 +405,6 @@ impl Game {
             visible: 0,
             last_stats: Instant::now(),
             database,
-            window_state,
             last_save: Instant::now(),
         }
     }
@@ -879,24 +867,8 @@ impl Game {
         }
     }
 
-    fn update_window_state(&mut self) {
-        let position = self.window.position();
-        self.window_state.x = position.x.round() as i32;
-        self.window_state.y = position.y.round() as i32;
-        let size = self.window.size();
-        if size.width >= 100.0 && size.height >= 100.0 {
-            self.window_state.width = size.width.round() as u32;
-            self.window_state.height = size.height.round() as u32;
-        }
-        self.window_state.maximized = false;
-    }
-
     fn save_session(&mut self) {
-        self.update_window_state();
-        if let Err(error) = self
-            .database
-            .save_session(&self.camera, self.night, self.window_state)
-        {
+        if let Err(error) = self.database.save_state(&self.camera, self.night) {
             eprintln!("Could not save session: {error}");
         }
         self.last_save = Instant::now();
@@ -1178,43 +1150,17 @@ fn main() {
         .app_id("nl", "bplaat", "PlaatCraft")
         .build();
     let database = database::Database::open(database::path()).expect("Open world database");
-    let mut saved_window = database.load_window().expect("Restore window state");
-    if let Some(state) = &mut saved_window {
-        // A disconnected monitor should not leave the restored window offscreen.
-        let visible = event_loop.available_monitors().iter().any(|monitor| {
-            let position = monitor.position();
-            let size = monitor.size();
-            state.x as f32 + state.width as f32 > position.x + 64.0
-                && state.y as f32 + state.height as f32 > position.y + 64.0
-                && (state.x as f32) < position.x + size.width - 64.0
-                && (state.y as f32) < position.y + size.height - 64.0
-        });
-        if !visible {
-            let monitor = event_loop.primary_monitor();
-            let position = monitor.position();
-            let size = monitor.size();
-            state.x = (position.x + 32.0).round() as i32;
-            state.y = (position.y + 32.0).round() as i32;
-            state.width = state.width.min((size.width - 64.0).max(100.0) as u32);
-            state.height = state.height.min((size.height - 64.0).max(100.0) as u32);
-        }
-    }
-
-    let mut builder = WindowBuilder::new()
+    let window = WindowBuilder::new()
         .title(TITLE)
         .size(LogicalSize::new(1280.0, 800.0))
         .theme(Theme::Dark)
         .background_color(0x000000)
-        .center();
-    if let Some(state) = saved_window {
-        builder = builder
-            .position(LogicalPoint::new(state.x as f32, state.y as f32))
-            .size(LogicalSize::new(state.width as f32, state.height as f32));
-    }
-    let window = builder.build();
+        .center()
+        .remember_window_state()
+        .build();
     let window_id = window.id();
     let attachment = window.attach_content().expect("Attach graphics surface");
-    let mut game = Game::new(window, attachment, database, saved_window);
+    let mut game = Game::new(window, attachment, database);
     game.window.request_animation_frame();
 
     event_loop.run(move |event| match event {
@@ -1331,11 +1277,7 @@ fn main() {
                 game.camera.keys.remove(&key);
             }
         }
-        Event::Window(id, WindowEvent::Move(_)) if id == window_id => {
-            game.update_window_state();
-        }
         Event::Window(id, WindowEvent::Resize(_)) if id == window_id => {
-            game.update_window_state();
             game.resize();
             game.window.request_animation_frame();
         }

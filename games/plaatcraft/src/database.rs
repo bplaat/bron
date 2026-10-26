@@ -40,15 +40,6 @@ type Result<T> = std::result::Result<T, String>;
 
 // Connections stay on their owning thread; statements borrow the connection.
 pub(crate) struct Database(*mut sql::sqlite3);
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct WindowState {
-    pub(crate) x: i32,
-    pub(crate) y: i32,
-    pub(crate) width: u32,
-    pub(crate) height: u32,
-    pub(crate) maximized: bool,
-}
-
 struct Statement<'a> {
     raw: *mut sql::sqlite3_stmt,
     db: &'a Database,
@@ -88,7 +79,6 @@ impl Database {
             CREATE TABLE IF NOT EXISTS metadata (id INTEGER PRIMARY KEY CHECK(id=1), seed INTEGER NOT NULL);
             CREATE TABLE IF NOT EXISTS chunks (x INTEGER NOT NULL, z INTEGER NOT NULL, data BLOB NOT NULL, PRIMARY KEY(x,z));
             CREATE TABLE IF NOT EXISTS game_state (id INTEGER PRIMARY KEY CHECK(id=1), data BLOB NOT NULL);
-            CREATE TABLE IF NOT EXISTS window_state (id INTEGER PRIMARY KEY CHECK(id=1), x INTEGER NOT NULL, y INTEGER NOT NULL, width INTEGER NOT NULL, height INTEGER NOT NULL, maximized INTEGER NOT NULL);
             CREATE TABLE IF NOT EXISTS interaction (id INTEGER PRIMARY KEY CHECK(id=1), selected INTEGER NOT NULL, revision INTEGER NOT NULL);
             INSERT OR IGNORE INTO interaction VALUES(1,3,0);
             CREATE TABLE IF NOT EXISTS hotbar (id INTEGER PRIMARY KEY CHECK(id=1), slots BLOB NOT NULL, selected INTEGER NOT NULL);
@@ -394,57 +384,6 @@ impl Database {
         result
     }
 
-    pub(crate) fn load_window(&self) -> Result<Option<WindowState>> {
-        let mut stmt =
-            self.prepare(c"SELECT x,y,width,height,maximized FROM window_state WHERE id=1")?;
-        if !stmt.row()? {
-            return Ok(None);
-        }
-        let width = u32::try_from(stmt.integer(2)).map_err(|e| e.to_string())?;
-        let height = u32::try_from(stmt.integer(3)).map_err(|e| e.to_string())?;
-        if !(100..=16384).contains(&width) || !(100..=16384).contains(&height) {
-            return Err("Invalid saved window size".into());
-        }
-        Ok(Some(WindowState {
-            x: i32::try_from(stmt.integer(0)).map_err(|e| e.to_string())?,
-            y: i32::try_from(stmt.integer(1)).map_err(|e| e.to_string())?,
-            width,
-            height,
-            maximized: stmt.integer(4) != 0,
-        }))
-    }
-
-    pub(crate) fn save_session(
-        &self,
-        camera: &Camera,
-        night: bool,
-        window: WindowState,
-    ) -> Result<()> {
-        self.execute(c"BEGIN IMMEDIATE")?;
-        let result = (|| {
-            self.save_state(camera, night)?;
-            let mut stmt = self.prepare(c"INSERT INTO window_state(id,x,y,width,height,maximized) VALUES(1,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET x=excluded.x,y=excluded.y,width=excluded.width,height=excluded.height,maximized=excluded.maximized")?;
-            for (i, value) in [
-                i64::from(window.x),
-                i64::from(window.y),
-                i64::from(window.width),
-                i64::from(window.height),
-                i64::from(window.maximized),
-            ]
-            .into_iter()
-            .enumerate()
-            {
-                stmt.bind_int(i as i32 + 1, value)?;
-            }
-            stmt.done()?;
-            self.execute(c"COMMIT")
-        })();
-        if result.is_err() {
-            let _ = self.execute(c"ROLLBACK");
-        }
-        result
-    }
-
     pub(crate) fn restore_state(&self, camera: &mut Camera) -> Result<bool> {
         let mut stmt = self.prepare(c"SELECT data FROM game_state WHERE id=1")?;
         if !stmt.row()? {
@@ -728,7 +667,29 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn wal_reopens_chunks_seed_camera_and_window() {
+    fn legacy_window_state_is_removed_without_losing_game_state() {
+        let world = TestWorld::new();
+        let camera = Camera::default();
+        {
+            let db = Database::open(&world.path).unwrap();
+            db.save_state(&camera, true).unwrap();
+            db.execute(c"CREATE TABLE window_state (id INTEGER PRIMARY KEY, x INTEGER, y INTEGER, width INTEGER, height INTEGER, maximized INTEGER);
+                INSERT INTO window_state VALUES(1,100,200,1100,700,1);")
+                .unwrap();
+        }
+        let db = Database::open(&world.path).unwrap();
+        let mut table = db
+            .prepare(c"SELECT name FROM sqlite_master WHERE type='table' AND name='window_state'")
+            .unwrap();
+        assert!(!table.row().unwrap());
+        let mut restored = Camera::default();
+        assert!(db.restore_state(&mut restored).unwrap());
+        assert_eq!(restored.position, camera.position);
+        assert_eq!(db.seed().unwrap(), world::WORLD_SEED);
+    }
+
+    #[test]
+    fn wal_reopens_chunks_seed_and_camera() {
         let world = TestWorld::new();
         let data = ChunkData::generate((-2, 1)).encode();
         let camera = Camera {
@@ -736,13 +697,6 @@ pub(crate) mod tests {
             yaw: 2.5,
             pitch: -1.55,
             ..Camera::default()
-        };
-        let window = WindowState {
-            x: -1280,
-            y: 120,
-            width: 1100,
-            height: 700,
-            maximized: true,
         };
         {
             let db = Database::open(&world.path).unwrap();
@@ -758,7 +712,7 @@ pub(crate) mod tests {
             db.execute(c"UPDATE metadata SET seed=12345 WHERE id=1")
                 .unwrap();
             db.save_chunk((-2, 1), &data).unwrap();
-            db.save_session(&camera, true, window).unwrap();
+            db.save_state(&camera, true).unwrap();
             let reader = Database::open(&world.path).unwrap();
             assert_eq!(reader.load_chunk((-2, 1)).unwrap().unwrap(), data);
             assert!(reader.load_chunk((999, 999)).unwrap().is_none());
@@ -771,18 +725,8 @@ pub(crate) mod tests {
         assert_eq!(restored.position, camera.position);
         assert_eq!(restored.yaw, camera.yaw);
         assert_eq!(restored.pitch, camera.pitch);
-        assert_eq!(db.load_window().unwrap(), Some(window));
-        db.save_session(
-            &restored,
-            false,
-            WindowState {
-                maximized: false,
-                ..window
-            },
-        )
-        .unwrap();
+        db.save_state(&restored, false).unwrap();
         assert!(!db.restore_state(&mut restored).unwrap());
-        assert!(!db.load_window().unwrap().unwrap().maximized);
     }
 
     #[test]
