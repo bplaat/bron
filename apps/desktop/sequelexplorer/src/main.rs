@@ -23,6 +23,7 @@ use bwindow::{
     MenuBuilder, MenuItem, MessageDialog, MessageLevel, Modifiers, Theme, WindowBuilder,
 };
 use keyring::{Entry as CredentialEntry, Error as CredentialError};
+use preferences::Preferences;
 use rust_embed::Embed;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -105,6 +106,40 @@ enum IpcMessage {
         ok: bool,
         error: Option<String>,
     },
+    Preferences {
+        values: HashMap<Preference, String>,
+    },
+    SetPreference {
+        key: Preference,
+        value: Option<String>,
+    },
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+enum Preference {
+    DbPath,
+    TableName,
+    MysqlConnection,
+    MysqlDatabase,
+}
+
+impl Preference {
+    const ALL: [Self; 4] = [
+        Self::DbPath,
+        Self::TableName,
+        Self::MysqlConnection,
+        Self::MysqlDatabase,
+    ];
+
+    const fn key(self) -> &'static str {
+        match self {
+            Self::DbPath => "last_db_path",
+            Self::TableName => "last_table_name",
+            Self::MysqlConnection => "last_mysql_connection",
+            Self::MysqlDatabase => "last_mysql_database",
+        }
+    }
 }
 
 #[derive(Deserialize, Serialize)]
@@ -1363,6 +1398,7 @@ fn main() {
     }
     let mut window = window_builder.build();
 
+    let prefs = Preferences::new("nl.bplaat.SequelExplorer").expect("Failed to open preferences");
     let mut webview = WebviewBuilder::new(&window)
         .on_event(event_loop.create_proxy(), AppEvent::Webview)
         .load_rust_embed_with_custom_handler::<WebAssets>(move |req| {
@@ -1452,6 +1488,19 @@ fn main() {
             match message {
                 IpcMessage::Ready => {
                     page_ready = true;
+                    let values = Preference::ALL
+                        .into_iter()
+                        .filter_map(|preference| match prefs.get(preference.key()) {
+                            Ok(Some(preferences::Value::String(value))) => {
+                                Some((preference, value))
+                            }
+                            _ => None,
+                        })
+                        .collect();
+                    webview.send_ipc_message(
+                        serde_json::to_string(&IpcMessage::Preferences { values })
+                            .expect("Failed to serialize preferences"),
+                    );
                     if let Some(path) = pending_open_path.take() {
                         webview.send_ipc_message(
                             serde_json::to_string(&IpcMessage::OpenFile { path })
@@ -1472,6 +1521,15 @@ fn main() {
                     }
                 }
                 IpcMessage::RestoreLastFile => {}
+                IpcMessage::SetPreference { key, value } => {
+                    let result = match value {
+                        Some(value) => prefs.set(key.key(), value),
+                        None => prefs.remove(key.key()),
+                    };
+                    if let Err(error) = result {
+                        eprintln!("Failed to save preference: {error}");
+                    }
+                }
                 IpcMessage::ShowMessage {
                     request_id,
                     title,
