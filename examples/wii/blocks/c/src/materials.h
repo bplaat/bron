@@ -37,6 +37,11 @@ static bool materials_load(TPLFile* tpl, GXTexObj textures[MaterialLayerCount]) 
     for (int material = 0; material < MaterialLayerCount; material++) {
         if (TPL_GetTexture(tpl, material, &textures[material]) != 0)
             return false;
+        // Like the desktop samplers: sharp texels up close, trilinear and anisotropic mipmaps in
+        // the distance, anisotropy needs the edge LOD
+        GX_InitTexObjFilterMode(&textures[material], GX_LIN_MIP_LIN, GX_NEAR);
+        GX_InitTexObjEdgeLOD(&textures[material], GX_ENABLE);
+        GX_InitTexObjMaxAniso(&textures[material], GX_ANISO_4);
     }
     return true;
 }
