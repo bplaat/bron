@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes" ?>
+<app version="1">
+    <name>PlaatCraft</name>
+    <coder>Bastiaan van der Plaat</coder>
+    <version>0.2.0</version>
+    <short_description>A Minecraft like voxel sandbox</short_description>
+    <long_description
+    >A Minecraft like voxel sandbox with endless generated terrain, biomes, trees, ores, water and lava.
+
+Hold the Wii Remote with the Nunchuk attached: the D-pad moves, the stick looks around, A jumps or swims up, B sneaks, Z breaks and C places blocks, + and - select a block, 1 toggles flying, 2 toggles the night and Home opens the menu.</long_description>
+</app>
