@@ -78,8 +78,10 @@ fn vs_terrain(@builtin(vertex_index) index: u32,
         p += vec3(corner.x, corner.y, select(corner.x, 1.0 - corner.x, face == 7u));
         uv = vec2(corner.x, 1.0 - corner.y);
     } else {
-        p[(axis + 1u) % 3u] += corner.x * extent.x;
-        p[(axis + 2u) % 3u] += corner.y * extent.y;
+        let offset = corner * extent;
+        if axis == 0u { p += vec3(0.0, offset.x, offset.y); }
+        if axis == 1u { p += vec3(offset.y, 0.0, offset.x); }
+        if axis == 2u { p += vec3(offset.x, offset.y, 0.0); }
         uv = vec2(p.x, -p.y);
         if axis == 0u { uv = vec2(p.z, -p.y); }
         if axis == 1u { uv = p.xz; }
