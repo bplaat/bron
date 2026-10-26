@@ -32,7 +32,7 @@ libsqlite3-sys = "0.38"
 cargo-bundle-assets = { path = "../../lib/build/cargo-bundle-assets" }
 bcanvas = { path = "../../lib/graphics/bcanvas", default-features = false }
 bwebgpu = { path = "../../lib/graphics/bwebgpu" }
-bwindow = { path = "../../lib/ui/bwindow", default-features = false }
+bwindow = { path = "../../lib/ui/bwindow", default-features = false, features = ["remember_window_state"] }
 deflate = { path = "../../lib/data/deflate" }
 image = { path = "../../lib/graphics/image", default-features = false, features = ["png"] }
 
