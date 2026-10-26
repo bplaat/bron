@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes" ?>
+<app version="1">
+    <name>Blocks (Rust)</name>
+    <coder>Bastiaan van der Plaat</coder>
+    <version>0.1.0</version>
+    <short_description>Wii Rust example</short_description>
+    <long_description
+    >Generates a random 64x64x64 voxel world and renders its visible block faces with GX display lists.</long_description>
+</app>

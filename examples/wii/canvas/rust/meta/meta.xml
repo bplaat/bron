@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes" ?>
+<app version="1">
+    <name>Canvas (Rust)</name>
+    <coder>Bastiaan van der Plaat</coder>
+    <version>0.1.0</version>
+    <short_description>Wii Rust example</short_description>
+    <long_description>2D rendering with PNG textures, bitmap font text and Wii Remote cursors.</long_description>
+</app>
