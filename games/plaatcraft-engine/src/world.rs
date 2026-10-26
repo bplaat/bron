@@ -990,39 +990,46 @@ impl ChunkData {
     }
 
     fn bake_light(&mut self, coord: Coord, edits: &[Edit], bases: &BTreeMap<Coord, Self>) {
-        // A 16-block margin covers the entire 15-level propagation radius, including
-        // the mesh halo. No neighbor loading or later remeshing is necessary.
-        const WIDTH: usize = CHUNK_SIZE * 3;
+        // Light loses a level per block, so only blocks within 14 of the mesh halo can
+        // reach it. No neighbor loading or later remeshing is necessary.
+        const MARGIN: usize = CHUNK_SIZE - 1;
+        const WIDTH: usize = CHUNK_SIZE + 2 * MARGIN;
+        let neighbor = |index: usize| {
+            (
+                coord.0 + index as i64 % 3 - 1,
+                coord.1 + index as i64 / 3 - 1,
+            )
+        };
+        let generated: [Option<Self>; 9] = core::array::from_fn(|index| {
+            let neighbor = neighbor(index);
+            (neighbor != coord && !bases.contains_key(&neighbor))
+                .then(|| Self::generate_unlit(neighbor, true))
+        });
+        let sources: [&Self; 9] = core::array::from_fn(|index| {
+            if index == 4 {
+                &*self
+            } else {
+                bases
+                    .get(&neighbor(index))
+                    .or(generated[index].as_ref())
+                    .expect("Neighbor base or generated chunk")
+            }
+        });
         let mut blocks = vec![0; WIDTH * WIDTH * HEIGHT];
-        for dz in -1..=1 {
-            for dx in -1..=1 {
-                let neighbor = (coord.0 + dx, coord.1 + dz);
-                let generated;
-                let source = if dx == 0 && dz == 0 {
-                    &*self
-                } else if let Some(base) = bases.get(&neighbor) {
-                    base
-                } else {
-                    generated = Self::generate_unlit(neighbor, true);
-                    &generated
-                };
-                for z in 0..CHUNK_SIZE {
-                    for x in 0..CHUNK_SIZE {
-                        let from = ((z + 1) * PADDED_SIZE + x + 1) * HEIGHT;
-                        let to = (((dz + 1) as usize * CHUNK_SIZE + z) * WIDTH
-                            + (dx + 1) as usize * CHUNK_SIZE
-                            + x)
-                            * HEIGHT;
-                        blocks[to..to + HEIGHT]
-                            .copy_from_slice(&source.blocks[from..from + HEIGHT]);
-                    }
-                }
+        for z in 0..WIDTH {
+            for x in 0..WIDTH {
+                // The position in the three by three chunks around this one
+                let [wx, wz] = [x, z].map(|v| v + CHUNK_SIZE - MARGIN);
+                let source = sources[wz / CHUNK_SIZE * 3 + wx / CHUNK_SIZE];
+                let from = ((wz % CHUNK_SIZE + 1) * PADDED_SIZE + wx % CHUNK_SIZE + 1) * HEIGHT;
+                let to = (z * WIDTH + x) * HEIGHT;
+                blocks[to..to + HEIGHT].copy_from_slice(&source.blocks[from..from + HEIGHT]);
             }
         }
         // The bases are unedited, so the edits go on the copy. Plants let light through.
         let corner = (
-            (coord.0 - 1) * CHUNK_SIZE as i64,
-            (coord.1 - 1) * CHUNK_SIZE as i64,
+            coord.0 * CHUNK_SIZE as i64 - MARGIN as i64,
+            coord.1 * CHUNK_SIZE as i64 - MARGIN as i64,
         );
         for edit in edits {
             let [x, y, z] = edit.position;
@@ -1053,7 +1060,7 @@ impl ChunkData {
         self.light.resize(self.blocks.len(), 0);
         for z in 0..PADDED_SIZE {
             for x in 0..PADDED_SIZE {
-                let from = ((z + CHUNK_SIZE - 1) * WIDTH + x + CHUNK_SIZE - 1) * HEIGHT;
+                let from = ((z + MARGIN - 1) * WIDTH + x + MARGIN - 1) * HEIGHT;
                 let to = (z * PADDED_SIZE + x) * HEIGHT;
                 self.light[to..to + HEIGHT].copy_from_slice(&light[from..from + HEIGHT]);
             }
