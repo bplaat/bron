@@ -48,6 +48,9 @@ const LOOK_SPEED: f32 = 2.6;
 const REPEAT_DELAY: f32 = 0.3;
 const REPEAT_INTERVAL: f32 = 0.2;
 const NAME_DURATION: f32 = 2.0;
+
+// Double tapping jump within this time toggles flying, like in Minecraft
+const DOUBLE_TAP: f32 = 0.3;
 const NIGHT_DAYLIGHT: f32 = 0.035;
 const MENU: [&str; 3] = ["Play", "Night", "Exit"];
 
@@ -96,6 +99,7 @@ struct Game {
     sounds: Sounds,
     breaking: Repeat,
     placing: Repeat,
+    last_jump: Option<f32>,
     name_shown: Option<(u8, f32)>,
     // The time base counts from 2000, which an f32 can't hold precisely, so time starts here
     started: u64,
@@ -121,7 +125,10 @@ impl Game {
             renderer,
             textures: Textures::load(),
             stream: Stream::start(),
-            camera: Camera::default(),
+            camera: Camera {
+                auto_jump: true,
+                ..Camera::default()
+            },
             hotbar: Hotbar::default(),
             target: None,
             night: false,
@@ -132,6 +139,7 @@ impl Game {
             sounds: Sounds::new(),
             breaking: Repeat::default(),
             placing: Repeat::default(),
+            last_jump: None,
             name_shown: None,
             started: unsafe { gettime() },
             last_frame: 0.0,
@@ -151,7 +159,7 @@ impl Game {
             let dt = now - self.last_frame;
             self.last_frame = now;
             self.controller = Controller::read();
-            if self.controller.pressed(Button::Home) {
+            if self.controller.pressed(Button::Home) || self.controller.pressed(Button::Plus) {
                 self.paused = !self.paused;
                 self.focus = 0;
             }
@@ -205,27 +213,36 @@ impl Game {
                 _ => self.exit = true,
             }
         }
+        if self.controller.pressed(Button::B) {
+            self.paused = false;
+        }
     }
 
     fn play(&mut self, dt: f32, now: f32) {
         let controller = &self.controller;
-        if let Some([x, y]) = controller.stick {
-            // A curve keeps small stick movements precise
-            let turn = |value: f32| value * value.abs() * LOOK_SPEED * dt / 0.002;
-            self.camera.look(f64::from(turn(x)), f64::from(-turn(y)));
-        }
-        if controller.pressed(Button::One) {
-            self.camera.set_flying(!self.camera.flying);
-            self.sounds.fly(self.camera.flying);
+        // A curve keeps small stick movements precise, the D-pad looks at full speed
+        let turn = |value: f32| value * value.abs() * LOOK_SPEED * dt / 0.002;
+        let yaw = controller.stick.map_or(0.0, |[x, _]| turn(x));
+        let pitch = f32::from(u8::from(controller.held(Button::Up)))
+            - f32::from(u8::from(controller.held(Button::Down)));
+        self.camera.look(f64::from(yaw), f64::from(-turn(pitch)));
+        if controller.pressed(Button::C) {
+            if self.last_jump.is_some_and(|last| now - last < DOUBLE_TAP) {
+                self.camera.set_flying(!self.camera.flying);
+                self.sounds.fly(self.camera.flying);
+                self.last_jump = None;
+            } else {
+                self.last_jump = Some(now);
+            }
         }
         if controller.pressed(Button::Two) {
             self.night = !self.night;
         }
         let mut hotbar = self.hotbar;
-        if controller.pressed(Button::Plus) {
+        if controller.pressed(Button::Right) {
             hotbar.cycle(-1);
         }
-        if controller.pressed(Button::Minus) {
+        if controller.pressed(Button::Left) {
             hotbar.cycle(1);
         }
         if hotbar != self.hotbar {
@@ -257,10 +274,10 @@ impl Game {
         self.sounds.movement(before, &self.camera, ground);
 
         self.aim();
-        if self.breaking.update(&self.controller, Button::Z, now) {
+        if self.breaking.update(&self.controller, Button::B, now) {
             self.edit(false);
         }
-        if self.placing.update(&self.controller, Button::C, now) {
+        if self.placing.update(&self.controller, Button::A, now) {
             self.edit(true);
         }
     }
@@ -352,7 +369,7 @@ impl Game {
                 );
             }
             let help = if self.controller.stick.is_some() {
-                "D-pad move - Stick look - A up - B down - Z break - C place"
+                "Stick walk and turn - D-pad look and block - A place - B break"
             } else {
                 "Connect a Nunchuk to look around and build"
             };
@@ -362,7 +379,7 @@ impl Game {
                 hud.height - 70.0,
                 15.0,
             );
-            let help = "+/- block - 1 fly - 2 night - Home menu";
+            let help = "C jump, double tap fly - Z sneak - 2 night - + menu";
             hud.label(
                 help,
                 (hud.width - Hud::text_width(help, 15.0)) / 2.0,

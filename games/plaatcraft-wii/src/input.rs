@@ -4,10 +4,11 @@
  * SPDX-License-Identifier: MIT
  */
 
-//! The Wii Remote with Nunchuk controls, like the original PlaatCraft Wii port: the D-pad
-//! moves, the Nunchuk stick looks around, A goes up and B goes down. Z and C break and
-//! place blocks, + and - select a hotbar slot, 1 flies, 2 toggles the night and Home opens
-//! the menu, where the pointer or the D-pad with A choose a button.
+//! The Wii Remote with Nunchuk controls, after the console editions of Minecraft: the
+//! Nunchuk stick walks and turns, D-pad up and down look up and down and D-pad left and
+//! right select a hotbar slot. A places and B breaks blocks, C jumps and double tapping it
+//! flies, Z sneaks, 2 toggles the night and + or Home open the menu, where the pointer or
+//! the D-pad with A choose a button and B goes back.
 
 use core::mem::MaybeUninit;
 
@@ -25,8 +26,6 @@ pub enum Button {
     A,
     B,
     Plus,
-    Minus,
-    One,
     Two,
     Home,
     Z,
@@ -43,8 +42,6 @@ impl Button {
             Self::A => WPAD_BUTTON_A,
             Self::B => WPAD_BUTTON_B,
             Self::Plus => WPAD_BUTTON_PLUS,
-            Self::Minus => WPAD_BUTTON_MINUS,
-            Self::One => WPAD_BUTTON_1,
             Self::Two => WPAD_BUTTON_2,
             Self::Home => WPAD_BUTTON_HOME,
             Self::Z => WPAD_NUNCHUK_BUTTON_Z,
@@ -90,19 +87,13 @@ impl Controller {
         self.pressed & button.mask() != 0
     }
 
-    /// The movement for the player, the stick turns the view instead.
+    /// The movement for the player, the stick walks forward and back and turns sideways.
     pub fn input(&self) -> Input {
-        let axis = |positive, negative| {
-            f32::from(u8::from(self.held(positive))) - f32::from(u8::from(self.held(negative)))
-        };
         Input {
-            direction: [
-                axis(Button::Right, Button::Left),
-                axis(Button::Up, Button::Down),
-            ],
-            stick: [0.0; 2],
-            jump: self.held(Button::A),
-            sneak: self.held(Button::B),
+            direction: [0.0; 2],
+            stick: [0.0, self.stick.map_or(0.0, |[_, y]| y)],
+            jump: self.held(Button::C),
+            sneak: self.held(Button::Z),
             fast: false,
         }
     }
