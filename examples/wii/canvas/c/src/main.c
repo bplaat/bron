@@ -67,9 +67,7 @@ int main(void) {
     GX_SetFieldMode(screenmode->field_rendering,
                     screenmode->viHeight == 2 * screenmode->xfbHeight ? GX_ENABLE : GX_DISABLE);
     GX_SetPixelFmt(screenmode->aa ? GX_PF_RGB565_Z16 : GX_PF_RGB8_Z24, GX_ZC_LINEAR);
-    GX_SetDispCopyGamma(GX_GM_1_0);
     GX_SetCopyClear(CLEAR_COLOR, GX_MAX_Z24);
-    GX_SetZMode(GX_ENABLE, GX_ALWAYS, GX_TRUE);
     GX_CopyDisp(framebuffers[framebuffer], GX_TRUE);
     uint32_t screen_height = screenmode->viHeight;
     uint32_t screen_width = (uint32_t)(screen_height * aspect);
@@ -89,7 +87,6 @@ int main(void) {
     GXTexObj stone_coal_texture;
     if (!texture_load_png_rgba8(&stone_coal_texture, stone_coal_png, sizeof(stone_coal_png)))
         return 1;
-    GX_InvalidateTexAll();
 
     // Game state
     float rotation = 0;
@@ -102,8 +99,7 @@ int main(void) {
         rotation += 1;
 
         // Read buttons
-        cursor_update();
-        if (cursors[0].buttons_down & WPAD_BUTTON_HOME)
+        if (cursor_update() & WPAD_BUTTON_HOME)
             break;
 
         // ### Draw cube ###

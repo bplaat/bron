@@ -74,9 +74,7 @@ int main(void) {
     GX_SetFieldMode(screenmode->field_rendering,
                     screenmode->viHeight == 2 * screenmode->xfbHeight ? GX_ENABLE : GX_DISABLE);
     GX_SetPixelFmt(screenmode->aa ? GX_PF_RGB565_Z16 : GX_PF_RGB8_Z24, GX_ZC_LINEAR);
-    GX_SetDispCopyGamma(GX_GM_1_0);
     GX_SetCopyClear(CLEAR_COLOR, GX_MAX_Z24);
-    GX_SetZMode(GX_ENABLE, GX_ALWAYS, GX_TRUE);
     GX_CopyDisp(framebuffers[framebuffer], GX_TRUE);
 
     WPAD_Init();
@@ -105,7 +103,6 @@ int main(void) {
         if (home_pressed())
             break;
         rotation += 1.0f;
-        GX_SetZMode(GX_ENABLE, GX_LEQUAL, GX_TRUE);
 
         for (int32_t y = -2; y < 2; y++) {
             for (int32_t x = -2; x < 2; x++) {
@@ -121,8 +118,6 @@ int main(void) {
         }
         GX_DrawDone();
         framebuffer ^= 1;
-        // GX_CopyDisp clears depth only when Z writes are enabled.
-        GX_SetZMode(GX_ENABLE, GX_LEQUAL, GX_TRUE);
         GX_CopyDisp(framebuffers[framebuffer], GX_TRUE);
         VIDEO_SetNextFramebuffer(framebuffers[framebuffer]);
         if (first_frame) {

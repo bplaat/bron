@@ -208,7 +208,6 @@ pub unsafe fn draw_cube(texture: &Texture, rotation: f32, projection: &Mtx44) {
                 gx_texcoord(uv[0], uv[1]);
             }
         }
-        GX_Flush();
     }
 }
 #[inline]
