@@ -12,6 +12,11 @@ use crate::world::{CHUNK_SIZE, Coord, HEIGHT};
 
 const SWIM_SPEED: f64 = 3.5;
 const SINK_SPEED: f64 = 2.0;
+// The player's box around the eye.
+const LOWER: [f64; 3] = [-0.3, -1.7, -0.3];
+const UPPER: [f64; 3] = [0.3, 0.1, 0.3];
+// How far ahead walking looks for a step to jump on.
+const STEP_LOOKAHEAD: f64 = 0.3;
 
 /// The held movement controls, set by the platform before each update.
 #[derive(Clone, Copy, Debug, Default)]
@@ -42,6 +47,8 @@ pub struct Camera {
     pub in_liquid: bool,
     /// Whether the player flies instead of walking, see [`Camera::set_flying`].
     pub flying: bool,
+    /// Whether walking into a one block step jumps on it, like in Minecraft.
+    pub auto_jump: bool,
     /// The vertical speed while walking or swimming.
     pub vertical_velocity: f64,
     /// Whether the player stands on a block.
@@ -79,6 +86,7 @@ impl Default for Camera {
             input: Input::default(),
             in_liquid: false,
             flying: false,
+            auto_jump: false,
             vertical_velocity: 0.0,
             grounded: false,
         }
@@ -162,7 +170,8 @@ impl Camera {
             return;
         }
         self.grounded = self.supported(&mut solid);
-        if space && self.grounded && !self.in_liquid {
+        let climb = self.auto_jump && !shift && self.facing_step(velocity, &mut solid);
+        if (space || climb) && self.grounded && !self.in_liquid {
             self.vertical_velocity = 8.0;
             self.grounded = false;
         }
@@ -186,6 +195,29 @@ impl Camera {
         self.grounded = self.supported(&mut solid);
     }
 
+    // Whether the box shifted by `offset` overlaps a solid block.
+    fn overlaps(&self, offset: [f64; 3], solid: &mut impl FnMut([i64; 3]) -> bool) -> bool {
+        let position: [f64; 3] = core::array::from_fn(|a| self.position[a] + offset[a]);
+        let min: [i64; 3] =
+            core::array::from_fn(|a| (position[a] + LOWER[a] + 1e-7).floor() as i64);
+        let max: [i64; 3] =
+            core::array::from_fn(|a| (position[a] + UPPER[a] - 1e-7).floor() as i64);
+        (min[2]..=max[2])
+            .any(|z| (min[1]..=max[1]).any(|y| (min[0]..=max[0]).any(|x| solid([x, y, z]))))
+    }
+
+    // Whether walking along `velocity` runs into a one block step with room to jump on it.
+    fn facing_step(&self, velocity: [f64; 3], solid: &mut impl FnMut([i64; 3]) -> bool) -> bool {
+        let length = velocity[0].hypot(velocity[2]);
+        if length < 1e-3 {
+            return false;
+        }
+        let [dx, dz] = [velocity[0], velocity[2]].map(|v| v / length * STEP_LOOKAHEAD);
+        self.overlaps([dx, 0.0, dz], solid)
+            && !self.overlaps([0.0, 1.0, 0.0], solid)
+            && !self.overlaps([dx, 1.0, dz], solid)
+    }
+
     fn move_by(
         &mut self,
         movement: [f64; 3],
@@ -195,8 +227,6 @@ impl Camera {
         let steps = (movement.iter().fold(0.0f64, |a, b| a.max(b.abs())) / 0.25)
             .ceil()
             .max(1.0) as usize;
-        let lower = [-0.3, -1.7, -0.3];
-        let upper = [0.3, 0.1, 0.3];
         for _ in 0..steps {
             for axis in [0, 2, 1] {
                 let delta = movement[axis] / steps as f64;
@@ -206,18 +236,18 @@ impl Camera {
                 let mut next = self.position;
                 next[axis] += delta;
                 let min: [i64; 3] =
-                    core::array::from_fn(|a| (next[a] + lower[a] + 1e-7).floor() as i64);
+                    core::array::from_fn(|a| (next[a] + LOWER[a] + 1e-7).floor() as i64);
                 let max: [i64; 3] =
-                    core::array::from_fn(|a| (next[a] + upper[a] - 1e-7).floor() as i64);
+                    core::array::from_fn(|a| (next[a] + UPPER[a] - 1e-7).floor() as i64);
                 for z in min[2]..=max[2] {
                     for y in min[1]..=max[1] {
                         for x in min[0]..=max[0] {
                             let block = [x, y, z];
                             if solid(block) {
                                 next[axis] = if delta > 0.0 {
-                                    next[axis].min(block[axis] as f64 - upper[axis])
+                                    next[axis].min(block[axis] as f64 - UPPER[axis])
                                 } else {
-                                    next[axis].max((block[axis] + 1) as f64 - lower[axis])
+                                    next[axis].max((block[axis] + 1) as f64 - LOWER[axis])
                                 };
                             }
                         }
@@ -440,6 +470,37 @@ mod tests {
         }
         assert!(camera.position[0] > 8.3);
         assert!(camera.position[1] >= 6.7 - 1e-7);
+    }
+
+    #[test]
+    fn auto_jump_climbs_one_block_steps_but_not_walls_or_while_sneaking() {
+        let walk = |auto_jump, sneak, solid: fn([i64; 3]) -> bool| {
+            let mut camera = Camera {
+                position: [0.5, 2.7, 0.5],
+                yaw: core::f32::consts::FRAC_PI_2,
+                auto_jump,
+                ..Camera::default()
+            };
+            camera.input.direction = [0.0, 1.0];
+            camera.input.sneak = sneak;
+            for _ in 0..120 {
+                camera.update(1.0 / 60.0, solid);
+            }
+            camera.position
+        };
+        let step: fn([i64; 3]) -> bool = |p| p[1] < 1 || p[0] >= 3 && p[1] < 2;
+        let wall: fn([i64; 3]) -> bool = |p| p[1] < 1 || p[0] >= 3 && p[1] < 3;
+        let climbed = walk(true, false, step);
+        assert!(climbed[0] > 4.0);
+        assert!((climbed[1] - 3.7).abs() < 0.0001);
+        for position in [
+            walk(false, false, step),
+            walk(true, true, step),
+            walk(true, false, wall),
+        ] {
+            assert!(position[0] < 2.71);
+            assert!((position[1] - 2.7).abs() < 0.0001);
+        }
     }
 
     #[test]
