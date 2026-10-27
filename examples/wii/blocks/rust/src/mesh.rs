@@ -63,6 +63,9 @@ impl Mesh {
 
     pub fn draw(&self, textures: &Materials) {
         unsafe {
+            // Faces wind counter-clockwise seen from outside, GX's front faces wind clockwise,
+            // so culling those skips the faces seen from behind
+            GX_SetCullMode(GX_CULL_FRONT);
             GX_SetZMode(GX_ENABLE, GX_LEQUAL, GX_TRUE);
             GX_SetBlendMode(GX_BM_NONE, GX_BL_ONE, GX_BL_ZERO, GX_LO_CLEAR);
             for material in Material::ALL.into_iter().filter(|&m| m != Material::Water) {
@@ -74,6 +77,7 @@ impl Mesh {
             }
 
             if let Some(list) = &self.lists[Material::Water.index()] {
+                GX_SetCullMode(GX_CULL_NONE);
                 GX_SetZMode(GX_ENABLE, GX_LEQUAL, GX_FALSE);
                 GX_SetBlendMode(GX_BM_BLEND, GX_BL_SRCALPHA, GX_BL_INVSRCALPHA, GX_LO_CLEAR);
                 GX_LoadTexObj(textures.get(Material::Water), GX_TEXMAP0 as u8);

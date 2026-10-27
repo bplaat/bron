@@ -86,10 +86,12 @@ static void mesh_configure_pipeline(void) {
     GX_SetTexCoordGen(GX_TEXCOORD0, GX_TG_MTX2x4, GX_TG_TEX0, GX_IDENTITY);
     GX_SetTevOrder(GX_TEVSTAGE0, GX_TEXCOORD0, GX_TEXMAP0, GX_COLOR0A0);
     GX_SetTevOp(GX_TEVSTAGE0, GX_MODULATE);
-    GX_SetCullMode(GX_CULL_NONE);
 }
 
 static void mesh_draw(const Mesh* mesh, GXTexObj textures[MaterialLayerCount]) {
+    // Faces wind counter-clockwise seen from outside, GX's front faces wind clockwise,
+    // so culling those skips the faces seen from behind
+    GX_SetCullMode(GX_CULL_FRONT);
     GX_SetZMode(GX_ENABLE, GX_LEQUAL, GX_TRUE);
     GX_SetBlendMode(GX_BM_NONE, GX_BL_ONE, GX_BL_ZERO, GX_LO_CLEAR);
     for (int material = 0; material < MaterialLayerCount; material++) {
@@ -99,6 +101,7 @@ static void mesh_draw(const Mesh* mesh, GXTexObj textures[MaterialLayerCount]) {
         GX_CallDispList(mesh->lists[material], mesh->list_sizes[material]);
     }
     if (mesh->list_sizes[MaterialLayerWater]) {
+        GX_SetCullMode(GX_CULL_NONE);
         GX_SetZMode(GX_ENABLE, GX_LEQUAL, GX_FALSE);
         GX_SetBlendMode(GX_BM_BLEND, GX_BL_SRCALPHA, GX_BL_INVSRCALPHA, GX_LO_CLEAR);
         GX_LoadTexObj(&textures[MaterialLayerWater], GX_TEXMAP0);
