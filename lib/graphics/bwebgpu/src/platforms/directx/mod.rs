@@ -186,7 +186,6 @@ pub(crate) struct Context {
     fence: Com,
     event: Event,
     root: Com,
-    sampler_indices: Com,
     frames: RefCell<Vec<Frame>>,
     slot: Cell<usize>,
     serial: Cell<u64>,
@@ -250,17 +249,6 @@ impl Context {
                 let event = Event(event);
                 let root = Self::root_signature(&device)
                     .map_err(|error| Error(format!("D3D12 root signature: {error}")))?;
-                let sampler_indices = Self::resource(&device, &Self::buffer_desc(4), true)?;
-                let mut data = ptr::null_mut();
-                check(Resource_Map(
-                    sampler_indices.0,
-                    0,
-                    &D3D12_RANGE::default(),
-                    &mut data,
-                ))?;
-                // Each draw binds one sampler, so its shader index is always zero.
-                data.cast::<u32>().write(0);
-                Resource_Unmap(sampler_indices.0, 0, ptr::null());
                 let context = Rc::new(Self {
                     device,
                     queue,
@@ -269,7 +257,6 @@ impl Context {
                     fence,
                     event,
                     root,
-                    sampler_indices,
                     frames: RefCell::new(Vec::new()),
                     slot: Cell::new(0),
                     serial: Cell::new(0),
@@ -397,16 +384,6 @@ impl Context {
                         DescriptorTable: D3D12_ROOT_DESCRIPTOR_TABLE {
                             NumDescriptorRanges: 1,
                             pDescriptorRanges: &sampler,
-                        },
-                    },
-                    ShaderVisibility: 5,
-                },
-                D3D12_ROOT_PARAMETER {
-                    ParameterType: 3,
-                    Anonymous: D3D12_ROOT_PARAMETER_0 {
-                        Descriptor: D3D12_ROOT_DESCRIPTOR {
-                            ShaderRegister: 4,
-                            RegisterSpace: 0,
                         },
                     },
                     ShaderVisibility: 5,
@@ -1049,11 +1026,6 @@ impl Context {
                         3,
                         frame.samplers.gpu(0),
                     );
-                    GraphicsCommandList_SetGraphicsRootShaderResourceView(
-                        list.0,
-                        4,
-                        Resource_GetGPUVirtualAddress(self.sampler_indices.0),
-                    );
                     if let Some(group) = &draw.group {
                         // A texture may have been rendered to by an earlier pass in this
                         // submission. Descriptor reuse does not imply that its resource
@@ -1134,11 +1106,6 @@ impl Context {
                             3,
                             frame.samplers.gpu(descriptor_index),
                         );
-                        GraphicsCommandList_SetGraphicsRootShaderResourceView(
-                            list.0,
-                            4,
-                            Resource_GetGPUVirtualAddress(self.sampler_indices.0),
-                        );
                         for (binding, resource) in group.entries.iter() {
                             if let Resource::Buffer(buffer) = resource {
                                 let address =
@@ -1193,7 +1160,7 @@ impl Context {
                     let offsets = [first_vertex, draw.instances.start, 0];
                     GraphicsCommandList_SetGraphicsRoot32BitConstants(
                         list.0,
-                        5,
+                        4,
                         3,
                         offsets.as_ptr().cast(),
                         0,
