@@ -52,6 +52,7 @@ pub(crate) enum Action {
     Distance,
     Volume,
     Stats,
+    AutoJump,
     Reset,
     Back,
 }
@@ -68,7 +69,7 @@ pub(crate) struct Layout {
 impl Layout {
     pub(crate) fn new(size: LogicalSize, safe: LogicalInsets, controls: bool, page: Page) -> Self {
         let height = if page == Page::Settings {
-            400.0
+            450.0
         } else {
             MAIN_BUTTONS_BOTTOM
                 + if controls {
@@ -122,8 +123,9 @@ impl Layout {
                 (Action::Distance, 80.0),
                 (Action::Volume, 160.0),
                 (Action::Stats, 240.0),
-                (Action::Reset, 290.0),
-                (Action::Back, 340.0),
+                (Action::AutoJump, 290.0),
+                (Action::Reset, 340.0),
+                (Action::Back, 390.0),
             ]
         }
     }
@@ -168,7 +170,7 @@ impl Menu {
                 layout.page as u32,
                 hovered.map_or(0, |action| action as u32 + 1),
                 u32::from(settings.distance) | u32::from(settings.volume) << 8,
-                u32::from(settings.show_stats),
+                u32::from(settings.show_stats) | u32::from(settings.auto_jump) << 1,
             ],
             (CONTENT_WIDTH, layout.height),
             |ctx| draw_content(ctx, layout, hovered, settings),
@@ -265,6 +267,13 @@ fn draw_content(
                     "Show Debug Info: ON"
                 } else {
                     "Show Debug Info: OFF"
+                }
+            }
+            Action::AutoJump => {
+                if settings.auto_jump {
+                    "Auto Jump: ON"
+                } else {
+                    "Auto Jump: OFF"
                 }
             }
             Action::Reset => "Reset to Defaults",

@@ -53,6 +53,8 @@ executables and multi-ABI Android APKs share one texture collection.
 | F / N               | Toggle flying and day/night             |
 | Escape              | Pause and return to the menu            |
 
+Walking into a one block step jumps on it, auto jump can be turned off in the settings.
+
 On touch screens, drag on the left side to move and on the right side to look
 around, tap to place a block and hold to break one, like Minecraft Pocket Edition.
 The on-screen buttons do the other actions.

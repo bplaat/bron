@@ -480,6 +480,7 @@ impl Game {
                 self.menu_drag(position);
             }
             Some(Action::Stats) => self.settings.show_stats = !self.settings.show_stats,
+            Some(Action::AutoJump) => self.settings.auto_jump = !self.settings.auto_jump,
             Some(Action::Reset) => self.settings = settings::Settings::default(),
             None => {}
         }
@@ -1060,6 +1061,7 @@ impl Game {
         if self.playing() {
             let before = sound::Movement::of(&self.camera);
             self.camera.input = self.input();
+            self.camera.auto_jump = self.settings.auto_jump;
             // The feet or waist in water or lava make the player swim.
             let [x, y, z] = self.camera.position;
             self.camera.in_liquid = [0.2, 0.9].into_iter().any(|offset| {
