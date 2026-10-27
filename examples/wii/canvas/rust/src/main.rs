@@ -31,7 +31,8 @@ const CLEAR_COLOR: GXColor = GXColor {
     b: 128,
     a: 255,
 };
-static RUNNING: AtomicBool = AtomicBool::new(true);
+// The power button of the Wii and of the Wii Remotes, libogc calls it from an interrupt
+static POWER_PRESSED: AtomicBool = AtomicBool::new(false);
 
 struct FrameState {
     buffers: [Framebuffer; 2],
@@ -244,14 +245,8 @@ impl CanvasScene {
     }
 }
 
-extern "C" fn poweroff() {
-    RUNNING.store(false, Ordering::Relaxed);
-}
-
-extern "C" fn wpad_poweroff(channel: c_int) {
-    if channel == WPAD_CHAN_ALL {
-        RUNNING.store(false, Ordering::Relaxed);
-    }
+extern "C" fn power() {
+    POWER_PRESSED.store(true, Ordering::Relaxed);
 }
 
 #[unsafe(export_name = "main")]
@@ -325,15 +320,13 @@ pub extern "C" fn app_main() -> c_int {
         );
         GX_SetDispCopyGamma(GX_GM_1_0);
         GX_SetCopyClear(CLEAR_COLOR, GX_MAX_Z24);
-
-        WPAD_Init();
-        SYS_SetPowerCallback(Some(poweroff));
-        WPAD_SetPowerButtonCallback(Some(wpad_poweroff));
         GX_SetZMode(GX_ENABLE, GX_ALWAYS, GX_TRUE);
         GX_CopyDisp(display.scanout(), GX_TRUE);
 
         let screen_height = mode_ref.vi_height as u32;
         let screen_width = (screen_height as f32 * aspect) as u32;
+        WPAD_Init();
+        SYS_SetPowerCallback(Some(power));
         WPAD_SetDataFormat(WPAD_CHAN_ALL, WPAD_FMT_BTNS_ACC_IR);
         WPAD_SetVRes(0, screen_width, screen_height);
 
@@ -341,20 +334,24 @@ pub extern "C" fn app_main() -> c_int {
         else {
             return 1;
         };
-        while RUNNING.load(Ordering::Relaxed) {
+        while !POWER_PRESSED.load(Ordering::Relaxed) {
             WPAD_ScanPads();
+            if WPAD_ButtonsDown(0) & WPAD_BUTTON_HOME != 0 {
+                break;
+            }
             let mut ir = core::mem::MaybeUninit::<IrData>::zeroed();
             WPAD_IR(0, ir.as_mut_ptr());
             let ir = ir.assume_init();
-            if WPAD_ButtonsDown(0) & WPAD_BUTTON_HOME != 0 {
-                RUNNING.store(false, Ordering::Relaxed);
-            }
 
             scene.draw(&ir);
 
             display.present();
         }
-        WPAD_Disconnect(WPAD_CHAN_ALL);
+
+        // HOME returns to the loader, a power button turns the Wii off
+        if POWER_PRESSED.load(Ordering::Relaxed) {
+            SYS_ResetSystem(SYS_POWEROFF, 0, 0);
+        }
     }
     0
 }

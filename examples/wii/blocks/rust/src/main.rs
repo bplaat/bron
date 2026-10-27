@@ -31,7 +31,8 @@ const CLEAR_COLOR: GXColor = GXColor {
     b: 158,
     a: 255,
 };
-static RUNNING: AtomicBool = AtomicBool::new(true);
+// The power button of the Wii and of the Wii Remotes, libogc calls it from an interrupt
+static POWER_PRESSED: AtomicBool = AtomicBool::new(false);
 
 struct FrameState {
     buffers: [Framebuffer; 2],
@@ -141,11 +142,10 @@ impl Demo {
             );
             GX_SetDispCopyGamma(GX_GM_1_0);
             GX_SetCopyClear(CLEAR_COLOR, GX_MAX_Z24);
-            WPAD_Init();
-            SYS_SetPowerCallback(Some(poweroff));
-            WPAD_SetPowerButtonCallback(Some(wpad_poweroff));
             GX_SetZMode(GX_ENABLE, GX_ALWAYS, GX_TRUE);
             GX_CopyDisp(display.scanout(), GX_TRUE);
+            WPAD_Init();
+            SYS_SetPowerCallback(Some(power));
 
             let materials = Materials::load();
             configure_pipeline();
@@ -168,7 +168,7 @@ impl Demo {
 
     fn run(&mut self) {
         unsafe {
-            while RUNNING.load(Ordering::Relaxed) {
+            while !POWER_PRESSED.load(Ordering::Relaxed) {
                 WPAD_ScanPads();
                 if WPAD_ButtonsDown(0) & WPAD_BUTTON_HOME != 0 {
                     break;
@@ -198,7 +198,6 @@ impl Demo {
                 self.mesh.draw(&self.materials);
                 self.display.present();
             }
-            WPAD_Disconnect(WPAD_CHAN_ALL);
         }
     }
 }
@@ -230,13 +229,8 @@ fn configure_pipeline() {
     }
 }
 
-extern "C" fn poweroff() {
-    RUNNING.store(false, Ordering::Relaxed);
-}
-extern "C" fn wpad_poweroff(channel: c_int) {
-    if channel == WPAD_CHAN_ALL {
-        RUNNING.store(false, Ordering::Relaxed);
-    }
+extern "C" fn power() {
+    POWER_PRESSED.store(true, Ordering::Relaxed);
 }
 
 #[unsafe(export_name = "main")]
@@ -245,5 +239,9 @@ pub extern "C" fn app_main() -> c_int {
         return 1;
     };
     demo.run();
+    // HOME returns to the loader, a power button turns the Wii off
+    if POWER_PRESSED.load(Ordering::Relaxed) {
+        unsafe { SYS_ResetSystem(SYS_POWEROFF, 0, 0) };
+    }
     0
 }

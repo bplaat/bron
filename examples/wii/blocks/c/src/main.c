@@ -16,15 +16,11 @@
 #define FIFO_SIZE (256 * 1024)
 #define CLEAR_COLOR ((GXColor){46, 84, 158, 255})
 
-static volatile bool running = true;
+// The power button of the Wii and of the Wii Remotes, libogc calls it from an interrupt
+static volatile bool power_pressed = false;
 
-static void poweroff(void) {
-    running = false;
-}
-
-static void wpad_poweroff(int32_t channel) {
-    if (channel == WPAD_CHAN_ALL)
-        running = false;
+static void power(void) {
+    power_pressed = true;
 }
 
 int main(void) {
@@ -67,13 +63,11 @@ int main(void) {
     GX_SetPixelFmt(screenmode->aa ? GX_PF_RGB565_Z16 : GX_PF_RGB8_Z24, GX_ZC_LINEAR);
     GX_SetDispCopyGamma(GX_GM_1_0);
     GX_SetCopyClear(CLEAR_COLOR, GX_MAX_Z24);
-
-    WPAD_Init();
-    SYS_SetPowerCallback(poweroff);
-    WPAD_SetPowerButtonCallback(wpad_poweroff);
-
     GX_SetZMode(GX_ENABLE, GX_ALWAYS, GX_TRUE);
     GX_CopyDisp(framebuffers[framebuffer], GX_TRUE);
+
+    WPAD_Init();
+    SYS_SetPowerCallback(power);
 
     TPLFile tpl;
     GXTexObj textures[MaterialLayerCount];
@@ -92,7 +86,7 @@ int main(void) {
     GX_LoadProjectionMtx(projection, GX_PERSPECTIVE);
     GX_SetFog(GX_FOG_LIN, 120.0f, 300.0f, 1.0f, 500.0f, CLEAR_COLOR);
     uint64_t started = gettime();
-    while (running) {
+    while (!power_pressed) {
         WPAD_ScanPads();
         if (WPAD_ButtonsDown(0) & WPAD_BUTTON_HOME)
             break;
@@ -120,6 +114,9 @@ int main(void) {
         VIDEO_Flush();
         VIDEO_WaitVSync();
     }
-    WPAD_Disconnect(WPAD_CHAN_ALL);
+
+    // HOME returns to the loader, a power button turns the Wii off
+    if (power_pressed)
+        SYS_ResetSystem(SYS_POWEROFF, 0, 0);
     return 0;
 }

@@ -22,15 +22,11 @@ static const uint8_t stone_coal_png[] = {
 #embed "assets/stone_coal.png"
 };
 
-static volatile bool running = true;
+// The power button of the Wii and of the Wii Remotes, libogc calls it from an interrupt
+static volatile bool power_pressed = false;
 
-static void poweroff(void) {
-    running = false;
-}
-
-static void wpad_poweroff(int32_t channel) {
-    if (channel == WPAD_CHAN_ALL)
-        running = false;
+static void power(void) {
+    power_pressed = true;
 }
 
 int main(void) {
@@ -73,16 +69,13 @@ int main(void) {
     GX_SetPixelFmt(screenmode->aa ? GX_PF_RGB565_Z16 : GX_PF_RGB8_Z24, GX_ZC_LINEAR);
     GX_SetDispCopyGamma(GX_GM_1_0);
     GX_SetCopyClear(CLEAR_COLOR, GX_MAX_Z24);
-
-    WPAD_Init();
-    SYS_SetPowerCallback(poweroff);
-    WPAD_SetPowerButtonCallback(wpad_poweroff);
-
     GX_SetZMode(GX_ENABLE, GX_ALWAYS, GX_TRUE);
     GX_CopyDisp(framebuffers[framebuffer], GX_TRUE);
     uint32_t screen_height = screenmode->viHeight;
     uint32_t screen_width = (uint32_t)(screen_height * aspect);
 
+    WPAD_Init();
+    SYS_SetPowerCallback(power);
     WPAD_SetDataFormat(WPAD_CHAN_ALL, WPAD_FMT_BTNS_ACC_IR);
     WPAD_SetVRes(0, screen_width, screen_height);
 
@@ -104,19 +97,14 @@ int main(void) {
     guPerspective(perspective_matrix, 45.0f, aspect, 0.1f, 1000.0f);
 
     // Game loop
-    while (running) {
+    while (!power_pressed) {
         // Update
         rotation += 1;
 
         // Read buttons
         cursor_update();
-        for (int32_t i = 0; i < 4; i++) {
-            Cursor* cursor = &cursors[i];
-            if (cursor->enabled) {
-                if (cursor->buttons_down & WPAD_BUTTON_HOME)
-                    running = false;
-            }
-        }
+        if (cursors[0].buttons_down & WPAD_BUTTON_HOME)
+            break;
 
         // ### Draw cube ###
         {
@@ -247,7 +235,8 @@ int main(void) {
         VIDEO_WaitVSync();
     }
 
-    // Disconnect wpads
-    WPAD_Disconnect(WPAD_CHAN_ALL);
+    // HOME returns to the loader, a power button turns the Wii off
+    if (power_pressed)
+        SYS_ResetSystem(SYS_POWEROFF, 0, 0);
     return 0;
 }

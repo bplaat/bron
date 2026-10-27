@@ -18,6 +18,7 @@ pub const SYS_BASE_CACHED: u32 = 0x8000_0000;
 pub const SYS_BASE_UNCACHED: u32 = 0xc000_0000;
 pub const VI_NON_INTERLACE: u32 = 1;
 pub const CONF_ASPECT_16_9: i32 = 1;
+pub const SYS_POWEROFF: i32 = 4;
 
 #[repr(C)]
 pub struct GXRModeObj {
@@ -49,6 +50,7 @@ unsafe extern "C" {
     pub fn VIDEO_WaitVSync();
     pub fn SYS_AllocateFramebuffer(mode: *const GXRModeObj) -> *mut c_void;
     pub fn SYS_SetPowerCallback(callback: PowerCallback) -> PowerCallback;
+    pub fn SYS_ResetSystem(reset: i32, reset_code: u32, force_menu: i32);
     pub fn CONF_GetAspectRatio() -> c_int;
     pub fn DCFlushRange(pointer: *mut c_void, size: u32);
     pub fn DCInvalidateRange(pointer: *mut c_void, size: u32);
