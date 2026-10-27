@@ -8,6 +8,7 @@ mod controls;
 mod game;
 mod gpu;
 mod scene;
+mod sound;
 
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
@@ -20,7 +21,7 @@ use preferences::{Preferences, Value};
 
 fn activate(game: &mut Game) {
     match game.state {
-        State::Ready => game.state = State::Playing,
+        State::Ready => game.start(),
         State::Dead => game.restart(),
         State::Paused => game.toggle_pause(),
         State::Playing => game.move_by(0, 1),
@@ -28,17 +29,25 @@ fn activate(game: &mut Game) {
     }
 }
 
+/// Whether the position is on the top bar button that ends `right` units from the edge
+fn on_button(position: LogicalPoint, size: LogicalSize, top: f32, right: f32) -> bool {
+    let unit = (size.width / 400.0).clamp(0.75, 1.5);
+    position.x >= size.width - (right + 32.0) * unit
+        && position.x <= size.width - right * unit
+        && position.y >= top + 12.0 * unit
+        && position.y <= top + 62.0 * unit
+}
+
 fn press(game: &mut Game, position: LogicalPoint, size: LogicalSize, top: f32) {
+    if on_button(position, size, top, 12.0) {
+        game.muted = !game.muted;
+        return;
+    }
     if game.state != State::Playing {
         activate(game);
         return;
     }
-    let unit = (size.width / 400.0).clamp(0.75, 1.5);
-    if position.x >= size.width - 44.0 * unit
-        && position.x <= size.width - 12.0 * unit
-        && position.y >= top + 12.0 * unit
-        && position.y <= top + 62.0 * unit
-    {
+    if on_button(position, size, top, 50.0) {
         game.toggle_pause();
         return;
     }
@@ -81,6 +90,10 @@ fn main() {
         .unwrap_or_default()
         .as_nanos() as u32;
     let mut game = Game::new(best, seed);
+    game.muted = matches!(prefs.get("muted"), Ok(Some(Value::Bool(true))));
+    let mut saved_muted = game.muted;
+    let mut sounds = sound::Sounds::new();
+    sounds.set_muted(game.muted);
     let mut saved_best = best;
     let mut previous = Instant::now();
     let mut mobile = cfg!(any(target_os = "ios", target_os = "android"));
@@ -94,6 +107,16 @@ fn main() {
                 let now = Instant::now();
                 game.update((now - previous).as_secs_f32());
                 previous = now;
+                if saved_muted != game.muted {
+                    sounds.set_muted(game.muted);
+                    match prefs.set("muted", game.muted) {
+                        Ok(()) => saved_muted = game.muted,
+                        Err(error) => eprintln!("Save mute setting: {error}"),
+                    }
+                }
+                for cue in game.cues.drain(..) {
+                    sounds.play(cue);
+                }
                 if saved_best != game.best {
                     match prefs.set("best_score", i64::from(game.best)) {
                         Ok(()) => saved_best = game.best,
@@ -146,6 +169,7 @@ fn main() {
                     match event.code {
                         Some(KeyCode::Space | KeyCode::Enter) => activate(&mut game),
                         Some(KeyCode::KeyP | KeyCode::Escape) => game.toggle_pause(),
+                        Some(KeyCode::KeyM) => game.muted = !game.muted,
                         Some(KeyCode::KeyR) if game.state != State::Dying => game.restart(),
                         Some(key) => {
                             let direction = match key {
@@ -156,9 +180,7 @@ fn main() {
                                 _ => None,
                             };
                             if let Some((dx, dy)) = direction {
-                                if game.state == State::Ready {
-                                    game.state = State::Playing;
-                                }
+                                game.start();
                                 game.move_by(dx, dy);
                             }
                         }

@@ -648,6 +648,18 @@ impl Scene {
         );
     }
 
+    /// A small raised button of the top bar
+    fn button(&mut self, x: f32, y: f32, unit: f32) {
+        self.rect(
+            x + 3.0 * unit,
+            y + 3.0 * unit,
+            32.0 * unit,
+            50.0 * unit,
+            0x547c59,
+        );
+        self.rect(x, y, 32.0 * unit, 50.0 * unit, CREAM);
+    }
+
     fn score_card(&mut self, x: f32, y: f32, width: f32, label: &str, value: i32, unit: f32) {
         let height = 50.0 * unit;
         self.rect(x + 3.0 * unit, y + 3.0 * unit, width, height, 0x547c59);
@@ -701,22 +713,25 @@ impl Scene {
         let y = top + pad;
         self.score_card(pad, y, 72.0 * unit, "HOPS", game.score, unit);
         self.score_card(
-            self.width - pad - 110.0 * unit,
+            self.width - pad - 148.0 * unit,
             y,
             72.0 * unit,
             "BEST",
             game.best,
             unit,
         );
-        let pause_x = self.width - pad - 32.0 * unit;
-        self.rect(
-            pause_x + 3.0 * unit,
-            y + 3.0 * unit,
-            32.0 * unit,
-            50.0 * unit,
-            0x547c59,
+        let pause_x = self.width - pad - 70.0 * unit;
+        self.button(pause_x, y, unit);
+        let mute_x = self.width - pad - 32.0 * unit;
+        self.button(mute_x, y, unit);
+        let speaker = if game.muted { "🔈🔇" } else { "🔈🔉" };
+        self.text(
+            speaker,
+            mute_x + 5.0 * unit,
+            y + 18.0 * unit,
+            2.0 * unit,
+            INK,
         );
-        self.rect(pause_x, y, 32.0 * unit, 50.0 * unit, CREAM);
         if game.state == State::Paused {
             self.text("▶", pause_x + 11.0 * unit, y + 18.0 * unit, 2.0 * unit, INK);
         } else {
@@ -830,6 +845,10 @@ const fn glyph(character: char) -> [u8; 7] {
         '▶' => [16, 24, 28, 30, 28, 24, 16],
         '↑' => [4, 14, 21, 4, 4, 4, 4],
         '↓' => [4, 4, 4, 4, 21, 14, 4],
+        // The speaker icon is a speaker glyph followed by sound waves or a cross
+        '🔈' => [2, 6, 30, 30, 30, 6, 2],
+        '🔉' => [2, 9, 5, 21, 5, 9, 2],
+        '🔇' => [0, 17, 10, 4, 10, 17, 0],
         _ => [0; 7],
     }
 }
