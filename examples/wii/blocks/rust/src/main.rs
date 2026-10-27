@@ -224,7 +224,6 @@ fn configure_pipeline() {
         GX_SetTexCoordGen(GX_TEXCOORD0, GX_TG_MTX2X4, GX_TG_TEX0, GX_IDENTITY);
         GX_SetTevOrder(GX_TEVSTAGE0, GX_TEXCOORD0 as u8, GX_TEXMAP0, GX_COLOR0A0);
         GX_SetTevOp(GX_TEVSTAGE0, GX_MODULATE);
-        GX_SetCullMode(GX_CULL_NONE);
     }
 }
 
