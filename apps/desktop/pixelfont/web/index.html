@@ -101,14 +101,7 @@
                                 <div class="pixel-row-labels">
                                     <div v-for="row in 8" :key="row - 1" class="row-label">{{ row - 1 }}</div>
                                 </div>
-                                <div
-                                    class="pixel-grid"
-                                    ref="pixelGrid"
-                                    @pointerdown.prevent="gridDown($event)"
-                                    @pointermove="gridMove($event)"
-                                    @pointerup="gridUp($event)"
-                                    @pointerleave="gridUp($event)"
-                                >
+                                <div class="pixel-grid" ref="pixelGrid">
                                     <div v-for="row in 8" :key="row - 1" class="pixel-row-cells">
                                         <div
                                             v-for="col in 8"
@@ -135,8 +128,8 @@
                     <!-- Right: copy/paste -->
                     <div class="editor-actions">
                         <canvas ref="previewCanvas" width="40" height="40" class="preview-canvas"></canvas>
-                        <button class="button" @click="copyChar">Copy</button>
-                        <button class="button" @click="pasteChar">Paste</button>
+                        <button class="button" :disabled="!canCopy" @click="copyChar">Copy</button>
+                        <button class="button" :disabled="!canPaste" @click="pasteChar">Paste</button>
                     </div>
                 </div>
             </div>

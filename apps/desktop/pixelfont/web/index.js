@@ -8,6 +8,24 @@ window.addEventListener('contextmenu', (e) => e.preventDefault());
 
 const isMacosBwebview = navigator.userAgent.includes('bwebview') && navigator.userAgent.includes('Macintosh');
 
+// Polyfills
+const mediaQueryListPrototype = Object.getPrototypeOf(window.matchMedia('all'));
+if (!mediaQueryListPrototype.addEventListener) {
+    mediaQueryListPrototype.addEventListener = function (type, listener) {
+        if (type === 'change') this.addListener(listener);
+    };
+}
+
+if (!window.PointerEvent) {
+    for (const type of ['down', 'move', 'up']) {
+        window.addEventListener(`mouse${type}`, (event) => {
+            const pointerEvent = new MouseEvent(`pointer${type}`, event);
+            event.target.dispatchEvent(pointerEvent);
+            if (pointerEvent.defaultPrevented) event.preventDefault();
+        });
+    }
+}
+
 const ACTIONS = {
     new: 'newFile',
     open: 'openFile',
@@ -160,6 +178,7 @@ function renderCharCanvas(canvas, bytes) {
 // Module-level paint state (not reactive)
 let isPainting = false;
 let paintValue = true;
+let paintingPointerId;
 let replacementQueue = Promise.resolve();
 
 PetiteVue.createApp({
@@ -169,6 +188,8 @@ PetiteVue.createApp({
     selectedChar: 0,
     dirty: false,
     closePending: false,
+    canCopy: !!(navigator.clipboard && navigator.clipboard.writeText),
+    canPaste: !!(navigator.clipboard && navigator.clipboard.readText),
 
     get charInfoText() {
         const idx = this.selectedChar;
@@ -190,6 +211,18 @@ PetiteVue.createApp({
             this._renderPreview();
         });
 
+        const grid = this.$refs.pixelGrid;
+        grid.addEventListener('pointerdown', (event) => {
+            if (event.button !== 0) return;
+            event.preventDefault();
+            this.gridDown(event);
+        });
+        window.addEventListener('pointermove', (event) => this.gridMove(event));
+        window.addEventListener('pointerup', (event) => this.gridUp(event));
+        window.addEventListener('blur', () => this.gridUp());
+        grid.addEventListener('pointercancel', (event) => this.gridUp(event));
+        grid.addEventListener('lostpointercapture', (event) => this.gridUp(event));
+
         window.addEventListener('keydown', (e) => {
             // Unmodified arrow keys walk the character grid
             if (e.metaKey || e.ctrlKey || e.altKey) return;
@@ -201,7 +234,8 @@ PetiteVue.createApp({
             if (next !== this.selectedChar) {
                 e.preventDefault();
                 this.selectChar(next);
-                document.querySelector(`.char-canvas[data-char="${next}"]`)?.scrollIntoView({ block: 'nearest' });
+                const canvas = document.querySelector(`.char-canvas[data-char="${next}"]`);
+                if (canvas) canvas.scrollIntoView({ block: 'nearest' });
             }
         });
 
@@ -433,23 +467,31 @@ PetiteVue.createApp({
 
     // Pointer-based painting (robust cross-cell drag)
     gridDown(event) {
+        if (isPainting) return;
         const cell = this._cellFromEvent(event);
         if (!cell) return;
         isPainting = true;
+        paintingPointerId = event.pointerId;
         paintValue = !this.getPixel(cell.row, cell.col);
-        event.currentTarget.setPointerCapture(event.pointerId);
+        if (event.currentTarget.setPointerCapture) event.currentTarget.setPointerCapture(event.pointerId);
         this._setPixel(cell.row, cell.col, paintValue);
     },
 
     gridMove(event) {
-        if (!isPainting) return;
+        if (!isPainting || event.pointerId !== paintingPointerId) return;
+        if ((event.buttons & 1) === 0) {
+            this.gridUp(event);
+            return;
+        }
         const cell = this._cellFromEvent(event);
         if (!cell) return;
         this._setPixel(cell.row, cell.col, paintValue);
     },
 
-    gridUp() {
+    gridUp(event) {
+        if (event && event.pointerId !== paintingPointerId) return;
         isPainting = false;
+        paintingPointerId = undefined;
     },
 
     _cellFromEvent(event) {
@@ -505,6 +547,7 @@ PetiteVue.createApp({
 
     // Copy hex bytes to clipboard
     copyChar() {
+        if (!this.canCopy) return;
         const hex = Array.from(getCharBytes(this.fontData, this.selectedChar))
             .map((b) => '0x' + b.toString(16).toUpperCase().padStart(2, '0'))
             .join(', ');
@@ -513,6 +556,7 @@ PetiteVue.createApp({
 
     // Paste hex bytes from clipboard
     async pasteChar() {
+        if (!this.canPaste) return;
         try {
             const text = await navigator.clipboard.readText();
             const values = text.match(/0x[0-9A-Fa-f]{1,2}|\b[0-9]{1,3}\b/g);
