@@ -11,7 +11,8 @@ you:
   then builds it with meson as the C library, its headers and `libc.a` with the math library go
   to `../../target/wii-toolchain/sysroot/`
 - Clones devkitPro's [gamecube-tools](https://github.com/devkitPro/gamecube-tools) v1.0.7 and
-  builds `elf2dol` (`.elf` to `.dol`)
+  builds `elf2dol` (`.elf` to `.dol`) and `gcdsptool`, which assembles libogc's AESND mixer for
+  the DSP that the audio of `libogc.a` loads
 - Builds our [gxtexconv](gxtexconv) with Cargo to `../../target/wii-toolchain/gxtexconv`
 - Checks out only the builtins of LLVM's [compiler-rt](https://github.com/llvm/llvm-project/tree/main/compiler-rt/lib/builtins)
   llvmorg-23.1.3 and builds the 64-bit integer math and conversions the PowerPC 750 can't do in
