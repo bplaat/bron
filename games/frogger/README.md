@@ -5,6 +5,10 @@ and [bwebgpu](../../lib/graphics/bwebgpu). Hop past cars and trucks, ride logs,
 and watch for trains. Crossings get busier as you advance, and your best score
 is saved between sessions.
 
+Retro sound effects are made with [sfxr](../../lib/audio/sfxr) and mixed by
+[baudio](../../lib/audio/baudio): hops, logs, crossing bells, train horns, and the
+countdown. The speaker button next to pause mutes them.
+
 Window position and size are restored by bwindow; best scores use the native
 preferences store.
 
@@ -21,6 +25,7 @@ cargo run -p frogger
 | Back           | Down / S            | Swipe down                  |
 | Start / retry  | Space / Enter       | Tap                         |
 | Pause / resume | P / Escape          | Tap the pause icon / dialog |
+| Mute / unmute  | M                   | Tap the speaker icon        |
 | Restart        | R                   | Retry after game over       |
 
 Mouse clicks hop forward; mouse drags and trackpad swipes use the same directional

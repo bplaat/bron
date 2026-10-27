@@ -24,9 +24,11 @@ sandbox = true
 [package.metadata.bundle.android]
 
 [dependencies]
+baudio = { path = "../../lib/audio/baudio" }
 bwindow = { path = "../../lib/ui/bwindow" }
 bwebgpu = { path = "../../lib/graphics/bwebgpu" }
 preferences = { path = "../../lib/sys/preferences" }
+sfxr = "0.1.4"
 
 [build-dependencies]
 bwebgpu-shader-build = { path = "../../lib/graphics/bwebgpu-shader-build" }

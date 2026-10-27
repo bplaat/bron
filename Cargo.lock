@@ -486,11 +486,13 @@ dependencies = [
 name = "frogger"
 version = "0.1.0"
 dependencies = [
+ "baudio",
  "bwebgpu",
  "bwebgpu-shader-build",
  "bwindow",
  "image",
  "preferences",
+ "sfxr",
  "winresource",
 ]
 
