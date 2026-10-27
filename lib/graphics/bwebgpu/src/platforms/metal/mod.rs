@@ -379,18 +379,12 @@ impl Context {
                             size,
                             data,
                         } => {
+                            // Metal copies tightly packed rows, unlike D3D12's 256-byte pitch.
                             let row = size.width as usize * 4;
-                            let pitch = (row + 255) & !255;
-                            let image = pitch * size.height as usize;
-                            let mut padded = vec![0u8; image * size.depth_or_array_layers as usize];
-                            for (src, dst) in
-                                data.chunks_exact(row).zip(padded.chunks_exact_mut(pitch))
-                            {
-                                dst[..row].copy_from_slice(src);
-                            }
-                            let source = self.stage(&padded)?;
+                            let image = row * size.height as usize;
+                            let source = self.stage(data)?;
                             for layer in 0..size.depth_or_array_layers {
-                                let _: () = msg_send![&*blit, copyFromBuffer: &*source, sourceOffset: layer as usize * image, sourceBytesPerRow: pitch, sourceBytesPerImage: image, sourceSize: MSize { width: size.width as usize, height: size.height as usize, depth: 1 }, toTexture: &*texture.inner.native.object, destinationSlice: (origin.z + layer) as usize, destinationLevel: *mip as usize, destinationOrigin: MOrigin { x: origin.x as usize, y: origin.y as usize, z: 0 }];
+                                let _: () = msg_send![&*blit, copyFromBuffer: &*source, sourceOffset: layer as usize * image, sourceBytesPerRow: row, sourceBytesPerImage: image, sourceSize: MSize { width: size.width as usize, height: size.height as usize, depth: 1 }, toTexture: &*texture.inner.native.object, destinationSlice: (origin.z + layer) as usize, destinationLevel: *mip as usize, destinationOrigin: MOrigin { x: origin.x as usize, y: origin.y as usize, z: 0 }];
                             }
                             staging.push(source);
                         }
@@ -541,31 +535,69 @@ mod tests {
         )
     }
 
+    /// Read mip level zero of every layer as tightly packed RGBA8 rows.
     fn pixels(device: &Device, texture: &super::super::Texture) -> Vec<u8> {
         autoreleasepool(|_| unsafe {
             let context = &device.shared.native;
             let size = texture.inner.size;
-            let pitch = (size.width as usize * 4).div_ceil(256) * 256;
-            let length = pitch * size.height as usize;
+            let pitch = size.width as usize * 4;
+            let image = pitch * size.height as usize;
+            let length = image * size.depth_or_array_layers as usize;
             let buffer =
                 owned(msg_send![&*context.device, newBufferWithLength: length, options: 0usize])
                     .unwrap();
             let command = retained(msg_send![&*context.queue, commandBuffer]).unwrap();
             let blit = retained(msg_send![&*command, blitCommandEncoder]).unwrap();
-            let _: () = msg_send![&*blit, copyFromTexture: &*texture.inner.native.object, sourceSlice: 0usize, sourceLevel: 0usize, sourceOrigin: MOrigin { x: 0, y: 0, z: 0 }, sourceSize: MSize { width: size.width as usize, height: size.height as usize, depth: 1 }, toBuffer: &*buffer, destinationOffset: 0usize, destinationBytesPerRow: pitch, destinationBytesPerImage: length];
+            for layer in 0..size.depth_or_array_layers as usize {
+                let _: () = msg_send![&*blit, copyFromTexture: &*texture.inner.native.object, sourceSlice: layer, sourceLevel: 0usize, sourceOrigin: MOrigin { x: 0, y: 0, z: 0 }, sourceSize: MSize { width: size.width as usize, height: size.height as usize, depth: 1 }, toBuffer: &*buffer, destinationOffset: layer * image, destinationBytesPerRow: pitch, destinationBytesPerImage: image];
+            }
             let _: () = msg_send![&*blit, endEncoding];
             let _: () = msg_send![&*command, commit];
             let _: () = msg_send![&*command, waitUntilCompleted];
             let status: usize = msg_send![&*command, status];
             assert_eq!(status, 4, "Readback command failed");
             let contents: *const c_void = msg_send![&*buffer, contents];
-            let bytes = std::slice::from_raw_parts(contents.cast::<u8>(), length);
-            bytes
-                .chunks_exact(pitch)
-                .flat_map(|row| &row[..size.width as usize * 4])
-                .copied()
-                .collect()
+            std::slice::from_raw_parts(contents.cast::<u8>(), length).to_vec()
         })
+    }
+
+    #[test]
+    fn texture_uploads_use_tightly_packed_rows_and_layers() {
+        let (device, queue) = gpu();
+        // Three-pixel rows are 12 bytes, far from any 256-byte pitch.
+        let size = Extent3d {
+            width: 3,
+            height: 2,
+            depth_or_array_layers: 2,
+        };
+        let texture = device.create_texture(&TextureDescriptor {
+            label: None,
+            size,
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: TextureDimension::D2,
+            format: TextureFormat::Rgba8Unorm,
+            usage: TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let data = (0..48).collect::<Vec<u8>>();
+        queue.write_texture(
+            TexelCopyTextureInfo {
+                texture: &texture,
+                mip_level: 0,
+                origin: Origin3d::default(),
+                aspect: TextureAspect::All,
+            },
+            &data,
+            TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(12),
+                rows_per_image: Some(2),
+            },
+            size,
+        );
+        queue.submit([]);
+        assert_eq!(pixels(&device, &texture), data);
     }
 
     #[test]
