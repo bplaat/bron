@@ -11,15 +11,19 @@
 #define FIFO_SIZE (256 * 1024)
 #define CLEAR_COLOR ((GXColor){128, 128, 128, 255})
 
-static volatile bool running = true;
+// The power button of the Wii and of the Wii Remotes, libogc calls it from an interrupt
+static volatile bool power_pressed = false;
 
-static void poweroff(void) {
-    running = false;
+static void power(void) {
+    power_pressed = true;
 }
 
-static void wpad_poweroff(int32_t channel) {
-    if (channel == WPAD_CHAN_ALL)
-        running = false;
+static bool home_pressed(void) {
+    for (int channel = 0; channel < WPAD_MAX_WIIMOTES; channel++) {
+        if (WPAD_ButtonsDown(channel) & WPAD_BUTTON_HOME)
+            return true;
+    }
+    return false;
 }
 
 // clang-format off
@@ -72,13 +76,11 @@ int main(void) {
     GX_SetPixelFmt(screenmode->aa ? GX_PF_RGB565_Z16 : GX_PF_RGB8_Z24, GX_ZC_LINEAR);
     GX_SetDispCopyGamma(GX_GM_1_0);
     GX_SetCopyClear(CLEAR_COLOR, GX_MAX_Z24);
-
-    WPAD_Init();
-    SYS_SetPowerCallback(poweroff);
-    WPAD_SetPowerButtonCallback(wpad_poweroff);
-
     GX_SetZMode(GX_ENABLE, GX_ALWAYS, GX_TRUE);
     GX_CopyDisp(framebuffers[framebuffer], GX_TRUE);
+
+    WPAD_Init();
+    SYS_SetPowerCallback(power);
 
     GX_ClearVtxDesc();
     GX_SetVtxDesc(GX_VA_POS, GX_DIRECT);
@@ -98,13 +100,9 @@ int main(void) {
     GX_LoadProjectionMtx(projection, GX_PERSPECTIVE);
 
     float rotation = 0.0f;
-    while (running) {
+    while (!power_pressed) {
         WPAD_ScanPads();
-        for (int channel = 0; channel < WPAD_MAX_WIIMOTES; channel++) {
-            if (WPAD_ButtonsDown(channel) & WPAD_BUTTON_HOME)
-                running = false;
-        }
-        if (!running)
+        if (home_pressed())
             break;
         rotation += 1.0f;
         GX_SetZMode(GX_ENABLE, GX_LEQUAL, GX_TRUE);
@@ -135,6 +133,8 @@ int main(void) {
         VIDEO_WaitVSync();
     }
 
-    WPAD_Disconnect(WPAD_CHAN_ALL);
+    // HOME returns to the loader, a power button turns the Wii off
+    if (power_pressed)
+        SYS_ResetSystem(SYS_POWEROFF, 0, 0);
     return 0;
 }
