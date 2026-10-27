@@ -375,12 +375,13 @@ impl NativeDevice {
                         return Err(e);
                     }
                 };
-            let result = Buffer {
+            let mut result = Buffer {
                 handle,
                 memory,
                 offset,
                 allocation_size: requirements.size,
                 capacity: size,
+                mapped: ptr::null_mut(),
             };
             check(call!(
                 self.instance,
@@ -390,6 +391,20 @@ impl NativeDevice {
                 result.memory.handle,
                 offset
             ))?;
+            if staging {
+                let mut mapped = ptr::null_mut();
+                check(call!(
+                    self.instance,
+                    MapMemory,
+                    self.handle,
+                    result.memory.handle,
+                    0,
+                    result.memory.size,
+                    0,
+                    &mut mapped
+                ))?;
+                result.mapped = mapped.cast();
+            }
             Ok(result)
         }
     }
@@ -401,6 +416,8 @@ pub(super) struct Buffer {
     offset: u64,
     allocation_size: u64,
     capacity: u64,
+    // Staging buffers own coherent memory that stays mapped until it is freed.
+    mapped: *mut u8,
 }
 
 impl Drop for Buffer {
@@ -1352,28 +1369,13 @@ impl Context {
                     Some(buffer) if buffer.capacity >= total as u64 => buffer,
                     _ => d.buffer(total as u64, true)?,
                 };
-                let mut mapped = ptr::null_mut();
-                check(call!(
-                    d.instance,
-                    MapMemory,
-                    d.handle,
-                    staging.memory.handle,
-                    0,
-                    staging.memory.size,
-                    0,
-                    &mut mapped
-                ))?;
                 let mut offset = 0;
                 let mut written = std::collections::HashSet::new();
                 for upload in &uploads {
                     let data = match upload {
                         Upload::Buffer { data, .. } | Upload::Texture { data, .. } => data,
                     };
-                    ptr::copy_nonoverlapping(
-                        data.as_ptr(),
-                        mapped.cast::<u8>().add(offset),
-                        data.len(),
-                    );
+                    ptr::copy_nonoverlapping(data.as_ptr(), staging.mapped.add(offset), data.len());
                     match upload {
                         Upload::Buffer {
                             buffer,
@@ -1453,7 +1455,6 @@ impl Context {
                     }
                     offset += (data.len() + 3) & !3;
                 }
-                call!(d.instance, UnmapMemory, d.handle, staging.memory.handle);
                 frame.staging.push(staging);
             }
             let mut sets = HashMap::new();
@@ -1837,20 +1838,7 @@ impl Context {
                 1,
                 u64::MAX
             ))?;
-            let mut mapped = ptr::null_mut();
-            check(call!(
-                d.instance,
-                MapMemory,
-                d.handle,
-                buffer.memory.handle,
-                buffer.offset,
-                length,
-                0,
-                &mut mapped
-            ))?;
-            let bytes = std::slice::from_raw_parts(mapped.cast::<u8>(), length as usize).to_vec();
-            call!(d.instance, UnmapMemory, d.handle, buffer.memory.handle);
-            Ok(bytes)
+            Ok(std::slice::from_raw_parts(buffer.mapped, length as usize).to_vec())
         }
     }
 }
