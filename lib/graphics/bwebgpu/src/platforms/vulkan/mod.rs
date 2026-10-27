@@ -153,6 +153,9 @@ struct NativeDevice {
     memory: vk::PhysicalDeviceMemoryProperties,
     pools: RefCell<Vec<Weak<Memory>>>,
     render_passes: RefCell<HashMap<RenderPassKey, u64>>,
+    // Binding roles are fixed, so every pipeline and bind group shares one layout.
+    set_layout: u64,
+    pipeline_layout: u64,
 }
 
 impl Drop for NativeDevice {
@@ -168,6 +171,20 @@ impl Drop for NativeDevice {
                     ptr::null()
                 );
             }
+            call!(
+                self.instance,
+                DestroyPipelineLayout,
+                self.handle,
+                self.pipeline_layout,
+                ptr::null()
+            );
+            call!(
+                self.instance,
+                DestroyDescriptorSetLayout,
+                self.handle,
+                self.set_layout,
+                ptr::null()
+            );
             call!(self.instance, DestroyDevice, self.handle, ptr::null());
         }
     }
@@ -266,6 +283,53 @@ impl NativeDevice {
             self.pools.borrow_mut().push(Rc::downgrade(&memory));
         }
         Ok((memory, offset))
+    }
+
+    fn create_layouts(&mut self) -> Result<()> {
+        // Uniform 0, texture 1, sampler 2 and read-only storage 3, see create_bind_group_layout.
+        let bindings = [(6, 1 | 16), (2, 16), (0, 16), (7, 1)]
+            .into_iter()
+            .enumerate()
+            .map(
+                |(binding, (descriptor_type, stage_flags))| vk::DescriptorSetLayoutBinding {
+                    binding: binding as u32,
+                    descriptor_type,
+                    descriptor_count: 1,
+                    stage_flags,
+                    ..Default::default()
+                },
+            )
+            .collect::<Vec<_>>();
+        unsafe {
+            let info = vk::DescriptorSetLayoutCreateInfo {
+                s_type: 32,
+                binding_count: bindings.len() as u32,
+                p_bindings: bindings.as_ptr(),
+                ..Default::default()
+            };
+            check(call!(
+                self.instance,
+                CreateDescriptorSetLayout,
+                self.handle,
+                &info,
+                ptr::null(),
+                &mut self.set_layout
+            ))?;
+            let info = vk::PipelineLayoutCreateInfo {
+                s_type: 30,
+                set_layout_count: 1,
+                p_set_layouts: &self.set_layout,
+                ..Default::default()
+            };
+            check(call!(
+                self.instance,
+                CreatePipelineLayout,
+                self.handle,
+                &info,
+                ptr::null(),
+                &mut self.pipeline_layout
+            ))
+        }
     }
 
     fn buffer(self: &Rc<Self>, size: u64, staging: bool) -> Result<Buffer> {
@@ -415,8 +479,6 @@ impl Drop for Sampler {
 
 pub(super) struct Pipeline {
     handle: u64,
-    layout: u64,
-    set_layout: u64,
     render: u64,
     device: Rc<NativeDevice>,
 }
@@ -430,20 +492,6 @@ impl Drop for Pipeline {
                 DestroyPipeline,
                 d.handle,
                 self.handle,
-                ptr::null()
-            );
-            call!(
-                d.instance,
-                DestroyPipelineLayout,
-                d.handle,
-                self.layout,
-                ptr::null()
-            );
-            call!(
-                d.instance,
-                DestroyDescriptorSetLayout,
-                d.handle,
-                self.set_layout,
                 ptr::null()
             );
         }
@@ -592,7 +640,8 @@ impl Context {
                 physical,
                 &mut memory
             );
-            let device = Rc::new(NativeDevice {
+            // Dropping the device on error also destroys any layout created so far.
+            let mut device = NativeDevice {
                 instance: instance.clone(),
                 handle,
                 #[cfg(feature = "window")]
@@ -602,7 +651,11 @@ impl Context {
                 memory,
                 pools: RefCell::new(Vec::new()),
                 render_passes: RefCell::new(HashMap::new()),
-            });
+                set_layout: 0,
+                pipeline_layout: 0,
+            };
+            device.create_layouts()?;
+            let device = Rc::new(device);
             let context = Rc::new(Self {
                 device,
                 frames: RefCell::new(Vec::new()),
@@ -1024,68 +1077,9 @@ impl Context {
             let d = &self.device;
             let mut pipeline = Pipeline {
                 handle: 0,
-                layout: 0,
-                set_layout: 0,
                 render: 0,
                 device: d.clone(),
             };
-            let bindings: Vec<_> = desc
-                .layout
-                .and_then(|layout| layout.group.as_ref())
-                .into_iter()
-                .flat_map(|group| group.entries.iter())
-                .map(|entry| vk::DescriptorSetLayoutBinding {
-                    binding: entry.binding,
-                    descriptor_type: match entry.ty {
-                        BindingType::Buffer {
-                            ty: BufferBindingType::Uniform,
-                            ..
-                        } => 6,
-                        BindingType::Buffer { .. } => 7,
-                        BindingType::Texture { .. } => 2,
-                        BindingType::Sampler(_) => 0,
-                    },
-                    descriptor_count: 1,
-                    stage_flags: (if entry.visibility.contains(ShaderStages::VERTEX) {
-                        1
-                    } else {
-                        0
-                    }) | (if entry.visibility.contains(ShaderStages::FRAGMENT) {
-                        16
-                    } else {
-                        0
-                    }),
-                    ..Default::default()
-                })
-                .collect();
-            let info = vk::DescriptorSetLayoutCreateInfo {
-                s_type: 32,
-                binding_count: bindings.len() as u32,
-                p_bindings: bindings.as_ptr(),
-                ..Default::default()
-            };
-            check(call!(
-                d.instance,
-                CreateDescriptorSetLayout,
-                d.handle,
-                &info,
-                ptr::null(),
-                &mut pipeline.set_layout
-            ))?;
-            let info = vk::PipelineLayoutCreateInfo {
-                s_type: 30,
-                set_layout_count: 1,
-                p_set_layouts: &pipeline.set_layout,
-                ..Default::default()
-            };
-            check(call!(
-                d.instance,
-                CreatePipelineLayout,
-                d.handle,
-                &info,
-                ptr::null(),
-                &mut pipeline.layout
-            ))?;
             let fragment = desc.fragment.as_ref().expect("fragment stage validated");
             let color = fragment.targets[0].expect("color target validated");
             pipeline.render = self.render_pass(
@@ -1250,7 +1244,7 @@ impl Context {
                 p_depth_stencil_state: &depth,
                 p_color_blend_state: &blend,
                 p_dynamic_state: &dynamic,
-                layout: pipeline.layout,
+                layout: d.pipeline_layout,
                 render_pass: pipeline.render,
                 base_pipeline_index: -1,
                 ..Default::default()
@@ -1584,7 +1578,7 @@ impl Context {
                         pipeline.handle
                     );
                     if let Some(group) = &draw.group {
-                        let key = (Rc::as_ptr(&group.entries), pipeline.set_layout);
+                        let key = Rc::as_ptr(&group.entries);
                         let set = if let Some(&set) = sets.get(&key) {
                             set
                         } else {
@@ -1592,7 +1586,7 @@ impl Context {
                                 s_type: 34,
                                 descriptor_pool: frame.descriptors,
                                 descriptor_set_count: 1,
-                                p_set_layouts: &pipeline.set_layout,
+                                p_set_layouts: &d.set_layout,
                                 ..Default::default()
                             };
                             let mut set = 0;
@@ -1604,26 +1598,14 @@ impl Context {
                                 &mut set
                             ))?;
                             for (binding, resource) in group.entries.iter() {
-                                let layout = group
-                                    .layout
-                                    .entries
-                                    .iter()
-                                    .find(|entry| entry.binding == *binding)
-                                    .expect("Missing bind group layout entry");
                                 let mut buffer = vk::DescriptorBufferInfo::default();
                                 let mut image = vk::DescriptorImageInfo::default();
                                 let ty = match resource {
                                     Resource::Buffer(b) => {
                                         buffer.buffer = b.inner.native.handle;
                                         buffer.range = b.inner.size;
-                                        match layout.ty {
-                                            BindingType::Buffer {
-                                                ty: BufferBindingType::Uniform,
-                                                ..
-                                            } => 6,
-                                            BindingType::Buffer { .. } => 7,
-                                            _ => unreachable!(),
-                                        }
+                                        // Uniform buffers use binding zero, storage buffers three.
+                                        if *binding == 0 { 6 } else { 7 }
                                     }
                                     Resource::Texture(t) => {
                                         image.image_view = t.texture.inner.native.view;
@@ -1663,7 +1645,7 @@ impl Context {
                             CmdBindDescriptorSets,
                             frame.command,
                             0,
-                            pipeline.layout,
+                            d.pipeline_layout,
                             0,
                             1,
                             &set,
