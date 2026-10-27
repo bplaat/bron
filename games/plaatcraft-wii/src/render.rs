@@ -99,6 +99,8 @@ impl Display {
                 },
                 GX_ZC_LINEAR,
             );
+            // Clears the embedded framebuffer, which still holds the loader's last frame
+            GX_CopyDisp(buffers[0].scanout(), GX_TRUE);
             Some(Self {
                 buffers,
                 current: 0,
