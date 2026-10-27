@@ -99,9 +99,6 @@ impl Display {
                 },
                 GX_ZC_LINEAR,
             );
-            GX_SetDispCopyGamma(GX_GM_1_0);
-            GX_InvVtxCache();
-            GX_InvalidateTexAll();
             Some(Self {
                 buffers,
                 current: 0,
@@ -119,7 +116,6 @@ impl Display {
             GX_DrawDone();
             self.current ^= 1;
             GX_SetZMode(GX_ENABLE, GX_LEQUAL, GX_TRUE);
-            GX_SetColorUpdate(GX_TRUE);
             GX_CopyDisp(self.buffers[self.current].scanout(), GX_TRUE);
             VIDEO_SetNextFramebuffer(self.buffers[self.current].scanout());
             if self.first_frame {
@@ -260,7 +256,6 @@ impl Renderer {
             );
             GX_InvVtxCache();
             set_vertex_color_texture(true);
-            GX_SetTevOp(GX_TEVSTAGE0, GX_MODULATE);
 
             // The fog of water and lava is close and colored, like the shaders' immersion fog
             let fog_end = (RENDER_DISTANCE as f32 - 1.5) * CHUNK_SIZE as f32;
@@ -414,7 +409,6 @@ pub fn set_vertex_color_texture(textured: bool) {
             GX_DF_NONE,
             GX_AF_NONE,
         );
-        GX_SetNumTevStages(1);
         if textured {
             GX_SetNumTexGens(1);
             GX_SetTexCoordGen(GX_TEXCOORD0, GX_TG_MTX2X4, GX_TG_TEX0, GX_IDENTITY);
