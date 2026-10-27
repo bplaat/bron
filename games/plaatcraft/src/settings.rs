@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: MIT
  */
 
-//! Persisted performance preferences.
+//! Persisted performance and sound preferences.
 
 use std::io;
 
@@ -12,6 +12,10 @@ use preferences::{Preferences, Value};
 
 const DISTANCE: &str = "render_distance";
 const SHOW_STATS: &str = "show_stats";
+const VOLUME: &str = "volume";
+
+/// The sound volume in percent
+pub(crate) const MAX_VOLUME: u8 = 100;
 
 pub(crate) const MIN_DISTANCE: u8 = 4;
 pub(crate) const MAX_DISTANCE: u8 = 128;
@@ -44,6 +48,7 @@ pub(crate) fn distance_fraction(distance: u8) -> f32 {
 pub(crate) struct Settings {
     pub(crate) distance: u8,
     pub(crate) show_stats: bool,
+    pub(crate) volume: u8,
 }
 
 /// The settings in the shared preferences, only written when they changed.
@@ -68,6 +73,13 @@ impl Store {
                 Some(Value::Bool(value)) => value,
                 _ => defaults.show_stats,
             },
+            volume: match prefs.get(VOLUME)? {
+                Some(Value::Integer(value)) => u8::try_from(value)
+                    .ok()
+                    .filter(|value| *value <= MAX_VOLUME)
+                    .unwrap_or(defaults.volume),
+                _ => defaults.volume,
+            },
         };
         Ok(Self { prefs, saved })
     }
@@ -83,6 +95,9 @@ impl Store {
         if settings.show_stats != self.saved.show_stats {
             self.prefs.set(SHOW_STATS, settings.show_stats)?;
         }
+        if settings.volume != self.saved.volume {
+            self.prefs.set(VOLUME, i64::from(settings.volume))?;
+        }
         self.saved = settings;
         Ok(())
     }
@@ -93,6 +108,7 @@ impl Default for Settings {
         Self {
             distance: DEFAULT_DISTANCE,
             show_stats: true,
+            volume: 80,
         }
     }
 }

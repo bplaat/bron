@@ -41,6 +41,7 @@ pub(crate) enum Action {
     Play,
     Settings,
     Distance,
+    Volume,
     Stats,
     Reset,
     Back,
@@ -58,7 +59,7 @@ pub(crate) struct Layout {
 impl Layout {
     pub(crate) fn new(size: LogicalSize, safe: LogicalInsets, controls: bool, page: Page) -> Self {
         let height = if page == Page::Settings {
-            330.0
+            400.0
         } else {
             HEADER_HEIGHT
                 + BUTTON_HEIGHT * 2.0
@@ -95,7 +96,7 @@ impl Layout {
     pub(crate) fn action_at(&self, position: LogicalPoint) -> Option<Action> {
         let point = self.local(position);
         self.widgets().iter().find_map(|&(action, y)| {
-            let width = if action == Action::Distance {
+            let width = if matches!(action, Action::Distance | Action::Volume) {
                 360.0
             } else {
                 BUTTON_WIDTH
@@ -115,15 +116,17 @@ impl Layout {
         } else {
             &[
                 (Action::Distance, 80.0),
-                (Action::Stats, 160.0),
-                (Action::Reset, 220.0),
-                (Action::Back, 270.0),
+                (Action::Volume, 160.0),
+                (Action::Stats, 240.0),
+                (Action::Reset, 290.0),
+                (Action::Back, 340.0),
             ]
         }
     }
 
-    pub(crate) fn slider_value(&self, position: LogicalPoint) -> u8 {
-        crate::settings::distance_at((self.local(position).x - 40.0) / 360.0)
+    /// The position along a slider, from 0.0 to 1.0
+    pub(crate) fn slider_fraction(&self, position: LogicalPoint) -> f32 {
+        ((self.local(position).x - 40.0) / 360.0).clamp(0.0, 1.0)
     }
 }
 
@@ -160,7 +163,7 @@ impl Menu {
                 layout.height.to_bits(),
                 layout.page as u32,
                 hovered.map_or(0, |action| action as u32 + 1),
-                u32::from(settings.distance),
+                u32::from(settings.distance) | u32::from(settings.volume) << 8,
                 u32::from(settings.show_stats),
             ],
             (CONTENT_WIDTH, layout.height),
@@ -261,15 +264,24 @@ fn draw_content(
             }
             Action::Reset => "Reset to Defaults",
             Action::Back => "Done",
-            Action::Distance => {
-                let value = settings.distance;
-                let label = format!("Render Distance: {value} chunks");
-                let help = "Lower uses less memory and loads fewer chunks";
+            Action::Distance | Action::Volume => {
+                let (label, fraction, help) = if action == Action::Distance {
+                    (
+                        format!("Render Distance: {} chunks", settings.distance),
+                        crate::settings::distance_fraction(settings.distance),
+                        "Lower uses less memory and loads fewer chunks",
+                    )
+                } else {
+                    (
+                        format!("Sound Volume: {}%", settings.volume),
+                        f32::from(settings.volume) / f32::from(crate::settings::MAX_VOLUME),
+                        "Blocks, footsteps, water and menu sounds",
+                    )
+                };
                 ctx.set_fill_style(Color::rgb(255, 255, 255));
                 ctx.fill_text(&label, center, y + 4.0);
                 ctx.set_fill_style(Color::rgb(45, 45, 45));
                 ctx.fill_rect(40.0, y + 22.0, 360.0, 8.0);
-                let fraction = crate::settings::distance_fraction(value);
                 ctx.set_fill_style(if hovered == Some(action) {
                     Color::rgb(255, 255, 160)
                 } else {
@@ -345,14 +357,14 @@ mod tests {
                     assert_eq!(layout.action_at(point), Some(action));
                 }
                 let point = LogicalPoint::new(layout.content.0 - 100.0, 0.0);
-                assert_eq!(layout.slider_value(point), 4);
+                assert_eq!(layout.slider_fraction(point), 0.0);
                 assert_eq!(
-                    layout.slider_value(LogicalPoint::new(size.width + 100.0, 0.0)),
-                    128
+                    layout.slider_fraction(LogicalPoint::new(size.width + 100.0, 0.0)),
+                    1.0
                 );
                 let point =
                     LogicalPoint::new(layout.content.0 + (40.0 + 360.0 * 0.75) * layout.scale, 0.0);
-                assert_eq!(layout.slider_value(point), 64);
+                assert!((layout.slider_fraction(point) - 0.75).abs() < 0.001);
             }
         }
     }
