@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Builds the Wii toolchain in the repository target/wii-toolchain/: fetches libogc, picolibc,
 # gamecube-tools and LLVM's compiler-rt, applies libogc/patches/ and picolibc/patches/ and builds
-# libogc.a, picolibc (the C library) in sysroot/, libcompiler-rt.a, elf2dol and our
-# gxtexconv/.
+# libogc.a with the AESND DSP mixer, picolibc (the C library) in sysroot/, libcompiler-rt.a,
+# elf2dol and our gxtexconv/.
 # The example Makefiles and Rust build.rs files run this before they build.
 #
 # Usage: ./build.sh [command]...
@@ -48,10 +48,10 @@ WII_CFLAGS=(--target=powerpc-none-eabi -mcpu=750 -ffreestanding -nostdlibinc
     -I"$SYSROOT/include" -I"$LIBOGC_DIR/gc" -I"$LIBOGC_DIR/gc/ogc"
     -I"$LIBOGC_DIR/gc/ogc/machine" -I"$LIBOGC_DIR/gc/bte" -I"$LIBOGC_DIR/gc/wiiuse")
 LIBOGC_CFLAGS=("${WII_CFLAGS[@]}" -std=gnu17 -fno-strict-aliasing -I"$LIBOGC_DIR/libogc"
-    -Wall -Wno-parentheses -Wno-unused)
+    -I"$BUILD_DIR/include" -Wall -Wno-parentheses -Wno-unused)
 
-# The parts of libogc we build, audio, DVD, memory cards, SD cards, networking and the console
-# are left out because the examples don't use them and most need newlib
+# The parts of libogc we build, DVD, memory cards, SD cards, networking and the console are left
+# out because the examples don't use them and most need newlib
 LIBOGC_SOURCES=(
     # Startup, interrupts, exceptions, caches and the C library locks
     libogc/{argv,cache,decrementer,exception,irq,lock,sbrk,system,sys_report,sys_state,timesupp}.c
@@ -65,6 +65,8 @@ LIBOGC_SOURCES=(
     libogc/{video_asm,gu_psasm,gu_ps_concat44}.S
     # IOS, the Wii system software, and serial ports for the GameCube controllers
     libogc/{conf,es,exi,ios,ipc,isfs,pad,si,stm,usb,wiilaunch}.c
+    # Audio, the DSP mixes the voices of AESND
+    libogc/{audio,dsp}.c libaesnd/aesndlib.c
     # Bluetooth stack and the Wii Remote library
     lwbt/{bte,btmemb,btmemr,btpbuf,hci,l2cap,physbusif}.c
     wiiuse/{classic,dynamics,events,guitar_hero_3,io,io_wii,ir,motion_plus,nunchuk,speaker,wiiboard,wiiuse,wpad}.c
@@ -239,10 +241,35 @@ build_archive() {
     "${LLVM}llvm-ar" rcs "$library" "${objects[@]}"
 }
 
+# Assembles the AESND mixer for the DSP with gcdsptool from gamecube-tools, aesndlib.c includes
+# it as a C array that the DSP loads its code from
+build_dsp_mixer() {
+    local header="$BUILD_DIR/include/aesnd_dsp_mixer_bin.h" mixer="$LIBOGC_DIR/libaesnd/dspcode/dspmixer.s"
+    if outdated "$BUILD_DIR/gcdsptool" "$TOOLS_DIR/gdtool" "$TOOLS_DIR/gdopcode"; then
+        msg "Building gcdsptool"
+        c++ -O2 -w -DPACKAGE_VERSION="\"$tools_version\"" -I"$TOOLS_DIR/gdopcode" -I"$TOOLS_DIR/gdtool" \
+            "$TOOLS_DIR/gdtool/gdtool.cpp" "$TOOLS_DIR"/gdopcode/{assemble,disassemble,opcodes}.cpp \
+            -o "$BUILD_DIR/gcdsptool" || die "Failed to build gcdsptool"
+    fi
+    outdated "$header" "$BUILD_DIR/gcdsptool" "$mixer" "$TOOLCHAIN_DIR/build.sh" || return 0
+    msg "Assembling the AESND DSP mixer"
+    mkdir -p "$BUILD_DIR/include"
+    "$BUILD_DIR/gcdsptool" -c "$mixer" -o "$BUILD_DIR/aesnd_dsp_mixer.bin" > /dev/null ||
+        die "Failed to assemble the AESND DSP mixer"
+    # The DSP copies its code with DMA, which needs 32 byte alignment
+    {
+        echo '#include <gctypes.h>'
+        echo 'static const u8 aesnd_dsp_mixer_bin[] __attribute__((aligned(32))) = {'
+        od -An -v -tx1 "$BUILD_DIR/aesnd_dsp_mixer.bin" | sed 's/ \([0-9a-f][0-9a-f]\)/0x\1,/g'
+        echo '};'
+        echo 'static const u32 aesnd_dsp_mixer_bin_size = sizeof(aesnd_dsp_mixer_bin);'
+    } > "$header"
+}
+
 build_libraries() {
     # The libogc sources are checked too, so edits in dev mode get built
-    if outdated "$BUILD_DIR/libogc.a" "$LIBOGC_DIR/.patched" "$LIBOGC_DIR"/{gc,libogc,lwbt,wiiuse} \
-        "$SYSROOT/lib/libc.a" "$TOOLCHAIN_DIR/build.sh"; then
+    if outdated "$BUILD_DIR/libogc.a" "$LIBOGC_DIR/.patched" "$LIBOGC_DIR"/{gc,libogc,libaesnd,lwbt,wiiuse} \
+        "$BUILD_DIR/include" "$SYSROOT/lib/libc.a" "$TOOLCHAIN_DIR/build.sh"; then
         build_archive libogc.a "${LIBOGC_CFLAGS[@]}" -- "${LIBOGC_SOURCES[@]/#/$LIBOGC_DIR/}"
     fi
     if outdated "$BUILD_DIR/libcompiler-rt.a" "$TOOLCHAIN_DIR/build.sh"; then
@@ -321,7 +348,7 @@ lock() {
 for command in "$@"; do
     case "$command" in
         all) lock; fetch; patch libogc "$libogc_commit"; patch picolibc "$picolibc_commit"
-            build_picolibc; build_libraries; build_tools ;;
+            build_picolibc; build_dsp_mixer; build_libraries; build_tools ;;
         export-patches) export_patches ;;
         test) run_test ;;
         clean) rm -rf "$BUILD_DIR" ;;

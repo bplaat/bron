@@ -387,6 +387,38 @@ unsafe extern "C" {
     pub fn WPAD_IR(channel: c_int, ir: *mut IrData);
 }
 
+// MARK: Audio
+pub const VOICE_MONO16: u32 = 2;
+
+/// AESND's voice parameter block, the DSP mixes the voices in hardware.
+#[repr(C)]
+pub struct AESNDPB {
+    _private: [u8; 0],
+}
+
+pub type AESNDVoiceCallbackArg =
+    Option<extern "C" fn(pb: *mut AESNDPB, state: u32, arg: *mut c_void)>;
+
+unsafe extern "C" {
+    pub fn AESND_Init();
+    pub fn AESND_Reset();
+    pub fn AESND_Pause(pause: bool);
+    pub fn AESND_AllocateVoiceWithArg(
+        callback: AESNDVoiceCallbackArg,
+        arg: *mut c_void,
+    ) -> *mut AESNDPB;
+    pub fn AESND_SetVoiceVolume(pb: *mut AESNDPB, volume_l: u16, volume_r: u16);
+    pub fn AESND_PlayVoice(
+        pb: *mut AESNDPB,
+        format: u32,
+        buffer: *const c_void,
+        len: u32,
+        freq: f32,
+        delay: u32,
+        looped: bool,
+    );
+}
+
 // MARK: C library
 unsafe extern "C" {
     pub fn memalign(alignment: usize, size: usize) -> *mut c_void;
