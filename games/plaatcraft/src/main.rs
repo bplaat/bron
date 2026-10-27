@@ -26,6 +26,7 @@ mod inventory;
 mod menu;
 mod scroll;
 mod settings;
+mod sound;
 mod stream;
 mod textures;
 
@@ -168,6 +169,7 @@ struct Game {
     menu: menu::Menu,
     settings: settings::Settings,
     preferences: settings::Store,
+    sounds: sound::Sounds,
     gpu_radius: i64,
     // Touch screens have no pointer lock, so they track the menu themselves.
     paused: bool,
@@ -394,6 +396,7 @@ impl Game {
             scroll: scroll::Scroll::default(),
             pointer: None,
             menu: menu::Menu::default(),
+            sounds: sound::Sounds::new(&settings),
             settings,
             preferences,
             gpu_radius: 0,
@@ -452,6 +455,7 @@ impl Game {
     }
 
     fn save_settings(&mut self) {
+        self.sounds.apply(&self.settings);
         if let Err(error) = self.preferences.save(self.settings) {
             eprintln!("Could not save settings: {error}");
         }
@@ -459,11 +463,15 @@ impl Game {
 
     fn menu_press(&mut self, position: LogicalPoint) {
         use menu::Action;
-        match self.menu_layout().action_at(position) {
+        let action = self.menu_layout().action_at(position);
+        if action.is_some() {
+            self.sounds.click();
+        }
+        match action {
             Some(Action::Play) => self.play(),
             Some(Action::Settings) => self.menu.page = menu::Page::Settings,
             Some(Action::Back) => self.menu.page = menu::Page::Main,
-            Some(action @ Action::Distance) => {
+            Some(action @ (Action::Distance | Action::Volume)) => {
                 self.menu.dragging = Some(action);
                 self.menu_drag(position);
             }
@@ -475,9 +483,16 @@ impl Game {
     }
 
     fn menu_drag(&mut self, position: LogicalPoint) {
-        let layout = self.menu_layout();
-        if let Some(menu::Action::Distance) = self.menu.dragging {
-            self.settings.distance = layout.slider_value(position);
+        let fraction = self.menu_layout().slider_fraction(position);
+        match self.menu.dragging {
+            Some(menu::Action::Distance) => {
+                self.settings.distance = settings::distance_at(fraction);
+            }
+            Some(menu::Action::Volume) => {
+                self.settings.volume = (fraction * f32::from(settings::MAX_VOLUME)).round() as u8;
+                self.sounds.apply(&self.settings);
+            }
+            _ => {}
         }
     }
 
@@ -518,6 +533,7 @@ impl Game {
         if hotbar == self.hotbar {
             return;
         }
+        self.sounds.click();
         if hotbar.material() != self.hotbar.material() {
             self.inventory.show_name(hotbar.material());
         }
@@ -530,6 +546,7 @@ impl Game {
     // The inventory needs the mouse, so it releases the pointer lock while open.
     fn toggle_inventory(&mut self) {
         self.inventory.toggle();
+        self.sounds.click();
         if let Some(touch) = &mut self.touch {
             if self.inventory.open {
                 let actions = touch.reset();
@@ -951,6 +968,7 @@ impl Game {
         let Some(edit) = edit else {
             return;
         };
+        let broken = button == MouseButton::Left;
         match self.database.edit(edit) {
             Ok(revision) => {
                 let center = (
@@ -963,6 +981,9 @@ impl Game {
                     }
                 }
                 self.interaction.apply_edit(edit);
+                let material = if broken { hit.material } else { edit.material };
+                self.sounds
+                    .block(&self.camera, edit.position, material, broken);
             }
             Err(error) => eprintln!("Could not save block edit: {error}"),
         }
@@ -1028,6 +1049,7 @@ impl Game {
             self.chunks.contains_key(&coord)
         });
         if self.playing() {
+            let before = sound::Movement::of(&self.camera);
             self.camera.input = self.input();
             // The feet or waist in water or lava make the player swim.
             let [x, y, z] = self.camera.position;
@@ -1057,6 +1079,12 @@ impl Game {
                     Some(material) if world::is_passable(material)
                 )
             });
+            let ground =
+                self.interaction
+                    .block(&self.database, sound::ground(&self.camera), |coord| {
+                        self.chunks.contains_key(&coord)
+                    });
+            self.sounds.movement(before, &self.camera, ground);
         }
         let (width, height) = self.surface.size();
         if width == 0 || height == 0 {
