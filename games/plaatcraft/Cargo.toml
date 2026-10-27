@@ -38,7 +38,6 @@ image = { path = "../../lib/graphics/image", default-features = false, features 
     "png",
 ] }
 plaatcraft-engine = { path = "../plaatcraft-engine" }
-sfxr = "0.1.4"
 
 # Android has no public system SQLite library
 [target.'cfg(target_os = "android")'.dependencies]

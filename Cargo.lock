@@ -973,13 +973,15 @@ dependencies = [
  "libsqlite3-sys",
  "plaatcraft-engine",
  "preferences",
- "sfxr",
  "winresource",
 ]
 
 [[package]]
 name = "plaatcraft-engine"
 version = "0.2.0"
+dependencies = [
+ "sfxr",
+]
 
 [[package]]
 name = "plaatnotes"
