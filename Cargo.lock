@@ -298,6 +298,13 @@ name = "copy_dir"
 version = "0.1.3+patch"
 
 [[package]]
+name = "cpal"
+version = "0.18.2+patch"
+dependencies = [
+ "objc2",
+]
+
+[[package]]
 name = "crc"
 version = "3.4.0+patch"
 dependencies = [
