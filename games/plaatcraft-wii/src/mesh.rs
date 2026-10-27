@@ -6,7 +6,7 @@
 
 //! Turns the packed greedy quads of a chunk into a GX display list. Each vertex is a u8
 //! position in the chunk, a u16 index into the light palette and u8 texture coordinates,
-//! the quads are grouped by section, translucency and tile so a draw is one texture.
+//! the quads are grouped by section, pass and tile so a draw is one texture.
 
 use alloc::vec::Vec;
 use core::ops::Range;
@@ -15,6 +15,8 @@ use plaatcraft_engine::tiles::tile;
 use plaatcraft_engine::world::{
     self, HEIGHT, LAVA, QUAD_BYTES, SECTION_COUNT, SECTION_SIZE, WATER, quad_material,
 };
+
+use crate::textures::has_alpha;
 
 const GX_QUADS: u8 = 0x80;
 // A draw has a 16-bit vertex count
@@ -28,6 +30,11 @@ pub const TINT_WATER: u16 = 4;
 pub const TINTS: usize = 5;
 pub const PALETTE_SIZE: usize = TINTS << 11;
 
+// The passes have their own depth, alpha and blend state
+pub const SOLID: usize = 0;
+pub const CUTOUT: usize = 1;
+pub const TRANSLUCENT: usize = 2;
+
 /// A part of the display list with quads of one tile.
 pub struct Draw {
     pub tile: u8,
@@ -38,8 +45,8 @@ pub struct Mesh {
     /// 32-byte aligned by the allocator and flushed from the CPU cache.
     pub list: Vec<u8>,
     pub draws: Vec<Draw>,
-    /// The opaque and translucent draws of each section.
-    pub sections: [[Range<usize>; 2]; SECTION_COUNT],
+    /// The draws of each section and pass.
+    pub sections: [[Range<usize>; 3]; SECTION_COUNT],
 }
 
 struct Quad {
@@ -52,8 +59,14 @@ impl Quad {
         ((self.words[0] >> 27) & 15) as usize
     }
 
-    fn translucent(&self) -> bool {
-        world::is_translucent(quad_material(self.words[0]))
+    fn pass(&self) -> usize {
+        if world::is_translucent(quad_material(self.words[0])) {
+            TRANSLUCENT
+        } else if has_alpha(self.tile) {
+            CUTOUT
+        } else {
+            SOLID
+        }
     }
 }
 
@@ -71,25 +84,21 @@ pub fn build(packed: &[u8]) -> Mesh {
             }
         })
         .collect();
-    quads.sort_by_key(|quad| (quad.section(), quad.translucent(), quad.tile));
+    quads.sort_by_key(|quad| (quad.section(), quad.pass(), quad.tile));
 
     let mut mesh = Mesh {
         list: Vec::with_capacity(quads.len() * 28 + 64),
         draws: Vec::new(),
-        sections: core::array::from_fn(|_| [0..0, 0..0]),
+        sections: Default::default(),
     };
     let mut start = 0;
     while start < quads.len() {
         let first = &quads[start];
-        let key = (first.section(), first.translucent(), first.tile);
+        let key = (first.section(), first.pass(), first.tile);
         let mut end = start + 1;
         while end < quads.len()
             && end - start < MAX_QUADS
-            && (
-                quads[end].section(),
-                quads[end].translucent(),
-                quads[end].tile,
-            ) == key
+            && (quads[end].section(), quads[end].pass(), quads[end].tile) == key
         {
             end += 1;
         }
@@ -101,8 +110,8 @@ pub fn build(packed: &[u8]) -> Mesh {
         }
         // Display lists are called in 32 byte blocks, padded with GX_NOP commands
         mesh.list.resize(mesh.list.len().next_multiple_of(32), 0);
-        let (section, translucent, tile) = key;
-        let draws = &mut mesh.sections[section][usize::from(translucent)];
+        let (section, pass, tile) = key;
+        let draws = &mut mesh.sections[section][pass];
         if draws.start == draws.end {
             *draws = mesh.draws.len()..mesh.draws.len();
         }

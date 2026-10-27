@@ -16,7 +16,9 @@ use plaatcraft_engine::camera::View;
 use plaatcraft_engine::world::{CHUNK_SIZE, Coord, LAVA, SECTION_COUNT, WATER};
 
 use crate::memory::{AlignedBuffer, Framebuffer};
-use crate::mesh::{PALETTE_SIZE, TINT_BEDROCK, TINT_LAVA, TINT_PINE, TINT_WATER};
+use crate::mesh::{
+    CUTOUT, PALETTE_SIZE, SOLID, TINT_BEDROCK, TINT_LAVA, TINT_PINE, TINT_WATER, TRANSLUCENT,
+};
 use crate::stream::{Chunk, RENDER_DISTANCE};
 use crate::textures::Textures;
 
@@ -289,17 +291,24 @@ impl Renderer {
             .collect();
         visible.sort_unstable_by_key(|&(distance, ..)| distance);
 
+        // Solid blocks test depth before texturing, so hidden texels are never fetched
         unsafe {
             GX_SetCullMode(GX_CULL_BACK);
             GX_SetZMode(GX_ENABLE, GX_LEQUAL, GX_TRUE);
             GX_SetBlendMode(GX_BM_NONE, GX_BL_ONE, GX_BL_ZERO, GX_LO_CLEAR);
-            // Cutouts like leaves and plants only write depth for their visible texels
-            GX_SetZCompLoc(GX_FALSE);
-            GX_SetAlphaCompare(GX_GREATER, 127, GX_AOP_AND, GX_ALWAYS, 0);
         }
         let mut bound = None;
         for &(_, coord, offset) in &visible {
-            self.draw_chunk(view, &chunks[&coord], offset, 0, textures, &mut bound);
+            self.draw_chunk(view, &chunks[&coord], offset, SOLID, textures, &mut bound);
+        }
+        // Cutouts like leaves and plants test depth after texturing, so they only write depth
+        // for their visible texels
+        unsafe {
+            GX_SetZCompLoc(GX_FALSE);
+            GX_SetAlphaCompare(GX_GREATER, 127, GX_AOP_AND, GX_ALWAYS, 0);
+        }
+        for &(_, coord, offset) in &visible {
+            self.draw_chunk(view, &chunks[&coord], offset, CUTOUT, textures, &mut bound);
         }
         // Translucent blocks blend over everything else, farthest first
         unsafe {
@@ -310,7 +319,14 @@ impl Renderer {
             GX_SetAlphaCompare(GX_ALWAYS, 0, GX_AOP_AND, GX_ALWAYS, 0);
         }
         for &(_, coord, offset) in visible.iter().rev() {
-            self.draw_chunk(view, &chunks[&coord], offset, 1, textures, &mut bound);
+            self.draw_chunk(
+                view,
+                &chunks[&coord],
+                offset,
+                TRANSLUCENT,
+                textures,
+                &mut bound,
+            );
         }
         unsafe {
             GX_SetZMode(GX_ENABLE, GX_LEQUAL, GX_TRUE);
@@ -339,12 +355,16 @@ impl Renderer {
         textures: &Textures,
         bound: &mut Option<u8>,
     ) {
-        let matrix = model_view(view, offset);
-        unsafe { GX_LoadPosMtxImm(&matrix, GX_PNMTX0) };
+        let mut positioned = false;
         for section in 0..SECTION_COUNT {
             let draws = chunk.mesh.sections[section][pass].clone();
             if draws.is_empty() || !view.section_visible(offset, section) {
                 continue;
+            }
+            // Most chunks have nothing to draw in some passes
+            if !positioned {
+                positioned = true;
+                unsafe { GX_LoadPosMtxImm(&model_view(view, offset), GX_PNMTX0) };
             }
             for draw in &chunk.mesh.draws[draws] {
                 if *bound != Some(draw.tile) {

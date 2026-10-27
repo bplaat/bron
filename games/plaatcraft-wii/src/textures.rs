@@ -45,6 +45,11 @@ impl Textures {
     }
 }
 
+/// Whether a block tile has transparent texels, build.rs only converts opaque tiles to CMPR.
+pub fn has_alpha(tile: u8) -> bool {
+    TILES[usize::from(tile)].format != GX_TF_CMPR
+}
+
 fn object(texture: &Texture, wrap: u8) -> GXTexObj {
     let mut object = GXTexObj { val: [0; 8] };
     let mipmapped = texture.levels > 1;
