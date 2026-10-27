@@ -127,7 +127,6 @@ pub const GX_AOP_AND: u8 = 0;
 pub const GX_ZC_LINEAR: u8 = 0;
 pub const GX_PF_RGB8_Z24: u8 = 0;
 pub const GX_PF_RGB565_Z16: u8 = 2;
-pub const GX_GM_1_0: u8 = 0;
 pub const GX_BM_NONE: u8 = 0;
 pub const GX_BM_BLEND: u8 = 1;
 pub const GX_BL_ZERO: u8 = 0;
@@ -173,18 +172,14 @@ unsafe extern "C" {
     pub fn GX_SetCopyFilter(aa: u8, sample_pattern: *const [u8; 2], vf: u8, vfilter: *const u8);
     pub fn GX_SetFieldMode(field_mode: u8, half_aspect_ratio: u8);
     pub fn GX_SetPixelFmt(pixel_format: u8, depth_compression: u8);
-    pub fn GX_SetDispCopyGamma(gamma: u8);
     pub fn GX_SetCopyClear(color: GXColor, depth: u32);
     pub fn GX_CopyDisp(destination: *mut c_void, clear: u8);
     pub fn GX_InvVtxCache();
-    pub fn GX_InvalidateTexAll();
-    pub fn GX_Flush();
     pub fn GX_DrawDone();
 
     // Vertex, pixel and texture environment state
     pub fn GX_SetZMode(enable: u8, function: u8, update_enable: u8);
     pub fn GX_SetZCompLoc(before_texture: u8);
-    pub fn GX_SetColorUpdate(enable: u8);
     pub fn GX_SetAlphaCompare(comp0: u8, ref0: u8, op: u8, comp1: u8, ref1: u8);
     pub fn GX_SetBlendMode(kind: u8, src: u8, dst: u8, op: u8);
     pub fn GX_SetCullMode(mode: u8);
@@ -211,7 +206,6 @@ unsafe extern "C" {
         attenuation_function: u8,
     );
     pub fn GX_SetNumTexGens(count: u32);
-    pub fn GX_SetNumTevStages(count: u8);
     pub fn GX_SetTexCoordGen(coord: u16, kind: u32, source: u32, matrix: u32);
     pub fn GX_SetTevOrder(stage: u8, coord: u8, map: u32, color: u8);
     pub fn GX_SetTevOp(stage: u8, mode: u8);
@@ -219,7 +213,6 @@ unsafe extern "C" {
     // Matrices, textures and drawing
     pub fn GX_LoadProjectionMtx(matrix: *const Mtx44, projection_type: u8);
     pub fn GX_LoadPosMtxImm(matrix: *const Mtx, index: u32);
-    pub fn GX_SetCurrentMtx(matrix: u32);
     pub fn GX_InitTexObj(
         obj: *mut GXTexObj,
         data: *mut c_void,
@@ -326,8 +319,6 @@ pub const WPAD_BUTTON_PLUS: u32 = 0x1000;
 pub const WPAD_NUNCHUK_BUTTON_Z: u32 = 0x0001 << 16;
 pub const WPAD_NUNCHUK_BUTTON_C: u32 = 0x0002 << 16;
 
-pub type WpadPowerCallback = Option<extern "C" fn(c_int)>;
-
 #[repr(C)]
 pub struct IrDot {
     pub visible: u8,
@@ -394,8 +385,6 @@ unsafe extern "C" {
     pub fn WPAD_ButtonsHeld(channel: c_int) -> u32;
     pub fn WPAD_Expansion(channel: c_int, expansion: *mut Expansion);
     pub fn WPAD_IR(channel: c_int, ir: *mut IrData);
-    pub fn WPAD_Disconnect(channel: c_int) -> c_int;
-    pub fn WPAD_SetPowerButtonCallback(callback: WpadPowerCallback);
 }
 
 // MARK: C library
