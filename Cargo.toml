@@ -70,6 +70,7 @@ rusb = { path = "lib/sys/rusb" }
 rust-embed = { path = "lib/build/rust-embed" }
 rust-embed-impl = { path = "lib/build/rust-embed-impl" }
 serde_yaml = { path = "lib/data/serde_yaml" }
+sfxr = { path = "lib/audio/sfxr" }
 sha1 = { path = "lib/crypto/sha1" }
 sha2 = { path = "lib/crypto/sha2" }
 simple-useragent = { path = "lib/net/simple-useragent" }
