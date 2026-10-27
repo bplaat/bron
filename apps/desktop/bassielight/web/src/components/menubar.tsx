@@ -92,13 +92,7 @@ export function Menubar() {
 
                 <div class="spacer" />
 
-                <div
-                    class="menubar-status"
-                    role="status"
-                    aria-live="polite"
-                    aria-atomic="true"
-                    title={statusContent.detail}
-                >
+                <div class="menubar-status" role="status" title={statusContent.detail}>
                     <span class={`menubar-dot ${usbStatusClass}`} />
                     {statusContent.label}
                 </div>

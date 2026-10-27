@@ -20,7 +20,7 @@ export function FormSelect({ class: extraClass, children, ...props }: JSX.Intrin
             <select {...props} class={cx('select', extraClass)}>
                 {children}
             </select>
-            <ChevronDownIcon class="select-icon" aria-hidden="true" />
+            <ChevronDownIcon class="select-icon" />
         </span>
     );
 }
@@ -33,7 +33,7 @@ export function FormCheckbox({ class: extraClass, label, ...props }: FormCheckbo
     return (
         <label class={cx('checkbox', extraClass)}>
             <input {...props} type="checkbox" class="checkbox-input" />
-            <span class="checkbox-control" aria-hidden="true">
+            <span class="checkbox-control">
                 <CheckIcon class="checkbox-icon" />
             </span>
             <span class="checkbox-label">{label}</span>

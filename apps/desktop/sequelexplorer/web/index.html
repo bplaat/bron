@@ -131,11 +131,7 @@
                                                     :title="`Go to ${columns[colIdx].foreign_key.table} row`"
                                                     @click="navigateToForeignKey(columns[colIdx].foreign_key.table, columns[colIdx].foreign_key.column, val)"
                                                 >
-                                                    <svg
-                                                        class="icon foreign-key-icon"
-                                                        viewBox="0 0 24 24"
-                                                        aria-hidden="true"
-                                                    >
+                                                    <svg class="icon foreign-key-icon" viewBox="0 0 24 24">
                                                         <path d="M5,17.59L15.59,7H9V5H19V15H17V8.41L6.41,19L5,17.59Z" />
                                                     </svg>
                                                 </button>
@@ -177,7 +173,7 @@
                             <h1>Connect to a database</h1>
                             <p>Connections are opened for browsing only.</p>
                         </div>
-                        <button class="button is-icon" aria-label="Close" @click="closeConnectionDialog">
+                        <button class="button is-icon" @click="closeConnectionDialog">
                             <svg class="icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
                                 <path
                                     d="M19,6.41L17.59,5L12,10.59L6.41,5L5,6.41L10.59,12L5,17.59L6.41,19L12,13.41L17.59,19L19,17.59L13.41,12L19,6.41Z"
@@ -186,12 +182,11 @@
                         </button>
                     </div>
 
-                    <div class="connection-tabs" role="tablist" aria-label="Database type">
+                    <div class="connection-tabs" role="tablist">
                         <button
                             class="connection-tab"
                             :class="{ 'is-active': connectionTab === 'sqlite' }"
                             role="tab"
-                            :aria-selected="connectionTab === 'sqlite'"
                             @click="connectionTab = 'sqlite'"
                         >
                             SQLite
@@ -200,7 +195,6 @@
                             class="connection-tab"
                             :class="{ 'is-active': connectionTab === 'mysql' }"
                             role="tab"
-                            :aria-selected="connectionTab === 'mysql'"
                             @click="connectionTab = 'mysql'"
                         >
                             MySQL
