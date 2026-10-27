@@ -56,8 +56,8 @@ pub struct Controller {
     pressed: u32,
     /// The Nunchuk stick, x to the right and y forward, `None` without a Nunchuk.
     pub stick: Option<[f32; 2]>,
-    /// Where the Wii Remote points on the screen.
-    pub pointer: Option<[f32; 2]>,
+    /// Where the Wii Remote points on the screen and its roll in degrees.
+    pub pointer: Option<[f32; 3]>,
 }
 
 impl Controller {
@@ -74,7 +74,7 @@ impl Controller {
                 held: WPAD_ButtonsHeld(0),
                 pressed: WPAD_ButtonsDown(0),
                 stick: (expansion.kind == WPAD_EXP_NUNCHUK).then(|| stick(&expansion.joystick)),
-                pointer: (ir.valid != 0).then_some([ir.x, ir.y]),
+                pointer: (ir.valid != 0).then_some([ir.x, ir.y, ir.angle]),
             }
         }
     }

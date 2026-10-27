@@ -115,20 +115,6 @@ impl<'a> Hud<'a> {
         );
     }
 
-    pub fn image(&mut self, texture: &GXTexObj, x: f32, y: f32, width: f32, height: f32) {
-        self.texture(Some(texture));
-        self.quad(
-            [
-                [x, y],
-                [x + width, y],
-                [x + width, y + height],
-                [x, y + height],
-            ],
-            [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
-            [WHITE; 4],
-        );
-    }
-
     pub fn text_width(text: &str, size: f32) -> f32 {
         let scale = size / font::RENDER_SIZE;
         text.chars()
@@ -260,15 +246,22 @@ impl<'a> Hud<'a> {
         );
     }
 
-    pub fn cursor(&mut self, pointer: [f32; 2]) {
+    /// The Wii Remote cursor, rolled with the remote like in the Wii menu.
+    pub fn cursor(&mut self, [x, y, angle]: [f32; 3]) {
         let textures = self.textures;
-        // The cursor image's tip is at its center
-        self.image(
-            &textures.cursor,
-            pointer[0] - 24.0,
-            pointer[1] - 24.0,
-            48.0,
-            48.0,
+        self.texture(Some(&textures.cursor));
+        // The cursor image's tip is at its center, so it turns around the pointer
+        let (sin, cos) = (sinf(angle.to_radians()), cosf(angle.to_radians()));
+        let corner = |dx: f32, dy: f32| [x + dx * cos - dy * sin, y + dx * sin + dy * cos];
+        self.quad(
+            [
+                corner(-24.0, -24.0),
+                corner(24.0, -24.0),
+                corner(24.0, 24.0),
+                corner(-24.0, 24.0),
+            ],
+            [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
+            [WHITE; 4],
         );
     }
 }
