@@ -167,7 +167,8 @@ fn configure_hlsl(options: &mut hlsl::Options) {
         register: 5,
         ..Default::default()
     });
-    // Each draw binds a one-entry sampler table and an index buffer containing zero.
+    // Naga requires a register for its sampler index buffer, which
+    // single_sampler_tables replaces with a constant zero index.
     options.sampler_buffer_binding_map.insert(
         hlsl::SamplerIndexBufferKey { group: 0 },
         hlsl::BindTarget {
@@ -185,6 +186,7 @@ fn configure_hlsl(options: &mut hlsl::Options) {
 
 fn single_sampler_tables(source: &str) -> Result<String> {
     // Naga 30 hardcodes these heap declarations to 2048, ignoring binding_array_size.
+    // Each draw binds a one-entry sampler table, so its sampler index is always zero.
     // Match only its generated declarations, leaving application arrays untouched.
     let output = source
         .replace(
@@ -194,8 +196,15 @@ fn single_sampler_tables(source: &str) -> Result<String> {
         .replace(
             "SamplerComparisonState nagaComparisonSamplerHeap[2048]",
             "SamplerComparisonState nagaComparisonSamplerHeap[1]",
+        )
+        .replace(
+            "StructuredBuffer<uint> nagaGroup0SamplerIndexArray : register(t4, space0);",
+            "static const uint nagaGroup0SamplerIndexArray[1] = { 0 };",
         );
     for line in output.lines().map(str::trim) {
+        if line.contains("SamplerIndexArray : register(") {
+            return Err(format!("Unexpected generated sampler index buffer: {line}").into());
+        }
         for (kind, expected) in [
             ("SamplerState ", "SamplerState nagaSamplerHeap[1]:"),
             (
@@ -328,7 +337,9 @@ mod tests {
         let output = single_sampler_tables(&output).expect("limit sampler tables");
         assert!(output.contains("SamplerState nagaSamplerHeap[1]: register(s0, space0)"));
         assert!(output.contains("nagaSamplerHeap[nagaGroup0SamplerIndexArray[0]]"));
+        assert!(output.contains("static const uint nagaGroup0SamplerIndexArray[1] = { 0 };"));
         assert!(!output.contains("[2048]"));
+        assert!(!output.contains("register(t4"));
     }
 
     #[test]
@@ -337,6 +348,7 @@ mod tests {
             "SamplerState nagaSamplerHeap[4096]: register(s0, space0);",
             "SamplerState renamedHeap[2048]: register(s0, space0);",
             "SamplerComparisonState nagaComparisonSamplerHeap[]: register(s0, space1);",
+            "StructuredBuffer<uint> nagaGroup0SamplerIndexArray : register(t5, space0);",
         ] {
             assert!(single_sampler_tables(source).is_err());
         }
