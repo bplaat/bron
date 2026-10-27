@@ -48,6 +48,10 @@ position, a light palette index, and byte texture coordinates, so day and night 
 the palette. The block textures are converted to mipmapped CMPR or RGB5A3 textures during
 the build. Edits live as long as the game runs, there is no saving yet.
 
+The sound effects of the engine are rendered from their sfxr samples during the build, so the
+game only starts them. The DSP mixes them with libogc's AESND and also changes their pitch,
+volume and pan, the CPU only copies the samples to AESND's buffers.
+
 ## Benchmark
 
 `bench.sh` builds the port with the `bench` feature, which times the chunk pipeline instead of

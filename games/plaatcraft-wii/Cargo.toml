@@ -17,9 +17,12 @@ plaatcraft-engine = { path = "../plaatcraft-engine", default-features = false }
 gxtexconv = { path = "../../tools/wii-toolchain/gxtexconv" }
 image = { path = "../../lib/graphics/image", default-features = false, features = ["png"] }
 plaatcraft-engine = { path = "../plaatcraft-engine" }
+sfxr = "0.1.4"
 
 [patch.crates-io]
 crc = { path = "../../lib/data/crc" }
+getrandom = { path = "../../lib/crypto/getrandom" }
+sfxr = { path = "../../lib/audio/sfxr" }
 
 # Unoptimized code is too slow for the Wii
 [profile.dev]
