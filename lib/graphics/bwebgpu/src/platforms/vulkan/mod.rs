@@ -1456,20 +1456,6 @@ impl Context {
                 call!(d.instance, UnmapMemory, d.handle, staging.memory.handle);
                 frame.staging.push(staging);
             }
-            call!(
-                d.instance,
-                CmdPipelineBarrier,
-                frame.command,
-                0x10000,
-                0x10000,
-                0,
-                1,
-                &memory,
-                0,
-                ptr::null(),
-                0,
-                ptr::null()
-            );
             let mut sets = HashMap::new();
             for pass in &passes {
                 call!(
