@@ -138,6 +138,10 @@ Most of these libraries are intended primarily for personal use, but can still b
 - [bwebgpu](lib/graphics/bwebgpu) A native GPU rendering library for bwindow
 - [bwebgpu-shader-build](lib/graphics/bwebgpu-shader-build) Build-time native WGSL compilation for bwebgpu
 
+**Audio**
+
+- [cpal](lib/audio/cpal) A minimal replacement for the [cpal](https://crates.io/crates/cpal) crate
+
 **Apple**
 
 - [block2](lib/apple/block2) A minimal replacement for the [block2](https://crates.io/crates/block2) crate
@@ -312,7 +316,7 @@ This repo is a monorepo. Projects are grouped by what they are, not by the langu
 - [apps](apps/) - applications, grouped by platform: `desktop` for cross-platform apps, plus `macos`, `windows` and `web`
 - [examples](examples/) - standalone examples, grouped by platform
 - [games](games/) - games and their engines
-- [lib](lib/) - libraries, grouped by topic like `ui`, `graphics`, `net`, `data` and `crypto`
+- [lib](lib/) - libraries, grouped by topic like `ui`, `graphics`, `audio`, `net`, `data` and `crypto`
 - [tools](tools/) - developer tools, including the build tooling of this repo
 
 Library examples live next to the library they show off, in its `examples` directory. Standalone platform examples live under the top-level `examples` directory.

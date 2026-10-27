@@ -1,0 +1,13 @@
+[package]
+name = "cpal"
+version = "0.18.2+patch"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[target.'cfg(target_os = "ios")'.dependencies]
+objc2 = "0.6.4"
