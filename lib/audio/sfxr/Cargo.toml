@@ -9,5 +9,10 @@ repository.workspace = true
 [lints]
 workspace = true
 
+# Without std only the sample parameters are left, for crates that only describe sounds
+[features]
+default = ["std"]
+std = ["dep:getrandom"]
+
 [dependencies]
-getrandom = "0.4.3"
+getrandom = { version = "0.4.3", optional = true }

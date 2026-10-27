@@ -12,6 +12,9 @@ parameters, the same parameters as the [sfxr.me](https://sfxr.me/) web editor.
 - `Generator` with `new`, `generate`, `reset` and its `sample` and `volume` fields
 - `WaveType` with `Square`, `Triangle`, `Sine` and `Noise`
 
+Without the default `std` feature the crate is `no_std` and only has `Sample`, `WaveType` and
+`SAMPLE_RATE`, so `no_std` crates can describe their sounds and render them elsewhere.
+
 Differences with the original crate:
 
 - Without a seed the presets and `mutate` use a random seed from `getrandom`, the original crate
