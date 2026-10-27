@@ -5,9 +5,12 @@
  */
 
 #![doc = include_str!("../README.md")]
+#![cfg_attr(not(feature = "std"), no_std)]
 
+#[cfg(feature = "std")]
 use crate::generator::{Envelope, HighLowPassFilter, Oscillator, OscillatorParams, Phaser};
 
+#[cfg(feature = "std")]
 mod generator;
 
 /// The sample rate of the generated sound in Hz.
@@ -15,8 +18,10 @@ pub const SAMPLE_RATE: u32 = 44_100;
 
 // MARK: Random
 /// A small SplitMix64 generator, seeds without a value come from the operating system
+#[cfg(feature = "std")]
 pub(crate) struct Rng(u64);
 
+#[cfg(feature = "std")]
 impl Rng {
     pub(crate) const fn new(seed: u64) -> Self {
         Self(seed)
@@ -171,7 +176,10 @@ impl Sample {
             arp_mod: 0.0,
         }
     }
+}
 
+#[cfg(feature = "std")]
+impl Sample {
     /// Asserts that all fields are within their ranges
     fn assert_valid(&self) {
         let unit = 0.0..=1.0;
@@ -428,6 +436,7 @@ impl Sample {
 ///
 /// Generates mono sound at [`SAMPLE_RATE`] according to a [`Sample`] into a buffer. The data can
 /// be generated in multiple chunks, as the generator keeps its state between calls.
+#[cfg(feature = "std")]
 pub struct Generator {
     /// Generator settings.
     pub sample: Sample,
@@ -441,6 +450,7 @@ pub struct Generator {
     rep_limit: i32,
 }
 
+#[cfg(feature = "std")]
 impl Generator {
     /// Constructs a new generator for the sample.
     ///
