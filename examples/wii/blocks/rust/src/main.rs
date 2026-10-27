@@ -140,9 +140,7 @@ impl Demo {
                 },
                 GX_ZC_LINEAR,
             );
-            GX_SetDispCopyGamma(GX_GM_1_0);
             GX_SetCopyClear(CLEAR_COLOR, GX_MAX_Z24);
-            GX_SetZMode(GX_ENABLE, GX_ALWAYS, GX_TRUE);
             GX_CopyDisp(display.scanout(), GX_TRUE);
             WPAD_Init();
             SYS_SetPowerCallback(Some(power));

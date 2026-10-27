@@ -96,8 +96,7 @@ impl FrameState {
         unsafe {
             GX_DrawDone();
             self.current ^= 1;
-            GX_SetZMode(GX_ENABLE, GX_LEQUAL, GX_ENABLE);
-            GX_CopyDisp(self.scanout(), GX_ENABLE);
+            GX_CopyDisp(self.scanout(), GX_TRUE);
             VIDEO_SetNextFramebuffer(self.scanout());
             if self.first_frame {
                 VIDEO_SetBlack(false);
@@ -128,7 +127,6 @@ impl TriangleScene {
     unsafe fn draw(&mut self) {
         unsafe {
             self.rotation += 1.0;
-            GX_SetZMode(GX_ENABLE, GX_LEQUAL, GX_ENABLE);
             for y in -2..2 {
                 for x in -2..2 {
                     let mut matrix = [[0.0; 4]; 3];
@@ -239,7 +237,7 @@ pub extern "C" fn main() -> c_int {
         GX_SetCopyFilter(
             mode_ref.aa,
             mode_ref.sample_pattern.as_ptr(),
-            1,
+            GX_TRUE,
             mode_ref.vfilter.as_ptr(),
         );
         GX_SetFieldMode(
@@ -258,10 +256,8 @@ pub extern "C" fn main() -> c_int {
             },
             GX_ZC_LINEAR,
         );
-        GX_SetDispCopyGamma(GX_GM_1_0);
         GX_SetCopyClear(CLEAR_COLOR, GX_MAX_Z24);
-        GX_SetZMode(GX_ENABLE, GX_ALWAYS, GX_ENABLE);
-        GX_CopyDisp(display.scanout(), GX_ENABLE);
+        GX_CopyDisp(display.scanout(), GX_TRUE);
 
         WPAD_Init();
         SYS_SetPowerCallback(Some(power));
@@ -269,8 +265,8 @@ pub extern "C" fn main() -> c_int {
         GX_ClearVtxDesc();
         GX_SetVtxDesc(GX_VA_POS, GX_DIRECT);
         GX_SetVtxDesc(GX_VA_CLR0, GX_DIRECT);
-        GX_SetVtxAttrFmt(0, GX_VA_POS as u32, GX_POS_XY, GX_S8, 0);
-        GX_SetVtxAttrFmt(0, GX_VA_CLR0 as u32, GX_CLR_RGBA, GX_RGBA8, 0);
+        GX_SetVtxAttrFmt(GX_VTXFMT0, GX_VA_POS as u32, GX_POS_XY, GX_S8, 0);
+        GX_SetVtxAttrFmt(GX_VTXFMT0, GX_VA_CLR0 as u32, GX_CLR_RGBA, GX_RGBA8, 0);
         GX_SetNumChans(1);
         GX_SetChanCtrl(
             GX_COLOR0A0 as i32,
@@ -282,8 +278,8 @@ pub extern "C" fn main() -> c_int {
             GX_AF_NONE,
         );
         GX_SetNumTexGens(0);
-        GX_SetTevOrder(0, GX_TEXCOORDNULL, GX_TEXMAP_NULL, GX_COLOR0A0);
-        GX_SetTevOp(0, GX_PASSCLR);
+        GX_SetTevOrder(GX_TEVSTAGE0, GX_TEXCOORDNULL, GX_TEXMAP_NULL, GX_COLOR0A0);
+        GX_SetTevOp(GX_TEVSTAGE0, GX_PASSCLR);
         GX_SetCullMode(GX_CULL_NONE);
         let mut scene = TriangleScene::new(aspect, TRIANGLE_LIST.prepare());
         while !POWER_PRESSED.load(Ordering::Relaxed) {

@@ -163,9 +163,7 @@ impl CanvasScene {
                 GX_DF_NONE,
                 GX_AF_NONE,
             );
-            GX_SetCurrentMtx(GX_PNMTX0);
             GX_SetNumTexGens(1);
-            GX_SetNumTevStages(1);
             GX_SetTexCoordGen(GX_TEXCOORD0, GX_TG_MTX2X4, GX_TG_TEX0, GX_IDENTITY);
             GX_SetTevOrder(GX_TEVSTAGE0, GX_TEXCOORD0 as u8, GX_TEXMAP0, GX_COLOR0A0);
             GX_SetTevOp(GX_TEVSTAGE0, GX_MODULATE);
@@ -240,7 +238,6 @@ impl CanvasScene {
                 0xffff_ffff,
             );
             GX_SetBlendMode(GX_BM_NONE, GX_BL_SRCALPHA, GX_BL_INVSRCALPHA, GX_LO_CLEAR);
-            GX_Flush();
         }
     }
 }
@@ -318,9 +315,7 @@ pub extern "C" fn app_main() -> c_int {
             },
             GX_ZC_LINEAR,
         );
-        GX_SetDispCopyGamma(GX_GM_1_0);
         GX_SetCopyClear(CLEAR_COLOR, GX_MAX_Z24);
-        GX_SetZMode(GX_ENABLE, GX_ALWAYS, GX_TRUE);
         GX_CopyDisp(display.scanout(), GX_TRUE);
 
         let screen_height = mode_ref.vi_height as u32;

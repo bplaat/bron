@@ -46,9 +46,7 @@ static void canvas_begin(uint32_t screen_width, uint32_t screen_height) {
     GX_SetVtxAttrFmt(GX_VTXFMT0, GX_VA_TEX0, GX_TEX_ST, GX_F32, 0);
     GX_SetNumChans(1);
     GX_SetChanCtrl(GX_COLOR0A0, GX_DISABLE, GX_SRC_VTX, GX_SRC_VTX, 0, GX_DF_NONE, GX_AF_NONE);
-    GX_SetCurrentMtx(GX_PNMTX0);
     GX_SetNumTexGens(1);
-    GX_SetNumTevStages(1);
     GX_SetTexCoordGen(GX_TEXCOORD0, GX_TG_MTX2x4, GX_TG_TEX0, GX_IDENTITY);
     GX_SetTevOrder(GX_TEVSTAGE0, GX_TEXCOORD0, GX_TEXMAP0, GX_COLOR0A0);
     GX_SetTevOp(GX_TEVSTAGE0, GX_MODULATE);
@@ -56,7 +54,6 @@ static void canvas_begin(uint32_t screen_width, uint32_t screen_height) {
 
 static void canvas_end(void) {
     GX_SetBlendMode(GX_BM_NONE, GX_BL_SRCALPHA, GX_BL_INVSRCALPHA, GX_LO_CLEAR);
-    GX_Flush();
 }
 
 static void canvas_draw_image(GXTexObj* texture, float x, float y, float width, float height, uint32_t color) {
