@@ -116,9 +116,10 @@ int main(void) {
                 GX_CallDispList(triangle_list, sizeof(triangle_list));
             }
         }
-        GX_DrawDone();
         framebuffer ^= 1;
         GX_CopyDisp(framebuffers[framebuffer], GX_TRUE);
+        // The copy follows the drawing, so this waits for both before the frame is shown.
+        GX_DrawDone();
         VIDEO_SetNextFramebuffer(framebuffers[framebuffer]);
         if (first_frame) {
             VIDEO_SetBlack(false);

@@ -55,10 +55,11 @@ impl FrameState {
 
     unsafe fn present(&mut self) {
         unsafe {
-            GX_DrawDone();
             self.current ^= 1;
             GX_SetZMode(GX_ENABLE, GX_LEQUAL, GX_TRUE);
             GX_CopyDisp(self.scanout(), GX_TRUE);
+            // The copy follows the drawing, so this waits for both before the frame is shown
+            GX_DrawDone();
             VIDEO_SetNextFramebuffer(self.scanout());
             if self.first_frame {
                 VIDEO_SetBlack(false);
