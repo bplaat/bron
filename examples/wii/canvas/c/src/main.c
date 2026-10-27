@@ -217,11 +217,12 @@ int main(void) {
         cursor_render();
         canvas_end();
 
-        GX_DrawDone();
         framebuffer ^= 1;
         // GX_CopyDisp clears depth only when Z writes are enabled.
         GX_SetZMode(GX_ENABLE, GX_LEQUAL, GX_TRUE);
         GX_CopyDisp(framebuffers[framebuffer], GX_TRUE);
+        // The copy follows the drawing, so this waits for both before the frame is shown.
+        GX_DrawDone();
         VIDEO_SetNextFramebuffer(framebuffers[framebuffer]);
         if (first_frame) {
             VIDEO_SetBlack(false);
