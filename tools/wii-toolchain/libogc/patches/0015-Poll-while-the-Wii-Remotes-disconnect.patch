@@ -1,0 +1,48 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Tue, 27 Oct 2026 10:30:53 +0100
+Subject: [PATCH] Poll while the Wii Remotes disconnect
+
+WPAD_Shutdown and WPAD_Disconnect slept in usleep until the remotes
+disconnected. When only the main thread runs, the Wii hangs in that
+loop once the Bluetooth disconnect interrupt arrives, so exiting to
+the Homebrew Channel never got past the WPAD reset function. Busy wait
+with udelay instead, with the same 150 ms limit.
+---
+ wiiuse/wpad.c | 7 +++++--
+ 1 file changed, 5 insertions(+), 2 deletions(-)
+
+diff --git a/wiiuse/wpad.c b/wiiuse/wpad.c
+index a0cb316..ec5356d 100644
+--- a/wiiuse/wpad.c
++++ b/wiiuse/wpad.c
+@@ -110,6 +110,7 @@ static WPADShutdownCallback __wpad_powcb = __wpad_def_powcb;
+ 
+ extern void __wiiuse_sensorbar_enable(int enable);
+ extern void __SYS_DoPowerCB(void);
++extern void udelay(int us);
+ 
+ static sys_resetinfo __wpad_resetinfo = {
+ 	{},
+@@ -1103,8 +1104,9 @@ s32 WPAD_Disconnect(s32 chan)
+ 
+ 	_CPU_ISR_Restore(level);
+ 
++	// Poll instead of sleeping, sleeping here hangs after the disconnect interrupt
+ 	while(__wpads_active&(0x01<<chan)) {
+-		usleep(50);
++		udelay(50);
+ 		if(++cnt > 3000) break;
+ 	}
+ 
+@@ -1131,8 +1133,9 @@ void WPAD_Shutdown(void)
+ 	__wiiuse_sensorbar_enable(0);
+ 	_CPU_ISR_Restore(level);
+ 
++	// Poll instead of sleeping, sleeping here hangs after the disconnect interrupt
+ 	while(__wpads_active) {
+-		usleep(50);
++		udelay(50);
+ 		if(++cnt > 3000) break;
+ 	}
+ 
