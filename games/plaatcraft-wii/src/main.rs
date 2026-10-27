@@ -48,7 +48,8 @@ const NAME_DURATION: f32 = 2.0;
 const NIGHT_DAYLIGHT: f32 = 0.035;
 const MENU: [&str; 3] = ["Play", "Night", "Exit"];
 
-static RUNNING: AtomicBool = AtomicBool::new(true);
+// The power button of the Wii and of the Wii Remotes, libogc calls it from an interrupt
+static POWER_PRESSED: AtomicBool = AtomicBool::new(false);
 
 // A held button that repeats its action, like holding a mouse button
 #[derive(Default)]
@@ -86,6 +87,7 @@ struct Game {
     target: Option<Hit>,
     night: bool,
     paused: bool,
+    exit: bool,
     focus: usize,
     controller: Controller,
     breaking: Repeat,
@@ -106,8 +108,7 @@ impl Game {
             WPAD_Init();
             WPAD_SetDataFormat(WPAD_CHAN_ALL, WPAD_FMT_BTNS_ACC_IR);
             WPAD_SetVRes(0, display.width as u32, display.height as u32);
-            SYS_SetPowerCallback(Some(poweroff));
-            WPAD_SetPowerButtonCallback(Some(wpad_poweroff));
+            SYS_SetPowerCallback(Some(power));
         }
         let renderer = Renderer::new(&display);
         world::set_seed(world::WORLD_SEED);
@@ -121,6 +122,7 @@ impl Game {
             target: None,
             night: false,
             paused: true,
+            exit: false,
             focus: 0,
             controller: Controller::default(),
             breaking: Repeat::default(),
@@ -139,7 +141,7 @@ impl Game {
     }
 
     fn run(&mut self) {
-        while RUNNING.load(Ordering::Relaxed) {
+        while !self.exit && !POWER_PRESSED.load(Ordering::Relaxed) {
             let now = self.seconds();
             let dt = now - self.last_frame;
             self.last_frame = now;
@@ -163,7 +165,6 @@ impl Game {
                 self.last_fps = now;
             }
         }
-        unsafe { WPAD_Disconnect(WPAD_CHAN_ALL) };
     }
 
     fn menu_button_y(&self, index: usize) -> f32 {
@@ -195,7 +196,7 @@ impl Game {
             match self.focus {
                 0 => self.paused = false,
                 1 => self.night = !self.night,
-                _ => RUNNING.store(false, Ordering::Relaxed),
+                _ => self.exit = true,
             }
         }
     }
@@ -376,14 +377,8 @@ impl Game {
     }
 }
 
-extern "C" fn poweroff() {
-    RUNNING.store(false, Ordering::Relaxed);
-}
-
-extern "C" fn wpad_poweroff(channel: c_int) {
-    if channel == WPAD_CHAN_ALL {
-        RUNNING.store(false, Ordering::Relaxed);
-    }
+extern "C" fn power() {
+    POWER_PRESSED.store(true, Ordering::Relaxed);
 }
 
 #[cfg(feature = "bench")]
@@ -399,5 +394,9 @@ pub extern "C" fn app_main() -> c_int {
         return 1;
     };
     game.run();
+    // Exit returns to the loader, a power button turns the Wii off
+    if POWER_PRESSED.load(Ordering::Relaxed) {
+        unsafe { SYS_ResetSystem(SYS_POWEROFF, 0, 0) };
+    }
     0
 }
