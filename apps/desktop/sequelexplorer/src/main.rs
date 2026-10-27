@@ -106,6 +106,16 @@ enum IpcMessage {
         ok: bool,
         error: Option<String>,
     },
+    RunQuery {
+        request_id: u64,
+        sql: String,
+    },
+    #[serde(skip_deserializing)]
+    RunQueryResponse {
+        request_id: u64,
+        #[serde(flatten)]
+        result: QueryResponse,
+    },
     Preferences {
         values: HashMap<Preference, String>,
     },
@@ -1110,16 +1120,18 @@ fn db_table_schema(req: &Request, state: &State) -> Result<Response> {
 }
 
 // MARK: Custom query
-#[derive(Deserialize)]
-struct QueryBody {
-    sql: String,
-}
-
 #[derive(Serialize)]
 struct QueryResult {
     columns: Vec<ColumnInfo>,
     rows: Vec<Vec<CellValue>>,
     truncated: bool,
+}
+
+#[derive(Serialize)]
+#[serde(untagged)]
+enum QueryResponse {
+    Success(QueryResult),
+    Error { error: String },
 }
 
 const CUSTOM_QUERY_ROW_LIMIT: usize = 10_000;
@@ -1182,30 +1194,35 @@ fn execute_custom_query(
     })
 }
 
-fn db_query(req: &Request, state: &State) -> Result<Response> {
-    let body: QueryBody = match serde_json::from_slice(req.body.as_deref().unwrap_or(&[])) {
-        Ok(b) => b,
-        Err(e) => return Ok(Response::with_json(json!({ "error": e.to_string() }))),
-    };
+struct QueryConnection {
+    connection: Connection,
+    backend: DatabaseBackend,
+    database: Option<String>,
+}
 
-    if let Err(error) = validate_read_only_query(&body.sql) {
-        return Ok(Response::with_json(json!({ "error": error })));
-    }
+fn query_connection(state: &State) -> Result<QueryConnection, String> {
+    let guard = state
+        .lock()
+        .map_err(|_| "Database state unavailable".to_string())?;
+    Ok(QueryConnection {
+        connection: guard
+            .connection
+            .clone()
+            .ok_or_else(|| "No database open".to_string())?,
+        backend: guard.backend.expect("backend set with connection"),
+        database: guard.database.clone(),
+    })
+}
 
-    let guard = match get_connection(state) {
-        Ok(g) => g,
-        Err(e) => return Ok(e),
-    };
-    let conn = guard.connection.as_ref().expect("connection checked above");
-    let backend = guard.backend.expect("backend set with connection");
-    let database = guard.database.as_deref();
-
-    let result = execute_custom_query(conn, backend, database, &body.sql);
-
-    match result {
-        Ok(result) => Ok(Response::with_json(&result)),
-        Err(e) => Ok(Response::with_json(json!({ "error": e.to_string() }))),
-    }
+fn run_query(connection: &QueryConnection, sql: &str) -> Result<QueryResult, String> {
+    validate_read_only_query(sql).map_err(str::to_string)?;
+    execute_custom_query(
+        &connection.connection,
+        connection.backend,
+        connection.database.as_deref(),
+        sql,
+    )
+    .map_err(|error| error.to_string())
 }
 
 fn validate_read_only_query(sql: &str) -> Result<(), &'static str> {
@@ -1377,7 +1394,6 @@ fn main() {
         .get("/api/tables", db_tables)
         .get("/api/table/:name/data", db_table_data)
         .get("/api/table/:name/schema", db_table_schema)
-        .post("/api/query", db_query)
         .build();
     let event_loop_proxy = Arc::new(event_loop.create_proxy());
     let mysql_connection_pending = Arc::new(AtomicBool::new(false));
@@ -1672,6 +1688,31 @@ fn main() {
                         })
                         .expect("Failed to spawn MySQL connection thread");
                 }
+                IpcMessage::RunQuery { request_id, sql } => {
+                    let connection = query_connection(&state);
+                    let event_loop_proxy = Arc::clone(&event_loop_proxy);
+                    std::thread::Builder::new()
+                        .name("query".to_string())
+                        .spawn(move || {
+                            let result =
+                                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                    connection.and_then(|connection| run_query(&connection, &sql))
+                                }))
+                                .unwrap_or_else(|_| Err("Failed to run query".to_string()));
+                            let response = IpcMessage::RunQueryResponse {
+                                request_id,
+                                result: match result {
+                                    Ok(result) => QueryResponse::Success(result),
+                                    Err(error) => QueryResponse::Error { error },
+                                },
+                            };
+                            let _ = event_loop_proxy.send_user_event(AppEvent::UserEvent(
+                                serde_json::to_string(&response)
+                                    .expect("Failed to serialize query response"),
+                            ));
+                        })
+                        .expect("Failed to spawn query thread");
+                }
                 IpcMessage::SelectMysqlDatabase {
                     request_id,
                     database,
@@ -1727,6 +1768,116 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn query_state() -> State {
+        let connection = Connection::open_sqlite_memory().expect("open test database");
+        connection
+            .execute_script(
+                "CREATE TABLE parents (id INTEGER PRIMARY KEY);
+                 CREATE TABLE children (parent_id INTEGER REFERENCES parents(id), payload BLOB);
+                 INSERT INTO parents VALUES (1);
+                 INSERT INTO children VALUES (1, X'00FF80');",
+            )
+            .expect("create query fixtures");
+        Arc::new(Mutex::new(DatabaseState {
+            connection: Some(connection),
+            backend: Some(DatabaseBackend::Sqlite),
+            ..DatabaseState::default()
+        }))
+    }
+
+    #[test]
+    fn query_ipc_preserves_request_id_rows_and_metadata() {
+        let request: IpcMessage = serde_json::from_value(json!({
+            "type": "runQuery",
+            "requestId": 42,
+            "sql": "SELECT parent_id, payload FROM children",
+        }))
+        .expect("deserialize query request");
+        let IpcMessage::RunQuery { request_id, sql } = request else {
+            panic!("expected query request");
+        };
+        let state = query_state();
+        let connection = query_connection(&state).expect("capture query connection");
+        let result = std::thread::spawn(move || run_query(&connection, &sql))
+            .join()
+            .expect("query worker completed")
+            .expect("run query");
+        let response = serde_json::to_value(IpcMessage::RunQueryResponse {
+            request_id,
+            result: QueryResponse::Success(result),
+        })
+        .expect("serialize query response");
+
+        assert_eq!(response["type"], "runQueryResponse");
+        assert_eq!(response["requestId"], 42);
+        assert_eq!(response["columns"][0]["foreign_key"]["table"], "parents");
+        assert_eq!(response["columns"][1]["is_blob"], true);
+        assert_eq!(response["rows"][0][0]["value"], "1");
+        assert_eq!(response["rows"][0][1]["value"], "AP+A");
+        assert_eq!(response["truncated"], false);
+        assert!(response.get("error").is_none());
+    }
+
+    #[test]
+    fn query_rejects_writes_and_reports_database_errors() {
+        let state = query_state();
+        let connection = query_connection(&state).expect("capture query connection");
+        assert!(run_query(&connection, "DELETE FROM children").is_err());
+        assert!(run_query(&connection, "SELECT 1; DELETE FROM children").is_err());
+        assert!(run_query(&connection, "SELECT * FROM missing_table").is_err());
+        let result = run_query(&connection, "SELECT * FROM children").expect("rows preserved");
+        assert_eq!(result.rows.len(), 1);
+
+        let state = Arc::new(Mutex::new(DatabaseState::default()));
+        let error = query_connection(&state).err().expect("no database");
+        let response = serde_json::to_value(IpcMessage::RunQueryResponse {
+            request_id: 43,
+            result: QueryResponse::Error { error },
+        })
+        .expect("serialize query error");
+        assert_eq!(
+            response,
+            json!({
+                "type": "runQueryResponse",
+                "requestId": 43,
+                "error": "No database open",
+            })
+        );
+    }
+
+    #[test]
+    fn query_preserves_row_limit_and_truncation() {
+        let sql = format!(
+            "SELECT n FROM (
+                WITH RECURSIVE numbers(n) AS (
+                    VALUES(1) UNION ALL SELECT n + 1 FROM numbers WHERE n <= {CUSTOM_QUERY_ROW_LIMIT}
+                ) SELECT n FROM numbers
+            )"
+        );
+        let connection = query_connection(&query_state()).expect("capture query connection");
+        let result = run_query(&connection, &sql).expect("run bounded query");
+        assert_eq!(result.rows.len(), CUSTOM_QUERY_ROW_LIMIT);
+        assert!(result.truncated);
+    }
+
+    #[test]
+    fn queued_query_keeps_its_original_connection() {
+        let state = query_state();
+        let connection = query_connection(&state).expect("capture query connection");
+        *state.lock().expect("lock database state") = DatabaseState {
+            connection: Some(Connection::open_sqlite_memory().expect("open replacement database")),
+            backend: Some(DatabaseBackend::Sqlite),
+            ..DatabaseState::default()
+        };
+
+        let result = std::thread::spawn(move || run_query(&connection, "SELECT * FROM children"))
+            .join()
+            .expect("query worker completed")
+            .expect("query original database");
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0][0].value, "1");
+    }
 
     #[test]
     fn credential_account_identifies_connection() {
