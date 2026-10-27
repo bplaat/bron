@@ -409,6 +409,7 @@ PetiteVue.createApp({
         document.title = `Sequel Explorer - ${this.dbFileName} - ${name}`;
 
         this.isLoading = false;
+        this.isQueryRunning = false;
         this.currentOffset = 0;
         this.currentTotal = 0;
         this.currentCursor = null;
@@ -524,12 +525,7 @@ PetiteVue.createApp({
         this.showDataTable = false;
 
         try {
-            const response = await fetch('/api/query', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ sql }),
-            });
-            const data = await response.json();
+            const data = await ipcRequest('runQuery', { sql });
             if (generation !== this.viewGeneration) return;
 
             if (data.error) {
@@ -566,7 +562,18 @@ PetiteVue.createApp({
     clearQuery() {
         this.queryText = '';
         this.isCustomQuery = false;
-        if (this.currentTable) this.openTableView(this.currentTable);
+        if (this.currentTable) {
+            this.openTableView(this.currentTable);
+        } else {
+            this.viewGeneration += 1;
+            this.isQueryRunning = false;
+            this.showDataLoading = false;
+            this.showDataTable = false;
+            this.showDataEmpty = false;
+            this.rows = [];
+            this.columns = [];
+            this.rowCount = '';
+        }
     },
 
     formatCellValue(cell, colIdx) {
