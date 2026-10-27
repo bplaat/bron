@@ -26,17 +26,19 @@ cargo xtask install-wii plaatcraft
 
 ## Controls
 
-Hold the Wii Remote with the Nunchuk attached, like the original PlaatCraft Wii port:
+Hold the Wii Remote with the Nunchuk attached, the controls follow the console editions of
+Minecraft and walking into a one block step always jumps on it:
 
-| Button        | Action                                    |
-| ------------- | ----------------------------------------- |
-| D-pad         | Move                                      |
-| Nunchuk stick | Look around                               |
-| A / B         | Jump or swim up, sneak; fly up and down   |
-| Z / C         | Break or place a block, hold to repeat    |
-| + / -         | Select a hotbar slot                      |
-| 1 / 2         | Toggle flying and day/night               |
-| Home          | Open the menu, point or use the D-pad + A |
+| Button             | Action                                       |
+| ------------------ | -------------------------------------------- |
+| Nunchuk stick      | Walk forward and back, turn left and right   |
+| D-pad up / down    | Look up and down                             |
+| D-pad left / right | Select a hotbar slot                         |
+| A / B              | Place or break a block, hold to repeat       |
+| C                  | Jump, swim, or fly up, double tap to fly     |
+| Z                  | Sneak or fly down                            |
+| 2                  | Toggle day/night                             |
+| + / Home           | Open the menu, point or use the D-pad + A, B |
 
 ## How it works
 
