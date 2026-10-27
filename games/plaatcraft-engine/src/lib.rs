@@ -5,8 +5,8 @@
  */
 
 //! The platform independent part of PlaatCraft: world generation, lighting, chunk
-//! meshing, player physics, block picking, and the hotbar. It only needs `alloc`, so
-//! the bwindow game and the Wii port share it.
+//! meshing, player physics, block picking, the hotbar, and when sound effects play. It
+//! only needs `alloc`, so the bwindow game and the Wii port share it.
 
 #![no_std]
 
@@ -22,5 +22,6 @@ mod lighting;
 mod math;
 mod perlin;
 pub mod raycast;
+pub mod sound;
 pub mod tiles;
 pub mod world;

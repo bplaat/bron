@@ -11,5 +11,8 @@ repository.workspace = true
 default = ["std"]
 std = []
 
+[dependencies]
+sfxr = { version = "0.1.4", default-features = false }
+
 [lints]
 workspace = true
