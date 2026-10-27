@@ -280,7 +280,7 @@ fn draw_content(
                     (
                         format!("Sound Volume: {}%", settings.volume),
                         f32::from(settings.volume) / f32::from(crate::settings::MAX_VOLUME),
-                        "Blocks, footsteps, water and menu sounds",
+                        "Blocks, footsteps, jumps, flying, water and menus",
                     )
                 };
                 ctx.set_fill_style(Color::rgb(255, 255, 255));

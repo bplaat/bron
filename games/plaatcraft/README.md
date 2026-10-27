@@ -14,8 +14,7 @@ The world generation, lighting, meshing, and player physics live in the `no_std`
 - Walking, swimming, and flying
 - Day and night with a layered skybox and voxel lighting
 - Your world, edits, and player are saved automatically
-- Retro sound effects for blocks, footsteps, water, and menus, made with
-  [sfxr](../../lib/audio/sfxr) and mixed by [baudio](../../lib/audio/baudio)
+- Retro sound effects made with [sfxr](../../lib/audio/sfxr) and mixed by [baudio](../../lib/audio/baudio)
 - Settings with a 4-128 chunk Render Distance slider, a Sound Volume slider,
   a Show Debug Info toggle, and saved preferences
 - On-screen touch controls on iOS and Android

@@ -40,11 +40,15 @@ pub enum Effect {
     Crumble,
     /// A menu, hotbar or inventory click
     Click,
+    /// A rising blip as the player leaves the ground
+    Jump,
+    /// A gust of wind when taking off or landing from flight
+    Fly,
 }
 
 impl Effect {
     /// All effects in order, so `effect as usize` indexes them
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 11] = [
         Self::Stone,
         Self::Dirt,
         Self::Sand,
@@ -54,6 +58,8 @@ impl Effect {
         Self::Splash,
         Self::Crumble,
         Self::Click,
+        Self::Jump,
+        Self::Fly,
     ];
 
     /// How a material sounds when it is broken, placed and walked on
@@ -185,6 +191,27 @@ impl Effect {
                 hpf_freq: 0.1,
                 ..Sample::new()
             },
+            Self::Jump => Sample {
+                duty: 0.5,
+                base_freq: 0.3,
+                freq_ramp: 0.2,
+                env_attack: 0.0,
+                env_sustain: 0.04,
+                env_decay: 0.1,
+                lpf_freq: 0.6,
+                ..Sample::new()
+            },
+            Self::Fly => Sample {
+                wave_type: WaveType::Noise,
+                base_freq: 0.2,
+                freq_ramp: 0.1,
+                env_attack: 0.08,
+                env_sustain: 0.08,
+                env_decay: 0.2,
+                lpf_freq: 0.4,
+                hpf_freq: 0.1,
+                ..Sample::new()
+            },
         }
     }
 }
@@ -215,6 +242,14 @@ impl Play {
     /// A menu, hotbar or inventory click
     pub const fn click() -> Self {
         Self::new(Effect::Click, 0.4)
+    }
+
+    /// Taking off rises, landing from flight sounds lower
+    pub const fn fly(flying: bool) -> Self {
+        Self {
+            pitch: if flying { 1.0 } else { 0.7 },
+            ..Self::new(Effect::Fly, 0.5)
+        }
     }
 
     /// A broken block crumbles, a placed block sounds lower
@@ -267,7 +302,7 @@ impl Movement {
     }
 }
 
-/// Footsteps on the ground, splashes in water and a thud on landing
+/// Jumps, footsteps on the ground, splashes in water and a thud on landing
 #[derive(Default)]
 pub struct Footsteps {
     /// The distance walked or swum since the last step
@@ -287,6 +322,13 @@ impl Footsteps {
         if camera.flying {
             self.stride = 0.0;
             return;
+        }
+        if before.grounded
+            && !camera.grounded
+            && camera.vertical_velocity > 0.0
+            && !camera.in_liquid
+        {
+            play(Play::new(Effect::Jump, 0.3));
         }
         if camera.in_liquid && !before.in_liquid {
             play(Play::new(Effect::Splash, 0.6));
@@ -408,4 +450,23 @@ mod tests {
         assert!(ahead.abs() < 0.001);
     }
 
+    #[test]
+    fn jumps_play_but_walking_off_ledges_does_not() {
+        let mut footsteps = Footsteps::default();
+        let mut camera = Camera {
+            grounded: true,
+            ..Camera::default()
+        };
+        let before = Movement::of(&camera);
+        camera.grounded = false;
+        camera.vertical_velocity = 8.0;
+        let mut played = None;
+        footsteps.update(before, &camera, None, |play| played = Some(play.effect));
+        assert_eq!(played, Some(Effect::Jump));
+
+        camera.vertical_velocity = -1.0;
+        let mut played = None;
+        footsteps.update(before, &camera, None, |play| played = Some(play.effect));
+        assert_eq!(played, None);
+    }
 }
