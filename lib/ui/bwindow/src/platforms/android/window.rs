@@ -19,8 +19,8 @@ use super::event_loop::{
 };
 use crate::content::ContentHost;
 use crate::{
-    CloseRequest, Event, LogicalInsets, LogicalPoint, LogicalSize, NativeWindowHandle, Theme,
-    WindowBuilder, WindowEvent, WindowId,
+    AndroidSystemBarIcons, CloseRequest, Event, LogicalInsets, LogicalPoint, LogicalSize,
+    NativeWindowHandle, Theme, WindowBuilder, WindowEvent, WindowId,
 };
 
 // An activity hosts exactly one window.
@@ -157,6 +157,7 @@ fn paint_background(host: &ContentHost) {
 pub(crate) struct PlatformWindow {
     id: WindowId,
     host: Rc<ContentHost>,
+    system_bar_icons: Option<AndroidSystemBarIcons>,
 }
 
 impl PlatformWindow {
@@ -177,12 +178,15 @@ impl PlatformWindow {
         let mut window = Self {
             id: builder.window_id,
             host: host.clone(),
+            system_bar_icons: builder.android_system_bar_icons,
         };
         if let Some(theme) = builder.theme {
             crate::WindowInterface::set_theme(&mut window, theme);
         }
         if let Some(color) = builder.background_color {
             crate::WindowInterface::set_background_color(&mut window, color);
+        } else if window.system_bar_icons.is_some() {
+            set_system_bar_appearance(android_default_background(), window.system_bar_icons);
         }
         WINDOW.with(|window| *window.borrow_mut() = Some(host));
         send_event(Event::Window(builder.window_id, WindowEvent::Create));
@@ -229,7 +233,7 @@ impl crate::WindowInterface for PlatformWindow {
 
     fn set_background_color(&mut self, color: u32) {
         self.host.set_background(color);
-        set_system_bar_appearance(color);
+        set_system_bar_appearance(color, self.system_bar_icons);
         if !self.host.draws_content() {
             paint_background(&self.host);
         }

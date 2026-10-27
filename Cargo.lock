@@ -468,6 +468,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "frogger"
+version = "0.1.0"
+dependencies = [
+ "bwebgpu",
+ "bwebgpu-shader-build",
+ "bwindow",
+ "image",
+ "preferences",
+ "winresource",
+]
+
+[[package]]
 name = "from_derive"
 version = "0.1.0"
 dependencies = [

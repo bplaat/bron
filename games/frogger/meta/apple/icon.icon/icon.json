@@ -1,0 +1,64 @@
+{
+    "fill": {
+        "linear-gradient": ["srgb:0.82,0.91,0.66,1.00000", "srgb:0.64,0.80,0.46,1.00000"],
+        "orientation": {
+            "start": {
+                "x": 0,
+                "y": 0
+            },
+            "stop": {
+                "x": 0.8,
+                "y": 1
+            }
+        }
+    },
+    "groups": [
+        {
+            "layers": [
+                {
+                    "image-name": "frog.svg",
+                    "name": "Frog"
+                }
+            ],
+            "name": "Frog",
+            "shadow": {
+                "kind": "neutral",
+                "opacity": 0
+            },
+            "specular-specializations": [
+                {
+                    "value": false
+                }
+            ],
+            "translucency": {
+                "enabled": false,
+                "value": 0.5
+            }
+        },
+        {
+            "layers": [
+                {
+                    "image-name": "road.svg",
+                    "name": "Road and grass"
+                }
+            ],
+            "name": "Road and grass",
+            "shadow": {
+                "kind": "neutral",
+                "opacity": 0
+            },
+            "specular-specializations": [
+                {
+                    "value": false
+                }
+            ],
+            "translucency": {
+                "enabled": false,
+                "value": 0.5
+            }
+        }
+    ],
+    "supported-platforms": {
+        "squares": ["macOS"]
+    }
+}

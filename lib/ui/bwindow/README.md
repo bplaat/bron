@@ -175,7 +175,8 @@ in the framework `android.app.NativeActivity`, so the APK needs no Java code. An
 - Title, position, size, minimum size, resizable, center, and window state calls
   are no-ops. `background_color` fills the window when no renderer takes the content
   host, also behind content in its own window like a web view, and picks matching
-  light or dark system bar icons. `set_theme` forces the app night mode on
+  light or dark system bar icons. `android_system_bar_icons` overrides that choice
+  for content such as games. `set_theme` forces the app night mode on
   Android 12+.
 - The system night mode is the theme, changes send `ThemeChanged`.
 - Touches report `MouseMove` and a left `MouseDown`, lifting the finger reports

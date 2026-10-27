@@ -18,6 +18,7 @@ use jni::{Env, JValue, jni_sig, jni_str};
 use super::event_loop::{self, DISPLAY, Queue, android_post, post_and_wait};
 use super::headers::*;
 use super::window;
+use crate::AndroidSystemBarIcons;
 
 // The framework android.app.NativeActivity hosts the single window, its callbacks run on
 // the Android UI thread. The process runs one Rust main and exits with the activity.
@@ -328,15 +329,39 @@ fn draw_behind_system_bars() {
     });
 }
 
-/// Use light or dark system bar icons for a window background color, callable from every thread.
-pub(super) fn set_system_bar_appearance(color: u32) {
+/// Apply explicit icon colors or match the window background, callable from every thread.
+pub(super) fn set_system_bar_appearance(color: u32, icons: Option<AndroidSystemBarIcons>) {
     let [_, red, green, blue] = color.to_be_bytes().map(u32::from);
-    let light = red * 299 + green * 587 + blue * 114 > 128_000;
+    let dark_icons = match icons {
+        Some(AndroidSystemBarIcons::Light) => false,
+        Some(AndroidSystemBarIcons::Dark) => true,
+        None => red * 299 + green * 587 + blue * 114 > 128_000,
+    };
     android_run_on_ui_thread(move || {
         const APPEARANCE_LIGHT_BARS: jint = 0x8 | 0x10;
         const LIGHT_STATUS_AND_NAVIGATION_BAR: jint = 0x2000 | 0x10;
         android_with_env(|env| {
             let (window, decor) = window_and_decor_view(env)?;
+            if icons.is_some() {
+                // Mark navigation color as explicit so edge-to-edge background adaptation
+                // cannot force dark icons over an app's requested light icons.
+                env.call_method(
+                    &window,
+                    jni_str!("setNavigationBarColor"),
+                    jni_sig!("(I)V"),
+                    &[JValue::Int(0)],
+                )?
+                .v()?;
+                if sdk_version() >= 29 {
+                    env.call_method(
+                        &window,
+                        jni_str!("setNavigationBarContrastEnforced"),
+                        jni_sig!("(Z)V"),
+                        &[JValue::Bool(false)],
+                    )?
+                    .v()?;
+                }
+            }
             if sdk_version() >= ANDROID_R {
                 let controller = env
                     .call_method(
@@ -354,7 +379,7 @@ pub(super) fn set_system_bar_appearance(color: u32) {
                     jni_str!("setSystemBarsAppearance"),
                     jni_sig!("(II)V"),
                     &[
-                        JValue::Int(if light { APPEARANCE_LIGHT_BARS } else { 0 }),
+                        JValue::Int(if dark_icons { APPEARANCE_LIGHT_BARS } else { 0 }),
                         JValue::Int(APPEARANCE_LIGHT_BARS),
                     ],
                 )?
@@ -368,7 +393,7 @@ pub(super) fn set_system_bar_appearance(color: u32) {
                         &[],
                     )?
                     .i()?;
-                let visibility = if light {
+                let visibility = if dark_icons {
                     visibility | LIGHT_STATUS_AND_NAVIGATION_BAR
                 } else {
                     visibility & !LIGHT_STATUS_AND_NAVIGATION_BAR
