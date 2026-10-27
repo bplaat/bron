@@ -167,140 +167,147 @@
                     </div>
                 </div>
 
-                <dialog ref="connectionDialog" class="connection-dialog" @click.self="closeConnectionDialog">
-                    <div class="dialog-header">
-                        <div>
-                            <h1>Connect to a database</h1>
-                            <p>Connections are opened for browsing only.</p>
-                        </div>
-                        <button class="button is-icon" @click="closeConnectionDialog">
-                            <svg class="icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
-                                <path
-                                    d="M19,6.41L17.59,5L12,10.59L6.41,5L5,6.41L10.59,12L5,17.59L6.41,19L12,13.41L17.59,19L19,17.59L13.41,12L19,6.41Z"
-                                />
-                            </svg>
-                        </button>
-                    </div>
-
-                    <div class="connection-tabs" role="tablist">
-                        <button
-                            class="connection-tab"
-                            :class="{ 'is-active': connectionTab === 'sqlite' }"
-                            role="tab"
-                            @click="connectionTab = 'sqlite'"
-                        >
-                            SQLite
-                        </button>
-                        <button
-                            class="connection-tab"
-                            :class="{ 'is-active': connectionTab === 'mysql' }"
-                            role="tab"
-                            @click="connectionTab = 'mysql'"
-                        >
-                            MySQL
-                        </button>
-                    </div>
-
-                    <section class="connection-panel" v-show="connectionTab === 'sqlite'">
-                        <p>Open an existing SQLite file in read-only mode.</p>
-                        <button class="button is-primary" @click="openSqliteDatabase">Choose SQLite file</button>
-                    </section>
-
-                    <form
-                        class="connection-panel mysql-form"
-                        v-show="connectionTab === 'mysql'"
-                        @submit.prevent="openMysql"
-                    >
-                        <div class="transport-options">
-                            <label>
-                                <input type="radio" value="tcp" v-model="mysql.transport" />
-                                TCP
-                            </label>
-                            <label v-show="supportsUnixSocket">
-                                <input type="radio" value="unix" v-model="mysql.transport" />
-                                Unix socket
-                            </label>
-                        </div>
-
-                        <div class="form-grid" v-show="mysql.transport === 'tcp'">
-                            <label>
-                                <span>Host</span>
-                                <input
-                                    class="input"
-                                    v-model="mysql.host"
-                                    :required="mysql.transport === 'tcp'"
-                                    :disabled="mysql.transport !== 'tcp'"
-                                    autocorrect="off"
-                                    spellcheck="false"
-                                />
-                            </label>
-                            <label>
-                                <span>Port</span>
-                                <input
-                                    class="input"
-                                    v-model.number="mysql.port"
-                                    type="number"
-                                    min="1"
-                                    max="65535"
-                                    :required="mysql.transport === 'tcp'"
-                                    :disabled="mysql.transport !== 'tcp'"
-                                />
-                            </label>
-                        </div>
-
-                        <label v-show="mysql.transport === 'unix'">
-                            <span>Socket path</span>
-                            <input
-                                class="input"
-                                v-model="mysql.socket"
-                                :required="mysql.transport === 'unix'"
-                                :disabled="mysql.transport !== 'unix'"
-                                autocorrect="off"
-                                spellcheck="false"
-                            />
-                        </label>
-
-                        <div class="form-grid">
-                            <label>
-                                <span>User</span>
-                                <input
-                                    class="input"
-                                    v-model="mysql.user"
-                                    required
-                                    autocomplete="username"
-                                    autocorrect="off"
-                                    spellcheck="false"
-                                />
-                            </label>
-                            <label>
-                                <span>Password</span>
-                                <input
-                                    class="input"
-                                    v-model="mysql.password"
-                                    type="password"
-                                    autocomplete="current-password"
-                                />
-                            </label>
-                        </div>
-
-                        <label class="checkbox-field" v-show="mysql.transport === 'tcp'">
-                            <input type="checkbox" v-model="mysql.tls" />
-                            Require verified TLS
-                        </label>
-
-                        <label class="checkbox-field">
-                            <input type="checkbox" v-model="mysql.remember" />
-                            Remember password
-                        </label>
-
-                        <div class="dialog-actions">
-                            <span class="connection-error" role="alert">{{ connectionError }}</span>
-                            <button class="button is-primary" type="submit" :disabled="isConnecting">
-                                {{ isConnecting ? 'Connecting...' : 'Connect' }}
+                <div
+                    class="connection-backdrop"
+                    v-show="connectionDialogOpen"
+                    @click.self="closeConnectionDialog"
+                    @keydown="handleConnectionDialogKeydown($event)"
+                >
+                    <div ref="connectionDialog" class="connection-dialog" role="dialog" tabindex="-1">
+                        <div class="dialog-header">
+                            <div>
+                                <h1 id="connection-dialog-title">Connect to a database</h1>
+                                <p>Connections are opened for browsing only.</p>
+                            </div>
+                            <button class="button is-icon" @click="closeConnectionDialog">
+                                <svg class="icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+                                    <path
+                                        d="M19,6.41L17.59,5L12,10.59L6.41,5L5,6.41L10.59,12L5,17.59L6.41,19L12,13.41L17.59,19L19,17.59L13.41,12L19,6.41Z"
+                                    />
+                                </svg>
                             </button>
                         </div>
-                    </form>
-                </dialog>
+
+                        <div class="connection-tabs" role="tablist">
+                            <button
+                                class="connection-tab"
+                                :class="{ 'is-active': connectionTab === 'sqlite' }"
+                                role="tab"
+                                @click="connectionTab = 'sqlite'"
+                            >
+                                SQLite
+                            </button>
+                            <button
+                                class="connection-tab"
+                                :class="{ 'is-active': connectionTab === 'mysql' }"
+                                role="tab"
+                                @click="connectionTab = 'mysql'"
+                            >
+                                MySQL
+                            </button>
+                        </div>
+
+                        <section class="connection-panel" v-show="connectionTab === 'sqlite'">
+                            <p>Open an existing SQLite file in read-only mode.</p>
+                            <button class="button is-primary" @click="openSqliteDatabase">Choose SQLite file</button>
+                        </section>
+
+                        <form
+                            class="connection-panel mysql-form"
+                            v-show="connectionTab === 'mysql'"
+                            @submit.prevent="openMysql"
+                        >
+                            <div class="transport-options">
+                                <label>
+                                    <input type="radio" value="tcp" v-model="mysql.transport" />
+                                    TCP
+                                </label>
+                                <label v-show="supportsUnixSocket">
+                                    <input type="radio" value="unix" v-model="mysql.transport" />
+                                    Unix socket
+                                </label>
+                            </div>
+
+                            <div class="form-grid" v-show="mysql.transport === 'tcp'">
+                                <label>
+                                    <span>Host</span>
+                                    <input
+                                        class="input"
+                                        v-model="mysql.host"
+                                        :required="mysql.transport === 'tcp'"
+                                        :disabled="mysql.transport !== 'tcp'"
+                                        autocorrect="off"
+                                        spellcheck="false"
+                                    />
+                                </label>
+                                <label>
+                                    <span>Port</span>
+                                    <input
+                                        class="input"
+                                        v-model.number="mysql.port"
+                                        type="number"
+                                        min="1"
+                                        max="65535"
+                                        :required="mysql.transport === 'tcp'"
+                                        :disabled="mysql.transport !== 'tcp'"
+                                    />
+                                </label>
+                            </div>
+
+                            <label v-show="mysql.transport === 'unix'">
+                                <span>Socket path</span>
+                                <input
+                                    class="input"
+                                    v-model="mysql.socket"
+                                    :required="mysql.transport === 'unix'"
+                                    :disabled="mysql.transport !== 'unix'"
+                                    autocorrect="off"
+                                    spellcheck="false"
+                                />
+                            </label>
+
+                            <div class="form-grid">
+                                <label>
+                                    <span>User</span>
+                                    <input
+                                        class="input"
+                                        v-model="mysql.user"
+                                        required
+                                        autocomplete="username"
+                                        autocorrect="off"
+                                        spellcheck="false"
+                                    />
+                                </label>
+                                <label>
+                                    <span>Password</span>
+                                    <input
+                                        class="input"
+                                        v-model="mysql.password"
+                                        type="password"
+                                        autocomplete="current-password"
+                                    />
+                                </label>
+                            </div>
+
+                            <label class="checkbox-field" v-show="mysql.transport === 'tcp'">
+                                <input type="checkbox" v-model="mysql.tls" />
+                                Require verified TLS
+                            </label>
+
+                            <label class="checkbox-field">
+                                <input type="checkbox" v-model="mysql.remember" />
+                                Remember password
+                            </label>
+
+                            <div class="dialog-actions">
+                                <span class="connection-error" role="alert">{{ connectionError }}</span>
+                                <button class="button is-primary" type="submit" :disabled="isConnecting">
+                                    {{ isConnecting ? 'Connecting...' : 'Connect' }}
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
             </div>
         </div>
 

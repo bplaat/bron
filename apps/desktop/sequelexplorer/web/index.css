@@ -560,18 +560,32 @@ body.is-bwebview-macos:not(.is-fullscreen) .macos-titlebar {
 }
 
 /* Connection dialog */
+.connection-backdrop {
+    position: fixed;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 1000;
+    display: flex;
+    padding: 1rem;
+    overflow: auto;
+    background: rgba(0, 0, 0, 0.45);
+}
+
 .connection-dialog {
-    width: min(34rem, calc(100vw - 2rem));
+    width: 34rem;
+    max-width: 100%;
+    max-height: 100%;
+    flex-shrink: 0;
     margin: auto;
+    overflow: auto;
+    outline: none;
     border: 1px solid var(--color-border);
     border-radius: 8px;
     background: var(--color-background);
     color: var(--color-text-primary);
     box-shadow: 0 1.5rem 4rem rgba(0, 0, 0, 0.3);
-}
-
-.connection-dialog::backdrop {
-    background: rgba(0, 0, 0, 0.45);
 }
 
 .dialog-header {

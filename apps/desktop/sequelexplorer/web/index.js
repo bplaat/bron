@@ -14,6 +14,11 @@ window.addEventListener('contextmenu', (e) => e.preventDefault());
 const PAGE_SIZE = 100;
 const supportsUnixSocket = !navigator.userAgent.includes('Windows');
 
+// Polyfills
+if (!Uint8Array.fromBase64) {
+    Uint8Array.fromBase64 = (value) => Uint8Array.from(atob(value), (char) => char.charCodeAt(0));
+}
+
 const ACTIONS = {
     open: 'openDatabase',
     showData: 'showData',
@@ -30,7 +35,8 @@ function ipcSend(type, data = {}) {
 const preferences = {
     values: {},
     get(key) {
-        return this.values[key] ?? null;
+        const value = this.values[key];
+        return value === undefined ? null : value;
     },
     set(key, value) {
         this.values[key] = value;
@@ -43,6 +49,7 @@ const preferences = {
 };
 
 let nextRequestId = 1;
+let connectionDialogFocus = null;
 function ipcRequest(type, data = {}) {
     const requestId = nextRequestId++;
     return new Promise((resolve) => {
@@ -101,6 +108,7 @@ PetiteVue.createApp({
     connectionLabel: '',
     connectionTab: 'sqlite',
     connectionError: '',
+    connectionDialogOpen: false,
     browserError: '',
     isConnecting: false,
     isSelectingDatabase: false,
@@ -139,6 +147,10 @@ PetiteVue.createApp({
     viewGeneration: 0,
 
     async init() {
+        document.addEventListener('focusin', (event) => {
+            const dialog = this.$refs.connectionDialog;
+            if (this.connectionDialogOpen && !dialog.contains(event.target)) dialog.focus();
+        });
         window.ipc.addEventListener('message', (event) => {
             const message = JSON.parse(event.data);
             if (message.type === 'preferences') preferences.values = message.values;
@@ -153,15 +165,21 @@ PetiteVue.createApp({
             }
             if (message.type === 'menuAction') this.performAction(message.action);
         });
-        const observer = new IntersectionObserver(
-            (entries) => {
-                if (entries[0].isIntersecting && this.currentTable && !this.isCustomQuery) {
-                    this.loadMoreRows(this.currentTable);
-                }
-            },
-            { rootMargin: '200px' },
-        );
-        observer.observe(this.$refs.loadSentinel);
+        if (typeof IntersectionObserver === 'function') {
+            const observer = new IntersectionObserver(
+                (entries) => {
+                    if (entries[0].isIntersecting && this.currentTable && !this.isCustomQuery) {
+                        this.loadMoreRows(this.currentTable);
+                    }
+                },
+                { rootMargin: '200px' },
+            );
+            observer.observe(this.$refs.loadSentinel);
+        } else {
+            const load = () => this.loadVisibleRows();
+            this.$refs.loadSentinel.parentElement.addEventListener('scroll', load, { passive: true });
+            window.addEventListener('resize', load);
+        }
 
         const notifyReady = () => requestAnimationFrame(() => requestAnimationFrame(() => ipcSend('ready')));
         if (document.readyState === 'complete') {
@@ -177,20 +195,55 @@ PetiteVue.createApp({
     },
 
     showData() {
-        if (this.currentTable !== null) this.activeTab = 'data';
+        if (this.currentTable !== null) {
+            this.activeTab = 'data';
+            this.$nextTick(() => this.loadVisibleRows());
+        }
     },
 
     showSchema() {
         if (this.currentTable !== null) this.activeTab = 'schema';
     },
 
-    async openDatabase() {
+    async openDatabase(event) {
         this.connectionError = '';
-        this.$refs.connectionDialog.showModal();
+        this.openConnectionDialog(event && event.currentTarget);
+    },
+
+    openConnectionDialog(opener = document.activeElement) {
+        if (this.connectionDialogOpen) return;
+        connectionDialogFocus = opener;
+        this.connectionDialogOpen = true;
+        this.$nextTick(() => this.$refs.connectionDialog.focus());
     },
 
     closeConnectionDialog() {
-        if (this.$refs.connectionDialog.open) this.$refs.connectionDialog.close();
+        if (!this.connectionDialogOpen) return;
+        this.connectionDialogOpen = false;
+        const previousFocus = connectionDialogFocus;
+        connectionDialogFocus = null;
+        this.$nextTick(() => {
+            if (previousFocus && document.contains(previousFocus)) previousFocus.focus();
+        });
+    },
+
+    handleConnectionDialogKeydown(event) {
+        if (event.key === 'Escape') {
+            event.preventDefault();
+            event.stopPropagation();
+            this.closeConnectionDialog();
+        } else if (event.key === 'Tab') {
+            const dialog = this.$refs.connectionDialog;
+            const controls = Array.from(
+                dialog.querySelectorAll('button, input, select, textarea, a[href], [tabindex]'),
+            ).filter((element) => !element.disabled && element.tabIndex >= 0 && element.getClientRects().length > 0);
+            const first = controls[0] || dialog;
+            const last = controls[controls.length - 1] || dialog;
+            if (document.activeElement === dialog || document.activeElement === (event.shiftKey ? first : last)) {
+                event.preventDefault();
+                (event.shiftKey ? last : first).focus();
+            }
+        }
     },
 
     async openSqliteDatabase() {
@@ -235,7 +288,7 @@ PetiteVue.createApp({
             if (!connection || !connection.transport || !connection.user) return;
             this.mysql = { ...this.mysql, ...connection, password: '', remember: true };
             this.connectionTab = 'mysql';
-            if (!(await this._openMysql(true))) this.$refs.connectionDialog.showModal();
+            if (!(await this._openMysql(true))) this.openConnectionDialog();
         } catch (_error) {
             preferences.remove('mysqlConnection');
         }
@@ -254,7 +307,9 @@ PetiteVue.createApp({
             let previousConnection = null;
             try {
                 const savedConnection = JSON.parse(preferences.get('mysqlConnection'));
-                if (savedConnection?.transport && savedConnection?.user) previousConnection = savedConnection;
+                if (savedConnection && savedConnection.transport && savedConnection.user) {
+                    previousConnection = savedConnection;
+                }
             } catch (_error) {
                 preferences.remove('mysqlConnection');
             }
@@ -436,6 +491,23 @@ PetiteVue.createApp({
         }
     },
 
+    loadVisibleRows() {
+        if (
+            typeof IntersectionObserver === 'function' ||
+            !this.currentTable ||
+            this.isCustomQuery ||
+            this.showDataEmpty
+        )
+            return;
+        const sentinel = this.$refs.loadSentinel;
+        if (sentinel.getClientRects().length === 0) return;
+        const bounds = sentinel.parentElement.getBoundingClientRect();
+        const rect = sentinel.getBoundingClientRect();
+        if (rect.top <= bounds.bottom + 200 && rect.bottom >= bounds.top - 200) {
+            this.loadMoreRows(this.currentTable);
+        }
+    },
+
     async loadMoreRows(tableName, generation = this.viewGeneration) {
         if (generation !== this.viewGeneration || tableName !== this.currentTable) return;
         if (this.isLoading) return;
@@ -474,6 +546,7 @@ PetiteVue.createApp({
             this.appendRows(data.rows);
             this.currentOffset = offset + data.rows.length;
             this.currentCursor = data.next_cursor;
+            if (data.rows.length > 0) this.$nextTick(() => this.loadVisibleRows());
         } catch (error) {
             if (generation !== this.viewGeneration || tableName !== this.currentTable) return;
             this.dataEmptyText = `Failed to load rows: ${error.message}`;
