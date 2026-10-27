@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: MIT
  */
 
-//! Persisted performance and sound preferences.
+//! Persisted performance, sound, and control preferences.
 
 use std::io;
 
@@ -13,6 +13,7 @@ use preferences::{Preferences, Value};
 const DISTANCE: &str = "render_distance";
 const SHOW_STATS: &str = "show_stats";
 const VOLUME: &str = "volume";
+const AUTO_JUMP: &str = "auto_jump";
 
 /// The sound volume in percent
 pub(crate) const MAX_VOLUME: u8 = 100;
@@ -49,6 +50,7 @@ pub(crate) struct Settings {
     pub(crate) distance: u8,
     pub(crate) show_stats: bool,
     pub(crate) volume: u8,
+    pub(crate) auto_jump: bool,
 }
 
 /// The settings in the shared preferences, only written when they changed.
@@ -80,6 +82,10 @@ impl Store {
                     .unwrap_or(defaults.volume),
                 _ => defaults.volume,
             },
+            auto_jump: match prefs.get(AUTO_JUMP)? {
+                Some(Value::Bool(value)) => value,
+                _ => defaults.auto_jump,
+            },
         };
         Ok(Self { prefs, saved })
     }
@@ -98,6 +104,9 @@ impl Store {
         if settings.volume != self.saved.volume {
             self.prefs.set(VOLUME, i64::from(settings.volume))?;
         }
+        if settings.auto_jump != self.saved.auto_jump {
+            self.prefs.set(AUTO_JUMP, settings.auto_jump)?;
+        }
         self.saved = settings;
         Ok(())
     }
@@ -109,6 +118,7 @@ impl Default for Settings {
             distance: DEFAULT_DISTANCE,
             show_stats: true,
             volume: 80,
+            auto_jump: true,
         }
     }
 }
