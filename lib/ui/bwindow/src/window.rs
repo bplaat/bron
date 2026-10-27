@@ -32,6 +32,16 @@ pub enum Theme {
     Dark,
 }
 
+/// Android status and navigation bar icon colors.
+#[cfg(target_os = "android")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AndroidSystemBarIcons {
+    /// Light icons for dark or varied content beneath transparent system bars.
+    Light,
+    /// Dark icons for light content beneath transparent system bars.
+    Dark,
+}
+
 // MARK: MacosTitlebarStyle
 /// macOS titlebar style
 #[cfg(target_os = "macos")]
@@ -72,6 +82,8 @@ pub struct WindowBuilder<'a> {
     pub(crate) resizable: bool,
     pub(crate) theme: Option<Theme>,
     pub(crate) background_color: Option<u32>,
+    #[cfg(target_os = "android")]
+    pub(crate) android_system_bar_icons: Option<AndroidSystemBarIcons>,
     #[cfg(feature = "remember_window_state")]
     pub(crate) remember_window_state: bool,
     #[cfg(feature = "file_drop")]
@@ -99,6 +111,8 @@ impl<'a> Default for WindowBuilder<'a> {
             resizable: true,
             theme: None,
             background_color: None,
+            #[cfg(target_os = "android")]
+            android_system_bar_icons: None,
             #[cfg(feature = "remember_window_state")]
             remember_window_state: false,
             #[cfg(feature = "file_drop")]
@@ -159,6 +173,13 @@ impl<'a> WindowBuilder<'a> {
     /// Set window background color
     pub const fn background_color(mut self, color: u32) -> Self {
         self.background_color = Some(color);
+        self
+    }
+
+    /// Override Android system bar icon colors; defaults to matching the window background.
+    #[cfg(target_os = "android")]
+    pub const fn android_system_bar_icons(mut self, icons: AndroidSystemBarIcons) -> Self {
+        self.android_system_bar_icons = Some(icons);
         self
     }
 

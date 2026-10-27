@@ -6,7 +6,7 @@ My personal monorepo for most of my hobby projects
 
 ### Apps / Games
 
-Some desktop apps and games written with the [bwindow](lib/ui/bwindow), [bwebview](lib/ui/bwebview), and [bcanvas](lib/graphics/bcanvas) libraries.
+Some desktop apps and games written with the [bwindow](lib/ui/bwindow), [bwebview](lib/ui/bwebview), [bcanvas](lib/graphics/bcanvas), and [bwebgpu](lib/graphics/bwebgpu) libraries.
 
 <table>
 <tr>
@@ -26,6 +26,12 @@ Some desktop apps and games written with the [bwindow](lib/ui/bwindow), [bwebvie
     <a href="./apps/windows/binman">
         <img src="apps/windows/binman/docs/images/icon.png" alt="Binman icon" width="48" height="48"/><br/>
         Binman
+    </a>
+</td>
+<td width="100" align="center">
+    <a href="./games/frogger">
+        <img src="games/frogger/meta/freedesktop/icons/128x128.png" alt="Frogger icon" width="48" height="48"/><br/>
+        Frogger
     </a>
 </td>
 <td width="100" align="center">
@@ -55,6 +61,12 @@ Some desktop apps and games written with the [bwindow](lib/ui/bwindow), [bwebvie
     </a>
 </td>
 <td width="100" align="center">
+    <a href="./games/plaatcraft">
+        <img src="games/plaatcraft/meta/freedesktop/icons/128x128.png" alt="PlaatCraft icon" width="48" height="48"/><br/>
+        PlaatCraft
+    </a>
+</td>
+<td width="100" align="center">
     <a href="./apps/desktop/pixelfont">
         <img src="apps/desktop/pixelfont/meta/freedesktop/icons/128x128.png" alt="Pixel Font Editor icon" width="48" height="48"/><br/>
         Pixel Font Editor
@@ -79,6 +91,7 @@ Some desktop apps and games written with the [bwindow](lib/ui/bwindow), [bwebvie
 - [BassieLight](apps/desktop/bassielight) A simple lights controller with GUI
 - [Binman](apps/windows/binman) A safe and minimal Windows cleanup tool
 - [Empires](games/empires) An Age of Empires rendering demo and DRS archive viewer using SDL2
+- [Frogger](games/frogger) A colorful voxel crossing game with cars, trucks, rivers, and trains
 - [MacView](apps/macos/macview) A macOS bitmap, QOI, SVG, and TinyVG image viewer with Quick Look [preview](apps/macos/macview-preview) and [thumbnail](apps/macos/macview-thumbnail)
 - [ManExplorer](apps/desktop/manexplorer) A simple man page explorer tool
 - [Nintendo DS Ports](games/nds) DOOM, Duke Nukem 3D, Quake, Quake II, and Wolfenstein 3D ports
