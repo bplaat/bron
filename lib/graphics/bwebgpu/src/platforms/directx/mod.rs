@@ -120,9 +120,9 @@ const fn format(value: TextureFormat) -> i32 {
     }
 }
 
+// Buffers are implicitly promoted from COMMON and decay back after each submission.
 pub(crate) struct Buffer {
     object: Com,
-    state: Cell<i32>,
 }
 
 pub(crate) struct Texture {
@@ -617,7 +617,6 @@ impl Context {
     pub(super) fn buffer(&self, size: u64, _: BufferUsages) -> Result<Buffer> {
         Ok(Buffer {
             object: Self::resource(&self.device, &Self::buffer_desc(size), false)?,
-            state: Cell::new(0),
         })
     }
 
@@ -821,18 +820,21 @@ impl Context {
 
     unsafe fn transition(list: &Com, object: &Com, state: &Cell<i32>, next: i32) {
         let previous = state.replace(next);
-        if previous == next {
-            return;
+        if previous != next {
+            unsafe { Self::barrier(list, object.0, previous, next) };
         }
+    }
+
+    unsafe fn barrier(list: &Com, resource: *mut c_void, before: i32, after: i32) {
         let barrier = D3D12_RESOURCE_BARRIER {
             Type: 0,
             Flags: 0,
             Anonymous: D3D12_RESOURCE_BARRIER_0 {
                 Transition: D3D12_RESOURCE_TRANSITION_BARRIER {
-                    pResource: object.0,
+                    pResource: resource,
                     Subresource: u32::MAX,
-                    StateBefore: previous,
-                    StateAfter: next,
+                    StateBefore: before,
+                    StateAfter: after,
                 },
             },
         };
@@ -853,7 +855,7 @@ impl Context {
                 ptr::null_mut(),
             ))?;
             let list = &frame.list;
-            let mut touched = HashMap::new();
+            let mut written = Vec::new();
             let mut staging_data = Vec::new();
             let mut offsets = Vec::new();
             for upload in &uploads {
@@ -905,17 +907,16 @@ impl Context {
                             offset: destination,
                             data,
                         } => {
-                            let native = &buffer.inner.native;
-                            Self::transition(list, &native.object, &native.state, 1024);
+                            let object = buffer.inner.native.object.0;
                             GraphicsCommandList_CopyBufferRegion(
                                 list.0,
-                                native.object.0,
+                                object,
                                 *destination,
                                 staging.0,
                                 offset,
                                 data.len() as u64,
                             );
-                            touched.insert(Rc::as_ptr(&buffer.inner), buffer.clone());
+                            written.push(object);
                         }
                         Upload::Texture {
                             texture,
@@ -968,9 +969,12 @@ impl Context {
                 }
                 frame.staging.push(staging);
             }
-            for buffer in touched.values() {
-                let native = &buffer.inner.native;
-                Self::transition(list, &native.object, &native.state, 193);
+            // Copies promote buffers to COPY_DEST, which reads cannot promote out of.
+            written.sort_unstable();
+            written.dedup();
+            for object in written {
+                // VERTEX_AND_CONSTANT_BUFFER | INDEX_BUFFER | (NON_)PIXEL_SHADER_RESOURCE
+                Self::barrier(list, object, 1024, 195);
             }
             for upload in &uploads {
                 if let Upload::Texture { texture, .. } = upload {
@@ -1137,10 +1141,8 @@ impl Context {
                         );
                         for (binding, resource) in group.entries.iter() {
                             if let Resource::Buffer(buffer) = resource {
-                                let native = &buffer.inner.native;
-                                Self::transition(list, &native.object, &native.state, 193);
-                                touched.insert(Rc::as_ptr(&buffer.inner), buffer.clone());
-                                let address = Resource_GetGPUVirtualAddress(native.object.0);
+                                let address =
+                                    Resource_GetGPUVirtualAddress(buffer.inner.native.object.0);
                                 match binding {
                                     0 => GraphicsCommandList_SetGraphicsRootConstantBufferView(
                                         list.0, 0, address,
@@ -1157,8 +1159,6 @@ impl Context {
                         let (buffer, range) =
                             draw.vertex.as_ref().expect("vertex buffer validated");
                         let native = &buffer.inner.native;
-                        Self::transition(list, &native.object, &native.state, 193);
-                        touched.insert(Rc::as_ptr(&buffer.inner), buffer.clone());
                         let view = D3D12_VERTEX_BUFFER_VIEW {
                             BufferLocation: Resource_GetGPUVirtualAddress(native.object.0)
                                 + range.start,
@@ -1212,9 +1212,6 @@ impl Context {
                             binding,
                         } => {
                             let native = &binding.buffer.inner.native;
-                            Self::transition(list, &native.object, &native.state, 195);
-                            touched
-                                .insert(Rc::as_ptr(&binding.buffer.inner), binding.buffer.clone());
                             let view = D3D12_INDEX_BUFFER_VIEW {
                                 BufferLocation: Resource_GetGPUVirtualAddress(native.object.0)
                                     + binding.range.start,
@@ -1244,10 +1241,6 @@ impl Context {
             }
             check(GraphicsCommandList_Close(list.0))?;
             CommandQueue_ExecuteCommandLists(self.queue.0, 1, &list.0);
-            // Buffers decay to COMMON at the ExecuteCommandLists boundary.
-            for buffer in touched.values() {
-                buffer.inner.native.state.set(0);
-            }
             frame.fence = self.signal()?;
             frame.uploads = uploads;
             frame.passes = passes;
