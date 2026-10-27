@@ -563,9 +563,9 @@ body.is-bwebview-mobile {
     flex-direction: column;
     justify-content: center;
     min-height: 100vh;
-    min-height: 100dvh;
-    padding: max(20px, env(safe-area-inset-top)) max(20px, env(safe-area-inset-right))
-        max(20px, env(safe-area-inset-bottom)) max(20px, env(safe-area-inset-left));
+    padding: 20px;
+    padding-top: max(20px, env(safe-area-inset-top));
+    padding-bottom: max(20px, env(safe-area-inset-bottom));
 }
 
 .is-bwebview-mobile h1.title {
@@ -574,9 +574,14 @@ body.is-bwebview-mobile {
 }
 
 .is-bwebview-mobile .container {
-    width: 100%;
-    max-width: 500px;
-    container-type: inline-size;
+    --board-size: calc(100vw - 40px);
+    width: var(--board-size);
+}
+
+@media (min-width: 540px) {
+    .is-bwebview-mobile .container {
+        --board-size: 500px;
+    }
 }
 
 .is-bwebview-mobile .score-container,
@@ -616,9 +621,8 @@ body.is-bwebview-mobile {
     background: var(--board);
     border-radius: 6px;
     width: 100%;
-    height: auto;
-    aspect-ratio: 1;
-    --cell: calc((100cqw - 50px) / 4);
+    height: var(--board-size);
+    --cell: calc((var(--board-size) - 50px) / 4);
     --step: calc(var(--cell) + 10px);
     box-sizing: border-box;
 }
