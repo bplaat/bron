@@ -163,8 +163,8 @@ impl Context {
                     state: Cell::new(0),
                     format: swap.format,
                     mips: 1,
-                    layers: 1,
                     index: Some(index),
+                    view: None,
                 },
                 false,
             ))
