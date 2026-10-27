@@ -196,7 +196,7 @@ impl Game {
         if controller.pressed(Button::Down) {
             self.focus = (self.focus + 1) % MENU.len();
         }
-        if let Some([x, y]) = controller.pointer {
+        if let Some([x, y, _]) = controller.pointer {
             let left = self.menu_button_x();
             if let Some(index) = (0..MENU.len()).find(|&index| {
                 let top = self.menu_button_y(index);
