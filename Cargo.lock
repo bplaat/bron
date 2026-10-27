@@ -68,6 +68,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "baudio"
+version = "0.1.0"
+dependencies = [
+ "cpal",
+ "sfxr",
+]
+
+[[package]]
 name = "bcanvas"
 version = "0.1.0"
 dependencies = [

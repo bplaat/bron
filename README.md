@@ -140,6 +140,7 @@ Most of these libraries are intended primarily for personal use, but can still b
 
 **Audio**
 
+- [baudio](lib/audio/baudio) A small game audio mixer that plays many sounds at once on cpal
 - [cpal](lib/audio/cpal) A minimal replacement for the [cpal](https://crates.io/crates/cpal) crate
 - [sfxr](lib/audio/sfxr) A minimal replacement for the [sfxr](https://crates.io/crates/sfxr) crate
 
