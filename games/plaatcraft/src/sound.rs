@@ -72,6 +72,11 @@ impl Sounds {
         self.mixer.play(Play::click());
     }
 
+    /// Taking off or landing from flight
+    pub(crate) fn fly(&self, flying: bool) {
+        self.mixer.play(Play::fly(flying));
+    }
+
     /// A broken or placed block
     pub(crate) fn block(
         &self,
@@ -85,7 +90,7 @@ impl Sounds {
         });
     }
 
-    /// Footsteps, splashes and landings since `before`
+    /// Jumps, footsteps, splashes and landings since `before`
     pub(crate) fn movement(
         &mut self,
         before: Movement,

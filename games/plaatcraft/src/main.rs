@@ -517,6 +517,12 @@ impl Game {
         }
     }
 
+    fn toggle_flying(&mut self) {
+        self.camera.set_flying(!self.camera.flying);
+        self.sounds.fly(self.camera.flying);
+        self.save_session();
+    }
+
     fn touch_layout(&self) -> controls::Layout {
         controls::Layout::new(self.window.size(), self.safe_area, self.camera.flying)
     }
@@ -710,9 +716,8 @@ impl Game {
                 controls::Action::Break => self.click_block(MouseButton::Left),
                 controls::Action::Place => self.click_block(MouseButton::Right),
                 controls::Action::Press(controls::Button::Fly) => {
-                    self.camera.set_flying(!self.camera.flying);
+                    self.toggle_flying();
                     self.descend = false;
-                    self.save_session();
                 }
                 controls::Action::Press(controls::Button::Night) => self.night = !self.night,
                 controls::Action::Press(controls::Button::Menu) => self.pause(),
@@ -1409,8 +1414,7 @@ fn main() {
             game.modifiers = event.modifiers;
             if let Some(key) = event.code {
                 if key == KeyCode::KeyF && game.playing() && !event.repeat {
-                    game.camera.set_flying(!game.camera.flying);
-                    game.save_session();
+                    game.toggle_flying();
                 } else if key == KeyCode::KeyN && !event.repeat {
                     game.night = !game.night;
                 } else if key == KeyCode::Escape
