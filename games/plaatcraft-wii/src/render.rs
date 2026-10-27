@@ -306,6 +306,7 @@ impl Renderer {
             GX_SetCullMode(GX_CULL_NONE);
             GX_SetZMode(GX_ENABLE, GX_LEQUAL, GX_FALSE);
             GX_SetBlendMode(GX_BM_BLEND, GX_BL_SRCALPHA, GX_BL_INVSRCALPHA, GX_LO_CLEAR);
+            GX_SetZCompLoc(GX_TRUE);
             GX_SetAlphaCompare(GX_ALWAYS, 0, GX_AOP_AND, GX_ALWAYS, 0);
         }
         for &(_, coord, offset) in visible.iter().rev() {
@@ -313,7 +314,6 @@ impl Renderer {
         }
         unsafe {
             GX_SetZMode(GX_ENABLE, GX_LEQUAL, GX_TRUE);
-            GX_SetZCompLoc(GX_TRUE);
             GX_SetFog(
                 GX_FOG_NONE,
                 0.0,
