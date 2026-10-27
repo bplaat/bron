@@ -7,7 +7,6 @@
 //! Direct3D 12 through local COM/Win32 declarations.
 
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
 use std::ffi::c_void;
 use std::ptr;
 use std::rc::Rc;
@@ -130,12 +129,12 @@ pub(crate) struct Texture {
     state: Cell<i32>,
     format: TextureFormat,
     mips: u32,
-    layers: u32,
     index: Option<u32>,
+    view: Option<Slot>,
 }
 
 pub(crate) struct Sampler {
-    desc: D3D12_SAMPLER_DESC,
+    slot: Slot,
 }
 
 pub(crate) struct Pipeline {
@@ -151,6 +150,32 @@ struct Heap {
 }
 
 impl Heap {
+    fn new(device: &Com, kind: i32, count: u32, visible: bool) -> Result<Self> {
+        unsafe {
+            let desc = D3D12_DESCRIPTOR_HEAP_DESC {
+                Type: kind,
+                NumDescriptors: count,
+                Flags: i32::from(visible),
+                ..Default::default()
+            };
+            let object = Com::create(|out| {
+                Device_CreateDescriptorHeap(device.0, &desc, &ID3D12DescriptorHeap, out)
+            })?;
+            let mut cpu = D3D12_CPU_DESCRIPTOR_HANDLE::default();
+            let mut gpu = D3D12_GPU_DESCRIPTOR_HANDLE::default();
+            DescriptorHeap_GetCPUDescriptorHandleForHeapStart(object.0, &mut cpu);
+            if visible {
+                DescriptorHeap_GetGPUDescriptorHandleForHeapStart(object.0, &mut gpu);
+            }
+            Ok(Self {
+                object,
+                cpu,
+                gpu,
+                stride: Device_GetDescriptorHandleIncrementSize(device.0, kind),
+            })
+        }
+    }
+
     const fn cpu(&self, index: u32) -> D3D12_CPU_DESCRIPTOR_HANDLE {
         D3D12_CPU_DESCRIPTOR_HANDLE {
             ptr: self.cpu.ptr + index as usize * self.stride as usize,
@@ -164,13 +189,65 @@ impl Heap {
     }
 }
 
+/// A shader-visible heap whose slots stay valid until their owner drops.
+/// Slot zero holds a null descriptor for draws without that binding.
+struct Descriptors {
+    heap: Heap,
+    capacity: u32,
+    next: Cell<u32>,
+    free: RefCell<Vec<u32>>,
+}
+
+impl Descriptors {
+    fn new(device: &Com, kind: i32, capacity: u32) -> Result<Rc<Self>> {
+        Ok(Rc::new(Self {
+            heap: Heap::new(device, kind, capacity, true)?,
+            capacity,
+            next: Cell::new(1),
+            free: RefCell::new(Vec::new()),
+        }))
+    }
+
+    fn allocate(self: &Rc<Self>) -> Result<Slot> {
+        let index = match self.free.borrow_mut().pop() {
+            Some(index) => index,
+            None => {
+                let index = self.next.get();
+                if index == self.capacity {
+                    return Err(Error("D3D12 descriptor heap is full".into()));
+                }
+                self.next.set(index + 1);
+                index
+            }
+        };
+        Ok(Slot {
+            heap: self.clone(),
+            index,
+        })
+    }
+}
+
+/// Owners are retained by their frame until the GPU finishes, so a dropped slot is unused.
+struct Slot {
+    heap: Rc<Descriptors>,
+    index: u32,
+}
+
+impl Slot {
+    fn cpu(&self) -> D3D12_CPU_DESCRIPTOR_HANDLE {
+        self.heap.heap.cpu(self.index)
+    }
+}
+
+impl Drop for Slot {
+    fn drop(&mut self) {
+        self.heap.free.borrow_mut().push(self.index);
+    }
+}
+
 struct Frame {
     allocator: Com,
     list: Com,
-    resources: Heap,
-    samplers: Heap,
-    colors: Heap,
-    depths: Heap,
     fence: u64,
     uploads: Vec<Upload>,
     passes: Vec<Pass>,
@@ -186,6 +263,11 @@ pub(crate) struct Context {
     fence: Com,
     event: Event,
     root: Com,
+    textures: Rc<Descriptors>,
+    samplers: Rc<Descriptors>,
+    // Render and depth target descriptors are read when recorded, so each pass reuses one.
+    color_target: Heap,
+    depth_target: Heap,
     frames: RefCell<Vec<Frame>>,
     slot: Cell<usize>,
     serial: Cell<u64>,
@@ -249,7 +331,12 @@ impl Context {
                 let event = Event(event);
                 let root = Self::root_signature(&device)
                     .map_err(|error| Error(format!("D3D12 root signature: {error}")))?;
+                let textures = Descriptors::new(&device, 0, 4096)?;
+                let samplers = Descriptors::new(&device, 1, 2048)?;
+                Self::write_null_descriptors(&device, &textures, &samplers);
                 let context = Rc::new(Self {
+                    color_target: Heap::new(&device, 2, 1, false)?,
+                    depth_target: Heap::new(&device, 3, 1, false)?,
                     device,
                     queue,
                     #[cfg(feature = "window")]
@@ -257,6 +344,8 @@ impl Context {
                     fence,
                     event,
                     root,
+                    textures,
+                    samplers,
                     frames: RefCell::new(Vec::new()),
                     slot: Cell::new(0),
                     serial: Cell::new(0),
@@ -425,7 +514,8 @@ impl Context {
         }
     }
 
-    fn initialize_descriptors(&self, frame: &Frame, index: u32) {
+    // Tier 1 requires initialized entries even when a shader does not use them.
+    fn write_null_descriptors(device: &Com, textures: &Descriptors, samplers: &Descriptors) {
         let texture = D3D12_SHADER_RESOURCE_VIEW_DESC {
             Format: 28,
             ViewDimension: 4,
@@ -448,38 +538,12 @@ impl Context {
         };
         unsafe {
             Device_CreateShaderResourceView(
-                self.device.0,
+                device.0,
                 ptr::null_mut(),
                 &texture,
-                frame.resources.cpu(index),
+                textures.heap.cpu(0),
             );
-            Device_CreateSampler(self.device.0, &sampler, frame.samplers.cpu(index));
-        }
-    }
-
-    fn heap(&self, kind: i32, count: u32, visible: bool) -> Result<Heap> {
-        unsafe {
-            let desc = D3D12_DESCRIPTOR_HEAP_DESC {
-                Type: kind,
-                NumDescriptors: count,
-                Flags: i32::from(visible),
-                ..Default::default()
-            };
-            let object = Com::create(|out| {
-                Device_CreateDescriptorHeap(self.device.0, &desc, &ID3D12DescriptorHeap, out)
-            })?;
-            let mut cpu = D3D12_CPU_DESCRIPTOR_HANDLE::default();
-            let mut gpu = D3D12_GPU_DESCRIPTOR_HANDLE::default();
-            DescriptorHeap_GetCPUDescriptorHandleForHeapStart(object.0, &mut cpu);
-            if visible {
-                DescriptorHeap_GetGPUDescriptorHandleForHeapStart(object.0, &mut gpu);
-            }
-            Ok(Heap {
-                object,
-                cpu,
-                gpu,
-                stride: Device_GetDescriptorHandleIncrementSize(self.device.0, kind),
-            })
+            Device_CreateSampler(device.0, &sampler, samplers.heap.cpu(0));
         }
     }
 
@@ -503,10 +567,6 @@ impl Context {
             Ok(Frame {
                 allocator,
                 list,
-                resources: self.heap(0, 257, true)?,
-                samplers: self.heap(1, 257, true)?,
-                colors: self.heap(2, 16, false)?,
-                depths: self.heap(3, 16, false)?,
                 fence: 0,
                 uploads: Vec::new(),
                 passes: Vec::new(),
@@ -619,50 +679,96 @@ impl Context {
             },
             ..Default::default()
         };
+        let object = Self::resource(&self.device, &native, false)?;
+        // Depth textures cannot be bound, and D32_FLOAT is not a valid view format.
+        let view = if desc.usage.contains(TextureUsages::TEXTURE_BINDING)
+            && desc.format != TextureFormat::Depth32Float
+        {
+            let slot = self.textures.allocate()?;
+            let layers = desc.size.depth_or_array_layers;
+            // Texture views are arrays exactly when their texture has multiple layers.
+            let (dimension, resource) = if layers > 1 {
+                (
+                    5,
+                    D3D12_SHADER_RESOURCE_VIEW_DESC_0 {
+                        Texture2DArray: D3D12_TEX2D_ARRAY_SRV {
+                            MipLevels: desc.mip_level_count,
+                            ArraySize: layers,
+                            ..Default::default()
+                        },
+                    },
+                )
+            } else {
+                (
+                    4,
+                    D3D12_SHADER_RESOURCE_VIEW_DESC_0 {
+                        Texture2D: D3D12_TEX2D_SRV {
+                            MipLevels: desc.mip_level_count,
+                            ..Default::default()
+                        },
+                    },
+                )
+            };
+            let view = D3D12_SHADER_RESOURCE_VIEW_DESC {
+                Format: format(desc.format),
+                ViewDimension: dimension,
+                Shader4ComponentMapping: 5768,
+                Anonymous: resource,
+            };
+            unsafe {
+                Device_CreateShaderResourceView(self.device.0, object.0, &view, slot.cpu());
+            }
+            Some(slot)
+        } else {
+            None
+        };
         Ok(Texture {
-            object: Self::resource(&self.device, &native, false)?,
+            object,
             state: Cell::new(0),
             format: desc.format,
             mips: desc.mip_level_count,
-            layers: desc.size.depth_or_array_layers,
             index: None,
+            view,
         })
     }
 
     pub(super) fn sampler(&self, desc: &SamplerDescriptor<'_>) -> Result<Sampler> {
-        Ok(Sampler {
-            desc: D3D12_SAMPLER_DESC {
-                Filter: (if desc.min_filter == FilterMode::Linear {
-                    16
-                } else {
-                    0
-                }) | (if desc.mag_filter == FilterMode::Linear {
-                    4
-                } else {
-                    0
-                }) | i32::from(desc.mipmap_filter == FilterMode::Linear),
-                AddressU: if desc.address_mode_u == AddressMode::Repeat {
-                    1
-                } else {
-                    3
-                },
-                AddressV: if desc.address_mode_v == AddressMode::Repeat {
-                    1
-                } else {
-                    3
-                },
-                AddressW: if desc.address_mode_w == AddressMode::Repeat {
-                    1
-                } else {
-                    3
-                },
-                MaxAnisotropy: 1,
-                ComparisonFunc: 8,
-                MinLOD: desc.lod_min_clamp,
-                MaxLOD: desc.lod_max_clamp,
-                ..Default::default()
+        let slot = self.samplers.allocate()?;
+        let native = D3D12_SAMPLER_DESC {
+            Filter: (if desc.min_filter == FilterMode::Linear {
+                16
+            } else {
+                0
+            }) | (if desc.mag_filter == FilterMode::Linear {
+                4
+            } else {
+                0
+            }) | i32::from(desc.mipmap_filter == FilterMode::Linear),
+            AddressU: if desc.address_mode_u == AddressMode::Repeat {
+                1
+            } else {
+                3
             },
-        })
+            AddressV: if desc.address_mode_v == AddressMode::Repeat {
+                1
+            } else {
+                3
+            },
+            AddressW: if desc.address_mode_w == AddressMode::Repeat {
+                1
+            } else {
+                3
+            },
+            MaxAnisotropy: 1,
+            ComparisonFunc: 8,
+            MinLOD: desc.lod_min_clamp,
+            MaxLOD: desc.lod_max_clamp,
+            ..Default::default()
+        };
+        unsafe {
+            Device_CreateSampler(self.device.0, &native, slot.cpu());
+        }
+        Ok(Sampler { slot })
     }
 
     pub(super) fn pipeline(&self, desc: &RenderPipelineDescriptor<'_>) -> Result<Pipeline> {
@@ -959,16 +1065,13 @@ impl Context {
                     Self::transition(list, &native.object, &native.state, 128);
                 }
             }
-            let heaps = [frame.resources.object.0, frame.samplers.object.0];
+            let heaps = [self.textures.heap.object.0, self.samplers.heap.object.0];
             GraphicsCommandList_SetDescriptorHeaps(list.0, 2, heaps.as_ptr());
-            self.initialize_descriptors(frame, 0);
-            let mut groups = HashMap::new();
-            require(passes.len() <= 16, "Too many render passes");
-            for (pass_index, pass) in passes.iter().enumerate() {
+            for pass in &passes {
                 let color = &pass.color.texture.inner.native;
                 Self::transition(list, &color.object, &color.state, 4);
-                let rtv = frame.colors.cpu(pass_index as u32);
-                let dsv = frame.depths.cpu(pass_index as u32);
+                let rtv = self.color_target.cpu(0);
+                let dsv = self.depth_target.cpu(0);
                 let color_desc = D3D12_RENDER_TARGET_VIEW_DESC {
                     Format: format(color.format),
                     ViewDimension: 4,
@@ -1015,99 +1118,13 @@ impl Context {
                     let pipeline = &draw.pipeline.native;
                     GraphicsCommandList_SetPipelineState(list.0, pipeline.object.0);
                     GraphicsCommandList_SetGraphicsRootSignature(list.0, pipeline.root.0);
-                    // Tier 1 requires initialized entries even when a shader does not use them.
-                    GraphicsCommandList_SetGraphicsRootDescriptorTable(
-                        list.0,
-                        1,
-                        frame.resources.gpu(0),
-                    );
-                    GraphicsCommandList_SetGraphicsRootDescriptorTable(
-                        list.0,
-                        3,
-                        frame.samplers.gpu(0),
-                    );
-                    if let Some(group) = &draw.group {
-                        // A texture may have been rendered to by an earlier pass in this
-                        // submission. Descriptor reuse does not imply that its resource
-                        // state is still shader-readable, so transition on every bind.
-                        for (_, resource) in group.entries.iter() {
-                            if let Resource::Texture(view) = resource {
-                                let texture = &view.texture.inner.native;
-                                Self::transition(list, &texture.object, &texture.state, 128);
-                            }
-                        }
-                        let key = Rc::as_ptr(&group.entries);
-                        let descriptor_index = if let Some(&index) = groups.get(&key) {
-                            index
-                        } else {
-                            let index = groups.len() as u32 + 1;
-                            require(index <= 256, "Too many bind groups in a frame");
-                            self.initialize_descriptors(frame, index);
-                            for (binding, resource) in group.entries.iter() {
-                                match resource {
-                                    Resource::Texture(view) => {
-                                        require(*binding == 1, "D3D12 texture binding must be 1");
-                                        let texture = &view.texture.inner.native;
-                                        let (dimension, resource) = match view.dimension {
-                                            TextureViewDimension::D2 => (
-                                                4,
-                                                D3D12_SHADER_RESOURCE_VIEW_DESC_0 {
-                                                    Texture2D: D3D12_TEX2D_SRV {
-                                                        MipLevels: texture.mips,
-                                                        ..Default::default()
-                                                    },
-                                                },
-                                            ),
-                                            TextureViewDimension::D2Array => (
-                                                5,
-                                                D3D12_SHADER_RESOURCE_VIEW_DESC_0 {
-                                                    Texture2DArray: D3D12_TEX2D_ARRAY_SRV {
-                                                        MipLevels: texture.mips,
-                                                        ArraySize: texture.layers,
-                                                        ..Default::default()
-                                                    },
-                                                },
-                                            ),
-                                        };
-                                        let desc = D3D12_SHADER_RESOURCE_VIEW_DESC {
-                                            Format: format(texture.format),
-                                            ViewDimension: dimension,
-                                            Shader4ComponentMapping: 5768,
-                                            Anonymous: resource,
-                                        };
-                                        Device_CreateShaderResourceView(
-                                            self.device.0,
-                                            texture.object.0,
-                                            &desc,
-                                            frame.resources.cpu(index),
-                                        );
-                                    }
-                                    Resource::Sampler(sampler) => {
-                                        require(*binding == 2, "D3D12 sampler binding must be 2");
-                                        Device_CreateSampler(
-                                            self.device.0,
-                                            &sampler.native.desc,
-                                            frame.samplers.cpu(index),
-                                        );
-                                    }
-                                    _ => {}
-                                }
-                            }
-                            groups.insert(key, index);
-                            index
-                        };
-                        GraphicsCommandList_SetGraphicsRootDescriptorTable(
-                            list.0,
-                            1,
-                            frame.resources.gpu(descriptor_index),
-                        );
-                        GraphicsCommandList_SetGraphicsRootDescriptorTable(
-                            list.0,
-                            3,
-                            frame.samplers.gpu(descriptor_index),
-                        );
-                        for (binding, resource) in group.entries.iter() {
-                            if let Resource::Buffer(buffer) = resource {
+                    // Slot zero holds null descriptors for draws without a texture or sampler.
+                    let (mut texture_slot, mut sampler_slot) = (0, 0);
+                    for (binding, resource) in
+                        draw.group.iter().flat_map(|group| group.entries.iter())
+                    {
+                        match resource {
+                            Resource::Buffer(buffer) => {
                                 let address =
                                     Resource_GetGPUVirtualAddress(buffer.inner.native.object.0);
                                 match binding {
@@ -1120,8 +1137,34 @@ impl Context {
                                     _ => panic!("Unsupported D3D12 buffer binding"),
                                 }
                             }
+                            Resource::Texture(view) => {
+                                require(*binding == 1, "D3D12 texture binding must be 1");
+                                // A texture may have been rendered to by an earlier pass in this
+                                // submission, so transition it on every bind.
+                                let texture = &view.texture.inner.native;
+                                Self::transition(list, &texture.object, &texture.state, 128);
+                                texture_slot = texture
+                                    .view
+                                    .as_ref()
+                                    .expect("Texture binding usage validated")
+                                    .index;
+                            }
+                            Resource::Sampler(sampler) => {
+                                require(*binding == 2, "D3D12 sampler binding must be 2");
+                                sampler_slot = sampler.native.slot.index;
+                            }
                         }
                     }
+                    GraphicsCommandList_SetGraphicsRootDescriptorTable(
+                        list.0,
+                        1,
+                        self.textures.heap.gpu(texture_slot),
+                    );
+                    GraphicsCommandList_SetGraphicsRootDescriptorTable(
+                        list.0,
+                        3,
+                        self.samplers.heap.gpu(sampler_slot),
+                    );
                     if let Some(layout) = draw.pipeline.vertex {
                         let (buffer, range) =
                             draw.vertex.as_ref().expect("vertex buffer validated");
@@ -1334,11 +1377,13 @@ mod tests {
     }
 
     #[test]
-    fn warp_initializes_the_rendering_resources() {
+    fn warp_reuses_freed_descriptor_slots() {
         let context = Context::with_driver(true).unwrap_or_else(|error| panic!("{}", error.error));
-        let frames = context.frames.borrow();
-        assert_eq!(frames.len(), 2);
-        context.initialize_descriptors(&frames[0], 0);
-        context.initialize_descriptors(&frames[0], 256);
+        assert_eq!(context.frames.borrow().len(), 2);
+        let slot = context.samplers.allocate().unwrap();
+        let index = slot.index;
+        assert_ne!(index, 0, "Slot zero holds the null descriptor");
+        drop(slot);
+        assert_eq!(context.samplers.allocate().unwrap().index, index);
     }
 }
