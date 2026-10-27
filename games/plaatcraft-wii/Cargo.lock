@@ -11,6 +11,10 @@ name = "deflate"
 version = "0.1.0"
 
 [[package]]
+name = "getrandom"
+version = "0.4.3+patch"
+
+[[package]]
 name = "gxtexconv"
 version = "0.1.0"
 dependencies = [
@@ -32,6 +36,9 @@ version = "0.1.0"
 [[package]]
 name = "plaatcraft-engine"
 version = "0.2.0"
+dependencies = [
+ "sfxr",
+]
 
 [[package]]
 name = "plaatcraft-wii"
@@ -41,4 +48,12 @@ dependencies = [
  "image",
  "libogc-sys",
  "plaatcraft-engine",
+ "sfxr",
+]
+
+[[package]]
+name = "sfxr"
+version = "0.1.4+patch"
+dependencies = [
+ "getrandom",
 ]

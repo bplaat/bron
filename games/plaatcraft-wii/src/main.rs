@@ -19,11 +19,13 @@ use libogc_sys::*;
 use plaatcraft_engine::camera::Camera;
 use plaatcraft_engine::hotbar::{Hotbar, name};
 use plaatcraft_engine::raycast::{Hit, raycast};
+use plaatcraft_engine::sound::{Movement, ground};
 use plaatcraft_engine::world::{self, LAVA, WATER};
 
 use crate::hud::{BUTTON_HEIGHT, BUTTON_WIDTH, Hud};
 use crate::input::{Button, Controller};
 use crate::render::{Display, Renderer};
+use crate::sound::Sounds;
 use crate::stream::Stream;
 use crate::textures::Textures;
 
@@ -35,6 +37,7 @@ mod input;
 mod memory;
 mod mesh;
 mod render;
+mod sound;
 mod stream;
 mod sync;
 mod textures;
@@ -90,6 +93,7 @@ struct Game {
     exit: bool,
     focus: usize,
     controller: Controller,
+    sounds: Sounds,
     breaking: Repeat,
     placing: Repeat,
     name_shown: Option<(u8, f32)>,
@@ -125,6 +129,7 @@ impl Game {
             exit: false,
             focus: 0,
             controller: Controller::default(),
+            sounds: Sounds::new(),
             breaking: Repeat::default(),
             placing: Repeat::default(),
             name_shown: None,
@@ -193,6 +198,7 @@ impl Game {
             }
         }
         if self.controller.pressed(Button::A) {
+            self.sounds.click();
             match self.focus {
                 0 => self.paused = false,
                 1 => self.night = !self.night,
@@ -210,6 +216,7 @@ impl Game {
         }
         if controller.pressed(Button::One) {
             self.camera.set_flying(!self.camera.flying);
+            self.sounds.fly(self.camera.flying);
         }
         if controller.pressed(Button::Two) {
             self.night = !self.night;
@@ -221,10 +228,14 @@ impl Game {
         if controller.pressed(Button::Minus) {
             hotbar.cycle(1);
         }
+        if hotbar != self.hotbar {
+            self.sounds.click();
+        }
         if hotbar.material() != self.hotbar.material() {
             self.name_shown = Some((hotbar.material(), now));
         }
         self.hotbar = hotbar;
+        let before = Movement::of(&self.camera);
         self.camera.input = controller.input();
 
         // The feet or waist in water or lava make the player swim
@@ -242,6 +253,8 @@ impl Game {
             position[1] < 0
                 || !matches!(stream.block(position), Some(material) if world::is_passable(material))
         });
+        let ground = self.stream.block(ground(&self.camera));
+        self.sounds.movement(before, &self.camera, ground);
 
         self.aim();
         if self.breaking.update(&self.controller, Button::Z, now) {
@@ -277,6 +290,9 @@ impl Game {
         let Some(edit) = edit else {
             return;
         };
+        let material = if place { edit.material } else { hit.material };
+        self.sounds
+            .block(&self.camera, edit.position, material, !place);
         self.stream.edit(edit);
         self.aim();
     }
