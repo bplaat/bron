@@ -1268,6 +1268,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "sfxr"
+version = "0.1.4+patch"
+dependencies = [
+ "getrandom 0.4.3+patch",
+]
+
+[[package]]
 name = "sha1"
 version = "0.11.0+patch"
 dependencies = [
