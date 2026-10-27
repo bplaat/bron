@@ -470,6 +470,10 @@ impl Game {
         match action {
             Some(Action::Play) => self.play(),
             Some(Action::Settings) => self.menu.page = menu::Page::Settings,
+            Some(Action::Quit) => {
+                self.save_session();
+                self.window.close();
+            }
             Some(Action::Back) => self.menu.page = menu::Page::Main,
             Some(action @ (Action::Distance | Action::Volume)) => {
                 self.menu.dragging = Some(action);

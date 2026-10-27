@@ -28,6 +28,14 @@ const BUTTON_HEIGHT: f32 = 40.0;
 const HEADER_HEIGHT: f32 = 106.0;
 const LINE_HEIGHT: f32 = 20.0;
 const FOOTER_HEIGHT: f32 = 24.0;
+// iOS apps don't quit themselves, so only the other platforms get a quit button.
+const MAIN_WIDGETS: &[(Action, f32)] = &[
+    (Action::Play, HEADER_HEIGHT),
+    (Action::Settings, HEADER_HEIGHT + 50.0),
+    #[cfg(not(target_os = "ios"))]
+    (Action::Quit, HEADER_HEIGHT + 100.0),
+];
+const MAIN_BUTTONS_BOTTOM: f32 = HEADER_HEIGHT + MAIN_WIDGETS.len() as f32 * 50.0 - 10.0;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum Page {
@@ -40,6 +48,7 @@ pub(crate) enum Page {
 pub(crate) enum Action {
     Play,
     Settings,
+    Quit,
     Distance,
     Volume,
     Stats,
@@ -61,9 +70,7 @@ impl Layout {
         let height = if page == Page::Settings {
             400.0
         } else {
-            HEADER_HEIGHT
-                + BUTTON_HEIGHT * 2.0
-                + 10.0
+            MAIN_BUTTONS_BOTTOM
                 + if controls {
                     MARGIN * 1.5 + CONTROLS.len() as f32 * LINE_HEIGHT
                 } else {
@@ -109,10 +116,7 @@ impl Layout {
 
     fn widgets(&self) -> &'static [(Action, f32)] {
         if self.page == Page::Main {
-            &[
-                (Action::Play, HEADER_HEIGHT),
-                (Action::Settings, HEADER_HEIGHT + 50.0),
-            ]
+            MAIN_WIDGETS
         } else {
             &[
                 (Action::Distance, 80.0),
@@ -255,6 +259,7 @@ fn draw_content(
         let label = match action {
             Action::Play => "Play",
             Action::Settings => "Settings",
+            Action::Quit => "Quit",
             Action::Stats => {
                 if settings.show_stats {
                     "Show Debug Info: ON"
@@ -301,7 +306,7 @@ fn draw_content(
     if layout.page == Page::Main && layout.controls {
         ctx.set_font("sans-serif", 14.0);
         ctx.set_fill_style(Color::rgba(255, 255, 255, 170));
-        let top = HEADER_HEIGHT + BUTTON_HEIGHT * 2.0 + 10.0 + MARGIN * 1.5;
+        let top = MAIN_BUTTONS_BOTTOM + MARGIN * 1.5;
         for (index, line) in CONTROLS.iter().enumerate() {
             ctx.fill_text(line, center, top + (index as f32 + 0.5) * LINE_HEIGHT);
         }
