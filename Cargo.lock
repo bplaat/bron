@@ -725,6 +725,7 @@ name = "macview"
 version = "0.1.0"
 dependencies = [
  "block2",
+ "image",
  "macview-appkit",
  "objc2",
 ]

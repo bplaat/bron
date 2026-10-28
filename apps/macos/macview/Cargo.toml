@@ -39,5 +39,6 @@ workspace = true
 
 [dependencies]
 block2 = "0.6.2"
+image = { path = "../../../lib/graphics/image" }
 macview-appkit = { path = "../macview-appkit" }
 objc2 = "0.6.4"

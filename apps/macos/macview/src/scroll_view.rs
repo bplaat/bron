@@ -14,6 +14,7 @@ use objc2::runtime::{AnyObject as Object, Bool};
 use objc2::{class, define_class, msg_send, sel};
 
 use crate::headers::*;
+use crate::selection_view::{SelectionView, selection_view_of};
 
 // The magnification the media may be shrunk and enlarged to.
 const MINIMUM_MAGNIFICATION: f64 = 0.02;
@@ -77,6 +78,17 @@ define_class!(
             self.reset_cursor_rects();
         }
 
+        // Takes key presses, to switch tools with single keys.
+        #[unsafe(method(acceptsFirstResponder))]
+        const fn _accepts_first_responder(&self) -> Bool {
+            Bool::YES
+        }
+
+        #[unsafe(method(keyDown:))]
+        fn _key_down(&self, event: *mut Object) {
+            self.key_down(event);
+        }
+
         #[unsafe(method(mouseDown:))]
         fn _mouse_down(&self, event: *mut Object) {
             self.mouse_down(event);
@@ -118,7 +130,8 @@ impl ClipView {
         }
     }
 
-    // Returns the clip view for every point of the visible area, and nothing outside of it.
+    // Returns the selection overlay while a selection tool is active, otherwise the clip view,
+    // for every point of the visible area, and nothing outside of it.
     fn hit_test(&self, point: Point) -> *mut Object {
         // SAFETY: The clip view is a live view whose frame is in the coordinates the point is in.
         unsafe {
@@ -128,7 +141,62 @@ impl ClipView {
                 && point.x <= frame.origin.x + frame.size.width
                 && point.y >= frame.origin.y
                 && point.y <= frame.origin.y + frame.size.height;
-            if inside { this } else { null_mut() }
+            if !inside {
+                return null_mut();
+            }
+            match self.active_selection_view() {
+                Some(overlay) => Retained::as_ptr(&overlay) as *mut Object,
+                None => this,
+            }
+        }
+    }
+
+    // Returns the selection overlay of the media while one of its selection tools is active.
+    fn active_selection_view(&self) -> Option<Retained<SelectionView>> {
+        // SAFETY: The clip view keeps its document view alive.
+        unsafe {
+            let document: *mut Object = msg_send![self as *const Self as *mut Object, documentView];
+            selection_view_of(document).filter(|overlay| overlay.is_selecting())
+        }
+    }
+
+    // Switches tools with V, M and E, and clears the selection with Escape.
+    fn key_down(&self, event: *mut Object) {
+        // SAFETY: AppKit passes a valid key NSEvent, and the actions take a sender.
+        unsafe {
+            let this = self as *const Self as *mut Object;
+            let characters: *mut Object = msg_send![event, charactersIgnoringModifiers];
+            let modifiers: u64 = msg_send![event, modifierFlags];
+            let length: usize = msg_send![characters, length];
+            let plain = modifiers
+                & (NS_EVENT_MODIFIER_FLAG_COMMAND
+                    | NS_EVENT_MODIFIER_FLAG_CONTROL
+                    | NS_EVENT_MODIFIER_FLAG_OPTION)
+                == 0;
+            let action = if plain && length == 1 {
+                let character: u16 = msg_send![characters, characterAtIndex: 0usize];
+                match character {
+                    NS_ESCAPE_CHARACTER => Some(sel!(deselectAll:)),
+                    c if c == u16::from(b'v') => Some(sel!(usePanTool:)),
+                    c if c == u16::from(b'm') => Some(sel!(useRectangleSelection:)),
+                    c if c == u16::from(b'e') => Some(sel!(useEllipseSelection:)),
+                    _ => None,
+                }
+            } else {
+                None
+            };
+            let application: *mut Object = msg_send![class!(NSApplication), sharedApplication];
+            let handled: Bool = match action {
+                Some(action) => msg_send![application,
+                    sendAction: action,
+                    to: null_mut::<Object>(),
+                    from: this
+                ],
+                None => Bool::NO,
+            };
+            if !handled.as_bool() {
+                let _: () = msg_send![super(self), keyDown: event];
+            }
         }
     }
 
@@ -166,9 +234,9 @@ impl ClipView {
         }
     }
 
-    // Shows an open hand over media that can be dragged around.
+    // Shows an open hand over media that can be dragged around, unless a selection tool is active.
     fn reset_cursor_rects(&self) {
-        if !self.is_scrollable() {
+        if !self.is_scrollable() || self.active_selection_view().is_some() {
             return;
         }
         // SAFETY: The cursors are shared objects of AppKit, and the rectangle is in the
