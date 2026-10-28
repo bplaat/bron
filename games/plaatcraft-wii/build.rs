@@ -9,7 +9,6 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use gxtexconv::{Format, Texture};
-use plaatcraft_engine::sound::Effect;
 
 #[path = "../../tools/wii-toolchain/build.rs"]
 mod wii;
@@ -43,33 +42,6 @@ fn convert(data: &mut Vec<u8>, path: &Path, mipmaps: bool) -> String {
     )
 }
 
-// Renders the sound effects like baudio does on the desktop, as 16-bit big-endian mono samples
-// that the DSP mixes
-fn render_sounds(out_dir: &Path) {
-    let mut data = Vec::new();
-    let mut code = format!(
-        "pub const SAMPLE_RATE: u32 = {};\npub const SOUNDS: [(usize, usize); {}] = [\n",
-        sfxr::SAMPLE_RATE,
-        Effect::ALL.len()
-    );
-    for effect in Effect::ALL {
-        let mut generator = sfxr::Generator::new(effect.sample());
-        generator.volume = 0.5;
-        let offset = data.len();
-        let mut chunk = [0.0; 1024];
-        while !generator.finished() {
-            generator.generate(&mut chunk);
-            for sample in chunk {
-                data.extend(((sample.clamp(-1.0, 1.0) * 32767.0) as i16).to_be_bytes());
-            }
-        }
-        writeln!(code, "    ({offset}, {}),", data.len() - offset).unwrap();
-    }
-    code.push_str("];\n");
-    fs::write(out_dir.join("sounds.bin"), data).expect("failed to write sounds.bin");
-    fs::write(out_dir.join("sounds.rs"), code).expect("failed to write sounds.rs");
-}
-
 fn main() {
     let manifest_dir = PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").unwrap());
     let out_dir = PathBuf::from(std::env::var_os("OUT_DIR").unwrap());
@@ -99,5 +71,4 @@ fn main() {
     }
     fs::write(out_dir.join("textures.bin"), data).expect("failed to write textures.bin");
     fs::write(out_dir.join("textures.rs"), code).expect("failed to write textures.rs");
-    render_sounds(&out_dir);
 }
