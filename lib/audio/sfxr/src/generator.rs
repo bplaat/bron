@@ -6,8 +6,10 @@
 
 //! The synthesizer stages of a generator: oscillator, envelope, filters and phaser.
 
-use std::f32::consts::PI;
+use core::f32::consts::PI;
 
+#[cfg(not(feature = "std"))]
+use crate::math::Float;
 use crate::{Rng, WaveType};
 
 // MARK: Oscillator

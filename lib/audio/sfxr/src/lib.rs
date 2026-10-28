@@ -7,33 +7,24 @@
 #![doc = include_str!("../README.md")]
 #![cfg_attr(not(feature = "std"), no_std)]
 
-#[cfg(feature = "std")]
 use crate::generator::{Envelope, HighLowPassFilter, Oscillator, OscillatorParams, Phaser};
+#[cfg(not(feature = "std"))]
+use crate::math::Float;
 
-#[cfg(feature = "std")]
 mod generator;
+#[cfg(not(feature = "std"))]
+mod math;
 
 /// The sample rate of the generated sound in Hz.
 pub const SAMPLE_RATE: u32 = 44_100;
 
 // MARK: Random
 /// A small SplitMix64 generator, seeds without a value come from the operating system
-#[cfg(feature = "std")]
 pub(crate) struct Rng(u64);
 
-#[cfg(feature = "std")]
 impl Rng {
     pub(crate) const fn new(seed: u64) -> Self {
         Self(seed)
-    }
-
-    fn from_seed(seed: Option<u64>) -> Self {
-        Self::new(seed.unwrap_or_else(|| {
-            let mut bytes = [0; 8];
-            // Without operating system randomness the sound is still valid, only predictable
-            _ = getrandom::fill(&mut bytes);
-            u64::from_ne_bytes(bytes)
-        }))
     }
 
     const fn next_u64(&mut self) -> u64 {
@@ -47,6 +38,18 @@ impl Rng {
     /// A value in `0.0..1.0`
     pub(crate) fn next_f32(&mut self) -> f32 {
         (self.next_u64() >> 40) as f32 / (1u64 << 24) as f32
+    }
+}
+
+#[cfg(feature = "std")]
+impl Rng {
+    fn from_seed(seed: Option<u64>) -> Self {
+        Self::new(seed.unwrap_or_else(|| {
+            let mut bytes = [0; 8];
+            // Without operating system randomness the sound is still valid, only predictable
+            _ = getrandom::fill(&mut bytes);
+            u64::from_ne_bytes(bytes)
+        }))
     }
 
     fn range_f32(&mut self, from: f32, until: f32) -> f32 {
@@ -178,7 +181,6 @@ impl Sample {
     }
 }
 
-#[cfg(feature = "std")]
 impl Sample {
     /// Asserts that all fields are within their ranges
     fn assert_valid(&self) {
@@ -217,7 +219,10 @@ impl Sample {
             );
         }
     }
+}
 
+#[cfg(feature = "std")]
+impl Sample {
     /// Changes the fields randomly by a little, `None` uses a random seed.
     pub fn mutate(&mut self, seed: Option<u64>) {
         let rng = &mut Rng::from_seed(seed);
@@ -436,7 +441,6 @@ impl Sample {
 ///
 /// Generates mono sound at [`SAMPLE_RATE`] according to a [`Sample`] into a buffer. The data can
 /// be generated in multiple chunks, as the generator keeps its state between calls.
-#[cfg(feature = "std")]
 pub struct Generator {
     /// Generator settings.
     pub sample: Sample,
@@ -450,7 +454,6 @@ pub struct Generator {
     rep_limit: i32,
 }
 
-#[cfg(feature = "std")]
 impl Generator {
     /// Constructs a new generator for the sample.
     ///
