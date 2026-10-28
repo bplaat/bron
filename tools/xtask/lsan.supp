@@ -1,0 +1,3 @@
+# Cairo text rendering retains Fontconfig caches until process exit.
+# Keep leak detection enabled for allocations outside Fontconfig.
+leak:libfontconfig.so

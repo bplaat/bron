@@ -339,7 +339,7 @@ version = "1.0.0"
 file_types = [{ name = "PNG Image", extensions = ["png"] }, { name = "QOI Image", extensions = ["qoi"] }]
 [package.metadata.bundle.windows.shell_extension]
 package = "../viewer-shell"
-library = "viewer_shell"
+library = "viewer-shell"
 thumbnail_handler = "{a1b2c3d4-0000-4000-8000-000000000001}"
 preview_handler = "A1B2C3D4-0000-4000-8000-000000000002"
 "#,
@@ -369,10 +369,10 @@ preview_handler = "A1B2C3D4-0000-4000-8000-000000000002"
         );
         assert!(xml.contains(r#"<com:SurrogateServer DisplayName="viewer">"#));
         assert!(xml.contains(
-            r#"<com:Class Id="A1B2C3D4-0000-4000-8000-000000000001" Path="viewer_shell.dll" ThreadingModel="STA"/>"#
+            r#"<com:Class Id="A1B2C3D4-0000-4000-8000-000000000001" Path="viewer-shell.dll" ThreadingModel="STA"/>"#
         ));
         assert!(xml.contains(
-            r#"<com:Class Id="A1B2C3D4-0000-4000-8000-000000000002" Path="viewer_shell.dll" ThreadingModel="STA"/>"#
+            r#"<com:Class Id="A1B2C3D4-0000-4000-8000-000000000002" Path="viewer-shell.dll" ThreadingModel="STA"/>"#
         ));
         // The handlers follow the file types inside each association.
         assert!(xml.find("</uap:SupportedFileTypes>") < xml.find("<desktop2:ThumbnailHandler"));

@@ -351,6 +351,14 @@ impl Xtask {
                     if rustflags.is_empty() { "" } else { " " }
                 ),
             );
+            if self.os == Os::Linux && package == "bcanvas" {
+                let options = env::var("LSAN_OPTIONS").unwrap_or_default();
+                let suppressions = self.root.join("tools/xtask/lsan.supp");
+                command.env(
+                    "LSAN_OPTIONS",
+                    format!("{options}:suppressions={}", suppressions.display()),
+                );
+            }
             command.args([
                 "+nightly", "test", "-p", package, "--lib", "--tests", "--locked",
             ]);

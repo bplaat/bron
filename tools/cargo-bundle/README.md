@@ -40,7 +40,7 @@ file_types = [{ name = "Example Document", extensions = ["example"] }] # optiona
 
 [package.metadata.bundle.windows.shell_extension] # optional
 package = "../example-shell" # cdylib crate exporting DllGetClassObject and DllCanUnloadNow
-library = "example_shell" # its DLL name without .dll
+library = "example-shell" # its DLL name in the package without .dll
 thumbnail_handler = "00000000-0000-0000-0000-000000000001" # optional IThumbnailProvider CLSID
 preview_handler = "00000000-0000-0000-0000-000000000002" # optional IPreviewHandler CLSID
 ```

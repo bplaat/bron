@@ -50,6 +50,13 @@ pub(crate) fn bundle(args: &Args, target_dir: &str, manifest: &Manifest) {
         .shell_extension
         .as_ref()
         .map(|shell| format!("{}/{}", args.path, shell.package));
+    // Cargo names the built DLL after the crate, the package can name it freely
+    let shell_artifact = shell_package.as_deref().map(|path| {
+        format!(
+            "{}.dll",
+            crate::read_manifest(path).package.name.replace('-', "_")
+        )
+    });
     for (target, _) in ARCHITECTURES {
         for path in std::iter::once(&args.path).chain(&shell_package) {
             let status = cargo_build(path)
@@ -75,13 +82,12 @@ pub(crate) fn bundle(args: &Args, target_dir: &str, manifest: &Manifest) {
             format!("{layout}/{executable}"),
         )
         .expect("Failed to copy executable");
-        if let Some(shell) = &windows.shell_extension {
-            let library = shell_extension_library(shell);
+        if let (Some(shell), Some(artifact)) = (&windows.shell_extension, &shell_artifact) {
             fs::copy(
-                format!("target/{target}/release/{library}"),
-                format!("{layout}/{library}"),
+                format!("target/{target}/release/{artifact}"),
+                format!("{layout}/{}", shell_extension_library(shell)),
             )
-            .unwrap_or_else(|error| panic!("Failed to copy {library}: {error}"));
+            .unwrap_or_else(|error| panic!("Failed to copy {artifact}: {error}"));
         }
         for logo in &logos {
             fs::copy(

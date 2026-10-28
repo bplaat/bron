@@ -72,7 +72,7 @@ extensions = ["tvg"]
 
 [package.metadata.bundle.windows.shell_extension]
 package = "../imageview-windows-shell"
-library = "imageview_windows_shell"
+library = "imageview-shell"
 thumbnail_handler = "80982B38-AE66-4D28-952E-410E1858801B"
 preview_handler = "1D468AD5-F899-453B-8915-D19CD884DBAD"
 
