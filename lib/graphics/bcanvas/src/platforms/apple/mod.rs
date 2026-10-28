@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: MIT
  */
 
-pub(crate) use crate::platforms::apple::context::PlatformCanvasContext;
+pub(crate) use crate::platforms::apple::context::{PlatformCanvasContext, PlatformImage};
 #[cfg(all(feature = "window", target_os = "ios"))]
 pub(crate) use crate::platforms::apple::ios::PlatformCanvas;
 #[cfg(all(feature = "window", target_os = "macos"))]

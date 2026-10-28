@@ -4,7 +4,8 @@
  * SPDX-License-Identifier: MIT
  */
 
-pub(crate) use crate::platforms::windows::context::PlatformCanvasContext;
+pub(crate) use crate::platforms::windows::context::{PlatformCanvasContext, PlatformImage};
+pub(crate) use crate::platforms::windows::hwnd::PlatformHwndCanvas;
 pub(crate) use crate::platforms::windows::offscreen::PlatformOffscreenCanvas;
 #[cfg(feature = "window")]
 pub(crate) use crate::platforms::windows::window::PlatformCanvas;
@@ -12,6 +13,7 @@ pub(crate) use crate::platforms::windows::window::PlatformCanvas;
 mod com;
 mod context;
 mod headers;
+mod hwnd;
 mod offscreen;
 #[cfg(feature = "window")]
 mod window;

@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: MIT
  */
 
-pub(crate) use crate::platforms::gtk::context::PlatformCanvasContext;
+pub(crate) use crate::platforms::gtk::context::{PlatformCanvasContext, PlatformImage};
 pub(crate) use crate::platforms::gtk::offscreen::PlatformOffscreenCanvas;
 #[cfg(feature = "window")]
 pub(crate) use crate::platforms::gtk::window::PlatformCanvas;

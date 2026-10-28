@@ -49,7 +49,6 @@ unsafe extern "C" {
     pub(super) fn cairo_rectangle(cr: *mut c_void, x: f64, y: f64, w: f64, h: f64);
     pub(super) fn cairo_fill(cr: *mut c_void);
     pub(super) fn cairo_fill_preserve(cr: *mut c_void);
-    pub(super) fn cairo_stroke(cr: *mut c_void);
     pub(super) fn cairo_stroke_preserve(cr: *mut c_void);
     pub(super) fn cairo_new_path(cr: *mut c_void);
     pub(super) fn cairo_new_sub_path(cr: *mut c_void);
@@ -110,4 +109,47 @@ unsafe extern "C" {
     pub(super) fn cairo_create(surface: *mut c_void) -> *mut c_void;
     pub(super) fn cairo_destroy(cr: *mut c_void);
     pub(super) fn cairo_status(cr: *mut c_void) -> i32;
+    pub(super) fn cairo_set_fill_rule(cr: *mut c_void, rule: i32);
+    pub(super) fn cairo_set_dash(cr: *mut c_void, dashes: *const f64, count: i32, offset: f64);
+    pub(super) fn cairo_set_miter_limit(cr: *mut c_void, limit: f64);
+    pub(super) fn cairo_paint_with_alpha(cr: *mut c_void, alpha: f64);
+    pub(super) fn cairo_mask(cr: *mut c_void, pattern: *mut c_void);
+    pub(super) fn cairo_push_group(cr: *mut c_void);
+    pub(super) fn cairo_pop_group(cr: *mut c_void) -> *mut c_void;
+    pub(super) fn cairo_pop_group_to_source(cr: *mut c_void);
+    pub(super) fn cairo_set_source(cr: *mut c_void, pattern: *mut c_void);
+    pub(super) fn cairo_set_source_surface(cr: *mut c_void, surface: *mut c_void, x: f64, y: f64);
+    pub(super) fn cairo_get_source(cr: *mut c_void) -> *mut c_void;
+    pub(super) fn cairo_get_group_target(cr: *mut c_void) -> *mut c_void;
+    pub(super) fn cairo_pattern_reference(pattern: *mut c_void) -> *mut c_void;
+    pub(super) fn cairo_identity_matrix(cr: *mut c_void);
+    pub(super) fn cairo_paint(cr: *mut c_void);
+    pub(super) fn cairo_pattern_create_linear(x0: f64, y0: f64, x1: f64, y1: f64) -> *mut c_void;
+    pub(super) fn cairo_pattern_create_radial(
+        cx0: f64,
+        cy0: f64,
+        radius0: f64,
+        cx1: f64,
+        cy1: f64,
+        radius1: f64,
+    ) -> *mut c_void;
+    pub(super) fn cairo_pattern_add_color_stop_rgba(
+        pattern: *mut c_void,
+        offset: f64,
+        r: f64,
+        g: f64,
+        b: f64,
+        a: f64,
+    );
+    pub(super) fn cairo_pattern_set_extend(pattern: *mut c_void, extend: i32);
+    pub(super) fn cairo_pattern_set_filter(pattern: *mut c_void, filter: i32);
+    pub(super) fn cairo_pattern_set_matrix(pattern: *mut c_void, matrix: *const CairoMatrix);
+    pub(super) fn cairo_pattern_destroy(pattern: *mut c_void);
 }
+
+pub(super) const CAIRO_FORMAT_ARGB32: i32 = 0;
+pub(super) const CAIRO_OPERATOR_SOURCE: i32 = 1;
+pub(super) const CAIRO_OPERATOR_OVER: i32 = 2;
+pub(super) const CAIRO_EXTEND_PAD: i32 = 3;
+pub(super) const CAIRO_FILTER_GOOD: i32 = 1;
+pub(super) const CAIRO_FILTER_NEAREST: i32 = 3;

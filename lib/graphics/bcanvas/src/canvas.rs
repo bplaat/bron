@@ -249,6 +249,343 @@ mod tests {
         }
     }
 
+    fn alpha_at(canvas: &mut super::OffscreenCanvas, x: usize, y: usize) -> u8 {
+        let width = canvas.width() as usize;
+        canvas.pixels()[(y * width + x) * 4 + 3]
+    }
+
+    #[test]
+    fn even_odd_fill_leaves_nested_areas_empty() {
+        let mut canvas = super::OffscreenCanvas::new(12, 12);
+        canvas.draw(|ctx| {
+            ctx.rect(0.0, 0.0, 12.0, 12.0);
+            ctx.rect(4.0, 4.0, 4.0, 4.0);
+            ctx.fill_with(super::FillRule::EvenOdd);
+        });
+        assert_eq!(alpha_at(&mut canvas, 1, 1), 255);
+        assert_eq!(alpha_at(&mut canvas, 6, 6), 0);
+    }
+
+    #[test]
+    fn even_odd_clip_excludes_nested_areas() {
+        let mut canvas = super::OffscreenCanvas::new(12, 12);
+        canvas.draw(|ctx| {
+            ctx.rect(0.0, 0.0, 12.0, 12.0);
+            ctx.rect(4.0, 4.0, 4.0, 4.0);
+            ctx.clip_with(super::FillRule::EvenOdd);
+            ctx.begin_path();
+            ctx.fill_rect(0.0, 0.0, 12.0, 12.0);
+        });
+        assert_eq!(alpha_at(&mut canvas, 1, 1), 255);
+        assert_eq!(alpha_at(&mut canvas, 6, 6), 0);
+    }
+
+    #[test]
+    fn linear_gradients_blend_between_stops_and_pad() {
+        let mut canvas = super::OffscreenCanvas::new(40, 1);
+        canvas.draw(|ctx| {
+            let mut gradient = ctx.create_linear_gradient(10.0, 0.0, 30.0, 0.0);
+            gradient.add_color_stop(0.0, Color::rgb(255, 0, 0));
+            gradient.add_color_stop(1.0, Color::rgb(0, 0, 255));
+            ctx.set_fill_style(gradient);
+            ctx.fill_rect(0.0, 0.0, 40.0, 1.0);
+        });
+        let pixels = canvas.pixels();
+        let pixel = |x: usize| &pixels[x * 4..][..4];
+        assert_eq!(pixel(2), [255, 0, 0, 255]);
+        assert_eq!(pixel(38), [0, 0, 255, 255]);
+        let middle = pixel(20);
+        assert!((100..156).contains(&middle[0]) && (100..156).contains(&middle[2]));
+    }
+
+    #[test]
+    fn repeated_and_reflected_gradients_continue_past_their_stops() {
+        for (spread, expected) in [
+            (super::GradientSpread::Repeat, [255, 0, 0, 255]),
+            (super::GradientSpread::Reflect, [0, 0, 255, 255]),
+        ] {
+            let mut canvas = super::OffscreenCanvas::new(40, 1);
+            canvas.draw(|ctx| {
+                let mut gradient = super::CanvasGradient::linear(0.0, 0.0, 10.0, 0.0);
+                gradient.add_color_stop(0.0, Color::rgb(255, 0, 0));
+                gradient.add_color_stop(1.0, Color::rgb(0, 0, 255));
+                gradient.set_spread(spread);
+                ctx.set_fill_style(gradient);
+                ctx.fill_rect(0.0, 0.0, 40.0, 1.0);
+            });
+            // Just past the start of the second period.
+            let pixel = &canvas.pixels()[10 * 4..][..4];
+            for (actual, expected) in pixel.iter().zip(expected) {
+                assert!(
+                    (i16::from(*actual) - expected).abs() <= 40,
+                    "{spread:?}: {pixel:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn gradients_follow_their_transform() {
+        let mut canvas = super::OffscreenCanvas::new(1, 20);
+        canvas.draw(|ctx| {
+            // A horizontal gradient rotated to run from top to bottom.
+            let mut gradient = super::CanvasGradient::linear(0.0, 0.0, 20.0, 0.0);
+            gradient.add_color_stop(0.0, Color::rgb(255, 0, 0));
+            gradient.add_color_stop(1.0, Color::rgb(0, 0, 255));
+            gradient.set_transform(0.0, 1.0, -1.0, 0.0, 0.0, 0.0);
+            ctx.set_fill_style(gradient);
+            ctx.fill_rect(0.0, 0.0, 1.0, 20.0);
+        });
+        let pixels = canvas.pixels();
+        assert!(pixels[0] > 200 && pixels[2] < 55);
+        assert!(pixels[19 * 4] < 55 && pixels[19 * 4 + 2] > 200);
+    }
+
+    #[test]
+    fn radial_gradients_spread_from_the_focal_point() {
+        let mut canvas = super::OffscreenCanvas::new(21, 21);
+        canvas.draw(|ctx| {
+            let mut gradient = ctx.create_radial_gradient(10.0, 10.0, 10.0, 10.0, 10.0);
+            gradient.add_color_stop(0.0, Color::rgb(255, 255, 255));
+            gradient.add_color_stop(1.0, Color::rgba(255, 255, 255, 0));
+            ctx.set_fill_style(gradient);
+            ctx.fill_rect(0.0, 0.0, 21.0, 21.0);
+        });
+        assert!(alpha_at(&mut canvas, 10, 10) > 230);
+        assert!(alpha_at(&mut canvas, 15, 10) > 90 && alpha_at(&mut canvas, 15, 10) < 165);
+        assert_eq!(alpha_at(&mut canvas, 0, 0), 0);
+    }
+
+    #[test]
+    fn gradient_strokes_paint_the_outline() {
+        let mut canvas = super::OffscreenCanvas::new(20, 20);
+        canvas.draw(|ctx| {
+            let mut gradient = super::CanvasGradient::linear(0.0, 0.0, 20.0, 0.0);
+            gradient.add_color_stop(0.0, Color::rgb(0, 255, 0));
+            gradient.add_color_stop(1.0, Color::rgb(0, 255, 0));
+            ctx.set_stroke_style(gradient);
+            ctx.set_line_width(4.0);
+            ctx.stroke_rect(4.0, 4.0, 12.0, 12.0);
+        });
+        assert_eq!(&canvas.pixels()[(4 * 20 + 10) * 4..][..4], [0, 255, 0, 255]);
+        assert_eq!(alpha_at(&mut canvas, 10, 10), 0);
+    }
+
+    #[test]
+    fn dashed_lines_leave_gaps() {
+        let mut canvas = super::OffscreenCanvas::new(20, 4);
+        canvas.draw(|ctx| {
+            ctx.set_line_dash(&[4.0]);
+            ctx.set_line_width(2.0);
+            ctx.move_to(0.0, 2.0);
+            ctx.line_to(20.0, 2.0);
+            ctx.stroke();
+        });
+        assert_eq!(alpha_at(&mut canvas, 1, 2), 255);
+        assert_eq!(alpha_at(&mut canvas, 6, 2), 0);
+        assert_eq!(alpha_at(&mut canvas, 9, 2), 255);
+    }
+
+    #[test]
+    fn layers_composite_overlapping_drawing_once() {
+        let mut canvas = super::OffscreenCanvas::new(3, 1);
+        canvas.draw(|ctx| {
+            ctx.set_global_alpha(0.5);
+            ctx.begin_layer();
+            assert_eq!(ctx.global_alpha(), 1.0);
+            ctx.fill_rect(0.0, 0.0, 2.0, 1.0);
+            ctx.fill_rect(1.0, 0.0, 2.0, 1.0);
+            ctx.end_layer();
+            assert_eq!(ctx.global_alpha(), 0.5);
+        });
+        for x in 0..3 {
+            assert!((i16::from(alpha_at(&mut canvas, x, 0)) - 128).abs() <= 1);
+        }
+    }
+
+    #[test]
+    fn mask_layers_show_content_through_the_mask_alpha() {
+        let mut canvas = super::OffscreenCanvas::new(4, 1);
+        canvas.draw(|ctx| {
+            ctx.begin_mask_layer();
+            ctx.fill_rect(0.0, 0.0, 1.0, 1.0);
+            ctx.set_fill_style(Color::rgba(0, 0, 0, 128));
+            ctx.fill_rect(1.0, 0.0, 1.0, 1.0);
+            ctx.end_mask();
+            ctx.set_fill_style(Color::rgb(255, 0, 0));
+            ctx.fill_rect(0.0, 0.0, 3.0, 1.0);
+            ctx.end_layer();
+            ctx.fill_rect(3.0, 0.0, 1.0, 1.0);
+        });
+        let pixels = canvas.pixels();
+        assert_eq!(&pixels[..4], [255, 0, 0, 255]);
+        assert!((i16::from(pixels[7]) - 128).abs() <= 1);
+        assert_eq!(pixels[11], 0);
+        // The fill style of the mask does not leak out of the layer.
+        assert_eq!(&pixels[12..16], [0, 0, 0, 255]);
+    }
+
+    #[test]
+    fn unbalanced_layers_are_closed_with_the_frame() {
+        let mut canvas = super::OffscreenCanvas::new(2, 1);
+        canvas.draw(|ctx| {
+            ctx.end_layer();
+            ctx.begin_mask_layer();
+            ctx.save();
+            ctx.fill_rect(0.0, 0.0, 1.0, 1.0);
+            ctx.restore();
+            ctx.restore();
+            ctx.end_mask();
+            ctx.begin_layer();
+            ctx.fill_rect(0.0, 0.0, 2.0, 1.0);
+        });
+        assert_eq!(alpha_at(&mut canvas, 0, 0), 255);
+        assert_eq!(alpha_at(&mut canvas, 1, 0), 0);
+    }
+
+    #[test]
+    fn images_are_drawn_upright_and_scaled() {
+        // Red on top of blue, as premultiplied BGRA.
+        let pixels: std::sync::Arc<[u8]> = [0, 0, 255, 255, 255, 0, 0, 255].into();
+        let image = super::CanvasImage::from_premultiplied_bgra(1, 2, pixels);
+        assert_eq!((image.width(), image.height()), (1, 2));
+        let mut canvas = super::OffscreenCanvas::new(4, 8);
+        canvas.draw(|ctx| {
+            ctx.set_image_smoothing_enabled(false);
+            ctx.draw_image(&image, 0.0, 0.0, 4.0, 8.0);
+        });
+        let pixels = canvas.pixels();
+        assert_eq!(&pixels[(4 + 1) * 4..][..4], [255, 0, 0, 255]);
+        assert_eq!(&pixels[(6 * 4 + 2) * 4..][..4], [0, 0, 255, 255]);
+    }
+
+    #[test]
+    fn text_is_painted_with_gradients() {
+        let mut canvas = super::OffscreenCanvas::new(60, 30);
+        canvas.draw(|ctx| {
+            let mut gradient = super::CanvasGradient::linear(0.0, 0.0, 60.0, 0.0);
+            gradient.add_color_stop(0.0, Color::rgb(0, 0, 255));
+            gradient.add_color_stop(1.0, Color::rgb(0, 0, 255));
+            ctx.set_fill_style(gradient);
+            ctx.set_font("sans-serif", 24.0);
+            ctx.fill_text("WW", 4.0, 24.0);
+        });
+        let pixels = canvas.pixels();
+        let ink = pixels
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .filter(|pixel| pixel[3] > 200);
+        assert!(ink.clone().count() > 20);
+        assert!(ink.into_iter().all(|pixel| pixel[2] > 200 && pixel[0] < 40));
+    }
+
+    #[test]
+    fn composite_operations_blend_with_the_content() {
+        let mut canvas = super::OffscreenCanvas::new(1, 1);
+        canvas.draw(|ctx| {
+            ctx.set_fill_style(Color::rgb(255, 128, 0));
+            ctx.fill_rect(0.0, 0.0, 1.0, 1.0);
+            ctx.set_global_composite_operation(super::CompositeOperation::Multiply);
+            ctx.set_fill_style(Color::rgb(128, 255, 255));
+            ctx.fill_rect(0.0, 0.0, 1.0, 1.0);
+        });
+        let pixel = &canvas.pixels()[..4];
+        assert!((i16::from(pixel[0]) - 128).abs() <= 2 && (i16::from(pixel[1]) - 128).abs() <= 2);
+        assert_eq!(pixel[2], 0);
+    }
+
+    // Draws a red background and blue over its left half with an operation.
+    fn composite_pixels(
+        operation: super::CompositeOperation,
+        draw: fn(&mut super::CanvasRenderingContext2d<'_>),
+    ) -> Vec<u8> {
+        let mut canvas = super::OffscreenCanvas::new(4, 4);
+        canvas.draw(|ctx| {
+            ctx.set_fill_style(Color::rgb(255, 0, 0));
+            ctx.fill_rect(0.0, 0.0, 4.0, 4.0);
+            ctx.set_global_composite_operation(operation);
+            ctx.set_fill_style(Color::rgb(0, 0, 255));
+            ctx.set_stroke_style(Color::rgb(0, 0, 255));
+            draw(ctx);
+        });
+        canvas.pixels().to_vec()
+    }
+
+    #[test]
+    fn composite_operations_only_change_the_drawn_area() {
+        let draws: [fn(&mut super::CanvasRenderingContext2d<'_>); 3] = [
+            |ctx| ctx.fill_rect(0.0, 0.0, 2.0, 4.0),
+            |ctx| {
+                ctx.rect(0.0, 0.0, 2.0, 4.0);
+                ctx.fill();
+            },
+            |ctx| {
+                ctx.set_line_width(2.0);
+                ctx.move_to(1.0, 0.0);
+                ctx.line_to(1.0, 4.0);
+                ctx.stroke();
+            },
+        ];
+        for draw in draws {
+            for operation in [
+                super::CompositeOperation::SourceIn,
+                super::CompositeOperation::DestinationIn,
+                super::CompositeOperation::Copy,
+            ] {
+                let pixels = composite_pixels(operation, draw);
+                let pixel = |x: usize| &pixels[(4 + x) * 4..][..4];
+                let expected = if operation == super::CompositeOperation::DestinationIn {
+                    [255, 0, 0, 255]
+                } else {
+                    [0, 0, 255, 255]
+                };
+                assert_eq!(pixel(0), expected, "{operation:?}");
+                assert_eq!(pixel(3), [255, 0, 0, 255], "{operation:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn layers_composite_over_the_whole_canvas() {
+        let pixels = composite_pixels(super::CompositeOperation::SourceIn, |ctx| {
+            ctx.begin_layer();
+            ctx.fill_rect(0.0, 0.0, 2.0, 4.0);
+            ctx.end_layer();
+        });
+        assert_eq!(&pixels[4 * 4..][..4], [0, 0, 255, 255]);
+        assert_eq!(pixels[7 * 4 + 3], 0);
+    }
+
+    #[test]
+    fn blend_mode_layers_mix_with_the_content() {
+        let pixels = composite_pixels(super::CompositeOperation::Screen, |ctx| {
+            ctx.begin_layer();
+            ctx.fill_rect(0.0, 0.0, 2.0, 4.0);
+            ctx.end_layer();
+        });
+        assert_eq!(&pixels[4 * 4..][..4], [255, 0, 255, 255]);
+        assert_eq!(&pixels[7 * 4..][..4], [255, 0, 0, 255]);
+    }
+
+    #[test]
+    fn gradient_stops_keep_their_order_and_reflect_in_odd_periods() {
+        let mut gradient = super::CanvasGradient::linear(0.0, 0.0, 1.0, 0.0);
+        gradient.add_color_stop(0.5, Color::rgb(0, 0, 255));
+        gradient.add_color_stop(0.0, Color::rgb(255, 0, 0));
+        gradient.add_color_stop(0.5, Color::rgb(0, 255, 0));
+        gradient.add_color_stop(f32::NAN, Color::rgb(1, 1, 1));
+        let offsets: Vec<f32> = gradient.0.stops.iter().map(|(offset, _)| *offset).collect();
+        assert_eq!(offsets, [0.0, 0.5, 0.5]);
+        assert_eq!(gradient.0.stops[2].1, Color::rgb(0, 255, 0));
+        gradient.set_spread(super::GradientSpread::Reflect);
+        let stops = gradient.0.spread_stops(0, 2);
+        assert_eq!(stops.len(), gradient.0.stops.len() * 2);
+        // The second period is mirrored.
+        assert_eq!(stops[3], (0.75, Color::rgb(0, 255, 0)));
+        assert_eq!(stops[5], (1.0, Color::rgb(255, 0, 0)));
+    }
+
     #[test]
     #[should_panic(expected = "rounded rectangle radius must be nonnegative")]
     fn rounded_rectangle_rejects_negative_radius() {
@@ -271,6 +608,249 @@ mod tests {
     #[should_panic(expected = "ellipse radii must be nonnegative")]
     fn ellipse_rejects_negative_vertical_radius() {
         super::OffscreenCanvas::new(4, 4).draw(|ctx| ctx.ellipse(0.0, 0.0, 1.0, -1.0));
+    }
+}
+
+/// How a gradient continues beyond its first and last color stops.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum GradientSpread {
+    /// Extend the first and last stop colors, like HTML canvas.
+    #[default]
+    Pad,
+    /// Mirror the gradient in every following period.
+    Reflect,
+    /// Repeat the gradient in every following period.
+    Repeat,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum GradientShape {
+    Linear {
+        start: (f32, f32),
+        end: (f32, f32),
+    },
+    // A focal circle of radius zero inside an end circle, like SVG radial gradients.
+    Radial {
+        focal: (f32, f32),
+        center: (f32, f32),
+        radius: f32,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct Gradient {
+    pub(crate) shape: GradientShape,
+    pub(crate) stops: Vec<(f32, Color)>,
+    pub(crate) spread: GradientSpread,
+    pub(crate) transform: [f32; 6],
+}
+
+/// A linear or radial gradient fill or stroke style, like the HTML `CanvasGradient`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CanvasGradient(pub(crate) Rc<Gradient>);
+
+impl CanvasGradient {
+    fn new(shape: GradientShape) -> Self {
+        Self(Rc::new(Gradient {
+            shape,
+            stops: Vec::new(),
+            spread: GradientSpread::Pad,
+            transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+        }))
+    }
+
+    /// Create a linear gradient along the line from the start to the end point.
+    pub fn linear(x0: f32, y0: f32, x1: f32, y1: f32) -> Self {
+        Self::new(GradientShape::Linear {
+            start: (x0, y0),
+            end: (x1, y1),
+        })
+    }
+
+    /// Create a radial gradient from a focal point to the circle around the center.
+    pub fn radial(fx: f32, fy: f32, cx: f32, cy: f32, radius: f32) -> Self {
+        Self::new(GradientShape::Radial {
+            focal: (fx, fy),
+            center: (cx, cy),
+            radius: radius.max(0.0),
+        })
+    }
+
+    /// Add a color stop. Offsets are clamped to 0.0..=1.0 and stops with the same offset keep
+    /// their order, which makes hard color transitions. Non-finite offsets are ignored.
+    pub fn add_color_stop(&mut self, offset: f32, color: Color) {
+        if !offset.is_finite() {
+            return;
+        }
+        let offset = offset.clamp(0.0, 1.0);
+        let stops = &mut Rc::make_mut(&mut self.0).stops;
+        let index = stops.partition_point(|(stop, _)| *stop <= offset);
+        stops.insert(index, (offset, color));
+    }
+
+    /// Set how the gradient continues beyond its first and last stops.
+    pub fn set_spread(&mut self, spread: GradientSpread) {
+        Rc::make_mut(&mut self.0).spread = spread;
+    }
+
+    /// Set the transform from gradient space to the user space of the painted shape.
+    /// Non-finite values are ignored.
+    pub fn set_transform(&mut self, a: f32, b: f32, c: f32, d: f32, e: f32, f: f32) {
+        if [a, b, c, d, e, f].iter().all(|value| value.is_finite()) {
+            Rc::make_mut(&mut self.0).transform = [a, b, c, d, e, f];
+        }
+    }
+}
+
+impl Gradient {
+    /// The stops covering the periods `first..last` of a reflected or repeated gradient as
+    /// one padded gradient, for graphics APIs without native spread modes.
+    #[cfg_attr(not(target_vendor = "apple"), allow(dead_code))]
+    pub(crate) fn spread_stops(&self, first: i32, last: i32) -> Vec<(f32, Color)> {
+        let periods = (last - first).max(1);
+        let mut stops = Vec::with_capacity(self.stops.len() * periods as usize);
+        for period in first..first + periods {
+            let reversed = self.spread == GradientSpread::Reflect && period.rem_euclid(2) == 1;
+            let base = (period - first) as f32;
+            let mut add = |offset: f32, color| {
+                stops.push(((base + offset) / periods as f32, color));
+            };
+            if reversed {
+                self.stops
+                    .iter()
+                    .rev()
+                    .for_each(|&(offset, color)| add(1.0 - offset, color));
+            } else {
+                self.stops
+                    .iter()
+                    .for_each(|&(offset, color)| add(offset, color));
+            }
+        }
+        stops
+    }
+}
+
+/// A fill or stroke style.
+#[derive(Debug, Clone, PartialEq)]
+pub enum CanvasStyle {
+    /// A uniform color.
+    Color(Color),
+    /// A linear or radial gradient.
+    Gradient(CanvasGradient),
+}
+
+impl From<Color> for CanvasStyle {
+    fn from(color: Color) -> Self {
+        Self::Color(color)
+    }
+}
+
+impl From<CanvasGradient> for CanvasStyle {
+    fn from(gradient: CanvasGradient) -> Self {
+        Self::Gradient(gradient)
+    }
+}
+
+/// The rule that decides which areas a path encloses.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum FillRule {
+    /// Areas with a nonzero winding number are inside.
+    #[default]
+    NonZero,
+    /// Areas crossed an odd number of times are inside.
+    EvenOdd,
+}
+
+/// How drawing is composited onto the existing content, like the HTML
+/// `globalCompositeOperation`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum CompositeOperation {
+    /// Draw over the existing content.
+    #[default]
+    SourceOver,
+    /// Keep the drawing only where there is existing content.
+    SourceIn,
+    /// Keep the drawing only where there is no existing content.
+    SourceOut,
+    /// Draw only over existing content, keeping the content elsewhere.
+    SourceAtop,
+    /// Draw behind the existing content.
+    DestinationOver,
+    /// Keep existing content only where the drawing is.
+    DestinationIn,
+    /// Keep existing content only where the drawing is not.
+    DestinationOut,
+    /// Keep existing content inside the drawing and draw the rest behind it.
+    DestinationAtop,
+    /// Add the colors.
+    Lighter,
+    /// Replace the existing content with the drawing.
+    Copy,
+    /// Keep the drawing and the content only where they do not overlap.
+    Xor,
+    /// Multiply the colors.
+    Multiply,
+    /// Invert, multiply and invert the colors.
+    Screen,
+    /// Multiply or screen depending on the existing color.
+    Overlay,
+    /// Keep the darker color.
+    Darken,
+    /// Keep the lighter color.
+    Lighten,
+    /// Brighten the existing color.
+    ColorDodge,
+    /// Darken the existing color.
+    ColorBurn,
+    /// Multiply or screen depending on the drawn color.
+    HardLight,
+    /// A softer hard light.
+    SoftLight,
+    /// Subtract the darker color from the lighter one.
+    Difference,
+    /// A lower contrast difference.
+    Exclusion,
+    /// The hue of the drawing with the saturation and luminosity of the content.
+    Hue,
+    /// The saturation of the drawing with the hue and luminosity of the content.
+    Saturation,
+    /// The hue and saturation of the drawing with the luminosity of the content.
+    Color,
+    /// The luminosity of the drawing with the hue and saturation of the content.
+    Luminosity,
+}
+
+/// A premultiplied BGRA8 bitmap that canvases draw with `draw_image`, which shares its pixels.
+#[derive(Clone)]
+pub struct CanvasImage(pub(crate) Rc<crate::platforms::PlatformImage>);
+
+impl CanvasImage {
+    /// Create an image from tightly packed, row-major, premultiplied BGRA8 pixels.
+    ///
+    /// # Panics
+    /// Panics if the dimensions are zero or do not match the pixel data.
+    pub fn from_premultiplied_bgra(width: u32, height: u32, pixels: std::sync::Arc<[u8]>) -> Self {
+        assert!(width > 0 && height > 0, "image dimensions must be nonzero");
+        assert_eq!(
+            Some(pixels.len()),
+            (width as usize)
+                .checked_mul(height as usize)
+                .and_then(|pixels| pixels.checked_mul(4)),
+            "image pixels must match the dimensions"
+        );
+        Self(Rc::new(crate::platforms::PlatformImage::new(
+            width, height, pixels,
+        )))
+    }
+
+    /// Width in pixels.
+    pub fn width(&self) -> u32 {
+        self.0.width
+    }
+
+    /// Height in pixels.
+    pub fn height(&self) -> u32 {
+        self.0.height
     }
 }
 
@@ -344,12 +924,17 @@ pub enum FontWeight {
 
 #[derive(Clone)]
 pub(crate) struct CanvasState {
-    pub fill: Color,
-    pub stroke: Color,
+    pub fill: CanvasStyle,
+    pub stroke: CanvasStyle,
     pub alpha: f32,
+    pub composite: CompositeOperation,
+    pub image_smoothing: bool,
     pub line_width: f32,
     pub line_cap: LineCap,
     pub line_join: LineJoin,
+    pub miter_limit: f32,
+    pub line_dash: Rc<[f32]>,
+    pub line_dash_offset: f32,
     pub font_family: Rc<str>,
     pub font_size: f32,
     pub font_weight: FontWeight,
@@ -360,12 +945,17 @@ pub(crate) struct CanvasState {
 impl Default for CanvasState {
     fn default() -> Self {
         Self {
-            fill: Color::rgb(0, 0, 0),
-            stroke: Color::rgb(0, 0, 0),
+            fill: Color::rgb(0, 0, 0).into(),
+            stroke: Color::rgb(0, 0, 0).into(),
             alpha: 1.0,
+            composite: CompositeOperation::SourceOver,
+            image_smoothing: true,
             line_width: 1.0,
             line_cap: LineCap::Butt,
             line_join: LineJoin::Miter,
+            miter_limit: 10.0,
+            line_dash: Rc::from([]),
+            line_dash_offset: 0.0,
             font_family: "sans-serif".into(),
             font_size: 10.0,
             font_weight: FontWeight::Normal,
@@ -537,6 +1127,58 @@ impl OffscreenCanvas {
     }
 }
 
+/// A native drawing context owned by the caller, like the one of a native view drawing itself.
+#[cfg(any(target_vendor = "apple", not(any(target_os = "android", windows))))]
+#[derive(Clone, Copy, Debug)]
+pub enum NativeContext {
+    /// A Core Graphics `CGContextRef` with a top left origin, like a flipped NSView's.
+    #[cfg(target_vendor = "apple")]
+    CoreGraphics(*mut std::ffi::c_void),
+    /// A `cairo_t`, like the one of a GTK draw signal.
+    #[cfg(not(target_vendor = "apple"))]
+    Cairo(*mut std::ffi::c_void),
+}
+
+/// Draw into a native context with logical coordinates, starting from its current transform
+/// and clip. The context keeps its state after drawing.
+///
+/// # Safety
+/// The native context must be valid for drawing during this call.
+#[cfg(any(target_vendor = "apple", not(any(target_os = "android", windows))))]
+pub unsafe fn draw_native(
+    context: NativeContext,
+    width: f32,
+    height: f32,
+    scale_factor: f32,
+    draw: impl for<'frame> FnOnce(&mut CanvasRenderingContext2d<'frame>),
+) {
+    let platform = unsafe { PlatformCanvasContext::from_native(context) };
+    let mut context = CanvasRenderingContext2d::new(platform, width, height, scale_factor);
+    draw(&mut context);
+}
+
+/// A canvas painting a native Win32 window, like a scroll view, with a Direct2D render target
+/// that follows the size and DPI of its client area.
+#[cfg(windows)]
+pub struct HwndCanvas(crate::platforms::PlatformHwndCanvas);
+
+#[cfg(windows)]
+impl HwndCanvas {
+    /// Create a canvas for a window.
+    ///
+    /// # Safety
+    /// The window must stay valid while the canvas is alive.
+    pub unsafe fn new(hwnd: *mut std::ffi::c_void) -> Self {
+        Self(crate::platforms::PlatformHwndCanvas::new(hwnd))
+    }
+
+    /// Paint the whole client area in logical pixels, call this for the `WM_PAINT` of the
+    /// window, which it validates.
+    pub fn paint(&mut self, draw: impl for<'frame> FnOnce(&mut CanvasRenderingContext2d<'frame>)) {
+        self.0.paint(draw);
+    }
+}
+
 #[cfg(not(any(target_vendor = "apple", target_os = "android")))]
 pub(crate) fn copy_bgra_premultiplied_to_rgba(source: &[u8], output: &mut [u8]) {
     let (source, source_remainder) = source.as_chunks::<4>();
@@ -596,7 +1238,7 @@ fn unpremultiply(component: u8, alpha: u8) -> u8 {
 pub struct CanvasRenderingContext2d<'a> {
     pub(crate) platform: PlatformCanvasContext,
     pub(crate) state: CanvasState,
-    pub(crate) stack: Vec<CanvasState>,
+    pub(crate) stack: Vec<(CanvasState, Option<LayerPhase>)>,
     width: f32,
     height: f32,
     scale_factor: f32,
@@ -642,30 +1284,126 @@ impl<'a> CanvasRenderingContext2d<'a> {
     /// Save styles, the transform, and the clipping region, but not the current path.
     pub fn save(&mut self) {
         self.platform.save();
-        self.stack.push(self.state.clone());
+        self.stack.push((self.state.clone(), None));
     }
-    /// Restore the most recently saved drawing state. An empty stack is a no-op.
+    /// Restore the most recently saved drawing state. An empty stack and a state saved by
+    /// a layer, which `end_layer` restores, are no-ops.
     pub fn restore(&mut self) {
-        if let Some(state) = self.stack.pop() {
+        if matches!(self.stack.last(), Some((_, None))) {
+            let (state, _) = self.stack.pop().expect("saved state");
             self.platform.restore();
             self.state = state;
         }
     }
-    /// Current fill color.
-    pub const fn fill_style(&self) -> Color {
-        self.state.fill
+    /// Start a layer that is drawn into on its own and composited when it ends, with the
+    /// global alpha and composite operation of now. Like `save`, the layer keeps the drawing
+    /// state, and its drawing starts with full alpha and source over compositing.
+    pub fn begin_layer(&mut self) {
+        self.platform.begin_layer(&self.state);
+        self.push_layer(LayerPhase::Content);
     }
-    /// Set the fill color.
-    pub const fn set_fill_style(&mut self, color: Color) {
-        self.state.fill = color;
+    /// Start a layer that is masked: drawing until `end_mask` makes the mask, whose alpha
+    /// is the coverage of the drawing after it until `end_layer`.
+    pub fn begin_mask_layer(&mut self) {
+        self.platform.begin_mask_layer(&self.state);
+        self.push_layer(LayerPhase::Mask);
     }
-    /// Current stroke color.
-    pub const fn stroke_style(&self) -> Color {
-        self.state.stroke
+    /// Finish the mask of a masked layer and start its content, with the drawing state of
+    /// the layer start. Without a mask being drawn, this is a no-op.
+    pub fn end_mask(&mut self) {
+        let Some(index) = self.layer_index() else {
+            return;
+        };
+        if self.stack[index].1 != Some(LayerPhase::Mask) {
+            return;
+        }
+        self.unwind_saves(index);
+        self.platform.end_mask();
+        self.stack[index].1 = Some(LayerPhase::Content);
+        self.state = self.layer_state(index);
     }
-    /// Set the stroke color.
-    pub const fn set_stroke_style(&mut self, color: Color) {
-        self.state.stroke = color;
+    /// Composite the most recent layer and restore the drawing state of its start. Without
+    /// a layer this is a no-op.
+    pub fn end_layer(&mut self) {
+        let Some(index) = self.layer_index() else {
+            return;
+        };
+        self.unwind_saves(index);
+        if self.stack[index].1 == Some(LayerPhase::Mask) {
+            self.platform.end_mask();
+        }
+        self.platform.end_layer();
+        let (state, _) = self.stack.pop().expect("layer state");
+        self.state = state;
+    }
+    fn push_layer(&mut self, phase: LayerPhase) {
+        self.stack.push((self.state.clone(), Some(phase)));
+        self.state = self.layer_state(self.stack.len() - 1);
+    }
+    // The drawing state inside a layer, which composites with the alpha and operation itself.
+    fn layer_state(&self, index: usize) -> CanvasState {
+        CanvasState {
+            alpha: 1.0,
+            composite: CompositeOperation::SourceOver,
+            ..self.stack[index].0.clone()
+        }
+    }
+    fn layer_index(&self) -> Option<usize> {
+        self.stack.iter().rposition(|(_, layer)| layer.is_some())
+    }
+    // Restore the states saved inside the layer at `index`.
+    fn unwind_saves(&mut self, index: usize) {
+        while self.stack.len() > index + 1 {
+            self.stack.pop();
+            self.platform.restore();
+        }
+    }
+    /// Current fill style.
+    pub const fn fill_style(&self) -> &CanvasStyle {
+        &self.state.fill
+    }
+    /// Set the fill color or gradient.
+    pub fn set_fill_style(&mut self, style: impl Into<CanvasStyle>) {
+        self.state.fill = style.into();
+    }
+    /// Current stroke style.
+    pub const fn stroke_style(&self) -> &CanvasStyle {
+        &self.state.stroke
+    }
+    /// Set the stroke color or gradient.
+    pub fn set_stroke_style(&mut self, style: impl Into<CanvasStyle>) {
+        self.state.stroke = style.into();
+    }
+    /// Create a linear gradient, like [`CanvasGradient::linear`].
+    pub fn create_linear_gradient(&self, x0: f32, y0: f32, x1: f32, y1: f32) -> CanvasGradient {
+        CanvasGradient::linear(x0, y0, x1, y1)
+    }
+    /// Create a radial gradient, like [`CanvasGradient::radial`].
+    pub fn create_radial_gradient(
+        &self,
+        fx: f32,
+        fy: f32,
+        cx: f32,
+        cy: f32,
+        radius: f32,
+    ) -> CanvasGradient {
+        CanvasGradient::radial(fx, fy, cx, cy, radius)
+    }
+    /// Current composite operation.
+    pub const fn global_composite_operation(&self) -> CompositeOperation {
+        self.state.composite
+    }
+    /// Set how drawing and layers composite onto the existing content.
+    pub const fn set_global_composite_operation(&mut self, operation: CompositeOperation) {
+        self.state.composite = operation;
+    }
+    /// Whether scaled images are smoothed, otherwise their pixels stay sharp.
+    pub const fn image_smoothing_enabled(&self) -> bool {
+        self.state.image_smoothing
+    }
+    /// Set whether scaled images are smoothed.
+    pub const fn set_image_smoothing_enabled(&mut self, enabled: bool) {
+        self.state.image_smoothing = enabled;
     }
     /// Current global alpha, from 0.0 to 1.0.
     pub const fn global_alpha(&self) -> f32 {
@@ -702,6 +1440,45 @@ impl<'a> CanvasRenderingContext2d<'a> {
     /// Set line join.
     pub const fn set_line_join(&mut self, join: LineJoin) {
         self.state.line_join = join;
+    }
+    /// Current miter limit.
+    pub const fn miter_limit(&self) -> f32 {
+        self.state.miter_limit
+    }
+    /// Set the miter limit. Non-finite, zero, and negative values are ignored.
+    pub const fn set_miter_limit(&mut self, limit: f32) {
+        if limit.is_finite() && limit > 0.0 {
+            self.state.miter_limit = limit;
+        }
+    }
+    /// Current dash pattern of alternating dash and gap lengths.
+    pub fn line_dash(&self) -> &[f32] {
+        &self.state.line_dash
+    }
+    /// Set the dash pattern, an odd number of lengths is repeated to make it even. Patterns
+    /// with non-finite or negative lengths are ignored and an empty one draws solid lines.
+    pub fn set_line_dash(&mut self, segments: &[f32]) {
+        if !segments
+            .iter()
+            .all(|length| length.is_finite() && *length >= 0.0)
+        {
+            return;
+        }
+        self.state.line_dash = if segments.len() % 2 == 1 {
+            segments.iter().chain(segments).copied().collect()
+        } else {
+            segments.into()
+        };
+    }
+    /// Current dash offset.
+    pub const fn line_dash_offset(&self) -> f32 {
+        self.state.line_dash_offset
+    }
+    /// Set the dash offset. Non-finite values are ignored.
+    pub const fn set_line_dash_offset(&mut self, offset: f32) {
+        if offset.is_finite() {
+            self.state.line_dash_offset = offset;
+        }
     }
     /// Current font family.
     pub fn font_family(&self) -> &str {
@@ -902,7 +1679,11 @@ impl<'a> CanvasRenderingContext2d<'a> {
     }
     /// Fill the current path without consuming it.
     pub fn fill(&mut self) {
-        self.platform.fill(&self.state);
+        self.fill_with(FillRule::NonZero);
+    }
+    /// Fill the current path with a fill rule without consuming it.
+    pub fn fill_with(&mut self, rule: FillRule) {
+        self.platform.fill(&self.state, rule);
     }
     /// Stroke the current path without consuming it.
     pub fn stroke(&mut self) {
@@ -910,7 +1691,19 @@ impl<'a> CanvasRenderingContext2d<'a> {
     }
     /// Clip future drawing to the current path without consuming it.
     pub fn clip(&mut self) {
-        self.platform.clip();
+        self.clip_with(FillRule::NonZero);
+    }
+    /// Clip future drawing to the current path with a fill rule without consuming it.
+    pub fn clip_with(&mut self, rule: FillRule) {
+        self.platform.clip(rule);
+    }
+    /// Draw an image scaled into a rectangle.
+    pub fn draw_image(&mut self, image: &CanvasImage, x: f32, y: f32, width: f32, height: f32) {
+        if ![x, y, width, height].iter().all(|v| v.is_finite()) {
+            return;
+        }
+        self.platform
+            .draw_image(&self.state, &image.0, x, y, width, height);
     }
     /// Translate the current transform.
     pub fn translate(&mut self, x: f32, y: f32) {
@@ -932,6 +1725,13 @@ impl<'a> CanvasRenderingContext2d<'a> {
             return;
         }
         self.platform.scale(x, y);
+    }
+    /// Multiply the current transform with an affine transform.
+    pub fn transform(&mut self, a: f32, b: f32, c: f32, d: f32, e: f32, f: f32) {
+        if ![a, b, c, d, e, f].iter().all(|v| v.is_finite()) {
+            return;
+        }
+        self.platform.transform(a, b, c, d, e, f);
     }
     /// Replace the current affine transform.
     pub fn set_transform(&mut self, a: f32, b: f32, c: f32, d: f32, e: f32, f: f32) {
@@ -959,8 +1759,23 @@ impl<'a> CanvasRenderingContext2d<'a> {
 
 impl Drop for CanvasRenderingContext2d<'_> {
     fn drop(&mut self) {
-        while self.stack.pop().is_some() {
-            self.platform.restore();
+        while let Some((_, layer)) = self.stack.pop() {
+            match layer {
+                None => self.platform.restore(),
+                Some(phase) => {
+                    if phase == LayerPhase::Mask {
+                        self.platform.end_mask();
+                    }
+                    self.platform.end_layer();
+                }
+            }
         }
     }
+}
+
+// Whether a layer is drawing its mask or its content.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LayerPhase {
+    Mask,
+    Content,
 }

@@ -6,7 +6,9 @@
 
 #[cfg(feature = "window")]
 pub(crate) use platform::PlatformCanvas;
-pub(crate) use platform::{PlatformCanvasContext, PlatformOffscreenCanvas};
+#[cfg(windows)]
+pub(crate) use platform::PlatformHwndCanvas;
+pub(crate) use platform::{PlatformCanvasContext, PlatformImage, PlatformOffscreenCanvas};
 
 #[cfg(target_os = "android")]
 use crate::platforms::android as platform;

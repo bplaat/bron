@@ -12,8 +12,9 @@ use bwindow::{NativeContentHandle, WindowAttachment, WindowEventSender};
 
 use crate::CanvasRenderingContext2d;
 use crate::platforms::windows::com::ComPtr;
-use crate::platforms::windows::context::{DrawTarget, PlatformCanvasContext, Resources};
+use crate::platforms::windows::context::{PlatformCanvasContext, Resources};
 use crate::platforms::windows::headers::*;
+use crate::platforms::windows::hwnd::{HwndTarget, client_size};
 
 // Draws the client area of the top-level window with a Direct2D HWND render target in the
 // paint pass of its WM_PAINT. The window delivers the interaction.
@@ -21,9 +22,7 @@ struct CanvasData {
     hwnd: Cell<Option<HWND>>,
     sender: WindowEventSender,
     resources: Rc<Resources>,
-    target: RefCell<Option<DrawTarget<ID2D1HwndRenderTarget>>>,
-    target_size: Cell<(u32, u32)>,
-    target_dpi: Cell<u32>,
+    target: RefCell<HwndTarget>,
     frame: RefCell<Option<CanvasRenderingContext2d<'static>>>,
     painting: Cell<bool>,
 }
@@ -44,16 +43,12 @@ impl CanvasData {
     fn close(&self) {
         self.hwnd.take();
         self.frame.borrow_mut().take();
-        self.target.borrow_mut().take();
-        self.target_size.set((0, 0));
-        self.target_dpi.set(0);
+        self.target.borrow_mut().lose();
     }
 
     fn lose_target(&self) {
         // The brush belongs to the lost render target and is recreated with it.
-        self.target.borrow_mut().take();
-        self.target_size.set((0, 0));
-        self.target_dpi.set(0);
+        self.target.borrow_mut().lose();
         self.request_redraw();
     }
 
@@ -66,17 +61,16 @@ impl CanvasData {
             self.request_redraw();
             return;
         }
-        let mut rect = RECT::default();
-        let _ = unsafe { GetClientRect(hwnd, &mut rect) };
-        let width = (rect.right - rect.left).max(0) as u32;
-        let height = (rect.bottom - rect.top).max(0) as u32;
+        let (width, height, scale) = client_size(hwnd);
         if width == 0 || height == 0 {
             self.painting.set(false);
             return;
         }
-        let dpi = unsafe { GetDpiForWindow(hwnd) }.max(96) as f32;
-        let scale = dpi / 96.0;
-        let Some(target) = self.target(hwnd, width, height, dpi) else {
+        let target =
+            self.target
+                .borrow_mut()
+                .get(&self.resources, hwnd, width, height, scale * 96.0);
+        let Some(target) = target else {
             self.painting.set(false);
             self.lose_target();
             return;
@@ -93,55 +87,6 @@ impl CanvasData {
             self.request_redraw();
         }
         self.painting.set(false);
-    }
-
-    // The cached render target resized to the client area, or a new one.
-    fn target(
-        &self,
-        hwnd: HWND,
-        width: u32,
-        height: u32,
-        dpi: f32,
-    ) -> Option<DrawTarget<ID2D1HwndRenderTarget>> {
-        let size = D2D_SIZE_U { width, height };
-        let cached = self.target.borrow().clone();
-        if let Some(target) = cached {
-            if self.target_size.get() != (width, height) {
-                unsafe { target.native.Resize(&size) }.ok()?;
-                self.target_size.set((width, height));
-            }
-            if self.target_dpi.replace(dpi as u32) != dpi as u32 {
-                unsafe { target.native.SetDpi(dpi, dpi) };
-            }
-            return Some(target);
-        }
-        let target = unsafe {
-            self.resources
-                .factory
-                .CreateHwndRenderTarget(
-                    &D2D1_RENDER_TARGET_PROPERTIES {
-                        pixelFormat: D2D1_PIXEL_FORMAT {
-                            format: DXGI_FORMAT_UNKNOWN,
-                            alphaMode: D2D1_ALPHA_MODE_UNKNOWN,
-                        },
-                        dpiX: dpi,
-                        dpiY: dpi,
-                        ..Default::default()
-                    },
-                    // The window paces the frames, so presenting never waits for the display.
-                    &D2D1_HWND_RENDER_TARGET_PROPERTIES {
-                        hwnd,
-                        pixelSize: size,
-                        presentOptions: D2D1_PRESENT_OPTIONS_IMMEDIATELY,
-                    },
-                )
-                .and_then(DrawTarget::new)
-                .ok()?
-        };
-        self.target_size.set((width, height));
-        self.target_dpi.set(dpi as u32);
-        *self.target.borrow_mut() = Some(target.clone());
-        Some(target)
     }
 
     fn end_draw(&self, target: &ComPtr<ID2D1HwndRenderTarget>) {
@@ -167,9 +112,7 @@ impl PlatformCanvas {
             hwnd: Cell::new(Some(hwnd)),
             sender: attachment.event_sender(),
             resources: Resources::new(),
-            target: RefCell::new(None),
-            target_size: Cell::new((0, 0)),
-            target_dpi: Cell::new(0),
+            target: RefCell::new(HwndTarget::default()),
             frame: RefCell::new(None),
             painting: Cell::new(false),
         });
