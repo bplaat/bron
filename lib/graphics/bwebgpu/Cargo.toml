@@ -18,6 +18,6 @@ image = { path = "../image", default-features = false, optional = true }
 objc2 = "0.6"
 
 [features]
-default = ["image", "window"]
+default = ["window"]
 image = ["dep:image"]
 window = ["dep:bwindow"]
