@@ -7,7 +7,7 @@
 use std::cell::Cell;
 use std::ptr::null_mut;
 
-use macview_appkit::{Size, ns_string};
+use imageview_appkit::{Size, ns_string};
 use objc2::rc::{Allocated, Retained};
 use objc2::runtime::{AnyObject as Object, Bool};
 use objc2::{class, define_class, msg_send, sel};
@@ -23,7 +23,7 @@ struct WindowControllerIvars {
 
 define_class!(
     #[unsafe(super(NSWindowController))]
-    #[name = "MacViewWindowController"]
+    #[name = "ImageViewWindowController"]
     #[ivars = WindowControllerIvars]
     struct WindowController;
 

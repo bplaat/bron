@@ -16,7 +16,7 @@
                 <string>com.microsoft.bmp</string>
             </array>
             <key>NSDocumentClass</key>
-            <string>MacViewDocument</string>
+            <string>ImageViewDocument</string>
         </dict>
         <dict>
             <key>CFBundleTypeName</key>
@@ -30,7 +30,7 @@
                 <string>org.jpeg.jfif</string>
             </array>
             <key>NSDocumentClass</key>
-            <string>MacViewDocument</string>
+            <string>ImageViewDocument</string>
         </dict>
         <dict>
             <key>CFBundleTypeName</key>
@@ -44,7 +44,7 @@
                 <string>org.libpng.apng</string>
             </array>
             <key>NSDocumentClass</key>
-            <string>MacViewDocument</string>
+            <string>ImageViewDocument</string>
         </dict>
         <dict>
             <key>CFBundleTypeName</key>
@@ -58,7 +58,7 @@
                 <string>org.qoiformat.qoi</string>
             </array>
             <key>NSDocumentClass</key>
-            <string>MacViewDocument</string>
+            <string>ImageViewDocument</string>
         </dict>
         <dict>
             <key>CFBundleTypeName</key>
@@ -72,7 +72,7 @@
                 <string>org.tinyvg.tvg</string>
             </array>
             <key>NSDocumentClass</key>
-            <string>MacViewDocument</string>
+            <string>ImageViewDocument</string>
         </dict>
         <dict>
             <key>CFBundleTypeName</key>
@@ -86,7 +86,7 @@
                 <string>public.image</string>
             </array>
             <key>NSDocumentClass</key>
-            <string>MacViewDocument</string>
+            <string>ImageViewDocument</string>
         </dict>
         <dict>
             <key>CFBundleTypeName</key>
@@ -100,7 +100,7 @@
                 <string>public.svg-image</string>
             </array>
             <key>NSDocumentClass</key>
-            <string>MacViewDocument</string>
+            <string>ImageViewDocument</string>
         </dict>
     </array>
     <key>UTExportedTypeDeclarations</key>

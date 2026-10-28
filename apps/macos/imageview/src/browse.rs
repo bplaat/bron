@@ -12,7 +12,7 @@ use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::ptr::null_mut;
 
-use macview_appkit::ns_string;
+use imageview_appkit::ns_string;
 use objc2::runtime::{AnyObject as Object, Bool};
 use objc2::{class, msg_send};
 
@@ -216,7 +216,7 @@ mod tests {
 
     // Creates a folder holding the given files, next to a folder of its own.
     fn folder_with(name: &str, files: &[&str]) -> PathBuf {
-        let folder = std::env::temp_dir().join(format!("macview-{}-{name}", std::process::id()));
+        let folder = std::env::temp_dir().join(format!("imageview-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&folder);
         std::fs::create_dir_all(folder.join("subfolder")).expect("failed to create test folder");
         for file in files {

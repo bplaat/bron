@@ -10,8 +10,6 @@
     <dict>
         <key>NSExtensionAttributes</key>
         <dict>
-            <key>QLIsDataBasedPreview</key>
-            <false/>
             <key>QLSupportedContentTypes</key>
             <array>
                 <string>com.microsoft.bmp</string>
@@ -21,13 +19,13 @@
                 <string>org.tinyvg.tvg</string>
                 <string>public.svg-image</string>
             </array>
-            <key>QLSupportsSearchableItems</key>
-            <false/>
+            <key>QLThumbnailMinimumDimension</key>
+            <integer>0</integer>
         </dict>
         <key>NSExtensionPointIdentifier</key>
-        <string>com.apple.quicklook.preview</string>
+        <string>com.apple.quicklook.thumbnail</string>
         <key>NSExtensionPrincipalClass</key>
-        <string>MacViewPreviewViewController</string>
+        <string>ImageViewThumbnailProvider</string>
     </dict>
 </dict>
 </plist>

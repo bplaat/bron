@@ -4,14 +4,14 @@
  * SPDX-License-Identifier: MIT
  */
 
-//! Quick Look preview extension for the image formats MacView displays.
+//! Quick Look preview extension for the image formats ImageView displays.
 
 #![allow(unsafe_code)]
 
 use std::ptr::null_mut;
 
 use block2::{Block, RcBlock};
-use macview_appkit::{
+use imageview_appkit::{
     NS_VIEW_HEIGHT_SIZABLE, NS_VIEW_WIDTH_SIZABLE, Point, Rect, Size, create_image_view,
     dispatch_async, dispatch_async_main, extension_main, load_media, make_error, ns_string,
     preferred_content_size,
@@ -25,7 +25,7 @@ mod headers;
 
 define_class!(
     #[unsafe(super(NSViewController))]
-    #[name = "MacViewPreviewViewController"]
+    #[name = "ImageViewPreviewViewController"]
     struct PreviewViewController;
 
     impl PreviewViewController {
@@ -138,7 +138,7 @@ impl PreviewViewController {
                         }
                         Err(description) => {
                             let error =
-                                make_error(ns_string!("nl.bplaat.MacView.Preview"), &description);
+                                make_error(ns_string!("nl.bplaat.ImageView.Preview"), &description);
                             completion.call(error);
                         }
                     }

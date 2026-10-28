@@ -8,7 +8,7 @@ use std::cell::Cell;
 use std::ffi::c_void;
 use std::ptr::null_mut;
 
-use macview_appkit::{NS_VIEW_HEIGHT_SIZABLE, NS_VIEW_WIDTH_SIZABLE, Point, Rect, Size};
+use imageview_appkit::{NS_VIEW_HEIGHT_SIZABLE, NS_VIEW_WIDTH_SIZABLE, Point, Rect, Size};
 use objc2::rc::{Allocated, Retained};
 use objc2::runtime::{AnyObject as Object, Bool};
 use objc2::{class, define_class, msg_send, sel};
@@ -49,7 +49,7 @@ struct ClipViewIvars {
 
 define_class!(
     #[unsafe(super(NSClipView))]
-    #[name = "MacViewClipView"]
+    #[name = "ImageViewClipView"]
     #[ivars = ClipViewIvars]
     struct ClipView;
 
@@ -259,7 +259,7 @@ impl ClipView {
 
 define_class!(
     #[unsafe(super(NSScrollView))]
-    #[name = "MacViewScrollView"]
+    #[name = "ImageViewScrollView"]
     struct ScrollView;
 
     impl ScrollView {

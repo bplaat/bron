@@ -229,7 +229,7 @@ impl Drop for NativeGradient {
 
 define_class!(
     #[unsafe(super(NSImageRep))]
-    #[name = "MacViewVectorImageRep"]
+    #[name = "ImageViewVectorImageRep"]
     #[ivars = VectorImageRepIvars]
     struct VectorImageRep;
     impl VectorImageRep {
