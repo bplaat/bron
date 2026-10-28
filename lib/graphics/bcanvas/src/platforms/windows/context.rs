@@ -187,13 +187,8 @@ impl PlatformCanvasContext {
     }
 
     pub(crate) fn begin_layer(&mut self, s: &CanvasState) {
-        if s.composite == CompositeOperation::SourceOver {
-            self.push_group(s.alpha, None, self.transform);
-            self.layers.push(Layer::Group { composited: false });
-        } else {
-            self.begin_offscreen(s.alpha, s.composite);
-            self.layers.push(Layer::Composited);
-        }
+        self.begin_offscreen(s.alpha, s.composite);
+        self.layers.push(Layer::Composited);
     }
 
     // Pushes a Direct2D layer, which composites with source over.
@@ -417,7 +412,25 @@ impl PlatformCanvasContext {
         let Some(bounds) = bounds(self) else {
             return;
         };
-        self.push_clip_layer(&bounds);
+        // Blend modes preserve the destination outside the source. Porter-Duff
+        // operations instead need a complete result copied through the draw's bounds.
+        let bounded = blend_mode(state.composite).is_none();
+        if bounded {
+            let Some(backdrop) = (unsafe { self.snapshot() }) else {
+                return;
+            };
+            self.begin_offscreen(1.0, CompositeOperation::SourceOver);
+            unsafe {
+                self.target.SetTransform(&D2D_MATRIX_3X2_F::identity());
+                self.target.DrawBitmap(
+                    backdrop.as_ptr(),
+                    null(),
+                    1.0,
+                    D2D1_BITMAP_INTERPOLATION_MODE_LINEAR,
+                );
+            }
+            self.apply_transform();
+        }
         self.begin_offscreen(1.0, state.composite);
         draw(
             self,
@@ -427,24 +440,26 @@ impl PlatformCanvasContext {
             },
         );
         self.end_composited();
-        self.pop_clip();
-    }
-
-    fn push_clip_layer(&mut self, geometry: &ComPtr<ID2D1PathGeometry>) {
-        let params = D2D1_LAYER_PARAMETERS {
-            contentBounds: rect(-1.0e10, -1.0e10, 2.0e10, 2.0e10),
-            geometricMask: geometry.as_ptr(),
-            maskAntialiasMode: D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
-            maskTransform: D2D_MATRIX_3X2_F::identity(),
-            opacity: 1.0,
-            ..Default::default()
-        };
-        unsafe {
-            self.target.SetTransform(&D2D_MATRIX_3X2_F::identity());
-            self.target.PushLayer(&params, null_mut());
+        if bounded {
+            let (offscreen, bitmap) = self.finish_offscreen();
+            let bitmap = bitmap.expect("Direct2D composite bitmap");
+            let brush = unsafe { self.target.CreateBitmapBrush(bitmap.as_ptr()) }
+                .expect("Direct2D composite brush");
+            let context = unsafe {
+                self.target
+                    .query::<ID2D1DeviceContext>(&IID_ID2D1_DEVICE_CONTEXT)
+            }
+            .expect("Direct2D composite context");
+            unsafe {
+                self.target.SetTransform(&D2D_MATRIX_3X2_F::identity());
+                context.SetPrimitiveBlend(D2D1_PRIMITIVE_BLEND_COPY);
+                self.target
+                    .FillGeometry(bounds.as_ptr(), brush.as_ptr(), null_mut());
+                context.SetPrimitiveBlend(D2D1_PRIMITIVE_BLEND_SOURCE_OVER);
+            }
+            self.transform = offscreen.transform;
+            self.apply_transform();
         }
-        self.clips.push(Clip::Layer);
-        self.apply_transform();
     }
 
     // The device-space outline of a stroke of a user-space geometry.

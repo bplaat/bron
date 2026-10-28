@@ -528,22 +528,41 @@ mod tests {
             },
         ];
         for draw in draws {
-            for operation in [
-                super::CompositeOperation::SourceIn,
-                super::CompositeOperation::DestinationIn,
-                super::CompositeOperation::Copy,
+            for (operation, expected) in [
+                (super::CompositeOperation::SourceIn, [0, 0, 255, 255]),
+                (super::CompositeOperation::DestinationIn, [255, 0, 0, 255]),
+                (super::CompositeOperation::SourceOut, [0, 0, 0, 0]),
+                (super::CompositeOperation::DestinationOut, [0, 0, 0, 0]),
+                (super::CompositeOperation::Copy, [0, 0, 255, 255]),
             ] {
                 let pixels = composite_pixels(operation, draw);
                 let pixel = |x: usize| &pixels[(4 + x) * 4..][..4];
-                let expected = if operation == super::CompositeOperation::DestinationIn {
-                    [255, 0, 0, 255]
-                } else {
-                    [0, 0, 255, 255]
-                };
                 assert_eq!(pixel(0), expected, "{operation:?}");
                 assert_eq!(pixel(3), [255, 0, 0, 255], "{operation:?}");
             }
         }
+    }
+
+    #[test]
+    fn nested_layers_blend_with_their_own_content() {
+        let mut canvas = super::OffscreenCanvas::new(3, 1);
+        canvas.draw(|ctx| {
+            ctx.set_fill_style(Color::rgb(255, 0, 0));
+            ctx.fill_rect(0.0, 0.0, 3.0, 1.0);
+            ctx.begin_layer();
+            ctx.begin_layer();
+            ctx.set_fill_style(Color::rgb(0, 255, 0));
+            ctx.fill_rect(0.0, 0.0, 2.0, 1.0);
+            ctx.set_global_composite_operation(super::CompositeOperation::Screen);
+            ctx.set_fill_style(Color::rgb(0, 0, 255));
+            ctx.fill_rect(1.0, 0.0, 2.0, 1.0);
+            ctx.end_layer();
+            ctx.end_layer();
+        });
+        assert_eq!(
+            canvas.pixels(),
+            [0, 255, 0, 255, 0, 255, 255, 255, 0, 0, 255, 255]
+        );
     }
 
     #[test]
