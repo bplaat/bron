@@ -11,7 +11,7 @@ use objc2::runtime::{AnyObject as Object, Bool};
 use objc2::{class, define_class, msg_send};
 
 use super::content::ContentView;
-use super::event_loop::{allow_termination_if_last_window, send_event};
+use super::event_loop::{allow_termination_if_last_window, has_launched, send_event};
 #[cfg(feature = "file_drop")]
 use super::file_drop::{perform_file_drop, register_dragged_types};
 use super::headers::*;
@@ -553,6 +553,11 @@ impl PlatformWindow {
         ));
         unsafe {
             let _: () = msg_send![&window, addObserver:window_delegate.as_ptr(), forKeyPath:ns_string!("effectiveAppearance"), options:5usize, context:null_mut::<std::ffi::c_void>()];
+        }
+        // Windows built before the launch finished are shown by it, later ones right away.
+        if has_launched() {
+            let _: () = unsafe { msg_send![&window, makeKeyAndOrderFront:null_mut::<Object>()] };
+            send_event(crate::Event::Window(builder.window_id, WindowEvent::Create));
         }
         PlatformWindow(Box::new(PlatformWindowData {
             window_id: builder.window_id,

@@ -213,6 +213,7 @@ impl PlatformWindow {
         host.scale_factor_changed(unsafe { gtk_widget_get_scale_factor(window.cast()) } as f32);
         unsafe { gtk_widget_show_all(window.cast()) };
         send_event(crate::Event::Window(builder.window_id, WindowEvent::Create));
+        super::event_loop::release_launch_hold();
         PlatformWindow(window_data)
     }
 }

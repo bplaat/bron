@@ -200,6 +200,8 @@ unsafe extern "C" {
         argv: *mut *mut c_char,
     ) -> i32;
     pub(crate) fn g_application_quit(application: *mut GApplication);
+    pub(crate) fn g_application_hold(application: *mut GApplication);
+    pub(crate) fn g_application_release(application: *mut GApplication);
     pub(crate) fn g_file_get_path(file: *mut GFile) -> *mut c_char;
     pub(crate) fn g_simple_action_group_new() -> *mut c_void;
     pub(crate) fn g_action_get_name(action: *mut GSimpleAction) -> *const c_char;
