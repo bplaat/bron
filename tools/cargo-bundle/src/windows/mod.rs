@@ -11,7 +11,7 @@ use std::process::exit;
 use crate::args::Args;
 use crate::manifest::Manifest;
 use crate::support::{assert_file_name, cargo_build, remove_path_if_exists};
-use crate::windows::appx_manifest::{appx_manifest, package_version};
+use crate::windows::appx_manifest::{appx_manifest, package_version, shell_extension_library};
 use crate::windows::publisher::publisher_name;
 
 mod appx_manifest;
@@ -46,12 +46,18 @@ pub(crate) fn bundle(args: &Args, target_dir: &str, manifest: &Manifest) {
     assert_file_name(&bundle.name, "bundle name");
     let windows = bundle.windows.clone().unwrap_or_default();
     let executable = format!("{}.exe", manifest.package.name);
+    let shell_package = windows
+        .shell_extension
+        .as_ref()
+        .map(|shell| format!("{}/{}", args.path, shell.package));
     for (target, _) in ARCHITECTURES {
-        let status = cargo_build(&args.path)
-            .args(["--target", target])
-            .status()
-            .expect("Failed to run cargo build");
-        assert!(status.success(), "cargo build failed for {target}");
+        for path in std::iter::once(&args.path).chain(&shell_package) {
+            let status = cargo_build(path)
+                .args(["--target", target])
+                .status()
+                .expect("Failed to run cargo build");
+            assert!(status.success(), "cargo build failed for {path} ({target})");
+        }
     }
 
     let publisher = publisher_name(&args.path, manifest);
@@ -69,6 +75,14 @@ pub(crate) fn bundle(args: &Args, target_dir: &str, manifest: &Manifest) {
             format!("{layout}/{executable}"),
         )
         .expect("Failed to copy executable");
+        if let Some(shell) = &windows.shell_extension {
+            let library = shell_extension_library(shell);
+            fs::copy(
+                format!("target/{target}/release/{library}"),
+                format!("{layout}/{library}"),
+            )
+            .unwrap_or_else(|error| panic!("Failed to copy {library}: {error}"));
+        }
         for logo in &logos {
             fs::copy(
                 format!("{}/{assets}/{logo}", args.path),

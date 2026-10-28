@@ -37,6 +37,12 @@ assets = "meta/windows"
 sandbox = true # optional, run in an AppContainer
 capabilities = ["internetClient"] # optional
 file_types = [{ name = "Example Document", extensions = ["example"] }] # optional
+
+[package.metadata.bundle.windows.shell_extension] # optional
+package = "../example-shell" # cdylib crate exporting DllGetClassObject and DllCanUnloadNow
+library = "example_shell" # its DLL name without .dll
+thumbnail_handler = "00000000-0000-0000-0000-000000000001" # optional IThumbnailProvider CLSID
+preview_handler = "00000000-0000-0000-0000-000000000002" # optional IPreviewHandler CLSID
 ```
 
 Then run `cargo bundle` with the path argument, when using a Cargo workspace run the command in the root of the workspace:
@@ -111,6 +117,11 @@ the installed executable. Conflicting payloads across architectures fail bundlin
 Logos and `resources.pri` stay in each architecture package; the shared asset package
 contains neither executable code nor a resource index. Apps without declared assets
 keep their existing architecture-only bundle.
+
+A `shell_extension` is built for the same architectures and its DLL is packaged beside the
+executable. The manifest registers its classes as a COM surrogate server and adds the
+thumbnail and preview handlers to every file type, so File Explorer shows thumbnails and
+previews without changing the registry.
 
 Shared asset packages require an NTFS installation volume. Publishing them through
 the Microsoft Store requires approval from Windows developer support; see
