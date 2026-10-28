@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: MIT
  */
 
+use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 use core::time::Duration;
@@ -13,7 +14,7 @@ use deflate::Level;
 
 use super::{
     Area, Bitmap, Budget, ColorSpace, DecodeError, EncodeError, EncodingStyle, Format, Frame,
-    Image, LoopCount, Reader, Result, pixel_len,
+    Image, LoopCount, MAX_BYTES, Reader, Result, pixel_len,
 };
 
 // MARK: Decoder
@@ -176,6 +177,7 @@ struct PngState {
     frames: Vec<Frame>,
     data_phase: DataPhase,
     frame_data: FrameData,
+    text: Vec<(String, String)>,
 }
 
 impl PngState {
@@ -193,6 +195,7 @@ impl PngState {
             frames: Vec::new(),
             data_phase: DataPhase::Before,
             frame_data: FrameData::None,
+            text: Vec::new(),
         }
     }
 
@@ -471,7 +474,10 @@ pub(super) fn decode(data: &[u8]) -> Result<Image> {
                         state.transparency,
                         &mut budget,
                     )?;
-                    return Ok(Image::still(Format::Png, width, height, pixels));
+                    return Ok(Image {
+                        text: state.text,
+                        ..Image::still(Format::Png, width, height, pixels)
+                    });
                 }
                 // A non-default animation frame must have an fdAT stream.
                 if state.frame_data == (FrameData::Fdat { seen: false }) {
@@ -486,6 +492,7 @@ pub(super) fn decode(data: &[u8]) -> Result<Image> {
                     format: Format::Png,
                     color_space: ColorSpace::Srgb,
                     frames: state.frames,
+                    text: state.text,
                     is_animated: true,
                     loop_count: if plays == 0 {
                         LoopCount::Infinite
@@ -493,6 +500,10 @@ pub(super) fn decode(data: &[u8]) -> Result<Image> {
                         LoopCount::Finite(plays)
                     },
                 });
+            }
+            // Malformed text is ancillary and skipped.
+            b"tEXt" | b"zTXt" | b"iTXt" => {
+                state.text.extend(text_entry(kind, bytes, &mut budget));
             }
             _ if kind[0] & 32 == 0 => return Err(DecodeError::UnsupportedFeature),
             _ => {}
@@ -518,6 +529,41 @@ fn chunk<'a>(r: &mut Reader<'a>) -> Result<(&'a [u8], &'a [u8])> {
 }
 
 static CRC32: Crc<u32> = Crc::<u32>::new(&CRC_32_ISO_HDLC);
+
+// Reads the keyword and text of a tEXt, zTXt or iTXt chunk.
+fn text_entry(kind: &[u8], bytes: &[u8], budget: &mut Budget) -> Option<(String, String)> {
+    let mut inflate = |data: &[u8]| {
+        let data = deflate::zlib_decompress(data, MAX_BYTES - budget.used).ok()?;
+        budget.claim(data.len()).ok()?;
+        Some(data)
+    };
+    let (keyword, rest) = split_nul(bytes)?;
+    let text = match (kind, rest) {
+        (b"tEXt", text) => latin1(text),
+        (b"zTXt", [0, data @ ..]) => latin1(&inflate(data)?),
+        (b"iTXt", [compressed @ (0 | 1), 0, rest @ ..]) => {
+            let (_language, rest) = split_nul(rest)?;
+            let (_translated_keyword, data) = split_nul(rest)?;
+            let data = if *compressed == 1 {
+                inflate(data)?
+            } else {
+                data.to_vec()
+            };
+            String::from_utf8(data).ok()?
+        }
+        _ => return None,
+    };
+    Some((latin1(keyword), text))
+}
+
+fn split_nul(bytes: &[u8]) -> Option<(&[u8], &[u8])> {
+    let end = bytes.iter().position(|byte| *byte == 0)?;
+    Some((&bytes[..end], &bytes[end + 1..]))
+}
+
+fn latin1(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| char::from(*byte)).collect()
+}
 
 fn chunk_crc(kind: &[u8], data: &[u8]) -> u32 {
     let mut digest = CRC32.digest();
@@ -1227,13 +1273,49 @@ pub(super) fn encode(
     bitmap: &Bitmap,
     animation: Option<(LoopCount, &[Frame])>,
     style: EncodingStyle,
+    text: &[(&str, &str)],
 ) -> core::result::Result<Vec<u8>, EncodeError> {
+    let chunks = text_chunks(text)?;
     let png = encode_smallest(bitmap, animation, style)?;
-    if style == EncodingStyle::MaxCompression {
-        crunch_streams(&png)
+    let png = if style == EncodingStyle::MaxCompression {
+        crunch_streams(&png)?
     } else {
-        Ok(png)
+        png
+    };
+    // The text follows the signature and IHDR, so readers find it before the image data.
+    Ok([&png[..33], &chunks, &png[33..]].concat())
+}
+
+// Writes Latin-1 text as tEXt and other text as UTF-8 iTXt chunks.
+fn text_chunks(text: &[(&str, &str)]) -> core::result::Result<Vec<u8>, EncodeError> {
+    let latin1 =
+        |text: &str| -> Option<Vec<u8>> { text.chars().map(|c| u8::try_from(c).ok()).collect() };
+    let mut out = Vec::new();
+    for (keyword, text) in text {
+        let keyword = latin1(keyword)
+            .filter(|keyword| {
+                (1..=79).contains(&keyword.len())
+                    && keyword
+                        .iter()
+                        .all(|byte| matches!(byte, b' '..=b'~' | 0xa1..=0xff))
+                    && keyword.first() != Some(&b' ')
+                    && keyword.last() != Some(&b' ')
+                    && !keyword.windows(2).any(|pair| pair == b"  ")
+            })
+            .ok_or(EncodeError::InvalidText)?;
+        if text.contains('\0') {
+            return Err(EncodeError::InvalidText);
+        }
+        match latin1(text) {
+            Some(text) => write_chunk(&mut out, b"tEXt", &[&keyword, &[0][..], &text].concat())?,
+            None => write_chunk(
+                &mut out,
+                b"iTXt",
+                &[&keyword, &[0, 0, 0, 0, 0][..], text.as_bytes()].concat(),
+            )?,
+        }
     }
+    Ok(out)
 }
 
 // Crunching is slow, so it runs once on the image data streams of the chosen candidate.
@@ -1491,8 +1573,9 @@ pub(super) fn encode_animation(
     frames: &[Frame],
     loop_count: LoopCount,
     style: EncodingStyle,
+    text: &[(&str, &str)],
 ) -> core::result::Result<Vec<u8>, EncodeError> {
-    encode(&frames[0].bitmap, Some((loop_count, frames)), style)
+    encode(&frames[0].bitmap, Some((loop_count, frames)), style, text)
 }
 
 // MARK: Tests
@@ -1504,11 +1587,93 @@ mod tests {
         encode_with_options,
     };
 
-    fn smallest() -> EncodeOptions {
+    fn smallest() -> EncodeOptions<'static> {
         EncodeOptions {
             style: EncodingStyle::MaxCompression,
             ..EncodeOptions::default()
         }
+    }
+
+    #[test]
+    fn text_round_trips() {
+        let bitmap = Bitmap::new(2, 1, vec![255, 0, 0, 255, 0, 0, 255, 128]).unwrap();
+        let text = [("Thumb::Image::Width", "600"), ("Title", "Café ☕")];
+        for style in [
+            EncodingStyle::NormalCompression,
+            EncodingStyle::MaxCompression,
+        ] {
+            let options = EncodeOptions {
+                style,
+                text: &text,
+                ..EncodeOptions::default()
+            };
+            let png = encode_with_options(&bitmap, Format::Png, options).unwrap();
+            // Latin-1 text uses tEXt, other text UTF-8 iTXt, both after IHDR.
+            assert_eq!(&png[37..41], b"tEXt");
+            assert!(png.windows(4).any(|kind| kind == b"iTXt"));
+            let decoded = crate::decode(&png).unwrap();
+            assert_eq!(decoded.pixels(), bitmap.data());
+            let expected: Vec<_> = text
+                .iter()
+                .map(|(keyword, text)| (String::from(*keyword), String::from(*text)))
+                .collect();
+            assert_eq!(decoded.text(), expected);
+        }
+        let frames = [Frame::new(bitmap, Duration::from_millis(100))];
+        let options = EncodeOptions {
+            text: &text[..1],
+            ..EncodeOptions::default()
+        };
+        let apng =
+            encode_animation_with_options(Format::Png, &frames, LoopCount::Infinite, options)
+                .unwrap();
+        assert_eq!(crate::decode(&apng).unwrap().text()[0].1, "600");
+    }
+
+    #[test]
+    fn decodes_compressed_text() {
+        let compressed = deflate::zlib_compress(b"Hello", Level::Default);
+        let mut png = encode(&Bitmap::new(1, 1, vec![0; 4]).unwrap(), Format::Png).unwrap();
+        let mut chunks = Vec::new();
+        write_chunk(&mut chunks, b"zTXt", &[b"A\0\0", &compressed[..]].concat()).unwrap();
+        write_chunk(
+            &mut chunks,
+            b"iTXt",
+            &[b"B\0\x01\0nl\0B\0", &compressed[..]].concat(),
+        )
+        .unwrap();
+        // Malformed text is skipped.
+        write_chunk(&mut chunks, b"tEXt", b"no separator").unwrap();
+        png.splice(33..33, chunks);
+        let text = crate::decode(&png).unwrap().text().to_vec();
+        assert_eq!(
+            text,
+            [("A".into(), "Hello".into()), ("B".into(), "Hello".into())]
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_text_keywords() {
+        let bitmap = Bitmap::new(1, 1, vec![0; 4]).unwrap();
+        let long = "k".repeat(80);
+        for keyword in ["", " lead", "trail ", "two  spaces", "tab\t", "☕", &long] {
+            let options = EncodeOptions {
+                text: &[(keyword, "text")],
+                ..EncodeOptions::default()
+            };
+            assert_eq!(
+                encode_with_options(&bitmap, Format::Png, options),
+                Err(EncodeError::InvalidText)
+            );
+        }
+        let options = EncodeOptions {
+            text: &[("Key", "nul\0")],
+            ..EncodeOptions::default()
+        };
+        assert_eq!(
+            encode_with_options(&bitmap, Format::Png, options),
+            Err(EncodeError::InvalidText)
+        );
     }
 
     use crate::MAX_BYTES;

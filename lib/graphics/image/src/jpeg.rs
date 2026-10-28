@@ -1668,7 +1668,7 @@ mod tests {
     use super::*;
     use crate::{EncodeOptions, Format, encode, encode_with_options};
 
-    fn smallest() -> EncodeOptions {
+    fn smallest() -> EncodeOptions<'static> {
         EncodeOptions {
             style: EncodingStyle::MaxCompression,
             ..EncodeOptions::default()
@@ -1965,6 +1965,7 @@ mod tests {
                 EncodeOptions {
                     style,
                     jpeg_quality: 100,
+                    ..EncodeOptions::default()
                 },
             )
             .unwrap();

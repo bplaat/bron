@@ -21,18 +21,21 @@ pub enum EncodingStyle {
 
 /// Options for raster encoding.
 #[derive(Clone, Copy, Debug)]
-pub struct EncodeOptions {
+pub struct EncodeOptions<'a> {
     /// Encoding time and file size tradeoff.
     pub style: EncodingStyle,
     /// JPEG quality from 1 to 100. Ignored by other formats.
     pub jpeg_quality: u8,
+    /// PNG/APNG text entries as keyword and text pairs. Ignored by other formats.
+    pub text: &'a [(&'a str, &'a str)],
 }
 
-impl Default for EncodeOptions {
+impl Default for EncodeOptions<'_> {
     fn default() -> Self {
         Self {
             style: EncodingStyle::NormalCompression,
             jpeg_quality: 85,
+            text: &[],
         }
     }
 }
@@ -54,6 +57,8 @@ pub enum EncodeError {
     InvalidTiming,
     /// JPEG quality must be between 1 and 100.
     InvalidQuality,
+    /// A PNG text keyword must be 1 to 79 printable Latin-1 characters.
+    InvalidText,
     /// Output exceeds the supported size or an allocation failed.
     ImageTooLarge,
 }
@@ -68,6 +73,7 @@ impl Display for EncodeError {
             Self::AlphaUnsupported => "JPEG requires opaque pixels",
             Self::InvalidTiming => "animation timing is outside format limits",
             Self::InvalidQuality => "JPEG quality must be between 1 and 100",
+            Self::InvalidText => "PNG text keyword is not 1 to 79 printable Latin-1 characters",
             Self::ImageTooLarge => "image exceeds encoding resource limits",
         })
     }
@@ -103,7 +109,7 @@ pub fn encode(bitmap: &Bitmap, format: Format) -> Result<Vec<u8>, EncodeError> {
 pub fn encode_with_options(
     bitmap: &Bitmap,
     format: Format,
-    options: EncodeOptions,
+    options: EncodeOptions<'_>,
 ) -> Result<Vec<u8>, EncodeError> {
     validate_pixels(bitmap.width, bitmap.height, &bitmap.data)?;
     match format {
@@ -112,7 +118,7 @@ pub fn encode_with_options(
         #[cfg(feature = "gif")]
         Format::Gif => super::gif::encode_bitmap(bitmap, options.style),
         #[cfg(feature = "png")]
-        Format::Png => super::png::encode(bitmap, None, options.style),
+        Format::Png => super::png::encode(bitmap, None, options.style, options.text),
         #[cfg(feature = "jpeg")]
         Format::Jpeg => super::jpeg::encode(bitmap, options.jpeg_quality, options.style),
         #[cfg(feature = "qoi")]
@@ -141,7 +147,7 @@ pub fn encode_animation_with_options(
     format: Format,
     frames: &[Frame],
     _loop_count: LoopCount,
-    options: EncodeOptions,
+    options: EncodeOptions<'_>,
 ) -> Result<Vec<u8>, EncodeError> {
     let first = frames.first().ok_or(EncodeError::InvalidDimensions)?;
     let width = first.bitmap.width;
@@ -156,7 +162,9 @@ pub fn encode_animation_with_options(
         #[cfg(feature = "gif")]
         Format::Gif => super::gif::encode(frames, _loop_count, options.style),
         #[cfg(feature = "png")]
-        Format::Png => super::png::encode_animation(frames, _loop_count, options.style),
+        Format::Png => {
+            super::png::encode_animation(frames, _loop_count, options.style, options.text)
+        }
         #[allow(unreachable_patterns)]
         _ => {
             let _ = options;
