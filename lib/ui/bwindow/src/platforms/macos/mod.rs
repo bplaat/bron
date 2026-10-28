@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: MIT
  */
 
+pub(crate) use crate::platforms::macos::content::embed_native_view;
 #[cfg(feature = "dialog")]
 pub(crate) use crate::platforms::macos::dialog::{PlatformFileDialog, PlatformMessageDialog};
 pub(crate) use crate::platforms::macos::event_loop::{

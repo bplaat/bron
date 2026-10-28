@@ -409,6 +409,23 @@ extern "C" fn window_on_scale_changed(window: *mut GtkWidget, _: *mut c_void, da
     }
 }
 
+/// Fill the window with a native widget, instead of the content drawing area.
+pub(crate) unsafe fn embed_native_view(
+    window: crate::NativeWindowHandle,
+    _content: Option<crate::NativeContentHandle>,
+    view: crate::NativeViewHandle,
+) {
+    let (crate::NativeWindowHandle::Gtk(window), crate::NativeViewHandle::Gtk(view)) =
+        (window, view)
+    else {
+        panic!("invalid native view handle");
+    };
+    unsafe {
+        gtk_container_add(window.cast(), view.cast());
+        gtk_widget_show_all(view.cast());
+    }
+}
+
 impl Drop for PlatformWindow {
     fn drop(&mut self) {
         self.0.content.disconnect();
