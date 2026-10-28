@@ -451,24 +451,13 @@ impl PlatformCanvasContext {
             };
         }
         let path = self.take_path();
-        let pattern = self.set_source(&s.fill, s.alpha);
-        let operator = operator(s.composite);
+        // Paint glyph outlines like other paths so the fill style also applies
+        // on Cairo versions that render gradient sources incorrectly with show_text.
         unsafe {
-            let show = || {
-                cairo_move_to(self.cr, x, y);
-                cairo_show_text(self.cr, text.as_ptr());
-            };
-            if is_unbounded(operator) {
-                self.bounded(operator, show);
-            } else {
-                cairo_set_operator(self.cr, operator);
-                show();
-                cairo_set_operator(self.cr, CAIRO_OPERATOR_OVER);
-            }
-            if let Some(pattern) = pattern {
-                cairo_pattern_destroy(pattern);
-            }
+            cairo_move_to(self.cr, x, y);
+            cairo_text_path(self.cr, text.as_ptr());
         }
+        self.paint(s, false, FillRule::NonZero);
         self.restore_path(path);
     }
     pub(crate) fn measure_text(&mut self, s: &CanvasState, text: &str) -> f32 {

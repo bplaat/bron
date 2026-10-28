@@ -91,7 +91,7 @@ unsafe extern "C" {
         extents: *mut CairoTextExtents,
     );
     pub(super) fn cairo_font_extents(cr: *mut c_void, extents: *mut CairoFontExtents);
-    pub(super) fn cairo_show_text(cr: *mut c_void, text: *const c_char);
+    pub(super) fn cairo_text_path(cr: *mut c_void, text: *const c_char);
     #[cfg(test)]
     pub(super) fn cairo_image_surface_create(format: i32, width: i32, height: i32) -> *mut c_void;
     pub(super) fn cairo_image_surface_create_for_data(
