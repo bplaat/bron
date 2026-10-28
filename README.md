@@ -224,12 +224,12 @@ Most of these libraries are intended primarily for personal use, but can still b
 ## Getting Started
 
 - Install [Rust](https://rustup.rs/), [Node.js](https://nodejs.org/), [Hadolint](https://github.com/hadolint/hadolint), a C toolchain (such as GCC, Clang or MSVC), an LLVM toolchain, clang-format, [NASM](https://nasm.us/) and [Dolphin emulator](https://dolphin-emu.org/)
-- Install Rust nightly toolchain, `cargo-binstall`, `cargo-deny` and `cargo-nextest`:
+- Install Rust nightly toolchain, `cargo-binstall`, `cargo-deny`, `cargo-nextest` and `taplo-cli`:
 
     ```sh
     rustup toolchain add nightly --component rust-src --component rustfmt
     cargo install cargo-binstall
-    cargo binstall -y --locked cargo-deny cargo-nextest
+    cargo binstall -y --locked cargo-deny cargo-nextest taplo-cli
     ```
 
 - Run checks, or run an example:

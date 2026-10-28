@@ -28,7 +28,7 @@ jobs:
           chmod a+x /usr/local/bin/hadolint
           hadolint --version
           curl -L --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash
-          cargo binstall -y --locked cargo-deny
+          cargo binstall -y --locked cargo-deny taplo-cli
       - run: cargo xtask check-shared
 
   # MARK: Check rust

@@ -168,7 +168,9 @@ impl Xtask {
                 &format!("swift format lint --strict ({} files)", files.len()),
             )?;
         }
-        Ok(())
+
+        println!("Checking TOML formatting...");
+        run(Command::new("taplo").args(["fmt", "--check"]))
     }
 
     pub(crate) fn check_docker(&self) -> Result<()> {

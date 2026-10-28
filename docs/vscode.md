@@ -22,6 +22,10 @@
         "editor.defaultFormatter": "rust-lang.rust-analyzer",
         "editor.formatOnSave": true
     },
+    "[toml]": {
+        "editor.defaultFormatter": "tamasfe.even-better-toml",
+        "editor.formatOnSave": true
+    },
     "rust-analyzer.rustfmt.extraArgs": ["+nightly"],
     "rust-analyzer.check.overrideCommand": ["cargo", "xtask", "check-editor"],
 
