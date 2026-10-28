@@ -68,16 +68,22 @@ pub(super) const fn hash(mut value: u32) -> u32 {
 
 impl Lane {
     pub(super) fn new(row: i32, seed: u32) -> Self {
-        let value = hash((row as u32).wrapping_add(seed));
         let terrain = Self::terrain(row, seed);
-        let difficulty = (row.max(0) as f32 * 0.015).min(1.0);
-        let direction = if value & 8 == 0 { -1.0 } else { 1.0 };
+        let value = hash((row as u32).wrapping_add(seed));
+        let flow_row = if terrain == Terrain::Water {
+            4 + (row - 4) / 8 * 8
+        } else {
+            row
+        };
+        let flow = hash((flow_row as u32).wrapping_add(seed));
+        let difficulty = (flow_row.max(0) as f32 * 0.015).min(1.0);
+        let direction = if flow & 8 == 0 { -1.0 } else { 1.0 };
         Self {
             row,
             terrain,
-            speed: direction * (0.85 + (value % 7) as f32 * 0.10 + difficulty * 1.25),
+            speed: direction * (0.85 + (flow % 7) as f32 * 0.10 + difficulty * 1.25),
             length: if terrain == Terrain::Water {
-                3.4
+                3.4 + ((value >> 8) % 4) as f32 * 0.3
             } else {
                 if row < 18 || value & 16 == 0 {
                     1.5
@@ -85,7 +91,13 @@ impl Lane {
                     2.8
                 }
             },
-            phase: (value % 240) as f32 * 0.1,
+            // Independent row offsets and lengths break up formations without widening gaps.
+            phase: (flow % 240) as f32 * 0.1
+                + if terrain == Terrain::Water {
+                    ((row - flow_row) % 3 - 1) as f32 * 0.9 + ((value >> 16) % 5) as f32 * 0.1 - 0.2
+                } else {
+                    0.0
+                },
         }
     }
 
@@ -122,10 +134,9 @@ impl Lane {
     }
 
     fn period(&self) -> f32 {
-        if self.terrain == Terrain::Road {
-            PERIOD + 8.0 * (1.0 - (self.row.max(0) as f32 * 0.015).min(1.0))
-        } else {
-            PERIOD
+        match self.terrain {
+            Terrain::Road => PERIOD + 8.0 * (1.0 - (self.row.max(0) as f32 * 0.015).min(1.0)),
+            _ => PERIOD,
         }
     }
 
@@ -530,6 +541,58 @@ mod tests {
     }
 
     #[test]
+    fn multi_row_rivers_have_playable_routes() {
+        let mut widths = [false; 4];
+        for seed in 0..100 {
+            for row in 20..200 {
+                if Lane::new(row, seed).terrain != Terrain::Water
+                    || Lane::new(row - 1, seed).terrain == Terrain::Water
+                {
+                    continue;
+                }
+                let width = (row..)
+                    .take_while(|&r| Lane::new(r, seed).terrain == Terrain::Water)
+                    .count();
+                if width < 2 {
+                    continue;
+                }
+                widths[width] = true;
+                for time in [0.0, 5.0, 12.0, 31.999, 100.0] {
+                    let crossed = (0..=8).any(|wait| {
+                        (-HALF_WIDTH..=HALF_WIDTH).any(|x| {
+                            if Lane::new(row - 1, seed).tree(x, seed) {
+                                return false;
+                            }
+                            let mut game = Game::new(0, seed);
+                            game.state = State::Playing;
+                            game.row = row - 1;
+                            game.score = row - 1;
+                            game.camera = (row - 1) as f32;
+                            game.x = x as f32;
+                            game.from = (game.x, game.row as f32);
+                            game.time = time + wait as f32 * 0.5;
+                            // Allow a short pause on each log before the next hop.
+                            for _ in 0..=width {
+                                game.move_by(0, 1);
+                                game.update(HOP + 0.05);
+                                if game.state != State::Playing {
+                                    return false;
+                                }
+                            }
+                            game.row == row + width as i32
+                        })
+                    });
+                    assert!(
+                        crossed,
+                        "no river route at row {row}, seed {seed}, time {time}"
+                    );
+                }
+            }
+        }
+        assert!(widths[2] && widths[3]);
+    }
+
+    #[test]
     fn score_only_counts_new_rows_and_pause_freezes() {
         let mut game = Game::new(8, 12);
         game.state = State::Playing;
@@ -579,7 +642,7 @@ mod tests {
         game.update(0.1);
         assert!(game.state == State::Playing);
         assert!((game.x - x - water.speed * 0.1).abs() < 0.001);
-        game.x += 4.0;
+        game.x += water.period() / 6.0;
         game.from.0 = game.x;
         game.update(0.01);
         assert!(game.state == State::Dying);

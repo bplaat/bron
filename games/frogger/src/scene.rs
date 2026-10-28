@@ -239,7 +239,7 @@ impl Scene {
                             );
                         }
                     }
-                    let (left, right) = self.visible_bounds(row as f32, 2.0);
+                    let (left, right) = self.visible_bounds(row as f32, lane.length / 2.0 + 0.3);
                     for x in lane.objects_in(game.time, left, right) {
                         self.vehicle(x, row as f32, &lane);
                     }
@@ -323,20 +323,10 @@ impl Scene {
                             0x99dce4,
                         );
                     }
-                    let (left, right) = self.visible_bounds(row as f32, 2.0);
+                    let (left, right) = self.visible_bounds(row as f32, lane.length / 2.0 + 0.3);
                     for x in lane.objects_in(game.time, left, right) {
                         self.shadow([x, row as f32, -0.015], [lane.length, 0.76], 0.0);
                         self.block([x, row as f32, 0.02], [lane.length, 0.76, 0.19], 0xb48250);
-                        self.block(
-                            [x, row as f32 - 0.17, 0.21],
-                            [lane.length - 0.13, 0.05, 0.012],
-                            0xd9ad6c,
-                        );
-                        self.block(
-                            [x, row as f32 + 0.17, 0.21],
-                            [lane.length - 0.13, 0.05, 0.012],
-                            0x8a623c,
-                        );
                     }
                 }
             }
@@ -916,6 +906,22 @@ mod tests {
                             .iter()
                             .all(|v| v[0] * side > 1.0)
                     );
+                }
+                for length in [3.4, 4.3, 5.1] {
+                    let (left, right) = scene.visible_bounds(row, length / 2.0 + 0.3);
+                    for (x, side) in [(left, -1.0), (right, 1.0)] {
+                        scene.vertices.clear();
+                        scene.shadow([x, row, -0.015], [length, 0.76], 0.0);
+                        scene.block([x, row, 0.02], [length, 0.76, 0.19], 0xb48250);
+                        assert!(
+                            scene
+                                .vertices
+                                .as_chunks::<7>()
+                                .0
+                                .iter()
+                                .all(|v| v[0] * side > 1.0)
+                        );
+                    }
                 }
                 let (left, right) = scene.visible_bounds(row, 5.5);
                 for (x, side) in [(left, -1.0), (right, 1.0)] {

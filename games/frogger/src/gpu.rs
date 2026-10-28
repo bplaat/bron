@@ -290,10 +290,12 @@ mod tests {
                 game.score = 4;
             }
             if name == "logs" {
-                game.row = (20..28)
+                game.row = (20..200)
                     .find(|&row| {
-                        crate::game::Lane::new(row, game.seed).terrain
-                            == crate::game::Terrain::Water
+                        (row..row + 3).all(|row| {
+                            crate::game::Lane::new(row, game.seed).terrain
+                                == crate::game::Terrain::Water
+                        })
                     })
                     .expect("river");
                 game.camera = game.row as f32;
