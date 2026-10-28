@@ -180,6 +180,8 @@ impl Context {
                     "Surface extent differs from window extent; retry after resize".into(),
                 ));
             }
+            #[cfg(not(target_os = "android"))]
+            surface.set_buffer_size(extent.width, extent.height);
             let count = if caps.max_image_count == 0 {
                 caps.min_image_count.max(3)
             } else {
