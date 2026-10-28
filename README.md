@@ -35,8 +35,8 @@ Some desktop apps and games written with the [bwindow](lib/ui/bwindow), [bwebvie
     </a>
 </td>
 <td width="100" align="center">
-    <a href="./apps/macos/imageview">
-        <img src="apps/macos/imageview/docs/images/icon.png" alt="ImageView icon" width="48" height="48"/><br/>
+    <a href="./apps/desktop/imageview">
+        <img src="apps/desktop/imageview/meta/freedesktop/icons/128x128.png" alt="ImageView icon" width="48" height="48"/><br/>
         ImageView
     </a>
 </td>
@@ -92,7 +92,7 @@ Some desktop apps and games written with the [bwindow](lib/ui/bwindow), [bwebvie
 - [Binman](apps/windows/binman) A safe and minimal Windows cleanup tool
 - [Empires](games/empires) An Age of Empires rendering demo and DRS archive viewer using SDL2
 - [Frogger](games/frogger) A colorful voxel crossing game with cars, trucks, rivers, and trains
-- [ImageView](apps/macos/imageview) A macOS bitmap, QOI, SVG, and TinyVG image viewer with Quick Look [preview](apps/macos/imageview-macos-preview) and [thumbnail](apps/macos/imageview-macos-thumbnail)
+- [ImageView](apps/desktop/imageview) A native bitmap, QOI, SVG, and TinyVG image viewer with file manager previews and thumbnails
 - [ManExplorer](apps/desktop/manexplorer) A simple man page explorer tool
 - [Nintendo DS Ports](games/nds) DOOM, Duke Nukem 3D, Quake, Quake II, and Wolfenstein 3D ports
 - [Navidrome](apps/desktop/navidrome) A [music.bplaat.nl](https://music.bplaat.nl/) webview wrapper

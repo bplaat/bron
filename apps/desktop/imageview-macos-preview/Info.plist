@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleSupportedPlatforms</key>
+    <array>
+        <string>MacOSX</string>
+    </array>
+    <key>NSExtension</key>
+    <dict>
+        <key>NSExtensionAttributes</key>
+        <dict>
+            <key>QLIsDataBasedPreview</key>
+            <false/>
+            <key>QLSupportedContentTypes</key>
+            <array>
+                <string>com.microsoft.bmp</string>
+                <string>org.jpeg.jfif</string>
+                <string>org.libpng.apng</string>
+                <string>org.qoiformat.qoi</string>
+                <string>public.svg-image</string>
+                <string>org.tinyvg.tvg</string>
+            </array>
+            <key>QLSupportsSearchableItems</key>
+            <false/>
+        </dict>
+        <key>NSExtensionPointIdentifier</key>
+        <string>com.apple.quicklook.preview</string>
+        <key>NSExtensionPrincipalClass</key>
+        <string>ImageViewPreviewViewController</string>
+    </dict>
+</dict>
+</plist>

@@ -1,0 +1,95 @@
+[package]
+name = "imageview"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[package.metadata.bundle]
+name = "ImageView"
+identifier = "nl.bplaat.ImageView"
+copyright = "Copyright (c) 2026 Bastiaan van der Plaat"
+icon = "meta/macos/icon.icon"
+
+[package.metadata.bundle.macos]
+hardened_runtime = true
+
+[[package.metadata.bundle.macos.appex]]
+name = "ImageView Preview"
+identifier = "nl.bplaat.ImageView.Preview"
+package = "../imageview-macos-preview"
+binary = "imageview-macos-preview"
+info_plist = "../imageview-macos-preview/Info.plist"
+entitlements = "../imageview-macos-preview/Entitlements.plist"
+
+[[package.metadata.bundle.macos.appex]]
+name = "ImageView Thumbnail"
+identifier = "nl.bplaat.ImageView.Thumbnail"
+package = "../imageview-macos-thumbnail"
+binary = "imageview-macos-thumbnail"
+info_plist = "../imageview-macos-thumbnail/Info.plist"
+entitlements = "../imageview-macos-thumbnail/Entitlements.plist"
+
+[package.metadata.bundle.windows]
+assets = "meta/windows"
+
+[[package.metadata.bundle.windows.file_types]]
+name = "BMP Image"
+extensions = ["bmp", "dib"]
+
+[[package.metadata.bundle.windows.file_types]]
+name = "GIF Image"
+extensions = ["gif"]
+
+[[package.metadata.bundle.windows.file_types]]
+name = "JPEG Image"
+extensions = ["jpg", "jpeg", "jpe", "jfif"]
+
+[[package.metadata.bundle.windows.file_types]]
+name = "PNG Image"
+extensions = ["png"]
+
+[[package.metadata.bundle.windows.file_types]]
+name = "Animated PNG Image"
+extensions = ["apng"]
+
+[[package.metadata.bundle.windows.file_types]]
+name = "Icon"
+extensions = ["ico"]
+
+[[package.metadata.bundle.windows.file_types]]
+name = "QOI Image"
+extensions = ["qoi"]
+
+[[package.metadata.bundle.windows.file_types]]
+name = "SVG Image"
+extensions = ["svg"]
+
+[[package.metadata.bundle.windows.file_types]]
+name = "TinyVG Image"
+extensions = ["tvg"]
+
+[package.metadata.bundle.windows.shell_extension]
+package = "../imageview-windows-shell"
+library = "imageview_windows_shell"
+thumbnail_handler = "80982B38-AE66-4D28-952E-410E1858801B"
+preview_handler = "1D468AD5-F899-453B-8915-D19CD884DBAD"
+
+[lints]
+workspace = true
+
+[dependencies]
+bcanvas = { path = "../../../lib/graphics/bcanvas", default-features = false }
+bwindow = { path = "../../../lib/ui/bwindow", features = ["dialog", "menu"] }
+imageview-core = { path = "../imageview-core" }
+
+[target.'cfg(not(any(target_vendor = "apple", windows)))'.dependencies]
+image = { path = "../../../lib/graphics/image" }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+block2 = "0.6.2"
+objc2 = "0.6.4"
+
+[build-dependencies]
+winresource = "0.1.31"

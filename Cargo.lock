@@ -648,15 +648,20 @@ dependencies = [
 name = "imageview"
 version = "0.1.0"
 dependencies = [
+ "bcanvas",
  "block2",
- "imageview-appkit",
+ "bwindow",
+ "image",
+ "imageview-core",
  "objc2",
+ "winresource",
 ]
 
 [[package]]
-name = "imageview-appkit"
+name = "imageview-core"
 version = "0.1.0"
 dependencies = [
+ "bcanvas",
  "image",
  "objc2",
  "vector",
@@ -667,7 +672,7 @@ name = "imageview-macos-preview"
 version = "0.1.0"
 dependencies = [
  "block2",
- "imageview-appkit",
+ "imageview-core",
  "objc2",
 ]
 
@@ -675,9 +680,19 @@ dependencies = [
 name = "imageview-macos-thumbnail"
 version = "0.1.0"
 dependencies = [
+ "bcanvas",
  "block2",
- "imageview-appkit",
+ "imageview-core",
  "objc2",
+]
+
+[[package]]
+name = "imageview-windows-shell"
+version = "0.1.0"
+dependencies = [
+ "bcanvas",
+ "image",
+ "imageview-core",
 ]
 
 [[package]]
