@@ -17,26 +17,26 @@ chrono = { version = "0.4.45", default-features = false, features = [
     "now",
     "serde",
 ] }
-getrandom = "0.4.3"
-gzip = { path = "../../../lib/data/gzip" }
 dotenvy = "0.15.7"
 from_derive = { path = "../../../lib/data/from_derive" }
+getrandom = "0.4.3"
+gzip = { path = "../../../lib/data/gzip" }
 log = "0.4.34"
 maxminddb = "0.30.3"
 mime_guess = { version = "2.0", default-features = false, features = ["std"] }
 pbkdf2 = { path = "../../../lib/crypto/pbkdf2" }
 rust-embed = { version = "8.12", features = ["interpolate-folder-path"] }
 serde = { version = "1.0", features = ["derive"] }
-simple-useragent = { version = "0.1.2", features = ["serde"] }
 serde_json = "1.0"
 serde_urlencoded = "0.7.1"
+simple-useragent = { version = "0.1.2", features = ["serde"] }
 simple_logger = "5.2"
 small-http = { version = "0.2.1", features = ["json", "form", "log", "tls"] }
 small-router = { version = "0.2.1", features = ["log"] }
 uuid = { version = "1.25", features = ["v7", "serde"] }
 validate = { path = "../../../lib/data/validate" }
-zip = "8.6"
 zeroize = "1.9"
+zip = "8.6"
 
 [target.'cfg(not(any(target_os = "macos", windows)))'.dependencies]
 bsql = { version = "0.1.2", features = ["uuid", "chrono", "sqlite-bundled"] }

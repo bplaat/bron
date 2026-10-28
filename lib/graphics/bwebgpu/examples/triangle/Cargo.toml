@@ -7,8 +7,8 @@ authors.workspace = true
 repository.workspace = true
 
 [dependencies]
-bwindow = { path = "../../../../ui/bwindow", default-features = false }
 bwebgpu = { path = "../.." }
+bwindow = { path = "../../../../ui/bwindow", default-features = false }
 
 [build-dependencies]
 bwebgpu-shader-build = { path = "../../../bwebgpu-shader-build" }

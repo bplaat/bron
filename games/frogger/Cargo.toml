@@ -25,8 +25,8 @@ sandbox = true
 
 [dependencies]
 baudio = { path = "../../lib/audio/baudio" }
-bwindow = { path = "../../lib/ui/bwindow" }
 bwebgpu = { path = "../../lib/graphics/bwebgpu" }
+bwindow = { path = "../../lib/ui/bwindow" }
 preferences = { path = "../../lib/sys/preferences" }
 sfxr = "0.1.4"
 
@@ -36,7 +36,9 @@ winresource = "0.1.31"
 
 [dev-dependencies]
 bwebgpu = { path = "../../lib/graphics/bwebgpu", features = ["image"] }
-image = { path = "../../lib/graphics/image", default-features = false, features = ["png"] }
+image = { path = "../../lib/graphics/image", default-features = false, features = [
+    "png",
+] }
 
 [lints]
 workspace = true

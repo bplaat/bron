@@ -10,9 +10,12 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
-bwindow = { path = "../../../bwindow", default-features = false, features = ["remember_window_state"] }
 bwebview = { path = "../..", default-features = false, features = [
-    "rust-embed"] }
+    "rust-embed",
+] }
+bwindow = { path = "../../../bwindow", default-features = false, features = [
+    "remember_window_state",
+] }
 directories = "6.0"
 rust-embed = "8.12"
 serde = { version = "1.0", features = ["derive"] }

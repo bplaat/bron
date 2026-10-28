@@ -27,10 +27,10 @@ sandbox = true
 [package.metadata.bundle.android]
 
 [dependencies]
-bwindow = { path = "../../lib/ui/bwindow", features = ["menu"] }
 bcanvas = { path = "../../lib/graphics/bcanvas" }
-reversi-engine = { path = "../reversi-engine" }
+bwindow = { path = "../../lib/ui/bwindow", features = ["menu"] }
 preferences = { path = "../../lib/sys/preferences" }
+reversi-engine = { path = "../reversi-engine" }
 
 [build-dependencies]
 winresource = "0.1.31"

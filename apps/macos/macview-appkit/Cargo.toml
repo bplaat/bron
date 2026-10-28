@@ -13,6 +13,6 @@ platforms = ["macos"]
 workspace = true
 
 [dependencies]
-objc2 = "0.6.4"
 image = { path = "../../../lib/graphics/image" }
+objc2 = "0.6.4"
 vector = { path = "../../../lib/graphics/vector" }

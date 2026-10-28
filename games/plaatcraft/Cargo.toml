@@ -23,21 +23,21 @@ info_plist = "meta/apple/ios/Info.plist"
 [package.metadata.bundle.android]
 
 [dependencies]
-directories = "6.0"
-libsqlite3-sys = "0.38"
 baudio = { path = "../../lib/audio/baudio" }
-cargo-bundle-assets = { path = "../../lib/build/cargo-bundle-assets" }
 bcanvas = { path = "../../lib/graphics/bcanvas", default-features = false }
 bwebgpu = { path = "../../lib/graphics/bwebgpu" }
 bwindow = { path = "../../lib/ui/bwindow", default-features = false, features = [
     "remember_window_state",
 ] }
-preferences = { path = "../../lib/sys/preferences" }
+cargo-bundle-assets = { path = "../../lib/build/cargo-bundle-assets" }
 deflate = { path = "../../lib/data/deflate" }
+directories = "6.0"
 image = { path = "../../lib/graphics/image", default-features = false, features = [
     "png",
 ] }
+libsqlite3-sys = "0.38"
 plaatcraft-engine = { path = "../plaatcraft-engine" }
+preferences = { path = "../../lib/sys/preferences" }
 
 # Android has no public system SQLite library
 [target.'cfg(target_os = "android")'.dependencies]

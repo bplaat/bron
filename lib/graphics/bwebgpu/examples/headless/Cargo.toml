@@ -7,8 +7,10 @@ authors.workspace = true
 repository.workspace = true
 
 [dependencies]
-image = { path = "../../../image", default-features = false, features = ["png"] }
 bwebgpu = { path = "../..", default-features = false, features = ["image"] }
+image = { path = "../../../image", default-features = false, features = [
+    "png",
+] }
 
 [build-dependencies]
 bwebgpu-shader-build = { path = "../../../bwebgpu-shader-build" }
