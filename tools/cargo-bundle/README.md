@@ -1,12 +1,13 @@
 # cargo-bundle
 
-A simple Cargo plugin that builds macOS and iOS app bundles, Windows MSIX packages and Android
-APKs.
+A simple Cargo plugin that builds macOS and iOS app bundles, Windows MSIX packages, Linux `.deb`
+and `.rpm` packages and Android APKs.
 
 ## Usage
 
 Bundle metadata is optional. By default, the bundle name is `package.name` and the
-identifier is `nl.bplaat.<package.name>`. Override these defaults or configure resources
+identifier is `nl.bplaat.<package.name>`. The `description`, `license`, `authors`, `homepage` and
+`repository` package fields, also when inherited from the workspace, describe the Linux packages. Override these defaults or configure resources
 in your `Cargo.toml`:
 
 ```toml
@@ -43,6 +44,14 @@ package = "../example-shell" # cdylib crate exporting DllGetClassObject and DllC
 library = "example_shell" # its DLL name without .dll
 thumbnail_handler = "00000000-0000-0000-0000-000000000001" # optional IThumbnailProvider CLSID
 preview_handler = "00000000-0000-0000-0000-000000000002" # optional IPreviewHandler CLSID
+
+[package.metadata.bundle.linux]
+icons = "meta/freedesktop/icons" # optional, <size>x<size>.png and scalable.svg hicolor icons
+categories = ["Graphics", "Viewer"] # optional, desktop entry categories
+mime_types = ["image/png", "image/x-example"] # optional, opened files and thumbnailed types
+mime_info = "meta/freedesktop/mime.xml" # optional, shared-mime-info definitions of new types
+thumbnailer = "--thumbnail -s %s %u %o" # optional, thumbnailer arguments of the executable
+desktop_entry = "meta/freedesktop/.desktop" # optional, merged into the desktop entry
 ```
 
 Then run `cargo bundle` with the path argument, when using a Cargo workspace run the command in the root of the workspace:
@@ -57,7 +66,8 @@ Use [`cargo-bundle-assets`](../../lib/build/cargo-bundle-assets) to declare file
 with `#[derive(cargo_bundle_assets::Assets)]` and `#[folder = "assets"]`.
 Ordinary Cargo builds embed the bytes. Bundle builds copy declared files into
 macOS `Contents/Resources/<hash>/`, iOS `assets/<hash>/`, Windows
-MSIX asset packages containing `Assets/<hash>/`, or shared Android APK `assets/<hash>/` entries.
+MSIX asset packages containing `Assets/<hash>/`, Linux `/usr/share/<crate>/<hash>/`, or shared
+Android APK `assets/<hash>/` entries.
 Each collection has its own namespace, shared by all executable architectures.
 APK assets are stored without ZIP compression and read through the native asset
 manager. No runtime extraction, asset catalogs, build script, or pack format is
@@ -135,6 +145,38 @@ so it can be installed on Windows 11 from an administrator PowerShell:
 ```powershell
 Add-AppxPackage -Path ExampleApp.msixbundle -AllowUnsigned -ForceUpdateFromAnyVersion
 ```
+
+### Linux
+
+On Linux, `cargo bundle` builds your crate for the host architecture and writes both a Debian
+`.deb` and an RPM `.rpm` package to the `target/bundle/<crate>` directory, add `--deb` or `--rpm`
+to only build one. Both packages are written in Rust, so building them needs neither `dpkg-deb`
+nor `rpmbuild`, and build an RPM on Debian or a `.deb` on Fedora. They install:
+
+- The executable as `/usr/bin/<crate>` and the declared assets in `/usr/share/<crate>`
+- A desktop entry `/usr/share/applications/<identifier>.desktop` with the bundle name, the
+  package description, the categories, and the MIME types, the executable receives the opened
+  files as arguments. The optional `desktop_entry` file overrides its keys and adds groups like
+  desktop actions
+- The icons as `/usr/share/icons/hicolor/<size>/apps/<identifier>.png`
+- AppStream metainfo `/usr/share/metainfo/<identifier>.metainfo.xml`, so software centers show
+  the app with its summary, license, developer, and homepage
+- The optional shared-mime-info file and a thumbnailer that runs the executable with the
+  `thumbnailer` arguments for the MIME types
+
+The GTK application ID of bwindow apps is the identifier, so the desktop shell matches windows
+with their desktop entry. The packages depend on the shared libraries that the executable links:
+the RPM requires their sonames like `libgtk-3.so.0()(64bit)`, the `.deb` depends on the Debian
+packages that contain them, found with `ldconfig` and `dpkg-query` when building on Debian.
+Desktop, MIME and icon caches are updated by the triggers of the package managers. Install the
+packages with their dependencies:
+
+```sh
+sudo apt install ./target/bundle/example/example_0.1.0_amd64.deb
+sudo dnf install ./target/bundle/example/example-0.1.0-1.x86_64.rpm
+```
+
+Set `SOURCE_DATE_EPOCH` for reproducible packages, otherwise files get the build time.
 
 ### Android
 

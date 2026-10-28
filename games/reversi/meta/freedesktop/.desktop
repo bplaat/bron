@@ -1,9 +1,0 @@
-[Desktop Entry]
-Version=1.0
-Type=Application
-Name=Reversi
-Comment=Play Reversi against the computer
-Exec="$BIN_DIR/Reversi"
-Icon=nl.bplaat.Reversi
-Terminal=false
-Categories=Game;BoardGame;

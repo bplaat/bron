@@ -1,6 +1,7 @@
 [package]
 name = "imageview"
 version = "0.1.0"
+description = "View bitmap, QOI, SVG, and TinyVG images"
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
@@ -75,6 +76,23 @@ package = "../imageview-windows-shell"
 library = "imageview_windows_shell"
 thumbnail_handler = "80982B38-AE66-4D28-952E-410E1858801B"
 preview_handler = "1D468AD5-F899-453B-8915-D19CD884DBAD"
+
+[package.metadata.bundle.linux]
+icons = "meta/freedesktop/icons"
+categories = ["Graphics", "Viewer"]
+mime_types = [
+    "image/bmp",
+    "image/gif",
+    "image/jpeg",
+    "image/png",
+    "image/apng",
+    "image/vnd.microsoft.icon",
+    "image/qoi",
+    "image/svg+xml",
+    "image/tinyvg",
+]
+mime_info = "meta/freedesktop/mime.xml"
+thumbnailer = "--thumbnail -s %s %u %o"
 
 [lints]
 workspace = true

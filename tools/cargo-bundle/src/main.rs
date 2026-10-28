@@ -6,7 +6,6 @@
 
 #![doc = include_str!("../README.md")]
 
-use std::fs;
 use std::process::{ExitCode, exit};
 
 use crate::manifest::Manifest;
@@ -16,23 +15,14 @@ mod android;
 mod apple;
 mod args;
 mod assets;
+#[cfg(any(target_os = "linux", test))]
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+mod linux;
 mod manifest;
 mod support;
 #[cfg(any(windows, test))]
 #[cfg_attr(not(windows), allow(dead_code))]
 mod windows;
-
-fn read_manifest(path: &str) -> Manifest {
-    let manifest_path = format!("{path}/Cargo.toml");
-    toml::from_str(&fs::read_to_string(&manifest_path).unwrap_or_else(|error| {
-        eprintln!("Can't read {manifest_path} file: {error}");
-        exit(1);
-    }))
-    .unwrap_or_else(|error| {
-        eprintln!("Can't parse {manifest_path} file: {error}");
-        exit(1);
-    })
-}
 
 fn main() -> ExitCode {
     let args = args::parse_args();
@@ -65,7 +55,14 @@ fn main() -> ExitCode {
         eprintln!("iOS bundles require macOS with Xcode and an iOS Simulator runtime");
         return ExitCode::FAILURE;
     }
-    let manifest = read_manifest(&args.path);
+    if (args.deb || args.rpm) && (args.ios || args.android || !cfg!(target_os = "linux")) {
+        eprintln!("--deb and --rpm require Linux and can't be combined with --ios or --android");
+        return ExitCode::FAILURE;
+    }
+    let manifest = Manifest::read(&args.path).unwrap_or_else(|error| {
+        eprintln!("{error}");
+        exit(1);
+    });
     let bundle_metadata = &manifest.package.metadata.bundle;
     println!(
         "Bundling {} v{} ({})",
@@ -80,7 +77,9 @@ fn main() -> ExitCode {
         apple::bundle(&args, &target_dir, &manifest);
         #[cfg(windows)]
         windows::bundle(&args, &target_dir, &manifest);
-        #[cfg(not(any(target_os = "macos", windows)))]
+        #[cfg(target_os = "linux")]
+        linux::bundle(&args, &target_dir, &manifest);
+        #[cfg(not(any(target_os = "macos", windows, target_os = "linux")))]
         {
             eprintln!("Only --android bundles are supported on this platform");
             return ExitCode::FAILURE;

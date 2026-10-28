@@ -1,9 +1,0 @@
-[Desktop Entry]
-Version=1.0
-Type=Application
-Name=Frogger
-Comment=Hop past traffic, rivers, and trains
-Exec="$BIN_DIR/Frogger"
-Icon=nl.bplaat.frogger
-Terminal=false
-Categories=Game;ArcadeGame;

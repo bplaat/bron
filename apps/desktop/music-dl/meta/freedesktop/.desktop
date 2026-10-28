@@ -1,8 +1,0 @@
-[Desktop Entry]
-Version=1.0
-Type=Application
-Name=Music Downloader
-Exec="$BIN_DIR/MusicDownloader"
-Icon=nl.bplaat.MusicDownloader
-Terminal=false
-Categories=AudioVideo;Audio;Network;

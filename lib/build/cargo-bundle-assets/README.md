@@ -19,8 +19,9 @@ release builds. These executables can be moved and run without the source tree.
 `cargo-bundle` sets `CARGO_BUNDLE`: these builds contain collection metadata
 instead of file payloads. The tool copies each declared file into the app's
 resources at `Contents/Resources/<hash>/` on macOS and `assets/<hash>/` on
-iOS, a shared neutral MSIX asset package at `Assets/<hash>/`, or shared APK
-`assets/<hash>/` entries. Resources are read
+iOS, a shared neutral MSIX asset package at `Assets/<hash>/`, shared APK
+`assets/<hash>/` entries, or `/usr/share/<name>/<hash>/` beside `/usr/bin/<name>`
+in Linux packages. Resources are read
 directly without extraction. No asset catalogs or custom pack files are created.
 Windows automatically folds the shared asset package into the selected architecture
 package, so the runtime uses the same executable-relative asset paths.

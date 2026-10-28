@@ -1,9 +1,0 @@
-[Desktop Entry]
-Version=1.0
-Type=Application
-Name=Pixel Font Editor
-Exec="$BIN_DIR/PixelFontEditor" %f
-Icon=nl.bplaat.PixelFontEditor
-Terminal=false
-Categories=Utility;
-MimeType=application/x-pixelfont;

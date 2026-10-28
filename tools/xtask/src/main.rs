@@ -20,6 +20,7 @@ mod build;
 mod checks;
 #[cfg(unix)]
 mod headers;
+mod linux;
 mod metadata;
 mod process;
 mod utils;

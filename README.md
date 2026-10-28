@@ -109,7 +109,7 @@ Various tools and websites. For the deployed sites, go to [bron.bplaat.nl](https
 - [baksteen](apps/web/baksteen/) A brick-laying robot simulator
 - [bob](tools/bob) A simple build system for my projects, because I like the simplicity of Cargo
 - [ccontinue](tools/ccontinue) A transpiler that translates an OOP extension for the C programming language back to C
-- [cargo-bundle](tools/cargo-bundle) A simple Cargo plugin that builds macOS and iOS app bundles, Windows MSIX packages and Android APKs
+- [cargo-bundle](tools/cargo-bundle) A simple Cargo plugin that builds macOS and iOS app bundles, Windows MSIX packages, Linux `.deb` and `.rpm` packages and Android APKs
 - [plaatnotes](apps/web/plaatnotes) A self-hosted note-taking web app with rich Markdown support
 - [nds-toolchain](tools/nds-toolchain/) An LLVM-based Nintendo DS toolchain with picolibc and a test ROM
 - [wii-toolchain](tools/wii-toolchain/) An LLVM-based Wii toolchain with picolibc, libogc, the [gxtexconv](tools/wii-toolchain/gxtexconv) texture converter, and Dolphin emulator tests
@@ -267,7 +267,7 @@ Most of these libraries are intended primarily for personal use, but can still b
     cargo xtask build-pages
     ```
 
-- To build app bundles, install the targets below, on Windows this builds MSIX bundles with the Windows SDK and MSVC build tools for x64 and ARM64:
+- To build app bundles, install the targets below, on Windows this builds MSIX bundles with the Windows SDK and MSVC build tools for x64 and ARM64, on Linux this builds `.deb` and `.rpm` packages:
 
     ```sh
     rustup target add aarch64-apple-darwin x86_64-apple-darwin # macOS
@@ -275,7 +275,7 @@ Most of these libraries are intended primarily for personal use, but can still b
     cargo xtask build-bundle
     ```
 
-- To build and install bins and GUI applications to your system, on Windows this installs the MSIX packages after one UAC prompt:
+- To build and install bins and GUI applications to your system, on Windows this installs the MSIX packages after one UAC prompt, on Debian and Fedora based Linux distributions this installs the `.deb` or `.rpm` packages with apt or dnf using sudo, other Linux distributions are not supported:
 
     ```sh
     cargo xtask install

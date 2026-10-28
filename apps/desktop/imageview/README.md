@@ -31,11 +31,11 @@ GtkScrolledWindow, all following the system light or dark theme.
 
 ### Linux
 
-- A freedesktop thumbnailer: `ImageView --thumbnail -s SIZE INPUT OUTPUT` writes a PNG
+- A freedesktop thumbnailer: `imageview --thumbnail -s SIZE INPUT OUTPUT` writes a PNG
   thumbnail, without starting GTK
-- `cargo xtask install` installs the binary, the [desktop entry](meta/freedesktop/.desktop),
-  the [thumbnailer](meta/freedesktop/.thumbnailer) and the [MIME types](meta/freedesktop/mime.xml)
-  of QOI and TinyVG into the user's data directory
+- The `.deb` and `.rpm` packages of `cargo bundle` install the binary, a desktop entry, the
+  thumbnailer and the [MIME types](meta/freedesktop/mime.xml) of QOI and TinyVG, which
+  `cargo xtask install` installs with apt or dnf
 
 ## macOS Entitlements
 

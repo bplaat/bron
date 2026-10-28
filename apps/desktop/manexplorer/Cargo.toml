@@ -1,6 +1,7 @@
 [package]
 name = "manexplorer"
 version = "0.1.0"
+description = "Browse and read man pages"
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
@@ -17,6 +18,10 @@ icon = "meta/macos/icon.icon"
 
 [package.metadata.bundle.macos]
 entitlements = "meta/macos/Entitlements.plist"
+
+[package.metadata.bundle.linux]
+icons = "meta/freedesktop/icons"
+categories = ["Utility"]
 
 [lints]
 workspace = true

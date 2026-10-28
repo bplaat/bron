@@ -14,8 +14,10 @@ workspace = true
 
 [dependencies]
 android-build = { path = "../../lib/build/android-build" }
+gzip = { path = "../../lib/data/gzip" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+sha2 = "0.11.0"
 toml = { version = "1.1.8", default-features = false, features = [
     "std",
     "serde",

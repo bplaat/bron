@@ -1,6 +1,7 @@
 [package]
 name = "music-dl"
 version = "0.1.0"
+description = "Download complete albums with the correct metadata"
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
@@ -14,6 +15,10 @@ icon = "meta/macos/icon.icon"
 
 [package.metadata.bundle.windows]
 assets = "meta/windows"
+
+[package.metadata.bundle.linux]
+icons = "meta/freedesktop/icons"
+categories = ["AudioVideo", "Audio", "Network"]
 
 [lints]
 workspace = true

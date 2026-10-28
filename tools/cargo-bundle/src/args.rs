@@ -15,6 +15,8 @@ pub(crate) struct Args {
     pub dmg: bool,
     pub ios: bool,
     pub android: bool,
+    pub deb: bool,
+    pub rpm: bool,
     pub run: bool,
     pub release: bool,
     pub device: Option<String>,
@@ -30,6 +32,8 @@ impl Default for Args {
             dmg: false,
             ios: false,
             android: false,
+            deb: false,
+            rpm: false,
             run: false,
             release: false,
             device: None,
@@ -77,6 +81,14 @@ fn parse(arguments: impl IntoIterator<Item = String>) -> Args {
                 args.help = false;
                 args.android = true;
             }
+            "--deb" => {
+                args.help = false;
+                args.deb = true;
+            }
+            "--rpm" => {
+                args.help = false;
+                args.rpm = true;
+            }
             "--run" => {
                 args.help = false;
                 args.run = true;
@@ -108,6 +120,8 @@ Options:
   --dmg                     Also create a DMG installer (macOS)
   --ios                     Build an iOS app instead (macOS)
   --android                 Build an Android APK instead
+  --deb                     Only build a Debian package (Linux)
+  --rpm                     Only build an RPM package (Linux)
   --run                     Launch the macOS app, or install and launch on an iOS simulator or the connected Android device
   --device <name-or-UDID>    Select the simulator (with --ios --run)
   --release                 Use release mode with --ios --run (default: debug)

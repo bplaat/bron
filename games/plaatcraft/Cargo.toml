@@ -1,6 +1,7 @@
 [package]
 name = "plaatcraft"
 version = "0.2.0"
+description = "Explore and build in a voxel world"
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
@@ -17,6 +18,11 @@ info_plist = "meta/apple/Info.plist"
 assets = "meta/windows"
 # Win32 pointer lock needs window-station access unavailable in AppContainer.
 sandbox = false
+
+[package.metadata.bundle.linux]
+icons = "meta/freedesktop/icons"
+categories = ["Game", "Simulation"]
+desktop_entry = "meta/freedesktop/.desktop"
 
 [package.metadata.bundle.ios]
 info_plist = "meta/apple/ios/Info.plist"

@@ -53,6 +53,11 @@ fn resource_root() -> io::Result<std::path::PathBuf> {
     return Ok(directory.join("assets"));
     #[cfg(windows)]
     return Ok(directory.join("Assets"));
+    // Linux packages install `<prefix>/bin/<name>` with its assets in `<prefix>/share/<name>`
+    #[cfg(not(any(target_vendor = "apple", windows)))]
+    if let (Some(prefix), Some(name)) = (directory.parent(), executable.file_name()) {
+        return Ok(prefix.join("share").join(name));
+    }
     #[cfg(not(any(target_os = "ios", windows)))]
     Ok(directory.to_path_buf())
 }

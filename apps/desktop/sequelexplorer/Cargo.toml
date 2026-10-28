@@ -1,6 +1,7 @@
 [package]
 name = "sequelexplorer"
 version = "0.1.0"
+description = "Browse SQLite and MySQL databases"
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
@@ -19,6 +20,12 @@ hardened_runtime = true
 [package.metadata.bundle.windows]
 assets = "meta/windows"
 file_types = [{ name = "SQLite Database", extensions = ["db"] }]
+
+[package.metadata.bundle.linux]
+icons = "meta/freedesktop/icons"
+categories = ["Development", "Database"]
+mime_types = ["application/vnd.sqlite3"]
+mime_info = "meta/freedesktop/mime.xml"
 
 [lints]
 workspace = true

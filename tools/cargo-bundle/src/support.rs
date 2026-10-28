@@ -35,6 +35,14 @@ pub(crate) fn assert_file_name(value: &str, description: &str) {
     );
 }
 
+pub(crate) fn xml_escape(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+}
+
 pub(crate) fn remove_path_if_exists(path: &str) {
     let metadata = match fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
@@ -45,5 +53,19 @@ pub(crate) fn remove_path_if_exists(path: &str) {
         fs::remove_dir_all(path).unwrap_or_else(|error| panic!("Failed to remove {path}: {error}"));
     } else {
         fs::remove_file(path).unwrap_or_else(|error| panic!("Failed to remove {path}: {error}"));
+    }
+}
+
+// MARK: Tests
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn xml_escape_escapes_markup() {
+        assert_eq!(
+            xml_escape(r#"A & "B" <C>"#),
+            "A &amp; &quot;B&quot; &lt;C&gt;"
+        );
     }
 }

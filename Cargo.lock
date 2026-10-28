@@ -228,9 +228,11 @@ version = "0.1.0"
 dependencies = [
  "android-build",
  "copy_dir",
+ "gzip",
  "plist",
  "serde",
  "serde_json",
+ "sha2",
  "toml",
  "zip",
 ]

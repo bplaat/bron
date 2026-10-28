@@ -1,6 +1,7 @@
 [package]
 name = "game2048"
 version = "0.1.0"
+description = "Join the numbers and get to the 2048 tile"
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
@@ -21,6 +22,10 @@ entitlements = "meta/apple/macos/Entitlements.plist"
 [package.metadata.bundle.windows]
 assets = "meta/windows"
 sandbox = true
+
+[package.metadata.bundle.linux]
+icons = "meta/freedesktop/icons"
+categories = ["Game", "LogicGame"]
 
 [package.metadata.bundle.ios]
 info_plist = "meta/apple/ios/Info.plist"

@@ -7,6 +7,7 @@
 use std::fmt::Write as _;
 
 use crate::manifest::{Manifest, ShellExtensionMetadata, WindowsMetadata};
+use crate::support::xml_escape;
 
 // Marks the package as unsigned so it can only be installed with `Add-AppxPackage -AllowUnsigned`
 // https://learn.microsoft.com/en-us/windows/msix/package/unsigned-package
@@ -269,14 +270,6 @@ pub(crate) fn package_version(version: &str, revision: u16) -> String {
     format!("{}.{revision}", parts.join("."))
 }
 
-fn xml_escape(value: &str) -> String {
-    value
-        .replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-}
-
 // MARK: Tests
 #[cfg(test)]
 mod tests {
@@ -284,12 +277,13 @@ mod tests {
 
     #[test]
     fn asset_template_preserves_family_and_version_without_enabling_execution() {
-        let manifest: Manifest = toml::from_str(
+        let manifest = Manifest::parse(
             r#"
 [package]
 name = "example-game"
 version = "1.2.3"
 "#,
+            None,
         )
         .expect("Manifest");
         let windows = WindowsMetadata::default();
@@ -330,7 +324,7 @@ version = "1.2.3"
 
     #[test]
     fn shell_extension_registers_its_handlers_for_every_file_type() {
-        let manifest: Manifest = toml::from_str(
+        let manifest = Manifest::parse(
             r#"
 [package]
 name = "viewer"
@@ -343,6 +337,7 @@ library = "viewer_shell"
 thumbnail_handler = "{a1b2c3d4-0000-4000-8000-000000000001}"
 preview_handler = "A1B2C3D4-0000-4000-8000-000000000002"
 "#,
+            None,
         )
         .expect("Manifest");
         let windows = manifest
@@ -388,14 +383,6 @@ preview_handler = "A1B2C3D4-0000-4000-8000-000000000002"
     fn file_type_id_is_lowercase_alphanumeric() {
         assert_eq!(file_type_id("Pixel Font"), "pixelfont");
         assert_eq!(file_type_id("SQLite-3 Database"), "sqlite3database");
-    }
-
-    #[test]
-    fn xml_escape_escapes_markup() {
-        assert_eq!(
-            xml_escape(r#"A & "B" <C>"#),
-            "A &amp; &quot;B&quot; &lt;C&gt;"
-        );
     }
 
     #[test]

@@ -1,6 +1,7 @@
 [package]
 name = "bassielight"
 version = "0.1.0"
+description = "Control stage lights"
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
@@ -17,6 +18,10 @@ entitlements = "meta/macos/Entitlements.plist"
 
 [package.metadata.bundle.windows]
 assets = "meta/windows"
+
+[package.metadata.bundle.linux]
+icons = "meta/freedesktop/icons"
+categories = ["Utility"]
 
 [lints]
 workspace = true

@@ -9,6 +9,8 @@
 
 use std::fmt::Write;
 
+use crate::support::xml_escape;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Element {
     pub name: String,
@@ -76,7 +78,7 @@ impl Element {
         let indent = "    ".repeat(depth);
         _ = write!(output, "{indent}<{}", self.name);
         for (name, value) in &self.attributes {
-            _ = write!(output, " {name}=\"{}\"", escape(value));
+            _ = write!(output, " {name}=\"{}\"", xml_escape(value));
         }
         if self.children.is_empty() {
             output.push_str(" />\n");
@@ -88,14 +90,6 @@ impl Element {
         }
         _ = writeln!(output, "{indent}</{}>", self.name);
     }
-}
-
-fn escape(value: &str) -> String {
-    value
-        .replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
 }
 
 fn unescape(value: &str) -> Result<String, String> {

@@ -1,8 +1,0 @@
-[Desktop Entry]
-Version=1.0
-Type=Application
-Name=BassieLight
-Exec="$BIN_DIR/BassieLight"
-Icon=nl.bplaat.BassieLight
-Terminal=false
-Categories=Utility;

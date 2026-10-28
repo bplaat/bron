@@ -9,9 +9,10 @@ use std::process::Command;
 use std::{env, fs};
 
 use anyhow::{Context, Result, bail};
-use directories::{BaseDirs, UserDirs};
+use directories::UserDirs;
 use serde_json::Value;
 
+use crate::linux::{PackageFormat, remove_home_install};
 use crate::metadata::{InstallableApp, has_target_kind, packages, supports_os};
 use crate::process::{capture, npm_program, run};
 use crate::utils::{
@@ -54,22 +55,6 @@ const ERROR_CANCELLED: i32 = 1223;
 
 fn powershell_quote(path: &Path) -> String {
     format!("'{}'", path.display().to_string().replace('\'', "''"))
-}
-
-fn freedesktop_identity(path: &Path) -> Result<Option<(String, String)>> {
-    if !path.exists() {
-        return Ok(None);
-    }
-    let contents = fs::read_to_string(path)?;
-    let executable = contents.lines().find_map(|line| {
-        let value = line.strip_prefix("Exec=")?.trim().trim_start_matches('"');
-        let value = value.strip_prefix("$BIN_DIR/")?;
-        value.split(['"', ' ']).next().map(str::to_owned)
-    });
-    let identifier = contents
-        .lines()
-        .find_map(|line| line.strip_prefix("Icon=").map(str::to_owned));
-    Ok(executable.zip(identifier))
 }
 
 impl Xtask {
@@ -241,68 +226,22 @@ impl Xtask {
                     .desktop_dir()
                     .to_owned();
                 for app in apps {
-                    remove_path_if_exists(&desktop.join(format!("{}.exe", app.name)))?;
+                    remove_path_if_exists(
+                        &desktop.join(format!("{}.exe", app.name.replace(' ', ""))),
+                    )?;
                 }
             }
             Os::Linux => {
-                let base_dirs = BaseDirs::new().context("home directory is not available")?;
-                let data = base_dirs.data_dir();
-                let bin = base_dirs
-                    .executable_dir()
-                    .context("executable directory is not available")?;
-                let applications = data.join("applications");
-                let icons = data.join("icons/hicolor");
-                let mime_packages = data.join("mime/packages");
-                let thumbnailers = data.join("thumbnailers");
-                fs::create_dir_all(&bin)?;
-                fs::create_dir_all(&applications)?;
-                fs::create_dir_all(&mime_packages)?;
-                for app in apps {
-                    run(Command::new("cargo").args(["build", "--release", "--bin", &app.package]))?;
-                    let executable = bin.join(&app.name);
-                    fs::copy(
-                        self.root.join(format!("target/release/{}", app.package)),
-                        &executable,
-                    )?;
-                    let desktop_template =
-                        fs::read_to_string(app.directory.join("meta/freedesktop/.desktop"))?;
-                    let desktop_entry =
-                        desktop_template.replace("$BIN_DIR", &bin.to_string_lossy());
-                    fs::write(
-                        applications.join(format!("{}.desktop", app.identifier)),
-                        desktop_entry,
-                    )?;
-                    let thumbnailer = app.directory.join("meta/freedesktop/.thumbnailer");
-                    if thumbnailer.exists() {
-                        fs::create_dir_all(&thumbnailers)?;
-                        fs::write(
-                            thumbnailers.join(format!("{}.thumbnailer", app.identifier)),
-                            fs::read_to_string(thumbnailer)?
-                                .replace("$BIN_DIR", &bin.to_string_lossy()),
-                        )?;
-                    }
-                    let mime_package = app.directory.join("meta/freedesktop/mime.xml");
-                    if mime_package.exists() {
-                        fs::copy(
-                            mime_package,
-                            mime_packages.join(format!("{}.xml", app.identifier)),
-                        )?;
-                    }
-                    for size in [16, 24, 32, 48, 64, 128, 256, 512] {
-                        let destination = icons.join(format!("{size}x{size}/apps"));
-                        fs::create_dir_all(&destination)?;
-                        fs::copy(
-                            app.directory
-                                .join(format!("meta/freedesktop/icons/{size}x{size}.png")),
-                            destination.join(format!("{}.png", app.identifier)),
-                        )?;
-                    }
+                if !apps.is_empty() {
+                    let format = PackageFormat::detect()?;
+                    self.build_bundles(&apps, &[&format!("--{}", format.extension())])?;
+                    let packages = apps
+                        .iter()
+                        .map(|app| self.bundle_output(app, "", format.extension()))
+                        .collect::<Result<Vec<_>>>()?;
+                    format.install(&packages)?;
                 }
-                run(Command::new("update-mime-database").arg(data.join("mime")))?;
-                run(Command::new("update-desktop-database").arg(&applications))?;
-                run(Command::new("gtk-update-icon-cache")
-                    .args(["--force", "--ignore-theme-index"])
-                    .arg(&icons))?;
+                remove_home_install(&apps)?;
             }
         }
         Ok(())
@@ -492,17 +431,16 @@ function Install-Bundle($Path) {{
                 .get("name")
                 .and_then(Value::as_str)
                 .context("Cargo package has no name")?;
-            let mut name_characters = package_name.chars();
-            let default_name = name_characters
-                .next()
-                .map(|first| first.to_uppercase().chain(name_characters).collect())
-                .unwrap_or_default();
-            let identity =
-                freedesktop_identity(&package_directory.join("meta/freedesktop/.desktop"))?;
-            let (name, identifier) = identity.unwrap_or_else(|| {
-                let identifier = package_name.to_owned();
-                (default_name, identifier)
-            });
+            // The same defaults as cargo-bundle
+            let bundle_value = |key| {
+                bundle
+                    .and_then(|bundle| bundle.get(key))
+                    .and_then(Value::as_str)
+                    .map(str::to_owned)
+            };
+            let name = bundle_value("name").unwrap_or_else(|| package_name.to_owned());
+            let identifier =
+                bundle_value("identifier").unwrap_or_else(|| format!("nl.bplaat.{package_name}"));
             apps.push(InstallableApp {
                 package: package_name.to_owned(),
                 directory: package_directory.to_path_buf(),

@@ -237,9 +237,11 @@ mod tests {
 
     #[test]
     fn normalizes_bundle_identifiers() {
-        let manifest: crate::manifest::Manifest =
-            toml::from_str("[package]\nname = \"example-bcanvas-showcase\"\nversion = \"0.1.0\"\n")
-                .expect("valid manifest");
+        let manifest = crate::manifest::Manifest::parse(
+            "[package]\nname = \"example-bcanvas-showcase\"\nversion = \"0.1.0\"\n",
+            None,
+        )
+        .expect("valid manifest");
         let identifier = normalize_identifier(&manifest.package.metadata.bundle.identifier);
         assert_eq!(identifier, "nl.bplaat.example_bcanvas_showcase");
         assert!(is_valid_identifier(&identifier));

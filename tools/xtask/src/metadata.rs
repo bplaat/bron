@@ -17,7 +17,9 @@ use crate::utils::{normalize_path, relative_slash};
 pub(crate) struct InstallableApp {
     pub(crate) package: String,
     pub(crate) directory: PathBuf,
+    /// The bundle name
     pub(crate) name: String,
+    /// The bundle identifier
     pub(crate) identifier: String,
     /// Has a [package.metadata.bundle.ios] table
     pub(crate) ios: bool,

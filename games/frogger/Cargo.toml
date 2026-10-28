@@ -1,6 +1,7 @@
 [package]
 name = "frogger"
 version = "0.1.0"
+description = "Hop past traffic, rivers, and trains"
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
@@ -18,6 +19,10 @@ entitlements = "meta/apple/macos/Entitlements.plist"
 [package.metadata.bundle.windows]
 assets = "meta/windows"
 sandbox = true
+
+[package.metadata.bundle.linux]
+icons = "meta/freedesktop/icons"
+categories = ["Game", "ArcadeGame"]
 
 [package.metadata.bundle.ios]
 

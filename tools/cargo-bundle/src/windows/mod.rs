@@ -60,7 +60,7 @@ pub(crate) fn bundle(args: &Args, target_dir: &str, manifest: &Manifest) {
         }
     }
 
-    let publisher = publisher_name(&args.path, manifest);
+    let publisher = publisher_name(manifest);
     let assets = windows.assets.as_deref().unwrap_or("meta/windows");
     let logos = logo_files(&format!("{}/{assets}", args.path));
     let msix_dir = format!("{target_dir}/msix");
