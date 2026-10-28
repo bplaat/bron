@@ -16,6 +16,7 @@ use std::ptr::{null, null_mut};
 
 use super::headers::*;
 use super::input::gtk_input_event;
+use super::pointer_lock;
 use crate::{CursorIcon, PointerLockError, WindowEvent, WindowEventSender};
 
 // Motion, buttons, key presses and releases, enter/leave, focus, scroll and smooth scroll.
@@ -45,6 +46,16 @@ unsafe extern "C" {
     fn gtk_widget_grab_focus(widget: *mut GtkWidget);
     fn gtk_container_check_resize(container: *mut GtkWidget);
     fn gtk_get_event_widget(event: *const GdkEvent) -> *mut GtkWidget;
+    fn gtk_window_activate_key(window: *mut GtkWindow, event: *const GdkEvent) -> i32;
+    fn gtk_container_forall(
+        container: *mut GtkWidget,
+        callback: extern "C" fn(*mut GtkWidget, *mut c_void),
+        data: *mut c_void,
+    );
+    fn gtk_bin_get_child(bin: *mut GtkWidget) -> *mut GtkWidget;
+    fn gtk_widget_get_mapped(widget: *mut GtkWidget) -> i32;
+    fn gtk_widget_get_allocation(widget: *mut GtkWidget, allocation: *mut GdkRectangle);
+    fn gdk_event_get_window(event: *const GdkEvent) -> *mut c_void;
     fn gdk_window_get_display(window: *mut c_void) -> *mut GdkDisplay;
     fn gdk_cursor_new_from_name(display: *mut GdkDisplay, name: *const c_char) -> *mut GObject;
     fn gdk_window_set_cursor(window: *mut c_void, cursor: *mut GObject);
@@ -89,6 +100,8 @@ impl Content {
         let data = self as *const Self as *const c_void;
         unsafe {
             gtk_widget_add_events(window.cast(), INPUT_EVENTS);
+            // The window moves and resizes from its decorations first, which are part of the
+            // window widget itself when there is no drawing area, like with a web view.
             for signal in [
                 c"button-press-event",
                 c"button-release-event",
@@ -101,18 +114,13 @@ impl Content {
                     signal,
                     pointer_event as *const c_void,
                     data,
-                    0,
-                );
-            }
-            // Accelerators and the focused window child handle keys first.
-            for signal in [c"key-press-event", c"key-release-event"] {
-                connect(
-                    window.cast(),
-                    signal,
-                    key_event as *const c_void,
-                    data,
                     G_CONNECT_AFTER,
                 );
+            }
+            // Keys reach the content before the window key bindings, which move the focus
+            // with the arrow keys and activate it with space, see `key_event`.
+            for signal in [c"key-press-event", c"key-release-event"] {
+                connect(window.cast(), signal, key_event as *const c_void, data, 0);
             }
             connect(
                 window.cast(),
@@ -206,6 +214,7 @@ impl Content {
                     "GDK pointer lock failed with status {status}"
                 )));
             }
+            pointer_lock::start(display, seat, self.widget(), &self.sender);
         }
         Ok(())
     }
@@ -266,10 +275,26 @@ impl Content {
     // without one, and not passed on by another window child.
     fn targets_content(&self, event: *const GdkEvent) -> bool {
         let widget = unsafe { gtk_get_event_widget(event) };
-        if self.area.get().is_null() {
-            widget == self.window.get().cast()
-        } else {
-            widget == self.area.get()
+        if !self.area.get().is_null() {
+            return widget == self.area.get();
+        }
+        let window: *mut GtkWidget = self.window.get().cast();
+        if widget != window
+            || unsafe { gdk_event_get_window(event) } != unsafe { gtk_widget_get_window(window) }
+        {
+            return false;
+        }
+        // Without a drawing area, events over the window itself include the title bar, which
+        // is an internal child next to the window child.
+        let (mut x, mut y) = (0.0, 0.0);
+        unsafe { gdk_event_get_coords(event, &mut x, &mut y) };
+        let mut hit = ChildHit {
+            point: (x as i32, y as i32),
+            child: null_mut(),
+        };
+        unsafe {
+            gtk_container_forall(window, child_hit, (&raw mut hit).cast());
+            hit.child == gtk_bin_get_child(window)
         }
     }
 
@@ -282,6 +307,7 @@ impl Content {
 
 /// Release the pointer lock of any window.
 pub(crate) fn release_pointer_lock() {
+    pointer_lock::stop();
     unsafe {
         let display = gdk_display_get_default();
         if display.is_null() {
@@ -313,6 +339,29 @@ unsafe fn connect(
     }
 }
 
+// The mapped window child under a point in window coordinates.
+struct ChildHit {
+    point: (i32, i32),
+    child: *mut GtkWidget,
+}
+
+extern "C" fn child_hit(child: *mut GtkWidget, data: *mut c_void) {
+    let hit = unsafe { &mut *data.cast::<ChildHit>() };
+    let mut allocation = GdkRectangle::default();
+    unsafe {
+        if gtk_widget_get_mapped(child) == 0 {
+            return;
+        }
+        gtk_widget_get_allocation(child, &mut allocation);
+    }
+    let (x, y) = hit.point;
+    if (allocation.x..allocation.x + allocation.width).contains(&x)
+        && (allocation.y..allocation.y + allocation.height).contains(&y)
+    {
+        hit.child = child;
+    }
+}
+
 extern "C" fn realize(_: *mut GtkWidget, content: &Content) {
     content.apply_cursor();
 }
@@ -326,6 +375,9 @@ extern "C" fn pointer_event(_: *mut GtkWidget, event: *const GdkEvent, content: 
     {
         unsafe { gtk_widget_grab_focus(content.area.get()) };
     }
+    if unsafe { pointer_lock::motion(event, &content.sender) } {
+        return 1;
+    }
     match unsafe { gtk_input_event(event.cast(), false) } {
         Some(event) => {
             content.sender.send(event);
@@ -335,11 +387,16 @@ extern "C" fn pointer_event(_: *mut GtkWidget, event: *const GdkEvent, content: 
     }
 }
 
+// A focused window child handles its keys itself, accelerators and mnemonics go first.
 extern "C" fn key_event(_: *mut GtkWidget, event: *const GdkEvent, content: &Content) -> i32 {
     if !content.has_key_focus() {
         return 0;
     }
     let kind = unsafe { gdk_event_get_event_type(event) };
+    if kind == GDK_KEY_PRESS && unsafe { gtk_window_activate_key(content.window.get(), event) } != 0
+    {
+        return 1;
+    }
     let mut code = 0;
     unsafe { gdk_event_get_keycode(event, &mut code) };
     let repeat = match kind {

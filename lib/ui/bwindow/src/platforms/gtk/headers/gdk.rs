@@ -18,6 +18,7 @@ pub(crate) struct GdkDragContext([u8; 0]);
 #[repr(C)]
 pub(crate) struct GdkEvent([u8; 0]);
 #[repr(C)]
+#[derive(Default)]
 pub(crate) struct GdkRectangle {
     pub(crate) x: i32,
     pub(crate) y: i32,

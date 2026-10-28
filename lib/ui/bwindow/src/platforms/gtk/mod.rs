@@ -22,6 +22,7 @@ pub(crate) mod file_drop;
 mod frame;
 pub(crate) mod headers;
 mod input;
+mod pointer_lock;
 mod menu;
 #[cfg(feature = "progress_bar")]
 mod progress_bar;
