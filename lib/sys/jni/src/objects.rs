@@ -245,6 +245,8 @@ impl JString<'_> {
 mod private {
     pub trait Sealed {}
     impl Sealed for i8 {}
+    impl Sealed for i32 {}
+    impl Sealed for i64 {}
     impl Sealed for f32 {}
 }
 
@@ -306,6 +308,20 @@ type_array!(
     SetByteArrayRegion
 );
 type_array!(
+    jint,
+    "[I",
+    NewIntArray,
+    GetIntArrayRegion,
+    SetIntArrayRegion
+);
+type_array!(
+    jlong,
+    "[J",
+    NewLongArray,
+    GetLongArrayRegion,
+    SetLongArrayRegion
+);
+type_array!(
     jfloat,
     "[F",
     NewFloatArray,
@@ -323,6 +339,10 @@ pub struct JPrimitiveArray<'local, T: TypeArray> {
 
 /// A `byte[]` reference.
 pub type JByteArray<'local> = JPrimitiveArray<'local, jbyte>;
+/// An `int[]` reference.
+pub type JIntArray<'local> = JPrimitiveArray<'local, jint>;
+/// A `long[]` reference.
+pub type JLongArray<'local> = JPrimitiveArray<'local, jlong>;
 /// A `float[]` reference.
 pub type JFloatArray<'local> = JPrimitiveArray<'local, jfloat>;
 
