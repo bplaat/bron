@@ -15,7 +15,8 @@ info_plist = "meta/apple/Info.plist"
 
 [package.metadata.bundle.windows]
 assets = "meta/windows"
-sandbox = true
+# Win32 pointer lock needs window-station access unavailable in AppContainer.
+sandbox = false
 
 [package.metadata.bundle.ios]
 info_plist = "meta/apple/ios/Info.plist"

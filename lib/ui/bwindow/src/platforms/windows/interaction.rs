@@ -153,16 +153,18 @@ impl Interaction {
     /// Hide the pointer, confine it to its position and receive raw mouse motion.
     pub(super) fn lock_pointer(&self, hwnd: HWND) -> Result<(), PointerLockError> {
         if !register_raw_mouse(0, hwnd) {
-            return Err(PointerLockError(
-                "Could not register raw mouse input".into(),
-            ));
+            return Err(PointerLockError(format!(
+                "Could not register raw mouse input: {}",
+                std::io::Error::last_os_error()
+            )));
         }
         let mut point = POINT { x: 0, y: 0 };
         if unsafe { GetCursorPos(&mut point) } == FALSE {
+            let error = std::io::Error::last_os_error();
             register_raw_mouse(RIDEV_REMOVE, null_mut());
-            return Err(PointerLockError(
-                "Could not read the pointer position".into(),
-            ));
+            return Err(PointerLockError(format!(
+                "Could not read the pointer position: {error}"
+            )));
         }
         let clip = RECT {
             left: point.x,
@@ -171,8 +173,11 @@ impl Interaction {
             bottom: point.y + 1,
         };
         if unsafe { ClipCursor(&clip) } == FALSE {
+            let error = std::io::Error::last_os_error();
             register_raw_mouse(RIDEV_REMOVE, null_mut());
-            return Err(PointerLockError("Could not confine the pointer".into()));
+            return Err(PointerLockError(format!(
+                "Could not confine the pointer: {error}"
+            )));
         }
         unsafe {
             ShowCursor(FALSE);
