@@ -69,8 +69,6 @@ unsafe extern "C" {
     pub(super) fn CGContextSetLineWidth(context: CGContextRef, width: f64);
     pub(super) fn CGContextSetLineCap(context: CGContextRef, cap: i32);
     pub(super) fn CGContextSetLineJoin(context: CGContextRef, join: i32);
-    pub(super) fn CGContextFillRect(context: CGContextRef, rect: CGRect);
-    pub(super) fn CGContextStrokeRect(context: CGContextRef, rect: CGRect);
     pub(super) fn CGContextBeginPath(context: CGContextRef);
     pub(super) fn CGContextClosePath(context: CGContextRef);
     pub(super) fn CGContextMoveToPoint(context: CGContextRef, x: f64, y: f64);
@@ -147,7 +145,79 @@ unsafe extern "C" {
     pub(super) fn CGContextRelease(context: CGContextRef);
     pub(super) fn CGContextSetTextMatrix(context: CGContextRef, transform: CGAffineTransform);
     pub(super) fn CGContextSetTextPosition(context: CGContextRef, x: f64, y: f64);
+    pub(super) fn CGContextEOFillPath(context: CGContextRef);
+    pub(super) fn CGContextEOClip(context: CGContextRef);
+    pub(super) fn CGContextReplacePathWithStrokedPath(context: CGContextRef);
+    pub(super) fn CGContextGetClipBoundingBox(context: CGContextRef) -> CGRect;
+    pub(super) fn CGContextSetMiterLimit(context: CGContextRef, limit: f64);
+    pub(super) fn CGContextSetLineDash(
+        context: CGContextRef,
+        phase: f64,
+        lengths: *const f64,
+        count: usize,
+    );
+    pub(super) fn CGContextSetAlpha(context: CGContextRef, alpha: f64);
+    pub(super) fn CGContextSetBlendMode(context: CGContextRef, mode: i32);
+    pub(super) fn CGContextBeginTransparencyLayer(context: CGContextRef, info: CFDictionaryRef);
+    pub(super) fn CGContextEndTransparencyLayer(context: CGContextRef);
+    pub(super) fn CGGradientCreateWithColorComponents(
+        space: *mut c_void,
+        components: *const f64,
+        locations: *const f64,
+        count: usize,
+    ) -> *mut c_void;
+    pub(super) fn CGGradientRelease(gradient: *mut c_void);
+    pub(super) fn CGContextDrawLinearGradient(
+        context: CGContextRef,
+        gradient: *mut c_void,
+        start: CGPoint,
+        end: CGPoint,
+        options: u32,
+    );
+    pub(super) fn CGContextDrawRadialGradient(
+        context: CGContextRef,
+        gradient: *mut c_void,
+        start_center: CGPoint,
+        start_radius: f64,
+        end_center: CGPoint,
+        end_radius: f64,
+        options: u32,
+    );
+    pub(super) fn CGDataProviderCreateWithData(
+        info: *mut c_void,
+        data: *const c_void,
+        size: usize,
+        release: unsafe extern "C" fn(*mut c_void, *const c_void, usize),
+    ) -> *mut c_void;
+    pub(super) fn CGDataProviderRelease(provider: *mut c_void);
+    pub(super) fn CGImageCreate(
+        width: usize,
+        height: usize,
+        bits_per_component: usize,
+        bits_per_pixel: usize,
+        bytes_per_row: usize,
+        space: *mut c_void,
+        bitmap_info: u32,
+        provider: *mut c_void,
+        decode: *const f64,
+        should_interpolate: bool,
+        intent: i32,
+    ) -> *mut c_void;
+    pub(super) fn CGImageRelease(image: *mut c_void);
+    pub(super) fn CGContextDrawImage(context: CGContextRef, rect: CGRect, image: *mut c_void);
+    pub(super) fn CGContextSetInterpolationQuality(context: CGContextRef, quality: i32);
+    pub(super) fn CGContextSetTextDrawingMode(context: CGContextRef, mode: i32);
 }
+
+pub(super) const K_CG_TEXT_FILL: i32 = 0;
+pub(super) const K_CG_TEXT_CLIP: i32 = 7;
+
+pub(super) const K_CG_GRADIENT_DRAWS_BEFORE_START: u32 = 1;
+pub(super) const K_CG_GRADIENT_DRAWS_AFTER_END: u32 = 2;
+pub(super) const K_CG_INTERPOLATION_NONE: i32 = 1;
+pub(super) const K_CG_INTERPOLATION_HIGH: i32 = 3;
+// Premultiplied alpha first in little endian 32-bit pixels, which is BGRA in memory.
+pub(super) const K_CG_IMAGE_PREMULTIPLIED_BGRA: u32 = 2 | (2 << 12);
 
 #[link(name = "CoreFoundation", kind = "framework")]
 unsafe extern "C" {

@@ -110,7 +110,6 @@ impl ID2D1Factory {
             })
         }
     }
-    #[cfg(feature = "window")]
     pub(super) unsafe fn CreateHwndRenderTarget(
         &self,
         properties: *const D2D1_RENDER_TARGET_PROPERTIES,
@@ -152,46 +151,98 @@ pub(super) struct ID2D1RenderTarget {
 #[repr(C)]
 struct ID2D1RenderTargetVtbl {
     base: IUnknownVtbl,
-    _unused_3_7: [*const c_void; 5],
+    _unused_3_3: [*const c_void; 1],
+    CreateBitmap: unsafe extern "system" fn(
+        *mut ID2D1RenderTarget,
+        D2D_SIZE_U,
+        *const c_void,
+        u32,
+        *const D2D1_BITMAP_PROPERTIES,
+        *mut *mut ID2D1Bitmap,
+    ) -> i32,
+    _unused_5_6: [*const c_void; 2],
+    CreateBitmapBrush: unsafe extern "system" fn(
+        *mut ID2D1RenderTarget,
+        *mut ID2D1Bitmap,
+        *const c_void,
+        *const D2D1_BRUSH_PROPERTIES,
+        *mut *mut ID2D1Brush,
+    ) -> i32,
     CreateSolidColorBrush: unsafe extern "system" fn(
         *mut ID2D1RenderTarget,
         *const D2D1_COLOR_F,
         *const c_void,
         *mut *mut ID2D1SolidColorBrush,
     ) -> i32,
-    _unused_9_15: [*const c_void; 7],
+    CreateGradientStopCollection: unsafe extern "system" fn(
+        *mut ID2D1RenderTarget,
+        *const D2D1_GRADIENT_STOP,
+        u32,
+        u32,
+        u32,
+        *mut *mut ID2D1GradientStopCollection,
+    ) -> i32,
+    CreateLinearGradientBrush: unsafe extern "system" fn(
+        *mut ID2D1RenderTarget,
+        *const D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES,
+        *const D2D1_BRUSH_PROPERTIES,
+        *mut ID2D1GradientStopCollection,
+        *mut *mut ID2D1Brush,
+    ) -> i32,
+    CreateRadialGradientBrush: unsafe extern "system" fn(
+        *mut ID2D1RenderTarget,
+        *const D2D1_RADIAL_GRADIENT_BRUSH_PROPERTIES,
+        *const D2D1_BRUSH_PROPERTIES,
+        *mut ID2D1GradientStopCollection,
+        *mut *mut ID2D1Brush,
+    ) -> i32,
+    CreateCompatibleRenderTarget: unsafe extern "system" fn(
+        *mut ID2D1RenderTarget,
+        *const c_void,
+        *const c_void,
+        *const c_void,
+        u32,
+        *mut *mut ID2D1BitmapRenderTarget,
+    ) -> i32,
+    _unused_13_15: [*const c_void; 3],
     DrawRectangle: unsafe extern "system" fn(
         *mut ID2D1RenderTarget,
         *const D2D_RECT_F,
-        *mut ID2D1SolidColorBrush,
+        *mut ID2D1Brush,
         f32,
         *mut ID2D1StrokeStyle,
     ),
-    FillRectangle: unsafe extern "system" fn(
-        *mut ID2D1RenderTarget,
-        *const D2D_RECT_F,
-        *mut ID2D1SolidColorBrush,
-    ),
+    FillRectangle:
+        unsafe extern "system" fn(*mut ID2D1RenderTarget, *const D2D_RECT_F, *mut ID2D1Brush),
     _unused_18_21: [*const c_void; 4],
     DrawGeometry: unsafe extern "system" fn(
         *mut ID2D1RenderTarget,
         *mut ID2D1PathGeometry,
-        *mut ID2D1SolidColorBrush,
+        *mut ID2D1Brush,
         f32,
         *mut ID2D1StrokeStyle,
     ),
     FillGeometry: unsafe extern "system" fn(
         *mut ID2D1RenderTarget,
         *mut ID2D1PathGeometry,
-        *mut ID2D1SolidColorBrush,
-        *mut ID2D1SolidColorBrush,
+        *mut ID2D1Brush,
+        *mut ID2D1Brush,
     ),
-    _unused_24_27: [*const c_void; 4],
+    _unused_24_25: [*const c_void; 2],
+    DrawBitmap: unsafe extern "system" fn(
+        *mut ID2D1RenderTarget,
+        *mut ID2D1Bitmap,
+        *const D2D_RECT_F,
+        f32,
+        u32,
+        *const D2D_RECT_F,
+    ),
+    _unused_27_27: [*const c_void; 1],
     DrawTextLayout: unsafe extern "system" fn(
         *mut ID2D1RenderTarget,
         D2D_POINT_2F,
         *mut IDWriteTextLayout,
-        *mut ID2D1SolidColorBrush,
+        *mut ID2D1Brush,
         u32,
     ),
     _unused_29_29: [*const c_void; 1],
@@ -211,10 +262,25 @@ struct ID2D1RenderTargetVtbl {
     EndDraw: unsafe extern "system" fn(*mut ID2D1RenderTarget, *mut u64, *mut u64) -> i32,
     _unused_50_50: [*const c_void; 1],
     SetDpi: unsafe extern "system" fn(*mut ID2D1RenderTarget, f32, f32),
-    _unused_52_56: [*const c_void; 5],
+    GetDpi: unsafe extern "system" fn(*mut ID2D1RenderTarget, *mut f32, *mut f32),
+    _unused_53_53: [*const c_void; 1],
+    // Structs are returned through a pointer after `this`, which is returned too.
+    GetPixelSize:
+        unsafe extern "system" fn(*mut ID2D1RenderTarget, *mut D2D_SIZE_U) -> *mut D2D_SIZE_U,
+    _unused_55_56: [*const c_void; 2],
 }
 
 impl ID2D1RenderTarget {
+    pub(super) unsafe fn GetDpi(&self) -> (f32, f32) {
+        let (mut x, mut y) = (0.0, 0.0);
+        unsafe { ((*self.lpVtbl).GetDpi)(self as *const Self as *mut Self, &mut x, &mut y) };
+        (x, y)
+    }
+    pub(super) unsafe fn GetPixelSize(&self) -> D2D_SIZE_U {
+        let mut size = D2D_SIZE_U::default();
+        unsafe { ((*self.lpVtbl).GetPixelSize)(self as *const Self as *mut Self, &mut size) };
+        size
+    }
     pub(super) unsafe fn CreateSolidColorBrush(
         &self,
         color: *const D2D1_COLOR_F,
@@ -234,7 +300,7 @@ impl ID2D1RenderTarget {
     pub(super) unsafe fn DrawRectangle(
         &self,
         rect: *const D2D_RECT_F,
-        brush: *mut ID2D1SolidColorBrush,
+        brush: *mut ID2D1Brush,
         width: f32,
         style: *mut ID2D1StrokeStyle,
     ) {
@@ -248,17 +314,13 @@ impl ID2D1RenderTarget {
             )
         }
     }
-    pub(super) unsafe fn FillRectangle(
-        &self,
-        rect: *const D2D_RECT_F,
-        brush: *mut ID2D1SolidColorBrush,
-    ) {
+    pub(super) unsafe fn FillRectangle(&self, rect: *const D2D_RECT_F, brush: *mut ID2D1Brush) {
         unsafe { ((*self.lpVtbl).FillRectangle)(self as *const Self as *mut Self, rect, brush) }
     }
     pub(super) unsafe fn DrawGeometry(
         &self,
         geometry: *mut ID2D1PathGeometry,
-        brush: *mut ID2D1SolidColorBrush,
+        brush: *mut ID2D1Brush,
         width: f32,
         style: *mut ID2D1StrokeStyle,
     ) {
@@ -275,8 +337,8 @@ impl ID2D1RenderTarget {
     pub(super) unsafe fn FillGeometry(
         &self,
         geometry: *mut ID2D1PathGeometry,
-        brush: *mut ID2D1SolidColorBrush,
-        opacity_brush: *mut ID2D1SolidColorBrush,
+        brush: *mut ID2D1Brush,
+        opacity_brush: *mut ID2D1Brush,
     ) {
         unsafe {
             ((*self.lpVtbl).FillGeometry)(
@@ -291,7 +353,7 @@ impl ID2D1RenderTarget {
         &self,
         origin: D2D_POINT_2F,
         layout: *mut IDWriteTextLayout,
-        brush: *mut ID2D1SolidColorBrush,
+        brush: *mut ID2D1Brush,
         options: u32,
     ) {
         unsafe {
@@ -301,6 +363,131 @@ impl ID2D1RenderTarget {
                 layout,
                 brush,
                 options,
+            )
+        }
+    }
+    pub(super) unsafe fn CreateBitmap(
+        &self,
+        size: D2D_SIZE_U,
+        pixels: *const c_void,
+        pitch: u32,
+        properties: *const D2D1_BITMAP_PROPERTIES,
+    ) -> Result<ComPtr<ID2D1Bitmap>, i32> {
+        unsafe {
+            ComPtr::create(|out| {
+                ((*self.lpVtbl).CreateBitmap)(
+                    self as *const Self as *mut Self,
+                    size,
+                    pixels,
+                    pitch,
+                    properties,
+                    out,
+                )
+            })
+        }
+    }
+    pub(super) unsafe fn CreateBitmapBrush(
+        &self,
+        bitmap: *mut ID2D1Bitmap,
+    ) -> Result<ComPtr<ID2D1Brush>, i32> {
+        unsafe {
+            ComPtr::create(|out| {
+                ((*self.lpVtbl).CreateBitmapBrush)(
+                    self as *const Self as *mut Self,
+                    bitmap,
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    out,
+                )
+            })
+        }
+    }
+    pub(super) unsafe fn CreateGradientStopCollection(
+        &self,
+        stops: &[D2D1_GRADIENT_STOP],
+        extend: u32,
+    ) -> Result<ComPtr<ID2D1GradientStopCollection>, i32> {
+        unsafe {
+            ComPtr::create(|out| {
+                ((*self.lpVtbl).CreateGradientStopCollection)(
+                    self as *const Self as *mut Self,
+                    stops.as_ptr(),
+                    stops.len() as u32,
+                    D2D1_GAMMA_2_2,
+                    extend,
+                    out,
+                )
+            })
+        }
+    }
+    pub(super) unsafe fn CreateLinearGradientBrush(
+        &self,
+        gradient: *const D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES,
+        brush: *const D2D1_BRUSH_PROPERTIES,
+        stops: *mut ID2D1GradientStopCollection,
+    ) -> Result<ComPtr<ID2D1Brush>, i32> {
+        unsafe {
+            ComPtr::create(|out| {
+                ((*self.lpVtbl).CreateLinearGradientBrush)(
+                    self as *const Self as *mut Self,
+                    gradient,
+                    brush,
+                    stops,
+                    out,
+                )
+            })
+        }
+    }
+    pub(super) unsafe fn CreateRadialGradientBrush(
+        &self,
+        gradient: *const D2D1_RADIAL_GRADIENT_BRUSH_PROPERTIES,
+        brush: *const D2D1_BRUSH_PROPERTIES,
+        stops: *mut ID2D1GradientStopCollection,
+    ) -> Result<ComPtr<ID2D1Brush>, i32> {
+        unsafe {
+            ComPtr::create(|out| {
+                ((*self.lpVtbl).CreateRadialGradientBrush)(
+                    self as *const Self as *mut Self,
+                    gradient,
+                    brush,
+                    stops,
+                    out,
+                )
+            })
+        }
+    }
+    /// A bitmap render target with the size, DPI and pixel format of this one.
+    pub(super) unsafe fn CreateCompatibleRenderTarget(
+        &self,
+    ) -> Result<ComPtr<ID2D1BitmapRenderTarget>, i32> {
+        unsafe {
+            ComPtr::create(|out| {
+                ((*self.lpVtbl).CreateCompatibleRenderTarget)(
+                    self as *const Self as *mut Self,
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    0,
+                    out,
+                )
+            })
+        }
+    }
+    pub(super) unsafe fn DrawBitmap(
+        &self,
+        bitmap: *mut ID2D1Bitmap,
+        rect: *const D2D_RECT_F,
+        opacity: f32,
+        interpolation: u32,
+    ) {
+        unsafe {
+            ((*self.lpVtbl).DrawBitmap)(
+                self as *const Self as *mut Self,
+                bitmap,
+                rect,
+                opacity,
+                interpolation,
+                std::ptr::null(),
             )
         }
     }
@@ -358,7 +545,6 @@ struct ID2D1HwndRenderTargetVtbl {
 }
 
 impl ID2D1HwndRenderTarget {
-    #[cfg(feature = "window")]
     pub(super) unsafe fn Resize(&self, size: *const D2D_SIZE_U) -> Result<(), i32> {
         unsafe {
             check(((*self.lpVtbl).Resize)(
@@ -406,6 +592,137 @@ impl Deref for ID2D1DCRenderTarget {
     }
 }
 
+#[repr(C)]
+pub(super) struct ID2D1BitmapRenderTarget {
+    lpVtbl: *const ID2D1BitmapRenderTargetVtbl,
+}
+
+#[repr(C)]
+struct ID2D1BitmapRenderTargetVtbl {
+    base: ID2D1RenderTargetVtbl,
+    GetBitmap:
+        unsafe extern "system" fn(*mut ID2D1BitmapRenderTarget, *mut *mut ID2D1Bitmap) -> i32,
+}
+
+impl ID2D1BitmapRenderTarget {
+    pub(super) unsafe fn GetBitmap(&self) -> Result<ComPtr<ID2D1Bitmap>, i32> {
+        unsafe {
+            ComPtr::create(|out| ((*self.lpVtbl).GetBitmap)(self as *const Self as *mut Self, out))
+        }
+    }
+}
+
+impl Deref for ID2D1BitmapRenderTarget {
+    type Target = ID2D1RenderTarget;
+    fn deref(&self) -> &ID2D1RenderTarget {
+        unsafe { &*(self as *const Self).cast() }
+    }
+}
+
+/// Any brush, solid, gradient or bitmap.
+#[repr(C)]
+pub(super) struct ID2D1Brush {
+    _vtable: *const IUnknownVtbl,
+}
+
+// Solid color brushes begin with the ID2D1Brush vtable.
+impl Deref for ID2D1SolidColorBrush {
+    type Target = ID2D1Brush;
+    fn deref(&self) -> &ID2D1Brush {
+        unsafe { &*(self as *const Self).cast() }
+    }
+}
+
+#[repr(C)]
+pub(super) struct ID2D1Bitmap {
+    lpVtbl: *const ID2D1BitmapVtbl,
+}
+
+#[repr(C)]
+struct ID2D1BitmapVtbl {
+    base: IUnknownVtbl,
+    _unused_3_8: [*const c_void; 6],
+    CopyFromRenderTarget: unsafe extern "system" fn(
+        *mut ID2D1Bitmap,
+        *const c_void,
+        *mut ID2D1RenderTarget,
+        *const c_void,
+    ) -> i32,
+}
+
+impl ID2D1Bitmap {
+    /// Copy all of a render target with the same size into this bitmap.
+    pub(super) unsafe fn CopyFromRenderTarget(
+        &self,
+        target: *mut ID2D1RenderTarget,
+    ) -> Result<(), i32> {
+        unsafe {
+            check(((*self.lpVtbl).CopyFromRenderTarget)(
+                self as *const Self as *mut Self,
+                std::ptr::null(),
+                target,
+                std::ptr::null(),
+            ))
+        }
+    }
+}
+
+/// A Direct2D 1.1 effect.
+#[repr(C)]
+pub(super) struct ID2D1Effect {
+    lpVtbl: *const ID2D1EffectVtbl,
+}
+
+#[repr(C)]
+struct ID2D1EffectVtbl {
+    base: IUnknownVtbl,
+    _unused_3_8: [*const c_void; 6],
+    SetValue: unsafe extern "system" fn(*mut ID2D1Effect, u32, u32, *const u8, u32) -> i32,
+    _unused_10_13: [*const c_void; 4],
+    SetInput: unsafe extern "system" fn(*mut ID2D1Effect, u32, *mut c_void, BOOL),
+    _unused_15_17: [*const c_void; 3],
+    GetOutput: unsafe extern "system" fn(*mut ID2D1Effect, *mut *mut c_void),
+}
+
+impl ID2D1Effect {
+    /// Set a property to a value whose type is checked by its size.
+    pub(super) unsafe fn SetValue<T: Copy>(&self, index: u32, value: T) -> Result<(), i32> {
+        unsafe {
+            check(((*self.lpVtbl).SetValue)(
+                self as *const Self as *mut Self,
+                index,
+                0,
+                (&raw const value).cast(),
+                size_of::<T>() as u32,
+            ))
+        }
+    }
+    pub(super) unsafe fn SetInput(&self, index: u32, image: *mut c_void) {
+        unsafe { ((*self.lpVtbl).SetInput)(self as *const Self as *mut Self, index, image, 1) }
+    }
+    /// The output image, which holds a reference.
+    pub(super) unsafe fn GetOutput(&self) -> ComPtr<ID2D1Image> {
+        unsafe {
+            ComPtr::create(|out: *mut *mut ID2D1Image| {
+                ((*self.lpVtbl).GetOutput)(self as *const Self as *mut Self, out.cast());
+                0
+            })
+        }
+        .expect("Direct2D effect output")
+    }
+}
+
+/// A Direct2D 1.1 image, like a bitmap or an effect output.
+#[repr(C)]
+pub(super) struct ID2D1Image {
+    _vtable: *const IUnknownVtbl,
+}
+
+#[repr(C)]
+pub(super) struct ID2D1GradientStopCollection {
+    _vtable: *const IUnknownVtbl,
+}
+
 /// Direct2D 1.1 interface, queried from a render target on Windows 8 and later.
 #[repr(C)]
 pub(super) struct ID2D1DeviceContext {
@@ -415,13 +732,78 @@ pub(super) struct ID2D1DeviceContext {
 #[repr(C)]
 struct ID2D1DeviceContextVtbl {
     base: ID2D1RenderTargetVtbl,
-    _unused_57_77: [*const c_void; 21],
+    _unused_57_62: [*const c_void; 6],
+    CreateEffect: unsafe extern "system" fn(
+        *mut ID2D1DeviceContext,
+        *const GUID,
+        *mut *mut ID2D1Effect,
+    ) -> i32,
+    _unused_64_77: [*const c_void; 14],
     SetPrimitiveBlend: unsafe extern "system" fn(*mut ID2D1DeviceContext, u32),
+    _unused_79_82: [*const c_void; 4],
+    DrawImage: unsafe extern "system" fn(
+        *mut ID2D1DeviceContext,
+        *mut c_void,
+        *const D2D_POINT_2F,
+        *const D2D_RECT_F,
+        u32,
+        u32,
+    ),
+    _unused_84_84: [*const c_void; 1],
+    DrawBitmap: unsafe extern "system" fn(
+        *mut ID2D1DeviceContext,
+        *mut ID2D1Bitmap,
+        *const D2D_RECT_F,
+        f32,
+        u32,
+        *const D2D_RECT_F,
+        *const c_void,
+    ),
 }
 
 impl ID2D1DeviceContext {
+    pub(super) unsafe fn CreateEffect(&self, clsid: &GUID) -> Result<ComPtr<ID2D1Effect>, i32> {
+        unsafe {
+            ComPtr::create(|out| {
+                ((*self.lpVtbl).CreateEffect)(self as *const Self as *mut Self, clsid, out)
+            })
+        }
+    }
+    /// Draw an image at the origin of the world transform with a composite mode.
+    pub(super) unsafe fn DrawImage(&self, image: *mut c_void, composite: u32) {
+        unsafe {
+            ((*self.lpVtbl).DrawImage)(
+                self as *const Self as *mut Self,
+                image,
+                std::ptr::null(),
+                std::ptr::null(),
+                1,
+                composite,
+            )
+        }
+    }
     pub(super) unsafe fn SetPrimitiveBlend(&self, blend: u32) {
         unsafe { ((*self.lpVtbl).SetPrimitiveBlend)(self as *const Self as *mut Self, blend) }
+    }
+    /// Draw a bitmap with a Direct2D 1.1 interpolation mode, like high quality cubic.
+    pub(super) unsafe fn DrawBitmap(
+        &self,
+        bitmap: *mut ID2D1Bitmap,
+        rect: *const D2D_RECT_F,
+        opacity: f32,
+        interpolation: u32,
+    ) {
+        unsafe {
+            ((*self.lpVtbl).DrawBitmap)(
+                self as *const Self as *mut Self,
+                bitmap,
+                rect,
+                opacity,
+                interpolation,
+                std::ptr::null(),
+                std::ptr::null(),
+            )
+        }
     }
 }
 
@@ -433,11 +815,38 @@ pub(super) struct ID2D1PathGeometry {
 #[repr(C)]
 struct ID2D1PathGeometryVtbl {
     base: IUnknownVtbl,
-    _unused_3_16: [*const c_void; 14],
+    _unused_3_15: [*const c_void; 13],
+    Widen: unsafe extern "system" fn(
+        *mut ID2D1PathGeometry,
+        f32,
+        *mut ID2D1StrokeStyle,
+        *const D2D_MATRIX_3X2_F,
+        f32,
+        *mut ID2D1GeometrySink,
+    ) -> i32,
     Open: unsafe extern "system" fn(*mut ID2D1PathGeometry, *mut *mut ID2D1GeometrySink) -> i32,
 }
 
 impl ID2D1PathGeometry {
+    /// Write the outline of the stroke of this geometry, transformed, into a sink.
+    pub(super) unsafe fn Widen(
+        &self,
+        width: f32,
+        style: *mut ID2D1StrokeStyle,
+        transform: &D2D_MATRIX_3X2_F,
+        sink: *mut ID2D1GeometrySink,
+    ) -> Result<(), i32> {
+        unsafe {
+            check(((*self.lpVtbl).Widen)(
+                self as *const Self as *mut Self,
+                width,
+                style,
+                transform,
+                0.25,
+                sink,
+            ))
+        }
+    }
     pub(super) unsafe fn Open(&self) -> Result<ComPtr<ID2D1GeometrySink>, i32> {
         unsafe {
             ComPtr::create(|out| ((*self.lpVtbl).Open)(self as *const Self as *mut Self, out))
@@ -779,7 +1188,6 @@ pub(super) struct D2D1_RENDER_TARGET_PROPERTIES {
     pub(super) minLevel: u32,
 }
 
-#[cfg(feature = "window")]
 pub(super) const D2D1_PRESENT_OPTIONS_IMMEDIATELY: u32 = 2;
 
 #[repr(C)]
@@ -819,13 +1227,51 @@ pub(super) struct D2D1_QUADRATIC_BEZIER_SEGMENT {
 
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
+pub(super) struct D2D1_GRADIENT_STOP {
+    pub(super) position: f32,
+    pub(super) color: D2D1_COLOR_F,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub(super) struct D2D1_BRUSH_PROPERTIES {
+    pub(super) opacity: f32,
+    pub(super) transform: D2D_MATRIX_3X2_F,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub(super) struct D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES {
+    pub(super) startPoint: D2D_POINT_2F,
+    pub(super) endPoint: D2D_POINT_2F,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub(super) struct D2D1_RADIAL_GRADIENT_BRUSH_PROPERTIES {
+    pub(super) center: D2D_POINT_2F,
+    pub(super) gradientOriginOffset: D2D_POINT_2F,
+    pub(super) radiusX: f32,
+    pub(super) radiusY: f32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub(super) struct D2D1_BITMAP_PROPERTIES {
+    pub(super) pixelFormat: D2D1_PIXEL_FORMAT,
+    pub(super) dpiX: f32,
+    pub(super) dpiY: f32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
 pub(super) struct D2D1_LAYER_PARAMETERS {
     pub(super) contentBounds: D2D_RECT_F,
     pub(super) geometricMask: *mut ID2D1PathGeometry,
     pub(super) maskAntialiasMode: u32,
     pub(super) maskTransform: D2D_MATRIX_3X2_F,
     pub(super) opacity: f32,
-    pub(super) opacityBrush: *mut ID2D1SolidColorBrush,
+    pub(super) opacityBrush: *mut ID2D1Brush,
     pub(super) layerOptions: u32,
 }
 
@@ -867,16 +1313,38 @@ impl D2D_MATRIX_3X2_F {
     }
 }
 
-#[cfg(feature = "window")]
 pub(super) const D2D1_ALPHA_MODE_UNKNOWN: u32 = 0;
 pub(super) const D2D1_ALPHA_MODE_PREMULTIPLIED: u32 = 1;
 pub(super) const D2D1_RENDER_TARGET_TYPE_SOFTWARE: u32 = 1;
-#[cfg(feature = "window")]
 pub(super) const DXGI_FORMAT_UNKNOWN: u32 = 0;
 pub(super) const DXGI_FORMAT_B8G8R8A8_UNORM: u32 = 87;
 pub(super) const D2D1_ANTIALIAS_MODE_PER_PRIMITIVE: u32 = 0;
 pub(super) const D2D1_ANTIALIAS_MODE_ALIASED: u32 = 1;
+pub(super) const D2D1_FILL_MODE_ALTERNATE: u32 = 0;
 pub(super) const D2D1_FILL_MODE_WINDING: u32 = 1;
+pub(super) const D2D1_GAMMA_2_2: u32 = 0;
+pub(super) const D2D1_EXTEND_MODE_CLAMP: u32 = 0;
+pub(super) const D2D1_EXTEND_MODE_WRAP: u32 = 1;
+pub(super) const D2D1_EXTEND_MODE_MIRROR: u32 = 2;
+pub(super) const D2D1_DASH_STYLE_CUSTOM: u32 = 5;
+pub(super) const D2D1_BITMAP_INTERPOLATION_MODE_NEAREST_NEIGHBOR: u32 = 0;
+pub(super) const D2D1_BITMAP_INTERPOLATION_MODE_LINEAR: u32 = 1;
+pub(super) const D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR: u32 = 0;
+pub(super) const D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC: u32 = 5;
+pub(super) const D2D1_PRIMITIVE_BLEND_ADD: u32 = 3;
+pub(super) const CLSID_D2D1_BLEND: GUID = GUID {
+    data1: 0x81c5_b77b,
+    data2: 0x13f8,
+    data3: 0x4cdd,
+    data4: [0xad, 0x20, 0xc8, 0x90, 0x54, 0x7a, 0xc6, 0x5d],
+};
+pub(super) const CLSID_D2D1_OPACITY: GUID = GUID {
+    data1: 0x811d_79a4,
+    data2: 0xde28,
+    data3: 0x4454,
+    data4: [0x80, 0x94, 0xc6, 0x46, 0x85, 0xf8, 0xbd, 0x4c],
+};
+pub(super) const D2D1_COMPOSITE_MODE_SOURCE_COPY: u32 = 10;
 pub(super) const D2D1_FIGURE_BEGIN_FILLED: u32 = 0;
 pub(super) const D2D1_FIGURE_END_OPEN: u32 = 0;
 pub(super) const D2D1_FIGURE_END_CLOSED: u32 = 1;
@@ -903,7 +1371,25 @@ const _: () = {
     assert!(std::mem::offset_of!(ID2D1FactoryVtbl, CreateStrokeStyle) == 11 * slot);
     assert!(std::mem::offset_of!(ID2D1FactoryVtbl, CreateHwndRenderTarget) == 14 * slot);
     assert!(std::mem::offset_of!(ID2D1FactoryVtbl, CreateDCRenderTarget) == 16 * slot);
+    assert!(std::mem::offset_of!(ID2D1RenderTargetVtbl, CreateBitmap) == 4 * slot);
+    assert!(std::mem::offset_of!(ID2D1RenderTargetVtbl, CreateBitmapBrush) == 7 * slot);
     assert!(std::mem::offset_of!(ID2D1RenderTargetVtbl, CreateSolidColorBrush) == 8 * slot);
+    assert!(std::mem::offset_of!(ID2D1RenderTargetVtbl, CreateGradientStopCollection) == 9 * slot);
+    assert!(std::mem::offset_of!(ID2D1RenderTargetVtbl, CreateLinearGradientBrush) == 10 * slot);
+    assert!(std::mem::offset_of!(ID2D1RenderTargetVtbl, CreateRadialGradientBrush) == 11 * slot);
+    assert!(std::mem::offset_of!(ID2D1RenderTargetVtbl, CreateCompatibleRenderTarget) == 12 * slot);
+    assert!(std::mem::offset_of!(ID2D1RenderTargetVtbl, DrawBitmap) == 26 * slot);
+    assert!(std::mem::offset_of!(ID2D1BitmapRenderTargetVtbl, GetBitmap) == 57 * slot);
+    assert!(std::mem::offset_of!(ID2D1DeviceContextVtbl, DrawBitmap) == 85 * slot);
+    assert!(std::mem::offset_of!(ID2D1DeviceContextVtbl, CreateEffect) == 63 * slot);
+    assert!(std::mem::offset_of!(ID2D1DeviceContextVtbl, DrawImage) == 83 * slot);
+    assert!(std::mem::offset_of!(ID2D1RenderTargetVtbl, GetDpi) == 52 * slot);
+    assert!(std::mem::offset_of!(ID2D1RenderTargetVtbl, GetPixelSize) == 54 * slot);
+    assert!(std::mem::offset_of!(ID2D1BitmapVtbl, CopyFromRenderTarget) == 9 * slot);
+    assert!(std::mem::offset_of!(ID2D1EffectVtbl, SetValue) == 9 * slot);
+    assert!(std::mem::offset_of!(ID2D1EffectVtbl, SetInput) == 14 * slot);
+    assert!(std::mem::offset_of!(ID2D1EffectVtbl, GetOutput) == 18 * slot);
+    assert!(std::mem::offset_of!(ID2D1PathGeometryVtbl, Widen) == 16 * slot);
     assert!(std::mem::offset_of!(ID2D1RenderTargetVtbl, DrawRectangle) == 16 * slot);
     assert!(std::mem::offset_of!(ID2D1RenderTargetVtbl, FillRectangle) == 17 * slot);
     assert!(std::mem::offset_of!(ID2D1RenderTargetVtbl, DrawGeometry) == 22 * slot);
@@ -949,6 +1435,10 @@ const _: () = {
     assert!(size_of::<D2D1_BEZIER_SEGMENT>() == 24);
     assert!(size_of::<D2D1_QUADRATIC_BEZIER_SEGMENT>() == 16);
     assert!(size_of::<D2D1_LAYER_PARAMETERS>() == if slot == 8 { 72 } else { 60 });
+    assert!(size_of::<D2D1_GRADIENT_STOP>() == 20);
+    assert!(size_of::<D2D1_BRUSH_PROPERTIES>() == 28);
+    assert!(size_of::<D2D1_RADIAL_GRADIENT_BRUSH_PROPERTIES>() == 24);
+    assert!(size_of::<D2D1_BITMAP_PROPERTIES>() == 16);
     assert!(size_of::<DWRITE_TEXT_METRICS>() == 36);
     assert!(size_of::<DWRITE_LINE_METRICS>() == 24);
 };
@@ -1046,11 +1536,11 @@ mod tests {
 }
 
 // MARK: Window
-// The Win32 API the canvas draws the window client area with.
-#[cfg(feature = "window")]
+// The Win32 API the canvas draws window client areas with.
 mod window {
     use super::{BOOL, HWND, RECT};
 
+    #[cfg(feature = "window")]
     pub(crate) const TRUE: BOOL = 1;
     pub(crate) const FALSE: BOOL = 0;
 
@@ -1059,7 +1549,7 @@ mod window {
         pub(crate) fn GetClientRect(hwnd: HWND, rect: *mut RECT) -> BOOL;
         pub(crate) fn InvalidateRect(hwnd: HWND, rect: *const RECT, erase: BOOL) -> BOOL;
         pub(crate) fn GetDpiForWindow(hwnd: HWND) -> u32;
+        pub(crate) fn ValidateRect(hwnd: HWND, rect: *const RECT) -> BOOL;
     }
 }
-#[cfg(feature = "window")]
 pub(super) use window::*;

@@ -6,7 +6,10 @@ graphics API: Core Graphics on macOS and iOS, Direct2D on Windows, Cairo on Linu
 
 ## Features
 
-- Paths, clipping, transforms, solid RGBA colors, and text
+- Paths, clipping with fill rules, transforms, dashed strokes, and text
+- Solid colors and linear or radial gradients with pad, reflect, or repeat spread
+- Layers with alpha, composite operations, and masks
+- Images drawn from premultiplied BGRA pixels
 - Logical pixel coordinates
 - One event loop shared with window and webview content
 
@@ -64,6 +67,24 @@ method names in snake_case, with getter/setter pairs such as `fill_style()` /
   radii in `arc`, `ellipse`, and `round_rect` panic instead of throwing JavaScript
   exceptions. `round_rect` preserves winding when width or height is negative.
 - `save()` / `restore()` do not include the current path.
+- `fill_with(rule)` and `clip_with(rule)` take the fill rule of `fill(rule)` and
+  `clip(rule)`, gradients add `set_spread` and `set_transform` for SVG paints.
+- `begin_layer()` / `end_layer()` follow the canvas layers proposal: a layer composites
+  with the global alpha and composite operation of its start. `begin_mask_layer()` draws a
+  mask until `end_mask()`, whose alpha masks the layer content.
+- `draw_image(image, x, y, width, height)` draws a `CanvasImage` of premultiplied BGRA
+  pixels, which it shares.
+- Composite operations of drawing only change the area that is drawn, like Core Graphics,
+  while a layer composites over the whole canvas when it ends.
+- Every backend supports the same features. Direct2D blends layers through Direct2D 1.1
+  effects. Android needs Android 10 for the blend modes and Android 12 for radial
+  gradients with a focal point, before which the focal point is the center.
+
+## Native views
+
+`draw_native` draws into a Core Graphics or cairo context of a native view, like the
+`drawRect:` of an NSView or the draw signal of a GTK widget. On Windows `HwndCanvas`
+paints a child window in its `WM_PAINT`.
 
 ## Input
 
