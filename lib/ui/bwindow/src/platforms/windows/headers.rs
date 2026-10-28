@@ -303,6 +303,7 @@ pub(crate) const WM_CREATE: u32 = 0x0001;
 pub(crate) const WM_DESTROY: u32 = 0x0002;
 pub(crate) const WM_MOVE: u32 = 0x0003;
 pub(crate) const WM_SIZE: u32 = 0x0005;
+pub(crate) const WM_SETFOCUS: u32 = 0x0007;
 pub(crate) const WM_PAINT: u32 = 0x000f;
 pub(crate) const WM_CLOSE: u32 = 0x0010;
 pub(crate) const WM_ERASEBKGND: u32 = 0x0014;
@@ -312,6 +313,7 @@ pub(crate) const WM_DROPFILES: u32 = 0x0233;
 pub(crate) const WM_DPICHANGED: u32 = 0x02E0;
 pub(crate) const WM_USER: u32 = 0x0400;
 
+pub(crate) const SW_SHOW: i32 = 5;
 pub(crate) const SW_RESTORE: i32 = 9;
 pub(crate) const SW_SHOWDEFAULT: i32 = 10;
 
@@ -408,6 +410,7 @@ unsafe extern "system" {
     pub(crate) fn SetWindowTextW(hWnd: HWND, lpString: *const w_char) -> i32;
     pub(crate) fn ShowWindow(hWnd: HWND, nCmdShow: i32) -> i32;
     pub(crate) fn UpdateWindow(hWnd: HWND) -> i32;
+    pub(crate) fn SetFocus(hWnd: HWND) -> HWND;
     pub(crate) fn GetWindowRect(hWnd: HWND, rect: *mut RECT) -> i32;
     pub(crate) fn GetClientRect(hWnd: HWND, rect: *mut RECT) -> i32;
     pub(crate) fn SetWindowPos(

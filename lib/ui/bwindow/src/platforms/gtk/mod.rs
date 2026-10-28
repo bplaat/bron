@@ -11,7 +11,7 @@ pub(crate) use crate::platforms::gtk::event_loop::{
     PlatformEventLoop, PlatformEventLoopProxy, PlatformMonitor,
 };
 pub(crate) use crate::platforms::gtk::frame::FrameSource;
-pub(crate) use crate::platforms::gtk::window::PlatformWindow;
+pub(crate) use crate::platforms::gtk::window::{PlatformWindow, embed_native_view};
 
 mod content;
 #[cfg(feature = "dialog")]
@@ -22,8 +22,8 @@ pub(crate) mod file_drop;
 mod frame;
 pub(crate) mod headers;
 mod input;
-mod pointer_lock;
 mod menu;
+mod pointer_lock;
 #[cfg(feature = "progress_bar")]
 mod progress_bar;
 mod window;

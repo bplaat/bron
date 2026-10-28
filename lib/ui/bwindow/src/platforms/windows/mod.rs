@@ -12,7 +12,7 @@ pub(crate) use crate::platforms::windows::event_loop::{
 pub(crate) use crate::platforms::windows::frame::FrameSource;
 pub(crate) use crate::platforms::windows::interaction::release_pointer_lock;
 pub(crate) use crate::platforms::windows::window::{
-    PlatformWindow, config_dir as windows_config_dir,
+    PlatformWindow, config_dir as windows_config_dir, embed_native_view, resize_native_view,
 };
 
 #[cfg(feature = "dialog")]

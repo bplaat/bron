@@ -465,6 +465,11 @@ unsafe extern "system" fn window_proc(
             _self.progress_bar.button_created(hwnd);
             0
         }
+        // Keyboard input goes to the native view filling the window.
+        WM_SETFOCUS if let Some(view) = _self.host.native_view() => {
+            unsafe { SetFocus(view) };
+            0
+        }
         WM_CREATE => {
             WINDOW_COUNT.with(|count| count.set(count.get() + 1));
             send_event(crate::Event::Window(_self.window_id, WindowEvent::Create));
@@ -601,6 +606,41 @@ unsafe extern "system" fn window_proc(
         }
         _ => unsafe { DefWindowProcW(hwnd, msg, w_param, l_param) },
     }
+}
+
+/// Fill the client area of the window with its child window and focus it.
+pub(crate) unsafe fn embed_native_view(
+    window: crate::NativeWindowHandle,
+    _content: Option<crate::NativeContentHandle>,
+    view: crate::NativeViewHandle,
+) {
+    let (crate::NativeWindowHandle::Win32(window), crate::NativeViewHandle::Win32(view)) =
+        (window, view)
+    else {
+        panic!("invalid native view handle");
+    };
+    let mut rect = RECT::default();
+    unsafe { GetClientRect(window, &mut rect) };
+    resize_native_view(view, rect.right as u32, rect.bottom as u32);
+    unsafe { ShowWindow(view, SW_SHOW) };
+    if unsafe { GetActiveWindow() } == window {
+        unsafe { SetFocus(view) };
+    }
+}
+
+/// Size the native view to the client area of its window.
+pub(crate) fn resize_native_view(view: HWND, width: u32, height: u32) {
+    unsafe {
+        SetWindowPos(
+            view,
+            null_mut(),
+            0,
+            0,
+            width as i32,
+            height as i32,
+            SWP_NOZORDER | SWP_NOACTIVATE,
+        )
+    };
 }
 
 pub(crate) fn config_dir() -> PathBuf {

@@ -18,7 +18,10 @@ use objc2::{class, define_class, msg_send};
 
 use super::headers::*;
 use super::input::{macos_key_event, macos_pointer_event, macos_scroll_event};
-use crate::{ButtonState, CursorIcon, WindowEvent, WindowEventSender};
+use crate::{
+    ButtonState, CursorIcon, NativeContentHandle, NativeViewHandle, NativeWindowHandle,
+    WindowEvent, WindowEventSender,
+};
 
 // Mouse entered and exited, mouse moved, active in key window, in visible rect and enabled
 // during mouse drag.
@@ -172,5 +175,35 @@ impl ContentView {
         let window: *mut Object = unsafe { msg_send![self, window] };
         let responder: *mut Object = unsafe { msg_send![window, firstResponder] };
         std::ptr::eq(responder, self as *const Self as *const Object)
+    }
+}
+
+/// Fill the content view with a native view below a titlebar drag view, it becomes the
+/// first responder of the window.
+pub(crate) unsafe fn embed_native_view(
+    window: NativeWindowHandle,
+    content: Option<NativeContentHandle>,
+    view: NativeViewHandle,
+) {
+    let (
+        NativeWindowHandle::AppKit(window),
+        Some(NativeContentHandle::AppKit(content)),
+        NativeViewHandle::AppKit(view),
+    ) = (window, content, view)
+    else {
+        panic!("invalid native view handle");
+    };
+    let (window, content, view) = (
+        window.cast::<Object>(),
+        content.cast::<Object>(),
+        view.cast::<Object>(),
+    );
+    unsafe {
+        let bounds: NSRect = msg_send![content, bounds];
+        let _: () = msg_send![view, setFrame:bounds];
+        let _: () =
+            msg_send![view, setAutoresizingMask:NS_VIEW_WIDTH_SIZABLE | NS_VIEW_HEIGHT_SIZABLE];
+        let _: () = msg_send![content, addSubview:view, positioned:NS_WINDOW_BELOW, relativeTo:null_mut::<Object>()];
+        let _: Bool = msg_send![window, makeFirstResponder:view];
     }
 }

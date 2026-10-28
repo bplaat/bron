@@ -116,6 +116,9 @@ is on, and repeated requests coalesce into one frame.
   `RedrawRequested` callback.
 - Web content: attach `bwebview::WebviewBuilder` and map browser notifications into
   your application's typed events with `on_event(proxy, mapper)`.
+- Native widgets: on macOS, Windows and GTK pass your own NSView, child HWND or
+  GtkWidget, like a native scroll view, to `WindowAttachment::set_native_view`. The window
+  sizes it to the content area and focuses it, the view handles its own input.
 
 A window has one content attachment, taken with `window.attach_content()`. The window
 keeps handling input and pacing frames, the attached content only draws. Content draws

@@ -43,6 +43,19 @@ pub enum NativeContentHandle {
     Android(*mut c_void),
 }
 
+/// A native view that fills the window content area instead of the content host, like a
+/// scroll view. It receives its own input, so the window does not report it again.
+#[cfg(not(any(target_os = "ios", target_os = "android")))]
+#[derive(Clone, Copy, Debug)]
+pub enum NativeViewHandle {
+    /// An AppKit NSView pointer.
+    AppKit(*mut c_void),
+    /// A Win32 HWND created as a child of the window.
+    Win32(*mut c_void),
+    /// A GTK 3 GtkWidget pointer.
+    Gtk(*mut c_void),
+}
+
 /// A cursor shown over window content; native window decorations retain their own cursors.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum CursorIcon {
@@ -65,6 +78,8 @@ pub(crate) struct ContentHost {
     handle: Cell<Option<NativeWindowHandle>>,
     content: Cell<Option<NativeContentHandle>>,
     content_factory: RefCell<Option<ContentFactory>>,
+    #[cfg(not(any(target_os = "ios", target_os = "android")))]
+    native_view: Cell<Option<NativeViewHandle>>,
     scale_factor: Cell<f32>,
     attached: Cell<bool>,
     // A renderer took the content host, so it draws the whole window surface.
@@ -96,6 +111,8 @@ impl ContentHost {
             handle: Cell::new(None),
             content: Cell::new(None),
             content_factory: RefCell::new(None),
+            #[cfg(not(any(target_os = "ios", target_os = "android")))]
+            native_view: Cell::new(None),
             scale_factor: Cell::new(1.0),
             attached: Cell::new(false),
             #[cfg(target_os = "android")]
@@ -167,6 +184,15 @@ impl ContentHost {
         self.content.get()
     }
 
+    /// The native child view of the window, which gets the focus of the window.
+    #[cfg(windows)]
+    pub(crate) const fn native_view(&self) -> Option<*mut c_void> {
+        match self.native_view.get() {
+            Some(NativeViewHandle::Win32(view)) => Some(view),
+            _ => None,
+        }
+    }
+
     pub(crate) const fn id(&self) -> WindowId {
         self.id
     }
@@ -229,6 +255,11 @@ impl ContentHost {
     pub(crate) fn resize(&self, width: u32, height: u32) {
         if self.closed.get() {
             return;
+        }
+        // AppKit, UIKit and GTK lay out the native view themselves.
+        #[cfg(windows)]
+        if let Some(view) = self.native_view() {
+            crate::platforms::resize_native_view(view, width, height);
         }
         let handler = self.resize.borrow().clone();
         if let Some(handler) = handler {
@@ -452,6 +483,28 @@ impl WindowAttachment {
             self.0.draws_content.set(true);
         }
         handle
+    }
+
+    /// Fill the window content area with a native view instead of the content host, the
+    /// window keeps it sized to the content area and focused while the window is active.
+    /// The view handles its own input, so the window does not report it.
+    ///
+    /// # Safety
+    /// `view` must be a live native view of the window's platform, a Win32 view must be a
+    /// child window of [`Self::window_handle`]. Use it only on the main thread and keep it
+    /// alive while this attachment is open.
+    #[cfg(not(any(target_os = "ios", target_os = "android")))]
+    pub unsafe fn set_native_view(&self, view: NativeViewHandle) {
+        assert!(!self.is_closed(), "window is closed");
+        assert!(
+            self.0.native_view.replace(Some(view)).is_none(),
+            "window already has a native view"
+        );
+        // The content host is never created when a native view fills the window.
+        let factory = self.0.content_factory.borrow_mut().take();
+        drop(factory);
+        let window = self.0.handle.get().expect("window has no native handle");
+        unsafe { crate::platforms::embed_native_view(window, self.0.content.get(), view) };
     }
 
     /// Native pixels per logical pixel of the window content.
