@@ -24,8 +24,8 @@ capabilities = ["internetClient", "privateNetworkClientServer"]
 workspace = true
 
 [dependencies]
-bwindow = { path = "../../../lib/ui/bwindow" }
 bwebview = { path = "../../../lib/ui/bwebview" }
+bwindow = { path = "../../../lib/ui/bwindow" }
 
 [build-dependencies]
 winresource = "0.1.31"

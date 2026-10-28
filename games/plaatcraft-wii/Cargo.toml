@@ -16,7 +16,9 @@ sfxr = { version = "0.1.4", default-features = false }
 
 [build-dependencies]
 gxtexconv = { path = "../../tools/wii-toolchain/gxtexconv" }
-image = { path = "../../lib/graphics/image", default-features = false, features = ["png"] }
+image = { path = "../../lib/graphics/image", default-features = false, features = [
+    "png",
+] }
 plaatcraft-engine = { path = "../plaatcraft-engine" }
 
 [patch.crates-io]

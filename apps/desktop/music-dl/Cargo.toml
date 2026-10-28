@@ -20,8 +20,8 @@ workspace = true
 
 [dependencies]
 anyhow = "1.0"
-bwindow = { path = "../../../lib/ui/bwindow" }
 bwebview = { path = "../../../lib/ui/bwebview", features = ["rust-embed"] }
+bwindow = { path = "../../../lib/ui/bwindow" }
 directories = "6.0"
 mp4ameta = "0.13.0"
 percent-encoding = "2.3"

@@ -1,0 +1,14 @@
+include = ["**/*.toml"]
+exclude = ["**/node_modules/**", "**/target/**"]
+
+[formatting]
+indent_string = "    "
+
+[[rule]]
+keys = [
+    "build-dependencies",
+    "dependencies",
+    "target.*.build-dependencies",
+    "target.*.dependencies",
+]
+formatting = { reorder_keys = true }

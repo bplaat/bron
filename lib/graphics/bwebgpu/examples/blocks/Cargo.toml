@@ -8,12 +8,12 @@ repository.workspace = true
 
 [dependencies]
 bcanvas = { path = "../../../bcanvas" }
+bwebgpu = { path = "../.." }
 bwindow = { path = "../../../../ui/bwindow", default-features = false }
 image = { path = "../../../image", default-features = false, features = [
     "png",
 ] }
 rust-embed = "8.12"
-bwebgpu = { path = "../.." }
 
 [build-dependencies]
 bwebgpu-shader-build = { path = "../../../bwebgpu-shader-build" }

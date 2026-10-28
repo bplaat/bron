@@ -10,4 +10,9 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
-naga = { version = "=30.0.1", default-features = false, features = ["wgsl-in", "msl-out", "spv-out", "hlsl-out"] }
+naga = { version = "=30.0.1", default-features = false, features = [
+    "wgsl-in",
+    "msl-out",
+    "spv-out",
+    "hlsl-out",
+] }

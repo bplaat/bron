@@ -8,7 +8,9 @@ repository.workspace = true
 
 [dependencies]
 bcanvas = { path = "../..", default-features = false, features = ["image"] }
-image = { path = "../../../image", default-features = false, features = ["png"] }
+image = { path = "../../../image", default-features = false, features = [
+    "png",
+] }
 
 [lints]
 workspace = true
