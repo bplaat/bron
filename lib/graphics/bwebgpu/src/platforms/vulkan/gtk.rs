@@ -69,6 +69,8 @@ pub(crate) struct Surface {
     pub(super) widget: *mut c_void,
     pub(super) redraw: Rc<Repaint>,
     pub(super) startup_clock: *mut c_void,
+    // The Wayland surface, which shows buffers at their scale instead of GDK.
+    wl_surface: Option<*mut c_void>,
 }
 
 impl Drop for Surface {
@@ -154,7 +156,11 @@ impl Surface {
             let content = widget::Widget::new(area, parent);
             let widget = content.handle;
             let window = platform_window(bwindow::NativeWindowHandle::Gtk(widget))?;
-            let wayland = matches!(window, PlatformWindow::Wayland { .. });
+            let wl_surface = match window {
+                PlatformWindow::Wayland { surface, .. } => Some(surface),
+                PlatformWindow::Xlib { .. } => None,
+            };
+            let wayland = wl_surface.is_some();
             let platform = match window {
                 PlatformWindow::Xlib { .. } => c"VK_KHR_xlib_surface",
                 PlatformWindow::Wayland { .. } => c"VK_KHR_wayland_surface",
@@ -259,7 +265,43 @@ impl Surface {
                 widget,
                 redraw,
                 startup_clock,
+                wl_surface,
             })
+        }
+    }
+
+    /// Show swapchain images of `width` by `height` pixels at the scale of the widget. GDK
+    /// only sets the buffer scale of the Wayland surfaces it draws itself, so without it the
+    /// compositor shows every pixel as a logical pixel. The scale applies with the next
+    /// present, which is the first one with images of this size.
+    pub(super) fn set_buffer_size(&self, width: u32, height: u32) {
+        let Some(surface) = self.wl_surface else {
+            return;
+        };
+        let scale = unsafe { gtk_widget_get_scale_factor(self.widget) }.max(1);
+        // Wayland requires buffer sizes that are a multiple of their scale.
+        let scale = if width.is_multiple_of(scale as u32) && height.is_multiple_of(scale as u32) {
+            scale
+        } else {
+            1
+        };
+        // libwayland-client is GDK's, so its functions are looked up in the process.
+        type GetVersion = unsafe extern "C" fn(*mut c_void) -> u32;
+        type Marshal = unsafe extern "C" fn(*mut c_void, u32, ...);
+        unsafe {
+            let process = dlopen(ptr::null(), 2);
+            let get_version = dlsym(process, c"wl_proxy_get_version".as_ptr());
+            let marshal = dlsym(process, c"wl_proxy_marshal".as_ptr());
+            dlclose(process);
+            if get_version.is_null() || marshal.is_null() {
+                return;
+            }
+            let get_version = std::mem::transmute::<*mut c_void, GetVersion>(get_version);
+            let marshal = std::mem::transmute::<*mut c_void, Marshal>(marshal);
+            // wl_surface.set_buffer_scale exists since version 3.
+            if get_version(surface) >= 3 {
+                marshal(surface, 8, scale);
+            }
         }
     }
 
