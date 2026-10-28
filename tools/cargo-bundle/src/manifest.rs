@@ -122,6 +122,16 @@ pub(crate) struct WindowsMetadata {
     pub virtualization: Option<bool>,
     pub capabilities: Option<Vec<String>>,
     pub file_types: Option<Vec<FileTypeMetadata>>,
+    pub shell_extension: Option<ShellExtensionMetadata>,
+}
+
+#[derive(Clone, Deserialize)]
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) struct ShellExtensionMetadata {
+    pub package: String,
+    pub library: String,
+    pub thumbnail_handler: Option<String>,
+    pub preview_handler: Option<String>,
 }
 
 #[derive(Clone, Deserialize)]
