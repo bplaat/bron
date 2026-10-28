@@ -7,7 +7,7 @@ authors.workspace = true
 repository.workspace = true
 
 [dependencies]
-bcanvas = { path = "../..", default-features = false }
+bcanvas = { path = "../..", default-features = false, features = ["image"] }
 image = { path = "../../../image", default-features = false, features = ["png"] }
 
 [lints]

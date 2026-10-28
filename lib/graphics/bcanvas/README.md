@@ -78,8 +78,7 @@ The canvas covers the whole window, also under the system bars, so keep content 
 ## Offscreen drawing
 
 `OffscreenCanvas` draws without a window into straight-alpha RGBA8 pixels, for
-example to upload with `bwebgpu::Queue::write_texture` or encode with the
-[image](../image) crate:
+example to upload with `bwebgpu::Queue::write_texture`:
 
 ```rust
 use bcanvas::{Color, OffscreenCanvas};
@@ -91,13 +90,12 @@ canvas.draw(|ctx| {
 });
 let rgba = canvas.pixels();
 assert_eq!(rgba.len(), 128 * 32 * 4);
-let bitmap = canvas.to_bitmap().expect("create bitmap");
-assert_eq!(bitmap.width(), 128);
 ```
 
-Run `cargo run -p example-bcanvas-headless` to draw and save `frame.png`
-without creating a window. The [example](examples/headless) enables
-the image crate's PNG feature and calls `image::encode`.
+With the `image` feature, `to_bitmap` copies the pixels into an [image](../image)
+bitmap for encoding. Run `cargo run -p example-bcanvas-headless` to draw and save `frame.png`
+without creating a window. The [example](examples/headless) enables the `image`
+feature and the image crate's `png` feature, then calls `image::encode`.
 
 Disable default features to drop the `window` feature and with it `Canvas`, bwindow
 and the windowing frameworks. On macOS and iOS an offscreen-only build then links
