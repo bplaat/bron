@@ -4,18 +4,17 @@
  * SPDX-License-Identifier: MIT
  */
 
-//! The sound effects of plaatcraft-engine, rendered from their sfxr samples by build.rs. The
+//! The sound effects of plaatcraft-engine, rendered from their sfxr samples at startup. The
 //! DSP mixes them with AESND and changes their pitch, volume and pan in hardware.
 
+use alloc::vec::Vec;
 use core::ptr;
 
 use libogc_sys::*;
 use plaatcraft_engine::camera::Camera;
-use plaatcraft_engine::sound::{Footsteps, Movement, Play};
+use plaatcraft_engine::sound::{Effect, Footsteps, Movement, Play};
 
-include!(concat!(env!("OUT_DIR"), "/sounds.rs"));
-
-static DATA: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/sounds.bin"));
+use crate::memory;
 
 /// The voices played in turn, a new sound cuts the oldest one off
 const VOICES: usize = 16;
@@ -23,7 +22,23 @@ const VOICES: usize = 16;
 /// AESND's full voice volume
 const FULL_VOLUME: f32 = 256.0;
 
+/// Renders an effect like baudio does on the desktop, as 16-bit mono samples that are big-endian
+/// like the DSP expects
+fn render(effect: Effect) -> Vec<i16> {
+    let mut generator = sfxr::Generator::new(effect.sample());
+    generator.volume = 0.5;
+    let mut samples = Vec::new();
+    let mut chunk = [0.0; 1024];
+    while !generator.finished() {
+        generator.generate(&mut chunk);
+        samples.extend(chunk.map(|sample| (sample * 32767.0) as i16));
+    }
+    memory::flush(&samples);
+    samples
+}
+
 struct Mixer {
+    sounds: [Vec<i16>; Effect::ALL.len()],
     voices: [*mut AESNDPB; VOICES],
     next: usize,
 }
@@ -35,7 +50,7 @@ impl Mixer {
         if voice.is_null() {
             return;
         }
-        let (offset, len) = SOUNDS[play.effect as usize];
+        let samples = &self.sounds[play.effect as usize];
         let pan = play.pan.clamp(-1.0, 1.0);
         let volume = |side: f32| (play.volume * side.min(1.0) * FULL_VOLUME) as u16;
         unsafe {
@@ -43,9 +58,9 @@ impl Mixer {
             AESND_PlayVoice(
                 voice,
                 VOICE_MONO16,
-                DATA[offset..].as_ptr().cast(),
-                len as u32,
-                SAMPLE_RATE as f32 * play.pitch,
+                samples.as_ptr().cast(),
+                size_of_val(samples.as_slice()) as u32,
+                sfxr::SAMPLE_RATE as f32 * play.pitch,
                 0,
                 false,
             );
@@ -66,6 +81,7 @@ impl Sounds {
         }
         Self {
             mixer: Mixer {
+                sounds: Effect::ALL.map(render),
                 voices: core::array::from_fn(|_| unsafe {
                     AESND_AllocateVoiceWithArg(None, ptr::null_mut())
                 }),
