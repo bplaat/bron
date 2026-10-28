@@ -24,6 +24,12 @@ use crate::{
 
 thread_local! {
     static EXIT_REQUESTED: Cell<bool> = const { Cell::new(false) };
+    static LAUNCHED: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Whether the application finished launching, after which new windows are shown right away.
+pub(super) fn has_launched() -> bool {
+    LAUNCHED.get()
 }
 
 // MARK: AppDelegate
@@ -63,6 +69,11 @@ define_class!(
 
         #[unsafe(method(drainUserEvents))]
         fn _drain_user_events(&self) {
+            // Files opened at launch arrive before the launch finishes, so user events wait
+            // for it and do not overtake them.
+            if !has_launched() {
+                return;
+            }
             while let Some(message) = self.ivars().mailbox.pop() {
                 match message {
                     Message::User(value) => send_event(Event::UserEvent(value)),
@@ -114,6 +125,7 @@ impl AppDelegate {
     }
 
     fn did_finish_launching(&self, notification: *mut Object) {
+        LAUNCHED.set(true);
         unsafe {
             let application: *mut Object = msg_send![notification, object];
             let _: Bool = msg_send![application, setActivationPolicy:NS_APPLICATION_ACTIVATION_POLICY_REGULAR];
@@ -129,6 +141,9 @@ impl AppDelegate {
                 }
             }
         }
+        // Windows built by waiting user events are shown when they are built, after the ones
+        // built before the launch, so none of them is shown twice.
+        let _: () = unsafe { msg_send![self, drainUserEvents] };
     }
 
     fn open_urls(&self, urls: *mut Object) {

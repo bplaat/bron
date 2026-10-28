@@ -94,6 +94,10 @@ impl PlatformEventLoop {
             #[cfg(not(feature = "menu"))]
             let menu = None;
             APPLICATION.set(application);
+            // GTK quits an application without windows, so hold it until the first window,
+            // which applications may create before running or after loading something.
+            g_application_hold(application.cast());
+            LAUNCH_HOLD.set(true);
             super::menu::register(application, menu);
             APP_ID = builder.app_id;
             application
@@ -277,7 +281,15 @@ pub(crate) use crate::dispatch::send as send_event;
 
 thread_local! {
     static EXIT_REQUESTED: Cell<bool> = const { Cell::new(false) };
+    static LAUNCH_HOLD: Cell<bool> = const { Cell::new(false) };
     static APPLICATION: Cell<*mut GtkApplication> = const { Cell::new(null_mut()) };
+}
+
+/// Let the application quit when its windows close, once it has a window.
+pub(super) fn release_launch_hold() {
+    if LAUNCH_HOLD.replace(false) {
+        unsafe { g_application_release(application().cast()) };
+    }
 }
 
 pub(super) fn stop() {
