@@ -36,6 +36,8 @@ pub type jthrowable = jobject;
 pub type jstring = jobject;
 pub type jarray = jobject;
 pub type jbyteArray = jarray;
+pub type jintArray = jarray;
+pub type jlongArray = jarray;
 pub type jfloatArray = jarray;
 pub type jobjectArray = jarray;
 
@@ -202,18 +204,28 @@ pub struct JNINativeInterface_ {
     pub SetObjectArrayElement: unsafe extern "system" fn(*mut JNIEnv, jobjectArray, jsize, jobject),
     _reserved175: Reserved,
     pub NewByteArray: unsafe extern "system" fn(*mut JNIEnv, jsize) -> jbyteArray,
-    _reserved177: [Reserved; 4],
+    _reserved177: [Reserved; 2],
+    pub NewIntArray: unsafe extern "system" fn(*mut JNIEnv, jsize) -> jintArray,
+    pub NewLongArray: unsafe extern "system" fn(*mut JNIEnv, jsize) -> jlongArray,
     pub NewFloatArray: unsafe extern "system" fn(*mut JNIEnv, jsize) -> jfloatArray,
     _reserved182: [Reserved; 18],
     pub GetByteArrayRegion:
         unsafe extern "system" fn(*mut JNIEnv, jbyteArray, jsize, jsize, *mut jbyte),
-    _reserved201: [Reserved; 4],
+    _reserved201: [Reserved; 2],
+    pub GetIntArrayRegion:
+        unsafe extern "system" fn(*mut JNIEnv, jintArray, jsize, jsize, *mut jint),
+    pub GetLongArrayRegion:
+        unsafe extern "system" fn(*mut JNIEnv, jlongArray, jsize, jsize, *mut jlong),
     pub GetFloatArrayRegion:
         unsafe extern "system" fn(*mut JNIEnv, jfloatArray, jsize, jsize, *mut jfloat),
     _reserved206: [Reserved; 2],
     pub SetByteArrayRegion:
         unsafe extern "system" fn(*mut JNIEnv, jbyteArray, jsize, jsize, *const jbyte),
-    _reserved209: [Reserved; 4],
+    _reserved209: [Reserved; 2],
+    pub SetIntArrayRegion:
+        unsafe extern "system" fn(*mut JNIEnv, jintArray, jsize, jsize, *const jint),
+    pub SetLongArrayRegion:
+        unsafe extern "system" fn(*mut JNIEnv, jlongArray, jsize, jsize, *const jlong),
     pub SetFloatArrayRegion:
         unsafe extern "system" fn(*mut JNIEnv, jfloatArray, jsize, jsize, *const jfloat),
     _reserved214: Reserved,
@@ -293,10 +305,16 @@ assert_slots!(JNINativeInterface_ {
     GetObjectArrayElement = 173,
     SetObjectArrayElement = 174,
     NewByteArray = 176,
+    NewIntArray = 179,
+    NewLongArray = 180,
     NewFloatArray = 181,
     GetByteArrayRegion = 200,
+    GetIntArrayRegion = 203,
+    GetLongArrayRegion = 204,
     GetFloatArrayRegion = 205,
     SetByteArrayRegion = 208,
+    SetIntArrayRegion = 211,
+    SetLongArrayRegion = 212,
     SetFloatArrayRegion = 213,
     RegisterNatives = 215,
     GetJavaVM = 219,

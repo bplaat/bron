@@ -12,8 +12,9 @@ use std::ptr::null_mut;
 
 use crate::errors::{Error, ErrorPolicy, JniError, Result};
 use crate::objects::{
-    Global, JByteArray, JByteBuffer, JClass, JFieldID, JFloatArray, JMethodID, JObject,
-    JStaticFieldID, JStaticMethodID, JString, JThrowable, JValue, JValueOwned, Reference,
+    Global, JByteArray, JByteBuffer, JClass, JFieldID, JFloatArray, JIntArray, JLongArray,
+    JMethodID, JObject, JStaticFieldID, JStaticMethodID, JString, JThrowable, JValue, JValueOwned,
+    Reference,
 };
 use crate::signature::{FieldSignature, JavaType, MethodSignature, Primitive, ReturnType};
 use crate::strings::JNIStr;
@@ -553,6 +554,36 @@ impl<'local> Env<'local> {
                 .collect::<Vec<_>>(),
         )?;
         Ok(array)
+    }
+
+    /// Create an `int[]` of `length` zero elements.
+    pub fn new_int_array(&mut self, length: usize) -> Result<JIntArray<'local>> {
+        JIntArray::new(self, length)
+    }
+
+    /// Copy `buf` into the elements of an `int[]` from `start`.
+    pub fn set_int_array_region<'other_local>(
+        &self,
+        array: impl AsRef<JIntArray<'other_local>>,
+        start: jsize,
+        buf: &[i32],
+    ) -> Result<()> {
+        array.as_ref().set_region(self, start, buf)
+    }
+
+    /// Create a `long[]` of `length` zero elements.
+    pub fn new_long_array(&mut self, length: usize) -> Result<JLongArray<'local>> {
+        JLongArray::new(self, length)
+    }
+
+    /// Copy `buf` into the elements of a `long[]` from `start`.
+    pub fn set_long_array_region<'other_local>(
+        &self,
+        array: impl AsRef<JLongArray<'other_local>>,
+        start: jsize,
+        buf: &[i64],
+    ) -> Result<()> {
+        array.as_ref().set_region(self, start, buf)
     }
 
     /// Create a `float[]` of `length` zero elements.
