@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: MIT
  */
 
-//! Shared AppKit support for MacView and its Quick Look extensions.
+//! Shared AppKit support for ImageView and its Quick Look extensions.
 
 #![allow(unsafe_code)]
 
@@ -95,7 +95,7 @@ impl Image {
     }
 }
 
-// SAFETY: MacView only transfers ownership of a fully initialized image between queues. It does
+// SAFETY: ImageView only transfers ownership of a fully initialized image between queues. It does
 // not access the image from both queues at once, and drawing remains on the queue chosen by
 // AppKit or Quick Look.
 unsafe impl Send for Image {}

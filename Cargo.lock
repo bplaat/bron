@@ -645,6 +645,42 @@ dependencies = [
 ]
 
 [[package]]
+name = "imageview"
+version = "0.1.0"
+dependencies = [
+ "block2",
+ "imageview-appkit",
+ "objc2",
+]
+
+[[package]]
+name = "imageview-appkit"
+version = "0.1.0"
+dependencies = [
+ "image",
+ "objc2",
+ "vector",
+]
+
+[[package]]
+name = "imageview-macos-preview"
+version = "0.1.0"
+dependencies = [
+ "block2",
+ "imageview-appkit",
+ "objc2",
+]
+
+[[package]]
+name = "imageview-macos-thumbnail"
+version = "0.1.0"
+dependencies = [
+ "block2",
+ "imageview-appkit",
+ "objc2",
+]
+
+[[package]]
 name = "indexmap"
 version = "2.14.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -719,42 +755,6 @@ name = "log"
 version = "0.4.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f9f8bd3e56ce4dfc153cf470fffbfa98c7620958b312ca5c3a4b8d5181fd13c6"
-
-[[package]]
-name = "macview"
-version = "0.1.0"
-dependencies = [
- "block2",
- "macview-appkit",
- "objc2",
-]
-
-[[package]]
-name = "macview-appkit"
-version = "0.1.0"
-dependencies = [
- "image",
- "objc2",
- "vector",
-]
-
-[[package]]
-name = "macview-preview"
-version = "0.1.0"
-dependencies = [
- "block2",
- "macview-appkit",
- "objc2",
-]
-
-[[package]]
-name = "macview-thumbnail"
-version = "0.1.0"
-dependencies = [
- "block2",
- "macview-appkit",
- "objc2",
-]
 
 [[package]]
 name = "manexplorer"

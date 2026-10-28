@@ -13,7 +13,7 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 use std::ptr::null_mut;
 
 use block2::RcBlock;
-use macview_appkit::{
+use imageview_appkit::{
     Image, NS_VIEW_HEIGHT_SIZABLE, NS_VIEW_WIDTH_SIZABLE, OwnedString, Point, Rect, Size,
     create_image_view, decode_image, decode_image_data, dispatch_async, dispatch_async_main,
     make_error, ns_string, preferred_content_size,
@@ -86,7 +86,7 @@ impl SendableUrl {
 
 define_class!(
     #[unsafe(super(NSDocument))]
-    #[name = "MacViewDocument"]
+    #[name = "ImageViewDocument"]
     #[ivars = DocumentIvars]
     struct Document;
 
@@ -302,7 +302,7 @@ impl Document {
         generation: u64,
         retained_document: MainQueueObject,
     ) {
-        let error_domain = ns_string!("nl.bplaat.MacView") as usize;
+        let error_domain = ns_string!("nl.bplaat.ImageView") as usize;
         // SAFETY: This runs on the main queue with a retained document from show_sibling.
         let prepared = unsafe {
             let url = file_url(&path);
@@ -611,7 +611,7 @@ unsafe fn decode_document_url(
     decode_document_bytes(bytes).map(|media| (media, identifier, version))
 }
 
-// Returns the type identifier MacView declares for an extension.
+// Returns the type identifier ImageView declares for an extension.
 //
 // # Safety
 //
@@ -681,7 +681,7 @@ unsafe fn enable_concurrent_document_reading() {
 
 define_class!(
     #[unsafe(super(NSObject))]
-    #[name = "MacViewAppDelegate"]
+    #[name = "ImageViewAppDelegate"]
     struct AppDelegate;
 
     impl AppDelegate {
@@ -728,7 +728,7 @@ fn set_error(error_out: *mut c_void, description: &str) {
     if error_out.is_null() {
         return;
     }
-    let domain = ns_string!("nl.bplaat.MacView");
+    let domain = ns_string!("nl.bplaat.ImageView");
     // SAFETY: error_out is a non-null NSError** supplied by NSDocument. The error is
     // autoreleased and remains valid for the current event cycle.
     unsafe {
@@ -841,7 +841,7 @@ fn create_menu(application: *mut Object) {
         let app_menu = add_menu(&main_menu, "");
         add_item(
             &app_menu,
-            "About MacView",
+            "About ImageView",
             sel!(orderFrontStandardAboutPanel:),
             "",
             0,
@@ -857,7 +857,7 @@ fn create_menu(application: *mut Object) {
         add_separator(&app_menu);
         add_item(
             &app_menu,
-            "Hide MacView",
+            "Hide ImageView",
             sel!(hide:),
             "h",
             NS_EVENT_MODIFIER_FLAG_COMMAND,
@@ -882,7 +882,7 @@ fn create_menu(application: *mut Object) {
         add_separator(&app_menu);
         add_item(
             &app_menu,
-            "Quit MacView",
+            "Quit ImageView",
             sel!(terminate:),
             "q",
             NS_EVENT_MODIFIER_FLAG_COMMAND,
@@ -1128,9 +1128,11 @@ mod tests {
     fn common_raster_extensions_load() {
         autoreleasepool(|_| {
             let fixtures =
-                Path::new(env!("CARGO_MANIFEST_DIR")).join("../macview-appkit/tests/fixtures");
-            let folder = std::env::temp_dir()
-                .join(format!("macview-raster-extensions-{}", std::process::id()));
+                Path::new(env!("CARGO_MANIFEST_DIR")).join("../imageview-appkit/tests/fixtures");
+            let folder = std::env::temp_dir().join(format!(
+                "imageview-raster-extensions-{}",
+                std::process::id()
+            ));
             std::fs::create_dir_all(&folder).expect("create raster extension test folder");
             for (extension, fixture) in [
                 ("bmp", "rgb.bmp"),

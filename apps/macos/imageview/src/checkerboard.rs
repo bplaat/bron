@@ -6,7 +6,7 @@
 
 use std::ffi::c_void;
 
-use macview_appkit::{CGContextFillRect, CGContextSetRGBFillColor, Point, Rect, Size};
+use imageview_appkit::{CGContextFillRect, CGContextSetRGBFillColor, Point, Rect, Size};
 use objc2::rc::{Allocated, Retained};
 use objc2::runtime::{AnyObject as Object, Bool};
 use objc2::{class, define_class, msg_send};
@@ -18,7 +18,7 @@ const TILE: f64 = 12.0;
 
 define_class!(
     #[unsafe(super(NSView))]
-    #[name = "MacViewCheckerboardView"]
+    #[name = "ImageViewCheckerboardView"]
     struct CheckerboardView;
 
     impl CheckerboardView {

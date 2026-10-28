@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: MIT
  */
 
-//! Quick Look thumbnail extension for the image formats MacView displays.
+//! Quick Look thumbnail extension for the image formats ImageView displays.
 
 #![allow(unsafe_code)]
 
@@ -13,7 +13,7 @@ use std::ptr::null_mut;
 use std::sync::Mutex;
 
 use block2::{Block, RcBlock};
-use macview_appkit::{
+use imageview_appkit::{
     Point, Rect, Size, dispatch_async, extension_main, fill_white_background, load_media,
     make_error, ns_string,
 };
@@ -25,7 +25,7 @@ mod headers;
 
 define_class!(
     #[unsafe(super(QLThumbnailProvider))]
-    #[name = "MacViewThumbnailProvider"]
+    #[name = "ImageViewThumbnailProvider"]
     struct ThumbnailProvider;
 
     impl ThumbnailProvider {
@@ -86,8 +86,9 @@ fn provide_thumbnail(request: *mut Object, completion: &Block<dyn Fn(*mut Object
             Ok(media) => media,
             Err(description) => {
                 // SAFETY: Foundation error creation is safe on this worker queue.
-                let error =
-                    unsafe { make_error(ns_string!("nl.bplaat.MacView.Thumbnail"), &description) };
+                let error = unsafe {
+                    make_error(ns_string!("nl.bplaat.ImageView.Thumbnail"), &description)
+                };
                 completion.call(null_mut(), error);
                 return;
             }

@@ -1,4 +1,4 @@
-# MacView
+# ImageView
 
 A simple native macOS image viewer with local raster decoders and support for SVG and TinyVG images.
 
@@ -16,11 +16,11 @@ A simple native macOS image viewer with local raster decoders and support for SV
 
 ## macOS Entitlements
 
-The main app does not use the `com.apple.security.app-sandbox` entitlement because `com.apple.security.files.user-selected.read-only` only permits reading the selected image, not the other images in the same folder. MacView needs access to those files to browse to the previous and next images.
+The main app does not use the `com.apple.security.app-sandbox` entitlement because `com.apple.security.files.user-selected.read-only` only permits reading the selected image, not the other images in the same folder. ImageView needs access to those files to browse to the previous and next images.
 
 ## Screenshot
 
-![MacView Screenshot](docs/images/screenshot.png)
+![ImageView Screenshot](docs/images/screenshot.png)
 
 ## License
 
