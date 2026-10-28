@@ -90,6 +90,7 @@ Some desktop apps and games written with the [bwindow](lib/ui/bwindow), [bwebvie
 - [2048](games/game2048) An offline desktop 2048 game app
 - [BassieLight](apps/desktop/bassielight) A simple lights controller with GUI
 - [Binman](apps/windows/binman) A safe and minimal Windows cleanup tool
+- [CatDog](apps/macos/catdog) A macOS AppKit clone of the SerenityOS desktop companion
 - [Empires](games/empires) An Age of Empires rendering demo and DRS archive viewer using SDL2
 - [Frogger](games/frogger) A colorful voxel crossing game with cars, trucks, rivers, and trains
 - [ImageView](apps/desktop/imageview) A native bitmap, QOI, SVG, and TinyVG image viewer with file manager previews and thumbnails

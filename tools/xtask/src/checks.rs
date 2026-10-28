@@ -122,6 +122,7 @@ impl Xtask {
         let mut files = Vec::new();
         for directory in [
             "tools/bob/examples",
+            "apps/macos",
             "examples/macos",
             "examples/wii",
             "games/empires",
