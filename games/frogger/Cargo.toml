@@ -35,6 +35,7 @@ bwebgpu-shader-build = { path = "../../lib/graphics/bwebgpu-shader-build" }
 winresource = "0.1.31"
 
 [dev-dependencies]
+bwebgpu = { path = "../../lib/graphics/bwebgpu", features = ["image"] }
 image = { path = "../../lib/graphics/image", default-features = false, features = ["png"] }
 
 [lints]

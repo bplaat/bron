@@ -11,7 +11,7 @@ groups, shaders, pipelines, render passes, and bitmap readback.
 ## Features
 
 - `window` (default): presentation surfaces for [bwindow](../../ui/bwindow) windows
-- `image` (default): offscreen render targets read back as
+- `image`: offscreen render targets read back as
   [image](../image) bitmaps
 
 At least one feature must be enabled. Disable default features and enable only
