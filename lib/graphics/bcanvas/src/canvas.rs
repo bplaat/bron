@@ -144,9 +144,12 @@ mod tests {
             context.fill_rect(1.0, 0.0, 1.0, 1.0);
         });
         assert_eq!(canvas.pixels(), &[0, 0, 0, 0, 1, 2, 3, 255]);
-        let bitmap = canvas.to_bitmap().expect("valid bitmap");
-        assert_eq!((bitmap.width(), bitmap.height()), (2, 1));
-        assert_eq!(bitmap.data(), &[0, 0, 0, 0, 1, 2, 3, 255]);
+        #[cfg(feature = "image")]
+        {
+            let bitmap = canvas.to_bitmap().expect("valid bitmap");
+            assert_eq!((bitmap.width(), bitmap.height()), (2, 1));
+            assert_eq!(bitmap.data(), &[0, 0, 0, 0, 1, 2, 3, 255]);
+        }
     }
 
     #[test]
@@ -528,6 +531,7 @@ impl OffscreenCanvas {
     }
 
     /// Copy the current pixels into an image bitmap for encoding or further processing.
+    #[cfg(feature = "image")]
     pub fn to_bitmap(&mut self) -> Result<image::Bitmap, image::EncodeError> {
         image::Bitmap::new(self.width, self.height, self.pixels().to_vec())
     }
