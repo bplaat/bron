@@ -253,6 +253,7 @@ impl Xtask {
                 let applications = data.join("applications");
                 let icons = data.join("icons/hicolor");
                 let mime_packages = data.join("mime/packages");
+                let thumbnailers = data.join("thumbnailers");
                 fs::create_dir_all(&bin)?;
                 fs::create_dir_all(&applications)?;
                 fs::create_dir_all(&mime_packages)?;
@@ -271,6 +272,15 @@ impl Xtask {
                         applications.join(format!("{}.desktop", app.identifier)),
                         desktop_entry,
                     )?;
+                    let thumbnailer = app.directory.join("meta/freedesktop/.thumbnailer");
+                    if thumbnailer.exists() {
+                        fs::create_dir_all(&thumbnailers)?;
+                        fs::write(
+                            thumbnailers.join(format!("{}.thumbnailer", app.identifier)),
+                            fs::read_to_string(thumbnailer)?
+                                .replace("$BIN_DIR", &bin.to_string_lossy()),
+                        )?;
+                    }
                     let mime_package = app.directory.join("meta/freedesktop/mime.xml");
                     if mime_package.exists() {
                         fs::copy(
