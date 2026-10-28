@@ -74,6 +74,7 @@ macro_rules! impl_block_call {
 }
 impl_block_call!(A: a);
 impl_block_call!(A: a, B: b);
+impl_block_call!(A: a, B: b, C: c);
 
 // Inner heap layout for `RcBlock`: ObjC block header immediately followed by the closure.
 #[repr(C)]
