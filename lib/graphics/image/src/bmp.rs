@@ -792,7 +792,7 @@ mod tests {
     use super::*;
     use crate::{EncodeOptions, EncodingStyle, Format, encode, encode_with_options};
 
-    fn smallest() -> EncodeOptions {
+    fn smallest() -> EncodeOptions<'static> {
         EncodeOptions {
             style: EncodingStyle::MaxCompression,
             ..EncodeOptions::default()

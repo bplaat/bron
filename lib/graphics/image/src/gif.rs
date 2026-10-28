@@ -109,6 +109,7 @@ impl<'a> Decoder<'a> {
                         color_space: ColorSpace::Srgb,
                         is_animated: self.has_loop_extension || self.frames.len() > 1,
                         frames: self.frames,
+                        text: Vec::new(),
                         loop_count: self.loop_count,
                     });
                 }

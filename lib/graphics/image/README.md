@@ -21,6 +21,10 @@ For GIF or APNG, give `encode_animation` a list of full-size frames, their
 display times, and a loop count. GIF supports up to 256 colors per frame and
 binary transparency. JPEG requires opaque pixels.
 
+PNG/APNG files can carry text entries. Set `EncodeOptions::text` to keyword and
+text pairs: Latin-1 text is written as `tEXt` and other text as UTF-8 `iTXt`.
+Decoding reads `tEXt`, `zTXt`, and `iTXt` entries into `Image::text`.
+
 ## Compression
 
 Normal compression is the default. For PNG/APNG, JPEG, or GIF, you can spend more

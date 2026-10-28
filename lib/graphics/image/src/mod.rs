@@ -9,6 +9,7 @@
 
 extern crate alloc;
 
+use alloc::string::String;
 use alloc::vec::Vec;
 use core::fmt::{self, Display, Formatter};
 use core::time::Duration;
@@ -155,6 +156,7 @@ pub struct Image {
     format: Format,
     color_space: ColorSpace,
     frames: Vec<Frame>,
+    text: Vec<(String, String)>,
     is_animated: bool,
     loop_count: LoopCount,
 }
@@ -169,7 +171,7 @@ impl Image {
     pub fn encode_with_options(
         &self,
         format: Format,
-        options: EncodeOptions,
+        options: EncodeOptions<'_>,
     ) -> core::result::Result<Vec<u8>, EncodeError> {
         if self.is_animated {
             encode_animation_with_options(format, &self.frames, self.loop_count, options)
@@ -213,6 +215,11 @@ impl Image {
         self.is_animated
     }
 
+    /// Returns the keyword and text pairs of the PNG/APNG text chunks.
+    pub fn text(&self) -> &[(String, String)] {
+        &self.text
+    }
+
     /// Returns the total animation plays.
     pub const fn loop_count(&self) -> LoopCount {
         self.loop_count
@@ -231,6 +238,7 @@ impl Image {
                 },
                 delay: Duration::ZERO,
             }],
+            text: Vec::new(),
             is_animated: false,
             loop_count: LoopCount::Finite(1),
         }
