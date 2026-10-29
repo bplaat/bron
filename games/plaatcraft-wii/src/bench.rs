@@ -14,7 +14,8 @@ use libogc_sys::{gettime, puts};
 use plaatcraft_engine::world::{self, ChunkData, Coord, QUAD_BYTES};
 
 use crate::TICKS_PER_SECOND;
-use crate::stream::Generator;
+use crate::stream::Store;
+use crate::sync::Mutex;
 
 // A grid of chunks at spawn and one in the hills, to cover several biomes
 const GRIDS: [(i64, i64); 2] = [(-2, -2), (-66, -2)];
@@ -37,14 +38,16 @@ pub fn run() -> ! {
         })
         .collect();
     let time = || unsafe { gettime() };
-    // The stream worker reuses the unlit neighbors of the chunks it builds after this one
-    let mut generator = Generator::default();
+    // The stream worker reuses the neighbors of the chunks it builds after this one, here
+    // without a world, so nothing is stored
+    let mut store = Store::new(world::WORLD_SEED);
+    let sqlite = Mutex::new(None);
     let start = time();
     for (index, &coord) in coords.iter().enumerate() {
-        generator.generate(world::WORLD_SEED, coord, &[], &coords[index + 1..]);
+        store.build(&sqlite, coord, &coords[index + 1..]);
     }
     let streamed = time() - start;
-    let mut totals = [0u64; 5];
+    let mut totals = [0u64; 7];
     let mut quads = 0;
     for &coord in &coords {
         let start = time();
@@ -57,9 +60,15 @@ pub fn run() -> ! {
         let blocks = chunk.encode();
         let encoded = time();
         let decoded = ChunkData::decode(&blocks).map(|chunk| chunk.voxel([0, 0, 0]));
+        let unpacked = time();
+        let stored = chunk.encode_blocks();
+        let saved = time();
+        let loaded = ChunkData::decode_blocks(&stored);
         let end = time();
-        assert!(decoded.is_ok() && !mesh.list.is_empty());
-        let phases = [start, generated, meshed, listed, encoded, end];
+        assert!(decoded.is_ok() && loaded.is_ok() && !mesh.list.is_empty());
+        let phases = [
+            start, generated, meshed, listed, encoded, unpacked, saved, end,
+        ];
         for (total, pair) in totals.iter_mut().zip(phases.windows(2)) {
             *total += pair[1] - pair[0];
         }
@@ -68,7 +77,7 @@ pub fn run() -> ! {
     let chunks = coords.len();
     let average = |ticks| milliseconds(ticks) / chunks as f64;
     print(&format!(
-        "BENCH {chunks} chunks, {} quads per chunk, ms per chunk: generate {:.1}, streamed {:.1}, mesh {:.1}, display list {:.1}, encode {:.1}, decode {:.1}, total {:.1}",
+        "BENCH {chunks} chunks, {} quads per chunk, ms per chunk: generate {:.1}, streamed {:.1}, mesh {:.1}, display list {:.1}, encode {:.1}, decode {:.1}, store {:.1}, load {:.1}, total {:.1}",
         quads / chunks,
         average(totals[0]),
         average(streamed),
@@ -76,6 +85,8 @@ pub fn run() -> ! {
         average(totals[2]),
         average(totals[3]),
         average(totals[4]),
+        average(totals[5]),
+        average(totals[6]),
         average(totals.iter().sum()),
     ));
     // Returning reloads the system menu, the script stops Dolphin after the results

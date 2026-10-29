@@ -21,6 +21,7 @@ use core::sync::atomic::{AtomicBool, Ordering};
 
 use libogc_sys::*;
 use plaatcraft_engine::camera::{Camera, Input};
+use plaatcraft_engine::database;
 use plaatcraft_engine::hotbar::{Hotbar, name};
 use plaatcraft_engine::menu::{self, Action, Layout, Menu, Page, Row};
 use plaatcraft_engine::particles::Particles;
@@ -32,15 +33,15 @@ use plaatcraft_engine::protocol::{
 use plaatcraft_engine::raycast::{Hit, raycast};
 use plaatcraft_engine::server::{HOST, Outgoing, Server, TICK};
 use plaatcraft_engine::sound::{Movement, ground};
-use plaatcraft_engine::world::{self, Coord, Edit};
+use plaatcraft_engine::world::{self, Coord};
 
 use crate::hud::Hud;
 use crate::input::{Button, Controller};
 use crate::local::{LIMITS, Local, Saved};
 use crate::render::{Display, Renderer};
-use crate::snapshot::{Settings, Snapshot, WORLD_SLOTS, valid_name};
+use crate::settings::Settings;
 use crate::sound::Sounds;
-use crate::storage::Storage;
+use crate::storage::{Opened, Storage, WorldFile};
 use crate::stream::{RENDER_DISTANCE, Stream};
 use crate::textures::Textures;
 
@@ -54,7 +55,7 @@ mod memory;
 mod mesh;
 mod network;
 mod render;
-mod snapshot;
+mod settings;
 mod sound;
 mod storage;
 mod stream;
@@ -78,6 +79,10 @@ const NIGHT_DAYLIGHT: f32 = 0.035;
 const BACKGROUND_TURN_SPEED: f32 = 0.05;
 // An IPv4 address with a port, like 192.168.100.200:47820.
 const MAX_ADDRESS_LENGTH: usize = 21;
+// Saves write to the slow SD card in the background, only the changed chunks with synced
+// journal writes. The game autosaves every two minutes, when the pause menu opens and when
+// the world closes, so a power loss loses little and the card isn't written all the time.
+const AUTOSAVE_INTERVAL: f32 = 120.0;
 
 // The power button of the Wii and of the Wii Remotes, libogc calls it from an interrupt
 static POWER_PRESSED: AtomicBool = AtomicBool::new(false);
@@ -136,10 +141,10 @@ struct Game {
     last_fps: f32,
     settings: Settings,
     storage: Storage,
-    worlds: Vec<Option<(String, i64)>>,
-    active: Option<usize>,
+    worlds: Vec<WorldFile>,
+    // Whether a world of this Wii is played, the next field is its name
+    active: bool,
     world_name: String,
-    sequence: u64,
     last_save: f32,
     message: Option<(String, f32)>,
     swing: f32,
@@ -173,6 +178,7 @@ impl Game {
         }
         let renderer = Renderer::new(&display);
         let storage = Storage::new();
+        let sqlite = storage.sqlite;
         let worlds = storage.worlds();
         let settings = storage.load_settings().unwrap_or_default();
         let mut sounds = Sounds::new();
@@ -183,7 +189,7 @@ impl Game {
             storage,
             worlds,
             textures: Textures::load(),
-            stream: Stream::start(),
+            stream: Stream::start(sqlite),
             camera: background_camera(),
             hotbar: Hotbar::default(),
             target: None,
@@ -204,9 +210,8 @@ impl Game {
             fps: 0,
             last_fps: 0.0,
             settings,
-            active: None,
+            active: false,
             world_name: String::new(),
-            sequence: 0,
             last_save: 0.0,
             message: None,
             swing: 0.0,
@@ -261,12 +266,11 @@ impl Game {
     }
     fn world_rows(&self) -> Vec<Row> {
         let now = storage::unix_time();
-        self.world_slots()
-            .into_iter()
-            .filter_map(|slot| self.worlds[slot].as_ref())
-            .map(|(name, saved)| Row {
-                title: name.clone(),
-                details: menu::played(now.saturating_sub(*saved).max(0) as u64),
+        self.worlds
+            .iter()
+            .map(|world| Row {
+                title: world.name.clone(),
+                details: menu::played(now.saturating_sub(world.modified).max(0) as u64),
                 enabled: true,
             })
             .collect()
@@ -291,29 +295,21 @@ impl Game {
     fn page(&self) -> Option<Page> {
         self.menu.as_ref().map(|menu| menu.page)
     }
-    // The world slots in the list, the most recently played first.
-    fn world_slots(&self) -> Vec<usize> {
-        let mut slots: Vec<_> = (0..WORLD_SLOTS)
-            .filter(|&slot| self.worlds[slot].is_some())
-            .collect();
-        slots.sort_by_key(|&slot| self.worlds[slot].as_ref().map(|(_, saved)| -saved));
-        slots
-    }
-    fn selected_slot(&self) -> Option<usize> {
+    fn selected_world(&self) -> Option<String> {
         let selected = self.menu.as_ref()?.selected?;
-        self.world_slots().get(selected).copied()
+        Some(self.worlds.get(selected)?.name.clone())
     }
     fn tell(&mut self, text: impl Into<String>) {
         self.message = Some((text.into(), self.seconds()));
     }
 
     fn playing(&self) -> bool {
-        self.active.is_some() || self.stream.remote
+        self.active || self.stream.remote
     }
     fn session(&self) -> menu::Session {
         if self.stream.remote {
             menu::Session::Guest
-        } else if self.active.is_some() {
+        } else if self.active {
             menu::Session::Host {
                 lan: self.hosting.then_some(GAME_PORT),
             }
@@ -324,10 +320,17 @@ impl Game {
     // Closes the world and shows the turning default world again.
     fn leave_world(&mut self) {
         self.serve(|server, world| server.stop(world));
+        if self.active {
+            self.stream.save(self.saved.clone());
+            if let Err(error) = self.stream.flush() {
+                self.tell(error);
+            }
+            self.storage.close();
+        }
         self.server = None;
         self.close_network();
-        self.active = None;
-        self.stream.reset(world::WORLD_SEED, Vec::new());
+        self.active = false;
+        self.stream.reset(world::WORLD_SEED);
         self.particles.particles.clear();
         self.target = None;
         self.camera = background_camera();
@@ -340,97 +343,66 @@ impl Game {
         self.jobs.clear();
         self.players.clear();
     }
-    // Saves the world of this Wii, the server of a LAN world saves it itself.
-    fn save(&mut self) -> bool {
-        let Some(slot) = self.active else {
-            return true;
-        };
-        self.serve(|server, world| server.save_all(world));
-        let sequence = self.sequence + 1;
-        let saved = storage::unix_time();
-        let save = Snapshot {
-            name: self.world_name.clone(),
-            seed: self.stream.seed,
-            saved,
-            sequence,
-            player: self.saved.player,
-            guests: self
-                .saved
-                .guests
-                .iter()
-                .map(|(name, player)| (name.clone(), *player))
-                .collect(),
-            fluids: self.saved.fluids.clone(),
-            edits: self.stream.edits().to_vec(),
-        };
-        match self.storage.save(slot, &save) {
-            Ok(()) => {
-                self.sequence = sequence;
-                self.worlds[slot] = Some((self.world_name.clone(), saved));
-                self.last_save = self.seconds();
-                true
-            }
+    // Saves the world of this Wii in the background, the server of a LAN world saves itself.
+    fn save(&mut self) {
+        if self.active {
+            self.serve(|server, world| server.save_all(world));
+            self.stream.save(self.saved.clone());
+            self.last_save = self.seconds();
+        }
+    }
+
+    // Saves the world of this Wii and waits until it's on the card.
+    fn flush(&mut self) -> bool {
+        self.save();
+        match self.stream.flush() {
+            Ok(()) => true,
             Err(error) => {
-                self.last_save = self.seconds();
                 self.tell(error);
                 false
             }
         }
     }
 
-    fn open(&mut self, slot: usize) {
-        let Some(save) = self.storage.load(slot) else {
-            self.tell("Could not read this world; its save was left intact");
-            return;
-        };
-        let saved = Saved {
-            player: save.player,
-            guests: save.guests.into_iter().collect(),
-            fluids: save.fluids,
-        };
-        self.world_name = save.name;
-        self.sequence = save.sequence;
-        self.start(slot, save.seed, save.edits, saved);
-    }
-
-    fn create(&mut self, name: String) {
-        if !self.storage.refresh() {
-            self.tell("Insert a FAT32 SD card to create a world");
-            return;
+    fn open(&mut self, name: &str) {
+        match self.storage.open(name) {
+            Ok(opened) => {
+                self.world_name = name.into();
+                self.start(opened);
+            }
+            Err(error) => self.tell(error),
         }
-        self.worlds = self.storage.worlds();
-        let Some(slot) = self.worlds.iter().position(Option::is_none) else {
-            self.tell("All 16 world slots are in use");
-            return;
-        };
-        self.world_name = name;
-        self.sequence = 0;
-        let seed = unsafe { gettime() }.wrapping_mul(6_364_136_223_846_793_005);
-        self.start(slot, seed, Vec::new(), Saved::default());
-        self.save();
     }
 
-    // Opens a world of this Wii in its integrated server and joins it as the host.
-    fn start(&mut self, slot: usize, seed: u64, edits: Vec<Edit>, saved: Saved) {
+    fn create(&mut self, name: &str) -> Result<(), String> {
+        let seed = unsafe { gettime() }.wrapping_mul(6_364_136_223_846_793_005);
+        let name = self.storage.create(name, seed)?;
+        self.open(&name);
+        Ok(())
+    }
+
+    // Plays an opened world of this Wii in its integrated server and joins it as the host.
+    fn start(&mut self, opened: Opened) {
         self.close_network();
-        self.stream.reset(seed, edits);
-        self.saved = saved;
+        self.stream.reset(opened.seed);
+        self.saved = opened.saved;
         let mut world = Local {
             stream: &mut self.stream,
             saved: &mut self.saved,
+            storage: &self.storage,
         };
         let fluids = world.saved.fluids.clone();
         let mut server = Server::new(&mut world, LIMITS, &fluids);
         let joined = server.join(&mut world, Some(HOST), &self.settings.username);
-        self.server = Some(server);
         match joined {
             Ok(welcome) => {
-                self.active = Some(slot);
+                self.server = Some(server);
+                self.active = true;
                 self.last_save = self.seconds();
                 self.enter(&welcome);
             }
             Err(error) => {
-                self.server = None;
+                self.storage.close();
                 self.tell(error);
             }
         }
@@ -461,6 +433,7 @@ impl Game {
         let mut world = Local {
             stream: &mut self.stream,
             saved: &mut self.saved,
+            storage: &self.storage,
         };
         run(server, &mut world);
         for outgoing in server.outgoing() {
@@ -533,11 +506,12 @@ impl Game {
                 if self.page() == Some(Page::Settings) {
                     self.save_settings();
                 }
-                self.show(if self.menu.is_none() {
-                    Some(Page::Pause)
+                if self.menu.is_none() {
+                    self.show(Some(Page::Pause));
+                    self.save();
                 } else {
-                    None
-                });
+                    self.show(None);
+                }
             }
             if self.inventory {
                 self.inventory();
@@ -555,8 +529,11 @@ impl Game {
                 self.tick_player(dt);
                 self.particles.update(dt, |p| self.stream.block(p));
                 self.network_tick();
-                if now - self.last_save >= 60.0 {
+                if now - self.last_save >= AUTOSAVE_INTERVAL {
                     self.save();
+                }
+                if let Some(error) = self.stream.error() {
+                    self.tell(error);
                 }
             }
             self.others.update(self.players.clone());
@@ -571,8 +548,7 @@ impl Game {
                 self.last_fps = now;
             }
         }
-        self.save();
-        self.network.stop();
+        self.leave_world();
     }
 
     // The engine's menus with the pointer and the D-pad, A presses and B goes back.
@@ -649,7 +625,7 @@ impl Game {
             Action::OpenToLan => self.network.host(&self.world_name, &self.settings.username),
             Action::QuitToTitle => {
                 let guest = self.stream.remote;
-                if guest || self.save() {
+                if guest || self.flush() {
                     self.leave_world();
                     self.show(Some(if guest {
                         Page::Multiplayer
@@ -673,24 +649,25 @@ impl Game {
                 }
             }
             Action::PlayWorld => {
-                if let Some(slot) = self.selected_slot() {
-                    self.open(slot);
+                if let Some(name) = self.selected_world() {
+                    self.open(&name);
                 }
             }
             Action::CreateWorld => {
-                if self.worlds.iter().all(Option::is_some) {
-                    self.tell("All 16 world slots are in use");
-                } else {
-                    let count = self.worlds.iter().filter(|world| world.is_some()).count();
-                    self.show_text(Some(Page::Create), format!("World {}", count + 1));
-                }
+                let name = (1..)
+                    .map(|index| format!("World {index}"))
+                    .find(|name| {
+                        !self
+                            .worlds
+                            .iter()
+                            .any(|world| world.name.eq_ignore_ascii_case(name))
+                    })
+                    .expect("Free world name");
+                self.show_text(Some(Page::Create), name);
             }
             // The world pages act on the selected world
             Action::RenameWorld | Action::DeleteWorld => {
-                let name = self
-                    .selected_slot()
-                    .and_then(|slot| self.worlds[slot].clone());
-                if let Some((name, _)) = name {
+                if let Some(name) = self.selected_world() {
                     let page = if action == Action::RenameWorld {
                         Page::Rename
                     } else {
@@ -733,7 +710,7 @@ impl Game {
                     Page::Chat => MAX_CHAT_LENGTH,
                     Page::Username => MAX_NAME_LENGTH,
                     Page::DirectConnect => MAX_ADDRESS_LENGTH,
-                    _ => snapshot::MAX_NAME_LENGTH,
+                    _ => database::MAX_NAME_LENGTH,
                 };
                 if let Some(menu) = &mut self.menu {
                     menu.type_key(action, max);
@@ -773,9 +750,6 @@ impl Game {
         };
         let text = String::from(menu.text.trim());
         let error = match page {
-            Page::Create | Page::Rename if !valid_name(&text) => {
-                Some("Use 1-24 letters, numbers, spaces, - or _".into())
-            }
             Page::DirectConnect => match network::parse_address(&text) {
                 Some(address) => {
                     self.join(address);
@@ -791,26 +765,26 @@ impl Game {
                 }
                 Err(error) => Some(error),
             },
-            Page::Create => {
-                if self.save() {
-                    self.create(text);
-                }
-                None
-            }
+            Page::Create => self.create(&text).err(),
             Page::Rename => {
-                if let Some(slot) = self.selected_slot() {
-                    self.rename(slot, text);
+                let renamed = self
+                    .selected_world()
+                    .map(|name| self.storage.rename(&name, &text));
+                match renamed {
+                    Some(Err(error)) => Some(error),
+                    _ => {
+                        self.worlds = self.storage.worlds();
+                        self.back(page);
+                        None
+                    }
                 }
-                self.back(page);
-                None
             }
             Page::Delete => {
-                if let Some(slot) = self.selected_slot() {
-                    if self.storage.delete(slot) {
-                        self.worlds[slot] = None;
-                    } else {
+                if let Some(name) = self.selected_world() {
+                    if !self.storage.delete(&name) {
                         self.tell("Could not delete the world");
                     }
+                    self.worlds = self.storage.worlds();
                 }
                 self.show(Some(Page::Worlds));
                 None
@@ -832,19 +806,6 @@ impl Game {
     fn save_settings(&mut self) {
         if let Err(error) = self.storage.save_settings(&self.settings) {
             self.tell(error);
-        }
-    }
-
-    fn rename(&mut self, slot: usize, name: String) {
-        let Some(mut save) = self.storage.load(slot) else {
-            self.tell("Could not read this world; its save was left intact");
-            return;
-        };
-        save.name = name;
-        save.sequence += 1;
-        match self.storage.save(slot, &save) {
-            Ok(()) => self.worlds[slot] = Some((save.name, save.saved)),
-            Err(error) => self.tell(error),
         }
     }
 
@@ -932,9 +893,9 @@ impl Game {
         match frame {
             ServerFrame::Accepted { welcome, .. } if self.joining.is_some() => {
                 self.joining = None;
-                self.active = None;
+                self.active = false;
                 self.server = None;
-                self.stream.reset(world::WORLD_SEED, Vec::new());
+                self.stream.reset(world::WORLD_SEED);
                 self.stream.remote = true;
                 self.enter(&welcome);
                 self.tell("Connected");
@@ -1230,10 +1191,11 @@ impl Game {
             hud.block(world::MATERIALS[i].0, x + 6.0, y + 6.0, 30.0);
         }
         hud.label(name(world::MATERIALS[self.focus].0), 24.0, 358.0, 20.0);
+        let help = "A assign - C/Z slot - B close";
         hud.label(
-            "A assign - C/Z slot - D-pad browse - B close",
-            24.0,
-            386.0,
+            help,
+            hud.width - 24.0 - Hud::text_width(help, 16.0),
+            360.0,
             16.0,
         );
         hud.hotbar(&self.hotbar);

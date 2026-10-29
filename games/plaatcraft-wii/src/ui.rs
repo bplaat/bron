@@ -19,11 +19,8 @@ pub const PLATFORM: Platform = Platform {
     confirm: "+",
     open: "Press A on a world",
     controls: &[
-        "Press + or Home to pause and return to this menu",
-        "The stick walks and turns, the D-pad looks and selects a block",
-        "A places, B breaks and Z with Minus picks a block",
-        "C jumps, Z sneaks and Minus opens the inventory",
-        "1 opens the build tools and chat, 2 toggles the time",
+        "+ pause - Stick walk - D-pad look and slot - A place - B break",
+        "C jump - Z sneak - Minus blocks - Z+Minus pick - 1 tools - 2 time",
     ],
 };
 

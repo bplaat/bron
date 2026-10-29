@@ -30,20 +30,17 @@ Worlds and settings are stored only on a FAT32 card in the Wii SD slot:
 
 ```text
 /data/plaatcraft/settings.db
-/data/plaatcraft/worlds/world1.db
-/data/plaatcraft/worlds/world2.db
+/data/plaatcraft/worlds/My World.db
+/data/plaatcraft/worlds/Island.db
 ...
 ```
 
-The game never saves to NAND and has no storage fallback. Insert a FAT32 SD card before
-creating a world. The game creates the directories automatically and supports 16 named
-worlds. Each world is a SQLite database containing the seed, edits, flowing fluid, player,
-hotbar, and saved LAN guests, the settings and username are shared by all worlds like on the
-desktop. Saves run every minute and when leaving a world or exiting. SQLite uses rollback
-journals in the same SD directory, with full synchronization, so an interrupted save is rolled
-back when the world is read again. Files from an unsupported format are left intact. The Wii
-state schema differs from the desktop schema; `.db` files cannot currently be exchanged
-between the two versions.
+The game never saves to NAND, insert a FAT32 SD card before creating a world. Worlds use the
+same SQLite files as the [desktop game](../plaatcraft), so they can be copied between a
+computer and the SD card, close a world on the computer before copying it.
+
+The game saves in the background every two minutes, when the pause menu opens, and when
+leaving a world, because SD card writes are slow.
 
 ## Controls
 
@@ -74,8 +71,9 @@ undo remembers up to 32 changes within a 65536-block memory budget.
 
 ## How it works
 
-The render distance is fixed at 8 chunks. A worker generates, lights, and meshes chunks
-nearest first and keeps compressed blocks for collision and picking. GX display lists use
+The render distance is fixed at 8 chunks. A worker loads or generates, lights, and meshes
+chunks nearest first, edited chunks before their neighbors, and the main thread keeps their
+compressed blocks for collision and picking. GX display lists use
 fixed-point positions for slabs, stairs, and liquid heights, with per-corner lighting from
 a palette. The sky layers, held block, breaking particles, player models, and textures
 follow the desktop version. Water and lava use the shared engine's flow rules, with a

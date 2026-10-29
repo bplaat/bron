@@ -6,7 +6,6 @@
 
 //! Chunk generation, storage encoding, and greedy meshing.
 
-use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
@@ -34,6 +33,26 @@ const FULL_LIGHT: u32 = 0xff;
 const SHAPED: u32 = 1 << 8;
 /// The x and z coordinate of a chunk.
 pub type Coord = (i64, i64);
+// A stored chunk: its blocks without halo, the plant count and the plants, compressed.
+const STORED_MAGIC: &[u8] = b"PCC1";
+const STORED_BYTES: usize = CHUNK_SIZE * CHUNK_SIZE * HEIGHT;
+
+/// The chunk at an index of the three by three chunks around a chunk, in rows of `x` from
+/// the lowest `z`, the chunk itself is index 4.
+pub const fn neighbor(coord: Coord, index: usize) -> Coord {
+    (
+        coord.0 + index as i64 % 3 - 1,
+        coord.1 + index as i64 / 3 - 1,
+    )
+}
+
+/// The chunk that holds a block.
+pub const fn chunk_of(position: [i64; 3]) -> Coord {
+    (
+        position[0].div_euclid(CHUNK_SIZE as i64),
+        position[2].div_euclid(CHUNK_SIZE as i64),
+    )
+}
 
 // Material IDs are shared with the tile mapping in terrain.wgsl.
 const GRASS: u8 = 1;
@@ -773,12 +792,16 @@ fn face_visible(material: u32, neighbor: u32, axis: usize, up: bool) -> bool {
 }
 
 impl ChunkData {
-    /// Encodes the chunk for storage.
+    /// Encodes the chunk to send or keep it, an unlit stored chunk is sent without light.
     pub fn encode(&self) -> Vec<u8> {
         let mut raw = Vec::new();
         raw.extend_from_slice(&self.heights);
         raw.extend_from_slice(&self.blocks);
-        raw.extend_from_slice(&self.light);
+        if self.light.is_empty() {
+            raw.resize(raw.len() + self.blocks.len(), 0);
+        } else {
+            raw.extend_from_slice(&self.light);
+        }
         raw.extend_from_slice(&(self.max_height as u16).to_le_bytes());
         raw.extend_from_slice(&(self.plants.len() as u16).to_le_bytes());
         for plant in &self.plants {
@@ -873,31 +896,131 @@ impl ChunkData {
         })
     }
 
-    /// Generates and lights an unedited chunk.
+    /// Generates and lights an unedited chunk, which isn't stored, like the title screen's.
     pub fn generate(seed: u64, coord: Coord) -> Self {
-        Self::generate_edited(seed, coord, &[])
+        let mut chunk = Self::generate_unlit(seed, coord, false);
+        // The generated halo is already right, the neighbors only give light
+        let neighbors: [Option<Self>; 9] = core::array::from_fn(|index| {
+            (index != 4).then(|| Self::generate_unlit(seed, neighbor(coord, index), true))
+        });
+        let light = Self::bake_light(core::array::from_fn(|index| {
+            neighbors[index].as_ref().unwrap_or(&chunk)
+        }));
+        chunk.light = light;
+        chunk
     }
 
-    /// Generates and lights a chunk with the edits around it.
-    pub fn generate_edited(seed: u64, coord: Coord, edits: &[Edit]) -> Self {
-        Self::rebuild(seed, coord, &BTreeMap::new(), edits)
-    }
-
-    /// Generates the unedited chunk without light, a base for [`Self::rebuild`].
-    pub fn generate_base(seed: u64, coord: Coord) -> Self {
+    /// Generates the blocks of a chunk without light, the chunks that worlds store.
+    pub fn generate_blocks(seed: u64, coord: Coord) -> Self {
         Self::generate_unlit(seed, coord, false)
     }
 
-    /// Applies the edits to the unedited chunk and lights it. `bases` holds already
-    /// generated unedited chunks of it and its neighbors, the others are generated.
-    pub fn rebuild(seed: u64, coord: Coord, bases: &BTreeMap<Coord, Self>, edits: &[Edit]) -> Self {
-        let mut chunk = bases
-            .get(&coord)
-            .cloned()
-            .unwrap_or_else(|| Self::generate_unlit(seed, coord, false));
-        chunk.apply_edits(coord, edits);
-        chunk.bake_light(seed, coord, edits, bases);
+    /// Lights the stored blocks of a chunk with the stored blocks of the chunks around it, in
+    /// rows of `x` from the lowest `z`, its halo comes from the neighbors.
+    pub fn lit(chunks: [&Self; 9]) -> Self {
+        let mut chunk = chunks[4].clone();
+        for z in 0..PADDED_SIZE {
+            for x in 0..PADDED_SIZE {
+                if (1..=CHUNK_SIZE).contains(&x) && (1..=CHUNK_SIZE).contains(&z) {
+                    continue;
+                }
+                let side = |v: usize| v.div_ceil(CHUNK_SIZE);
+                let source = chunks[side(z) * 3 + side(x)];
+                let inner = |v: usize| (v + CHUNK_SIZE - 1) % CHUNK_SIZE + 1;
+                let from = (inner(z) * PADDED_SIZE + inner(x)) * HEIGHT;
+                let to = (z * PADDED_SIZE + x) * HEIGHT;
+                chunk.blocks[to..to + HEIGHT].copy_from_slice(&source.blocks[from..from + HEIGHT]);
+            }
+        }
+        chunk.measure();
+        chunk.light = Self::bake_light(chunks);
         chunk
+    }
+
+    /// Encodes the blocks of the chunk without its halo and light, as worlds store them.
+    pub fn encode_blocks(&self) -> Vec<u8> {
+        let mut raw = Vec::with_capacity(STORED_BYTES + 2 + self.plants.len() * 4);
+        for z in 1..=CHUNK_SIZE {
+            for x in 1..=CHUNK_SIZE {
+                let from = (z * PADDED_SIZE + x) * HEIGHT;
+                raw.extend_from_slice(&self.blocks[from..from + HEIGHT]);
+            }
+        }
+        raw.extend_from_slice(&(self.plants.len() as u16).to_le_bytes());
+        for plant in &self.plants {
+            raw.extend_from_slice(plant);
+        }
+        let mut encoded = STORED_MAGIC.to_vec();
+        encoded.extend(deflate::zlib_compress(&raw, deflate::Level::Fast));
+        encoded
+    }
+
+    /// Decodes and validates stored blocks, the halo stays empty until [`Self::lit`].
+    ///
+    /// # Errors
+    ///
+    /// When the data is truncated, corrupt, or has unknown materials.
+    pub fn decode_blocks(encoded: &[u8]) -> Result<Self, String> {
+        let invalid = || String::from("Invalid stored chunk");
+        let compressed = encoded.strip_prefix(STORED_MAGIC).ok_or_else(invalid)?;
+        let raw =
+            deflate::zlib_decompress(compressed, STORED_BYTES + 2 + 4 * STORED_BYTES / HEIGHT)
+                .map_err(|_| invalid())?;
+        let (stored, rest) = raw.split_at_checked(STORED_BYTES).ok_or_else(invalid)?;
+        let (count, plants) = rest.split_at_checked(2).ok_or_else(invalid)?;
+        let plants = plants.as_chunks::<4>();
+        if !plants.1.is_empty()
+            || plants.0.len() != usize::from(u16::from_le_bytes([count[0], count[1]]))
+        {
+            return Err(invalid());
+        }
+        let mut blocks = vec![0; PADDED_SIZE * PADDED_SIZE * HEIGHT];
+        for (index, column) in stored.as_chunks::<HEIGHT>().0.iter().enumerate() {
+            let to = ((index / CHUNK_SIZE + 1) * PADDED_SIZE + index % CHUNK_SIZE + 1) * HEIGHT;
+            for (block, &material) in blocks[to..to + HEIGHT].iter_mut().zip(column) {
+                *block = STORED_BLOCKS[usize::from(material)].ok_or_else(invalid)?;
+            }
+        }
+        let plants = plants.0.to_vec();
+        if plants.iter().any(|&[x, y, z, material]| {
+            usize::from(x) >= CHUNK_SIZE
+                || usize::from(z) >= CHUNK_SIZE
+                || usize::from(y) >= HEIGHT
+                || !is_sprite(material)
+        }) {
+            return Err(invalid());
+        }
+        let mut chunk = Self {
+            heights: [1; PADDED_SIZE * PADDED_SIZE],
+            blocks,
+            light: Vec::new(),
+            plants,
+            max_height: 0,
+        };
+        chunk.measure();
+        Ok(chunk)
+    }
+
+    // The height of each column and of the chunk from its blocks and plants.
+    fn measure(&mut self) {
+        for (height, column) in self
+            .heights
+            .iter_mut()
+            .zip(self.blocks.as_chunks::<HEIGHT>().0)
+        {
+            *height = column
+                .iter()
+                .rposition(|&b| b != 0)
+                .map_or(1, |y| y as u8 + 1);
+        }
+        let plants = self.plants.iter().map(|plant| usize::from(plant[1]) + 1);
+        self.max_height = self
+            .heights
+            .iter()
+            .map(|&h| usize::from(h))
+            .chain(plants)
+            .max()
+            .unwrap_or(1);
     }
 
     /// The material at a position in the chunk, including plants, air outside it.
@@ -1272,38 +1395,12 @@ impl ChunkData {
         }
     }
 
-    fn bake_light(
-        &mut self,
-        seed: u64,
-        coord: Coord,
-        edits: &[Edit],
-        bases: &BTreeMap<Coord, Self>,
-    ) {
+    // The light of the chunk in the middle of the chunks, from their blocks without halo.
+    fn bake_light(sources: [&Self; 9]) -> Vec<u8> {
         // Light loses a level per block, so only blocks within 14 of the mesh halo can
         // reach it. No neighbor loading or later remeshing is necessary.
         const MARGIN: usize = CHUNK_SIZE - 1;
         const WIDTH: usize = CHUNK_SIZE + 2 * MARGIN;
-        let neighbor = |index: usize| {
-            (
-                coord.0 + index as i64 % 3 - 1,
-                coord.1 + index as i64 / 3 - 1,
-            )
-        };
-        let generated: [Option<Self>; 9] = core::array::from_fn(|index| {
-            let neighbor = neighbor(index);
-            (neighbor != coord && !bases.contains_key(&neighbor))
-                .then(|| Self::generate_unlit(seed, neighbor, true))
-        });
-        let sources: [&Self; 9] = core::array::from_fn(|index| {
-            if index == 4 {
-                &*self
-            } else {
-                bases
-                    .get(&neighbor(index))
-                    .or(generated[index].as_ref())
-                    .expect("Neighbor base or generated chunk")
-            }
-        });
         let mut blocks = vec![0; WIDTH * WIDTH * HEIGHT];
         for z in 0..WIDTH {
             for x in 0..WIDTH {
@@ -1313,26 +1410,6 @@ impl ChunkData {
                 let from = ((wz % CHUNK_SIZE + 1) * PADDED_SIZE + wx % CHUNK_SIZE + 1) * HEIGHT;
                 let to = (z * WIDTH + x) * HEIGHT;
                 blocks[to..to + HEIGHT].copy_from_slice(&source.blocks[from..from + HEIGHT]);
-            }
-        }
-        // The bases are unedited, so the edits go on the copy. Plants let light through.
-        let corner = (
-            coord.0 * CHUNK_SIZE as i64 - MARGIN as i64,
-            coord.1 * CHUNK_SIZE as i64 - MARGIN as i64,
-        );
-        for edit in edits {
-            let [x, y, z] = edit.position;
-            let (x, z) = (x - corner.0, z - corner.1);
-            if (0..WIDTH as i64).contains(&x)
-                && (0..WIDTH as i64).contains(&z)
-                && (0..HEIGHT as i64).contains(&y)
-            {
-                blocks[(z as usize * WIDTH + x as usize) * HEIGHT + y as usize] =
-                    if is_sprite(edit.material) {
-                        0
-                    } else {
-                        edit.material
-                    };
             }
         }
         let light = crate::lighting::bake::<WIDTH, HEIGHT>(
@@ -1346,14 +1423,15 @@ impl ChunkData {
             },
             |material| if is_lava(material) { 15 } else { 0 },
         );
-        self.light.resize(self.blocks.len(), 0);
+        let mut padded = vec![0; PADDED_SIZE * PADDED_SIZE * HEIGHT];
         for z in 0..PADDED_SIZE {
             for x in 0..PADDED_SIZE {
                 let from = ((z + MARGIN - 1) * WIDTH + x + MARGIN - 1) * HEIGHT;
                 let to = (z * PADDED_SIZE + x) * HEIGHT;
-                self.light[to..to + HEIGHT].copy_from_slice(&light[from..from + HEIGHT]);
+                padded[to..to + HEIGHT].copy_from_slice(&light[from..from + HEIGHT]);
             }
         }
+        padded
     }
 
     // The mask key of a face toward a neighbor along an axis: its material, the light of the
@@ -1895,28 +1973,61 @@ mod tests {
         }
     }
 
+    // Lights a chunk from the stored chunks around it, with the edits that fall in them.
+    fn stored(coord: Coord, edits: &[Edit]) -> ChunkData {
+        let chunks: [ChunkData; 9] = core::array::from_fn(|index| {
+            let neighbor = neighbor(coord, index);
+            let mut chunk = ChunkData::generate_blocks(WORLD_SEED, neighbor);
+            chunk.apply_edits(neighbor, edits);
+            ChunkData::decode_blocks(&chunk.encode_blocks()).unwrap()
+        });
+        ChunkData::lit(chunks.each_ref())
+    }
+
     #[test]
-    fn rebuilding_from_generated_bases_matches_generating() {
+    fn stored_chunks_light_and_mesh_like_generated_chunks() {
+        for coord in [(-4, 3), (0, 0), (-66, -2), (17, -23)] {
+            let generated = ChunkData::generate(WORLD_SEED, coord);
+            let stored = stored(coord, &[]);
+            assert_eq!(stored.mesh(), generated.mesh(), "{coord:?}");
+            let decoded = ChunkData::decode(&stored.encode()).unwrap();
+            assert_eq!(decoded.mesh(), generated.mesh());
+        }
+    }
+
+    #[test]
+    fn stored_chunks_keep_edits_and_reject_corrupt_data() {
         let coord = (-4, 3);
         let origin = [coord.0 * CHUNK_SIZE as i64, coord.1 * CHUNK_SIZE as i64];
         let edits = [
             (origin[0] + 5, 70, origin[1] + 2, GLASS),
             (origin[0] - 1, 40, origin[1] + 15, 0),
-            (origin[0] + 20, 66, origin[1] - 3, LAVA),
             (origin[0] + 3, 80, origin[1] + 3, FIRST_PLANT),
         ]
         .map(|(x, y, z, material)| Edit {
             position: [x, y, z],
             material,
         });
-        let bases = (-1..=1)
-            .flat_map(|dz| (-1..=1).map(move |dx| (coord.0 + dx, coord.1 + dz)))
-            .map(|neighbor| (neighbor, ChunkData::generate_base(WORLD_SEED, neighbor)))
-            .collect();
-        let rebuilt = ChunkData::rebuild(WORLD_SEED, coord, &bases, &edits);
-        let generated = ChunkData::generate_edited(WORLD_SEED, coord, &edits);
-        assert_eq!(rebuilt.encode(), generated.encode());
-        assert_eq!(rebuilt.mesh(), generated.mesh());
+        let chunk = stored(coord, &edits);
+        assert_eq!(chunk.voxel([5, 70, 2]), GLASS);
+        assert_eq!(chunk.block([-1, 40, 15]), 0);
+        assert_eq!(chunk.voxel([3, 80, 3]), FIRST_PLANT);
+        let encoded = chunk.encode_blocks();
+        assert!(encoded.len() < STORED_BYTES / 4);
+        assert_eq!(
+            ChunkData::decode_blocks(&encoded).unwrap().encode_blocks(),
+            encoded
+        );
+        let mut corrupt = encoded.clone();
+        *corrupt.last_mut().unwrap() ^= 1;
+        assert!(ChunkData::decode_blocks(&corrupt).is_err());
+        assert!(ChunkData::decode_blocks(&encoded[..encoded.len() - 1]).is_err());
+        assert!(ChunkData::decode_blocks(&chunk.encode()).is_err());
+        // Guests get stored chunks for their collisions
+        let stored = ChunkData::decode_blocks(&encoded).unwrap();
+        let sent = ChunkData::decode(&stored.encode()).unwrap();
+        assert_eq!(sent.voxel([5, 70, 2]), GLASS);
+        assert_eq!(sent.voxel([3, 80, 3]), FIRST_PLANT);
     }
 
     #[test]
@@ -2064,8 +2175,8 @@ mod tests {
                 material: FIRST_PLANT,
             },
         ];
-        let left = ChunkData::generate_edited(WORLD_SEED, (-1, 0), &edits);
-        let right = ChunkData::generate_edited(WORLD_SEED, (0, 0), &edits);
+        let left = stored((-1, 0), &edits);
+        let right = stored((0, 0), &edits);
         assert_eq!(left.voxel([15, 120, 0]), LAVA);
         assert_eq!(right.block([-1, 120, 0]), u32::from(LAVA));
         assert!(right.light_at([0, 120, 0]) >> 4 > 0);

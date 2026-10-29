@@ -59,43 +59,48 @@ struct Client {
     epoch: Arc<AtomicU64>,
 }
 
-// The world database as the storage of the engine's server.
-struct Storage<'a>(&'a Database);
+// The world database as the storage of the engine's server. The revision counts the saved
+// edits, the terrain workers read it before the chunks, so their chunks are never newer.
+struct Storage<'a> {
+    db: &'a Database,
+    revision: &'a AtomicU64,
+}
 
 impl rules::World for Storage<'_> {
     fn chunk(&mut self, coord: Coord) -> Option<ChunkData> {
-        self.0
-            .blocks(coord)
+        self.db
+            .chunk(coord)
             .inspect_err(|error| eprintln!("Could not read blocks: {error}"))
             .ok()
             .flatten()
     }
 
     fn save_edits(&mut self, edits: &[Edit]) -> Result<u64, String> {
-        self.0.edits(edits)
+        self.db.edit(edits)?;
+        Ok(self.revision.fetch_add(1, Ordering::Release) + 1)
     }
 
     fn revision(&mut self) -> Result<u64, String> {
-        self.0.revision()
+        Ok(self.revision.load(Ordering::Acquire))
     }
 
     fn player(&mut self) -> Result<Player, String> {
-        self.0.player()
+        self.db.player()
     }
 
     fn guest(&mut self, name: &str) -> Result<Option<Player>, String> {
-        self.0.guest(name)
+        self.db.guest(name)
     }
 
     fn save_player(&mut self, guest: Option<&str>, player: &Player) -> Result<(), String> {
         match guest {
-            Some(name) => self.0.save_guest(name, player),
-            None => self.0.save_player(player),
+            Some(name) => self.db.save_guest(name, player),
+            None => self.db.save_player(player),
         }
     }
 
     fn save_fluids(&mut self, positions: &[[i64; 3]]) -> Result<(), String> {
-        self.0.save_fluid_updates(positions)
+        self.db.save_fluid_updates(positions)
     }
 }
 
@@ -141,6 +146,9 @@ impl Connection {
                     Ok(db) => {
                         if opened.send(Ok(())).is_ok() {
                             serve(&db, path, &incoming, &players);
+                        }
+                        if let Err(error) = db.close() {
+                            eprintln!("Could not close the world: {error}");
                         }
                     }
                     Err(error) => drop(opened.send(Err(error))),
@@ -272,9 +280,10 @@ fn serve(db: &Database, path: PathBuf, messages: &Receiver<Message>, players: &A
     let available = thread::available_parallelism().map_or(1, usize::from);
     let (jobs, queue) = mpsc::channel::<Job>();
     let queue = Arc::new(Mutex::new(queue));
+    let revision = Arc::new(AtomicU64::new(0));
     let workers: Vec<_> = (0..available.saturating_sub(1).max(1))
         .map(|index| {
-            let (path, queue) = (path.clone(), queue.clone());
+            let (path, queue, revision) = (path.clone(), queue.clone(), revision.clone());
             thread::Builder::new()
                 .name(format!("terrain-{index}"))
                 .spawn(move || {
@@ -286,8 +295,8 @@ fn serve(db: &Database, path: PathBuf, messages: &Receiver<Message>, players: &A
                         let Ok(job) = job else { break };
                         let (chunk, revision) = if job.epoch == job.canceled.load(Ordering::Relaxed)
                         {
-                            let (chunk, revision) =
-                                db.terrain(job.coord).expect("Load or generate chunk");
+                            let revision = revision.load(Ordering::Acquire);
+                            let chunk = db.terrain(job.coord).expect("Load or generate chunk");
                             (Some(chunk), revision)
                         } else {
                             (None, 0)
@@ -309,7 +318,10 @@ fn serve(db: &Database, path: PathBuf, messages: &Receiver<Message>, players: &A
         eprintln!("Could not read fluid updates: {error}");
         Vec::new()
     });
-    let mut storage = Storage(db);
+    let mut storage = Storage {
+        db,
+        revision: &revision,
+    };
     let mut server = rules::Server::new(&mut storage, Limits::default(), &fluids);
     let mut clients = BTreeMap::new();
     let mut next_tick = Instant::now() + TICK;
@@ -407,7 +419,7 @@ fn deliver(
                     _ = client.responses.send(Response::Blocks {
                         coord,
                         tag,
-                        chunk: db.blocks(coord).expect("Read nearby blocks"),
+                        chunk: db.chunk(coord).expect("Read nearby blocks"),
                     });
                 }
             }
@@ -503,7 +515,8 @@ pub(crate) mod tests {
         let (_server, welcome) = host(&world);
         assert_eq!(welcome.player.hotbar, hotbar);
         assert!(welcome.player.flying && welcome.player.night);
-        assert_eq!(welcome.revision, revision.unwrap());
+        let chunk = Database::open(&world.path).unwrap().chunk((0, 0)).unwrap();
+        assert_eq!(chunk.unwrap().voxel([0, 120, 0]), 3);
     }
 
     fn message(server: &mut Connection) -> String {
@@ -641,7 +654,7 @@ pub(crate) mod tests {
         let world = TestWorld::new();
         Database::open(&world.path)
             .unwrap()
-            .save_chunk((0, 0), &ChunkData::from_heights([60; 18 * 18]).encode())
+            .store((0, 0), &ChunkData::from_heights([60; 18 * 18]))
             .unwrap();
         // The host sends no input, like a paused game, and still falls.
         let (mut server, _) = host(&world);
@@ -668,7 +681,7 @@ pub(crate) mod tests {
         let world = TestWorld::new();
         Database::open(&world.path)
             .unwrap()
-            .save_chunk((0, 0), &ChunkData::from_heights([60; 18 * 18]).encode())
+            .store((0, 0), &ChunkData::from_heights([60; 18 * 18]))
             .unwrap();
         let (mut server, _) = host(&world);
         let flowed = |server: &mut Connection| {

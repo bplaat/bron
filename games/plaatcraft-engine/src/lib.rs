@@ -7,8 +7,9 @@
 //! The platform independent part of PlaatCraft: world generation, lighting, chunk
 //! meshing, player physics and its client prediction, block picking, the hotbar, when sound
 //! effects play, block particles, the game rules of the integrated server, the LAN protocol,
-//! the other players' models, and the menus. It only needs `alloc`, so the bwindow game and
-//! the Wii port share it, they add rendering, input, sound output, storage and networking.
+//! the other players' models, the menus, and the world database. It only needs `alloc`, so
+//! the bwindow game and the Wii port share it, they add rendering, input, sound output,
+//! storage and networking.
 
 #![no_std]
 
@@ -19,6 +20,7 @@ extern crate std;
 pub mod avatars;
 mod biome;
 pub mod camera;
+pub mod database;
 pub mod flow;
 pub mod hotbar;
 mod lighting;

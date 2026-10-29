@@ -536,10 +536,9 @@ mod tests {
         let world = TestWorld::new();
         // Store a distinctive flat chunk to prove loading bypasses world generation.
         let terrain = ChunkData::from_heights([60; (world::CHUNK_SIZE + 2).pow(2)]);
-        let mesh = terrain.mesh();
         Database::open(&world.path)
             .unwrap()
-            .save_chunk((0, 0), &terrain.encode())
+            .store((0, 0), &terrain)
             .unwrap();
         let (mut server, welcome) = crate::server::tests::host(&world);
         let mut stream = Stream::with_workers(1, welcome.revision);
@@ -547,7 +546,8 @@ mod tests {
         stream.desired = vec![(0, 0)];
         stream.loading = stream.desired.clone();
         wait_for_center(&mut stream, &mut server, (0, 0));
-        assert_eq!(stream.cache[&(0, 0)].mesh, mesh);
+        let mesh = stream.cache[&(0, 0)].mesh.clone();
+        assert_ne!(mesh, ChunkData::generate(world::WORLD_SEED, (0, 0)).mesh());
         stream.trim_cache(0, 0);
         assert!(stream.cache.is_empty());
         wait_for_center(&mut stream, &mut server, (0, 0));

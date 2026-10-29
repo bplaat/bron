@@ -11,14 +11,14 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-use plaatcraft_engine::protocol::valid_char;
+pub(crate) use plaatcraft_engine::database::MAX_NAME_LENGTH;
+use plaatcraft_engine::database::validate_name;
 
 use crate::database::Database;
 
 const EXTENSION: &str = "db";
 // SQLite keeps these next to an open or uncleanly closed database.
 const SIDECARS: [&str; 3] = ["-wal", "-shm", "-journal"];
-pub(crate) const MAX_NAME_LENGTH: usize = 32;
 const DEFAULT_NAME: &str = "New World";
 
 pub(crate) struct World {
@@ -62,7 +62,9 @@ impl Worlds {
                 }
                 let name = path.file_stem()?.to_str()?.to_owned();
                 let modified = entry.metadata().ok()?.modified().ok()?;
-                validate(&name).is_ok().then_some(World { name, modified })
+                validate_name(&name)
+                    .is_ok()
+                    .then_some(World { name, modified })
             })
             .collect();
         worlds.sort_by(|a, b| {
@@ -107,7 +109,7 @@ impl Worlds {
     }
 
     pub(crate) fn rename(&self, from: &str, to: &str) -> Result<String, String> {
-        let to = validate(to)?;
+        let to = validate_name(to)?;
         if to != from {
             if !to.eq_ignore_ascii_case(from) {
                 self.available(to)?;
@@ -126,24 +128,10 @@ impl Worlds {
     }
 
     fn available<'a>(&self, name: &'a str) -> Result<&'a str, String> {
-        let name = validate(name)?;
+        let name = validate_name(name)?;
         if self.taken(name) {
             return Err("A world with this name already exists".into());
         }
-        Ok(name)
-    }
-}
-
-/// Checks a world name, which is also its file name, and returns it trimmed.
-pub(crate) fn validate(name: &str) -> Result<&str, String> {
-    let name = name.trim();
-    if name.is_empty() {
-        Err("Enter a name for the world".into())
-    } else if name.chars().count() > MAX_NAME_LENGTH {
-        Err(format!("Use at most {MAX_NAME_LENGTH} characters"))
-    } else if name.starts_with('.') || name.ends_with('.') || !name.chars().all(valid_char) {
-        Err("Names can't contain < > : \" / \\ | ? * or start or end with a dot".into())
-    } else {
         Ok(name)
     }
 }
@@ -229,15 +217,5 @@ mod tests {
                 .count(),
             1
         );
-    }
-
-    #[test]
-    fn names_are_trimmed_and_safe_file_names() {
-        assert_eq!(validate("  Hello World "), Ok("Hello World"));
-        for name in ["", "   ", ".hidden", "end.", "a/b", "a\\b", "what?", "a\tb"] {
-            assert!(validate(name).is_err(), "{name}");
-        }
-        assert!(validate(&"x".repeat(MAX_NAME_LENGTH)).is_ok());
-        assert!(validate(&"x".repeat(MAX_NAME_LENGTH + 1)).is_err());
     }
 }

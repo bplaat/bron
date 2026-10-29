@@ -4,22 +4,18 @@
  * SPDX-License-Identifier: MIT
  */
 
+//! The world database of the engine's schema, in WAL mode while the world is open. Edits
+//! rewrite the stored chunks they fall in, generated chunks are stored when first loaded, so
+//! a world never changes with the world generation.
+
 use std::ffi::{CStr, CString};
 use std::path::Path;
 use std::ptr;
 
 use libsqlite3_sys as sql;
+use plaatcraft_engine::database::{self as schema, APPLICATION_ID, VERSION};
 use plaatcraft_engine::protocol::{MAX_BLOB_SIZE, Player};
 use plaatcraft_engine::world::{self, ChunkData, Coord, Edit};
-
-fn compress_chunk(data: &[u8]) -> Vec<u8> {
-    deflate::zlib_compress(data, deflate::Level::Default)
-}
-
-fn decompress_chunk(data: Vec<u8>) -> Result<Vec<u8>> {
-    deflate::zlib_decompress(&data, MAX_BLOB_SIZE)
-        .map_err(|error| format!("Invalid compressed chunk: {error}"))
-}
 
 type Result<T> = std::result::Result<T, String>;
 
@@ -81,33 +77,27 @@ impl Database {
                 (&raw mut persist_wal).cast(),
             );
         }
-        let mut version = db.prepare(c"PRAGMA user_version")?;
-        version.row()?;
-        let version_number = version.integer(0);
-        drop(version);
-        if !matches!(version_number, 0 | 1) {
-            return Err(format!(
-                "Unsupported world database version {version_number}"
-            ));
+        let identity = {
+            let mut stmt = db.prepare(schema::IDENTITY)?;
+            stmt.row()?;
+            [stmt.integer(0), stmt.integer(1)]
+        };
+        if identity != [0, 0] && identity != [APPLICATION_ID, VERSION] {
+            return Err("Unsupported world database".into());
         }
+        // Edits commit to the WAL without waiting for the disk, which stays consistent and
+        // only loses the last edits on a power loss, so slow disks don't stall the game.
         db.execute(c"PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA cache_size=-4096; PRAGMA wal_autocheckpoint=1000; PRAGMA journal_size_limit=16777216;")?;
-        db.execute(c"BEGIN IMMEDIATE;
-            CREATE TABLE IF NOT EXISTS metadata (id INTEGER PRIMARY KEY CHECK(id=1), seed INTEGER NOT NULL);
-            CREATE TABLE IF NOT EXISTS chunks (x INTEGER NOT NULL, z INTEGER NOT NULL, data BLOB NOT NULL, PRIMARY KEY(x,z));
-            CREATE TABLE IF NOT EXISTS game_state (id INTEGER PRIMARY KEY CHECK(id=1), data BLOB NOT NULL);
-            CREATE TABLE IF NOT EXISTS interaction (id INTEGER PRIMARY KEY CHECK(id=1), revision INTEGER NOT NULL);
-            INSERT OR IGNORE INTO interaction VALUES(1,0);
-            CREATE TABLE IF NOT EXISTS players (name BLOB PRIMARY KEY, data BLOB NOT NULL) WITHOUT ROWID;
-            CREATE TABLE IF NOT EXISTS fluid_updates (x INTEGER NOT NULL, y INTEGER NOT NULL, z INTEGER NOT NULL, PRIMARY KEY(x,y,z)) WITHOUT ROWID;
-            CREATE TABLE IF NOT EXISTS edits (x INTEGER NOT NULL, y INTEGER NOT NULL, z INTEGER NOT NULL, material INTEGER NOT NULL, PRIMARY KEY(x,z,y)) WITHOUT ROWID;
-            CREATE TABLE IF NOT EXISTS dirty_chunks (x INTEGER NOT NULL, z INTEGER NOT NULL, PRIMARY KEY(x,z)) WITHOUT ROWID;
-            PRAGMA user_version=1; COMMIT;")?;
-        if let Some(seed) = seed {
-            let mut stmt = db.prepare(c"INSERT INTO metadata(id,seed) VALUES(1,?)")?;
-            stmt.bind_int(1, seed as i64)?;
-            stmt.done()?;
-        }
-        let mut stmt = db.prepare(c"SELECT seed FROM metadata WHERE id=1")?;
+        db.transaction(|| {
+            db.execute(schema::SCHEMA)?;
+            if let Some(seed) = seed {
+                let mut stmt = db.prepare(schema::SET_SEED)?;
+                stmt.bind_int(1, seed as i64)?;
+                stmt.done()?;
+            }
+            Ok(())
+        })?;
+        let mut stmt = db.prepare(schema::SEED)?;
         if !stmt.row()? {
             return Err("World seed is missing".into());
         }
@@ -115,6 +105,12 @@ impl Database {
         drop(stmt);
         db.seed = seed;
         Ok(db)
+    }
+
+    /// Closes the last connection of the world and leaves a rollback journal database,
+    /// because the Wii's SQLite has no WAL.
+    pub(crate) fn close(self) -> Result<()> {
+        self.execute(c"PRAGMA journal_mode=DELETE")
     }
 
     fn check(&self, code: i32) -> Result<()> {
@@ -141,6 +137,16 @@ impl Database {
         })
     }
 
+    // Runs the writes in one transaction, which is rolled back when they fail.
+    fn transaction<T>(&self, writes: impl FnOnce() -> Result<T>) -> Result<T> {
+        self.execute(c"BEGIN IMMEDIATE")?;
+        let result = writes().and_then(|value| self.execute(c"COMMIT").map(|()| value));
+        if result.is_err() {
+            let _ = self.execute(c"ROLLBACK");
+        }
+        result
+    }
+
     fn prepare(&self, text: &CStr) -> Result<Statement<'_>> {
         let mut raw = ptr::null_mut();
         // SAFETY: All input pointers are valid and `raw` receives the owned statement.
@@ -150,121 +156,84 @@ impl Database {
         Ok(Statement { raw, db: self })
     }
 
-    pub(crate) fn load_chunk(&self, (x, z): Coord) -> Result<Option<Vec<u8>>> {
-        let mut stmt = self.prepare(c"SELECT data FROM chunks WHERE x=? AND z=? AND NOT EXISTS (SELECT 1 FROM dirty_chunks WHERE dirty_chunks.x=chunks.x AND dirty_chunks.z=chunks.z)")?;
+    /// The stored blocks of a chunk, `None` while it was never loaded.
+    pub(crate) fn chunk(&self, (x, z): Coord) -> Result<Option<ChunkData>> {
+        let mut stmt = self.prepare(schema::CHUNK)?;
         stmt.bind_int(1, x)?;
         stmt.bind_int(2, z)?;
         if stmt.row()? {
-            Ok(Some(decompress_chunk(stmt.blob(0)?)?))
+            ChunkData::decode_blocks(&stmt.blob(0)?).map(Some)
         } else {
             Ok(None)
         }
     }
 
-    fn load_base(&self, (x, z): Coord) -> Result<Option<Vec<u8>>> {
-        let mut stmt = self.prepare(c"SELECT data FROM chunks WHERE x=? AND z=?")?;
+    fn save_chunk(&self, (x, z): Coord, chunk: &ChunkData, statement: &CStr) -> Result<()> {
+        let mut stmt = self.prepare(statement)?;
         stmt.bind_int(1, x)?;
         stmt.bind_int(2, z)?;
-        if stmt.row()? {
-            Ok(Some(decompress_chunk(stmt.blob(0)?)?))
-        } else {
-            Ok(None)
-        }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn save_chunk(&self, coord: Coord, data: &[u8]) -> Result<()> {
-        self.store_chunk(coord, &compress_chunk(data))
-    }
-
-    fn store_chunk(&self, (x, z): Coord, data: &[u8]) -> Result<()> {
-        let mut stmt = self.prepare(c"INSERT INTO chunks(x,z,data) VALUES(?,?,?) ON CONFLICT(x,z) DO UPDATE SET data=excluded.data")?;
-        stmt.bind_int(1, x)?;
-        stmt.bind_int(2, z)?;
-        stmt.bind_blob(3, data)?;
+        stmt.bind_blob(3, &chunk.encode_blocks())?;
         stmt.done()
     }
 
-    pub(crate) fn revision(&self) -> Result<u64> {
-        let mut stmt = self.prepare(c"SELECT revision FROM interaction WHERE id=1")?;
-        stmt.row()?;
-        Ok(stmt.integer(0) as u64)
+    /// The lit chunk from the stored chunks around it, a chunk that was never loaded is
+    /// generated and stored, its neighbors only light it.
+    pub(crate) fn terrain(&self, coord: Coord) -> Result<ChunkData> {
+        // One read transaction, so the chunks come from one consistent WAL snapshot.
+        self.execute(c"BEGIN")?;
+        let stored: Result<Vec<_>> = (0..9)
+            .map(|index| self.chunk(world::neighbor(coord, index)))
+            .collect();
+        self.execute(c"COMMIT")?;
+        let mut stored = stored?;
+        if stored[4].is_none() {
+            let chunk = ChunkData::generate_blocks(self.seed, coord);
+            // An edit may have stored the chunk meanwhile, the client loads it again then.
+            self.save_chunk(coord, &chunk, schema::ADD_CHUNK)?;
+            stored[4] = Some(chunk);
+        }
+        let chunks: Vec<_> = stored
+            .into_iter()
+            .enumerate()
+            .map(|(index, chunk)| {
+                chunk.unwrap_or_else(|| {
+                    ChunkData::generate_blocks(self.seed, world::neighbor(coord, index))
+                })
+            })
+            .collect();
+        Ok(ChunkData::lit(std::array::from_fn(|index| &chunks[index])))
     }
 
-    fn load_edits(&self, coord: Coord) -> Result<Vec<Edit>> {
-        let mut stmt = self.prepare(
-            c"SELECT x,y,z,material FROM edits WHERE x BETWEEN ? AND ? AND z BETWEEN ? AND ?",
-        )?;
-        for (i, value) in [
-            coord.0 * 16 - 16,
-            coord.0 * 16 + 31,
-            coord.1 * 16 - 16,
-            coord.1 * 16 + 31,
-        ]
-        .into_iter()
-        .enumerate()
-        {
-            stmt.bind_int(i as i32 + 1, value)?;
-        }
-        let mut edits = Vec::new();
-        while stmt.row()? {
-            let material = u8::try_from(stmt.integer(3)).map_err(|e| e.to_string())?;
-            let position = [stmt.integer(0), stmt.integer(1), stmt.integer(2)];
-            if material != 0 && !world::valid_material(material)
-                || !(3..world::HEIGHT as i64).contains(&position[1])
-            {
-                return Err("Invalid saved block edit".into());
-            }
-            edits.push(Edit { position, material });
-        }
-        Ok(edits)
-    }
-
-    /// Saves edits at one new revision.
-    pub(crate) fn edits(&self, edits: &[Edit]) -> Result<u64> {
+    /// Stores the edits in the chunks they fall in, at once.
+    pub(crate) fn edit(&self, edits: &[Edit]) -> Result<()> {
         if edits.iter().any(|edit| {
             (edit.material != 0 && !world::valid_material(edit.material))
                 || !(3..world::HEIGHT as i64).contains(&edit.position[1])
         }) {
             return Err("Cannot edit this block".into());
         }
-        self.execute(c"BEGIN IMMEDIATE")?;
-        let result = (|| {
-            let mut stmt = self.prepare(c"INSERT INTO edits(x,y,z,material) VALUES(?,?,?,?) ON CONFLICT(x,z,y) DO UPDATE SET material=excluded.material")?;
-            let mut invalidate =
-                self.prepare(c"INSERT OR IGNORE INTO dirty_chunks(x,z) SELECT x,z FROM chunks WHERE x BETWEEN ? AND ? AND z BETWEEN ? AND ?")?;
-            for edit in edits {
-                for (i, value) in edit
-                    .position
-                    .into_iter()
-                    .chain([i64::from(edit.material)])
-                    .enumerate()
-                {
-                    stmt.bind_int(i as i32 + 1, value)?;
-                }
-                stmt.done()?;
-                stmt.reset();
-                let x = edit.position[0].div_euclid(16);
-                let z = edit.position[2].div_euclid(16);
-                for (i, value) in [x - 1, x + 1, z - 1, z + 1].into_iter().enumerate() {
-                    invalidate.bind_int(i as i32 + 1, value)?;
-                }
-                invalidate.done()?;
-                invalidate.reset();
+        let mut coords: Vec<_> = edits
+            .iter()
+            .map(|edit| world::chunk_of(edit.position))
+            .collect();
+        coords.sort_unstable();
+        coords.dedup();
+        self.transaction(|| {
+            for coord in coords {
+                let mut chunk = match self.chunk(coord)? {
+                    Some(chunk) => chunk,
+                    None => ChunkData::generate_blocks(self.seed, coord),
+                };
+                chunk.apply_edits(coord, edits);
+                self.save_chunk(coord, &chunk, schema::SAVE_CHUNK)?;
             }
-            drop((stmt, invalidate));
-            self.execute(c"UPDATE interaction SET revision=revision+1 WHERE id=1; COMMIT")?;
-            self.revision()
-        })();
-        if result.is_err() {
-            let _ = self.execute(c"ROLLBACK");
-        }
-        result
+            Ok(())
+        })
     }
 
     /// The blocks whose fluid still has to flow, saved when the world closed.
     pub(crate) fn fluid_updates(&self) -> Result<Vec<[i64; 3]>> {
-        let mut stmt = self.prepare(c"SELECT x,y,z FROM fluid_updates")?;
+        let mut stmt = self.prepare(schema::FLUIDS)?;
         let mut positions = Vec::new();
         while stmt.row()? {
             positions.push([stmt.integer(0), stmt.integer(1), stmt.integer(2)]);
@@ -273,11 +242,9 @@ impl Database {
     }
 
     pub(crate) fn save_fluid_updates(&self, positions: &[[i64; 3]]) -> Result<()> {
-        self.execute(c"BEGIN IMMEDIATE")?;
-        let result = (|| {
-            self.execute(c"DELETE FROM fluid_updates")?;
-            let mut stmt =
-                self.prepare(c"INSERT OR IGNORE INTO fluid_updates(x,y,z) VALUES(?,?,?)")?;
+        self.transaction(|| {
+            self.execute(schema::CLEAR_FLUIDS)?;
+            let mut stmt = self.prepare(schema::ADD_FLUID)?;
             for position in positions {
                 for (i, &value) in position.iter().enumerate() {
                     stmt.bind_int(i as i32 + 1, value)?;
@@ -285,107 +252,12 @@ impl Database {
                 stmt.done()?;
                 stmt.reset();
             }
-            drop(stmt);
-            self.execute(c"COMMIT")
-        })();
-        if result.is_err() {
-            let _ = self.execute(c"ROLLBACK");
-        }
-        result
-    }
-
-    pub(crate) fn blocks(&self, coord: Coord) -> Result<Option<ChunkData>> {
-        // Collision/picking needs current voxels even while lighting is being rebuilt.
-        self.execute(c"BEGIN")?;
-        let result = (|| {
-            let base = self.load_base(coord)?;
-            let edits = if base.is_some() {
-                self.load_edits(coord)?
-            } else {
-                Vec::new()
-            };
-            self.execute(c"COMMIT")?;
-            base.map(|data| {
-                let mut chunk = ChunkData::decode(&data)?;
-                chunk.apply_edits(coord, &edits);
-                Ok(chunk)
-            })
-            .transpose()
-        })();
-        if result.is_err() {
-            let _ = self.execute(c"ROLLBACK");
-        }
-        result
-    }
-
-    pub(crate) fn terrain(&self, coord: Coord) -> Result<(ChunkData, u64)> {
-        // Read the cache, edits and revision from one consistent WAL snapshot.
-        self.execute(c"BEGIN")?;
-        let snapshot = (|| {
-            let revision = self.revision()?;
-            let saved = self.load_chunk(coord)?;
-            let edits = if saved.is_none() {
-                self.load_edits(coord)?
-            } else {
-                Vec::new()
-            };
-            let mut bases = Vec::new();
-            if saved.is_none() {
-                for z in coord.1 - 1..=coord.1 + 1 {
-                    for x in coord.0 - 1..=coord.0 + 1 {
-                        if let Some(data) = self.load_base((x, z))? {
-                            bases.push(((x, z), data));
-                        }
-                    }
-                }
-            }
-            self.execute(c"COMMIT")?;
-            Ok((revision, saved, edits, bases))
-        })();
-        let (revision, saved, edits, bases) = match snapshot {
-            Ok(snapshot) => snapshot,
-            Err(error) => {
-                let _ = self.execute(c"ROLLBACK");
-                return Err(error);
-            }
-        };
-        let terrain = if let Some(data) = saved {
-            ChunkData::decode(&data)?
-        } else {
-            let bases = bases
-                .into_iter()
-                .map(|(coord, data)| Ok((coord, ChunkData::decode(&data)?)))
-                .collect::<Result<std::collections::BTreeMap<_, _>>>()?;
-            let terrain = ChunkData::rebuild(self.seed, coord, &bases, &edits);
-            self.save_generated(coord, &terrain.encode(), revision)?;
-            terrain
-        };
-        Ok((terrain, revision))
-    }
-
-    fn save_generated(&self, (x, z): Coord, data: &[u8], revision: u64) -> Result<()> {
-        let data = compress_chunk(data);
-        // Preserve saved block data while replacing derived lighting. A stale worker
-        // cannot clear a newer dirty marker or overwrite a newer edit.
-        self.execute(c"BEGIN IMMEDIATE")?;
-        let result = (|| {
-            if self.revision()? == revision {
-                self.store_chunk((x, z), &data)?;
-                let mut stmt = self.prepare(c"DELETE FROM dirty_chunks WHERE x=? AND z=?")?;
-                stmt.bind_int(1, x)?;
-                stmt.bind_int(2, z)?;
-                stmt.done()?;
-            }
-            self.execute(c"COMMIT")
-        })();
-        if result.is_err() {
-            let _ = self.execute(c"ROLLBACK");
-        }
-        result
+            Ok(())
+        })
     }
 
     pub(crate) fn player(&self) -> Result<Player> {
-        let mut stmt = self.prepare(c"SELECT data FROM game_state WHERE id=1")?;
+        let mut stmt = self.prepare(schema::PLAYER)?;
         if stmt.row()? {
             Player::decode(&stmt.blob(0)?)
         } else {
@@ -394,14 +266,14 @@ impl Database {
     }
 
     pub(crate) fn save_player(&self, player: &Player) -> Result<()> {
-        let mut stmt = self.prepare(c"INSERT INTO game_state(id,data) VALUES(1,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data")?;
+        let mut stmt = self.prepare(schema::SAVE_PLAYER)?;
         stmt.bind_blob(1, &player.encode())?;
         stmt.done()
     }
 
     /// A player that joined the world over the network, by name.
     pub(crate) fn guest(&self, name: &str) -> Result<Option<Player>> {
-        let mut stmt = self.prepare(c"SELECT data FROM players WHERE name=?")?;
+        let mut stmt = self.prepare(schema::GUEST)?;
         stmt.bind_blob(1, name.as_bytes())?;
         if stmt.row()? {
             Player::decode(&stmt.blob(0)?).map(Some)
@@ -411,7 +283,7 @@ impl Database {
     }
 
     pub(crate) fn save_guest(&self, name: &str, player: &Player) -> Result<()> {
-        let mut stmt = self.prepare(c"INSERT INTO players(name,data) VALUES(?,?) ON CONFLICT(name) DO UPDATE SET data=excluded.data")?;
+        let mut stmt = self.prepare(schema::SAVE_GUEST)?;
         stmt.bind_blob(1, name.as_bytes())?;
         stmt.bind_blob(2, &player.encode())?;
         stmt.done()
@@ -536,6 +408,13 @@ pub(crate) mod tests {
         Database::create(Path::new(":memory:"), world::WORLD_SEED).unwrap()
     }
 
+    impl Database {
+        /// Stores the blocks of a chunk, like a flat one to tell it from generated terrain.
+        pub(crate) fn store(&self, coord: Coord, chunk: &ChunkData) -> Result<()> {
+            self.save_chunk(coord, chunk, schema::SAVE_CHUNK)
+        }
+    }
+
     #[test]
     fn chunk_blobs_use_a_rowid_table_to_avoid_overflow_page_waste() {
         let db = memory();
@@ -544,20 +423,6 @@ pub(crate) mod tests {
             .unwrap();
         assert!(table.row().unwrap());
         assert_eq!(table.integer(0), 0);
-    }
-
-    #[test]
-    fn chunk_compression_is_bounded_and_detects_corruption() {
-        let data = vec![7; 80_000];
-        let compressed = compress_chunk(&data);
-        assert!(compressed.len() < data.len() / 10);
-        assert_eq!(decompress_chunk(compressed.clone()).unwrap(), data);
-        let mut corrupt = compressed.clone();
-        *corrupt.last_mut().unwrap() ^= 1;
-        assert!(decompress_chunk(corrupt).is_err());
-        assert!(decompress_chunk(compressed[..compressed.len() - 1].to_vec()).is_err());
-        assert!(decompress_chunk(compress_chunk(&vec![0; MAX_BLOB_SIZE + 1])).is_err());
-        assert!(decompress_chunk(vec![1, 2, 3]).is_err());
     }
 
     #[test]
@@ -589,7 +454,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn edits_survive_restart_and_old_workers_cannot_restore_invalidated_chunks() {
+    fn loaded_and_edited_chunks_are_stored_and_survive_restart() {
         let world = TestWorld::new();
         let edit = Edit {
             position: [-1, 120, 0],
@@ -597,20 +462,19 @@ pub(crate) mod tests {
         };
         {
             let db = Database::open(&world.path).unwrap();
-            let flat = ChunkData::from_heights([60; 18 * 18]);
-            db.save_chunk((-1, 0), &flat.encode()).unwrap();
-            let (old, old_revision) = db.terrain((-1, 0)).unwrap();
-            db.terrain((0, 0)).unwrap();
-            let revision = db.edits(&[edit]).unwrap();
-            assert!(revision > old_revision);
-            assert!(db.load_chunk((-1, 0)).unwrap().is_none());
-            assert!(db.load_chunk((0, 0)).unwrap().is_none());
-            db.save_generated((-1, 0), &old.encode(), old_revision)
-                .unwrap();
-            assert!(db.load_chunk((-1, 0)).unwrap().is_none());
-            assert_eq!(db.terrain((-1, 0)).unwrap().0.voxel([15, 120, 0]), 24);
-            assert_eq!(db.terrain((-1, 0)).unwrap().0.voxel([8, 59, 8]), 1);
-            assert_eq!(db.terrain((-1, 0)).unwrap().0.voxel([8, 60, 8]), 0);
+            assert!(db.chunk((0, 0)).unwrap().is_none());
+            let generated = db.terrain((0, 0)).unwrap();
+            assert_eq!(
+                generated.mesh(),
+                ChunkData::generate(world::WORLD_SEED, (0, 0)).mesh()
+            );
+            // Only the loaded chunk is stored, its neighbors only light it.
+            assert!(db.chunk((0, 0)).unwrap().is_some());
+            assert!(db.chunk((-1, 0)).unwrap().is_none());
+            db.edit(&[edit]).unwrap();
+            assert_eq!(db.chunk((-1, 0)).unwrap().unwrap().voxel([15, 120, 0]), 24);
+            // The neighbor's halo shows the edit.
+            assert_eq!(db.terrain((0, 0)).unwrap().voxel([0, 120, 0]), 0);
             let mut hotbar = Hotbar::default();
             hotbar.pick(25);
             db.save_player(&Player {
@@ -618,18 +482,19 @@ pub(crate) mod tests {
                 ..Player::default()
             })
             .unwrap();
+            db.close().unwrap();
         }
         let db = Database::open(&world.path).unwrap();
         assert_eq!(db.player().unwrap().hotbar.material(), 25);
-        assert_eq!(db.terrain((-1, 0)).unwrap().0.voxel([15, 120, 0]), 24);
-        db.edits(&[Edit {
+        assert_eq!(db.terrain((-1, 0)).unwrap().voxel([15, 120, 0]), 24);
+        db.edit(&[Edit {
             material: 0,
             ..edit
         }])
         .unwrap();
-        assert_eq!(db.terrain((-1, 0)).unwrap().0.voxel([15, 120, 0]), 0);
+        assert_eq!(db.terrain((-1, 0)).unwrap().voxel([15, 120, 0]), 0);
         assert!(
-            db.edits(&[Edit {
+            db.edit(&[Edit {
                 position: [0, 0, 0],
                 material: 0
             }])
@@ -638,9 +503,44 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn stored_chunks_dont_change_with_the_world_generation() {
+        let world = TestWorld::new();
+        {
+            let db = Database::open(&world.path).unwrap();
+            db.store((0, 0), &ChunkData::from_heights([60; 18 * 18]))
+                .unwrap();
+            db.terrain((5, 5)).unwrap();
+            db.execute(c"UPDATE metadata SET seed=12345 WHERE id=1")
+                .unwrap();
+        }
+        let db = Database::open(&world.path).unwrap();
+        assert_eq!(db.terrain((0, 0)).unwrap().voxel([8, 60, 8]), 0);
+        assert_eq!(db.terrain((0, 0)).unwrap().voxel([8, 59, 8]), 1);
+        assert_eq!(
+            db.chunk((5, 5)).unwrap().unwrap().encode_blocks(),
+            ChunkData::generate_blocks(world::WORLD_SEED, (5, 5)).encode_blocks()
+        );
+    }
+
+    #[test]
+    fn closed_worlds_are_rollback_journal_files_for_the_wii() {
+        let world = TestWorld::new();
+        let db = Database::open(&world.path).unwrap();
+        db.terrain((0, 0)).unwrap();
+        db.close().unwrap();
+        let header = std::fs::read(&world.path).unwrap();
+        // The file format versions are 2 in WAL mode.
+        assert_eq!(header[18..20], [1, 1]);
+        assert_eq!(header[60..64], (VERSION as u32).to_be_bytes());
+        assert_eq!(header[68..72], (APPLICATION_ID as u32).to_be_bytes());
+        assert!(!world.path.with_extension("db-wal").exists());
+        let db = Database::open(&world.path).unwrap();
+        assert!(db.chunk((0, 0)).unwrap().is_some());
+    }
+
+    #[test]
     fn wal_reopens_chunks_seed_and_player() {
         let world = TestWorld::new();
-        let data = ChunkData::generate(world::WORLD_SEED, (-2, 1)).encode();
         let player = Player {
             position: [-192.25, 93.5, 400.125],
             yaw: 2.5,
@@ -648,7 +548,7 @@ pub(crate) mod tests {
             night: true,
             ..Player::default()
         };
-        {
+        let blocks = {
             let db = Database::open(&world.path).unwrap();
             let mut mode = db.prepare(c"PRAGMA journal_mode").unwrap();
             assert!(mode.row().unwrap());
@@ -660,15 +560,19 @@ pub(crate) mod tests {
             drop(mode);
             db.execute(c"UPDATE metadata SET seed=12345 WHERE id=1")
                 .unwrap();
-            db.save_chunk((-2, 1), &data).unwrap();
+            let blocks = db.terrain((-2, 1)).unwrap().encode_blocks();
             db.save_player(&player).unwrap();
             let reader = Database::open(&world.path).unwrap();
-            assert_eq!(reader.load_chunk((-2, 1)).unwrap().unwrap(), data);
-            assert!(reader.load_chunk((999, 999)).unwrap().is_none());
-        }
+            assert_eq!(
+                reader.chunk((-2, 1)).unwrap().unwrap().encode_blocks(),
+                blocks
+            );
+            assert!(reader.chunk((999, 999)).unwrap().is_none());
+            blocks
+        };
         let db = Database::open(&world.path).unwrap();
         assert_eq!(db.seed, 12345);
-        assert_eq!(db.load_chunk((-2, 1)).unwrap().unwrap(), data);
+        assert_eq!(db.terrain((-2, 1)).unwrap().encode_blocks(), blocks);
         let mut camera = Camera::default();
         db.player().unwrap().restore(&mut camera);
         assert_eq!(Player::new(&camera, true, Hotbar::default()), player);
@@ -697,30 +601,35 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn batches_of_edits_share_a_revision_and_fluid_updates_persist() {
+    fn batches_of_edits_apply_at_once_and_fluid_updates_persist() {
         let db = memory();
-        let revision = db.revision().unwrap();
         let edits: Vec<_> = (0..5)
             .map(|x| Edit {
-                position: [x, 100, 0],
+                position: [x * 8 - 8, 100, 0],
                 material: world::Fluid::Water.flowing(7),
             })
             .collect();
-        assert_eq!(db.edits(&edits).unwrap(), revision + 1);
+        db.edit(&edits).unwrap();
         assert_eq!(
-            db.terrain((0, 0)).unwrap().0.voxel([4, 100, 0]),
+            db.terrain((1, 0)).unwrap().voxel([8, 100, 0]),
             world::Fluid::Water.flowing(7)
         );
         // One invalid edit rejects the whole batch.
         let invalid = [
-            edits[0],
+            Edit {
+                material: 0,
+                ..edits[0]
+            },
             Edit {
                 position: [0, 1, 0],
                 material: 0,
             },
         ];
-        assert!(db.edits(&invalid).is_err());
-        assert_eq!(db.revision().unwrap(), revision + 1);
+        assert!(db.edit(&invalid).is_err());
+        assert_eq!(
+            db.chunk((-1, 0)).unwrap().unwrap().voxel([8, 100, 0]),
+            world::Fluid::Water.flowing(7)
+        );
 
         assert!(db.fluid_updates().unwrap().is_empty());
         db.save_fluid_updates(&[[1, 2, 3], [-4, 5, -6]]).unwrap();
@@ -729,7 +638,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn concurrent_workers_commit_independent_chunks() {
+    fn concurrent_workers_store_independent_chunks() {
         let world = TestWorld::new();
         let db = Database::open(&world.path).unwrap();
         std::thread::scope(|scope| {
@@ -737,15 +646,15 @@ pub(crate) mod tests {
                 let path = &world.path;
                 scope.spawn(move || {
                     let db = Database::open(path).unwrap();
-                    for z in 0..20 {
-                        db.save_chunk((x, z), &[x as u8, z as u8]).unwrap();
+                    for z in 0..5 {
+                        db.terrain((x, z)).unwrap();
                     }
                 });
             }
         });
         for x in 0..4 {
-            for z in 0..20 {
-                assert_eq!(db.load_chunk((x, z)).unwrap().unwrap(), [x as u8, z as u8]);
+            for z in 0..5 {
+                assert!(db.chunk((x, z)).unwrap().is_some());
             }
         }
     }

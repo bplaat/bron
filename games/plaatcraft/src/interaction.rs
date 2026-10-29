@@ -144,7 +144,7 @@ mod tests {
         let world = TestWorld::new();
         Database::open(&world.path)
             .unwrap()
-            .save_chunk((0, 0), &flat(60).encode())
+            .store((0, 0), &flat(60))
             .unwrap();
         let (mut server, _) = crate::server::tests::host(&world);
         let mut interaction = Interaction::default();
