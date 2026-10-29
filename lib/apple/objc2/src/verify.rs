@@ -19,9 +19,8 @@ fn enc_type_len(s: &str) -> Option<usize> {
         '{' => matching_close(s, '{', '}'),
         '(' => matching_close(s, '(', ')'),
         '[' => matching_close(s, '[', ']'),
-        '^' => enc_type_len(&s[1..]).map(|n| 1 + n),
+        '^' | 'r' | 'n' | 'N' | 'o' | 'O' | 'R' | 'V' => enc_type_len(&s[1..]).map(|n| 1 + n),
         '@' if s.starts_with("@?") => Some(2),
-        'r' | 'n' | 'N' | 'o' | 'O' | 'R' | 'V' => enc_type_len(&s[1..]).map(|n| 1 + n),
         c => Some(c.len_utf8()),
     }
 }
