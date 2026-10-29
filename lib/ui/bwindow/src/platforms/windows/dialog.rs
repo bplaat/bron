@@ -106,7 +106,6 @@ fn message_dialog_result(
     use crate::MessageDialogResult as Result;
     match selected {
         IDOK => Result::Ok,
-        IDCANCEL => Result::Cancel,
         IDYES => Result::Yes,
         IDNO => Result::No,
         id if id >= FIRST_CUSTOM_BUTTON_ID => {
@@ -142,22 +141,18 @@ fn fallback_message_box(
         )
     };
     match (&dialog.buttons, selected) {
-        (crate::MessageButtons::OkCustom(ok), IDOK) => {
-            crate::MessageDialogResult::Custom(ok.clone())
-        }
-        (crate::MessageButtons::OkCancelCustom(ok, _), IDOK) => {
-            crate::MessageDialogResult::Custom(ok.clone())
-        }
-        (crate::MessageButtons::OkCancelCustom(_, cancel), _) => {
-            crate::MessageDialogResult::Custom(cancel.clone())
-        }
+        (
+            crate::MessageButtons::OkCustom(ok) | crate::MessageButtons::OkCancelCustom(ok, _),
+            IDOK,
+        ) => crate::MessageDialogResult::Custom(ok.clone()),
         (crate::MessageButtons::YesNoCancelCustom(yes, _, _), IDYES) => {
             crate::MessageDialogResult::Custom(yes.clone())
         }
         (crate::MessageButtons::YesNoCancelCustom(_, no, _), IDNO) => {
             crate::MessageDialogResult::Custom(no.clone())
         }
-        (crate::MessageButtons::YesNoCancelCustom(_, _, cancel), IDCANCEL) => {
+        (crate::MessageButtons::OkCancelCustom(_, cancel), _)
+        | (crate::MessageButtons::YesNoCancelCustom(_, _, cancel), IDCANCEL) => {
             crate::MessageDialogResult::Custom(cancel.clone())
         }
         (_, selected) => message_dialog_result(&dialog.buttons, selected),

@@ -70,26 +70,21 @@ pub(crate) fn message_button_labels(buttons: &MessageButtons) -> Vec<&str> {
 
 pub(crate) fn message_dialog_result(buttons: &MessageButtons, index: usize) -> MessageDialogResult {
     match (buttons, index) {
-        (MessageButtons::Ok, 0) => MessageDialogResult::Ok,
-        (MessageButtons::OkCancel, 0) => MessageDialogResult::Ok,
-        (MessageButtons::OkCancel, _) => MessageDialogResult::Cancel,
-        (MessageButtons::YesNo, 0) => MessageDialogResult::Yes,
-        (MessageButtons::YesNo, _) => MessageDialogResult::No,
-        (MessageButtons::YesNoCancel, 0) => MessageDialogResult::Yes,
-        (MessageButtons::YesNoCancel, 1) => MessageDialogResult::No,
-        (MessageButtons::YesNoCancel, _) => MessageDialogResult::Cancel,
-        (MessageButtons::OkCustom(ok), 0) => MessageDialogResult::Custom(ok.clone()),
-        (MessageButtons::OkCancelCustom(ok, _), 0) => MessageDialogResult::Custom(ok.clone()),
-        (MessageButtons::OkCancelCustom(_, cancel), _) => {
-            MessageDialogResult::Custom(cancel.clone())
+        (MessageButtons::Ok | MessageButtons::OkCancel, 0) => MessageDialogResult::Ok,
+        (MessageButtons::YesNo | MessageButtons::YesNoCancel, 0) => MessageDialogResult::Yes,
+        (MessageButtons::YesNo, _) | (MessageButtons::YesNoCancel, 1) => MessageDialogResult::No,
+        (MessageButtons::OkCustom(ok) | MessageButtons::OkCancelCustom(ok, _), 0) => {
+            MessageDialogResult::Custom(ok.clone())
         }
         (MessageButtons::YesNoCancelCustom(yes, _, _), 0) => {
             MessageDialogResult::Custom(yes.clone())
         }
         (MessageButtons::YesNoCancelCustom(_, no, _), 1) => MessageDialogResult::Custom(no.clone()),
-        (MessageButtons::YesNoCancelCustom(_, _, cancel), _) => {
-            MessageDialogResult::Custom(cancel.clone())
-        }
+        (
+            MessageButtons::OkCancelCustom(_, cancel)
+            | MessageButtons::YesNoCancelCustom(_, _, cancel),
+            _,
+        ) => MessageDialogResult::Custom(cancel.clone()),
         _ => MessageDialogResult::Cancel,
     }
 }
