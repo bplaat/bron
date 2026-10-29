@@ -8,16 +8,21 @@
 //! voxel pack's male character. The texture coordinates of a box follow its side, so its front
 //! and back stretch the sprite's face and back edges.
 
-use std::collections::BTreeMap;
-use std::f32::consts::{PI, TAU};
+use alloc::collections::BTreeMap;
+use alloc::string::String;
+use alloc::vec::Vec;
+#[cfg(all(test, feature = "std"))]
+use alloc::{format, vec};
+use core::f32::consts::{PI, TAU};
 
-use plaatcraft_engine::camera::View;
-use plaatcraft_engine::world::{CHUNK_SIZE, Coord};
+use crate::camera::View;
+#[cfg(not(feature = "std"))]
+use crate::math::Float;
+use crate::protocol::{ClientId, MAX_PLAYERS, PlayerInfo, Pose};
+use crate::world::{CHUNK_SIZE, Coord};
 
-use crate::protocol::{PlayerInfo, Pose};
-use crate::server::ClientId;
-
-pub(crate) const PARTS: [&str; 4] = ["head", "body", "arm", "leg"];
+/// The body parts, in the order of their sprites.
+pub const PARTS: [&str; 4] = ["head", "body", "arm", "leg"];
 // The width along the facing direction and the height of each part's sprite in pixels.
 const SPRITES: [[f32; 2]; PARTS.len()] = [[64.0, 64.0], [44.0, 59.0], [28.0, 66.0], [28.0, 56.0]];
 // The world size of a sprite pixel, which makes the man as tall as the player's box.
@@ -26,12 +31,14 @@ const PIXEL: f32 = 0.01;
 const EYE_HEIGHT: f64 = 1.7;
 const BOXES: usize = 6;
 /// The size of a box instance: pivot, yaw, pitch, texture layer, size, and offset.
-pub(crate) const INSTANCE_BYTES: u64 = 12 * 4;
-pub(crate) const MAX_INSTANCES: usize = crate::protocol::MAX_PLAYERS * BOXES;
+pub const INSTANCE_BYTES: u64 = 12 * 4;
+/// The most box instances, of all players.
+pub const MAX_INSTANCES: usize = MAX_PLAYERS * BOXES;
 // Farther moves than this jump instead of gliding.
 const TELEPORT_DISTANCE: f64 = 8.0;
 
-pub(crate) struct Other {
+// Another player as it is drawn.
+struct Other {
     name: String,
     pose: Pose,
     target: Pose,
@@ -40,8 +47,9 @@ pub(crate) struct Other {
     stride: f32,
 }
 
+/// The other players in the world.
 #[derive(Default)]
-pub(crate) struct Others {
+pub struct Others {
     players: BTreeMap<ClientId, Other>,
 }
 
@@ -51,7 +59,8 @@ fn angle_difference(from: f32, to: f32) -> f32 {
 }
 
 impl Others {
-    pub(crate) fn update(&mut self, players: Vec<PlayerInfo>) {
+    /// Adds, moves, and removes the players of a state.
+    pub fn update(&mut self, players: Vec<PlayerInfo>) {
         self.players
             .retain(|id, _| players.iter().any(|player| player.id == *id));
         for player in players {
@@ -67,13 +76,13 @@ impl Others {
         }
     }
 
-    // Glides towards the received poses, which arrive twenty times a second.
-    pub(crate) fn animate(&mut self, dt: f32) {
+    /// Glides towards the received poses, which arrive twenty times a second.
+    pub fn animate(&mut self, dt: f32) {
         let blend = 1.0 - (-dt * 15.0).exp();
         for other in self.players.values_mut() {
             let [x, y, z] = other.pose.position;
             let [tx, ty, tz] = other.target.position;
-            let distance = ((tx - x).powi(2) + (ty - y).powi(2) + (tz - z).powi(2)).sqrt();
+            let distance = ((tx - x) * (tx - x) + (ty - y) * (ty - y) + (tz - z) * (tz - z)).sqrt();
             if distance > TELEPORT_DISTANCE {
                 other.pose = other.target;
                 continue;
@@ -91,9 +100,9 @@ impl Others {
     }
 
     /// The box instances relative to the center chunk.
-    pub(crate) fn instances(&self, center: Coord, first_layer: u32) -> Vec<u8> {
+    pub fn instances(&self, center: Coord, first_layer: u32) -> Vec<u8> {
         let mut bytes = Vec::with_capacity(self.players.len() * BOXES * INSTANCE_BYTES as usize);
-        for other in self.players.values().take(crate::protocol::MAX_PLAYERS) {
+        for other in self.players.values().take(MAX_PLAYERS) {
             for part in other.boxes() {
                 let layer = first_layer + part.sprite as u32;
                 let feet = [
@@ -121,7 +130,7 @@ impl Others {
     }
 
     /// Where the name tags go on the screen, in physical pixels.
-    pub(crate) fn name_tags(&self, view: &View, center: Coord) -> Vec<(&str, [f32; 2])> {
+    pub fn name_tags(&self, view: &View, center: Coord) -> Vec<(&str, [f32; 2])> {
         self.players
             .values()
             .filter_map(|other| {
@@ -197,11 +206,10 @@ impl Other {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "std"))]
 mod tests {
-    use plaatcraft_engine::camera::Camera;
-
     use super::*;
+    use crate::camera::Camera;
 
     fn info(id: ClientId, x: f64) -> PlayerInfo {
         PlayerInfo {
@@ -218,7 +226,7 @@ mod tests {
     #[test]
     fn sprite_sizes_match_the_kenney_parts() {
         for (part, [width, height]) in PARTS.iter().zip(SPRITES) {
-            let path = format!("assets/characters/male_{part}.png");
+            let path = format!("../plaatcraft/assets/characters/male_{part}.png");
             let image = image::decode(&std::fs::read(&path).unwrap()).unwrap();
             assert_eq!(
                 [image.width() as f32, image.height() as f32],

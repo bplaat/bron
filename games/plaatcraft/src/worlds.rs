@@ -11,6 +11,8 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
+use plaatcraft_engine::protocol::valid_char;
+
 use crate::database::Database;
 
 const EXTENSION: &str = "db";
@@ -35,22 +37,12 @@ impl Worlds {
             .ok_or_else(|| io::Error::other("Find data directory"))?
             .data_dir()
             .to_owned();
-        let worlds = Self::with_directory(data.join("worlds"))?;
-        worlds.migrate(&data.join("world.db"))?;
-        Ok(worlds)
+        Self::with_directory(data.join("worlds"))
     }
 
     fn with_directory(directory: PathBuf) -> io::Result<Self> {
         std::fs::create_dir_all(&directory)?;
         Ok(Self { directory })
-    }
-
-    // Earlier versions saved their only world next to the worlds folder.
-    fn migrate(&self, legacy: &Path) -> io::Result<()> {
-        if legacy.exists() && !self.path("World").exists() {
-            move_world(legacy, &self.path("World"))?;
-        }
-        Ok(())
     }
 
     pub(crate) fn path(&self, name: &str) -> PathBuf {
@@ -156,11 +148,6 @@ pub(crate) fn validate(name: &str) -> Result<&str, String> {
     }
 }
 
-/// Whether a typed character can go in a world name.
-pub(crate) fn valid_char(c: char) -> bool {
-    !c.is_control() && !r#"<>:"/\|?*"#.contains(c)
-}
-
 fn with_suffix(path: &Path, suffix: &str) -> PathBuf {
     let mut path = path.as_os_str().to_owned();
     path.push(suffix);
@@ -245,18 +232,6 @@ mod tests {
     }
 
     #[test]
-    fn the_legacy_world_moves_into_the_worlds_folder() {
-        let test = TestWorlds::new("legacy");
-        let legacy = test.directory.join("world.db");
-        Database::create(&legacy, 42).unwrap();
-        test.worlds.migrate(&legacy).unwrap();
-        assert!(!legacy.exists());
-        assert_eq!(names(&test.worlds), ["World"]);
-        test.worlds.migrate(&legacy).unwrap();
-        assert_eq!(names(&test.worlds), ["World"]);
-    }
-
-    #[test]
     fn names_are_trimmed_and_safe_file_names() {
         assert_eq!(validate("  Hello World "), Ok("Hello World"));
         for name in ["", "   ", ".hidden", "end.", "a/b", "a\\b", "what?", "a\tb"] {
@@ -264,6 +239,5 @@ mod tests {
         }
         assert!(validate(&"x".repeat(MAX_NAME_LENGTH)).is_ok());
         assert!(validate(&"x".repeat(MAX_NAME_LENGTH + 1)).is_err());
-        assert!(valid_char('é') && !valid_char('/') && !valid_char('\n'));
     }
 }

@@ -4,8 +4,9 @@ A Minecraft like voxel sandbox written in Rust for macOS, Linux, Windows, iOS, a
 Android. It's built with [bwindow](../../lib/ui/bwindow), [bcanvas](../../lib/graphics/bcanvas),
 and [bwebgpu](../../lib/graphics/bwebgpu) on Metal, Vulkan, or Direct3D 12.
 
-The world generation, lighting, meshing, and player physics live in the `no_std`
-[plaatcraft-engine](../plaatcraft-engine) crate, which the [Wii port](../plaatcraft-wii) shares.
+The world generation, lighting, meshing, player physics, game rules, network protocol, and
+menus live in the `no_std` [plaatcraft-engine](../plaatcraft-engine) crate, which the
+[Wii port](../plaatcraft-wii) shares.
 
 ## Features
 
@@ -85,7 +86,7 @@ networking entitlement, Direct Connect works without it.
 Walking into a one block step jumps on it, auto jump can be turned off in the settings.
 
 The chat in the bottom left sends messages to the other players and runs commands:
-`/fly on|off` starts or stops flying, `/time day|night` changes the time for everyone,
+`/fly on|off` starts or stops flying, `/time` toggles day and night for everyone,
 and `/help` lists them. To build big, look at a block and mark the corners of a box with
 `/pos1` and `/pos2`, then `/fill` fills it with the held block and `/clear` empties it, up
 to 32768 blocks. `/undo` takes back your last fill, clear, or block edit, up to 32 times.

@@ -6,6 +6,8 @@
 
 //! A Minecraft style hotbar with nine quick select slots.
 
+use serde::{Deserialize, Serialize};
+
 use crate::world;
 
 /// The number of hotbar slots.
@@ -21,7 +23,7 @@ pub fn name(material: u8) -> &'static str {
 }
 
 /// The nine quick select slots of placeable blocks.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Hotbar {
     /// The material in each slot.
     pub slots: [u8; SLOTS],

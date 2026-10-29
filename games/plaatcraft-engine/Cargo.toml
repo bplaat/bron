@@ -12,7 +12,15 @@ default = ["std"]
 std = []
 
 [dependencies]
+deflate = { path = "../../lib/data/deflate" }
+postcard = { version = "1.1", default-features = false, features = ["alloc"] }
+serde = { version = "1.0", default-features = false, features = ["alloc", "derive"] }
 sfxr = { version = "0.1.4", default-features = false }
+
+[dev-dependencies]
+image = { path = "../../lib/graphics/image", default-features = false, features = [
+    "png",
+] }
 
 [lints]
 workspace = true

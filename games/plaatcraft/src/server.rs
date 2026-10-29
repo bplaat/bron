@@ -5,10 +5,11 @@
  */
 
 //! The integrated server that owns a world. Clients only talk to it with messages, the
-//! server thread handles them in order and terrain workers load and generate chunks. The
-//! host talks to it over channels, LAN guests over the sockets of lan.rs.
+//! server thread handles them in order with the engine's game rules and terrain workers load
+//! and generate chunks. The host talks to it over channels, LAN guests over the sockets of
+//! lan.rs.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, SyncSender, TryRecvError};
@@ -16,103 +17,16 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use plaatcraft_engine::camera::Camera;
-use plaatcraft_engine::flow;
-use plaatcraft_engine::raycast::raycast;
-use plaatcraft_engine::world::{self, ChunkData, Coord, Edit, HEIGHT};
+use plaatcraft_engine::protocol::{ClientId, Player, Request, Response, Welcome};
+pub(crate) use plaatcraft_engine::server::WORLD;
+use plaatcraft_engine::server::{self as rules, Limits, Outgoing};
+use plaatcraft_engine::world::{ChunkData, Coord, Edit};
 
-use crate::database::{Database, Player};
-use crate::inventory::Hotbar;
+use crate::database::Database;
 use crate::lan;
-use crate::protocol::{Body, Controls, MAX_CHAT_LENGTH, PlayerInfo, Pose};
 
-pub(crate) type ClientId = u32;
-/// The player that runs the integrated server.
-pub(crate) const HOST: ClientId = 0;
-/// The physics tick of the players, which also tells them where the others are.
-pub(crate) const TICK: Duration = Duration::from_millis(50);
-// Players that sent no input for this long, like a paused game, keep falling on their own.
-const IDLE: Duration = Duration::from_millis(150);
-// The players are saved every this many ticks.
-const SAVE_TICKS: u32 = 100;
-// Collisions use the blocks this many chunks around the players.
-const NEARBY_RADIUS: i64 = 2;
-// Fluid flows this many chunks around the players, like Minecraft only ticks loaded
-// chunks, and changes at most this many blocks a tick.
-const FLUID_RADIUS: i64 = 4;
-const MAX_FLUID_UPDATES: usize = 4096;
-/// The player that edits flowing fluid: the world itself.
-pub(crate) const WORLD: ClientId = ClientId::MAX;
-const HELP: &str =
-    "Commands: /fly on|off, /time day|night, /pos1, /pos2, /fill, /clear, /undo, /help";
-// The most blocks one /fill or /clear changes, and how many changes /undo remembers.
-const MAX_FILL: usize = 32_768;
-const UNDO_STEPS: usize = 32;
-
-#[derive(Clone, Debug, PartialEq)]
-pub(crate) enum Request {
-    /// Load or generate the lit terrain of a chunk.
-    Terrain(Coord),
-    /// Skip the terrain requests that are still queued.
-    CancelTerrain,
-    /// The current blocks of a chunk, the tag comes back with them.
-    Blocks(Coord, u64),
-    Edit(Edit),
-    Hotbar(Hotbar),
-    /// The controls of the next physics tick of the player.
-    Input {
-        sequence: u32,
-        controls: Controls,
-    },
-    /// A chat message or a command like `/time night`.
-    Chat(String),
-}
-
-#[derive(Clone)]
-pub(crate) enum Response {
-    /// A canceled request has no chunk.
-    Terrain {
-        coord: Coord,
-        revision: u64,
-        chunk: Option<ChunkData>,
-    },
-    Blocks {
-        coord: Coord,
-        tag: u64,
-        chunk: Option<ChunkData>,
-    },
-    /// Edits of a player or of flowing fluid were saved at a revision, or rejected without
-    /// one.
-    Edited {
-        edits: Vec<Edit>,
-        revision: Option<u64>,
-        by: ClientId,
-    },
-    /// The player's body after the input with the sequence number, and the other players.
-    State {
-        sequence: u32,
-        body: Body,
-        others: Vec<PlayerInfo>,
-    },
-    Chat {
-        name: String,
-        text: String,
-    },
-    /// A message of the world, like someone joining or the answer to a command.
-    Message(String),
-    Time {
-        night: bool,
-    },
-    /// The world closed or the connection broke.
-    Disconnected(String),
-}
-
-/// What the client needs to know when it joins.
-pub(crate) struct Welcome {
-    pub(crate) id: ClientId,
-    pub(crate) player: Player,
-    pub(crate) revision: u64,
-}
+// The physics tick of the players, which the engine's server runs.
+const TICK: Duration = Duration::from_millis((rules::TICK * 1000.0) as u64);
 
 /// Who joins a world.
 #[derive(Clone, Debug)]
@@ -138,138 +52,50 @@ struct Job {
     responses: Sender<Response>,
 }
 
+// Where the responses of a player go.
 struct Client {
-    identity: Identity,
     responses: Sender<Response>,
     // Terrain requests from before the last cancel are skipped.
     epoch: Arc<AtomicU64>,
-    body: Camera,
-    // The last input that moved the body.
-    sequence: u32,
-    last_input: Instant,
-    hotbar: Hotbar,
-    // The corners of the selection that /fill and /clear change, set by /pos1 and /pos2.
-    corners: [Option<[i64; 3]>; 2],
-    // The edits that undo the player's last changes, the newest last.
-    undo: Vec<Vec<Edit>>,
 }
 
-impl Client {
-    const fn player(&self, night: bool) -> Player {
-        Player {
-            night,
-            ..Player::new(&self.body, false, self.hotbar)
-        }
-    }
-}
+// The world database as the storage of the engine's server.
+struct Storage<'a>(&'a Database);
 
-// The blocks around the players for collisions, chunks that were not generated yet are
-// remembered as missing until the next tick.
-#[derive(Default)]
-struct Blocks(HashMap<Coord, Option<ChunkData>>);
-
-impl Blocks {
-    fn block(&mut self, db: &Database, position: [i64; 3]) -> Option<u8> {
-        if !(0..HEIGHT as i64).contains(&position[1]) {
-            return Some(0);
-        }
-        let coord = (position[0].div_euclid(16), position[2].div_euclid(16));
-        let chunk = self.0.entry(coord).or_insert_with(|| {
-            db.blocks(coord)
-                .inspect_err(|error| eprintln!("Could not read blocks: {error}"))
-                .ok()
-                .flatten()
-        });
-        Some(chunk.as_ref()?.voxel([
-            position[0].rem_euclid(16) as i32,
-            position[1] as i32,
-            position[2].rem_euclid(16) as i32,
-        ]))
+impl rules::World for Storage<'_> {
+    fn chunk(&mut self, coord: Coord) -> Option<ChunkData> {
+        self.0
+            .blocks(coord)
+            .inspect_err(|error| eprintln!("Could not read blocks: {error}"))
+            .ok()
+            .flatten()
     }
 
-    fn apply(&mut self, edits: &[Edit]) {
-        for (&coord, chunk) in &mut self.0 {
-            if let Some(chunk) = chunk {
-                chunk.apply_edits(coord, edits);
-            }
-        }
-    }
-}
-
-// The blocks whose fluid flows at a game tick.
-#[derive(Default)]
-struct Fluids(HashMap<[i64; 3], u32>);
-
-impl Fluids {
-    fn schedule(&mut self, position: [i64; 3], tick: u32) {
-        let due = self.0.entry(position).or_insert(tick);
-        *due = (*due).min(tick);
+    fn save_edits(&mut self, edits: &[Edit]) -> Result<u64, String> {
+        self.0.edits(edits)
     }
 
-    // Schedules a changed block and its neighbors next to fluid, water flows faster.
-    fn schedule_around(
-        &mut self,
-        position: [i64; 3],
-        now: u32,
-        blocks: &mut Blocks,
-        db: &Database,
-    ) {
-        const AROUND: [[i64; 3]; 6] = [
-            [0, 0, 0],
-            [1, 0, 0],
-            [-1, 0, 0],
-            [0, 1, 0],
-            [0, 0, 1],
-            [0, 0, -1],
-        ];
-        for offset in AROUND.into_iter().chain([[0, -1, 0]]) {
-            let block: [i64; 3] = std::array::from_fn(|axis| position[axis] + offset[axis]);
-            if !(3..HEIGHT as i64).contains(&block[1]) {
-                continue;
-            }
-            let fluids: Vec<_> = AROUND
-                .into_iter()
-                .filter_map(|around| {
-                    blocks.block(db, std::array::from_fn(|axis| block[axis] + around[axis]))
-                })
-                .filter(|&material| world::fluid(material).is_some())
-                .collect();
-            if let Some(fastest) = fluids.iter().map(|&material| flow::delay(material)).min() {
-                self.schedule(block, now + fastest);
-            }
+    fn revision(&mut self) -> Result<u64, String> {
+        self.0.revision()
+    }
+
+    fn player(&mut self) -> Result<Player, String> {
+        self.0.player()
+    }
+
+    fn guest(&mut self, name: &str) -> Result<Option<Player>, String> {
+        self.0.guest(name)
+    }
+
+    fn save_player(&mut self, guest: Option<&str>, player: &Player) -> Result<(), String> {
+        match guest {
+            Some(name) => self.0.save_guest(name, player),
+            None => self.0.save_player(player),
         }
     }
 
-    // The new blocks of the fluid that is due near the players, all read before any
-    // changes.
-    fn update(
-        &mut self,
-        now: u32,
-        blocks: &mut Blocks,
-        db: &Database,
-        centers: &[Coord],
-    ) -> Vec<Edit> {
-        let due: Vec<_> = self
-            .0
-            .iter()
-            .filter(|&(position, &tick)| {
-                tick <= now
-                    && centers.iter().any(|center| {
-                        (position[0].div_euclid(16) - center.0).abs() <= FLUID_RADIUS
-                            && (position[2].div_euclid(16) - center.1).abs() <= FLUID_RADIUS
-                    })
-            })
-            .map(|(&position, _)| position)
-            .take(MAX_FLUID_UPDATES)
-            .collect();
-        let mut edits = Vec::new();
-        for position in due {
-            self.0.remove(&position);
-            if let Some(material) = flow::flow(position, |block| blocks.block(db, block)) {
-                edits.push(Edit { position, material });
-            }
-        }
-        edits
+    fn save_fluids(&mut self, positions: &[[i64; 3]]) -> Result<(), String> {
+        self.0.save_fluid_updates(positions)
     }
 }
 
@@ -478,52 +304,60 @@ fn serve(db: &Database, path: PathBuf, messages: &Receiver<Message>, players: &A
         })
         .collect();
 
-    let mut server = Server {
-        db,
-        night: db.player().is_ok_and(|player| player.night),
-        clients: BTreeMap::new(),
-        blocks: Blocks::default(),
-        fluids: Fluids::default(),
-        jobs,
-        next_id: HOST,
-        ticks: 0,
-        players,
-    };
     // Fluid that was still flowing when the world closed flows on.
-    match db.fluid_updates() {
-        Ok(positions) => {
-            for position in positions {
-                server.fluids.schedule(position, flow::WATER_DELAY);
-            }
-        }
-        Err(error) => eprintln!("Could not read fluid updates: {error}"),
-    }
+    let fluids = db.fluid_updates().unwrap_or_else(|error| {
+        eprintln!("Could not read fluid updates: {error}");
+        Vec::new()
+    });
+    let mut storage = Storage(db);
+    let mut server = rules::Server::new(&mut storage, Limits::default(), &fluids);
+    let mut clients = BTreeMap::new();
     let mut next_tick = Instant::now() + TICK;
     loop {
         match messages.recv_timeout(next_tick.saturating_duration_since(Instant::now())) {
+            Ok(Message::Join {
+                identity,
+                responses,
+                welcome,
+            }) => {
+                let joined = server.join(&mut storage, None, &identity.name);
+                // The others hear about the player before it is connected.
+                deliver(db, &clients, &jobs, server.outgoing());
+                if let Ok(joined) = &joined {
+                    let epoch = Arc::new(AtomicU64::new(0));
+                    clients.insert(joined.id, Client { responses, epoch });
+                }
+                _ = welcome.send(joined);
+            }
+            Ok(Message::Request(id, request)) => server.request(&mut storage, id, request),
+            Ok(Message::Leave(id)) => {
+                server.leave(&mut storage, id);
+                clients.remove(&id);
+            }
             Ok(Message::Stop) => {
-                server.stop();
+                server.stop(&mut storage);
+                deliver(db, &clients, &jobs, server.outgoing());
                 break;
             }
-            Ok(message) => server.handle(message),
             Err(RecvTimeoutError::Timeout) => {
                 next_tick += TICK;
                 // A stalled server catches up instead of ticking in a burst.
                 if next_tick < Instant::now() {
                     next_tick = Instant::now() + TICK;
                 }
-                server.tick();
+                server.tick(&mut storage);
             }
             Err(RecvTimeoutError::Disconnected) => break,
         }
+        deliver(db, &clients, &jobs, server.outgoing());
+        players.store(server.players(), Ordering::Relaxed);
     }
 
     // Drop the players first, so the guests' connections close, then skip the queued
     // terrain and wait for the workers before closing the world.
-    for client in server.clients.values() {
+    for client in clients.values() {
         client.epoch.fetch_add(1, Ordering::Relaxed);
     }
-    let Server { clients, jobs, .. } = server;
     drop(clients);
     drop(jobs);
     for worker in workers {
@@ -533,440 +367,64 @@ fn serve(db: &Database, path: PathBuf, messages: &Receiver<Message>, players: &A
     }
 }
 
-struct Server<'a> {
-    db: &'a Database,
-    night: bool,
-    clients: BTreeMap<ClientId, Client>,
-    blocks: Blocks,
-    fluids: Fluids,
-    jobs: Sender<Job>,
-    next_id: ClientId,
-    ticks: u32,
-    players: &'a AtomicUsize,
-}
-
-impl Server<'_> {
-    fn broadcast(&self, response: &Response) {
-        for client in self.clients.values() {
-            _ = client.responses.send(response.clone());
-        }
-    }
-
-    fn handle(&mut self, message: Message) {
-        match message {
-            Message::Join {
-                identity,
-                responses,
-                welcome,
-            } => self.join(identity, responses, welcome),
-            Message::Leave(id) => {
-                if let Some(client) = self.clients.remove(&id) {
-                    self.save(id, &client);
-                    self.broadcast(&Response::Message(format!(
-                        "{} left the game",
-                        client.identity.name
-                    )));
-                    self.players.store(self.clients.len(), Ordering::Relaxed);
-                }
-            }
-            Message::Request(id, request) => self.request(id, request),
-            Message::Stop => {}
-        }
-    }
-
-    fn join(
-        &mut self,
-        identity: Identity,
-        responses: Sender<Response>,
-        welcome: SyncSender<Result<Welcome, String>>,
-    ) {
-        let joined = admit(self.db, &self.clients, self.next_id, &identity);
-        let Ok(mut joined) = joined else {
-            _ = welcome.send(joined);
-            return;
-        };
-        joined.player.night = self.night;
-        let mut body = Camera::default();
-        joined.player.restore(&mut body);
-        let client = Client {
-            identity,
-            responses,
-            epoch: Arc::new(AtomicU64::new(0)),
-            body,
-            sequence: 0,
-            last_input: Instant::now(),
-            hotbar: joined.player.hotbar,
-            corners: [None; 2],
-            undo: Vec::new(),
-        };
-        _ = welcome.send(Ok(joined));
-        self.broadcast(&Response::Message(format!(
-            "{} joined the game",
-            client.identity.name
-        )));
-        self.clients.insert(self.next_id, client);
-        self.next_id += 1;
-        self.players.store(self.clients.len(), Ordering::Relaxed);
-    }
-
-    fn request(&mut self, id: ClientId, request: Request) {
-        let Some(client) = self.clients.get_mut(&id) else {
-            return;
-        };
-        match request {
-            Request::Terrain(coord) => {
-                let job = Job {
-                    coord,
-                    epoch: client.epoch.load(Ordering::Relaxed),
-                    canceled: client.epoch.clone(),
-                    responses: client.responses.clone(),
-                };
-                self.jobs.send(job).expect("Queue terrain");
-            }
-            Request::CancelTerrain => {
-                client.epoch.fetch_add(1, Ordering::Relaxed);
-            }
-            Request::Blocks(coord, tag) => {
-                _ = client.responses.send(Response::Blocks {
-                    coord,
-                    tag,
-                    chunk: self.db.blocks(coord).expect("Read nearby blocks"),
-                });
-            }
-            Request::Edit(edit) => match self.save_edits(id, vec![edit]) {
-                // Everyone applies the edit, the editor already did.
-                Ok(revision) => self.broadcast(&Response::Edited {
-                    edits: vec![edit],
-                    revision: Some(revision),
-                    by: id,
-                }),
-                Err(error) => {
-                    eprintln!("Could not save block edit: {error}");
-                    if let Some(client) = self.clients.get(&id) {
-                        _ = client.responses.send(Response::Edited {
-                            edits: vec![edit],
-                            revision: None,
-                            by: id,
-                        });
-                    }
-                }
-            },
-            Request::Hotbar(hotbar) => client.hotbar = hotbar,
-            // Repeated and late inputs are skipped, the client predicted them already.
-            Request::Input { sequence, controls } => {
-                if sequence > client.sequence {
-                    controls.apply(&mut client.body);
-                    let (db, blocks) = (self.db, &mut self.blocks);
-                    client
-                        .body
-                        .tick(TICK.as_secs_f32(), |position| blocks.block(db, position));
-                    client.sequence = sequence;
-                    client.last_input = Instant::now();
-                }
-            }
-            Request::Chat(text) => {
-                let text = text.trim();
-                if text.starts_with('/') {
-                    let answer = self.command(id, text);
-                    if let Some(client) = self.clients.get(&id) {
-                        _ = client.responses.send(Response::Message(answer));
-                    }
-                } else if !text.is_empty() {
-                    let text = text.chars().take(MAX_CHAT_LENGTH).collect();
-                    let name = client.identity.name.clone();
-                    self.broadcast(&Response::Chat { name, text });
-                }
-            }
-        }
-    }
-
-    // Runs a chat command and returns the answer for the player.
-    fn command(&mut self, id: ClientId, text: &str) -> String {
-        let words: Vec<_> = text.split_whitespace().collect();
-        match words.as_slice() {
-            ["/fly", rest @ ..] => {
-                let client = self.clients.get_mut(&id).expect("Commanding client");
-                let flying = match rest {
-                    [] => !client.body.flying,
-                    ["on"] => true,
-                    ["off"] => false,
-                    _ => return "Usage: /fly on|off".into(),
-                };
-                client.body.set_flying(flying);
-                if flying { "Flying on" } else { "Flying off" }.into()
-            }
-            ["/time", time @ ("day" | "night")] => {
-                self.night = *time == "night";
-                self.broadcast(&Response::Time { night: self.night });
-                let name = &self.clients[&id].identity.name;
-                self.broadcast(&Response::Message(format!("{name} set the time to {time}")));
-                format!("It is {time} now")
-            }
-            ["/time", ..] => "Usage: /time day|night".into(),
-            [corner @ ("/pos1" | "/pos2")] => {
-                let client = &self.clients[&id];
-                let (db, blocks) = (self.db, &mut self.blocks);
-                let body = client.body;
-                let Some(hit) = raycast(body.position, body.direction(), |position| {
-                    blocks.block(db, position)
-                }) else {
-                    return "Look at a block to mark a corner".into();
-                };
-                let index = usize::from(*corner == "/pos2");
-                let client = self.clients.get_mut(&id).expect("Commanding client");
-                client.corners[index] = Some(hit.position);
-                let [x, y, z] = hit.position;
-                format!("Corner {} is at {x} {y} {z}", index + 1)
-            }
-            [command @ ("/fill" | "/clear")] => {
-                let client = &self.clients[&id];
-                let [Some(first), Some(second)] = client.corners else {
-                    return "Mark two corners with /pos1 and /pos2 first".into();
-                };
-                let material = if *command == "/fill" {
-                    client.hotbar.material()
-                } else {
-                    0
-                };
-                let low: [i64; 3] = std::array::from_fn(|axis| first[axis].min(second[axis]));
-                let high: [i64; 3] = std::array::from_fn(|axis| first[axis].max(second[axis]));
-                let count: usize = (0..3)
-                    .map(|axis| (high[axis] - low[axis] + 1) as usize)
-                    .product();
-                if count > MAX_FILL {
-                    return format!("The selection has {count} blocks, at most {MAX_FILL} fit");
-                }
-                let mut edits = Vec::with_capacity(count);
-                for y in low[1]..=high[1] {
-                    for z in low[2]..=high[2] {
-                        for x in low[0]..=high[0] {
-                            edits.push(Edit {
-                                position: [x, y, z],
-                                material,
-                            });
-                        }
-                    }
-                }
-                self.command_edits(id, edits, true)
-            }
-            ["/undo"] => {
-                let client = self.clients.get_mut(&id).expect("Commanding client");
-                let Some(edits) = client.undo.pop() else {
-                    return "There is nothing to undo".into();
-                };
-                self.command_edits(id, edits, false)
-            }
-            ["/help"] => HELP.into(),
-            _ => format!("Unknown command {}, try /help", words[0]),
-        }
-    }
-
-    // Saves the edits of a player and applies them to the server's blocks, the blocks they
-    // replace go on the player's undo stack when `undoable`. Unchanged blocks are skipped.
-    fn save_edits(&mut self, id: ClientId, edits: Vec<Edit>) -> Result<u64, String> {
-        self.save_undoable(id, edits, true)
-            .map(|(revision, _)| revision)
-    }
-
-    fn save_undoable(
-        &mut self,
-        id: ClientId,
-        edits: Vec<Edit>,
-        undoable: bool,
-    ) -> Result<(u64, Vec<Edit>), String> {
-        let (db, blocks) = (self.db, &mut self.blocks);
-        let mut undo = Vec::new();
-        let edits: Vec<_> = edits
-            .into_iter()
-            .filter(|edit| {
-                let before = blocks.block(db, edit.position);
-                if let Some(material) = before.filter(|&material| material != edit.material) {
-                    undo.push(Edit {
-                        position: edit.position,
-                        material,
-                    });
-                }
-                before != Some(edit.material)
-            })
-            .collect();
-        let revision = db.edits(&edits).map_err(|error| error.to_string())?;
-        blocks.apply(&edits);
-        for edit in &edits {
-            self.fluids
-                .schedule_around(edit.position, self.ticks, blocks, db);
-        }
-        if let Some(client) = self.clients.get_mut(&id)
-            && undoable
-            && !undo.is_empty()
-        {
-            if client.undo.len() == UNDO_STEPS {
-                client.undo.remove(0);
-            }
-            client.undo.push(undo);
-        }
-        Ok((revision, edits))
-    }
-
-    // Saves the edits of a command and shares them with everyone, also the player, who
-    // didn't apply them yet. Returns the answer for the player.
-    fn command_edits(&mut self, id: ClientId, edits: Vec<Edit>, undoable: bool) -> String {
-        match self.save_undoable(id, edits, undoable) {
-            Ok((_, edits)) if edits.is_empty() => "No blocks changed".into(),
-            Ok((revision, edits)) => {
-                let count = edits.len();
-                self.broadcast(&Response::Edited {
-                    edits,
-                    revision: Some(revision),
-                    by: WORLD,
-                });
-                format!("Changed {count} block{}", if count == 1 { "" } else { "s" })
-            }
-            Err(error) => format!("Could not change the blocks: {error}"),
-        }
-    }
-
-    fn save(&self, id: ClientId, client: &Client) {
-        let player = client.player(self.night);
-        let saved = if id == HOST {
-            self.db.save_player(&player)
-        } else {
-            self.db.save_guest(&client.identity.name, &player)
-        };
-        if let Err(error) = saved {
-            eprintln!("Could not save player: {error}");
-        }
-    }
-
-    // Moves idle players, sends everyone their state and the others, and saves now and then.
-    fn tick(&mut self) {
-        let (db, blocks) = (self.db, &mut self.blocks);
-        for client in self.clients.values_mut() {
-            if client.last_input.elapsed() >= IDLE {
-                client.body.input = Default::default();
-                client
-                    .body
-                    .tick(TICK.as_secs_f32(), |position| blocks.block(db, position));
-            }
-        }
-        let centers: Vec<_> = self.clients.values().map(|c| c.body.chunk()).collect();
-        self.flow(&centers);
-        for (&id, client) in &self.clients {
-            let others = self
-                .clients
-                .iter()
-                .filter(|&(&other, _)| other != id)
-                .map(|(&other, client)| PlayerInfo {
-                    id: other,
-                    name: client.identity.name.clone(),
-                    pose: Pose {
-                        position: client.body.position,
-                        yaw: client.body.yaw,
-                        pitch: client.body.pitch,
-                    },
-                })
-                .collect();
-            _ = client.responses.send(Response::State {
-                sequence: client.sequence,
-                body: Body::of(&client.body),
-                others,
-            });
-        }
-        // Forget far and missing chunks, missing ones may have been generated since.
-        let radius = NEARBY_RADIUS.max(FLUID_RADIUS);
-        self.blocks.0.retain(|coord, chunk| {
-            chunk.is_some()
-                && centers.iter().any(|center| {
-                    (coord.0 - center.0).abs() <= radius && (coord.1 - center.1).abs() <= radius
-                })
-        });
-        self.ticks += 1;
-        if self.ticks.is_multiple_of(SAVE_TICKS) {
-            for (&id, client) in &self.clients {
-                self.save(id, client);
-            }
-            self.save_fluids();
-        }
-    }
-
-    // Flows the fluid that is due and tells everyone, as one edit of the world.
-    fn flow(&mut self, centers: &[Coord]) {
-        let (db, blocks, fluids) = (self.db, &mut self.blocks, &mut self.fluids);
-        let edits = fluids.update(self.ticks, blocks, db, centers);
-        if edits.is_empty() {
-            return;
-        }
-        match db.edits(&edits) {
-            Ok(revision) => {
-                blocks.apply(&edits);
-                for edit in &edits {
-                    fluids.schedule_around(edit.position, self.ticks, blocks, db);
-                }
-                self.broadcast(&Response::Edited {
-                    edits,
-                    revision: Some(revision),
-                    by: WORLD,
-                });
-            }
-            Err(error) => eprintln!("Could not save flowing fluid: {error}"),
-        }
-    }
-
-    fn save_fluids(&self) {
-        let positions: Vec<_> = self.fluids.0.keys().copied().collect();
-        if let Err(error) = self.db.save_fluid_updates(&positions) {
-            eprintln!("Could not save fluid updates: {error}");
-        }
-    }
-
-    fn stop(&self) {
-        self.save_fluids();
-        for (&id, client) in &self.clients {
-            self.save(id, client);
-            if id != HOST {
-                _ = client
-                    .responses
-                    .send(Response::Disconnected("The host closed the world".into()));
-            }
-        }
-    }
-}
-
-// Checks whether a player may join and welcomes them, guests that are new to the world
-// start next to the host.
-fn admit(
+// Sends the responses of the server to the players and queues their terrain.
+fn deliver(
     db: &Database,
     clients: &BTreeMap<ClientId, Client>,
-    id: ClientId,
-    identity: &Identity,
-) -> Result<Welcome, String> {
-    let name = crate::protocol::validate_name(&identity.name)?;
-    if clients
-        .values()
-        .any(|client| client.identity.name.eq_ignore_ascii_case(name))
-    {
-        return Err(format!("{name} is already playing in this world"));
+    jobs: &Sender<Job>,
+    outgoing: Vec<Outgoing>,
+) {
+    for outgoing in outgoing {
+        match outgoing {
+            Outgoing::All(response) => {
+                for client in clients.values() {
+                    _ = client.responses.send(response.clone());
+                }
+            }
+            Outgoing::To(id, response) => {
+                if let Some(client) = clients.get(&id) {
+                    _ = client.responses.send(response);
+                }
+            }
+            Outgoing::Terrain(id, coord) => {
+                if let Some(client) = clients.get(&id) {
+                    let job = Job {
+                        coord,
+                        epoch: client.epoch.load(Ordering::Relaxed),
+                        canceled: client.epoch.clone(),
+                        responses: client.responses.clone(),
+                    };
+                    jobs.send(job).expect("Queue terrain");
+                }
+            }
+            Outgoing::CancelTerrain(id) => {
+                if let Some(client) = clients.get(&id) {
+                    client.epoch.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+            Outgoing::Blocks(id, coord, tag) => {
+                if let Some(client) = clients.get(&id) {
+                    _ = client.responses.send(Response::Blocks {
+                        coord,
+                        tag,
+                        chunk: db.blocks(coord).expect("Read nearby blocks"),
+                    });
+                }
+            }
+            Outgoing::Log(message) => eprintln!("{message}"),
+        }
     }
-    let player = if id == HOST {
-        db.player()?
-    } else {
-        db.guest(name)?.unwrap_or_else(|| Player {
-            position: clients
-                .get(&HOST)
-                .map_or(Player::default().position, |host| host.body.position),
-            ..Player::default()
-        })
-    };
-    Ok(Welcome {
-        id,
-        player,
-        revision: db.revision()?,
-    })
 }
 
 #[cfg(test)]
 pub(crate) mod tests {
+    use plaatcraft_engine::protocol::Controls;
+    use plaatcraft_engine::server::HOST;
+    use plaatcraft_engine::world;
+
     use super::*;
     use crate::database::tests::TestWorld;
+    use crate::inventory::Hotbar;
 
     pub(crate) fn identity(name: &str) -> Identity {
         Identity {
@@ -1036,7 +494,7 @@ pub(crate) mod tests {
         hotbar.pick(25);
         server.send(Request::Hotbar(hotbar));
         server.send(Request::Chat("/fly on".into()));
-        server.send(Request::Chat("/time night".into()));
+        server.send(Request::Chat("/time".into()));
         assert!(wait(&mut server, |response| match response {
             Response::Time { night } => Some(night),
             _ => None,

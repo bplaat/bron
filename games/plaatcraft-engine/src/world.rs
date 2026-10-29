@@ -11,6 +11,8 @@ use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 
+use serde::{Deserialize, Serialize};
+
 use crate::biome::{Biome, Column, Terrain, smooth};
 
 /// The width and depth of a chunk in blocks.
@@ -270,7 +272,7 @@ pub const fn fluid_height(material: u8) -> f32 {
 }
 
 /// A placed or removed block, material 0 is air.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Edit {
     /// The world position of the block.
     pub position: [i64; 3],

@@ -26,9 +26,9 @@ const SIZE: u32 = 128;
 /// The first texture layer of the character parts, after the sky and the tiles.
 pub(crate) const CHARACTER_LAYER: u32 = (SKY.len() + TILES.len()) as u32;
 
-// The parts of the Kenney male character, see players.rs.
+// The parts of the Kenney male character, see the engine's avatars.
 fn character_paths() -> impl Iterator<Item = String> {
-    crate::players::PARTS
+    plaatcraft_engine::avatars::PARTS
         .iter()
         .map(|part| format!("characters/male_{part}.png"))
 }
@@ -157,7 +157,7 @@ pub(crate) fn load(
         size: bwebgpu::Extent3d {
             width: SIZE,
             height: SIZE,
-            depth_or_array_layers: CHARACTER_LAYER + crate::players::PARTS.len() as u32,
+            depth_or_array_layers: CHARACTER_LAYER + plaatcraft_engine::avatars::PARTS.len() as u32,
         },
         mip_level_count: 8,
         sample_count: 1,

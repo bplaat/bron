@@ -6,6 +6,8 @@
 
 //! The first-person player: walking, swimming, and flying physics and the view frustum.
 
+use serde::{Deserialize, Serialize};
+
 #[cfg(not(feature = "std"))]
 use crate::math::Float;
 use crate::world::{self, Bounds, CHUNK_SIZE, Coord, HEIGHT};
@@ -45,7 +47,7 @@ fn for_cells(bounds: Bounds, mut f: impl FnMut([i64; 3])) {
 }
 
 /// The held movement controls, set by the platform before each update.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Input {
     /// Digital movement like WASD or a D-pad, x to the right and y forward.
     pub direction: [f32; 2],

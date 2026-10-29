@@ -9,12 +9,8 @@ use std::path::Path;
 use std::ptr;
 
 use libsqlite3_sys as sql;
-use plaatcraft_engine::camera::Camera;
+use plaatcraft_engine::protocol::{MAX_BLOB_SIZE, Player};
 use plaatcraft_engine::world::{self, ChunkData, Coord, Edit};
-
-use crate::inventory::{self, Hotbar};
-
-pub(crate) const MAX_BLOB_SIZE: usize = 450_000;
 
 fn compress_chunk(data: &[u8]) -> Vec<u8> {
     deflate::zlib_compress(data, deflate::Level::Default)
@@ -26,112 +22,6 @@ fn decompress_chunk(data: Vec<u8>) -> Result<Vec<u8>> {
 }
 
 type Result<T> = std::result::Result<T, String>;
-
-/// The saved player of a world.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct Player {
-    pub(crate) position: [f64; 3],
-    pub(crate) yaw: f32,
-    pub(crate) pitch: f32,
-    pub(crate) flying: bool,
-    pub(crate) night: bool,
-    pub(crate) hotbar: Hotbar,
-}
-
-impl Player {
-    pub(crate) const fn new(camera: &Camera, night: bool, hotbar: Hotbar) -> Self {
-        Self {
-            position: camera.position,
-            yaw: camera.yaw,
-            pitch: camera.pitch,
-            flying: camera.flying,
-            night,
-            hotbar,
-        }
-    }
-
-    const STATE_SIZE: usize = 42;
-    /// The size of an encoded player.
-    pub(crate) const SIZE: usize = Self::STATE_SIZE + inventory::SLOTS + 1;
-
-    // The position, orientation, and modes, older saves lack the movement mode.
-    fn encode_state(&self) -> Vec<u8> {
-        let mut data = Vec::with_capacity(Self::SIZE);
-        for value in self
-            .position
-            .into_iter()
-            .chain([f64::from(self.yaw), f64::from(self.pitch)])
-        {
-            data.extend_from_slice(&value.to_le_bytes());
-        }
-        data.push(u8::from(self.night));
-        data.push(u8::from(self.flying));
-        data
-    }
-
-    fn decode_state(&mut self, data: &[u8]) -> Result<()> {
-        if !matches!(data.len(), 41 | 42) || data[40] > 1 || (data.len() == 42 && data[41] > 1) {
-            return Err("Invalid saved game state".into());
-        }
-        let values: Vec<_> = data[..40]
-            .as_chunks::<8>()
-            .0
-            .iter()
-            .map(|v| f64::from_le_bytes(*v))
-            .collect();
-        if values.iter().any(|v| !v.is_finite())
-            || values[..3].iter().any(|v| v.abs() > 1e12)
-            || values[3].abs() > f64::from(f32::MAX)
-            || values[4].abs() > f64::from(1.55f32)
-        {
-            return Err("Invalid saved camera coordinates".into());
-        }
-        self.position.copy_from_slice(&values[..3]);
-        self.yaw = values[3] as f32;
-        self.pitch = values[4] as f32;
-        self.night = data[40] != 0;
-        // Older saves predate walking and retain their original flying behavior.
-        self.flying = data.get(41).is_none_or(|&mode| mode != 0);
-        Ok(())
-    }
-
-    /// The player with the hotbar, for guests and the network.
-    pub(crate) fn encode(&self) -> Vec<u8> {
-        let mut data = self.encode_state();
-        data.extend_from_slice(&self.hotbar.slots);
-        data.push(self.hotbar.selected as u8);
-        data
-    }
-
-    pub(crate) fn decode(data: &[u8]) -> Result<Self> {
-        if data.len() != Self::SIZE {
-            return Err("Invalid player size".into());
-        }
-        let (state, hotbar) = data.split_at(Self::STATE_SIZE);
-        let mut player = Self {
-            hotbar: decode_hotbar(
-                &hotbar[..inventory::SLOTS],
-                i64::from(hotbar[inventory::SLOTS]),
-            )?,
-            ..Self::default()
-        };
-        player.decode_state(state)?;
-        Ok(player)
-    }
-
-    pub(crate) const fn restore(&self, camera: &mut Camera) {
-        camera.position = self.position;
-        camera.yaw = self.yaw;
-        camera.pitch = self.pitch;
-        camera.set_flying(self.flying);
-    }
-}
-
-impl Default for Player {
-    fn default() -> Self {
-        Self::new(&Camera::default(), false, Hotbar::default())
-    }
-}
 
 // Connections stay on their owning thread; statements borrow the connection.
 pub(crate) struct Database {
@@ -195,7 +85,7 @@ impl Database {
         version.row()?;
         let version_number = version.integer(0);
         drop(version);
-        if !matches!(version_number, 0 | 3 | 4) {
+        if !matches!(version_number, 0 | 1) {
             return Err(format!(
                 "Unsupported world database version {version_number}"
             ));
@@ -205,16 +95,13 @@ impl Database {
             CREATE TABLE IF NOT EXISTS metadata (id INTEGER PRIMARY KEY CHECK(id=1), seed INTEGER NOT NULL);
             CREATE TABLE IF NOT EXISTS chunks (x INTEGER NOT NULL, z INTEGER NOT NULL, data BLOB NOT NULL, PRIMARY KEY(x,z));
             CREATE TABLE IF NOT EXISTS game_state (id INTEGER PRIMARY KEY CHECK(id=1), data BLOB NOT NULL);
-            CREATE TABLE IF NOT EXISTS interaction (id INTEGER PRIMARY KEY CHECK(id=1), selected INTEGER NOT NULL, revision INTEGER NOT NULL);
-            INSERT OR IGNORE INTO interaction VALUES(1,3,0);
-            CREATE TABLE IF NOT EXISTS hotbar (id INTEGER PRIMARY KEY CHECK(id=1), slots BLOB NOT NULL, selected INTEGER NOT NULL);
+            CREATE TABLE IF NOT EXISTS interaction (id INTEGER PRIMARY KEY CHECK(id=1), revision INTEGER NOT NULL);
+            INSERT OR IGNORE INTO interaction VALUES(1,0);
             CREATE TABLE IF NOT EXISTS players (name BLOB PRIMARY KEY, data BLOB NOT NULL) WITHOUT ROWID;
             CREATE TABLE IF NOT EXISTS fluid_updates (x INTEGER NOT NULL, y INTEGER NOT NULL, z INTEGER NOT NULL, PRIMARY KEY(x,y,z)) WITHOUT ROWID;
             CREATE TABLE IF NOT EXISTS edits (x INTEGER NOT NULL, y INTEGER NOT NULL, z INTEGER NOT NULL, material INTEGER NOT NULL, PRIMARY KEY(x,z,y)) WITHOUT ROWID;
             CREATE TABLE IF NOT EXISTS dirty_chunks (x INTEGER NOT NULL, z INTEGER NOT NULL, PRIMARY KEY(x,z)) WITHOUT ROWID;
-            DROP TABLE IF EXISTS window_state;
-            DROP TABLE IF EXISTS settings;
-            PRAGMA user_version=4; COMMIT;")?;
+            PRAGMA user_version=1; COMMIT;")?;
         if let Some(seed) = seed {
             let mut stmt = db.prepare(c"INSERT INTO metadata(id,seed) VALUES(1,?)")?;
             stmt.bind_int(1, seed as i64)?;
@@ -304,44 +191,6 @@ impl Database {
         Ok(stmt.integer(0) as u64)
     }
 
-    // The block selected before the hotbar existed.
-    fn selected(&self) -> Result<u8> {
-        let mut stmt = self.prepare(c"SELECT selected FROM interaction WHERE id=1")?;
-        stmt.row()?;
-        let material = u8::try_from(stmt.integer(0)).map_err(|e| e.to_string())?;
-        if matches!(material, 64 | 65) {
-            return Ok(Hotbar::default().material());
-        }
-        world::canonical_material(material).ok_or_else(|| "Invalid selected block".into())
-    }
-
-    fn hotbar(&self) -> Result<Hotbar> {
-        let mut stmt = self.prepare(c"SELECT slots,selected FROM hotbar WHERE id=1")?;
-        let mut hotbar = Hotbar::default();
-        if !stmt.row()? {
-            // Worlds from before the hotbar start with their selected block in it.
-            drop(stmt);
-            hotbar.pick(self.selected()?);
-            return Ok(hotbar);
-        }
-        decode_hotbar(&stmt.blob(0)?, stmt.integer(1))
-    }
-
-    fn save_hotbar(&self, hotbar: &Hotbar) -> Result<()> {
-        if !hotbar
-            .slots
-            .iter()
-            .all(|&material| world::valid_material(material))
-        {
-            return Err("Invalid hotbar block".into());
-        }
-        let mut stmt =
-            self.prepare(c"INSERT OR REPLACE INTO hotbar(id,slots,selected) VALUES(1,?,?)")?;
-        stmt.bind_blob(1, &hotbar.slots)?;
-        stmt.bind_int(2, hotbar.selected as i64)?;
-        stmt.done()
-    }
-
     fn load_edits(&self, coord: Coord) -> Result<Vec<Edit>> {
         let mut stmt = self.prepare(
             c"SELECT x,y,z,material FROM edits WHERE x BETWEEN ? AND ? AND z BETWEEN ? AND ?",
@@ -361,14 +210,9 @@ impl Database {
         while stmt.row()? {
             let material = u8::try_from(stmt.integer(3)).map_err(|e| e.to_string())?;
             let position = [stmt.integer(0), stmt.integer(1), stmt.integer(2)];
-            let material = if matches!(material, 0 | 64 | 65) {
-                0
-            } else if let Some(material) = world::canonical_material(material) {
-                material
-            } else {
-                return Err("Invalid saved block edit".into());
-            };
-            if !(3..world::HEIGHT as i64).contains(&position[1]) {
+            if material != 0 && !world::valid_material(material)
+                || !(3..world::HEIGHT as i64).contains(&position[1])
+            {
                 return Err("Invalid saved block edit".into());
             }
             edits.push(Edit { position, material });
@@ -541,31 +385,18 @@ impl Database {
     }
 
     pub(crate) fn player(&self) -> Result<Player> {
-        let mut player = Player {
-            hotbar: self.hotbar()?,
-            ..Player::default()
-        };
         let mut stmt = self.prepare(c"SELECT data FROM game_state WHERE id=1")?;
         if stmt.row()? {
-            player.decode_state(&stmt.blob(0)?)?;
+            Player::decode(&stmt.blob(0)?)
+        } else {
+            Ok(Player::default())
         }
-        Ok(player)
     }
 
     pub(crate) fn save_player(&self, player: &Player) -> Result<()> {
-        self.execute(c"BEGIN IMMEDIATE")?;
-        let result = (|| {
-            let mut stmt = self.prepare(c"INSERT INTO game_state(id,data) VALUES(1,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data")?;
-            stmt.bind_blob(1, &player.encode_state())?;
-            stmt.done()?;
-            drop(stmt);
-            self.save_hotbar(&player.hotbar)?;
-            self.execute(c"COMMIT")
-        })();
-        if result.is_err() {
-            let _ = self.execute(c"ROLLBACK");
-        }
-        result
+        let mut stmt = self.prepare(c"INSERT INTO game_state(id,data) VALUES(1,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data")?;
+        stmt.bind_blob(1, &player.encode())?;
+        stmt.done()
     }
 
     /// A player that joined the world over the network, by name.
@@ -585,23 +416,6 @@ impl Database {
         stmt.bind_blob(2, &player.encode())?;
         stmt.done()
     }
-}
-
-pub(crate) fn decode_hotbar(slots: &[u8], selected: i64) -> Result<Hotbar> {
-    if slots.len() != inventory::SLOTS {
-        return Err("Invalid hotbar size".into());
-    }
-    let mut hotbar = Hotbar::default();
-    for (slot, &material) in hotbar.slots.iter_mut().zip(slots) {
-        if !matches!(material, 64 | 65) {
-            *slot = world::canonical_material(material).ok_or("Invalid hotbar block")?;
-        }
-    }
-    hotbar.selected = usize::try_from(selected)
-        .ok()
-        .filter(|&selected| selected < inventory::SLOTS)
-        .ok_or("Invalid selected hotbar slot")?;
-    Ok(hotbar)
 }
 
 impl Statement<'_> {
@@ -691,7 +505,10 @@ pub(crate) mod tests {
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU64, Ordering};
 
+    use plaatcraft_engine::camera::Camera;
+
     use super::*;
+    use crate::inventory::Hotbar;
 
     pub(crate) struct TestWorld {
         directory: PathBuf,
@@ -757,7 +574,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn movement_mode_roundtrips_and_legacy_saves_remain_flying() {
+    fn movement_mode_roundtrips() {
         let db = memory();
         assert!(!db.player().unwrap().flying);
         assert!(!Player::default().flying);
@@ -769,54 +586,6 @@ pub(crate) mod tests {
         };
         db.save_player(&flying).unwrap();
         assert!(db.player().unwrap().flying);
-        db.save_player(&Player::default()).unwrap();
-        db.execute(c"UPDATE game_state SET data=substr(data,1,41)")
-            .unwrap();
-        assert!(db.player().unwrap().flying);
-    }
-
-    #[test]
-    fn retired_materials_are_removed_from_saved_edits_and_hotbars() {
-        let db = memory();
-        for material in [64, 65] {
-            let mut selected = db
-                .prepare(c"UPDATE interaction SET selected=? WHERE id=1")
-                .unwrap();
-            selected.bind_int(1, i64::from(material)).unwrap();
-            selected.done().unwrap();
-            assert_eq!(db.selected().unwrap(), Hotbar::default().material());
-            db.save_hotbar(&Hotbar::default()).unwrap();
-            let mut hotbar = Hotbar::default();
-            hotbar.slots[0] = material;
-            let mut slots = db.prepare(c"UPDATE hotbar SET slots=? WHERE id=1").unwrap();
-            slots.bind_blob(1, &hotbar.slots).unwrap();
-            slots.done().unwrap();
-            assert_eq!(db.hotbar().unwrap(), Hotbar::default());
-
-            let mut edit = db
-                .prepare(c"INSERT OR REPLACE INTO edits(x,y,z,material) VALUES(1,120,1,?)")
-                .unwrap();
-            edit.bind_int(1, i64::from(material)).unwrap();
-            edit.done().unwrap();
-            assert_eq!(db.load_edits((0, 0)).unwrap()[0].material, 0);
-
-            assert_eq!(db.terrain((0, 0)).unwrap().0.voxel([1, 120, 1]), 0);
-        }
-    }
-
-    #[test]
-    fn legacy_iron_selections_and_edits_use_canonical_materials() {
-        let db = memory();
-        db.execute(
-            c"UPDATE interaction SET selected=17 WHERE id=1;
-            INSERT INTO edits(x,y,z,material) VALUES(1,60,1,57);",
-        )
-        .unwrap();
-
-        assert_eq!(db.selected().unwrap(), 50);
-        // The hotbar migrates the legacy selection into the selected slot.
-        assert_eq!(db.hotbar().unwrap().material(), 50);
-        assert_eq!(db.load_edits((0, 0)).unwrap()[0].material, 51);
     }
 
     #[test]
@@ -866,31 +635,6 @@ pub(crate) mod tests {
             }])
             .is_err()
         );
-    }
-
-    #[test]
-    fn legacy_tables_are_removed_without_losing_game_state() {
-        let world = TestWorld::new();
-        let player = Player {
-            night: true,
-            ..Player::default()
-        };
-        {
-            let db = Database::open(&world.path).unwrap();
-            db.save_player(&player).unwrap();
-            db.execute(c"CREATE TABLE window_state (id INTEGER PRIMARY KEY, x INTEGER, y INTEGER, width INTEGER, height INTEGER, maximized INTEGER);
-                INSERT INTO window_state VALUES(1,100,200,1100,700,1);
-                CREATE TABLE settings (id INTEGER PRIMARY KEY, data BLOB NOT NULL);
-                PRAGMA user_version=4;")
-                .unwrap();
-        }
-        let db = Database::open(&world.path).unwrap();
-        let mut table = db
-            .prepare(c"SELECT name FROM sqlite_master WHERE type='table' AND name IN ('window_state','settings')")
-            .unwrap();
-        assert!(!table.row().unwrap());
-        assert_eq!(db.player().unwrap(), player);
-        assert_eq!(db.seed, world::WORLD_SEED);
     }
 
     #[test]

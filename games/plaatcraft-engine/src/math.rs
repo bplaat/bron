@@ -17,6 +17,8 @@ unsafe extern "C" {
     safe fn cos(x: f64) -> f64;
     safe fn tan(x: f64) -> f64;
     safe fn hypot(x: f64, y: f64) -> f64;
+    safe fn log(x: f64) -> f64;
+    safe fn pow(x: f64, y: f64) -> f64;
     safe fn floorf(x: f32) -> f32;
     safe fn ceilf(x: f32) -> f32;
     safe fn roundf(x: f32) -> f32;
@@ -26,6 +28,8 @@ unsafe extern "C" {
     safe fn cosf(x: f32) -> f32;
     safe fn tanf(x: f32) -> f32;
     safe fn hypotf(x: f32, y: f32) -> f32;
+    safe fn logf(x: f32) -> f32;
+    safe fn powf(x: f32, y: f32) -> f32;
 }
 
 pub(crate) trait Float: Sized {
@@ -34,14 +38,17 @@ pub(crate) trait Float: Sized {
     fn round(self) -> Self;
     fn sqrt(self) -> Self;
     fn exp(self) -> Self;
+    fn sin(self) -> Self;
     fn sin_cos(self) -> (Self, Self);
     fn tan(self) -> Self;
     fn hypot(self, other: Self) -> Self;
+    fn ln(self) -> Self;
+    fn powf(self, exponent: Self) -> Self;
     fn rem_euclid(self, rhs: Self) -> Self;
 }
 
 macro_rules! float {
-    ($type:ty, $floor:ident, $ceil:ident, $round:ident, $sqrt:ident, $exp:ident, $sin:ident, $cos:ident, $tan:ident, $hypot:ident) => {
+    ($type:ty, $floor:ident, $ceil:ident, $round:ident, $sqrt:ident, $exp:ident, $sin:ident, $cos:ident, $tan:ident, $hypot:ident, $ln:ident, $pow:ident) => {
         impl Float for $type {
             fn floor(self) -> Self {
                 $floor(self)
@@ -58,6 +65,9 @@ macro_rules! float {
             fn exp(self) -> Self {
                 $exp(self)
             }
+            fn sin(self) -> Self {
+                $sin(self)
+            }
             fn sin_cos(self) -> (Self, Self) {
                 ($sin(self), $cos(self))
             }
@@ -67,6 +77,12 @@ macro_rules! float {
             fn hypot(self, other: Self) -> Self {
                 $hypot(self, other)
             }
+            fn ln(self) -> Self {
+                $ln(self)
+            }
+            fn powf(self, exponent: Self) -> Self {
+                $pow(self, exponent)
+            }
             fn rem_euclid(self, rhs: Self) -> Self {
                 let r = self % rhs;
                 if r < 0.0 { r + rhs.abs() } else { r }
@@ -75,7 +91,9 @@ macro_rules! float {
     };
 }
 
-float!(f64, floor, ceil, round, sqrt, exp, sin, cos, tan, hypot);
 float!(
-    f32, floorf, ceilf, roundf, sqrtf, expf, sinf, cosf, tanf, hypotf
+    f64, floor, ceil, round, sqrt, exp, sin, cos, tan, hypot, log, pow
+);
+float!(
+    f32, floorf, ceilf, roundf, sqrtf, expf, sinf, cosf, tanf, hypotf, logf, powf
 );

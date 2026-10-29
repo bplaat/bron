@@ -5,33 +5,40 @@
  */
 
 //! The bits of broken blocks, which fly apart, fall, and land on the blocks below, like
-//! in Minecraft. They are small boxes with the texture of the block, drawn by the player
-//! box pipeline, see players.rs.
+//! in Minecraft. The platforms draw them as small boxes with the texture of the block.
 
-use plaatcraft_engine::world::{self, CHUNK_SIZE, Coord};
+use alloc::vec::Vec;
 
-use crate::players::INSTANCE_BYTES;
-use crate::textures;
+#[cfg(not(feature = "std"))]
+use crate::math::Float;
+use crate::world::{self, CHUNK_SIZE, Coord};
 
 /// The most bits that fly at once, the oldest make room for new ones.
-pub(crate) const MAX_PARTICLES: usize = 256;
+pub const MAX_PARTICLES: usize = 256;
+/// The width of a bit in blocks.
+pub const SIZE: f32 = 0.11;
 // The bits of one broken block, along each axis.
 const SPLIT: usize = 3;
 const GRAVITY: f32 = 16.0;
-const SIZE: f32 = 0.11;
 
-struct Particle {
-    position: [f64; 3],
+/// A flying bit of a broken block.
+pub struct Particle {
+    /// The center of the bit.
+    pub position: [f64; 3],
+    /// The material of the broken block.
+    pub material: u8,
+    /// The turn around the vertical axis.
+    pub spin: f32,
     velocity: [f32; 3],
-    spin: f32,
-    layer: u32,
     // How long the bit still lives, in seconds.
     life: f32,
 }
 
+/// The flying bits.
 #[derive(Default)]
-pub(crate) struct Particles {
-    particles: Vec<Particle>,
+pub struct Particles {
+    /// The bits, the oldest first.
+    pub particles: Vec<Particle>,
     random: u32,
 }
 
@@ -46,10 +53,7 @@ impl Particles {
     }
 
     /// Breaks a block of a material into flying bits.
-    pub(crate) fn burst(&mut self, position: [i64; 3], material: u8) {
-        // Plants show their plane, blocks their side.
-        let face = if world::is_sprite(material) { 6 } else { 0 };
-        let layer = textures::layer(material, face);
+    pub fn burst(&mut self, position: [i64; 3], material: u8) {
         for index in 0..SPLIT * SPLIT * SPLIT {
             let cell = [
                 index % SPLIT,
@@ -57,27 +61,29 @@ impl Particles {
                 index / (SPLIT * SPLIT),
             ]
             .map(|cell| (cell as f32 + 0.5) / SPLIT as f32);
-            let velocity = std::array::from_fn(|axis| {
+            let velocity = core::array::from_fn(|axis| {
                 (cell[axis] - 0.5) * 3.0 + (self.random() - 0.5) * 1.5 + [0.0, 2.5, 0.0][axis]
             });
             let life = 0.5 + self.random() * 0.6;
-            let spin = self.random() * std::f32::consts::TAU;
+            let spin = self.random() * core::f32::consts::TAU;
             if self.particles.len() == MAX_PARTICLES {
                 self.particles.remove(0);
             }
             self.particles.push(Particle {
-                position: std::array::from_fn(|axis| position[axis] as f64 + f64::from(cell[axis])),
-                velocity,
+                position: core::array::from_fn(|axis| {
+                    position[axis] as f64 + f64::from(cell[axis])
+                }),
+                material,
                 spin,
-                layer,
+                velocity,
                 life,
             });
         }
     }
 
     /// Moves the bits, which stop on solid blocks, and forgets the old ones.
-    pub(crate) fn update(&mut self, dt: f32, block: impl Fn([i64; 3]) -> Option<u8>) {
-        let solid = |position: [f64; 3]| {
+    pub fn update(&mut self, dt: f32, mut block: impl FnMut([i64; 3]) -> Option<u8>) {
+        let mut solid = |position: [f64; 3]| {
             block(position.map(|value| value.floor() as i64))
                 .is_some_and(|material| !world::is_passable(material))
         };
@@ -102,9 +108,11 @@ impl Particles {
         self.particles.retain(|particle| particle.life > 0.0);
     }
 
-    /// The box instances relative to the center chunk, see players.rs.
-    pub(crate) fn instances(&self, center: Coord) -> Vec<u8> {
-        let mut bytes = Vec::with_capacity(self.particles.len() * INSTANCE_BYTES as usize);
+    /// The box instances relative to the center chunk, like the player boxes of
+    /// [`crate::avatars`], with the texture layer of each material.
+    pub fn instances(&self, center: Coord, layer: impl Fn(u8) -> u32) -> Vec<u8> {
+        let mut bytes =
+            Vec::with_capacity(self.particles.len() * crate::avatars::INSTANCE_BYTES as usize);
         for particle in &self.particles {
             let pivot = [
                 (particle.position[0] - (center.0 * CHUNK_SIZE as i64) as f64) as f32,
@@ -113,7 +121,7 @@ impl Particles {
             ];
             let values = pivot
                 .into_iter()
-                .chain([particle.spin, 0.0, particle.layer as f32])
+                .chain([particle.spin, 0.0, layer(particle.material) as f32])
                 .chain([SIZE; 3])
                 .chain([-SIZE / 2.0, 0.0, -SIZE / 2.0]);
             for value in values {
@@ -139,8 +147,8 @@ mod tests {
         }
         assert!(particles.particles.iter().all(|p| p.position[1] >= 10.0));
         assert_eq!(
-            particles.instances((0, 0)).len(),
-            27 * INSTANCE_BYTES as usize
+            particles.instances((0, 0), |_| 0).len(),
+            27 * crate::avatars::INSTANCE_BYTES as usize
         );
         particles.update(2.0, ground);
         assert!(particles.particles.is_empty());

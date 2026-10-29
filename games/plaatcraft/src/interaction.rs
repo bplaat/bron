@@ -6,10 +6,11 @@
 
 use std::collections::{HashMap, HashSet};
 
+use plaatcraft_engine::protocol::Request;
 use plaatcraft_engine::raycast::{Hit, raycast};
 use plaatcraft_engine::world::{self, ChunkData, Coord};
 
-use crate::server::{Connection, Request};
+use crate::server::Connection;
 
 // Chunks within this many chunks of the player are kept for collision and aiming.
 const NEARBY_RADIUS: i64 = 2;
@@ -109,12 +110,12 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use plaatcraft_engine::camera::Camera;
+    use plaatcraft_engine::protocol::Response;
     use plaatcraft_engine::world::Edit;
 
     use super::*;
     use crate::database::Database;
     use crate::database::tests::TestWorld;
-    use crate::server::Response;
 
     fn flat(heights: u8) -> ChunkData {
         ChunkData::from_heights([heights; 18 * 18])

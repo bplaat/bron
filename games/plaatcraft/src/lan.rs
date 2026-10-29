@@ -21,11 +21,12 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use std::{io, thread};
 
-use crate::protocol::{
-    Announcement, ClientFrame, Controls, DISCOVERY_PORT, Datagram, GAME_PORT, REPEATED_INPUTS,
-    ServerFrame, VERSION, read_frame, write_frame,
+use plaatcraft_engine::protocol::{
+    Announcement, ClientFrame, ClientId, Controls, DISCOVERY_PORT, Datagram, GAME_PORT,
+    REPEATED_INPUTS, Request, Response, ServerFrame, VERSION, Welcome, read_frame, write_frame,
 };
-use crate::server::{self, ClientId, Identity, Message, Request, Response, Welcome};
+
+use crate::server::{self, Identity, Message};
 
 const POLL: Duration = Duration::from_millis(100);
 const ANNOUNCE_INTERVAL: Duration = Duration::from_millis(1500);

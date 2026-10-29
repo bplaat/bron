@@ -9,14 +9,15 @@
 #![allow(unsafe_code)]
 #![cfg_attr(test, allow(clippy::unwrap_used))]
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
 use bwindow::{
     Event, EventLoopBuilder, Key, KeyCode, KeyboardEvent, LogicalInsets, LogicalPoint, LogicalSize,
     Modifiers, MouseButton, NamedKey, Theme, Window, WindowBuilder, WindowEvent,
 };
-use plaatcraft_engine::{camera, world};
+use plaatcraft_engine::prediction::Prediction;
+use plaatcraft_engine::{avatars, camera, particles, protocol, world};
 
 mod controls;
 mod database;
@@ -25,9 +26,6 @@ mod interaction;
 mod inventory;
 mod lan;
 mod menu;
-mod particles;
-mod players;
-mod protocol;
 mod scroll;
 mod server;
 mod settings;
@@ -45,9 +43,6 @@ const BACKGROUND_DISTANCE: u8 = 16;
 const BACKGROUND_TURN_SPEED: f32 = 0.05;
 // How long the held block swings when the player breaks or places a block, in seconds.
 const SWING_DURATION: f32 = 0.3;
-// Smoothing hides corrections of the predicted position this fast, farther ones jump.
-const CORRECTION_SPEED: f32 = 12.0;
-const MAX_CORRECTION: f64 = 2.0;
 // Typed server addresses can be long host names.
 const MAX_ADDRESS_LENGTH: usize = 64;
 const DIGITS: [KeyCode; inventory::SLOTS] = [
@@ -67,16 +62,10 @@ struct World {
     server: server::Connection,
     stream: stream::Stream,
     interaction: interaction::Interaction,
-    others: players::Others,
+    others: avatars::Others,
     particles: particles::Particles,
-    // The player moves in physics ticks like the server, which predicts it ahead of the
-    // server: the last input, the inputs the server has not handled yet, the time towards
-    // the next tick, the position before the last tick and the hidden part of a correction.
-    sequence: u32,
-    inputs: VecDeque<(u32, protocol::Controls)>,
-    accumulator: f32,
-    previous: [f64; 3],
-    correction: [f64; 3],
+    // The player moves in physics ticks like the server, ahead of the server.
+    prediction: Prediction,
 }
 
 struct GpuChunk {
@@ -118,7 +107,7 @@ fn pipeline(
         array_stride: if selection {
             12
         } else if player {
-            players::INSTANCE_BYTES
+            avatars::INSTANCE_BYTES
         } else {
             world::QUAD_BYTES as u64
         },
@@ -267,7 +256,7 @@ impl Game {
     fn new(window: Window, attachment: bwindow::WindowAttachment, worlds: worlds::Worlds) -> Self {
         let preferences = settings::Store::new().expect("Open preferences");
         let mut menu = menu::Menu::default();
-        menu.identity = Some(preferences.identity().clone());
+        menu.username.clone_from(&preferences.identity().name);
         let settings = preferences.settings();
         let scale = attachment.scale_factor();
         let instance = bwebgpu::Instance::default();
@@ -409,13 +398,13 @@ impl Game {
         );
         let player_buffer = device.create_buffer(&bwebgpu::BufferDescriptor {
             label: Some("Other players"),
-            size: players::INSTANCE_BYTES * players::MAX_INSTANCES as u64,
+            size: avatars::INSTANCE_BYTES * avatars::MAX_INSTANCES as u64,
             usage: bwebgpu::BufferUsages::VERTEX | bwebgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
         let particle_buffer = device.create_buffer(&bwebgpu::BufferDescriptor {
             label: Some("Block particles"),
-            size: players::INSTANCE_BYTES * particles::MAX_PARTICLES as u64,
+            size: avatars::INSTANCE_BYTES * particles::MAX_PARTICLES as u64,
             usage: bwebgpu::BufferUsages::VERTEX | bwebgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -600,7 +589,10 @@ impl Game {
             }
             Some(Action::Stats) => self.settings.show_stats = !self.settings.show_stats,
             Some(Action::AutoJump) => self.settings.auto_jump = !self.settings.auto_jump,
-            Some(Action::Reset) => self.settings = settings::Settings::default(),
+            Some(Action::Reset) => self.settings = settings::defaults(),
+            // The build tools and the on-screen keyboard are for consoles, which have no chat
+            // and keyboard.
+            Some(Action::Tool(_) | Action::Key(_) | Action::Space | Action::Erase) => {}
             None if layout.in_list(position) => {
                 self.menu.start_list_drag(&layout, position);
             }
@@ -635,7 +627,9 @@ impl Game {
 
     // Shows the worlds on the LAN, which are found while the page is open.
     fn show_servers(&mut self) {
-        self.menu.identity = Some(self.preferences.identity().clone());
+        self.menu
+            .username
+            .clone_from(&self.preferences.identity().name);
         self.menu.show_servers();
         if self.discovery.is_none() {
             match lan::Discovery::start() {
@@ -649,7 +643,7 @@ impl Game {
 
     // Opens a page with a text field, filled with what it edits.
     fn edit_text(&mut self, page: menu::Page) {
-        self.menu.name = match page {
+        self.menu.text = match page {
             menu::Page::Create => self.worlds.unused_name(),
             menu::Page::Rename => self.menu.selected_world().unwrap_or_default().to_owned(),
             menu::Page::Username => self.preferences.identity().name.clone(),
@@ -662,7 +656,7 @@ impl Game {
     fn menu_confirm(&mut self) {
         use menu::Page;
         let selected = self.menu.selected_world().map(str::to_owned);
-        let text = self.menu.name.clone();
+        let text = self.menu.text.clone();
         match (self.menu.page, selected) {
             (Page::Create, _) => self.create_world(&text),
             (Page::Rename, Some(selected)) => match self.worlds.rename(&selected, &text) {
@@ -677,7 +671,9 @@ impl Game {
             }
             (Page::Username, _) => match self.preferences.set_name(&text) {
                 Ok(()) => {
-                    self.menu.identity = Some(self.preferences.identity().clone());
+                    self.menu
+                        .username
+                        .clone_from(&self.preferences.identity().name);
                     self.menu.page = Page::Settings;
                 }
                 Err(error) => self.menu.error = Some(error),
@@ -745,20 +741,20 @@ impl Game {
                 |c| c.is_ascii_alphanumeric() || ".:-_[]%".contains(c),
                 MAX_ADDRESS_LENGTH,
             ),
-            menu::Page::Username => (worlds::valid_char, protocol::MAX_NAME_LENGTH),
-            _ => (worlds::valid_char, worlds::MAX_NAME_LENGTH),
+            menu::Page::Username => (protocol::valid_char, protocol::MAX_NAME_LENGTH),
+            _ => (protocol::valid_char, worlds::MAX_NAME_LENGTH),
         };
         match &event.key {
             Key::Named(NamedKey::Backspace) => {
-                self.menu.name.pop();
+                self.menu.text.pop();
             }
             Key::Character(text)
                 if !event.modifiers.contains(Modifiers::CONTROL)
                     && !event.modifiers.contains(Modifiers::META) =>
             {
                 for c in text.chars().filter(|&c| allowed(c)) {
-                    if self.menu.name.chars().count() < length {
-                        self.menu.name.push(c);
+                    if self.menu.text.chars().count() < length {
+                        self.menu.text.push(c);
                     }
                 }
             }
@@ -815,7 +811,7 @@ impl Game {
         Ok(())
     }
 
-    fn start_world(&mut self, server: server::Connection, welcome: &server::Welcome) {
+    fn start_world(&mut self, server: server::Connection, welcome: &protocol::Welcome) {
         self.menu.session = if server.is_host() {
             menu::Session::Host { lan: None }
         } else {
@@ -831,13 +827,9 @@ impl Game {
             server,
             stream: stream::Stream::new(welcome.revision),
             interaction: interaction::Interaction::default(),
-            others: players::Others::default(),
+            others: avatars::Others::default(),
             particles: particles::Particles::default(),
-            sequence: 0,
-            inputs: VecDeque::new(),
-            accumulator: 0.0,
-            previous: self.camera.position,
-            correction: [0.0; 3],
+            prediction: Prediction::new(&self.camera),
         });
         self.chat.clear();
         self.play();
@@ -917,7 +909,7 @@ impl Game {
     // Sends a chat message or a command to the server.
     fn send_chat(&self, text: &str) {
         if let Some(world) = &self.world {
-            world.server.send(server::Request::Chat(text.to_owned()));
+            world.server.send(protocol::Request::Chat(text.to_owned()));
         }
     }
 
@@ -986,7 +978,7 @@ impl Game {
         }
         self.hotbar = hotbar;
         if let Some(world) = &self.world {
-            world.server.send(server::Request::Hotbar(hotbar));
+            world.server.send(protocol::Request::Hotbar(hotbar));
         }
     }
 
@@ -1160,11 +1152,7 @@ impl Game {
                     self.descend = false;
                 }
                 controls::Action::Press(controls::Button::Night) => {
-                    self.send_chat(if self.night {
-                        "/time day"
-                    } else {
-                        "/time night"
-                    });
+                    self.send_chat("/time");
                 }
                 controls::Action::Press(controls::Button::Menu) => self.pause(),
                 controls::Action::Release(_) => {}
@@ -1193,21 +1181,11 @@ impl Game {
         }
     }
 
-    // The camera where it is drawn: between the last two physics ticks and with the rest
-    // of a correction, so the player moves smoothly at any frame rate.
+    // The camera where it is drawn, see the engine's prediction.
     fn view_camera(&self) -> camera::Camera {
-        let Some(world) = &self.world else {
-            return self.camera;
-        };
-        let alpha = f64::from(world.accumulator / server::TICK.as_secs_f32());
-        camera::Camera {
-            position: std::array::from_fn(|axis| {
-                world.previous[axis]
-                    + (self.camera.position[axis] - world.previous[axis]) * alpha
-                    + world.correction[axis]
-            }),
-            ..self.camera
-        }
+        self.world
+            .as_ref()
+            .map_or(self.camera, |world| world.prediction.view(&self.camera))
     }
 
     fn camera_view(&self) -> camera::View {
@@ -1220,7 +1198,6 @@ impl Game {
 
     // Runs the physics ticks of the passed time, like the server does with the inputs.
     fn tick_player(&mut self, dt: f32) {
-        let tick = server::TICK.as_secs_f32();
         let controls = protocol::Controls {
             input: if self.playing() {
                 self.input()
@@ -1234,65 +1211,34 @@ impl Game {
         let Some(world) = &mut self.world else {
             return;
         };
-        world.accumulator = (world.accumulator + dt).min(tick * 5.0);
-        let decay = (-dt * CORRECTION_SPEED).exp();
-        world.correction = world.correction.map(|value| value * f64::from(decay));
-        while world.accumulator >= tick {
-            world.accumulator -= tick;
-            world.sequence += 1;
-            world.previous = self.camera.position;
-            let before = sound::Movement::of(&self.camera);
-            controls.apply(&mut self.camera);
-            let interaction = &world.interaction;
-            self.camera
-                .tick(tick, |position| interaction.block(position));
-            world.inputs.push_back((world.sequence, controls));
-            world.server.send(server::Request::Input {
-                sequence: world.sequence,
-                controls,
-            });
-            let ground = interaction.block(sound::ground(&self.camera));
-            self.sounds.movement(before, &self.camera, ground);
+        let (interaction, sounds) = (&world.interaction, &mut self.sounds);
+        let requests = world.prediction.tick(
+            dt,
+            &mut self.camera,
+            controls,
+            |position| interaction.block(position),
+            |before, after, block| {
+                let ground = block(sound::ground(after));
+                sounds.movement(sound::Movement::of(before), after, ground);
+            },
+        );
+        for request in requests {
+            world.server.send(request);
         }
     }
 
-    // Moves the player to the server's body and predicts the inputs it did not handle yet,
-    // the difference is smoothed away.
+    // Moves the player to the server's body and predicts the inputs it did not handle yet.
     fn reconcile(&mut self, sequence: u32, body: protocol::Body) {
         let Some(world) = &mut self.world else {
             return;
         };
-        let (predicted, flying, view) = (
-            self.camera.position,
-            self.camera.flying,
-            (self.camera.yaw, self.camera.pitch),
-        );
-        body.apply(&mut self.camera);
-        world.inputs.retain(|&(input, _)| input > sequence);
+        let flying = self.camera.flying;
         let interaction = &world.interaction;
-        for (_, controls) in &world.inputs {
-            controls.apply(&mut self.camera);
-            self.camera.tick(server::TICK.as_secs_f32(), |position| {
+        world
+            .prediction
+            .reconcile(sequence, body, &mut self.camera, |position| {
                 interaction.block(position)
             });
-        }
-        (self.camera.yaw, self.camera.pitch) = view;
-        let error: [f64; 3] =
-            std::array::from_fn(|axis| predicted[axis] - self.camera.position[axis]);
-        if error.iter().map(|value| value * value).sum::<f64>() < MAX_CORRECTION.powi(2) {
-            for ((previous, correction), error) in world
-                .previous
-                .iter_mut()
-                .zip(&mut world.correction)
-                .zip(error)
-            {
-                *previous -= error;
-                *correction += error;
-            }
-        } else {
-            world.previous = self.camera.position;
-            world.correction = [0.0; 3];
-        }
         if self.camera.flying != flying {
             self.sounds.fly(self.camera.flying);
         }
@@ -1307,17 +1253,17 @@ impl Game {
         let mut state = None;
         while let Some(response) = world.server.receive() {
             match response {
-                server::Response::Terrain {
+                protocol::Response::Terrain {
                     coord,
                     revision,
                     chunk,
                 } => world.stream.receive(coord, revision, chunk),
-                server::Response::Blocks { coord, tag, chunk } => {
+                protocol::Response::Blocks { coord, tag, chunk } => {
                     world
                         .interaction
                         .receive(self.camera.chunk(), coord, tag, chunk);
                 }
-                server::Response::Edited {
+                protocol::Response::Edited {
                     edits,
                     revision: Some(revision),
                     by,
@@ -1358,8 +1304,8 @@ impl Game {
                         }
                     }
                 }
-                server::Response::Edited { revision: None, .. } => world.interaction.reload(),
-                server::Response::State {
+                protocol::Response::Edited { revision: None, .. } => world.interaction.reload(),
+                protocol::Response::State {
                     sequence,
                     body,
                     others,
@@ -1367,10 +1313,10 @@ impl Game {
                     world.others.update(others);
                     state = Some((sequence, body));
                 }
-                server::Response::Chat { name, text } => self.chat.push(Some(name), text),
-                server::Response::Message(message) => self.chat.push(None, message),
-                server::Response::Time { night } => self.night = night,
-                server::Response::Disconnected(reason) => {
+                protocol::Response::Chat { name, text } => self.chat.push(Some(name), text),
+                protocol::Response::Message(message) => self.chat.push(None, message),
+                protocol::Response::Time { night } => self.night = night,
+                protocol::Response::Disconnected(reason) => {
                     disconnected = Some(reason);
                     break;
                 }
@@ -1641,7 +1587,7 @@ impl Game {
             return;
         };
         // The edit applies right away, the server rebuilds the chunks around it.
-        world.server.send(server::Request::Edit(edit));
+        world.server.send(protocol::Request::Edit(edit));
         world.interaction.apply_edit(edit);
         let broken = button == MouseButton::Left;
         let material = if broken { hit.material } else { edit.material };
@@ -1806,10 +1752,12 @@ impl Game {
             self.queue
                 .write_buffer(&self.player_buffer, 0, &player_instances);
         }
-        let particle_instances = self
-            .world
-            .as_ref()
-            .map_or_else(Vec::new, |world| world.particles.instances(self.gpu_center));
+        let particle_instances = self.world.as_ref().map_or_else(Vec::new, |world| {
+            world.particles.instances(self.gpu_center, |material| {
+                // Plants show their plane, blocks their side.
+                textures::layer(material, if world::is_sprite(material) { 6 } else { 0 })
+            })
+        });
         if !particle_instances.is_empty() {
             self.queue
                 .write_buffer(&self.particle_buffer, 0, &particle_instances);
@@ -1871,13 +1819,13 @@ impl Game {
             if !player_instances.is_empty() {
                 pass.set_pipeline(&self.player_pipeline);
                 pass.set_vertex_buffer(0, self.player_buffer.slice(..));
-                let count = (player_instances.len() as u64 / players::INSTANCE_BYTES) as u32;
+                let count = (player_instances.len() as u64 / avatars::INSTANCE_BYTES) as u32;
                 pass.draw(0..36, 0..count);
             }
             if !particle_instances.is_empty() {
                 pass.set_pipeline(&self.player_pipeline);
                 pass.set_vertex_buffer(0, self.particle_buffer.slice(..));
-                let count = (particle_instances.len() as u64 / players::INSTANCE_BYTES) as u32;
+                let count = (particle_instances.len() as u64 / avatars::INSTANCE_BYTES) as u32;
                 pass.draw(0..36, 0..count);
             }
             // Draw the sky only into pixels not covered by terrain.

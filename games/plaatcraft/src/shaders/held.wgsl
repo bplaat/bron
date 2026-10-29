@@ -95,13 +95,14 @@ fn vs_held(
         layer = material.layers[6];
     }
 
-    // The swing moves the block toward the middle and turns it down, like Minecraft's arm.
+    // The swing moves the block toward the middle and tips it forward, like Minecraft's arm,
+    // its top stays toward the player.
     let t = f32(instance >> 7u) / 127.0;
     let swing = sin(t * PI);
     let reach = sin(sqrt(t) * PI);
-    var p = (corner - 0.5) * 0.4;
+    var p = (corner - 0.5) * 0.3;
     p = rotate_y(p, 0.8 - swing * 0.35);
-    p = rotate_x(p, 0.12 - reach * 1.2);
+    p = rotate_x(p, 0.12 + reach * 0.6);
     // The view looks along -z with x to the right and y up.
     p += vec3(0.56 - reach * 0.4, -0.5 + sin(sqrt(t) * 2.0 * PI) * 0.2, -0.85 - swing * 0.2);
 

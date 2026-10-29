@@ -14,9 +14,10 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use plaatcraft_engine::protocol::Request;
 use plaatcraft_engine::world::{self, ChunkData, Coord};
 
-use crate::server::{Connection, Request};
+use crate::server::Connection;
 
 pub(crate) type SectionRanges = [[Range<u32>; 2]; world::SECTION_COUNT];
 
@@ -391,10 +392,11 @@ impl Drop for Stream {
 
 #[cfg(test)]
 mod tests {
+    use plaatcraft_engine::protocol::Response;
+
     use super::*;
     use crate::database::Database;
     use crate::database::tests::TestWorld;
-    use crate::server::Response;
 
     fn connect() -> (TestWorld, Connection, Stream) {
         let world = TestWorld::new();

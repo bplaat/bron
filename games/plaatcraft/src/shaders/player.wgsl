@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: MIT
  */
 
-// The other players: textured boxes for the head, body, arms, and legs, see players.rs.
+// The other players: textured boxes for the head, body, arms, and legs, see the engine's avatars.
 // Camera bindings match camera.rs.
 struct Camera {
     eye: vec4<f32>,
