@@ -4,5 +4,5 @@
     <coder>Bastiaan van der Plaat</coder>
     <version>0.1.0</version>
     <short_description>Wii C example</short_description>
-    <long_description>A minimal program that draws a few triangles using a display list.</long_description>
+    <long_description>Draws a few triangles on the screen.</long_description>
 </app>

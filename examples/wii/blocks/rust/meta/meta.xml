@@ -4,6 +4,5 @@
     <coder>Bastiaan van der Plaat</coder>
     <version>0.1.0</version>
     <short_description>Wii Rust example</short_description>
-    <long_description
-    >Generates a random 64x64x64 voxel world and renders its visible block faces with GX display lists.</long_description>
+    <long_description>Flies through a randomly generated world made of blocks.</long_description>
 </app>
