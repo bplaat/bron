@@ -41,7 +41,7 @@ pub fn run() -> ! {
     let mut generator = Generator::default();
     let start = time();
     for (index, &coord) in coords.iter().enumerate() {
-        generator.generate(coord, &[], &coords[index + 1..]);
+        generator.generate(world::WORLD_SEED, coord, &[], &coords[index + 1..]);
     }
     let streamed = time() - start;
     let mut totals = [0u64; 5];

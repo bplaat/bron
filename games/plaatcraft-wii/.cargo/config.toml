@@ -8,3 +8,8 @@ rustflags = ["--extern", "alloc"]
 [unstable]
 build-std = ["core", "alloc", "compiler_builtins"]
 json-target-spec = true
+
+# cc-rs build scripts, like the bundled SQLite, compile with the Wii C compiler
+[env]
+TARGET_CC = { value = "../../tools/wii-toolchain/cc", relative = true }
+TARGET_AR = { value = "../../tools/wii-toolchain/ar", relative = true }

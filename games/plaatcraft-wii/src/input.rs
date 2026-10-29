@@ -27,6 +27,8 @@ pub enum Button {
     B,
     Plus,
     Two,
+    One,
+    Minus,
     Home,
     Z,
     C,
@@ -43,6 +45,8 @@ impl Button {
             Self::B => WPAD_BUTTON_B,
             Self::Plus => WPAD_BUTTON_PLUS,
             Self::Two => WPAD_BUTTON_2,
+            Self::One => WPAD_BUTTON_1,
+            Self::Minus => WPAD_BUTTON_MINUS,
             Self::Home => WPAD_BUTTON_HOME,
             Self::Z => WPAD_NUNCHUK_BUTTON_Z,
             Self::C => WPAD_NUNCHUK_BUTTON_C,
@@ -50,7 +54,7 @@ impl Button {
     }
 }
 
-#[derive(Default)]
+#[derive(Clone, Copy, Default)]
 pub struct Controller {
     held: u32,
     pressed: u32,

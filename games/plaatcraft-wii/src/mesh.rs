@@ -4,8 +4,8 @@
  * SPDX-License-Identifier: MIT
  */
 
-//! Turns the packed greedy quads of a chunk into a GX display list. Each vertex is a u8
-//! position in the chunk, a u16 index into the light palette and u8 texture coordinates,
+//! Turns the packed greedy quads of a chunk into a GX display list. Each vertex has a
+//! fixed point position in the chunk, a palette index and fixed point texture coordinates,
 //! the quads are grouped by section, pass and tile so a draw is one texture.
 
 use alloc::vec::Vec;
@@ -13,8 +13,7 @@ use core::ops::Range;
 
 use plaatcraft_engine::tiles::tile;
 use plaatcraft_engine::world::{
-    self, HEIGHT, LAVA, QUAD_BYTES, SECTION_COUNT, SECTION_SIZE, WATER, full_block_quad,
-    quad_material,
+    self, HEIGHT, QUAD_BYTES, SECTION_COUNT, SECTION_SIZE, quad_material,
 };
 
 use crate::textures::has_alpha;
@@ -29,7 +28,7 @@ pub const TINT_BEDROCK: u16 = 2;
 pub const TINT_LAVA: u16 = 3;
 pub const TINT_WATER: u16 = 4;
 pub const TINTS: usize = 5;
-pub const PALETTE_SIZE: usize = TINTS << 11;
+pub const PALETTE_SIZE: usize = TINTS << 13;
 
 // The passes have their own depth, alpha and blend state
 pub const SOLID: usize = 0;
@@ -51,7 +50,7 @@ pub struct Mesh {
 }
 
 struct Quad {
-    words: [u32; 2],
+    words: [u32; 3],
     tile: u8,
 }
 
@@ -72,15 +71,12 @@ impl Quad {
 }
 
 pub fn build(packed: &[u8]) -> Mesh {
-    // Positions are whole blocks, so slabs and stairs are drawn as full blocks.
     let mut quads: Vec<Quad> = packed
         .as_chunks::<QUAD_BYTES>()
         .0
         .iter()
         .map(|bytes| {
-            let words = full_block_quad(
-                [0, 4, 8].map(|i| u32::from_ne_bytes(bytes[i..i + 4].try_into().unwrap())),
-            );
+            let words = [0, 4, 8].map(|i| u32::from_ne_bytes(bytes[i..i + 4].try_into().unwrap()));
             let face = (words[0] >> 17) & 7;
             Quad {
                 words,
@@ -91,7 +87,7 @@ pub fn build(packed: &[u8]) -> Mesh {
     quads.sort_by_key(|quad| (quad.section(), quad.pass(), quad.tile));
 
     let mut mesh = Mesh {
-        list: Vec::with_capacity(quads.len() * 28 + 64),
+        list: Vec::with_capacity(quads.len() * 48 + 64),
         draws: Vec::new(),
         sections: Default::default(),
     };
@@ -130,50 +126,80 @@ pub fn build(packed: &[u8]) -> Mesh {
     mesh
 }
 
-fn emit(list: &mut Vec<u8>, [a, b]: [u32; 2]) {
-    let x = (a & 31) as u8;
-    let y = (((a >> 5) & 31) + ((a >> 27) & 15) * SECTION_SIZE as u32) as u8;
-    let z = ((a >> 12) & 31) as u8;
+fn emit(list: &mut Vec<u8>, [a, b, shape]: [u32; 3]) {
+    let origin = [
+        (a & 31) as f32,
+        (((a >> 5) & 31) + ((a >> 27) & 15) * SECTION_SIZE as u32) as f32,
+        ((a >> 12) & 31) as f32,
+    ];
     let face = (a >> 17) & 7;
     let material = quad_material(a) as u8;
     let reverse = (face & 1) ^ ((a >> 26) & 1) != 0;
-    let extent = [(b & 31) as u8, ((b >> 5) & 31) as u8];
     let tint = match material {
         11 => TINT_PINE,
         23 => TINT_BEDROCK,
-        LAVA => TINT_LAVA,
-        WATER => TINT_WATER,
+        m if world::is_lava(m) => TINT_LAVA,
+        m if world::is_water(m) => TINT_WATER,
         _ => 0,
     };
-    let color = (tint << 11 | (face as u16) << 8 | ((b >> 10) & 255) as u16).to_be_bytes();
-    // GX culls the opposite winding of the terrain shader's triangles
-    let corners: [[u8; 2]; 4] = if reverse {
-        [[0, 0], [1, 0], [1, 1], [0, 1]]
-    } else {
-        [[0, 0], [0, 1], [1, 1], [1, 0]]
-    };
-    for [cx, cy] in corners {
-        let mut p = [x, y, z];
+    // GX splits quads at 0-2. Rotate corners to choose the brighter diagonal.
+    let light = [
+        shape & 3,
+        (shape >> 2) & 3,
+        (shape >> 6) & 3,
+        (shape >> 4) & 3,
+    ];
+    let flip = usize::from(light[0] + light[2] < light[1] + light[3]);
+    let order = if reverse { [0, 1, 2, 3] } else { [0, 3, 2, 1] };
+    let corners = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]];
+    for corner in order {
+        let index = (corner + flip) % 4;
+        let [cx, cy] = corners[index];
+        let mut p = origin;
         let uv = if face >= 6 {
-            // Plants are two diagonal planes through the block
             p[0] += cx;
             p[1] += cy;
-            p[2] += if face == 7 { 1 - cx } else { cx };
-            [cx, 1 - cy]
+            p[2] += if face == 7 { 1.0 - cx } else { cx };
+            [cx, 1.0 - cy]
         } else {
             let axis = (face / 2) as usize;
-            p[(axis + 1) % 3] += cx * extent[0];
-            p[(axis + 2) % 3] += cy * extent[1];
-            // Textures repeat, so the world y can be flipped as HEIGHT - y in a u8
-            let flipped = HEIGHT as u8 - p[1];
-            match axis {
-                0 => [p[2], flipped],
-                1 => [p[0], p[2]],
-                _ => [p[0], flipped],
+            let mut offset = [cx * (b & 31) as f32, cy * ((b >> 5) & 31) as f32];
+            if shape & 256 != 0 {
+                let low = [(shape >> 9) & 1, (shape >> 11) & 1].map(|v| v as f32 * 0.5);
+                let high = [(shape >> 10) & 1, (shape >> 12) & 1].map(|v| 1.0 - v as f32 * 0.5);
+                offset = [
+                    low[0] + (high[0] - low[0]) * cx,
+                    low[1] + (high[1] - low[1]) * cy,
+                ];
+                p[axis] += ((shape >> 13) & 3) as f32 * 0.5;
             }
+            p[(axis + 1) % 3] += offset[0];
+            p[(axis + 2) % 3] += offset[1];
+            // Keep texture coordinates on the block grid, as the desktop shaders do.
+            let uv = match axis {
+                0 => [p[2], HEIGHT as f32 - p[1]],
+                1 => [p[0], p[2]],
+                _ => [p[0], HEIGHT as f32 - p[1]],
+            };
+            if world::fluid(material).is_some()
+                && (face == 2 || axis == 0 && cx == 1.0 || axis == 2 && cy == 1.0)
+            {
+                p[1] -= 1.0 - world::fluid_height(material);
+            }
+            uv
         };
-        list.extend(p);
+        // Fixed point retains sub-block shapes and fluid heights with compact vertices.
+        for value in p {
+            list.extend(((value * 256.0 + 0.5) as u16).to_be_bytes());
+        }
+        let color = (tint << 13
+            | (light[index] as u16) << 11
+            | (face as u16) << 8
+            | ((b >> 10) & 255) as u16)
+            .to_be_bytes();
         list.extend(color);
-        list.extend(uv);
+        for value in uv {
+            list.extend(((value * 256.0 + 0.5) as u16).to_be_bytes());
+        }
     }
 }

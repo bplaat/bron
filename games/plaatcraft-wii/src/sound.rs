@@ -12,6 +12,7 @@ use core::ptr;
 
 use libogc_sys::*;
 use plaatcraft_engine::camera::Camera;
+use plaatcraft_engine::menu::MAX_VOLUME;
 use plaatcraft_engine::sound::{Effect, Footsteps, Movement, Play};
 
 use crate::memory;
@@ -41,6 +42,7 @@ struct Mixer {
     sounds: [Vec<i16>; Effect::ALL.len()],
     voices: [*mut AESNDPB; VOICES],
     next: usize,
+    volume: f32,
 }
 
 impl Mixer {
@@ -52,7 +54,7 @@ impl Mixer {
         }
         let samples = &self.sounds[play.effect as usize];
         let pan = play.pan.clamp(-1.0, 1.0);
-        let volume = |side: f32| (play.volume * side.min(1.0) * FULL_VOLUME) as u16;
+        let volume = |side: f32| (play.volume * self.volume * side.min(1.0) * FULL_VOLUME) as u16;
         unsafe {
             AESND_SetVoiceVolume(voice, volume(1.0 - pan), volume(1.0 + pan));
             AESND_PlayVoice(
@@ -86,9 +88,14 @@ impl Sounds {
                     AESND_AllocateVoiceWithArg(None, ptr::null_mut())
                 }),
                 next: 0,
+                volume: 1.0,
             },
             footsteps: Footsteps::default(),
         }
+    }
+
+    pub fn set_volume(&mut self, volume: u8) {
+        self.mixer.volume = f32::from(volume) / f32::from(MAX_VOLUME);
     }
 
     /// A menu or hotbar click

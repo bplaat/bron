@@ -27,6 +27,8 @@ static DATA: &Data<[u8]> = &Data(*include_bytes!(concat!(env!("OUT_DIR"), "/text
 
 pub struct Textures {
     pub tiles: Vec<GXTexObj>,
+    pub sky: Vec<GXTexObj>,
+    pub characters: Vec<GXTexObj>,
     pub font: GXTexObj,
     pub cursor: GXTexObj,
 }
@@ -36,6 +38,14 @@ impl Textures {
         crate::memory::flush(&DATA.0);
         Self {
             tiles: TILES
+                .iter()
+                .map(|texture| object(texture, GX_REPEAT))
+                .collect(),
+            characters: CHARACTERS
+                .iter()
+                .map(|texture| object(texture, GX_CLAMP))
+                .collect(),
+            sky: SKY
                 .iter()
                 .map(|texture| object(texture, GX_REPEAT))
                 .collect(),

@@ -13,7 +13,8 @@ use core::ptr;
 
 use libogc_sys::*;
 use plaatcraft_engine::camera::View;
-use plaatcraft_engine::world::{CHUNK_SIZE, Coord, LAVA, SECTION_COUNT, WATER};
+use plaatcraft_engine::particles::SIZE;
+use plaatcraft_engine::world::{self, CHUNK_SIZE, Coord, SECTION_COUNT};
 
 use crate::memory::{AlignedBuffer, Framebuffer};
 use crate::mesh::{
@@ -163,7 +164,8 @@ fn palette(daylight: f32) -> Vec<[u8; 4]> {
     let curve: [f32; 16] = core::array::from_fn(|level| powf(level as f32 / 15.0, 1.8));
     let mut palette = Vec::with_capacity(PALETTE_SIZE);
     for index in 0..PALETTE_SIZE as u16 {
-        let tint = index >> 11;
+        let tint = index >> 13;
+        let occlusion = [0.45, 0.65, 0.82, 1.0][usize::from(index >> 11 & 3)];
         let face = usize::from(index >> 8 & 7);
         let light = index & 255;
         let sky = curve[usize::from(light & 15)] * daylight;
@@ -192,7 +194,12 @@ fn palette(daylight: f32) -> Vec<[u8; 4]> {
         } else {
             core::array::from_fn(|i| sky[i].max(block[i]).max(minimum) * faces[face] * color[i])
         };
-        palette.push([encode(lit[0]), encode(lit[1]), encode(lit[2]), alpha]);
+        palette.push([
+            encode(lit[0] * occlusion),
+            encode(lit[1] * occlusion),
+            encode(lit[2] * occlusion),
+            alpha,
+        ]);
     }
     crate::memory::flush(&palette);
     palette
@@ -251,9 +258,9 @@ impl Renderer {
             GX_SetVtxDesc(GX_VA_POS, GX_DIRECT);
             GX_SetVtxDesc(GX_VA_CLR0, GX_INDEX16);
             GX_SetVtxDesc(GX_VA_TEX0, GX_DIRECT);
-            GX_SetVtxAttrFmt(GX_VTXFMT0, GX_VA_POS as u32, GX_POS_XYZ, GX_U8, 0);
+            GX_SetVtxAttrFmt(GX_VTXFMT0, GX_VA_POS as u32, GX_POS_XYZ, GX_U16, 8);
             GX_SetVtxAttrFmt(GX_VTXFMT0, GX_VA_CLR0 as u32, GX_CLR_RGBA, GX_RGBA8, 0);
-            GX_SetVtxAttrFmt(GX_VTXFMT0, GX_VA_TEX0 as u32, GX_TEX_ST, GX_U8, 0);
+            GX_SetVtxAttrFmt(GX_VTXFMT0, GX_VA_TEX0 as u32, GX_TEX_ST, GX_U16, 8);
             GX_SetArray(
                 GX_VA_CLR0 as u32,
                 self.palette.as_ptr().cast_mut().cast(),
@@ -265,12 +272,12 @@ impl Renderer {
             // The fog of water and lava is close and colored, like the shaders' immersion fog
             let fog_end = (RENDER_DISTANCE as f32 - 1.5) * CHUNK_SIZE as f32;
             let (start, end, color) = match eye_material {
-                Some(WATER) => (
+                Some(m) if world::is_water(m) => (
                     0.0,
                     24.0,
                     [0.025, 0.16, 0.23].map(|c| c * self.daylight.max(0.06)),
                 ),
-                Some(LAVA) => (0.0, 4.0, [0.65, 0.035, 0.005]),
+                Some(m) if world::is_lava(m) => (0.0, 4.0, [0.65, 0.035, 0.005]),
                 _ => (fog_end * 0.75, fog_end, fog_color(self.daylight)),
             };
             GX_SetFog(GX_FOG_LIN, start, end, NEAR, self.far, gx_color(color));
@@ -379,8 +386,198 @@ impl Renderer {
         }
     }
 
+    pub fn draw_sky(&self, view: &View, textures: &Textures, eye: Option<u8>, now: f32) {
+        if eye.is_some_and(|m| world::fluid(m).is_some()) {
+            return;
+        }
+        self.immediate();
+        let radius = self.far * 0.4;
+        let rotation = model_view(view, view.eye);
+        let sky = mix([0.06, 0.08, 0.16], [1.0; 3], self.daylight);
+        let color = rgba(gx_color(sky));
+        unsafe {
+            GX_LoadPosMtxImm(&rotation, GX_PNMTX0);
+            GX_SetZMode(GX_DISABLE, GX_ALWAYS, GX_FALSE);
+        }
+        for (face, corners) in BOX_FACES.iter().enumerate() {
+            let vertices = corners.map(|p| p.map(|v| (v * 2.0 - 1.0) * radius));
+            let layers: &[usize] = match face {
+                2 => &[4, 5],
+                3 => &[0],
+                _ => &[1, 3, 2],
+            };
+            for &layer in layers {
+                let uvs = if layer == 5 {
+                    UVS.map(|[u, v]| [u * 2.0 + now * 0.0025, v * 2.0 + now * 0.00125])
+                } else {
+                    UVS
+                };
+                quad3(&textures.sky[layer], vertices, uvs, color);
+            }
+        }
+        let azimuth = if self.daylight > 0.5 {
+            1.256_637
+        } else {
+            -1.884_956
+        };
+        let elevation = 0.973_894;
+        let body = [
+            sinf(azimuth) * cosf(elevation),
+            sinf(elevation),
+            cosf(azimuth) * cosf(elevation),
+        ];
+        let right = [cosf(azimuth), 0.0, -sinf(azimuth)];
+        let up = [
+            -sinf(elevation) * sinf(azimuth),
+            cosf(elevation),
+            -sinf(elevation) * cosf(azimuth),
+        ];
+        let vertices = UVS.map(|[u, v]| {
+            core::array::from_fn(|a| {
+                radius
+                    * (body[a]
+                        + right[a] * (u * 2.0 - 1.0) * 0.194
+                        + up[a] * (1.0 - v * 2.0) * 0.194)
+            })
+        });
+        quad3(
+            &textures.sky[if self.daylight > 0.5 { 6 } else { 7 }],
+            vertices,
+            UVS,
+            0xffff_ffff,
+        );
+    }
+
+    fn immediate(&self) {
+        unsafe {
+            GX_LoadProjectionMtx(&self.projection, GX_PERSPECTIVE);
+            GX_ClearVtxDesc();
+            GX_SetVtxDesc(GX_VA_POS, GX_DIRECT);
+            GX_SetVtxDesc(GX_VA_CLR0, GX_DIRECT);
+            GX_SetVtxDesc(GX_VA_TEX0, GX_DIRECT);
+            GX_SetVtxAttrFmt(GX_VTXFMT1, GX_VA_POS as u32, GX_POS_XYZ, GX_F32, 0);
+            GX_SetVtxAttrFmt(GX_VTXFMT1, GX_VA_CLR0 as u32, GX_CLR_RGBA, GX_RGBA8, 0);
+            GX_SetVtxAttrFmt(GX_VTXFMT1, GX_VA_TEX0 as u32, GX_TEX_ST, GX_F32, 0);
+            GX_SetCullMode(GX_CULL_NONE);
+            GX_SetAlphaCompare(GX_ALWAYS, 0, GX_AOP_AND, GX_ALWAYS, 0);
+            GX_SetBlendMode(GX_BM_BLEND, GX_BL_SRCALPHA, GX_BL_INVSRCALPHA, GX_LO_CLEAR);
+        }
+        set_vertex_color_texture(true);
+    }
+
+    pub fn draw_players(
+        &self,
+        view: &View,
+        center: Coord,
+        others: &plaatcraft_engine::avatars::Others,
+        textures: &Textures,
+    ) {
+        self.immediate();
+        unsafe {
+            GX_SetZMode(GX_ENABLE, GX_LEQUAL, GX_TRUE);
+            GX_SetAlphaCompare(GX_GREATER, 127, GX_AOP_AND, GX_ALWAYS, 0);
+        }
+        let base = model_view(view, [0.0; 3]);
+        let color = rgba(gx_color([self.daylight.max(0.15); 3]));
+        for bytes in others.instances(center, 0).as_chunks::<48>().0 {
+            let v: [f32; 12] = core::array::from_fn(|i| {
+                f32::from_ne_bytes(bytes[i * 4..i * 4 + 4].try_into().unwrap())
+            });
+            let (sy, cy) = (sinf(v[3]), cosf(v[3]));
+            let (sp, cp) = (sinf(v[4]), cosf(v[4]));
+            let model = [
+                [cy, sy * sp, sy * cp, v[0]],
+                [0.0, cp, -sp, v[1]],
+                [-sy, cy * sp, cy * cp, v[2]],
+            ];
+            let mut matrix = [[0.0; 4]; 3];
+            unsafe {
+                ps_guMtxConcat(&base, &model, &mut matrix);
+                GX_LoadPosMtxImm(&matrix, GX_PNMTX0);
+            }
+            for face in BOX_FACES {
+                let positions = face.map(|p| core::array::from_fn(|a| v[9 + a] + p[a] * v[6 + a]));
+                quad3(&textures.characters[v[5] as usize], positions, UVS, color);
+            }
+        }
+    }
+
+    /// The block in the hand, placed and swung like held.wgsl of the desktop game. The swing
+    /// progress goes from 0 to 1.
+    pub fn draw_held(&self, material: u8, progress: f32, textures: &Textures) {
+        use core::f32::consts::PI;
+        self.immediate();
+        let swing = sinf(progress * PI);
+        let reach = sinf(sqrtf(progress) * PI);
+        let (sy, cy) = (sinf(0.8 - swing * 0.35), cosf(0.8 - swing * 0.35));
+        let (sx, cx) = (sinf(0.12 + reach * 0.6), cosf(0.12 + reach * 0.6));
+        // The x rotation after the y rotation, of a block scaled around its center
+        let rotation = [
+            [cy, 0.0, sy],
+            [sx * sy, cx, -sx * cy],
+            [-cx * sy, sx, cx * cy],
+        ];
+        let position = [
+            0.56 - reach * 0.4,
+            -0.5 + sinf(sqrtf(progress) * 2.0 * PI) * 0.2,
+            -0.85 - swing * 0.2,
+        ];
+        let matrix: [[f32; 4]; 3] = core::array::from_fn(|row| {
+            let [x, y, z] = rotation[row].map(|value| value * HELD_SIZE);
+            [x, y, z, position[row] - (x + y + z) / 2.0]
+        });
+        unsafe {
+            GX_LoadPosMtxImm(&matrix, GX_PNMTX0);
+            // Drawn over the world, so only the front faces keep the faces in order
+            GX_SetZMode(GX_DISABLE, GX_ALWAYS, GX_FALSE);
+            GX_SetCullMode(GX_CULL_BACK);
+        }
+        let full = [[[0.0; 3], [1.0; 3]]];
+        let boxes = world::boxes(material);
+        for &bounds in if boxes.is_empty() { &full[..] } else { boxes } {
+            draw_box(
+                textures,
+                material,
+                bounds.map(|p| p.map(|v| v as f32)),
+                self.daylight,
+                world::is_sprite(material),
+            );
+        }
+        unsafe { GX_SetCullMode(GX_CULL_NONE) };
+    }
+
+    pub fn draw_particles(
+        &self,
+        view: &View,
+        center: Coord,
+        particles: &plaatcraft_engine::particles::Particles,
+        textures: &Textures,
+    ) {
+        self.immediate();
+        unsafe {
+            GX_SetZMode(GX_ENABLE, GX_LEQUAL, GX_TRUE);
+        }
+        for particle in &particles.particles {
+            let offset = [
+                (particle.position[0] - (center.0 * CHUNK_SIZE as i64) as f64) as f32,
+                particle.position[1] as f32,
+                (particle.position[2] - (center.1 * CHUNK_SIZE as i64) as f64) as f32,
+            ];
+            unsafe {
+                GX_LoadPosMtxImm(&model_view(view, offset), GX_PNMTX0);
+            }
+            draw_box(
+                textures,
+                particle.material,
+                [[-SIZE / 2.0; 3], [SIZE / 2.0; 3]],
+                self.daylight,
+                false,
+            );
+        }
+    }
+
     /// Outlines the targeted block like the selection shader.
-    pub fn draw_selection(&self, view: &View, center: Coord, block: [i64; 3]) {
+    pub fn draw_selection(&self, view: &View, center: Coord, block: [i64; 3], material: u8) {
         const GROW: f32 = 0.004;
         let size = CHUNK_SIZE as i64;
         let offset = [
@@ -399,18 +596,26 @@ impl Renderer {
             set_vertex_color_texture(false);
             GX_SetBlendMode(GX_BM_BLEND, GX_BL_SRCALPHA, GX_BL_INVSRCALPHA, GX_LO_CLEAR);
             GX_SetLineWidth(12, GX_TO_ZERO);
-            GX_Begin(GX_LINES, GX_VTXFMT1, 24);
-            for axis in 0..3 {
-                for corner in 0..4 {
-                    for end in 0..2 {
-                        let mut p = [0.0f32; 3];
-                        p[axis] = if end == 0 { -GROW } else { 1.0 + GROW };
-                        p[(axis + 1) % 3] = if corner & 1 == 0 { -GROW } else { 1.0 + GROW };
-                        p[(axis + 2) % 3] = if corner & 2 == 0 { -GROW } else { 1.0 + GROW };
-                        pipe_f32(p[0]);
-                        pipe_f32(p[1]);
-                        pipe_f32(p[2]);
-                        pipe_u32(0x0000_00a0);
+            let boxes = world::boxes(material);
+            let full = [[[0.0; 3], [1.0; 3]]];
+            let boxes = if boxes.is_empty() { &full[..] } else { boxes };
+            GX_Begin(GX_LINES, GX_VTXFMT1, boxes.len() as u16 * 24);
+            for bounds in boxes {
+                for axis in 0..3 {
+                    for corner in 0..4 {
+                        for end in 0..2 {
+                            let mut p = [0.0f32; 3];
+                            p[axis] =
+                                bounds[end][axis] as f32 + if end == 0 { -GROW } else { GROW };
+                            p[(axis + 1) % 3] = bounds[corner & 1][(axis + 1) % 3] as f32
+                                + if corner & 1 == 0 { -GROW } else { GROW };
+                            p[(axis + 2) % 3] = bounds[(corner >> 1) & 1][(axis + 2) % 3] as f32
+                                + if corner & 2 == 0 { -GROW } else { GROW };
+                            pipe_f32(p[0]);
+                            pipe_f32(p[1]);
+                            pipe_f32(p[2]);
+                            pipe_u32(0x0000_00a0);
+                        }
                     }
                 }
             }
@@ -476,4 +681,86 @@ pub unsafe fn pipe_f32(value: f32) {
 #[inline]
 pub unsafe fn pipe_u32(value: u32) {
     unsafe { ptr::write_volatile(wgPipe.cast::<u32>(), value) }
+}
+
+const UVS: [[f32; 2]; 4] = [[0.0, 0.0], [0.0, 1.0], [1.0, 1.0], [1.0, 0.0]];
+// The size of the held block, a bit smaller than in held.wgsl on the smaller TV screen.
+const HELD_SIZE: f32 = 0.22;
+
+const BOX_FACES: [[[f32; 3]; 4]; 6] = [
+    [
+        [1.0, 1.0, 0.0],
+        [1.0, 0.0, 0.0],
+        [1.0, 0.0, 1.0],
+        [1.0, 1.0, 1.0],
+    ],
+    [
+        [0.0, 1.0, 1.0],
+        [0.0, 0.0, 1.0],
+        [0.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0],
+    ],
+    [
+        [0.0, 1.0, 0.0],
+        [0.0, 1.0, 1.0],
+        [1.0, 1.0, 1.0],
+        [1.0, 1.0, 0.0],
+    ],
+    [
+        [0.0, 0.0, 1.0],
+        [0.0, 0.0, 0.0],
+        [1.0, 0.0, 0.0],
+        [1.0, 0.0, 1.0],
+    ],
+    [
+        [1.0, 1.0, 1.0],
+        [1.0, 0.0, 1.0],
+        [0.0, 0.0, 1.0],
+        [0.0, 1.0, 1.0],
+    ],
+    [
+        [0.0, 1.0, 0.0],
+        [0.0, 0.0, 0.0],
+        [1.0, 0.0, 0.0],
+        [1.0, 1.0, 0.0],
+    ],
+];
+fn rgba(color: GXColor) -> u32 {
+    u32::from_be_bytes([color.r, color.g, color.b, color.a])
+}
+fn quad3(texture: &GXTexObj, vertices: [[f32; 3]; 4], uvs: [[f32; 2]; 4], color: u32) {
+    unsafe {
+        GX_LoadTexObj(texture, GX_TEXMAP0 as u8);
+        GX_Begin(GX_QUADS, GX_VTXFMT1, 4);
+        for (p, uv) in vertices.into_iter().zip(uvs) {
+            for v in p {
+                pipe_f32(v);
+            }
+            pipe_u32(color);
+            for v in uv {
+                pipe_f32(v);
+            }
+        }
+    }
+}
+fn draw_box(textures: &Textures, material: u8, bounds: [[f32; 3]; 2], daylight: f32, sprite: bool) {
+    for face in 0..6 {
+        if sprite && face != 4 {
+            continue;
+        }
+        let vertices = BOX_FACES[face]
+            .map(|p| core::array::from_fn(|a| bounds[0][a] + (bounds[1][a] - bounds[0][a]) * p[a]));
+        let light = if world::is_lava(material) {
+            1.0
+        } else {
+            daylight.max(0.15) * [0.8, 0.8, 1.0, 0.5, 0.65, 0.65][face]
+        };
+        let tile = plaatcraft_engine::tiles::tile(material, if sprite { 6 } else { face as u32 });
+        quad3(
+            &textures.tiles[tile],
+            vertices,
+            UVS,
+            rgba(gx_color([light; 3])),
+        );
+    }
 }

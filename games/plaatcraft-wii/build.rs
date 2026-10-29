@@ -27,10 +27,37 @@ fn convert(data: &mut Vec<u8>, path: &Path, mipmaps: bool) -> String {
         .iter()
         .all(|p| p[3] == 255);
     let format = if opaque { Format::Cmpr } else { Format::Rgb5a3 };
-    let texture = if mipmaps {
-        Texture::load_mipmapped(path, format)
+    // The sky layers and character sprites have different sizes, including a 513-pixel edge,
+    // so they're scaled to one tile-aligned square like the desktop texture arrays.
+    let normalized;
+    let texture_path = if path
+        .parent()
+        .is_some_and(|p| p.ends_with("sky") || p.ends_with("characters"))
+    {
+        let mut pixels = Vec::with_capacity(256 * 256 * 4);
+        for y in 0..256 {
+            for x in 0..256 {
+                let i = (((y * image.height() / 256) * image.width() + x * image.width() / 256) * 4)
+                    as usize;
+                pixels.extend_from_slice(&image.pixels()[i..i + 4]);
+            }
+        }
+        let bitmap = image::Bitmap::new(256, 256, pixels).expect("valid bitmap");
+        normalized =
+            PathBuf::from(std::env::var_os("OUT_DIR").unwrap()).join(path.file_name().unwrap());
+        fs::write(
+            &normalized,
+            image::encode(&bitmap, image::Format::Png).expect("failed to encode texture"),
+        )
+        .expect("failed to write texture");
+        &normalized
     } else {
-        Texture::load(path, format)
+        path
+    };
+    let texture = if mipmaps {
+        Texture::load_mipmapped(texture_path, format)
+    } else {
+        Texture::load(texture_path, format)
     }
     .expect("failed to convert texture");
     let offset = data.len();
@@ -45,7 +72,10 @@ fn convert(data: &mut Vec<u8>, path: &Path, mipmaps: bool) -> String {
 fn main() {
     let manifest_dir = PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").unwrap());
     let out_dir = PathBuf::from(std::env::var_os("OUT_DIR").unwrap());
-    wii::build(manifest_dir.join("../../tools/wii-toolchain"));
+    // The C libraries are only built and linked for the Wii, not when checking for the host
+    if std::env::var("CARGO_CFG_TARGET_ARCH").as_deref() == Ok("powerpc") {
+        wii::build(manifest_dir.join("../../tools/wii-toolchain"));
+    }
 
     // The block tiles are shared with the bwindow game, they all go in one texture blob
     let assets = manifest_dir.join("../plaatcraft/assets");
@@ -57,6 +87,40 @@ fn main() {
             code,
             "    {},",
             convert(&mut data, &assets.join(tile), true)
+        )
+        .unwrap();
+    }
+    code.push_str("];\n");
+    code.push_str("pub const SKY: [Texture; 8] = [\n");
+    for file in [
+        "skybox_bottom.png",
+        "skybox_side.png",
+        "skybox_sideClouds.png",
+        "skybox_sideHills.png",
+        "skybox_top.png",
+        "clouds.png",
+        "sun.png",
+        "moon.png",
+    ] {
+        writeln!(
+            code,
+            "    {},",
+            convert(&mut data, &assets.join("sky").join(file), false)
+        )
+        .unwrap();
+    }
+    code.push_str("];\n");
+
+    code.push_str("pub const CHARACTERS: [Texture; 4] = [\n");
+    for part in plaatcraft_engine::avatars::PARTS {
+        writeln!(
+            code,
+            "    {},",
+            convert(
+                &mut data,
+                &assets.join("characters").join(format!("male_{part}.png")),
+                false
+            )
         )
         .unwrap();
     }
