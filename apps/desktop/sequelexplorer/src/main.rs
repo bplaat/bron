@@ -1536,7 +1536,6 @@ fn main() {
                         );
                     }
                 }
-                IpcMessage::RestoreLastFile => {}
                 IpcMessage::SetPreference { key, value } => {
                     let result = match value {
                         Some(value) => prefs.set(key.key(), value),
