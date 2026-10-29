@@ -794,6 +794,7 @@ impl Context {
                     VertexFormat::Float32x2 => 16,
                     VertexFormat::Float32x3 => 6,
                     VertexFormat::Uint32x2 => 17,
+                    VertexFormat::Uint32x3 => 7,
                     VertexFormat::Float32x4 => 2,
                     VertexFormat::Uint8x4 => 30,
                     VertexFormat::Unorm8x4 => 28,

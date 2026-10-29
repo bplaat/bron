@@ -61,7 +61,7 @@ Buffer slice offsets, index ranges, signed base vertices and starting instances
 are preserved on all backends. The pass retains its buffers until the GPU finishes.
 Invalid usages, alignment and index ranges panic.
 
-Vertex layouts support `Float32x2`, `Float32x3`, `Float32x4`, `Uint32x2`,
+Vertex layouts support `Float32x2`, `Float32x3`, `Float32x4`, `Uint32x2`, `Uint32x3`,
 `Uint8x4`, `Unorm8x4` and `Sint16x4`. `vertex_attr_array!` accepts multiple
 `location => Format` entries and computes their packed byte offsets.
 

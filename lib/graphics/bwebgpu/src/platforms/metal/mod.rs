@@ -308,6 +308,7 @@ impl Context {
                         VertexFormat::Float32x2 => 29usize,
                         VertexFormat::Float32x3 => 30usize,
                         VertexFormat::Uint32x2 => 37usize,
+                        VertexFormat::Uint32x3 => 38usize,
                         VertexFormat::Float32x4 => 31usize,
                         VertexFormat::Uint8x4 => 3usize,
                         VertexFormat::Unorm8x4 => 9usize,
