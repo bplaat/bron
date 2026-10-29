@@ -38,3 +38,11 @@ opt-level = "s"
 panic = "immediate-abort"
 lto = false
 codegen-units = 1
+
+# The build script converts every texture whenever the engine changes, optimized it takes
+# seconds instead of half a minute
+[profile.release.build-override]
+opt-level = 3
+
+[profile.dev.build-override]
+opt-level = 3
