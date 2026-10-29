@@ -588,6 +588,42 @@ mod tests {
     }
 
     #[test]
+    fn gradients_outside_the_clip_leave_pixels_unchanged() {
+        let mut canvas = super::OffscreenCanvas::new(32, 32);
+        canvas.draw(|ctx| {
+            ctx.set_fill_style(Color::rgb(20, 30, 40));
+            ctx.fill_rect(0.0, 0.0, 32.0, 32.0);
+            ctx.begin_path();
+            ctx.rect(8.0, 8.0, 16.0, 16.0);
+            ctx.clip();
+            for spread in [
+                super::GradientSpread::Repeat,
+                super::GradientSpread::Reflect,
+            ] {
+                let mut gradient = super::CanvasGradient::linear(0.0, 0.0, 8.0, 0.0);
+                gradient.add_color_stop(0.0, Color::rgb(255, 0, 0));
+                gradient.add_color_stop(1.0, Color::rgb(0, 0, 255));
+                gradient.set_spread(spread);
+                ctx.set_stroke_style(gradient.clone());
+                ctx.begin_path();
+                ctx.move_to(0.0, 40.0);
+                ctx.line_to(32.0, 40.0);
+                ctx.stroke();
+                ctx.set_fill_style(gradient);
+                ctx.fill_rect(40.0, 0.0, 8.0, 32.0);
+            }
+        });
+        assert!(
+            canvas
+                .pixels()
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .all(|pixel| *pixel == [20, 30, 40, 255])
+        );
+    }
+
+    #[test]
     fn gradient_stops_keep_their_order_and_reflect_in_odd_periods() {
         let mut gradient = super::CanvasGradient::linear(0.0, 0.0, 1.0, 0.0);
         gradient.add_color_stop(0.5, Color::rgb(0, 0, 255));

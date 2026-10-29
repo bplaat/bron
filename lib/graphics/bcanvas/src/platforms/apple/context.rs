@@ -472,6 +472,17 @@ unsafe fn draw_gradient(context: CGContextRef, gradient: &Gradient) {
     unsafe {
         CGContextConcatCTM(context, affine(gradient.transform));
         let clip = CGContextGetClipBoundingBox(context);
+        // An entirely clipped path has a null bounding box with an infinite origin.
+        // It has no paintable pixels, and cannot be projected into gradient periods.
+        if clip.size.width <= 0.0
+            || clip.size.height <= 0.0
+            || !clip.origin.x.is_finite()
+            || !clip.origin.y.is_finite()
+            || !clip.size.width.is_finite()
+            || !clip.size.height.is_finite()
+        {
+            return;
+        }
         let corners = [
             (clip.origin.x, clip.origin.y),
             (clip.origin.x + clip.size.width, clip.origin.y),
