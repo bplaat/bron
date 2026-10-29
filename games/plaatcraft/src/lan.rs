@@ -12,15 +12,14 @@
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
 use std::hash::{BuildHasher, RandomState};
-use std::io;
 use std::net::{
     Ipv4Addr, Ipv6Addr, Shutdown, SocketAddr, TcpListener, TcpStream, ToSocketAddrs, UdpSocket,
 };
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
-use std::thread;
 use std::time::{Duration, Instant};
+use std::{io, thread};
 
 use crate::protocol::{
     Announcement, ClientFrame, Controls, DISCOVERY_PORT, Datagram, GAME_PORT, REPEATED_INPUTS,

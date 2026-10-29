@@ -16,12 +16,10 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use plaatcraft_engine::world::{ChunkData, Coord, Edit};
-
 use plaatcraft_engine::camera::Camera;
 use plaatcraft_engine::flow;
 use plaatcraft_engine::raycast::raycast;
-use plaatcraft_engine::world::{self, HEIGHT};
+use plaatcraft_engine::world::{self, ChunkData, Coord, Edit, HEIGHT};
 
 use crate::database::{Database, Player};
 use crate::inventory::Hotbar;
