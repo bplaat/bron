@@ -1198,9 +1198,8 @@ impl ChunkData {
         for y in 2..=tree.height + 2 {
             let radius: i32 = match tree.style {
                 TreeStyle::Oak => match y - tree.height {
-                    -2 => 2,
+                    -2 | 1 => 2,
                     -1 | 0 => 3,
-                    1 => 2,
                     2 => 1,
                     _ => continue,
                 },
@@ -1338,8 +1337,7 @@ impl ChunkData {
             &blocks,
             |material| match material {
                 0 => 0,
-                GLASS | GLASS_FRAME => 1,
-                LEAVES..=PINE_LEAVES => 1,
+                GLASS | GLASS_FRAME | LEAVES..=PINE_LEAVES => 1,
                 _ if shape(material).is_some() => 1,
                 _ if is_water(material) => 2,
                 _ => 15,

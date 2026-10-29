@@ -1736,11 +1736,7 @@ impl Game {
         let (frame, suboptimal) = match self.surface.get_current_texture() {
             bwebgpu::CurrentSurfaceTexture::Success(frame) => (frame, false),
             bwebgpu::CurrentSurfaceTexture::Suboptimal(frame) => (frame, true),
-            bwebgpu::CurrentSurfaceTexture::Outdated => {
-                self.resize();
-                return;
-            }
-            bwebgpu::CurrentSurfaceTexture::Lost => {
+            bwebgpu::CurrentSurfaceTexture::Outdated | bwebgpu::CurrentSurfaceTexture::Lost => {
                 self.resize();
                 return;
             }
