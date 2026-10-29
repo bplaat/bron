@@ -408,9 +408,9 @@ impl Renderer {
             };
             for &layer in layers {
                 let uvs = if layer == 5 {
-                    UVS.map(|[u, v]| [u * 2.0 + now * 0.0025, v * 2.0 + now * 0.00125])
+                    BOX_UVS[face].map(|[u, v]| [u * 2.0 + now * 0.0025, v * 2.0 + now * 0.00125])
                 } else {
-                    UVS
+                    BOX_UVS[face]
                 };
                 quad3(&textures.sky[layer], vertices, uvs, color);
             }
@@ -495,9 +495,9 @@ impl Renderer {
                 ps_guMtxConcat(&base, &model, &mut matrix);
                 GX_LoadPosMtxImm(&matrix, GX_PNMTX0);
             }
-            for face in BOX_FACES {
+            for (face, uvs) in BOX_FACES.into_iter().zip(BOX_UVS) {
                 let positions = face.map(|p| core::array::from_fn(|a| v[9 + a] + p[a] * v[6 + a]));
-                quad3(&textures.characters[v[5] as usize], positions, UVS, color);
+                quad3(&textures.characters[v[5] as usize], positions, uvs, color);
             }
         }
     }
@@ -517,9 +517,10 @@ impl Renderer {
             [sx * sy, cx, -sx * cy],
             [-cx * sy, sx, cx * cy],
         ];
+        // A bit higher than in held.wgsl, so the larger hotbar on TVs doesn't cover it
         let position = [
             0.56 - reach * 0.4,
-            -0.5 + sinf(sqrtf(progress) * 2.0 * PI) * 0.2,
+            -0.4 + sinf(sqrtf(progress) * 2.0 * PI) * 0.2,
             -0.85 - swing * 0.2,
         ];
         let matrix: [[f32; 4]; 3] = core::array::from_fn(|row| {
@@ -687,6 +688,8 @@ const UVS: [[f32; 2]; 4] = [[0.0, 0.0], [0.0, 1.0], [1.0, 1.0], [1.0, 0.0]];
 // The size of the held block, a bit smaller than in held.wgsl on the smaller TV screen.
 const HELD_SIZE: f32 = 0.22;
 
+// The faces of a unit box: +x, -x, +y, -y, +z, -z, clockwise seen from outside, which GX
+// takes as the front, and the texture coordinates of their corners.
 const BOX_FACES: [[[f32; 3]; 4]; 6] = [
     [
         [1.0, 1.0, 0.0],
@@ -701,16 +704,16 @@ const BOX_FACES: [[[f32; 3]; 4]; 6] = [
         [0.0, 1.0, 0.0],
     ],
     [
-        [0.0, 1.0, 0.0],
-        [0.0, 1.0, 1.0],
-        [1.0, 1.0, 1.0],
         [1.0, 1.0, 0.0],
+        [1.0, 1.0, 1.0],
+        [0.0, 1.0, 1.0],
+        [0.0, 1.0, 0.0],
     ],
     [
-        [0.0, 0.0, 1.0],
-        [0.0, 0.0, 0.0],
-        [1.0, 0.0, 0.0],
         [1.0, 0.0, 1.0],
+        [1.0, 0.0, 0.0],
+        [0.0, 0.0, 0.0],
+        [0.0, 0.0, 1.0],
     ],
     [
         [1.0, 1.0, 1.0],
@@ -725,6 +728,10 @@ const BOX_FACES: [[[f32; 3]; 4]; 6] = [
         [1.0, 1.0, 0.0],
     ],
 ];
+const BOX_UVS: [[[f32; 2]; 4]; 6] = {
+    let flipped = [UVS[3], UVS[2], UVS[1], UVS[0]];
+    [UVS, UVS, flipped, flipped, UVS, UVS]
+};
 fn rgba(color: GXColor) -> u32 {
     u32::from_be_bytes([color.r, color.g, color.b, color.a])
 }
@@ -759,7 +766,7 @@ fn draw_box(textures: &Textures, material: u8, bounds: [[f32; 3]; 2], daylight: 
         quad3(
             &textures.tiles[tile],
             vertices,
-            UVS,
+            BOX_UVS[face],
             rgba(gx_color([light; 3])),
         );
     }
