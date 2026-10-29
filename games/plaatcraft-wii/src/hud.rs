@@ -117,9 +117,7 @@ impl<'a> Hud<'a> {
 
     pub fn text_width(text: &str, size: f32) -> f32 {
         let scale = size / font::RENDER_SIZE;
-        text.chars()
-            .map(|ch| font::glyph(ch).map_or(font::SPACE_WIDTH, |g| f32::from(g.w) + 2.0) * scale)
-            .sum()
+        text.chars().map(|ch| advance(ch) * scale).sum()
     }
 
     pub fn text(&mut self, text: &str, mut x: f32, y: f32, size: f32, color: u32) {
@@ -128,7 +126,7 @@ impl<'a> Hud<'a> {
         let scale = size / font::RENDER_SIZE;
         for ch in text.chars() {
             let Some(glyph) = font::glyph(ch) else {
-                x += font::SPACE_WIDTH * scale;
+                x += advance(ch) * scale;
                 continue;
             };
             let [left, top] = [glyph.x, glyph.y].map(|v| f32::from(v) / font::ATLAS_SIZE);
@@ -288,5 +286,14 @@ impl Canvas for Hud<'_> {
         if font.bold {
             Hud::text(self, text, left + font.size / 24.0, top, font.size, color);
         }
+    }
+}
+
+// How far a character moves the text at the font's size, a tab is four spaces.
+fn advance(ch: char) -> f32 {
+    match font::glyph(ch) {
+        Some(glyph) => f32::from(glyph.w) + 2.0,
+        None if ch == '\t' => font::SPACE_WIDTH * 4.0,
+        None => font::SPACE_WIDTH,
     }
 }

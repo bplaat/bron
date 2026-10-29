@@ -592,7 +592,16 @@ impl Game {
             Some(Action::Reset) => self.settings = settings::defaults(),
             // The build tools and the on-screen keyboard are for consoles, which have no chat
             // and keyboard.
-            Some(Action::Tool(_) | Action::Key(_) | Action::Space | Action::Erase) => {}
+            Some(
+                Action::Tool(_)
+                | Action::Key(_)
+                | Action::Space
+                | Action::Erase
+                | Action::Tab
+                | Action::Shift(_)
+                | Action::CapsLock
+                | Action::Enter,
+            ) => {}
             None if layout.in_list(position) => {
                 self.menu.start_list_drag(&layout, position);
             }

@@ -683,7 +683,7 @@ impl Game {
                 }
             }
             Action::DirectConnect => self.show(Some(Page::DirectConnect)),
-            Action::Confirm => self.confirm(page),
+            Action::Confirm | Action::Enter => self.confirm(page),
             Action::Distance | Action::Volume => {}
             Action::Stats => self.settings.game.show_stats = !self.settings.game.show_stats,
             Action::AutoJump => {
@@ -705,7 +705,12 @@ impl Game {
                 self.command(menu::TOOLS[index].1);
                 self.show(None);
             }
-            Action::Key(_) | Action::Space | Action::Erase => {
+            Action::Key(_)
+            | Action::Space
+            | Action::Erase
+            | Action::Tab
+            | Action::Shift(_)
+            | Action::CapsLock => {
                 let max = match page {
                     Page::Chat => MAX_CHAT_LENGTH,
                     Page::Username => MAX_NAME_LENGTH,

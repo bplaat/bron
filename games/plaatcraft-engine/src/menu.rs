@@ -42,13 +42,25 @@ const LIST_ROWS: usize = 5;
 const ROW_HEIGHT: f32 = 48.0;
 const LIST_BOTTOM: f32 = LIST_TOP + LIST_ROWS as f32 * ROW_HEIGHT;
 const FIELD_TOP: f32 = 110.0;
-// The on-screen keyboard of consoles, below the text field.
-const KEY_SIZE: f32 = 32.0;
-const KEY_COLUMNS: usize = 13;
+// The QWERTY on-screen keyboard of consoles below the text field, 31 half keys wide like a
+// keyboard. The rows of character keys without and with shift, and where they start in half
+// keys after Tab, Caps Lock and Shift.
+const KEY_SIZE: f32 = 28.0;
 const KEYS_TOP: f32 = FIELD_TOP + 90.0;
-const KEYS: &[u8] = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_/.:";
-// The space and erase keys fill the last row after the other keys.
-const SPACE_KEYS: usize = 8;
+const KEYS: [&[u8]; 4] = [
+    b"`1234567890-=",
+    b"qwertyuiop[]\\",
+    b"asdfghjkl;'",
+    b"zxcvbnm,./",
+];
+const SHIFTED_KEYS: [&[u8]; 4] = [
+    b"~!@#$%^&*()_+",
+    b"QWERTYUIOP{}|",
+    b"ASDFGHJKL:\"",
+    b"ZXCVBNM<>?",
+];
+const KEY_STARTS: [usize; 4] = [0, 4, 4, 5];
+const KEY_HALVES: usize = 31;
 /// The build tools and the commands they run, the last one opens the chat.
 pub const TOOLS: [(&str, &str); 8] = [
     ("Mark First Corner", "/pos1"),
@@ -253,10 +265,18 @@ pub enum Action {
     Reset,
     /// A build tool of [`TOOLS`].
     Tool(usize),
-    /// A key of the on-screen keyboard.
+    /// A character key of the on-screen keyboard, counted through its rows.
     Key(usize),
     Space,
     Erase,
+    /// Types a tab, which text draws four spaces wide.
+    Tab,
+    /// Shifts the next key of the on-screen keyboard, `true` for the right shift key.
+    Shift(bool),
+    /// Shifts the letters of the on-screen keyboard until pressed again.
+    CapsLock,
+    /// The enter key of the on-screen keyboard, which confirms the text.
+    Enter,
     Back,
 }
 
@@ -470,24 +490,41 @@ impl Layout {
                 }
             }
             page if page.typing() && platform.keyboard == Keyboard::OnScreen => {
-                let left = (CONTENT_WIDTH - KEY_COLUMNS as f32 * KEY_SIZE) / 2.0;
-                let key = |action, index: usize, span: usize| Widget {
+                let half = KEY_SIZE / 2.0;
+                let left = (CONTENT_WIDTH - KEY_HALVES as f32 * half) / 2.0;
+                let key = |action, row: usize, start: usize, halves: usize| Widget {
                     height: KEY_SIZE - 2.0,
                     ..Widget::new(
                         action,
-                        left + (index % KEY_COLUMNS) as f32 * KEY_SIZE,
-                        KEYS_TOP + (index / KEY_COLUMNS) as f32 * KEY_SIZE,
-                        span as f32 * KEY_SIZE - 2.0,
+                        left + start as f32 * half,
+                        KEYS_TOP + row as f32 * KEY_SIZE,
+                        halves as f32 * half - 2.0,
                     )
                 };
-                let erase = KEYS.len() + SPACE_KEYS;
-                let mut widgets: Vec<_> = (0..KEYS.len())
-                    .map(|index| key(Action::Key(index), index, 1))
-                    .collect();
-                widgets.push(key(Action::Space, KEYS.len(), SPACE_KEYS));
-                widgets.push(key(Action::Erase, erase, KEY_COLUMNS - erase % KEY_COLUMNS));
-                let y = KEYS_TOP + (erase / KEY_COLUMNS + 1) as f32 * KEY_SIZE + 10.0;
-                widgets.extend(confirm(y));
+                let mut widgets = Vec::new();
+                let mut index = 0;
+                for (row, keys) in KEYS.iter().enumerate() {
+                    for column in 0..keys.len() {
+                        // The backslash ends its row a bit wider, like on keyboards
+                        let halves = if row == 1 && column == keys.len() - 1 {
+                            3
+                        } else {
+                            2
+                        };
+                        let start = KEY_STARTS[row] + column * 2;
+                        widgets.push(key(Action::Key(index), row, start, halves));
+                        index += 1;
+                    }
+                }
+                widgets.push(key(Action::Erase, 0, 26, 5));
+                widgets.push(key(Action::Tab, 1, 0, 4));
+                widgets.push(key(Action::CapsLock, 2, 0, 4));
+                widgets.push(key(Action::Enter, 2, 26, 5));
+                widgets.push(key(Action::Shift(false), 3, 0, 5));
+                widgets.push(key(Action::Shift(true), 3, 25, 6));
+                widgets.push(key(Action::Space, 4, 7, 17));
+                let y = KEYS_TOP + 5.0 * KEY_SIZE + 10.0;
+                widgets.push(Widget::button(Action::Back, y));
                 (y + BUTTON_HEIGHT, widgets)
             }
             page if page.typing() => (FIELD_TOP + 140.0, confirm(FIELD_TOP + 100.0)),
@@ -582,6 +619,9 @@ pub struct Menu {
     pub error: Option<String>,
     // The widget the D-pad or pointer is on, for consoles.
     focus: Option<Action>,
+    // Whether the on-screen keyboard shifts the next key, and its caps lock.
+    shift: bool,
+    caps_lock: bool,
 }
 
 // Everything that shows, so platforms can draw a page again only when it changed.
@@ -599,6 +639,7 @@ impl Menu {
         self.text = text;
         self.error = None;
         self.focus = None;
+        self.shift = false;
     }
 
     /// Shows a list page with its rows and the row selected, or else the first.
@@ -678,12 +719,35 @@ impl Menu {
     pub fn type_key(&mut self, action: Action, max: usize) {
         let room = self.text.chars().count() < max;
         match action {
-            Action::Key(index) if room => self.text.push(char::from(KEYS[index])),
+            Action::Key(index) if room => {
+                self.text.push(self.key(index));
+                self.shift = false;
+            }
             Action::Space if room => self.text.push(' '),
             Action::Erase => _ = self.text.pop(),
+            Action::Tab if room => self.text.push('\t'),
+            Action::Shift(_) => self.shift = !self.shift,
+            Action::CapsLock => self.caps_lock = !self.caps_lock,
             _ => {}
         }
         self.error = None;
+    }
+
+    // The character of a key, caps lock only shifts the letters.
+    fn key(&self, mut index: usize) -> char {
+        let row = KEYS
+            .iter()
+            .position(|keys| {
+                let found = index < keys.len();
+                if !found {
+                    index -= keys.len();
+                }
+                found
+            })
+            .expect("Key of the keyboard");
+        let key = KEYS[row][index];
+        let shifted = self.shift != (self.caps_lock && key.is_ascii_alphabetic());
+        char::from(if shifted { SHIFTED_KEYS } else { KEYS }[row][index])
     }
 
     /// The widget the D-pad or pointer is on, for consoles.
@@ -810,9 +874,15 @@ impl Menu {
             Action::Username => return format!("Username: {}", self.username),
             Action::Reset => "Reset to Defaults",
             Action::Tool(index) => TOOLS[index].0,
-            Action::Key(index) => return String::from(char::from(KEYS[index])),
+            Action::Key(index) => return String::from(self.key(index)),
             Action::Space => "Space",
-            Action::Erase => "Delete",
+            Action::Erase => "Backspace",
+            Action::Tab => "Tab",
+            Action::Shift(_) if self.shift => "SHIFT",
+            Action::Shift(_) => "Shift",
+            Action::CapsLock if self.caps_lock => "CAPS",
+            Action::CapsLock => "Caps",
+            Action::Enter => "Enter",
             Action::Row(_) | Action::Distance | Action::Volume => "",
         };
         label.into()
@@ -1212,10 +1282,11 @@ fn draw_button(canvas: &mut impl Canvas, widget: &Widget, label: &str, highlight
     canvas.rect(x + 2.0, y + height - 4.0, width - 4.0, 2.0, [0, 0, 0, 90]);
     canvas.rect(x + width - 4.0, y + 2.0, 2.0, height - 4.0, [0, 0, 0, 90]);
     let (center, label_y) = (x + width / 2.0, y + height / 2.0);
-    let size = if matches!(widget.action, Action::Key(_)) {
-        17.0
-    } else {
-        15.0
+    let size = match widget.action {
+        Action::Key(_) => 17.0,
+        // The keyboard's wider keys have small labels like on keyboards
+        Action::Erase | Action::Tab | Action::Shift(_) | Action::CapsLock | Action::Enter => 13.0,
+        _ => 15.0,
     };
     canvas.text(
         label,
@@ -1414,10 +1485,58 @@ mod tests {
         menu.step(&layout(&menu), [1.0, 0.0]);
         assert_eq!(menu.focused(&layout(&menu)), Some(Action::CreateWorld));
         menu.show(Page::Create, String::new());
-        menu.type_key(Action::Key(0), 2);
+        menu.type_key(Action::Key(13), 2);
         menu.type_key(Action::Space, 2);
-        menu.type_key(Action::Key(1), 2);
-        assert_eq!(menu.text, "a ");
+        menu.type_key(Action::Key(14), 2);
+        assert_eq!(menu.text, "q ");
+    }
+
+    #[test]
+    fn the_on_screen_keyboard_shifts_once_and_caps_lock_shifts_letters() {
+        let mut menu = menu(Page::Chat, 0);
+        let typed = |menu: &mut Menu, keys: &[Action]| {
+            for &key in keys {
+                menu.type_key(key, 100);
+            }
+        };
+        // q is the first key of the second row, 1 the second of the first
+        let (q, one) = (Action::Key(13), Action::Key(1));
+        typed(
+            &mut menu,
+            &[Action::Shift(false), q, q, Action::Shift(true), one, one],
+        );
+        assert_eq!(menu.text, "Qq!1");
+        menu.text.clear();
+        typed(
+            &mut menu,
+            &[
+                Action::CapsLock,
+                q,
+                one,
+                Action::Shift(false),
+                q,
+                Action::CapsLock,
+                q,
+            ],
+        );
+        assert_eq!(menu.text, "Q1qq");
+        let layout = Layout::new(
+            &menu,
+            Platform {
+                keyboard: Keyboard::OnScreen,
+                ..DESKTOP
+            },
+            [640.0, 480.0],
+            [0.0; 4],
+        );
+        let keys = layout
+            .actions()
+            .filter(|action| matches!(action, Action::Key(_)))
+            .count();
+        assert_eq!(keys, KEYS.iter().map(|keys| keys.len()).sum());
+        assert!(layout.actions().any(|action| action == Action::Enter));
+        typed(&mut menu, &[Action::Tab]);
+        assert!(menu.text.ends_with('\t'));
     }
 
     #[test]

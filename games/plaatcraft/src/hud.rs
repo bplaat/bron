@@ -464,9 +464,11 @@ impl Chat {
                 ctx.set_text_baseline(TextBaseline::Middle);
                 for (row, line) in shown.iter().enumerate() {
                     let y = row as f32 * CHAT_LINE;
+                    // Wii players type tabs, which show as four spaces
+                    let text = line.text.replace('\t', "    ");
                     let text = match &line.name {
-                        Some(name) => format!("<{name}> {}", line.text),
-                        None => line.text.clone(),
+                        Some(name) => format!("<{name}> {text}"),
+                        None => text,
                     };
                     let width = (ctx.measure_text(&text) + 12.0).min(CHAT_WIDTH);
                     ctx.set_fill_style(Color::rgba(0, 0, 0, 120));
