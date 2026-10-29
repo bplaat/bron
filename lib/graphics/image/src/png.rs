@@ -900,11 +900,10 @@ enum PngColor {
 impl PngColor {
     const fn channels(self) -> usize {
         match self {
-            Self::Gray(_) => 1,
+            Self::Gray(_) | Self::Indexed(_) => 1,
             Self::Rgb => 3,
             Self::GrayAlpha => 2,
             Self::Rgba => 4,
-            Self::Indexed(_) => 1,
         }
     }
 
