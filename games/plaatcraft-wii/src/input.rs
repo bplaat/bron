@@ -7,8 +7,8 @@
 //! The Wii Remote with Nunchuk controls, after the console editions of Minecraft: the
 //! Nunchuk stick walks and turns, D-pad up and down look up and down and D-pad left and
 //! right select a hotbar slot. A places and B breaks blocks, C jumps and double tapping it
-//! flies, Z sneaks, 2 toggles the night and + or Home open the menu, where the pointer or
-//! the D-pad with A choose a button and B goes back.
+//! flies, Z sneaks, 2 runs or flies faster and + or Home open the menu, where the pointer
+//! or the D-pad with A choose a button and B goes back.
 
 use core::mem::MaybeUninit;
 
@@ -27,6 +27,7 @@ pub enum Button {
     B,
     Plus,
     One,
+    Two,
     Minus,
     Home,
     Z,
@@ -44,6 +45,7 @@ impl Button {
             Self::B => WPAD_BUTTON_B,
             Self::Plus => WPAD_BUTTON_PLUS,
             Self::One => WPAD_BUTTON_1,
+            Self::Two => WPAD_BUTTON_2,
             Self::Minus => WPAD_BUTTON_MINUS,
             Self::Home => WPAD_BUTTON_HOME,
             Self::Z => WPAD_NUNCHUK_BUTTON_Z,
@@ -96,7 +98,7 @@ impl Controller {
             stick: [0.0, self.stick.map_or(0.0, |[_, y]| y)],
             jump: self.held(Button::C),
             sneak: self.held(Button::Z),
-            fast: false,
+            fast: self.held(Button::Two),
         }
     }
 }

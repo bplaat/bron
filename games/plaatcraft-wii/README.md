@@ -54,6 +54,7 @@ Hold the Wii Remote with the Nunchuk attached:
 | A / B            | Place/break a block; hold to repeat   |
 | C                | Jump, swim, fly up; double tap to fly |
 | Z                | Sneak or fly down                     |
+| 2                | Fly faster, push the stick far to run |
 | Minus            | Full inventory                        |
 | Z + Minus        | Pick the targeted block               |
 | 1                | Build tools, day/night, and chat      |
