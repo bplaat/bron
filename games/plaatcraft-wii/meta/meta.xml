@@ -4,5 +4,8 @@
     <coder>Bastiaan van der Plaat</coder>
     <version>0.2.0</version>
     <short_description>A Minecraft like voxel sandbox</short_description>
-    <long_description>Explore endless generated worlds, build with many kinds of blocks and play together with friends on your local network. Play with a Wii Remote and Nunchuk, your worlds are saved on the SD card.</long_description>
+    <long_description>
+        Explore endless generated worlds, build with many kinds of blocks and play together with friends on your local
+        network. Play with a Wii Remote and Nunchuk, your worlds are saved on the SD card.
+    </long_description>
 </app>

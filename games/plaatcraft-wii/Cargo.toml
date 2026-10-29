@@ -10,11 +10,16 @@ edition = "2024"
 bench = []
 
 [dependencies]
-libsqlite3-sys = { path = "../../lib/data/libsqlite3-sys", features = ["bundled"] }
 libogc-sys = { path = "../../tools/wii-toolchain/libogc-sys" }
+libsqlite3-sys = { path = "../../lib/data/libsqlite3-sys", features = [
+    "bundled",
+] }
 plaatcraft-engine = { path = "../plaatcraft-engine", default-features = false }
 postcard = { version = "1.1", default-features = false, features = ["alloc"] }
-serde = { version = "1.0", default-features = false, features = ["alloc", "derive"] }
+serde = { version = "1.0", default-features = false, features = [
+    "alloc",
+    "derive",
+] }
 sfxr = { version = "0.1.4", default-features = false }
 
 [build-dependencies]
