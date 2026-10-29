@@ -50,6 +50,14 @@ fn layer(in: VertexOutput, face: u32) -> i32 {
     return i32(in.layers[face]);
 }
 
+// A box of a material's block from 0 to 1, see shape_flags in world.rs.
+fn shape_box(flags: u32, index: u32) -> array<vec3<f32>, 2> {
+    let bits = flags >> (17u + index * 6u);
+    let low = vec3(f32(bits & 1u), f32((bits >> 1u) & 1u), f32((bits >> 2u) & 1u)) * 0.5;
+    let high = 1.0 - vec3(f32((bits >> 3u) & 1u), f32((bits >> 4u) & 1u), f32((bits >> 5u) & 1u)) * 0.5;
+    return array(low, high);
+}
+
 fn rotate_x(p: vec3<f32>, angle: f32) -> vec3<f32> {
     let c = cos(angle);
     let s = sin(angle);
@@ -84,28 +92,38 @@ fn fs_preview(in: VertexOutput) -> @location(0) vec4<f32> {
         return vec4(texel.rgb, 1.0);
     }
 
+    // The nearest box of the block the view ray enters, slabs and stairs have halves.
     let inverse = 1.0 / direction;
-    let near3 = (-vec3(0.72) - origin) * inverse;
-    let far3 = (vec3(0.72) - origin) * inverse;
-    let entry3 = min(near3, far3);
-    let exit3 = max(near3, far3);
-    let entry = max(max(entry3.x, entry3.y), entry3.z);
-    let exit = min(min(exit3.x, exit3.y), exit3.z);
-    if entry > exit || exit < 0.0 { discard; }
+    var nearest = 1e9;
+    var entry3 = vec3(0.0);
+    for (var index = 0u; index <= ((in.flags >> 16u) & 1u); index++) {
+        let bounds = shape_box(in.flags, index);
+        let near3 = (bounds[0] * 1.44 - 0.72 - origin) * inverse;
+        let far3 = (bounds[1] * 1.44 - 0.72 - origin) * inverse;
+        let box_entry3 = min(near3, far3);
+        let exit3 = max(near3, far3);
+        let entry = max(max(box_entry3.x, box_entry3.y), box_entry3.z);
+        let exit = min(min(exit3.x, exit3.y), exit3.z);
+        if entry <= exit && exit >= 0.0 && entry < nearest {
+            nearest = entry;
+            entry3 = box_entry3;
+        }
+    }
+    if nearest == 1e9 { discard; }
 
-    let point = origin + direction * max(entry, 0.0);
-    let axis = abs(point);
+    // The face is the side the ray entered through last.
+    let point = origin + direction * max(nearest, 0.0);
     var normal = vec3(0.0);
     var face: u32;
-    if axis.x > axis.y && axis.x > axis.z {
-        normal.x = sign(point.x);
-        face = select(0u, 1u, point.x < 0.0);
-    } else if axis.y > axis.z {
-        normal.y = sign(point.y);
-        face = select(2u, 3u, point.y < 0.0);
+    if entry3.x >= entry3.y && entry3.x >= entry3.z {
+        normal.x = -sign(direction.x);
+        face = select(0u, 1u, direction.x > 0.0);
+    } else if entry3.y >= entry3.z {
+        normal.y = -sign(direction.y);
+        face = select(2u, 3u, direction.y > 0.0);
     } else {
-        normal.z = sign(point.z);
-        face = select(4u, 5u, point.z < 0.0);
+        normal.z = -sign(direction.z);
+        face = select(4u, 5u, direction.z > 0.0);
     }
     // Texture rows go down while y goes up, so side faces flip v to keep grass on top.
     var uv = vec2(point.x, -point.y) / 1.44 + 0.5;

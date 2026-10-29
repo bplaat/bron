@@ -30,7 +30,6 @@ fn milliseconds(ticks: u64) -> f64 {
 }
 
 pub fn run() -> ! {
-    world::set_seed(world::WORLD_SEED);
     let coords: Vec<Coord> = GRIDS
         .iter()
         .flat_map(|&(x, z)| {
@@ -49,7 +48,7 @@ pub fn run() -> ! {
     let mut quads = 0;
     for &coord in &coords {
         let start = time();
-        let chunk = ChunkData::generate(coord);
+        let chunk = ChunkData::generate(world::WORLD_SEED, coord);
         let generated = time();
         let packed = chunk.mesh();
         let meshed = time();

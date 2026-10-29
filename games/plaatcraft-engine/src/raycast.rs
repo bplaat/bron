@@ -50,7 +50,7 @@ impl Hit {
     ) -> Option<Edit> {
         let position = self.placement_position()?;
         let replaceable =
-            |material| matches!(material, 0 | world::WATER) || world::is_sprite(material);
+            |material| material == 0 || world::is_water(material) || world::is_sprite(material);
         if !buildable(position)
             || overlaps_player(position, eye)
             || !block(position).is_some_and(replaceable)
@@ -63,6 +63,7 @@ impl Hit {
                 item,
                 eye[0] - (position[0] as f64 + 0.5),
                 eye[2] - (position[2] as f64 + 0.5),
+                position[1] < self.position[1],
             ),
         })
     }
@@ -112,7 +113,7 @@ pub fn raycast(
         // Water is targetable at an exposed boundary. When swimming, skip the
         // surrounding water volume so the ray can still reach the seabed.
         if material != 0
-            && (material != world::WATER || adjacent.is_some() && previous != world::WATER)
+            && (!world::is_water(material) || adjacent.is_some() && !world::is_water(previous))
         {
             return Some(Hit {
                 position,

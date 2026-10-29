@@ -10,7 +10,6 @@ use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
-use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use crate::biome::{Biome, Column, Terrain, smooth};
 
@@ -22,39 +21,15 @@ pub const HEIGHT: usize = 128;
 pub const SECTION_SIZE: usize = 16;
 /// The number of sections in a chunk.
 pub const SECTION_COUNT: usize = HEIGHT / SECTION_SIZE;
-/// The seed of new worlds.
+/// The seed of the default world.
 pub const WORLD_SEED: u64 = 42;
-// The Wii has no 64-bit atomics, so the seed is stored in two halves. The first read
-// or set locks it, so all chunks are generated with the same seed.
-static SEED: [AtomicU32; 2] = [
-    AtomicU32::new(WORLD_SEED as u32),
-    AtomicU32::new((WORLD_SEED >> 32) as u32),
-];
-static SEED_LOCKED: AtomicBool = AtomicBool::new(false);
-
-fn seed() -> u64 {
-    // Only the first read writes, so the generator threads don't contend for the flag.
-    if !SEED_LOCKED.load(Ordering::Relaxed) {
-        SEED_LOCKED.store(true, Ordering::Release);
-    }
-    u64::from(SEED[1].load(Ordering::Acquire)) << 32 | u64::from(SEED[0].load(Ordering::Acquire))
-}
-
-/// Sets the world seed, before any chunk is generated.
-///
-/// # Panics
-///
-/// When a different seed was already used.
-pub fn set_seed(seed: u64) {
-    if !SEED_LOCKED.swap(true, Ordering::AcqRel) {
-        SEED[0].store(seed as u32, Ordering::Release);
-        SEED[1].store((seed >> 32) as u32, Ordering::Release);
-    }
-    assert_eq!(self::seed(), seed, "World seed changed");
-}
 /// The size of a packed quad in a chunk mesh.
-pub const QUAD_BYTES: usize = 8;
+pub const QUAD_BYTES: usize = 12;
 const PADDED_SIZE: usize = CHUNK_SIZE + 2;
+// The ambient occlusion of a face whose corners are all unoccluded.
+const FULL_LIGHT: u32 = 0xff;
+// The quad is a face of a box of slabs or stairs.
+const SHAPED: u32 = 1 << 8;
 /// The x and z coordinate of a chunk.
 pub type Coord = (i64, i64);
 
@@ -126,8 +101,173 @@ const OVEN: u8 = 36;
 const OVEN_WEST: u8 = 73;
 const OVEN_NORTH: u8 = 74;
 const OVEN_EAST: u8 = 75;
+// Flowing and falling water and lava, see `Fluid`.
+const FIRST_FLUID: u8 = 76;
+const LAST_FLUID: u8 = 87;
 /// The height of the sea surface.
 pub const SEA_LEVEL: u8 = 48;
+// Slabs and stairs of some materials, each has the shapes of `SHAPE_BOXES` in order.
+const FIRST_SHAPED: u8 = 88;
+const SHAPED_MATERIALS: [u8; 6] = [STONE, 28, 29, 21, 27, 26];
+const SHAPES: u8 = 6;
+const LAST_SHAPED: u8 = FIRST_SHAPED + SHAPED_MATERIALS.len() as u8 * SHAPES - 1;
+// Materials have a 7-bit ID in the packed quad format.
+const _: () = assert!(LAST_SHAPED < 128);
+// The shape of stairs whose high side faces north, the inventory holds these.
+const STAIRS: u8 = 2;
+
+/// A box inside a block, its lower and upper corner from 0 to 1.
+pub type Bounds = [[f64; 3]; 2];
+const FULL: &[Bounds] = &[[[0.0; 3], [1.0; 3]]];
+const BOTTOM: Bounds = [[0.0; 3], [1.0, 0.5, 1.0]];
+// A bottom and a top slab, then stairs whose high side faces north, east, south and west.
+const SHAPE_BOXES: [&[Bounds]; SHAPES as usize] = [
+    &[BOTTOM],
+    &[[[0.0, 0.5, 0.0], [1.0; 3]]],
+    &[BOTTOM, [[0.0, 0.5, 0.0], [1.0, 1.0, 0.5]]],
+    &[BOTTOM, [[0.5, 0.5, 0.0], [1.0; 3]]],
+    &[BOTTOM, [[0.0, 0.5, 0.5], [1.0; 3]]],
+    &[BOTTOM, [[0.0, 0.5, 0.0], [0.5, 1.0, 1.0]]],
+];
+
+/// The material slabs or stairs are made of and their shape, see `boxes`.
+pub const fn shape(material: u8) -> Option<(u8, u8)> {
+    if material < FIRST_SHAPED || material > LAST_SHAPED {
+        return None;
+    }
+    let index = material - FIRST_SHAPED;
+    Some((SHAPED_MATERIALS[(index / SHAPES) as usize], index % SHAPES))
+}
+
+/// The boxes a block of a material fills, none for blocks the player moves through.
+pub fn boxes(material: u8) -> &'static [Bounds] {
+    match shape(material) {
+        Some((_, shape)) => SHAPE_BOXES[usize::from(shape)],
+        None if is_passable(material) => &[],
+        None => FULL,
+    }
+}
+
+/// Water or lava, which flow from their sources.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Fluid {
+    /// Water
+    Water,
+    /// Lava
+    Lava,
+}
+
+impl Fluid {
+    /// The source block, which never runs dry.
+    pub const fn source(self) -> u8 {
+        match self {
+            Self::Water => WATER,
+            Self::Lava => LAVA,
+        }
+    }
+
+    /// How many blocks flowing fluid spreads from a source on flat ground.
+    pub const fn reach(self) -> u8 {
+        match self {
+            Self::Water => 7,
+            Self::Lava => 3,
+        }
+    }
+
+    const fn first_flow(self) -> u8 {
+        match self {
+            Self::Water => FIRST_FLUID,
+            Self::Lava => FIRST_FLUID + 8,
+        }
+    }
+
+    /// Flowing fluid at a level from 1 to the reach, higher levels are closer to a source.
+    pub const fn flowing(self, level: u8) -> u8 {
+        self.first_flow() + level - 1
+    }
+
+    /// Fluid falling down, as tall as a source.
+    pub const fn falling(self) -> u8 {
+        self.first_flow() + self.reach()
+    }
+}
+
+/// The fluid in a block.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FluidState {
+    /// Water or lava
+    pub fluid: Fluid,
+    /// From 1 for the end of a flow to the reach, one more for sources and falling fluid.
+    pub level: u8,
+    /// Whether it is a source.
+    pub source: bool,
+    /// Whether it is falling down.
+    pub falling: bool,
+}
+
+/// The fluid in a block of a material.
+pub const fn fluid(material: u8) -> Option<FluidState> {
+    let mut index = 0;
+    while index < 2 {
+        let fluid = if index == 0 {
+            Fluid::Water
+        } else {
+            Fluid::Lava
+        };
+        let reach = fluid.reach();
+        if material == fluid.source() || material == fluid.falling() {
+            return Some(FluidState {
+                fluid,
+                level: reach + 1,
+                source: material == fluid.source(),
+                falling: material == fluid.falling(),
+            });
+        }
+        if material >= fluid.first_flow() && material < fluid.falling() {
+            return Some(FluidState {
+                fluid,
+                level: material - fluid.first_flow() + 1,
+                source: false,
+                falling: false,
+            });
+        }
+        index += 1;
+    }
+    None
+}
+
+/// Whether a material is water, flowing or not.
+pub const fn is_water(material: u8) -> bool {
+    matches!(
+        fluid(material),
+        Some(FluidState {
+            fluid: Fluid::Water,
+            ..
+        })
+    )
+}
+
+/// Whether a material is lava, flowing or not.
+pub const fn is_lava(material: u8) -> bool {
+    matches!(
+        fluid(material),
+        Some(FluidState {
+            fluid: Fluid::Lava,
+            ..
+        })
+    )
+}
+
+/// The height of the top of a block, like in Minecraft sources reach 8/9 and flowing fluid
+/// drops in ninths, lava two at a time. Falling fluid fills its block.
+pub const fn fluid_height(material: u8) -> f32 {
+    match fluid(material) {
+        Some(state) if !state.falling => {
+            (state.level * (8 / (state.fluid.reach() + 1))) as f32 / 9.0
+        }
+        _ => 1.0,
+    }
+}
 
 /// A placed or removed block, material 0 is air.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -207,6 +347,18 @@ pub const MATERIALS: &[(u8, &str)] = &[
     (MUSHROOM_TAN, "Tan mushroom"),
     (ROCK, "Rock"),
     (ROCK_MOSS, "Mossy rock"),
+    (88, "Stone slab"),
+    (90, "Stone stairs"),
+    (94, "Oak plank slab"),
+    (96, "Oak plank stairs"),
+    (100, "Pine plank slab"),
+    (102, "Pine plank stairs"),
+    (106, "Birch plank slab"),
+    (108, "Birch plank stairs"),
+    (112, "Red brick slab"),
+    (114, "Red brick stairs"),
+    (118, "Gray brick slab"),
+    (120, "Gray brick stairs"),
 ];
 
 /// Whether a material can be placed or stored.
@@ -218,27 +370,43 @@ pub const fn valid_material(material: u8) -> bool {
         }
         index += 1;
     }
-    matches!(material, OVEN_WEST..=OVEN_EAST)
+    matches!(
+        material,
+        OVEN_WEST..=OVEN_EAST | FIRST_FLUID..=LAST_FLUID | FIRST_SHAPED..=LAST_SHAPED
+    )
 }
 
 /// The inventory item for a placed block.
 pub fn item_material(material: u8) -> Option<u8> {
-    canonical_material(material).map(|material| match material {
-        OVEN_WEST..=OVEN_EAST => OVEN,
-        _ => material,
+    canonical_material(material).map(|material| match fluid(material) {
+        Some(state) => state.fluid.source(),
+        None if matches!(material, OVEN_WEST..=OVEN_EAST) => OVEN,
+        // Top slabs are slabs, and all stairs the north facing ones.
+        None => match shape(material) {
+            Some((_, shape)) => material - shape + if shape < STAIRS { 0 } else { STAIRS },
+            None => material,
+        },
     })
 }
 
-/// The block to place for an item, an oven faces the player at `dx`, `dz` from its center.
-pub fn placed_material(material: u8, dx: f64, dz: f64) -> u8 {
-    if material != OVEN {
-        material
-    } else if dx.abs() > dz.abs() {
-        if dx > 0.0 { OVEN_EAST } else { OVEN_WEST }
+/// The block to place for an item, an oven faces the player at `dx`, `dz` from its center
+/// and stairs rise away from the player. A slab placed against the bottom of a block, when
+/// `below`, fills the top of its block.
+pub fn placed_material(material: u8, dx: f64, dz: f64, below: bool) -> u8 {
+    // The side toward the player: east, west, north and south.
+    let side = if dx.abs() > dz.abs() {
+        if dx > 0.0 { 0 } else { 1 }
     } else if dz < 0.0 {
-        OVEN_NORTH
+        2
     } else {
-        OVEN
+        3
+    };
+    match shape(material) {
+        Some((_, 0)) if below => material + 1,
+        // Stairs rise toward the side away from the player.
+        Some((_, STAIRS)) => material + [3, 1, 2, 0][side],
+        _ if material == OVEN => [OVEN_EAST, OVEN_WEST, OVEN_NORTH, OVEN][side],
+        _ => material,
     }
 }
 
@@ -297,6 +465,9 @@ const fn tinted(tile: &'static str, tint: [f32; 3]) -> Look {
 
 /// The look of every drawable material, uploaded once to the GPU material table.
 pub const fn look(material: u8) -> Option<Look> {
+    if let Some((base, _)) = shape(material) {
+        return look(base);
+    }
     Some(match material {
         GRASS => column("dirt_grass", "grass_top", "dirt"),
         DIRT => all("dirt"),
@@ -369,6 +540,8 @@ pub const fn look(material: u8) -> Option<Look> {
         OVEN_WEST => oven(1),
         OVEN_NORTH => oven(5),
         OVEN_EAST => oven(0),
+        _ if is_water(material) => all("water"),
+        _ if is_lava(material) => all("lava"),
         _ => return None,
     })
 }
@@ -385,8 +558,34 @@ pub const fn look_flags(material: u8) -> u32 {
         } else {
             0
         })
-        | (if material == LAVA { EMISSIVE } else { 0 })
-        | (if material == WATER { FLOWING } else { 0 })
+        | (if is_lava(material) { EMISSIVE } else { 0 })
+        | (if is_water(material) { FLOWING } else { 0 })
+        // How far flowing fluid's surface lies below the top of the block, in 255ths.
+        | (((1.0 - fluid_height(material)) * 255.0) as u32) << 8
+        | shape_flags(material) << 16
+}
+
+// The boxes of slabs and stairs for the shaders: whether there is a second box, then for
+// each box whether its lower and its upper corner lie halfway along x, y and z. Other
+// blocks fill their whole block.
+const fn shape_flags(material: u8) -> u32 {
+    let Some((_, shape)) = shape(material) else {
+        return 0;
+    };
+    let boxes = SHAPE_BOXES[shape as usize];
+    let mut flags = (boxes.len() > 1) as u32;
+    let mut index = 0;
+    while index < boxes.len() {
+        let mut bit = 0;
+        while bit < 6 {
+            if boxes[index][bit / 3][bit % 3] == 0.5 {
+                flags |= 1 << (1 + index * 6 + bit);
+            }
+            bit += 1;
+        }
+        index += 1;
+    }
+    flags
 }
 
 /// Whether a material is drawn as two crossed planes instead of a cube.
@@ -396,7 +595,7 @@ pub const fn is_sprite(material: u8) -> bool {
 
 /// Whether the player can move through a material.
 pub const fn is_passable(material: u8) -> bool {
-    matches!(material, 0 | 12..=15 | GRASS_BROWN..=ROCK_MOSS | WATER | LAVA)
+    matches!(material, 0 | 12..=15 | GRASS_BROWN..=ROCK_MOSS) || fluid(material).is_some()
 }
 
 /// The material of a packed quad's first word.
@@ -453,12 +652,12 @@ struct Tree {
     style: TreeStyle,
 }
 
-fn hash(x: i64, y: i64, z: i64, seed: u64) -> u64 {
+const fn hash(seed: u64, x: i64, y: i64, z: i64, salt: u64) -> u64 {
     let mut value = (x as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15)
         ^ (y as u64).wrapping_mul(0xbf58_476d_1ce4_e5b9)
         ^ (z as u64).wrapping_mul(0x94d0_49bb_1331_11eb)
-        ^ seed
-        ^ self::seed();
+        ^ salt
+        ^ seed;
     value = (value ^ (value >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
     value = (value ^ (value >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
     value ^ (value >> 31)
@@ -483,18 +682,18 @@ fn roll_in_halves(value: u64, divisor: u32) -> u32 {
 
 #[cfg(test)]
 pub(crate) fn ground_height(x: i64, z: i64) -> f64 {
-    f64::from(terrain_column(x, z).height)
+    f64::from(terrain_column(WORLD_SEED, x, z).height)
 }
 
-fn terrain_column(x: i64, z: i64) -> Column {
-    Terrain::new(seed()).sample(x, z)
+fn terrain_column(seed: u64, x: i64, z: i64) -> Column {
+    Terrain::new(seed).sample(x, z)
 }
 
-fn tree_at(cell_x: i64, cell_z: i64) -> Option<Tree> {
-    let random = hash(cell_x, 0, cell_z, 7183);
+fn tree_at(seed: u64, cell_x: i64, cell_z: i64) -> Option<Tree> {
+    let random = hash(seed, cell_x, 0, cell_z, 7183);
     let x = cell_x * 10 + 2 + i64::from(roll(random >> 8, 6));
     let z = cell_z * 10 + 2 + i64::from(roll(random >> 12, 6));
-    let column = terrain_column(x, z);
+    let column = terrain_column(seed, x, z);
     let ground = column.height;
     let density = match column.biome {
         Biome::Forest => (30.0 + 60.0 * smooth(0.54, 0.75, column.humidity)) as u64,
@@ -507,7 +706,7 @@ fn tree_at(cell_x: i64, cell_z: i64) -> Option<Tree> {
         || ground <= SEA_LEVEL + 1
         || [(1, 0), (-1, 0), (0, 1), (0, -1)]
             .into_iter()
-            .any(|(dx, dz)| ground.abs_diff(terrain_column(x + dx, z + dz).height) > 2)
+            .any(|(dx, dz)| ground.abs_diff(terrain_column(seed, x + dx, z + dz).height) > 2)
     {
         return None;
     }
@@ -544,18 +743,31 @@ fn is_leaf(material: u32) -> bool {
 
 /// Whether a material is drawn blended after the opaque blocks.
 pub const fn is_translucent(material: u32) -> bool {
-    matches!(material, 22 | 62 | 63)
+    matches!(material, 62 | 63) || material < 256 && is_water(material as u8)
 }
 
-fn face_visible(material: u32, neighbor: u32) -> bool {
-    // Preserve solid faces behind translucent blocks. The larger translucent ID
-    // owns boundaries between unlike translucent materials to avoid coplanar faces.
-    material != 0
-        && (neighbor == 0
-            || (is_translucent(neighbor) && (!is_translucent(material) || material > neighbor))
-            || (neighbor == u32::from(LAVA)
-                && material != u32::from(LAVA)
-                && material != u32::from(WATER)))
+// Whether the face of a material towards a neighbor along an axis shows, `up` when the
+// neighbor lies in the positive direction.
+fn face_visible(material: u32, neighbor: u32, axis: usize, up: bool) -> bool {
+    let (block, next) = (material as u8, neighbor as u8);
+    // Slabs and stairs draw their own boxes, see `ChunkData::mesh_shape`.
+    if material == 0 || shape(block).is_some() {
+        return false;
+    }
+    let same_fluid =
+        matches!((fluid(block), fluid(next)), (Some(a), Some(b)) if a.fluid as u8 == b.fluid as u8);
+    if same_fluid {
+        // Only the steps between flow levels show, never the inside of a pool or column.
+        return axis != 1 && fluid_height(block) > fluid_height(next);
+    }
+    // The lowered surface of flowing fluid shows below a ceiling.
+    (axis == 1 && up && fluid_height(block) < 1.0)
+        || neighbor == 0
+        // Preserve solid faces behind translucent blocks. The larger translucent ID
+        // owns boundaries between unlike translucent materials to avoid coplanar faces.
+        || (is_translucent(neighbor) && (!is_translucent(material) || material > neighbor))
+        || (is_lava(next) && fluid(block).is_none())
+        || shape(next).is_some()
 }
 
 impl ChunkData {
@@ -660,29 +872,29 @@ impl ChunkData {
     }
 
     /// Generates and lights an unedited chunk.
-    pub fn generate(coord: Coord) -> Self {
-        Self::generate_edited(coord, &[])
+    pub fn generate(seed: u64, coord: Coord) -> Self {
+        Self::generate_edited(seed, coord, &[])
     }
 
     /// Generates and lights a chunk with the edits around it.
-    pub fn generate_edited(coord: Coord, edits: &[Edit]) -> Self {
-        Self::rebuild(coord, &BTreeMap::new(), edits)
+    pub fn generate_edited(seed: u64, coord: Coord, edits: &[Edit]) -> Self {
+        Self::rebuild(seed, coord, &BTreeMap::new(), edits)
     }
 
     /// Generates the unedited chunk without light, a base for [`Self::rebuild`].
-    pub fn generate_base(coord: Coord) -> Self {
-        Self::generate_unlit(coord, false)
+    pub fn generate_base(seed: u64, coord: Coord) -> Self {
+        Self::generate_unlit(seed, coord, false)
     }
 
     /// Applies the edits to the unedited chunk and lights it. `bases` holds already
     /// generated unedited chunks of it and its neighbors, the others are generated.
-    pub fn rebuild(coord: Coord, bases: &BTreeMap<Coord, Self>, edits: &[Edit]) -> Self {
+    pub fn rebuild(seed: u64, coord: Coord, bases: &BTreeMap<Coord, Self>, edits: &[Edit]) -> Self {
         let mut chunk = bases
             .get(&coord)
             .cloned()
-            .unwrap_or_else(|| Self::generate_unlit(coord, false));
+            .unwrap_or_else(|| Self::generate_unlit(seed, coord, false));
         chunk.apply_edits(coord, edits);
-        chunk.bake_light(coord, edits, bases);
+        chunk.bake_light(seed, coord, edits, bases);
         chunk
     }
 
@@ -728,7 +940,7 @@ impl ChunkData {
         }
     }
 
-    fn generate_unlit(coord: Coord, lighting_only: bool) -> Self {
+    fn generate_unlit(seed: u64, coord: Coord, lighting_only: bool) -> Self {
         let origin = (coord.0 * CHUNK_SIZE as i64, coord.1 * CHUNK_SIZE as i64);
         let columns = core::array::from_fn(|index| {
             let (x, z) = (index % PADDED_SIZE, index / PADDED_SIZE);
@@ -736,13 +948,13 @@ impl ChunkData {
             if lighting_only && (x % (PADDED_SIZE - 1) == 0 || z % (PADDED_SIZE - 1) == 0) {
                 Column::default()
             } else {
-                terrain_column(origin.0 + x as i64 - 1, origin.1 + z as i64 - 1)
+                terrain_column(seed, origin.0 + x as i64 - 1, origin.1 + z as i64 - 1)
             }
         });
         let mut chunk = Self::unlit(columns);
         if !lighting_only {
-            chunk.add_outcrops(origin);
-            chunk.add_ores(origin);
+            chunk.add_outcrops(seed, origin);
+            chunk.add_ores(seed, origin);
         }
         // Include every root whose radius-four canopy can touch the halo.
         for cell_z in
@@ -751,26 +963,31 @@ impl ChunkData {
             for cell_x in
                 (origin.0 - 5).div_euclid(10)..=(origin.0 + CHUNK_SIZE as i64 + 4).div_euclid(10)
             {
-                if let Some(tree) = tree_at(cell_x, cell_z) {
+                if let Some(tree) = tree_at(seed, cell_x, cell_z) {
                     chunk.add_tree(&tree, origin);
                 }
             }
         }
-        chunk.add_cacti(&columns, origin);
-        chunk.add_lava(origin);
+        chunk.add_cacti(seed, &columns, origin);
+        chunk.add_lava(seed, origin);
         if lighting_only {
             return chunk;
         }
-        chunk.add_decorations(&columns, origin);
+        chunk.add_decorations(seed, &columns, origin);
         chunk
     }
 
-    fn add_decorations(&mut self, columns: &[Column; PADDED_SIZE * PADDED_SIZE], origin: Coord) {
+    fn add_decorations(
+        &mut self,
+        seed: u64,
+        columns: &[Column; PADDED_SIZE * PADDED_SIZE],
+        origin: Coord,
+    ) {
         for z in 0..CHUNK_SIZE {
             for x in 0..CHUNK_SIZE {
                 let column = columns[(z + 1) * PADDED_SIZE + x + 1];
                 let y = column.height;
-                let random = hash(origin.0 + x as i64, 0, origin.1 + z as i64, 9341);
+                let random = hash(seed, origin.0 + x as i64, 0, origin.1 + z as i64, 9341);
                 let roll = roll(random, 200);
                 let variant = (random >> 8) as usize;
                 let material = match column.biome {
@@ -885,6 +1102,21 @@ impl ChunkData {
         )
     }
 
+    // The material at a position as meshed, a source below the same fluid fills its block.
+    fn fluid_block(&self, [x, y, z]: [i32; 3]) -> u32 {
+        let material = self.block([x, y, z]);
+        match fluid(material as u8) {
+            Some(state)
+                if state.source
+                    && fluid(self.block([x, y + 1, z]) as u8)
+                        .is_some_and(|above| above.fluid == state.fluid) =>
+            {
+                u32::from(state.fluid.falling())
+            }
+            _ => material,
+        }
+    }
+
     fn put(&mut self, [x, y, z]: [i32; 3], material: u8, replace_leaves: bool) {
         if x < -1
             || x > CHUNK_SIZE as i32
@@ -902,7 +1134,12 @@ impl ChunkData {
         }
     }
 
-    fn add_cacti(&mut self, columns: &[Column; PADDED_SIZE * PADDED_SIZE], origin: Coord) {
+    fn add_cacti(
+        &mut self,
+        seed: u64,
+        columns: &[Column; PADDED_SIZE * PADDED_SIZE],
+        origin: Coord,
+    ) {
         for (index, column) in columns.iter().enumerate() {
             if column.biome != Biome::Desert || column.height <= SEA_LEVEL + 1 {
                 continue;
@@ -912,7 +1149,7 @@ impl ChunkData {
             let wx = origin.0 + i64::from(x);
             let wz = origin.1 + i64::from(z);
             // One jittered candidate per six-block cell keeps cacti apart across chunks.
-            let random = hash(wx.div_euclid(6), 0, wz.div_euclid(6), 5821);
+            let random = hash(seed, wx.div_euclid(6), 0, wz.div_euclid(6), 5821);
             if roll(random, 100) >= 5
                 || wx.rem_euclid(6) != 1 + ((random >> 8) % 4) as i64
                 || wz.rem_euclid(6) != 1 + ((random >> 16) % 4) as i64
@@ -926,7 +1163,7 @@ impl ChunkData {
                 || (ground..ground + height).any(|y| self.block([x, y, z]) != 0)
                 || [(1, 0), (-1, 0), (0, 1), (0, -1)]
                     .into_iter()
-                    .any(|(dx, dz)| terrain_column(wx + dx, wz + dz).height > column.height)
+                    .any(|(dx, dz)| terrain_column(seed, wx + dx, wz + dz).height > column.height)
             {
                 continue;
             }
@@ -999,17 +1236,17 @@ impl ChunkData {
         }
     }
 
-    fn add_lava(&mut self, origin: Coord) {
+    fn add_lava(&mut self, seed: u64, origin: Coord) {
         // Rare, small lava vents provide natural block-light sources on rocky slopes.
         for cz in (origin.1 - 3).div_euclid(32)..=(origin.1 + 18).div_euclid(32) {
             for cx in (origin.0 - 3).div_euclid(32)..=(origin.0 + 18).div_euclid(32) {
-                let random = hash(cx, 0, cz, 3167);
+                let random = hash(seed, cx, 0, cz, 3167);
                 if roll(random, 12) != 0 {
                     continue;
                 }
                 let wx = cx * 32 + 8 + ((random >> 8) % 16) as i64;
                 let wz = cz * 32 + 8 + ((random >> 16) % 16) as i64;
-                let column = terrain_column(wx, wz);
+                let column = terrain_column(seed, wx, wz);
                 if column.biome != Biome::Mountains || column.height <= SEA_LEVEL + 4 {
                     continue;
                 }
@@ -1034,7 +1271,13 @@ impl ChunkData {
         }
     }
 
-    fn bake_light(&mut self, coord: Coord, edits: &[Edit], bases: &BTreeMap<Coord, Self>) {
+    fn bake_light(
+        &mut self,
+        seed: u64,
+        coord: Coord,
+        edits: &[Edit],
+        bases: &BTreeMap<Coord, Self>,
+    ) {
         // Light loses a level per block, so only blocks within 14 of the mesh halo can
         // reach it. No neighbor loading or later remeshing is necessary.
         const MARGIN: usize = CHUNK_SIZE - 1;
@@ -1048,7 +1291,7 @@ impl ChunkData {
         let generated: [Option<Self>; 9] = core::array::from_fn(|index| {
             let neighbor = neighbor(index);
             (neighbor != coord && !bases.contains_key(&neighbor))
-                .then(|| Self::generate_unlit(neighbor, true))
+                .then(|| Self::generate_unlit(seed, neighbor, true))
         });
         let sources: [&Self; 9] = core::array::from_fn(|index| {
             if index == 4 {
@@ -1095,12 +1338,13 @@ impl ChunkData {
             &blocks,
             |material| match material {
                 0 => 0,
-                WATER => 2,
                 GLASS | GLASS_FRAME => 1,
                 LEAVES..=PINE_LEAVES => 1,
+                _ if shape(material).is_some() => 1,
+                _ if is_water(material) => 2,
                 _ => 15,
             },
-            |material| if material == LAVA { 15 } else { 0 },
+            |material| if is_lava(material) { 15 } else { 0 },
         );
         self.light.resize(self.blocks.len(), 0);
         for z in 0..PADDED_SIZE {
@@ -1112,12 +1356,51 @@ impl ChunkData {
         }
     }
 
-    fn face_key(&self, material: u32, neighbor: [i32; 3]) -> i32 {
+    // The mask key of a face toward a neighbor along an axis: its material, the light of the
+    // neighbor and the ambient occlusion of its corners.
+    fn face_key(&self, material: u32, neighbor: [i32; 3], axis: usize) -> i32 {
         let mut light = self.light_at(neighbor);
-        if material == u32::from(LAVA) {
+        if is_lava(material as u8) {
             light |= 0xf0;
         }
-        (material | u32::from(light) << 8) as i32
+        (material | u32::from(light) << 8 | self.occlusion(material, neighbor, axis) << 16) as i32
+    }
+
+    // Two bits per face corner, the corner at u and v in the low bits, of how many of the
+    // three blocks around it in the neighbor's layer don't darken it, like in Minecraft.
+    fn occlusion(&self, material: u32, neighbor: [i32; 3], axis: usize) -> u32 {
+        if fluid(material as u8).is_some() || is_translucent(material) {
+            return FULL_LIGHT;
+        }
+        let (u, v) = ((axis + 1) % 3, (axis + 2) % 3);
+        let mut bits = 0;
+        for corner in 0..4 {
+            let step = |position: [i32; 3], axis: usize, positive: bool| {
+                let mut position = position;
+                position[axis] += if positive { 1 } else { -1 };
+                position
+            };
+            let side_u = step(neighbor, u, corner & 1 != 0);
+            let side_v = step(neighbor, v, corner & 2 != 0);
+            let [a, b, c] = [side_u, side_v, step(side_u, v, corner & 2 != 0)]
+                .map(|position| u32::from(self.occludes(position)));
+            let light = if a + b == 2 { 0 } else { 3 - a - b - c };
+            bits |= light << (corner * 2);
+        }
+        bits
+    }
+
+    // Whether the block at a position darkens the face corners next to it.
+    fn occludes(&self, [x, y, z]: [i32; 3]) -> bool {
+        if !(-1..=CHUNK_SIZE as i32).contains(&x) || !(-1..=CHUNK_SIZE as i32).contains(&z) {
+            return false;
+        }
+        let material = self.block([x, y, z]);
+        material != 0
+            && !is_sprite(material as u8)
+            && fluid(material as u8).is_none()
+            && !is_translucent(material)
+            && shape(material as u8).is_none()
     }
 
     fn light_at(&self, [x, y, z]: [i32; 3]) -> u8 {
@@ -1130,13 +1413,13 @@ impl ChunkData {
         self.light[((z + 1) as usize * PADDED_SIZE + (x + 1) as usize) * HEIGHT + y as usize]
     }
 
-    fn add_outcrops(&mut self, origin: Coord) {
+    fn add_outcrops(&mut self, seed: u64, origin: Coord) {
         // Small exposed rock patches make common veins visible without digging.
         for z in -1..=CHUNK_SIZE as i32 {
             for x in -1..=CHUNK_SIZE as i32 {
                 let wx = origin.0 + i64::from(x);
                 let wz = origin.1 + i64::from(z);
-                let random = hash(wx.div_euclid(8), 0, wz.div_euclid(8), 9914);
+                let random = hash(seed, wx.div_euclid(8), 0, wz.div_euclid(8), 9914);
                 let dx = wx.rem_euclid(8) - 4;
                 let dz = wz.rem_euclid(8) - 4;
                 let column = (z + 1) as usize * PADDED_SIZE + (x + 1) as usize;
@@ -1152,7 +1435,7 @@ impl ChunkData {
         }
     }
 
-    fn add_ores(&mut self, origin: Coord) {
+    fn add_ores(&mut self, seed: u64, origin: Coord) {
         // Coarse global cells seed small spherical veins, including across chunk boundaries.
         for cell_z in
             (origin.1 - 3).div_euclid(6)..=(origin.1 + CHUNK_SIZE as i64 + 2).div_euclid(6)
@@ -1161,7 +1444,7 @@ impl ChunkData {
                 (origin.0 - 3).div_euclid(6)..=(origin.0 + CHUNK_SIZE as i64 + 2).div_euclid(6)
             {
                 for cell_y in 0..(HEIGHT as i64 / 6 + 1) {
-                    let random = hash(cell_x, cell_y, cell_z, 5729);
+                    let random = hash(seed, cell_x, cell_y, cell_z, 5729);
                     if !random.is_multiple_of(4) {
                         continue;
                     }
@@ -1245,9 +1528,46 @@ impl ChunkData {
         self.blocks.as_chunks::<HEIGHT>().0.iter().all(|column| {
             column[bottom - 1..=top].iter().all(|&block| {
                 let block = u32::from(block);
-                block != 0 && !is_translucent(block) && block != u32::from(LAVA)
+                block != 0
+                    && !is_translucent(block)
+                    && !is_lava(block as u8)
+                    && shape(block as u8).is_none()
             })
         })
+    }
+
+    // The faces of the boxes of slabs or stairs, skipping the sides that touch a full block.
+    fn mesh_shape(&self, bytes: &mut Vec<u8>, position: [i32; 3], section: usize) {
+        let material = self.block(position);
+        let Some((_, shape)) = shape(material as u8) else {
+            return;
+        };
+        for bounds in SHAPE_BOXES[usize::from(shape)] {
+            for face in 0..6 {
+                let (axis, negative) = (face / 2, face % 2 == 1);
+                let (u, v) = ((axis + 1) % 3, (axis + 2) % 3);
+                let plane = bounds[usize::from(!negative)][axis];
+                let mut neighbor = position;
+                neighbor[axis] += if negative { -1 } else { 1 };
+                if plane == f64::from(u8::from(!negative)) && self.occludes(neighbor) {
+                    continue;
+                }
+                let local = [position[0], position[1] % SECTION_SIZE as i32, position[2]];
+                let mut quad = pack_quad(local, face as u32, [1, 1], material);
+                quad[0] |= (section as u32) << 27;
+                quad[1] |= u32::from(self.light_at(neighbor)) << 10;
+                let half = |value: f64, bit: u32| u32::from(value == 0.5) << bit;
+                quad[2] |= SHAPED
+                    | half(bounds[0][u], 9)
+                    | half(bounds[1][u], 10)
+                    | half(bounds[0][v], 11)
+                    | half(bounds[1][v], 12)
+                    | ((plane * 2.0) as u32) << 13;
+                for word in quad {
+                    bytes.extend_from_slice(&word.to_ne_bytes());
+                }
+            }
+        }
     }
 
     /// The greedy meshed quads of the chunk sorted by section, opaque before
@@ -1261,6 +1581,8 @@ impl ChunkData {
             let origin = [0, (section * SECTION_SIZE) as i32, 0];
             let dimensions = [CHUNK_SIZE, SECTION_SIZE, CHUNK_SIZE];
             let mut mask = [0i32; CHUNK_SIZE * SECTION_SIZE];
+            // A lowered fluid surface below a ceiling shows together with the ceiling face.
+            let mut lowered = [0i32; CHUNK_SIZE * SECTION_SIZE];
             // Sweep each axis; merge adjacent coplanar faces of the same material.
             for axis in 0..3 {
                 let u = (axis + 1) % 3;
@@ -1276,57 +1598,81 @@ impl ChunkData {
                             a[v] += j as i32;
                             let mut b = a;
                             b[axis] += 1;
-                            let left = self.block(a);
-                            let right = self.block(b);
+                            let left = self.fluid_block(a);
+                            let right = self.fluid_block(b);
                             // Neighbors come from the whole world, but only this chunk owns its faces.
                             // A material never shows a face to itself.
-                            mask[j * width + i] = if left == right {
-                                0
-                            } else if face_visible(left, right) && slice > 0 {
-                                self.face_key(left, b)
-                            } else if face_visible(right, left) && slice < dimensions[axis] {
-                                -self.face_key(right, a)
-                            } else {
-                                0
+                            let index = j * width + i;
+                            let different = left != right;
+                            let positive =
+                                (different && face_visible(left, right, axis, true) && slice > 0)
+                                    .then(|| self.face_key(left, b, axis));
+                            let negative = (different
+                                && face_visible(right, left, axis, false)
+                                && slice < dimensions[axis])
+                                .then(|| -self.face_key(right, a, axis));
+                            (mask[index], lowered[index]) = match (positive, negative) {
+                                (Some(positive), Some(negative)) => (positive, negative),
+                                (Some(face), None) | (None, Some(face)) => (face, 0),
+                                (None, None) => (0, 0),
                             };
                         }
                     }
-                    for j in 0..height {
-                        let mut i = 0;
-                        while i < width {
-                            let material = mask[j * width + i];
-                            if material == 0 {
-                                i += 1;
-                                continue;
+                    for mask in [&mut mask, &mut lowered] {
+                        for j in 0..height {
+                            let mut i = 0;
+                            while i < width {
+                                let material = mask[j * width + i];
+                                if material == 0 {
+                                    i += 1;
+                                    continue;
+                                }
+                                // Faces only merge when their corners are equally dark.
+                                let occlusion = material.unsigned_abs() >> 16;
+                                let merges = occlusion == (occlusion & 3) * 0x55;
+                                let mut w = 1;
+                                while merges && i + w < width && mask[j * width + i + w] == material
+                                {
+                                    w += 1;
+                                }
+                                let mut h = 1;
+                                while merges
+                                    && j + h < height
+                                    && (0..w).all(|k| mask[(j + h) * width + i + k] == material)
+                                {
+                                    h += 1;
+                                }
+                                let mut position = origin;
+                                position[axis] += slice as i32;
+                                position[u] += i as i32;
+                                position[v] += j as i32;
+                                let face = axis as u32 * 2 + u32::from(material < 0);
+                                position[1] -= origin[1];
+                                let mut quad = pack_quad(
+                                    position,
+                                    face,
+                                    [w, h],
+                                    material.unsigned_abs() & 255,
+                                );
+                                quad[0] |= (section as u32) << 27;
+                                quad[1] |= (material.unsigned_abs() >> 8 & 255) << 10;
+                                quad[2] = occlusion;
+                                for value in quad {
+                                    bytes.extend_from_slice(&value.to_ne_bytes());
+                                }
+                                for row in j..j + h {
+                                    mask[row * width + i..row * width + i + w].fill(0);
+                                }
+                                i += w;
                             }
-                            let mut w = 1;
-                            while i + w < width && mask[j * width + i + w] == material {
-                                w += 1;
-                            }
-                            let mut h = 1;
-                            while j + h < height
-                                && (0..w).all(|k| mask[(j + h) * width + i + k] == material)
-                            {
-                                h += 1;
-                            }
-                            let mut position = origin;
-                            position[axis] += slice as i32;
-                            position[u] += i as i32;
-                            position[v] += j as i32;
-                            let face = axis as u32 * 2 + u32::from(material < 0);
-                            position[1] -= origin[1];
-                            let mut quad =
-                                pack_quad(position, face, [w, h], material.unsigned_abs() & 255);
-                            quad[0] |= (section as u32) << 27;
-                            quad[1] |= (material.unsigned_abs() >> 8) << 10;
-                            for value in quad {
-                                bytes.extend_from_slice(&value.to_ne_bytes());
-                            }
-                            for row in j..j + h {
-                                mask[row * width + i..row * width + i + w].fill(0);
-                            }
-                            i += w;
                         }
+                    }
+                }
+            }
+            for y in origin[1]..origin[1] + SECTION_SIZE as i32 {
+                for z in 0..CHUNK_SIZE as i32 {
+                    for x in 0..CHUNK_SIZE as i32 {
+                        self.mesh_shape(&mut bytes, [x, y, z], section);
                     }
                 }
             }
@@ -1365,6 +1711,16 @@ impl ChunkData {
     }
 }
 
+/// The first two words of a packed quad as if slabs and stairs filled their block, for
+/// renderers without half block positions: their faces move out to the sides of the block.
+pub const fn full_block_quad([position, extent, shape]: [u32; 3]) -> [u32; 2] {
+    let face = (position >> 17) & 7;
+    if shape & SHAPED == 0 || face % 2 == 1 {
+        return [position, extent];
+    }
+    [position + (1 << [0, 5, 12][face as usize / 2]), extent]
+}
+
 /// Stores the GPU chunk slot in a packed quad, see `pack_quad`.
 pub const fn with_chunk_slot(quad: [u32; 2], slot: u32) -> [u32; 2] {
     debug_assert!(slot < 1 << 16);
@@ -1376,7 +1732,10 @@ pub const fn with_chunk_slot(quad: [u32; 2], slot: u32) -> [u32; 2] {
 
 // First word: x:5, local y:5, GPU chunk slot high:2, z:5, face:3, material low:6, reverse:1, section:4, material high:1.
 // Second word: width:5, height:5, sky:4, block light:4, GPU chunk slot low:14.
-const fn pack_quad(position: [i32; 3], face: u32, extent: [usize; 2], material: u32) -> [u32; 2] {
+// Third word: ambient occlusion of the four corners:8, see `ChunkData::occlusion`, shaped:1,
+// then for the box faces of slabs and stairs, see `ChunkData::mesh_shape`: whether the box
+// starts and ends halfway along u and along v:4, and the plane along the axis in halves:2.
+const fn pack_quad(position: [i32; 3], face: u32, extent: [usize; 2], material: u32) -> [u32; 3] {
     [
         position[0] as u32
             | (position[1] as u32) << 5
@@ -1385,12 +1744,55 @@ const fn pack_quad(position: [i32; 3], face: u32, extent: [usize; 2], material: 
             | (material & 63) << 20
             | (material >> 6) << 31,
         extent[0] as u32 | (extent[1] as u32) << 5,
+        FULL_LIGHT,
     ]
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn visible(material: u8, neighbor: u8) -> bool {
+        face_visible(u32::from(material), u32::from(neighbor), 0, true)
+    }
+
+    #[test]
+    fn fluids_have_levels_heights_and_their_own_faces() {
+        for fluid in [Fluid::Water, Fluid::Lava] {
+            let source = super::fluid(fluid.source()).unwrap();
+            assert!(source.source && source.level == fluid.reach() + 1);
+            assert!(super::fluid(fluid.falling()).unwrap().falling);
+            let mut previous = 0.0;
+            for level in 1..=fluid.reach() {
+                let material = fluid.flowing(level);
+                assert_eq!(super::fluid(material).unwrap().level, level);
+                assert_eq!(item_material(material), Some(fluid.source()));
+                assert!(valid_material(material) && is_passable(material));
+                assert!(look(material).is_some());
+                let height = fluid_height(material);
+                assert!(height > previous && height < 1.0);
+                previous = height;
+            }
+            assert_eq!(fluid_height(fluid.falling()), 1.0);
+        }
+        assert_eq!(Fluid::Lava.falling(), LAST_FLUID);
+        let (high, low) = (Fluid::Water.flowing(6), Fluid::Water.flowing(2));
+        // Steps between levels show sideways, never inside a column or pool.
+        assert!(visible(WATER, high) && visible(high, low) && !visible(low, high));
+        assert!(!face_visible(u32::from(WATER), u32::from(high), 1, true));
+        // A lowered surface shows below a ceiling, but a full block does not.
+        assert!(face_visible(u32::from(low), u32::from(STONE), 1, true));
+        let full = Fluid::Water.falling();
+        assert!(!face_visible(u32::from(full), u32::from(STONE), 1, true));
+        assert!(look_flags(WATER) >> 8 > 0 && look_flags(full) >> 8 == 0);
+        // Minecraft heights: sources at 8/9, flowing water in ninths, lava in two ninths.
+        assert_eq!(fluid_height(WATER), 8.0 / 9.0);
+        assert_eq!(fluid_height(Fluid::Water.flowing(1)), 1.0 / 9.0);
+        assert_eq!(fluid_height(Fluid::Lava.flowing(3)), 6.0 / 9.0);
+        assert!(
+            is_translucent(u32::from(high)) && !is_translucent(u32::from(Fluid::Lava.flowing(1)))
+        );
+    }
 
     #[test]
     fn material_catalog_is_sorted_unique_and_fits_the_packed_format() {
@@ -1400,7 +1802,7 @@ mod tests {
                 .iter()
                 .all(|&(material, name)| material <= 127 && !name.is_empty())
         );
-        assert_eq!(MATERIALS.last().map(|&(material, _)| material), Some(72));
+        assert_eq!(MATERIALS.last().map(|&(material, _)| material), Some(120));
         assert_eq!(canonical_material(LEGACY_IRON_ORE), Some(IRON_ORE));
         assert_eq!(
             canonical_material(LEGACY_DENSE_IRON_ORE),
@@ -1416,10 +1818,71 @@ mod tests {
     }
 
     #[test]
+    fn slabs_and_stairs_place_pick_collide_and_mesh() {
+        let (slab, stairs) = (FIRST_SHAPED, FIRST_SHAPED + STAIRS);
+        assert_eq!(shape(slab), Some((STONE, 0)));
+        assert_eq!(shape(LAST_SHAPED), Some((26, SHAPES - 1)));
+        assert_eq!(shape(FIRST_SHAPED - 1), None);
+        // Slabs fill the top below a block, stairs rise away from the player.
+        assert_eq!(placed_material(slab, 0.0, 2.0, false), slab);
+        assert_eq!(placed_material(slab, 0.0, 2.0, true), slab + 1);
+        for (dx, dz, facing) in [(2.0, 0.0, 5), (-2.0, 0.0, 3), (0.0, -2.0, 4), (0.0, 2.0, 2)] {
+            let placed = placed_material(stairs, dx, dz, false);
+            assert_eq!(shape(placed), Some((STONE, facing)));
+            assert_eq!(item_material(placed), Some(stairs));
+            assert!(valid_stored_block(placed));
+        }
+        assert_eq!(item_material(slab + 1), Some(slab));
+        assert_eq!(look(slab).unwrap().faces, look(STONE).unwrap().faces);
+        assert_eq!(boxes(slab), &[BOTTOM]);
+        assert_eq!(boxes(STONE), FULL);
+        assert!(boxes(0).is_empty() && boxes(WATER).is_empty());
+        // A slab on the ground shows its own five faces, not the ground below it, and the
+        // ground shows its top around the slab.
+        let mut chunk = ChunkData::from_heights([60; PADDED_SIZE * PADDED_SIZE]);
+        chunk.put([8, 60, 8], slab, false);
+        let mesh = chunk.mesh();
+        let shaped: Vec<_> = mesh
+            .as_chunks::<QUAD_BYTES>()
+            .0
+            .iter()
+            .map(|quad| u32::from_ne_bytes(quad[8..].try_into().unwrap()))
+            .filter(|word| word & SHAPED != 0)
+            .collect();
+        assert_eq!(shaped.len(), 5);
+        // The top face lies halfway up the block.
+        assert!(shaped.iter().any(|word| (word >> 13) & 3 == 1));
+        assert!(!face_visible(u32::from(slab), 0, 0, true));
+        // The shaders see one box halfway up for slabs and two boxes for stairs.
+        assert_eq!(look_flags(slab) >> 16, 1 << 5);
+        assert_eq!(look_flags(stairs) >> 16 & 1, 1);
+        assert_eq!(look_flags(STONE) >> 16, 0);
+        // Without half blocks, the top of a slab lies on top of its block.
+        let quads: Vec<_> = mesh
+            .as_chunks::<QUAD_BYTES>()
+            .0
+            .iter()
+            .map(|quad| {
+                let words: [u32; 3] = core::array::from_fn(|i| {
+                    u32::from_ne_bytes(quad[i * 4..i * 4 + 4].try_into().unwrap())
+                });
+                (words, full_block_quad(words))
+            })
+            .filter(|(words, _)| words[2] & SHAPED != 0)
+            .collect();
+        let (top, full) = quads
+            .iter()
+            .find(|(words, _)| (words[0] >> 17) & 7 == 2)
+            .unwrap();
+        assert_eq!(full[0], top[0] + (1 << 5));
+        assert!(visible(STONE, slab));
+    }
+
+    #[test]
     fn rolls_in_halves_match_64_bit_remainders() {
         for divisor in [2, 3, 6, 7, 9, 12, 100, 200, 1 << 16] {
             for shift in 0..64 {
-                let value = hash(i64::from(shift), 0, 0, u64::from(divisor)) >> shift;
+                let value = hash(WORLD_SEED, i64::from(shift), 0, 0, u64::from(divisor)) >> shift;
                 assert_eq!(
                     roll_in_halves(value, divisor),
                     (value % u64::from(divisor)) as u32
@@ -1448,10 +1911,10 @@ mod tests {
         });
         let bases = (-1..=1)
             .flat_map(|dz| (-1..=1).map(move |dx| (coord.0 + dx, coord.1 + dz)))
-            .map(|neighbor| (neighbor, ChunkData::generate_base(neighbor)))
+            .map(|neighbor| (neighbor, ChunkData::generate_base(WORLD_SEED, neighbor)))
             .collect();
-        let rebuilt = ChunkData::rebuild(coord, &bases, &edits);
-        let generated = ChunkData::generate_edited(coord, &edits);
+        let rebuilt = ChunkData::rebuild(WORLD_SEED, coord, &bases, &edits);
+        let generated = ChunkData::generate_edited(WORLD_SEED, coord, &edits);
         assert_eq!(rebuilt.encode(), generated.encode());
         assert_eq!(rebuilt.mesh(), generated.mesh());
     }
@@ -1464,13 +1927,17 @@ mod tests {
             (0.5, -2.0, OVEN_NORTH),
             (2.0, -0.5, OVEN_EAST),
         ] {
-            assert_eq!(placed_material(OVEN, dx, dz), oven);
+            assert_eq!(placed_material(OVEN, dx, dz, false), oven);
             assert!(valid_material(oven) && valid_stored_block(oven));
             assert_eq!(canonical_material(oven), Some(oven));
             assert_eq!(item_material(oven), Some(OVEN));
         }
-        assert_eq!(placed_material(STONE, 2.0, 0.0), STONE);
-        assert!(MATERIALS.iter().all(|&(material, _)| material < OVEN_WEST));
+        assert_eq!(placed_material(STONE, 2.0, 0.0, false), STONE);
+        assert!(
+            MATERIALS
+                .iter()
+                .all(|&(material, _)| !matches!(material, OVEN_WEST..=OVEN_EAST))
+        );
     }
 
     #[test]
@@ -1537,7 +2004,7 @@ mod tests {
         let mut count = 0;
         for cx in 0..16 {
             let mut chunk = ChunkData::from_columns(columns);
-            chunk.add_decorations(&columns, (cx * CHUNK_SIZE as i64, 0));
+            chunk.add_decorations(WORLD_SEED, &columns, (cx * CHUNK_SIZE as i64, 0));
             count += chunk.plants.len();
         }
         let coverage = count as f64 / (16 * CHUNK_SIZE * CHUNK_SIZE) as f64;
@@ -1570,9 +2037,9 @@ mod tests {
             for cx in -2..=2 {
                 let mut chunk = ChunkData::from_columns(columns);
                 let origin = (cx * CHUNK_SIZE as i64, 0);
-                chunk.add_decorations(&columns, origin);
+                chunk.add_decorations(WORLD_SEED, &columns, origin);
                 let mut repeat = ChunkData::from_columns(columns);
-                repeat.add_decorations(&columns, origin);
+                repeat.add_decorations(WORLD_SEED, &columns, origin);
                 assert_eq!(chunk.plants, repeat.plants);
                 found.extend(chunk.plants.iter().map(|p| p[3]));
             }
@@ -1597,8 +2064,8 @@ mod tests {
                 material: FIRST_PLANT,
             },
         ];
-        let left = ChunkData::generate_edited((-1, 0), &edits);
-        let right = ChunkData::generate_edited((0, 0), &edits);
+        let left = ChunkData::generate_edited(WORLD_SEED, (-1, 0), &edits);
+        let right = ChunkData::generate_edited(WORLD_SEED, (0, 0), &edits);
         assert_eq!(left.voxel([15, 120, 0]), LAVA);
         assert_eq!(right.block([-1, 120, 0]), u32::from(LAVA));
         assert!(right.light_at([0, 120, 0]) >> 4 > 0);
@@ -1626,7 +2093,7 @@ mod tests {
     #[test]
     fn chunk_storage_roundtrips_blocks_lighting_plants_and_mesh() {
         for coord in [(0, 0), (-17, 23)] {
-            let chunk = ChunkData::generate(coord);
+            let chunk = ChunkData::generate(WORLD_SEED, coord);
             let encoded = chunk.encode();
             let restored = ChunkData::decode(&encoded).unwrap();
             assert_eq!(restored.blocks, chunk.blocks);
@@ -1685,7 +2152,7 @@ mod tests {
         let mut snowy = false;
         for z in (-2048..=2048).step_by(32) {
             for x in (-2048..=2048).step_by(32) {
-                let column = terrain_column(x, z);
+                let column = terrain_column(WORLD_SEED, x, z);
                 let index = biomes.iter().position(|&b| b == column.biome).unwrap();
                 examples[index].get_or_insert((x, z));
                 snowy |= column.biome == Biome::Mountains && column.height >= 88;
@@ -1695,12 +2162,15 @@ mod tests {
         for (biome, example) in biomes.into_iter().zip(examples) {
             let (x, z) = example.unwrap_or_else(|| panic!("Missing biome {biome:?}"));
             let coord = (x.div_euclid(16), z.div_euclid(16));
-            let chunk = ChunkData::generate(coord);
-            let right = ChunkData::generate((coord.0 + 1, coord.1));
+            let chunk = ChunkData::generate(WORLD_SEED, coord);
+            let right = ChunkData::generate(WORLD_SEED, (coord.0 + 1, coord.1));
             for z in 0..CHUNK_SIZE as i32 {
                 for x in 0..CHUNK_SIZE as i32 {
-                    let column =
-                        terrain_column(coord.0 * 16 + i64::from(x), coord.1 * 16 + i64::from(z));
+                    let column = terrain_column(
+                        WORLD_SEED,
+                        coord.0 * 16 + i64::from(x),
+                        coord.1 * 16 + i64::from(z),
+                    );
                     for y in i32::from(column.height)..i32::from(SEA_LEVEL) {
                         assert_eq!(chunk.block([x, y, z]), u32::from(WATER));
                     }
@@ -1724,12 +2194,12 @@ mod tests {
         let mut heights = [false; 3];
         for z in (-2048i64..=2048).step_by(128) {
             for x in (-2048i64..=2048).step_by(128) {
-                if terrain_column(x, z).biome != Biome::Desert {
+                if terrain_column(WORLD_SEED, x, z).biome != Biome::Desert {
                     continue;
                 }
                 let coord = (x.div_euclid(16), z.div_euclid(16));
-                let chunk = ChunkData::generate_unlit(coord, false);
-                let neighbor = ChunkData::generate_unlit((coord.0 + 1, coord.1), true);
+                let chunk = ChunkData::generate_unlit(WORLD_SEED, coord, false);
+                let neighbor = ChunkData::generate_unlit(WORLD_SEED, (coord.0 + 1, coord.1), true);
                 for z in 0..CHUNK_SIZE as i32 {
                     for y in 0..HEIGHT as i32 {
                         assert_eq!(
@@ -1743,6 +2213,7 @@ mod tests {
                     }
                     for x in 0..CHUNK_SIZE as i32 {
                         let column = terrain_column(
+                            WORLD_SEED,
                             coord.0 * 16 + i64::from(x),
                             coord.1 * 16 + i64::from(z),
                         );
@@ -1799,12 +2270,12 @@ mod tests {
                 ((packed >> 27) & 15) * SECTION_SIZE as u32 + ((packed >> 5) & 31),
                 u32::from(SEA_LEVEL)
             );
-            assert!(!face_visible(u32::from(liquid), u32::from(liquid)));
-            assert!(face_visible(u32::from(STONE), u32::from(liquid)));
+            assert!(!visible(liquid, liquid));
+            assert!(visible(STONE, liquid));
         }
-        assert!(face_visible(u32::from(LAVA), u32::from(WATER)));
-        assert!(!face_visible(u32::from(WATER), u32::from(LAVA)));
-        assert!(!face_visible(u32::from(LAVA), u32::from(STONE)));
+        assert!(visible(LAVA, WATER));
+        assert!(!visible(WATER, LAVA));
+        assert!(!visible(LAVA, STONE));
     }
 
     #[test]
@@ -1812,12 +2283,12 @@ mod tests {
         for material in [WATER, GLASS, GLASS_FRAME] {
             let material = u32::from(material);
             assert!(is_translucent(material));
-            assert!(!face_visible(material, material));
-            assert!(face_visible(u32::from(STONE), material));
-            assert!(!face_visible(material, u32::from(STONE)));
+            assert!(!visible(material as u8, material as u8));
+            assert!(visible(STONE, material as u8));
+            assert!(!visible(material as u8, STONE));
         }
-        assert!(face_visible(u32::from(GLASS_FRAME), u32::from(GLASS)));
-        assert!(!face_visible(u32::from(GLASS), u32::from(GLASS_FRAME)));
+        assert!(visible(GLASS_FRAME, GLASS));
+        assert!(!visible(GLASS, GLASS_FRAME));
     }
 
     #[test]
@@ -1839,7 +2310,8 @@ mod tests {
         );
         let chunk = ChunkData::decode(&chunk.encode()).unwrap();
         let mesh = chunk.mesh();
-        assert_eq!(mesh.len(), original + 6 * QUAD_BYTES);
+        // The six stone walls, and the lowered lava surface below the stone ceiling.
+        assert_eq!(mesh.len(), original + 7 * QUAD_BYTES);
         let mut walls = [false; 6];
         for quad in mesh.as_chunks::<QUAD_BYTES>().0 {
             let packed = u32::from_ne_bytes(quad[..4].try_into().unwrap());
@@ -1856,11 +2328,11 @@ mod tests {
         let mut plains = [0; 2];
         for z in -100..100 {
             for x in -100..100 {
-                let random = hash(x, 0, z, 7183);
+                let random = hash(WORLD_SEED, x, 0, z, 7183);
                 let wx = x * 10 + 2 + ((random >> 8) % 6) as i64;
                 let wz = z * 10 + 2 + ((random >> 12) % 6) as i64;
-                let column = terrain_column(wx, wz);
-                let tree = tree_at(x, z);
+                let column = terrain_column(WORLD_SEED, wx, wz);
+                let tree = tree_at(WORLD_SEED, x, z);
                 match column.biome {
                     Biome::Forest => {
                         forest[0] += 1;
@@ -1884,7 +2356,7 @@ mod tests {
     #[test]
     fn bedrock_is_continuous_and_section_boundaries_do_not_add_faces() {
         for coord in [(0, 0), (-12, 3), (42, -27)] {
-            let chunk = ChunkData::generate(coord);
+            let chunk = ChunkData::generate(WORLD_SEED, coord);
             for z in 0..CHUNK_SIZE as i32 {
                 for x in 0..CHUNK_SIZE as i32 {
                     for y in 0..3 {
@@ -1902,7 +2374,7 @@ mod tests {
         let mesh = full.mesh();
         assert_eq!(mesh.len(), 2 * QUAD_BYTES);
         let tops: Vec<_> = mesh
-            .as_chunks::<8>()
+            .as_chunks::<QUAD_BYTES>()
             .0
             .iter()
             .map(|q| {
@@ -1917,17 +2389,17 @@ mod tests {
     fn generated_lava_is_an_emissive_light_source() {
         for cz in -16..16 {
             for cx in -16..16 {
-                let random = hash(cx, 0, cz, 3167);
+                let random = hash(WORLD_SEED, cx, 0, cz, 3167);
                 if !random.is_multiple_of(12) {
                     continue;
                 }
                 let x = cx * 32 + 8 + ((random >> 8) % 16) as i64;
                 let z = cz * 32 + 8 + ((random >> 16) % 16) as i64;
-                let column = terrain_column(x, z);
+                let column = terrain_column(WORLD_SEED, x, z);
                 if column.biome != Biome::Mountains || column.height <= SEA_LEVEL + 4 {
                     continue;
                 }
-                let chunk = ChunkData::generate((x.div_euclid(16), z.div_euclid(16)));
+                let chunk = ChunkData::generate(WORLD_SEED, (x.div_euclid(16), z.div_euclid(16)));
                 let [px, py, pz] = [
                     x.rem_euclid(16) as i32,
                     i32::from(column.height) - 1,
@@ -1949,7 +2421,7 @@ mod tests {
             for face in 0..8 {
                 for extent in [[1, 1], [16, 16]] {
                     for material in 1..=127 {
-                        let [a, b] = pack_quad(position, face, extent, material);
+                        let [a, b, _] = pack_quad(position, face, extent, material);
                         assert_eq!(
                             [a & 31, (a >> 5) & 31, (a >> 12) & 31],
                             position.map(|v| v as u32)
@@ -1975,8 +2447,8 @@ mod tests {
     #[test]
     fn terrain_is_repeatable_in_positive_and_negative_chunks() {
         for coord in [(0, 0), (-1, -1), (20_000, -30_000)] {
-            let a = ChunkData::generate(coord);
-            let b = ChunkData::generate(coord);
+            let a = ChunkData::generate(WORLD_SEED, coord);
+            let b = ChunkData::generate(WORLD_SEED, coord);
             assert_eq!(a.heights, b.heights);
             assert_eq!(a.blocks, b.blocks);
             assert_eq!(a.plants, b.plants);
@@ -1986,8 +2458,8 @@ mod tests {
 
     #[test]
     fn neighbor_halos_agree_across_zero() {
-        let left = ChunkData::generate((-1, 0));
-        let right = ChunkData::generate((0, 0));
+        let left = ChunkData::generate(WORLD_SEED, (-1, 0));
+        let right = ChunkData::generate(WORLD_SEED, (0, 0));
         for z in 0..PADDED_SIZE {
             assert_eq!(
                 left.heights[z * PADDED_SIZE + CHUNK_SIZE + 1],
@@ -2003,9 +2475,9 @@ mod tests {
     #[test]
     fn decorated_halos_match_in_both_axes() {
         for coord in [(-1, 0), (0, -1), (3, -4), (-5, -5)] {
-            let a = ChunkData::generate(coord);
-            let right = ChunkData::generate((coord.0 + 1, coord.1));
-            let front = ChunkData::generate((coord.0, coord.1 + 1));
+            let a = ChunkData::generate(WORLD_SEED, coord);
+            let right = ChunkData::generate(WORLD_SEED, (coord.0 + 1, coord.1));
+            let front = ChunkData::generate(WORLD_SEED, (coord.0, coord.1 + 1));
             for y in 0..HEIGHT as i32 {
                 for t in -1..=CHUNK_SIZE as i32 {
                     assert_eq!(a.block([16, y, t]), right.block([0, y, t]));
@@ -2055,7 +2527,7 @@ mod tests {
         for z in -3..=3 {
             for x in -3..=3 {
                 // Sample multiple broad biome regions, not only the spawn coastline.
-                let chunk = ChunkData::generate((x * 13, z * 13));
+                let chunk = ChunkData::generate(WORLD_SEED, (x * 13, z * 13));
                 for &material in &chunk.blocks {
                     if let Some(index) = ORES.iter().position(|&ore| ore == material) {
                         ore_types[index] = true;
@@ -2095,7 +2567,7 @@ mod tests {
         chunk.plants.push([8, 60, 8, FIRST_PLANT]);
         let mesh = chunk.mesh();
         let plants: Vec<_> = mesh
-            .as_chunks::<8>()
+            .as_chunks::<QUAD_BYTES>()
             .0
             .iter()
             .filter_map(|q| {
@@ -2109,10 +2581,35 @@ mod tests {
 
     #[test]
     fn solid_leaves_hide_adjacent_faces() {
-        assert!(!face_visible(u32::from(OAK), u32::from(LEAVES)));
-        assert!(!face_visible(u32::from(LEAVES), u32::from(OAK)));
-        assert!(!face_visible(u32::from(LEAVES), u32::from(LEAVES)));
-        assert!(face_visible(u32::from(LEAVES), 0));
+        assert!(!visible(OAK, LEAVES));
+        assert!(!visible(LEAVES, OAK));
+        assert!(!visible(LEAVES, LEAVES));
+        assert!(visible(LEAVES, 0));
+    }
+
+    #[test]
+    fn corners_next_to_blocks_are_occluded() {
+        let mut chunk = ChunkData::from_heights([60; PADDED_SIZE * PADDED_SIZE]);
+        assert_eq!(chunk.occlusion(u32::from(STONE), [7, 60, 8], 1), FULL_LIGHT);
+        // A block on the ground darkens the two top corners of the ground next to it, seen
+        // along the x axis, and three blocks around a corner make it the darkest.
+        chunk.put([8, 60, 8], STONE, false);
+        assert_eq!(
+            chunk.occlusion(u32::from(STONE), [7, 60, 8], 1),
+            0b1010_1111
+        );
+        chunk.put([7, 60, 9], STONE, false);
+        assert_eq!(chunk.occlusion(u32::from(STONE), [7, 60, 8], 1) >> 6, 0);
+        // Fluids and translucent blocks are never occluded, and the mesh keeps the occlusion.
+        assert_eq!(chunk.occlusion(u32::from(WATER), [7, 60, 8], 1), FULL_LIGHT);
+        assert!(
+            chunk
+                .mesh()
+                .as_chunks::<QUAD_BYTES>()
+                .0
+                .iter()
+                .any(|quad| { u32::from_ne_bytes(quad[8..].try_into().unwrap()) != FULL_LIGHT })
+        );
     }
 
     #[test]
@@ -2124,13 +2621,13 @@ mod tests {
     #[test]
     fn merged_area_matches_exposed_faces() {
         for coord in [(0, 0), (-1, -1), (17, -42)] {
-            let chunk = ChunkData::generate(coord);
+            let chunk = ChunkData::generate(WORLD_SEED, coord);
             let mesh = chunk.mesh();
             let mut actual = 0u64;
             for quad in mesh.as_chunks::<QUAD_BYTES>().0 {
                 let [a, b] = [
                     u32::from_ne_bytes(quad[..4].try_into().unwrap()),
-                    u32::from_ne_bytes(quad[4..].try_into().unwrap()),
+                    u32::from_ne_bytes(quad[4..8].try_into().unwrap()),
                 ];
                 if (a >> 17) & 7 < 6 {
                     actual += u64::from((b & 31) * ((b >> 5) & 31));
@@ -2155,6 +2652,8 @@ mod tests {
                             expected += u64::from(face_visible(
                                 chunk.block([x, y, z]),
                                 chunk.block([x + dx, y + dy, z + dz]),
+                                if dy == 0 { 0 } else { 1 },
+                                dx + dy + dz > 0,
                             ));
                         }
                     }

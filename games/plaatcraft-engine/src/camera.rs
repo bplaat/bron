@@ -8,7 +8,7 @@
 
 #[cfg(not(feature = "std"))]
 use crate::math::Float;
-use crate::world::{CHUNK_SIZE, Coord, HEIGHT};
+use crate::world::{self, Bounds, CHUNK_SIZE, Coord, HEIGHT};
 
 const SWIM_SPEED: f64 = 3.5;
 const SINK_SPEED: f64 = 2.0;
@@ -17,9 +17,35 @@ const LOWER: [f64; 3] = [-0.3, -1.7, -0.3];
 const UPPER: [f64; 3] = [0.3, 0.1, 0.3];
 // How far ahead walking looks for a step to jump on.
 const STEP_LOOKAHEAD: f64 = 0.3;
+const FULL: &[Bounds] = &[[[0.0; 3], [1.0; 3]]];
+
+// A box inside the block at a cell, in world coordinates.
+fn offset_bounds(bounds: &Bounds, cell: [i64; 3]) -> Bounds {
+    bounds.map(|corner| core::array::from_fn(|a| cell[a] as f64 + corner[a]))
+}
+
+// Whether two boxes overlap by more than touching.
+fn intersects(a: Bounds, b: Bounds) -> bool {
+    (0..3).all(|axis| a[0][axis] < b[1][axis] - 1e-7 && a[1][axis] > b[0][axis] + 1e-7)
+}
+
+// Calls `f` with every block cell a box touches.
+fn for_cells(bounds: Bounds, mut f: impl FnMut([i64; 3])) {
+    let [min, max] = [0, 1].map(|end| {
+        let nudge = if end == 0 { 1e-7 } else { -1e-7 };
+        bounds[end].map(|value| (value + nudge).floor() as i64)
+    });
+    for z in min[2]..=max[2] {
+        for y in min[1]..=max[1] {
+            for x in min[0]..=max[0] {
+                f([x, y, z]);
+            }
+        }
+    }
+}
 
 /// The held movement controls, set by the platform before each update.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Input {
     /// Digital movement like WASD or a D-pad, x to the right and y forward.
     pub direction: [f32; 2],
@@ -34,6 +60,7 @@ pub struct Input {
 }
 
 /// The player's position, orientation, and movement state.
+#[derive(Clone, Copy, Debug)]
 pub struct Camera {
     /// The eye position in world coordinates.
     pub position: [f64; 3],
@@ -108,6 +135,13 @@ impl Camera {
         self.pitch = (self.pitch - dy as f32 * 0.002).clamp(-1.55, 1.55);
     }
 
+    /// The unit vector the player looks along.
+    pub fn direction(&self) -> [f64; 3] {
+        let (sin, cos) = self.yaw.sin_cos();
+        let (sp, cp) = self.pitch.sin_cos();
+        [f64::from(sin * cp), f64::from(sp), f64::from(-cos * cp)]
+    }
+
     /// Starts or stops flying.
     pub const fn set_flying(&mut self, flying: bool) {
         self.flying = flying;
@@ -115,22 +149,52 @@ impl Camera {
         self.grounded = false;
     }
 
-    fn supported(&self, solid: &mut impl FnMut([i64; 3]) -> bool) -> bool {
-        let feet = self.position[1] - 1.7;
+    fn supported(&self, solid: &mut impl FnMut([i64; 3]) -> &'static [Bounds]) -> bool {
+        let feet = self.position[1] + LOWER[1];
         let y = (feet - 0.002).floor() as i64;
-        if ((y + 1) as f64 - feet).abs() > 0.002 {
-            return false;
-        }
-        let min_x = (self.position[0] - 0.3 + 1e-7).floor() as i64;
-        let max_x = (self.position[0] + 0.3 - 1e-7).floor() as i64;
-        let min_z = (self.position[2] - 0.3 + 1e-7).floor() as i64;
-        let max_z = (self.position[2] + 0.3 - 1e-7).floor() as i64;
-        (min_z..=max_z).any(|z| (min_x..=max_x).any(|x| solid([x, y, z])))
+        let [lower, upper] = self.body([0.0; 3]);
+        (lower[2].floor() as i64..=(upper[2] - 1e-7).floor() as i64).any(|z| {
+            (lower[0].floor() as i64..=(upper[0] - 1e-7).floor() as i64).any(|x| {
+                solid([x, y, z]).iter().any(|bounds| {
+                    let world = offset_bounds(bounds, [x, y, z]);
+                    (world[1][1] - feet).abs() <= 0.002
+                        && [0, 2].into_iter().all(|axis| {
+                            lower[axis] < world[1][axis] - 1e-7
+                                && upper[axis] > world[0][axis] + 1e-7
+                        })
+                })
+            })
+        })
+    }
+
+    /// Moves the player by the held input for `dt` seconds through the blocks, which
+    /// `block` looks up. Unknown blocks collide, so the player never falls into
+    /// unloaded chunks. Clients and servers both move players with it.
+    pub fn tick(&mut self, dt: f32, mut block: impl FnMut([i64; 3]) -> Option<u8>) {
+        // The feet or waist in water or lava make the player swim.
+        let [x, y, z] = self.position;
+        self.in_liquid = [0.2, 0.9].into_iter().any(|offset| {
+            let position = [
+                x.floor() as i64,
+                (y - 1.7 + offset).floor() as i64,
+                z.floor() as i64,
+            ];
+            block(position).is_some_and(|material| world::fluid(material).is_some())
+        });
+        self.update_in(dt, |position| match block(position) {
+            Some(material) if position[1] >= 0 => world::boxes(material),
+            _ => FULL,
+        });
     }
 
     /// Moves the player by the held input for `dt` seconds, `solid` tells which
     /// blocks collide.
     pub fn update(&mut self, dt: f32, mut solid: impl FnMut([i64; 3]) -> bool) {
+        self.update_in(dt, |position| if solid(position) { FULL } else { &[] });
+    }
+
+    // Moves the player by the held input for `dt` seconds through the boxes of the blocks.
+    fn update_in(&mut self, dt: f32, mut solid: impl FnMut([i64; 3]) -> &'static [Bounds]) {
         let dt = f64::from(dt.clamp(0.0, 0.05));
         let Input {
             direction,
@@ -170,7 +234,24 @@ impl Camera {
             return;
         }
         self.grounded = self.supported(&mut solid);
-        let climb = self.auto_jump && !shift && self.facing_step(velocity, &mut solid);
+        // Half block steps like slabs and stairs are walked up, full ones jumped on.
+        let ahead = self.ahead(velocity);
+        if self.grounded
+            && ahead.is_some_and(|[dx, dz]| {
+                self.overlaps([dx, 0.0, dz], &mut solid)
+                    && !self.overlaps([0.0, 0.5, 0.0], &mut solid)
+                    && !self.overlaps([dx, 0.5, dz], &mut solid)
+            })
+        {
+            self.position[1] += 0.5;
+        }
+        let climb = self.auto_jump
+            && !shift
+            && ahead.is_some_and(|[dx, dz]| {
+                self.overlaps([dx, 0.0, dz], &mut solid)
+                    && !self.overlaps([0.0, 1.0, 0.0], &mut solid)
+                    && !self.overlaps([dx, 1.0, dz], &mut solid)
+            });
         if (space || climb) && self.grounded && !self.in_liquid {
             self.vertical_velocity = 8.0;
             self.grounded = false;
@@ -195,33 +276,38 @@ impl Camera {
         self.grounded = self.supported(&mut solid);
     }
 
-    // Whether the box shifted by `offset` overlaps a solid block.
-    fn overlaps(&self, offset: [f64; 3], solid: &mut impl FnMut([i64; 3]) -> bool) -> bool {
-        let position: [f64; 3] = core::array::from_fn(|a| self.position[a] + offset[a]);
-        let min: [i64; 3] =
-            core::array::from_fn(|a| (position[a] + LOWER[a] + 1e-7).floor() as i64);
-        let max: [i64; 3] =
-            core::array::from_fn(|a| (position[a] + UPPER[a] - 1e-7).floor() as i64);
-        (min[2]..=max[2])
-            .any(|z| (min[1]..=max[1]).any(|y| (min[0]..=max[0]).any(|x| solid([x, y, z]))))
+    // The player's box shifted by `offset`.
+    fn body(&self, offset: [f64; 3]) -> Bounds {
+        [LOWER, UPPER]
+            .map(|corner| core::array::from_fn(|a| self.position[a] + offset[a] + corner[a]))
     }
 
-    // Whether walking along `velocity` runs into a one block step with room to jump on it.
-    fn facing_step(&self, velocity: [f64; 3], solid: &mut impl FnMut([i64; 3]) -> bool) -> bool {
+    // Whether the box shifted by `offset` overlaps the boxes of the blocks.
+    fn overlaps(
+        &self,
+        offset: [f64; 3],
+        solid: &mut impl FnMut([i64; 3]) -> &'static [Bounds],
+    ) -> bool {
+        let body = self.body(offset);
+        let mut found = false;
+        for_cells(body, |cell| {
+            found |= solid(cell)
+                .iter()
+                .any(|bounds| intersects(body, offset_bounds(bounds, cell)));
+        });
+        found
+    }
+
+    // Where walking along `velocity` looks for steps, none when standing still.
+    fn ahead(&self, velocity: [f64; 3]) -> Option<[f64; 2]> {
         let length = velocity[0].hypot(velocity[2]);
-        if length < 1e-3 {
-            return false;
-        }
-        let [dx, dz] = [velocity[0], velocity[2]].map(|v| v / length * STEP_LOOKAHEAD);
-        self.overlaps([dx, 0.0, dz], solid)
-            && !self.overlaps([0.0, 1.0, 0.0], solid)
-            && !self.overlaps([dx, 1.0, dz], solid)
+        (length >= 1e-3).then(|| [velocity[0], velocity[2]].map(|v| v / length * STEP_LOOKAHEAD))
     }
 
     fn move_by(
         &mut self,
         movement: [f64; 3],
-        solid: &mut impl FnMut([i64; 3]) -> bool,
+        solid: &mut impl FnMut([i64; 3]) -> &'static [Bounds],
     ) -> [bool; 3] {
         let mut hit = [false; 3];
         let steps = (movement.iter().fold(0.0f64, |a, b| a.max(b.abs())) / 0.25)
@@ -233,31 +319,27 @@ impl Camera {
                 if delta == 0.0 {
                     continue;
                 }
-                let mut next = self.position;
-                next[axis] += delta;
-                let min: [i64; 3] =
-                    core::array::from_fn(|a| (next[a] + LOWER[a] + 1e-7).floor() as i64);
-                let max: [i64; 3] =
-                    core::array::from_fn(|a| (next[a] + UPPER[a] - 1e-7).floor() as i64);
-                for z in min[2]..=max[2] {
-                    for y in min[1]..=max[1] {
-                        for x in min[0]..=max[0] {
-                            let block = [x, y, z];
-                            if solid(block) {
-                                next[axis] = if delta > 0.0 {
-                                    next[axis].min(block[axis] as f64 - UPPER[axis])
-                                } else {
-                                    next[axis].max((block[axis] + 1) as f64 - LOWER[axis])
-                                };
-                            }
+                let mut offset = [0.0; 3];
+                offset[axis] = delta;
+                let body = self.body(offset);
+                let mut next = self.position[axis] + delta;
+                for_cells(body, |cell| {
+                    for bounds in solid(cell) {
+                        let world = offset_bounds(bounds, cell);
+                        if intersects(body, world) {
+                            next = if delta > 0.0 {
+                                next.min(world[0][axis] - UPPER[axis])
+                            } else {
+                                next.max(world[1][axis] - LOWER[axis])
+                            };
                         }
                     }
-                }
-                hit[axis] |= (next[axis] - self.position[axis] - delta).abs() > 1e-7;
+                });
+                hit[axis] |= (next - self.position[axis] - delta).abs() > 1e-7;
                 self.position[axis] = if delta > 0.0 {
-                    next[axis].max(self.position[axis])
+                    next.max(self.position[axis])
                 } else {
-                    next[axis].min(self.position[axis])
+                    next.min(self.position[axis])
                 };
             }
         }
@@ -294,8 +376,8 @@ impl View {
     pub fn bytes(&self, time: f32, daylight: f32, eye_material: Option<u8>) -> [u8; 96] {
         // environment.x distinguishes air, water, and lava without changing the uniform layout.
         let medium = match eye_material {
-            Some(crate::world::WATER) => 1.0,
-            Some(crate::world::LAVA) => 2.0,
+            Some(world::WATER) => 1.0,
+            Some(world::LAVA) => 2.0,
             _ => 0.0,
         };
         let mut bytes = [0; 96];
@@ -319,6 +401,26 @@ impl View {
         bytes
     }
 
+    /// The position in pixels from the top left of the screen of a point relative to the
+    /// player's chunk, when it is in front of the camera.
+    pub fn project(&self, point: [f32; 3]) -> Option<[f32; 2]> {
+        let relative = [
+            point[0] - self.eye[0],
+            point[1] - self.eye[1],
+            point[2] - self.eye[2],
+        ];
+        let depth = dot(relative, self.forward);
+        if depth < 0.05 {
+            return None;
+        }
+        let x = dot(relative, self.right) * self.horizontal / depth;
+        let y = dot(relative, self.up) * self.vertical / depth;
+        Some([
+            (x + 1.0) * 0.5 * self.size[0],
+            (1.0 - y) * 0.5 * self.size[1],
+        ])
+    }
+
     /// Whether a chunk at an offset from the player's chunk is in the frustum.
     pub fn visible(&self, offset: [f32; 3]) -> bool {
         self.visible_height(offset, HEIGHT as f32)
@@ -326,8 +428,8 @@ impl View {
 
     /// Whether a chunk section is in the frustum.
     pub fn section_visible(&self, mut offset: [f32; 3], section: usize) -> bool {
-        offset[1] = (section * crate::world::SECTION_SIZE) as f32;
-        self.visible_height(offset, crate::world::SECTION_SIZE as f32)
+        offset[1] = (section * world::SECTION_SIZE) as f32;
+        self.visible_height(offset, world::SECTION_SIZE as f32)
     }
 
     fn visible_height(&self, offset: [f32; 3], height: f32) -> bool {
@@ -364,6 +466,53 @@ mod tests {
     use super::*;
 
     #[test]
+    fn players_walk_up_stairs_and_stand_on_slabs() {
+        let stairs = world::placed_material(90, 0.0, 2.0, false);
+        let mut camera = Camera {
+            position: [0.5, 2.7, 0.5],
+            auto_jump: false,
+            ..Camera::default()
+        };
+        camera.yaw = 0.0;
+        camera.pitch = 0.0;
+        camera.input.direction = [0.0, 1.0];
+        // Stairs rising to the north up a block, a slab on top, and a wall, without auto jump.
+        let block = |[_, y, z]: [i64; 3]| {
+            Some(match (y, z) {
+                (..=0, _) | (1, -4..=-3) | (1..=3, ..=-5) => 3,
+                (1, -2) => stairs,
+                (2, -4) => 88,
+                _ => 0,
+            })
+        };
+        for _ in 0..120 {
+            camera.tick(1.0 / 60.0, block);
+        }
+        assert!(camera.grounded);
+        assert!((camera.position[1] - 4.2).abs() < 0.0001);
+        assert!((camera.position[2] + 3.7).abs() < 0.0001);
+    }
+
+    #[test]
+    fn ticks_fall_through_air_swim_in_water_and_stop_at_unknown_blocks() {
+        let mut camera = Camera {
+            position: [0.5, 70.0, 0.5],
+            ..Camera::default()
+        };
+        // Air above y 60, unknown below.
+        let block = |[_, y, _]: [i64; 3]| (y >= 60).then_some(0);
+        for _ in 0..40 {
+            camera.tick(0.05, block);
+        }
+        assert!(camera.grounded);
+        assert!((camera.position[1] - 61.7).abs() < 0.001);
+        camera.tick(0.05, |[_, y, _]| {
+            Some(if y < 70 { world::WATER } else { 0 })
+        });
+        assert!(camera.in_liquid);
+    }
+
+    #[test]
     fn liquid_fog_uses_the_eye_material_instead_of_sea_level() {
         for height in [20.0, 100.0] {
             let camera = Camera {
@@ -375,8 +524,8 @@ mod tests {
                 (None, 0.0),
                 (Some(0), 0.0),
                 (Some(3), 0.0),
-                (Some(crate::world::WATER), 1.0),
-                (Some(crate::world::LAVA), 2.0),
+                (Some(world::WATER), 1.0),
+                (Some(world::LAVA), 2.0),
             ] {
                 for daylight in [0.035, 1.0] {
                     let bytes = view.bytes(0.0, daylight, material);
@@ -655,11 +804,9 @@ mod tests {
     fn descending_stops_at_the_seabed() {
         let (x, z) = (-32..32)
             .flat_map(|z| (-32..32).map(move |x| (x * 16, z * 16)))
-            .find(|&(x, z)| {
-                crate::world::ground_height(x, z) < f64::from(crate::world::SEA_LEVEL) - 4.0
-            })
+            .find(|&(x, z)| world::ground_height(x, z) < f64::from(world::SEA_LEVEL) - 4.0)
             .unwrap();
-        let ground = crate::world::ground_height(x, z);
+        let ground = world::ground_height(x, z);
         let mut camera = Camera {
             position: [x as f64, 116.0, z as f64],
             flying: true,
@@ -686,5 +833,21 @@ mod tests {
         camera.look(100000.0, 100000.0);
         assert!(camera.pitch.abs() <= 1.55);
         assert!(camera.yaw >= 0.0 && camera.yaw < core::f32::consts::TAU);
+    }
+
+    #[test]
+    fn points_project_to_screen_pixels() {
+        let camera = Camera {
+            position: [8.0, 70.0, 8.0],
+            yaw: 0.0,
+            pitch: 0.0,
+            ..Camera::default()
+        };
+        let view = camera.view(800, 600, 8);
+        let [x, y] = view.project([8.0, 70.0, 0.0]).unwrap();
+        assert!((x - 400.0).abs() < 0.01 && (y - 300.0).abs() < 0.01);
+        let [right, up] = view.project([9.0, 71.0, 0.0]).unwrap();
+        assert!(right > 400.0 && up < 300.0);
+        assert!(view.project([8.0, 70.0, 16.0]).is_none());
     }
 }

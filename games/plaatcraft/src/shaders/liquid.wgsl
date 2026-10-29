@@ -43,7 +43,7 @@ struct VertexOutput {
 
 @vertex
 fn vs_liquid(@builtin(vertex_index) index: u32,
-    @location(0) packed: vec2<u32>) -> VertexOutput {
+    @location(0) packed: vec3<u32>) -> VertexOutput {
     let corners = array(vec2(0.0, 0.0), vec2(1.0, 0.0), vec2(1.0, 1.0), vec2(0.0, 1.0));
     let positive = array(0u, 1u, 2u, 0u, 2u, 3u);
     let negative = array(0u, 2u, 1u, 0u, 3u, 2u);
@@ -65,6 +65,11 @@ fn vs_liquid(@builtin(vertex_index) index: u32,
     uv = vec2(p.x, -p.y);
     if axis == 0u { uv = vec2(p.z, -p.y); }
     if axis == 1u { uv = p.xz; }
+    // Flowing fluid's surface lies below the top of its block.
+    let drop = f32((scene.materials[material].flags >> 8u) & 255u) / 255.0;
+    if face == 2u || (axis == 0u && corner.x == 1.0) || (axis == 2u && corner.y == 1.0) {
+        p.y -= drop;
+    }
     let relative = p - camera.eye.xyz;
     let depth = dot(relative, camera.forward.xyz);
     let near = camera.eye.w;

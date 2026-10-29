@@ -15,7 +15,7 @@ use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 
-use plaatcraft_engine::world::{CHUNK_SIZE, ChunkData, Coord, Edit, HEIGHT};
+use plaatcraft_engine::world::{CHUNK_SIZE, ChunkData, Coord, Edit, HEIGHT, WORLD_SEED};
 
 use crate::mesh::{self, Mesh};
 use crate::sync::{Condvar, Mutex};
@@ -217,10 +217,10 @@ impl Generator {
                 let neighbor = (coord.0 + x, coord.1 + z);
                 self.bases
                     .entry(neighbor)
-                    .or_insert_with(|| ChunkData::generate_base(neighbor));
+                    .or_insert_with(|| ChunkData::generate_base(WORLD_SEED, neighbor));
             }
         }
-        ChunkData::rebuild(coord, &self.bases, edits)
+        ChunkData::rebuild(WORLD_SEED, coord, &self.bases, edits)
     }
 }
 

@@ -38,11 +38,12 @@ struct VertexOutput {
     @location(3) uv: vec2<f32>,
     @location(4) @interpolate(flat) illumination: vec3<f32>,
     @location(5) @interpolate(flat) layer: i32,
+    @location(6) occlusion: f32,
 }
 
 @vertex
 fn vs_terrain(@builtin(vertex_index) index: u32,
-    @location(0) packed: vec2<u32>) -> VertexOutput {
+    @location(0) packed: vec3<u32>) -> VertexOutput {
     let corners = array(vec2(0.0, 0.0), vec2(1.0, 0.0), vec2(1.0, 1.0), vec2(0.0, 1.0));
     let positive = array(0u, 1u, 2u, 0u, 2u, 3u);
     let negative = array(0u, 2u, 1u, 0u, 3u, 2u);
@@ -52,7 +53,12 @@ fn vs_terrain(@builtin(vertex_index) index: u32,
     let extent = vec2(f32(packed.y & 31u), f32((packed.y >> 5u) & 31u));
     let chunk_origin = scene.chunk_origins[(packed.y >> 18u) | (((packed.x >> 10u) & 3u) << 14u)];
     let reverse = ((face & 1u) ^ ((packed.x >> 26u) & 1u)) != 0u;
-    let corner = corners[select(positive[index], negative[index], reverse)];
+    // Two bits of ambient occlusion per corner, split the quad along its brighter diagonal.
+    let corner_light = array((packed.z & 3u), ((packed.z >> 2u) & 3u), ((packed.z >> 6u) & 3u),
+        ((packed.z >> 4u) & 3u));
+    let flip = select(0u, 1u, corner_light[0] + corner_light[2] < corner_light[1] + corner_light[3]);
+    let corner_index = (select(positive[index], negative[index], reverse) + flip) % 4u;
+    let corner = corners[corner_index];
     let axis = face / 2u;
     var p = origin + chunk_origin.xyz;
     p.y += f32((packed.x >> 27u) & 15u) * 16.0;
@@ -61,13 +67,26 @@ fn vs_terrain(@builtin(vertex_index) index: u32,
         p += vec3(corner.x, corner.y, select(corner.x, 1.0 - corner.x, face == 7u));
         uv = vec2(corner.x, 1.0 - corner.y);
     } else {
-        let offset = corner * extent;
-        if axis == 0u { p += vec3(0.0, offset.x, offset.y); }
-        if axis == 1u { p += vec3(offset.y, 0.0, offset.x); }
-        if axis == 2u { p += vec3(offset.x, offset.y, 0.0); }
+        var offset = corner * extent;
+        var plane = 0.0;
+        // A face of a box of slabs or stairs spans halves of its block, see world.rs.
+        if (packed.z & 256u) != 0u {
+            let low = vec2(f32((packed.z >> 9u) & 1u), f32((packed.z >> 11u) & 1u)) * 0.5;
+            let high = 1.0 - vec2(f32((packed.z >> 10u) & 1u), f32((packed.z >> 12u) & 1u)) * 0.5;
+            offset = mix(low, high, corner);
+            plane = f32((packed.z >> 13u) & 3u) * 0.5;
+        }
+        if axis == 0u { p += vec3(plane, offset.x, offset.y); }
+        if axis == 1u { p += vec3(offset.y, plane, offset.x); }
+        if axis == 2u { p += vec3(offset.x, offset.y, plane); }
         uv = vec2(p.x, -p.y);
         if axis == 0u { uv = vec2(p.z, -p.y); }
         if axis == 1u { uv = p.xz; }
+        // Flowing fluid's surface lies below the top of its block.
+        let drop = f32((scene.materials[material].flags >> 8u) & 255u) / 255.0;
+        if face == 2u || (axis == 0u && corner.x == 1.0) || (axis == 2u && corner.y == 1.0) {
+            p.y -= drop;
+        }
     }
     let relative = p - camera.eye.xyz;
     let depth = dot(relative, camera.forward.xyz);
@@ -86,6 +105,7 @@ fn vs_terrain(@builtin(vertex_index) index: u32,
     if (scene.materials[material].flags & EMISSIVE) != 0u { out.illumination = vec3(1.0); }
     out.illumination *= scene.materials[material].tint;
     out.layer = i32(scene.materials[material].layers[face]);
+    out.occlusion = array(0.45, 0.65, 0.82, 1.0)[corner_light[corner_index]];
     return out;
 }
 
@@ -102,7 +122,7 @@ fn fs_terrain(in: VertexOutput) -> @location(0) vec4<f32> {
         vec3(0.64, 0.79, 0.90),
         camera.environment.z,
     );
-    let shaded = color * in.illumination;
+    let shaded = color * in.illumination * in.occlusion;
     var result = shaded;
     if fog > 0.0 && camera.environment.x < 0.5 {
         result = mix(shaded, fog_color, fog);

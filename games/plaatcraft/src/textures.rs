@@ -23,11 +23,26 @@ const SKY: [&str; 8] = [
     "sky/moon.png",
 ];
 const SIZE: u32 = 128;
+/// The first texture layer of the character parts, after the sky and the tiles.
+pub(crate) const CHARACTER_LAYER: u32 = (SKY.len() + TILES.len()) as u32;
+
+// The parts of the Kenney male character, see players.rs.
+fn character_paths() -> impl Iterator<Item = String> {
+    crate::players::PARTS
+        .iter()
+        .map(|part| format!("characters/male_{part}.png"))
+}
 // Materials have a 7-bit ID in the packed quad format.
 const MATERIAL_COUNT: usize = 128;
 const MATERIAL_BYTES: usize = 48;
 /// The size of the material table at the start of the scene storage buffer.
 pub(crate) const MATERIAL_TABLE_BYTES: usize = MATERIAL_COUNT * MATERIAL_BYTES;
+
+/// The texture layer of a face of a material, faces 6 and 7 are the sprite planes.
+pub(crate) fn layer(material: u8, face: usize) -> u32 {
+    // The sky layers come first so they never move.
+    (SKY.len() + usize::from(FACE_TILES[usize::from(material)][face])) as u32
+}
 
 /// Encode the per-material tint, flags and face layers the shaders look up by material ID.
 pub(crate) fn material_table() -> Vec<u8> {
@@ -46,9 +61,8 @@ pub(crate) fn material_table() -> Vec<u8> {
             *word = tint.to_bits();
         }
         words[3] = world::look_flags(material as u8);
-        // The sky layers come first so they never move.
-        for (word, tile) in words[4..].iter_mut().zip(FACE_TILES[material]) {
-            *word = (SKY.len() + usize::from(tile)) as u32;
+        for (face, word) in words[4..].iter_mut().enumerate() {
+            *word = layer(material as u8, face);
         }
         for (bytes, word) in entry.as_chunks_mut::<4>().0.iter_mut().zip(words) {
             *bytes = word.to_ne_bytes();
@@ -143,7 +157,7 @@ pub(crate) fn load(
         size: bwebgpu::Extent3d {
             width: SIZE,
             height: SIZE,
-            depth_or_array_layers: (TILES.len() + SKY.len()) as u32,
+            depth_or_array_layers: CHARACTER_LAYER + crate::players::PARTS.len() as u32,
         },
         mip_level_count: 8,
         sample_count: 1,
@@ -152,14 +166,20 @@ pub(crate) fn load(
         usage: bwebgpu::TextureUsages::TEXTURE_BINDING | bwebgpu::TextureUsages::COPY_DST,
         view_formats: &[],
     });
-    for (layer, path) in SKY.into_iter().chain(TILES).enumerate() {
-        let file = Assets::get(path).expect("Texture asset");
+    let paths = SKY
+        .into_iter()
+        .chain(TILES)
+        .map(str::to_owned)
+        .chain(character_paths());
+    for (layer, path) in paths.enumerate() {
+        let file = Assets::get(&path).expect("Texture asset");
         let image = decode(&file.data);
-        let mut pixels = if layer < SKY.len() {
-            resize_nearest(&image, SIZE, SIZE)
-        } else {
+        // Character parts fill their layer, the boxes they cover keep their proportions.
+        let mut pixels = if (SKY.len()..CHARACTER_LAYER as usize).contains(&layer) {
             assert_eq!((image.width, image.height), (SIZE, SIZE));
             image.pixels
+        } else {
+            resize_nearest(&image, SIZE, SIZE)
         };
         let coverage = pixels
             .as_chunks::<4>()
@@ -233,8 +253,16 @@ mod tests {
 
     #[test]
     fn tiles_and_mips_preserve_opaque_and_cutout_materials() {
+        let characters: Vec<_> = character_paths().collect();
         for path in Assets::iter() {
-            assert!(TILES.contains(&path.as_ref()) || SKY.contains(&path.as_ref()));
+            assert!(
+                TILES.contains(&path.as_ref())
+                    || SKY.contains(&path.as_ref())
+                    || characters.iter().any(|character| *character == path)
+            );
+        }
+        for path in characters {
+            assert!(Assets::get(&path).is_some(), "{path} is missing");
         }
 
         for tile in TILES {

@@ -16,6 +16,7 @@ extern crate std;
 
 mod biome;
 pub mod camera;
+pub mod flow;
 pub mod hotbar;
 mod lighting;
 #[cfg(not(feature = "std"))]

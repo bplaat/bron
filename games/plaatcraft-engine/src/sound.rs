@@ -64,7 +64,7 @@ impl Effect {
 
     /// How a material sounds when it is broken, placed and walked on
     pub fn surface(material: u8) -> Self {
-        if matches!(material, world::WATER | world::LAVA) {
+        if world::fluid(material).is_some() {
             return Self::Splash;
         }
         let name = world::MATERIALS

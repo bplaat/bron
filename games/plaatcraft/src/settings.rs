@@ -10,10 +10,14 @@ use std::io;
 
 use preferences::{Preferences, Value};
 
+use crate::server::Identity;
+
 const DISTANCE: &str = "render_distance";
 const SHOW_STATS: &str = "show_stats";
 const VOLUME: &str = "volume";
 const AUTO_JUMP: &str = "auto_jump";
+// The chosen username, or the random one of a computer without a system account.
+const USERNAME: &str = "username";
 
 /// The sound volume in percent
 pub(crate) const MAX_VOLUME: u8 = 100;
@@ -45,7 +49,7 @@ pub(crate) fn distance_fraction(distance: u8) -> f32 {
     .powf(1.0 / distance_exponent())
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct Settings {
     pub(crate) distance: u8,
     pub(crate) show_stats: bool,
@@ -57,6 +61,24 @@ pub(crate) struct Settings {
 pub(crate) struct Store {
     prefs: Preferences,
     saved: Settings,
+    identity: Identity,
+}
+
+// The name of the system account, when other players can see it as it is.
+fn system_name() -> Option<String> {
+    ["USER", "USERNAME", "LOGNAME"]
+        .into_iter()
+        .filter_map(|key| std::env::var(key).ok())
+        .find(|name| crate::protocol::validate_name(name) == Ok(name.as_str()))
+}
+
+// Phones have no system account, so they get a random name to tell them apart.
+fn random_name() -> String {
+    let number = std::hash::BuildHasher::hash_one(
+        &std::hash::RandomState::new(),
+        std::time::SystemTime::now(),
+    ) % 1000;
+    format!("Player{number:03}")
 }
 
 impl Store {
@@ -87,11 +109,39 @@ impl Store {
                 _ => defaults.auto_jump,
             },
         };
-        Ok(Self { prefs, saved })
+        let name = match (prefs.get(USERNAME)?, system_name()) {
+            (Some(Value::String(name)), _) if crate::protocol::validate_name(&name).is_ok() => name,
+            (_, Some(name)) => name,
+            (_, None) => {
+                let name = random_name();
+                prefs.set(USERNAME, name.as_str())?;
+                name
+            }
+        };
+        Ok(Self {
+            prefs,
+            saved,
+            identity: Identity { name },
+        })
     }
 
     pub(crate) const fn settings(&self) -> Settings {
         self.saved
+    }
+
+    /// The player name other players see.
+    pub(crate) const fn identity(&self) -> &Identity {
+        &self.identity
+    }
+
+    /// Changes the username, which other players see from the next time they join.
+    pub(crate) fn set_name(&mut self, name: &str) -> Result<(), String> {
+        let name = crate::protocol::validate_name(name)?;
+        self.prefs
+            .set(USERNAME, name)
+            .map_err(|error| error.to_string())?;
+        name.clone_into(&mut self.identity.name);
+        Ok(())
     }
 
     pub(crate) fn save(&mut self, settings: Settings) -> io::Result<()> {

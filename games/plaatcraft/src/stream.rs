@@ -4,17 +4,21 @@
  * SPDX-License-Identifier: MIT
  */
 
-use std::ops::Range;
+//! Requests the terrain around the player from the server, or generates it for the title
+//! screen background, and meshes it for the GPU.
 
-use plaatcraft_engine::world::{self, ChunkData, Coord};
-
-pub(crate) type SectionRanges = [[Range<u32>; 2]; world::SECTION_COUNT];
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::ops::Range;
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
+
+use plaatcraft_engine::world::{self, ChunkData, Coord};
+
+use crate::server::{Connection, Request};
+
+pub(crate) type SectionRanges = [[Range<u32>; 2]; world::SECTION_COUNT];
 
 pub(crate) const RESIDENT_CAPACITY: usize = resident_capacity(crate::settings::MAX_DISTANCE as i64);
 const _: () = assert!(RESIDENT_CAPACITY <= 1 << 16);
@@ -45,11 +49,25 @@ const JOBS_PER_WORKER: usize = 32;
 const CACHE_CHUNKS: usize = 512;
 const CACHE_BYTES: usize = 128 * 1024 * 1024;
 
+/// Where a stream gets its terrain.
+#[derive(Clone, Copy)]
+pub(crate) enum Source<'a> {
+    Server(&'a Connection),
+    /// Generates an unsaved world from a seed, for the title screen background.
+    Generate(u64),
+}
+
+enum Terrain {
+    Loaded(Box<ChunkData>),
+    Generate(u64),
+}
+
 struct Job {
     coord: Coord,
-    epoch: u64,
+    revision: u64,
+    terrain: Terrain,
 }
-type ChunkResult = (Coord, u64, Option<Arc<CachedChunk>>);
+type Meshed = (Coord, u64, Arc<CachedChunk>);
 
 pub(crate) struct CachedChunk {
     // Terrain is persisted on disk; only reusable meshes remain in RAM.
@@ -64,10 +82,12 @@ pub(crate) struct Stream {
     pub(crate) loading: Vec<Coord>,
     last_priority: Instant,
     pub(crate) center: Coord,
+    // Chunks requested from the server or being meshed.
     pending: HashSet<Coord>,
+    // Whether the terrain requests the server still has queued are stale.
+    cancel: bool,
     jobs: Sender<Job>,
-    results: Receiver<ChunkResult>,
-    epoch: Arc<AtomicU64>,
+    results: Receiver<Meshed>,
     pub(crate) worker_count: usize,
     uploaded: HashSet<Coord>,
     cache_order: VecDeque<Coord>,
@@ -113,7 +133,7 @@ fn load_order(coords: &[Coord], center: Coord, visible: impl Fn(Coord) -> bool) 
 
 // Terrain work yields to the main thread, which renders and handles input, so loading
 // chunks does not drop frames.
-fn lower_thread_priority() {
+pub(crate) fn lower_thread_priority() {
     cfg_select! {
         any(target_os = "linux", target_os = "android") => {
             unsafe extern "C" {
@@ -144,90 +164,64 @@ fn lower_thread_priority() {
     }
 }
 
+fn mesh(terrain: &ChunkData) -> CachedChunk {
+    let mesh = terrain.mesh();
+    let mut sections: SectionRanges = std::array::from_fn(|_| [0..0, 0..0]);
+    for (index, quad) in mesh
+        .as_chunks::<{ world::QUAD_BYTES }>()
+        .0
+        .iter()
+        .enumerate()
+    {
+        let packed = u32::from_ne_bytes(quad[..4].try_into().expect("Packed quad word"));
+        let section = ((packed >> 27) & 15) as usize;
+        let translucent = usize::from(world::is_translucent(world::quad_material(packed)));
+        let range = &mut sections[section][translucent];
+        if range.start == range.end {
+            range.start = index as u32;
+        }
+        range.end = index as u32 + 1;
+    }
+    CachedChunk { mesh, sections }
+}
+
 impl Stream {
-    pub(crate) fn open(path: &str) -> Self {
+    /// Streams a world whose edits are at a revision.
+    pub(crate) fn new(revision: u64) -> Self {
         // Leave one core for the main thread, which renders and runs the physics.
         let available = thread::available_parallelism().map_or(1, usize::from);
-        Self::start(available.saturating_sub(1).max(1), Some(path.to_owned()))
+        Self::with_workers(available.saturating_sub(1).max(1), revision)
     }
 
-    #[cfg(test)]
-    pub(crate) fn with_workers(worker_count: usize) -> Self {
-        Self::start(worker_count, None)
-    }
-
-    fn start(worker_count: usize, path: Option<String>) -> Self {
+    fn with_workers(worker_count: usize, revision: u64) -> Self {
         assert!(worker_count > 0);
-        let revision = path.as_ref().map_or(0, |path| {
-            crate::database::Database::open(path)
-                .expect("Open world database")
-                .revision()
-                .expect("Read edit revision")
-        });
-        let (jobs, requests) = mpsc::channel::<Job>();
-        let requests = Arc::new(Mutex::new(requests));
-        let epoch = Arc::new(AtomicU64::new(0));
-        let (finished, results) = mpsc::sync_channel(worker_count * JOBS_PER_WORKER);
-        let mut workers = Vec::new();
-        for index in 0..worker_count {
-            let path = path.clone();
-            let requests = requests.clone();
-            let finished = finished.clone();
-            let epoch = epoch.clone();
-            workers.push(
+        let (jobs, queue) = mpsc::channel::<Job>();
+        let queue = Arc::new(Mutex::new(queue));
+        let (finished, results) = mpsc::channel();
+        let workers = (0..worker_count)
+            .map(|index| {
+                let (queue, finished) = (queue.clone(), finished.clone());
                 thread::Builder::new()
-                    .name(format!("terrain-{index}"))
+                    .name(format!("mesh-{index}"))
                     .spawn(move || {
                         lower_thread_priority();
-                        let database = path.map(|path| {
-                            crate::database::Database::open(&path).expect("Open worker database")
-                        });
                         loop {
-                            // Release the receiver lock before doing expensive work.
-                            let job = { requests.lock().expect("Terrain queue poisoned").recv() };
+                            // Release the queue lock before doing expensive work.
+                            let job = { queue.lock().expect("Mesh queue poisoned").recv() };
                             let Ok(job) = job else { break };
-                            let mut generated_revision = 0;
-                            let chunk = if job.epoch == epoch.load(Ordering::Relaxed) {
-                                let terrain = if let Some(db) = &database {
-                                    let (terrain, revision) =
-                                        db.terrain(job.coord).expect("Load or generate chunk");
-                                    generated_revision = revision;
-                                    terrain
-                                } else {
-                                    ChunkData::generate(job.coord)
-                                };
-                                let mesh = terrain.mesh();
-                                let mut sections: SectionRanges =
-                                    std::array::from_fn(|_| [0..0, 0..0]);
-                                for (index, quad) in mesh.as_chunks::<8>().0.iter().enumerate() {
-                                    let packed = u32::from_ne_bytes(
-                                        quad[..4].try_into().expect("Packed quad word"),
-                                    );
-                                    let section = ((packed >> 27) & 15) as usize;
-                                    let translucent = usize::from(world::is_translucent(
-                                        world::quad_material(packed),
-                                    ));
-                                    let range = &mut sections[section][translucent];
-                                    if range.start == range.end {
-                                        range.start = index as u32;
-                                    }
-                                    range.end = index as u32 + 1;
-                                }
-                                Some(Arc::new(CachedChunk { mesh, sections }))
-                            } else {
-                                None
+                            let terrain = match job.terrain {
+                                Terrain::Loaded(terrain) => *terrain,
+                                Terrain::Generate(seed) => ChunkData::generate(seed, job.coord),
                             };
-                            if finished
-                                .send((job.coord, generated_revision, chunk))
-                                .is_err()
-                            {
+                            let chunk = Arc::new(mesh(&terrain));
+                            if finished.send((job.coord, job.revision, chunk)).is_err() {
                                 break;
                             }
                         }
                     })
-                    .expect("Start terrain worker"),
-            );
-        }
+                    .expect("Start mesh worker")
+            })
+            .collect();
         // Workers exit when Stream drops: job/result channel disconnection unblocks them.
         Self {
             cache: HashMap::new(),
@@ -236,9 +230,9 @@ impl Stream {
             last_priority: Instant::now(),
             center: (0, 0),
             pending: HashSet::new(),
+            cancel: false,
             jobs,
             results,
-            epoch,
             worker_count,
             uploaded: HashSet::new(),
             cache_order: VecDeque::new(),
@@ -252,7 +246,7 @@ impl Stream {
 
     pub(crate) fn invalidate(&mut self, center: Coord, revision: u64) -> Vec<Coord> {
         self.revision = revision;
-        self.epoch.fetch_add(1, Ordering::Relaxed);
+        self.cancel = true;
         let mut affected = Vec::new();
         for z in center.1 - 1..=center.1 + 1 {
             for x in center.0 - 1..=center.0 + 1 {
@@ -266,6 +260,23 @@ impl Stream {
             }
         }
         affected
+    }
+
+    /// Meshes terrain from the server, unless it was canceled or is from an old revision.
+    pub(crate) fn receive(&mut self, coord: Coord, revision: u64, terrain: Option<ChunkData>) {
+        match terrain {
+            Some(terrain) if revision == self.revision => self
+                .jobs
+                .send(Job {
+                    coord,
+                    revision,
+                    terrain: Terrain::Loaded(Box::new(terrain)),
+                })
+                .expect("Queue chunk meshing"),
+            _ => {
+                self.pending.remove(&coord);
+            }
+        }
     }
 
     pub(crate) fn mark_uploaded(&mut self, coord: Coord) {
@@ -300,7 +311,12 @@ impl Stream {
         }
     }
 
-    pub(crate) fn update(&mut self, center: Coord, visible: impl Fn(Coord) -> bool) {
+    pub(crate) fn update(
+        &mut self,
+        source: Source<'_>,
+        center: Coord,
+        visible: impl Fn(Coord) -> bool,
+    ) {
         let moved =
             self.desired.is_empty() || self.center != center || self.radius != self.desired_radius;
         if moved {
@@ -314,23 +330,26 @@ impl Stream {
             let loading = load_order(&self.desired, center, visible);
             if loading != self.loading {
                 // Queued stale priorities are canceled; already generated chunks stay cached.
-                self.epoch.fetch_add(1, Ordering::Relaxed);
+                self.cancel = true;
                 self.loading = loading;
             }
             self.last_priority = Instant::now();
+        }
+        if std::mem::take(&mut self.cancel)
+            && let Source::Server(server) = source
+        {
+            server.send(Request::CancelTerrain);
         }
         loop {
             match self.results.try_recv() {
                 Ok((coord, revision, chunk)) => {
                     self.pending.remove(&coord);
-                    if let Some(chunk) = chunk
-                        && revision == self.revision
-                    {
+                    if revision == self.revision {
                         self.cache_chunk(coord, chunk);
                     }
                 }
                 Err(TryRecvError::Empty) => break,
-                Err(TryRecvError::Disconnected) => panic!("Terrain worker stopped unexpectedly"),
+                Err(TryRecvError::Disconnected) => panic!("Mesh worker stopped unexpectedly"),
             }
         }
         for &coord in &self.loading {
@@ -341,12 +360,17 @@ impl Stream {
                 && !self.cache.contains_key(&coord)
                 && self.pending.insert(coord)
             {
-                self.jobs
-                    .send(Job {
-                        coord,
-                        epoch: self.epoch.load(Ordering::Relaxed),
-                    })
-                    .expect("Queue chunk generation");
+                match source {
+                    Source::Server(server) => server.send(Request::Terrain(coord)),
+                    Source::Generate(seed) => self
+                        .jobs
+                        .send(Job {
+                            coord,
+                            revision: self.revision,
+                            terrain: Terrain::Generate(seed),
+                        })
+                        .expect("Queue chunk generation"),
+                }
             }
         }
     }
@@ -354,13 +378,12 @@ impl Stream {
 
 impl Drop for Stream {
     fn drop(&mut self) {
-        self.epoch.fetch_add(1, Ordering::Relaxed);
         // Disconnect both queues before joining, including workers blocked on sending.
         self.jobs = mpsc::channel().0;
         self.results = mpsc::channel().1;
         for worker in self.workers.drain(..) {
             if worker.join().is_err() {
-                eprintln!("Terrain worker failed during shutdown");
+                eprintln!("Mesh worker failed during shutdown");
             }
         }
     }
@@ -369,31 +392,58 @@ impl Drop for Stream {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::database::Database;
+    use crate::database::tests::TestWorld;
+    use crate::server::Response;
 
-    fn wait_for_center(stream: &mut Stream, coord: Coord) {
-        let deadline = Instant::now() + Duration::from_secs(5);
+    fn connect() -> (TestWorld, Connection, Stream) {
+        let world = TestWorld::new();
+        let (server, welcome) = crate::server::tests::host(&world);
+        (world, server, Stream::with_workers(1, welcome.revision))
+    }
+
+    // Hands the terrain to the stream and returns the revision of the last saved edit.
+    fn pump(stream: &mut Stream, server: &mut Connection) -> Option<u64> {
+        let mut edited = None;
+        while let Some(response) = server.receive() {
+            match response {
+                Response::Terrain {
+                    coord,
+                    revision,
+                    chunk,
+                } => stream.receive(coord, revision, chunk),
+                Response::Edited { revision, .. } => edited = revision,
+                _ => {}
+            }
+        }
+        edited
+    }
+
+    fn wait_for_center(stream: &mut Stream, server: &mut Connection, coord: Coord) {
+        let deadline = Instant::now() + Duration::from_secs(10);
         while !stream.cache.contains_key(&coord) {
-            stream.update(coord, |_| true);
-            assert!(Instant::now() < deadline, "Terrain worker timed out");
+            pump(stream, server);
+            stream.update(Source::Server(server), coord, |_| true);
+            assert!(Instant::now() < deadline, "Terrain timed out");
             thread::sleep(Duration::from_millis(1));
         }
     }
 
     #[test]
     fn changing_distance_rebuilds_residency_without_moving() {
-        let mut stream = Stream::with_workers(1);
+        let (_world, server, mut stream) = connect();
         let center = (-40, 73);
         stream.radius = 4;
-        stream.update(center, |_| true);
+        stream.update(Source::Server(&server), center, |_| true);
         assert_eq!(stream.desired.len(), resident_capacity(4));
         stream.radius = i64::from(crate::settings::MAX_DISTANCE);
-        stream.update(center, |_| true);
+        stream.update(Source::Server(&server), center, |_| true);
         assert_eq!(stream.desired.len(), RESIDENT_CAPACITY);
         let distant = (center.0 + stream.radius, center.1);
         assert!(stream.desired.contains(&distant));
         stream.mark_uploaded(distant);
         stream.radius = 4;
-        stream.update(center, |_| true);
+        stream.update(Source::Server(&server), center, |_| true);
         assert!(!stream.uploaded.contains(&distant));
         assert!(!stream.loading.contains(&distant));
         assert_eq!(stream.desired.len(), resident_capacity(4));
@@ -401,28 +451,57 @@ mod tests {
 
     #[test]
     fn edited_chunks_replace_the_old_cached_mesh() {
-        let world = crate::database::tests::TestWorld::new();
-        let db = crate::database::Database::open(&world.path).unwrap();
-        let mut stream = Stream::start(1, Some(world.path.clone()));
-        wait_for_center(&mut stream, (0, 0));
+        let (_world, mut server, mut stream) = connect();
+        stream.radius = 4;
+        wait_for_center(&mut stream, &mut server, (0, 0));
         let original = stream.cache[&(0, 0)].clone();
         stream.mark_uploaded((0, 0));
-        let revision = db
-            .edit(world::Edit {
-                position: [0, 120, 0],
-                material: 3,
-            })
-            .unwrap();
+        server.send(Request::Edit(world::Edit {
+            position: [0, 120, 0],
+            material: 3,
+        }));
+        let revision = loop {
+            if let Some(revision) = pump(&mut stream, &mut server) {
+                break revision;
+            }
+            thread::sleep(Duration::from_millis(1));
+        };
         stream.invalidate((0, 0), revision);
         assert!(!stream.uploaded.contains(&(0, 0)));
-        wait_for_center(&mut stream, (0, 0));
+        wait_for_center(&mut stream, &mut server, (0, 0));
         assert_ne!(stream.cache[&(0, 0)].mesh, original.mesh);
-        assert_eq!(db.terrain((0, 0)).unwrap().0.voxel([0, 120, 0]), 3);
+    }
+
+    #[test]
+    fn generated_streams_need_no_server() {
+        let mut stream = Stream::with_workers(1, 0);
+        stream.radius = 2;
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while stream.cache.len() < resident_capacity(2) {
+            stream.update(Source::Generate(world::WORLD_SEED), (0, 0), |_| true);
+            assert!(Instant::now() < deadline, "Terrain timed out");
+            thread::sleep(Duration::from_millis(1));
+        }
+        assert_eq!(
+            stream.cache[&(0, 0)].mesh,
+            ChunkData::generate(world::WORLD_SEED, (0, 0)).mesh()
+        );
+    }
+
+    #[test]
+    fn terrain_of_old_revisions_is_not_meshed() {
+        let mut stream = Stream::with_workers(1, 3);
+        stream.pending.insert((0, 0));
+        stream.receive((0, 0), 2, Some(ChunkData::from_heights([60; 18 * 18])));
+        assert!(stream.pending.is_empty());
+        stream.pending.insert((0, 0));
+        stream.receive((0, 0), 3, None);
+        assert!(stream.pending.is_empty());
     }
 
     #[test]
     fn cache_caps_evict_uploaded_meshes_without_requesting_them_again() {
-        let mut stream = Stream::with_workers(1);
+        let (_world, server, mut stream) = connect();
         let chunk = Arc::new(CachedChunk {
             mesh: vec![0; 64],
             sections: std::array::from_fn(|_| [0..0, 0..0]),
@@ -446,27 +525,30 @@ mod tests {
                 .map(|c| c.mesh.capacity())
                 .sum::<usize>()
         );
-        stream.update((100, 0), |_| true);
+        stream.update(Source::Server(&server), (100, 0), |_| true);
         assert!(!stream.pending.contains(&(100, 0)));
     }
 
     #[test]
     fn evicted_chunks_reload_from_sqlite() {
-        let world = crate::database::tests::TestWorld::new();
-        let db = crate::database::Database::open(&world.path).unwrap();
+        let world = TestWorld::new();
         // Store a distinctive flat chunk to prove loading bypasses world generation.
         let terrain = ChunkData::from_heights([60; (world::CHUNK_SIZE + 2).pow(2)]);
         let mesh = terrain.mesh();
-        db.save_chunk((0, 0), &terrain.encode()).unwrap();
-        let mut stream = Stream::start(1, Some(world.path.clone()));
+        Database::open(&world.path)
+            .unwrap()
+            .save_chunk((0, 0), &terrain.encode())
+            .unwrap();
+        let (mut server, welcome) = crate::server::tests::host(&world);
+        let mut stream = Stream::with_workers(1, welcome.revision);
         // Limit residency so unrelated generation cannot queue ahead of the reload.
         stream.desired = vec![(0, 0)];
         stream.loading = stream.desired.clone();
-        wait_for_center(&mut stream, (0, 0));
+        wait_for_center(&mut stream, &mut server, (0, 0));
         assert_eq!(stream.cache[&(0, 0)].mesh, mesh);
         stream.trim_cache(0, 0);
         assert!(stream.cache.is_empty());
-        wait_for_center(&mut stream, (0, 0));
+        wait_for_center(&mut stream, &mut server, (0, 0));
         assert_eq!(stream.cache[&(0, 0)].mesh, mesh);
     }
 
@@ -502,34 +584,34 @@ mod tests {
 
     #[test]
     fn turning_reprioritizes_without_unloading_or_reordering_draws() {
-        let mut stream = Stream::with_workers(1);
-        stream.update((0, 0), |(_, z)| z < 0);
+        let (_world, server, mut stream) = connect();
+        stream.update(Source::Server(&server), (0, 0), |(_, z)| z < 0);
         let draws = stream.desired.clone();
-        let epoch = stream.epoch.load(Ordering::Relaxed);
         stream.last_priority = Instant::now() - PRIORITY_INTERVAL;
-        stream.update((0, 0), |(_, z)| z > 0);
+        stream.update(Source::Server(&server), (0, 0), |(_, z)| z > 0);
         let index = |coord| stream.loading.iter().position(|&c| c == coord).unwrap();
         assert!(index((0, 12)) < index((0, -3)));
-        assert!(stream.epoch.load(Ordering::Relaxed) > epoch);
+        assert!(!stream.cancel);
         assert_eq!(stream.desired, draws);
         assert!(stream.pending.len() <= stream.worker_count * JOBS_PER_WORKER);
     }
 
     #[test]
     fn rapid_moves_cancel_stale_work_without_losing_the_new_center() {
-        let mut stream = Stream::with_workers(2);
+        let (_world, mut server, mut stream) = connect();
         for step in 0..20 {
-            stream.update((step * 100, -step * 100), |_| true);
-            assert!(stream.pending.len() <= 2 * JOBS_PER_WORKER);
+            stream.update(Source::Server(&server), (step * 100, -step * 100), |_| true);
+            assert!(stream.pending.len() <= JOBS_PER_WORKER);
         }
-        wait_for_center(&mut stream, (-1000, 1000));
+        wait_for_center(&mut stream, &mut server, (-1000, 1000));
         assert_eq!(stream.center, (-1000, 1000));
     }
 
     #[test]
     fn streaming_reuses_visited_chunks_and_bounds_pending_work() {
-        let mut stream = Stream::with_workers(2);
-        wait_for_center(&mut stream, (0, 0));
+        let (_world, mut server, mut stream) = connect();
+        stream.radius = 8;
+        wait_for_center(&mut stream, &mut server, (0, 0));
         let original = stream.cache[&(0, 0)].clone();
         let mut covered = 0;
         for (section, ranges) in original.sections.iter().enumerate() {
@@ -547,9 +629,9 @@ mod tests {
             }
         }
         assert_eq!(covered * world::QUAD_BYTES, original.mesh.len());
-        wait_for_center(&mut stream, (-32, 12));
+        wait_for_center(&mut stream, &mut server, (-32, 12));
         assert!(stream.pending.len() <= stream.worker_count * JOBS_PER_WORKER);
-        stream.update((0, 0), |_| true);
+        stream.update(Source::Server(&server), (0, 0), |_| true);
         assert!(Arc::ptr_eq(&original, &stream.cache[&(0, 0)]));
         assert!(stream.cache.contains_key(&(-32, 12)));
         assert_eq!(stream.desired.len(), resident_capacity(stream.radius));

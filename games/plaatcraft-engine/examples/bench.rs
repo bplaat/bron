@@ -16,7 +16,6 @@ const GRIDS: [(i64, i64); 2] = [(-2, -2), (-66, -2)];
 const GRID_SIZE: i64 = 4;
 
 fn main() {
-    world::set_seed(world::WORLD_SEED);
     let mut totals = [Duration::ZERO; 4];
     let mut chunks = 0;
     let mut quads = 0;
@@ -24,7 +23,7 @@ fn main() {
         for dz in 0..GRID_SIZE {
             for dx in 0..GRID_SIZE {
                 let start = Instant::now();
-                let chunk = ChunkData::generate((x + dx, z + dz));
+                let chunk = ChunkData::generate(world::WORLD_SEED, (x + dx, z + dz));
                 let generated = Instant::now();
                 let packed = chunk.mesh();
                 let meshed = Instant::now();

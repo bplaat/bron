@@ -20,7 +20,6 @@ use plaatcraft_engine::camera::Camera;
 use plaatcraft_engine::hotbar::{Hotbar, name};
 use plaatcraft_engine::raycast::{Hit, raycast};
 use plaatcraft_engine::sound::{Movement, ground};
-use plaatcraft_engine::world::{self, LAVA, WATER};
 
 use crate::hud::{BUTTON_HEIGHT, BUTTON_WIDTH, Hud};
 use crate::input::{Button, Controller};
@@ -119,7 +118,6 @@ impl Game {
             SYS_SetPowerCallback(Some(power));
         }
         let renderer = Renderer::new(&display);
-        world::set_seed(world::WORLD_SEED);
         Some(Self {
             display,
             renderer,
@@ -255,21 +253,8 @@ impl Game {
         let before = Movement::of(&self.camera);
         self.camera.input = controller.input();
 
-        // The feet or waist in water or lava make the player swim
-        let [x, y, z] = self.camera.position;
-        self.camera.in_liquid = [0.2, 0.9].into_iter().any(|offset| {
-            let position = [
-                floor(x) as i64,
-                floor(y - 1.7 + offset) as i64,
-                floor(z) as i64,
-            ];
-            matches!(self.stream.block(position), Some(WATER | LAVA))
-        });
         let stream = &mut self.stream;
-        self.camera.update(dt, |position| {
-            position[1] < 0
-                || !matches!(stream.block(position), Some(material) if world::is_passable(material))
-        });
+        self.camera.tick(dt, |position| stream.block(position));
         let ground = self.stream.block(ground(&self.camera));
         self.sounds.movement(before, &self.camera, ground);
 

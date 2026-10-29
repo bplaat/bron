@@ -73,6 +73,8 @@ fn main() -> bwebgpu_shader_build::Result<()> {
         .shader("crosshair.wgsl", "src/shaders/crosshair.wgsl")
         .shader("selection.wgsl", "src/shaders/selection.wgsl")
         .shader("preview.wgsl", "src/shaders/preview.wgsl")
+        .shader("player.wgsl", "src/shaders/player.wgsl")
+        .shader("held.wgsl", "src/shaders/held.wgsl")
         .shader("hud.wgsl", "src/shaders/hud.wgsl")
         .compile()
 }

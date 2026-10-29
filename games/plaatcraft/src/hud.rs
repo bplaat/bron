@@ -354,3 +354,218 @@ impl Painter<'_> {
         });
     }
 }
+
+const CHAT_TIME: Duration = Duration::from_secs(10);
+const CHAT_HISTORY: usize = 50;
+const CHAT_RECENT: usize = 5;
+const CHAT_OPEN: usize = 10;
+const CHAT_WIDTH: f32 = 440.0;
+const CHAT_LINE: f32 = 20.0;
+// The chat stays above the hotbar.
+const CHAT_BOTTOM: f32 = 84.0;
+
+struct ChatLine {
+    // Who said it, world messages have no name.
+    name: Option<String>,
+    text: String,
+    received: Instant,
+}
+
+// The chat in the bottom left: recent messages, and all of them with an input bar while
+// typing.
+#[derive(Default)]
+pub(crate) struct Chat {
+    lines: std::collections::VecDeque<ChatLine>,
+    input: Option<String>,
+    cached: Option<Cached>,
+}
+
+impl Chat {
+    pub(crate) fn push(&mut self, name: Option<String>, text: String) {
+        if self.lines.len() == CHAT_HISTORY {
+            self.lines.pop_front();
+        }
+        self.lines.push_back(ChatLine {
+            name,
+            text,
+            received: Instant::now(),
+        });
+    }
+
+    pub(crate) fn clear(&mut self) {
+        self.lines.clear();
+        self.input = None;
+    }
+
+    pub(crate) const fn typing(&self) -> bool {
+        self.input.is_some()
+    }
+
+    pub(crate) fn open(&mut self, text: &str) {
+        self.input = Some(text.to_owned());
+    }
+
+    pub(crate) fn close(&mut self) {
+        self.input = None;
+    }
+
+    pub(crate) fn text(&self) -> &str {
+        self.input.as_deref().unwrap_or_default()
+    }
+
+    pub(crate) fn backspace(&mut self) {
+        if let Some(input) = &mut self.input {
+            input.pop();
+        }
+    }
+
+    pub(crate) fn type_text(&mut self, text: &str, length: usize) {
+        if let Some(input) = &mut self.input {
+            for c in text.chars().filter(|c| !c.is_control()) {
+                if input.chars().count() < length {
+                    input.push(c);
+                }
+            }
+        }
+    }
+
+    pub(crate) fn prepare(&mut self, painter: &Painter<'_>) {
+        let typing = self.typing();
+        let shown: Vec<_> = if typing {
+            self.lines.iter().rev().take(CHAT_OPEN).rev().collect()
+        } else {
+            let recent: Vec<_> = self
+                .lines
+                .iter()
+                .filter(|line| line.received.elapsed() < CHAT_TIME)
+                .collect();
+            recent[recent.len().saturating_sub(CHAT_RECENT)..].to_vec()
+        };
+        if shown.is_empty() && !typing {
+            self.cached = None;
+            return;
+        }
+        let mut hasher = std::hash::DefaultHasher::new();
+        for line in &shown {
+            std::hash::Hash::hash(&(&line.name, &line.text), &mut hasher);
+        }
+        std::hash::Hash::hash(&self.input, &mut hasher);
+        let hash = std::hash::Hasher::finish(&hasher);
+        let rows = shown.len() + usize::from(typing);
+        let height = rows as f32 * CHAT_LINE;
+        let input = self.input.as_deref();
+        painter.paint(
+            &mut self.cached,
+            [height.to_bits(), 0, hash as u32, (hash >> 32) as u32, 0],
+            (CHAT_WIDTH, height),
+            |ctx| {
+                ctx.set_font("sans-serif", 14.0);
+                ctx.set_text_align(TextAlign::Left);
+                ctx.set_text_baseline(TextBaseline::Middle);
+                for (row, line) in shown.iter().enumerate() {
+                    let y = row as f32 * CHAT_LINE;
+                    let text = match &line.name {
+                        Some(name) => format!("<{name}> {}", line.text),
+                        None => line.text.clone(),
+                    };
+                    let width = (ctx.measure_text(&text) + 12.0).min(CHAT_WIDTH);
+                    ctx.set_fill_style(Color::rgba(0, 0, 0, 120));
+                    ctx.fill_rect(0.0, y, width, CHAT_LINE);
+                    ctx.set_fill_style(if line.name.is_some() {
+                        Color::rgb(255, 255, 255)
+                    } else {
+                        Color::rgb(255, 255, 160)
+                    });
+                    ctx.fill_text(&text, 6.0, y + CHAT_LINE / 2.0);
+                }
+                if let Some(input) = input {
+                    let y = shown.len() as f32 * CHAT_LINE;
+                    ctx.set_fill_style(Color::rgba(0, 0, 0, 170));
+                    ctx.fill_rect(0.0, y, CHAT_WIDTH, CHAT_LINE);
+                    ctx.set_fill_style(Color::rgb(255, 255, 255));
+                    ctx.fill_text(format!("> {input}_"), 6.0, y + CHAT_LINE / 2.0);
+                }
+            },
+        );
+    }
+
+    pub(crate) fn draw(
+        &self,
+        hud: &Hud,
+        pass: &mut bwebgpu::RenderPass<'_>,
+        safe_area: LogicalInsets,
+        target: (u32, u32),
+    ) {
+        if let Some(cached) = &self.cached {
+            let scale = cached.sprite.scale_factor();
+            let height = cached.sprite.canvas.height() as f32;
+            hud.draw(
+                pass,
+                &cached.sprite,
+                (
+                    (safe_area.left + MARGIN / 2.0) * scale,
+                    target.1 as f32 - (safe_area.bottom + CHAT_BOTTOM) * scale - height,
+                ),
+                target,
+            );
+        }
+    }
+}
+
+const TAG_WIDTH: f32 = 200.0;
+const TAG_HEIGHT: f32 = 24.0;
+
+// The names above the other players.
+#[derive(Default)]
+pub(crate) struct NameTags {
+    cached: std::collections::HashMap<String, Cached>,
+}
+
+impl NameTags {
+    pub(crate) fn prepare<'a>(
+        &mut self,
+        painter: &Painter<'_>,
+        names: impl Iterator<Item = &'a str>,
+    ) {
+        let names: Vec<_> = names.collect();
+        self.cached.retain(|name, _| names.contains(&name.as_str()));
+        for name in names {
+            let mut cached = self.cached.remove(name);
+            painter.paint(&mut cached, [0; 5], (TAG_WIDTH, TAG_HEIGHT), |ctx| {
+                ctx.set_font("sans-serif", 14.0);
+                ctx.set_text_align(TextAlign::Center);
+                ctx.set_text_baseline(TextBaseline::Middle);
+                let width = ctx.measure_text(name).min(TAG_WIDTH - 12.0) + 12.0;
+                ctx.set_fill_style(Color::rgba(0, 0, 0, 110));
+                ctx.fill_rect((TAG_WIDTH - width) / 2.0, 0.0, width, TAG_HEIGHT);
+                ctx.set_fill_style(Color::rgb(255, 255, 255));
+                ctx.fill_text(name, TAG_WIDTH / 2.0, TAG_HEIGHT / 2.0);
+            });
+            if let Some(cached) = cached {
+                self.cached.insert(name.to_owned(), cached);
+            }
+        }
+    }
+
+    // Draws the tags centered above physical pixel positions.
+    pub(crate) fn draw(
+        &self,
+        hud: &Hud,
+        pass: &mut bwebgpu::RenderPass<'_>,
+        tags: &[(&str, [f32; 2])],
+        target: (u32, u32),
+    ) {
+        for (name, [x, y]) in tags {
+            if let Some(cached) = self.cached.get(*name) {
+                let scale = cached.sprite.scale_factor();
+                let position = (x - TAG_WIDTH * scale / 2.0, y - TAG_HEIGHT * scale);
+                if position.0 >= 0.0
+                    && position.1 >= 0.0
+                    && position.0 + TAG_WIDTH * scale <= target.0 as f32
+                {
+                    hud.draw(pass, &cached.sprite, position, target);
+                }
+            }
+        }
+    }
+}

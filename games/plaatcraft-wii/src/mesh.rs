@@ -13,7 +13,8 @@ use core::ops::Range;
 
 use plaatcraft_engine::tiles::tile;
 use plaatcraft_engine::world::{
-    self, HEIGHT, LAVA, QUAD_BYTES, SECTION_COUNT, SECTION_SIZE, WATER, quad_material,
+    self, HEIGHT, LAVA, QUAD_BYTES, SECTION_COUNT, SECTION_SIZE, WATER, full_block_quad,
+    quad_material,
 };
 
 use crate::textures::has_alpha;
@@ -71,12 +72,15 @@ impl Quad {
 }
 
 pub fn build(packed: &[u8]) -> Mesh {
+    // Positions are whole blocks, so slabs and stairs are drawn as full blocks.
     let mut quads: Vec<Quad> = packed
         .as_chunks::<QUAD_BYTES>()
         .0
         .iter()
         .map(|bytes| {
-            let words = [0, 4].map(|i| u32::from_ne_bytes(bytes[i..i + 4].try_into().unwrap()));
+            let words = full_block_quad(
+                [0, 4, 8].map(|i| u32::from_ne_bytes(bytes[i..i + 4].try_into().unwrap())),
+            );
             let face = (words[0] >> 17) & 7;
             Quad {
                 words,
