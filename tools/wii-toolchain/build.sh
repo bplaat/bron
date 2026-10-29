@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Builds the Wii toolchain in the repository target/wii-toolchain/: fetches libogc, picolibc,
-# gamecube-tools and LLVM's compiler-rt, applies libogc/patches/ and picolibc/patches/ and builds
-# libogc.a with the AESND DSP mixer, picolibc (the C library) in sysroot/, libcompiler-rt.a,
-# elf2dol and our gxtexconv/.
+# libdvm, fatfs-mod, gamecube-tools and LLVM's compiler-rt, applies libogc/patches/,
+# picolibc/patches/ and libdvm/patches/ and builds libogc.a with the AESND DSP mixer, picolibc
+# (the C library) in sysroot/, libdvm.a for SD card files, libcompiler-rt.a, elf2dol and our
+# gxtexconv/.
 # The example Makefiles and Rust build.rs files run this before they build.
 #
 # Usage: ./build.sh [command]...
@@ -16,6 +17,12 @@ cd "$(dirname "$0")"
 libogc_url='https://github.com/devkitPro/libogc.git'
 libogc_version='v2.11.0'
 libogc_commit='7a2c05b8d78cf3a5ae2606874ef3e4a117273bf9'
+libdvm_url='https://github.com/devkitPro/libdvm.git'
+libdvm_version='v2.1.0'
+libdvm_commit='3006b93714b2cac7e052dbc44903b3ef29d2965a'
+fatfs_url='https://github.com/devkitPro/fatfs-mod.git'
+fatfs_version='v0.15.3'
+fatfs_commit='6d3e8f89202223bf70e957357dd31405b17d1f95'
 picolibc_url='https://github.com/picolibc/picolibc.git'
 picolibc_version='1.8.12'
 picolibc_commit='2ae376c6cdf4fef90ca2388ecf7a07457fa63cff'
@@ -31,6 +38,8 @@ ROOT_DIR="$(cd ../.. && pwd)"
 BUILD_DIR="$ROOT_DIR/target/wii-toolchain"
 LIBOGC_DIR="$BUILD_DIR/libogc"
 PICOLIBC_DIR="$BUILD_DIR/picolibc"
+LIBDVM_DIR="$BUILD_DIR/libdvm"
+FATFS_DIR="$BUILD_DIR/fatfs"
 SYSROOT="$BUILD_DIR/sysroot"
 TOOLS_DIR="$BUILD_DIR/gamecube-tools"
 COMPILER_RT_DIR="$BUILD_DIR/compiler-rt"
@@ -45,16 +54,16 @@ done
 # All code is optimized for size, like the Rust examples (opt-level = "s").
 WII_CFLAGS=(--target=powerpc-none-eabi -mcpu=750 -ffreestanding -nostdlibinc
     -ffunction-sections -fdata-sections -DGEKKO -DHW_RVL -D_DEFAULT_SOURCE -Os -g
-    -I"$SYSROOT/include" -I"$LIBOGC_DIR/gc" -I"$LIBOGC_DIR/gc/ogc"
-    -I"$LIBOGC_DIR/gc/ogc/machine" -I"$LIBOGC_DIR/gc/bte" -I"$LIBOGC_DIR/gc/wiiuse")
+    -I"$SYSROOT/include" -I"$LIBOGC_DIR/gc" -I"$LIBOGC_DIR/gc/ogc" -I"$LIBOGC_DIR/gc/ipv4"
+    -I"$LIBOGC_DIR/gc/netif" -I"$LIBOGC_DIR/gc/ogc/machine" -I"$LIBOGC_DIR/gc/bte" -I"$LIBOGC_DIR/gc/wiiuse")
 LIBOGC_CFLAGS=("${WII_CFLAGS[@]}" -std=gnu17 -fno-strict-aliasing -I"$LIBOGC_DIR/libogc"
     -I"$BUILD_DIR/include" -Wall -Wno-parentheses -Wno-unused)
 
-# The parts of libogc we build, DVD, memory cards, SD cards, networking and the console are left
+# The parts of libogc we build, DVD, GameCube memory cards and the console are left
 # out because the examples don't use them and most need newlib
 LIBOGC_SOURCES=(
-    # Startup, interrupts, exceptions, caches and the C library locks
-    libogc/{argv,cache,decrementer,exception,irq,lock,sbrk,system,sys_report,sys_state,timesupp}.c
+    # Startup, interrupts, exceptions, caches, the C library locks and file functions
+    libogc/{argv,cache,decrementer,exception,irq,lock,sbrk,system,sys_report,sys_state,timesupp,iosupport}.c
     libogc/{cache_asm,decrementer_handler,exception_handler,irq_handler,ogc_crt0,system_asm}.S
     # Threads
     libogc/{cond,lwp,lwp_heap,lwp_messages,lwp_mutex,lwp_objmgr,lwp_priority,lwp_queue}.c
@@ -64,7 +73,7 @@ LIBOGC_SOURCES=(
     libogc/{video,gx,gu,tpl}.c
     libogc/{video_asm,gu_psasm,gu_ps_concat44}.S
     # IOS, the Wii system software, and serial ports for the GameCube controllers
-    libogc/{conf,es,exi,ios,ipc,isfs,pad,si,stm,usb,wiilaunch}.c
+    libogc/{conf,es,exi,ios,ipc,isfs,pad,si,stm,usb,wiilaunch,network_wii,network_common,wiisd}.c
     # Audio, the DSP mixes the voices of AESND
     libogc/{audio,dsp}.c libaesnd/aesndlib.c
     # Bluetooth stack and the Wii Remote library
@@ -119,6 +128,10 @@ fetch() {
     pids+=($!)
     clone "$picolibc_url" "$picolibc_version" "$picolibc_commit" "$PICOLIBC_DIR" &
     pids+=($!)
+    clone "$libdvm_url" "$libdvm_version" "$libdvm_commit" "$LIBDVM_DIR" &
+    pids+=($!)
+    clone "$fatfs_url" "$fatfs_version" "$fatfs_commit" "$FATFS_DIR" &
+    pids+=($!)
     clone "$tools_url" "$tools_version" "$tools_commit" "$TOOLS_DIR" &
     pids+=($!)
     clone "$llvm_url" "$llvm_version" "$llvm_commit" "$COMPILER_RT_DIR" /compiler-rt/lib/builtins/ &
@@ -161,7 +174,7 @@ patch() {
 # Writes the commits on top of upstream back to <name>/patches/ for every patched repo
 export_patches() {
     local name dir
-    for name in libogc picolibc; do
+    for name in libogc picolibc libdvm; do
         dir="$BUILD_DIR/$name"
         [ -d "$dir/.git" ] || die "No patched $name, run ./build.sh first"
         rm -f "$TOOLCHAIN_DIR/$name"/patches/*.patch
@@ -204,7 +217,7 @@ CROSS
         --cross-file "$BUILD_DIR/picolibc-cross.txt" --prefix "$SYSROOT" --includedir include \
         --libdir lib --buildtype plain -Dc_args="['-ffunction-sections', '-fdata-sections', '-DHW_RVL', '-Os', '-g']" \
         -Dmultilib=false -Dpicocrt=false -Dsemihost=false -Dtests=false -Dspecsdir=none \
-        -Dthread-local-storage=false > /dev/null ||
+        -Dthread-local-storage=false -Dposix-console=true -Dfast-bufio=true -Dstdio-exit-flush=true > /dev/null ||
         die "Failed to configure picolibc"
     meson install -C "$BUILD_DIR/picolibc-build" > /dev/null || die "Failed to build picolibc"
 }
@@ -276,6 +289,13 @@ build_libraries() {
         build_archive libcompiler-rt.a "${WII_CFLAGS[@]}" -std=gnu11 -- \
             "${COMPILER_RT_SOURCES[@]/#/$COMPILER_RT_DIR/compiler-rt/lib/builtins/}"
     fi
+    if outdated "$BUILD_DIR/libdvm.a" "$LIBDVM_DIR"/{.patched,source,include} "$FATFS_DIR/source" \
+        "$BUILD_DIR/libogc.a" "$TOOLCHAIN_DIR/build.sh"; then
+        build_archive libdvm.a "${WII_CFLAGS[@]}" -std=gnu23 -D__wii__ -DLIBDVM_BUFFER_ALIGN=32 \
+            -I"$LIBDVM_DIR/include" -I"$FATFS_DIR/source" -I"$LIBDVM_DIR/source" -- \
+            "$LIBDVM_DIR"/source/{dvm_disc,dvm_cache,dvm_volume,dvm_prober,dvm_libogc,fat_wrappers,fat_driver}.c \
+            "$FATFS_DIR"/source/{ff,ffunicode}.c
+    fi
 }
 
 # elf2dol from gamecube-tools and our gxtexconv/ run on the host
@@ -296,10 +316,10 @@ build_tools() {
 }
 
 # Builds test/ with the toolchain and runs it in Dolphin without its user interface, the test
-# writes its results to /tmp/test.txt on Dolphin's NAND. Doesn't lock, make runs the build itself.
+# writes its results to Dolphin's debug UART. Doesn't lock, make runs the build itself.
 run_test() {
     local test_dir="$TOOLCHAIN_DIR/test" test_build="$BUILD_DIR/test" user="$BUILD_DIR/test/dolphin" pid
-    local results="$user/Wii/tmp/test.txt" nogui options=(--batch)
+    local results="$user/Logs/dolphin.log" sd_image="$test_build/sd.raw" nogui options=(--batch)
     # The Qt interface hangs without a GPU, so Linux uses the headless build with no video
     nogui=$(command -v dolphin-emu-nogui || echo /usr/games/dolphin-emu-nogui)
     if [ -z "${DOLPHIN:-}" ] && [ -x "$nogui" ]; then
@@ -308,25 +328,29 @@ run_test() {
     fi
     make -C "$test_dir" --no-print-directory
     msg "Running the test in Dolphin"
-    rm -f "$results"
-    # Without these a new user folder waits on dialogs
+    rm -f "$results" "$sd_image"
+    python3 "$test_dir/make-sd.py" "$sd_image"
+    # Without these a new user folder waits on dialogs, the test gets a fresh writable SD card
+    # and the debug UART goes to the log file
     mkdir -p "$user/Config"
-    printf '[Analytics]\nPermissionAsked = True\n[Interface]\nUsePanicHandlers = False\n' \
-        > "$user/Config/Dolphin.ini"
+    printf '[Analytics]\nPermissionAsked = True\n[Interface]\nUsePanicHandlers = False\n[Core]\nWiiSDCard = True\nWiiSDCardAllowWrites = True\n[General]\nWiiSDCardPath = %s\n' \
+        "$sd_image" > "$user/Config/Dolphin.ini"
+    printf '[Logs]\nOSREPORT = True\n[Options]\nVerbosity = 5\nWriteToFile = True\n' > "$user/Config/Logger.ini"
     "$TOOLCHAIN_DIR/run.sh" "$test_build/test.elf" "${options[@]}" --user="$user" \
         > "$test_build/dolphin.log" 2>&1 &
     pid=$!
     # Wait at most a minute for the test to finish
     for _ in $(seq 120); do
-        grep -qs '^DONE' "$results" && break
+        grep -qs 'DONE [0-9]* failed' "$results" && break
         kill -0 "$pid" 2> /dev/null || break
         sleep 0.5
     done
     # Dolphin ignores the first SIGTERM
     kill -KILL "$pid" 2> /dev/null || true
     wait "$pid" 2> /dev/null || true
-    cat "$results" 2> /dev/null || true
-    grep -qs '^DONE 0 failed' "$results" ||
+    # Only the UART text of the log lines
+    sed 's/^.*\[OSREPORT\]: //' "$results" 2> /dev/null | tr -d '\r' || true
+    grep -qs 'DONE 0 failed' "$results" ||
         { tail -n 20 "$test_build/dolphin.log" >&2; die "The test failed or didn't finish"; }
     msg "All tests passed"
 }
@@ -348,7 +372,7 @@ lock() {
 for command in "$@"; do
     case "$command" in
         all) lock; fetch; patch libogc "$libogc_commit"; patch picolibc "$picolibc_commit"
-            build_picolibc; build_dsp_mixer; build_libraries; build_tools ;;
+            patch libdvm "$libdvm_commit"; build_picolibc; build_dsp_mixer; build_libraries; build_tools ;;
         export-patches) export_patches ;;
         test) run_test ;;
         clean) rm -rf "$BUILD_DIR" ;;

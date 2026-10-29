@@ -1,0 +1,884 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Thu, 29 Oct 2026 14:00:00 +0100
+Subject: [PATCH] Implement picolibc's POSIX file functions with devoptab
+ devices
+
+Paths and file descriptors go to the devoptab devices that libdvm's FAT
+driver registers, and the standard streams to Dolphin's debug UART. Run
+constructors before main and finalizers at exit so buffered stdio can
+register its cleanup hooks. The linker script supplies their tables.
+---
+ gc/sys/iosupport.h  |  66 +++++
+ libogc/iosupport.c  | 705 ++++++++++++++++++++++++++++++++++++++++++++
+ libogc/sys_report.c |  31 +-
+ libogc/system.c     |  13 +
+ 4 files changed, 794 insertions(+), 21 deletions(-)
+ create mode 100644 gc/sys/iosupport.h
+ create mode 100644 libogc/iosupport.c
+
+diff --git a/gc/sys/iosupport.h b/gc/sys/iosupport.h
+new file mode 100644
+index 0000000..660cd09
+--- /dev/null
++++ b/gc/sys/iosupport.h
+@@ -0,0 +1,66 @@
++// SPDX-License-Identifier: ZPL-2.1
++// SPDX-FileCopyrightText: Copyright fincs, devkitPro
++#pragma once
++#include <sys/stat.h>
++#include <sys/statvfs.h>
++#include <sys/types.h>
++
++// The devoptab device interface of devkitPro's newlib, which libdvm's FAT driver and the debug
++// UART plug into. Paths start with "<device>:", others are relative to the current directory set
++// by chdir(). The POSIX file functions picolibc's stdio uses go to these devices.
++
++enum {
++    STD_IN,
++    STD_OUT,
++    STD_ERR,
++    STD_MAX = 16,
++};
++
++// What the devoptab functions get: they report their error in it and get the deviceData of
++// their devoptab
++struct _reent {
++    int _errno;
++    void* deviceData;
++};
++
++typedef struct {
++    void* dirStruct;
++} DIR_ITER;
++
++// The fields are in newlib's order
++typedef struct {
++    const char* name;
++    size_t structSize;
++    int (*open_r)(struct _reent* r, void* fileStruct, const char* path, int flags, int mode);
++    int (*close_r)(struct _reent* r, void* fd);
++    ssize_t (*write_r)(struct _reent* r, void* fd, const char* ptr, size_t len);
++    ssize_t (*read_r)(struct _reent* r, void* fd, char* ptr, size_t len);
++    off_t (*seek_r)(struct _reent* r, void* fd, off_t pos, int dir);
++    int (*fstat_r)(struct _reent* r, void* fd, struct stat* st);
++    int (*stat_r)(struct _reent* r, const char* file, struct stat* st);
++    int (*link_r)(struct _reent* r, const char* existing, const char* newLink);
++    int (*unlink_r)(struct _reent* r, const char* name);
++    int (*chdir_r)(struct _reent* r, const char* name);
++    int (*rename_r)(struct _reent* r, const char* oldName, const char* newName);
++    int (*mkdir_r)(struct _reent* r, const char* path, int mode);
++    size_t dirStateSize;
++    DIR_ITER* (*diropen_r)(struct _reent* r, DIR_ITER* dirState, const char* path);
++    int (*dirreset_r)(struct _reent* r, DIR_ITER* dirState);
++    int (*dirnext_r)(struct _reent* r, DIR_ITER* dirState, char* filename, struct stat* filestat);
++    int (*dirclose_r)(struct _reent* r, DIR_ITER* dirState);
++    int (*statvfs_r)(struct _reent* r, const char* path, struct statvfs* buf);
++    int (*ftruncate_r)(struct _reent* r, void* fd, off_t len);
++    int (*fsync_r)(struct _reent* r, void* fd);
++    void* deviceData;
++    int (*chmod_r)(struct _reent* r, const char* path, mode_t mode);
++    int (*fchmod_r)(struct _reent* r, void* fd, mode_t mode);
++    int (*rmdir_r)(struct _reent* r, const char* name);
++    int (*lstat_r)(struct _reent* r, const char* file, struct stat* st);
++} devoptab_t;
++
++extern const devoptab_t* devoptab_list[STD_MAX];
++
++int AddDevice(const devoptab_t* device);
++int FindDevice(const char* name);
++int RemoveDevice(const char* name);
++const devoptab_t* GetDeviceOpTab(const char* name);
+diff --git a/libogc/iosupport.c b/libogc/iosupport.c
+new file mode 100644
+index 0000000..f28ed6d
+--- /dev/null
++++ b/libogc/iosupport.c
+@@ -0,0 +1,705 @@
++// SPDX-License-Identifier: ZPL-2.1
++// SPDX-FileCopyrightText: Copyright fincs, devkitPro
++#include <dirent.h>
++#include <errno.h>
++#include <fcntl.h>
++#include <limits.h>
++#include <stdbool.h>
++#include <stdlib.h>
++#include <string.h>
++#include <sys/iosupport.h>
++#include <sys/time.h>
++#include <unistd.h>
++
++#include "processor.h"
++
++// The POSIX file functions on the devoptab devices: paths are made absolute with the current
++// directory and go to the device named before their colon, file descriptors 0 to 2 are the
++// standard streams devoptab_list[STD_IN] to devoptab_list[STD_ERR].
++
++#define MAX_FILES 32
++
++static const devoptab_t s_nullDevice = {.name = "stdnull"};
++
++// stdout and stderr write to Dolphin's debug UART
++extern const devoptab_t __stdio_device;
++#define STD_DEVICE (&__stdio_device)
++
++const devoptab_t* devoptab_list[STD_MAX] = {
++    &s_nullDevice, STD_DEVICE,    STD_DEVICE,    &s_nullDevice, &s_nullDevice, &s_nullDevice,
++    &s_nullDevice, &s_nullDevice, &s_nullDevice, &s_nullDevice, &s_nullDevice, &s_nullDevice,
++    &s_nullDevice, &s_nullDevice, &s_nullDevice, &s_nullDevice,
++};
++
++static int s_defaultDevice;
++static char s_currentDirectory[PATH_MAX];
++
++// An open file or directory, a directory's file is its DIR_ITER with the device state after it
++typedef struct Handle {
++    const devoptab_t* device;
++    void* file;
++    bool dir;
++    bool append;
++    off_t position;
++} Handle;
++
++static Handle s_handles[MAX_FILES];
++
++// The device name of a path ends with a colon, a digit may come before it
++static size_t _deviceNameLength(const char* path) {
++    const char* colon = strchr(path, ':');
++    const char* slash = strchr(path, '/');
++    return colon && (!slash || colon < slash) ? (size_t)(colon - path) : 0;
++}
++
++int FindDevice(const char* name) {
++    size_t length = _deviceNameLength(name);
++    if (!length) {
++        return s_defaultDevice;
++    }
++    for (int i = 0; i < STD_MAX; i++) {
++        size_t device_length = strlen(devoptab_list[i]->name);
++        if (!strncmp(devoptab_list[i]->name, name, device_length) &&
++            (device_length == length ||
++             (device_length + 1 == length && name[device_length] >= '0' && name[device_length] <= '9'))) {
++            return i;
++        }
++    }
++    return -1;
++}
++
++const devoptab_t* GetDeviceOpTab(const char* name) {
++    int device = FindDevice(name);
++    return device >= 0 ? devoptab_list[device] : NULL;
++}
++
++int AddDevice(const devoptab_t* device) {
++    for (int i = STD_ERR + 1; i < STD_MAX; i++) {
++        if (!strcmp(devoptab_list[i]->name, device->name) || devoptab_list[i] == &s_nullDevice) {
++            devoptab_list[i] = device;
++            return i;
++        }
++    }
++    return -1;
++}
++
++int RemoveDevice(const char* name) {
++    int device = FindDevice(name);
++    if (device <= STD_ERR) {
++        return -1;
++    }
++    devoptab_list[device] = &s_nullDevice;
++    if (s_defaultDevice == device) {
++        s_defaultDevice = 0;
++        s_currentDirectory[0] = '\0';
++    }
++    return 0;
++}
++
++// Appends a path to an absolute path, resolving the . and .. parts
++static bool _appendPath(char* buffer, size_t size, const char* path) {
++    size_t length = strlen(buffer);
++    size_t root = _deviceNameLength(buffer) + 2;
++    while (*path) {
++        size_t part = strcspn(path, "/");
++        if (part == 2 && path[0] == '.' && path[1] == '.') {
++            if (length > root) {
++                length--;
++                while (length > root && buffer[length - 1] != '/') {
++                    length--;
++                }
++            }
++        } else if (part > 0 && !(part == 1 && path[0] == '.')) {
++            if (length + part + 2 > size) {
++                return false;
++            }
++            if (buffer[length - 1] != '/') {
++                buffer[length++] = '/';
++            }
++            memcpy(buffer + length, path, part);
++            length += part;
++        }
++        path += part;
++        while (*path == '/') {
++            path++;
++        }
++    }
++    buffer[length] = '\0';
++    return true;
++}
++
++// Makes a path absolute: "<device>:/..." with the current directory, NULL when it doesn't fit
++static const char* _absolutePath(const char* path, char* buffer, size_t size) {
++    // Unix style path normalization prefixes an absolute slash to device names, like /sd:/
++    if (path[0] == '/' && _deviceNameLength(path + 1)) {
++        path++;
++    }
++    size_t length = _deviceNameLength(path);
++    if (length) {
++        // device:path, the path is always from the root of the device
++        if (length + 3 > size) {
++            return NULL;
++        }
++        memcpy(buffer, path, length);
++        memcpy(buffer + length, ":/", 3);
++        path += length + 1;
++    } else if (s_currentDirectory[0]) {
++        if (*path == '/') {
++            length = _deviceNameLength(s_currentDirectory) + 2;
++        } else {
++            length = strlen(s_currentDirectory);
++        }
++        if (length + 1 > size) {
++            return NULL;
++        }
++        memcpy(buffer, s_currentDirectory, length);
++        buffer[length] = '\0';
++    } else {
++        // No current directory yet, the default device gets the path as it is
++        return path;
++    }
++    return _appendPath(buffer, size, path) ? buffer : NULL;
++}
++
++// Finds the device of a path and makes it absolute in buffer
++static const devoptab_t* _pathDevice(const char** path, char* buffer, struct _reent* r) {
++    *path = _absolutePath(*path, buffer, PATH_MAX);
++    if (!*path) {
++        errno = ENAMETOOLONG;
++        return NULL;
++    }
++    const devoptab_t* device = GetDeviceOpTab(*path);
++    if (!device || device == &s_nullDevice) {
++        errno = ENODEV;
++        return NULL;
++    }
++    *r = (struct _reent){.deviceData = device->deviceData};
++    return device;
++}
++
++// Returns the result of a device function, setting errno when it failed
++static int _result(int value, struct _reent* r) {
++    if (value == -1) {
++        errno = r->_errno;
++    }
++    return value;
++}
++
++static int _notSupported(void) {
++    errno = ENOSYS;
++    return -1;
++}
++
++// Takes a free file descriptor for a device, threads may open files at the same time
++static int _takeFd(const devoptab_t* device, bool dir) {
++    u32 level;
++    _CPU_ISR_Disable(level);
++    for (int fd = STD_ERR + 1; fd < MAX_FILES; fd++) {
++        if (!s_handles[fd].device) {
++            s_handles[fd] = (Handle){.device = device, .dir = dir};
++            _CPU_ISR_Restore(level);
++            return fd;
++        }
++    }
++    _CPU_ISR_Restore(level);
++    errno = EMFILE;
++    return -1;
++}
++
++// Finds the handle of a file descriptor of a file or a directory, the standard streams have no
++// file struct and always use their current device
++static Handle* _handle(int fd, bool dir, struct _reent* r) {
++    if (fd >= 0 && fd <= STD_ERR && !dir) {
++        s_handles[fd].device = devoptab_list[fd];
++    }
++    if (fd < 0 || fd >= MAX_FILES || !s_handles[fd].device || s_handles[fd].dir != dir) {
++        errno = EBADF;
++        return NULL;
++    }
++    *r = (struct _reent){.deviceData = s_handles[fd].device->deviceData};
++    return &s_handles[fd];
++}
++
++int open(const char* path, int flags, ...) {
++    char buffer[PATH_MAX];
++    struct _reent r;
++    const devoptab_t* device = _pathDevice(&path, buffer, &r);
++    if (!device) {
++        return -1;
++    }
++    if (!device->open_r) {
++        return _notSupported();
++    }
++    int fd = _takeFd(device, false);
++    if (fd == -1) {
++        return -1;
++    }
++    void* file = calloc(1, device->structSize ? device->structSize : 1);
++    if (!file) {
++        errno = ENOMEM;
++    } else if (_result(device->open_r(&r, file, path, flags, 0666), &r) != -1) {
++        s_handles[fd].file = file;
++        s_handles[fd].append = (flags & O_APPEND) != 0;
++        return fd;
++    }
++    free(file);
++    s_handles[fd].device = NULL;
++    return -1;
++}
++
++int close(int fd) {
++    struct _reent r;
++    const Handle* h = _handle(fd, false, &r);
++    if (!h) {
++        return -1;
++    }
++    if (fd <= STD_ERR) {
++        return 0;
++    }
++    int value = h->device->close_r ? _result(h->device->close_r(&r, h->file), &r) : 0;
++    free(h->file);
++    s_handles[fd].device = NULL;
++    return value;
++}
++
++static ssize_t _readBuffer(const Handle* h, struct _reent* r, int fd, void* buffer, size_t size) {
++    if (!h->device->read_r) {
++        // stdin is always at its end
++        return fd <= STD_ERR ? 0 : _notSupported();
++    }
++    return _result(h->device->read_r(r, h->file, buffer, size), r);
++}
++
++ssize_t read(int fd, void* buffer, size_t size) {
++    struct _reent r;
++    Handle* h = _handle(fd, false, &r);
++    if (!h) {
++        return -1;
++    }
++    if (h->device->seek_r && h->device->fstat_r) {
++        struct stat st;
++        if (_result(h->device->fstat_r(&r, h->file, &st), &r) == -1) {
++            return -1;
++        }
++        if (h->position >= st.st_size) {
++            return 0;
++        }
++        if (h->device->seek_r(&r, h->file, h->position, SEEK_SET) != h->position) {
++            return _result(-1, &r);
++        }
++    }
++    ssize_t count = _readBuffer(h, &r, fd, buffer, size);
++    if (count > 0) {
++        h->position += count;
++    }
++    return count;
++}
++
++// Fill newly allocated space explicitly: FAT does not guarantee zero-filled clusters.
++static int _zeroRange(const Handle* h, struct _reent* r, off_t start, off_t end) {
++    const char zeros[512] = {0};
++    while (start < end) {
++        size_t part = end - start < sizeof(zeros) ? end - start : sizeof(zeros);
++        ssize_t count = h->device->write_r(r, h->file, zeros, part);
++        if (count < 0) {
++            return _result(-1, r);
++        }
++        if (count == 0) {
++            errno = ENOSPC;
++            return -1;
++        }
++        start += count;
++    }
++    return 0;
++}
++
++ssize_t write(int fd, const void* buffer, size_t size) {
++    struct _reent r;
++    Handle* h = _handle(fd, false, &r);
++    if (!h) {
++        return -1;
++    }
++    if (!h->device->write_r) {
++        return fd <= STD_ERR ? (ssize_t)size : _notSupported();
++    }
++    if (!size) {
++        return 0;
++    }
++    if (h->device->seek_r && h->device->fstat_r) {
++        struct stat st;
++        if (_result(h->device->fstat_r(&r, h->file, &st), &r) == -1) {
++            return -1;
++        }
++        if (h->append) {
++            h->position = st.st_size;
++        }
++        off_t start = h->position < st.st_size ? h->position : st.st_size;
++        if (h->device->seek_r(&r, h->file, start, SEEK_SET) != start) {
++            return _result(-1, &r);
++        }
++        if (_zeroRange(h, &r, start, h->position) == -1) {
++            return -1;
++        }
++    } else if (h->append && h->device->seek_r) {
++        if (h->device->seek_r(&r, h->file, 0, SEEK_END) == -1) {
++            return _result(-1, &r);
++        }
++    }
++    ssize_t count = _result(h->device->write_r(&r, h->file, buffer, size), &r);
++    if (count > 0) {
++        h->position += count;
++    }
++    return count;
++}
++
++off_t lseek(int fd, off_t offset, int whence) {
++    struct _reent r;
++    Handle* h = _handle(fd, false, &r);
++    if (!h) {
++        return -1;
++    }
++    if (!h->device->seek_r) {
++        errno = ESPIPE;
++        return -1;
++    }
++    if (!h->device->fstat_r) {
++        off_t position = h->device->seek_r(&r, h->file, offset, whence);
++        if (position == -1) {
++            errno = r._errno;
++        } else {
++            h->position = position;
++        }
++        return position;
++    }
++    struct stat st;
++    if (_result(h->device->fstat_r(&r, h->file, &st), &r) == -1) {
++        return -1;
++    }
++    off_t base;
++    switch (whence) {
++        case SEEK_SET:
++            base = 0;
++            break;
++        case SEEK_CUR:
++            base = h->position;
++            break;
++        case SEEK_END:
++            base = st.st_size;
++            break;
++        default:
++            errno = EINVAL;
++            return -1;
++    }
++    off_t position;
++    if (__builtin_add_overflow(base, offset, &position) || position < 0) {
++        errno = EINVAL;
++        return -1;
++    }
++    // Unlike FatFs f_lseek, POSIX lseek must never extend a file, even on a writable handle.
++    h->position = position;
++    return position;
++}
++
++int isatty(int fd) {
++    return fd >= 0 && fd <= STD_ERR;
++}
++
++int fstat(int fd, struct stat* st) {
++    struct _reent r;
++    const Handle* h = _handle(fd, false, &r);
++    if (!h) {
++        return -1;
++    }
++    if (!h->device->fstat_r) {
++        return _notSupported();
++    }
++    return _result(h->device->fstat_r(&r, h->file, st), &r);
++}
++
++int stat(const char* path, struct stat* st) {
++    char buffer[PATH_MAX];
++    struct _reent r;
++    const devoptab_t* device = _pathDevice(&path, buffer, &r);
++    if (!device) {
++        return -1;
++    }
++    if (!device->stat_r) {
++        return _notSupported();
++    }
++    return _result(device->stat_r(&r, path, st), &r);
++}
++
++int access(const char* path, int mode) {
++    if (mode & ~(R_OK | W_OK | X_OK)) {
++        errno = EINVAL;
++        return -1;
++    }
++    struct stat st;
++    if (stat(path, &st) == -1) {
++        return -1;
++    }
++    if (((mode & R_OK) && !(st.st_mode & 0444)) || ((mode & W_OK) && !(st.st_mode & 0222)) ||
++        ((mode & X_OK) && !(st.st_mode & 0111))) {
++        errno = EACCES;
++        return -1;
++    }
++    return 0;
++}
++
++int mkdir(const char* path, mode_t mode) {
++    char buffer[PATH_MAX];
++    struct _reent r;
++    const devoptab_t* device = _pathDevice(&path, buffer, &r);
++    if (!device) {
++        return -1;
++    }
++    if (!device->mkdir_r) {
++        return _notSupported();
++    }
++    return _result(device->mkdir_r(&r, path, (int)mode), &r);
++}
++
++int unlink(const char* path) {
++    char buffer[PATH_MAX];
++    struct _reent r;
++    const devoptab_t* device = _pathDevice(&path, buffer, &r);
++    if (!device) {
++        return -1;
++    }
++    if (!device->unlink_r) {
++        return _notSupported();
++    }
++    return _result(device->unlink_r(&r, path), &r);
++}
++
++int rmdir(const char* path) {
++    char buffer[PATH_MAX];
++    struct _reent r;
++    const devoptab_t* device = _pathDevice(&path, buffer, &r);
++    if (!device) {
++        return -1;
++    }
++    if (!device->rmdir_r) {
++        return _notSupported();
++    }
++    return _result(device->rmdir_r(&r, path), &r);
++}
++
++int rename(const char* old_path, const char* new_path) {
++    char old_buffer[PATH_MAX], new_buffer[PATH_MAX];
++    struct _reent r;
++    const devoptab_t* device = _pathDevice(&old_path, old_buffer, &r);
++    if (!device || !_pathDevice(&new_path, new_buffer, &r)) {
++        return -1;
++    }
++    if (GetDeviceOpTab(new_path) != device) {
++        errno = EXDEV;
++        return -1;
++    }
++    if (!device->rename_r) {
++        return _notSupported();
++    }
++    return _result(device->rename_r(&r, old_path, new_path), &r);
++}
++
++int chdir(const char* path) {
++    char buffer[PATH_MAX];
++    struct _reent r;
++    const devoptab_t* device = _pathDevice(&path, buffer, &r);
++    if (!device) {
++        return -1;
++    }
++    if (device->chdir_r && _result(device->chdir_r(&r, path), &r) == -1) {
++        return -1;
++    }
++    // Only absolute paths become the current directory
++    if (!_deviceNameLength(path)) {
++        return 0;
++    }
++    size_t length = strlen(path);
++    if (length + 2 > sizeof(s_currentDirectory)) {
++        errno = ENAMETOOLONG;
++        return -1;
++    }
++    memcpy(s_currentDirectory, path, length + 1);
++    if (s_currentDirectory[length - 1] != '/') {
++        memcpy(s_currentDirectory + length, "/", 2);
++    }
++    s_defaultDevice = FindDevice(path);
++    return 0;
++}
++
++char* getcwd(char* buffer, size_t size) {
++    size_t length = strlen(s_currentDirectory);
++    if (length + 1 > size) {
++        errno = ERANGE;
++        return NULL;
++    }
++    // Without the trailing slash, except for the root of a device
++    memcpy(buffer, s_currentDirectory, length + 1);
++    if (length > 0 && buffer[length - 1] == '/' && buffer[length - 2] != ':') {
++        buffer[length - 1] = '\0';
++    }
++    return buffer;
++}
++
++DIR* opendir(const char* path) {
++    char buffer[PATH_MAX];
++    struct _reent r;
++    const devoptab_t* device = _pathDevice(&path, buffer, &r);
++    if (!device) {
++        return NULL;
++    }
++    if (!device->diropen_r) {
++        _notSupported();
++        return NULL;
++    }
++    int fd = _takeFd(device, true);
++    if (fd == -1) {
++        return NULL;
++    }
++    DIR* dir = malloc(sizeof(DIR));
++    DIR_ITER* iter = calloc(1, sizeof(DIR_ITER) + device->dirStateSize);
++    if (!dir || !iter) {
++        errno = ENOMEM;
++    } else {
++        iter->dirStruct = iter + 1;
++        if (device->diropen_r(&r, iter, path)) {
++            s_handles[fd].file = iter;
++            dir->fd = fd;
++            return dir;
++        }
++        errno = r._errno;
++    }
++    free(dir);
++    free(iter);
++    s_handles[fd].device = NULL;
++    return NULL;
++}
++
++struct dirent* readdir(DIR* dir) {
++    struct _reent r;
++    const Handle* h = _handle(dir->fd, true, &r);
++    struct stat st;
++    if (!h || h->device->dirnext_r(&r, h->file, dir->dirent.d_name, &st) == -1) {
++        return NULL;
++    }
++    dir->dirent.d_ino = st.st_ino;
++    dir->dirent.d_type = S_ISDIR(st.st_mode) ? DT_DIR : S_ISREG(st.st_mode) ? DT_REG : DT_UNKNOWN;
++    return &dir->dirent;
++}
++
++int closedir(DIR* dir) {
++    struct _reent r;
++    const Handle* h = _handle(dir->fd, true, &r);
++    if (!h) {
++        return -1;
++    }
++    int value = h->device->dirclose_r ? _result(h->device->dirclose_r(&r, h->file), &r) : 0;
++    free(h->file);
++    s_handles[dir->fd].device = NULL;
++    free(dir);
++    return value;
++}
++
++int fsync(int fd) {
++    struct _reent r;
++    const Handle* h = _handle(fd, false, &r);
++    if (!h) {
++        return -1;
++    }
++    return h->device->fsync_r ? _result(h->device->fsync_r(&r, h->file), &r) : _notSupported();
++}
++
++int ftruncate(int fd, off_t length) {
++    struct _reent r;
++    const Handle* h = _handle(fd, false, &r);
++    if (!h) {
++        return -1;
++    }
++    if (length < 0) {
++        errno = EINVAL;
++        return -1;
++    }
++    if (!h->device->ftruncate_r) {
++        return _notSupported();
++    }
++    if (h->device->fstat_r && h->device->seek_r && h->device->write_r) {
++        struct stat st;
++        if (_result(h->device->fstat_r(&r, h->file, &st), &r) == -1) {
++            return -1;
++        }
++        if (length > st.st_size) {
++            if (h->device->seek_r(&r, h->file, st.st_size, SEEK_SET) != st.st_size) {
++                return _result(-1, &r);
++            }
++            return _zeroRange(h, &r, st.st_size, length);
++        }
++    }
++    return _result(h->device->ftruncate_r(&r, h->file, length), &r);
++}
++
++int lstat(const char* path, struct stat* st) {
++    char buffer[PATH_MAX];
++    struct _reent r;
++    const devoptab_t* device = _pathDevice(&path, buffer, &r);
++    if (!device) {
++        return -1;
++    }
++    if (device->lstat_r) {
++        return _result(device->lstat_r(&r, path, st), &r);
++    }
++    return device->stat_r ? _result(device->stat_r(&r, path, st), &r) : _notSupported();
++}
++
++int fchmod(int fd, mode_t mode) {
++    struct _reent r;
++    const Handle* h = _handle(fd, false, &r);
++    if (!h) {
++        return -1;
++    }
++    return h->device->fchmod_r ? _result(h->device->fchmod_r(&r, h->file, mode), &r) : _notSupported();
++}
++
++// Device files have no descriptor flags or POSIX byte-range locks.
++int fcntl(int fd, int command, ...) {
++    struct _reent r;
++    if (!_handle(fd, false, &r)) {
++        return -1;
++    }
++    if (command == F_GETFD || command == F_SETFD) {
++        return 0;
++    }
++    return _notSupported();
++}
++
++// These consoles run a single process without Unix user identities.
++pid_t getpid(void) {
++    return 1;
++}
++uid_t getuid(void) {
++    return 0;
++}
++uid_t geteuid(void) {
++    return 0;
++}
++
++int fchown(int fd, uid_t owner, gid_t group) {
++    struct _reent r;
++    (void)owner;
++    (void)group;
++    return _handle(fd, false, &r) ? _notSupported() : -1;
++}
++
++ssize_t readlink(const char* path, char* buffer, size_t size) {
++    (void)path;
++    (void)buffer;
++    (void)size;
++    return _notSupported();
++}
++
++int utimes(const char* path, const struct timeval times[2]) {
++    (void)path;
++    (void)times;
++    return _notSupported();
++}
+diff --git a/libogc/sys_report.c b/libogc/sys_report.c
+index 34ff489..b7125d8 100644
+--- a/libogc/sys_report.c
++++ b/libogc/sys_report.c
+@@ -28,6 +28,7 @@ distribution.
+ 
+ #include <stdio.h>
+ #include <stdarg.h>
++#include <sys/iosupport.h>
+ 
+ #include "exi.h"
+ #include "processor.h"
+@@ -54,33 +55,21 @@ static void __uart_write_line(void)
+ 	__uart_len = 0;
+ }
+ 
+-static int __uart_flush(FILE *file)
++static ssize_t __uart_write(struct _reent *r, void *file, const char *data, size_t size)
+ {
+ 	u32 level;
+-
+ 	_CPU_ISR_Disable(level);
+-	__uart_write_line();
+-	_CPU_ISR_Restore(level);
+-	return 0;
+-}
+-
+-static int __uart_put(char c, FILE *file)
+-{
+-	u32 level;
+-
+-	_CPU_ISR_Disable(level);
+-	// newline should be converted to carriage return for Dolphin handling
+-	__uart_line[__uart_len++] = c == '\n' ? '\r' : c;
+-	if(c == '\n' || __uart_len == sizeof(__uart_line))
+-		__uart_write_line();
++	for(size_t i = 0; i < size; i++) {
++		char c = data[i];
++		__uart_line[__uart_len++] = c == '\n' ? '\r' : c;
++		if(c == '\n' || __uart_len == sizeof(__uart_line))
++			__uart_write_line();
++	}
+ 	_CPU_ISR_Restore(level);
+-	return (unsigned char)c;
++	return size;
+ }
+ 
+-static FILE __uart = FDEV_SETUP_STREAM(__uart_put, NULL, __uart_flush, _FDEV_SETUP_WRITE);
+-FILE *const stdin = &__uart;
+-FILE *const stdout = &__uart;
+-FILE *const stderr = &__uart;
++const devoptab_t __stdio_device = { .name = "uart", .write_r = __uart_write };
+ 
+ // stdout and stderr always write to the UART
+ void SYS_STDIO_Report(bool use_stdout)
+diff --git a/libogc/system.c b/libogc/system.c
+index 8164bc4..eb1b594 100644
+--- a/libogc/system.c
++++ b/libogc/system.c
+@@ -1104,9 +1104,22 @@ void SYS_PreMain(void)
+ // The main thread runs this, libogc's crt0 has set up the system
+ extern int main(int argc, char **argv);
+ 
++typedef void (*init_function)(void);
++extern init_function __init_array_start[], __init_array_end[];
++extern init_function __fini_array_start[], __fini_array_end[];
++
++static void __run_fini_array(void)
++{
++	for (init_function* fn = __fini_array_end; fn != __fini_array_start; )
++		(*--fn)();
++}
++
+ void __crtmain(void)
+ {
+ 	SYS_PreMain();
++	atexit(__run_fini_array);
++	for (init_function* fn = __init_array_start; fn != __init_array_end; fn++)
++		(*fn)();
+ 	exit(main(__system_argv->argc, __system_argv->argv));
+ }
+ 

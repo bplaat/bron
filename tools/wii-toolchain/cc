@@ -1,0 +1,20 @@
+#!/bin/sh
+# The Wii C compiler and archiver for cc-rs build scripts, like the bundled SQLite of
+# libsqlite3-sys: builds the toolchain first and compiles with the Wii flags and picolibc.
+# Rust projects point TARGET_CC at it and TARGET_AR at the ar link to it.
+set -eu
+dir=$(cd "$(dirname "$0")" && pwd)
+
+# Apple's clang can't target PowerPC, so prefer Homebrew's LLVM like build.sh
+llvm=''
+for bin in /opt/homebrew/opt/llvm/bin/ /usr/local/opt/llvm/bin/; do
+    [ -d "$bin" ] && llvm="$bin" && break
+done
+if [ "$(basename "$0")" = ar ]; then
+    exec "${llvm}llvm-ar" "$@"
+fi
+
+"$dir/build.sh" >&2
+exec "${llvm}clang" --target=powerpc-none-eabi -mcpu=750 -ffreestanding -nostdlibinc \
+    -ffunction-sections -fdata-sections -DGEKKO -DHW_RVL -D_DEFAULT_SOURCE -Os \
+    -I"$dir/../../target/wii-toolchain/sysroot/include" "$@"

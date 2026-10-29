@@ -1,6 +1,10 @@
 // Tests the toolchain on the Wii: the startup code, the C library, compiler-rt, libogc and the
-// tools. The results go to /tmp/test.txt on the NAND, where `build.sh test` reads them.
+// tools. Results go to Dolphin debug UART, where `build.sh test` reads them.
 
+#include <dirent.h>
+#include <errno.h>
+#include <fat.h>
+#include <fcntl.h>
 #include <gccore.h>
 #include <malloc.h>
 #include <math.h>
@@ -11,9 +15,12 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/lock.h>
+#include <sys/stat.h>
+#include <sys/time.h>
+#include <time.h>
 #include <unistd.h>
 
-#define RESULTS_PATH "/tmp/test.txt"
+#define IO_PATH "sd:/libc-test"
 #define PI 3.14159265358979f
 
 _Alignas(32) static const uint8_t test_tpl[] = {
@@ -35,13 +42,11 @@ static void report(const char* format, ...) {
         results_length = (int)sizeof(results) - 1;
 }
 
-// Writes all results again, so a crash still leaves the results so far
+// Flush each completed group to the emulator without touching NAND.
 static void save_results(void) {
-    s32 file = ISFS_Open(RESULTS_PATH, ISFS_OPEN_WRITE);
-    if (file < 0)
-        return;
-    ISFS_Write(file, results, results_length);
-    ISFS_Close(file);
+    SYS_Report("%s", results);
+    results_length = 0;
+    results[0] = 0;
 }
 
 static uint32_t float_bits(float value) {
@@ -89,9 +94,14 @@ static void run(const char* name, void (*test)(void)) {
     save_results();
 }
 
-// Startup: crt0 cleared .bss and the loader copied .data
+// Startup: crt0 cleared .bss and the loader copied .data, then __crtmain ran the constructors
 static int data_value = 1234;
 static int bss_values[256];
+static int constructed;
+
+__attribute__((constructor)) static void construct(void) {
+    constructed = data_value + 1;
+}
 
 static void test_startup(void) {
     extern void build_argv(struct __argv * args);
@@ -118,6 +128,20 @@ static void test_startup(void) {
     for (int i = 0; i < 256; i++)
         zero &= bss_values[i] == 0;
     CHECK(zero);
+    CHECK(constructed == 1235);
+}
+
+// stdout and stderr go to Dolphin's debug UART, stdin is always at its end
+static void test_streams(void) {
+    static const char line[] = "stdout goes to the debug UART\n";
+    CHECK(fputs(line, stdout) >= 0 && fflush(stdout) == 0);
+    CHECK(fprintf(stderr, "%s", line) == (int)strlen(line));
+    CHECK(write(STDOUT_FILENO, line, strlen(line)) == (ssize_t)strlen(line));
+    char byte;
+    CHECK(read(STDIN_FILENO, &byte, 1) == 0);
+    CHECK(fgetc(stdin) == EOF);
+    CHECK(isatty(STDIN_FILENO) && isatty(STDOUT_FILENO) && isatty(STDERR_FILENO));
+    CHECK(close(STDOUT_FILENO) == 0 && write(STDOUT_FILENO, "", 0) == 0);
 }
 
 // Byte loops as the reference for the word sized memory functions
@@ -497,12 +521,242 @@ static void test_texture(void) {
     TPL_CloseTPLFile(&tpl);
 }
 
-int main(void) {
-    ISFS_Initialize();
-    ISFS_Delete(RESULTS_PATH);
-    ISFS_CreateFile(RESULTS_PATH, 0, ISFS_OPEN_RW, ISFS_OPEN_RW, ISFS_OPEN_RW);
+static void test_files(void) {
+    CHECK(fatInitDefault());
+    CHECK(wiiMountSd(1));
+    CHECK(mkdir(IO_PATH, 0777) == 0);
+    FILE* file = fopen(IO_PATH "/long filename.txt", "w+");
+    CHECK(file != NULL);
+    if (!file)
+        return;
+    CHECK(fwrite("persistent data", 1, 15, file) == 15);
+    CHECK(fflush(file) == 0);
+    CHECK(fsync(fileno(file)) == 0);
+    CHECK(fseek(file, 0, SEEK_SET) == 0);
+    char text[32] = {0};
+    CHECK(fread(text, 1, sizeof(text), file) == 15);
+    check_string(text, "persistent data", __LINE__);
+    CHECK(ftruncate(fileno(file), 10) == 0);
+    CHECK(fclose(file) == 0);
+    int hole = open(IO_PATH "/hole.bin", O_CREAT | O_RDWR, 0666);
+    CHECK(hole >= 3);
+    if (hole >= 3) {
+        struct stat size;
+        CHECK(lseek(hole, 1024, SEEK_SET) == 1024);
+        CHECK(read(hole, text, 1) == 0);
+        CHECK(fstat(hole, &size) == 0 && size.st_size == 0);
+        CHECK(write(hole, "!", 1) == 1);
+        CHECK(lseek(hole, 0, SEEK_SET) == 0);
+        char zeros[1024];
+        CHECK(read(hole, zeros, sizeof(zeros)) == sizeof(zeros));
+        bool cleared = true;
+        for (unsigned i = 0; i < sizeof(zeros); i++)
+            cleared &= zeros[i] == 0;
+        CHECK(cleared);
+        CHECK(ftruncate(hole, 2048) == 0);
+        CHECK(lseek(hole, 0, SEEK_CUR) == 1024);
+        CHECK(fstat(hole, &size) == 0 && size.st_size == 2048);
+        CHECK(lseek(hole, 1025, SEEK_SET) == 1025);
+        CHECK(read(hole, zeros, 1023) == 1023);
+        cleared = true;
+        for (unsigned i = 0; i < 1023; i++)
+            cleared &= zeros[i] == 0;
+        CHECK(cleared);
+        CHECK(ftruncate(hole, 10) == 0);
+        CHECK(lseek(hole, 0, SEEK_CUR) == 2048);
+        CHECK(close(hole) == 0);
+        CHECK(unlink(IO_PATH "/hole.bin") == 0);
+    }
+    CHECK(rename(IO_PATH "/long filename.txt", IO_PATH "/renamed.txt") == 0);
+    CHECK(wiiMountSd(1));
+    file = fopen(IO_PATH "/renamed.txt", "a");
+    CHECK(file != NULL);
+    if (!file)
+        return;
+    CHECK(fwrite("!", 1, 1, file) == 1);
+    CHECK(fclose(file) == 0);
+    struct stat st;
+    CHECK(stat(IO_PATH "/renamed.txt", &st) == 0 && st.st_size == 11);
+    DIR* dir = opendir(IO_PATH);
+    CHECK(dir != NULL);
+    if (dir) {
+        bool found = false;
+        struct dirent* entry;
+        while ((entry = readdir(dir)))
+            found |= strcmp(entry->d_name, "renamed.txt") == 0;
+        CHECK(found);
+        CHECK(closedir(dir) == 0);
+    }
+    int fd = open(IO_PATH "/renamed.txt", O_RDONLY);
+    CHECK(fd >= 3);
+    if (fd >= 3) {
+        CHECK(read(fd, text, 1) == 1 && text[0] == 'p');
+        CHECK(lseek(fd, 10, SEEK_SET) == 10);
+        CHECK(read(fd, text, 1) == 1 && text[0] == '!');
+        CHECK(close(fd) == 0);
+    }
+    CHECK(unlink(IO_PATH "/renamed.txt") == 0);
+    CHECK(access(IO_PATH "/renamed.txt", F_OK) == -1 && errno == ENOENT);
+    CHECK(rmdir(IO_PATH) == 0);
+}
 
-    run("startup", test_startup);
+static bool create(const char* path, const char* text) {
+    FILE* file = fopen(path, "w");
+    return file && fputs(text, file) >= 0 && fclose(file) == 0;
+}
+
+// Relative paths start at the current directory, . and .. are resolved before the FAT driver
+static void test_directories(void) {
+    CHECK(mkdir(IO_PATH, 0777) == 0);
+    CHECK(mkdir(IO_PATH, 0777) == -1 && errno == EEXIST);
+    CHECK(mkdir(IO_PATH "/sub", 0777) == 0);
+    CHECK(mkdir(IO_PATH "/sub/deeper", 0777) == 0);
+    struct stat st;
+    CHECK(stat(IO_PATH "/sub", &st) == 0 && S_ISDIR(st.st_mode));
+
+    char cwd[64];
+    CHECK(chdir(IO_PATH "/sub") == 0);
+    CHECK(getcwd(cwd, sizeof(cwd)) && strcmp(cwd, IO_PATH "/sub") == 0);
+    CHECK(create("relative.txt", "relative"));
+    CHECK(stat(IO_PATH "/sub/relative.txt", &st) == 0 && st.st_size == 8);
+    CHECK(chdir("deeper/..//./deeper") == 0);
+    CHECK(getcwd(cwd, sizeof(cwd)) && strcmp(cwd, IO_PATH "/sub/deeper") == 0);
+    CHECK(stat("../relative.txt", &st) == 0 && S_ISREG(st.st_mode));
+    // Absolute paths stay on the current device, also the Unix style ones with a device
+    CHECK(stat("/libc-test/sub/relative.txt", &st) == 0);
+    CHECK(stat("/sd:/libc-test/sub/relative.txt", &st) == 0);
+    CHECK(chdir("../../..") == 0);
+    CHECK(getcwd(cwd, sizeof(cwd)) && strcmp(cwd, "sd:/") == 0);
+    CHECK(getcwd(cwd, 3) == NULL && errno == ERANGE);
+
+    CHECK(create(IO_PATH "/a.txt", "a") && create(IO_PATH "/b.txt", "b"));
+    DIR* dir = opendir(IO_PATH);
+    CHECK(dir != NULL);
+    if (dir) {
+        int files = 0, directories = 0;
+        struct dirent* entry;
+        while ((entry = readdir(dir))) {
+            if (entry->d_type == DT_REG)
+                files++;
+            else if (entry->d_type == DT_DIR && strcmp(entry->d_name, "sub") == 0)
+                directories++;
+        }
+        CHECK(files == 2 && directories == 1);
+        CHECK(closedir(dir) == 0);
+    }
+    CHECK(opendir(IO_PATH "/missing") == NULL);
+
+    // Renaming moves between directories, a directory with files can't be removed
+    CHECK(rename(IO_PATH "/a.txt", IO_PATH "/sub/deeper/a.txt") == 0);
+    CHECK(access(IO_PATH "/sub/deeper/a.txt", R_OK | W_OK) == 0);
+    CHECK(rmdir(IO_PATH "/sub/deeper") == -1);
+    CHECK(unlink(IO_PATH "/sub/deeper/a.txt") == 0);
+    CHECK(rmdir(IO_PATH "/sub/deeper") == 0);
+    CHECK(unlink(IO_PATH "/sub/relative.txt") == 0 && rmdir(IO_PATH "/sub") == 0);
+    CHECK(unlink(IO_PATH "/b.txt") == 0 && rmdir(IO_PATH) == 0);
+}
+
+// Failures set errno, the descriptors are reused and limited
+static void test_descriptors(void) {
+    CHECK(open(IO_PATH "/missing.txt", O_RDONLY) == -1 && errno == ENOENT);
+    CHECK(fopen(IO_PATH "/missing.txt", "r") == NULL && errno == ENOENT);
+    CHECK(open("nodev:/file.txt", O_RDONLY) == -1 && errno == ENODEV);
+    CHECK(unlink("sd:/missing.txt") == -1 && errno == ENOENT);
+    CHECK(close(99) == -1 && errno == EBADF);
+    char byte;
+    CHECK(read(20, &byte, 1) == -1 && errno == EBADF);
+    CHECK(access("sd:/", F_OK | 0x100) == -1 && errno == EINVAL);
+
+    CHECK(create("sd:/fds.txt", "0123456789"));
+    CHECK(open("sd:/fds.txt", O_CREAT | O_EXCL | O_WRONLY, 0666) == -1 && errno == EEXIST);
+    int fds[32], count = 0;
+    while (count < 32 && (fds[count] = open("sd:/fds.txt", O_RDONLY)) >= 0)
+        count++;
+    CHECK(count == 29 && errno == EMFILE);
+    CHECK(lseek(fds[0], -1, SEEK_SET) == -1 && errno == EINVAL);
+    CHECK(lseek(fds[0], -3, SEEK_END) == 7 && read(fds[0], &byte, 1) == 1 && byte == '7');
+    CHECK(lseek(fds[0], -2, SEEK_CUR) == 6);
+    CHECK(fcntl(fds[0], F_GETFD) == 0 && fcntl(fds[0], F_SETLK) == -1 && errno == ENOSYS);
+    for (int i = 0; i < count; i++)
+        close(fds[i]);
+    int fd = open("sd:/fds.txt", O_RDONLY);
+    CHECK(fd == 3);
+    close(fd);
+
+    // Appending writes go to the end wherever the position is, truncating empties the file
+    fd = open("sd:/fds.txt", O_WRONLY | O_APPEND);
+    CHECK(fd >= 3 && lseek(fd, 0, SEEK_SET) == 0 && write(fd, "AB", 2) == 2);
+    CHECK(lseek(fd, 0, SEEK_CUR) == 12 && close(fd) == 0);
+    struct stat st;
+    CHECK(stat("sd:/fds.txt", &st) == 0 && st.st_size == 12);
+    fd = open("sd:/fds.txt", O_WRONLY | O_TRUNC);
+    CHECK(fd >= 3 && fstat(fd, &st) == 0 && st.st_size == 0 && close(fd) == 0);
+    CHECK(unlink("sd:/fds.txt") == 0);
+}
+
+// Buffered streams over many clusters, formatted reads and writes, and seeking
+static void test_stdio_files(void) {
+    FILE* file = fopen("sd:/stream.bin", "w+");
+    CHECK(file != NULL);
+    if (!file)
+        return;
+    uint32_t written = 0;
+    for (int i = 0; i < 100000; i++) {
+        int byte = (i * 31 + i / 256) & 0xff;
+        written += byte;
+        fputc(byte, file);
+    }
+    CHECK(ftell(file) == 100000);
+    rewind(file);
+    uint32_t read_back = 0;
+    int byte, size = 0;
+    while ((byte = fgetc(file)) != EOF) {
+        read_back += byte;
+        size++;
+    }
+    CHECK(size == 100000 && read_back == written && feof(file));
+    CHECK(fclose(file) == 0);
+
+    file = fopen("sd:/stream.txt", "w+");
+    CHECK(file != NULL);
+    if (!file)
+        return;
+    CHECK(fprintf(file, "%d %s %x\nsecond line\n", 42, "blocks", 255) == 25);
+    CHECK(fseek(file, 0, SEEK_SET) == 0);
+    int number = 0, hex = 0;
+    char word[16] = {0}, line[32] = {0};
+    CHECK(fscanf(file, "%d %15s %x\n", &number, word, &hex) == 3);
+    CHECK(number == 42 && hex == 255);
+    check_string(word, "blocks", __LINE__);
+    CHECK(fgets(line, sizeof(line), file) != NULL);
+    check_string(line, "second line\n", __LINE__);
+    CHECK(fgets(line, sizeof(line), file) == NULL);
+    CHECK(fseek(file, -5, SEEK_END) == 0 && fgetc(file) == 'l');
+    CHECK(ungetc('L', file) == 'L' && fgetc(file) == 'L' && fgetc(file) == 'i');
+    CHECK(fclose(file) == 0);
+    CHECK(remove("sd:/stream.bin") == 0 && remove("sd:/stream.txt") == 0);
+}
+
+// The time base starts at the RTC time, which the FAT driver also gives the files
+static void test_time(void) {
+    struct timeval before, after;
+    CHECK(gettimeofday(&before, NULL) == 0);
+    CHECK(before.tv_sec > 1704067200 && before.tv_usec >= 0 && before.tv_usec < 1000000);
+    time_t now = time(NULL);
+    CHECK(now >= before.tv_sec && now - before.tv_sec <= 1);
+    usleep(20000);
+    CHECK(gettimeofday(&after, NULL) == 0);
+    long long elapsed = (after.tv_sec - before.tv_sec) * 1000000LL + after.tv_usec - before.tv_usec;
+    CHECK(elapsed >= 20000 && elapsed < 1000000);
+
+    struct stat st;
+    CHECK(create("sd:/time.txt", "now") && stat("sd:/time.txt", &st) == 0);
+    CHECK(llabs((long long)(st.st_mtime - now)) <= 4);
+    CHECK(unlink("sd:/time.txt") == 0);
+}
+
+int main(void) {
+    run("startup and constructors", test_startup);
     run("memory and strings", test_memory);
     run("malloc", test_malloc);
     run("printf", test_printf);
@@ -510,10 +764,16 @@ int main(void) {
     run("compiler-rt", test_compiler_rt);
     run("libogc", test_libogc);
     run("gxtexconv texture", test_texture);
+    run("standard streams", test_streams);
+    run("SD files", test_files);
+    run("SD directories and paths", test_directories);
+    run("SD errors and descriptors", test_descriptors);
+    run("SD stdio streams", test_stdio_files);
+    run("time", test_time);
 
     report("DONE %d failed\n", failures);
     save_results();
-    // Returning reloads IOS, which clears /tmp, so wait until `build.sh test` stops Dolphin
+    // Wait until `build.sh test` stops Dolphin
     while (true)
         LWP_YieldThread();
 }

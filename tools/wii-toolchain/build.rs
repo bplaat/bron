@@ -21,6 +21,7 @@ pub fn build(toolchain: impl AsRef<Path>) -> PathBuf {
         "build.rs",
         "build.sh",
         "gxtexconv",
+        "libdvm",
         "libogc",
         "picolibc",
         "wii.ld",
@@ -40,6 +41,7 @@ pub fn build(toolchain: impl AsRef<Path>) -> PathBuf {
     );
     println!("cargo:rustc-link-search=native={}", build_dir.display());
     println!("cargo:rustc-link-lib=static=ogc");
+    println!("cargo:rustc-link-lib=static=dvm");
     println!("cargo:rustc-link-lib=static=c");
     build_dir
 }

@@ -1,0 +1,132 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Thu, 29 Oct 2026 14:10:00 +0100
+Subject: [PATCH] Mount only the Wii SD card and add wiiMountSd
+
+libogc is built without USB storage and the GameCube card slots.
+wiiMountSd remounts the SD card, optionally only when it is FAT32, so
+a game can check for a card again after it was replaced.
+---
+ include/dvm.h       |  4 +++
+ source/dvm_libogc.c | 81 +++++++++++++++++++++------------------------
+ 2 files changed, 42 insertions(+), 43 deletions(-)
+
+diff --git a/include/dvm.h b/include/dvm.h
+index 98393d0..af32946 100644
+--- a/include/dvm.h
++++ b/include/dvm.h
+@@ -100,6 +100,10 @@ unsigned dvmReadPartitionTable(DvmDisc* disc, DvmPartInfo* out, unsigned max_par
+ unsigned dvmProbeMountDisc(const char* basename, DvmDisc* disc);
+ unsigned dvmProbeMountDiscIface(const char* basename, const DISC_INTERFACE* iface, unsigned cache_pages, unsigned sectors_per_page);
+ 
++// Wii SD card: mounts its first FAT partition, or only a FAT32 one, as sd:/ and makes it the
++// current directory, returns non-zero on success. Call it with all files closed.
++int wiiMountSd(int fat32_only);
++
+ #ifdef __cplusplus
+ }
+ #endif
+diff --git a/source/dvm_libogc.c b/source/dvm_libogc.c
+index ad4db6c..f072d0a 100644
+--- a/source/dvm_libogc.c
++++ b/source/dvm_libogc.c
+@@ -1,57 +1,20 @@
+ // SPDX-License-Identifier: ZPL-2.1
+ // SPDX-FileCopyrightText: Copyright fincs, devkitPro
+-#include <sdcard/wiisd_io.h>
+-#include <ogc/usbstorage.h>
+-#include <sdcard/gcsd.h>
+ #include <dvm.h>
++#include <sdcard/wiisd_io.h>
++#include <string.h>
++#include <unistd.h>
++#include "fat_driver.h"
+ 
+ __attribute__((weak)) unsigned g_dvmDefaultCachePages = 4;
+ __attribute__((weak)) unsigned g_dvmDefaultSectorsPerPage = 64;
+-__attribute__((weak)) unsigned g_dvmOgcUsbMount = 1;
+ 
+ void _dvmSetAppWorkingDir(const char* argv0);
+ 
+-#if defined(__wii__)
+-unsigned _dvmDetectSectorShift(const DISC_INTERFACE* iface)
+-{
+-	if (iface == &__io_usbstorage) {
+-		return __builtin_ffs(__io_usbstorage_sector_size)-1;
+-	} else {
+-		return 9; // 512 byte sectors
+-	}
+-}
+-#endif
+-
++// Only the SD card slot is mounted, libogc is built without USB storage and GameCube cards
+ bool dvmInit(bool set_app_cwdir, unsigned cache_pages, unsigned sectors_per_page)
+ {
+-	unsigned num_mounted = 0;
+-
+-#if defined(__wii__)
+-	const DISC_INTERFACE* sd    = &__io_wiisd;
+-	const DISC_INTERFACE* usb   = &__io_usbstorage;
+-#elif defined(__gamecube__)
+-	const DISC_INTERFACE* sd    = &__io_gcsd2;
+-#else
+-#error "Neither Wii nor GameCube"
+-#endif
+-	const DISC_INTERFACE* carda = &__io_gcsda;
+-	const DISC_INTERFACE* cardb = &__io_gcsdb;
+-
+-	// Try mounting SD card
+-	num_mounted += dvmProbeMountDiscIface("sd", sd, cache_pages, sectors_per_page);
+-
+-#if defined(__wii__)
+-	// Try mounting the first found USB drive if requested
+-	if (g_dvmOgcUsbMount) {
+-		num_mounted += dvmProbeMountDiscIface("usb", usb, cache_pages, sectors_per_page);
+-	}
+-#endif
+-
+-	// Try mounting Card A
+-	num_mounted += dvmProbeMountDiscIface("carda", carda, cache_pages, sectors_per_page);
+-
+-	// Try mounting Card B
+-	num_mounted += dvmProbeMountDiscIface("cardb", cardb, cache_pages, sectors_per_page);
++	unsigned num_mounted = dvmProbeMountDiscIface("sd", &__io_wiisd, cache_pages, sectors_per_page);
+ 
+ 	// Set current working directory if needed
+ 	if (set_app_cwdir && num_mounted != 0 && __system_argv->argvMagic == ARGV_MAGIC && __system_argv->argc >= 1) {
+@@ -60,3 +23,35 @@ bool dvmInit(bool set_app_cwdir, unsigned cache_pages, unsigned sectors_per_page
+ 
+ 	return num_mounted != 0;
+ }
++
++// Mounts the SD card as sd:/ and makes it the current directory, probing the card again so a
++// replaced card never reuses cached sectors. Call it with all files closed.
++int wiiMountSd(int fat32_only)
++{
++	dvmUnmountVolume("sd:");
++	__io_wiisd.shutdown();
++	DvmDisc* disc = dvmDiscCreate(&__io_wiisd);
++	if (!disc)
++		return 0;
++	dvmDiscAddUser(disc);
++	DvmPartInfo parts[4];
++	unsigned count = dvmReadPartitionTable(disc, parts, 4, DVM_IDENT_FSTYPE);
++	int mounted = 0;
++	for (unsigned i = 0; i < count; i++) {
++		if (!parts[i].fstype || strcmp(parts[i].fstype, "vfat"))
++			continue;
++		if (!dvmMountVolume("sd", disc, parts[i].start_sector, "vfat"))
++			continue;
++		FatVolume* volume = GetDeviceOpTab("sd:")->deviceData;
++		if (fat32_only && volume->fs.fs_type != FS_FAT32) {
++			dvmUnmountVolume("sd:");
++			continue;
++		}
++		mounted = chdir("sd:/") == 0;
++		if (!mounted)
++			dvmUnmountVolume("sd:");
++		break;
++	}
++	dvmDiscRemoveUser(disc);
++	return mounted;
++}

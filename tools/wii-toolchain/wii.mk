@@ -21,11 +21,11 @@ LD := ld.lld
 # All code is optimized for size, like the Rust examples (opt-level = "s").
 CFLAGS := --target=powerpc-none-eabi -mcpu=750 -ffreestanding -nostdlibinc \
 	-ffunction-sections -fdata-sections -DGEKKO -DHW_RVL -D_DEFAULT_SOURCE -Os -g -std=c23 -Wall -Wextra \
-	-I$(TOOLCHAIN_BUILD)/sysroot/include -I$(LIBOGC)/gc -I$(LIBOGC)/gc/ogc -I$(LIBOGC)/gc/ogc/machine \
+	-I$(TOOLCHAIN_BUILD)/libdvm/include -I$(TOOLCHAIN_BUILD)/sysroot/include -I$(LIBOGC)/gc -I$(LIBOGC)/gc/ogc -I$(LIBOGC)/gc/ogc/machine \
 	-I$(LIBOGC)/gc/bte -I$(LIBOGC)/gc/wiiuse
 
 OBJECTS := $(patsubst src/%.c,$(BUILD)/%.o,$(wildcard src/*.c))
-LIBRARIES := $(addprefix $(TOOLCHAIN_BUILD)/,libogc.a sysroot/lib/libc.a libcompiler-rt.a)
+LIBRARIES := $(addprefix $(TOOLCHAIN_BUILD)/,libogc.a libdvm.a sysroot/lib/libc.a libcompiler-rt.a)
 
 $(BUILD)/$(NAME).dol: $(BUILD)/$(NAME).elf
 	$(ELF2DOL) $< $@
@@ -40,7 +40,7 @@ $(BUILD)/%.o: src/%.c | $(TOOLCHAIN_BUILD)/libogc.a
 # The toolchain script knows itself when it needs to rebuild, one run builds all libraries
 $(TOOLCHAIN_BUILD)/libogc.a: FORCE
 	@$(TOOLCHAIN)/build.sh
-$(TOOLCHAIN_BUILD)/sysroot/lib/libc.a $(TOOLCHAIN_BUILD)/libcompiler-rt.a: $(TOOLCHAIN_BUILD)/libogc.a ;
+$(TOOLCHAIN_BUILD)/libdvm.a $(TOOLCHAIN_BUILD)/sysroot/lib/libc.a $(TOOLCHAIN_BUILD)/libcompiler-rt.a: $(TOOLCHAIN_BUILD)/libogc.a ;
 
 run: $(BUILD)/$(NAME).elf
 	$(TOOLCHAIN)/run.sh $<

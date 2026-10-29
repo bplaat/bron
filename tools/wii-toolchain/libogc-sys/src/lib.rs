@@ -427,6 +427,80 @@ unsafe extern "C" {
     pub safe fn floor(x: f64) -> f64;
     pub safe fn floorf(x: f32) -> f32;
     pub safe fn powf(x: f32, y: f32) -> f32;
+    pub safe fn sqrtf(x: f32) -> f32;
     pub safe fn sinf(x: f32) -> f32;
     pub safe fn cosf(x: f32) -> f32;
+}
+
+// MARK: SD card (libdvm)
+unsafe extern "C" {
+    /// Mounts the SD card (only when FAT32 if asked) as `sd:/` and the current directory,
+    /// returns non-zero on success. Call it with all files closed.
+    pub fn wiiMountSd(fat32_only: c_int) -> c_int;
+}
+
+// MARK: IOS network sockets
+pub const AF_INET: u8 = 2;
+pub const SOCK_STREAM: u32 = 1;
+pub const SOCK_DGRAM: u32 = 2;
+pub const SOL_SOCKET: u32 = 0xffff;
+pub const SO_REUSEADDR: u32 = 0x0004;
+pub const SO_BROADCAST: u32 = 0x0020;
+pub const F_SETFL: u32 = 4;
+pub const IOS_O_NONBLOCK: u32 = 4;
+pub const MSG_DONTWAIT: u32 = 0x40;
+pub const EAGAIN: i32 = 11;
+#[repr(C, align(32))]
+#[derive(Clone, Copy, Default)]
+pub struct SocketAddress {
+    pub length: u8,
+    pub family: u8,
+    pub port: u16,
+    pub address: u32,
+    pub padding: [u8; 8],
+}
+unsafe extern "C" {
+    pub fn net_init_async(
+        callback: Option<extern "C" fn(i32, *mut c_void) -> i32>,
+        argument: *mut c_void,
+    ) -> i32;
+    pub fn if_configex(
+        address: *mut u32,
+        netmask: *mut u32,
+        gateway: *mut u32,
+        dhcp: bool,
+        retries: c_int,
+    ) -> i32;
+    pub fn net_socket(domain: u32, kind: u32, protocol: u32) -> i32;
+    pub fn net_bind(socket: i32, address: *mut SocketAddress, length: u32) -> i32;
+    pub fn net_listen(socket: i32, backlog: u32) -> i32;
+    pub fn net_accept(socket: i32, address: *mut SocketAddress, length: *mut u32) -> i32;
+    pub fn net_connect(socket: i32, address: *mut SocketAddress, length: u32) -> i32;
+    pub fn net_fcntl(socket: i32, command: u32, flags: u32) -> i32;
+    pub fn net_setsockopt(
+        socket: i32,
+        level: u32,
+        option: u32,
+        value: *const c_void,
+        length: u32,
+    ) -> i32;
+    pub fn net_send(socket: i32, bytes: *const c_void, length: i32, flags: u32) -> i32;
+    pub fn net_recv(socket: i32, bytes: *mut c_void, length: i32, flags: u32) -> i32;
+    pub fn net_sendto(
+        socket: i32,
+        bytes: *const c_void,
+        length: i32,
+        flags: u32,
+        address: *mut SocketAddress,
+        address_length: u32,
+    ) -> i32;
+    pub fn net_recvfrom(
+        socket: i32,
+        bytes: *mut c_void,
+        length: i32,
+        flags: u32,
+        address: *mut SocketAddress,
+        address_length: *mut u32,
+    ) -> i32;
+    pub fn net_close(socket: i32) -> i32;
 }

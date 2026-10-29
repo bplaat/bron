@@ -10,6 +10,9 @@ you:
 - Clones [picolibc](https://github.com/picolibc/picolibc) 1.8.12 and applies `picolibc/patches/`,
   then builds it with meson as the C library, its headers and `libc.a` with the math library go
   to `../../target/wii-toolchain/sysroot/`
+- Clones devkitPro's [libdvm](https://github.com/devkitPro/libdvm) v2.1.0 and applies
+  `libdvm/patches/`, then builds it with [fatfs-mod](https://github.com/devkitPro/fatfs-mod)
+  v0.15.3 to `../../target/wii-toolchain/libdvm.a`, the FAT driver for SD card files
 - Clones devkitPro's [gamecube-tools](https://github.com/devkitPro/gamecube-tools) v1.0.7 and
   builds `elf2dol` (`.elf` to `.dol`) and `gcdsptool`, which assembles libogc's AESND mixer for
   the DSP that the audio of `libogc.a` loads
@@ -47,11 +50,15 @@ separately from main Cargo workspace.
 ## Files
 
 - `wii.mk` has the make rules for the C examples, `wii.ld` is the linker script
-- `wii.json` is the Rust target; `build.rs` builds and links `../../target/wii-toolchain/libogc.a`
-  and picolibc's `../../target/wii-toolchain/sysroot/lib/libc.a`
+- `wii.json` is the Rust target; `build.rs` builds and links `../../target/wii-toolchain/libogc.a`,
+  `../../target/wii-toolchain/libdvm.a` and picolibc's `../../target/wii-toolchain/sysroot/lib/libc.a`
 - `gxtexconv/` converts images to GX textures, as a library for `build.rs` files and a CLI for
   the Makefiles
 - `libogc-sys/` has the Rust bindings for the libogc and picolibc functions the programs use
+- `cc` is the C compiler for cc-rs build scripts of Rust projects, like the bundled SQLite of
+  `libsqlite3-sys`: it builds the toolchain and compiles with the Wii flags and picolibc, `ar`
+  links to it for `llvm-ar`. Projects set `TARGET_CC` and `TARGET_AR` to them in
+  `.cargo/config.toml`
 - `run.sh` converts a program to a `.dol` and starts it in Dolphin, extra arguments go to Dolphin
 - `test/` is a Wii program that tests the toolchain, see below
 
@@ -60,10 +67,11 @@ separately from main Cargo workspace.
 `./build.sh test` builds `test/` into the repository root's `target/wii-toolchain/test/` and runs it in Dolphin without its user
 interface, on Linux headless in `dolphin-emu-nogui` without video when it is installed. It checks
 the startup code, the C library, compiler-rt, libogc's paired single math, threads and timers, the
-C library locks, and RGBA8 and RGB5A3 textures converted by `gxtexconv`. The program writes its results to
-`/tmp/test.txt` on Dolphin's NAND after every group, the script prints them and fails when a check
-failed or the program didn't finish. The program keeps running after the last group, because
-returning reloads IOS, which clears `/tmp`.
+C library locks, RGBA8 and RGB5A3 textures converted by `gxtexconv`, constructors, the standard
+streams, the clock, and files, directories, relative paths, descriptors and stdio streams on a
+fresh FAT32 SD card image that `test/make-sd.py` creates for every run. The program writes its
+results to Dolphin's debug UART after every group, which Dolphin logs to a file. The script prints
+them and fails when a check failed or the program didn't finish.
 
 From the repository root on Linux, `cargo xtask check-others` builds the assembly examples, Empires, and the Nintendo DS test ROM, runs this test, then builds the PlaatCraft Wii port. On macOS, `cargo xtask check-macos-examples` builds the native macOS applications. `cargo xtask check` includes these platform checks.
 
@@ -87,3 +95,26 @@ The libogc patches:
 - `0013` implements the system functions picolibc leaves to the platform, like `sbrk` and `stdout`
   to Dolphin's debug UART
 - `0014` implements picolibc's locks with LWP mutexes, so threads can share `malloc`
+- `0015` busy waits while the Wii Remotes disconnect, because sleeping hangs when only the main
+  thread runs, so exiting to the Homebrew Channel works
+- `0016` implements picolibc's POSIX file functions (`open`, `read`, `stat`, `opendir`, ...) on
+  devoptab devices. `0003` and `0005` removed newlib's devoptab glue, and picolibc's stdio only
+  calls these functions, so without it no file could be opened and the standard streams could
+  not reach Dolphin's debug UART. It also runs the constructors and finalizers of the linker
+  script's init and fini arrays, because picolibc's stdio registers its flush at exit in one
+- `0017` implements `gettimeofday` with the time base, which libogc starts at the RTC time.
+  picolibc leaves it to the platform, without it `time()` fails and the FAT driver can't give
+  files their modification time
+
+The libdvm patch:
+
+- `0001` mounts only the SD card, because upstream `dvmInit` also probes USB storage and the
+  GameCube card slots, which libogc is built without, so it wouldn't link. It adds
+  `wiiMountSd` because `dvmInit` mounts once at startup, a game can't notice a replaced card
+
+## SD card storage
+
+`wiiMountSd(1)` from `dvm.h` mounts the FAT32 SD card as `sd:/` and makes it the current
+directory, so the standard C file functions work on it, `wiiMountSd(0)` also accepts FAT12 and
+FAT16. It probes the card again, so call it with all files closed, for example to check for a
+card after it was replaced.
