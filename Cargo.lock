@@ -229,6 +229,7 @@ dependencies = [
  "android-build",
  "copy_dir",
  "plist",
+ "postcard",
  "serde",
  "serde_json",
  "toml",
@@ -248,9 +249,9 @@ dependencies = [
 name = "cargo-bundle-assets-impl"
 version = "0.1.0"
 dependencies = [
+ "postcard",
  "proc-macro2",
  "quote",
- "serde_json",
  "syn 3.0.9",
 ]
 

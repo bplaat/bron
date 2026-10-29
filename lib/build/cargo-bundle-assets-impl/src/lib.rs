@@ -59,7 +59,8 @@ fn expand(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
     let root = root
         .canonicalize()
         .map_err(|error| fail(&format!("Invalid asset folder: {error}")))?;
-    root.to_str()
+    let root_utf8 = root
+        .to_str()
         .ok_or_else(|| fail("Asset root must be UTF-8"))?;
     let mut paths = Vec::new();
     visit(&root, &mut paths).map_err(|error| fail(&format!("Cannot index assets: {error}")))?;
@@ -92,12 +93,12 @@ fn expand(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
     let collection = format!("{hash:016x}");
     let external = env::var_os("CARGO_BUNDLE").is_some();
     let (metadata, read) = if external {
-        let json = serde_json::to_vec(&serde_json::json!({
-            "collection": collection, "root": root.to_str().ok_or_else(|| fail("Asset root must be UTF-8"))?, "files": names
-        })).expect("asset metadata is serializable");
+        // v1 payload: postcard tuple (collection ID, UTF-8 root, relative file names).
+        let data = postcard::to_allocvec(&(&collection, root_utf8, &names))
+            .expect("Asset metadata is serializable");
         let mut record = b"\0cargo-bundle-assets:v1\0".to_vec();
-        record.extend_from_slice(&(json.len() as u32).to_le_bytes());
-        record.extend_from_slice(&json);
+        record.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        record.extend_from_slice(&data);
         let length = record.len();
         (
             quote! {

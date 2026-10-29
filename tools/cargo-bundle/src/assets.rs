@@ -11,16 +11,7 @@ use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::{fs, io};
 
-use serde::Deserialize;
-
 const MAGIC: &[u8] = b"\0cargo-bundle-assets:v1\0";
-
-#[derive(Deserialize)]
-struct Collection {
-    collection: String,
-    root: PathBuf,
-    files: Vec<String>,
-}
 
 /// Select external assets and refresh procedural macro folder enumeration once per invocation.
 pub(crate) fn configure(command: &mut Command) {
@@ -57,17 +48,17 @@ fn collect(bytes: &[u8]) -> io::Result<BTreeMap<String, PathBuf>> {
         let record = bytes
             .get(start..end)
             .ok_or_else(|| io::Error::other("Truncated asset metadata"))?;
-        let collection: Collection = serde_json::from_slice(record)?;
-        if collection.collection.len() != 16
-            || !collection
-                .collection
-                .bytes()
-                .all(|byte| byte.is_ascii_hexdigit())
-        {
+        // v1 payload: postcard tuple (collection ID, UTF-8 root, relative file names).
+        let ((collection, root, names), rest): ((String, PathBuf, Vec<String>), _) =
+            postcard::take_from_bytes(record).map_err(io::Error::other)?;
+        if !rest.is_empty() {
+            return Err(io::Error::other("Trailing asset metadata bytes"));
+        }
+        if collection.len() != 16 || !collection.bytes().all(|byte| byte.is_ascii_hexdigit()) {
             return Err(io::Error::other("Invalid asset collection ID"));
         }
-        let root = collection.root.canonicalize()?;
-        for name in collection.files {
+        let root = root.canonicalize()?;
+        for name in names {
             if name.is_empty()
                 || name.contains('\\')
                 || !Path::new(&name)
@@ -80,7 +71,7 @@ fn collect(bytes: &[u8]) -> io::Result<BTreeMap<String, PathBuf>> {
             if !source.starts_with(&root) || !source.is_file() {
                 return Err(io::Error::other("Asset is outside its collection"));
             }
-            let destination = format!("{}/{name}", collection.collection);
+            let destination = format!("{collection}/{name}");
             if let Some(previous) = files.insert(destination, source.clone())
                 && previous != source
                 && fs::read(previous)? != fs::read(source)?
@@ -138,10 +129,8 @@ mod tests {
     use super::*;
 
     fn record(root: &Path, name: &str) -> Vec<u8> {
-        let data = serde_json::to_vec(&serde_json::json!({
-            "collection": "0123456789abcdef", "root": root, "files": [name]
-        }))
-        .expect("Valid fixture");
+        let data =
+            postcard::to_allocvec(&("0123456789abcdef", root, &[name][..])).expect("Valid fixture");
         let mut bytes = MAGIC.to_vec();
         bytes.extend_from_slice(&(data.len() as u32).to_le_bytes());
         bytes.extend(data);
@@ -236,6 +225,21 @@ mod tests {
         fs::write(second.join("file"), b"second").expect("Second asset");
         let mut bytes = record(&first, "file");
         bytes.extend(record(&second, "file"));
+        assert!(collect(&bytes).is_err());
+    }
+
+    #[test]
+    fn rejects_malformed_postcard_and_trailing_payload_bytes() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/assets");
+        let mut bytes = record(&root, "nested/example.txt");
+        let length = (bytes.len() - MAGIC.len() - 4 + 1) as u32;
+        bytes[MAGIC.len()..MAGIC.len() + 4].copy_from_slice(&length.to_le_bytes());
+        bytes.push(0);
+        assert!(collect(&bytes).is_err());
+
+        let mut bytes = MAGIC.to_vec();
+        bytes.extend_from_slice(&1u32.to_le_bytes());
+        bytes.push(0xff);
         assert!(collect(&bytes).is_err());
     }
 

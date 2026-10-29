@@ -62,13 +62,11 @@ mod tests {
         }
 
         fn binary(&self, name: &str, source: &Path, files: &[&str]) -> PathBuf {
-            let json = serde_json::to_vec(&serde_json::json!({
-                "collection": "0123456789abcdef", "root": source, "files": files,
-            }))
-            .expect("Metadata");
+            let data =
+                postcard::to_allocvec(&("0123456789abcdef", source, files)).expect("Metadata");
             let mut record = b"\0cargo-bundle-assets:v1\0".to_vec();
-            record.extend_from_slice(&(json.len() as u32).to_le_bytes());
-            record.extend(json);
+            record.extend_from_slice(&(data.len() as u32).to_le_bytes());
+            record.extend(data);
             let binary = self.0.join(name);
             fs::write(&binary, record).expect("Executable metadata");
             binary
