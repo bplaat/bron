@@ -262,8 +262,9 @@ enum ResourceCompiler {
 impl ResourceCompiler {
     fn program(&self) -> &Path {
         match self {
-            Self::Rc(program) => program,
-            Self::Windres { program, .. } | Self::Zig { program, .. } => program,
+            Self::Rc(program) | Self::Windres { program, .. } | Self::Zig { program, .. } => {
+                program
+            }
         }
     }
 
