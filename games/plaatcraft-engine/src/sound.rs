@@ -100,116 +100,114 @@ impl Effect {
         match self {
             Self::Stone => Sample {
                 wave_type: WaveType::Noise,
-                base_freq: 0.45,
-                freq_ramp: -0.1,
-                env_attack: 0.0,
-                env_sustain: 0.02,
-                env_decay: 0.12,
-                env_punch: 0.5,
-                hpf_freq: 0.15,
+                base_freq: 0.4,
+                freq_ramp: -0.08,
+                env_attack: 0.025,
+                env_sustain: 0.025,
+                env_decay: 0.17,
+                hpf_freq: 0.08,
+                lpf_freq: 0.7,
                 ..Sample::new()
             },
             Self::Dirt => Sample {
                 wave_type: WaveType::Noise,
-                base_freq: 0.15,
-                env_attack: 0.0,
-                env_sustain: 0.03,
-                env_decay: 0.14,
-                env_punch: 0.3,
-                lpf_freq: 0.45,
+                base_freq: 0.18,
+                env_attack: 0.025,
+                env_sustain: 0.04,
+                env_decay: 0.2,
+                lpf_freq: 0.35,
+                lpf_ramp: -0.08,
                 ..Sample::new()
             },
             Self::Sand => Sample {
                 wave_type: WaveType::Noise,
-                base_freq: 0.6,
-                env_attack: 0.01,
-                env_sustain: 0.04,
-                env_decay: 0.16,
-                lpf_freq: 0.8,
-                hpf_freq: 0.25,
+                base_freq: 0.55,
+                env_attack: 0.025,
+                env_sustain: 0.06,
+                env_decay: 0.24,
+                lpf_freq: 0.65,
+                hpf_freq: 0.12,
                 ..Sample::new()
             },
             Self::Wood => Sample {
-                duty: 0.5,
-                base_freq: 0.24,
-                freq_ramp: -0.15,
-                env_attack: 0.0,
-                env_sustain: 0.02,
-                env_decay: 0.12,
-                env_punch: 0.5,
-                lpf_freq: 0.5,
+                wave_type: WaveType::Triangle,
+                base_freq: 0.23,
+                freq_ramp: -0.08,
+                env_attack: 0.025,
+                env_sustain: 0.025,
+                env_decay: 0.19,
+                lpf_freq: 0.45,
                 ..Sample::new()
             },
             Self::Soft => Sample {
                 wave_type: WaveType::Noise,
-                base_freq: 0.5,
-                env_attack: 0.02,
-                env_sustain: 0.03,
-                env_decay: 0.1,
-                lpf_freq: 0.6,
-                hpf_freq: 0.3,
+                base_freq: 0.45,
+                env_attack: 0.035,
+                env_sustain: 0.05,
+                env_decay: 0.19,
+                lpf_freq: 0.45,
+                hpf_freq: 0.12,
                 ..Sample::new()
             },
             Self::Ice => Sample {
                 wave_type: WaveType::Sine,
-                base_freq: 0.7,
-                env_attack: 0.0,
-                env_sustain: 0.02,
-                env_decay: 0.2,
-                env_punch: 0.3,
-                pha_offset: 0.1,
+                base_freq: 0.68,
+                env_attack: 0.025,
+                env_sustain: 0.015,
+                env_decay: 0.27,
+                pha_offset: 0.06,
                 ..Sample::new()
             },
             Self::Splash => Sample {
                 wave_type: WaveType::Noise,
-                base_freq: 0.3,
-                freq_ramp: -0.2,
-                env_attack: 0.02,
-                env_sustain: 0.06,
-                env_decay: 0.35,
-                lpf_freq: 0.5,
-                lpf_ramp: -0.2,
+                base_freq: 0.32,
+                freq_ramp: -0.15,
+                env_attack: 0.045,
+                env_sustain: 0.1,
+                env_decay: 0.4,
+                lpf_freq: 0.55,
+                lpf_ramp: -0.12,
                 ..Sample::new()
             },
             Self::Crumble => Sample {
                 wave_type: WaveType::Noise,
-                base_freq: 0.25,
-                freq_ramp: -0.05,
-                env_attack: 0.0,
-                env_sustain: 0.05,
-                env_decay: 0.25,
-                lpf_freq: 0.55,
-                repeat_speed: 0.55,
+                base_freq: 0.28,
+                freq_ramp: -0.08,
+                env_attack: 0.02,
+                env_sustain: 0.07,
+                env_decay: 0.3,
+                lpf_freq: 0.5,
+                lpf_ramp: -0.1,
                 ..Sample::new()
             },
             Self::Click => Sample {
                 wave_type: WaveType::Sine,
-                base_freq: 0.5,
-                env_attack: 0.0,
+                base_freq: 0.42,
+                env_attack: 0.025,
                 env_sustain: 0.01,
-                env_decay: 0.07,
-                hpf_freq: 0.1,
+                env_decay: 0.08,
+                hpf_freq: 0.05,
                 ..Sample::new()
             },
             Self::Jump => Sample {
-                duty: 0.5,
-                base_freq: 0.3,
-                freq_ramp: 0.2,
-                env_attack: 0.0,
-                env_sustain: 0.04,
-                env_decay: 0.1,
-                lpf_freq: 0.6,
+                wave_type: WaveType::Triangle,
+                base_freq: 0.26,
+                freq_ramp: 0.12,
+                env_attack: 0.025,
+                env_sustain: 0.035,
+                env_decay: 0.15,
+                lpf_freq: 0.5,
                 ..Sample::new()
             },
             Self::Fly => Sample {
                 wave_type: WaveType::Noise,
-                base_freq: 0.2,
-                freq_ramp: 0.1,
-                env_attack: 0.08,
+                base_freq: 0.24,
+                freq_ramp: 0.06,
+                env_attack: 0.16,
                 env_sustain: 0.08,
-                env_decay: 0.2,
+                env_decay: 0.3,
                 lpf_freq: 0.4,
-                hpf_freq: 0.1,
+                hpf_freq: 0.06,
                 ..Sample::new()
             },
         }
@@ -408,6 +406,37 @@ mod tests {
     fn effects_are_in_index_order() {
         for (index, effect) in Effect::ALL.into_iter().enumerate() {
             assert_eq!(effect as usize, index);
+        }
+    }
+
+    #[test]
+    fn presets_render_short_audible_effects_with_bounded_samples() {
+        for effect in Effect::ALL {
+            let mut generator = sfxr::Generator::new(effect.sample());
+            generator.volume = 0.5;
+            let mut samples = alloc::vec![0.0; sfxr::SAMPLE_RATE as usize];
+            generator.generate(&mut samples);
+            assert!(
+                generator.finished(),
+                "{effect:?} lasts longer than a second"
+            );
+            assert!(
+                samples
+                    .iter()
+                    .all(|sample| sample.is_finite() && sample.abs() <= 1.0),
+                "{effect:?} contains invalid samples"
+            );
+            let peak = samples
+                .iter()
+                .fold(0.0f32, |peak, sample| peak.max(sample.abs()));
+            assert!(peak > 0.01, "{effect:?} is inaudible");
+            assert!(samples[0].abs() < 0.01, "{effect:?} starts abruptly");
+            assert!(
+                samples[samples.len() - 1024..]
+                    .iter()
+                    .all(|sample| sample.abs() < 0.001),
+                "{effect:?} leaves an audible tail"
+            );
         }
     }
 
