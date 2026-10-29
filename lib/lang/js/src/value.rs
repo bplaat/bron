@@ -76,8 +76,7 @@ pub enum Value {
 impl PartialEq for Value {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
-            (Value::Undefined, Value::Undefined) => true,
-            (Value::Null, Value::Null) => true,
+            (Value::Undefined, Value::Undefined) | (Value::Null, Value::Null) => true,
             (Value::Boolean(a), Value::Boolean(b)) => a == b,
             (Value::Number(a), Value::Number(b)) => a == b,
             (Value::String(a), Value::String(b)) => a == b,
@@ -121,33 +120,29 @@ impl Value {
     pub(crate) const fn typeof_string(&self) -> &'static str {
         match self {
             Value::Undefined => "undefined",
-            Value::Null => "object",
             Value::Boolean(_) => "boolean",
             Value::Number(_) => "number",
             Value::String(_) => "string",
-            Value::Array(_) | Value::Object(_) => "object",
+            Value::Null | Value::Array(_) | Value::Object(_) => "object",
             Value::Function(..) | Value::NativeFunction(_) => "function",
         }
     }
 
     pub(crate) fn is_truthy(&self) -> bool {
         match self {
-            Value::Undefined => false,
-            Value::Null => false,
+            Value::Undefined | Value::Null => false,
             Value::Boolean(b) => *b,
             Value::Number(n) => *n != 0.0 && !n.is_nan(),
             Value::String(s) => !s.is_empty(),
-            Value::Array(_) | Value::Object(_) => true,
-            Value::Function(..) | Value::NativeFunction(_) => true,
+            Value::Array(_) | Value::Object(_) | Value::Function(..) | Value::NativeFunction(_) => {
+                true
+            }
         }
     }
 
     pub(crate) fn loose_equals(&self, other: &Self) -> bool {
         match (self, other) {
-            (Value::Undefined, Value::Undefined) => true,
-            (Value::Null, Value::Null) => true,
-            (Value::Undefined, Value::Null) => true,
-            (Value::Null, Value::Undefined) => true,
+            (Value::Undefined | Value::Null, Value::Undefined | Value::Null) => true,
             (Value::Null | Value::Undefined, _) | (_, Value::Null | Value::Undefined) => false,
             (Value::Boolean(a), b) => {
                 let a_num = if *a { 1.0 } else { 0.0 };
@@ -167,7 +162,6 @@ impl Value {
 
     pub(crate) fn to_number(&self) -> f64 {
         match self {
-            Value::Undefined => f64::NAN,
             Value::Null => 0.0,
             Value::Boolean(b) => {
                 if *b {
@@ -188,8 +182,10 @@ impl Value {
                     f64::NAN
                 }
             }
-            Value::Object(_) => f64::NAN,
-            Value::Function(..) | Value::NativeFunction(_) => f64::NAN,
+            Value::Undefined
+            | Value::Object(_)
+            | Value::Function(..)
+            | Value::NativeFunction(_) => f64::NAN,
         }
     }
 }

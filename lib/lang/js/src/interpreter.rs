@@ -747,10 +747,7 @@ impl Interpreter {
     fn get_var(&mut self, variable: &str) -> Option<Value> {
         for scope in self.scopes.iter_mut().rev() {
             match scope {
-                Scope::Block(env) if env.contains_key(variable) => {
-                    return env.get(variable).cloned();
-                }
-                Scope::Function(env) if env.contains_key(variable) => {
+                Scope::Block(env) | Scope::Function(env) if env.contains_key(variable) => {
                     return env.get(variable).cloned();
                 }
                 _ => {}
