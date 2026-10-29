@@ -1121,9 +1121,6 @@ impl Game {
                 self.last_jump = Some(now);
             }
         }
-        if controller.pressed(Button::Two) {
-            self.command("/time");
-        }
         let mut hotbar = self.hotbar;
         if controller.pressed(Button::Right) {
             hotbar.cycle(-1);

@@ -20,7 +20,7 @@ pub const PLATFORM: Platform = Platform {
     open: "Press A on a world",
     controls: &[
         "+ pause - Stick walk - D-pad look and slot - A place - B break",
-        "C jump - Z sneak - Minus blocks - Z+Minus pick - 1 tools - 2 time",
+        "C jump - Z sneak - Minus blocks - Z+Minus pick - 1 tools",
     ],
 };
 

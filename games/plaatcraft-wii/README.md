@@ -56,8 +56,7 @@ Hold the Wii Remote with the Nunchuk attached:
 | Z                | Sneak or fly down                     |
 | Minus            | Full inventory                        |
 | Z + Minus        | Pick the targeted block               |
-| 1                | Build tools, undo, commands, and chat |
-| 2                | Toggle day/night                      |
+| 1                | Build tools, day/night, and chat      |
 | + / Home         | Pause menu                            |
 
 The menus are the desktop game's: the title screen over the turning default world with Single
