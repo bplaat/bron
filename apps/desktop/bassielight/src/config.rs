@@ -32,10 +32,9 @@ pub(crate) enum FixtureType {
 impl FixtureType {
     pub(crate) const fn channel_count(&self) -> usize {
         match self {
-            FixtureType::AmericanDJP56Led => 6,
+            FixtureType::AmericanDJP56Led | FixtureType::AyraCompar20 => 6,
             FixtureType::AmericanDJMegaTripar => 7,
             FixtureType::AyraCompar10 => 8,
-            FixtureType::AyraCompar20 => 6,
             FixtureType::ShowtecMultidimMKII => DMX_SWITCHES_LENGTH,
         }
     }
