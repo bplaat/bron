@@ -449,8 +449,6 @@ impl Stylesheet {
         for (name, value, fallback, _) in declarations {
             let result = (|| -> Result<(), VectorDecodeError> {
                 match name {
-                    "color" | "font-size" if value == "inherit" => {}
-                    "color" => {}
                     "color-interpolation" => {
                         style.color_interpolation = match value.to_ascii_lowercase().as_str() {
                             "srgb" | "auto" => ColorSpace::Srgb,
@@ -458,11 +456,11 @@ impl Stylesheet {
                             _ => return Err(VectorDecodeError::InvalidData),
                         }
                     }
-                    "fill" | "stroke" | "fill-opacity" | "stroke-opacity" | "fill-rule"
-                    | "clip-rule" | "visibility" | "stroke-width" | "stroke-linecap"
-                    | "stroke-linejoin" | "stroke-miterlimit" | "stroke-dasharray"
-                    | "stroke-dashoffset" | "marker" | "marker-start" | "marker-mid"
-                    | "marker-end"
+                    "font-size" | "fill" | "stroke" | "fill-opacity" | "stroke-opacity"
+                    | "fill-rule" | "clip-rule" | "visibility" | "stroke-width"
+                    | "stroke-linecap" | "stroke-linejoin" | "stroke-miterlimit"
+                    | "stroke-dasharray" | "stroke-dashoffset" | "marker" | "marker-start"
+                    | "marker-mid" | "marker-end"
                         if value == "inherit" => {}
                     "fill" => {
                         style.fill = resolve_context_paint(
@@ -721,15 +719,6 @@ impl Stylesheet {
                     "height" => {
                         style.geometry.height = Some(geometry_value(value, viewport.height, true)?)
                     }
-                    "d"
-                    | "points"
-                    | "viewBox"
-                    | "preserveAspectRatio"
-                    | "id"
-                    | "xmlns"
-                    | "href" => {}
-                    "maskUnits" | "maskContentUnits" | "mask-type" => {}
-                    _ if name.starts_with("xmlns") => {}
                     _ => {}
                 }
                 Ok(())
@@ -988,14 +977,13 @@ fn named_color(value: &str) -> Option<[u8; 4]> {
         "silver" => 0xc0c0c0,
         "maroon" => 0x800000,
         "purple" => 0x800080,
-        "fuchsia" => 0xff00ff,
+        "fuchsia" | "magenta" => 0xff00ff,
         "lime" => 0x00ff00,
         "olive" => 0x808000,
         "navy" => 0x000080,
         "teal" => 0x008080,
         "aqua" | "cyan" => 0x00ffff,
         "orange" => 0xffa500,
-        "magenta" => 0xff00ff,
         "aliceblue" => 0xf0f8ff,
         "antiquewhite" => 0xfaebd7,
         "aquamarine" => 0x7fffd4,

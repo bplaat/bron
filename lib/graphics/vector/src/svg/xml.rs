@@ -136,15 +136,7 @@ impl<'a> XmlDocument<'a> {
                         }
                     }
                 },
-                Token::Text { text } => {
-                    if stack.is_empty() && !text.as_str().trim().is_empty() {
-                        return Err(VectorDecodeError::InvalidData);
-                    }
-                    if let Some(index) = stack.last() {
-                        elements[*index].text.push_str(text.as_str());
-                    }
-                }
-                Token::Cdata { text, .. } => {
+                Token::Text { text } | Token::Cdata { text, .. } => {
                     if stack.is_empty() && !text.as_str().trim().is_empty() {
                         return Err(VectorDecodeError::InvalidData);
                     }
@@ -155,8 +147,10 @@ impl<'a> XmlDocument<'a> {
                 Token::DtdStart { .. }
                 | Token::EmptyDtd { .. }
                 | Token::EntityDeclaration { .. } => return Err(VectorDecodeError::InvalidData),
-                Token::ProcessingInstruction { .. } => {}
-                Token::Declaration { .. } | Token::Comment { .. } | Token::DtdEnd { .. } => {}
+                Token::ProcessingInstruction { .. }
+                | Token::Declaration { .. }
+                | Token::Comment { .. }
+                | Token::DtdEnd { .. } => {}
             }
         }
         if pending.is_some() || !stack.is_empty() {

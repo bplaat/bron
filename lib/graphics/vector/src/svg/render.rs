@@ -717,8 +717,7 @@ impl<'document, 'source> Composer<'document, 'source> {
         viewport: Size,
     ) -> Result<Option<Paint>, VectorDecodeError> {
         match value {
-            PaintValue::None => Ok(None),
-            PaintValue::ContextFill | PaintValue::ContextStroke => Ok(None),
+            PaintValue::None | PaintValue::ContextFill | PaintValue::ContextStroke => Ok(None),
             PaintValue::Color(color) => {
                 let mut color = *color;
                 color.alpha *= opacity;
