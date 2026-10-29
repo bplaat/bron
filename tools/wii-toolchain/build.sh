@@ -320,6 +320,7 @@ build_tools() {
 run_test() {
     local test_dir="$TOOLCHAIN_DIR/test" test_build="$BUILD_DIR/test" user="$BUILD_DIR/test/dolphin" pid
     local results="$user/Logs/dolphin.log" sd_image="$test_build/sd.raw" nogui options=(--batch)
+    local output="$test_build/dolphin.log"
     # The Qt interface hangs without a GPU, so Linux uses the headless build with no video
     nogui=$(command -v dolphin-emu-nogui || echo /usr/games/dolphin-emu-nogui)
     if [ -z "${DOLPHIN:-}" ] && [ -x "$nogui" ]; then
@@ -337,21 +338,23 @@ run_test() {
         "$sd_image" > "$user/Config/Dolphin.ini"
     printf '[Logs]\nOSREPORT = True\n[Options]\nVerbosity = 5\nWriteToFile = True\n' > "$user/Config/Logger.ini"
     "$TOOLCHAIN_DIR/run.sh" "$test_build/test.elf" "${options[@]}" --user="$user" \
-        > "$test_build/dolphin.log" 2>&1 &
+        > "$output" 2>&1 &
     pid=$!
     # Wait at most a minute for the test to finish
     for _ in $(seq 120); do
-        grep -qs 'DONE [0-9]* failed' "$results" && break
+        grep -qs 'DONE [0-9]* failed' "$results" "$output" && break
         kill -0 "$pid" 2> /dev/null || break
         sleep 0.5
     done
     # Dolphin ignores the first SIGTERM
     kill -KILL "$pid" 2> /dev/null || true
     wait "$pid" 2> /dev/null || true
+    # Headless Dolphin can write the UART to its output instead of the configured log file
+    grep -qs 'DONE [0-9]* failed' "$results" || results="$output"
     # Only the UART text of the log lines
     sed 's/^.*\[OSREPORT\]: //' "$results" 2> /dev/null | tr -d '\r' || true
     grep -qs 'DONE 0 failed' "$results" ||
-        { tail -n 20 "$test_build/dolphin.log" >&2; die "The test failed or didn't finish"; }
+        { tail -n 20 "$output" >&2; die "The test failed or didn't finish"; }
     msg "All tests passed"
 }
 
