@@ -7,6 +7,7 @@
 //! The settings of the Wii, encoded with postcard and validated when loaded.
 use alloc::string::String;
 use alloc::vec::Vec;
+use core::ffi::CStr;
 
 use plaatcraft_engine::menu;
 use plaatcraft_engine::protocol::validate_name;
@@ -29,7 +30,7 @@ impl Default for Settings {
                 volume: menu::MAX_VOLUME,
                 auto_jump: true,
             },
-            username: "Wii".into(),
+            username: nickname().unwrap_or_else(|| "Wii".into()),
         }
     }
 }
@@ -43,4 +44,14 @@ impl Settings {
             settings.game.volume <= menu::MAX_VOLUME && validate_name(&settings.username).is_ok();
         valid.then_some(settings)
     }
+}
+
+// The nickname of the Wii from its system settings, when it's a valid player name.
+fn nickname() -> Option<String> {
+    let mut nickname = [0; 11];
+    if unsafe { libogc_sys::CONF_GetNickName(nickname.as_mut_ptr()) } < 0 {
+        return None;
+    }
+    let nickname = CStr::from_bytes_until_nul(&nickname).ok()?.to_str().ok()?;
+    validate_name(nickname).ok().map(String::from)
 }

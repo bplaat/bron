@@ -765,6 +765,7 @@ impl Game {
             Page::Username => match validate_name(&text) {
                 Ok(name) => {
                     self.settings.username = name.into();
+                    self.save_settings();
                     self.back(page);
                     None
                 }
