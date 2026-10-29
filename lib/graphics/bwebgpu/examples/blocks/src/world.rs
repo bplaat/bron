@@ -114,9 +114,8 @@ impl Block {
 
         match (self, side) {
             (B::Grass, S::Top) => M::GrassTop,
-            (B::Grass, S::Bottom) => M::Dirt,
+            (B::Grass, S::Bottom) | (B::Dirt, _) => M::Dirt,
             (B::Grass, _) => M::DirtGrass,
-            (B::Dirt, _) => M::Dirt,
             (B::Sand, _) => M::Sand,
             (B::Stone, _) => M::Stone,
             (B::Greystone, _) => M::Greystone,

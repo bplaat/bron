@@ -331,7 +331,6 @@ impl Context {
             0 | 1000001003 => {}
             -1000001004 => return Err(CurrentSurfaceTexture::Outdated),
             -1000000000 => return Err(CurrentSurfaceTexture::Lost),
-            -4 => return Err(CurrentSurfaceTexture::Validation),
             1 | 2 => return Err(CurrentSurfaceTexture::Timeout),
             _ => return Err(CurrentSurfaceTexture::Validation),
         }
