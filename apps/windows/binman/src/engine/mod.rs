@@ -141,9 +141,8 @@ pub(crate) fn scan(
             scan_docker_build_cache(cancelled, &mut result);
         }
         CleanupKind::RustToolchains if !is_elevated => rustup::scan(cancelled, &mut result),
-        CleanupKind::DockerBuildCache | CleanupKind::RustToolchains => {}
         CleanupKind::UvCache if !is_elevated => scan_uv_cache(cancelled, &mut result),
-        CleanupKind::UvCache => {}
+        CleanupKind::DockerBuildCache | CleanupKind::RustToolchains | CleanupKind::UvCache => {}
     }
     result
 }
