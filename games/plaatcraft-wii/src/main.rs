@@ -69,6 +69,9 @@ const LOOK_SPEED: f32 = 2.6;
 const REPEAT_DELAY: f32 = 0.3;
 const REPEAT_INTERVAL: f32 = 0.2;
 const NAME_DURATION: f32 = 2.0;
+// The chat shows the last few messages for a while, like the desktop chat.
+const CHAT_RECENT: usize = 5;
+const CHAT_TIME: f32 = 8.0;
 // How long the held block swings when the player breaks or places a block, like the desktop.
 const SWING_DURATION: f32 = 0.3;
 
@@ -146,7 +149,7 @@ struct Game {
     active: bool,
     world_name: String,
     last_save: f32,
-    message: Option<(String, f32)>,
+    messages: VecDeque<(String, f32)>,
     swing: f32,
     particles: Particles,
     network: network::Network,
@@ -213,7 +216,7 @@ impl Game {
             active: false,
             world_name: String::new(),
             last_save: 0.0,
-            message: None,
+            messages: VecDeque::new(),
             swing: 0.0,
             particles: Particles::default(),
             network: network::Network::new(),
@@ -300,7 +303,11 @@ impl Game {
         Some(self.worlds.get(selected)?.name.clone())
     }
     fn tell(&mut self, text: impl Into<String>) {
-        self.message = Some((text.into(), self.seconds()));
+        if self.messages.len() == CHAT_RECENT {
+            self.messages.pop_front();
+        }
+        let now = self.seconds();
+        self.messages.push_back((text.into(), now));
     }
 
     fn playing(&self) -> bool {
@@ -1294,11 +1301,11 @@ impl Game {
         if !in_game && let Some(pointer) = self.controller.pointer {
             hud.cursor(pointer);
         }
-        if let Some((message, shown)) = &self.message
-            && now - shown < 8.0
-        {
-            hud.rect(8.0, hud.height - 74.0, hud.width - 16.0, 24.0, 0x0000_00c0);
-            hud.label(message, 14.0, hud.height - 70.0, 16.0);
+        let recent = self.messages.iter().filter(|(_, shown)| now - shown < CHAT_TIME);
+        for (row, (message, _)) in recent.rev().enumerate() {
+            let y = hud.height - 74.0 - row as f32 * 24.0;
+            hud.rect(8.0, y, hud.width - 16.0, 24.0, 0x0000_00c0);
+            hud.label(message, 14.0, y + 4.0, 16.0);
         }
     }
 }
