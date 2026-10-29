@@ -31,6 +31,8 @@ pub const SQLITE_TEXT: i32 = 3;
 pub const SQLITE_BLOB: i32 = 4;
 pub const SQLITE_NULL: i32 = 5;
 
+pub const SQLITE_FCNTL_PERSIST_WAL: i32 = 10;
+
 #[allow(unsafe_code)]
 pub fn SQLITE_TRANSIENT() -> sqlite3_destructor_type {
     // SAFETY: The SQLite docs say that the value of `SQLITE_TRANSIENT` is -1.
@@ -48,6 +50,12 @@ unsafe extern "C" {
         ppDb: *mut *mut sqlite3,
         flags: c_int,
         zVfs: *const c_char,
+    ) -> c_int;
+    pub fn sqlite3_file_control(
+        db: *mut sqlite3,
+        zDbName: *const c_char,
+        op: c_int,
+        arg: *mut c_void,
     ) -> c_int;
     pub fn sqlite3_busy_timeout(db: *mut sqlite3, ms: c_int) -> c_int;
     pub fn sqlite3_exec(
