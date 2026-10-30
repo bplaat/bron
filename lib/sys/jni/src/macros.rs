@@ -24,12 +24,26 @@ macro_rules! jni_str {
 }
 
 /// Parse a raw JNI method or field signature literal at compile time, like `"(IF)V"` or
-/// `"Ljava/lang/String;"`.
+/// `"Ljava/lang/String;"`, into a [`crate::signature::MethodSignature`] or a
+/// [`crate::signature::FieldSignature`].
 ///
 /// Unlike the upstream macro, the Rust like `(a: jint) -> void` syntax is not supported.
 #[macro_export]
 macro_rules! jni_sig {
     ($sig:literal) => {
-        const { $crate::signature::Signature::new($crate::jni_str!($sig)) }
+        const {
+            use $crate::signature::{__Parse, __Select, __SigLiteral, JavaType};
+            const SIG: &str = $sig;
+            const ARGS: [JavaType; $crate::signature::__arg_count(SIG)] =
+                $crate::signature::__args(SIG);
+            type Selected = __Select<{ $crate::signature::__is_method(SIG) }>;
+            struct Literal;
+            impl __SigLiteral for Literal {
+                const SIG: &'static $crate::strings::JNIStr = $crate::jni_str!($sig);
+                const ARGS: &'static [JavaType] = &ARGS;
+                const TYPE: JavaType = $crate::signature::__type(SIG);
+            }
+            <Selected as __Parse<Literal>>::VALUE
+        }
     };
 }

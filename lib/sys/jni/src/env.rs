@@ -10,6 +10,7 @@ use std::marker::PhantomData;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::ptr::null_mut;
 
+use crate::descriptors::Desc;
 use crate::errors::{Error, ErrorPolicy, JniError, Result};
 use crate::objects::{
     Global, JByteArray, JByteBuffer, JClass, JFieldID, JFloatArray, JIntArray, JLongArray,
@@ -133,7 +134,8 @@ impl<'local> Env<'local> {
     }
 
     /// The raw environment pointer.
-    pub const fn get_raw(&self) -> *mut sys::JNIEnv {
+    #[allow(clippy::missing_const_for_fn)] // Upstream API is not const
+    pub fn get_raw(&self) -> *mut sys::JNIEnv {
         self.raw
     }
 
@@ -156,8 +158,9 @@ impl<'local> Env<'local> {
     pub fn throw_new<'other_local, S, C>(&mut self, class: C, msg: S) -> Result<()>
     where
         S: AsRef<JNIStr>,
-        C: AsRef<JClass<'other_local>>,
+        C: Desc<'local, JClass<'other_local>>,
     {
+        let class = class.lookup(self)?;
         let class = non_null(class.as_ref().as_raw(), "throw_new class")?;
         let result = unsafe { (self.table().ThrowNew)(self.raw, class, msg.as_ref().as_ptr()) };
         if result == JNI_OK {
@@ -261,11 +264,12 @@ impl<'local> Env<'local> {
         sig: S,
     ) -> Result<JMethodID>
     where
-        C: AsRef<JClass<'other_local>>,
+        C: Desc<'local, JClass<'other_local>>,
         N: AsRef<JNIStr>,
         S: AsRef<MethodSignature<'sig, 'sig_args>>,
     {
         let lookup = self.table().GetMethodID;
+        let class = class.lookup(self)?;
         self.member_id(class.as_ref(), name.as_ref(), sig.as_ref().sig(), lookup)
             .map(|id| unsafe { JMethodID::from_raw(id) })
     }
@@ -278,11 +282,12 @@ impl<'local> Env<'local> {
         sig: S,
     ) -> Result<JStaticMethodID>
     where
-        C: AsRef<JClass<'other_local>>,
+        C: Desc<'local, JClass<'other_local>>,
         N: AsRef<JNIStr>,
         S: AsRef<MethodSignature<'sig, 'sig_args>>,
     {
         let lookup = self.table().GetStaticMethodID;
+        let class = class.lookup(self)?;
         self.member_id(class.as_ref(), name.as_ref(), sig.as_ref().sig(), lookup)
             .map(|id| unsafe { JStaticMethodID::from_raw(id) })
     }
@@ -295,11 +300,12 @@ impl<'local> Env<'local> {
         sig: S,
     ) -> Result<JFieldID>
     where
-        C: AsRef<JClass<'other_local>>,
+        C: Desc<'local, JClass<'other_local>>,
         N: AsRef<JNIStr>,
         S: AsRef<FieldSignature<'sig>>,
     {
         let lookup = self.table().GetFieldID;
+        let class = class.lookup(self)?;
         self.member_id(class.as_ref(), name.as_ref(), sig.as_ref().sig(), lookup)
             .map(|id| unsafe { JFieldID::from_raw(id) })
     }
@@ -312,11 +318,12 @@ impl<'local> Env<'local> {
         sig: S,
     ) -> Result<JStaticFieldID>
     where
-        C: AsRef<JClass<'other_local>>,
+        C: Desc<'local, JClass<'other_local>>,
         N: AsRef<JNIStr>,
         S: AsRef<FieldSignature<'sig>>,
     {
         let lookup = self.table().GetStaticFieldID;
+        let class = class.lookup(self)?;
         self.member_id(class.as_ref(), name.as_ref(), sig.as_ref().sig(), lookup)
             .map(|id| unsafe { JStaticFieldID::from_raw(id) })
     }
@@ -367,8 +374,9 @@ impl<'local> Env<'local> {
         args: &[jvalue],
     ) -> Result<JValueOwned<'local>>
     where
-        C: AsRef<JClass<'other_local>>,
+        C: Desc<'local, JClass<'other_local>>,
     {
+        let class = class.lookup(self)?;
         let class = non_null(
             class.as_ref().as_raw(),
             "call_static_method_unchecked class",
@@ -421,12 +429,13 @@ impl<'local> Env<'local> {
         args: &[JValue],
     ) -> Result<JValueOwned<'local>>
     where
-        C: AsRef<JClass<'other_local>>,
+        C: Desc<'local, JClass<'other_local>>,
         N: AsRef<JNIStr>,
         S: AsRef<MethodSignature<'sig, 'sig_args>>,
     {
-        let sig = sig.as_ref();
-        let method = self.get_static_method_id(class.as_ref(), name, sig)?;
+        let (class, sig) = (class.lookup(self)?, sig.as_ref());
+        let class = class.as_ref();
+        let method = self.get_static_method_id(class, name, sig)?;
         let args = args.iter().map(JValue::as_jni).collect::<Vec<_>>();
         unsafe { self.call_static_method_unchecked(class, method, sig.ret(), &args) }
     }
@@ -442,8 +451,9 @@ impl<'local> Env<'local> {
         ctor_args: &[jvalue],
     ) -> Result<JObject<'local>>
     where
-        C: AsRef<JClass<'other_local>>,
+        C: Desc<'local, JClass<'other_local>>,
     {
+        let class = class.lookup(self)?;
         let class = non_null(class.as_ref().as_raw(), "new_object class")?;
         let object = unsafe {
             (self.table().NewObjectA)(self.raw, class, ctor_id.into_raw(), ctor_args.as_ptr())
@@ -460,10 +470,12 @@ impl<'local> Env<'local> {
         ctor_args: &[JValue],
     ) -> Result<JObject<'local>>
     where
-        C: AsRef<JClass<'other_local>>,
+        C: Desc<'local, JClass<'other_local>>,
         S: AsRef<MethodSignature<'sig, 'sig_args>>,
     {
-        let ctor = self.get_method_id(class.as_ref(), jni_str!("<init>"), ctor_sig)?;
+        let class = class.lookup(self)?;
+        let class = class.as_ref();
+        let ctor = self.get_method_id(class, jni_str!("<init>"), ctor_sig)?;
         let args = ctor_args.iter().map(JValue::as_jni).collect::<Vec<_>>();
         unsafe { self.new_object_unchecked(class, ctor, &args) }
     }
@@ -511,15 +523,14 @@ impl<'local> Env<'local> {
         sig: S,
     ) -> Result<JValueOwned<'local>>
     where
-        C: AsRef<JClass<'other_local>>,
+        C: Desc<'local, JClass<'other_local>>,
         N: AsRef<JNIStr>,
         S: AsRef<FieldSignature<'sig>>,
     {
-        let sig = sig.as_ref();
-        let field = self
-            .get_static_field_id(class.as_ref(), name, sig)?
-            .into_raw();
-        let class = class.as_ref().as_raw();
+        let (class, sig) = (class.lookup(self)?, sig.as_ref());
+        let class = class.as_ref();
+        let field = self.get_static_field_id(class, name, sig)?.into_raw();
+        let class = class.as_raw();
         typed_call!(
             self,
             sig.ty(),
@@ -627,8 +638,9 @@ impl<'local> Env<'local> {
         methods: &[NativeMethod],
     ) -> Result<()>
     where
-        C: AsRef<JClass<'other_local>>,
+        C: Desc<'local, JClass<'other_local>>,
     {
+        let class = class.lookup(self)?;
         let class = non_null(class.as_ref().as_raw(), "register_native_methods class")?;
         let count = jint::try_from(methods.len())
             .map_err(|_| Error::JniCall(JniError::InvalidArguments))?;
@@ -713,7 +725,8 @@ impl<'local> EnvUnowned<'local> {
     }
 
     /// The raw environment pointer.
-    pub const fn as_raw(&self) -> *mut sys::JNIEnv {
+    #[allow(clippy::missing_const_for_fn)] // Upstream API is not const
+    pub fn as_raw(&self) -> *mut sys::JNIEnv {
         self.ptr
     }
 

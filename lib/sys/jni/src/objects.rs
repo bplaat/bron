@@ -30,7 +30,8 @@ impl<'local> JObject<'local> {
     ///
     /// # Safety
     /// `raw` must be a valid reference or null.
-    pub const unsafe fn from_raw(_env: &Env<'local>, raw: jobject) -> Self {
+    #[allow(clippy::missing_const_for_fn)] // Upstream API is not const
+    pub unsafe fn from_raw(_env: &Env<'local>, raw: jobject) -> Self {
         Self {
             internal: raw,
             lifetime: PhantomData,
@@ -50,11 +51,6 @@ impl<'local> JObject<'local> {
         self.internal
     }
 
-    /// Whether the reference is null.
-    pub const fn is_null(&self) -> bool {
-        self.internal.is_null()
-    }
-
     /// Unwrap the raw reference.
     pub const fn into_raw(self) -> jobject {
         self.internal
@@ -65,6 +61,14 @@ impl<'local> JObject<'local> {
             internal: raw,
             lifetime: PhantomData,
         }
+    }
+}
+
+impl Deref for JObject<'_> {
+    type Target = jobject;
+
+    fn deref(&self) -> &jobject {
+        &self.internal
     }
 }
 
@@ -120,7 +124,8 @@ macro_rules! object_type {
             ///
             /// # Safety
             /// `raw` must be a valid reference of this type or null.
-            pub const unsafe fn from_raw(env: &Env<'local>, raw: $raw) -> Self {
+            #[allow(clippy::missing_const_for_fn)] // Upstream API is not const
+            pub unsafe fn from_raw(env: &Env<'local>, raw: $raw) -> Self {
                 Self(unsafe { JObject::from_raw(env, raw) })
             }
 
@@ -129,13 +134,9 @@ macro_rules! object_type {
                 $name(JObject::null())
             }
 
-            /// The raw reference.
-            pub const fn as_raw(&self) -> $raw {
-                self.0.as_raw()
-            }
-
             /// Unwrap the raw reference.
-            pub const fn into_raw(self) -> $raw {
+            #[allow(clippy::missing_const_for_fn)] // Upstream API is not const
+            pub fn into_raw(self) -> $raw {
                 self.0.into_raw()
             }
         }
@@ -362,16 +363,12 @@ impl<'local, T: TypeArray> JPrimitiveArray<'local, T> {
     ///
     /// # Safety
     /// `raw` must be a valid array of `T` or null.
-    pub const unsafe fn from_raw(env: &Env<'local>, raw: jarray) -> Self {
+    #[allow(clippy::missing_const_for_fn)] // Upstream API is not const
+    pub unsafe fn from_raw(env: &Env<'local>, raw: jarray) -> Self {
         Self {
             obj: unsafe { JObject::from_raw(env, raw) },
             lifetime: PhantomData,
         }
-    }
-
-    /// The raw reference.
-    pub const fn as_raw(&self) -> jarray {
-        self.obj.as_raw()
     }
 
     /// The number of elements.
@@ -497,16 +494,12 @@ impl<'local, E: Reference + 'local> JObjectArray<'local, E> {
     ///
     /// # Safety
     /// `raw` must be a valid array of `E` or null.
-    pub const unsafe fn from_raw(env: &Env<'local>, raw: jobjectArray) -> Self {
+    #[allow(clippy::missing_const_for_fn)] // Upstream API is not const
+    pub unsafe fn from_raw(env: &Env<'local>, raw: jobjectArray) -> Self {
         Self {
             obj: unsafe { JObject::from_raw(env, raw) },
             lifetime: PhantomData,
         }
-    }
-
-    /// The raw reference.
-    pub const fn as_raw(&self) -> jobjectArray {
-        self.obj.as_raw()
     }
 
     /// The number of elements.
@@ -606,11 +599,14 @@ pub enum JValue<'obj_ref> {
     Float(jfloat),
     /// A `double`.
     Double(jdouble),
+    /// No value.
+    Void,
 }
 
 impl JValue<'_> {
     /// The raw JNI value.
-    pub const fn as_jni(&self) -> jvalue {
+    #[allow(clippy::missing_const_for_fn)] // Upstream API is not const
+    pub fn as_jni(&self) -> jvalue {
         match *self {
             Self::Object(object) => jvalue { l: object.as_raw() },
             Self::Byte(b) => jvalue { b },
@@ -621,6 +617,9 @@ impl JValue<'_> {
             Self::Bool(z) => jvalue { z },
             Self::Float(f) => jvalue { f },
             Self::Double(d) => jvalue { d },
+            Self::Void => jvalue {
+                l: std::ptr::null_mut(),
+            },
         }
     }
 }
@@ -659,7 +658,8 @@ pub enum JValueOwned<'local> {
 macro_rules! value_accessor {
     ($(#[$doc:meta])* $name:ident, $variant:ident, $ty:ty, $type_name:literal) => {
         $(#[$doc])*
-        pub const fn $name(self) -> Result<$ty> {
+        #[allow(clippy::missing_const_for_fn)] // Upstream API is not const
+        pub fn $name(self) -> Result<$ty> {
             match self {
                 Self::$variant(value) => Ok(value),
                 other => Err(Error::WrongJValueType($type_name, other.type_name())),
@@ -670,7 +670,8 @@ macro_rules! value_accessor {
 
 impl<'local> JValueOwned<'local> {
     /// The Java type name of this value.
-    pub const fn type_name(&self) -> &'static str {
+    #[allow(clippy::missing_const_for_fn)] // Upstream API is not const
+    pub fn type_name(&self) -> &'static str {
         match self {
             Self::Object(_) => "object",
             Self::Byte(_) => "byte",
@@ -750,7 +751,8 @@ impl<'local> JValueOwned<'local> {
     );
 
     /// Unwrap no value.
-    pub const fn v(self) -> Result<()> {
+    #[allow(clippy::missing_const_for_fn)] // Upstream API is not const
+    pub fn v(self) -> Result<()> {
         match self {
             Self::Void => Ok(()),
             other => Err(Error::WrongJValueType("void", other.type_name())),
@@ -763,7 +765,7 @@ macro_rules! member_id {
     ($(#[$doc:meta])* $name:ident($raw:ty)) => {
         $(#[$doc])*
         #[repr(transparent)]
-        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        #[derive(Debug, Clone, Copy)]
         pub struct $name($raw);
 
         impl $name {

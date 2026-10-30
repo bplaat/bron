@@ -12,6 +12,7 @@
 pub use crate::env::{Env, EnvOutcome, EnvUnowned, NativeMethod};
 pub use crate::objects::{JValue, JValueOwned};
 
+pub mod descriptors;
 mod env;
 pub mod errors;
 mod macros;

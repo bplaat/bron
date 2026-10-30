@@ -58,7 +58,7 @@ impl Display for Error {
 impl std::error::Error for Error {}
 
 /// A JNI function error code.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug)]
 pub enum JniError {
     /// An unknown error.
     Unknown,

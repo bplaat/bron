@@ -14,6 +14,7 @@ use std::ops::Deref;
 ///
 /// Create literals with the [`crate::jni_str!`] macro.
 #[repr(transparent)]
+#[derive(PartialEq, Eq)]
 pub struct JNIStr {
     internal: CStr,
 }
@@ -51,7 +52,8 @@ impl JNIStr {
     }
 
     /// The string bytes without the null terminator.
-    pub const fn to_bytes(&self) -> &[u8] {
+    #[allow(clippy::missing_const_for_fn)] // Upstream API is not const
+    pub fn to_bytes(&self) -> &[u8] {
         self.internal.to_bytes()
     }
 }

@@ -5,8 +5,9 @@
  */
 
 //! Raw declarations of the JNI types and function tables from `jni.h`, named like the
-//! [jni-sys](https://crates.io/crates/jni-sys) crate. Only the used table slots are callable,
-//! the others are kept as padding to preserve the C layout.
+//! [jni-sys](https://crates.io/crates/jni-sys) crate. Only the used table slots are declared,
+//! the others are kept as padding to preserve the C layout. The function tables are opaque
+//! outside this crate, as upstream namespaces their functions by JNI version.
 
 #![allow(
     missing_docs,
@@ -29,6 +30,7 @@ pub type jfloat = f32;
 pub type jdouble = f64;
 pub type jsize = jint;
 
+#[derive(Debug)]
 pub enum _jobject {}
 pub type jobject = *mut _jobject;
 pub type jclass = jobject;
@@ -41,8 +43,10 @@ pub type jlongArray = jarray;
 pub type jfloatArray = jarray;
 pub type jobjectArray = jarray;
 
+#[derive(Debug)]
 pub enum _jfieldID {}
 pub type jfieldID = *mut _jfieldID;
+#[derive(Debug)]
 pub enum _jmethodID {}
 pub type jmethodID = *mut _jmethodID;
 
@@ -87,166 +91,179 @@ type Reserved = *const c_void;
 #[repr(C)]
 pub struct JNINativeInterface_ {
     _reserved0: [Reserved; 6],
-    pub FindClass: unsafe extern "system" fn(*mut JNIEnv, *const c_char) -> jclass,
+    pub(crate) FindClass: unsafe extern "system" fn(*mut JNIEnv, *const c_char) -> jclass,
     _reserved7: [Reserved; 6],
-    pub Throw: unsafe extern "system" fn(*mut JNIEnv, jthrowable) -> jint,
-    pub ThrowNew: unsafe extern "system" fn(*mut JNIEnv, jclass, *const c_char) -> jint,
-    pub ExceptionOccurred: unsafe extern "system" fn(*mut JNIEnv) -> jthrowable,
-    pub ExceptionDescribe: unsafe extern "system" fn(*mut JNIEnv),
-    pub ExceptionClear: unsafe extern "system" fn(*mut JNIEnv),
+    pub(crate) Throw: unsafe extern "system" fn(*mut JNIEnv, jthrowable) -> jint,
+    pub(crate) ThrowNew: unsafe extern "system" fn(*mut JNIEnv, jclass, *const c_char) -> jint,
+    pub(crate) ExceptionOccurred: unsafe extern "system" fn(*mut JNIEnv) -> jthrowable,
+    pub(crate) ExceptionDescribe: unsafe extern "system" fn(*mut JNIEnv),
+    pub(crate) ExceptionClear: unsafe extern "system" fn(*mut JNIEnv),
     _reserved18: Reserved,
-    pub PushLocalFrame: unsafe extern "system" fn(*mut JNIEnv, jint) -> jint,
-    pub PopLocalFrame: unsafe extern "system" fn(*mut JNIEnv, jobject) -> jobject,
-    pub NewGlobalRef: unsafe extern "system" fn(*mut JNIEnv, jobject) -> jobject,
-    pub DeleteGlobalRef: unsafe extern "system" fn(*mut JNIEnv, jobject),
-    pub DeleteLocalRef: unsafe extern "system" fn(*mut JNIEnv, jobject),
+    pub(crate) PushLocalFrame: unsafe extern "system" fn(*mut JNIEnv, jint) -> jint,
+    pub(crate) PopLocalFrame: unsafe extern "system" fn(*mut JNIEnv, jobject) -> jobject,
+    pub(crate) NewGlobalRef: unsafe extern "system" fn(*mut JNIEnv, jobject) -> jobject,
+    pub(crate) DeleteGlobalRef: unsafe extern "system" fn(*mut JNIEnv, jobject),
+    pub(crate) DeleteLocalRef: unsafe extern "system" fn(*mut JNIEnv, jobject),
     _reserved24: [Reserved; 6],
-    pub NewObjectA:
+    pub(crate) NewObjectA:
         unsafe extern "system" fn(*mut JNIEnv, jclass, jmethodID, *const jvalue) -> jobject,
-    pub GetObjectClass: unsafe extern "system" fn(*mut JNIEnv, jobject) -> jclass,
+    pub(crate) GetObjectClass: unsafe extern "system" fn(*mut JNIEnv, jobject) -> jclass,
     _reserved32: Reserved,
-    pub GetMethodID:
+    pub(crate) GetMethodID:
         unsafe extern "system" fn(*mut JNIEnv, jclass, *const c_char, *const c_char) -> jmethodID,
     _reserved34: [Reserved; 2],
-    pub CallObjectMethodA:
+    pub(crate) CallObjectMethodA:
         unsafe extern "system" fn(*mut JNIEnv, jobject, jmethodID, *const jvalue) -> jobject,
     _reserved37: [Reserved; 2],
-    pub CallBooleanMethodA:
+    pub(crate) CallBooleanMethodA:
         unsafe extern "system" fn(*mut JNIEnv, jobject, jmethodID, *const jvalue) -> jboolean,
     _reserved40: [Reserved; 2],
-    pub CallByteMethodA:
+    pub(crate) CallByteMethodA:
         unsafe extern "system" fn(*mut JNIEnv, jobject, jmethodID, *const jvalue) -> jbyte,
     _reserved43: [Reserved; 2],
-    pub CallCharMethodA:
+    pub(crate) CallCharMethodA:
         unsafe extern "system" fn(*mut JNIEnv, jobject, jmethodID, *const jvalue) -> jchar,
     _reserved46: [Reserved; 2],
-    pub CallShortMethodA:
+    pub(crate) CallShortMethodA:
         unsafe extern "system" fn(*mut JNIEnv, jobject, jmethodID, *const jvalue) -> jshort,
     _reserved49: [Reserved; 2],
-    pub CallIntMethodA:
+    pub(crate) CallIntMethodA:
         unsafe extern "system" fn(*mut JNIEnv, jobject, jmethodID, *const jvalue) -> jint,
     _reserved52: [Reserved; 2],
-    pub CallLongMethodA:
+    pub(crate) CallLongMethodA:
         unsafe extern "system" fn(*mut JNIEnv, jobject, jmethodID, *const jvalue) -> jlong,
     _reserved55: [Reserved; 2],
-    pub CallFloatMethodA:
+    pub(crate) CallFloatMethodA:
         unsafe extern "system" fn(*mut JNIEnv, jobject, jmethodID, *const jvalue) -> jfloat,
     _reserved58: [Reserved; 2],
-    pub CallDoubleMethodA:
+    pub(crate) CallDoubleMethodA:
         unsafe extern "system" fn(*mut JNIEnv, jobject, jmethodID, *const jvalue) -> jdouble,
     _reserved61: [Reserved; 2],
-    pub CallVoidMethodA: unsafe extern "system" fn(*mut JNIEnv, jobject, jmethodID, *const jvalue),
+    pub(crate) CallVoidMethodA:
+        unsafe extern "system" fn(*mut JNIEnv, jobject, jmethodID, *const jvalue),
     _reserved64: [Reserved; 30],
-    pub GetFieldID:
+    pub(crate) GetFieldID:
         unsafe extern "system" fn(*mut JNIEnv, jclass, *const c_char, *const c_char) -> jfieldID,
-    pub GetObjectField: unsafe extern "system" fn(*mut JNIEnv, jobject, jfieldID) -> jobject,
-    pub GetBooleanField: unsafe extern "system" fn(*mut JNIEnv, jobject, jfieldID) -> jboolean,
-    pub GetByteField: unsafe extern "system" fn(*mut JNIEnv, jobject, jfieldID) -> jbyte,
-    pub GetCharField: unsafe extern "system" fn(*mut JNIEnv, jobject, jfieldID) -> jchar,
-    pub GetShortField: unsafe extern "system" fn(*mut JNIEnv, jobject, jfieldID) -> jshort,
-    pub GetIntField: unsafe extern "system" fn(*mut JNIEnv, jobject, jfieldID) -> jint,
-    pub GetLongField: unsafe extern "system" fn(*mut JNIEnv, jobject, jfieldID) -> jlong,
-    pub GetFloatField: unsafe extern "system" fn(*mut JNIEnv, jobject, jfieldID) -> jfloat,
-    pub GetDoubleField: unsafe extern "system" fn(*mut JNIEnv, jobject, jfieldID) -> jdouble,
+    pub(crate) GetObjectField: unsafe extern "system" fn(*mut JNIEnv, jobject, jfieldID) -> jobject,
+    pub(crate) GetBooleanField:
+        unsafe extern "system" fn(*mut JNIEnv, jobject, jfieldID) -> jboolean,
+    pub(crate) GetByteField: unsafe extern "system" fn(*mut JNIEnv, jobject, jfieldID) -> jbyte,
+    pub(crate) GetCharField: unsafe extern "system" fn(*mut JNIEnv, jobject, jfieldID) -> jchar,
+    pub(crate) GetShortField: unsafe extern "system" fn(*mut JNIEnv, jobject, jfieldID) -> jshort,
+    pub(crate) GetIntField: unsafe extern "system" fn(*mut JNIEnv, jobject, jfieldID) -> jint,
+    pub(crate) GetLongField: unsafe extern "system" fn(*mut JNIEnv, jobject, jfieldID) -> jlong,
+    pub(crate) GetFloatField: unsafe extern "system" fn(*mut JNIEnv, jobject, jfieldID) -> jfloat,
+    pub(crate) GetDoubleField: unsafe extern "system" fn(*mut JNIEnv, jobject, jfieldID) -> jdouble,
     _reserved104: [Reserved; 9],
-    pub GetStaticMethodID:
+    pub(crate) GetStaticMethodID:
         unsafe extern "system" fn(*mut JNIEnv, jclass, *const c_char, *const c_char) -> jmethodID,
     _reserved114: [Reserved; 2],
-    pub CallStaticObjectMethodA:
+    pub(crate) CallStaticObjectMethodA:
         unsafe extern "system" fn(*mut JNIEnv, jclass, jmethodID, *const jvalue) -> jobject,
     _reserved117: [Reserved; 2],
-    pub CallStaticBooleanMethodA:
+    pub(crate) CallStaticBooleanMethodA:
         unsafe extern "system" fn(*mut JNIEnv, jclass, jmethodID, *const jvalue) -> jboolean,
     _reserved120: [Reserved; 2],
-    pub CallStaticByteMethodA:
+    pub(crate) CallStaticByteMethodA:
         unsafe extern "system" fn(*mut JNIEnv, jclass, jmethodID, *const jvalue) -> jbyte,
     _reserved123: [Reserved; 2],
-    pub CallStaticCharMethodA:
+    pub(crate) CallStaticCharMethodA:
         unsafe extern "system" fn(*mut JNIEnv, jclass, jmethodID, *const jvalue) -> jchar,
     _reserved126: [Reserved; 2],
-    pub CallStaticShortMethodA:
+    pub(crate) CallStaticShortMethodA:
         unsafe extern "system" fn(*mut JNIEnv, jclass, jmethodID, *const jvalue) -> jshort,
     _reserved129: [Reserved; 2],
-    pub CallStaticIntMethodA:
+    pub(crate) CallStaticIntMethodA:
         unsafe extern "system" fn(*mut JNIEnv, jclass, jmethodID, *const jvalue) -> jint,
     _reserved132: [Reserved; 2],
-    pub CallStaticLongMethodA:
+    pub(crate) CallStaticLongMethodA:
         unsafe extern "system" fn(*mut JNIEnv, jclass, jmethodID, *const jvalue) -> jlong,
     _reserved135: [Reserved; 2],
-    pub CallStaticFloatMethodA:
+    pub(crate) CallStaticFloatMethodA:
         unsafe extern "system" fn(*mut JNIEnv, jclass, jmethodID, *const jvalue) -> jfloat,
     _reserved138: [Reserved; 2],
-    pub CallStaticDoubleMethodA:
+    pub(crate) CallStaticDoubleMethodA:
         unsafe extern "system" fn(*mut JNIEnv, jclass, jmethodID, *const jvalue) -> jdouble,
     _reserved141: [Reserved; 2],
-    pub CallStaticVoidMethodA:
+    pub(crate) CallStaticVoidMethodA:
         unsafe extern "system" fn(*mut JNIEnv, jclass, jmethodID, *const jvalue),
-    pub GetStaticFieldID:
+    pub(crate) GetStaticFieldID:
         unsafe extern "system" fn(*mut JNIEnv, jclass, *const c_char, *const c_char) -> jfieldID,
-    pub GetStaticObjectField: unsafe extern "system" fn(*mut JNIEnv, jclass, jfieldID) -> jobject,
-    pub GetStaticBooleanField: unsafe extern "system" fn(*mut JNIEnv, jclass, jfieldID) -> jboolean,
-    pub GetStaticByteField: unsafe extern "system" fn(*mut JNIEnv, jclass, jfieldID) -> jbyte,
-    pub GetStaticCharField: unsafe extern "system" fn(*mut JNIEnv, jclass, jfieldID) -> jchar,
-    pub GetStaticShortField: unsafe extern "system" fn(*mut JNIEnv, jclass, jfieldID) -> jshort,
-    pub GetStaticIntField: unsafe extern "system" fn(*mut JNIEnv, jclass, jfieldID) -> jint,
-    pub GetStaticLongField: unsafe extern "system" fn(*mut JNIEnv, jclass, jfieldID) -> jlong,
-    pub GetStaticFloatField: unsafe extern "system" fn(*mut JNIEnv, jclass, jfieldID) -> jfloat,
-    pub GetStaticDoubleField: unsafe extern "system" fn(*mut JNIEnv, jclass, jfieldID) -> jdouble,
+    pub(crate) GetStaticObjectField:
+        unsafe extern "system" fn(*mut JNIEnv, jclass, jfieldID) -> jobject,
+    pub(crate) GetStaticBooleanField:
+        unsafe extern "system" fn(*mut JNIEnv, jclass, jfieldID) -> jboolean,
+    pub(crate) GetStaticByteField:
+        unsafe extern "system" fn(*mut JNIEnv, jclass, jfieldID) -> jbyte,
+    pub(crate) GetStaticCharField:
+        unsafe extern "system" fn(*mut JNIEnv, jclass, jfieldID) -> jchar,
+    pub(crate) GetStaticShortField:
+        unsafe extern "system" fn(*mut JNIEnv, jclass, jfieldID) -> jshort,
+    pub(crate) GetStaticIntField: unsafe extern "system" fn(*mut JNIEnv, jclass, jfieldID) -> jint,
+    pub(crate) GetStaticLongField:
+        unsafe extern "system" fn(*mut JNIEnv, jclass, jfieldID) -> jlong,
+    pub(crate) GetStaticFloatField:
+        unsafe extern "system" fn(*mut JNIEnv, jclass, jfieldID) -> jfloat,
+    pub(crate) GetStaticDoubleField:
+        unsafe extern "system" fn(*mut JNIEnv, jclass, jfieldID) -> jdouble,
     _reserved154: [Reserved; 9],
-    pub NewString: unsafe extern "system" fn(*mut JNIEnv, *const jchar, jsize) -> jstring,
-    pub GetStringLength: unsafe extern "system" fn(*mut JNIEnv, jstring) -> jsize,
+    pub(crate) NewString: unsafe extern "system" fn(*mut JNIEnv, *const jchar, jsize) -> jstring,
+    pub(crate) GetStringLength: unsafe extern "system" fn(*mut JNIEnv, jstring) -> jsize,
     _reserved165: [Reserved; 6],
-    pub GetArrayLength: unsafe extern "system" fn(*mut JNIEnv, jarray) -> jsize,
-    pub NewObjectArray:
+    pub(crate) GetArrayLength: unsafe extern "system" fn(*mut JNIEnv, jarray) -> jsize,
+    pub(crate) NewObjectArray:
         unsafe extern "system" fn(*mut JNIEnv, jsize, jclass, jobject) -> jobjectArray,
-    pub GetObjectArrayElement:
+    pub(crate) GetObjectArrayElement:
         unsafe extern "system" fn(*mut JNIEnv, jobjectArray, jsize) -> jobject,
-    pub SetObjectArrayElement: unsafe extern "system" fn(*mut JNIEnv, jobjectArray, jsize, jobject),
+    pub(crate) SetObjectArrayElement:
+        unsafe extern "system" fn(*mut JNIEnv, jobjectArray, jsize, jobject),
     _reserved175: Reserved,
-    pub NewByteArray: unsafe extern "system" fn(*mut JNIEnv, jsize) -> jbyteArray,
+    pub(crate) NewByteArray: unsafe extern "system" fn(*mut JNIEnv, jsize) -> jbyteArray,
     _reserved177: [Reserved; 2],
-    pub NewIntArray: unsafe extern "system" fn(*mut JNIEnv, jsize) -> jintArray,
-    pub NewLongArray: unsafe extern "system" fn(*mut JNIEnv, jsize) -> jlongArray,
-    pub NewFloatArray: unsafe extern "system" fn(*mut JNIEnv, jsize) -> jfloatArray,
+    pub(crate) NewIntArray: unsafe extern "system" fn(*mut JNIEnv, jsize) -> jintArray,
+    pub(crate) NewLongArray: unsafe extern "system" fn(*mut JNIEnv, jsize) -> jlongArray,
+    pub(crate) NewFloatArray: unsafe extern "system" fn(*mut JNIEnv, jsize) -> jfloatArray,
     _reserved182: [Reserved; 18],
-    pub GetByteArrayRegion:
+    pub(crate) GetByteArrayRegion:
         unsafe extern "system" fn(*mut JNIEnv, jbyteArray, jsize, jsize, *mut jbyte),
     _reserved201: [Reserved; 2],
-    pub GetIntArrayRegion:
+    pub(crate) GetIntArrayRegion:
         unsafe extern "system" fn(*mut JNIEnv, jintArray, jsize, jsize, *mut jint),
-    pub GetLongArrayRegion:
+    pub(crate) GetLongArrayRegion:
         unsafe extern "system" fn(*mut JNIEnv, jlongArray, jsize, jsize, *mut jlong),
-    pub GetFloatArrayRegion:
+    pub(crate) GetFloatArrayRegion:
         unsafe extern "system" fn(*mut JNIEnv, jfloatArray, jsize, jsize, *mut jfloat),
     _reserved206: [Reserved; 2],
-    pub SetByteArrayRegion:
+    pub(crate) SetByteArrayRegion:
         unsafe extern "system" fn(*mut JNIEnv, jbyteArray, jsize, jsize, *const jbyte),
     _reserved209: [Reserved; 2],
-    pub SetIntArrayRegion:
+    pub(crate) SetIntArrayRegion:
         unsafe extern "system" fn(*mut JNIEnv, jintArray, jsize, jsize, *const jint),
-    pub SetLongArrayRegion:
+    pub(crate) SetLongArrayRegion:
         unsafe extern "system" fn(*mut JNIEnv, jlongArray, jsize, jsize, *const jlong),
-    pub SetFloatArrayRegion:
+    pub(crate) SetFloatArrayRegion:
         unsafe extern "system" fn(*mut JNIEnv, jfloatArray, jsize, jsize, *const jfloat),
     _reserved214: Reserved,
-    pub RegisterNatives:
+    pub(crate) RegisterNatives:
         unsafe extern "system" fn(*mut JNIEnv, jclass, *const JNINativeMethod, jint) -> jint,
     _reserved216: [Reserved; 3],
-    pub GetJavaVM: unsafe extern "system" fn(*mut JNIEnv, *mut *mut JavaVM) -> jint,
-    pub GetStringRegion: unsafe extern "system" fn(*mut JNIEnv, jstring, jsize, jsize, *mut jchar),
+    pub(crate) GetJavaVM: unsafe extern "system" fn(*mut JNIEnv, *mut *mut JavaVM) -> jint,
+    pub(crate) GetStringRegion:
+        unsafe extern "system" fn(*mut JNIEnv, jstring, jsize, jsize, *mut jchar),
     _reserved221: [Reserved; 7],
-    pub ExceptionCheck: unsafe extern "system" fn(*mut JNIEnv) -> jboolean,
-    pub NewDirectByteBuffer: unsafe extern "system" fn(*mut JNIEnv, *mut c_void, jlong) -> jobject,
+    pub(crate) ExceptionCheck: unsafe extern "system" fn(*mut JNIEnv) -> jboolean,
+    pub(crate) NewDirectByteBuffer:
+        unsafe extern "system" fn(*mut JNIEnv, *mut c_void, jlong) -> jobject,
 }
 
 // MARK: JavaVM
 #[repr(C)]
 pub struct JNIInvokeInterface_ {
     _reserved0: [Reserved; 4],
-    pub AttachCurrentThread:
+    pub(crate) AttachCurrentThread:
         unsafe extern "system" fn(*mut JavaVM, *mut *mut c_void, *mut c_void) -> jint,
-    pub DetachCurrentThread: unsafe extern "system" fn(*mut JavaVM) -> jint,
-    pub GetEnv: unsafe extern "system" fn(*mut JavaVM, *mut *mut c_void, jint) -> jint,
+    pub(crate) DetachCurrentThread: unsafe extern "system" fn(*mut JavaVM) -> jint,
+    pub(crate) GetEnv: unsafe extern "system" fn(*mut JavaVM, *mut *mut c_void, jint) -> jint,
 }
 
 // Verify every used slot against the function indices of jni.h.

@@ -8,7 +8,7 @@
 
 use std::ops::Deref;
 
-use crate::objects::{JClass, JObject};
+use crate::objects::JObject;
 use crate::strings::JNIStr;
 use crate::sys::jobject;
 use crate::vm::JavaVM;
@@ -127,9 +127,10 @@ where
     }
 }
 
-impl<T> AsRef<JObject<'static>> for Global<T>
+impl<T, U> AsRef<U> for Global<T>
 where
-    T: Into<JObject<'static>>
+    T: AsRef<U>
+        + Into<JObject<'static>>
         + AsRef<JObject<'static>>
         + Default
         + Reference
@@ -137,14 +138,8 @@ where
         + Sync
         + 'static,
 {
-    fn as_ref(&self) -> &JObject<'static> {
+    fn as_ref(&self) -> &U {
         self.obj.as_ref()
-    }
-}
-
-impl AsRef<JClass<'static>> for Global<JClass<'static>> {
-    fn as_ref(&self) -> &JClass<'static> {
-        &self.obj
     }
 }
 
