@@ -1,0 +1,35 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Fri, 30 Oct 2026 13:30:14 +0100
+Subject: [PATCH] Use no fastmem exception handler in generic builds
+
+A generic build has no JIT and no fastmem, so it needs no exception
+handler, but one of the platform exception handlers was still built
+for it and failed for the unknown architecture. Generic builds now
+always use the empty handler.
+---
+ Source/Core/Core/MemTools.cpp | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/Source/Core/Core/MemTools.cpp b/Source/Core/Core/MemTools.cpp
+index a7919fb..2384c23 100644
+--- a/Source/Core/Core/MemTools.cpp
++++ b/Source/Core/Core/MemTools.cpp
+@@ -26,7 +26,7 @@
+ #include "Common/Thread.h"
+ #endif
+ 
+-#if defined(__APPLE__)
++#if defined(__APPLE__) && !defined(_M_GENERIC)
+ #ifdef _M_X86_64
+ #define THREAD_STATE64_COUNT x86_THREAD_STATE64_COUNT
+ #define THREAD_STATE64 x86_THREAD_STATE64
+@@ -120,7 +120,7 @@ bool IsExceptionHandlerSupported()
+   return true;
+ }
+ 
+-#elif defined(__APPLE__) && !defined(USE_SIGACTION_ON_APPLE)
++#elif defined(__APPLE__) && !defined(USE_SIGACTION_ON_APPLE) && !defined(_M_GENERIC)
+ 
+ static void CheckKR(const char* name, kern_return_t kr)
+ {

@@ -92,10 +92,10 @@ physics and client prediction.
 ## Benchmark
 
 `bench.sh` builds the port with the `bench` feature, which times the chunk pipeline instead of
-starting the game, runs it in Dolphin without its user interface and prints the milliseconds per
-chunk. Dolphin's time base counts emulated cycles, so the results are repeatable but only
-approximate the real Wii. `cargo run --release -p plaatcraft-engine --example bench` times the
-same chunks on the host.
+starting the game, runs it headless in the Wii toolchain's
+[dolphin-runner](../../tools/wii-toolchain) and prints the milliseconds per chunk. Dolphin's time
+base counts emulated cycles, so the results are repeatable but only approximate the real Wii.
+`cargo run --release -p plaatcraft-engine --example bench` times the same chunks on the host.
 
 ```sh
 ./bench.sh

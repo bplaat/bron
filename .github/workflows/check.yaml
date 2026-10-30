@@ -139,12 +139,12 @@ jobs:
   # MARK: Check others
   check-others:
     runs-on: ubuntu-26.04
-    timeout-minutes: 20
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v6
       - name: Install assembly and console toolchains and headless emulators
         run: |
           sudo apt-get update
-          sudo apt-get install -y nasm python3 clang lld llvm make pkg-config libsdl2-dev dolphin-emu meson ninja-build cmake zlib1g-dev
+          sudo apt-get install -y nasm python3 clang lld llvm make pkg-config libsdl2-dev meson ninja-build cmake zlib1g-dev
       - name: Build assembly examples and games, run NDS and Wii toolchain tests, and build PlaatCraft for the Wii
         run: cargo xtask check-others

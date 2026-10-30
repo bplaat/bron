@@ -9,7 +9,9 @@
 # Usage: ./build.sh [command]...
 #   (none)          fetch, patch and build
 #   export-patches  write the commits in ../../target/wii-toolchain/<name>/ back to <name>/patches/
-#   test            build test/ and run it in Dolphin
+#   test            build test/ and run it headless in dolphin-runner
+#   dolphin         build Dolphin's core with dolphin/patches/ and dolphin/runner.cpp to
+#                   ../../target/wii-toolchain/dolphin-runner
 #   clean           remove ../../target/wii-toolchain/
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -32,6 +34,17 @@ tools_commit='3b7f914df771d4b779d88607ceed2ec9264ff93a'
 llvm_url='https://github.com/llvm/llvm-project.git'
 llvm_version='llvmorg-23.1.3'
 llvm_commit='0d261d1ca552c95a8f007e061c787ac7132fbcbc'
+# Dolphin for dolphin/runner.cpp, cloned by the dolphin and test commands, with only the submodules
+# its core needs, all its libraries are built from them
+dolphin_url='https://github.com/dolphin-emu/dolphin.git'
+dolphin_version='2609a'
+dolphin_commit='409881c34357d0f105fd473167d15ab0bd9c1628'
+DOLPHIN_SUBMODULES=(
+    Externals/{SFML/SFML,bzip2/bzip2,cpp-ipc/cpp-ipc,cpp-optparse/cpp-optparse,curl/curl,enet/enet}
+    Externals/{fmt/fmt,glslang/glslang,hidapi/hidapi-src,imgui/imgui,implot/implot,libspng/libspng}
+    Externals/{libusb/libusb,lz4/lz4,minizip-ng/minizip-ng,pugixml/pugixml,spirv_cross/SPIRV-Cross}
+    Externals/{tinygltf/tinygltf,watcher/watcher,xxhash/xxHash,zlib-ng/zlib-ng,zstd/zstd}
+)
 
 TOOLCHAIN_DIR="$PWD"
 ROOT_DIR="$(cd ../.. && pwd)"
@@ -43,6 +56,7 @@ FATFS_DIR="$BUILD_DIR/fatfs"
 SYSROOT="$BUILD_DIR/sysroot"
 TOOLS_DIR="$BUILD_DIR/gamecube-tools"
 COMPILER_RT_DIR="$BUILD_DIR/compiler-rt"
+DOLPHIN_DIR="$BUILD_DIR/dolphin"
 
 # Apple's clang can't target PowerPC, so prefer Homebrew's LLVM when it's installed
 LLVM=''
@@ -174,8 +188,10 @@ patch() {
 # Writes the commits on top of upstream back to <name>/patches/ for every patched repo
 export_patches() {
     local name dir
-    for name in libogc picolibc libdvm; do
+    for name in libogc picolibc libdvm dolphin; do
         dir="$BUILD_DIR/$name"
+        # Dolphin is only there once the dolphin command ran
+        [ "$name" = dolphin ] && [ ! -d "$dir" ] && continue
         [ -d "$dir/.git" ] || die "No patched $name, run ./build.sh first"
         rm -f "$TOOLCHAIN_DIR/$name"/patches/*.patch
         git -C "$dir" format-patch -q --no-numbered --zero-commit --no-signature \
@@ -315,47 +331,51 @@ build_tools() {
     fi
 }
 
-# Builds test/ with the toolchain and runs it in Dolphin without its user interface, the test
-# writes its results to Dolphin's debug UART. Doesn't lock, make runs the build itself.
+# Builds test/ with the toolchain and runs it headless in dolphin-runner with an SD card made from
+# an empty directory, the test writes its results to the debug UART, the runner fails when a check
+# failed or the program didn't finish. Doesn't lock, make runs the build itself.
 run_test() {
-    local test_dir="$TOOLCHAIN_DIR/test" test_build="$BUILD_DIR/test" user="$BUILD_DIR/test/dolphin" pid
-    local results="$user/Logs/dolphin.log" sd_image="$test_build/sd.raw" nogui options=(--batch)
-    local output="$test_build/dolphin.log"
-    # The Qt interface hangs without a GPU, so Linux uses the headless build with no video
-    nogui=$(command -v dolphin-emu-nogui || echo /usr/games/dolphin-emu-nogui)
-    if [ -z "${DOLPHIN:-}" ] && [ -x "$nogui" ]; then
-        export DOLPHIN="$nogui"
-        options=(--platform=headless --video_backend=Null)
-    fi
-    make -C "$test_dir" --no-print-directory
+    local sd_dir="$BUILD_DIR/test/sd"
+    build_dolphin
+    make -C "$TOOLCHAIN_DIR/test" --no-print-directory
+    rm -rf "$sd_dir"
+    mkdir -p "$sd_dir"
     msg "Running the test in Dolphin"
-    rm -f "$results" "$sd_image"
-    python3 "$test_dir/make-sd.py" "$sd_image"
-    # Without these a new user folder waits on dialogs, the test gets a fresh writable SD card
-    # and the debug UART goes to the log file
-    mkdir -p "$user/Config"
-    printf '[Analytics]\nPermissionAsked = True\n[Interface]\nUsePanicHandlers = False\n[Core]\nWiiSDCard = True\nWiiSDCardAllowWrites = True\n[General]\nWiiSDCardPath = %s\n' \
-        "$sd_image" > "$user/Config/Dolphin.ini"
-    printf '[Logs]\nOSREPORT = True\n[Options]\nVerbosity = 5\nWriteToFile = True\n' > "$user/Config/Logger.ini"
-    "$TOOLCHAIN_DIR/run.sh" "$test_build/test.elf" "${options[@]}" --user="$user" \
-        > "$output" 2>&1 &
-    pid=$!
-    # Wait at most a minute for the test to finish
-    for _ in $(seq 120); do
-        grep -qs 'DONE [0-9]* failed' "$results" "$output" && break
-        kill -0 "$pid" 2> /dev/null || break
-        sleep 0.5
-    done
-    # Dolphin ignores the first SIGTERM
-    kill -KILL "$pid" 2> /dev/null || true
-    wait "$pid" 2> /dev/null || true
-    # Headless Dolphin can write the UART to its output instead of the configured log file
-    grep -qs 'DONE [0-9]* failed' "$results" || results="$output"
-    # Only the UART text of the log lines
-    sed 's/^.*\[OSREPORT\]: //' "$results" 2> /dev/null | tr -d '\r' || true
-    grep -qs 'DONE 0 failed' "$results" ||
-        { tail -n 20 "$output" >&2; die "The test failed or didn't finish"; }
+    "$BUILD_DIR/dolphin-runner" --sd "$sd_dir" "$BUILD_DIR/test/test.elf" 'test 3600'
     msg "All tests passed"
+}
+
+# Builds Dolphin's core without its user interfaces, JIT (a generic build has only the
+# interpreters), GPU video backends, sound output, controllers and network services, and
+# dolphin/runner.cpp on it, which plays a program headless and takes screenshots
+build_dolphin() {
+    local objects_dir="$BUILD_DIR/objects/dolphin" options=()
+    command -v cmake > /dev/null || die "Install cmake and ninja to build Dolphin"
+    if [ ! -d "$DOLPHIN_DIR" ]; then
+        clone "$dolphin_url" "$dolphin_version" "$dolphin_commit" "$DOLPHIN_DIR.clone"
+        msg "Cloning Dolphin's submodules"
+        git -C "$DOLPHIN_DIR.clone" submodule update -q --init --depth 1 --jobs 8 "${DOLPHIN_SUBMODULES[@]}" ||
+            die "Failed to clone Dolphin's submodules"
+        mv "$DOLPHIN_DIR.clone" "$DOLPHIN_DIR"
+    fi
+    patch dolphin "$dolphin_commit"
+    # Its bundled curl uses functions of the current macOS SDK, the runner only runs here
+    [ "$(uname)" = Darwin ] && options+=(-DCMAKE_OSX_DEPLOYMENT_TARGET="$(sw_vers -productVersion)")
+    # Their output goes to a log, which is shown when they fail
+    mkdir -p "$BUILD_DIR/objects"
+    [ -f "$objects_dir/build.ninja" ] || cmake -S "$DOLPHIN_DIR" -B "$objects_dir" -G Ninja \
+        -DCMAKE_BUILD_TYPE=Release -DUSE_SYSTEM_LIBS=OFF -DENABLE_GENERIC=ON -DENABLE_HEADLESS=ON \
+        -DENABLE_QT=OFF -DENABLE_NOGUI=OFF -DENABLE_CLI_TOOL=OFF -DENABLE_TESTS=OFF -DENABLE_VULKAN=OFF \
+        -DENABLE_X11=OFF -DENABLE_EGL=OFF -DENABLE_EVDEV=OFF -DENABLE_HWDB=OFF -DENABLE_SDL=OFF \
+        -DENABLE_CUBEB=OFF -DENABLE_ALSA=OFF -DENABLE_PULSEAUDIO=OFF -DENABLE_LLVM=OFF -DUSE_UPNP=OFF \
+        -DUSE_DISCORD_PRESENCE=OFF -DUSE_MGBA=OFF -DUSE_RETRO_ACHIEVEMENTS=OFF -DENABLE_AUTOUPDATE=OFF \
+        -DENABLE_ANALYTICS=OFF -DENCODE_FRAMEDUMPS=OFF -DMACOS_CODE_SIGNING=OFF -DUSE_BUNDLED_MOLTENVK=OFF \
+        -DDOLPHIN_RUNNER_SOURCE="$TOOLCHAIN_DIR/dolphin/runner.cpp" "${options[@]}" > "$objects_dir.log" 2>&1 ||
+        { cat "$objects_dir.log" >&2; die "Failed to configure Dolphin"; }
+    msg "Building Dolphin"
+    ninja -C "$objects_dir" dolphin-runner > "$objects_dir.log" 2>&1 ||
+        { tail -n 50 "$objects_dir.log" >&2; die "Failed to build Dolphin"; }
+    cp "$objects_dir/Binaries/dolphin-runner" "$BUILD_DIR/dolphin-runner"
 }
 
 # Only one build at a time, the C and Rust examples can start one at the same time
@@ -378,6 +398,7 @@ for command in "$@"; do
             patch libdvm "$libdvm_commit"; build_picolibc; build_dsp_mixer; build_libraries; build_tools ;;
         export-patches) export_patches ;;
         test) run_test ;;
+        dolphin) lock; build_dolphin ;;
         clean) rm -rf "$BUILD_DIR" ;;
         *) die "Unknown command: $command" ;;
     esac

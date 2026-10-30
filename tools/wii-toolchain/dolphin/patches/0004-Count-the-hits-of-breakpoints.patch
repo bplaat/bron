@@ -1,0 +1,38 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Fri, 30 Oct 2026 13:31:48 +0100
+Subject: [PATCH] Count the hits of breakpoints
+
+Each breakpoint counts how often its condition held when its code ran,
+also when it neither breaks nor logs, so a frontend can count how often
+a function runs, like the frame rate of a renderer.
+---
+ Source/Core/Core/PowerPC/BreakPoints.h | 2 ++
+ Source/Core/Core/PowerPC/PowerPC.cpp   | 1 +
+ 2 files changed, 3 insertions(+)
+
+diff --git a/Source/Core/Core/PowerPC/BreakPoints.h b/Source/Core/Core/PowerPC/BreakPoints.h
+index da5e755..4539483 100644
+--- a/Source/Core/Core/PowerPC/BreakPoints.h
++++ b/Source/Core/Core/PowerPC/BreakPoints.h
+@@ -24,6 +24,8 @@ struct TBreakPoint
+   bool log_on_hit = false;
+   bool break_on_hit = false;
+   std::optional<Expression> condition;
++  // How often its condition held when the code ran, also when it doesn't break or log
++  mutable u64 hit_count = 0;
+ };
+ 
+ struct TMemCheck
+diff --git a/Source/Core/Core/PowerPC/PowerPC.cpp b/Source/Core/Core/PowerPC/PowerPC.cpp
+index 564d74d..a560c81 100644
+--- a/Source/Core/Core/PowerPC/PowerPC.cpp
++++ b/Source/Core/Core/PowerPC/PowerPC.cpp
+@@ -641,6 +641,7 @@ bool PowerPCManager::CheckBreakPoints()
+       !EvaluateCondition(m_system, bp->condition))
+     return false;
+ 
++  bp->hit_count++;
+   if (bp->log_on_hit)
+   {
+     NOTICE_LOG_FMT(MEMMAP,

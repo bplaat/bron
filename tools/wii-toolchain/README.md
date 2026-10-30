@@ -26,7 +26,8 @@ cd tools/wii-toolchain
 ./build.sh                 # fetch, patch and build
 ./build.sh clean           # remove ../../target/wii-toolchain/
 ./build.sh export-patches  # write the commits in ../../target/wii-toolchain/<name>/ back to <name>/patches/
-./build.sh test            # build test/ and run it in Dolphin
+./build.sh test            # build test/ and run it headless in dolphin-runner
+./build.sh dolphin         # build ../../target/wii-toolchain/dolphin-runner
 ```
 
 All code is compiled for the PowerPC 750 (`-mcpu=750`) and optimized for size with `-Os`, like
@@ -60,18 +61,47 @@ separately from main Cargo workspace.
   links to it for `llvm-ar`. Projects set `TARGET_CC` and `TARGET_AR` to them in
   `.cargo/config.toml`
 - `run.sh` converts a program to a `.dol` and starts it in Dolphin, extra arguments go to Dolphin
+- `dolphin/runner.cpp` runs a Wii program headless in [Dolphin](https://dolphin-emu.org/)'s core,
+  field exact, for scripts and agents: it presses the Wii Remote's and the Nunchuk's buttons, points
+  the Wii Remote, tilts the Nunchuk's stick, takes PNG screenshots and saves and loads savestates.
+  Each argument is a command, without them it reads one per line from stdin and answers each with
+  `ok`. What the program writes to the debug UART, like `printf`, goes to stderr:
+
+    ```sh
+    ../../target/wii-toolchain/dolphin-runner ../../examples/wii/canvas/c/target/canvas.elf 'wait 120' \
+        'point 320 240' 'press a' 'shot canvas.png' 'save canvas.sav'
+    ```
+
+    The commands are `wait <frames>`, `press <keys> [frames]`, `hold <keys>`, `release`,
+    `point <x> <y>`, which points at a pixel of the 640x480 screen as far as Dolphin's pointer
+    range and the program's IR settings agree, `stick <x> <y>` from -100 to 100, `shot <file.png>`,
+    the frame the video interface shows, `save <file>`, `load <file>`, `hook <address>` and
+    `count`, which count the executions of a function such as a renderer's for frame rates,
+    `wav <file>` and `wav stop`, which record the DSP's sound, `peek <address> [words]`, which
+    prints words of memory, `await <text> <frames>`, which runs until a UART line after the last
+    awaited one contains the text, `test <frames>`, which awaits the test program's
+    `DONE <n> failed` line and fails on failures, both fail on a timeout, and `quit`. The keys are the Wii Remote's
+    `a`, `b`, `1`, `2`, `plus`, `minus`, `home`, `up`, `down`, `left` and `right` and the
+    Nunchuk's `c` and `z`, joined like `up+a`, the first Wii Remote always has a Nunchuk. The
+    optional `--sd <directory>` before the program puts an SD card with the files of that
+    directory in the SD card slot, its writes stay in a temporary card image. Every run starts
+    from a fresh Dolphin user directory, without a GPU, JIT, sound output or window: Dolphin's
+    cached interpreter, which runs decoded instructions without generating code, and its
+    software renderer on one thread, as fast as it goes, with the clock starting at 2026-01-01
+    00:00 UTC, so runs are repeatable. Dolphin maps the emulated memory through `/dev/shm` on
+    Linux, which Docker limits to 64 MiB, so give a container more, like `--shm-size=1g`
 - `test/` is a Wii program that tests the toolchain, see below
 
 ## Test
 
-`./build.sh test` builds `test/` into the repository root's `target/wii-toolchain/test/` and runs it in Dolphin without its user
-interface, on Linux headless in `dolphin-emu-nogui` without video when it is installed. It checks
-the startup code, the C library, compiler-rt, libogc's paired single math, threads and timers, the
-C library locks, RGBA8 and RGB5A3 textures converted by `gxtexconv`, constructors, the standard
-streams, the clock, and files, directories, relative paths, descriptors and stdio streams on a
-fresh FAT32 SD card image that `test/make-sd.py` creates for every run. The program writes its
-results to Dolphin's debug UART after every group, which Dolphin logs to a file. The script prints
-them and fails when a check failed or the program didn't finish.
+`./build.sh test` builds `test/` into the repository root's `target/wii-toolchain/test/` and runs
+it headless in `dolphin-runner`, which it builds first. It checks the startup code, the C library,
+compiler-rt, libogc's paired single math, threads and timers, the C library locks, RGBA8 and
+RGB5A3 textures converted by `gxtexconv`, constructors, the standard streams, the clock, and
+files, directories, relative paths, descriptors and stdio streams on a fresh FAT32 SD card that
+Dolphin makes from an empty directory for every run. The program writes
+its results to the debug UART after every group, the runner prints them and fails when a check
+failed or the program didn't finish within 3600 frames.
 
 From the repository root on Linux, `cargo xtask check-others` builds the assembly examples, Empires, and the Nintendo DS test ROM, runs this test, then builds the PlaatCraft Wii port. On macOS, `cargo xtask check-macos-examples` builds the native macOS applications. `cargo xtask check` includes these platform checks.
 
@@ -111,6 +141,17 @@ The libdvm patch:
 - `0001` mounts only the SD card, because upstream `dvmInit` also probes USB storage and the
   GameCube card slots, which libogc is built without, so it wouldn't link. It adds
   `wiiMountSd` because `dvmInit` mounts once at startup, a game can't notice a replaced card
+
+The Dolphin patches, for `dolphin-runner`:
+
+- `0001` uses no fastmem exception handler in a generic build, which has no JIT or fastmem
+- `0002` runs the software renderer headless without OpenGL, so it needs no GPU or display
+- `0003` remembers the XFB of the last field the video interface output, for `shot`
+- `0004` counts the hits of breakpoints, also when they don't break, for `hook` and `count`
+- `0005` lets frame stepping stop at every VI field, also when it shows the same frame, for an
+  exact number of frames
+- `0006` builds `DOLPHIN_RUNNER_SOURCE`, a frontend outside Dolphin's source tree
+- `0007` lets a frontend wait until saved states are written
 
 ## SD card storage
 

@@ -1,0 +1,61 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Fri, 30 Oct 2026 13:33:40 +0100
+Subject: [PATCH] Frame step VI fields when a frontend asks for it
+
+Frame stepping only stopped at a field that showed a new frame, so a
+program that keeps showing the same frame never stopped. With
+SetFrameStepFields a frontend steps every field instead, like a
+headless test runner that waits an exact number of fields.
+---
+ Source/Core/Core/Core.cpp | 8 +++++++-
+ Source/Core/Core/Core.h   | 3 +++
+ 2 files changed, 10 insertions(+), 1 deletion(-)
+
+diff --git a/Source/Core/Core/Core.cpp b/Source/Core/Core/Core.cpp
+index fc614fd..c2b719c 100644
+--- a/Source/Core/Core/Core.cpp
++++ b/Source/Core/Core/Core.cpp
+@@ -102,6 +102,7 @@ static Common::HookableEvent<Core::State> s_state_changed_event;
+ static bool s_is_throttler_temp_disabled = false;
+ static bool s_frame_step = false;
+ static std::atomic<bool> s_stop_frame_step;
++static std::atomic<bool> s_frame_step_fields;
+ 
+ // Threads other than the CPU thread must hold this when taking on the role of the CPU thread.
+ // The CPU thread is not required to hold this when doing normal work, but must hold it if writing
+@@ -881,7 +882,7 @@ void Callback_NewField(Core::System& system)
+ 
+     // Only stop the frame stepping if a new frame was displayed
+     // (as opposed to the previous frame being displayed for another frame).
+-    if (s_stop_frame_step.load())
++    if (s_stop_frame_step.load() || s_frame_step_fields.load())
+     {
+       s_frame_step = false;
+       system.GetCPU().Break();
+@@ -1025,6 +1026,11 @@ void DoFrameStep(Core::System& system)
+   }
+ }
+ 
++void SetFrameStepFields(bool fields)
++{
++  s_frame_step_fields.store(fields);
++}
++
+ void UpdateInputGate(bool require_focus, bool require_full_focus)
+ {
+   // If the user accepts background input, controls should pass even if an on screen interface is on
+diff --git a/Source/Core/Core/Core.h b/Source/Core/Core/Core.h
+index 7dff8e1..528ad85 100644
+--- a/Source/Core/Core/Core.h
++++ b/Source/Core/Core/Core.h
+@@ -184,6 +184,9 @@ void QueueHostJob(std::function<void(Core::System&)> job, bool run_during_stop =
+ void HostDispatchJobs(Core::System& system);
+ 
+ void DoFrameStep(Core::System& system);
++// Makes frame stepping stop after every VI field, also when it shows the same frame again, so a
++// frontend can run an exact number of fields
++void SetFrameStepFields(bool fields);
+ 
+ void UpdateInputGate(bool require_focus, bool require_full_focus = false);
+ 

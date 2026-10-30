@@ -1,0 +1,56 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Fri, 30 Oct 2026 13:31:03 +0100
+Subject: [PATCH] Remember the XFB of the last field the VI output
+
+Frontends can read the address, width, stride in bytes and height of
+the last output XFB, to decode it from emulated RAM themselves, like a
+headless test runner that takes screenshots without a video backend
+that presents frames.
+---
+ Source/Core/Core/HW/VideoInterface.cpp |  1 +
+ Source/Core/Core/HW/VideoInterface.h   | 12 ++++++++++++
+ 2 files changed, 13 insertions(+)
+
+diff --git a/Source/Core/Core/HW/VideoInterface.cpp b/Source/Core/Core/HW/VideoInterface.cpp
+index 42e0f35..c909eb4 100644
+--- a/Source/Core/Core/HW/VideoInterface.cpp
++++ b/Source/Core/Core/HW/VideoInterface.cpp
+@@ -861,6 +861,7 @@ void VideoInterfaceManager::OutputField(FieldType field, u64 ticks)
+   }
+ 
+   LogField(field, xfbAddr);
++  m_last_xfb = {xfbAddr, fbWidth, fbStride, fbHeight};
+ 
+   // Outputting the entire frame using a single set of VI register values isn't accurate, as games
+   // can change the register values during scanout. To correctly emulate the scanout process, we
+diff --git a/Source/Core/Core/HW/VideoInterface.h b/Source/Core/Core/HW/VideoInterface.h
+index 6bf762a..2f7b18b 100644
+--- a/Source/Core/Core/HW/VideoInterface.h
++++ b/Source/Core/Core/HW/VideoInterface.h
+@@ -372,6 +372,16 @@ public:
+   u32 GetXFBAddressTop() const;
+   u32 GetXFBAddressBottom() const;
+ 
++  // The XFB of the last field that was output, in RAM, for frontends that read it themselves
++  struct XFBInfo
++  {
++    u32 address = 0;
++    u32 width = 0;
++    u32 stride = 0;
++    u32 height = 0;
++  };
++  const XFBInfo& GetLastXFB() const { return m_last_xfb; }
++
+   // Update and draw framebuffer
+   void Update(u64 ticks);
+ 
+@@ -456,6 +466,8 @@ private:
+ 
+   float m_config_vi_oc_factor = 1.0f;
+ 
++  XFBInfo m_last_xfb;
++
+   Config::ConfigChangedCallbackID m_config_changed_callback_id;
+   Core::System& m_system;
+ };

@@ -1,0 +1,33 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Fri, 30 Oct 2026 13:33:48 +0100
+Subject: [PATCH] Build an extra frontend from a source file outside the tree
+
+DOLPHIN_RUNNER_SOURCE builds that file as dolphin-runner, linked with
+the core like the NoGUI frontend, so a frontend like a headless test
+runner can be kept and built outside Dolphin's source tree.
+---
+ Source/Core/CMakeLists.txt | 10 ++++++++++
+ 1 file changed, 10 insertions(+)
+
+diff --git a/Source/Core/CMakeLists.txt b/Source/Core/CMakeLists.txt
+index b1c5a3a..c719d73 100644
+--- a/Source/Core/CMakeLists.txt
++++ b/Source/Core/CMakeLists.txt
+@@ -15,6 +15,16 @@ if(ENABLE_CLI_TOOL)
+   add_subdirectory(DolphinTool)
+ endif()
+ 
++# A frontend from outside the source tree, like a headless test runner, built as dolphin-runner
++set(DOLPHIN_RUNNER_SOURCE "" CACHE FILEPATH "Source file of an extra frontend to build")
++if(DOLPHIN_RUNNER_SOURCE)
++  add_executable(dolphin-runner ${DOLPHIN_RUNNER_SOURCE})
++  target_link_libraries(dolphin-runner PRIVATE core uicommon)
++  if(APPLE)
++    target_link_libraries(dolphin-runner PRIVATE ${APPKIT_LIBRARY} ${COREFOUNDATION_LIBRARY} ${IOK_LIBRARY})
++  endif()
++endif()
++
+ if(ENABLE_QT)
+   add_subdirectory(DolphinQt)
+ endif()
