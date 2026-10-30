@@ -9,7 +9,7 @@
 use std::ffi::{CStr, CString, c_char, c_void};
 use std::ptr::{null, null_mut};
 
-use crate::{Error, Result};
+use crate::{Error, Result, platform_failure};
 
 const SECRET_SCHEMA_NONE: i32 = 0;
 const SECRET_SCHEMA_ATTRIBUTE_STRING: i32 = 0;
@@ -78,7 +78,7 @@ impl Schema {
             )
         };
         if schema.is_null() {
-            Err(Error::Platform(
+            Err(platform_failure(
                 "failed to create libsecret schema".to_string(),
             ))
         } else {
@@ -116,7 +116,7 @@ pub(crate) fn set_secret(service: &str, account: &str, secret: &[u8]) -> Result<
         )
     };
     if value.is_null() {
-        return Err(Error::Platform(
+        return Err(platform_failure(
             "failed to create libsecret value".to_string(),
         ));
     }
@@ -142,7 +142,7 @@ pub(crate) fn set_secret(service: &str, account: &str, secret: &[u8]) -> Result<
         return Err(take_error(error, "store"));
     }
     if succeeded == 0 {
-        Err(Error::Platform(
+        Err(platform_failure(
             "libsecret failed to store credential".to_string(),
         ))
     } else {
@@ -182,7 +182,7 @@ pub(crate) fn get_secret(service: &str, account: &str) -> Result<Vec<u8>> {
         return Ok(Vec::new());
     }
     if bytes.is_null() {
-        return Err(Error::Platform(
+        return Err(platform_failure(
             "libsecret returned an invalid secret".to_string(),
         ));
     }
@@ -219,7 +219,7 @@ pub(crate) fn delete_credential(service: &str, account: &str) -> Result<()> {
 }
 
 fn c_string(value: &str) -> Result<CString> {
-    CString::new(value).map_err(|_| Error::InvalidInput)
+    CString::new(value).map_err(platform_failure)
 }
 
 fn take_error(error: *mut GError, operation: &str) -> Error {
@@ -229,7 +229,7 @@ fn take_error(error: *mut GError, operation: &str) -> Error {
         .into_owned();
     // SAFETY: ownership of this GError was transferred to the caller.
     unsafe { g_error_free(error) };
-    Error::Platform(format!(
+    platform_failure(format!(
         "failed to {operation} libsecret credential: {message}"
     ))
 }

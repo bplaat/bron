@@ -12,7 +12,7 @@ use std::ptr::{null_mut, slice_from_raw_parts};
 
 use zeroize::{Zeroize, Zeroizing};
 
-use crate::{Error, Result};
+use crate::{Error, Result, platform_failure};
 
 const CRED_TYPE_GENERIC: u32 = 1;
 const CRED_PERSIST_LOCAL_MACHINE: u32 = 2;
@@ -116,7 +116,7 @@ pub(crate) fn get_secret(service: &str, account: &str) -> Result<Vec<u8>> {
         // SAFETY: GetLastError is called immediately after the failed Win32 operation.
         return match unsafe { GetLastError() } {
             ERROR_NOT_FOUND => Err(Error::NoEntry),
-            code => Err(Error::Platform(format!(
+            code => Err(platform_failure(format!(
                 "failed to load Windows credential (error {code})"
             ))),
         };
@@ -146,7 +146,7 @@ pub(crate) fn delete_credential(service: &str, account: &str) -> Result<()> {
     // SAFETY: GetLastError is called immediately after the failed Win32 operation.
     match unsafe { GetLastError() } {
         ERROR_NOT_FOUND => Err(Error::NoEntry),
-        code => Err(Error::Platform(format!(
+        code => Err(platform_failure(format!(
             "failed to delete Windows credential (error {code})"
         ))),
     }
@@ -159,7 +159,7 @@ fn wide(value: &str) -> Vec<u16> {
 fn last_error(operation: &str) -> Error {
     // SAFETY: GetLastError is called immediately after the failed Win32 operation.
     let code = unsafe { GetLastError() };
-    Error::Platform(format!(
+    platform_failure(format!(
         "failed to {operation} Windows credential (error {code})"
     ))
 }

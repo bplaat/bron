@@ -11,7 +11,7 @@ use std::ptr::{null, null_mut};
 
 use zeroize::Zeroize;
 
-use crate::{Error, Result};
+use crate::{Error, Result, platform_failure};
 
 type CfIndex = isize;
 type CfTypeRef = *const c_void;
@@ -102,7 +102,7 @@ impl OwnedCf {
 
     fn from_created(object: CfTypeRef, operation: &str) -> Result<Self> {
         if object.is_null() {
-            Err(Error::Platform(format!("failed to {operation}")))
+            Err(platform_failure(format!("failed to {operation}")))
         } else {
             Ok(Self(object))
         }
@@ -255,7 +255,7 @@ pub(crate) fn delete_credential(service: &str, account: &str) -> Result<()> {
 }
 
 fn status_error(operation: &str, status: OsStatus) -> Error {
-    Error::Platform(format!(
+    platform_failure(format!(
         "failed to {operation} Keychain credential (OSStatus {status})"
     ))
 }

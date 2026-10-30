@@ -32,36 +32,58 @@ cfg_select! {
     }
 }
 
+/// A platform-specific error attached to an [`Error`].
+type PlatformError = Box<dyn std::error::Error + Send + Sync>;
+
 /// An error returned by the system credential store.
+#[non_exhaustive]
 #[derive(Debug)]
 pub enum Error {
+    /// The platform credential store failed.
+    PlatformFailure(PlatformError),
     /// The requested credential does not exist.
     NoEntry,
-    /// A service or account contains an embedded NUL byte.
-    InvalidInput,
-    /// The platform credential store failed.
-    Platform(String),
+    /// A parameter was invalid, with the parameter name and the reason.
+    Invalid(String, String),
 }
 
 impl Display for Error {
-    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
-            Self::NoEntry => formatter.write_str("credential not found"),
-            Self::InvalidInput => {
-                formatter.write_str("service and account must not contain NUL bytes")
-            }
-            Self::Platform(message) => formatter.write_str(message),
+            Self::PlatformFailure(err) => write!(f, "Platform failure: {err}"),
+            Self::NoEntry => write!(f, "No matching credential found"),
+            Self::Invalid(attr, reason) => write!(f, "Value of '{attr}' is invalid: {reason}"),
         }
     }
 }
 
-impl std::error::Error for Error {}
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::PlatformFailure(err) => Some(err.as_ref()),
+            _ => None,
+        }
+    }
+}
+
+fn platform_failure(message: impl Into<PlatformError>) -> Error {
+    Error::PlatformFailure(message.into())
+}
+
+fn reject_nul(name: &str, value: &str) -> Result<()> {
+    if value.contains('\0') {
+        return Err(Error::Invalid(
+            name.to_string(),
+            "must not contain NUL bytes".to_string(),
+        ));
+    }
+    Ok(())
+}
 
 /// A result returned by the system credential store.
 pub type Result<T> = std::result::Result<T, Error>;
 
 /// A secret identified by a service and account name.
-#[derive(Debug, Clone)]
 pub struct Entry {
     service: String,
     account: String,
@@ -70,9 +92,8 @@ pub struct Entry {
 impl Entry {
     /// Creates an entry in the platform credential store.
     pub fn new(service: &str, account: &str) -> Result<Self> {
-        if service.contains('\0') || account.contains('\0') {
-            return Err(Error::InvalidInput);
-        }
+        reject_nul("service", service)?;
+        reject_nul("username", account)?;
         Ok(Self {
             service: service.to_string(),
             account: account.to_string(),
@@ -105,11 +126,11 @@ mod tests {
     fn rejects_embedded_nul() {
         assert!(matches!(
             Entry::new("service\0suffix", "account"),
-            Err(Error::InvalidInput)
+            Err(Error::Invalid(..))
         ));
         assert!(matches!(
             Entry::new("service", "account\0suffix"),
-            Err(Error::InvalidInput)
+            Err(Error::Invalid(..))
         ));
     }
 
