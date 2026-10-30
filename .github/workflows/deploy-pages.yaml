@@ -39,7 +39,7 @@ jobs:
         run: |
           rustup target add wasm32-unknown-unknown
           curl -L --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash
-          cargo binstall -y --locked wasm-bindgen-cli --version 0.2.129
+          cargo binstall -y --locked wasm-bindgen-cli --version 0.2.130
       - name: Build pages
         run: cargo xtask build-pages
       - name: Upload pages
