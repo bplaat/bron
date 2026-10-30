@@ -4,9 +4,9 @@
  * SPDX-License-Identifier: MIT
  */
 
-use rust_embed_impl::Embed;
+use rust_embed_impl::RustEmbed;
 
-#[derive(Embed)]
+#[derive(RustEmbed)]
 #[folder("assets")]
 struct Assets;
 

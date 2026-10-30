@@ -1,7 +1,5 @@
-error: proc-macro derive panicked
- --> tests/ui/fail/malformed_attribute.rs:9:10
-  |
-9 | #[derive(Embed)]
-  |          ^^^^^
-  |
-  = help: message: Invalid #[folder = "..."] attribute
+error: #[derive(RustEmbed)] must contain one attribute like this #[folder = "examples/public/"]
+  --> tests/ui/fail/malformed_attribute.rs:11:8
+   |
+11 | struct Assets;
+   |        ^^^^^^

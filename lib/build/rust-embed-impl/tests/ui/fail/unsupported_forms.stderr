@@ -1,10 +1,10 @@
-error: Embed can only be derived for unit structs
+error: RustEmbed can only be derived for unit structs
   --> tests/ui/fail/unsupported_forms.rs:11:6
    |
 11 | enum Assets {}
    |      ^^^^^^
 
-error: Embed does not support generic types
+error: RustEmbed does not support generic types
   --> tests/ui/fail/unsupported_forms.rs:15:15
    |
 15 | struct Generic<const N: usize>;

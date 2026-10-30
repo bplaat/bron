@@ -4,13 +4,13 @@
  * SPDX-License-Identifier: MIT
  */
 
-use rust_embed_impl::Embed;
+use rust_embed_impl::RustEmbed;
 
-#[derive(Embed)]
+#[derive(RustEmbed)]
 #[folder = "tests/ui/assets"]
 enum Assets {}
 
-#[derive(Embed)]
+#[derive(RustEmbed)]
 #[folder = "tests/ui/assets"]
 struct Generic<const N: usize>;
 

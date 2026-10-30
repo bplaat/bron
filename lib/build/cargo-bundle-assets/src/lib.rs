@@ -18,6 +18,8 @@ pub mod __private {
     pub use std::borrow::Cow;
     pub use std::io;
 
+    pub use rust_embed::Metadata;
+
     pub use super::read;
 }
 
@@ -33,6 +35,7 @@ pub fn read(collection: &str, name: &str, metadata: &[u8]) -> io::Result<Embedde
     let data = std::fs::read(resource_root()?.join(relative))?;
     Ok(EmbeddedFile {
         data: Cow::Owned(data),
+        metadata: rust_embed::Metadata::__rust_embed_new([0; 32], None, None),
     })
 }
 

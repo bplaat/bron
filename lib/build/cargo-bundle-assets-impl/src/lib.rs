@@ -123,6 +123,7 @@ fn expand(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
                 Ok(match path {
                     #(#names => Some(::cargo_bundle_assets::EmbeddedFile {
                         data: ::cargo_bundle_assets::__private::Cow::Borrowed(include_bytes!(#sources)),
+                        metadata: ::cargo_bundle_assets::__private::Metadata::__rust_embed_new([0; 32], None, None),
                     }),)*
                     _ => None,
                 })
