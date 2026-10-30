@@ -1,0 +1,27 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Fri, 30 Oct 2026 13:06:33 +0100
+Subject: [PATCH] Only report SD writes that end inside a sector
+
+A write of whole sectors leaves SectorPos at 0, as each full sector
+resets it, so every write printed that it was incomplete with len=0.
+The message is also logged as a warning instead of printed to stdout.
+---
+ src/NDSCart/CartHomebrew.cpp | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/src/NDSCart/CartHomebrew.cpp b/src/NDSCart/CartHomebrew.cpp
+index ab53126..f3d2dd1 100644
+--- a/src/NDSCart/CartHomebrew.cpp
++++ b/src/NDSCart/CartHomebrew.cpp
+@@ -168,8 +168,8 @@ void CartHomebrew::ROMCommandFinish()
+     switch (ROMCmd[0])
+     {
+     case 0xC1:
+-        if (SectorPos < 512)
+-            printf("incomplete SD write command?? len=%d\n", SectorPos);
++        if (SectorPos != 0)
++            Log(LogLevel::Warn, "incomplete SD write command?? len=%d\n", SectorPos);
+         //if (SD && !SD->IsReadOnly()) SD->WriteSectors(SectorAddr, 1, SectorBuffer);
+         return;
+ 

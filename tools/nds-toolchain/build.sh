@@ -8,8 +8,8 @@
 # Usage: ./build.sh [command]...
 #   (none)          fetch, patch and build
 #   export-patches  write the commits in target/<name>/ back to <name>/patches/
-#   test            build test/ and run it headless in DeSmuME
-#   desmume         build DeSmuME's library and desmume/runner.c to target/bin/desmume-runner
+#   test            build test/ and run it headless in melonDS, as a DS and as a DSi
+#   melonds         build melonDS's core library and melonds/runner.cpp to target/bin/melonds-runner
 #   clean           remove target/
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -26,9 +26,10 @@ REPOS=(
     'compiler-rt https://github.com/llvm/llvm-project.git llvmorg-23.1.3 0d261d1ca552c95a8f007e061c787ac7132fbcbc /compiler-rt/lib/builtins/'
 )
 
-# DeSmuME for desmume/runner.c, cloned by the desmume and test commands. Its last release is from
-# 2022, so it's a commit of master, a version that is the commit fetches that commit.
-DESMUME_REPO='desmume https://github.com/TASEmulators/desmume.git 1275dc64f5d1f5ef18dc1bc1fa9e012024b6df1a 1275dc64f5d1f5ef18dc1bc1fa9e012024b6df1a'
+# melonDS for melonds/runner.cpp, cloned by the melonds and test commands. Its free DSi BIOS, which
+# runs DSi mode without dumps, is newer than its last release, so it's a commit of master, a version
+# that is the commit fetches that commit.
+MELONDS_REPO='melonds https://github.com/melonDS-emu/melonDS.git 1e654443e4c0a54b40709c0208aa0eeba41e6142 1e654443e4c0a54b40709c0208aa0eeba41e6142'
 
 TOOLCHAIN_DIR="$PWD"
 BUILD_DIR="$(cd ../.. && pwd)/target/nds-toolchain"
@@ -200,12 +201,12 @@ patch_all() {
 # Writes the commits on top of upstream back to <name>/patches/
 export_patches() {
     local repo name dir
-    for repo in "${REPOS[@]}" "$DESMUME_REPO"; do
+    for repo in "${REPOS[@]}" "$MELONDS_REPO"; do
         name="${repo%% *}"
         dir="$BUILD_DIR/$name"
         [ -d "$TOOLCHAIN_DIR/$name/patches" ] || continue
-        # DeSmuME is only there once the desmume command ran
-        [ "$repo" = "$DESMUME_REPO" ] && [ ! -d "$dir" ] && continue
+        # melonDS is only there once the melonds command ran
+        [ "$repo" = "$MELONDS_REPO" ] && [ ! -d "$dir" ] && continue
         [ -d "$dir/.git" ] || die "No patched $name, run ./build.sh first"
         rm -f "$TOOLCHAIN_DIR/$name"/patches/*.patch
         git -C "$dir" format-patch -q --no-numbered --zero-commit --no-signature \
@@ -367,39 +368,45 @@ build_ndstool() {
         "$objects_dir"/*.o -o "$BUILD_DIR/bin/ndstool"
 }
 
-# Builds test/ with the toolchain and runs it headless in desmume-runner, with an R4 card holding
-# the ROM in test/target/sd/, the runner reads the results from RAM and fails when a check fails
+# Builds test/ with the toolchain and runs it headless in melonds-runner, as a DS with an R4 card
+# and as a DSi with an SD card, both holding the ROM in test/target/sd/, the runner reads the results
+# from RAM and fails when a check fails
 run_test() {
     local target="$TOOLCHAIN_DIR/test/target" address
-    build_desmume
+    build_melonds
     make -C "$TOOLCHAIN_DIR/test" --no-print-directory
     address=$("${LLVM}llvm-nm" "$target/test.elf" | awk '$3 == "test_results" { print $1 }')
     [ -n "$address" ] || die "Missing test results symbol"
     rm -rf "$target/sd"
     mkdir -p "$target/sd"
     cp "$target/test.nds" "$target/sd/test.nds"
-    msg "Running the test in DeSmuME"
-    "$BUILD_DIR/bin/desmume-runner" --fat "$target/sd" "$target/sd/test.nds" "test $address 3600"
+    msg "Running the test in melonDS as a DS"
+    "$BUILD_DIR/bin/melonds-runner" --fat "$target/sd" "$target/sd/test.nds" "test $address 3600"
+    msg "Running the test in melonDS as a DSi"
+    "$BUILD_DIR/bin/melonds-runner" --dsi --fat "$target/sd" "$target/sd/test.nds" "test $address 3600"
     msg "All tests passed"
 }
 
-# Builds DeSmuME's interface library, the one py-desmume uses, and the runner on it, which plays a
-# program headless and takes screenshots
-build_desmume() {
-    local interface="$BUILD_DIR/desmume/desmume/src/frontend/interface" objects_dir="$BUILD_DIR/objects/desmume"
-    command -v meson > /dev/null || die "Install meson and ninja to build DeSmuME"
+# Builds melonDS's core library, without its frontend, JIT, OpenGL renderer and GDB stub, and the
+# runner on it, which plays a program headless and takes screenshots
+build_melonds() {
+    local objects_dir="$BUILD_DIR/objects/melonds"
+    command -v cmake > /dev/null || die "Install cmake and ninja to build melonDS"
     # shellcheck disable=SC2086
-    clone $DESMUME_REPO
-    patch desmume "$(echo "$DESMUME_REPO" | cut -d' ' -f4)"
-    [ -f "$objects_dir/build.ninja" ] || meson setup "$objects_dir" "$interface" --buildtype=release > /dev/null
-    msg "Building DeSmuME"
-    ninja -C "$objects_dir" > /dev/null
-    outdated "$BUILD_DIR/bin/desmume-runner" "$TOOLCHAIN_DIR/desmume/runner.c" "$objects_dir"/libdesmume.* ||
+    clone $MELONDS_REPO
+    patch melonds "$(echo "$MELONDS_REPO" | cut -d' ' -f4)"
+    [ -f "$objects_dir/build.ninja" ] || cmake -S "$BUILD_DIR/melonds" -B "$objects_dir" -G Ninja -Wno-dev \
+        -DCMAKE_BUILD_TYPE=Release -DBUILD_QT_SDL=OFF -DENABLE_JIT=OFF -DENABLE_OGLRENDERER=OFF \
+        -DENABLE_GDBSTUB=OFF -DENABLE_LTO_RELEASE=OFF > /dev/null
+    msg "Building melonDS"
+    ninja -C "$objects_dir" core teakra > /dev/null
+    outdated "$BUILD_DIR/bin/melonds-runner" "$TOOLCHAIN_DIR/melonds/runner.cpp" "$objects_dir"/src/libcore.a ||
         return 0
-    msg "Building desmume-runner"
+    msg "Building melonds-runner"
     mkdir -p "$BUILD_DIR/bin"
-    cc -std=c11 -O2 -Wall -Wextra "$TOOLCHAIN_DIR/desmume/runner.c" -L"$objects_dir" -ldesmume -lz \
-        -Wl,-rpath,"$objects_dir" -o "$BUILD_DIR/bin/desmume-runner"
+    c++ -std=c++17 -O2 -Wall -Wextra -fwrapv -isystem "$BUILD_DIR/melonds/src" -isystem "$objects_dir/src" \
+        "$TOOLCHAIN_DIR/melonds/runner.cpp" "$objects_dir/src/libcore.a" "$objects_dir/src/teakra/src/libteakra.a" \
+        -lz -lpthread -o "$BUILD_DIR/bin/melonds-runner"
 }
 
 # Only one build at a time, the ports can start one at the same time
@@ -421,7 +428,7 @@ for command in "$@"; do
         all) lock; fetch; patch_all; build_libraries; build_arm7; build_ndstool ;;
         export-patches) export_patches ;;
         test) lock; fetch; patch_all; build_libraries; build_arm7; build_ndstool; run_test ;;
-        desmume) lock; build_desmume ;;
+        melonds) lock; build_melonds ;;
         clean) rm -rf "$BUILD_DIR" ;;
         *) die "Unknown command: $command" ;;
     esac

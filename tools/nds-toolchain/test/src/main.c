@@ -21,7 +21,7 @@
 #include <time.h>
 #include <unistd.h>
 
-// Read from RAM by the `test` command of desmume-runner, the status is 0 while running, 1 when
+// Read from RAM by the `test` command of melonds-runner, the status is 0 while running, 1 when
 // all checks passed and 2 when one failed
 struct {
     volatile uint32_t status;

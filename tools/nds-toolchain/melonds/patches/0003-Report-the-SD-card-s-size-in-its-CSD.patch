@@ -1,0 +1,65 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Fri, 30 Oct 2026 13:13:04 +0100
+Subject: [PATCH] Report the SD card's size in its CSD
+
+The CSD of a DSi SD card always described a card of 240 MiB, while the
+default card image is 256 MiB, so software that checks its partitions
+against the card's size, like calico, found the partition too big and
+didn't mount the card. The size fields are now set to the smallest
+unit that covers the image, up to 4 GiB.
+---
+ src/DSi_SD.cpp | 33 +++++++++++++++++++++++++++++++++
+ 1 file changed, 33 insertions(+)
+
+diff --git a/src/DSi_SD.cpp b/src/DSi_SD.cpp
+index ee8c45c..5a98933 100644
+--- a/src/DSi_SD.cpp
++++ b/src/DSi_SD.cpp
+@@ -847,6 +847,16 @@ DSi_MMCStorage::DSi_MMCStorage(melonDS::DSi& dsi, DSi_SDHost* host, FATStorage&&
+ // std::variant's destructor will clean it up.
+ DSi_MMCStorage::~DSi_MMCStorage() = default;
+ 
++// Sets a field of a CSD, which is stored without its CRC byte, so its bits are shifted down by 8
++static void SetCSDField(u8* csd, int start, int width, u32 value)
++{
++    for (int i = 0; i < width; i++)
++    {
++        int bit = start - 8 + i;
++        csd[bit >> 3] = (csd[bit >> 3] & ~(1 << (bit & 7))) | (((value >> i) & 1) << (bit & 7));
++    }
++}
++
+ void DSi_MMCStorage::Reset()
+ {
+     // TODO: reset file access????
+@@ -861,6 +871,29 @@ void DSi_MMCStorage::Reset()
+     u8 csd_template[16] = {0x40, 0x40, 0x96, 0xE9, 0x7F, 0xDB, 0xF6, 0xDF, 0x01, 0x59, 0x0F, 0x2A, 0x01, 0x26, 0x90, 0x00};
+     memcpy(CSD, csd_template, 16);
+ 
++    // An SD card's size is (C_SIZE+1) << (C_SIZE_MULT+2) blocks of 1 << READ_BL_LEN bytes, the
++    // smallest unit that covers the image up to 4 GiB, so software can check its partitions
++    if (auto* sd = std::get_if<FATStorage>(&Storage))
++    {
++        u64 sectors = sd->GetSectorCount();
++        bool found = false;
++        for (u32 blocklen = 9; blocklen <= 11 && !found; blocklen++)
++        {
++            for (u32 mult = 0; mult <= 7 && !found; mult++)
++            {
++                u64 unit = 1ULL << (blocklen - 9 + mult + 2);
++                u64 size = (sectors + unit - 1) / unit;
++                if (size > 0 && size <= 4096)
++                {
++                    SetCSDField(CSD, 80, 4, blocklen);  // READ_BL_LEN
++                    SetCSDField(CSD, 62, 12, size - 1); // C_SIZE
++                    SetCSDField(CSD, 47, 3, mult);      // C_SIZE_MULT
++                    found = true;
++                }
++            }
++        }
++    }
++
+     // checkme
+     memset(SCR, 0, 8);
+     *(u32*)&SCR[0] = 0x012A0000;

@@ -52,11 +52,11 @@ button, quits.
 ./build.sh clean            # remove target/
 ```
 
-DeSmuME emulates the Memory Expansion Pak, the [runner](../../../tools/nds-toolchain) puts
+melonDS emulates the Memory Expansion Pak, the [runner](../../../tools/nds-toolchain) puts
 one in the GBA slot with its `pak` command:
 
 ```sh
-../../../target/nds-toolchain/bin/desmume-runner target/quake2.nds pak 'wait 2000' 'shot quake2.png'
+../../../target/nds-toolchain/bin/melonds-runner target/quake2.nds pak 'wait 2000' 'shot quake2.png'
 ```
 
 ## Game data
@@ -99,10 +99,10 @@ short. The biggest maps, like the Upper Mines, leave about 190 KiB of main
 RAM and 1 MiB of the Memory Expansion Pak free.
 
 The GBA slot is a 16-bit bus, the pak ignores byte writes, like melonDS
-does and DeSmuME does for the runner. What goes there is written a halfword
-or word at a time: what has bytes is put together in main RAM and copied,
-the C library's `memcpy` and `memset` write the bytes at their ends with
-their halfword and `fread` reads into it through its buffer.
+does. What goes there is written a halfword or word at a time: what has
+bytes is put together in main RAM and copied, the C library's `memcpy` and
+`memset` write the bytes at their ends with their halfword and `fread`
+reads into it through its buffer.
 
 ## Changes to Quake II
 

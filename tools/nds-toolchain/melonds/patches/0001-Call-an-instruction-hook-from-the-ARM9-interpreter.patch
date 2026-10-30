@@ -1,0 +1,52 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Fri, 30 Oct 2026 13:00:22 +0100
+Subject: [PATCH] Call an instruction hook from the ARM9 interpreter
+
+For profiling by a frontend: while ARMv5::InstrHook is set, the
+interpreter calls it after each instruction with the instruction's
+address and its cycles, including the waits for its memory accesses.
+---
+ src/ARM.cpp | 5 +++++
+ src/ARM.h   | 5 +++++
+ 2 files changed, 10 insertions(+)
+
+diff --git a/src/ARM.cpp b/src/ARM.cpp
+index 3937a99..6966856 100644
+--- a/src/ARM.cpp
++++ b/src/ARM.cpp
+@@ -657,6 +657,8 @@ void ARMv5::Execute()
+         else
+ #endif
+         {
++            const u32 instrAddr = R[15] - ((CPSR & 0x20) ? 2 : 4);
++
+             if (CPSR & 0x20) // THUMB
+             {
+                 if constexpr (mode == CPUExecuteMode::InterpreterGDB)
+@@ -698,6 +700,9 @@ void ARMv5::Execute()
+                     AddCycles_C();
+             }
+ 
++            if (InstrHook)
++                InstrHook(InstrHookData, instrAddr, Cycles);
++
+             // TODO optimize this shit!!!
+             if (Halted)
+             {
+diff --git a/src/ARM.h b/src/ARM.h
+index 88f970b..ee6d85c 100644
+--- a/src/ARM.h
++++ b/src/ARM.h
+@@ -241,6 +241,11 @@ public:
+ 
+     void UpdateRegionTimings(u32 addrstart, u32 addrend);
+ 
++    // For profiling by a frontend: while set, the interpreter calls it after each instruction with
++    // its address and its cycles
++    void (*InstrHook)(void* data, u32 addr, s32 cycles) = nullptr;
++    void* InstrHookData = nullptr;
++
+     void FillPipeline() override;
+ 
+     void JumpTo(u32 addr, bool restorecpsr = false) override;

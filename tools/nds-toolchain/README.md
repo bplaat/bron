@@ -21,28 +21,30 @@ What the ports share to build Nintendo DS programs with plain clang and lld, wit
 ./build.sh                 # fetch, patch and build
 ./build.sh clean           # remove ../../target/nds-toolchain/
 ./build.sh export-patches  # write the commits in ../../target/nds-toolchain/<name>/ back to <name>/patches/
-./build.sh test            # build test/ and run it headless in DeSmuME
-./build.sh desmume         # build ../../target/nds-toolchain/bin/desmume-runner
+./build.sh test            # build test/ and run it headless in melonDS, as a DS and as a DSi
+./build.sh melonds         # build ../../target/nds-toolchain/bin/melonds-runner
 ```
 
-Building picolibc and DeSmuME needs meson and ninja. The ARM9 (ARMv5TE) and ARM7 (ARMv4T) have no
-floating point unit, picolibc's float math is single precision. Code is Thumb, except objects named
-`*.32.o` or `*.itcm.o` (a port's `ITCM_SOURCES`), which are ARM code in fast memory. Code is
-compiled with `_DEFAULT_SOURCE`, so picolibc also declares its POSIX and BSD functions.
+Building picolibc needs meson and ninja, melonDS needs CMake, ninja and zlib. The ARM9 (ARMv5TE)
+and ARM7 (ARMv4T) have no floating point unit, picolibc's float math is single precision. Code is
+Thumb, except objects named `*.32.o` or `*.itcm.o` (a port's `ITCM_SOURCES`), which are ARM code in
+fast memory. Code is compiled with `_DEFAULT_SOURCE`, so picolibc also declares its POSIX and BSD
+functions.
 
 ## Files
 
 - `nds.mk` has the make rules for the ports' `Makefile.nds`, at `-O3`. A port's own ARM7 code
   (`ARM7_SOURCES`) is linked with the default ARM7 program, which calls its `arm7PortInit`
 - `run.sh` starts a program in melonDS, `make run` uses it
-- `desmume/runner.c` runs a `.nds` headless in [DeSmuME](https://github.com/TASEmulators/desmume)'s
-  interface library, frame exact, for scripts and agents: it presses buttons, touches the touch
-  screen, takes PNG screenshots of both screens and saves and loads savestates. Each argument is a
-  command, without them it reads one per line from stdin and answers each with `ok`:
+- `melonds/runner.cpp` runs a `.nds` headless in [melonDS](https://github.com/melonDS-emu/melonDS)'s
+  core library, with its interpreter, software renderer, free BIOSes and generated firmware, frame
+  exact, for scripts and agents: it presses buttons, touches the touch screen, takes PNG
+  screenshots of both screens and saves and loads savestates. Each argument is a command, without
+  them it reads one per line from stdin and answers each with `ok`:
 
     ```sh
-    ../../target/nds-toolchain/bin/desmume-runner ../../games/nds/duke3d/target/duke3d.nds 'wait 1200' 'press start' 'wait 60' \
-        'press a' 'shot menu.png' 'save menu.dst'
+    ../../target/nds-toolchain/bin/melonds-runner ../../games/nds/duke3d/target/duke3d.nds 'wait 1200' 'press start' 'wait 60' \
+        'press a' 'shot menu.png' 'save menu.mln'
     ```
 
     The commands are `wait <frames>`, `press <keys> [frames]`, `hold <keys>`, `release`,
@@ -51,16 +53,19 @@ compiled with `_DEFAULT_SOURCE`, so picolibc also declares its POSIX and BSD fun
     `profile start`, `busy`, the share of the ARM9's time not waiting, `profile save <file>`, the
     ARM9 cycles per instruction address with their cache misses, `profile stop`, `wav <file>` and
     `wav stop`, which record the sound, `pak`, which puts a Memory Expansion Pak in the GBA slot
-    before the first `wait`, `peek <address> [words]`, which prints words of memory, and `quit`,
-    keys like `up+a`. The optional `--fat <directory>` before the ROM argument selects a writable
-    R4 card initialized from that directory; writes stay in emulated memory. Without it, ports read
-    their data from NitroFS. `test <address> <frames>` reads the test ROM's status and log from RAM,
-    returning an error on failed tests or a frame timeout.
+    (not on a DSi), `peek <address> [words]`, which prints words of memory, and `quit`, keys like
+    `up+a`. Before the ROM argument, `--dsi` runs it as a DSi instead of a DS, and `--fat
+    <directory>` puts a writable SD card initialized from that directory in melonDS's R4 like card,
+    as `fat:/`, or on a DSi in its SD card slot, as `sd:/`, the ROM's `argv[0]` points to it there.
+    Its writes stay in emulated memory. Without it, ports read their data from NitroFS.
+    `test <address> <frames>` reads the test ROM's status and log from RAM, returning an error on
+    failed tests or a frame timeout.
 
 - `test/` is a DS program that checks the startup code, the C library, compiler-rt, threads, ITCM,
-  FAT, NitroFS and the console's escape sequences. `./build.sh test` builds DeSmuME and runs it headless with a writable R4 card
-  initialized from `test/target/sd/`. It prints the results and fails when a check fails or the ROM does not
-  finish within 3600 emulated frames. The ROM also saves `test.txt` on the emulated card.
+  FAT, NitroFS and the console's escape sequences. `./build.sh test` builds melonDS and runs it
+  headless twice, as a DS with a writable R4 card and as a DSi with a writable SD card, both
+  initialized from `test/target/sd/`. It prints the results and fails when a check fails or the ROM
+  does not finish within 3600 emulated frames. The ROM also saves `test.txt` on the emulated card.
 
 ## Patches
 
@@ -81,18 +86,14 @@ to write the commits back.
   like a Memory Expansion Pak's (`far_heap_init`, `far_malloc`), and `clock` counts milliseconds,
   so its 32 bits wrap after 24 days
 - default-arm7: calls `arm7PortInit`, which does nothing by default, before its main loop
-- desmume: returning from an interrupt to Thumb code at an address that isn't a multiple of 4,
-  like calico does with `ldm sp!, {..., pc}^`, ran the instruction before it again, the ARM9
-  cycles are counted per instruction address for `profile` of the runner and the sound can be
-  recorded for `wav`, the runner can put a Memory Expansion Pak in the GBA slot for `pak`, which
-  ignores byte writes like in melonDS, the runner can put an R4 card with the files of a directory
-  in the card slot for `--fat`, whose driver returns with `bx`, so calico can run it on the ARM7,
-  and whose directory is listed by host paths, so it also works on Linux, and the microphone is
-  never captured, it only gets emulated samples
+- melonds: the ARM9 interpreter calls a hook after each instruction with its address and cycles,
+  for `hook` and `profile` of the runner, a DSi SD card's CSD has the size of its image, so calico
+  doesn't reject its partition as bigger than the card, and complete SD writes of the R4 like card
+  no longer print that they are incomplete
 - compiler-rt: the optimized float functions for ARMv5TE, divisions that return to Thumb on
   ARMv4T
 
 From the repository root, `./meta.sh check-others` (or `cargo xtask check-others`) builds and runs
 these tests on Linux alongside the other platform checks. To run only the DS tests on Linux or
-macOS, use `tools/nds-toolchain/build.sh test`. DeSmuME needs Meson, Ninja, pkg-config and the SDL2,
-GLib, libpcap and zlib development packages. Interactive `make run` continues to use melonDS.
+macOS, use `tools/nds-toolchain/build.sh test`. The runner is built from melonDS's core library,
+interactive `make run` uses the melonDS app.
