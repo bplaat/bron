@@ -7,72 +7,211 @@
 //! A minimal replacement for the [plist](https://crates.io/crates/plist) crate.
 //! Supports writing binary plists and reading XML plists.
 
-use std::collections::BTreeMap;
+use std::fmt;
 use std::io::Write;
 use std::path::Path;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use base64::prelude::*;
+pub use dictionary::Dictionary;
 use xmlparser::{ElementEnd, Token as XmlToken, Tokenizer};
 
-// MARK: Types
-/// A plist dictionary (ordered by key).
-pub type Dictionary = BTreeMap<String, Value>;
+pub mod dictionary;
 
+// MARK: Value
 /// A plist value.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub enum Value {
-    /// A boolean value.
-    Boolean(bool),
-    /// A signed 64-bit integer value.
-    Integer(i64),
-    /// A 64-bit floating-point value.
-    Real(f64),
-    /// A UTF-8 string value.
-    String(String),
-    /// A raw bytes value.
-    Data(Vec<u8>),
     /// An ordered array of values.
     Array(Vec<Value>),
     /// A key-value dictionary.
     Dictionary(Dictionary),
+    /// A boolean value.
+    Boolean(bool),
+    /// A raw bytes value.
+    Data(Vec<u8>),
+    /// A date value.
+    Date(Date),
+    /// A 64-bit floating-point value.
+    Real(f64),
+    /// An integer value.
+    Integer(Integer),
+    /// A UTF-8 string value.
+    String(String),
+    /// A keyed archiver object reference.
+    Uid(Uid),
 }
 
-impl From<bool> for Value {
-    fn from(b: bool) -> Self {
-        Value::Boolean(b)
+impl From<Vec<Value>> for Value {
+    fn from(from: Vec<Value>) -> Self {
+        Value::Array(from)
     }
 }
 
-impl From<i64> for Value {
-    fn from(n: i64) -> Self {
-        Value::Integer(n)
+impl From<Dictionary> for Value {
+    fn from(from: Dictionary) -> Self {
+        Value::Dictionary(from)
+    }
+}
+
+impl From<bool> for Value {
+    fn from(from: bool) -> Self {
+        Value::Boolean(from)
+    }
+}
+
+impl From<Date> for Value {
+    fn from(from: Date) -> Self {
+        Value::Date(from)
     }
 }
 
 impl From<f64> for Value {
-    fn from(f: f64) -> Self {
-        Value::Real(f)
+    fn from(from: f64) -> Self {
+        Value::Real(from)
     }
 }
 
 impl From<String> for Value {
-    fn from(s: String) -> Self {
-        Value::String(s)
+    fn from(from: String) -> Self {
+        Value::String(from)
     }
 }
 
 impl From<&str> for Value {
-    fn from(s: &str) -> Self {
-        Value::String(s.to_string())
+    fn from(from: &str) -> Self {
+        Value::String(from.into())
     }
 }
 
+// MARK: Integer
+/// An integer that can be represented by either an `i64` or a `u64`.
+#[derive(Clone, Copy, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct Integer {
+    value: i128,
+}
+
+impl Integer {
+    /// Returns the value as an `i64` if it can be represented by that type.
+    pub fn as_signed(self) -> Option<i64> {
+        i64::try_from(self.value).ok()
+    }
+
+    /// Returns the value as a `u64` if it can be represented by that type.
+    pub fn as_unsigned(self) -> Option<u64> {
+        u64::try_from(self.value).ok()
+    }
+
+    /// Parse an XML plist integer, preferring `i64` like Apple's implementation.
+    fn parse(s: &str) -> Result<Self, std::num::ParseIntError> {
+        Ok(match s.strip_prefix("0x") {
+            Some(hex) => u64::from_str_radix(hex, 16)?.into(),
+            None => match s.parse::<i64>() {
+                Ok(value) => value.into(),
+                Err(_) => s.parse::<u64>()?.into(),
+            },
+        })
+    }
+}
+
+impl fmt::Debug for Integer {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.value.fmt(f)
+    }
+}
+
+impl fmt::Display for Integer {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.value.fmt(f)
+    }
+}
+
+macro_rules! impl_integer_from {
+    ($($ty:ty),*) => {$(
+        impl From<$ty> for Integer {
+            fn from(value: $ty) -> Self {
+                Integer {
+                    value: value.into(),
+                }
+            }
+        }
+
+        impl From<$ty> for Value {
+            fn from(from: $ty) -> Self {
+                Value::Integer(from.into())
+            }
+        }
+    )*};
+}
+impl_integer_from!(i64, i32, i16, i8, u64, u32, u16, u8);
+
+// MARK: Date
+/// A UTC timestamp used for serialization to and from the plist date type.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct Date {
+    inner: SystemTime,
+}
+
+impl Date {
+    /// The plist epoch (2001-01-01T00:00:00Z) as a Unix timestamp.
+    const PLIST_EPOCH_UNIX_TIMESTAMP: Duration = Duration::from_secs(978_307_200);
+
+    fn as_seconds_since_plist_epoch(&self) -> f64 {
+        let plist_epoch = UNIX_EPOCH + Self::PLIST_EPOCH_UNIX_TIMESTAMP;
+        match self.inner.duration_since(plist_epoch) {
+            Ok(duration) => duration.as_secs_f64(),
+            Err(err) => -err.duration().as_secs_f64(),
+        }
+    }
+}
+
+impl From<SystemTime> for Date {
+    fn from(date: SystemTime) -> Self {
+        Date { inner: date }
+    }
+}
+
+impl From<Date> for SystemTime {
+    fn from(val: Date) -> Self {
+        val.inner
+    }
+}
+
+// MARK: Uid
+/// A plist `uid` value, used by `NSKeyedArchiver` object references.
+#[derive(Clone, Copy, Eq, Hash, PartialEq)]
+pub struct Uid {
+    value: u64,
+}
+
+impl Uid {
+    /// Creates a new `Uid` containing the given value.
+    #[allow(clippy::missing_const_for_fn)] // Upstream API is not const
+    pub fn new(value: u64) -> Uid {
+        Uid { value }
+    }
+
+    /// Returns the value as a `u64`.
+    #[allow(clippy::missing_const_for_fn)] // Upstream API is not const
+    pub fn get(self) -> u64 {
+        self.value
+    }
+}
+
+impl fmt::Debug for Uid {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.value.fmt(f)
+    }
+}
+
+// MARK: Error
 /// Error type returned by plist operations.
 #[derive(Debug)]
 pub struct Error(String);
 
-impl std::fmt::Display for Error {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.0)
     }
 }
@@ -125,7 +264,9 @@ impl Value {
 // MARK: Binary plist writer
 enum Obj {
     Bool(bool),
-    Int(i64),
+    Int(Integer),
+    Date(Date),
+    Uid(Uid),
     Real(f64),
     Str(String),
     Data(Vec<u8>),
@@ -142,6 +283,8 @@ impl Collector {
         match value {
             Value::Boolean(b) => self.push(Obj::Bool(*b)),
             Value::Integer(n) => self.push(Obj::Int(*n)),
+            Value::Date(d) => self.push(Obj::Date(*d)),
+            Value::Uid(u) => self.push(Obj::Uid(*u)),
             Value::Real(f) => self.push(Obj::Real(*f)),
             Value::String(s) => self.push(Obj::Str(s.clone())),
             Value::Data(d) => self.push(Obj::Data(d.clone())),
@@ -251,7 +394,32 @@ fn encode_obj(obj: &Obj, ref_size: usize) -> Vec<u8> {
     match obj {
         Obj::Bool(false) => vec![0x08],
         Obj::Bool(true) => vec![0x09],
-        Obj::Int(n) => encode_int_obj(*n),
+        Obj::Int(n) => match n.as_signed() {
+            Some(n) => encode_int_obj(n),
+            // Integers above `i64::MAX` are stored as signed 128-bit integers
+            None => {
+                let mut v = vec![0x14];
+                v.extend_from_slice(&n.value.to_be_bytes());
+                v
+            }
+        },
+        Obj::Date(d) => {
+            let mut v = vec![0x33];
+            v.extend_from_slice(&d.as_seconds_since_plist_epoch().to_bits().to_be_bytes());
+            v
+        }
+        Obj::Uid(u) => {
+            let bytes = u.value.to_be_bytes();
+            let size = match u.value {
+                0..=0xFF => 1,
+                0x100..=0xFFFF => 2,
+                0x1_0000..=0xFFFF_FFFF => 4,
+                _ => 8,
+            };
+            let mut v = vec![0x80 | (size - 1) as u8];
+            v.extend_from_slice(&bytes[8 - size..]);
+            v
+        }
         Obj::Real(f) => {
             let mut v = vec![0x23]; // 64-bit double
             v.extend_from_slice(&f.to_bits().to_be_bytes());
@@ -391,8 +559,7 @@ fn parse_value(tokens: &[Token], pos: &mut usize) -> Result<Value, Error> {
                     "integer" => {
                         let text = read_text(tokens, pos);
                         consume_close(tokens, pos, "integer")?;
-                        text.trim()
-                            .parse::<i64>()
+                        Integer::parse(text.trim())
                             .map(Value::Integer)
                             .map_err(|e| Error(e.to_string()))
                     }
@@ -560,28 +727,28 @@ mod tests {
 
     #[test]
     fn test_binary_int_1_byte() {
-        let b = write_binary(&Value::Integer(42));
+        let b = write_binary(&Value::Integer(42.into()));
         assert_eq!(b[8], 0x10);
         assert_eq!(b[9], 42);
     }
 
     #[test]
     fn test_binary_int_2_bytes() {
-        let b = write_binary(&Value::Integer(256));
+        let b = write_binary(&Value::Integer(256.into()));
         assert_eq!(b[8], 0x11);
         assert_eq!(&b[9..11], &[0x01, 0x00]);
     }
 
     #[test]
     fn test_binary_int_4_bytes() {
-        let b = write_binary(&Value::Integer(0x10000));
+        let b = write_binary(&Value::Integer(0x10000.into()));
         assert_eq!(b[8], 0x12);
         assert_eq!(&b[9..13], &[0x00, 0x01, 0x00, 0x00]);
     }
 
     #[test]
     fn test_binary_int_8_bytes_negative() {
-        let b = write_binary(&Value::Integer(-1));
+        let b = write_binary(&Value::Integer((-1).into()));
         assert_eq!(b[8], 0x13);
         assert_eq!(&b[9..17], &[0xFF; 8]);
     }
@@ -657,7 +824,7 @@ mod tests {
         assert_eq!(dict["Name"], Value::String("TestApp".to_string()));
         assert_eq!(dict["Version"], Value::String("1.2.3".to_string()));
         assert_eq!(dict["Flag"], Value::Boolean(true));
-        assert_eq!(dict["Count"], Value::Integer(42));
+        assert_eq!(dict["Count"], Value::Integer(42.into()));
     }
 
     #[test]
@@ -685,7 +852,7 @@ mod tests {
         };
         assert_eq!(arr.len(), 3);
         assert_eq!(arr[0], Value::String("a".to_string()));
-        assert_eq!(arr[1], Value::Integer(3));
+        assert_eq!(arr[1], Value::Integer(3.into()));
         assert_eq!(arr[2], Value::Boolean(false));
     }
 
@@ -724,7 +891,7 @@ mod tests {
         let Value::Dictionary(inner) = &outer["inner"] else {
             panic!("expected inner dict");
         };
-        assert_eq!(inner["x"], Value::Integer(42));
+        assert_eq!(inner["x"], Value::Integer(42.into()));
     }
 
     #[test]
@@ -763,13 +930,84 @@ mod tests {
     fn test_from_impls() {
         assert_eq!(Value::from(true), Value::Boolean(true));
         assert_eq!(Value::from(false), Value::Boolean(false));
-        assert_eq!(Value::from(42i64), Value::Integer(42));
+        assert_eq!(Value::from(42i64), Value::Integer(42.into()));
+        assert_eq!(Value::from(42u8), Value::Integer(42.into()));
+        assert_eq!(
+            Value::from(vec![Value::from(true)]),
+            Value::Array(vec![Value::Boolean(true)])
+        );
         assert_eq!(Value::from(1.0f64), Value::Real(1.0));
         assert_eq!(Value::from("hello"), Value::String("hello".to_string()));
         assert_eq!(
             Value::from("world".to_string()),
             Value::String("world".to_string())
         );
+    }
+
+    #[test]
+    fn test_binary_int_unsigned_128() {
+        let b = write_binary(&Value::from(u64::MAX));
+        assert_eq!(b[8], 0x14);
+        assert_eq!(&b[9..17], &[0; 8]);
+        assert_eq!(&b[17..25], &[0xFF; 8]);
+    }
+
+    #[test]
+    fn test_binary_date() {
+        let date = Date::from(UNIX_EPOCH + Duration::from_secs(978_307_200 + 60));
+        let b = write_binary(&Value::Date(date));
+        assert_eq!(b[8], 0x33);
+        assert_eq!(&b[9..17], &60f64.to_bits().to_be_bytes());
+    }
+
+    #[test]
+    fn test_binary_uid() {
+        assert_eq!(&write_binary(&Value::Uid(Uid::new(7)))[8..10], &[0x80, 7]);
+        assert_eq!(
+            &write_binary(&Value::Uid(Uid::new(0x1234)))[8..11],
+            &[0x81, 0x12, 0x34]
+        );
+    }
+
+    #[test]
+    fn test_integer() {
+        assert_eq!(Integer::from(-1i64).as_signed(), Some(-1));
+        assert_eq!(Integer::from(-1i64).as_unsigned(), None);
+        assert_eq!(Integer::from(u64::MAX).as_signed(), None);
+        assert_eq!(Integer::from(u64::MAX).as_unsigned(), Some(u64::MAX));
+        assert_eq!(Integer::parse("0x1F").map(Integer::as_signed), Ok(Some(31)));
+        assert_eq!(
+            Integer::parse("18446744073709551615").map(Integer::as_unsigned),
+            Ok(Some(u64::MAX))
+        );
+        assert!(Integer::parse("abc").is_err());
+    }
+
+    #[test]
+    fn test_dictionary_order() {
+        let mut dict = [("b", 1), ("a", 2)].into_iter().collect::<Dictionary>();
+        assert_eq!(dict.insert("b".into(), 3.into()), Some(Value::from(1)));
+        dict.extend([("c".to_string(), Value::from(4))]);
+        let keys = dict.iter().map(|(k, _)| k.as_str()).collect::<Vec<_>>();
+        assert_eq!(keys, ["b", "a", "c"]);
+        assert_eq!(dict.len(), 3);
+        assert_eq!(dict["b"], Value::from(3));
+        assert_eq!(
+            dict,
+            [("c", 4), ("a", 2), ("b", 3)]
+                .into_iter()
+                .collect::<Dictionary>()
+        );
+    }
+
+    #[test]
+    fn test_xml_dict_order() {
+        let xml = "<plist><dict><key>z</key><true/><key>a</key><false/></dict></plist>";
+        let Value::Dictionary(dict) = parse(xml).expect("parse") else {
+            panic!("expected dict");
+        };
+        let keys = dict.into_iter().map(|(k, _)| k).collect::<Vec<_>>();
+        assert_eq!(keys, ["z", "a"]);
     }
 
     // -- macOS plutil validation (optional, requires plutil) --
@@ -818,10 +1056,10 @@ mod tests {
     fn test_plutil_primitives() {
         assert!(plutil_lint(&write_binary(&Value::Boolean(true))));
         assert!(plutil_lint(&write_binary(&Value::Boolean(false))));
-        assert!(plutil_lint(&write_binary(&Value::Integer(0))));
-        assert!(plutil_lint(&write_binary(&Value::Integer(255))));
-        assert!(plutil_lint(&write_binary(&Value::Integer(65536))));
-        assert!(plutil_lint(&write_binary(&Value::Integer(-1))));
+        assert!(plutil_lint(&write_binary(&Value::Integer(0.into()))));
+        assert!(plutil_lint(&write_binary(&Value::Integer(255.into()))));
+        assert!(plutil_lint(&write_binary(&Value::Integer(65536.into()))));
+        assert!(plutil_lint(&write_binary(&Value::Integer((-1).into()))));
         assert!(plutil_lint(&write_binary(&Value::Real(
             std::f64::consts::PI
         ))));
@@ -832,12 +1070,19 @@ mod tests {
             "caf\u{00E9}".to_string()
         ))));
         assert!(plutil_lint(&write_binary(&Value::Data(vec![1, 2, 3]))));
+        assert!(plutil_lint(&write_binary(&Value::from(u64::MAX))));
+        assert!(plutil_lint(&write_binary(&Value::Date(
+            SystemTime::now().into()
+        ))));
     }
 
     #[cfg(target_os = "macos")]
     #[test]
     fn test_plutil_array() {
-        let arr = Value::Array(vec![Value::Integer(1), Value::String("a".to_string())]);
+        let arr = Value::Array(vec![
+            Value::Integer(1.into()),
+            Value::String("a".to_string()),
+        ]);
         assert!(plutil_lint(&write_binary(&arr)));
     }
 
@@ -863,14 +1108,14 @@ mod tests {
     fn test_plutil_roundtrip() {
         let mut dict = Dictionary::new();
         dict.insert("Name".to_string(), "MyApp".into());
-        dict.insert("Count".to_string(), Value::Integer(42));
+        dict.insert("Count".to_string(), Value::Integer(42.into()));
         dict.insert("Flag".to_string(), Value::Boolean(true));
         let bytes = write_binary(&Value::Dictionary(dict));
         let Value::Dictionary(result) = plutil_roundtrip(&bytes) else {
             panic!("expected dict");
         };
         assert_eq!(result["Name"], Value::String("MyApp".to_string()));
-        assert_eq!(result["Count"], Value::Integer(42));
+        assert_eq!(result["Count"], Value::Integer(42.into()));
         assert_eq!(result["Flag"], Value::Boolean(true));
     }
 }
