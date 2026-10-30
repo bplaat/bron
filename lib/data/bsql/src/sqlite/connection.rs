@@ -65,7 +65,7 @@ impl Connection {
                     .to_string_lossy()
                     .into_owned();
                 // SAFETY: database was returned by sqlite3_open_v2 and may be closed after failure.
-                unsafe { sqlite3_close_v2(database) };
+                unsafe { sqlite3_close(database) };
                 error
             };
             return Err(format!("failed to open SQLite database: {error}"));
@@ -167,7 +167,7 @@ impl Connection {
 impl Drop for Connection {
     fn drop(&mut self) {
         // SAFETY: self.0 is exclusively owned and is closed exactly once.
-        unsafe { sqlite3_close_v2(self.0) };
+        unsafe { sqlite3_close(self.0) };
     }
 }
 

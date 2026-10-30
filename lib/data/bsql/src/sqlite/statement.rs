@@ -168,7 +168,7 @@ impl Prepared {
                 let text = unsafe { sqlite3_column_text(self.0, index) };
                 assert!(!text.is_null(), "SQLite returned a null text value");
                 // SAFETY: text is non-null and points to len readable bytes until the next call.
-                let bytes = unsafe { std::slice::from_raw_parts(text.cast::<u8>(), len) };
+                let bytes = unsafe { std::slice::from_raw_parts(text, len) };
                 Value::Text(String::from_utf8_lossy(bytes).into_owned())
             }
             SQLITE_BLOB => {

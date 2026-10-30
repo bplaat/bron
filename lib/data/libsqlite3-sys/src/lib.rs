@@ -9,11 +9,22 @@
 #![allow(non_camel_case_types, non_snake_case, missing_docs)]
 #![cfg_attr(not(test), no_std)]
 
-use core::ffi::{c_char, c_int, c_void};
+use core::ffi::{c_char, c_int, c_longlong, c_uchar, c_void};
 
-pub type sqlite3 = c_void;
-pub type sqlite3_stmt = c_void;
-pub type sqlite3_destructor_type = Option<unsafe extern "C" fn(*mut c_void)>;
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct sqlite3 {
+    _unused: [u8; 0],
+}
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct sqlite3_stmt {
+    _unused: [u8; 0],
+}
+
+pub type sqlite3_int64 = c_longlong;
+pub type sqlite3_destructor_type = Option<unsafe extern "C" fn(arg1: *mut c_void)>;
 
 pub const SQLITE_OK: i32 = 0;
 
@@ -33,6 +44,7 @@ pub const SQLITE_NULL: i32 = 5;
 
 pub const SQLITE_FCNTL_PERSIST_WAL: i32 = 10;
 
+#[must_use]
 #[allow(unsafe_code)]
 pub fn SQLITE_TRANSIENT() -> sqlite3_destructor_type {
     // SAFETY: The SQLite docs say that the value of `SQLITE_TRANSIENT` is -1.
@@ -75,11 +87,11 @@ unsafe extern "C" {
         pzTail: *mut *const c_char,
     ) -> c_int;
     pub fn sqlite3_stmt_readonly(statement: *mut sqlite3_stmt) -> c_int;
-    pub fn sqlite3_changes(db: *mut sqlite3) -> i32;
-    pub fn sqlite3_last_insert_rowid(db: *mut sqlite3) -> i64;
+    pub fn sqlite3_changes(db: *mut sqlite3) -> c_int;
+    pub fn sqlite3_last_insert_rowid(db: *mut sqlite3) -> sqlite3_int64;
     pub fn sqlite3_get_autocommit(db: *mut sqlite3) -> c_int;
     pub fn sqlite3_errmsg(db: *mut sqlite3) -> *const c_char;
-    pub fn sqlite3_close_v2(db: *mut sqlite3) -> c_int;
+    pub fn sqlite3_close(db: *mut sqlite3) -> c_int;
 
     // sqlite3_stmt
     pub fn sqlite3_db_handle(pStmt: *mut sqlite3_stmt) -> *mut sqlite3;
@@ -90,7 +102,7 @@ unsafe extern "C" {
 
     pub fn sqlite3_bind_parameter_index(pStmt: *mut sqlite3_stmt, zName: *const c_char) -> c_int;
     pub fn sqlite3_bind_null(pStmt: *mut sqlite3_stmt, i: c_int) -> c_int;
-    pub fn sqlite3_bind_int64(pStmt: *mut sqlite3_stmt, i: c_int, value: i64) -> c_int;
+    pub fn sqlite3_bind_int64(pStmt: *mut sqlite3_stmt, i: c_int, value: sqlite3_int64) -> c_int;
     pub fn sqlite3_bind_double(pStmt: *mut sqlite3_stmt, i: c_int, value: f64) -> c_int;
     pub fn sqlite3_bind_text(
         pStmt: *mut sqlite3_stmt,
@@ -113,9 +125,9 @@ unsafe extern "C" {
     pub fn sqlite3_column_decltype(pStmt: *mut sqlite3_stmt, iCol: c_int) -> *const c_char;
     pub fn sqlite3_column_table_name(pStmt: *mut sqlite3_stmt, iCol: c_int) -> *const c_char;
     pub fn sqlite3_column_origin_name(pStmt: *mut sqlite3_stmt, iCol: c_int) -> *const c_char;
-    pub fn sqlite3_column_int64(pStmt: *mut sqlite3_stmt, iCol: c_int) -> i64;
+    pub fn sqlite3_column_int64(pStmt: *mut sqlite3_stmt, iCol: c_int) -> sqlite3_int64;
     pub fn sqlite3_column_double(pStmt: *mut sqlite3_stmt, iCol: c_int) -> f64;
-    pub fn sqlite3_column_text(pStmt: *mut sqlite3_stmt, iCol: c_int) -> *const c_char;
+    pub fn sqlite3_column_text(pStmt: *mut sqlite3_stmt, iCol: c_int) -> *const c_uchar;
     pub fn sqlite3_column_blob(pStmt: *mut sqlite3_stmt, iCol: c_int) -> *const c_void;
     pub fn sqlite3_column_bytes(pStmt: *mut sqlite3_stmt, iCol: c_int) -> c_int;
 }

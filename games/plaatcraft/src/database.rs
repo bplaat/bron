@@ -367,7 +367,7 @@ impl Drop for Database {
     fn drop(&mut self) {
         // SAFETY: This connection is owned and closed exactly once.
         unsafe {
-            sql::sqlite3_close_v2(self.raw);
+            sql::sqlite3_close(self.raw);
         }
     }
 }

@@ -387,7 +387,7 @@ impl Database {
 impl Drop for Database {
     fn drop(&mut self) {
         unsafe {
-            sql::sqlite3_close_v2(self.0);
+            sql::sqlite3_close(self.0);
         }
     }
 }
