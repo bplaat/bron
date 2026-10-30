@@ -102,7 +102,7 @@ impl TlsConnector {
         stream: S,
     ) -> Result<TlsStream<S>, HandshakeError<S>> {
         self.connect_inner(domain, stream)
-            .map_err(HandshakeError::new)
+            .map_err(HandshakeError::Failure)
     }
 
     fn connect_inner<S: Read + Write>(
@@ -122,12 +122,6 @@ impl TlsConnector {
     }
 }
 
-impl Default for TlsConnector {
-    fn default() -> Self {
-        Self::new().expect("TlsConnector::new() failed")
-    }
-}
-
 // MARK: TlsStream
 /// A TLS stream backed by rustls
 pub struct TlsStream<S> {
@@ -137,12 +131,14 @@ pub struct TlsStream<S> {
 
 impl<S> TlsStream<S> {
     /// Returns a reference to the underlying stream
-    pub const fn get_ref(&self) -> &S {
+    #[allow(clippy::missing_const_for_fn)] // Upstream API is not const
+    pub fn get_ref(&self) -> &S {
         &self.stream
     }
 
     /// Returns a mutable reference to the underlying stream
-    pub const fn get_mut(&mut self) -> &mut S {
+    #[allow(clippy::missing_const_for_fn)] // Upstream API is not const
+    pub fn get_mut(&mut self) -> &mut S {
         &mut self.stream
     }
 }

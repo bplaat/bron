@@ -9,7 +9,7 @@ use std::io::{self, Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 
 #[cfg(feature = "mysql-tls")]
-use native_tls::TlsConnector;
+use native_tls::{HandshakeError, TlsConnector};
 #[cfg(feature = "mysql-native-password")]
 use sha1::Sha1;
 use sha2::Sha256;
@@ -109,7 +109,14 @@ impl Client {
             let connector = TlsConnector::new().map_err(|error| error.to_string())?;
             let tls = connector
                 .connect(&host, stream)
-                .map_err(|error| format!("MySQL TLS handshake failed: {error}"))?;
+                .map_err(|error| match error {
+                    HandshakeError::Failure(error) => {
+                        format!("MySQL TLS handshake failed: {error}")
+                    }
+                    HandshakeError::WouldBlock(_) => {
+                        "MySQL TLS handshake was interrupted".to_string()
+                    }
+                })?;
             stream = Box::new(tls);
         }
 

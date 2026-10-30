@@ -278,7 +278,7 @@ impl TlsConnector {
         stream: S,
     ) -> Result<TlsStream<S>, HandshakeError<S>> {
         self.connect_inner(domain, stream)
-            .map_err(HandshakeError::new)
+            .map_err(HandshakeError::Failure)
     }
 
     fn connect_inner<S: Read + Write>(
@@ -400,13 +400,6 @@ impl TlsConnector {
             network_bio,
             stream,
         })
-    }
-}
-
-#[cfg(openssl_v10x)]
-impl Default for TlsConnector {
-    fn default() -> Self {
-        Self::new().expect("TlsConnector::new() failed")
     }
 }
 
@@ -647,7 +640,7 @@ unsafe extern "C" fn bio_write(bio: *mut c_void, buf: *const c_char, len: c_int)
 }
 
 #[cfg(not(openssl_v10x))]
-unsafe extern "C" fn bio_ctrl(
+const unsafe extern "C" fn bio_ctrl(
     _bio: *mut c_void,
     cmd: c_int,
     _larg: c_long,
@@ -664,7 +657,7 @@ unsafe extern "C" fn bio_create(bio: *mut c_void) -> c_int {
 }
 
 #[cfg(not(openssl_v10x))]
-unsafe extern "C" fn bio_destroy(_bio: *mut c_void) -> c_int {
+const unsafe extern "C" fn bio_destroy(_bio: *mut c_void) -> c_int {
     // IoFuncs is owned by TlsStream; do not free here
     1
 }
@@ -702,6 +695,7 @@ struct BioMethodPtr(*mut c_void);
 // SAFETY: BIO_METHOD is immutable after creation; OpenSSL guarantees thread safety for reads.
 #[cfg(not(openssl_v10x))]
 unsafe impl Send for BioMethodPtr {}
+// SAFETY: see the Send impl above.
 #[cfg(not(openssl_v10x))]
 unsafe impl Sync for BioMethodPtr {}
 
@@ -795,7 +789,7 @@ impl TlsConnector {
         stream: S,
     ) -> Result<TlsStream<S>, HandshakeError<S>> {
         self.connect_inner(domain, stream)
-            .map_err(HandshakeError::new)
+            .map_err(HandshakeError::Failure)
     }
 
     fn connect_inner<S: Read + Write>(
@@ -883,13 +877,6 @@ impl TlsConnector {
             _io: io,
             stream,
         })
-    }
-}
-
-#[cfg(not(openssl_v10x))]
-impl Default for TlsConnector {
-    fn default() -> Self {
-        Self::new().expect("TlsConnector::new() failed")
     }
 }
 

@@ -7,7 +7,10 @@
 #![doc = include_str!("../README.md")]
 #![allow(unsafe_code)]
 
+use std::any::Any;
+use std::convert::Infallible;
 use std::fmt::{self, Display, Formatter};
+use std::io::{Read, Write};
 use std::marker::PhantomData;
 
 cfg_select! {
@@ -44,34 +47,71 @@ impl Display for Error {
 impl std::error::Error for Error {}
 
 // MARK: HandshakeError
-/// TLS handshake error that consumes and drops the unrecoverable underlying stream.
+/// An error returned from `TlsConnector::connect`.
 #[derive(Debug)]
-pub struct HandshakeError<S> {
-    error: Error,
-    _stream: PhantomData<S>,
+pub enum HandshakeError<S> {
+    /// A fatal error.
+    Failure(Error),
+
+    /// A stream interrupted midway through the handshake process due to a `WouldBlock` error.
+    ///
+    /// The handshake is always driven to completion, so this variant is never returned.
+    WouldBlock(MidHandshakeTlsStream<S>),
 }
 
-impl<S> HandshakeError<S> {
-    pub(crate) const fn new(error: Error) -> Self {
-        Self {
-            error,
-            _stream: PhantomData,
+impl<S: Any + fmt::Debug> std::error::Error for HandshakeError<S> {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Failure(error) => Some(error),
+            Self::WouldBlock(_) => None,
         }
     }
-
-    /// Returns the underlying TLS error
-    pub const fn error(&self) -> &Error {
-        &self.error
-    }
 }
 
-impl<S> Display for HandshakeError<S> {
+impl<S: Any + fmt::Debug> Display for HandshakeError<S> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        self.error.fmt(f)
+        match self {
+            Self::Failure(error) => Display::fmt(error, f),
+            Self::WouldBlock(_) => f.write_str("the handshake process was interrupted"),
+        }
     }
 }
 
-impl<S: fmt::Debug> std::error::Error for HandshakeError<S> {}
+// MARK: MidHandshakeTlsStream
+/// A TLS stream which has been interrupted midway through the handshake process.
+///
+/// The handshake is always driven to completion, so this type is never constructed.
+pub struct MidHandshakeTlsStream<S>(Infallible, PhantomData<S>);
+
+impl<S: fmt::Debug> fmt::Debug for MidHandshakeTlsStream<S> {
+    fn fmt(&self, _f: &mut Formatter<'_>) -> fmt::Result {
+        match self.0 {}
+    }
+}
+
+impl<S> MidHandshakeTlsStream<S> {
+    /// Returns a shared reference to the inner stream.
+    #[must_use]
+    #[allow(clippy::missing_const_for_fn)] // Upstream API is not const
+    pub fn get_ref(&self) -> &S {
+        match self.0 {}
+    }
+
+    /// Returns a mutable reference to the inner stream.
+    #[must_use]
+    #[allow(clippy::missing_const_for_fn)] // Upstream API is not const
+    pub fn get_mut(&mut self) -> &mut S {
+        match self.0 {}
+    }
+}
+
+impl<S: Read + Write> MidHandshakeTlsStream<S> {
+    /// Restarts the handshake process.
+    #[allow(clippy::missing_const_for_fn)] // Upstream API is not const
+    pub fn handshake(self) -> Result<TlsStream<S>, HandshakeError<S>> {
+        match self.0 {}
+    }
+}
 
 // MARK: TlsConnector
 /// A TLS connector for creating TLS connections
@@ -83,7 +123,6 @@ pub use imp::TlsStream;
 // MARK: Tests
 #[cfg(test)]
 mod tests {
-    use std::io::{Read, Write};
     use std::net::{Ipv4Addr, TcpListener, TcpStream};
     use std::sync::Arc;
     use std::thread;

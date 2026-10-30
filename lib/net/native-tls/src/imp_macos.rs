@@ -189,7 +189,8 @@ pub struct TlsConnector {
 
 impl TlsConnector {
     /// Create a new TLS connector
-    pub const fn new() -> Result<Self, Error> {
+    #[allow(clippy::missing_const_for_fn)] // Upstream API is not const
+    pub fn new() -> Result<Self, Error> {
         Ok(Self {
             accept_invalid_certs: false,
         })
@@ -209,7 +210,7 @@ impl TlsConnector {
         stream: S,
     ) -> Result<TlsStream<S>, HandshakeError<S>> {
         self.connect_inner(domain, stream)
-            .map_err(HandshakeError::new)
+            .map_err(HandshakeError::Failure)
     }
 
     fn connect_inner<S: Read + Write>(
@@ -345,12 +346,6 @@ impl TlsConnector {
         }
 
         Ok(TlsStream { ctx, io, stream })
-    }
-}
-
-impl Default for TlsConnector {
-    fn default() -> Self {
-        Self::new().expect("TlsConnector::new() failed")
     }
 }
 
