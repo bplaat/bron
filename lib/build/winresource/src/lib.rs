@@ -6,8 +6,7 @@
 
 //! A minimal replacement for the [winresource](https://crates.io/crates/winresource) crate
 
-use core::panic;
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -21,12 +20,14 @@ mod version;
 pub struct WindowsResource {
     icon_path: Option<PathBuf>,
     manifest: Option<String>,
-    version_fields: HashMap<String, String>,
+    version_fields: BTreeMap<String, String>,
 }
 
-impl Default for WindowsResource {
-    fn default() -> Self {
-        let mut version_fields = HashMap::new();
+impl WindowsResource {
+    /// Create a new Windows resource compiler
+    #[allow(clippy::new_without_default)] // Upstream has no Default impl
+    pub fn new() -> Self {
+        let mut version_fields = BTreeMap::new();
         version_fields.insert(
             "FileVersion".to_string(),
             env::var("CARGO_PKG_VERSION").expect("CARGO_PKG_VERSION not set"),
@@ -50,24 +51,17 @@ impl Default for WindowsResource {
             version_fields,
         }
     }
-}
-
-impl WindowsResource {
-    /// Create a new Windows resource compiler
-    pub fn new() -> Self {
-        Self::default()
-    }
 
     /// Set a version field
-    pub fn set(&mut self, key: impl AsRef<str>, value: impl AsRef<str>) -> &mut Self {
+    pub fn set(&mut self, name: &str, value: &str) -> &mut Self {
         self.version_fields
-            .insert(key.as_ref().to_string(), value.as_ref().to_string());
+            .insert(name.to_string(), value.to_string());
         self
     }
 
     /// Set the icon file
-    pub fn set_icon(&mut self, path: impl AsRef<Path>) -> &mut Self {
-        self.icon_path = Some(path.as_ref().to_path_buf());
+    pub fn set_icon(&mut self, path: &str) -> &mut Self {
+        self.icon_path = Some(PathBuf::from(path));
         self
     }
 
@@ -78,16 +72,7 @@ impl WindowsResource {
     }
 
     /// Compile the resources
-    pub fn compile(&self) -> Result<(), String> {
-        self.compile_inner(false)
-    }
-
-    /// Compile resources and link them only into examples of the current package
-    pub fn compile_for_examples(&self) -> Result<(), String> {
-        self.compile_inner(true)
-    }
-
-    fn compile_inner(&self, examples_only: bool) -> Result<(), String> {
+    pub fn compile(&self) -> io::Result<()> {
         println!("cargo:rerun-if-env-changed=RC");
         println!("cargo:rerun-if-env-changed=RUSTC_LINKER");
         println!("cargo:rerun-if-env-changed=ProgramFiles(x86)");
@@ -95,15 +80,7 @@ impl WindowsResource {
 
         // Write manifest file
         if let Some(manifest) = &self.manifest {
-            let manifest_path = Path::new(&out_dir).join("manifest.xml");
-            if let Some(parent) = manifest_path.parent() {
-                fs::create_dir_all(parent).unwrap_or_else(|_| {
-                    panic!("failed to create output directory {}", parent.display())
-                });
-            }
-            fs::write(&manifest_path, manifest.as_bytes()).unwrap_or_else(|_| {
-                panic!("failed to write manifest to {}", manifest_path.display())
-            });
+            fs::write(Path::new(&out_dir).join("manifest.xml"), manifest)?;
         }
 
         // Write resource.rc file
@@ -168,8 +145,7 @@ impl WindowsResource {
         );
 
         let rc_path = Path::new(&out_dir).join("resource.rc");
-        fs::write(&rc_path, rc_content)
-            .unwrap_or_else(|_| panic!("failed to write resource.rc to {}", rc_path.display()));
+        fs::write(&rc_path, rc_content)?;
 
         // Compile resource.rc
         let target_env = env::var("CARGO_CFG_TARGET_ENV").unwrap_or_default();
@@ -180,26 +156,18 @@ impl WindowsResource {
             env::var_os("RC"),
             find_rc_exe(),
             &env::var("RUSTC_LINKER").unwrap_or_default(),
-        )?;
+        )
+        .map_err(io::Error::other)?;
         let (resource_path, needs_link_search) =
-            run_resource_compiler(&compilers, Path::new(&out_dir), &rc_path)?;
-        emit_link_directives(
-            examples_only,
-            &resource_path,
-            needs_link_search.then_some(out_dir.as_str()),
-        );
+            run_resource_compiler(&compilers, Path::new(&out_dir), &rc_path)
+                .map_err(io::Error::other)?;
+        if needs_link_search {
+            println!("cargo:rustc-link-search=native={out_dir}");
+            println!("cargo:rustc-link-lib=static=resource");
+        } else {
+            println!("cargo:rustc-link-arg={}", resource_path.display());
+        }
         Ok(())
-    }
-}
-
-fn emit_link_directives(examples_only: bool, resource_path: &Path, out_dir: Option<&str>) {
-    if examples_only {
-        println!("cargo:rustc-link-arg-examples={}", resource_path.display());
-    } else if let Some(out_dir) = out_dir {
-        println!("cargo:rustc-link-search=native={out_dir}");
-        println!("cargo:rustc-link-lib=static=resource");
-    } else {
-        println!("cargo:rustc-link-arg={}", resource_path.display());
     }
 }
 

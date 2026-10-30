@@ -8,3 +8,8 @@ repository.workspace = true
 
 [lints]
 workspace = true
+
+[features]
+default = ["toml"]
+# No-op, mirrors upstream (Cargo.toml metadata parsing is not supported)
+toml = []
