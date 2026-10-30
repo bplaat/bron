@@ -204,8 +204,7 @@ deny = [
 
 # Certain crates/versions that will be skipped when doing duplicate detection.
 skip = [
-    { crate = "getrandom@0.3.4", reason = "graviola has not migrated to getrandom 0.4" },
-    { crate = "syn@2.0.119", reason = "wasm-bindgen has not migrated to syn 3" },
+    { crate = "syn@2.0.119", reason = "zerocopy-derive still requires syn 2" },
 ]
 # Similarly to `skip` allows you to skip certain crates during duplicate
 # detection. Unlike skip, it also includes the entire tree of transitive
