@@ -5,105 +5,177 @@
  */
 
 //! A minimal replacement for the [mime](https://crates.io/crates/mime) crate
+//!
+//! Only the essence (`type/subtype+suffix`) is supported, parsing a MIME type with parameters returns an error.
 
-#![allow(missing_docs)]
-#![cfg_attr(not(test), no_std)]
-
-use core::fmt::{self, Display, Formatter};
+use std::borrow::Cow;
+use std::error::Error;
+use std::fmt;
+use std::str::FromStr;
 
 // MARK: Mime
-/// A MIME type
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// A parsed mime or media type.
+#[derive(Clone, PartialEq, Eq)]
 pub struct Mime {
-    type_: &'static str,
-    subtype: &'static str,
-    suffix: Option<&'static str>,
+    source: Cow<'static, str>,
 }
 
-impl Mime {
-    /// Create a new `Mime` instance
-    pub const fn new(
-        type_: &'static str,
-        subtype: &'static str,
-        suffix: Option<&'static str>,
-    ) -> Self {
-        Self {
-            type_,
-            subtype,
-            suffix,
+impl PartialEq<&str> for Mime {
+    fn eq(&self, other: &&str) -> bool {
+        self.source.eq_ignore_ascii_case(other)
+    }
+}
+
+impl PartialEq<Mime> for &str {
+    fn eq(&self, other: &Mime) -> bool {
+        other == self
+    }
+}
+
+impl AsRef<str> for Mime {
+    fn as_ref(&self) -> &str {
+        &self.source
+    }
+}
+
+impl fmt::Debug for Mime {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(&self.source, f)
+    }
+}
+
+impl fmt::Display for Mime {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(&self.source, f)
+    }
+}
+
+impl FromStr for Mime {
+    type Err = FromStrError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let invalid_token = |pos: usize, byte: u8| FromStrError {
+            inner: ParseError::InvalidToken { pos, byte },
+        };
+        let mut bytes = s.bytes().enumerate();
+
+        // Top level type
+        loop {
+            match bytes.next() {
+                Some((_, byte)) if is_token(byte) => (),
+                Some((pos, b'/')) if pos > 0 => break,
+                Some((pos, byte)) => return Err(invalid_token(pos, byte)),
+                None => {
+                    return Err(FromStrError {
+                        inner: ParseError::MissingSlash,
+                    });
+                }
+            }
+        }
+
+        // Subtype with optional suffix
+        for (pos, byte) in bytes {
+            if !is_token(byte) {
+                return Err(invalid_token(pos, byte));
+            }
+        }
+        Ok(Self {
+            source: Cow::Owned(s.to_ascii_lowercase()),
+        })
+    }
+}
+
+const fn is_token(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric()
+        || matches!(
+            byte,
+            b'!' | b'#'
+                | b'$'
+                | b'%'
+                | b'&'
+                | b'\''
+                | b'*'
+                | b'+'
+                | b'-'
+                | b'.'
+                | b'^'
+                | b'_'
+                | b'`'
+                | b'|'
+                | b'~'
+        )
+}
+
+// MARK: FromStrError
+/// An error when parsing a `Mime` from a string.
+#[derive(Debug)]
+pub struct FromStrError {
+    inner: ParseError,
+}
+
+impl fmt::Display for FromStrError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "mime parse error: {}", self.inner)
+    }
+}
+
+impl Error for FromStrError {}
+
+#[derive(Debug)]
+enum ParseError {
+    MissingSlash,
+    InvalidToken { pos: usize, byte: u8 },
+}
+
+impl fmt::Display for ParseError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::MissingSlash => {
+                f.write_str("a slash (/) was missing between the type and subtype")
+            }
+            Self::InvalidToken { pos, byte } => {
+                write!(
+                    f,
+                    "an invalid token was encountered, {byte:X} at position {pos}"
+                )
+            }
         }
     }
-
-    /// Type
-    pub const fn type_(&self) -> &str {
-        self.type_
-    }
-
-    /// Subtype
-    pub const fn subtype(&self) -> &str {
-        self.subtype
-    }
-
-    /// Suffix
-    pub const fn suffix(&self) -> Option<&str> {
-        self.suffix
-    }
 }
 
-impl Display for Mime {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "{}/{}", self.type_, self.subtype)?;
-        if let Some(suffix) = self.suffix {
-            write!(f, "+{suffix}")?;
-        }
-        Ok(())
-    }
+// MARK: Constants
+macro_rules! mimes {
+    ($($id:ident, $source:expr;)*) => {
+        $(
+            #[doc = concat!("`", $source, "`")]
+            pub const $id: Mime = Mime {
+                source: Cow::Borrowed($source),
+            };
+        )*
+    };
 }
 
-// MARK: Common MIME types
-pub const APPLICATION_GZIP: Mime = Mime::new("application", "gzip", None);
-pub const APPLICATION_JAVASCRIPT: Mime = Mime::new("application", "javascript", None);
-pub const APPLICATION_JSON: Mime = Mime::new("application", "json", None);
-pub const APPLICATION_MANIFEST_JSON: Mime = Mime::new("application", "manifest+json", None);
-pub const APPLICATION_OCTET_STREAM: Mime = Mime::new("application", "octet-stream", None);
-pub const APPLICATION_PDF: Mime = Mime::new("application", "pdf", None);
-pub const APPLICATION_WASM: Mime = Mime::new("application", "wasm", None);
-pub const APPLICATION_X_TAR: Mime = Mime::new("application", "x-tar", None);
-pub const APPLICATION_YAML: Mime = Mime::new("application", "yaml", None);
-pub const APPLICATION_ZIP: Mime = Mime::new("application", "zip", None);
+mimes! {
+    TEXT_PLAIN, "text/plain";
+    TEXT_HTML, "text/html";
+    TEXT_CSS, "text/css";
+    TEXT_XML, "text/xml";
+    TEXT_CSV, "text/csv";
 
-pub const AUDIO_AAC: Mime = Mime::new("audio", "aac", None);
-pub const AUDIO_FLAC: Mime = Mime::new("audio", "flac", None);
-pub const AUDIO_MPEG: Mime = Mime::new("audio", "mpeg", None);
-pub const AUDIO_OGG: Mime = Mime::new("audio", "ogg", None);
-pub const AUDIO_OPUS: Mime = Mime::new("audio", "opus", None);
-pub const AUDIO_WAV: Mime = Mime::new("audio", "wav", None);
+    IMAGE_JPEG, "image/jpeg";
+    IMAGE_GIF, "image/gif";
+    IMAGE_PNG, "image/png";
+    IMAGE_BMP, "image/bmp";
+    IMAGE_SVG, "image/svg+xml";
 
-pub const FONT_OTF: Mime = Mime::new("font", "otf", None);
-pub const FONT_TTF: Mime = Mime::new("font", "ttf", None);
-pub const FONT_WOFF: Mime = Mime::new("font", "woff", None);
-pub const FONT_WOFF2: Mime = Mime::new("font", "woff2", None);
+    FONT_WOFF, "font/woff";
+    FONT_WOFF2, "font/woff2";
 
-pub const IMAGE_AVIF: Mime = Mime::new("image", "avif", None);
-pub const IMAGE_BMP: Mime = Mime::new("image", "bmp", None);
-pub const IMAGE_GIF: Mime = Mime::new("image", "gif", None);
-pub const IMAGE_JPEG: Mime = Mime::new("image", "jpeg", None);
-pub const IMAGE_PNG: Mime = Mime::new("image", "png", None);
-pub const IMAGE_SVG: Mime = Mime::new("image", "svg", Some("xml"));
-pub const IMAGE_TIFF: Mime = Mime::new("image", "tiff", None);
-pub const IMAGE_WEBP: Mime = Mime::new("image", "webp", None);
-pub const IMAGE_X_ICON: Mime = Mime::new("image", "x-icon", None);
-
-pub const TEXT_CSV: Mime = Mime::new("text", "csv", None);
-pub const TEXT_CSS: Mime = Mime::new("text", "css", None);
-pub const TEXT_HTML: Mime = Mime::new("text", "html", None);
-pub const TEXT_MARKDOWN: Mime = Mime::new("text", "markdown", None);
-pub const TEXT_PLAIN: Mime = Mime::new("text", "plain", None);
-pub const TEXT_XML: Mime = Mime::new("text", "xml", None);
-
-pub const VIDEO_MP4: Mime = Mime::new("video", "mp4", None);
-pub const VIDEO_OGG: Mime = Mime::new("video", "ogg", None);
-pub const VIDEO_WEBM: Mime = Mime::new("video", "webm", None);
+    APPLICATION_JSON, "application/json";
+    APPLICATION_JAVASCRIPT, "application/javascript";
+    APPLICATION_OCTET_STREAM, "application/octet-stream";
+    APPLICATION_PDF, "application/pdf";
+}
 
 // MARK: Tests
 #[cfg(test)]
@@ -112,17 +184,27 @@ mod test {
 
     #[test]
     fn test_to_string() {
-        let mime = Mime::new("text", "html", None);
-        assert_eq!(mime.to_string(), "text/html");
-
-        let mime = Mime::new("application", "vnd.api", Some("json"));
-        assert_eq!(mime.to_string(), "application/vnd.api+json");
-
+        assert_eq!(TEXT_HTML.to_string(), "text/html");
+        assert_eq!(IMAGE_SVG.to_string(), "image/svg+xml");
         assert_eq!(
             APPLICATION_OCTET_STREAM.to_string(),
             "application/octet-stream"
         );
-        assert_eq!(IMAGE_SVG.to_string(), "image/svg+xml");
-        assert_eq!(TEXT_XML.to_string(), "text/xml");
+    }
+
+    #[test]
+    fn test_parse() {
+        let mime = "Application/Vnd.Api+JSON"
+            .parse::<Mime>()
+            .expect("valid mime");
+        assert_eq!(mime.to_string(), "application/vnd.api+json");
+        assert_eq!(mime, "application/vnd.api+json");
+        assert_eq!("text/html".parse::<Mime>().ok(), Some(TEXT_HTML));
+        assert_eq!(TEXT_HTML, "TEXT/HTML");
+
+        assert!("text".parse::<Mime>().is_err());
+        assert!("/html".parse::<Mime>().is_err());
+        assert!("text/ html".parse::<Mime>().is_err());
+        assert!("text/html; charset=utf-8".parse::<Mime>().is_err());
     }
 }

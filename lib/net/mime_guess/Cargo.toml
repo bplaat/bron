@@ -13,5 +13,5 @@ workspace = true
 mime = { version = "0.3.17" }
 
 [features]
-default = ["std"]
-std = []
+default = ["rev-mappings"]
+rev-mappings = []

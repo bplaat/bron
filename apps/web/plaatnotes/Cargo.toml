@@ -23,7 +23,7 @@ getrandom = "0.4.3"
 gzip = { path = "../../../lib/data/gzip" }
 log = "0.4.34"
 maxminddb = "0.32.0"
-mime_guess = { version = "2.0", default-features = false, features = ["std"] }
+mime_guess = { version = "2.0", default-features = false }
 pbkdf2 = { path = "../../../lib/crypto/pbkdf2" }
 rust-embed = { version = "8.13", features = ["interpolate-folder-path"] }
 serde = { version = "1.0", features = ["derive"] }

@@ -27,7 +27,7 @@ bwindow = { path = "../../../lib/ui/bwindow" }
 directories = "6.0"
 local-ip-address = { version = "0.6.13" }
 log = "0.4.34"
-mime_guess = { version = "2.0", default-features = false, features = ["std"] }
+mime_guess = { version = "2.0", default-features = false }
 rusb = "0.9.4"
 rust-embed = { version = "8.13", features = ["interpolate-folder-path"] }
 serde = { version = "1.0", features = ["derive"] }
