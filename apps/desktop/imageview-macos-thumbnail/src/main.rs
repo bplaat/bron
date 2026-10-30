@@ -105,7 +105,7 @@ fn provide_thumbnail(request: *mut Object, completion: &Block<dyn Fn(*mut Object
             y: (drawing_size.height - fitted_size.height) / 2.0,
         };
         let media = Mutex::new(media);
-        let drawing = RcBlock::new_ret::<*mut c_void, bool>(move |context| {
+        let drawing = RcBlock::new(move |context: *mut c_void| -> bool {
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 let media = media.lock().unwrap_or_else(|error| error.into_inner());
                 let renderer = MediaRenderer::new(media.clone());
