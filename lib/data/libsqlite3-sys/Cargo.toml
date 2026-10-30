@@ -10,7 +10,7 @@ repository.workspace = true
 workspace = true
 
 [build-dependencies]
-cc = { version = "1.4", optional = true }
+cc = { version = "1.10", optional = true }
 
 [features]
 bundled = ["dep:cc"]
