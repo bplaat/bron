@@ -284,7 +284,7 @@ mod tests {
 
     #[test]
     fn asset_template_preserves_family_and_version_without_enabling_execution() {
-        let manifest: Manifest = toml::from_str(
+        let manifest: Manifest = basic_toml::from_str(
             r#"
 [package]
 name = "example-game"
@@ -330,7 +330,7 @@ version = "1.2.3"
 
     #[test]
     fn shell_extension_registers_its_handlers_for_every_file_type() {
-        let manifest: Manifest = toml::from_str(
+        let manifest: Manifest = basic_toml::from_str(
             r#"
 [package]
 name = "viewer"

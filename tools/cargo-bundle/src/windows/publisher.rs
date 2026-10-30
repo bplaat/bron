@@ -51,7 +51,7 @@ fn workspace_authors(path: &str) -> Vec<String> {
         let Ok(contents) = fs::read_to_string(&manifest_path) else {
             continue;
         };
-        let manifest: WorkspaceManifest = toml::from_str(&contents)
+        let manifest: WorkspaceManifest = basic_toml::from_str(&contents)
             .unwrap_or_else(|error| panic!("Can't parse {}: {error}", manifest_path.display()));
         if let Some(workspace) = manifest.workspace {
             return workspace

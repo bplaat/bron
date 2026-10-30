@@ -24,7 +24,7 @@ mod windows;
 
 fn read_manifest(path: &str) -> Manifest {
     let manifest_path = format!("{path}/Cargo.toml");
-    toml::from_str(&fs::read_to_string(&manifest_path).unwrap_or_else(|error| {
+    basic_toml::from_str(&fs::read_to_string(&manifest_path).unwrap_or_else(|error| {
         eprintln!("Can't read {manifest_path} file: {error}");
         exit(1);
     }))

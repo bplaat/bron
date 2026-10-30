@@ -78,7 +78,7 @@ impl Bobje {
         // MARK: Read manifest
         let manifest_path = format!("{manifest_dir}/bob.toml");
         let mut manifest: Manifest =
-            toml::from_str(&fs::read_to_string(&manifest_path).unwrap_or_else(|err| {
+            basic_toml::from_str(&fs::read_to_string(&manifest_path).unwrap_or_else(|err| {
                 eprintln!("Can't read {manifest_path} file: {err}");
                 exit(1);
             }))

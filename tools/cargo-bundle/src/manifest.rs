@@ -149,7 +149,7 @@ mod tests {
     fn bundle_metadata_is_optional() {
         let source = "[package]\nname = \"example-app\"\nversion = \"0.1.0\"\n";
         for metadata in ["", "[package.metadata]\n", "[package.metadata.bundle]\n"] {
-            let manifest: Manifest = toml::from_str(&format!("{source}{metadata}"))
+            let manifest: Manifest = basic_toml::from_str(&format!("{source}{metadata}"))
                 .expect("valid manifest without bundle options");
             assert_eq!(manifest.package.metadata.bundle.name, "example-app");
             assert_eq!(
@@ -167,13 +167,13 @@ name = "example-app"
 version = "0.1.0"
 [package.metadata.bundle]
 "#;
-        let manifest: Manifest = toml::from_str(source).expect("valid manifest");
+        let manifest: Manifest = basic_toml::from_str(source).expect("valid manifest");
         assert_eq!(manifest.package.metadata.bundle.name, "example-app");
         assert_eq!(
             manifest.package.metadata.bundle.identifier,
             "nl.bplaat.example-app"
         );
-        let manifest: Manifest = toml::from_str(&format!("{source}name = \"Example App\"\n"))
+        let manifest: Manifest = basic_toml::from_str(&format!("{source}name = \"Example App\"\n"))
             .expect("valid manifest with override");
         assert_eq!(manifest.package.metadata.bundle.name, "Example App");
         assert_eq!(
@@ -181,7 +181,7 @@ version = "0.1.0"
             "nl.bplaat.example-app"
         );
         let manifest: Manifest =
-            toml::from_str(&format!("{source}identifier = \"com.example.App\"\n"))
+            basic_toml::from_str(&format!("{source}identifier = \"com.example.App\"\n"))
                 .expect("valid manifest with identifier override");
         assert_eq!(
             manifest.package.metadata.bundle.identifier,

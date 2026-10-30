@@ -210,7 +210,7 @@ impl TestCases {
             .collect();
         let workspace_manifest = fs::read_to_string(workspace_dir.join("Cargo.toml"))
             .map_err(|error| error.to_string())?;
-        let patch = toml::from_str::<WorkspaceManifest>(&workspace_manifest)
+        let patch = basic_toml::from_str::<WorkspaceManifest>(&workspace_manifest)
             .map_err(|error| error.to_string())?
             .patch
             .into_iter()
@@ -229,7 +229,7 @@ impl TestCases {
             patch,
             workspace: Empty {},
         };
-        let manifest = toml::to_string(&manifest).map_err(|error| error.to_string())?;
+        let manifest = basic_toml::to_string(&manifest).map_err(|error| error.to_string())?;
         fs::write(project_dir.join("Cargo.toml"), manifest).map_err(|error| error.to_string())?;
 
         let mut failures = 0;
@@ -274,7 +274,7 @@ struct ExpandedTest {
 fn read_source_manifest(source_dir: &Path) -> Result<SourceManifest, String> {
     let contents =
         fs::read_to_string(source_dir.join("Cargo.toml")).map_err(|error| error.to_string())?;
-    toml::from_str(&contents).map_err(|error| error.to_string())
+    basic_toml::from_str(&contents).map_err(|error| error.to_string())
 }
 
 fn resolve_edition(source_dir: &Path, edition: Option<Edition>) -> Result<String, String> {
@@ -286,7 +286,7 @@ fn resolve_edition(source_dir: &Path, edition: Option<Edition>) -> Result<String
                 let Ok(contents) = fs::read_to_string(path) else {
                     continue;
                 };
-                let Ok(manifest) = toml::from_str::<WorkspaceManifest>(&contents) else {
+                let Ok(manifest) = basic_toml::from_str::<WorkspaceManifest>(&contents) else {
                     continue;
                 };
                 if let Some(edition) = manifest.workspace.package.edition {
@@ -487,9 +487,54 @@ fn compare_diagnostics(test: &ExpandedTest, actual: &str) -> Result<(), String> 
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
     use std::path::Path;
 
-    use super::normalize_diagnostics;
+    use super::{Bin, Empty, TestManifest, TestPackage, TestTarget, normalize_diagnostics};
+
+    #[test]
+    fn generated_manifest_preserves_dependencies_targets_and_paths() {
+        let manifest = TestManifest {
+            package: TestPackage {
+                name: "example-tests".into(),
+                version: "0.0.0",
+                edition: "2024".into(),
+                publish: false,
+            },
+            dependencies: BTreeMap::from([(
+                "example".into(),
+                serde_json::json!({ "path": "C:\\source\\example", "default-features": false }),
+            )]),
+            target: BTreeMap::from([(
+                "cfg(target_os = \"macos\")".into(),
+                TestTarget {
+                    dependencies: BTreeMap::from([(
+                        "platform".into(),
+                        serde_json::json!({ "version": "1", "features": ["test"] }),
+                    )]),
+                },
+            )]),
+            bins: vec![Bin {
+                name: "trybuild000".into(),
+                path: "tests/path with spaces.rs".into(),
+            }],
+            patch: BTreeMap::from([(
+                "crates-io".into(),
+                BTreeMap::from([(
+                    "patched".into(),
+                    serde_json::json!({ "path": "/source/patched" }),
+                )]),
+            )]),
+            workspace: Empty {},
+        };
+        let contents = basic_toml::to_string(&manifest).expect("serialize test manifest");
+        let parsed: serde_json::Value =
+            basic_toml::from_str(&contents).expect("parse generated manifest");
+        assert_eq!(
+            parsed,
+            serde_json::to_value(manifest).expect("manifest value")
+        );
+    }
 
     #[test]
     fn normalizes_source_paths_and_trailing_newline() {
