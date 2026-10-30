@@ -35,78 +35,150 @@ pub(crate) fn compile_shader(path: &Path, out: &Path, name: &str, target: &str) 
             e.emit_to_string_with_path(&source, &path.to_string_lossy())
         )
     })?;
-    let mut msl_options = msl::Options {
-        lang_version: (2, 1),
-        fake_missing_bindings: false,
-        ..Default::default()
+    validate_bindings(path, &module)?;
+    let (data, native_names) = match target {
+        "macos" | "ios" => {
+            let mut options = msl::Options {
+                lang_version: (2, 1),
+                fake_missing_bindings: false,
+                ..Default::default()
+            };
+            let mut resources = msl::EntryPointResources {
+                sizes_buffer: Some(30),
+                ..Default::default()
+            };
+            for (_, global) in module.global_variables.iter() {
+                let Some(binding) = global.binding else {
+                    continue;
+                };
+                let slot = binding.binding as u8;
+                let mut target = msl::BindTarget::default();
+                match module.types[global.ty].inner {
+                    naga::TypeInner::Image { .. } => target.texture = Some(slot),
+                    naga::TypeInner::Sampler { .. } => {
+                        target.sampler = Some(msl::BindSamplerTarget::Resource(slot));
+                    }
+                    _ => target.buffer = Some(slot),
+                }
+                resources.resources.insert(binding, target);
+            }
+            for entry in &module.entry_points {
+                options
+                    .per_entry_point_map
+                    .insert(entry.name.clone(), resources.clone());
+            }
+            let (source, translation) = msl::write_string(
+                &module,
+                &info,
+                &options,
+                &msl::PipelineOptions {
+                    vertex_pulling_transform: false,
+                    ..Default::default()
+                },
+            )
+            .map_err(|e| format!("{}: Metal translation: {e}", path.display()))?;
+            let names = entry_names(path, "Metal", translation.entry_point_names)?;
+            let metal_path = out.join(format!("{name}.metal"));
+            write_if_changed(&metal_path, source.as_bytes())?;
+            metal::compile(
+                &metal_path,
+                &out.join(format!("{name}.air")),
+                &out.join(format!("{name}.metallib")),
+                target,
+            )?;
+            let include = format!("/{name}.metallib");
+            (
+                format!(
+                    "bwebgpu::ShaderSource::Binary(&[(\"\", include_bytes!(concat!(env!(\"OUT_DIR\"), {include:?})))])"
+                ),
+                names,
+            )
+        }
+        "windows" => {
+            let mut options = hlsl::Options {
+                fake_missing_bindings: false,
+                ..Default::default()
+            };
+            for (_, global) in module.global_variables.iter() {
+                if let Some(binding) = global.binding {
+                    options.binding_map.insert(
+                        binding,
+                        hlsl::BindTarget {
+                            register: binding.binding,
+                            ..Default::default()
+                        },
+                    );
+                }
+            }
+            configure_hlsl(&mut options);
+            let mut source = String::new();
+            let translation = hlsl::Writer::new(&mut source, &options, &Default::default())
+                .write(&module, &info, None)
+                .map_err(|e| format!("{}: HLSL translation: {e}", path.display()))?;
+            let source = single_sampler_tables(&source)
+                .map_err(|e| format!("{}: HLSL sampler tables: {e}", path.display()))?;
+            let names = entry_names(path, "HLSL", translation.entry_point_names)?;
+            let entries = module
+                .entry_points
+                .iter()
+                .zip(&names)
+                .map(|(entry, native)| (entry.name.as_str(), native.as_str(), entry.stage))
+                .collect::<Vec<_>>();
+            let hlsl_path = out.join(format!("{name}.hlsl"));
+            write_if_changed(&hlsl_path, source.as_bytes())?;
+            let binaries = native_hlsl::compile(&hlsl_path, out, name, "dx12", "5_1", &entries)?;
+            let values = binaries
+                .iter()
+                .map(|(entry, relative)| {
+                    format!("({entry:?}, include_bytes!(concat!(env!(\"OUT_DIR\"), {relative:?})))")
+                })
+                .collect::<Vec<_>>()
+                .join(",");
+            (format!("bwebgpu::ShaderSource::Binary(&[{values}])"), names)
+        }
+        "linux" | "android" => {
+            let spirv = spv::write_vec(&module, &info, &spv::Options::default(), None)
+                .map_err(|e| format!("{}: SPIR-V translation: {e}", path.display()))?;
+            let bytes: Vec<u8> = spirv.iter().flat_map(|word| word.to_le_bytes()).collect();
+            write_if_changed(&out.join(format!("{name}.spv")), &bytes)?;
+            (
+                format!("bwebgpu::ShaderSource::SpirV(&{spirv:?})"),
+                module
+                    .entry_points
+                    .iter()
+                    .map(|entry| entry.name.clone())
+                    .collect(),
+            )
+        }
+        _ => return Err(format!("Unsupported graphics target: {target}").into()),
     };
-    let mut hlsl_options = hlsl::Options {
-        fake_missing_bindings: false,
-        ..Default::default()
-    };
-    let mut resources = msl::EntryPointResources {
-        sizes_buffer: Some(30),
-        ..Default::default()
-    };
-    configure_bindings(path, &module, &mut resources, &mut hlsl_options)?;
-    for entry in &module.entry_points {
-        msl_options
-            .per_entry_point_map
-            .insert(entry.name.clone(), resources.clone());
-    }
-    configure_hlsl(&mut hlsl_options);
-
-    let (metal_source, metal_info) = msl::write_string(
-        &module,
-        &info,
-        &msl_options,
-        &msl::PipelineOptions {
-            vertex_pulling_transform: false,
-            ..Default::default()
-        },
-    )
-    .map_err(|e| format!("{}: Metal translation: {e}", path.display()))?;
-    let mut hlsl_source = String::new();
-    let hlsl_info = hlsl::Writer::new(&mut hlsl_source, &hlsl_options, &Default::default())
-        .write(&module, &info, None)
-        .map_err(|e| format!("{}: HLSL translation: {e}", path.display()))?;
-    let hlsl_source = single_sampler_tables(&hlsl_source)
-        .map_err(|e| format!("{}: HLSL sampler tables: {e}", path.display()))?;
-    let spirv = spv::write_vec(&module, &info, &spv::Options::default(), None)
-        .map_err(|e| format!("{}: SPIR-V translation: {e}", path.display()))?;
-
-    let mut entries = Vec::new();
-    for (i, entry) in module.entry_points.iter().enumerate() {
-        let metal_name = metal_info.entry_point_names[i]
-            .as_ref()
-            .map_err(|e| format!("{}: Metal entry point {}: {e}", path.display(), entry.name))?;
-        let hlsl_name = hlsl_info.entry_point_names[i]
-            .as_ref()
-            .map_err(|e| format!("{}: HLSL entry point {}: {e}", path.display(), entry.name))?;
-        let native = match target {
-            "macos" | "ios" => metal_name,
-            "windows" => hlsl_name,
-            _ => &entry.name,
-        };
-        entries.push((entry.name.as_str(), native.as_str(), entry.stage));
-    }
-    write_outputs(
-        out,
-        name,
-        target,
-        &entries,
-        &metal_source,
-        &hlsl_source,
-        &spirv,
-    )
+    let entry_map = module
+        .entry_points
+        .iter()
+        .zip(native_names)
+        .map(|(entry, native)| format!("({:?}, {native:?})", entry.name))
+        .collect::<Vec<_>>()
+        .join(",");
+    let descriptor = format!(
+        "bwebgpu::ShaderModuleDescriptor {{ label: Some({name:?}), source: {data}, entries: &[{entry_map}] }}"
+    );
+    write_if_changed(&out.join(format!("{name}.rs")), descriptor.as_bytes())
 }
 
-fn configure_bindings(
+fn entry_names<E: std::fmt::Display>(
     path: &Path,
-    module: &naga::Module,
-    metal: &mut msl::EntryPointResources,
-    hlsl: &mut hlsl::Options,
-) -> Result<()> {
+    backend: &str,
+    names: Vec<std::result::Result<String, E>>,
+) -> Result<Vec<String>> {
+    names
+        .into_iter()
+        .map(|name| {
+            name.map_err(|e| format!("{}: {backend} entry point: {e}", path.display()).into())
+        })
+        .collect()
+}
+
+fn validate_bindings(path: &Path, module: &naga::Module) -> Result<()> {
     for (_, global) in module.global_variables.iter() {
         let Some(binding) = global.binding else {
             continue;
@@ -140,23 +212,6 @@ fn configure_bindings(
             )
             .into());
         }
-        let slot = binding.binding as u8;
-        let mut target = msl::BindTarget::default();
-        match module.types[global.ty].inner {
-            naga::TypeInner::Image { .. } => target.texture = Some(slot),
-            naga::TypeInner::Sampler { .. } => {
-                target.sampler = Some(msl::BindSamplerTarget::Resource(slot));
-            }
-            _ => target.buffer = Some(slot),
-        }
-        metal.resources.insert(binding, target);
-        hlsl.binding_map.insert(
-            binding,
-            hlsl::BindTarget {
-                register: binding.binding,
-                ..Default::default()
-            },
-        );
     }
     Ok(())
 }
@@ -220,60 +275,49 @@ fn single_sampler_tables(source: &str) -> Result<String> {
     Ok(output)
 }
 
-fn write_outputs(
-    out: &Path,
-    name: &str,
-    target: &str,
-    entries: &[(&str, &str, naga::ShaderStage)],
-    metal_source: &str,
-    hlsl: &str,
-    spirv: &[u32],
-) -> Result<()> {
-    let metal_path = out.join(format!("{name}.metal"));
-    let hlsl_path = out.join(format!("{name}.hlsl"));
-    write_if_changed(&metal_path, metal_source.as_bytes())?;
-    write_if_changed(&hlsl_path, hlsl.as_bytes())?;
-    let data = match target {
-        "macos" | "ios" => {
-            let air_path = out.join(format!("{name}.air"));
-            let library_path = out.join(format!("{name}.metallib"));
-            metal::compile(&metal_path, &air_path, &library_path, target)?;
-            let include = format!("/{name}.metallib");
-            format!(
-                "bwebgpu::ShaderSource::Binary(&[(\"\", include_bytes!(concat!(env!(\"OUT_DIR\"), {include:?})))])"
-            )
-        }
-        "windows" => {
-            let binaries = native_hlsl::compile(&hlsl_path, out, name, "dx12", "5_1", entries)?;
-            let values = binaries
-                .iter()
-                .map(|(entry, relative)| {
-                    format!("({entry:?}, include_bytes!(concat!(env!(\"OUT_DIR\"), {relative:?})))")
-                })
-                .collect::<Vec<_>>()
-                .join(",");
-            format!("bwebgpu::ShaderSource::Binary(&[{values}])")
-        }
-        _ => format!("bwebgpu::ShaderSource::SpirV(&{spirv:?})"),
-    };
-    let entry_map = entries
-        .iter()
-        .map(|(original, native, _)| format!("({original:?}, {native:?})"))
-        .collect::<Vec<_>>()
-        .join(",");
-    let descriptor = format!(
-        "bwebgpu::ShaderModuleDescriptor {{ label: Some({name:?}), source: {data}, entries: &[{entry_map}] }}"
-    );
-    let bytes: Vec<u8> = spirv.iter().flat_map(|word| word.to_le_bytes()).collect();
-    for (extension, contents) in [("spv", bytes.as_slice()), ("rs", descriptor.as_bytes())] {
-        write_if_changed(&out.join(format!("{name}.{extension}")), contents)?;
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
     use super::{configure_hlsl, single_sampler_tables};
+
+    #[test]
+    fn spirv_targets_only_generate_spirv_and_descriptor() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos();
+        let directory = std::env::temp_dir().join(format!(
+            "bwebgpu-shader-build-{}-{nonce}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&directory).expect("create test directory");
+        fs::write(
+            directory.join("shader.wgsl"),
+            "@vertex fn main() -> @builtin(position) vec4<f32> { return vec4<f32>(0.0); }",
+        )
+        .expect("write shader");
+        for target in ["linux", "android"] {
+            let out = directory.join(target);
+            crate::Builder::new()
+                .shader("shader", "shader.wgsl")
+                .compile_to(&directory, &out, target)
+                .expect("compile SPIR-V shader");
+            let mut files = fs::read_dir(&out)
+                .expect("read shader outputs")
+                .map(|entry| entry.expect("shader output").file_name())
+                .collect::<Vec<_>>();
+            files.sort();
+            assert_eq!(files, ["shader.rs", "shader.spv"]);
+            let spirv = fs::read(out.join("shader.spv")).expect("read SPIR-V");
+            assert_eq!(spirv[..4], 0x0723_0203_u32.to_le_bytes());
+            let descriptor = fs::read_to_string(out.join("shader.rs")).expect("read descriptor");
+            assert!(descriptor.contains("ShaderSource::SpirV"));
+            assert!(descriptor.contains("(\"main\", \"main\")"));
+        }
+        fs::remove_dir_all(directory).expect("remove test directory");
+    }
 
     #[test]
     fn d3d12_shader_ids_include_draw_offsets() {

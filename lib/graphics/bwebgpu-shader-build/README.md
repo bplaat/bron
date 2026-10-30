@@ -1,8 +1,8 @@
 # bwebgpu-shader-build Rust library
 
 Build-time WGSL compilation for this repository's [bwebgpu](../bwebgpu) crate. It
-uses Naga to translate each registered shader, then embeds the target-native
-output:
+uses Naga to translate each registered shader only to the format required by the
+Cargo target, then embeds the target-native output:
 
 - macOS and iOS: MSL is compiled to AIR and linked into a Metal library with `xcrun`.
 - Linux and Android: Naga emits SPIR-V directly.
