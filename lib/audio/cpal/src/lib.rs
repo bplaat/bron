@@ -58,12 +58,18 @@ pub enum ErrorKind {
 impl Display for ErrorKind {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
-            Self::DeviceBusy => "The device is busy.",
-            Self::DeviceNotAvailable => "The requested device is not available.",
-            Self::InvalidInput => "Invalid input.",
-            Self::UnsupportedConfig => "The requested stream configuration is not supported.",
+            Self::DeviceBusy => {
+                "The requested device is temporarily busy. Another application or stream may be using it."
+            }
+            Self::DeviceNotAvailable => {
+                "The requested audio device is not available. It may have been disconnected."
+            }
+            Self::InvalidInput => "Invalid input or argument.",
+            Self::UnsupportedConfig => {
+                "The requested stream configuration is not supported by the device."
+            }
             Self::UnsupportedOperation => "The requested operation is not supported.",
-            Self::BackendError => "A backend-specific error has occurred.",
+            Self::BackendError => "The audio backend returned an unclassified error.",
         })
     }
 }
@@ -77,7 +83,8 @@ pub struct Error {
 
 impl Error {
     /// Creates a new error with the given kind and no message.
-    pub const fn new(kind: ErrorKind) -> Self {
+    #[allow(clippy::missing_const_for_fn)] // Upstream API is not const
+    pub fn new(kind: ErrorKind) -> Self {
         Self {
             kind,
             message: None,
@@ -93,7 +100,8 @@ impl Error {
     }
 
     /// Returns the error kind.
-    pub const fn kind(&self) -> ErrorKind {
+    #[allow(clippy::missing_const_for_fn)] // Upstream API is not const
+    pub fn kind(&self) -> ErrorKind {
         self.kind
     }
 
@@ -163,7 +171,7 @@ impl SizedSample for f32 {
 }
 
 /// The buffer size of a stream.
-#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum BufferSize {
     /// Let the backend pick a buffer size.
     #[default]
@@ -173,7 +181,7 @@ pub enum BufferSize {
 }
 
 /// The configuration of a stream.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct StreamConfig {
     /// Number of interleaved channels.
     pub channels: ChannelCount,
@@ -194,7 +202,7 @@ impl StreamConfig {
 }
 
 /// A stream configuration supported by a device.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SupportedStreamConfig {
     channels: ChannelCount,
     sample_rate: SampleRate,
@@ -203,22 +211,26 @@ pub struct SupportedStreamConfig {
 
 impl SupportedStreamConfig {
     /// Returns the number of channels.
-    pub const fn channels(&self) -> ChannelCount {
+    #[allow(clippy::missing_const_for_fn)] // Upstream API is not const
+    pub fn channels(&self) -> ChannelCount {
         self.channels
     }
 
     /// Returns the sample rate.
-    pub const fn sample_rate(&self) -> SampleRate {
+    #[allow(clippy::missing_const_for_fn)] // Upstream API is not const
+    pub fn sample_rate(&self) -> SampleRate {
         self.sample_rate
     }
 
     /// Returns the sample format.
-    pub const fn sample_format(&self) -> SampleFormat {
+    #[allow(clippy::missing_const_for_fn)] // Upstream API is not const
+    pub fn sample_format(&self) -> SampleFormat {
         self.sample_format
     }
 
     /// Returns a stream config with the default buffer size.
-    pub const fn config(&self) -> StreamConfig {
+    #[allow(clippy::missing_const_for_fn)] // Upstream API is not const
+    pub fn config(&self) -> StreamConfig {
         StreamConfig {
             channels: self.channels,
             sample_rate: self.sample_rate,
@@ -234,13 +246,13 @@ impl From<SupportedStreamConfig> for StreamConfig {
 }
 
 /// Information passed to the input data callback.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct InputCallbackInfo {
     _private: (),
 }
 
 /// Information passed to the output data callback.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct OutputCallbackInfo {
     _private: (),
 }
@@ -343,12 +355,12 @@ pub mod traits {
 
 // MARK: Host
 /// Returns the default host of the platform.
-pub const fn default_host() -> Host {
+#[allow(clippy::missing_const_for_fn)] // Upstream API is not const
+pub fn default_host() -> Host {
     Host { _private: () }
 }
 
 /// The default audio host of the platform.
-#[derive(Debug)]
 pub struct Host {
     _private: (),
 }
