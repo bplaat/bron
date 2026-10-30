@@ -81,7 +81,8 @@ impl Context {
                     {
                         devices.push(Arc::new(Device {
                             path,
-                            descriptor: DeviceDescriptor::new(vendor_id, product_id),
+                            vendor_id,
+                            product_id,
                         }));
                     }
                 }
@@ -122,12 +123,13 @@ impl Drop for RegistryKey {
 
 pub(crate) struct Device {
     path: Vec<u16>,
-    descriptor: DeviceDescriptor,
+    vendor_id: u16,
+    product_id: u16,
 }
 
 impl Device {
     pub(crate) const fn device_descriptor(&self) -> Result<DeviceDescriptor, Error> {
-        Ok(self.descriptor)
+        Ok(DeviceDescriptor::new(self.vendor_id, self.product_id))
     }
 
     pub(crate) fn open(&self) -> Result<Handle, Error> {

@@ -62,6 +62,8 @@ pub enum Error {
     NoDevice,
     /// The requested item was not found.
     NotFound,
+    /// The device returned a malformed descriptor.
+    BadDescriptor,
     /// Another error occurred.
     Other,
 }
@@ -69,19 +71,20 @@ pub enum Error {
 impl Display for Error {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
-            Self::Io => "input/output error",
-            Self::InvalidParam => "invalid parameter",
-            Self::Access => "access denied",
-            Self::Busy => "resource busy",
-            Self::Timeout => "operation timed out",
-            Self::Overflow => "overflow",
-            Self::Pipe => "pipe error",
-            Self::Interrupted => "operation interrupted",
-            Self::NoMem => "out of memory",
-            Self::NotSupported => "operation not supported",
-            Self::NoDevice => "device not present",
-            Self::NotFound => "not found",
-            Self::Other => "other USB error",
+            Self::Io => "Input/Output Error",
+            Self::InvalidParam => "Invalid parameter",
+            Self::Access => "Access denied (insufficient permissions)",
+            Self::Busy => "Resource busy",
+            Self::Timeout => "Operation timed out",
+            Self::Overflow => "Overflow",
+            Self::Pipe => "Pipe error",
+            Self::Interrupted => "System call interrupted (perhaps due to signal)",
+            Self::NoMem => "Insufficient memory",
+            Self::NotSupported => "Operation not supported or unimplemented on this platform",
+            Self::NoDevice => "No such device (it may have been disconnected)",
+            Self::NotFound => "Entity not found",
+            Self::BadDescriptor => "Malformed descriptor",
+            Self::Other => "Other error",
         })
     }
 }
@@ -164,7 +167,7 @@ impl Context {
 }
 
 /// Operations implemented by USB contexts.
-pub trait UsbContext: Sized {
+pub trait UsbContext: Clone + Sized + Send + Sync {
     /// Returns the currently present USB devices.
     fn devices(&self) -> Result<DeviceList<Self>, Error>;
 }
@@ -231,7 +234,7 @@ impl<T: UsbContext> Device<T> {
 }
 
 /// The fields from a USB device descriptor exposed by this minimal API.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Debug)]
 pub struct DeviceDescriptor {
     vendor_id: u16,
     product_id: u16,
@@ -246,12 +249,14 @@ impl DeviceDescriptor {
     }
 
     /// Returns the vendor identifier.
-    pub const fn vendor_id(&self) -> u16 {
+    #[allow(clippy::missing_const_for_fn)] // Upstream API is not const
+    pub fn vendor_id(&self) -> u16 {
         self.vendor_id
     }
 
     /// Returns the product identifier.
-    pub const fn product_id(&self) -> u16 {
+    #[allow(clippy::missing_const_for_fn)] // Upstream API is not const
+    pub fn product_id(&self) -> u16 {
         self.product_id
     }
 }
