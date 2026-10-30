@@ -13,8 +13,8 @@ platforms = ["macos", "windows", "linux"]
 workspace = true
 
 [dependencies]
-basic-toml = "0.1.10"
 android-build = { path = "../../lib/build/android-build" }
+basic-toml = "0.1.10"
 postcard = { version = "1.1", default-features = false, features = ["alloc"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

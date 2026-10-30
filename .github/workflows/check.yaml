@@ -146,5 +146,19 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y nasm python3 clang lld llvm make pkg-config libsdl2-dev meson ninja-build cmake zlib1g-dev
+      # The toolchains and emulator runners only rebuild when their inputs are newer than their outputs,
+      # so date the checkout before any cached build, the exact keys keep a stale build from being used
+      - name: Date toolchain sources before cached builds
+        run: find tools/nds-toolchain tools/wii-toolchain lib/graphics/image -exec touch -d 2000-01-01 {} +
+      - uses: actions/cache@v5
+        with:
+          path: target/nds-toolchain
+          key: linux-x86_64-nds-toolchain-${{ hashFiles('tools/nds-toolchain/**', '!tools/nds-toolchain/test/**') }}
+      - uses: actions/cache@v5
+        with:
+          path: |
+            target/wii-toolchain
+            !target/wii-toolchain/test
+          key: linux-x86_64-wii-toolchain-${{ hashFiles('tools/wii-toolchain/**', '!tools/wii-toolchain/test/**', 'lib/graphics/image/**') }}
       - name: Build assembly examples and games, run NDS and Wii toolchain tests, and build PlaatCraft for the Wii
         run: cargo xtask check-others

@@ -24,8 +24,8 @@ capabilities = ["allowElevation"]
 workspace = true
 
 [dependencies]
-basic-toml = "0.1.10"
 anyhow = "1"
+basic-toml = "0.1.10"
 bwebview = { path = "../../../lib/ui/bwebview", features = ["rust-embed"] }
 bwindow = { path = "../../../lib/ui/bwindow", features = ["progress_bar"] }
 directories = "6.0"

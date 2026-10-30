@@ -55,7 +55,7 @@ functions.
     `wav stop`, which record the sound, `pak`, which puts a Memory Expansion Pak in the GBA slot
     (not on a DSi), `peek <address> [words]`, which prints words of memory, and `quit`, keys like
     `up+a`. Before the ROM argument, `--dsi` runs it as a DSi instead of a DS, and `--fat
-    <directory>` puts a writable SD card initialized from that directory in melonDS's R4 like card,
+<directory>` puts a writable SD card initialized from that directory in melonDS's R4 like card,
     as `fat:/`, or on a DSi in its SD card slot, as `sd:/`, the ROM's `argv[0]` points to it there.
     Its writes stay in emulated memory. Without it, ports read their data from NitroFS.
     `test <address> <frames>` reads the test ROM's status and log from RAM, returning an error on

@@ -90,6 +90,7 @@ separately from main Cargo workspace.
     software renderer on one thread, as fast as it goes, with the clock starting at 2026-01-01
     00:00 UTC, so runs are repeatable. Dolphin maps the emulated memory through `/dev/shm` on
     Linux, which Docker limits to 64 MiB, so give a container more, like `--shm-size=1g`
+
 - `test/` is a Wii program that tests the toolchain, see below
 
 ## Test
