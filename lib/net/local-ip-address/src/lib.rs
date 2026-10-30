@@ -9,11 +9,47 @@
 #![allow(non_camel_case_types)]
 #![allow(clippy::upper_case_acronyms)]
 
+use std::fmt;
 use std::net::IpAddr;
 
+// MARK: Error
+/// An error returned by the local IP address lookup functions.
+#[derive(Debug, PartialEq)]
+pub enum Error {
+    /// Returned when `local_ip` is unable to find the system's local IP address
+    /// in the collection of network interfaces
+    LocalIpAddressNotFound,
+    /// Returned when an error occurs in the strategy level.
+    /// The error message may include any internal strategy error if available
+    StrategyError(String),
+    /// Returned when the current platform is not yet supported
+    PlatformNotSupported(String),
+}
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Error::LocalIpAddressNotFound => write!(
+                f,
+                "The Local IP Address wasn't available in the network interfaces list/table"
+            ),
+            Error::StrategyError(msg) => write!(
+                f,
+                "An error occurred executing the underlying strategy error.\n{msg}"
+            ),
+            Error::PlatformNotSupported(platform) => {
+                write!(f, "The current platform: `{platform}`, is not supported")
+            }
+        }
+    }
+}
+
+impl std::error::Error for Error {}
+
+// MARK: Functions
 /// Returns the local IPv4 address of the machine.
 #[allow(unsafe_code)]
-pub fn local_ip() -> Result<IpAddr, std::io::Error> {
+pub fn local_ip() -> Result<IpAddr, Error> {
     cfg_select! {
         unix => {
             use std::ffi::{c_char, c_int, c_uint};
@@ -69,12 +105,11 @@ pub fn local_ip() -> Result<IpAddr, std::io::Error> {
             let mut ifaddrs: *mut ifaddrs = std::ptr::null_mut();
             // SAFETY: ifaddrs is a valid out-pointer; getifaddrs will initialize it on success.
             if unsafe { getifaddrs(&mut ifaddrs) } != 0 {
-                return Err(std::io::Error::last_os_error());
+                return Err(Error::StrategyError(
+                    std::io::Error::last_os_error().to_string(),
+                ));
             }
-            let mut result = Err(std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                "No valid network interface found",
-            ));
+            let mut result = Err(Error::LocalIpAddressNotFound);
 
             let mut current = ifaddrs;
             while !current.is_null() {
@@ -188,7 +223,9 @@ pub fn local_ip() -> Result<IpAddr, std::io::Error> {
                 )
             };
             if result != ERROR_BUFFER_OVERFLOW && result != NO_ERROR {
-                return Err(std::io::Error::from_raw_os_error(result as i32));
+                return Err(Error::StrategyError(
+                    std::io::Error::from_raw_os_error(result as i32).to_string(),
+                ));
             }
 
             // Second call to get the actual data
@@ -205,7 +242,9 @@ pub fn local_ip() -> Result<IpAddr, std::io::Error> {
                 )
             };
             if result != NO_ERROR {
-                return Err(std::io::Error::from_raw_os_error(result as i32));
+                return Err(Error::StrategyError(
+                    std::io::Error::from_raw_os_error(result as i32).to_string(),
+                ));
             }
 
             // Iterate through adapters
@@ -239,13 +278,7 @@ pub fn local_ip() -> Result<IpAddr, std::io::Error> {
                 current_adapter = adapter.next;
             }
 
-            if let Some(ipv4) = best_ipv4_addr {
-                return Ok(ipv4);
-            }
-            Err(std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                "No local IP address found",
-            ))
+            best_ipv4_addr.ok_or(Error::LocalIpAddressNotFound)
         }
         _ => compile_error!("Unsupported platform"),
     }
