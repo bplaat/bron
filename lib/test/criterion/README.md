@@ -6,8 +6,9 @@ workspace and has no dependencies.
 
 Supported APIs: `Criterion`, `BenchmarkGroup`, `BenchmarkId`, `Throughput`,
 `Bencher::iter`, `iter_batched`, `iter_batched_ref`, `iter_custom`,
-`criterion_group!`, and `criterion_main!`. Results show the median and the
-10th and 90th percentile sample times.
+`criterion_group!` (including the `name = ...; config = ...; targets = ...;` form),
+and `criterion_main!`. Results show the median and the 10th and 90th percentile
+sample times.
 
 Run a benchmark with Cargo:
 
@@ -19,7 +20,7 @@ cargo bench -p sha1 --bench sha1 --features disable-software
 Optional arguments after `--`:
 
 - A substring filters benchmark names, for example `-- digest/1048576`.
-- `--sample-size 20` sets the number of timed samples (default: 15).
+- `--sample-size 20` sets the number of timed samples (default: 15, minimum: 10).
 - `--measurement-time 2` sets the total target measurement time in seconds
   (default: 3).
 - `--warm-up-time 1` sets the minimum warm-up time in seconds (default: 0.1).
