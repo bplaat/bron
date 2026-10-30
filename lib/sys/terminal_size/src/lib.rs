@@ -17,88 +17,110 @@ pub struct Width(pub u16);
 pub struct Height(pub u16);
 
 /// Returns the terminal size as a tuple.
-#[allow(unsafe_code)]
+///
+/// Checks stdout, stderr, and stdin (in that order) and returns the size of the first one that is
+/// a terminal.
 pub fn terminal_size() -> Option<(Width, Height)> {
-    cfg_select! {
-        unix => {
-            #[repr(C)]
-            struct winsize {
-                ws_row: u16,
-                ws_col: u16,
-                ws_xpixel: u16,
-                ws_ypixel: u16,
-            }
-            const STDOUT_FILENO: i32 = 1;
-            const TIOCGWINSZ: std::ffi::c_ulong = if cfg!(any(
-                target_os = "macos",
-                target_os = "freebsd",
-                target_os = "dragonfly",
-                target_os = "openbsd",
-                target_os = "netbsd"
-            )) {
-                0x40087468
-            } else {
-                0x5413
-            };
-            unsafe extern "C" {
-                fn ioctl(fd: i32, op: std::ffi::c_ulong, ...) -> i32;
-            }
+    STREAMS.into_iter().find_map(stream_size)
+}
 
+cfg_select! {
+    unix => {
+        #[repr(C)]
+        struct winsize {
+            ws_row: u16,
+            ws_col: u16,
+            ws_xpixel: u16,
+            ws_ypixel: u16,
+        }
+        const TIOCGWINSZ: std::ffi::c_ulong = if cfg!(any(
+            target_os = "macos",
+            target_os = "freebsd",
+            target_os = "dragonfly",
+            target_os = "openbsd",
+            target_os = "netbsd"
+        )) {
+            0x40087468
+        } else {
+            0x5413
+        };
+        #[allow(unsafe_code)]
+        unsafe extern "C" {
+            fn ioctl(fd: i32, op: std::ffi::c_ulong, ...) -> i32;
+        }
+
+        /// The stdout, stderr, and stdin file descriptors.
+        const STREAMS: [i32; 3] = [1, 2, 0];
+
+        #[allow(unsafe_code)]
+        fn stream_size(fd: i32) -> Option<(Width, Height)> {
             let mut size = MaybeUninit::<winsize>::uninit();
             // SAFETY: size is a valid MaybeUninit<winsize> pointer; ioctl with TIOCGWINSZ fills it on success.
-            if unsafe { ioctl(STDOUT_FILENO, TIOCGWINSZ, size.as_mut_ptr()) } == -1 {
+            if unsafe { ioctl(fd, TIOCGWINSZ, size.as_mut_ptr()) } == -1 {
                 return None;
             }
             // SAFETY: ioctl returned success, so size was fully initialized by the kernel.
             let size = unsafe { size.assume_init() };
-            Some((Width(size.ws_col), Height(size.ws_row)))
+            (size.ws_row > 0 && size.ws_col > 0)
+                .then_some((Width(size.ws_col), Height(size.ws_row)))
         }
-        windows => {
-            #[repr(C)]
-            struct COORD {
-                X: i16,
-                Y: i16,
-            }
-            #[repr(C)]
-            struct SMALL_RECT {
-                Left: i16,
-                Top: i16,
-                Right: i16,
-                Bottom: i16,
-            }
-            #[repr(C)]
-            struct CONSOLE_SCREEN_BUFFER_INFO {
-                dwSize: COORD,
-                dwCursorPosition: COORD,
-                wAttributes: u16,
-                srWindow: SMALL_RECT,
-                dwMaximumWindowSize: COORD,
-            }
-            const STD_OUTPUT_HANDLE: i32 = -11;
-            const INVALID_HANDLE_VALUE: *mut std::ffi::c_void = (-1isize) as *mut std::ffi::c_void;
-            #[link(name = "kernel32")]
-            unsafe extern "system" {
-                fn GetStdHandle(nStdHandle: i32) -> *mut std::ffi::c_void;
-                fn GetConsoleScreenBufferInfo(
-                    hConsoleOutput: *mut std::ffi::c_void,
-                    lpConsoleScreenBufferInfo: *mut CONSOLE_SCREEN_BUFFER_INFO,
-                ) -> i32;
-            }
+    }
+    windows => {
+        #[repr(C)]
+        struct COORD {
+            X: i16,
+            Y: i16,
+        }
+        #[repr(C)]
+        struct SMALL_RECT {
+            Left: i16,
+            Top: i16,
+            Right: i16,
+            Bottom: i16,
+        }
+        #[repr(C)]
+        struct CONSOLE_SCREEN_BUFFER_INFO {
+            dwSize: COORD,
+            dwCursorPosition: COORD,
+            wAttributes: u16,
+            srWindow: SMALL_RECT,
+            dwMaximumWindowSize: COORD,
+        }
+        const INVALID_HANDLE_VALUE: *mut std::ffi::c_void = (-1isize) as *mut std::ffi::c_void;
+        #[allow(unsafe_code)]
+        #[link(name = "kernel32")]
+        unsafe extern "system" {
+            fn GetStdHandle(nStdHandle: u32) -> *mut std::ffi::c_void;
+            fn GetConsoleScreenBufferInfo(
+                hConsoleOutput: *mut std::ffi::c_void,
+                lpConsoleScreenBufferInfo: *mut CONSOLE_SCREEN_BUFFER_INFO,
+            ) -> i32;
+        }
 
-            // SAFETY: STD_OUTPUT_HANDLE is a valid standard handle constant for GetStdHandle.
-            let stdout = unsafe { GetStdHandle(STD_OUTPUT_HANDLE) };
-            if stdout == INVALID_HANDLE_VALUE {
+        /// The STD_OUTPUT_HANDLE, STD_ERROR_HANDLE, and STD_INPUT_HANDLE constants.
+        const STREAMS: [u32; 3] = [-11i32 as u32, -12i32 as u32, -10i32 as u32];
+
+        #[allow(unsafe_code)]
+        fn stream_size(std_handle: u32) -> Option<(Width, Height)> {
+            // SAFETY: std_handle is a valid standard handle constant for GetStdHandle.
+            let handle = unsafe { GetStdHandle(std_handle) };
+            if handle == INVALID_HANDLE_VALUE {
                 return None;
             }
             let mut csbi = MaybeUninit::<CONSOLE_SCREEN_BUFFER_INFO>::uninit();
-            // SAFETY: stdout is a valid console handle (checked above); csbi.as_mut_ptr() is a valid output pointer.
-            if unsafe { GetConsoleScreenBufferInfo(stdout, csbi.as_mut_ptr()) } == 0 {
+            // SAFETY: GetConsoleScreenBufferInfo fails for non-console handles; csbi.as_mut_ptr() is a valid output pointer.
+            if unsafe { GetConsoleScreenBufferInfo(handle, csbi.as_mut_ptr()) } == 0 {
                 return None;
             }
             // SAFETY: GetConsoleScreenBufferInfo returned success, so csbi was fully initialized by the OS.
-            let csbi = unsafe { csbi.assume_init() };
-            Some((Width(csbi.dwSize.X as u16), Height(csbi.dwSize.Y as u16)))
+            let window = unsafe { csbi.assume_init() }.srWindow;
+            Some((
+                Width((window.Right - window.Left + 1) as u16),
+                Height((window.Bottom - window.Top + 1) as u16),
+            ))
         }
-        _ => compile_error!("Unsupported platform"),
+    }
+    _ => {
+        compile_error!("Unsupported platform");
     }
 }
