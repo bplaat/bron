@@ -141,14 +141,16 @@ struct CompilerMessage {
 
 impl TestCases {
     /// Creates an empty test collection.
-    pub const fn new() -> Self {
+    // Upstream API is not const and has no Default
+    #[allow(clippy::missing_const_for_fn, clippy::new_without_default)]
+    pub fn new() -> Self {
         Self {
             tests: RefCell::new(Vec::new()),
         }
     }
 
     /// Adds files that must compile and run successfully.
-    pub fn pass(&self, pattern: impl AsRef<Path>) {
+    pub fn pass<P: AsRef<Path>>(&self, pattern: P) {
         self.tests.borrow_mut().push(Test {
             pattern: pattern.as_ref().to_owned(),
             expected: Expected::Pass,
@@ -156,7 +158,7 @@ impl TestCases {
     }
 
     /// Adds files that must fail with their adjacent `.stderr` diagnostics.
-    pub fn compile_fail(&self, pattern: impl AsRef<Path>) {
+    pub fn compile_fail<P: AsRef<Path>>(&self, pattern: P) {
         self.tests.borrow_mut().push(Test {
             pattern: pattern.as_ref().to_owned(),
             expected: Expected::CompileFail,
@@ -248,12 +250,6 @@ impl TestCases {
         } else {
             Err(format!("{failures} of {} tests failed", tests.len()))
         }
-    }
-}
-
-impl Default for TestCases {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
