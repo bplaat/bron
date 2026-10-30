@@ -13,6 +13,7 @@ workspace = true
 cc = "1.10"
 indexmap = "2.14"
 regex = { version = "1.13", default-features = false, features = [
+    "std",
     "unicode-perl",
 ] }
 
@@ -20,5 +21,6 @@ regex = { version = "1.13", default-features = false, features = [
 cc = "1.10"
 indexmap = "2.14"
 regex = { version = "1.13", default-features = false, features = [
+    "std",
     "unicode-perl",
 ] }

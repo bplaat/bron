@@ -10,7 +10,9 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
-regex = { version = "1.13", default-features = false, optional = true }
+regex = { version = "1.13", default-features = false, features = [
+    "std",
+], optional = true }
 serde = { version = "1.0", features = ["derive"], optional = true }
 url = { version = "2.5", optional = true }
 validate_derive = { path = "../validate_derive", optional = true }

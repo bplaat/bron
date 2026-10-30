@@ -16,6 +16,7 @@ workspace = true
 
 [dependencies]
 regex = { version = "1.13", default-features = false, features = [
+    "std",
     "unicode-perl",
 ] }
 serde = { version = "1.0", features = ["derive"], optional = true }

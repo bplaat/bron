@@ -16,5 +16,6 @@ regex-lite = { version = "0.1.9", default-features = false, features = [
 ] }
 
 [features]
-default = []
+default = ["std"]
+std = []
 unicode-perl = []
