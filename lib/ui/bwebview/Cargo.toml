@@ -15,7 +15,7 @@ log = { version = "0.4.34", optional = true }
 mime_guess = { version = "2.0", default-features = false, features = [
     "std",
 ], optional = true }
-rust-embed = { version = "8.12", optional = true }
+rust-embed = { version = "8.13", optional = true }
 small-http = { version = "0.2.1", optional = true, default-features = false }
 
 [target.'cfg(target_os = "android")'.dependencies]
@@ -23,7 +23,7 @@ jni = "0.22.4"
 
 [target.'cfg(target_vendor = "apple")'.dependencies]
 block2 = "0.6.2"
-objc2 = "0.6.4"
+objc2 = "0.6.5"
 
 [build-dependencies]
 android-build = { path = "../../build/android-build" }

@@ -7,7 +7,7 @@ authors.workspace = true
 repository.workspace = true
 
 [dependencies]
-objc2 = "0.6.4"
+objc2 = "0.6.5"
 
 [lints]
 workspace = true

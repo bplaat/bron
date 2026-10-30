@@ -42,7 +42,7 @@ bwindow = { path = "../../../lib/ui/bwindow", features = [
 ] }
 keyring = "4.2"
 preferences = { path = "../../../lib/sys/preferences" }
-rust-embed = "8.12"
+rust-embed = "8.13"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 serde_urlencoded = "0.7.1"
@@ -57,4 +57,4 @@ zeroize = { version = "1.9", features = ["serde"] }
 bsql = { version = "0.1.2", features = ["sqlite-bundled"] }
 
 [build-dependencies]
-winresource = "0.1.31"
+winresource = "0.1.34"

@@ -1,6 +1,6 @@
 [package]
 name = "maxminddb"
-version = "0.30.3+patch"
+version = "0.32.0+patch"
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
@@ -13,7 +13,7 @@ workspace = true
 serde = { version = "1.0", features = ["derive"] }
 
 [dev-dependencies]
-criterion = "0.7"
+criterion = "0.8"
 
 [[bench]]
 name = "maxminddb"

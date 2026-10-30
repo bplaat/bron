@@ -1,6 +1,6 @@
 [package]
 name = "uuid"
-version = "1.25.0+patch"
+version = "1.29.0+patch"
 edition.workspace = true
 license.workspace = true
 authors.workspace = true

@@ -33,4 +33,4 @@ preferences = { path = "../../lib/sys/preferences" }
 reversi-engine = { path = "../reversi-engine" }
 
 [build-dependencies]
-winresource = "0.1.31"
+winresource = "0.1.34"

@@ -16,4 +16,4 @@ workspace = true
 bcanvas = { path = "../../../lib/graphics/bcanvas", default-features = false }
 block2 = "0.6.2"
 imageview-core = { path = "../imageview-core" }
-objc2 = "0.6.4"
+objc2 = "0.6.5"

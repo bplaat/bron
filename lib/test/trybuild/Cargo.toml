@@ -1,6 +1,6 @@
 [package]
 name = "trybuild"
-version = "1.0.120+patch"
+version = "1.0.122+patch"
 edition.workspace = true
 license.workspace = true
 authors.workspace = true

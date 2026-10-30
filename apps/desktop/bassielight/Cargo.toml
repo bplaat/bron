@@ -29,7 +29,7 @@ local-ip-address = { version = "0.6.13" }
 log = "0.4.34"
 mime_guess = { version = "2.0", default-features = false, features = ["std"] }
 rusb = "0.9.4"
-rust-embed = { version = "8.12", features = ["interpolate-folder-path"] }
+rust-embed = { version = "8.13", features = ["interpolate-folder-path"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 simple_logger = "5.2"
@@ -38,4 +38,4 @@ small-websocket = { path = "../../../lib/net/small-websocket", default-features 
 
 [build-dependencies]
 copy_dir = "0.1.3"
-winresource = "0.1.31"
+winresource = "0.1.34"

@@ -25,7 +25,7 @@ bwindow = { path = "../../../lib/ui/bwindow" }
 directories = "6.0"
 mp4ameta = "0.13.0"
 percent-encoding = "2.3"
-rust-embed = "8.12"
+rust-embed = "8.13"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 small-http = { version = "0.2.1", features = ["json", "tls"] }
@@ -35,4 +35,4 @@ threadpool = "2.0"
 enable-ansi-support = "0.3.1"
 
 [build-dependencies]
-winresource = "0.1.31"
+winresource = "0.1.34"

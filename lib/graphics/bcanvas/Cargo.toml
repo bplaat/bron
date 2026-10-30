@@ -17,7 +17,7 @@ image = { path = "../image", default-features = false, optional = true }
 jni = "0.22.4"
 
 [target.'cfg(target_vendor = "apple")'.dependencies]
-objc2 = { version = "0.6.4", optional = true }
+objc2 = { version = "0.6.5", optional = true }
 
 [features]
 default = ["window"]

@@ -17,7 +17,7 @@ quote = "1.0"
 syn = { version = "3.0", features = ["full"] }
 
 [target.'cfg(target_vendor = "apple")'.dev-dependencies]
-objc2 = "0.6.4"
+objc2 = "0.6.5"
 
 [dev-dependencies]
 trybuild = "1.0"

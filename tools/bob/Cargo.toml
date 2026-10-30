@@ -27,7 +27,7 @@ toml = { version = "1.1.8", default-features = false, features = [
     "parse",
 ] }
 url = "2.5"
-zip = "8.6"
+zip = "9.1"
 
 [target.'cfg(windows)'.dependencies]
 enable-ansi-support = "0.3.1"

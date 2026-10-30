@@ -26,7 +26,7 @@ crc = { version = "3", optional = true }
 deflate = { path = "../../data/deflate", optional = true }
 
 [dev-dependencies]
-criterion = "0.7"
+criterion = "0.8"
 
 [[bench]]
 name = "image"

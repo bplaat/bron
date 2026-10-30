@@ -1,6 +1,6 @@
 [package]
 name = "sha2"
-version = "0.11.0+patch"
+version = "0.11.1+patch"
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
@@ -16,7 +16,7 @@ disable-software = []
 disable-simd = []
 
 [dev-dependencies]
-criterion = "0.7"
+criterion = "0.8"
 
 [[bench]]
 name = "sha2"

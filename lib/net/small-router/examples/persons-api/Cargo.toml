@@ -25,7 +25,7 @@ serde_urlencoded = "0.7.1"
 simple_logger = "5.2"
 small-http = { version = "0.2.1", features = ["json", "form", "cgi", "log"] }
 small-router = { version = "0.2.1", features = ["log"] }
-uuid = { version = "1.25", features = ["v7", "serde"] }
+uuid = { version = "1.29", features = ["v7", "serde"] }
 validate = { path = "../../../../data/validate" }
 
 [target.'cfg(not(any(target_os = "macos", windows)))'.dependencies]

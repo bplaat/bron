@@ -11,7 +11,7 @@ workspace = true
 
 [dependencies]
 cargo-bundle-assets-impl = { path = "../cargo-bundle-assets-impl" }
-rust-embed = "8.12"
+rust-embed = "8.13"
 
 [target.'cfg(target_os = "android")'.dependencies]
 bwindow = { path = "../../ui/bwindow", default-features = false }

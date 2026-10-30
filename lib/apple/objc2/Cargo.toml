@@ -1,6 +1,6 @@
 [package]
 name = "objc2"
-version = "0.6.4+patch"
+version = "0.6.5+patch"
 edition.workspace = true
 license.workspace = true
 authors.workspace = true

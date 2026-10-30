@@ -17,7 +17,7 @@ bwindow = { path = "../../../bwindow", default-features = false, features = [
     "remember_window_state",
 ] }
 directories = "6.0"
-rust-embed = "8.12"
+rust-embed = "8.13"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-uuid = { version = "1.25", features = ["serde"] }
+uuid = { version = "1.29", features = ["serde"] }
