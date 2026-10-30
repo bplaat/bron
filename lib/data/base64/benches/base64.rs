@@ -8,7 +8,7 @@
 
 use std::hint::black_box;
 
-use base64::{BASE64_STANDARD, BASE64_STANDARD_NO_PAD, Engine};
+use base64::prelude::*;
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 
 fn codecs(c: &mut Criterion) {
