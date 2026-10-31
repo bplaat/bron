@@ -24,6 +24,11 @@ declare global {
 
 export type IpcType = 'ipc' | 'websocket';
 
+// The token of the LAN server from the QR-code URL, kept for page reloads
+export const ipcToken =
+    new URLSearchParams(window.location.search).get('token') ?? sessionStorage.getItem('ipcToken') ?? '';
+sessionStorage.setItem('ipcToken', ipcToken);
+
 export class Ipc {
     type: IpcType;
     ws?: WebSocket;
@@ -34,7 +39,7 @@ export class Ipc {
             this.type = 'ipc';
         } else {
             this.type = 'websocket';
-            this.ws = new WebSocket('/ipc');
+            this.ws = new WebSocket(`/ipc?token=${encodeURIComponent(ipcToken)}`);
         }
     }
 

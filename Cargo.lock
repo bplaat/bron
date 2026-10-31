@@ -63,6 +63,7 @@ dependencies = [
  "bwindow",
  "copy_dir",
  "directories",
+ "getrandom 0.4.3+patch",
  "local-ip-address",
  "log",
  "mime_guess",

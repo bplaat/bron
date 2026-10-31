@@ -15,7 +15,7 @@ use bwebview::{WebviewBuilder, WebviewEvent};
 use bwindow::{Event, EventLoopBuilder, LogicalSize, Theme, WindowBuilder};
 use log::{info, warn};
 use rust_embed::Embed;
-use small_http::Response;
+use small_http::{Response, Status};
 use small_websocket::Message;
 
 use crate::config::Config;
@@ -33,6 +33,12 @@ pub(crate) static CONFIG: Mutex<Option<Config>> = Mutex::new(None);
 #[derive(Embed)]
 #[folder = "$OUT_DIR/web"]
 struct WebAssets;
+
+fn random_token() -> String {
+    let mut bytes = [0; 16];
+    getrandom::fill(&mut bytes).expect("Can't get random bytes");
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
 
 // MARK: Main
 pub(crate) enum AppEvent {
@@ -73,6 +79,9 @@ fn main() {
     let local_addr = listener
         .local_addr()
         .expect("Can't get local http server port");
+    // The LAN server controls the lights, so WebSocket clients need this token from the QR-code URL
+    let ipc_token = random_token();
+    let ipc_query = format!("token={ipc_token}");
     let url = if let Ok(ip) = local_ip_address::local_ip() {
         format!("http://{}:{}", ip, local_addr.port())
     } else {
@@ -91,6 +100,10 @@ fn main() {
                 }
 
                 if req.url.path() == "/ipc" {
+                    if req.url.query() != Some(ipc_query.as_str()) {
+                        return Response::with_status(Status::Unauthorized)
+                            .body("401 Unauthorized");
+                    }
                     return small_websocket::upgrade(req, |mut ws| {
                         if let Err(error) = ws.set_write_timeout(Some(Duration::from_millis(250))) {
                             warn!("Can't configure WebSocket write timeout: {error}");
@@ -164,7 +177,7 @@ fn main() {
 
     let mut webview = WebviewBuilder::new(&window)
         .on_event(event_loop.create_proxy(), AppEvent::Webview)
-        .load_url(&url)
+        .load_url(format!("{url}/?token={ipc_token}"))
         .build();
 
     #[cfg(target_os = "macos")]

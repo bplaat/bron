@@ -8,6 +8,7 @@ import { signal } from '@preact/signals';
 import { useContext, useEffect, useState } from 'preact/hooks';
 import { Link, useRoute } from 'wouter-preact';
 import { IpcContext } from '../app.tsx';
+import { ipcToken } from '../ipc.ts';
 import { CogIcon, MotionPlayOutlineIcon, QrcodeIcon, SquareEditOutlineIcon } from './icons.tsx';
 import { QrModal } from './qrmodal.tsx';
 import './menubar.css';
@@ -108,7 +109,10 @@ export function Menubar() {
                 </button>
             </div>
             {showQrCode && (
-                <QrModal contents={`http://${window.location.host}/`} onClose={() => setShowQrCode(false)} />
+                <QrModal
+                    contents={`http://${window.location.host}/?token=${ipcToken}`}
+                    onClose={() => setShowQrCode(false)}
+                />
             )}
         </>
     );

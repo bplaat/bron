@@ -25,6 +25,7 @@ workspace = true
 bwebview = { path = "../../../lib/ui/bwebview", features = ["rust-embed"] }
 bwindow = { path = "../../../lib/ui/bwindow" }
 directories = "6.0"
+getrandom = "0.4.3"
 local-ip-address = { version = "0.6.13" }
 log = "0.4.34"
 mime_guess = { version = "2.0", default-features = false }
