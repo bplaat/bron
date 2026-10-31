@@ -18,7 +18,12 @@ concurrency:
 jobs:
   deploy-pages:
     runs-on: ubuntu-26.04
-    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    # The branches filter matches the head branch name, which a fork PR can also call master,
+    # so only deploy check runs of pushes to this repository
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
