@@ -78,6 +78,8 @@ public final class Bwebview {
         var settings = webView.getSettings();
         settings.setJavaScriptEnabled(true);
         settings.setDomStorageEnabled(true);
+        // Pages don't need file:// access, custom protocols are served over https
+        settings.setAllowFileAccess(false);
         settings.setUserAgentString(settings.getUserAgentString() + " " + userAgent);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             settings.setAlgorithmicDarkeningAllowed(false);

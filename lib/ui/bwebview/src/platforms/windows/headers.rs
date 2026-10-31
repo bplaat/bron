@@ -1031,6 +1031,10 @@ pub(crate) struct ICoreWebView2WebMessageReceivedEventArgs {
 }
 
 impl ICoreWebView2WebMessageReceivedEventArgs {
+    pub(crate) unsafe fn get_Source(&self, uri: *mut *mut w_char) -> HRESULT {
+        unsafe { ((*self.lpVtbl).get_Source)(self as *const _ as *mut _, uri) }
+    }
+
     pub(crate) unsafe fn TryGetWebMessageAsString(&self, message: *mut *mut w_char) -> HRESULT {
         unsafe { ((*self.lpVtbl).TryGetWebMessageAsString)(self as *const _ as *mut _, message) }
     }
@@ -1045,7 +1049,11 @@ pub(crate) struct ICoreWebView2WebMessageReceivedEventArgsVtbl {
     ) -> HRESULT,
     pub(crate) AddRef: unsafe extern "system" fn(This: *mut c_void) -> u32,
     pub(crate) Release: unsafe extern "system" fn(This: *mut c_void) -> u32,
-    padding: [usize; 2],
+    pub(crate) get_Source: unsafe extern "system" fn(
+        This: *mut ICoreWebView2WebMessageReceivedEventArgs,
+        uri: *mut *mut w_char,
+    ) -> HRESULT,
+    padding: [usize; 1],
     pub(crate) TryGetWebMessageAsString: unsafe extern "system" fn(
         This: *mut ICoreWebView2WebMessageReceivedEventArgs,
         message: *mut *mut w_char,

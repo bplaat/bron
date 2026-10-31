@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: MIT
  */
 
+use std::cell::RefCell;
 use std::fmt::Write;
 use std::rc::Rc;
 
@@ -17,6 +18,53 @@ use crate::platforms::PlatformWebview;
 pub(crate) struct CustomProtocol {
     pub scheme: String,
     pub handler: Box<dyn Fn(&small_http::Request) -> small_http::Response + Send + 'static>,
+}
+
+// MARK: TrustedUrl
+/// The URL of the last page the app loaded, only pages of its origin may send IPC messages, so
+/// remote pages the webview navigated to can't use the IPC handlers of the app
+#[derive(Clone)]
+pub(crate) struct TrustedUrl(Rc<RefCell<String>>);
+
+impl Default for TrustedUrl {
+    fn default() -> Self {
+        Self(Rc::new(RefCell::new(Self::HTML_URL.to_string())))
+    }
+}
+
+impl TrustedUrl {
+    /// The URL of pages loaded from an HTML string
+    pub(crate) const HTML_URL: &str = "about:blank";
+
+    pub(crate) fn set(&self, url: &str) {
+        *self.0.borrow_mut() = url.to_string();
+    }
+
+    pub(crate) fn allows(&self, url: &str) -> bool {
+        url_origin(&self.0.borrow()).eq_ignore_ascii_case(url_origin(url))
+    }
+}
+
+/// Get the scheme, host and port of a URL, or the URL without query and fragment when it has no host
+fn url_origin(url: &str) -> &str {
+    let end = match url.find("://") {
+        Some(index) => url[index + 3..]
+            .find(['/', '?', '#'])
+            .map_or(url.len(), |end| index + 3 + end),
+        None => url.find(['?', '#']).unwrap_or(url.len()),
+    };
+    &url[..end]
+}
+
+/// Whether a URL a page opens in a new window may be passed to the OS, other schemes like file
+/// could start any registered handler
+#[cfg(not(target_os = "android"))]
+pub(crate) fn is_external_url(url: &str) -> bool {
+    url.split_once(':').is_some_and(|(scheme, _)| {
+        ["http", "https", "mailto"]
+            .iter()
+            .any(|allowed| scheme.eq_ignore_ascii_case(allowed))
+    })
 }
 
 // MARK: InjectionTime
@@ -251,5 +299,32 @@ mod test {
             json_string("\0\x1b\u{2028}\u{2029}é"),
             r#""\u0000\u001b\u2028\u2029é""#
         );
+    }
+
+    #[test]
+    fn test_trusted_url() {
+        let trusted = TrustedUrl::default();
+        assert!(trusted.allows("about:blank"));
+        assert!(!trusted.allows("https://example.com/"));
+
+        trusted.set("http://app.localhost/index.html");
+        assert!(trusted.allows("http://app.localhost/"));
+        assert!(trusted.allows("http://APP.localhost/api?x=1#y"));
+        assert!(!trusted.allows("http://app.localhost.example.com/"));
+        assert!(!trusted.allows("https://app.localhost/"));
+        assert!(!trusted.allows("http://app.localhost:8080/"));
+        assert!(!trusted.allows("about:blank"));
+    }
+
+    #[test]
+    #[cfg(not(target_os = "android"))]
+    fn test_is_external_url() {
+        assert!(is_external_url("https://example.com/"));
+        assert!(is_external_url("HTTP://example.com/"));
+        assert!(is_external_url("mailto:me@example.com"));
+        assert!(!is_external_url("file:///C:/Windows/System32/calc.exe"));
+        assert!(!is_external_url("ms-msdt:/id PCWDiagnostic"));
+        assert!(!is_external_url("\\\\server\\share\\evil.exe"));
+        assert!(!is_external_url("javascript:alert(1)"));
     }
 }

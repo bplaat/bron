@@ -18,7 +18,7 @@ use jni::strings::JNIStr;
 use jni::sys::{jint, jlong};
 use jni::{Env, EnvUnowned, JValue, NativeMethod, jni_sig, jni_str};
 
-use crate::{InjectionTime, WebviewBuilder, WebviewEvent};
+use crate::{InjectionTime, TrustedUrl, WebviewBuilder, WebviewEvent};
 
 // Custom protocols are served from this domain, which Android reserves for local content.
 const HOST_SUFFIX: &str = ".appassets.androidplatform.net";
@@ -94,6 +94,7 @@ static PROTOCOLS: std::sync::Mutex<Option<HashMap<u64, Vec<crate::CustomProtocol
 struct WebviewState {
     event_handler: Option<crate::EventHandler>,
     url: RefCell<Option<String>>,
+    trusted_url: TrustedUrl,
 }
 
 thread_local! {
@@ -230,10 +231,12 @@ impl crate::WebviewInterface for PlatformWebview {
 
     fn load_url(&mut self, url: impl AsRef<str>) {
         let url = rewrite_custom_protocol(url.as_ref(), &self.schemes);
+        self.state.trusted_url.set(&url);
         self.call_with_string(jni_str!("loadUrl"), &url);
     }
 
     fn load_html(&mut self, html: impl AsRef<str>) {
+        self.state.trusted_url.set(TrustedUrl::HTML_URL);
         self.call_with_string(jni_str!("loadHtml"), html.as_ref());
     }
 
@@ -401,9 +404,19 @@ fn dispatch_event(id: u64, kind: &str, value: &str) {
                 }
                 return;
             }
+            // The Java bridge doesn't tell which frame sent a message, so check the page in the
+            // main frame
             let Some(message) = value.strip_prefix('i') else {
                 return;
             };
+            if !state
+                .url
+                .borrow()
+                .as_ref()
+                .is_some_and(|url| state.trusted_url.allows(url))
+            {
+                return;
+            }
             WebviewEvent::MessageReceive(message.to_string())
         }
         _ => return,

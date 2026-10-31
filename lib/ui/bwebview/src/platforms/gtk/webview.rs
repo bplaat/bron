@@ -13,11 +13,12 @@ use std::rc::Rc;
 #[cfg(feature = "file_drop")]
 use super::file_drop::{FileDropState, connect_signals};
 use super::headers::*;
-use crate::{InjectionTime, WebviewBuilder, WebviewEvent};
+use crate::{InjectionTime, TrustedUrl, WebviewBuilder, WebviewEvent, is_external_url};
 
 pub(super) struct WebviewData {
     pub(super) attachment: bwindow::WindowAttachment,
     closed: Cell<bool>,
+    trusted_url: TrustedUrl,
     handler: RefCell<Option<crate::EventHandler>>,
     manager: Cell<*mut WebKitUserContentManager>,
     pub(super) window: *mut GtkWindow,
@@ -97,6 +98,7 @@ impl PlatformWebview {
         };
         PlatformWebview(Rc::new(WebviewData {
             closed: Cell::new(false),
+            trusted_url: TrustedUrl::default(),
             handler: RefCell::new(None),
             manager: Cell::new(null_mut()),
             window: window.cast(),
@@ -238,10 +240,12 @@ impl PlatformWebview {
             }
 
             if let Some(should_load_url) = builder.should_load_url {
+                data.trusted_url.set(&should_load_url);
                 let url = CString::new(should_load_url).expect("Can't convert to CString");
                 webkit_web_view_load_uri(webview, url.as_ptr());
             }
             if let Some(should_load_html) = builder.should_load_html {
+                data.trusted_url.set(TrustedUrl::HTML_URL);
                 let html = CString::new(should_load_html).expect("Can't convert to CString");
                 webkit_web_view_load_html(webview, html.as_ptr(), null());
             }
@@ -377,6 +381,7 @@ impl crate::WebviewInterface for PlatformWebview {
         if self.0.closed.get() {
             return;
         }
+        self.0.trusted_url.set(url.as_ref());
         let url = CString::new(url.as_ref()).expect("Can't convert to CString");
         unsafe { webkit_web_view_load_uri(self.0.webview.get(), url.as_ptr()) }
     }
@@ -401,6 +406,7 @@ impl crate::WebviewInterface for PlatformWebview {
         if self.0.closed.get() {
             return;
         }
+        self.0.trusted_url.set(TrustedUrl::HTML_URL);
         let html = CString::new(html.as_ref()).expect("Can't convert to CString");
         unsafe { webkit_web_view_load_html(self.0.webview.get(), html.as_ptr(), null()) }
     }
@@ -507,11 +513,13 @@ extern "C" fn webview_on_navigation_policy_decision(
     if decision_type == WEBKIT_POLICY_DECISION_TYPE_NEW_WINDOW_ACTION {
         let request = unsafe { webkit_navigation_policy_decision_get_request(decision) };
         let uri = unsafe { webkit_uri_request_get_uri(request) };
-        cfg_select! {
-            gtk3_22 => unsafe { gtk_show_uri_on_window(null_mut(), uri, 0, null_mut()) },
-            _ => unsafe {
-                _ = gtk_show_uri(gdk_screen_get_default(), uri, 0, null_mut());
-            },
+        if is_external_url(&unsafe { CStr::from_ptr(uri) }.to_string_lossy()) {
+            cfg_select! {
+                gtk3_22 => unsafe { gtk_show_uri_on_window(null_mut(), uri, 0, null_mut()) },
+                _ => unsafe {
+                    _ = gtk_show_uri(gdk_screen_get_default(), uri, 0, null_mut());
+                },
+            }
         }
         return true;
     }
@@ -526,6 +534,15 @@ extern "C" fn webview_on_message_ipc(
     let owner = unsafe { WebviewData::retain(_self) };
     let _self = &*owner;
     if _self.closed.get() {
+        return;
+    }
+    // WebKitGTK doesn't tell which frame sent a message, so check the page in the main frame
+    let uri = unsafe { webkit_web_view_get_uri(_self.webview.get()) };
+    if uri.is_null()
+        || !_self
+            .trusted_url
+            .allows(&unsafe { CStr::from_ptr(uri) }.to_string_lossy())
+    {
         return;
     }
     let message = js_result_to_string(_message);

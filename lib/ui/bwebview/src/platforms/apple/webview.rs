@@ -19,7 +19,7 @@ use objc2::{class, define_class, msg_send};
 #[cfg(all(target_os = "macos", feature = "file_drop"))]
 use super::file_drop::droppable_webview_class;
 use super::headers::*;
-use crate::{InjectionTime, WebviewBuilder, WebviewEvent};
+use crate::{InjectionTime, TrustedUrl, WebviewBuilder, WebviewEvent, is_external_url};
 
 fn title_key_path() -> *mut Object {
     ns_string!("title")
@@ -34,7 +34,10 @@ fn console_handler_name() -> *mut Object {
     ns_string!("console")
 }
 
-type WebviewDelegateIvars = Option<crate::EventHandler>;
+struct WebviewDelegateIvars {
+    event_handler: Option<crate::EventHandler>,
+    trusted_url: TrustedUrl,
+}
 
 // MARK: WebviewDelegate
 define_class!(
@@ -74,7 +77,7 @@ define_class!(
 
 impl WebviewDelegate {
     fn emit(&self, event: WebviewEvent) {
-        if let Some(handler) = self.ivars() {
+        if let Some(handler) = &self.ivars().event_handler {
             handler(event);
         }
     }
@@ -105,7 +108,9 @@ impl WebviewDelegate {
             if target_frame.is_null() {
                 let request: *mut Object = msg_send![navigation_action, request];
                 let url: *mut Object = msg_send![request, URL];
-                open_external_url(url);
+                if url_string(url).is_some_and(|url| is_external_url(&url)) {
+                    open_external_url(url);
+                }
                 decision_handler.call((WK_NAVIGATION_ACTION_POLICY_CANCEL,));
             } else {
                 decision_handler.call((WK_NAVIGATION_ACTION_POLICY_ALLOW,));
@@ -135,8 +140,19 @@ impl WebviewDelegate {
                 _ => return,
             }
         }
-        if name == "ipc" {
+        if name == "ipc" && self.is_trusted_frame(message) {
             self.emit(WebviewEvent::MessageReceive(body));
+        }
+    }
+
+    fn is_trusted_frame(&self, message: *mut Object) -> bool {
+        unsafe {
+            let frame_info: *mut Object = msg_send![message, frameInfo];
+            let is_main_frame: Bool = msg_send![frame_info, isMainFrame];
+            let request: *mut Object = msg_send![frame_info, request];
+            let url: *mut Object = msg_send![request, URL];
+            is_main_frame.as_bool()
+                && url_string(url).is_some_and(|url| self.ivars().trusted_url.allows(&url))
         }
     }
 }
@@ -164,6 +180,7 @@ impl From<WebviewBuilder<'_>> for WebviewInit {
 pub(super) struct WebviewData {
     attachment: bwindow::WindowAttachment,
     closed: Rc<Cell<bool>>,
+    trusted_url: TrustedUrl,
     pub(super) window: Retained<Object>,
     pub(super) background_color: Option<u32>,
     pub(super) webview: Option<Retained<Object>>,
@@ -191,6 +208,7 @@ impl PlatformWebview {
         };
         PlatformWebview(Box::new(WebviewData {
             closed: Rc::new(Cell::new(false)),
+            trusted_url: TrustedUrl::default(),
             window: unsafe { Retained::retain(window.cast()) }.expect("window has been destroyed"),
             background_color: attachment.background_color(),
             webview: None,
@@ -228,7 +246,10 @@ impl PlatformWebview {
             unsafe { msg_send![WebviewDelegate::class(), alloc] };
         let webview_delegate: Retained<Object> = unsafe {
             msg_send![
-                super(delegate.set_ivars(builder.event_handler.take())),
+                super(delegate.set_ivars(WebviewDelegateIvars {
+                    event_handler: builder.event_handler.take(),
+                    trusted_url: self.0.trusted_url.clone(),
+                })),
                 init
             ]
         };
@@ -312,11 +333,13 @@ impl PlatformWebview {
                 context:null::<c_void>()
             ];
             if let Some(url) = builder.should_load_url {
+                self.0.trusted_url.set(&url);
                 let url: *mut Object = msg_send![class!(NSURL), URLWithString:&*NSString::new(url)];
                 let request: *mut Object = msg_send![class!(NSURLRequest), requestWithURL:url];
                 let _: *mut Object = msg_send![&webview, loadRequest:request];
             }
             if let Some(html) = builder.should_load_html {
+                self.0.trusted_url.set(TrustedUrl::HTML_URL);
                 let _: *mut Object = msg_send![&webview, loadHTMLString:&*NSString::new(html), baseURL:null::<Object>()];
             }
             // isInspectable is available since iOS 16.4
@@ -376,21 +399,14 @@ impl crate::WebviewInterface for PlatformWebview {
         if self.0.closed.get() {
             return None;
         }
-        unsafe {
-            let url: *mut Object = msg_send![self.webview(), URL];
-            if !url.is_null() {
-                let url: NSString = msg_send![url, absoluteString];
-                Some(url.to_string())
-            } else {
-                None
-            }
-        }
+        url_string(unsafe { msg_send![self.webview(), URL] })
     }
 
     fn load_url(&mut self, url: impl AsRef<str>) {
         if self.0.closed.get() {
             return;
         }
+        self.0.trusted_url.set(url.as_ref());
         unsafe {
             let url: *mut Object = msg_send![class!(NSURL), URLWithString:&*NSString::new(url)];
             let request: *mut Object = msg_send![class!(NSURLRequest), requestWithURL:url];
@@ -402,6 +418,7 @@ impl crate::WebviewInterface for PlatformWebview {
         if self.0.closed.get() {
             return;
         }
+        self.0.trusted_url.set(TrustedUrl::HTML_URL);
         unsafe {
             msg_send![self.webview(), loadHTMLString:&*NSString::new(html), baseURL:null::<c_void>()]
         }
@@ -466,6 +483,14 @@ fn set_transparent_background(webview: &Object) {
             let _: () = msg_send![scroll_view, setBackgroundColor:clear];
         }
     }
+}
+
+fn url_string(url: *mut Object) -> Option<String> {
+    if url.is_null() {
+        return None;
+    }
+    let url: NSString = unsafe { msg_send![url, absoluteString] };
+    Some(url.to_string())
 }
 
 fn open_external_url(url: *mut Object) {

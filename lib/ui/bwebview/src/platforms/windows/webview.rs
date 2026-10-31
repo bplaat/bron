@@ -19,12 +19,13 @@ use super::headers::*;
 use super::loader::*;
 #[cfg(feature = "custom_protocol")]
 use crate::CustomProtocol;
-use crate::{InjectionTime, WebviewBuilder, WebviewEvent};
+use crate::{InjectionTime, TrustedUrl, WebviewBuilder, WebviewEvent, is_external_url};
 
 pub(super) struct WebviewData {
     pub(super) attachment: bwindow::WindowAttachment,
     handler: Option<crate::EventHandler>,
     closed: Cell<bool>,
+    trusted_url: TrustedUrl,
     pub(super) hwnd: HWND,
     pub(super) background_color: Cell<Option<u32>>,
     pub(super) should_load_url: Option<String>,
@@ -53,6 +54,7 @@ impl PlatformWebview {
         };
         let webview_data = Rc::new(WebviewData {
             closed: Cell::new(false),
+            trusted_url: TrustedUrl::default(),
             handler: None,
             hwnd: window,
             background_color: Cell::new(attachment.background_color()),
@@ -199,6 +201,7 @@ impl crate::WebviewInterface for PlatformWebview {
                     ),
                     _ => url.as_ref(),
                 };
+                self.webview_data.trusted_url.set(&url);
                 (*webview).Navigate(url.to_wide_string().as_ptr() as *mut _);
             }
         }
@@ -229,6 +232,7 @@ impl crate::WebviewInterface for PlatformWebview {
     fn load_html(&mut self, html: impl AsRef<str>) {
         unsafe {
             if let Some(webview) = self.webview_data.webview.get() {
+                self.webview_data.trusted_url.set(TrustedUrl::HTML_URL);
                 (*webview).NavigateToString(html.as_ref().to_wide_string().as_ptr() as *mut _);
             }
         }
@@ -566,9 +570,11 @@ extern "system" fn controller_created(
                 }
                 _ => url.as_str(),
             };
+            _self.trusted_url.set(&url);
             (*webview).Navigate(url.to_wide_string().as_ptr() as *mut _);
         }
         if let Some(html) = &_self.should_load_html {
+            _self.trusted_url.set(TrustedUrl::HTML_URL);
             (*webview).NavigateToString(html.to_wide_string().as_ptr() as *mut _);
         }
 
@@ -654,14 +660,16 @@ extern "system" fn new_window_requested(
         (*args).put_Handled(TRUE);
         let mut uri = LPWSTR::default();
         (*args).get_Uri(uri.as_mut_ptr());
-        ShellExecuteW(
-            null_mut(),
-            wide!("open").as_ptr(),
-            uri.as_ptr(),
-            null(),
-            null(),
-            SW_SHOWNORMAL,
-        );
+        if is_external_url(&uri.to_string()) {
+            ShellExecuteW(
+                null_mut(),
+                wide!("open").as_ptr(),
+                uri.as_ptr(),
+                null(),
+                null(),
+                SW_SHOWNORMAL,
+            );
+        }
     }
     S_OK
 }
@@ -694,7 +702,11 @@ extern "system" fn web_message_received(
         }
     }
     if r#type == "i" {
-        _self.emit(WebviewEvent::MessageReceive(message.to_string()));
+        let mut source = LPWSTR::default();
+        unsafe { (*args).get_Source(source.as_mut_ptr()) };
+        if _self.trusted_url.allows(&source.to_string()) {
+            _self.emit(WebviewEvent::MessageReceive(message.to_string()));
+        }
     }
 
     S_OK
