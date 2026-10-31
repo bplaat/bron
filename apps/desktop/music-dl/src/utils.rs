@@ -53,7 +53,17 @@ pub(crate) fn get_album_ids(
 }
 
 pub(crate) fn escape_path(path: &str) -> String {
-    path.replace(['<', '>', ':', '"', '/', '\\', '|', '?', '*'], "_")
+    let path = path.replace(
+        |c: char| {
+            matches!(c, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*') || c.is_control()
+        },
+        "_",
+    );
+    // Windows drops trailing dots and spaces, and names of only dots like .. would leave the folder
+    match path.trim_end_matches(['.', ' ']) {
+        "" => "_".to_string(),
+        path => path.to_string(),
+    }
 }
 
 pub(crate) fn format_bar(percent: f32) -> String {
@@ -79,5 +89,21 @@ pub(crate) fn truncate(s: &str, max: usize) -> &str {
     match s.char_indices().nth(max) {
         Some((i, _)) => &s[..i],
         None => s,
+    }
+}
+
+// MARK: Tests
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_escape_path() {
+        assert_eq!(escape_path("AC/DC: Live?"), "AC_DC_ Live_");
+        assert_eq!(escape_path("Tab\there"), "Tab_here");
+        assert_eq!(escape_path(".."), "_");
+        assert_eq!(escape_path(". . "), "_");
+        assert_eq!(escape_path("Vol. 1..."), "Vol. 1");
+        assert_eq!(escape_path(".hidden"), ".hidden");
     }
 }

@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
 
-use anyhow::Result;
+use anyhow::{Result, ensure};
 use threadpool::ThreadPool;
 
 use crate::args::Args;
@@ -110,6 +110,10 @@ fn download_album(
     track_start: usize,
 ) -> Result<usize> {
     let album = metadata_service.get_album(album_id)?;
+    ensure!(
+        !album.contributors.is_empty(),
+        "Album {album_id} has no artist"
+    );
 
     let album_folder = PathBuf::from(&args.output_dir)
         .join(escape_path(&album.contributors[0].name))
@@ -260,7 +264,8 @@ fn download_track(job: TrackJob) -> Result<()> {
             .arg("bestaudio[ext=m4a]")
             .arg(format!("https://www.youtube.com/watch?v={video_id}"))
             .arg("-o")
-            .arg(&path)
+            // yt-dlp expands % fields in the output template
+            .arg(path.to_string_lossy().replace('%', "%%"))
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
             .spawn()?;
