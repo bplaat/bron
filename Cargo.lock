@@ -1004,6 +1004,7 @@ dependencies = [
  "cargo-bundle-assets",
  "deflate",
  "directories",
+ "getrandom 0.4.3+patch",
  "image",
  "libsqlite3-sys",
  "plaatcraft-engine",

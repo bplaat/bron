@@ -11,7 +11,6 @@
 
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
-use std::hash::{BuildHasher, RandomState};
 use std::net::{
     Ipv4Addr, Ipv6Addr, Shutdown, SocketAddr, TcpListener, TcpStream, ToSocketAddrs, UdpSocket,
 };
@@ -23,7 +22,8 @@ use std::{io, thread};
 
 use plaatcraft_engine::protocol::{
     Announcement, ClientFrame, ClientId, Controls, DISCOVERY_PORT, Datagram, GAME_PORT,
-    REPEATED_INPUTS, Request, Response, ServerFrame, VERSION, Welcome, read_frame, write_frame,
+    MAX_PLAYERS, REPEATED_INPUTS, Request, Response, ServerFrame, VERSION, Welcome, read_frame,
+    write_frame,
 };
 
 use crate::server::{self, Identity, Message};
@@ -41,7 +41,9 @@ const WRITE_TIMEOUT: Duration = Duration::from_secs(5);
 type Guests = Arc<Mutex<HashMap<ClientId, (u64, Option<SocketAddr>)>>>;
 
 fn random() -> u64 {
-    RandomState::new().hash_one(Instant::now())
+    let mut bytes = [0; 8];
+    getrandom::fill(&mut bytes).expect("Can't get random bytes");
+    u64::from_ne_bytes(bytes)
 }
 
 /// A world opened to the LAN, dropping it stops accepting and announcing.
@@ -81,14 +83,28 @@ impl Lan {
             spawn(
                 "lan-accept",
                 Box::new(move || {
+                    let connections = Arc::new(AtomicUsize::new(0));
                     while !stop.load(Ordering::Relaxed) {
                         match listener.accept() {
                             Ok((stream, _)) => {
+                                // Every connection has a thread and may send a large frame
+                                // before joining, so a full world turns more connections away
+                                if connections.load(Ordering::Relaxed) >= MAX_PLAYERS {
+                                    continue;
+                                }
                                 let (messages, guests) = (messages.clone(), guests.clone());
                                 let Ok(udp) = udp.try_clone() else { continue };
-                                _ = thread::Builder::new().name("lan-guest".to_owned()).spawn(
-                                    move || serve_guest(stream, &messages, &guests, udp, udp_port),
-                                );
+                                connections.fetch_add(1, Ordering::Relaxed);
+                                let guest_connections = connections.clone();
+                                let spawned = thread::Builder::new()
+                                    .name("lan-guest".to_owned())
+                                    .spawn(move || {
+                                        serve_guest(stream, &messages, &guests, udp, udp_port);
+                                        guest_connections.fetch_sub(1, Ordering::Relaxed);
+                                    });
+                                if spawned.is_err() {
+                                    connections.fetch_sub(1, Ordering::Relaxed);
+                                }
                             }
                             Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
                                 thread::sleep(POLL);

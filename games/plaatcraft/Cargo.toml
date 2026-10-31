@@ -33,6 +33,7 @@ bwindow = { path = "../../lib/ui/bwindow", default-features = false, features = 
 cargo-bundle-assets = { path = "../../lib/build/cargo-bundle-assets" }
 deflate = { path = "../../lib/data/deflate" }
 directories = "6.0"
+getrandom = "0.4.3"
 image = { path = "../../lib/graphics/image", default-features = false, features = [
     "png",
 ] }
