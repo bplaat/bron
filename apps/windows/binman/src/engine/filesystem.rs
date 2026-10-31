@@ -5,14 +5,19 @@
  */
 
 use std::collections::HashSet;
-use std::fs;
+use std::ffi::OsString;
+use std::os::windows::ffi::OsStringExt;
+use std::os::windows::fs::OpenOptionsExt;
+use std::os::windows::io::AsRawHandle;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, SystemTime};
+use std::{fs, io};
 
 use super::CleanupResult;
 use crate::catalog::PathRule;
 use crate::pattern;
+use crate::win32::*;
 
 #[derive(Default)]
 pub(super) struct ScanStats {
@@ -171,20 +176,34 @@ fn scan_old_roots(
 }
 
 fn clean_old_roots(roots: &[PathBuf], days: u64, result: &mut CleanupResult) {
-    let cutoff = cutoff_for_days(days);
+    clean_paths(roots, Some(cutoff_for_days(days)), result);
+}
+
+pub(super) fn clean_roots(roots: &[PathBuf], result: &mut CleanupResult) {
+    clean_paths(roots, None, result);
+}
+
+// Deletes the files in the root directories and file roots themselves, cleanup can run elevated
+// in user writable folders, so every delete goes through a handle whose final path must still be
+// in the canonical root, which a junction swapped into the tree during the walk can't redirect
+fn clean_paths(roots: &[PathBuf], cutoff: Option<SystemTime>, result: &mut CleanupResult) {
     let mut seen = HashSet::new();
     for root in roots {
         if !root.exists() || !seen.insert(root.clone()) {
             continue;
         }
-        delete_old_path(root, cutoff, false, result);
+        match fs::canonicalize(root) {
+            Ok(base) => delete_path(root, &base, cutoff, false, result),
+            Err(error) => result.errors.push(format!("{}: {error}", root.display())),
+        }
     }
 }
 
-fn delete_old_path(
+fn delete_path(
     path: &Path,
-    cutoff: SystemTime,
-    remove_empty: bool,
+    base: &Path,
+    cutoff: Option<SystemTime>,
+    remove_dir: bool,
     result: &mut CleanupResult,
 ) {
     let metadata = match fs::symlink_metadata(path) {
@@ -201,9 +220,23 @@ fn delete_old_path(
             .errors
             .push(format!("Skipped reparse point {}", path.display()));
     } else if metadata.is_file() {
-        match metadata.modified() {
-            Ok(modified) if modified <= cutoff => delete_file(path, &metadata, result),
-            Ok(_) => {}
+        let is_old = match cutoff.map(|cutoff| metadata.modified().map(|time| time <= cutoff)) {
+            Some(Ok(is_old)) => is_old,
+            Some(Err(error)) => {
+                result.skipped += 1;
+                result.errors.push(format!("{}: {error}", path.display()));
+                return;
+            }
+            None => true,
+        };
+        if !is_old {
+            return;
+        }
+        match delete_verified(path, base) {
+            Ok(()) => {
+                result.cleaned_files += 1;
+                result.cleaned_bytes += metadata.len();
+            }
             Err(error) => {
                 result.skipped += 1;
                 result.errors.push(format!("{}: {error}", path.display()));
@@ -220,115 +253,94 @@ fn delete_old_path(
         };
         for entry in entries {
             match entry {
-                Ok(entry) => delete_old_path(&entry.path(), cutoff, true, result),
+                Ok(entry) => delete_path(&entry.path(), base, cutoff, true, result),
                 Err(error) => {
                     result.skipped += 1;
                     result.errors.push(error.to_string());
                 }
             }
         }
-        if remove_empty
+        if remove_dir
             && fs::read_dir(path).is_ok_and(|mut entries| entries.next().is_none())
-            && let Err(error) = fs::remove_dir(path)
+            && let Err(error) = delete_verified(path, base)
         {
             result.errors.push(format!("{}: {error}", path.display()));
         }
     }
 }
 
-pub(super) fn clean_roots(roots: &[PathBuf], result: &mut CleanupResult) {
-    let mut seen = HashSet::new();
-    for root in roots {
-        if !root.exists() || !seen.insert(root.clone()) {
-            continue;
+// Deletes a file or empty directory through a handle that doesn't follow a final reparse point,
+// after checking that the handle is still in the base
+fn delete_verified(path: &Path, base: &Path) -> io::Result<()> {
+    let file = fs::OpenOptions::new()
+        .access_mode(DELETE | FILE_READ_ATTRIBUTES)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS)
+        .open(path)?;
+    if is_reparse(&file.metadata()?) || !is_within(base, &final_path(&file)?) {
+        return Err(io::Error::other("path moved outside the cleanup root"));
+    }
+    delete_on_close(&file)
+}
+
+#[allow(unsafe_code)]
+fn final_path(file: &fs::File) -> io::Result<PathBuf> {
+    let mut buffer = vec![0; 512];
+    loop {
+        // SAFETY: `file` owns an open handle and the buffer is writable for its length.
+        let length = unsafe {
+            GetFinalPathNameByHandleW(
+                file.as_raw_handle(),
+                buffer.as_mut_ptr(),
+                buffer.len() as u32,
+                0,
+            )
+        } as usize;
+        if length == 0 {
+            return Err(io::Error::last_os_error());
         }
-        let metadata = match fs::symlink_metadata(root) {
-            Ok(metadata) => metadata,
-            Err(error) => {
-                result.errors.push(format!("{}: {error}", root.display()));
-                continue;
-            }
-        };
-        if is_reparse(&metadata) {
-            result.skipped += 1;
-            result
-                .errors
-                .push(format!("Skipped reparse point {}", root.display()));
-            continue;
+        if length < buffer.len() {
+            return Ok(PathBuf::from(OsString::from_wide(&buffer[..length])));
         }
-        if metadata.is_file() {
-            delete_file(root, &metadata, result);
-            continue;
-        }
-        let entries = match fs::read_dir(root) {
-            Ok(entries) => entries,
-            Err(error) => {
-                result.errors.push(format!("{}: {error}", root.display()));
-                continue;
-            }
-        };
-        for entry in entries {
-            match entry {
-                Ok(entry) => delete_tree(&entry.path(), result),
-                Err(error) => {
-                    result.skipped += 1;
-                    result.errors.push(error.to_string());
-                }
-            }
-        }
+        buffer.resize(length, 0);
     }
 }
 
-fn delete_tree(path: &Path, result: &mut CleanupResult) {
-    let metadata = match fs::symlink_metadata(path) {
-        Ok(metadata) => metadata,
-        Err(error) => {
-            result.skipped += 1;
-            result.errors.push(format!("{}: {error}", path.display()));
-            return;
-        }
-    };
-    if is_reparse(&metadata) {
-        result.skipped += 1;
-        result
-            .errors
-            .push(format!("Skipped reparse point {}", path.display()));
-    } else if metadata.is_file() {
-        delete_file(path, &metadata, result);
-    } else if metadata.is_dir() {
-        let mut before = ScanStats::default();
-        scan_path(path, &AtomicBool::new(false), &mut before);
-
-        // On Windows, std::fs::remove_dir_all opens children relative to their
-        // parent handles with FILE_OPEN_REPARSE_POINT and OBJ_DONT_REPARSE. This
-        // prevents a concurrent junction swap from redirecting elevated cleanup.
-        match fs::remove_dir_all(path) {
-            Ok(()) => {
-                result.cleaned_files += before.files;
-                result.cleaned_bytes += before.bytes;
-            }
-            Err(error) => {
-                let mut remaining = ScanStats::default();
-                scan_path(path, &AtomicBool::new(false), &mut remaining);
-                result.cleaned_files += before.files.saturating_sub(remaining.files);
-                result.cleaned_bytes += before.bytes.saturating_sub(remaining.bytes);
-                result.skipped += remaining.files.max(1);
-                result.errors.push(format!("{}: {error}", path.display()));
-            }
-        }
+#[allow(unsafe_code)]
+fn delete_on_close(file: &fs::File) -> io::Result<()> {
+    // POSIX semantics remove the name at once and also delete read-only files, like remove_dir_all
+    let flags = FILE_DISPOSITION_FLAG_DELETE
+        | FILE_DISPOSITION_FLAG_POSIX_SEMANTICS
+        | FILE_DISPOSITION_FLAG_IGNORE_READONLY_ATTRIBUTE;
+    // SAFETY: `file` owns a handle opened with DELETE access and `flags` has the layout of
+    // FILE_DISPOSITION_INFO_EX.
+    if unsafe {
+        SetFileInformationByHandle(
+            file.as_raw_handle(),
+            FILE_DISPOSITION_INFO_EX_CLASS,
+            (&raw const flags).cast(),
+            size_of::<u32>() as u32,
+        )
+    } != 0
+    {
+        return Ok(());
     }
-}
-
-fn delete_file(path: &Path, metadata: &fs::Metadata, result: &mut CleanupResult) {
-    match fs::remove_file(path) {
-        Ok(()) => {
-            result.cleaned_files += 1;
-            result.cleaned_bytes += metadata.len();
-        }
-        Err(error) => {
-            result.skipped += 1;
-            result.errors.push(format!("{}: {error}", path.display()));
-        }
+    // File systems like FAT only support the plain disposition
+    let delete = 1u8;
+    // SAFETY: `file` owns a handle opened with DELETE access and `delete` has the layout of
+    // FILE_DISPOSITION_INFO.
+    if unsafe {
+        SetFileInformationByHandle(
+            file.as_raw_handle(),
+            FILE_DISPOSITION_INFO_CLASS,
+            (&raw const delete).cast(),
+            size_of::<u8>() as u32,
+        )
+    } != 0
+    {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
     }
 }
 
@@ -411,6 +423,25 @@ mod tests {
         assert!(mixed_recent_file.exists());
         assert!(root.exists());
         fs::remove_dir_all(root).expect("fixture directory should be removable");
+    }
+
+    #[test]
+    fn verified_delete_refuses_paths_outside_the_root() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock should be after epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("binman-root-test-{unique}"));
+        let outside = std::env::temp_dir().join(format!("binman-outside-test-{unique}.tmp"));
+        fs::create_dir(&root).expect("fixture directory should be created");
+        fs::write(&outside, b"keep").expect("fixture file should be created");
+
+        let base = fs::canonicalize(&root).expect("fixture directory should resolve");
+        assert!(delete_verified(&outside, &base).is_err());
+        assert!(outside.exists());
+
+        fs::remove_file(outside).expect("fixture file should be removable");
+        fs::remove_dir(root).expect("fixture directory should be removable");
     }
 
     #[test]
