@@ -72,9 +72,17 @@ fn man_index(_req: &Request, _ctx: &()) -> Result<Response> {
 fn man_show(req: &Request, _ctx: &()) -> Result<Response> {
     let page = req.params.get("page").expect("Should be some");
     let name = req.params.get("name").expect("Should be some");
+    // Names starting with - would be options and names with / paths to any file
+    if name.starts_with('-')
+        || name.contains('/')
+        || !page.bytes().all(|b| b.is_ascii_alphanumeric())
+    {
+        return Ok(Response::with_status(Status::BadRequest));
+    }
     let output = Command::new("man")
         .arg("-P")
         .arg("col -b")
+        .arg("--")
         .arg(page)
         .arg(name)
         .output()?;
