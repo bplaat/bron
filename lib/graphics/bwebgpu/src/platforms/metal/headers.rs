@@ -31,6 +31,23 @@ unsafe extern "C" {
 #[link(name = "QuartzCore", kind = "framework")]
 unsafe extern "C" {}
 
+/// A Core Graphics color space, passed to Objective-C as its opaque struct pointer.
+#[cfg(feature = "window")]
+#[repr(transparent)]
+#[derive(Clone, Copy)]
+pub(super) struct ColorSpace(*mut c_void);
+#[cfg(feature = "window")]
+unsafe impl Encode for ColorSpace {
+    const ENCODING: Encoding = Encoding::Pointer(&Encoding::Struct("CGColorSpace", &[]));
+}
+#[cfg(feature = "window")]
+#[link(name = "CoreGraphics", kind = "framework")]
+unsafe extern "C" {
+    pub(super) static kCGColorSpaceSRGB: *const c_void;
+    pub(super) fn CGColorSpaceCreateWithName(name: *const c_void) -> ColorSpace;
+    pub(super) fn CGColorSpaceRelease(space: ColorSpace);
+}
+
 macro_rules! structure {
     ($name:ident, $encoding:literal, $($field:ident: $ty:ty),+ $(,)?) => {
         #[repr(C)] #[derive(Clone, Copy)] pub(super) struct $name { $(pub(super) $field: $ty),+ }

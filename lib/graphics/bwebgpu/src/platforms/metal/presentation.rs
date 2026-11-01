@@ -25,6 +25,10 @@ impl Context {
             let _: () = msg_send![&*surface.layer, setDevice: &*self.device];
             let _: () = msg_send![&*surface.layer, setPixelFormat: format(config.format)];
             let _: () = msg_send![&*surface.layer, setFramebufferOnly: Bool::YES];
+            // Without a color space the layer is not matched to the display; frames are sRGB.
+            let space = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
+            let _: () = msg_send![&*surface.layer, setColorspace: space];
+            CGColorSpaceRelease(space);
             #[cfg(target_os = "macos")]
             let _: () = msg_send![&*surface.layer, setDisplaySyncEnabled: Bool::YES];
             // The attachment supplies the layer's display scale, including live changes.
