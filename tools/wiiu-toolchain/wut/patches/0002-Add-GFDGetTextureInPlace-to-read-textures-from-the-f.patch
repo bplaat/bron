@@ -1,0 +1,117 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Sun, 1 Nov 2026 21:51:20 +0100
+Subject: [PATCH] Add GFDGetTextureInPlace to read textures from the file
+
+The GPU reads the texture data of a loaded GFD file in place, without
+copying it, when the image and mipmap blocks are aligned in memory.
+---
+ libraries/libgfd/include/gfd.h | 10 +++++
+ libraries/libgfd/src/gfd.c     | 70 ++++++++++++++++++++++++++++++++++
+ 2 files changed, 80 insertions(+)
+
+diff --git a/libraries/libgfd/include/gfd.h b/libraries/libgfd/include/gfd.h
+index 046cacd..6513c7c 100644
+--- a/libraries/libgfd/include/gfd.h
++++ b/libraries/libgfd/include/gfd.h
+@@ -202,6 +202,16 @@ const GX2Texture *
+ GFDGetTexturePointer(uint32_t index,
+                      const void *file);
+ 
++/**
++ * Fills in the texture with its image and mipmaps pointing into the file, so
++ * the GPU reads them in place. The file must stay loaded and its image and
++ * mipmap blocks must be aligned in memory to the texture alignment.
++ */
++BOOL
++GFDGetTextureInPlace(GX2Texture *texture,
++                     uint32_t index,
++                     const void *file);
++
+ #ifdef __cplusplus
+ }
+ #endif
+diff --git a/libraries/libgfd/src/gfd.c b/libraries/libgfd/src/gfd.c
+index faa1003..7d602ef 100644
+--- a/libraries/libgfd/src/gfd.c
++++ b/libraries/libgfd/src/gfd.c
+@@ -1,5 +1,6 @@
+ #include "gfd.h"
+ 
++#include <gx2/mem.h>
+ #include <gx2/temp.h>
+ #include <gx2r/surface.h>
+ #include <stdarg.h>
+@@ -906,3 +907,72 @@ GFDGetTexturePointer(uint32_t index,
+ 
+    return texture;
+ }
++
++BOOL
++GFDGetTextureInPlace(GX2Texture *texture,
++                     uint32_t index,
++                     const void *file)
++{
++   const uint8_t *ptr          = (const uint8_t *)file;
++   const GFDHeader *fileHeader = (const GFDHeader *)file;
++   const GFDBlockHeader *blockHeader;
++   uint32_t headerCount = 0;
++   BOOL found           = FALSE;
++
++   if (!texture || !file || !_GFDCheckHeaderVersions(file)) {
++      return FALSE;
++   }
++
++   ptr += fileHeader->headerSize;
++   blockHeader = (const GFDBlockHeader *)ptr;
++
++   while (_GFDCheckBlockHeaderMagicVersions(blockHeader)) {
++      ptr += blockHeader->headerSize;
++
++      if (blockHeader->type == GFD_BLOCK_TEXTURE_HEADER) {
++         if (found) {
++            break;
++         }
++
++         if (headerCount == index) {
++            if (blockHeader->dataSize < sizeof(GX2Texture)) {
++               return FALSE;
++            }
++
++            memcpy(texture, ptr, sizeof(GX2Texture));
++            texture->surface.image   = NULL;
++            texture->surface.mipmaps = NULL;
++            found                    = TRUE;
++         }
++
++         headerCount++;
++      } else if (found && blockHeader->type == GFD_BLOCK_TEXTURE_IMAGE) {
++         texture->surface.image = (void *)ptr;
++      } else if (found && blockHeader->type == GFD_BLOCK_TEXTURE_MIPMAP) {
++         texture->surface.mipmaps = (void *)ptr;
++      } else if (blockHeader->type == GFD_BLOCK_END_OF_FILE) {
++         break;
++      }
++
++      ptr += blockHeader->dataSize;
++      blockHeader = (const GFDBlockHeader *)ptr;
++   }
++
++   if (!found || !texture->surface.image ||
++       ((uintptr_t)texture->surface.image & (texture->surface.alignment - 1)) ||
++       ((uintptr_t)texture->surface.mipmaps & (texture->surface.alignment - 1)) ||
++       (texture->surface.mipmapSize && !texture->surface.mipmaps)) {
++      setLastError("%s: texture %u not found or not aligned", __FUNCTION__, index);
++      return FALSE;
++   }
++
++   // The CPU caches may still hold the file, the GPU reads memory
++   GX2Invalidate(GX2_INVALIDATE_MODE_CPU_TEXTURE, texture->surface.image,
++                 texture->surface.imageSize);
++   if (texture->surface.mipmaps) {
++      GX2Invalidate(GX2_INVALIDATE_MODE_CPU_TEXTURE, texture->surface.mipmaps,
++                    texture->surface.mipmapSize);
++   }
++
++   return TRUE;
++}

@@ -78,19 +78,21 @@ libwhb looks up by name. devkitPro has no GLSL compiler, the alternative is
 
 ## Patches
 
-wut needs newlib and devkitPPC, its patch makes it work with picolibc. The patches of wut-tools,
+wut needs newlib and devkitPPC, its first patch makes it work with picolibc. The patches of wut-tools,
 picolibc and decaf-emu make them build and work with LLVM, and decaf-emu without its other
 libraries. To change them, edit and commit in `../../target/wiiu-toolchain/<name>/`, run
 `./build.sh` to try it and `./build.sh export-patches` to write the commits back. The build stops
 instead of applying changed patches over commits or edits in `../../target/wiiu-toolchain/<name>/`
 that aren't exported yet.
 
-The wut patch:
+The wut patches:
 
 - `0001` adds wutpicolibc, which replaces wutcrt, wutnewlib and wutmalloc: `__rpx_start` runs the
   constructors and `main`, `malloc` uses the default heap of Cafe OS, the standard streams write
   lines to `OSReport` and `gettimeofday` reads the time base. The programs are single threaded,
   so picolibc is built without locks
+- `0002` adds `GFDGetTextureInPlace` to libgfd, which points a texture at its image and mipmaps in a
+  loaded `.gtx` file instead of copying them
 
 The libogc patches, trimmed versions of the Wii toolchain's for only the matrix math files:
 
