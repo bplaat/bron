@@ -23,6 +23,8 @@
     --color-success: #22c55e;
     --color-warning: #f59e0b;
     --color-danger: #ef4444;
+    --color-scrollbar: rgba(255, 255, 255, 0.2);
+    --color-scrollbar-hover: rgba(255, 255, 255, 0.35);
 }
 
 /* Form controls inherit typography (minireset leaves these to the framework) */
@@ -44,23 +46,25 @@ html {
     user-select: none;
     overflow: hidden;
     scrollbar-width: thin;
-    scrollbar-color: rgba(255, 255, 255, 0.1) transparent;
+    scrollbar-color: var(--color-scrollbar) transparent;
 }
 
+/* Thin rounded scrollbars, the transparent border insets the thumb from the edges */
 ::-webkit-scrollbar {
-    width: 6px;
-    height: 6px;
+    width: 10px;
+    height: 10px;
 }
 ::-webkit-scrollbar-track,
 ::-webkit-scrollbar-corner {
     background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-    background-color: rgba(255, 255, 255, 0.1);
-    border-radius: 3px;
+    border: 2px solid transparent;
+    border-radius: 5px;
+    background: var(--color-scrollbar) padding-box;
 }
 ::-webkit-scrollbar-thumb:hover {
-    background-color: rgba(255, 255, 255, 0.2);
+    background-color: var(--color-scrollbar-hover);
 }
 
 body {
