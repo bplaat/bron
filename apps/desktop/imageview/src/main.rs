@@ -7,6 +7,7 @@
 #![doc = include_str!("../README.md")]
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -27,6 +28,10 @@ mod viewport;
 
 // How often open files are checked for changes.
 const RELOAD_INTERVAL: Duration = Duration::from_secs(1);
+// How long a file may take to decode before its window opens with a loading indicator.
+const SLOW_LOAD: Duration = Duration::from_millis(250);
+// The size a window opens with before its media is decoded.
+const LOADING_SIZE: (f64, f64) = (800.0, 600.0);
 
 /// Events sent to the event loop from worker threads.
 pub(crate) enum AppEvent {
@@ -39,6 +44,8 @@ pub(crate) enum AppEvent {
     Tick,
     /// A file finished decoding.
     Loaded(Load, Result<Media, String>),
+    /// A file for a new window is still decoding after a while.
+    SlowLoad(u64),
 }
 
 /// Where decoded media is shown.
@@ -49,8 +56,8 @@ pub(crate) struct Load {
 }
 
 enum Target {
-    // A new window.
-    Window,
+    // A new window, for an open request.
+    Window(u64),
     // An open window, replacing its media.
     Replace {
         window: WindowId,
@@ -67,6 +74,8 @@ struct ImageWindow {
     version: Option<FileVersion>,
     // Increments for every load into this window, so only the latest one is shown.
     generation: u64,
+    // The open request that is still decoding the first media of the window.
+    opening: Option<u64>,
 }
 
 struct App {
@@ -74,6 +83,9 @@ struct App {
     windows: Vec<ImageWindow>,
     active: Option<WindowId>,
     pending_loads: usize,
+    // The open requests that are decoding without a window yet.
+    opening: HashMap<u64, PathBuf>,
+    next_open: u64,
     theme: Theme,
 }
 
@@ -86,6 +98,13 @@ impl App {
 
     fn window(&mut self, id: WindowId) -> Option<&mut ImageWindow> {
         self.position(id).map(|index| &mut self.windows[index])
+    }
+
+    // Stops treating a closed window as the active one.
+    fn forget(&mut self, id: WindowId) {
+        if self.active == Some(id) {
+            self.active = None;
+        }
     }
 
     fn active_window(&mut self) -> Option<&mut ImageWindow> {
@@ -115,9 +134,55 @@ impl App {
         });
     }
 
+    // Opens the files in new windows, which open with a loading indicator when decoding is
+    // slow.
     fn open(&mut self, paths: Vec<PathBuf>) {
         for path in paths {
-            self.load(path, Target::Window);
+            let id = self.next_open;
+            self.next_open += 1;
+            self.opening.insert(id, path.clone());
+            self.load(path, Target::Window(id));
+            let proxy = Arc::clone(&self.proxy);
+            std::thread::spawn(move || {
+                std::thread::sleep(SLOW_LOAD);
+                _ = proxy.send_user_event(AppEvent::SlowLoad(id));
+            });
+        }
+    }
+
+    // Opens a window for media, or a loading window without it.
+    fn open_window(
+        &mut self,
+        path: PathBuf,
+        version: Option<FileVersion>,
+        media: Option<Media>,
+        opening: Option<u64>,
+    ) {
+        let (width, height) = media.as_ref().map_or(LOADING_SIZE, |media| {
+            let (width, height) = media.size();
+            preferred_content_size(width, height)
+        });
+        let window = WindowBuilder::new()
+            .title(title(&path, media.as_ref()))
+            .size(LogicalSize::new(width as f32, height as f32))
+            .min_size(LogicalSize::new(240.0, 180.0))
+            .center()
+            .build();
+        let view = MediaView::new(&window, media, self.theme);
+        self.active = Some(window.id());
+        self.windows.push(ImageWindow {
+            window,
+            view,
+            path,
+            version,
+            generation: 0,
+            opening,
+        });
+    }
+
+    fn slow_load(&mut self, id: u64) {
+        if let Some(path) = self.opening.remove(&id) {
+            self.open_window(path, None, None, Some(id));
         }
     }
 
@@ -136,25 +201,20 @@ impl App {
     fn loaded(&mut self, load: Load, result: Result<Media, String>) {
         self.pending_loads -= 1;
         match (load.target, result) {
-            (Target::Window, Ok(media)) => {
+            (Target::Window(id), Ok(media)) => {
                 platforms::note_recent_file(&load.path);
-                let (width, height) = media.size();
-                let (width, height) = preferred_content_size(width, height);
-                let window = WindowBuilder::new()
-                    .title(title(&load.path, &media))
-                    .size(LogicalSize::new(width as f32, height as f32))
-                    .min_size(LogicalSize::new(240.0, 180.0))
-                    .center()
-                    .build();
-                let view = MediaView::new(&window, media, self.theme);
-                self.active = Some(window.id());
-                self.windows.push(ImageWindow {
-                    window,
-                    view,
-                    path: load.path,
-                    version: load.version,
-                    generation: 0,
-                });
+                if self.opening.remove(&id).is_some() {
+                    self.open_window(load.path, load.version, Some(media), None);
+                } else if let Some(window) = self
+                    .windows
+                    .iter_mut()
+                    .find(|window| window.opening == Some(id))
+                {
+                    window.opening = None;
+                    window.version = load.version;
+                    window.window.set_title(title(&load.path, Some(&media)));
+                    window.view.set_media(media, true);
+                }
             }
             (
                 Target::Replace {
@@ -170,14 +230,23 @@ impl App {
                 if window.generation != generation {
                     return;
                 }
-                window.window.set_title(title(&load.path, &media));
+                window.window.set_title(title(&load.path, Some(&media)));
                 window.view.set_media(media, zoom_to_fit);
                 window.path = load.path;
                 window.version = load.version;
             }
             // A file that is being saved may not decode yet, the next change reloads it.
             (Target::Replace { .. }, Err(_)) => {}
-            (Target::Window, Err(error)) => {
+            (Target::Window(id), Err(error)) => {
+                self.opening.remove(&id);
+                if let Some(index) = self
+                    .windows
+                    .iter()
+                    .position(|window| window.opening == Some(id))
+                {
+                    let window = self.windows.remove(index);
+                    self.forget(window.window.id());
+                }
                 MessageDialog::new()
                     .level(MessageLevel::Error)
                     .title(format!("Could not open {}", file_name(&load.path)))
@@ -192,7 +261,10 @@ impl App {
 
     // Shows the image `offset` places from the active one in its folder.
     fn browse(&mut self, offset: isize) {
-        let Some(window) = self.active_window() else {
+        let Some(window) = self
+            .active_window()
+            .filter(|window| window.opening.is_none())
+        else {
             return;
         };
         let Some(path) = platforms::neighbour_path(&window.path, offset) else {
@@ -215,6 +287,9 @@ impl App {
     fn reload_changed(&mut self) {
         let mut reloads = Vec::new();
         for window in &mut self.windows {
+            if window.opening.is_some() {
+                continue;
+            }
             let version = FileVersion::of(&window.path);
             if version.is_some() && version != window.version {
                 window.version = version;
@@ -267,9 +342,7 @@ impl App {
             }
             WindowEvent::CloseRequested(request) if !request.default_prevented() => {
                 self.windows.retain(|window| window.window.id() != id);
-                if self.active == Some(id) {
-                    self.active = None;
-                }
+                self.forget(id);
             }
             _ => {}
         }
@@ -283,8 +356,12 @@ fn file_name(path: &Path) -> String {
     )
 }
 
-fn title(path: &Path, media: &Media) -> String {
-    window_title(&file_name(path), media.size())
+// The file name and the media size once it is decoded.
+fn title(path: &Path, media: Option<&Media>) -> String {
+    media.map_or_else(
+        || file_name(path),
+        |media| window_title(&file_name(path), media.size()),
+    )
 }
 
 fn menu() -> MenuBarBuilder {
@@ -353,6 +430,8 @@ fn main() {
         windows: Vec::new(),
         active: None,
         pending_loads: 0,
+        opening: HashMap::new(),
+        next_open: 0,
         theme: event_loop.theme(),
     };
     let files: Vec<PathBuf> = std::env::args_os()
@@ -381,6 +460,7 @@ fn main() {
         }
         Event::UserEvent(AppEvent::Tick) => app.reload_changed(),
         Event::UserEvent(AppEvent::Loaded(load, result)) => app.loaded(load, result),
+        Event::UserEvent(AppEvent::SlowLoad(id)) => app.slow_load(id),
         Event::Action(action) => app.action(&action),
         Event::Window(id, event) => app.window_event(id, event),
         _ => {}

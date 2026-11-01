@@ -220,8 +220,8 @@ define_class!(
 );
 
 impl View {
-    /// Creates a view that shows the media zoomed to fit `frame`.
-    pub(super) fn new(frame: Rect, media: Media) -> Retained<Self> {
+    /// Creates a view that shows the media zoomed to fit `frame`, or nothing while it loads.
+    pub(super) fn new(frame: Rect, media: Option<Media>) -> Retained<Self> {
         // SAFETY: All objects are valid AppKit instances, the view retains the scroll view as
         // its subview and observes its clip view until `stop_observing`.
         unsafe {

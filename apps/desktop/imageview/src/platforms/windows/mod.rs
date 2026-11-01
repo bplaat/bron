@@ -31,6 +31,8 @@ struct State {
     viewport: RefCell<Viewport>,
     dark: Cell<bool>,
     updating_scroll_bars: Cell<bool>,
+    // The marquee progress bar shown until the media is decoded, or null.
+    spinner: Cell<HWND>,
 }
 
 /// A native view that zooms and pans media.
@@ -40,8 +42,10 @@ pub(crate) struct MediaView {
 }
 
 impl MediaView {
-    /// Fills the window with the media, zoomed to fit.
-    pub(crate) fn new(window: &Window, media: Media, theme: Theme) -> Self {
+    /// Fills the window with the media zoomed to fit, or a loading indicator until the media
+    /// is set.
+    pub(crate) fn new(window: &Window, media: Option<Media>, theme: Theme) -> Self {
+        let loading = media.is_none();
         let attachment = window.attach_content().expect("window has no content yet");
         // SAFETY: The window is open while its attachment is.
         let Some(NativeWindowHandle::Win32(parent)) = (unsafe { attachment.window_handle() })
@@ -58,6 +62,7 @@ impl MediaView {
             )),
             dark: Cell::new(theme == Theme::Dark),
             updating_scroll_bars: Cell::new(false),
+            spinner: Cell::new(null_mut()),
         });
         register_class();
         let class = wide(CLASS_NAME);
@@ -68,7 +73,7 @@ impl MediaView {
                 0,
                 class.as_ptr(),
                 null(),
-                WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WS_HSCROLL | WS_VSCROLL,
+                WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WS_CLIPCHILDREN | WS_HSCROLL | WS_VSCROLL,
                 0,
                 0,
                 0,
@@ -84,6 +89,9 @@ impl MediaView {
             *state.canvas.borrow_mut() = Some(HwndCanvas::new(hwnd));
             state.apply_theme();
             attachment.set_native_view(NativeViewHandle::Win32(hwnd));
+            if loading {
+                state.add_spinner();
+            }
         }
         // The view has its size now.
         state.update(Viewport::zoom_to_fit);
@@ -99,6 +107,11 @@ impl MediaView {
         self.state
             .update(|viewport| viewport.set_media(media, zoom_to_fit));
         self.state.animate();
+        let spinner = self.state.spinner.replace(null_mut());
+        if !spinner.is_null() {
+            // SAFETY: The spinner is a live child window of the view.
+            unsafe { DestroyWindow(spinner) };
+        }
     }
 
     /// Magnifies by `factor`, keeping the middle of the visible area in place.
@@ -162,6 +175,62 @@ fn register_class() {
 }
 
 impl State {
+    // Shows a native marquee progress bar in the middle of the view.
+    fn add_spinner(&self) {
+        let class = wide("msctls_progress32");
+        // SAFETY: The progress bar class is registered by comctl32, the view owns the child.
+        unsafe {
+            InitCommonControlsEx(&INITCOMMONCONTROLSEX {
+                dwSize: size_of::<INITCOMMONCONTROLSEX>() as u32,
+                dwICC: ICC_PROGRESS_CLASS,
+            });
+            let spinner = CreateWindowExW(
+                0,
+                class.as_ptr(),
+                null(),
+                WS_CHILD | WS_VISIBLE | PBS_MARQUEE,
+                0,
+                0,
+                0,
+                0,
+                self.hwnd.get(),
+                null_mut(),
+                GetModuleHandleW(null()),
+                null_mut(),
+            );
+            if spinner.is_null() {
+                return;
+            }
+            SendMessageW(spinner, PBM_SETMARQUEE, 1, 0);
+            self.spinner.set(spinner);
+        }
+        self.layout_spinner();
+    }
+
+    // Keeps the progress bar in the middle of the view.
+    fn layout_spinner(&self) {
+        const SIZE: (f64, f64) = (160.0, 12.0);
+        let spinner = self.spinner.get();
+        if spinner.is_null() {
+            return;
+        }
+        let mut rect = RECT::default();
+        let scale = self.scale();
+        let (width, height) = ((SIZE.0 * scale) as i32, (SIZE.1 * scale) as i32);
+        // SAFETY: The view and its progress bar are alive.
+        unsafe {
+            GetClientRect(self.hwnd.get(), &mut rect);
+            MoveWindow(
+                spinner,
+                (rect.right - width) / 2,
+                (rect.bottom - height) / 2,
+                width,
+                height,
+                1,
+            );
+        }
+    }
+
     fn scale(&self) -> f64 {
         // SAFETY: The window is alive while the state is.
         f64::from(unsafe { GetDpiForWindow(self.hwnd.get()) }.max(96)) / 96.0
@@ -342,6 +411,7 @@ unsafe extern "system" fn window_proc(
             unsafe { GetClientRect(hwnd, &mut rect) };
             let visible = state.logical((rect.right, rect.bottom));
             state.update(|viewport| viewport.resize(visible));
+            state.layout_spinner();
         }
         WM_HSCROLL => state.scroll_bar(Axis::Horizontal, wparam as u16),
         WM_VSCROLL => state.scroll_bar(Axis::Vertical, wparam as u16),

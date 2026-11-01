@@ -12,7 +12,8 @@ use std::time::{Duration, Instant};
 
 use bcanvas::CanvasRenderingContext2d;
 use imageview_core::{
-    Media, MediaRenderer, clamp_magnification, draw_checkerboard, fit_magnification,
+    LoopCount, Media, MediaRenderer, Raster, clamp_magnification, draw_checkerboard,
+    fit_magnification,
 };
 
 /// How far a scroll bar arrow, arrow key or scroll wheel line scrolls, in logical pixels.
@@ -79,8 +80,14 @@ pub(crate) struct Viewport {
 }
 
 impl Viewport {
-    /// Shows the media zoomed to fit the visible area.
-    pub(crate) fn new(media: Media, visible: (f64, f64)) -> Self {
+    /// Shows the media zoomed to fit the visible area, or nothing while it is loading.
+    pub(crate) fn new(media: Option<Media>, visible: (f64, f64)) -> Self {
+        let media = media.unwrap_or(Media::Raster(Raster {
+            width: 0,
+            height: 0,
+            frames: Vec::new(),
+            loop_count: LoopCount::Finite(1),
+        }));
         let mut viewport = Self {
             renderer: MediaRenderer::new(media),
             visible,
@@ -291,7 +298,7 @@ mod tests {
 
     #[test]
     fn fitting_centers_the_media() {
-        let viewport = Viewport::new(media(), (400.0, 300.0));
+        let viewport = Viewport::new(Some(media()), (400.0, 300.0));
         assert_eq!(viewport.magnification, 3.0);
         assert_eq!(viewport.offset(Axis::Horizontal), 50.0);
         assert_eq!(viewport.scroll, (0.0, 0.0));
@@ -300,7 +307,7 @@ mod tests {
 
     #[test]
     fn magnifying_keeps_the_anchor_in_place() {
-        let mut viewport = Viewport::new(media(), (100.0, 100.0));
+        let mut viewport = Viewport::new(Some(media()), (100.0, 100.0));
         viewport.magnify(2.0, Some((25.0, 25.0)));
         assert_eq!(viewport.scroll, (25.0, 25.0));
         viewport.magnify(1.0, Some((25.0, 25.0)));
@@ -309,7 +316,7 @@ mod tests {
 
     #[test]
     fn scrolling_stays_inside_the_media() {
-        let mut viewport = Viewport::new(media(), (100.0, 100.0));
+        let mut viewport = Viewport::new(Some(media()), (100.0, 100.0));
         viewport.zoom_centered(4.0);
         assert_eq!(viewport.scroll, (150.0, 150.0));
         viewport.scroll_by((1000.0, -1000.0));
@@ -322,7 +329,7 @@ mod tests {
 
     #[test]
     fn resizing_keeps_the_middle_in_place() {
-        let mut viewport = Viewport::new(media(), (100.0, 100.0));
+        let mut viewport = Viewport::new(Some(media()), (100.0, 100.0));
         viewport.zoom_centered(4.0);
         assert_eq!(viewport.scroll, (150.0, 150.0));
         viewport.resize((80.0, 90.0));
@@ -331,7 +338,7 @@ mod tests {
 
     #[test]
     fn dragging_moves_the_media_with_the_pointer() {
-        let mut viewport = Viewport::new(media(), (100.0, 100.0));
+        let mut viewport = Viewport::new(Some(media()), (100.0, 100.0));
         assert!(!viewport.drag_begin((50.0, 50.0)));
         viewport.zoom_centered(2.0);
         assert!(viewport.drag_begin((50.0, 50.0)));

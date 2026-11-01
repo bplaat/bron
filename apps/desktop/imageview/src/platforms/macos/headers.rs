@@ -16,6 +16,9 @@ pub(crate) const KEY_DOWN: u16 = 125;
 pub(crate) const KEY_UP: u16 = 126;
 pub(crate) const NS_EVENT_MODIFIER_FLAG_COMMAND: u64 = 1 << 20;
 pub(crate) const NS_PRINTING_PAGINATION_MODE_FIT: u64 = 1;
+pub(crate) const NS_PROGRESS_INDICATOR_STYLE_SPINNING: u64 = 1;
+// Flexible margins on all sides, which keep a view in the middle of its superview.
+pub(crate) const NS_VIEW_CENTERED: u64 = 1 | 4 | 8 | 32;
 pub(crate) const NS_WINDOW_COLLECTION_BEHAVIOR_FULL_SCREEN_PRIMARY: u64 = 1 << 7;
 
 #[link(name = "AppKit", kind = "framework")]

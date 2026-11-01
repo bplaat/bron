@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: MIT
  */
 
-//! Win32 window, scroll bar and theme declarations.
+//! Win32 window, scroll bar, progress bar and theme declarations.
 
 #![allow(non_snake_case, clippy::upper_case_acronyms)]
 
@@ -19,6 +19,10 @@ pub(crate) type LRESULT = isize;
 pub(crate) const WS_CHILD: u32 = 0x4000_0000;
 pub(crate) const WS_VISIBLE: u32 = 0x1000_0000;
 pub(crate) const WS_CLIPSIBLINGS: u32 = 0x0400_0000;
+pub(crate) const WS_CLIPCHILDREN: u32 = 0x0200_0000;
+pub(crate) const PBS_MARQUEE: u32 = 0x08;
+pub(crate) const PBM_SETMARQUEE: u32 = 0x0400 + 10;
+pub(crate) const ICC_PROGRESS_CLASS: u32 = 0x20;
 pub(crate) const WS_HSCROLL: u32 = 0x0010_0000;
 pub(crate) const WS_VSCROLL: u32 = 0x0020_0000;
 pub(crate) const GWLP_USERDATA: i32 = -21;
@@ -122,6 +126,17 @@ pub(crate) struct WNDCLASSEXW {
     pub(crate) hIconSm: *mut c_void,
 }
 
+#[repr(C)]
+pub(crate) struct INITCOMMONCONTROLSEX {
+    pub(crate) dwSize: u32,
+    pub(crate) dwICC: u32,
+}
+
+#[link(name = "comctl32")]
+unsafe extern "system" {
+    pub(crate) fn InitCommonControlsEx(controls: *const INITCOMMONCONTROLSEX) -> BOOL;
+}
+
 #[link(name = "user32")]
 unsafe extern "system" {
     pub(crate) fn RegisterClassExW(class: *const WNDCLASSEXW) -> u16;
@@ -140,6 +155,15 @@ unsafe extern "system" {
         param: *mut c_void,
     ) -> HWND;
     pub(crate) fn DestroyWindow(hwnd: HWND) -> BOOL;
+    pub(crate) fn MoveWindow(
+        hwnd: HWND,
+        x: i32,
+        y: i32,
+        width: i32,
+        height: i32,
+        repaint: BOOL,
+    ) -> BOOL;
+    pub(crate) fn SendMessageW(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT;
     pub(crate) fn IsWindow(hwnd: HWND) -> BOOL;
     pub(crate) fn DefWindowProcW(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT;
     pub(crate) fn SetWindowLongPtrW(hwnd: HWND, index: i32, value: isize) -> isize;

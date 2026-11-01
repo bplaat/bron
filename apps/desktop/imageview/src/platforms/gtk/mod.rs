@@ -5,7 +5,8 @@
  */
 
 //! The GTK media view: a native GtkScrolledWindow around a drawing area as large as the
-//! magnified media, which draws the viewport with bcanvas. The scrolled window scrolls the
+//! magnified media, which draws the viewport with bcanvas, in an overlay that shows a spinner
+//! while the media loads. The scrolled window scrolls the
 //! drawing area, its scroll position is followed by the viewport and the other way around.
 
 #![allow(unsafe_code)]
@@ -29,7 +30,11 @@ mod thumbnail;
 struct State {
     viewport: RefCell<Viewport>,
     dark: Cell<bool>,
+    // The overlay of the scrolled window and the loading spinner, which the window embeds.
+    overlay: *mut c_void,
     scrolled_window: *mut c_void,
+    // The spinner shown until the media is decoded, or null.
+    spinner: Cell<*mut c_void>,
     area: *mut c_void,
     gesture: *mut c_void,
     // Whether the adjustments are being set from the viewport.
@@ -46,15 +51,31 @@ pub(crate) struct MediaView {
 }
 
 impl MediaView {
-    /// Fills the window with the media, zoomed to fit.
-    pub(crate) fn new(window: &Window, media: Media, theme: Theme) -> Self {
+    /// Fills the window with the media zoomed to fit, or a loading spinner until the media is
+    /// set.
+    pub(crate) fn new(window: &Window, media: Option<Media>, theme: Theme) -> Self {
+        let loading = media.is_none();
         let attachment = window.attach_content().expect("window has no content yet");
         let size = window.size();
         // SAFETY: The created widgets are owned by this view until it drops them, the window
-        // keeps the scrolled window it embeds alive while the attachment is open.
+        // keeps the overlay it embeds alive while the attachment is open.
         let state = unsafe {
+            let overlay = g_object_ref_sink(gtk_overlay_new());
             let scrolled_window =
                 g_object_ref_sink(gtk_scrolled_window_new(null_mut(), null_mut()));
+            gtk_container_add(overlay, scrolled_window);
+            let spinner = if loading {
+                let spinner = gtk_spinner_new();
+                gtk_widget_set_halign(spinner, GTK_ALIGN_CENTER);
+                gtk_widget_set_valign(spinner, GTK_ALIGN_CENTER);
+                gtk_widget_set_size_request(spinner, 32, 32);
+                gtk_overlay_add_overlay(overlay, spinner);
+                gtk_overlay_set_overlay_pass_through(overlay, spinner, 1);
+                gtk_spinner_start(spinner);
+                spinner
+            } else {
+                null_mut()
+            };
             let area = g_object_ref(gtk_drawing_area_new());
             gtk_widget_add_events(
                 area,
@@ -73,7 +94,9 @@ impl MediaView {
                     (f64::from(size.width), f64::from(size.height)),
                 )),
                 dark: Cell::new(theme == Theme::Dark),
+                overlay,
                 scrolled_window,
+                spinner: Cell::new(spinner),
                 area,
                 gesture: gtk_gesture_zoom_new(area),
                 updating: Cell::new(false),
@@ -82,9 +105,9 @@ impl MediaView {
             })
         };
         state.connect();
-        // SAFETY: The scrolled window is a live widget that the window lays out from now on.
+        // SAFETY: The overlay is a live widget that the window lays out from now on.
         unsafe {
-            attachment.set_native_view(NativeViewHandle::Gtk(state.scrolled_window));
+            attachment.set_native_view(NativeViewHandle::Gtk(state.overlay));
             gtk_widget_grab_focus(state.area);
         }
         state.update(Viewport::zoom_to_fit);
@@ -101,6 +124,11 @@ impl MediaView {
         self.state
             .update(|viewport| viewport.set_media(media, zoom_to_fit));
         self.state.start_animation();
+        let spinner = self.state.spinner.replace(null_mut());
+        if !spinner.is_null() {
+            // SAFETY: The spinner is a live child of the overlay, which drops it.
+            unsafe { gtk_widget_destroy(spinner) };
+        }
     }
 
     /// Magnifies by `factor`, keeping the middle of the visible area in place.
@@ -154,6 +182,7 @@ impl Drop for MediaView {
             g_object_unref(state.gesture);
             g_object_unref(state.area);
             g_object_unref(state.scrolled_window);
+            g_object_unref(state.overlay);
         }
     }
 }

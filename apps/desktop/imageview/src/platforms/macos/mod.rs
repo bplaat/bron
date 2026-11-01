@@ -16,8 +16,8 @@ use std::ptr::null_mut;
 use block2::Block;
 use bwindow::{EventLoopProxy, NativeViewHandle, Theme, Window, WindowAttachment};
 use imageview_core::Media;
-use imageview_core::appkit::{create_media_view, ns_string};
-use objc2::rc::{Retained, autoreleasepool};
+use imageview_core::appkit::{Rect, create_media_view, ns_string};
+use objc2::rc::{Allocated, Retained, autoreleasepool};
 use objc2::runtime::{AnyObject as Object, Bool};
 use objc2::{class, define_class, msg_send, sel};
 
@@ -133,12 +133,16 @@ pub(crate) fn note_recent_file(path: &Path) {
 /// A native view that zooms and pans media.
 pub(crate) struct MediaView {
     view: Retained<View>,
+    // The loading indicator, shown until the media is decoded.
+    spinner: Option<Retained<Object>>,
     _attachment: WindowAttachment,
 }
 
 impl MediaView {
-    /// Fills the window with the media, zoomed to fit.
-    pub(crate) fn new(window: &Window, media: Media, theme: Theme) -> Self {
+    /// Fills the window with the media zoomed to fit, or a loading indicator until the media
+    /// is set.
+    pub(crate) fn new(window: &Window, media: Option<Media>, theme: Theme) -> Self {
+        let loading = media.is_none();
         let attachment = window.attach_content().expect("window has no content yet");
         let size = window.size();
         let view = View::new(
@@ -157,11 +161,13 @@ impl MediaView {
                 setCollectionBehavior: behavior | NS_WINDOW_COLLECTION_BEHAVIOR_FULL_SCREEN_PRIMARY
             ];
         }
+        let spinner = loading.then(|| add_spinner(&view));
         // The view has its size now.
         view.update(Viewport::zoom_to_fit);
         view.advance_frame();
         Self {
             view,
+            spinner,
             _attachment: attachment,
         }
     }
@@ -171,6 +177,13 @@ impl MediaView {
         self.view
             .update(|viewport| viewport.set_media(media, zoom_to_fit));
         self.view.advance_frame();
+        if let Some(spinner) = self.spinner.take() {
+            // SAFETY: The spinner is a live subview of the view.
+            unsafe {
+                let _: () = msg_send![&*spinner, stopAnimation: null_mut::<Object>()];
+                let _: () = msg_send![&*spinner, removeFromSuperview];
+            }
+        }
     }
 
     /// Magnifies by `factor`, keeping the middle of the visible area in place.
@@ -224,6 +237,27 @@ impl MediaView {
                 ];
             }
         });
+    }
+}
+
+// Shows a spinning progress indicator in the middle of the view, which keeps it there.
+fn add_spinner(view: &View) -> Retained<Object> {
+    const SIZE: f64 = 32.0;
+    // SAFETY: The indicator is a valid AppKit view that the view retains as its subview.
+    unsafe {
+        let bounds: Rect = msg_send![view, bounds];
+        let spinner: Allocated<Object> = msg_send![class!(NSProgressIndicator), alloc];
+        let spinner: Retained<Object> = msg_send![spinner, initWithFrame: rect(
+            ((bounds.size.width - SIZE) / 2.0).round(),
+            ((bounds.size.height - SIZE) / 2.0).round(),
+            SIZE,
+            SIZE
+        )];
+        let _: () = msg_send![&*spinner, setStyle: NS_PROGRESS_INDICATOR_STYLE_SPINNING];
+        let _: () = msg_send![&*spinner, setAutoresizingMask: NS_VIEW_CENTERED];
+        let _: () = msg_send![view, addSubview: &*spinner];
+        let _: () = msg_send![&*spinner, startAnimation: null_mut::<Object>()];
+        spinner
     }
 }
 

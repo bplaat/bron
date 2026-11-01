@@ -11,6 +11,7 @@ vector drawings, and follows the system light or dark theme.
   by [imageview-core](../imageview-core) with [bcanvas](../../../lib/graphics/bcanvas): Core
   Graphics on macOS, Direct2D on Windows and Cairo on Linux
 - Zoom, pan, and fit images to the window
+- Open slow to decode images in a window with a native loading indicator right away
 - Automatically refresh an open image when its file changes, without resetting the zoom
 - Browse previous and next images in the same folder
 - File manager previews and thumbnails for supported formats

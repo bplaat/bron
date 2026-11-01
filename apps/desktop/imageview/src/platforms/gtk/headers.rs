@@ -23,6 +23,7 @@ pub(crate) const GDK_KEY_DOWN: u32 = 0xff54;
 pub(crate) const GDK_KEY_PAGE_UP: u32 = 0xff55;
 pub(crate) const GDK_KEY_PAGE_DOWN: u32 = 0xff56;
 pub(crate) const GDK_KEY_END: u32 = 0xff57;
+pub(crate) const GTK_ALIGN_CENTER: i32 = 3;
 pub(crate) const G_SIGNAL_MATCH_DATA: i32 = 1 << 4;
 
 unsafe extern "C" {
@@ -58,6 +59,18 @@ unsafe extern "C" {
     pub(crate) fn gtk_scrolled_window_new(h: *mut c_void, v: *mut c_void) -> *mut c_void;
     pub(crate) fn gtk_scrolled_window_get_hadjustment(window: *mut c_void) -> *mut c_void;
     pub(crate) fn gtk_scrolled_window_get_vadjustment(window: *mut c_void) -> *mut c_void;
+    pub(crate) fn gtk_overlay_new() -> *mut c_void;
+    pub(crate) fn gtk_overlay_add_overlay(overlay: *mut c_void, widget: *mut c_void);
+    pub(crate) fn gtk_overlay_set_overlay_pass_through(
+        overlay: *mut c_void,
+        widget: *mut c_void,
+        pass_through: i32,
+    );
+    pub(crate) fn gtk_spinner_new() -> *mut c_void;
+    pub(crate) fn gtk_spinner_start(spinner: *mut c_void);
+    pub(crate) fn gtk_widget_set_halign(widget: *mut c_void, align: i32);
+    pub(crate) fn gtk_widget_set_valign(widget: *mut c_void, align: i32);
+    pub(crate) fn gtk_widget_destroy(widget: *mut c_void);
     pub(crate) fn gtk_drawing_area_new() -> *mut c_void;
     pub(crate) fn gtk_container_add(container: *mut c_void, widget: *mut c_void);
     pub(crate) fn gtk_widget_set_size_request(widget: *mut c_void, width: i32, height: i32);
