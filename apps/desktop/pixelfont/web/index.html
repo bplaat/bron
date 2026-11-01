@@ -128,7 +128,7 @@
                     <!-- Right: copy/paste -->
                     <div class="editor-actions">
                         <canvas ref="previewCanvas" width="40" height="40" class="preview-canvas"></canvas>
-                        <button class="button" :disabled="!canCopy" @click="copyChar">Copy</button>
+                        <button class="button" @click="copyChar">Copy</button>
                         <button class="button" :disabled="!canPaste" @click="pasteChar">Paste</button>
                     </div>
                 </div>

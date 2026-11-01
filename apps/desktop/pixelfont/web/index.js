@@ -4,10 +4,6 @@
  * SPDX-License-Identifier: MIT
  */
 
-window.addEventListener('contextmenu', (e) => e.preventDefault());
-
-const isMacosBwebview = navigator.userAgent.includes('bwebview') && navigator.userAgent.includes('Macintosh');
-
 // Polyfills
 const mediaQueryListPrototype = Object.getPrototypeOf(window.matchMedia('all'));
 if (!mediaQueryListPrototype.addEventListener) {
@@ -25,6 +21,29 @@ if (!window.PointerEvent) {
         });
     }
 }
+
+if (!navigator.clipboard) {
+    Object.defineProperty(navigator, 'clipboard', {
+        value: {
+            writeText(text) {
+                const textarea = document.createElement('textarea');
+                textarea.value = text;
+                textarea.style.position = 'fixed';
+                textarea.style.opacity = '0';
+                document.body.appendChild(textarea);
+                textarea.select();
+                const copied = document.execCommand('copy');
+                textarea.remove();
+                return copied ? Promise.resolve() : Promise.reject(new Error('Copy to the clipboard failed'));
+            },
+        },
+    });
+}
+
+// App
+window.addEventListener('contextmenu', (e) => e.preventDefault());
+
+const isMacosBwebview = navigator.userAgent.includes('bwebview') && navigator.userAgent.includes('Macintosh');
 
 const ACTIONS = {
     new: 'newFile',
@@ -188,8 +207,8 @@ PetiteVue.createApp({
     selectedChar: 0,
     dirty: false,
     closePending: false,
-    canCopy: !!(navigator.clipboard && navigator.clipboard.writeText),
-    canPaste: !!(navigator.clipboard && navigator.clipboard.readText),
+    // Copying always works through the polyfill, reading the clipboard cannot be polyfilled
+    canPaste: typeof navigator.clipboard.readText === 'function',
 
     get charInfoText() {
         const idx = this.selectedChar;
@@ -547,7 +566,6 @@ PetiteVue.createApp({
 
     // Copy hex bytes to clipboard
     copyChar() {
-        if (!this.canCopy) return;
         const hex = Array.from(getCharBytes(this.fontData, this.selectedChar))
             .map((b) => '0x' + b.toString(16).toUpperCase().padStart(2, '0'))
             .join(', ');
