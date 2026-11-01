@@ -120,16 +120,21 @@ pub fn decode_media(bytes: &[u8]) -> Result<Media, String> {
 
 // Converts straight-alpha RGBA8 pixels to premultiplied BGRA8 pixels.
 fn premultiplied_bgra(pixels: &[u8]) -> Vec<u8> {
-    let mut output = Vec::with_capacity(pixels.len());
-    for pixel in pixels.as_chunks::<4>().0 {
-        let alpha = u16::from(pixel[3]);
-        let premultiply = |value: u8| ((u16::from(value) * alpha + 127) / 255) as u8;
-        output.extend_from_slice(&[
-            premultiply(pixel[2]),
-            premultiply(pixel[1]),
-            premultiply(pixel[0]),
-            pixel[3],
-        ]);
+    let mut output = pixels.to_vec();
+    for pixel in output.as_chunks_mut::<4>().0 {
+        let [red, green, blue, alpha] = *pixel;
+        // Opaque pixels, like all of a photo, only swap their channels.
+        *pixel = if alpha == 255 {
+            [blue, green, red, alpha]
+        } else {
+            let premultiply = |value: u8| ((u16::from(value) * u16::from(alpha) + 127) / 255) as u8;
+            [
+                premultiply(blue),
+                premultiply(green),
+                premultiply(red),
+                alpha,
+            ]
+        };
     }
     output
 }
