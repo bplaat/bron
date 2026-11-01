@@ -97,7 +97,7 @@ The libogc patches, trimmed versions of the Wii toolchain's for only the matrix 
 - `0001` adds `paired_single.inc`, LLVM doesn't know the paired single instructions, so its
   assembler macros encode them
 - `0002` writes the paired single load and store offsets as `d, rA`, which the macros can take apart
-- `0003` loads the matrix constants without small data, which clang doesn't have
+- `0003` loads the matrix constants from `.rodata` with absolute addresses, clang has no small data
 
 The wut-tools patch:
 
