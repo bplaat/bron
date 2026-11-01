@@ -12,9 +12,10 @@ use core::time::Duration;
 use crc::{CRC_32_ISO_HDLC, Crc};
 use deflate::Level;
 
+use super::color::{self, ColorModel, Curve, Transform};
 use super::{
-    Area, Bitmap, Budget, ColorSpace, DecodeError, EncodeError, EncodingStyle, Format, Frame,
-    Image, LoopCount, MAX_BYTES, Reader, Result, pixel_len,
+    Area, Bitmap, Budget, DecodeError, EncodeError, EncodingStyle, Format, Frame, Image, LoopCount,
+    MAX_BYTES, Reader, Result, pixel_len,
 };
 
 // MARK: Decoder
@@ -178,6 +179,41 @@ struct PngState {
     data_phase: DataPhase,
     frame_data: FrameData,
     text: Vec<(String, String)>,
+    color: ColorChunks,
+    transform: Option<Transform>,
+}
+
+/// The color description chunks, which must come before the image data.
+struct ColorChunks {
+    cicp: Option<[u8; 2]>,
+    icc: Option<Vec<u8>>,
+    srgb: bool,
+    gamma: Option<u32>,
+    chromaticities: Option<color::Primaries>,
+}
+
+impl ColorChunks {
+    // Uses the first usable description in the PNG priority order: cICP, iCCP, sRGB, then
+    // cHRM and gAMA.
+    fn transform(&self, model: ColorModel) -> Option<Transform> {
+        if let Some((primaries, curve)) = self.cicp.and_then(|[p, t]| color::cicp(p, t)) {
+            return Transform::rgb(&primaries, [&curve; 3]);
+        }
+        if let Some(icc) = &self.icc {
+            return Transform::icc(icc, model);
+        }
+        if self.srgb || (self.gamma.is_none() && self.chromaticities.is_none()) {
+            return None;
+        }
+        // Encoders often write gAMA 1/2.2 for sRGB content.
+        let curve = match self.gamma {
+            Some(gamma) if !(45000..=46000).contains(&gamma) => {
+                Curve::gamma(100_000.0 / f64::from(gamma))
+            }
+            _ => Curve::SRGB,
+        };
+        Transform::rgb(&self.chromaticities.unwrap_or(color::SRGB), [&curve; 3])
+    }
 }
 
 impl PngState {
@@ -196,6 +232,14 @@ impl PngState {
             data_phase: DataPhase::Before,
             frame_data: FrameData::None,
             text: Vec::new(),
+            color: ColorChunks {
+                cicp: None,
+                icc: None,
+                srgb: false,
+                gamma: None,
+                chromaticities: None,
+            },
+            transform: None,
         }
     }
 
@@ -213,22 +257,13 @@ impl PngState {
     fn finish_frame(&mut self, header: &Header, budget: &mut Budget, last: bool) -> Result<()> {
         // Validate an excluded default image even though it is not emitted as a frame.
         let Some(control) = self.control else {
-            header.raster(
-                header.width,
-                header.height,
-                &self.compressed,
-                &self.palette[..self.palette_len],
-                self.transparency,
-                budget,
-            )?;
+            header.raster(header.width, header.height, self, budget)?;
             return Ok(());
         };
         let pixels = header.raster(
             control.area.width as u32,
             control.area.height as u32,
-            &self.compressed,
-            &self.palette[..self.palette_len],
-            self.transparency,
+            self,
             budget,
         )?;
         let previous = if !last && control.dispose == DisposeOp::Previous {
@@ -444,6 +479,15 @@ pub(super) fn decode(data: &[u8]) -> Result<Image> {
                 {
                     return Err(DecodeError::InvalidData);
                 }
+                if state.data_phase == DataPhase::Before {
+                    let model = if matches!(color, ColorType::Grayscale | ColorType::GrayscaleAlpha)
+                    {
+                        ColorModel::Gray
+                    } else {
+                        ColorModel::Rgb
+                    };
+                    state.transform = state.color.transform(model);
+                }
                 state.data_phase = DataPhase::In;
                 budget.append(&mut state.compressed, bytes)?;
             }
@@ -466,14 +510,7 @@ pub(super) fn decode(data: &[u8]) -> Result<Image> {
                     return Err(DecodeError::InvalidData);
                 }
                 if state.animation.is_none() {
-                    let pixels = header.raster(
-                        width,
-                        height,
-                        &state.compressed,
-                        &state.palette[..state.palette_len],
-                        state.transparency,
-                        &mut budget,
-                    )?;
+                    let pixels = header.raster(width, height, &state, &mut budget)?;
                     return Ok(Image {
                         text: state.text,
                         ..Image::still(Format::Png, width, height, pixels)
@@ -490,7 +527,6 @@ pub(super) fn decode(data: &[u8]) -> Result<Image> {
                 }
                 return Ok(Image {
                     format: Format::Png,
-                    color_space: ColorSpace::Srgb,
                     frames: state.frames,
                     text: state.text,
                     is_animated: true,
@@ -500,6 +536,39 @@ pub(super) fn decode(data: &[u8]) -> Result<Image> {
                         LoopCount::Finite(plays)
                     },
                 });
+            }
+            // Color chunks after the image data are ignored, as are malformed ones.
+            b"cICP" if !state.data_phase.has_idat() => {
+                if let [primaries, transfer, 0, 1] = *bytes {
+                    state.color.cicp = Some([primaries, transfer]);
+                }
+            }
+            b"iCCP" if !state.data_phase.has_idat() => {
+                if let Some((_name, [0, data @ ..])) = split_nul(bytes) {
+                    state.color.icc = deflate::zlib_decompress(data, MAX_BYTES - budget.used)
+                        .ok()
+                        .filter(|icc| budget.claim(icc.len()).is_ok());
+                }
+            }
+            b"sRGB" if !state.data_phase.has_idat() => state.color.srgb = true,
+            b"gAMA" if !state.data_phase.has_idat() => {
+                if let Ok(&value) = <&[u8; 4]>::try_from(bytes) {
+                    state.color.gamma = Some(u32::from_be_bytes(value)).filter(|v| *v != 0);
+                }
+            }
+            b"cHRM" if !state.data_phase.has_idat() => {
+                if let Ok(values) = <&[u8; 32]>::try_from(bytes) {
+                    let [white, red, green, blue] = core::array::from_fn(|i| {
+                        core::array::from_fn(|j| {
+                            let at = (i * 2 + j) * 4;
+                            let value = u32::from_be_bytes(
+                                values[at..at + 4].try_into().expect("four bytes"),
+                            );
+                            f64::from(value) / 100_000.0
+                        })
+                    });
+                    state.color.chromaticities = Some([white, red, green, blue]);
+                }
             }
             // Malformed text is ancillary and skipped.
             b"tEXt" | b"zTXt" | b"iTXt" => {
@@ -602,11 +671,11 @@ impl Header {
         &self,
         width: u32,
         height: u32,
-        compressed: &[u8],
-        palette: &[[u8; 4]],
-        transparency: Option<[u16; 3]>,
+        state: &PngState,
         budget: &mut Budget,
     ) -> Result<Vec<u8>> {
+        let palette = &state.palette[..state.palette_len];
+        let transform = state.transform.as_ref();
         // Adam7 writes seven sparse passes into one output; ordinary PNG uses one full-size pass.
         let passes = if self.interlace == InterlaceMethod::Adam7 {
             &ADAM7[..]
@@ -635,16 +704,29 @@ impl Header {
         // Chunk CRCs already cover the compressed stream, so the Adler-32 trailer must be
         // present but is not verified. Decompression allocates fallibly and never beyond the
         // expected size.
-        let mut raw = deflate::zlib_decompress_unchecked(compressed, expected).map_err(
-            |error| match error {
-                deflate::Error::OutOfMemory => DecodeError::ImageTooLarge,
-                _ => DecodeError::InvalidData,
-            },
-        )?;
+        let mut raw =
+            deflate::zlib_decompress_unchecked(&state.compressed, expected).map_err(|error| {
+                match error {
+                    deflate::Error::OutOfMemory => DecodeError::ImageTooLarge,
+                    _ => DecodeError::InvalidData,
+                }
+            })?;
         if raw.len() != expected {
             return Err(DecodeError::InvalidData);
         }
         let mut pixels = budget.zeroed(pixel_len(width as u32, height as u32)?)?;
+        // Palettes convert once per entry and 16-bit samples before their reduction to 8 bits;
+        // other samples convert after expansion.
+        let mut converted = [[0; 4]; 256];
+        let palette = match transform {
+            Some(transform) if self.color == ColorType::Indexed => {
+                converted[..palette.len()].copy_from_slice(palette);
+                transform.apply(converted.as_flattened_mut());
+                &converted[..palette.len()]
+            }
+            _ => palette,
+        };
+        let wide = transform.filter(|_| self.depth == 16);
         let bpp = (self.channels * self.depth as usize).div_ceil(8);
         let mut cursor = 0;
         for &(x, y, dx, dy) in passes {
@@ -675,10 +757,16 @@ impl Header {
                     .iter_mut()
                     .step_by(dx)
                     .take(w);
-                self.expand(scan, dest, palette, transparency)?;
+                self.expand(scan, dest, palette, state.transparency, wide)?;
                 previous = Some(scan_start);
                 cursor += bytes;
             }
+        }
+        if let Some(transform) = transform
+            && self.depth != 16
+            && self.color != ColorType::Indexed
+        {
+            transform.apply(&mut pixels);
         }
         Ok(pixels)
     }
@@ -692,8 +780,12 @@ impl Header {
         dest: impl Iterator<Item = &'a mut [u8; 4]>,
         palette: &[[u8; 4]],
         transparency: Option<[u16; 3]>,
+        transform: Option<&Transform>,
     ) -> Result<()> {
         let alpha = |key: bool| if key { 0 } else { 255 };
+        let color16 = |samples: [u16; 3]| {
+            transform.map_or_else(|| samples.map(scale_16_to_8), |t| t.rgb16(samples))
+        };
         match (self.color, self.depth) {
             (ColorType::TruecolorAlpha, 8) => {
                 for (p, s) in dest.zip(scan.as_chunks::<4>().0) {
@@ -702,7 +794,8 @@ impl Header {
             }
             (ColorType::TruecolorAlpha, _) => {
                 for (p, s) in dest.zip(scan.as_chunks::<8>().0) {
-                    *p = core::array::from_fn(|i| scale_16_to_8(sample16(s, i)));
+                    let [r, g, b] = color16(core::array::from_fn(|i| sample16(s, i)));
+                    *p = [r, g, b, scale_16_to_8(sample16(s, 3))];
                 }
             }
             (ColorType::Truecolor, 8) => {
@@ -714,7 +807,7 @@ impl Header {
             (ColorType::Truecolor, _) => {
                 for (p, s) in dest.zip(scan.as_chunks::<6>().0) {
                     let samples = core::array::from_fn(|i| sample16(s, i));
-                    let [r, g, b] = samples.map(scale_16_to_8);
+                    let [r, g, b] = color16(samples);
                     *p = [r, g, b, alpha(transparency == Some(samples))];
                 }
             }
@@ -725,20 +818,15 @@ impl Header {
             }
             (ColorType::GrayscaleAlpha, _) => {
                 for (p, s) in dest.zip(scan.as_chunks::<4>().0) {
-                    let value = scale_16_to_8(sample16(s, 0));
-                    *p = [value, value, value, scale_16_to_8(sample16(s, 1))];
+                    let [r, g, b] = color16([sample16(s, 0); 3]);
+                    *p = [r, g, b, scale_16_to_8(sample16(s, 1))];
                 }
             }
             (ColorType::Grayscale, 16) => {
                 for (p, s) in dest.zip(scan.as_chunks::<2>().0) {
                     let sample = sample16(s, 0);
-                    let value = scale_16_to_8(sample);
-                    *p = [
-                        value,
-                        value,
-                        value,
-                        alpha(transparency.is_some_and(|t| t[0] == sample)),
-                    ];
+                    let [r, g, b] = color16([sample; 3]);
+                    *p = [r, g, b, alpha(transparency.is_some_and(|t| t[0] == sample))];
                 }
             }
             (ColorType::Grayscale | ColorType::Indexed, depth) => {

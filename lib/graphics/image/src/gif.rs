@@ -10,8 +10,8 @@ use core::mem;
 use core::time::Duration;
 
 use super::{
-    Area, Bitmap, Budget, ColorSpace, DecodeError, EncodeError, EncodingStyle, Format, Frame,
-    Image, LoopCount, Reader, Result, pixel_len, round,
+    Area, Bitmap, Budget, DecodeError, EncodeError, EncodingStyle, Format, Frame, Image, LoopCount,
+    Reader, Result, pixel_len, round,
 };
 
 // MARK: Decoder
@@ -106,7 +106,6 @@ impl<'a> Decoder<'a> {
                     }
                     return Ok(Image {
                         format: Format::Gif,
-                        color_space: ColorSpace::Srgb,
                         is_animated: self.has_loop_extension || self.frames.len() > 1,
                         frames: self.frames,
                         text: Vec::new(),

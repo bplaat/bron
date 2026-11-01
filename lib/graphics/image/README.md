@@ -1,6 +1,6 @@
 # Image
 
-Decode JPEG, PNG/APNG, GIF, BMP, ICO, and QOI images into RGBA pixels. You can
+Decode JPEG, PNG/APNG, GIF, BMP, ICO, and QOI images into sRGB RGBA pixels. You can
 also encode images as JPEG, PNG/APNG, GIF, BMP, or QOI.
 
 ## Getting started
@@ -14,7 +14,7 @@ for frame in image.frames() {
 }
 ```
 
-To write an image, create a `Bitmap` from RGBA pixels and call `encode`.
+To write an image, create a `Bitmap` from sRGB RGBA pixels and call `encode`.
 Use `Image::encode` to save a decoded image in another format.
 
 For GIF or APNG, give `encode_animation` a list of full-size frames, their
@@ -48,8 +48,30 @@ replace the color of fully transparent PNG/APNG pixels.
 
 Animated images expose full-size frames, display times, and a loop count.
 Decoding applies JPEG orientation, reduces 16-bit PNG samples to 8 bits, and
-selects the largest image in an ICO file. HDR, streaming, and ICC color
-management are not supported. Decoding has a cumulative 1 GiB allocation limit.
+selects the largest image in an ICO file. Streaming is not supported. Decoding
+has a cumulative 1 GiB allocation limit.
+
+## Color management
+
+Decoded pixels are always sRGB. Each decoder reads the color description of
+the file and converts the pixels, clipping colors outside the sRGB gamut:
+
+| Format | Color description                                                                      |
+| ------ | -------------------------------------------------------------------------------------- |
+| PNG    | `cICP`, then `iCCP`, then `sRGB`, then `cHRM` and `gAMA`; 16-bit samples convert first |
+| JPEG   | ICC profile in APP2 segments, otherwise the EXIF Adobe RGB color space                 |
+| BMP    | V4/V5 calibrated RGB endpoints with gamma, or an embedded ICC profile                  |
+| QOI    | The linear RGB header flag                                                             |
+
+ICC v2 and v4 profiles for gray, RGB, and CMYK samples are supported, both
+matrix/TRC profiles and `mft1`, `mft2`, and `mAB ` lookup tables. HDR transfer
+functions (PQ and HLG) map SDR white to sRGB white and clip brighter colors.
+Images without a color description, and profiles that are invalid or do not
+match the samples, are treated as sRGB.
+
+To average pixels correctly, for example when resizing or building mipmaps,
+convert samples with `srgb_to_linear`, combine them in linear light, and encode
+the result with `linear_to_srgb`.
 
 All formats are enabled by default. You can enable only the codecs you need
 with the `qoi`, `jpeg`, `png`, `gif`, `bmp`, and `ico` Cargo features. The crate

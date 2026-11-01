@@ -6,7 +6,8 @@
 
 use alloc::vec::Vec;
 
-use super::{Bitmap, Budget, ColorSpace, DecodeError, EncodeError, Format, Image};
+use super::color::{Curve, SRGB, Transform};
+use super::{Bitmap, Budget, DecodeError, EncodeError, Format, Image};
 
 const HEADER_LEN: usize = 14;
 const END_MARKER: [u8; 8] = [0, 0, 0, 0, 0, 0, 0, 1];
@@ -122,13 +123,13 @@ impl<'a> Decoder<'a> {
         if self.cursor != self.stream_end {
             return Err(DecodeError::InvalidData);
         }
-        let mut image = Image::still(Format::Qoi, width, height, pixels);
-        image.color_space = if self.data[13] == 0 {
-            ColorSpace::Srgb
-        } else {
-            ColorSpace::LinearSrgb
-        };
-        Ok(image)
+        // The header marks linear RGB channels, which are encoded as sRGB.
+        if self.data[13] != 0
+            && let Some(transform) = Transform::rgb(&SRGB, [&Curve::LINEAR; 3])
+        {
+            transform.apply(&mut pixels);
+        }
+        Ok(Image::still(Format::Qoi, width, height, pixels))
     }
 
     const fn pixel_hash(pixel: [u8; 4]) -> usize {

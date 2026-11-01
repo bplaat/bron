@@ -46,11 +46,7 @@ use crate::{Format, decode};
 #[derive(Clone, Copy)]
 enum PixelTolerance {
     Exact,
-    #[cfg(feature = "jpeg")]
-    Lossy {
-        maximum: u8,
-        mean: f64,
-    },
+    Lossy { maximum: u8, mean: f64 },
 }
 
 #[cfg(any(
@@ -69,7 +65,23 @@ struct RasterCase {
     inputs: usize,
     references: usize,
     tolerance: PixelTolerance,
+    /// Fixtures whose embedded color description is converted to sRGB.
+    color_managed: &'static [&'static str],
 }
+
+// Color-managed references come from a reference color engine, which rounds differently.
+#[cfg(any(
+    feature = "qoi",
+    feature = "jpeg",
+    feature = "png",
+    feature = "gif",
+    feature = "bmp",
+    feature = "ico"
+))]
+const COLOR_TOLERANCE: PixelTolerance = PixelTolerance::Lossy {
+    maximum: 1,
+    mean: 0.1,
+};
 
 #[path = "fixture_corpus.rs"]
 mod fixture_corpus;
@@ -93,6 +105,7 @@ fn raster_cases() -> Vec<RasterCase> {
             inputs: 5,
             references: 5,
             tolerance: PixelTolerance::Exact,
+            color_managed: &[],
         },
         #[cfg(feature = "jpeg")]
         RasterCase {
@@ -105,6 +118,7 @@ fn raster_cases() -> Vec<RasterCase> {
                 maximum: 4,
                 mean: 1.0,
             },
+            color_managed: &[],
         },
         #[cfg(feature = "png")]
         RasterCase {
@@ -114,6 +128,14 @@ fn raster_cases() -> Vec<RasterCase> {
             inputs: 10,
             references: 18,
             tolerance: PixelTolerance::Exact,
+            // gAMA 1.0 marks linear samples.
+            color_managed: &[
+                "16bpc/basi0g16.png",
+                "16bpc/basn2c16.png",
+                "16bpc/basn6a16.png",
+                "interlaced/basi2c08.png",
+                "transparency/tp1n3p08.png",
+            ],
         },
         #[cfg(feature = "gif")]
         RasterCase {
@@ -123,6 +145,7 @@ fn raster_cases() -> Vec<RasterCase> {
             inputs: 4,
             references: 9,
             tolerance: PixelTolerance::Exact,
+            color_managed: &[],
         },
         #[cfg(feature = "bmp")]
         RasterCase {
@@ -132,6 +155,7 @@ fn raster_cases() -> Vec<RasterCase> {
             inputs: 7,
             references: 7,
             tolerance: PixelTolerance::Exact,
+            color_managed: &[],
         },
         #[cfg(feature = "ico")]
         RasterCase {
@@ -141,6 +165,52 @@ fn raster_cases() -> Vec<RasterCase> {
             inputs: 4,
             references: 4,
             tolerance: PixelTolerance::Exact,
+            color_managed: &[],
+        },
+        #[cfg(feature = "qoi")]
+        RasterCase {
+            directory: "color/qoi",
+            extension: "qoi",
+            format: Format::Qoi,
+            inputs: 1,
+            references: 1,
+            tolerance: COLOR_TOLERANCE,
+            color_managed: &[],
+        },
+        #[cfg(feature = "jpeg")]
+        RasterCase {
+            directory: "color/jpeg",
+            extension: "jpg",
+            format: Format::Jpeg,
+            inputs: 6,
+            references: 6,
+            // Reference decoding rounds differently, which wide-gamut matrices and CMYK LUTs
+            // amplify.
+            tolerance: PixelTolerance::Lossy {
+                maximum: 4,
+                mean: 0.1,
+            },
+            color_managed: &[],
+        },
+        #[cfg(feature = "png")]
+        RasterCase {
+            directory: "color/png",
+            extension: "png",
+            format: Format::Png,
+            inputs: 13,
+            references: 13,
+            tolerance: COLOR_TOLERANCE,
+            color_managed: &[],
+        },
+        #[cfg(feature = "bmp")]
+        RasterCase {
+            directory: "color/bmp",
+            extension: "bmp",
+            format: Format::Bmp,
+            inputs: 2,
+            references: 2,
+            tolerance: COLOR_TOLERANCE,
+            color_managed: &[],
         },
     ]
 }
@@ -202,7 +272,6 @@ fn compare_pixels(name: &Path, actual: &[u8], expected: &[u8], tolerance: PixelT
                 name.display()
             );
         }
-        #[cfg(feature = "jpeg")]
         PixelTolerance::Lossy { maximum, mean } => {
             let mut maximum_error = 0;
             let mut total_error = 0usize;
@@ -293,7 +362,16 @@ fn run_raster_case(case: RasterCase) {
                 "{} frame {index}",
                 name.display()
             );
-            compare_pixels(name, frame.pixels(), &expected, case.tolerance);
+            let tolerance = if case
+                .color_managed
+                .iter()
+                .any(|managed| Path::new(managed) == name)
+            {
+                COLOR_TOLERANCE
+            } else {
+                case.tolerance
+            };
+            compare_pixels(name, frame.pixels(), &expected, tolerance);
             used_references.insert(reference);
         }
     }

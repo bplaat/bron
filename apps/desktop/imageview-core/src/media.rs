@@ -7,7 +7,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use image::{ColorSpace, LoopCount};
+use image::LoopCount;
 use vector::VectorImage;
 
 /// Decoded media, ready to draw with a canvas.
@@ -102,12 +102,11 @@ pub fn decode_media(bytes: &[u8]) -> Result<Media, String> {
             .map_err(|error| error.to_string());
     }
     let decoded = image::decode(bytes).map_err(|error| error.to_string())?;
-    let linear = decoded.color_space() == ColorSpace::LinearSrgb;
     let frames = decoded
         .frames()
         .iter()
         .map(|frame| Frame {
-            pixels: premultiplied_bgra(frame.pixels(), linear).into(),
+            pixels: premultiplied_bgra(frame.pixels()).into(),
             delay: frame.delay(),
         })
         .collect();
@@ -119,20 +118,12 @@ pub fn decode_media(bytes: &[u8]) -> Result<Media, String> {
     }))
 }
 
-// Converts straight-alpha RGBA8 pixels to premultiplied BGRA8 pixels in sRGB.
-fn premultiplied_bgra(pixels: &[u8], linear: bool) -> Vec<u8> {
-    let encode: [u8; 256] = std::array::from_fn(|value| {
-        if linear {
-            linear_to_srgb(value as u8)
-        } else {
-            value as u8
-        }
-    });
+// Converts straight-alpha RGBA8 pixels to premultiplied BGRA8 pixels.
+fn premultiplied_bgra(pixels: &[u8]) -> Vec<u8> {
     let mut output = Vec::with_capacity(pixels.len());
     for pixel in pixels.as_chunks::<4>().0 {
         let alpha = u16::from(pixel[3]);
-        let premultiply =
-            |value: u8| ((u16::from(encode[usize::from(value)]) * alpha + 127) / 255) as u8;
+        let premultiply = |value: u8| ((u16::from(value) * alpha + 127) / 255) as u8;
         output.extend_from_slice(&[
             premultiply(pixel[2]),
             premultiply(pixel[1]),
@@ -141,16 +132,6 @@ fn premultiplied_bgra(pixels: &[u8], linear: bool) -> Vec<u8> {
         ]);
     }
     output
-}
-
-fn linear_to_srgb(value: u8) -> u8 {
-    let linear = f64::from(value) / 255.0;
-    let srgb = if linear <= 0.003_130_8 {
-        linear * 12.92
-    } else {
-        1.055 * linear.powf(1.0 / 2.4) - 0.055
-    };
-    (srgb * 255.0).round() as u8
 }
 
 #[cfg(test)]
@@ -162,16 +143,8 @@ mod tests {
     #[test]
     fn pixels_become_premultiplied_bgra() {
         assert_eq!(
-            premultiplied_bgra(&[255, 128, 0, 128, 10, 20, 30, 255], false),
+            premultiplied_bgra(&[255, 128, 0, 128, 10, 20, 30, 255]),
             [0, 64, 128, 128, 30, 20, 10, 255]
-        );
-    }
-
-    #[test]
-    fn linear_pixels_are_encoded_as_srgb() {
-        assert_eq!(
-            premultiplied_bgra(&[0, 255, 55, 255], true),
-            [128, 255, 0, 255]
         );
     }
 

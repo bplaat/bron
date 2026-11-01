@@ -7,6 +7,7 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
+use super::color::{ADOBE_RGB, ColorModel, Curve, Transform};
 use super::{
     Bitmap, Budget, DecodeError, EncodeError, EncodingStyle, Format, Image, Reader, Result,
     pixel_len, roundf, truncf,
@@ -309,6 +310,15 @@ struct Jpeg {
     adobe: Option<u8>,
     jfif: bool,
     orientation: u16,
+    icc: Vec<IccChunk>,
+    adobe_rgb: bool,
+}
+
+/// One APP2 part of an ICC profile, which is split to fit in segments.
+struct IccChunk {
+    sequence: u8,
+    count: u8,
+    data: Vec<u8>,
 }
 
 pub(super) fn decode(data: &[u8]) -> Result<Image> {
@@ -333,6 +343,8 @@ impl Jpeg {
             adobe: None,
             jfif: false,
             orientation: 1,
+            icc: Vec::new(),
+            adobe_rgb: false,
         }
     }
 
@@ -416,8 +428,20 @@ impl Jpeg {
                     }
                 }
                 0xe1 => {
-                    if let Some(orientation) = exif_orientation(bytes) {
-                        jpeg.orientation = orientation;
+                    if let Some(exif) = Exif::parse(bytes) {
+                        jpeg.orientation = exif.orientation.unwrap_or(jpeg.orientation);
+                        jpeg.adobe_rgb = exif.adobe_rgb;
+                    }
+                }
+                0xe2 => {
+                    if let Some([sequence, count, data @ ..]) = bytes.strip_prefix(b"ICC_PROFILE\0")
+                    {
+                        budget.claim(data.len())?;
+                        jpeg.icc.push(IccChunk {
+                            sequence: *sequence,
+                            count: *count,
+                            data: data.to_vec(),
+                        });
                     }
                 }
                 0xee => {
@@ -425,7 +449,7 @@ impl Jpeg {
                         jpeg.adobe = Some(bytes[11]);
                     }
                 }
-                0xe2..=0xed | 0xef | 0xfe => {}
+                0xe3..=0xed | 0xef | 0xfe => {}
                 _ => return Err(DecodeError::UnsupportedFeature),
             }
         }
@@ -672,6 +696,26 @@ impl Jpeg {
         Ok(())
     }
 
+    // Joins the APP2 chunks of a complete ICC profile in sequence order.
+    fn icc_profile(&mut self) -> Option<Vec<u8>> {
+        let count = self.icc.first()?.count;
+        self.icc.sort_unstable_by_key(|chunk| chunk.sequence);
+        let complete = self.icc.len() == usize::from(count)
+            && self
+                .icc
+                .iter()
+                .zip(1..)
+                .all(|(chunk, sequence)| chunk.count == count && chunk.sequence == sequence);
+        if !complete {
+            return None;
+        }
+        let mut profile = Vec::new();
+        for chunk in &self.icc {
+            profile.extend_from_slice(&chunk.data);
+        }
+        Some(profile)
+    }
+
     fn render(mut self, budget: &mut Budget) -> Result<Image> {
         // Transform component blocks, upsample chroma, convert to RGB, then apply EXIF orientation.
         let mut planes = budget.zeroed::<Vec<u8>>(self.components.len())?;
@@ -705,6 +749,19 @@ impl Jpeg {
         if self.adobe.is_some_and(|v| v > 2) {
             return Err(DecodeError::UnsupportedFeature);
         }
+        let model = match self.components.len() {
+            1 => ColorModel::Gray,
+            3 => ColorModel::Rgb,
+            _ => ColorModel::Cmyk,
+        };
+        // An embedded profile takes precedence over the EXIF color space.
+        let transform = match self.icc_profile() {
+            Some(icc) => Transform::icc(&icc, model),
+            None if self.adobe_rgb && model == ColorModel::Rgb => {
+                Transform::rgb(&ADOBE_RGB, [&Curve::gamma(563.0 / 256.0); 3])
+            }
+            None => None,
+        };
         let width = self.width as usize;
         let mut upsamplers = Vec::with_capacity(self.components.len());
         for c in &self.components {
@@ -747,26 +804,35 @@ impl Jpeg {
                 4 => {
                     for (x, p) in row.iter_mut().enumerate() {
                         let values = [rows[0][x], rows[1][x], rows[2][x], rows[3][x]];
-                        let color = if self.adobe == Some(2) {
-                            ycbcr(values[0], values[1], values[2]).map(|v| 255 - v)
-                        } else if self.adobe.is_some() {
-                            [values[0], values[1], values[2]]
+                        let stored = if self.adobe == Some(2) {
+                            let [c, m, y] = ycbcr(values[0], values[1], values[2]).map(|v| 255 - v);
+                            [c, m, y, values[3]]
                         } else {
-                            [255 - values[0], 255 - values[1], 255 - values[2]]
+                            values
                         };
-                        let black = if self.adobe.is_some() {
-                            values[3]
+                        // Adobe files store inverted ink amounts.
+                        let ink = if self.adobe.is_some() {
+                            stored.map(|v| 255 - v)
                         } else {
-                            255 - values[3]
+                            stored
                         };
-                        for k in 0..3 {
-                            p[k] = ((u16::from(color[k]) * u16::from(black) + 127) / 255) as u8;
-                        }
-                        p[3] = 255;
+                        let [r, g, b] = match &transform {
+                            Some(transform) => transform.cmyk(ink),
+                            None => core::array::from_fn(|k| {
+                                ((u16::from(255 - ink[k]) * u16::from(255 - ink[3]) + 127) / 255)
+                                    as u8
+                            }),
+                        };
+                        *p = [r, g, b, 255];
                     }
                 }
                 _ => unreachable!("component count checked"),
             }
+        }
+        if let Some(transform) = transform
+            && model != ColorModel::Cmyk
+        {
+            transform.apply(&mut pixels);
         }
         let (width, height, pixels) =
             orient(self.width, self.height, pixels, self.orientation, budget)?;
@@ -980,41 +1046,68 @@ fn ycbcr(y: u8, cb: u8, cr: u8) -> [u8; 3] {
     .map(|v| v.clamp(0, 255) as u8)
 }
 
-fn exif_orientation(bytes: &[u8]) -> Option<u16> {
-    let data = bytes.strip_prefix(b"Exif\0\0")?;
-    let little = match data.get(..2)? {
-        b"II" => true,
-        b"MM" => false,
-        _ => return None,
-    };
-    let short = |p: usize| -> Option<u16> {
-        let a = data.get(p..p.checked_add(2)?)?.try_into().ok()?;
-        Some(if little {
-            u16::from_le_bytes(a)
-        } else {
-            u16::from_be_bytes(a)
-        })
-    };
-    let long = |p: usize| -> Option<u32> {
-        let a = data.get(p..p.checked_add(4)?)?.try_into().ok()?;
-        Some(if little {
-            u32::from_le_bytes(a)
-        } else {
-            u32::from_be_bytes(a)
-        })
-    };
-    if short(2)? != 42 {
-        return None;
-    }
-    let ifd = long(4)? as usize;
-    let count = short(ifd)? as usize;
-    for i in 0..count {
-        let offset = ifd.checked_add(2 + i * 12)?;
-        if short(offset)? == 0x112 && short(offset + 2)? == 3 && long(offset + 4)? == 1 {
-            return short(offset + 8).filter(|v| (1..=8).contains(v));
+/// The EXIF tags that affect decoding.
+struct Exif {
+    orientation: Option<u16>,
+    /// DCF marks Adobe RGB with an uncalibrated color space and the R03 interoperability index.
+    adobe_rgb: bool,
+}
+
+impl Exif {
+    fn parse(bytes: &[u8]) -> Option<Self> {
+        let data = bytes.strip_prefix(b"Exif\0\0")?;
+        let little = match data.get(..2)? {
+            b"II" => true,
+            b"MM" => false,
+            _ => return None,
+        };
+        let short = |p: usize| -> Option<u16> {
+            let a = data.get(p..p.checked_add(2)?)?.try_into().ok()?;
+            Some(if little {
+                u16::from_le_bytes(a)
+            } else {
+                u16::from_be_bytes(a)
+            })
+        };
+        let long = |p: usize| -> Option<u32> {
+            let a = data.get(p..p.checked_add(4)?)?.try_into().ok()?;
+            Some(if little {
+                u32::from_le_bytes(a)
+            } else {
+                u32::from_be_bytes(a)
+            })
+        };
+        // Returns the value position of a single-value entry of the given type in an IFD.
+        let entry = |ifd: usize, tag: u16, kind: u16| {
+            (0..short(ifd)?).find_map(|i| {
+                let offset = ifd.checked_add(2 + usize::from(i) * 12)?;
+                (short(offset)? == tag && short(offset + 2)? == kind).then_some(offset + 8)
+            })
+        };
+        if short(2)? != 42 {
+            return None;
         }
+        let ifd = long(4)? as usize;
+        let orientation = entry(ifd, 0x112, 3)
+            .filter(|p| long(p - 4) == Some(1))
+            .and_then(short)
+            .filter(|v| (1..=8).contains(v));
+        let adobe_rgb = (|| {
+            let exif = long(entry(ifd, 0x8769, 4)?)? as usize;
+            if short(entry(exif, 0xa001, 3)?)? != 0xffff {
+                return None;
+            }
+            let interop = long(entry(exif, 0xa005, 4)?)? as usize;
+            data.get(entry(interop, 1, 2)?..)?
+                .get(..3)
+                .filter(|index| *index == b"R03")
+        })()
+        .is_some();
+        Some(Self {
+            orientation,
+            adobe_rgb,
+        })
     }
-    None
 }
 
 fn orient(

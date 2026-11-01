@@ -6,6 +6,7 @@
 
 use alloc::vec::Vec;
 
+use super::color::{ColorModel, Curve, Transform};
 use super::{Bitmap, Budget, DecodeError, EncodeError, Format, Image, Reader, Result, pixel_len};
 
 // MARK: Decoder
@@ -142,6 +143,7 @@ struct BmpHeader {
     colors: usize,
     masks: ChannelMasks,
     pixel_len: usize,
+    transform: Option<Transform>,
 }
 
 impl BmpHeader {
@@ -159,11 +161,13 @@ impl BmpHeader {
 
     fn parse_dib(r: &mut Reader<'_>, icon: bool, icon_colors: usize) -> Result<Self> {
         // CORE and INFO-family headers arrange palettes and masks differently.
+        let start = r.pos;
         let dib_len = r.le32()? as usize;
         if !matches!(dib_len, 12 | 40 | 52 | 56 | 64 | 108 | 124) {
             return Err(DecodeError::UnsupportedFeature);
         }
         let mut h = Reader::new(r.take(dib_len - 4)?);
+        let transform = color_transform(&r.data[start..], dib_len);
         let (width, mut height, top_down) = if dib_len == 12 {
             (u32::from(h.le16()?), u32::from(h.le16()?), false)
         } else {
@@ -235,6 +239,7 @@ impl BmpHeader {
             colors,
             masks,
             pixel_len,
+            transform,
         })
     }
 }
@@ -257,11 +262,12 @@ pub(super) fn decode(data: &[u8]) -> Result<Image> {
         header.file_size
     };
     let mut budget = Budget::default();
-    let (pixels, _) = header.decode_pixels(
+    let (mut pixels, _) = header.decode_pixels(
         &data[header.pixel_offset..end],
         &palette[..palette_len],
         &mut budget,
     )?;
+    header.convert(&mut pixels);
     Ok(Image::still(
         Format::Bmp,
         header.width,
@@ -275,7 +281,9 @@ pub(super) fn decode_dib(data: &[u8]) -> Result<Image> {
     let header = BmpHeader::parse_dib(&mut r, false, 0)?;
     let (palette, palette_len) = header.read_palette(&mut r)?;
     let mut budget = Budget::default();
-    let (pixels, _) = header.decode_pixels(&data[r.pos..], &palette[..palette_len], &mut budget)?;
+    let (mut pixels, _) =
+        header.decode_pixels(&data[r.pos..], &palette[..palette_len], &mut budget)?;
+    header.convert(&mut pixels);
     Ok(Image::still(
         Format::Bmp,
         header.width,
@@ -317,6 +325,7 @@ pub(super) fn decode_icon(
         )
         .ok_or(DecodeError::InvalidData)?;
     header.apply_icon_mask(mask, &mut pixels)?;
+    header.convert(&mut pixels);
     Ok(Image::still(
         Format::Ico,
         header.width,
@@ -325,7 +334,59 @@ pub(super) fn decode_icon(
     ))
 }
 
+// Reads the color space of a V4 or V5 header; profile data offsets count from the header.
+fn color_transform(header: &[u8], dib_len: usize) -> Option<Transform> {
+    const CALIBRATED_RGB: u32 = 0;
+    const PROFILE_EMBEDDED: u32 = u32::from_be_bytes(*b"MBED");
+    if dib_len < 108 {
+        return None;
+    }
+    let value = |at: usize| {
+        Some(u32::from_le_bytes(
+            header.get(at..at + 4)?.try_into().expect("four bytes"),
+        ))
+    };
+    match value(56)? {
+        // Endpoints are the XYZ of each primary, paired with a D65 white.
+        CALIBRATED_RGB => {
+            let mut primaries = [[0.3127, 0.3290]; 4];
+            for (i, primary) in primaries.iter_mut().skip(1).enumerate() {
+                let xyz: [f64; 3] = core::array::from_fn(|j| {
+                    value(60 + (i * 3 + j) * 4)
+                        .map_or(0.0, |v| f64::from(v) / f64::from(1u32 << 30))
+                });
+                let sum = xyz.iter().sum::<f64>();
+                if sum <= 0.0 {
+                    return None;
+                }
+                *primary = [xyz[0] / sum, xyz[1] / sum];
+            }
+            let gammas = [96, 100, 104].map(|at| value(at).unwrap_or(0));
+            if gammas.contains(&0) {
+                return None;
+            }
+            let [r, g, b] = gammas.map(|gamma| Curve::gamma(f64::from(gamma) / 65536.0));
+            Transform::rgb(&primaries, [&r, &g, &b])
+        }
+        PROFILE_EMBEDDED if dib_len == 124 => {
+            let offset = value(112)? as usize;
+            let size = value(116)? as usize;
+            Transform::icc(
+                header.get(offset..offset.checked_add(size)?)?,
+                ColorModel::Rgb,
+            )
+        }
+        _ => None,
+    }
+}
+
 impl BmpHeader {
+    fn convert(&self, pixels: &mut [u8]) {
+        if let Some(transform) = &self.transform {
+            transform.apply(pixels);
+        }
+    }
+
     fn read_palette(&self, r: &mut Reader<'_>) -> Result<([[u8; 4]; 256], usize)> {
         let mut palette = [[0u8, 0, 0, 255]; 256];
         let palette_len = if self.depth <= 8 {

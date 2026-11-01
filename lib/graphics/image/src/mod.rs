@@ -15,6 +15,7 @@ use core::fmt::{self, Display, Formatter};
 use core::time::Duration;
 
 mod encoder;
+pub use color::{linear_to_srgb, srgb_to_linear};
 pub use encoder::{
     EncodeError, EncodeOptions, EncodingStyle, encode, encode_animation,
     encode_animation_with_options, encode_with_options,
@@ -22,6 +23,7 @@ pub use encoder::{
 
 #[cfg(feature = "bmp")]
 mod bmp;
+mod color;
 #[cfg(feature = "gif")]
 mod gif;
 #[cfg(feature = "ico")]
@@ -68,15 +70,6 @@ pub enum Format {
     Ico,
 }
 
-/// The interpretation of decoded color channels. Alpha is always linear.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ColorSpace {
-    /// Standard RGB.
-    Srgb,
-    /// Linear extended sRGB.
-    LinearSrgb,
-}
-
 /// The number of times an animation is played.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum LoopCount {
@@ -86,7 +79,7 @@ pub enum LoopCount {
     Finite(u32),
 }
 
-/// A row-major, straight-alpha RGBA8 bitmap.
+/// A row-major, straight-alpha sRGB RGBA8 bitmap.
 #[derive(Debug, Eq, PartialEq)]
 pub struct Bitmap {
     width: u32,
@@ -115,7 +108,7 @@ impl Bitmap {
         self.height
     }
 
-    /// Returns the row-major, straight-alpha RGBA8 pixels.
+    /// Returns the row-major, straight-alpha sRGB RGBA8 pixels.
     pub fn data(&self) -> &[u8] {
         &self.data
     }
@@ -150,11 +143,11 @@ impl Frame {
     }
 }
 
-/// A decoded image. JPEG orientation is already applied to dimensions and pixels.
+/// A decoded image with sRGB pixels. Embedded color profiles and JPEG orientation are already
+/// applied to the pixels.
 #[derive(Debug, Eq, PartialEq)]
 pub struct Image {
     format: Format,
-    color_space: ColorSpace,
     frames: Vec<Frame>,
     text: Vec<(String, String)>,
     is_animated: bool,
@@ -195,11 +188,6 @@ impl Image {
         self.frames[0].bitmap.height()
     }
 
-    /// Returns the interpretation of the decoded color channels.
-    pub const fn color_space(&self) -> ColorSpace {
-        self.color_space
-    }
-
     /// Returns one or more fully composited frames.
     pub fn frames(&self) -> &[Frame] {
         &self.frames
@@ -229,7 +217,6 @@ impl Image {
     fn still(format: Format, width: u32, height: u32, pixels: Vec<u8>) -> Self {
         Self {
             format,
-            color_space: ColorSpace::Srgb,
             frames: alloc::vec![Frame {
                 bitmap: Bitmap {
                     width,
@@ -673,6 +660,30 @@ mod tests {
     fn ico_reference_corpus() {
         test_support::run_raster_format("ico");
     }
+    #[cfg(feature = "qoi")]
+    #[test]
+    fn qoi_color_reference_corpus() {
+        test_support::run_raster_format("color/qoi");
+    }
+
+    #[cfg(feature = "jpeg")]
+    #[test]
+    fn jpeg_color_reference_corpus() {
+        test_support::run_raster_format("color/jpeg");
+    }
+
+    #[cfg(feature = "png")]
+    #[test]
+    fn png_color_reference_corpus() {
+        test_support::run_raster_format("color/png");
+    }
+
+    #[cfg(feature = "bmp")]
+    #[test]
+    fn bmp_color_reference_corpus() {
+        test_support::run_raster_format("color/bmp");
+    }
+
     #[cfg(any(
         feature = "qoi",
         feature = "jpeg",
