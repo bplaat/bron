@@ -57,9 +57,9 @@ separately from main Cargo workspace.
   the Makefiles
 - `libogc-sys/` has the Rust bindings for the libogc and picolibc functions the programs use
 - `cc` is the C compiler for cc-rs build scripts of Rust projects, like the bundled SQLite of
-  `libsqlite3-sys`: it builds the toolchain and compiles with the Wii flags and picolibc, `ar`
-  links to it for `llvm-ar`. Projects set `TARGET_CC` and `TARGET_AR` to them in
-  `.cargo/config.toml`
+  `libsqlite3-sys`: it builds the toolchain and compiles with the Wii flags and picolibc.
+  `ar` is a separate wrapper for `llvm-ar`. Projects set `TARGET_CC` and `TARGET_AR` to
+  these scripts in `.cargo/config.toml`
 - `run.sh` converts a program to a `.dol` and starts it in Dolphin, extra arguments go to Dolphin
 - `dolphin/runner.cpp` runs a Wii program headless in [Dolphin](https://dolphin-emu.org/)'s core,
   field exact, for scripts and agents: it presses the Wii Remote's and the Nunchuk's buttons, points
