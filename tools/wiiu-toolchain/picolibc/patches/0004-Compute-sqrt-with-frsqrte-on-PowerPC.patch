@@ -1,0 +1,165 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Sun, 18 Oct 2026 21:48:33 +0200
+Subject: [PATCH] Compute sqrt with frsqrte on PowerPC
+
+Without fsqrt the generic sqrt computes one bit at a time. Refine the
+frsqrte estimate with Newton steps and round it correctly with
+Tuckerman's test using fmsub, sqrtf rounds the double result. Use fsqrt
+when the CPU has it.
+---
+ libm/machine/powerpc/CMakeLists.txt |  2 +
+ libm/machine/powerpc/meson.build    |  2 +
+ libm/machine/powerpc/s_sqrt.c       | 90 +++++++++++++++++++++++++++++
+ libm/machine/powerpc/sf_sqrt.c      | 21 +++++++
+ 4 files changed, 115 insertions(+)
+ create mode 100644 libm/machine/powerpc/s_sqrt.c
+ create mode 100644 libm/machine/powerpc/sf_sqrt.c
+
+diff --git a/libm/machine/powerpc/CMakeLists.txt b/libm/machine/powerpc/CMakeLists.txt
+index 1ddda27..b38d3fe 100644
+--- a/libm/machine/powerpc/CMakeLists.txt
++++ b/libm/machine/powerpc/CMakeLists.txt
+@@ -35,4 +35,6 @@
+ 
+ picolibc_sources(
+   complex128.c
++  s_sqrt.c
++  sf_sqrt.c
+   )
+diff --git a/libm/machine/powerpc/meson.build b/libm/machine/powerpc/meson.build
+index c2fac2d..22ef6bd 100644
+--- a/libm/machine/powerpc/meson.build
++++ b/libm/machine/powerpc/meson.build
+@@ -34,6 +34,8 @@
+ #
+ 
+ srcs_libm_machine = [
++  's_sqrt.c',
++  'sf_sqrt.c',
+ ]
+ 
+ srcs_libm_machine_complex128 = [
+diff --git a/libm/machine/powerpc/s_sqrt.c b/libm/machine/powerpc/s_sqrt.c
+new file mode 100644
+index 0000000..c7154bc
+--- /dev/null
++++ b/libm/machine/powerpc/s_sqrt.c
+@@ -0,0 +1,90 @@
++/*
++ * SPDX-License-Identifier: BSD-3-Clause
++ *
++ * Copyright (c) 2026 Bastiaan van der Plaat
++ */
++
++#if defined(_ARCH_PPCSQ) || defined(_ARCH_PPCGR)
++#include "fdlibm.h"
++
++#ifndef _ARCH_PPCSQ
++/* a * b - c rounded once, __builtin_fma is a library call without __FP_FAST_FMA */
++static inline double
++fmsub(double a, double b, double c)
++{
++    double r;
++    __asm__("fmsub %0,%1,%2,%3" : "=f"(r) : "f"(a), "f"(b), "f"(c));
++    return r;
++}
++
++/* The double next to positive s, up or down */
++static inline double
++next(double s, int dir)
++{
++    union {
++        double     d;
++        __uint64_t u;
++    } v = { s };
++    v.u += dir;
++    return v.d;
++}
++#endif
++
++double
++sqrt(double x)
++{
++    if (!isgreater(x, 0.0) || isinf(x)) {
++        if (isless(x, 0.0))
++            return __math_invalid(x);
++        return x + x; /* sqrt(+-0) = +-0, sqrt(NaN) = NaN, sqrt(+inf) = +inf */
++    }
++#ifdef _ARCH_PPCSQ
++    double r;
++    __asm__("fsqrt %0,%1" : "=f"(r) : "f"(x));
++    return r;
++#else
++    /*
++     * Split x into y * 2^(2k) with y in [1, 4), so the residuals below stay
++     * normal, also in the non-IEEE mode that flushes subnormals to zero
++     */
++    __uint32_t hx, lx;
++    EXTRACT_WORDS(hx, lx, x);
++    __int32_t e = hx >> 20;
++    if (e == 0) {
++        __uint64_t m = (__uint64_t)hx << 32 | lx;
++        int        shift = __builtin_clzll(m) - 11;
++        m <<= shift;
++        hx = m >> 32;
++        lx = (__uint32_t)m;
++        e = 1 - shift;
++    }
++    e -= 1023;
++    double y;
++    INSERT_WORDS(y, (hx & 0x000fffff) | (__uint32_t)(1023 + (e & 1)) << 20, lx);
++
++    /* frsqrte guesses 1 / sqrt(y) to 5 bits, every Newton step doubles them */
++    double r, h = 0.5 * y;
++    __asm__("frsqrte %0,%1" : "=f"(r) : "f"(y));
++    for (int i = 0; i < 4; i++)
++        r = r * (1.5 - h * r * r);
++    double s = y * r;
++    s -= fmsub(s, s, y) * (0.5 * r);
++
++    /* Tuckerman's test: s is sqrt(y) rounded to nearest when s * prev(s) < y <= s * next(s) */
++    double t;
++    while (fmsub(s, t = next(s, 1), y) < 0)
++        s = t;
++    while (fmsub(s, t = next(s, -1), y) >= 0)
++        s = t;
++
++    GET_HIGH_WORD(hx, s);
++    SET_HIGH_WORD(s, hx + ((__uint32_t)(e >> 1) << 20));
++    return s;
++#endif
++}
++
++_MATH_ALIAS_d_d(sqrt)
++
++#else
++#include "../../math/s_sqrt.c"
++#endif
+diff --git a/libm/machine/powerpc/sf_sqrt.c b/libm/machine/powerpc/sf_sqrt.c
+new file mode 100644
+index 0000000..1da4276
+--- /dev/null
++++ b/libm/machine/powerpc/sf_sqrt.c
+@@ -0,0 +1,21 @@
++/*
++ * SPDX-License-Identifier: BSD-3-Clause
++ *
++ * Copyright (c) 2026 Bastiaan van der Plaat
++ */
++
++#if defined(_ARCH_PPCSQ) || defined(_ARCH_PPCGR)
++#include "fdlibm.h"
++
++/* Rounding twice is harmless, a double has more than 2 * 24 + 2 bits */
++float
++sqrtf(float x)
++{
++    return (float)sqrt((double)x);
++}
++
++_MATH_ALIAS_f_f(sqrt)
++
++#else
++#include "../../math/sf_sqrt.c"
++#endif

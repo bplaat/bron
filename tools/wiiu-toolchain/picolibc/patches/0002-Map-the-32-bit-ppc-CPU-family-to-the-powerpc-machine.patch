@@ -1,0 +1,21 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Sun, 18 Oct 2026 21:08:28 +0200
+Subject: [PATCH] Map the 32-bit ppc CPU family to the powerpc machine files
+
+---
+ meson.build | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/meson.build b/meson.build
+index 93daa5d..e72b979 100644
+--- a/meson.build
++++ b/meson.build
+@@ -93,6 +93,7 @@ cpu_family_aliases = {
+ 		       # or1k
+ 		       'or1knd': 'or1k',
+ 		       # powerpc
++		       'ppc' : 'powerpc',
+ 		       'powerpc64' : 'powerpc',
+ 		       'ppc64' : 'powerpc',
+ 		       'ppc64le' : 'powerpc',

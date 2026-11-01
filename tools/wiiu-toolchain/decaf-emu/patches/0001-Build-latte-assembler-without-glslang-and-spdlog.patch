@@ -1,0 +1,138 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Sun, 1 Nov 2026 20:35:05 +0100
+Subject: [PATCH] Build latte-assembler without glslang and spdlog
+
+The compile command needs glslang and AMD's Windows shader analyzer, the
+toolchain only assembles shaders. The assertions print without common's
+spdlog logger.
+---
+ tools/latte-assembler/src/main.cpp | 88 +++++-------------------------
+ 1 file changed, 15 insertions(+), 73 deletions(-)
+
+diff --git a/tools/latte-assembler/src/main.cpp b/tools/latte-assembler/src/main.cpp
+index 8a3324a..1232cfe 100644
+--- a/tools/latte-assembler/src/main.cpp
++++ b/tools/latte-assembler/src/main.cpp
+@@ -1,15 +1,25 @@
+ #include "shader_assembler.h"
+ #include "gfd_comment_parser.h"
+-#include "glsl_compiler.h"
+ 
++#include <common/decaf_assert.h>
++#include <cstdlib>
+ #include <excmd.h>
+ #include <fmt/core.h>
+ #include <fstream>
+-#include <glslang/Public/ShaderLang.h>
+ #include <memory>
+ #include <optional>
+ #include <string>
+-#include <spdlog/spdlog.h>
++
++// Without common's logger and stack traces, which need spdlog
++void
++assertFailed(const char *file,
++             unsigned line,
++             const char *expression,
++             const std::string &message)
++{
++   fmt::print(stderr, "Assertion failed: {} at {}:{} {}\n", expression, file, line, message);
++   std::abort();
++}
+ 
+ static bool
+ readFile(const std::string &path,
+@@ -55,10 +65,7 @@ int main(int argc, char **argv)
+                   excmd::description { "Pixel shader input." },
+                   excmd::value<std::string> {})
+       .add_option("align",
+-                  excmd::description { "Align data in gsh file." })
+-      .add_option("amd-shader-analyzer",
+-                  excmd::description{ "Path to AMD Shader Analyzer exe." },
+-                  excmd::value<std::string> {});
++                  excmd::description { "Align data in gsh file." });
+ 
+    parser.add_command("help")
+       .add_argument("command", excmd::value<std::string> { });
+@@ -66,9 +73,6 @@ int main(int argc, char **argv)
+    parser.add_command("assemble")
+       .add_argument("gsh", excmd::value<std::string> { });
+ 
+-   parser.add_command("compile")
+-      .add_argument("gsh", excmd::value<std::string> { });
+-
+    // Parse command line
+    try {
+       options = parser.parse(argc, argv);
+@@ -90,69 +94,7 @@ int main(int argc, char **argv)
+ 
+ 
+    try {
+-      if (options.has("compile")) {
+-         if (!options.has("amd-shader-analyzer")) {
+-            std::cout << "Compile requires amd-shader-analyzer" << std::endl;
+-            return -1;
+-         }
+-
+-         if (!options.has("vsh") || !options.has("psh")) {
+-            std::cout << "Compile requires vsh and psh" << std::endl;
+-            return -1;
+-         }
+-
+-         auto vertexShaderPath = options.get<std::string>("vsh");
+-         auto pixelShaderPath = options.get<std::string>("psh");
+-         auto shaderAnalyzerPath = options.get<std::string>("amd-shader-analyzer");
+-         auto outGshPath = options.get<std::string>("gsh");
+-         glslang::InitializeProcess();
+-
+-         auto vertexShaderAssembly = compileShader(shaderAnalyzerPath, vertexShaderPath, ShaderType::VertexShader);
+-         if (vertexShaderAssembly.empty()) {
+-            std::cout << "Failed to compile vertex shader " << vertexShaderPath << std::endl;
+-            return -1;
+-         }
+-
+-         auto pixelShaderAssembly = compileShader(shaderAnalyzerPath, pixelShaderPath, ShaderType::PixelShader);
+-         if (pixelShaderAssembly.empty()) {
+-            std::cout << "Failed to compile pixel shader " << pixelShaderPath << std::endl;
+-            return -1;
+-         }
+-
+-         auto vertexShader = Shader { };
+-         vertexShader.path = vertexShaderPath;
+-         vertexShader.type = ShaderType::VertexShader;
+-         if (!assembleShaderCode(vertexShader, vertexShaderAssembly)) {
+-            std::cout << "Failed to assemble vertex shader" << std::endl;
+-            return -1;
+-         }
+-
+-         auto pixelShader = Shader { };
+-         pixelShader.path = pixelShaderPath;
+-         pixelShader.type = ShaderType::PixelShader;
+-         if (!assembleShaderCode(pixelShader, pixelShaderAssembly)) {
+-            std::cout << "Failed to assemble pixel shader" << std::endl;
+-            return -1;
+-         }
+-
+-         auto gfd = gfd::GFDFile { };
+-         if (!gfdAddVertexShader(gfd, vertexShader)) {
+-            std::cout << "Failed to add vertex shader to gfd" << std::endl;
+-            return -1;
+-         }
+-
+-         if (!gfdAddPixelShader(gfd, pixelShader)) {
+-            std::cout << "Failed to add pixel shader to gfd" << std::endl;
+-            return -1;
+-         }
+-
+-         if (!gfd::writeFile(gfd, outGshPath, options.has("align"))) {
+-            std::cout << "Failed to add write gfd" << std::endl;
+-            return -1;
+-         }
+-
+-         glslang::FinalizeProcess();
+-      } else if (options.has("assemble")) {
++      if (options.has("assemble")) {
+          auto dst = options.get<std::string>("gsh");
+          gfd::GFDFile gfd;
+ 

@@ -1,0 +1,170 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Sun, 1 Nov 2026 21:09:17 +0100
+Subject: [PATCH] Implement the system functions picolibc leaves to the
+ platform
+
+Adds wutpicolibc, which replaces wutcrt, wutnewlib and wutmalloc for
+picolibc: __rpx_start runs the constructors and main, malloc uses the
+default heap of coreinit, the standard streams write lines to OSReport
+and gettimeofday reads the time base.
+---
+ libraries/wutpicolibc/wut_picolibc.c | 149 +++++++++++++++++++++++++++
+ 1 file changed, 149 insertions(+)
+ create mode 100644 libraries/wutpicolibc/wut_picolibc.c
+
+diff --git a/libraries/wutpicolibc/wut_picolibc.c b/libraries/wutpicolibc/wut_picolibc.c
+new file mode 100644
+index 0000000..86af71f
+--- /dev/null
++++ b/libraries/wutpicolibc/wut_picolibc.c
+@@ -0,0 +1,149 @@
++/*
++ * The startup code and the system functions picolibc leaves to the platform:
++ * Cafe OS calls __rpx_start, malloc uses the default heap of coreinit, the
++ * standard streams write to OSReport and the clock reads the time base.
++ */
++
++#include <coreinit/debug.h>
++#include <coreinit/exit.h>
++#include <coreinit/memdefaultheap.h>
++#include <coreinit/memexpheap.h>
++#include <coreinit/time.h>
++#include <errno.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <sys/time.h>
++
++// The default heap of Cafe OS aligns its blocks to 64 bytes, like wutmalloc
++#define HEAP_ALIGNMENT 0x40
++// The time base starts at 2000-01-01, the Unix epoch 30 years earlier
++#define EPOCH_DIFF_SECS 946684800ull
++
++int
++main(int argc, char **argv);
++void
++__libc_init_array(void);
++
++void
++__rpx_start(int argc, char **argv)
++{
++   __libc_init_array();
++   exit(main(argc, argv));
++}
++
++void
++_exit(int status)
++{
++   RPLWRAP(exit)(status);
++   __builtin_unreachable();
++}
++
++void *
++malloc(size_t size)
++{
++   return MEMAllocFromDefaultHeapEx(size, HEAP_ALIGNMENT);
++}
++
++void *
++memalign(size_t alignment, size_t size)
++{
++   return MEMAllocFromDefaultHeapEx((size + alignment - 1) & ~(alignment - 1),
++                                    alignment > HEAP_ALIGNMENT ? alignment : HEAP_ALIGNMENT);
++}
++
++void *
++aligned_alloc(size_t alignment, size_t size)
++{
++   return memalign(alignment, size);
++}
++
++int
++posix_memalign(void **pointer, size_t alignment, size_t size)
++{
++   *pointer = memalign(alignment, size);
++   return *pointer ? 0 : ENOMEM;
++}
++
++void *
++calloc(size_t count, size_t size)
++{
++   size_t total;
++   if (__builtin_mul_overflow(count, size, &total)) {
++      return NULL;
++   }
++
++   void *pointer = malloc(total);
++   if (pointer) {
++      memset(pointer, 0, total);
++   }
++   return pointer;
++}
++
++void
++free(void *pointer)
++{
++   if (pointer) {
++      MEMFreeToDefaultHeap(pointer);
++   }
++}
++
++size_t
++malloc_usable_size(void *pointer)
++{
++   return pointer ? MEMGetSizeForMBlockExpHeap(pointer) : 0;
++}
++
++void *
++realloc(void *pointer, size_t size)
++{
++   void *resized = malloc(size);
++   if (resized && pointer) {
++      size_t oldSize = malloc_usable_size(pointer);
++      memcpy(resized, pointer, oldSize < size ? oldSize : size);
++      free(pointer);
++   }
++   return resized;
++}
++
++// OSReport prints whole lines, so the streams buffer until a newline or a
++// full buffer
++static char sLine[256];
++static size_t sLineLength;
++
++static int
++consoleFlush(FILE *file)
++{
++   (void)file;
++   if (sLineLength > 0) {
++      OSReport("%.*s", (int)sLineLength, sLine);
++      sLineLength = 0;
++   }
++   return 0;
++}
++
++static int
++consolePut(char c, FILE *file)
++{
++   sLine[sLineLength++] = c;
++   if (c == '\n' || sLineLength == sizeof(sLine)) {
++      consoleFlush(file);
++   }
++   return (unsigned char)c;
++}
++
++static FILE sConsole = FDEV_SETUP_STREAM(consolePut, NULL, consoleFlush, _FDEV_SETUP_WRITE);
++FILE *const stdin  = &sConsole;
++FILE *const stdout = &sConsole;
++FILE *const stderr = &sConsole;
++
++int
++gettimeofday(struct timeval *restrict tv, void *restrict tz)
++{
++   (void)tz;
++   OSTime time      = OSGetTime();
++   uint64_t seconds = OSTicksToSeconds(time);
++   tv->tv_sec       = (time_t)(seconds + EPOCH_DIFF_SECS);
++   tv->tv_usec      = (suseconds_t)OSTicksToMicroseconds(time - OSSecondsToTicks(seconds));
++   return 0;
++}

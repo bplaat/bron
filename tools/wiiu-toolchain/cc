@@ -1,0 +1,16 @@
+#!/bin/sh
+set -eu
+dir=$(cd "$(dirname "$0")" && pwd)
+
+# Apple's clang can't target PowerPC, so prefer Homebrew's LLVM like build.sh
+llvm=''
+for bin in /opt/homebrew/opt/llvm/bin/ /usr/local/opt/llvm/bin/; do
+    [ -d "$bin" ] && llvm="$bin" && break
+done
+
+"$dir/build.sh" >&2
+build="$dir/../../target/wiiu-toolchain"
+exec "${llvm}clang" --target=powerpc-none-eabi -mcpu=750 -ffreestanding -nostdlibinc \
+    -ffunction-sections -fdata-sections -DESPRESSO -DGEKKO -D__WIIU__ -D__WUT__ -D_DEFAULT_SOURCE -Os \
+    -I"$build/sysroot/include" -I"$build/wut/include" -I"$build/wut/libraries/libwhb/include" \
+    -I"$build/wut/libraries/libgfd/include" -I"$build/include" "$@"

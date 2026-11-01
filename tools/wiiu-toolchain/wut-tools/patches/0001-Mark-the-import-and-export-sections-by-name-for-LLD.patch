@@ -1,0 +1,64 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Sun, 1 Nov 2026 20:39:48 +0100
+Subject: [PATCH] Mark the import and export sections by name for LLD
+
+LLD rejects sections with the RPL import and export types, so rplimportgen
+writes the import stubs in progbits sections and elf2rpl gives the sections
+their RPL types by name.
+---
+ src/elf2rpl/main.cpp              | 12 ++++++++++++
+ src/rplimportgen/rplimportgen.cpp |  8 ++++----
+ 2 files changed, 16 insertions(+), 4 deletions(-)
+
+diff --git a/src/elf2rpl/main.cpp b/src/elf2rpl/main.cpp
+index 25fa859..97ea57c 100644
+--- a/src/elf2rpl/main.cpp
++++ b/src/elf2rpl/main.cpp
+@@ -139,6 +139,18 @@ readElf(ElfFile &file, const std::string &filename)
+       section->name = shStrTab + section->header.name;
+    }
+ 
++   // LLD doesn't link sections of the RPL types, so the import and export
++   // sections can also be marked by their names
++   for (auto &section : file.sections) {
++      if (!section->name.compare(0, 9, ".fimport_") ||
++          !section->name.compare(0, 9, ".dimport_")) {
++         section->header.type = elf::SHT_RPL_IMPORTS;
++      } else if (section->name == ".fexports" ||
++                 section->name == ".dexports") {
++         section->header.type = elf::SHT_RPL_EXPORTS;
++      }
++   }
++
+    // Mark debugging sections as discarded
+    uint32_t index = 0;
+    file.num_discarded_sections = 0;
+diff --git a/src/rplimportgen/rplimportgen.cpp b/src/rplimportgen/rplimportgen.cpp
+index 259427a..b6f7441 100644
+--- a/src/rplimportgen/rplimportgen.cpp
++++ b/src/rplimportgen/rplimportgen.cpp
+@@ -30,9 +30,9 @@ writeExports(std::ofstream &out,
+              const std::vector<std::string> &exports)
+ {
+    if (isData) {
+-      out << ".section .dimport_" << moduleName << ", \"a\", @0x80000002" << std::endl;
++      out << ".section .dimport_" << moduleName << ", \"a\", @progbits" << std::endl;
+    } else {
+-      out << ".section .fimport_" << moduleName << ", \"ax\", @0x80000002" << std::endl;
++      out << ".section .fimport_" << moduleName << ", \"ax\", @progbits" << std::endl;
+    }
+ 
+    out << ".align 4" << std::endl;
+@@ -65,9 +65,9 @@ writeExports(std::ofstream &out,
+       if (i < exports.size()) {
+          // Basically do -ffunction-sections
+          if (isData) {
+-            out << ".section .dimport_" << moduleName << "." << exports[i] << ", \"a\", @0x80000002" << std::endl;
++            out << ".section .dimport_" << moduleName << "." << exports[i] << ", \"a\", @progbits" << std::endl;
+          } else {
+-            out << ".section .fimport_" << moduleName << "." << exports[i] << ", \"ax\", @0x80000002" << std::endl;
++            out << ".section .fimport_" << moduleName << "." << exports[i] << ", \"ax\", @progbits" << std::endl;
+          }
+          out << ".global " << exports[i] << std::endl;
+          out << ".type " << exports[i] << ", " << type << std::endl;

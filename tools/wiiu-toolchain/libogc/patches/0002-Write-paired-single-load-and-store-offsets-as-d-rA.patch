@@ -1,0 +1,1040 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Sat, 10 Oct 2026 12:35:54 +0200
+Subject: [PATCH] Write paired single load and store offsets as d, rA
+
+Assembler macros can't take d(rA) apart, so psq_l f1,8(r3),0,0 is
+written as psq_l f1,8,r3,0,0.
+---
+ libogc/gu.c             |  54 ++---
+ libogc/gu_ps_concat44.S |  48 ++---
+ libogc/gu_psasm.S       | 454 ++++++++++++++++++++--------------------
+ 3 files changed, 278 insertions(+), 278 deletions(-)
+
+diff --git a/libogc/gu.c b/libogc/gu.c
+index 1c6b301..32ebdfb 100644
+--- a/libogc/gu.c
++++ b/libogc/gu.c
+@@ -851,14 +851,14 @@ void ps_guQuatAdd(register const guQuaternion *a,const register guQuaternion *b,
+ 	register f32 tmp0,tmp1;
+ 
+ 	__asm__ __volatile__ (
+-		"psq_l		%0,0(%2),0,0\n"		// [ax][ay]
+-		"psq_l		%1,0(%3),0,0\n"		// [bx][by]
++		"psq_l		%0,0,%2,0,0\n"		// [ax][ay]
++		"psq_l		%1,0,%3,0,0\n"		// [bx][by]
+ 		"ps_add		%1,%0,%1\n"			// [ax+bx][ay+by]
+-		"psq_st		%1,0(%4),0,0\n"		// X = [ax+bx], Y = [ay+by]
+-		"psq_l		%0,8(%2),0,0\n"		// [az][aw]
+-		"psq_l		%1,8(%3),0,0\n"		// [bz][bw]
++		"psq_st		%1,0,%4,0,0\n"		// X = [ax+bx], Y = [ay+by]
++		"psq_l		%0,8,%2,0,0\n"		// [az][aw]
++		"psq_l		%1,8,%3,0,0\n"		// [bz][bw]
+ 		"ps_add		%1,%0,%1\n"			// [az+bz][aw+bw]
+-		"psq_st		%1,8(%4),0,0"		// Z = [az+bz], W = [aw+bw]
++		"psq_st		%1,8,%4,0,0"		// Z = [az+bz], W = [aw+bw]
+ 		: "=&f"(tmp0),"=&f"(tmp1)
+ 		: "b"(a),"b"(b),"b"(ab)
+ 		: "memory"
+@@ -880,14 +880,14 @@ void ps_guQuatSub(register const guQuaternion *a,register const guQuaternion *b,
+ 	register f32 tmp0,tmp1;
+ 
+ 	__asm__ __volatile__ (
+-		"psq_l		%0,0(%2),0,0\n"			// [ax][ay]
+-		"psq_l		%1,0(%3),0,0\n"			// [bx][by]
++		"psq_l		%0,0,%2,0,0\n"			// [ax][ay]
++		"psq_l		%1,0,%3,0,0\n"			// [bx][by]
+ 		"ps_sub		%1,%0,%1\n"				// [ax-bx][ay-by]
+-		"psq_st		%1,0(%4),0,0\n"			// X = [ax-bx], Y = [ay-by]
+-		"psq_l		%0,8(%2),0,0\n"			// [az][aw]
+-		"psq_l		%1,8(%3),0,0\n"			// [bz][bw]
++		"psq_st		%1,0,%4,0,0\n"			// X = [ax-bx], Y = [ay-by]
++		"psq_l		%0,8,%2,0,0\n"			// [az][aw]
++		"psq_l		%1,8,%3,0,0\n"			// [bz][bw]
+ 		"ps_sub		%1,%0,%1\n"				// [az-bz][aw-bw]
+-		"psq_st		%1,8(%4),0,0"			// Z = [az-bz], W = [aw-bw]
++		"psq_st		%1,8,%4,0,0"			// Z = [az-bz], W = [aw-bw]
+ 		: "=&f"(tmp0),"=&f"(tmp1)
+ 		: "b"(a),"b"(b),"b"(ab)
+ 		: "memory"
+@@ -918,11 +918,11 @@ void ps_guQuatMultiply(register const guQuaternion *a,register const guQuaternio
+ 	register f32 tmp0,tmp1,tmp2,tmp3,tmp4,tmp5,tmp6,tmp7;
+ 	
+ 	__asm__ __volatile__ (
+-		"psq_l		%0,0(%12),0,0\n"		// [px][py]
+-		"psq_l		%1,8(%12),0,0\n"		// [pz][pw]
+-		"psq_l		%2,0(%13),0,0\n"		// [qx][qy]
++		"psq_l		%0,0,%12,0,0\n"		// [px][py]
++		"psq_l		%1,8,%12,0,0\n"		// [pz][pw]
++		"psq_l		%2,0,%13,0,0\n"		// [qx][qy]
+ 		"ps_neg		%4,%0\n"				// [-px][-py]
+-		"psq_l		%3,8(%13),0,0\n"		// [qz][qw]
++		"psq_l		%3,8,%13,0,0\n"		// [qz][qw]
+ 		"ps_neg		%5,%1\n"				// [-pz][-pw]
+ 		"ps_merge01	%6,%4,%0\n"				// [-px][py]
+ 		"ps_muls0	%8,%1,%2\n"				// [pz*qx][pw*qx]
+@@ -937,9 +937,9 @@ void ps_guQuatMultiply(register const guQuaternion *a,register const guQuaternio
+ 		"ps_madds1	%10,%0,%3,%10\n"		// [px*qw+-pz*qy][py*qw+pw*qy]
+ 		"ps_merge10	%9,%9,%9\n"				// [pw*qz+-py*qx][-pz*qz+-px*qx]
+ 		"ps_add		%8,%8,%10\n"			// [py*qz+pw*qx+px*qw+-pz*qy][-px*qz+pz*qx+py*qw+pw*qy]
+-		"psq_st		%8,0(%14),0,0\n"		// X = [py*qz+pw*qx+px*qw+-pz*qy], Y = [-px*qz+pz*qx+py*qw+pw*qy]
++		"psq_st		%8,0,%14,0,0\n"		// X = [py*qz+pw*qx+px*qw+-pz*qy], Y = [-px*qz+pz*qx+py*qw+pw*qy]
+ 		"ps_sub		%9,%9,%11\n"			// [pw*qz+-py*qx--pz*qw+-px*qy][-pz*qz+-px*qx--pw*qw+py*qy]
+-		"psq_st		%9,8(%14),0,0"			// Z = [pw*qz+-py*qx--pz*qw+-px*qy], W = [-pz*qz+-px*qx--pw*qw+py*qy]
++		"psq_st		%9,8,%14,0,0"			// Z = [pw*qz+-py*qx--pz*qw+-px*qy], W = [-pz*qz+-px*qx--pw*qw+py*qy]
+ 		: "=&f"(aXY),"=&f"(aZW),"=&f"(bXY),"=&f"(bZW),"=&f"(tmp0),"=&f"(tmp1),"=&f"(tmp2),"=&f"(tmp3),"=&f"(tmp4),"=&f"(tmp5),"=&f"(tmp6),"=&f"(tmp7)
+ 		: "b"(a),"b"(b),"b"(ab)
+ 		: "memory"
+@@ -971,9 +971,9 @@ void ps_guQuatNormalize(register const guQuaternion *a,register guQuaternion *d)
+ 	register f32 axy,azw,tmp0,tmp1,tmp2,tmp3;
+ 
+ 	__asm__ __volatile__ (
+-		"psq_l		%0,0(%6),0,0\n"		// [ax][ay]
++		"psq_l		%0,0,%6,0,0\n"		// [ax][ay]
+ 		"ps_mul		%2,%0,%0\n"			// [ax*ax][ay*ay]
+-		"psq_l		%1,8(%6),0,0\n"		// [az][aw]
++		"psq_l		%1,8,%6,0,0\n"		// [az][aw]
+ 		"ps_madd	%2,%1,%1,%2\n"		// [az*az+ax*ax][aw*aw+ay*ay]
+ 		"ps_sum0	%2,%2,%2,%2\n"		// [az*az+ax*ax+aw*aw+ay*ay][aw*aw+ay*ay]
+ 		"frsqrte	%3,%2\n"			// reciprocal sqrt estimated
+@@ -985,8 +985,8 @@ void ps_guQuatNormalize(register const guQuaternion *a,register guQuaternion *d)
+ 		"ps_sel		%3,%2,%3,%10\n"		// NaN check: if(mag==0.0f)
+ 		"ps_muls0	%0,%0,%3\n"			// [ax*rsqmag][ay*rsqmag]
+ 		"ps_muls0	%1,%1,%3\n"			// [az*rsqmag][aw*rsqmag]
+-		"psq_st		%0,0(%7),0,0\n"		// X = [az*rsqmag], Y = [aw*rsqmag]
+-		"psq_st		%1,8(%7),0,0\n"		// Z = [az*rsqmag], W = [aw*rsqmag]	
++		"psq_st		%0,0,%7,0,0\n"		// X = [az*rsqmag], Y = [aw*rsqmag]
++		"psq_st		%1,8,%7,0,0\n"		// Z = [az*rsqmag], W = [aw*rsqmag]	
+ 		: "=&f"(axy),"=&f"(azw),"=&f"(tmp0),"=&f"(tmp1),"=&f"(tmp2),"=&f"(tmp3)
+ 		: "b"(a),"b"(d),"f"(c_half),"f"(c_three),"f"(c_zero)
+ 		: "memory"
+@@ -1015,10 +1015,10 @@ void ps_guQuatInverse(register const guQuaternion *a,register guQuaternion *d)
+ 	register f32 axy,azw,tmp0,tmp1,tmp2,tmp3,tmp4,tmp5;
+ 
+ 	__asm__ __volatile__ (
+-		"psq_l		%0,0(%8),0,0\n"		// [ax][ay]
++		"psq_l		%0,0,%8,0,0\n"		// [ax][ay]
+ 		"ps_mul		%2,%0,%0\n"			// [ax*ax][ay*ay]
+ 		"ps_sub		%3,%10,%10\n"		// [1 - 1][1 - 1]
+-		"psq_l		%1,8(%8),0,0\n"		// [az][aw]
++		"psq_l		%1,8,%8,0,0\n"		// [az][aw]
+ 		"ps_madd	%2,%1,%1,%2\n"		// [az*az+ax*ax][aw*aw+ay*ay]
+ 		"ps_add		%7,%0,%10\n"		// [1 + 1][1 + 1]
+ 		"ps_sum0	%2,%2,%2,%2\n"		// [az*az+ax*ax+aw*aw+ay*ay][aw*aw+ay*ay]
+@@ -1036,10 +1036,10 @@ void ps_guQuatInverse(register const guQuaternion *a,register guQuaternion *d)
+ 		"ps_neg		%7,%4\n"
+ 		"ps_muls1	%5,%4,%1\n"
+ 		"ps_muls0	%0,%0,%7\n"
+-		"psq_st		%5,12(%9),1,0\n"
++		"psq_st		%5,12,%9,1,0\n"
+ 		"ps_muls0	%6,%1,%7\n"
+-		"psq_st		%0,0(%9),0,0\n"
+-		"psq_st		%6,8(%9),1,0\n"
++		"psq_st		%0,0,%9,0,0\n"
++		"psq_st		%6,8,%9,1,0\n"
+ 		: "=&f"(axy),"=&f"(azw),"=&f"(tmp0),"=&f"(tmp1),"=&f"(tmp2),"=&f"(tmp3),"=&f"(tmp4),"=&f"(tmp5)
+ 		: "b"(a),"b"(d),"f"(c_one)
+ 	);
+diff --git a/libogc/gu_ps_concat44.S b/libogc/gu_ps_concat44.S
+index f3bf0e0..bb87367 100644
+--- a/libogc/gu_ps_concat44.S
++++ b/libogc/gu_ps_concat44.S
+@@ -54,28 +54,28 @@ ps_guMtx44Concat:
+ 	 * The code is less readable than what it could be because we intertwine
+ 	 * the instructions in order to avoid data hazards.
+ 	 */
+-	psq_l		A00_A01,0(r3),0,0
+-	psq_l		B00_B01,0(r4),0,0
+-	psq_l		B02_B03,8(r4),0,0
+-	psq_l		B10_B11,16(r4),0,0
++	psq_l		A00_A01,0,r3,0,0
++	psq_l		B00_B01,0,r4,0,0
++	psq_l		B02_B03,8,r4,0,0
++	psq_l		B10_B11,16,r4,0,0
+ 	ps_muls0	D00_D01,B00_B01,A00_A01
+-	psq_l		A02_A03,8(r3),0,0
++	psq_l		A02_A03,8,r3,0,0
+ 	ps_muls0	D02_D03,B02_B03,A00_A01
+-	psq_l		B12_B13,24(r4),0,0
++	psq_l		B12_B13,24,r4,0,0
+ 	ps_madds1	D00_D01,B10_B11,A00_A01,D00_D01
+-	psq_l		B20_B21,32(r4),0,0
++	psq_l		B20_B21,32,r4,0,0
+ 	ps_madds1	D02_D03,B12_B13,A00_A01,D02_D03
+-	psq_l		B22_B23,40(r4),0,0
++	psq_l		B22_B23,40,r4,0,0
+ 	ps_madds0	D00_D01,B20_B21,A02_A03,D00_D01
+-	psq_l		B30_B31,48(r4),0,0
++	psq_l		B30_B31,48,r4,0,0
+ 	ps_madds0	D02_D03,B22_B23,A02_A03,D02_D03
+-	psq_l		B32_B33,56(r4),0,0
++	psq_l		B32_B33,56,r4,0,0
+ 	ps_madds1	D00_D01,B30_B31,A02_A03,D00_D01
+-	psq_l		A10_A11,16(r3),0,0
++	psq_l		A10_A11,16,r3,0,0
+ 	ps_madds1	D02_D03,B32_B33,A02_A03,D02_D03
+-	psq_st		D00_D01,0(r5),0,0
+-	psq_l		A12_A13,24(r3),0,0
+-	psq_st		D02_D03,8(r5),0,0
++	psq_st		D00_D01,0,r5,0,0
++	psq_l		A12_A13,24,r3,0,0
++	psq_st		D02_D03,8,r5,0,0
+ 
+     // Second row
+ 	ps_muls0	D10_D11,B00_B01,A10_A11
+@@ -84,12 +84,12 @@ ps_guMtx44Concat:
+ 	ps_madds0	D12_D13,B22_B23,A12_A13,D12_D13
+ 	ps_madds1	D10_D11,B10_B11,A10_A11,D10_D11
+ 	ps_madds1	D12_D13,B12_B13,A10_A11,D12_D13
+-	psq_l		A20_A21,32(r3),0,0
++	psq_l		A20_A21,32,r3,0,0
+ 	ps_madds1	D10_D11,B30_B31,A12_A13,D10_D11
+-	psq_l		A22_A23,40(r3),0,0
++	psq_l		A22_A23,40,r3,0,0
+ 	ps_madds1	D12_D13,B32_B33,A12_A13,D12_D13
+-	psq_st		D10_D11,16(r5),0,0
+-	psq_st		D12_D13,24(r5),0,0
++	psq_st		D10_D11,16,r5,0,0
++	psq_st		D12_D13,24,r5,0,0
+ 
+     // Third row
+ 	ps_muls0	D20_D21,B00_B01,A20_A21
+@@ -98,12 +98,12 @@ ps_guMtx44Concat:
+ 	ps_madds0	D22_D23,B22_B23,A22_A23,D22_D23
+ 	ps_madds1	D20_D21,B10_B11,A20_A21,D20_D21
+ 	ps_madds1	D22_D23,B12_B13,A20_A21,D22_D23
+-	psq_l		A30_A31,48(r3),0,0
++	psq_l		A30_A31,48,r3,0,0
+ 	ps_madds1	D20_D21,B30_B31,A22_A23,D20_D21
+-	psq_l		A32_A33,56(r3),0,0
++	psq_l		A32_A33,56,r3,0,0
+ 	ps_madds1	D22_D23,B32_B33,A22_A23,D22_D23
+-	psq_st		D20_D21,32(r5),0,0
+-	psq_st		D22_D23,40(r5),0,0
++	psq_st		D20_D21,32,r5,0,0
++	psq_st		D22_D23,40,r5,0,0
+ 
+     // Fourth row
+ 	ps_muls0	D30_D31,B00_B01,A30_A31
+@@ -114,8 +114,8 @@ ps_guMtx44Concat:
+ 	ps_madds1	D32_D33,B12_B13,A30_A31,D32_D33
+ 	ps_madds1	D30_D31,B30_B31,A32_A33,D30_D31
+ 	ps_madds1	D32_D33,B32_B33,A32_A33,D32_D33
+-	psq_st		D30_D31,48(r5),0,0
+-	psq_st		D32_D33,56(r5),0,0
++	psq_st		D30_D31,48,r5,0,0
++	psq_st		D32_D33,56,r5,0,0
+ 
+ 	blr
+ 
+diff --git a/libogc/gu_psasm.S b/libogc/gu_psasm.S
+index 485499c..8b8d540 100644
+--- a/libogc/gu_psasm.S
++++ b/libogc/gu_psasm.S
+@@ -41,51 +41,51 @@
+ 	//r3 = mtxA, r4 = mtxB, r5 = mtxAB
+ ps_guMtxConcat:
+ 	stwu		r1,-64(r1)
+-	psq_l		A00_A01,0(r3),0,0
++	psq_l		A00_A01,0,r3,0,0
+ 	stfd		fr14,8(r1)
+-	psq_l		B00_B01,0(r4),0,0
+-	psq_l		B02_B03,8(r4),0,0
++	psq_l		B00_B01,0,r4,0,0
++	psq_l		B02_B03,8,r4,0,0
+ 	stfd		fr15,16(r1)
+ 	stfd		fr31,40(r1)
+-	psq_l		B10_B11,16(r4),0,0
++	psq_l		B10_B11,16,r4,0,0
+ 	ps_muls0	D00_D01,B00_B01,A00_A01
+-	psq_l		A10_A11,16(r3),0,0
++	psq_l		A10_A11,16,r3,0,0
+ 	ps_muls0	D02_D03,B02_B03,A00_A01
+-	psq_l		UNIT01,Unit01@sdarel(r13),0,0
++	psq_l		UNIT01,Unit01@sdarel,r13,0,0
+ 	ps_muls0	D10_D11,B00_B01,A10_A11
+-	psq_l		B12_B13,24(r4),0,0
++	psq_l		B12_B13,24,r4,0,0
+ 	ps_muls0	D12_D13,B02_B03,A10_A11
+-	psq_l		A02_A03,8(r3),0,0
++	psq_l		A02_A03,8,r3,0,0
+ 	ps_madds1	D00_D01,B10_B11,A00_A01,D00_D01
+-	psq_l		A12_A13,24(r3),0,0
++	psq_l		A12_A13,24,r3,0,0
+ 	ps_madds1	D10_D11,B10_B11,A10_A11,D10_D11
+-	psq_l		B20_B21,32(r4),0,0
++	psq_l		B20_B21,32,r4,0,0
+ 	ps_madds1	D02_D03,B12_B13,A00_A01,D02_D03
+-	psq_l		B22_B23,40(r4),0,0
++	psq_l		B22_B23,40,r4,0,0
+ 	ps_madds1	D12_D13,B12_B13,A10_A11,D12_D13
+-	psq_l		A20_A21,32(r3),0,0
+-	psq_l		A22_A23,40(r3),0,0
++	psq_l		A20_A21,32,r3,0,0
++	psq_l		A22_A23,40,r3,0,0
+ 	ps_madds0	D00_D01,B20_B21,A02_A03,D00_D01
+ 	ps_madds0	D02_D03,B22_B23,A02_A03,D02_D03
+ 	ps_madds0	D10_D11,B20_B21,A12_A13,D10_D11
+ 	ps_madds0	D12_D13,B22_B23,A12_A13,D12_D13
+-	psq_st		D00_D01,0(r5),0,0
++	psq_st		D00_D01,0,r5,0,0
+ 	ps_muls0	D20_D21,B00_B01,A20_A21
+ 	ps_madds1	D02_D03,UNIT01,A02_A03,D02_D03
+ 	ps_muls0	D22_D23,B02_B03,A20_A21
+-	psq_st		D10_D11,16(r5),0,0
++	psq_st		D10_D11,16,r5,0,0
+ 	ps_madds1	D12_D13,UNIT01,A12_A13,D12_D13
+-	psq_st		D02_D03,8(r5),0,0
++	psq_st		D02_D03,8,r5,0,0
+ 	ps_madds1	D20_D21,B10_B11,A20_A21,D20_D21
+ 	ps_madds1	D22_D23,B12_B13,A20_A21,D22_D23
+ 	ps_madds0	D20_D21,B20_B21,A22_A23,D20_D21
+ 	lfd		fr14,8(r1)
+-	psq_st		D12_D13,24(r5),0,0
++	psq_st		D12_D13,24,r5,0,0
+ 	ps_madds0	D22_D23,B22_B23,A22_A23,D22_D23
+-	psq_st		D20_D21,32(r5),0,0
++	psq_st		D20_D21,32,r5,0,0
+ 	ps_madds1	D22_D23,UNIT01,A22_A23,D22_D23
+ 	lfd		fr15,16(r1)
+-	psq_st		D22_D23,40(r5),0,0
++	psq_st		D22_D23,40,r5,0,0
+ 	lfd		fr31,40(r1)
+ 	addi		r1,r1,64
+ 	blr
+@@ -95,68 +95,68 @@ ps_guMtxConcat:
+ ps_guMtxIdentity:
+ 	lfs		fr0,Unit01@sdarel(r13)
+ 	lfs		fr1,Unit01+4@sdarel(r13)
+-	psq_st		fr0,8(r3),0,0
++	psq_st		fr0,8,r3,0,0
+ 	ps_merge01	fr2,fr0,fr1
+-	psq_st		fr0,24(r3),0,0
++	psq_st		fr0,24,r3,0,0
+ 	ps_merge10	fr3,fr1,fr0
+-	psq_st		fr0,32(r3),0,0
+-	psq_st		fr2,16(r3),0,0
+-	psq_st		fr3,0(r3),0,0
+-	psq_st		fr3,40(r3),0,0
++	psq_st		fr0,32,r3,0,0
++	psq_st		fr2,16,r3,0,0
++	psq_st		fr3,0,r3,0,0
++	psq_st		fr3,40,r3,0,0
+ 	blr
+ 
+ 	.globl ps_guMtxCopy
+ 	//r3 = src, r4 = dst
+ ps_guMtxCopy:
+-	psq_l		fr0,0(r3),0,0
+-	psq_st		fr0,0(r4),0,0
+-	psq_l		fr1,8(r3),0,0
+-	psq_st		fr1,8(r4),0,0
+-	psq_l		fr2,16(r3),0,0
+-	psq_st		fr2,16(r4),0,0
+-	psq_l		fr3,24(r3),0,0
+-	psq_st		fr3,24(r4),0,0
+-	psq_l		fr4,32(r3),0,0
+-	psq_st		fr4,32(r4),0,0
+-	psq_l		fr5,40(r3),0,0
+-	psq_st		fr5,40(r4),0,0
++	psq_l		fr0,0,r3,0,0
++	psq_st		fr0,0,r4,0,0
++	psq_l		fr1,8,r3,0,0
++	psq_st		fr1,8,r4,0,0
++	psq_l		fr2,16,r3,0,0
++	psq_st		fr2,16,r4,0,0
++	psq_l		fr3,24,r3,0,0
++	psq_st		fr3,24,r4,0,0
++	psq_l		fr4,32,r3,0,0
++	psq_st		fr4,32,r4,0,0
++	psq_l		fr5,40,r3,0,0
++	psq_st		fr5,40,r4,0,0
+ 	blr
+ 
+ 	.globl ps_guMtxTranspose
+ 	//r3 = src, r4 = xpose
+ ps_guMtxTranspose:
+ 	lfs		fr0,Unit01@sdarel(r13)
+-	psq_l		fr1,0(r3),0,0
++	psq_l		fr1,0,r3,0,0
+ 	stfs		fr0,44(r4)
+-	psq_l		fr2,16(r3),0,0
++	psq_l		fr2,16,r3,0,0
+ 	ps_merge00	fr5,fr1,fr2
+-	psq_l		fr3,8(r3),1,0
++	psq_l		fr3,8,r3,1,0
+ 	ps_merge11	fr6,fr1,fr2
+-	psq_l		fr4,24(r3),1,0
+-	psq_st		fr5,0(r4),0,0
+-	psq_l		fr1,32(r3),0,0
++	psq_l		fr4,24,r3,1,0
++	psq_st		fr5,0,r4,0,0
++	psq_l		fr1,32,r3,0,0
+ 	ps_merge00	fr7,fr3,fr4
+-	psq_st		fr6,16(r4),0,0
++	psq_st		fr6,16,r4,0,0
+ 	ps_merge00	fr5,fr1,fr0
+-	psq_st		fr7,32(r4),0,0
++	psq_st		fr7,32,r4,0,0
+ 	ps_merge10	fr6,fr1,fr0
+-	psq_st		fr5,8(r4),0,0
++	psq_st		fr5,8,r4,0,0
+ 	lfs		fr3,40(r3)
+-	psq_st		fr6,24(r4),0,0
++	psq_st		fr6,24,r4,0,0
+ 	stfs		fr3,40(r4)
+ 	blr
+ 
+ 	.globl ps_guMtxInverse
+ 	//r3 = src, r4 = inv
+ ps_guMtxInverse:
+-	psq_l		fr0,0(r3),1,0
+-	psq_l		fr1,4(r3),0,0
+-	psq_l		fr2,16(r3),1,0
++	psq_l		fr0,0,r3,1,0
++	psq_l		fr1,4,r3,0,0
++	psq_l		fr2,16,r3,1,0
+ 	ps_merge10	fr6,fr1,fr0
+-	psq_l		fr3,20(r3),0,0
+-	psq_l		fr4,32(r3),1,0
++	psq_l		fr3,20,r3,0,0
++	psq_l		fr4,32,r3,1,0
+ 	ps_merge10	fr7,fr3,fr2
+-	psq_l		fr5,36(r3),0,0
++	psq_l		fr5,36,r3,0,0
+ 	ps_mul		fr11,fr3,fr6
+ 	ps_mul		fr13,fr5,fr7
+ 	ps_merge10	fr8,fr5,fr4
+@@ -193,37 +193,37 @@ ps_guMtxInverse:
+ 	ps_muls0	fr10,fr10,fr0
+ 	ps_merge11	fr4,fr13,fr12
+ 	ps_muls0	fr9,fr9,fr0
+-	psq_st		fr5,0(r4),0,0
++	psq_st		fr5,0,r4,0,0
+ 	ps_mul		fr6,fr13,fr1
+-	psq_st		fr4,16(r4),0,0
++	psq_st		fr4,16,r4,0,0
+ 	ps_muls0	fr8,fr8,fr0
+ 	ps_madd		fr6,fr12,fr2,fr6
+-	psq_st		fr10,32(r4),1,0
++	psq_st		fr10,32,r4,1,0
+ 	ps_nmadd	fr6,fr11,fr3,fr6
+-	psq_st		fr9,36(r4),1,0
++	psq_st		fr9,36,r4,1,0
+ 	ps_mul		fr7,fr10,fr1
+ 	ps_merge00	fr5,fr11,fr6
+-	psq_st		fr8,40(r4),1,0
++	psq_st		fr8,40,r4,1,0
+ 	ps_merge11	fr4,fr11,fr6
+-	psq_st		fr5,8(r4),0,0
++	psq_st		fr5,8,r4,0,0
+ 	ps_madd		fr7,fr9,fr2,fr7
+-	psq_st		fr4,24(r4),0,0
++	psq_st		fr4,24,r4,0,0
+ 	ps_nmadd	fr7,fr8,fr3,fr7
+ 	li		r3,1
+-	psq_st		fr7,44(r4),1,0
++	psq_st		fr7,44,r4,1,0
+ 	blr
+ 
+ 	.globl ps_guMtxInvXpose
+ 	//r3 = src, r4 = invx
+ ps_guMtxInvXpose:
+-	psq_l       fr0, 0(r3), 1, 0
+-	psq_l       fr1, 4(r3), 0, 0
+-	psq_l       fr2, 16(r3), 1, 0
++	psq_l       fr0, 0,r3, 1, 0
++	psq_l       fr1, 4,r3, 0, 0
++	psq_l       fr2, 16,r3, 1, 0
+ 	ps_merge10  fr6, fr1, fr0
+-	psq_l       fr3, 20(r3), 0, 0
+-	psq_l       fr4, 32(r3), 1, 0
++	psq_l       fr3, 20,r3, 0, 0
++	psq_l       fr4, 32,r3, 1, 0
+ 	ps_merge10  fr7, fr3, fr2
+-	psq_l       fr5, 36(r3), 0, 0
++	psq_l       fr5, 36,r3, 0, 0
+ 	ps_mul      fr11, fr3, fr6
+ 	ps_merge10  fr8, fr5, fr4
+ 	ps_mul      fr13, fr5, fr7
+@@ -247,25 +247,25 @@ ps_guMtxInvXpose:
+ 	blr
+ 
+ 0:	fres        fr0, fr7
+-	psq_st      fr1,  12(r4), 1, 0
++	psq_st      fr1,  12,r4, 1, 0
+ 	ps_add      fr6, fr0, fr0
+ 	ps_mul      fr5, fr0, fr0
+-	psq_st      fr1,  28(r4), 1, 0
++	psq_st      fr1,  28,r4, 1, 0
+ 	ps_nmsub    fr0, fr7, fr5, fr6
+-	psq_st      fr1,  44(r4), 1, 0
++	psq_st      fr1,  44,r4, 1, 0
+ 	ps_muls0    fr13, fr13, fr0
+ 	ps_muls0    fr12, fr12, fr0
+ 	ps_muls0    fr11, fr11, fr0
+-	psq_st      fr13,  0(r4), 0, 0
+-	psq_st      fr12,  16(r4), 0, 0
++	psq_st      fr13,  0,r4, 0, 0
++	psq_st      fr12,  16,r4, 0, 0
+ 	ps_muls0    fr10, fr10, fr0
+ 	ps_muls0    fr9,  fr9,  fr0
+-	psq_st      fr11,  32(r4), 0, 0
+-	psq_st      fr10,  8(r4), 1, 0
++	psq_st      fr11,  32,r4, 0, 0
++	psq_st      fr10,  8,r4, 1, 0
+ 	ps_muls0    fr8,  fr8,  fr0
+ 	addi        r3, 0, 1
+-	psq_st      fr9,   24(r4), 1, 0
+-	psq_st      fr8,   40(r4), 1, 0
++	psq_st      fr9,   24,r4, 1, 0
++	psq_st      fr8,   40,r4, 1, 0
+ 	blr
+ 
+ 	.globl ps_guMtxScale
+@@ -273,11 +273,11 @@ ps_guMtxInvXpose:
+ ps_guMtxScale:
+ 	lfs		fr0,Unit01@sdarel(r13)
+ 	stfs		fr1,0(r3)
+-	psq_st		fr0,4(r3),0,0
+-	psq_st		fr0,12(r3),0,0
++	psq_st		fr0,4,r3,0,0
++	psq_st		fr0,12,r3,0,0
+ 	stfs		fr2,20(r3)
+-	psq_st		fr0,24(r3),0,0
+-	psq_st		fr0,32(r3),0,0
++	psq_st		fr0,24,r3,0,0
++	psq_st		fr0,32,r3,0,0
+ 	stfs		fr3,40(r3)
+ 	stfs		fr0,44(r3)
+ 	blr
+@@ -286,26 +286,26 @@ ps_guMtxScale:
+ 	//r3 = src,r4 = dst,fr1 = xS,fr2 = yS,fr3 = zS
+ ps_guMtxScaleApply:
+ 	frsp		fr1,fr1
+-	psq_l		fr4,0(r3),0,0
++	psq_l		fr4,0,r3,0,0
+ 	frsp		fr2,fr2
+-	psq_l		fr5,8(r3),0,0
++	psq_l		fr5,8,r3,0,0
+ 	frsp		fr3,fr3
+ 	ps_muls0	fr4,fr4,fr1
+-	psq_l		fr6,16(r3),0,0
++	psq_l		fr6,16,r3,0,0
+ 	ps_muls0	fr5,fr5,fr1
+-	psq_l		fr7,24(r3),0,0
++	psq_l		fr7,24,r3,0,0
+ 	ps_muls0	fr6,fr6,fr2
+-	psq_l		fr8,32(r3),0,0
+-	psq_st		fr4,0(r4),0,0
++	psq_l		fr8,32,r3,0,0
++	psq_st		fr4,0,r4,0,0
+ 	ps_muls0	fr7,fr7,fr2
+-	psq_l		fr2,40(r3),0,0
+-	psq_st		fr5,8(r4),0,0
++	psq_l		fr2,40,r3,0,0
++	psq_st		fr5,8,r4,0,0
+ 	ps_muls0	fr8,fr8,fr3
+-	psq_st		fr6,16(r4),0,0
++	psq_st		fr6,16,r4,0,0
+ 	ps_muls0	fr2,fr2,fr3
+-	psq_st		fr7,24(r4),0,0
+-	psq_st		fr8,32(r4),0,0
+-	psq_st		fr2,40(r4),0,0
++	psq_st		fr7,24,r4,0,0
++	psq_st		fr8,32,r4,0,0
++	psq_st		fr2,40,r4,0,0
+ 	blr
+ 
+ 	.globl ps_guMtxApplyScale
+@@ -313,28 +313,28 @@ ps_guMtxScaleApply:
+ ps_guMtxApplyScale:
+ 	lfs		fr6,Unit01+4@sdarel(r13)
+ 	frsp		fr1,fr1
+-	psq_l		fr4,0(r3),0,0
++	psq_l		fr4,0,r3,0,0
+ 	frsp		fr2,fr2
+-	psq_l		fr5,8(r3),0,0
++	psq_l		fr5,8,r3,0,0
+ 	frsp		fr3,fr3
+ 	ps_merge00	fr10,fr1,fr2
+ 	ps_merge00	fr11,fr3,fr6
+ 	ps_mul		fr4,fr4,fr10
+-	psq_l		fr6,16(r3),0,0
++	psq_l		fr6,16,r3,0,0
+ 	ps_mul		fr5,fr5,fr11
+-	psq_l		fr7,24(r3),0,0
++	psq_l		fr7,24,r3,0,0
+ 	ps_mul		fr6,fr6,fr10
+-	psq_l		fr8,32(r3),0,0
+-	psq_st		fr4,0(r4),0,0
++	psq_l		fr8,32,r3,0,0
++	psq_st		fr4,0,r4,0,0
+ 	ps_mul		fr7,fr7,fr11
+-	psq_l		fr2,40(r3),0,0
+-	psq_st		fr5,8(r4),0,0
++	psq_l		fr2,40,r3,0,0
++	psq_st		fr5,8,r4,0,0
+ 	ps_mul		fr8,fr8,fr10
+-	psq_st		fr6,16(r4),0,0
++	psq_st		fr6,16,r4,0,0
+ 	ps_mul		fr2,fr2,fr11
+-	psq_st		fr7,24(r4),0,0
+-	psq_st		fr8,32(r4),0,0
+-	psq_st		fr2,40(r4),0,0
++	psq_st		fr7,24,r4,0,0
++	psq_st		fr8,32,r4,0,0
++	psq_st		fr2,40,r4,0,0
+ 	blr
+ 
+ 	.globl ps_guMtxTrans
+@@ -345,8 +345,8 @@ ps_guMtxTrans:
+ 	stfs		fr4,16(r3)
+ 	stfs		fr1,12(r3)
+ 	stfs		fr2,28(r3)
+-	psq_st		fr4,4(r3),0,0
+-	psq_st		fr4,32(r3),0,0
++	psq_st		fr4,4,r3,0,0
++	psq_st		fr4,32,r3,0,0
+ 	stfs		fr5,20(r3)
+ 	stfs		fr4,24(r3)
+ 	stfs		fr5,40(r3)
+@@ -357,59 +357,59 @@ ps_guMtxTrans:
+ 	.globl ps_guMtxTransApply
+ 	//r3 = src,r4 = dst,fr1 = xT,fr2 = yT,fr3 = zT
+ ps_guMtxTransApply:
+-	psq_l		fr4,0(r3),0,0
++	psq_l		fr4,0,r3,0,0
+ 	frsp		fr1,fr1
+-	psq_l		fr5,8(r3),0,0
++	psq_l		fr5,8,r3,0,0
+ 	frsp		fr2,fr2
+-	psq_l		fr7,24(r3),0,0
++	psq_l		fr7,24,r3,0,0
+ 	frsp		fr3,fr3
+-	psq_l		fr8,40(r3),0,0
++	psq_l		fr8,40,r3,0,0
+ 	ps_sum1		fr5,fr1,fr5,fr5
+-	psq_l		fr6,16(r3),0,0
++	psq_l		fr6,16,r3,0,0
+ 	ps_sum1		fr7,fr2,fr7,fr7
+-	psq_l		fr9,32(r3),0,0
++	psq_l		fr9,32,r3,0,0
+ 	ps_sum1		fr8,fr3,fr8,fr8
+-	psq_st		fr4,0(r4),0,0
+-	psq_st		fr5,8(r4),0,0
+-	psq_st		fr6,16(r4),0,0
+-	psq_st		fr7,24(r4),0,0
+-	psq_st		fr9,32(r4),0,0
+-	psq_st		fr8,40(r4),0,0
++	psq_st		fr4,0,r4,0,0
++	psq_st		fr5,8,r4,0,0
++	psq_st		fr6,16,r4,0,0
++	psq_st		fr7,24,r4,0,0
++	psq_st		fr9,32,r4,0,0
++	psq_st		fr8,40,r4,0,0
+ 	blr
+ 
+ 	.globl ps_guMtxApplyTrans
+ 	//r3 = src,r4 = dst,fr1 = xT,fr2 = yT,fr3 = zT
+ ps_guMtxApplyTrans:
+ 	lfs		fr6,Unit01+4@sdarel(r13)
+-	psq_l		fr4,0(r3),0,0
++	psq_l		fr4,0,r3,0,0
+ 	frsp		fr1,fr1
+-	psq_l		fr5,8(r3),0,0
++	psq_l		fr5,8,r3,0,0
+ 	frsp		fr2,fr2
+ 	ps_merge00	fr10,fr1,fr2
+-	psq_l		fr7,24(r3),0,0
++	psq_l		fr7,24,r3,0,0
+ 	frsp		fr3,fr3
+ 	ps_mul		fr1,fr4,fr10
+ 	ps_merge00	fr11,fr3,fr6
+-	psq_l		fr8,40(r3),0,0
++	psq_l		fr8,40,r3,0,0
+ 	ps_madd		fr2,fr5,fr11,fr1
+-	psq_l		fr6,16(r3),0,0
++	psq_l		fr6,16,r3,0,0
+ 	ps_sum0		fr3,fr2,fr3,fr2
+-	psq_l		fr9,32(r3),0,0
++	psq_l		fr9,32,r3,0,0
+ 	ps_mul		fr12,fr6,fr10
+-	psq_st		fr4,0(r4),0,0
++	psq_st		fr4,0,r4,0,0
+ 	ps_madd		fr4,fr7,fr11,fr12
+-	psq_st		fr5,8(r4),1,0
++	psq_st		fr5,8,r4,1,0
+ 	ps_sum0		fr12,fr4,fr12,fr4
+-	psq_st		fr3,12(r4),1,0
++	psq_st		fr3,12,r4,1,0
+ 	ps_mul		fr3,fr9,fr10
+-	psq_st		fr6,16(r4),0,0
++	psq_st		fr6,16,r4,0,0
+ 	ps_madd		fr2,fr8,fr11,fr3
+-	psq_st		fr7,24(r4),1,0
++	psq_st		fr7,24,r4,1,0
+ 	ps_sum0		fr3,fr2,fr3,fr2
+-	psq_st		fr12,28(r4),1,0
+-	psq_st		fr9,32(r4),0,0
+-	psq_st		fr8,40(r4),1,0
+-	psq_st		fr3,44(r4),1,0
++	psq_st		fr12,28,r4,1,0
++	psq_st		fr9,32,r4,0,0
++	psq_st		fr8,40,r4,1,0
++	psq_st		fr3,44,r4,1,0
+ 	blr
+ 
+ 	.globl ps_guMtxRotTrig
+@@ -429,38 +429,38 @@ ps_guMtxRotTrig:
+ 	beq		2f
+ 	b		3f
+ 0:
+-	psq_st		fr4,0(r3),1,0
+-	psq_st		fr3,4(r3),0,0
++	psq_st		fr4,0,r3,1,0
++	psq_st		fr3,4,r3,0,0
+ 	ps_merge00	fr6,fr1,fr2
+-	psq_st		fr3,12(r3),0,0
++	psq_st		fr3,12,r3,0,0
+ 	ps_merge00	fr7,fr2,fr5
+-	psq_st		fr3,28(r3),0,0
+-	psq_st		fr3,44(r3),1,0
+-	psq_st		fr6,36(r3),0,0
+-	psq_st		fr7,20(r3),0,0
++	psq_st		fr3,28,r3,0,0
++	psq_st		fr3,44,r3,1,0
++	psq_st		fr6,36,r3,0,0
++	psq_st		fr7,20,r3,0,0
+ 	b		3f
+ 1:
+ 	ps_merge00	fr6,fr2,fr3
+ 	ps_merge00	fr7,fr3,fr4
+-	psq_st		fr3,24(r3),0,0
+-	psq_st		fr6,0(r3),0,0
++	psq_st		fr3,24,r3,0,0
++	psq_st		fr6,0,r3,0,0
+ 	ps_merge00	fr8,fr5,fr3
+ 	ps_merge00	fr9,fr1,fr3
+-	psq_st		fr6,40(r3),0,0
+-	psq_st		fr7,16(r3),0,0
+-	psq_st		fr9,8(r3),0,0
+-	psq_st		fr8,32(r3),0,0
++	psq_st		fr6,40,r3,0,0
++	psq_st		fr7,16,r3,0,0
++	psq_st		fr9,8,r3,0,0
++	psq_st		fr8,32,r3,0,0
+ 	b		3f
+ 2:
+-	psq_st		fr3,8(r3),0,0
++	psq_st		fr3,8,r3,0,0
+ 	ps_merge00	fr6,fr1,fr2
+ 	ps_merge00	fr8,fr2,fr5
+-	psq_st		fr3,24(r3),0,0
+-	psq_st		fr3,32(r3),0,0
++	psq_st		fr3,24,r3,0,0
++	psq_st		fr3,32,r3,0,0
+ 	ps_merge00	fr7,fr4,fr3
+-	psq_st		fr6,16(r3),0,0
+-	psq_st		fr8,0(r3),0,0
+-	psq_st		fr7,40(r3),0,0
++	psq_st		fr6,16,r3,0,0
++	psq_st		fr8,0,r3,0,0
++	psq_st		fr7,40,r3,0,0
+ 3:
+ 	blr
+ 
+@@ -469,7 +469,7 @@ ps_guMtxRotTrig:
+ __ps_guMtxRotAxisRadInternal:
+ 	stwu		r1,-64(r1)
+ 	frsp		fr2,fr2
+-	psq_l		fr3,0(r4),0,0
++	psq_l		fr3,0,r4,0,0
+ 	frsp		fr1,fr1
+ 	stfd		fr14,8(r1)
+ 	lfs		fr11,NrmData+4@sdarel(r13)
+@@ -502,16 +502,16 @@ __ps_guMtxRotAxisRadInternal:
+ 	ps_sum0		fr5,fr5,fr9,fr2
+ 	ps_sum1		fr6,fr2,fr10,fr6
+ 	ps_sum0		fr9,fr3,fr14,fr7
+-	psq_st		fr11,8(r3),0,0
++	psq_st		fr11,8,r3,0,0
+ 	ps_sum0		fr3,fr7,fr7,fr3
+-	psq_st		fr5,0(r3),0,0
++	psq_st		fr5,0,r3,0,0
+ 	ps_muls0	fr8,fr8,fr4
+-	psq_st		fr6,16(r3),0,0
++	psq_st		fr6,16,r3,0,0
+ 	ps_sum1		fr7,fr12,fr3,fr7
+-	psq_st		fr9,24(r3),0,0
++	psq_st		fr9,24,r3,0,0
+ 	ps_sum0		fr8,fr8,fr14,fr2
+-	psq_st		fr7,32(r3),0,0
+-	psq_st		fr8,40(r3),0,0
++	psq_st		fr7,32,r3,0,0
++	psq_st		fr8,40,r3,0,0
+ 	lfd			fr14,8(r1)
+ 	addi		r1,r1,64
+ 	blr
+@@ -520,69 +520,69 @@ __ps_guMtxRotAxisRadInternal:
+ 	//r3 = mtx,r4 = vec1,r5 = vec2
+ ps_guMtxReflect:
+ 	lfs		fr0,Unit01+4@sdarel(r13)
+-	psq_l		fr1,8(r5),1,0
+-	psq_l		fr2,0(r5),0,0
+-	psq_l		fr3,0(r4),0,0
++	psq_l		fr1,8,r5,1,0
++	psq_l		fr2,0,r5,0,0
++	psq_l		fr3,0,r4,0,0
+ 	ps_nmadd	fr5,fr1,fr0,fr1
+-	psq_l		fr4,8(r4),1,0
++	psq_l		fr4,8,r4,1,0
+ 	ps_nmadd	fr6,fr2,fr0,fr2
+ 	ps_muls0	fr7,fr2,fr5
+ 	ps_mul		fr8,fr6,fr3
+ 	ps_muls0	fr9,fr2,fr6
+ 	ps_sum0		fr8,fr8,fr8,fr8
+ 	ps_muls1	fr10,fr2,fr6
+-	psq_st		fr7,32(r3),0,0
++	psq_st		fr7,32,r3,0,0
+ 	ps_sum0		fr2,fr2,fr2,fr0
+ 	ps_nmadd	fr8,fr5,fr4,fr8
+ 	ps_sum1		fr10,fr0,fr10,fr10
+-	psq_st		fr9,0(r3),0,0
++	psq_st		fr9,0,r3,0,0
+ 	ps_muls0	fr11,fr2,fr8
+ 	ps_merge00	fr12,fr5,fr8
+-	psq_st		fr10,16(r3),0,0
++	psq_st		fr10,16,r3,0,0
+ 	ps_merge00	fr13,fr7,fr11
+ 	ps_muls0	fr12,fr12,fr1
+ 	ps_merge11	fr11,fr7,fr11
+-	psq_st		fr13,8(r3),0,0
++	psq_st		fr13,8,r3,0,0
+ 	ps_sum0		fr12,fr12,fr12,fr0
+-	psq_st		fr11,24(r3),0,0
+-	psq_st		fr12,40(r3),0,0
++	psq_st		fr11,24,r3,0,0
++	psq_st		fr12,40,r3,0,0
+ 	blr
+ 
+ 	.globl ps_guVecAdd
+ 	//r3 = v1,r4 = v2,r5 = dst
+ ps_guVecAdd:
+-	psq_l		V1_XY,0(r3),0,0
+-	psq_l		V2_XY,0(r4),0,0
++	psq_l		V1_XY,0,r3,0,0
++	psq_l		V2_XY,0,r4,0,0
+ 	ps_add		D1_XY,V1_XY,V2_XY
+-	psq_st		D1_XY,0(r5),0,0
+-	psq_l		V1_Z,8(r3),1,0
+-	psq_l		V2_Z,8(r4),1,0
++	psq_st		D1_XY,0,r5,0,0
++	psq_l		V1_Z,8,r3,1,0
++	psq_l		V2_Z,8,r4,1,0
+ 	ps_add		D1_Z,V1_Z,V2_Z
+-	psq_st		D1_Z,8(r5),1,0
++	psq_st		D1_Z,8,r5,1,0
+ 	blr
+ 
+ 	.globl ps_guVecSub
+ 	//r3 = v1,r4 = v2,r5 = dst
+ ps_guVecSub:
+-	psq_l		V1_XY,0(r3),0,0
+-	psq_l		V2_XY,0(r4),0,0
++	psq_l		V1_XY,0,r3,0,0
++	psq_l		V2_XY,0,r4,0,0
+ 	ps_sub		D1_XY,V1_XY,V2_XY
+-	psq_st		D1_XY,0(r5),0,0
+-	psq_l		V1_Z,8(r3),1,0
+-	psq_l		V2_Z,8(r4),1,0
++	psq_st		D1_XY,0,r5,0,0
++	psq_l		V1_Z,8,r3,1,0
++	psq_l		V2_Z,8,r4,1,0
+ 	ps_sub		D1_Z,V1_Z,V2_Z
+-	psq_st		D1_Z,8(r5),1,0
++	psq_st		D1_Z,8,r5,1,0
+ 	blr
+ 
+ 	.globl ps_guVecScale
+ 	//r3 = src,r4 = dst,fr1 = S
+ ps_guVecScale:
+-	psq_l		fr2,0(r3),0,0
+-	psq_l		fr3,8(r3),1,0
++	psq_l		fr2,0,r3,0,0
++	psq_l		fr3,8,r3,1,0
+ 	ps_muls0	fr4,fr2,fr1
+-	psq_st		fr4,0(r4),0,0
++	psq_st		fr4,0,r4,0,0
+ 	ps_muls0	fr4,fr3,fr1
+-	psq_st		fr4,8(r4),1,0	
++	psq_st		fr4,8,r4,1,0	
+ 	blr
+ 
+ 	.globl	ps_guVecNormalize
+@@ -590,9 +590,9 @@ ps_guVecScale:
+ ps_guVecNormalize:
+ 	lfs		fr0,NrmData@sdarel(r13)
+ 	lfs		fr1,NrmData+4@sdarel(r13)
+-	psq_l		fr2,0(r3),0,0
++	psq_l		fr2,0,r3,0,0
+ 	ps_mul		fr4,fr2,fr2
+-	psq_l		fr3,8(r3),1,0
++	psq_l		fr3,8,r3,1,0
+ 	ps_madd		fr5,fr3,fr3,fr4
+ 	ps_sum0		fr6,fr5,fr3,fr4
+ 	frsqrte		fr7,fr6
+@@ -601,17 +601,17 @@ ps_guVecNormalize:
+ 	fnmsubs		fr8,fr8,fr6,fr1
+ 	fmuls		fr7,fr8,fr9
+ 	ps_muls0	fr2,fr2,fr7
+-	psq_st		fr2,0(r3),0,0
++	psq_st		fr2,0,r3,0,0
+ 	ps_muls0	fr3,fr3,fr7
+-	psq_st		fr3,8(r3),1,0
++	psq_st		fr3,8,r3,1,0
+ 	blr
+ 
+ 	.globl ps_guVecCross
+ 	//r3 = v1,r4 = v2,r5 = v12
+ ps_guVecCross:
+-	psq_l		fr1,0(r4),0,0
++	psq_l		fr1,0,r4,0,0
+ 	lfs		fr2,8(r3)
+-	psq_l		fr0,0(r3),0,0
++	psq_l		fr0,0,r3,0,0
+ 	ps_merge10	fr6,fr1,fr1
+ 	lfs		fr3,8(r4)
+ 	ps_mul		fr4,fr1,fr2
+@@ -620,95 +620,95 @@ ps_guVecCross:
+ 	ps_msub		fr8,fr0,fr6,fr7
+ 	ps_merge11	fr9,fr5,fr5
+ 	ps_merge01	fr10,fr5,fr8
+-	psq_st		fr9,0(r5),1,0
++	psq_st		fr9,0,r5,1,0
+ 	ps_neg		fr10,fr10
+-	psq_st		fr10,4(r5),0,0	
++	psq_st		fr10,4,r5,0,0	
+ 	blr
+ 
+ 	.globl ps_guVecDotProduct
+ 	//r3 = vec1,r4 = vec2
+ ps_guVecDotProduct:
+-	psq_l		fr2,4(r3),0,0
+-	psq_l		fr3,4(r4),0,0
++	psq_l		fr2,4,r3,0,0
++	psq_l		fr3,4,r4,0,0
+ 	ps_mul		fr2,fr2,fr3
+-	psq_l		fr5,0(r3),0,0
+-	psq_l		fr4,0(r4),0,0
++	psq_l		fr5,0,r3,0,0
++	psq_l		fr4,0,r4,0,0
+ 	ps_madd		fr3,fr5,fr4,fr2
+ 	ps_sum0		fr1,fr3,fr2,fr2
+ 	blr
+ 
+ 	.globl ps_guVecMultiply
+ ps_guVecMultiply:
+-	psq_l		fr0,0(r4),0,0
+-	psq_l		fr2,0(r3),0,0
+-	psq_l		fr1,8(r4),1,0
++	psq_l		fr0,0,r4,0,0
++	psq_l		fr2,0,r3,0,0
++	psq_l		fr1,8,r4,1,0
+ 	ps_mul		fr4,fr2,fr0
+-	psq_l		fr3,8(r3),0,0
++	psq_l		fr3,8,r3,0,0
+ 	ps_madd		fr5,fr3,fr1,fr4
+-	psq_l		fr8,16(r3),0,0
++	psq_l		fr8,16,r3,0,0
+ 	ps_sum0		fr6,fr5,fr6,fr5
+-	psq_l		fr9,24(r3),0,0
++	psq_l		fr9,24,r3,0,0
+ 	ps_mul		fr10,fr8,fr0
+-	psq_st		fr6,0(r5),1,0
++	psq_st		fr6,0,r5,1,0
+ 	ps_madd		fr11,fr9,fr1,fr10
+-	psq_l		fr2,32(r3),0,0
++	psq_l		fr2,32,r3,0,0
+ 	ps_sum0		fr12,fr11,fr12,fr11
+-	psq_l		fr3,40(r3),0,0
++	psq_l		fr3,40,r3,0,0
+ 	ps_mul		fr4,fr2,fr0
+-	psq_st		fr12,4(r5),1,0
++	psq_st		fr12,4,r5,1,0
+ 	ps_madd		fr5,fr3,fr1,fr4
+ 	ps_sum0		fr6,fr5,fr6,fr5
+-	psq_st		fr6,8(r5),1,0
++	psq_st		fr6,8,r5,1,0
+ 	blr
+ 
+ 	.globl ps_guVecMultiplySR
+ 	// r3 = mt, r4 = src, r5 = dst
+ ps_guVecMultiplySR:
+-    psq_l		fr0,0(r3),0,0    // m[0][0], m[0][1] GQR0 = 0
++    psq_l		fr0,0,r3,0,0    // m[0][0], m[0][1] GQR0 = 0
+     // fp6 - x y 
+-    psq_l		fr6,0(r4),0,0 
+-    psq_l		fr2,16(r3),0,0   // m[1][0], m[1][1]
++    psq_l		fr6,0,r4,0,0 
++    psq_l		fr2,16,r3,0,0   // m[1][0], m[1][1]
+     // fp8 = m00x m01y // next X
+     ps_mul		fr8,fr0,fr6
+-    psq_l		fr4,32(r3),0,0   // m[2][0], m[2][1]
++    psq_l		fr4,32,r3,0,0   // m[2][0], m[2][1]
+     // fp10 = m10x m11y // next Y
+     ps_mul		fr10,fr2,fr6
+-    psq_l		fr7,8(r4),1,0   // fp7 - z,1.0
++    psq_l		fr7,8,r4,1,0   // fp7 - z,1.0
+     // fp12 = m20x m21y // next Z
+     ps_mul		fr12,fr4,fr6  // YYY last FP6 usage
+-    psq_l		fr3,24(r3),0,0   // m[1][2], m[1][3]
++    psq_l		fr3,24,r3,0,0   // m[1][2], m[1][3]
+     ps_sum0		fr8,fr8,fr8,fr8
+-    psq_l		fr5,40(r3),0,0   // m[2][2], m[2][3]
++    psq_l		fr5,40,r3,0,0   // m[2][2], m[2][3]
+     ps_sum0		fr10,fr10,fr10,fr10
+-    psq_l		fr1,8(r3),0,0    // m[0][2], m[0][3] 
++    psq_l		fr1,8,r3,0,0    // m[0][2], m[0][3] 
+     ps_sum0		fr12,fr12,fr12,fr12
+     ps_madd		fr9,fr1,fr7,fr8
+-    psq_st		fr9,0(r5),1,0      // store X
++    psq_st		fr9,0,r5,1,0      // store X
+     ps_madd		fr11,fr3,fr7,fr10
+-    psq_st		fr11,4(r5),1,0      // store Y  
++    psq_st		fr11,4,r5,1,0      // store Y  
+     ps_madd		fr13,fr5,fr7,fr12
+-    psq_st		fr13,8(r5),1,0      //  sore Z
++    psq_st		fr13,8,r5,1,0      //  sore Z
+ 	blr
+ 
+ 	.globl ps_quQuatScale
+ 	//r3 = q,r4 = r, fr1 = scale
+ ps_guQuatScale:
+-	psq_l		fr4,0(r3),0,0
+-	psq_l		fr5,8(r3),0,0
++	psq_l		fr4,0,r3,0,0
++	psq_l		fr5,8,r3,0,0
+ 	ps_muls0	fr4,fr4,fr1
+-	psq_st		fr4,0(r4),0,0
++	psq_st		fr4,0,r4,0,0
+ 	ps_muls0	fr5,fr5,fr1
+-	psq_st		fr5,8(r4),0,0
++	psq_st		fr5,8,r4,0,0
+ 	blr
+ 
+ 	.globl ps_guQuatDotProduct
+ 	//r3 = p, r4 = q ; fr1 = res
+ ps_guQuatDotProduct:
+-	psq_l		fr2,0(r3),0,0
+-	psq_l		fr4,0(r4),0,0
++	psq_l		fr2,0,r3,0,0
++	psq_l		fr4,0,r4,0,0
+ 	ps_mul		fr1,fr2,fr4
+-	psq_l		fr3,8(r3),0,0
+-	psq_l		fr5,8(r4),0,0
++	psq_l		fr3,8,r3,0,0
++	psq_l		fr5,8,r4,0,0
+ 	ps_madd		fr1,fr3,fr5,fr1
+ 	ps_sum0		fr1,fr1,fr1,fr1
+ 	blr

@@ -1,0 +1,150 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Sat, 10 Oct 2026 12:35:54 +0200
+Subject: [PATCH] Load the matrix constants without small data
+
+Clang has no small data relocations, so the constants are loaded with an
+absolute address through r12, which the matrix functions don't use.
+---
+ libogc/gu_psasm.S | 50 ++++++++++++++++++++++++++++++++---------------
+ 1 file changed, 34 insertions(+), 16 deletions(-)
+
+diff --git a/libogc/gu_psasm.S b/libogc/gu_psasm.S
+index 8b8d540..87b0e4a 100644
+--- a/libogc/gu_psasm.S
++++ b/libogc/gu_psasm.S
+@@ -51,7 +51,9 @@ ps_guMtxConcat:
+ 	ps_muls0	D00_D01,B00_B01,A00_A01
+ 	psq_l		A10_A11,16,r3,0,0
+ 	ps_muls0	D02_D03,B02_B03,A00_A01
+-	psq_l		UNIT01,Unit01@sdarel,r13,0,0
++	lis		r12,Unit01@ha
++	addi		r12,r12,Unit01@l
++	psq_l		UNIT01,0,r12,0,0
+ 	ps_muls0	D10_D11,B00_B01,A10_A11
+ 	psq_l		B12_B13,24,r4,0,0
+ 	ps_muls0	D12_D13,B02_B03,A10_A11
+@@ -93,8 +95,10 @@ ps_guMtxConcat:
+ 	.globl ps_guMtxIdentity
+ 	//r3 == mtx
+ ps_guMtxIdentity:
+-	lfs		fr0,Unit01@sdarel(r13)
+-	lfs		fr1,Unit01+4@sdarel(r13)
++	lis		r12,Unit01@ha
++	lfs		fr0,Unit01@l(r12)
++	lis		r12,Unit01+4@ha
++	lfs		fr1,Unit01+4@l(r12)
+ 	psq_st		fr0,8,r3,0,0
+ 	ps_merge01	fr2,fr0,fr1
+ 	psq_st		fr0,24,r3,0,0
+@@ -125,7 +129,8 @@ ps_guMtxCopy:
+ 	.globl ps_guMtxTranspose
+ 	//r3 = src, r4 = xpose
+ ps_guMtxTranspose:
+-	lfs		fr0,Unit01@sdarel(r13)
++	lis		r12,Unit01@ha
++	lfs		fr0,Unit01@l(r12)
+ 	psq_l		fr1,0,r3,0,0
+ 	stfs		fr0,44(r4)
+ 	psq_l		fr2,16,r3,0,0
+@@ -271,7 +276,8 @@ ps_guMtxInvXpose:
+ 	.globl ps_guMtxScale
+ 	//r3 = mtx,fr1 = xS,fr2 = yS,fr3 = zS
+ ps_guMtxScale:
+-	lfs		fr0,Unit01@sdarel(r13)
++	lis		r12,Unit01@ha
++	lfs		fr0,Unit01@l(r12)
+ 	stfs		fr1,0(r3)
+ 	psq_st		fr0,4,r3,0,0
+ 	psq_st		fr0,12,r3,0,0
+@@ -311,7 +317,8 @@ ps_guMtxScaleApply:
+ 	.globl ps_guMtxApplyScale
+ 	//r3 = src,r4 = dst,fr1 = xS,fr2 = yS,fr3 = zS
+ ps_guMtxApplyScale:
+-	lfs		fr6,Unit01+4@sdarel(r13)
++	lis		r12,Unit01+4@ha
++	lfs		fr6,Unit01+4@l(r12)
+ 	frsp		fr1,fr1
+ 	psq_l		fr4,0,r3,0,0
+ 	frsp		fr2,fr2
+@@ -340,8 +347,10 @@ ps_guMtxApplyScale:
+ 	.globl ps_guMtxTrans
+ 	//r3 = mtx,fr1 = xT,fr2 = yT,fr3 = zT
+ ps_guMtxTrans:
+-	lfs		fr4,Unit01@sdarel(r13)
+-	lfs		fr5,Unit01+4@sdarel(r13)
++	lis		r12,Unit01@ha
++	lfs		fr4,Unit01@l(r12)
++	lis		r12,Unit01+4@ha
++	lfs		fr5,Unit01+4@l(r12)
+ 	stfs		fr4,16(r3)
+ 	stfs		fr1,12(r3)
+ 	stfs		fr2,28(r3)
+@@ -380,7 +389,8 @@ ps_guMtxTransApply:
+ 	.globl ps_guMtxApplyTrans
+ 	//r3 = src,r4 = dst,fr1 = xT,fr2 = yT,fr3 = zT
+ ps_guMtxApplyTrans:
+-	lfs		fr6,Unit01+4@sdarel(r13)
++	lis		r12,Unit01+4@ha
++	lfs		fr6,Unit01+4@l(r12)
+ 	psq_l		fr4,0,r3,0,0
+ 	frsp		fr1,fr1
+ 	psq_l		fr5,8,r3,0,0
+@@ -416,9 +426,11 @@ ps_guMtxApplyTrans:
+ 	//r3 = mt,r4 = axis,fr1 = sinA,fr2 = cosA
+ ps_guMtxRotTrig:
+ 	frsp		fr1,fr1
+-	lfs		fr3,Unit01@sdarel(r13)
++	lis		r12,Unit01@ha
++	lfs		fr3,Unit01@l(r12)
+ 	frsp		fr2,fr2
+-	lfs		fr4,Unit01+4@sdarel(r13)
++	lis		r12,Unit01+4@ha
++	lfs		fr4,Unit01+4@l(r12)
+ 	ori		r4,r4,0x20
+ 	ps_neg		fr5,fr1
+ 	cmplwi		r4,'x'
+@@ -472,8 +484,10 @@ __ps_guMtxRotAxisRadInternal:
+ 	psq_l		fr3,0,r4,0,0
+ 	frsp		fr1,fr1
+ 	stfd		fr14,8(r1)
+-	lfs		fr11,NrmData+4@sdarel(r13)
+-	lfs		fr12,NrmData@sdarel(r13)
++	lis		r12,NrmData+4@ha
++	lfs		fr11,NrmData+4@l(r12)
++	lis		r12,NrmData@ha
++	lfs		fr12,NrmData@l(r12)
+ 	ps_mul		fr5,fr3,fr3
+ 	lfs		fr4,8(r4)
+ 	fadds		fr10,fr12,fr12
+@@ -519,7 +533,8 @@ __ps_guMtxRotAxisRadInternal:
+ 	.globl ps_guMtxReflect
+ 	//r3 = mtx,r4 = vec1,r5 = vec2
+ ps_guMtxReflect:
+-	lfs		fr0,Unit01+4@sdarel(r13)
++	lis		r12,Unit01+4@ha
++	lfs		fr0,Unit01+4@l(r12)
+ 	psq_l		fr1,8,r5,1,0
+ 	psq_l		fr2,0,r5,0,0
+ 	psq_l		fr3,0,r4,0,0
+@@ -588,8 +603,10 @@ ps_guVecScale:
+ 	.globl	ps_guVecNormalize
+ 	//r3 = v
+ ps_guVecNormalize:
+-	lfs		fr0,NrmData@sdarel(r13)
+-	lfs		fr1,NrmData+4@sdarel(r13)
++	lis		r12,NrmData@ha
++	lfs		fr0,NrmData@l(r12)
++	lis		r12,NrmData+4@ha
++	lfs		fr1,NrmData+4@l(r12)
+ 	psq_l		fr2,0,r3,0,0
+ 	ps_mul		fr4,fr2,fr2
+ 	psq_l		fr3,8,r3,1,0
+@@ -713,6 +730,7 @@ ps_guQuatDotProduct:
+ 	ps_sum0		fr1,fr1,fr1,fr1
+ 	blr
+ 
++	# Clang doesn't use small data, so these constants are loaded with absolute addresses
+ 	.section .sdata
+ 	.balign 16
+ Unit01:

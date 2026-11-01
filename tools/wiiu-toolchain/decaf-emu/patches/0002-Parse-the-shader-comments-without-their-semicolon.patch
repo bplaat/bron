@@ -1,0 +1,33 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Sun, 1 Nov 2026 20:44:38 +0100
+Subject: [PATCH] Parse the shader comments without their semicolon
+
+The comment tokens of the grammar leave out the semicolon, so the regular
+expressions never matched and the assembler silently ignored all register
+and variable comments. Negative numbers like a uniform block of -1 are
+accepted too, and a malformed comment is an error again.
+---
+ tools/latte-assembler/src/gfd.cpp | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/tools/latte-assembler/src/gfd.cpp b/tools/latte-assembler/src/gfd.cpp
+index 27343e6..9228154 100644
+--- a/tools/latte-assembler/src/gfd.cpp
++++ b/tools/latte-assembler/src/gfd.cpp
+@@ -19,13 +19,13 @@ Matches:
+ static std::regex
+ sCommentKeyValueRegex
+ {
+-   ";[[:space:]]*\\$([_[:alnum:]]+)(?:\\[([[:digit:]]+)\\])?(?:\\.([_[:alnum:]]+))?[[:space:]]*=[[:space:]]*(\"[^\"]+\"|[0-9]+|0x[0-9a-fA-F]+|true|false|TRUE|FALSE)"
++   ";?[[:space:]]*\\$([_[:alnum:]]+)(?:\\[([[:digit:]]+)\\])?(?:\\.([_[:alnum:]]+))?[[:space:]]*=[[:space:]]*(\"[^\"]+\"|-?[0-9]+|0x[0-9a-fA-F]+|true|false|TRUE|FALSE)"
+ };
+ 
+ static std::regex
+ sCommentKeyValueStartRegex
+ {
+-   ";[[:space:]]*\\$"
++   ";?[[:space:]]*\\$.*"
+ };
+ 
+ bool

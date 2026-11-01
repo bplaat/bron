@@ -1,0 +1,21 @@
+{
+    "llvm-target": "powerpc-unknown-eabi",
+    "data-layout": "E-m:e-p:32:32-Fn32-i64:64-n32",
+    "arch": "powerpc",
+    "cpu": "750",
+    "os": "none",
+    "env": "eabi",
+    "vendor": "nintendo",
+    "linker-flavor": "gnu-lld",
+    "linker": "rust-lld",
+    "executables": true,
+    "exe-suffix": ".elf",
+    "panic-strategy": "abort",
+    "disable-redzone": true,
+    "target-pointer-width": 32,
+    "target-endian": "big",
+    "max-atomic-width": 32,
+    "relocation-model": "static",
+    "code-model": "small",
+    "features": "+hard-float"
+}

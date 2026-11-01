@@ -1,0 +1,198 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Sat, 10 Oct 2026 12:35:54 +0200
+Subject: [PATCH] Add assembler macros for the paired single instructions
+
+LLVM doesn't know the paired single instructions of the Gekko and
+Broadway CPUs, so paired_single.inc encodes them with .long. asm.h
+includes it for assembly files and gctypes.h for C inline assembly.
+---
+ gc/gctypes.h                     |   5 ++
+ gc/ogc/machine/asm.h             |   5 ++
+ gc/ogc/machine/paired_single.inc | 145 +++++++++++++++++++++++++++++++
+ 3 files changed, 155 insertions(+)
+ create mode 100644 gc/ogc/machine/paired_single.inc
+
+diff --git a/gc/gctypes.h b/gc/gctypes.h
+index 0e53704..d56789c 100644
+--- a/gc/gctypes.h
++++ b/gc/gctypes.h
+@@ -9,6 +9,11 @@
+ #include <stdbool.h>
+ #include <stdint.h>
+ 
++// LLVM doesn't know the paired single instructions, include macros that encode them
++#if defined(__clang__) && !defined(_LANGUAGE_ASSEMBLY)
++__asm__(".include \"paired_single.inc\"");
++#endif
++
+ #ifdef __cplusplus
+    extern "C" {
+ #endif /* __cplusplus */
+diff --git a/gc/ogc/machine/asm.h b/gc/ogc/machine/asm.h
+index 373fc03..29c6b80 100644
+--- a/gc/ogc/machine/asm.h
++++ b/gc/ogc/machine/asm.h
+@@ -2,6 +2,11 @@
+ #define __ASM_H__
+ 
+ #ifdef _LANGUAGE_ASSEMBLY
++
++// LLVM doesn't know the paired single instructions, include macros that encode them
++#ifdef __clang__
++.include "paired_single.inc"
++#endif
+ /* Condition Register Bit Fields */
+ 
+ #define	cr0	0
+diff --git a/gc/ogc/machine/paired_single.inc b/gc/ogc/machine/paired_single.inc
+new file mode 100644
+index 0000000..2921712
+--- /dev/null
++++ b/gc/ogc/machine/paired_single.inc
+@@ -0,0 +1,145 @@
++# Paired single instructions of the GameCube and Wii CPUs (Gekko and Broadway).
++# LLVM doesn't know them, so these macros encode them by hand. It works the same in .S files
++# and in C inline assembly. The only difference with the official syntax is that load and
++# store offsets are written as "d, rA" instead of "d(rA)", for example psq_l 1, 8, 3, 0, 0
++# instead of psq_l f1, 8(r3), 0, 0. Record forms like ps_add. are not supported.
++
++.ifndef __paired_single_inc
++.set __paired_single_inc, 1
++
++.macro _ps_a xo, D, A, B, C
++	.long (4 << 26) | ((\D) << 21) | ((\A) << 16) | ((\B) << 11) | ((\C) << 6) | ((\xo) << 1)
++.endm
++.macro _ps_x xo, D, A, B
++	.long (4 << 26) | ((\D) << 21) | ((\A) << 16) | ((\B) << 11) | ((\xo) << 1)
++.endm
++.macro _psq op, S, d, A, W, I
++	.long ((\op) << 26) | ((\S) << 21) | ((\A) << 16) | ((\W) << 15) | ((\I) << 12) | ((\d) & 0xfff)
++.endm
++.macro _psq_x xo, S, A, B, W, I
++	.long (4 << 26) | ((\S) << 21) | ((\A) << 16) | ((\B) << 11) | ((\W) << 10) | ((\I) << 7) | ((\xo) << 1)
++.endm
++
++# Quantized loads and stores, W=1 loads a single value, I selects the GQR used for conversion
++.macro psq_l S, d, A, W, I
++	_psq 56, \S, \d, \A, \W, \I
++.endm
++.macro psq_lu S, d, A, W, I
++	_psq 57, \S, \d, \A, \W, \I
++.endm
++.macro psq_st S, d, A, W, I
++	_psq 60, \S, \d, \A, \W, \I
++.endm
++.macro psq_stu S, d, A, W, I
++	_psq 61, \S, \d, \A, \W, \I
++.endm
++.macro psq_lx S, A, B, W, I
++	_psq_x 6, \S, \A, \B, \W, \I
++.endm
++.macro psq_stx S, A, B, W, I
++	_psq_x 7, \S, \A, \B, \W, \I
++.endm
++.macro psq_lux S, A, B, W, I
++	_psq_x 38, \S, \A, \B, \W, \I
++.endm
++.macro psq_stux S, A, B, W, I
++	_psq_x 39, \S, \A, \B, \W, \I
++.endm
++
++# Arithmetic
++.macro ps_div D, A, B
++	_ps_a 18, \D, \A, \B, 0
++.endm
++.macro ps_sub D, A, B
++	_ps_a 20, \D, \A, \B, 0
++.endm
++.macro ps_add D, A, B
++	_ps_a 21, \D, \A, \B, 0
++.endm
++.macro ps_mul D, A, C
++	_ps_a 25, \D, \A, 0, \C
++.endm
++.macro ps_muls0 D, A, C
++	_ps_a 12, \D, \A, 0, \C
++.endm
++.macro ps_muls1 D, A, C
++	_ps_a 13, \D, \A, 0, \C
++.endm
++.macro ps_sel D, A, C, B
++	_ps_a 23, \D, \A, \B, \C
++.endm
++.macro ps_msub D, A, C, B
++	_ps_a 28, \D, \A, \B, \C
++.endm
++.macro ps_madd D, A, C, B
++	_ps_a 29, \D, \A, \B, \C
++.endm
++.macro ps_nmsub D, A, C, B
++	_ps_a 30, \D, \A, \B, \C
++.endm
++.macro ps_nmadd D, A, C, B
++	_ps_a 31, \D, \A, \B, \C
++.endm
++.macro ps_sum0 D, A, C, B
++	_ps_a 10, \D, \A, \B, \C
++.endm
++.macro ps_sum1 D, A, C, B
++	_ps_a 11, \D, \A, \B, \C
++.endm
++.macro ps_madds0 D, A, C, B
++	_ps_a 14, \D, \A, \B, \C
++.endm
++.macro ps_madds1 D, A, C, B
++	_ps_a 15, \D, \A, \B, \C
++.endm
++.macro ps_res D, B
++	_ps_a 24, \D, 0, \B, 0
++.endm
++.macro ps_rsqrte D, B
++	_ps_a 26, \D, 0, \B, 0
++.endm
++
++# Moves, merges and compares
++.macro ps_neg D, B
++	_ps_x 40, \D, 0, \B
++.endm
++.macro ps_mr D, B
++	_ps_x 72, \D, 0, \B
++.endm
++.macro ps_nabs D, B
++	_ps_x 136, \D, 0, \B
++.endm
++.macro ps_abs D, B
++	_ps_x 264, \D, 0, \B
++.endm
++.macro ps_merge00 D, A, B
++	_ps_x 528, \D, \A, \B
++.endm
++.macro ps_merge01 D, A, B
++	_ps_x 560, \D, \A, \B
++.endm
++.macro ps_merge10 D, A, B
++	_ps_x 592, \D, \A, \B
++.endm
++.macro ps_merge11 D, A, B
++	_ps_x 624, \D, \A, \B
++.endm
++.macro ps_cmpu0 crf, A, B
++	_ps_x 0, (\crf) << 2, \A, \B
++.endm
++.macro ps_cmpo0 crf, A, B
++	_ps_x 32, (\crf) << 2, \A, \B
++.endm
++.macro ps_cmpu1 crf, A, B
++	_ps_x 64, (\crf) << 2, \A, \B
++.endm
++.macro ps_cmpo1 crf, A, B
++	_ps_x 96, (\crf) << 2, \A, \B
++.endm
++
++# Clears a cache line and locks it in the L1 cache
++.macro dcbz_l A, B
++	_ps_x 1014, 0, \A, \B
++.endm
++
++.endif

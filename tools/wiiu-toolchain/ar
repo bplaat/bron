@@ -1,0 +1,10 @@
+#!/bin/sh
+set -eu
+
+# Apple's clang can't target PowerPC, so prefer Homebrew's LLVM like build.sh
+llvm=''
+for bin in /opt/homebrew/opt/llvm/bin/ /usr/local/opt/llvm/bin/; do
+    [ -d "$bin" ] && llvm="$bin" && break
+done
+
+exec "${llvm}llvm-ar" "$@"
