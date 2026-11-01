@@ -13,62 +13,62 @@ use std::{env, fs};
 use anyhow::{Context, Result, bail};
 
 use crate::process::run;
+use crate::utils::collect_source_files;
 use crate::{Os, Xtask};
 
 /// A Wii program with a `meta/` folder for the Homebrew Channel.
 struct Program {
-    directory: &'static str,
+    directory: PathBuf,
     /// The name of the built program.
-    name: &'static str,
+    name: String,
     /// The folder in `apps/` on the SD card.
-    bundle: &'static str,
+    bundle: String,
     rust: bool,
 }
 
-const PROGRAMS: [Program; 7] = [
-    Program {
-        directory: "examples/wii/triangles/c",
-        name: "triangles",
-        bundle: "triangles-c",
-        rust: false,
-    },
-    Program {
-        directory: "examples/wii/triangles/rust",
-        name: "triangles",
-        bundle: "triangles-rust",
-        rust: true,
-    },
-    Program {
-        directory: "examples/wii/canvas/c",
-        name: "canvas",
-        bundle: "canvas-c",
-        rust: false,
-    },
-    Program {
-        directory: "examples/wii/canvas/rust",
-        name: "canvas",
-        bundle: "canvas-rust",
-        rust: true,
-    },
-    Program {
-        directory: "examples/wii/blocks/c",
-        name: "blocks",
-        bundle: "blocks-c",
-        rust: false,
-    },
-    Program {
-        directory: "examples/wii/blocks/rust",
-        name: "blocks",
-        bundle: "blocks-rust",
-        rust: true,
-    },
-    Program {
-        directory: "games/plaatcraft-wii",
-        name: "plaatcraft-wii",
-        bundle: "plaatcraft",
-        rust: true,
-    },
-];
+fn discover_programs(root: &Path) -> Result<Vec<Program>> {
+    let mut files = Vec::new();
+    collect_source_files(root, &mut files)?;
+    let mut programs = Vec::new();
+    for file in files {
+        if !file.ends_with("meta/meta.xml") {
+            continue;
+        }
+        let directory = file
+            .parent()
+            .and_then(Path::parent)
+            .context("invalid Wii metadata path")?;
+        let leaf = directory
+            .file_name()
+            .and_then(|name| name.to_str())
+            .context("invalid Wii program directory")?;
+        let rust = directory.join("Cargo.toml").is_file();
+        if !rust && !directory.join("Makefile").is_file() {
+            continue;
+        }
+        let (name, bundle) = if matches!(leaf, "c" | "rust") {
+            let name = directory
+                .parent()
+                .and_then(Path::file_name)
+                .and_then(|name| name.to_str())
+                .context("invalid Wii example directory")?;
+            (name.to_owned(), format!("{name}-{leaf}"))
+        } else {
+            (
+                leaf.to_owned(),
+                leaf.strip_suffix("-wii").unwrap_or(leaf).to_owned(),
+            )
+        };
+        programs.push(Program {
+            directory: directory.to_owned(),
+            name,
+            bundle,
+            rust,
+        });
+    }
+    programs.sort_by(|left, right| left.bundle.cmp(&right.bundle));
+    Ok(programs)
+}
 
 impl Xtask {
     pub(crate) fn build_wii_bundle(&self, selected: Option<&str>) -> Result<()> {
@@ -99,14 +99,18 @@ impl Xtask {
 
     /// Builds the selected program or all of them into `target/bundle/wii/apps/<bundle>/`.
     fn wii_bundles(&self, selected: Option<&str>) -> Result<Vec<PathBuf>> {
-        let programs: Vec<_> = PROGRAMS
+        let available = discover_programs(&self.root)?;
+        let programs: Vec<_> = available
             .iter()
             .filter(|program| selected.is_none_or(|selected| program.bundle == selected))
             .collect();
         if let Some(selected) = selected
             && programs.is_empty()
         {
-            let names: Vec<_> = PROGRAMS.iter().map(|program| program.bundle).collect();
+            let names: Vec<_> = available
+                .iter()
+                .map(|program| program.bundle.as_str())
+                .collect();
             bail!(
                 "no Wii program {selected}, choose from: {}",
                 names.join(", ")
@@ -115,11 +119,11 @@ impl Xtask {
         let elf2dol = self.root.join("target/wii-toolchain/elf2dol");
         let mut bundles = Vec::new();
         for program in programs {
-            let directory = self.root.join(program.directory);
+            let directory = self.root.join(&program.directory);
             let bundle = self
                 .root
                 .join("target/bundle/wii/apps")
-                .join(program.bundle);
+                .join(&program.bundle);
             fs::create_dir_all(&bundle)?;
             let dol = bundle.join("boot.dol");
             if program.rust {
@@ -175,5 +179,60 @@ impl Xtask {
                     .join(", ")
             ),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn discovers_examples_with_homebrew_metadata() -> Result<()> {
+        let root = env::temp_dir().join(format!("xtask-wii-discovery-{}", std::process::id()));
+        if root.exists() {
+            fs::remove_dir_all(&root)?;
+        }
+        for directory in [
+            "examples/wii/new-example/c/meta",
+            "examples/wii/new-example/rust/meta",
+            "examples/wii-extra/another/c/meta",
+            "examples/wii/target/ignored/c/meta",
+            "games/plaatcraft-wii/meta",
+            "apps/homebrew/rust/meta",
+        ] {
+            let directory = root.join(directory);
+            fs::create_dir_all(&directory)?;
+            fs::write(directory.join("meta.xml"), "")?;
+            let program = directory.parent().unwrap();
+            let manifest = if program.ends_with("rust") || program.ends_with("plaatcraft-wii") {
+                "Cargo.toml"
+            } else {
+                "Makefile"
+            };
+            fs::write(program.join(manifest), "")?;
+        }
+        fs::create_dir_all(root.join("examples/wii/no-metadata/c"))?;
+        fs::create_dir_all(root.join("unrelated/meta"))?;
+        fs::write(root.join("unrelated/meta/meta.xml"), "")?;
+        let programs = discover_programs(&root)?;
+        fs::remove_dir_all(&root)?;
+        assert_eq!(
+            programs
+                .iter()
+                .map(|program| program.bundle.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "another-c",
+                "homebrew-rust",
+                "new-example-c",
+                "new-example-rust",
+                "plaatcraft"
+            ]
+        );
+        assert_eq!(programs[2].name, "new-example");
+        assert!(!programs[2].rust);
+        assert!(programs[3].rust);
+        assert_eq!(programs[4].name, "plaatcraft-wii");
+        Ok(())
     }
 }
