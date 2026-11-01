@@ -6,6 +6,7 @@
 
 use std::ffi::c_void;
 use std::ptr::{NonNull, null};
+use std::sync::OnceLock;
 
 pub(super) type CGContextRef = *mut c_void;
 pub(super) type CFTypeRef = *const c_void;
@@ -64,8 +65,10 @@ unsafe extern "C" {
     pub(super) fn CGContextRestoreGState(context: CGContextRef);
     pub(super) fn CGContextFlush(context: CGContextRef);
     pub(super) fn CGContextClearRect(context: CGContextRef, rect: CGRect);
-    pub(super) fn CGContextSetRGBFillColor(context: CGContextRef, r: f64, g: f64, b: f64, a: f64);
-    pub(super) fn CGContextSetRGBStrokeColor(context: CGContextRef, r: f64, g: f64, b: f64, a: f64);
+    pub(super) fn CGContextSetFillColorSpace(context: CGContextRef, space: *mut c_void);
+    pub(super) fn CGContextSetStrokeColorSpace(context: CGContextRef, space: *mut c_void);
+    pub(super) fn CGContextSetFillColor(context: CGContextRef, components: *const f64);
+    pub(super) fn CGContextSetStrokeColor(context: CGContextRef, components: *const f64);
     pub(super) fn CGContextSetLineWidth(context: CGContextRef, width: f64);
     pub(super) fn CGContextSetLineCap(context: CGContextRef, cap: i32);
     pub(super) fn CGContextSetLineJoin(context: CGContextRef, join: i32);
@@ -131,8 +134,8 @@ pub(super) struct CGAffineTransform {
 }
 
 unsafe extern "C" {
-    pub(super) fn CGColorSpaceCreateDeviceRGB() -> *mut c_void;
-    pub(super) fn CGColorSpaceRelease(space: *mut c_void);
+    static kCGColorSpaceSRGB: CFStringRef;
+    fn CGColorSpaceCreateWithName(name: CFStringRef) -> *mut c_void;
     pub(super) fn CGBitmapContextCreate(
         data: *mut c_void,
         width: usize,
@@ -218,6 +221,23 @@ pub(super) const K_CG_INTERPOLATION_NONE: i32 = 1;
 pub(super) const K_CG_INTERPOLATION_HIGH: i32 = 3;
 // Premultiplied alpha first in little endian 32-bit pixels, which is BGRA in memory.
 pub(super) const K_CG_IMAGE_PREMULTIPLIED_BGRA: u32 = 2 | (2 << 12);
+
+/// Returns the shared sRGB color space. Pixels and colors in it are matched to the display,
+/// unlike the device RGB space.
+pub(super) fn srgb_color_space() -> *mut c_void {
+    struct Space(*mut c_void);
+    // Core Graphics color spaces are immutable and may be used from any thread.
+    unsafe impl Send for Space {}
+    unsafe impl Sync for Space {}
+    static SPACE: OnceLock<Space> = OnceLock::new();
+    SPACE
+        .get_or_init(|| {
+            let space = unsafe { CGColorSpaceCreateWithName(kCGColorSpaceSRGB) };
+            assert!(!space.is_null(), "Could not create sRGB color space");
+            Space(space)
+        })
+        .0
+}
 
 #[link(name = "CoreFoundation", kind = "framework")]
 unsafe extern "C" {

@@ -16,7 +16,7 @@ use bwindow::Window;
 use crate::platforms::PlatformCanvas;
 use crate::platforms::{PlatformCanvasContext, PlatformOffscreenCanvas};
 
-/// A portable RGBA color.
+/// A portable sRGB color with alpha.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Color {
     /// Red component.
@@ -875,12 +875,13 @@ pub enum CompositeOperation {
     Luminosity,
 }
 
-/// A premultiplied BGRA8 bitmap that canvases draw with `draw_image`, which shares its pixels.
+/// A premultiplied sRGB BGRA8 bitmap that canvases draw with `draw_image`, which shares its
+/// pixels.
 #[derive(Clone)]
 pub struct CanvasImage(pub(crate) Rc<crate::platforms::PlatformImage>);
 
 impl CanvasImage {
-    /// Create an image from tightly packed, row-major, premultiplied BGRA8 pixels.
+    /// Create an image from tightly packed, row-major, premultiplied sRGB BGRA8 pixels.
     ///
     /// # Panics
     /// Panics if the dimensions are zero or do not match the pixel data.
@@ -1088,7 +1089,7 @@ impl Canvas {
     }
 }
 
-/// A thread-bound native 2D canvas backed by tightly packed, straight-alpha RGBA8 pixels.
+/// A thread-bound native 2D canvas backed by tightly packed, straight-alpha sRGB RGBA8 pixels.
 pub struct OffscreenCanvas {
     platform: PlatformOffscreenCanvas,
     width: u32,
@@ -1170,7 +1171,7 @@ impl OffscreenCanvas {
         self.platform.end_draw();
     }
 
-    /// Return tightly packed pixels in RGBA byte order with straight alpha.
+    /// Return tightly packed sRGB pixels in RGBA byte order with straight alpha.
     pub fn pixels(&mut self) -> &[u8] {
         self.platform.pixels()
     }

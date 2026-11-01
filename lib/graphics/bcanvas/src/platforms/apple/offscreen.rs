@@ -20,8 +20,7 @@ impl PlatformOffscreenCanvas {
     pub(crate) fn new(width: u32, height: u32, length: usize) -> Self {
         let mut storage = vec![0; length];
         unsafe {
-            let space = CGColorSpaceCreateDeviceRGB();
-            assert!(!space.is_null(), "Could not create bitmap color space");
+            let space = srgb_color_space();
             let context = CGBitmapContextCreate(
                 storage.as_mut_ptr().cast(),
                 width as usize,
@@ -31,7 +30,6 @@ impl PlatformOffscreenCanvas {
                 space,
                 (4 << 12) | 1,
             );
-            CGColorSpaceRelease(space);
             assert!(!context.is_null(), "Could not create bitmap canvas");
             CGContextTranslateCTM(context, 0.0, f64::from(height));
             CGContextScaleCTM(context, 1.0, -1.0);

@@ -277,8 +277,7 @@ impl PlatformCanvasContext {
             CGContextSetTextPosition(self.context, x.into(), y.into());
             match &s.fill {
                 CanvasStyle::Color(color) => {
-                    let (r, g, b, a) = color.components(1.0);
-                    CGContextSetRGBFillColor(self.context, r, g, b, a);
+                    set_color(self.context, *color, false);
                     CTLineDraw(line.as_ptr(), self.context);
                 }
                 // Gradients fill the clip of the glyphs.
@@ -339,7 +338,7 @@ impl PlatformImage {
                 release,
             );
             assert!(!provider.is_null(), "Could not create image data provider");
-            let space = CGColorSpaceCreateDeviceRGB();
+            let space = srgb_color_space();
             let image = CGImageCreate(
                 width as usize,
                 height as usize,
@@ -353,7 +352,6 @@ impl PlatformImage {
                 true,
                 0,
             );
-            CGColorSpaceRelease(space);
             CGDataProviderRelease(provider);
             assert!(!image.is_null(), "Could not create image");
             Self {
@@ -375,6 +373,21 @@ impl Drop for PlatformImage {
 enum PaintMode {
     Fill(FillRule),
     Stroke,
+}
+
+/// Set the fill or stroke color as sRGB.
+unsafe fn set_color(context: CGContextRef, color: Color, stroke: bool) {
+    let (r, g, b, a) = color.components(1.0);
+    let components = [r, g, b, a];
+    unsafe {
+        if stroke {
+            CGContextSetStrokeColorSpace(context, srgb_color_space());
+            CGContextSetStrokeColor(context, components.as_ptr());
+        } else {
+            CGContextSetFillColorSpace(context, srgb_color_space());
+            CGContextSetFillColor(context, components.as_ptr());
+        }
+    }
 }
 
 /// Paint the current path with the fill or stroke style, consuming it.
@@ -416,19 +429,11 @@ unsafe fn paint_path(context: CGContextRef, s: &CanvasState, mode: PaintMode) {
         };
         match style {
             CanvasStyle::Color(color) => {
-                let (r, g, b, a) = color.components(1.0);
+                set_color(context, *color, matches!(mode, PaintMode::Stroke));
                 match mode {
-                    PaintMode::Fill(rule) => {
-                        CGContextSetRGBFillColor(context, r, g, b, a);
-                        match rule {
-                            FillRule::NonZero => CGContextFillPath(context),
-                            FillRule::EvenOdd => CGContextEOFillPath(context),
-                        }
-                    }
-                    PaintMode::Stroke => {
-                        CGContextSetRGBStrokeColor(context, r, g, b, a);
-                        CGContextStrokePath(context);
-                    }
+                    PaintMode::Fill(FillRule::NonZero) => CGContextFillPath(context),
+                    PaintMode::Fill(FillRule::EvenOdd) => CGContextEOFillPath(context),
+                    PaintMode::Stroke => CGContextStrokePath(context),
                 }
             }
             CanvasStyle::Gradient(gradient) => {
@@ -575,14 +580,13 @@ impl NativeGradient {
             .collect();
         let locations: Vec<f64> = stops.iter().map(|(offset, _)| f64::from(*offset)).collect();
         unsafe {
-            let space = CGColorSpaceCreateDeviceRGB();
+            let space = srgb_color_space();
             let gradient = CGGradientCreateWithColorComponents(
                 space,
                 components.as_ptr(),
                 locations.as_ptr(),
                 locations.len(),
             );
-            CGColorSpaceRelease(space);
             assert!(!gradient.is_null(), "Could not create gradient");
             Self(gradient)
         }
@@ -803,7 +807,7 @@ mod tests {
     fn cached_fill_preserves_restored_colors_and_alpha() {
         let mut pixels = [0_u8; 16];
         unsafe {
-            let space = CGColorSpaceCreateDeviceRGB();
+            let space = srgb_color_space();
             // Big-endian RGBA, premultiplied alpha in the last component.
             let context = CGBitmapContextCreate(
                 pixels.as_mut_ptr().cast(),
@@ -814,7 +818,6 @@ mod tests {
                 space,
                 (4 << 12) | 1,
             );
-            CGColorSpaceRelease(space);
             assert!(!context.is_null());
             {
                 let mut canvas = PlatformCanvasContext::new(context, TextStyleCache::default());
