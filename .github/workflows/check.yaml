@@ -149,7 +149,7 @@ jobs:
       # The toolchains and emulator runners only rebuild when their inputs are newer than their outputs,
       # so date the checkout before any cached build, the exact keys keep a stale build from being used
       - name: Date toolchain sources before cached builds
-        run: find tools/nds-toolchain tools/wii-toolchain lib/graphics/image -exec touch -d 2000-01-01 {} +
+        run: find tools/nds-toolchain tools/wii-toolchain tools/wiiu-toolchain lib/graphics/image -exec touch -d 2000-01-01 {} +
       - uses: actions/cache@v5
         with:
           path: target/nds-toolchain
@@ -160,5 +160,9 @@ jobs:
             target/wii-toolchain
             !target/wii-toolchain/test
           key: linux-x86_64-wii-toolchain-${{ hashFiles('tools/wii-toolchain/**', '!tools/wii-toolchain/test/**', 'lib/graphics/image/**') }}
-      - name: Build assembly examples and games, run NDS and Wii toolchain tests, and build PlaatCraft for the Wii
+      - uses: actions/cache@v5
+        with:
+          path: target/wiiu-toolchain
+          key: linux-x86_64-wiiu-toolchain-${{ hashFiles('tools/wiiu-toolchain/**', 'lib/graphics/image/**', 'Cargo.lock') }}
+      - name: Build assembly examples and games, run NDS and Wii tests, and build Wii U examples and PlaatCraft for the Wii
         run: cargo xtask check-others

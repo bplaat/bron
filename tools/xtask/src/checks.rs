@@ -434,6 +434,18 @@ impl Xtask {
         println!("Running Wii toolchain tests...");
         run(Command::new("bash").args(["tools/wii-toolchain/build.sh", "test"]))?;
 
+        println!("Building the Wii U toolchain...");
+        run(Command::new("bash").arg("tools/wiiu-toolchain/build.sh"))?;
+
+        println!("Building Wii U examples...");
+        for example in ["triangle", "cube", "blocks"] {
+            run(Command::new("make").args(["-C", &format!("examples/wiiu/{example}/c")]))?;
+            run(Command::new("cargo")
+                .args(["build", "--release", "--locked"])
+                .current_dir(format!("examples/wiiu/{example}/rust"))
+                .env_remove("RUSTUP_TOOLCHAIN"))?;
+        }
+
         // The port selects its nightly toolchain itself, so drop the one cargo xtask runs with
         println!("Building the PlaatCraft Wii port...");
         run(Command::new("cargo")
