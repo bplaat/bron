@@ -110,10 +110,15 @@ impl Viewport {
         }
     }
 
-    /// Follows a new size of the visible area.
+    /// Follows a new size of the visible area, keeping the media in its middle in place, so
+    /// it does not shift when scroll bars appear.
     pub(crate) fn resize(&mut self, visible: (f64, f64)) {
+        let scroll = (
+            self.scroll.0 + (self.visible.0 - visible.0) / 2.0,
+            self.scroll.1 + (self.visible.1 - visible.1) / 2.0,
+        );
         self.visible = visible;
-        self.scroll_to(self.scroll);
+        self.scroll_to(scroll);
     }
 
     /// The magnified media size.
@@ -313,6 +318,15 @@ mod tests {
         assert_eq!(viewport.scroll, (300.0, 300.0));
         viewport.resize((400.0, 400.0));
         assert_eq!(viewport.scroll, (0.0, 0.0));
+    }
+
+    #[test]
+    fn resizing_keeps_the_middle_in_place() {
+        let mut viewport = Viewport::new(media(), (100.0, 100.0));
+        viewport.zoom_centered(4.0);
+        assert_eq!(viewport.scroll, (150.0, 150.0));
+        viewport.resize((80.0, 90.0));
+        assert_eq!(viewport.scroll, (160.0, 155.0));
     }
 
     #[test]

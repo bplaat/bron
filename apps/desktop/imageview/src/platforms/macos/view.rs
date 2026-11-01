@@ -100,14 +100,22 @@ define_class!(
             self.update(|_| {});
         }
 
-        // The scroll view scrolled, by itself or through `update`.
-        #[unsafe(method(clipViewBoundsChanged:))]
-        fn _clip_view_bounds_changed(&self, _: *mut Object) {
-            let origin = self.clip_bounds().origin;
+        // The scroll view scrolled, by itself or through `update`, or its visible area changed,
+        // like when legacy scrollers appear.
+        #[unsafe(method(clipViewChanged:))]
+        fn _clip_view_changed(&self, _: *mut Object) {
+            let bounds = self.clip_bounds();
+            let pages = Axis::BOTH.map(|axis| self.ivars().viewport.borrow().scroll_bar(axis).page);
+            let resized = pages != [bounds.size.width, bounds.size.height];
+            if resized {
+                // The viewport keeps the middle in place, which the scroll view then follows.
+                self.update(|_| {});
+                return;
+            }
             self.ivars()
                 .viewport
                 .borrow_mut()
-                .scroll_to((origin.x, origin.y));
+                .scroll_to((bounds.origin.x, bounds.origin.y));
             // SAFETY: The view is a live NSView.
             unsafe {
                 let _: () = msg_send![self, setNeedsDisplay: Bool::YES];
@@ -232,6 +240,7 @@ impl View {
             let clip: *mut Object = msg_send![&*scroll_view, contentView];
             let _: () = msg_send![clip, setDrawsBackground: Bool::NO];
             let _: () = msg_send![clip, setPostsBoundsChangedNotifications: Bool::YES];
+            let _: () = msg_send![clip, setPostsFrameChangedNotifications: Bool::YES];
 
             let view: Allocated<Self> = msg_send![Self::class(), alloc];
             let view: Retained<Self> = msg_send![
@@ -248,12 +257,17 @@ impl View {
             ];
             let _: () = msg_send![&*view, addSubview: &*view.ivars().scroll_view];
             let center: *mut Object = msg_send![class!(NSNotificationCenter), defaultCenter];
-            let _: () = msg_send![center,
-                addObserver: &*view,
-                selector: sel!(clipViewBoundsChanged:),
-                name: NSViewBoundsDidChangeNotification,
-                object: clip
-            ];
+            for name in [
+                NSViewBoundsDidChangeNotification,
+                NSViewFrameDidChangeNotification,
+            ] {
+                let _: () = msg_send![center,
+                    addObserver: &*view,
+                    selector: sel!(clipViewChanged:),
+                    name: name,
+                    object: clip
+                ];
+            }
             view
         }
     }
@@ -295,7 +309,10 @@ impl View {
                 width: bars[0].length,
                 height: bars[1].length,
             };
+            // Resizing the document can show or hide legacy scrollers, which resizes the
+            // viewport again, so the scroll position is read after it.
             let _: () = msg_send![&*ivars.document, setFrameSize: size];
+            let bars = Axis::BOTH.map(|axis| ivars.viewport.borrow().scroll_bar(axis));
             let clip: *mut Object = msg_send![&*ivars.scroll_view, contentView];
             let origin = Point {
                 x: bars[0].position,
