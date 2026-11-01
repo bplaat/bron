@@ -23,6 +23,7 @@ pub(crate) const NS_WINDOW_COLLECTION_BEHAVIOR_FULL_SCREEN_PRIMARY: u64 = 1 << 7
 
 #[link(name = "AppKit", kind = "framework")]
 unsafe extern "C" {
+    pub(crate) static NSToolbarFlexibleSpaceItemIdentifier: *mut Object;
     pub(crate) static NSViewBoundsDidChangeNotification: *mut Object;
     pub(crate) static NSViewFrameDidChangeNotification: *mut Object;
 }

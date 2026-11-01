@@ -16,19 +16,21 @@ use std::ptr::null_mut;
 use block2::Block;
 use bwindow::{EventLoopProxy, NativeViewHandle, Theme, Window, WindowAttachment};
 use imageview_core::Media;
-use imageview_core::appkit::{Rect, create_media_view, ns_string};
+use imageview_core::appkit::{Point, Rect, Size, create_media_view, ns_string};
 use objc2::rc::{Allocated, Retained, autoreleasepool};
 use objc2::runtime::{AnyObject as Object, Bool};
 use objc2::{class, define_class, msg_send, sel};
 
 pub(crate) use self::browse::neighbour_path;
 use self::headers::*;
+use self::toolbar::install_toolbar;
 use self::view::{View, rect};
 use crate::AppEvent;
 use crate::viewport::Viewport;
 
 mod browse;
 mod headers;
+mod toolbar;
 mod view;
 
 thread_local! {
@@ -55,17 +57,22 @@ define_class!(
                 // SAFETY: NSURL returns a null-terminated representation that lives in this pool.
                 let bytes = unsafe { std::ffi::CStr::from_ptr(path) }.to_bytes();
                 let path = std::path::PathBuf::from(<std::ffi::OsStr as std::os::unix::ffi::OsStrExt>::from_bytes(bytes));
-                PROXY.with_borrow(|proxy| {
-                    if let Some(proxy) = proxy {
-                        _ = proxy.send_user_event(AppEvent::Open(vec![path]));
-                    }
-                });
+                send(AppEvent::Open(vec![path]));
             }
             // The application shows the file in its own window, not in an NSDocument.
             completion.call((null_mut(), Bool::NO, null_mut()));
         }
     }
 );
+
+// Sends an event to the application.
+fn send(event: AppEvent) {
+    PROXY.with_borrow(|proxy| {
+        if let Some(proxy) = proxy {
+            _ = proxy.send_user_event(event);
+        }
+    });
+}
 
 /// Sets up the recent documents menu.
 pub(crate) fn init(proxy: EventLoopProxy<AppEvent>) {
@@ -135,6 +142,7 @@ pub(crate) struct MediaView {
     view: Retained<View>,
     // The loading indicator, shown until the media is decoded.
     spinner: Option<Retained<Object>>,
+    _toolbar: Retained<Object>,
     _attachment: WindowAttachment,
 }
 
@@ -152,22 +160,43 @@ impl MediaView {
         view.set_dark(theme == Theme::Dark);
         // SAFETY: The attachment keeps the window that retains the view open while this view
         // lives.
-        unsafe {
+        let toolbar = unsafe {
             attachment.set_native_view(NativeViewHandle::AppKit(Retained::as_ptr(&view) as _));
             let window: *mut Object = msg_send![&*view, window];
+            // The unified toolbar changes the content size, so the window gets the size it was
+            // built with back, keeping its top left corner in place.
+            let frame: Rect = msg_send![window, frame];
+            let toolbar = install_toolbar(window);
+            let content_size = Size {
+                width: f64::from(size.width),
+                height: f64::from(size.height),
+            };
+            let _: () = msg_send![window, setContentSize: content_size];
+            let top_left = Point {
+                x: frame.origin.x,
+                y: frame.origin.y + frame.size.height,
+            };
+            let _: () = msg_send![window, setFrameTopLeftPoint: top_left];
             // Enable full screen, code-created windows only zoom by default.
             let behavior: u64 = msg_send![window, collectionBehavior];
             let _: () = msg_send![window,
                 setCollectionBehavior: behavior | NS_WINDOW_COLLECTION_BEHAVIOR_FULL_SCREEN_PRIMARY
             ];
-        }
-        let spinner = loading.then(|| add_spinner(&view));
+            toolbar
+        };
+        let spinner = if loading {
+            Some(add_spinner(&view))
+        } else {
+            show_size(&view);
+            None
+        };
         // The view has its size now.
         view.update(Viewport::zoom_to_fit);
         view.advance_frame();
         Self {
             view,
             spinner,
+            _toolbar: toolbar,
             _attachment: attachment,
         }
     }
@@ -177,6 +206,7 @@ impl MediaView {
         self.view
             .update(|viewport| viewport.set_media(media, zoom_to_fit));
         self.view.advance_frame();
+        show_size(&self.view);
         if let Some(spinner) = self.spinner.take() {
             // SAFETY: The spinner is a live subview of the view.
             unsafe {
@@ -258,6 +288,17 @@ fn add_spinner(view: &View) -> Retained<Object> {
         let _: () = msg_send![view, addSubview: &*spinner];
         let _: () = msg_send![&*spinner, startAnimation: null_mut::<Object>()];
         spinner
+    }
+}
+
+// Shows the size of the media as the subtitle of the window.
+fn show_size(view: &View) {
+    let (width, height) = view.media().size();
+    let subtitle = format!("{} \u{d7} {}", width.round() as i64, height.round() as i64);
+    // SAFETY: The view is in its window and the subtitle string is autoreleased.
+    unsafe {
+        let window: *mut Object = msg_send![view, window];
+        let _: () = msg_send![window, setSubtitle: ns_string(&subtitle)];
     }
 }
 

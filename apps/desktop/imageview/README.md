@@ -18,6 +18,8 @@ vector drawings, and follows the system light or dark theme.
 
 ### macOS
 
+- A toolbar in the titlebar with previous and next image and the zoom commands, and the
+  image size below the file name
 - Print images at their natural size or scaled to fit, and reopen them from Open Recent
 - Quick Look [preview](../imageview-macos-preview) and [thumbnail](../imageview-macos-thumbnail)
   extensions

@@ -18,7 +18,7 @@ use bwindow::{
     WindowBuilder, WindowEvent, WindowId,
 };
 use imageview_core::{
-    EXTENSIONS, FileVersion, Media, ZOOM_STEP, decode_media, preferred_content_size, window_title,
+    EXTENSIONS, FileVersion, Media, ZOOM_STEP, decode_media, preferred_content_size,
 };
 
 use crate::platforms::MediaView;
@@ -32,6 +32,9 @@ const RELOAD_INTERVAL: Duration = Duration::from_secs(1);
 const SLOW_LOAD: Duration = Duration::from_millis(250);
 // The size a window opens with before its media is decoded.
 const LOADING_SIZE: (f64, f64) = (800.0, 600.0);
+// The width new windows open with at least, so the whole macOS toolbar fits.
+#[cfg(target_os = "macos")]
+const MINIMUM_TOOLBAR_WIDTH: f64 = 600.0;
 
 /// Events sent to the event loop from worker threads.
 pub(crate) enum AppEvent {
@@ -46,6 +49,9 @@ pub(crate) enum AppEvent {
     Loaded(Load, Result<Media, String>),
     /// A file for a new window is still decoding after a while.
     SlowLoad(u64),
+    /// Run a menu action, like the macOS toolbar does.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    Action(&'static str),
 }
 
 /// Where decoded media is shown.
@@ -162,6 +168,8 @@ impl App {
             let (width, height) = media.size();
             preferred_content_size(width, height)
         });
+        #[cfg(target_os = "macos")]
+        let width = width.max(MINIMUM_TOOLBAR_WIDTH);
         let window = WindowBuilder::new()
             .title(title(&path, media.as_ref()))
             .size(LogicalSize::new(width as f32, height as f32))
@@ -356,11 +364,18 @@ fn file_name(path: &Path) -> String {
     )
 }
 
+// The file name, macOS shows the media size as the subtitle of the window.
+#[cfg(target_os = "macos")]
+fn title(path: &Path, _media: Option<&Media>) -> String {
+    file_name(path)
+}
+
 // The file name and the media size once it is decoded.
+#[cfg(not(target_os = "macos"))]
 fn title(path: &Path, media: Option<&Media>) -> String {
     media.map_or_else(
         || file_name(path),
-        |media| window_title(&file_name(path), media.size()),
+        |media| imageview_core::window_title(&file_name(path), media.size()),
     )
 }
 
@@ -462,6 +477,7 @@ fn main() {
         Event::UserEvent(AppEvent::Loaded(load, result)) => app.loaded(load, result),
         Event::UserEvent(AppEvent::SlowLoad(id)) => app.slow_load(id),
         Event::Action(action) => app.action(&action),
+        Event::UserEvent(AppEvent::Action(action)) => app.action(action),
         Event::Window(id, event) => app.window_event(id, event),
         _ => {}
     });
