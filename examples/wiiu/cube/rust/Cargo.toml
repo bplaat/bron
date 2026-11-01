@@ -1,0 +1,24 @@
+cargo-features = ["panic-immediate-abort"]
+
+[package]
+name = "cube"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+image = { path = "../../../../lib/graphics/image", default-features = false, features = [
+    "jpeg",
+] }
+wut-sys = { path = "../../../../tools/wiiu-toolchain/wut-sys" }
+
+[patch.crates-io]
+crc = { path = "../../../../lib/data/crc" }
+
+[profile.dev]
+opt-level = "s"
+panic = "immediate-abort"
+
+[profile.release]
+opt-level = "s"
+panic = "immediate-abort"
+codegen-units = 1

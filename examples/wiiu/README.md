@@ -39,11 +39,16 @@ The Rust examples are standalone nightly projects, separate from the main Cargo 
 Run Cargo from the example directory so it loads the Wii U target and runner configuration.
 
 All examples draw on both the TV and the GamePad with libwhb. Their shaders are written in Latte
-assembly in `src/shader.vsh` and `src/shader.psh`.
+assembly in `src/shader.vsh` and `src/shader.psh`, and their images are embedded and decoded at
+runtime, with stb_image in C and our [image](../../lib/graphics/image) crate in Rust.
 
 ## Triangle
 
 A minimal program that draws a rotating triangle with vertex colors.
+
+## Cube
+
+A rotating crate cube scene.
 
 ## License
 
