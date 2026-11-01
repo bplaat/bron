@@ -113,7 +113,7 @@ Various tools and websites. For the deployed sites, go to [bron.bplaat.nl](https
 - [plaatnotes](apps/web/plaatnotes) A self-hosted note-taking web app with rich Markdown support
 - [nds-toolchain](tools/nds-toolchain/) An LLVM-based Nintendo DS toolchain with picolibc and a test ROM
 - [wii-toolchain](tools/wii-toolchain/) An LLVM-based Wii toolchain with picolibc, libogc, the [gxtexconv](tools/wii-toolchain/gxtexconv) texture converter, and Dolphin emulator tests
-- [wiiu-toolchain](tools/wiiu-toolchain/) An LLVM-based Wii U toolchain with picolibc, wut, libwhb, and decaf-emu's shader assembler
+- [wiiu-toolchain](tools/wiiu-toolchain/) An LLVM-based Wii U toolchain with picolibc, wut, libwhb, decaf-emu's shader assembler, and the [gtxconv](tools/wiiu-toolchain/gtxconv) texture converter
 
 ### Examples
 

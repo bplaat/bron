@@ -1,0 +1,7 @@
+[[textures]]
+path = "texture.png"
+format = "bc1"
+mipmaps = true
+
+[[textures]]
+path = "texture.png"

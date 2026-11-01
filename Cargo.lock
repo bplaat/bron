@@ -610,6 +610,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "gtxconv"
+version = "0.1.0"
+dependencies = [
+ "basic-toml",
+ "image",
+ "serde",
+]
+
+[[package]]
 name = "gxtexconv"
 version = "0.1.0"
 dependencies = [

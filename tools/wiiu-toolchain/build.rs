@@ -22,6 +22,7 @@ pub fn build(toolchain: impl AsRef<Path>) -> PathBuf {
         "build.rs",
         "build.sh",
         "decaf-emu",
+        "gtxconv",
         "libogc",
         "picolibc",
         "wiiu.ld",
@@ -50,6 +51,30 @@ pub fn build(toolchain: impl AsRef<Path>) -> PathBuf {
     println!("cargo:rustc-link-lib=static=gu");
     println!("cargo:rustc-link-lib=static=c");
     build_dir
+}
+
+/// Converts the textures of a gtxconv config to `textures.gtx` in `OUT_DIR`.
+#[allow(dead_code, reason = "not every program has textures")]
+pub fn convert_textures(build_dir: &Path, config: &Path) -> PathBuf {
+    println!("cargo:rerun-if-changed={}", config.display());
+    let directory = config.parent().expect("config has a directory");
+    for entry in std::fs::read_dir(directory).expect("failed to read the textures directory") {
+        println!(
+            "cargo:rerun-if-changed={}",
+            entry.expect("failed to read entry").path().display()
+        );
+    }
+    let output =
+        PathBuf::from(env::var_os("OUT_DIR").expect("OUT_DIR not set")).join("textures.gtx");
+    let status = Command::new(build_dir.join("gtxconv"))
+        .arg("-c")
+        .arg(config)
+        .arg("-o")
+        .arg(&output)
+        .status()
+        .expect("failed to run gtxconv");
+    assert!(status.success(), "failed to convert the textures");
+    output
 }
 
 /// Assembles a vertex and pixel shader with latte-assembler to `shader.gsh` in `OUT_DIR`.

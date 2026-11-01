@@ -4,7 +4,8 @@
 # wut/patches/, wut-tools/patches/, picolibc/patches/, libogc/patches/ and decaf-emu/patches/ and
 # builds libwut.a with the import stubs of the system libraries, libwhb and
 # wutpicolibc, picolibc (the C library) in sysroot/, libogc's paired single matrix math in
-# libgu.a, libcompiler-rt.a and the host tools elf2rpl, rplimportgen and latte-assembler.
+# libgu.a, libcompiler-rt.a and the host tools elf2rpl, rplimportgen, latte-assembler and our
+# gtxconv/.
 # The example Makefiles and Rust build.rs files run this before they build.
 #
 # Usage: ./build.sh [command]...
@@ -299,9 +300,19 @@ build_libraries() {
     fi
 }
 
-# elf2rpl and rplimportgen from wut-tools and latte-assembler from decaf-emu run on the host
+# elf2rpl and rplimportgen from wut-tools, latte-assembler from decaf-emu and our gtxconv/ run on
+# the host
 build_tools() {
     local source objects_dir="$BUILD_DIR/objects/latte-assembler" pids=() objects=() pid failed=0
+    if outdated "$BUILD_DIR/gtxconv" "$TOOLCHAIN_DIR/gtxconv" "$ROOT_DIR/lib/graphics/image"; then
+        msg "Building gtxconv"
+        # The Rust examples run this from their build.rs, so leave out their toolchain and target
+        env -u RUSTUP_TOOLCHAIN -u RUSTC -u RUSTC_WRAPPER -u RUSTC_WORKSPACE_WRAPPER \
+            -u CARGO_ENCODED_RUSTFLAGS -u CARGO_BUILD_TARGET \
+            cargo build -q --release -p gtxconv --manifest-path "$ROOT_DIR/Cargo.toml" \
+            --target-dir "$ROOT_DIR/target" || die "Failed to build gtxconv"
+        cp "$ROOT_DIR/target/release/gtxconv" "$BUILD_DIR/gtxconv"
+    fi
     if outdated "$BUILD_DIR/elf2rpl" "$TOOLS_DIR/.patched" "$TOOLS_DIR/src"; then
         msg "Building elf2rpl"
         c++ -std=c++17 -O2 -w -DFMT_HEADER_ONLY -I"$TOOLS_DIR/src/common" -I"$TOOLS_DIR/libraries/excmd/src" \

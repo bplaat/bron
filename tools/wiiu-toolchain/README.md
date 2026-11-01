@@ -18,6 +18,8 @@ for you. For now the programs are only tested in the [Cemu](https://cemu.info/) 
 - Clones the last commit of [decaf-emu](https://github.com/decaf-emu/decaf-emu) and applies
   `decaf-emu/patches/`, then builds its `latte-assembler`, which assembles Latte shader assembly
   to `.gsh` shader files
+- Builds our [gtxconv](gtxconv) with Cargo to `../../target/wiiu-toolchain/gtxconv`, which converts
+  images to `.gtx` texture files in the tiled layout of the GPU
 - Checks out only the matrix math of devkitPro's [libogc](https://github.com/devkitPro/libogc) v2.11.0,
   applies `libogc/patches/` and builds `../../target/wiiu-toolchain/libgu.a`. Its `ps_` functions use
   the paired single instructions, which the Espresso CPU has like the Wii's Broadway. `gu.h` and the
@@ -42,10 +44,11 @@ Install the host dependencies listed in the [examples README](../../examples/wii
 Downloaded sources, compiled libraries and host tools stay in the repository root's ignored `target/wiiu-toolchain/` folder.
 
 C projects include `wiiu.mk` from their Makefile, which also assembles `src/shader.vsh` and
-`src/shader.psh` to `target/shader.gsh`. Rust projects select `wiiu.json` and `run.sh` in
-`.cargo/config.toml`, then call the shared `build.rs` helper to build the libraries, configure the
-linker and assemble their shaders. They use the wut, libwhb and picolibc functions through the
-`wut-sys` crate, which also binds the libogc matrix functions they use. Each project keeps its own build output in `target/`.
+`src/shader.psh` to `target/shader.gsh` and converts the textures of `src/assets/textures.toml` to
+`target/textures.gtx`. Rust projects select `wiiu.json` and `run.sh` in `.cargo/config.toml`, then
+call the shared `build.rs` helper to build the libraries, configure the linker, assemble their
+shaders and convert their textures. They use the wut, libwhb and picolibc functions through
+the `wut-sys` crate, which also binds the libogc matrix functions they use. Each project keeps its own build output in `target/`.
 
 The toolchain and the examples build separately from the main Cargo workspace.
 
@@ -59,6 +62,7 @@ The toolchain and the examples build separately from the main Cargo workspace.
   `libgu.a` and picolibc's `../../target/wiiu-toolchain/sysroot/lib/libc.a` and assembles shaders
 - `wut-sys/` has the Rust bindings for the wut, libwhb, libogc matrix and picolibc functions the
   programs use
+- `gtxconv/` converts images to `.gtx` texture files from a TOML config, as a library and a CLI
 - `cc` is the C compiler for cc-rs build scripts of Rust projects: it builds the toolchain and
   compiles with the Wii U flags and the picolibc, wut and libogc matrix headers. `ar` is a separate
   wrapper for `llvm-ar`. Rust projects with C sources set `TARGET_CC` and `TARGET_AR` to these
