@@ -18,73 +18,103 @@
     <body>
         <div id="app" v-cloak @vue:mounted="init">
             <div class="app">
-                <div class="macos-titlebar">Sequel Explorer</div>
-
-                <div class="sidebar">
-                    <div class="open-db">
-                        <button class="button" @click="openDatabase">Connect</button>
-                        <span class="backend-badge" v-show="dbOpened">{{ connectionKind }}</span>
-                        <span class="db-path-label" :title="connectionLabel">
-                            {{ connectionLabel || 'No database open' }}
-                        </span>
+                <aside class="sidebar">
+                    <div class="sidebar-titlebar is-titlebar">
+                        <button
+                            class="connection-switcher"
+                            :class="{ 'is-open': connectionMenu }"
+                            :title="connectionLabel || 'Connect to a database'"
+                            :disabled="sqlTransferRunning || schemaSaving"
+                            @click.stop="toggleConnectionMenu"
+                        >
+                            <svg class="icon" viewBox="0 0 24 24">
+                                <path
+                                    data-mdi="database"
+                                    d="M12,3C7.58,3 4,4.79 4,7C4,9.21 7.58,11 12,11C16.42,11 20,9.21 20,7C20,4.79 16.42,3 12,3M4,9V12C4,14.21 7.58,16 12,16C16.42,16 20,14.21 20,12V9C20,11.21 16.42,13 12,13C7.58,13 4,11.21 4,9M4,14V17C4,19.21 7.58,21 12,21C16.42,21 20,19.21 20,17V14C20,16.21 16.42,18 12,18C7.58,18 4,16.21 4,14Z"
+                                />
+                            </svg>
+                            <span>{{ connectionTitle() }}</span>
+                            <svg class="icon is-chevron" viewBox="0 0 24 24" v-show="dbOpened">
+                                <path
+                                    data-mdi="chevron-down"
+                                    d="M7.41,8.58L12,13.17L16.59,8.58L18,10L12,16L6,10L7.41,8.58Z"
+                                />
+                            </svg>
+                        </button>
                     </div>
 
                     <div class="sidebar-content">
-                        <div class="database-picker" v-show="connectionKind === 'mysql'">
-                            <label for="database-select">Database</label>
-                            <select
-                                id="database-select"
-                                class="input"
-                                v-model="currentDatabase"
-                                :disabled="isSelectingDatabase"
-                                @change="selectDatabase(currentDatabase)"
-                            >
-                                <option value="" disabled>Select a database</option>
-                                <option v-for="database in databases" :key="database" :value="database">
-                                    {{ database }}
-                                </option>
-                            </select>
-                        </div>
-                        <div class="placeholder" v-show="!dbOpened">Connect to a database</div>
-                        <div class="placeholder is-error" v-show="browserError">{{ browserError }}</div>
                         <div
-                            class="placeholder"
+                            class="sidebar-section"
+                            v-show="dbOpened && !browserError && (connectionKind === 'sqlite' || currentDatabase)"
+                        >
+                            <div class="sidebar-section-header">
+                                <span class="section-title">Tables</span>
+                                <div class="toolbar-group">
+                                    <button
+                                        class="button is-icon is-small"
+                                        title="Table actions"
+                                        :disabled="currentTable === null || sqlTransferRunning || schemaSaving"
+                                        @click.stop="openCurrentTableMenu"
+                                    >
+                                        <svg class="icon" viewBox="0 0 24 24">
+                                            <path
+                                                data-mdi="dots-horizontal"
+                                                d="M16,12A2,2 0 0,1 18,10A2,2 0 0,1 20,12A2,2 0 0,1 18,14A2,2 0 0,1 16,12M10,12A2,2 0 0,1 12,10A2,2 0 0,1 14,12A2,2 0 0,1 12,14A2,2 0 0,1 10,12M4,12A2,2 0 0,1 6,10A2,2 0 0,1 8,12A2,2 0 0,1 6,14A2,2 0 0,1 4,12Z"
+                                            />
+                                        </svg>
+                                    </button>
+                                    <button
+                                        class="button is-icon is-small"
+                                        title="New table"
+                                        :disabled="sqlTransferRunning || schemaSaving"
+                                        @click="openCreateTableDialog"
+                                    >
+                                        <svg class="icon" viewBox="0 0 24 24">
+                                            <path data-mdi="plus" d="M19,13H13V19H11V13H5V11H11V5H13V11H19V13Z" />
+                                        </svg>
+                                    </button>
+                                </div>
+                            </div>
+                            <ul
+                                ref="tablesList"
+                                class="tables-list"
+                                v-show="tables.length > 0"
+                                role="listbox"
+                                tabindex="0"
+                                @keydown="onTableListKeydown"
+                            >
+                                <li
+                                    v-for="(name, tableIdx) in tables"
+                                    :key="name"
+                                    :id="`table-option-${tableIdx}`"
+                                    role="option"
+                                    :title="name"
+                                    :class="{ 'is-active': name === currentTable }"
+                                    @click="selectTableFromList(name)"
+                                    @contextmenu="openTableMenu(name, $event)"
+                                >
+                                    {{ name }}
+                                </li>
+                            </ul>
+                            <div class="empty-state is-compact" v-show="currentDatabase && tables.length === 0">
+                                No tables found
+                            </div>
+                        </div>
+
+                        <div class="empty-state is-error" v-show="browserError">{{ browserError }}</div>
+                        <div
+                            class="empty-state"
                             v-show="dbOpened && !browserError && !currentDatabase && connectionKind === 'mysql'"
                         >
                             No databases found
                         </div>
-                        <div
-                            class="placeholder"
-                            v-show="dbOpened && !browserError && currentDatabase && tables.length === 0"
-                        >
-                            No tables found
-                        </div>
-                        <div class="sidebar-section-title" v-show="tables.length > 0">Tables</div>
-                        <ul class="tables-list" v-show="tables.length > 0">
-                            <li v-for="name in tables" :key="name">
-                                <a
-                                    href="#"
-                                    @click.prevent="selectTable(name)"
-                                    :class="{ 'is-active': name === currentTable }"
-                                >
-                                    {{ name }}
-                                </a>
-                            </li>
-                        </ul>
                     </div>
-                </div>
+                </aside>
 
-                <div class="content-area">
-                    <div class="placeholder" v-show="!dbOpened">Connect to a database</div>
-                    <div
-                        class="placeholder"
-                        v-show="dbOpened && !browserError && connectionKind === 'mysql' && !currentDatabase"
-                    >
-                        Select a database
-                    </div>
-
-                    <div class="table-view" v-show="dbOpened && (connectionKind === 'sqlite' || currentDatabase)">
-                        <div class="tabs">
+                <main class="content-area">
+                    <div class="tabs is-titlebar">
+                        <div class="tabs-list" role="tablist" v-show="hasDatabaseView()">
                             <button class="tab" :class="{ 'is-active': activeTab === 'data' }" @click="showData">
                                 Data
                             </button>
@@ -96,43 +126,228 @@
                             >
                                 Schema
                             </button>
-                            <div class="tab-spacer"></div>
-                            <div class="row-count">{{ rowCount }}</div>
+                            <button class="tab" :class="{ 'is-active': activeTab === 'query' }" @click="showQuery">
+                                Query
+                            </button>
                         </div>
+                        <div class="toolbar-spacer"></div>
+                        <div class="tabs-actions" v-show="hasDatabaseView()">
+                            <button
+                                class="button is-icon is-small"
+                                :disabled="sqlTransferRunning || schemaSaving || isRowActionRunning"
+                                title="Refresh tables and rows"
+                                @click="refresh"
+                            >
+                                <svg class="icon" viewBox="0 0 24 24">
+                                    <path
+                                        data-mdi="refresh"
+                                        d="M17.65,6.35C16.2,4.9 14.21,4 12,4A8,8 0 0,0 4,12A8,8 0 0,0 12,20C15.73,20 18.84,17.45 19.73,14H17.65C16.83,16.33 14.61,18 12,18A6,6 0 0,1 6,12A6,6 0 0,1 12,6C13.66,6 15.14,6.69 16.22,7.78L13,11H20V4L17.65,6.35Z"
+                                    />
+                                </svg>
+                            </button>
+                            <button
+                                class="button is-small"
+                                :disabled="sqlTransferRunning || schemaSaving"
+                                title="Run a SQL script against this database"
+                                @click="importSql"
+                            >
+                                Import SQL
+                            </button>
+                            <button
+                                class="button is-small"
+                                :disabled="sqlTransferRunning || schemaSaving"
+                                title="Export this database's schema and rows as SQL"
+                                @click="exportSql"
+                            >
+                                Export SQL
+                            </button>
+                        </div>
+                    </div>
 
+                    <div class="empty-state welcome" v-show="!dbOpened">
+                        <svg class="icon" viewBox="0 0 24 24">
+                            <path
+                                data-mdi="database"
+                                d="M12,3C7.58,3 4,4.79 4,7C4,9.21 7.58,11 12,11C16.42,11 20,9.21 20,7C20,4.79 16.42,3 12,3M4,9V12C4,14.21 7.58,16 12,16C16.42,16 20,14.21 20,12V9C20,11.21 16.42,13 12,13C7.58,13 4,11.21 4,9M4,14V17C4,19.21 7.58,21 12,21C16.42,21 20,19.21 20,17V14C20,16.21 16.42,18 12,18C7.58,18 4,16.21 4,14Z"
+                            />
+                        </svg>
+                        <h1>No database open</h1>
+                        <p>Open a SQLite file or connect to a MySQL server.</p>
+                        <button class="button is-primary" @click="openDatabase">Connect to a database…</button>
+                    </div>
+                    <div
+                        class="empty-state"
+                        v-show="dbOpened && !browserError && connectionKind === 'mysql' && !currentDatabase"
+                    >
+                        Select a database
+                    </div>
+
+                    <div class="table-view" v-show="hasDatabaseView()">
                         <div class="tab-panel" v-show="activeTab === 'data'">
-                            <div class="data-table-wrap">
-                                <div class="placeholder" v-show="currentTable === null && !isCustomQuery">
+                            <div class="toolbar">
+                                <div class="toolbar-group" v-show="isTableView()">
+                                    <button
+                                        class="button is-small"
+                                        title="Add a row"
+                                        :disabled="!canAddRow()"
+                                        @click="openAddRowDialog"
+                                    >
+                                        <svg class="icon" viewBox="0 0 24 24">
+                                            <path data-mdi="plus" d="M19,13H13V19H11V13H5V11H11V5H13V11H19V13Z" />
+                                        </svg>
+                                        Add
+                                    </button>
+                                    <button
+                                        class="button is-small"
+                                        :title="rowActionTitle('edit')"
+                                        :disabled="!canEditSelectedRow()"
+                                        @click="openEditRowDialog"
+                                    >
+                                        <svg class="icon" viewBox="0 0 24 24">
+                                            <path
+                                                data-mdi="pencil"
+                                                d="M20.71,7.04C21.1,6.65 21.1,6 20.71,5.63L18.37,3.29C18,2.9 17.35,2.9 16.96,3.29L15.12,5.12L18.87,8.87M3,17.25V21H6.75L17.81,9.93L14.06,6.18L3,17.25Z"
+                                            />
+                                        </svg>
+                                        Edit
+                                    </button>
+                                    <button
+                                        class="button is-small"
+                                        :title="rowActionTitle('duplicate')"
+                                        :disabled="!canDuplicateSelectedRows()"
+                                        @click="duplicateSelectedRows"
+                                    >
+                                        <svg class="icon" viewBox="0 0 24 24">
+                                            <path
+                                                data-mdi="content-copy"
+                                                d="M19,21H8V7H19M19,5H8A2,2 0 0,0 6,7V21A2,2 0 0,0 8,23H19A2,2 0 0,0 21,21V7A2,2 0 0,0 19,5M16,1H4A2,2 0 0,0 2,3V17H4V3H16V1Z"
+                                            />
+                                        </svg>
+                                        Duplicate
+                                    </button>
+                                    <button
+                                        class="button is-small is-danger"
+                                        :title="rowActionTitle('delete')"
+                                        :disabled="!canDeleteSelectedRows()"
+                                        @click="deleteSelectedRows"
+                                    >
+                                        <svg class="icon" viewBox="0 0 24 24">
+                                            <path
+                                                data-mdi="delete"
+                                                d="M19,4H15.5L14.5,3H9.5L8.5,4H5V6H19M6,19A2,2 0 0,0 8,21H16A2,2 0 0,0 18,19V7H6V19Z"
+                                            />
+                                        </svg>
+                                        Delete
+                                    </button>
+                                </div>
+                                <div class="toolbar-separator" v-show="isTableView()"></div>
+                                <form class="toolbar-group filter" v-show="isTableView()" @submit.prevent="applyFilter">
+                                    <select class="input is-small" v-model="filterDraft.column" title="Filter column">
+                                        <option value="">No filter</option>
+                                        <option v-for="column in columns" :key="column.name" :value="column.name">
+                                            {{ column.name }}
+                                        </option>
+                                    </select>
+                                    <select
+                                        class="input is-small"
+                                        v-model="filterDraft.operator"
+                                        :disabled="!filterDraft.column"
+                                        title="Filter operator"
+                                    >
+                                        <option
+                                            v-for="operator in filterOperators"
+                                            :key="operator.value"
+                                            :value="operator.value"
+                                        >
+                                            {{ operator.label }}
+                                        </option>
+                                    </select>
+                                    <input
+                                        class="input is-small filter-value"
+                                        v-model="filterDraft.value"
+                                        v-show="filterNeedsValue()"
+                                        :disabled="!filterDraft.column"
+                                        placeholder="Value"
+                                        autocorrect="off"
+                                        spellcheck="false"
+                                    />
+                                    <button class="button is-small" type="submit" :disabled="!filterDraft.column">
+                                        Apply
+                                    </button>
+                                    <button
+                                        class="button is-small"
+                                        type="button"
+                                        v-show="filter !== null"
+                                        @click="clearFilter"
+                                    >
+                                        Clear
+                                    </button>
+                                </form>
+                                <span class="toolbar-title" v-show="isCustomQuery">Query result</span>
+                                <div class="toolbar-spacer"></div>
+                                <span class="toolbar-status">{{ rowCount }}</span>
+                            </div>
+                            <div class="alert is-error is-banner" role="alert" v-show="rowActionError">
+                                <span class="alert-text">{{ rowActionError }}</span>
+                                <button class="button is-icon is-small" title="Dismiss" @click="rowActionError = ''">
+                                    <svg class="icon" viewBox="0 0 24 24">
+                                        <path
+                                            data-mdi="close"
+                                            d="M19,6.41L17.59,5L12,10.59L6.41,5L5,6.41L10.59,12L5,17.59L6.41,19L12,13.41L17.59,19L19,17.59L13.41,12L19,6.41Z"
+                                        />
+                                    </svg>
+                                </button>
+                            </div>
+                            <div class="data-table-wrap" tabindex="0" @keydown="onDataKeydown">
+                                <div class="empty-state" v-show="currentTable === null && !isCustomQuery">
                                     Select a table or run a SELECT query
                                 </div>
                                 <table class="data-table" v-show="showDataTable">
                                     <thead>
                                         <tr>
-                                            <th v-for="(col, colIdx) in columns" :key="colIdx">
-                                                <span class="col-name">{{ col.name }}</span>
-                                                <span class="col-type">{{ col.type }}</span>
+                                            <th
+                                                v-for="(col, colIdx) in columns"
+                                                :key="colIdx"
+                                                :class="{ 'is-sortable': isTableView() }"
+                                                :title="isTableView() ? 'Click to sort' : null"
+                                                @click="toggleSort(colIdx)"
+                                            >
+                                                <span class="column-name">{{ col.name }}</span>
+                                                <span class="column-type">{{ col.type }}</span>
+                                                <span class="sort-indicator">{{ sortIndicator(colIdx) }}</span>
                                             </th>
                                         </tr>
                                     </thead>
                                     <tbody>
                                         <tr class="empty-table-row" v-if="showDataEmpty">
-                                            <td :colspan="Math.max(columns.length, 1)">
-                                                <span>{{ dataEmptyText }}</span>
-                                            </td>
+                                            <td :colspan="Math.max(columns.length, 1)">{{ dataEmptyText }}</td>
                                         </tr>
-                                        <tr v-for="(row, rowIdx) in rows" :key="rowIdx">
-                                            <td v-for="(val, colIdx) in row" :key="colIdx">
-                                                <span class="cell-value" :class="{ 'is-null': val.kind === 'null' }">
+                                        <tr
+                                            v-for="(row, rowIdx) in rows"
+                                            :key="rowIdx"
+                                            :class="{ 'is-selected': isRowSelected(rowIdx) }"
+                                            @click="selectRow(rowIdx, $event)"
+                                            @dblclick="editRowAt(rowIdx, $event)"
+                                        >
+                                            <td
+                                                v-for="(val, colIdx) in row"
+                                                :key="colIdx"
+                                                @contextmenu="openRowMenu(rowIdx, colIdx, $event)"
+                                            >
+                                                <span :class="{ 'is-null': val.kind === 'null' }">
                                                     {{ formatCellValue(val, colIdx) }}
                                                 </span>
                                                 <button
-                                                    v-if="val.kind !== 'null' && columns[colIdx] && columns[colIdx].foreign_key"
-                                                    class="button is-icon is-small is-subtle"
-                                                    :title="`Go to ${columns[colIdx].foreign_key.table} row`"
-                                                    @click="navigateToForeignKey(columns[colIdx].foreign_key.table, columns[colIdx].foreign_key.column, val)"
+                                                    v-if="val.kind !== 'null' && foreignKeyOf(colIdx)"
+                                                    class="button is-icon is-tiny"
+                                                    :title="`Go to ${foreignKeyOf(colIdx).table} row`"
+                                                    @click="navigateToForeignKey(foreignKeyOf(colIdx).table, foreignKeyOf(colIdx).column, val)"
                                                 >
-                                                    <svg class="icon foreign-key-icon" viewBox="0 0 24 24">
-                                                        <path d="M5,17.59L15.59,7H9V5H19V15H17V8.41L6.41,19L5,17.59Z" />
+                                                    <svg class="icon" viewBox="0 0 24 24">
+                                                        <path
+                                                            data-mdi="arrow-top-right"
+                                                            d="M5,17.59L15.59,7H9V5H19V15H17V8.41L6.41,19L5,17.59Z"
+                                                        />
                                                     </svg>
                                                 </button>
                                             </td>
@@ -140,57 +355,820 @@
                                     </tbody>
                                 </table>
                                 <div ref="loadSentinel" class="load-sentinel"></div>
-                                <div class="placeholder" v-show="showDataLoading">Loading…</div>
-                                <div class="placeholder" v-show="showDataEmpty && !showDataTable">
+                                <div class="empty-state" v-show="showDataLoading">Loading…</div>
+                                <div class="empty-state" v-show="showDataEmpty && !showDataTable">
                                     {{ dataEmptyText }}
                                 </div>
                             </div>
+                            <form class="toolbar is-footer" @submit.prevent="runQuery">
+                                <input
+                                    class="input is-small is-code query-input"
+                                    type="text"
+                                    placeholder="SELECT query for a quick table result…"
+                                    autocorrect="off"
+                                    spellcheck="false"
+                                    v-model="queryText"
+                                />
+                                <button class="button is-small is-primary" type="submit" :disabled="!queryText.trim()">
+                                    Run SELECT
+                                </button>
+                                <button
+                                    class="button is-small"
+                                    type="button"
+                                    v-show="isCustomQuery"
+                                    @click="clearQuery"
+                                >
+                                    Back to table
+                                </button>
+                            </form>
                         </div>
 
                         <div class="tab-panel" v-show="activeTab === 'schema'">
-                            <pre class="schema-code" v-text="schemaText"></pre>
+                            <div class="schema-editor">
+                                <div class="alert is-error" role="alert" v-show="schemaError">
+                                    <span class="alert-text">{{ schemaError }}</span>
+                                </div>
+                                <div class="empty-state" v-show="schemaLoading">Loading schema…</div>
+
+                                <section class="panel" v-show="!schemaLoading">
+                                    <div class="panel-header">
+                                        <div>
+                                            <h2>Table</h2>
+                                            <p>Rename the selected table.</p>
+                                        </div>
+                                    </div>
+                                    <form class="panel-body panel-row" @submit.prevent="renameSchemaTable">
+                                        <input
+                                            class="input is-code"
+                                            v-model="schemaTableName"
+                                            :disabled="schemaSaving"
+                                            title="Table name"
+                                        />
+                                        <button
+                                            class="button"
+                                            type="submit"
+                                            :disabled="schemaSaving || !schemaTableName.trim() || schemaTableName.trim() === currentTable"
+                                        >
+                                            Rename
+                                        </button>
+                                    </form>
+                                </section>
+
+                                <section class="panel" v-show="!schemaLoading">
+                                    <div class="panel-header">
+                                        <div>
+                                            <h2>Columns</h2>
+                                            <p>Edit names, SQL types, nullability, defaults, and keys.</p>
+                                        </div>
+                                        <span class="panel-meta">
+                                            {{ schemaSaving ? 'Applying change…' : `${schemaColumns.length} columns` }}
+                                        </span>
+                                    </div>
+                                    <div class="panel-scroll">
+                                        <table class="schema-grid">
+                                            <thead>
+                                                <tr>
+                                                    <th>Name</th>
+                                                    <th>Type</th>
+                                                    <th class="is-center">Null</th>
+                                                    <th>Default SQL</th>
+                                                    <th>Attributes</th>
+                                                    <th><span class="visually-hidden">Actions</span></th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                <tr v-for="column in schemaColumns" :key="column.originalName">
+                                                    <td>
+                                                        <input
+                                                            class="input is-small is-code"
+                                                            v-model="column.name"
+                                                            :disabled="schemaSaving || column.generated"
+                                                            title="Column name"
+                                                        />
+                                                    </td>
+                                                    <td>
+                                                        <input
+                                                            class="input is-small is-code"
+                                                            v-model="column.type"
+                                                            list="schema-column-types"
+                                                            :disabled="schemaSaving || column.generated"
+                                                            placeholder="TEXT"
+                                                            title="Column type"
+                                                        />
+                                                    </td>
+                                                    <td class="is-center">
+                                                        <input
+                                                            type="checkbox"
+                                                            v-model="column.nullable"
+                                                            :disabled="schemaSaving || column.generated || column.primaryKey"
+                                                            title="Nullable"
+                                                        />
+                                                    </td>
+                                                    <td>
+                                                        <input
+                                                            class="input is-small is-code"
+                                                            v-model="column.defaultSql"
+                                                            :disabled="schemaSaving || column.generated || column.autoIncrement"
+                                                            placeholder="No default"
+                                                            title="Default SQL"
+                                                        />
+                                                    </td>
+                                                    <td>
+                                                        <div class="check-list">
+                                                            <span class="badge" v-show="column.generated"
+                                                                >Generated</span
+                                                            >
+                                                            <label class="checkbox" v-show="!column.generated">
+                                                                <input
+                                                                    type="checkbox"
+                                                                    v-model="column.primaryKey"
+                                                                    :disabled="schemaSaving"
+                                                                    @change="!column.primaryKey && (column.autoIncrement = false)"
+                                                                />
+                                                                Primary
+                                                            </label>
+                                                            <label
+                                                                class="checkbox"
+                                                                v-show="!column.generated && (column.primaryKey || connectionKind === 'mysql')"
+                                                            >
+                                                                <input
+                                                                    type="checkbox"
+                                                                    v-model="column.autoIncrement"
+                                                                    :disabled="schemaSaving"
+                                                                />
+                                                                Auto increment
+                                                            </label>
+                                                        </div>
+                                                    </td>
+                                                    <td>
+                                                        <div class="button-row">
+                                                            <button
+                                                                class="button is-small is-primary"
+                                                                :disabled="schemaSaving || column.generated || !column.name.trim() || !column.type.trim() || !schemaColumnChanged(column)"
+                                                                @click="saveSchemaColumn(column)"
+                                                            >
+                                                                Save
+                                                            </button>
+                                                            <button
+                                                                class="button is-small is-danger"
+                                                                :disabled="schemaSaving || schemaColumns.length === 1"
+                                                                @click="dropSchemaColumn(column)"
+                                                            >
+                                                                Delete
+                                                            </button>
+                                                        </div>
+                                                    </td>
+                                                </tr>
+                                                <tr class="is-new">
+                                                    <td>
+                                                        <input
+                                                            class="input is-small is-code"
+                                                            v-model="newSchemaColumn.name"
+                                                            :disabled="schemaSaving"
+                                                            placeholder="new_column"
+                                                            title="New column name"
+                                                        />
+                                                    </td>
+                                                    <td>
+                                                        <input
+                                                            class="input is-small is-code"
+                                                            v-model="newSchemaColumn.type"
+                                                            list="schema-column-types"
+                                                            :disabled="schemaSaving"
+                                                            title="New column type"
+                                                        />
+                                                    </td>
+                                                    <td class="is-center">
+                                                        <input
+                                                            type="checkbox"
+                                                            v-model="newSchemaColumn.nullable"
+                                                            :disabled="schemaSaving"
+                                                            title="Nullable"
+                                                        />
+                                                    </td>
+                                                    <td>
+                                                        <input
+                                                            class="input is-small is-code"
+                                                            v-model="newSchemaColumn.defaultSql"
+                                                            :disabled="schemaSaving"
+                                                            placeholder="No default"
+                                                            title="New column default SQL"
+                                                        />
+                                                    </td>
+                                                    <td><span class="muted">New column</span></td>
+                                                    <td>
+                                                        <div class="button-row">
+                                                            <button
+                                                                class="button is-small is-primary"
+                                                                :disabled="schemaSaving || !newSchemaColumn.name.trim() || !newSchemaColumn.type.trim()"
+                                                                @click="addSchemaColumn"
+                                                            >
+                                                                Add column
+                                                            </button>
+                                                        </div>
+                                                    </td>
+                                                </tr>
+                                            </tbody>
+                                        </table>
+                                        <datalist id="schema-column-types">
+                                            <option value="INTEGER"></option>
+                                            <option value="BIGINT"></option>
+                                            <option value="REAL"></option>
+                                            <option value="DECIMAL(10,2)"></option>
+                                            <option value="BOOLEAN"></option>
+                                            <option value="TEXT"></option>
+                                            <option value="VARCHAR(255)"></option>
+                                            <option value="BLOB"></option>
+                                            <option value="DATE"></option>
+                                            <option value="DATETIME"></option>
+                                            <option value="TIMESTAMP"></option>
+                                            <option value="JSON"></option>
+                                        </datalist>
+                                    </div>
+                                </section>
+
+                                <section class="panel" v-show="!schemaLoading">
+                                    <div class="panel-header">
+                                        <div>
+                                            <h2>Indexes</h2>
+                                            <p>Create standard or unique multi-column indexes.</p>
+                                        </div>
+                                    </div>
+                                    <div class="panel-list">
+                                        <div class="panel-row" v-for="index in schemaIndexes" :key="index.originalName">
+                                            <input
+                                                class="input is-small is-code index-name"
+                                                v-model="index.name"
+                                                :disabled="schemaSaving || index.primary || index.readOnly"
+                                                title="Index name"
+                                            />
+                                            <span class="badge is-key" v-show="index.primary">Primary</span>
+                                            <div class="check-list is-boxed" v-show="!index.primary && !index.readOnly">
+                                                <label
+                                                    class="checkbox"
+                                                    v-for="column in schemaColumns"
+                                                    :key="column.originalName"
+                                                >
+                                                    <input
+                                                        type="checkbox"
+                                                        :value="column.originalName"
+                                                        v-model="index.columns"
+                                                        :disabled="schemaSaving"
+                                                    />
+                                                    {{ column.name }}
+                                                </label>
+                                            </div>
+                                            <span class="muted index-columns" v-show="index.primary || index.readOnly">
+                                                {{ index.columns.join(', ') || 'Expression index' }}
+                                            </span>
+                                            <label class="checkbox" v-show="!index.primary && !index.readOnly">
+                                                <input
+                                                    type="checkbox"
+                                                    v-model="index.unique"
+                                                    :disabled="schemaSaving"
+                                                />
+                                                Unique
+                                            </label>
+                                            <div class="button-row">
+                                                <button
+                                                    class="button is-small is-primary"
+                                                    v-show="!index.primary && !index.readOnly"
+                                                    :disabled="schemaSaving || !index.name.trim() || index.columns.length === 0 || !schemaIndexChanged(index)"
+                                                    @click="saveSchemaIndex(index)"
+                                                >
+                                                    Save
+                                                </button>
+                                                <button
+                                                    class="button is-small is-danger"
+                                                    :disabled="schemaSaving || index.primary || index.readOnly"
+                                                    :title="index.primary || index.readOnly ? 'This database-managed index is read-only' : 'Delete index'"
+                                                    @click="dropSchemaIndex(index)"
+                                                >
+                                                    Delete
+                                                </button>
+                                            </div>
+                                        </div>
+                                        <div class="empty-state is-compact" v-show="schemaIndexes.length === 0">
+                                            No indexes
+                                        </div>
+                                        <form class="panel-row is-new" @submit.prevent="addSchemaIndex">
+                                            <input
+                                                class="input is-small is-code index-name"
+                                                v-model="newSchemaIndex.name"
+                                                :disabled="schemaSaving"
+                                                placeholder="index_name"
+                                                title="New index name"
+                                            />
+                                            <div class="check-list is-boxed">
+                                                <label
+                                                    class="checkbox"
+                                                    v-for="column in schemaColumns"
+                                                    :key="column.originalName"
+                                                >
+                                                    <input
+                                                        type="checkbox"
+                                                        :value="column.originalName"
+                                                        v-model="newSchemaIndex.columns"
+                                                        :disabled="schemaSaving"
+                                                    />
+                                                    {{ column.name }}
+                                                </label>
+                                            </div>
+                                            <label class="checkbox">
+                                                <input
+                                                    type="checkbox"
+                                                    v-model="newSchemaIndex.unique"
+                                                    :disabled="schemaSaving"
+                                                />
+                                                Unique
+                                            </label>
+                                            <div class="button-row">
+                                                <button
+                                                    class="button is-small is-primary"
+                                                    type="submit"
+                                                    :disabled="schemaSaving || !newSchemaIndex.name.trim() || newSchemaIndex.columns.length === 0"
+                                                >
+                                                    Add index
+                                                </button>
+                                            </div>
+                                        </form>
+                                    </div>
+                                </section>
+
+                                <section class="panel" v-show="!schemaLoading">
+                                    <div class="panel-header">
+                                        <div>
+                                            <h2>Foreign keys</h2>
+                                            <p>Reference rows in other tables and choose what happens on change.</p>
+                                        </div>
+                                    </div>
+                                    <div class="panel-list">
+                                        <div
+                                            class="panel-row"
+                                            v-for="foreignKey in schemaForeignKeys"
+                                            :key="foreignKey.name"
+                                        >
+                                            <span class="code-text">{{ foreignKeyLabel(foreignKey) }}</span>
+                                            <div class="button-row">
+                                                <button
+                                                    class="button is-small is-danger"
+                                                    :disabled="schemaSaving"
+                                                    @click="dropSchemaForeignKey(foreignKey)"
+                                                >
+                                                    Delete
+                                                </button>
+                                            </div>
+                                        </div>
+                                        <div class="empty-state is-compact" v-show="schemaForeignKeys.length === 0">
+                                            No foreign keys
+                                        </div>
+                                        <form
+                                            class="panel-row is-new is-wrapping"
+                                            @submit.prevent="addSchemaForeignKey"
+                                        >
+                                            <input
+                                                class="input is-small is-code"
+                                                v-show="connectionKind === 'mysql'"
+                                                v-model="newForeignKey.name"
+                                                :disabled="schemaSaving"
+                                                placeholder="constraint_name"
+                                                title="Constraint name"
+                                            />
+                                            <select
+                                                class="input is-small"
+                                                v-model="newForeignKey.column"
+                                                :disabled="schemaSaving"
+                                                title="Column"
+                                            >
+                                                <option value="" disabled>Column</option>
+                                                <option
+                                                    v-for="column in schemaColumns"
+                                                    :key="column.originalName"
+                                                    :value="column.originalName"
+                                                >
+                                                    {{ column.originalName }}
+                                                </option>
+                                            </select>
+                                            <span class="muted">references</span>
+                                            <select
+                                                class="input is-small"
+                                                v-model="newForeignKey.referencedTable"
+                                                :disabled="schemaSaving"
+                                                title="Referenced table"
+                                                @change="loadReferencedColumns"
+                                            >
+                                                <option value="" disabled>Table</option>
+                                                <option v-for="name in tables" :key="name" :value="name">
+                                                    {{ name }}
+                                                </option>
+                                            </select>
+                                            <select
+                                                class="input is-small"
+                                                v-model="newForeignKey.referencedColumn"
+                                                :disabled="schemaSaving || referencedColumns.length === 0"
+                                                title="Referenced column"
+                                            >
+                                                <option value="" disabled>Column</option>
+                                                <option
+                                                    v-for="column in referencedColumns"
+                                                    :key="column"
+                                                    :value="column"
+                                                >
+                                                    {{ column }}
+                                                </option>
+                                            </select>
+                                            <label class="inline-field">
+                                                On delete
+                                                <select
+                                                    class="input is-small"
+                                                    v-model="newForeignKey.onDelete"
+                                                    :disabled="schemaSaving"
+                                                >
+                                                    <option
+                                                        v-for="action in foreignKeyActions"
+                                                        :key="action"
+                                                        :value="action"
+                                                    >
+                                                        {{ action }}
+                                                    </option>
+                                                </select>
+                                            </label>
+                                            <label class="inline-field">
+                                                On update
+                                                <select
+                                                    class="input is-small"
+                                                    v-model="newForeignKey.onUpdate"
+                                                    :disabled="schemaSaving"
+                                                >
+                                                    <option
+                                                        v-for="action in foreignKeyActions"
+                                                        :key="action"
+                                                        :value="action"
+                                                    >
+                                                        {{ action }}
+                                                    </option>
+                                                </select>
+                                            </label>
+                                            <div class="button-row">
+                                                <button
+                                                    class="button is-small is-primary"
+                                                    type="submit"
+                                                    :disabled="schemaSaving || !newForeignKey.column || !newForeignKey.referencedTable || !newForeignKey.referencedColumn"
+                                                >
+                                                    Add foreign key
+                                                </button>
+                                            </div>
+                                        </form>
+                                    </div>
+                                </section>
+
+                                <details class="panel" v-show="!schemaLoading">
+                                    <summary class="panel-header">
+                                        <h2>CREATE statement</h2>
+                                    </summary>
+                                    <pre class="schema-code" v-text="schemaSql"></pre>
+                                </details>
+                            </div>
                         </div>
 
-                        <div class="field query-bar">
-                            <input
-                                class="input query-input"
-                                type="text"
-                                placeholder="Custom SELECT query…"
-                                autocorrect="off"
-                                spellcheck="false"
-                                v-model="queryText"
-                                @keydown.enter="runQuery"
-                            />
-                            <button class="button is-primary" @click="runQuery">Run</button>
-                            <button class="button" :disabled="!isCustomQuery" @click="clearQuery">Clear</button>
+                        <div class="tab-panel query-workspace" v-show="activeTab === 'query'">
+                            <section class="query-editor">
+                                <div class="toolbar">
+                                    <span class="toolbar-title">SQL</span>
+                                    <div class="toolbar-spacer"></div>
+                                    <span class="toolbar-status">
+                                        Multiple statements run in one transaction, run with Ctrl+Enter
+                                    </span>
+                                </div>
+                                <textarea
+                                    class="query-textarea"
+                                    v-model="rawQueryText"
+                                    placeholder="SELECT * FROM table_name;"
+                                    autocorrect="off"
+                                    spellcheck="false"
+                                    @keydown="onRawQueryKeydown"
+                                ></textarea>
+                                <div class="toolbar is-footer">
+                                    <div class="toolbar-spacer"></div>
+                                    <button
+                                        class="button is-small is-primary"
+                                        :disabled="rawQueryRunning || !rawQueryText.trim()"
+                                        @click="runRawQuery"
+                                    >
+                                        {{ rawQueryRunning ? 'Running…' : 'Execute' }}
+                                    </button>
+                                </div>
+                            </section>
+
+                            <section class="query-result">
+                                <div class="toolbar">
+                                    <span class="toolbar-title">Result</span>
+                                    <div class="toolbar-spacer"></div>
+                                    <span class="toolbar-status">{{ rawQueryStatus }}</span>
+                                </div>
+                                <div class="query-result-scroll">
+                                    <div class="alert is-error is-banner is-code" role="alert" v-show="rawQueryError">
+                                        <span class="alert-text">{{ rawQueryError }}</span>
+                                    </div>
+                                    <div
+                                        class="empty-state"
+                                        v-show="!rawQueryRunning && !rawQueryError && !rawQueryHasRun"
+                                    >
+                                        Run a statement to see its result
+                                    </div>
+                                    <div
+                                        class="empty-state"
+                                        v-show="rawQueryRunning || (rawQueryHasRun && !rawQueryError && rawQueryColumns.length === 0)"
+                                    >
+                                        {{ rawQueryRunning ? 'Executing statement…' : rawQueryStatus }}
+                                    </div>
+                                    <table class="data-table" v-show="!rawQueryError && rawQueryColumns.length > 0">
+                                        <thead>
+                                            <tr>
+                                                <th v-for="(column, columnIdx) in rawQueryColumns" :key="columnIdx">
+                                                    <span class="column-name">{{ column.name }}</span>
+                                                    <span class="column-type">{{ column.type }}</span>
+                                                </th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            <tr v-for="(row, rowIdx) in rawQueryRows" :key="rowIdx">
+                                                <td v-for="(value, columnIdx) in row" :key="columnIdx">
+                                                    <span :class="{ 'is-null': value.kind === 'null' }">
+                                                        {{ formatRawQueryCell(value, columnIdx) }}
+                                                    </span>
+                                                </td>
+                                            </tr>
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </section>
                         </div>
                     </div>
+                </main>
+
+                <div class="menu" role="menu" v-show="connectionMenu" :style="menuStyle(connectionMenu)" @click.stop>
+                    <div class="menu-header">
+                        <span class="badge">{{ connectionKind }}</span>
+                        <span>{{ connectionKind === 'sqlite' ? dbPath : connectionLabel }}</span>
+                    </div>
+                    <div class="menu-group" v-show="connectionKind === 'mysql'">
+                        <hr />
+                        <div class="menu-section">Databases</div>
+                        <div class="menu-scroll">
+                            <button
+                                role="menuitemradio"
+                                v-for="database in databases"
+                                :key="database"
+                                :aria-checked="database === currentDatabase"
+                                :class="{ 'is-checked': database === currentDatabase }"
+                                :disabled="isSelectingDatabase"
+                                @click="chooseDatabase(database)"
+                            >
+                                {{ database }}
+                            </button>
+                        </div>
+                        <button role="menuitem" @click="openCreateDatabaseDialog">New database…</button>
+                        <button
+                            role="menuitem"
+                            class="is-danger"
+                            :disabled="!currentDatabase"
+                            @click="dropCurrentDatabase"
+                        >
+                            Delete {{ currentDatabase || 'database' }}…
+                        </button>
+                        <hr />
+                        <button role="menuitem" @click="openUsersDialog">Manage users…</button>
+                    </div>
+                    <hr />
+                    <button role="menuitem" @click="openDatabase">Connect to another database…</button>
+                </div>
+
+                <div class="menu" role="menu" v-show="rowMenu" :style="menuStyle(rowMenu)" @click.stop>
+                    <button role="menuitem" @click="copySelectedRows">
+                        {{ rowMenuLabel('Copy row', 'Copy rows') }}
+                    </button>
+                    <button role="menuitem" v-show="isTableView()" @click="copySelectedRowsAsInsert">
+                        Copy as SQL INSERT
+                    </button>
+                    <hr v-show="isTableView()" />
+                    <button
+                        role="menuitem"
+                        v-show="isTableView()"
+                        :disabled="!canEditSelectedRow()"
+                        @click="openEditRowDialog"
+                    >
+                        Edit row…
+                    </button>
+                    <button
+                        role="menuitem"
+                        v-show="canSetMenuCellNull()"
+                        :disabled="isRowActionRunning"
+                        @click="setMenuCellNull"
+                    >
+                        Set {{ menuColumnName() }} to NULL
+                    </button>
+                    <button
+                        role="menuitem"
+                        v-show="isTableView()"
+                        :disabled="!canDuplicateSelectedRows()"
+                        @click="duplicateSelectedRows"
+                    >
+                        {{ rowMenuLabel('Duplicate row', 'Duplicate rows') }}
+                    </button>
+                    <button
+                        role="menuitem"
+                        class="is-danger"
+                        v-show="isTableView()"
+                        :disabled="!canDeleteSelectedRows()"
+                        :title="rowActionTitle('delete')"
+                        @click="deleteSelectedRows"
+                    >
+                        {{ rowMenuLabel('Delete row…', 'Delete rows…') }}
+                    </button>
+                </div>
+
+                <div class="menu" role="menu" v-show="tableMenu" :style="menuStyle(tableMenu)" @click.stop>
+                    <button role="menuitem" @click="openDuplicateTableDialog">Duplicate table…</button>
+                    <hr />
+                    <button role="menuitem" class="is-danger" @click="truncateTable">Truncate table…</button>
+                    <button role="menuitem" class="is-danger" @click="dropTable">Delete table…</button>
                 </div>
 
                 <div
-                    class="connection-backdrop"
-                    v-show="connectionDialogOpen"
-                    @click.self="closeConnectionDialog"
-                    @keydown="handleConnectionDialogKeydown($event)"
+                    class="modal-backdrop"
+                    v-show="activeModal === 'row'"
+                    @mousedown="onBackdropMouseDown"
+                    @click.self="onBackdropClick"
+                    @keydown="handleModalKeydown($event)"
                 >
-                    <div ref="connectionDialog" class="connection-dialog" role="dialog" tabindex="-1">
+                    <form
+                        ref="rowDialog"
+                        class="dialog is-wide"
+                        role="dialog"
+                        tabindex="-1"
+                        @submit.prevent="saveRowDialog"
+                    >
                         <div class="dialog-header">
                             <div>
-                                <h1 id="connection-dialog-title">Connect to a database</h1>
-                                <p>Connections are opened for browsing only.</p>
+                                <span class="eyebrow">{{ currentTable }}</span>
+                                <h1>{{ rowDialogMode === 'add' ? 'Add row' : 'Edit row' }}</h1>
+                                <p>
+                                    {{ rowDialogMode === 'add' ? 'Choose a value, NULL, or Default for every column.' :
+                                    'Only changed columns are written.' }}
+                                </p>
                             </div>
-                            <button class="button is-icon" @click="closeConnectionDialog">
-                                <svg class="icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+                            <button class="button is-icon" type="button" title="Close" @click="closeRowDialog">
+                                <svg class="icon" viewBox="0 0 24 24">
                                     <path
+                                        data-mdi="close"
                                         d="M19,6.41L17.59,5L12,10.59L6.41,5L5,6.41L10.59,12L5,17.59L6.41,19L12,13.41L17.59,19L19,17.59L13.41,12L19,6.41Z"
                                     />
                                 </svg>
                             </button>
                         </div>
 
-                        <div class="connection-tabs" role="tablist">
+                        <div class="dialog-body row-fields">
+                            <label class="row-field" v-for="field in rowFields" :key="field.name">
+                                <span class="row-field-heading">
+                                    <strong :title="field.name">{{ field.name }}</strong>
+                                    <span class="badge is-key" v-show="field.isPrimaryKey">Primary key</span>
+                                    <span class="badge">{{ field.type || 'ANY' }}</span>
+                                </span>
+                                <span class="row-field-control">
+                                    <select class="input" v-model="field.mode" :title="`${field.name} value kind`">
+                                        <option v-for="mode in rowValueModes()" :key="mode.value" :value="mode.value">
+                                            {{ mode.label }}
+                                        </option>
+                                    </select>
+                                    <input
+                                        class="input"
+                                        :class="{ 'is-code': field.isBlob }"
+                                        v-show="field.mode === 'value'"
+                                        v-model="field.value"
+                                        :placeholder="rowFieldPlaceholder(field)"
+                                        :inputmode="field.inputMode"
+                                        autocorrect="off"
+                                        spellcheck="false"
+                                    />
+                                    <span class="input is-placeholder" v-show="field.mode !== 'value'">
+                                        {{ field.mode === 'null' ? 'Stores a database NULL' : 'Uses the column default'
+                                        }}
+                                    </span>
+                                </span>
+                            </label>
+                        </div>
+
+                        <div class="dialog-footer">
+                            <span class="dialog-error" role="alert">{{ rowDialogError }}</span>
+                            <button class="button" type="button" :disabled="isSavingRow" @click="closeRowDialog">
+                                Cancel
+                            </button>
+                            <button class="button is-primary" type="submit" :disabled="isSavingRow">
+                                {{ isSavingRow ? 'Saving…' : rowDialogMode === 'add' ? 'Add row' : 'Save row' }}
+                            </button>
+                        </div>
+                    </form>
+                </div>
+
+                <div
+                    class="modal-backdrop"
+                    v-show="activeModal === 'form'"
+                    @mousedown="onBackdropMouseDown"
+                    @click.self="onBackdropClick"
+                    @keydown="handleModalKeydown($event)"
+                >
+                    <form ref="formDialog" class="dialog" role="dialog" tabindex="-1" @submit.prevent="submitForm">
+                        <div class="dialog-header">
+                            <div><h1>{{ form.title }}</h1></div>
+                            <button class="button is-icon" type="button" title="Close" @click="closeFormDialog">
+                                <svg class="icon" viewBox="0 0 24 24">
+                                    <path
+                                        data-mdi="close"
+                                        d="M19,6.41L17.59,5L12,10.59L6.41,5L5,6.41L10.59,12L5,17.59L6.41,19L12,13.41L17.59,19L19,17.59L13.41,12L19,6.41Z"
+                                    />
+                                </svg>
+                            </button>
+                        </div>
+                        <div class="dialog-body">
+                            <label class="field">
+                                <span>{{ form.kind === 'createDatabase' ? 'Database name' : 'Table name' }}</span>
+                                <input
+                                    class="input"
+                                    v-model="form.name"
+                                    required
+                                    :disabled="isSubmittingForm"
+                                    autocorrect="off"
+                                    spellcheck="false"
+                                />
+                            </label>
+                            <p class="muted" v-show="form.kind === 'createTable'">
+                                The table starts with an auto increment id primary key, add more columns in the Schema
+                                tab.
+                            </p>
+                            <label class="checkbox" v-show="form.kind === 'duplicateTable'">
+                                <input type="checkbox" v-model="form.withData" :disabled="isSubmittingForm" />
+                                Copy the rows as well as the structure
+                            </label>
+                            <div class="field-grid" v-show="form.kind === 'createDatabase'">
+                                <label class="field">
+                                    <span>Character set</span>
+                                    <input
+                                        class="input"
+                                        v-model="form.characterSet"
+                                        :disabled="isSubmittingForm"
+                                        placeholder="Server default"
+                                    />
+                                </label>
+                                <label class="field">
+                                    <span>Collation</span>
+                                    <input
+                                        class="input"
+                                        v-model="form.collation"
+                                        :disabled="isSubmittingForm"
+                                        placeholder="Character set default"
+                                    />
+                                </label>
+                            </div>
+                        </div>
+                        <div class="dialog-footer">
+                            <span class="dialog-error" role="alert">{{ formError }}</span>
+                            <button class="button" type="button" :disabled="isSubmittingForm" @click="closeFormDialog">
+                                Cancel
+                            </button>
+                            <button class="button is-primary" type="submit" :disabled="isSubmittingForm">
+                                {{ isSubmittingForm ? 'Working…' : form.submitLabel }}
+                            </button>
+                        </div>
+                    </form>
+                </div>
+
+                <div
+                    class="modal-backdrop"
+                    v-show="activeModal === 'connection'"
+                    @mousedown="onBackdropMouseDown"
+                    @click.self="onBackdropClick"
+                    @keydown="handleModalKeydown($event)"
+                >
+                    <div ref="connectionDialog" class="dialog" role="dialog" tabindex="-1">
+                        <div class="dialog-header is-tabbed">
+                            <div>
+                                <h1>Connect to a database</h1>
+                                <p>Browse tables and edit rows with primary keys.</p>
+                            </div>
+                            <button class="button is-icon" title="Close" @click="closeConnectionDialog">
+                                <svg class="icon" viewBox="0 0 24 24">
+                                    <path
+                                        data-mdi="close"
+                                        d="M19,6.41L17.59,5L12,10.59L6.41,5L5,6.41L10.59,12L5,17.59L6.41,19L12,13.41L17.59,19L19,17.59L13.41,12L19,6.41Z"
+                                    />
+                                </svg>
+                            </button>
+                        </div>
+
+                        <div class="dialog-tabs" role="tablist">
                             <button
-                                class="connection-tab"
+                                class="dialog-tab"
                                 :class="{ 'is-active': connectionTab === 'sqlite' }"
                                 role="tab"
                                 @click="connectionTab = 'sqlite'"
@@ -198,7 +1176,7 @@
                                 SQLite
                             </button>
                             <button
-                                class="connection-tab"
+                                class="dialog-tab"
                                 :class="{ 'is-active': connectionTab === 'mysql' }"
                                 role="tab"
                                 @click="connectionTab = 'mysql'"
@@ -207,105 +1185,273 @@
                             </button>
                         </div>
 
-                        <section class="connection-panel" v-show="connectionTab === 'sqlite'">
-                            <p>Open an existing SQLite file in read-only mode.</p>
-                            <button class="button is-primary" @click="openSqliteDatabase">Choose SQLite file</button>
-                        </section>
-
-                        <form
-                            class="connection-panel mysql-form"
-                            v-show="connectionTab === 'mysql'"
-                            @submit.prevent="openMysql"
-                        >
-                            <div class="transport-options">
-                                <label>
-                                    <input type="radio" value="tcp" v-model="mysql.transport" />
-                                    TCP
-                                </label>
-                                <label v-show="supportsUnixSocket">
-                                    <input type="radio" value="unix" v-model="mysql.transport" />
-                                    Unix socket
-                                </label>
+                        <div class="dialog-pane" v-show="connectionTab === 'sqlite'">
+                            <div class="dialog-body">
+                                <p class="muted">Open an existing SQLite database file.</p>
                             </div>
+                            <div class="dialog-footer">
+                                <button class="button is-primary" @click="openSqliteDatabase">
+                                    Choose SQLite file…
+                                </button>
+                            </div>
+                        </div>
 
-                            <div class="form-grid" v-show="mysql.transport === 'tcp'">
-                                <label>
-                                    <span>Host</span>
+                        <form class="dialog-pane" v-show="connectionTab === 'mysql'" @submit.prevent="openMysql">
+                            <div class="dialog-body">
+                                <div class="check-list">
+                                    <label class="checkbox">
+                                        <input type="radio" value="tcp" v-model="mysql.transport" />
+                                        TCP
+                                    </label>
+                                    <label class="checkbox" v-show="supportsUnixSocket">
+                                        <input type="radio" value="unix" v-model="mysql.transport" />
+                                        Unix socket
+                                    </label>
+                                </div>
+
+                                <div class="field-grid" v-show="mysql.transport === 'tcp'">
+                                    <label class="field">
+                                        <span>Host</span>
+                                        <input
+                                            class="input"
+                                            v-model="mysql.host"
+                                            :required="mysql.transport === 'tcp'"
+                                            :disabled="mysql.transport !== 'tcp'"
+                                            autocorrect="off"
+                                            spellcheck="false"
+                                        />
+                                    </label>
+                                    <label class="field">
+                                        <span>Port</span>
+                                        <input
+                                            class="input"
+                                            v-model.number="mysql.port"
+                                            type="number"
+                                            min="1"
+                                            max="65535"
+                                            :required="mysql.transport === 'tcp'"
+                                            :disabled="mysql.transport !== 'tcp'"
+                                        />
+                                    </label>
+                                </div>
+
+                                <label class="field" v-show="mysql.transport === 'unix'">
+                                    <span>Socket path</span>
                                     <input
                                         class="input"
-                                        v-model="mysql.host"
-                                        :required="mysql.transport === 'tcp'"
-                                        :disabled="mysql.transport !== 'tcp'"
+                                        v-model="mysql.socket"
+                                        :required="mysql.transport === 'unix'"
+                                        :disabled="mysql.transport !== 'unix'"
                                         autocorrect="off"
                                         spellcheck="false"
                                     />
                                 </label>
-                                <label>
-                                    <span>Port</span>
-                                    <input
-                                        class="input"
-                                        v-model.number="mysql.port"
-                                        type="number"
-                                        min="1"
-                                        max="65535"
-                                        :required="mysql.transport === 'tcp'"
-                                        :disabled="mysql.transport !== 'tcp'"
-                                    />
+
+                                <div class="field-grid is-even">
+                                    <label class="field">
+                                        <span>User</span>
+                                        <input
+                                            class="input"
+                                            v-model="mysql.user"
+                                            required
+                                            autocomplete="username"
+                                            autocorrect="off"
+                                            spellcheck="false"
+                                        />
+                                    </label>
+                                    <label class="field">
+                                        <span>Password</span>
+                                        <input
+                                            class="input"
+                                            v-model="mysql.password"
+                                            type="password"
+                                            autocomplete="current-password"
+                                        />
+                                    </label>
+                                </div>
+
+                                <label class="checkbox" v-show="mysql.transport === 'tcp'">
+                                    <input type="checkbox" v-model="mysql.tls" />
+                                    Require verified TLS
+                                </label>
+                                <label class="checkbox">
+                                    <input type="checkbox" v-model="mysql.remember" />
+                                    Remember password
                                 </label>
                             </div>
 
-                            <label v-show="mysql.transport === 'unix'">
-                                <span>Socket path</span>
-                                <input
-                                    class="input"
-                                    v-model="mysql.socket"
-                                    :required="mysql.transport === 'unix'"
-                                    :disabled="mysql.transport !== 'unix'"
-                                    autocorrect="off"
-                                    spellcheck="false"
-                                />
-                            </label>
-
-                            <div class="form-grid">
-                                <label>
-                                    <span>User</span>
-                                    <input
-                                        class="input"
-                                        v-model="mysql.user"
-                                        required
-                                        autocomplete="username"
-                                        autocorrect="off"
-                                        spellcheck="false"
-                                    />
-                                </label>
-                                <label>
-                                    <span>Password</span>
-                                    <input
-                                        class="input"
-                                        v-model="mysql.password"
-                                        type="password"
-                                        autocomplete="current-password"
-                                    />
-                                </label>
-                            </div>
-
-                            <label class="checkbox-field" v-show="mysql.transport === 'tcp'">
-                                <input type="checkbox" v-model="mysql.tls" />
-                                Require verified TLS
-                            </label>
-
-                            <label class="checkbox-field">
-                                <input type="checkbox" v-model="mysql.remember" />
-                                Remember password
-                            </label>
-
-                            <div class="dialog-actions">
-                                <span class="connection-error" role="alert">{{ connectionError }}</span>
+                            <div class="dialog-footer">
+                                <span class="dialog-error" role="alert">{{ connectionError }}</span>
                                 <button class="button is-primary" type="submit" :disabled="isConnecting">
-                                    {{ isConnecting ? 'Connecting...' : 'Connect' }}
+                                    {{ isConnecting ? 'Connecting…' : 'Connect' }}
                                 </button>
                             </div>
                         </form>
+                    </div>
+                </div>
+
+                <div
+                    class="modal-backdrop"
+                    v-show="activeModal === 'users'"
+                    @mousedown="onBackdropMouseDown"
+                    @click.self="onBackdropClick"
+                    @keydown="handleModalKeydown($event)"
+                >
+                    <div ref="usersDialog" class="dialog is-large" role="dialog" tabindex="-1">
+                        <div class="dialog-header">
+                            <div>
+                                <h1>MySQL users</h1>
+                                <p>Manage server accounts and full direct database grants.</p>
+                            </div>
+                            <button class="button is-icon" title="Close" @click="closeUsersDialog">
+                                <svg class="icon" viewBox="0 0 24 24">
+                                    <path
+                                        data-mdi="close"
+                                        d="M19,6.41L17.59,5L12,10.59L6.41,5L5,6.41L10.59,12L5,17.59L6.41,19L12,13.41L17.59,19L19,17.59L13.41,12L19,6.41Z"
+                                    />
+                                </svg>
+                            </button>
+                        </div>
+
+                        <div class="users-layout">
+                            <section class="users-list-panel">
+                                <div class="toolbar">
+                                    <span class="toolbar-status">
+                                        {{ mysqlUsers.length }} {{ mysqlUsers.length === 1 ? 'account' : 'accounts' }}
+                                    </span>
+                                    <div class="toolbar-spacer"></div>
+                                    <button class="button is-small is-primary" @click="startCreatingUser">
+                                        Add user
+                                    </button>
+                                </div>
+                                <div class="empty-state is-compact" v-show="isLoadingUsers">Loading users…</div>
+                                <div
+                                    class="empty-state is-compact is-error"
+                                    role="alert"
+                                    v-show="usersError && !editingUser"
+                                >
+                                    {{ usersError }}
+                                </div>
+                                <div
+                                    class="empty-state is-compact"
+                                    v-show="!isLoadingUsers && !usersError && mysqlUsers.length === 0"
+                                >
+                                    No users found
+                                </div>
+                                <ul class="users-list" v-show="!isLoadingUsers && mysqlUsers.length > 0">
+                                    <li v-for="account in mysqlUsers" :key="`${account.user}@${account.host}`">
+                                        <button
+                                            class="user-row"
+                                            :class="{ 'is-active': selectedUserKey === `${account.user}@${account.host}` }"
+                                            @click="startEditingUser(account)"
+                                        >
+                                            <span class="user-avatar">{{ userInitial(account.user) }}</span>
+                                            <span class="user-row-text">
+                                                <strong>{{ account.user || '(anonymous)' }}</strong>
+                                                <small>@{{ account.host }} - {{ databaseAccessLabel(account) }}</small>
+                                            </span>
+                                        </button>
+                                    </li>
+                                </ul>
+                            </section>
+
+                            <form class="user-editor" v-show="editingUser" @submit.prevent="saveUser">
+                                <div class="dialog-body">
+                                    <div>
+                                        <span class="eyebrow"
+                                            >{{ isCreatingUser ? 'New account' : 'Edit account' }}</span
+                                        >
+                                        <h2>
+                                            {{ isCreatingUser ? 'Create MySQL user' :
+                                            `${userForm.user}@${userForm.host}` }}
+                                        </h2>
+                                    </div>
+
+                                    <div class="field-grid">
+                                        <label class="field">
+                                            <span>User name</span>
+                                            <input
+                                                class="input"
+                                                v-model.trim="userForm.user"
+                                                required
+                                                autocorrect="off"
+                                                spellcheck="false"
+                                            />
+                                        </label>
+                                        <label class="field">
+                                            <span>Host</span>
+                                            <input
+                                                class="input"
+                                                v-model.trim="userForm.host"
+                                                required
+                                                autocorrect="off"
+                                                spellcheck="false"
+                                            />
+                                        </label>
+                                    </div>
+                                    <label class="field">
+                                        <span>Password</span>
+                                        <input
+                                            class="input"
+                                            v-model="userForm.password"
+                                            type="password"
+                                            :required="isCreatingUser"
+                                            autocomplete="new-password"
+                                            :placeholder="isCreatingUser ? 'Enter a password' : 'Leave blank to keep current password'"
+                                        />
+                                    </label>
+
+                                    <fieldset class="field">
+                                        <span>Full direct database grants</span>
+                                        <p class="muted">
+                                            Selected databases receive all privileges. Partial, global, role, object,
+                                            and pattern-based grants are left unchanged and are not shown here.
+                                        </p>
+                                        <div class="database-checklist">
+                                            <label
+                                                class="checkbox"
+                                                v-for="database in assignableDatabases"
+                                                :key="database"
+                                            >
+                                                <input type="checkbox" :value="database" v-model="userForm.databases" />
+                                                <span>{{ database }}</span>
+                                            </label>
+                                        </div>
+                                        <div class="empty-state is-compact" v-show="assignableDatabases.length === 0">
+                                            No databases available
+                                        </div>
+                                    </fieldset>
+                                </div>
+
+                                <div class="dialog-footer">
+                                    <button
+                                        class="button is-danger"
+                                        type="button"
+                                        v-show="!isCreatingUser"
+                                        :disabled="isSavingUser"
+                                        @click="deleteUser"
+                                    >
+                                        Delete user
+                                    </button>
+                                    <span class="dialog-error" role="alert">{{ usersError }}</span>
+                                    <button
+                                        class="button"
+                                        type="button"
+                                        :disabled="isSavingUser"
+                                        @click="cancelEditingUser"
+                                    >
+                                        Cancel
+                                    </button>
+                                    <button class="button is-primary" type="submit" :disabled="isSavingUser">
+                                        {{ isSavingUser ? 'Saving…' : isCreatingUser ? 'Create user' : 'Save changes' }}
+                                    </button>
+                                </div>
+                            </form>
+
+                            <div class="empty-state" v-show="!editingUser">
+                                Select an account to edit, or add a new user
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>

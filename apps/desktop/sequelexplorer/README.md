@@ -1,18 +1,21 @@
 # Sequel Explorer
 
-A read-only SQLite and MySQL database GUI viewer built with [bwebview](../../../lib/ui/bwebview) and
-[bsql](../../../lib/data/bsql).
+A lightweight SQLite and MySQL database explorer and editor built with
+[bwebview](../../../lib/ui/bwebview) and [bsql](../../../lib/data/bsql). It combines fast table
+browsing, direct row editing, a full read/write SQL workspace, and MySQL user management in a
+compact native desktop application.
 
 ## Features
 
-- Open SQLite database files in read-only mode
-- Connect to MySQL over TCP or a local Unix socket
-- Save MySQL passwords in the operating system credential store and reconnect automatically
-- Browse the MySQL databases available to the connected account
-- Browse tables in the sidebar
-- Inspect table rows, declared column types, primary keys, and CREATE TABLE definitions
-- Follow foreign-key references
-- Run SELECT-only custom queries
+- **Connections**: open SQLite files or connect to MySQL over TCP or a Unix socket, with passwords
+  saved in the system credential store
+- **Data**: browse, sort, filter, and incrementally load tables, then add, edit, duplicate, and
+  delete rows from the toolbar, context menu, or by double-clicking a row
+- **Structure**: create, duplicate, truncate, and delete tables and MySQL databases, and edit
+  columns, keys, indexes, and foreign keys
+- **SQL**: run read and write statements in one transaction in the Query workspace (MySQL
+  commits schema changes implicitly), and import or export complete databases as SQL scripts
+- **Administration**: manage MySQL users and their database privileges
 
 ## Screenshot
 
@@ -20,7 +23,8 @@ A read-only SQLite and MySQL database GUI viewer built with [bwebview](../../../
 
 ## macOS Entitlements
 
-The `com.apple.security.app-sandbox` entitlement is not used because `com.apple.security.files.user-selected.read-only` only permits reading the selected file, not the accompanying `*-shm` and `*-wal` files next to the `.db` file.
+The `com.apple.security.app-sandbox` entitlement is not used because SQLite databases can require
+access to accompanying `*-shm` and `*-wal` files next to the selected `.db` file.
 
 For stable Keychain authorization across rebuilds, bundles use the first valid system code-signing
 identity. Set `CODESIGN_IDENTITY` or `package.metadata.bundle.signing_identity` to select one
