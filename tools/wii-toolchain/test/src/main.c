@@ -23,7 +23,8 @@
 #define IO_PATH "sd:/libc-test"
 #define PI 3.14159265358979f
 
-_Alignas(32) static const uint8_t test_tpl[] = {
+// libogc relocates the TPL headers in place.
+_Alignas(32) static uint8_t test_tpl[] = {
 #embed "../../../../target/wii-toolchain/test/test.tpl"
 };
 
@@ -500,15 +501,16 @@ static void test_libogc(void) {
 // gxtexconv converted src/assets/test.png, its pixel (x, y) is (x * 32, y * 32, 128, 255)
 static void test_texture(void) {
     TPLFile tpl;
-    CHECK(TPL_OpenTPLFromMemory(&tpl, (void*)test_tpl, sizeof(test_tpl)) == 1);
+    CHECK(TPL_OpenTPLFromMemory(&tpl, test_tpl, sizeof(test_tpl)) == 1);
     u32 format;
     u16 width, height;
     CHECK(TPL_GetTextureInfo(&tpl, 0, &format, &width, &height) == 0);
     CHECK(format == GX_TF_RGBA8 && width == 8 && height == 8);
 
     // RGBA8 stores 4x4 tiles as 16 alpha red pairs and then 16 green blue pairs
-    const uint32_t* words = (const uint32_t*)test_tpl;
-    const uint8_t* image = test_tpl + ((const uint32_t*)(test_tpl + words[3]))[2];
+    GXTexObj texture;
+    CHECK(TPL_GetTexture(&tpl, 0, &texture) == 0);
+    const uint8_t* image = MEM_PHYSICAL_TO_K0(GX_GetTexObjData(&texture));
     int pixel = 2 * 4 + 1;
     CHECK(image[pixel * 2] == 255 && image[pixel * 2 + 1] == 32);
     CHECK(image[32 + pixel * 2] == 64 && image[32 + pixel * 2 + 1] == 128);
@@ -516,7 +518,8 @@ static void test_texture(void) {
     // RGB5A3 stores 4x4 tiles of 16-bit pixels, opaque ones are RGB555 with the top bit set
     CHECK(TPL_GetTextureInfo(&tpl, 1, &format, &width, &height) == 0);
     CHECK(format == GX_TF_RGB5A3 && width == 8 && height == 8);
-    image = test_tpl + ((const uint32_t*)(test_tpl + words[5]))[2];
+    CHECK(TPL_GetTexture(&tpl, 1, &texture) == 0);
+    image = MEM_PHYSICAL_TO_K0(GX_GetTexObjData(&texture));
     CHECK(image[pixel * 2] == 0x91 && image[pixel * 2 + 1] == 0x10);
     TPL_CloseTPLFile(&tpl);
 }

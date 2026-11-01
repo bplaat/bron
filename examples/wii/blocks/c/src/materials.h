@@ -27,12 +27,13 @@ typedef enum MaterialLayer {
     MaterialLayerCount,
 } MaterialLayer;
 
-_Alignas(32) static const uint8_t materials_tpl[] = {
+// libogc relocates the TPL headers in place.
+_Alignas(32) static uint8_t materials_tpl[] = {
 #embed "../target/materials.tpl"
 };
 
 static bool materials_load(TPLFile* tpl, GXTexObj textures[MaterialLayerCount]) {
-    if (TPL_OpenTPLFromMemory(tpl, (void*)materials_tpl, sizeof(materials_tpl)) != 1)
+    if (TPL_OpenTPLFromMemory(tpl, materials_tpl, sizeof(materials_tpl)) != 1)
         return false;
     for (int material = 0; material < MaterialLayerCount; material++) {
         if (TPL_GetTexture(tpl, material, &textures[material]) != 0)
