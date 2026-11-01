@@ -119,6 +119,7 @@ Various tools and websites. For the deployed sites, go to [bron.bplaat.nl](https
 
 - [macOS Examples](examples/macos/) Mach-O assembly, Cocoa, Metal, OpenGL, and iOS examples
 - [Wii Examples](examples/wii/) Wii homebrew examples in C and Rust: triangles, a 2D canvas, and voxel blocks
+- [Wii U Examples](examples/wiiu/) Wii U homebrew examples in C and Rust for the Cemu emulator: a triangle
 - [Windows Examples](examples/windows/) 32-bit and 64-bit Windows assembly examples using NASM
 
 ### Libraries
@@ -324,7 +325,7 @@ This repo is a monorepo. Projects are grouped by what they are, not by the langu
 
 Library examples live next to the library they show off, in its `examples` directory. Standalone platform examples live under the top-level `examples` directory.
 
-The main Rust projects share one `Cargo` workspace and the JavaScript projects share one `npm` workspace. The macOS and iOS Rust examples are standalone projects using the local Apple bindings. The Wii Rust examples are standalone nightly projects with a custom PowerPC target. When a Rust app has a web frontend, its `Cargo` build script runs `npm` for you, so `Cargo` stays the one place where everything comes together.
+The main Rust projects share one `Cargo` workspace and the JavaScript projects share one `npm` workspace. The macOS and iOS Rust examples are standalone projects using the local Apple bindings. The Wii and Wii U Rust examples are standalone nightly projects with custom PowerPC targets. When a Rust app has a web frontend, its `Cargo` build script runs `npm` for you, so `Cargo` stays the one place where everything comes together.
 
 Every top-level task, like checking, building and installing, goes through the [xtask](tools/xtask) crate with `cargo xtask`, both on your machine and in CI.
 

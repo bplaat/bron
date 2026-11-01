@@ -1,0 +1,9 @@
+[build]
+target = "../../../../tools/wiiu-toolchain/wiiu.json"
+
+[target.wiiu]
+runner = "../../../../tools/wiiu-toolchain/run.sh"
+
+[unstable]
+build-std = ["core", "compiler_builtins"]
+json-target-spec = true

@@ -10,6 +10,7 @@ members = [
 exclude = [
     "examples/macos",
     "examples/wii",
+    "examples/wiiu",
     "games/empires",
     "games/plaatcraft-wii",
     "games/nds",
