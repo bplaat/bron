@@ -24,9 +24,35 @@ pub(crate) const GDK_KEY_PAGE_UP: u32 = 0xff55;
 pub(crate) const GDK_KEY_PAGE_DOWN: u32 = 0xff56;
 pub(crate) const GDK_KEY_END: u32 = 0xff57;
 pub(crate) const GTK_ALIGN_CENTER: i32 = 3;
+pub(crate) const GTK_ORIENTATION_HORIZONTAL: i32 = 0;
+pub(crate) const GTK_ICON_SIZE_BUTTON: i32 = 4;
+pub(crate) const G_BINDING_SYNC_CREATE: u32 = 1 << 1;
 pub(crate) const G_SIGNAL_MATCH_DATA: i32 = 1 << 4;
 
 unsafe extern "C" {
+    pub(crate) fn gtk_header_bar_new() -> *mut c_void;
+    pub(crate) fn gtk_header_bar_set_subtitle(bar: *mut c_void, subtitle: *const c_char);
+    pub(crate) fn gtk_header_bar_set_show_close_button(bar: *mut c_void, show: i32);
+    pub(crate) fn gtk_header_bar_pack_start(bar: *mut c_void, child: *mut c_void);
+    pub(crate) fn gtk_header_bar_pack_end(bar: *mut c_void, child: *mut c_void);
+    pub(crate) fn gtk_window_set_titlebar(window: *mut c_void, bar: *mut c_void);
+    pub(crate) fn gtk_widget_hide(widget: *mut c_void);
+    pub(crate) fn gtk_widget_unrealize(widget: *mut c_void);
+    pub(crate) fn gtk_widget_show_all(widget: *mut c_void);
+    pub(crate) fn gtk_box_new(orientation: i32, spacing: i32) -> *mut c_void;
+    pub(crate) fn gtk_button_new_from_icon_name(name: *const c_char, size: i32) -> *mut c_void;
+    pub(crate) fn gtk_widget_set_tooltip_text(widget: *mut c_void, text: *const c_char);
+    pub(crate) fn gtk_button_set_focus_on_click(widget: *mut c_void, focus: i32);
+    pub(crate) fn gtk_widget_get_style_context(widget: *mut c_void) -> *mut c_void;
+    pub(crate) fn gtk_style_context_add_class(context: *mut c_void, class: *const c_char);
+    pub(crate) fn g_object_bind_property(
+        source: *mut c_void,
+        source_property: *const c_char,
+        target: *mut c_void,
+        target_property: *const c_char,
+        flags: u32,
+    ) -> *mut c_void;
+
     pub(crate) fn g_object_ref(object: *mut c_void) -> *mut c_void;
     pub(crate) fn g_object_ref_sink(object: *mut c_void) -> *mut c_void;
     pub(crate) fn g_object_unref(object: *mut c_void);

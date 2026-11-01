@@ -364,14 +364,14 @@ fn file_name(path: &Path) -> String {
     )
 }
 
-// The file name, macOS shows the media size as the subtitle of the window.
-#[cfg(target_os = "macos")]
+// The file name, macOS and GTK show the media size in the header subtitle.
+#[cfg(not(windows))]
 fn title(path: &Path, _media: Option<&Media>) -> String {
     file_name(path)
 }
 
 // The file name and the media size once it is decoded.
-#[cfg(not(target_os = "macos"))]
+#[cfg(windows)]
 fn title(path: &Path, media: Option<&Media>) -> String {
     media.map_or_else(
         || file_name(path),

@@ -26,12 +26,16 @@ use crate::viewport::{Axis, LINE, Step, Viewport};
 
 mod headers;
 mod thumbnail;
+mod toolbar;
+
+pub(crate) use toolbar::init;
 
 struct State {
     viewport: RefCell<Viewport>,
     dark: Cell<bool>,
     // The overlay of the scrolled window and the loading spinner, which the window embeds.
     overlay: *mut c_void,
+    header_bar: *mut c_void,
     scrolled_window: *mut c_void,
     // The spinner shown until the media is decoded, or null.
     spinner: Cell<*mut c_void>,
@@ -57,6 +61,17 @@ impl MediaView {
         let loading = media.is_none();
         let attachment = window.attach_content().expect("window has no content yet");
         let size = window.size();
+        // SAFETY: The attachment keeps the GTK window alive on this thread.
+        let header_bar = unsafe {
+            let Some(bwindow::NativeWindowHandle::Gtk(window)) = attachment.window_handle() else {
+                unreachable!("GTK view requires a GTK window");
+            };
+            let bar = toolbar::install(window);
+            if let Some(media) = &media {
+                toolbar::show_size(bar, media);
+            }
+            bar
+        };
         // SAFETY: The created widgets are owned by this view until it drops them, the window
         // keeps the overlay it embeds alive while the attachment is open.
         let state = unsafe {
@@ -95,6 +110,7 @@ impl MediaView {
                 )),
                 dark: Cell::new(theme == Theme::Dark),
                 overlay,
+                header_bar,
                 scrolled_window,
                 spinner: Cell::new(spinner),
                 area,
@@ -121,6 +137,8 @@ impl MediaView {
     /// Replaces the media, keeping the zoom or fitting it to the window.
     pub(crate) fn set_media(&mut self, media: Media, zoom_to_fit: bool) {
         self.state.stop_animation();
+        // SAFETY: The window owns the header bar while this view is attached.
+        unsafe { toolbar::show_size(self.state.header_bar, &media) };
         self.state
             .update(|viewport| viewport.set_media(media, zoom_to_fit));
         self.state.start_animation();
