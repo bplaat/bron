@@ -285,6 +285,13 @@ pub(super) fn install_toolbar(window: *mut Object) -> Retained<Object> {
         let _: () = msg_send![&*toolbar, setDelegate: &*delegate];
         let _: () = msg_send![&*toolbar, setDisplayMode: NS_TOOLBAR_DISPLAY_MODE_ICON_ONLY];
         let _: () = msg_send![&*toolbar, setAllowsUserCustomization: Bool::NO];
+        // Without customization, also remove the display mode menu of a right click, which
+        // macOS 15 and later can disable.
+        let customizable: Bool =
+            msg_send![&*toolbar, respondsToSelector: sel!(setAllowsDisplayModeCustomization:)];
+        if customizable.as_bool() {
+            let _: () = msg_send![&*toolbar, setAllowsDisplayModeCustomization: Bool::NO];
+        }
         let _: () = msg_send![window, setToolbar: &*toolbar];
         let _: () = msg_send![window, setToolbarStyle: NS_WINDOW_TOOLBAR_STYLE_UNIFIED];
         delegate
