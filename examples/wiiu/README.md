@@ -50,6 +50,10 @@ A minimal program that draws a rotating triangle with vertex colors.
 
 A rotating crate cube scene.
 
+## Blocks
+
+Generates a random 64x64x64 voxel world and renders its visible block faces.
+
 ## License
 
 Copyright © 2026 [Bastiaan van der Plaat](https://github.com/bplaat)

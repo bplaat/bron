@@ -119,7 +119,7 @@ Various tools and websites. For the deployed sites, go to [bron.bplaat.nl](https
 
 - [macOS Examples](examples/macos/) Mach-O assembly, Cocoa, Metal, OpenGL, and iOS examples
 - [Wii Examples](examples/wii/) Wii homebrew examples in C and Rust: triangles, a 2D canvas, and voxel blocks
-- [Wii U Examples](examples/wiiu/) Wii U homebrew examples in C and Rust for the Cemu emulator: a triangle and a textured cube
+- [Wii U Examples](examples/wiiu/) Wii U homebrew examples in C and Rust for the Cemu emulator: a triangle, a textured cube, and voxel blocks
 - [Windows Examples](examples/windows/) 32-bit and 64-bit Windows assembly examples using NASM
 
 ### Libraries
