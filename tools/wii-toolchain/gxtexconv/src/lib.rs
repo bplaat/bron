@@ -327,25 +327,6 @@ fn preserve_coverage(pixels: &mut [u8], coverage: f32) {
     }
 }
 
-fn srgb_to_linear(value: u8) -> f32 {
-    let value = f32::from(value) / 255.0;
-    if value <= 0.04045 {
-        value / 12.92
-    } else {
-        ((value + 0.055) / 1.055).powf(2.4)
-    }
-}
-
-fn linear_to_srgb(value: f32) -> u8 {
-    let value = value.clamp(0.0, 1.0);
-    let value = if value <= 0.003_130_8 {
-        value * 12.92
-    } else {
-        1.055 * value.powf(1.0 / 2.4) - 0.055
-    };
-    (value * 255.0).round() as u8
-}
-
 /// Halves an RGBA image by averaging 2x2 pixels in linear light, like GPUs filter sRGB
 /// textures. Colors are weighted by alpha, so transparent pixels don't darken the edges of
 /// cutouts.
@@ -359,13 +340,13 @@ fn downsample(pixels: &[u8], width: usize, height: usize) -> Vec<u8> {
                 let pixel = &pixels[((y + dy) * width + x + dx) * 4..];
                 let weight = f32::from(pixel[3]) / 255.0;
                 for channel in 0..3 {
-                    color[channel] += srgb_to_linear(pixel[channel]) * weight;
+                    color[channel] += image::srgb_to_linear(pixel[channel]) * weight;
                 }
                 alpha += weight;
             }
             for channel in color {
                 output.push(if alpha > 0.0 {
-                    linear_to_srgb(channel / alpha)
+                    image::linear_to_srgb(channel / alpha)
                 } else {
                     0
                 });

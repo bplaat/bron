@@ -111,8 +111,7 @@ fn downsample(pixels: &[u8], size: u32) -> Vec<u8> {
                     let index = (((y * 2 + dy) * size + x * 2 + dx) * 4) as usize;
                     let a = f32::from(pixels[index + 3]) / 255.0;
                     for channel in 0..3 {
-                        color[channel] +=
-                            (f32::from(pixels[index + channel]) / 255.0).powf(2.2) * a;
+                        color[channel] += image::srgb_to_linear(pixels[index + channel]) * a;
                     }
                     alpha += a;
                 }
@@ -120,7 +119,7 @@ fn downsample(pixels: &[u8], size: u32) -> Vec<u8> {
             // Alpha-weighted filtering prevents black fringes around transparent sprites.
             for c in color {
                 output.push(if alpha > 0.0 {
-                    ((c / alpha).powf(1.0 / 2.2) * 255.0).round() as u8
+                    image::linear_to_srgb(c / alpha)
                 } else {
                     0
                 });

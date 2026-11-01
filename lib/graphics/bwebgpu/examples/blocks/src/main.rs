@@ -716,12 +716,13 @@ fn downsample_rgba(pixels: &[u8], width: u32, height: u32) -> Vec<u8> {
                     let alpha = f32::from(pixels[index + 3]) / 255.0;
                     alpha_sum += alpha;
                     for channel in 0..3 {
-                        color_sum[channel] += srgb_to_linear(pixels[index + channel]) * alpha;
+                        color_sum[channel] +=
+                            image::srgb_to_linear(pixels[index + channel]) * alpha;
                     }
                 }
             }
             for color in color_sum {
-                output.push(linear_to_srgb(if alpha_sum > 0.0 {
+                output.push(image::linear_to_srgb(if alpha_sum > 0.0 {
                     color / alpha_sum
                 } else {
                     0.0
@@ -732,24 +733,6 @@ fn downsample_rgba(pixels: &[u8], width: u32, height: u32) -> Vec<u8> {
     }
 
     output
-}
-
-fn srgb_to_linear(value: u8) -> f32 {
-    let value = f32::from(value) / 255.0;
-    if value <= 0.04045 {
-        value / 12.92
-    } else {
-        ((value + 0.055) / 1.055).powf(2.4)
-    }
-}
-
-fn linear_to_srgb(value: f32) -> u8 {
-    let value = if value <= 0.003_130_8 {
-        value * 12.92
-    } else {
-        1.055 * value.powf(1.0 / 2.4) - 0.055
-    };
-    (value.clamp(0.0, 1.0) * 255.0).round() as u8
 }
 
 fn main() {
