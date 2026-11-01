@@ -47,7 +47,7 @@ C projects include `wiiu.mk` from their Makefile, which also assembles `src/shad
 `src/shader.psh` to `target/shader.gsh` and converts the textures of `src/assets/textures.toml` to
 `target/textures.gtx`. Rust projects select `wiiu.json` and `run.sh` in `.cargo/config.toml`, then
 call the shared `build.rs` helper to build the libraries, configure the linker, assemble their
-shaders and convert their textures. They use the wut, libwhb and picolibc functions through
+shaders and convert their textures. They use the wut, libwhb, libgfd and picolibc functions through
 the `wut-sys` crate, which also binds the libogc matrix functions they use. Each project keeps its own build output in `target/`.
 
 The toolchain and the examples build separately from the main Cargo workspace.
@@ -60,8 +60,8 @@ The toolchain and the examples build separately from the main Cargo workspace.
   `--emit-relocs`, elf2rpl turns the relocations into the imports of the system libraries
 - `wiiu.json` is the Rust target; `build.rs` builds and links `../../target/wiiu-toolchain/libwut.a`,
   `libgu.a` and picolibc's `../../target/wiiu-toolchain/sysroot/lib/libc.a` and assembles shaders
-- `wut-sys/` has the Rust bindings for the wut, libwhb, libogc matrix and picolibc functions the
-  programs use
+- `wut-sys/` has the Rust bindings for the wut, libwhb, libgfd, libogc matrix and picolibc
+  functions the programs use
 - `gtxconv/` converts images to `.gtx` texture files from a TOML config, as a library and a CLI
 - `cc` is the C compiler for cc-rs build scripts of Rust projects: it builds the toolchain and
   compiles with the Wii U flags and the picolibc, wut and libogc matrix headers. `ar` is a separate
@@ -79,6 +79,13 @@ shaders of devkitPro's [wiiu-examples](https://github.com/devkitPro/wiiu-example
 starting with `$` set the shader registers and name the attributes, uniforms and samplers, which
 libwhb looks up by name. devkitPro has no GLSL compiler, the alternative is
 [CafeGLSL](https://github.com/Exzap/CafeGLSL), which compiles GLSL on the console at runtime.
+
+## Textures
+
+The programs embed their textures as a `.gtx` file aligned to 4 KiB and load them with
+`GFDGetTextureInPlace`, which a wut patch adds. It points the textures at their data in the file,
+so the GPU reads the BC1 compressed, tiled and mipmapped textures in place without decoding or
+copying them.
 
 ## Patches
 

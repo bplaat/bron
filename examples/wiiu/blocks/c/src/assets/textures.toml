@@ -1,0 +1,95 @@
+# The block textures in the order of MaterialLayer
+[[textures]]
+path = "brick_red.png"
+format = "bc1"
+mipmaps = true
+
+[[textures]]
+path = "cactus_side.png"
+format = "bc1"
+mipmaps = true
+
+[[textures]]
+path = "cactus_top.png"
+format = "bc1"
+mipmaps = true
+
+[[textures]]
+path = "dirt.png"
+format = "bc1"
+mipmaps = true
+
+[[textures]]
+path = "dirt_grass.png"
+format = "bc1"
+mipmaps = true
+
+[[textures]]
+path = "grass_top.png"
+format = "bc1"
+mipmaps = true
+
+[[textures]]
+path = "greystone.png"
+format = "bc1"
+mipmaps = true
+
+[[textures]]
+path = "lava.png"
+format = "bc1"
+mipmaps = true
+
+[[textures]]
+path = "leaves.png"
+format = "bc1"
+mipmaps = true
+
+[[textures]]
+path = "sand.png"
+format = "bc1"
+mipmaps = true
+
+[[textures]]
+path = "stone.png"
+format = "bc1"
+mipmaps = true
+
+[[textures]]
+path = "stone_coal.png"
+format = "bc1"
+mipmaps = true
+
+[[textures]]
+path = "stone_diamond.png"
+format = "bc1"
+mipmaps = true
+
+[[textures]]
+path = "stone_gold.png"
+format = "bc1"
+mipmaps = true
+
+[[textures]]
+path = "stone_iron.png"
+format = "bc1"
+mipmaps = true
+
+[[textures]]
+path = "trunk_side.png"
+format = "bc1"
+mipmaps = true
+
+[[textures]]
+path = "trunk_top.png"
+format = "bc1"
+mipmaps = true
+
+[[textures]]
+path = "water.png"
+format = "bc1"
+mipmaps = true
+
+[[textures]]
+path = "wood.png"
+format = "bc1"
+mipmaps = true

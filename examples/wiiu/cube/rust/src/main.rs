@@ -14,11 +14,6 @@ use core::mem::{self, MaybeUninit};
 
 use wut_sys::*;
 
-use crate::texture::Texture;
-
-mod memory;
-mod texture;
-
 #[repr(C)]
 struct Vertex {
     position: [f32; 3],
@@ -67,12 +62,19 @@ struct Shader<T: ?Sized>(T);
 
 static SHADER: &Shader<[u8]> = &Shader(*include_bytes!(concat!(env!("OUT_DIR"), "/shader.gsh")));
 
+// The GPU reads the BC1 textures in place, which needs the 4 KiB alignment of their tiles
+#[repr(C, align(4096))]
+struct Textures<T: ?Sized>(T);
+
+static TEXTURES: &Textures<[u8]> =
+    &Textures(*include_bytes!(concat!(env!("OUT_DIR"), "/textures.gtx")));
+
 struct Cube {
     group: WHBGfxShaderGroup,
     projection_offset: u32,
     model_view_offset: u32,
     light_offset: u32,
-    texture: Texture,
+    texture: GX2Texture,
     sampler: GX2Sampler,
 }
 
@@ -108,12 +110,20 @@ impl Cube {
                 (&raw mut VERTICES).cast(),
                 mem::size_of::<Vertices>() as u32,
             );
-            let texture = Texture::decode(include_bytes!("assets/crate.jpg"))?;
+            let mut texture = MaybeUninit::<GX2Texture>::zeroed().assume_init();
+            if GFDGetTextureInPlace(&mut texture, 0, TEXTURES.0.as_ptr().cast()) == FALSE {
+                return None;
+            }
             let mut sampler = GX2Sampler::default();
             GX2InitSampler(
                 &mut sampler,
                 GX2_TEX_CLAMP_MODE_WRAP,
                 GX2_TEX_XY_FILTER_MODE_LINEAR,
+            );
+            GX2InitSamplerZMFilter(
+                &mut sampler,
+                GX2_TEX_Z_FILTER_MODE_POINT,
+                GX2_TEX_MIP_FILTER_MODE_LINEAR,
             );
             Some(Self {
                 group,
@@ -135,7 +145,7 @@ impl Cube {
             GX2SetDepthOnlyControl(TRUE, TRUE, GX2_COMPARE_FUNC_LEQUAL);
             GX2SetVertexUniformReg(self.projection_offset, 16, projection.as_ptr().cast());
             GX2SetVertexUniformReg(self.model_view_offset, 12, matrix.as_ptr().cast());
-            GX2SetPixelTexture(self.texture.as_ptr(), 0);
+            GX2SetPixelTexture(&self.texture, 0);
             GX2SetPixelSampler(&self.sampler, 0);
             GX2SetAttribBuffer(
                 0,

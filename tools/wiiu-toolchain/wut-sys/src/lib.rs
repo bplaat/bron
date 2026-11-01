@@ -4,8 +4,8 @@
  * SPDX-License-Identifier: MIT
  */
 
-//! Rust bindings for the parts of wut, libwhb, libogc's matrix math and picolibc that the Wii U
-//! programs use, the toolchain's `build.rs` helper builds and links the libraries. The names and values come
+//! Rust bindings for the parts of wut, libwhb, libgfd, libogc's matrix math and picolibc that the
+//! Wii U programs use, the toolchain's `build.rs` helper builds and links the libraries. The names and values come
 //! from wut's headers, the C enums are plain `u32` constants.
 
 #![no_std]
@@ -144,7 +144,6 @@ pub const GX2_PRIMITIVE_MODE_QUADS: u32 = 19;
 pub const GX2_INDEX_TYPE_U16: u32 = 4;
 pub const GX2_INDEX_TYPE_U32: u32 = 9;
 pub const GX2_INVALIDATE_MODE_CPU_ATTRIBUTE_BUFFER: u32 = 1 << 6 | 1 << 0;
-pub const GX2_INVALIDATE_MODE_CPU_TEXTURE: u32 = 1 << 6 | 1 << 1;
 pub const GX2_COMPARE_FUNC_LESS: u32 = 1;
 pub const GX2_COMPARE_FUNC_LEQUAL: u32 = 3;
 pub const GX2_FRONT_FACE_CCW: u32 = 0;
@@ -189,25 +188,13 @@ unsafe extern "C" {
 }
 
 // MARK: GX2 textures
-pub const GX2_SURFACE_DIM_TEXTURE_2D: u32 = 1;
-pub const GX2_SURFACE_FORMAT_UNORM_R8_G8_B8_A8: u32 = 0x01a;
-pub const GX2_SURFACE_USE_TEXTURE: u32 = 1 << 0;
-pub const GX2_TILE_MODE_LINEAR_ALIGNED: u32 = 1;
 pub const GX2_TEX_CLAMP_MODE_WRAP: u32 = 0;
 pub const GX2_TEX_CLAMP_MODE_CLAMP: u32 = 2;
 pub const GX2_TEX_XY_FILTER_MODE_POINT: u32 = 0;
 pub const GX2_TEX_XY_FILTER_MODE_LINEAR: u32 = 1;
-pub const GX2_SQ_SEL_R: u32 = 0;
-pub const GX2_SQ_SEL_G: u32 = 1;
-pub const GX2_SQ_SEL_B: u32 = 2;
-pub const GX2_SQ_SEL_A: u32 = 3;
+pub const GX2_TEX_Z_FILTER_MODE_POINT: u32 = 1;
+pub const GX2_TEX_MIP_FILTER_MODE_LINEAR: u32 = 2;
 
-/// Selects the red, green, blue and alpha channels of a texture, like wut's `GX2_COMP_MAP`.
-pub const fn GX2_COMP_MAP(x: u32, y: u32, z: u32, w: u32) -> u32 {
-    x << 24 | y << 16 | z << 8 | w
-}
-
-/// Create with `core::mem::zeroed()` and fill in the fields of the texture
 #[repr(C)]
 pub struct GX2Surface {
     pub dim: u32,
@@ -229,6 +216,7 @@ pub struct GX2Surface {
     pub mip_level_offset: [u32; 13],
 }
 
+/// Create with `core::mem::zeroed()` and load with `GFDGetTextureInPlace`
 #[repr(C)]
 pub struct GX2Texture {
     pub surface: GX2Surface,
@@ -247,11 +235,17 @@ pub struct GX2Sampler {
 }
 
 unsafe extern "C" {
-    pub fn GX2CalcSurfaceSizeAndAlignment(surface: *mut GX2Surface);
-    pub fn GX2InitTextureRegs(texture: *mut GX2Texture);
     pub fn GX2InitSampler(sampler: *mut GX2Sampler, clamp_mode: u32, min_mag_filter_mode: u32);
+    pub fn GX2InitSamplerZMFilter(sampler: *mut GX2Sampler, z_filter_mode: u32, mip_filter_mode: u32);
     pub fn GX2SetPixelTexture(texture: *const GX2Texture, unit: u32);
     pub fn GX2SetPixelSampler(sampler: *const GX2Sampler, unit: u32);
+}
+
+// MARK: libgfd
+unsafe extern "C" {
+    /// Points a texture at its image and mipmaps in a `.gtx` file, the GPU reads them in place.
+    /// The file must stay loaded and be aligned like the texture data in it.
+    pub fn GFDGetTextureInPlace(texture: *mut GX2Texture, index: u32, file: *const c_void) -> BOOL;
 }
 
 // MARK: libwhb

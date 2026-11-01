@@ -6,24 +6,7 @@ version = 4
 name = "blocks"
 version = "0.1.0"
 dependencies = [
- "image",
  "wut-sys",
-]
-
-[[package]]
-name = "crc"
-version = "3.4.0+patch"
-
-[[package]]
-name = "deflate"
-version = "0.1.0"
-
-[[package]]
-name = "image"
-version = "0.1.0"
-dependencies = [
- "crc",
- "deflate",
 ]
 
 [[package]]

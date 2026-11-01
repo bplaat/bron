@@ -1,0 +1,4 @@
+[[textures]]
+path = "crate.jpg"
+format = "bc1"
+mipmaps = true

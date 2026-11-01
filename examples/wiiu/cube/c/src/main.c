@@ -1,18 +1,18 @@
 // The rotating textured cube scene from the WebGPU example, on the TV and the GamePad.
 
 #include <coreinit/time.h>
+#include <gfd.h>
 #include <gu.h>
 #include <gx2/draw.h>
 #include <gx2/mem.h>
 #include <gx2/registers.h>
 #include <gx2/sampler.h>
 #include <gx2/shaders.h>
+#include <gx2/texture.h>
 #include <math.h>
 #include <stdint.h>
 #include <whb/gfx.h>
 #include <whb/proc.h>
-
-#include "texture.h"
 
 typedef struct {
     float position[3];
@@ -33,8 +33,9 @@ _Alignas(64) static const uint8_t shader_gsh[] = {
 #embed "../target/shader.gsh"
 };
 
-static const uint8_t crate_jpg[] = {
-#embed "assets/crate.jpg"
+// The GPU reads the BC1 textures in place, which needs the 4 KiB alignment of their tiles
+_Alignas(4096) static const uint8_t textures_gtx[] = {
+#embed "../target/textures.gtx"
 };
 
 typedef struct {
@@ -97,9 +98,10 @@ int main(void) {
     cube.model_view_offset = GX2GetVertexUniformVar(cube.group.vertexShader, "uModelView")->offset;
     cube.light_offset = GX2GetPixelUniformVar(cube.group.pixelShader, "uLight")->offset;
     GX2Invalidate(GX2_INVALIDATE_MODE_CPU_ATTRIBUTE_BUFFER, vertices, sizeof(vertices));
-    if (!texture_load(&cube.texture, crate_jpg, sizeof(crate_jpg)))
+    if (!GFDGetTextureInPlace(&cube.texture, 0, textures_gtx))
         return 1;
     GX2InitSampler(&cube.sampler, GX2_TEX_CLAMP_MODE_WRAP, GX2_TEX_XY_FILTER_MODE_LINEAR);
+    GX2InitSamplerZMFilter(&cube.sampler, GX2_TEX_Z_FILTER_MODE_POINT, GX2_TEX_MIP_FILTER_MODE_LINEAR);
 
     // The TV renders at 1280x720 and the GamePad at 854x480, both about 16:9
     Mtx44 projection;
@@ -120,7 +122,6 @@ int main(void) {
         WHBGfxFinishRender();
     }
 
-    texture_free(&cube.texture);
     WHBGfxFreeShaderGroup(&cube.group);
     WHBGfxShutdown();
     WHBProcShutdown();

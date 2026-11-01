@@ -39,8 +39,9 @@ The Rust examples are standalone nightly projects, separate from the main Cargo 
 Run Cargo from the example directory so it loads the Wii U target and runner configuration.
 
 All examples draw on both the TV and the GamePad with libwhb. Their shaders are written in Latte
-assembly in `src/shader.vsh` and `src/shader.psh`, and their images are embedded and decoded at
-runtime, with stb_image in C and our [image](../../lib/graphics/image) crate in Rust.
+assembly in `src/shader.vsh` and `src/shader.psh`. Their images are converted at build time to BC1
+compressed textures with mipmaps by the toolchain's [gtxconv](../../tools/wiiu-toolchain/gtxconv),
+from `src/assets/textures.toml`, and the GPU reads them in place from the program.
 
 ## Triangle
 

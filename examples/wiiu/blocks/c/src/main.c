@@ -5,6 +5,7 @@
 #include <gu.h>
 #include <gx2/registers.h>
 #include <gx2/shaders.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <whb/gfx.h>
@@ -82,8 +83,6 @@ int main(void) {
     }
 
     free(blocks.mesh.vertices);
-    for (int material = 0; material < MaterialLayerCount; material++)
-        texture_free(&blocks.materials.textures[material]);
     WHBGfxFreeShaderGroup(&blocks.group);
     WHBGfxShutdown();
     WHBProcShutdown();

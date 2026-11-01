@@ -6,18 +6,9 @@ version = 4
 name = "cube"
 version = "0.1.0"
 dependencies = [
- "image",
  "wut-sys",
 ]
 
 [[package]]
-name = "image"
-version = "0.1.0"
-
-[[package]]
 name = "wut-sys"
 version = "0.1.0"
-
-[[patch.unused]]
-name = "crc"
-version = "3.4.0+patch"

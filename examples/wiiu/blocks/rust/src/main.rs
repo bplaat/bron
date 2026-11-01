@@ -23,7 +23,6 @@ use crate::world::World;
 mod materials;
 mod memory;
 mod mesh;
-mod texture;
 mod world;
 
 #[repr(C, align(64))]

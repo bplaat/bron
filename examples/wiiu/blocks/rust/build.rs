@@ -16,4 +16,5 @@ fn main() {
         Path::new("src/shader.vsh"),
         Path::new("src/shader.psh"),
     );
+    wiiu::convert_textures(&build_dir, Path::new("src/assets/textures.toml"));
 }
