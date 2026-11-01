@@ -7,7 +7,7 @@
 use std::path::PathBuf;
 use std::{env, fs};
 
-use gxtexconv::Format;
+use gxtexconv::{Format, Texture};
 
 #[path = "../../../../tools/wii-toolchain/build.rs"]
 mod wii;
@@ -17,20 +17,38 @@ fn main() {
     let out_dir = PathBuf::from(env::var_os("OUT_DIR").unwrap());
     wii::build(manifest_dir.join("../../../../tools/wii-toolchain"));
 
-    // Convert the block images to mipmapped CMPR textures, materials.rs loads them in script order
-    let script = manifest_dir.join("src/assets/materials.scf");
-    println!("cargo:rerun-if-changed={}", script.display());
+    // Keep textures in Material order; materials.rs loads the concatenated image data.
+    let assets = manifest_dir.join("src/assets");
     let mut images = Vec::new();
-    for entry in gxtexconv::read_script(&script).expect("failed to read materials.scf") {
-        println!("cargo:rerun-if-changed={}", entry.path.display());
-        let texture = entry.load().expect("failed to convert material");
+    for name in [
+        "brick_red",
+        "cactus_side",
+        "cactus_top",
+        "dirt",
+        "dirt_grass",
+        "grass_top",
+        "greystone",
+        "lava",
+        "leaves",
+        "sand",
+        "stone",
+        "stone_coal",
+        "stone_diamond",
+        "stone_gold",
+        "stone_iron",
+        "trunk_side",
+        "trunk_top",
+        "water",
+        "wood",
+    ] {
+        let path = assets.join(format!("{name}.png"));
+        println!("cargo:rerun-if-changed={}", path.display());
+        let texture = Texture::load_mipmapped(&path, Format::Cmpr)
+            .unwrap_or_else(|err| panic!("failed to convert {}: {err}", path.display()));
         assert!(
-            texture.format == Format::Cmpr
-                && texture.width == 128
-                && texture.height == 128
-                && texture.levels == 5,
-            "{} must be a 128x128 CMPR texture with mipmaps",
-            entry.path.display()
+            texture.width == 128 && texture.height == 128 && texture.levels == 5,
+            "{} must be a 128x128 texture with five mipmap levels",
+            path.display()
         );
         images.extend(texture.data);
     }
