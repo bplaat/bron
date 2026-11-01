@@ -733,11 +733,16 @@ impl Connection {
             ConnectionSource::Pool(pool) => pool.acquire_script_connection()?,
             ConnectionSource::Transaction(lease) => Arc::clone(lease),
         };
-        if let Err(error) = lease.active_connection()?.execute_script(sql) {
+        let result = lease.active_connection()?.execute_script(sql);
+        if let Err(error) = result {
             if error.connection_broken {
                 lease.mark_broken();
             }
-            return Err(error);
+            // A script that fails after its own BEGIN must not return its open transaction to the pool.
+            return Err(match self.source {
+                ConnectionSource::Pool(_) => rollback_after_error(&lease, error),
+                ConnectionSource::Transaction(_) => error,
+            });
         }
         if matches!(self.source, ConnectionSource::Pool(_)) && !lease.connection().is_autocommit() {
             let rollback = lease.finish_transaction(false);
@@ -1104,6 +1109,27 @@ mod tests {
             0
         );
         database.execute("INSERT INTO items VALUES (2)", ())?;
+        Ok(())
+    }
+
+    #[test]
+    fn failed_script_rolls_back_its_transaction() -> Result<(), StatementError> {
+        let database = Connection::open_sqlite_memory().expect("open SQLite");
+        database.execute("CREATE TABLE items (id INTEGER PRIMARY KEY) STRICT", ())?;
+        let script = "BEGIN TRANSACTION; INSERT INTO items VALUES (1); INSERT INTO missing VALUES (1); COMMIT;";
+        let error = database
+            .execute_script(script)
+            .expect_err("missing table must fail");
+        assert!(error.to_string().contains("missing"));
+        assert_eq!(
+            database.query_some::<i64>("SELECT COUNT(*) FROM items", ())?,
+            0
+        );
+        database.execute_script("BEGIN TRANSACTION; INSERT INTO items VALUES (2); COMMIT;")?;
+        assert_eq!(
+            database.query_some::<i64>("SELECT COUNT(*) FROM items", ())?,
+            1
+        );
         Ok(())
     }
 
