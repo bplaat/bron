@@ -1,9 +1,7 @@
 # ImageView
 
-A simple native image viewer for macOS, Windows and Linux with local raster decoders and support
-for SVG and TinyVG images. Windows and the event loop come from [bwindow](../../../lib/ui/bwindow),
-which hosts a native scroll view: an AppKit NSScrollView, a Win32 window with scroll bars, or a
-GtkScrolledWindow, all following the system light or dark theme.
+A simple native image viewer for macOS, Windows and Linux that opens common images, animations and
+vector drawings, and follows the system light or dark theme.
 
 ## Features
 

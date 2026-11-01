@@ -5,73 +5,35 @@
  */
 
 //! The Win32 media view: a child window with native scroll bars, dark in the dark theme, that
-//! draws the media with bcanvas above a checkerboard.
+//! draws the viewport with bcanvas.
 
 #![allow(unsafe_code)]
 
 use std::cell::{Cell, RefCell};
 use std::ptr::{null, null_mut};
 use std::sync::Once;
-use std::time::Instant;
 
 use bcanvas::HwndCanvas;
 use bwindow::{NativeViewHandle, NativeWindowHandle, Theme, Window, WindowAttachment};
-use imageview_core::{
-    Media, MediaRenderer, WHEEL_ZOOM_RATE, clamp_magnification, draw_checkerboard,
-    fit_magnification,
-};
+use imageview_core::{Media, WHEEL_ZOOM_RATE};
 
 use self::headers::*;
+use crate::viewport::{Axis, LINE, Step, Viewport};
 
 mod headers;
 
 const CLASS_NAME: &str = "ImageViewMediaView";
 const ANIMATION_TIMER: usize = 1;
-// How far a scroll bar arrow or wheel line scrolls, in logical pixels.
-const LINE: f64 = 48.0;
-
-// Where a drag started: the pointer position and the scroll position.
-type Drag = ((i32, i32), (f64, f64));
-
-// One scroll axis of the view.
-#[derive(Clone, Copy)]
-enum Axis {
-    Horizontal,
-    Vertical,
-}
-
-impl Axis {
-    const fn of(self, (x, y): (f64, f64)) -> f64 {
-        match self {
-            Self::Horizontal => x,
-            Self::Vertical => y,
-        }
-    }
-
-    const fn bar(self) -> i32 {
-        match self {
-            Self::Horizontal => SB_HORZ,
-            Self::Vertical => SB_VERT,
-        }
-    }
-}
 
 struct State {
     hwnd: Cell<HWND>,
     canvas: RefCell<Option<HwndCanvas>>,
-    renderer: RefCell<MediaRenderer>,
-    magnification: Cell<f64>,
-    // The scroll position in logical pixels.
-    scroll: Cell<(f64, f64)>,
+    viewport: RefCell<Viewport>,
     dark: Cell<bool>,
     updating_scroll_bars: Cell<bool>,
-    // The shown animation frame and when the animation started.
-    frame: Cell<usize>,
-    start: Cell<Instant>,
-    drag: Cell<Option<Drag>>,
 }
 
-/// A native scroll view that zooms and pans media.
+/// A native view that zooms and pans media.
 pub(crate) struct MediaView {
     state: Box<State>,
     _attachment: WindowAttachment,
@@ -86,17 +48,16 @@ impl MediaView {
         else {
             panic!("expected a Win32 window");
         };
+        let size = window.size();
         let state = Box::new(State {
             hwnd: Cell::new(null_mut()),
             canvas: RefCell::new(None),
-            renderer: RefCell::new(MediaRenderer::new(media)),
-            magnification: Cell::new(1.0),
-            scroll: Cell::new((0.0, 0.0)),
+            viewport: RefCell::new(Viewport::new(
+                media,
+                (f64::from(size.width), f64::from(size.height)),
+            )),
             dark: Cell::new(theme == Theme::Dark),
             updating_scroll_bars: Cell::new(false),
-            frame: Cell::new(0),
-            start: Cell::new(Instant::now()),
-            drag: Cell::new(None),
         });
         register_class();
         let class = wide(CLASS_NAME);
@@ -124,8 +85,9 @@ impl MediaView {
             state.apply_theme();
             attachment.set_native_view(NativeViewHandle::Win32(hwnd));
         }
-        state.zoom_to_fit();
-        state.start_animation();
+        // The view has its size now.
+        state.update(Viewport::zoom_to_fit);
+        state.animate();
         Self {
             state,
             _attachment: attachment,
@@ -134,33 +96,24 @@ impl MediaView {
 
     /// Replaces the media, keeping the zoom or fitting it to the window.
     pub(crate) fn set_media(&mut self, media: Media, zoom_to_fit: bool) {
-        let state = &self.state;
-        *state.renderer.borrow_mut() = MediaRenderer::new(media);
-        state.frame.set(0);
-        state.start.set(Instant::now());
-        if zoom_to_fit {
-            state.zoom_to_fit();
-        } else {
-            state.magnify(state.magnification.get(), None);
-        }
-        state.start_animation();
+        self.state
+            .update(|viewport| viewport.set_media(media, zoom_to_fit));
+        self.state.animate();
     }
 
     /// Magnifies by `factor`, keeping the middle of the visible area in place.
     pub(crate) fn zoom_by(&self, factor: f64) {
-        self.state
-            .magnify(self.state.magnification.get() * factor, None);
+        self.state.update(|viewport| viewport.zoom_by(factor, None));
     }
 
     /// Shows the media at its natural size.
     pub(crate) fn actual_size(&self) {
-        self.state.magnify(1.0, None);
-        self.state.center();
+        self.state.update(Viewport::actual_size);
     }
 
     /// Shows all of the media.
     pub(crate) fn zoom_to_fit(&self) {
-        self.state.zoom_to_fit();
+        self.state.update(Viewport::zoom_to_fit);
     }
 
     /// Follows the light or dark theme of the window.
@@ -209,45 +162,24 @@ fn register_class() {
 }
 
 impl State {
-    // The visible area in logical pixels.
-    fn view(&self) -> (f64, f64) {
-        let mut rect = RECT::default();
-        // SAFETY: The window is alive while the state is.
-        unsafe { GetClientRect(self.hwnd.get(), &mut rect) };
-        let scale = self.scale();
-        (
-            f64::from(rect.right) / scale,
-            f64::from(rect.bottom) / scale,
-        )
-    }
-
     fn scale(&self) -> f64 {
         // SAFETY: The window is alive while the state is.
         f64::from(unsafe { GetDpiForWindow(self.hwnd.get()) }.max(96)) / 96.0
     }
 
-    // The magnified media size in logical pixels.
-    fn content(&self) -> (f64, f64) {
-        let (width, height) = self.renderer.borrow().media().size();
-        let magnification = self.magnification.get();
-        (width * magnification, height * magnification)
+    // A point in client pixels in logical pixels.
+    fn logical(&self, (x, y): (i32, i32)) -> (f64, f64) {
+        let scale = self.scale();
+        (f64::from(x) / scale, f64::from(y) / scale)
     }
 
-    // Where the media starts in the view, it is centered when smaller than the view.
-    fn offset(&self, axis: Axis) -> f64 {
-        ((axis.of(self.view()) - axis.of(self.content())) / 2.0).max(0.0)
+    // Changes the viewport, then shows the change in the scroll bars and the view.
+    fn update(&self, change: impl FnOnce(&mut Viewport)) {
+        change(&mut self.viewport.borrow_mut());
+        self.refresh();
     }
 
-    // Scrolls to a position kept inside the media, updating the scroll bars.
-    fn scroll_to(&self, (x, y): (f64, f64)) {
-        let clamp = |axis: Axis, value: f64| {
-            value.clamp(
-                0.0,
-                (axis.of(self.content()) - axis.of(self.view())).max(0.0),
-            )
-        };
-        self.scroll
-            .set((clamp(Axis::Horizontal, x), clamp(Axis::Vertical, y)));
+    fn refresh(&self) {
         self.update_scroll_bars();
         self.redraw();
     }
@@ -260,49 +192,17 @@ impl State {
         }
         let scale = self.scale();
         for _ in 0..2 {
-            for axis in [Axis::Horizontal, Axis::Vertical] {
+            for axis in Axis::BOTH {
+                let bar = self.viewport.borrow().scroll_bar(axis);
                 let mut info = SCROLLINFO::new(SIF_RANGE | SIF_PAGE | SIF_POS);
-                info.nMax = (axis.of(self.content()) * scale).round() as i32 - 1;
-                info.nPage = (axis.of(self.view()) * scale).round() as u32;
-                info.nPos = (axis.of(self.scroll.get()) * scale).round() as i32;
+                info.nMax = (bar.length * scale).round() as i32 - 1;
+                info.nPage = (bar.page * scale).round() as u32;
+                info.nPos = (bar.position * scale).round() as i32;
                 // SAFETY: The window is alive, scroll bars hide when everything is visible.
-                unsafe { SetScrollInfo(self.hwnd.get(), axis.bar(), &info, 1) };
+                unsafe { SetScrollInfo(self.hwnd.get(), bar_of(axis), &info, 1) };
             }
         }
         self.updating_scroll_bars.set(false);
-    }
-
-    // Magnifies the media, keeping the media under `anchor` in the view in place, or the
-    // middle of the view.
-    fn magnify(&self, magnification: f64, anchor: Option<(f64, f64)>) {
-        let before = self.magnification.get();
-        let view = self.view();
-        let anchor = anchor.unwrap_or((view.0 / 2.0, view.1 / 2.0));
-        let media = [Axis::Horizontal, Axis::Vertical].map(|axis| {
-            (axis.of(self.scroll.get()) + axis.of(anchor) - self.offset(axis)) / before
-        });
-        self.magnification.set(clamp_magnification(magnification));
-        let after = self.magnification.get();
-        self.scroll_to((
-            media[0] * after + self.offset(Axis::Horizontal) - anchor.0,
-            media[1] * after + self.offset(Axis::Vertical) - anchor.1,
-        ));
-    }
-
-    fn center(&self) {
-        let (content, view) = (self.content(), self.view());
-        self.scroll_to(((content.0 - view.0) / 2.0, (content.1 - view.1) / 2.0));
-    }
-
-    fn zoom_to_fit(&self) {
-        let magnification = fit_magnification(self.view(), self.renderer.borrow().media().size());
-        self.magnify(magnification, None);
-        self.center();
-    }
-
-    fn scroll_by(&self, (x, y): (f64, f64)) {
-        let (scroll_x, scroll_y) = self.scroll.get();
-        self.scroll_to((scroll_x + x, scroll_y + y));
     }
 
     fn apply_theme(&self) {
@@ -322,32 +222,17 @@ impl State {
     }
 
     fn paint(&self) {
-        let (scroll_x, scroll_y) = self.scroll.get();
-        let (content_width, content_height) = self.content();
-        let rect = (
-            (self.offset(Axis::Horizontal) - scroll_x) as f32,
-            (self.offset(Axis::Vertical) - scroll_y) as f32,
-            content_width as f32,
-            content_height as f32,
-        );
         let mut canvas = self.canvas.borrow_mut();
         let Some(canvas) = canvas.as_mut() else {
             return;
         };
-        canvas.paint(|context| {
-            draw_checkerboard(context, context.width(), context.height(), self.dark.get());
-            self.renderer.borrow().draw(context, self.frame.get(), rect);
-        });
+        canvas.paint(|context| self.viewport.borrow().paint(context, self.dark.get()));
     }
 
     // Shows the current animation frame and schedules the next one.
-    fn start_animation(&self) {
-        let (frame, next) = self
-            .renderer
-            .borrow()
-            .media()
-            .frame_at(self.start.get().elapsed());
-        if self.frame.replace(frame) != frame {
+    fn animate(&self) {
+        let (changed, next) = self.viewport.borrow_mut().advance_frame();
+        if changed {
             self.redraw();
         }
         // SAFETY: The window is alive and owns its timer.
@@ -366,28 +251,27 @@ impl State {
 
     // Scrolls an axis for a scroll bar request.
     fn scroll_bar(&self, axis: Axis, request: u16) {
-        let mut info = SCROLLINFO::new(SIF_TRACKPOS);
-        // SAFETY: The window is alive and the scroll info is valid.
-        unsafe { GetScrollInfo(self.hwnd.get(), axis.bar(), &mut info) };
-        let page = axis.of(self.view());
-        let current = axis.of(self.scroll.get());
-        let value = match request {
-            SB_LINEUP => current - LINE,
-            SB_LINEDOWN => current + LINE,
-            SB_PAGEUP => current - page,
-            SB_PAGEDOWN => current + page,
-            SB_THUMBTRACK => f64::from(info.nTrackPos) / self.scale(),
-            SB_TOP => 0.0,
-            SB_BOTTOM => f64::INFINITY,
+        let step = match request {
+            SB_LINEUP => Step::LineBack,
+            SB_LINEDOWN => Step::LineForward,
+            SB_PAGEUP => Step::PageBack,
+            SB_PAGEDOWN => Step::PageForward,
+            SB_TOP => Step::Start,
+            SB_BOTTOM => Step::End,
+            SB_THUMBTRACK => {
+                let mut info = SCROLLINFO::new(SIF_TRACKPOS);
+                // SAFETY: The window is alive and the scroll info is valid.
+                unsafe { GetScrollInfo(self.hwnd.get(), bar_of(axis), &mut info) };
+                let position = f64::from(info.nTrackPos) / self.scale();
+                self.update(|viewport| viewport.scroll_axis(axis, position));
+                return;
+            }
             _ => return,
         };
-        let (x, y) = self.scroll.get();
-        self.scroll_to(match axis {
-            Axis::Horizontal => (value, y),
-            Axis::Vertical => (x, value),
-        });
+        self.update(|viewport| viewport.step(axis, step));
     }
 
+    // Control + wheel magnifies around the pointer, shift + wheel scrolls horizontally.
     fn wheel(&self, wparam: WPARAM, lparam: LPARAM, horizontal: bool) {
         let lines = f64::from((wparam >> 16) as u16 as i16) / WHEEL_DELTA;
         // SAFETY: GetKeyState reads the keyboard state of this thread.
@@ -399,36 +283,37 @@ impl State {
             };
             // SAFETY: The window is alive, wheel positions are in screen coordinates.
             unsafe { ScreenToClient(self.hwnd.get(), &mut point) };
-            let scale = self.scale();
-            self.magnify(
-                self.magnification.get() * (lines * WHEEL_ZOOM_RATE).exp(),
-                Some((f64::from(point.x) / scale, f64::from(point.y) / scale)),
-            );
+            let anchor = self.logical((point.x, point.y));
+            self.update(|viewport| {
+                viewport.zoom_by((lines * WHEEL_ZOOM_RATE).exp(), Some(anchor));
+            });
         } else if horizontal || shift {
-            self.scroll_by((lines * LINE * if horizontal { 1.0 } else { -1.0 }, 0.0));
+            let sign = if horizontal { 1.0 } else { -1.0 };
+            self.update(|viewport| viewport.scroll_by((sign * lines * LINE, 0.0)));
         } else {
-            self.scroll_by((0.0, -lines * LINE));
+            self.update(|viewport| viewport.scroll_by((0.0, -lines * LINE)));
         }
     }
 
     fn key(&self, key: usize) -> bool {
-        let page = self.view().1;
-        match key {
-            VK_UP => self.scroll_by((0.0, -LINE)),
-            VK_DOWN => self.scroll_by((0.0, LINE)),
-            VK_PRIOR => self.scroll_by((0.0, -page)),
-            VK_NEXT => self.scroll_by((0.0, page)),
-            VK_HOME => self.scroll_to((self.scroll.get().0, 0.0)),
-            VK_END => self.scroll_to((self.scroll.get().0, f64::INFINITY)),
+        let step = match key {
+            VK_UP => Step::LineBack,
+            VK_DOWN => Step::LineForward,
+            VK_PRIOR => Step::PageBack,
+            VK_NEXT => Step::PageForward,
+            VK_HOME => Step::Start,
+            VK_END => Step::End,
             _ => return false,
-        }
+        };
+        self.update(|viewport| viewport.step(Axis::Vertical, step));
         true
     }
+}
 
-    // The media can be dragged when it does not fit.
-    fn is_scrollable(&self) -> bool {
-        let (content, view) = (self.content(), self.view());
-        content.0 > view.0 || content.1 > view.1
+const fn bar_of(axis: Axis) -> i32 {
+    match axis {
+        Axis::Horizontal => SB_HORZ,
+        Axis::Vertical => SB_VERT,
     }
 }
 
@@ -451,37 +336,40 @@ unsafe extern "system" fn window_proc(
     match message {
         WM_PAINT => state.paint(),
         WM_ERASEBKGND => return 1,
-        WM_SIZE => state.scroll_to(state.scroll.get()),
+        WM_SIZE => {
+            let mut rect = RECT::default();
+            // SAFETY: The window is alive.
+            unsafe { GetClientRect(hwnd, &mut rect) };
+            let visible = state.logical((rect.right, rect.bottom));
+            state.update(|viewport| viewport.resize(visible));
+        }
         WM_HSCROLL => state.scroll_bar(Axis::Horizontal, wparam as u16),
         WM_VSCROLL => state.scroll_bar(Axis::Vertical, wparam as u16),
         WM_MOUSEWHEEL => state.wheel(wparam, lparam, false),
         WM_MOUSEHWHEEL => state.wheel(wparam, lparam, true),
         WM_KEYDOWN if state.key(wparam) => {}
-        WM_TIMER if wparam == ANIMATION_TIMER => state.start_animation(),
+        WM_TIMER if wparam == ANIMATION_TIMER => state.animate(),
         WM_LBUTTONDOWN => {
             // SAFETY: The window is alive and takes the focus and mouse capture.
             unsafe { SetFocus(hwnd) };
-            if state.is_scrollable() {
-                state.drag.set(Some((point, state.scroll.get())));
+            if state.viewport.borrow_mut().drag_begin(state.logical(point)) {
                 // SAFETY: The window is alive.
                 unsafe { SetCapture(hwnd) };
             }
         }
         WM_MOUSEMOVE => {
-            if let Some(((start_x, start_y), (scroll_x, scroll_y))) = state.drag.get() {
-                let scale = state.scale();
-                state.scroll_to((
-                    scroll_x - f64::from(point.0 - start_x) / scale,
-                    scroll_y - f64::from(point.1 - start_y) / scale,
-                ));
+            if state.viewport.borrow_mut().drag_to(state.logical(point)) {
+                state.refresh();
             }
         }
         // SAFETY: The window is alive and releases its own capture.
         WM_LBUTTONUP if unsafe { GetCapture() } == hwnd => unsafe {
             ReleaseCapture();
         },
-        WM_CAPTURECHANGED => state.drag.set(None),
-        WM_SETCURSOR if lparam as u16 == HTCLIENT && state.is_scrollable() => {
+        WM_CAPTURECHANGED => {
+            state.viewport.borrow_mut().drag_end();
+        }
+        WM_SETCURSOR if lparam as u16 == HTCLIENT && state.viewport.borrow().is_scrollable() => {
             // SAFETY: The system cursor lives for the process lifetime.
             unsafe { SetCursor(LoadCursorW(null_mut(), IDC_SIZEALL)) };
             return 1;

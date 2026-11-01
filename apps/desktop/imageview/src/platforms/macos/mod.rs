@@ -4,8 +4,8 @@
  * SPDX-License-Identifier: MIT
  */
 
-//! The AppKit media view: a magnifying NSScrollView above a checkerboard, which shows media
-//! drawn with bcanvas.
+//! The AppKit platform: the media view, folder browsing like Finder, the recent documents menu
+//! and printing.
 
 #![allow(unsafe_code)]
 
@@ -14,23 +14,22 @@ use std::path::Path;
 use std::ptr::null_mut;
 
 use block2::Block;
-use bwindow::{EventLoopProxy, NativeViewHandle, Window, WindowAttachment};
+use bwindow::{EventLoopProxy, NativeViewHandle, Theme, Window, WindowAttachment};
 use imageview_core::Media;
-use imageview_core::appkit::{Point, Rect, Size, create_media_view, ns_string};
+use imageview_core::appkit::{create_media_view, ns_string};
 use objc2::rc::{Retained, autoreleasepool};
 use objc2::runtime::{AnyObject as Object, Bool};
 use objc2::{class, define_class, msg_send, sel};
 
 pub(crate) use self::browse::neighbour_path;
-use self::checkerboard::create_checkerboard_view;
 use self::headers::*;
-use self::scroll_view::{create_scroll_view, replace_document_view};
+use self::view::{View, rect};
 use crate::AppEvent;
+use crate::viewport::Viewport;
 
 mod browse;
-mod checkerboard;
 mod headers;
-mod scroll_view;
+mod view;
 
 thread_local! {
     static PROXY: RefCell<Option<EventLoopProxy<AppEvent>>> = const { RefCell::new(None) };
@@ -131,90 +130,73 @@ pub(crate) fn note_recent_file(path: &Path) {
     });
 }
 
-/// A native scroll view that zooms and pans media above a checkerboard.
+/// A native view that zooms and pans media.
 pub(crate) struct MediaView {
-    media: Media,
-    scroll_view: Retained<Object>,
-    _checkerboard: Retained<Object>,
+    view: Retained<View>,
     _attachment: WindowAttachment,
 }
 
 impl MediaView {
     /// Fills the window with the media, zoomed to fit.
-    pub(crate) fn new(window: &Window, media: Media, _theme: bwindow::Theme) -> Self {
+    pub(crate) fn new(window: &Window, media: Media, theme: Theme) -> Self {
         let attachment = window.attach_content().expect("window has no content yet");
         let size = window.size();
-        let frame = Rect {
-            origin: Point { x: 0.0, y: 0.0 },
-            size: Size {
-                width: f64::from(size.width),
-                height: f64::from(size.height),
-            },
-        };
-        let checkerboard = create_checkerboard_view(frame);
-        let media_view = create_media_view(media_frame(&media), media.clone());
-        let scroll_view = create_scroll_view(frame, media_view.as_ptr());
-        // SAFETY: The views are live and the checkerboard retains the scroll view, the attachment
-        // keeps the window that retains the checkerboard open while this view lives.
+        let view = View::new(
+            rect(0.0, 0.0, f64::from(size.width), f64::from(size.height)),
+            media,
+        );
+        view.set_dark(theme == Theme::Dark);
+        // SAFETY: The attachment keeps the window that retains the view open while this view
+        // lives.
         unsafe {
-            let _: () = msg_send![&*scroll_view, zoomToFit];
-            let _: () = msg_send![&*checkerboard, addSubview: scroll_view.as_ptr()];
-            attachment.set_native_view(NativeViewHandle::AppKit(checkerboard.as_ptr().cast()));
-            let window: *mut Object = msg_send![&*checkerboard, window];
-            let _: Bool = msg_send![window, makeFirstResponder: scroll_view.as_ptr()];
+            attachment.set_native_view(NativeViewHandle::AppKit(Retained::as_ptr(&view) as _));
+            let window: *mut Object = msg_send![&*view, window];
             // Enable full screen, code-created windows only zoom by default.
             let behavior: u64 = msg_send![window, collectionBehavior];
             let _: () = msg_send![window,
                 setCollectionBehavior: behavior | NS_WINDOW_COLLECTION_BEHAVIOR_FULL_SCREEN_PRIMARY
             ];
         }
+        // The view has its size now.
+        view.update(Viewport::zoom_to_fit);
+        view.advance_frame();
         Self {
-            media,
-            scroll_view,
-            _checkerboard: checkerboard,
+            view,
             _attachment: attachment,
         }
     }
 
     /// Replaces the media, keeping the zoom or fitting it to the window.
     pub(crate) fn set_media(&mut self, media: Media, zoom_to_fit: bool) {
-        let media_view = create_media_view(media_frame(&media), media.clone());
-        // SAFETY: The scroll view is live and retains the new media view.
-        unsafe {
-            replace_document_view(self.scroll_view.as_ptr(), media_view.as_ptr(), zoom_to_fit)
-        };
-        self.media = media;
+        self.view
+            .update(|viewport| viewport.set_media(media, zoom_to_fit));
+        self.view.advance_frame();
     }
 
     /// Magnifies by `factor`, keeping the middle of the visible area in place.
     pub(crate) fn zoom_by(&self, factor: f64) {
-        // SAFETY: The scroll view implements `zoomBy:` with a double.
-        unsafe {
-            let _: () = msg_send![&*self.scroll_view, zoomBy: factor];
-        }
+        self.view.update(|viewport| viewport.zoom_by(factor, None));
     }
 
     /// Shows the media at its natural size.
     pub(crate) fn actual_size(&self) {
-        // SAFETY: The scroll view implements `setZoom:` with a double.
-        unsafe {
-            let _: () = msg_send![&*self.scroll_view, setZoom: 1.0f64];
-        }
+        self.view.update(Viewport::actual_size);
     }
 
     /// Shows all of the media.
     pub(crate) fn zoom_to_fit(&self) {
-        // SAFETY: The scroll view implements `zoomToFit`.
-        unsafe {
-            let _: () = msg_send![&*self.scroll_view, zoomToFit];
-        }
+        self.view.update(Viewport::zoom_to_fit);
     }
 
-    /// AppKit follows the theme itself.
-    pub(crate) const fn theme_changed(&self, _theme: bwindow::Theme) {}
+    /// Follows the light or dark theme of the window.
+    pub(crate) fn theme_changed(&self, theme: Theme) {
+        self.view.set_dark(theme == Theme::Dark);
+    }
 
     /// Prints the media at its natural size, scaled to fit one page.
     pub(crate) fn print(&self) {
+        let media = self.view.media();
+        let (width, height) = media.size();
         autoreleasepool(|_| {
             // SAFETY: All objects are valid AppKit instances. The print info copy and the media
             // view are released after the operation that retains them has run.
@@ -228,12 +210,12 @@ impl MediaView {
                     msg_send![&*print_info, setVerticalPagination: NS_PRINTING_PAGINATION_MODE_FIT];
                 let _: () = msg_send![&*print_info, setHorizontallyCentered: Bool::YES];
                 let _: () = msg_send![&*print_info, setVerticallyCentered: Bool::YES];
-                let view = create_media_view(media_frame(&self.media), self.media.clone());
+                let view = create_media_view(rect(0.0, 0.0, width, height), media);
                 let operation: *mut Object = msg_send![class!(NSPrintOperation),
                     printOperationWithView: view.as_ptr(),
                     printInfo: print_info.as_ptr()
                 ];
-                let window: *mut Object = msg_send![&*self.scroll_view, window];
+                let window: *mut Object = msg_send![&*self.view, window];
                 let _: () = msg_send![operation,
                     runOperationModalForWindow: window,
                     delegate: null_mut::<Object>(),
@@ -245,10 +227,8 @@ impl MediaView {
     }
 }
 
-fn media_frame(media: &Media) -> Rect {
-    let (width, height) = media.size();
-    Rect {
-        origin: Point { x: 0.0, y: 0.0 },
-        size: Size { width, height },
+impl Drop for MediaView {
+    fn drop(&mut self) {
+        self.view.stop();
     }
 }

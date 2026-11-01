@@ -23,6 +23,7 @@ use imageview_core::{
 use crate::platforms::MediaView;
 
 mod platforms;
+mod viewport;
 
 // How often open files are checked for changes.
 const RELOAD_INTERVAL: Duration = Duration::from_secs(1);

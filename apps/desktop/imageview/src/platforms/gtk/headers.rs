@@ -17,16 +17,13 @@ pub(crate) const GDK_SMOOTH_SCROLL_MASK: i32 = 1 << 23;
 pub(crate) const GDK_TOUCHPAD_GESTURE_MASK: i32 = 1 << 24;
 pub(crate) const GDK_SCROLL_UP: i32 = 0;
 pub(crate) const GDK_SCROLL_DOWN: i32 = 1;
+pub(crate) const GDK_KEY_HOME: u32 = 0xff50;
+pub(crate) const GDK_KEY_UP: u32 = 0xff52;
+pub(crate) const GDK_KEY_DOWN: u32 = 0xff54;
+pub(crate) const GDK_KEY_PAGE_UP: u32 = 0xff55;
+pub(crate) const GDK_KEY_PAGE_DOWN: u32 = 0xff56;
+pub(crate) const GDK_KEY_END: u32 = 0xff57;
 pub(crate) const G_SIGNAL_MATCH_DATA: i32 = 1 << 4;
-
-#[repr(C)]
-#[derive(Default)]
-pub(crate) struct GdkRgba {
-    pub(crate) red: f64,
-    pub(crate) green: f64,
-    pub(crate) blue: f64,
-    pub(crate) alpha: f64,
-}
 
 unsafe extern "C" {
     pub(crate) fn g_object_ref(object: *mut c_void) -> *mut c_void;
@@ -73,18 +70,7 @@ unsafe extern "C" {
     pub(crate) fn gtk_widget_queue_draw(widget: *mut c_void);
     pub(crate) fn gtk_widget_get_window(widget: *mut c_void) -> *mut c_void;
     pub(crate) fn gtk_widget_get_display(widget: *mut c_void) -> *mut c_void;
-    pub(crate) fn gtk_widget_get_style_context(widget: *mut c_void) -> *mut c_void;
-    pub(crate) fn gtk_style_context_get_state(context: *mut c_void) -> i32;
-    pub(crate) fn gtk_style_context_get_color(
-        context: *mut c_void,
-        state: i32,
-        color: *mut GdkRgba,
-    );
     pub(crate) fn gtk_adjustment_get_value(adjustment: *mut c_void) -> f64;
-    pub(crate) fn gtk_adjustment_get_page_size(adjustment: *mut c_void) -> f64;
-    pub(crate) fn gtk_adjustment_get_step_increment(adjustment: *mut c_void) -> f64;
-    pub(crate) fn gtk_adjustment_get_page_increment(adjustment: *mut c_void) -> f64;
-    pub(crate) fn gtk_adjustment_set_value(adjustment: *mut c_void, value: f64);
     pub(crate) fn gtk_adjustment_configure(
         adjustment: *mut c_void,
         value: f64,
@@ -104,6 +90,7 @@ unsafe extern "C" {
     pub(crate) fn gdk_event_get_state(event: *const c_void, state: *mut u32) -> i32;
     pub(crate) fn gdk_event_get_coords(event: *const c_void, x: *mut f64, y: *mut f64) -> i32;
     pub(crate) fn gdk_event_get_root_coords(event: *const c_void, x: *mut f64, y: *mut f64) -> i32;
+    pub(crate) fn gdk_event_get_keyval(event: *const c_void, keyval: *mut u32) -> i32;
     pub(crate) fn gdk_event_get_button(event: *const c_void, button: *mut u32) -> i32;
     pub(crate) fn gdk_event_get_scroll_direction(event: *const c_void, direction: *mut i32) -> i32;
     pub(crate) fn gdk_event_get_scroll_deltas(

@@ -4,8 +4,9 @@
  * SPDX-License-Identifier: MIT
  */
 
-//! The GTK media view: a GtkScrolledWindow with overlay scrollbars around a drawing area as large
-//! as the magnified media, which draws it with bcanvas above a checkerboard.
+//! The GTK media view: a native GtkScrolledWindow around a drawing area as large as the
+//! magnified media, which draws the viewport with bcanvas. The scrolled window scrolls the
+//! drawing area, its scroll position is followed by the viewport and the other way around.
 
 #![allow(unsafe_code)]
 
@@ -13,55 +14,32 @@ use std::cell::{Cell, RefCell};
 use std::ffi::c_void;
 use std::ptr::null_mut;
 use std::rc::{Rc, Weak};
-use std::time::Instant;
 
 use bcanvas::NativeContext;
-use bwindow::{NativeViewHandle, Window, WindowAttachment};
-use imageview_core::{
-    Media, MediaRenderer, WHEEL_ZOOM_RATE, clamp_magnification, draw_checkerboard,
-    fit_magnification,
-};
+use bwindow::{NativeViewHandle, Theme, Window, WindowAttachment};
+use imageview_core::{Media, WHEEL_ZOOM_RATE};
 
 use self::headers::*;
 pub(crate) use self::thumbnail::thumbnail;
+use crate::viewport::{Axis, LINE, Step, Viewport};
 
 mod headers;
 mod thumbnail;
 
-// One scroll axis of the view.
-#[derive(Clone, Copy)]
-enum Axis {
-    Horizontal,
-    Vertical,
-}
-
-impl Axis {
-    // Picks the component of a point or size along this axis.
-    const fn of(self, (x, y): (f64, f64)) -> f64 {
-        match self {
-            Self::Horizontal => x,
-            Self::Vertical => y,
-        }
-    }
-}
-
 struct State {
-    renderer: RefCell<MediaRenderer>,
-    magnification: Cell<f64>,
-    // The shown animation frame, when the animation started and its timer source.
-    frame: Cell<usize>,
-    start: Cell<Instant>,
-    timer: Cell<u32>,
+    viewport: RefCell<Viewport>,
+    dark: Cell<bool>,
     scrolled_window: *mut c_void,
     area: *mut c_void,
     gesture: *mut c_void,
-    // The pointer position and scroll position where the media started being dragged.
-    drag: Cell<Option<(f64, f64, f64, f64)>>,
-    // The magnification where a pinch started.
+    // Whether the adjustments are being set from the viewport.
+    updating: Cell<bool>,
+    // The scale of the current pinch so far and the timer of the next animation frame.
     pinch: Cell<f64>,
+    timer: Cell<u32>,
 }
 
-/// A native scroll view that zooms and pans media.
+/// A native view that zooms and pans media.
 pub(crate) struct MediaView {
     state: Rc<State>,
     _attachment: WindowAttachment,
@@ -69,13 +47,9 @@ pub(crate) struct MediaView {
 
 impl MediaView {
     /// Fills the window with the media, zoomed to fit.
-    pub(crate) fn new(window: &Window, media: Media, _theme: bwindow::Theme) -> Self {
+    pub(crate) fn new(window: &Window, media: Media, theme: Theme) -> Self {
         let attachment = window.attach_content().expect("window has no content yet");
         let size = window.size();
-        let magnification = fit_magnification(
-            (f64::from(size.width), f64::from(size.height)),
-            media.size(),
-        );
         // SAFETY: The created widgets are owned by this view until it drops them, the window
         // keeps the scrolled window it embeds alive while the attachment is open.
         let state = unsafe {
@@ -94,26 +68,27 @@ impl MediaView {
             gtk_widget_set_can_focus(area, 1);
             gtk_container_add(scrolled_window, area);
             Rc::new(State {
-                renderer: RefCell::new(MediaRenderer::new(media)),
-                magnification: Cell::new(magnification),
-                frame: Cell::new(0),
-                start: Cell::new(Instant::now()),
-                timer: Cell::new(0),
+                viewport: RefCell::new(Viewport::new(
+                    media,
+                    (f64::from(size.width), f64::from(size.height)),
+                )),
+                dark: Cell::new(theme == Theme::Dark),
                 scrolled_window,
                 area,
                 gesture: gtk_gesture_zoom_new(area),
-                drag: Cell::new(None),
+                updating: Cell::new(false),
                 pinch: Cell::new(1.0),
+                timer: Cell::new(0),
             })
         };
         state.connect();
-        state.resize();
-        state.start_animation();
         // SAFETY: The scrolled window is a live widget that the window lays out from now on.
         unsafe {
             attachment.set_native_view(NativeViewHandle::Gtk(state.scrolled_window));
             gtk_widget_grab_focus(state.area);
         }
+        state.update(Viewport::zoom_to_fit);
+        state.start_animation();
         Self {
             state,
             _attachment: attachment,
@@ -122,38 +97,30 @@ impl MediaView {
 
     /// Replaces the media, keeping the zoom or fitting it to the window.
     pub(crate) fn set_media(&mut self, media: Media, zoom_to_fit: bool) {
-        let state = &self.state;
-        state.stop_animation();
-        *state.renderer.borrow_mut() = MediaRenderer::new(media);
-        state.frame.set(0);
-        state.start.set(Instant::now());
-        if zoom_to_fit {
-            state.zoom_to_fit();
-        } else {
-            state.magnify(state.magnification.get(), None);
-        }
-        state.start_animation();
+        self.state.stop_animation();
+        self.state
+            .update(|viewport| viewport.set_media(media, zoom_to_fit));
+        self.state.start_animation();
     }
 
     /// Magnifies by `factor`, keeping the middle of the visible area in place.
     pub(crate) fn zoom_by(&self, factor: f64) {
-        self.state
-            .magnify(self.state.magnification.get() * factor, None);
+        self.state.update(|viewport| viewport.zoom_by(factor, None));
     }
 
     /// Shows the media at its natural size.
     pub(crate) fn actual_size(&self) {
-        self.state.magnify(1.0, None);
-        self.state.center();
+        self.state.update(Viewport::actual_size);
     }
 
     /// Shows all of the media.
     pub(crate) fn zoom_to_fit(&self) {
-        self.state.zoom_to_fit();
+        self.state.update(Viewport::zoom_to_fit);
     }
 
     /// Redraws the checkerboard in the colors of the new theme.
-    pub(crate) fn theme_changed(&self, _theme: bwindow::Theme) {
+    pub(crate) fn theme_changed(&self, theme: Theme) {
+        self.state.dark.set(theme == Theme::Dark);
         // SAFETY: The drawing area is alive while this view is.
         unsafe { gtk_widget_queue_draw(self.state.area) };
     }
@@ -167,7 +134,13 @@ impl Drop for MediaView {
         // SAFETY: This view owns a reference to each object, the handlers using the state are
         // disconnected before it is freed.
         unsafe {
-            for object in [state.area, state.gesture] {
+            for object in [
+                state.area,
+                state.gesture,
+                state.scrolled_window,
+                state.adjustment(Axis::Horizontal),
+                state.adjustment(Axis::Vertical),
+            ] {
                 g_signal_handlers_disconnect_matched(
                     object,
                     G_SIGNAL_MATCH_DATA,
@@ -188,9 +161,10 @@ impl Drop for MediaView {
 impl State {
     fn connect(&self) {
         let data = std::ptr::from_ref(self).cast::<c_void>();
-        let signals: [(*mut c_void, &std::ffi::CStr, *const c_void); 7] = [
+        let signals: [(*mut c_void, &std::ffi::CStr, *const c_void); 11] = [
             (self.area, c"draw", draw as *const c_void),
             (self.area, c"scroll-event", scroll as *const c_void),
+            (self.area, c"key-press-event", key_press as *const c_void),
             (
                 self.area,
                 c"button-press-event",
@@ -203,10 +177,21 @@ impl State {
             ),
             (self.area, c"motion-notify-event", motion as *const c_void),
             (self.gesture, c"begin", pinch_begin as *const c_void),
+            (self.gesture, c"scale-changed", pinch as *const c_void),
             (
-                self.gesture,
-                c"scale-changed",
-                pinch_changed as *const c_void,
+                self.scrolled_window,
+                c"size-allocate",
+                resized as *const c_void,
+            ),
+            (
+                self.adjustment(Axis::Horizontal),
+                c"value-changed",
+                scrolled as *const c_void,
+            ),
+            (
+                self.adjustment(Axis::Vertical),
+                c"value-changed",
+                scrolled as *const c_void,
             ),
         ];
         for (object, signal, handler) in signals {
@@ -226,108 +211,62 @@ impl State {
         }
     }
 
-    // The visible length of an axis, the window size before the first layout.
-    fn page(&self, axis: Axis) -> f64 {
-        // SAFETY: The adjustment and scrolled window are alive.
+    // The scroll position of the scrolled window.
+    fn scroll(&self) -> (f64, f64) {
+        // SAFETY: The adjustments are alive.
         unsafe {
-            let page = gtk_adjustment_get_page_size(self.adjustment(axis));
-            if page > 0.0 {
-                return page;
-            }
-            f64::from(match axis {
-                Axis::Horizontal => gtk_widget_get_allocated_width(self.scrolled_window),
-                Axis::Vertical => gtk_widget_get_allocated_height(self.scrolled_window),
-            })
+            (
+                gtk_adjustment_get_value(self.adjustment(Axis::Horizontal)),
+                gtk_adjustment_get_value(self.adjustment(Axis::Vertical)),
+            )
         }
     }
 
-    // The magnified length of the media along an axis.
-    fn content(&self, axis: Axis) -> f64 {
-        self.magnification.get() * axis.of(self.renderer.borrow().media().size())
+    // A point in the drawing area in the visible area.
+    fn visible_point(&self, (x, y): (f64, f64)) -> (f64, f64) {
+        let scroll = self.scroll();
+        (x - scroll.0, y - scroll.1)
     }
 
-    // Where the media starts inside the drawing area, it is centered when smaller than the view.
-    fn offset(&self, axis: Axis) -> f64 {
-        ((self.page(axis) - self.content(axis)) / 2.0).max(0.0)
-    }
-
-    // Sizes the drawing area to the magnified media.
-    fn resize(&self) {
-        let length = |axis| self.content(axis).ceil().min(f64::from(i32::MAX / 2)) as i32;
-        // SAFETY: The drawing area is alive.
+    // Changes the viewport, then sizes the drawing area to the magnified media and scrolls the
+    // scrolled window along. The ranges are set before the next layout, so the scroll position
+    // is kept.
+    fn update(&self, change: impl FnOnce(&mut Viewport)) {
+        let (content, bars) = {
+            let mut viewport = self.viewport.borrow_mut();
+            change(&mut viewport);
+            (
+                viewport.content(),
+                Axis::BOTH.map(|axis| viewport.scroll_bar(axis)),
+            )
+        };
+        self.updating.set(true);
+        // SAFETY: The drawing area and adjustments are alive.
         unsafe {
-            gtk_widget_set_size_request(
-                self.area,
-                length(Axis::Horizontal),
-                length(Axis::Vertical),
-            );
+            // The scrolled window grows the drawing area to at least the visible area.
+            let length = |length: f64| length.ceil().min(f64::from(i32::MAX / 2)) as i32;
+            gtk_widget_set_size_request(self.area, length(content.0), length(content.1));
+            for (axis, bar) in Axis::BOTH.into_iter().zip(bars) {
+                let adjustment = self.adjustment(axis);
+                gtk_adjustment_configure(
+                    adjustment,
+                    bar.position,
+                    0.0,
+                    bar.length,
+                    LINE,
+                    bar.page,
+                    bar.page,
+                );
+            }
             gtk_widget_queue_draw(self.area);
         }
-    }
-
-    // Scrolls an axis, its range is updated before the next layout so the value is kept.
-    fn scroll_to(&self, axis: Axis, value: f64) {
-        let adjustment = self.adjustment(axis);
-        let page = self.page(axis);
-        let upper = self.content(axis).max(page);
-        // SAFETY: The adjustment is alive.
-        unsafe {
-            gtk_adjustment_configure(
-                adjustment,
-                value.clamp(0.0, upper - page),
-                0.0,
-                upper,
-                gtk_adjustment_get_step_increment(adjustment),
-                gtk_adjustment_get_page_increment(adjustment),
-                page,
-            );
-        }
-    }
-
-    // Magnifies the media, keeping the media under `anchor` in the drawing area in place, or
-    // the middle of the visible area.
-    fn magnify(&self, magnification: f64, anchor: Option<(f64, f64)>) {
-        let before = self.magnification.get();
-        let positions = [Axis::Horizontal, Axis::Vertical].map(|axis| {
-            // SAFETY: The adjustment is alive.
-            let value = unsafe { gtk_adjustment_get_value(self.adjustment(axis)) };
-            let visible = anchor.map_or(self.page(axis) / 2.0, |anchor| axis.of(anchor) - value);
-            (
-                axis,
-                visible,
-                (value + visible - self.offset(axis)) / before,
-            )
-        });
-        self.magnification.set(clamp_magnification(magnification));
-        for (axis, visible, media) in positions {
-            let after = self.magnification.get();
-            self.scroll_to(axis, media * after + self.offset(axis) - visible);
-        }
-        self.resize();
-    }
-
-    // Scrolls to the middle of the media.
-    fn center(&self) {
-        for axis in [Axis::Horizontal, Axis::Vertical] {
-            self.scroll_to(axis, (self.content(axis) - self.page(axis)) / 2.0);
-        }
-    }
-
-    fn zoom_to_fit(&self) {
-        let visible = (self.page(Axis::Horizontal), self.page(Axis::Vertical));
-        let magnification = fit_magnification(visible, self.renderer.borrow().media().size());
-        self.magnify(magnification, None);
-        self.center();
+        self.updating.set(false);
     }
 
     // Shows the current animation frame and schedules the next one.
     fn start_animation(self: &Rc<Self>) {
-        let (frame, next) = self
-            .renderer
-            .borrow()
-            .media()
-            .frame_at(self.start.get().elapsed());
-        if self.frame.replace(frame) != frame {
+        let (changed, next) = self.viewport.borrow_mut().advance_frame();
+        if changed {
             // SAFETY: The drawing area is alive while the state is.
             unsafe { gtk_widget_queue_draw(self.area) };
         }
@@ -373,81 +312,92 @@ extern "C" fn drop_weak(data: *mut c_void) {
     drop(unsafe { Box::from_raw(data.cast::<Weak<State>>()) });
 }
 
-// The viewport caches what the drawing area draws beyond the visible area and reuses it while
-// scrolling, so everything is drawn in drawing area coordinates, independent of the scroll
-// position. The viewport sizes the area to at least the visible area, so media smaller than
-// the view is centered in it.
+// The scrolled window caches what the drawing area draws beyond the visible area and reuses it
+// while scrolling, so it is drawn as a document independent of the scroll position.
 extern "C" fn draw(area: *mut c_void, cr: *mut c_void, state: &State) -> i32 {
-    let content = [Axis::Horizontal, Axis::Vertical].map(|axis| state.content(axis) as f32);
     // SAFETY: GTK passes the live drawing area and its cairo context while drawing.
     unsafe {
-        let width = gtk_widget_get_allocated_width(area) as f32;
-        let height = gtk_widget_get_allocated_height(area) as f32;
-        let dark = is_dark(area);
         bcanvas::draw_native(
             NativeContext::Cairo(cr),
-            width,
-            height,
+            gtk_widget_get_allocated_width(area) as f32,
+            gtk_widget_get_allocated_height(area) as f32,
             gtk_widget_get_scale_factor(area) as f32,
             |canvas| {
-                draw_checkerboard(canvas, width, height, dark);
-                state.renderer.borrow().draw(
-                    canvas,
-                    state.frame.get(),
-                    (
-                        ((width - content[0]) / 2.0).max(0.0),
-                        ((height - content[1]) / 2.0).max(0.0),
-                        content[0],
-                        content[1],
-                    ),
-                );
+                state
+                    .viewport
+                    .borrow()
+                    .paint_document(canvas, state.dark.get());
             },
         );
     }
     1
 }
 
-// Whether the theme is dark, which draws light text.
-unsafe fn is_dark(widget: *mut c_void) -> bool {
-    let mut color = GdkRgba::default();
-    // SAFETY: The caller supplies a live widget, which owns its style context.
-    unsafe {
-        let context = gtk_widget_get_style_context(widget);
-        gtk_style_context_get_color(context, gtk_style_context_get_state(context), &mut color);
-    }
-    color.red * 0.2126 + color.green * 0.7152 + color.blue * 0.0722 > 0.5
+// The visible area changed with the scrolled window.
+extern "C" fn resized(scrolled_window: *mut c_void, _: *mut c_void, state: &State) {
+    // SAFETY: GTK passes the live scrolled window.
+    let visible = unsafe {
+        (
+            f64::from(gtk_widget_get_allocated_width(scrolled_window)),
+            f64::from(gtk_widget_get_allocated_height(scrolled_window)),
+        )
+    };
+    let mut viewport = state.viewport.borrow_mut();
+    viewport.resize(visible);
+    viewport.scroll_to(state.scroll());
 }
 
-// Control + scroll magnifies around the pointer, other scrolls are left to the scrolled window.
+// The scrolled window scrolled by itself.
+extern "C" fn scrolled(_: *mut c_void, state: &State) {
+    if !state.updating.get() {
+        state.viewport.borrow_mut().scroll_to(state.scroll());
+    }
+}
+
+// Control + scroll magnifies around the pointer, the scrolled window scrolls the others.
 extern "C" fn scroll(_: *mut c_void, event: *const c_void, state: &State) -> i32 {
-    let (mut modifiers, mut direction, mut x, mut y, mut dx, mut dy) = (0, 0, 0.0, 0.0, 0.0, 0.0);
+    let (mut modifiers, mut direction) = (0, 0);
+    let (mut x, mut y, mut dx, mut dy) = (0.0, 0.0, 0.0, 0.0);
     // SAFETY: GTK passes a live scroll event.
-    let lines = unsafe {
+    unsafe {
         gdk_event_get_state(event, &mut modifiers);
         gdk_event_get_coords(event, &mut x, &mut y);
-        if gdk_event_get_scroll_deltas(event, &mut dx, &mut dy) != 0 {
-            -dy
-        } else if gdk_event_get_scroll_direction(event, &mut direction) != 0 {
-            match direction {
-                GDK_SCROLL_UP => 1.0,
-                GDK_SCROLL_DOWN => -1.0,
+        if gdk_event_get_scroll_deltas(event, &mut dx, &mut dy) == 0
+            && gdk_event_get_scroll_direction(event, &mut direction) != 0
+        {
+            dy = match direction {
+                GDK_SCROLL_UP => -1.0,
+                GDK_SCROLL_DOWN => 1.0,
                 _ => 0.0,
-            }
-        } else {
-            0.0
+            };
         }
-    };
-    if modifiers & GDK_CONTROL_MASK == 0 || lines == 0.0 {
+    }
+    if modifiers & GDK_CONTROL_MASK == 0 || dy == 0.0 {
         return 0;
     }
-    state.magnify(
-        state.magnification.get() * (lines * WHEEL_ZOOM_RATE).exp(),
-        Some((x, y)),
-    );
+    let anchor = state.visible_point((x, y));
+    state.update(|viewport| viewport.zoom_by((-dy * WHEEL_ZOOM_RATE).exp(), Some(anchor)));
     1
 }
 
-// Dragging with the primary button pans the media.
+extern "C" fn key_press(_: *mut c_void, event: *const c_void, state: &State) -> i32 {
+    let mut keyval = 0;
+    // SAFETY: GTK passes a live key event.
+    unsafe { gdk_event_get_keyval(event, &mut keyval) };
+    let step = match keyval {
+        GDK_KEY_UP => Step::LineBack,
+        GDK_KEY_DOWN => Step::LineForward,
+        GDK_KEY_PAGE_UP => Step::PageBack,
+        GDK_KEY_PAGE_DOWN => Step::PageForward,
+        GDK_KEY_HOME => Step::Start,
+        GDK_KEY_END => Step::End,
+        _ => return 0,
+    };
+    state.update(|viewport| viewport.step(Axis::Vertical, step));
+    1
+}
+
+// Dragging with the primary button pans the media, the screen position does not move with it.
 extern "C" fn button_press(area: *mut c_void, event: *const c_void, state: &State) -> i32 {
     let (mut button, mut x, mut y) = (0, 0.0, 0.0);
     // SAFETY: GTK passes the live drawing area and a button event.
@@ -457,52 +407,60 @@ extern "C" fn button_press(area: *mut c_void, event: *const c_void, state: &Stat
             return 0;
         }
         gdk_event_get_root_coords(event, &mut x, &mut y);
-        state.drag.set(Some((
-            x,
-            y,
-            gtk_adjustment_get_value(state.adjustment(Axis::Horizontal)),
-            gtk_adjustment_get_value(state.adjustment(Axis::Vertical)),
-        )));
-        let cursor = gdk_cursor_new_from_name(gtk_widget_get_display(area), c"grabbing".as_ptr());
-        gdk_window_set_cursor(gtk_widget_get_window(area), cursor);
-        if !cursor.is_null() {
-            g_object_unref(cursor);
-        }
+    }
+    if state.viewport.borrow_mut().drag_begin((x, y)) {
+        // SAFETY: GTK passes the live realized drawing area.
+        unsafe { set_cursor(area, c"grabbing".as_ptr()) };
     }
     1
 }
 
 extern "C" fn button_release(area: *mut c_void, _: *const c_void, state: &State) -> i32 {
-    if state.drag.take().is_none() {
+    if !state.viewport.borrow_mut().drag_end() {
         return 0;
     }
     // SAFETY: GTK passes the live realized drawing area.
-    unsafe { gdk_window_set_cursor(gtk_widget_get_window(area), null_mut()) };
+    unsafe { set_cursor(area, std::ptr::null()) };
     1
 }
 
 extern "C" fn motion(_: *mut c_void, event: *const c_void, state: &State) -> i32 {
-    let Some((start_x, start_y, value_x, value_y)) = state.drag.get() else {
-        return 0;
-    };
     let (mut x, mut y) = (0.0, 0.0);
-    // SAFETY: GTK passes a live motion event, the adjustments clamp their values.
-    unsafe {
-        gdk_event_get_root_coords(event, &mut x, &mut y);
-        gtk_adjustment_set_value(state.adjustment(Axis::Horizontal), value_x - (x - start_x));
-        gtk_adjustment_set_value(state.adjustment(Axis::Vertical), value_y - (y - start_y));
+    // SAFETY: GTK passes a live motion event.
+    unsafe { gdk_event_get_root_coords(event, &mut x, &mut y) };
+    if !state.viewport.borrow_mut().drag_to((x, y)) {
+        return 0;
     }
+    state.update(|_| {});
     1
 }
 
-// Pinching magnifies around the middle of the fingers.
-extern "C" fn pinch_begin(_: *mut c_void, _: *mut c_void, state: &State) {
-    state.pinch.set(state.magnification.get());
+// Shows a named cursor over the realized widget, or the default one for null.
+unsafe fn set_cursor(widget: *mut c_void, name: *const std::ffi::c_char) {
+    // SAFETY: The caller supplies a live realized widget and a null-terminated name or null.
+    unsafe {
+        let cursor = if name.is_null() {
+            null_mut()
+        } else {
+            gdk_cursor_new_from_name(gtk_widget_get_display(widget), name)
+        };
+        gdk_window_set_cursor(gtk_widget_get_window(widget), cursor);
+        if !cursor.is_null() {
+            g_object_unref(cursor);
+        }
+    }
 }
 
-extern "C" fn pinch_changed(gesture: *mut c_void, scale: f64, state: &State) {
+// Pinching magnifies around the middle of the fingers, GTK reports the scale since its start.
+extern "C" fn pinch_begin(_: *mut c_void, _: *mut c_void, state: &State) {
+    state.pinch.set(1.0);
+}
+
+extern "C" fn pinch(gesture: *mut c_void, scale: f64, state: &State) {
     let (mut x, mut y) = (0.0, 0.0);
     // SAFETY: GTK passes the live zoom gesture.
     let anchor = unsafe { gtk_gesture_get_bounding_box_center(gesture, &mut x, &mut y) != 0 };
-    state.magnify(state.pinch.get() * scale, anchor.then_some((x, y)));
+    let anchor = anchor.then(|| state.visible_point((x, y)));
+    let previous = state.pinch.replace(scale);
+    state.update(|viewport| viewport.zoom_by(scale / previous, anchor));
 }
