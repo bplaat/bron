@@ -84,6 +84,30 @@ impl Xtask {
         Ok(())
     }
 
+    pub(crate) fn exclude_vendored_files(&self, files: &mut Vec<PathBuf>) -> Result<()> {
+        let mut command = Command::new("git");
+        command
+            .current_dir(&self.root)
+            .args(["check-attr", "-z", "linguist-vendored", "--"]);
+        let mut retained = Vec::new();
+        for batch in command_batches(files, command_argument_budget(&command, self.os)?, self.os)? {
+            let mut command = Command::new("git");
+            command
+                .current_dir(&self.root)
+                .args(["check-attr", "-z", "linguist-vendored", "--"])
+                .args(batch);
+            let output = capture(&mut command)?;
+            let fields = output.stdout.split(|byte| *byte == 0).collect::<Vec<_>>();
+            for (file, attributes) in batch.iter().zip(fields.as_chunks::<3>().0) {
+                if !matches!(attributes[2], b"set" | b"true") {
+                    retained.push(file.clone());
+                }
+            }
+        }
+        *files = retained;
+        Ok(())
+    }
+
     pub(crate) fn check_formatting(&self) -> Result<()> {
         self.ensure_npm_deps()?;
         println!("Checking Prettier formatting...");

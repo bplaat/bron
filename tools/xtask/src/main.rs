@@ -164,6 +164,7 @@ impl Xtask {
                     .is_some_and(|extension| extensions.contains(&extension))
             });
         }
+        self.exclude_vendored_files(&mut files)?;
         files.sort();
         Ok(files)
     }
