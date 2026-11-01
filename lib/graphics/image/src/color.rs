@@ -610,6 +610,10 @@ impl Lut {
         for (i, value) in v.iter_mut().take(input.len()).enumerate() {
             *value = self.a_curves.get(i).map_or(input[i], |c| c.eval(input[i]));
         }
+        self.eval_after_input_curves(v)
+    }
+
+    fn eval_after_input_curves(&self, v: [f32; 4]) -> [f32; 3] {
         let mut pcs = match &self.clut {
             Some(clut) => clut.eval(&v),
             None => [v[0], v[1], v[2]],
@@ -803,10 +807,17 @@ impl Transform {
         if matrix.iter().flatten().any(|v| !v.is_finite()) {
             return None;
         }
-        let transform = Self::Matrix {
-            linear: Box::new(core::array::from_fn(|c| {
+        let mut linear = Box::new([[0.0; 256]; 3]);
+        for c in 0..3 {
+            // RGB and gray profiles commonly share one transfer curve across channels.
+            linear[c] = if let Some(previous) = (0..c).find(|&i| curves[i] == curves[c]) {
+                linear[previous]
+            } else {
                 core::array::from_fn(|v| curves[c].eval(v as f64 / 255.0) as f32)
-            })),
+            };
+        }
+        let transform = Self::Matrix {
+            linear,
             matrix: matrix.map(|row| row.map(|v| v as f32)),
         };
         (!transform.is_identity()).then_some(transform)
@@ -833,7 +844,7 @@ impl Transform {
             }
             Self::Lut(lut) => lut.eval(&input[..lut.inputs()]),
         };
-        linear.map(|v| (Table::lerp(&SRGB_ENCODE, v) * 255.0 + 0.5) as u8)
+        linear.map(encode)
     }
 
     fn rgb8(&self, rgb: [u8; 3]) -> [u8; 3] {
@@ -842,9 +853,39 @@ impl Transform {
 
     /// Converts straight-alpha RGBA8 pixels in place; gray samples are read from red.
     pub(crate) fn apply(&self, pixels: &mut [u8]) {
-        for pixel in pixels.as_chunks_mut::<4>().0 {
-            let [r, g, b] = self.rgb8([pixel[0], pixel[1], pixel[2]]);
-            pixel[..3].copy_from_slice(&[r, g, b]);
+        match self {
+            // The linear light of every 8-bit sample is looked up once instead of per pixel,
+            // which gives the same results as `rgb8`.
+            Self::Matrix { linear, matrix } => {
+                let linear: [[f32; 256]; 3] = core::array::from_fn(|i| {
+                    core::array::from_fn(|v| Table::lerp(&linear[i], v as f32 / 255.0))
+                });
+                for pixel in pixels.as_chunks_mut::<4>().0 {
+                    let v: [f32; 3] = core::array::from_fn(|i| linear[i][usize::from(pixel[i])]);
+                    for (i, row) in matrix.iter().enumerate() {
+                        pixel[i] = encode(row[0] * v[0] + row[1] * v[1] + row[2] * v[2]);
+                    }
+                }
+            }
+            Self::Lut(lut) => {
+                // Evaluate the input curves once per 8-bit value instead of per pixel.
+                let inputs: [[f32; 256]; 3] = core::array::from_fn(|i| {
+                    core::array::from_fn(|v| {
+                        let value = v as f32 / 255.0;
+                        lut.a_curves.get(i).map_or(value, |curve| curve.eval(value))
+                    })
+                });
+                for pixel in pixels.as_chunks_mut::<4>().0 {
+                    let v = [
+                        inputs[0][usize::from(pixel[0])],
+                        inputs[1][usize::from(pixel[1])],
+                        inputs[2][usize::from(pixel[2])],
+                        0.0,
+                    ];
+                    let [r, g, b] = lut.eval_after_input_curves(v).map(encode);
+                    pixel[..3].copy_from_slice(&[r, g, b]);
+                }
+            }
         }
     }
 
@@ -857,6 +898,11 @@ impl Transform {
     pub(crate) fn cmyk(&self, cmyk: [u8; 4]) -> [u8; 3] {
         self.eval(&cmyk.map(|v| f32::from(v) / 255.0))
     }
+}
+
+// Encodes linear light to the nearest 8-bit sRGB sample.
+fn encode(linear: f32) -> u8 {
+    (Table::lerp(&SRGB_ENCODE, linear) * 255.0 + 0.5) as u8
 }
 
 impl Lut {
@@ -943,6 +989,64 @@ mod tests {
         let mut pixels = [0, 1, 128, 255];
         transform.apply(&mut pixels);
         assert_eq!(pixels, [0, 13, 188, 255]);
+    }
+
+    #[test]
+    fn shared_and_distinct_channel_curves_preserve_samples() {
+        for gammas in [[2.2, 2.2, 2.2], [1.8, 2.2, 1.8], [1.8, 2.2, 2.4]] {
+            let curves = gammas.map(Curve::gamma);
+            let transform =
+                Transform::matrix(diagonal([1.0; 3]), curves.each_ref()).expect("non-sRGB curves");
+            let mut pixels: Vec<u8> = (0..=255u8).flat_map(|v| [v, v, v, v]).collect();
+            transform.apply(&mut pixels);
+            for (value, pixel) in pixels.as_chunks::<4>().0.iter().enumerate() {
+                let expected =
+                    gammas.map(|gamma| linear_to_srgb((value as f64 / 255.0).powf(gamma) as f32));
+                assert_eq!(pixel[..3], expected, "sample {value}, gamma {gammas:?}");
+                assert_eq!(pixel[3], value as u8);
+            }
+        }
+    }
+
+    #[test]
+    fn lut_batch_matches_individual_samples() {
+        for inputs in [1, 3] {
+            let data: Vec<u8> = (0..3 * 2usize.pow(inputs))
+                .map(|i| (i * 37) as u8)
+                .collect();
+            let transform = Transform::Lut(Box::new(Lut {
+                a_curves: (0..inputs)
+                    .map(|i| Table(alloc::vec![0.0, 0.2 + i as f32 * 0.1, 1.0]))
+                    .collect(),
+                clut: Clut::parse(&data, [2; 4], inputs as usize, 1),
+                m_curves: Vec::new(),
+                matrix: None,
+                b_curves: Vec::new(),
+                pcs: Pcs::Xyz,
+                to_srgb: xyz_d50_to_srgb().map(|row| row.map(|v| v as f32)),
+            }));
+            let original: Vec<u8> = (0..4096)
+                .flat_map(|i| {
+                    [
+                        (i % 16 * 17) as u8,
+                        (i / 16 % 16 * 17) as u8,
+                        (i / 256 * 17) as u8,
+                        i as u8,
+                    ]
+                })
+                .collect();
+            let mut pixels = original.clone();
+            transform.apply(&mut pixels);
+            for (actual, input) in pixels
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .zip(original.as_chunks::<4>().0)
+            {
+                assert_eq!(actual[..3], transform.rgb8([input[0], input[1], input[2]]));
+                assert_eq!(actual[3], input[3]);
+            }
+        }
     }
 
     #[test]
