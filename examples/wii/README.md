@@ -49,6 +49,10 @@ cargo xtask install-wii
 
 A minimal program that draws a few triangles using a display list.
 
+## Cube
+
+A rotating crate cube scene.
+
 ## Canvas
 
 2D rendering with PNG textures, bitmap font text and Wii Remote cursors.

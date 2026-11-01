@@ -1,0 +1,26 @@
+cargo-features = ["panic-immediate-abort"]
+
+[package]
+name = "cube"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+libogc-sys = { path = "../../../../tools/wii-toolchain/libogc-sys" }
+
+[build-dependencies]
+gxtexconv = { path = "../../../../tools/wii-toolchain/gxtexconv" }
+
+[patch.crates-io]
+crc = { path = "../../../../lib/data/crc" }
+
+# Unoptimized code is too slow for the Wii
+[profile.dev]
+opt-level = "s"
+panic = "immediate-abort"
+
+[profile.release]
+opt-level = "s"
+panic = "immediate-abort"
+lto = false
+codegen-units = 1
