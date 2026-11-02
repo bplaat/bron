@@ -9,10 +9,10 @@ repository.workspace = true
 [lints]
 workspace = true
 
-# Without std synthesis uses C library math and random presets are unavailable
+# Without std synthesis uses C library math
 [features]
 default = ["std"]
-std = ["dep:getrandom"]
+std = []
 
 [dependencies]
-getrandom = { version = "0.4.3", optional = true }
+getrandom = "0.4.3"

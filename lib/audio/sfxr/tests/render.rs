@@ -31,3 +31,38 @@ fn waveforms_with_vibrato_are_finite_and_finish() {
         assert!(generator.finished());
     }
 }
+
+fn render(sample: Sample) -> Vec<f32> {
+    let mut generator = Generator::new(sample);
+    let mut buffer = vec![0.0; SAMPLE_RATE as usize];
+    generator.generate(&mut buffer);
+    buffer
+}
+
+#[test]
+fn seeded_presets_are_deterministic_and_valid() {
+    for preset in [
+        Sample::pickup,
+        Sample::laser,
+        Sample::explosion,
+        Sample::powerup,
+        Sample::hit,
+        Sample::jump,
+        Sample::blip,
+    ] {
+        for seed in 0..8 {
+            assert_eq!(preset(Some(seed)), preset(Some(seed)));
+            let mut mutated = preset(Some(seed));
+            mutated.mutate(Some(seed));
+            for sample in [preset(Some(seed)), mutated] {
+                let buffer = render(sample);
+                assert!(
+                    buffer
+                        .iter()
+                        .all(|value| value.is_finite() && value.abs() <= 1.0)
+                );
+                assert!(buffer.iter().any(|value| *value != 0.0));
+            }
+        }
+    }
+}

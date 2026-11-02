@@ -9,6 +9,7 @@
 
 use crate::generator::{Envelope, HighLowPassFilter, Oscillator, OscillatorParams, Phaser};
 #[cfg(not(any(test, feature = "std")))]
+#[allow(unused_imports)] // A dependency may link std and supply inherent float methods.
 use crate::math::Float;
 
 mod generator;
@@ -39,10 +40,7 @@ impl Rng {
     pub(crate) fn next_f32(&mut self) -> f32 {
         (self.next_u64() >> 40) as f32 / (1u64 << 24) as f32
     }
-}
 
-#[cfg(feature = "std")]
-impl Rng {
     fn from_seed(seed: Option<u64>) -> Self {
         Self::new(seed.unwrap_or_else(|| {
             let mut bytes = [0; 8];
@@ -215,10 +213,7 @@ impl Sample {
             );
         }
     }
-}
 
-#[cfg(feature = "std")]
-impl Sample {
     /// Changes the fields randomly by a little, `None` uses a random seed.
     pub fn mutate(&mut self, seed: Option<u64>) {
         let rng = &mut Rng::from_seed(seed);
@@ -540,44 +535,9 @@ impl Generator {
 }
 
 // MARK: Tests
-#[cfg(all(test, feature = "std"))]
+#[cfg(test)]
 mod test {
     use super::*;
-
-    fn render(sample: Sample) -> Vec<f32> {
-        let mut generator = Generator::new(sample);
-        let mut buffer = vec![0.0; SAMPLE_RATE as usize];
-        generator.generate(&mut buffer);
-        buffer
-    }
-
-    #[test]
-    fn seeded_presets_are_deterministic_and_valid() {
-        for preset in [
-            Sample::pickup,
-            Sample::laser,
-            Sample::explosion,
-            Sample::powerup,
-            Sample::hit,
-            Sample::jump,
-            Sample::blip,
-        ] {
-            for seed in 0..8 {
-                assert_eq!(preset(Some(seed)), preset(Some(seed)));
-                let mut mutated = preset(Some(seed));
-                mutated.mutate(Some(seed));
-                for sample in [preset(Some(seed)), mutated] {
-                    let buffer = render(sample);
-                    assert!(
-                        buffer
-                            .iter()
-                            .all(|value| value.is_finite() && value.abs() <= 1.0)
-                    );
-                    assert!(buffer.iter().any(|value| *value != 0.0));
-                }
-            }
-        }
-    }
 
     #[test]
     fn generator_finishes_after_the_envelope() {

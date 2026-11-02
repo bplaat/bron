@@ -31,6 +31,7 @@ plaatcraft-engine = { path = "../plaatcraft-engine" }
 
 [patch.crates-io]
 crc = { path = "../../lib/data/crc" }
+getrandom = { path = "../../lib/crypto/getrandom" }
 sfxr = { path = "../../lib/audio/sfxr" }
 
 # Unoptimized code is too slow for the Wii

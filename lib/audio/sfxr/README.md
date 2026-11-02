@@ -12,8 +12,8 @@ parameters, the same parameters as the [sfxr.me](https://sfxr.me/) web editor.
 - `Generator` with `new`, `generate`, `reset` and its `sample` and `volume` fields
 - `WaveType` with `Square`, `Triangle`, `Sine` and `Noise`
 
-Without the default `std` feature the crate is `no_std`, it then lacks the random presets and
-`mutate` and links `sinf` from the C library.
+Without the default `std` feature the crate is `no_std` and links `sinf` from the C library.
+Random presets and `mutate` remain available through `getrandom` on supported targets.
 
 Differences with the original crate:
 

@@ -9,6 +9,7 @@
 use core::f32::consts::PI;
 
 #[cfg(not(any(test, feature = "std")))]
+#[allow(unused_imports)] // A dependency may link std and supply inherent float methods.
 use crate::math::Float;
 use crate::{Rng, WaveType};
 
