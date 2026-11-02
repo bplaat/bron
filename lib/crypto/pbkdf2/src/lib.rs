@@ -14,10 +14,8 @@ use alloc::vec::Vec;
 use hmac::Hmac;
 use sha2::Sha256;
 
-#[cfg(feature = "std")]
-pub use crate::utils::password_hash;
 pub use crate::utils::{
-    DEFAULT_SAFE_ITERATIONS, MAX_PASSWORD_HASH_ITERATIONS, PasswordHashDecodeError,
+    DEFAULT_SAFE_ITERATIONS, MAX_PASSWORD_HASH_ITERATIONS, PasswordHashDecodeError, password_hash,
     password_hash_customized, password_verify,
 };
 
