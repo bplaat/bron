@@ -1,5 +1,6 @@
 // CPU-only frontend for Cemu's Espresso interpreter. No executable memory or graphics backend.
 #include <sys/mman.h>
+#include <zlib.h>
 
 #include "Cafe/HW/Espresso/PPCState.h"
 
@@ -52,99 +53,173 @@ static void require(bool condition, const char* message) {
         throw std::runtime_error(message);
 }
 
-// These ELFs are already relocated by LLD. RPX compression and dynamic loading belong to Cemu's
-// full frontend; the toolchain's original ELF keeps the symbols needed to resolve OS imports.
+// Loads an RPX like Cafe OS: inflates its zlib sections, puts the allocated ones at their addresses
+// and applies its relocations. Imports of the system libraries resolve to OS call stubs below the
+// code, in range of its branches, a data import to a pointer to one.
 struct Section {
-    uint32 name, type, flags, address, offset, size, link, entrySize;
+    uint32 name, type, flags, address, link, info, entrySize;
+    std::vector<uint8> data;
 };
 static std::map<uint32, std::string> imports;
 static uint32 load(const char* path) {
     std::ifstream file(path, std::ios::binary | std::ios::ate);
-    require(bool(file), "Cannot open ELF");
+    require(bool(file), "Cannot open RPX");
     auto length = file.tellg();
-    require(length >= 52 && length <= 128 * 1024 * 1024, "Invalid ELF size");
+    require(length >= 52 && length <= 128 * 1024 * 1024, "Invalid RPX size");
     std::vector<uint8> bytes(static_cast<size_t>(length));
     file.seekg(0);
-    require(bool(file.read(reinterpret_cast<char*>(bytes.data()), bytes.size())), "Cannot read ELF");
-    auto word = [&](size_t offset, size_t count = 4) {
-        require(offset <= bytes.size() && count <= bytes.size() - offset, "Truncated ELF");
+    require(bool(file.read(reinterpret_cast<char*>(bytes.data()), bytes.size())), "Cannot read RPX");
+    auto word = [](const std::vector<uint8>& data, size_t offset, size_t count = 4) {
+        require(offset <= data.size() && count <= data.size() - offset, "Truncated RPX");
         uint32 result = 0;
         for (size_t i = 0; i < count; i++)
-            result = (result << 8) | bytes[offset + i];
+            result = (result << 8) | data[offset + i];
         return result;
     };
-    require(word(0) == 0x7f454c46 && bytes[4] == 1 && bytes[5] == 2 && bytes[6] == 1,
-            "Expected a big-endian ELF32 file");
-    require(word(16, 2) == 2 && word(18, 2) == 20, "Expected a linked PowerPC executable");
-    uint32 entry = word(24), table = word(32), stride = word(46, 2), count = word(48, 2);
-    require(stride == 40 && count > 0 && uint64(table) + uint64(count) * stride <= bytes.size(),
-            "Invalid ELF section table");
+    require(word(bytes, 0) == 0x7f454c46 && word(bytes, 4) == 0x010201ca && bytes[8] == 0xfe,
+            "Expected a big-endian ELF32 Cafe OS file");
+    require(word(bytes, 16, 2) == 0xfe01 && word(bytes, 18, 2) == 20, "Expected a PowerPC RPX executable");
+    uint32 entry = word(bytes, 24), table = word(bytes, 32), stride = word(bytes, 46, 2), count = word(bytes, 48, 2),
+           names = word(bytes, 50, 2);
+    require(stride == 40 && count > 0 && names < count && uint64(table) + uint64(count) * stride <= bytes.size(),
+            "Invalid RPX section table");
     std::vector<Section> sections;
     for (uint32 i = 0; i < count; i++) {
         size_t pos = table + i * stride;
-        sections.push_back({word(pos), word(pos + 4), word(pos + 8), word(pos + 12), word(pos + 16), word(pos + 20),
-                            word(pos + 24), word(pos + 36)});
+        Section section{word(bytes, pos),      word(bytes, pos + 4),  word(bytes, pos + 8),  word(bytes, pos + 12),
+                        word(bytes, pos + 24), word(bytes, pos + 28), word(bytes, pos + 36), {}};
+        uint32 offset = word(bytes, pos + 16), size = word(bytes, pos + 20);
+        if (section.type == 8) {
+            section.data.resize(size);
+        } else if (size > 0) {
+            require(uint64(offset) + size <= bytes.size(), "Truncated RPX section");
+            if (section.flags & 0x08000000) {
+                // The inflated size, then the zlib stream
+                uLongf inflated = word(bytes, offset);
+                section.data.resize(inflated);
+                require(uncompress(section.data.data(), &inflated, bytes.data() + offset + 4, size - 4) == Z_OK &&
+                            inflated == section.data.size(),
+                        "Cannot inflate RPX section");
+            } else {
+                section.data.assign(bytes.begin() + offset, bytes.begin() + offset + size);
+            }
+        }
+        sections.push_back(std::move(section));
     }
     auto string = [&](const Section& section, uint32 offset) {
-        require(section.type == 3 && offset < section.size && uint64(section.offset) + section.size <= bytes.size(),
-                "Invalid ELF string table");
-        const char* start = reinterpret_cast<const char*>(bytes.data() + section.offset + offset);
-        const char* end = static_cast<const char*>(memchr(start, 0, section.size - offset));
-        require(end != nullptr, "Unterminated ELF string");
+        require(section.type == 3 && offset < section.data.size(), "Invalid RPX string table");
+        const char* start = reinterpret_cast<const char*>(section.data.data() + offset);
+        const char* end = static_cast<const char*>(memchr(start, 0, section.data.size() - offset));
+        require(end != nullptr, "Unterminated RPX string");
         return std::string(start, end);
     };
-    uint32 names = word(50, 2);
-    require(names < count, "Invalid ELF section names");
     bool executableEntry = false;
     for (const auto& section : sections) {
-        if (!(section.flags & 2) || section.size == 0)
+        if (!(section.flags & 2) || section.data.empty())
             continue;
-        uint64 end = uint64(section.address) + section.size;
+        uint64 end = uint64(section.address) + section.data.size();
         require((section.address >= 0x02000000 && end <= 0x42000000) ||
                     (section.address >= 0xc0000000 && end <= 0xc8000000),
-                "ELF section outside toolchain memory");
+                "RPX section outside toolchain memory");
         if ((section.flags & 4) && entry >= section.address && entry < end)
             executableEntry = true;
-        if (section.type != 8) {
-            require(uint64(section.offset) + section.size <= bytes.size(), "Truncated ELF section");
-            memcpy(memory_base + section.address, bytes.data() + section.offset, section.size);
-        }
+        memcpy(memory_base + section.address, section.data.data(), section.data.size());
     }
-    require(executableEntry && (entry & 3) == 0, "Invalid ELF entry point");
-    uint32 trampoline = 0x01000000;
-    bool symbols = false;
-    for (const auto& section : sections) {
+    require(executableEntry && (entry & 3) == 0, "Invalid RPX entry point");
+
+    uint32 stubs = 0x01000000;
+    auto stub = [&](const std::string& name) {
+        imports[stubs] = name;
+        return (stubs += 4) - 4;
+    };
+    std::map<uint32, std::vector<uint32>> values;
+    for (uint32 index = 0; index < count; index++) {
+        const auto& section = sections[index];
         if (section.type != 2)
             continue;
-        symbols = true;
-        require(section.entrySize == 16 && section.size % 16 == 0 && section.link < count &&
-                    uint64(section.offset) + section.size <= bytes.size(),
-                "Invalid ELF symbols");
-        for (size_t pos = section.offset; pos < uint64(section.offset) + section.size; pos += 16) {
-            uint32 address = word(pos + 4), index = word(pos + 14, 2);
-            if (index == 0 || index >= count)
-                continue;
-            auto name = string(sections[names], sections[index].name);
-            if (!name.starts_with(".fimport_") && !name.starts_with(".dimport_"))
-                continue;
-            auto symbol = string(sections[section.link], word(pos));
-            if (symbol.empty() || (bytes[pos + 12] >> 4) == 0)
-                continue;
-            require(address >= sections[index].address &&
-                        uint64(address) + 4 <= uint64(sections[index].address) + sections[index].size,
-                    "Invalid import address");
-            if (name.starts_with(".dimport_")) {
-                require(symbol == "MEMAllocFromDefaultHeapEx" || symbol == "MEMFreeToDefaultHeap",
-                        ("Unsupported data import: " + symbol).c_str());
-                memory_writeU32(address, trampoline);
-                imports[trampoline] = symbol;
-                trampoline += 4;
-            } else {
-                imports[address] = symbol;
+        require(section.entrySize == 16 && section.data.size() % 16 == 0 && section.link < count,
+                "Invalid RPX symbols");
+        auto& symbols = values[index];
+        for (size_t pos = 0; pos < section.data.size(); pos += 16) {
+            uint32 value = word(section.data, pos + 4), shndx = word(section.data, pos + 14, 2);
+            auto symbol = string(sections[section.link], word(section.data, pos));
+            auto kind = shndx > 0 && shndx < count ? string(sections[names], sections[shndx].name) : "";
+            bool function = kind.starts_with(".fimport_");
+            // The import sections' own section symbols have no name and aren't imports
+            if (!symbol.empty() && (function || kind.starts_with(".dimport_"))) {
+                if (function) {
+                    value = stub(symbol);
+                } else {
+                    require(symbol == "MEMAllocFromDefaultHeapEx" || symbol == "MEMFreeToDefaultHeap",
+                            ("Unsupported data import: " + symbol).c_str());
+                    value = stubs;
+                    stubs += 4;
+                    memory_writeU32(value, stub(symbol));
+                }
+            }
+            symbols.push_back(value);
+        }
+    }
+    require(!values.empty(), "RPX without symbols");
+
+    for (const auto& section : sections) {
+        if (section.type != 4)
+            continue;
+        require(section.entrySize == 12 && section.data.size() % 12 == 0 && values.contains(section.link) &&
+                    section.info < count && (sections[section.info].flags & 2),
+                "Invalid RPX relocations");
+        const auto& symbols = values.at(section.link);
+        const auto& target = sections[section.info];
+        for (size_t pos = 0; pos < section.data.size(); pos += 12) {
+            uint32 address = word(section.data, pos), info = word(section.data, pos + 4), type = info & 0xff;
+            require(address >= target.address && uint64(address) + 4 <= uint64(target.address) + target.data.size(),
+                    "RPX relocation outside its section");
+            require((info >> 8) < symbols.size(), "Invalid RPX relocation symbol");
+            uint32 value = symbols[info >> 8] + word(section.data, pos + 8), relative = value - address;
+            uint8* place = memory_base + address;
+            auto half = [&](uint32 bits) {
+                place[0] = uint8(bits >> 8);
+                place[1] = uint8(bits);
+            };
+            switch (type) {
+                case 0:  // R_PPC_NONE
+                    break;
+                case 1:  // R_PPC_ADDR32
+                    memory_writeU32(address, value);
+                    break;
+                case 4:  // R_PPC_ADDR16_LO
+                    half(value);
+                    break;
+                case 5:  // R_PPC_ADDR16_HI
+                    half(value >> 16);
+                    break;
+                case 6:  // R_PPC_ADDR16_HA
+                    half((value + 0x8000) >> 16);
+                    break;
+                case 10:  // R_PPC_REL24
+                    require(sint32(relative) >= -0x02000000 && sint32(relative) < 0x02000000 && !(relative & 3),
+                            "RPX branch out of range");
+                    memory_writeU32(address, (memory_readU32(address) & ~0x03fffffcu) | (relative & 0x03fffffc));
+                    break;
+                case 11:  // R_PPC_REL14
+                    require(sint32(relative) >= -0x8000 && sint32(relative) < 0x8000 && !(relative & 3),
+                            "RPX branch out of range");
+                    memory_writeU32(address, (memory_readU32(address) & ~0xfffcu) | (relative & 0xfffc));
+                    break;
+                case 251:  // R_PPC_GHS_REL16_HA
+                    half((relative + 0x8000) >> 16);
+                    break;
+                case 252:  // R_PPC_GHS_REL16_HI
+                    half(relative >> 16);
+                    break;
+                case 253:  // R_PPC_GHS_REL16_LO
+                    half(relative);
+                    break;
+                default:
+                    throw std::runtime_error("Unsupported RPX relocation " + std::to_string(type));
             }
         }
     }
-    require(symbols, "ELF must retain its symbol table");
     return entry;
 }
 
@@ -232,7 +307,7 @@ static void systemCall(PPCInterpreter_t& cpu, const std::string& name) {
 int main(int argc, char** argv) {
     try {
         require(argc == 2 || argc == 3,
-                "Usage: cemu-runner <program.elf> ['test <instructions>' | 'run <instructions>']");
+                "Usage: cemu-runner <program.rpx> ['test <instructions>' | 'run <instructions>']");
         std::string command = argc == 3 ? argv[2] : "run 100000000";
         bool test = command.starts_with("test ");
         require(test || command.starts_with("run "), "Expected test or run with an instruction budget");

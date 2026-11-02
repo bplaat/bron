@@ -373,7 +373,7 @@ build_cemu() {
         -DCEMU_DEBUG_ASSERT -I"$CEMU_DIR/src" -I"$CEMU_DIR/src/Common" \
         -include "$TOOLCHAIN_DIR/cemu/interpreter.h" "$TOOLCHAIN_DIR/cemu/runner.cpp" \
         "${sources[@]/#/$CEMU_DIR/src/Cafe/HW/Espresso/Interpreter/}" \
-        -o "$BUILD_DIR/cemu-runner" > "$BUILD_DIR/cemu-runner.log" 2>&1 ||
+        -lz -o "$BUILD_DIR/cemu-runner" > "$BUILD_DIR/cemu-runner.log" 2>&1 ||
         { tail -n 50 "$BUILD_DIR/cemu-runner.log" >&2; die "Failed to build cemu-runner"; }
 }
 
@@ -384,7 +384,7 @@ run_test() {
     (lock; build_cemu)
     make -C "$TOOLCHAIN_DIR/test" --no-print-directory
     msg "Running the test in cemu-runner"
-    "$BUILD_DIR/cemu-runner" "$BUILD_DIR/test/test.elf" 'test 100000000'
+    "$BUILD_DIR/cemu-runner" "$BUILD_DIR/test/test.rpx" 'test 100000000'
     msg "All tests passed"
 }
 

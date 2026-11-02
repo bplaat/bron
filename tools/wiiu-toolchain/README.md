@@ -72,15 +72,16 @@ The toolchain and the examples build separately from the main Cargo workspace.
 - `run.sh` converts a program to an `.rpx` and starts it in Cemu, extra arguments go to Cemu
 - `cemu/` builds a CPU-only runner from the Espresso interpreter of
   [Cemu v2.6](https://github.com/cemu-project/Cemu/tree/v2.6) with `cemu/patches/`. Its build
-  links no JIT, graphics, audio or window code and allocates no executable host memory. The frontend loads the toolchain's linked,
-  unstripped `.elf` files and supplies a small single-threaded OS bridge for heap allocation,
-  OSReport, the clock and cache invalidation. Unsupported OS calls fail. It does not run the
-  graphical examples or load RPX files; use the normal Cemu frontend for those
+  links no JIT, graphics, audio or window code and allocates no executable host memory. Its
+  frontend loads `.rpx` files like Cafe OS: it inflates their zlib sections, applies their
+  relocations and points their imports at a small single-threaded OS bridge for heap allocation,
+  OSReport, the clock and cache invalidation. Unsupported OS calls fail, so it doesn't run the
+  graphical examples, use the normal Cemu for those
 - `test/` is the Wii U program run by `./build.sh test`
 
 ## Test
 
-Install a C++20 compiler in addition to the toolchain's normal dependencies.
+Install a C++20 compiler and zlib in addition to the toolchain's normal dependencies.
 Run `./build.sh test` to build the toolchain, `cemu-runner` and the test program in
 `../../target/wiiu-toolchain/`, then run the guest suite.
 `cargo xtask check-others` runs this suite and builds both the Wii and Wii U C and Rust examples.
@@ -99,8 +100,8 @@ exit and returns the guest's status. Budgets count interpreter instructions and 
 without a frame clock or GPU. Every invocation starts fresh, with the clock at 2026-01-01 UTC.
 
 ```sh
-../../target/wiiu-toolchain/cemu-runner ../../target/wiiu-toolchain/test/test.elf 'test 100000000'
-../../target/wiiu-toolchain/cemu-runner ../../target/wiiu-toolchain/test/test.elf 'run 100000000'
+../../target/wiiu-toolchain/cemu-runner ../../target/wiiu-toolchain/test/test.rpx 'test 100000000'
+../../target/wiiu-toolchain/cemu-runner ../../target/wiiu-toolchain/test/test.rpx 'run 100000000'
 ```
 
 Only Cemu's interpreter sources are checked out, without its submodules. Its patches work like
