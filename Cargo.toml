@@ -6,8 +6,10 @@ members = [
     "lib/*/*/examples/*",
     "tools/*",
     "tools/wii-toolchain/gxtexconv",
+    "tools/wii-toolchain/libogc-sys",
     "tools/wiiu-toolchain/gtxconv",
     "tools/wiiu-toolchain/wuhbtool",
+    "tools/wiiu-toolchain/wut-sys",
 ]
 exclude = [
     "examples/macos",

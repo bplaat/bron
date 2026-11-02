@@ -9,7 +9,8 @@
 //! from wut's headers; constants use the parameter's integer type.
 
 #![no_std]
-#![allow(non_snake_case, non_camel_case_types)]
+#![allow(non_snake_case, non_camel_case_types, missing_docs)]
+#![allow(unsafe_code)]
 
 use core::ffi::{CStr, c_char, c_int, c_void};
 
@@ -46,6 +47,7 @@ unsafe extern "C" {
 
 /// The time base ticks at a quarter of the bus clock, like wut's `OSTimerClockSpeed`.
 pub fn OSTimerClockSpeed() -> u32 {
+    // SAFETY: Cafe OS owns the system information and returns a valid static pointer.
     unsafe { (*OSGetSystemInfo()).bus_clock_speed / 4 }
 }
 
@@ -110,6 +112,7 @@ unsafe fn find_uniform_var(
     vars: *const GX2UniformVar,
     name: &CStr,
 ) -> Option<&'static GX2UniformVar> {
+    // SAFETY: the caller supplies a loaded shader's uniform array and names.
     unsafe {
         (0..count as usize)
             .map(|index| &*vars.add(index))
@@ -125,6 +128,7 @@ pub unsafe fn GX2GetVertexUniformVar(
     shader: *const GX2VertexShader,
     name: &CStr,
 ) -> Option<&'static GX2UniformVar> {
+    // SAFETY: the caller guarantees shader points to a loaded vertex shader.
     unsafe { find_uniform_var((*shader).uniform_var_count, (*shader).uniform_vars, name) }
 }
 
@@ -136,6 +140,7 @@ pub unsafe fn GX2GetPixelUniformVar(
     shader: *const GX2PixelShader,
     name: &CStr,
 ) -> Option<&'static GX2UniformVar> {
+    // SAFETY: the caller guarantees shader points to a loaded pixel shader.
     unsafe { find_uniform_var((*shader).uniform_var_count, (*shader).uniform_vars, name) }
 }
 

@@ -9,7 +9,8 @@
 //! from libogc's headers, the C macros get the type of the parameter that usually takes them.
 
 #![no_std]
-#![allow(non_snake_case, non_camel_case_types)]
+#![allow(non_snake_case, non_camel_case_types, missing_docs)]
+#![allow(unsafe_code)]
 
 use core::ffi::{c_char, c_int, c_void};
 
