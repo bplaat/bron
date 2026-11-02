@@ -1,0 +1,722 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Mon, 2 Nov 2026 14:00:54 +0100
+Subject: [PATCH] Implement picolibc's POSIX file functions on the SD card
+
+Paths go to the SD card at /vol/external01 through FSA, which mounts
+it on first use: "sd:/" paths, absolute paths and paths relative to the
+current directory. The file functions keep their own positions, write
+zeros into the gaps after the end of a file and read and write through
+an aligned buffer when FSA can't use the caller's.
+---
+ libraries/wutpicolibc/wut_files.c | 701 ++++++++++++++++++++++++++++++
+ 1 file changed, 701 insertions(+)
+ create mode 100644 libraries/wutpicolibc/wut_files.c
+
+diff --git a/libraries/wutpicolibc/wut_files.c b/libraries/wutpicolibc/wut_files.c
+new file mode 100644
+index 0000000..eb74653
+--- /dev/null
++++ b/libraries/wutpicolibc/wut_files.c
+@@ -0,0 +1,701 @@
++/*
++ * picolibc's POSIX file functions on the SD card, the only device: "sd:/"
++ * paths, absolute paths and paths relative to the current directory go to
++ * /vol/external01 through FSA, which mounts the SD card on first use. File
++ * descriptors 0 to 2 are the standard streams.
++ */
++
++#include <coreinit/debug.h>
++#include <coreinit/filesystem_fsa.h>
++#include <dirent.h>
++#include <errno.h>
++#include <fcntl.h>
++#include <stdbool.h>
++#include <stdlib.h>
++#include <string.h>
++#include <sys/lock.h>
++#include <sys/stat.h>
++#include <unistd.h>
++
++#define MAX_FILES  32
++#define MOUNT_PATH "/vol/external01"
++// FSA reads and writes cache lines, other buffers go through an aligned one
++#define FSA_ALIGNMENT 0x40
++// FSTime counts microseconds from 1980, the Unix epoch is 10 years earlier
++#define FS_EPOCH_DIFF_SECS 315532800ll
++
++typedef struct
++{
++   bool used;
++   bool dir;
++   int flags;
++   uint32_t position;
++   uint32_t handle;
++} Handle;
++
++static FSAClientHandle sClient;
++static bool sMounted;
++// The FSA path of the current directory
++static char sCwd[FS_MAX_PATH + 1] = MOUNT_PATH;
++static Handle sHandles[MAX_FILES];
++
++static int
++fail(int error)
++{
++   errno = error;
++   return -1;
++}
++
++static int
++translateError(FSError error)
++{
++   switch (error) {
++   case FS_ERROR_NOT_FOUND:
++      return ENOENT;
++   case FS_ERROR_ALREADY_EXISTS:
++      return EEXIST;
++   case FS_ERROR_NOT_EMPTY:
++      return ENOTEMPTY;
++   case FS_ERROR_NOT_FILE:
++      return EISDIR;
++   case FS_ERROR_NOT_DIR:
++      return ENOTDIR;
++   case FS_ERROR_ACCESS_ERROR:
++   case FS_ERROR_PERMISSION_ERROR:
++      return EACCES;
++   case FS_ERROR_STORAGE_FULL:
++      return ENOSPC;
++   case FS_ERROR_FILE_TOO_BIG:
++      return EFBIG;
++   case FS_ERROR_INVALID_PATH:
++      return ENAMETOOLONG;
++   case FS_ERROR_WRITE_PROTECTED:
++      return EROFS;
++   case FS_ERROR_MAX_FILES:
++   case FS_ERROR_MAX_DIRS:
++      return EMFILE;
++   case FS_ERROR_OUT_OF_RESOURCES:
++      return ENOMEM;
++   default:
++      return EIO;
++   }
++}
++
++// Returns 0 or -1 with errno set for an FSA result
++static int
++check(FSError error)
++{
++   return error < 0 ? fail(translateError(error)) : 0;
++}
++
++static bool
++mount(void)
++{
++   __LIBC_LOCK();
++   if (!sMounted) {
++      FSAInit();
++      sClient = FSAAddClient(NULL);
++      FSError error = sClient ? FSAMount(sClient, "/dev/sdcard01", MOUNT_PATH, FSA_MOUNT_FLAG_LOCAL_MOUNT, NULL, 0)
++                              : FS_ERROR_MAX_CLIENTS;
++      sMounted = error >= 0 || error == FS_ERROR_ALREADY_EXISTS;
++      if (!sMounted && sClient) {
++         FSADelClient(sClient);
++      }
++   }
++   __LIBC_UNLOCK();
++   if (!sMounted) {
++      errno = ENODEV;
++   }
++   return sMounted;
++}
++
++// Appends the parts of a path to an FSA path, resolving . and .. without leaving the SD card
++static bool
++appendPath(char *buffer, const char *path)
++{
++   size_t length = strlen(buffer);
++   while (*path) {
++      size_t part = strcspn(path, "/");
++      if (part == 2 && path[0] == '.' && path[1] == '.') {
++         while (length > sizeof(MOUNT_PATH) - 1 && buffer[--length] != '/') {
++         }
++      } else if (part > 0 && !(part == 1 && path[0] == '.')) {
++         if (length + part + 2 > FS_MAX_PATH + 1) {
++            return false;
++         }
++         buffer[length++] = '/';
++         memcpy(buffer + length, path, part);
++         length += part;
++      }
++      buffer[length] = '\0';
++      path += part;
++      while (*path == '/') {
++         path++;
++      }
++   }
++   return true;
++}
++
++// Makes the FSA path of a path in buffer, which holds FS_MAX_PATH + 1 bytes
++static bool
++fsaPath(const char *path, char *buffer)
++{
++   if (!mount()) {
++      return false;
++   }
++   // Unix style path normalization puts a slash before the device, like /sd:/
++   const char *device = *path == '/' ? path + 1 : path;
++   const char *colon  = strchr(device, ':');
++   if (colon && colon < device + strcspn(device, "/")) {
++      if (colon - device != 2 || strncmp(device, "sd", 2) != 0) {
++         errno = ENODEV;
++         return false;
++      }
++      strcpy(buffer, MOUNT_PATH);
++      path = colon + 1;
++   } else {
++      strcpy(buffer, *path == '/' ? MOUNT_PATH : sCwd);
++   }
++   if (!appendPath(buffer, path)) {
++      errno = ENAMETOOLONG;
++      return false;
++   }
++   return true;
++}
++
++static void
++translateStat(const FSAStat *fs, struct stat *st)
++{
++   *st = (struct stat){0};
++   // Mounted paths like /vol/external01 have no flags
++   st->st_mode = (fs->flags & FS_STAT_DIRECTORY) || !(fs->flags & FS_STAT_FILE) ? S_IFDIR : S_IFREG;
++   // Cafe OS keeps the Unix permission bits in hexadecimal digits
++   st->st_mode |= ((fs->mode >> 2) & S_IRWXU) | ((fs->mode >> 1) & S_IRWXG) | (fs->mode & S_IRWXO);
++   st->st_ino           = fs->entryId;
++   st->st_nlink         = 1;
++   st->st_size          = fs->size;
++   st->st_blksize       = 512;
++   st->st_blocks        = (fs->size + 511) / 512;
++   st->st_mtim.tv_sec   = (time_t)(fs->modified / 1000000) + FS_EPOCH_DIFF_SECS;
++   st->st_ctim.tv_sec   = (time_t)(fs->created / 1000000) + FS_EPOCH_DIFF_SECS;
++   st->st_atim          = st->st_mtim;
++}
++
++// Makes the FSA path of a path in buffer and gets its status
++static int
++statPath(const char *path, char *buffer, FSAStat *fs)
++{
++   return fsaPath(path, buffer) ? check(FSAGetStat(sClient, buffer, fs)) : -1;
++}
++
++// Takes a free file descriptor, threads may open files at the same time
++static int
++takeFd(bool dir, int flags, uint32_t handle)
++{
++   __LIBC_LOCK();
++   for (int fd = STDERR_FILENO + 1; fd < MAX_FILES; fd++) {
++      if (!sHandles[fd].used) {
++         sHandles[fd] = (Handle){.used = true, .dir = dir, .flags = flags, .handle = handle};
++         __LIBC_UNLOCK();
++         return fd;
++      }
++   }
++   __LIBC_UNLOCK();
++   return fail(EMFILE);
++}
++
++static Handle *
++getHandle(int fd, bool dir)
++{
++   if (fd < 0 || fd >= MAX_FILES || !sHandles[fd].used || sHandles[fd].dir != dir) {
++      errno = EBADF;
++      return NULL;
++   }
++   return &sHandles[fd];
++}
++
++static bool
++isStandardStream(int fd)
++{
++   return fd >= STDIN_FILENO && fd <= STDERR_FILENO;
++}
++
++int
++open(const char *path, int flags, ...)
++{
++   char buffer[FS_MAX_PATH + 1];
++   if (!fsaPath(path, buffer)) {
++      return -1;
++   }
++   FSAStat fs;
++   FSError error = FSAGetStat(sClient, buffer, &fs);
++   if (error == FS_ERROR_OK) {
++      if ((flags & (O_CREAT | O_EXCL)) == (O_CREAT | O_EXCL)) {
++         return fail(EEXIST);
++      }
++      if (fs.flags & FS_STAT_DIRECTORY) {
++         return fail(EISDIR);
++      }
++   } else if (error != FS_ERROR_NOT_FOUND || !(flags & O_CREAT)) {
++      return check(error);
++   }
++
++   // Cafe OS has no mode that creates a file without truncating it, so it is created first
++   FSAFileHandle file;
++   if (error == FS_ERROR_NOT_FOUND &&
++       (check(FSAOpenFileEx(sClient, buffer, "w", (FSMode)0x666, FS_OPEN_FLAG_NONE, 0, &file)) == -1 ||
++        check(FSACloseFile(sClient, file)) == -1)) {
++      return -1;
++   }
++   bool readOnly = (flags & O_ACCMODE) == O_RDONLY;
++   if (check(FSAOpenFileEx(sClient, buffer, readOnly ? "r" : "r+", (FSMode)0x666, FS_OPEN_FLAG_NONE, 0, &file)) == -1) {
++      return -1;
++   }
++   if ((flags & O_TRUNC) && !readOnly && check(FSATruncateFile(sClient, file)) == -1) {
++      FSACloseFile(sClient, file);
++      return -1;
++   }
++   int fd = takeFd(false, flags, file);
++   if (fd == -1) {
++      FSACloseFile(sClient, file);
++   }
++   return fd;
++}
++
++int
++close(int fd)
++{
++   if (isStandardStream(fd)) {
++      return 0;
++   }
++   Handle *h = getHandle(fd, false);
++   if (!h) {
++      return -1;
++   }
++   int result = check(FSACloseFile(sClient, h->handle));
++   h->used    = false;
++   return result;
++}
++
++static int
++fileSize(const Handle *h, uint32_t *size)
++{
++   FSAStat fs;
++   if (check(FSAGetStatFile(sClient, h->handle, &fs)) == -1) {
++      return -1;
++   }
++   *size = fs.size;
++   return 0;
++}
++
++// Reads or writes at the current position of the FSA file, through an aligned buffer when needed
++static ssize_t
++transfer(const Handle *h, void *data, size_t size, bool write)
++{
++   __attribute__((aligned(FSA_ALIGNMENT))) uint8_t aligned[512];
++   size_t done = 0;
++   while (done < size) {
++      uint8_t *buffer = (uint8_t *)data + done;
++      size_t part     = size - done;
++      if (((uintptr_t)buffer & (FSA_ALIGNMENT - 1)) || part < FSA_ALIGNMENT) {
++         part   = part < sizeof(aligned) ? part : sizeof(aligned);
++         buffer = aligned;
++         if (write) {
++            memcpy(aligned, (uint8_t *)data + done, part);
++         }
++      } else {
++         part &= ~(size_t)(FSA_ALIGNMENT - 1);
++      }
++      FSError count = write ? FSAWriteFile(sClient, buffer, 1, part, h->handle, 0)
++                            : FSAReadFile(sClient, buffer, 1, part, h->handle, 0);
++      if (count < 0) {
++         return done ? (ssize_t)done : check(count);
++      }
++      if (!write && buffer == aligned) {
++         memcpy((uint8_t *)data + done, aligned, count);
++      }
++      done += count;
++      if ((size_t)count < part) {
++         break;
++      }
++   }
++   return done;
++}
++
++// Writes zeros up to the end, FAT doesn't clear new clusters
++static int
++zeroFill(const Handle *h, uint32_t start, uint32_t end)
++{
++   static const uint8_t zeros[512] = {0};
++   if (start >= end) {
++      return 0;
++   }
++   if (check(FSASetPosFile(sClient, h->handle, start)) == -1) {
++      return -1;
++   }
++   while (start < end) {
++      uint32_t part = end - start < sizeof(zeros) ? end - start : sizeof(zeros);
++      ssize_t count = transfer(h, (void *)zeros, part, true);
++      if (count <= 0) {
++         return count ? -1 : fail(ENOSPC);
++      }
++      start += count;
++   }
++   return 0;
++}
++
++ssize_t
++read(int fd, void *data, size_t size)
++{
++   // stdin is always at its end
++   if (fd == STDIN_FILENO) {
++      return 0;
++   }
++   Handle *h = getHandle(fd, false);
++   uint32_t fileLength;
++   if (!h || fileSize(h, &fileLength) == -1) {
++      return -1;
++   }
++   if ((h->flags & O_ACCMODE) == O_WRONLY) {
++      return fail(EBADF);
++   }
++   if (h->position >= fileLength || !size) {
++      return 0;
++   }
++   if (size > fileLength - h->position) {
++      size = fileLength - h->position;
++   }
++   if (check(FSASetPosFile(sClient, h->handle, h->position)) == -1) {
++      return -1;
++   }
++   ssize_t count = transfer(h, data, size, false);
++   if (count > 0) {
++      h->position += count;
++   }
++   return count;
++}
++
++ssize_t
++write(int fd, const void *data, size_t size)
++{
++   if (fd == STDOUT_FILENO || fd == STDERR_FILENO) {
++      if (size) {
++         OSReport("%.*s", (int)size, (const char *)data);
++      }
++      return size;
++   }
++   Handle *h = getHandle(fd, false);
++   uint32_t fileLength;
++   if (!h || fileSize(h, &fileLength) == -1) {
++      return -1;
++   }
++   if ((h->flags & O_ACCMODE) == O_RDONLY) {
++      return fail(EBADF);
++   }
++   if (!size) {
++      return 0;
++   }
++   if (h->flags & O_APPEND) {
++      h->position = fileLength;
++   }
++   if (zeroFill(h, fileLength, h->position) == -1 ||
++       check(FSASetPosFile(sClient, h->handle, h->position)) == -1) {
++      return -1;
++   }
++   ssize_t count = transfer(h, (void *)data, size, true);
++   if (count > 0) {
++      h->position += count;
++   }
++   return count;
++}
++
++// Seeking never extends a file, writing after its end does
++off_t
++lseek(int fd, off_t offset, int whence)
++{
++   if (isStandardStream(fd)) {
++      return fail(ESPIPE);
++   }
++   Handle *h = getHandle(fd, false);
++   uint32_t fileLength;
++   if (!h || fileSize(h, &fileLength) == -1) {
++      return -1;
++   }
++   off_t base;
++   switch (whence) {
++   case SEEK_SET:
++      base = 0;
++      break;
++   case SEEK_CUR:
++      base = h->position;
++      break;
++   case SEEK_END:
++      base = fileLength;
++      break;
++   default:
++      return fail(EINVAL);
++   }
++   off_t position;
++   if (__builtin_add_overflow(base, offset, &position) || position < 0 || position > UINT32_MAX) {
++      return fail(EINVAL);
++   }
++   h->position = position;
++   return position;
++}
++
++int
++ftruncate(int fd, off_t length)
++{
++   Handle *h = getHandle(fd, false);
++   uint32_t fileLength;
++   if (!h || fileSize(h, &fileLength) == -1) {
++      return -1;
++   }
++   if (length < 0 || length > UINT32_MAX) {
++      return fail(EINVAL);
++   }
++   if ((h->flags & O_ACCMODE) == O_RDONLY) {
++      return fail(EBADF);
++   }
++   if (length > fileLength) {
++      return zeroFill(h, fileLength, length);
++   }
++   if (check(FSASetPosFile(sClient, h->handle, length)) == -1) {
++      return -1;
++   }
++   return check(FSATruncateFile(sClient, h->handle));
++}
++
++int
++fsync(int fd)
++{
++   Handle *h = getHandle(fd, false);
++   return h ? check(FSAFlushFile(sClient, h->handle)) : -1;
++}
++
++int
++isatty(int fd)
++{
++   return isStandardStream(fd);
++}
++
++int
++fstat(int fd, struct stat *st)
++{
++   if (isStandardStream(fd)) {
++      *st = (struct stat){.st_mode = S_IFCHR | 0666};
++      return 0;
++   }
++   Handle *h = getHandle(fd, false);
++   FSAStat fs;
++   if (!h || check(FSAGetStatFile(sClient, h->handle, &fs)) == -1) {
++      return -1;
++   }
++   translateStat(&fs, st);
++   return 0;
++}
++
++int
++stat(const char *path, struct stat *st)
++{
++   char buffer[FS_MAX_PATH + 1];
++   FSAStat fs;
++   if (statPath(path, buffer, &fs) == -1) {
++      return -1;
++   }
++   translateStat(&fs, st);
++   return 0;
++}
++
++int
++lstat(const char *path, struct stat *st)
++{
++   return stat(path, st);
++}
++
++int
++access(const char *path, int mode)
++{
++   if (mode & ~(R_OK | W_OK | X_OK)) {
++      return fail(EINVAL);
++   }
++   struct stat st;
++   if (stat(path, &st) == -1) {
++      return -1;
++   }
++   if (((mode & R_OK) && !(st.st_mode & 0444)) || ((mode & W_OK) && !(st.st_mode & 0222)) ||
++       ((mode & X_OK) && !(st.st_mode & 0111))) {
++      return fail(EACCES);
++   }
++   return 0;
++}
++
++int
++fcntl(int fd, int command, ...)
++{
++   if (!isStandardStream(fd) && !getHandle(fd, false)) {
++      return -1;
++   }
++   switch (command) {
++   case F_GETFD:
++   case F_SETFD:
++      return 0;
++   case F_GETFL:
++      return isStandardStream(fd) ? O_RDWR : sHandles[fd].flags;
++   default:
++      return fail(ENOSYS);
++   }
++}
++
++int
++mkdir(const char *path, mode_t mode)
++{
++   char buffer[FS_MAX_PATH + 1];
++   if (!fsaPath(path, buffer)) {
++      return -1;
++   }
++   FSMode fsMode = (FSMode)(((mode & S_IRWXU) << 2) | ((mode & S_IRWXG) << 1) | (mode & S_IRWXO));
++   return check(FSAMakeDir(sClient, buffer, fsMode));
++}
++
++// Removes a file or an empty directory, the one the caller asks for
++static int
++removePath(const char *path, bool dir)
++{
++   char buffer[FS_MAX_PATH + 1];
++   FSAStat fs;
++   if (statPath(path, buffer, &fs) == -1) {
++      return -1;
++   }
++   if ((bool)(fs.flags & FS_STAT_DIRECTORY) != dir) {
++      return fail(dir ? ENOTDIR : EISDIR);
++   }
++   return check(FSARemove(sClient, buffer));
++}
++
++int
++unlink(const char *path)
++{
++   return removePath(path, false);
++}
++
++int
++rmdir(const char *path)
++{
++   return removePath(path, true);
++}
++
++int
++rename(const char *oldPath, const char *newPath)
++{
++   char oldBuffer[FS_MAX_PATH + 1], newBuffer[FS_MAX_PATH + 1];
++   if (!fsaPath(oldPath, oldBuffer) || !fsaPath(newPath, newBuffer)) {
++      return -1;
++   }
++   return check(FSARename(sClient, oldBuffer, newBuffer));
++}
++
++int
++chdir(const char *path)
++{
++   char buffer[FS_MAX_PATH + 1];
++   FSAStat fs;
++   struct stat st;
++   if (statPath(path, buffer, &fs) == -1) {
++      return -1;
++   }
++   translateStat(&fs, &st);
++   if (!S_ISDIR(st.st_mode)) {
++      return fail(ENOTDIR);
++   }
++   __LIBC_LOCK();
++   strcpy(sCwd, buffer);
++   __LIBC_UNLOCK();
++   return 0;
++}
++
++char *
++getcwd(char *buffer, size_t size)
++{
++   __LIBC_LOCK();
++   // The root is sd:/, other directories have no slash at their end
++   const char *path = sCwd + sizeof(MOUNT_PATH) - 1;
++   size_t length    = strlen(path);
++   bool fits        = (length ? length + 4 : 5) <= size;
++   if (fits) {
++      memcpy(buffer, "sd:/", 5);
++      memcpy(buffer + 3, path, length ? length + 1 : 0);
++   }
++   __LIBC_UNLOCK();
++   if (!fits) {
++      errno = ERANGE;
++      return NULL;
++   }
++   return buffer;
++}
++
++DIR *
++opendir(const char *path)
++{
++   char buffer[FS_MAX_PATH + 1];
++   FSADirectoryHandle handle;
++   if (!fsaPath(path, buffer) || check(FSAOpenDir(sClient, buffer, &handle)) == -1) {
++      return NULL;
++   }
++   DIR *dir = malloc(sizeof(DIR));
++   int fd   = dir ? takeFd(true, O_RDONLY, handle) : fail(ENOMEM);
++   if (fd == -1) {
++      free(dir);
++      FSACloseDir(sClient, handle);
++      return NULL;
++   }
++   dir->fd = fd;
++   return dir;
++}
++
++struct dirent *
++readdir(DIR *dir)
++{
++   Handle *h = getHandle(dir->fd, true);
++   FSADirectoryEntry entry;
++   if (!h) {
++      return NULL;
++   }
++   FSError error = FSAReadDir(sClient, h->handle, &entry);
++   if (error < 0) {
++      // The end of the directory leaves errno as it was
++      if (error != FS_ERROR_END_OF_DIR) {
++         check(error);
++      }
++      return NULL;
++   }
++   struct stat st;
++   translateStat(&entry.info, &st);
++   dir->dirent.d_ino  = st.st_ino;
++   dir->dirent.d_type = S_ISDIR(st.st_mode) ? DT_DIR : DT_REG;
++   strncpy(dir->dirent.d_name, entry.name, sizeof(dir->dirent.d_name) - 1);
++   dir->dirent.d_name[sizeof(dir->dirent.d_name) - 1] = '\0';
++   return &dir->dirent;
++}
++
++void
++rewinddir(DIR *dir)
++{
++   Handle *h = getHandle(dir->fd, true);
++   if (h) {
++      FSARewindDir(sClient, h->handle);
++   }
++}
++
++int
++closedir(DIR *dir)
++{
++   Handle *h = getHandle(dir->fd, true);
++   if (!h) {
++      return -1;
++   }
++   int result = check(FSACloseDir(sClient, h->handle));
++   h->used    = false;
++   free(dir);
++   return result;
++}

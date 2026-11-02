@@ -1,0 +1,250 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Mon, 2 Nov 2026 14:08:32 +0100
+Subject: [PATCH] Add the user, link and time functions and seek only when
+ needed
+
+Add geteuid, fchown, fchmod, readlink and utimes for a single user
+system, the SD card has no owners, links or settable times. Each file remembers
+where its FSA file is, so sequential reads and writes don't seek or
+look up the file size. Writes to the standard streams go through the
+console stream, so they stay in order with stdio.
+---
+ libraries/wutpicolibc/wut_files.c | 119 ++++++++++++++++++++++++------
+ 1 file changed, 96 insertions(+), 23 deletions(-)
+
+diff --git a/libraries/wutpicolibc/wut_files.c b/libraries/wutpicolibc/wut_files.c
+index eb74653..60213f2 100644
+--- a/libraries/wutpicolibc/wut_files.c
++++ b/libraries/wutpicolibc/wut_files.c
+@@ -11,10 +11,12 @@
+ #include <errno.h>
+ #include <fcntl.h>
+ #include <stdbool.h>
++#include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
+ #include <sys/lock.h>
+ #include <sys/stat.h>
++#include <sys/time.h>
+ #include <unistd.h>
+ 
+ #define MAX_FILES  32
+@@ -30,9 +32,13 @@ typedef struct
+    bool dir;
+    int flags;
+    uint32_t position;
++   // Where the FSA file is, sequential reads and writes don't have to seek
++   uint32_t fsaPosition;
+    uint32_t handle;
+ } Handle;
+ 
++#define UNKNOWN_POSITION UINT32_MAX
++
+ static FSAClientHandle sClient;
+ static bool sMounted;
+ // The FSA path of the current directory
+@@ -288,9 +294,20 @@ fileSize(const Handle *h, uint32_t *size)
+    return 0;
+ }
+ 
++static FSError
++seek(Handle *h, uint32_t position)
++{
++   if (h->fsaPosition == position) {
++      return FS_ERROR_OK;
++   }
++   FSError error  = FSASetPosFile(sClient, h->handle, position);
++   h->fsaPosition = error < 0 ? UNKNOWN_POSITION : position;
++   return error;
++}
++
+ // Reads or writes at the current position of the FSA file, through an aligned buffer when needed
+ static ssize_t
+-transfer(const Handle *h, void *data, size_t size, bool write)
++transfer(Handle *h, void *data, size_t size, bool write)
+ {
+    __attribute__((aligned(FSA_ALIGNMENT))) uint8_t aligned[512];
+    size_t done = 0;
+@@ -308,9 +325,14 @@ transfer(const Handle *h, void *data, size_t size, bool write)
+       }
+       FSError count = write ? FSAWriteFile(sClient, buffer, 1, part, h->handle, 0)
+                             : FSAReadFile(sClient, buffer, 1, part, h->handle, 0);
++      if (count == FS_ERROR_END_OF_FILE) {
++         break;
++      }
+       if (count < 0) {
++         h->fsaPosition = UNKNOWN_POSITION;
+          return done ? (ssize_t)done : check(count);
+       }
++      h->fsaPosition += count;
+       if (!write && buffer == aligned) {
+          memcpy((uint8_t *)data + done, aligned, count);
+       }
+@@ -324,13 +346,13 @@ transfer(const Handle *h, void *data, size_t size, bool write)
+ 
+ // Writes zeros up to the end, FAT doesn't clear new clusters
+ static int
+-zeroFill(const Handle *h, uint32_t start, uint32_t end)
++zeroFill(Handle *h, uint32_t start, uint32_t end)
+ {
+    static const uint8_t zeros[512] = {0};
+    if (start >= end) {
+       return 0;
+    }
+-   if (check(FSASetPosFile(sClient, h->handle, start)) == -1) {
++   if (check(seek(h, start)) == -1) {
+       return -1;
+    }
+    while (start < end) {
+@@ -352,20 +374,21 @@ read(int fd, void *data, size_t size)
+       return 0;
+    }
+    Handle *h = getHandle(fd, false);
+-   uint32_t fileLength;
+-   if (!h || fileSize(h, &fileLength) == -1) {
++   if (!h) {
+       return -1;
+    }
+    if ((h->flags & O_ACCMODE) == O_WRONLY) {
+       return fail(EBADF);
+    }
+-   if (h->position >= fileLength || !size) {
++   if (!size) {
+       return 0;
+    }
+-   if (size > fileLength - h->position) {
+-      size = fileLength - h->position;
++   // Cafe OS doesn't seek after the end, where there is nothing to read
++   FSError error = seek(h, h->position);
++   if (error == FS_ERROR_OUT_OF_RANGE) {
++      return 0;
+    }
+-   if (check(FSASetPosFile(sClient, h->handle, h->position)) == -1) {
++   if (check(error) == -1) {
+       return -1;
+    }
+    ssize_t count = transfer(h, data, size, false);
+@@ -378,15 +401,12 @@ read(int fd, void *data, size_t size)
+ ssize_t
+ write(int fd, const void *data, size_t size)
+ {
++   // The standard streams share the console stream, so the output stays in order
+    if (fd == STDOUT_FILENO || fd == STDERR_FILENO) {
+-      if (size) {
+-         OSReport("%.*s", (int)size, (const char *)data);
+-      }
+-      return size;
++      return fwrite(data, 1, size, stdout) == size && fflush(stdout) == 0 ? (ssize_t)size : fail(EIO);
+    }
+    Handle *h = getHandle(fd, false);
+-   uint32_t fileLength;
+-   if (!h || fileSize(h, &fileLength) == -1) {
++   if (!h) {
+       return -1;
+    }
+    if ((h->flags & O_ACCMODE) == O_RDONLY) {
+@@ -395,12 +415,18 @@ write(int fd, const void *data, size_t size)
+    if (!size) {
+       return 0;
+    }
+-   if (h->flags & O_APPEND) {
+-      h->position = fileLength;
+-   }
+-   if (zeroFill(h, fileLength, h->position) == -1 ||
+-       check(FSASetPosFile(sClient, h->handle, h->position)) == -1) {
+-      return -1;
++   // Only appending and writing elsewhere than the last time need the size of the file
++   if ((h->flags & O_APPEND) || h->position != h->fsaPosition) {
++      uint32_t fileLength;
++      if (fileSize(h, &fileLength) == -1) {
++         return -1;
++      }
++      if (h->flags & O_APPEND) {
++         h->position = fileLength;
++      }
++      if (zeroFill(h, fileLength, h->position) == -1 || check(seek(h, h->position)) == -1) {
++         return -1;
++      }
+    }
+    ssize_t count = transfer(h, (void *)data, size, true);
+    if (count > 0) {
+@@ -418,7 +444,7 @@ lseek(int fd, off_t offset, int whence)
+    }
+    Handle *h = getHandle(fd, false);
+    uint32_t fileLength;
+-   if (!h || fileSize(h, &fileLength) == -1) {
++   if (!h) {
+       return -1;
+    }
+    off_t base;
+@@ -430,6 +456,9 @@ lseek(int fd, off_t offset, int whence)
+       base = h->position;
+       break;
+    case SEEK_END:
++      if (fileSize(h, &fileLength) == -1) {
++         return -1;
++      }
+       base = fileLength;
+       break;
+    default:
+@@ -460,7 +489,7 @@ ftruncate(int fd, off_t length)
+    if (length > fileLength) {
+       return zeroFill(h, fileLength, length);
+    }
+-   if (check(FSASetPosFile(sClient, h->handle, length)) == -1) {
++   if (check(seek(h, length)) == -1) {
+       return -1;
+    }
+    return check(FSATruncateFile(sClient, h->handle));
+@@ -547,6 +576,50 @@ fcntl(int fd, int command, ...)
+    }
+ }
+ 
++// A single user system, the SD card has no owners, permissions to change, links or settable
++// times
++uid_t
++getuid(void)
++{
++   return 0;
++}
++
++uid_t
++geteuid(void)
++{
++   return 0;
++}
++
++int
++fchmod(int fd, mode_t mode)
++{
++   (void)mode;
++   return isStandardStream(fd) || getHandle(fd, false) ? fail(ENOSYS) : -1;
++}
++
++int
++fchown(int fd, uid_t owner, gid_t group)
++{
++   (void)owner, (void)group;
++   return isStandardStream(fd) || getHandle(fd, false) ? fail(ENOSYS) : -1;
++}
++
++ssize_t
++readlink(const char *path, char *buffer, size_t size)
++{
++   (void)buffer, (void)size;
++   FSAStat fs;
++   char fsa[FS_MAX_PATH + 1];
++   return statPath(path, fsa, &fs) == -1 ? -1 : fail(EINVAL);
++}
++
++int
++utimes(const char *path, const struct timeval times[2])
++{
++   (void)path, (void)times;
++   return fail(ENOSYS);
++}
++
+ int
+ mkdir(const char *path, mode_t mode)
+ {

@@ -1,0 +1,121 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Mon, 2 Nov 2026 14:08:32 +0100
+Subject: [PATCH] Implement clock_gettime, clock_getres and times with the time
+ base
+
+The real time clock is the time base like gettimeofday, the monotonic
+clock the system time and the processor time counts from the start of
+the program. picolibc's clock() adds up times(), without these
+programs using them didn't link.
+---
+ libraries/wutpicolibc/wut_picolibc.c | 65 ++++++++++++++++++++++++++--
+ 1 file changed, 61 insertions(+), 4 deletions(-)
+
+diff --git a/libraries/wutpicolibc/wut_picolibc.c b/libraries/wutpicolibc/wut_picolibc.c
+index f5632c7..2c0779e 100644
+--- a/libraries/wutpicolibc/wut_picolibc.c
++++ b/libraries/wutpicolibc/wut_picolibc.c
+@@ -5,6 +5,8 @@
+  * waits in the scheduler and the C library locks are Cafe OS mutexes.
+  */
+ 
++// picolibc only declares the monotonic and processor clocks for GNU sources
++#define _GNU_SOURCE
+ #include <coreinit/debug.h>
+ #include <coreinit/exit.h>
+ #include <coreinit/memdefaultheap.h>
+@@ -18,6 +20,7 @@
+ #include <string.h>
+ #include <sys/lock.h>
+ #include <sys/time.h>
++#include <sys/times.h>
+ #include <time.h>
+ #include <unistd.h>
+ 
+@@ -39,9 +42,13 @@ struct __lock
+ 
+ struct __lock __lock___libc_recursive_mutex;
+ 
++// The system time when the program started, the processor time counts from it
++static OSTime sStartTime;
++
+ void
+ __rpx_start(int argc, char **argv)
+ {
++   sStartTime = OSGetSystemTime();
+    OSInitMutex(&__lock___libc_recursive_mutex.mutex);
+    __libc_init_array();
+    exit(main(argc, argv));
+@@ -152,17 +159,67 @@ FILE *const stdin  = &sConsole;
+ FILE *const stdout = &sConsole;
+ FILE *const stderr = &sConsole;
+ 
++// The real time is the time base, the monotonic time the system time since the console started
++int
++clock_gettime(clockid_t clock, struct timespec *ts)
++{
++   OSTime time;
++   uint64_t epoch = 0;
++   switch (clock) {
++   case CLOCK_REALTIME:
++      time  = OSGetTime();
++      epoch = EPOCH_DIFF_SECS;
++      break;
++   case CLOCK_MONOTONIC:
++      time = OSGetSystemTime();
++      break;
++   case CLOCK_PROCESS_CPUTIME_ID:
++      time = OSGetSystemTime() - sStartTime;
++      break;
++   default:
++      errno = EINVAL;
++      return -1;
++   }
++   uint64_t seconds = OSTicksToSeconds(time);
++   ts->tv_sec       = (time_t)(seconds + epoch);
++   ts->tv_nsec      = (long)OSTicksToNanoseconds(time - OSSecondsToTicks(seconds));
++   return 0;
++}
++
++// All clocks count time base ticks
++int
++clock_getres(clockid_t clock, struct timespec *resolution)
++{
++   if (clock != CLOCK_REALTIME && clock != CLOCK_MONOTONIC && clock != CLOCK_PROCESS_CPUTIME_ID) {
++      errno = EINVAL;
++      return -1;
++   }
++   if (resolution) {
++      *resolution = (struct timespec){.tv_nsec = (long)OSTicksToNanoseconds(1) + 1};
++   }
++   return 0;
++}
++
+ int
+ gettimeofday(struct timeval *restrict tv, void *restrict tz)
+ {
+    (void)tz;
+-   OSTime time      = OSGetTime();
+-   uint64_t seconds = OSTicksToSeconds(time);
+-   tv->tv_sec       = (time_t)(seconds + EPOCH_DIFF_SECS);
+-   tv->tv_usec      = (suseconds_t)OSTicksToMicroseconds(time - OSSecondsToTicks(seconds));
++   struct timespec ts;
++   clock_gettime(CLOCK_REALTIME, &ts);
++   tv->tv_sec  = ts.tv_sec;
++   tv->tv_usec = (suseconds_t)(ts.tv_nsec / 1000);
+    return 0;
+ }
+ 
++// clock() adds these up, the program has the processor to itself
++clock_t
++times(struct tms *buffer)
++{
++   clock_t time = (clock_t)(OSTicksToMicroseconds(OSGetSystemTime() - sStartTime) / (1000000 / CLOCKS_PER_SEC));
++   *buffer      = (struct tms){.tms_utime = time};
++   return time;
++}
++
+ // Nothing interrupts the sleep, so there is never a remaining time
+ int
+ nanosleep(const struct timespec *duration, struct timespec *remaining)

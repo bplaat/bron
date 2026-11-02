@@ -77,10 +77,10 @@ WIIU_CFLAGS=(--target=powerpc-none-eabi -mcpu=750 -ffreestanding -nostdlibinc
     -I"$WUT_DIR/libraries/libgfd/include")
 
 # The parts of wut we build besides the import stubs: wutpicolibc starts the program and gives
-# picolibc its heap, console and clock, libwhb sets up the graphics and the process lifecycle
-# and loads the shaders with libgfd
+# picolibc its heap, console, clock, sleep, locks and SD card files, libwhb sets up the graphics
+# and the process lifecycle and loads the shaders with libgfd
 WUT_SOURCES=(
-    libraries/wutpicolibc/wut_picolibc.c
+    libraries/wutpicolibc/{wut_picolibc,wut_files}.c
     libraries/libwhb/src/{gfx,gfx_heap,gfx_shader,gfx_texture,proc,log,log_cafe}.c
     libraries/libgfd/src/gfd.c
 )
@@ -252,13 +252,13 @@ endian = 'big'
 skip_sanity_check = true
 CROSS
     rm -rf "$BUILD_DIR/picolibc-build" "$SYSROOT"
-    # Cafe OS starts the program, wutpicolibc gives picolibc its console and heap. The programs
-    # are single threaded, so picolibc needs no locks or thread-local storage.
+    # Cafe OS starts the program, wutpicolibc gives picolibc its console, heap, locks and files.
+    # Threads share errno without thread-local storage, the streams lock and are flushed at exit.
     meson setup "$BUILD_DIR/picolibc-build" "$PICOLIBC_DIR" \
         --cross-file "$BUILD_DIR/picolibc-cross.txt" --prefix "$SYSROOT" --includedir include \
         --libdir lib --buildtype plain -Dc_args="['-ffunction-sections', '-fdata-sections', '-DESPRESSO', '-Os', '-g']" \
         -Dmultilib=false -Dpicocrt=false -Dsemihost=false -Dtests=false -Dspecsdir=none \
-        -Dthread-local-storage=false -Dsingle-thread=true -Dposix-console=false > /dev/null ||
+        -Dthread-local-storage=false -Dposix-console=false -Dstdio-locking=true -Dstdio-exit-flush=true > /dev/null ||
         die "Failed to configure picolibc"
     meson install -C "$BUILD_DIR/picolibc-build" > /dev/null || die "Failed to build picolibc"
 }

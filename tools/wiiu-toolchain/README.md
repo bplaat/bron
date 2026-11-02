@@ -13,8 +13,8 @@ for you. For now the programs are only tested in the [Cemu](https://cemu.info/) 
   then builds it with meson as the C library, its headers and `libc.a` with the math library go
   to `../../target/wiiu-toolchain/sysroot/`
 - Builds `../../target/wiiu-toolchain/libwut.a` from the import stubs of all system libraries,
-  wutpicolibc, which a wut patch adds for picolibc, libwhb (graphics, process lifecycle and
-  logging) and libgfd
+  wutpicolibc, which wut patches add for picolibc (startup, heap, console, clock, sleep, locks and
+  SD card files), libwhb (graphics, process lifecycle and logging) and libgfd
 - Clones the last commit of [decaf-emu](https://github.com/decaf-emu/decaf-emu) and applies
   `decaf-emu/patches/`, then builds its `latte-assembler`, which assembles Latte shader assembly
   to `.gsh` shader files
@@ -90,7 +90,9 @@ Run `./build.sh test` to build the toolchain, `cemu-runner` and the test program
 The guest suite checks constructors, finalizers, memory functions at different alignments,
 heap alignment and realloc preservation, calloc overflow, printf and scanf, standard streams,
 stdlib and string functions, setjmp and assert, math including IEEE edge cases, compiler-rt's
-64-bit operations, paired single matrices and vectors, and the clock. It also loads GTX textures made by gtxconv with GFDGetTextureInPlace and checks their formats,
+64-bit operations, paired single matrices and vectors, threads with mutexes and the C library
+lock, the clock and sleeping, and files, directories, relative paths, descriptors, stdio streams
+and file times on the SD card. It also loads GTX textures made by gtxconv with GFDGetTextureInPlace and checks their formats,
 mipmaps and in-place pointers. It assembles the cube example's shaders with latte-assembler
 and checks GFD relocation, attribute names, uniforms and samplers. It tests CPU-side asset
 loading; shader execution and rendered pixels need the normal emulator.
@@ -156,12 +158,25 @@ The wut patches:
 
 - `0001` adds wutpicolibc, which replaces wutcrt, wutnewlib and wutmalloc: `__rpx_start` runs the
   constructors and `main`, `malloc` uses the default heap of Cafe OS, the standard streams write
-  lines to `OSReport` and `gettimeofday` reads the time base. The programs are single threaded,
-  so picolibc is built without locks
+  lines to `OSReport` and `gettimeofday` reads the time base
 - `0002` adds `GFDGetTextureInPlace` to libgfd, which points a texture at its image and mipmaps in a
   loaded `.gtx` file instead of copying them
+- `0003` implements picolibc's locks with Cafe OS mutexes, so threads can share the streams and the
+  other C library state, and `nanosleep` and `usleep` with `OSSleepTicks`. Without thread-local
+  storage the threads share `errno`
+- `0004` implements picolibc's POSIX file functions (`open`, `read`, `stat`, `opendir`, ...) on the
+  SD card with FSA, see below. picolibc's stdio only calls these functions, so without it no file
+  could be opened
+- `0005` implements `clock_gettime`, `clock_getres` and `times`, which `clock()` adds up: the
+  real time is the time base, the monotonic time the system time and the processor time counts
+  from the start of the program. picolibc only declares the monotonic and processor clocks with
+  `_GNU_SOURCE`
+- `0006` adds `geteuid`, `fchown`, `fchmod`, `readlink` and `utimes` for a single user system
+  without links, and lets sequential reads and writes skip seeking and looking up the file size
 - `0007` prints the console lines with `"%s"`, because Cemu's `OSReport` doesn't support the `*`
   precision
+- `0008` fills the gap with zeros when writing after seeking past the end of a file, which FSA
+  allows like Cemu
 
 The libogc patches, trimmed versions of the Wii toolchain's for only the matrix math files:
 
@@ -186,3 +201,11 @@ The decaf-emu patches:
   Windows-only shader analyzer, and without the spdlog logger of decaf-emu's common library
 - `0002` parses the `$` comments of the shaders: the grammar leaves the semicolon out of comment
   tokens, so upstream silently ignores all register and variable comments
+
+## SD card storage
+
+The SD card is the only storage the C file functions reach, the console's internal storage is left
+out. The first file call mounts it at `/vol/external01`, `sd:/` paths and absolute paths like
+`/saves/world.dat` are on it and relative paths start at the current directory, which starts at
+`sd:/`. Seeking never extends a file, writing after its end fills the gap with zeros. A program
+can have 29 files and directories open, besides the standard streams.

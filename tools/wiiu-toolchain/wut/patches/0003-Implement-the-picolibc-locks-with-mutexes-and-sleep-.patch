@@ -1,0 +1,149 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Mon, 2 Nov 2026 14:00:54 +0100
+Subject: [PATCH] Implement the picolibc locks with mutexes and sleep with the
+ scheduler
+
+picolibc's default locks do nothing, which is only safe for programs
+with one thread. The locks become Cafe OS mutexes, which count
+recursive locks, so threads can share the streams and the other C
+library state. nanosleep and usleep wait with OSSleepTicks.
+---
+ libraries/wutpicolibc/wut_picolibc.c | 98 +++++++++++++++++++++++++++-
+ 1 file changed, 97 insertions(+), 1 deletion(-)
+
+diff --git a/libraries/wutpicolibc/wut_picolibc.c b/libraries/wutpicolibc/wut_picolibc.c
+index 86af71f..f5632c7 100644
+--- a/libraries/wutpicolibc/wut_picolibc.c
++++ b/libraries/wutpicolibc/wut_picolibc.c
+@@ -1,19 +1,25 @@
+ /*
+  * The startup code and the system functions picolibc leaves to the platform:
+  * Cafe OS calls __rpx_start, malloc uses the default heap of coreinit, the
+- * standard streams write to OSReport and the clock reads the time base.
++ * standard streams write to OSReport, the clock reads the time base, sleeping
++ * waits in the scheduler and the C library locks are Cafe OS mutexes.
+  */
+ 
+ #include <coreinit/debug.h>
+ #include <coreinit/exit.h>
+ #include <coreinit/memdefaultheap.h>
+ #include <coreinit/memexpheap.h>
++#include <coreinit/mutex.h>
++#include <coreinit/thread.h>
+ #include <coreinit/time.h>
+ #include <errno.h>
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
++#include <sys/lock.h>
+ #include <sys/time.h>
++#include <time.h>
++#include <unistd.h>
+ 
+ // The default heap of Cafe OS aligns its blocks to 64 bytes, like wutmalloc
+ #define HEAP_ALIGNMENT 0x40
+@@ -25,9 +31,18 @@ main(int argc, char **argv);
+ void
+ __libc_init_array(void);
+ 
++// Cafe OS mutexes count recursive locks, so they serve both kinds of locks
++struct __lock
++{
++   OSMutex mutex;
++};
++
++struct __lock __lock___libc_recursive_mutex;
++
+ void
+ __rpx_start(int argc, char **argv)
+ {
++   OSInitMutex(&__lock___libc_recursive_mutex.mutex);
+    __libc_init_array();
+    exit(main(argc, argv));
+ }
+@@ -147,3 +162,84 @@ gettimeofday(struct timeval *restrict tv, void *restrict tz)
+    tv->tv_usec      = (suseconds_t)OSTicksToMicroseconds(time - OSSecondsToTicks(seconds));
+    return 0;
+ }
++
++// Nothing interrupts the sleep, so there is never a remaining time
++int
++nanosleep(const struct timespec *duration, struct timespec *remaining)
++{
++   (void)remaining;
++   if (duration->tv_sec < 0 || duration->tv_nsec < 0 || duration->tv_nsec >= 1000000000) {
++      errno = EINVAL;
++      return -1;
++   }
++   OSSleepTicks(OSSecondsToTicks((uint64_t)duration->tv_sec) + OSNanosecondsToTicks(duration->tv_nsec));
++   return 0;
++}
++
++int
++usleep(useconds_t microseconds)
++{
++   OSSleepTicks(OSMicrosecondsToTicks(microseconds));
++   return 0;
++}
++
++static void
++lockInit(_LOCK_T *lock)
++{
++   *lock = malloc(sizeof(struct __lock));
++   if (*lock) {
++      OSInitMutex(&(*lock)->mutex);
++   }
++}
++
++void
++__retarget_lock_init(_LOCK_T *lock)
++{
++   lockInit(lock);
++}
++
++void
++__retarget_lock_init_recursive(_LOCK_T *lock)
++{
++   lockInit(lock);
++}
++
++void
++__retarget_lock_close(_LOCK_T lock)
++{
++   free(lock);
++}
++
++void
++__retarget_lock_close_recursive(_LOCK_T lock)
++{
++   free(lock);
++}
++
++void
++__retarget_lock_acquire(_LOCK_T lock)
++{
++   if (lock) {
++      OSLockMutex(&lock->mutex);
++   }
++}
++
++void
++__retarget_lock_acquire_recursive(_LOCK_T lock)
++{
++   __retarget_lock_acquire(lock);
++}
++
++void
++__retarget_lock_release(_LOCK_T lock)
++{
++   if (lock) {
++      OSUnlockMutex(&lock->mutex);
++   }
++}
++
++void
++__retarget_lock_release_recursive(_LOCK_T lock)
++{
++   __retarget_lock_release(lock);
++}

@@ -1,9 +1,15 @@
 // Tests the toolchain on the Wii U: the startup code, the C library, compiler-rt, wut, libgu and
 // the tools. Results go through wutpicolibc and OSReport, where `build.sh test` reads them in
 // cemu-runner.
+// picolibc only declares the monotonic and processor clocks for GNU sources
+#define _GNU_SOURCE
 #include <assert.h>
+#include <coreinit/mutex.h>
+#include <coreinit/thread.h>
 #include <coreinit/time.h>
+#include <dirent.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <gfd.h>
 #include <gu.h>
 #include <limits.h>
@@ -14,9 +20,13 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/lock.h>
+#include <sys/stat.h>
 #include <sys/time.h>
 #include <time.h>
+#include <unistd.h>
 
+#define IO_PATH "sd:/libc-test"
 #define PI 3.14159265358979f
 
 static int failures;
@@ -209,11 +219,16 @@ static void test_printf(void) {
     CHECK(sscanf("", "%d", &a) == EOF);
 }
 
-// stdout and stderr go to OSReport
+// stdout and stderr go to OSReport, stdin is always at its end
 static void test_streams(void) {
+    static const char line[] = "write through OSReport\n";
     CHECK(fputs("stdout through OSReport\n", stdout) >= 0);
     CHECK(fputs("stderr through OSReport\n", stderr) >= 0);
     CHECK(fflush(stdout) == 0 && fflush(stderr) == 0);
+    CHECK(write(STDOUT_FILENO, line, strlen(line)) == (ssize_t)strlen(line));
+    char byte;
+    CHECK(read(STDIN_FILENO, &byte, 1) == 0);
+    CHECK(isatty(STDIN_FILENO) && isatty(STDOUT_FILENO) && isatty(STDERR_FILENO));
 }
 
 static int compare_ints(const void* a, const void* b) {
@@ -450,6 +465,53 @@ static void test_shaders(void) {
     free(program);
 }
 
+static OSMutex counter_mutex;
+static int count_up(int argc, const char** argv) {
+    int* counter = (int*)argv;
+    for (int i = 0; i < 1000; i++) {
+        OSLockMutex(&counter_mutex);
+        int value = *counter;
+        OSYieldThread();
+        *counter = value + 1;
+        OSUnlockMutex(&counter_mutex);
+    }
+    return argc;
+}
+
+static int read_environment(int argc, const char** argv) {
+    (void)argc;
+    getenv("HOME");
+    *(volatile bool*)argv = true;
+    return 0;
+}
+
+static bool start_thread(OSThread* thread, OSThreadEntryPointFn entry, int argc, void* argv, uint8_t* stack) {
+    return OSCreateThread(thread, entry, argc, argv, stack + 16 * 1024, 16 * 1024, 16, OS_THREAD_ATTRIB_AFFINITY_ANY) &&
+           OSResumeThread(thread) == 1;
+}
+
+static void test_threads(void) {
+    static OSThread threads[2];
+    static _Alignas(16) uint8_t stacks[2][16 * 1024];
+    int counter = 0, results[2] = {0};
+    OSInitMutex(&counter_mutex);
+    for (int i = 0; i < 2; i++)
+        CHECK(start_thread(&threads[i], count_up, 7 + i, &counter, stacks[i]));
+    for (int i = 0; i < 2; i++)
+        CHECK(OSJoinThread(&threads[i], &results[i]));
+    CHECK(counter == 2000 && results[0] == 7 && results[1] == 8);
+
+    // getenv waits while another thread holds the C library lock
+    volatile bool read = false;
+    __LIBC_LOCK();
+    CHECK(start_thread(&threads[0], read_environment, 0, (void*)&read, stacks[0]));
+    usleep(10000);
+    CHECK(!read);
+    __LIBC_UNLOCK();
+    CHECK(OSJoinThread(&threads[0], NULL));
+    CHECK(read);
+}
+
 static void test_clock(void) {
     struct timeval before, after;
     CHECK(gettimeofday(&before, NULL) == 0);
@@ -462,6 +524,257 @@ static void test_clock(void) {
     CHECK(gettimeofday(&after, NULL) == 0);
     CHECK(after.tv_sec > before.tv_sec || (after.tv_sec == before.tv_sec && after.tv_usec > before.tv_usec));
     CHECK(time(NULL) >= before.tv_sec);
+
+    // The real time matches gettimeofday, the monotonic and processor times count up
+    struct timespec real, monotonic, later;
+    CHECK(clock_gettime(CLOCK_REALTIME, &real) == 0 && real.tv_sec >= before.tv_sec);
+    CHECK(real.tv_nsec >= 0 && real.tv_nsec < 1000000000);
+    CHECK(clock_gettime(CLOCK_MONOTONIC, &monotonic) == 0);
+    CHECK(clock_gettime(99, &later) == -1 && errno == EINVAL);
+    CHECK(clock_getres(CLOCK_MONOTONIC, &later) == 0 && later.tv_sec == 0 && later.tv_nsec > 0 && later.tv_nsec < 100);
+    clock_t processor = clock();
+    CHECK(processor != (clock_t)-1);
+
+    // Sleeping waits in the scheduler
+    CHECK(gettimeofday(&before, NULL) == 0);
+    CHECK(usleep(20000) == 0);
+    CHECK(nanosleep(&(struct timespec){.tv_nsec = 5000000}, NULL) == 0);
+    CHECK(gettimeofday(&after, NULL) == 0);
+    long long elapsed = (after.tv_sec - before.tv_sec) * 1000000LL + after.tv_usec - before.tv_usec;
+    CHECK(elapsed >= 25000 && elapsed < 1000000);
+    CHECK(clock_gettime(CLOCK_MONOTONIC, &later) == 0);
+    elapsed = (later.tv_sec - monotonic.tv_sec) * 1000000LL + (later.tv_nsec - monotonic.tv_nsec) / 1000;
+    CHECK(elapsed >= 25000 && elapsed < 1000000);
+    CHECK((clock() - processor) * 1000000LL / CLOCKS_PER_SEC >= 25000);
+    CHECK(nanosleep(&(struct timespec){.tv_nsec = 1000000000}, NULL) == -1 && errno == EINVAL);
+}
+
+static bool create(const char* path, const char* text) {
+    FILE* file = fopen(path, "w");
+    return file && fputs(text, file) >= 0 && fclose(file) == 0;
+}
+
+static void test_files(void) {
+    CHECK(mkdir(IO_PATH, 0777) == 0);
+    FILE* file = fopen(IO_PATH "/long filename.txt", "w+");
+    CHECK(file != NULL);
+    if (!file)
+        return;
+    CHECK(fwrite("persistent data", 1, 15, file) == 15);
+    CHECK(fflush(file) == 0);
+    CHECK(fsync(fileno(file)) == 0);
+    CHECK(fseek(file, 0, SEEK_SET) == 0);
+    char text[32] = {0};
+    CHECK(fread(text, 1, sizeof(text), file) == 15);
+    check_string(text, "persistent data", __LINE__);
+    CHECK(ftruncate(fileno(file), 10) == 0);
+    CHECK(fclose(file) == 0);
+
+    // Writing after the end fills the gap with zeros, seeking and truncating keep the position
+    int hole = open(IO_PATH "/hole.bin", O_CREAT | O_RDWR, 0666);
+    CHECK(hole >= 3);
+    if (hole >= 3) {
+        struct stat size;
+        CHECK(lseek(hole, 1024, SEEK_SET) == 1024);
+        CHECK(read(hole, text, 1) == 0);
+        CHECK(fstat(hole, &size) == 0 && size.st_size == 0);
+        CHECK(write(hole, "!", 1) == 1);
+        CHECK(lseek(hole, 0, SEEK_SET) == 0);
+        char zeros[1024];
+        CHECK(read(hole, zeros, sizeof(zeros)) == sizeof(zeros));
+        bool cleared = true;
+        for (unsigned i = 0; i < sizeof(zeros); i++)
+            cleared &= zeros[i] == 0;
+        CHECK(cleared);
+        CHECK(ftruncate(hole, 2048) == 0);
+        CHECK(lseek(hole, 0, SEEK_CUR) == 1024);
+        CHECK(fstat(hole, &size) == 0 && size.st_size == 2048);
+        CHECK(lseek(hole, 1025, SEEK_SET) == 1025);
+        CHECK(read(hole, zeros, 1023) == 1023);
+        cleared = true;
+        for (unsigned i = 0; i < 1023; i++)
+            cleared &= zeros[i] == 0;
+        CHECK(cleared);
+        CHECK(ftruncate(hole, 10) == 0);
+        CHECK(lseek(hole, 0, SEEK_CUR) == 2048);
+        CHECK(close(hole) == 0);
+        CHECK(unlink(IO_PATH "/hole.bin") == 0);
+    }
+
+    CHECK(rename(IO_PATH "/long filename.txt", IO_PATH "/renamed.txt") == 0);
+    file = fopen(IO_PATH "/renamed.txt", "a");
+    CHECK(file != NULL);
+    if (!file)
+        return;
+    CHECK(fwrite("!", 1, 1, file) == 1);
+    CHECK(fclose(file) == 0);
+    struct stat st;
+    CHECK(stat(IO_PATH "/renamed.txt", &st) == 0 && st.st_size == 11 && S_ISREG(st.st_mode));
+    int fd = open(IO_PATH "/renamed.txt", O_RDONLY);
+    CHECK(fd >= 3);
+    if (fd >= 3) {
+        CHECK(read(fd, text, 1) == 1 && text[0] == 'p');
+        CHECK(lseek(fd, 10, SEEK_SET) == 10);
+        CHECK(read(fd, text, 1) == 1 && text[0] == '!');
+        CHECK(write(fd, "x", 1) == -1 && errno == EBADF);
+        CHECK(close(fd) == 0);
+    }
+    CHECK(unlink(IO_PATH "/renamed.txt") == 0);
+    CHECK(access(IO_PATH "/renamed.txt", F_OK) == -1 && errno == ENOENT);
+    CHECK(rmdir(IO_PATH) == 0);
+}
+
+// Relative paths start at the current directory, . and .. are resolved before FSA
+static void test_directories(void) {
+    CHECK(mkdir(IO_PATH, 0777) == 0);
+    CHECK(mkdir(IO_PATH, 0777) == -1 && errno == EEXIST);
+    CHECK(mkdir(IO_PATH "/sub", 0777) == 0);
+    CHECK(mkdir(IO_PATH "/sub/deeper", 0777) == 0);
+    struct stat st;
+    CHECK(stat(IO_PATH "/sub", &st) == 0 && S_ISDIR(st.st_mode));
+
+    char cwd[64];
+    CHECK(getcwd(cwd, sizeof(cwd)) && strcmp(cwd, "sd:/") == 0);
+    CHECK(chdir(IO_PATH "/sub") == 0);
+    CHECK(getcwd(cwd, sizeof(cwd)) && strcmp(cwd, IO_PATH "/sub") == 0);
+    CHECK(create("relative.txt", "relative"));
+    CHECK(stat(IO_PATH "/sub/relative.txt", &st) == 0 && st.st_size == 8);
+    CHECK(chdir("relative.txt") == -1 && errno == ENOTDIR);
+    CHECK(chdir("deeper/..//./deeper") == 0);
+    CHECK(getcwd(cwd, sizeof(cwd)) && strcmp(cwd, IO_PATH "/sub/deeper") == 0);
+    CHECK(stat("../relative.txt", &st) == 0 && S_ISREG(st.st_mode));
+    // Absolute paths are on the SD card, also the Unix style ones with its device
+    CHECK(stat("/libc-test/sub/relative.txt", &st) == 0);
+    CHECK(stat("/sd:/libc-test/sub/relative.txt", &st) == 0);
+    CHECK(chdir("../../..") == 0);
+    CHECK(getcwd(cwd, sizeof(cwd)) && strcmp(cwd, "sd:/") == 0);
+    CHECK(getcwd(cwd, 3) == NULL && errno == ERANGE);
+
+    CHECK(create(IO_PATH "/a.txt", "a") && create(IO_PATH "/b.txt", "b"));
+    DIR* dir = opendir(IO_PATH);
+    CHECK(dir != NULL);
+    if (dir) {
+        int files = 0, directories = 0;
+        struct dirent* entry;
+        while ((entry = readdir(dir))) {
+            if (entry->d_type == DT_REG)
+                files++;
+            else if (entry->d_type == DT_DIR && strcmp(entry->d_name, "sub") == 0)
+                directories++;
+        }
+        CHECK(files == 2 && directories == 1);
+        rewinddir(dir);
+        CHECK(readdir(dir) != NULL);
+        CHECK(closedir(dir) == 0);
+    }
+    CHECK(opendir(IO_PATH "/missing") == NULL && errno == ENOENT);
+
+    // Renaming moves between directories, a directory with files can't be removed
+    CHECK(rename(IO_PATH "/a.txt", IO_PATH "/sub/deeper/a.txt") == 0);
+    CHECK(access(IO_PATH "/sub/deeper/a.txt", R_OK | W_OK) == 0);
+    CHECK(rmdir(IO_PATH "/sub/deeper") == -1 && errno == ENOTEMPTY);
+    CHECK(unlink(IO_PATH "/sub/deeper") == -1 && errno == EISDIR);
+    CHECK(rmdir(IO_PATH "/sub/deeper/a.txt") == -1 && errno == ENOTDIR);
+    CHECK(unlink(IO_PATH "/sub/deeper/a.txt") == 0);
+    CHECK(rmdir(IO_PATH "/sub/deeper") == 0);
+    CHECK(unlink(IO_PATH "/sub/relative.txt") == 0 && rmdir(IO_PATH "/sub") == 0);
+    CHECK(unlink(IO_PATH "/b.txt") == 0 && rmdir(IO_PATH) == 0);
+}
+
+// Failures set errno, the descriptors are reused and limited
+static void test_descriptors(void) {
+    CHECK(open(IO_PATH "/missing.txt", O_RDONLY) == -1 && errno == ENOENT);
+    CHECK(fopen(IO_PATH "/missing.txt", "r") == NULL && errno == ENOENT);
+    CHECK(open("nodev:/file.txt", O_RDONLY) == -1 && errno == ENODEV);
+    CHECK(unlink("sd:/missing.txt") == -1 && errno == ENOENT);
+    CHECK(close(99) == -1 && errno == EBADF);
+    char byte;
+    CHECK(read(20, &byte, 1) == -1 && errno == EBADF);
+    CHECK(access("sd:/", F_OK | 0x100) == -1 && errno == EINVAL);
+
+    CHECK(create("sd:/fds.txt", "0123456789"));
+    CHECK(open("sd:/fds.txt", O_CREAT | O_EXCL | O_WRONLY, 0666) == -1 && errno == EEXIST);
+    int fds[32], count = 0;
+    while (count < 32 && (fds[count] = open("sd:/fds.txt", O_RDONLY)) >= 0)
+        count++;
+    CHECK(count == 29 && errno == EMFILE);
+    CHECK(lseek(fds[0], -1, SEEK_SET) == -1 && errno == EINVAL);
+    CHECK(lseek(fds[0], -3, SEEK_END) == 7 && read(fds[0], &byte, 1) == 1 && byte == '7');
+    CHECK(lseek(fds[0], -2, SEEK_CUR) == 6);
+    CHECK(fcntl(fds[0], F_GETFD) == 0 && fcntl(fds[0], F_SETLK) == -1 && errno == ENOSYS);
+    // A single user system without links
+    char link[16];
+    CHECK(geteuid() == 0 && fchown(fds[0], 0, 0) == -1 && errno == ENOSYS);
+    CHECK(fchmod(fds[0], 0644) == -1 && errno == ENOSYS && fchmod(99, 0644) == -1 && errno == EBADF);
+    CHECK(readlink("sd:/fds.txt", link, sizeof(link)) == -1 && errno == EINVAL);
+    CHECK(readlink("sd:/missing.txt", link, sizeof(link)) == -1 && errno == ENOENT);
+    for (int i = 0; i < count; i++)
+        close(fds[i]);
+    int fd = open("sd:/fds.txt", O_RDONLY);
+    CHECK(fd == 3);
+    close(fd);
+
+    // Appending writes go to the end wherever the position is, truncating empties the file
+    fd = open("sd:/fds.txt", O_WRONLY | O_APPEND);
+    CHECK(fd >= 3 && lseek(fd, 0, SEEK_SET) == 0 && write(fd, "AB", 2) == 2);
+    CHECK(lseek(fd, 0, SEEK_CUR) == 12 && close(fd) == 0);
+    struct stat st;
+    CHECK(stat("sd:/fds.txt", &st) == 0 && st.st_size == 12);
+    fd = open("sd:/fds.txt", O_WRONLY | O_TRUNC);
+    CHECK(fd >= 3 && fstat(fd, &st) == 0 && st.st_size == 0 && close(fd) == 0);
+    CHECK(unlink("sd:/fds.txt") == 0);
+}
+
+// Buffered streams over unaligned buffers, formatted reads and writes, and seeking
+static void test_stdio_files(void) {
+    FILE* file = fopen("sd:/stream.bin", "w+");
+    CHECK(file != NULL);
+    if (!file)
+        return;
+    uint32_t written = 0;
+    for (int i = 0; i < 20000; i++) {
+        int byte = (i * 31 + i / 256) & 0xff;
+        written += byte;
+        fputc(byte, file);
+    }
+    CHECK(ftell(file) == 20000);
+    rewind(file);
+    uint32_t read_back = 0;
+    int byte, size = 0;
+    while ((byte = fgetc(file)) != EOF) {
+        read_back += byte;
+        size++;
+    }
+    CHECK(size == 20000 && read_back == written && feof(file));
+    CHECK(fclose(file) == 0);
+
+    file = fopen("sd:/stream.txt", "w+");
+    CHECK(file != NULL);
+    if (!file)
+        return;
+    CHECK(fprintf(file, "%d %s %x\nsecond line\n", 42, "blocks", 255) == 25);
+    CHECK(fseek(file, 0, SEEK_SET) == 0);
+    int number = 0, hex = 0;
+    char word[16] = {0}, line[32] = {0};
+    CHECK(fscanf(file, "%d %15s %x\n", &number, word, &hex) == 3);
+    CHECK(number == 42 && hex == 255);
+    check_string(word, "blocks", __LINE__);
+    CHECK(fgets(line, sizeof(line), file) != NULL);
+    check_string(line, "second line\n", __LINE__);
+    CHECK(fgets(line, sizeof(line), file) == NULL);
+    CHECK(fseek(file, -5, SEEK_END) == 0 && fgetc(file) == 'l');
+    CHECK(ungetc('L', file) == 'L' && fgetc(file) == 'L' && fgetc(file) == 'i');
+    CHECK(fclose(file) == 0);
+    CHECK(remove("sd:/stream.bin") == 0 && remove("sd:/stream.txt") == 0);
+}
+
+// Files get the time they were written
+static void test_file_time(void) {
+    struct stat st;
+    time_t now = time(NULL);
+    CHECK(create("sd:/time.txt", "now") && stat("sd:/time.txt", &st) == 0);
+    CHECK(llabs((long long)(st.st_mtime - now)) <= 4);
+    CHECK(unlink("sd:/time.txt") == 0);
 }
 
 __attribute__((destructor)) static void finalize(void) {
@@ -483,7 +796,13 @@ int main(void) {
     run("paired single matrices", test_matrices);
     run("gtxconv and GFD textures", test_textures);
     run("Latte shaders and GFD relocation", test_shaders);
-    run("clock", test_clock);
+    run("threads and locks", test_threads);
+    run("clock and sleep", test_clock);
+    run("SD files", test_files);
+    run("SD directories and paths", test_directories);
+    run("SD errors and descriptors", test_descriptors);
+    run("SD stdio streams", test_stdio_files);
+    run("SD file time", test_file_time);
     main_finished = true;
     return failures ? 1 : 0;
 }

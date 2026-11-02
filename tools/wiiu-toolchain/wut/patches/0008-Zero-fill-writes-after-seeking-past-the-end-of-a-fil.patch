@@ -1,0 +1,78 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Mon, 2 Nov 2026 14:49:59 +0100
+Subject: [PATCH] Zero fill writes after seeking past the end of a file
+
+FSA can seek past the end of a file, like Cemu does, so a write at the
+position of the last seek skipped filling the gap with zeros. Only
+reading or writing up to a position shows it is inside the file.
+---
+ libraries/wutpicolibc/wut_files.c | 17 +++++++++++------
+ 1 file changed, 11 insertions(+), 6 deletions(-)
+
+diff --git a/libraries/wutpicolibc/wut_files.c b/libraries/wutpicolibc/wut_files.c
+index 60213f2..d452a63 100644
+--- a/libraries/wutpicolibc/wut_files.c
++++ b/libraries/wutpicolibc/wut_files.c
+@@ -32,8 +32,10 @@ typedef struct
+    bool dir;
+    int flags;
+    uint32_t position;
+-   // Where the FSA file is, sequential reads and writes don't have to seek
++   // Where the FSA file is, sequential reads and writes don't have to seek. Seeking may go
++   // after the end, only reading and writing there show it's inside the file.
+    uint32_t fsaPosition;
++   bool fsaInFile;
+    uint32_t handle;
+ } Handle;
+ 
+@@ -201,7 +203,7 @@ takeFd(bool dir, int flags, uint32_t handle)
+    __LIBC_LOCK();
+    for (int fd = STDERR_FILENO + 1; fd < MAX_FILES; fd++) {
+       if (!sHandles[fd].used) {
+-         sHandles[fd] = (Handle){.used = true, .dir = dir, .flags = flags, .handle = handle};
++         sHandles[fd] = (Handle){.used = true, .dir = dir, .flags = flags, .fsaInFile = true, .handle = handle};
+          __LIBC_UNLOCK();
+          return fd;
+       }
+@@ -302,6 +304,7 @@ seek(Handle *h, uint32_t position)
+    }
+    FSError error  = FSASetPosFile(sClient, h->handle, position);
+    h->fsaPosition = error < 0 ? UNKNOWN_POSITION : position;
++   h->fsaInFile   = false;
+    return error;
+ }
+ 
+@@ -333,6 +336,7 @@ transfer(Handle *h, void *data, size_t size, bool write)
+          return done ? (ssize_t)done : check(count);
+       }
+       h->fsaPosition += count;
++      h->fsaInFile = h->fsaInFile || count > 0;
+       if (!write && buffer == aligned) {
+          memcpy((uint8_t *)data + done, aligned, count);
+       }
+@@ -415,8 +419,8 @@ write(int fd, const void *data, size_t size)
+    if (!size) {
+       return 0;
+    }
+-   // Only appending and writing elsewhere than the last time need the size of the file
+-   if ((h->flags & O_APPEND) || h->position != h->fsaPosition) {
++   // Only appending and writing elsewhere than the last read or write need the size of the file
++   if ((h->flags & O_APPEND) || h->position != h->fsaPosition || !h->fsaInFile) {
+       uint32_t fileLength;
+       if (fileSize(h, &fileLength) == -1) {
+          return -1;
+@@ -489,10 +493,11 @@ ftruncate(int fd, off_t length)
+    if (length > fileLength) {
+       return zeroFill(h, fileLength, length);
+    }
+-   if (check(seek(h, length)) == -1) {
++   if (check(seek(h, length)) == -1 || check(FSATruncateFile(sClient, h->handle)) == -1) {
+       return -1;
+    }
+-   return check(FSATruncateFile(sClient, h->handle));
++   h->fsaInFile = true;
++   return 0;
+ }
+ 
+ int
