@@ -783,6 +783,47 @@ __attribute__((destructor)) static void finalize(void) {
     fflush(stdout);
 }
 
+static void test_entropy(void) {
+    unsigned char bytes[257] = {0};
+    CHECK(getentropy(NULL, 0) == 0);
+    CHECK(getentropy(bytes, 0) == 0);
+    CHECK(getentropy(bytes, sizeof(bytes)) == -1 && errno == EIO);
+    CHECK(getentropy(NULL, 1) == -1 && errno == EFAULT);
+}
+
+// nlibnss exports are linked through WUT's import stubs.
+int32_t NSSInit(void);
+int32_t NSSFinish(void);
+int32_t NSSLibReady(void);
+int32_t NSSGetRandom(void* buffer, int32_t size);
+
+static void test_entropy_generation(void) {
+    unsigned char first[512] = {0}, second[256] = {0};
+    NSSFinish();
+    CHECK(NSSLibReady() < 0);
+    CHECK(NSSGetRandom(first, 1) == (int32_t)0xFFD1FFFBu);
+    CHECK(NSSInit() == 0 && NSSLibReady() >= 0);
+    CHECK(NSSGetRandom(NULL, 1) == (int32_t)0xFFD1FFF7u);
+    CHECK(NSSGetRandom(first, -1) == (int32_t)0xFFD1FFF7u);
+    CHECK(NSSGetRandom(first, 0) == 0);
+    CHECK(NSSGetRandom(first, sizeof(first)) == 0);
+    CHECK(memcmp(first, first + 256, 256) != 0);
+    CHECK(getentropy(second, sizeof(second)) == 0);
+    CHECK(memcmp(first, second, sizeof(second)) != 0);
+    CHECK(getentropy(first, 16) == 0);
+    CHECK(memcmp(first, second, 16) != 0);
+    CHECK(NSSFinish() == 0 && NSSLibReady() < 0);
+    // The libc wrapper must initialize NSS again after another user finishes it.
+    CHECK(getentropy(second, sizeof(second)) == 0 && NSSLibReady() >= 0);
+    static const size_t lengths[] = {1, 63, 64, 65, 255, 256};
+    unsigned char guarded[258];
+    for (size_t i = 0; i < sizeof(lengths) / sizeof(lengths[0]); i++) {
+        memset(guarded, 0xa5, sizeof(guarded));
+        CHECK(getentropy(guarded + 1, lengths[i]) == 0);
+        CHECK(guarded[0] == 0xa5 && guarded[lengths[i] + 1] == 0xa5);
+    }
+}
+
 int main(void) {
     run("startup and constructors", test_startup);
     run("memory and strings", test_memory);
@@ -803,6 +844,8 @@ int main(void) {
     run("SD errors and descriptors", test_descriptors);
     run("SD stdio streams", test_stdio_files);
     run("SD file time", test_file_time);
+    run("entropy arguments", test_entropy);
+    run("NSS entropy generation", test_entropy_generation);
     main_finished = true;
     return failures ? 1 : 0;
 }

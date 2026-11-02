@@ -344,6 +344,8 @@ unsafe extern "C" {
 
 // MARK: picolibc
 unsafe extern "C" {
+    /// Fill at most 256 bytes using the platform entropy source; returns 0 or -1 with errno set.
+    pub fn getentropy(buffer: *mut c_void, length: usize) -> c_int;
     pub fn malloc(size: usize) -> *mut c_void;
     pub fn memalign(alignment: usize, size: usize) -> *mut c_void;
     pub fn free(pointer: *mut c_void);

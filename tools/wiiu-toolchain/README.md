@@ -126,6 +126,9 @@ other repos, `./build.sh export-patches` also writes `../../target/wiiu-toolchai
 - `0009` counts the high resolution timer in nanoseconds on Unix, on macOS the clock ran 42 times
   too fast
 - `0010` fuses the multiply-add instructions on every host, on x86-64 they rounded twice
+- `0011` implements NSS initialization and random-byte exports using the host OS
+  CSPRNG. The headless runner links the implementation, and the guest suite checks
+  NSS errors, fresh output and reinitialization through `getentropy()`.
 
 ## Shaders
 
@@ -177,6 +180,9 @@ The wut patches:
   precision
 - `0008` fills the gap with zeros when writing after seeking past the end of a file, which FSA
   allows like Cemu
+- `0009` adds `wutpicolibc/wut_entropy.c`, which supplies picolibc's `getentropy()`
+  through `NSSGetRandom`. C programs use `<unistd.h>`, Rust programs use `wut-sys`
+  or the workspace's `getrandom` replacement.
 
 The libogc patches, trimmed versions of the Wii toolchain's for only the matrix math files:
 

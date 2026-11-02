@@ -80,7 +80,7 @@ WIIU_CFLAGS=(--target=powerpc-none-eabi -mcpu=750 -ffreestanding -nostdlibinc
 # picolibc its heap, console, clock, sleep, locks and SD card files, libwhb sets up the graphics
 # and the process lifecycle and loads the shaders with libgfd
 WUT_SOURCES=(
-    libraries/wutpicolibc/{wut_picolibc,wut_files}.c
+    libraries/wutpicolibc/{wut_picolibc,wut_files,wut_entropy}.c
     libraries/libwhb/src/{gfx,gfx_heap,gfx_shader,gfx_texture,proc,log,log_cafe}.c
     libraries/libgfd/src/gfd.c
 )
@@ -118,6 +118,7 @@ CEMU_SOURCES=(
     Cafe/HW/Espresso/Interpreter/PPCInterpreter{FPU,HLE,Impl,Main,OPC,PS}.cpp
     Cafe/HW/Espresso/{PPCScheduler,PPCTimer}.cpp Cafe/HW/Espresso/Debugger/GDBBreakpoints.cpp Cafe/HW/MMU/MMU.cpp
     Cafe/OS/common/OSCommon.cpp Cafe/OS/RPL/{elf,rpl,rpl_debug_symbols,rpl_symbol_storage}.cpp
+    Cafe/OS/libs/nlibnss/nlibnss.cpp
     Cafe/IOSU/fsa/iosu_fsa.cpp Cafe/IOSU/kernel/iosu_kernel.cpp Cafe/Filesystem/{fsc,fscDeviceHostFS,fscDeviceRedirect}.cpp
     Common/{SysAllocator,cpu_features}.cpp Common/unix/{FileStream_unix,platform}.cpp util/Fiber/FiberUnix.cpp
     util/MemMapper/MemMapperUnix.cpp util/highresolutiontimer/HighResolutionTimer.cpp util/crypto/crc32.cpp

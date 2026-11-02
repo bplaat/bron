@@ -186,9 +186,6 @@ NO_LIBRARY(load)
 namespace nn::idbe {
 NO_LIBRARY(load)
 }
-namespace nlibnss {
-NO_LIBRARY(load)
-}
 namespace nlibcurl {
 NO_LIBRARY(load)
 }
