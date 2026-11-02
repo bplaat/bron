@@ -341,7 +341,7 @@ run_test() {
     rm -rf "$sd_dir"
     mkdir -p "$sd_dir"
     msg "Running the test in Dolphin"
-    "$BUILD_DIR/dolphin-runner" --sd "$sd_dir" "$BUILD_DIR/test/test.elf" 'test 3600'
+    "$BUILD_DIR/dolphin-runner" --sd "$sd_dir" "$BUILD_DIR/test/test.dol" 'test 3600'
     msg "All tests passed"
 }
 

@@ -68,7 +68,7 @@ separately from main Cargo workspace.
   `ok`. What the program writes to the debug UART, like `printf`, goes to stderr:
 
     ```sh
-    ../../target/wii-toolchain/dolphin-runner ../../examples/wii/canvas/c/target/canvas.elf 'wait 120' \
+    ../../target/wii-toolchain/dolphin-runner ../../examples/wii/canvas/c/target/canvas.dol 'wait 120' \
         'point 320 240' 'press a' 'shot canvas.png' 'save canvas.sav'
     ```
 
