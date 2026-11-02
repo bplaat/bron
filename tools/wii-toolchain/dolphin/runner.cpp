@@ -20,6 +20,7 @@
 //   count                     print "count <executions>" since hook or the last count
 //   wav <file>, wav stop      record the sound of the DSP to a WAV file, stop recording
 //   peek <address> [words]    print "peek <address> <word>..." of the memory, in hex
+//   test-title                supply synthetic title metadata for standalone ES signing tests
 //   quit                      stop, also the end of the commands
 // Keys are the Wii Remote's a, b, 1, 2, plus, minus, home, up, down, left and right and the
 // Nunchuk's c and z, joined by +, like up+a.
@@ -46,6 +47,7 @@
 #include "AudioCommon/SoundStream.h"
 #include "Common/Image.h"
 #include "Common/Logging/LogManager.h"
+#include "Common/Swap.h"
 #include "Common/WindowSystemInfo.h"
 #include "Core/Boot/Boot.h"
 #include "Core/BootManager.h"
@@ -60,6 +62,8 @@
 #include "Core/HW/WiimoteEmu/Extension/Nunchuk.h"
 #include "Core/HW/WiimoteEmu/WiimoteEmu.h"
 #include "Core/Host.h"
+#include "Core/IOS/ES/ES.h"
+#include "Core/IOS/ES/Formats.h"
 #include "Core/PowerPC/BreakPoints.h"
 #include "Core/PowerPC/MMU.h"
 #include "Core/PowerPC/PowerPC.h"
@@ -334,10 +338,35 @@ static std::string await_uart(const char* text, int frames) {
     die("No '%s' on the UART after %d frames", text, frames);
 }
 
+// A standalone DOL has no title context. Supply test metadata through the same
+// entry point as a disc boot, without replacing the ES signing implementation.
+static void set_test_title() {
+    std::vector<u8> tmd(sizeof(IOS::ES::TMDHeader));
+    std::vector<u8> ticket(sizeof(IOS::ES::Ticket));
+    auto store32 = [](std::vector<u8>& bytes, size_t offset, u32 value) {
+        value = Common::swap32(value);
+        std::memcpy(bytes.data() + offset, &value, sizeof(value));
+    };
+    auto store64 = [](std::vector<u8>& bytes, size_t offset, u64 value) {
+        value = Common::swap64(value);
+        std::memcpy(bytes.data() + offset, &value, sizeof(value));
+    };
+    store32(tmd, 0, 0x10001);
+    store32(ticket, 0, 0x10001);
+    store64(tmd, offsetof(IOS::ES::TMDHeader, title_id), 0x0001000054455354ULL);
+    store64(ticket, offsetof(IOS::ES::Ticket, title_id), 0x0001000054455354ULL);
+    auto result = system().GetIOS()->GetESDevice()->DIVerify(IOS::ES::TMDReader(std::move(tmd)),
+                                                             IOS::ES::TicketReader(std::move(ticket)));
+    if (result != IOS::HLE::IPC_SUCCESS)
+        die("Test title setup failed: %d", static_cast<int>(result));
+}
+
 // Runs one command from its words, false on quit
 static bool command(char** words) {
     const char* name = words[0];
-    if (strcmp(name, "wait") == 0) {
+    if (strcmp(name, "test-title") == 0) {
+        set_test_title();
+    } else if (strcmp(name, "wait") == 0) {
         run(parse_number(words[1]));
     } else if (strcmp(name, "press") == 0) {
         u32 mask = parse_keys(words[1]);

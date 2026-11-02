@@ -758,6 +758,32 @@ static void test_time(void) {
     CHECK(unlink("sd:/time.txt") == 0);
 }
 
+static void test_entropy(void) {
+    unsigned char bytes[257] = {0};
+    CHECK(getentropy(NULL, 0) == 0);
+    CHECK(getentropy(bytes, 0) == 0);
+    CHECK(getentropy(bytes, sizeof(bytes)) == -1 && errno == EIO);
+    CHECK(getentropy(NULL, 1) == -1 && errno == EFAULT);
+    unsigned char previous[256];
+    CHECK(getentropy(bytes, 256) == 0);
+    memcpy(previous, bytes, sizeof(previous));
+    CHECK(getentropy(bytes, 256) == 0);
+    CHECK(memcmp(previous, bytes, sizeof(previous)) != 0);
+    static const size_t lengths[] = {1, 63, 64, 65, 255, 256};
+    unsigned char guarded[258];
+    for (size_t i = 0; i < sizeof(lengths) / sizeof(lengths[0]); i++) {
+        memset(guarded, 0xa5, sizeof(guarded));
+        CHECK(getentropy(guarded + 1, lengths[i]) == 0);
+        CHECK(guarded[0] == 0xa5 && guarded[lengths[i] + 1] == 0xa5);
+    }
+    // Cross the 1 MiB reseed boundary and check that generation continues.
+    for (size_t i = 0; i <= 1024 * 1024 / sizeof(previous); i++) {
+        CHECK(getentropy(bytes, sizeof(previous)) == 0);
+        CHECK(memcmp(previous, bytes, sizeof(previous)) != 0);
+        memcpy(previous, bytes, sizeof(previous));
+    }
+}
+
 int main(void) {
     run("startup and constructors", test_startup);
     run("memory and strings", test_memory);
@@ -773,6 +799,7 @@ int main(void) {
     run("SD errors and descriptors", test_descriptors);
     run("SD stdio streams", test_stdio_files);
     run("time", test_time);
+    run("entropy arguments and generation", test_entropy);
 
     report("DONE %d failed\n", failures);
     save_results();

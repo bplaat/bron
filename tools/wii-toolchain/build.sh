@@ -77,7 +77,7 @@ LIBOGC_CFLAGS=("${WII_CFLAGS[@]}" -std=gnu17 -fno-strict-aliasing -I"$LIBOGC_DIR
 # out because the examples don't use them and most need newlib
 LIBOGC_SOURCES=(
     # Startup, interrupts, exceptions, caches, the C library locks and file functions
-    libogc/{argv,cache,decrementer,exception,irq,lock,sbrk,system,sys_report,sys_state,timesupp,iosupport}.c
+    libogc/{argv,cache,decrementer,exception,getentropy,irq,lock,sbrk,system,sys_report,sys_state,timesupp,iosupport}.c
     libogc/{cache_asm,decrementer_handler,exception_handler,irq_handler,ogc_crt0,system_asm}.S
     # Threads
     libogc/{cond,lwp,lwp_heap,lwp_messages,lwp_mutex,lwp_objmgr,lwp_priority,lwp_queue}.c
@@ -341,7 +341,7 @@ run_test() {
     rm -rf "$sd_dir"
     mkdir -p "$sd_dir"
     msg "Running the test in Dolphin"
-    "$BUILD_DIR/dolphin-runner" --sd "$sd_dir" "$BUILD_DIR/test/test.dol" 'test 3600'
+    "$BUILD_DIR/dolphin-runner" --sd "$sd_dir" "$BUILD_DIR/test/test.dol" test-title 'test 3600'
     msg "All tests passed"
 }
 

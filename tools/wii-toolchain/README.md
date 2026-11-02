@@ -94,6 +94,10 @@ separately from main Cargo workspace.
 
 - `test/` is a Wii program that tests the toolchain, see below
 
+The runner's `test-title` command supplies synthetic title metadata for standalone
+ES signing tests. `./build.sh test` uses it to check entropy generation without a
+disc or NAND dump; normal programs keep their existing boot behavior.
+
 ## Test
 
 `./build.sh test` builds `test/` into the repository root's `target/wii-toolchain/test/` and runs
@@ -137,6 +141,13 @@ The libogc patches:
 - `0017` implements `gettimeofday` with the time base, which libogc starts at the RTC time.
   picolibc leaves it to the platform, without it `time()` fails and the FAT driver can't give
   files their modification time
+- `0018` adds `libogc/getentropy.c`, which supplies picolibc's `getentropy()` using
+  ChaCha20 seeded with hashed ES signatures, with key rotation after each request
+  and a fresh seed after at most 1 MiB of output. The initial request and reseeds
+  still require IOS signing. C programs use `<unistd.h>`, Rust programs use
+  `libogc-sys` or the workspace's `getrandom` replacement.
+  Its security depends on fresh, unpredictable IOS signing nonces; emulator
+  tests do not establish the quality of this entropy source on real hardware.
 
 The libdvm patch:
 

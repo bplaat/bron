@@ -1,0 +1,230 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Mon, 2 Nov 2026 19:00:00 +0100
+Subject: [PATCH] Implement getentropy with ES-seeded ChaCha20
+
+Provide picolibc getentropy from libogc using ChaCha20 seeded with
+SHA-256 of fresh ES signatures. Serialize requests, rotate the key
+after each request and reseed after at most 1 MiB of output.
+
+Keep the 256-byte POSIX limit, fail closed when IOS signing is
+unavailable and erase old seed and keystream buffers. Never fall
+back to a timer or libc PRNG. The seed still depends on the security
+of IOS signing randomness.
+---
+ libogc/getentropy.c | 206 ++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 206 insertions(+)
+ create mode 100644 libogc/getentropy.c
+
+diff --git a/libogc/getentropy.c b/libogc/getentropy.c
+new file mode 100644
+index 0000000..f5256e9
+--- /dev/null
++++ b/libogc/getentropy.c
+@@ -0,0 +1,206 @@
++/*
++ * Copyright (c) 2026 Bastiaan van der Plaat
++ *
++ * SPDX-License-Identifier: MIT
++ */
++
++#if defined(HW_RVL)
++
++#include <errno.h>
++#include <ogc/ipc.h>
++#include <stdint.h>
++#include <string.h>
++#include <sys/lock.h>
++#include <unistd.h>
++
++// Clear seed material and old keystream even when the compiler can see no reads.
++static void erase(void* data, size_t length) {
++    volatile uint8_t* bytes = data;
++    while (length-- > 0)
++        *bytes++ = 0;
++}
++
++// SHA-256 of one 60-byte ES signature supplies the generator's seed.
++static void hash_signature(const uint8_t signature[60], uint8_t digest[32]) {
++    static const uint32_t constants[64] = {
++        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
++        0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
++        0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
++        0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
++        0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
++        0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
++        0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
++        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
++    };
++    uint32_t state[8] = {0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
++                         0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19};
++    uint8_t padded[128] = {0};
++    memcpy(padded, signature, 60);
++    padded[60] = 0x80;
++    padded[126] = 1;
++    padded[127] = 0xe0;  // 60 * 8 bits, big endian
++
++    for (size_t block = 0; block < sizeof(padded); block += 64) {
++        uint32_t words[64];
++        for (size_t i = 0; i < 16; i++) {
++            const uint8_t* p = padded + block + i * 4;
++            words[i] = (uint32_t)p[0] << 24 | (uint32_t)p[1] << 16 | (uint32_t)p[2] << 8 | p[3];
++        }
++        for (size_t i = 16; i < 64; i++) {
++            uint32_t x = words[i - 15], y = words[i - 2];
++            uint32_t s0 = ((x >> 7) | (x << 25)) ^ ((x >> 18) | (x << 14)) ^ (x >> 3);
++            uint32_t s1 = ((y >> 17) | (y << 15)) ^ ((y >> 19) | (y << 13)) ^ (y >> 10);
++            words[i] = words[i - 16] + s0 + words[i - 7] + s1;
++        }
++        uint32_t a = state[0], b = state[1], c = state[2], d = state[3];
++        uint32_t e = state[4], f = state[5], g = state[6], h = state[7];
++        for (size_t i = 0; i < 64; i++) {
++            uint32_t s1 = ((e >> 6) | (e << 26)) ^ ((e >> 11) | (e << 21)) ^ ((e >> 25) | (e << 7));
++            uint32_t t1 = h + s1 + ((e & f) ^ (~e & g)) + constants[i] + words[i];
++            uint32_t s0 = ((a >> 2) | (a << 30)) ^ ((a >> 13) | (a << 19)) ^ ((a >> 22) | (a << 10));
++            uint32_t t2 = s0 + ((a & b) ^ (a & c) ^ (b & c));
++            h = g;
++            g = f;
++            f = e;
++            e = d + t1;
++            d = c;
++            c = b;
++            b = a;
++            a = t1 + t2;
++        }
++        state[0] += a;
++        state[1] += b;
++        state[2] += c;
++        state[3] += d;
++        state[4] += e;
++        state[5] += f;
++        state[6] += g;
++        state[7] += h;
++        erase(words, sizeof(words));
++    }
++    for (size_t i = 0; i < 32; i++)
++        digest[i] = state[i / 4] >> (24 - (i % 4) * 8);
++    erase(state, sizeof(state));
++    erase(padded, sizeof(padded));
++}
++
++// RFC 8439 ChaCha20 block function, with a 32-bit counter and 96-bit nonce.
++// Each request replaces the key, so the counter never approaches its limit.
++static uint32_t rotate_left(uint32_t value, unsigned count) {
++    return value << count | value >> (32 - count);
++}
++
++static void quarter_round(uint32_t* a, uint32_t* b, uint32_t* c, uint32_t* d) {
++    *a += *b;
++    *d = rotate_left(*d ^ *a, 16);
++    *c += *d;
++    *b = rotate_left(*b ^ *c, 12);
++    *a += *b;
++    *d = rotate_left(*d ^ *a, 8);
++    *c += *d;
++    *b = rotate_left(*b ^ *c, 7);
++}
++
++static void chacha_block(uint32_t state[16], uint8_t bytes[64]) {
++    uint32_t words[16];
++    memcpy(words, state, sizeof(words));
++    for (unsigned i = 0; i < 10; i++) {
++        quarter_round(&words[0], &words[4], &words[8], &words[12]);
++        quarter_round(&words[1], &words[5], &words[9], &words[13]);
++        quarter_round(&words[2], &words[6], &words[10], &words[14]);
++        quarter_round(&words[3], &words[7], &words[11], &words[15]);
++        quarter_round(&words[0], &words[5], &words[10], &words[15]);
++        quarter_round(&words[1], &words[6], &words[11], &words[12]);
++        quarter_round(&words[2], &words[7], &words[8], &words[13]);
++        quarter_round(&words[3], &words[4], &words[9], &words[14]);
++    }
++    for (size_t i = 0; i < 16; i++) {
++        uint32_t word = words[i] + state[i];
++        for (unsigned byte = 0; byte < 4; byte++)
++            bytes[i * 4 + byte] = word >> (byte * 8);
++    }
++    state[12]++;
++    erase(words, sizeof(words));
++}
++
++static uint32_t load_le32(const uint8_t* bytes) {
++    return (uint32_t)bytes[0] | (uint32_t)bytes[1] << 8 | (uint32_t)bytes[2] << 16 | (uint32_t)bytes[3] << 24;
++}
++
++static uint32_t generator[16] = {0x61707865, 0x3320646e, 0x79622d32, 0x6b206574};
++static size_t bytes_until_reseed;
++#define RESEED_BYTES (1024 * 1024)
++
++// Called under the libc lock. A failed reseed never falls back to old output.
++static int reseed(void) {
++    int fd = IOS_Open("/dev/es", 0);
++    if (fd < 0)
++        return -1;
++
++    // Use the ES_Sign ioctl directly: libogc's wrapper has a broken alignment
++    // check with clang. These buffers obey the IOS alignment requirements.
++    _Alignas(64) uint8_t message[32] = {0};
++    _Alignas(64) uint8_t signature[60] = {0};
++    _Alignas(64) uint8_t certificate[384] = {0};
++    _Alignas(32) ioctlv vectors[3] = {
++        {.data = message, .len = sizeof(message)},
++        {.data = signature, .len = sizeof(signature)},
++        {.data = certificate, .len = sizeof(certificate)},
++    };
++    int result = IOS_Ioctlv(fd, 0x30, 1, 2, vectors);
++    IOS_Close(fd);
++    if (result >= 0) {
++        uint8_t seed[32];
++        hash_signature(signature, seed);
++        // Retain previous key material while mixing in the fresh seed.
++        for (size_t i = 0; i < 8; i++)
++            generator[4 + i] ^= load_le32(seed + i * 4);
++        generator[12] = 0;
++        bytes_until_reseed = RESEED_BYTES;
++        erase(seed, sizeof(seed));
++    }
++    erase(signature, sizeof(signature));
++    erase(certificate, sizeof(certificate));
++    return result < 0 ? -1 : 0;
++}
++
++int getentropy(void* buffer, size_t length) {
++    if (length > 256) {
++        errno = EIO;
++        return -1;
++    }
++    if (length == 0)
++        return 0;
++    if (buffer == NULL) {
++        errno = EFAULT;
++        return -1;
++    }
++
++    __LIBC_LOCK();
++    if (bytes_until_reseed < length) {
++        bytes_until_reseed = 0;
++        if (reseed() < 0) {
++            __LIBC_UNLOCK();
++            errno = EIO;
++            return -1;
++        }
++    }
++    uint8_t block[64];
++    for (size_t offset = 0; offset < length; offset += sizeof(block)) {
++        chacha_block(generator, block);
++        size_t count = length - offset < sizeof(block) ? length - offset : sizeof(block);
++        memcpy((uint8_t*)buffer + offset, block, count);
++    }
++    // Reserve a separate block for the next key, never returning it to callers.
++    // Erase the previous key to limit recovery of earlier output after compromise.
++    chacha_block(generator, block);
++    for (size_t i = 0; i < 8; i++)
++        generator[4 + i] = load_le32(block + i * 4);
++    generator[12] = 0;
++    bytes_until_reseed -= length;
++    erase(block, sizeof(block));
++    __LIBC_UNLOCK();
++    return 0;
++}
++
++#endif
