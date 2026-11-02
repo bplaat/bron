@@ -434,8 +434,17 @@ impl Xtask {
         println!("Running Wii toolchain tests...");
         run(Command::new("bash").args(["tools/wii-toolchain/build.sh", "test"]))?;
 
-        println!("Building the Wii U toolchain...");
-        run(Command::new("bash").arg("tools/wiiu-toolchain/build.sh"))?;
+        println!("Running Wii U toolchain tests...");
+        run(Command::new("bash").args(["tools/wiiu-toolchain/build.sh", "test"]))?;
+
+        println!("Building Wii examples...");
+        for example in ["triangles", "cube", "blocks", "canvas"] {
+            run(Command::new("make").args(["-C", &format!("examples/wii/{example}/c")]))?;
+            run(Command::new("cargo")
+                .args(["build", "--release", "--locked"])
+                .current_dir(format!("examples/wii/{example}/rust"))
+                .env_remove("RUSTUP_TOOLCHAIN"))?;
+        }
 
         println!("Building Wii U examples...");
         for example in ["triangle", "cube", "blocks"] {
