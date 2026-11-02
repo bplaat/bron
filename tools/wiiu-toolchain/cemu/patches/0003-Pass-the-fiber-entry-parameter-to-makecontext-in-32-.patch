@@ -1,0 +1,41 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Mon, 2 Nov 2026 15:03:40 +0100
+Subject: [PATCH] Pass the fiber entry parameter to makecontext in 32-bit
+ halves
+
+makecontext passes int arguments, a 64-bit pointer only survives as one
+by chance of the calling convention. On arm64 macOS it's cut off, so
+the first fiber crashed.
+---
+ src/util/Fiber/FiberUnix.cpp | 10 +++++++++-
+ 1 file changed, 9 insertions(+), 1 deletion(-)
+
+diff --git a/src/util/Fiber/FiberUnix.cpp b/src/util/Fiber/FiberUnix.cpp
+index 0d52706..63e6888 100644
+--- a/src/util/Fiber/FiberUnix.cpp
++++ b/src/util/Fiber/FiberUnix.cpp
+@@ -4,6 +4,13 @@
+ 
+ thread_local Fiber* sCurrentFiber{};
+ 
++// makecontext passes int arguments, so the entry point and its parameter go in 32-bit halves
++static void FiberStart(unsigned int entryHigh, unsigned int entryLow, unsigned int paramHigh, unsigned int paramLow)
++{
++	auto entry = (void(*)(void*))(((uintptr_t)entryHigh << 32) | entryLow);
++	entry((void*)(((uintptr_t)paramHigh << 32) | paramLow));
++}
++
+ Fiber::Fiber(void(*FiberEntryPoint)(void* userParam), void* userParam, void* privateData) : m_privateData(privateData)
+ {
+ 	ucontext_t* ctx = (ucontext_t*)malloc(sizeof(ucontext_t));
+@@ -15,7 +22,8 @@ Fiber::Fiber(void(*FiberEntryPoint)(void* userParam), void* userParam, void* pri
+ 	ctx->uc_stack.ss_sp = m_stackPtr;
+ 	ctx->uc_stack.ss_size = stackSize;
+ 	ctx->uc_link = &ctx[0];
+-	makecontext(ctx, (void(*)())FiberEntryPoint, 1, userParam);
++	makecontext(ctx, (void(*)())FiberStart, 4, (unsigned int)((uintptr_t)FiberEntryPoint >> 32), (unsigned int)(uintptr_t)FiberEntryPoint,
++		(unsigned int)((uintptr_t)userParam >> 32), (unsigned int)(uintptr_t)userParam);
+ 	this->m_implData = (void*)ctx;
+ }
+ 

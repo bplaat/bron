@@ -1,0 +1,82 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Mon, 2 Nov 2026 15:03:41 +0100
+Subject: [PATCH] Give host files their modification time
+
+FSAGetStat and FSAGetStatFile left the created and modified times at
+zero, 1980. Host files report the time they were last written.
+---
+ src/Cafe/Filesystem/fsc.h               | 1 +
+ src/Cafe/Filesystem/fscDeviceHostFS.cpp | 9 +++++++++
+ src/Cafe/Filesystem/fscDeviceHostFS.h   | 2 +-
+ src/Cafe/IOSU/fsa/iosu_fsa.cpp          | 4 ++++
+ 4 files changed, 15 insertions(+), 1 deletion(-)
+
+diff --git a/src/Cafe/Filesystem/fsc.h b/src/Cafe/Filesystem/fsc.h
+index aa98263..52b1f2c 100644
+--- a/src/Cafe/Filesystem/fsc.h
++++ b/src/Cafe/Filesystem/fsc.h
+@@ -8,6 +8,7 @@ struct FSCVirtualFile;
+ 
+ #define FSC_QUERY_SIZE					(1) // file size, 0 for directories
+ #define FSC_QUERY_WRITEABLE				(2) // non-zero if file is writeable, else 0
++#define FSC_QUERY_MODIFIED_TIME			(3) // last modification in seconds since 1970, 0 if unknown
+ 
+ enum class FSC_ACCESS_FLAG : uint8
+ {
+diff --git a/src/Cafe/Filesystem/fscDeviceHostFS.cpp b/src/Cafe/Filesystem/fscDeviceHostFS.cpp
+index 6f7c461..d4e0d83 100644
+--- a/src/Cafe/Filesystem/fscDeviceHostFS.cpp
++++ b/src/Cafe/Filesystem/fscDeviceHostFS.cpp
+@@ -35,6 +35,14 @@ uint32 FSCVirtualFile_Host::fscDeviceHostFSFile_getFileSize()
+ 
+ uint64 FSCVirtualFile_Host::fscQueryValueU64(uint32 id)
+ {
++	if (id == FSC_QUERY_MODIFIED_TIME)
++	{
++		std::error_code ec;
++		auto time = fs::last_write_time(*m_path, ec);
++		if (ec)
++			return 0;
++		return (uint64)std::chrono::duration_cast<std::chrono::seconds>(std::chrono::file_clock::to_sys(time).time_since_epoch()).count();
++	}
+ 	if (m_type == FSC_TYPE_FILE)
+ 	{
+ 		if (id == FSC_QUERY_SIZE)
+@@ -197,6 +205,7 @@ FSCVirtualFile* FSCVirtualFile_Host::OpenFile(const fs::path& path, FSC_ACCESS_F
+ 			vf->m_fs = fs;
+ 			vf->m_isWritable = writeAccessRequested;
+ 			vf->m_fileSize = fs->GetSize();
++			vf->m_path.reset(new std::filesystem::path(path));
+ 			fscStatus = FSC_STATUS_OK;
+ 			return vf;
+ 		}
+diff --git a/src/Cafe/Filesystem/fscDeviceHostFS.h b/src/Cafe/Filesystem/fscDeviceHostFS.h
+index 7121594..e267b91 100644
+--- a/src/Cafe/Filesystem/fscDeviceHostFS.h
++++ b/src/Cafe/Filesystem/fscDeviceHostFS.h
+@@ -28,7 +28,7 @@ private:
+ 	uint64 m_seek{ 0 };
+ 	uint64 m_fileSize{ 0 };
+ 	bool m_isWritable{ false };
+-	// directory
++	// file or directory
+ 	std::unique_ptr<std::filesystem::path> m_path{};
+ 	std::unique_ptr<std::filesystem::directory_iterator> m_dirIterator{};
+ };
+\ No newline at end of file
+diff --git a/src/Cafe/IOSU/fsa/iosu_fsa.cpp b/src/Cafe/IOSU/fsa/iosu_fsa.cpp
+index 95ae924..ea9d7f0 100644
+--- a/src/Cafe/IOSU/fsa/iosu_fsa.cpp
++++ b/src/Cafe/IOSU/fsa/iosu_fsa.cpp
+@@ -392,6 +392,10 @@ namespace iosu
+ 			}
+ 			fsStatOut->permissions = 0x777; // format matches unix (fstat) permissions?
+ 			fsStatOut->flag = statFlag;
++			// FSTime counts microseconds since 1980
++			uint64 modifiedTime = fscFile->fscQueryValueU64(FSC_QUERY_MODIFIED_TIME);
++			if (modifiedTime >= 315532800)
++				fsStatOut->createdTime = fsStatOut->modifiedTime = (modifiedTime - 315532800) * 1000000;
+ 			return true;
+ 		}
+ 

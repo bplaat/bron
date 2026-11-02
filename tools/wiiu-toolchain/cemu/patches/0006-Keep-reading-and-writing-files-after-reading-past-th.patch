@@ -1,0 +1,49 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Mon, 2 Nov 2026 15:03:41 +0100
+Subject: [PATCH] Keep reading and writing files after reading past their end
+
+Reading after the end of a host file underflowed the number of bytes
+left and read anyway. That set the end of file state of the Unix file
+stream, which nothing cleared, so every later read and write of the
+file did nothing.
+---
+ src/Cafe/Filesystem/fscDeviceHostFS.cpp | 3 +++
+ src/Common/unix/FileStream_unix.cpp     | 3 +++
+ 2 files changed, 6 insertions(+)
+
+diff --git a/src/Cafe/Filesystem/fscDeviceHostFS.cpp b/src/Cafe/Filesystem/fscDeviceHostFS.cpp
+index 85a04af..31def18 100644
+--- a/src/Cafe/Filesystem/fscDeviceHostFS.cpp
++++ b/src/Cafe/Filesystem/fscDeviceHostFS.cpp
+@@ -79,6 +79,9 @@ uint32 FSCVirtualFile_Host::fscReadData(void* buffer, uint32 size)
+ 		cemu_assert_suspicious();
+ 		return 0;
+ 	}
++	// After the end of the file there is nothing to read
++	if (m_seek >= m_fileSize)
++		return 0;
+ 	uint32 bytesLeft = (uint32)(m_fileSize - m_seek);
+ 	bytesLeft = std::min(bytesLeft, 0x7FFFFFFFu);
+ 	sint32 bytesToRead = std::min(bytesLeft, size);
+diff --git a/src/Common/unix/FileStream_unix.cpp b/src/Common/unix/FileStream_unix.cpp
+index d05b873..cbbdafd 100644
+--- a/src/Common/unix/FileStream_unix.cpp
++++ b/src/Common/unix/FileStream_unix.cpp
+@@ -84,6 +84,7 @@ std::optional<std::vector<uint8>> FileStream::LoadIntoMemory(const fs::path& pat
+ void FileStream::SetPosition(uint64 pos)
+ {
+ 	cemu_assert(m_isValid);
++	m_fileStream.clear();
+ 	if (m_prevOperationWasWrite)
+ 		m_fileStream.seekp((std::streampos)pos);
+ 	else
+@@ -234,6 +235,8 @@ FileStream::FileStream(const fs::path& path, bool isOpen, bool isWriteable)
+ 
+ void FileStream::SyncReadWriteSeek(bool nextOpIsWrite)
+ {
++	// A read that reached the end leaves the stream failing every later operation
++	m_fileStream.clear();
+ 	// nextOpIsWrite == false -> read. Otherwise write
+ 	if (nextOpIsWrite == m_prevOperationWasWrite)
+ 		return;

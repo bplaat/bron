@@ -1,0 +1,24 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Mon, 2 Nov 2026 15:03:40 +0100
+Subject: [PATCH] Stop firing alarms when none are left
+
+After the last alarm fired the loop looked at the first alarm of the
+empty list, which crashes with libc++, like on the first OSSleepTicks.
+---
+ src/Cafe/OS/libs/coreinit/coreinit_Alarm.cpp | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/Cafe/OS/libs/coreinit/coreinit_Alarm.cpp b/src/Cafe/OS/libs/coreinit/coreinit_Alarm.cpp
+index ae2d1e6..1e2b051 100644
+--- a/src/Cafe/OS/libs/coreinit/coreinit_Alarm.cpp
++++ b/src/Cafe/OS/libs/coreinit/coreinit_Alarm.cpp
+@@ -83,7 +83,7 @@ namespace coreinit
+ 			}
+ #endif
+ 			// debug end
+-			while (true)
++			while (!g_activeAlarmList.empty())
+ 			{
+ 				auto firstAlarm = g_activeAlarmList.begin();
+ 				if (currentTick >= (*firstAlarm)->m_nextFire)

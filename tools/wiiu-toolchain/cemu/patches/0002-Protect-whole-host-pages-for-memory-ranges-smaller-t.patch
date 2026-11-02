@@ -1,0 +1,28 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Mon, 2 Nov 2026 15:03:40 +0100
+Subject: [PATCH] Protect whole host pages for memory ranges smaller than a
+ page
+
+Hosts with 16 KiB pages, like Apple silicon Macs, refuse to protect the
+4 KiB per-core range at 0xFFFFF000, so Cemu exited at startup.
+---
+ src/util/MemMapper/MemMapperUnix.cpp | 5 ++++-
+ 1 file changed, 4 insertions(+), 1 deletion(-)
+
+diff --git a/src/util/MemMapper/MemMapperUnix.cpp b/src/util/MemMapper/MemMapperUnix.cpp
+index 0ade291..0de11e1 100644
+--- a/src/util/MemMapper/MemMapperUnix.cpp
++++ b/src/util/MemMapper/MemMapperUnix.cpp
+@@ -45,7 +45,10 @@ namespace MemMapper
+ 		void* r;
+ 		if(fromReservation)
+ 		{
+-			if( mprotect(baseAddr, size, GetProt(permissionFlags)) == 0 )
++			// Ranges smaller than a host page, like on 16 KiB page hosts, protect their whole pages
++			uintptr_t start = (uintptr_t)baseAddr & ~(sPageSize - 1);
++			size_t length = (((uintptr_t)baseAddr + size + sPageSize - 1) & ~(sPageSize - 1)) - start;
++			if( mprotect((void*)start, length, GetProt(permissionFlags)) == 0 )
+                 r = baseAddr;
+ 			else
+                 r = nullptr;

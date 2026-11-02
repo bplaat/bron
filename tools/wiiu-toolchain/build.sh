@@ -12,7 +12,7 @@
 #   (none)          fetch, patch and build
 #   export-patches  write the commits in ../../target/wiiu-toolchain/<name>/ back to <name>/patches/
 #   test            build test/ and run it in cemu-runner
-#   cemu            build Cemu's interpreter with cemu/patches/ and cemu/runner.cpp to
+#   cemu            build Cemu's interpreter and Cafe OS with cemu/patches/ and cemu/runner.cpp to
 #                   ../../target/wiiu-toolchain/cemu-runner
 #   clean           remove ../../target/wiiu-toolchain/
 set -euo pipefail
@@ -37,10 +37,17 @@ llvm_commit='0d261d1ca552c95a8f007e061c787ac7132fbcbc'
 decaf_url='https://github.com/decaf-emu/decaf-emu.git'
 decaf_version='master'
 decaf_commit='e6c528a20a41c34e0f9eb91dd3da40f119db2dee'
-# Cemu for cemu/runner.cpp, cloned by the cemu and test commands, only its interpreter is built
+# Cemu, fmt and pugixml for cemu/runner.cpp, cloned by the cemu and test commands, only Cemu's
+# interpreter and Cafe OS are built
 cemu_url='https://github.com/cemu-project/Cemu.git'
 cemu_version='v2.6'
 cemu_commit='a6fb0a48eb437a8a41c13b782ac8ae0433bf8f98'
+fmt_url='https://github.com/fmtlib/fmt.git'
+fmt_version='12.0.0'
+fmt_commit='e424e3f2e607da02742f73db84873b8084fc714c'
+pugixml_url='https://github.com/zeux/pugixml.git'
+pugixml_version='v1.15'
+pugixml_commit='ee86beb30e4973f5feffe3ce63bfa4fbadf72f38'
 
 TOOLCHAIN_DIR="$PWD"
 ROOT_DIR="$(cd ../.. && pwd)"
@@ -51,6 +58,8 @@ PICOLIBC_DIR="$BUILD_DIR/picolibc"
 LIBOGC_DIR="$BUILD_DIR/libogc"
 COMPILER_RT_DIR="$BUILD_DIR/compiler-rt"
 CEMU_DIR="$BUILD_DIR/cemu"
+FMT_DIR="$BUILD_DIR/fmt"
+PUGIXML_DIR="$BUILD_DIR/pugixml"
 DECAF_DIR="$BUILD_DIR/decaf-emu"
 SYSROOT="$BUILD_DIR/sysroot"
 
@@ -100,6 +109,18 @@ LATTE_ASSEMBLER_SOURCES=(
     tools/latte-assembler/src/{assembler_instructions,assembler_latte,assembler_parse,assembler_tex}.cpp
     tools/latte-assembler/src/{gfd,gfd_psh_comment_parser,gfd_vsh_comment_parser,main}.cpp
     src/libgfd/src/{gfd_read,gfd_write}.cpp
+)
+
+# The Cemu sources cemu/runner.cpp runs programs with besides coreinit: the interpreter, the RPL
+# loader, the FSA of IOSU on host folders, memory and the scheduler's fibers, without the GPU,
+# audio, input, JIT or GUI
+CEMU_SOURCES=(
+    Cafe/HW/Espresso/Interpreter/PPCInterpreter{FPU,HLE,Impl,Main,OPC,PS}.cpp
+    Cafe/HW/Espresso/{PPCScheduler,PPCTimer}.cpp Cafe/HW/Espresso/Debugger/GDBBreakpoints.cpp Cafe/HW/MMU/MMU.cpp
+    Cafe/OS/common/OSCommon.cpp Cafe/OS/RPL/{elf,rpl,rpl_debug_symbols,rpl_symbol_storage}.cpp
+    Cafe/IOSU/fsa/iosu_fsa.cpp Cafe/IOSU/kernel/iosu_kernel.cpp Cafe/Filesystem/{fsc,fscDeviceHostFS,fscDeviceRedirect}.cpp
+    Common/{SysAllocator,cpu_features}.cpp Common/unix/{FileStream_unix,platform}.cpp util/Fiber/FiberUnix.cpp
+    util/MemMapper/MemMapperUnix.cpp util/highresolutiontimer/HighResolutionTimer.cpp util/crypto/crc32.cpp
 )
 
 msg() { printf '\033[1;34m[toolchain]\033[0m %s\n' "$*"; }
@@ -274,6 +295,39 @@ build_archive() {
     "${LLVM}llvm-ar" rcs "$library" "${objects[@]}"
 }
 
+# Compiles host C++ sources, as many at the same time as there are CPUs, and links them to a program
+# in the build directory, usage: build_host <program> <flags>... -- <sources>... -- <link flags>...
+build_host() {
+    local program="$1" objects_dir="$BUILD_DIR/objects/$1" jobs flags=() objects=() pids=() source object pid failed=0
+    jobs=$(getconf _NPROCESSORS_ONLN)
+    shift
+    while [ "$1" != -- ]; do
+        flags+=("$1")
+        shift
+    done
+    shift
+    msg "Building $program"
+    mkdir -p "$objects_dir"
+    while [ "$1" != -- ]; do
+        source="$1"
+        shift
+        object="$objects_dir/$(basename "$(dirname "$source")")_$(basename "$source").o"
+        c++ "${flags[@]}" -c "$source" -o "$object" &
+        pids+=($!)
+        objects+=("$object")
+        # Waits for a batch to finish before starting the next
+        if [ "${#pids[@]}" -ge "$jobs" ] || [ "$1" = -- ]; then
+            for pid in "${pids[@]}"; do
+                wait "$pid" || failed=1
+            done
+            pids=()
+        fi
+    done
+    shift
+    [ "$failed" = 0 ] || die "Failed to compile $program"
+    c++ "${objects[@]}" "$@" -o "$BUILD_DIR/$program" || die "Failed to link $program"
+}
+
 # rplimportgen writes the import stubs of every system library in wut's cafe/*.def files, the
 # linker script includes imports.ld, which puts each library's stubs in its own import section
 build_imports() {
@@ -313,7 +367,7 @@ build_libraries() {
 # elf2rpl and rplimportgen from wut-tools, latte-assembler from decaf-emu and our gtxconv/ and
 # wuhbtool/ run on the host
 build_tools() {
-    local source objects_dir="$BUILD_DIR/objects/latte-assembler" pids=() objects=() pid failed=0 tool
+    local objects_dir="$BUILD_DIR/objects/latte-assembler" tool
     for tool in gtxconv wuhbtool; do
         outdated "$BUILD_DIR/$tool" "$TOOLCHAIN_DIR/$tool" "$ROOT_DIR/lib/graphics/image" "$ROOT_DIR/lib/data" ||
             continue
@@ -337,54 +391,49 @@ build_tools() {
             -o "$BUILD_DIR/rplimportgen" || die "Failed to build rplimportgen"
     fi
     outdated "$BUILD_DIR/latte-assembler" "$DECAF_DIR/.patched" "$DECAF_DIR/tools" "$TOOLCHAIN_DIR/build.sh" || return 0
-    msg "Building latte-assembler"
+    # The assembler parses with this PEG grammar, upstream CMake generates the same header
     rm -rf "$objects_dir"
     mkdir -p "$objects_dir"
-    # The assembler parses with this PEG grammar, upstream CMake generates the same header
     {
         printf 'const char *LatteGrammar = R"(\n'
         cat "$DECAF_DIR/tools/latte-assembler/resources/grammar.txt"
         printf ')";\n'
     } > "$objects_dir/grammar.h"
-    for source in "${LATTE_ASSEMBLER_SOURCES[@]}"; do
-        c++ -std=c++17 -O2 -w -DFMT_HEADER_ONLY -I"$objects_dir" -I"$DECAF_DIR/src" -I"$DECAF_DIR/src/libgpu" -I"$DECAF_DIR/src/libgfd" \
-            -I"$DECAF_DIR/tools/latte-assembler/src" -I"$DECAF_DIR/libraries/fmt/include" \
-            -I"$DECAF_DIR/libraries/excmd/src" -I"$DECAF_DIR/libraries/cpp-peglib" \
-            -I"$DECAF_DIR/libraries/cnl/include" \
-            -c "$DECAF_DIR/$source" -o "$objects_dir/$(basename "$source").o" &
-        pids+=($!)
-        objects+=("$objects_dir/$(basename "$source").o")
-    done
-    for pid in "${pids[@]}"; do
-        wait "$pid" || failed=1
-    done
-    [ "$failed" = 0 ] || die "Failed to compile latte-assembler"
-    c++ "${objects[@]}" -o "$BUILD_DIR/latte-assembler" || die "Failed to link latte-assembler"
+    build_host latte-assembler -std=c++17 -O2 -w -DFMT_HEADER_ONLY -I"$objects_dir" -I"$DECAF_DIR/src" \
+        -I"$DECAF_DIR/src/libgpu" -I"$DECAF_DIR/src/libgfd" -I"$DECAF_DIR/tools/latte-assembler/src" \
+        -I"$DECAF_DIR/libraries/fmt/include" -I"$DECAF_DIR/libraries/excmd/src" -I"$DECAF_DIR/libraries/cpp-peglib" \
+        -I"$DECAF_DIR/libraries/cnl/include" -- "${LATTE_ASSEMBLER_SOURCES[@]/#/$DECAF_DIR/}" --
 }
 
-# Builds cemu/runner.cpp on Cemu's Espresso interpreter, without its JIT, GPU, audio or frontend
+# Builds cemu/runner.cpp with Cemu's interpreter and Cafe OS. Cemu's headers include boost, glm
+# and wxWidgets for things the OS emulation doesn't use, cemu/shim/ has the few parts it does.
+# macOS only declares the ucontext functions of Cemu's fibers for X/Open sources.
 build_cemu() {
-    local sources=(PPCInterpreterImpl.cpp PPCInterpreterOPC.cpp PPCInterpreterFPU.cpp PPCInterpreterPS.cpp)
-    clone "$cemu_url" "$cemu_version" "$cemu_commit" "$CEMU_DIR" /src/Cafe/HW/Espresso/ /src/Cafe/HW/MMU/ /src/Common/
+    local flags=()
+    clone "$cemu_url" "$cemu_version" "$cemu_commit" "$CEMU_DIR" /src/
+    clone "$fmt_url" "$fmt_version" "$fmt_commit" "$FMT_DIR" /include/
+    clone "$pugixml_url" "$pugixml_version" "$pugixml_commit" "$PUGIXML_DIR" /src/
     patch cemu "$cemu_commit"
-    outdated "$BUILD_DIR/cemu-runner" "$TOOLCHAIN_DIR/cemu" "$CEMU_DIR/.patched" "$TOOLCHAIN_DIR/build.sh" || return 0
-    msg "Building cemu-runner"
-    c++ -std=c++20 -O2 -fno-strict-aliasing -Wno-multichar -Wno-invalid-offsetof \
-        -DCEMU_DEBUG_ASSERT -I"$CEMU_DIR/src" -I"$CEMU_DIR/src/Common" \
-        -include "$TOOLCHAIN_DIR/cemu/interpreter.h" "$TOOLCHAIN_DIR/cemu/runner.cpp" \
-        "${sources[@]/#/$CEMU_DIR/src/Cafe/HW/Espresso/Interpreter/}" \
-        -lz -o "$BUILD_DIR/cemu-runner" > "$BUILD_DIR/cemu-runner.log" 2>&1 ||
-        { tail -n 50 "$BUILD_DIR/cemu-runner.log" >&2; die "Failed to build cemu-runner"; }
+    outdated "$BUILD_DIR/cemu-runner" "$TOOLCHAIN_DIR/cemu" "$CEMU_DIR"/{.patched,src} "$TOOLCHAIN_DIR/build.sh" || return 0
+    [ "$(uname)" = Darwin ] && flags+=(-D_XOPEN_SOURCE)
+    build_host cemu-runner -std=c++20 -O2 -w -fno-strict-aliasing -DFMT_HEADER_ONLY -DEMULATOR_VERSION_MAJOR=2 \
+        -DEMULATOR_VERSION_MINOR=6 -DEMULATOR_VERSION_PATCH=0 -DEMULATOR_HASH="$cemu_version" ${flags[@]+"${flags[@]}"} \
+        -I"$CEMU_DIR/src" -I"$CEMU_DIR/src/Cafe" -I"$TOOLCHAIN_DIR/cemu/shim" -I"$FMT_DIR/include" \
+        -I"$PUGIXML_DIR/src" -include "$CEMU_DIR/src/Common/precompiled.h" -- \
+        "${CEMU_SOURCES[@]/#/$CEMU_DIR/src/}" "$CEMU_DIR"/src/Cafe/OS/libs/coreinit/*.cpp \
+        "$PUGIXML_DIR/src/pugixml.cpp" "$TOOLCHAIN_DIR/cemu/runner.cpp" -- -lz -pthread
 }
 
-# Builds test/ with the toolchain and runs it in cemu-runner, the test reports its results with
-# OSReport, the runner fails when a check failed or the program didn't finish. Only build_cemu
-# locks, make runs the toolchain build itself.
+# Builds test/ with the toolchain and runs it in cemu-runner with a new user folder, which has the
+# SD card. The test reports its results with OSReport, the runner fails when a check failed or the
+# program didn't finish. Only build_cemu locks, make runs the toolchain build itself.
 run_test() {
+    local user="$BUILD_DIR/test/cemu"
     (lock; build_cemu)
     make -C "$TOOLCHAIN_DIR/test" --no-print-directory
     msg "Running the test in cemu-runner"
-    "$BUILD_DIR/cemu-runner" "$BUILD_DIR/test/test.rpx" 'test 100000000'
+    rm -rf "$user"
+    "$BUILD_DIR/cemu-runner" "$BUILD_DIR/test/test.rpx" test 60 "$user"
     msg "All tests passed"
 }
 

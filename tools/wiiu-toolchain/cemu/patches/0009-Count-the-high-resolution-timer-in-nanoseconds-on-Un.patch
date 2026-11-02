@@ -1,0 +1,28 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Mon, 2 Nov 2026 15:08:04 +0100
+Subject: [PATCH] Count the high resolution timer in nanoseconds on Unix
+
+now() returns nanoseconds, but the frequency came from the resolution of
+the clock. macOS reports 42 ns for the 24 MHz counter of Apple silicon,
+so the calibrated PPC clock ran 42 times too fast.
+---
+ src/util/highresolutiontimer/HighResolutionTimer.cpp | 6 +++---
+ 1 file changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/src/util/highresolutiontimer/HighResolutionTimer.cpp b/src/util/highresolutiontimer/HighResolutionTimer.cpp
+index 67ffa34..d1cdffc 100644
+--- a/src/util/highresolutiontimer/HighResolutionTimer.cpp
++++ b/src/util/highresolutiontimer/HighResolutionTimer.cpp
+@@ -28,8 +28,8 @@ uint64 HighResolutionTimer::m_freq = []() -> uint64 {
+ 	QueryPerformanceFrequency(&freq);
+ 	return (uint64)(freq.QuadPart);
+ #else
+-    timespec pc;
+-    clock_getres(CLOCK_MONOTONIC_RAW, &pc);
+-    return (uint64)1000000000 / (uint64)pc.tv_nsec;
++	// now() counts nanoseconds, whatever the resolution of the clock. macOS reports 42 ns for the
++	// 24 MHz counter of Apple silicon, which made the frequency 42 times too low.
++	return (uint64)1000000000;
+ #endif
+ }();

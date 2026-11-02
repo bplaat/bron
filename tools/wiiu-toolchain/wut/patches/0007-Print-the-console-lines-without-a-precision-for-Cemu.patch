@@ -1,0 +1,45 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Mon, 2 Nov 2026 14:49:59 +0100
+Subject: [PATCH] Print the console lines without a precision for Cemu
+
+Cemu's OSReport doesn't support the * precision, so "%.*s" printed
+nothing or garbage there. The console line ends with a zero and prints
+with "%s".
+---
+ libraries/wutpicolibc/wut_picolibc.c | 8 +++++---
+ 1 file changed, 5 insertions(+), 3 deletions(-)
+
+diff --git a/libraries/wutpicolibc/wut_picolibc.c b/libraries/wutpicolibc/wut_picolibc.c
+index 2c0779e..a565d68 100644
+--- a/libraries/wutpicolibc/wut_picolibc.c
++++ b/libraries/wutpicolibc/wut_picolibc.c
+@@ -130,7 +130,7 @@ realloc(void *pointer, size_t size)
+ 
+ // OSReport prints whole lines, so the streams buffer until a newline or a
+ // full buffer
+-static char sLine[256];
++static char sLine[257];
+ static size_t sLineLength;
+ 
+ static int
+@@ -138,7 +138,9 @@ consoleFlush(FILE *file)
+ {
+    (void)file;
+    if (sLineLength > 0) {
+-      OSReport("%.*s", (int)sLineLength, sLine);
++      // Cemu's OSReport doesn't take a precision, so the line ends with a zero
++      sLine[sLineLength] = '\0';
++      OSReport("%s", sLine);
+       sLineLength = 0;
+    }
+    return 0;
+@@ -148,7 +150,7 @@ static int
+ consolePut(char c, FILE *file)
+ {
+    sLine[sLineLength++] = c;
+-   if (c == '\n' || sLineLength == sizeof(sLine)) {
++   if (c == '\n' || sLineLength == sizeof(sLine) - 1) {
+       consoleFlush(file);
+    }
+    return (unsigned char)c;

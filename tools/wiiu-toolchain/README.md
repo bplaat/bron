@@ -70,12 +70,12 @@ The toolchain and the examples build separately from the main Cargo workspace.
   wrapper for `llvm-ar`. Rust projects with C sources set `TARGET_CC` and `TARGET_AR` to these
   scripts in `.cargo/config.toml`
 - `run.sh` converts a program to an `.rpx` and starts it in Cemu, extra arguments go to Cemu
-- `cemu/` builds a CPU-only runner from the Espresso interpreter of
-  [Cemu v2.6](https://github.com/cemu-project/Cemu/tree/v2.6) with `cemu/patches/`. Its build
-  links no JIT, graphics, audio or window code and allocates no executable host memory. Its
-  frontend loads `.rpx` files like Cafe OS: it inflates their zlib sections, applies their
-  relocations and points their imports at a small single-threaded OS bridge for heap allocation,
-  OSReport, the clock and cache invalidation. Unsupported OS calls fail, so it doesn't run the
+- `cemu/` builds a headless runner from [Cemu v2.6](https://github.com/cemu-project/Cemu/tree/v2.6)
+  with `cemu/patches/`: Cemu's own interpreter, RPL loader, coreinit (threads, scheduler, memory,
+  time and the FSA file functions) and the FSA of IOSU on a host folder as the SD card, without
+  the GPU, audio, input, JIT or GUI. `cemu/runner.cpp` replaces Cemu's system startup and stubs
+  the rest of Cemu, `cemu/shim/` has the few parts of boost, glm, wxWidgets, X11, GTK and curl
+  that Cemu's headers need. The other system libraries aren't there, so it doesn't run the
   graphical examples, use the normal Cemu for those
 - `test/` is the Wii U program run by `./build.sh test`
 
@@ -83,7 +83,8 @@ The toolchain and the examples build separately from the main Cargo workspace.
 
 Install a C++20 compiler and zlib in addition to the toolchain's normal dependencies.
 Run `./build.sh test` to build the toolchain, `cemu-runner` and the test program in
-`../../target/wiiu-toolchain/`, then run the guest suite.
+`../../target/wiiu-toolchain/`, then run the guest suite with a new user folder
+`../../target/wiiu-toolchain/test/cemu/`, whose `sdcard/` is the SD card.
 `cargo xtask check-others` runs this suite and builds both the Wii and Wii U C and Rust examples.
 
 The guest suite checks constructors, finalizers, memory functions at different alignments,
@@ -94,21 +95,35 @@ mipmaps and in-place pointers. It assembles the cube example's shaders with latt
 and checks GFD relocation, attribute names, uniforms and samplers. It tests CPU-side asset
 loading; shader execution and rendered pixels need the normal emulator.
 
-The runner writes guest output to stderr. `test` waits for an exact `DONE <n> failed` line and
-fails for guest failures, an early exit or an exhausted instruction budget. `run` waits for
-exit and returns the guest's status. Budgets count interpreter instructions and OS calls,
-without a frame clock or GPU. Every invocation starts fresh, with the clock at 2026-01-01 UTC.
+The runner writes guest output to stderr. `test` waits for a `DONE <n> failed` line and fails for
+guest failures, an early exit or when the program doesn't finish in time. `run` waits for the
+exit and returns the guest's status. Programs run in real time on Cemu's scheduler with one
+core, the clock starts at the host's time. Cemu calibrates the clock against the host clock
+first, which takes three seconds. The defaults are `run`, 60 seconds and `cemu-runner` in the
+temporary folder as the user folder, set `CEMU_RUNNER_LOG` to also print Cemu's log.
 
 ```sh
-../../target/wiiu-toolchain/cemu-runner ../../target/wiiu-toolchain/test/test.rpx 'test 100000000'
-../../target/wiiu-toolchain/cemu-runner ../../target/wiiu-toolchain/test/test.rpx 'run 100000000'
+../../target/wiiu-toolchain/cemu-runner ../../target/wiiu-toolchain/test/test.rpx test 60 ../../target/wiiu-toolchain/test/cemu
+../../target/wiiu-toolchain/cemu-runner ../../target/wiiu-toolchain/test/test.rpx run
 ```
 
-Only Cemu's interpreter sources are checked out, without its submodules. Its patches work like
-the other repos, `./build.sh export-patches` also writes `../../target/wiiu-toolchain/cemu/`
-back to `cemu/patches/` once it is there. The first patch removes the debugger, JIT and graphics
-hooks from the interpreter; the second implements `crnand`, which clang emits in picolibc's
-floating-point formatting.
+Only Cemu's `src/` is checked out, without its submodules, with [fmt](https://github.com/fmtlib/fmt)
+12.0.0 and [pugixml](https://github.com/zeux/pugixml) v1.15 next to it. Its patches work like the
+other repos, `./build.sh export-patches` also writes `../../target/wiiu-toolchain/cemu/` back to
+`cemu/patches/` once it is there:
+
+- `0001` implements `crnand`, which clang emits in picolibc's floating-point formatting
+- `0002` and `0003` make Cemu run on Apple silicon Macs: it protects whole 16 KiB host pages for
+  smaller memory ranges and passes the fiber entry parameter to `makecontext` in 32-bit halves
+- `0004` stops firing alarms when none are left, which crashed with libc++ on the first sleep
+- `0005` truncates host files on Unix, `FSATruncateFile` was a debug break
+- `0006` keeps files working after reading past their end, which left the Unix file stream failing
+  every later read and write
+- `0007` fails to remove a host directory that isn't empty, which reported success
+- `0008` gives host files their modification time, `FSAGetStat` returned 1980
+- `0009` counts the high resolution timer in nanoseconds on Unix, on macOS the clock ran 42 times
+  too fast
+- `0010` fuses the multiply-add instructions on every host, on x86-64 they rounded twice
 
 ## Shaders
 
@@ -145,6 +160,8 @@ The wut patches:
   so picolibc is built without locks
 - `0002` adds `GFDGetTextureInPlace` to libgfd, which points a texture at its image and mipmaps in a
   loaded `.gtx` file instead of copying them
+- `0007` prints the console lines with `"%s"`, because Cemu's `OSReport` doesn't support the `*`
+  precision
 
 The libogc patches, trimmed versions of the Wii toolchain's for only the matrix math files:
 

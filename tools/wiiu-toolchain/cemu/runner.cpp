@@ -1,356 +1,341 @@
-// CPU-only frontend for Cemu's Espresso interpreter. No executable memory or graphics backend.
-#include <sys/mman.h>
-#include <zlib.h>
+// Headless frontend for Cemu's Cafe OS: runs an RPX on Cemu's interpreter with its own coreinit,
+// RPL loader and FSA, without the GPU, audio, input, JIT or GUI. It replaces Cemu's CafeSystem.cpp
+// and stubs what the OS emulation calls of the rest of Cemu.
+//
+// Usage: cemu-runner <program.rpx> [test | run] [seconds] [user folder]
+// The program's OSReport lines go to stderr. A test finishes at a "DONE <n> failed" line and fails
+// when n isn't 0, a run returns the program's exit status. Both fail when the program doesn't
+// finish in time (60 seconds by default). The user folder (cemu-runner in the temporary folder by
+// default) holds the SD card in sdcard/. Set CEMU_RUNNER_LOG to also print Cemu's log.
+#include <execinfo.h>
+#include <unistd.h>
 
+#include <csignal>
+
+#include "Cafe/CafeSystem.h"
+#include "Cafe/Filesystem/fsc.h"
+#include "Cafe/GraphicPack/GraphicPack2.h"
+#include "Cafe/HW/Espresso/Debugger/GDBBreakpoints.h"
+#include "Cafe/HW/Espresso/Debugger/GDBStub.h"
 #include "Cafe/HW/Espresso/PPCState.h"
+#include "Cafe/HW/Espresso/Recompiler/PPCRecompiler.h"
+#include "Cafe/HW/Latte/Core/Latte.h"
+#include "Cafe/HW/Latte/Core/LatteBufferCache.h"
+#include "Cafe/HW/MMU/MMU.h"
+#include "Cafe/IOSU/fsa/iosu_fsa.h"
+#include "Cafe/IOSU/kernel/iosu_kernel.h"
+#include "Cafe/IOSU/legacy/iosu_ioctl.h"
+#include "Cafe/OS/RPL/rpl.h"
+#include "Cafe/OS/RPL/rpl_symbol_storage.h"
+#include "Cafe/OS/common/OSCommon.h"
+#include "Cafe/OS/libs/coreinit/coreinit_Thread.h"
+#include "Cafe/OS/libs/nn_act/nn_act.h"
+#include "Cafe/TitleList/TitleInfo.h"
+#include "Common/SysAllocator.h"
+#include "config/ActiveSettings.h"
+#include "config/CemuConfig.h"
+#include "util/helpers/helpers.h"
 
-uint8* memory_base;
-uint64 ppcMainThreadDECCycleStart, ppcMainThreadDECCycleValue;
-uint64 ppcCyclesSince2000, ppcCyclesSince2000TimerClock, ppcCyclesSince2000_UTC;
-static uint64 instructions;
-static uint32 lastIP;
+// The globals of CafeSystem.cpp and the default settings, which are never loaded or saved
+MPTR _entryPoint;
+std::string _pathToExecutable;
+RPLModule* applicationRPX;
+LatteGPUState_t LatteGPUState = {};
+std::unique_ptr<GDBServer> g_gdbstub;
+XMLCemuConfig_t g_config;
+uint64 s_loggingFlagMask = cemuLog_getFlag(LogType::Force) | cemuLog_getFlag(LogType::CoreinitLogging);
 
-uint8* memory_getPointerFromVirtualOffset(uint32 address) {
-    return memory_base + address;
-}
-uint8* memory_getPointerFromVirtualOffsetAllowNull(uint32 address) {
-    return address ? memory_base + address : nullptr;
-}
-uint32 memory_readU32(uint32 address) {
-    return _swapEndianU32(*(uint32*)(memory_base + address));
-}
-void memory_writeU32(uint32 address, uint32 value) {
-    *(uint32*)(memory_base + address) = _swapEndianU32(value);
-}
-void PPCInterpreter_nextInstruction(PPCInterpreter_t* cpu) {
-    cpu->instructionPointer += 4;
-}
-void PPCInterpreter_jumpToInstruction(PPCInterpreter_t* cpu, uint32 address) {
-    cpu->instructionPointer = address;
-}
-uint64 PPCInterpreter_getMainCoreCycleCounter() {
-    return instructions * 20;
-}
-uint64 PPCTimer_getFromRDTSC() {
-    return instructions;
-}
-uint32 PPCInterpreter_getXER(PPCInterpreter_t* cpu) {
-    return (cpu->spr.XER & ~(1u << 29)) | (uint32(cpu->xer_ca) << 29);
-}
-void PPCInterpreter_setXER(PPCInterpreter_t* cpu, uint32 value) {
-    cpu->spr.XER = value;
-    cpu->xer_ca = (value >> 29) & 1;
-}
-void PPCInterpreter_setDEC(PPCInterpreter_t* cpu, uint32 value) {
-    cpu->sprExtended.DEC = value;
-}
-void PPCInterpreter_virtualHLE(PPCInterpreter_t*, unsigned int) {
-    throw std::runtime_error("Unexpected HLE instruction");
-}
+// The program's finish: the failures of a test or the exit status of a run
+static std::atomic<int> s_failures{-1}, s_exitStatus{-1};
 
-static void require(bool condition, const char* message) {
-    if (!condition)
-        throw std::runtime_error(message);
-}
-
-// Loads an RPX like Cafe OS: inflates its zlib sections, puts the allocated ones at their addresses
-// and applies its relocations. Imports of the system libraries resolve to OS call stubs below the
-// code, in range of its branches, a data import to a pointer to one.
-struct Section {
-    uint32 name, type, flags, address, link, info, entrySize;
-    std::vector<uint8> data;
-};
-static std::map<uint32, std::string> imports;
-static uint32 load(const char* path) {
-    std::ifstream file(path, std::ios::binary | std::ios::ate);
-    require(bool(file), "Cannot open RPX");
-    auto length = file.tellg();
-    require(length >= 52 && length <= 128 * 1024 * 1024, "Invalid RPX size");
-    std::vector<uint8> bytes(static_cast<size_t>(length));
-    file.seekg(0);
-    require(bool(file.read(reinterpret_cast<char*>(bytes.data()), bytes.size())), "Cannot read RPX");
-    auto word = [](const std::vector<uint8>& data, size_t offset, size_t count = 4) {
-        require(offset <= data.size() && count <= data.size() - offset, "Truncated RPX");
-        uint32 result = 0;
-        for (size_t i = 0; i < count; i++)
-            result = (result << 8) | data[offset + i];
-        return result;
-    };
-    require(word(bytes, 0) == 0x7f454c46 && word(bytes, 4) == 0x010201ca && bytes[8] == 0xfe,
-            "Expected a big-endian ELF32 Cafe OS file");
-    require(word(bytes, 16, 2) == 0xfe01 && word(bytes, 18, 2) == 20, "Expected a PowerPC RPX executable");
-    uint32 entry = word(bytes, 24), table = word(bytes, 32), stride = word(bytes, 46, 2), count = word(bytes, 48, 2),
-           names = word(bytes, 50, 2);
-    require(stride == 40 && count > 0 && names < count && uint64(table) + uint64(count) * stride <= bytes.size(),
-            "Invalid RPX section table");
-    std::vector<Section> sections;
-    for (uint32 i = 0; i < count; i++) {
-        size_t pos = table + i * stride;
-        Section section{word(bytes, pos),      word(bytes, pos + 4),  word(bytes, pos + 8),  word(bytes, pos + 12),
-                        word(bytes, pos + 24), word(bytes, pos + 28), word(bytes, pos + 36), {}};
-        uint32 offset = word(bytes, pos + 16), size = word(bytes, pos + 20);
-        if (section.type == 8) {
-            section.data.resize(size);
-        } else if (size > 0) {
-            require(uint64(offset) + size <= bytes.size(), "Truncated RPX section");
-            if (section.flags & 0x08000000) {
-                // The inflated size, then the zlib stream
-                uLongf inflated = word(bytes, offset);
-                section.data.resize(inflated);
-                require(uncompress(section.data.data(), &inflated, bytes.data() + offset + 4, size - 4) == Z_OK &&
-                            inflated == section.data.size(),
-                        "Cannot inflate RPX section");
-            } else {
-                section.data.assign(bytes.begin() + offset, bytes.begin() + offset + size);
-            }
-        }
-        sections.push_back(std::move(section));
+// OSReport lines come as "[OSConsole] <line>". coreinit's exit only logs and then hangs, so the
+// runner watches for its message.
+bool cemuLog_log(LogType type, std::string_view text) {
+    if (type == LogType::CoreinitLogging) {
+        constexpr std::string_view prefix = "[OSConsole] ";
+        if (text.starts_with(prefix))
+            text.remove_prefix(prefix.size());
+        fprintf(stderr, "%.*s\n", (int)text.size(), text.data());
+        int failures;
+        if (sscanf(std::string(text).c_str(), "DONE %d failed", &failures) == 1)
+            s_failures = failures;
+        return true;
     }
-    auto string = [&](const Section& section, uint32 offset) {
-        require(section.type == 3 && offset < section.data.size(), "Invalid RPX string table");
-        const char* start = reinterpret_cast<const char*>(section.data.data() + offset);
-        const char* end = static_cast<const char*>(memchr(start, 0, section.data.size() - offset));
-        require(end != nullptr, "Unterminated RPX string");
-        return std::string(start, end);
-    };
-    bool executableEntry = false;
-    for (const auto& section : sections) {
-        if (!(section.flags & 2) || section.data.empty())
-            continue;
-        uint64 end = uint64(section.address) + section.data.size();
-        require((section.address >= 0x02000000 && end <= 0x42000000) ||
-                    (section.address >= 0xc0000000 && end <= 0xc8000000),
-                "RPX section outside toolchain memory");
-        if ((section.flags & 4) && entry >= section.address && entry < end)
-            executableEntry = true;
-        memcpy(memory_base + section.address, section.data.data(), section.data.size());
-    }
-    require(executableEntry && (entry & 3) == 0, "Invalid RPX entry point");
+    constexpr std::string_view exitPrefix = "The title terminated the process by calling coreinit.exit(";
+    if (text.starts_with(exitPrefix))
+        s_exitStatus = atoi(std::string(text.substr(exitPrefix.size())).c_str()) & 0xff;
+    else if (getenv("CEMU_RUNNER_LOG"))
+        fprintf(stderr, "cemu: %.*s\n", (int)text.size(), text.data());
+    return true;
+}
+bool cemuLog_log(LogType type, std::u8string_view text) {
+    return cemuLog_log(type, std::string_view((const char*)text.data(), text.size()));
+}
+void cemuLog_waitForFlush() {}
+void cemuLog_createLogFile(bool) {}
+bool cemuLog_advancedPPCLoggingEnabled() {
+    return false;
+}
+void SetThreadName(const char*) {}
 
-    uint32 stubs = 0x01000000;
-    auto stub = [&](const std::string& name) {
-        imports[stubs] = name;
-        return (stubs += 4) - 4;
-    };
-    std::map<uint32, std::vector<uint32>> values;
-    for (uint32 index = 0; index < count; index++) {
-        const auto& section = sections[index];
-        if (section.type != 2)
-            continue;
-        require(section.entrySize == 16 && section.data.size() % 16 == 0 && section.link < count,
-                "Invalid RPX symbols");
-        auto& symbols = values[index];
-        for (size_t pos = 0; pos < section.data.size(); pos += 16) {
-            uint32 value = word(section.data, pos + 4), shndx = word(section.data, pos + 14, 2);
-            auto symbol = string(sections[section.link], word(section.data, pos));
-            auto kind = shndx > 0 && shndx < count ? string(sections[names], sections[shndx].name) : "";
-            bool function = kind.starts_with(".fimport_");
-            // The import sections' own section symbols have no name and aren't imports
-            if (!symbol.empty() && (function || kind.starts_with(".dimport_"))) {
-                if (function) {
-                    value = stub(symbol);
-                } else {
-                    require(symbol == "MEMAllocFromDefaultHeapEx" || symbol == "MEMFreeToDefaultHeap",
-                            ("Unsupported data import: " + symbol).c_str());
-                    value = stubs;
-                    stubs += 4;
-                    memory_writeU32(value, stub(symbol));
-                }
-            }
-            symbols.push_back(value);
-        }
-    }
-    require(!values.empty(), "RPX without symbols");
+// The user folder holds the SD card, the system libraries are always emulated
+void ActiveSettings::SetPaths(bool, const fs::path&, const fs::path& userDataPath, const fs::path&, const fs::path&,
+                              const fs::path&, std::set<fs::path>&) {
+    s_user_data_path = userDataPath;
+}
+fs::path ActiveSettings::GetMlcPath() {
+    return GetUserDataPath("mlc01");
+}
+uint8 ActiveSettings::GetTimerShiftFactor() {
+    return 3;
+}
+bool ActiveSettings::LoadSharedLibrariesEnabled() {
+    return false;
+}
+void CemuConfig::Load(XMLConfigParser&) {}
+void CemuConfig::Save(XMLConfigParser&) {}
 
-    for (const auto& section : sections) {
-        if (section.type != 4)
-            continue;
-        require(section.entrySize == 12 && section.data.size() % 12 == 0 && values.contains(section.link) &&
-                    section.info < count && (sections[section.info].flags & 2),
-                "Invalid RPX relocations");
-        const auto& symbols = values.at(section.link);
-        const auto& target = sections[section.info];
-        for (size_t pos = 0; pos < section.data.size(); pos += 12) {
-            uint32 address = word(section.data, pos), info = word(section.data, pos + 4), type = info & 0xff;
-            require(address >= target.address && uint64(address) + 4 <= uint64(target.address) + target.data.size(),
-                    "RPX relocation outside its section");
-            require((info >> 8) < symbols.size(), "Invalid RPX relocation symbol");
-            uint32 value = symbols[info >> 8] + word(section.data, pos + 8), relative = value - address;
-            uint8* place = memory_base + address;
-            auto half = [&](uint32 bits) {
-                place[0] = uint8(bits >> 8);
-                place[1] = uint8(bits);
-            };
-            switch (type) {
-                case 0:  // R_PPC_NONE
-                    break;
-                case 1:  // R_PPC_ADDR32
-                    memory_writeU32(address, value);
-                    break;
-                case 4:  // R_PPC_ADDR16_LO
-                    half(value);
-                    break;
-                case 5:  // R_PPC_ADDR16_HI
-                    half(value >> 16);
-                    break;
-                case 6:  // R_PPC_ADDR16_HA
-                    half((value + 0x8000) >> 16);
-                    break;
-                case 10:  // R_PPC_REL24
-                    require(sint32(relative) >= -0x02000000 && sint32(relative) < 0x02000000 && !(relative & 3),
-                            "RPX branch out of range");
-                    memory_writeU32(address, (memory_readU32(address) & ~0x03fffffcu) | (relative & 0x03fffffc));
-                    break;
-                case 11:  // R_PPC_REL14
-                    require(sint32(relative) >= -0x8000 && sint32(relative) < 0x8000 && !(relative & 3),
-                            "RPX branch out of range");
-                    memory_writeU32(address, (memory_readU32(address) & ~0xfffcu) | (relative & 0xfffc));
-                    break;
-                case 251:  // R_PPC_GHS_REL16_HA
-                    half((relative + 0x8000) >> 16);
-                    break;
-                case 252:  // R_PPC_GHS_REL16_HI
-                    half(relative >> 16);
-                    break;
-                case 253:  // R_PPC_GHS_REL16_LO
-                    half(relative);
-                    break;
-                default:
-                    throw std::runtime_error("Unsupported RPX relocation " + std::to_string(type));
-            }
-        }
-    }
-    return entry;
+// No JIT, GPU, debugger, graphic packs, audio, input or other system libraries
+void PPCRecompiler_attemptEnter(PPCInterpreter_t*, uint32) {}
+void PPCRecompiler_attemptEnterWithoutRecompile(PPCInterpreter_t*, uint32) {}
+void PPCRecompiler_recompileIfUnvisited(uint32) {}
+void PPCRecompiler_allocateRange(uint32, uint32) {}
+void PPCRecompiler_invalidateRange(uint32, uint32) {}
+void LatteBufferCache_notifyDCFlush(MPTR, uint32) {}
+GDBServer::~GDBServer() {}
+void GDBServer::HandleTrapInstruction(PPCInterpreter_t*) {}
+void debugger_enterTW(PPCInterpreter_t*) {}
+void debuggerWindow_notifyModuleLoaded(void*) {}
+void debuggerWindow_notifyModuleUnloaded(void*) {}
+std::vector<std::pair<MPTR, MPTR>> GraphicPack2::GetActiveRAMMappings() {
+    return {};
+}
+void GraphicPack2::NotifyModuleLoaded(const RPLModule*) {}
+uint8* extractCafeDefaultFont(sint32* size) {
+    *size = 0;
+    return nullptr;
+}
+sint32 iosuIoctl_pushAndWait(uint32, ioQueueEntry_t*) {
+    return -1;
+}
+void nnNfp_update() {}
+namespace snd_core {
+void AXOut_update() {}
+void loadExports() {}
+}  // namespace snd_core
+namespace padscore {
+void load() {}
+void start() {}
+}  // namespace padscore
+namespace vpad {
+void load() {}
+void start() {}
+}  // namespace vpad
+namespace nn::act {
+uint32 GetUuidEx(uint8* uuid, uint8, sint32) {
+    memset(uuid, 0, 16);
+    return 0;
+}
+uint32 GetSimpleAddressIdEx(uint32be* id, uint8) {
+    *id = 0;
+    return 0;
+}
+}  // namespace nn::act
+#define NO_LIBRARY(load) \
+    void load() {}
+NO_LIBRARY(gx2_load)
+NO_LIBRARY(dmae_load)
+NO_LIBRARY(nnAct_load)
+NO_LIBRARY(nnAc_load)
+NO_LIBRARY(nnEc_load)
+NO_LIBRARY(nnBoss_load)
+NO_LIBRARY(nnUds_load)
+NO_LIBRARY(nnSL_load)
+NO_LIBRARY(nsysnet_load)
+NO_LIBRARY(sysapp_load)
+namespace zlib {
+NO_LIBRARY(load)
+}
+namespace nn::erreula {
+NO_LIBRARY(load)
+}
+namespace nn::acp {
+NO_LIBRARY(load)
+}
+namespace nn::nfp {
+NO_LIBRARY(load)
+}
+namespace nn::nim {
+NO_LIBRARY(load)
+}
+namespace nn::ndm {
+NO_LIBRARY(load)
+}
+namespace nn::spm {
+NO_LIBRARY(load)
+}
+namespace nn::save {
+NO_LIBRARY(load)
+}
+namespace nn::fp {
+NO_LIBRARY(load)
+}
+namespace nn::olv {
+NO_LIBRARY(load)
+}
+namespace nn::idbe {
+NO_LIBRARY(load)
+}
+namespace nlibnss {
+NO_LIBRARY(load)
+}
+namespace nlibcurl {
+NO_LIBRARY(load)
+}
+namespace nsyshid {
+NO_LIBRARY(load)
+}
+namespace nsyskbd {
+NO_LIBRARY(nsyskbd_load)
+}
+namespace swkbd {
+NO_LIBRARY(load)
+}
+namespace camera {
+NO_LIBRARY(load)
+}
+namespace proc_ui {
+NO_LIBRARY(load)
 }
 
-static uint32 heapEnd = 0x30000000;
-static std::map<uint32, uint32> allocations;
-static bool exited, done;
-static int exitStatus, failures;
-static void report(std::string_view output) {
-    fwrite(output.data(), 1, output.size(), stderr);
-    static std::string line;
-    for (char byte : output) {
-        require(line.size() < 4096, "OSReport line exceeds 4096 bytes");
-        line += byte;
-        if (byte != '\n')
-            continue;
-        // Only an exact, complete completion line can finish a test.
-        if (line.starts_with("DONE ") && line.ends_with(" failed\n")) {
-            auto digits = std::string_view(line).substr(5, line.size() - 13);
-            int count;
-            auto [end, error] = std::from_chars(digits.data(), digits.data() + digits.size(), count);
-            if (!digits.empty() && digits.find_first_not_of("0123456789") == std::string_view::npos &&
-                error == std::errc{} && end == digits.data() + digits.size()) {
-                failures = count;
-                done = true;
-            }
-        }
-        line.clear();
-    }
+// The parts of CafeSystem the OS asks, for a standalone RPX
+namespace CafeSystem {
+TitleId GetForegroundTitleId() {
+    return 0xFFFFFFFF00000001ULL;
 }
-static std::string_view guestString(uint32 address) {
-    require(address >= 0x10000 && address < 0xffff0000, "Invalid guest string");
-    const char* start = reinterpret_cast<const char*>(memory_base + address);
-    const char* end = static_cast<const char*>(memchr(start, 0, std::min<uint64>(4096, 0xffff0000ull - address)));
-    require(end != nullptr, "Guest string exceeds 4096 bytes");
-    return {start, size_t(end - start)};
+uint32 GetForegroundTitleSDKVersion() {
+    return 21204;
 }
-static void systemCall(PPCInterpreter_t& cpu, const std::string& name) {
-    auto a = cpu.gpr[3], b = cpu.gpr[4];
-    if (name == "MEMAllocFromDefaultHeapEx") {
-        uint32 alignment = b ? b : 4;
-        require((alignment & (alignment - 1)) == 0, "Invalid heap alignment");
-        uint64 address = (uint64(heapEnd) + alignment - 1) & ~(uint64(alignment) - 1);
-        if (address + a > 0x40000000) {
-            cpu.gpr[3] = 0;
-        } else {
-            cpu.gpr[3] = uint32(address);
-            allocations[uint32(address)] = a;
-            heapEnd = uint32(address + std::max(a, 1u));
-        }
-    } else if (name == "MEMFreeToDefaultHeap") {
-        require(a == 0 || allocations.erase(a) == 1, "Invalid heap free");
-    } else if (name == "MEMGetSizeForMBlockExpHeap") {
-        require(allocations.contains(a), "Invalid heap block");
-        cpu.gpr[3] = allocations.at(a);
-    } else if (name == "OSGetSystemInfo") {
-        memory_writeU32(0x00010000, ESPRESSO_BUS_CLOCK);
-        memory_writeU32(0x00010004, ESPRESSO_CORE_CLOCK);
-        cpu.gpr[3] = 0x00010000;
-    } else if (name == "OSGetTime" || name == "OSGetSystemTime") {
-        // 2026-01-01, plus a deterministic time base advanced by interpreter instructions.
-        uint64 ticks = 820540800ull * ESPRESSO_TIMER_CLOCK + instructions;
-        cpu.gpr[3] = ticks >> 32;
-        cpu.gpr[4] = uint32(ticks);
-    } else if (name == "OSReport") {
-        auto format = guestString(a);
-        if (format == "%.*s") {
-            auto line = guestString(cpu.gpr[5]);
-            report(line.substr(0, std::min<size_t>(b, line.size())));
-        } else if (format == "%s") {
-            report(guestString(b));
-        } else {
-            throw std::runtime_error("Unsupported OSReport format: " + std::string(format));
-        }
-    } else if (name == "GX2Invalidate" || name == "DCFlushRange" || name == "DCInvalidateRange") {
-        // CPU-only memory is coherent; there is no graphics device to invalidate.
-    } else if (name == "exit" || name == "_Exit" || name == "__rplwrap_exit") {
-        exited = true;
-        exitStatus = int(a);
-    } else {
-        throw std::runtime_error("Unsupported OS import: " + name);
-    }
-    cpu.instructionPointer = cpu.spr.LR;
+CafeConsoleRegion GetForegroundTitleRegion() {
+    return CafeConsoleRegion::EUR;
+}
+CafeConsoleRegion GetPlatformRegion() {
+    return CafeConsoleRegion::EUR;
+}
+std::string GetForegroundTitleArgStr() {
+    return {};
+}
+CosCapabilityBits GetForegroundTitleCosCapabilities(CosCapabilityGroup) {
+    return CosCapabilityBits::All;
+}
+bool GetOverrideArgStr(std::vector<std::string>&) {
+    return false;
+}
+void SetOverrideArgs(std::span<std::string>) {}
+void UnsetOverrideArgs() {}
+void ShutdownTitle() {}
+void RequestRecreateCanvas() {}
+PREPARE_STATUS_CODE PrepareForegroundTitle(TitleId) {
+    return PREPARE_STATUS_CODE::UNABLE_TO_MOUNT;
+}
+void LaunchForegroundTitle() {}
+}  // namespace CafeSystem
+
+void coreinit_start(PPCInterpreter_t* hCPU);
+
+// Crashes print where they happened, guest addresses are relative to memory_base
+static void crashed(int signal, siginfo_t* info, void*) {
+    fprintf(stderr, "cemu-runner: signal %d at %p (guest %08llx)\n", signal, info->si_addr,
+            (unsigned long long)((uint8*)info->si_addr - memory_base));
+    void* frames[32];
+    backtrace_symbols_fd(frames, backtrace(frames, 32), STDERR_FILENO);
+    _exit(1);
+}
+
+static int fail(const char* message) {
+    fprintf(stderr, "cemu-runner: %s\n", message);
+    return 1;
+}
+
+// Loads the RPX like CafeSystem::PrepareForegroundTitleFromStandaloneRPX, from the code folder
+static bool load(const fs::path& rpx) {
+    FSCDeviceHostFS_Mount("/internal/code/", _pathToUtf8(rpx.parent_path()), FSC_PRIORITY_BASE);
+    _pathToExecutable = "/internal/code/" + _pathToUtf8(rpx.filename());
+    memory_mapForCurrentTitle();
+    uint32 size = 0;
+    uint8* data = fsc_extractFile(_pathToExecutable.c_str(), &size);
+    if (!data)
+        return false;
+    RPLLoader_AddDependency(_pathToExecutable.c_str());
+    applicationRPX = RPLLoader_LoadFromMemory(data, size, _pathToExecutable.data());
+    free(data);
+    if (!applicationRPX)
+        return false;
+    RPLLoader_SetMainModule(applicationRPX);
+    _entryPoint = RPLLoader_GetModuleEntrypoint(applicationRPX);
+    return true;
 }
 
 int main(int argc, char** argv) {
-    try {
-        require(argc == 2 || argc == 3,
-                "Usage: cemu-runner <program.rpx> ['test <instructions>' | 'run <instructions>']");
-        std::string command = argc == 3 ? argv[2] : "run 100000000";
-        bool test = command.starts_with("test ");
-        require(test || command.starts_with("run "), "Expected test or run with an instruction budget");
-        auto number = command.substr(command.find(' ') + 1);
-        require(!number.empty() && number.find_first_not_of("0123456789") == std::string::npos,
-                "Invalid instruction budget");
-        size_t consumed;
-        uint64 budget = std::stoull(number, &consumed);
-        require(budget > 0 && consumed == number.size(), "Invalid instruction budget");
-        constexpr uint64 memorySize = 1ull << 32;
-        memory_base =
-            static_cast<uint8*>(mmap(nullptr, memorySize, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0));
-        require(memory_base != MAP_FAILED, "Cannot reserve guest memory");
-        require(mprotect(memory_base, 0x10000, PROT_NONE) == 0, "Cannot protect null memory");
-        PPCInterpreterGlobal_t global{};
-        PPCInterpreter_t cpu{};
-        cpu.global = &global;
-        cpu.instructionPointer = load(argv[1]);
-        cpu.gpr[1] = 0x2ffffff0;
-        cpu.spr.UPIR = 1;
-        cpu.PSE = cpu.LSQE = 1;
-        cpu.remainingCycles = std::numeric_limits<sint32>::max();
-        while (instructions < budget && !exited && !(test && done)) {
-            lastIP = cpu.instructionPointer;
-            auto call = imports.find(cpu.instructionPointer);
-            if (call != imports.end())
-                systemCall(cpu, call->second);
-            else
-                PPCInterpreterSlim_executeInstruction(&cpu);
-            instructions++;
-        }
-        munmap(memory_base, memorySize);
-        if (test) {
-            require(done, exited ? "Program exited before DONE" : "Test instruction budget exhausted");
-            require(failures == 0, "Guest tests failed");
-        } else {
-            require(exited, "Run instruction budget exhausted");
-            return exitStatus;
-        }
-        return 0;
-    } catch (const std::exception& error) {
-        fprintf(stderr, "cemu-runner: %s (at %08x, after %llu instructions)\n", error.what(), lastIP,
-                static_cast<unsigned long long>(instructions));
-        return 1;
-    }
+    if (argc < 2 || argc > 5)
+        return fail("Usage: cemu-runner <program.rpx> [test | run] [seconds] [user folder]");
+    std::string_view mode = argc > 2 ? argv[2] : "run";
+    int seconds = argc > 3 ? atoi(argv[3]) : 60;
+    if ((mode != "test" && mode != "run") || seconds <= 0)
+        return fail("Expected test or run and a number of seconds");
+    if (getenv("CEMU_RUNNER_LOG"))
+        s_loggingFlagMask = ~0ULL;
+    struct sigaction action{};
+    action.sa_sigaction = crashed;
+    action.sa_flags = SA_SIGINFO;
+    for (int signal : {SIGSEGV, SIGBUS, SIGILL, SIGTRAP})
+        sigaction(signal, &action, nullptr);
+    std::set<fs::path> failedWriteAccess;
+    ActiveSettings::SetPaths(false, {}, fs::absolute(argc > 4 ? argv[4] : fs::temp_directory_path() / "cemu-runner"),
+                             {}, {}, {}, failedWriteAccess);
+    std::error_code error;
+    fs::create_directories(ActiveSettings::GetUserDataPath("sdcard"), error);
+
+    // The system, like CafeSystem::Initialize with only the kernel and FSA of IOSU. The PPC clock
+    // calibrates itself against the host clock in the background meanwhile.
+    PPCTimer_init();
+    fsc_init();
+    memory_init();
+    PPCCore_init();
+    RPLLoader_InitState();
+    rplSymbolStorage_init();
+    SysAllocatorContainer::GetInstance().Initialize();
+    iosu::kernel::GetModule()->SystemLaunch();
+    iosu::fsa::Initialize();
+    if (!load(fs::absolute(argv[1])))
+        return fail("Cannot load the RPX");
+
+    // Start it like cemu_initForGame without the GPU and audio, the scheduler runs one core
+    PPCTimer_waitForInit();
+    iosu::kernel::GetModule()->TitleStart();
+    ppcCyclesSince2000 = ppcCyclesSince2000_UTC = (uint64)(time(nullptr) - 946684800) * ESPRESSO_CORE_CLOCK;
+    ppcCyclesSince2000TimerClock = ppcCyclesSince2000 / 20;
+    PPCTimer_start();
+    osLib_load();
+    RPLLoader_UpdateDependencies();
+    RPLLoader_Link();
+    RPLLoader_NotifyControlPassedToApplication();
+    OSThread_t* initialThread = coreinit::OSGetDefaultThread(1);
+    coreinit::OSSetThreadPriority(initialThread, 16);
+    coreinit::OSRunThread(initialThread, PPCInterpreter_makeCallableExportDepr(coreinit_start), 0, nullptr);
+    coreinit::OSSchedulerBegin(1);
+
+    bool test = mode == "test";
+    for (int i = 0; i < seconds * 100 && s_exitStatus < 0 && !(test && s_failures >= 0); i++)
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    int status;
+    if (!test)
+        status = s_exitStatus >= 0 ? s_exitStatus.load() : fail("The program didn't exit in time");
+    else if (s_failures < 0)
+        status = fail(s_exitStatus < 0 ? "The test didn't finish in time" : "The program exited before DONE");
+    else
+        status = s_failures > 0 ? fail("Guest tests failed") : 0;
+    // The emulation threads don't stop, so the process ends without cleaning up
+    fflush(stderr);
+    _exit(status);
 }

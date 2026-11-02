@@ -1,0 +1,55 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Mon, 2 Nov 2026 15:03:40 +0100
+Subject: [PATCH] Truncate files on Unix
+
+SetEndOfFile was only a debug break, so FSATruncateFile stopped the
+emulator. It resizes the file at the current position now.
+---
+ src/Common/unix/FileStream_unix.cpp | 11 ++++++++---
+ src/Common/unix/FileStream_unix.h   |  1 +
+ 2 files changed, 9 insertions(+), 3 deletions(-)
+
+diff --git a/src/Common/unix/FileStream_unix.cpp b/src/Common/unix/FileStream_unix.cpp
+index 4bc9b52..d05b873 100644
+--- a/src/Common/unix/FileStream_unix.cpp
++++ b/src/Common/unix/FileStream_unix.cpp
+@@ -101,11 +101,15 @@ uint64 FileStream::GetSize()
+ 	return fs;
+ }
+ 
++// Cuts the file off at the current position, after writing out what is buffered
+ bool FileStream::SetEndOfFile()
+ {
+-	assert_dbg();
+-	return true;
+-	//return ::SetEndOfFile(m_hFile) != 0;
++	cemu_assert(m_isValid);
++	std::streampos position = m_prevOperationWasWrite ? m_fileStream.tellp() : m_fileStream.tellg();
++	m_fileStream.flush();
++	std::error_code ec;
++	fs::resize_file(m_path, (uintmax_t)position, ec);
++	return !ec;
+ }
+ 
+ void FileStream::extract(std::vector<uint8>& data)
+@@ -210,6 +214,7 @@ FileStream::~FileStream()
+ FileStream::FileStream(const fs::path& path, bool isOpen, bool isWriteable)
+ {
+ 	fs::path CIPath = findPathCI(path);
++	m_path = CIPath;
+ 	if (isOpen)
+ 	{
+ 		m_fileStream.open(CIPath, isWriteable ? (std::ios_base::in | std::ios_base::out | std::ios_base::binary) : (std::ios_base::in | std::ios_base::binary));
+diff --git a/src/Common/unix/FileStream_unix.h b/src/Common/unix/FileStream_unix.h
+index 12c971d..2b33101 100644
+--- a/src/Common/unix/FileStream_unix.h
++++ b/src/Common/unix/FileStream_unix.h
+@@ -50,6 +50,7 @@ class FileStream
+ 	FileStream(const fs::path& path, bool isOpen, bool isWriteable);
+ 
+ 	bool m_isValid{};
++	fs::path m_path;
+ 	std::fstream m_fileStream;
+ 	bool m_prevOperationWasWrite{false};
+ 

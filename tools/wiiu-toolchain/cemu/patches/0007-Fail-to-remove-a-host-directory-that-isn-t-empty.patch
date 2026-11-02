@@ -1,0 +1,66 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Mon, 2 Nov 2026 15:03:41 +0100
+Subject: [PATCH] Fail to remove a host directory that isn't empty
+
+Removing a directory with files reported success while it was kept, now
+FSARemove returns NOT_EMPTY like the console.
+---
+ src/Cafe/Filesystem/fsc.h               | 1 +
+ src/Cafe/Filesystem/fscDeviceHostFS.cpp | 4 ++--
+ src/Cafe/IOSU/fsa/fsa_types.h           | 1 +
+ src/Cafe/IOSU/fsa/iosu_fsa.cpp          | 2 ++
+ 4 files changed, 6 insertions(+), 2 deletions(-)
+
+diff --git a/src/Cafe/Filesystem/fsc.h b/src/Cafe/Filesystem/fsc.h
+index 8b8ed5e..aa98263 100644
+--- a/src/Cafe/Filesystem/fsc.h
++++ b/src/Cafe/Filesystem/fsc.h
+@@ -36,6 +36,7 @@ DEFINE_ENUM_FLAG_OPERATORS(FSC_ACCESS_FLAG);
+ #define FSC_STATUS_INVALID_PATH			(1)
+ #define FSC_STATUS_FILE_NOT_FOUND		(2)
+ #define FSC_STATUS_ALREADY_EXISTS		(3)
++#define FSC_STATUS_DIR_NOT_EMPTY		(4)
+ // note: Unlike the native Wii U filesystem, FSC does not provide separate error codes for NOT_A_FILE and NOT_A_DIRECTORY
+ // to determine them manually, open with both modes (file and dir) and check the type
+ 
+diff --git a/src/Cafe/Filesystem/fscDeviceHostFS.cpp b/src/Cafe/Filesystem/fscDeviceHostFS.cpp
+index 31def18..6f7c461 100644
+--- a/src/Cafe/Filesystem/fscDeviceHostFS.cpp
++++ b/src/Cafe/Filesystem/fscDeviceHostFS.cpp
+@@ -262,8 +262,8 @@ public:
+ 		}
+ 		if (!fs::remove(_path, ec))
+ 		{
+-			cemu_assert_unimplemented(); // return correct error (e.g. if directory is non-empty)
+-			*fscStatus = FSC_STATUS_FILE_NOT_FOUND;
++			*fscStatus = ec == std::errc::directory_not_empty ? FSC_STATUS_DIR_NOT_EMPTY : FSC_STATUS_FILE_NOT_FOUND;
++			return false;
+ 		}
+ 		return true;
+ 	}
+diff --git a/src/Cafe/IOSU/fsa/fsa_types.h b/src/Cafe/IOSU/fsa/fsa_types.h
+index a775748..54c7a10 100644
+--- a/src/Cafe/IOSU/fsa/fsa_types.h
++++ b/src/Cafe/IOSU/fsa/fsa_types.h
+@@ -26,6 +26,7 @@ enum class FSA_RESULT : sint32 // aka FSError/FSAStatus
+ 	MAX_DIRS = -0x30000 - 0x14,
+ 	ALREADY_EXISTS = -0x30000 - 0x16,
+ 	NOT_FOUND = -0x30000 - 0x17,
++	NOT_EMPTY = -0x30000 - 0x18,
+ 	PERMISSION_ERROR = -0x30000 - 0x1A,
+ 	INVALID_PARAM = -0x30000 - 0x21,
+ 	INVALID_PATH = -0x30000 - 0x22,
+diff --git a/src/Cafe/IOSU/fsa/iosu_fsa.cpp b/src/Cafe/IOSU/fsa/iosu_fsa.cpp
+index 1429d08..95ae924 100644
+--- a/src/Cafe/IOSU/fsa/iosu_fsa.cpp
++++ b/src/Cafe/IOSU/fsa/iosu_fsa.cpp
+@@ -59,6 +59,8 @@ namespace iosu
+ 				return FSA_RESULT::NOT_FOUND;
+ 			else if (fscError == FSC_STATUS_ALREADY_EXISTS)
+ 				return FSA_RESULT::ALREADY_EXISTS;
++			else if (fscError == FSC_STATUS_DIR_NOT_EMPTY)
++				return FSA_RESULT::NOT_EMPTY;
+ 			cemu_assert_unimplemented();
+ 			return FSA_RESULT::FATAL_ERROR;
+ 		}
