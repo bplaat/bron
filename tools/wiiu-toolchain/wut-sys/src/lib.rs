@@ -6,12 +6,22 @@
 
 //! Rust bindings for the parts of wut, libwhb, libgfd, libogc's matrix math and picolibc that the
 //! Wii U programs use, the toolchain's `build.rs` helper builds and links the libraries. The names and values come
-//! from wut's headers, the C enums are plain `u32` constants.
+//! from wut's headers; constants use the parameter's integer type.
 
 #![no_std]
 #![allow(non_snake_case, non_camel_case_types)]
 
 use core::ffi::{CStr, c_char, c_int, c_void};
+
+mod audio;
+mod input;
+mod network;
+mod thread;
+
+pub use audio::*;
+pub use input::*;
+pub use network::*;
+pub use thread::*;
 
 pub type BOOL = i32;
 pub const TRUE: BOOL = 1;
@@ -30,6 +40,7 @@ pub struct OSSystemInfo {
 
 unsafe extern "C" {
     pub fn OSGetTime() -> OSTime;
+    pub fn OSGetSystemTime() -> OSTime;
     pub fn OSGetSystemInfo() -> *mut OSSystemInfo;
 }
 
@@ -236,7 +247,11 @@ pub struct GX2Sampler {
 
 unsafe extern "C" {
     pub fn GX2InitSampler(sampler: *mut GX2Sampler, clamp_mode: u32, min_mag_filter_mode: u32);
-    pub fn GX2InitSamplerZMFilter(sampler: *mut GX2Sampler, z_filter_mode: u32, mip_filter_mode: u32);
+    pub fn GX2InitSamplerZMFilter(
+        sampler: *mut GX2Sampler,
+        z_filter_mode: u32,
+        mip_filter_mode: u32,
+    );
     pub fn GX2SetPixelTexture(texture: *const GX2Texture, unit: u32);
     pub fn GX2SetPixelSampler(sampler: *const GX2Sampler, unit: u32);
 }
@@ -301,12 +316,22 @@ pub struct GuVector {
 
 unsafe extern "C" {
     pub fn guPerspective(matrix: *mut Mtx44, fovy: f32, aspect: f32, near: f32, far: f32);
+    pub fn guOrtho(
+        matrix: *mut Mtx44,
+        top: f32,
+        bottom: f32,
+        left: f32,
+        right: f32,
+        near: f32,
+        far: f32,
+    );
     pub fn guLookAt(
         matrix: *mut Mtx,
         camera: *const GuVector,
         up: *const GuVector,
         target: *const GuVector,
     );
+    pub fn ps_guMtxIdentity(matrix: *mut Mtx);
     pub fn ps_guMtxRotRad(matrix: *mut Mtx, axis: c_char, radians: f32);
     pub fn ps_guMtxConcat(a: *const Mtx, b: *const Mtx, destination: *mut Mtx);
     pub fn ps_guMtxTransApply(source: *const Mtx, destination: *mut Mtx, x: f32, y: f32, z: f32);
