@@ -7,6 +7,7 @@ members = [
     "tools/*",
     "tools/wii-toolchain/gxtexconv",
     "tools/wiiu-toolchain/gtxconv",
+    "tools/wiiu-toolchain/wuhbtool",
 ]
 exclude = [
     "examples/macos",

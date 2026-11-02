@@ -3,9 +3,11 @@
 #   NAME := triangle
 #   include ../../../../tools/wiiu-toolchain/wiiu.mk
 #
-# Then `make` builds $(BUILD)/$(NAME).rpx from src/*.c and `make run` starts it in Cemu. The
-# shaders in src/shader.vsh and src/shader.psh are assembled to $(BUILD)/shader.gsh, a
-# src/assets/textures.toml config is converted to $(BUILD)/textures.gtx with gtxconv.
+# Then `make` builds $(BUILD)/$(NAME).rpx from src/*.c, `make run` starts it in Cemu and
+# `make bundle` packs it with the names and images of meta/ into $(BUILD)/$(NAME).wuhb for the
+# Wii U Menu. The shaders in src/shader.vsh and src/shader.psh are assembled to
+# $(BUILD)/shader.gsh, a src/assets/textures.toml config is converted to $(BUILD)/textures.gtx with
+# gtxconv.
 
 TOOLCHAIN := $(patsubst %/,%,$(dir $(lastword $(MAKEFILE_LIST))))
 TOOLCHAIN_BUILD := $(abspath $(TOOLCHAIN)/../../target/wiiu-toolchain)
@@ -14,6 +16,7 @@ WUT := $(TOOLCHAIN_BUILD)/wut
 ELF2RPL := $(TOOLCHAIN_BUILD)/elf2rpl
 LATTE_ASSEMBLER := $(TOOLCHAIN_BUILD)/latte-assembler
 GTXCONV := $(TOOLCHAIN_BUILD)/gtxconv
+WUHBTOOL := $(TOOLCHAIN_BUILD)/wuhbtool
 
 # Apple's clang can't target PowerPC, so prefer Homebrew's LLVM when it's installed
 LLVM := $(firstword $(wildcard /opt/homebrew/opt/llvm/bin/ /usr/local/opt/llvm/bin/))
@@ -49,6 +52,9 @@ $(BUILD)/shader.gsh: src/shader.vsh src/shader.psh $(LATTE_ASSEMBLER)
 	@mkdir -p $(dir $@)
 	$(LATTE_ASSEMBLER) assemble --vsh=src/shader.vsh --psh=src/shader.psh $@
 
+$(BUILD)/$(NAME).wuhb: $(BUILD)/$(NAME).rpx $(wildcard meta/*) $(WUHBTOOL)
+	$(TOOLCHAIN)/bundle.sh $< meta $@
+
 $(BUILD)/textures.gtx: src/assets/textures.toml $(filter-out %.toml,$(wildcard src/assets/*)) $(GTXCONV)
 	@mkdir -p $(dir $@)
 	$(GTXCONV) -c $< -o $@
@@ -57,14 +63,16 @@ $(BUILD)/textures.gtx: src/assets/textures.toml $(filter-out %.toml,$(wildcard s
 $(TOOLCHAIN_BUILD)/libwut.a: FORCE
 	@$(TOOLCHAIN)/build.sh
 $(TOOLCHAIN_BUILD)/libgu.a $(TOOLCHAIN_BUILD)/sysroot/lib/libc.a $(TOOLCHAIN_BUILD)/libcompiler-rt.a \
-	$(LATTE_ASSEMBLER) $(GTXCONV): $(TOOLCHAIN_BUILD)/libwut.a ;
+	$(LATTE_ASSEMBLER) $(GTXCONV) $(WUHBTOOL): $(TOOLCHAIN_BUILD)/libwut.a ;
 
 run: $(BUILD)/$(NAME).elf
 	$(TOOLCHAIN)/run.sh $<
 
+bundle: $(BUILD)/$(NAME).wuhb
+
 clean:
 	rm -rf $(BUILD)
 
-.PHONY: run clean FORCE
+.PHONY: run bundle clean FORCE
 
 -include $(OBJECTS:.o=.d)

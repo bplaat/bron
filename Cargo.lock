@@ -1703,6 +1703,14 @@ name = "winresource"
 version = "0.1.34+patch"
 
 [[package]]
+name = "wuhbtool"
+version = "0.1.0"
+dependencies = [
+ "gzip",
+ "image",
+]
+
+[[package]]
 name = "xmlparser"
 version = "0.13.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"

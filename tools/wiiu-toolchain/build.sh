@@ -5,7 +5,7 @@
 # builds libwut.a with the import stubs of the system libraries, libwhb and
 # wutpicolibc, picolibc (the C library) in sysroot/, libogc's paired single matrix math in
 # libgu.a, libcompiler-rt.a and the host tools elf2rpl, rplimportgen, latte-assembler and our
-# gtxconv/.
+# gtxconv/ and wuhbtool/.
 # The example Makefiles and Rust build.rs files run this before they build.
 #
 # Usage: ./build.sh [command]...
@@ -300,19 +300,21 @@ build_libraries() {
     fi
 }
 
-# elf2rpl and rplimportgen from wut-tools, latte-assembler from decaf-emu and our gtxconv/ run on
-# the host
+# elf2rpl and rplimportgen from wut-tools, latte-assembler from decaf-emu and our gtxconv/ and
+# wuhbtool/ run on the host
 build_tools() {
-    local source objects_dir="$BUILD_DIR/objects/latte-assembler" pids=() objects=() pid failed=0
-    if outdated "$BUILD_DIR/gtxconv" "$TOOLCHAIN_DIR/gtxconv" "$ROOT_DIR/lib/graphics/image"; then
-        msg "Building gtxconv"
+    local source objects_dir="$BUILD_DIR/objects/latte-assembler" pids=() objects=() pid failed=0 tool
+    for tool in gtxconv wuhbtool; do
+        outdated "$BUILD_DIR/$tool" "$TOOLCHAIN_DIR/$tool" "$ROOT_DIR/lib/graphics/image" "$ROOT_DIR/lib/data" ||
+            continue
+        msg "Building $tool"
         # The Rust examples run this from their build.rs, so leave out their toolchain and target
         env -u RUSTUP_TOOLCHAIN -u RUSTC -u RUSTC_WRAPPER -u RUSTC_WORKSPACE_WRAPPER \
             -u CARGO_ENCODED_RUSTFLAGS -u CARGO_BUILD_TARGET \
-            cargo build -q --release -p gtxconv --manifest-path "$ROOT_DIR/Cargo.toml" \
-            --target-dir "$ROOT_DIR/target" || die "Failed to build gtxconv"
-        cp "$ROOT_DIR/target/release/gtxconv" "$BUILD_DIR/gtxconv"
-    fi
+            cargo build -q --release -p "$tool" --manifest-path "$ROOT_DIR/Cargo.toml" \
+            --target-dir "$ROOT_DIR/target" || die "Failed to build $tool"
+        cp "$ROOT_DIR/target/release/$tool" "$BUILD_DIR/$tool"
+    done
     if outdated "$BUILD_DIR/elf2rpl" "$TOOLS_DIR/.patched" "$TOOLS_DIR/src"; then
         msg "Building elf2rpl"
         c++ -std=c++17 -O2 -w -DFMT_HEADER_ONLY -I"$TOOLS_DIR/src/common" -I"$TOOLS_DIR/libraries/excmd/src" \
