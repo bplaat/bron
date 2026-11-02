@@ -170,6 +170,14 @@ pub const GX2_BLEND_MODE_INV_SRC_ALPHA: u32 = 5;
 pub const GX2_BLEND_COMBINE_MODE_ADD: u32 = 0;
 pub const GX2_RENDER_TARGET_0: u32 = 0;
 pub const GX2_LOGIC_OP_COPY: u32 = 0xcc;
+pub const GX2_SCAN_TARGET_TV: u32 = 1 << 0;
+pub const GX2_SCAN_TARGET_DRC: u32 = 1 << 2;
+
+/// A render target, only used through pointers from libwhb.
+#[repr(C)]
+pub struct GX2ColorBuffer {
+    _private: [u8; 0],
+}
 
 unsafe extern "C" {
     pub fn GX2Invalidate(mode: u32, buffer: *mut c_void, size: u32);
@@ -201,6 +209,8 @@ unsafe extern "C" {
         alpha_dst_blend: u32,
         alpha_combine: u32,
     );
+    /// Copies a color buffer to the screen's scan buffer, scaled to the screen's size.
+    pub fn GX2CopyColorBufferToScanBuffer(buffer: *const GX2ColorBuffer, scan_target: u32);
 }
 
 // MARK: GX2 textures
@@ -289,8 +299,7 @@ unsafe extern "C" {
     pub fn WHBGfxFinishRender();
     pub fn WHBGfxBeginRenderTV();
     pub fn WHBGfxFinishRenderTV();
-    pub fn WHBGfxBeginRenderDRC();
-    pub fn WHBGfxFinishRenderDRC();
+    pub fn WHBGfxGetTVColourBuffer() -> *mut GX2ColorBuffer;
     pub fn WHBGfxClearColor(r: f32, g: f32, b: f32, a: f32);
     pub fn WHBGfxLoadGFDShaderGroup(
         group: *mut WHBGfxShaderGroup,

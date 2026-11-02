@@ -8,6 +8,7 @@
 #include <gx2/registers.h>
 #include <gx2/sampler.h>
 #include <gx2/shaders.h>
+#include <gx2/swap.h>
 #include <gx2/texture.h>
 #include <math.h>
 #include <stdint.h>
@@ -103,7 +104,7 @@ int main(void) {
     GX2InitSampler(&cube.sampler, GX2_TEX_CLAMP_MODE_WRAP, GX2_TEX_XY_FILTER_MODE_LINEAR);
     GX2InitSamplerZMFilter(&cube.sampler, GX2_TEX_Z_FILTER_MODE_POINT, GX2_TEX_MIP_FILTER_MODE_LINEAR);
 
-    // The TV renders at 1280x720 and the GamePad at 854x480, both about 16:9
+    // The TV renders at 1280x720 and the GamePad gets a copy at 854x480, both about 16:9
     Mtx44 projection;
     guPerspective(projection, 45.0f, 16.0f / 9.0f, 0.1f, 100.0f);
     OSTime started = OSGetTime();
@@ -116,9 +117,8 @@ int main(void) {
         WHBGfxBeginRenderTV();
         cube_draw(&cube, projection, matrix);
         WHBGfxFinishRenderTV();
-        WHBGfxBeginRenderDRC();
-        cube_draw(&cube, projection, matrix);
-        WHBGfxFinishRenderDRC();
+        // The GamePad shows the TV image scaled down, instead of drawing the scene twice
+        GX2CopyColorBufferToScanBuffer(WHBGfxGetTVColourBuffer(), GX2_SCAN_TARGET_DRC);
         WHBGfxFinishRender();
     }
 

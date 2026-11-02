@@ -110,7 +110,7 @@ pub extern "C" fn main() -> c_int {
             return 1;
         };
 
-        // The TV renders at 1280x720 and the GamePad at 854x480, both about 16:9
+        // The TV renders at 1280x720 and the GamePad gets a copy at 854x480, both about 16:9
         let mut projection = [[0.0; 4]; 4];
         guPerspective(&mut projection, 50.0, 16.0 / 9.0, 1.0, 500.0);
         let started = OSGetTime();
@@ -142,9 +142,8 @@ pub extern "C" fn main() -> c_int {
             WHBGfxBeginRenderTV();
             blocks.draw(&projection, &view);
             WHBGfxFinishRenderTV();
-            WHBGfxBeginRenderDRC();
-            blocks.draw(&projection, &view);
-            WHBGfxFinishRenderDRC();
+            // The GamePad shows the TV image scaled down, instead of drawing the scene twice
+            GX2CopyColorBufferToScanBuffer(WHBGfxGetTVColourBuffer(), GX2_SCAN_TARGET_DRC);
             WHBGfxFinishRender();
         }
 
