@@ -38,6 +38,8 @@ pub(crate) const CODE_LENGTH_ORDER: [usize; 19] = [
 /// The compression time and size tradeoff.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum Level {
+    /// Stored blocks without compression.
+    Store,
     /// Greedy matching for quick compression.
     Fast,
     /// Lazy matching with block splitting.
@@ -96,7 +98,14 @@ pub fn decompress(data: &[u8], limit: usize) -> Result<Vec<u8>, Error> {
 pub fn zlib_compress(data: &[u8], level: Level) -> Vec<u8> {
     let mut out = Vec::new();
     // Deflate with a 32 KiB window; the level hint is informational only.
-    out.extend_from_slice(&[0x78, if level == Level::Fast { 0x01 } else { 0xda }]);
+    out.extend_from_slice(&[
+        0x78,
+        if matches!(level, Level::Store | Level::Fast) {
+            0x01
+        } else {
+            0xda
+        },
+    ]);
     encode::compress(data, level, &mut out);
     out.extend_from_slice(&adler32(data).to_be_bytes());
     out
@@ -160,7 +169,13 @@ mod tests {
 
     use super::*;
 
-    const LEVELS: [Level; 4] = [Level::Fast, Level::Default, Level::Best, Level::Crunch];
+    const LEVELS: [Level; 5] = [
+        Level::Store,
+        Level::Fast,
+        Level::Default,
+        Level::Best,
+        Level::Crunch,
+    ];
 
     /// A deterministic xorshift generator for test data.
     fn xorshift(mut state: u32) -> impl FnMut() -> u32 {
@@ -268,7 +283,8 @@ mod tests {
         // Short repetitive input favors a fixed Huffman block, whose 9-bit literal
         // codes cover bytes 144 to 255.
         let data = [0xc8, 0x90, 0xff, 0x41].repeat(8);
-        for level in LEVELS {
+        // Store never uses Huffman blocks
+        for &level in &LEVELS[1..] {
             let compressed = compress(&data, level);
             assert_eq!(compressed[0] & 6, 2, "{level:?} uses a fixed block");
             assert_eq!(
@@ -284,9 +300,24 @@ mod tests {
         let data = &samples()[5];
         let sizes = LEVELS.map(|level| compress(data, level).len());
         assert!(
-            sizes[0] >= sizes[1] && sizes[1] > sizes[2] && sizes[2] >= sizes[3],
+            sizes[0] > sizes[1]
+                && sizes[1] >= sizes[2]
+                && sizes[2] > sizes[3]
+                && sizes[3] >= sizes[4],
             "{sizes:?}"
         );
+    }
+
+    #[test]
+    fn store_writes_stored_blocks() {
+        for len in [0, 1, 0xffff, 0x10000, 0x20001] {
+            let data = vec![7; len];
+            let compressed = compress(&data, Level::Store);
+            // A 5-byte header for each block of at most 65535 bytes
+            assert_eq!(compressed.len(), len + len.div_ceil(0xffff).max(1) * 5);
+            assert_eq!(compressed[0] & 6, 0);
+            assert_eq!(decompress(&compressed, len), Ok(data));
+        }
     }
 
     #[test]

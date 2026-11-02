@@ -19,6 +19,7 @@ Use `compress` and `decompress` for raw Deflate streams, as in gzip and ZIP file
 
 | Level     | Method                                                                                   |
 | --------- | ---------------------------------------------------------------------------------------- |
+| `Store`   | Stored blocks without compression.                                                       |
 | `Fast`    | Greedy matching on hash chains of 4 byte sequences, with Huffman block splitting.        |
 | `Default` | Like `Fast` with lazy matching and deeper chains.                                        |
 | `Best`    | Binary tree match finding and optimal parsing with a refined cost model, then splitting. |

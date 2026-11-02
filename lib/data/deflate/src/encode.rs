@@ -61,8 +61,10 @@ struct Params {
     span: usize,
 }
 
-const fn params(level: Level) -> Params {
-    match level {
+// Store has no parser, it only writes stored blocks.
+const fn params(level: Level) -> Option<Params> {
+    Some(match level {
+        Level::Store => return None,
         Level::Fast => Params {
             depth: 32,
             nice: 128,
@@ -103,7 +105,7 @@ const fn params(level: Level) -> Params {
             rounds: 2,
             span: 16,
         },
-    }
+    })
 }
 
 // MARK: Symbols
@@ -506,21 +508,27 @@ impl BitWriter<'_> {
     }
 }
 
+// Empty data still gets one empty stored block.
+fn write_stored(writer: &mut BitWriter, raw: &[u8], last: bool) {
+    let chunks = raw.len().div_ceil(0xffff).max(1);
+    let empty = raw.is_empty().then_some(&[][..]);
+    for (index, chunk) in raw.chunks(0xffff).chain(empty).enumerate() {
+        writer.put(u32::from(last && index + 1 == chunks), 3);
+        writer.align();
+        let len = chunk.len() as u16;
+        writer.out.extend_from_slice(&len.to_le_bytes());
+        writer.out.extend_from_slice(&(!len).to_le_bytes());
+        writer.out.extend_from_slice(chunk);
+    }
+}
+
 fn write_block(writer: &mut BitWriter, symbols: &[Symbol], raw: &[u8], last: bool) {
     let histogram = Histogram::new(symbols);
     let code = DynamicCode::new(&histogram);
     let (dynamic, fixed) = huffman_bits(&histogram, &code);
     let stored = (raw.len().div_ceil(0xffff) * 40 + raw.len() * 8) as u64;
     if stored < dynamic.min(fixed) {
-        let chunks = raw.chunks(0xffff).count();
-        for (index, chunk) in raw.chunks(0xffff).enumerate() {
-            writer.put(u32::from(last && index + 1 == chunks), 3);
-            writer.align();
-            let len = chunk.len() as u16;
-            writer.out.extend_from_slice(&len.to_le_bytes());
-            writer.out.extend_from_slice(&(!len).to_le_bytes());
-            writer.out.extend_from_slice(chunk);
-        }
+        write_stored(writer, raw, last);
         return;
     }
 
@@ -1205,11 +1213,14 @@ fn compress_lazy(writer: &mut BitWriter, data: &[u8], p: &Params) {
 
 /// Appends the raw DEFLATE stream for `data` to `out`.
 pub(crate) fn compress(data: &[u8], level: Level, out: &mut Vec<u8>) {
-    let p = params(level);
     let mut writer = BitWriter {
         out,
         bits: 0,
         count: 0,
+    };
+    let Some(p) = params(level) else {
+        write_stored(&mut writer, data, true);
+        return;
     };
     if data.is_empty() {
         // A final fixed Huffman block holding only the end code.
