@@ -5,7 +5,7 @@ vector drawings, and follows the system light or dark theme.
 
 ## Features
 
-- Decode BMP, GIF, JPEG, PNG/APNG, ICO, and QOI with a custom [image](../../../lib/graphics/image) decoder crate
+- Decode BMP, GIF, ICO, JPEG, PNG/APNG, QOI, and TGA with a custom [image](../../../lib/graphics/image) decoder crate
 - Play GIF/APNG animations with frame timings and loop counts
 - Render SVG and TinyVG with the shared [vector](../../../lib/graphics/vector) decoder, drawn
   by [imageview-core](../imageview-core) with [bcanvas](../../../lib/graphics/bcanvas): Core

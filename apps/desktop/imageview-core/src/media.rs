@@ -165,6 +165,13 @@ mod tests {
             (still.width * still.height * 4) as usize
         );
 
+        // TGA has no signature, so it is detected from its header.
+        let tga = decode_media(&std::fs::read(format!("{FIXTURES}/rgb.tga")).unwrap()).unwrap();
+        let Media::Raster(tga) = tga else {
+            panic!("expected a raster");
+        };
+        assert_eq!(tga.frames[0].pixels, still.frames[0].pixels);
+
         let animated =
             decode_media(&std::fs::read(format!("{FIXTURES}/animated.gif")).unwrap()).unwrap();
         let Media::Raster(animated) = animated else {

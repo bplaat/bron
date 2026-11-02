@@ -54,6 +54,18 @@
         </dict>
         <dict>
             <key>CFBundleTypeName</key>
+            <string>TGA Image</string>
+            <key>CFBundleTypeRole</key>
+            <string>Viewer</string>
+            <key>LSHandlerRank</key>
+            <string>Alternate</string>
+            <key>LSItemContentTypes</key>
+            <array>
+                <string>com.truevision.tga-image</string>
+            </array>
+        </dict>
+        <dict>
+            <key>CFBundleTypeName</key>
             <string>SVG Image</string>
             <key>CFBundleTypeRole</key>
             <string>Viewer</string>

@@ -43,6 +43,10 @@ name = "GIF Image"
 extensions = ["gif"]
 
 [[package.metadata.bundle.windows.file_types]]
+name = "Icon"
+extensions = ["ico"]
+
+[[package.metadata.bundle.windows.file_types]]
 name = "JPEG Image"
 extensions = ["jpg", "jpeg", "jpe", "jfif"]
 
@@ -55,12 +59,12 @@ name = "Animated PNG Image"
 extensions = ["apng"]
 
 [[package.metadata.bundle.windows.file_types]]
-name = "Icon"
-extensions = ["ico"]
-
-[[package.metadata.bundle.windows.file_types]]
 name = "QOI Image"
 extensions = ["qoi"]
+
+[[package.metadata.bundle.windows.file_types]]
+name = "TGA Image"
+extensions = ["tga"]
 
 [[package.metadata.bundle.windows.file_types]]
 name = "SVG Image"

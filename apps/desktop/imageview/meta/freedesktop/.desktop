@@ -7,4 +7,4 @@ Exec="$BIN_DIR/ImageView" %F
 Icon=nl.bplaat.ImageView
 Terminal=false
 Categories=Graphics;Viewer;
-MimeType=image/bmp;image/gif;image/jpeg;image/png;image/apng;image/vnd.microsoft.icon;image/qoi;image/svg+xml;image/tinyvg;
+MimeType=image/bmp;image/gif;image/vnd.microsoft.icon;image/jpeg;image/png;image/apng;image/qoi;image/x-tga;image/svg+xml;image/tinyvg;
