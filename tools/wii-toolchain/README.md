@@ -55,7 +55,8 @@ separately from main Cargo workspace.
   `../../target/wii-toolchain/libdvm.a` and picolibc's `../../target/wii-toolchain/sysroot/lib/libc.a`
 - `gxtexconv/` converts images to GX textures, as a library for `build.rs` files and a CLI for
   the Makefiles
-- `libogc-sys/` has the Rust bindings for the libogc and picolibc functions the programs use
+- `libogc-sys/` has Rust bindings for graphics, matrices, picolibc, threads, Wii Remote input,
+  AESND audio, SD card mounting and IOS network sockets
 - `cc` is the C compiler for cc-rs build scripts of Rust projects, like the bundled SQLite of
   `libsqlite3-sys`: it builds the toolchain and compiles with the Wii flags and picolibc.
   `ar` is a separate wrapper for `llvm-ar`. Projects set `TARGET_CC` and `TARGET_AR` to

@@ -13,6 +13,16 @@
 
 use core::ffi::{c_char, c_int, c_void};
 
+mod audio;
+mod input;
+mod network;
+mod thread;
+
+pub use audio::*;
+pub use input::*;
+pub use network::*;
+pub use thread::*;
+
 // MARK: System and video
 pub const SYS_BASE_CACHED: u32 = 0x8000_0000;
 pub const SYS_BASE_UNCACHED: u32 = 0xc000_0000;
@@ -276,150 +286,6 @@ unsafe extern "C" {
     pub fn ps_guMtxTransApply(source: *const Mtx, destination: *mut Mtx, x: f32, y: f32, z: f32);
 }
 
-// MARK: Threads
-pub type lwp_t = u32;
-pub type mutex_t = u32;
-pub type cond_t = u32;
-
-pub const LWP_THREAD_NULL: lwp_t = 0xffff_ffff;
-pub const LWP_MUTEX_NULL: mutex_t = 0xffff_ffff;
-pub const LWP_COND_NULL: cond_t = 0xffff_ffff;
-
-unsafe extern "C" {
-    pub fn LWP_CreateThread(
-        thread: *mut lwp_t,
-        entry: extern "C" fn(*mut c_void) -> *mut c_void,
-        argument: *mut c_void,
-        stack: *mut c_void,
-        stack_size: u32,
-        priority: u8,
-    ) -> i32;
-    pub fn LWP_MutexInit(mutex: *mut mutex_t, recursive: bool) -> i32;
-    pub fn LWP_MutexLock(mutex: mutex_t) -> i32;
-    pub fn LWP_MutexUnlock(mutex: mutex_t) -> i32;
-    pub fn LWP_CondInit(cond: *mut cond_t) -> i32;
-    pub fn LWP_CondWait(cond: cond_t, mutex: mutex_t) -> i32;
-    pub fn LWP_CondSignal(cond: cond_t) -> i32;
-}
-
-// MARK: Wii Remote
-pub const WPAD_CHAN_ALL: c_int = -1;
-pub const WPAD_FMT_BTNS_ACC_IR: c_int = 2;
-pub const WPAD_EXP_NUNCHUK: c_int = 1;
-pub const WPAD_BUTTON_2: u32 = 0x0001;
-pub const WPAD_BUTTON_1: u32 = 0x0002;
-pub const WPAD_BUTTON_B: u32 = 0x0004;
-pub const WPAD_BUTTON_A: u32 = 0x0008;
-pub const WPAD_BUTTON_MINUS: u32 = 0x0010;
-pub const WPAD_BUTTON_HOME: u32 = 0x0080;
-pub const WPAD_BUTTON_LEFT: u32 = 0x0100;
-pub const WPAD_BUTTON_RIGHT: u32 = 0x0200;
-pub const WPAD_BUTTON_DOWN: u32 = 0x0400;
-pub const WPAD_BUTTON_UP: u32 = 0x0800;
-pub const WPAD_BUTTON_PLUS: u32 = 0x1000;
-pub const WPAD_NUNCHUK_BUTTON_Z: u32 = 0x0001 << 16;
-pub const WPAD_NUNCHUK_BUTTON_C: u32 = 0x0002 << 16;
-
-#[repr(C)]
-pub struct IrDot {
-    pub visible: u8,
-    pub rx: i16,
-    pub ry: i16,
-    pub size: u8,
-}
-
-/// wiiuse's `ir_t`, the pointer position is `x` and `y` in the `WPAD_SetVRes` resolution.
-#[repr(C)]
-pub struct IrData {
-    pub dots: [IrDot; 4],
-    pub num_dots: u8,
-    pub state: c_int,
-    pub raw_valid: c_int,
-    pub sensorbar: [f32; 15],
-    pub ax: f32,
-    pub ay: f32,
-    pub distance: f32,
-    pub z: f32,
-    pub angle: f32,
-    pub smooth_valid: c_int,
-    pub sx: f32,
-    pub sy: f32,
-    pub error_cnt: f32,
-    pub glitch_cnt: f32,
-    pub valid: c_int,
-    pub x: f32,
-    pub y: f32,
-    pub aspect: c_int,
-    pub pos: c_int,
-    pub vres: [u32; 2],
-    pub offset: [c_int; 2],
-}
-
-/// wiiuse's `joystick_t`, the angle is in degrees clockwise from up.
-#[repr(C)]
-pub struct Joystick {
-    pub max: [u8; 2],
-    pub min: [u8; 2],
-    pub center: [u8; 2],
-    pub position: [u8; 2],
-    pub ang: f32,
-    pub mag: f32,
-}
-
-/// wiiuse's `expansion_t` up to the Nunchuk's joystick, which follows its accelerometer
-/// calibration. The union of all expansions is smaller than the padding.
-#[repr(C)]
-pub struct Expansion {
-    pub kind: c_int,
-    pub accel_calibration: [u16; 6],
-    pub accel_smoothing: [f32; 3],
-    pub joystick: Joystick,
-    _rest: [u32; 128],
-}
-
-unsafe extern "C" {
-    pub fn WPAD_Init() -> c_int;
-    pub fn WPAD_ScanPads() -> c_int;
-    pub fn WPAD_SetDataFormat(channel: c_int, format: c_int) -> c_int;
-    pub fn WPAD_SetVRes(channel: c_int, width: u32, height: u32) -> c_int;
-    pub fn WPAD_ButtonsDown(channel: c_int) -> u32;
-    pub fn WPAD_ButtonsHeld(channel: c_int) -> u32;
-    pub fn WPAD_Expansion(channel: c_int, expansion: *mut Expansion);
-    pub fn WPAD_IR(channel: c_int, ir: *mut IrData);
-}
-
-// MARK: Audio
-pub const VOICE_MONO16: u32 = 2;
-
-/// AESND's voice parameter block, the DSP mixes the voices in hardware.
-#[repr(C)]
-pub struct AESNDPB {
-    _private: [u8; 0],
-}
-
-pub type AESNDVoiceCallbackArg =
-    Option<extern "C" fn(pb: *mut AESNDPB, state: u32, arg: *mut c_void)>;
-
-unsafe extern "C" {
-    pub fn AESND_Init();
-    pub fn AESND_Reset();
-    pub fn AESND_Pause(pause: bool);
-    pub fn AESND_AllocateVoiceWithArg(
-        callback: AESNDVoiceCallbackArg,
-        arg: *mut c_void,
-    ) -> *mut AESNDPB;
-    pub fn AESND_SetVoiceVolume(pb: *mut AESNDPB, volume_l: u16, volume_r: u16);
-    pub fn AESND_PlayVoice(
-        pb: *mut AESNDPB,
-        format: u32,
-        buffer: *const c_void,
-        len: u32,
-        freq: f32,
-        delay: u32,
-        looped: bool,
-    );
-}
-
 // MARK: C library
 unsafe extern "C" {
     pub fn memalign(alignment: usize, size: usize) -> *mut c_void;
@@ -438,70 +304,4 @@ unsafe extern "C" {
     /// Mounts the SD card (only when FAT32 if asked) as `sd:/` and the current directory,
     /// returns non-zero on success. Call it with all files closed.
     pub fn wiiMountSd(fat32_only: c_int) -> c_int;
-}
-
-// MARK: IOS network sockets
-pub const AF_INET: u8 = 2;
-pub const SOCK_STREAM: u32 = 1;
-pub const SOCK_DGRAM: u32 = 2;
-pub const SOL_SOCKET: u32 = 0xffff;
-pub const SO_REUSEADDR: u32 = 0x0004;
-pub const SO_BROADCAST: u32 = 0x0020;
-pub const F_SETFL: u32 = 4;
-pub const IOS_O_NONBLOCK: u32 = 4;
-pub const MSG_DONTWAIT: u32 = 0x40;
-pub const EAGAIN: i32 = 11;
-#[repr(C, align(32))]
-#[derive(Clone, Copy, Default)]
-pub struct SocketAddress {
-    pub length: u8,
-    pub family: u8,
-    pub port: u16,
-    pub address: u32,
-    pub padding: [u8; 8],
-}
-unsafe extern "C" {
-    pub fn net_init_async(
-        callback: Option<extern "C" fn(i32, *mut c_void) -> i32>,
-        argument: *mut c_void,
-    ) -> i32;
-    pub fn if_configex(
-        address: *mut u32,
-        netmask: *mut u32,
-        gateway: *mut u32,
-        dhcp: bool,
-        retries: c_int,
-    ) -> i32;
-    pub fn net_socket(domain: u32, kind: u32, protocol: u32) -> i32;
-    pub fn net_bind(socket: i32, address: *mut SocketAddress, length: u32) -> i32;
-    pub fn net_listen(socket: i32, backlog: u32) -> i32;
-    pub fn net_accept(socket: i32, address: *mut SocketAddress, length: *mut u32) -> i32;
-    pub fn net_connect(socket: i32, address: *mut SocketAddress, length: u32) -> i32;
-    pub fn net_fcntl(socket: i32, command: u32, flags: u32) -> i32;
-    pub fn net_setsockopt(
-        socket: i32,
-        level: u32,
-        option: u32,
-        value: *const c_void,
-        length: u32,
-    ) -> i32;
-    pub fn net_send(socket: i32, bytes: *const c_void, length: i32, flags: u32) -> i32;
-    pub fn net_recv(socket: i32, bytes: *mut c_void, length: i32, flags: u32) -> i32;
-    pub fn net_sendto(
-        socket: i32,
-        bytes: *const c_void,
-        length: i32,
-        flags: u32,
-        address: *mut SocketAddress,
-        address_length: u32,
-    ) -> i32;
-    pub fn net_recvfrom(
-        socket: i32,
-        bytes: *mut c_void,
-        length: i32,
-        flags: u32,
-        address: *mut SocketAddress,
-        address_length: *mut u32,
-    ) -> i32;
-    pub fn net_close(socket: i32) -> i32;
 }
