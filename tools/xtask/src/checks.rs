@@ -455,12 +455,16 @@ impl Xtask {
                 .env_remove("RUSTUP_TOOLCHAIN"))?;
         }
 
-        // The port selects its nightly toolchain itself, so drop the one cargo xtask runs with
-        println!("Building the PlaatCraft Wii port...");
-        run(Command::new("cargo")
-            .args(["build", "--release", "--locked"])
-            .current_dir("games/plaatcraft-wii")
-            .env_remove("RUSTUP_TOOLCHAIN"))
+        // The ports select their nightly toolchain themselves, so drop the one cargo xtask runs
+        // with
+        for (name, port) in [("Wii", "plaatcraft-wii"), ("Wii U", "plaatcraft-wiiu")] {
+            println!("Building the PlaatCraft {name} port...");
+            run(Command::new("cargo")
+                .args(["build", "--release", "--locked"])
+                .current_dir(format!("games/{port}"))
+                .env_remove("RUSTUP_TOOLCHAIN"))?;
+        }
+        Ok(())
     }
 
     pub(crate) fn coverage(&self) -> Result<()> {

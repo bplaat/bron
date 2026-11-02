@@ -1,0 +1,49 @@
+cargo-features = ["panic-immediate-abort"]
+
+[package]
+name = "plaatcraft-wiiu"
+version = "0.2.0"
+edition = "2024"
+
+# Runs the chunk pipeline benchmark instead of the game
+[features]
+bench = []
+
+[dependencies]
+libsqlite3-sys = { version = "0.39", features = ["bundled"] }
+plaatcraft-engine = { path = "../plaatcraft-engine", default-features = false, features = [
+    "client",
+] }
+sfxr = { version = "0.1.4", default-features = false }
+wut-sys = { path = "../../tools/wiiu-toolchain/wut-sys" }
+
+[build-dependencies]
+gtxconv = { path = "../../tools/wiiu-toolchain/gtxconv" }
+image = { path = "../../lib/graphics/image", default-features = false, features = [
+    "png",
+] }
+plaatcraft-engine = { path = "../plaatcraft-engine" }
+
+[patch.crates-io]
+crc = { path = "../../lib/data/crc" }
+getrandom = { path = "../../lib/crypto/getrandom" }
+libsqlite3-sys = { path = "../../lib/data/libsqlite3-sys" }
+sfxr = { path = "../../lib/audio/sfxr" }
+
+# Unoptimized code is too slow for the Wii U
+[profile.dev]
+opt-level = "s"
+panic = "immediate-abort"
+
+[profile.release]
+opt-level = "s"
+panic = "immediate-abort"
+codegen-units = 1
+
+# The build script converts every texture whenever the engine changes, optimized it takes
+# seconds instead of half a minute
+[profile.release.build-override]
+opt-level = 3
+
+[profile.dev.build-override]
+opt-level = 3

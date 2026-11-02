@@ -17,6 +17,7 @@ exclude = [
     "examples/wiiu",
     "games/empires",
     "games/plaatcraft-wii",
+    "games/plaatcraft-wiiu",
     "games/nds",
     "lib/ui/plaatui",
     "lib/ui/plaatui/examples/showcase",

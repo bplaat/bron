@@ -493,7 +493,8 @@ impl<P: Platform> Game<P> {
     }
 
     /// Plays until the player quits or the console stops the game, then saves the world.
-    pub fn run(&mut self) {
+    /// Returns true when the player chose Quit, false when the console requested an exit.
+    pub fn run(&mut self) -> bool {
         while !self.exit && P::running() {
             let now = self.seconds();
             let dt = (now - self.last_frame).min(0.1);
@@ -550,6 +551,7 @@ impl<P: Platform> Game<P> {
             }
         }
         self.leave_world();
+        self.exit
     }
 
     // The engine's menus with the pointer and the D-pad, select presses and back goes back.

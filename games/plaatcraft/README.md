@@ -3,7 +3,7 @@
 A Minecraft like voxel sandbox written in Rust for macOS, Linux, Windows, iOS, and
 Android, built with [bwindow](../../lib/ui/bwindow), [bcanvas](../../lib/graphics/bcanvas)
 and [bwebgpu](../../lib/graphics/bwebgpu). The game itself lives in the
-[plaatcraft-engine](../plaatcraft-engine) crate, which the [Wii port](../plaatcraft-wii) shares.
+[plaatcraft-engine](../plaatcraft-engine) crate, which the [Wii](../plaatcraft-wii) and [Wii U](../plaatcraft-wiiu) ports share.
 
 ## Features
 
@@ -11,8 +11,8 @@ and [bwebgpu](../../lib/graphics/bwebgpu). The game itself lives in the
 - Break and place blocks from a hotbar and an inventory of every block, slabs and stairs
 - Build big with `/pos1`, `/pos2`, `/fill`, and `/clear`, and take changes back with `/undo`
 - Walking, swimming, and flying, day and night
-- Multiple worlds that are saved automatically and also play on the Wii
-- LAN multiplayer like Minecraft, with the desktop, mobile, and Wii versions together
+- Multiple worlds that are saved automatically and also play on the Wii and Wii U
+- LAN multiplayer like Minecraft, with the desktop, mobile, Wii, and Wii U versions together
 - Synthesized sound effects, settings, and touch controls on iOS and Android
 
 ## Run
