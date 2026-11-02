@@ -13,6 +13,7 @@ use std::process::Command;
 use anyhow::{Context, Result, bail};
 use serde_json::Value;
 
+use crate::homebrew::Console;
 use crate::process::{capture, npm_program, run};
 use crate::utils::collect_source_files;
 
@@ -20,11 +21,11 @@ mod build;
 mod checks;
 #[cfg(unix)]
 mod headers;
+mod homebrew;
 mod metadata;
 mod process;
 mod utils;
 mod vscode;
-mod wii;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Os {
@@ -76,7 +77,13 @@ impl Xtask {
         if package.is_some()
             && !matches!(
                 task,
-                "install" | "install-ios" | "install-android" | "install-wii" | "build-wii-bundle"
+                "install"
+                    | "install-ios"
+                    | "install-android"
+                    | "install-wii"
+                    | "install-wiiu"
+                    | "build-wii-bundle"
+                    | "build-wiiu-bundle"
             )
         {
             bail!("task {task} does not accept a package");
@@ -84,7 +91,8 @@ impl Xtask {
         match task {
             "build-pages" => self.build_pages(),
             "build-bundle" => self.build_bundle(),
-            "build-wii-bundle" => self.build_wii_bundle(package),
+            "build-wii-bundle" => self.build_homebrew_bundle(Console::Wii, package),
+            "build-wiiu-bundle" => self.build_homebrew_bundle(Console::WiiU, package),
             "clean" => self.clean(),
             "check" => self.check(),
             "check-editor" => self.check_editor(),
@@ -98,7 +106,8 @@ impl Xtask {
             "install" => self.install(package),
             "install-ios" => self.install_ios(package),
             "install-android" => self.install_android(package),
-            "install-wii" => self.install_wii(package),
+            "install-wii" => self.install_homebrew(Console::Wii, package),
+            "install-wiiu" => self.install_homebrew(Console::WiiU, package),
             "help" | "--help" | "-h" => {
                 Self::print_help();
                 Ok(())
@@ -128,6 +137,7 @@ impl Xtask {
         println!("  build-pages      Build GitHub Pages artifacts");
         println!("  build-bundle     Build native application bundles");
         println!("  build-wii-bundle [name]   Build Homebrew Channel bundles of the Wii programs");
+        println!("  build-wiiu-bundle [name]  Build Wii U Menu bundles of the Wii U programs");
         println!("  clean            Remove generated files");
         println!("  install [name]   Install all applications or only the named package");
         println!("  install-ios [name]        Install iOS applications on the booted simulators");
@@ -135,6 +145,7 @@ impl Xtask {
             "  install-android [name]    Install Android applications on the first adb device"
         );
         println!("  install-wii [name]        Install Wii programs on the connected SD card");
+        println!("  install-wiiu [name]       Install Wii U programs on the connected SD card");
     }
 
     fn ensure_npm_deps(&self) -> Result<()> {
