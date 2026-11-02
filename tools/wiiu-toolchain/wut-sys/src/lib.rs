@@ -350,7 +350,6 @@ unsafe extern "C" {
     pub fn printf(format: *const c_char, ...) -> c_int;
     pub safe fn floorf(x: f32) -> f32;
     pub safe fn powf(x: f32, y: f32) -> f32;
-    pub safe fn fmod(x: f64, y: f64) -> f64;
     pub safe fn sinf(x: f32) -> f32;
     pub safe fn cosf(x: f32) -> f32;
     pub safe fn tanf(x: f32) -> f32;
