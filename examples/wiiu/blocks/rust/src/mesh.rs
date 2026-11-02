@@ -21,9 +21,12 @@ const UV: [[u8; 2]; 4] = [[0, 255], [255, 255], [255, 0], [0, 0]];
 pub struct Vertex {
     pub position: [f32; 3],
     pub tex_coord: [u8; 2],
-    pub color: [u8; 4],
+    // Packed RGBA fetches must start on a four-byte boundary on the console.
     _padding: [u8; 2],
+    pub color: [u8; 4],
 }
+
+const _: () = assert!(mem::offset_of!(Vertex, color).is_multiple_of(4));
 
 /// The vertices of all faces, sorted by material, so each material draws one range
 pub struct Mesh {
@@ -135,7 +138,7 @@ fn face_vertices(face: &Face, water: bool) -> [Vertex; 4] {
             f32::from(face.position[axis] + corners[corner][axis])
         }),
         tex_coord: UV[corner],
-        color: [shade, shade, shade, if water { 153 } else { 255 }],
         _padding: [0; 2],
+        color: [shade, shade, shade, if water { 153 } else { 255 }],
     })
 }

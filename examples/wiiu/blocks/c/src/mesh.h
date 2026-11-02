@@ -6,6 +6,7 @@
 #include <gx2/shaders.h>
 #include <malloc.h>
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #include "materials.h"
@@ -15,9 +16,12 @@
 typedef struct {
     float position[3];
     uint8_t tex_coord[2];
-    uint8_t color[4];
+    // Packed RGBA fetches must start on a four-byte boundary on the console.
     uint8_t padding[2];
+    uint8_t color[4];
 } Vertex;
+
+static_assert(offsetof(Vertex, color) % 4 == 0);
 
 // The vertices of all faces, sorted by material, so each material draws one range
 typedef struct {
