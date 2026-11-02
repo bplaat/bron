@@ -10,9 +10,13 @@ repository.workspace = true
 [features]
 default = ["std"]
 std = []
+# The game client of the consoles: the menus, the streamed chunks, the SQLite worlds on the SD
+# card, the LAN, the HUD and the controls, the ports add their GPU, input, sound and system
+client = ["dep:libsqlite3-sys"]
 
 [dependencies]
 deflate = { path = "../../lib/data/deflate" }
+libsqlite3-sys = { version = "0.39", optional = true }
 postcard = { version = "1.1", default-features = false, features = ["alloc"] }
 serde = { version = "1.0", default-features = false, features = [
     "alloc",

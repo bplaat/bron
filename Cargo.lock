@@ -1031,6 +1031,7 @@ version = "0.2.0"
 dependencies = [
  "deflate",
  "image",
+ "libsqlite3-sys",
  "postcard",
  "serde",
  "sfxr",

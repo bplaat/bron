@@ -8,8 +8,9 @@
 //! meshing, player physics and its client prediction, block picking, the hotbar, when sound
 //! effects play, block particles, the game rules of the integrated server, the LAN protocol,
 //! the other players' models, the menus, and the world database. It only needs `alloc`, so
-//! the bwindow game and the Wii port share it, they add rendering, input, sound output,
-//! storage and networking.
+//! the bwindow game and the console ports share it. The `client` feature adds the game client
+//! of the consoles, which the Wii and Wii U ports run with their GPU, input, sound output,
+//! threads and sockets.
 
 #![no_std]
 
@@ -20,6 +21,8 @@ extern crate std;
 pub mod avatars;
 mod biome;
 pub mod camera;
+#[cfg(all(feature = "client", any(feature = "std", target_os = "none")))]
+pub mod client;
 pub mod database;
 pub mod flow;
 pub mod hotbar;
