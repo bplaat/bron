@@ -352,16 +352,27 @@ build_tools() {
     c++ "${objects[@]}" -o "$BUILD_DIR/latte-assembler" || die "Failed to link latte-assembler"
 }
 
-# Only one build at a time, the C and Rust examples can start one at the same time
+# Only one build at a time, the C and Rust examples can start one at the same time. The lock holds
+# the process ID of its build, so the lock of a killed build is taken over instead of waited on.
 locked=false
 lock() {
     $locked && return
+    local lock="$BUILD_DIR/.lock" pid waiting=false
     mkdir -p "$BUILD_DIR"
-    if ! mkdir "$BUILD_DIR/.lock" 2> /dev/null; then
-        msg "Waiting for another build, remove ../../target/wiiu-toolchain/.lock if none is running"
-        until mkdir "$BUILD_DIR/.lock" 2> /dev/null; do sleep 1; done
-    fi
-    trap 'rmdir "$BUILD_DIR/.lock"' EXIT
+    until mkdir "$lock" 2> /dev/null; do
+        # A new lock gets its process ID right after it's made, so give it a second
+        pid=$(cat "$lock/pid" 2> /dev/null || { sleep 1; cat "$lock/pid" 2> /dev/null; } || true)
+        if [ -z "$pid" ] || ! kill -0 "$pid" 2> /dev/null; then
+            msg "Removing the lock of a build that was stopped"
+            rm -rf "$lock"
+            continue
+        fi
+        $waiting || msg "Waiting for another build"
+        waiting=true
+        sleep 1
+    done
+    echo $$ > "$lock/pid"
+    trap 'rm -rf "$BUILD_DIR/.lock"' EXIT
     locked=true
 }
 
