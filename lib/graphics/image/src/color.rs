@@ -17,6 +17,8 @@
 use alloc::boxed::Box;
 use alloc::vec::Vec;
 
+use super::math::{exp, pow};
+
 type Matrix = [[f64; 3]; 3];
 
 /// The device color model of the samples a profile describes.
@@ -35,60 +37,6 @@ impl ColorModel {
             Self::Cmyk => 4,
         }
     }
-}
-
-// MARK: Math
-// `core` has no transcendental functions (see the rounding FIXME in mod.rs). Curves are only
-// evaluated while building tables, so short series are fast enough and accurate to ~1e-15.
-
-const fn ln(x: f64) -> f64 {
-    if x <= 0.0 {
-        return f64::NEG_INFINITY;
-    }
-    // x = m * 2^e with m in [sqrt(1/2), sqrt(2)], and ln(m) = 2 atanh((m - 1) / (m + 1)).
-    let bits = x.to_bits();
-    let mut exponent = ((bits >> 52) & 0x7ff) as i64 - 1023;
-    let mut m = f64::from_bits((bits & 0x000f_ffff_ffff_ffff) | 0x3ff0_0000_0000_0000);
-    if m > core::f64::consts::SQRT_2 {
-        m /= 2.0;
-        exponent += 1;
-    }
-    let s = (m - 1.0) / (m + 1.0);
-    let s2 = s * s;
-    let mut term = s;
-    let mut sum = 0.0;
-    let mut k = 1;
-    while k < 40 {
-        sum += term / k as f64;
-        term *= s2;
-        k += 2;
-    }
-    2.0 * sum + exponent as f64 * core::f64::consts::LN_2
-}
-
-const fn exp(x: f64) -> f64 {
-    if x < -700.0 {
-        return 0.0;
-    }
-    if x > 700.0 {
-        return f64::INFINITY;
-    }
-    // e^x = 2^k * e^r with |r| < ln 2.
-    let k = (x / core::f64::consts::LN_2) as i64;
-    let r = x - k as f64 * core::f64::consts::LN_2;
-    let mut term = 1.0;
-    let mut sum = 1.0;
-    let mut n = 1;
-    while n < 28 {
-        term *= r / n as f64;
-        sum += term;
-        n += 1;
-    }
-    sum * f64::from_bits(((k + 1023) as u64) << 52)
-}
-
-const fn pow(x: f64, y: f64) -> f64 {
-    if x <= 0.0 { 0.0 } else { exp(y * ln(x)) }
 }
 
 fn multiply(a: &Matrix, b: &Matrix) -> Matrix {
@@ -299,57 +247,16 @@ impl Curve {
 }
 
 // MARK: Tables
-const TABLE_STEPS: usize = 4096;
+include!(concat!(env!("OUT_DIR"), "/srgb.rs"));
 
-/// The sRGB encoding of linear light, both normalized to [0, 1], sampled at compile time.
-static SRGB_ENCODE: [f32; TABLE_STEPS + 1] = {
-    let mut table = [0.0; TABLE_STEPS + 1];
-    let mut i = 0;
-    while i <= TABLE_STEPS {
-        let x = i as f64 / TABLE_STEPS as f64;
-        table[i] = srgb_encode(x) as f32;
-        i += 1;
-    }
-    table
-};
-
-const fn srgb_encode(x: f64) -> f64 {
+#[cfg(test)]
+fn srgb_encode(x: f64) -> f64 {
     if x <= 0.003_130_8 {
         12.92 * x
     } else {
         1.055 * pow(x, 1.0 / 2.4) - 0.055
     }
 }
-
-const fn srgb_decode(x: f64) -> f64 {
-    if x <= 0.040_45 {
-        x / 12.92
-    } else {
-        pow((x + 0.055) / 1.055, 2.4)
-    }
-}
-
-/// The linear light of every 8-bit sRGB sample.
-static SRGB_TO_LINEAR: [f32; 256] = {
-    let mut table = [0.0; 256];
-    let mut i = 0;
-    while i < 256 {
-        table[i] = srgb_decode(i as f64 / 255.0) as f32;
-        i += 1;
-    }
-    table
-};
-
-/// The linear light halfway between each pair of adjacent 8-bit sRGB samples.
-static SRGB_ROUNDING: [f32; 255] = {
-    let mut table = [0.0; 255];
-    let mut i = 0;
-    while i < 255 {
-        table[i] = srgb_decode((i as f64 + 0.5) / 255.0) as f32;
-        i += 1;
-    }
-    table
-};
 
 /// Converts an 8-bit sRGB sample to linear light in [0, 1], for example to average pixels
 /// when resizing or building mipmaps.
@@ -933,7 +840,6 @@ mod tests {
     fn math_matches_std() {
         for i in 1..2000 {
             let x = f64::from(i) / 97.0;
-            assert!((ln(x) - x.ln()).abs() < 1e-13, "ln {x}");
             assert!(
                 (exp(x / 4.0 - 10.0) - (x / 4.0 - 10.0).exp()).abs() < 1e-13,
                 "exp {x}"

@@ -88,7 +88,9 @@ the result with `linear_to_srgb`.
 
 All formats are enabled by default. You can enable only the codecs you need
 with the `bmp`, `gif`, `ico`, `jpeg`, `png`, `qoi`, and `tga` Cargo features.
-The crate is `no_std` and only needs `alloc`.
+The default `std` feature uses Rust math functions. Disable it for `no_std` with `alloc`
+and C library math (`exp`, `pow`, `round`, `roundf`, and `truncf`, depending on the codecs).
+The sRGB tables are generated at build time using host `std` math.
 
 ## Tests and benchmarks
 

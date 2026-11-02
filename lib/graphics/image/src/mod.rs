@@ -5,7 +5,7 @@
  */
 
 #![doc = include_str!("../README.md")]
-#![cfg_attr(not(test), no_std)]
+#![cfg_attr(not(any(test, feature = "std")), no_std)]
 
 extern crate alloc;
 
@@ -13,6 +13,13 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use core::fmt::{self, Display, Formatter};
 use core::time::Duration;
+
+mod math;
+
+#[cfg(feature = "gif")]
+use math::round;
+#[cfg(feature = "jpeg")]
+use math::{roundf, truncf};
 
 mod encoder;
 pub use color::{linear_to_srgb, srgb_to_linear};
@@ -594,40 +601,6 @@ impl Area {
             let start = ((self.y + row) * stride + self.x) * 4;
             canvas[start..start + row_len].copy_from_slice(source);
         }
-    }
-}
-
-// MARK: Rounding
-// FIXME: Use `f32::round`, `f32::trunc` and `f64::round` once the `core_float_math` feature
-// brings them to `core` on stable Rust.
-// `core` has no float rounding; codecs only round values far inside the `i64` range, where
-// truncation is an integer cast.
-
-/// Rounds toward zero, like `f32::trunc`.
-#[cfg(feature = "jpeg")]
-const fn truncf(x: f32) -> f32 {
-    x as i64 as f32
-}
-
-/// Rounds half away from zero, like `f32::round`.
-#[cfg(feature = "jpeg")]
-fn roundf(x: f32) -> f32 {
-    let truncated = truncf(x);
-    if (x - truncated).abs() >= 0.5 {
-        truncated + 1f32.copysign(x)
-    } else {
-        truncated
-    }
-}
-
-/// Rounds half away from zero, like `f64::round`.
-#[cfg(feature = "gif")]
-fn round(x: f64) -> f64 {
-    let truncated = x as i64 as f64;
-    if (x - truncated).abs() >= 0.5 {
-        truncated + 1f64.copysign(x)
-    } else {
-        truncated
     }
 }
 
