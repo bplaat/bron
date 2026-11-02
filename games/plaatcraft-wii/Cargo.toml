@@ -11,14 +11,9 @@ bench = []
 
 [dependencies]
 libogc-sys = { path = "../../tools/wii-toolchain/libogc-sys" }
-libsqlite3-sys = { path = "../../lib/data/libsqlite3-sys", features = [
-    "bundled",
-] }
-plaatcraft-engine = { path = "../plaatcraft-engine", default-features = false }
-postcard = { version = "1.1", default-features = false, features = ["alloc"] }
-serde = { version = "1.0", default-features = false, features = [
-    "alloc",
-    "derive",
+libsqlite3-sys = { version = "0.39", features = ["bundled"] }
+plaatcraft-engine = { path = "../plaatcraft-engine", default-features = false, features = [
+    "client",
 ] }
 sfxr = { version = "0.1.4", default-features = false }
 
@@ -32,6 +27,7 @@ plaatcraft-engine = { path = "../plaatcraft-engine" }
 [patch.crates-io]
 crc = { path = "../../lib/data/crc" }
 getrandom = { path = "../../lib/crypto/getrandom" }
+libsqlite3-sys = { path = "../../lib/data/libsqlite3-sys" }
 sfxr = { path = "../../lib/audio/sfxr" }
 
 # Unoptimized code is too slow for the Wii

@@ -1,9 +1,9 @@
 # PlaatCraft Wii
 
-A Wii port of [PlaatCraft](../plaatcraft), the Minecraft like voxel sandbox. It shares the
-world generation, lighting, meshing, and player physics of the
-[plaatcraft-engine](../plaatcraft-engine) crate with the desktop and mobile game, and draws
-the chunks as GX display lists. It's built with the [Wii toolchain](../../tools/wii-toolchain),
+A Wii port of [PlaatCraft](../plaatcraft), the Minecraft like voxel sandbox. The game client
+of the consoles lives in the `client` feature of the [plaatcraft-engine](../plaatcraft-engine)
+crate, which the [Wii U port](../plaatcraft-wiiu) shares, this port adds drawing with GX, the
+Wii Remote, AESND sound, LWP threads and libogc's sockets. It's built with the [Wii toolchain](../../tools/wii-toolchain),
 see the [Wii examples](../../examples/wii/README.md#getting-started) for the host tools.
 
 ## Run
@@ -73,8 +73,8 @@ undo remembers up to 32 changes within a 65536-block memory budget.
 
 The render distance is fixed at 8 chunks. A worker loads or generates, lights, and meshes
 chunks nearest first, edited chunks before their neighbors, and the main thread keeps their
-compressed blocks for collision and picking. GX display lists use
-fixed-point positions for slabs, stairs, and liquid heights, with per-corner lighting from
+compressed blocks for collision and picking. The engine's chunk quads become GX display lists
+with fixed-point positions for slabs, stairs, and liquid heights, with per-corner lighting from
 a palette. The sky layers, held block, breaking particles, player models, and textures
 follow the desktop version. Water and lava use the shared engine's flow rules, with a
 smaller update budget on the Wii.

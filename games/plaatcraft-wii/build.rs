@@ -128,7 +128,7 @@ fn main() {
     for (name, file) in [("FONT", "font.png"), ("CURSOR", "cursor.png")] {
         let texture = convert(
             &mut data,
-            &manifest_dir.join("src/assets").join(file),
+            &manifest_dir.join("../plaatcraft-engine/assets").join(file),
             false,
         );
         writeln!(code, "pub const {name}: Texture = {texture};").unwrap();

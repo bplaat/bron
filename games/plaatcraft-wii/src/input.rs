@@ -4,69 +4,56 @@
  * SPDX-License-Identifier: MIT
  */
 
-//! The Wii Remote with Nunchuk controls, after the console editions of Minecraft: the
-//! Nunchuk stick walks and turns, D-pad up and down look up and down and D-pad left and
-//! right select a hotbar slot. A places and B breaks blocks, C jumps and double tapping it
-//! flies, Z sneaks, 2 runs or flies faster and + or Home open the menu, where the pointer
-//! or the D-pad with A choose a button and B goes back.
+//! The Wii Remote with Nunchuk, read with WPAD for the engine's Wii Remote controls.
 
 use core::mem::MaybeUninit;
 
 use libogc_sys::*;
-use plaatcraft_engine::camera::Input;
+use plaatcraft_engine::client::Controller;
+use plaatcraft_engine::client::input::{Context, Pad, Wiimote};
 
 const STICK_DEADZONE: f32 = 0.12;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum Button {
-    Up,
-    Down,
-    Left,
-    Right,
-    A,
-    B,
-    Plus,
-    One,
-    Two,
-    Minus,
-    Home,
-    Z,
-    C,
+const BUTTONS: [(u32, u32); 13] = [
+    (WPAD_BUTTON_A, Wiimote::A),
+    (WPAD_BUTTON_B, Wiimote::B),
+    (WPAD_BUTTON_1, Wiimote::ONE),
+    (WPAD_BUTTON_2, Wiimote::TWO),
+    (WPAD_BUTTON_PLUS, Wiimote::PLUS),
+    (WPAD_BUTTON_MINUS, Wiimote::MINUS),
+    (WPAD_BUTTON_HOME, Wiimote::HOME),
+    (WPAD_BUTTON_UP, Wiimote::UP),
+    (WPAD_BUTTON_DOWN, Wiimote::DOWN),
+    (WPAD_BUTTON_LEFT, Wiimote::LEFT),
+    (WPAD_BUTTON_RIGHT, Wiimote::RIGHT),
+    (WPAD_NUNCHUK_BUTTON_C, Wiimote::C),
+    (WPAD_NUNCHUK_BUTTON_Z, Wiimote::Z),
+];
+
+fn buttons(wpad: u32) -> u32 {
+    BUTTONS
+        .iter()
+        .filter(|&&(mask, _)| wpad & mask != 0)
+        .fold(0, |buttons, &(_, button)| buttons | button)
 }
 
-impl Button {
-    const fn mask(self) -> u32 {
-        match self {
-            Self::Up => WPAD_BUTTON_UP,
-            Self::Down => WPAD_BUTTON_DOWN,
-            Self::Left => WPAD_BUTTON_LEFT,
-            Self::Right => WPAD_BUTTON_RIGHT,
-            Self::A => WPAD_BUTTON_A,
-            Self::B => WPAD_BUTTON_B,
-            Self::Plus => WPAD_BUTTON_PLUS,
-            Self::One => WPAD_BUTTON_1,
-            Self::Two => WPAD_BUTTON_2,
-            Self::Minus => WPAD_BUTTON_MINUS,
-            Self::Home => WPAD_BUTTON_HOME,
-            Self::Z => WPAD_NUNCHUK_BUTTON_Z,
-            Self::C => WPAD_NUNCHUK_BUTTON_C,
+pub struct Remote;
+
+impl Remote {
+    /// Starts WPAD with the pointer in the 2D screen space.
+    pub fn new([width, height]: [f32; 2]) -> Self {
+        unsafe {
+            WPAD_Init();
+            WPAD_SetDataFormat(WPAD_CHAN_ALL, WPAD_FMT_BTNS_ACC_IR);
+            WPAD_SetVRes(0, width as u32, height as u32);
         }
+        Self
     }
 }
 
-#[derive(Clone, Copy, Default)]
-pub struct Controller {
-    held: u32,
-    pressed: u32,
-    /// The Nunchuk stick, x to the right and y forward, `None` without a Nunchuk.
-    pub stick: Option<[f32; 2]>,
-    /// Where the Wii Remote points on the screen and its roll in degrees.
-    pub pointer: Option<[f32; 3]>,
-}
-
-impl Controller {
-    pub fn read() -> Self {
-        unsafe {
+impl Controller for Remote {
+    fn read(&mut self, context: Context) -> Pad {
+        let wiimote = unsafe {
             WPAD_ScanPads();
             let mut expansion = MaybeUninit::<Expansion>::zeroed();
             WPAD_Expansion(0, expansion.as_mut_ptr());
@@ -74,32 +61,14 @@ impl Controller {
             let mut ir = MaybeUninit::<IrData>::zeroed();
             WPAD_IR(0, ir.as_mut_ptr());
             let ir = ir.assume_init();
-            Self {
-                held: WPAD_ButtonsHeld(0),
-                pressed: WPAD_ButtonsDown(0),
+            Wiimote {
+                held: buttons(WPAD_ButtonsHeld(0)),
+                pressed: buttons(WPAD_ButtonsDown(0)),
                 stick: (expansion.kind == WPAD_EXP_NUNCHUK).then(|| stick(&expansion.joystick)),
                 pointer: (ir.valid != 0).then_some([ir.x, ir.y, ir.angle]),
             }
-        }
-    }
-
-    pub const fn held(&self, button: Button) -> bool {
-        self.held & button.mask() != 0
-    }
-
-    pub const fn pressed(&self, button: Button) -> bool {
-        self.pressed & button.mask() != 0
-    }
-
-    /// The movement for the player, the stick walks forward and back and turns sideways.
-    pub fn input(&self) -> Input {
-        Input {
-            direction: [0.0; 2],
-            stick: [0.0, self.stick.map_or(0.0, |[_, y]| y)],
-            jump: self.held(Button::C),
-            sneak: self.held(Button::Z),
-            fast: self.held(Button::Two),
-        }
+        };
+        wiimote.pad(context)
     }
 }
 

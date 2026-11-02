@@ -82,6 +82,7 @@ name = "plaatcraft-engine"
 version = "0.2.0"
 dependencies = [
  "deflate",
+ "libsqlite3-sys",
  "postcard",
  "serde",
  "sfxr",
@@ -96,8 +97,6 @@ dependencies = [
  "libogc-sys",
  "libsqlite3-sys",
  "plaatcraft-engine",
- "postcard",
- "serde",
  "sfxr",
 ]
 
