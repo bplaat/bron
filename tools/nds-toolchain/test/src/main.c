@@ -97,12 +97,13 @@ static void run(const char* name, void (*test)(void)) {
 }
 
 // Startup: the loader's arguments and the file systems
+static bool expect_entropy;
 static int start_argc;
 static char** start_argv;
 static bool nitro;
 
 static void test_startup(void) {
-    CHECK(start_argc == 1 && strstr(start_argv[0], "test.nds"));
+    CHECK(start_argc == (expect_entropy ? 2 : 1) && strstr(start_argv[0], "test.nds"));
     CHECK(nitro);
 }
 
@@ -598,9 +599,112 @@ static void test_nitrofs(void) {
     chdir(cwd);
 }
 
+static void test_entropy(void) {
+    unsigned char bytes[257];
+    memset(bytes, 0xa5, sizeof(bytes));
+    CHECK(getentropy(NULL, 0) == 0);
+    CHECK(getentropy(bytes, 0) == 0);
+    CHECK(getentropy(bytes, sizeof(bytes)) == -1 && errno == EIO);
+    CHECK(getentropy(NULL, sizeof(bytes)) == -1 && errno == EIO);
+    CHECK(getentropy(NULL, 1) == -1 && errno == EFAULT);
+    for (size_t i = 0; i < sizeof(bytes); i++)
+        CHECK(bytes[i] == 0xa5);
+}
+
+static int entropy_worker(void* argument) {
+    return getentropy(argument, 256);
+}
+
+static void test_entropy_generation(void) {
+    unsigned char first[256], second[256] = {0};
+    memset(first, 0xa5, sizeof(first));
+    // A required initial seed must not steal an application's recording.
+    static alignas(32) unsigned char recording[32];
+    micInit();
+    // Invalid shared buffers must be rejected before touching cache or RAM.
+    CHECK(!micReadEntropy(NULL));
+    CHECK(!micReadEntropy((u16*)0x01ffffe0));
+    CHECK(!micReadEntropy((u16*)0x02ff0000));
+    CHECK(!micReadEntropy((u16*)(isDSiMode() ? 0x02ffffe0 : 0x023fffe0)));
+    CHECK(!micReadEntropy((u16*)(recording + 1)));
+    CHECK(micSetDmaRate(MicRate_Div4));
+    CHECK(micStart(recording, sizeof(recording), MicFmt_Pcm16, MicMode_Repeat));
+    CHECK(getentropy(first, sizeof(first)) == -1 && errno == EIO);
+    CHECK(!micSetDmaRate(MicRate_Full));  // Our recording must still be active.
+    micStop();
+    for (size_t i = 0; i < sizeof(first); i++)
+        CHECK(first[i] == 0xa5);
+    u64 start = tickGetCount();
+    int result = getentropy(first, sizeof(first));
+    u64 cold_ticks = tickGetCount() - start;
+    if (!expect_entropy) {
+        CHECK(result == -1 && errno == EIO);
+        for (size_t i = 0; i < sizeof(first); i++)
+            CHECK(first[i] == 0xa5);
+        CHECK(getentropy(first, sizeof(first)) == -1 && errno == EIO);
+        return;
+    }
+    CHECK(result == 0);
+    // Warm requests must also leave an application's recording running.
+    CHECK(micStart(recording, sizeof(recording), MicFmt_Pcm16, MicMode_Repeat));
+    CHECK(getentropy(second, sizeof(second)) == 0);
+    CHECK(!micSetDmaRate(MicRate_Full));
+    micStop();
+    CHECK(memcmp(first, second, sizeof(first)) != 0);
+
+    static const size_t lengths[] = {1, 3, 4, 5, 63, 64, 65, 255, 256};
+    unsigned char guarded[258];
+    for (size_t i = 0; i < sizeof(lengths) / sizeof(lengths[0]); i++) {
+        memset(guarded, 0xa5, sizeof(guarded));
+        CHECK(getentropy(guarded + 1, lengths[i]) == 0);
+        CHECK(guarded[0] == 0xa5);
+        for (size_t j = lengths[i] + 1; j < sizeof(guarded); j++)
+            CHECK(guarded[j] == 0xa5);
+    }
+
+    // Neither srand nor rand may control or consume getentropy's private stream.
+    srand(1234);
+    int expected = rand();
+    srand(1234);
+    CHECK(getentropy(first, sizeof(first)) == 0);
+    CHECK(rand() == expected);
+    srand(1234);
+    CHECK(getentropy(second, sizeof(second)) == 0);
+    CHECK(memcmp(first, second, sizeof(first)) != 0);
+
+    static Thread thread;
+    alignas(8) static unsigned char stack[4096];
+    threadPrepare(&thread, entropy_worker, first, &stack[sizeof(stack)], MAIN_THREAD_PRIO - 1);
+    threadAttachLocalStorage(&thread, NULL);
+    threadStart(&thread);
+    CHECK(getentropy(second, sizeof(second)) == 0);
+    CHECK(threadJoin(&thread) == 0);
+    CHECK(memcmp(first, second, sizeof(first)) != 0);
+
+    // Warm timings stay below the reseed boundary; report emulated guest time.
+    start = tickGetCount();
+    for (unsigned i = 0; i < 256; i++)
+        CHECK(getentropy(second, 32) == 0);
+    u64 small_ticks = tickGetCount() - start;
+    start = tickGetCount();
+    for (unsigned i = 0; i < 256; i++)
+        CHECK(getentropy(second, sizeof(second)) == 0);
+    u64 large_ticks = tickGetCount() - start;
+    report("  entropy guest us: cold=%lu warm32=%lu warm256=%lu\n", (unsigned long)(cold_ticks * 1000000 / TICK_FREQ),
+           (unsigned long)(small_ticks * 1000000 / TICK_FREQ / 256),
+           (unsigned long)(large_ticks * 1000000 / TICK_FREQ / 256));
+    // Cross the 1 MiB boundary, requiring another capture and seed.
+    for (unsigned i = 0; i <= 1024 * 1024 / sizeof(second); i++) {
+        memcpy(first, second, sizeof(first));
+        CHECK(getentropy(second, sizeof(second)) == 0);
+        CHECK(memcmp(first, second, sizeof(first)) != 0);
+    }
+}
+
 int main(int argc, char** argv) {
     console = consoleDemoInit();
     printf("Toolchain test\n");
+    expect_entropy = argc == 2 && !strcmp(argv[1], "--entropy-noise");
     start_argc = argc;
     start_argv = argv;
     bool fat = fatInitDefault();
@@ -622,6 +726,8 @@ int main(int argc, char** argv) {
         run("threads and time", test_threads);
         run("files", test_files);
         run("console", test_console);
+        run("entropy arguments", test_entropy);
+        run("ADC entropy and random-byte generation", test_entropy_generation);
         if (nitro)
             run("nitrofs", test_nitrofs);
         report("DONE %d failed\n", failures);

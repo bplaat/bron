@@ -47,6 +47,9 @@ functions.
         'press a' 'shot menu.png' 'save menu.mln'
     ```
 
+    The `--mic-noise` option explicitly supplies synthetic microphone noise from the host
+    CSPRNG for testing. It is not a model of the entropy available on real hardware.
+
     The commands are `wait <frames>`, `press <keys> [frames]`, `hold <keys>`, `release`,
     `touch <x> <y> [frames]`, `shot <file.png>`, `save <file>`, `load <file>`, `hook <address>`
     and `count`, which count the executions of a function such as a renderer's for frame rates,
@@ -62,8 +65,9 @@ functions.
     failed tests or a frame timeout.
 
 - `test/` is a DS program that checks the startup code, the C library, compiler-rt, threads, ITCM,
-  FAT, NitroFS and the console's escape sequences. `./build.sh test` builds melonDS and runs it
-  headless twice, as a DS with a writable R4 card and as a DSi with a writable SD card, both
+  FAT, NitroFS, random-byte generation and the console's escape sequences. `./build.sh test` builds melonDS and runs it
+  headless in DS and DSi modes, each with silent input and with synthetic microphone noise.
+  The DS uses a writable R4 card and the DSi a writable SD card, both
   initialized from `test/target/sd/`. It prints the results and fails when a check fails or the ROM
   does not finish within 3600 emulated frames. The ROM also saves `test.txt` on the emulated card.
 
@@ -75,7 +79,17 @@ to write the commits back.
 - calico: unified assembly syntax for LLVM, no newlib glue, linker scripts that work with lld, and
   the system functions picolibc leaves to the platform: the POSIX file functions on the devoptab
   devices (SD card, NitroFS, console) in `sys/iosupport.h`, which read into memory outside main RAM
-  through main RAM, `stdin` is always empty, `sbrk`, locks on calico mutexes, time and sleeping
+  through main RAM, `stdin` is always empty, `sbrk`, locks on calico mutexes, time and sleeping.
+  Patch `0006` adds `getentropy()` for both CPUs, with a maximum of 256 bytes per call.
+  It briefly samples the microphone ADC on ARM7, hashes 1024 raw samples plus timing and
+  input data with SHA-256, then generates bytes with ChaCha20. It rotates its key after
+  each request and collects a new seed after at most 1 MiB of output. An active recording
+  is left alone; capture parameters and amplifier state are preserved. Raw audio and
+  seed buffers are erased. Busy, missing or obviously faulty sources return `EIO`
+  without changing the output, with no fallback to a predictable seed.
+  This is experimental: basic source health checks do not establish an entropy rate,
+  and real hardware validation is still required. The workspace's cryptographic
+  `getrandom` crate does not select this backend.
 - libnds: builds with clang and without newlib, with a pregenerated `libversion.h`, and
   `ramPakInit` in `nds/arm9/rampak.h` unlocks the 8 MiB RAM of the DS Browser's Memory Expansion
   Pak in the GBA slot and maps it data cached, the standard `printf` names, and the console keeps

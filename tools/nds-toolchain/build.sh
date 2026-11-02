@@ -65,7 +65,7 @@ LIB_CFLAGS=(-std=gnu17 -w -I"$LIBNDS_DIR/include" -I"$LIBDVM_DIR/include"
     -I"$FATFS_DIR/source")
 
 CALICO_SOURCES=(
-    system/{irq,tick,thread_cold,thread_hot.32,mutex,mailbox,dietprint,newlib_syscalls,iosupport}.c
+    system/{irq,tick,thread_cold,thread_hot.32,mutex,mailbox,dietprint,newlib_syscalls,iosupport,getentropy}.c
     arm/{arm-copy-fill.32,arm-context.32,arm-readtp.32}.s arm/arm-shims.32.c
     dev/fugu.32.c
     nds/{startup.crt0,tlnc.twl,pxi,smutex.32,keypad,pm,netbuf,gbacart,ntrcard,nitrorom}.c
@@ -384,6 +384,10 @@ run_test() {
     "$BUILD_DIR/bin/melonds-runner" --fat "$target/sd" "$target/sd/test.nds" "test $address 3600"
     msg "Running the test in melonDS as a DSi"
     "$BUILD_DIR/bin/melonds-runner" --dsi --fat "$target/sd" "$target/sd/test.nds" "test $address 3600"
+    msg "Running the test in melonDS as a DS with synthetic microphone noise"
+    "$BUILD_DIR/bin/melonds-runner" --mic-noise --fat "$target/sd" "$target/sd/test.nds" "test $address 3600"
+    msg "Running the test in melonDS as a DSi with synthetic microphone noise"
+    "$BUILD_DIR/bin/melonds-runner" --dsi --mic-noise --fat "$target/sd" "$target/sd/test.nds" "test $address 3600"
     msg "All tests passed"
 }
 

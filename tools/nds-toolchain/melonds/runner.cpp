@@ -2,8 +2,9 @@
 // agent can play a port and take screenshots. The commands come from the arguments, or from stdin
 // one per line when there are none, then it answers each with ok.
 //
-// Usage: melonds-runner [--dsi] [--fat <directory>] <program.nds> ['command args']...
+// Usage: melonds-runner [--dsi] [--mic-noise] [--fat <directory>] <program.nds> ['command args']...
 //   --dsi                     run as a DSi instead of a DS
+//   --mic-noise               supply synthetic ADC test noise from the host CSPRNG
 //   --fat <directory>         put an SD card with the files of the directory in the R4 card (DS)
 //                             or the SD card slot (DSi), its writes stay in emulated memory
 //   test <address> <frames>   await test results, fail on errors or timeout
@@ -26,6 +27,7 @@
 //   quit                      stop, also the end of the commands
 // Keys are a, b, x, y, l, r, start, select, up, down, left and right, joined by +, like up+a.
 
+#include <sys/random.h>
 #include <unistd.h>
 #include <zlib.h>
 
@@ -76,6 +78,7 @@ using namespace melonDS;
 // In the bit order of the DS keypad registers, which melonDS's key mask uses too
 static const char* const key_names[] = {"a", "b", "select", "start", "right", "left", "up", "down", "r", "l", "x", "y"};
 
+static bool mic_noise;
 static NDS* nds;
 static std::filesystem::path temp_dir;
 static u32 held_keys;
@@ -98,7 +101,8 @@ static void die(const char* format, ...) {
 }
 
 // The headless platform: files are stdio files, local files (the SD card's image) go to a temporary
-// directory, there is no network, camera, microphone or saving, logs are errors only
+// directory. Microphone input is silent unless synthetic test noise is explicitly enabled.
+// There is no network, camera or saving; logs are errors only.
 namespace melonDS::Platform {
 
 void SignalStop(StopReason, void*) {}
@@ -348,8 +352,18 @@ void Camera_Stop(int, void*) {}
 void Camera_CaptureFrame(int, u32*, int, int, bool, void*) {}
 void Mic_Start(void*) {}
 void Mic_Stop(void*) {}
-int Mic_ReadInput(s16*, int, void*) {
-    return 0;
+int Mic_ReadInput(s16* data, int maxlength, void*) {
+    if (!mic_noise)
+        return 0;
+    for (int offset = 0; offset < maxlength;) {
+        int count = std::min(maxlength - offset, 128);
+        if (::getentropy(data + offset, count * sizeof(s16)) != 0)
+            die("Host RNG failed while generating synthetic microphone noise");
+        for (int i = 0; i < count; i++)
+            data[offset + i] = static_cast<s16>((static_cast<u16>(data[offset + i]) & 0x7ff) - 1024);
+        offset += count;
+    }
+    return maxlength;
 }
 
 AACDecoder* AAC_Init() {
@@ -734,13 +748,16 @@ static void remove_temp_dir() {
     std::filesystem::remove_all(temp_dir, error);
 }
 
-// Starts from the DSi's SD card like a homebrew loader: melonDS boots the ROM like the DSi menu
-// boots a card, which turns the SD card off for the ARM7, so it gets turned on again (SCFG_EXT7 bit
-// 18), and the homebrew argv points to sd:/<rom>, like melonDS does with fat:/<rom> for an R4 card,
-// the command line goes after the ARM9 program
-static void setup_sd_boot(const std::string& rom_name) {
-    static_cast<DSi*>(nds)->SCFG_EXT[1] |= 1 << 18;
-    std::string argv = "sd:/" + rom_name;
+// Sets up homebrew argv and the DSi SD card. The synthetic-noise test flag goes
+// through argv so guest tests can require success only when input is provided.
+static void setup_card_boot(const std::string& rom_name, bool dsi) {
+    if (dsi)
+        static_cast<DSi*>(nds)->SCFG_EXT[1] |= 1 << 18;
+    std::string argv = (dsi ? "sd:/" : "fat:/") + rom_name;
+    if (mic_noise) {
+        argv += '\0';
+        argv += "--entropy-noise";
+    }
     const NDSHeader& header = nds->NDSCartSlot.GetCart()->GetHeader();
     u32 base = (header.ARM9RAMAddress + header.ARM9Size + 15) & ~15u;
     for (u32 i = 0; i <= argv.size(); i++)
@@ -762,6 +779,10 @@ int main(int argc, char** argv) {
             dsi = true;
             argc--;
             argv++;
+        } else if (argc >= 2 && strcmp(argv[1], "--mic-noise") == 0) {
+            mic_noise = true;
+            argc--;
+            argv++;
         } else if (argc >= 3 && strcmp(argv[1], "--fat") == 0) {
             fat_directory = argv[2];
             argc -= 2;
@@ -771,7 +792,8 @@ int main(int argc, char** argv) {
         }
     }
     if (argc < 2) {
-        fprintf(stderr, "Usage: %s [--dsi] [--fat <directory>] <program.nds> ['command args']...\n", program);
+        fprintf(stderr, "Usage: %s [--dsi] [--mic-noise] [--fat <directory>] <program.nds> ['command args']...\n",
+                program);
         return 1;
     }
 
@@ -815,8 +837,8 @@ int main(int argc, char** argv) {
     nds->SetNDSCart(std::move(cart));
     std::string rom_name = std::filesystem::path(argv[1]).filename().string();
     nds->SetupDirectBoot(rom_name);
-    if (dsi && card)
-        setup_sd_boot(rom_name);
+    if (card && (dsi || mic_noise))
+        setup_card_boot(rom_name, dsi);
     time_t now = time(nullptr);
     struct tm* local = localtime(&now);
     nds->RTC.SetDateTime(local->tm_year + 1900, local->tm_mon + 1, local->tm_mday, local->tm_hour, local->tm_min,

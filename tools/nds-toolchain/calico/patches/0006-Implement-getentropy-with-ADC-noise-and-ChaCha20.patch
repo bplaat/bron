@@ -1,0 +1,509 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Mon, 2 Nov 2026 20:00:00 +0100
+Subject: [PATCH] Implement getentropy with ADC noise and ChaCha20
+
+Collect 1024 microphone ADC samples through the ARM7 microphone service,
+reject busy, missing, stuck, strongly biased or trivially alternating
+input, and condition it with SHA-256 alongside timing and input data.
+Use ChaCha20 with per-request key rotation and reseed after 1 MiB.
+
+Preserve microphone capture settings and amplifier state. Bound sampling
+waits and fail with EIO without touching the output on required seed
+failure. Keep the POSIX 256-byte limit and never fall back to a clock seed.
+
+This remains experimental: the ADC entropy rate has not been measured
+on hardware, and the health checks do not establish cryptographic security.
+---
+ include/calico/nds/mic.h   |  15 +++++++++++++++
+ source/nds/pxi/mic.h       |  18 ++++++++++++++++++
+ source/nds/arm9/mic.c      |  15 +++++++++++++++
+ source/nds/arm7/mic.32.c   |  88 +++++++++++++++++++++++++++++++++++
+ source/system/getentropy.c | 248 +++++++++++++++++++++++++++++++++++
+ 5 files changed, 384 insertions(+)
+ create mode 100644 source/system/getentropy.c
+
+diff --git a/include/calico/nds/mic.h b/include/calico/nds/mic.h
+index d15a494..823c8c9 100644
+--- a/include/calico/nds/mic.h
++++ b/include/calico/nds/mic.h
+@@ -40,4 +40,19 @@
+ 	return 512*((unsigned)rate + 1);
+ }
+ 
++//! Number of raw ADC samples collected for an entropy reseed.
++#define MIC_ENTROPY_SAMPLES 1024
++
++MK_EXTERN_C_START
++
++/*! @brief Collects microphone ADC samples without taking over an active recording.
++    @param[out] samples 32-byte-aligned main RAM buffer of MIC_ENTROPY_SAMPLES halfwords.
++    @return false for an invalid buffer, absent/busy service or sampling failure.
++    @note Enables the microphone briefly, then restores its amplifier and capture state.
++    The samples are unconditioned; their entropy has not been assessed on hardware.
++*/
++bool micReadEntropy(u16 samples[MIC_ENTROPY_SAMPLES]);
++
++MK_EXTERN_C_END
++
+ //! @}
+diff --git a/source/nds/pxi/mic.h b/source/nds/pxi/mic.h
+index b29a7cb..0416c4e 100644
+--- a/source/nds/pxi/mic.h
++++ b/source/nds/pxi/mic.h
+@@ -2,12 +2,16 @@
+ // SPDX-FileCopyrightText: Copyright fincs, devkitPro
+ #pragma once
+ #include <calico/nds/pxi.h>
++#include <calico/nds/mic.h>
++#include <calico/nds/mm.h>
++#include <calico/nds/system.h>
+ 
+ typedef enum PxiMicCmd {
+ 	PxiMicCmd_SetCpuTimer = 0,
+ 	PxiMicCmd_SetDmaRate  = 1,
+ 	PxiMicCmd_Start       = 2,
+ 	PxiMicCmd_Stop        = 3,
++	PxiMicCmd_Entropy     = 4,
+ } PxiMicCmd;
+ 
+ typedef union PxiMicImmDivTimer {
+@@ -45,3 +49,17 @@
+ {
+ 	return msg >> 3;
+ }
++
++// Only canonical main RAM can be shared between the CPUs through this request.
++MK_INLINE bool pxiMicEntropyBufferValid(u32 address)
++{
++    u32 end = MM_MAINRAM + (systemIsTwlMode() ? MM_MAINRAM_SZ_TWL : MM_MAINRAM_SZ_NTR);
++    if ((address & 31) || address < MM_MAINRAM || address > end - MIC_ENTROPY_SAMPLES * sizeof(u16))
++        return false;
++#if defined(ARM9)
++    // DTCM overlays main RAM on ARM9, but ARM7 sees different storage there.
++    if (address < MM_DTCM + MM_DTCM_SZ && address + MIC_ENTROPY_SAMPLES * sizeof(u16) > MM_DTCM)
++        return false;
++#endif
++    return true;
++}
+diff --git a/source/nds/arm9/mic.c b/source/nds/arm9/mic.c
+index af1094f..e20950c 100644
+--- a/source/nds/arm9/mic.c
++++ b/source/nds/arm9/mic.c
+@@ -1,10 +1,12 @@
+ // SPDX-License-Identifier: ZPL-2.1
+ // SPDX-FileCopyrightText: Copyright fincs, devkitPro
+ #include <calico/types.h>
++#include <calico/arm/cache.h>
+ #include <calico/system/thread.h>
+ #include <calico/system/mailbox.h>
+ #include <calico/nds/arm9/mic.h>
+ #include "../pxi/mic.h"
++#include "../transfer.h"
+ 
+ static struct {
+ 	MicBufferFn fn;
+@@ -106,3 +108,16 @@
+ {
+ 	_micIssueCmd(PxiMicCmd_Stop, 0);
+ }
++
++// Preserve the application's microphone callback and capture parameters.
++bool micReadEntropy(u16 samples[MIC_ENTROPY_SAMPLES]) {
++    if (!(s_pxiRemotePxiMask & (1U << PxiChannel_Mic)))
++        return false;
++    if (!pxiMicEntropyBufferValid((u32)samples))
++        return false;
++    armDCacheFlush(samples, MIC_ENTROPY_SAMPLES * sizeof(u16));
++    // An aligned main RAM address fits in the command's immediate field.
++    bool result = _micIssueCmd(PxiMicCmd_Entropy, (u32)samples >> 5);
++    armDCacheInvalidate(samples, MIC_ENTROPY_SAMPLES * sizeof(u16));
++    return result;
++}
+diff --git a/source/nds/arm7/mic.32.c b/source/nds/arm7/mic.32.c
+index cf7a4bf..c62b4bc 100644
+--- a/source/nds/arm7/mic.32.c
++++ b/source/nds/arm7/mic.32.c
+@@ -1,6 +1,9 @@
+ // SPDX-License-Identifier: ZPL-2.1
+ // SPDX-FileCopyrightText: Copyright fincs, devkitPro
+ #include <calico/system/irq.h>
++#include <calico/system/mutex.h>
++#include <calico/system/tick.h>
++#include <calico/nds/arm7/pmic.h>
+ #include <calico/system/thread.h>
+ #include <calico/system/mailbox.h>
+ #include <calico/nds/timer.h>
+@@ -18,6 +21,7 @@
+ 	void* ptr;
+ } MicBuf;
+ 
++static RMutex s_micMutex;
+ static Thread s_micThread;
+ static alignas(8) u8 s_micThreadStack[0x200];
+ 
+@@ -280,6 +284,81 @@
+ 	armIrqUnlockByPsr(st);
+ }
+ 
++// Collect raw ADC samples; conditioning and health checks run on the caller.
++bool micReadEntropy(u16 samples[MIC_ENTROPY_SAMPLES]) {
++    if (!samples || ((uptr)samples & 31))
++        return false;
++    rmutexLock(&s_micMutex);
++    if (s_micState.active) {
++        rmutexUnlock(&s_micMutex);
++        return false;
++    }
++    spiLock();
++    bool twl = cdcIsTwlMode();
++    unsigned control = twl ? REG_MICEX_CNT : 0;
++    if (twl && (control & MICEX_CNT_ENABLE)) {
++        spiUnlock();
++        rmutexUnlock(&s_micMutex);
++        return false;
++    }
++    // Keep SPI locked while saving, sampling and restoring. This also serializes
++    // amplifier changes through pmMicSetAmp on the power-management thread.
++    u8 saved[4];
++    bool ok = true;
++    if (twl) {
++        saved[0] = cdcReadReg(CdcPage_Sound, CdcTscSndReg_MicBias);
++        saved[1] = cdcReadReg(CdcPage_Sound, CdcTscSndReg_MicPga);
++        saved[2] = cdcReadReg(CdcPage_Control, CdcTscCtrlReg_AdcDigitalMic);
++        saved[3] = cdcReadReg(CdcPage_Control, CdcTscCtrlReg_AdcDigitalVolFine);
++        ok &= cdcWriteReg(CdcPage_Sound, CdcTscSndReg_MicBias, 3);
++        ok &= cdcWriteReg(CdcPage_Sound, CdcTscSndReg_MicPga, 40);
++        ok &= cdcWriteReg(CdcPage_Control, CdcTscCtrlReg_AdcDigitalMic, 0x80);
++        ok &= cdcWriteReg(CdcPage_Control, CdcTscCtrlReg_AdcDigitalVolFine, 0);
++    } else {
++        saved[0] = pmicReadRegister(PmicReg_MicAmpControl);
++        saved[1] = pmicReadRegister(PmicReg_MicAmpGain);
++        ok &= pmicWriteRegister(PmicReg_MicAmpGain, PmicMicGain_40);
++        ok &= pmicWriteRegister(PmicReg_MicAmpControl, PMIC_MIC_AMP_CTRL_ENABLE);
++    }
++    threadSleep(20000);
++    if (twl)
++        _micexStart(0, 0);
++    for (unsigned i = 0; ok && i < MIC_ENTROPY_SAMPLES; i++) {
++        if (twl) {
++            u64 deadline = tickGetCount() + ticksFromUsec(2000);
++            while (REG_MICEX_CNT & MICEX_CNT_FIFO_EMPTY) {
++                if (tickGetCount() >= deadline) {
++                    ok = false;
++                    break;
++                }
++                threadSleep(32);
++            }
++            if (ok)
++                samples[i] = REG_MICEX_DATA & 0xffff;
++            REG_MICEX_CNT = 0;
++            _micexStart(0, 0);
++        } else {
++            // Keep the actual 12-bit sample: the PCM16 representation has four
++            // zero low bits, which would invalidate an LSB noise check.
++            samples[i] = tscReadChannel12(TscChannel_AUX);
++            threadSleep(32);
++        }
++    }
++    if (twl) {
++        REG_MICEX_CNT = control & (MICEX_CNT_NO_L | MICEX_CNT_NO_R | MICEX_CNT_RATE_DIV(3) | MICEX_CNT_IE_FIFO_HALF);
++        ok &= cdcWriteReg(CdcPage_Control, CdcTscCtrlReg_AdcDigitalVolFine, saved[3]);
++        ok &= cdcWriteReg(CdcPage_Control, CdcTscCtrlReg_AdcDigitalMic, saved[2]);
++        ok &= cdcWriteReg(CdcPage_Sound, CdcTscSndReg_MicPga, saved[1]);
++        ok &= cdcWriteReg(CdcPage_Sound, CdcTscSndReg_MicBias, saved[0]);
++    } else {
++        ok &= pmicWriteRegister(PmicReg_MicAmpGain, saved[1]);
++        ok &= pmicWriteRegister(PmicReg_MicAmpControl, saved[0]);
++    }
++    spiUnlock();
++    rmutexUnlock(&s_micMutex);
++    return ok;
++}
++
+ static int _micThreadMain(void* unused)
+ {
+ 	u32 slots[4];
+@@ -296,6 +375,7 @@
+ 
+ 		unsigned ret = 0;
+ 		unsigned imm = pxiMicCmdGetImm(msg);
++		rmutexLock(&s_micMutex);
+ 		switch (pxiMicCmdGetType(msg)) {
+ 			default: break;
+ 
+@@ -322,12 +402,20 @@
+ 				break;
+ 			}
+ 
++			case PxiMicCmd_Entropy: {
++				u32 address = imm << 5;
++				if (pxiMicEntropyBufferValid(address))
++					ret = micReadEntropy((u16*)address);
++				break;
++			}
++
+ 			case PxiMicCmd_Stop: {
+ 				_micStop();
+ 				break;
+ 			}
+ 		}
+ 
++		rmutexUnlock(&s_micMutex);
+ 		pxiReply(PxiChannel_Mic, ret);
+ 	}
+ 
+diff --git a/source/system/getentropy.c b/source/system/getentropy.c
+new file mode 100644
+index 0000000..cbda9d2
+--- /dev/null
++++ b/source/system/getentropy.c
+@@ -0,0 +1,248 @@
++/*
++ * Copyright (c) 2026 Bastiaan van der Plaat
++ *
++ * SPDX-License-Identifier: MIT
++ */
++
++#if defined(ARM9)
++#include <calico/arm/cache.h>
++#endif
++#include <calico/nds/env.h>
++#include <calico/nds/keypad.h>
++#include <calico/nds/mic.h>
++#include <calico/nds/touch.h>
++#include <calico/system/mutex.h>
++#include <calico/system/tick.h>
++#include <errno.h>
++#include <stdint.h>
++#include <string.h>
++#include <time.h>
++#include <unistd.h>
++
++// Experimental hardware noise collector. Basic health checks reject obvious
++// failures; they do not establish the entropy of DS or DSi microphone samples.
++// Clear seed material and old keystream even when the compiler can see no reads.
++static void erase(void* data, size_t length) {
++    volatile uint8_t* bytes = data;
++    while (length-- > 0)
++        *bytes++ = 0;
++}
++
++// SHA-256 conditions the collected samples; it does not establish their entropy.
++static void sha256(const void* input, size_t length, uint8_t digest[32]) {
++    static const uint32_t constants[64] = {
++        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
++        0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
++        0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
++        0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
++        0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
++        0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
++        0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
++        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
++    };
++    uint32_t state[8] = {0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
++                         0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19};
++    const uint8_t* bytes = input;
++    size_t padded_length = (length + 9 + 63) & ~(size_t)63;
++    for (size_t block = 0; block < padded_length; block += 64) {
++        uint8_t padded[64] = {0};
++        if (block < length) {
++            size_t count = length - block < 64 ? length - block : 64;
++            memcpy(padded, bytes + block, count);
++        }
++        if (block <= length && length - block < 64)
++            padded[length - block] = 0x80;
++        if (block + 64 == padded_length) {
++            uint64_t bits = (uint64_t)length * 8;
++            for (unsigned i = 0; i < 8; i++)
++                padded[63 - i] = bits >> (i * 8);
++        }
++        uint32_t words[64];
++        for (size_t i = 0; i < 16; i++) {
++            const uint8_t* p = padded + i * 4;
++            words[i] = (uint32_t)p[0] << 24 | (uint32_t)p[1] << 16 | (uint32_t)p[2] << 8 | p[3];
++        }
++        for (size_t i = 16; i < 64; i++) {
++            uint32_t x = words[i - 15], y = words[i - 2];
++            uint32_t s0 = ((x >> 7) | (x << 25)) ^ ((x >> 18) | (x << 14)) ^ (x >> 3);
++            uint32_t s1 = ((y >> 17) | (y << 15)) ^ ((y >> 19) | (y << 13)) ^ (y >> 10);
++            words[i] = words[i - 16] + s0 + words[i - 7] + s1;
++        }
++        uint32_t a = state[0], b = state[1], c = state[2], d = state[3];
++        uint32_t e = state[4], f = state[5], g = state[6], h = state[7];
++        for (size_t i = 0; i < 64; i++) {
++            uint32_t s1 = ((e >> 6) | (e << 26)) ^ ((e >> 11) | (e << 21)) ^ ((e >> 25) | (e << 7));
++            uint32_t t1 = h + s1 + ((e & f) ^ (~e & g)) + constants[i] + words[i];
++            uint32_t s0 = ((a >> 2) | (a << 30)) ^ ((a >> 13) | (a << 19)) ^ ((a >> 22) | (a << 10));
++            uint32_t t2 = s0 + ((a & b) ^ (a & c) ^ (b & c));
++            h = g;
++            g = f;
++            f = e;
++            e = d + t1;
++            d = c;
++            c = b;
++            b = a;
++            a = t1 + t2;
++        }
++        state[0] += a;
++        state[1] += b;
++        state[2] += c;
++        state[3] += d;
++        state[4] += e;
++        state[5] += f;
++        state[6] += g;
++        state[7] += h;
++        erase(words, sizeof(words));
++        erase(padded, sizeof(padded));
++    }
++    for (size_t i = 0; i < 32; i++)
++        digest[i] = state[i / 4] >> (24 - (i % 4) * 8);
++    erase(state, sizeof(state));
++}
++
++// RFC 8439 ChaCha20 block function, with a 32-bit counter and 96-bit nonce.
++// Each request replaces the key, so the counter never approaches its limit.
++static uint32_t rotate_left(uint32_t value, unsigned count) {
++    return value << count | value >> (32 - count);
++}
++
++static void quarter_round(uint32_t* a, uint32_t* b, uint32_t* c, uint32_t* d) {
++    *a += *b;
++    *d = rotate_left(*d ^ *a, 16);
++    *c += *d;
++    *b = rotate_left(*b ^ *c, 12);
++    *a += *b;
++    *d = rotate_left(*d ^ *a, 8);
++    *c += *d;
++    *b = rotate_left(*b ^ *c, 7);
++}
++
++static void chacha_block(uint32_t state[16], uint8_t bytes[64]) {
++    uint32_t words[16];
++    memcpy(words, state, sizeof(words));
++    for (unsigned i = 0; i < 10; i++) {
++        quarter_round(&words[0], &words[4], &words[8], &words[12]);
++        quarter_round(&words[1], &words[5], &words[9], &words[13]);
++        quarter_round(&words[2], &words[6], &words[10], &words[14]);
++        quarter_round(&words[3], &words[7], &words[11], &words[15]);
++        quarter_round(&words[0], &words[5], &words[10], &words[15]);
++        quarter_round(&words[1], &words[6], &words[11], &words[12]);
++        quarter_round(&words[2], &words[7], &words[8], &words[13]);
++        quarter_round(&words[3], &words[4], &words[9], &words[14]);
++    }
++    for (size_t i = 0; i < 16; i++) {
++        uint32_t word = words[i] + state[i];
++        for (unsigned byte = 0; byte < 4; byte++)
++            bytes[i * 4 + byte] = word >> (byte * 8);
++    }
++    state[12]++;
++    erase(words, sizeof(words));
++}
++
++static uint32_t load_le32(const uint8_t* bytes) {
++    return (uint32_t)bytes[0] | (uint32_t)bytes[1] << 8 | (uint32_t)bytes[2] << 16 | (uint32_t)bytes[3] << 24;
++}
++
++#define RESEED_BYTES (1024 * 1024)
++static Mutex random_mutex;
++static uint32_t generator[16] = {0x61707865, 0x3320646e, 0x79622d32, 0x6b206574};
++static size_t bytes_until_reseed;
++
++// Use a dedicated, cache-line-aligned main RAM object for ARM7 writes.
++static _Alignas(32) struct {
++    uint16_t samples[MIC_ENTROPY_SAMPLES];
++    uint64_t ticks;
++    int64_t rtc;
++    TouchData touch;
++    uint32_t keys;
++    uint8_t rssi;
++    uint8_t reserved[3];
++} material;
++
++static void erase_material(void) {
++    erase(&material, sizeof(material));
++#if defined(ARM9)
++    // ARM7 wrote raw samples directly into RAM; clear that copy as well.
++    armDCacheFlush(&material, sizeof(material));
++#endif
++}
++
++static int healthy_samples(const uint16_t* samples) {
++    unsigned previous = samples[0] & 1, run = 0, ones = 0, changes = 0;
++    for (unsigned i = 0; i < MIC_ENTROPY_SAMPLES; i++) {
++        unsigned bit = samples[i] & 1;
++        run = bit == previous ? run + 1 : 1;
++        changes += bit != previous;
++        previous = bit;
++        ones += bit;
++        if (run > 32)
++            return 0;
++        if ((i & 255) == 255) {
++            // Conservative, heuristic checks for stuck, strongly biased and
++            // trivially alternating input. Not calibrated SP 800-90B tests.
++            if (ones < 64 || ones > 192 || changes < 64 || changes > 192)
++                return 0;
++            ones = changes = 0;
++        }
++    }
++    return 1;
++}
++
++static int reseed(void) {
++    // All error paths leave the caller's buffer untouched and wipe raw audio.
++    if (!micReadEntropy(material.samples) || !healthy_samples(material.samples)) {
++        erase_material();
++        return -1;
++    }
++    material.ticks = tickGetCount();
++    material.rtc = time(NULL);
++    touchRead(&material.touch);
++    material.keys = keypadGetState();
++    material.rssi = g_envExtraInfo->wlmgr_rssi;
++    uint8_t seed[32];
++    sha256(&material, sizeof(material), seed);
++    for (unsigned i = 0; i < 8; i++)
++        generator[4 + i] ^= load_le32(seed + i * 4);
++    generator[12] = 0;
++    bytes_until_reseed = RESEED_BYTES;
++    erase(seed, sizeof(seed));
++    erase_material();
++    return 0;
++}
++
++int getentropy(void* buffer, size_t length) {
++    if (length > 256) {
++        errno = EIO;
++        return -1;
++    }
++    if (length == 0)
++        return 0;
++    if (buffer == NULL) {
++        errno = EFAULT;
++        return -1;
++    }
++    mutexLock(&random_mutex);
++    if (bytes_until_reseed < length) {
++        bytes_until_reseed = 0;
++        if (reseed() < 0) {
++            mutexUnlock(&random_mutex);
++            errno = EIO;
++            return -1;
++        }
++    }
++    uint8_t block[64];
++    for (size_t offset = 0; offset < length; offset += sizeof(block)) {
++        chacha_block(generator, block);
++        size_t count = length - offset < sizeof(block) ? length - offset : sizeof(block);
++        memcpy((uint8_t*)buffer + offset, block, count);
++    }
++    // The next key comes from a separate block, never exposed to callers.
++    chacha_block(generator, block);
++    for (unsigned i = 0; i < 8; i++)
++        generator[4 + i] = load_le32(block + i * 4);
++    generator[12] = 0;
++    bytes_until_reseed -= length;
++    erase(block, sizeof(block));
++    mutexUnlock(&random_mutex);
++    return 0;
++}
