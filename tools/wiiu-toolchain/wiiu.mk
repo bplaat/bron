@@ -43,8 +43,9 @@ $(BUILD)/$(NAME).elf: $(OBJECTS) $(LIBRARIES) $(TOOLCHAIN)/wiiu.ld
 		$(OBJECTS) $(LIBRARIES) -o $@
 
 # The sources embed the assembled shaders and the converted textures
+SHADERS := $(if $(wildcard src/shader.vsh),$(BUILD)/shader.gsh)
 TEXTURES := $(if $(wildcard src/assets/textures.toml),$(BUILD)/textures.gtx)
-$(BUILD)/%.o: src/%.c $(BUILD)/shader.gsh $(TEXTURES) | $(TOOLCHAIN_BUILD)/libwut.a
+$(BUILD)/%.o: src/%.c $(SHADERS) $(TEXTURES) | $(TOOLCHAIN_BUILD)/libwut.a
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -MMD -MP -c $< -o $@
 
