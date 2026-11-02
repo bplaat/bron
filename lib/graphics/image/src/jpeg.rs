@@ -9,7 +9,7 @@ use alloc::vec::Vec;
 
 use super::color::{ADOBE_RGB, ColorModel, Curve, Transform};
 use super::{
-    Bitmap, Budget, DecodeError, EncodeError, EncodingStyle, Format, Image, Reader, Result,
+    Bitmap, Budget, Compression, DecodeError, EncodeError, Format, Image, Reader, Result,
     pixel_len, roundf, truncf,
 };
 
@@ -1565,7 +1565,7 @@ fn jpeg_optimized_huffman(mut frequencies: [u32; 257]) -> JpegOptimizedHuffman {
 pub(super) fn encode(
     bitmap: &Bitmap,
     quality: u8,
-    style: EncodingStyle,
+    compression: Compression,
 ) -> core::result::Result<Vec<u8>, EncodeError> {
     if !(1..=100).contains(&quality) {
         return Err(EncodeError::InvalidQuality);
@@ -1580,10 +1580,10 @@ pub(super) fn encode(
         .iter()
         .all(|pixel| pixel[0] == pixel[1] && pixel[1] == pixel[2]);
     // JPEG is always lossy, so no compression only skips chroma subsampling
-    let samplings: &[(usize, usize)] = match (gray, style) {
-        (true, _) | (false, EncodingStyle::NoCompression) => &[(1, 1)],
-        (false, EncodingStyle::NormalCompression) => &[(2, 2)],
-        (false, EncodingStyle::MaxCompression) => &[(2, 2), (2, 1), (1, 2), (1, 1)],
+    let samplings: &[(usize, usize)] = match (gray, compression) {
+        (true, _) | (false, Compression::None) => &[(1, 1)],
+        (false, Compression::Normal) => &[(2, 2)],
+        (false, Compression::Max) => &[(2, 2), (2, 1), (1, 2), (1, 1)],
     };
     let tables = JpegTables::new(quality);
     let planes = JpegPlanes::new(bitmap, gray);
@@ -1763,7 +1763,7 @@ mod tests {
 
     fn smallest() -> EncodeOptions<'static> {
         EncodeOptions {
-            style: EncodingStyle::MaxCompression,
+            compression: Compression::Max,
             ..EncodeOptions::default()
         }
     }
@@ -2048,15 +2048,12 @@ mod tests {
         let blocks = JpegPlanes::new(&gray, true).blocks(1, 1, &tables);
         let decoded = crate::decode(&jpeg_write(19, 17, true, (1, 1), &tables, &blocks)).unwrap();
         assert_eq!(decoded.pixels(), [127, 127, 127, 255].repeat(19 * 17));
-        for style in [
-            EncodingStyle::NormalCompression,
-            EncodingStyle::MaxCompression,
-        ] {
+        for compression in [Compression::Normal, Compression::Max] {
             let encoded = encode_with_options(
                 &bitmap,
                 Format::Jpeg,
                 EncodeOptions {
-                    style,
+                    compression,
                     jpeg_quality: 100,
                     ..EncodeOptions::default()
                 },

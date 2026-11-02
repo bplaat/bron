@@ -21,25 +21,25 @@ pub(super) fn palette_slot(lookup: &[u64; 512], key: u32) -> usize {
 
 /// The encoding time and file size tradeoff.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub enum EncodingStyle {
+pub enum Compression {
     /// Write pixels without compression. GIF still needs a palette and JPEG stays lossy.
-    NoCompression,
+    None,
     /// Apply useful size optimizations without searching many alternatives.
     #[default]
-    NormalCompression,
+    Normal,
     /// Try additional representations and return the smallest candidate.
-    MaxCompression,
+    Max,
 }
 
 /// Options for raster encoding.
 #[derive(Clone, Copy, Debug)]
 pub struct EncodeOptions<'a> {
     /// Encoding time and file size tradeoff.
-    pub style: EncodingStyle,
+    pub compression: Compression,
     /// JPEG quality from 1 to 100. Ignored by other formats.
     pub jpeg_quality: u8,
     /// PNG/APNG text entries as keyword and text pairs. Ignored by other formats.
-    pub text: &'a [(&'a str, &'a str)],
+    pub png_text: &'a [(&'a str, &'a str)],
     /// TGA: always write 32-bit pixels with an alpha channel, also for opaque images. Ignored by
     /// other formats.
     pub tga_alpha: bool,
@@ -48,9 +48,9 @@ pub struct EncodeOptions<'a> {
 impl Default for EncodeOptions<'_> {
     fn default() -> Self {
         Self {
-            style: EncodingStyle::NormalCompression,
+            compression: Compression::default(),
             jpeg_quality: 85,
-            text: &[],
+            png_text: &[],
             tga_alpha: false,
         }
     }
@@ -130,19 +130,19 @@ pub fn encode_with_options(
     validate_pixels(bitmap.width, bitmap.height, &bitmap.data)?;
     match format {
         #[cfg(feature = "bmp")]
-        Format::Bmp => super::bmp::encode(bitmap, options.style),
+        Format::Bmp => super::bmp::encode(bitmap, options.compression),
         #[cfg(feature = "gif")]
-        Format::Gif => super::gif::encode_bitmap(bitmap, options.style),
+        Format::Gif => super::gif::encode_bitmap(bitmap, options.compression),
         #[cfg(feature = "ico")]
         Format::Ico => Err(EncodeError::UnsupportedFormat),
         #[cfg(feature = "jpeg")]
-        Format::Jpeg => super::jpeg::encode(bitmap, options.jpeg_quality, options.style),
+        Format::Jpeg => super::jpeg::encode(bitmap, options.jpeg_quality, options.compression),
         #[cfg(feature = "png")]
-        Format::Png => super::png::encode(bitmap, None, options.style, options.text),
+        Format::Png => super::png::encode(bitmap, None, options.compression, options.png_text),
         #[cfg(feature = "qoi")]
-        Format::Qoi => super::qoi::encode(bitmap, options.style),
+        Format::Qoi => super::qoi::encode(bitmap, options.compression),
         #[cfg(feature = "tga")]
-        Format::Tga => super::tga::encode(bitmap, options.style, options.tga_alpha),
+        Format::Tga => super::tga::encode(bitmap, options.compression, options.tga_alpha),
         #[allow(unreachable_patterns)]
         _ => {
             let _ = options;
@@ -178,10 +178,10 @@ pub fn encode_animation_with_options(
     }
     match format {
         #[cfg(feature = "gif")]
-        Format::Gif => super::gif::encode(frames, _loop_count, options.style),
+        Format::Gif => super::gif::encode(frames, _loop_count, options.compression),
         #[cfg(feature = "png")]
         Format::Png => {
-            super::png::encode_animation(frames, _loop_count, options.style, options.text)
+            super::png::encode_animation(frames, _loop_count, options.compression, options.png_text)
         }
         #[allow(unreachable_patterns)]
         _ => {
@@ -324,7 +324,7 @@ mod tests {
                     &bitmap,
                     format,
                     EncodeOptions {
-                        style: EncodingStyle::MaxCompression,
+                        compression: Compression::Max,
                         ..EncodeOptions::default()
                     },
                 )
@@ -343,7 +343,7 @@ mod tests {
         pixels[7] = 0;
         let transparent = Bitmap::new(32, 32, pixels).unwrap();
         let none = EncodeOptions {
-            style: EncodingStyle::NoCompression,
+            compression: Compression::None,
             ..EncodeOptions::default()
         };
         for format in [

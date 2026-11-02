@@ -14,7 +14,7 @@ use deflate::Level;
 
 use super::color::{self, ColorModel, Curve, Transform};
 use super::{
-    Area, Bitmap, Budget, DecodeError, EncodeError, EncodingStyle, Format, Frame, Image, LoopCount,
+    Area, Bitmap, Budget, Compression, DecodeError, EncodeError, Format, Frame, Image, LoopCount,
     MAX_BYTES, Reader, Result, pixel_len,
 };
 
@@ -1279,7 +1279,7 @@ fn compressed_frame(
     bitmap: &Bitmap,
     color: PngColor,
     palette_lookup: Option<&[u64; 512]>,
-    style: EncodingStyle,
+    compression: Compression,
 ) -> core::result::Result<Vec<u8>, EncodeError> {
     let source_stride = bitmap.width as usize * 4;
     let row_len = if let PngColor::Gray(depth) | PngColor::Indexed(depth) = color
@@ -1302,7 +1302,7 @@ fn compressed_frame(
         raw.push(0);
         raw.extend_from_slice(&row);
     }
-    if style == EncodingStyle::NoCompression {
+    if compression == Compression::None {
         return Ok(deflate::zlib_compress(&raw, Level::Store));
     }
     let bpp = if color.depth() < 8 {
@@ -1323,7 +1323,7 @@ fn compressed_frame(
         }
     };
     let msad = |row: &[u8], previous: &[u8], _: &[u8]| png_best_filter(row, previous, bpp);
-    if style == EncodingStyle::NormalCompression {
+    if compression == Compression::Normal {
         consider(&raw);
         // Palette and packed samples rarely benefit from prediction. Unfiltered rows
         // also often win on screenshots, whose repeated content deflate matches directly.
@@ -1355,12 +1355,12 @@ const fn png_palette_depth(len: usize) -> u8 {
 pub(super) fn encode(
     bitmap: &Bitmap,
     animation: Option<(LoopCount, &[Frame])>,
-    style: EncodingStyle,
+    compression: Compression,
     text: &[(&str, &str)],
 ) -> core::result::Result<Vec<u8>, EncodeError> {
     let chunks = text_chunks(text)?;
-    let png = encode_smallest(bitmap, animation, style)?;
-    let png = if style == EncodingStyle::MaxCompression {
+    let png = encode_smallest(bitmap, animation, compression)?;
+    let png = if compression == Compression::Max {
         crunch_streams(&png)?
     } else {
         png
@@ -1429,10 +1429,10 @@ fn crunch_streams(png: &[u8]) -> core::result::Result<Vec<u8>, EncodeError> {
 fn encode_smallest(
     bitmap: &Bitmap,
     animation: Option<(LoopCount, &[Frame])>,
-    style: EncodingStyle,
+    compression: Compression,
 ) -> core::result::Result<Vec<u8>, EncodeError> {
-    let best = encode_layouts(bitmap, animation, style)?;
-    if style != EncodingStyle::MaxCompression {
+    let best = encode_layouts(bitmap, animation, compression)?;
+    if compression != Compression::Max {
         return Ok(best);
     }
     let cleared = match animation {
@@ -1457,10 +1457,10 @@ fn encode_smallest(
                     )
                 })
                 .collect();
-            encode_layouts(&frames[0].bitmap, Some((loop_count, &frames)), style)?
+            encode_layouts(&frames[0].bitmap, Some((loop_count, &frames)), compression)?
         }
         None => match clear_transparent(bitmap) {
-            Some(cleared) => encode_layouts(&cleared, None, style)?,
+            Some(cleared) => encode_layouts(&cleared, None, compression)?,
             None => return Ok(best),
         },
     };
@@ -1489,18 +1489,18 @@ fn clear_transparent(bitmap: &Bitmap) -> Option<Bitmap> {
 fn encode_layouts(
     bitmap: &Bitmap,
     animation: Option<(LoopCount, &[Frame])>,
-    style: EncodingStyle,
+    compression: Compression,
 ) -> core::result::Result<Vec<u8>, EncodeError> {
     let bitmaps: Vec<_> = match animation {
         Some((_, frames)) => frames.iter().map(|frame| &frame.bitmap).collect(),
         None => vec![bitmap],
     };
-    if style == EncodingStyle::NoCompression {
-        return encode_png_variant(bitmap, animation, style, None, None);
+    if compression == Compression::None {
+        return encode_png_variant(bitmap, animation, compression, None, None);
     }
     let palette = png_palette(bitmaps.iter().copied());
     let key = png_transparent_key(bitmaps.iter().copied());
-    if style == EncodingStyle::NormalCompression {
+    if compression == Compression::Normal {
         // Pick the layout that is usually smallest instead of compressing each one:
         // a palette unless packed grayscale is as small, then a color key over alpha.
         let gray_depth = match png_color(bitmaps.iter().copied(), false) {
@@ -1511,15 +1511,16 @@ fn encode_layouts(
             gray_depth.is_none_or(|depth| png_palette_depth(palette.len()) < depth)
         });
         let key = key.filter(|_| palette.is_none());
-        return encode_png_variant(bitmap, animation, style, palette.as_deref(), key);
+        return encode_png_variant(bitmap, animation, compression, palette.as_deref(), key);
     }
-    let mut best = encode_png_variant(bitmap, animation, style, None, None)?;
+    let mut best = encode_png_variant(bitmap, animation, compression, None, None)?;
     let candidates = [
         palette.map(|palette| (Some(palette), None)),
         key.map(|key| (None, Some(key))),
     ];
     for (palette, key) in candidates.into_iter().flatten() {
-        let candidate = encode_png_variant(bitmap, animation, style, palette.as_deref(), key)?;
+        let candidate =
+            encode_png_variant(bitmap, animation, compression, palette.as_deref(), key)?;
         if candidate.len() < best.len() {
             best = candidate;
         }
@@ -1530,7 +1531,7 @@ fn encode_layouts(
 fn encode_png_variant(
     bitmap: &Bitmap,
     animation: Option<(LoopCount, &[Frame])>,
-    style: EncodingStyle,
+    compression: Compression,
     palette: Option<&[[u8; 4]]>,
     transparent_key: Option<[u8; 3]>,
 ) -> core::result::Result<Vec<u8>, EncodeError> {
@@ -1546,8 +1547,8 @@ fn encode_png_variant(
     };
     // Grayscale is a smaller layout, so no compression keeps 8-bit RGB or RGBA samples
     let color = match color {
-        PngColor::Gray(_) | PngColor::Rgb if style == EncodingStyle::NoCompression => PngColor::Rgb,
-        PngColor::GrayAlpha if style == EncodingStyle::NoCompression => PngColor::Rgba,
+        PngColor::Gray(_) | PngColor::Rgb if compression == Compression::None => PngColor::Rgb,
+        PngColor::GrayAlpha if compression == Compression::None => PngColor::Rgba,
         color => color,
     };
     let palette_lookup = palette.map(png_palette_lookup);
@@ -1600,7 +1601,7 @@ fn encode_png_variant(
             let delay = u16::try_from(nanos / divisor).map_err(|_| EncodeError::InvalidTiming)?;
             let timebase =
                 u16::try_from(1_000_000_000 / divisor).map_err(|_| EncodeError::InvalidTiming)?;
-            let region = if i != 0 && style != EncodingStyle::NoCompression {
+            let region = if i != 0 && compression != Compression::None {
                 Some(super::encoder::crop_changed(
                     &frames[i - 1].bitmap,
                     &frame.bitmap,
@@ -1614,9 +1615,10 @@ fn encode_png_variant(
                 (0, 0, &frame.bitmap)
             };
             let mut compressed =
-                compressed_frame(frame_bitmap, color, palette_lookup.as_ref(), style)?;
-            if region.is_some() && style == EncodingStyle::MaxCompression {
-                let full = compressed_frame(&frame.bitmap, color, palette_lookup.as_ref(), style)?;
+                compressed_frame(frame_bitmap, color, palette_lookup.as_ref(), compression)?;
+            if region.is_some() && compression == Compression::Max {
+                let full =
+                    compressed_frame(&frame.bitmap, color, palette_lookup.as_ref(), compression)?;
                 if full.len() < compressed.len() {
                     (x, y, frame_bitmap) = (0, 0, &frame.bitmap);
                     compressed = full;
@@ -1654,7 +1656,7 @@ fn encode_png_variant(
         write_chunk(
             &mut out,
             b"IDAT",
-            &compressed_frame(bitmap, color, palette_lookup.as_ref(), style)?,
+            &compressed_frame(bitmap, color, palette_lookup.as_ref(), compression)?,
         )?;
     }
     write_chunk(&mut out, b"IEND", &[])?;
@@ -1664,10 +1666,15 @@ fn encode_png_variant(
 pub(super) fn encode_animation(
     frames: &[Frame],
     loop_count: LoopCount,
-    style: EncodingStyle,
+    compression: Compression,
     text: &[(&str, &str)],
 ) -> core::result::Result<Vec<u8>, EncodeError> {
-    encode(&frames[0].bitmap, Some((loop_count, frames)), style, text)
+    encode(
+        &frames[0].bitmap,
+        Some((loop_count, frames)),
+        compression,
+        text,
+    )
 }
 
 // MARK: Tests
@@ -1681,7 +1688,7 @@ mod tests {
 
     fn smallest() -> EncodeOptions<'static> {
         EncodeOptions {
-            style: EncodingStyle::MaxCompression,
+            compression: Compression::Max,
             ..EncodeOptions::default()
         }
     }
@@ -1690,13 +1697,10 @@ mod tests {
     fn text_round_trips() {
         let bitmap = Bitmap::new(2, 1, vec![255, 0, 0, 255, 0, 0, 255, 128]).unwrap();
         let text = [("Thumb::Image::Width", "600"), ("Title", "Café ☕")];
-        for style in [
-            EncodingStyle::NormalCompression,
-            EncodingStyle::MaxCompression,
-        ] {
+        for compression in [Compression::Normal, Compression::Max] {
             let options = EncodeOptions {
-                style,
-                text: &text,
+                compression,
+                png_text: &text,
                 ..EncodeOptions::default()
             };
             let png = encode_with_options(&bitmap, Format::Png, options).unwrap();
@@ -1713,7 +1717,7 @@ mod tests {
         }
         let frames = [Frame::new(bitmap, Duration::from_millis(100))];
         let options = EncodeOptions {
-            text: &text[..1],
+            png_text: &text[..1],
             ..EncodeOptions::default()
         };
         let apng =
@@ -1750,7 +1754,7 @@ mod tests {
         let long = "k".repeat(80);
         for keyword in ["", " lead", "trail ", "two  spaces", "tab\t", "☕", &long] {
             let options = EncodeOptions {
-                text: &[(keyword, "text")],
+                png_text: &[(keyword, "text")],
                 ..EncodeOptions::default()
             };
             assert_eq!(
@@ -1759,7 +1763,7 @@ mod tests {
             );
         }
         let options = EncodeOptions {
-            text: &[("Key", "nul\0")],
+            png_text: &[("Key", "nul\0")],
             ..EncodeOptions::default()
         };
         assert_eq!(
@@ -1781,14 +1785,8 @@ mod tests {
         let bitmap = Bitmap::new(16, 16, pixels).unwrap();
         let palette = png_palette(core::iter::once(&bitmap)).unwrap();
         assert_eq!(palette.len(), 256);
-        let encoded = encode_png_variant(
-            &bitmap,
-            None,
-            EncodingStyle::MaxCompression,
-            Some(&palette),
-            None,
-        )
-        .expect("indexed PNG");
+        let encoded = encode_png_variant(&bitmap, None, Compression::Max, Some(&palette), None)
+            .expect("indexed PNG");
         assert_eq!(crate::decode(&encoded).unwrap().pixels(), bitmap.data());
     }
 
@@ -1815,14 +1813,8 @@ mod tests {
         assert_eq!(crate::decode(&max).unwrap().pixels(), bitmap.data());
 
         let gray = Bitmap::new(2, 1, vec![85, 85, 85, 0, 170, 170, 170, 255]).unwrap();
-        let encoded = encode_png_variant(
-            &gray,
-            None,
-            EncodingStyle::NormalCompression,
-            None,
-            Some([85, 85, 85]),
-        )
-        .unwrap();
+        let encoded =
+            encode_png_variant(&gray, None, Compression::Normal, None, Some([85, 85, 85])).unwrap();
         assert_eq!(encoded[24], 2);
         assert_eq!(crate::decode(&encoded).unwrap().pixels(), gray.data());
 
@@ -1841,7 +1833,7 @@ mod tests {
         let encoded = encode_png_variant(
             &frames[0].bitmap,
             Some((LoopCount::Infinite, &frames)),
-            EncodingStyle::MaxCompression,
+            Compression::Max,
             None,
             Some([0, 0, 0]),
         )

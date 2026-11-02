@@ -8,13 +8,12 @@ use alloc::vec::Vec;
 
 use super::color::{ColorModel, Curve, Transform};
 use super::{
-    Bitmap, Budget, DecodeError, EncodeError, EncodingStyle, Format, Image, Reader, Result,
-    pixel_len,
+    Bitmap, Budget, Compression, DecodeError, EncodeError, Format, Image, Reader, Result, pixel_len,
 };
 
 // MARK: Decoder
 #[derive(Clone, Copy, Eq, PartialEq)]
-enum Compression {
+enum BmpCompression {
     Rgb,
     Rle8,
     Rle4,
@@ -23,13 +22,13 @@ enum Compression {
     AlphaBitfields,
 }
 
-impl Compression {
+impl BmpCompression {
     const fn is_rle(self) -> bool {
         matches!(self, Self::Rle8 | Self::Rle4 | Self::Rle24)
     }
 }
 
-impl TryFrom<u32> for Compression {
+impl TryFrom<u32> for BmpCompression {
     type Error = DecodeError;
 
     fn try_from(value: u32) -> Result<Self> {
@@ -58,13 +57,13 @@ impl ChannelMasks {
 
     fn read(
         depth: u16,
-        compression: Compression,
+        compression: BmpCompression,
         dib_len: usize,
         header: &mut Reader<'_>,
         file: &mut Reader<'_>,
     ) -> Result<Self> {
         let mut masks = Self::defaults(depth);
-        if compression == Compression::Rgb && depth == 32 && dib_len >= 108 {
+        if compression == BmpCompression::Rgb && depth == 32 && dib_len >= 108 {
             header.take(12)?;
             let alpha = header.le32()?;
             if alpha != 0 {
@@ -77,11 +76,11 @@ impl ChannelMasks {
         }
         if !matches!(
             compression,
-            Compression::Bitfields | Compression::AlphaBitfields
+            BmpCompression::Bitfields | BmpCompression::AlphaBitfields
         ) {
             return Ok(masks);
         }
-        let has_alpha = dib_len >= 56 || compression == Compression::AlphaBitfields;
+        let has_alpha = dib_len >= 56 || compression == BmpCompression::AlphaBitfields;
         if dib_len >= 52 {
             masks.read_values(header, has_alpha)?;
         } else {
@@ -101,9 +100,9 @@ impl ChannelMasks {
         Ok(())
     }
 
-    fn validate(self, depth: u16, compression: Compression) -> Result<()> {
+    fn validate(self, depth: u16, compression: BmpCompression) -> Result<()> {
         if self.0[..3].contains(&0)
-            || (compression == Compression::AlphaBitfields && self.0[3] == 0)
+            || (compression == BmpCompression::AlphaBitfields && self.0[3] == 0)
         {
             return Err(DecodeError::InvalidHeader);
         }
@@ -140,7 +139,7 @@ struct BmpHeader {
     height: u32,
     top_down: bool,
     depth: u16,
-    compression: Compression,
+    compression: BmpCompression,
     #[cfg(feature = "ico")]
     image_size: usize,
     colors: usize,
@@ -195,15 +194,15 @@ impl BmpHeader {
         if !matches!(depth, 1 | 4 | 8 | 16 | 24 | 32) {
             return Err(DecodeError::UnsupportedFeature);
         }
-        let mut compression = Compression::Rgb;
+        let mut compression = BmpCompression::Rgb;
         let mut _image_size = 0;
         let mut colors = 0;
         if dib_len != 12 {
             let value = h.le32()?;
             compression = if dib_len == 64 && value == 4 {
-                Compression::Rle24
+                BmpCompression::Rle24
             } else {
-                Compression::try_from(value)?
+                BmpCompression::try_from(value)?
             };
             _image_size = h.le32()? as usize;
             h.take(8)?; // Pixels per meter.
@@ -213,19 +212,19 @@ impl BmpHeader {
         if icon && colors == 0 && icon_colors != 0 {
             colors = icon_colors;
         }
-        if (compression == Compression::Rle8 && depth != 8)
-            || (compression == Compression::Rle4 && depth != 4)
-            || (compression == Compression::Rle24 && depth != 24)
+        if (compression == BmpCompression::Rle8 && depth != 8)
+            || (compression == BmpCompression::Rle4 && depth != 4)
+            || (compression == BmpCompression::Rle24 && depth != 24)
             || (matches!(
                 compression,
-                Compression::Bitfields | Compression::AlphaBitfields
+                BmpCompression::Bitfields | BmpCompression::AlphaBitfields
             ) && !matches!(depth, 16 | 32))
             || (top_down && compression.is_rle())
         {
             return Err(DecodeError::InvalidHeader);
         }
         let mut masks = ChannelMasks::read(depth, compression, dib_len, &mut h, r)?;
-        if icon && depth == 32 && compression == Compression::Rgb {
+        if icon && depth == 32 && compression == BmpCompression::Rgb {
             masks.0[3] = 0xff00_0000;
         }
         Ok(Self {
@@ -531,7 +530,7 @@ fn rle(
     pixels: &mut [u8],
     width: usize,
     height: usize,
-    compression: Compression,
+    compression: BmpCompression,
     palette: &[[u8; 4]],
 ) -> Result<()> {
     // RLE streams alternate encoded runs with escape commands for literals, row ends, and deltas.
@@ -562,7 +561,7 @@ fn rle(
                     if y >= height || count > width - x {
                         return Err(DecodeError::InvalidData);
                     }
-                    if compression == Compression::Rle24 {
+                    if compression == BmpCompression::Rle24 {
                         let size = count.checked_mul(3).ok_or(DecodeError::InvalidData)?;
                         let bytes = r.take(size)?;
                         for (i, bgr) in bytes.as_chunks::<3>().0.iter().enumerate() {
@@ -576,14 +575,14 @@ fn rle(
                         }
                         continue;
                     }
-                    let size = if compression == Compression::Rle8 {
+                    let size = if compression == BmpCompression::Rle8 {
                         count
                     } else {
                         count.div_ceil(2)
                     };
                     let bytes = r.take(size)?;
                     for i in 0..count {
-                        let index = if compression == Compression::Rle8 {
+                        let index = if compression == BmpCompression::Rle8 {
                             bytes[i]
                         } else {
                             (bytes[i / 2] >> (4 - i % 2 * 4)) & 15
@@ -605,7 +604,7 @@ fn rle(
             if y >= height || count > width - x {
                 return Err(DecodeError::InvalidData);
             }
-            if compression == Compression::Rle24 {
+            if compression == BmpCompression::Rle24 {
                 let green = r.byte()?;
                 let red = r.byte()?;
                 for i in 0..count {
@@ -616,7 +615,7 @@ fn rle(
                 continue;
             }
             for i in 0..count {
-                let index = if compression == Compression::Rle8 {
+                let index = if compression == BmpCompression::Rle8 {
                     value
                 } else {
                     (value >> (4 - i % 2 * 4)) & 15
@@ -645,14 +644,14 @@ fn put(pixels: &mut [u8], offset: usize, index: u8, palette: &[[u8; 4]]) -> Resu
 // MARK: Encoder
 pub(super) fn encode(
     bitmap: &Bitmap,
-    style: EncodingStyle,
+    compression: Compression,
 ) -> core::result::Result<Vec<u8>, EncodeError> {
     let width = i32::try_from(bitmap.width).map_err(|_| EncodeError::InvalidDimensions)?;
     let height = i32::try_from(bitmap.height).map_err(|_| EncodeError::InvalidDimensions)?;
     let opaque = bitmap.data.as_chunks::<4>().0.iter().all(|p| p[3] == 255);
     let mut indexed = None;
     // Palettes and RLE are compression, so no compression writes 24 or 32-bit pixels
-    if opaque && style != EncodingStyle::NoCompression {
+    if opaque && compression != Compression::None {
         let mut colors = Vec::<[u8; 3]>::with_capacity(256);
         let mut lookup = [0u64; 512];
         let mut indices = Vec::new();
@@ -850,11 +849,11 @@ fn bmp_rle8(indices: &[u8], width: usize) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{EncodeOptions, EncodingStyle, Format, encode, encode_with_options};
+    use crate::{Compression, EncodeOptions, Format, encode, encode_with_options};
 
     fn smallest() -> EncodeOptions<'static> {
         EncodeOptions {
-            style: EncodingStyle::MaxCompression,
+            compression: Compression::Max,
             ..EncodeOptions::default()
         }
     }
@@ -862,10 +861,10 @@ mod tests {
     #[test]
     fn compression_values_are_validated() {
         assert!(matches!(
-            Compression::try_from(6),
-            Ok(Compression::AlphaBitfields)
+            BmpCompression::try_from(6),
+            Ok(BmpCompression::AlphaBitfields)
         ));
-        assert!(Compression::try_from(4).is_err());
+        assert!(BmpCompression::try_from(4).is_err());
     }
 
     fn bitmap(
@@ -1174,10 +1173,7 @@ mod tests {
         }
         let bitmap = Bitmap::new(20, 15, pixels).unwrap();
         let normal = encode(&bitmap, Format::Bmp).unwrap();
-        assert_eq!(
-            EncodeOptions::default().style,
-            EncodingStyle::NormalCompression
-        );
+        assert_eq!(EncodeOptions::default().compression, Compression::Normal);
         assert_eq!(u16::from_le_bytes([normal[28], normal[29]]), 24);
         assert_eq!(crate::decode(&normal).unwrap().pixels(), bitmap.data());
     }

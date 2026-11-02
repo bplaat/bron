@@ -10,7 +10,7 @@ use std::fmt::{self, Display, Formatter};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use image::{Bitmap, EncodeOptions, EncodingStyle, Format};
+use image::{Bitmap, Compression, EncodeOptions, Format};
 
 use crate::romfs::Node;
 
@@ -212,7 +212,7 @@ fn tga_gz(
         .map_err(|err| Error(format!("failed to convert {}: {err}", path.display())))?;
     // The Wii U Menu only reads uncompressed true-color TGA
     let options = EncodeOptions {
-        style: EncodingStyle::NoCompression,
+        compression: Compression::None,
         tga_alpha: alpha,
         ..EncodeOptions::default()
     };

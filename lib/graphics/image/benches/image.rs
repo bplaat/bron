@@ -10,7 +10,7 @@ use std::hint::black_box;
 use std::time::Duration;
 
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};
-use image::{Bitmap, EncodeOptions, EncodingStyle, Format, Frame, LoopCount};
+use image::{Bitmap, Compression, EncodeOptions, Format, Frame, LoopCount};
 
 // Builds a bottom-up 24-bit BMP gradient, avoiding a large checked-in fixture.
 fn bmp(width: u32, height: u32) -> Vec<u8> {
@@ -156,17 +156,14 @@ fn encode(c: &mut Criterion) {
         #[cfg(feature = "tga")]
         ("tga", Format::Tga),
     ];
-    let styles = [
-        ("normal", EncodingStyle::NormalCompression),
-        ("max", EncodingStyle::MaxCompression),
-    ];
+    let compressions = [("normal", Compression::Normal), ("max", Compression::Max)];
     let mut raster = c.benchmark_group("image_encode_raster");
     raster.throughput(Throughput::Elements(128 * 128));
     for &(name, format) in formats {
-        for &(style_name, style) in &styles {
-            let bench_name = format!("{name}_{style_name}");
+        for &(compression_name, compression) in &compressions {
+            let bench_name = format!("{name}_{compression_name}");
             let options = EncodeOptions {
-                style,
+                compression,
                 ..EncodeOptions::default()
             };
             raster.bench_function(&bench_name, |b| {
@@ -200,10 +197,10 @@ fn encode(c: &mut Criterion) {
         ("png_palette", Format::Png),
     ];
     for &(name, format) in palette_formats {
-        for &(style_name, style) in &styles {
-            let bench_name = format!("{name}_{style_name}");
+        for &(compression_name, compression) in &compressions {
+            let bench_name = format!("{name}_{compression_name}");
             let options = EncodeOptions {
-                style,
+                compression,
                 ..EncodeOptions::default()
             };
             raster.bench_function(&bench_name, |b| {
@@ -221,10 +218,10 @@ fn encode(c: &mut Criterion) {
         let mut transparent_pixels = bitmap.data().to_vec();
         transparent_pixels[3] = 0;
         let transparent = Bitmap::new(128, 128, transparent_pixels).expect("valid bitmap");
-        for &(style_name, style) in &styles {
-            let bench_name = format!("png_transparent_{style_name}");
+        for &(compression_name, compression) in &compressions {
+            let bench_name = format!("png_transparent_{compression_name}");
             let options = EncodeOptions {
-                style,
+                compression,
                 ..EncodeOptions::default()
             };
             raster.bench_function(&bench_name, |b| {
@@ -265,10 +262,10 @@ fn encode(c: &mut Criterion) {
     let mut animation = c.benchmark_group("image_encode_animation");
     animation.throughput(Throughput::Elements(128 * 128 * frames.len() as u64));
     for &(name, format) in animated_formats {
-        for &(style_name, style) in &styles {
-            let bench_name = format!("{name}_{style_name}");
+        for &(compression_name, compression) in &compressions {
+            let bench_name = format!("{name}_{compression_name}");
             let options = EncodeOptions {
-                style,
+                compression,
                 ..EncodeOptions::default()
             };
             animation.bench_function(&bench_name, |b| {
@@ -327,12 +324,11 @@ fn encode_tga(c: &mut Criterion) {
                 }
             }
             let bitmap = Bitmap::new(256, 256, pixels).expect("valid bitmap");
-            for (style_name, style) in [
-                ("none", EncodingStyle::NoCompression),
-                ("normal", EncodingStyle::NormalCompression),
-            ] {
+            for (compression_name, compression) in
+                [("none", Compression::None), ("normal", Compression::Normal)]
+            {
                 let options = EncodeOptions {
-                    style,
+                    compression,
                     ..EncodeOptions::default()
                 };
                 let encoded = image::encode_with_options(&bitmap, Format::Tga, options)
@@ -341,8 +337,8 @@ fn encode_tga(c: &mut Criterion) {
                     image::decode(&encoded).expect("decode bitmap").pixels(),
                     bitmap.data()
                 );
-                eprintln!("TGA {name}/{style_name}: {} bytes", encoded.len());
-                group.bench_function(&format!("{name}_{style_name}"), |b| {
+                eprintln!("TGA {name}/{compression_name}: {} bytes", encoded.len());
+                group.bench_function(&format!("{name}_{compression_name}"), |b| {
                     b.iter(|| {
                         black_box(
                             image::encode_with_options(black_box(&bitmap), Format::Tga, options)

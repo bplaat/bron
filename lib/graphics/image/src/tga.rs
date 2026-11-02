@@ -10,8 +10,7 @@
 use alloc::vec::Vec;
 
 use super::{
-    Bitmap, Budget, DecodeError, EncodeError, EncodingStyle, Format, Image, Reader, Result,
-    pixel_len,
+    Bitmap, Budget, Compression, DecodeError, EncodeError, Format, Image, Reader, Result, pixel_len,
 };
 
 const HEADER_LEN: usize = 18;
@@ -239,16 +238,15 @@ fn attributes_type(data: &[u8]) -> Result<Option<u8>> {
 // compression are the same.
 pub(super) fn encode(
     bitmap: &Bitmap,
-    style: EncodingStyle,
-    alpha: bool,
+    compression: Compression,
+    force_alpha: bool,
 ) -> core::result::Result<Vec<u8>, EncodeError> {
-    let compress = style != EncodingStyle::NoCompression;
+    let compress = compression != Compression::None;
     if bitmap.width > u32::from(u16::MAX) || bitmap.height > u32::from(u16::MAX) {
         return Err(EncodeError::InvalidDimensions);
     }
     let pixels = bitmap.data.as_chunks::<4>().0;
-    let force_alpha = alpha;
-    let alpha = alpha || pixels.iter().any(|pixel| pixel[3] != 255);
+    let alpha = force_alpha || pixels.iter().any(|pixel| pixel[3] != 255);
     let grayscale = compress && !force_alpha && pixels.iter().all(|p| p[0] == p[1] && p[1] == p[2]);
     // Grayscale always beats or ties true color for the same packet boundaries.
     let mut out = if grayscale {
@@ -422,9 +420,9 @@ mod tests {
     use super::*;
     use crate::{EncodeOptions, encode_with_options};
 
-    fn options(style: EncodingStyle, tga_alpha: bool) -> EncodeOptions<'static> {
+    fn options(compression: Compression, tga_alpha: bool) -> EncodeOptions<'static> {
         EncodeOptions {
-            style,
+            compression,
             tga_alpha,
             ..EncodeOptions::default()
         }
@@ -444,14 +442,14 @@ mod tests {
         let pixels = [
             255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 12, 34, 56, 255,
         ];
-        let encoded = round_trip(&pixels, options(EncodingStyle::NoCompression, false));
+        let encoded = round_trip(&pixels, options(Compression::None, false));
         assert_eq!((encoded[2], encoded[16], encoded[17]), (2, 24, 0));
         assert_eq!(encoded.len(), HEADER_LEN + 2 * 2 * 3 + FOOTER.len());
         assert!(encoded.ends_with(&FOOTER));
         // The bottom-left pixel comes first, in BGR order.
         assert_eq!(encoded[HEADER_LEN..HEADER_LEN + 3], [255, 0, 0]);
 
-        let encoded = round_trip(&pixels, options(EncodingStyle::NoCompression, true));
+        let encoded = round_trip(&pixels, options(Compression::None, true));
         assert_eq!((encoded[16], encoded[17]), (32, 8));
     }
 
@@ -460,19 +458,20 @@ mod tests {
         let pixels = [
             255, 0, 0, 255, 0, 255, 0, 128, 0, 0, 255, 0, 12, 34, 56, 255,
         ];
-        let encoded = round_trip(&pixels, options(EncodingStyle::NoCompression, false));
+        let encoded = round_trip(&pixels, options(Compression::None, false));
         assert_eq!((encoded[16], encoded[17]), (32, 8));
     }
 
     #[test]
     fn compression_uses_rle_for_flat_images() {
         let bitmap = Bitmap::new(64, 64, [10, 20, 30, 255].repeat(64 * 64)).unwrap();
-        let encode = |style| encode_with_options(&bitmap, Format::Tga, options(style, false));
-        let none = encode(EncodingStyle::NoCompression).unwrap();
-        let normal = encode(EncodingStyle::NormalCompression).unwrap();
+        let encode =
+            |compression| encode_with_options(&bitmap, Format::Tga, options(compression, false));
+        let none = encode(Compression::None).unwrap();
+        let normal = encode(Compression::Normal).unwrap();
         assert_eq!((none[2], normal[2]), (2, 9));
         assert!(normal.len() < none.len());
-        assert_eq!(encode(EncodingStyle::MaxCompression).unwrap(), normal);
+        assert_eq!(encode(Compression::Max).unwrap(), normal);
         assert_eq!(crate::decode(&normal).unwrap().pixels(), bitmap.data());
 
         // Raw and run packets of up to 128 pixels.
@@ -572,13 +571,10 @@ mod tests {
 
     #[test]
     fn fully_transparent_pixels_round_trip() {
-        for style in [
-            EncodingStyle::NoCompression,
-            EncodingStyle::NormalCompression,
-        ] {
+        for compression in [Compression::None, Compression::Normal] {
             for force in [false, true] {
                 for color in [[30, 60, 90, 0], [40, 40, 40, 0]] {
-                    round_trip(&color.repeat(4), options(style, force));
+                    round_trip(&color.repeat(4), options(compression, force));
                 }
             }
         }
@@ -667,12 +663,9 @@ mod tests {
                 encode_with_options(&bitmap, Format::Tga, EncodeOptions::default()).unwrap();
             assert_eq!(encoded[2], if gray { GRAYSCALE } else { COLOR_MAPPED });
             assert_eq!(crate::decode(&encoded).unwrap().pixels(), bitmap.data());
-            let forced = encode_with_options(
-                &bitmap,
-                Format::Tga,
-                options(EncodingStyle::NormalCompression, true),
-            )
-            .unwrap();
+            let forced =
+                encode_with_options(&bitmap, Format::Tga, options(Compression::Normal, true))
+                    .unwrap();
             assert_eq!(forced[16], 32);
             assert_eq!(crate::decode(&forced).unwrap().pixels(), bitmap.data());
         }
@@ -689,12 +682,9 @@ mod tests {
                     })
                     .collect();
                 let bitmap = Bitmap::new(width, 3, pixels).unwrap();
-                let none = encode_with_options(
-                    &bitmap,
-                    Format::Tga,
-                    options(EncodingStyle::NoCompression, false),
-                )
-                .unwrap();
+                let none =
+                    encode_with_options(&bitmap, Format::Tga, options(Compression::None, false))
+                        .unwrap();
                 let normal =
                     encode_with_options(&bitmap, Format::Tga, EncodeOptions::default()).unwrap();
                 assert!(normal.len() <= none.len());

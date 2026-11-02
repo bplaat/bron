@@ -17,7 +17,7 @@ use core::time::Duration;
 mod encoder;
 pub use color::{linear_to_srgb, srgb_to_linear};
 pub use encoder::{
-    EncodeError, EncodeOptions, EncodingStyle, encode, encode_animation,
+    Compression, EncodeError, EncodeOptions, encode, encode_animation,
     encode_animation_with_options, encode_with_options,
 };
 

@@ -10,7 +10,7 @@ use core::mem;
 use core::time::Duration;
 
 use super::{
-    Area, Bitmap, Budget, DecodeError, EncodeError, EncodingStyle, Format, Frame, Image, LoopCount,
+    Area, Bitmap, Budget, Compression, DecodeError, EncodeError, Format, Frame, Image, LoopCount,
     Reader, Result, pixel_len, round,
 };
 
@@ -447,23 +447,23 @@ impl<'a> GifFrames<'a> {
 
 pub(super) fn encode_bitmap(
     bitmap: &Bitmap,
-    style: EncodingStyle,
+    compression: Compression,
 ) -> core::result::Result<Vec<u8>, EncodeError> {
-    encode_frames(GifFrames::Still(bitmap), LoopCount::Finite(1), style)
+    encode_frames(GifFrames::Still(bitmap), LoopCount::Finite(1), compression)
 }
 
 pub(super) fn encode(
     frames: &[Frame],
     loop_count: LoopCount,
-    style: EncodingStyle,
+    compression: Compression,
 ) -> core::result::Result<Vec<u8>, EncodeError> {
-    encode_frames(GifFrames::Animated(frames), loop_count, style)
+    encode_frames(GifFrames::Animated(frames), loop_count, compression)
 }
 
 fn encode_frames(
     frames: GifFrames<'_>,
     loop_count: LoopCount,
-    style: EncodingStyle,
+    compression: Compression,
 ) -> core::result::Result<Vec<u8>, EncodeError> {
     let first = frames.get(0).bitmap;
     let width = u16::try_from(first.width).map_err(|_| EncodeError::InvalidDimensions)?;
@@ -492,7 +492,7 @@ fn encode_frames(
             index == 0 || pixels.iter().all(|pixel| pixel[3] >= 128)
         })
         .collect();
-    let compress = style != EncodingStyle::NoCompression;
+    let compress = compression != Compression::None;
     let cropped: Vec<_> = (0..frames.len())
         .map(|index| {
             compress && index != 0 && opaque[index] && opaque.get(index + 1) != Some(&false)
@@ -513,7 +513,7 @@ fn encode_frames(
         let (x, y, bitmap) = region
             .as_ref()
             .map_or((0, 0, frame.bitmap), |(x, y, bitmap)| (*x, *y, bitmap));
-        let (palette, candidates, transparency) = gif_palette(bitmap, style);
+        let (palette, candidates, transparency) = gif_palette(bitmap, compression);
         let bits = (palette.len().max(2).next_power_of_two().trailing_zeros() as u8).max(1);
         let min_code_size = bits.max(2);
         let disposal = if cropped.get(index + 1) == Some(&true) {
@@ -557,7 +557,10 @@ fn encode_frames(
     Ok(out)
 }
 
-fn gif_palette(bitmap: &Bitmap, style: EncodingStyle) -> (Vec<[u8; 3]>, Vec<Vec<u8>>, Option<u8>) {
+fn gif_palette(
+    bitmap: &Bitmap,
+    compression: Compression,
+) -> (Vec<[u8; 3]>, Vec<Vec<u8>>, Option<u8>) {
     let pixels = &bitmap.data;
     let transparent = pixels.as_chunks::<4>().0.iter().any(|pixel| pixel[3] < 128);
     let mut colors = Vec::<[u8; 3]>::with_capacity(256);
@@ -596,7 +599,7 @@ fn gif_palette(bitmap: &Bitmap, style: EncodingStyle) -> (Vec<[u8; 3]>, Vec<Vec<
         indices.push(index);
     }
     if colors.is_empty() {
-        let (colors, candidates) = gif_quantize(bitmap, transparent, style);
+        let (colors, candidates) = gif_quantize(bitmap, transparent, compression);
         return (colors, candidates, transparent.then_some(0));
     }
     (colors, vec![indices], transparent.then_some(0))
@@ -656,7 +659,7 @@ fn gif_mean(cells: &[GifCell]) -> [f64; 3] {
 fn gif_quantize(
     bitmap: &Bitmap,
     transparent: bool,
-    style: EncodingStyle,
+    compression: Compression,
 ) -> (Vec<[u8; 3]>, Vec<Vec<u8>>) {
     let pixels = bitmap.data.as_chunks::<4>().0;
     let mut histogram = vec![(0u32, [0u64; 3]); 1 << 15];
@@ -776,7 +779,7 @@ fn gif_quantize(
         }
         usize::from(cache[key] - 1)
     })];
-    if style == EncodingStyle::MaxCompression {
+    if compression == Compression::Max {
         candidates.push(gif_diffuse(pixels, width, &palette, 0.125, |color| {
             reserved + gif_nearest(opaque, color.map(f64::from))
         }));
@@ -897,7 +900,7 @@ fn gif_lzw(indices: &[u8], min_code_size: u8, compress: bool) -> Vec<u8> {
 mod tests {
     use super::*;
     use crate::{
-        Bitmap, EncodeOptions, EncodingStyle, Format, encode, encode_animation_with_options,
+        Bitmap, Compression, EncodeOptions, Format, encode, encode_animation_with_options,
     };
 
     #[test]
@@ -1097,15 +1100,12 @@ mod tests {
             }
         }
         let bitmap = Bitmap::new(64, 64, pixels).unwrap();
-        for style in [
-            EncodingStyle::NormalCompression,
-            EncodingStyle::MaxCompression,
-        ] {
+        for compression in [Compression::Normal, Compression::Max] {
             let encoded = crate::encode_with_options(
                 &bitmap,
                 Format::Gif,
                 EncodeOptions {
-                    style,
+                    compression,
                     ..EncodeOptions::default()
                 },
             )
@@ -1129,7 +1129,7 @@ mod tests {
                     }
                 }
             }
-            assert!(squared_error / count < 150, "{style:?}");
+            assert!(squared_error / count < 150, "{compression:?}");
         }
     }
 
@@ -1163,7 +1163,7 @@ mod tests {
             &frames,
             LoopCount::Infinite,
             EncodeOptions {
-                style: EncodingStyle::MaxCompression,
+                compression: Compression::Max,
                 ..EncodeOptions::default()
             },
         )
@@ -1213,19 +1213,16 @@ mod tests {
                 ]);
             }
             let bitmap = Bitmap::new(width, height, pixels).unwrap();
-            for style in [
-                EncodingStyle::NoCompression,
-                EncodingStyle::NormalCompression,
-            ] {
+            for compression in [Compression::None, Compression::Normal] {
                 let options = EncodeOptions {
-                    style,
+                    compression,
                     ..EncodeOptions::default()
                 };
                 let encoded = crate::encode_with_options(&bitmap, Format::Gif, options).unwrap();
                 assert_eq!(
                     crate::decode(&encoded).unwrap().pixels(),
                     bitmap.data(),
-                    "{style:?}"
+                    "{compression:?}"
                 );
             }
         }

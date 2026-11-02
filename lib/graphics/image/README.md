@@ -21,22 +21,22 @@ For GIF or APNG, give `encode_animation` a list of full-size frames, their
 display times, and a loop count. GIF supports up to 256 colors per frame and
 binary transparency. JPEG requires opaque pixels.
 
-PNG/APNG files can carry text entries. Set `EncodeOptions::text` to keyword and
+PNG/APNG files can carry text entries. Set `EncodeOptions::png_text` to keyword and
 text pairs: Latin-1 text is written as `tEXt` and other text as UTF-8 `iTXt`.
 Decoding reads `tEXt`, `zTXt`, and `iTXt` entries into `Image::text`.
 
 ## Compression
 
 Normal compression is the default. For GIF, JPEG, or PNG/APNG, you can spend more
-time looking for a smaller file. Set `EncodeOptions::style` to `MaxCompression`
-and use `encode_with_options` or `encode_animation_with_options`. It keeps the
-smallest result it tries.
+time looking for a smaller file. Set `EncodeOptions::compression` to
+`Compression::Max` and use `encode_with_options` or
+`encode_animation_with_options`. It keeps the smallest result it tries.
 
-Set `EncodeOptions::style` to `NoCompression` to store every pixel in full: 24 or
-32-bit BMP and TGA pixels, RGB or RGBA operations in QOI, and RGB or RGBA PNG/APNG
-rows in stored Deflate blocks with full frames. GIF still reduces colors to a
-palette but writes uncompressed LZW codes and full frames. JPEG is always lossy,
-so it only skips chroma subsampling.
+Set `EncodeOptions::compression` to `Compression::None` to store every pixel in
+full: 24 or 32-bit BMP and TGA pixels, RGB or RGBA operations in QOI, and RGB or
+RGBA PNG/APNG rows in stored Deflate blocks with full frames. GIF still reduces
+colors to a palette but writes uncompressed LZW codes and full frames. JPEG is
+always lossy, so it only skips chroma subsampling.
 
 | Format   | Normal compression                                                                                                                                                                    | Max compression                                                                                                                                                                  |
 | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -47,7 +47,7 @@ so it only skips chroma subsampling.
 | QOI      | Uses run, index, difference, and luma operations.                                                                                                                                     | Same as normal.                                                                                                                                                                  |
 | TGA      | Tries grayscale and palettes of up to 256 colors, with RLE packets within each row.                                                                                                   | Same as normal.                                                                                                                                                                  |
 
-JPEG's color sampling can change how the image looks between compression styles.
+JPEG's color sampling can change how the image looks between compression levels.
 BMP, PNG/APNG, QOI, and TGA preserve RGBA pixels, except that max compression may
 replace the color of fully transparent PNG/APNG pixels.
 

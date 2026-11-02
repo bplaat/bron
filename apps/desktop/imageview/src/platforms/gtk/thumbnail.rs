@@ -93,7 +93,7 @@ fn run(arguments: Arguments) -> Result<(), String> {
     );
     // The file manager adds the URI and modification time when it stores the thumbnail.
     let options = image::EncodeOptions {
-        text: &[
+        png_text: &[
             ("Thumb::Image::Width", &width),
             ("Thumb::Image::Height", &height),
             ("Software", "ImageView"),
@@ -157,5 +157,6 @@ mod tests {
         };
         assert_eq!(text("Thumb::Image::Width"), Some("600"));
         assert_eq!(text("Thumb::Image::Height"), Some("600"));
+        assert_eq!(text("Software"), Some("ImageView"));
     }
 }
