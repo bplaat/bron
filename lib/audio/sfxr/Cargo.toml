@@ -9,7 +9,7 @@ repository.workspace = true
 [lints]
 workspace = true
 
-# Without std only the sample parameters are left, for crates that only describe sounds
+# Without std synthesis uses C library math and random presets are unavailable
 [features]
 default = ["std"]
 std = ["dep:getrandom"]

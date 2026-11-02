@@ -8,7 +8,7 @@
 
 use core::f32::consts::PI;
 
-#[cfg(not(feature = "std"))]
+#[cfg(not(any(test, feature = "std")))]
 use crate::math::Float;
 use crate::{Rng, WaveType};
 
@@ -21,29 +21,29 @@ pub(crate) struct Oscillator {
     noise_buffer: [f32; 32],
     square_duty: f32,
     square_slide: f32,
-    fperiod: f64,
-    fmaxperiod: f64,
-    fslide: f64,
-    fdslide: f64,
-    vib_phase: f64,
-    vib_speed: f64,
-    vib_amp: f64,
+    fperiod: f32,
+    fmaxperiod: f32,
+    fslide: f32,
+    fdslide: f32,
+    vib_phase: f32,
+    vib_speed: f32,
+    vib_amp: f32,
     arp_time: i32,
     arp_limit: i32,
-    arp_mod: f64,
+    arp_mod: f32,
 }
 
 /// The parameters of an oscillator restart
 pub(crate) struct OscillatorParams {
     pub(crate) wave_type: WaveType,
-    pub(crate) base_freq: f64,
-    pub(crate) freq_limit: f64,
-    pub(crate) freq_ramp: f64,
-    pub(crate) freq_dramp: f64,
+    pub(crate) base_freq: f32,
+    pub(crate) freq_limit: f32,
+    pub(crate) freq_ramp: f32,
+    pub(crate) freq_dramp: f32,
     pub(crate) duty: f32,
     pub(crate) duty_ramp: f32,
     pub(crate) arp_speed: f32,
-    pub(crate) arp_mod: f64,
+    pub(crate) arp_mod: f32,
 }
 
 impl Oscillator {
@@ -80,7 +80,7 @@ impl Oscillator {
         self.phase = 0;
     }
 
-    pub(crate) fn reset_vibrato(&mut self, vib_speed: f64, vib_strength: f64) {
+    pub(crate) fn reset_vibrato(&mut self, vib_speed: f32, vib_strength: f32) {
         self.vib_phase = 0.0;
         self.vib_speed = vib_speed.powi(2) * 0.01;
         self.vib_amp = vib_strength * 0.5;

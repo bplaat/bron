@@ -13,7 +13,7 @@ parameters, the same parameters as the [sfxr.me](https://sfxr.me/) web editor.
 - `WaveType` with `Square`, `Triangle`, `Sine` and `Noise`
 
 Without the default `std` feature the crate is `no_std`, it then lacks the random presets and
-`mutate` and links `sin` and `sinf` from the C library.
+`mutate` and links `sinf` from the C library.
 
 Differences with the original crate:
 

@@ -5,14 +5,14 @@
  */
 
 #![doc = include_str!("../README.md")]
-#![cfg_attr(not(feature = "std"), no_std)]
+#![cfg_attr(not(any(test, feature = "std")), no_std)]
 
 use crate::generator::{Envelope, HighLowPassFilter, Oscillator, OscillatorParams, Phaser};
-#[cfg(not(feature = "std"))]
+#[cfg(not(any(test, feature = "std")))]
 use crate::math::Float;
 
 mod generator;
-#[cfg(not(feature = "std"))]
+#[cfg(not(any(test, feature = "std")))]
 mod math;
 
 /// The sample rate of the generated sound in Hz.
@@ -56,10 +56,6 @@ impl Rng {
         from + (until - from) * self.next_f32()
     }
 
-    fn range_f64(&mut self, from: f64, until: f64) -> f64 {
-        from + (until - from) * ((self.next_u64() >> 11) as f64 / (1u64 << 53) as f64)
-    }
-
     /// True with `chance_true` to `chance_false` odds
     const fn chance(&mut self, chance_true: u64, chance_false: u64) -> bool {
         self.next_u64() % (chance_true + chance_false) < chance_true
@@ -90,22 +86,22 @@ pub struct Sample {
     /// Oscillator wave type.
     pub wave_type: WaveType,
     /// Oscillator base frequency, between `0.0` and `1.0`.
-    pub base_freq: f64,
+    pub base_freq: f32,
     /// Oscillator frequency limit, between `0.0` and `1.0`.
-    pub freq_limit: f64,
+    pub freq_limit: f32,
     /// Oscillator frequency change over time, between `-1.0` and `1.0`.
-    pub freq_ramp: f64,
+    pub freq_ramp: f32,
     /// `freq_ramp` change over time, between `-1.0` and `1.0`.
-    pub freq_dramp: f64,
+    pub freq_dramp: f32,
     /// Oscillator square wave duty cycle, between `0.0` and `1.0`.
     pub duty: f32,
     /// Oscillator square wave duty cycle change over time, between `-1.0` and `1.0`.
     pub duty_ramp: f32,
 
     /// Vibrato strength, between `0.0` and `1.0`.
-    pub vib_strength: f64,
+    pub vib_strength: f32,
     /// Vibrato speed, between `0.0` and `1.0`.
-    pub vib_speed: f64,
+    pub vib_speed: f32,
     /// Vibrato delay, between `0.0` and `1.0`.
     pub vib_delay: f32,
 
@@ -140,7 +136,7 @@ pub struct Sample {
     /// Arpeggio interval, between `0.0` and `1.0`.
     pub arp_speed: f32,
     /// Arpeggio step in frequency, between `-1.0` and `1.0`.
-    pub arp_mod: f64,
+    pub arp_mod: f32,
 }
 
 impl Default for Sample {
@@ -191,24 +187,24 @@ impl Sample {
             ("freq_limit", self.freq_limit, &unit),
             ("freq_ramp", self.freq_ramp, &signed),
             ("freq_dramp", self.freq_dramp, &signed),
-            ("duty", f64::from(self.duty), &unit),
-            ("duty_ramp", f64::from(self.duty_ramp), &signed),
+            ("duty", self.duty, &unit),
+            ("duty_ramp", self.duty_ramp, &signed),
             ("vib_strength", self.vib_strength, &unit),
             ("vib_speed", self.vib_speed, &unit),
-            ("vib_delay", f64::from(self.vib_delay), &unit),
-            ("env_attack", f64::from(self.env_attack), &unit),
-            ("env_sustain", f64::from(self.env_sustain), &unit),
-            ("env_decay", f64::from(self.env_decay), &unit),
-            ("env_punch", f64::from(self.env_punch), &signed),
-            ("lpf_resonance", f64::from(self.lpf_resonance), &unit),
-            ("lpf_freq", f64::from(self.lpf_freq), &unit),
-            ("lpf_ramp", f64::from(self.lpf_ramp), &signed),
-            ("hpf_freq", f64::from(self.hpf_freq), &unit),
-            ("hpf_ramp", f64::from(self.hpf_ramp), &signed),
-            ("pha_offset", f64::from(self.pha_offset), &signed),
-            ("pha_ramp", f64::from(self.pha_ramp), &signed),
-            ("repeat_speed", f64::from(self.repeat_speed), &unit),
-            ("arp_speed", f64::from(self.arp_speed), &unit),
+            ("vib_delay", self.vib_delay, &unit),
+            ("env_attack", self.env_attack, &unit),
+            ("env_sustain", self.env_sustain, &unit),
+            ("env_decay", self.env_decay, &unit),
+            ("env_punch", self.env_punch, &signed),
+            ("lpf_resonance", self.lpf_resonance, &unit),
+            ("lpf_freq", self.lpf_freq, &unit),
+            ("lpf_ramp", self.lpf_ramp, &signed),
+            ("hpf_freq", self.hpf_freq, &unit),
+            ("hpf_ramp", self.hpf_ramp, &signed),
+            ("pha_offset", self.pha_offset, &signed),
+            ("pha_ramp", self.pha_ramp, &signed),
+            ("repeat_speed", self.repeat_speed, &unit),
+            ("arp_speed", self.arp_speed, &unit),
             ("arp_mod", self.arp_mod, &signed),
         ] {
             assert!(
@@ -226,33 +222,28 @@ impl Sample {
     /// Changes the fields randomly by a little, `None` uses a random seed.
     pub fn mutate(&mut self, seed: Option<u64>) {
         let rng = &mut Rng::from_seed(seed);
-        let mut mutate = |value: &mut f64, min: f64, max: f64| {
+        let mut mutate = |value: &mut f32, min: f32, max: f32| {
             if rng.chance(1, 1) {
-                *value = (*value + rng.range_f64(-0.05, 0.05)).clamp(min, max);
+                *value = (*value + rng.range_f32(-0.05, 0.05)).clamp(min, max);
             }
         };
-        let mut mutate_f32 = |value: &mut f32, min: f32, max: f32| {
-            let mut wide = f64::from(*value);
-            mutate(&mut wide, f64::from(min), f64::from(max));
-            *value = wide as f32;
-        };
         // The frequency limit isn't mutated, like in the original sfxr
-        mutate_f32(&mut self.duty, 0.0, 1.0);
-        mutate_f32(&mut self.duty_ramp, -1.0, 1.0);
-        mutate_f32(&mut self.vib_delay, 0.0, 1.0);
-        mutate_f32(&mut self.env_attack, 0.0, 1.0);
-        mutate_f32(&mut self.env_sustain, 0.0, 1.0);
-        mutate_f32(&mut self.env_decay, 0.0, 1.0);
-        mutate_f32(&mut self.env_punch, -1.0, 1.0);
-        mutate_f32(&mut self.lpf_resonance, 0.0, 1.0);
-        mutate_f32(&mut self.lpf_freq, 0.0, 1.0);
-        mutate_f32(&mut self.lpf_ramp, -1.0, 1.0);
-        mutate_f32(&mut self.hpf_freq, 0.0, 1.0);
-        mutate_f32(&mut self.hpf_ramp, -1.0, 1.0);
-        mutate_f32(&mut self.pha_offset, -1.0, 1.0);
-        mutate_f32(&mut self.pha_ramp, -1.0, 1.0);
-        mutate_f32(&mut self.repeat_speed, 0.0, 1.0);
-        mutate_f32(&mut self.arp_speed, 0.0, 1.0);
+        mutate(&mut self.duty, 0.0, 1.0);
+        mutate(&mut self.duty_ramp, -1.0, 1.0);
+        mutate(&mut self.vib_delay, 0.0, 1.0);
+        mutate(&mut self.env_attack, 0.0, 1.0);
+        mutate(&mut self.env_sustain, 0.0, 1.0);
+        mutate(&mut self.env_decay, 0.0, 1.0);
+        mutate(&mut self.env_punch, -1.0, 1.0);
+        mutate(&mut self.lpf_resonance, 0.0, 1.0);
+        mutate(&mut self.lpf_freq, 0.0, 1.0);
+        mutate(&mut self.lpf_ramp, -1.0, 1.0);
+        mutate(&mut self.hpf_freq, 0.0, 1.0);
+        mutate(&mut self.hpf_ramp, -1.0, 1.0);
+        mutate(&mut self.pha_offset, -1.0, 1.0);
+        mutate(&mut self.pha_ramp, -1.0, 1.0);
+        mutate(&mut self.repeat_speed, 0.0, 1.0);
+        mutate(&mut self.arp_speed, 0.0, 1.0);
         mutate(&mut self.base_freq, 0.0, 1.0);
         mutate(&mut self.freq_ramp, -1.0, 1.0);
         mutate(&mut self.freq_dramp, -1.0, 1.0);
@@ -265,14 +256,14 @@ impl Sample {
     pub fn pickup(seed: Option<u64>) -> Self {
         let rng = &mut Rng::from_seed(seed);
         let mut s = Self::new();
-        s.base_freq = rng.range_f64(0.4, 0.9);
+        s.base_freq = rng.range_f32(0.4, 0.9);
         s.env_attack = 0.0;
         s.env_sustain = rng.range_f32(0.0, 0.1);
         s.env_decay = rng.range_f32(0.1, 0.5);
         s.env_punch = rng.range_f32(0.3, 0.6);
         if rng.chance(1, 1) {
             s.arp_speed = rng.range_f32(0.5, 0.7);
-            s.arp_mod = rng.range_f64(0.2, 0.6);
+            s.arp_mod = rng.range_f32(0.2, 0.6);
         }
         s
     }
@@ -285,13 +276,13 @@ impl Sample {
         let mut s = Self::new();
         s.wave_type = rng.element(&[Square, Square, Sine, Sine, Triangle]);
         if rng.chance(1, 2) {
-            s.base_freq = rng.range_f64(0.3, 0.9);
-            s.freq_limit = rng.range_f64(0.0, 0.1);
-            s.freq_ramp = rng.range_f64(-0.35, -0.65);
+            s.base_freq = rng.range_f32(0.3, 0.9);
+            s.freq_limit = rng.range_f32(0.0, 0.1);
+            s.freq_ramp = rng.range_f32(-0.35, -0.65);
         } else {
-            s.base_freq = rng.range_f64(0.5, 1.0);
-            s.freq_limit = (s.base_freq - rng.range_f64(0.2, 0.8)).max(0.2);
-            s.freq_ramp = rng.range_f64(-0.15, -0.35);
+            s.base_freq = rng.range_f32(0.5, 1.0);
+            s.freq_limit = (s.base_freq - rng.range_f32(0.2, 0.8)).max(0.2);
+            s.freq_ramp = rng.range_f32(-0.15, -0.35);
         }
         if rng.chance(1, 1) {
             s.duty = rng.range_f32(0.0, 0.5);
@@ -322,11 +313,11 @@ impl Sample {
         let mut s = Self::new();
         s.wave_type = WaveType::Noise;
         if rng.chance(1, 1) {
-            s.base_freq = rng.range_f64(0.1, 0.5);
-            s.freq_ramp = rng.range_f64(-0.1, 0.3);
+            s.base_freq = rng.range_f32(0.1, 0.5);
+            s.freq_ramp = rng.range_f32(-0.1, 0.3);
         } else {
-            s.base_freq = rng.range_f64(0.2, 0.9);
-            s.freq_ramp = rng.range_f64(-0.2, -0.4);
+            s.base_freq = rng.range_f32(0.2, 0.9);
+            s.freq_ramp = rng.range_f32(-0.2, -0.4);
         }
         s.base_freq = s.base_freq.powi(2);
         if rng.chance(1, 4) {
@@ -344,12 +335,12 @@ impl Sample {
         }
         s.env_punch = rng.range_f32(0.2, 0.8);
         if rng.chance(1, 1) {
-            s.vib_strength = rng.range_f64(0.0, 0.7);
-            s.vib_speed = rng.range_f64(0.0, 0.6);
+            s.vib_strength = rng.range_f32(0.0, 0.7);
+            s.vib_speed = rng.range_f32(0.0, 0.6);
         }
         if rng.chance(1, 2) {
             s.arp_speed = rng.range_f32(0.6, 0.9);
-            s.arp_mod = rng.range_f64(-0.8, 0.8);
+            s.arp_mod = rng.range_f32(-0.8, 0.8);
         }
         s
     }
@@ -363,15 +354,15 @@ impl Sample {
         } else {
             s.duty = rng.range_f32(0.0, 0.6);
         }
-        s.base_freq = rng.range_f64(0.2, 0.5);
+        s.base_freq = rng.range_f32(0.2, 0.5);
         if rng.chance(1, 1) {
-            s.freq_ramp = rng.range_f64(0.1, 0.5);
+            s.freq_ramp = rng.range_f32(0.1, 0.5);
             s.repeat_speed = rng.range_f32(0.4, 0.8);
         } else {
-            s.freq_ramp = rng.range_f64(0.05, 0.25);
+            s.freq_ramp = rng.range_f32(0.05, 0.25);
             if rng.chance(1, 1) {
-                s.vib_strength = rng.range_f64(0.0, 0.7);
-                s.vib_speed = rng.range_f64(0.0, 0.6);
+                s.vib_strength = rng.range_f32(0.0, 0.7);
+                s.vib_speed = rng.range_f32(0.0, 0.6);
             }
         }
         s.env_attack = 0.0;
@@ -388,8 +379,8 @@ impl Sample {
         if s.wave_type == WaveType::Square {
             s.duty = rng.range_f32(0.0, 0.6);
         }
-        s.base_freq = rng.range_f64(0.2, 0.8);
-        s.freq_ramp = rng.range_f64(-0.3, -0.7);
+        s.base_freq = rng.range_f32(0.2, 0.8);
+        s.freq_ramp = rng.range_f32(-0.3, -0.7);
         s.env_attack = 0.0;
         s.env_sustain = rng.range_f32(0.0, 0.1);
         s.env_decay = rng.range_f32(0.1, 0.3);
@@ -405,8 +396,8 @@ impl Sample {
         let mut s = Self::new();
         s.wave_type = WaveType::Square;
         s.duty = rng.range_f32(0.0, 0.6);
-        s.base_freq = rng.range_f64(0.3, 0.6);
-        s.freq_ramp = rng.range_f64(0.1, 0.3);
+        s.base_freq = rng.range_f32(0.3, 0.6);
+        s.freq_ramp = rng.range_f32(0.1, 0.3);
         s.env_attack = 0.0;
         s.env_sustain = rng.range_f32(0.1, 0.4);
         s.env_decay = rng.range_f32(0.1, 0.3);
@@ -427,7 +418,7 @@ impl Sample {
         if s.wave_type == WaveType::Square {
             s.duty = rng.range_f32(0.0, 0.6);
         }
-        s.base_freq = rng.range_f64(0.2, 0.6);
+        s.base_freq = rng.range_f32(0.2, 0.6);
         s.env_attack = 0.0;
         s.env_sustain = rng.range_f32(0.1, 0.2);
         s.env_decay = rng.range_f32(0.0, 0.2);
@@ -549,7 +540,7 @@ impl Generator {
 }
 
 // MARK: Tests
-#[cfg(test)]
+#[cfg(all(test, feature = "std"))]
 mod test {
     use super::*;
 

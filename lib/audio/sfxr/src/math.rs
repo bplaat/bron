@@ -8,7 +8,6 @@
 #![allow(unsafe_code)]
 
 unsafe extern "C" {
-    safe fn sin(x: f64) -> f64;
     safe fn sinf(x: f32) -> f32;
 }
 
@@ -17,18 +16,12 @@ pub(crate) trait Float: Sized {
     fn powi(self, n: i32) -> Self;
 }
 
-macro_rules! float {
-    ($type:ty, $sin:ident) => {
-        impl Float for $type {
-            fn sin(self) -> Self {
-                $sin(self)
-            }
-            fn powi(self, n: i32) -> Self {
-                (0..n).fold(1.0, |value, _| value * self)
-            }
-        }
-    };
-}
+impl Float for f32 {
+    fn sin(self) -> Self {
+        sinf(self)
+    }
 
-float!(f64, sin);
-float!(f32, sinf);
+    fn powi(self, n: i32) -> Self {
+        (0..n).fold(1.0, |value, _| value * self)
+    }
+}
