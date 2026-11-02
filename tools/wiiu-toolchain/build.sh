@@ -40,8 +40,8 @@ decaf_commit='e6c528a20a41c34e0f9eb91dd3da40f119db2dee'
 # Cemu, fmt and pugixml for cemu/runner.cpp, cloned by the cemu and test commands, only Cemu's
 # interpreter and Cafe OS are built
 cemu_url='https://github.com/cemu-project/Cemu.git'
-cemu_version='v2.6'
-cemu_commit='a6fb0a48eb437a8a41c13b782ac8ae0433bf8f98'
+cemu_version='main'
+cemu_commit='3f8dd913cfd4c8247ad65ab41ba6ef0a55926769'
 fmt_url='https://github.com/fmtlib/fmt.git'
 fmt_version='12.0.0'
 fmt_commit='e424e3f2e607da02742f73db84873b8084fc714c'
@@ -120,7 +120,7 @@ CEMU_SOURCES=(
     Cafe/OS/common/OSCommon.cpp Cafe/OS/RPL/{elf,rpl,rpl_debug_symbols,rpl_symbol_storage}.cpp
     Cafe/OS/libs/nlibnss/nlibnss.cpp
     Cafe/IOSU/fsa/iosu_fsa.cpp Cafe/IOSU/kernel/iosu_kernel.cpp Cafe/Filesystem/{fsc,fscDeviceHostFS,fscDeviceRedirect}.cpp
-    Common/{SysAllocator,cpu_features}.cpp Common/unix/{FileStream_unix,platform}.cpp util/Fiber/FiberUnix.cpp
+    Common/{CafeStaticVar,SysAllocator,cpu_features}.cpp Common/unix/{FileStream_unix,platform}.cpp util/Fiber/FiberUnix.cpp
     util/MemMapper/MemMapperUnix.cpp util/highresolutiontimer/HighResolutionTimer.cpp util/crypto/crc32.cpp
 )
 
@@ -408,6 +408,7 @@ build_tools() {
 
 # Builds cemu/runner.cpp with Cemu's interpreter and Cafe OS. Cemu's headers include boost, glm
 # and wxWidgets for things the OS emulation doesn't use, cemu/shim/ has the few parts it does.
+# ENABLE_OPENGL only gives the unused graphics API setting a default.
 # macOS only declares the ucontext functions of Cemu's fibers for X/Open sources.
 build_cemu() {
     local flags=()
@@ -419,7 +420,7 @@ build_cemu() {
     [ "$(uname)" = Darwin ] && flags+=(-D_XOPEN_SOURCE)
     build_host cemu-runner -std=c++20 -O2 -w -fno-strict-aliasing -DFMT_HEADER_ONLY -DEMULATOR_VERSION_MAJOR=2 \
         -DEMULATOR_VERSION_MINOR=6 -DEMULATOR_VERSION_PATCH=0 -DEMULATOR_HASH="$cemu_version" ${flags[@]+"${flags[@]}"} \
-        -I"$CEMU_DIR/src" -I"$CEMU_DIR/src/Cafe" -I"$TOOLCHAIN_DIR/cemu/shim" -I"$FMT_DIR/include" \
+        -DENABLE_OPENGL -I"$CEMU_DIR/src" -I"$CEMU_DIR/src/Cafe" -I"$TOOLCHAIN_DIR/cemu/shim" -I"$FMT_DIR/include" \
         -I"$PUGIXML_DIR/src" -include "$CEMU_DIR/src/Common/precompiled.h" -- \
         "${CEMU_SOURCES[@]/#/$CEMU_DIR/src/}" "$CEMU_DIR"/src/Cafe/OS/libs/coreinit/*.cpp \
         "$PUGIXML_DIR/src/pugixml.cpp" "$TOOLCHAIN_DIR/cemu/runner.cpp" -- -lz -pthread

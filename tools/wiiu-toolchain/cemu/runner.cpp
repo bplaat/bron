@@ -15,6 +15,7 @@
 #include "Cafe/CafeSystem.h"
 #include "Cafe/Filesystem/fsc.h"
 #include "Cafe/GraphicPack/GraphicPack2.h"
+#include "Cafe/HW/Espresso/Debugger/Debugger.h"
 #include "Cafe/HW/Espresso/Debugger/GDBBreakpoints.h"
 #include "Cafe/HW/Espresso/Debugger/GDBStub.h"
 #include "Cafe/HW/Espresso/PPCState.h"
@@ -25,13 +26,17 @@
 #include "Cafe/IOSU/fsa/iosu_fsa.h"
 #include "Cafe/IOSU/kernel/iosu_kernel.h"
 #include "Cafe/IOSU/legacy/iosu_ioctl.h"
+#include "Cafe/OS/RPL/COSModule.h"
 #include "Cafe/OS/RPL/rpl.h"
 #include "Cafe/OS/RPL/rpl_symbol_storage.h"
 #include "Cafe/OS/common/OSCommon.h"
+#include "Cafe/OS/libs/coreinit/coreinit.h"
 #include "Cafe/OS/libs/coreinit/coreinit_Thread.h"
+#include "Cafe/OS/libs/nlibnss/nlibnss.h"
 #include "Cafe/OS/libs/nn_act/nn_act.h"
 #include "Cafe/TitleList/TitleInfo.h"
 #include "Common/SysAllocator.h"
+#include "WindowSystem.h"
 #include "config/ActiveSettings.h"
 #include "config/CemuConfig.h"
 #include "util/helpers/helpers.h"
@@ -48,8 +53,7 @@ uint64 s_loggingFlagMask = cemuLog_getFlag(LogType::Force) | cemuLog_getFlag(Log
 // The program's finish: the failures of a test or the exit status of a run
 static std::atomic<int> s_failures{-1}, s_exitStatus{-1};
 
-// OSReport lines come as "[OSConsole] <line>". coreinit's exit only logs and then hangs, so the
-// runner watches for its message.
+// OSReport lines come as "[OSConsole] <line>"
 bool cemuLog_log(LogType type, std::string_view text) {
     if (type == LogType::CoreinitLogging) {
         constexpr std::string_view prefix = "[OSConsole] ";
@@ -61,10 +65,7 @@ bool cemuLog_log(LogType type, std::string_view text) {
             s_failures = failures;
         return true;
     }
-    constexpr std::string_view exitPrefix = "The title terminated the process by calling coreinit.exit(";
-    if (text.starts_with(exitPrefix))
-        s_exitStatus = atoi(std::string(text.substr(exitPrefix.size())).c_str()) & 0xff;
-    else if (getenv("CEMU_RUNNER_LOG"))
+    if (getenv("CEMU_RUNNER_LOG"))
         fprintf(stderr, "cemu: %.*s\n", (int)text.size(), text.data());
     return true;
 }
@@ -92,8 +93,21 @@ uint8 ActiveSettings::GetTimerShiftFactor() {
 bool ActiveSettings::LoadSharedLibrariesEnabled() {
     return false;
 }
-void CemuConfig::Load(XMLConfigParser&) {}
-void CemuConfig::Save(XMLConfigParser&) {}
+XMLConfigParser CemuConfig::Load(XMLConfigParser& parser) {
+    return parser;
+}
+XMLConfigParser CemuConfig::Save(XMLConfigParser& parser) {
+    return parser;
+}
+void WindowSystem::ShowErrorDialog(std::string_view message, std::string_view, std::optional<ErrorCategory>) {
+    fprintf(stderr, "cemu-runner: %.*s\n", (int)message.size(), message.data());
+}
+
+// The emulated system libraries, the others aren't there
+std::span<COSModule*> GetCOSModules() {
+    static COSModule* modules[] = {coreinit::GetModule(), nlibnss::GetModule()};
+    return modules;
+}
 
 // No JIT, GPU, debugger, graphic packs, audio, input or other system libraries
 void PPCRecompiler_attemptEnter(PPCInterpreter_t*, uint32) {}
@@ -104,9 +118,9 @@ void PPCRecompiler_invalidateRange(uint32, uint32) {}
 void LatteBufferCache_notifyDCFlush(MPTR, uint32) {}
 GDBServer::~GDBServer() {}
 void GDBServer::HandleTrapInstruction(PPCInterpreter_t*) {}
-void debugger_enterTW(PPCInterpreter_t*) {}
-void debuggerWindow_notifyModuleLoaded(void*) {}
-void debuggerWindow_notifyModuleUnloaded(void*) {}
+void debugger_enterTW(PPCInterpreter_t*, bool) {}
+DebuggerDispatcher g_debuggerDispatcher;
+std::vector<GraphicPackPtr> GraphicPack2::s_active_graphic_packs;
 std::vector<std::pair<MPTR, MPTR>> GraphicPack2::GetActiveRAMMappings() {
     return {};
 }
@@ -121,16 +135,7 @@ sint32 iosuIoctl_pushAndWait(uint32, ioQueueEntry_t*) {
 void nnNfp_update() {}
 namespace snd_core {
 void AXOut_update() {}
-void loadExports() {}
 }  // namespace snd_core
-namespace padscore {
-void load() {}
-void start() {}
-}  // namespace padscore
-namespace vpad {
-void load() {}
-void start() {}
-}  // namespace vpad
 namespace nn::act {
 uint32 GetUuidEx(uint8* uuid, uint8, sint32) {
     memset(uuid, 0, 16);
@@ -141,69 +146,6 @@ uint32 GetSimpleAddressIdEx(uint32be* id, uint8) {
     return 0;
 }
 }  // namespace nn::act
-#define NO_LIBRARY(load) \
-    void load() {}
-NO_LIBRARY(gx2_load)
-NO_LIBRARY(dmae_load)
-NO_LIBRARY(nnAct_load)
-NO_LIBRARY(nnAc_load)
-NO_LIBRARY(nnEc_load)
-NO_LIBRARY(nnBoss_load)
-NO_LIBRARY(nnUds_load)
-NO_LIBRARY(nnSL_load)
-NO_LIBRARY(nsysnet_load)
-NO_LIBRARY(sysapp_load)
-namespace zlib {
-NO_LIBRARY(load)
-}
-namespace nn::erreula {
-NO_LIBRARY(load)
-}
-namespace nn::acp {
-NO_LIBRARY(load)
-}
-namespace nn::nfp {
-NO_LIBRARY(load)
-}
-namespace nn::nim {
-NO_LIBRARY(load)
-}
-namespace nn::ndm {
-NO_LIBRARY(load)
-}
-namespace nn::spm {
-NO_LIBRARY(load)
-}
-namespace nn::save {
-NO_LIBRARY(load)
-}
-namespace nn::fp {
-NO_LIBRARY(load)
-}
-namespace nn::olv {
-NO_LIBRARY(load)
-}
-namespace nn::idbe {
-NO_LIBRARY(load)
-}
-namespace nlibcurl {
-NO_LIBRARY(load)
-}
-namespace nsyshid {
-NO_LIBRARY(load)
-}
-namespace nsyskbd {
-NO_LIBRARY(nsyskbd_load)
-}
-namespace swkbd {
-NO_LIBRARY(load)
-}
-namespace camera {
-NO_LIBRARY(load)
-}
-namespace proc_ui {
-NO_LIBRARY(load)
-}
 
 // The parts of CafeSystem the OS asks, for a standalone RPX
 namespace CafeSystem {
@@ -231,14 +173,16 @@ bool GetOverrideArgStr(std::vector<std::string>&) {
 void SetOverrideArgs(std::span<std::string>) {}
 void UnsetOverrideArgs() {}
 void ShutdownTitle() {}
+// coreinit's exit ends here after the atexit cleanups
+void NotifyPPCProcessExit(sint32 status) {
+    s_exitStatus = status & 0xff;
+}
 void RequestRecreateCanvas() {}
 PREPARE_STATUS_CODE PrepareForegroundTitle(TitleId) {
     return PREPARE_STATUS_CODE::UNABLE_TO_MOUNT;
 }
 void LaunchForegroundTitle() {}
 }  // namespace CafeSystem
-
-void coreinit_start(PPCInterpreter_t* hCPU);
 
 // Crashes print where they happened, guest addresses are relative to memory_base
 static void crashed(int signal, siginfo_t* info, void*) {
@@ -254,16 +198,15 @@ static int fail(const char* message) {
     return 1;
 }
 
-// Loads the RPX like CafeSystem::PrepareForegroundTitleFromStandaloneRPX, from the code folder
+// Loads the RPX like CafeSystem::LoadMainExecutable, from the code folder
 static bool load(const fs::path& rpx) {
     FSCDeviceHostFS_Mount("/internal/code/", _pathToUtf8(rpx.parent_path()), FSC_PRIORITY_BASE);
     _pathToExecutable = "/internal/code/" + _pathToUtf8(rpx.filename());
-    memory_mapForCurrentTitle();
     uint32 size = 0;
     uint8* data = fsc_extractFile(_pathToExecutable.c_str(), &size);
     if (!data)
         return false;
-    RPLLoader_AddDependency(_pathToExecutable.c_str());
+    RPLLoader_AddDependency(_pathToExecutable.c_str(), true);
     applicationRPX = RPLLoader_LoadFromMemory(data, size, _pathToExecutable.data());
     free(data);
     if (!applicationRPX)
@@ -304,22 +247,22 @@ int main(int argc, char** argv) {
     SysAllocatorContainer::GetInstance().Initialize();
     iosu::kernel::GetModule()->SystemLaunch();
     iosu::fsa::Initialize();
-    if (!load(fs::absolute(argv[1])))
-        return fail("Cannot load the RPX");
+    memory_mapForCurrentTitle();
 
-    // Start it like cemu_initForGame without the GPU and audio, the scheduler runs one core
+    // Start it like cemu_initForGame without the GPU and audio: coreinit is loaded before the RPX
+    // and its entry starts the main thread, the scheduler runs one core
     PPCTimer_waitForInit();
     iosu::kernel::GetModule()->TitleStart();
     ppcCyclesSince2000 = ppcCyclesSince2000_UTC = (uint64)(time(nullptr) - 946684800) * ESPRESSO_CORE_CLOCK;
     ppcCyclesSince2000TimerClock = ppcCyclesSince2000 / 20;
     PPCTimer_start();
-    osLib_load();
+    RPLLoader_LoadCoreinit();
+    if (!load(fs::absolute(argv[1])))
+        return fail("Cannot load the RPX");
     RPLLoader_UpdateDependencies();
     RPLLoader_Link();
     RPLLoader_NotifyControlPassedToApplication();
-    OSThread_t* initialThread = coreinit::OSGetDefaultThread(1);
-    coreinit::OSSetThreadPriority(initialThread, 16);
-    coreinit::OSRunThread(initialThread, PPCInterpreter_makeCallableExportDepr(coreinit_start), 0, nullptr);
+    RPLLoader_CallCoreinitEntrypoint();
     coreinit::OSSchedulerBegin(1);
 
     bool test = mode == "test";

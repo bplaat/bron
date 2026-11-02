@@ -70,13 +70,13 @@ The toolchain and the examples build separately from the main Cargo workspace.
   wrapper for `llvm-ar`. Rust projects with C sources set `TARGET_CC` and `TARGET_AR` to these
   scripts in `.cargo/config.toml`
 - `run.sh` converts a program to an `.rpx` and starts it in Cemu, extra arguments go to Cemu
-- `cemu/` builds a headless runner from [Cemu v2.6](https://github.com/cemu-project/Cemu/tree/v2.6)
+- `cemu/` builds a headless runner from the main branch of [Cemu](https://github.com/cemu-project/Cemu)
   with `cemu/patches/`: Cemu's own interpreter, RPL loader, coreinit (threads, scheduler, memory,
-  time and the FSA file functions) and the FSA of IOSU on a host folder as the SD card, without
-  the GPU, audio, input, JIT or GUI. `cemu/runner.cpp` replaces Cemu's system startup and stubs
-  the rest of Cemu, `cemu/shim/` has the few parts of boost, glm, wxWidgets, X11, GTK and curl
-  that Cemu's headers need. The other system libraries aren't there, so it doesn't run the
-  graphical examples, use the normal Cemu for those
+  time and the FSA file functions), nlibnss's random bytes and the FSA of IOSU on a host folder as
+  the SD card, without the GPU, audio, input, JIT or GUI. `cemu/runner.cpp` replaces Cemu's system
+  startup and stubs the rest of Cemu, `cemu/shim/` has the few parts of boost, glm, wxWidgets, X11,
+  GTK, curl and the window system that Cemu's headers need. The other system libraries aren't
+  there, so it doesn't run the graphical examples, use the normal Cemu for those
 - `test/` is the Wii U program run by `./build.sh test`
 
 ## Test
@@ -114,21 +114,16 @@ Only Cemu's `src/` is checked out, without its submodules, with [fmt](https://gi
 other repos, `./build.sh export-patches` also writes `../../target/wiiu-toolchain/cemu/` back to
 `cemu/patches/` once it is there:
 
-- `0001` implements `crnand`, which clang emits in picolibc's floating-point formatting
-- `0002` and `0003` make Cemu run on Apple silicon Macs: it protects whole 16 KiB host pages for
-  smaller memory ranges and passes the fiber entry parameter to `makecontext` in 32-bit halves
-- `0004` stops firing alarms when none are left, which crashed with libc++ on the first sleep
-- `0005` truncates host files on Unix, `FSATruncateFile` was a debug break
-- `0006` keeps files working after reading past their end, which left the Unix file stream failing
+- `0001` truncates host files on Unix, `FSATruncateFile` was a debug break
+- `0002` keeps files working after reading past their end, which left the Unix file stream failing
   every later read and write
-- `0007` fails to remove a host directory that isn't empty, which reported success
-- `0008` gives host files their modification time, `FSAGetStat` returned 1980
-- `0009` counts the high resolution timer in nanoseconds on Unix, on macOS the clock ran 42 times
-  too fast
-- `0010` fuses the multiply-add instructions on every host, on x86-64 they rounded twice
-- `0011` implements NSS initialization and random-byte exports using the host OS
-  CSPRNG. The headless runner links the implementation, and the guest suite checks
-  NSS errors, fresh output and reinitialization through `getentropy()`.
+- `0003` fails to remove a host directory that isn't empty, which reported success
+- `0004` gives host files their modification time, `FSAGetStat` returned 1980
+- `0005` fuses the multiply-add instructions on every host, on x86-64 they rounded twice
+- `0006` implements NSS initialization and random-byte exports using the host OS
+  CSPRNG, with the error codes of [cafe-sys](https://github.com/rust-wiiu/cafe-sys). The headless
+  runner links the implementation, and the guest suite checks NSS errors, fresh output and
+  reinitialization through `getentropy()`.
 
 ## Shaders
 

@@ -8,11 +8,10 @@ initialization and argument errors. Use host getentropy or Windows
 BCryptGenRandom so successful calls fill fresh random bytes rather
 than passing through unsupported-function stubs.
 ---
- src/Cafe/OS/libs/nlibnss/nlibnss.cpp | 57 ++++++++++++++++++++++++++++++++++++++++
+ src/Cafe/OS/libs/nlibnss/nlibnss.cpp | 57 +++++++++++++++++++++++++++++++++++++++++
  1 file changed, 57 insertions(+)
 
 diff --git a/src/Cafe/OS/libs/nlibnss/nlibnss.cpp b/src/Cafe/OS/libs/nlibnss/nlibnss.cpp
-index 0c8ee28..04b7582 100644
 --- a/src/Cafe/OS/libs/nlibnss/nlibnss.cpp
 +++ b/src/Cafe/OS/libs/nlibnss/nlibnss.cpp
 @@ -1,8 +1,60 @@
@@ -76,15 +75,15 @@ index 0c8ee28..04b7582 100644
  	int NSSExportDeviceCertChain(uint8* uknPtr1, uint32be* uknLength1, uint8* uknPtr2, uint32be* uknLength2, uint32 uknR7, uint32 uknR8)
  	{
  		cemuLog_logDebug(LogType::Force, "NSSExportDeviceCertChain called but not implemented");
-@@ -31,6 +83,11 @@
+@@ -39,6 +91,11 @@ namespace nlibnss
  
- 	void load()
- 	{
-+		s_initialized = false;
-+		cafeExportRegister("nlibnss", NSSInit, LogType::Placeholder);
-+		cafeExportRegister("nlibnss", NSSFinish, LogType::Placeholder);
-+		cafeExportRegister("nlibnss", NSSLibReady, LogType::Placeholder);
-+		cafeExportRegister("nlibnss", NSSGetRandom, LogType::Placeholder);
- 		cafeExportRegister("nlibnss", NSSSignatureGetSignatureLength, LogType::Placeholder);
- 		cafeExportRegister("nlibnss", NSSExportDeviceCertChain, LogType::Placeholder);
- 	}
+ 		void RPLMapped() override
+ 		{
++			s_initialized = false;
++			cafeExportRegister("nlibnss", NSSInit, LogType::Placeholder);
++			cafeExportRegister("nlibnss", NSSFinish, LogType::Placeholder);
++			cafeExportRegister("nlibnss", NSSLibReady, LogType::Placeholder);
++			cafeExportRegister("nlibnss", NSSGetRandom, LogType::Placeholder);
+ 			cafeExportRegister("nlibnss", NSSSignatureGetSignatureLength, LogType::Placeholder);
+ 			cafeExportRegister("nlibnss", NSSExportDeviceCertChain, LogType::Placeholder);
+ 		};
