@@ -53,6 +53,8 @@ unsafe extern "C" {
     pub fn ACConnect() -> NNResult;
     pub fn ACConnectAsync() -> NNResult;
     pub fn ACClose() -> NNResult;
+    /// The console's IPv4 address, once it's connected.
+    pub fn ACGetAssignedAddress(ip: *mut u32) -> NNResult;
     pub fn socket_lib_init();
     pub fn socket_lib_finish();
     #[link_name = "__rplwrap_socket"]

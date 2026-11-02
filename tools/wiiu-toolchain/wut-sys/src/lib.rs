@@ -155,14 +155,19 @@ unsafe extern "C" {
 // MARK: GX2 drawing and state
 pub const GX2_VERTEX_BUFFER_ALIGNMENT: usize = 0x40;
 pub const GX2_INDEX_BUFFER_ALIGNMENT: usize = 0x20;
+pub const GX2_PRIMITIVE_MODE_LINES: u32 = 2;
 pub const GX2_PRIMITIVE_MODE_TRIANGLES: u32 = 4;
 pub const GX2_PRIMITIVE_MODE_QUADS: u32 = 19;
 pub const GX2_INDEX_TYPE_U16: u32 = 4;
 pub const GX2_INDEX_TYPE_U32: u32 = 9;
 pub const GX2_INVALIDATE_MODE_CPU_ATTRIBUTE_BUFFER: u32 = 1 << 6 | 1 << 0;
+pub const GX2_INVALIDATE_MODE_CPU_TEXTURE: u32 = 1 << 6 | 1 << 1;
 pub const GX2_COMPARE_FUNC_LESS: u32 = 1;
 pub const GX2_COMPARE_FUNC_LEQUAL: u32 = 3;
+pub const GX2_COMPARE_FUNC_GREATER: u32 = 4;
+pub const GX2_COMPARE_FUNC_ALWAYS: u32 = 7;
 pub const GX2_FRONT_FACE_CCW: u32 = 0;
+pub const GX2_FRONT_FACE_CW: u32 = 1;
 pub const GX2_BLEND_MODE_ZERO: u32 = 0;
 pub const GX2_BLEND_MODE_ONE: u32 = 1;
 pub const GX2_BLEND_MODE_SRC_ALPHA: u32 = 4;
@@ -209,6 +214,8 @@ unsafe extern "C" {
         alpha_dst_blend: u32,
         alpha_combine: u32,
     );
+    pub fn GX2SetAlphaTest(alpha_test: BOOL, func: u32, reference: f32);
+    pub fn GX2SetLineWidth(width: f32);
     /// Copies a color buffer to the screen's scan buffer, scaled to the screen's size.
     pub fn GX2CopyColorBufferToScanBuffer(buffer: *const GX2ColorBuffer, scan_target: u32);
 }
@@ -315,6 +322,13 @@ unsafe extern "C" {
     ) -> BOOL;
     pub fn WHBGfxInitFetchShader(group: *mut WHBGfxShaderGroup) -> BOOL;
     pub fn WHBGfxFreeShaderGroup(group: *mut WHBGfxShaderGroup) -> BOOL;
+}
+
+// MARK: sysapp
+unsafe extern "C" {
+    /// Asks the system to go back to the Wii U Menu, `WHBProcIsRunning` turns false once the
+    /// program may exit.
+    pub fn SYSLaunchMenu();
 }
 
 // MARK: GU matrices

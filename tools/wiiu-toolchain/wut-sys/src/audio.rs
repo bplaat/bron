@@ -89,6 +89,9 @@ unsafe extern "C" {
         context: *mut c_void,
     ) -> *mut AXVoice;
     pub fn AXFreeVoice(voice: *mut AXVoice);
+    /// Holds the voice's changes back until `AXVoiceEnd`, so the DSP sees them together.
+    pub fn AXVoiceBegin(voice: *mut AXVoice) -> i32;
+    pub fn AXVoiceEnd(voice: *mut AXVoice) -> i32;
     pub fn AXSetVoiceOffsets(voice: *mut AXVoice, offsets: *mut AXVoiceOffsets);
     pub fn AXGetVoiceOffsets(voice: *mut AXVoice, offsets: *mut AXVoiceOffsets);
     pub fn AXSetVoiceState(voice: *mut AXVoice, state: u32);
