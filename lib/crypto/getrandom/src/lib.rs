@@ -6,8 +6,10 @@
 
 //! A minimal replacement for the [getrandom](https://crates.io/crates/getrandom) crate
 
-use std::fmt;
-use std::num::NonZeroI32;
+#![cfg_attr(not(any(test, feature = "std", unix)), no_std)]
+
+use core::fmt;
+use core::num::NonZeroI32;
 
 // MARK: Error
 /// Error type
@@ -19,6 +21,8 @@ impl Error {
     pub const ERRNO_NOT_POSITIVE: Error = Self::new_internal(1);
     /// Encountered an unexpected situation which should not happen in practice.
     pub const UNEXPECTED: Error = Self::new_internal(2);
+    /// No supported source of randomness is available.
+    pub const UNSUPPORTED: Error = Self::new_internal(3);
     /// Call to `CCRandomGenerateBytes` failed.
     #[cfg(target_os = "ios")]
     const IOS_RANDOM_GEN: Error = Self::new_internal(10);
@@ -38,6 +42,7 @@ impl Error {
         }
     }
 
+    #[cfg(unix)]
     #[allow(dead_code)]
     fn from_io(error: &std::io::Error) -> Self {
         error
@@ -56,14 +61,15 @@ impl Error {
         match self {
             Self::ERRNO_NOT_POSITIVE => Some("errno: did not return a positive value"),
             Self::UNEXPECTED => Some("unexpected situation"),
+            Self::UNSUPPORTED => Some("no supported source of randomness"),
             #[cfg(target_os = "ios")]
-            Self::IOS_RANDOM_GEN => Some("SecRandomCopyBytes: iOS Security framework failure"),
+            Self::IOS_RANDOM_GEN => Some("CCRandomGenerateBytes: iOS random generation failure"),
             _ => None,
         }
     }
 }
 
-impl std::error::Error for Error {}
+impl core::error::Error for Error {}
 
 impl fmt::Debug for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -85,9 +91,12 @@ impl fmt::Debug for Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if let Some(errno) = self.raw_os_error() {
-            if cfg!(feature = "std") {
+            #[cfg(feature = "std")]
+            {
                 std::io::Error::from_raw_os_error(errno).fmt(f)
-            } else {
+            }
+            #[cfg(not(feature = "std"))]
+            {
                 write!(f, "OS Error: {errno}")
             }
         } else if let Some(desc) = self.internal_desc() {
@@ -112,15 +121,33 @@ impl From<Error> for std::io::Error {
 /// Fill buffer with crypto random bytes
 #[allow(unsafe_code)]
 pub fn fill(buf: &mut [u8]) -> Result<(), Error> {
+    if buf.is_empty() {
+        return Ok(());
+    }
     cfg_select! {
-        any(target_os = "macos", target_os = "openbsd") => {
+        any(
+            target_os = "macos",
+            target_os = "openbsd",
+            all(
+                target_os = "none",
+                target_vendor = "nintendo",
+                target_arch = "powerpc"
+            ),
+        ) => {
             unsafe extern "C" {
                 fn getentropy(buf: *mut u8, buflen: usize) -> i32;
             }
             for chunk in buf.chunks_mut(256) {
                 // SAFETY: chunk is a valid mutable byte slice with length <= 256, satisfying getentropy's requirements.
                 if unsafe { getentropy(chunk.as_mut_ptr(), chunk.len()) } != 0 {
-                    return Err(Error::from_io(&std::io::Error::last_os_error()));
+                    cfg_select! {
+                        target_os = "none" => {
+                            // These toolchains use a shared, non-thread-local errno.
+                            // Avoid racing other libc callers when reading it.
+                            return Err(Error::UNEXPECTED);
+                        }
+                        _ => return Err(Error::from_io(&std::io::Error::last_os_error())),
+                    }
                 }
             }
         }
