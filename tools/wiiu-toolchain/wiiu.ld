@@ -35,6 +35,8 @@ SECTIONS
 
 	/* The loader sections, the import sections of the system libraries follow from imports.ld */
 	. = ORIGIN(loadmem);
+	/* Cafe OS excludes imports when finding this region's lower bound. */
+	.wut_load_bounds : { LONG(0) } > loadmem
 	.fexports ALIGN(32) : { KEEP(*(.fexports)) } > loadmem
 	.dexports ALIGN(32) : { KEEP(*(.dexports)) } > loadmem
 

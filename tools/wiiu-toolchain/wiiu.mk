@@ -34,7 +34,7 @@ CFLAGS := --target=powerpc-none-eabi -mcpu=750 -ffreestanding -nostdlibinc \
 OBJECTS := $(patsubst src/%.c,$(BUILD)/%.o,$(wildcard src/*.c))
 LIBRARIES := $(addprefix $(TOOLCHAIN_BUILD)/,libwut.a libgu.a sysroot/lib/libc.a libcompiler-rt.a)
 
-$(BUILD)/$(NAME).rpx: $(BUILD)/$(NAME).elf
+$(BUILD)/$(NAME).rpx: $(BUILD)/$(NAME).elf $(ELF2RPL)
 	$(ELF2RPL) $< $@ > /dev/null
 
 # elf2rpl needs the relocations to make the imports of the system libraries
@@ -64,7 +64,7 @@ $(BUILD)/textures.gtx: src/assets/textures.toml $(filter-out %.toml,$(wildcard s
 $(TOOLCHAIN_BUILD)/libwut.a: FORCE
 	@$(TOOLCHAIN)/build.sh
 $(TOOLCHAIN_BUILD)/libgu.a $(TOOLCHAIN_BUILD)/sysroot/lib/libc.a $(TOOLCHAIN_BUILD)/libcompiler-rt.a \
-	$(LATTE_ASSEMBLER) $(GTXCONV) $(WUHBTOOL): $(TOOLCHAIN_BUILD)/libwut.a ;
+	$(ELF2RPL) $(LATTE_ASSEMBLER) $(GTXCONV) $(WUHBTOOL): $(TOOLCHAIN_BUILD)/libwut.a ;
 
 run: $(BUILD)/$(NAME).elf
 	$(TOOLCHAIN)/run.sh $<

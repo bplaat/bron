@@ -1,0 +1,54 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Mon, 2 Nov 2026 21:45:37 +0100
+Subject: [PATCH] Reserve the loader bounds and branch trampoline space for LLD
+
+Keep the linker-generated loader boundary read-only and reserve space for the trampolines Cafe OS may create for retained REL24 relocations. Cemu allocates trampolines separately, hiding the missing space on hardware.
+---
+ src/elf2rpl/main.cpp | 26 +++++++++++++++++++++++++-
+ 1 file changed, 25 insertions(+), 1 deletion(-)
+
+diff --git a/src/elf2rpl/main.cpp b/src/elf2rpl/main.cpp
+index 97ea57c..8e1d2a5 100644
+--- a/src/elf2rpl/main.cpp
++++ b/src/elf2rpl/main.cpp
+@@ -142,6 +142,11 @@ readElf(ElfFile &file, const std::string &filename)
+    // LLD doesn't link sections of the RPL types, so the import and export
+    // sections can also be marked by their names
+    for (auto &section : file.sections) {
++      // LLD marks linker-generated data writable. This sentinel belongs to
++      // loader memory, whose lower bound excludes writable and import sections.
++      if (section->name == ".wut_load_bounds") {
++         section->header.flags &= ~(elf::SHF_WRITE | elf::SHF_EXECINSTR);
++      }
+       if (!section->name.compare(0, 9, ".fimport_") ||
+           !section->name.compare(0, 9, ".dimport_")) {
+          section->header.type = elf::SHT_RPL_IMPORTS;
+@@ -259,7 +264,26 @@ generateFileInfoSection(ElfFile &file,
+       }
+    }
+ 
+-   info.textSize = align_up(info.textSize, info.textAlign);
++   // The loader may need a 16-byte trampoline for every relative branch,
++   // especially calls to imports outside the PowerPC branch range. LLD's
++   // link-time thunks do not replace the retained REL24 relocations.
++   uint32_t trampolineSize = 0;
++   for (const auto &section : file.sections) {
++      if (section->index == UINT32_MAX || section->header.type != elf::SHT_RELA) {
++         continue;
++      }
++
++      auto rels = reinterpret_cast<const elf::Rela *>(section->data.data());
++      auto count = section->data.size() / sizeof(elf::Rela);
++      for (size_t i = 0; i < count; ++i) {
++         if ((rels[i].info & 0xFF) == elf::R_PPC_REL24) {
++            trampolineSize += 16;
++         }
++      }
++   }
++
++   info.textSize = align_up(info.textSize, info.textAlign) +
++                   align_up(trampolineSize, info.textAlign);
+    info.dataSize = align_up(info.dataSize, info.dataAlign);
+    info.loadSize = align_up(info.loadSize, info.loadAlign);
+ 
