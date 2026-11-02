@@ -63,7 +63,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libcunit1-dev libgtk-3-dev libsecret-1-0 libusb-1.0-0 libwebkit2gtk-4.1-dev
+          sudo apt-get install -y libcunit1-dev libgtk-3-dev libsecret-1-0 libwebkit2gtk-4.1-dev
 
       - name: Install packages (macos)
         if: runner.os == 'macOS'
@@ -142,10 +142,12 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v6
-      - name: Install assembly and console toolchains and headless emulators
+      - name: Install extra assembly and console dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y nasm python3 clang lld llvm make pkg-config libsdl2-dev meson ninja-build cmake zlib1g-dev
+          sudo apt-get install -y nasm libsdl2-dev meson
+          # LLVM is preinstalled with versioned tools; expose its unversioned binaries.
+          dirname "$(readlink -f "$(command -v clang)")" >> "$GITHUB_PATH"
       # The toolchains and emulator runners only rebuild when their inputs are newer than their outputs,
       # so date the checkout before any cached build, the exact keys keep a stale build from being used
       - name: Date toolchain sources before cached builds
@@ -164,5 +166,5 @@ jobs:
         with:
           path: target/wiiu-toolchain
           key: linux-x86_64-wiiu-toolchain-${{ hashFiles('tools/wiiu-toolchain/**', 'lib/graphics/image/**', 'Cargo.lock') }}
-      - name: Build assembly examples and games, run NDS and Wii tests, and build Wii U examples and PlaatCraft for the Wii
+      - name: Build assembly examples and games, run NDS, Wii and Wii U tests, and build Wii and Wii U examples and PlaatCraft for the Wii
         run: cargo xtask check-others
