@@ -11,6 +11,9 @@
 # Usage: ./build.sh [command]...
 #   (none)          fetch, patch and build
 #   export-patches  write the commits in ../../target/wiiu-toolchain/<name>/ back to <name>/patches/
+#   test            build test/ and run it in cemu-runner
+#   cemu            build Cemu's interpreter with cemu/patches/ and cemu/runner.cpp to
+#                   ../../target/wiiu-toolchain/cemu-runner
 #   clean           remove ../../target/wiiu-toolchain/
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -34,6 +37,10 @@ llvm_commit='0d261d1ca552c95a8f007e061c787ac7132fbcbc'
 decaf_url='https://github.com/decaf-emu/decaf-emu.git'
 decaf_version='master'
 decaf_commit='e6c528a20a41c34e0f9eb91dd3da40f119db2dee'
+# Cemu for cemu/runner.cpp, cloned by the cemu and test commands, only its interpreter is built
+cemu_url='https://github.com/cemu-project/Cemu.git'
+cemu_version='v2.6'
+cemu_commit='a6fb0a48eb437a8a41c13b782ac8ae0433bf8f98'
 
 TOOLCHAIN_DIR="$PWD"
 ROOT_DIR="$(cd ../.. && pwd)"
@@ -43,6 +50,7 @@ TOOLS_DIR="$BUILD_DIR/wut-tools"
 PICOLIBC_DIR="$BUILD_DIR/picolibc"
 LIBOGC_DIR="$BUILD_DIR/libogc"
 COMPILER_RT_DIR="$BUILD_DIR/compiler-rt"
+CEMU_DIR="$BUILD_DIR/cemu"
 DECAF_DIR="$BUILD_DIR/decaf-emu"
 SYSROOT="$BUILD_DIR/sysroot"
 
@@ -184,8 +192,10 @@ patch() {
 # Writes the commits on top of upstream back to <name>/patches/ for every patched repo
 export_patches() {
     local name dir
-    for name in wut wut-tools picolibc libogc decaf-emu; do
+    for name in wut wut-tools picolibc libogc decaf-emu cemu; do
         dir="$BUILD_DIR/$name"
+        # Cemu is only there once the cemu command ran
+        [ "$name" = cemu ] && [ ! -d "$dir" ] && continue
         [ -d "$dir/.git" ] || die "No patched $name, run ./build.sh first"
         rm -f "$TOOLCHAIN_DIR/$name"/patches/*.patch
         git -C "$dir" format-patch -q --no-numbered --zero-commit --no-signature \
@@ -352,6 +362,32 @@ build_tools() {
     c++ "${objects[@]}" -o "$BUILD_DIR/latte-assembler" || die "Failed to link latte-assembler"
 }
 
+# Builds cemu/runner.cpp on Cemu's Espresso interpreter, without its JIT, GPU, audio or frontend
+build_cemu() {
+    local sources=(PPCInterpreterImpl.cpp PPCInterpreterOPC.cpp PPCInterpreterFPU.cpp PPCInterpreterPS.cpp)
+    clone "$cemu_url" "$cemu_version" "$cemu_commit" "$CEMU_DIR" /src/Cafe/HW/Espresso/ /src/Cafe/HW/MMU/ /src/Common/
+    patch cemu "$cemu_commit"
+    outdated "$BUILD_DIR/cemu-runner" "$TOOLCHAIN_DIR/cemu" "$CEMU_DIR/.patched" "$TOOLCHAIN_DIR/build.sh" || return 0
+    msg "Building cemu-runner"
+    c++ -std=c++20 -O2 -fno-strict-aliasing -Wno-multichar -Wno-invalid-offsetof \
+        -DCEMU_DEBUG_ASSERT -I"$CEMU_DIR/src" -I"$CEMU_DIR/src/Common" \
+        -include "$TOOLCHAIN_DIR/cemu/interpreter.h" "$TOOLCHAIN_DIR/cemu/runner.cpp" \
+        "${sources[@]/#/$CEMU_DIR/src/Cafe/HW/Espresso/Interpreter/}" \
+        -o "$BUILD_DIR/cemu-runner" > "$BUILD_DIR/cemu-runner.log" 2>&1 ||
+        { tail -n 50 "$BUILD_DIR/cemu-runner.log" >&2; die "Failed to build cemu-runner"; }
+}
+
+# Builds test/ with the toolchain and runs it in cemu-runner, the test reports its results with
+# OSReport, the runner fails when a check failed or the program didn't finish. Only build_cemu
+# locks, make runs the toolchain build itself.
+run_test() {
+    (lock; build_cemu)
+    make -C "$TOOLCHAIN_DIR/test" --no-print-directory
+    msg "Running the test in cemu-runner"
+    "$BUILD_DIR/cemu-runner" "$BUILD_DIR/test/test.elf" 'test 100000000'
+    msg "All tests passed"
+}
+
 # Only one build at a time, the C and Rust examples can start one at the same time. The lock holds
 # the process ID of its build, so the lock of a killed build is taken over instead of waited on.
 locked=false
@@ -382,6 +418,8 @@ for command in "$@"; do
         all) lock; fetch; patch wut "$wut_commit"; patch wut-tools "$tools_commit"
             patch picolibc "$picolibc_commit"; patch libogc "$libogc_commit"; patch decaf-emu "$decaf_commit"
             build_picolibc; build_tools; build_imports; build_libraries ;;
+        test) run_test ;;
+        cemu) lock; build_cemu ;;
         export-patches) export_patches ;;
         clean) rm -rf "$BUILD_DIR" ;;
         *) die "Unknown command: $command" ;;

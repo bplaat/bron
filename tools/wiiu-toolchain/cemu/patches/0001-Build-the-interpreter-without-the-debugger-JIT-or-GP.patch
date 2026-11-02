@@ -1,0 +1,105 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Mon, 2 Nov 2026 12:00:00 +0100
+Subject: [PATCH] Build the interpreter without the debugger JIT or GPU
+
+Remove desktop-only debugger, recompiler and graphics cache hooks so a
+CPU-only frontend can link the interpreter without those subsystems.
+---
+ .../HW/Espresso/Interpreter/PPCInterpreterImpl.cpp   |  2 --
+ .../HW/Espresso/Interpreter/PPCInterpreterOPC.cpp    | 12 ------------
+ .../HW/Espresso/Interpreter/PPCInterpreterOPC.hpp    |  5 +----
+ 3 files changed, 1 insertion(+), 18 deletions(-)
+
+diff --git a/src/Cafe/HW/Espresso/Interpreter/PPCInterpreterImpl.cpp b/src/Cafe/HW/Espresso/Interpreter/PPCInterpreterImpl.cpp
+index cacfa4a..cc3925c 100644
+--- a/src/Cafe/HW/Espresso/Interpreter/PPCInterpreterImpl.cpp
++++ b/src/Cafe/HW/Espresso/Interpreter/PPCInterpreterImpl.cpp
+@@ -1,7 +1,5 @@
+ #include "PPCInterpreterInternal.h"
+ #include "PPCInterpreterHelper.h"
+-#include "Cafe/HW/Espresso/Debugger/Debugger.h"
+-#include "Cafe/HW/Espresso/Debugger/GDBStub.h"
+ 
+ class PPCItpCafeOSUsermode
+ {
+diff --git a/src/Cafe/HW/Espresso/Interpreter/PPCInterpreterOPC.cpp b/src/Cafe/HW/Espresso/Interpreter/PPCInterpreterOPC.cpp
+index 12f8642..aacd974 100644
+--- a/src/Cafe/HW/Espresso/Interpreter/PPCInterpreterOPC.cpp
++++ b/src/Cafe/HW/Espresso/Interpreter/PPCInterpreterOPC.cpp
+@@ -2,13 +2,7 @@
+ #include "PPCInterpreterInternal.h"
+ #include "PPCInterpreterHelper.h"
+ 
+-#include "Cafe/OS/libs/coreinit/coreinit_CodeGen.h"
+-
+-#include "../Recompiler/PPCRecompiler.h"
+-#include "../Recompiler/PPCRecompilerX64.h"
+-
+ #include <float.h>
+-#include "Cafe/HW/Latte/Core/LatteBufferCache.h"
+ 
+ void PPCInterpreter_MFMSR(PPCInterpreter_t* hCPU, uint32 Opcode)
+ {
+@@ -166,7 +160,6 @@ void PPCInterpreter_BX(PPCInterpreter_t* hCPU, uint32 Opcode)
+ 		hCPU->spr.LR = (unsigned int)hCPU->instructionPointer + 4;
+ 		hCPU->instructionPointer = li;
+ 		PPCInterpreter_jumpToInstruction(hCPU, li);
+-		PPCRecompiler_attemptEnter(hCPU, li);
+ 		return;
+ 	}
+ 	PPCInterpreter_jumpToInstruction(hCPU, li);
+@@ -228,7 +221,6 @@ void PPCInterpreter_BCLRX(PPCInterpreter_t* hCPU, uint32 Opcode)
+ 			hCPU->spr.LR = (unsigned int)hCPU->instructionPointer + 4;
+ 		}
+ 		PPCInterpreter_jumpToInstruction(hCPU, BD);
+-		PPCRecompiler_attemptEnter(hCPU, BD);
+ 		return;
+ 	}
+ 	else
+@@ -258,7 +250,6 @@ void PPCInterpreter_BCCTR(PPCInterpreter_t* hCPU, uint32 Opcode)
+ 		{
+ 			hCPU->instructionPointer = (unsigned int)(hCPU->spr.CTR & 0xfffffffc);
+ 		}
+-		PPCRecompiler_attemptEnter(hCPU, hCPU->instructionPointer);
+ 	}
+ 	else
+ 	{
+@@ -282,7 +273,6 @@ void PPCInterpreter_DCBST(PPCInterpreter_t* hCPU, uint32 Opcode)
+ 
+ 	uint32 ea = (rA ? hCPU->gpr[rA] : 0) + hCPU->gpr[rB];
+ 
+-	LatteBufferCache_notifyDCFlush(ea, 32);
+ 	
+ 	PPCInterpreter_nextInstruction(hCPU);
+ }
+@@ -295,7 +285,6 @@ void PPCInterpreter_DCBF(PPCInterpreter_t* hCPU, uint32 Opcode)
+ 
+ 	uint32 ea = (rA ? hCPU->gpr[rA] : 0) + hCPU->gpr[rB];
+ 
+-	LatteBufferCache_notifyDCFlush(ea, 32);
+ 
+ 	PPCInterpreter_nextInstruction(hCPU);
+ }
+@@ -318,7 +307,6 @@ void PPCInterpreter_ICBI(PPCInterpreter_t* hCPU, uint32 Opcode)
+ 	PPC_OPC_TEMPL_X(Opcode, rD, rA, rB);
+ 	uint32 ea = (rA ? hCPU->gpr[rA] : 0) + hCPU->gpr[rB];
+ 	// invalidate range
+-	coreinit::codeGenHandleICBI(ea);
+ 	PPCInterpreter_nextInstruction(hCPU);
+ }
+ 
+diff --git a/src/Cafe/HW/Espresso/Interpreter/PPCInterpreterOPC.hpp b/src/Cafe/HW/Espresso/Interpreter/PPCInterpreterOPC.hpp
+index 718162b..0a108d9 100644
+--- a/src/Cafe/HW/Espresso/Interpreter/PPCInterpreterOPC.hpp
++++ b/src/Cafe/HW/Espresso/Interpreter/PPCInterpreterOPC.hpp
+@@ -69,8 +69,5 @@ static void PPCInterpreter_TW(PPCInterpreter_t* hCPU, uint32 opcode)
+ 
+ 	cemu_assert_debug(to == 0);
+ 
+-    if (rA == DEBUGGER_BP_T_DEBUGGER)
+-	    debugger_enterTW(hCPU);
+-    else if (rA == DEBUGGER_BP_T_GDBSTUB)
+-        g_gdbstub->HandleTrapInstruction(hCPU);
++	cemu_assert_unimplemented();
+ }
