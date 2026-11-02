@@ -135,7 +135,7 @@ Most of these libraries are intended primarily for personal use, but can still b
 **Graphics**
 
 - [bcanvas](lib/graphics/bcanvas) Native 2D canvas content, without a browser dependency
-- [image](lib/graphics/image) A minimal JPEG, PNG/APNG, GIF, BMP, and QOI image decoder crate
+- [image](lib/graphics/image) A minimal BMP, GIF, ICO, JPEG, PNG/APNG, QOI, and TGA image decoder crate
 - [vector](lib/graphics/vector) SVG (subset) and TinyVG decoders with a backend-neutral display list
 - [bwebgpu](lib/graphics/bwebgpu) A native GPU rendering library for bwindow
 - [bwebgpu-shader-build](lib/graphics/bwebgpu-shader-build) Build-time native WGSL compilation for bwebgpu

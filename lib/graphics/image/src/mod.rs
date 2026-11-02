@@ -37,37 +37,43 @@ mod qoi;
 #[cfg(all(
     test,
     any(
-        feature = "qoi",
+        feature = "bmp",
+        feature = "gif",
+        feature = "ico",
         feature = "jpeg",
         feature = "png",
-        feature = "gif",
-        feature = "bmp",
-        feature = "ico"
+        feature = "qoi",
+        feature = "tga"
     )
 ))]
 mod test_support;
+#[cfg(feature = "tga")]
+mod tga;
 
 /// The encoded format detected from an image's file signature.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Format {
-    /// Quite OK Image.
-    #[cfg(feature = "qoi")]
-    Qoi,
+    /// Windows or OS/2 bitmap.
+    #[cfg(feature = "bmp")]
+    Bmp,
+    /// Graphics Interchange Format.
+    #[cfg(feature = "gif")]
+    Gif,
+    /// Windows icon.
+    #[cfg(feature = "ico")]
+    Ico,
     /// JPEG.
     #[cfg(feature = "jpeg")]
     Jpeg,
     /// PNG, including APNG animations.
     #[cfg(feature = "png")]
     Png,
-    /// Graphics Interchange Format.
-    #[cfg(feature = "gif")]
-    Gif,
-    /// Windows or OS/2 bitmap.
-    #[cfg(feature = "bmp")]
-    Bmp,
-    /// Windows icon.
-    #[cfg(feature = "ico")]
-    Ico,
+    /// Quite OK Image.
+    #[cfg(feature = "qoi")]
+    Qoi,
+    /// Truevision TGA.
+    #[cfg(feature = "tga")]
+    Tga,
 }
 
 /// The number of times an animation is played.
@@ -213,7 +219,13 @@ impl Image {
         self.loop_count
     }
 
-    #[cfg(any(feature = "qoi", feature = "jpeg", feature = "png", feature = "bmp"))]
+    #[cfg(any(
+        feature = "bmp",
+        feature = "jpeg",
+        feature = "png",
+        feature = "qoi",
+        feature = "tga"
+    ))]
     fn still(format: Format, width: u32, height: u32, pixels: Vec<u8>) -> Self {
         Self {
             format,
@@ -263,21 +275,30 @@ impl core::error::Error for DecodeError {}
 
 type Result<T> = core::result::Result<T, DecodeError>;
 
-/// Decodes a complete image within 1 GiB, excluding uncommon JPEG/BMP variants.
+/// Decodes a complete image within 1 GiB, excluding uncommon BMP/JPEG variants.
 #[cfg_attr(
     not(any(
-        feature = "qoi",
+        feature = "bmp",
+        feature = "gif",
         feature = "jpeg",
         feature = "png",
-        feature = "gif",
-        feature = "bmp"
+        feature = "qoi",
+        feature = "tga"
     )),
     allow(clippy::missing_const_for_fn)
 )]
 pub fn decode(_data: &[u8]) -> Result<Image> {
-    #[cfg(feature = "qoi")]
-    if _data.starts_with(b"qoif") {
-        return qoi::decode(_data);
+    #[cfg(feature = "bmp")]
+    if _data.starts_with(b"BM") {
+        return bmp::decode(_data);
+    }
+    #[cfg(feature = "gif")]
+    if _data.starts_with(b"GIF87a") || _data.starts_with(b"GIF89a") {
+        return gif::decode(_data);
+    }
+    #[cfg(feature = "ico")]
+    if _data.starts_with(b"\0\0\x01\0") {
+        return ico::decode(_data);
     }
     #[cfg(feature = "jpeg")]
     if _data.starts_with(b"\xff\xd8") {
@@ -287,14 +308,11 @@ pub fn decode(_data: &[u8]) -> Result<Image> {
     if _data.starts_with(b"\x89PNG\r\n\x1a\n") {
         return png::decode(_data);
     }
-    #[cfg(feature = "gif")]
-    if _data.starts_with(b"GIF87a") || _data.starts_with(b"GIF89a") {
-        return gif::decode(_data);
+    #[cfg(feature = "qoi")]
+    if _data.starts_with(b"qoif") {
+        return qoi::decode(_data);
     }
-    #[cfg(feature = "bmp")]
-    if _data.starts_with(b"BM") {
-        return bmp::decode(_data);
-    }
+    // A headerless DIB starts with its header size, so it is tried after the signatures.
     #[cfg(feature = "bmp")]
     if let Some(length) = _data.first_chunk::<4>()
         && matches!(
@@ -304,43 +322,47 @@ pub fn decode(_data: &[u8]) -> Result<Image> {
     {
         return bmp::decode_dib(_data);
     }
-    #[cfg(feature = "ico")]
-    if _data.starts_with(b"\0\0\x01\0") {
-        return ico::decode(_data);
+    // TGA has no signature, so it is only tried when its header is plausible.
+    #[cfg(feature = "tga")]
+    if let Some(header) = tga::Header::parse(_data) {
+        return tga::decode(_data, &header);
     }
     Err(DecodeError::InvalidMagic)
 }
 
 #[cfg(any(
-    feature = "qoi",
+    feature = "bmp",
+    feature = "gif",
+    feature = "ico",
     feature = "jpeg",
     feature = "png",
-    feature = "gif",
-    feature = "bmp",
-    feature = "ico"
+    feature = "qoi",
+    feature = "tga"
 ))]
 const MAX_BYTES: usize = 1024 * 1024 * 1024;
 
 // Count cumulative allocations conservatively, including buffers later discarded.
 #[derive(Default)]
 #[cfg(any(
-    feature = "qoi",
+    feature = "bmp",
+    feature = "gif",
+    feature = "ico",
     feature = "jpeg",
     feature = "png",
-    feature = "gif",
-    feature = "bmp",
-    feature = "ico"
+    feature = "qoi",
+    feature = "tga"
 ))]
 struct Budget {
     used: usize,
 }
 
 #[cfg(any(
-    feature = "qoi",
+    feature = "bmp",
+    feature = "gif",
     feature = "jpeg",
     feature = "png",
-    feature = "gif",
-    feature = "bmp"
+    feature = "qoi",
+    feature = "tga"
 ))]
 impl Budget {
     fn claim(&mut self, bytes: usize) -> Result<()> {
@@ -353,11 +375,12 @@ impl Budget {
     }
 
     #[cfg(any(
-        feature = "qoi",
+        feature = "bmp",
+        feature = "gif",
         feature = "jpeg",
         feature = "png",
-        feature = "gif",
-        feature = "bmp"
+        feature = "qoi",
+        feature = "tga"
     ))]
     fn zeroed<T: Default + Clone>(&mut self, len: usize) -> Result<Vec<T>> {
         self.claim(
@@ -371,7 +394,7 @@ impl Budget {
         Ok(out)
     }
 
-    #[cfg(any(feature = "png", feature = "gif"))]
+    #[cfg(any(feature = "gif", feature = "png"))]
     fn copy(&mut self, bytes: &[u8]) -> Result<Vec<u8>> {
         self.claim(bytes.len())?;
         let mut out = Vec::new();
@@ -381,7 +404,7 @@ impl Budget {
         Ok(out)
     }
 
-    #[cfg(any(feature = "png", feature = "gif"))]
+    #[cfg(any(feature = "gif", feature = "png"))]
     fn append<T: Copy>(&mut self, out: &mut Vec<T>, bytes: &[T]) -> Result<()> {
         self.claim(size_of_val(bytes))?;
         out.try_reserve(bytes.len())
@@ -390,7 +413,7 @@ impl Budget {
         Ok(())
     }
 
-    #[cfg(any(feature = "png", feature = "gif"))]
+    #[cfg(any(feature = "gif", feature = "png"))]
     fn frame(
         &mut self,
         frames: &mut Vec<Frame>,
@@ -415,7 +438,13 @@ impl Budget {
     }
 }
 
-#[cfg(any(feature = "jpeg", feature = "png", feature = "gif", feature = "bmp"))]
+#[cfg(any(
+    feature = "bmp",
+    feature = "gif",
+    feature = "jpeg",
+    feature = "png",
+    feature = "tga"
+))]
 fn pixel_len(width: u32, height: u32) -> Result<usize> {
     if width == 0 || height == 0 {
         return Err(DecodeError::InvalidHeader);
@@ -430,13 +459,25 @@ fn pixel_len(width: u32, height: u32) -> Result<usize> {
     .ok_or(DecodeError::ImageTooLarge)
 }
 
-#[cfg(any(feature = "jpeg", feature = "png", feature = "gif", feature = "bmp"))]
+#[cfg(any(
+    feature = "bmp",
+    feature = "gif",
+    feature = "jpeg",
+    feature = "png",
+    feature = "tga"
+))]
 struct Reader<'a> {
     data: &'a [u8],
     pos: usize,
 }
 
-#[cfg(any(feature = "jpeg", feature = "png", feature = "gif", feature = "bmp"))]
+#[cfg(any(
+    feature = "bmp",
+    feature = "gif",
+    feature = "jpeg",
+    feature = "png",
+    feature = "tga"
+))]
 impl<'a> Reader<'a> {
     const fn new(data: &'a [u8]) -> Self {
         Self { data, pos: 0 }
@@ -470,7 +511,7 @@ impl<'a> Reader<'a> {
         ))
     }
 
-    #[cfg(any(feature = "gif", feature = "bmp"))]
+    #[cfg(any(feature = "bmp", feature = "gif"))]
     fn le16(&mut self) -> Result<u16> {
         Ok(u16::from_le_bytes(
             self.take(2)?.try_into().expect("two bytes"),
@@ -484,14 +525,14 @@ impl<'a> Reader<'a> {
         ))
     }
 
-    #[cfg(any(feature = "jpeg", feature = "png", feature = "bmp"))]
+    #[cfg(any(feature = "bmp", feature = "jpeg", feature = "png"))]
     const fn remaining(&self) -> usize {
         self.data.len() - self.pos
     }
 }
 
 #[derive(Clone, Copy)]
-#[cfg(any(feature = "png", feature = "gif"))]
+#[cfg(any(feature = "gif", feature = "png"))]
 struct Area {
     x: usize,
     y: usize,
@@ -499,7 +540,7 @@ struct Area {
     height: usize,
 }
 
-#[cfg(any(feature = "png", feature = "gif"))]
+#[cfg(any(feature = "gif", feature = "png"))]
 impl Area {
     fn validate(self, width: u32, height: u32) -> Result<Self> {
         if self.width == 0
@@ -594,18 +635,19 @@ fn round(x: f64) -> f64 {
 #[cfg(all(
     test,
     any(
-        feature = "qoi",
+        feature = "bmp",
+        feature = "gif",
+        feature = "ico",
         feature = "jpeg",
         feature = "png",
-        feature = "gif",
-        feature = "bmp",
-        feature = "ico"
+        feature = "qoi",
+        feature = "tga"
     )
 ))]
 mod tests {
     use super::*;
 
-    #[cfg(any(feature = "jpeg", feature = "gif"))]
+    #[cfg(any(feature = "gif", feature = "jpeg"))]
     #[test]
     fn rounding_matches_std() {
         // Exact halves, values beside them, and signs of both.
@@ -660,6 +702,12 @@ mod tests {
     fn ico_reference_corpus() {
         test_support::run_raster_format("ico");
     }
+    #[cfg(feature = "tga")]
+    #[test]
+    fn tga_reference_corpus() {
+        test_support::run_raster_format("tga");
+    }
+
     #[cfg(feature = "qoi")]
     #[test]
     fn qoi_color_reference_corpus() {
@@ -685,12 +733,13 @@ mod tests {
     }
 
     #[cfg(any(
-        feature = "qoi",
+        feature = "bmp",
+        feature = "gif",
+        feature = "ico",
         feature = "jpeg",
         feature = "png",
-        feature = "gif",
-        feature = "bmp",
-        feature = "ico"
+        feature = "qoi",
+        feature = "tga"
     ))]
     #[test]
     fn every_truncation_is_rejected() {
@@ -706,12 +755,13 @@ mod tests {
     }
 
     #[cfg(any(
-        feature = "qoi",
+        feature = "bmp",
+        feature = "gif",
+        feature = "ico",
         feature = "jpeg",
         feature = "png",
-        feature = "gif",
-        feature = "bmp",
-        feature = "ico"
+        feature = "qoi",
+        feature = "tga"
     ))]
     #[test]
     fn corrupted_inputs_do_not_panic() {
@@ -738,6 +788,8 @@ mod tests {
                 b"\0\0\x01\0",
                 b"qoif",
                 b"\x89PNG\r\n\x1a\n",
+                // A 16x16 RLE true color TGA header.
+                b"\0\0\x0a\0\0\0\0\0\0\0\0\0\x10\0\x10\0\x20\x08",
             ] {
                 let mut input = signature.to_vec();
                 input.extend_from_slice(&bytes);
@@ -746,7 +798,7 @@ mod tests {
         }
     }
 
-    #[cfg(any(feature = "png", feature = "gif"))]
+    #[cfg(any(feature = "gif", feature = "png"))]
     #[test]
     fn animation_snapshot_only_stores_the_changed_area() {
         let area = Area {

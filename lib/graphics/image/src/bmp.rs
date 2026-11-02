@@ -7,7 +7,10 @@
 use alloc::vec::Vec;
 
 use super::color::{ColorModel, Curve, Transform};
-use super::{Bitmap, Budget, DecodeError, EncodeError, Format, Image, Reader, Result, pixel_len};
+use super::{
+    Bitmap, Budget, DecodeError, EncodeError, EncodingStyle, Format, Image, Reader, Result,
+    pixel_len,
+};
 
 // MARK: Decoder
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -640,20 +643,16 @@ fn put(pixels: &mut [u8], offset: usize, index: u8, palette: &[[u8; 4]]) -> Resu
 }
 
 // MARK: Encoder
-fn bmp_palette_slot(lookup: &[u64; 512], key: u32) -> usize {
-    let mut slot = (key.wrapping_mul(0x9e37_79b1) as usize) & (lookup.len() - 1);
-    while lookup[slot] != 0 && lookup[slot] >> 9 != u64::from(key) {
-        slot = (slot + 1) & (lookup.len() - 1);
-    }
-    slot
-}
-
-pub(super) fn encode(bitmap: &Bitmap) -> core::result::Result<Vec<u8>, EncodeError> {
+pub(super) fn encode(
+    bitmap: &Bitmap,
+    style: EncodingStyle,
+) -> core::result::Result<Vec<u8>, EncodeError> {
     let width = i32::try_from(bitmap.width).map_err(|_| EncodeError::InvalidDimensions)?;
     let height = i32::try_from(bitmap.height).map_err(|_| EncodeError::InvalidDimensions)?;
     let opaque = bitmap.data.as_chunks::<4>().0.iter().all(|p| p[3] == 255);
     let mut indexed = None;
-    if opaque {
+    // Palettes and RLE are compression, so no compression writes 24 or 32-bit pixels
+    if opaque && style != EncodingStyle::NoCompression {
         let mut colors = Vec::<[u8; 3]>::with_capacity(256);
         let mut lookup = [0u64; 512];
         let mut indices = Vec::new();
@@ -663,7 +662,7 @@ pub(super) fn encode(bitmap: &Bitmap) -> core::result::Result<Vec<u8>, EncodeErr
         for pixel in bitmap.data.as_chunks::<4>().0 {
             let rgb = [pixel[0], pixel[1], pixel[2]];
             let key = u32::from_be_bytes([0, rgb[0], rgb[1], rgb[2]]);
-            let slot = bmp_palette_slot(&lookup, key);
+            let slot = super::encoder::palette_slot(&lookup, key);
             if lookup[slot] == 0 {
                 if colors.len() == 256 {
                     colors.clear();

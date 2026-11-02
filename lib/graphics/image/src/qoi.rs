@@ -7,7 +7,7 @@
 use alloc::vec::Vec;
 
 use super::color::{Curve, SRGB, Transform};
-use super::{Bitmap, Budget, DecodeError, EncodeError, Format, Image};
+use super::{Bitmap, Budget, DecodeError, EncodeError, EncodingStyle, Format, Image};
 
 const HEADER_LEN: usize = 14;
 const END_MARKER: [u8; 8] = [0, 0, 0, 0, 0, 0, 0, 1];
@@ -142,7 +142,7 @@ impl<'a> Decoder<'a> {
 }
 
 // MARK: Encoder
-pub(super) fn encode(bitmap: &Bitmap) -> Result<Vec<u8>, EncodeError> {
+pub(super) fn encode(bitmap: &Bitmap, style: EncodingStyle) -> Result<Vec<u8>, EncodeError> {
     let mut out = Vec::new();
     out.try_reserve(
         bitmap
@@ -160,6 +160,16 @@ pub(super) fn encode(bitmap: &Bitmap) -> Result<Vec<u8>, EncodeError> {
     let mut index = [[0; 4]; 64];
     let mut run = 0u8;
     for pixel in bitmap.data.as_chunks::<4>().0 {
+        // No compression writes every pixel as a full RGB or RGBA operation
+        if style == EncodingStyle::NoCompression {
+            if pixel[3] == previous[3] {
+                out.extend_from_slice(&[0xfe, pixel[0], pixel[1], pixel[2]]);
+            } else {
+                out.extend_from_slice(&[0xff, pixel[0], pixel[1], pixel[2], pixel[3]]);
+            }
+            previous = *pixel;
+            continue;
+        }
         if *pixel == previous {
             run += 1;
             if run == 62 {

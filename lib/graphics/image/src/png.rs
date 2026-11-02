@@ -1013,19 +1013,12 @@ impl PngColor {
     }
 }
 
-fn png_palette_slot(lookup: &[u64; 512], key: u32) -> usize {
-    let mut slot = (key.wrapping_mul(0x9e37_79b1) as usize) & (lookup.len() - 1);
-    while lookup[slot] != 0 && lookup[slot] >> 9 != u64::from(key) {
-        slot = (slot + 1) & (lookup.len() - 1);
-    }
-    slot
-}
-
 fn png_palette_lookup(palette: &[[u8; 4]]) -> [u64; 512] {
     let mut lookup = [0u64; 512];
     for (index, pixel) in palette.iter().enumerate() {
         let key = u32::from_be_bytes(*pixel);
-        lookup[png_palette_slot(&lookup, key)] = (u64::from(key) << 9) | (index as u64 + 1);
+        lookup[super::encoder::palette_slot(&lookup, key)] =
+            (u64::from(key) << 9) | (index as u64 + 1);
     }
     lookup
 }
@@ -1036,7 +1029,7 @@ fn png_palette<'a>(bitmaps: impl Iterator<Item = &'a Bitmap>) -> Option<Vec<[u8;
     for bitmap in bitmaps {
         for pixel in bitmap.data.as_chunks::<4>().0 {
             let key = u32::from_be_bytes(*pixel);
-            let slot = png_palette_slot(&lookup, key);
+            let slot = super::encoder::palette_slot(&lookup, key);
             if lookup[slot] == 0 {
                 if palette.len() == 256 {
                     return None;
@@ -1240,7 +1233,7 @@ fn png_filtered(
 }
 
 fn png_palette_index(pixel: &[u8; 4], lookup: &[u64; 512]) -> u8 {
-    (lookup[png_palette_slot(lookup, u32::from_be_bytes(*pixel))] - 1) as u8
+    (lookup[super::encoder::palette_slot(lookup, u32::from_be_bytes(*pixel))] - 1) as u8
 }
 
 fn png_row(
@@ -1308,6 +1301,9 @@ fn compressed_frame(
         png_row(source, color, palette_lookup, row_len, &mut row);
         raw.push(0);
         raw.extend_from_slice(&row);
+    }
+    if style == EncodingStyle::NoCompression {
+        return Ok(deflate::zlib_compress(&raw, Level::Store));
     }
     let bpp = if color.depth() < 8 {
         1
@@ -1436,7 +1432,7 @@ fn encode_smallest(
     style: EncodingStyle,
 ) -> core::result::Result<Vec<u8>, EncodeError> {
     let best = encode_layouts(bitmap, animation, style)?;
-    if style == EncodingStyle::NormalCompression {
+    if style != EncodingStyle::MaxCompression {
         return Ok(best);
     }
     let cleared = match animation {
@@ -1499,6 +1495,9 @@ fn encode_layouts(
         Some((_, frames)) => frames.iter().map(|frame| &frame.bitmap).collect(),
         None => vec![bitmap],
     };
+    if style == EncodingStyle::NoCompression {
+        return encode_png_variant(bitmap, animation, style, None, None);
+    }
     let palette = png_palette(bitmaps.iter().copied());
     let key = png_transparent_key(bitmaps.iter().copied());
     if style == EncodingStyle::NormalCompression {
@@ -1544,6 +1543,12 @@ fn encode_png_variant(
         )
     } else {
         png_color(core::iter::once(bitmap), transparent_key.is_some())
+    };
+    // Grayscale is a smaller layout, so no compression keeps 8-bit RGB or RGBA samples
+    let color = match color {
+        PngColor::Gray(_) | PngColor::Rgb if style == EncodingStyle::NoCompression => PngColor::Rgb,
+        PngColor::GrayAlpha if style == EncodingStyle::NoCompression => PngColor::Rgba,
+        color => color,
     };
     let palette_lookup = palette.map(png_palette_lookup);
     let mut out = b"\x89PNG\r\n\x1a\n".to_vec();
@@ -1595,7 +1600,7 @@ fn encode_png_variant(
             let delay = u16::try_from(nanos / divisor).map_err(|_| EncodeError::InvalidTiming)?;
             let timebase =
                 u16::try_from(1_000_000_000 / divisor).map_err(|_| EncodeError::InvalidTiming)?;
-            let region = if i != 0 {
+            let region = if i != 0 && style != EncodingStyle::NoCompression {
                 Some(super::encoder::crop_changed(
                     &frames[i - 1].bitmap,
                     &frame.bitmap,

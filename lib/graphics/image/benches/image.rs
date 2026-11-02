@@ -37,14 +37,45 @@ fn bmp(width: u32, height: u32) -> Vec<u8> {
     out
 }
 
+// Builds a bottom-up 24-bit TGA gradient, like the BMP above.
+fn tga(width: u16, height: u16) -> Vec<u8> {
+    let mut out = vec![0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+    out.extend_from_slice(&width.to_le_bytes());
+    out.extend_from_slice(&height.to_le_bytes());
+    out.extend_from_slice(&[24, 0]);
+    for y in 0..height {
+        for x in 0..width {
+            out.extend_from_slice(&[x as u8, y as u8, (x ^ y) as u8]);
+        }
+    }
+    out
+}
+
 fn decode(c: &mut Criterion) {
     let bmp = bmp(800, 600);
+    let tga = tga(800, 600);
     let mut raster = c.benchmark_group("image_decode_raster");
     for (name, enabled, bytes) in [
+        ("bmp", cfg!(feature = "bmp"), &bmp[..]),
         (
-            "qoi",
-            cfg!(feature = "qoi"),
-            &include_bytes!("images/dice.qoi")[..],
+            "gif",
+            cfg!(feature = "gif"),
+            &include_bytes!("images/dice.gif")[..],
+        ),
+        (
+            "gif_animated",
+            cfg!(feature = "gif"),
+            &include_bytes!("images/dice-animated.gif")[..],
+        ),
+        (
+            "gif_interlaced",
+            cfg!(feature = "gif"),
+            &include_bytes!("../tests/images/gif/anim/interlaced.gif")[..],
+        ),
+        (
+            "ico",
+            cfg!(feature = "ico"),
+            &include_bytes!("../tests/images/ico/png-32bpp-alpha.ico")[..],
         ),
         (
             "jpeg_baseline",
@@ -82,26 +113,11 @@ fn decode(c: &mut Criterion) {
             &include_bytes!("../tests/images/png/apng/wpt/fcTL-dispose-in-region-previous.png")[..],
         ),
         (
-            "gif",
-            cfg!(feature = "gif"),
-            &include_bytes!("images/dice.gif")[..],
+            "qoi",
+            cfg!(feature = "qoi"),
+            &include_bytes!("images/dice.qoi")[..],
         ),
-        (
-            "gif_animated",
-            cfg!(feature = "gif"),
-            &include_bytes!("images/dice-animated.gif")[..],
-        ),
-        (
-            "gif_interlaced",
-            cfg!(feature = "gif"),
-            &include_bytes!("../tests/images/gif/anim/interlaced.gif")[..],
-        ),
-        ("bmp", cfg!(feature = "bmp"), &bmp[..]),
-        (
-            "ico",
-            cfg!(feature = "ico"),
-            &include_bytes!("../tests/images/ico/png-32bpp-alpha.ico")[..],
-        ),
+        ("tga", cfg!(feature = "tga"), &tga[..]),
     ] {
         if !enabled {
             continue;
@@ -127,16 +143,18 @@ fn encode(c: &mut Criterion) {
     }
     let bitmap = Bitmap::new(128, 128, pixels).expect("valid bitmap");
     let formats: &[(&str, Format)] = &[
-        #[cfg(feature = "qoi")]
-        ("qoi", Format::Qoi),
+        #[cfg(feature = "bmp")]
+        ("bmp", Format::Bmp),
+        #[cfg(feature = "gif")]
+        ("gif", Format::Gif),
         #[cfg(feature = "jpeg")]
         ("jpeg", Format::Jpeg),
         #[cfg(feature = "png")]
         ("png", Format::Png),
-        #[cfg(feature = "gif")]
-        ("gif", Format::Gif),
-        #[cfg(feature = "bmp")]
-        ("bmp", Format::Bmp),
+        #[cfg(feature = "qoi")]
+        ("qoi", Format::Qoi),
+        #[cfg(feature = "tga")]
+        ("tga", Format::Tga),
     ];
     let styles = [
         ("normal", EncodingStyle::NormalCompression),
@@ -174,12 +192,12 @@ fn encode(c: &mut Criterion) {
     }
     let palette_bitmap = Bitmap::new(128, 128, palette_pixels).expect("valid bitmap");
     let palette_formats: &[(&str, Format)] = &[
-        #[cfg(feature = "png")]
-        ("png_palette", Format::Png),
-        #[cfg(feature = "gif")]
-        ("gif_palette", Format::Gif),
         #[cfg(feature = "bmp")]
         ("bmp_palette", Format::Bmp),
+        #[cfg(feature = "gif")]
+        ("gif_palette", Format::Gif),
+        #[cfg(feature = "png")]
+        ("png_palette", Format::Png),
     ];
     for &(name, format) in palette_formats {
         for &(style_name, style) in &styles {
@@ -239,10 +257,10 @@ fn encode(c: &mut Criterion) {
         ),
     ];
     let animated_formats: &[(&str, Format)] = &[
-        #[cfg(feature = "png")]
-        ("apng", Format::Png),
         #[cfg(feature = "gif")]
         ("gif", Format::Gif),
+        #[cfg(feature = "png")]
+        ("apng", Format::Png),
     ];
     let mut animation = c.benchmark_group("image_encode_animation");
     animation.throughput(Throughput::Elements(128 * 128 * frames.len() as u64));
@@ -271,5 +289,74 @@ fn encode(c: &mut Criterion) {
     animation.finish();
 }
 
-criterion_group!(benches, decode, encode);
+#[cfg_attr(not(feature = "tga"), allow(clippy::missing_const_for_fn))]
+fn encode_tga(c: &mut Criterion) {
+    #[cfg(feature = "tga")]
+    {
+        let mut group = c.benchmark_group("image_encode_tga");
+        group.throughput(Throughput::Elements(256 * 256));
+        for name in [
+            "flat",
+            "gray",
+            "gray_alpha",
+            "palette",
+            "noise",
+            "transparent",
+        ] {
+            let mut seed = 123456789u32;
+            let mut pixels = Vec::with_capacity(256 * 256 * 4);
+            for y in 0..256u32 {
+                for x in 0..256u32 {
+                    seed ^= seed << 13;
+                    seed ^= seed >> 17;
+                    seed ^= seed << 5;
+                    let v = x as u8;
+                    pixels.extend_from_slice(&match name {
+                        "flat" => [30, 60, 90, 255],
+                        "gray" => [v, v, v, 255],
+                        "gray_alpha" => [v, v, v, y as u8],
+                        "palette" => match (x / 8 + y / 8) % 4 {
+                            0 => [255, 0, 0, 255],
+                            1 => [0, 255, 0, 255],
+                            2 => [0, 0, 255, 255],
+                            _ => [255, 255, 0, 255],
+                        },
+                        "transparent" => [30, 60, 90, 0],
+                        _ => [seed as u8, (seed >> 8) as u8, (seed >> 16) as u8, 255],
+                    });
+                }
+            }
+            let bitmap = Bitmap::new(256, 256, pixels).expect("valid bitmap");
+            for (style_name, style) in [
+                ("none", EncodingStyle::NoCompression),
+                ("normal", EncodingStyle::NormalCompression),
+            ] {
+                let options = EncodeOptions {
+                    style,
+                    ..EncodeOptions::default()
+                };
+                let encoded = image::encode_with_options(&bitmap, Format::Tga, options)
+                    .expect("encode bitmap");
+                assert_eq!(
+                    image::decode(&encoded).expect("decode bitmap").pixels(),
+                    bitmap.data()
+                );
+                eprintln!("TGA {name}/{style_name}: {} bytes", encoded.len());
+                group.bench_function(&format!("{name}_{style_name}"), |b| {
+                    b.iter(|| {
+                        black_box(
+                            image::encode_with_options(black_box(&bitmap), Format::Tga, options)
+                                .expect("encode bitmap"),
+                        )
+                    });
+                });
+            }
+        }
+        group.finish();
+    }
+    #[cfg(not(feature = "tga"))]
+    let _ = c;
+}
+
+criterion_group!(benches, decode, encode, encode_tga);
 criterion_main!(benches);

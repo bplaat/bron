@@ -10,7 +10,7 @@
 
 // Codecs share this module, so each feature subset leaves some of it unused.
 #![cfg_attr(
-    not(all(feature = "qoi", feature = "jpeg", feature = "png", feature = "bmp")),
+    not(all(feature = "bmp", feature = "jpeg", feature = "png", feature = "qoi")),
     allow(dead_code)
 )]
 

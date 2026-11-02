@@ -492,8 +492,11 @@ fn encode_frames(
             index == 0 || pixels.iter().all(|pixel| pixel[3] >= 128)
         })
         .collect();
+    let compress = style != EncodingStyle::NoCompression;
     let cropped: Vec<_> = (0..frames.len())
-        .map(|index| index != 0 && opaque[index] && opaque.get(index + 1) != Some(&false))
+        .map(|index| {
+            compress && index != 0 && opaque[index] && opaque.get(index + 1) != Some(&false)
+        })
         .collect();
     for index in 0..frames.len() {
         let frame = frames.get(index);
@@ -541,7 +544,7 @@ fn encode_frames(
         out.push(min_code_size);
         let data = candidates
             .iter()
-            .map(|indices| gif_lzw(indices, min_code_size))
+            .map(|indices| gif_lzw(indices, min_code_size, compress))
             .min_by_key(Vec::len)
             .expect("GIF has indices");
         for block in data.chunks(255) {
@@ -821,7 +824,7 @@ fn gif_diffuse(
     indices
 }
 
-fn gif_lzw(indices: &[u8], min_code_size: u8) -> Vec<u8> {
+fn gif_lzw(indices: &[u8], min_code_size: u8, compress: bool) -> Vec<u8> {
     let clear = 1u16 << min_code_size;
     let end = clear + 1;
     let mut next = end + 1;
@@ -840,7 +843,17 @@ fn gif_lzw(indices: &[u8], min_code_size: u8) -> Vec<u8> {
         }
     };
     write(clear, width, &mut out);
-    if let Some((&first, rest)) = indices.split_first() {
+    if !compress {
+        // Literal codes only, with a clear code before the decoder's table would widen them
+        for (index, chunk) in indices.chunks(usize::from(clear) - 2).enumerate() {
+            if index != 0 {
+                write(clear, width, &mut out);
+            }
+            for &value in chunk {
+                write(u16::from(value), width, &mut out);
+            }
+        }
+    } else if let Some((&first, rest)) = indices.split_first() {
         let mut prefix = u16::from(first);
         for &index in rest {
             let key = (u32::from(prefix) << 8) | u32::from(index);
@@ -1200,8 +1213,21 @@ mod tests {
                 ]);
             }
             let bitmap = Bitmap::new(width, height, pixels).unwrap();
-            let encoded = encode(&bitmap, Format::Gif).unwrap();
-            assert_eq!(crate::decode(&encoded).unwrap().pixels(), bitmap.data());
+            for style in [
+                EncodingStyle::NoCompression,
+                EncodingStyle::NormalCompression,
+            ] {
+                let options = EncodeOptions {
+                    style,
+                    ..EncodeOptions::default()
+                };
+                let encoded = crate::encode_with_options(&bitmap, Format::Gif, options).unwrap();
+                assert_eq!(
+                    crate::decode(&encoded).unwrap().pixels(),
+                    bitmap.data(),
+                    "{style:?}"
+                );
+            }
         }
     }
 

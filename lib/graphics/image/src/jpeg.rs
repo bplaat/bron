@@ -1579,11 +1579,11 @@ pub(super) fn encode(
     let gray = pixels
         .iter()
         .all(|pixel| pixel[0] == pixel[1] && pixel[1] == pixel[2]);
-    let max = style == EncodingStyle::MaxCompression;
-    let samplings: &[(usize, usize)] = match (gray, max) {
-        (true, _) => &[(1, 1)],
-        (false, false) => &[(2, 2)],
-        (false, true) => &[(2, 2), (2, 1), (1, 2), (1, 1)],
+    // JPEG is always lossy, so no compression only skips chroma subsampling
+    let samplings: &[(usize, usize)] = match (gray, style) {
+        (true, _) | (false, EncodingStyle::NoCompression) => &[(1, 1)],
+        (false, EncodingStyle::NormalCompression) => &[(2, 2)],
+        (false, EncodingStyle::MaxCompression) => &[(2, 2), (2, 1), (1, 2), (1, 1)],
     };
     let tables = JpegTables::new(quality);
     let planes = JpegPlanes::new(bitmap, gray);

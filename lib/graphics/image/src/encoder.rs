@@ -9,9 +9,21 @@ use core::fmt::{self, Display, Formatter};
 
 use super::{Bitmap, Format, Frame, LoopCount};
 
+// Open addressing for exact palettes of at most 256 RGBA or RGB colors.
+#[cfg(any(feature = "bmp", feature = "png", feature = "tga"))]
+pub(super) fn palette_slot(lookup: &[u64; 512], key: u32) -> usize {
+    let mut slot = (key.wrapping_mul(0x9e37_79b1) >> 23) as usize;
+    while lookup[slot] != 0 && lookup[slot] >> 9 != u64::from(key) {
+        slot = (slot + 1) & (lookup.len() - 1);
+    }
+    slot
+}
+
 /// The encoding time and file size tradeoff.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum EncodingStyle {
+    /// Write pixels without compression. GIF still needs a palette and JPEG stays lossy.
+    NoCompression,
     /// Apply useful size optimizations without searching many alternatives.
     #[default]
     NormalCompression,
@@ -28,6 +40,9 @@ pub struct EncodeOptions<'a> {
     pub jpeg_quality: u8,
     /// PNG/APNG text entries as keyword and text pairs. Ignored by other formats.
     pub text: &'a [(&'a str, &'a str)],
+    /// TGA: always write 32-bit pixels with an alpha channel, also for opaque images. Ignored by
+    /// other formats.
+    pub tga_alpha: bool,
 }
 
 impl Default for EncodeOptions<'_> {
@@ -36,6 +51,7 @@ impl Default for EncodeOptions<'_> {
             style: EncodingStyle::NormalCompression,
             jpeg_quality: 85,
             text: &[],
+            tga_alpha: false,
         }
     }
 }
@@ -114,17 +130,19 @@ pub fn encode_with_options(
     validate_pixels(bitmap.width, bitmap.height, &bitmap.data)?;
     match format {
         #[cfg(feature = "bmp")]
-        Format::Bmp => super::bmp::encode(bitmap),
+        Format::Bmp => super::bmp::encode(bitmap, options.style),
         #[cfg(feature = "gif")]
         Format::Gif => super::gif::encode_bitmap(bitmap, options.style),
-        #[cfg(feature = "png")]
-        Format::Png => super::png::encode(bitmap, None, options.style, options.text),
-        #[cfg(feature = "jpeg")]
-        Format::Jpeg => super::jpeg::encode(bitmap, options.jpeg_quality, options.style),
-        #[cfg(feature = "qoi")]
-        Format::Qoi => super::qoi::encode(bitmap),
         #[cfg(feature = "ico")]
         Format::Ico => Err(EncodeError::UnsupportedFormat),
+        #[cfg(feature = "jpeg")]
+        Format::Jpeg => super::jpeg::encode(bitmap, options.jpeg_quality, options.style),
+        #[cfg(feature = "png")]
+        Format::Png => super::png::encode(bitmap, None, options.style, options.text),
+        #[cfg(feature = "qoi")]
+        Format::Qoi => super::qoi::encode(bitmap, options.style),
+        #[cfg(feature = "tga")]
+        Format::Tga => super::tga::encode(bitmap, options.style, options.tga_alpha),
         #[allow(unreachable_patterns)]
         _ => {
             let _ = options;
@@ -225,9 +243,10 @@ pub(super) fn crop_changed(
     any(
         feature = "bmp",
         feature = "gif",
-        feature = "png",
         feature = "jpeg",
-        feature = "qoi"
+        feature = "png",
+        feature = "qoi",
+        feature = "tga"
     )
 ))]
 mod tests {
@@ -236,9 +255,10 @@ mod tests {
     #[cfg(any(
         feature = "bmp",
         feature = "gif",
-        feature = "png",
         feature = "jpeg",
-        feature = "qoi"
+        feature = "png",
+        feature = "qoi",
+        feature = "tga"
     ))]
     #[test]
     #[allow(clippy::single_element_loop)] // A single codec feature leaves one format.
@@ -249,12 +269,14 @@ mod tests {
             Format::Bmp,
             #[cfg(feature = "gif")]
             Format::Gif,
-            #[cfg(feature = "png")]
-            Format::Png,
             #[cfg(feature = "jpeg")]
             Format::Jpeg,
+            #[cfg(feature = "png")]
+            Format::Png,
             #[cfg(feature = "qoi")]
             Format::Qoi,
+            #[cfg(feature = "tga")]
+            Format::Tga,
         ] {
             let encoded = encode(&bitmap, format).unwrap();
             let decoded = crate::decode(&encoded).unwrap();
@@ -265,9 +287,10 @@ mod tests {
     #[cfg(any(
         feature = "bmp",
         feature = "gif",
-        feature = "png",
         feature = "jpeg",
-        feature = "qoi"
+        feature = "png",
+        feature = "qoi",
+        feature = "tga"
     ))]
     #[test]
     #[allow(clippy::single_element_loop)] // A single codec feature leaves one format.
@@ -287,12 +310,14 @@ mod tests {
                 Format::Bmp,
                 #[cfg(feature = "gif")]
                 Format::Gif,
-                #[cfg(feature = "png")]
-                Format::Png,
                 #[cfg(feature = "jpeg")]
                 Format::Jpeg,
+                #[cfg(feature = "png")]
+                Format::Png,
                 #[cfg(feature = "qoi")]
                 Format::Qoi,
+                #[cfg(feature = "tga")]
+                Format::Tga,
             ] {
                 let normal = encode(&bitmap, format).unwrap();
                 let max = encode_with_options(
@@ -309,8 +334,48 @@ mod tests {
         }
     }
 
-    #[cfg(any(feature = "bmp", feature = "png", feature = "qoi"))]
+    #[cfg(any(feature = "bmp", feature = "png", feature = "qoi", feature = "tga"))]
     #[test]
+    #[allow(clippy::single_element_loop)] // A single codec feature leaves one format.
+    fn no_compression_round_trips_without_shrinking() {
+        let flat = Bitmap::new(32, 32, [40, 40, 40, 255].repeat(1024)).unwrap();
+        let mut pixels = [255, 0, 0, 255].repeat(1024);
+        pixels[7] = 0;
+        let transparent = Bitmap::new(32, 32, pixels).unwrap();
+        let none = EncodeOptions {
+            style: EncodingStyle::NoCompression,
+            ..EncodeOptions::default()
+        };
+        for format in [
+            #[cfg(feature = "bmp")]
+            Format::Bmp,
+            #[cfg(feature = "png")]
+            Format::Png,
+            #[cfg(feature = "qoi")]
+            Format::Qoi,
+            #[cfg(feature = "tga")]
+            Format::Tga,
+        ] {
+            for (bitmap, bytes_per_pixel) in [(&flat, 3), (&transparent, 4)] {
+                let encoded = encode_with_options(bitmap, format, none).unwrap();
+                assert_eq!(
+                    crate::decode(&encoded).unwrap().pixels(),
+                    bitmap.data(),
+                    "{format:?}"
+                );
+                // Every pixel is stored in full, so the file is at least the raw pixel size
+                assert!(encoded.len() >= 1024 * bytes_per_pixel, "{format:?}");
+                assert!(
+                    encoded.len() >= encode(bitmap, format).unwrap().len(),
+                    "{format:?}"
+                );
+            }
+        }
+    }
+
+    #[cfg(any(feature = "bmp", feature = "png", feature = "qoi", feature = "tga"))]
+    #[test]
+    #[allow(clippy::single_element_loop)] // A single codec feature leaves one format.
     fn lossless_round_trip() {
         let pixels = vec![
             255, 0, 0, 255, 0, 255, 0, 128, 0, 0, 255, 0, 12, 34, 56, 255,
@@ -323,6 +388,8 @@ mod tests {
             Format::Png,
             #[cfg(feature = "qoi")]
             Format::Qoi,
+            #[cfg(feature = "tga")]
+            Format::Tga,
         ] {
             let decoded = crate::decode(&encode(&bitmap, format).unwrap()).unwrap();
             assert_eq!(decoded.pixels(), pixels);
