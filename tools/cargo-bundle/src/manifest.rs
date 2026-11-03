@@ -123,6 +123,7 @@ pub(crate) struct WindowsMetadata {
     pub capabilities: Option<Vec<String>>,
     pub file_types: Option<Vec<FileTypeMetadata>>,
     pub shell_extension: Option<ShellExtensionMetadata>,
+    pub windows_app_sdk: Option<String>,
 }
 
 #[derive(Clone, Deserialize)]

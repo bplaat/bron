@@ -16,6 +16,34 @@ const UNSIGNED_PUBLISHER_OID: &str = "OID.2.25.311729368913984317654407730594956
 const MIN_OS_VERSION: &str = "10.0.22000.0";
 const MAX_OS_VERSION_TESTED: &str = "10.0.26100.0";
 
+// The publisher of the Windows App Runtime framework packages
+const MICROSOFT_PUBLISHER: &str =
+    "CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US";
+
+// The framework package and minimum package version of a Windows App SDK release, like
+// Microsoft.WindowsAppRuntime.2 2.0.0.0 for "2.0". Since 2.0 the framework is named after the
+// major version and its package version is the release version.
+fn windows_app_runtime(version: &str) -> (String, String) {
+    let parts = version
+        .split('.')
+        .map(|part| part.parse::<u16>().ok())
+        .collect::<Option<Vec<_>>>()
+        .filter(|parts| (1..=4).contains(&parts.len()))
+        .unwrap_or_else(|| panic!("Invalid Windows App SDK version: {version}"));
+    assert!(
+        parts[0] >= 2,
+        "Windows App SDK {version} is not supported, use 2.0 or newer"
+    );
+    let min_version = (0..4)
+        .map(|index| parts.get(index).copied().unwrap_or(0).to_string())
+        .collect::<Vec<_>>()
+        .join(".");
+    (
+        format!("Microsoft.WindowsAppRuntime.{}", parts[0]),
+        min_version,
+    )
+}
+
 pub(crate) fn appx_manifest(
     manifest: &Manifest,
     windows: &WindowsMetadata,
@@ -83,6 +111,13 @@ pub(crate) fn appx_manifest(
         xml,
         r#"        <TargetDeviceFamily Name="Windows.Desktop" MinVersion="{MIN_OS_VERSION}" MaxVersionTested="{MAX_OS_VERSION_TESTED}"/>"#
     );
+    if let Some(version) = &windows.windows_app_sdk {
+        let (name, min_version) = windows_app_runtime(version);
+        _ = writeln!(
+            xml,
+            r#"        <PackageDependency Name="{name}" MinVersion="{min_version}" Publisher="{MICROSOFT_PUBLISHER}"/>"#
+        );
+    }
     _ = writeln!(xml, "    </Dependencies>");
     _ = writeln!(xml, "    <Resources>");
     _ = writeln!(xml, r#"        <Resource Language="en-us"/>"#);
@@ -376,6 +411,49 @@ preview_handler = "A1B2C3D4-0000-4000-8000-000000000002"
         ));
         // The handlers follow the file types inside each association.
         assert!(xml.find("</uap:SupportedFileTypes>") < xml.find("<desktop2:ThumbnailHandler"));
+    }
+
+    #[test]
+    fn windows_app_sdk_adds_its_framework_dependency() {
+        let manifest: Manifest = basic_toml::from_str(
+            r#"
+[package]
+name = "viewer"
+version = "1.0.0"
+[package.metadata.bundle.windows]
+windows_app_sdk = "2.0"
+"#,
+        )
+        .expect("Manifest");
+        let windows = manifest
+            .package
+            .metadata
+            .bundle
+            .windows
+            .clone()
+            .expect("Windows metadata");
+        let xml = appx_manifest(&manifest, &windows, "Publisher", "viewer.exe", "x64", 0);
+        assert!(xml.contains(
+            r#"<PackageDependency Name="Microsoft.WindowsAppRuntime.2" MinVersion="2.0.0.0" Publisher="CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US"/>"#
+        ));
+        assert!(xml.find("<TargetDeviceFamily") < xml.find("<PackageDependency"));
+    }
+
+    #[test]
+    fn windows_app_runtime_versions_have_four_parts() {
+        assert_eq!(
+            windows_app_runtime("2.4.1"),
+            (
+                "Microsoft.WindowsAppRuntime.2".to_owned(),
+                "2.4.1.0".to_owned()
+            )
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "use 2.0 or newer")]
+    fn windows_app_sdk_1_is_rejected() {
+        windows_app_runtime("1.8");
     }
 
     #[test]

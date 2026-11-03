@@ -37,6 +37,7 @@ assets = "meta/windows"
 sandbox = true # optional, run in an AppContainer
 capabilities = ["internetClient"] # optional
 file_types = [{ name = "Example Document", extensions = ["example"] }] # optional
+windows_app_sdk = "2.0" # optional, minimum Windows App Runtime framework the app depends on
 
 [package.metadata.bundle.windows.shell_extension] # optional
 package = "../example-shell" # cdylib crate exporting DllGetClassObject and DllCanUnloadNow
@@ -117,6 +118,12 @@ the installed executable. Conflicting payloads across architectures fail bundlin
 Logos and `resources.pri` stay in each architecture package; the shared asset package
 contains neither executable code nor a resource index. Apps without declared assets
 keep their existing architecture-only bundle.
+
+An app using WinUI 3 or other Windows App SDK APIs sets `windows_app_sdk` to the minimum
+release it needs, 2.0 or newer. The manifest then depends on the `Microsoft.WindowsAppRuntime.2`
+framework package of that version, which Windows installs with the app and adds to its package
+graph, so the app needs no bootstrapper. Unpackaged builds add the framework at runtime with the
+dynamic dependency API instead.
 
 A `shell_extension` is built for the same architectures and its DLL is packaged beside the
 executable. The manifest registers its classes as a COM surrogate server and adds the
