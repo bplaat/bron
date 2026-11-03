@@ -604,6 +604,12 @@ unsafe extern "system" fn window_proc(
             });
             0
         }
+        // The handle stays readable until the messages it is handling return, and the window
+        // data is freed when the window is dropped, so callbacks after this must not find it.
+        WM_NCDESTROY => {
+            unsafe { SetWindowLong(hwnd, GWL_USERDATA, 0) };
+            unsafe { DefWindowProcW(hwnd, msg, w_param, l_param) }
+        }
         _ => unsafe { DefWindowProcW(hwnd, msg, w_param, l_param) },
     }
 }

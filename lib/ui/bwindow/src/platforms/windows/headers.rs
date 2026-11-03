@@ -309,6 +309,7 @@ pub(crate) const WM_CLOSE: u32 = 0x0010;
 pub(crate) const WM_ERASEBKGND: u32 = 0x0014;
 pub(crate) const WM_GETMINMAXINFO: u32 = 0x0024;
 pub(crate) const WM_NCCREATE: u32 = 0x0081;
+pub(crate) const WM_NCDESTROY: u32 = 0x0082;
 pub(crate) const WM_DROPFILES: u32 = 0x0233;
 pub(crate) const WM_DPICHANGED: u32 = 0x02E0;
 pub(crate) const WM_USER: u32 = 0x0400;
