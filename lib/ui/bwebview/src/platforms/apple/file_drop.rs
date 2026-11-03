@@ -4,11 +4,10 @@
  * SPDX-License-Identifier: MIT
  */
 
-use bwindow::ffi::perform_file_drop;
+use bwindow::ffi::{file_drag_operation, perform_file_drop};
 use objc2::define_class;
 use objc2::runtime::{AnyObject as Object, Bool};
 
-use super::headers::*;
 define_class!(
     #[unsafe(super(WKWebView))]
     #[name = "BWebviewDroppableWebview"]
@@ -16,13 +15,13 @@ define_class!(
 
     impl DroppableWebview {
         #[unsafe(method(draggingEntered:))]
-        const fn _dragging_entered(&self, _: *mut Object) -> u64 {
-            NS_DRAG_OPERATION_COPY
+        fn _dragging_entered(&self, sender: *mut Object) -> u64 {
+            unsafe { file_drag_operation(sender) }
         }
 
         #[unsafe(method(draggingUpdated:))]
-        const fn _dragging_updated(&self, _: *mut Object) -> u64 {
-            NS_DRAG_OPERATION_COPY
+        fn _dragging_updated(&self, sender: *mut Object) -> u64 {
+            unsafe { file_drag_operation(sender) }
         }
 
         #[unsafe(method(prepareForDragOperation:))]

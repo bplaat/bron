@@ -60,8 +60,6 @@ pub(crate) const NS_VIEW_WIDTH_SIZABLE: u64 = 2;
 pub(crate) const NS_VIEW_HEIGHT_SIZABLE: u64 = 16;
 #[cfg(target_os = "macos")]
 pub(crate) const NS_WINDOW_BELOW: i64 = -1;
-#[cfg(all(target_os = "macos", feature = "file_drop"))]
-pub(crate) const NS_DRAG_OPERATION_COPY: u64 = 1;
 
 #[cfg(target_os = "ios")]
 pub(crate) const UI_VIEW_AUTORESIZING_FLEXIBLE_WIDTH: u64 = 1 << 1;
