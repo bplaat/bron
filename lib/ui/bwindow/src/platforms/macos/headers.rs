@@ -26,6 +26,8 @@ unsafe extern "C" {
     pub(crate) static NSAppearanceNameDarkAqua: *const Object;
     #[cfg(feature = "file_drop")]
     pub(crate) static NSFilenamesPboardType: *mut Object;
+    #[cfg(feature = "file_drop")]
+    pub(crate) static NSPasteboardURLReadingFileURLsOnlyKey: *mut Object;
 }
 
 #[link(name = "ApplicationServices", kind = "framework")]

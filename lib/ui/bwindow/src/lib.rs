@@ -59,7 +59,9 @@ pub mod ffi {
     ))]
     pub use crate::platforms::gtk::file_drop::gtk_dropped_paths;
     #[cfg(all(target_os = "macos", feature = "file_drop"))]
-    pub use crate::platforms::macos::file_drop::{perform_file_drop, register_dragged_types};
+    pub use crate::platforms::macos::file_drop::{
+        file_drag_operation, perform_file_drop, register_dragged_types,
+    };
     #[cfg(windows)]
     pub use crate::platforms::windows::input::windows_translate_accelerator;
 }

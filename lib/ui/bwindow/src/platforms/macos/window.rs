@@ -13,7 +13,7 @@ use objc2::{class, define_class, msg_send};
 use super::content::ContentView;
 use super::event_loop::{allow_termination_if_last_window, has_launched, send_event};
 #[cfg(feature = "file_drop")]
-use super::file_drop::{perform_file_drop, register_dragged_types};
+use super::file_drop::{file_drag_operation, perform_file_drop, register_dragged_types};
 use super::headers::*;
 use crate::{
     CloseRequest, CursorIcon, LogicalPoint, LogicalSize, MacosTitlebarStyle, PointerLockError,
@@ -172,11 +172,11 @@ define_class!(
 
         #[cfg(feature = "file_drop")]
         #[unsafe(method(draggingEntered:))]
-        const fn _dragging_entered(&self, _: *mut Object) -> u64 { NS_DRAG_OPERATION_COPY }
+        fn _dragging_entered(&self, sender: *mut Object) -> u64 { unsafe { file_drag_operation(sender) } }
 
         #[cfg(feature = "file_drop")]
         #[unsafe(method(draggingUpdated:))]
-        const fn _dragging_updated(&self, _: *mut Object) -> u64 { NS_DRAG_OPERATION_COPY }
+        fn _dragging_updated(&self, sender: *mut Object) -> u64 { unsafe { file_drag_operation(sender) } }
 
         #[cfg(feature = "file_drop")]
         #[unsafe(method(prepareForDragOperation:))]
