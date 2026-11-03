@@ -64,11 +64,15 @@ presses and B goes back. Text fields have an on-screen keyboard where B erases a
 
 The render distance is fixed at 12 chunks. A worker on its own CPU core loads or generates,
 lights, and meshes chunks nearest first, the network polls its sockets on another core. The
-engine's chunk quads become GX2 vertex buffers with a day and a night color from the light
+engine's chunk quads become GX2 vertex buffers with linear day and night colors from the light
 palette, so the night needs no new meshes. One Latte shader in `src/shader.vsh` and
-`src/shader.psh` draws everything like GX: a texture times a color, with fog by the distance
-from the eye. The textures are converted at build time by the toolchain's
+`src/shader.psh` draws with sRGB textures and output, smooth radial fog per pixel, and
+exponential fog with a tint when immersed in water or lava. Water textures drift like the
+desktop version, with the same base color mix and increasing opacity in distance fog.
+The textures are converted at build time by the toolchain's
 [gtxconv](../../tools/wiiu-toolchain/gtxconv).
+
+GX2's alpha test rejects cutout texels before they write color or depth.
 
 ## Benchmark
 

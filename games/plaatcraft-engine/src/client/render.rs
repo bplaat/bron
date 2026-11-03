@@ -186,6 +186,7 @@ pub(super) struct Renderer {
     projection: Mtx44,
     far: f32,
     fog_end: f32,
+    fog: Option<Fog>,
 }
 
 impl Renderer {
@@ -196,18 +197,59 @@ impl Renderer {
             projection: perspective(FOV, size[0] / size[1], NEAR, far),
             far,
             fog_end: (distance as f32 - 1.5) * CHUNK_SIZE as f32,
+            fog: None,
         }
     }
 
     /// Clears the screen to the color of the sky and the fog.
-    pub(super) fn begin(&mut self, gpu: &mut impl Gpu, daylight: f32) {
+    pub(super) fn begin(
+        &mut self,
+        gpu: &mut impl Gpu,
+        daylight: f32,
+        time: f32,
+        eye_material: Option<u8>,
+    ) {
         self.daylight = daylight;
-        gpu.begin(encode_rgb(fog_color(daylight)), daylight);
+        let fog = self.environment_fog(eye_material);
+        self.fog = Some(fog);
+        gpu.begin(fog.color, daylight, time);
     }
 
     fn world(&self, gpu: &mut impl Gpu, state: State) {
         gpu.projection(&self.projection, false);
         gpu.state(state);
+    }
+
+    fn environment_fog(&self, eye_material: Option<u8>) -> Fog {
+        // The fog of water and lava is close and colored, like the shaders' immersion fog
+        let (start, end, color, density, tint) = match eye_material {
+            Some(m) if world::is_water(m) => (
+                0.0,
+                24.0,
+                [0.025, 0.16, 0.23].map(|c| c * self.daylight.max(0.06)),
+                0.065,
+                [0.6, 0.85, 0.95],
+            ),
+            Some(m) if world::is_lava(m) => {
+                (0.0, 4.0, [0.65, 0.035, 0.005], 0.35, [1.0, 0.3, 0.08])
+            }
+            _ => (
+                self.fog_end * 0.75,
+                self.fog_end,
+                fog_color(self.daylight),
+                0.0,
+                [1.0; 3],
+            ),
+        };
+        Fog {
+            start,
+            end,
+            distance: [self.fog_end * 0.75, self.fog_end],
+            color: encode_rgb(color),
+            planes: [NEAR, self.far],
+            density,
+            tint,
+        }
     }
 
     pub(super) fn draw_world<G: Gpu>(
@@ -216,24 +258,8 @@ impl Renderer {
         view: &View,
         center: Coord,
         chunks: &BTreeMap<Coord, Chunk<G::Mesh>>,
-        eye_material: Option<u8>,
     ) {
-        // The fog of water and lava is close and colored, like the shaders' immersion fog
-        let (start, end, color) = match eye_material {
-            Some(m) if world::is_water(m) => (
-                0.0,
-                24.0,
-                [0.025, 0.16, 0.23].map(|c| c * self.daylight.max(0.06)),
-            ),
-            Some(m) if world::is_lava(m) => (0.0, 4.0, [0.65, 0.035, 0.005]),
-            _ => (self.fog_end * 0.75, self.fog_end, fog_color(self.daylight)),
-        };
-        gpu.fog(Some(Fog {
-            start,
-            end,
-            color: encode_rgb(color),
-            planes: [NEAR, self.far],
-        }));
+        gpu.fog(self.fog);
 
         // Nearest chunks first, so the depth test rejects more of the farther ones
         let mut visible: Vec<(i64, Coord, [f32; 3])> = chunks
@@ -342,6 +368,7 @@ impl Renderer {
         center: Coord,
         others: &Others,
     ) {
+        gpu.fog(self.fog);
         self.world(
             gpu,
             State {
@@ -397,6 +424,7 @@ impl Renderer {
     /// The block in the hand, placed and swung like held.wgsl of the desktop game. The swing
     /// progress goes from 0 to 1.
     pub(super) fn draw_held(&self, gpu: &mut impl Gpu, material: u8, progress: f32) {
+        gpu.fog(None);
         let swing = (progress * PI).sin();
         let reach = (progress.sqrt() * PI).sin();
         let (sy, cy) = (0.8 - swing * 0.35).sin_cos();
@@ -447,6 +475,7 @@ impl Renderer {
         center: Coord,
         particles: &Particles,
     ) {
+        gpu.fog(self.fog);
         self.world(
             gpu,
             State {
@@ -545,6 +574,24 @@ fn draw_chunk<G: Gpu>(gpu: &mut G, view: &View, mesh: &G::Mesh, offset: [f32; 3]
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn immersion_background_and_fog_match_the_medium() {
+        let renderer = Renderer::new([640.0, 480.0], 12);
+        let air = renderer.environment_fog(None);
+        assert_eq!(air.density, 0.0);
+        assert_eq!(air.tint, [1.0; 3]);
+        let water = renderer.environment_fog(Some(world::WATER));
+        assert_eq!(water.color, encode_rgb([0.025, 0.16, 0.23]));
+        assert_eq!(water.density, 0.065);
+        assert_eq!(water.tint, [0.6, 0.85, 0.95]);
+        assert_eq!(water.distance, air.distance);
+        assert!(water.end < water.distance[0]);
+        let lava = renderer.environment_fog(Some(world::LAVA));
+        assert_eq!(lava.color, encode_rgb([0.65, 0.035, 0.005]));
+        assert!(lava.density > water.density);
+        assert_eq!(lava.distance, air.distance);
+    }
 
     #[test]
     fn ortho_maps_the_screen_corners() {

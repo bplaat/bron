@@ -1238,7 +1238,6 @@ impl<P: Platform> Game<P> {
     fn render(&mut self, now: f32) {
         let gpu = &mut self.gpu;
         let daylight = if self.night { NIGHT_DAYLIGHT } else { 1.0 };
-        self.renderer.begin(gpu, daylight);
         // Between the last two physics ticks, so the player moves smoothly
         let camera = if self.active || self.stream.remote {
             self.prediction.view(&self.camera)
@@ -1252,9 +1251,10 @@ impl<P: Platform> Game<P> {
         // The title pages show the turning default world behind them
         let eye = camera.position.map(|v| v.floor() as i64);
         let eye_material = self.stream.block(eye);
+        self.renderer.begin(gpu, daylight, now, eye_material);
         self.renderer.draw_sky(gpu, &view, eye_material, now);
         self.renderer
-            .draw_world(gpu, &view, center, &self.stream.chunks, eye_material);
+            .draw_world(gpu, &view, center, &self.stream.chunks);
         if self.active || self.stream.remote {
             if in_game && let Some(hit) = self.target {
                 self.renderer

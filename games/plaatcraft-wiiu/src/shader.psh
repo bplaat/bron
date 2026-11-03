@@ -1,5 +1,10 @@
-; Outputs the texture color at the interpolated texture coordinate times the interpolated color,
-; mixed with the fog color by the interpolated fog
+; Linear lighting with radial smoothstep fog, exponential immersion fog and animated water.
+; C0: fog color, C1: distance scale/offset, density, enabled, C2: immersion tint,
+; C3: water enabled, texture weight, reserved, opacity.
+; The water palette already includes its tint. Group 10 adds 0.25 * base / tint before
+; lighting, matching desktop's illumination * (0.75 * texel * tint + 0.25 * base).
+; Each ALU group can read at most two constant pairs (xy or zw). Keep the water
+; alpha operations separate from tint and fog so they do not need a third pair.
 
 ; $MODE = "UniformRegister"
 ; $NUM_SPI_PS_INPUT_CNTL = 3
@@ -9,7 +14,7 @@
 ; R1, the color
 ; $SPI_PS_INPUT_CNTL[1].SEMANTIC = 1
 ; $SPI_PS_INPUT_CNTL[1].DEFAULT_VAL = 1
-; R2, the fog
+; R2, the eye space position
 ; $SPI_PS_INPUT_CNTL[2].SEMANTIC = 2
 ; $SPI_PS_INPUT_CNTL[2].DEFAULT_VAL = 1
 
@@ -20,22 +25,66 @@
 ; $UNIFORM_VARS[0].block = -1
 ; $UNIFORM_VARS[0].offset = 0
 
+; $UNIFORM_VARS[1].name = "uFogParams"
+; $UNIFORM_VARS[1].type = "vec4"
+; $UNIFORM_VARS[1].count = 1
+; $UNIFORM_VARS[1].block = -1
+; $UNIFORM_VARS[1].offset = 4
+
+; $UNIFORM_VARS[2].name = "uTint"
+; $UNIFORM_VARS[2].type = "vec4"
+; $UNIFORM_VARS[2].count = 1
+; $UNIFORM_VARS[2].block = -1
+; $UNIFORM_VARS[2].offset = 8
+
+; $UNIFORM_VARS[3].name = "uWater"
+; $UNIFORM_VARS[3].type = "vec4"
+; $UNIFORM_VARS[3].count = 1
+; $UNIFORM_VARS[3].block = -1
+; $UNIFORM_VARS[3].offset = 12
+
 ; $SAMPLER_VARS[0].name = "uTexture"
 ; $SAMPLER_VARS[0].type = "sampler2D"
 ; $SAMPLER_VARS[0].location = 0
 
-00 TEX: ADDR(48) CNT(1) VALID_PIX
+00 TEX: VALID_PIX
     0  SAMPLE R0, R0.xy00, t0, s0
-01 ALU: ADDR(32) CNT(10)
-    1  x: MUL    R0.x, R0.x, R1.x
+01 ALU:
+    1  x: DOT4   R3.x, R2.x, R2.x
+       y: DOT4   ____, R2.y, R2.y
+       z: DOT4   ____, R2.z, R2.z
+       w: DOT4   ____, 0.0, 0.0
+    2  t: SQRT_IEEE R3.x, R3.x
+    3  x: MULADD R4.x, R3.x, C1.x, C1.y CLAMP
+       t: MUL    R5.x, C1.z, -1.442695
+    4  y: MUL    R4.y, R4.x, R4.x
+       z: MULADD R4.z, R4.x, -2.0, 3.0
+    5  x: MUL    R5.x, R5.x, R3.x
+    6  x: MUL    R4.x, R4.y, R4.z
+       t: EXP_IEEE R5.x, R5.x
+    7  x: ADD    R5.x, 1.0, -R5.x
+    8  x: CNDE   R5.x, C1.z, R4.x, R5.x
+    9  x: MUL    R5.x, R5.x, C1.w
+    10 x: MULADD R6.x, R0.x, C3.y, 0.058333333
+       y: MULADD R6.y, R0.y, C3.y, 0.107758621
+       z: MULADD R6.z, R0.z, C3.y, 0.126666667
+    11 x: CNDE   R0.x, C3.x, R0.x, R6.x
+       y: CNDE   R0.y, C3.x, R0.y, R6.y
+       z: CNDE   R0.z, C3.x, R0.z, R6.z
+    12 x: MUL    R0.x, R0.x, R1.x
        y: MUL    R0.y, R0.y, R1.y
        z: MUL    R0.z, R0.z, R1.z
        w: MUL    R0.w, R0.w, R1.w
-    2  x: ADD    R3.x, C0.x, -R0.x
+    13 x: MUL    R0.x, R0.x, C2.x
+       y: MUL    R0.y, R0.y, C2.y
+       z: MUL    R0.z, R0.z, C2.z
+    14 w: MULADD R6.w, R4.x, 0.38, C3.w
+    15 x: ADD    R3.x, C0.x, -R0.x
        y: ADD    R3.y, C0.y, -R0.y
        z: ADD    R3.z, C0.z, -R0.z
-    3  x: MULADD R0.x, R3.x, R2.x, R0.x
-       y: MULADD R0.y, R3.y, R2.x, R0.y
-       z: MULADD R0.z, R3.z, R2.x, R0.z
+    16 w: CNDE   R0.w, C3.x, R0.w, R6.w
+    17 x: MULADD R0.x, R3.x, R5.x, R0.x
+       y: MULADD R0.y, R3.y, R5.x, R0.y
+       z: MULADD R0.z, R3.z, R5.x, R0.z
 02 EXP_DONE: PIX0, R0
 END_OF_PROGRAM

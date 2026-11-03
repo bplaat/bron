@@ -4,10 +4,10 @@
  * SPDX-License-Identifier: MIT
  */
 
-//! Drawing with GX2 on the TV, the GamePad shows a copy. One shader draws everything like GX:
-//! a texture times a color, the chunks have a day and a night color so the night needs no new
-//! meshes, and fog by the distance from the eye. The draws besides the chunks write their
-//! vertices to a buffer that starts over every frame.
+//! Drawing with GX2 on the TV, the GamePad shows a copy. Linear lighting, sRGB textures and
+//! output, per-pixel radial fog and animated water follow the desktop shaders. The chunks
+//! have day and night colors so the night needs no new meshes. Other draws stream vertices
+//! to a buffer that starts over every frame.
 
 use alloc::boxed::Box;
 use alloc::vec::Vec;
@@ -18,7 +18,8 @@ use core::ptr::{self, NonNull};
 use core::sync::atomic::{AtomicPtr, Ordering};
 
 use plaatcraft_engine::client::{
-    Fog, Gpu, Mtx, Mtx44, NIGHT_DAYLIGHT, Pass, State, Texture, Vertex, mesh, palette,
+    Fog, Gpu, Mtx, Mtx44, NIGHT_DAYLIGHT, Pass, State, Texture, Vertex, linear_palette, linear_rgb,
+    mesh,
 };
 use plaatcraft_engine::world::SECTION_COUNT;
 use wut_sys::*;
@@ -51,12 +52,12 @@ const INVALIDATE_ATTRIBUTE_BUFFER: u32 = 1 << 0;
 #[derive(Clone, Copy)]
 struct GpuVertex {
     position: [f32; 3],
-    color: [u8; 4],
+    color: [f32; 4],
     uv: [f32; 2],
-    night: [u8; 4],
+    night: [f32; 4],
 }
 
-// Packed RGBA fetches must start on a four-byte boundary on the console.
+// Vertex attributes must start on a four-byte boundary on the console.
 const _: () = assert!(
     offset_of!(GpuVertex, color).is_multiple_of(4)
         && offset_of!(GpuVertex, night).is_multiple_of(4)
@@ -120,8 +121,9 @@ pub struct Mesh {
 
 /// The colors of the light palette during the day and at night.
 struct Palettes {
-    day: Vec<[u8; 4]>,
-    night: Vec<[u8; 4]>,
+    day: Vec<[f32; 4]>,
+    night: Vec<[f32; 4]>,
+    srgb: [f32; 256],
 }
 
 static PALETTES: AtomicPtr<Palettes> = AtomicPtr::new(ptr::null_mut());
@@ -131,8 +133,9 @@ fn palettes() -> &'static Palettes {
     let mut palettes = PALETTES.load(Ordering::Acquire);
     if palettes.is_null() {
         let made = Box::into_raw(Box::new(Palettes {
-            day: palette(1.0),
-            night: palette(NIGHT_DAYLIGHT),
+            day: linear_palette(1.0),
+            night: linear_palette(NIGHT_DAYLIGHT),
+            srgb: core::array::from_fn(|value| linear_rgb([value as u8; 3])[0]),
         }));
         palettes = match PALETTES.compare_exchange(
             ptr::null_mut(),
@@ -158,8 +161,14 @@ const fn pass_index(pass: Pass) -> usize {
     }
 }
 
-const fn bytes(color: u32) -> [u8; 4] {
-    color.to_be_bytes()
+fn linear_color(color: u32, srgb: &[f32; 256]) -> [f32; 4] {
+    let [r, g, b, a] = color.to_be_bytes();
+    [
+        srgb[usize::from(r)],
+        srgb[usize::from(g)],
+        srgb[usize::from(b)],
+        f32::from(a) / 255.0,
+    ]
 }
 
 pub struct Gx2 {
@@ -168,6 +177,10 @@ pub struct Gx2 {
     model_view: u32,
     params: u32,
     fog_color: u32,
+    fog_params: u32,
+    tint: u32,
+    water: u32,
+    scroll: u32,
     textures: Vec<GX2Texture>,
     tiles: GX2Sampler,
     repeat: GX2Sampler,
@@ -176,6 +189,7 @@ pub struct Gx2 {
     used: usize,
     size: [f32; 2],
     night: f32,
+    time: f32,
     bound: Option<Texture>,
 }
 
@@ -203,12 +217,12 @@ impl Gx2 {
                 (
                     c"aColor",
                     offset_of!(GpuVertex, color),
-                    GX2_ATTRIB_FORMAT_UNORM_8_8_8_8,
+                    GX2_ATTRIB_FORMAT_FLOAT_32_32_32_32,
                 ),
                 (
                     c"aNight",
                     offset_of!(GpuVertex, night),
-                    GX2_ATTRIB_FORMAT_UNORM_8_8_8_8,
+                    GX2_ATTRIB_FORMAT_FLOAT_32_32_32_32,
                 ),
             ] {
                 WHBGfxInitShaderAttribute(&mut group, name.as_ptr(), 0, offset as u32, format);
@@ -218,6 +232,10 @@ impl Gx2 {
             let model_view = GX2GetVertexUniformVar(group.vertex_shader, c"uModelView")?.offset;
             let params = GX2GetVertexUniformVar(group.vertex_shader, c"uParams")?.offset;
             let fog_color = GX2GetPixelUniformVar(group.pixel_shader, c"uFogColor")?.offset;
+            let fog_params = GX2GetPixelUniformVar(group.pixel_shader, c"uFogParams")?.offset;
+            let tint = GX2GetPixelUniformVar(group.pixel_shader, c"uTint")?.offset;
+            let water = GX2GetPixelUniformVar(group.pixel_shader, c"uWater")?.offset;
+            let scroll = GX2GetVertexUniformVar(group.vertex_shader, c"uScroll")?.offset;
 
             let mut textures = Vec::with_capacity(textures::COUNT);
             for index in 0..textures::COUNT {
@@ -227,12 +245,25 @@ impl Gx2 {
                 {
                     return None;
                 }
+                texture.surface.format = if texture.surface.format == 0x31 {
+                    GX2_SURFACE_FORMAT_SRGB_BC1
+                } else {
+                    GX2_SURFACE_FORMAT_SRGB_R8_G8_B8_A8
+                };
+                GX2InitTextureRegs(&mut texture);
                 textures.push(texture);
             }
             let sampler = |clamp, filter, mipmaps| {
                 let mut sampler = GX2Sampler::default();
                 GX2InitSampler(&mut sampler, clamp, filter);
                 if mipmaps {
+                    // Match desktop and GX: nearest magnification, linear minification.
+                    GX2InitSamplerXYFilter(
+                        &mut sampler,
+                        GX2_TEX_XY_FILTER_MODE_POINT,
+                        GX2_TEX_XY_FILTER_MODE_LINEAR,
+                        GX2_TEX_ANISO_RATIO_NONE,
+                    );
                     GX2InitSamplerZMFilter(
                         &mut sampler,
                         GX2_TEX_Z_FILTER_MODE_POINT,
@@ -241,15 +272,21 @@ impl Gx2 {
                 }
                 sampler
             };
-            // The TV's color buffer starts with its surface
-            let surface = &*WHBGfxGetTVColourBuffer().cast::<GX2Surface>();
+            let buffer = WHBGfxGetTVColourBuffer();
+            let surface = &mut (*buffer).surface;
+            surface.format = GX2_SURFACE_FORMAT_SRGB_R8_G8_B8_A8;
             let aspect = surface.width as f32 / surface.height as f32;
+            GX2InitColorBufferRegs(buffer);
             Some(Self {
                 group,
                 projection,
                 model_view,
                 params,
                 fog_color,
+                fog_params,
+                tint,
+                water,
+                scroll,
                 textures,
                 // Pixel art stays sharp up close and blends between mipmaps in the distance
                 tiles: sampler(GX2_TEX_CLAMP_MODE_WRAP, GX2_TEX_XY_FILTER_MODE_POINT, true),
@@ -267,6 +304,7 @@ impl Gx2 {
                 used: 0,
                 size: [480.0 * aspect, 480.0],
                 night: 0.0,
+                time: 0.0,
                 bound: None,
             })
         }
@@ -291,13 +329,24 @@ impl Gx2 {
         }
     }
 
-    fn set_params(&self, fog: [f32; 2]) {
-        let params = [self.night, fog[0], fog[1], 0.0];
-        unsafe { GX2SetVertexUniformReg(self.params, 4, params.as_ptr().cast()) };
+    fn water(&self, enabled: bool) {
+        let water = f32::from(u8::from(enabled));
+        let scroll = [
+            self.time * 0.007_812_5 * water,
+            self.time * 0.003_906_25 * water,
+            0.0,
+            0.0,
+        ];
+        let params = [water, 0.75, 0.0, 0.62];
+        unsafe {
+            GX2SetVertexUniformReg(self.scroll, 4, scroll.as_ptr().cast());
+            GX2SetPixelUniformReg(self.water, 4, params.as_ptr().cast());
+        }
     }
 
     // Writes vertices to the stream buffer and draws them
     fn draw(&mut self, mode: u32, texture: Texture, vertices: &[Vertex]) {
+        self.water(false);
         let range = self.used..self.used + vertices.len();
         if range.end > self.stream.length {
             return;
@@ -305,8 +354,9 @@ impl Gx2 {
         self.used = range.end;
         self.texture(texture);
         let stream = &mut self.stream.slice()[range.clone()];
+        let srgb = &palettes().srgb;
         for (target, vertex) in stream.iter_mut().zip(vertices) {
-            let color = bytes(vertex.color);
+            let color = linear_color(vertex.color, srgb);
             *target = GpuVertex {
                 position: vertex.position,
                 color,
@@ -374,9 +424,10 @@ impl Gpu for Gx2 {
         self.size
     }
 
-    fn begin(&mut self, clear: [u8; 3], daylight: f32) {
-        let [r, g, b] = clear.map(|value| f32::from(value) / 255.0);
+    fn begin(&mut self, clear: [u8; 3], daylight: f32, time: f32) {
+        let [r, g, b] = linear_rgb(clear);
         self.night = if daylight < 0.5 { 1.0 } else { 0.0 };
+        self.time = time;
         self.used = 0;
         self.bound = None;
         unsafe {
@@ -384,6 +435,8 @@ impl Gpu for Gx2 {
             WHBGfxBeginRenderTV();
             // Clearing sets the TV's context state, so the shaders follow
             WHBGfxClearColor(r, g, b, 1.0);
+            // libwhb restores its original context after clearing; rebind the sRGB target.
+            GX2SetColorBuffer(WHBGfxGetTVColourBuffer(), GX2_RENDER_TARGET_0);
             GX2SetFetchShader(&self.group.fetch_shader);
             GX2SetVertexShader(self.group.vertex_shader);
             GX2SetPixelShader(self.group.pixel_shader);
@@ -400,6 +453,9 @@ impl Gpu for Gx2 {
             GX2SetLineWidth(3.0);
             GX2Invalidate(INVALIDATE_ATTRIBUTE_BUFFER, ptr::null_mut(), u32::MAX);
         }
+        let params = [self.night, 0.0, 0.0, 0.0];
+        unsafe { GX2SetVertexUniformReg(self.params, 4, params.as_ptr().cast()) };
+        self.water(false);
         self.fog(None);
     }
 
@@ -423,23 +479,29 @@ impl Gpu for Gx2 {
             // The quads turn clockwise for their front like on GX
             GX2SetCullOnlyControl(GX2_FRONT_FACE_CW, FALSE, flag(state.cull));
             GX2SetColorControl(GX2_LOGIC_OP_COPY, u8::from(state.blend), FALSE, TRUE);
+            // Test the exported alpha before cutouts write color or depth.
             GX2SetAlphaTest(flag(state.cutout), GX2_COMPARE_FUNC_GREATER, 0.5);
         }
     }
 
     fn fog(&mut self, fog: Option<Fog>) {
-        let (params, color) = fog.map_or(([0.0; 2], [0; 3]), |fog| {
-            let scale = 1.0 / (fog.end - fog.start);
-            ([-scale, -fog.start * scale], fog.color)
+        let (params, color, tint) = fog.map_or(([0.0; 4], [0; 3], [1.0; 3]), |fog| {
+            let [start, end] = fog.distance;
+            let scale = 1.0 / (end - start);
+            (
+                [scale, -start * scale, fog.density, 1.0],
+                fog.color,
+                fog.tint,
+            )
         });
-        self.set_params(params);
-        let color = [
-            f32::from(color[0]) / 255.0,
-            f32::from(color[1]) / 255.0,
-            f32::from(color[2]) / 255.0,
-            1.0,
-        ];
-        unsafe { GX2SetPixelUniformReg(self.fog_color, 4, color.as_ptr().cast()) };
+        let [r, g, b] = linear_rgb(color);
+        let color = [r, g, b, 1.0];
+        let tint = [tint[0], tint[1], tint[2], 1.0];
+        unsafe {
+            GX2SetPixelUniformReg(self.fog_color, 4, color.as_ptr().cast());
+            GX2SetPixelUniformReg(self.fog_params, 4, params.as_ptr().cast());
+            GX2SetPixelUniformReg(self.tint, 4, tint.as_ptr().cast());
+        }
     }
 
     fn quads(&mut self, texture: Texture, vertices: &[Vertex]) {
@@ -453,6 +515,11 @@ impl Gpu for Gx2 {
     fn chunk(&mut self, mesh: &Mesh, section: usize, pass: Pass) {
         unsafe { mesh.buffer.bind() };
         for draw in &mesh.draws[mesh.sections[section][pass_index(pass)].clone()] {
+            self.water(
+                pass == Pass::Translucent
+                    && draw.tile
+                        == plaatcraft_engine::tiles::tile(plaatcraft_engine::world::WATER, 2),
+            );
             self.texture(Texture::Tile(draw.tile));
             unsafe {
                 GX2DrawEx(
@@ -467,9 +534,14 @@ impl Gpu for Gx2 {
 
     fn present(&mut self) {
         unsafe {
-            WHBGfxFinishRenderTV();
+            // libwhb's scan buffers are UNORM. Copy the stored sRGB bytes through an UNORM
+            // view, so presentation does not decode them to linear and darken the image.
+            let mut scanout = *WHBGfxGetTVColourBuffer();
+            scanout.surface.format = GX2_SURFACE_FORMAT_UNORM_R8_G8_B8_A8;
+            GX2InitColorBufferRegs(&mut scanout);
+            GX2CopyColorBufferToScanBuffer(&scanout, GX2_SCAN_TARGET_TV);
             // The GamePad shows the TV image scaled down, instead of drawing the scene twice
-            GX2CopyColorBufferToScanBuffer(WHBGfxGetTVColourBuffer(), GX2_SCAN_TARGET_DRC);
+            GX2CopyColorBufferToScanBuffer(&scanout, GX2_SCAN_TARGET_DRC);
             WHBGfxFinishRender();
         }
     }

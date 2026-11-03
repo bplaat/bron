@@ -188,17 +188,23 @@ pub struct State {
     pub cutout: bool,
 }
 
-/// Linear fog by the distance from the eye.
+/// Distance fog, with a linear fallback for fixed-function GPUs.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Fog {
     /// Where the fog starts.
     pub start: f32,
     /// Where the fog covers everything.
     pub end: f32,
+    /// The normal distance-fog range, also used for water opacity while immersed.
+    pub distance: [f32; 2],
     /// The gamma encoded color of the fog.
     pub color: [u8; 3],
     /// The near and far planes of the projection, GX finds the distance from the depth.
     pub planes: [f32; 2],
+    /// Exponential immersion density, zero for smooth distance fog.
+    pub density: f32,
+    /// Linear immersion tint, white above water.
+    pub tint: [f32; 3],
 }
 
 /// The passes of the chunks, each with its own depth, cutout and blend state.
@@ -228,7 +234,7 @@ pub trait Gpu {
     /// The size of the 2D screen space, square pixels with a height of 480.
     fn size(&self) -> [f32; 2];
     /// Starts a frame cleared to the color, with chunks lit for the daylight.
-    fn begin(&mut self, clear: [u8; 3], daylight: f32);
+    fn begin(&mut self, clear: [u8; 3], daylight: f32, time: f32);
     /// Sets the projection matrix.
     fn projection(&mut self, matrix: &Mtx44, orthographic: bool);
     /// Sets the model view matrix.

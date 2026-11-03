@@ -298,7 +298,7 @@ impl Gpu for Gx {
         self.size
     }
 
-    fn begin(&mut self, [r, g, b]: [u8; 3], daylight: f32) {
+    fn begin(&mut self, [r, g, b]: [u8; 3], daylight: f32, _time: f32) {
         if self.daylight != daylight {
             self.daylight = daylight;
             self.palette = palette(daylight);

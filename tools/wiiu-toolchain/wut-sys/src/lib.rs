@@ -178,11 +178,24 @@ pub const GX2_LOGIC_OP_COPY: u32 = 0xcc;
 pub const GX2_SCAN_TARGET_TV: u32 = 1 << 0;
 pub const GX2_SCAN_TARGET_DRC: u32 = 1 << 2;
 
-/// A render target, only used through pointers from libwhb.
+/// A render target, including its surface and cached registers.
 #[repr(C)]
+#[derive(Clone, Copy)]
 pub struct GX2ColorBuffer {
-    _private: [u8; 0],
+    pub surface: GX2Surface,
+    pub view_mip: u32,
+    pub view_first_slice: u32,
+    pub view_num_slices: u32,
+    pub aa_buffer: *mut c_void,
+    pub aa_size: u32,
+    pub regs: [u32; 5],
 }
+
+#[cfg(target_pointer_width = "32")]
+const _: () = {
+    assert!(size_of::<GX2ColorBuffer>() == 0x9c);
+    assert!(core::mem::offset_of!(GX2ColorBuffer, regs) == 0x88);
+};
 
 unsafe extern "C" {
     pub fn GX2InitColorBufferRegs(buffer: *mut GX2ColorBuffer);
@@ -223,6 +236,7 @@ unsafe extern "C" {
 }
 
 // MARK: GX2 textures
+pub const GX2_SURFACE_FORMAT_UNORM_R8_G8_B8_A8: u32 = 0x1a;
 pub const GX2_SURFACE_FORMAT_SRGB_R8_G8_B8_A8: u32 = 0x41a;
 pub const GX2_SURFACE_FORMAT_SRGB_BC1: u32 = 0x431;
 pub const GX2_TEX_CLAMP_MODE_WRAP: u32 = 0;
@@ -234,6 +248,7 @@ pub const GX2_TEX_Z_FILTER_MODE_POINT: u32 = 1;
 pub const GX2_TEX_MIP_FILTER_MODE_LINEAR: u32 = 2;
 
 #[repr(C)]
+#[derive(Clone, Copy)]
 pub struct GX2Surface {
     pub dim: u32,
     pub width: u32,

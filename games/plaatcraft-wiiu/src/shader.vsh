@@ -1,5 +1,5 @@
 ; Transforms the position by the model view and projection matrices like GX, passes the texture
-; coordinate on, mixes the day and night colors and finds the fog of the distance from the eye
+; coordinate on, mixes linear day/night colors and passes eye space positions for pixel fog
 
 ; $MODE = "UniformRegister"
 ; $SPI_VS_OUT_CONFIG.VS_EXPORT_COUNT = 2
@@ -20,12 +20,19 @@
 ; $UNIFORM_VARS[1].count = 1
 ; $UNIFORM_VARS[1].block = -1
 ; $UNIFORM_VARS[1].offset = 16
-; C7, how much of the night color shows, and the scale and offset of the fog by the eye z
+; C7, how much of the night color shows
 ; $UNIFORM_VARS[2].name = "uParams"
 ; $UNIFORM_VARS[2].type = "vec4"
 ; $UNIFORM_VARS[2].count = 1
 ; $UNIFORM_VARS[2].block = -1
 ; $UNIFORM_VARS[2].offset = 28
+
+; C8, animated water texture offset
+; $UNIFORM_VARS[3].name = "uScroll"
+; $UNIFORM_VARS[3].type = "vec4"
+; $UNIFORM_VARS[3].count = 1
+; $UNIFORM_VARS[3].block = -1
+; $UNIFORM_VARS[3].offset = 32
 
 ; R1
 ; $ATTRIB_VARS[0].name = "aPosition"
@@ -45,7 +52,7 @@
 ; $ATTRIB_VARS[3].location = 3
 
 00 CALL_FS NO_BARRIER
-01 ALU: ADDR(32) CNT(37)
+01 ALU:
     0  x: DOT4   R127.x, R1.x, C4.x
        y: DOT4   ____, R1.y, C4.y
        z: DOT4   ____, R1.z, C4.z
@@ -82,9 +89,10 @@
        y: MULADD R3.y, R4.y, C7.x, R3.y
        z: MULADD R3.z, R4.z, C7.x, R3.z
        w: MULADD R3.w, R4.w, C7.x, R3.w
-    9  x: MULADD R4.x, R127.z, C7.y, C7.z CLAMP
+    9  x: ADD    R2.x, R2.x, C8.x
+       y: ADD    R2.y, R2.y, C8.y
 02 EXP_DONE: POS0, R1
 03 EXP: PARAM0, R2 NO_BARRIER
 04 EXP: PARAM1, R3 NO_BARRIER
-05 EXP_DONE: PARAM2, R4.xxxx NO_BARRIER
+05 EXP_DONE: PARAM2, R127.xyz0 NO_BARRIER
 END_OF_PROGRAM
