@@ -86,7 +86,11 @@ workspace = true
 
 [dependencies]
 bcanvas = { path = "../../../lib/graphics/bcanvas", default-features = false }
-bwindow = { path = "../../../lib/ui/bwindow", features = ["dialog", "menu"] }
+bwindow = { path = "../../../lib/ui/bwindow", features = [
+    "dialog",
+    "file_drop",
+    "menu",
+] }
 imageview-core = { path = "../imageview-core" }
 
 [target.'cfg(not(any(target_vendor = "apple", windows)))'.dependencies]

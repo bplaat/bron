@@ -118,7 +118,7 @@ impl MediaView {
                 0,
                 class.as_ptr(),
                 null(),
-                WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS,
+                WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WS_CLIPCHILDREN,
                 0,
                 0,
                 0,

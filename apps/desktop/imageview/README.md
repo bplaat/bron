@@ -14,6 +14,7 @@ vector drawings, and follows the system light or dark theme.
 - Open slow to decode images in a window with a native loading indicator right away
 - Automatically refresh an open image when its file changes, without resetting the zoom
 - Browse previous and next images in the same folder
+- Drop an image onto a window to show it there
 - File manager previews and thumbnails for supported formats
 
 ### macOS

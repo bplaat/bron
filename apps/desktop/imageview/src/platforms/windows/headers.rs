@@ -130,6 +130,15 @@ unsafe extern "system" {
     pub(crate) fn DefWindowProcW(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT;
     pub(crate) fn SetWindowLongPtrW(hwnd: HWND, index: i32, value: isize) -> isize;
     pub(crate) fn GetWindowLongPtrW(hwnd: HWND, index: i32) -> isize;
+    pub(crate) fn MoveWindow(
+        hwnd: HWND,
+        x: i32,
+        y: i32,
+        width: i32,
+        height: i32,
+        repaint: BOOL,
+    ) -> BOOL;
+    pub(crate) fn SendMessageW(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT;
     pub(crate) fn GetClientRect(hwnd: HWND, rect: *mut RECT) -> BOOL;
     pub(crate) fn GetWindowRect(hwnd: HWND, rect: *mut RECT) -> BOOL;
     pub(crate) fn SetWindowPos(

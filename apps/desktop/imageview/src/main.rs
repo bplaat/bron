@@ -18,12 +18,13 @@ use bwindow::{
     WindowBuilder, WindowEvent, WindowId,
 };
 use imageview_core::{
-    EXTENSIONS, FileVersion, Media, ZOOM_STEP, decode_media, preferred_content_size,
+    EXTENSIONS, FileVersion, Media, ZOOM_STEP, decode_media, is_supported, preferred_content_size,
 };
 
 use crate::platforms::MediaView;
 
 mod platforms;
+#[cfg(not(windows))]
 mod viewport;
 
 // How often open files are checked for changes.
@@ -43,17 +44,14 @@ pub(crate) enum AppEvent {
     /// Open files in new windows, like the macOS recent documents menu does.
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     Open(Vec<PathBuf>),
-    /// Perform a menu action, like the Windows header bar buttons do.
-    #[cfg_attr(not(windows), allow(dead_code))]
-    Action(&'static str),
     /// Check open files for changes.
     Tick,
     /// A file finished decoding.
     Loaded(Load, Result<Media, String>),
     /// A file for a new window is still decoding after a while.
     SlowLoad(u64),
-    /// Run a menu action, like the macOS toolbar does.
-    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    /// Run a menu action from a native toolbar.
+    #[cfg_attr(not(any(target_os = "macos", windows)), allow(dead_code))]
     Action(&'static str),
 }
 
@@ -184,6 +182,7 @@ impl App {
                 platforms::MIN_SIZE.1,
             ))
             .center()
+            .allow_file_drop(true)
             .build();
         let view = MediaView::new(&window, media, self.theme);
         self.active = Some(window.id());
@@ -287,13 +286,22 @@ impl App {
         let Some(path) = platforms::neighbour_path(&window.path, offset) else {
             return;
         };
+        let id = window.window.id();
+        self.show(id, path);
+    }
+
+    // Shows another image in a window, fitted to it.
+    fn show(&mut self, id: WindowId, path: PathBuf) {
+        let Some(window) = self.window(id) else {
+            return;
+        };
         // The window moves on right away, so the next browse continues from this file even
         // when it does not decode, and reloads watch it instead of the shown one.
         window.path.clone_from(&path);
         window.version = FileVersion::of(&path);
         window.generation += 1;
         let target = Target::Replace {
-            window: window.window.id(),
+            window: id,
             generation: window.generation,
             zoom_to_fit: true,
         };
@@ -351,6 +359,8 @@ impl App {
     fn window_event(&mut self, id: WindowId, event: WindowEvent) {
         match event {
             WindowEvent::Focus => self.active = Some(id),
+            // A dropped image replaces the one in the window it is dropped on.
+            WindowEvent::DroppedFile(path) if is_supported(&path) => self.show(id, path),
             WindowEvent::ThemeChanged(theme) => {
                 self.theme = theme;
                 if let Some(window) = self.window(id) {
