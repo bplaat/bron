@@ -153,24 +153,29 @@ fn quad(
 }
 
 fn draw_box(gpu: &mut impl Gpu, material: u8, bounds: [[f32; 3]; 2], daylight: f32, sprite: bool) {
+    let tint = world::look(material).map_or([1.0; 3], |look| look.tint);
+    let daylight = [0.85, 0.92, 1.0].map(|value: f32| (value * daylight).max(0.06));
     for face in 0..6 {
         if sprite && face != 4 {
             continue;
         }
-        let positions = BOX_FACES[face]
+        let mut positions = BOX_FACES[face]
             .map(|p| core::array::from_fn(|a| bounds[0][a] + (bounds[1][a] - bounds[0][a]) * p[a]));
-        let light = if world::is_lava(material) {
-            1.0
-        } else {
-            daylight.max(0.15) * [0.8, 0.8, 1.0, 0.5, 0.65, 0.65][face]
-        };
+        if sprite {
+            for position in &mut positions {
+                position[2] = 0.5;
+            }
+        }
+        let light = core::array::from_fn(|i| {
+            daylight[i] * [0.8, 0.8, 1.0, 0.5, 0.65, 0.65][face] * tint[i]
+        });
         let tile = tiles::tile(material, if sprite { 6 } else { face as u32 });
         quad(
             gpu,
             Texture::Tile(tile),
             positions,
             BOX_UVS[face],
-            rgba(encode_rgb([light; 3])),
+            rgba(encode_rgb(light)),
         );
     }
 }
@@ -342,13 +347,12 @@ impl Renderer {
             State {
                 depth_test: true,
                 depth_write: true,
-                blend: true,
                 cutout: true,
                 ..State::default()
             },
         );
         let base = model_view(view, [0.0; 3]);
-        let color = rgba(encode_rgb([self.daylight.max(0.15); 3]));
+        let daylight = [0.85, 0.92, 1.0].map(|value: f32| (value * self.daylight).max(0.06));
         for bytes in others.instances(center, 0).as_chunks::<48>().0 {
             let v: [f32; 12] = core::array::from_fn(|i| {
                 f32::from_ne_bytes([
@@ -361,13 +365,24 @@ impl Renderer {
             let (sy, cy) = v[3].sin_cos();
             let (sp, cp) = v[4].sin_cos();
             let model = [
-                [cy, sy * sp, sy * cp, v[0]],
-                [0.0, cp, -sp, v[1]],
-                [-sy, cy * sp, cy * cp, v[2]],
+                [cy, -sy * sp, sy * cp, v[0]],
+                [0.0, cp, sp, v[1]],
+                [sy, cy * sp, -cy * cp, v[2]],
             ];
             gpu.model_view(&concat(&base, &model));
-            for (face, uvs) in BOX_FACES.into_iter().zip(BOX_UVS) {
+            for (index, face) in BOX_FACES.into_iter().enumerate() {
                 let positions = face.map(|p| core::array::from_fn(|a| v[9 + a] + p[a] * v[6 + a]));
+                let inset = 0.5 / 128.0;
+                let uvs = face.map(|p| {
+                    [
+                        (1.0 - p[2]).clamp(inset, 1.0 - inset),
+                        (1.0 - p[1]).clamp(inset, 1.0 - inset),
+                    ]
+                });
+                let color =
+                    rgba(encode_rgb(daylight.map(|value| {
+                        value * [0.8, 0.8, 1.0, 0.5, 0.65, 0.65][index]
+                    })));
                 quad(
                     gpu,
                     Texture::Character(v[5] as usize),
@@ -407,7 +422,7 @@ impl Renderer {
             gpu,
             State {
                 cull: true,
-                blend: true,
+                cutout: true,
                 ..State::default()
             },
         );
