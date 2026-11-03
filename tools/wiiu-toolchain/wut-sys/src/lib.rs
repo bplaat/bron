@@ -185,6 +185,8 @@ pub struct GX2ColorBuffer {
 }
 
 unsafe extern "C" {
+    pub fn GX2InitColorBufferRegs(buffer: *mut GX2ColorBuffer);
+    pub fn GX2SetColorBuffer(buffer: *const GX2ColorBuffer, target: u32);
     pub fn GX2Invalidate(mode: u32, buffer: *mut c_void, size: u32);
     pub fn GX2SetAttribBuffer(index: u32, size: u32, stride: u32, buffer: *const c_void);
     pub fn GX2DrawEx(mode: u32, count: u32, offset: u32, num_instances: u32);
@@ -221,10 +223,13 @@ unsafe extern "C" {
 }
 
 // MARK: GX2 textures
+pub const GX2_SURFACE_FORMAT_SRGB_R8_G8_B8_A8: u32 = 0x41a;
+pub const GX2_SURFACE_FORMAT_SRGB_BC1: u32 = 0x431;
 pub const GX2_TEX_CLAMP_MODE_WRAP: u32 = 0;
 pub const GX2_TEX_CLAMP_MODE_CLAMP: u32 = 2;
 pub const GX2_TEX_XY_FILTER_MODE_POINT: u32 = 0;
 pub const GX2_TEX_XY_FILTER_MODE_LINEAR: u32 = 1;
+pub const GX2_TEX_ANISO_RATIO_NONE: u32 = 0;
 pub const GX2_TEX_Z_FILTER_MODE_POINT: u32 = 1;
 pub const GX2_TEX_MIP_FILTER_MODE_LINEAR: u32 = 2;
 
@@ -269,6 +274,13 @@ pub struct GX2Sampler {
 
 unsafe extern "C" {
     pub fn GX2InitSampler(sampler: *mut GX2Sampler, clamp_mode: u32, min_mag_filter_mode: u32);
+    pub fn GX2InitTextureRegs(texture: *mut GX2Texture);
+    pub fn GX2InitSamplerXYFilter(
+        sampler: *mut GX2Sampler,
+        mag_filter_mode: u32,
+        min_filter_mode: u32,
+        max_aniso: u32,
+    );
     pub fn GX2InitSamplerZMFilter(
         sampler: *mut GX2Sampler,
         z_filter_mode: u32,
