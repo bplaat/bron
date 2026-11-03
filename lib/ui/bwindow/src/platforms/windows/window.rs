@@ -235,6 +235,9 @@ impl PlatformWindow {
                 window_data.as_mut() as *mut WindowData as LPARAM,
             );
             window_data.hwnd = hwnd;
+            // The window stays hidden from the screen until the application filled it, see
+            // WM_REVEAL.
+            set_cloaked(hwnd, true);
             host.set_handle(crate::NativeWindowHandle::Win32(hwnd));
             // Renderers draw into the client area, which receives the interaction.
             host.set_content(crate::NativeContentHandle::Win32(hwnd));
@@ -277,6 +280,7 @@ impl PlatformWindow {
                 ShowWindow(hwnd, SW_SHOWDEFAULT);
             }
             UpdateWindow(hwnd);
+            PostMessageW(hwnd, WM_REVEAL, 0, 0);
         }
 
         PlatformWindow(window_data)
@@ -393,6 +397,23 @@ impl crate::WindowInterface for PlatformWindow {
     }
 }
 
+/// Posted to a new window once it is shown. Applications attach content and native views right
+/// after creating a window, before the event loop handles this message, so the first frame
+/// shows the filled window instead of an empty background and later layout changes.
+const WM_REVEAL: u32 = WM_USER + 17;
+
+fn set_cloaked(hwnd: HWND, cloaked: bool) {
+    let cloaked: BOOL = cloaked.into();
+    unsafe {
+        DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_CLOAK,
+            &cloaked as *const _ as *const _,
+            size_of::<BOOL>() as u32,
+        );
+    }
+}
+
 unsafe fn set_titlebar_theme(hwnd: HWND, theme: Theme) {
     let enabled: BOOL = (theme == Theme::Dark).into();
     unsafe {
@@ -433,6 +454,12 @@ unsafe extern "system" fn window_proc(
         return result;
     }
     match msg {
+        WM_REVEAL => {
+            // Paint the window and its child windows before showing them.
+            unsafe { RedrawWindow(hwnd, null(), null_mut(), RDW_UPDATENOW | RDW_ALLCHILDREN) };
+            set_cloaked(hwnd, false);
+            0
+        }
         super::frame::WM_ANIMATION_FRAME => {
             let host = _self.host.clone();
             host.animation_frame();

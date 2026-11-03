@@ -126,6 +126,12 @@ into `WindowAttachment::content_handle()`: the client area of the window on Wind
 layer-backed view on macOS and iOS, a drawing area on GTK and the window surface on
 Android.
 
+On Windows a new window stays cloaked until the event loop handles its first messages, so
+content attached right after creating the window is painted before the window shows, without
+an empty background or a layout change first. The event loop initializes COM as a
+single-threaded apartment, which the file dialogs, file drops and hosted content like WebView2
+or WinUI XAML islands need.
+
 ## Safe Area
 
 Content fills the whole window, also under the status bar, display cutouts and the home

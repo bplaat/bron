@@ -313,6 +313,8 @@ pub(crate) const WM_NCDESTROY: u32 = 0x0082;
 pub(crate) const WM_DROPFILES: u32 = 0x0233;
 pub(crate) const WM_DPICHANGED: u32 = 0x02E0;
 pub(crate) const WM_USER: u32 = 0x0400;
+pub(crate) const RDW_ALLCHILDREN: u32 = 0x0080;
+pub(crate) const RDW_UPDATENOW: u32 = 0x0100;
 
 pub(crate) const SW_SHOW: i32 = 5;
 pub(crate) const SW_RESTORE: i32 = 9;
@@ -436,6 +438,12 @@ unsafe extern "system" {
     pub(crate) fn EndPaint(hWnd: HWND, lpPaint: *const PAINTSTRUCT) -> BOOL;
     pub(crate) fn PostQuitMessage(nExitCode: i32);
     pub(crate) fn InvalidateRect(hWnd: HWND, lpRect: *const RECT, bErase: BOOL) -> BOOL;
+    pub(crate) fn RedrawWindow(
+        hWnd: HWND,
+        lprcUpdate: *const RECT,
+        hrgnUpdate: *mut c_void,
+        flags: u32,
+    ) -> BOOL;
     pub(crate) fn MessageBoxW(
         hWnd: HWND,
         lpText: *const w_char,
@@ -531,6 +539,7 @@ unsafe extern "system" {
 }
 
 // MARK: dwmapi.dll
+pub(crate) const DWMWA_CLOAK: u32 = 13;
 pub(crate) const DWMWA_USE_IMMERSIVE_DARK_MODE: u32 = 20;
 
 #[link(name = "dwmapi")]
