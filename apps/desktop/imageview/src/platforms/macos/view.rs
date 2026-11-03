@@ -14,6 +14,7 @@ use std::ffi::c_void;
 use std::ptr::null_mut;
 
 use bcanvas::NativeContext;
+use bwindow::ffi::{file_drag_operation, perform_file_drop, register_dragged_types};
 use imageview_core::appkit::{NS_VIEW_HEIGHT_SIZABLE, NS_VIEW_WIDTH_SIZABLE, Point, Rect, Size};
 use imageview_core::{Media, PRECISE_ZOOM_RATE, WHEEL_ZOOM_RATE};
 use objc2::rc::{Allocated, Retained};
@@ -71,6 +72,29 @@ define_class!(
     pub(super) struct View;
 
     impl View {
+        #[unsafe(method(draggingEntered:))]
+        fn _dragging_entered(&self, sender: *mut Object) -> u64 {
+            // SAFETY: AppKit supplies the current dragging info on its UI thread.
+            unsafe { file_drag_operation(sender) }
+        }
+
+        #[unsafe(method(draggingUpdated:))]
+        fn _dragging_updated(&self, sender: *mut Object) -> u64 {
+            // SAFETY: AppKit supplies the current dragging info on its UI thread.
+            unsafe { file_drag_operation(sender) }
+        }
+
+        #[unsafe(method(prepareForDragOperation:))]
+        const fn _prepare_for_drag_operation(&self, _: *mut Object) -> Bool {
+            Bool::YES
+        }
+
+        #[unsafe(method(performDragOperation:))]
+        fn _perform_drag_operation(&self, sender: *mut Object) -> Bool {
+            // SAFETY: AppKit supplies the completed drag on its UI thread.
+            unsafe { perform_file_drop(sender) }
+        }
+
         #[unsafe(method(isFlipped))]
         const fn _is_flipped(&self) -> Bool {
             Bool::YES
@@ -256,6 +280,7 @@ impl View {
                 initWithFrame: frame
             ];
             let _: () = msg_send![&*view, addSubview: &*view.ivars().scroll_view];
+            register_dragged_types(Retained::as_ptr(&view) as *mut Object);
             let center: *mut Object = msg_send![class!(NSNotificationCenter), defaultCenter];
             for name in [
                 NSViewBoundsDidChangeNotification,
@@ -412,5 +437,27 @@ pub(super) const fn rect(x: f64, y: f64, width: f64, height: f64) -> Rect {
     Rect {
         origin: Point { x, y },
         size: Size { width, height },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use imageview_core::appkit::ns_string;
+    use objc2::rc::autoreleasepool;
+
+    use super::*;
+
+    #[test]
+    fn media_view_accepts_file_drops() {
+        // SAFETY: The view stays retained during the test and uses AppKit selector signatures.
+        autoreleasepool(|_| unsafe {
+            let view = View::new(rect(0.0, 0.0, 320.0, 240.0), None);
+            let types: *mut Object = msg_send![&*view, registeredDraggedTypes];
+            let accepts: Bool = msg_send![types, containsObject:ns_string("public.file-url")];
+            assert!(accepts.as_bool());
+            let handles: Bool = msg_send![&*view, respondsToSelector:sel!(performDragOperation:)];
+            assert!(handles.as_bool());
+            view.stop();
+        });
     }
 }
