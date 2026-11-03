@@ -35,10 +35,10 @@ llvm_url='https://github.com/llvm/llvm-project.git'
 llvm_version='llvmorg-23.1.3'
 llvm_commit='0d261d1ca552c95a8f007e061c787ac7132fbcbc'
 # Dolphin for dolphin/runner.cpp, cloned by the dolphin and test commands, with only the submodules
-# its core needs, all its libraries are built from them
+# its core needs, all its libraries are built from them. Fetch the pinned commit from master.
 dolphin_url='https://github.com/dolphin-emu/dolphin.git'
-dolphin_version='master'
 dolphin_commit='a0ed231ff614ec6e03716d72fa8f3a11ce57c6a0'
+dolphin_version="$dolphin_commit"
 DOLPHIN_SUBMODULES=(
     Externals/{SFML/SFML,bzip2/bzip2,cpp-ipc/cpp-ipc,cpp-optparse/cpp-optparse,curl/curl,enet/enet}
     Externals/{fmt/fmt,glslang/glslang,hidapi/hidapi-src,imgui/imgui,implot/implot,libspng/libspng}
@@ -115,7 +115,7 @@ outdated() {
     [ ! -e "$target" ] || [ -n "$(find "$@" -newer "$target" -print -quit)" ]
 }
 
-# Clones a tag of a repo to dir (unless present) and verifies its commit, when paths are given
+# Clones a tag or commit of a repo to dir (unless present) and verifies its commit, when paths are given
 # only those are checked out
 clone() {
     local url="$1" version="$2" commit="$3" dir="$4"
@@ -123,8 +123,12 @@ clone() {
     [ -d "$dir" ] && return
     msg "Cloning $url $version"
     rm -rf "$dir.part"
-    # Annotated release tags make git warn that the tag "is not a commit", which it is
-    if [ $# -gt 0 ]; then
+    if [ "$version" = "$commit" ]; then
+        git init -q "$dir.part"
+        git -C "$dir.part" fetch -q --depth 1 "$url" "$commit"
+        git -C "$dir.part" -c advice.detachedHead=false checkout -q FETCH_HEAD
+    elif [ $# -gt 0 ]; then
+        # Annotated release tags make git warn that the tag "is not a commit", which it is
         git -c advice.detachedHead=false clone -q --depth 1 --branch "$version" --filter=blob:none \
             --sparse "$url" "$dir.part" 2>&1 | grep -v 'is not a commit' >&2 || true
         git -C "$dir.part" sparse-checkout set --no-cone "$@"
