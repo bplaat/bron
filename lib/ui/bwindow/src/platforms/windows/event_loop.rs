@@ -32,9 +32,7 @@ pub(crate) struct PlatformEventLoop {
 impl PlatformEventLoop {
     pub(crate) fn new(builder: EventLoopBuilder) -> Self {
         unsafe {
-            // Initialize OLE (and COM as a single-threaded apartment). OLE
-            // initialization is required for RegisterDragDrop to succeed.
-            #[cfg(feature = "file_drop")]
+            // Initialize OLE (and COM as a single-threaded apartment).
             OleInitialize(null_mut());
 
             // Explorer creates the taskbar button asynchronously. Shell APIs must
@@ -230,10 +228,7 @@ impl Drop for PlatformEventLoop {
         self.single_instance.take();
         crate::dispatch::shutdown(&self.mailbox);
         unsafe { DestroyWindow(self.message_window) };
-        #[cfg(feature = "file_drop")]
-        unsafe {
-            OleUninitialize()
-        };
+        unsafe { OleUninitialize() };
     }
 }
 
