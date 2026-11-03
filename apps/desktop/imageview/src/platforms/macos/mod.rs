@@ -33,6 +33,9 @@ mod headers;
 mod toolbar;
 mod view;
 
+/// The smallest window.
+pub(crate) const MIN_SIZE: (f32, f32) = (240.0, 180.0);
+
 thread_local! {
     static PROXY: RefCell<Option<EventLoopProxy<AppEvent>>> = const { RefCell::new(None) };
 }

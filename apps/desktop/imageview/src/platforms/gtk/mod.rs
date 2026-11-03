@@ -30,6 +30,9 @@ mod toolbar;
 
 pub(crate) use toolbar::init;
 
+/// The smallest window.
+pub(crate) const MIN_SIZE: (f32, f32) = (240.0, 180.0);
+
 struct State {
     viewport: RefCell<Viewport>,
     dark: Cell<bool>,

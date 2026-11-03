@@ -8,9 +8,6 @@
 
 use std::path::{Path, PathBuf};
 
-#[cfg(windows)]
-use crate::AppEvent;
-
 /// Returns the path of the image `offset` places from `path` inside its folder.
 pub(crate) fn neighbour_path(path: &Path, offset: isize) -> Option<PathBuf> {
     imageview_core::neighbour_path(
@@ -23,7 +20,3 @@ pub(crate) fn neighbour_path(path: &Path, offset: isize) -> Option<PathBuf> {
 
 /// Recent files are left to the file manager.
 pub(crate) const fn note_recent_file(_path: &Path) {}
-
-/// There is nothing to set up.
-#[cfg(windows)]
-pub(crate) fn init(_proxy: bwindow::EventLoopProxy<AppEvent>) {}

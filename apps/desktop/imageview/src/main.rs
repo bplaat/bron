@@ -43,6 +43,9 @@ pub(crate) enum AppEvent {
     /// Open files in new windows, like the macOS recent documents menu does.
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     Open(Vec<PathBuf>),
+    /// Perform a menu action, like the Windows header bar buttons do.
+    #[cfg_attr(not(windows), allow(dead_code))]
+    Action(&'static str),
     /// Check open files for changes.
     Tick,
     /// A file finished decoding.
@@ -172,8 +175,14 @@ impl App {
         let width = width.max(MINIMUM_TOOLBAR_WIDTH);
         let window = WindowBuilder::new()
             .title(title(&path, media.as_ref()))
-            .size(LogicalSize::new(width as f32, height as f32))
-            .min_size(LogicalSize::new(240.0, 180.0))
+            .size(LogicalSize::new(
+                (width as f32).max(platforms::MIN_SIZE.0),
+                (height as f32).max(platforms::MIN_SIZE.1),
+            ))
+            .min_size(LogicalSize::new(
+                platforms::MIN_SIZE.0,
+                platforms::MIN_SIZE.1,
+            ))
             .center()
             .build();
         let view = MediaView::new(&window, media, self.theme);

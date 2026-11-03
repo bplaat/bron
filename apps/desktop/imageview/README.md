@@ -26,9 +26,14 @@ vector drawings, and follows the system light or dark theme.
 
 ### Windows
 
+- A WinUI 3 window from one XAML island, through handwritten Windows App SDK bindings without
+  extra crates: a header bar with the toolbar buttons in the title bar, like a GTK header bar or
+  a unified macOS toolbar, with Mica and tall caption buttons, above a ScrollViewer with overlay
+  scroll bars, touch and touchpad pinch zoom and panning by dragging. Vector images are drawn
+  again at the magnification they settle at, so they stay sharp
 - File Explorer thumbnails and preview pane from the [shell extension](../imageview-windows-shell),
   which the MSIX package registers without changing the registry
-- Dark scroll bars in the dark theme
+- Light and dark themes, also for the scroll bars and caption buttons
 
 ### Linux
 

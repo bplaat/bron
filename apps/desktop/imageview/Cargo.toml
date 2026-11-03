@@ -33,6 +33,7 @@ entitlements = "../imageview-macos-thumbnail/Entitlements.plist"
 
 [package.metadata.bundle.windows]
 assets = "meta/windows"
+windows_app_sdk = "2.0"
 
 [[package.metadata.bundle.windows.file_types]]
 name = "BMP Image"

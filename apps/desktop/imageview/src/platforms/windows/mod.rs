@@ -4,46 +4,91 @@
  * SPDX-License-Identifier: MIT
  */
 
-//! The Win32 media view: a child window with native scroll bars, dark in the dark theme, that
-//! draws the viewport with bcanvas.
+//! The Windows media view: a WinUI 3 XAML island filling the window, with a header bar in the
+//! title bar and a scroll viewer that zooms and pans the media over a checkerboard, following
+//! the system light or dark theme. Media is drawn into XAML bitmaps, vector media again at the
+//! magnification it settles at so it stays sharp.
 
 #![allow(unsafe_code)]
 
 use std::cell::{Cell, RefCell};
+use std::ffi::c_void;
 use std::ptr::{null, null_mut};
+use std::rc::Rc;
 use std::sync::Once;
+use std::time::Instant;
 
-use bcanvas::HwndCanvas;
-use bwindow::{NativeViewHandle, NativeWindowHandle, Theme, Window, WindowAttachment};
-use imageview_core::{Media, WHEEL_ZOOM_RATE};
+use bcanvas::OffscreenCanvas;
+use bwindow::{
+    EventLoopProxy, NativeViewHandle, NativeWindowHandle, Theme, Window, WindowAttachment,
+};
+use imageview_core::{
+    Media, MediaRenderer, clamp_magnification, draw_checkerboard, fit_magnification, window_title,
+};
 
 use self::headers::*;
-use crate::viewport::{Axis, LINE, Step, Viewport};
+use self::winui::{Bitmap, HEADER_HEIGHT, Island, MIN_WIDTH};
+use crate::AppEvent;
 
 mod headers;
+mod winrt;
+mod winui;
 
-const CLASS_NAME: &str = "ImageViewMediaView";
+const CLASS_NAME: &str = "ImageViewContent";
+const FRAME_SUBCLASS: usize = 1;
 const ANIMATION_TIMER: usize = 1;
+// The longest side of a media bitmap in pixels, larger media is drawn scaled down.
+const MAX_BITMAP: f64 = 8192.0;
+// The checkerboard grows in steps of this many pixels, so resizing rarely draws it again.
+const CHECKERBOARD_STEP: u32 = 512;
+
+/// The smallest window, wide enough for the header bar.
+pub(crate) const MIN_SIZE: (f32, f32) = (MIN_WIDTH as f32, 240.0);
+
+thread_local! {
+    static PROXY: RefCell<Option<EventLoopProxy<AppEvent>>> = const { RefCell::new(None) };
+}
+
+/// Loads WinUI and keeps the proxy the header bar buttons send their actions with.
+pub(crate) fn init(proxy: EventLoopProxy<AppEvent>) {
+    winui::init();
+    PROXY.with(|stored| *stored.borrow_mut() = Some(proxy));
+}
+
+fn send_action(action: &'static str) {
+    PROXY.with(|proxy| {
+        if let Some(proxy) = proxy.borrow().as_ref() {
+            _ = proxy.send_user_event(AppEvent::Action(action));
+        }
+    });
+}
 
 struct State {
-    hwnd: Cell<HWND>,
-    canvas: RefCell<Option<HwndCanvas>>,
-    viewport: RefCell<Viewport>,
+    // The window filling the client area, which hosts the island.
+    content: Cell<HWND>,
+    // The top-level window.
+    window: Cell<HWND>,
+    island: RefCell<Option<Island>>,
+    renderer: RefCell<Option<MediaRenderer>>,
+    bitmap: RefCell<Option<Bitmap>>,
+    // The checkerboard bitmap, whether it is dark and its scale.
+    checkerboard: RefCell<Option<(Bitmap, bool, f64)>>,
     dark: Cell<bool>,
-    updating_scroll_bars: Cell<bool>,
-    // The marquee progress bar shown until the media is decoded, or null.
+    // The shown animation frame and when the animation started.
+    frame: Cell<usize>,
+    start: Cell<Instant>,
+    // The loading indicator shown until the first media is decoded.
     spinner: Cell<HWND>,
 }
 
-/// A native view that zooms and pans media.
+/// A native scroll view that zooms and pans media.
 pub(crate) struct MediaView {
-    state: Box<State>,
+    state: Rc<State>,
     _attachment: WindowAttachment,
 }
 
 impl MediaView {
-    /// Fills the window with the media zoomed to fit, or a loading indicator until the media
-    /// is set.
+    /// Fills the window with the media, zoomed to fit.
     pub(crate) fn new(window: &Window, media: Option<Media>, theme: Theme) -> Self {
         let loading = media.is_none();
         let attachment = window.attach_content().expect("window has no content yet");
@@ -52,28 +97,28 @@ impl MediaView {
         else {
             panic!("expected a Win32 window");
         };
-        let size = window.size();
-        let state = Box::new(State {
-            hwnd: Cell::new(null_mut()),
-            canvas: RefCell::new(None),
-            viewport: RefCell::new(Viewport::new(
-                media,
-                (f64::from(size.width), f64::from(size.height)),
-            )),
+        let state = Rc::new(State {
+            content: Cell::new(null_mut()),
+            window: Cell::new(parent),
+            island: RefCell::new(None),
+            renderer: RefCell::new(media.map(MediaRenderer::new)),
+            bitmap: RefCell::new(None),
+            checkerboard: RefCell::new(None),
             dark: Cell::new(theme == Theme::Dark),
-            updating_scroll_bars: Cell::new(false),
+            frame: Cell::new(0),
+            start: Cell::new(Instant::now()),
             spinner: Cell::new(null_mut()),
         });
         register_class();
         let class = wide(CLASS_NAME);
-        // SAFETY: The class is registered and the boxed state outlives the window, which this
-        // view destroys before dropping it.
-        unsafe {
-            let hwnd = CreateWindowExW(
+        // SAFETY: The class is registered and the state outlives the window, which this view
+        // destroys before dropping the state.
+        let content = unsafe {
+            let content = CreateWindowExW(
                 0,
                 class.as_ptr(),
                 null(),
-                WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WS_CLIPCHILDREN | WS_HSCROLL | WS_VSCROLL,
+                WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS,
                 0,
                 0,
                 0,
@@ -83,19 +128,42 @@ impl MediaView {
                 GetModuleHandleW(null()),
                 null_mut(),
             );
-            assert!(!hwnd.is_null(), "could not create the media view");
-            SetWindowLongPtrW(hwnd, GWLP_USERDATA, &*state as *const State as isize);
-            state.hwnd.set(hwnd);
-            *state.canvas.borrow_mut() = Some(HwndCanvas::new(hwnd));
-            state.apply_theme();
-            attachment.set_native_view(NativeViewHandle::Win32(hwnd));
-            if loading {
-                state.add_spinner();
+            assert!(!content.is_null(), "could not create the media view");
+            SetWindowLongPtrW(content, GWLP_USERDATA, Rc::as_ptr(&state) as isize);
+            content
+        };
+        state.content.set(content);
+
+        // The window was sized for the media, which goes below the header bar.
+        let mut media = RECT::default();
+        // SAFETY: The window is alive.
+        unsafe { GetClientRect(parent, &mut media) };
+        let zoomed = Rc::downgrade(&state);
+        let island = Island::new(content, parent, state.dark.get(), send_action, move || {
+            if let Some(state) = zoomed.upgrade() {
+                state.zoomed();
             }
+        });
+        fit_below_header(parent, &media);
+        // SAFETY: GetActiveWindow reads the state of this thread.
+        island.set_active(unsafe { GetActiveWindow() } == parent);
+        *state.island.borrow_mut() = Some(island);
+        state.update_heading();
+        // SAFETY: The windows are alive, the subclass is removed before the state is freed.
+        unsafe {
+            SetWindowSubclass(
+                parent,
+                frame_proc,
+                FRAME_SUBCLASS,
+                Rc::as_ptr(&state) as usize,
+            );
+            attachment.set_native_view(NativeViewHandle::Win32(content));
         }
-        // The view has its size now.
-        state.update(Viewport::zoom_to_fit);
-        state.animate();
+        if loading {
+            state.add_spinner();
+        }
+        state.zoom_to_fit();
+        state.start_animation();
         Self {
             state,
             _attachment: attachment,
@@ -104,46 +172,71 @@ impl MediaView {
 
     /// Replaces the media, keeping the zoom or fitting it to the window.
     pub(crate) fn set_media(&mut self, media: Media, zoom_to_fit: bool) {
-        self.state
-            .update(|viewport| viewport.set_media(media, zoom_to_fit));
-        self.state.animate();
-        let spinner = self.state.spinner.replace(null_mut());
+        let state = &self.state;
+        let spinner = state.spinner.replace(null_mut());
         if !spinner.is_null() {
-            // SAFETY: The spinner is a live child window of the view.
+            // SAFETY: The spinner is a live child window owned by the content.
             unsafe { DestroyWindow(spinner) };
         }
+        *state.renderer.borrow_mut() = Some(MediaRenderer::new(media));
+        // A new bitmap shows the new media, also when it has the same size.
+        state.bitmap.borrow_mut().take();
+        state.frame.set(0);
+        state.start.set(Instant::now());
+        state.update_heading();
+        if zoom_to_fit {
+            state.zoom_to_fit();
+        } else {
+            state.render(state.zoom_factor());
+        }
+        state.start_animation();
     }
 
     /// Magnifies by `factor`, keeping the middle of the visible area in place.
     pub(crate) fn zoom_by(&self, factor: f64) {
-        self.state.update(|viewport| viewport.zoom_by(factor, None));
+        self.state.zoom_by(factor);
     }
 
     /// Shows the media at its natural size.
     pub(crate) fn actual_size(&self) {
-        self.state.update(Viewport::actual_size);
+        let state = &self.state;
+        let (view, media) = (state.viewport(), state.media_size());
+        state.change_view(((media.0 - view.0) / 2.0, (media.1 - view.1) / 2.0), 1.0);
     }
 
     /// Shows all of the media.
     pub(crate) fn zoom_to_fit(&self) {
-        self.state.update(Viewport::zoom_to_fit);
+        self.state.zoom_to_fit();
     }
 
     /// Follows the light or dark theme of the window.
     pub(crate) fn theme_changed(&self, theme: Theme) {
-        self.state.dark.set(theme == Theme::Dark);
-        self.state.apply_theme();
+        let state = &self.state;
+        state.dark.set(theme == Theme::Dark);
+        if let Some(island) = state.island.borrow().as_ref() {
+            island.set_dark(theme == Theme::Dark);
+        }
+        state.update_checkerboard();
+        // SAFETY: The content is alive while the state is.
+        unsafe { InvalidateRect(state.content.get(), null(), 1) };
     }
 }
 
 impl Drop for MediaView {
     fn drop(&mut self) {
-        let hwnd = self.state.hwnd.get();
-        // SAFETY: The window procedure forgets the state before it is freed.
+        let state = &self.state;
+        // SAFETY: The window procedure and the subclass forget the state before it is freed,
+        // destroying the content also destroys the island inside it.
         unsafe {
-            if IsWindow(hwnd) != 0 {
-                SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
-                DestroyWindow(hwnd);
+            let window = state.window.get();
+            if IsWindow(window) != 0 {
+                RemoveWindowSubclass(window, frame_proc, FRAME_SUBCLASS);
+            }
+            state.island.borrow_mut().take();
+            let content = state.content.get();
+            if IsWindow(content) != 0 {
+                SetWindowLongPtrW(content, GWLP_USERDATA, 0);
+                DestroyWindow(content);
             }
         }
     }
@@ -158,7 +251,7 @@ fn register_class() {
             let atom = RegisterClassExW(&WNDCLASSEXW {
                 cbSize: size_of::<WNDCLASSEXW>() as u32,
                 style: 0,
-                lpfnWndProc: window_proc,
+                lpfnWndProc: content_proc,
                 cbClsExtra: 0,
                 cbWndExtra: 0,
                 hInstance: GetModuleHandleW(null()),
@@ -172,6 +265,63 @@ fn register_class() {
             assert!(atom != 0, "could not register the media view class");
         }
     });
+}
+
+// Resizes a window around its center so the area below the header bar is `media`, the client
+// area it had before its content extended into the title bar.
+fn fit_below_header(window: HWND, media: &RECT) {
+    let (mut client, mut frame) = (RECT::default(), RECT::default());
+    // SAFETY: The window is alive.
+    let scale = unsafe {
+        GetClientRect(window, &mut client);
+        GetWindowRect(window, &mut frame);
+        f64::from(GetDpiForWindow(window).max(96)) / 96.0
+    };
+    let header = (HEADER_HEIGHT * scale).round() as i32;
+    let grow = (
+        media.right - client.right,
+        media.bottom + header - client.bottom,
+    );
+    if grow == (0, 0) {
+        return;
+    }
+    // SAFETY: The window is alive, it is not shown yet.
+    unsafe {
+        SetWindowPos(
+            window,
+            null_mut(),
+            frame.left - grow.0 / 2,
+            frame.top - grow.1 / 2,
+            frame.right - frame.left + grow.0,
+            frame.bottom - frame.top + grow.1,
+            SWP_NOZORDER | SWP_NOACTIVATE,
+        )
+    };
+}
+
+fn window_text(hwnd: HWND) -> String {
+    // SAFETY: The buffer holds the text and its terminator.
+    unsafe {
+        let mut text = vec![0u16; GetWindowTextLengthW(hwnd).max(0) as usize + 1];
+        let length = GetWindowTextW(hwnd, text.as_mut_ptr(), text.len() as i32);
+        String::from_utf16_lossy(&text[..length.max(0) as usize])
+    }
+}
+
+// Converts straight-alpha RGBA pixels to the premultiplied BGRA pixels of a bitmap.
+fn premultiplied_bgra(rgba: &[u8]) -> Vec<u8> {
+    let mut pixels = rgba.to_vec();
+    for pixel in pixels.as_chunks_mut::<4>().0 {
+        let [red, green, blue, alpha] = *pixel;
+        let premultiply = |channel: u8| (u16::from(channel) * u16::from(alpha) / 255) as u8;
+        *pixel = [
+            premultiply(blue),
+            premultiply(green),
+            premultiply(red),
+            alpha,
+        ];
+    }
+    pixels
 }
 
 impl State {
@@ -193,7 +343,7 @@ impl State {
                 0,
                 0,
                 0,
-                self.hwnd.get(),
+                self.content.get(),
                 null_mut(),
                 GetModuleHandleW(null()),
                 null_mut(),
@@ -219,7 +369,7 @@ impl State {
         let (width, height) = ((SIZE.0 * scale) as i32, (SIZE.1 * scale) as i32);
         // SAFETY: The view and its progress bar are alive.
         unsafe {
-            GetClientRect(self.hwnd.get(), &mut rect);
+            GetClientRect(self.content.get(), &mut rect);
             MoveWindow(
                 spinner,
                 (rect.right - width) / 2,
@@ -232,161 +382,257 @@ impl State {
     }
 
     fn scale(&self) -> f64 {
-        // SAFETY: The window is alive while the state is.
-        f64::from(unsafe { GetDpiForWindow(self.hwnd.get()) }.max(96)) / 96.0
+        // SAFETY: The content is alive while the state is.
+        f64::from(unsafe { GetDpiForWindow(self.content.get()) }.max(96)) / 96.0
     }
 
-    // A point in client pixels in logical pixels.
-    fn logical(&self, (x, y): (i32, i32)) -> (f64, f64) {
+    // The area of the scroll viewer in logical pixels.
+    fn viewport(&self) -> (f64, f64) {
+        let mut rect = RECT::default();
+        // SAFETY: The content is alive while the state is.
+        unsafe { GetClientRect(self.content.get(), &mut rect) };
         let scale = self.scale();
-        (f64::from(x) / scale, f64::from(y) / scale)
+        (
+            f64::from(rect.right) / scale,
+            (f64::from(rect.bottom) / scale - HEADER_HEIGHT).max(0.0),
+        )
     }
 
-    // Changes the viewport, then shows the change in the scroll bars and the view.
-    fn update(&self, change: impl FnOnce(&mut Viewport)) {
-        change(&mut self.viewport.borrow_mut());
-        self.refresh();
+    fn media_size(&self) -> (f64, f64) {
+        self.renderer
+            .borrow()
+            .as_ref()
+            .map_or((1.0, 1.0), |renderer| renderer.media().size())
     }
 
-    fn refresh(&self) {
-        self.update_scroll_bars();
-        self.redraw();
+    fn zoom_factor(&self) -> f64 {
+        self.island
+            .borrow()
+            .as_ref()
+            .map_or(1.0, Island::zoom_factor)
     }
 
-    fn update_scroll_bars(&self) {
-        // Showing or hiding a scroll bar resizes the view, which can change the other bar,
-        // so the bars are set twice without reentering from the resize.
-        if self.updating_scroll_bars.replace(true) {
-            return;
+    // Scrolls to `offsets` of the media at `magnification` and draws it for that size.
+    fn change_view(&self, offsets: (f64, f64), magnification: f64) {
+        let magnification = clamp_magnification(magnification);
+        if let Some(island) = self.island.borrow().as_ref() {
+            island.change_view(Some(offsets.0), Some(offsets.1), Some(magnification));
         }
-        let scale = self.scale();
-        for _ in 0..2 {
-            for axis in Axis::BOTH {
-                let bar = self.viewport.borrow().scroll_bar(axis);
-                let mut info = SCROLLINFO::new(SIF_RANGE | SIF_PAGE | SIF_POS);
-                info.nMax = (bar.length * scale).round() as i32 - 1;
-                info.nPage = (bar.page * scale).round() as u32;
-                info.nPos = (bar.position * scale).round() as i32;
-                // SAFETY: The window is alive, scroll bars hide when everything is visible.
-                unsafe { SetScrollInfo(self.hwnd.get(), bar_of(axis), &info, 1) };
-            }
-        }
-        self.updating_scroll_bars.set(false);
+        self.render(magnification);
     }
 
-    fn apply_theme(&self) {
-        let theme = wide(if self.dark.get() {
-            "DarkMode_Explorer"
-        } else {
-            "Explorer"
-        });
-        // SAFETY: The window is alive and the theme name is copied by the system.
-        unsafe { SetWindowTheme(self.hwnd.get(), theme.as_ptr(), null()) };
-        self.redraw();
-    }
-
-    fn redraw(&self) {
-        // SAFETY: The window is alive while the state is.
-        unsafe { InvalidateRect(self.hwnd.get(), null(), 0) };
-    }
-
-    fn paint(&self) {
-        let mut canvas = self.canvas.borrow_mut();
-        let Some(canvas) = canvas.as_mut() else {
+    // Magnifies by `factor`, keeping the middle of the visible area in place.
+    fn zoom_by(&self, factor: f64) {
+        let (Some((x, y)), magnification) = (
+            self.island.borrow().as_ref().map(Island::offsets),
+            self.zoom_factor(),
+        ) else {
             return;
         };
-        canvas.paint(|context| self.viewport.borrow().paint(context, self.dark.get()));
+        let (view, media) = (self.viewport(), self.media_size());
+        let target = clamp_magnification(magnification * factor);
+        // The media is centered while it is smaller than the view.
+        let margin = |view: f64, media: f64, magnification: f64| {
+            ((view - media * magnification) / 2.0).max(0.0)
+        };
+        let middle = |offset: f64, view: f64, media: f64| {
+            let point = (offset + view / 2.0 - margin(view, media, magnification)) / magnification;
+            point * target + margin(view, media, target) - view / 2.0
+        };
+        self.change_view(
+            (middle(x, view.0, media.0), middle(y, view.1, media.1)),
+            target,
+        );
+    }
+
+    fn zoom_to_fit(&self) {
+        let magnification = fit_magnification(self.viewport(), self.media_size());
+        self.change_view((0.0, 0.0), magnification);
+    }
+
+    // The scroll viewer settled, vector media is drawn again for its magnification.
+    fn zoomed(&self) {
+        if self
+            .renderer
+            .borrow()
+            .as_ref()
+            .is_some_and(|renderer| matches!(renderer.media(), Media::Vector(_)))
+        {
+            self.render(self.zoom_factor());
+        }
+    }
+
+    // The pixel size of the media bitmap: raster media at its own size, vector media at the size
+    // it is shown, both at most the largest bitmap.
+    fn bitmap_size(&self, magnification: f64) -> (u32, u32) {
+        let renderer = self.renderer.borrow();
+        let Some(renderer) = renderer.as_ref() else {
+            return (1, 1);
+        };
+        let (width, height) = match renderer.media() {
+            Media::Raster(raster) => (f64::from(raster.width), f64::from(raster.height)),
+            Media::Vector(_) => {
+                let (width, height) = renderer.media().size();
+                let scale = magnification * self.scale();
+                (width * scale, height * scale)
+            }
+        };
+        let shrink = (MAX_BITMAP / width.max(height)).min(1.0);
+        (
+            (width * shrink).round().max(1.0) as u32,
+            (height * shrink).round().max(1.0) as u32,
+        )
+    }
+
+    // Draws the shown frame of the media into its bitmap, which gets the size the media is
+    // shown at.
+    fn render(&self, magnification: f64) {
+        let size = self.bitmap_size(magnification);
+        let renderer = self.renderer.borrow();
+        let Some(renderer) = renderer.as_ref() else {
+            return;
+        };
+        let mut bitmap = self.bitmap.borrow_mut();
+        let fresh = bitmap.as_ref().is_none_or(|bitmap| bitmap.size() != size);
+        if fresh {
+            *bitmap = Bitmap::new(size.0, size.1);
+        } else if matches!(renderer.media(), Media::Vector(_)) {
+            // Vector media has one frame, which is drawn at this size already.
+            return;
+        }
+        let Some(target) = bitmap.as_ref() else {
+            return;
+        };
+        match renderer.media() {
+            Media::Raster(raster) if (raster.width, raster.height) == size => {
+                if let Some(frame) = raster.frames.get(self.frame.get()) {
+                    target.write(&frame.pixels);
+                }
+            }
+            _ => {
+                let mut canvas = OffscreenCanvas::new(size.0, size.1);
+                canvas.draw(|context| {
+                    renderer.draw(
+                        context,
+                        self.frame.get(),
+                        (0.0, 0.0, size.0 as f32, size.1 as f32),
+                    );
+                });
+                target.write(&premultiplied_bgra(canvas.pixels()));
+            }
+        }
+        if fresh && let Some(island) = self.island.borrow().as_ref() {
+            island.set_media(target, renderer.media().size());
+        }
+    }
+
+    // Draws the checkerboard behind the media when the view outgrew it or the theme changed.
+    // It is centered and drawn larger than the view, so its tiles stay in place while resizing.
+    fn update_checkerboard(&self) {
+        let island = self.island.borrow();
+        let Some(island) = island.as_ref() else {
+            return;
+        };
+        let mut rect = RECT::default();
+        // SAFETY: The content is alive while the state is.
+        unsafe { GetClientRect(self.content.get(), &mut rect) };
+        let scale = self.scale();
+        let step =
+            |pixels: i32| (pixels.max(1) as u32).div_ceil(CHECKERBOARD_STEP) * CHECKERBOARD_STEP;
+        let needed = (step(rect.right), step(rect.bottom));
+        let dark = self.dark.get();
+        let mut checkerboard = self.checkerboard.borrow_mut();
+        if checkerboard
+            .as_ref()
+            .is_some_and(|(bitmap, drawn_dark, drawn_scale)| {
+                *drawn_dark == dark
+                    && *drawn_scale == scale
+                    && bitmap.size().0 >= needed.0
+                    && bitmap.size().1 >= needed.1
+            })
+        {
+            return;
+        }
+        let logical = (
+            (f64::from(needed.0) / scale).ceil() as u32,
+            (f64::from(needed.1) / scale).ceil() as u32,
+        );
+        let mut canvas = OffscreenCanvas::with_scale_factor(logical.0, logical.1, scale as f32);
+        canvas.draw(|context| {
+            draw_checkerboard(context, logical.0 as f32, logical.1 as f32, dark);
+        });
+        let Some(bitmap) = Bitmap::new(canvas.width(), canvas.height()) else {
+            return;
+        };
+        bitmap.write(&premultiplied_bgra(canvas.pixels()));
+        island.set_checkerboard(
+            &bitmap,
+            (
+                f64::from(canvas.width()) / scale,
+                f64::from(canvas.height()) / scale,
+            ),
+        );
+        *checkerboard = Some((bitmap, dark, scale));
     }
 
     // Shows the current animation frame and schedules the next one.
-    fn animate(&self) {
-        let (changed, next) = self.viewport.borrow_mut().advance_frame();
-        if changed {
-            self.redraw();
+    fn start_animation(&self) {
+        let (frame, next) = {
+            let renderer = self.renderer.borrow();
+            let Some(renderer) = renderer.as_ref() else {
+                return;
+            };
+            renderer.media().frame_at(self.start.get().elapsed())
+        };
+        if self.frame.replace(frame) != frame {
+            self.render(self.zoom_factor());
         }
-        // SAFETY: The window is alive and owns its timer.
+        // SAFETY: The content is alive and owns its timer.
         unsafe {
             match next {
                 Some(next) => SetTimer(
-                    self.hwnd.get(),
+                    self.content.get(),
                     ANIMATION_TIMER,
                     next.as_millis().max(1) as u32,
                     null(),
                 ),
-                None => KillTimer(self.hwnd.get(), ANIMATION_TIMER) as usize,
+                None => KillTimer(self.content.get(), ANIMATION_TIMER) as usize,
             };
         }
     }
 
-    // Scrolls an axis for a scroll bar request.
-    fn scroll_bar(&self, axis: Axis, request: u16) {
-        let step = match request {
-            SB_LINEUP => Step::LineBack,
-            SB_LINEDOWN => Step::LineForward,
-            SB_PAGEUP => Step::PageBack,
-            SB_PAGEDOWN => Step::PageForward,
-            SB_TOP => Step::Start,
-            SB_BOTTOM => Step::End,
-            SB_THUMBTRACK => {
-                let mut info = SCROLLINFO::new(SIF_TRACKPOS);
-                // SAFETY: The window is alive and the scroll info is valid.
-                unsafe { GetScrollInfo(self.hwnd.get(), bar_of(axis), &mut info) };
-                let position = f64::from(info.nTrackPos) / self.scale();
-                self.update(|viewport| viewport.scroll_axis(axis, position));
-                return;
-            }
-            _ => return,
+    // Shows the file name of the window title in the header bar, with the media size below it.
+    fn update_heading(&self) {
+        let island = self.island.borrow();
+        let Some(island) = island.as_ref() else {
+            return;
         };
-        self.update(|viewport| viewport.step(axis, step));
-    }
-
-    // Control + wheel magnifies around the pointer, shift + wheel scrolls horizontally.
-    fn wheel(&self, wparam: WPARAM, lparam: LPARAM, horizontal: bool) {
-        let lines = f64::from((wparam >> 16) as u16 as i16) / WHEEL_DELTA;
-        // SAFETY: GetKeyState reads the keyboard state of this thread.
-        let (control, shift) = unsafe { (GetKeyState(VK_CONTROL) < 0, GetKeyState(VK_SHIFT) < 0) };
-        if control && !horizontal {
-            let mut point = POINT {
-                x: (lparam & 0xffff) as i16 as i32,
-                y: ((lparam >> 16) & 0xffff) as i16 as i32,
-            };
-            // SAFETY: The window is alive, wheel positions are in screen coordinates.
-            unsafe { ScreenToClient(self.hwnd.get(), &mut point) };
-            let anchor = self.logical((point.x, point.y));
-            self.update(|viewport| {
-                viewport.zoom_by((lines * WHEEL_ZOOM_RATE).exp(), Some(anchor));
-            });
-        } else if horizontal || shift {
-            let sign = if horizontal { 1.0 } else { -1.0 };
-            self.update(|viewport| viewport.scroll_by((sign * lines * LINE, 0.0)));
-        } else {
-            self.update(|viewport| viewport.scroll_by((0.0, -lines * LINE)));
+        if self.renderer.borrow().is_none() {
+            island.set_title(&window_text(self.window.get()), "Loading...");
+            return;
         }
+        let (width, height) = self.media_size();
+        let title = window_text(self.window.get());
+        let name = title
+            .strip_suffix(&window_title("", (width, height)))
+            .unwrap_or(&title);
+        let subtitle = format!("{} × {}", width.round() as i64, height.round() as i64);
+        island.set_title(name, &subtitle);
     }
 
-    fn key(&self, key: usize) -> bool {
-        let step = match key {
-            VK_UP => Step::LineBack,
-            VK_DOWN => Step::LineForward,
-            VK_PRIOR => Step::PageBack,
-            VK_NEXT => Step::PageForward,
-            VK_HOME => Step::Start,
-            VK_END => Step::End,
-            _ => return false,
-        };
-        self.update(|viewport| viewport.step(Axis::Vertical, step));
-        true
-    }
-}
-
-const fn bar_of(axis: Axis) -> i32 {
-    match axis {
-        Axis::Horizontal => SB_HORZ,
-        Axis::Vertical => SB_VERT,
+    // Fills the content with the island and draws the checkerboard for its size, and vector
+    // media for a changed scale.
+    fn layout(&self, width: i32, height: i32) {
+        self.layout_spinner();
+        if let Some(island) = self.island.borrow().as_ref() {
+            island.move_and_resize(width, height, self.scale());
+        }
+        self.update_checkerboard();
+        self.zoomed();
     }
 }
 
-unsafe extern "system" fn window_proc(
+unsafe extern "system" fn content_proc(
     hwnd: HWND,
     message: u32,
     wparam: WPARAM,
@@ -394,63 +640,73 @@ unsafe extern "system" fn window_proc(
 ) -> LRESULT {
     // SAFETY: The user data is the state of the view, which clears it before freeing it.
     let state = unsafe { (GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const State).as_ref() };
-    let Some(state) = state else {
-        // SAFETY: Messages without state get the default handling.
-        return unsafe { DefWindowProcW(hwnd, message, wparam, lparam) };
-    };
-    let point = (
-        (lparam & 0xffff) as i16 as i32,
-        ((lparam >> 16) & 0xffff) as i16 as i32,
-    );
-    match message {
-        WM_PAINT => state.paint(),
-        WM_ERASEBKGND => return 1,
-        WM_SIZE => {
-            let mut rect = RECT::default();
-            // SAFETY: The window is alive.
-            unsafe { GetClientRect(hwnd, &mut rect) };
-            let visible = state.logical((rect.right, rect.bottom));
-            state.update(|viewport| viewport.resize(visible));
-            state.layout_spinner();
-        }
-        WM_HSCROLL => state.scroll_bar(Axis::Horizontal, wparam as u16),
-        WM_VSCROLL => state.scroll_bar(Axis::Vertical, wparam as u16),
-        WM_MOUSEWHEEL => state.wheel(wparam, lparam, false),
-        WM_MOUSEHWHEEL => state.wheel(wparam, lparam, true),
-        WM_KEYDOWN if state.key(wparam) => {}
-        WM_TIMER if wparam == ANIMATION_TIMER => state.animate(),
-        WM_LBUTTONDOWN => {
-            // SAFETY: The window is alive and takes the focus and mouse capture.
-            unsafe { SetFocus(hwnd) };
-            if state.viewport.borrow_mut().drag_begin(state.logical(point)) {
-                // SAFETY: The window is alive.
-                unsafe { SetCapture(hwnd) };
+    if let Some(state) = state {
+        match message {
+            WM_SIZE => {
+                state.layout((lparam & 0xffff) as i32, ((lparam >> 16) & 0xffff) as i32);
+                return 0;
             }
-        }
-        WM_MOUSEMOVE => {
-            if state.viewport.borrow_mut().drag_to(state.logical(point)) {
-                state.refresh();
+            // The theme background shows where the island has not drawn yet, like while it
+            // catches up with a resize.
+            WM_ERASEBKGND => {
+                let mut rect = RECT::default();
+                // SAFETY: The device context is valid while the message is handled.
+                unsafe {
+                    GetClientRect(hwnd, &mut rect);
+                    let brush = CreateSolidBrush(if state.dark.get() {
+                        0x0020_2020
+                    } else {
+                        0x00f3_f3f3
+                    });
+                    FillRect(wparam as *mut c_void, &rect, brush);
+                    DeleteObject(brush);
+                }
+                return 1;
             }
+            // Keyboard input goes to the scroll viewer.
+            WM_SETFOCUS => {
+                if let Some(island) = state.island.borrow().as_ref() {
+                    island.focus();
+                }
+                return 0;
+            }
+            WM_TIMER if wparam == ANIMATION_TIMER => {
+                state.start_animation();
+                return 0;
+            }
+            _ => {}
         }
-        // SAFETY: The window is alive and releases its own capture.
-        WM_LBUTTONUP if unsafe { GetCapture() } == hwnd => unsafe {
-            ReleaseCapture();
-        },
-        WM_CAPTURECHANGED => {
-            state.viewport.borrow_mut().drag_end();
-        }
-        WM_SETCURSOR if lparam as u16 == HTCLIENT && state.viewport.borrow().is_scrollable() => {
-            // SAFETY: The system cursor lives for the process lifetime.
-            unsafe { SetCursor(LoadCursorW(null_mut(), IDC_SIZEALL)) };
-            return 1;
-        }
-        WM_NCDESTROY => {
-            // SAFETY: The window is going away, so it forgets the state.
-            unsafe { SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0) };
-            state.hwnd.set(null_mut());
-        }
-        // SAFETY: Other messages get the default handling.
-        _ => return unsafe { DefWindowProcW(hwnd, message, wparam, lparam) },
     }
-    0
+    // SAFETY: Other messages get the default handling.
+    unsafe { DefWindowProcW(hwnd, message, wparam, lparam) }
+}
+
+// Follows the activation of the top-level window in the island, and closes it with the window.
+unsafe extern "system" fn frame_proc(
+    hwnd: HWND,
+    message: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+    _id: usize,
+    data: usize,
+) -> LRESULT {
+    // SAFETY: The data is the state of the view, which removes this subclass before freeing it.
+    let state = unsafe { (data as *const State).as_ref() };
+    // The window is destroyed before the view is dropped, the island closes while the windows
+    // it lives in still exist.
+    if message == WM_DESTROY
+        && let Some(state) = state
+        && let Ok(mut island) = state.island.try_borrow_mut()
+    {
+        island.take();
+    }
+    // SAFETY: Messages pass through to the window first.
+    let result = unsafe { DefSubclassProc(hwnd, message, wparam, lparam) };
+    if message == WM_ACTIVATE
+        && let Some(island) = state.and_then(|state| state.island.try_borrow().ok())
+        && let Some(island) = island.as_ref()
+    {
+        island.set_active(wparam & 0xffff != WA_INACTIVE);
+    }
+    result
 }
