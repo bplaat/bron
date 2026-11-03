@@ -254,20 +254,22 @@ impl App {
             // A file that is being saved may not decode yet, the next change reloads it.
             (Target::Replace { .. }, Err(_)) => {}
             (Target::Window(id), Err(error)) => {
-                self.opening.remove(&id);
-                if let Some(index) = self
+                let opening = self.opening.remove(&id).is_some();
+                let index = self
                     .windows
                     .iter()
-                    .position(|window| window.opening == Some(id))
-                {
-                    let window = self.windows.remove(index);
-                    self.forget(window.window.id());
+                    .position(|window| window.opening == Some(id));
+                if opening || index.is_some() {
+                    if let Some(index) = index {
+                        let window = self.windows.remove(index);
+                        self.forget(window.window.id());
+                    }
+                    MessageDialog::new()
+                        .level(MessageLevel::Error)
+                        .title(format!("Could not open {}", file_name(&load.path)))
+                        .description(error)
+                        .show();
                 }
-                MessageDialog::new()
-                    .level(MessageLevel::Error)
-                    .title(format!("Could not open {}", file_name(&load.path)))
-                    .description(error)
-                    .show();
             }
         }
         if self.windows.is_empty() && self.pending_loads == 0 {
@@ -295,6 +297,8 @@ impl App {
         let Some(window) = self.window(id) else {
             return;
         };
+        // Supersede the first load too, so its completion cannot replace the dropped file.
+        window.opening = None;
         // The window moves on right away, so the next browse continues from this file even
         // when it does not decode, and reloads watch it instead of the shown one.
         window.path.clone_from(&path);
