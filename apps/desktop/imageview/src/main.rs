@@ -387,10 +387,22 @@ fn file_name(path: &Path) -> String {
     )
 }
 
-// The file name, macOS and GTK show the media size in the header subtitle.
-#[cfg(not(windows))]
+// macOS shows the media size in the header subtitle.
+#[cfg(target_os = "macos")]
 fn title(path: &Path, _media: Option<&Media>) -> String {
     file_name(path)
+}
+
+// GTK desktops with a separate titlebar show dimensions there instead of in the toolbar.
+#[cfg(not(any(target_os = "macos", windows)))]
+fn title(path: &Path, media: Option<&Media>) -> String {
+    if platforms::uses_header_bar() {
+        return file_name(path);
+    }
+    media.map_or_else(
+        || file_name(path),
+        |media| imageview_core::window_title(&file_name(path), media.size()),
+    )
 }
 
 // The file name and the media size once it is decoded.

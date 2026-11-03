@@ -38,8 +38,11 @@ vector drawings, and follows the system light or dark theme.
 
 ### Linux
 
-- A native GTK3 header bar with previous and next image, zoom out, actual size, and zoom in controls,
-  with image dimensions shown beneath the filename
+- Native GTK3 controls for previous and next image, zoom out, actual size, and zoom in,
+  with a header bar on GNOME (including Ubuntu), Budgie, and Pantheon, and image dimensions
+  beneath the filename. Other desktops use a normal titlebar showing `filename (widthxheight)`
+  and an inline toolbar containing only buttons.
+  Detection uses `XDG_CURRENT_DESKTOP` on both X11 and Wayland
 - A freedesktop thumbnailer: `ImageView --thumbnail -s SIZE INPUT OUTPUT` writes a PNG
   thumbnail, without starting GTK
 - `cargo xtask install` installs the binary, the [desktop entry](meta/freedesktop/.desktop),

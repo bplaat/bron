@@ -28,7 +28,7 @@ mod headers;
 mod thumbnail;
 mod toolbar;
 
-pub(crate) use toolbar::init;
+pub(crate) use toolbar::{init, uses_header_bar};
 
 /// The smallest window.
 pub(crate) const MIN_SIZE: (f32, f32) = (240.0, 180.0);
@@ -39,6 +39,7 @@ struct State {
     // The overlay of the scrolled window and the loading spinner, which the window embeds.
     overlay: *mut c_void,
     header_bar: *mut c_void,
+    integrated_toolbar: bool,
     scrolled_window: *mut c_void,
     // The spinner shown until the media is decoded, or null.
     spinner: Cell<*mut c_void>,
@@ -64,13 +65,14 @@ impl MediaView {
         let loading = media.is_none();
         let attachment = window.attach_content().expect("window has no content yet");
         let size = window.size();
+        let integrated_toolbar = uses_header_bar();
         // SAFETY: The attachment keeps the GTK window alive on this thread.
         let header_bar = unsafe {
             let Some(bwindow::NativeWindowHandle::Gtk(window)) = attachment.window_handle() else {
                 unreachable!("GTK view requires a GTK window");
             };
-            let bar = toolbar::install(window);
-            if let Some(media) = &media {
+            let bar = toolbar::install(window, integrated_toolbar);
+            if integrated_toolbar && let Some(media) = &media {
                 toolbar::show_size(bar, media);
             }
             bar
@@ -114,6 +116,7 @@ impl MediaView {
                 dark: Cell::new(theme == Theme::Dark),
                 overlay,
                 header_bar,
+                integrated_toolbar,
                 scrolled_window,
                 spinner: Cell::new(spinner),
                 area,
@@ -126,7 +129,31 @@ impl MediaView {
         state.connect();
         // SAFETY: The overlay is a live widget that the window lays out from now on.
         unsafe {
-            attachment.set_native_view(NativeViewHandle::Gtk(state.overlay));
+            let content = if integrated_toolbar {
+                state.overlay
+            } else {
+                let content = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+                gtk_box_pack_start(content, header_bar, 0, 0, 0);
+                gtk_box_pack_start(content, state.overlay, 1, 1, 0);
+                content
+            };
+            attachment.set_native_view(NativeViewHandle::Gtk(content));
+            // As on macOS and Windows, preserve the media area requested by the builder.
+            // An inline toolbar needs extra client height; a titlebar lives outside it.
+            // Measure GTK's requisition so larger themes and fonts are accounted for.
+            let mut toolbar_width = 0;
+            let mut toolbar_height = 0;
+            gtk_widget_get_preferred_width(header_bar, &mut toolbar_width, null_mut());
+            if !integrated_toolbar {
+                gtk_widget_get_preferred_height(header_bar, null_mut(), &mut toolbar_height);
+            }
+            let width = (size.width.round() as i32).max(toolbar_width);
+            let height = size.height.round() as i32 + toolbar_height;
+            let Some(bwindow::NativeWindowHandle::Gtk(window)) = attachment.window_handle() else {
+                unreachable!("GTK view requires a GTK window");
+            };
+            gtk_window_set_default_size(window, width, height);
+            gtk_window_resize(window, width, height);
             gtk_widget_grab_focus(state.area);
         }
         state.update(Viewport::zoom_to_fit);
@@ -140,8 +167,10 @@ impl MediaView {
     /// Replaces the media, keeping the zoom or fitting it to the window.
     pub(crate) fn set_media(&mut self, media: Media, zoom_to_fit: bool) {
         self.state.stop_animation();
-        // SAFETY: The window owns the header bar while this view is attached.
-        unsafe { toolbar::show_size(self.state.header_bar, &media) };
+        if self.state.integrated_toolbar {
+            // SAFETY: The window owns the header bar while this view is attached.
+            unsafe { toolbar::show_size(self.state.header_bar, &media) };
+        }
         self.state
             .update(|viewport| viewport.set_media(media, zoom_to_fit));
         self.state.start_animation();
@@ -513,4 +542,48 @@ extern "C" fn pinch(gesture: *mut c_void, scale: f64, state: &State) {
     let anchor = anchor.then(|| state.visible_point((x, y)));
     let previous = state.pinch.replace(scale);
     state.update(|viewport| viewport.zoom_by(scale / previous, anchor));
+}
+
+#[cfg(test)]
+mod layout_tests {
+    use std::time::{Duration, Instant};
+
+    use bwindow::{EventLoop, LogicalSize, WindowBuilder};
+
+    use super::*;
+
+    unsafe extern "C" {
+        fn gtk_main_iteration_do(blocking: i32) -> i32;
+    }
+
+    #[test]
+    #[ignore = "requires a display and session bus; run separately for each GTK backend and desktop"]
+    fn initial_layout_preserves_the_requested_media_area() {
+        let _event_loop = EventLoop::new();
+        let window = WindowBuilder::new()
+            .title("ImageView layout test")
+            .size(LogicalSize::new(640.0, 480.0))
+            .build();
+        let view = MediaView::new(&window, None, Theme::Light);
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while Instant::now() < deadline {
+            // SAFETY: GTK is initialized on this thread and the window remains alive.
+            unsafe { gtk_main_iteration_do(0) };
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        // SAFETY: The view retains these live widgets.
+        unsafe {
+            assert_eq!(
+                gtk_widget_get_allocated_width(view.state.scrolled_window),
+                640
+            );
+            assert_eq!(
+                gtk_widget_get_allocated_height(view.state.scrolled_window),
+                480
+            );
+            if !view.state.integrated_toolbar {
+                assert!(gtk_widget_get_allocated_height(view.state.header_bar) >= 48);
+            }
+        }
+    }
 }

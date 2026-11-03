@@ -25,6 +25,7 @@ pub(crate) const GDK_KEY_PAGE_DOWN: u32 = 0xff56;
 pub(crate) const GDK_KEY_END: u32 = 0xff57;
 pub(crate) const GTK_ALIGN_CENTER: i32 = 3;
 pub(crate) const GTK_ORIENTATION_HORIZONTAL: i32 = 0;
+pub(crate) const GTK_ORIENTATION_VERTICAL: i32 = 1;
 pub(crate) const GTK_ICON_SIZE_BUTTON: i32 = 4;
 pub(crate) const G_BINDING_SYNC_CREATE: u32 = 1 << 1;
 pub(crate) const G_SIGNAL_MATCH_DATA: i32 = 1 << 4;
@@ -35,11 +36,39 @@ unsafe extern "C" {
     pub(crate) fn gtk_header_bar_set_show_close_button(bar: *mut c_void, show: i32);
     pub(crate) fn gtk_header_bar_pack_start(bar: *mut c_void, child: *mut c_void);
     pub(crate) fn gtk_header_bar_pack_end(bar: *mut c_void, child: *mut c_void);
+    pub(crate) fn gtk_window_set_default_size(window: *mut c_void, width: i32, height: i32);
+    pub(crate) fn gtk_window_resize(window: *mut c_void, width: i32, height: i32);
+    pub(crate) fn gtk_widget_get_preferred_width(
+        widget: *mut c_void,
+        minimum: *mut i32,
+        natural: *mut i32,
+    );
+    pub(crate) fn gtk_widget_get_preferred_height(
+        widget: *mut c_void,
+        minimum: *mut i32,
+        natural: *mut i32,
+    );
+    pub(crate) fn gtk_widget_set_margin_top(widget: *mut c_void, margin: i32);
+    pub(crate) fn gtk_widget_set_margin_bottom(widget: *mut c_void, margin: i32);
     pub(crate) fn gtk_window_set_titlebar(window: *mut c_void, bar: *mut c_void);
     pub(crate) fn gtk_widget_hide(widget: *mut c_void);
     pub(crate) fn gtk_widget_unrealize(widget: *mut c_void);
     pub(crate) fn gtk_widget_show_all(widget: *mut c_void);
     pub(crate) fn gtk_box_new(orientation: i32, spacing: i32) -> *mut c_void;
+    pub(crate) fn gtk_box_pack_start(
+        container: *mut c_void,
+        child: *mut c_void,
+        expand: i32,
+        fill: i32,
+        padding: u32,
+    );
+    pub(crate) fn gtk_box_pack_end(
+        container: *mut c_void,
+        child: *mut c_void,
+        expand: i32,
+        fill: i32,
+        padding: u32,
+    );
     pub(crate) fn gtk_button_new_from_icon_name(name: *const c_char, size: i32) -> *mut c_void;
     pub(crate) fn gtk_widget_set_tooltip_text(widget: *mut c_void, text: *const c_char);
     pub(crate) fn gtk_button_set_focus_on_click(widget: *mut c_void, focus: i32);
