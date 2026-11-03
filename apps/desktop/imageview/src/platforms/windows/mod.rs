@@ -37,6 +37,13 @@ mod winui;
 const CLASS_NAME: &str = "ImageViewContent";
 const FRAME_SUBCLASS: usize = 1;
 const ANIMATION_TIMER: usize = 1;
+const REVEAL_TIMER: usize = 2;
+// How long a new window waits at most for the first frame of the island before it shows.
+const REVEAL_TIMEOUT_MS: u32 = 1000;
+// Posted by bwindow to a new window to show it, see `WM_REVEAL` in its window module.
+const WM_REVEAL: u32 = WM_USER + 17;
+// Posted to the content once the island has rendered its first frame.
+const WM_RENDERED: u32 = WM_APP + 1;
 // The longest side of a media bitmap in pixels, larger media is drawn scaled down.
 const MAX_BITMAP: f64 = 8192.0;
 // The checkerboard grows in steps of this many pixels, so resizing rarely draws it again.
@@ -79,6 +86,11 @@ struct State {
     start: Cell<Instant>,
     // The loading indicator shown until the first media is decoded.
     spinner: Cell<HWND>,
+    // Whether the window draws the Mica backdrop itself, behind transparent window surfaces.
+    window_backdrop: Cell<bool>,
+    // Whether the window may show, and whether it held back showing until then.
+    revealed: Cell<bool>,
+    reveal_held: Cell<bool>,
 }
 
 /// A native scroll view that zooms and pans media.
@@ -108,7 +120,11 @@ impl MediaView {
             frame: Cell::new(0),
             start: Cell::new(Instant::now()),
             spinner: Cell::new(null_mut()),
+            window_backdrop: Cell::new(set_window_backdrop(parent)),
+            revealed: Cell::new(false),
+            reveal_held: Cell::new(false),
         });
+        state.update_background();
         register_class();
         let class = wide(CLASS_NAME);
         // SAFETY: The class is registered and the state outlives the window, which this view
@@ -139,11 +155,23 @@ impl MediaView {
         // SAFETY: The window is alive.
         unsafe { GetClientRect(parent, &mut media) };
         let zoomed = Rc::downgrade(&state);
-        let island = Island::new(content, parent, state.dark.get(), send_action, move || {
-            if let Some(state) = zoomed.upgrade() {
-                state.zoomed();
-            }
-        });
+        let island = Island::new(
+            content,
+            parent,
+            state.dark.get(),
+            state.window_backdrop.get(),
+            send_action,
+            move || {
+                if let Some(state) = zoomed.upgrade() {
+                    state.zoomed();
+                }
+            },
+            // Handled outside of the rendering of the island, which it stops following.
+            // SAFETY: Posting to a destroyed window does nothing.
+            move || unsafe {
+                PostMessageW(content, WM_RENDERED, 0, 0);
+            },
+        );
         fit_below_header(parent, &media);
         // SAFETY: GetActiveWindow reads the state of this thread.
         island.set_active(unsafe { GetActiveWindow() } == parent);
@@ -158,6 +186,7 @@ impl MediaView {
                 Rc::as_ptr(&state) as usize,
             );
             attachment.set_native_view(NativeViewHandle::Win32(content));
+            SetTimer(content, REVEAL_TIMER, REVEAL_TIMEOUT_MS, null());
         }
         if loading {
             state.add_spinner();
@@ -216,6 +245,7 @@ impl MediaView {
         if let Some(island) = state.island.borrow().as_ref() {
             island.set_dark(theme == Theme::Dark);
         }
+        state.update_background();
         state.update_checkerboard();
         // SAFETY: The content is alive while the state is.
         unsafe { InvalidateRect(state.content.get(), null(), 1) };
@@ -265,6 +295,63 @@ fn register_class() {
             assert!(atom != 0, "could not register the media view class");
         }
     });
+}
+
+// Lets the window draw the Mica backdrop behind its whole client area, where Windows supports
+// it. The backdrop is part of the window frame, so it fills the pixels a resize uncovers right
+// away, where the island and the client area catch up a frame later. Black in the client area is
+// transparent.
+fn set_window_backdrop(window: HWND) -> bool {
+    let margins = MARGINS {
+        cxLeftWidth: -1,
+        cxRightWidth: -1,
+        cyTopHeight: -1,
+        cyBottomHeight: -1,
+    };
+    let backdrop = DWMSBT_MAINWINDOW;
+    // SAFETY: The window is alive and the attribute takes a DWM_SYSTEMBACKDROP_TYPE.
+    unsafe {
+        DwmSetWindowAttribute(
+            window,
+            DWMWA_SYSTEMBACKDROP_TYPE,
+            (&raw const backdrop).cast(),
+            size_of::<u32>() as u32,
+        ) >= 0
+            && DwmExtendFrameIntoClientArea(window, &margins) >= 0
+    }
+}
+
+// The brush the window surfaces behind the island are filled with: transparent over the Mica
+// of the window, or else the background color of the theme. The brushes live as long as the
+// process.
+fn background_brush(window_backdrop: bool, dark: bool) -> *mut c_void {
+    thread_local! {
+        static THEME_BRUSHES: [usize; 2] =
+            // SAFETY: Creating a brush has no preconditions.
+            unsafe { [CreateSolidBrush(0x00f3_f3f3), CreateSolidBrush(0x0020_2020)] }
+                .map(|brush| brush as usize);
+    }
+    if window_backdrop {
+        // SAFETY: Stock objects need no cleanup.
+        unsafe { GetStockObject(BLACK_BRUSH) }
+    } else {
+        THEME_BRUSHES.with(|brushes| brushes[usize::from(dark)] as *mut c_void)
+    }
+}
+
+// Fills a window with the background brush, for WM_ERASEBKGND.
+fn erase_background(state: &State, hwnd: HWND, hdc: WPARAM) -> LRESULT {
+    let mut rect = RECT::default();
+    // SAFETY: The device context is valid while the message is handled.
+    unsafe {
+        GetClientRect(hwnd, &mut rect);
+        FillRect(
+            hdc as *mut c_void,
+            &rect,
+            background_brush(state.window_backdrop.get(), state.dark.get()),
+        );
+    }
+    1
 }
 
 // Resizes a window around its center so the area below the header bar is `media`, the client
@@ -620,6 +707,34 @@ impl State {
         island.set_title(name, &subtitle);
     }
 
+    // The system fills the pixels a resize uncovers with the class brush of the window, which
+    // is white for windows of bwindow, before the window paints them.
+    fn update_background(&self) {
+        let brush = background_brush(self.window_backdrop.get(), self.dark.get());
+        // SAFETY: The window is alive, all windows of its class follow the same theme.
+        unsafe {
+            SetClassLongPtrW(self.window.get(), GCLP_HBRBACKGROUND, brush as isize);
+            InvalidateRect(self.window.get(), null(), 1);
+        }
+    }
+
+    // Lets the window show, also when it held back showing before.
+    fn reveal(&self) {
+        if self.revealed.replace(true) {
+            return;
+        }
+        if let Some(island) = self.island.borrow().as_ref() {
+            island.stop_rendered();
+        }
+        // SAFETY: The windows are alive.
+        unsafe {
+            KillTimer(self.content.get(), REVEAL_TIMER);
+            if self.reveal_held.get() {
+                PostMessageW(self.window.get(), WM_REVEAL, 0, 0);
+            }
+        }
+    }
+
     // Fills the content with the island and draws the checkerboard for its size, and vector
     // media for a changed scale.
     fn layout(&self, width: i32, height: i32) {
@@ -646,22 +761,16 @@ unsafe extern "system" fn content_proc(
                 state.layout((lparam & 0xffff) as i32, ((lparam >> 16) & 0xffff) as i32);
                 return 0;
             }
-            // The theme background shows where the island has not drawn yet, like while it
-            // catches up with a resize.
-            WM_ERASEBKGND => {
-                let mut rect = RECT::default();
-                // SAFETY: The device context is valid while the message is handled.
-                unsafe {
-                    GetClientRect(hwnd, &mut rect);
-                    let brush = CreateSolidBrush(if state.dark.get() {
-                        0x0020_2020
-                    } else {
-                        0x00f3_f3f3
-                    });
-                    FillRect(wparam as *mut c_void, &rect, brush);
-                    DeleteObject(brush);
-                }
-                return 1;
+            // The backdrop shows where the island has not drawn yet, like while it catches up
+            // with a resize.
+            WM_ERASEBKGND => return erase_background(state, hwnd, wparam),
+            WM_RENDERED => {
+                state.reveal();
+                return 0;
+            }
+            WM_TIMER if wparam == REVEAL_TIMER => {
+                state.reveal();
+                return 0;
             }
             // Keyboard input goes to the scroll viewer.
             WM_SETFOCUS => {
@@ -699,6 +808,18 @@ unsafe extern "system" fn frame_proc(
         && let Ok(mut island) = state.island.try_borrow_mut()
     {
         island.take();
+    }
+    if let Some(state) = state {
+        match message {
+            // The window shows once the island has rendered its first frame, instead of the
+            // empty window behind it.
+            WM_REVEAL if !state.revealed.get() => {
+                state.reveal_held.set(true);
+                return 0;
+            }
+            WM_ERASEBKGND => return erase_background(state, hwnd, wparam),
+            _ => {}
+        }
     }
     // SAFETY: Messages pass through to the window first.
     let result = unsafe { DefSubclassProc(hwnd, message, wparam, lparam) };

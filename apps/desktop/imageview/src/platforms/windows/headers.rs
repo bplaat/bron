@@ -31,6 +31,12 @@ pub(crate) const WM_ACTIVATE: u32 = 0x0006;
 pub(crate) const WM_SETFOCUS: u32 = 0x0007;
 pub(crate) const WM_ERASEBKGND: u32 = 0x0014;
 pub(crate) const WM_TIMER: u32 = 0x0113;
+pub(crate) const WM_USER: u32 = 0x0400;
+pub(crate) const WM_APP: u32 = 0x8000;
+pub(crate) const GCLP_HBRBACKGROUND: i32 = -10;
+pub(crate) const BLACK_BRUSH: i32 = 4;
+pub(crate) const DWMWA_SYSTEMBACKDROP_TYPE: u32 = 38;
+pub(crate) const DWMSBT_MAINWINDOW: u32 = 2;
 
 pub(crate) const WA_INACTIVE: usize = 0;
 pub(crate) const SWP_NOZORDER: u32 = 0x0004;
@@ -98,6 +104,14 @@ pub(crate) struct BITMAPINFOHEADER {
 }
 
 #[repr(C)]
+pub(crate) struct MARGINS {
+    pub(crate) cxLeftWidth: i32,
+    pub(crate) cxRightWidth: i32,
+    pub(crate) cyTopHeight: i32,
+    pub(crate) cyBottomHeight: i32,
+}
+
+#[repr(C)]
 pub(crate) struct INITCOMMONCONTROLSEX {
     pub(crate) dwSize: u32,
     pub(crate) dwICC: u32,
@@ -158,6 +172,8 @@ unsafe extern "system" {
     pub(crate) fn GetWindowTextW(hwnd: HWND, text: *mut u16, max: i32) -> i32;
     pub(crate) fn GetWindowTextLengthW(hwnd: HWND) -> i32;
     pub(crate) fn GetActiveWindow() -> HWND;
+    pub(crate) fn PostMessageW(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> BOOL;
+    pub(crate) fn SetClassLongPtrW(hwnd: HWND, index: i32, value: isize) -> usize;
     pub(crate) fn MessageBoxW(hwnd: HWND, text: *const u16, caption: *const u16, kind: u32) -> i32;
     pub(crate) fn FillRect(hdc: *mut c_void, rect: *const RECT, brush: *mut c_void) -> i32;
     pub(crate) fn GetDC(hwnd: HWND) -> *mut c_void;
@@ -178,6 +194,7 @@ unsafe extern "system" {
 unsafe extern "system" {
     pub(crate) fn CreateSolidBrush(color: u32) -> *mut c_void;
     pub(crate) fn DeleteObject(object: *mut c_void) -> BOOL;
+    pub(crate) fn GetStockObject(object: i32) -> *mut c_void;
     pub(crate) fn GetDIBits(
         hdc: *mut c_void,
         bitmap: *mut c_void,
@@ -186,6 +203,17 @@ unsafe extern "system" {
         bits: *mut c_void,
         info: *mut BITMAPINFOHEADER,
         usage: u32,
+    ) -> i32;
+}
+
+#[link(name = "dwmapi")]
+unsafe extern "system" {
+    pub(crate) fn DwmExtendFrameIntoClientArea(hwnd: HWND, margins: *const MARGINS) -> i32;
+    pub(crate) fn DwmSetWindowAttribute(
+        hwnd: HWND,
+        attribute: u32,
+        value: *const c_void,
+        size: u32,
     ) -> i32;
 }
 

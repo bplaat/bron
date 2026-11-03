@@ -439,6 +439,11 @@ pub(crate) struct Island {
     regions: Rc<Regions>,
     // A view change asked for before the scroll viewer was laid out, which it would ignore.
     pending: Rc<Cell<Option<View>>>,
+    // Whether the window draws the Mica backdrop itself, under the transparent island.
+    window_backdrop: bool,
+    // The composition target statics and the registration of the rendered frame handler,
+    // until the first frame is rendered.
+    rendered: Cell<Option<(ComPtr, i64)>>,
 }
 
 // The button groups in the header bar, which take clicks instead of dragging the window.
@@ -512,26 +517,39 @@ type Drag = (Point, (f64, f64));
 type View = (Option<f64>, Option<f64>, Option<f64>);
 
 impl Island {
-    /// Creates the island in `parent`, which fills the client area of `window`. The buttons call
-    /// `on_action` with their application action, and `on_zoomed` follows the end of every
-    /// change of the zoom or scroll position.
+    /// Creates the island in `parent`, which fills the client area of `window`. With
+    /// `window_backdrop` the window also draws Mica itself, under the island. The buttons
+    /// call `on_action` with their application action, `on_zoomed` follows the end of every
+    /// change of the zoom or scroll position and `on_rendered` the first rendered frame, until
+    /// [`Self::stop_rendered`].
     pub(crate) fn new(
         parent: HWND,
         window: HWND,
         dark: bool,
+        window_backdrop: bool,
         on_action: impl Fn(&'static str) + 'static,
         on_zoomed: impl Fn() + 'static,
+        on_rendered: impl Fn() + 'static,
     ) -> Self {
-        Self::create(parent, window, on_action, on_zoomed)
-            .inspect(|island| island.set_dark(dark))
-            .unwrap_or_else(|(component, result)| fail(window, component, result))
+        Self::create(
+            parent,
+            window,
+            window_backdrop,
+            on_action,
+            on_zoomed,
+            on_rendered,
+        )
+        .inspect(|island| island.set_dark(dark))
+        .unwrap_or_else(|(component, result)| fail(window, component, result))
     }
 
     fn create(
         parent: HWND,
         window: HWND,
+        window_backdrop: bool,
         on_action: impl Fn(&'static str) + 'static,
         on_zoomed: impl Fn() + 'static,
+        on_rendered: impl Fn() + 'static,
     ) -> std::result::Result<Self, (&'static str, HRESULT)> {
         let failed = |component| move |result| (component, result);
 
@@ -605,13 +623,16 @@ impl Island {
         };
 
         // Mica shows through the header bar where Windows supports it, otherwise it gets a solid
-        // background. The backdrop needs the content of the island to attach to.
-        // SAFETY: Slot 10 is put_SystemBackdrop.
+        // background. The backdrop needs the content of the island to attach to. Where the
+        // window also draws Mica itself, that fills the pixels a resize uncovers before the
+        // island catches up. The island keeps its own backdrop then too: closing an island
+        // without one fails fast in CoreUIComponents.dll once a file dialog has been shown.
         let mica = compose(
             "Microsoft.UI.Xaml.Media.MicaBackdrop",
             &IID_IMICA_BACKDROP_FACTORY,
         )
         .and_then(|mica| mica.cast(&IID_ISYSTEM_BACKDROP))
+        // SAFETY: Slot 10 is put_SystemBackdrop.
         .and_then(|mica| unsafe { source.put(10, mica.as_raw()) });
         if mica.is_err() {
             let background =
@@ -754,6 +775,22 @@ impl Island {
         })
         .map_err(failed("window content"))?;
 
+        // The window shows once the island has rendered its first frame, so it never shows the
+        // empty window behind it.
+        let statics = factory(
+            "Microsoft.UI.Xaml.Media.CompositionTarget",
+            &IID_ICOMPOSITION_TARGET_STATICS,
+        )
+        .map_err(failed("window content"))?;
+        let rendered = event_handler(IID_RENDERED_EVENT_HANDLER, move |_, _| on_rendered());
+        let mut token = 0i64;
+        // SAFETY: Slot 8 of ICompositionTargetStatics is add_Rendered, the composition target
+        // keeps the handler until it is removed.
+        check(unsafe {
+            call!(statics, 8, rendered.as_raw() => *mut c_void, &mut token => *mut i64)
+        })
+        .map_err(failed("window content"))?;
+
         Ok(Self {
             source,
             bridge,
@@ -767,7 +804,17 @@ impl Island {
             checkerboard,
             regions,
             pending,
+            window_backdrop,
+            rendered: Cell::new(Some((statics, token))),
         })
+    }
+
+    /// Stops following the rendered frames.
+    pub(crate) fn stop_rendered(&self) {
+        if let Some((statics, token)) = self.rendered.take() {
+            // SAFETY: Slot 9 of ICompositionTargetStatics is remove_Rendered.
+            unsafe { call!(statics, 9, token => i64) };
+        }
     }
 
     // Dragging with the primary mouse button pans the media, like the hand tool of other
@@ -943,8 +990,13 @@ impl Island {
         };
         let transparent = color(0, 0);
         // The title bar the window draws behind the header bar shows while it catches up with a
-        // resize, so it gets the background color of the theme instead of white.
-        let background = color(0xff, if dark { 0x20 } else { 0xf3 });
+        // resize, so it shows the Mica of the window or the background color of the theme
+        // instead of white.
+        let background = if self.window_backdrop {
+            transparent
+        } else {
+            color(0xff, if dark { 0x20 } else { 0xf3 })
+        };
         // The IAppWindowTitleBar setter slots of the title bar and caption button colors.
         for (slot, color) in [
             (7, background),
@@ -966,6 +1018,7 @@ impl Island {
 
 impl Drop for Island {
     fn drop(&mut self) {
+        self.stop_rendered();
         if let Ok(closable) = self.source.cast(&IID_ICLOSABLE) {
             // SAFETY: Slot 6 of IClosable is Close.
             unsafe { call!(closable, 6) };

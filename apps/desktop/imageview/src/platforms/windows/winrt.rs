@@ -111,6 +111,12 @@ pub(crate) const IID_ROUTED_EVENT_HANDLER: GUID =
     GUID::from_u128(0xdae23d85_69ca_5bdf_805b_6161a3a215cc);
 pub(crate) const IID_SIZE_CHANGED_EVENT_HANDLER: GUID =
     GUID::from_u128(0x8d7b1a58_14c6_51c9_892c_9fcce368e77d);
+pub(crate) const IID_ICOMPOSITION_TARGET_STATICS: GUID =
+    GUID::from_u128(0x12a4be6f_6db1_5165_b622_d57ab782745b);
+// EventHandler<Microsoft.UI.Xaml.Media.RenderedEventArgs>, derived from its parameterized type
+// signature.
+pub(crate) const IID_RENDERED_EVENT_HANDLER: GUID =
+    GUID::from_u128(0xad69ce67_e31c_58c5_a3c8_63f4ed881637);
 // IReference<Windows.UI.Color>, derived from its parameterized type signature.
 const IID_IREFERENCE_COLOR: GUID = GUID::from_u128(0xab8e5d11_b0c1_5a21_95ae_f16bf3a37624);
 
