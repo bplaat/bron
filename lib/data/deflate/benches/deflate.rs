@@ -70,5 +70,17 @@ fn decompress(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, compress, decompress);
+fn stored_zlib(c: &mut Criterion) {
+    let mut group = c.benchmark_group("zlib_store");
+    for size in [64, 5552, 1024 * 1024] {
+        let data = vec![255; size];
+        group.throughput(Throughput::Bytes(size as u64));
+        group.bench_function(&size.to_string(), |b| {
+            b.iter(|| black_box(deflate::zlib_compress(black_box(&data), Level::Store)));
+        });
+    }
+    group.finish();
+}
+
+criterion_group!(benches, compress, decompress, stored_zlib);
 criterion_main!(benches);

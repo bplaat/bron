@@ -152,7 +152,20 @@ fn adler32(data: &[u8]) -> u32 {
     // 5552 is the most bytes that can be summed before `b` may overflow.
     let (mut a, mut b) = (1u32, 0u32);
     for chunk in data.chunks(5552) {
-        for &byte in chunk {
+        let (blocks, tail) = chunk.as_chunks::<32>();
+        for block in blocks {
+            // Independent sums let LLVM vectorize the bytes instead of carrying `a`
+            // through every addition to `b`. The 5552-byte limit still bounds both.
+            let mut sum = 0;
+            let mut weighted = 0;
+            for (index, &byte) in block.iter().enumerate() {
+                sum += u32::from(byte);
+                weighted += (32 - index as u32) * u32::from(byte);
+            }
+            b += 32 * a + weighted;
+            a += sum;
+        }
+        for &byte in tail {
             a += u32::from(byte);
             b += a;
         }
@@ -168,6 +181,24 @@ mod tests {
     use alloc::vec;
 
     use super::*;
+
+    #[test]
+    fn adler32_matches_bytewise_reference_at_block_boundaries() {
+        for length in [0, 1, 15, 16, 31, 32, 33, 5551, 5552, 5553, 11104, 65536] {
+            for data in [
+                vec![0; length],
+                vec![255; length],
+                (0..length).map(|index| (index * 7919) as u8).collect(),
+            ] {
+                let (mut a, mut b) = (1u32, 0u32);
+                for &byte in &data {
+                    a = (a + u32::from(byte)) % 65521;
+                    b = (b + a) % 65521;
+                }
+                assert_eq!(adler32(&data), b << 16 | a, "length={length}");
+            }
+        }
+    }
 
     const LEVELS: [Level; 5] = [
         Level::Store,
