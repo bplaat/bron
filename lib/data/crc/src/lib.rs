@@ -8,6 +8,16 @@
 
 #![no_std]
 
+// The bytes of a sparse reduction step, up to the closest of its offsets.
+const SPARSE_CHUNK: usize = 1920;
+// The distances from a byte to the bytes that take its place, the largest being the reach.
+const SPARSE_OFFSETS: [usize; 3] = [1927, 2181, SPARSE_REACH];
+const SPARSE_REACH: usize = 4018;
+// The bytes pending for later chunks, a whole number of chunks that holds a chunk and the reach.
+const SPARSE_RING: usize = 4 * SPARSE_CHUNK;
+// The input length where sparse reduction overtakes the tables, which handle its last bytes.
+const SPARSE_MINIMUM: usize = 12 * 1024;
+
 // MARK: Algorithm
 /// CRC algorithm parameters.
 #[derive(Clone, Copy, Debug)]
@@ -99,7 +109,46 @@ impl Crc<u32> {
         }
     }
 
-    fn update(&self, mut crc: u32, bytes: &[u8]) -> u32 {
+    fn update(&self, crc: u32, bytes: &[u8]) -> u32 {
+        if self.algorithm.poly == CRC_32_ISO_HDLC.poly && bytes.len() >= SPARSE_MINIMUM {
+            return self.update_sparse(crc, bytes);
+        }
+        self.update_software(crc, bytes)
+    }
+
+    // Shortens the message without changing its remainder: with `y` as x^8, the polynomial
+    // divides y^4018 + y^2091 + y^1837 + 1, so a byte equals itself XORed onto the three bytes
+    // at `SPARSE_OFFSETS` after it. Those are further away than a chunk, which leaves every
+    // byte of a chunk independent, unlike the carried register of a table lookup.
+    fn update_sparse(&self, crc: u32, bytes: &[u8]) -> u32 {
+        let mut pending = [0u8; SPARSE_RING];
+        pending[..4].copy_from_slice(&crc.to_le_bytes());
+        let chunks = (bytes.len() - SPARSE_REACH) / SPARSE_CHUNK;
+        let (body, rest) = bytes.split_at(chunks * SPARSE_CHUNK);
+        for (index, chunk) in body.as_chunks::<SPARSE_CHUNK>().0.iter().enumerate() {
+            let start = index * SPARSE_CHUNK % SPARSE_RING;
+            let mut value = *chunk;
+            xor(&mut value, &pending[start..start + SPARSE_CHUNK]);
+            pending[start..start + SPARSE_CHUNK].fill(0);
+            for offset in SPARSE_OFFSETS {
+                let at = (start + offset) % SPARSE_RING;
+                let (head, tail) = value.split_at((SPARSE_RING - at).min(SPARSE_CHUNK));
+                xor(&mut pending[at..], head);
+                xor(&mut pending, tail);
+            }
+        }
+        let start = chunks * SPARSE_CHUNK % SPARSE_RING;
+        let (head, tail) = rest.split_at(SPARSE_REACH);
+        let mut remainder = [0; SPARSE_REACH];
+        remainder.copy_from_slice(head);
+        let (before_wrap, after_wrap) =
+            remainder.split_at_mut((SPARSE_RING - start).min(SPARSE_REACH));
+        xor(before_wrap, &pending[start..]);
+        xor(after_wrap, &pending);
+        self.update_software(self.update_software(0, &remainder), tail)
+    }
+
+    fn update_software(&self, mut crc: u32, bytes: &[u8]) -> u32 {
         let t = &self.table;
         let (chunks, rest) = bytes.as_chunks::<8>();
         for chunk in chunks {
@@ -118,6 +167,13 @@ impl Crc<u32> {
             crc = t[0][((crc as u8) ^ byte) as usize] ^ (crc >> 8);
         }
         crc
+    }
+}
+
+// XORs a slice onto the start of another, in a loop that has no dependency between bytes.
+fn xor(dest: &mut [u8], source: &[u8]) {
+    for (dest, source) in dest.iter_mut().zip(source) {
+        *dest ^= source;
     }
 }
 
@@ -144,6 +200,62 @@ impl Digest<'_, u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sparse_reduction_matches_software_at_its_edges() {
+        let mut data = [0u8; 70000];
+        let mut state = 0x2545_f491u32;
+        for byte in &mut data {
+            state ^= state << 13;
+            state ^= state >> 17;
+            state ^= state << 5;
+            *byte = state as u8;
+        }
+        for offset in 0..16 {
+            for length in [
+                4018, 4019, 5937, 5938, 5939, 7857, 7858, 7859, 9777, 9778, 11697, 13618, 13619,
+                15360, 15361, 69000,
+            ] {
+                let bytes = &data[offset..offset + length];
+                for initial in [0, u32::MAX, 0x1234_5678] {
+                    assert_eq!(
+                        CRC32.update_sparse(initial, bytes),
+                        CRC32.update_software(initial, bytes),
+                        "offset={offset}, length={length}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn bulk_update_matches_software_for_alignments_and_registers() {
+        let mut data = [0u8; 70000];
+        for (index, byte) in data.iter_mut().enumerate() {
+            *byte = (index * 73 + 11) as u8;
+        }
+        const CASTAGNOLI: Algorithm<u32> = Algorithm {
+            poly: 0x1edc_6f41,
+            ..CRC_32_ISO_HDLC
+        };
+        let other = Crc::<u32>::new(&CASTAGNOLI);
+        for calculator in [&CRC32, &other] {
+            for offset in 0..16 {
+                for length in [
+                    0, 1, 7, 8, 15, 16, 31, 32, 63, 64, 65, 79, 80, 81, 95, 96, 111, 112, 127, 128,
+                    129, 255, 256, 1024, 5937, 5938, 5939, 7857, 7858, 7859, 15360, 15361, 69000,
+                ] {
+                    let bytes = &data[offset..offset + length];
+                    for initial in [0, u32::MAX, 0x1234_5678] {
+                        assert_eq!(
+                            calculator.update(initial, bytes),
+                            calculator.update_software(initial, bytes)
+                        );
+                    }
+                }
+            }
+        }
+    }
 
     const CRC32: Crc<u32> = Crc::<u32>::new(&CRC_32_ISO_HDLC);
 
