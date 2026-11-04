@@ -99,19 +99,19 @@ strip = true
 panic = "abort"
 overflow-checks = false
 
-[profile.release.package.reversi-engine]
-opt-level = 3
-
 [profile.release.package.crc]
-opt-level = 3
-
-[profile.release.package.image]
 opt-level = 3
 
 [profile.release.package.deflate]
 opt-level = 3
 
+[profile.release.package.image]
+opt-level = 3
+
 [profile.release.package.pbkdf2]
+opt-level = 3
+
+[profile.release.package.reversi-engine]
 opt-level = 3
 
 [profile.release.package.sha1]
