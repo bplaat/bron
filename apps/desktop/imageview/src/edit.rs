@@ -23,7 +23,7 @@ use imageview_core::edit::{
 use imageview_core::{FileVersion, Media};
 
 use crate::save::{SaveRequest, ask_save};
-use crate::{App, AppEvent, file_name};
+use crate::{App, AppEvent, ImageWindow, file_name, title};
 
 // The filters of their actions.
 const FILTERS: &[(&str, Filter)] = &[
@@ -99,6 +99,21 @@ pub(crate) struct Saved {
     // Whether it saved a copy, which the window does not follow.
     export: bool,
     after: AfterSave,
+}
+
+impl ImageWindow {
+    /// Shows whether the picture has unsaved changes in the title, with the size of the edited
+    /// picture, and in the close button on macOS.
+    fn show_edited(&mut self) {
+        let edited = self
+            .editing
+            .as_ref()
+            .is_some_and(|editing| editing.editor.is_modified());
+        self.window
+            .set_title(title(&self.path, Some(&self.view.media()), edited));
+        #[cfg(target_os = "macos")]
+        self.view.set_edited(edited);
+    }
 }
 
 impl App {
@@ -351,7 +366,7 @@ impl App {
                 .view
                 .set_media(editing.editor.original().clone(), true);
         }
-        window.view.set_edited(false);
+        window.show_edited();
         window.view.set_selecting(None);
         window.view.set_editing(false);
         true
@@ -399,7 +414,7 @@ impl App {
         window
             .view
             .set_media(editing.editor.picture().to_media(), zoom_to_fit);
-        window.view.set_edited(editing.editor.is_modified());
+        window.show_edited();
         // A picture of another size has no selection.
         if zoom_to_fit {
             window.view.set_selecting(None);
@@ -442,15 +457,20 @@ impl App {
             editing.is_some_and(|editing| editing.tool.is_some() || editing.editor.can_undo());
         let redo = editing.is_some_and(|editing| editing.editor.can_redo());
         let modified = editing.is_some_and(|editing| editing.editor.is_modified());
+        // GTK gives accelerators the keys before a focused field of a tool, so the ones that
+        // edit text only work in the image while no tool is open.
+        let keys =
+            cfg!(target_os = "macos") || editing.is_none_or(|editing| editing.tool.is_none());
         let states = [
             ("file.save", edit && modified),
             ("file.save_as", idle),
+            #[cfg(target_os = "macos")]
             ("file.print", shown),
             ("edit.toggle", editable),
             ("edit.undo", edit && undo),
             ("edit.redo", edit && redo),
-            ("edit.copy", idle),
-            ("select.all", edit),
+            ("edit.copy", idle && keys),
+            ("select.all", edit && keys),
             ("select.none", selected),
             ("select.invert", selected),
             ("select.whole", edit),
@@ -458,8 +478,8 @@ impl App {
             ("select.ellipse", edit),
             ("image.crop", edit),
             ("image.resize", edit),
-            ("view.previous", idle),
-            ("view.next", idle),
+            ("view.previous", idle && keys),
+            ("view.next", idle && keys),
             ("view.zoom_in", shown),
             ("view.zoom_out", shown),
             ("view.actual_size", shown),
@@ -850,13 +870,12 @@ impl App {
             && let Some(editing) = &mut window.editing
         {
             editing.editor.saved(bytes);
-            window.view.set_edited(false);
             window.version = FileVersion::of(&saved.path);
             if saved.path != window.path {
-                window.window.set_title(file_name(&saved.path));
                 crate::platforms::note_recent_file(&saved.path);
                 window.path = saved.path;
             }
+            window.show_edited();
         }
         self.continue_after_save(id, saved.after);
     }

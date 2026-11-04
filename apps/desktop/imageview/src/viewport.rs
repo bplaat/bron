@@ -271,26 +271,22 @@ impl Viewport {
     }
 
     /// Shows a preview of any size in the place of the media, or the media again.
-    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub(crate) fn set_preview(&mut self, preview: Option<Media>) {
         self.preview = preview.map(MediaRenderer::new);
     }
 
     /// Shows a crop rectangle over all of the media, or removes it.
-    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub(crate) fn set_cropping(&mut self, cropping: bool) {
         self.crop = cropping.then(|| Marquee::covering(self.media().size()));
     }
 
     /// The crop rectangle, while cropping.
-    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub(crate) const fn crop(&mut self) -> Option<&mut Marquee> {
         self.crop.as_mut()
     }
 
     /// Makes drags draw a selection of a shape, which the selection takes too, or selects
     /// all of the media again, where drags pan it.
-    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub(crate) const fn set_selecting(&mut self, shape: Option<Shape>) {
         self.selecting = shape;
         match shape {
@@ -307,19 +303,16 @@ impl Viewport {
     }
 
     /// The shape drags draw a selection of.
-    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub(crate) const fn selecting(&self) -> Option<Shape> {
         self.selecting
     }
 
     /// Whether drags draw a crop or selection, instead of panning.
-    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub(crate) const fn is_marking(&self) -> bool {
         self.crop.is_some() || self.selecting.is_some()
     }
 
     /// The selected part of the media.
-    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub(crate) fn selection(&self) -> Option<Selection> {
         self.selection.as_ref().map(|(shape, marquee)| Selection {
             shape: *shape,
@@ -329,7 +322,6 @@ impl Viewport {
     }
 
     /// Selects everything outside the selection instead.
-    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub(crate) const fn invert_selection(&mut self) {
         if self.selection.is_some() {
             self.inverted = !self.inverted;
@@ -346,7 +338,6 @@ impl Viewport {
 
     /// Takes hold of the crop rectangle, the selection or a new selection at `pointer`,
     /// returns whether it is one of them instead of the media.
-    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub(crate) fn mark_begin(&mut self, pointer: (f64, f64)) -> bool {
         let (point, reach) = (self.media_point(pointer), CROP_REACH / self.magnification);
         if let Some(crop) = &mut self.crop {
@@ -371,7 +362,6 @@ impl Viewport {
     }
 
     /// Moves the held rectangle along, as a square when asked, returns whether one is held.
-    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub(crate) fn mark_drag(&mut self, pointer: (f64, f64), square: bool) -> bool {
         let point = self.media_point(pointer);
         let crop = self
@@ -386,7 +376,6 @@ impl Viewport {
 
     /// Lets go of the held rectangle, a selection without a size is removed. Returns whether
     /// one was held.
-    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub(crate) fn mark_end(&mut self) -> bool {
         if self.crop.as_mut().is_some_and(Marquee::end) {
             return true;

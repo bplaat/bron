@@ -6,7 +6,7 @@
 
 //! GTK, GDK and GLib declarations, bwindow links their libraries.
 
-use std::ffi::{c_char, c_void};
+use std::ffi::{c_char, c_ulong, c_void};
 
 pub(crate) const GDK_CONTROL_MASK: u32 = 1 << 2;
 pub(crate) const GDK_BUTTON1_MOTION_MASK: i32 = 1 << 5;
@@ -15,8 +15,13 @@ pub(crate) const GDK_BUTTON_RELEASE_MASK: i32 = 1 << 9;
 pub(crate) const GDK_SCROLL_MASK: i32 = 1 << 21;
 pub(crate) const GDK_SMOOTH_SCROLL_MASK: i32 = 1 << 23;
 pub(crate) const GDK_TOUCHPAD_GESTURE_MASK: i32 = 1 << 24;
+pub(crate) const GDK_BUTTON_PRESS: i32 = 4;
 pub(crate) const GDK_SCROLL_UP: i32 = 0;
 pub(crate) const GDK_SCROLL_DOWN: i32 = 1;
+pub(crate) const GDK_SHIFT_MASK: u32 = 1 << 0;
+pub(crate) const GDK_KEY_RETURN: u32 = 0xff0d;
+pub(crate) const GDK_KEY_ESCAPE: u32 = 0xff1b;
+pub(crate) const GDK_KEY_KP_ENTER: u32 = 0xff8d;
 pub(crate) const GDK_KEY_HOME: u32 = 0xff50;
 pub(crate) const GDK_KEY_UP: u32 = 0xff52;
 pub(crate) const GDK_KEY_DOWN: u32 = 0xff54;
@@ -24,11 +29,22 @@ pub(crate) const GDK_KEY_PAGE_UP: u32 = 0xff55;
 pub(crate) const GDK_KEY_PAGE_DOWN: u32 = 0xff56;
 pub(crate) const GDK_KEY_END: u32 = 0xff57;
 pub(crate) const GTK_ALIGN_CENTER: i32 = 3;
+pub(crate) const GTK_POLICY_NEVER: i32 = 2;
+pub(crate) const GTK_POLICY_AUTOMATIC: i32 = 1;
+pub(crate) const GTK_POS_BOTTOM: i32 = 3;
 pub(crate) const GTK_ORIENTATION_HORIZONTAL: i32 = 0;
 pub(crate) const GTK_ORIENTATION_VERTICAL: i32 = 1;
 pub(crate) const GTK_ICON_SIZE_BUTTON: i32 = 4;
 pub(crate) const G_BINDING_SYNC_CREATE: u32 = 1 << 1;
 pub(crate) const G_SIGNAL_MATCH_DATA: i32 = 1 << 4;
+
+/// A clipboard format, as GTK reads it.
+#[repr(C)]
+pub(crate) struct GtkTargetEntry {
+    pub(crate) target: *const c_char,
+    pub(crate) flags: u32,
+    pub(crate) info: u32,
+}
 
 unsafe extern "C" {
     pub(crate) fn gtk_header_bar_new() -> *mut c_void;
@@ -92,7 +108,7 @@ unsafe extern "C" {
         data: *const c_void,
         destroy: *const c_void,
         flags: i32,
-    ) -> u64;
+    ) -> c_ulong;
     pub(crate) fn g_signal_handlers_disconnect_matched(
         instance: *mut c_void,
         mask: i32,
@@ -155,6 +171,7 @@ unsafe extern "C" {
         y: *mut f64,
     ) -> i32;
 
+    pub(crate) fn gdk_event_get_event_type(event: *const c_void) -> i32;
     pub(crate) fn gdk_event_get_state(event: *const c_void, state: *mut u32) -> i32;
     pub(crate) fn gdk_event_get_coords(event: *const c_void, x: *mut f64, y: *mut f64) -> i32;
     pub(crate) fn gdk_event_get_root_coords(event: *const c_void, x: *mut f64, y: *mut f64) -> i32;
@@ -171,4 +188,103 @@ unsafe extern "C" {
         name: *const c_char,
     ) -> *mut c_void;
     pub(crate) fn gdk_window_set_cursor(window: *mut c_void, cursor: *mut c_void);
+    pub(crate) fn gdk_atom_intern(name: *const c_char, only_if_exists: i32) -> *mut c_void;
+
+    pub(crate) fn gtk_widget_get_toplevel(widget: *mut c_void) -> *mut c_void;
+    pub(crate) fn gtk_widget_has_focus(widget: *mut c_void) -> i32;
+    pub(crate) fn gtk_widget_show(widget: *mut c_void);
+    pub(crate) fn gtk_widget_set_no_show_all(widget: *mut c_void, no_show_all: i32);
+    pub(crate) fn gtk_widget_set_visible(widget: *mut c_void, visible: i32);
+    pub(crate) fn gtk_widget_set_sensitive(widget: *mut c_void, sensitive: i32);
+    pub(crate) fn gtk_widget_set_margin_start(widget: *mut c_void, margin: i32);
+    pub(crate) fn gtk_widget_set_margin_end(widget: *mut c_void, margin: i32);
+    pub(crate) fn gtk_widget_get_preferred_size(
+        widget: *mut c_void,
+        minimum: *mut [i32; 2],
+        natural: *mut [i32; 2],
+    );
+    pub(crate) fn gtk_button_new_with_label(label: *const c_char) -> *mut c_void;
+    pub(crate) fn gtk_button_set_image(button: *mut c_void, image: *mut c_void);
+    pub(crate) fn gtk_image_new_from_icon_name(name: *const c_char, size: i32) -> *mut c_void;
+    pub(crate) fn gtk_toggle_button_get_active(button: *mut c_void) -> i32;
+    pub(crate) fn gtk_toggle_button_set_active(button: *mut c_void, active: i32);
+    pub(crate) fn gtk_toggle_button_set_mode(button: *mut c_void, draw_indicator: i32);
+    pub(crate) fn gtk_radio_button_new_from_widget(group: *mut c_void) -> *mut c_void;
+    pub(crate) fn gtk_menu_button_new() -> *mut c_void;
+    pub(crate) fn gtk_menu_button_set_popup(button: *mut c_void, menu: *mut c_void);
+    pub(crate) fn gtk_menu_new() -> *mut c_void;
+    pub(crate) fn gtk_menu_item_new_with_label(label: *const c_char) -> *mut c_void;
+    pub(crate) fn gtk_separator_menu_item_new() -> *mut c_void;
+    pub(crate) fn gtk_menu_shell_append(menu: *mut c_void, item: *mut c_void);
+    pub(crate) fn gtk_popover_new(relative_to: *mut c_void) -> *mut c_void;
+    pub(crate) fn gtk_popover_set_modal(popover: *mut c_void, modal: i32);
+    pub(crate) fn gtk_popover_set_position(popover: *mut c_void, position: i32);
+    pub(crate) fn gtk_grid_new() -> *mut c_void;
+    pub(crate) fn gtk_grid_set_row_spacing(grid: *mut c_void, spacing: u32);
+    pub(crate) fn gtk_grid_set_column_spacing(grid: *mut c_void, spacing: u32);
+    pub(crate) fn gtk_grid_attach(
+        grid: *mut c_void,
+        child: *mut c_void,
+        left: i32,
+        top: i32,
+        width: i32,
+        height: i32,
+    );
+    pub(crate) fn gtk_label_new(text: *const c_char) -> *mut c_void;
+    pub(crate) fn gtk_label_set_text(label: *mut c_void, text: *const c_char);
+    pub(crate) fn gtk_label_set_xalign(label: *mut c_void, align: f32);
+    pub(crate) fn gtk_label_set_width_chars(label: *mut c_void, chars: i32);
+    pub(crate) fn gtk_label_set_markup(label: *mut c_void, markup: *const c_char);
+    pub(crate) fn gtk_scale_new_with_range(
+        orientation: i32,
+        minimum: f64,
+        maximum: f64,
+        step: f64,
+    ) -> *mut c_void;
+    pub(crate) fn gtk_scale_set_draw_value(scale: *mut c_void, draw: i32);
+    pub(crate) fn gtk_range_get_value(range: *mut c_void) -> f64;
+    pub(crate) fn gtk_range_set_value(range: *mut c_void, value: f64);
+    pub(crate) fn gtk_spin_button_new_with_range(
+        minimum: f64,
+        maximum: f64,
+        step: f64,
+    ) -> *mut c_void;
+    pub(crate) fn gtk_spin_button_set_numeric(button: *mut c_void, numeric: i32);
+    pub(crate) fn gtk_spin_button_set_value(button: *mut c_void, value: f64);
+    pub(crate) fn gtk_entry_get_text(entry: *mut c_void) -> *const c_char;
+    pub(crate) fn gtk_combo_box_text_new() -> *mut c_void;
+    pub(crate) fn gtk_combo_box_text_append_text(combo: *mut c_void, text: *const c_char);
+    pub(crate) fn gtk_combo_box_get_active(combo: *mut c_void) -> i32;
+    pub(crate) fn gtk_combo_box_set_active(combo: *mut c_void, index: i32);
+    pub(crate) fn gtk_check_button_new_with_label(label: *const c_char) -> *mut c_void;
+    pub(crate) fn gtk_scrolled_window_set_policy(window: *mut c_void, h: i32, v: i32);
+    pub(crate) fn gtk_clipboard_get(selection: *mut c_void) -> *mut c_void;
+    pub(crate) fn gtk_clipboard_set_with_data(
+        clipboard: *mut c_void,
+        targets: *const GtkTargetEntry,
+        count: u32,
+        get: extern "C" fn(*mut c_void, *mut c_void, u32, *mut c_void),
+        clear: extern "C" fn(*mut c_void, *mut c_void),
+        data: *mut c_void,
+    ) -> i32;
+    pub(crate) fn gtk_clipboard_set_can_store(
+        clipboard: *mut c_void,
+        targets: *const GtkTargetEntry,
+        count: i32,
+    );
+    pub(crate) fn gtk_selection_data_set(
+        data: *mut c_void,
+        kind: *mut c_void,
+        format: i32,
+        bytes: *const u8,
+        length: i32,
+    );
+    pub(crate) fn gtk_file_chooser_set_extra_widget(chooser: *mut c_void, widget: *mut c_void);
+    pub(crate) fn gtk_file_chooser_set_do_overwrite_confirmation(
+        chooser: *mut c_void,
+        confirm: i32,
+    );
+    pub(crate) fn gtk_file_chooser_set_current_name(chooser: *mut c_void, name: *const c_char);
+    pub(crate) fn gtk_file_chooser_get_current_name(chooser: *mut c_void) -> *mut c_char;
+    pub(crate) fn g_free(memory: *mut c_void);
 }

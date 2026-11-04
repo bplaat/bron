@@ -17,6 +17,28 @@ vector drawings, and follows the system light or dark theme.
 - Drop an image onto a window to show it there
 - File manager previews and thumbnails for supported formats
 
+### Editing
+
+An Edit button, on macOS and Linux, swaps in an edit toolbar for still bitmaps, with popovers
+for its tools:
+
+- Rotate and flip, saved to JPEG files by changing their EXIF orientation instead of encoding
+  them again
+- Crop with aspect ratios and straightening, and resize
+- Adjust the light (exposure, brightness, contrast, highlights, shadows, vignette) and colors
+  (saturation, vibrance, warmth, tint, hue)
+- Auto enhance, grayscale, sepia, invert, threshold, solarize, gaussian, box, motion and radial
+  blur, sharpen, noise reduction and pixelate
+- Rectangle and ellipse selections that edits only change, with feathered edges, which are
+  flipped in place, copied, or cropped to with a transparent background for ellipses
+- Previews on a copy as large as the window, edits applied in the background, and the last
+  change set up again when its tool is opened again
+- Undo and redo within a memory budget, and saving with a JPEG quality, the EXIF metadata of
+  photos and the smallest encoding for pictures up to 1024x1024
+- Save As, in the file dialog of the platform with controls for the format, JPEG quality and
+  size, draws vectors as bitmaps at a chosen size, and saves the first frame of animations,
+  which cannot be edited
+
 ### macOS
 
 - A toolbar in the titlebar with previous and next image and the zoom commands, and the
@@ -24,22 +46,7 @@ vector drawings, and follows the system light or dark theme.
 - Print images at their natural size or scaled to fit, and reopen them from Open Recent
 - Quick Look [preview](../imageview-macos-preview) and [thumbnail](../imageview-macos-thumbnail)
   extensions
-- An Edit button that swaps in an edit toolbar for still bitmaps, with popovers for its tools:
-  - Rotate and flip, saved to JPEG files by changing their EXIF orientation instead of
-    encoding them again
-  - Crop with aspect ratios and straightening, and resize
-  - Adjust the light (exposure, brightness, contrast, highlights, shadows, vignette) and
-    colors (saturation, vibrance, warmth, tint, hue)
-  - Auto enhance, grayscale, sepia, invert, threshold, solarize, gaussian, box, motion and
-    radial blur, sharpen, noise reduction and pixelate
-  - Rectangle and ellipse selections that edits only change, with feathered edges, which
-    are flipped in place, copied, or cropped to with a transparent background for ellipses
-  - Previews on a copy as large as the window, edits applied in the background, and the
-    last change set up again when its tool is opened again
-  - Undo and redo within a memory budget, and saving with a JPEG quality, the EXIF metadata
-    of photos and the smallest encoding
-- Save As draws vectors as bitmaps at a chosen size, and saves the first frame of
-  animations, which cannot be edited
+- Edit tools in popovers below the unified toolbar, and Save As controls in the save sheet
 
 ### Windows
 
@@ -59,6 +66,9 @@ vector drawings, and follows the system light or dark theme.
   beneath the filename. Other desktops use a normal titlebar showing `filename (widthxheight)`
   and an inline toolbar containing only buttons.
   Detection uses `XDG_CURRENT_DESKTOP` on both X11 and Wayland
+- The edit controls in the same place, with GtkPopovers for the tools and Image and Edit menus
+  in the application menu. Save As uses a GtkFileChooserDialog for its extra controls, the
+  other file dialogs a native chooser
 - A freedesktop thumbnailer: `ImageView --thumbnail -s SIZE INPUT OUTPUT` writes a PNG
   thumbnail, without starting GTK
 - `cargo xtask install` installs the binary, the [desktop entry](meta/freedesktop/.desktop),

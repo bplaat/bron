@@ -23,14 +23,13 @@ use imageview_core::{
 
 use crate::platforms::MediaView;
 
-#[cfg(target_os = "macos")]
-mod edit;
-// Only the macOS view crops and selects yet.
+// The Windows view does not edit yet.
 #[cfg(not(windows))]
-#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+mod edit;
+#[cfg(not(windows))]
 mod marquee;
 mod platforms;
-#[cfg(target_os = "macos")]
+#[cfg(not(windows))]
 mod save;
 #[cfg(not(windows))]
 mod viewport;
@@ -62,11 +61,11 @@ pub(crate) enum AppEvent {
     #[cfg_attr(not(any(target_os = "macos", windows)), allow(dead_code))]
     Action(&'static str),
     /// A control of the open edit tool of a window changed, with the values of all controls.
-    #[cfg(target_os = "macos")]
+    #[cfg(not(windows))]
     ToolChanged(WindowId, usize, Vec<f32>),
     /// The preview of an edit tool of a window finished, with the smaller copy of the
     /// picture it was made from and its scale.
-    #[cfg(target_os = "macos")]
+    #[cfg(not(windows))]
     Previewed(
         WindowId,
         u64,
@@ -75,10 +74,10 @@ pub(crate) enum AppEvent {
         f64,
     ),
     /// A save of a window finished in the background.
-    #[cfg(target_os = "macos")]
+    #[cfg(not(windows))]
     Saved(WindowId, edit::Saved),
     /// An edit of a window finished in the background.
-    #[cfg(target_os = "macos")]
+    #[cfg(not(windows))]
     Applied(
         WindowId,
         imageview_core::edit::Picture,
@@ -105,29 +104,30 @@ enum Target {
     },
 }
 
-// A window showing one image file.
+// A window showing one image file. The view is declared first so it drops while its window still
+// exists, its native controls are torn down before the window that contains them.
 struct ImageWindow {
-    window: Window,
     view: MediaView,
+    window: Window,
     path: PathBuf,
     version: Option<FileVersion>,
     // Increments for every load into this window, so only the latest one is shown.
     generation: u64,
     // The open request that is still decoding the first media of the window.
     opening: Option<u64>,
-    #[cfg(target_os = "macos")]
+    #[cfg(not(windows))]
     editing: Option<edit::Editing>,
     // Whether an edit is being applied or the image saved in the background.
-    #[cfg(target_os = "macos")]
+    #[cfg(not(windows))]
     busy: bool,
 }
 
 impl ImageWindow {
     // Whether the media is being edited, which keeps it from reloading.
     const fn is_editing(&self) -> bool {
-        #[cfg(target_os = "macos")]
+        #[cfg(not(windows))]
         return self.editing.is_some();
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(windows)]
         false
     }
 }
@@ -219,7 +219,7 @@ impl App {
         opening: Option<u64>,
     ) {
         let window = WindowBuilder::new()
-            .title(title(&path, media.as_ref()))
+            .title(title(&path, media.as_ref(), false))
             .size(content_size(media.as_ref()))
             .min_size(LogicalSize::new(
                 platforms::MIN_SIZE.0,
@@ -237,9 +237,9 @@ impl App {
             version,
             generation: 0,
             opening,
-            #[cfg(target_os = "macos")]
+            #[cfg(not(windows))]
             editing: None,
-            #[cfg(target_os = "macos")]
+            #[cfg(not(windows))]
             busy: false,
         });
     }
@@ -276,7 +276,9 @@ impl App {
                 {
                     window.opening = None;
                     window.version = load.version;
-                    window.window.set_title(title(&load.path, Some(&media)));
+                    window
+                        .window
+                        .set_title(title(&load.path, Some(&media), false));
                     // The window opened with the loading size gets the size of its media.
                     window.window.set_size(content_size(Some(&media)));
                     #[cfg(target_os = "macos")]
@@ -298,7 +300,9 @@ impl App {
                 if window.generation != generation {
                     return;
                 }
-                window.window.set_title(title(&load.path, Some(&media)));
+                window
+                    .window
+                    .set_title(title(&load.path, Some(&media), false));
                 window.view.set_media(media, zoom_to_fit);
                 window.path = load.path;
                 window.version = load.version;
@@ -346,7 +350,7 @@ impl App {
 
     // Shows another image in a window, fitted to it.
     fn show(&mut self, id: WindowId, path: PathBuf) {
-        #[cfg(target_os = "macos")]
+        #[cfg(not(windows))]
         if !self.finish_editing(id, edit::AfterSave::Show(path.clone())) {
             return;
         }
@@ -395,7 +399,7 @@ impl App {
     }
 
     fn action(&mut self, action: &str) {
-        #[cfg(target_os = "macos")]
+        #[cfg(not(windows))]
         if self.edit_action(action) {
             return;
         }
@@ -432,7 +436,7 @@ impl App {
                 }
             }
             WindowEvent::CloseRequested(request) if !request.default_prevented() => {
-                #[cfg(target_os = "macos")]
+                #[cfg(not(windows))]
                 if !self.finish_editing(id, edit::AfterSave::Close) {
                     request.prevent_default();
                     return;
@@ -461,19 +465,19 @@ impl App {
             Event::UserEvent(AppEvent::SlowLoad(id)) => self.slow_load(id),
             Event::Action(action) => self.action(&action),
             Event::UserEvent(AppEvent::Action(action)) => self.action(action),
-            #[cfg(target_os = "macos")]
+            #[cfg(not(windows))]
             Event::UserEvent(AppEvent::ToolChanged(id, index, values)) => {
                 self.tool_changed(id, index, values)
             }
-            #[cfg(target_os = "macos")]
+            #[cfg(not(windows))]
             Event::UserEvent(AppEvent::Previewed(id, generation, media, proxy, scale)) => {
                 self.previewed(id, generation, media, proxy, scale);
             }
-            #[cfg(target_os = "macos")]
+            #[cfg(not(windows))]
             Event::UserEvent(AppEvent::Applied(id, picture, step, amend)) => {
                 self.applied(id, picture, step, amend);
             }
-            #[cfg(target_os = "macos")]
+            #[cfg(not(windows))]
             Event::UserEvent(AppEvent::Saved(id, saved)) => self.saved(id, saved),
             Event::Window(id, event) => self.window_event(id, event),
             _ => {}
@@ -502,30 +506,30 @@ fn file_name(path: &Path) -> String {
     )
 }
 
-// macOS shows the media size in the header subtitle.
+// macOS shows the media size in the header subtitle, and unsaved changes with a dot in the close
+// button.
 #[cfg(target_os = "macos")]
-fn title(path: &Path, _media: Option<&Media>) -> String {
+fn title(path: &Path, _media: Option<&Media>, _edited: bool) -> String {
     file_name(path)
 }
 
-// GTK desktops with a separate titlebar show dimensions there instead of in the toolbar.
-#[cfg(not(any(target_os = "macos", windows)))]
-fn title(path: &Path, media: Option<&Media>) -> String {
+// The file name with a star in front of it for unsaved changes, like other Windows and Linux
+// applications, and the media size once it is decoded. GTK desktops with a header bar show the
+// size in the toolbar instead.
+#[cfg(not(target_os = "macos"))]
+fn title(path: &Path, media: Option<&Media>, edited: bool) -> String {
+    let name = if edited {
+        format!("*{}", file_name(path))
+    } else {
+        file_name(path)
+    };
+    #[cfg(not(windows))]
     if platforms::uses_header_bar() {
-        return file_name(path);
+        return name;
     }
     media.map_or_else(
-        || file_name(path),
-        |media| imageview_core::window_title(&file_name(path), media.size()),
-    )
-}
-
-// The file name and the media size once it is decoded.
-#[cfg(windows)]
-fn title(path: &Path, media: Option<&Media>) -> String {
-    media.map_or_else(
-        || file_name(path),
-        |media| imageview_core::window_title(&file_name(path), media.size()),
+        || name.clone(),
+        |media| imageview_core::window_title(&name, media.size()),
     )
 }
 
@@ -533,7 +537,7 @@ fn menu() -> MenuBarBuilder {
     let primary = |key| Accelerator::new(Modifiers::PRIMARY, key);
     let file = MenuBuilder::new("File")
         .item(MenuItem::new("Open...", "file.open").accelerator(primary(KeyCode::KeyO)));
-    #[cfg(target_os = "macos")]
+    #[cfg(not(windows))]
     let file = file
         .separator()
         .item(MenuItem::new("Save", "file.save").accelerator(primary(KeyCode::KeyS)))
@@ -543,11 +547,13 @@ fn menu() -> MenuBarBuilder {
                 KeyCode::KeyS,
             )),
         )
-        .separator()
+        .separator();
+    #[cfg(target_os = "macos")]
+    let file = file
         .item(MenuItem::new("Print...", "file.print").accelerator(primary(KeyCode::KeyP)))
         .separator();
     let menu_bar = MenuBarBuilder::new().menu(file);
-    #[cfg(target_os = "macos")]
+    #[cfg(not(windows))]
     let menu_bar = menu_bar.menu(edit_menu()).menu(image_menu());
     menu_bar.menu(
         MenuBuilder::new("View")
@@ -591,16 +597,45 @@ fn edit_menu() -> MenuBuilder {
         )
 }
 
-#[cfg(target_os = "macos")]
+// These take the place of the default items of the same names, which only reach text fields.
+#[cfg(not(any(target_os = "macos", windows)))]
+fn edit_menu() -> MenuBuilder {
+    let primary = |key| Accelerator::new(Modifiers::PRIMARY, key);
+    MenuBuilder::new("Edit")
+        .item(MenuItem::new("Undo", "edit.undo").accelerator(primary(KeyCode::KeyZ)))
+        .item(
+            MenuItem::new("Redo", "edit.redo").accelerator(Accelerator::new(
+                Modifiers::PRIMARY | Modifiers::SHIFT,
+                KeyCode::KeyZ,
+            )),
+        )
+        .item(MenuItem::new("Copy", "edit.copy").accelerator(primary(KeyCode::KeyC)))
+        .item(MenuItem::new("Select All", "select.all").accelerator(primary(KeyCode::KeyA)))
+}
+
+#[cfg(not(windows))]
 fn image_menu() -> MenuBuilder {
     let primary = |key| Accelerator::new(Modifiers::PRIMARY, key);
-    MenuBuilder::new("Image")
+    let menu = MenuBuilder::new("Image")
         .item(MenuItem::new("Edit Image", "edit.toggle").accelerator(primary(KeyCode::KeyE)))
         .separator()
         .item(MenuItem::new("Whole Image", "select.whole"))
         .item(MenuItem::new("Rectangle Selection", "select.rectangle"))
-        .item(MenuItem::new("Ellipse Selection", "select.ellipse"))
-        .separator()
+        .item(MenuItem::new("Ellipse Selection", "select.ellipse"));
+    // Custom items open GTK menus, so these stay with the other selection items.
+    #[cfg(not(target_os = "macos"))]
+    let menu = menu
+        .item(
+            MenuItem::new("Deselect", "select.none")
+                .accelerator(Accelerator::new(Modifiers::PRIMARY, KeyCode::KeyD)),
+        )
+        .item(
+            MenuItem::new("Invert Selection", "select.invert").accelerator(Accelerator::new(
+                Modifiers::PRIMARY | Modifiers::SHIFT,
+                KeyCode::KeyI,
+            )),
+        );
+    menu.separator()
         .item(MenuItem::new("Rotate Left", "image.rotate_left").accelerator(primary(KeyCode::KeyL)))
         .item(
             MenuItem::new("Rotate Right", "image.rotate_right").accelerator(primary(KeyCode::KeyR)),
@@ -692,7 +727,7 @@ fn main() {
     event_loop.run(move |event| {
         app.handle(event);
         // The menu follows the mode of the active window.
-        #[cfg(target_os = "macos")]
+        #[cfg(not(windows))]
         app.update_menu();
     });
 }

@@ -6,25 +6,32 @@
 
 //! The GTK media view: a native GtkScrolledWindow around a drawing area as large as the
 //! magnified media, which draws the viewport with bcanvas, in an overlay that shows a spinner
-//! while the media loads. The scrolled window scrolls the
-//! drawing area, its scroll position is followed by the viewport and the other way around.
+//! while the media loads or an edit is applied. The scrolled window scrolls the drawing area, its
+//! scroll position is followed by the viewport and the other way around.
 
 #![allow(unsafe_code)]
 
 use std::cell::{Cell, RefCell};
-use std::ffi::c_void;
-use std::ptr::null_mut;
+use std::ffi::{CStr, c_void};
+use std::ptr::{from_ref, null, null_mut};
 use std::rc::{Rc, Weak};
 
 use bcanvas::NativeContext;
-use bwindow::{NativeViewHandle, Theme, Window, WindowAttachment};
+use bwindow::{NativeViewHandle, Theme, Window, WindowAttachment, WindowId};
+use imageview_core::edit::{Control, Selection, Shape, Tool};
 use imageview_core::{Media, WHEEL_ZOOM_RATE};
 
 use self::headers::*;
+use self::popover::Popover;
+pub(crate) use self::save::SaveOptions;
 pub(crate) use self::thumbnail::thumbnail;
+use self::toolbar::{Toolbar, send};
+use crate::AppEvent;
 use crate::viewport::{Axis, LINE, Step, Viewport};
 
 mod headers;
+mod popover;
+mod save;
 mod thumbnail;
 mod toolbar;
 
@@ -38,10 +45,13 @@ struct State {
     dark: Cell<bool>,
     // The overlay of the scrolled window and the loading spinner, which the window embeds.
     overlay: *mut c_void,
-    header_bar: *mut c_void,
+    toolbar: Toolbar,
     integrated_toolbar: bool,
     scrolled_window: *mut c_void,
-    // The spinner shown until the media is decoded, or null.
+    // The horizontal and vertical adjustments of the scrolled window, which a destroyed
+    // scrolled window no longer returns.
+    adjustments: [*mut c_void; 2],
+    // The spinner shown until the media is decoded or an edit is applied, or null.
     spinner: Cell<*mut c_void>,
     area: *mut c_void,
     gesture: *mut c_void,
@@ -55,6 +65,8 @@ struct State {
 /// A native view that zooms and pans media.
 pub(crate) struct MediaView {
     state: Rc<State>,
+    // The popover of the open edit tool.
+    popover: Option<Popover>,
     _attachment: WindowAttachment,
 }
 
@@ -67,16 +79,19 @@ impl MediaView {
         let size = window.size();
         let integrated_toolbar = uses_header_bar();
         // SAFETY: The attachment keeps the GTK window alive on this thread.
-        let header_bar = unsafe {
+        let toolbar = unsafe {
             let Some(bwindow::NativeWindowHandle::Gtk(window)) = attachment.window_handle() else {
                 unreachable!("GTK view requires a GTK window");
             };
-            let bar = toolbar::install(window, integrated_toolbar);
+            let toolbar = Toolbar::install(window, integrated_toolbar);
             if integrated_toolbar && let Some(media) = &media {
-                toolbar::show_size(bar, media);
+                toolbar::show_size(toolbar.bar, media);
             }
-            bar
+            toolbar
         };
+        let header_bar = toolbar.bar;
+        // Only still bitmaps can be edited, the loading media has no frames.
+        toolbar.set_editable(media.as_ref().is_some_and(Media::is_still));
         // SAFETY: The created widgets are owned by this view until it drops them, the window
         // keeps the overlay it embeds alive while the attachment is open.
         let state = unsafe {
@@ -85,14 +100,7 @@ impl MediaView {
                 g_object_ref_sink(gtk_scrolled_window_new(null_mut(), null_mut()));
             gtk_container_add(overlay, scrolled_window);
             let spinner = if loading {
-                let spinner = gtk_spinner_new();
-                gtk_widget_set_halign(spinner, GTK_ALIGN_CENTER);
-                gtk_widget_set_valign(spinner, GTK_ALIGN_CENTER);
-                gtk_widget_set_size_request(spinner, 32, 32);
-                gtk_overlay_add_overlay(overlay, spinner);
-                gtk_overlay_set_overlay_pass_through(overlay, spinner, 1);
-                gtk_spinner_start(spinner);
-                spinner
+                add_spinner(overlay)
             } else {
                 null_mut()
             };
@@ -115,9 +123,13 @@ impl MediaView {
                 )),
                 dark: Cell::new(theme == Theme::Dark),
                 overlay,
-                header_bar,
+                toolbar,
                 integrated_toolbar,
                 scrolled_window,
+                adjustments: [
+                    g_object_ref(gtk_scrolled_window_get_hadjustment(scrolled_window)),
+                    g_object_ref(gtk_scrolled_window_get_vadjustment(scrolled_window)),
+                ],
                 spinner: Cell::new(spinner),
                 area,
                 gesture: gtk_gesture_zoom_new(area),
@@ -160,20 +172,32 @@ impl MediaView {
         state.start_animation();
         Self {
             state,
+            popover: None,
             _attachment: attachment,
         }
+    }
+
+    /// The shown media.
+    pub(crate) fn media(&self) -> Media {
+        self.state.viewport.borrow().media().clone()
     }
 
     /// Replaces the media, keeping the zoom or fitting it to the window.
     pub(crate) fn set_media(&mut self, media: Media, zoom_to_fit: bool) {
         self.state.stop_animation();
+        // Vectors and animations cannot be edited, only saved as bitmaps.
+        self.state.toolbar.set_editable(media.is_still());
         if self.state.integrated_toolbar {
             // SAFETY: The window owns the header bar while this view is attached.
-            unsafe { toolbar::show_size(self.state.header_bar, &media) };
+            unsafe { toolbar::show_size(self.state.toolbar.bar, &media) };
         }
         self.state
             .update(|viewport| viewport.set_media(media, zoom_to_fit));
         self.state.start_animation();
+        self.remove_spinner();
+    }
+
+    fn remove_spinner(&self) {
         let spinner = self.state.spinner.replace(null_mut());
         if !spinner.is_null() {
             // SAFETY: The spinner is a live child of the overlay, which drops it.
@@ -196,6 +220,161 @@ impl MediaView {
         self.state.update(Viewport::zoom_to_fit);
     }
 
+    /// Shows the edit controls, or the view controls again.
+    pub(crate) fn set_editing(&mut self, editing: bool) {
+        self.close_tool();
+        self.state.toolbar.set_editing(editing);
+    }
+
+    /// Shows the popover with controls of a tool below the toolbar button of `action`, and
+    /// the crop rectangle for a crop. Changes of the controls go to `window`, reset goes back
+    /// to the defaults.
+    pub(crate) fn show_tool(
+        &mut self,
+        window: WindowId,
+        tool: Tool,
+        controls: &[Control],
+        values: &[f32],
+        defaults: &[f32],
+        action: &str,
+    ) {
+        self.close_tool();
+        if tool == Tool::Crop {
+            self.state.update(|viewport| viewport.set_cropping(true));
+            self.state.show_cursor();
+        }
+        let anchor = self.state.toolbar.button(action).unwrap_or(self.state.area);
+        // SAFETY: The anchor is a live widget of the window of this view.
+        self.popover =
+            Some(unsafe { Popover::new(anchor, window, tool, controls, values, defaults) });
+    }
+
+    /// Shows changed values of the open tool.
+    pub(crate) fn set_tool_values(&self, values: &[f32]) {
+        if let Some(popover) = &self.popover {
+            popover.set_values(values);
+        }
+    }
+
+    /// Closes the popover and crop rectangle of the open tool.
+    pub(crate) fn close_tool(&mut self) {
+        if self.popover.take().is_some() {
+            self.state.update(|viewport| viewport.set_cropping(false));
+            self.state.show_cursor();
+            // SAFETY: The drawing area is alive while this view is.
+            unsafe { gtk_widget_grab_focus(self.state.area) };
+        }
+    }
+
+    /// Makes drags draw selections of a shape, or selects the whole image again, shown as on
+    /// in the toolbar.
+    pub(crate) fn set_selecting(&self, shape: Option<Shape>) {
+        self.state.update(|viewport| viewport.set_selecting(shape));
+        self.state.show_cursor();
+        self.state.toolbar.set_toggled(match shape {
+            None => "select.whole",
+            Some(Shape::Rectangle) => "select.rectangle",
+            Some(Shape::Ellipse) => "select.ellipse",
+        });
+    }
+
+    /// The selected part of the media.
+    pub(crate) fn selection(&self) -> Option<Selection> {
+        self.state.viewport.borrow().selection()
+    }
+
+    /// Selects everything outside the selection instead.
+    pub(crate) fn invert_selection(&self) {
+        self.state.update(Viewport::invert_selection);
+    }
+
+    /// Puts a PNG image on the clipboard, for as long as this application lives or the desktop
+    /// keeps a copy.
+    pub(crate) fn copy_png(&self, png: &[u8]) {
+        let targets = [GtkTargetEntry {
+            target: c"image/png".as_ptr(),
+            flags: 0,
+            info: 0,
+        }];
+        let png = Box::into_raw(Box::new(png.to_vec())).cast::<c_void>();
+        // SAFETY: GTK copies the targets and hands the boxed image to the clipboard handlers,
+        // the last of which frees it.
+        unsafe {
+            let clipboard = gtk_clipboard_get(gdk_atom_intern(c"CLIPBOARD".as_ptr(), 0));
+            if gtk_clipboard_set_with_data(
+                clipboard,
+                targets.as_ptr(),
+                1,
+                clipboard_get,
+                clipboard_clear,
+                png,
+            ) == 0
+            {
+                drop(Box::from_raw(png.cast::<Vec<u8>>()));
+                return;
+            }
+            // The application hands the image to the clipboard manager of the desktop when it
+            // quits, which storing right away would do in a nested main loop.
+            gtk_clipboard_set_can_store(clipboard, targets.as_ptr(), 1);
+        }
+    }
+
+    /// Shows a preview of any size in the place of the image, or the image again.
+    pub(crate) fn set_preview(&self, preview: Option<Media>) {
+        self.state.update(|viewport| viewport.set_preview(preview));
+    }
+
+    /// Places the crop rectangle at a position with a size in pixels.
+    pub(crate) fn set_crop_rect(&self, rect: (u32, u32, u32, u32)) {
+        self.state.update(|viewport| {
+            if let Some(crop) = viewport.crop() {
+                crop.set_rect(rect);
+            }
+        });
+    }
+
+    /// Makes the crop rectangle keep a width divided by height, or any shape.
+    pub(crate) fn set_crop_aspect(&self, aspect: Option<f64>) {
+        self.state.update(|viewport| {
+            if let Some(crop) = viewport.crop() {
+                crop.set_aspect(aspect);
+            }
+        });
+    }
+
+    /// The crop rectangle in pixels, or all of the media without one.
+    pub(crate) fn crop_rect(&self) -> (u32, u32, u32, u32) {
+        let mut viewport = self.state.viewport.borrow_mut();
+        let (width, height) = viewport.media().size();
+        viewport
+            .crop()
+            .map_or((0, 0, width as u32, height as u32), |crop| crop.rect())
+    }
+
+    /// The longest side of the view in device pixels, which previews do not need to exceed.
+    pub(crate) fn longest_pixels(&self) -> u32 {
+        let area = self.state.scrolled_window;
+        // SAFETY: The scrolled window is alive while this view is.
+        unsafe {
+            let longest = gtk_widget_get_allocated_width(area)
+                .max(gtk_widget_get_allocated_height(area))
+                .max(1);
+            (longest * gtk_widget_get_scale_factor(area)) as u32
+        }
+    }
+
+    /// Shows a spinner while an edit is applied.
+    pub(crate) fn set_busy(&self, busy: bool) {
+        if !busy {
+            self.remove_spinner();
+        } else if self.state.spinner.get().is_null() {
+            // SAFETY: The overlay is alive while this view is.
+            self.state
+                .spinner
+                .set(unsafe { add_spinner(self.state.overlay) });
+        }
+    }
+
     /// Redraws the checkerboard in the colors of the new theme.
     pub(crate) fn theme_changed(&self, theme: Theme) {
         self.state.dark.set(theme == Theme::Dark);
@@ -204,20 +383,58 @@ impl MediaView {
     }
 }
 
+// Adds a running spinner in the middle of an overlay, which keeps it there.
+unsafe fn add_spinner(overlay: *mut c_void) -> *mut c_void {
+    // SAFETY: The caller supplies a live overlay, which owns its children.
+    unsafe {
+        let spinner = gtk_spinner_new();
+        gtk_widget_set_halign(spinner, GTK_ALIGN_CENTER);
+        gtk_widget_set_valign(spinner, GTK_ALIGN_CENTER);
+        gtk_widget_set_size_request(spinner, 32, 32);
+        gtk_overlay_add_overlay(overlay, spinner);
+        gtk_overlay_set_overlay_pass_through(overlay, spinner, 1);
+        gtk_spinner_start(spinner);
+        gtk_widget_show(spinner);
+        spinner
+    }
+}
+
+// Gives the image to an application that pastes it.
+extern "C" fn clipboard_get(_: *mut c_void, data: *mut c_void, _: u32, png: *mut c_void) {
+    // SAFETY: GTK passes the selection data and the boxed image of this clipboard content.
+    unsafe {
+        let png = &*png.cast::<Vec<u8>>();
+        gtk_selection_data_set(
+            data,
+            gdk_atom_intern(c"image/png".as_ptr(), 0),
+            8,
+            png.as_ptr(),
+            png.len() as i32,
+        );
+    }
+}
+
+extern "C" fn clipboard_clear(_: *mut c_void, png: *mut c_void) {
+    // SAFETY: GTK is done with the boxed image of this clipboard content.
+    drop(unsafe { Box::from_raw(png.cast::<Vec<u8>>()) });
+}
+
 impl Drop for MediaView {
     fn drop(&mut self) {
+        self.popover = None;
         let state = &self.state;
         state.stop_animation();
-        let data = Rc::as_ptr(state).cast::<c_void>();
+        let data = from_ref::<State>(state).cast::<c_void>();
         // SAFETY: This view owns a reference to each object, the handlers using the state are
         // disconnected before it is freed.
         unsafe {
+            let [horizontal, vertical] = state.adjustments;
             for object in [
                 state.area,
                 state.gesture,
                 state.scrolled_window,
-                state.adjustment(Axis::Horizontal),
-                state.adjustment(Axis::Vertical),
+                horizontal,
+                vertical,
             ] {
                 g_signal_handlers_disconnect_matched(
                     object,
@@ -231,6 +448,8 @@ impl Drop for MediaView {
             }
             g_object_unref(state.gesture);
             g_object_unref(state.area);
+            g_object_unref(horizontal);
+            g_object_unref(vertical);
             g_object_unref(state.scrolled_window);
             g_object_unref(state.overlay);
         }
@@ -239,8 +458,8 @@ impl Drop for MediaView {
 
 impl State {
     fn connect(&self) {
-        let data = std::ptr::from_ref(self).cast::<c_void>();
-        let signals: [(*mut c_void, &std::ffi::CStr, *const c_void); 11] = [
+        let data = from_ref(self).cast::<c_void>();
+        let signals: [(*mut c_void, &CStr, *const c_void); 11] = [
             (self.area, c"draw", draw as *const c_void),
             (self.area, c"scroll-event", scroll as *const c_void),
             (self.area, c"key-press-event", key_press as *const c_void),
@@ -280,13 +499,10 @@ impl State {
         }
     }
 
-    fn adjustment(&self, axis: Axis) -> *mut c_void {
-        // SAFETY: The scrolled window is alive and owns its adjustments.
-        unsafe {
-            match axis {
-                Axis::Horizontal => gtk_scrolled_window_get_hadjustment(self.scrolled_window),
-                Axis::Vertical => gtk_scrolled_window_get_vadjustment(self.scrolled_window),
-            }
+    const fn adjustment(&self, axis: Axis) -> *mut c_void {
+        match axis {
+            Axis::Horizontal => self.adjustments[0],
+            Axis::Vertical => self.adjustments[1],
         }
     }
 
@@ -364,6 +580,18 @@ impl State {
             )
         };
         self.timer.set(timer);
+    }
+
+    // Shows a crosshair while cropping or selecting.
+    fn show_cursor(&self) {
+        let marking = self.viewport.borrow().is_marking();
+        let name = if marking {
+            c"crosshair".as_ptr()
+        } else {
+            null()
+        };
+        // SAFETY: The drawing area is alive while the state is.
+        unsafe { set_cursor(self.area, name) };
     }
 
     fn stop_animation(&self) {
@@ -470,22 +698,42 @@ extern "C" fn key_press(_: *mut c_void, event: *const c_void, state: &State) -> 
         GDK_KEY_PAGE_DOWN => Step::PageForward,
         GDK_KEY_HOME => Step::Start,
         GDK_KEY_END => Step::End,
+        // Return applies the open tool and escape cancels it.
+        GDK_KEY_RETURN | GDK_KEY_KP_ENTER => {
+            send(AppEvent::Action("tool.apply"));
+            return 1;
+        }
+        GDK_KEY_ESCAPE => {
+            send(AppEvent::Action("tool.cancel"));
+            return 1;
+        }
         _ => return 0,
     };
     state.update(|viewport| viewport.step(Axis::Vertical, step));
     1
 }
 
-// Dragging with the primary button pans the media, the screen position does not move with it.
+// Dragging with the primary button draws or changes the crop rectangle or selection, or else
+// pans the media, the screen position does not move with it.
 extern "C" fn button_press(area: *mut c_void, event: *const c_void, state: &State) -> i32 {
-    let (mut button, mut x, mut y) = (0, 0.0, 0.0);
+    let (mut button, mut x, mut y, mut area_x, mut area_y) = (0, 0.0, 0.0, 0.0, 0.0);
     // SAFETY: GTK passes the live drawing area and a button event.
     unsafe {
         gtk_widget_grab_focus(area);
         if gdk_event_get_button(event, &mut button) == 0 || button != 1 {
             return 0;
         }
+        // A double or triple click reports another press after the presses of its clicks.
+        if gdk_event_get_event_type(event) != GDK_BUTTON_PRESS {
+            return 1;
+        }
         gdk_event_get_root_coords(event, &mut x, &mut y);
+        gdk_event_get_coords(event, &mut area_x, &mut area_y);
+    }
+    let pointer = state.visible_point((area_x, area_y));
+    if state.viewport.borrow_mut().mark_begin(pointer) {
+        state.update(|_| {});
+        return 1;
     }
     if state.viewport.borrow_mut().drag_begin((x, y)) {
         // SAFETY: GTK passes the live realized drawing area.
@@ -494,20 +742,50 @@ extern "C" fn button_press(area: *mut c_void, event: *const c_void, state: &Stat
     1
 }
 
-extern "C" fn button_release(area: *mut c_void, _: *const c_void, state: &State) -> i32 {
+extern "C" fn button_release(_: *mut c_void, event: *const c_void, state: &State) -> i32 {
+    let mut button = 0;
+    // SAFETY: GTK passes a live button event.
+    if unsafe { gdk_event_get_button(event, &mut button) } == 0 || button != 1 {
+        return 0;
+    }
+    let (marked, cleared) = {
+        let mut viewport = state.viewport.borrow_mut();
+        let marked = viewport.mark_end();
+        let cleared = viewport.selecting().is_some() && viewport.selection().is_none();
+        (marked, marked && cleared)
+    };
+    // A click without a drag goes back to editing the whole image, the menu follows a drawn
+    // selection.
+    if cleared {
+        send(AppEvent::Action("select.whole"));
+    } else if marked {
+        send(AppEvent::Action("select.changed"));
+    }
+    if marked {
+        state.update(|_| {});
+        return 1;
+    }
     if !state.viewport.borrow_mut().drag_end() {
         return 0;
     }
-    // SAFETY: GTK passes the live realized drawing area.
-    unsafe { set_cursor(area, std::ptr::null()) };
+    state.show_cursor();
     1
 }
 
 extern "C" fn motion(_: *mut c_void, event: *const c_void, state: &State) -> i32 {
-    let (mut x, mut y) = (0.0, 0.0);
+    let (mut x, mut y, mut area_x, mut area_y, mut modifiers) = (0.0, 0.0, 0.0, 0.0, 0);
     // SAFETY: GTK passes a live motion event.
-    unsafe { gdk_event_get_root_coords(event, &mut x, &mut y) };
-    if !state.viewport.borrow_mut().drag_to((x, y)) {
+    unsafe {
+        gdk_event_get_root_coords(event, &mut x, &mut y);
+        gdk_event_get_coords(event, &mut area_x, &mut area_y);
+        gdk_event_get_state(event, &mut modifiers);
+    }
+    let pointer = state.visible_point((area_x, area_y));
+    let moved = {
+        let mut viewport = state.viewport.borrow_mut();
+        viewport.mark_drag(pointer, modifiers & GDK_SHIFT_MASK != 0) || viewport.drag_to((x, y))
+    };
+    if !moved {
         return 0;
     }
     state.update(|_| {});
@@ -518,12 +796,16 @@ extern "C" fn motion(_: *mut c_void, event: *const c_void, state: &State) -> i32
 unsafe fn set_cursor(widget: *mut c_void, name: *const std::ffi::c_char) {
     // SAFETY: The caller supplies a live realized widget and a null-terminated name or null.
     unsafe {
+        let window = gtk_widget_get_window(widget);
+        if window.is_null() {
+            return;
+        }
         let cursor = if name.is_null() {
             null_mut()
         } else {
             gdk_cursor_new_from_name(gtk_widget_get_display(widget), name)
         };
-        gdk_window_set_cursor(gtk_widget_get_window(widget), cursor);
+        gdk_window_set_cursor(window, cursor);
         if !cursor.is_null() {
             g_object_unref(cursor);
         }
@@ -582,7 +864,7 @@ mod layout_tests {
                 480
             );
             if !view.state.integrated_toolbar {
-                assert!(gtk_widget_get_allocated_height(view.state.header_bar) >= 48);
+                assert!(gtk_widget_get_allocated_height(view.state.toolbar.bar) >= 48);
             }
         }
     }
