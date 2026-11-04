@@ -88,6 +88,46 @@ pub mod engine {
 
         const INVALID_VALUE: u8 = 0xff;
         const PAD_BYTE: u8 = b'=';
+        // Input bytes of a bulk encoding block and symbols of a bulk decoding block. Both turn
+        // into 64 symbols, which arithmetic maps at once where table lookups go one by one.
+        const ENCODE_BLOCK: usize = 48;
+        const DECODE_BLOCK: usize = 64;
+
+        // The symbol of a 6-bit value, with the two symbols that differ between alphabets.
+        #[inline(always)]
+        const fn symbol(value: u8, plus: u8, slash: u8) -> u8 {
+            let letter = if value < 26 { value + b'A' } else { value + 71 };
+            let digit = if value < 62 {
+                value.wrapping_sub(4)
+            } else if value == 62 {
+                plus
+            } else {
+                slash
+            };
+            if value < 52 { letter } else { digit }
+        }
+
+        // The 6-bit value of a symbol, or `INVALID_VALUE`.
+        #[inline(always)]
+        const fn symbol_value(byte: u8, plus: u8, slash: u8) -> u8 {
+            let mut value = INVALID_VALUE;
+            if byte.wrapping_sub(b'A') < 26 {
+                value = byte.wrapping_sub(b'A');
+            }
+            if byte.wrapping_sub(b'a') < 26 {
+                value = byte.wrapping_sub(71);
+            }
+            if byte.wrapping_sub(b'0') < 10 {
+                value = byte.wrapping_add(4);
+            }
+            if byte == plus {
+                value = 62;
+            }
+            if byte == slash {
+                value = 63;
+            }
+            value
+        }
 
         /// A general-purpose base64 engine.
         #[derive(Debug, Clone)]
@@ -104,7 +144,30 @@ pub mod engine {
             fn encode<T: AsRef<[u8]>>(&self, input: T) -> String {
                 let input = input.as_ref();
                 let mut out = Vec::with_capacity(input.len().div_ceil(3) * 4);
-                let (chunks, tail) = input.as_chunks::<3>();
+                let [plus, slash] = [self.encode_table[62], self.encode_table[63]];
+                let (blocks, rest) = input.as_chunks::<ENCODE_BLOCK>();
+                for block in blocks {
+                    let mut values = [0u8; 64];
+                    for (group, value) in block
+                        .as_chunks::<3>()
+                        .0
+                        .iter()
+                        .zip(values.as_chunks_mut::<4>().0)
+                    {
+                        let &[b0, b1, b2] = group;
+                        *value = [
+                            b0 >> 2,
+                            (b0 & 0x03) << 4 | b1 >> 4,
+                            (b1 & 0x0f) << 2 | b2 >> 6,
+                            b2 & 0x3f,
+                        ];
+                    }
+                    for value in &mut values {
+                        *value = symbol(*value, plus, slash);
+                    }
+                    out.extend_from_slice(&values);
+                }
+                let (chunks, tail) = rest.as_chunks::<3>();
                 for &[b0, b1, b2] in chunks {
                     out.extend_from_slice(&[
                         self.encode_table[(b0 >> 2) as usize],
@@ -149,11 +212,38 @@ pub mod engine {
                     .saturating_sub(rem)
                     .saturating_sub(usize::from(rem == 0) * 4);
                 let mut out = Vec::with_capacity(input.len().div_ceil(4) * 3);
-                let (quads, _) = input[..quads_len].as_chunks::<4>();
+                let [plus, slash] = [self.encode_table[62], self.encode_table[63]];
+                let blocks = input[..quads_len].as_chunks::<DECODE_BLOCK>().0;
+                let mut valid_len = 0;
+                for block in blocks {
+                    let mut values = [0u8; DECODE_BLOCK];
+                    let mut seen = 0;
+                    for (value, &byte) in values.iter_mut().zip(block) {
+                        *value = symbol_value(byte, plus, slash);
+                        seen |= *value;
+                    }
+                    // Valid values fit in 6 bits; the quads below find any invalid byte.
+                    if seen & 0xc0 != 0 {
+                        break;
+                    }
+                    let mut bytes = [0u8; 48];
+                    for (bytes, group) in bytes
+                        .as_chunks_mut::<3>()
+                        .0
+                        .iter_mut()
+                        .zip(values.as_chunks::<4>().0)
+                    {
+                        let &[a, b, c, d] = group;
+                        *bytes = [(a << 2) | (b >> 4), (b << 4) | (c >> 2), (c << 6) | d];
+                    }
+                    out.extend_from_slice(&bytes);
+                    valid_len += DECODE_BLOCK;
+                }
+                let (quads, _) = input[valid_len..quads_len].as_chunks::<4>();
                 for (index, quad) in quads.iter().enumerate() {
                     let [a, b, c, d] = quad.map(|byte| self.decode_table[byte as usize]);
                     if (a | b | c | d) == INVALID_VALUE {
-                        return Err(self.invalid_byte(quad, index * 4));
+                        return Err(self.invalid_byte(quad, valid_len + index * 4));
                     }
                     out.extend_from_slice(&[
                         (a << 2) | (b >> 4),
@@ -310,6 +400,46 @@ mod test {
         &BASE64_URL_SAFE,
         &BASE64_URL_SAFE_NO_PAD,
     ];
+
+    #[test]
+    fn bulk_blocks_match_the_tables() {
+        for engine in ENGINES {
+            let alphabet: Vec<u8> = (0..64)
+                .map(|value| engine.encode([value << 2]).into_bytes()[0])
+                .collect();
+            for byte in 0..=u8::MAX {
+                let mut symbols = [b'A'; 128];
+                symbols[77] = byte;
+                let value = alphabet.iter().position(|&symbol| symbol == byte);
+                let decoded = engine.decode(symbols);
+                match value {
+                    Some(value) => {
+                        let bytes = decoded.expect("valid symbol");
+                        let packed = u32::from_be_bytes([bytes[57], bytes[58], 0, 0]);
+                        assert_eq!(packed >> 20 & 63, value as u32);
+                    }
+                    None => assert_eq!(decoded, Err(DecodeError::InvalidByte(77, byte))),
+                }
+            }
+            for length in [0, 1, 2, 3, 47, 48, 49, 50, 95, 96, 97, 480, 1024] {
+                let data: Vec<u8> = (0..length).map(|index| (index * 211 + 7) as u8).collect();
+                let mut expected = String::new();
+                for group in data.chunks(3) {
+                    let mut value = [0u8; 3];
+                    value[..group.len()].copy_from_slice(group);
+                    let value = u32::from_be_bytes([0, value[0], value[1], value[2]]);
+                    for index in 0..=group.len() {
+                        expected.push(char::from(
+                            alphabet[(value >> (18 - 6 * index) & 63) as usize],
+                        ));
+                    }
+                }
+                let encoded = engine.encode(&data);
+                assert_eq!(encoded.trim_end_matches('='), expected);
+                assert_eq!(engine.decode(encoded).expect("round trip"), data);
+            }
+        }
+    }
 
     #[test]
     fn test_encode_standard() {
