@@ -78,7 +78,7 @@ impl crate::FileDialogInterface for PlatformFileDialog {
         open_files_impl(dialog, true)
     }
 
-    fn save_file(dialog: crate::FileDialog<'_>) -> Option<PathBuf> {
+    fn save_file(mut dialog: crate::FileDialog<'_>) -> Option<PathBuf> {
         unsafe {
             let title = CString::new(dialog.title.as_deref().unwrap_or("Save File"))
                 .expect("Can't convert to CString");
@@ -87,15 +87,10 @@ impl crate::FileDialogInterface for PlatformFileDialog {
                 .map(|window| window.0.window)
                 .unwrap_or(null_mut());
 
-            let chooser = cfg_select! {
-                gtk3_20 => gtk_file_chooser_native_new(
-                    title.as_ptr(),
-                    parent,
-                    GTK_FILE_CHOOSER_ACTION_SAVE,
-                    c"_Save".as_ptr(),
-                    c"_Cancel".as_ptr(),
-                ) as *mut c_void,
-                _ => gtk_file_chooser_dialog_new(
+            // Only a dialog takes extra widgets, a native chooser can be another process.
+            let customize = dialog.customize.take();
+            let new_dialog = || {
+                gtk_file_chooser_dialog_new(
                     title.as_ptr(),
                     parent,
                     GTK_FILE_CHOOSER_ACTION_SAVE,
@@ -103,8 +98,23 @@ impl crate::FileDialogInterface for PlatformFileDialog {
                     GTK_RESPONSE_CANCEL,
                     c"_Save".as_ptr(),
                     GTK_RESPONSE_ACCEPT,
-                    null::<c_char>(),
-                ) as *mut c_void,
+                    std::ptr::null::<c_char>(),
+                ) as *mut c_void
+            };
+            let native = cfg!(gtk3_20) && customize.is_none();
+            let chooser = cfg_select! {
+                gtk3_20 => if native {
+                    gtk_file_chooser_native_new(
+                        title.as_ptr(),
+                        parent,
+                        GTK_FILE_CHOOSER_ACTION_SAVE,
+                        c"_Save".as_ptr(),
+                        c"_Cancel".as_ptr(),
+                    ) as *mut c_void
+                } else {
+                    new_dialog()
+                },
+                _ => new_dialog(),
             };
 
             if let Some(dir) = &dialog.directory {
@@ -117,9 +127,16 @@ impl crate::FileDialogInterface for PlatformFileDialog {
                 gtk_file_chooser_set_current_name(chooser, name_c.as_ptr());
             }
             add_gtk_filters(chooser, &dialog.filters);
+            if let Some(customize) = customize {
+                customize(crate::NativeFileDialog::Gtk(chooser));
+            }
 
             let result = cfg_select! {
-                gtk3_20 => gtk_native_dialog_run(chooser as *mut GtkNativeDialog),
+                gtk3_20 => if native {
+                    gtk_native_dialog_run(chooser as *mut GtkNativeDialog)
+                } else {
+                    gtk_dialog_run(chooser as *mut GtkDialog)
+                },
                 _ => gtk_dialog_run(chooser as *mut GtkDialog),
             };
 
@@ -136,9 +153,11 @@ impl crate::FileDialogInterface for PlatformFileDialog {
                 None
             };
 
-            cfg_select! {
-                gtk3_20 => g_object_unref(chooser as *mut GObject),
-                _ => gtk_widget_destroy(chooser as *mut GtkWidget),
+            if native {
+                #[cfg(gtk3_20)]
+                g_object_unref(chooser as *mut GObject);
+            } else {
+                gtk_widget_destroy(chooser as *mut GtkWidget);
             }
             path
         }

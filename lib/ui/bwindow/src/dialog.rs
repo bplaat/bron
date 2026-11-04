@@ -4,6 +4,8 @@
  * SPDX-License-Identifier: MIT
  */
 
+use std::ffi::c_void;
+
 use crate::platforms::{PlatformFileDialog, PlatformMessageDialog};
 
 // MARK: Message dialogs
@@ -161,6 +163,17 @@ pub(crate) trait FileDialogInterface {
     fn save_file(dialog: FileDialog<'_>) -> Option<std::path::PathBuf>;
 }
 
+/// The native dialog of a save dialog, which [`FileDialog::customize`] adds its controls to.
+#[derive(Clone, Copy, Debug)]
+pub enum NativeFileDialog {
+    /// An AppKit NSSavePanel pointer.
+    AppKit(*mut c_void),
+    /// A COM IFileSaveDialog pointer.
+    Win32(*mut c_void),
+    /// A GTK 3 GtkFileChooserDialog pointer, which unlike a native chooser takes extra widgets.
+    Gtk(*mut c_void),
+}
+
 /// File dialog builder
 #[derive(Default)]
 pub struct FileDialog<'a> {
@@ -169,6 +182,7 @@ pub struct FileDialog<'a> {
     pub(crate) directory: Option<std::path::PathBuf>,
     pub(crate) filename: Option<String>,
     pub(crate) filters: Vec<FileDialogFilter>,
+    pub(crate) customize: Option<Box<dyn FnOnce(NativeFileDialog) + 'a>>,
 }
 
 impl<'a> FileDialog<'a> {
@@ -207,6 +221,13 @@ impl<'a> FileDialog<'a> {
             name: name.as_ref().to_string(),
             extensions: extensions.iter().map(|e| e.as_ref().to_string()).collect(),
         });
+        self
+    }
+
+    /// Adds platform controls to a save dialog: runs with the native dialog right before it
+    /// opens, set up with everything else of this builder.
+    pub fn customize(mut self, customize: impl FnOnce(NativeFileDialog) + 'a) -> Self {
+        self.customize = Some(Box::new(customize));
         self
     }
 

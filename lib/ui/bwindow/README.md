@@ -143,7 +143,8 @@ and let backgrounds fill the window. Changes, like rotating the device, send
 ## Features
 
 - `remember_window_state` (default): persist native window placement.
-- `dialog`: native message and file dialogs.
+- `dialog`: native message and file dialogs. `FileDialog::customize` hands save dialogs to
+  the application before they open, to add native controls.
 - `file_drop`: native file-drop events.
 - `menu`: custom application menus and their keyboard shortcuts, which can be enabled,
   disabled and retitled while the application runs.

@@ -277,7 +277,7 @@ impl crate::FileDialogInterface for PlatformFileDialog {
         }
     }
 
-    fn save_file(dialog: crate::FileDialog<'_>) -> Option<PathBuf> {
+    fn save_file(mut dialog: crate::FileDialog<'_>) -> Option<PathBuf> {
         unsafe {
             let mut raw: *mut IFileSaveDialog = null_mut();
             if CoCreateInstance(
@@ -316,6 +316,9 @@ impl crate::FileDialogInterface for PlatformFileDialog {
                 .map(|e| e.to_wide_string());
             if let Some(ref e) = default_extension {
                 dlg.SetDefaultExtension(e.as_ptr());
+            }
+            if let Some(customize) = dialog.customize.take() {
+                customize(crate::NativeFileDialog::Win32(raw.cast()));
             }
             let hwnd = dialog
                 .parent

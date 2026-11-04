@@ -115,12 +115,15 @@ impl crate::FileDialogInterface for PlatformFileDialog {
         }
     }
 
-    fn save_file(dialog: crate::FileDialog<'_>) -> Option<std::path::PathBuf> {
+    fn save_file(mut dialog: crate::FileDialog<'_>) -> Option<std::path::PathBuf> {
         unsafe {
             let panel: *mut Object = msg_send![class!(NSSavePanel), savePanel];
             setup_ns_panel(panel, &dialog);
             if let Some(filename) = &dialog.filename {
                 let _: () = msg_send![panel, setNameFieldStringValue: &*NSString::new(filename)];
+            }
+            if let Some(customize) = dialog.customize.take() {
+                customize(crate::NativeFileDialog::AppKit(panel.cast()));
             }
             let result: i64 = run_panel_modal(panel, dialog.parent);
             if result == NS_MODAL_RESPONSE_OK {
