@@ -922,8 +922,13 @@ fn unfilter_pixels<const N: usize>(row: &mut [u8], previous: Option<&[u8]>, filt
         (4, Some(previous)) => {
             let mut c = [0u8; N];
             for (x, b) in row.iter_mut().zip(previous.as_chunks::<N>().0) {
+                // The channels are independent, so predicting them apart can use SIMD.
+                let mut predicted = [0; N];
                 for k in 0..N {
-                    x[k] = x[k].wrapping_add(paeth(a[k], b[k], c[k]));
+                    predicted[k] = paeth(a[k], b[k], c[k]);
+                }
+                for k in 0..N {
+                    x[k] = x[k].wrapping_add(predicted[k]);
                 }
                 a = *x;
                 c = *b;
@@ -1153,30 +1158,66 @@ fn png_filter(row: &[u8], previous: &[u8], bpp: usize, filter: u8, output: &mut 
     }
 }
 
+// The summed distances from zero of filtered bytes, which estimates how well they compress.
+fn png_filter_cost(filtered: impl Iterator<Item = u8>) -> u32 {
+    filtered
+        .map(|value| u32::from(value.min(value.wrapping_neg())))
+        .sum()
+}
+
 fn png_best_filter(row: &[u8], previous: &[u8], bpp: usize) -> u8 {
+    // Bytes cost at most 128, so the 32-bit sums of a block can't overflow.
+    const BLOCK: usize = 1 << 16;
     let mut scores = [0u64; 5];
-    let mut score = |value: u8, left: u8, up: u8, upper_left: u8| {
-        let predictors = [
-            0,
-            left,
-            up,
-            ((u16::from(left) + u16::from(up)) / 2) as u8,
-            paeth(left, up, upper_left),
-        ];
-        for (score, predictor) in scores.iter_mut().zip(predictors) {
-            let filtered = value.wrapping_sub(predictor);
-            *score += u64::from(filtered.min(filtered.wrapping_neg()));
-        }
-    };
     for (&value, &up) in row[..bpp].iter().zip(previous) {
-        score(value, 0, up, 0);
+        let predictors = [0, 0, up, up / 2, up];
+        for (score, predictor) in scores.iter_mut().zip(predictors) {
+            *score += u64::from(png_filter_cost([value.wrapping_sub(predictor)].into_iter()));
+        }
     }
-    for ((&value, &up), (&left, &upper_left)) in row[bpp..]
-        .iter()
-        .zip(&previous[bpp..])
-        .zip(row.iter().zip(previous))
+    // A loop per filter, with its own sum, lets every filter vectorize on its own.
+    for (((values, ups), lefts), upper_lefts) in row[bpp..]
+        .chunks(BLOCK)
+        .zip(previous[bpp..].chunks(BLOCK))
+        .zip(row.chunks(BLOCK))
+        .zip(previous.chunks(BLOCK))
     {
-        score(value, left, up, upper_left);
+        let block = [
+            png_filter_cost(values.iter().copied()),
+            png_filter_cost(
+                values
+                    .iter()
+                    .zip(lefts)
+                    .map(|(&value, &left)| value.wrapping_sub(left)),
+            ),
+            png_filter_cost(
+                values
+                    .iter()
+                    .zip(ups)
+                    .map(|(&value, &up)| value.wrapping_sub(up)),
+            ),
+            png_filter_cost(
+                values
+                    .iter()
+                    .zip(ups)
+                    .zip(lefts)
+                    .map(|((&value, &up), &left)| {
+                        value.wrapping_sub(((u16::from(left) + u16::from(up)) / 2) as u8)
+                    }),
+            ),
+            png_filter_cost(
+                values
+                    .iter()
+                    .zip(ups)
+                    .zip(lefts.iter().zip(upper_lefts))
+                    .map(|((&value, &up), (&left, &upper_left))| {
+                        value.wrapping_sub(paeth(left, up, upper_left))
+                    }),
+            ),
+        ];
+        for (score, block) in scores.iter_mut().zip(block) {
+            *score += u64::from(block);
+        }
     }
     scores
         .iter()
