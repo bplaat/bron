@@ -87,6 +87,7 @@ void framebuffer_present(Framebuffer* framebuffer) {
 void framebuffer_free(Framebuffer* framebuffer) {
     SDL_DestroyTexture(framebuffer->texture);
     SDL_DestroyRenderer(framebuffer->renderer);
+    free(framebuffer);
 }
 
 void framebuffer_draw_pixel(Framebuffer* framebuffer, int32_t x, int32_t y, uint32_t color) {
