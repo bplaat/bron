@@ -7,7 +7,9 @@
 //! The Windows media view: a WinUI 3 XAML island filling the window, with a header bar in the
 //! title bar and a scroll viewer that zooms and pans the media over a checkerboard, following
 //! the system light or dark theme. Media is drawn into XAML bitmaps, vector media again at the
-//! magnification it settles at so it stays sharp.
+//! magnification it settles at so it stays sharp. While editing, the header bar shows the edit
+//! controls, a card the controls of the open tool, and an overlay the crop rectangle or
+//! selection, which the shared viewport follows the scroll viewer for.
 
 #![allow(unsafe_code)]
 
@@ -16,21 +18,26 @@ use std::ffi::c_void;
 use std::ptr::{null, null_mut};
 use std::rc::Rc;
 use std::sync::Once;
-use std::time::Instant;
 
 use bcanvas::OffscreenCanvas;
 use bwindow::{
-    EventLoopProxy, NativeViewHandle, NativeWindowHandle, Theme, Window, WindowAttachment,
+    EventLoopProxy, NativeViewHandle, NativeWindowHandle, Theme, Window, WindowAttachment, WindowId,
 };
+use imageview_core::edit::{Control, Selection, Shape, Tool};
 use imageview_core::{
-    Media, MediaRenderer, clamp_magnification, draw_checkerboard, fit_magnification, window_title,
+    Media, clamp_magnification, draw_checkerboard, fit_magnification, window_title,
 };
 
 use self::headers::*;
-use self::winui::{Bitmap, HEADER_HEIGHT, Island, MIN_WIDTH};
+pub(crate) use self::save::SaveOptions;
+use self::tool::ToolPanel;
+use self::winui::{Bitmap, HEADER_HEIGHT, Handlers, Island, MIN_WIDTH, Mark};
 use crate::AppEvent;
+use crate::viewport::Viewport;
 
 mod headers;
+mod save;
+mod tool;
 mod winrt;
 mod winui;
 
@@ -51,6 +58,7 @@ const CHECKERBOARD_STEP: u32 = 512;
 
 /// The smallest window, wide enough for the header bar.
 pub(crate) const MIN_SIZE: (f32, f32) = (MIN_WIDTH as f32, 240.0);
+pub(crate) const CONTENT_HEADER_HEIGHT: f32 = HEADER_HEIGHT as f32;
 
 thread_local! {
     static PROXY: RefCell<Option<EventLoopProxy<AppEvent>>> = const { RefCell::new(None) };
@@ -62,10 +70,16 @@ pub(crate) fn init(proxy: EventLoopProxy<AppEvent>) {
     PROXY.with(|stored| *stored.borrow_mut() = Some(proxy));
 }
 
-fn send_action(action: &'static str) {
+pub(crate) fn shutdown() {
+    PROXY.with_borrow_mut(|proxy| *proxy = None);
+    winui::shutdown();
+}
+
+// Sends an event to the application.
+fn send(event: AppEvent) {
     PROXY.with(|proxy| {
         if let Some(proxy) = proxy.borrow().as_ref() {
-            _ = proxy.send_user_event(AppEvent::Action(action));
+            _ = proxy.send_user_event(event);
         }
     });
 }
@@ -76,16 +90,19 @@ struct State {
     // The top-level window.
     window: Cell<HWND>,
     island: RefCell<Option<Island>>,
-    renderer: RefCell<Option<MediaRenderer>>,
+    // The media with its animation, preview, crop rectangle and selection, which follows the
+    // scroll viewer.
+    viewport: RefCell<Viewport>,
+    // Whether the first media is decoded.
+    loaded: Cell<bool>,
     bitmap: RefCell<Option<Bitmap>>,
+    // The bitmap of the crop rectangle or selection over the visible area.
+    overlay: RefCell<Option<Bitmap>>,
+    // The controls of the open edit tool.
+    tool: RefCell<Option<ToolPanel>>,
     // The checkerboard bitmap, whether it is dark and its scale.
     checkerboard: RefCell<Option<(Bitmap, bool, f64)>>,
     dark: Cell<bool>,
-    // The shown animation frame and when the animation started.
-    frame: Cell<usize>,
-    start: Cell<Instant>,
-    // The loading indicator shown until the first media is decoded.
-    spinner: Cell<HWND>,
     // Whether the window draws the Mica backdrop itself, behind transparent window surfaces.
     window_backdrop: Cell<bool>,
     // Whether the window may show, and whether it held back showing until then.
@@ -113,13 +130,13 @@ impl MediaView {
             content: Cell::new(null_mut()),
             window: Cell::new(parent),
             island: RefCell::new(None),
-            renderer: RefCell::new(media.map(MediaRenderer::new)),
+            viewport: RefCell::new(Viewport::new(media, (1.0, 1.0))),
+            loaded: Cell::new(!loading),
             bitmap: RefCell::new(None),
+            overlay: RefCell::new(None),
+            tool: RefCell::new(None),
             checkerboard: RefCell::new(None),
             dark: Cell::new(theme == Theme::Dark),
-            frame: Cell::new(0),
-            start: Cell::new(Instant::now()),
-            spinner: Cell::new(null_mut()),
             window_backdrop: Cell::new(set_window_backdrop(parent)),
             revealed: Cell::new(false),
             reveal_held: Cell::new(false),
@@ -150,31 +167,32 @@ impl MediaView {
         };
         state.content.set(content);
 
-        // The window was sized for the media, which goes below the header bar.
-        let mut media = RECT::default();
-        // SAFETY: The window is alive.
-        unsafe { GetClientRect(parent, &mut media) };
-        let zoomed = Rc::downgrade(&state);
+        let (viewed, marked) = (Rc::downgrade(&state), Rc::downgrade(&state));
         let island = Island::new(
             content,
             parent,
             state.dark.get(),
             state.window_backdrop.get(),
-            send_action,
-            move || {
-                if let Some(state) = zoomed.upgrade() {
-                    state.zoomed();
-                }
-            },
-            // Handled outside of the rendering of the island, which it stops following.
-            // SAFETY: Posting to a destroyed window does nothing.
-            move || unsafe {
-                PostMessageW(content, WM_RENDERED, 0, 0);
+            Handlers {
+                action: Box::new(|action| send(AppEvent::Action(action))),
+                view: Box::new(move |settled| {
+                    if let Some(state) = viewed.upgrade() {
+                        state.view_changed(settled);
+                    }
+                }),
+                mark: Box::new(move |mark| marked.upgrade().is_some_and(|state| state.mark(mark))),
+                // Handled outside of the rendering of the island, which it stops following.
+                // SAFETY: Posting to a destroyed window does nothing.
+                rendered: Box::new(move || unsafe {
+                    PostMessageW(content, WM_RENDERED, 0, 0);
+                }),
             },
         );
-        fit_below_header(parent, &media);
         // SAFETY: GetActiveWindow reads the state of this thread.
         island.set_active(unsafe { GetActiveWindow() } == parent);
+        // Only still bitmaps can be edited, the loading media has no frames.
+        island.set_editable(!loading && state.viewport.borrow().media().is_still());
+        island.set_spinner(loading);
         *state.island.borrow_mut() = Some(island);
         state.update_heading();
         // SAFETY: The windows are alive, the subclass is removed before the state is freed.
@@ -188,9 +206,6 @@ impl MediaView {
             attachment.set_native_view(NativeViewHandle::Win32(content));
             SetTimer(content, REVEAL_TIMER, REVEAL_TIMEOUT_MS, null());
         }
-        if loading {
-            state.add_spinner();
-        }
         state.zoom_to_fit();
         state.start_animation();
         Self {
@@ -202,16 +217,17 @@ impl MediaView {
     /// Replaces the media, keeping the zoom or fitting it to the window.
     pub(crate) fn set_media(&mut self, media: Media, zoom_to_fit: bool) {
         let state = &self.state;
-        let spinner = state.spinner.replace(null_mut());
-        if !spinner.is_null() {
-            // SAFETY: The spinner is a live child window owned by the content.
-            unsafe { DestroyWindow(spinner) };
+        // Vectors and animations cannot be edited, only saved as bitmaps.
+        if let Some(island) = state.island.borrow().as_ref() {
+            island.set_editable(media.is_still());
+            if !state.loaded.get() {
+                island.set_spinner(false);
+            }
         }
-        *state.renderer.borrow_mut() = Some(MediaRenderer::new(media));
+        state.viewport.borrow_mut().set_media(media, zoom_to_fit);
+        state.loaded.set(true);
         // A new bitmap shows the new media, also when it has the same size.
         state.bitmap.borrow_mut().take();
-        state.frame.set(0);
-        state.start.set(Instant::now());
         state.update_heading();
         if zoom_to_fit {
             state.zoom_to_fit();
@@ -219,6 +235,12 @@ impl MediaView {
             state.render(state.zoom_factor());
         }
         state.start_animation();
+        state.draw_marks();
+    }
+
+    /// The shown media.
+    pub(crate) fn media(&self) -> Media {
+        self.state.viewport.borrow().media().clone()
     }
 
     /// Magnifies by `factor`, keeping the middle of the visible area in place.
@@ -229,7 +251,7 @@ impl MediaView {
     /// Shows the media at its natural size.
     pub(crate) fn actual_size(&self) {
         let state = &self.state;
-        let (view, media) = (state.viewport(), state.media_size());
+        let (view, media) = (state.visible(), state.media_size());
         state.change_view(((media.0 - view.0) / 2.0, (media.1 - view.1) / 2.0), 1.0);
     }
 
@@ -250,10 +272,163 @@ impl MediaView {
         // SAFETY: The content is alive while the state is.
         unsafe { InvalidateRect(state.content.get(), null(), 1) };
     }
+
+    /// Shows the edit controls in the header bar, or the view controls again.
+    pub(crate) fn set_editing(&mut self, editing: bool) {
+        self.close_tool();
+        if let Some(island) = self.state.island.borrow().as_ref() {
+            island.set_editing(editing);
+        }
+    }
+
+    /// Shows the controls of a tool in a card over the image, and the crop rectangle for a crop.
+    /// Changes of the controls go to `window`. Reset goes back to the defaults.
+    pub(crate) fn show_tool(
+        &mut self,
+        window: WindowId,
+        tool: Tool,
+        controls: &[Control],
+        values: &[f32],
+        defaults: &[f32],
+        _action: &str,
+    ) {
+        self.close_tool();
+        // Without a card there is no tool that closing would remove the crop rectangle of.
+        let Ok(panel) = ToolPanel::new(window, tool, controls, values, defaults) else {
+            return;
+        };
+        if tool == Tool::Crop {
+            self.state
+                .change_marks(|viewport| viewport.set_cropping(true));
+        }
+        if let Some(island) = self.state.island.borrow().as_ref() {
+            island.set_tool(Some(panel.content()));
+        }
+        *self.state.tool.borrow_mut() = Some(panel);
+    }
+
+    /// Shows changed values of the open tool.
+    pub(crate) fn set_tool_values(&self, values: &[f32]) {
+        if let Some(panel) = self.state.tool.borrow().as_ref() {
+            panel.set_values(values);
+        }
+    }
+
+    /// Closes the controls and crop rectangle of the open tool.
+    pub(crate) fn close_tool(&mut self) {
+        if self.state.tool.borrow_mut().take().is_none() {
+            return;
+        }
+        if let Some(island) = self.state.island.borrow().as_ref() {
+            island.set_tool(None);
+            island.focus();
+        }
+        self.state
+            .change_marks(|viewport| viewport.set_cropping(false));
+    }
+
+    /// Makes drags draw selections of a shape, or selects the whole image again, shown as on in
+    /// the header bar.
+    pub(crate) fn set_selecting(&self, shape: Option<Shape>) {
+        self.state
+            .change_marks(|viewport| viewport.set_selecting(shape));
+        if let Some(island) = self.state.island.borrow().as_ref() {
+            island.set_toggled(match shape {
+                None => "select.whole",
+                Some(Shape::Rectangle) => "select.rectangle",
+                Some(Shape::Ellipse) => "select.ellipse",
+            });
+        }
+    }
+
+    /// The selected part of the media.
+    pub(crate) fn selection(&self) -> Option<Selection> {
+        self.state.viewport.borrow().selection()
+    }
+
+    /// Selects everything outside the selection instead.
+    pub(crate) fn invert_selection(&self) {
+        self.state.change_marks(Viewport::invert_selection);
+    }
+
+    /// Puts a PNG image on the clipboard, in the format of that name.
+    pub(crate) fn copy_png(&self, png: &[u8]) {
+        let format = wide("PNG");
+        // SAFETY: The clipboard takes over the global memory once it has it, which is freed
+        // here otherwise.
+        unsafe {
+            if OpenClipboard(self.state.window.get()) == 0 {
+                return;
+            }
+            EmptyClipboard();
+            let memory = GlobalAlloc(GMEM_MOVEABLE, png.len());
+            let target = GlobalLock(memory);
+            if !target.is_null() {
+                std::ptr::copy_nonoverlapping(png.as_ptr(), target.cast(), png.len());
+                GlobalUnlock(memory);
+                if SetClipboardData(RegisterClipboardFormatW(format.as_ptr()), memory).is_null() {
+                    GlobalFree(memory);
+                }
+            } else if !memory.is_null() {
+                GlobalFree(memory);
+            }
+            CloseClipboard();
+        }
+    }
+
+    /// Shows a preview of any size in the place of the image, or the image again.
+    pub(crate) fn set_preview(&self, preview: Option<Media>) {
+        self.state.viewport.borrow_mut().set_preview(preview);
+        self.state.render(self.state.zoom_factor());
+    }
+
+    /// Places the crop rectangle at a position with a size in pixels.
+    pub(crate) fn set_crop_rect(&self, rect: (u32, u32, u32, u32)) {
+        self.state.change_marks(|viewport| {
+            if let Some(crop) = viewport.crop() {
+                crop.set_rect(rect);
+            }
+        });
+    }
+
+    /// Makes the crop rectangle keep a width divided by height, or any shape.
+    pub(crate) fn set_crop_aspect(&self, aspect: Option<f64>) {
+        self.state.change_marks(|viewport| {
+            if let Some(crop) = viewport.crop() {
+                crop.set_aspect(aspect);
+            }
+        });
+    }
+
+    /// The crop rectangle in pixels, or all of the media without one.
+    pub(crate) fn crop_rect(&self) -> (u32, u32, u32, u32) {
+        let mut viewport = self.state.viewport.borrow_mut();
+        let (width, height) = viewport.media().size();
+        viewport
+            .crop()
+            .map_or((0, 0, width as u32, height as u32), |crop| crop.rect())
+    }
+
+    /// The longest side of the view in device pixels, which previews do not need to exceed.
+    pub(crate) fn longest_pixels(&self) -> u32 {
+        let (width, height) = self.state.visible();
+        (width.max(height) * self.state.scale()).ceil().max(1.0) as u32
+    }
+
+    /// Shows a progress bar while an edit is applied.
+    pub(crate) fn set_busy(&self, busy: bool) {
+        if let Some(island) = self.state.island.borrow().as_ref() {
+            island.set_spinner(busy || !self.state.loaded.get());
+        }
+    }
 }
 
 impl Drop for MediaView {
     fn drop(&mut self) {
+        // Hide immediately; releasing the XAML tree may wait for composition work.
+        // SAFETY: The parent window belongs to this view and may already be destroyed.
+        unsafe { ShowWindow(self.state.window.get(), 0) };
+        self.close_tool();
         let state = &self.state;
         // SAFETY: The window procedure and the subclass forget the state before it is freed,
         // destroying the content also destroys the island inside it.
@@ -262,7 +437,10 @@ impl Drop for MediaView {
             if IsWindow(window) != 0 {
                 RemoveWindowSubclass(window, frame_proc, FRAME_SUBCLASS);
             }
-            state.island.borrow_mut().take();
+            // Closing XAML can synchronously move focus back to the content window.
+            // Release the RefCell borrow before it runs those native callbacks.
+            let island = state.island.borrow_mut().take();
+            drop(island);
             let content = state.content.get();
             if IsWindow(content) != 0 {
                 SetWindowLongPtrW(content, GWLP_USERDATA, 0);
@@ -356,36 +534,6 @@ fn erase_background(state: &State, hwnd: HWND, hdc: WPARAM) -> LRESULT {
 
 // Resizes a window around its center so the area below the header bar is `media`, the client
 // area it had before its content extended into the title bar.
-fn fit_below_header(window: HWND, media: &RECT) {
-    let (mut client, mut frame) = (RECT::default(), RECT::default());
-    // SAFETY: The window is alive.
-    let scale = unsafe {
-        GetClientRect(window, &mut client);
-        GetWindowRect(window, &mut frame);
-        f64::from(GetDpiForWindow(window).max(96)) / 96.0
-    };
-    let header = (HEADER_HEIGHT * scale).round() as i32;
-    let grow = (
-        media.right - client.right,
-        media.bottom + header - client.bottom,
-    );
-    if grow == (0, 0) {
-        return;
-    }
-    // SAFETY: The window is alive, it is not shown yet.
-    unsafe {
-        SetWindowPos(
-            window,
-            null_mut(),
-            frame.left - grow.0 / 2,
-            frame.top - grow.1 / 2,
-            frame.right - frame.left + grow.0,
-            frame.bottom - frame.top + grow.1,
-            SWP_NOZORDER | SWP_NOACTIVATE,
-        )
-    };
-}
-
 fn window_text(hwnd: HWND) -> String {
     // SAFETY: The buffer holds the text and its terminator.
     unsafe {
@@ -412,69 +560,13 @@ fn premultiplied_bgra(rgba: &[u8]) -> Vec<u8> {
 }
 
 impl State {
-    // Shows a native marquee progress bar in the middle of the view.
-    fn add_spinner(&self) {
-        let class = wide("msctls_progress32");
-        // SAFETY: The progress bar class is registered by comctl32, the view owns the child.
-        unsafe {
-            InitCommonControlsEx(&INITCOMMONCONTROLSEX {
-                dwSize: size_of::<INITCOMMONCONTROLSEX>() as u32,
-                dwICC: ICC_PROGRESS_CLASS,
-            });
-            let spinner = CreateWindowExW(
-                0,
-                class.as_ptr(),
-                null(),
-                WS_CHILD | WS_VISIBLE | PBS_MARQUEE,
-                0,
-                0,
-                0,
-                0,
-                self.content.get(),
-                null_mut(),
-                GetModuleHandleW(null()),
-                null_mut(),
-            );
-            if spinner.is_null() {
-                return;
-            }
-            SendMessageW(spinner, PBM_SETMARQUEE, 1, 0);
-            self.spinner.set(spinner);
-        }
-        self.layout_spinner();
-    }
-
-    // Keeps the progress bar in the middle of the view.
-    fn layout_spinner(&self) {
-        const SIZE: (f64, f64) = (160.0, 12.0);
-        let spinner = self.spinner.get();
-        if spinner.is_null() {
-            return;
-        }
-        let mut rect = RECT::default();
-        let scale = self.scale();
-        let (width, height) = ((SIZE.0 * scale) as i32, (SIZE.1 * scale) as i32);
-        // SAFETY: The view and its progress bar are alive.
-        unsafe {
-            GetClientRect(self.content.get(), &mut rect);
-            MoveWindow(
-                spinner,
-                (rect.right - width) / 2,
-                (rect.bottom - height) / 2,
-                width,
-                height,
-                1,
-            );
-        }
-    }
-
     fn scale(&self) -> f64 {
         // SAFETY: The content is alive while the state is.
         f64::from(unsafe { GetDpiForWindow(self.content.get()) }.max(96)) / 96.0
     }
 
     // The area of the scroll viewer in logical pixels.
-    fn viewport(&self) -> (f64, f64) {
+    fn visible(&self) -> (f64, f64) {
         let mut rect = RECT::default();
         // SAFETY: The content is alive while the state is.
         unsafe { GetClientRect(self.content.get(), &mut rect) };
@@ -486,10 +578,11 @@ impl State {
     }
 
     fn media_size(&self) -> (f64, f64) {
-        self.renderer
-            .borrow()
-            .as_ref()
-            .map_or((1.0, 1.0), |renderer| renderer.media().size())
+        if self.loaded.get() {
+            self.viewport.borrow().media().size()
+        } else {
+            (1.0, 1.0)
+        }
     }
 
     fn zoom_factor(&self) -> f64 {
@@ -499,8 +592,12 @@ impl State {
             .map_or(1.0, Island::zoom_factor)
     }
 
-    // Scrolls to `offsets` of the media at `magnification` and draws it for that size.
+    // Scrolls to `offsets` of the media at `magnification` and draws it for that size. Loading
+    // media has no size to zoom, the media zooms once it is decoded.
     fn change_view(&self, offsets: (f64, f64), magnification: f64) {
+        if !self.loaded.get() {
+            return;
+        }
         let magnification = clamp_magnification(magnification);
         if let Some(island) = self.island.borrow().as_ref() {
             island.change_view(Some(offsets.0), Some(offsets.1), Some(magnification));
@@ -516,7 +613,7 @@ impl State {
         ) else {
             return;
         };
-        let (view, media) = (self.viewport(), self.media_size());
+        let (view, media) = (self.visible(), self.media_size());
         let target = clamp_magnification(magnification * factor);
         // The media is centered while it is smaller than the view.
         let margin = |view: f64, media: f64, magnification: f64| {
@@ -533,33 +630,108 @@ impl State {
     }
 
     fn zoom_to_fit(&self) {
-        let magnification = fit_magnification(self.viewport(), self.media_size());
+        let magnification = fit_magnification(self.visible(), self.media_size());
         self.change_view((0.0, 0.0), magnification);
+    }
+
+    // The scroll viewer zoomed or scrolled: the crop rectangle or selection follows it, and vector
+    // media is drawn again for its magnification once it settled.
+    fn view_changed(&self, settled: bool) {
+        self.draw_marks();
+        if settled {
+            self.zoomed();
+        }
     }
 
     // The scroll viewer settled, vector media is drawn again for its magnification.
     fn zoomed(&self) {
-        if self
-            .renderer
-            .borrow()
-            .as_ref()
-            .is_some_and(|renderer| matches!(renderer.media(), Media::Vector(_)))
-        {
+        if matches!(self.viewport.borrow().media(), Media::Vector(_)) {
             self.render(self.zoom_factor());
         }
     }
 
-    // The pixel size of the media bitmap: raster media at its own size, vector media at the size
-    // it is shown, both at most the largest bitmap.
-    fn bitmap_size(&self, magnification: f64) -> (u32, u32) {
-        let renderer = self.renderer.borrow();
-        let Some(renderer) = renderer.as_ref() else {
-            return (1, 1);
+    // Lets the viewport follow the scroll viewer, so it places the crop rectangle and selection.
+    fn follow(&self) {
+        let offsets = self
+            .island
+            .borrow()
+            .as_ref()
+            .map_or((0.0, 0.0), Island::offsets);
+        let (visible, magnification) = (self.visible(), self.zoom_factor());
+        self.viewport
+            .borrow_mut()
+            .follow(visible, magnification, offsets);
+    }
+
+    // Takes a drag that crops or selects, returns whether it does.
+    fn mark(&self, mark: Mark) -> bool {
+        self.follow();
+        let marked = {
+            let mut viewport = self.viewport.borrow_mut();
+            match mark {
+                Mark::Begin(pointer) => viewport.mark_begin(pointer),
+                Mark::Drag(pointer, square) => viewport.mark_drag(pointer, square),
+                Mark::End => {
+                    let marked = viewport.mark_end();
+                    // A click without a drag goes back to editing the whole image, the menu
+                    // follows a drawn selection.
+                    if marked && viewport.selecting().is_some() && viewport.selection().is_none() {
+                        send(AppEvent::Action("select.whole"));
+                    } else if marked {
+                        send(AppEvent::Action("select.changed"));
+                    }
+                    marked
+                }
+            }
         };
-        let (width, height) = match renderer.media() {
+        if marked {
+            self.draw_marks();
+        }
+        marked
+    }
+
+    // Changes the crop rectangle or selection and shows it.
+    fn change_marks(&self, change: impl FnOnce(&mut Viewport)) {
+        change(&mut self.viewport.borrow_mut());
+        self.draw_marks();
+    }
+
+    // Draws the crop rectangle or selection over the visible area, or hides the overlay.
+    fn draw_marks(&self) {
+        self.follow();
+        let island = self.island.borrow();
+        let Some(island) = island.as_ref() else {
+            return;
+        };
+        let viewport = self.viewport.borrow();
+        if !viewport.has_marks() {
+            island.set_overlay(None);
+            return;
+        }
+        let (width, height) = self.visible();
+        let logical = (width.ceil().max(1.0) as u32, height.ceil().max(1.0) as u32);
+        let mut canvas =
+            OffscreenCanvas::with_scale_factor(logical.0, logical.1, self.scale() as f32);
+        canvas.draw(|context| viewport.paint_marks(context));
+        let size = (canvas.width(), canvas.height());
+        let mut overlay = self.overlay.borrow_mut();
+        if overlay.as_ref().is_none_or(|bitmap| bitmap.size() != size) {
+            *overlay = Bitmap::new(size.0, size.1);
+        }
+        let Some(bitmap) = overlay.as_ref() else {
+            return;
+        };
+        bitmap.write(&premultiplied_bgra(canvas.pixels()));
+        island.set_overlay(Some((bitmap, (f64::from(logical.0), f64::from(logical.1)))));
+    }
+
+    // The pixel size of the bitmap of media: raster media at its own size, vector media at the
+    // size it is shown, both at most the largest bitmap.
+    fn bitmap_size(&self, media: &Media, magnification: f64) -> (u32, u32) {
+        let (width, height) = match media {
             Media::Raster(raster) => (f64::from(raster.width), f64::from(raster.height)),
             Media::Vector(_) => {
-                let (width, height) = renderer.media().size();
+                let (width, height) = media.size();
                 let scale = magnification * self.scale();
                 (width * scale, height * scale)
             }
@@ -571,14 +743,15 @@ impl State {
         )
     }
 
-    // Draws the shown frame of the media into its bitmap, which gets the size the media is
-    // shown at.
+    // Draws the shown frame of the media, or the preview of an edit, into its bitmap, which gets
+    // the size the media is shown at.
     fn render(&self, magnification: f64) {
-        let size = self.bitmap_size(magnification);
-        let renderer = self.renderer.borrow();
-        let Some(renderer) = renderer.as_ref() else {
+        if !self.loaded.get() {
             return;
-        };
+        }
+        let viewport = self.viewport.borrow();
+        let (renderer, frame) = viewport.drawn();
+        let size = self.bitmap_size(renderer.media(), magnification);
         let mut bitmap = self.bitmap.borrow_mut();
         let fresh = bitmap.as_ref().is_none_or(|bitmap| bitmap.size() != size);
         if fresh {
@@ -592,24 +765,21 @@ impl State {
         };
         match renderer.media() {
             Media::Raster(raster) if (raster.width, raster.height) == size => {
-                if let Some(frame) = raster.frames.get(self.frame.get()) {
+                if let Some(frame) = raster.frames.get(frame) {
                     target.write(&frame.pixels);
                 }
             }
             _ => {
                 let mut canvas = OffscreenCanvas::new(size.0, size.1);
                 canvas.draw(|context| {
-                    renderer.draw(
-                        context,
-                        self.frame.get(),
-                        (0.0, 0.0, size.0 as f32, size.1 as f32),
-                    );
+                    renderer.draw(context, frame, (0.0, 0.0, size.0 as f32, size.1 as f32));
                 });
                 target.write(&premultiplied_bgra(canvas.pixels()));
             }
         }
+        // A preview shows at the size of the media.
         if fresh && let Some(island) = self.island.borrow().as_ref() {
-            island.set_media(target, renderer.media().size());
+            island.set_media(target, viewport.media().size());
         }
     }
 
@@ -664,14 +834,11 @@ impl State {
 
     // Shows the current animation frame and schedules the next one.
     fn start_animation(&self) {
-        let (frame, next) = {
-            let renderer = self.renderer.borrow();
-            let Some(renderer) = renderer.as_ref() else {
-                return;
-            };
-            renderer.media().frame_at(self.start.get().elapsed())
-        };
-        if self.frame.replace(frame) != frame {
+        if !self.loaded.get() {
+            return;
+        }
+        let (changed, next) = self.viewport.borrow_mut().advance_frame();
+        if changed {
             self.render(self.zoom_factor());
         }
         // SAFETY: The content is alive and owns its timer.
@@ -694,14 +861,23 @@ impl State {
         let Some(island) = island.as_ref() else {
             return;
         };
-        if self.renderer.borrow().is_none() {
+        if !self.loaded.get() {
             island.set_title(&window_text(self.window.get()), "Loading...");
             return;
         }
         let (width, height) = self.media_size();
         let title = window_text(self.window.get());
+        // The title can still have the size of other media, like while the media changes or a
+        // tool shows the picture before its last change.
         let name = title
             .strip_suffix(&window_title("", (width, height)))
+            .or_else(|| {
+                let (name, size) = title.rsplit_once(" (")?;
+                let (width, height) = size.strip_suffix(')')?.split_once('x')?;
+                let number =
+                    |text: &str| !text.is_empty() && text.bytes().all(|b| b.is_ascii_digit());
+                (number(width) && number(height)).then_some(name)
+            })
             .unwrap_or(&title);
         let subtitle = format!("{} × {}", width.round() as i64, height.round() as i64);
         island.set_title(name, &subtitle);
@@ -738,12 +914,12 @@ impl State {
     // Fills the content with the island and draws the checkerboard for its size, and vector
     // media for a changed scale.
     fn layout(&self, width: i32, height: i32) {
-        self.layout_spinner();
         if let Some(island) = self.island.borrow().as_ref() {
             island.move_and_resize(width, height, self.scale());
         }
         self.update_checkerboard();
         self.zoomed();
+        self.draw_marks();
     }
 }
 
@@ -805,9 +981,13 @@ unsafe extern "system" fn frame_proc(
     // it lives in still exist.
     if message == WM_DESTROY
         && let Some(state) = state
-        && let Ok(mut island) = state.island.try_borrow_mut()
     {
-        island.take();
+        let island = state
+            .island
+            .try_borrow_mut()
+            .ok()
+            .and_then(|mut island| island.take());
+        drop(island);
     }
     if let Some(state) = state {
         match message {
@@ -823,6 +1003,12 @@ unsafe extern "system" fn frame_proc(
     }
     // SAFETY: Messages pass through to the window first.
     let result = unsafe { DefSubclassProc(hwnd, message, wparam, lparam) };
+    // The header bar shows the title, which changes with unsaved changes.
+    if message == WM_SETTEXT
+        && let Some(state) = state
+    {
+        state.update_heading();
+    }
     if message == WM_ACTIVATE
         && let Some(island) = state.and_then(|state| state.island.try_borrow().ok())
         && let Some(island) = island.as_ref()
@@ -830,4 +1016,114 @@ unsafe extern "system" fn frame_proc(
         island.set_active(wparam & 0xffff != WA_INACTIVE);
     }
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::{Duration, Instant};
+
+    use bwindow::{EventLoopBuilder, WindowBuilder};
+    use imageview_core::edit::Picture;
+
+    use super::*;
+
+    #[repr(C)]
+    struct Message {
+        window: HWND,
+        message: u32,
+        wparam: usize,
+        lparam: isize,
+        time: u32,
+        x: i32,
+        y: i32,
+        private: u32,
+    }
+
+    #[link(name = "user32")]
+    unsafe extern "system" {
+        fn PeekMessageW(
+            message: *mut Message,
+            window: HWND,
+            min: u32,
+            max: u32,
+            flags: u32,
+        ) -> BOOL;
+        fn TranslateMessage(message: *const Message) -> BOOL;
+        fn DispatchMessageW(message: *const Message) -> isize;
+    }
+
+    fn layout_frames() {
+        let until = Instant::now() + Duration::from_millis(200);
+        while Instant::now() < until {
+            // SAFETY: MSG is initialized and passed to the thread's native message pump.
+            unsafe {
+                let mut message: Message = std::mem::zeroed();
+                while PeekMessageW(&mut message, null_mut(), 0, 0, 1) != 0 {
+                    TranslateMessage(&message);
+                    DispatchMessageW(&message);
+                }
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+
+    #[test]
+    #[ignore = "requires an installed Windows App Runtime and a desktop"]
+    fn images_have_no_scrollable_overflow_after_initial_and_deferred_loading() {
+        let event_loop = EventLoopBuilder::new()
+            .with_user_event::<AppEvent>()
+            .single_instance(false)
+            .build();
+        init(event_loop.create_proxy());
+        let media = std::env::var_os("IMAGEVIEW_TEST_IMAGE").map_or_else(
+            || Picture::new(1024, 1024, vec![255; 1024 * 1024 * 4]).to_media(),
+            |path| {
+                imageview_core::decode_media(&std::fs::read(path).expect("test image"))
+                    .expect("decode test image")
+            },
+        );
+        let samples = [
+            media,
+            Picture::new(1023, 1023, vec![255; 1023 * 1023 * 4]).to_media(),
+            Picture::new(1001, 753, vec![255; 1001 * 753 * 4]).to_media(),
+        ];
+        for media in samples {
+            for deferred in [false, true] {
+                let size = crate::content_size((!deferred).then_some(&media));
+                let mut window = WindowBuilder::new()
+                    .title("Initial image fit test")
+                    .size(size)
+                    .build();
+                let mut view =
+                    MediaView::new(&window, (!deferred).then(|| media.clone()), Theme::Light);
+                window.set_size(size);
+                view.zoom_to_fit();
+                layout_frames();
+                if deferred {
+                    window.set_size(crate::content_size(Some(&media)));
+                    view.set_media(media.clone(), true);
+                    layout_frames();
+                }
+                let visible = view.state.visible();
+                let zoom = view.state.zoom_factor();
+                let fitted = (media.size().0 * zoom, media.size().1 * zoom);
+                let scrollable = view
+                    .state
+                    .island
+                    .borrow()
+                    .as_ref()
+                    .unwrap()
+                    .scrollable_size();
+                drop(view);
+                drop(window);
+                assert_eq!(
+                    scrollable,
+                    (0.0, 0.0),
+                    "deferred={deferred}, visible={visible:?}, fitted={fitted:?}"
+                );
+            }
+        }
+        shutdown();
+        drop(event_loop);
+    }
 }

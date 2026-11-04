@@ -507,6 +507,7 @@ impl Editor {
     pub fn saved(&mut self, bytes: Vec<u8>) {
         self.saved = Some(self.undo.len());
         self.source = Some(Arc::from(bytes));
+        self.original = self.state.picture.to_media();
         // The other versions are no longer turns of the file.
         for state in self.undo.iter_mut().chain(&mut self.redo) {
             state.orientation = None;
@@ -552,6 +553,17 @@ mod tests {
         editor.apply(original.flip_horizontal());
         assert!(!editor.redo());
         assert!(editor.is_modified());
+    }
+
+    #[test]
+    fn discarding_after_a_save_returns_to_the_saved_picture() {
+        let mut editor = editor();
+        editor.orient(Orientation::Rotate90);
+        let saved = editor.picture().clone();
+        editor.saved(Vec::new());
+        editor.orient(Orientation::Rotate90);
+        assert_ne!(editor.picture(), &saved);
+        assert_eq!(Picture::from_media(editor.original(), 0), Some(saved));
     }
 
     #[test]

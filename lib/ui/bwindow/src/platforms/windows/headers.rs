@@ -454,6 +454,9 @@ unsafe extern "system" {
     pub(crate) fn GetWindowLongPtrW(hwnd: HWND, index: i32) -> isize;
     pub(crate) fn SetWindowLongW(hwnd: HWND, index: i32, value: i32) -> i32;
     pub(crate) fn SetWindowLongPtrW(hwnd: HWND, index: i32, value: isize) -> isize;
+    pub(crate) fn GetClassLongW(hwnd: HWND, index: i32) -> u32;
+    #[cfg(target_pointer_width = "64")]
+    pub(crate) fn GetClassLongPtrW(hwnd: HWND, index: i32) -> usize;
     pub(crate) fn MonitorFromPoint(pt: POINT, dwFlags: u32) -> *mut c_void;
     pub(crate) fn EnumDisplayMonitors(
         hdc: HDC,
@@ -492,6 +495,15 @@ pub(crate) unsafe fn GetWindowLong(hwnd: HWND, index: i32) -> isize {
     cfg_select! {
         target_pointer_width = "32" => (unsafe { GetWindowLongW(hwnd, index) }) as isize,
         _ => unsafe { GetWindowLongPtrW(hwnd, index) },
+    }
+}
+
+/// # Safety
+/// `hwnd` must be a live window handle; `index` must identify valid class data.
+pub(crate) unsafe fn GetClassLong(hwnd: HWND, index: i32) -> usize {
+    cfg_select! {
+        target_pointer_width = "32" => (unsafe { GetClassLongW(hwnd, index) }) as usize,
+        _ => unsafe { GetClassLongPtrW(hwnd, index) },
     }
 }
 

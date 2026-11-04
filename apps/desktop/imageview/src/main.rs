@@ -23,15 +23,12 @@ use imageview_core::{
 
 use crate::platforms::MediaView;
 
-// The Windows view does not edit yet.
-#[cfg(not(windows))]
 mod edit;
-#[cfg(not(windows))]
 mod marquee;
 mod platforms;
-#[cfg(not(windows))]
 mod save;
-#[cfg(not(windows))]
+// The WinUI scroll viewer zooms and pans the media itself, Windows only crops and selects with it.
+#[cfg_attr(windows, allow(dead_code))]
 mod viewport;
 
 // How often open files are checked for changes.
@@ -61,11 +58,9 @@ pub(crate) enum AppEvent {
     #[cfg_attr(not(any(target_os = "macos", windows)), allow(dead_code))]
     Action(&'static str),
     /// A control of the open edit tool of a window changed, with the values of all controls.
-    #[cfg(not(windows))]
     ToolChanged(WindowId, usize, Vec<f32>),
     /// The preview of an edit tool of a window finished, with the smaller copy of the
     /// picture it was made from and its scale.
-    #[cfg(not(windows))]
     Previewed(
         WindowId,
         u64,
@@ -74,10 +69,8 @@ pub(crate) enum AppEvent {
         f64,
     ),
     /// A save of a window finished in the background.
-    #[cfg(not(windows))]
     Saved(WindowId, edit::Saved),
     /// An edit of a window finished in the background.
-    #[cfg(not(windows))]
     Applied(
         WindowId,
         imageview_core::edit::Picture,
@@ -115,20 +108,21 @@ struct ImageWindow {
     generation: u64,
     // The open request that is still decoding the first media of the window.
     opening: Option<u64>,
-    #[cfg(not(windows))]
+    // While a replacement decodes, retain the file of the displayed pixels for failure.
+    replacing: Option<(PathBuf, Option<FileVersion>)>,
     editing: Option<edit::Editing>,
     // Whether an edit is being applied or the image saved in the background.
-    #[cfg(not(windows))]
     busy: bool,
 }
 
 impl ImageWindow {
+    const fn is_loading(&self) -> bool {
+        self.opening.is_some() || self.replacing.is_some()
+    }
+
     // Whether the media is being edited, which keeps it from reloading.
     const fn is_editing(&self) -> bool {
-        #[cfg(not(windows))]
-        return self.editing.is_some();
-        #[cfg(windows)]
-        false
+        self.editing.is_some()
     }
 }
 
@@ -218,9 +212,10 @@ impl App {
         media: Option<Media>,
         opening: Option<u64>,
     ) {
+        let size = content_size(media.as_ref());
         let window = WindowBuilder::new()
             .title(title(&path, media.as_ref(), false))
-            .size(content_size(media.as_ref()))
+            .size(size)
             .min_size(LogicalSize::new(
                 platforms::MIN_SIZE.0,
                 platforms::MIN_SIZE.1,
@@ -228,7 +223,15 @@ impl App {
             .center()
             .allow_file_drop(true)
             .build();
+        #[cfg(windows)]
+        let mut window = window;
         let view = MediaView::new(&window, media, self.theme);
+        #[cfg(windows)]
+        // WinUI extends content into the title bar, changing the native client rectangle.
+        {
+            window.set_size(size);
+            view.zoom_to_fit();
+        }
         self.active = Some(window.id());
         self.windows.push(ImageWindow {
             window,
@@ -237,9 +240,8 @@ impl App {
             version,
             generation: 0,
             opening,
-            #[cfg(not(windows))]
+            replacing: None,
             editing: None,
-            #[cfg(not(windows))]
             busy: false,
         });
     }
@@ -300,6 +302,7 @@ impl App {
                 if window.generation != generation {
                     return;
                 }
+                window.replacing = None;
                 window
                     .window
                     .set_title(title(&load.path, Some(&media), false));
@@ -308,7 +311,25 @@ impl App {
                 window.version = load.version;
             }
             // A file that is being saved may not decode yet, the next change reloads it.
-            (Target::Replace { .. }, Err(_)) => {}
+            (
+                Target::Replace {
+                    window, generation, ..
+                },
+                Err(_),
+            ) => {
+                if let Some(window) = self.window(window)
+                    && window.generation == generation
+                    && let Some((path, version)) = window.replacing.take()
+                {
+                    // A failed reload waits for the next file change before trying again.
+                    window.version = if path == load.path {
+                        load.version
+                    } else {
+                        version
+                    };
+                    window.path = path;
+                }
+            }
             (Target::Window(id), Err(error)) => {
                 let opening = self.opening.remove(&id).is_some();
                 let index = self
@@ -350,7 +371,6 @@ impl App {
 
     // Shows another image in a window, fitted to it.
     fn show(&mut self, id: WindowId, path: PathBuf) {
-        #[cfg(not(windows))]
         if !self.finish_editing(id, edit::AfterSave::Show(path.clone())) {
             return;
         }
@@ -359,8 +379,11 @@ impl App {
         };
         // Supersede the first load too, so its completion cannot replace the dropped file.
         window.opening = None;
-        // The window moves on right away, so the next browse continues from this file even
-        // when it does not decode, and reloads watch it instead of the shown one.
+        // Browse continues from the requested file while it decodes. On failure, restore the
+        // path of the displayed pixels so editing never pairs them with a different file.
+        if window.replacing.is_none() {
+            window.replacing = Some((window.path.clone(), window.version));
+        }
         window.path.clone_from(&path);
         window.version = FileVersion::of(&path);
         window.generation += 1;
@@ -376,11 +399,12 @@ impl App {
     fn reload_changed(&mut self) {
         let mut reloads = Vec::new();
         for window in &mut self.windows {
-            if window.opening.is_some() || window.is_editing() {
+            if window.is_loading() || window.is_editing() || window.busy {
                 continue;
             }
             let version = FileVersion::of(&window.path);
             if version.is_some() && version != window.version {
+                window.replacing = Some((window.path.clone(), window.version));
                 window.version = version;
                 window.generation += 1;
                 reloads.push((
@@ -399,7 +423,6 @@ impl App {
     }
 
     fn action(&mut self, action: &str) {
-        #[cfg(not(windows))]
         if self.edit_action(action) {
             return;
         }
@@ -436,7 +459,6 @@ impl App {
                 }
             }
             WindowEvent::CloseRequested(request) if !request.default_prevented() => {
-                #[cfg(not(windows))]
                 if !self.finish_editing(id, edit::AfterSave::Close) {
                     request.prevent_default();
                     return;
@@ -450,6 +472,11 @@ impl App {
     // Handles an event of the event loop.
     fn handle(&mut self, event: Event<AppEvent>) {
         match event {
+            Event::LoopExiting => {
+                self.windows.clear();
+                #[cfg(windows)]
+                platforms::shutdown();
+            }
             Event::OpenFiles(paths) | Event::UserEvent(AppEvent::Open(paths)) => self.open(paths),
             Event::UserEvent(AppEvent::Launched) => {
                 // Ask for a file when the application launched without one.
@@ -465,22 +492,17 @@ impl App {
             Event::UserEvent(AppEvent::SlowLoad(id)) => self.slow_load(id),
             Event::Action(action) => self.action(&action),
             Event::UserEvent(AppEvent::Action(action)) => self.action(action),
-            #[cfg(not(windows))]
             Event::UserEvent(AppEvent::ToolChanged(id, index, values)) => {
                 self.tool_changed(id, index, values)
             }
-            #[cfg(not(windows))]
             Event::UserEvent(AppEvent::Previewed(id, generation, media, proxy, scale)) => {
                 self.previewed(id, generation, media, proxy, scale);
             }
-            #[cfg(not(windows))]
             Event::UserEvent(AppEvent::Applied(id, picture, step, amend)) => {
                 self.applied(id, picture, step, amend);
             }
-            #[cfg(not(windows))]
             Event::UserEvent(AppEvent::Saved(id, saved)) => self.saved(id, saved),
             Event::Window(id, event) => self.window_event(id, event),
-            _ => {}
         }
     }
 }
@@ -493,6 +515,8 @@ fn content_size(media: Option<&Media>) -> LogicalSize {
     });
     #[cfg(target_os = "macos")]
     let width = width.max(MINIMUM_TOOLBAR_WIDTH);
+    #[cfg(windows)]
+    let height = height + f64::from(platforms::CONTENT_HEADER_HEIGHT);
     LogicalSize::new(
         (width as f32).max(platforms::MIN_SIZE.0),
         (height as f32).max(platforms::MIN_SIZE.1),
@@ -537,7 +561,6 @@ fn menu() -> MenuBarBuilder {
     let primary = |key| Accelerator::new(Modifiers::PRIMARY, key);
     let file = MenuBuilder::new("File")
         .item(MenuItem::new("Open...", "file.open").accelerator(primary(KeyCode::KeyO)));
-    #[cfg(not(windows))]
     let file = file
         .separator()
         .item(MenuItem::new("Save", "file.save").accelerator(primary(KeyCode::KeyS)))
@@ -553,7 +576,6 @@ fn menu() -> MenuBarBuilder {
         .item(MenuItem::new("Print...", "file.print").accelerator(primary(KeyCode::KeyP)))
         .separator();
     let menu_bar = MenuBarBuilder::new().menu(file);
-    #[cfg(not(windows))]
     let menu_bar = menu_bar.menu(edit_menu()).menu(image_menu());
     menu_bar.menu(
         MenuBuilder::new("View")
@@ -598,7 +620,7 @@ fn edit_menu() -> MenuBuilder {
 }
 
 // These take the place of the default items of the same names, which only reach text fields.
-#[cfg(not(any(target_os = "macos", windows)))]
+#[cfg(not(target_os = "macos"))]
 fn edit_menu() -> MenuBuilder {
     let primary = |key| Accelerator::new(Modifiers::PRIMARY, key);
     MenuBuilder::new("Edit")
@@ -613,7 +635,6 @@ fn edit_menu() -> MenuBuilder {
         .item(MenuItem::new("Select All", "select.all").accelerator(primary(KeyCode::KeyA)))
 }
 
-#[cfg(not(windows))]
 fn image_menu() -> MenuBuilder {
     let primary = |key| Accelerator::new(Modifiers::PRIMARY, key);
     let menu = MenuBuilder::new("Image")
@@ -622,7 +643,7 @@ fn image_menu() -> MenuBuilder {
         .item(MenuItem::new("Whole Image", "select.whole"))
         .item(MenuItem::new("Rectangle Selection", "select.rectangle"))
         .item(MenuItem::new("Ellipse Selection", "select.ellipse"));
-    // Custom items open GTK menus, so these stay with the other selection items.
+    // Elsewhere the Edit menu has no room for these, so they stay with the other selection items.
     #[cfg(not(target_os = "macos"))]
     let menu = menu
         .item(
@@ -727,7 +748,6 @@ fn main() {
     event_loop.run(move |event| {
         app.handle(event);
         // The menu follows the mode of the active window.
-        #[cfg(not(windows))]
         app.update_menu();
     });
 }
@@ -735,6 +755,21 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    fn window_size_reserves_the_header_above_the_image() {
+        let bytes =
+            std::fs::read(Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/dice.png")).unwrap();
+        let media = decode_media(&bytes).unwrap();
+        let size = content_size(Some(&media));
+        assert_eq!(size.width, 800.0);
+        assert_eq!(size.height, 600.0 + platforms::CONTENT_HEADER_HEIGHT);
+        assert_eq!(
+            content_size(None).height,
+            LOADING_SIZE.1 as f32 + platforms::CONTENT_HEADER_HEIGHT
+        );
+    }
 
     #[test]
     fn examples_decode_with_their_pixel_sizes() {

@@ -416,7 +416,7 @@ impl Viewport {
     }
 
     /// Draws the checkerboard filling the visible area and the scrolled media above it.
-    #[cfg(any(target_os = "macos", windows))]
+    #[cfg(target_os = "macos")]
     pub(crate) fn paint(&self, context: &mut CanvasRenderingContext2d<'_>, dark: bool) {
         self.draw(context, dark, self.scroll);
     }
@@ -450,6 +450,50 @@ impl Viewport {
                 height as f32,
             ),
         );
+        self.draw_marks(context, origin);
+    }
+
+    /// Draws the crop rectangle or selection over the visible area, for a platform that draws the
+    /// media itself.
+    #[cfg(windows)]
+    pub(crate) fn paint_marks(&self, context: &mut CanvasRenderingContext2d<'_>) {
+        let origin = Axis::BOTH.map(|axis| self.offset(axis) - axis.of(self.scroll));
+        self.draw_marks(context, (origin[0], origin[1]));
+    }
+
+    /// What a platform that draws the media itself shows: the preview or the media, with its
+    /// frame.
+    #[cfg(windows)]
+    pub(crate) fn drawn(&self) -> (&MediaRenderer, usize) {
+        // A preview is a still image, whichever frame the media is at.
+        self.preview
+            .as_ref()
+            .map_or((&self.renderer, self.frame), |preview| (preview, 0))
+    }
+
+    /// Whether there is a crop rectangle or selection to draw.
+    #[cfg(windows)]
+    pub(crate) const fn has_marks(&self) -> bool {
+        self.crop.is_some() || self.selection.is_some()
+    }
+
+    /// Follows a platform view that zooms and scrolls by itself, like the WinUI scroll viewer:
+    /// its visible area, magnification and scroll position.
+    #[cfg(windows)]
+    pub(crate) const fn follow(
+        &mut self,
+        visible: (f64, f64),
+        magnification: f64,
+        scroll: (f64, f64),
+    ) {
+        self.visible = visible;
+        self.magnification = magnification;
+        self.scroll = scroll;
+    }
+
+    // Draws the crop rectangle or selection over media drawn at an origin.
+    fn draw_marks(&self, context: &mut CanvasRenderingContext2d<'_>, origin: (f64, f64)) {
+        let (width, height) = self.content();
         let (x, y) = (origin.0 as f32, origin.1 as f32);
         let place = |marquee: &Marquee| {
             let [left, top, right, bottom] = marquee

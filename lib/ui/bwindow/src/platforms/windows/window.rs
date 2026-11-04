@@ -106,6 +106,17 @@ impl WindowData {
             bottom: logical_to_physical(size.height, self.dpi),
         };
         unsafe {
+            // Custom title bars can change the non-client area without changing WS_CAPTION.
+            // Measure the live frame instead of assuming the default caption dimensions.
+            let mut outer = RECT::default();
+            let mut client = RECT::default();
+            if GetWindowRect(self.hwnd, &mut outer) != FALSE
+                && GetClientRect(self.hwnd, &mut client) != FALSE
+            {
+                rect.right += (outer.right - outer.left) - (client.right - client.left);
+                rect.bottom += (outer.bottom - outer.top) - (client.bottom - client.top);
+                return rect;
+            }
             let style = GetWindowLongPtrW(self.hwnd, GWL_STYLE) as u32;
             AdjustWindowRectExForDpi(&mut rect, style, FALSE, 0, self.dpi);
         }
@@ -697,8 +708,11 @@ pub(crate) fn config_dir() -> PathBuf {
     project_dirs.config_dir()
 }
 
+// Whether a window is one of this application, by the window procedure of its class: the
+// procedure of the window itself changes when an application or a framework like WinUI subclasses
+// it. GCLP_WNDPROC is -24.
 pub(super) fn is_app_window(window: HWND) -> bool {
-    !window.is_null() && unsafe { GetWindowLong(window, -4) } == window_proc as *const () as isize
+    !window.is_null() && unsafe { GetClassLong(window, -24) } == window_proc as *const () as usize
 }
 
 // Activation runs on the UI thread after initialization, even when another process
@@ -724,6 +738,74 @@ mod dpi_tests {
     use std::rc::Rc;
 
     use super::*;
+
+    #[test]
+    fn set_size_uses_the_live_frame_for_custom_title_bars() {
+        use crate::WindowInterface;
+
+        unsafe extern "system" fn custom_frame(
+            hwnd: HWND,
+            msg: u32,
+            w: WPARAM,
+            l: LPARAM,
+        ) -> LRESULT {
+            if msg == 0x0083 {
+                // WM_NCCALCSIZE: extend the client area into the standard caption and frame.
+                return 0;
+            }
+            // SAFETY: Forward this window's other messages to its original procedure.
+            unsafe { window_proc(hwnd, msg, w, l) }
+        }
+
+        let builder = WindowBuilder::new().title("Custom title bar size test");
+        let host = crate::content::ContentHost::new(builder.window_id, None, false);
+        let mut window = PlatformWindow::new(&builder, host);
+        let hwnd = window.0.hwnd;
+        // SAFETY: The replacement procedure lives for the duration of the test. FRAMECHANGED
+        // asks Windows to recalculate the client area with that procedure.
+        let previous = unsafe {
+            let previous = SetWindowLong(hwnd, -4, custom_frame as *const () as isize);
+            SetWindowPos(
+                hwnd,
+                null_mut(),
+                0,
+                0,
+                0,
+                0,
+                SWP_NOSIZE | SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE | 0x20,
+            );
+            previous
+        };
+        window.set_size(LogicalSize::new(640.0, 480.0));
+        let size = window.size();
+        // SAFETY: Restore the original procedure before destroying the window.
+        unsafe { SetWindowLong(hwnd, -4, previous) };
+        window.close();
+        crate::dispatch::shutdown(&crate::mailbox::Mailbox::new());
+        assert!((size.width - 640.0).abs() < 1.0);
+        assert!((size.height - 480.0).abs() < 1.0);
+    }
+
+    #[test]
+    fn subclassed_windows_are_still_app_windows() {
+        use crate::WindowInterface;
+
+        let builder = WindowBuilder::new().title("Subclass identification test");
+        let host = crate::content::ContentHost::new(builder.window_id, None, false);
+        let mut window = PlatformWindow::new(&builder, host);
+        let hwnd = window.0.hwnd;
+        assert!(is_app_window(hwnd));
+        // WinUI replaces the instance procedure when it attaches to the window.
+        let previous = unsafe { SetWindowLong(hwnd, -4, DefWindowProcW as *const () as isize) };
+        let recognized = is_app_window(hwnd);
+        unsafe { SetWindowLong(hwnd, -4, previous) };
+        window.close();
+        assert!(
+            recognized,
+            "subclassing must not disable application shortcuts"
+        );
+        assert!(!is_app_window(null_mut()));
+    }
 
     #[test]
     fn redraw_requests_coalesce_until_paint_and_allow_input_first() {

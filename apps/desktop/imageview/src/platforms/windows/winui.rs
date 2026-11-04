@@ -10,7 +10,7 @@
 //! an unpackaged build adds it to the process with the dynamic dependency API, like a WebView2
 //! app expects its runtime to be installed.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::ffi::c_void;
 use std::ptr::{null, null_mut};
 use std::rc::Rc;
@@ -24,6 +24,28 @@ use super::winrt::*;
 /// The height of the header bar, the tall caption buttons of the window fill it.
 pub(crate) const HEADER_HEIGHT: f64 = 48.0;
 
+thread_local! {
+    static RUNTIME: RefCell<Option<(ComPtr, ComPtr, ComPtr)>> = const { RefCell::new(None) };
+}
+
+/// Finish XAML work before the event loop uninitializes COM.
+pub(crate) fn shutdown() {
+    let runtime = RUNTIME.with_borrow_mut(Option::take);
+    if let Some((dispatcher, manager, application)) = runtime {
+        if let Ok(closable) = manager.cast(&IID_ICLOSABLE) {
+            // SAFETY: IClosable::Close is slot 6.
+            unsafe { call!(closable, 6) };
+        }
+        let iid = GUID::from_u128(0x4c68ee2a_1cb1_5591_a3a2_9b590b8f8b9a);
+        if let Ok(controller) = dispatcher.cast(&iid) {
+            // SAFETY: IDispatcherQueueController2::ShutdownQueue is slot 6. It drains the
+            // dispatcher on this thread, including the asynchronous XAML shutdown.
+            unsafe { call!(controller, 6) };
+        }
+        drop((application, manager, dispatcher));
+    }
+}
+
 // The oldest Windows App SDK release ImageView supports, cargo-bundle writes the same
 // dependency into the MSIX manifest.
 const FRAMEWORK_FAMILY: &str = "Microsoft.WindowsAppRuntime.2_8wekyb3d8bbwe";
@@ -33,14 +55,102 @@ const DOWNLOAD_URL: &str = "https://learn.microsoft.com/windows/apps/windows-app
 
 const STATEREPOSITORY_E_DEPENDENCY_NOT_RESOLVED: HRESULT = 0x8067_0016_u32 as i32;
 
-// The header bar buttons and the application actions they perform.
-const ACTIONS: [(&str, &str); 5] = [
+// The header bar buttons and menu items and the application actions they perform.
+const ACTIONS: &[(&str, &str)] = &[
     ("Previous", "view.previous"),
     ("Next", "view.next"),
     ("ZoomOut", "view.zoom_out"),
     ("ResetZoom", "view.zoom_to_fit"),
     ("ZoomIn", "view.zoom_in"),
+    ("Edit", "edit.toggle"),
+    ("Done", "edit.toggle"),
+    ("Undo", "edit.undo"),
+    ("Redo", "edit.redo"),
+    ("SelectWhole", "select.whole"),
+    ("SelectRectangle", "select.rectangle"),
+    ("SelectEllipse", "select.ellipse"),
+    ("RotateLeft", "image.rotate_left"),
+    ("RotateRight", "image.rotate_right"),
+    ("FlipHorizontal", "image.flip_horizontal"),
+    ("FlipVertical", "image.flip_vertical"),
+    ("Crop", "image.crop"),
+    ("Resize", "image.resize"),
+    ("Adjust", "filter.adjust"),
+    ("AutoEnhance", "filter.auto_enhance"),
+    ("Grayscale", "filter.grayscale"),
+    ("Sepia", "filter.sepia"),
+    ("Invert", "filter.invert"),
+    ("Threshold", "filter.threshold"),
+    ("Solarize", "filter.solarize"),
+    ("GaussianBlur", "filter.gaussian_blur"),
+    ("BoxBlur", "filter.box_blur"),
+    ("MotionBlur", "filter.motion_blur"),
+    ("RadialBlur", "filter.radial_blur"),
+    ("Sharpen", "filter.sharpen"),
+    ("ReduceNoise", "filter.reduce_noise"),
+    ("Pixelate", "filter.pixelate"),
+    ("MoreRotateLeft", "image.rotate_left"),
+    ("MoreRotateRight", "image.rotate_right"),
+    ("MoreFlipHorizontal", "image.flip_horizontal"),
+    ("MoreFlipVertical", "image.flip_vertical"),
+    ("MoreSelectWhole", "select.whole"),
+    ("MoreSelectRectangle", "select.rectangle"),
+    ("MoreSelectEllipse", "select.ellipse"),
+    ("MoreCrop", "image.crop"),
+    ("MoreResize", "image.resize"),
+    ("MoreAdjust", "filter.adjust"),
+    // Opening the filters or More menu closes the card of the open tool, like opening a popover
+    // closes the one that was open.
+    ("Filters", "tool.cancel"),
+    ("More", "tool.cancel"),
 ];
+
+// The toggle buttons of the selection shapes.
+const TOGGLES: [&str; 3] = ["SelectWhole", "SelectRectangle", "SelectEllipse"];
+
+// The elements shown while viewing and while editing.
+const VIEW_ITEMS: [&str; 2] = ["ViewStart", "ViewEnd"];
+const EDIT_ITEMS: [&str; 2] = ["EditStart", "EditEnd"];
+
+// The edit buttons that always show, and the groups that move to the More menu when the header
+// bar is too narrow, the first ones first, with their items in that menu. The menu lists them in
+// the order of the header bar, a separator shows with the group that needs it, so the menu
+// never starts or ends with one.
+const EDIT_FIXED: [&str; 3] = ["HistoryGroup", "Filters", "Done"];
+const OVERFLOW: [(&str, &[&str]); 3] = [
+    (
+        "TransformGroup",
+        &[
+            "MoreRotateLeft",
+            "MoreRotateRight",
+            "MoreFlipHorizontal",
+            "MoreFlipVertical",
+        ],
+    ),
+    (
+        "SelectGroup",
+        &[
+            "MoreSelectWhole",
+            "MoreSelectRectangle",
+            "MoreSelectEllipse",
+            "MoreSelectSeparator",
+        ],
+    ),
+    (
+        "ToolsGroup",
+        &[
+            "MoreTransformSeparator",
+            "MoreCrop",
+            "MoreResize",
+            "MoreAdjust",
+        ],
+    ),
+];
+
+// VirtualKeyModifiers.Shift
+const SHIFT: u32 = 4;
+// VirtualKey.Escape
+const ESCAPE: i32 = 27;
 
 // The scroll viewer zooms from 0.1, so it shows the media at this scale and zooms that by the
 // magnification divided by it, which keeps the smallest magnification in its range.
@@ -50,25 +160,35 @@ const MAX_ZOOM_FACTOR: f64 = MAXIMUM_MAGNIFICATION / CONTENT_SCALE;
 
 // Where the buttons start, after the app icon.
 const BUTTONS_LEFT: f64 = 44.0;
-// The space between the zoom buttons and the caption buttons.
+// The space between the last buttons and the caption buttons.
 const END_GAP: f64 = 8.0;
+// The space between groups of buttons.
+const GROUP_SPACING: f64 = 8.0;
+// The More button of the edit groups that do not fit.
+const MORE_WIDTH: f64 = 40.0;
+// The room for a few characters of the title and its margins, edit groups move to the More menu
+// before the title gets narrower.
+const TITLE_WIDTH: f64 = 120.0;
 
 /// The narrowest header bar that fits the icon, the navigation buttons, a trimmed title, the zoom
-/// buttons and the tall caption buttons, so they never overlap.
+/// and Edit buttons and the tall caption buttons, so they never overlap. The edit groups that
+/// do not fit move to the More menu.
 pub(crate) const MIN_WIDTH: f64 = BUTTONS_LEFT
-    // Previous and next.
-    + 2.0 * 40.0
-    // A few characters of the title and its margins.
-    + 120.0
-    // The zoom out, reset and zoom in buttons and their border.
-    + 36.0 + 56.0 + 36.0 + 2.0
+    // Previous and next, with a divider and a border.
+    + 2.0 * 40.0 + 3.0
+    + TITLE_WIDTH
+    // The zoom out, reset and zoom in buttons, with dividers and a border.
+    + 40.0 + 56.0 + 40.0 + 4.0
+    // The Edit button.
+    + GROUP_SPACING + 56.0
     + END_GAP
     // The three tall caption buttons.
     + 3.0 * 48.0;
 
 // The whole window: one header bar, like a GTK header bar or a unified macOS toolbar, with the
-// app icon and navigation buttons, the centered title and the zoom buttons before the caption
-// buttons, above a scroll viewer that zooms and pans the media over a checkerboard.
+// app icon and navigation buttons, the centered title and the zoom and Edit buttons before the
+// caption buttons, or the edit groups and the Done button, above a scroll viewer that zooms and
+// pans the media over a checkerboard.
 const XAML: &str = include_str!("winui.xaml");
 
 /// Why WinUI could not start.
@@ -146,7 +266,7 @@ fn start() -> std::result::Result<(), StartError> {
     }
     let failed = |component| move |result| StartError::Failed(component, result);
     // XAML runs on the dispatcher queue of this thread, and keeps running while windows come
-    // and go when the thread keeps its XAML manager. Both live as long as the process.
+    // and go when the thread keeps its XAML manager. Shut both down before COM uninitializes.
     // SAFETY: Slot 7 of the statics is CreateOnCurrentThread.
     let dispatcher = factory(
         "Microsoft.UI.Dispatching.DispatcherQueueController",
@@ -169,7 +289,7 @@ fn start() -> std::result::Result<(), StartError> {
         .map_err(failed("controls resources"))?;
     // SAFETY: Slot 7 of IApplication is put_Resources.
     unsafe { application.put(7, resources.as_raw()) }.map_err(failed("controls resources"))?;
-    std::mem::forget((dispatcher, manager, application));
+    RUNTIME.with_borrow_mut(|runtime| *runtime = Some((dispatcher, manager, application)));
     Ok(())
 }
 
@@ -436,7 +556,18 @@ pub(crate) struct Island {
     scroller: ComPtr,
     media: ComPtr,
     checkerboard: ComPtr,
+    overlay: ComPtr,
+    tool: ComPtr,
+    spinner: ComPtr,
+    view_items: Vec<ComPtr>,
+    edit_items: Vec<ComPtr>,
+    edit_button: ComPtr,
+    toggles: Vec<(&'static str, ComPtr)>,
+    // The action of the toggle button that is on.
+    toggled: Rc<Cell<&'static str>>,
     regions: Rc<Regions>,
+    // Whether the card of a tool shows.
+    tool_open: Rc<Cell<bool>>,
     // A view change asked for before the scroll viewer was laid out, which it would ignore.
     pending: Rc<Cell<Option<View>>>,
     // Whether the window draws the Mica backdrop itself, under the transparent island.
@@ -446,17 +577,81 @@ pub(crate) struct Island {
     rendered: Cell<Option<(ComPtr, i64)>>,
 }
 
+// A group of edit buttons that moves to the More menu when the header bar is too narrow.
+struct Overflow {
+    group: ComPtr,
+    // Its items in the More menu.
+    items: Vec<ComPtr>,
+    // Its width in logical pixels when it was last shown.
+    width: Cell<f64>,
+    hidden: Cell<bool>,
+}
+
 // The button groups in the header bar, which take clicks instead of dragging the window.
 struct Regions {
     non_client: ComPtr,
     title_bar: ComPtr,
     start: ComPtr,
     end: ComPtr,
+    // The edit buttons that always show, the groups that move to the More menu in order, and the
+    // More button.
+    fixed: Vec<ComPtr>,
+    overflow: Vec<Overflow>,
+    more: ComPtr,
+    editing: Cell<bool>,
     // The width and header bar height in physical pixels and the scale.
     size: Cell<(i32, i32, f64)>,
 }
 
+// The width of an element in logical pixels.
+fn actual_width(element: &ComPtr) -> f64 {
+    let mut width = 0.0;
+    // SAFETY: Slot 13 of IFrameworkElement is get_ActualWidth.
+    unsafe { call!(element, 13, &mut width => *mut f64) };
+    width
+}
+
 impl Regions {
+    // Moves the edit groups that do not fit in `available` logical pixels to the More menu, the
+    // first ones first.
+    fn fit(&self, available: f64) {
+        for overflow in &self.overflow {
+            let width = actual_width(&overflow.group);
+            if !overflow.hidden.get() && width > 0.0 {
+                overflow.width.set(width);
+            }
+        }
+        let fixed: f64 = self
+            .fixed
+            .iter()
+            .map(|element| actual_width(element) + GROUP_SPACING)
+            .sum();
+        let hide = (0..=self.overflow.len())
+            .find(|&count| {
+                let shown: f64 = self.overflow[count..]
+                    .iter()
+                    .map(|overflow| overflow.width.get() + GROUP_SPACING)
+                    .sum();
+                let more = if count > 0 {
+                    MORE_WIDTH + GROUP_SPACING
+                } else {
+                    0.0
+                };
+                fixed + shown + more <= available
+            })
+            .unwrap_or(self.overflow.len());
+        for (index, overflow) in self.overflow.iter().enumerate() {
+            let hidden = index < hide;
+            if overflow.hidden.replace(hidden) != hidden {
+                set_visible(&overflow.group, !hidden);
+                for item in &overflow.items {
+                    set_visible(item, hidden);
+                }
+            }
+        }
+        set_visible(&self.more, hide > 0);
+    }
+
     fn update(&self) {
         let (width, height, scale) = self.size.get();
         if width == 0 {
@@ -475,13 +670,11 @@ impl Regions {
             };
             call!(self.end, 32, margin => Thickness);
         }
-        let actual_width = |element: &ComPtr| {
-            let mut width = 0.0;
-            // SAFETY: Slot 13 of IFrameworkElement is get_ActualWidth.
-            unsafe { call!(element, 13, &mut width => *mut f64) };
-            (width * scale).round() as i32
-        };
-        let (start, end) = (actual_width(&self.start), actual_width(&self.end));
+        if self.editing.get() {
+            self.fit(f64::from(width - inset) / scale - BUTTONS_LEFT - END_GAP - TITLE_WIDTH);
+        }
+        let physical = |element: &ComPtr| (actual_width(element) * scale).round() as i32;
+        let (start, end) = (physical(&self.start), physical(&self.end));
         let rects = [
             RectInt32 {
                 x: (BUTTONS_LEFT * scale).round() as i32,
@@ -516,41 +709,95 @@ type Drag = (Point, (f64, f64));
 // Scroll offsets and a magnification, keeping what is not given.
 type View = (Option<f64>, Option<f64>, Option<f64>);
 
+/// What follows the input of an island.
+pub(crate) struct Handlers {
+    /// Runs the application action of a button or menu item.
+    pub(crate) action: Box<dyn Fn(&'static str)>,
+    /// Follows every change of the zoom or scroll position, with whether it settled.
+    pub(crate) view: Box<dyn Fn(bool)>,
+    /// Takes drags that crop or select first, returns whether it does.
+    pub(crate) mark: Box<dyn Fn(Mark) -> bool>,
+    /// Follows the first rendered frame, until [`Island::stop_rendered`].
+    pub(crate) rendered: Box<dyn Fn()>,
+}
+
+/// A drag with the primary mouse button, which crops or selects, at a position in the visible
+/// area.
+pub(crate) enum Mark {
+    Begin((f64, f64)),
+    // Whether shift is held, which keeps a square.
+    Drag((f64, f64), bool),
+    End,
+}
+
+/// Creates the object of a XAML document.
+pub(crate) fn load_xaml(xaml: &str) -> Result<ComPtr> {
+    let statics = factory(
+        "Microsoft.UI.Xaml.Markup.XamlReader",
+        &IID_IXAML_READER_STATICS,
+    )?;
+    let xaml = HString::new(xaml);
+    // SAFETY: Slot 6 of the statics is Load.
+    out(|raw| unsafe { call!(statics, 6, xaml.as_raw() => HSTRING, raw => *mut *mut c_void) })
+}
+
+/// Finds an element by its name in a XAML tree, as an interface.
+pub(crate) fn find_name(root: &ComPtr, name: &str, iid: &GUID) -> Result<ComPtr> {
+    let name = HString::new(name);
+    // SAFETY: Slot 77 of IFrameworkElement is FindName.
+    out(|raw| unsafe { call!(root, 77, name.as_raw() => HSTRING, raw => *mut *mut c_void) })
+        .and_then(|element| element.cast(iid))
+}
+
+/// Shows or collapses an element.
+pub(crate) fn set_visible(element: &ComPtr, visible: bool) {
+    if let Ok(element) = element.cast(&IID_IUI_ELEMENT) {
+        // SAFETY: Slot 24 of IUIElement is put_Visibility, 0 is visible and 1 collapsed.
+        unsafe { call!(element, 24, i32::from(!visible) => i32) };
+    }
+}
+
+/// Boxes a boolean as an `IReference<Boolean>`, slot 17 of the property value statics is
+/// CreateBoolean.
+pub(crate) fn boxed_bool(value: bool) -> Option<ComPtr> {
+    boxed(17, value, &IID_IREFERENCE_BOOLEAN)
+}
+
+/// Adds a handler to the event in a vtable slot of an interface, which keeps it.
+pub(crate) fn add_event(object: &ComPtr, slot: usize, handler: &ComPtr) -> Result<()> {
+    let mut token = 0i64;
+    // SAFETY: The caller passes the slot of an event that takes a handler of this kind.
+    check(unsafe { call!(object, slot, handler.as_raw() => *mut c_void, &mut token => *mut i64) })
+}
+
 impl Island {
-    /// Creates the island in `parent`, which fills the client area of `window`. With
-    /// `window_backdrop` the window also draws Mica itself, under the island. The buttons
-    /// call `on_action` with their application action, `on_zoomed` follows the end of every
-    /// change of the zoom or scroll position and `on_rendered` the first rendered frame, until
-    /// [`Self::stop_rendered`].
+    /// Creates the island in `parent`, which fills the client area of `window`, following its
+    /// input with `handlers`. With `window_backdrop` the window also draws Mica itself, under the
+    /// island.
     pub(crate) fn new(
         parent: HWND,
         window: HWND,
         dark: bool,
         window_backdrop: bool,
-        on_action: impl Fn(&'static str) + 'static,
-        on_zoomed: impl Fn() + 'static,
-        on_rendered: impl Fn() + 'static,
+        handlers: Handlers,
     ) -> Self {
-        Self::create(
-            parent,
-            window,
-            window_backdrop,
-            on_action,
-            on_zoomed,
-            on_rendered,
-        )
-        .inspect(|island| island.set_dark(dark))
-        .unwrap_or_else(|(component, result)| fail(window, component, result))
+        Self::create(parent, window, window_backdrop, handlers)
+            .inspect(|island| island.set_dark(dark))
+            .unwrap_or_else(|(component, result)| fail(window, component, result))
     }
 
     fn create(
         parent: HWND,
         window: HWND,
         window_backdrop: bool,
-        on_action: impl Fn(&'static str) + 'static,
-        on_zoomed: impl Fn() + 'static,
-        on_rendered: impl Fn() + 'static,
+        handlers: Handlers,
     ) -> std::result::Result<Self, (&'static str, HRESULT)> {
+        let Handlers {
+            action: on_action,
+            view: on_view,
+            mark: on_mark,
+            rendered: on_rendered,
+        } = handlers;
         let failed = |component| move |result| (component, result);
 
         // The content extends into the title bar, under the caption buttons.
@@ -596,31 +843,16 @@ impl Island {
         let xaml = XAML
             .replace("{MIN_ZOOM}", &MIN_ZOOM_FACTOR.to_string())
             .replace("{MAX_ZOOM}", &MAX_ZOOM_FACTOR.to_string());
-        let root = factory(
-            "Microsoft.UI.Xaml.Markup.XamlReader",
-            &IID_IXAML_READER_STATICS,
-        )
-        .and_then(|statics| {
-            let xaml = HString::new(&xaml);
-            // SAFETY: Slot 6 of the statics is Load.
-            out(|raw| unsafe {
-                call!(statics, 6, xaml.as_raw() => HSTRING, raw => *mut *mut c_void)
-            })
-        })
-        .and_then(|root| root.cast(&IID_IFRAMEWORK_ELEMENT))
-        .map_err(failed("window content"))?;
+        let root = load_xaml(&xaml)
+            .and_then(|root| root.cast(&IID_IFRAMEWORK_ELEMENT))
+            .map_err(failed("window content"))?;
         let element = root
             .cast(&IID_IUI_ELEMENT)
             .map_err(failed("window content"))?;
         // SAFETY: Slot 7 of IDesktopWindowXamlSource is put_Content.
         unsafe { source.put(7, element.as_raw()) }.map_err(failed("window content"))?;
 
-        let find = |name: &str, iid: &GUID| {
-            let name = HString::new(name);
-            // SAFETY: Slot 77 of IFrameworkElement is FindName.
-            out(|raw| unsafe { call!(root, 77, name.as_raw() => HSTRING, raw => *mut *mut c_void) })
-                .and_then(|element| element.cast(iid))
-        };
+        let find = |name: &str, iid: &GUID| find_name(&root, name, iid);
 
         // Mica shows through the header bar where Windows supports it, otherwise it gets a solid
         // background. The backdrop needs the content of the island to attach to. Where the
@@ -656,6 +888,29 @@ impl Island {
         let scroller = find("Scroller", &IID_ISCROLL_VIEWER).map_err(failed("window content"))?;
         let media = find("Media", &IID_IIMAGE).map_err(failed("window content"))?;
         let checkerboard = find("Checkerboard", &IID_IIMAGE).map_err(failed("window content"))?;
+        let overlay = find("Overlay", &IID_IIMAGE).map_err(failed("window content"))?;
+        let tool = find("Tool", &IID_IBORDER).map_err(failed("window content"))?;
+        let spinner = find("Spinner", &IID_IUI_ELEMENT).map_err(failed("window content"))?;
+        let elements = |names: &[&str]| {
+            names
+                .iter()
+                .map(|name| find(name, &IID_IUI_ELEMENT))
+                .collect::<Result<Vec<_>>>()
+        };
+        let view_items = elements(&VIEW_ITEMS).map_err(failed("window content"))?;
+        let edit_items = elements(&EDIT_ITEMS).map_err(failed("window content"))?;
+        let edit_button = find("Edit", &IID_ICONTROL).map_err(failed("window content"))?;
+        let toggles = TOGGLES
+            .iter()
+            .map(|name| {
+                let action = ACTIONS
+                    .iter()
+                    .find(|(button, _)| button == name)
+                    .map_or("", |(_, action)| *action);
+                find(name, &IID_ITOGGLE_BUTTON).map(|toggle| (action, toggle))
+            })
+            .collect::<Result<Vec<_>>>()
+            .map_err(failed("window content"))?;
 
         // The buttons in the title bar take clicks, the rest of it drags the window.
         let non_client = factory(
@@ -668,11 +923,32 @@ impl Island {
             out(|raw| unsafe { call!(statics, 6, id => WindowId, raw => *mut *mut c_void) })
         })
         .map_err(failed("title bar"))?;
+        let fixed = EDIT_FIXED
+            .iter()
+            .map(|name| find(name, &IID_IFRAMEWORK_ELEMENT))
+            .collect::<Result<Vec<_>>>()
+            .map_err(failed("window content"))?;
+        let overflow = OVERFLOW
+            .iter()
+            .map(|(group, items)| {
+                Ok(Overflow {
+                    group: find(group, &IID_IFRAMEWORK_ELEMENT)?,
+                    items: elements(items)?,
+                    width: Cell::new(0.0),
+                    hidden: Cell::new(false),
+                })
+            })
+            .collect::<Result<Vec<_>>>()
+            .map_err(failed("window content"))?;
         let regions = Rc::new(Regions {
             non_client,
             title_bar: title_bar.clone(),
             start: start.clone(),
             end: end.clone(),
+            fixed,
+            overflow,
+            more: find("More", &IID_IUI_ELEMENT).map_err(failed("window content"))?,
+            editing: Cell::new(false),
             size: Cell::new((0, 0, 1.0)),
         });
         // The groups are measured after the island first shows them.
@@ -692,28 +968,52 @@ impl Island {
             .map_err(failed("title bar"))?;
         }
 
-        let clicked = event_handler(IID_ROUTED_EVENT_HANDLER, move |sender, _| {
-            let Ok(sender) = sender.cast(&IID_IFRAMEWORK_ELEMENT) else {
-                return;
-            };
-            let mut name = null_mut();
-            // SAFETY: Slot 33 of IFrameworkElement is get_Name, which returns an owned string.
-            if check(unsafe { call!(sender, 33, &mut name => *mut HSTRING) }).is_err() {
-                return;
-            }
-            // SAFETY: The name is owned by this call.
-            let name = unsafe { HString::from_raw(name) }.to_string_lossy();
-            if let Some((_, action)) = ACTIONS.iter().find(|(button, _)| *button == name) {
-                on_action(action);
-            }
-        });
-        for (name, _) in ACTIONS {
-            let button = find(name, &IID_IBUTTON_BASE).map_err(failed("window content"))?;
-            let mut token = 0i64;
-            // SAFETY: Slot 14 of IButtonBase is add_Click, the button keeps the handler.
-            check(unsafe {
-                call!(button, 14, clicked.as_raw() => *mut c_void, &mut token => *mut i64)
+        let on_action: Rc<dyn Fn(&'static str)> = Rc::from(on_action);
+        let tool_open = Rc::new(Cell::new(false));
+        let toggled = Rc::new(Cell::new(""));
+        let clicked = {
+            let (on_action, opened, toggled) =
+                (on_action.clone(), tool_open.clone(), toggled.clone());
+            event_handler(IID_ROUTED_EVENT_HANDLER, move |sender, _| {
+                let Ok(sender) = sender.cast(&IID_IFRAMEWORK_ELEMENT) else {
+                    return;
+                };
+                let mut name = null_mut();
+                // SAFETY: Slot 33 of IFrameworkElement is get_Name, which returns an owned
+                // string.
+                if check(unsafe { call!(sender, 33, &mut name => *mut HSTRING) }).is_err() {
+                    return;
+                }
+                // SAFETY: The name is owned by this call.
+                let name = unsafe { HString::from_raw(name) }.to_string_lossy();
+                let Some((_, action)) = ACTIONS.iter().find(|(button, _)| *button == name) else {
+                    return;
+                };
+                // A toggle button shows what the application selects rather than the click: it
+                // stays on when clicked while on, and stays as it was while the application
+                // ignores the action, like while an edit is applied.
+                if TOGGLES.contains(&name.as_str())
+                    && let Ok(toggle) = sender.cast(&IID_ITOGGLE_BUTTON)
+                    && let Some(checked) = boxed_bool(*action == toggled.get())
+                {
+                    // SAFETY: Slot 7 of IToggleButton is put_IsChecked.
+                    _ = unsafe { toggle.put(7, checked.as_raw()) };
+                }
+                // Canceling without an open tool would select the whole image again.
+                if *action != "tool.cancel" || opened.get() {
+                    on_action(action);
+                }
             })
+        };
+        // Slot 14 of IButtonBase and slot 17 of IMenuFlyoutItem are add_Click.
+        for (name, _) in ACTIONS {
+            let element = find(name, &IID_IFRAMEWORK_ELEMENT).map_err(failed("window content"))?;
+            match element.cast(&IID_IBUTTON_BASE) {
+                Ok(button) => add_event(&button, 14, &clicked),
+                Err(_) => element
+                    .cast(&IID_IMENU_FLYOUT_ITEM)
+                    .and_then(|item| add_event(&item, 17, &clicked)),
+            }
             .map_err(failed("window content"))?;
         }
 
@@ -738,9 +1038,7 @@ impl Island {
                 // SAFETY: Slot 6 of the arguments is get_IsIntermediate.
                 unsafe { call!(args, 6, &mut intermediate => *mut u8) };
             }
-            if intermediate == 0 {
-                on_zoomed();
-            }
+            on_view(intermediate == 0);
         });
         let mut token = 0i64;
         // SAFETY: Slot 74 of IScrollViewer is add_ViewChanged, the scroll viewer keeps the
@@ -750,13 +1048,44 @@ impl Island {
         })
         .map_err(failed("window content"))?;
 
-        Self::add_drag(&scroller).map_err(failed("window content"))?;
+        Self::add_drag(&scroller, on_mark).map_err(failed("window content"))?;
 
+        // Escape in the image edits the whole image again, like on the other platforms. The
+        // card of an open tool cancels it with its own keyboard accelerator instead.
+        let key_down = {
+            let opened = tool_open.clone();
+            event_handler(IID_KEY_EVENT_HANDLER, move |_, args| {
+                let Some(args) = args.and_then(|args| args.cast(&IID_IKEY_ROUTED_EVENT_ARGS).ok())
+                else {
+                    return;
+                };
+                let mut key = 0i32;
+                // SAFETY: Slot 6 of IKeyRoutedEventArgs is get_Key and slot 9 is put_Handled.
+                unsafe {
+                    call!(args, 6, &mut key => *mut i32);
+                    if key == ESCAPE && !opened.get() {
+                        call!(args, 9, 1u8 => u8);
+                        on_action("tool.cancel");
+                    }
+                }
+            })
+        };
+        // Slot 132 of IUIElement is add_KeyDown.
+        scroller
+            .cast(&IID_IUI_ELEMENT)
+            .and_then(|element| add_event(&element, 132, &key_down))
+            .map_err(failed("window content"))?;
+
+        let on_rendered: Rc<dyn Fn()> = Rc::from(on_rendered);
         // The view change from before the first layout applies once the scroll viewer has a size.
         let pending = Rc::new(Cell::<Option<View>>::new(None));
         let laid_out = {
             let pending = pending.clone();
+            let reveal = on_rendered.clone();
             event_handler(IID_SIZE_CHANGED_EVENT_HANDLER, move |sender, _| {
+                // The window can show once the island is laid out, it draws that layout in the
+                // same frame.
+                reveal();
                 if let Ok(scroller) = sender.cast(&IID_ISCROLL_VIEWER)
                     && let Some((x, y, zoom)) = pending.take()
                 {
@@ -802,7 +1131,16 @@ impl Island {
             scroller,
             media,
             checkerboard,
+            overlay,
+            tool,
+            spinner,
+            view_items,
+            edit_items,
+            edit_button,
+            toggles,
+            toggled,
             regions,
+            tool_open,
             pending,
             window_backdrop,
             rendered: Cell::new(Some((statics, token))),
@@ -817,13 +1155,16 @@ impl Island {
         }
     }
 
-    // Dragging with the primary mouse button pans the media, like the hand tool of other
-    // viewers. Touch and touchpads pan with the scroll viewer itself. The handlers get the
-    // scroll viewer as their sender, so they keep no reference to it that would keep it alive.
-    fn add_drag(scroller: &ComPtr) -> Result<()> {
+    // Dragging with the primary mouse button crops or selects, or else pans the media, like the
+    // hand tool of other viewers. Touch and touchpads pan with the scroll viewer itself. The
+    // handlers get the scroll viewer as their sender, so they keep no reference to it that would
+    // keep it alive.
+    fn add_drag(scroller: &ComPtr, on_mark: impl Fn(Mark) -> bool + 'static) -> Result<()> {
+        let on_mark = Rc::new(on_mark);
         let drag = Rc::new(Cell::<Option<Drag>>::new(None));
+        let marking = Rc::new(Cell::new(false));
         let pressed = {
-            let drag = drag.clone();
+            let (drag, marking, on_mark) = (drag.clone(), marking.clone(), on_mark.clone());
             event_handler(IID_POINTER_EVENT_HANDLER, move |sender, args| {
                 let (Some((point, args)), Ok(scroller), Ok(element)) = (
                     args.and_then(|args| mouse_drag_point(sender, args)),
@@ -832,7 +1173,11 @@ impl Island {
                 ) else {
                     return;
                 };
-                drag.set(Some((point, scroll_offsets(&scroller))));
+                if on_mark(Mark::Begin(position(point))) {
+                    marking.set(true);
+                } else {
+                    drag.set(Some((point, scroll_offsets(&scroller))));
+                }
                 // SAFETY: Slot 6 of IPointerRoutedEventArgs is get_Pointer, slot 212 of
                 // IUIElement is CapturePointer and slot 9 of the arguments is put_Handled.
                 unsafe {
@@ -845,13 +1190,22 @@ impl Island {
             })
         };
         let moved = {
-            let drag = drag.clone();
+            let (drag, marking, on_mark) = (drag.clone(), marking.clone(), on_mark.clone());
             event_handler(IID_POINTER_EVENT_HANDLER, move |sender, args| {
-                let (Some((start, (x, y))), Some((point, _)), Ok(scroller)) = (
-                    drag.get(),
-                    args.and_then(|args| mouse_drag_point(sender, args)),
-                    sender.cast(&IID_ISCROLL_VIEWER),
-                ) else {
+                let Some((point, args)) = args.and_then(|args| mouse_drag_point(sender, args))
+                else {
+                    return;
+                };
+                if marking.get() {
+                    let mut modifiers = 0u32;
+                    // SAFETY: Slot 7 of IPointerRoutedEventArgs is get_KeyModifiers.
+                    unsafe { call!(args, 7, &mut modifiers => *mut u32) };
+                    on_mark(Mark::Drag(position(point), modifiers & SHIFT != 0));
+                    return;
+                }
+                let (Some((start, (x, y))), Ok(scroller)) =
+                    (drag.get(), sender.cast(&IID_ISCROLL_VIEWER))
+                else {
                     return;
                 };
                 change_view(
@@ -862,7 +1216,12 @@ impl Island {
                 );
             })
         };
-        let released = event_handler(IID_POINTER_EVENT_HANDLER, move |_, _| drag.set(None));
+        let released = event_handler(IID_POINTER_EVENT_HANDLER, move |_, _| {
+            drag.set(None);
+            if marking.replace(false) {
+                on_mark(Mark::End);
+            }
+        });
         let element = scroller.cast(&IID_IUI_ELEMENT)?;
         // Slots 152, 154, 156 and 162 of IUIElement are add_PointerPressed, add_PointerMoved,
         // add_PointerReleased and add_PointerCaptureLost.
@@ -872,11 +1231,7 @@ impl Island {
             (156, &released),
             (162, &released),
         ] {
-            let mut token = 0i64;
-            // SAFETY: These slots add a pointer event handler, the element keeps it.
-            check(unsafe {
-                call!(element, slot, handler.as_raw() => *mut c_void, &mut token => *mut i64)
-            })?;
+            add_event(&element, slot, handler)?;
         }
         Ok(())
     }
@@ -920,6 +1275,61 @@ impl Island {
         );
     }
 
+    /// Shows the edit controls in the header bar, or the view controls.
+    pub(crate) fn set_editing(&self, editing: bool) {
+        for (items, visible) in [(&self.view_items, !editing), (&self.edit_items, editing)] {
+            for item in items {
+                set_visible(item, visible);
+            }
+        }
+        self.regions.editing.set(editing);
+        self.regions.update();
+    }
+
+    /// Enables the Edit button, only still bitmaps can be edited.
+    pub(crate) fn set_editable(&self, editable: bool) {
+        // SAFETY: Slot 29 of IControl is put_IsEnabled.
+        unsafe { call!(self.edit_button, 29, editable => bool) };
+    }
+
+    /// Shows the toggle button of a selection action as on and the others as off.
+    pub(crate) fn set_toggled(&self, action: &str) {
+        for (toggle_action, toggle) in &self.toggles {
+            if *toggle_action == action {
+                self.toggled.set(toggle_action);
+            }
+            if let Some(checked) = boxed_bool(*toggle_action == action) {
+                // SAFETY: Slot 7 of IToggleButton is put_IsChecked.
+                _ = unsafe { toggle.put(7, checked.as_raw()) };
+            }
+        }
+    }
+
+    /// Shows a bitmap over the visible area at its size in logical pixels, or nothing.
+    pub(crate) fn set_overlay(&self, overlay: Option<(&Bitmap, (f64, f64))>) {
+        if let Some((bitmap, size)) = overlay {
+            set_image(&self.overlay, bitmap, size);
+        }
+        set_visible(&self.overlay, overlay.is_some());
+    }
+
+    /// Shows the controls of an edit tool, or hides them.
+    pub(crate) fn set_tool(&self, content: Option<&ComPtr>) {
+        let element = content.and_then(|content| content.cast(&IID_IUI_ELEMENT).ok());
+        // SAFETY: Slot 19 of IBorder is put_Child, null removes the child.
+        _ = unsafe {
+            self.tool
+                .put(19, element.as_ref().map_or(null_mut(), ComPtr::as_raw))
+        };
+        set_visible(&self.tool, element.is_some());
+        self.tool_open.set(element.is_some());
+    }
+
+    /// Shows the spinning progress ring in the middle of the image, or hides it.
+    pub(crate) fn set_spinner(&self, spinning: bool) {
+        set_visible(&self.spinner, spinning);
+    }
+
     /// Shows a bitmap as the checkerboard behind the media, centered at its size in logical
     /// pixels.
     pub(crate) fn set_checkerboard(&self, bitmap: &Bitmap, size: (f64, f64)) {
@@ -937,6 +1347,17 @@ impl Island {
     /// The scroll offsets of the magnified media, in logical pixels.
     pub(crate) fn offsets(&self) -> (f64, f64) {
         scroll_offsets(&self.scroller)
+    }
+
+    #[cfg(test)]
+    pub(super) fn scrollable_size(&self) -> (f64, f64) {
+        let (mut width, mut height) = (0.0, 0.0);
+        // SAFETY: Slots 42 and 47 of IScrollViewer are ScrollableWidth and ScrollableHeight.
+        unsafe {
+            call!(self.scroller, 42, &mut width => *mut f64);
+            call!(self.scroller, 47, &mut height => *mut f64);
+        }
+        (width, height)
     }
 
     /// Scrolls and zooms right away, keeping what is not given, or once the scroll viewer is laid
@@ -1045,7 +1466,15 @@ fn change_view(scroller: &ComPtr, x: Option<f64>, y: Option<f64>, zoom: Option<f
     let y = y.and_then(|y| boxed(15, y.max(0.0), &IID_IREFERENCE_DOUBLE));
     let zoom = zoom.and_then(|magnification| {
         let factor = (magnification / CONTENT_SCALE).clamp(MIN_ZOOM_FACTOR, MAX_ZOOM_FACTOR);
-        boxed(14, factor as f32, &IID_IREFERENCE_SINGLE)
+        // ChangeView takes a float. Rounding upward can put the fitted image just beyond
+        // the viewport, which WinUI treats as scrollable even for a fraction of a pixel.
+        let rounded = factor as f32;
+        let rounded = if f64::from(rounded) > factor {
+            rounded.next_down()
+        } else {
+            rounded
+        };
+        boxed(14, rounded, &IID_IREFERENCE_SINGLE)
     });
     let raw = |value: &Option<ComPtr>| value.as_ref().map_or(null_mut(), ComPtr::as_raw);
     let mut changed = 0u8;
@@ -1073,6 +1502,11 @@ fn scroll_offsets(scroller: &ComPtr) -> (f64, f64) {
         call!(scroller, 45, &mut y => *mut f64);
     }
     (x, y)
+}
+
+// A pointer position in logical pixels.
+fn position(point: Point) -> (f64, f64) {
+    (f64::from(point.x), f64::from(point.y))
 }
 
 // The position of a mouse pointer with the primary button down relative to the element that got

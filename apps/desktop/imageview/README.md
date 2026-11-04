@@ -19,8 +19,7 @@ vector drawings, and follows the system light or dark theme.
 
 ### Editing
 
-An Edit button, on macOS and Linux, swaps in an edit toolbar for still bitmaps, with popovers
-for its tools:
+An Edit button swaps in an edit toolbar for still bitmaps, with popovers for its tools:
 
 - Rotate and flip, saved to JPEG files by changing their EXIF orientation instead of encoding
   them again
@@ -58,6 +57,9 @@ for its tools:
 - File Explorer thumbnails and preview pane from the [shell extension](../imageview-windows-shell),
   which the MSIX package registers without changing the registry
 - Light and dark themes, also for the scroll bars and caption buttons
+- The edit controls in the header bar, with the controls of a tool in a card over the image and
+  the Filters in a menu flyout. Save As uses the file types of the dialog for the format and adds
+  combo boxes for the JPEG quality and size
 
 ### Linux
 

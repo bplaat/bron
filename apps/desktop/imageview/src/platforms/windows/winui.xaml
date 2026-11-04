@@ -4,51 +4,59 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     Background="Transparent"
 >
-    <Grid.Resources>
-        <ResourceDictionary>
-            <ResourceDictionary.ThemeDictionaries>
-                <ResourceDictionary x:Key="Light">
-                    <StaticResource x:Key="ButtonBackground" ResourceKey="SubtleFillColorTransparentBrush" />
-                    <StaticResource x:Key="ButtonBackgroundPointerOver" ResourceKey="SubtleFillColorSecondaryBrush" />
-                    <StaticResource x:Key="ButtonBackgroundPressed" ResourceKey="SubtleFillColorTertiaryBrush" />
-                    <StaticResource x:Key="ButtonBorderBrush" ResourceKey="SubtleFillColorTransparentBrush" />
-                    <StaticResource
-                        x:Key="ButtonBorderBrushPointerOver"
-                        ResourceKey="SubtleFillColorTransparentBrush"
-                    />
-                    <StaticResource x:Key="ButtonBorderBrushPressed" ResourceKey="SubtleFillColorTransparentBrush" />
-                    <StaticResource x:Key="ButtonForegroundPressed" ResourceKey="TextFillColorSecondaryBrush" />
-                </ResourceDictionary>
-                <ResourceDictionary x:Key="Dark">
-                    <StaticResource x:Key="ButtonBackground" ResourceKey="SubtleFillColorTransparentBrush" />
-                    <StaticResource x:Key="ButtonBackgroundPointerOver" ResourceKey="SubtleFillColorSecondaryBrush" />
-                    <StaticResource x:Key="ButtonBackgroundPressed" ResourceKey="SubtleFillColorTertiaryBrush" />
-                    <StaticResource x:Key="ButtonBorderBrush" ResourceKey="SubtleFillColorTransparentBrush" />
-                    <StaticResource
-                        x:Key="ButtonBorderBrushPointerOver"
-                        ResourceKey="SubtleFillColorTransparentBrush"
-                    />
-                    <StaticResource x:Key="ButtonBorderBrushPressed" ResourceKey="SubtleFillColorTransparentBrush" />
-                    <StaticResource x:Key="ButtonForegroundPressed" ResourceKey="TextFillColorSecondaryBrush" />
-                </ResourceDictionary>
-            </ResourceDictionary.ThemeDictionaries>
-            <Style TargetType="Button" BasedOn="{StaticResource DefaultButtonStyle}">
-                <Setter Property="Width" Value="40" />
-                <Setter Property="Height" Value="32" />
-                <Setter Property="Padding" Value="0" />
-                <Setter Property="AllowFocusOnInteraction" Value="False" />
-            </Style>
-            <Style TargetType="FontIcon">
-                <Setter Property="FontSize" Value="16" />
-            </Style>
-        </ResourceDictionary>
-    </Grid.Resources>
     <Grid.RowDefinitions>
         <RowDefinition Height="48" />
         <RowDefinition Height="*" />
     </Grid.RowDefinitions>
 
     <Grid x:Name="Header" BorderThickness="0,0,0,1" BorderBrush="{ThemeResource DividerStrokeColorDefaultBrush}">
+        <!-- Related buttons are segments of one control, like linked buttons in a GTK header bar
+             or a segmented control in a macOS toolbar: a group looks like a single standard
+             button, with dividers between its segments. The buttons never take the focus, so
+             the keys keep scrolling the image. -->
+        <Grid.Resources>
+            <Style x:Key="Group" TargetType="Border">
+                <Setter Property="Height" Value="32" />
+                <Setter Property="CornerRadius" Value="{ThemeResource ControlCornerRadius}" />
+                <Setter Property="BorderThickness" Value="1" />
+                <Setter Property="Background" Value="{ThemeResource ControlFillColorDefaultBrush}" />
+                <Setter Property="BorderBrush" Value="{ThemeResource ControlElevationBorderBrush}" />
+            </Style>
+            <Style x:Key="Segment" TargetType="Button" BasedOn="{StaticResource DefaultButtonStyle}">
+                <Setter Property="Width" Value="40" />
+                <Setter Property="Height" Value="30" />
+                <Setter Property="Padding" Value="0" />
+                <Setter Property="CornerRadius" Value="0" />
+                <Setter Property="BorderThickness" Value="0" />
+                <Setter Property="Background" Value="Transparent" />
+                <Setter Property="AllowFocusOnInteraction" Value="False" />
+            </Style>
+            <Style x:Key="TextSegment" TargetType="Button" BasedOn="{StaticResource Segment}">
+                <Setter Property="Width" Value="Auto" />
+                <Setter Property="Padding" Value="11,0" />
+            </Style>
+            <Style x:Key="ToggleSegment" TargetType="ToggleButton" BasedOn="{StaticResource DefaultToggleButtonStyle}">
+                <Setter Property="Width" Value="40" />
+                <Setter Property="Height" Value="30" />
+                <Setter Property="Padding" Value="0" />
+                <Setter Property="CornerRadius" Value="0" />
+                <Setter Property="BorderThickness" Value="0" />
+                <Setter Property="Background" Value="Transparent" />
+                <Setter Property="AllowFocusOnInteraction" Value="False" />
+            </Style>
+            <Style x:Key="Divider" TargetType="Rectangle">
+                <Setter Property="Width" Value="1" />
+                <Setter Property="Fill" Value="{ThemeResource ControlStrokeColorDefaultBrush}" />
+            </Style>
+            <Style x:Key="TextButton" TargetType="Button" BasedOn="{StaticResource DefaultButtonStyle}">
+                <Setter Property="Height" Value="32" />
+                <Setter Property="Padding" Value="11,0" />
+                <Setter Property="AllowFocusOnInteraction" Value="False" />
+            </Style>
+            <Style TargetType="FontIcon">
+                <Setter Property="FontSize" Value="16" />
+            </Style>
+        </Grid.Resources>
         <Grid.ColumnDefinitions>
             <ColumnDefinition Width="Auto" />
             <ColumnDefinition Width="Auto" />
@@ -66,12 +74,120 @@
         <Image x:Name="Icon" Width="16" Height="16" Margin="16,0,12,0" />
 
         <StackPanel x:Name="Start" Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-            <Button x:Name="Previous" ToolTipService.ToolTip="Previous image (Left)">
-                <FontIcon Glyph="&#xE72B;" />
-            </Button>
-            <Button x:Name="Next" ToolTipService.ToolTip="Next image (Right)">
-                <FontIcon Glyph="&#xE72A;" />
-            </Button>
+            <Border x:Name="ViewStart" Style="{StaticResource Group}">
+                <StackPanel Orientation="Horizontal">
+                    <Button
+                        x:Name="Previous"
+                        Style="{StaticResource Segment}"
+                        CornerRadius="3,0,0,3"
+                        ToolTipService.ToolTip="Previous image (Left)"
+                    >
+                        <FontIcon Glyph="&#xE76B;" />
+                    </Button>
+                    <Rectangle Style="{StaticResource Divider}" />
+                    <Button
+                        x:Name="Next"
+                        Style="{StaticResource Segment}"
+                        CornerRadius="0,3,3,0"
+                        ToolTipService.ToolTip="Next image (Right)"
+                    >
+                        <FontIcon Glyph="&#xE76C;" />
+                    </Button>
+                </StackPanel>
+            </Border>
+            <StackPanel x:Name="EditStart" Orientation="Horizontal" Spacing="8" Visibility="Collapsed">
+                <Border x:Name="HistoryGroup" Style="{StaticResource Group}">
+                    <StackPanel Orientation="Horizontal">
+                        <Button
+                            x:Name="Undo"
+                            Style="{StaticResource Segment}"
+                            CornerRadius="3,0,0,3"
+                            ToolTipService.ToolTip="Undo (Ctrl+Z)"
+                        >
+                            <FontIcon Glyph="&#xE7A7;" />
+                        </Button>
+                        <Rectangle Style="{StaticResource Divider}" />
+                        <Button
+                            x:Name="Redo"
+                            Style="{StaticResource Segment}"
+                            CornerRadius="0,3,3,0"
+                            ToolTipService.ToolTip="Redo (Ctrl+Shift+Z)"
+                        >
+                            <FontIcon Glyph="&#xE7A6;" />
+                        </Button>
+                    </StackPanel>
+                </Border>
+                <Border x:Name="SelectGroup" Style="{StaticResource Group}">
+                    <StackPanel Orientation="Horizontal">
+                        <ToggleButton
+                            x:Name="SelectWhole"
+                            Style="{StaticResource ToggleSegment}"
+                            CornerRadius="3,0,0,3"
+                            ToolTipService.ToolTip="Whole image"
+                        >
+                            <FontIcon Glyph="&#xE8B9;" />
+                        </ToggleButton>
+                        <Rectangle Style="{StaticResource Divider}" />
+                        <ToggleButton
+                            x:Name="SelectRectangle"
+                            Style="{StaticResource ToggleSegment}"
+                            ToolTipService.ToolTip="Rectangle selection"
+                        >
+                            <FontIcon Glyph="&#xE8B3;" />
+                        </ToggleButton>
+                        <Rectangle Style="{StaticResource Divider}" />
+                        <ToggleButton
+                            x:Name="SelectEllipse"
+                            Style="{StaticResource ToggleSegment}"
+                            CornerRadius="0,3,3,0"
+                            ToolTipService.ToolTip="Ellipse selection"
+                        >
+                            <FontIcon Glyph="&#xEA3A;" />
+                        </ToggleButton>
+                    </StackPanel>
+                </Border>
+                <Border x:Name="TransformGroup" Style="{StaticResource Group}">
+                    <StackPanel Orientation="Horizontal">
+                        <Button
+                            x:Name="RotateLeft"
+                            Style="{StaticResource Segment}"
+                            CornerRadius="3,0,0,3"
+                            ToolTipService.ToolTip="Rotate left (Ctrl+L)"
+                        >
+                            <FontIcon Glyph="&#xE7AD;" RenderTransformOrigin="0.5,0.5">
+                                <FontIcon.RenderTransform>
+                                    <ScaleTransform ScaleX="-1" />
+                                </FontIcon.RenderTransform>
+                            </FontIcon>
+                        </Button>
+                        <Rectangle Style="{StaticResource Divider}" />
+                        <Button
+                            x:Name="RotateRight"
+                            Style="{StaticResource Segment}"
+                            ToolTipService.ToolTip="Rotate right (Ctrl+R)"
+                        >
+                            <FontIcon Glyph="&#xE7AD;" />
+                        </Button>
+                        <Rectangle Style="{StaticResource Divider}" />
+                        <Button
+                            x:Name="FlipHorizontal"
+                            Style="{StaticResource Segment}"
+                            ToolTipService.ToolTip="Flip horizontal"
+                        >
+                            <FontIcon Glyph="&#xE8AB;" />
+                        </Button>
+                        <Rectangle Style="{StaticResource Divider}" />
+                        <Button
+                            x:Name="FlipVertical"
+                            Style="{StaticResource Segment}"
+                            CornerRadius="0,3,3,0"
+                            ToolTipService.ToolTip="Flip vertical"
+                        >
+                            <FontIcon Glyph="&#xE8CB;" />
+                        </Button>
+                    </StackPanel>
+                </Border>
+            </StackPanel>
         </StackPanel>
 
         <StackPanel
@@ -100,53 +216,143 @@
             />
         </StackPanel>
 
-        <Border
-            x:Name="End"
-            Grid.Column="3"
-            VerticalAlignment="Center"
-            CornerRadius="4"
-            BorderThickness="1"
-            Background="{ThemeResource ControlFillColorDefaultBrush}"
-            BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
-        >
-            <StackPanel Orientation="Horizontal">
+        <!-- The main action of each mode at the trailing edge, like on the other platforms. -->
+        <StackPanel x:Name="End" Grid.Column="3" Orientation="Horizontal" VerticalAlignment="Center">
+            <StackPanel x:Name="ViewEnd" Orientation="Horizontal" Spacing="8">
+                <Border Style="{StaticResource Group}">
+                    <StackPanel Orientation="Horizontal">
+                        <Button
+                            x:Name="ZoomOut"
+                            Style="{StaticResource Segment}"
+                            CornerRadius="3,0,0,3"
+                            ToolTipService.ToolTip="Zoom out (Ctrl+-)"
+                        >
+                            <FontIcon Glyph="&#xE71F;" />
+                        </Button>
+                        <Rectangle Style="{StaticResource Divider}" />
+                        <Button
+                            x:Name="ResetZoom"
+                            Style="{StaticResource Segment}"
+                            Width="56"
+                            ToolTipService.ToolTip="Reset zoom (Ctrl+9)"
+                        >
+                            <TextBlock x:Name="Zoom" Style="{StaticResource CaptionTextBlockStyle}" />
+                        </Button>
+                        <Rectangle Style="{StaticResource Divider}" />
+                        <Button
+                            x:Name="ZoomIn"
+                            Style="{StaticResource Segment}"
+                            CornerRadius="0,3,3,0"
+                            ToolTipService.ToolTip="Zoom in (Ctrl+=)"
+                        >
+                            <FontIcon Glyph="&#xE8A3;" />
+                        </Button>
+                    </StackPanel>
+                </Border>
                 <Button
-                    x:Name="ZoomOut"
-                    Width="36"
-                    Height="30"
-                    CornerRadius="3,0,0,3"
-                    ToolTipService.ToolTip="Zoom out (Ctrl+-)"
-                >
-                    <FontIcon Glyph="&#xE738;" FontSize="12" />
-                </Button>
-                <Button
-                    x:Name="ResetZoom"
-                    Width="56"
-                    Height="30"
-                    CornerRadius="0"
-                    BorderThickness="1,0"
-                    BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
-                    ToolTipService.ToolTip="Reset zoom (Ctrl+9)"
-                >
-                    <TextBlock x:Name="Zoom" Style="{StaticResource CaptionTextBlockStyle}" />
-                </Button>
-                <Button
-                    x:Name="ZoomIn"
-                    Width="36"
-                    Height="30"
-                    CornerRadius="0,3,3,0"
-                    ToolTipService.ToolTip="Zoom in (Ctrl+=)"
-                >
-                    <FontIcon Glyph="&#xE710;" FontSize="12" />
-                </Button>
+                    x:Name="Edit"
+                    Content="Edit"
+                    Style="{StaticResource TextButton}"
+                    ToolTipService.ToolTip="Edit image (Ctrl+E)"
+                />
             </StackPanel>
-        </Border>
+            <StackPanel x:Name="EditEnd" Orientation="Horizontal" Spacing="8" Visibility="Collapsed">
+                <Border x:Name="ToolsGroup" Style="{StaticResource Group}">
+                    <StackPanel Orientation="Horizontal">
+                        <Button
+                            x:Name="Crop"
+                            Content="Crop"
+                            Style="{StaticResource TextSegment}"
+                            CornerRadius="3,0,0,3"
+                            ToolTipService.ToolTip="Crop (Ctrl+K)"
+                        />
+                        <Rectangle Style="{StaticResource Divider}" />
+                        <Button x:Name="Resize" Content="Resize" Style="{StaticResource TextSegment}" />
+                        <Rectangle Style="{StaticResource Divider}" />
+                        <Button
+                            x:Name="Adjust"
+                            Content="Adjust"
+                            Style="{StaticResource TextSegment}"
+                            CornerRadius="0,3,3,0"
+                        />
+                    </StackPanel>
+                </Border>
+                <DropDownButton x:Name="Filters" Content="Filters" Height="32" AllowFocusOnInteraction="False">
+                    <DropDownButton.Flyout>
+                        <MenuFlyout Placement="BottomEdgeAlignedRight">
+                            <MenuFlyoutItem x:Name="AutoEnhance" Text="Auto Enhance" />
+                            <MenuFlyoutSeparator />
+                            <MenuFlyoutItem x:Name="Grayscale" Text="Grayscale" />
+                            <MenuFlyoutItem x:Name="Sepia" Text="Sepia" />
+                            <MenuFlyoutItem x:Name="Invert" Text="Invert" />
+                            <MenuFlyoutItem x:Name="Threshold" Text="Threshold..." />
+                            <MenuFlyoutItem x:Name="Solarize" Text="Solarize..." />
+                            <MenuFlyoutSeparator />
+                            <MenuFlyoutItem x:Name="GaussianBlur" Text="Gaussian Blur..." />
+                            <MenuFlyoutItem x:Name="BoxBlur" Text="Box Blur..." />
+                            <MenuFlyoutItem x:Name="MotionBlur" Text="Motion Blur..." />
+                            <MenuFlyoutItem x:Name="RadialBlur" Text="Radial Blur..." />
+                            <MenuFlyoutSeparator />
+                            <MenuFlyoutItem x:Name="Sharpen" Text="Sharpen..." />
+                            <MenuFlyoutItem x:Name="ReduceNoise" Text="Reduce Noise..." />
+                            <MenuFlyoutItem x:Name="Pixelate" Text="Pixelate..." />
+                        </MenuFlyout>
+                    </DropDownButton.Flyout>
+                </DropDownButton>
+                <!-- The groups that do not fit a narrow window, like the overflow menu of a macOS
+                     toolbar. -->
+                <Button
+                    x:Name="More"
+                    Width="40"
+                    Height="32"
+                    Padding="0"
+                    Visibility="Collapsed"
+                    AllowFocusOnInteraction="False"
+                    ToolTipService.ToolTip="More"
+                >
+                    <FontIcon Glyph="&#xE712;" />
+                    <Button.Flyout>
+                        <MenuFlyout Placement="BottomEdgeAlignedRight">
+                            <MenuFlyoutItem x:Name="MoreSelectWhole" Text="Whole Image" Visibility="Collapsed" />
+                            <MenuFlyoutItem
+                                x:Name="MoreSelectRectangle"
+                                Text="Rectangle Selection"
+                                Visibility="Collapsed"
+                            />
+                            <MenuFlyoutItem
+                                x:Name="MoreSelectEllipse"
+                                Text="Ellipse Selection"
+                                Visibility="Collapsed"
+                            />
+                            <MenuFlyoutSeparator x:Name="MoreSelectSeparator" Visibility="Collapsed" />
+                            <MenuFlyoutItem x:Name="MoreRotateLeft" Text="Rotate Left" Visibility="Collapsed" />
+                            <MenuFlyoutItem x:Name="MoreRotateRight" Text="Rotate Right" Visibility="Collapsed" />
+                            <MenuFlyoutItem x:Name="MoreFlipHorizontal" Text="Flip Horizontal" Visibility="Collapsed" />
+                            <MenuFlyoutItem x:Name="MoreFlipVertical" Text="Flip Vertical" Visibility="Collapsed" />
+                            <MenuFlyoutSeparator x:Name="MoreTransformSeparator" Visibility="Collapsed" />
+                            <MenuFlyoutItem x:Name="MoreCrop" Text="Crop" Visibility="Collapsed" />
+                            <MenuFlyoutItem x:Name="MoreResize" Text="Resize" Visibility="Collapsed" />
+                            <MenuFlyoutItem x:Name="MoreAdjust" Text="Adjust" Visibility="Collapsed" />
+                        </MenuFlyout>
+                    </Button.Flyout>
+                </Button>
+                <Button
+                    x:Name="Done"
+                    Content="Done"
+                    Style="{StaticResource AccentButtonStyle}"
+                    Height="32"
+                    Padding="11,0"
+                    AllowFocusOnInteraction="False"
+                />
+            </StackPanel>
+        </StackPanel>
     </Grid>
 
     <Grid Grid.Row="1">
         <Image x:Name="Checkerboard" Stretch="Fill" HorizontalAlignment="Center" VerticalAlignment="Center" />
         <ScrollViewer
             x:Name="Scroller"
+            UseLayoutRounding="False"
             ZoomMode="Enabled"
             IsTabStop="True"
             MinZoomFactor="{MIN_ZOOM}"
@@ -156,7 +362,44 @@
             HorizontalScrollBarVisibility="Auto"
             VerticalScrollBarVisibility="Auto"
         >
-            <Image x:Name="Media" Stretch="Fill" HorizontalAlignment="Center" VerticalAlignment="Center" />
+            <Image
+                x:Name="Media"
+                UseLayoutRounding="False"
+                Stretch="Fill"
+                HorizontalAlignment="Center"
+                VerticalAlignment="Center"
+            />
         </ScrollViewer>
+        <!-- The crop rectangle or selection, drawn over the visible area. -->
+        <Image
+            x:Name="Overlay"
+            Stretch="Fill"
+            HorizontalAlignment="Left"
+            VerticalAlignment="Top"
+            IsHitTestVisible="False"
+            Visibility="Collapsed"
+        />
+        <!-- Shown until the media is decoded and while an edit is applied. -->
+        <ProgressRing
+            x:Name="Spinner"
+            Width="48"
+            Height="48"
+            IsActive="True"
+            IsHitTestVisible="False"
+            Visibility="Collapsed"
+        />
+        <!-- The controls of the open edit tool, like a flyout that stays open while the image is used. -->
+        <Border
+            x:Name="Tool"
+            Visibility="Collapsed"
+            HorizontalAlignment="Right"
+            VerticalAlignment="Top"
+            Margin="12"
+            Padding="16"
+            CornerRadius="8"
+            BorderThickness="1"
+            Background="{ThemeResource AcrylicInAppFillColorDefaultBrush}"
+            BorderBrush="{ThemeResource SurfaceStrokeColorFlyoutBrush}"
+        />
     </Grid>
 </Grid>

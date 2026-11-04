@@ -17,9 +17,6 @@ pub(crate) type LPARAM = isize;
 pub(crate) type LRESULT = isize;
 
 pub(crate) const WS_CLIPCHILDREN: u32 = 0x0200_0000;
-pub(crate) const PBS_MARQUEE: u32 = 0x08;
-pub(crate) const PBM_SETMARQUEE: u32 = 0x0400 + 10;
-pub(crate) const ICC_PROGRESS_CLASS: u32 = 0x20;
 pub(crate) const WS_CHILD: u32 = 0x4000_0000;
 pub(crate) const WS_VISIBLE: u32 = 0x1000_0000;
 pub(crate) const WS_CLIPSIBLINGS: u32 = 0x0400_0000;
@@ -29,6 +26,7 @@ pub(crate) const WM_DESTROY: u32 = 0x0002;
 pub(crate) const WM_SIZE: u32 = 0x0005;
 pub(crate) const WM_ACTIVATE: u32 = 0x0006;
 pub(crate) const WM_SETFOCUS: u32 = 0x0007;
+pub(crate) const WM_SETTEXT: u32 = 0x000c;
 pub(crate) const WM_ERASEBKGND: u32 = 0x0014;
 pub(crate) const WM_TIMER: u32 = 0x0113;
 pub(crate) const WM_USER: u32 = 0x0400;
@@ -39,8 +37,6 @@ pub(crate) const DWMWA_SYSTEMBACKDROP_TYPE: u32 = 38;
 pub(crate) const DWMSBT_MAINWINDOW: u32 = 2;
 
 pub(crate) const WA_INACTIVE: usize = 0;
-pub(crate) const SWP_NOZORDER: u32 = 0x0004;
-pub(crate) const SWP_NOACTIVATE: u32 = 0x0010;
 pub(crate) const MB_OK: u32 = 0x0000;
 pub(crate) const MB_YESNO: u32 = 0x0004;
 pub(crate) const MB_ICONERROR: u32 = 0x0010;
@@ -51,6 +47,7 @@ pub(crate) const ERROR_INSUFFICIENT_BUFFER: i32 = 122;
 pub(crate) const IDC_ARROW: *const u16 = 32512 as *const u16;
 pub(crate) const IMAGE_ICON: u32 = 1;
 pub(crate) const DIB_RGB_COLORS: u32 = 0;
+pub(crate) const GMEM_MOVEABLE: u32 = 0x0002;
 
 #[repr(C)]
 #[derive(Default)]
@@ -111,19 +108,9 @@ pub(crate) struct MARGINS {
     pub(crate) cyBottomHeight: i32,
 }
 
-#[repr(C)]
-pub(crate) struct INITCOMMONCONTROLSEX {
-    pub(crate) dwSize: u32,
-    pub(crate) dwICC: u32,
-}
-
-#[link(name = "comctl32")]
-unsafe extern "system" {
-    pub(crate) fn InitCommonControlsEx(controls: *const INITCOMMONCONTROLSEX) -> BOOL;
-}
-
 #[link(name = "user32")]
 unsafe extern "system" {
+    pub(crate) fn ShowWindow(hwnd: HWND, command: i32) -> BOOL;
     pub(crate) fn RegisterClassExW(class: *const WNDCLASSEXW) -> u16;
     pub(crate) fn CreateWindowExW(
         ex_style: u32,
@@ -144,26 +131,7 @@ unsafe extern "system" {
     pub(crate) fn DefWindowProcW(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT;
     pub(crate) fn SetWindowLongPtrW(hwnd: HWND, index: i32, value: isize) -> isize;
     pub(crate) fn GetWindowLongPtrW(hwnd: HWND, index: i32) -> isize;
-    pub(crate) fn MoveWindow(
-        hwnd: HWND,
-        x: i32,
-        y: i32,
-        width: i32,
-        height: i32,
-        repaint: BOOL,
-    ) -> BOOL;
-    pub(crate) fn SendMessageW(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT;
     pub(crate) fn GetClientRect(hwnd: HWND, rect: *mut RECT) -> BOOL;
-    pub(crate) fn GetWindowRect(hwnd: HWND, rect: *mut RECT) -> BOOL;
-    pub(crate) fn SetWindowPos(
-        hwnd: HWND,
-        after: HWND,
-        x: i32,
-        y: i32,
-        width: i32,
-        height: i32,
-        flags: u32,
-    ) -> BOOL;
     pub(crate) fn InvalidateRect(hwnd: HWND, rect: *const RECT, erase: BOOL) -> BOOL;
     pub(crate) fn SetTimer(hwnd: HWND, id: usize, elapse: u32, function: *const c_void) -> usize;
     pub(crate) fn KillTimer(hwnd: HWND, id: usize) -> BOOL;
@@ -172,6 +140,11 @@ unsafe extern "system" {
     pub(crate) fn GetWindowTextW(hwnd: HWND, text: *mut u16, max: i32) -> i32;
     pub(crate) fn GetWindowTextLengthW(hwnd: HWND) -> i32;
     pub(crate) fn GetActiveWindow() -> HWND;
+    pub(crate) fn OpenClipboard(hwnd: HWND) -> BOOL;
+    pub(crate) fn EmptyClipboard() -> BOOL;
+    pub(crate) fn CloseClipboard() -> BOOL;
+    pub(crate) fn RegisterClipboardFormatW(name: *const u16) -> u32;
+    pub(crate) fn SetClipboardData(format: u32, memory: *mut c_void) -> *mut c_void;
     pub(crate) fn PostMessageW(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> BOOL;
     pub(crate) fn SetClassLongPtrW(hwnd: HWND, index: i32, value: isize) -> usize;
     pub(crate) fn MessageBoxW(hwnd: HWND, text: *const u16, caption: *const u16, kind: u32) -> i32;
@@ -223,6 +196,10 @@ unsafe extern "system" {
     pub(crate) fn LoadLibraryW(name: *const u16) -> *mut c_void;
     pub(crate) fn GetProcAddress(module: *mut c_void, name: *const i8) -> *mut c_void;
     pub(crate) fn GetProcessHeap() -> *mut c_void;
+    pub(crate) fn GlobalAlloc(flags: u32, bytes: usize) -> *mut c_void;
+    pub(crate) fn GlobalLock(memory: *mut c_void) -> *mut c_void;
+    pub(crate) fn GlobalUnlock(memory: *mut c_void) -> BOOL;
+    pub(crate) fn GlobalFree(memory: *mut c_void) -> *mut c_void;
     pub(crate) fn HeapFree(heap: *mut c_void, flags: u32, memory: *mut c_void) -> BOOL;
     pub(crate) fn GetCurrentPackageFullName(length: *mut u32, name: *mut u16) -> i32;
 }

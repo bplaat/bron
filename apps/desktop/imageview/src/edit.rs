@@ -130,7 +130,7 @@ impl App {
         }
         let Some(id) = self
             .active_window()
-            .filter(|window| window.opening.is_none())
+            .filter(|window| !window.is_loading())
             .map(|window| window.window.id())
         else {
             return true;
@@ -294,6 +294,9 @@ impl App {
         let Some(window) = self.window(id) else {
             return false;
         };
+        if window.is_loading() {
+            return false;
+        }
         let source = std::fs::read(&window.path).ok();
         let Some(editor) = Editor::new(window.view.media(), 0, source) else {
             return false;
@@ -438,9 +441,7 @@ impl App {
     /// Enables the menu items that work in the mode of the active window: viewing, editing or
     /// busy applying an edit or saving, and names Edit Image after the mode.
     pub(crate) fn update_menu(&mut self) {
-        let window = self
-            .active_window()
-            .filter(|window| window.opening.is_none());
+        let window = self.active_window().filter(|window| !window.is_loading());
         let shown = window.is_some();
         let idle = shown && window.as_ref().is_some_and(|window| !window.busy);
         let editing = window.as_ref().and_then(|window| window.editing.as_ref());
@@ -467,8 +468,8 @@ impl App {
             #[cfg(target_os = "macos")]
             ("file.print", shown),
             ("edit.toggle", editable),
-            ("edit.undo", edit && undo),
-            ("edit.redo", edit && redo),
+            ("edit.undo", edit && undo && keys),
+            ("edit.redo", edit && redo && keys),
             ("edit.copy", idle && keys),
             ("select.all", edit && keys),
             ("select.none", selected),

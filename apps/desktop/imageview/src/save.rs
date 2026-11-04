@@ -79,6 +79,10 @@ pub(crate) fn format_of(name: &str, formats: &[(&str, &str)]) -> usize {
 }
 
 /// A file name with the extension of a format instead of its own.
+#[cfg_attr(
+    windows,
+    allow(dead_code, reason = "Windows dialogs change the extension themselves")
+)]
 pub(crate) fn with_extension(name: &str, extension: &str) -> String {
     let stem = Path::new(name).file_stem().map_or_else(
         || name.to_owned(),
