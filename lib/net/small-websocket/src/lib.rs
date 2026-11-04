@@ -270,6 +270,18 @@ fn read_into_buffer(state: &mut ConnectionState) -> io::Result<usize> {
     Ok(read)
 }
 
+// XORs whole words, which unlike a mask index per byte has no dependency for SIMD to work around.
+fn apply_mask(payload: &mut [u8], mask: [u8; 4]) {
+    let (words, tail) = payload.as_chunks_mut::<4>();
+    let key = u32::from_ne_bytes(mask);
+    for word in words {
+        *word = (u32::from_ne_bytes(*word) ^ key).to_ne_bytes();
+    }
+    for (byte, key) in tail.iter_mut().zip(mask) {
+        *byte ^= key;
+    }
+}
+
 fn parse_frame(buffer: &[u8], role: Role) -> io::Result<Option<(Frame, usize)>> {
     if buffer.len() < 2 {
         return Ok(None);
@@ -355,9 +367,7 @@ fn parse_frame(buffer: &[u8], role: Role) -> io::Result<Option<(Frame, usize)>> 
 
     let mut payload = buffer[offset..frame_end].to_vec();
     if let Some(mask) = mask {
-        for (index, byte) in payload.iter_mut().enumerate() {
-            *byte ^= mask[index % mask.len()];
-        }
+        apply_mask(&mut payload, mask);
     }
     Ok(Some((
         Frame {
@@ -468,12 +478,9 @@ fn build_frame(opcode: u8, payload: &[u8], role: Role) -> io::Result<Vec<u8>> {
             getrandom::fill(&mut mask)
                 .map_err(|error| io::Error::other(format!("failed to generate mask: {error}")))?;
             frame.extend_from_slice(&mask);
-            frame.extend(
-                payload
-                    .iter()
-                    .enumerate()
-                    .map(|(index, byte)| byte ^ mask[index % mask.len()]),
-            );
+            let start = frame.len();
+            frame.extend_from_slice(payload);
+            apply_mask(&mut frame[start..], mask);
         }
         #[cfg(not(feature = "client"))]
         return Err(invalid_input("client support is disabled"));
@@ -746,6 +753,23 @@ mod test {
                 assert_eq!(reason, None);
             }
             _ => panic!("expected Close"),
+        }
+    }
+
+    #[test]
+    fn test_apply_mask_handles_unaligned_payloads_and_tails() {
+        let mask = [0x37, 0xfa, 0x21, 0x3d];
+        for offset in 0..8 {
+            for length in 0..70 {
+                let original: Vec<u8> = (0..offset + length).map(|index| index as u8).collect();
+                let mut masked = original.clone();
+                apply_mask(&mut masked[offset..], mask);
+                for index in 0..length {
+                    let expected = original[offset + index] ^ mask[index % 4];
+                    assert_eq!(masked[offset + index], expected);
+                }
+                assert_eq!(masked[..offset], original[..offset]);
+            }
         }
     }
 
