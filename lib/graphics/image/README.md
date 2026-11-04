@@ -21,6 +21,9 @@ For GIF or APNG, give `encode_animation` a list of full-size frames, their
 display times, and a loop count. GIF supports up to 256 colors per frame and
 binary transparency. JPEG requires opaque pixels.
 
+`Format::from_extension` and `Format::from_signature` find the format of a file name or
+encoded bytes, and `Format::can_encode` tells whether images can be written in it.
+
 PNG/APNG files can carry text entries. Set `EncodeOptions::png_text` to keyword and
 text pairs: Latin-1 text is written as `tEXt` and other text as UTF-8 `iTXt`.
 Decoding reads `tEXt`, `zTXt`, and `iTXt` entries into `Image::text`.
@@ -50,6 +53,15 @@ always lossy, so it only skips chroma subsampling.
 JPEG's color sampling can change how the image looks between compression levels.
 BMP, PNG/APNG, QOI, and TGA preserve RGBA pixels, except that max compression may
 replace the color of fully transparent PNG/APNG pixels.
+
+## JPEG metadata
+
+`reorient_jpeg` turns or mirrors a JPEG file by changing its EXIF orientation, so its
+pixels are not encoded again and keep their quality. Orientations combine with
+`Orientation::then`. `copy_jpeg_exif` adds the EXIF metadata of a JPEG file, like its
+capture date, camera and location, to a JPEG of its decoded pixels encoded again: the
+orientation and color space are reset, as decoding applies them, the pixel size follows
+the new pixels and the thumbnail of the original is left out.
 
 ## Reading
 

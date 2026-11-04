@@ -8,6 +8,9 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use super::color::{ADOBE_RGB, ColorModel, Curve, Transform};
+use super::exif::{
+    ASCII, COLOR_SPACE, EXIF_DIRECTORY, ExifData, INTEROPERABILITY_DIRECTORY, ORIENTATION, SHORT,
+};
 use super::{
     Bitmap, Budget, Compression, DecodeError, EncodeError, Format, Image, Reader, Result,
     pixel_len, roundf, truncf,
@@ -1056,49 +1059,20 @@ struct Exif {
 impl Exif {
     fn parse(bytes: &[u8]) -> Option<Self> {
         let data = bytes.strip_prefix(b"Exif\0\0")?;
-        let little = match data.get(..2)? {
-            b"II" => true,
-            b"MM" => false,
-            _ => return None,
-        };
-        let short = |p: usize| -> Option<u16> {
-            let a = data.get(p..p.checked_add(2)?)?.try_into().ok()?;
-            Some(if little {
-                u16::from_le_bytes(a)
-            } else {
-                u16::from_be_bytes(a)
-            })
-        };
-        let long = |p: usize| -> Option<u32> {
-            let a = data.get(p..p.checked_add(4)?)?.try_into().ok()?;
-            Some(if little {
-                u32::from_le_bytes(a)
-            } else {
-                u32::from_be_bytes(a)
-            })
-        };
-        // Returns the value position of a single-value entry of the given type in an IFD.
-        let entry = |ifd: usize, tag: u16, kind: u16| {
-            (0..short(ifd)?).find_map(|i| {
-                let offset = ifd.checked_add(2 + usize::from(i) * 12)?;
-                (short(offset)? == tag && short(offset + 2)? == kind).then_some(offset + 8)
-            })
-        };
-        if short(2)? != 42 {
-            return None;
-        }
-        let ifd = long(4)? as usize;
-        let orientation = entry(ifd, 0x112, 3)
-            .filter(|p| long(p - 4) == Some(1))
-            .and_then(short)
-            .filter(|v| (1..=8).contains(v));
+        let exif = ExifData::new(data)?;
+        let directory = exif.first_directory()?;
+        let orientation = exif
+            .entry(directory, ORIENTATION, SHORT)
+            .and_then(|at| exif.read(at, 2))
+            .map(|value| value as u16)
+            .filter(|value| (1..=8).contains(value));
         let adobe_rgb = (|| {
-            let exif = long(entry(ifd, 0x8769, 4)?)? as usize;
-            if short(entry(exif, 0xa001, 3)?)? != 0xffff {
+            let exif_directory = exif.get(directory, EXIF_DIRECTORY)? as usize;
+            if exif.get(exif_directory, COLOR_SPACE)? != 0xffff {
                 return None;
             }
-            let interop = long(entry(exif, 0xa005, 4)?)? as usize;
-            data.get(entry(interop, 1, 2)?..)?
+            let interoperability = exif.get(exif_directory, INTEROPERABILITY_DIRECTORY)? as usize;
+            data.get(exif.entry(interoperability, 1, ASCII)?..)?
                 .get(..3)
                 .filter(|index| *index == b"R03")
         })()

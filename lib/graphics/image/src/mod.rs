@@ -27,10 +27,14 @@ pub use encoder::{
     Compression, EncodeError, EncodeOptions, encode, encode_animation,
     encode_animation_with_options, encode_with_options,
 };
+#[cfg(feature = "jpeg")]
+pub use exif::{Orientation, copy_jpeg_exif, reorient_jpeg};
 
 #[cfg(feature = "bmp")]
 mod bmp;
 mod color;
+#[cfg(feature = "jpeg")]
+mod exif;
 #[cfg(feature = "gif")]
 mod gif;
 #[cfg(feature = "ico")]
@@ -81,6 +85,58 @@ pub enum Format {
     /// Truevision TGA.
     #[cfg(feature = "tga")]
     Tga,
+}
+
+impl Format {
+    /// The format of a file name extension, ignoring case.
+    pub fn from_extension(extension: &str) -> Option<Self> {
+        match extension.to_ascii_lowercase().as_str() {
+            #[cfg(feature = "bmp")]
+            "bmp" | "dib" => Some(Self::Bmp),
+            #[cfg(feature = "gif")]
+            "gif" => Some(Self::Gif),
+            #[cfg(feature = "ico")]
+            "ico" => Some(Self::Ico),
+            #[cfg(feature = "jpeg")]
+            "jpg" | "jpeg" | "jpe" | "jfif" => Some(Self::Jpeg),
+            #[cfg(feature = "png")]
+            "png" | "apng" => Some(Self::Png),
+            #[cfg(feature = "qoi")]
+            "qoi" => Some(Self::Qoi),
+            #[cfg(feature = "tga")]
+            "tga" => Some(Self::Tga),
+            _ => None,
+        }
+    }
+
+    /// The format of encoded bytes from their signature. TGA files and headerless DIB bitmaps
+    /// have none.
+    pub const fn from_signature(data: &[u8]) -> Option<Self> {
+        match data {
+            #[cfg(feature = "bmp")]
+            [b'B', b'M', ..] => Some(Self::Bmp),
+            #[cfg(feature = "gif")]
+            [b'G', b'I', b'F', b'8', b'7' | b'9', b'a', ..] => Some(Self::Gif),
+            #[cfg(feature = "ico")]
+            [0, 0, 1, 0, ..] => Some(Self::Ico),
+            #[cfg(feature = "jpeg")]
+            [0xff, 0xd8, ..] => Some(Self::Jpeg),
+            #[cfg(feature = "png")]
+            [0x89, b'P', b'N', b'G', b'\r', b'\n', 0x1a, b'\n', ..] => Some(Self::Png),
+            #[cfg(feature = "qoi")]
+            [b'q', b'o', b'i', b'f', ..] => Some(Self::Qoi),
+            _ => None,
+        }
+    }
+
+    /// Whether images can be encoded in the format, which all but ICO can.
+    pub const fn can_encode(self) -> bool {
+        #[cfg(feature = "ico")]
+        if matches!(self, Self::Ico) {
+            return false;
+        }
+        true
+    }
 }
 
 /// The number of times an animation is played.
@@ -295,29 +351,20 @@ type Result<T> = core::result::Result<T, DecodeError>;
     allow(clippy::missing_const_for_fn)
 )]
 pub fn decode(_data: &[u8]) -> Result<Image> {
-    #[cfg(feature = "bmp")]
-    if _data.starts_with(b"BM") {
-        return bmp::decode(_data);
-    }
-    #[cfg(feature = "gif")]
-    if _data.starts_with(b"GIF87a") || _data.starts_with(b"GIF89a") {
-        return gif::decode(_data);
-    }
-    #[cfg(feature = "ico")]
-    if _data.starts_with(b"\0\0\x01\0") {
-        return ico::decode(_data);
-    }
-    #[cfg(feature = "jpeg")]
-    if _data.starts_with(b"\xff\xd8") {
-        return jpeg::decode(_data);
-    }
-    #[cfg(feature = "png")]
-    if _data.starts_with(b"\x89PNG\r\n\x1a\n") {
-        return png::decode(_data);
-    }
-    #[cfg(feature = "qoi")]
-    if _data.starts_with(b"qoif") {
-        return qoi::decode(_data);
+    match Format::from_signature(_data) {
+        #[cfg(feature = "bmp")]
+        Some(Format::Bmp) => return bmp::decode(_data),
+        #[cfg(feature = "gif")]
+        Some(Format::Gif) => return gif::decode(_data),
+        #[cfg(feature = "ico")]
+        Some(Format::Ico) => return ico::decode(_data),
+        #[cfg(feature = "jpeg")]
+        Some(Format::Jpeg) => return jpeg::decode(_data),
+        #[cfg(feature = "png")]
+        Some(Format::Png) => return png::decode(_data),
+        #[cfg(feature = "qoi")]
+        Some(Format::Qoi) => return qoi::decode(_data),
+        _ => {}
     }
     // A headerless DIB starts with its header size, so it is tried after the signatures.
     #[cfg(feature = "bmp")]
@@ -619,6 +666,26 @@ impl Area {
 ))]
 mod tests {
     use super::*;
+
+    #[cfg(all(feature = "jpeg", feature = "png", feature = "ico", feature = "tga"))]
+    #[test]
+    fn formats_follow_extensions_and_signatures() {
+        assert_eq!(Format::from_extension("JPEG"), Some(Format::Jpeg));
+        assert_eq!(Format::from_extension("apng"), Some(Format::Png));
+        assert_eq!(Format::from_extension("tga"), Some(Format::Tga));
+        assert_eq!(Format::from_extension("svg"), None);
+        assert_eq!(
+            Format::from_signature(b"\xff\xd8\xff\xe0"),
+            Some(Format::Jpeg)
+        );
+        assert_eq!(
+            Format::from_signature(b"\x89PNG\r\n\x1a\n"),
+            Some(Format::Png)
+        );
+        assert_eq!(Format::from_signature(b"\x89PNG"), None);
+        assert_eq!(Format::from_signature(b"\0\0\x02\0"), None);
+        assert!(Format::Png.can_encode() && !Format::Ico.can_encode());
+    }
 
     #[cfg(any(feature = "gif", feature = "jpeg"))]
     #[test]
