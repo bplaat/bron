@@ -238,7 +238,19 @@ int main(int argc, char** argv) {
         framebuffer_present(framebuffer);
     }
 
+    free(hud_slp);
+    for (int32_t i = 0; i < 4; i++) {
+        free(terrain_slps[i]);
+    }
+    for (int32_t i = 0; i < 6; i++) {
+        free(border_slps[i]);
+    }
+    for (int32_t i = 0; i < 716; i++) {
+        free(unit_slps[i]);
+    }
     palette_free(palette);
+    drs_free(border_drs);
+    drs_free(terrain_drs);
     drs_free(graphics_drs);
     drs_free(interface_drs);
 
