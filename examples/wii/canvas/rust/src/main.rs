@@ -227,17 +227,20 @@ impl CanvasScene {
                 0xffff_ffff,
             );
 
-            let mut cursor_matrix = [[0.0; 4]; 3];
-            rotate_degrees(&mut cursor_matrix, b'z' as core::ffi::c_char, cursor.angle);
-            draw_image(
-                &self.assets.cursors[0],
-                &cursor_matrix,
-                cursor.x - 48.0,
-                cursor.y - 48.0,
-                96.0,
-                96.0,
-                0xffff_ffff,
-            );
+            if cursor.valid != 0 {
+                // Screen y points down, so positive roll turns the cursor clockwise.
+                let mut cursor_matrix = [[0.0; 4]; 3];
+                rotate_degrees(&mut cursor_matrix, b'z' as core::ffi::c_char, cursor.angle);
+                draw_image(
+                    &self.assets.cursors[0],
+                    &cursor_matrix,
+                    cursor.x - 48.0,
+                    cursor.y - 48.0,
+                    96.0,
+                    96.0,
+                    0xffff_ffff,
+                );
+            }
             GX_SetBlendMode(GX_BM_NONE, GX_BL_SRCALPHA, GX_BL_INVSRCALPHA, GX_LO_CLEAR);
         }
     }

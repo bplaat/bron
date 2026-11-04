@@ -8,6 +8,7 @@
 
 typedef struct Cursor {
     bool enabled;
+    bool visible;
     float x;
     float y;
     float angle;
@@ -49,6 +50,7 @@ static uint32_t cursor_update(void) {
         if (cursor->enabled) {
             ir_t ir;
             WPAD_IR(i, &ir);
+            cursor->visible = ir.valid != 0;
             cursor->x = ir.x;
             cursor->y = ir.y;
             cursor->angle = ir.angle;
@@ -62,7 +64,8 @@ static void cursor_render(void) {
     // Draw enabled cursors on screen
     for (int32_t i = 0; i < 4; i++) {
         Cursor* cursor = &cursors[i];
-        if (cursor->enabled) {
+        if (cursor->enabled && cursor->visible) {
+            // Screen y points down, so positive roll turns the cursor clockwise.
             ps_guMtxRotRad(canvas.transform_matrix, 'z', DegToRad(cursor->angle));
             canvas_draw_image(&cursor->texture, cursor->x - 96 / 2, cursor->y - 96 / 2, 96, 96, 0xffffffff);
         }
