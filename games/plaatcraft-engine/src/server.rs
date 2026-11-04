@@ -203,8 +203,56 @@ impl Server {
         self.outgoing.push(Outgoing::To(id, response));
     }
 
+    // New or overlapping players start three blocks apart, around the host.
+    fn guest_spawn(&mut self, world: &mut impl World) -> Result<[f64; 3], String> {
+        let origin = self
+            .clients
+            .get(&HOST)
+            .map_or(Player::default().position, |host| host.body.position);
+        let mut unloaded = None;
+        for up in 0..=4 {
+            for radius in [3.0, 6.0] {
+                for [dx, dz] in [
+                    [1.0, 0.0],
+                    [0.0, 1.0],
+                    [-1.0, 0.0],
+                    [0.0, -1.0],
+                    [1.0, 1.0],
+                    [-1.0, 1.0],
+                    [-1.0, -1.0],
+                    [1.0, -1.0],
+                ] {
+                    let position = [
+                        origin[0] + dx * radius,
+                        origin[1] + f64::from(up),
+                        origin[2] + dz * radius,
+                    ];
+                    if self.clients.values().any(|client| {
+                        let x = position[0] - client.body.position[0];
+                        let z = position[2] - client.body.position[2];
+                        x * x + z * z < 9.0
+                    }) {
+                        continue;
+                    }
+                    let camera = Camera {
+                        position,
+                        ..Camera::default()
+                    };
+                    match camera.vacant(|position| self.blocks.block(world, position)) {
+                        Some(true) => return Ok(position),
+                        None => {
+                            unloaded.get_or_insert(position);
+                        }
+                        Some(false) => {}
+                    }
+                }
+            }
+        }
+        unloaded.ok_or_else(|| "No room for a new player near the host".into())
+    }
+
     /// Lets a player join, the first one is the host, with the id or else the next free one.
-    /// Guests that are new to the world start next to the host.
+    /// Guests that are new to the world start a few blocks apart around the host.
     pub fn join(
         &mut self,
         world: &mut impl World,
@@ -226,18 +274,27 @@ impl Server {
         let mut player = if id == HOST {
             world.player()?
         } else {
-            world.guest(&name)?.unwrap_or_else(|| Player {
-                position: self
-                    .clients
-                    .get(&HOST)
-                    .map_or(Player::default().position, |host| host.body.position),
-                ..Player::default()
-            })
+            match world.guest(&name)? {
+                Some(player) => player,
+                None => Player {
+                    position: self.guest_spawn(world)?,
+                    ..Player::default()
+                },
+            }
         };
         player.night = self.night;
         let revision = world.revision()?;
         let mut body = Camera::default();
         player.restore(&mut body);
+        if id != HOST
+            && self
+                .clients
+                .values()
+                .any(|client| body.overlaps_player(&client.body))
+        {
+            player.position = self.guest_spawn(world)?;
+            player.restore(&mut body);
+        }
         // The players that already play hear about the new one
         if !self.clients.is_empty() {
             self.broadcast(Response::Message(format!("{name} joined the game")));
@@ -741,6 +798,77 @@ mod tests {
                 Outgoing::All(Response::Message(message)) if *message == format!("{name} joined the game")
             ));
         }
+    }
+
+    #[test]
+    fn new_players_spawn_apart_and_saved_players_keep_their_position() {
+        let mut world = TestWorld::default();
+        let mut server = Server::new(&mut world, Limits::default(), &[]);
+        let host = server.join(&mut world, Some(HOST), "Host").unwrap();
+        let mut positions = vec![host.player.position];
+        for slot in 1..5 {
+            let joined = server
+                .join(&mut world, Some(slot), &format!("Player {slot}"))
+                .unwrap();
+            for other in &positions {
+                let x = joined.player.position[0] - other[0];
+                let z = joined.player.position[2] - other[2];
+                assert!(x * x + z * z >= 9.0);
+            }
+            positions.push(joined.player.position);
+        }
+        server.leave(&mut world, 1);
+        let saved = world.guests["Player 1"];
+        let joined = server.join(&mut world, Some(1), "Player 1").unwrap();
+        assert_eq!(joined.player, saved);
+    }
+
+    #[test]
+    fn overlapping_old_saves_are_separated_without_resetting_player_state() {
+        let mut world = TestWorld::default();
+        let mut saved = Player {
+            flying: true,
+            yaw: 0.4,
+            pitch: -0.2,
+            ..Player::default()
+        };
+        saved.hotbar.selected = 3;
+        world.guests.insert("Returning".into(), saved);
+        let mut server = Server::new(&mut world, Limits::default(), &[]);
+        let host = server.join(&mut world, Some(HOST), "Host").unwrap();
+        let guest = server.join(&mut world, Some(1), "Returning").unwrap();
+        let distance = (guest.player.position[0] - host.player.position[0])
+            .hypot(guest.player.position[2] - host.player.position[2]);
+        assert!(distance >= 3.0);
+        assert_eq!(guest.player.hotbar, saved.hotbar);
+        assert_eq!(guest.player.flying, saved.flying);
+        assert_eq!(guest.player.yaw, saved.yaw);
+        assert_eq!(guest.player.pitch, saved.pitch);
+        server.leave(&mut world, 1);
+        let resumed = server.join(&mut world, Some(1), "Returning").unwrap();
+        assert_eq!(resumed.player.position, guest.player.position);
+    }
+
+    #[test]
+    fn new_player_spawn_avoids_a_blocked_offset() {
+        let mut world = TestWorld::default();
+        let host = Player::default().position;
+        world.edits.push(Edit {
+            position: [host[0] as i64 + 3, host[1] as i64 - 1, host[2] as i64],
+            material: 3,
+        });
+        let mut server = Server::new(&mut world, Limits::default(), &[]);
+        server.join(&mut world, Some(HOST), "Host").unwrap();
+        let guest = server.join(&mut world, Some(1), "Guest").unwrap();
+        assert_ne!(guest.player.position, [host[0] + 3.0, host[1], host[2]]);
+        let camera = Camera {
+            position: guest.player.position,
+            ..Camera::default()
+        };
+        assert_eq!(
+            camera.vacant(|position| server.blocks.block(&mut world, position)),
+            Some(true)
+        );
     }
 
     #[test]

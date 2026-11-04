@@ -169,6 +169,30 @@ impl Camera {
         })
     }
 
+    pub(crate) fn overlaps_player(&self, other: &Self) -> bool {
+        intersects(self.body([0.0; 3]), other.body([0.0; 3]))
+    }
+
+    // Whether this position has room for the body; None means terrain is still loading.
+    pub(crate) fn vacant(&self, mut block: impl FnMut([i64; 3]) -> Option<u8>) -> Option<bool> {
+        let mut missing = false;
+        let overlaps = self.overlaps([0.0; 3], &mut |position| match block(position) {
+            Some(material) if position[1] >= 0 => world::boxes(material),
+            Some(_) => FULL,
+            None => {
+                missing = true;
+                &[]
+            }
+        });
+        if overlaps {
+            Some(false)
+        } else if missing {
+            None
+        } else {
+            Some(true)
+        }
+    }
+
     /// Moves the player by the held input for `dt` seconds through the blocks, which
     /// `block` looks up. Unknown blocks collide, so the player never falls into
     /// unloaded chunks. Clients and servers both move players with it.
