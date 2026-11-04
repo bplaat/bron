@@ -11,3 +11,10 @@ workspace = true
 
 [dependencies]
 image = { path = "../../../lib/graphics/image" }
+
+[dev-dependencies]
+criterion = "0.8"
+
+[[bench]]
+name = "textures"
+harness = false

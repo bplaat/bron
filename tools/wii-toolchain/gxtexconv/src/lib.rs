@@ -287,7 +287,7 @@ fn encode(format: Format, pixels: &[u8], width: usize, height: usize) -> Vec<u8>
     } else {
         padded = (0..padded_height)
             .flat_map(|y| (0..padded_width).map(move |x| (y.min(height - 1), x.min(width - 1))))
-            .flat_map(|(y, x)| pixels[(y * width + x) * 4..][..4].to_vec())
+            .flat_map(|(y, x)| pixels[(y * width + x) * 4..][..4].iter().copied())
             .collect::<Vec<u8>>();
         &padded
     };

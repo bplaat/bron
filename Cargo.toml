@@ -108,6 +108,9 @@ opt-level = 3
 [profile.release.package.deflate]
 opt-level = 3
 
+[profile.release.package.gxtexconv]
+opt-level = 3
+
 [profile.release.package.image]
 opt-level = 3
 
