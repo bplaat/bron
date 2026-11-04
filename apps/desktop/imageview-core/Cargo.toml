@@ -16,3 +16,10 @@ vector = { path = "../../../lib/graphics/vector" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6.5"
+
+[dev-dependencies]
+criterion = "0.8"
+
+[[bench]]
+name = "edit"
+harness = false

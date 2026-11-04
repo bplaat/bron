@@ -691,6 +691,7 @@ name = "imageview-core"
 version = "0.1.0"
 dependencies = [
  "bcanvas",
+ "criterion",
  "image",
  "objc2",
  "vector",

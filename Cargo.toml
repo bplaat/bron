@@ -111,6 +111,9 @@ opt-level = 3
 [profile.release.package.image]
 opt-level = 3
 
+[profile.release.package.imageview-core]
+opt-level = 3
+
 [profile.release.package.pbkdf2]
 opt-level = 3
 

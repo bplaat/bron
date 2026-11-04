@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: MIT
  */
 
-use super::picture::{Picture, premultiply, unpremultiply};
+use super::picture::{Picture, premultiply, to_byte, unpremultiply};
 
 /// A slider of a filter with its range and neutral value.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -180,7 +180,7 @@ impl Filter {
                     rgb,
                 )
             }),
-            Self::Invert => map_colors(picture, |rgb| rgb.map(|value| 1.0 - value)),
+            Self::Invert => map_channels(picture, |value| 1.0 - value),
             Self::Threshold => {
                 let level = value(0) / 255.0;
                 map_colors(picture, |[red, green, blue]| {
@@ -193,9 +193,12 @@ impl Filter {
             }
             Self::Solarize => {
                 let level = value(0) / 255.0;
-                map_colors(picture, |rgb| {
-                    rgb.map(|value| if value > level { 1.0 - value } else { value })
-                })
+                map_channels(
+                    picture,
+                    |value| {
+                        if value > level { 1.0 - value } else { value }
+                    },
+                )
             }
             Self::GaussianBlur => gaussian_blur(picture, value(0) / 2.0),
             Self::BoxBlur => box_blur(picture, value(0).round() as usize),
@@ -222,46 +225,87 @@ fn multiply(a: &[[f32; 3]; 3], b: &[[f32; 3]; 3]) -> [[f32; 3]; 3] {
     })
 }
 
-// Runs `work` on every row of `pixels` on all cores, with the row index.
-fn for_rows<T: Send>(pixels: &mut [T], row: usize, work: impl Fn(usize, &mut [T]) + Sync) {
-    let rows = pixels.len() / row.max(1);
-    if rows == 0 {
+// The number of workers for a size in bytes. Small previews cost less to process directly than
+// to start threads, so each worker gets at least 256 KiB.
+fn worker_count(bytes: usize) -> usize {
+    match bytes / (256 * 1024) {
+        0 | 1 => 1,
+        workers => std::thread::available_parallelism()
+            .map_or(1, usize::from)
+            .min(workers),
+    }
+}
+
+// Runs `work` on every part on all cores, with the part index.
+fn for_parts<T: Send>(parts: Vec<T>, work: impl Fn(usize, T) + Sync) {
+    if let [_] = parts[..] {
+        parts.into_iter().for_each(|part| work(0, part));
         return;
     }
-    let threads = std::thread::available_parallelism().map_or(1, usize::from);
-    let per_thread = rows.div_ceil(threads);
     std::thread::scope(|scope| {
-        for (chunk_index, chunk) in pixels.chunks_mut(per_thread * row).enumerate() {
+        for (index, part) in parts.into_iter().enumerate() {
             let work = &work;
-            scope.spawn(move || {
-                for (index, line) in chunk.chunks_mut(row).enumerate() {
-                    work(chunk_index * per_thread + index, line);
-                }
-            });
+            scope.spawn(move || work(index, part));
+        }
+    });
+}
+
+/// Runs `work` on every row of `pixels` on all cores, with the row index; the last row may be
+/// shorter.
+pub(super) fn for_rows<T: Send>(
+    pixels: &mut [T],
+    row: usize,
+    work: impl Fn(usize, &mut [T]) + Sync,
+) {
+    if pixels.is_empty() {
+        return;
+    }
+    let per_worker = pixels
+        .len()
+        .div_ceil(row)
+        .div_ceil(worker_count(size_of_val(pixels)));
+    let parts = pixels.chunks_mut(per_worker * row).collect();
+    for_parts(parts, |part, rows| {
+        for (index, line) in rows.chunks_mut(row).enumerate() {
+            work(part * per_worker + index, line);
         }
     });
 }
 
 // Changes the color of every pixel, in [0, 1] and keeping its alpha.
 fn map_colors(picture: &Picture, map: impl Fn([f32; 3]) -> [f32; 3] + Sync) -> Picture {
-    map_pixels(picture, |_, _, rgb| map(rgb))
+    map_pixels(picture, |_, _, rgb| {
+        map(rgb.map(|value| f32::from(value) / 255.0))
+    })
 }
 
-// Changes the color of every pixel from its position and color in [0, 1], keeping its alpha.
+// Changes the color of every pixel from its position and samples to one in [0, 1], keeping its
+// alpha.
 fn map_pixels(
     picture: &Picture,
-    map: impl Fn(usize, usize, [f32; 3]) -> [f32; 3] + Sync,
+    map: impl Fn(usize, usize, [u8; 3]) -> [f32; 3] + Sync,
 ) -> Picture {
     let mut pixels = picture.pixels.clone();
     for_rows(&mut pixels, picture.width as usize * 4, |y, row| {
         for (x, pixel) in row.as_chunks_mut::<4>().0.iter_mut().enumerate() {
-            let rgb = map(
-                x,
-                y,
-                [0, 1, 2].map(|channel| f32::from(pixel[channel]) / 255.0),
-            );
+            let rgb = map(x, y, [pixel[0], pixel[1], pixel[2]]);
             for (value, mapped) in pixel.iter_mut().zip(rgb) {
-                *value = (mapped * 255.0).round().clamp(0.0, 255.0) as u8;
+                *value = to_byte(mapped);
+            }
+        }
+    });
+    Picture::new(picture.width, picture.height, pixels)
+}
+
+// Changes every color channel on its own, in [0, 1] and keeping alpha, through a table of the
+// 256 possible samples.
+fn map_channels(picture: &Picture, map: impl Fn(f32) -> f32) -> Picture {
+    let table: [u8; 256] = std::array::from_fn(|value| to_byte(map(value as f32 / 255.0)));
+    let mut pixels = picture.pixels.clone();
+    for_rows(&mut pixels, picture.width as usize * 4, |_, row| {
+        for pixel in row.as_chunks_mut::<4>().0 {
+            for value in &mut pixel[..3] {
+                *value = table[usize::from(*value)];
             }
         }
     });
@@ -351,10 +395,7 @@ fn adjust(picture: &Picture, values: &[f32; 11]) -> Picture {
     let vignette = vignette / 100.0;
     let center = (picture.width as f32 / 2.0, picture.height as f32 / 2.0);
     map_pixels(picture, |x, y, rgb| {
-        let rgb = matrix(
-            &colors,
-            rgb.map(|value| tones[(value * 255.0).round() as usize]),
-        );
+        let rgb = matrix(&colors, rgb.map(|value| tones[usize::from(value)]));
         let rgb = if vibrance == 0.0 {
             rgb
         } else {
@@ -391,7 +432,7 @@ pub(super) fn auto_enhance(picture: &Picture, sample: &Picture) -> Picture {
     let mut histogram = [0usize; 256];
     for pixel in sample.pixels.as_chunks::<4>().0 {
         let [red, green, blue] = [0, 1, 2].map(|channel| f32::from(pixel[channel]));
-        histogram[luma(red, green, blue).round().clamp(0.0, 255.0) as usize] += 1;
+        histogram[(luma(red, green, blue) + 0.5).clamp(0.0, 255.0) as usize] += 1;
     }
     let total: usize = histogram.iter().sum();
     let clip = total / 200;
@@ -410,7 +451,41 @@ pub(super) fn auto_enhance(picture: &Picture, sample: &Picture) -> Picture {
     if high - low < 0.04 {
         return picture.clone();
     }
-    map_colors(picture, |rgb| rgb.map(|value| (value - low) / (high - low)))
+    map_channels(picture, |value| (value - low) / (high - low))
+}
+
+// A histogram of the samples of a window that follows its median, which moves little as the
+// window slides, so the cost doesn't grow with the window.
+struct Median {
+    histogram: [u32; 256],
+    median: usize,
+    // The samples below the median.
+    below: u32,
+}
+
+impl Median {
+    fn add(&mut self, sample: u8) {
+        self.histogram[usize::from(sample)] += 1;
+        self.below += u32::from(usize::from(sample) < self.median);
+    }
+
+    fn remove(&mut self, sample: u8) {
+        self.histogram[usize::from(sample)] -= 1;
+        self.below -= u32::from(usize::from(sample) < self.median);
+    }
+
+    // The sample at a rank of the sorted window.
+    const fn at(&mut self, rank: u32) -> u8 {
+        while self.below > rank {
+            self.median -= 1;
+            self.below -= self.histogram[self.median];
+        }
+        while self.below + self.histogram[self.median] <= rank {
+            self.below += self.histogram[self.median];
+            self.median += 1;
+        }
+        self.median as u8
+    }
 }
 
 // The median of every channel in a square around every pixel.
@@ -419,19 +494,43 @@ fn reduce_noise(picture: &Picture, radius: usize) -> Picture {
     if radius == 0 {
         return picture.clone();
     }
+    let source = picture.pixels.as_chunks::<4>().0;
     let mut pixels = picture.pixels.clone();
     for_rows(&mut pixels, width * 4, |y, row| {
-        let mut window = Vec::with_capacity((2 * radius + 1).pow(2));
-        for x in 0..width {
-            for channel in 0..3 {
-                window.clear();
-                for sample_y in y.saturating_sub(radius)..(y + radius + 1).min(height) {
-                    for sample_x in x.saturating_sub(radius)..(x + radius + 1).min(width) {
-                        window.push(picture.pixels[(sample_y * width + sample_x) * 4 + channel]);
+        let lines = y.saturating_sub(radius)..(y + radius + 1).min(height);
+        let line_count = lines.len();
+        let column = |x: usize| lines.clone().map(move |line| &source[line * width + x]);
+        let mut channels = [(); 3].map(|()| Median {
+            histogram: [0; 256],
+            median: 0,
+            below: 0,
+        });
+        for sample in (0..(radius + 1).min(width)).flat_map(column) {
+            for (median, &value) in channels.iter_mut().zip(sample) {
+                median.add(value);
+            }
+        }
+        for (x, pixel) in row.as_chunks_mut::<4>().0.iter_mut().enumerate() {
+            if x > 0 {
+                if x + radius < width {
+                    for sample in column(x + radius) {
+                        for (median, &value) in channels.iter_mut().zip(sample) {
+                            median.add(value);
+                        }
                     }
                 }
-                let middle = window.len() / 2;
-                row[x * 4 + channel] = *window.select_nth_unstable(middle).1;
+                if x > radius {
+                    for sample in column(x - radius - 1) {
+                        for (median, &value) in channels.iter_mut().zip(sample) {
+                            median.remove(value);
+                        }
+                    }
+                }
+            }
+            let columns = (x + radius + 1).min(width) - x.saturating_sub(radius);
+            let rank = (columns * line_count / 2) as u32;
+            for (value, median) in pixel.iter_mut().zip(&mut channels) {
+                *value = median.at(rank);
             }
         }
     });
@@ -440,26 +539,26 @@ fn reduce_noise(picture: &Picture, radius: usize) -> Picture {
 
 // Fills blocks of a size with their average color.
 fn pixelate(picture: &Picture, size: usize) -> Picture {
-    filter_premultiplied(picture, |pixels, width, height| {
-        for top in (0..height).step_by(size) {
+    filter_premultiplied(picture, |pixels, width, _| {
+        for_rows(pixels, width * size * 4, |_, block| {
+            let block = block.as_chunks_mut::<4>().0;
+            let rows = block.len() / width;
             for left in (0..width).step_by(size) {
-                let (bottom, right) = ((top + size).min(height), (left + size).min(width));
+                let right = (left + size).min(width);
                 let mut sum = [0.0f32; 4];
-                for y in top..bottom {
-                    for x in left..right {
+                for row in block.chunks(width) {
+                    for pixel in &row[left..right] {
                         for channel in 0..4 {
-                            sum[channel] += pixels[(y * width + x) * 4 + channel];
+                            sum[channel] += pixel[channel];
                         }
                     }
                 }
-                let average = sum.map(|value| value / ((bottom - top) * (right - left)) as f32);
-                for y in top..bottom {
-                    for x in left..right {
-                        pixels[(y * width + x) * 4..][..4].copy_from_slice(&average);
-                    }
+                let average = sum.map(|value| value / (rows * (right - left)) as f32);
+                for row in block.chunks_mut(width) {
+                    row[left..right].fill(average);
                 }
             }
-        }
+        });
     })
 }
 
@@ -475,14 +574,21 @@ pub(crate) fn straighten(picture: &Picture, degrees: f32) -> Picture {
     let scale = ((w * cos.abs() + h * sin.abs()) / w).max((w * sin.abs() + h * cos.abs()) / h);
     let source = premultiply(&picture.pixels);
     let mut output = vec![0.0; source.len()];
-    let sample = |x: f32, y: f32, channel: usize| {
+    let corners = source.as_chunks::<4>().0;
+    let sample = |x: f32, y: f32| {
         let (x, y) = (x.clamp(0.0, w - 1.0), y.clamp(0.0, h - 1.0));
         let (left, top) = (x.floor() as usize, y.floor() as usize);
         let (right, bottom) = ((left + 1).min(width - 1), (top + 1).min(height - 1));
         let (fx, fy) = (x - left as f32, y - top as f32);
-        let at = |x: usize, y: usize| source[(y * width + x) * 4 + channel];
-        (at(left, top) * (1.0 - fx) + at(right, top) * fx) * (1.0 - fy)
-            + (at(left, bottom) * (1.0 - fx) + at(right, bottom) * fx) * fy
+        let at = |x: usize, y: usize| &corners[y * width + x];
+        let (a, b) = (at(left, top), at(right, top));
+        let (c, d) = (at(left, bottom), at(right, bottom));
+        let mut pixel = [0.0; 4];
+        for channel in 0..4 {
+            pixel[channel] = (a[channel] * (1.0 - fx) + b[channel] * fx) * (1.0 - fy)
+                + (c[channel] * (1.0 - fx) + d[channel] * fx) * fy;
+        }
+        pixel
     };
     for_rows(&mut output, width * 4, |y, row| {
         for (x, pixel) in row.as_chunks_mut::<4>().0.iter_mut().enumerate() {
@@ -490,7 +596,7 @@ pub(crate) fn straighten(picture: &Picture, degrees: f32) -> Picture {
             let (dx, dy) = (x as f32 + 0.5 - w / 2.0, y as f32 + 0.5 - h / 2.0);
             let source_x = (dx * cos + dy * sin) / scale + w / 2.0 - 0.5;
             let source_y = (-dx * sin + dy * cos) / scale + h / 2.0 - 0.5;
-            *pixel = std::array::from_fn(|channel| sample(source_x, source_y, channel));
+            *pixel = sample(source_x, source_y);
         }
     });
     Picture::new(picture.width, picture.height, unpremultiply(&output))
@@ -506,63 +612,83 @@ fn filter_premultiplied(
     Picture::new(picture.width, picture.height, unpremultiply(&pixels))
 }
 
-// Swaps the rows and columns of premultiplied pixels.
-fn transpose(pixels: &[f32], width: usize, height: usize) -> Vec<f32> {
-    let mut output = vec![0.0; pixels.len()];
-    for_rows(&mut output, height * 4, |x, row| {
-        for (y, pixel) in row.as_chunks_mut::<4>().0.iter_mut().enumerate() {
-            let at = (y * width + x) * 4;
-            pixel.copy_from_slice(&pixels[at..at + 4]);
+// Averages every pixel with `radius` pixels on both sides in its row, repeating the edges.
+fn blur_rows(source: &[f32], output: &mut [f32], width: usize, radius: usize) {
+    let scale = 1.0 / (2 * radius + 1) as f32;
+    for_rows(output, width * 4, |y, row| {
+        let line = source[y * width * 4..][..width * 4].as_chunks::<4>().0;
+        let mut sum = [0.0f32; 4];
+        for offset in 0..=2 * radius {
+            let pixel = &line[offset.saturating_sub(radius).min(width - 1)];
+            for channel in 0..4 {
+                sum[channel] += pixel[channel];
+            }
+        }
+        for (x, out) in row.as_chunks_mut::<4>().0.iter_mut().enumerate() {
+            *out = sum.map(|value| value * scale);
+            let enter = &line[(x + radius + 1).min(width - 1)];
+            let leave = &line[x.saturating_sub(radius)];
+            for channel in 0..4 {
+                sum[channel] += enter[channel] - leave[channel];
+            }
         }
     });
-    output
 }
 
-// Averages every pixel with `radius` pixels on both sides in its row, repeating the edges.
-fn blur_rows(pixels: &mut [f32], width: usize, radius: usize) {
-    if radius == 0 || width == 0 {
-        return;
-    }
+// Averages every pixel with `radius` pixels on both sides in its column, repeating the edges.
+// Every worker has a strip of columns and slides a whole row of sums down it, which keeps the
+// memory access in rows and leaves independent samples to vectorize.
+fn blur_columns(source: &[f32], output: &mut [f32], width: usize, radius: usize) {
+    let height = output.len() / (width * 4);
     let scale = 1.0 / (2 * radius + 1) as f32;
-    for_rows(pixels, width * 4, |_, row| {
-        let source = row.to_vec();
-        let at = |x: isize| x.clamp(0, width as isize - 1) as usize * 4;
-        let mut sum = [0.0f32; 4];
-        for x in -(radius as isize)..=radius as isize {
-            for channel in 0..4 {
-                sum[channel] += source[at(x) + channel];
+    let per_worker = width.div_ceil(worker_count(size_of_val(output)));
+    let mut strips: Vec<Vec<&mut [f32]>> = (0..width.div_ceil(per_worker))
+        .map(|_| Vec::with_capacity(height))
+        .collect();
+    for row in output.chunks_mut(width * 4) {
+        for (strip, part) in strips.iter_mut().zip(row.chunks_mut(per_worker * 4)) {
+            strip.push(part);
+        }
+    }
+    for_parts(strips, |index, mut rows| {
+        let length = rows[0].len();
+        let line = |y: usize| &source[(y * width + index * per_worker) * 4..][..length];
+        let mut sums = vec![0.0f32; length];
+        for offset in 0..=2 * radius {
+            let samples = line(offset.saturating_sub(radius).min(height - 1));
+            for (sum, &value) in sums.iter_mut().zip(samples) {
+                *sum += value;
             }
         }
-        for x in 0..width {
-            for channel in 0..4 {
-                row[x * 4 + channel] = sum[channel] * scale;
+        for (y, row) in rows.iter_mut().enumerate() {
+            for (out, &sum) in row.iter_mut().zip(&sums) {
+                *out = sum * scale;
             }
-            let (enter, leave) = (
-                at((x + radius + 1) as isize),
-                at(x as isize - radius as isize),
-            );
-            for channel in 0..4 {
-                sum[channel] += source[enter + channel] - source[leave + channel];
+            let enter = line((y + radius + 1).min(height - 1));
+            let leave = line(y.saturating_sub(radius));
+            for ((sum, &enter), &leave) in sums.iter_mut().zip(enter).zip(leave) {
+                *sum += enter - leave;
             }
         }
     });
 }
 
 // Blurs premultiplied pixels with box radii in both directions.
-fn blur_both(pixels: &mut Vec<f32>, width: usize, height: usize, radii: &[usize]) {
-    for &radius in radii {
-        blur_rows(pixels, width, radius);
+fn blur_both(pixels: &mut Vec<f32>, width: usize, radii: &[usize]) {
+    let mut scratch = vec![0.0; pixels.len()];
+    for &radius in radii.iter().filter(|&&radius| radius > 0) {
+        blur_rows(pixels, &mut scratch, width, radius);
+        std::mem::swap(pixels, &mut scratch);
     }
-    let mut transposed = transpose(pixels, width, height);
-    for &radius in radii {
-        blur_rows(&mut transposed, height, radius);
+    for &radius in radii.iter().filter(|&&radius| radius > 0) {
+        blur_columns(pixels, &mut scratch, width, radius);
+        std::mem::swap(pixels, &mut scratch);
     }
-    *pixels = transpose(&transposed, height, width);
 }
 
 fn box_blur(picture: &Picture, radius: usize) -> Picture {
-    filter_premultiplied(picture, |pixels, width, height| {
-        blur_both(pixels, width, height, &[radius]);
+    filter_premultiplied(picture, |pixels, width, _| {
+        blur_both(pixels, width, &[radius]);
     })
 }
 
@@ -588,8 +714,8 @@ fn gaussian_blur(picture: &Picture, sigma: f32) -> Picture {
     if sigma <= 0.0 {
         return picture.clone();
     }
-    filter_premultiplied(picture, |pixels, width, height| {
-        blur_both(pixels, width, height, &gaussian_radii(sigma));
+    filter_premultiplied(picture, |pixels, width, _| {
+        blur_both(pixels, width, &gaussian_radii(sigma));
     })
 }
 
@@ -653,25 +779,160 @@ fn radial_blur(picture: &Picture, amount: f32) -> Picture {
 fn sharpen(picture: &Picture, amount: f32, radius: f32) -> Picture {
     let blurred = gaussian_blur(picture, radius);
     let mut pixels = picture.pixels.clone();
-    for (pixel, blurred) in pixels
-        .as_chunks_mut::<4>()
-        .0
-        .iter_mut()
-        .zip(blurred.pixels.as_chunks::<4>().0)
-    {
-        for (value, blurred) in pixel[..3].iter_mut().zip(blurred) {
-            let value_f = f32::from(*value);
-            *value = (value_f + (value_f - f32::from(*blurred)) * amount)
-                .round()
-                .clamp(0.0, 255.0) as u8;
+    let row = picture.width as usize * 4;
+    for_rows(&mut pixels, row, |y, line| {
+        let blurred = &blurred.pixels[y * row..][..row];
+        for (pixel, blurred) in line
+            .as_chunks_mut::<4>()
+            .0
+            .iter_mut()
+            .zip(blurred.as_chunks::<4>().0)
+        {
+            for (value, blurred) in pixel[..3].iter_mut().zip(blurred) {
+                let value_f = f32::from(*value);
+                *value = (value_f + (value_f - f32::from(*blurred)) * amount + 0.5)
+                    .clamp(0.0, 255.0) as u8;
+            }
         }
-    }
+    });
     Picture::new(picture.width, picture.height, pixels)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn row_workers_visit_each_row_with_its_global_index() {
+        for rows in [0, 1, 100, 2115, 40000] {
+            let mut pixels = vec![255; rows * 31 + 5];
+            for_rows(&mut pixels, 31, |index, row| row.fill((index % 251) as u8));
+            for (index, row) in pixels.chunks(31).enumerate() {
+                assert!(row.iter().all(|&value| value == (index % 251) as u8));
+            }
+        }
+    }
+
+    // Deterministic noise with a varying alpha.
+    fn noise(width: u32, height: u32) -> Picture {
+        let mut state = 0x1234_5678u32;
+        let pixels = (0..width * height * 4)
+            .map(|_| {
+                state ^= state << 13;
+                state ^= state >> 17;
+                state ^= state << 5;
+                state as u8
+            })
+            .collect();
+        Picture::new(width, height, pixels)
+    }
+
+    #[test]
+    fn medians_match_a_sorted_window() {
+        for (width, height) in [(1, 1), (1, 9), (9, 1), (4, 3), (23, 17)] {
+            let picture = noise(width, height);
+            for radius in [1, 2, 3, 30] {
+                let (w, h) = (width as usize, height as usize);
+                let mut expected = picture.pixels.clone();
+                for y in 0..h {
+                    for x in 0..w {
+                        for channel in 0..3 {
+                            let mut window = Vec::new();
+                            for sample_y in y.saturating_sub(radius)..(y + radius + 1).min(h) {
+                                for sample_x in x.saturating_sub(radius)..(x + radius + 1).min(w) {
+                                    window.push(
+                                        picture.pixels[(sample_y * w + sample_x) * 4 + channel],
+                                    );
+                                }
+                            }
+                            window.sort_unstable();
+                            expected[(y * w + x) * 4 + channel] = window[window.len() / 2];
+                        }
+                    }
+                }
+                assert_eq!(
+                    reduce_noise(&picture, radius).pixels,
+                    expected,
+                    "{width}x{height}, radius={radius}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn blurs_match_a_pixel_at_a_time_reference() {
+        fn reference(
+            pixels: &[f32],
+            stride: usize,
+            step: usize,
+            lines: usize,
+            radius: usize,
+        ) -> Vec<f32> {
+            let scale = 1.0 / (2 * radius + 1) as f32;
+            let length = pixels.len() / 4 / lines;
+            let mut output = pixels.to_vec();
+            for line in 0..lines {
+                let at = |index: isize, channel: usize| {
+                    let index = index.clamp(0, length as isize - 1) as usize;
+                    pixels[(line * stride + index * step) * 4 + channel]
+                };
+                let mut sum = [0.0f32; 4];
+                for index in -(radius as isize)..=radius as isize {
+                    for (channel, sum) in sum.iter_mut().enumerate() {
+                        *sum += at(index, channel);
+                    }
+                }
+                for index in 0..length {
+                    for (channel, sum) in sum.iter_mut().enumerate() {
+                        output[(line * stride + index * step) * 4 + channel] = *sum * scale;
+                        *sum += at((index + radius + 1) as isize, channel)
+                            - at(index as isize - radius as isize, channel);
+                    }
+                }
+            }
+            output
+        }
+
+        // The large size exercises the workers.
+        for (width, height) in [(1, 1), (5, 1), (1, 5), (17, 9), (300, 200)] {
+            let source = premultiply(&noise(width, height).pixels);
+            let (width, height) = (width as usize, height as usize);
+            for radius in [1, 2, 7, 40] {
+                let mut output = vec![0.0; source.len()];
+                blur_rows(&source, &mut output, width, radius);
+                assert_eq!(output, reference(&source, width, 1, height, radius));
+                blur_columns(&source, &mut output, width, radius);
+                assert_eq!(output, reference(&source, 1, width, width, radius));
+            }
+        }
+    }
+
+    #[test]
+    fn channel_tables_match_mapping_the_colors() {
+        let picture = noise(16, 16);
+        let filters: [fn(f32) -> f32; 3] = [
+            |value| 1.0 - value,
+            |value| if value > 0.5 { 1.0 - value } else { value },
+            |value| (value - 0.2) / 0.5,
+        ];
+        for filter in filters {
+            assert_eq!(
+                map_channels(&picture, filter),
+                map_colors(&picture, |rgb| rgb.map(filter))
+            );
+        }
+    }
+
+    #[test]
+    fn pixelation_covers_blocks_taller_than_the_picture() {
+        let blocks = Filter::Pixelate.apply(&halves(), &[9.0]);
+        assert!(
+            blocks
+                .pixels
+                .chunks(4)
+                .all(|pixel| pixel[0] == blocks.pixels[0])
+        );
+    }
 
     // A 4x4 picture with a white left half and black right half.
     fn halves() -> Picture {

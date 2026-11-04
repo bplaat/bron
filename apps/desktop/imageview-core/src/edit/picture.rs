@@ -9,6 +9,7 @@ use std::sync::Arc;
 
 use image::{Bitmap, Compression, EncodeOptions, Format, LoopCount, Orientation};
 
+use super::filter::for_rows;
 use crate::media::premultiplied_bgra;
 use crate::{Frame, Media, Raster, render_media};
 
@@ -85,6 +86,7 @@ impl Picture {
     }
 
     // The pixel at a position.
+    #[cfg(test)]
     pub(crate) fn pixel(&self, x: u32, y: u32) -> [u8; 4] {
         let index = (y as usize * self.width as usize + x as usize) * 4;
         let mut pixel = [0; 4];
@@ -93,14 +95,20 @@ impl Picture {
     }
 
     // Creates a picture of a size from the source pixel of every pixel.
-    fn remap(&self, width: u32, height: u32, source: impl Fn(u32, u32) -> (u32, u32)) -> Self {
-        let mut pixels = Vec::with_capacity(width as usize * height as usize * 4);
-        for y in 0..height {
-            for x in 0..width {
-                let (x, y) = source(x, y);
-                pixels.extend_from_slice(&self.pixel(x, y));
+    fn remap(
+        &self,
+        width: u32,
+        height: u32,
+        source: impl Fn(u32, u32) -> (u32, u32) + Sync,
+    ) -> Self {
+        let from = self.pixels.as_chunks::<4>().0;
+        let mut pixels = vec![0; width as usize * height as usize * 4];
+        for_rows(&mut pixels, width as usize * 4, |y, row| {
+            for (x, pixel) in row.as_chunks_mut::<4>().0.iter_mut().enumerate() {
+                let (x, y) = source(x as u32, y as u32);
+                *pixel = from[y as usize * self.width as usize + x as usize];
             }
-        }
+        });
         Self::new(width, height, pixels)
     }
 
@@ -161,9 +169,9 @@ impl Picture {
     /// the ones that are enlarged.
     pub fn resize(&self, width: u32, height: u32) -> Self {
         let (width, height) = (width.max(1), height.max(1));
-        let mut premultiplied = premultiply(&self.pixels);
-        premultiplied = resample(&premultiplied, self.width, self.height, width, true);
-        premultiplied = resample(&premultiplied, width, self.height, height, false);
+        let premultiplied = premultiply(&self.pixels);
+        let premultiplied = resample(premultiplied, self.width, self.height, width, true);
+        let premultiplied = resample(premultiplied, width, self.height, height, false);
         Self::new(width, height, unpremultiply(&premultiplied))
     }
 
@@ -260,50 +268,65 @@ fn straight_rgba(pixels: &[u8]) -> Vec<u8> {
     output
 }
 
+// The pixels of a block of the alpha conversions, which fan out over the workers.
+const BLOCK: usize = 4096;
+
 /// Converts straight-alpha RGBA8 pixels to premultiplied RGBA in [0, 1], so blending does
 /// not bleed the colors of transparent pixels.
 pub(crate) fn premultiply(pixels: &[u8]) -> Vec<f32> {
-    pixels
-        .as_chunks::<4>()
-        .0
-        .iter()
-        .flat_map(|&[red, green, blue, alpha]| {
-            let alpha = f32::from(alpha) / 255.0;
-            [red, green, blue]
-                .map(|value| f32::from(value) / 255.0 * alpha)
-                .into_iter()
-                .chain([alpha])
-        })
-        .collect()
+    let source = pixels.as_chunks::<4>().0;
+    let mut output = vec![0.0; source.len() * 4];
+    for_rows(&mut output, BLOCK * 4, |block, line| {
+        let line = line.as_chunks_mut::<4>().0;
+        for (pixel, out) in source[block * BLOCK..].iter().zip(line) {
+            let alpha = f32::from(pixel[3]) / 255.0;
+            *out = [
+                f32::from(pixel[0]) / 255.0 * alpha,
+                f32::from(pixel[1]) / 255.0 * alpha,
+                f32::from(pixel[2]) / 255.0 * alpha,
+                alpha,
+            ];
+        }
+    });
+    output
+}
+
+/// Rounds a sample in [0, 1] to a byte. Adding a half instead of calling `round` keeps the loops
+/// around it vectorizable on x86 without SSE4.1, and the clamp spares them a saturating cast.
+pub(crate) fn to_byte(value: f32) -> u8 {
+    (value * 255.0 + 0.5).clamp(0.0, 255.0) as u8
 }
 
 /// Converts premultiplied RGBA in [0, 1] back to straight-alpha RGBA8 pixels.
 pub(crate) fn unpremultiply(pixels: &[f32]) -> Vec<u8> {
-    let byte = |value: f32| (value * 255.0).round().clamp(0.0, 255.0) as u8;
-    pixels
-        .as_chunks::<4>()
-        .0
-        .iter()
-        .flat_map(|&[red, green, blue, alpha]| {
-            if alpha <= 0.0 {
-                return [0; 4];
-            }
-            [
-                byte(red / alpha),
-                byte(green / alpha),
-                byte(blue / alpha),
-                byte(alpha),
-            ]
-        })
-        .collect()
+    let source = pixels.as_chunks::<4>().0;
+    let mut output = vec![0; source.len() * 4];
+    for_rows(&mut output, BLOCK * 4, |block, line| {
+        let line = line.as_chunks_mut::<4>().0;
+        for (&[red, green, blue, alpha], out) in source[block * BLOCK..].iter().zip(line) {
+            *out = if alpha <= 0.0 {
+                [0; 4]
+            } else {
+                [
+                    to_byte(red / alpha),
+                    to_byte(green / alpha),
+                    to_byte(blue / alpha),
+                    to_byte(alpha),
+                ]
+            };
+        }
+    });
+    output
 }
 
 // Resamples premultiplied pixels along one axis with a tent filter, widened when shrinking so
 // every source pixel counts.
-fn resample(pixels: &[f32], width: u32, height: u32, length: u32, horizontal: bool) -> Vec<f32> {
+fn resample(pixels: Vec<f32>, width: u32, height: u32, length: u32, horizontal: bool) -> Vec<f32> {
     let (width, height, length) = (width as usize, height as usize, length as usize);
     let source = if horizontal { width } else { height };
-    let lines = if horizontal { height } else { width };
+    if source == length {
+        return pixels;
+    }
     let scale = source as f64 / length as f64;
     let support = scale.max(1.0);
     // The source pixels and their weights for every destination pixel.
@@ -333,33 +356,147 @@ fn resample(pixels: &[f32], width: u32, height: u32, length: u32, horizontal: bo
         (width, length)
     };
     let mut output = vec![0.0; out_width * out_height * 4];
-    for line in 0..lines {
-        for (index, taps) in taps.iter().enumerate() {
-            let mut sum = [0.0f32; 4];
-            for &(tap, weight) in taps {
-                let at = if horizontal {
-                    (line * width + tap) * 4
-                } else {
-                    (tap * width + line) * 4
-                };
-                for channel in 0..4 {
-                    sum[channel] += pixels[at + channel] * weight;
+    if !horizontal {
+        // Accumulate whole rows so the inner loop has contiguous independent samples.
+        // Keep the tap order for each sample to preserve floating-point rounding.
+        for_rows(&mut output, width * 4, |y, row| {
+            for &(tap, weight) in &taps[y] {
+                let source = &pixels[tap * width * 4..][..width * 4];
+                for (out, &value) in row.iter_mut().zip(source) {
+                    *out += value * weight;
                 }
             }
-            let at = if horizontal {
-                (line * out_width + index) * 4
-            } else {
-                (index * out_width + line) * 4
-            };
-            output[at..at + 4].copy_from_slice(&sum);
+        });
+        return output;
+    }
+    for_rows(&mut output, length * 4, |y, row| {
+        resample_row(
+            pixels[y * width * 4..][..width * 4].as_chunks::<4>().0,
+            row.as_chunks_mut::<4>().0,
+            &taps,
+        );
+    });
+    output
+}
+
+// Arguments tell the compiler that the slices don't overlap, which it needs to use SIMD for the
+// channels of a pixel.
+fn resample_row(source: &[[f32; 4]], row: &mut [[f32; 4]], taps: &[Vec<(usize, f32)>]) {
+    for (pixel, taps) in row.iter_mut().zip(taps) {
+        for &(tap, weight) in taps {
+            let sample = &source[tap];
+            for channel in 0..4 {
+                pixel[channel] += sample[channel] * weight;
+            }
         }
     }
-    output
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn alpha_conversion_matches_scalar_reference() {
+        let pixels: Vec<u8> = (0..=255u8)
+            .flat_map(|alpha| {
+                (0..=255u8).flat_map(move |value| [value, 255 - value, value / 2, alpha])
+            })
+            .collect();
+        let expected: Vec<f32> = pixels
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .flat_map(|pixel| {
+                let alpha = f32::from(pixel[3]) / 255.0;
+                [
+                    f32::from(pixel[0]) / 255.0 * alpha,
+                    f32::from(pixel[1]) / 255.0 * alpha,
+                    f32::from(pixel[2]) / 255.0 * alpha,
+                    alpha,
+                ]
+            })
+            .collect();
+        assert_eq!(premultiply(&pixels), expected);
+        let expected: Vec<u8> = pixels
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .flat_map(|pixel| if pixel[3] == 0 { [0; 4] } else { *pixel })
+            .collect();
+        assert_eq!(unpremultiply(&premultiply(&pixels)), expected);
+    }
+
+    #[test]
+    fn resampling_matches_scalar_tent_filter() {
+        // An independent pixel-at-a-time reference covers nonintegral scales and edges.
+        fn reference(
+            pixels: &[f32],
+            width: usize,
+            height: usize,
+            length: usize,
+            horizontal: bool,
+        ) -> Vec<f32> {
+            let source = if horizontal { width } else { height };
+            let (out_width, out_height) = if horizontal {
+                (length, height)
+            } else {
+                (width, length)
+            };
+            let scale = source as f64 / length as f64;
+            let support = scale.max(1.0);
+            let mut output = Vec::new();
+            for y in 0..out_height {
+                for x in 0..out_width {
+                    let center = (if horizontal { x } else { y }) as f64 * scale + 0.5 * scale;
+                    let mut taps = Vec::new();
+                    for tap in 0..source {
+                        let weight =
+                            (1.0 - ((tap as f64 + 0.5 - center) / support).abs()).max(0.0) as f32;
+                        if weight > 0.0 {
+                            taps.push((tap, weight));
+                        }
+                    }
+                    let total: f32 = taps.iter().map(|(_, weight)| weight).sum();
+                    let mut pixel = [0.0; 4];
+                    for (tap, weight) in taps {
+                        let index = if horizontal {
+                            y * width + tap
+                        } else {
+                            tap * width + x
+                        };
+                        for channel in 0..4 {
+                            pixel[channel] += pixels[index * 4 + channel] * (weight / total);
+                        }
+                    }
+                    output.extend(pixel);
+                }
+            }
+            output
+        }
+
+        for (width, height) in [(1, 1), (3, 5), (17, 9)] {
+            let pixels: Vec<f32> = (0..width * height * 4)
+                .map(|index| (index * 37 % 256) as f32 / 255.0)
+                .collect();
+            for length in [1, 2, 3, 5, 7, 9, 17, 19] {
+                for horizontal in [false, true] {
+                    let actual = resample(
+                        pixels.clone(),
+                        width as u32,
+                        height as u32,
+                        length as u32,
+                        horizontal,
+                    );
+                    let expected = reference(&pixels, width, height, length, horizontal);
+                    assert_eq!(
+                        actual, expected,
+                        "{width}x{height}, length={length}, horizontal={horizontal}"
+                    );
+                }
+            }
+        }
+    }
 
     #[test]
     fn small_pictures_are_encoded_smallest() {
