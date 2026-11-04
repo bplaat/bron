@@ -624,6 +624,36 @@ static void test_files(void) {
     CHECK(rmdir(IO_PATH) == 0);
 }
 
+static void test_read_after_end(void) {
+    // SQLite reads the change counter of a new database before writing its header.
+    const char* path = "sd:/sqlite-header.bin";
+    const char header[] = "SQLite format 3";
+    char data[32] = {0};
+    int fd = open(path, O_CREAT | O_TRUNC | O_RDWR, 0666);
+    CHECK(fd >= 3);
+    if (fd < 3)
+        return;
+    CHECK(lseek(fd, 24, SEEK_SET) == 24);
+    CHECK(read(fd, data, 16) == 0);
+    CHECK(lseek(fd, 0, SEEK_CUR) == 24);
+    CHECK(lseek(fd, 0, SEEK_SET) == 0);
+    CHECK(write(fd, header, sizeof(header)) == sizeof(header));
+    CHECK(fsync(fd) == 0 && close(fd) == 0);
+
+    fd = open(path, O_RDWR);
+    CHECK(fd >= 3);
+    if (fd < 3)
+        return;
+    CHECK(read(fd, data, sizeof(data)) == sizeof(header));
+    CHECK(memcmp(data, header, sizeof(header)) == 0);
+    CHECK(lseek(fd, 24, SEEK_SET) == 24);
+    CHECK(read(fd, data, 16) == 0);
+    CHECK(lseek(fd, 0, SEEK_SET) == 0);
+    CHECK(write(fd, header, sizeof(header)) == sizeof(header));
+    CHECK(close(fd) == 0);
+    CHECK(unlink(path) == 0);
+}
+
 // Relative paths start at the current directory, . and .. are resolved before FSA
 static void test_directories(void) {
     CHECK(mkdir(IO_PATH, 0777) == 0);
@@ -840,6 +870,7 @@ int main(void) {
     run("threads and locks", test_threads);
     run("clock and sleep", test_clock);
     run("SD files", test_files);
+    run("SD reads after EOF preserve writes", test_read_after_end);
     run("SD directories and paths", test_directories);
     run("SD errors and descriptors", test_descriptors);
     run("SD stdio streams", test_stdio_files);
