@@ -239,10 +239,8 @@ impl Server {
         let mut body = Camera::default();
         player.restore(&mut body);
         // The players that already play hear about the new one
-        let joined = Response::Message(format!("{name} joined the game"));
-        let others: Vec<_> = self.ids().collect();
-        for other in others {
-            self.send(other, joined.clone());
+        if !self.clients.is_empty() {
+            self.broadcast(Response::Message(format!("{name} joined the game")));
         }
         self.clients.insert(
             id,
@@ -725,6 +723,24 @@ mod tests {
         server.leave(&mut world, guest.id);
         assert!(world.guests["Guest"].flying);
         assert_eq!(server.ids().collect::<Vec<_>>(), [HOST]);
+    }
+
+    #[test]
+    fn joining_broadcasts_one_notification_for_all_existing_players() {
+        let mut world = TestWorld::default();
+        let mut server = Server::new(&mut world, Limits::default(), &[]);
+        server.join(&mut world, None, "Host").unwrap();
+        assert!(server.outgoing().is_empty());
+        for slot in 1..5 {
+            let name = format!("Player {slot}");
+            server.join(&mut world, None, &name).unwrap();
+            let outgoing = server.outgoing();
+            assert_eq!(outgoing.len(), 1);
+            assert!(matches!(
+                &outgoing[0],
+                Outgoing::All(Response::Message(message)) if *message == format!("{name} joined the game")
+            ));
+        }
     }
 
     #[test]
