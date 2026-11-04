@@ -228,9 +228,11 @@ pub(crate) use call;
 /// Calls a function that returns an interface through its out parameter.
 pub(crate) fn out(f: impl FnOnce(*mut *mut c_void) -> HRESULT) -> Result<ComPtr> {
     let mut raw = null_mut();
-    check(f(&mut raw))?;
-    // SAFETY: A succeeded call returns an owned reference.
-    unsafe { ComPtr::from_raw(raw) }.ok_or(E_POINTER)
+    let result = f(&mut raw);
+    // SAFETY: A non-null out parameter transfers an owned reference, including a partial result.
+    let object = unsafe { ComPtr::from_raw(raw) };
+    check(result)?;
+    object.ok_or(E_POINTER)
 }
 
 /// An owned reference to a COM interface.
@@ -354,10 +356,10 @@ pub(crate) fn compose(class: &str, factory_iid: &GUID) -> Result<ComPtr> {
     // SAFETY: Slot 6 of a composable factory is CreateInstance(outer, inner, value).
     let value = out(|raw| unsafe {
         call!(factory, 6, null_mut() => *mut c_void, &mut inner => *mut *mut c_void, raw => *mut *mut c_void)
-    })?;
+    });
     // SAFETY: Without an outer object there is no inner reference to keep.
     drop(unsafe { ComPtr::from_raw(inner) });
-    Ok(value)
+    value
 }
 
 // MARK: COM objects
@@ -667,6 +669,18 @@ static XAML_METADATA_PROVIDER_VTBL: XamlMetadataProviderVtbl = XamlMetadataProvi
 /// Creates the `Microsoft.UI.Xaml.Application` of this thread and returns its `IApplication`.
 pub(crate) fn create_application() -> Result<ComPtr> {
     let factory = factory("Microsoft.UI.Xaml.Application", &IID_IAPPLICATION_FACTORY)?;
+    compose_application(|outer, inner, value| {
+        // SAFETY: Slot 6 is CreateInstance(outer, inner, value). The caller retains outer
+        // throughout composition and owns both returned interfaces.
+        unsafe {
+            call!(factory, 6, outer => *mut c_void, inner => *mut *mut c_void, value => *mut *mut c_void)
+        }
+    })
+}
+
+fn compose_application(
+    create: impl FnOnce(*mut c_void, *mut *mut c_void, *mut *mut c_void) -> HRESULT,
+) -> Result<ComPtr> {
     let outer = Box::into_raw(Box::new(XamlApplication {
         overrides: &APPLICATION_OVERRIDES_VTBL,
         provider: &XAML_METADATA_PROVIDER_VTBL,
@@ -674,20 +688,14 @@ pub(crate) fn create_application() -> Result<ComPtr> {
         inner: Cell::new(null_mut()),
         controls: OnceCell::new(),
     }));
+    // SAFETY: The new outer object owns its initial COM reference. Keep that reference
+    // guarded even if the factory fails after temporarily retaining the object.
+    let _outer = unsafe { ComPtr::from_raw(outer.cast()) }.expect("application outer");
     let mut inner = null_mut();
-    // SAFETY: Slot 6 is CreateInstance(outer, inner, value), the outer object stays alive
-    // while the composed Application holds it.
-    // A failed creation already released the outer object.
-    let application = out(|raw| unsafe {
-        call!(factory, 6, outer.cast::<c_void>() => *mut c_void, &mut inner => *mut *mut c_void, raw => *mut *mut c_void)
-    })?;
-    // SAFETY: The outer object is alive, its own reference is released after the Application
-    // took one.
-    unsafe {
-        (*outer).inner.set(inner);
-        application_release(outer.cast());
-    }
-    Ok(application)
+    let application = out(|value| create(outer.cast(), &mut inner, value));
+    // SAFETY: The guard keeps outer alive, and its destructor will release any returned inner.
+    unsafe { (*outer).inner.set(inner) };
+    application
 }
 
 const unsafe fn application_from_provider(this: *mut c_void) -> *mut c_void {
@@ -855,6 +863,73 @@ unsafe extern "system" fn provider_get_xmlns_definitions(
                 call!(provider, 8, count => *mut u32, definitions => *mut *mut c_void)
             }
             None => S_OK,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::rc::Rc;
+
+    use super::*;
+
+    #[test]
+    fn failed_interface_call_releases_a_partial_result() {
+        let marker = Rc::new(());
+        let weak = Rc::downgrade(&marker);
+        let result = out(move |value| {
+            let object = event_handler(IID_ROUTED_EVENT_HANDLER, move |_, _| {
+                let _ = &marker;
+            });
+            // SAFETY: The caller supplies a writable output for this owned interface.
+            unsafe { *value = ManuallyDrop::new(object).as_raw() };
+            E_NOINTERFACE
+        });
+        assert!(result.is_err());
+        assert!(
+            weak.upgrade().is_none(),
+            "failed call retained its partial result"
+        );
+    }
+
+    #[test]
+    fn application_composition_balances_outer_and_inner_references() {
+        for status in [S_OK, E_NOINTERFACE] {
+            let marker = Rc::new(());
+            let weak = Rc::downgrade(&marker);
+            let result = compose_application(move |outer, inner, value| {
+                let controls_marker = marker.clone();
+                let controls = event_handler(IID_ROUTED_EVENT_HANDLER, move |_, _| {
+                    let _ = &controls_marker;
+                });
+                let inner_object = event_handler(IID_ROUTED_EVENT_HANDLER, move |_, _| {
+                    let _ = &marker;
+                });
+                // SAFETY: Composition supplies writable outputs and borrows the live outer.
+                unsafe {
+                    *inner = ManuallyDrop::new(inner_object).as_raw();
+                    let application = &*outer.cast::<XamlApplication>();
+                    assert!(application.controls.set(Some(controls)).is_ok());
+                    application_add_ref(outer);
+                    application_release(outer);
+                    if status == S_OK {
+                        application_add_ref(outer);
+                        *value = outer;
+                    }
+                }
+                status
+            });
+            match result {
+                Ok(application) => {
+                    assert!(
+                        weak.upgrade().is_some(),
+                        "composition released its state early"
+                    );
+                    drop(application);
+                }
+                Err(error) => assert_eq!(error, status),
+            }
+            assert!(weak.upgrade().is_none(), "composition retained its state");
         }
     }
 }
