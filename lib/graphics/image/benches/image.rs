@@ -51,9 +51,40 @@ fn tga(width: u16, height: u16) -> Vec<u8> {
     out
 }
 
+// Encodes a JPEG with the smooth shapes and fine grain of a photo, which unlike flat fixtures
+// leaves most DCT coefficients nonzero.
+fn photo_jpeg(width: u32, height: u32) -> Vec<u8> {
+    let mut state = 0x2545_f491u32;
+    let mut pixels = Vec::with_capacity((width * height * 4) as usize);
+    for y in 0..height {
+        for x in 0..width {
+            state ^= state << 13;
+            state ^= state >> 17;
+            state ^= state << 5;
+            let wave = |scale: f32, phase: f32| {
+                ((x as f32 * scale + phase).sin() + (y as f32 * scale * 0.7).cos()) * 50.0 + 128.0
+            };
+            let grain = (state & 31) as f32 - 16.0;
+            pixels.extend_from_slice(&[
+                (wave(0.03, 0.0) + grain) as u8,
+                (wave(0.05, 1.0) + grain) as u8,
+                (wave(0.02, 2.0) + grain) as u8,
+                255,
+            ]);
+        }
+    }
+    let bitmap = Bitmap::new(width, height, pixels).expect("valid bitmap");
+    image::encode(&bitmap, Format::Jpeg).expect("valid JPEG")
+}
+
 fn decode(c: &mut Criterion) {
     let bmp = bmp(800, 600);
     let tga = tga(800, 600);
+    let photo = if cfg!(feature = "jpeg") {
+        photo_jpeg(800, 600)
+    } else {
+        Vec::new()
+    };
     let mut raster = c.benchmark_group("image_decode_raster");
     for (name, enabled, bytes) in [
         ("bmp", cfg!(feature = "bmp"), &bmp[..]),
@@ -87,6 +118,7 @@ fn decode(c: &mut Criterion) {
             cfg!(feature = "jpeg"),
             &include_bytes!("images/dice-progressive.jpg")[..],
         ),
+        ("jpeg_photo", cfg!(feature = "jpeg"), &photo[..]),
         (
             "jpeg_restart_420",
             cfg!(feature = "jpeg"),

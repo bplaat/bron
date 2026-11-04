@@ -797,11 +797,16 @@ impl Jpeg {
                     }
                 }
                 3 => {
-                    for (p, ((&a, &b), &c)) in
-                        row.iter_mut().zip(rows[0].iter().zip(rows[1]).zip(rows[2]))
-                    {
-                        let [r, g, b] = if rgb { [a, b, c] } else { ycbcr(a, b, c) };
-                        *p = [r, g, b, 255];
+                    let samples = rows[0].iter().zip(rows[1]).zip(rows[2]);
+                    if rgb {
+                        for (p, ((&a, &b), &c)) in row.iter_mut().zip(samples) {
+                            *p = [a, b, c, 255];
+                        }
+                    } else {
+                        for (p, ((&y, &cb), &cr)) in row.iter_mut().zip(samples) {
+                            let [r, g, b] = ycbcr(y, cb, cr);
+                            *p = [r, g, b, 255];
+                        }
                     }
                 }
                 4 => {
@@ -1011,10 +1016,15 @@ fn idct_1d(v: [f32; 8]) -> [f32; 8] {
     ]
 }
 
+// Rounds a level-shifted sample to a byte, adding a half instead of calling `roundf`, which is a
+// library call on x86 without SSE4.1. The cast saturates, which clamps it to 0..=255.
+fn sample(value: f32) -> u8 {
+    (value + 128.5) as u8
+}
+
 fn idct(block: &[i32], table: &[f32; 64], dest: &mut [u8], stride: usize) {
-    // Float-to-u8 casts saturate, which clamps every output sample to 0..=255.
     if block[1..].iter().all(|v| *v == 0) {
-        let value = roundf(block[0] as f32 * table[0] + 128.0) as u8;
+        let value = sample(block[0] as f32 * table[0]);
         for row in dest.chunks_mut(stride).take(8) {
             row[..8].fill(value);
         }
@@ -1032,7 +1042,7 @@ fn idct(block: &[i32], table: &[f32; 64], dest: &mut [u8], stride: usize) {
     for (y, dest) in dest.chunks_mut(stride).take(8).enumerate() {
         let row = idct_1d(core::array::from_fn(|x| columns[x][y]));
         for (dest, value) in dest.iter_mut().zip(row) {
-            *dest = roundf(value + 128.0) as u8;
+            *dest = sample(value);
         }
     }
 }
@@ -1388,7 +1398,11 @@ fn jpeg_fdct(plane: &[u8], stride: usize, scale: &[f32; 64]) -> [i16; 64] {
             row[x] = value;
         }
     }
-    core::array::from_fn(|index| roundf(data[index / 8][index % 8] * scale[index]) as i16)
+    // Rounds away from zero without a library call.
+    core::array::from_fn(|index| {
+        let value = data[index / 8][index % 8] * scale[index];
+        (value + 0.5f32.copysign(value)) as i16
+    })
 }
 
 fn jpeg_amplitude(value: i16) -> (u8, u16) {
