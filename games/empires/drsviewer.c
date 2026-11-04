@@ -66,6 +66,7 @@ int main(int argc, char** argv) {
         void* ptr;
         int32_t frame;
     } selected = {0};
+    SDL_AudioDeviceID audio_device = 0;
 
     // Event loop
     bool running = false;
@@ -96,14 +97,17 @@ int main(int argc, char** argv) {
                                 SDL_AudioSpec wavSpec;
                                 uint8_t* wavBuffer;
                                 uint32_t wavLength;
-                                SDL_LoadWAV("tmp.wav", &wavSpec, &wavBuffer, &wavLength);
-                                SDL_AudioDeviceID deviceId = SDL_OpenAudioDevice(NULL, 0, &wavSpec, NULL, 0);
-                                SDL_QueueAudio(deviceId, wavBuffer, wavLength);
-                                SDL_PauseAudioDevice(deviceId, 0);
-
-                                // TODO releasing SDL audio stuff
-                                // SDL_CloseAudioDevice(deviceId);
-                                // SDL_FreeWAV(wavBuffer);
+                                if (SDL_LoadWAV("tmp.wav", &wavSpec, &wavBuffer, &wavLength) != NULL) {
+                                    if (audio_device != 0)
+                                        SDL_CloseAudioDevice(audio_device);
+                                    audio_device = SDL_OpenAudioDevice(NULL, 0, &wavSpec, NULL, 0);
+                                    if (audio_device != 0) {
+                                        SDL_QueueAudio(audio_device, wavBuffer, wavLength);
+                                        SDL_PauseAudioDevice(audio_device, 0);
+                                    }
+                                    // SDL_QueueAudio copies the samples into its own buffer.
+                                    SDL_FreeWAV(wavBuffer);
+                                }
                             }
                             break;
                         }
@@ -237,6 +241,9 @@ int main(int argc, char** argv) {
         framebuffer_present(framebuffer);
     }
 
+    if (audio_device != 0)
+        SDL_CloseAudioDevice(audio_device);
+    free(selected.ptr);
     drs_free(drs);
     palette_free(default_palette);
     drs_free(interface_drs);
