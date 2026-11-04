@@ -23,6 +23,12 @@ use imageview_core::{
 
 use crate::platforms::MediaView;
 
+#[cfg(target_os = "macos")]
+mod edit;
+// Only the macOS view crops and selects yet.
+#[cfg(not(windows))]
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+mod marquee;
 mod platforms;
 #[cfg(not(windows))]
 mod viewport;
@@ -53,6 +59,30 @@ pub(crate) enum AppEvent {
     /// Run a menu action from a native toolbar.
     #[cfg_attr(not(any(target_os = "macos", windows)), allow(dead_code))]
     Action(&'static str),
+    /// A control of the open edit tool of a window changed, with the values of all controls.
+    #[cfg(target_os = "macos")]
+    ToolChanged(WindowId, usize, Vec<f32>),
+    /// The preview of an edit tool of a window finished, with the smaller copy of the
+    /// picture it was made from and its scale.
+    #[cfg(target_os = "macos")]
+    Previewed(
+        WindowId,
+        u64,
+        Media,
+        Arc<imageview_core::edit::Picture>,
+        f64,
+    ),
+    /// A save of a window finished in the background.
+    #[cfg(target_os = "macos")]
+    Saved(WindowId, edit::Saved),
+    /// An edit of a window finished in the background.
+    #[cfg(target_os = "macos")]
+    Applied(
+        WindowId,
+        imageview_core::edit::Picture,
+        imageview_core::edit::Step,
+        bool,
+    ),
 }
 
 /// Where decoded media is shown.
@@ -83,6 +113,21 @@ struct ImageWindow {
     generation: u64,
     // The open request that is still decoding the first media of the window.
     opening: Option<u64>,
+    #[cfg(target_os = "macos")]
+    editing: Option<edit::Editing>,
+    // Whether an edit is being applied or the image saved in the background.
+    #[cfg(target_os = "macos")]
+    busy: bool,
+}
+
+impl ImageWindow {
+    // Whether the media is being edited, which keeps it from reloading.
+    const fn is_editing(&self) -> bool {
+        #[cfg(target_os = "macos")]
+        return self.editing.is_some();
+        #[cfg(not(target_os = "macos"))]
+        false
+    }
 }
 
 struct App {
@@ -105,6 +150,12 @@ impl App {
 
     fn window(&mut self, id: WindowId) -> Option<&mut ImageWindow> {
         self.position(id).map(|index| &mut self.windows[index])
+    }
+
+    // Closes a window and forgets it.
+    fn close_window(&mut self, id: WindowId) {
+        self.windows.retain(|window| window.window.id() != id);
+        self.forget(id);
     }
 
     // Stops treating a closed window as the active one.
@@ -165,18 +216,9 @@ impl App {
         media: Option<Media>,
         opening: Option<u64>,
     ) {
-        let (width, height) = media.as_ref().map_or(LOADING_SIZE, |media| {
-            let (width, height) = media.size();
-            preferred_content_size(width, height)
-        });
-        #[cfg(target_os = "macos")]
-        let width = width.max(MINIMUM_TOOLBAR_WIDTH);
         let window = WindowBuilder::new()
             .title(title(&path, media.as_ref()))
-            .size(LogicalSize::new(
-                (width as f32).max(platforms::MIN_SIZE.0),
-                (height as f32).max(platforms::MIN_SIZE.1),
-            ))
+            .size(content_size(media.as_ref()))
             .min_size(LogicalSize::new(
                 platforms::MIN_SIZE.0,
                 platforms::MIN_SIZE.1,
@@ -193,6 +235,10 @@ impl App {
             version,
             generation: 0,
             opening,
+            #[cfg(target_os = "macos")]
+            editing: None,
+            #[cfg(target_os = "macos")]
+            busy: false,
         });
     }
 
@@ -229,6 +275,10 @@ impl App {
                     window.opening = None;
                     window.version = load.version;
                     window.window.set_title(title(&load.path, Some(&media)));
+                    // The window opened with the loading size gets the size of its media.
+                    window.window.set_size(content_size(Some(&media)));
+                    #[cfg(target_os = "macos")]
+                    window.view.center_window();
                     window.view.set_media(media, true);
                 }
             }
@@ -294,6 +344,10 @@ impl App {
 
     // Shows another image in a window, fitted to it.
     fn show(&mut self, id: WindowId, path: PathBuf) {
+        #[cfg(target_os = "macos")]
+        if !self.finish_editing(id, edit::AfterSave::Show(path.clone())) {
+            return;
+        }
         let Some(window) = self.window(id) else {
             return;
         };
@@ -316,7 +370,7 @@ impl App {
     fn reload_changed(&mut self) {
         let mut reloads = Vec::new();
         for window in &mut self.windows {
-            if window.opening.is_some() {
+            if window.opening.is_some() || window.is_editing() {
                 continue;
             }
             let version = FileVersion::of(&window.path);
@@ -339,6 +393,10 @@ impl App {
     }
 
     fn action(&mut self, action: &str) {
+        #[cfg(target_os = "macos")]
+        if self.edit_action(action) {
+            return;
+        }
         match action {
             "file.open" => self.show_open_dialog(),
             "view.previous" => self.browse(-1),
@@ -372,12 +430,67 @@ impl App {
                 }
             }
             WindowEvent::CloseRequested(request) if !request.default_prevented() => {
-                self.windows.retain(|window| window.window.id() != id);
-                self.forget(id);
+                #[cfg(target_os = "macos")]
+                if !self.finish_editing(id, edit::AfterSave::Close) {
+                    request.prevent_default();
+                    return;
+                }
+                self.close_window(id);
             }
             _ => {}
         }
     }
+
+    // Handles an event of the event loop.
+    fn handle(&mut self, event: Event<AppEvent>) {
+        match event {
+            Event::OpenFiles(paths) | Event::UserEvent(AppEvent::Open(paths)) => self.open(paths),
+            Event::UserEvent(AppEvent::Launched) => {
+                // Ask for a file when the application launched without one.
+                if self.windows.is_empty() && self.pending_loads == 0 {
+                    self.show_open_dialog();
+                    if self.windows.is_empty() && self.pending_loads == 0 {
+                        _ = self.proxy.exit();
+                    }
+                }
+            }
+            Event::UserEvent(AppEvent::Tick) => self.reload_changed(),
+            Event::UserEvent(AppEvent::Loaded(load, result)) => self.loaded(load, result),
+            Event::UserEvent(AppEvent::SlowLoad(id)) => self.slow_load(id),
+            Event::Action(action) => self.action(&action),
+            Event::UserEvent(AppEvent::Action(action)) => self.action(action),
+            #[cfg(target_os = "macos")]
+            Event::UserEvent(AppEvent::ToolChanged(id, index, values)) => {
+                self.tool_changed(id, index, values)
+            }
+            #[cfg(target_os = "macos")]
+            Event::UserEvent(AppEvent::Previewed(id, generation, media, proxy, scale)) => {
+                self.previewed(id, generation, media, proxy, scale);
+            }
+            #[cfg(target_os = "macos")]
+            Event::UserEvent(AppEvent::Applied(id, picture, step, amend)) => {
+                self.applied(id, picture, step, amend);
+            }
+            #[cfg(target_os = "macos")]
+            Event::UserEvent(AppEvent::Saved(id, saved)) => self.saved(id, saved),
+            Event::Window(id, event) => self.window_event(id, event),
+            _ => {}
+        }
+    }
+}
+
+// The content size a window opens with for media, or while the media loads.
+fn content_size(media: Option<&Media>) -> LogicalSize {
+    let (width, height) = media.map_or(LOADING_SIZE, |media| {
+        let (width, height) = media.size();
+        preferred_content_size(width, height)
+    });
+    #[cfg(target_os = "macos")]
+    let width = width.max(MINIMUM_TOOLBAR_WIDTH);
+    LogicalSize::new(
+        (width as f32).max(platforms::MIN_SIZE.0),
+        (height as f32).max(platforms::MIN_SIZE.1),
+    )
 }
 
 fn file_name(path: &Path) -> String {
@@ -421,9 +534,20 @@ fn menu() -> MenuBarBuilder {
     #[cfg(target_os = "macos")]
     let file = file
         .separator()
+        .item(MenuItem::new("Save", "file.save").accelerator(primary(KeyCode::KeyS)))
+        .item(
+            MenuItem::new("Save As...", "file.save_as").accelerator(Accelerator::new(
+                Modifiers::PRIMARY | Modifiers::SHIFT,
+                KeyCode::KeyS,
+            )),
+        )
+        .separator()
         .item(MenuItem::new("Print...", "file.print").accelerator(primary(KeyCode::KeyP)))
         .separator();
-    MenuBarBuilder::new().menu(file).menu(
+    let menu_bar = MenuBarBuilder::new().menu(file);
+    #[cfg(target_os = "macos")]
+    let menu_bar = menu_bar.menu(edit_menu()).menu(image_menu());
+    menu_bar.menu(
         MenuBuilder::new("View")
             .item(MenuItem::new("Zoom In", "view.zoom_in").accelerator(primary(KeyCode::Equal)))
             .item(MenuItem::new("Zoom Out", "view.zoom_out").accelerator(primary(KeyCode::Minus)))
@@ -446,6 +570,72 @@ fn menu() -> MenuBarBuilder {
                     .accelerator(Accelerator::new(Modifiers::NONE, KeyCode::ArrowRight)),
             ),
     )
+}
+
+// The selection items follow the default ones, Undo and Redo reach the image view through the
+// responder chain.
+#[cfg(target_os = "macos")]
+fn edit_menu() -> MenuBuilder {
+    MenuBuilder::new("Edit")
+        .item(
+            MenuItem::new("Deselect", "select.none")
+                .accelerator(Accelerator::new(Modifiers::PRIMARY, KeyCode::KeyD)),
+        )
+        .item(
+            MenuItem::new("Invert Selection", "select.invert").accelerator(Accelerator::new(
+                Modifiers::PRIMARY | Modifiers::SHIFT,
+                KeyCode::KeyI,
+            )),
+        )
+}
+
+#[cfg(target_os = "macos")]
+fn image_menu() -> MenuBuilder {
+    let primary = |key| Accelerator::new(Modifiers::PRIMARY, key);
+    MenuBuilder::new("Image")
+        .item(MenuItem::new("Edit Image", "edit.toggle").accelerator(primary(KeyCode::KeyE)))
+        .separator()
+        .item(MenuItem::new("Whole Image", "select.whole"))
+        .item(MenuItem::new("Rectangle Selection", "select.rectangle"))
+        .item(MenuItem::new("Ellipse Selection", "select.ellipse"))
+        .separator()
+        .item(MenuItem::new("Rotate Left", "image.rotate_left").accelerator(primary(KeyCode::KeyL)))
+        .item(
+            MenuItem::new("Rotate Right", "image.rotate_right").accelerator(primary(KeyCode::KeyR)),
+        )
+        .item(MenuItem::new("Flip Horizontal", "image.flip_horizontal"))
+        .item(MenuItem::new("Flip Vertical", "image.flip_vertical"))
+        .separator()
+        .item(MenuItem::new("Crop...", "image.crop").accelerator(primary(KeyCode::KeyK)))
+        .item(MenuItem::new("Resize...", "image.resize"))
+        .separator()
+        .item(
+            MenuItem::new("Adjust...", "filter.adjust").accelerator(Accelerator::new(
+                Modifiers::PRIMARY | Modifiers::OPTION,
+                KeyCode::KeyC,
+            )),
+        )
+        .item(
+            MenuItem::new("Auto Enhance", "filter.auto_enhance").accelerator(Accelerator::new(
+                Modifiers::PRIMARY | Modifiers::SHIFT,
+                KeyCode::KeyE,
+            )),
+        )
+        .separator()
+        .item(MenuItem::new("Grayscale", "filter.grayscale"))
+        .item(MenuItem::new("Sepia", "filter.sepia"))
+        .item(MenuItem::new("Invert", "filter.invert"))
+        .item(MenuItem::new("Threshold...", "filter.threshold"))
+        .item(MenuItem::new("Solarize...", "filter.solarize"))
+        .separator()
+        .item(MenuItem::new("Gaussian Blur...", "filter.gaussian_blur"))
+        .item(MenuItem::new("Box Blur...", "filter.box_blur"))
+        .item(MenuItem::new("Motion Blur...", "filter.motion_blur"))
+        .item(MenuItem::new("Radial Blur...", "filter.radial_blur"))
+        .separator()
+        .item(MenuItem::new("Sharpen...", "filter.sharpen"))
+        .item(MenuItem::new("Reduce Noise...", "filter.reduce_noise"))
+        .item(MenuItem::new("Pixelate...", "filter.pixelate"))
 }
 
 fn main() {
@@ -497,24 +687,11 @@ fn main() {
         app.open(files);
     }
 
-    event_loop.run(move |event| match event {
-        Event::OpenFiles(paths) | Event::UserEvent(AppEvent::Open(paths)) => app.open(paths),
-        Event::UserEvent(AppEvent::Launched) => {
-            // Ask for a file when the application launched without one.
-            if app.windows.is_empty() && app.pending_loads == 0 {
-                app.show_open_dialog();
-                if app.windows.is_empty() && app.pending_loads == 0 {
-                    _ = app.proxy.exit();
-                }
-            }
-        }
-        Event::UserEvent(AppEvent::Tick) => app.reload_changed(),
-        Event::UserEvent(AppEvent::Loaded(load, result)) => app.loaded(load, result),
-        Event::UserEvent(AppEvent::SlowLoad(id)) => app.slow_load(id),
-        Event::Action(action) => app.action(&action),
-        Event::UserEvent(AppEvent::Action(action)) => app.action(action),
-        Event::Window(id, event) => app.window_event(id, event),
-        _ => {}
+    event_loop.run(move |event| {
+        app.handle(event);
+        // The menu follows the mode of the active window.
+        #[cfg(target_os = "macos")]
+        app.update_menu();
     });
 }
 

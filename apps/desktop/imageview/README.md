@@ -24,6 +24,22 @@ vector drawings, and follows the system light or dark theme.
 - Print images at their natural size or scaled to fit, and reopen them from Open Recent
 - Quick Look [preview](../imageview-macos-preview) and [thumbnail](../imageview-macos-thumbnail)
   extensions
+- An Edit button that swaps in an edit toolbar for still bitmaps, with popovers for its tools:
+  - Rotate and flip, saved to JPEG files by changing their EXIF orientation instead of
+    encoding them again
+  - Crop with aspect ratios and straightening, and resize
+  - Adjust the light (exposure, brightness, contrast, highlights, shadows, vignette) and
+    colors (saturation, vibrance, warmth, tint, hue)
+  - Auto enhance, grayscale, sepia, invert, threshold, solarize, gaussian, box, motion and
+    radial blur, sharpen, noise reduction and pixelate
+  - Rectangle and ellipse selections that edits only change, with feathered edges, which
+    are flipped in place, copied, or cropped to with a transparent background for ellipses
+  - Previews on a copy as large as the window, edits applied in the background, and the
+    last change set up again when its tool is opened again
+  - Undo and redo within a memory budget, and saving with a JPEG quality, the EXIF metadata
+    of photos and the smallest encoding
+- Save As draws vectors as bitmaps at a chosen size, and saves the first frame of
+  animations, which cannot be edited
 
 ### Windows
 

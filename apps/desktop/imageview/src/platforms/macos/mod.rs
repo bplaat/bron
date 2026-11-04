@@ -10,26 +10,32 @@
 #![allow(unsafe_code)]
 
 use std::cell::RefCell;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::ptr::null_mut;
 
 use block2::Block;
-use bwindow::{EventLoopProxy, NativeViewHandle, Theme, Window, WindowAttachment};
+use bwindow::{EventLoopProxy, NativeViewHandle, Theme, Window, WindowAttachment, WindowId};
 use imageview_core::Media;
 use imageview_core::appkit::{Point, Rect, Size, create_media_view, ns_string};
+use imageview_core::edit::{Control, Selection, Shape, Tool};
 use objc2::rc::{Allocated, Retained, autoreleasepool};
-use objc2::runtime::{AnyObject as Object, Bool};
+use objc2::runtime::{AnyObject as Object, Bool, Sel};
 use objc2::{class, define_class, msg_send, sel};
 
 pub(crate) use self::browse::neighbour_path;
 use self::headers::*;
-use self::toolbar::install_toolbar;
+use self::popover::Popover;
+use self::toolbar::{Mode, Toolbars};
 use self::view::{View, rect};
 use crate::AppEvent;
 use crate::viewport::Viewport;
 
 mod browse;
 mod headers;
+mod popover;
+mod save;
+
+pub(crate) use self::save::{SaveChoice, SaveRequest};
 mod toolbar;
 mod view;
 
@@ -59,7 +65,7 @@ define_class!(
             if !path.is_null() {
                 // SAFETY: NSURL returns a null-terminated representation that lives in this pool.
                 let bytes = unsafe { std::ffi::CStr::from_ptr(path) }.to_bytes();
-                let path = std::path::PathBuf::from(<std::ffi::OsStr as std::os::unix::ffi::OsStrExt>::from_bytes(bytes));
+                let path = PathBuf::from(<std::ffi::OsStr as std::os::unix::ffi::OsStrExt>::from_bytes(bytes));
                 send(AppEvent::Open(vec![path]));
             }
             // The application shows the file in its own window, not in an NSDocument.
@@ -145,7 +151,9 @@ pub(crate) struct MediaView {
     view: Retained<View>,
     // The loading indicator, shown until the media is decoded.
     spinner: Option<Retained<Object>>,
-    _toolbar: Retained<Object>,
+    toolbars: Toolbars,
+    // The popover of the open edit tool.
+    popover: Option<Popover>,
     _attachment: WindowAttachment,
 }
 
@@ -163,13 +171,13 @@ impl MediaView {
         view.set_dark(theme == Theme::Dark);
         // SAFETY: The attachment keeps the window that retains the view open while this view
         // lives.
-        let toolbar = unsafe {
+        let toolbars = unsafe {
             attachment.set_native_view(NativeViewHandle::AppKit(Retained::as_ptr(&view) as _));
             let window: *mut Object = msg_send![&*view, window];
             // The unified toolbar changes the content size, so the window gets the size it was
             // built with back, keeping its top left corner in place.
             let frame: Rect = msg_send![window, frame];
-            let toolbar = install_toolbar(window);
+            let toolbars = Toolbars::install(window);
             let content_size = Size {
                 width: f64::from(size.width),
                 height: f64::from(size.height),
@@ -185,7 +193,9 @@ impl MediaView {
             let _: () = msg_send![window,
                 setCollectionBehavior: behavior | NS_WINDOW_COLLECTION_BEHAVIOR_FULL_SCREEN_PRIMARY
             ];
-            toolbar
+            // The view has focus, so the Copy and Select All menu items reach it.
+            let _: Bool = msg_send![window, makeFirstResponder: &*view];
+            toolbars
         };
         let spinner = if loading {
             Some(add_spinner(&view))
@@ -193,29 +203,35 @@ impl MediaView {
             show_size(&view);
             None
         };
+        // Only still bitmaps can be edited, the loading media has no frames.
+        toolbars.set_editable(view.media().is_still());
         // The view has its size now.
         view.update(Viewport::zoom_to_fit);
         view.advance_frame();
         Self {
             view,
             spinner,
-            _toolbar: toolbar,
+            toolbars,
+            popover: None,
             _attachment: attachment,
         }
     }
 
+    /// The shown media.
+    pub(crate) fn media(&self) -> Media {
+        self.view.media()
+    }
+
     /// Replaces the media, keeping the zoom or fitting it to the window.
     pub(crate) fn set_media(&mut self, media: Media, zoom_to_fit: bool) {
+        // Vectors and animations cannot be edited, only saved as bitmaps.
+        self.toolbars.set_editable(media.is_still());
         self.view
             .update(|viewport| viewport.set_media(media, zoom_to_fit));
         self.view.advance_frame();
         show_size(&self.view);
         if let Some(spinner) = self.spinner.take() {
-            // SAFETY: The spinner is a live subview of the view.
-            unsafe {
-                let _: () = msg_send![&*spinner, stopAnimation: null_mut::<Object>()];
-                let _: () = msg_send![&*spinner, removeFromSuperview];
-            }
+            remove_spinner(&spinner);
         }
     }
 
@@ -232,6 +248,159 @@ impl MediaView {
     /// Shows all of the media.
     pub(crate) fn zoom_to_fit(&self) {
         self.view.update(Viewport::zoom_to_fit);
+    }
+
+    fn window(&self) -> *mut Object {
+        // SAFETY: The view is in its window while this view lives.
+        unsafe { msg_send![&*self.view, window] }
+    }
+
+    /// Places the window in the middle of its screen, like new windows.
+    pub(crate) fn center_window(&self) {
+        // SAFETY: The window is a live NSWindow.
+        unsafe {
+            let _: () = msg_send![self.window(), center];
+        }
+    }
+
+    /// Shows the edit toolbar, or the view toolbar again.
+    pub(crate) fn set_editing(&mut self, editing: bool) {
+        self.close_tool();
+        let mode = if editing { Mode::Edit } else { Mode::View };
+        self.toolbars.show(self.window(), mode);
+    }
+
+    /// Marks the window as having unsaved changes, with a dot in its close button.
+    pub(crate) fn set_edited(&self, edited: bool) {
+        // SAFETY: The window is a live NSWindow.
+        unsafe {
+            let _: () = msg_send![self.window(), setDocumentEdited: objc_bool(edited)];
+        }
+    }
+
+    /// Shows the popover with controls of a tool below the toolbar button of `action`, and
+    /// the crop rectangle for a crop. Changes of the controls go to `window`, reset goes back
+    /// to the defaults.
+    pub(crate) fn show_tool(
+        &mut self,
+        window: WindowId,
+        tool: Tool,
+        controls: &[Control],
+        values: &[f32],
+        defaults: &[f32],
+        action: &str,
+    ) {
+        self.close_tool();
+        if tool == Tool::Crop {
+            self.view.set_cropping(true);
+        }
+        let popover = Popover::new(window, tool, controls, values, defaults);
+        popover.show(
+            self.toolbars.edit_item(action),
+            Retained::as_ptr(&self.view) as *mut Object,
+        );
+        self.popover = Some(popover);
+    }
+
+    /// Shows changed values of the open tool.
+    pub(crate) fn set_tool_values(&self, values: &[f32]) {
+        if let Some(popover) = &self.popover {
+            popover.set_values(values);
+        }
+    }
+
+    /// Closes the popover and crop rectangle of the open tool.
+    pub(crate) fn close_tool(&mut self) {
+        if self.popover.take().is_some() {
+            self.view.set_cropping(false);
+            // SAFETY: The window is a live NSWindow and the view is in it.
+            unsafe {
+                let _: Bool = msg_send![self.window(), makeFirstResponder: &*self.view];
+            }
+        }
+    }
+
+    /// Makes drags draw selections of a shape, or selects the whole image again, shown as on
+    /// in the toolbar.
+    pub(crate) fn set_selecting(&self, shape: Option<Shape>) {
+        self.view.set_selecting(shape);
+        self.toolbars.set_toggled(match shape {
+            None => "select.whole",
+            Some(Shape::Rectangle) => "select.rectangle",
+            Some(Shape::Ellipse) => "select.ellipse",
+        });
+    }
+
+    /// The selected part of the media.
+    pub(crate) fn selection(&self) -> Option<Selection> {
+        self.view.selection()
+    }
+
+    /// Selects everything outside the selection instead.
+    pub(crate) fn invert_selection(&self) {
+        self.view.invert_selection();
+    }
+
+    /// Asks in a sheet where to save the image, in which format and with which JPEG quality,
+    /// and at which size for a vector.
+    pub(crate) fn ask_save(&self, request: &SaveRequest<'_>) -> Option<SaveChoice> {
+        save::save_panel(self.window(), request)
+    }
+
+    /// Puts a PNG image on the clipboard.
+    pub(crate) fn copy_png(&self, png: &[u8]) {
+        autoreleasepool(|_| {
+            // SAFETY: NSData copies the bytes, the pasteboard retains the autoreleased image.
+            unsafe {
+                let data: *mut Object = msg_send![class!(NSData),
+                    dataWithBytes: png.as_ptr().cast::<std::ffi::c_void>(),
+                    length: png.len()
+                ];
+                let image: Allocated<Object> = msg_send![class!(NSImage), alloc];
+                let image: Option<Retained<Object>> = msg_send![image, initWithData: data];
+                let Some(image) = image else {
+                    return;
+                };
+                let pasteboard: *mut Object = msg_send![class!(NSPasteboard), generalPasteboard];
+                let _: isize = msg_send![pasteboard, clearContents];
+                let objects: *mut Object = msg_send![class!(NSArray), arrayWithObject: &*image];
+                let _: Bool = msg_send![pasteboard, writeObjects: objects];
+            }
+        });
+    }
+
+    /// Shows a preview of any size in the place of the image, or the image again.
+    pub(crate) fn set_preview(&self, preview: Option<Media>) {
+        self.view.set_preview(preview);
+    }
+
+    /// Places the crop rectangle at a position with a size in pixels.
+    pub(crate) fn set_crop_rect(&self, rect: (u32, u32, u32, u32)) {
+        self.view.set_crop_rect(rect);
+    }
+
+    /// The longest side of the view in device pixels, which previews do not need to exceed.
+    pub(crate) fn longest_pixels(&self) -> u32 {
+        self.view.longest_pixels()
+    }
+
+    /// Shows a spinning progress indicator while an edit is applied.
+    pub(crate) fn set_busy(&mut self, busy: bool) {
+        if busy && self.spinner.is_none() {
+            self.spinner = Some(add_spinner(&self.view));
+        } else if !busy && let Some(spinner) = self.spinner.take() {
+            remove_spinner(&spinner);
+        }
+    }
+
+    /// Makes the crop rectangle keep a width divided by height, or any shape.
+    pub(crate) fn set_crop_aspect(&self, aspect: Option<f64>) {
+        self.view.set_crop_aspect(aspect);
+    }
+
+    /// The crop rectangle in pixels.
+    pub(crate) fn crop_rect(&self) -> (u32, u32, u32, u32) {
+        self.view.crop_rect()
     }
 
     /// Follows the light or dark theme of the window.
@@ -265,7 +434,7 @@ impl MediaView {
                 let _: () = msg_send![operation,
                     runOperationModalForWindow: window,
                     delegate: null_mut::<Object>(),
-                    didRunSelector: null_mut::<std::ffi::c_void>(),
+                    didRunSelector: Sel(std::ptr::null()),
                     contextInfo: null_mut::<std::ffi::c_void>()
                 ];
             }
@@ -294,6 +463,15 @@ fn add_spinner(view: &View) -> Retained<Object> {
     }
 }
 
+// Stops and removes a progress indicator.
+fn remove_spinner(spinner: &Object) {
+    // SAFETY: The spinner is a live subview of the view.
+    unsafe {
+        let _: () = msg_send![spinner, stopAnimation: null_mut::<Object>()];
+        let _: () = msg_send![spinner, removeFromSuperview];
+    }
+}
+
 // Shows the size of the media as the subtitle of the window.
 fn show_size(view: &View) {
     let (width, height) = view.media().size();
@@ -307,6 +485,7 @@ fn show_size(view: &View) {
 
 impl Drop for MediaView {
     fn drop(&mut self) {
+        self.popover = None;
         self.view.stop();
     }
 }

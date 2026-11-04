@@ -16,12 +16,14 @@ use std::ptr::null_mut;
 use bcanvas::NativeContext;
 use bwindow::ffi::{file_drag_operation, perform_file_drop, register_dragged_types};
 use imageview_core::appkit::{NS_VIEW_HEIGHT_SIZABLE, NS_VIEW_WIDTH_SIZABLE, Point, Rect, Size};
+use imageview_core::edit::{Selection, Shape};
 use imageview_core::{Media, PRECISE_ZOOM_RATE, WHEEL_ZOOM_RATE};
 use objc2::rc::{Allocated, Retained};
-use objc2::runtime::{AnyObject as Object, Bool};
+use objc2::runtime::{AnyObject as Object, Bool, Sel};
 use objc2::{class, define_class, msg_send, sel};
 
 use super::headers::*;
+use crate::AppEvent;
 use crate::viewport::{Axis, Step, Viewport};
 
 define_class!(
@@ -178,7 +180,12 @@ define_class!(
 
         #[unsafe(method(mouseDown:))]
         fn _mouse_down(&self, event: *mut Object) {
-            if self.ivars().viewport.borrow_mut().drag_begin(self.pointer(event)) {
+            let pointer = self.pointer(event);
+            if self.ivars().viewport.borrow_mut().mark_begin(pointer) {
+                self.update(|_| {});
+                return;
+            }
+            if self.ivars().viewport.borrow_mut().drag_begin(pointer) {
                 // SAFETY: The cursor is a shared AppKit object, popped on mouse up.
                 unsafe {
                     let cursor: *mut Object = msg_send![class!(NSCursor), closedHandCursor];
@@ -190,14 +197,36 @@ define_class!(
         #[unsafe(method(mouseDragged:))]
         fn _mouse_dragged(&self, event: *mut Object) {
             let pointer = self.pointer(event);
-            if self.ivars().viewport.borrow_mut().drag_to(pointer) {
+            // SAFETY: AppKit passes a valid mouse NSEvent.
+            let modifiers: u64 = unsafe { msg_send![event, modifierFlags] };
+            let square = modifiers & NS_EVENT_MODIFIER_FLAG_SHIFT != 0;
+            let moved = {
+                let mut viewport = self.ivars().viewport.borrow_mut();
+                viewport.mark_drag(pointer, square) || viewport.drag_to(pointer)
+            };
+            if moved {
                 self.update(|_| {});
             }
         }
 
         #[unsafe(method(mouseUp:))]
         fn _mouse_up(&self, _: *mut Object) {
-            if self.ivars().viewport.borrow_mut().drag_end() {
+            let (marked, cleared) = {
+                let mut viewport = self.ivars().viewport.borrow_mut();
+                let marked = viewport.mark_end();
+                let cleared = viewport.selecting().is_some() && viewport.selection().is_none();
+                (marked, marked && cleared)
+            };
+            // A click without a drag goes back to editing the whole image, the menu follows a
+            // drawn selection.
+            if cleared {
+                super::send(AppEvent::Action("select.whole"));
+            } else if marked {
+                super::send(AppEvent::Action("select.changed"));
+            }
+            if marked {
+                self.update(|_| {});
+            } else if self.ivars().viewport.borrow_mut().drag_end() {
                 // SAFETY: The closed hand cursor of the drag is on top of the cursor stack.
                 unsafe {
                     let _: () = msg_send![class!(NSCursor), pop];
@@ -205,16 +234,21 @@ define_class!(
             }
         }
 
-        // Shows an open hand over media that can be dragged around.
+        // Shows a crosshair while cropping or selecting, or an open hand over media that can
+        // be dragged around.
         #[unsafe(method(resetCursorRects))]
         fn _reset_cursor_rects(&self) {
-            if !self.ivars().viewport.borrow().is_scrollable() {
-                return;
-            }
-            // SAFETY: The cursor is a shared AppKit object and the rectangle is the bounds.
+            let viewport = self.ivars().viewport.borrow();
+            // SAFETY: The cursors are shared AppKit objects and the rectangle is the bounds.
             unsafe {
+                let cursor: *mut Object = if viewport.is_marking() {
+                    msg_send![class!(NSCursor), crosshairCursor]
+                } else if viewport.is_scrollable() {
+                    msg_send![class!(NSCursor), openHandCursor]
+                } else {
+                    return;
+                };
                 let bounds: Rect = msg_send![self, bounds];
-                let cursor: *mut Object = msg_send![class!(NSCursor), openHandCursor];
                 let _: () = msg_send![self, addCursorRect: bounds, cursor: cursor];
             }
         }
@@ -224,6 +258,9 @@ define_class!(
             // SAFETY: AppKit passes a valid key NSEvent.
             let code: u16 = unsafe { msg_send![event, keyCode] };
             let step = match code {
+                // Return applies the open tool and escape cancels it.
+                KEY_RETURN | KEY_ENTER => return super::send(AppEvent::Action("tool.apply")),
+                KEY_ESCAPE => return super::send(AppEvent::Action("tool.cancel")),
                 KEY_UP => Step::LineBack,
                 KEY_DOWN => Step::LineForward,
                 KEY_PAGE_UP => Step::PageBack,
@@ -234,6 +271,59 @@ define_class!(
                 _ => return unsafe { msg_send![super(self), keyDown: event] },
             };
             self.update(|viewport| viewport.step(Axis::Vertical, step));
+        }
+
+        // The Copy and Select All items of the Edit menu reach the view when it has focus,
+        // and text fields of popovers when they have.
+        #[unsafe(method(copy:))]
+        fn _copy(&self, _: *mut Object) {
+            super::send(AppEvent::Action("edit.copy"));
+        }
+
+        #[unsafe(method(selectAll:))]
+        fn _select_all(&self, _: *mut Object) {
+            super::send(AppEvent::Action("select.all"));
+        }
+
+        // Undo and Redo of the Edit menu undo edits, text fields of popovers undo their typing
+        // themselves.
+        // The items of the Edit menu that reach the view follow the state of their actions.
+        #[unsafe(method(validateMenuItem:))]
+        fn _validate_menu_item(&self, item: *mut Object) -> Bool {
+            // SAFETY: AppKit passes a valid menu item.
+            let selector: Sel = unsafe { msg_send![item, action] };
+            let action = match selector {
+                selector if selector == sel!(undo:) => "edit.undo",
+                selector if selector == sel!(redo:) => "edit.redo",
+                selector if selector == sel!(copy:) => "edit.copy",
+                selector if selector == sel!(selectAll:) => "select.all",
+                // NSView validates the other items of its responder chain when it implements
+                // the validation, an action without it is enabled.
+                _ => {
+                    // SAFETY: The super call is only made when NSView implements it.
+                    return unsafe {
+                        let validates: Bool = msg_send![class!(NSView),
+                            instancesRespondToSelector: sel!(validateMenuItem:)
+                        ];
+                        if validates.as_bool() {
+                            msg_send![super(self), validateMenuItem: item]
+                        } else {
+                            Bool::YES
+                        }
+                    };
+                }
+            };
+            objc_bool(bwindow::is_menu_item_enabled(action))
+        }
+
+        #[unsafe(method(undo:))]
+        fn _undo(&self, _: *mut Object) {
+            super::send(AppEvent::Action("edit.undo"));
+        }
+
+        #[unsafe(method(redo:))]
+        fn _redo(&self, _: *mut Object) {
+            super::send(AppEvent::Action("edit.redo"));
         }
 
         #[unsafe(method(advanceFrame))]
@@ -300,6 +390,73 @@ impl View {
     /// The shown media.
     pub(super) fn media(&self) -> Media {
         self.ivars().viewport.borrow().media().clone()
+    }
+
+    /// Shows a crop rectangle over all of the media, or removes it.
+    pub(super) fn set_cropping(&self, cropping: bool) {
+        self.update(|viewport| viewport.set_cropping(cropping));
+    }
+
+    /// Shows a preview of any size in the place of the media, or the media again.
+    pub(super) fn set_preview(&self, preview: Option<Media>) {
+        self.update(|viewport| viewport.set_preview(preview));
+    }
+
+    /// Places the crop rectangle at a position with a size in pixels.
+    pub(super) fn set_crop_rect(&self, rect: (u32, u32, u32, u32)) {
+        self.update(|viewport| {
+            if let Some(crop) = viewport.crop() {
+                crop.set_rect(rect);
+            }
+        });
+    }
+
+    /// The longest side of the view in device pixels.
+    pub(super) fn longest_pixels(&self) -> u32 {
+        // SAFETY: The view is a live NSView, its window may not be there yet.
+        unsafe {
+            let bounds: Rect = msg_send![self, bounds];
+            let window: *mut Object = msg_send![self, window];
+            let scale: f64 = if window.is_null() {
+                1.0
+            } else {
+                msg_send![window, backingScaleFactor]
+            };
+            (bounds.size.width.max(bounds.size.height) * scale).ceil() as u32
+        }
+    }
+
+    /// Makes the crop rectangle keep a width divided by height.
+    pub(super) fn set_crop_aspect(&self, aspect: Option<f64>) {
+        self.update(|viewport| {
+            if let Some(crop) = viewport.crop() {
+                crop.set_aspect(aspect);
+            }
+        });
+    }
+
+    /// The crop rectangle in pixels, or all of the media without one.
+    pub(super) fn crop_rect(&self) -> (u32, u32, u32, u32) {
+        let mut viewport = self.ivars().viewport.borrow_mut();
+        let (width, height) = viewport.media().size();
+        viewport
+            .crop()
+            .map_or((0, 0, width as u32, height as u32), |crop| crop.rect())
+    }
+
+    /// Makes drags draw selections of a shape, or pan the media.
+    pub(super) fn set_selecting(&self, shape: Option<Shape>) {
+        self.update(|viewport| viewport.set_selecting(shape));
+    }
+
+    /// The selected part of the media.
+    pub(super) fn selection(&self) -> Option<Selection> {
+        self.ivars().viewport.borrow().selection()
+    }
+
+    /// Selects everything outside the selection instead.
+    pub(super) fn invert_selection(&self) {
+        self.update(Viewport::invert_selection);
     }
 
     /// Follows the light or dark theme.
