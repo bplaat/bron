@@ -12,3 +12,10 @@ workspace = true
 [dependencies]
 cpal = "0.18.2"
 sfxr = "0.1.4"
+
+[dev-dependencies]
+criterion = "0.8"
+
+[[bench]]
+name = "mixer"
+harness = false

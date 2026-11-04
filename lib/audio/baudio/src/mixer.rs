@@ -53,7 +53,7 @@ impl VoiceState {
 
     /// The sound at the current position, linearly interpolated between samples
     fn sample(&self) -> f32 {
-        let samples = &self.sound.samples;
+        let samples = self.sound.samples();
         let index = self.position as usize;
         let fraction = (self.position - index as f64) as f32;
         let next = match samples.get(index + 1) {
@@ -66,8 +66,8 @@ impl VoiceState {
 
     /// Adds the voice to the interleaved output
     fn render(&mut self, output: &mut [f32], channels: usize, sample_rate: f64, smoothing: f32) {
-        let length = self.sound.samples.len() as f64;
-        let step = f64::from(self.sound.sample_rate) / sample_rate * f64::from(self.play.pitch);
+        let length = self.sound.samples().len() as f64;
+        let step = f64::from(self.sound.sample_rate()) / sample_rate * f64::from(self.play.pitch);
         let pan = self.play.pan.clamp(-1.0, 1.0);
         let (left, right) = ((1.0 - pan).min(1.0), (1.0 + pan).min(1.0));
         let target = if self.stopping { 0.0 } else { self.play.volume };

@@ -102,6 +102,9 @@ overflow-checks = false
 [profile.release.package.base64]
 opt-level = 3
 
+[profile.release.package.baudio]
+opt-level = 3
+
 [profile.release.package.crc]
 opt-level = 3
 
