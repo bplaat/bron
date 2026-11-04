@@ -6,11 +6,14 @@
 
 //! The Wii Remote with Nunchuk, read with WPAD for the engine's Wii Remote controls.
 
+use alloc::format;
+use alloc::vec::Vec;
 use core::mem::MaybeUninit;
 
 use libogc_sys::*;
 use plaatcraft_engine::client::Controller;
 use plaatcraft_engine::client::input::{Context, Pad, Wiimote};
+use plaatcraft_engine::menu::Row;
 
 const STICK_DEADZONE: f32 = 0.12;
 
@@ -37,7 +40,9 @@ fn buttons(wpad: u32) -> u32 {
         .fold(0, |buttons, &(_, button)| buttons | button)
 }
 
-pub struct Remote;
+pub struct Remote {
+    remotes: [Wiimote; 4],
+}
 
 impl Remote {
     /// Starts WPAD with the pointer in the 2D screen space.
@@ -45,30 +50,79 @@ impl Remote {
         unsafe {
             WPAD_Init();
             WPAD_SetDataFormat(WPAD_CHAN_ALL, WPAD_FMT_BTNS_ACC_IR);
-            WPAD_SetVRes(0, width as u32, height as u32);
+            for channel in 0..4 {
+                WPAD_SetVRes(channel, width as u32, height as u32);
+            }
         }
-        Self
+        Self {
+            remotes: [Wiimote::default(); 4],
+        }
     }
 }
 
 impl Controller for Remote {
-    fn read(&mut self, context: Context) -> Pad {
-        let wiimote = unsafe {
+    fn poll(&mut self) {
+        unsafe {
             WPAD_ScanPads();
-            let mut expansion = MaybeUninit::<Expansion>::zeroed();
-            WPAD_Expansion(0, expansion.as_mut_ptr());
-            let expansion = expansion.assume_init();
-            let mut ir = MaybeUninit::<IrData>::zeroed();
-            WPAD_IR(0, ir.as_mut_ptr());
-            let ir = ir.assume_init();
-            Wiimote {
-                held: buttons(WPAD_ButtonsHeld(0)),
-                pressed: buttons(WPAD_ButtonsDown(0)),
-                stick: (expansion.kind == WPAD_EXP_NUNCHUK).then(|| stick(&expansion.joystick)),
-                pointer: (ir.valid != 0).then_some([ir.x, ir.y, ir.angle]),
+        }
+        for channel in 0..4 {
+            self.remotes[channel as usize] = unsafe {
+                let mut kind = 0;
+                if WPAD_Probe(channel, &mut kind) != 0 {
+                    self.remotes[channel as usize] = Wiimote::default();
+                    continue;
+                }
+                let mut expansion = MaybeUninit::<Expansion>::zeroed();
+                WPAD_Expansion(channel, expansion.as_mut_ptr());
+                let expansion = expansion.assume_init();
+                let mut ir = MaybeUninit::<IrData>::zeroed();
+                WPAD_IR(channel, ir.as_mut_ptr());
+                let ir = ir.assume_init();
+                Wiimote {
+                    held: buttons(WPAD_ButtonsHeld(channel)),
+                    pressed: buttons(WPAD_ButtonsDown(channel)),
+                    stick: (expansion.kind == WPAD_EXP_NUNCHUK).then(|| stick(&expansion.joystick)),
+                    pointer: (ir.valid != 0).then_some([ir.x, ir.y, ir.angle]),
+                }
+            };
+        }
+    }
+
+    fn read_player(&self, player: usize, context: Context) -> Pad {
+        self.remotes[player].pad(context)
+    }
+
+    fn status(&self) -> Vec<Row> {
+        (0..4)
+            .map(|channel| {
+                let mut kind = 0;
+                let connected = unsafe { WPAD_Probe(channel, &mut kind) == 0 };
+                Row {
+                    title: format!("Player {} - Wii Remote {}", channel + 1, channel + 1),
+                    details: if connected {
+                        let battery = unsafe { WPAD_BatteryLevel(channel) };
+                        let extension = if kind == WPAD_EXP_NUNCHUK as u32 {
+                            "Nunchuk ready"
+                        } else {
+                            "Attach a Nunchuk to play"
+                        };
+                        format!("{extension} - Battery {battery}%")
+                    } else {
+                        "Not connected - press 1 + 2".into()
+                    },
+                    enabled: false,
+                }
+            })
+            .collect()
+    }
+
+    fn reconnect(&mut self) {
+        for channel in 0..4 {
+            unsafe {
+                WPAD_Disconnect(channel);
             }
-        };
-        wiimote.pad(context)
+        }
+        self.remotes = [Wiimote::default(); 4];
     }
 }
 

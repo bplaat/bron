@@ -125,14 +125,19 @@ fn main() {
         .unwrap();
     }
     code.push_str("];\n");
-    for (name, file) in [("FONT", "font.png"), ("CURSOR", "cursor.png")] {
-        let texture = convert(
-            &mut data,
-            &manifest_dir.join("../plaatcraft-engine/assets").join(file),
-            false,
-        );
-        writeln!(code, "pub const {name}: Texture = {texture};").unwrap();
+    let client_assets = manifest_dir.join("../plaatcraft-engine/assets");
+    let font = convert(&mut data, &client_assets.join("font.png"), false);
+    writeln!(code, "pub const FONT: Texture = {font};").unwrap();
+    code.push_str("pub const CURSORS: [Texture; 4] = [\n");
+    for file in ["cursor1.png", "cursor2.png", "cursor3.png", "cursor4.png"] {
+        writeln!(
+            code,
+            "    {},",
+            convert(&mut data, &client_assets.join(file), false)
+        )
+        .unwrap();
     }
+    code.push_str("];\n");
     fs::write(out_dir.join("textures.bin"), data).expect("failed to write textures.bin");
     fs::write(out_dir.join("textures.rs"), code).expect("failed to write textures.rs");
 }

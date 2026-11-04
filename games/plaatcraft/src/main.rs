@@ -593,7 +593,11 @@ impl Game {
             // The build tools and the on-screen keyboard are for consoles, which have no chat
             // and keyboard.
             Some(
-                Action::Tool(_)
+                Action::SplitScreen
+                | Action::LocalPlayers(_)
+                | Action::Remotes
+                | Action::ReconnectRemotes
+                | Action::Tool(_)
                 | Action::Key(_)
                 | Action::Space
                 | Action::Erase

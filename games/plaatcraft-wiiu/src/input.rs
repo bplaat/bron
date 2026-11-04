@@ -9,8 +9,8 @@
 
 use core::mem::MaybeUninit;
 
-use plaatcraft_engine::client::Controller;
 use plaatcraft_engine::client::input::{Context, Gamepad, Pad, Wiimote};
+use plaatcraft_engine::client::{Controller, viewport};
 use wut_sys::*;
 
 const STICK_DEADZONE: f32 = 0.12;
@@ -67,11 +67,16 @@ fn stick(x: f32, y: f32) -> [f32; 2] {
     [x * scale, y * scale]
 }
 
+// KPAD's horizon vector uses screen coordinates, with positive y pointing down.
+fn pointer_angle(angle: KPADVec2D) -> f32 {
+    atan2f(angle.y, angle.x).to_degrees()
+}
+
 pub struct Controllers {
     size: [f32; 2],
     gamepad: Gamepad,
-    wiimote: Wiimote,
-    connected: bool,
+    wiimotes: [Wiimote; 4],
+    players: usize,
 }
 
 impl Controllers {
@@ -84,8 +89,8 @@ impl Controllers {
         Self {
             size,
             gamepad: Gamepad::default(),
-            wiimote: Wiimote::default(),
-            connected: false,
+            wiimotes: [Wiimote::default(); 4],
+            players: 1,
         }
     }
 
@@ -94,9 +99,13 @@ impl Controllers {
         let mut error = 0;
         let read = unsafe { VPADRead(VPAD_CHAN_0, &mut status, 1, &mut error) };
         let gamepad = &mut self.gamepad;
-        gamepad.pressed = 0;
-        gamepad.touched = false;
         if read < 1 || error != VPAD_READ_SUCCESS {
+            if error != VPAD_READ_NO_SAMPLES {
+                *gamepad = Gamepad::default();
+            } else {
+                gamepad.pressed = 0;
+                gamepad.touched = false;
+            }
             return;
         }
         gamepad.held = buttons(&GAMEPAD_BUTTONS, status.hold);
@@ -115,28 +124,30 @@ impl Controllers {
         });
     }
 
-    fn read_wiimote(&mut self) {
+    fn read_wiimote(&mut self, channel: usize) {
         let mut status = MaybeUninit::<KPADStatus>::zeroed();
         let mut error = 0;
-        let read = unsafe { KPADReadEx(WPAD_CHAN_0, status.as_mut_ptr(), 1, &mut error) };
-        self.wiimote.pressed = 0;
+        let read = unsafe { KPADReadEx(channel as u32, status.as_mut_ptr(), 1, &mut error) };
+        self.wiimotes[channel].pressed = 0;
         if read == 0 {
             // Without samples the Wii Remote is disconnected or nothing changed
             if error != KPAD_ERROR_NO_SAMPLES {
-                self.wiimote = Wiimote::default();
-                self.connected = false;
+                self.wiimotes[channel] = Wiimote::default();
             }
             return;
         }
         let status = unsafe { status.assume_init() };
+        if error != KPAD_ERROR_OK || status.error != 0 {
+            self.wiimotes[channel] = Wiimote::default();
+            return;
+        }
         let nunchuk = matches!(
             status.extension_type,
             WPAD_EXT_NUNCHUK | WPAD_EXT_MPLUS_NUNCHUK
         )
         .then(|| unsafe { status.extension.nunchuk });
         let (held, pressed) = nunchuk.map_or((0, 0), |n| (n.hold, n.trigger));
-        self.connected = true;
-        self.wiimote = Wiimote {
+        self.wiimotes[channel] = Wiimote {
             held: buttons(&WIIMOTE_BUTTONS, status.hold | held),
             pressed: buttons(&WIIMOTE_BUTTONS, status.trigger | pressed),
             stick: nunchuk.map(|n| stick(n.stick.x, n.stick.y)),
@@ -145,7 +156,7 @@ impl Controllers {
                 [
                     (status.pos.x + 1.0) * 0.5 * self.size[0],
                     (status.pos.y + 1.0) * 0.5 * self.size[1],
-                    0.0,
+                    pointer_angle(status.angle),
                 ]
             }),
         };
@@ -153,14 +164,117 @@ impl Controllers {
 }
 
 impl Controller for Controllers {
-    fn read(&mut self, context: Context) -> Pad {
+    fn poll(&mut self) {
         self.read_gamepad();
-        self.read_wiimote();
-        let pad = self.gamepad.pad(context);
-        if self.connected {
-            pad.merge(self.wiimote.pad(context))
+        for channel in 0..4 {
+            self.read_wiimote(channel);
+        }
+    }
+
+    fn local_players(&mut self, count: usize) {
+        self.players = count;
+    }
+
+    fn cursor_index(&self, player: usize) -> Option<usize> {
+        // The GamePad uses touch, while Remote channel numbers select the four hand images.
+        player
+            .checked_sub(1)
+            .filter(|&channel| channel < self.wiimotes.len())
+    }
+
+    fn read_player(&self, player: usize, context: Context) -> Pad {
+        if player == 0 {
+            let mut gamepad = self.gamepad;
+            if self.players > 1
+                && context == Context::Play
+                && let Some([x, y]) = gamepad.touch
+            {
+                let [_, _, width, height] = viewport(self.players, 0);
+                // Touches follow the mirrored TV image, and only target player 1's view.
+                gamepad.touch = (x < self.size[0] * width && y < self.size[1] * height)
+                    .then_some([x / width, y / height]);
+                gamepad.touched &= gamepad.touch.is_some();
+            }
+            gamepad.pad(context)
         } else {
-            pad
+            self.wiimotes[player - 1].pad(context)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn gamepad_is_player_one_and_the_four_remotes_are_players_two_to_five() {
+        let mut controllers = Controllers {
+            size: [640.0, 480.0],
+            gamepad: Gamepad {
+                left: [0.2, 0.3],
+                ..Gamepad::default()
+            },
+            wiimotes: core::array::from_fn(|channel| Wiimote {
+                stick: Some([0.0, (channel + 1) as f32 / 5.0]),
+                pressed: Wiimote::A,
+                ..Wiimote::default()
+            }),
+            players: 5,
+        };
+        assert_eq!(controllers.read_player(0, Context::Play).walk, [0.2, 0.3]);
+        assert!(
+            !controllers
+                .read_player(0, Context::Menu)
+                .pressed(plaatcraft_engine::client::input::Button::Select)
+        );
+        assert_eq!(controllers.cursor_index(0), None);
+        for player in 1..=4 {
+            assert_eq!(
+                controllers.read_player(player, Context::Play).walk,
+                [0.0, player as f32 / 5.0]
+            );
+            assert_eq!(controllers.cursor_index(player), Some(player - 1));
+        }
+        controllers.local_players(1);
+        assert_eq!(controllers.read_player(0, Context::Play).walk, [0.2, 0.3]);
+        assert!(
+            !controllers
+                .read_player(0, Context::Menu)
+                .pressed(plaatcraft_engine::client::input::Button::Select)
+        );
+    }
+
+    #[test]
+    fn gamepad_touch_clicks_without_a_hand_cursor() {
+        let controllers = Controllers {
+            size: [640.0, 480.0],
+            gamepad: Gamepad {
+                touch: Some([320.0, 240.0]),
+                touched: true,
+                ..Gamepad::default()
+            },
+            wiimotes: [Wiimote::default(); 4],
+            players: 5,
+        };
+        for context in [Context::Menu, Context::Inventory] {
+            let pad = controllers.read_player(0, context);
+            assert!(pad.pressed(plaatcraft_engine::client::input::Button::Select));
+            assert_eq!(pad.pointer, Some([320.0, 240.0, 0.0]));
+            assert_eq!(controllers.cursor_index(0), None);
+        }
+    }
+
+    #[test]
+    fn horizon_vectors_produce_cursor_roll_in_degrees() {
+        for ([x, y], expected) in [
+            ([1.0, 0.0], 0.0),
+            ([1.0, 1.0], 45.0),
+            ([0.0, 1.0], 90.0),
+            ([1.0, -1.0], -45.0),
+            ([0.0, -1.0], -90.0),
+            ([-1.0, 0.0], 180.0),
+        ] {
+            assert!((pointer_angle(KPADVec2D { x, y }) - expected).abs() < 0.001);
         }
     }
 }

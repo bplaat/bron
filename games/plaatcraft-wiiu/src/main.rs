@@ -41,6 +41,7 @@ impl Platform for WiiU {
     type Audio = Ax;
     type Controller = Controllers;
 
+    const MAX_LOCAL_PLAYERS: usize = 5;
     const NAME: &'static str = "Wii U";
     // The render distance is fixed
     const MENU: Menu = Menu {

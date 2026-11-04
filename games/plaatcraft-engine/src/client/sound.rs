@@ -30,17 +30,12 @@ pub fn samples(effect: Effect) -> Vec<i16> {
 
 pub(super) struct Sounds<A> {
     audio: A,
-    footsteps: Footsteps,
     volume: f32,
 }
 
 impl<A: Audio> Sounds<A> {
-    pub(super) fn new(audio: A) -> Self {
-        Self {
-            audio,
-            footsteps: Footsteps::default(),
-            volume: 1.0,
-        }
+    pub(super) const fn new(audio: A) -> Self {
+        Self { audio, volume: 1.0 }
     }
 
     pub(super) fn set_volume(&mut self, volume: u8) {
@@ -78,10 +73,55 @@ impl<A: Audio> Sounds<A> {
     }
 
     /// Jumps, footsteps, splashes and landings since `before`
-    pub(super) fn movement(&mut self, before: Movement, camera: &Camera, ground: Option<u8>) {
+    pub(super) fn movement(
+        &mut self,
+        footsteps: &mut Footsteps,
+        before: Movement,
+        camera: &Camera,
+        ground: Option<u8>,
+    ) {
         let (audio, volume) = (&mut self.audio, self.volume);
-        self.footsteps.update(before, camera, ground, |play| {
+        footsteps.update(before, camera, ground, |play| {
             Self::play(audio, volume, play);
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Default)]
+    struct Output {
+        effects: Vec<Effect>,
+    }
+    impl Audio for Output {
+        fn play(&mut self, effect: Effect, _: [f32; 2], _: f32) {
+            self.effects.push(effect);
+        }
+    }
+
+    #[test]
+    fn one_players_flying_does_not_reset_another_players_footsteps() {
+        let mut sounds = Sounds::new(Output::default());
+        let mut walking = Footsteps::default();
+        let mut flying = Footsteps::default();
+        let mut camera = Camera {
+            grounded: true,
+            ..Camera::default()
+        };
+        let before = Movement::of(&camera);
+        camera.position[0] += 1.2;
+        sounds.movement(&mut walking, before, &camera, Some(3));
+        assert!(sounds.audio.effects.is_empty());
+        let flyer = Camera {
+            flying: true,
+            ..Camera::default()
+        };
+        sounds.movement(&mut flying, Movement::of(&flyer), &flyer, None);
+        let before = Movement::of(&camera);
+        camera.position[0] += 1.2;
+        sounds.movement(&mut walking, before, &camera, Some(3));
+        assert_eq!(sounds.audio.effects.len(), 1);
     }
 }

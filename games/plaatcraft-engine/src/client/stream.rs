@@ -50,7 +50,7 @@ struct Built<M> {
 }
 
 struct Shared<M> {
-    center: Coord,
+    views: Vec<Coord>,
     seed: u64,
     epoch: u64,
     // Edited chunks are rebuilt first, the others nearest first
@@ -75,7 +75,7 @@ struct Shared<M> {
 impl<M> Default for Shared<M> {
     fn default() -> Self {
         Self {
-            center: Coord::default(),
+            views: Vec::new(),
             seed: 0,
             epoch: 0,
             urgent: Vec::new(),
@@ -126,6 +126,7 @@ pub(super) struct Stream<P: Platform> {
     // are still rebuilt, and of guests' chunks built before an edit, miss them.
     edits: BTreeMap<Coord, Vec<Edit>>,
     center: Option<Coord>,
+    views: Vec<Coord>,
     pub(super) revision: u64,
     epoch: u64,
     pub(super) remote: bool,
@@ -156,6 +157,7 @@ impl<P: Platform> Stream<P> {
             nearby: BTreeMap::new(),
             edits: BTreeMap::new(),
             center: None,
+            views: Vec::new(),
             revision: 0,
             epoch: 0,
             remote: false,
@@ -179,6 +181,7 @@ impl<P: Platform> Stream<P> {
         self.epoch += 1;
         self.revision = 0;
         self.centers.clear();
+        self.views.clear();
         self.chunks.clear();
         self.nearby.clear();
         self.needed.clear();
@@ -221,7 +224,26 @@ impl<P: Platform> Stream<P> {
     }
 
     /// Keeps the chunks around the player and takes the chunks the worker finished.
+    pub(super) fn set_views(&mut self, views: Vec<Coord>) {
+        if self.views != views {
+            self.center = None;
+            self.views = views;
+        }
+    }
+
+    pub(super) fn distance(&self) -> i64 {
+        if self.views.is_empty() {
+            P::RENDER_DISTANCE
+        } else {
+            (P::RENDER_DISTANCE / if self.views.len() >= 4 { 3 } else { 2 }).max(4)
+        }
+    }
+
     pub(super) fn update(&mut self, center: Coord) {
+        let mut views = self.views.clone();
+        views.push(center);
+        let distance = self.distance();
+        let visible = |coord| views.iter().any(|&view| in_range(coord, view, distance));
         let mut shared = self.worker.shared.lock();
         for built in core::mem::take(&mut shared.built) {
             if built.epoch != self.epoch {
@@ -233,7 +255,7 @@ impl<P: Platform> Stream<P> {
                 Some(_) => _ = self.needed.remove(&built.coord),
                 None => {}
             }
-            if in_range(built.coord, center, P::RENDER_DISTANCE) {
+            if visible(built.coord) {
                 self.nearby.remove(&built.coord);
                 self.chunks.insert(
                     built.coord,
@@ -249,46 +271,38 @@ impl<P: Platform> Stream<P> {
             return;
         }
         self.center = Some(center);
-        shared.center = center;
-        self.chunks
-            .retain(|&coord, _| in_range(coord, center, P::RENDER_DISTANCE));
+        shared.views.clone_from(&views);
+        self.chunks.retain(|&coord, _| visible(coord));
         if moved {
-            self.requests
-                .retain(|&c| in_range(c, center, P::RENDER_DISTANCE));
-            self.requested
-                .retain(|&c| in_range(c, center, P::RENDER_DISTANCE));
-            self.in_flight
-                .retain(|&c| in_range(c, center, P::RENDER_DISTANCE));
-            self.required
-                .retain(|&c, _| in_range(c, center, P::RENDER_DISTANCE));
-            self.needed
-                .retain(|&c, _| in_range(c, center, P::RENDER_DISTANCE));
-            shared
-                .supplied
-                .retain(|&c, _| in_range(c, center, P::RENDER_DISTANCE));
-            shared
-                .urgent
-                .retain(|&c| in_range(c, center, P::RENDER_DISTANCE));
+            self.requests.retain(|&c| visible(c));
+            self.requested.retain(|&c| visible(c));
+            self.in_flight.retain(|&c| visible(c));
+            self.required.retain(|&c, _| visible(c));
+            self.needed.retain(|&c, _| visible(c));
+            shared.supplied.retain(|&c, _| visible(c));
+            shared.urgent.retain(|&c| visible(c));
             self.nearby.retain(|&coord, _| {
-                (coord.0 - center.0).abs() <= 2 && (coord.1 - center.1).abs() <= 2
+                views.iter().any(|center| {
+                    (coord.0 - center.0).abs() <= 2 && (coord.1 - center.1).abs() <= 2
+                })
             });
         }
-        shared
-            .queue
-            .retain(|&coord| in_range(coord, center, P::RENDER_DISTANCE));
-        for z in -P::RENDER_DISTANCE..=P::RENDER_DISTANCE {
-            for x in -P::RENDER_DISTANCE..=P::RENDER_DISTANCE {
-                let coord = (center.0 + x, center.1 + z);
-                if in_range(coord, center, P::RENDER_DISTANCE)
-                    && !self.chunks.contains_key(&coord)
-                    && !shared.loading(coord)
-                    && !self.requested.contains(&coord)
-                {
-                    if self.remote {
-                        self.requested.insert(coord);
-                        self.requests.push(coord);
-                    } else {
-                        shared.queue.push(coord);
+        shared.queue.retain(|&coord| visible(coord));
+        for &center in &views {
+            for z in -distance..=distance {
+                for x in -distance..=distance {
+                    let coord = (center.0 + x, center.1 + z);
+                    if in_range(coord, center, distance)
+                        && !self.chunks.contains_key(&coord)
+                        && !shared.loading(coord)
+                        && !self.requested.contains(&coord)
+                    {
+                        if self.remote {
+                            self.requested.insert(coord);
+                            self.requests.push(coord);
+                        } else {
+                            shared.queue.push(coord);
+                        }
                     }
                 }
             }
@@ -667,18 +681,27 @@ fn work<P: Platform>(worker: &Worker<P>) {
         } else if !shared.urgent.is_empty() {
             shared.urgent.remove(0)
         } else {
-            let center = shared.center;
             let nearest = (0..shared.queue.len())
                 .min_by_key(|&i| {
-                    (shared.queue[i].0 - center.0).pow(2) + (shared.queue[i].1 - center.1).pow(2)
+                    shared
+                        .views
+                        .iter()
+                        .map(|center| {
+                            (shared.queue[i].0 - center.0).pow(2)
+                                + (shared.queue[i].1 - center.1).pow(2)
+                        })
+                        .min()
+                        .unwrap_or(0)
                 })
                 .expect("Queue has chunks");
             shared.queue.swap_remove(nearest)
         };
         shared.building = Some(coord);
         // Edits rebuild the chunks around the player, so their neighbors are kept too
-        let center = shared.center;
-        let around = (0..9).map(move |index| world::neighbor(center, index));
+        let around = shared
+            .views
+            .iter()
+            .flat_map(|&center| (0..9).map(move |index| world::neighbor(center, index)));
         let jobs = shared.jobs.iter().map(|&(_, coord, _)| coord);
         let pending: Vec<_> = shared
             .urgent
@@ -719,5 +742,45 @@ fn work<P: Platform>(worker: &Worker<P>) {
                 shared.built.push(built);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::client::game::tests::TestPlatform;
+    use crate::client::storage::Storage;
+
+    #[test]
+    fn split_screen_streams_and_retains_terrain_around_every_local_player() {
+        let storage = Storage::<TestPlatform>::new();
+        let mut stream = Stream::<TestPlatform>::start(storage.sqlite);
+        stream.set_views(alloc::vec![(100, 100)]);
+        stream.update((0, 0));
+        assert_eq!(stream.distance(), 4);
+        {
+            let mut shared = stream.worker.shared.lock();
+            assert!(shared.queue.contains(&(0, 0)));
+            assert!(shared.queue.contains(&(100, 100)));
+            assert!(!shared.queue.contains(&(50, 50)));
+            for coord in [(0, 0), (100, 100)] {
+                shared.built.push(Built {
+                    coord,
+                    revision: 0,
+                    epoch: 0,
+                    blocks: Vec::new(),
+                    mesh: (),
+                });
+            }
+        }
+        stream.update((0, 0));
+        assert!(stream.chunks.contains_key(&(0, 0)));
+        assert!(stream.chunks.contains_key(&(100, 100)));
+        stream.set_views(Vec::new());
+        stream.update((0, 0));
+        assert_eq!(stream.distance(), 8);
+        assert!(stream.chunks.contains_key(&(0, 0)));
+        assert!(!stream.chunks.contains_key(&(100, 100)));
+        assert!(stream.worker.shared.lock().queue.contains(&(7, 0)));
     }
 }

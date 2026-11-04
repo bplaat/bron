@@ -27,8 +27,7 @@ pub(super) struct Hud<'a, G> {
 }
 
 impl<'a, G: Gpu> Hud<'a, G> {
-    pub(super) fn begin(gpu: &'a mut G) -> Self {
-        let [width, height] = gpu.size();
+    pub(super) fn begin(gpu: &'a mut G, [width, height]: [f32; 2]) -> Self {
         gpu.projection(&ortho(width, height), true);
         gpu.model_view(&[
             [1.0, 0.0, 0.0, 0.0],
@@ -225,12 +224,12 @@ impl<'a, G: Gpu> Hud<'a, G> {
     }
 
     /// The Wii Remote cursor, rolled with the remote like in the Wii menu.
-    pub(super) fn cursor(&mut self, [x, y, angle]: [f32; 3]) {
+    pub(super) fn cursor(&mut self, [x, y, angle]: [f32; 3], player: usize) {
         // The cursor image's tip is at its center, so it turns around the pointer
         let (sin, cos) = angle.to_radians().sin_cos();
         let corner = |dx: f32, dy: f32| [x + dx * cos - dy * sin, y + dx * sin + dy * cos];
         self.quad(
-            Texture::Cursor,
+            Texture::Cursor(player),
             [
                 corner(-24.0, -24.0),
                 corner(24.0, -24.0),

@@ -41,8 +41,9 @@ menu opens, and when leaving a world.
 
 ## Controls
 
-The TV shows the game and the GamePad a copy of it. The GamePad plays like Minecraft: Wii U
-Edition, a Wii Remote with a Nunchuk plays like on the Wii at the same time:
+The TV shows the game and the GamePad a copy of it. Player 1 uses the GamePad, with controls
+like Minecraft: Wii U Edition. Additional local players use Wii Remotes with Nunchuks, with
+the same controls as on the Wii:
 
 | GamePad      | Action                                |
 | ------------ | ------------------------------------- |
@@ -60,10 +61,15 @@ Edition, a Wii Remote with a Nunchuk plays like on the Wii at the same time:
 The menus and the inventory are touched on the GamePad, or moved through with the D-pad, A
 presses and B goes back. Text fields have an on-screen keyboard where B erases and + finishes.
 
+For split-screen, pause a Local Play world and choose 2-5 players. Player 1 uses the GamePad;
+the others use Wii Remotes 1-4 with Nunchuks, managed through HOME. Menus and inventory are
+full-screen and controlled by player 1.
+
 ## How it works
 
-The render distance is fixed at 12 chunks. A worker on its own CPU core loads or generates,
-lights, and meshes chunks nearest first, the network polls its sockets on another core. The
+The render distance is 12 chunks, or 4-6 per split-screen view. A worker on its own CPU core
+loads or generates, lights, and meshes chunks nearest first; the network polls its sockets
+on another core. The
 engine's chunk quads become GX2 vertex buffers with linear day and night colors from the light
 palette, so the night needs no new meshes. One Latte shader in `src/shader.vsh` and
 `src/shader.psh` draws with sRGB textures and output, smooth radial fog per pixel, and

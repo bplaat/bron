@@ -60,8 +60,8 @@ Hold the Wii Remote with the Nunchuk attached:
 | 1                | Build tools, day/night, and chat      |
 | + / Home         | Pause menu                            |
 
-The menus are the desktop game's: the title screen over the turning default world with Single
-Player, Multi Player and Settings, the world list, the LAN world list, and the pause menu.
+The menus are the desktop game's: the title screen over the turning default world with Local
+Play, Online Play and Settings, the world list, the LAN world list, and the pause menu.
 Point with the Wii Remote or move with the D-pad, A presses and B goes back, text fields
 have an on-screen keyboard where B erases and + finishes. In the inventory, the D-pad browses
 the blocks, A assigns a block to the selected hotbar slot, C/Z changes the slot, and B or
@@ -69,9 +69,12 @@ Minus closes it. The on-screen keyboard accepts commands and chat. Build tools p
 `/fill`, `/clear`, and `/undo` without typing. A selection holds up to 32768 blocks;
 undo remembers up to 32 changes within a 65536-block memory budget.
 
+For split-screen, pause a Local Play world and choose 2-4 players, each with a Wii Remote
+and Nunchuk. Menus and inventory are full-screen and controlled by player 1.
+
 ## How it works
 
-The render distance is fixed at 8 chunks. A worker loads or generates, lights, and meshes
+The render distance is 8 chunks, or 4 per split-screen view. A worker loads or generates, lights, and meshes
 chunks nearest first, edited chunks before their neighbors, and the main thread keeps their
 compressed blocks for collision and picking. The engine's chunk quads become GX display lists
 with fixed-point positions for slabs, stairs, and liquid heights, with per-corner lighting from

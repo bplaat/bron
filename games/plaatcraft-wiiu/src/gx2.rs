@@ -320,7 +320,7 @@ impl Gx2 {
             Texture::Sky(layer) => (textures::SKY + layer, &self.repeat),
             Texture::Character(part) => (textures::CHARACTERS + part, &self.clamp),
             Texture::Font => (textures::FONT, &self.clamp),
-            Texture::Cursor => (textures::CURSOR, &self.clamp),
+            Texture::Cursor(player) => (textures::CURSORS + player, &self.clamp),
             Texture::None => (textures::WHITE, &self.clamp),
         };
         unsafe {
@@ -457,6 +457,21 @@ impl Gpu for Gx2 {
         unsafe { GX2SetVertexUniformReg(self.params, 4, params.as_ptr().cast()) };
         self.water(false);
         self.fog(None);
+    }
+
+    fn viewport(&mut self, [x, y, width, height]: [f32; 4]) {
+        unsafe {
+            let surface = &(*WHBGfxGetTVColourBuffer()).surface;
+            let fw = surface.width as f32;
+            let fh = surface.height as f32;
+            GX2SetViewport(x * fw, y * fh, width * fw, height * fh, 0.0, 1.0);
+            GX2SetScissor(
+                (x * fw) as u32,
+                (y * fh) as u32,
+                (width * fw) as u32,
+                (height * fh) as u32,
+            );
+        }
     }
 
     fn projection(&mut self, matrix: &Mtx44, _orthographic: bool) {

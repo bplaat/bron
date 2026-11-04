@@ -196,6 +196,10 @@ pub enum Page {
     Title,
     /// The pause page of a played world.
     Pause,
+    /// Local player count.
+    SplitScreen,
+    /// Wii Remote connection management.
+    Remotes,
     /// The saved worlds.
     Worlds,
     /// Naming a new world.
@@ -229,7 +233,7 @@ impl Page {
 
     /// Whether the page has a list of worlds.
     pub const fn listing(self) -> bool {
-        matches!(self, Self::Worlds | Self::Multiplayer)
+        matches!(self, Self::Worlds | Self::Multiplayer | Self::Remotes)
     }
 
     const fn main(self) -> bool {
@@ -244,6 +248,10 @@ pub enum Action {
     SinglePlayer,
     MultiPlayer,
     Resume,
+    SplitScreen,
+    LocalPlayers(usize),
+    Remotes,
+    ReconnectRemotes,
     Settings,
     Quit,
     OpenToLan,
@@ -432,6 +440,7 @@ impl Layout {
                 .enumerate()
                 .map(|(row, index)| Widget {
                     height: ROW_HEIGHT - 4.0,
+                    enabled: menu.rows[index].enabled,
                     ..Widget::wide(Action::Row(index), LIST_TOP + row as f32 * ROW_HEIGHT)
                 })
                 .collect()
@@ -439,23 +448,43 @@ impl Layout {
         let y = LIST_BOTTOM + 16.0;
         match menu.page {
             Page::Title => {
-                let mut actions = vec![
-                    (Action::SinglePlayer, true),
-                    (Action::MultiPlayer, true),
-                    (Action::Settings, true),
-                ];
+                let mut actions = vec![(Action::SinglePlayer, true), (Action::MultiPlayer, true)];
+                if menu.remotes {
+                    actions.push((Action::Remotes, true));
+                }
+                actions.push((Action::Settings, true));
                 if platform.quits {
                     actions.push((Action::Quit, true));
                 }
                 main(&actions)
             }
             Page::Pause => {
-                let mut actions = vec![(Action::Resume, true), (Action::Settings, true)];
+                let mut actions = vec![(Action::Resume, true)];
+                if menu.splitscreen {
+                    actions.push((Action::SplitScreen, true));
+                }
+                if menu.remotes {
+                    actions.push((Action::Remotes, true));
+                }
                 if let Session::Host { lan } = menu.session {
                     actions.push((Action::OpenToLan, lan.is_none()));
                 }
+                actions.push((Action::Settings, true));
                 actions.push((Action::QuitToTitle, true));
                 main(&actions)
+            }
+            Page::SplitScreen => {
+                let mut actions: Vec<_> = (1..=menu.max_local_players.max(4))
+                    .map(|count| (Action::LocalPlayers(count), true))
+                    .collect();
+                actions.push((Action::Back, true));
+                main(&actions)
+            }
+            Page::Remotes => {
+                let mut widgets = rows(menu);
+                widgets.push(Widget::wide(Action::ReconnectRemotes, y));
+                widgets.push(Widget::button(Action::Back, y + 50.0));
+                (y + 90.0, widgets)
             }
             Page::Worlds => {
                 let selected = menu.selected.is_some();
@@ -604,6 +633,14 @@ pub struct Menu {
     pub page: Page,
     /// How the player is in a world.
     pub session: Session,
+    /// Whether this host can add local players.
+    pub splitscreen: bool,
+    /// Whether this platform manages Wii Remotes in game.
+    pub remotes: bool,
+    /// The current number of local players.
+    pub local_players: usize,
+    /// The platform's local player limit; zero uses the four-player default.
+    pub max_local_players: usize,
     /// The player name.
     pub username: String,
     /// The rows of the shown list.
@@ -629,6 +666,13 @@ impl Hash for Menu {
     fn hash<H: Hasher>(&self, state: &mut H) {
         (self.page, self.session, &self.username, &self.rows).hash(state);
         (self.selected, self.scroll, &self.text, &self.error).hash(state);
+        (
+            self.splitscreen,
+            self.remotes,
+            self.local_players,
+            self.max_local_players,
+        )
+            .hash(state);
     }
 }
 
@@ -815,6 +859,8 @@ impl Menu {
         let open = platform.open;
         match self.page {
             Page::Title | Page::Pause => DESCRIPTION.into(),
+            Page::SplitScreen => self.text.clone(),
+            Page::Remotes => "Reconnect, then press 1 + 2 on each Remote".into(),
             page if page.listing()
                 && let Some(error) = &self.error =>
             {
@@ -841,8 +887,22 @@ impl Menu {
         let page = self.page;
         let on = |name: &str, on: bool| format!("{name}: {}", if on { "ON" } else { "OFF" });
         let label = match action {
-            Action::SinglePlayer => "Single Player",
-            Action::MultiPlayer => "Multi Player",
+            Action::SinglePlayer => "Local Play",
+            Action::MultiPlayer => "Online Play",
+            Action::SplitScreen => "Split-screen",
+            Action::LocalPlayers(count) => {
+                return format!(
+                    "{count} Player{}{}",
+                    if count == 1 { "" } else { "s" },
+                    if self.local_players == count {
+                        " (Current)"
+                    } else {
+                        ""
+                    }
+                );
+            }
+            Action::Remotes => "Wii Remotes",
+            Action::ReconnectRemotes => "Reconnect Wii Remotes",
             Action::Resume => "Back to Game",
             Action::Settings => "Settings",
             Action::Quit => "Quit",
@@ -892,11 +952,13 @@ impl Menu {
         match self.page {
             Page::Title => TITLE,
             Page::Pause => "Game Paused",
+            Page::SplitScreen => "Split-screen",
+            Page::Remotes => "Wii Remotes",
             Page::Worlds => "Select World",
             Page::Create => "Create New World",
             Page::Rename => "Rename World",
             Page::Delete => "Delete World",
-            Page::Multiplayer => "Multi Player",
+            Page::Multiplayer => "Online Play",
             Page::DirectConnect => "Direct Connect",
             Page::Username => "Username",
             Page::Settings => "Settings",
@@ -1362,6 +1424,8 @@ mod tests {
         let pages = [
             Page::Title,
             Page::Pause,
+            Page::SplitScreen,
+            Page::Remotes,
             Page::Worlds,
             Page::Create,
             Page::Rename,
@@ -1465,6 +1529,84 @@ mod tests {
             menu.label(Action::OpenToLan, settings),
             "LAN Open on Port 47820"
         );
+    }
+
+    #[test]
+    fn five_player_option_only_appears_on_supported_platforms() {
+        let mut menu = menu(Page::SplitScreen, 0);
+        for maximum in [4, 5] {
+            menu.max_local_players = maximum;
+            let layout = Layout::new(&menu, DESKTOP, [640.0, 480.0], [0.0; 4]);
+            assert_eq!(
+                layout
+                    .actions()
+                    .filter(|action| matches!(action, Action::LocalPlayers(_)))
+                    .count(),
+                maximum
+            );
+            assert_eq!(
+                layout
+                    .actions()
+                    .any(|action| action == Action::LocalPlayers(5)),
+                maximum == 5
+            );
+        }
+    }
+
+    #[test]
+    fn settings_is_directly_above_quit_in_title_and_pause_menus() {
+        for page in [Page::Title, Page::Pause] {
+            for remotes in [false, true] {
+                for session in [
+                    Session::Guest,
+                    Session::Host { lan: None },
+                    Session::Host { lan: Some(47820) },
+                ] {
+                    let mut menu = menu(page, 0);
+                    menu.session = session;
+                    menu.remotes = remotes;
+                    menu.splitscreen = true;
+                    let layout = Layout::new(&menu, DESKTOP, [640.0, 480.0], [0.0; 4]);
+                    let actions: Vec<_> = layout.actions().collect();
+                    assert_eq!(actions[actions.len() - 2], Action::Settings);
+                    assert_eq!(
+                        actions.last(),
+                        Some(&if page == Page::Title {
+                            Action::Quit
+                        } else {
+                            Action::QuitToTitle
+                        })
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn console_menu_options_follow_the_session() {
+        let mut menu = menu(Page::Pause, 0);
+        menu.session = Session::Host { lan: None };
+        menu.splitscreen = true;
+        menu.remotes = true;
+        let actions = |menu: &Menu| {
+            Layout::new(menu, DESKTOP, [640.0, 480.0], [0.0; 4])
+                .actions()
+                .collect::<Vec<_>>()
+        };
+        assert!(actions(&menu).contains(&Action::SplitScreen));
+        assert!(actions(&menu).contains(&Action::Remotes));
+        menu.splitscreen = false;
+        menu.remotes = false;
+        menu.session = Session::Guest;
+        let secondary = actions(&menu);
+        assert!(!secondary.contains(&Action::SplitScreen));
+        assert!(!secondary.contains(&Action::Remotes));
+        assert!(!secondary.contains(&Action::OpenToLan));
+        assert!(secondary.contains(&Action::QuitToTitle));
+        menu.page = Page::SplitScreen;
+        for count in 1..=4 {
+            assert!(actions(&menu).contains(&Action::LocalPlayers(count)));
+        }
     }
 
     #[test]

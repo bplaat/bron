@@ -231,6 +231,8 @@ unsafe extern "C" {
     );
     pub fn GX2SetAlphaTest(alpha_test: BOOL, func: u32, reference: f32);
     pub fn GX2SetLineWidth(width: f32);
+    pub fn GX2SetViewport(x: f32, y: f32, width: f32, height: f32, near: f32, far: f32);
+    pub fn GX2SetScissor(x: u32, y: u32, width: u32, height: u32);
     /// Copies a color buffer to the screen's scan buffer, scaled to the screen's size.
     pub fn GX2CopyColorBufferToScanBuffer(buffer: *const GX2ColorBuffer, scan_target: u32);
 }
@@ -404,6 +406,7 @@ unsafe extern "C" {
     pub safe fn powf(x: f32, y: f32) -> f32;
     pub safe fn sinf(x: f32) -> f32;
     pub safe fn cosf(x: f32) -> f32;
+    pub safe fn atan2f(y: f32, x: f32) -> f32;
     pub safe fn tanf(x: f32) -> f32;
     pub safe fn fabsf(x: f32) -> f32;
     pub safe fn sqrtf(x: f32) -> f32;

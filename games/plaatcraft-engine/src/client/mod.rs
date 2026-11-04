@@ -28,7 +28,7 @@ mod stream;
 mod sync;
 
 pub use bench::bench;
-pub use game::Game;
+pub use game::{Game, viewport};
 pub use light::{NIGHT_DAYLIGHT, linear_palette, linear_rgb, palette};
 pub use platform::{
     Address, Audio, Controller, Fog, Gpu, Io, Lock, Mtx, Mtx44, Pass, Platform, Signal, Socket,

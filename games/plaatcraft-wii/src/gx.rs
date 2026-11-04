@@ -48,6 +48,7 @@ pub struct Gx {
     first_frame: bool,
     _fifo: AlignedBuffer,
     size: [f32; 2],
+    framebuffer_size: [f32; 2],
     textures: Textures,
     palette: Vec<[u8; 4]>,
     daylight: f32,
@@ -127,6 +128,7 @@ impl Gx {
                 first_frame: true,
                 _fifo: fifo,
                 size: [480.0 * aspect, 480.0],
+                framebuffer_size: [f32::from(mode_ref.fb_width), f32::from(mode_ref.efb_height)],
                 textures: Textures::load(),
                 palette: Vec::new(),
                 daylight: -1.0,
@@ -206,7 +208,7 @@ impl Gx {
             Texture::Sky(layer) => &self.textures.sky[layer],
             Texture::Character(part) => &self.textures.characters[part],
             Texture::Font => &self.textures.font,
-            Texture::Cursor => &self.textures.cursor,
+            Texture::Cursor(player) => &self.textures.cursors[player],
         };
         self.bound = Some(texture);
         unsafe { GX_LoadTexObj(object, GX_TEXMAP0 as u8) };
@@ -307,6 +309,19 @@ impl Gpu for Gx {
             self.format = None;
         }
         unsafe { GX_SetCopyClear(GXColor { r, g, b, a: 255 }, GX_MAX_Z24) };
+    }
+
+    fn viewport(&mut self, [x, y, width, height]: [f32; 4]) {
+        let [fw, fh] = self.framebuffer_size;
+        unsafe {
+            GX_SetViewport(x * fw, y * fh, width * fw, height * fh, 0.0, 1.0);
+            GX_SetScissor(
+                (x * fw) as u32,
+                (y * fh) as u32,
+                (width * fw) as u32,
+                (height * fh) as u32,
+            );
+        }
     }
 
     fn projection(&mut self, matrix: &Mtx44, orthographic: bool) {

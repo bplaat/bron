@@ -8,6 +8,7 @@
 
 use alloc::boxed::Box;
 use alloc::string::String;
+use alloc::vec::Vec;
 
 use super::input::{Context, Pad};
 use super::mesh::Mesh;
@@ -43,9 +44,13 @@ pub trait Platform: Sized + 'static {
     const LIMITS: Limits;
     /// The fixed render distance in chunks.
     const RENDER_DISTANCE: i64;
+    /// The most players sharing this console.
+    const MAX_LOCAL_PLAYERS: usize = 4;
     /// The most guests of a world opened to the LAN.
     const MAX_GUESTS: usize;
-    /// The controls of the inventory, shown below its blocks.
+    /// Whether the platform manages Wii Remotes inside the game.
+    const REMOTE_MANAGEMENT: bool = false;
+    /// The controls of the inventory.
     const INVENTORY_HELP: &'static str;
 
     /// Starts a thread that runs forever.
@@ -169,8 +174,8 @@ pub enum Texture {
     Character(usize),
     /// The font atlas in assets/font.png.
     Font,
-    /// The Wii Remote pointer, in assets/cursor.png.
-    Cursor,
+    /// A numbered Wii Remote pointer, zero-based for players 1-4.
+    Cursor(usize),
 }
 
 /// How the draws test and write depth, cull and blend.
@@ -235,6 +240,8 @@ pub trait Gpu {
     fn size(&self) -> [f32; 2];
     /// Starts a frame cleared to the color, with chunks lit for the daylight.
     fn begin(&mut self, clear: [u8; 3], daylight: f32, time: f32);
+    /// Selects a viewport as fractions of the full framebuffer.
+    fn viewport(&mut self, rect: [f32; 4]);
     /// Sets the projection matrix.
     fn projection(&mut self, matrix: &Mtx44, orthographic: bool);
     /// Sets the model view matrix.
@@ -263,5 +270,19 @@ pub trait Audio {
 /// The controllers the player plays with.
 pub trait Controller {
     /// Reads the controllers, mapped for what the player does.
-    fn read(&mut self, context: Context) -> Pad;
+    fn poll(&mut self);
+    /// Maps one local controller to the current context.
+    fn read_player(&self, player: usize, context: Context) -> Pad;
+    /// The numbered cursor image of a player; touch input may omit the hand cursor.
+    fn cursor_index(&self, player: usize) -> Option<usize> {
+        (player < 4).then_some(player)
+    }
+    /// Updates controller assignments when the local player count changes.
+    fn local_players(&mut self, _count: usize) {}
+    /// Current controller connections for the Wii Remote menu.
+    fn status(&self) -> Vec<menu::Row> {
+        Vec::new()
+    }
+    /// Reconnects Wii Remotes in player order, where supported.
+    fn reconnect(&mut self) {}
 }

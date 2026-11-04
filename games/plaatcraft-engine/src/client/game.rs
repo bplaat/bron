@@ -41,7 +41,7 @@ use crate::protocol::{
 };
 use crate::raycast::{Hit, raycast};
 use crate::server::{HOST, Outgoing, Server, TICK};
-use crate::sound::{Movement, ground};
+use crate::sound::{Footsteps, Movement, ground};
 use crate::world::{self, Coord};
 
 const LOOK_SPEED: f32 = 2.6;
@@ -103,27 +103,38 @@ impl Repeat {
     }
 }
 
-/// The game of a console, its port runs it with [`Game::run`].
-pub struct Game<P: Platform> {
-    gpu: P::Gpu,
-    controller: P::Controller,
-    renderer: Renderer,
-    stream: Stream<P>,
+// The independent controls and prediction of one local player.
+struct LocalPlayer {
     camera: Camera,
     hotbar: Hotbar,
     target: Option<Hit>,
-    night: bool,
-    menu: Option<Menu>,
-    // The inventory's block grid is open
-    inventory: bool,
-    exit: bool,
-    focus: usize,
     pad: Pad,
-    sounds: Sounds<P::Audio>,
     breaking: Repeat,
     placing: Repeat,
     last_jump: Option<f32>,
     name_shown: Option<(u8, f32)>,
+    swing: f32,
+    prediction: Prediction,
+    id: u32,
+    players: Vec<PlayerInfo>,
+    others: Others,
+    footsteps: Footsteps,
+}
+
+/// The game of a console, its port runs it with [`Game::run`].
+pub struct Game<P: Platform> {
+    player: LocalPlayer,
+    locals: Vec<LocalPlayer>,
+    menu: Option<Menu>,
+    inventory: bool,
+    focus: usize,
+    gpu: P::Gpu,
+    controller: P::Controller,
+    renderer: Renderer,
+    stream: Stream<P>,
+    night: bool,
+    exit: bool,
+    sounds: Sounds<P::Audio>,
     // The system's clock can be far from zero, which an f32 can't hold precisely, so time
     // starts here
     started: f64,
@@ -139,7 +150,6 @@ pub struct Game<P: Platform> {
     world_name: String,
     last_save: f32,
     messages: VecDeque<(String, f32)>,
-    swing: f32,
     particles: Particles,
     network: Network<P>,
     // The integrated server of a world played on this console, and what it saves
@@ -147,16 +157,32 @@ pub struct Game<P: Platform> {
     saved: Saved,
     // The terrain the guests asked for, which the stream's worker builds in turn
     jobs: VecDeque<(u32, Coord, Option<u64>)>,
-    prediction: Prediction,
-    // The id of the player in the played world
-    id: u32,
     hosting: bool,
     joining: Option<f32>,
-    players: Vec<PlayerInfo>,
     found: Vec<(Address, Announcement, f32)>,
     state_elapsed: f32,
     remote_revision: u64,
-    others: Others,
+}
+
+impl LocalPlayer {
+    fn new() -> Self {
+        Self {
+            camera: background_camera(),
+            hotbar: Hotbar::default(),
+            target: None,
+            pad: Pad::default(),
+            breaking: Repeat::default(),
+            placing: Repeat::default(),
+            last_jump: None,
+            name_shown: None,
+            swing: 0.0,
+            prediction: Prediction::default(),
+            id: HOST,
+            players: Vec::new(),
+            others: Others::default(),
+            footsteps: Footsteps::default(),
+        }
+    }
 }
 
 impl<P: Platform> Game<P> {
@@ -169,27 +195,23 @@ impl<P: Platform> Game<P> {
         let settings = storage.load_settings().unwrap_or_else(Settings::new::<P>);
         let mut sounds = Sounds::new(audio);
         sounds.set_volume(settings.game.volume);
+        let mut menu = Menu::default();
+        menu.remotes = P::REMOTE_MANAGEMENT;
         Self {
+            menu: Some(menu),
+            inventory: false,
+            focus: 0,
+            player: LocalPlayer::new(),
+            locals: Vec::new(),
             gpu,
             controller,
             renderer,
             storage,
             worlds,
             stream: Stream::start(sqlite),
-            camera: background_camera(),
-            hotbar: Hotbar::default(),
-            target: None,
             night: false,
-            menu: Some(Menu::default()),
-            inventory: false,
             exit: false,
-            focus: 0,
-            pad: Pad::default(),
             sounds,
-            breaking: Repeat::default(),
-            placing: Repeat::default(),
-            last_jump: None,
-            name_shown: None,
             started: P::seconds(),
             last_frame: 0.0,
             frames: 0,
@@ -200,22 +222,93 @@ impl<P: Platform> Game<P> {
             world_name: String::new(),
             last_save: 0.0,
             messages: VecDeque::new(),
-            swing: 0.0,
             particles: Particles::default(),
             network: Network::new(),
             server: None,
             saved: Saved::default(),
             jobs: VecDeque::new(),
-            prediction: Prediction::default(),
-            id: HOST,
             hosting: false,
             joining: None,
-            players: Vec::new(),
             found: Vec::new(),
             state_elapsed: 0.0,
             remote_revision: 0,
-            others: Others::default(),
         }
+    }
+
+    fn view_size(&self) -> [f32; 2] {
+        let [width, height] = self.gpu.size();
+        let [_, _, w, h] = viewport(self.locals.len() + 1, 0);
+        [width * w / h, height]
+    }
+
+    fn map_pointer(&mut self, index: usize) {
+        if self.menu.is_some() || self.inventory {
+            return;
+        }
+        if let Some(pointer) = &mut self.player.pad.pointer {
+            let [_, _, w, h] = viewport(self.locals.len() + 1, index);
+            // Each controller points at its own view using the whole sensor bar or touch screen.
+            pointer[0] = pointer[0] * w / h;
+        }
+    }
+
+    fn draw_player(&mut self, index: usize, now: f32, dt: f32) {
+        let rect = viewport(self.locals.len() + 1, index);
+        self.gpu.viewport(rect);
+        self.renderer = Renderer::new(self.view_size(), self.stream.distance());
+        self.player.others.update(self.player.players.clone());
+        self.player.others.animate(dt);
+        self.player.swing = (self.player.swing - dt).max(0.0);
+        self.render(now);
+    }
+
+    fn set_local_players(&mut self, count: usize) {
+        if !self.active || self.player.id != HOST || !(1..=P::MAX_LOCAL_PLAYERS).contains(&count) {
+            return;
+        }
+        let Some(server) = &self.server else {
+            return;
+        };
+        let additional = count.saturating_sub(self.locals.len() + 1);
+        if server.players() + additional > P::MAX_GUESTS + 1 {
+            self.tell("World is full - disconnect online players first");
+            return;
+        }
+        while self.locals.len() + 1 > count {
+            let player = self.locals.pop().expect("Local player");
+            self.serve(|server, world| server.leave(world, player.id));
+        }
+        while self.locals.len() + 1 < count {
+            let slot = self.locals.len() + 2;
+            // Stable names preserve each local slot's position and hotbar across sessions.
+            let name = format!("Local Player {slot}");
+            let mut joined = None;
+            self.serve(|server, world| {
+                joined = Some(server.join(world, Some((slot - 1) as u32), &name))
+            });
+            match joined {
+                Some(Ok(welcome)) => {
+                    let mut player = LocalPlayer::new();
+                    welcome.player.restore(&mut player.camera);
+                    player.camera.auto_jump = self.settings.game.auto_jump;
+                    player.hotbar = welcome.player.hotbar;
+                    player.prediction = Prediction::new(&player.camera);
+                    player.id = welcome.id;
+                    self.locals.push(player);
+                }
+                Some(Err(error)) => {
+                    self.tell(error);
+                    break;
+                }
+                None => break,
+            }
+        }
+        self.controller.local_players(self.locals.len() + 1);
+        if self.hosting {
+            self.network.local_players(self.locals.len() + 1);
+        }
+        self.show(Some(Page::Pause));
+        self.save();
     }
 
     fn seconds(&self) -> f32 {
@@ -228,14 +321,18 @@ impl<P: Platform> Game<P> {
     fn show_text(&mut self, page: Option<Page>, text: String) {
         self.inventory = false;
         self.focus = 0;
-        self.breaking.next = None;
-        self.placing.next = None;
+        self.player.breaking.next = None;
+        self.player.placing.next = None;
         let Some(page) = page else {
             self.menu = None;
             return;
         };
         let mut menu = self.menu.take().unwrap_or_default();
         menu.session = self.session();
+        menu.splitscreen = self.active;
+        menu.local_players = self.locals.len() + 1;
+        menu.max_local_players = P::MAX_LOCAL_PLAYERS;
+        menu.remotes = P::REMOTE_MANAGEMENT;
         menu.username.clone_from(&self.settings.username);
         match page {
             Page::Worlds => {
@@ -246,6 +343,15 @@ impl<P: Platform> Game<P> {
                 }
             }
             Page::Multiplayer => menu.show_list(page, self.server_rows(), None),
+            Page::Remotes => menu.show_list(page, self.controller.status(), None),
+            Page::SplitScreen => menu.show(
+                page,
+                if P::NAME == "Wii U" {
+                    "Player 1: GamePad - Players 2-5: Wii Remotes".into()
+                } else {
+                    "One Wii Remote with Nunchuk per player".into()
+                },
+            ),
             _ => menu.show(page, text),
         }
         self.menu = Some(menu);
@@ -318,12 +424,14 @@ impl<P: Platform> Game<P> {
             self.storage.close();
         }
         self.server = None;
+        self.locals.clear();
+        self.controller.local_players(1);
         self.close_network();
         self.active = false;
         self.stream.reset(world::WORLD_SEED);
         self.particles.particles.clear();
-        self.target = None;
-        self.camera = background_camera();
+        self.player.target = None;
+        self.player.camera = background_camera();
         self.night = false;
     }
     fn close_network(&mut self) {
@@ -331,7 +439,7 @@ impl<P: Platform> Game<P> {
         self.hosting = false;
         self.joining = None;
         self.jobs.clear();
-        self.players.clear();
+        self.player.players.clear();
     }
     // Saves the world of this console in the background, the server of a LAN world saves
     // itself.
@@ -400,18 +508,19 @@ impl<P: Platform> Game<P> {
 
     // Starts playing as the welcomed player, of this console's world or of a LAN world.
     fn enter(&mut self, welcome: &Welcome) {
-        self.camera = Camera::default();
-        welcome.player.restore(&mut self.camera);
-        self.camera.auto_jump = self.settings.game.auto_jump;
-        self.hotbar = welcome.player.hotbar;
+        self.player.camera = Camera::default();
+        welcome.player.restore(&mut self.player.camera);
+        self.player.camera.auto_jump = self.settings.game.auto_jump;
+        self.player.hotbar = welcome.player.hotbar;
         self.night = welcome.player.night;
-        self.prediction = Prediction::new(&self.camera);
-        self.id = welcome.id;
+        self.player.prediction = Prediction::new(&self.player.camera);
+        self.player.id = welcome.id;
         self.remote_revision = welcome.revision;
         self.particles.particles.clear();
-        self.target = None;
-        self.last_jump = None;
-        self.players.clear();
+        self.player.target = None;
+        self.player.last_jump = None;
+        self.player.footsteps = Footsteps::default();
+        self.player.players.clear();
         self.show(None);
     }
 
@@ -433,8 +542,17 @@ impl<P: Platform> Game<P> {
 
     fn deliver(&mut self, outgoing: Outgoing) {
         match outgoing {
-            Outgoing::To(HOST, response) => self.response(response),
-            Outgoing::To(id, response) => self.network.respond(id, ServerFrame::Response(response)),
+            Outgoing::To(id, response) => {
+                if self.player.id == id {
+                    self.response(response);
+                } else if let Some(index) = self.locals.iter().position(|player| player.id == id) {
+                    core::mem::swap(&mut self.player, &mut self.locals[index]);
+                    self.response(response);
+                    core::mem::swap(&mut self.player, &mut self.locals[index]);
+                } else {
+                    self.network.respond(id, ServerFrame::Response(response));
+                }
+            }
             Outgoing::All(response) => {
                 if self.hosting {
                     self.network.broadcast(response.clone());
@@ -475,10 +593,11 @@ impl<P: Platform> Game<P> {
 
     // Sends a request to the server of the played world, here or on the LAN.
     fn send(&mut self, request: Request) {
+        let id = self.player.id;
         if self.stream.remote {
             self.network.request(request);
         } else {
-            self.serve(|server, world| server.request(world, HOST, request));
+            self.serve(|server, world| server.request(world, id, request));
         }
     }
 
@@ -499,37 +618,30 @@ impl<P: Platform> Game<P> {
             let now = self.seconds();
             let dt = (now - self.last_frame).min(0.1);
             self.last_frame = now;
-            self.pad = self.controller.read(self.context());
+            self.controller.poll();
+            self.player.pad = self.controller.read_player(0, self.context());
+            self.map_pointer(0);
             self.network_events(now);
-            if self.playing()
-                && !self.page().is_some_and(Page::typing)
-                && self.pad.pressed(Button::Pause)
-            {
-                if self.page() == Some(Page::Settings) {
-                    self.save_settings();
-                }
-                if self.menu.is_none() {
-                    self.show(Some(Page::Pause));
-                    self.save();
-                } else {
-                    self.show(None);
-                }
-            }
-            if self.inventory {
-                self.inventory();
-            } else if self.menu.is_some() {
-                self.menu();
-            } else if self.playing() {
-                self.play(dt, now);
-            } else {
-                self.show(Some(Page::Title));
-            }
-            self.stream.update(self.camera.chunk());
+            self.update_player(dt, now);
+            self.update_local_players(dt, now);
+            self.stream.set_views(
+                self.locals
+                    .iter()
+                    .map(|player| player.camera.chunk())
+                    .collect(),
+            );
+            self.stream.update(self.player.camera.chunk());
             if !self.playing() {
-                self.camera.yaw = (self.camera.yaw + dt * BACKGROUND_TURN_SPEED) % TAU;
+                self.player.camera.yaw =
+                    (self.player.camera.yaw + dt * BACKGROUND_TURN_SPEED) % TAU;
             } else {
                 self.tick_player(dt);
                 self.particles.update(dt, |p| self.stream.block(p));
+                self.state_elapsed += dt;
+                while self.state_elapsed >= TICK {
+                    self.state_elapsed -= TICK;
+                    self.serve(|server, world| server.tick(world));
+                }
                 self.network_tick();
                 if now - self.last_save >= AUTOSAVE_INTERVAL {
                     self.save();
@@ -538,11 +650,7 @@ impl<P: Platform> Game<P> {
                     self.tell(error);
                 }
             }
-            self.others.update(self.players.clone());
-            self.others.animate(dt);
-            self.swing = (self.swing - dt).max(0.0);
-            self.render(now);
-            self.gpu.present();
+            self.draw_frame(now, dt);
             self.frames += 1;
             if now - self.last_fps >= 1.0 {
                 self.fps = (self.frames as f32 / (now - self.last_fps) + 0.5) as u32;
@@ -554,13 +662,70 @@ impl<P: Platform> Game<P> {
         self.exit
     }
 
+    fn update_local_players(&mut self, dt: f32, now: f32) {
+        for index in 0..self.locals.len() {
+            core::mem::swap(&mut self.player, &mut self.locals[index]);
+            self.player.pad = self.controller.read_player(index + 1, Context::Play);
+            self.map_pointer(index + 1);
+            if self.menu.is_none() && !self.inventory {
+                self.play(dt, now, false);
+            }
+            self.tick_player(dt);
+            core::mem::swap(&mut self.player, &mut self.locals[index]);
+        }
+    }
+
+    fn draw_frame(&mut self, now: f32, dt: f32) {
+        let daylight = if self.night { NIGHT_DAYLIGHT } else { 1.0 };
+        self.gpu.begin([0; 3], daylight, now);
+        self.draw_player(0, now, dt);
+        for index in 0..self.locals.len() {
+            core::mem::swap(&mut self.player, &mut self.locals[index]);
+            self.draw_player(index + 1, now, dt);
+            core::mem::swap(&mut self.player, &mut self.locals[index]);
+        }
+        self.gpu.viewport([0.0, 0.0, 1.0, 1.0]);
+        self.draw_overlay(now);
+        self.gpu.present();
+    }
+
+    fn update_player(&mut self, dt: f32, now: f32) {
+        if self.playing()
+            && !self.page().is_some_and(Page::typing)
+            && self.player.pad.pressed(Button::Pause)
+        {
+            if self.page() == Some(Page::Settings) {
+                self.save_settings();
+            }
+            if self.menu.is_none() {
+                self.show(Some(Page::Pause));
+                self.save();
+            } else {
+                self.show(None);
+            }
+        }
+        if self.inventory {
+            self.inventory();
+        } else if self.menu.is_some() {
+            self.menu();
+        } else if self.playing() {
+            self.play(dt, now, true);
+        } else {
+            self.show(Some(Page::Title));
+        }
+    }
+
     // The engine's menus with the pointer and the D-pad, select presses and back goes back.
     fn menu(&mut self) {
         let size = self.gpu.size();
-        let (pad, session) = (self.pad, self.session());
+        let (pad, session) = (self.player.pad, self.session());
+        let status = (self.page() == Some(Page::Remotes)).then(|| self.controller.status());
         let Some(menu) = &mut self.menu else {
             return;
         };
+        if let Some(rows) = status {
+            menu.set_rows(rows, None);
+        }
         menu.session = session;
         let page = menu.page;
         if let Some([x, y, _]) = pad.pointer {
@@ -621,10 +786,18 @@ impl<P: Platform> Game<P> {
                 self.network.discover();
                 self.show(Some(Page::Multiplayer));
             }
+            Action::SplitScreen => self.show(Some(Page::SplitScreen)),
+            Action::LocalPlayers(count) => self.set_local_players(count),
+            Action::Remotes => self.show(Some(Page::Remotes)),
+            Action::ReconnectRemotes => self.controller.reconnect(),
             Action::Resume => self.show(None),
             Action::Settings => self.show(Some(Page::Settings)),
             Action::Quit => self.exit = true,
-            Action::OpenToLan => self.network.host(&self.world_name, &self.settings.username),
+            Action::OpenToLan => self.network.host(
+                &self.world_name,
+                &self.settings.username,
+                self.locals.len() + 1,
+            ),
             Action::QuitToTitle => {
                 let guest = self.stream.remote;
                 if guest || self.flush() {
@@ -690,14 +863,14 @@ impl<P: Platform> Game<P> {
             Action::Stats => self.settings.game.show_stats = !self.settings.game.show_stats,
             Action::AutoJump => {
                 self.settings.game.auto_jump = !self.settings.game.auto_jump;
-                self.camera.auto_jump = self.settings.game.auto_jump;
+                self.player.camera.auto_jump = self.settings.game.auto_jump;
             }
             Action::Username => {
                 self.show_text(Some(Page::Username), self.settings.username.clone());
             }
             Action::Reset => {
                 self.settings.game = Settings::new::<P>().game;
-                self.camera.auto_jump = self.settings.game.auto_jump;
+                self.player.camera.auto_jump = self.settings.game.auto_jump;
                 self.sounds.set_volume(self.settings.game.volume);
             }
             Action::Tool(index) if menu::TOOLS[index].1.is_empty() => {
@@ -730,6 +903,11 @@ impl<P: Platform> Game<P> {
     fn back(&mut self, page: Page) {
         match page {
             Page::Title => {}
+            Page::SplitScreen | Page::Remotes => self.show(Some(if self.playing() {
+                Page::Pause
+            } else {
+                Page::Title
+            })),
             Page::Create | Page::Rename | Page::Delete => self.show(Some(Page::Worlds)),
             Page::DirectConnect => self.show(Some(Page::Multiplayer)),
             Page::Username => self.show(Some(Page::Settings)),
@@ -834,9 +1012,11 @@ impl<P: Platform> Game<P> {
                 // The world can be left before it opened
                 network::Event::Hosted if self.server.is_some() => {
                     self.hosting = true;
+                    // The local player count may have changed while networking started.
+                    self.network.local_players(self.locals.len() + 1);
                     self.tell(format!(
                         "World opened to LAN (up to {} guests)",
-                        P::MAX_GUESTS
+                        P::MAX_GUESTS.saturating_sub(self.locals.len())
                     ));
                 }
                 network::Event::Found(address, announcement) => {
@@ -851,9 +1031,17 @@ impl<P: Platform> Game<P> {
                     }
                 }
                 // Guests play with the id of their connection, their datagrams use it
-                network::Event::Joined(id, name) if self.hosting => {
+                network::Event::Joined(id, name)
+                    if self.hosting && id >= P::MAX_LOCAL_PLAYERS as u32 =>
+                {
                     let mut joined = Err(String::new());
-                    self.serve(|server, world| joined = server.join(world, Some(id), &name));
+                    self.serve(|server, world| {
+                        joined = if server.players() > P::MAX_GUESTS {
+                            Err("World is full".into())
+                        } else {
+                            server.join(world, Some(id), &name)
+                        }
+                    });
                     let frame = match joined {
                         Ok(welcome) => ServerFrame::Accepted {
                             welcome,
@@ -864,7 +1052,9 @@ impl<P: Platform> Game<P> {
                     };
                     self.network.respond(id, frame);
                 }
-                network::Event::Request(id, request) if self.hosting => {
+                network::Event::Request(id, request)
+                    if self.hosting && id >= P::MAX_LOCAL_PLAYERS as u32 =>
+                {
                     self.serve(|server, world| server.request(world, id, request));
                 }
                 // The connection to a LAN world has id 0, which is the host's id for the server
@@ -876,7 +1066,9 @@ impl<P: Platform> Game<P> {
                         self.tell("Disconnected from the server");
                     }
                 }
-                network::Event::Left(id) => self.serve(|server, world| server.leave(world, id)),
+                network::Event::Left(id) if id >= P::MAX_LOCAL_PLAYERS as u32 => {
+                    self.serve(|server, world| server.leave(world, id))
+                }
                 network::Event::Server(frame) => self.server_frame(*frame),
                 _ => {}
             }
@@ -933,7 +1125,7 @@ impl<P: Platform> Game<P> {
             } if self.stream.remote && revision > self.remote_revision => {
                 for edit in &edits {
                     // The player's own breaks burst when it breaks them
-                    if by != self.id
+                    if by != self.player.id
                         && edit.material == 0
                         && let Some(material) = self.stream.block(edit.position)
                     {
@@ -948,19 +1140,20 @@ impl<P: Platform> Game<P> {
                 body,
                 others,
             } => {
-                let flying = self.camera.flying;
+                let flying = self.player.camera.flying;
                 let stream = &mut self.stream;
-                self.prediction
-                    .reconcile(sequence, body, &mut self.camera, |p| stream.block(p));
-                if self.camera.flying != flying {
-                    self.sounds.fly(self.camera.flying);
+                self.player
+                    .prediction
+                    .reconcile(sequence, body, &mut self.player.camera, |p| stream.block(p));
+                if self.player.camera.flying != flying {
+                    self.sounds.fly(self.player.camera.flying);
                 }
-                self.players = others;
+                self.player.players = others;
             }
             Response::Time { night } => self.night = night,
             Response::Chat { name, text } => self.tell(format!("{name}: {text}")),
             Response::Message(message) => self.tell(message),
-            Response::Disconnected(message) => {
+            Response::Disconnected(message) if self.stream.remote => {
                 self.leave_world();
                 self.network.discover();
                 self.show(Some(Page::Multiplayer));
@@ -977,38 +1170,36 @@ impl<P: Platform> Game<P> {
             input: if self.menu.is_none() && !self.inventory {
                 Input {
                     direction: [0.0; 2],
-                    stick: self.pad.walk,
-                    jump: self.pad.held(Button::Jump),
-                    sneak: self.pad.held(Button::Sneak),
-                    fast: self.pad.held(Button::Fast),
+                    stick: self.player.pad.walk,
+                    jump: self.player.pad.held(Button::Jump),
+                    sneak: self.player.pad.held(Button::Sneak),
+                    fast: self.player.pad.held(Button::Fast),
                 }
             } else {
                 Input::default()
             },
-            yaw: self.camera.yaw,
-            pitch: self.camera.pitch,
+            yaw: self.player.camera.yaw,
+            pitch: self.player.camera.pitch,
             auto_jump: self.settings.game.auto_jump,
         };
         let (stream, sounds) = (&mut self.stream, &mut self.sounds);
-        let requests = self.prediction.tick(
+        let requests = self.player.prediction.tick(
             dt,
-            &mut self.camera,
+            &mut self.player.camera,
             controls,
             |p| stream.block(p),
             |before, after, block| {
                 let ground = block(ground(after));
-                sounds.movement(Movement::of(before), after, ground);
+                sounds.movement(
+                    &mut self.player.footsteps,
+                    Movement::of(before),
+                    after,
+                    ground,
+                );
             },
         );
         for request in requests {
             self.send(request);
-        }
-        if self.server.is_some() {
-            self.state_elapsed += dt;
-            while self.state_elapsed >= TICK {
-                self.state_elapsed -= TICK;
-                self.serve(|server, world| server.tick(world));
-            }
         }
     }
 
@@ -1053,19 +1244,19 @@ impl<P: Platform> Game<P> {
 
     // Selects or fills hotbar slots, the server keeps the hotbar for the save.
     fn set_hotbar(&mut self, hotbar: Hotbar) {
-        if hotbar == self.hotbar {
+        if hotbar == self.player.hotbar {
             return;
         }
-        if hotbar.material() != self.hotbar.material() {
-            self.name_shown = Some((hotbar.material(), self.seconds()));
+        if hotbar.material() != self.player.hotbar.material() {
+            self.player.name_shown = Some((hotbar.material(), self.seconds()));
         }
         self.sounds.click();
-        self.hotbar = hotbar;
+        self.player.hotbar = hotbar;
         self.send(Request::Hotbar(hotbar));
     }
 
     fn inventory(&mut self) {
-        let (pad, count) = (self.pad, world::MATERIALS.len());
+        let (pad, count) = (self.player.pad, world::MATERIALS.len());
         let page = page_start(self.focus);
         for (button, step) in [
             (Button::Left, count - 1),
@@ -1090,7 +1281,7 @@ impl<P: Platform> Game<P> {
                 }
             }
         }
-        let mut hotbar = self.hotbar;
+        let mut hotbar = self.player.hotbar;
         if pad.pressed(Button::Previous) {
             hotbar.cycle(1);
         }
@@ -1111,46 +1302,51 @@ impl<P: Platform> Game<P> {
     }
 
     // Looks around, selects blocks and edits, the physics runs in tick_player.
-    fn play(&mut self, dt: f32, now: f32) {
-        let pad = self.pad;
+    fn play(&mut self, dt: f32, now: f32, menus: bool) {
+        let pad = self.player.pad;
         if pad.pressed(Button::Pick) {
-            if let Some(hit) = self.target
+            if let Some(hit) = self.player.target
                 && let Some(material) = world::item_material(hit.material)
             {
-                let mut hotbar = self.hotbar;
+                let mut hotbar = self.player.hotbar;
                 hotbar.pick(material);
                 self.set_hotbar(hotbar);
             }
             return;
         }
-        if pad.pressed(Button::Inventory) {
+        if menus && pad.pressed(Button::Inventory) {
             self.show(None);
             self.inventory = true;
             return;
         }
-        if pad.pressed(Button::Tools) {
+        if menus && pad.pressed(Button::Tools) {
             self.show(Some(Page::Tools));
             return;
         }
         let turn = |value: f32| value * value.abs() * LOOK_SPEED * dt / 0.002;
         let [yaw, pitch] = pad.look;
-        self.camera
+        self.player
+            .camera
             .look(f64::from(turn(yaw)), f64::from(-turn(pitch)));
         if pad.pressed(Button::Jump) {
-            if self.last_jump.is_some_and(|last| now - last < DOUBLE_TAP) {
-                let flying = !self.camera.flying;
+            if self
+                .player
+                .last_jump
+                .is_some_and(|last| now - last < DOUBLE_TAP)
+            {
+                let flying = !self.player.camera.flying;
                 self.send(Request::Chat(
                     if flying { "/fly on" } else { "/fly off" }.into(),
                 ));
                 // Predicted, the server's state confirms it
-                self.camera.set_flying(flying);
+                self.player.camera.set_flying(flying);
                 self.sounds.fly(flying);
-                self.last_jump = None;
+                self.player.last_jump = None;
             } else {
-                self.last_jump = Some(now);
+                self.player.last_jump = Some(now);
             }
         }
-        let mut hotbar = self.hotbar;
+        let mut hotbar = self.player.hotbar;
         if pad.pressed(Button::Previous) {
             hotbar.cycle(1);
         }
@@ -1164,36 +1360,45 @@ impl<P: Platform> Game<P> {
         }
         self.set_hotbar(hotbar);
         self.aim();
-        if self.breaking.update(&pad, Button::Break, now) {
+        if self.player.breaking.update(&pad, Button::Break, now) {
             self.edit(false);
         }
-        if self.placing.update(&pad, Button::Place, now) {
+        if self.player.placing.update(&pad, Button::Place, now) {
             self.edit(true);
         }
     }
     // The hotbar slot under the pointer.
     fn hotbar_slot(&self, pointer: Option<[f32; 3]>) -> Option<usize> {
         let [x, y, _] = pointer?;
-        hud::hotbar_slot(self.gpu.size(), [x, y])
+        hud::hotbar_slot(
+            if self.inventory {
+                self.gpu.size()
+            } else {
+                self.view_size()
+            },
+            [x, y],
+        )
     }
 
     fn aim(&mut self) {
-        let direction = self.camera.direction();
+        let direction = self.player.camera.direction();
         let stream = &mut self.stream;
-        self.target = raycast(self.camera.position, direction, |position| {
+        self.player.target = raycast(self.player.camera.position, direction, |position| {
             stream.block(position)
         });
     }
     fn edit(&mut self, place: bool) {
-        self.swing = SWING_DURATION;
-        let Some(hit) = self.target else {
+        self.player.swing = SWING_DURATION;
+        let Some(hit) = self.player.target else {
             return;
         };
         let edit = if place {
             let stream = &mut self.stream;
-            hit.place_edit(self.hotbar.material(), self.camera.position, |p| {
-                stream.block(p)
-            })
+            hit.place_edit(
+                self.player.hotbar.material(),
+                self.player.camera.position,
+                |p| stream.block(p),
+            )
         } else {
             hit.break_edit()
         };
@@ -1203,7 +1408,7 @@ impl<P: Platform> Game<P> {
         let material = if place { edit.material } else { hit.material };
         self.send(Request::Edit(edit));
         self.sounds
-            .block(&self.camera, edit.position, material, !place);
+            .block(&self.player.camera, edit.position, material, !place);
         if !place {
             self.particles.burst(hit.position, material);
         }
@@ -1236,90 +1441,93 @@ impl<P: Platform> Game<P> {
     }
 
     fn render(&mut self, now: f32) {
+        let [width, height] = self.view_size();
         let gpu = &mut self.gpu;
         let daylight = if self.night { NIGHT_DAYLIGHT } else { 1.0 };
         // Between the last two physics ticks, so the player moves smoothly
         let camera = if self.active || self.stream.remote {
-            self.prediction.view(&self.camera)
+            self.player.prediction.view(&self.player.camera)
         } else {
-            self.camera
+            self.player.camera
         };
-        let [width, height] = gpu.size();
-        let view = camera.view(width as u32, height as u32, P::RENDER_DISTANCE);
+        let view = camera.view(width as u32, height as u32, self.stream.distance());
         let center = camera.chunk();
         let in_game = self.menu.is_none() && !self.inventory;
         // The title pages show the turning default world behind them
         let eye = camera.position.map(|v| v.floor() as i64);
         let eye_material = self.stream.block(eye);
-        self.renderer.begin(gpu, daylight, now, eye_material);
+        let clear = self.renderer.begin(daylight, eye_material);
+        let mut background = Hud::begin(gpu, [width, height]);
+        background.rect(
+            0.0,
+            0.0,
+            width,
+            height,
+            u32::from_be_bytes([clear[0], clear[1], clear[2], 255]),
+        );
         self.renderer.draw_sky(gpu, &view, eye_material, now);
         self.renderer
             .draw_world(gpu, &view, center, &self.stream.chunks);
         if self.active || self.stream.remote {
-            if in_game && let Some(hit) = self.target {
+            if in_game && let Some(hit) = self.player.target {
                 self.renderer
                     .draw_selection(gpu, &view, center, hit.position, hit.material);
             }
-            self.renderer.draw_players(gpu, &view, center, &self.others);
+            self.renderer
+                .draw_players(gpu, &view, center, &self.player.others);
             self.renderer
                 .draw_particles(gpu, &view, center, &self.particles);
             if in_game {
                 self.renderer.draw_held(
                     gpu,
-                    self.hotbar.material(),
-                    1.0 - self.swing / SWING_DURATION,
+                    self.player.hotbar.material(),
+                    1.0 - self.player.swing / SWING_DURATION,
                 );
             }
         }
-        let mut hud = Hud::begin(gpu);
+        let mut hud = Hud::begin(gpu, [width, height]);
         if in_game {
-            for (name, [x, y]) in self.others.name_tags(&view, center) {
+            for (name, [x, y]) in self.player.others.name_tags(&view, center) {
                 hud.label(name, x - text_width(name, 16.0) / 2.0, y, 16.0);
             }
         }
+        if in_game {
+            hud.crosshair();
+            let top = hud.hotbar(&self.player.hotbar);
+            if let Some((material, shown)) = self.player.name_shown
+                && now - shown < NAME_DURATION
+            {
+                let text = name(material);
+                hud.label(
+                    text,
+                    (hud.width - text_width(text, 18.0)) / 2.0,
+                    top - 30.0,
+                    18.0,
+                );
+            }
+            if self.player.camera.flying {
+                hud.label("Flying", 12.0, 32.0, 16.0);
+            }
+        }
+    }
+    // Shared messages and menus are drawn once after restoring the full-screen viewport.
+    fn draw_overlay(&mut self, now: f32) {
+        let size = self.gpu.size();
+        let context = self.context();
+        let mut hud = Hud::begin(&mut self.gpu, size);
         if self.settings.game.show_stats && (self.active || self.stream.remote) {
-            let [x, y, z] = self.camera.position;
+            let [x, y, z] = self.player.camera.position;
             hud.label(
                 &format!(
                     "{} FPS - {x:.0}, {y:.0}, {z:.0} - {} chunks - distance {}",
                     self.fps,
                     self.stream.chunks.len(),
-                    P::RENDER_DISTANCE
+                    self.stream.distance()
                 ),
                 12.0,
                 10.0,
                 16.0,
             );
-        }
-        match &self.menu {
-            _ if self.inventory => Self::draw_inventory(&mut hud, self.focus, &self.hotbar),
-            Some(menu) => {
-                let size = [hud.width, hud.height];
-                let layout = Layout::new(menu, P::MENU, size, [0.0; 4]);
-                let focused = menu.focused(&layout);
-                menu.draw(&mut hud, &layout, size, focused, self.settings.game);
-            }
-            None => {
-                hud.crosshair();
-                let top = hud.hotbar(&self.hotbar);
-                if let Some((material, shown)) = self.name_shown
-                    && now - shown < NAME_DURATION
-                {
-                    let text = name(material);
-                    hud.label(
-                        text,
-                        (hud.width - text_width(text, 18.0)) / 2.0,
-                        top - 30.0,
-                        18.0,
-                    );
-                }
-                if self.camera.flying {
-                    hud.label("Flying", 12.0, 32.0, 16.0);
-                }
-            }
-        }
-        if !in_game && let Some(pointer) = self.pad.pointer {
-            hud.cursor(pointer);
         }
         let recent = self
             .messages
@@ -1330,12 +1538,697 @@ impl<P: Platform> Game<P> {
             hud.rect(8.0, y, hud.width - 16.0, 24.0, 0x0000_00c0);
             hud.label(message, 14.0, y + 4.0, 16.0);
         }
+        if self.inventory {
+            Self::draw_inventory(&mut hud, self.focus, &self.player.hotbar);
+        } else if let Some(menu) = &self.menu {
+            let layout = Layout::new(menu, P::MENU, size, [0.0; 4]);
+            menu.draw(
+                &mut hud,
+                &layout,
+                size,
+                menu.focused(&layout),
+                self.settings.game,
+            );
+        }
+        if context != Context::Play {
+            // Remote hands are visual only for secondary players; touch input exposes no hand.
+            for player in (0..=self.locals.len()).rev() {
+                if let Some(cursor) = self.controller.cursor_index(player)
+                    && let Some(pointer) = self.controller.read_player(player, context).pointer
+                {
+                    hud.cursor(pointer, cursor);
+                }
+            }
+        }
     }
 }
+/// The viewport of a local player, in fractions of the full screen.
+/// Two players share horizontal halves; three and four use a two-by-two grid, five a three-by-two grid.
+pub fn viewport(count: usize, index: usize) -> [f32; 4] {
+    match count {
+        1 => [0.0, 0.0, 1.0, 1.0],
+        2 => [0.0, index as f32 * 0.5, 1.0, 0.5],
+        3 | 4 => [(index % 2) as f32 * 0.5, (index / 2) as f32 * 0.5, 0.5, 0.5],
+        _ => [
+            (index % 3) as f32 / 3.0,
+            (index / 3) as f32 * 0.5,
+            1.0 / 3.0,
+            0.5,
+        ],
+    }
+}
+
 // Looks over the default world from above its spawn, like the desktop title screen.
 fn background_camera() -> Camera {
     Camera {
         pitch: -0.2,
         ..Camera::default()
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod tests {
+    use alloc::boxed::Box;
+
+    use super::super::platform::{
+        Audio, Fog, Io, Lock, Mtx, Mtx44, Pass, Signal, Socket, State, Texture, Thread, Vertex,
+    };
+    use super::*;
+    use crate::protocol::Player;
+    use crate::sound::Effect;
+
+    // No worker or network threads: tests drive the integrated server themselves.
+    const LOCAL_PLAYERS: usize = 4;
+    pub(crate) type TestPlatform = TestConsole<4>;
+    pub(crate) struct TestConsole<const PLAYERS: usize>;
+    #[derive(Default)]
+    pub(crate) struct Device {
+        viewports: Vec<[f32; 4]>,
+        projections: Vec<[f32; 2]>,
+        pads: [super::super::input::Wiimote; 5],
+        draws: Vec<Draw>,
+    }
+    struct Draw {
+        viewport: [f32; 4],
+        size: [f32; 2],
+        texture: Texture,
+        vertices: Vec<Vertex>,
+    }
+
+    pub(crate) struct TestLock(core::sync::atomic::AtomicBool);
+
+    impl Lock for TestLock {
+        fn new() -> Self {
+            Self(core::sync::atomic::AtomicBool::new(false))
+        }
+        fn lock(&self) {
+            assert!(!self.0.swap(true, core::sync::atomic::Ordering::Acquire));
+        }
+        fn unlock(&self) {
+            self.0.store(false, core::sync::atomic::Ordering::Release);
+        }
+    }
+    impl Signal<TestLock> for Device {
+        fn new() -> Self {
+            Self::default()
+        }
+        fn wait(&self, _: &TestLock) {
+            panic!("Tests must not wait on a worker");
+        }
+        fn signal(&self) {}
+    }
+    impl Socket for Device {
+        fn tcp() -> Option<Self> {
+            None
+        }
+        fn udp() -> Option<Self> {
+            None
+        }
+        fn bind(&self, _: u16) -> bool {
+            false
+        }
+        fn listen(&self, _: usize) -> bool {
+            false
+        }
+        fn nonblocking(&self) {}
+        fn broadcast(&self) {}
+        fn connect(&self, _: Address) -> bool {
+            false
+        }
+        fn accept(&self) -> Option<Self> {
+            None
+        }
+        fn send(&self, _: &[u8]) -> Io {
+            Io::Failed
+        }
+        fn receive(&self, _: &mut [u8]) -> Io {
+            Io::Wait
+        }
+        fn send_to(&self, _: &[u8], _: Address) {}
+        fn receive_from(&self, _: &mut [u8]) -> Option<(usize, Address)> {
+            None
+        }
+    }
+    impl Gpu for Device {
+        type Mesh = ();
+        fn mesh(_: &super::super::mesh::Mesh) {}
+        fn has_alpha(_: usize) -> bool {
+            false
+        }
+        fn draws(_: &(), _: usize, _: Pass) -> bool {
+            false
+        }
+        fn size(&self) -> [f32; 2] {
+            [640.0, 480.0]
+        }
+        fn begin(&mut self, _: [u8; 3], _: f32, _: f32) {}
+        fn viewport(&mut self, rect: [f32; 4]) {
+            self.viewports.push(rect);
+        }
+        fn projection(&mut self, matrix: &Mtx44, orthographic: bool) {
+            if orthographic {
+                self.projections
+                    .push([2.0 / matrix[0][0], -2.0 / matrix[1][1]]);
+            }
+        }
+        fn model_view(&mut self, _: &Mtx) {}
+        fn state(&mut self, _: State) {}
+        fn fog(&mut self, _: Option<Fog>) {}
+        fn quads(&mut self, texture: Texture, vertices: &[Vertex]) {
+            self.draws.push(Draw {
+                viewport: *self.viewports.last().unwrap(),
+                size: *self.projections.last().unwrap(),
+                texture,
+                vertices: vertices.to_vec(),
+            });
+        }
+        fn lines(&mut self, _: &[Vertex]) {}
+        fn chunk(&mut self, _: &(), _: usize, _: Pass) {}
+        fn present(&mut self) {}
+    }
+    impl Audio for Device {
+        fn play(&mut self, _: Effect, _: [f32; 2], _: f32) {}
+    }
+    impl Controller for Device {
+        fn poll(&mut self) {}
+        fn read_player(&self, player: usize, context: Context) -> Pad {
+            self.pads[player].pad(context)
+        }
+    }
+    impl<const PLAYERS: usize> Platform for TestConsole<PLAYERS> {
+        type Lock = TestLock;
+        type Signal = Device;
+        type Socket = Device;
+        type Gpu = Device;
+        type Audio = Device;
+        type Controller = Device;
+        const NAME: &'static str = "Test";
+        const MENU: menu::Platform = menu::Platform {
+            keyboard: menu::Keyboard::OnScreen,
+            quits: true,
+            distance: false,
+            confirm: "+",
+            open: "Press A",
+            controls: &[],
+        };
+        const LIMITS: crate::server::Limits = crate::server::Limits {
+            fluid_radius: 0,
+            fluid_updates: 0,
+        };
+        const RENDER_DISTANCE: i64 = 8;
+        const MAX_GUESTS: usize = if PLAYERS > 4 { 7 } else { 3 };
+        const MAX_LOCAL_PLAYERS: usize = PLAYERS;
+        const INVENTORY_HELP: &'static str = "";
+        fn spawn(_: Thread, _: Box<dyn FnOnce() + Send>) {}
+        fn seconds() -> f64 {
+            0.0
+        }
+        fn random() -> u64 {
+            1
+        }
+        fn idle() {}
+        fn connect_network() -> Result<[u8; 4], i32> {
+            Err(-1)
+        }
+        fn mount_storage() -> bool {
+            false
+        }
+        fn nickname() -> Option<String> {
+            None
+        }
+        fn running() -> bool {
+            true
+        }
+    }
+
+    fn game_for<const PLAYERS: usize>() -> Game<TestConsole<PLAYERS>> {
+        let mut game = Game::<TestConsole<PLAYERS>>::new(
+            Device::default(),
+            Device::default(),
+            Device::default(),
+        );
+        let mut saved = Saved::default();
+        // Seed guest saves so this test requires no mounted SD card.
+        for slot in 2..=PLAYERS {
+            saved
+                .guests
+                .insert(format!("Local Player {slot}"), Player::default());
+        }
+        game.start(Opened {
+            seed: world::WORLD_SEED,
+            saved,
+        });
+        game
+    }
+
+    fn game() -> Game<TestPlatform> {
+        game_for::<4>()
+    }
+
+    #[test]
+    fn wii_u_supports_five_players_with_four_existing_cursor_images() {
+        let mut game = game_for::<5>();
+        game.set_local_players(5);
+        assert_eq!(game.locals.len(), 4);
+        assert_eq!(game.server.as_ref().unwrap().players(), 5);
+        assert_eq!(
+            game.locals
+                .iter()
+                .map(|player| player.id)
+                .collect::<Vec<_>>(),
+            [1, 2, 3, 4]
+        );
+        game.set_local_players(6);
+        assert_eq!(game.locals.len(), 4);
+        for pad in &mut game.controller.pads {
+            pad.pointer = Some([320.0, 240.0, 0.0]);
+        }
+        game.draw_frame(0.0, 0.0);
+        assert_eq!(
+            game.gpu
+                .draws
+                .iter()
+                .filter(|draw| matches!(draw.texture, Texture::Cursor(_)))
+                .count(),
+            4
+        );
+        game.show(None);
+        game.controller.pads[4].stick = Some([0.0, 1.0]);
+        game.update_local_players(TICK, 0.0);
+        assert_eq!(game.locals[3].camera.input.stick, [0.0, 1.0]);
+        game.hosting = true;
+        game.saved.guests.insert("Online".into(), Player::default());
+        game.network
+            .inject(network::Event::Joined(5, "Online".into()));
+        game.network_events(0.0);
+        assert_eq!(game.server.as_ref().unwrap().players(), 6);
+        game.network.inject(network::Event::Left(5));
+        game.network_events(0.0);
+        assert_eq!(game.server.as_ref().unwrap().players(), 5);
+        assert_eq!(game.locals[3].id, 4);
+    }
+
+    #[test]
+    fn local_players_have_independent_requests_predictions_and_saved_inventories() {
+        let mut game = game();
+        game.set_local_players(4);
+        assert_eq!(game.locals.len(), 3);
+        assert_eq!(game.server.as_ref().unwrap().players(), 4);
+        let host = game.player.hotbar;
+        for index in 0..3 {
+            core::mem::swap(&mut game.player, &mut game.locals[index]);
+            let mut hotbar = game.player.hotbar;
+            hotbar.selected = index + 1;
+            game.set_hotbar(hotbar);
+            game.command("/fly on");
+            core::mem::swap(&mut game.player, &mut game.locals[index]);
+        }
+        game.serve(|server, world| server.tick(world));
+        assert_eq!(game.player.hotbar, host);
+        assert!(!game.player.camera.flying);
+        for player in &game.locals {
+            assert!(player.camera.flying);
+        }
+        game.set_local_players(1);
+        assert!(game.locals.is_empty());
+        assert_eq!(game.server.as_ref().unwrap().players(), 1);
+        for slot in 2..=4 {
+            let saved = game.saved.guests[&format!("Local Player {slot}")];
+            assert_eq!(saved.hotbar.selected, slot - 1);
+            assert!(saved.flying);
+        }
+        game.set_local_players(4);
+        for (index, player) in game.locals.iter().enumerate() {
+            assert_eq!(player.hotbar.selected, index + 1);
+            assert!(player.camera.flying);
+        }
+        // Closing the host must not recursively treat local guests as network disconnects.
+        game.serve(|server, world| server.stop(world));
+        assert!(game.active);
+    }
+
+    #[test]
+    fn wii_local_players_from_old_overlapping_saves_are_spaced_apart() {
+        let mut game = game();
+        game.set_local_players(4);
+        let mut positions = alloc::vec![game.player.camera.position];
+        for player in &game.locals {
+            for other in &positions {
+                let distance = (player.camera.position[0] - other[0])
+                    .hypot(player.camera.position[2] - other[2]);
+                assert!(distance >= 3.0);
+            }
+            positions.push(player.camera.position);
+        }
+        for slot in 2..=4 {
+            assert_eq!(
+                game.saved.guests[&format!("Local Player {slot}")].position,
+                game.locals[slot - 2].camera.position
+            );
+        }
+    }
+
+    #[test]
+    fn split_screen_shares_join_chat_and_leave_messages_without_dropping_repeats() {
+        let mut game = game();
+        game.set_local_players(4);
+        assert_eq!(
+            game.messages
+                .iter()
+                .map(|(text, _)| text.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "Local Player 2 joined the game",
+                "Local Player 3 joined the game",
+                "Local Player 4 joined the game",
+            ]
+        );
+        game.messages.clear();
+        for _ in 0..2 {
+            game.send(Request::Chat("Hello".into()));
+        }
+        assert_eq!(game.messages.len(), 2);
+        assert_eq!(game.messages[0].0, game.messages[1].0);
+        game.messages.clear();
+        game.set_local_players(1);
+        assert_eq!(
+            game.messages
+                .iter()
+                .map(|(text, _)| text.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "Local Player 4 left the game",
+                "Local Player 3 left the game",
+                "Local Player 2 left the game",
+            ]
+        );
+    }
+
+    #[test]
+    fn local_player_count_is_only_changed_by_a_host_and_stays_in_range() {
+        let mut game = game();
+        game.set_local_players(0);
+        game.set_local_players(5);
+        assert!(game.locals.is_empty());
+        game.active = false;
+        game.set_local_players(2);
+        assert!(game.locals.is_empty());
+    }
+
+    #[test]
+    fn local_slots_and_online_connections_remain_separate_and_share_capacity() {
+        let mut game = game();
+        game.set_local_players(3);
+        assert_eq!(
+            game.locals
+                .iter()
+                .map(|player| player.id)
+                .collect::<Vec<_>>(),
+            [1, 2]
+        );
+        game.hosting = true;
+        game.saved.guests.insert("Online".into(), Player::default());
+        let online = LOCAL_PLAYERS as u32;
+        game.network
+            .inject(network::Event::Joined(online, "Online".into()));
+        game.network_events(0.0);
+        assert_eq!(game.server.as_ref().unwrap().players(), 4);
+        game.set_local_players(4);
+        assert_eq!(game.locals.len(), 2);
+        assert_eq!(game.server.as_ref().unwrap().players(), 4);
+        game.network.inject(network::Event::Left(online));
+        game.network.inject(network::Event::Left(1));
+        game.network_events(0.0);
+        assert_eq!(game.server.as_ref().unwrap().players(), 3);
+        assert_eq!(
+            game.locals
+                .iter()
+                .map(|player| player.id)
+                .collect::<Vec<_>>(),
+            [1, 2]
+        );
+        game.set_local_players(4);
+        assert_eq!(game.locals[2].id, 3);
+        assert_eq!(game.server.as_ref().unwrap().players(), 4);
+        // A full split-screen session must also refuse an incoming online guest.
+        game.network
+            .inject(network::Event::Joined(online + 1, "Another".into()));
+        game.network_events(0.0);
+        assert_eq!(game.server.as_ref().unwrap().players(), 4);
+    }
+
+    #[test]
+    fn only_player_one_opens_the_full_screen_menus_and_inventory() {
+        use super::super::input::Wiimote;
+        let mut game = game();
+        game.set_local_players(4);
+        game.show(None);
+        for pad in &mut game.controller.pads[1..] {
+            pad.pressed = Wiimote::PLUS | Wiimote::MINUS | Wiimote::ONE;
+        }
+        game.update_local_players(0.0, 0.0);
+        assert!(game.menu.is_none());
+        assert!(!game.inventory);
+        game.player.pad = Wiimote {
+            pressed: Wiimote::MINUS,
+            ..Wiimote::default()
+        }
+        .pad(Context::Play);
+        game.update_player(0.0, 0.0);
+        assert!(game.inventory);
+        game.controller.pads[1].stick = Some([0.0, 1.0]);
+        game.controller.pads[1].held = Wiimote::A;
+        game.update_local_players(TICK, 0.0);
+        assert_eq!(game.locals[0].camera.input, Input::default());
+        game.player.pad.pointer = Some([320.0, 240.0, 0.0]);
+        game.map_pointer(0);
+        assert_eq!(game.player.pad.pointer, Some([320.0, 240.0, 0.0]));
+        game.draw_frame(0.0, 0.0);
+        assert_eq!(game.gpu.viewports.last(), Some(&[0.0, 0.0, 1.0, 1.0]));
+        assert!(
+            game.gpu
+                .projections
+                .last()
+                .unwrap()
+                .iter()
+                .zip([640.0, 480.0])
+                .all(|(actual, expected)| (actual - expected).abs() < 0.001)
+        );
+        game.set_local_players(2);
+        game.show(Some(Page::Pause));
+        game.draw_frame(0.0, 0.0);
+        assert_eq!(game.gpu.viewports.last(), Some(&[0.0, 0.0, 1.0, 1.0]));
+        assert!(
+            game.gpu
+                .projections
+                .last()
+                .unwrap()
+                .iter()
+                .zip([640.0, 480.0])
+                .all(|(actual, expected)| (actual - expected).abs() < 0.001)
+        );
+        assert!(
+            game.gpu
+                .projections
+                .iter()
+                .any(|size| (size[0] - 1280.0).abs() < 0.001 && (size[1] - 480.0).abs() < 0.001)
+        );
+    }
+
+    #[test]
+    fn numbered_menu_cursors_are_visible_but_only_player_one_interacts() {
+        use super::super::input::Wiimote;
+        let mut game = game();
+        for count in 2..=LOCAL_PLAYERS {
+            game.set_local_players(count);
+            let layout = Layout::new(
+                game.menu.as_ref().unwrap(),
+                TestPlatform::MENU,
+                game.gpu.size(),
+                [0.0; 4],
+            );
+            let settings_y = (0..480)
+                .find(|&y| layout.action_at([320.0, y as f32]) == Some(Action::Settings))
+                .unwrap() as f32;
+            game.controller.pads[0].pointer = Some([20.0, 30.0, 0.0]);
+            game.player.pad = game.controller.read_player(0, Context::Menu);
+            game.menu();
+            let focused = game.menu.as_ref().unwrap().focused(&layout);
+            for player in 1..count {
+                game.controller.pads[player] = Wiimote {
+                    pointer: Some([320.0, settings_y, 0.0]),
+                    pressed: Wiimote::A,
+                    held: Wiimote::A,
+                    ..Wiimote::default()
+                };
+            }
+            game.update_local_players(0.0, 0.0);
+            assert_eq!(game.page(), Some(Page::Pause));
+            assert_eq!(game.menu.as_ref().unwrap().focused(&layout), focused);
+            game.gpu.draws.clear();
+            game.draw_frame(0.0, 0.0);
+            let cursors: Vec<_> = game
+                .gpu
+                .draws
+                .iter()
+                .filter_map(|draw| match draw.texture {
+                    Texture::Cursor(player) => Some((player, draw)),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(
+                cursors
+                    .iter()
+                    .map(|(player, _)| *player)
+                    .collect::<Vec<_>>(),
+                (0..count).rev().collect::<Vec<_>>()
+            );
+            for (player, draw) in cursors {
+                assert_eq!(draw.viewport, [0.0, 0.0, 1.0, 1.0]);
+                let pointer = game.controller.pads[player].pointer.unwrap();
+                assert_eq!(
+                    draw.vertices[0].position,
+                    [pointer[0] - 24.0, pointer[1] - 24.0, 0.0]
+                );
+            }
+            game.controller.pads[count - 1].pointer = None;
+            game.gpu.draws.clear();
+            game.draw_frame(0.0, 0.0);
+            assert!(
+                !game
+                    .gpu
+                    .draws
+                    .iter()
+                    .any(|draw| draw.texture == Texture::Cursor(count - 1))
+            );
+            game.show(None);
+            game.gpu.draws.clear();
+            game.draw_frame(0.0, 0.0);
+            assert!(
+                !game
+                    .gpu
+                    .draws
+                    .iter()
+                    .any(|draw| matches!(draw.texture, Texture::Cursor(_)))
+            );
+        }
+    }
+
+    #[test]
+    fn numbered_cursors_follow_tilt_without_moving_the_pointer_tip() {
+        let mut game = game();
+        game.set_local_players(LOCAL_PLAYERS);
+        let diagonal = 24.0 / 2.0_f32.sqrt();
+        for (angle, top) in [
+            (0.0, [0.0, -24.0]),
+            (45.0, [diagonal, -diagonal]),
+            (90.0, [24.0, 0.0]),
+            (-45.0, [-diagonal, -diagonal]),
+            (-90.0, [-24.0, 0.0]),
+            (180.0, [0.0, 24.0]),
+        ] {
+            for (player, pad) in game.controller.pads.iter_mut().enumerate() {
+                pad.pointer = Some([100.0 + player as f32 * 80.0, 240.0, angle]);
+            }
+            game.gpu.draws.clear();
+            game.draw_frame(0.0, 0.0);
+            for player in 0..LOCAL_PLAYERS {
+                let draw = game
+                    .gpu
+                    .draws
+                    .iter()
+                    .find(|draw| draw.texture == Texture::Cursor(player))
+                    .unwrap();
+                let pointer = game.controller.pads[player].pointer.unwrap();
+                for axis in 0..2 {
+                    let center = draw
+                        .vertices
+                        .iter()
+                        .map(|vertex| vertex.position[axis])
+                        .sum::<f32>()
+                        / 4.0;
+                    assert!((center - pointer[axis]).abs() < 0.001);
+                    let edge =
+                        (draw.vertices[0].position[axis] + draw.vertices[1].position[axis]) / 2.0;
+                    assert!((edge - pointer[axis] - top[axis]).abs() < 0.001);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn chat_and_debug_info_are_drawn_once_across_the_full_screen() {
+        let mut game = game();
+        game.settings.game.show_stats = true;
+        for count in 1..=LOCAL_PLAYERS {
+            game.set_local_players(count);
+            game.messages.clear();
+            game.messages.push_back(("Expired".into(), -CHAT_TIME));
+            game.messages.push_back(("First message".into(), 0.0));
+            game.messages.push_back(("Second message".into(), 0.5));
+            game.gpu.draws.clear();
+            game.draw_frame(1.0, 0.0);
+            let rows: Vec<_> = game
+                .gpu
+                .draws
+                .iter()
+                .filter(|draw| {
+                    draw.texture == Texture::None
+                        && draw.vertices.iter().all(|v| v.color == 0x0000_00c0)
+                })
+                .collect();
+            assert_eq!(rows.len(), 2);
+            for draw in &rows {
+                assert_eq!(draw.viewport, [0.0, 0.0, 1.0, 1.0]);
+                assert!((draw.size[0] - 640.0).abs() < 0.001);
+                assert!((draw.size[1] - 480.0).abs() < 0.001);
+                assert_eq!(
+                    draw.vertices[1].position[0] - draw.vertices[0].position[0],
+                    624.0
+                );
+            }
+            assert_eq!(rows[0].vertices[0].position[1], 406.0);
+            assert_eq!(rows[1].vertices[0].position[1], 382.0);
+            // While paused, all text (including debug information) belongs to the global UI.
+            assert!(
+                game.gpu
+                    .draws
+                    .iter()
+                    .filter(|draw| draw.texture == Texture::Font)
+                    .all(|draw| draw.viewport == [0.0, 0.0, 1.0, 1.0])
+            );
+            game.gpu.draws.clear();
+            game.draw_frame(CHAT_TIME + 1.0, 0.0);
+            assert!(
+                !game
+                    .gpu
+                    .draws
+                    .iter()
+                    .any(|draw| draw.texture == Texture::None
+                        && draw.vertices.iter().all(|v| v.color == 0x0000_00c0))
+            );
+        }
+    }
+
+    #[test]
+    fn split_viewports_are_disjoint_and_keep_hud_coordinates_readable() {
+        for count in 1..=5 {
+            let views: Vec<_> = (0..count).map(|index| viewport(count, index)).collect();
+            for (index, &[x, y, w, h]) in views.iter().enumerate() {
+                assert!(x >= 0.0 && y >= 0.0 && x + w <= 1.0 && y + h <= 1.0);
+                for &[ox, oy, ow, oh] in &views[index + 1..] {
+                    assert!(x + w <= ox || ox + ow <= x || y + h <= oy || oy + oh <= y);
+                }
+            }
+        }
+        let mut game = game();
+        game.set_local_players(2);
+        assert_eq!(game.view_size(), [1280.0, 480.0]);
+        game.show(None);
+        game.player.pad.pointer = Some([320.0, 240.0, 0.0]);
+        game.map_pointer(0);
+        assert_eq!(game.player.pad.pointer, Some([640.0, 240.0, 0.0]));
+        game.set_local_players(4);
+        assert_eq!(game.view_size(), [640.0, 480.0]);
     }
 }

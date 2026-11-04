@@ -46,6 +46,7 @@ impl Platform for Wii {
     type Audio = Aesnd;
     type Controller = Remote;
 
+    const REMOTE_MANAGEMENT: bool = true;
     const NAME: &'static str = "Wii";
     // The render distance is fixed
     const MENU: Menu = Menu {

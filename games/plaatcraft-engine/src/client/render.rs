@@ -201,18 +201,12 @@ impl Renderer {
         }
     }
 
-    /// Clears the screen to the color of the sky and the fog.
-    pub(super) fn begin(
-        &mut self,
-        gpu: &mut impl Gpu,
-        daylight: f32,
-        time: f32,
-        eye_material: Option<u8>,
-    ) {
+    /// Prepares the view lighting and returns its background color.
+    pub(super) fn begin(&mut self, daylight: f32, eye_material: Option<u8>) -> [u8; 3] {
         self.daylight = daylight;
         let fog = self.environment_fog(eye_material);
         self.fog = Some(fog);
-        gpu.begin(fog.color, daylight, time);
+        fog.color
     }
 
     fn world(&self, gpu: &mut impl Gpu, state: State) {

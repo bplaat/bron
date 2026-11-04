@@ -39,6 +39,7 @@ pub(super) enum Event {
 enum Command {
     Discover,
     Host(Announcement),
+    LocalPlayers(usize),
     Connect(Address, String),
     Client(Request),
     Server(u32, Box<ServerFrame>),
@@ -72,13 +73,22 @@ impl<P: Platform> Network<P> {
         self.send(Command::Discover);
     }
 
-    pub(super) fn host(&self, world: &str, host: &str) {
+    pub(super) fn host(&self, world: &str, host: &str, players: usize) {
         self.send(Command::Host(Announcement {
             port: GAME_PORT,
             world: world.into(),
             host: host.into(),
-            players: 1,
+            players: players as u8,
         }));
+    }
+
+    pub(super) fn local_players(&self, count: usize) {
+        self.send(Command::LocalPlayers(count));
+    }
+
+    #[cfg(test)]
+    pub(super) fn inject(&self, event: Event) {
+        self.shared.lock().events.push_back(event);
     }
 
     pub(super) fn connect(&self, address: Address, name: &str) {
@@ -248,6 +258,17 @@ struct Host<S> {
     announcement: Announcement,
 }
 
+impl<S: Socket> Host<S> {
+    fn announcement(&self, connections: &BTreeMap<u32, Connection<S>>) -> Announcement {
+        let mut announcement = self.announcement.clone();
+        announcement.players += connections
+            .values()
+            .filter(|connection| connection.token.is_some())
+            .count() as u8;
+        announcement
+    }
+}
+
 fn host<S: Socket>(backlog: usize) -> Option<(S, S)> {
     let listener = S::tcp()?;
     if !listener.bind(GAME_PORT) || !listener.listen(backlog) {
@@ -263,7 +284,8 @@ fn run<P: Platform>(shared: &Mutex<P::Lock, Shared>) {
     let mut discovery: Option<P::Socket> = None;
     let mut hosted: Option<Host<P::Socket>> = None;
     let mut connections: BTreeMap<u32, Connection<P::Socket>> = BTreeMap::new();
-    let mut next_id = 1;
+    // Reserve this console's host and local player slots before assigning LAN IDs.
+    let mut next_id = P::MAX_LOCAL_PLAYERS as u32;
     let mut last_announce = 0.0;
     loop {
         let commands = core::mem::take(&mut shared.lock().commands);
@@ -296,6 +318,11 @@ fn run<P: Platform>(shared: &Mutex<P::Lock, Shared>) {
                     }
                     hosted = None;
                     connections.clear();
+                }
+                Command::LocalPlayers(count) => {
+                    if let Some(hosted) = &mut hosted {
+                        hosted.announcement.players = count as u8;
+                    }
                 }
                 Command::Discover => {
                     if discovery.is_none() {
@@ -445,8 +472,7 @@ fn run<P: Platform>(shared: &Mutex<P::Lock, Shared>) {
         if now - last_announce > ANNOUNCE_INTERVAL
             && let Some(hosted) = &hosted
         {
-            let mut announcement = hosted.announcement.clone();
-            announcement.players = connections.len() as u8 + 1;
+            let announcement = hosted.announcement(&connections);
             let bytes = Datagram::Announce {
                 version: VERSION,
                 announcement,
@@ -462,5 +488,38 @@ fn run<P: Platform>(shared: &Mutex<P::Lock, Shared>) {
         }
         // A video frame is frequent enough for the 20 Hz game state.
         P::idle();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::client::game::tests::{Device, TestPlatform};
+
+    #[test]
+    fn lan_discovery_counts_local_players_and_only_accepted_online_guests() {
+        let mut hosted = Host {
+            listener: Device::default(),
+            inputs: Device::default(),
+            announcement: Announcement {
+                port: GAME_PORT,
+                world: "World".into(),
+                host: "Host".into(),
+                players: 3,
+            },
+        };
+        let mut connections = BTreeMap::new();
+        connections.insert(
+            TestPlatform::MAX_LOCAL_PLAYERS as u32,
+            Connection::new(Device::default()),
+        );
+        assert_eq!(hosted.announcement(&connections).players, 3);
+        connections
+            .get_mut(&(TestPlatform::MAX_LOCAL_PLAYERS as u32))
+            .unwrap()
+            .token = Some(1);
+        assert_eq!(hosted.announcement(&connections).players, 4);
+        hosted.announcement.players = 1;
+        assert_eq!(hosted.announcement(&connections).players, 2);
     }
 }
