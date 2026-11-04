@@ -836,6 +836,50 @@ mod layout_tests {
 
     unsafe extern "C" {
         fn gtk_main_iteration_do(blocking: i32) -> i32;
+        fn g_object_weak_ref(
+            object: *mut c_void,
+            notify: extern "C" fn(*mut c_void, *mut c_void),
+            data: *const c_void,
+        );
+    }
+
+    #[test]
+    #[ignore = "requires a display and session bus"]
+    fn closing_a_view_releases_its_native_objects() {
+        extern "C" fn finalized(data: *mut c_void, _: *mut c_void) {
+            // SAFETY: Each weak notification owns one reference until its object is finalized.
+            let count = unsafe { Rc::from_raw(data.cast::<Cell<usize>>()) };
+            count.set(count.get() + 1);
+        }
+        let _event_loop = EventLoop::new();
+        let mut window = WindowBuilder::new().build();
+        let view = MediaView::new(&window, None, Theme::Light);
+        let state = Rc::downgrade(&view.state);
+        let count = Rc::new(Cell::new(0));
+        let objects = [
+            view.state.overlay,
+            view.state.scrolled_window,
+            view.state.area,
+            view.state.gesture,
+            view.state.adjustments[0],
+            view.state.adjustments[1],
+        ];
+        for object in objects {
+            // SAFETY: The view retains these objects and every notification owns its counter.
+            unsafe { g_object_weak_ref(object, finalized, Rc::into_raw(count.clone()).cast()) };
+        }
+        drop(view);
+        window.close();
+        drop(window);
+        for _ in 0..32 {
+            // SAFETY: GTK remains initialized while deferred destruction is processed.
+            unsafe { gtk_main_iteration_do(0) };
+        }
+        assert!(
+            state.upgrade().is_none(),
+            "callbacks retained the view state"
+        );
+        assert_eq!(count.get(), objects.len(), "native objects were retained");
     }
 
     #[test]

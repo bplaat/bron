@@ -600,9 +600,32 @@ pub(super) const fn rect(x: f64, y: f64, width: f64, height: f64) -> Rect {
 #[cfg(test)]
 mod tests {
     use imageview_core::appkit::ns_string;
+    use imageview_core::decode_media;
     use objc2::rc::autoreleasepool;
 
     use super::*;
+
+    #[test]
+    fn stopping_an_animated_view_releases_its_timer_reference() {
+        let media = decode_media(include_bytes!(
+            "../../../../imageview-core/tests/fixtures/animated.gif"
+        ))
+        .expect("valid animation");
+        autoreleasepool(|_| {
+            let view = View::new(rect(0.0, 0.0, 320.0, 240.0), Some(media));
+            // SAFETY: The test retains the view during these ownership checks.
+            let before: usize = unsafe { msg_send![&*view, retainCount] };
+            view.advance_frame();
+            // SAFETY: The view remains live with its pending timer.
+            let scheduled: usize = unsafe { msg_send![&*view, retainCount] };
+            view.stop();
+            // SAFETY: The Rust owner keeps the view live after cancellation.
+            let stopped: usize = unsafe { msg_send![&*view, retainCount] };
+            assert!(scheduled > before, "timer did not retain its target");
+            assert_eq!(stopped, before, "timer retained its canceled target");
+            drop(view);
+        });
+    }
 
     #[test]
     fn media_view_accepts_file_drops() {
