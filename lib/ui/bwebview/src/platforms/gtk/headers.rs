@@ -18,6 +18,8 @@ pub(crate) struct GdkDisplay([u8; 0]);
 #[repr(C)]
 pub(crate) struct GInputStream([u8; 0]);
 #[repr(C)]
+pub(crate) struct GBytes([u8; 0]);
+#[repr(C)]
 pub(crate) struct GObject([u8; 0]);
 #[repr(C)]
 pub(crate) struct GSimpleAction([u8; 0]);
@@ -41,6 +43,14 @@ pub(crate) struct GtkWidget([u8; 0]);
 pub(crate) struct GtkWindow([u8; 0]);
 
 unsafe extern "C" {
+    pub(crate) fn g_free(memory: *mut c_void);
+    pub(crate) fn g_bytes_new_with_free_func(
+        data: *const c_void,
+        size: usize,
+        free_func: extern "C" fn(*mut c_void),
+        user_data: *mut c_void,
+    ) -> *mut GBytes;
+    pub(crate) fn g_bytes_unref(bytes: *mut GBytes);
     pub(crate) fn g_action_get_name(action: *mut GSimpleAction) -> *const c_char;
     pub(crate) fn g_action_map_add_action(map: *mut c_void, action: *mut GSimpleAction);
     pub(crate) fn g_action_map_lookup_action(
@@ -55,11 +65,7 @@ unsafe extern "C" {
         cancellable: *mut c_void,
         error: *mut *mut GError,
     ) -> bool;
-    pub(crate) fn g_memory_input_stream_new_from_data(
-        data: *const c_void,
-        len: usize,
-        destroy: *const c_void,
-    ) -> *mut GInputStream;
+    pub(crate) fn g_memory_input_stream_new_from_bytes(bytes: *mut GBytes) -> *mut GInputStream;
     pub(crate) fn g_object_new(
         object_type: *mut c_void,
         first_property_name: *const c_char,
@@ -241,6 +247,7 @@ unsafe extern "C" {
         manager: *mut WebKitUserContentManager,
         script: *mut WebKitUserScript,
     );
+    pub(crate) fn webkit_user_script_unref(script: *mut WebKitUserScript);
     pub(crate) fn webkit_user_content_manager_register_script_message_handler(
         manager: *mut WebKitUserContentManager,
         name: *const c_char,
@@ -345,5 +352,5 @@ unsafe extern "C" {
     pub(crate) fn JSStringRelease(string: *mut c_void);
 
     // WebKitGTK 4.0 2.22+ and WebKitGTK 4.1
-    pub(crate) fn jsc_value_to_string(value: *mut c_void) -> *const c_char;
+    pub(crate) fn jsc_value_to_string(value: *mut c_void) -> *mut c_char;
 }

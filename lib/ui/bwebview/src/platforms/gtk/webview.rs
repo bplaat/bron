@@ -165,6 +165,7 @@ impl PlatformWebview {
                 null(),
             );
             webkit_user_content_manager_add_script(user_content_manager, user_script);
+            webkit_user_script_unref(user_script);
             g_signal_connect_data(
                 user_content_manager as *mut GObject,
                 c"script-message-received::ipc".as_ptr(),
@@ -461,6 +462,7 @@ impl crate::WebviewInterface for PlatformWebview {
                 null(),
             );
             webkit_user_content_manager_add_script(user_content_manager, user_script);
+            webkit_user_script_unref(user_script);
         }
     }
 }
@@ -577,7 +579,9 @@ fn js_result_to_string(result: *mut WebKitJavascriptResult) -> String {
         any(webkit2gtk_4_1, webkit2gtk_4_0_jsc_glib) => {
             let value = unsafe { webkit_javascript_result_get_js_value(result) };
             let s = unsafe { jsc_value_to_string(value) };
-            unsafe { CStr::from_ptr(s) }.to_string_lossy().into_owned()
+            let message = unsafe { CStr::from_ptr(s) }.to_string_lossy().into_owned();
+            unsafe { g_free(s.cast()) };
+            message
         }
         _ => {
             let ctx = unsafe { webkit_javascript_result_get_global_context(result) };
@@ -681,21 +685,12 @@ fn webkit_finish_uri_scheme_response(
     uri_scheme_request: *mut WebKitURISchemeRequest,
     res: small_http::Response,
 ) {
-    extern "C" fn body_data_destroy(data: *mut c_void) {
-        drop(unsafe { Box::from_raw(data as *mut u8) });
-    }
-    let stream = unsafe {
-        g_memory_input_stream_new_from_data(
-            Box::into_raw(res.body.clone().into_boxed_slice()) as *const c_void,
-            res.body.len(),
-            body_data_destroy as *const c_void,
-        )
-    };
+    let body_len = res.body.len() as i64;
+    let stream = response_body_stream(res.body);
 
     cfg_select! {
         webkit2gtk_4_1 => {
-            let uri_scheme_response =
-                unsafe { webkit_uri_scheme_response_new(stream, res.body.len() as i64) };
+            let uri_scheme_response = unsafe { webkit_uri_scheme_response_new(stream, body_len) };
             unsafe {
                 webkit_uri_scheme_response_set_status(
                     uri_scheme_response,
@@ -739,10 +734,61 @@ fn webkit_finish_uri_scheme_response(
                 webkit_uri_scheme_request_finish(
                     uri_scheme_request,
                     stream,
-                    res.body.len() as i64,
+                    body_len,
                     content_type.as_ref().map_or(null(), |ct| ct.as_ptr()),
                 );
-                g_object_unref(stream as *mut GObject);
+            }
+        }
+    }
+    unsafe { g_object_unref(stream.cast()) };
+}
+
+#[cfg(feature = "custom_protocol")]
+fn response_body_stream(body: Vec<u8>) -> *mut GInputStream {
+    extern "C" fn body_data_destroy(data: *mut c_void) {
+        drop(unsafe { Box::from_raw(data.cast::<Vec<u8>>()) });
+    }
+    let body = Box::new(body);
+    unsafe {
+        // GBytes keeps the Rust allocation alive until the last stream reference is released.
+        let bytes = g_bytes_new_with_free_func(
+            body.as_ptr().cast(),
+            body.len(),
+            body_data_destroy,
+            Box::into_raw(body).cast(),
+        );
+        let stream = g_memory_input_stream_new_from_bytes(bytes);
+        g_bytes_unref(bytes);
+        stream
+    }
+}
+
+#[cfg(all(test, feature = "custom_protocol"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn response_stream_keeps_body_alive_until_last_reference() {
+        for expected in [Vec::new(), vec![0xAB; 65536]] {
+            let mut body = Vec::with_capacity(expected.len() + 1024);
+            body.extend_from_slice(&expected);
+            let stream = response_body_stream(body);
+            unsafe {
+                g_object_ref(stream.cast());
+                g_object_unref(stream.cast());
+                let mut actual = vec![0; expected.len() + 1];
+                let mut bytes_read = 0;
+                assert!(g_input_stream_read_all(
+                    stream,
+                    actual.as_mut_ptr().cast(),
+                    actual.len(),
+                    &mut bytes_read,
+                    null_mut(),
+                    null_mut(),
+                ));
+                actual.truncate(bytes_read);
+                assert_eq!(actual, expected);
+                g_object_unref(stream.cast());
             }
         }
     }
