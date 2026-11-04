@@ -28,6 +28,11 @@ impl Media {
         }
     }
 
+    /// Whether the media is a still bitmap, which can be edited.
+    pub const fn is_still(&self) -> bool {
+        matches!(self, Self::Raster(raster) if raster.frames.len() == 1)
+    }
+
     /// Returns the frame shown after `elapsed` of playback, and how long until the next frame
     /// is shown when the media is still playing.
     pub fn frame_at(&self, elapsed: Duration) -> (usize, Option<Duration>) {
@@ -119,7 +124,7 @@ pub fn decode_media(bytes: &[u8]) -> Result<Media, String> {
 }
 
 // Converts straight-alpha RGBA8 pixels to premultiplied BGRA8 pixels.
-fn premultiplied_bgra(pixels: &[u8]) -> Vec<u8> {
+pub(crate) fn premultiplied_bgra(pixels: &[u8]) -> Vec<u8> {
     let mut output = pixels.to_vec();
     for pixel in output.as_chunks_mut::<4>().0 {
         let [red, green, blue, alpha] = *pixel;

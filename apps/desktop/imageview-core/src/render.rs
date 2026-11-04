@@ -100,6 +100,16 @@ pub fn render_thumbnail(media: Media, size: u32) -> Option<image::Bitmap> {
         return None;
     }
     let scale = (f64::from(size) / width.max(height)).min(1.0);
+    render_media(media, scale)
+}
+
+/// Renders the first frame of media at a scale of its natural size, as a bitmap of
+/// straight-alpha RGBA pixels. Vectors are drawn at that size, so they stay sharp.
+pub fn render_media(media: Media, scale: f64) -> Option<image::Bitmap> {
+    let (width, height) = media.size();
+    if width <= 0.0 || height <= 0.0 || scale <= 0.0 {
+        return None;
+    }
     let (width, height) = (
         (width * scale).round().max(1.0) as u32,
         (height * scale).round().max(1.0) as u32,
@@ -810,6 +820,16 @@ mod tests {
         assert_eq!(&thumbnail.data()[..4], [255, 0, 0, 255]);
         let small = render_thumbnail(decode_media(svg).expect("SVG"), 1000).expect("thumbnail");
         assert_eq!((small.width(), small.height()), (400, 200));
+    }
+
+    #[test]
+    fn vectors_render_at_any_scale() {
+        let svg = br#"<svg xmlns="http://www.w3.org/2000/svg" width="400" height="200">
+            <rect width="400" height="200" fill="red"/></svg>"#;
+        let large = render_media(decode_media(svg).expect("SVG"), 1.5).expect("render");
+        assert_eq!((large.width(), large.height()), (600, 300));
+        assert_eq!(&large.data()[..4], [255, 0, 0, 255]);
+        assert!(render_media(decode_media(svg).expect("SVG"), 0.0).is_none());
     }
 
     #[test]
