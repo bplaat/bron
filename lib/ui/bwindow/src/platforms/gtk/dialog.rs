@@ -103,17 +103,19 @@ impl crate::FileDialogInterface for PlatformFileDialog {
             };
             let native = cfg!(gtk3_20) && customize.is_none();
             let chooser = cfg_select! {
-                gtk3_20 => if native {
-                    gtk_file_chooser_native_new(
-                        title.as_ptr(),
-                        parent,
-                        GTK_FILE_CHOOSER_ACTION_SAVE,
-                        c"_Save".as_ptr(),
-                        c"_Cancel".as_ptr(),
-                    ) as *mut c_void
-                } else {
-                    new_dialog()
-                },
+                gtk3_20 => {
+                    if native {
+                        gtk_file_chooser_native_new(
+                            title.as_ptr(),
+                            parent,
+                            GTK_FILE_CHOOSER_ACTION_SAVE,
+                            c"_Save".as_ptr(),
+                            c"_Cancel".as_ptr(),
+                        ) as *mut c_void
+                    } else {
+                        new_dialog()
+                    }
+                }
                 _ => new_dialog(),
             };
 
@@ -132,11 +134,13 @@ impl crate::FileDialogInterface for PlatformFileDialog {
             }
 
             let result = cfg_select! {
-                gtk3_20 => if native {
-                    gtk_native_dialog_run(chooser as *mut GtkNativeDialog)
-                } else {
-                    gtk_dialog_run(chooser as *mut GtkDialog)
-                },
+                gtk3_20 => {
+                    if native {
+                        gtk_native_dialog_run(chooser as *mut GtkNativeDialog)
+                    } else {
+                        gtk_dialog_run(chooser as *mut GtkDialog)
+                    }
+                }
                 _ => gtk_dialog_run(chooser as *mut GtkDialog),
             };
 
