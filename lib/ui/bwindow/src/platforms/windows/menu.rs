@@ -8,7 +8,7 @@ use std::cell::{Cell, RefCell};
 use std::ptr::null_mut;
 
 use super::headers::*;
-use crate::{Accelerator, Event, KeyCode, MenuBarBuilder, Modifiers};
+use crate::{Accelerator, KeyCode, MenuBarBuilder, Modifiers};
 
 thread_local! {
     static NATIVE: Cell<(HWND, HANDLE)> = const { Cell::new((null_mut(), null_mut())) };
@@ -86,8 +86,8 @@ pub(super) unsafe fn translate(message: *mut MSG) -> bool {
 
 pub(super) fn activate(id: usize) {
     let action = ACTIONS.with(|actions| actions.borrow().get(id.wrapping_sub(1)).cloned());
-    if let Some(action) = action {
-        super::event_loop::send_event(Event::Action(action));
+    if let Some(event) = action.and_then(crate::menu::action_event) {
+        super::event_loop::send_event(event);
     }
 }
 

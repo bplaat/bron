@@ -240,7 +240,9 @@ extern "C" fn release_action(data: *mut c_void, _: *mut c_void) {
 )]
 extern "C" fn activate_custom(_: *mut GSimpleAction, _: *mut GVariant, _data: *const String) {
     #[cfg(feature = "menu")]
-    super::event_loop::send_event(crate::Event::Action(unsafe { &*_data }.clone()));
+    if let Some(event) = crate::menu::action_event(unsafe { &*_data }.clone()) {
+        super::event_loop::send_event(event);
+    }
 }
 
 extern "C" fn activate(action: *mut GSimpleAction, state: *mut GVariant, _: *mut c_void) {
@@ -418,6 +420,24 @@ fn is_fullscreen(window: *mut GtkWindow) -> bool {
     }
     let native = unsafe { gtk_widget_get_window(window.cast()) };
     !native.is_null() && unsafe { gdk_window_get_state(native) & GDK_WINDOW_STATE_FULLSCREEN != 0 }
+}
+
+/// Grays out the menu items of a custom action, or shows them again.
+#[cfg(feature = "menu")]
+pub(crate) fn set_action_enabled(action: &str, enabled: bool) {
+    let application = super::event_loop::application();
+    let Ok(name) = CString::new(action) else {
+        return;
+    };
+    if application.is_null() {
+        return;
+    }
+    unsafe {
+        let action = g_action_map_lookup_action(application.cast(), name.as_ptr());
+        if !action.is_null() {
+            g_simple_action_set_enabled(action, enabled as i32);
+        }
+    }
 }
 
 pub(crate) fn update_actions() {

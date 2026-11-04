@@ -11,6 +11,8 @@ pub(crate) use crate::platforms::gtk::event_loop::{
     PlatformEventLoop, PlatformEventLoopProxy, PlatformMonitor,
 };
 pub(crate) use crate::platforms::gtk::frame::FrameSource;
+#[cfg(feature = "menu")]
+pub(crate) use crate::platforms::gtk::menu::set_action_enabled;
 pub(crate) use crate::platforms::gtk::window::{PlatformWindow, embed_native_view};
 
 mod content;

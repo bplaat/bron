@@ -145,7 +145,8 @@ and let backgrounds fill the window. Changes, like rotating the device, send
 - `remember_window_state` (default): persist native window placement.
 - `dialog`: native message and file dialogs.
 - `file_drop`: native file-drop events.
-- `menu`: custom application menus and their keyboard shortcuts.
+- `menu`: custom application menus and their keyboard shortcuts, which can be enabled,
+  disabled and retitled while the application runs.
 - `progress_bar`: Windows taskbar and GTK launcher progress.
 
 ## iOS

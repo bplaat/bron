@@ -88,6 +88,11 @@ define_class!(
         #[cfg(feature = "menu")]
         #[unsafe(method(menuItemSelected:))]
         fn _menu_item_selected(&self, sender: *mut Object) { self.menu_item_selected(sender); }
+
+        // Custom items follow the enabled state and title of their action.
+        #[cfg(feature = "menu")]
+        #[unsafe(method(validateMenuItem:))]
+        fn _validate_menu_item(&self, item: *mut Object) -> Bool { Self::validate_menu_item(item) }
     }
 );
 
@@ -171,7 +176,27 @@ impl AppDelegate {
     #[cfg(feature = "menu")]
     fn menu_item_selected(&self, sender: *mut Object) {
         let action: NSString = unsafe { msg_send![sender, representedObject] };
-        send_event(Event::Action(action.to_string()));
+        if let Some(event) = crate::menu::action_event(action.to_string()) {
+            send_event(event);
+        }
+    }
+
+    #[cfg(feature = "menu")]
+    fn validate_menu_item(item: *mut Object) -> Bool {
+        let selector: objc2::runtime::Sel = unsafe { msg_send![item, action] };
+        if selector != sel!(menuItemSelected:) {
+            return Bool::YES;
+        }
+        let action: NSString = unsafe { msg_send![item, representedObject] };
+        let action = action.to_string();
+        if let Some(title) = crate::menu::menu_item_title(&action) {
+            let _: () = unsafe { msg_send![item, setTitle:&*NSString::new(title)] };
+        }
+        if crate::is_menu_item_enabled(&action) {
+            Bool::YES
+        } else {
+            Bool::NO
+        }
     }
 }
 

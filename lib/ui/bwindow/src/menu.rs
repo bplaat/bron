@@ -4,7 +4,80 @@
  * SPDX-License-Identifier: MIT
  */
 
+#[cfg(feature = "menu")]
+use std::cell::RefCell;
+#[cfg(feature = "menu")]
+use std::collections::HashMap;
+
 use crate::{KeyCode, Modifiers};
+
+// The changed state of the menu items of an action.
+#[cfg(feature = "menu")]
+#[derive(Default)]
+struct ItemState {
+    disabled: bool,
+    title: Option<String>,
+}
+
+#[cfg(feature = "menu")]
+thread_local! {
+    static ITEM_STATES: RefCell<HashMap<String, ItemState>> = RefCell::new(HashMap::new());
+}
+
+/// Enables or disables the menu items and keyboard accelerators of an action. Disabled items
+/// are grayed out on macOS and GTK, and their action events are not sent.
+#[cfg(feature = "menu")]
+pub fn set_menu_item_enabled(action: &str, enabled: bool) {
+    let changed = ITEM_STATES.with_borrow_mut(|states| {
+        let state = states.entry(action.to_owned()).or_default();
+        std::mem::replace(&mut state.disabled, !enabled) == enabled
+    });
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "freebsd",
+        target_os = "dragonfly",
+        target_os = "openbsd",
+        target_os = "netbsd"
+    ))]
+    if changed {
+        crate::platforms::set_action_enabled(action, enabled);
+    }
+    #[cfg(not(any(
+        target_os = "linux",
+        target_os = "freebsd",
+        target_os = "dragonfly",
+        target_os = "openbsd",
+        target_os = "netbsd"
+    )))]
+    let _ = changed;
+}
+
+/// Changes the title of the menu items of an action, which macOS shows the next time the menu
+/// opens.
+#[cfg(feature = "menu")]
+pub fn set_menu_item_title(action: &str, title: impl Into<String>) {
+    ITEM_STATES.with_borrow_mut(|states| {
+        states.entry(action.to_owned()).or_default().title = Some(title.into());
+    });
+}
+
+/// Whether the menu items of an action are enabled, which they are until disabled.
+#[cfg(feature = "menu")]
+pub fn is_menu_item_enabled(action: &str) -> bool {
+    ITEM_STATES.with_borrow(|states| states.get(action).is_none_or(|state| !state.disabled))
+}
+
+// The changed title of the menu items of an action.
+#[cfg(all(feature = "menu", target_os = "macos"))]
+pub(crate) fn menu_item_title(action: &str) -> Option<String> {
+    ITEM_STATES.with_borrow(|states| states.get(action).and_then(|state| state.title.clone()))
+}
+
+// The event of a chosen menu item or accelerator, none while its action is disabled.
+#[cfg(feature = "menu")]
+pub(crate) fn action_event<T>(action: String) -> Option<crate::Event<T>> {
+    is_menu_item_enabled(&action).then_some(crate::Event::Action(action))
+}
 
 /// Application keyboard accelerator
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -109,5 +182,25 @@ impl MenuBarBuilder {
                 MenuBuilderEntry::Item(item) => Some(item),
                 MenuBuilderEntry::Separator => None,
             })
+    }
+}
+
+#[cfg(all(test, feature = "menu"))]
+mod tests {
+    use super::*;
+    use crate::Event;
+
+    #[test]
+    fn disabled_actions_send_no_events() {
+        assert!(is_menu_item_enabled("test.open"));
+        assert!(matches!(
+            action_event::<()>("test.open".into()),
+            Some(Event::Action(action)) if action == "test.open"
+        ));
+        set_menu_item_enabled("test.open", false);
+        assert!(!is_menu_item_enabled("test.open"));
+        assert!(action_event::<()>("test.open".into()).is_none());
+        set_menu_item_enabled("test.open", true);
+        assert!(action_event::<()>("test.open".into()).is_some());
     }
 }
