@@ -126,6 +126,9 @@ opt-level = 3
 [profile.release.package.pbkdf2]
 opt-level = 3
 
+[profile.release.package.plaatcraft-engine]
+opt-level = 3
+
 [profile.release.package.reversi-engine]
 opt-level = 3
 

@@ -25,9 +25,14 @@ serde = { version = "1.0", default-features = false, features = [
 sfxr = { version = "0.1.4", default-features = false }
 
 [dev-dependencies]
+criterion = "0.8"
 image = { path = "../../lib/graphics/image", default-features = false, features = [
     "png",
 ] }
+
+[[bench]]
+name = "world"
+harness = false
 
 [lints]
 workspace = true

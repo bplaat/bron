@@ -1033,6 +1033,7 @@ dependencies = [
 name = "plaatcraft-engine"
 version = "0.2.0"
 dependencies = [
+ "criterion",
  "deflate",
  "image",
  "libsqlite3-sys",
