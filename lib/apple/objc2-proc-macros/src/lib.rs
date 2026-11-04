@@ -372,10 +372,15 @@ pub fn define_class(input: TokenStream) -> TokenStream {
                                 __sel: ::objc2::runtime::Sel,
                                 #(#objc_arg_names: #objc_arg_types,)*
                             ) #ret {
-                                Self::#fn_name(
-                                    unsafe { ::objc2::rc::Allocated::from_raw(__this.cast::<Self>()) },
-                                    #(#objc_arg_names,)*
-                                )
+                                unsafe {
+                                    ::objc2::macros::prepare_method_return(
+                                        Self::#fn_name(
+                                            ::objc2::rc::Allocated::from_raw(__this.cast::<Self>()),
+                                            #(#objc_arg_names,)*
+                                        ),
+                                        #sel_str,
+                                    )
+                                }
                             }
                         });
 
@@ -412,7 +417,12 @@ pub fn define_class(input: TokenStream) -> TokenStream {
                             __sel: ::objc2::runtime::Sel,
                             #(#arg_names: #arg_types,)*
                         ) #ret {
-                            unsafe { &*(__this as *const Self) }.#fn_name(#(#arg_names,)*)
+                            unsafe {
+                                ::objc2::macros::prepare_method_return(
+                                    (&*(__this as *const Self)).#fn_name(#(#arg_names,)*),
+                                    #sel_str,
+                                )
+                            }
                         }
                     });
 

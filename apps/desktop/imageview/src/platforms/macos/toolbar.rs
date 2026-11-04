@@ -259,11 +259,9 @@ define_class!(
             item_identifiers(*self.ivars())
         }
 
-        // The method does not own its result, so the item is autoreleased.
         #[unsafe(method(toolbar:itemForItemIdentifier:willBeInsertedIntoToolbar:))]
-        fn _item(&self, _: *mut Object, identifier: *mut Object, _: Bool) -> *mut Object {
+        fn _item(&self, _: *mut Object, identifier: *mut Object, _: Bool) -> Option<Retained<Object>> {
             self.item(identifier)
-                .map_or(null_mut(), Retained::autorelease_ptr)
         }
 
         #[unsafe(method(itemSelected:))]

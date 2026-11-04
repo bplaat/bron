@@ -229,6 +229,23 @@ impl<T: crate::runtime::ClassType> SuperReceiver for &T {
 }
 
 #[doc(hidden)]
+/// Adjust an owned Rust result immediately before returning through the Objective-C ABI.
+///
+/// # Safety
+///
+/// The result must be returned directly to Objective-C, without running its Rust destructor.
+pub unsafe fn prepare_method_return<R: crate::Encode>(value: R, selector: &str) -> R {
+    if R::IS_OBJECT_OWNERSHIP && !selector_returns_retained(selector) {
+        // SAFETY: Ownership wrappers declare the object pointer ABI through Encode.
+        // Objective-C receives the pointer without running the wrapper's destructor.
+        let pointer = unsafe { std::ptr::read((&raw const value).cast::<*mut AnyObject>()) };
+        // SAFETY: The wrapper transfers its +1 ownership to the autorelease pool.
+        unsafe { crate::ffi::objc_autorelease(pointer) };
+    }
+    value
+}
+
+#[doc(hidden)]
 pub fn selector_returns_retained(selector: &str) -> bool {
     fn is_family(selector: &str, family: &str) -> bool {
         selector.starts_with(family)
@@ -238,6 +255,7 @@ pub fn selector_returns_retained(selector: &str) -> bool {
                 .is_none_or(|character| !character.is_ascii_lowercase())
     }
 
+    let selector = selector.trim_start_matches('_');
     selector == "retain"
         || ["alloc", "init", "new", "copy", "mutableCopy"]
             .iter()

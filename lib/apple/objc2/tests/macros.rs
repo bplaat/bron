@@ -18,7 +18,7 @@ use std::ffi::c_void;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use objc2::ffi::{objc_msgSendSuper, objc_super};
-use objc2::rc::{Allocated, Retained};
+use objc2::rc::{Allocated, Retained, autoreleasepool};
 use objc2::runtime::{AnyClass, AnyObject};
 use objc2::{class, define_class, extern_class, msg_send, sel};
 
@@ -352,6 +352,97 @@ fn test_define_class_dealloc_uses_raw_receiver() {
         let _: () = msg_send![object, release];
     }
     assert!(DEALLOCATED.load(Ordering::SeqCst));
+}
+
+// MARK: define_class! - return ownership
+
+type ReturnOwnershipIvars = Retained<AnyObject>;
+
+define_class!(
+    #[unsafe(super(NSObject))]
+    #[ivars = ReturnOwnershipIvars]
+    struct ReturnOwnershipClass;
+
+    impl ReturnOwnershipClass {
+        #[unsafe(method_id(initWithObject:))]
+        fn _init(this: Allocated<Self>, object: *mut AnyObject) -> Option<Retained<Self>> {
+            unsafe { msg_send![super(this.set_ivars(Retained::retain(object).expect("non-null test object"))), init] }
+        }
+
+        #[unsafe(method(object))]
+        fn _object(&self) -> Retained<AnyObject> {
+            self.ivars().clone()
+        }
+
+        #[unsafe(method_id(optionalObject:))]
+        fn _optional_object(&self, present: bool) -> Option<Retained<AnyObject>> {
+            present.then(|| self.ivars().clone())
+        }
+
+        #[unsafe(method(rawObject))]
+        fn _raw_object(&self) -> *mut AnyObject {
+            self.ivars().as_ptr()
+        }
+
+        #[unsafe(method_id(newObject))]
+        fn _new_object(&self) -> Retained<AnyObject> {
+            self.ivars().clone()
+        }
+
+        #[unsafe(method_id(_copyObject))]
+        fn _copy_object(&self) -> Option<Retained<AnyObject>> {
+            Some(self.ivars().clone())
+        }
+
+        #[unsafe(method(newspaper))]
+        fn _newspaper(&self) -> Retained<AnyObject> {
+            self.ivars().clone()
+        }
+    }
+);
+
+#[test]
+fn test_define_class_return_ownership() {
+    unsafe {
+        let object: Retained<AnyObject> = msg_send![class!(NSObject), new];
+        let factory: Allocated<ReturnOwnershipClass> =
+            msg_send![ReturnOwnershipClass::class(), alloc];
+        let factory: Retained<ReturnOwnershipClass> =
+            msg_send![factory, initWithObject: object.as_ptr()];
+        let retain_count = || -> usize { msg_send![&object, retainCount] };
+        let baseline = retain_count();
+
+        // The Rust caller must keep one retain after the pool drains, then release it on drop.
+        macro_rules! check_return {
+            ($($selector:tt)*) => {
+                let returned: Retained<AnyObject> = autoreleasepool(|_| {
+                    msg_send![&factory, $($selector)*]
+                });
+                assert_eq!(returned.as_ptr(), object.as_ptr());
+                assert_eq!(retain_count(), baseline + 1);
+                drop(returned);
+                assert_eq!(retain_count(), baseline);
+            };
+        }
+        check_return!(object);
+        check_return!(optionalObject: true);
+        check_return!(newObject);
+        check_return!(_copyObject);
+        check_return!(newspaper);
+
+        autoreleasepool(|_| {
+            let absent: Option<Retained<AnyObject>> = msg_send![&factory, optionalObject: false];
+            assert!(absent.is_none());
+            let borrowed: *mut AnyObject = msg_send![&factory, rawObject];
+            assert_eq!(borrowed, object.as_ptr());
+        });
+        assert_eq!(retain_count(), baseline);
+
+        let direct = autoreleasepool(|_| factory._object());
+        assert_eq!(retain_count(), baseline + 1);
+        drop(direct);
+        assert_eq!(retain_count(), baseline);
+    }
 }
 
 // MARK: extern_class!
