@@ -172,6 +172,37 @@ unsafe extern "system" {
     fn QueryContextAttributesW(context: *mut CtxtHandle, attr: u32, buf: *mut c_void) -> i32;
 }
 
+struct SecurityHandles {
+    cred: CredHandle,
+    ctx: CtxtHandle,
+}
+
+impl Drop for SecurityHandles {
+    fn drop(&mut self) {
+        // SAFETY: These handles are uniquely owned. A partially established context must also
+        // be deleted, before releasing the credentials it uses.
+        unsafe {
+            if !self.ctx.is_invalid() {
+                DeleteSecurityContext(&mut self.ctx);
+            }
+            if !self.cred.is_invalid() {
+                FreeCredentialsHandle(&mut self.cred);
+            }
+        }
+    }
+}
+
+struct ContextBuffer(*mut c_void);
+
+impl Drop for ContextBuffer {
+    fn drop(&mut self) {
+        if !self.0.is_null() {
+            // SAFETY: SChannel transfers ownership of each output token to the caller.
+            unsafe { FreeContextBuffer(self.0) };
+        }
+    }
+}
+
 fn to_utf16(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
 }
@@ -223,11 +254,11 @@ fn acquire_cred(accept_invalid_certs: bool) -> Result<CredHandle, Error> {
 }
 
 fn do_handshake<S: Read + Write>(
-    cred: &mut CredHandle,
+    handles: &mut SecurityHandles,
     domain: &[u16],
     stream: &mut S,
-) -> Result<(CtxtHandle, Vec<u8>), Error> {
-    let mut ctx = CtxtHandle::INVALID;
+) -> Result<Vec<u8>, Error> {
+    let SecurityHandles { cred, ctx } = handles;
     let mut in_data: Vec<u8> = Vec::new();
     let mut first_call = true;
 
@@ -259,7 +290,7 @@ fn do_handshake<S: Read + Write>(
                     0,
                     std::ptr::null_mut(),
                     0,
-                    &mut ctx,
+                    ctx,
                     &mut out_desc,
                     &mut ctx_attrs,
                     &mut expiry,
@@ -287,14 +318,14 @@ fn do_handshake<S: Read + Write>(
             let status = unsafe {
                 InitializeSecurityContextW(
                     cred,
-                    &mut ctx,
+                    ctx,
                     domain.as_ptr(),
                     ISC_FLAGS,
                     0,
                     0,
                     &mut in_desc,
                     0,
-                    &mut ctx,
+                    ctx,
                     &mut out_desc,
                     &mut ctx_attrs,
                     &mut expiry,
@@ -317,20 +348,19 @@ fn do_handshake<S: Read + Write>(
         };
         first_call = false;
 
-        // Send output token if any
-        if !out_buf.pv_buffer.is_null() && out_buf.cb_buffer > 0 {
+        // Release the token on every path, including an I/O error or an empty output.
+        let token = ContextBuffer(out_buf.pv_buffer);
+        if !token.0.is_null() && out_buf.cb_buffer > 0 {
             // SAFETY: SChannel allocated out_buf.pv_buffer (ISC_REQ_ALLOCATE_MEMORY) and
             // cb_buffer bytes are valid; FreeContextBuffer releases SChannel-allocated memory.
-            let data = unsafe {
-                slice::from_raw_parts(out_buf.pv_buffer as *const u8, out_buf.cb_buffer as usize)
-            };
+            let data =
+                unsafe { slice::from_raw_parts(token.0 as *const u8, out_buf.cb_buffer as usize) };
             stream.write_all(data).map_err(|e| Error(e.to_string()))?;
-            // SAFETY: out_buf.pv_buffer is non-null and was allocated by SChannel.
-            unsafe { FreeContextBuffer(out_buf.pv_buffer) };
         }
+        drop(token);
 
         match status {
-            SEC_E_OK => return Ok((ctx, in_data)),
+            SEC_E_OK => return Ok(in_data),
             SEC_I_CONTINUE_NEEDED => {
                 // Only read from the network when there is no leftover data from
                 // SECBUFFER_EXTRA; if there is, loop immediately with that data.
@@ -353,10 +383,6 @@ fn do_handshake<S: Read + Write>(
                 in_data.extend_from_slice(&chunk[..n]);
             }
             _ => {
-                if !ctx.is_invalid() {
-                    // SAFETY: ctx is a valid (non-invalid) context handle.
-                    unsafe { DeleteSecurityContext(&mut ctx) };
-                }
                 return Err(Error(format!(
                     "TLS handshake error: 0x{:08x}",
                     status as u32
@@ -422,15 +448,16 @@ impl TlsConnector {
         domain: &str,
         stream: S,
     ) -> Result<TlsStream<S>, Error> {
-        let mut cred = acquire_cred(self.accept_invalid_certs)?;
+        let mut handles = SecurityHandles {
+            cred: acquire_cred(self.accept_invalid_certs)?,
+            ctx: CtxtHandle::INVALID,
+        };
         let domain = to_utf16(domain);
         let mut stream = stream;
-        let (ctx, enc_buf) = do_handshake(&mut cred, &domain, &mut stream)?;
-        let mut ctx = ctx;
-        let sizes = query_stream_sizes(&mut ctx)?;
+        let enc_buf = do_handshake(&mut handles, &domain, &mut stream)?;
+        let sizes = query_stream_sizes(&mut handles.ctx)?;
         Ok(TlsStream {
-            cred,
-            ctx,
+            handles,
             stream,
             sizes,
             enc_buf,
@@ -442,8 +469,7 @@ impl TlsConnector {
 // MARK: TlsStream
 /// A TLS stream backed by SChannel
 pub struct TlsStream<S> {
-    cred: CredHandle,
-    ctx: CtxtHandle,
+    handles: SecurityHandles,
     stream: S,
     sizes: SecPkgContextStreamSizes,
     enc_buf: Vec<u8>, // buffered ciphertext read from stream
@@ -506,8 +532,9 @@ impl<S: Read + Write> Read for TlsStream<S> {
                 };
                 // SAFETY: self.ctx is a valid context handle; bufs[0].pv_buffer points into
                 // self.enc_buf which is alive for this call; the other buffers are empty outputs.
-                let status =
-                    unsafe { DecryptMessage(&mut self.ctx, &mut desc, 0, std::ptr::null_mut()) };
+                let status = unsafe {
+                    DecryptMessage(&mut self.handles.ctx, &mut desc, 0, std::ptr::null_mut())
+                };
 
                 match status {
                     SEC_E_OK => {
@@ -612,7 +639,7 @@ impl<S: Read + Write> Write for TlsStream<S> {
 
         // SAFETY: self.ctx is a valid context handle; all buffer pointers are into enc_buf which
         // is alive for the duration of the call; EncryptMessage operates in-place.
-        let status = unsafe { EncryptMessage(&mut self.ctx, 0, &mut desc, 0) };
+        let status = unsafe { EncryptMessage(&mut self.handles.ctx, 0, &mut desc, 0) };
         if status != SEC_E_OK {
             return Err(io::Error::other(format!(
                 "EncryptMessage failed: 0x{:08x}",
@@ -632,12 +659,50 @@ impl<S: Read + Write> Write for TlsStream<S> {
     }
 }
 
-impl<S> Drop for TlsStream<S> {
-    fn drop(&mut self) {
-        // SAFETY: ctx and cred are valid handles; Drop is called at most once.
-        unsafe {
-            DeleteSecurityContext(&mut self.ctx);
-            FreeCredentialsHandle(&mut self.cred);
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct FailingStream {
+        fail_write: bool,
+    }
+
+    impl Read for FailingStream {
+        fn read(&mut self, _: &mut [u8]) -> io::Result<usize> {
+            Err(io::Error::other("read failed"))
+        }
+    }
+
+    impl Write for FailingStream {
+        fn write(&mut self, data: &[u8]) -> io::Result<usize> {
+            if self.fail_write {
+                Err(io::Error::other("write failed"))
+            } else {
+                Ok(data.len())
+            }
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn handshake_propagates_transport_errors() {
+        let connector = TlsConnector::new().expect("TLS connector");
+        for fail_write in [false, true] {
+            let Err(error) = connector.connect_inner("localhost", FailingStream { fail_write })
+            else {
+                panic!("failing stream completed its handshake");
+            };
+            assert_eq!(
+                error.0,
+                if fail_write {
+                    "write failed"
+                } else {
+                    "read failed"
+                }
+            );
         }
     }
 }
