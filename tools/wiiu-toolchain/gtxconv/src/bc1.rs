@@ -15,8 +15,9 @@ const WEIGHTS: Rgb = [4, 16, 1];
 /// The bit offset and maximum value of the red, green and blue channels of a 565 color.
 const CHANNELS_565: [(u16, u16); 3] = [(11, 31), (5, 63), (0, 31)];
 
-fn color_error(a: &Rgb, b: &Rgb) -> i32 {
-    (0..3).map(|c| (a[c] - b[c]).pow(2) * WEIGHTS[c]).sum()
+const fn color_error(a: &Rgb, b: &Rgb) -> i32 {
+    let [red, green, blue] = [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+    red * red * WEIGHTS[0] + green * green * WEIGHTS[1] + blue * blue * WEIGHTS[2]
 }
 
 /// Returns the index of the first palette color with the lowest error and that error.
@@ -27,6 +28,13 @@ fn nearest(color: &Rgb, palette: &[Rgb]) -> (usize, i32) {
         .enumerate()
         .min_by_key(|&(_, error)| error)
         .unwrap_or_default()
+}
+
+/// The red, green and blue samples of a block.
+type Planes = [[i32; 16]; 3];
+
+fn split_planes(colors: &[Rgb; 16]) -> Planes {
+    std::array::from_fn(|channel| std::array::from_fn(|pixel| colors[pixel][channel]))
 }
 
 const fn to_rgb565(color: &Rgb) -> u16 {
@@ -55,24 +63,40 @@ fn hardware_palette(color0: u16, color1: u16) -> ([Rgb; 4], usize) {
 
 /// Encodes a BC1 block: little endian colors and the first pixel of a row in the low bits of
 /// its index byte. Returns the block and its error.
-fn encode_block(colors: &[Rgb; 16], color0: u16, color1: u16) -> ([u8; 8], i32) {
+fn encode_block(planes: &Planes, color0: u16, color1: u16) -> ([u8; 8], i32) {
     let (palette, size) = hardware_palette(color0, color1);
     let mut block = [0; 8];
     block[0..2].copy_from_slice(&color0.to_le_bytes());
     block[2..4].copy_from_slice(&color1.to_le_bytes());
-    let mut error = 0;
-    for (i, color) in colors.iter().enumerate() {
-        let (index, pixel_error) = nearest(color, &palette[..size]);
-        block[4 + i / 4] |= (index as u8) << (2 * (i % 4));
-        error += pixel_error;
+    // Separate channels and loops of one element width keep the pixels independent for SIMD.
+    let mut errors = [i32::MAX; 16];
+    let mut indices = [0i32; 16];
+    for (index, entry) in palette[..size].iter().enumerate() {
+        let mut candidates = [0; 16];
+        for ((plane, value), weight) in planes.iter().zip(entry).zip(WEIGHTS) {
+            for (candidate, sample) in candidates.iter_mut().zip(plane) {
+                *candidate += (sample - value) * (sample - value) * weight;
+            }
+        }
+        for ((error, nearest), candidate) in errors.iter_mut().zip(&mut indices).zip(candidates) {
+            *nearest = if candidate < *error {
+                index as i32
+            } else {
+                *nearest
+            };
+            *error = candidate.min(*error);
+        }
     }
-    (block, error)
+    for (i, index) in indices.into_iter().enumerate() {
+        block[4 + i / 4] |= (index as u8) << (2 * (i % 4));
+    }
+    (block, errors.iter().sum())
 }
 
 /// Encodes the endpoints in the four color or three color mode, whichever has less error.
-fn encode_best_mode(colors: &[Rgb; 16], a: u16, b: u16) -> ([u8; 8], i32) {
-    let four_colors = encode_block(colors, a.max(b), a.min(b));
-    let three_colors = encode_block(colors, a.min(b), a.max(b));
+fn encode_best_mode(planes: &Planes, a: u16, b: u16) -> ([u8; 8], i32) {
+    let four_colors = encode_block(planes, a.max(b), a.min(b));
+    let three_colors = encode_block(planes, a.min(b), a.max(b));
     if three_colors.1 < four_colors.1 {
         three_colors
     } else {
@@ -83,7 +107,8 @@ fn encode_best_mode(colors: &[Rgb; 16], a: u16, b: u16) -> ([u8; 8], i32) {
 /// Compresses a 4x4 block of colors, row by row, to a BC1 block.
 pub(crate) fn compress_block(colors: &[Rgb; 16]) -> [u8; 8] {
     let mut endpoints = base_colors(colors).map(|color| to_rgb565(&color));
-    let (mut block, mut error) = encode_best_mode(colors, endpoints[0], endpoints[1]);
+    let planes = split_planes(colors);
+    let (mut block, mut error) = encode_best_mode(&planes, endpoints[0], endpoints[1]);
 
     // Step the channels of both endpoints while that lowers the error
     let mut improved = true;
@@ -100,7 +125,7 @@ pub(crate) fn compress_block(colors: &[Rgb; 16]) -> [u8; 8] {
                     candidate[endpoint] =
                         (candidate[endpoint] & !(max << shift)) | ((value as u16) << shift);
                     let (candidate_block, candidate_error) =
-                        encode_best_mode(colors, candidate[0], candidate[1]);
+                        encode_best_mode(&planes, candidate[0], candidate[1]);
                     if candidate_error < error {
                         (block, error, endpoints) = (candidate_block, candidate_error, candidate);
                         improved = true;
@@ -171,6 +196,35 @@ mod tests {
     }
 
     #[test]
+    fn block_search_matches_nearest_palette_colors() {
+        let mut state = 0x2545_f491u32;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 17;
+            state ^= state << 5;
+            state
+        };
+        for _ in 0..1000 {
+            let colors: [Rgb; 16] = std::array::from_fn(|_| {
+                let value = next();
+                [value & 255, value >> 8 & 255, value >> 16 & 255].map(|sample| sample as i32)
+            });
+            let (color0, color1) = (next() as u16, next() as u16);
+            let (palette, size) = hardware_palette(color0, color1);
+            let (block, error) = encode_block(&split_planes(&colors), color0, color1);
+            let mut expected = block;
+            expected[4..].fill(0);
+            let mut expected_error = 0;
+            for (i, color) in colors.iter().enumerate() {
+                let (index, pixel_error) = nearest(color, &palette[..size]);
+                expected[4 + i / 4] |= (index as u8) << (2 * (i % 4));
+                expected_error += pixel_error;
+            }
+            assert_eq!((block, error), (expected, expected_error));
+        }
+    }
+
+    #[test]
     fn compresses_solid_block_losslessly() {
         let colors = [[255, 255, 255]; 16];
         assert_eq!(decoded_error(&colors, &compress_block(&colors)), 0);
@@ -190,7 +244,7 @@ mod tests {
             [i * 16, 255 - i * 9, (i * 37) % 256]
         });
         let base = base_colors(&colors).map(|color| to_rgb565(&color));
-        let (_, base_error) = encode_best_mode(&colors, base[0], base[1]);
+        let (_, base_error) = encode_best_mode(&split_planes(&colors), base[0], base[1]);
         assert!(decoded_error(&colors, &compress_block(&colors)) < base_error);
     }
 

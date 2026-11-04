@@ -614,6 +614,7 @@ name = "gtxconv"
 version = "0.1.0"
 dependencies = [
  "basic-toml",
+ "criterion",
  "image",
  "serde",
 ]
