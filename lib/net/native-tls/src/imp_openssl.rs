@@ -286,6 +286,9 @@ impl TlsConnector {
         domain: &str,
         stream: S,
     ) -> Result<TlsStream<S>, Error> {
+        let domain_c =
+            CString::new(domain).map_err(|_| Error("Invalid domain name".to_string()))?;
+
         // SAFETY: self.ctx is a non-null SSL_CTX valid for the connector's lifetime.
         let ssl = unsafe { SSL_new(self.ctx) };
         if ssl.is_null() {
@@ -294,9 +297,6 @@ impl TlsConnector {
                 openssl_error_string()
             )));
         }
-
-        let domain_c =
-            CString::new(domain).map_err(|_| Error("Invalid domain name".to_string()))?;
 
         // Set SNI hostname
         // SAFETY: ssl is non-null; domain_c is a valid C string valid for the call duration.
@@ -797,6 +797,9 @@ impl TlsConnector {
         domain: &str,
         stream: S,
     ) -> Result<TlsStream<S>, Error> {
+        let domain_c =
+            CString::new(domain).map_err(|_| Error("Invalid domain name".to_string()))?;
+
         // SAFETY: self.ctx is a non-null SSL_CTX valid for the connector's lifetime.
         let ssl = unsafe { SSL_new(self.ctx) };
         if ssl.is_null() {
@@ -806,8 +809,6 @@ impl TlsConnector {
             )));
         }
 
-        let domain_c =
-            CString::new(domain).map_err(|_| Error("Invalid domain name".to_string()))?;
         // SAFETY: ssl is non-null; domain_c is a valid C string for the call duration.
         unsafe {
             // Set SNI hostname
@@ -986,6 +987,24 @@ impl<S> Drop for TlsStream<S> {
                 SSL_shutdown(self.ssl);
             }
             SSL_free(self.ssl); // also frees the BIO
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rejects_embedded_nul_before_handshake() {
+        let connector = TlsConnector::new().expect("TLS connector");
+        // Repeated invalid requests must not leave SSL allocations behind.
+        for _ in 0..32 {
+            let stream = io::Cursor::new(Vec::<u8>::new());
+            let Err(error) = connector.connect_inner("local\0host", stream) else {
+                panic!("invalid hostname was accepted");
+            };
+            assert_eq!(error.0, "Invalid domain name");
         }
     }
 }
