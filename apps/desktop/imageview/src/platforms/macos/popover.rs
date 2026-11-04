@@ -211,12 +211,7 @@ impl Target {
     fn show_values(&self, values: &[f32]) {
         for (entry, value) in self.ivars().entries.borrow().iter().zip(values) {
             if let (Control::Slider(parameter), Some(label)) = (entry.control, &entry.value) {
-                // Small ranges show a decimal.
-                let text = if parameter.max - parameter.min <= 10.0 {
-                    format!("{value:.1}")
-                } else {
-                    format!("{}", value.round() as i64)
-                };
+                let text = parameter.value_text(*value);
                 // SAFETY: The label is a live text field.
                 unsafe {
                     let _: () = msg_send![&**label, setStringValue: ns_string(&text)];

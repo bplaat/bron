@@ -136,12 +136,7 @@ impl State {
     fn show_values(&self, values: &[f32]) {
         for (entry, value) in self.entries.borrow().iter().zip(values) {
             if let Control::Slider(parameter) = entry.control {
-                // Small ranges show a decimal.
-                let text = if parameter.max - parameter.min <= 10.0 {
-                    format!("{value:.1}")
-                } else {
-                    format!("{}", value.round() as i64)
-                };
+                let text = parameter.value_text(*value);
                 // SAFETY: The label is a live child of the grid.
                 unsafe { gtk_label_set_text(entry.value, c_string(&text).as_ptr()) };
             }

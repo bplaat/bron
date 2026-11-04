@@ -46,6 +46,15 @@ impl Parameter {
         self.pixels = true;
         self
     }
+
+    /// The text of a value next to its slider, with a decimal for small ranges.
+    pub fn value_text(&self, value: f32) -> String {
+        if self.max - self.min <= 10.0 {
+            format!("{value:.1}")
+        } else {
+            format!("{}", value.round() as i64)
+        }
+    }
 }
 
 /// A change to the colors or sharpness of every pixel.
