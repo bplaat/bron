@@ -112,6 +112,7 @@ struct State {
 
 /// A native scroll view that zooms and pans media.
 pub(crate) struct MediaView {
+    dialog: Option<winui::Dialog>,
     state: Rc<State>,
     _attachment: WindowAttachment,
 }
@@ -209,6 +210,7 @@ impl MediaView {
         state.zoom_to_fit();
         state.start_animation();
         Self {
+            dialog: None,
             state,
             _attachment: attachment,
         }
@@ -241,6 +243,28 @@ impl MediaView {
     /// The shown media.
     pub(crate) fn media(&self) -> Media {
         self.state.viewport.borrow().media().clone()
+    }
+
+    pub(crate) fn show_alert(&mut self, id: WindowId, title: &str, description: &str, save: bool) {
+        if let Some(island) = self.state.island.borrow().as_ref() {
+            island.set_spinner(false);
+            match island.show_alert(title, description, save, move |result| {
+                send(AppEvent::AlertClosed(id, result))
+            }) {
+                Ok(dialog) => self.dialog = Some(dialog),
+                Err(error) => {
+                    eprintln!("Could not show alert: {title}: {description} (0x{error:08x})");
+                    send(AppEvent::AlertClosed(id, 0));
+                }
+            }
+        }
+    }
+
+    pub(crate) fn close_alert(&mut self) {
+        self.dialog.take();
+        if let Some(island) = self.state.island.borrow().as_ref() {
+            island.focus();
+        }
     }
 
     /// Magnifies by `factor`, keeping the middle of the visible area in place.
@@ -425,6 +449,7 @@ impl MediaView {
 
 impl Drop for MediaView {
     fn drop(&mut self) {
+        self.dialog.take();
         // Hide immediately; releasing the XAML tree may wait for composition work.
         // SAFETY: The parent window belongs to this view and may already be destroyed.
         unsafe { ShowWindow(self.state.window.get(), 0) };
@@ -532,8 +557,7 @@ fn erase_background(state: &State, hwnd: HWND, hdc: WPARAM) -> LRESULT {
     1
 }
 
-// Resizes a window around its center so the area below the header bar is `media`, the client
-// area it had before its content extended into the title bar.
+// Reads the window title, which also supplies the heading of the XAML island.
 fn window_text(hwnd: HWND) -> String {
     // SAFETY: The buffer holds the text and its terminator.
     unsafe {
@@ -541,22 +565,6 @@ fn window_text(hwnd: HWND) -> String {
         let length = GetWindowTextW(hwnd, text.as_mut_ptr(), text.len() as i32);
         String::from_utf16_lossy(&text[..length.max(0) as usize])
     }
-}
-
-// Converts straight-alpha RGBA pixels to the premultiplied BGRA pixels of a bitmap.
-fn premultiplied_bgra(rgba: &[u8]) -> Vec<u8> {
-    let mut pixels = rgba.to_vec();
-    for pixel in pixels.as_chunks_mut::<4>().0 {
-        let [red, green, blue, alpha] = *pixel;
-        let premultiply = |channel: u8| (u16::from(channel) * u16::from(alpha) / 255) as u8;
-        *pixel = [
-            premultiply(blue),
-            premultiply(green),
-            premultiply(red),
-            alpha,
-        ];
-    }
-    pixels
 }
 
 impl State {
@@ -706,6 +714,7 @@ impl State {
         let viewport = self.viewport.borrow();
         if !viewport.has_marks() {
             island.set_overlay(None);
+            self.overlay.borrow_mut().take();
             return;
         }
         let (width, height) = self.visible();
@@ -721,7 +730,7 @@ impl State {
         let Some(bitmap) = overlay.as_ref() else {
             return;
         };
-        bitmap.write(&premultiplied_bgra(canvas.pixels()));
+        bitmap.write_rgba(canvas.pixels());
         island.set_overlay(Some((bitmap, (f64::from(logical.0), f64::from(logical.1)))));
     }
 
@@ -774,7 +783,7 @@ impl State {
                 canvas.draw(|context| {
                     renderer.draw(context, frame, (0.0, 0.0, size.0 as f32, size.1 as f32));
                 });
-                target.write(&premultiplied_bgra(canvas.pixels()));
+                target.write_rgba(canvas.pixels());
             }
         }
         // A preview shows at the size of the media.
@@ -821,7 +830,7 @@ impl State {
         let Some(bitmap) = Bitmap::new(canvas.width(), canvas.height()) else {
             return;
         };
-        bitmap.write(&premultiplied_bgra(canvas.pixels()));
+        bitmap.write_rgba(canvas.pixels());
         island.set_checkerboard(
             &bitmap,
             (
@@ -1069,7 +1078,7 @@ mod tests {
 
     #[test]
     #[ignore = "requires an installed Windows App Runtime and a desktop"]
-    fn images_have_no_scrollable_overflow_after_initial_and_deferred_loading() {
+    fn native_windows_layout_and_alerts() {
         let event_loop = EventLoopBuilder::new()
             .with_user_event::<AppEvent>()
             .single_instance(false)
@@ -1123,6 +1132,167 @@ mod tests {
                 );
             }
         }
+        // Exercise ContentDialog on a real island, including its Closed callback and theme.
+        let mut app = crate::App {
+            proxy: std::sync::Arc::new(event_loop.create_proxy()),
+            windows: Vec::new(),
+            active: None,
+            pending_loads: 0,
+            opening: std::collections::HashMap::new(),
+            next_open: 0,
+            theme: Theme::Dark,
+        };
+        let media = Picture::new(2, 1, vec![255; 8]).to_media();
+        app.open_window("alert-test.png".into(), None, Some(media), None);
+        let id = app.windows[0].window.id();
+        layout_frames();
+        let answer = Rc::new(Cell::new(-1i32));
+        let output = answer.clone();
+        let dialog = app.windows[0]
+            .view
+            .state
+            .island
+            .borrow()
+            .as_ref()
+            .unwrap()
+            .show_alert(
+                "Could not save <photo>",
+                "An error with & and \"quotes\".",
+                false,
+                move |result| output.set(result),
+            )
+            .expect("window-attached error dialog");
+        layout_frames();
+        assert_eq!(answer.get(), -1);
+        app.open_window(
+            "other-alert-test.png".into(),
+            None,
+            Some(Picture::new(2, 1, vec![255; 8]).to_media()),
+            None,
+        );
+        let other_id = app.windows.last().unwrap().window.id();
+        app.edit_action("image.rotate_right");
+        assert_eq!(
+            app.windows.last().unwrap().view.media().size(),
+            (1.0, 2.0),
+            "another image window must remain usable"
+        );
+        assert!(!app.finish_editing(other_id, crate::edit::AfterSave::Close));
+        layout_frames();
+        assert!(
+            app.windows.last().unwrap().view.dialog.is_some(),
+            "each window must own its dialog"
+        );
+        app.windows
+            .last()
+            .unwrap()
+            .view
+            .dialog
+            .as_ref()
+            .unwrap()
+            .hide();
+        layout_frames();
+        app.alert_closed(other_id, 2);
+        app.active = Some(id);
+        dialog.hide();
+        for _ in 0..10 {
+            layout_frames();
+            if answer.get() != -1 {
+                break;
+            }
+        }
+        assert_eq!(
+            answer.get(),
+            0,
+            "Close must complete the native dialog asynchronously"
+        );
+        drop(dialog);
+
+        app.edit_action("image.rotate_right");
+        assert!(!app.finish_editing(id, crate::edit::AfterSave::Close));
+        layout_frames();
+        assert!(app.windows[0].is_modal());
+        assert!(
+            app.windows[0].view.dialog.is_some(),
+            "save prompt must be a ContentDialog"
+        );
+        let size = app.windows[0].view.media().size();
+        app.action("image.rotate_right");
+        assert_eq!(
+            app.windows[0].view.media().size(),
+            size,
+            "modal dialog must block image shortcuts"
+        );
+        app.windows[0].view.dialog.as_ref().unwrap().hide();
+        layout_frames();
+        app.alert_closed(id, 0);
+        assert!(
+            app.windows[0].is_editing(),
+            "Cancel must retain unsaved edits"
+        );
+        assert!(!app.windows[0].is_modal());
+
+        assert!(!app.finish_editing(id, crate::edit::AfterSave::Close));
+        layout_frames();
+        app.windows[0].view.dialog.as_ref().unwrap().hide();
+        layout_frames();
+        app.alert_closed(id, 2);
+        assert!(
+            app.windows.is_empty(),
+            "Don't Save must resume the requested close"
+        );
+
+        app.open_error("missing.png".into(), None, None, "File not found".into());
+        layout_frames();
+        assert_eq!(
+            app.windows.len(),
+            1,
+            "a startup error needs its own XAML host"
+        );
+        assert!(app.windows[0].view.dialog.is_some());
+        let error_id = app.windows[0].window.id();
+        app.windows[0].view.dialog.as_ref().unwrap().hide();
+        layout_frames();
+        app.alert_closed(error_id, 0);
+        assert!(
+            app.windows.is_empty(),
+            "closing a startup error must close its host"
+        );
+
+        // Save starts its worker without losing the requested continuation or blocking XAML.
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "imageview-alert-{}-{unique}.png",
+            std::process::id()
+        ));
+        app.open_window(
+            path.clone(),
+            None,
+            Some(Picture::new(2, 1, vec![255; 8]).to_media()),
+            None,
+        );
+        let id = app.windows[0].window.id();
+        app.edit_action("image.rotate_right");
+        assert!(!app.finish_editing(id, crate::edit::AfterSave::Close));
+        layout_frames();
+        app.windows[0].view.dialog.as_ref().unwrap().hide();
+        layout_frames();
+        app.alert_closed(id, 1);
+        assert!(app.windows[0].busy, "Save must start asynchronously");
+        let until = Instant::now() + Duration::from_secs(3);
+        while !path.exists() && Instant::now() < until {
+            layout_frames();
+        }
+        let saved = std::fs::read(&path).expect("Save must write the edited image");
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(
+            imageview_core::decode_media(&saved).unwrap().size(),
+            (1.0, 2.0)
+        );
+        app.close_window(id);
         shutdown();
         drop(event_loop);
     }

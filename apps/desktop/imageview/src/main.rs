@@ -14,15 +14,19 @@ use std::time::Duration;
 
 use bwindow::{
     Accelerator, Event, EventLoopBuilder, EventLoopProxy, FileDialog, KeyCode, LogicalSize,
-    MenuBarBuilder, MenuBuilder, MenuItem, MessageDialog, MessageLevel, Modifiers, Theme, Window,
-    WindowBuilder, WindowEvent, WindowId,
+    MenuBarBuilder, MenuBuilder, MenuItem, Modifiers, Theme, Window, WindowBuilder, WindowEvent,
+    WindowId,
 };
+#[cfg(not(windows))]
+use bwindow::{MessageDialog, MessageLevel};
 use imageview_core::{
     EXTENSIONS, FileVersion, Media, ZOOM_STEP, decode_media, is_supported, preferred_content_size,
 };
 
 use crate::platforms::MediaView;
 
+#[cfg(windows)]
+mod alert;
 mod edit;
 mod marquee;
 mod platforms;
@@ -43,6 +47,9 @@ const MINIMUM_TOOLBAR_WIDTH: f64 = 600.0;
 
 /// Events sent to the event loop from worker threads.
 pub(crate) enum AppEvent {
+    /// A window-attached WinUI dialog finished without blocking the event loop.
+    #[cfg(windows)]
+    AlertClosed(WindowId, i32),
     /// The application finished launching.
     Launched,
     /// Open files in new windows, like the macOS recent documents menu does.
@@ -113,9 +120,20 @@ struct ImageWindow {
     editing: Option<edit::Editing>,
     // Whether an edit is being applied or the image saved in the background.
     busy: bool,
+    #[cfg(windows)]
+    alerts: std::collections::VecDeque<alert::Alert>,
 }
 
 impl ImageWindow {
+    #[cfg(windows)]
+    fn is_modal(&self) -> bool {
+        !self.alerts.is_empty()
+    }
+
+    #[cfg(not(windows))]
+    const fn is_modal(&self) -> bool {
+        false
+    }
     const fn is_loading(&self) -> bool {
         self.opening.is_some() || self.replacing.is_some()
     }
@@ -234,6 +252,8 @@ impl App {
         }
         self.active = Some(window.id());
         self.windows.push(ImageWindow {
+            #[cfg(windows)]
+            alerts: std::collections::VecDeque::new(),
             window,
             view,
             path,
@@ -337,15 +357,20 @@ impl App {
                     .iter()
                     .position(|window| window.opening == Some(id));
                 if opening || index.is_some() {
-                    if let Some(index) = index {
-                        let window = self.windows.remove(index);
-                        self.forget(window.window.id());
+                    #[cfg(windows)]
+                    self.open_error(load.path, load.version, index, error);
+                    #[cfg(not(windows))]
+                    {
+                        if let Some(index) = index {
+                            let window = self.windows.remove(index);
+                            self.forget(window.window.id());
+                        }
+                        MessageDialog::new()
+                            .level(MessageLevel::Error)
+                            .title(format!("Could not open {}", file_name(&load.path)))
+                            .description(error)
+                            .show();
                     }
-                    MessageDialog::new()
-                        .level(MessageLevel::Error)
-                        .title(format!("Could not open {}", file_name(&load.path)))
-                        .description(error)
-                        .show();
                 }
             }
         }
@@ -399,7 +424,7 @@ impl App {
     fn reload_changed(&mut self) {
         let mut reloads = Vec::new();
         for window in &mut self.windows {
-            if window.is_loading() || window.is_editing() || window.busy {
+            if window.is_loading() || window.is_editing() || window.busy || window.is_modal() {
                 continue;
             }
             let version = FileVersion::of(&window.path);
@@ -423,6 +448,9 @@ impl App {
     }
 
     fn action(&mut self, action: &str) {
+        if self.active_window().is_some_and(|window| window.is_modal()) {
+            return;
+        }
         if self.edit_action(action) {
             return;
         }
@@ -472,6 +500,8 @@ impl App {
     // Handles an event of the event loop.
     fn handle(&mut self, event: Event<AppEvent>) {
         match event {
+            #[cfg(windows)]
+            Event::UserEvent(AppEvent::AlertClosed(id, result)) => self.alert_closed(id, result),
             Event::LoopExiting => {
                 self.windows.clear();
                 #[cfg(windows)]

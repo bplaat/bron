@@ -439,6 +439,34 @@ impl Bitmap {
     pub(crate) fn write(&self, pixels: &[u8]) {
         let length = self.size.0 as usize * self.size.1 as usize * 4;
         assert_eq!(pixels.len(), length, "bitmap pixels have the wrong size");
+        self.update(|buffer| buffer.copy_from_slice(pixels));
+    }
+
+    /// Convert canvas pixels directly into the WinUI buffer without a second full-size image.
+    pub(crate) fn write_rgba(&self, pixels: &[u8]) {
+        let length = self.size.0 as usize * self.size.1 as usize * 4;
+        assert_eq!(pixels.len(), length, "bitmap pixels have the wrong size");
+        self.update(|buffer| {
+            for (dest, source) in buffer
+                .as_chunks_mut::<4>()
+                .0
+                .iter_mut()
+                .zip(pixels.as_chunks::<4>().0)
+            {
+                let [red, green, blue, alpha] = *source;
+                let premultiply = |channel: u8| (u16::from(channel) * u16::from(alpha) / 255) as u8;
+                *dest = [
+                    premultiply(blue),
+                    premultiply(green),
+                    premultiply(red),
+                    alpha,
+                ];
+            }
+        });
+    }
+
+    fn update(&self, write: impl FnOnce(&mut [u8])) {
+        let length = self.size.0 as usize * self.size.1 as usize * 4;
         // SAFETY: Slot 6 of IWriteableBitmap is get_PixelBuffer, slot 3 of IBufferByteAccess is
         // Buffer, which holds the pixels of the bitmap, and slot 7 of IWriteableBitmap is
         // Invalidate.
@@ -452,7 +480,7 @@ impl Bitmap {
             };
             let mut bytes = null_mut::<u8>();
             if check(call!(buffer, 3, &mut bytes => *mut *mut u8)).is_ok() && !bytes.is_null() {
-                std::ptr::copy_nonoverlapping(pixels.as_ptr(), bytes, length);
+                write(std::slice::from_raw_parts_mut(bytes, length));
                 call!(self.bitmap, 7);
             }
         }
@@ -741,6 +769,96 @@ pub(crate) fn load_xaml(xaml: &str) -> Result<ComPtr> {
     out(|raw| unsafe { call!(statics, 6, xaml.as_raw() => HSTRING, raw => *mut *mut c_void) })
 }
 
+const IID_ICONTENT_DIALOG: GUID = GUID::from_u128(0xac2145a3_4a32_5305_a81d_47509515bfce);
+const IID_ICONTENT_DIALOG_CLOSED_EVENT_ARGS: GUID =
+    GUID::from_u128(0x9b84e681_1ab6_5485_88b2_d0d3c05b29f3);
+// TypedEventHandler<ContentDialog, ContentDialogClosedEventArgs>.
+const IID_DIALOG_CLOSED_HANDLER: GUID = GUID::from_u128(0xaa8730ec_c9bd_50ea_8714_da30c29590d9);
+
+fn escape_xml(text: &str) -> String {
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+}
+
+/// An asynchronous ContentDialog attached to this island's XamlRoot.
+pub(super) struct Dialog {
+    content: ComPtr,
+    _operation: ComPtr,
+    closed: i64,
+}
+
+impl Dialog {
+    fn new(
+        root: &ComPtr,
+        title: &str,
+        description: &str,
+        save: bool,
+        answered: impl Fn(i32) + 'static,
+    ) -> Result<Self> {
+        let buttons = if save {
+            r#"PrimaryButtonText="Save" SecondaryButtonText="Don't Save" CloseButtonText="Cancel" DefaultButton="Primary""#
+        } else {
+            r#"CloseButtonText="Close" DefaultButton="Close""#
+        };
+        let xaml = format!(
+            r#"<ContentDialog xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" Title="{}" {buttons}><TextBlock Text="{}" TextWrapping="Wrap" IsTextSelectionEnabled="True" /></ContentDialog>"#,
+            escape_xml(title),
+            escape_xml(description)
+        );
+        let content = load_xaml(&xaml)?.cast(&IID_ICONTENT_DIALOG)?;
+        let element = content.cast(&IID_IUI_ELEMENT)?;
+        let root = root.cast(&IID_IUI_ELEMENT)?;
+        // SAFETY: Slots 109 and 110 of IUIElement are get_XamlRoot and put_XamlRoot.
+        unsafe {
+            let xaml_root = root.get(109)?;
+            element.put(110, xaml_root.as_raw())?;
+            let root_theme = root.cast(&IID_IFRAMEWORK_ELEMENT)?;
+            let dialog_theme = element.cast(&IID_IFRAMEWORK_ELEMENT)?;
+            let mut theme = 0i32;
+            check(call!(root_theme, 57, &mut theme => *mut i32))?;
+            check(call!(dialog_theme, 58, theme => i32))?;
+        }
+        let handler = event_handler(IID_DIALOG_CLOSED_HANDLER, move |_, args| {
+            let mut result = 0i32;
+            if let Some(args) =
+                args.and_then(|args| args.cast(&IID_ICONTENT_DIALOG_CLOSED_EVENT_ARGS).ok())
+            {
+                // SAFETY: Slot 6 of IContentDialogClosedEventArgs is get_Result.
+                unsafe { call!(args, 6, &mut result => *mut i32) };
+            }
+            answered(result);
+        });
+        let mut closed = 0;
+        // SAFETY: Slot 44 is add_Closed; slot 55 is ShowAsync. The dialog keeps its handler.
+        let operation = unsafe {
+            check(call!(content, 44, handler.as_raw() => *mut c_void, &mut closed => *mut i64))?;
+            out(|raw| call!(content, 55, raw => *mut *mut c_void))?
+        };
+        Ok(Self {
+            content,
+            _operation: operation,
+            closed,
+        })
+    }
+
+    pub(super) fn hide(&self) {
+        // SAFETY: Slot 54 of IContentDialog is Hide.
+        unsafe { call!(self.content, 54) };
+    }
+}
+
+impl Drop for Dialog {
+    fn drop(&mut self) {
+        // SAFETY: Unsubscribe before Hide, which can synchronously raise Closed during teardown.
+        unsafe {
+            call!(self.content, 45, self.closed => i64);
+        }
+        self.hide();
+    }
+}
+
 /// Finds an element by its name in a XAML tree, as an interface.
 pub(crate) fn find_name(root: &ComPtr, name: &str, iid: &GUID) -> Result<ComPtr> {
     let name = HString::new(name);
@@ -771,6 +889,15 @@ pub(crate) fn add_event(object: &ComPtr, slot: usize, handler: &ComPtr) -> Resul
 }
 
 impl Island {
+    pub(super) fn show_alert(
+        &self,
+        title: &str,
+        description: &str,
+        save: bool,
+        answered: impl Fn(i32) + 'static,
+    ) -> Result<Dialog> {
+        Dialog::new(&self.root, title, description, save, answered)
+    }
     /// Creates the island in `parent`, which fills the client area of `window`, following its
     /// input with `handlers`. With `window_backdrop` the window also draws Mica itself, under the
     /// island.
@@ -1309,6 +1436,10 @@ impl Island {
     pub(crate) fn set_overlay(&self, overlay: Option<(&Bitmap, (f64, f64))>) {
         if let Some((bitmap, size)) = overlay {
             set_image(&self.overlay, bitmap, size);
+        } else {
+            // Hidden image elements otherwise retain their last CPU buffer and GPU texture.
+            // SAFETY: Slot 7 of IImage is put_Source; null releases its image.
+            unsafe { self.overlay.put(7, null_mut()) }.ok();
         }
         set_visible(&self.overlay, overlay.is_some());
     }

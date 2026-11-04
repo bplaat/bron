@@ -15,7 +15,9 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use bwindow::{MessageButtons, MessageDialog, MessageDialogResult, MessageLevel, WindowId};
+use bwindow::WindowId;
+#[cfg(not(windows))]
+use bwindow::{MessageButtons, MessageDialog, MessageDialogResult, MessageLevel};
 use imageview_core::edit::{
     DEFAULT_JPEG_QUALITY, DEFAULT_SAVE_EXTENSION, Editor, Filter, Orientation, Picture,
     SAVE_FORMATS, Selection, Shape, Step, Tool, can_save, crop_aspect, is_jpeg,
@@ -268,7 +270,8 @@ impl App {
 
     // Whether an edit is being applied or the image saved, which holds off other changes.
     fn is_busy(&mut self, id: WindowId) -> bool {
-        self.window(id).is_some_and(|window| window.busy)
+        self.window(id)
+            .is_some_and(|window| window.busy || window.is_modal())
     }
 
     // Shows that the window is busy or done.
@@ -358,11 +361,17 @@ impl App {
         if modified && !self.drop_changes(id, after) {
             return false;
         }
+        self.leave_editing(id, modified);
+        true
+    }
+
+    // Discard returns to the saved image without asking again after an asynchronous answer.
+    pub(super) fn leave_editing(&mut self, id: WindowId, modified: bool) {
         let Some(window) = self.window(id) else {
-            return true;
+            return;
         };
         let Some(editing) = window.editing.take() else {
-            return true;
+            return;
         };
         if modified {
             window
@@ -372,11 +381,11 @@ impl App {
         window.show_edited();
         window.view.set_selecting(None);
         window.view.set_editing(false);
-        true
     }
 
     // Asks whether to save the changes, returns whether they are dropped. Saving continues
     // with `after` once it succeeded.
+    #[cfg(not(windows))]
     fn drop_changes(&mut self, id: WindowId, after: AfterSave) -> bool {
         let Some(window) = self.window(id) else {
             return true;
@@ -403,6 +412,12 @@ impl App {
             MessageDialogResult::Custom(button) => button == "Don't Save",
             _ => false,
         }
+    }
+
+    #[cfg(windows)]
+    fn drop_changes(&mut self, id: WindowId, after: AfterSave) -> bool {
+        self.ask_save_changes(id, after);
+        false
     }
 
     // Changes the picture and shows it, fitted after its size changes.
@@ -441,7 +456,10 @@ impl App {
     /// Enables the menu items that work in the mode of the active window: viewing, editing or
     /// busy applying an edit or saving, and names Edit Image after the mode.
     pub(crate) fn update_menu(&mut self) {
-        let window = self.active_window().filter(|window| !window.is_loading());
+        let modal = self.active_window().is_some_and(|window| window.is_modal());
+        let window = self
+            .active_window()
+            .filter(|window| !window.is_loading() && !window.is_modal());
         let shown = window.is_some();
         let idle = shown && window.as_ref().is_some_and(|window| !window.busy);
         let editing = window.as_ref().and_then(|window| window.editing.as_ref());
@@ -463,6 +481,7 @@ impl App {
         let keys =
             cfg!(target_os = "macos") || editing.is_none_or(|editing| editing.tool.is_none());
         let states = [
+            ("file.open", !modal),
             ("file.save", edit && modified),
             ("file.save_as", idle),
             #[cfg(target_os = "macos")]
@@ -730,7 +749,7 @@ impl App {
     // Saves the picture to its file, or asks for a new one, in the background, then continues
     // with `after`. Unchanged pictures are not written again. Returns whether it continues,
     // which is not when no file is chosen.
-    fn save(&mut self, id: WindowId, save_as: bool, after: AfterSave) -> bool {
+    pub(super) fn save(&mut self, id: WindowId, save_as: bool, after: AfterSave) -> bool {
         // An open tool is applied first, here and now.
         if let Some((base, step, amend)) = self.close_tool(id) {
             let picture = step.apply(&base);
@@ -858,6 +877,14 @@ impl App {
         let bytes = match saved.result {
             Ok(bytes) => bytes,
             Err(error) => {
+                #[cfg(windows)]
+                self.show_error(
+                    id,
+                    format!("Could not save {}", file_name(&saved.path)),
+                    error,
+                    false,
+                );
+                #[cfg(not(windows))]
                 MessageDialog::new()
                     .parent(&window.window)
                     .level(MessageLevel::Error)
@@ -881,7 +908,7 @@ impl App {
         self.continue_after_save(id, saved.after);
     }
 
-    fn continue_after_save(&mut self, id: WindowId, after: AfterSave) {
+    pub(super) fn continue_after_save(&mut self, id: WindowId, after: AfterSave) {
         match after {
             AfterSave::Nothing => {}
             AfterSave::FinishEditing => _ = self.finish_editing(id, AfterSave::Nothing),

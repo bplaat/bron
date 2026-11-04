@@ -133,7 +133,7 @@
                             Style="{StaticResource ToggleSegment}"
                             ToolTipService.ToolTip="Rectangle selection"
                         >
-                            <FontIcon Glyph="&#xE8B3;" />
+                            <FontIcon Glyph="&#xE739;" />
                         </ToggleButton>
                         <Rectangle Style="{StaticResource Divider}" />
                         <ToggleButton
