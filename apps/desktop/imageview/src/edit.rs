@@ -22,7 +22,7 @@ use imageview_core::edit::{
 };
 use imageview_core::{FileVersion, Media};
 
-use crate::platforms::SaveRequest;
+use crate::save::{SaveRequest, ask_save};
 use crate::{App, AppEvent, file_name};
 
 // The filters of their actions.
@@ -745,7 +745,7 @@ impl App {
                 formats: SAVE_FORMATS,
                 size: None,
             };
-            let Some(choice) = window.view.ask_save(&request) else {
+            let Some(choice) = ask_save(&window.window, &request) else {
                 return false;
             };
             editing.jpeg_quality = choice.quality;
@@ -788,7 +788,7 @@ impl App {
             formats: &formats,
             size: matches!(media, Media::Vector(_)).then(|| media.size()),
         };
-        let Some(choice) = window.view.ask_save(&request) else {
+        let Some(choice) = ask_save(&window.window, &request) else {
             return;
         };
         let (scale, quality) = (choice.scale, choice.quality);

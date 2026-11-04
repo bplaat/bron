@@ -34,10 +34,10 @@ mod browse;
 mod headers;
 mod popover;
 mod save;
-
-pub(crate) use self::save::{SaveChoice, SaveRequest};
 mod toolbar;
 mod view;
+
+pub(crate) use self::save::SaveOptions;
 
 /// The smallest window.
 pub(crate) const MIN_SIZE: (f32, f32) = (240.0, 180.0);
@@ -339,12 +339,6 @@ impl MediaView {
     /// Selects everything outside the selection instead.
     pub(crate) fn invert_selection(&self) {
         self.view.invert_selection();
-    }
-
-    /// Asks in a sheet where to save the image, in which format and with which JPEG quality,
-    /// and at which size for a vector.
-    pub(crate) fn ask_save(&self, request: &SaveRequest<'_>) -> Option<SaveChoice> {
-        save::save_panel(self.window(), request)
     }
 
     /// Puts a PNG image on the clipboard.

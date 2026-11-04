@@ -4,49 +4,25 @@
  * SPDX-License-Identifier: MIT
  */
 
-//! The Save As sheet of a window: a save panel with a format choice and the JPEG quality
-//! below it, like Preview, and the size vectors are drawn at as bitmaps.
+//! The controls of the Save As sheet below its save panel, like Preview.
 
-use std::ffi::{CStr, OsStr, c_char};
-use std::os::unix::ffi::OsStrExt;
-use std::path::{Path, PathBuf};
+use std::ffi::{CStr, c_char};
 use std::ptr::null_mut;
 
-use block2::RcBlock;
+use bwindow::NativeFileDialog;
 use imageview_core::appkit::ns_string;
-use imageview_core::edit::{EXPORT_SCALES, is_jpeg};
 use objc2::rc::{Allocated, Retained, autoreleasepool};
 use objc2::runtime::{AnyObject as Object, Bool};
 use objc2::{class, define_class, msg_send, sel};
 
-use super::browse::file_url;
 use super::headers::*;
+use crate::save::{
+    SaveRequest, format_of, has_quality, natural_scale, scale_at, scale_titles, with_extension,
+};
 
-const NS_MODAL_RESPONSE_OK: isize = 1;
 const NS_GRID_ROW_ALIGNMENT_FIRST_BASELINE: isize = 2;
 const NS_GRID_CELL_PLACEMENT_TRAILING: isize = 3;
 const QUALITY_WIDTH: f64 = 160.0;
-
-/// What a save sheet asks for.
-pub(crate) struct SaveRequest<'a> {
-    /// The folder it starts in.
-    pub(crate) directory: Option<&'a Path>,
-    /// The file name it starts with.
-    pub(crate) name: &'a str,
-    /// The JPEG quality it starts with.
-    pub(crate) quality: u8,
-    /// The formats to choose from, as a name and file name extension.
-    pub(crate) formats: &'a [(&'static str, &'static str)],
-    /// The natural size of a vector, which is drawn at a chosen scale.
-    pub(crate) size: Option<(f64, f64)>,
-}
-
-/// What a save sheet chose: the path, the JPEG quality and the scale of a vector.
-pub(crate) struct SaveChoice {
-    pub(crate) path: PathBuf,
-    pub(crate) quality: u8,
-    pub(crate) scale: f64,
-}
 
 struct TargetIvars {
     panel: *mut Object,
@@ -101,19 +77,15 @@ impl Target {
         // and arrays are autoreleased.
         unsafe {
             let name: *mut Object = msg_send![ivars.panel, nameFieldStringValue];
-            let name = string(name);
-            let stem = Path::new(&name)
-                .file_stem()
-                .map_or_else(|| name.clone(), |stem| stem.to_string_lossy().into_owned());
-            let _: () = msg_send![ivars.panel, setNameFieldStringValue: ns_string(&format!("{stem}.{extension}"))];
+            let name = with_extension(&string(name), extension);
+            let _: () = msg_send![ivars.panel, setNameFieldStringValue: ns_string(&name)];
             let kind: *mut Object =
                 msg_send![class!(UTType), typeWithFilenameExtension: ns_string(extension)];
             if !kind.is_null() {
                 let kinds: *mut Object = msg_send![class!(NSArray), arrayWithObject: kind];
                 let _: () = msg_send![ivars.panel, setAllowedContentTypes: kinds];
             }
-            let jpeg = is_jpeg(Path::new(&format!("a.{extension}")));
-            let _: () = msg_send![ivars.quality_row, setHidden: objc_bool(!jpeg)];
+            let _: () = msg_send![ivars.quality_row, setHidden: objc_bool(!has_quality(extension))];
         }
     }
 
@@ -127,202 +99,169 @@ impl Target {
     }
 }
 
-/// Asks where to save an image in a sheet of a window, in which format and with which JPEG
-/// quality, and at which size for a vector.
-pub(super) fn save_panel(window: *mut Object, request: &SaveRequest<'_>) -> Option<SaveChoice> {
+/// The controls of a save panel.
+pub(crate) struct SaveOptions {
+    target: Retained<Target>,
+    scales: Option<Retained<Object>>,
+}
+
+impl SaveOptions {
+    /// Adds the controls to the save panel of a dialog.
+    pub(crate) fn new(native: NativeFileDialog, request: &SaveRequest<'_>) -> Option<Self> {
+        let NativeFileDialog::AppKit(panel) = native else {
+            return None;
+        };
+        autoreleasepool(|_| {
+            // SAFETY: bwindow passes a live NSSavePanel.
+            unsafe { add_controls(panel.cast(), request) }
+        })
+    }
+
+    /// The chosen JPEG quality.
+    pub(crate) fn quality(&self) -> u8 {
+        self.target.quality()
+    }
+
+    /// The chosen scale of a vector.
+    pub(crate) fn scale(&self) -> f64 {
+        self.scales.as_ref().map_or(1.0, |scales| {
+            // SAFETY: The control is a live pop-up button.
+            let index: isize = unsafe { msg_send![&**scales, indexOfSelectedItem] };
+            usize::try_from(index).map_or(1.0, scale_at)
+        })
+    }
+}
+
+// Adds the format, quality and size controls of a request below a save panel.
+unsafe fn add_controls(panel: *mut Object, request: &SaveRequest<'_>) -> Option<SaveOptions> {
     let SaveRequest {
-        directory,
         name,
         quality,
         formats,
         size,
+        ..
     } = *request;
-    autoreleasepool(|_| {
-        // SAFETY: All objects are valid AppKit instances. The panel retains its accessory view,
-        // which retains the controls that send to the target, which lives until the panel
-        // is closed.
-        unsafe {
-            let panel: *mut Object = msg_send![class!(NSSavePanel), savePanel];
-            if let Some(directory) = directory {
-                let url = file_url(directory);
-                if !url.is_null() {
-                    let _: () = msg_send![panel, setDirectoryURL: url];
-                }
-            }
-            let _: () = msg_send![panel, setNameFieldStringValue: ns_string(name)];
-            let _: () = msg_send![panel, setCanCreateDirectories: Bool::YES];
-            let _: () = msg_send![panel, setExtensionHidden: Bool::NO];
+    // SAFETY: All objects are valid AppKit instances. The panel retains its accessory view, which
+    // retains the controls that send to the target, which lives until the panel is closed.
+    unsafe {
+        let _: () = msg_send![panel, setCanCreateDirectories: Bool::YES];
+        let _: () = msg_send![panel, setExtensionHidden: Bool::NO];
 
-            let format: Allocated<Object> = msg_send![class!(NSPopUpButton), alloc];
-            let format: Retained<Object> = msg_send![format,
+        let format: Allocated<Object> = msg_send![class!(NSPopUpButton), alloc];
+        let format: Retained<Object> = msg_send![format,
+            initWithFrame: super::view::rect(0.0, 0.0, 0.0, 0.0),
+            pullsDown: Bool::NO
+        ];
+        for (title, _) in formats {
+            let _: () = msg_send![&*format, addItemWithTitle: ns_string(title)];
+        }
+        let selected = format_of(name, formats);
+        let _: () = msg_send![&*format, selectItemAtIndex: selected as isize];
+
+        let quality_slider: *mut Object = msg_send![class!(NSSlider),
+            sliderWithValue: f64::from(quality),
+            minValue: 1.0f64,
+            maxValue: 100.0f64,
+            target: null_mut::<Object>(),
+            action: sel!(qualityChanged:)
+        ];
+        let _: () = msg_send![quality_slider, setContinuous: Bool::YES];
+        let anchor: *mut Object = msg_send![quality_slider, widthAnchor];
+        let constraint: *mut Object = msg_send![anchor, constraintEqualToConstant: QUALITY_WIDTH];
+        let _: () = msg_send![constraint, setActive: Bool::YES];
+        let value: *mut Object = msg_send![class!(NSTextField), labelWithString: ns_string("")];
+        let font: *mut Object = msg_send![class!(NSFont),
+            monospacedDigitSystemFontOfSize: 0.0f64,
+            weight: 0.0f64
+        ];
+        let _: () = msg_send![value, setFont: font];
+
+        let label = |text: &str| -> *mut Object {
+            msg_send![class!(NSTextField), labelWithString: ns_string(text)]
+        };
+        let row = |views: &[*mut Object]| -> *mut Object {
+            let row: *mut Object = msg_send![class!(NSMutableArray), array];
+            for view in views {
+                let _: () = msg_send![row, addObject: *view];
+            }
+            row
+        };
+        let rows: *mut Object = msg_send![class!(NSMutableArray), array];
+        let _: () = msg_send![rows, addObject: row(&[
+            label("Format:"),
+            Retained::as_ptr(&format),
+            msg_send![class!(NSGridCell), emptyContentView]
+        ])];
+        let _: () = msg_send![rows, addObject: row(&[label("Quality:"), quality_slider, value])];
+        // A vector is drawn at a scale of its natural size, shown with its pixel size.
+        let scales = size.map(|size| {
+            let scales: Allocated<Object> = msg_send![class!(NSPopUpButton), alloc];
+            let scales: Retained<Object> = msg_send![scales,
                 initWithFrame: super::view::rect(0.0, 0.0, 0.0, 0.0),
                 pullsDown: Bool::NO
             ];
-            for (title, _) in formats {
-                let _: () = msg_send![&*format, addItemWithTitle: ns_string(title)];
+            for title in scale_titles(size) {
+                let _: () = msg_send![&*scales, addItemWithTitle: ns_string(&title)];
             }
-            let extension = Path::new(name)
-                .extension()
-                .map(|extension| extension.to_string_lossy().to_ascii_lowercase());
-            let selected = formats
-                .iter()
-                .position(|(_, candidate)| {
-                    extension.as_deref() == Some(candidate)
-                        || (is_jpeg(Path::new(name))
-                            && is_jpeg(Path::new(&format!("a.{candidate}"))))
-                })
-                .unwrap_or(0);
-            let _: () = msg_send![&*format, selectItemAtIndex: selected as isize];
-
-            let quality_slider: *mut Object = msg_send![class!(NSSlider),
-                sliderWithValue: f64::from(quality),
-                minValue: 1.0f64,
-                maxValue: 100.0f64,
-                target: null_mut::<Object>(),
-                action: sel!(qualityChanged:)
-            ];
-            let _: () = msg_send![quality_slider, setContinuous: Bool::YES];
-            let anchor: *mut Object = msg_send![quality_slider, widthAnchor];
-            let constraint: *mut Object =
-                msg_send![anchor, constraintEqualToConstant: QUALITY_WIDTH];
-            let _: () = msg_send![constraint, setActive: Bool::YES];
-            let value: *mut Object = msg_send![class!(NSTextField), labelWithString: ns_string("")];
-            let font: *mut Object = msg_send![class!(NSFont),
-                monospacedDigitSystemFontOfSize: 0.0f64,
-                weight: 0.0f64
-            ];
-            let _: () = msg_send![value, setFont: font];
-
-            let label = |text: &str| -> *mut Object {
-                msg_send![class!(NSTextField), labelWithString: ns_string(text)]
-            };
-            let row = |views: &[*mut Object]| -> *mut Object {
-                let row: *mut Object = msg_send![class!(NSMutableArray), array];
-                for view in views {
-                    let _: () = msg_send![row, addObject: *view];
-                }
-                row
-            };
-            let rows: *mut Object = msg_send![class!(NSMutableArray), array];
+            let _: () = msg_send![&*scales, selectItemAtIndex: natural_scale() as isize];
+            scales
+        });
+        if let Some(scales) = &scales {
             let _: () = msg_send![rows, addObject: row(&[
-                label("Format:"),
-                Retained::as_ptr(&format),
+                label("Size:"),
+                Retained::as_ptr(scales),
                 msg_send![class!(NSGridCell), emptyContentView]
             ])];
-            let _: () =
-                msg_send![rows, addObject: row(&[label("Quality:"), quality_slider, value])];
-            // A vector is drawn at a scale of its natural size, shown with its pixel size.
-            let scales = size.map(|(width, height)| {
-                let scales: Allocated<Object> = msg_send![class!(NSPopUpButton), alloc];
-                let scales: Retained<Object> = msg_send![scales,
-                    initWithFrame: super::view::rect(0.0, 0.0, 0.0, 0.0),
-                    pullsDown: Bool::NO
-                ];
-                for scale in EXPORT_SCALES {
-                    let title = format!(
-                        "{}% ({} \u{d7} {})",
-                        (scale * 100.0).round(),
-                        (width * scale).round().max(1.0),
-                        (height * scale).round().max(1.0)
-                    );
-                    let _: () = msg_send![&*scales, addItemWithTitle: ns_string(&title)];
-                }
-                let natural = EXPORT_SCALES
-                    .iter()
-                    .position(|scale| *scale == 1.0)
-                    .unwrap_or(0);
-                let _: () = msg_send![&*scales, selectItemAtIndex: natural as isize];
-                scales
-            });
-            if let Some(scales) = &scales {
-                let _: () = msg_send![rows, addObject: row(&[
-                    label("Size:"),
-                    Retained::as_ptr(scales),
-                    msg_send![class!(NSGridCell), emptyContentView]
-                ])];
-            }
-            let grid: *mut Object = msg_send![class!(NSGridView), gridViewWithViews: rows];
-            let _: () = msg_send![grid, setRowAlignment: NS_GRID_ROW_ALIGNMENT_FIRST_BASELINE];
-            let _: () = msg_send![grid, setColumnSpacing: 8.0f64];
-            let _: () = msg_send![grid, setRowSpacing: 8.0f64];
-            let column: *mut Object = msg_send![grid, columnAtIndex: 0isize];
-            let _: () = msg_send![column, setXPlacement: NS_GRID_CELL_PLACEMENT_TRAILING];
-            let quality_row: *mut Object = msg_send![grid, rowAtIndex: 1isize];
-
-            // Leave room around the controls, like other accessory views.
-            let accessory: Retained<Object> = msg_send![class!(NSView), new];
-            let _: () = msg_send![grid, setTranslatesAutoresizingMaskIntoConstraints: Bool::NO];
-            let _: () = msg_send![&*accessory, addSubview: grid];
-            for (grid_anchor, accessory_anchor, constant) in [
-                (sel!(topAnchor), sel!(topAnchor), 12.0f64),
-                (sel!(bottomAnchor), sel!(bottomAnchor), -12.0),
-                (sel!(centerXAnchor), sel!(centerXAnchor), 0.0),
-            ] {
-                let from: *mut Object = msg_send![grid, performSelector: grid_anchor];
-                let to: *mut Object = msg_send![&*accessory, performSelector: accessory_anchor];
-                let constraint: *mut Object =
-                    msg_send![from, constraintEqualToAnchor: to, constant: constant];
-                let _: () = msg_send![constraint, setActive: Bool::YES];
-            }
-            let leading: *mut Object = msg_send![grid, leadingAnchor];
-            let accessory_leading: *mut Object = msg_send![&*accessory, leadingAnchor];
-            let constraint: *mut Object = msg_send![leading, constraintGreaterThanOrEqualToAnchor: accessory_leading, constant: 20.0f64];
-            let _: () = msg_send![constraint, setActive: Bool::YES];
-            let _: () = msg_send![panel, setAccessoryView: &*accessory];
-
-            let target: Allocated<Target> = msg_send![Target::class(), alloc];
-            let target: Retained<Target> = msg_send![
-                super(target.set_ivars(TargetIvars {
-                    panel,
-                    formats: formats.to_vec(),
-                    format: format.clone(),
-                    quality: Retained::retain(quality_slider)?,
-                    value: Retained::retain(value)?,
-                    quality_row,
-                })),
-                init
-            ];
-            let _: () = msg_send![&*format, setTarget: &*target];
-            let _: () = msg_send![&*format, setAction: sel!(formatChanged:)];
-            let _: () = msg_send![quality_slider, setTarget: &*target];
-            target.format_changed();
-            target.show_quality();
-
-            let response: isize = if window.is_null() {
-                msg_send![panel, runModal]
-            } else {
-                let application: *mut Object = msg_send![class!(NSApplication), sharedApplication];
-                let block = RcBlock::new(move |response: isize| {
-                    let _: () = msg_send![application, stopModalWithCode: response];
-                });
-                let _: () =
-                    msg_send![panel, beginSheetModalForWindow: window, completionHandler: &*block];
-                msg_send![application, runModalForWindow: panel]
-            };
-            if response != NS_MODAL_RESPONSE_OK {
-                return None;
-            }
-            let url: *mut Object = msg_send![panel, URL];
-            let path: *const c_char = msg_send![url, fileSystemRepresentation];
-            if path.is_null() {
-                return None;
-            }
-            let path = PathBuf::from(OsStr::from_bytes(CStr::from_ptr(path).to_bytes()));
-            let scale = scales.map_or(1.0, |scales| {
-                let index: isize = msg_send![&*scales, indexOfSelectedItem];
-                usize::try_from(index)
-                    .ok()
-                    .and_then(|index| EXPORT_SCALES.get(index))
-                    .copied()
-                    .unwrap_or(1.0)
-            });
-            Some(SaveChoice {
-                path,
-                quality: target.quality(),
-                scale,
-            })
         }
-    })
+        let grid: *mut Object = msg_send![class!(NSGridView), gridViewWithViews: rows];
+        let _: () = msg_send![grid, setRowAlignment: NS_GRID_ROW_ALIGNMENT_FIRST_BASELINE];
+        let _: () = msg_send![grid, setColumnSpacing: 8.0f64];
+        let _: () = msg_send![grid, setRowSpacing: 8.0f64];
+        let column: *mut Object = msg_send![grid, columnAtIndex: 0isize];
+        let _: () = msg_send![column, setXPlacement: NS_GRID_CELL_PLACEMENT_TRAILING];
+        let quality_row: *mut Object = msg_send![grid, rowAtIndex: 1isize];
+
+        // Leave room around the controls, like other accessory views.
+        let accessory: Retained<Object> = msg_send![class!(NSView), new];
+        let _: () = msg_send![grid, setTranslatesAutoresizingMaskIntoConstraints: Bool::NO];
+        let _: () = msg_send![&*accessory, addSubview: grid];
+        for (grid_anchor, accessory_anchor, constant) in [
+            (sel!(topAnchor), sel!(topAnchor), 12.0f64),
+            (sel!(bottomAnchor), sel!(bottomAnchor), -12.0),
+            (sel!(centerXAnchor), sel!(centerXAnchor), 0.0),
+        ] {
+            let from: *mut Object = msg_send![grid, performSelector: grid_anchor];
+            let to: *mut Object = msg_send![&*accessory, performSelector: accessory_anchor];
+            let constraint: *mut Object =
+                msg_send![from, constraintEqualToAnchor: to, constant: constant];
+            let _: () = msg_send![constraint, setActive: Bool::YES];
+        }
+        let leading: *mut Object = msg_send![grid, leadingAnchor];
+        let accessory_leading: *mut Object = msg_send![&*accessory, leadingAnchor];
+        let constraint: *mut Object = msg_send![leading, constraintGreaterThanOrEqualToAnchor: accessory_leading, constant: 20.0f64];
+        let _: () = msg_send![constraint, setActive: Bool::YES];
+        let _: () = msg_send![panel, setAccessoryView: &*accessory];
+
+        let target: Allocated<Target> = msg_send![Target::class(), alloc];
+        let target: Retained<Target> = msg_send![
+            super(target.set_ivars(TargetIvars {
+                panel,
+                formats: formats.to_vec(),
+                format: format.clone(),
+                quality: Retained::retain(quality_slider)?,
+                value: Retained::retain(value)?,
+                quality_row,
+            })),
+            init
+        ];
+        let _: () = msg_send![&*format, setTarget: &*target];
+        let _: () = msg_send![&*format, setAction: sel!(formatChanged:)];
+        let _: () = msg_send![quality_slider, setTarget: &*target];
+        target.format_changed();
+        target.show_quality();
+
+        Some(SaveOptions { target, scales })
+    }
 }
 
 // The contents of an NSString.

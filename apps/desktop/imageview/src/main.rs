@@ -30,6 +30,8 @@ mod edit;
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 mod marquee;
 mod platforms;
+#[cfg(target_os = "macos")]
+mod save;
 #[cfg(not(windows))]
 mod viewport;
 
