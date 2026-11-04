@@ -16,3 +16,10 @@ std = []
 
 [dependencies]
 getrandom = "0.4.3"
+
+[dev-dependencies]
+criterion = "0.8"
+
+[[bench]]
+name = "synthesis"
+harness = false

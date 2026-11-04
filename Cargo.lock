@@ -1339,6 +1339,7 @@ dependencies = [
 name = "sfxr"
 version = "0.1.4+patch"
 dependencies = [
+ "criterion",
  "getrandom 0.4.3+patch",
 ]
 

@@ -126,6 +126,9 @@ opt-level = 3
 [profile.release.package.reversi-engine]
 opt-level = 3
 
+[profile.release.package.sfxr]
+opt-level = 3
+
 [profile.release.package.sha1]
 opt-level = 3
 
