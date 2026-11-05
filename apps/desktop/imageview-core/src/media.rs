@@ -236,6 +236,33 @@ mod tests {
     }
 
     #[test]
+    fn netpbm_decodes_to_display_pixels() {
+        for bytes in [
+            &b"P1\n1 1\n0"[..],
+            &b"P2\n1 1\n15\n15"[..],
+            &b"P3\n1 1\n255\n255 255 255"[..],
+            &b"P4\n1 1\n\0"[..],
+            &b"P5\n1 1\n65535\n\xff\xff"[..],
+            &b"P6\n1 1\n255\n\xff\xff\xff"[..],
+            &b"P7\nWIDTH 1\nHEIGHT 1\nDEPTH 3\nMAXVAL 255\nTUPLTYPE RGB\nENDHDR\n\xff\xff\xff"[..],
+        ] {
+            let media = decode_media(bytes).expect("Netpbm");
+            assert_eq!(media.size(), (1.0, 1.0));
+            assert!(media.is_still());
+            let Media::Raster(raster) = media else {
+                panic!("expected Netpbm raster");
+            };
+            assert_eq!(&*raster.frames[0].pixels, &[255, 255, 255, 255]);
+        }
+        let Media::Raster(raster) = decode_media(
+            b"P7\nWIDTH 1\nHEIGHT 1\nDEPTH 4\nMAXVAL 255\nTUPLTYPE RGB_ALPHA\nENDHDR\n\xff\x80\0\x80",
+        ).expect("PAM alpha") else {
+            panic!("expected PAM raster");
+        };
+        assert_eq!(&*raster.frames[0].pixels, &[0, 64, 128, 128]);
+    }
+
+    #[test]
     fn high_bit_depth_images_decode() {
         for name in ["16bit.png", "16bit-apng.png", "animated.png", "dib.ico"] {
             let bytes = std::fs::read(format!("{FIXTURES}/{name}")).unwrap();

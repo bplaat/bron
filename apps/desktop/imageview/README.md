@@ -5,7 +5,7 @@ vector drawings, and follows the system light or dark theme.
 
 ## Features
 
-- Decode BMP, GIF, ICNS, ICO, JPEG, JPEG 2000, PNG/APNG, QOI, TGA, and WebP with a custom [image](../../../lib/graphics/image) decoder crate
+- Decode BMP, GIF, ICNS, ICO, JPEG, JPEG 2000, PBM/PGM/PPM/PAM, PNG/APNG, QOI, TGA, and WebP with a custom [image](../../../lib/graphics/image) decoder crate
 - Play APNG/GIF/WebP animations with frame timings and loop counts
 - Render SVG/SVGZ and TinyVG with the shared [vector](../../../lib/graphics/vector) decoder, drawn
   by [imageview-core](../imageview-core) with [bcanvas](../../../lib/graphics/bcanvas): Core
@@ -78,7 +78,7 @@ An Edit button swaps in an edit toolbar for still bitmaps, with popovers for its
   thumbnail, without starting GTK
 - `cargo xtask install` installs the binary, the [desktop entry](meta/freedesktop/.desktop),
   the [thumbnailer](meta/freedesktop/.thumbnailer) and the [MIME types](meta/freedesktop/mime.xml)
-  of QOI and TinyVG into the user's data directory
+  of PAM, QOI, and TinyVG into the user's data directory
 
 ## Windows file icons
 

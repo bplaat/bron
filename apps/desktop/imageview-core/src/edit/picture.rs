@@ -615,7 +615,10 @@ mod tests {
                 .is_err()
         );
         assert!(is_jpeg(Path::new("a.JPEG")) && !is_jpeg(Path::new("a.png")));
-        for extension in ["icns", "ico", "j2c", "j2k", "jp2", "jpc", "svgz", "webp"] {
+        for extension in [
+            "icns", "ico", "j2c", "j2k", "jp2", "jpc", "pam", "pbm", "pgm", "pnm", "ppm", "svgz",
+            "webp",
+        ] {
             let path = format!("a.{extension}");
             assert!(!can_save(Path::new(&path)));
             assert!(

@@ -136,6 +136,50 @@
                 <string>org.webmproject.webp</string>
             </array>
         </dict>
+        <dict>
+            <key>CFBundleTypeName</key>
+            <string>Netpbm Image</string>
+            <key>CFBundleTypeRole</key>
+            <string>Viewer</string>
+            <key>LSHandlerRank</key>
+            <string>Alternate</string>
+            <key>LSItemContentTypes</key>
+            <array>
+                <string>org.netpbm.pnm</string>
+            </array>
+        </dict>
+    </array>
+    <key>UTImportedTypeDeclarations</key>
+    <array>
+        <dict>
+            <key>UTTypeConformsTo</key>
+            <array>
+                <string>public.image</string>
+            </array>
+            <key>UTTypeDescription</key>
+            <string>Netpbm Image</string>
+            <key>UTTypeIdentifier</key>
+            <string>org.netpbm.pnm</string>
+            <key>UTTypeTagSpecification</key>
+            <dict>
+                <key>public.filename-extension</key>
+                <array>
+                    <string>pam</string>
+                    <string>pbm</string>
+                    <string>pgm</string>
+                    <string>pnm</string>
+                    <string>ppm</string>
+                </array>
+                <key>public.mime-type</key>
+                <array>
+                    <string>image/x-portable-anymap</string>
+                    <string>image/x-portable-arbitrarymap</string>
+                    <string>image/x-portable-bitmap</string>
+                    <string>image/x-portable-graymap</string>
+                    <string>image/x-portable-pixmap</string>
+                </array>
+            </dict>
+        </dict>
     </array>
     <key>UTExportedTypeDeclarations</key>
     <array>

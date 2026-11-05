@@ -146,6 +146,9 @@ mod tests {
         assert!(is_supported(Path::new("picture.JP2")));
         assert!(is_supported(Path::new("picture.j2k")));
         assert!(is_supported(Path::new("drawing.SVGZ")));
+        for extension in ["PAM", "PBM", "PGM", "PNM", "PPM"] {
+            assert!(is_supported(Path::new(&format!("picture.{extension}"))));
+        }
         assert!(!is_supported(Path::new("notes.txt")));
         assert!(!is_supported(Path::new("png")));
     }

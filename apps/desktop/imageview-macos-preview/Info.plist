@@ -21,6 +21,7 @@
                 <string>com.truevision.tga-image</string>
                 <string>org.jpeg.jfif</string>
                 <string>org.libpng.apng</string>
+                <string>org.netpbm.pnm</string>
                 <string>org.qoiformat.qoi</string>
                 <string>org.tinyvg.tvg</string>
                 <string>org.webmproject.webp</string>

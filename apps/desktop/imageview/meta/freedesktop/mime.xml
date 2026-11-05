@@ -1,5 +1,13 @@
 <?xml version="1.0" encoding="UTF-8" ?>
 <mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
+    <mime-type type="image/x-portable-arbitrarymap">
+        <comment>PAM image</comment>
+        <sub-class-of type="image/x-portable-anymap" />
+        <magic priority="50">
+            <match type="string" value="P7\n" offset="0" />
+        </magic>
+        <glob pattern="*.pam" />
+    </mime-type>
     <mime-type type="image/qoi">
         <comment>QOI image</comment>
         <sub-class-of type="application/octet-stream" />
