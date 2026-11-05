@@ -59,6 +59,7 @@ fn main() {
             .set("FileDescription", "Sequel Explorer")
             .set("LegalCopyright", "Copyright © 2026 Bastiaan van der Plaat")
             .set_icon("meta/windows/icon.ico")
+            .set_icon_with_id("meta/windows/file-types/db.ico", "2")
             .set_manifest(&manifest);
         res.compile().expect("Failed to compile Windows resources.");
     }

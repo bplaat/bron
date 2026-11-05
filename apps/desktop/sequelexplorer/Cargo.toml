@@ -18,7 +18,7 @@ hardened_runtime = true
 
 [package.metadata.bundle.windows]
 assets = "meta/windows"
-file_types = [{ name = "SQLite Database", extensions = ["db"] }]
+file_types = [{ name = "SQLite Database", extensions = ["db"], icon = 2 }]
 
 [lints]
 workspace = true
