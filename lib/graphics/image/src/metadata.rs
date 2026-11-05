@@ -4,21 +4,27 @@
  * SPDX-License-Identifier: MIT
  */
 
-//! EXIF metadata of JPEG files. EXIF is stored as directories of tagged values with a byte
-//! order mark, the layout of TIFF files.
+//! EXIF metadata, TIFF directories, and pixel orientation shared by image decoders.
 
 use alloc::vec::Vec;
+#[cfg(feature = "jpeg")]
 use core::ops::Range;
 
+use super::{Budget, Result};
+
 pub(crate) const ORIENTATION: u16 = 0x112;
+#[cfg(feature = "jpeg")]
 pub(crate) const EXIF_DIRECTORY: u16 = 0x8769;
+#[cfg(feature = "jpeg")]
 pub(crate) const COLOR_SPACE: u16 = 0xa001;
+#[cfg(feature = "jpeg")]
 pub(crate) const INTEROPERABILITY_DIRECTORY: u16 = 0xa005;
+#[cfg(feature = "jpeg")]
 const PIXEL_WIDTH: u16 = 0xa002;
+#[cfg(feature = "jpeg")]
 const PIXEL_HEIGHT: u16 = 0xa003;
 pub(crate) const ASCII: u16 = 2;
-pub(crate) const SHORT: u16 = 3;
-pub(crate) const LONG: u16 = 4;
+#[cfg(feature = "jpeg")]
 const SRGB: u32 = 1;
 
 /// How stored pixels are turned to show them, as numbered by the EXIF orientation tag.
@@ -97,12 +103,14 @@ impl Orientation {
 }
 
 // A metadata segment of a JPEG file: its marker and contents.
+#[cfg(feature = "jpeg")]
 struct Segment {
     marker: u8,
     contents: Range<usize>,
 }
 
 // The segments before the pixel data, or `None` for a file that is not a JPEG.
+#[cfg(feature = "jpeg")]
 fn segments(jpeg: &[u8]) -> Option<Vec<Segment>> {
     if !jpeg.starts_with(&[0xff, 0xd8]) {
         return None;
@@ -126,6 +134,7 @@ fn segments(jpeg: &[u8]) -> Option<Vec<Segment>> {
 }
 
 // The EXIF data of the segments that have it.
+#[cfg(feature = "jpeg")]
 fn exif_ranges(jpeg: &[u8], segments: &[Segment]) -> Vec<Range<usize>> {
     segments
         .iter()
@@ -137,6 +146,7 @@ fn exif_ranges(jpeg: &[u8], segments: &[Segment]) -> Vec<Range<usize>> {
 }
 
 // Where a new EXIF segment goes: after the JFIF segment, which has to come first.
+#[cfg(feature = "jpeg")]
 fn exif_position(jpeg: &[u8], segments: &[Segment]) -> usize {
     segments
         .iter()
@@ -146,66 +156,8 @@ fn exif_position(jpeg: &[u8], segments: &[Segment]) -> usize {
         .map_or(2, |segment| segment.contents.end)
 }
 
-/// EXIF data in its byte order.
-pub(crate) struct ExifData<'a> {
-    data: &'a [u8],
-    little: bool,
-}
-
-impl<'a> ExifData<'a> {
-    pub(crate) fn new(data: &'a [u8]) -> Option<Self> {
-        let little = match data.get(..2)? {
-            b"II" => true,
-            b"MM" => false,
-            _ => return None,
-        };
-        let exif = Self { data, little };
-        (exif.read(2, 2)? == 42).then_some(exif)
-    }
-
-    pub(crate) fn read(&self, at: usize, length: usize) -> Option<u32> {
-        let bytes = self.data.get(at..at.checked_add(length)?)?;
-        Some(bytes.iter().enumerate().fold(0, |value, (index, byte)| {
-            let shift = if self.little {
-                index
-            } else {
-                length - 1 - index
-            } * 8;
-            value | u32::from(*byte) << shift
-        }))
-    }
-
-    /// The first image directory.
-    pub(crate) fn first_directory(&self) -> Option<usize> {
-        self.read(4, 4).map(|offset| offset as usize)
-    }
-
-    /// The value position of a single-value entry of a type in a directory.
-    pub(crate) fn entry(&self, directory: usize, tag: u16, kind: u16) -> Option<usize> {
-        (0..self.read(directory, 2)? as usize).find_map(|index| {
-            let entry = directory.checked_add(2 + index * 12)?;
-            (self.read(entry, 2)? == u32::from(tag)
-                && self.read(entry + 2, 2)? == u32::from(kind)
-                && (kind == ASCII || self.read(entry + 4, 4)? == 1))
-                .then_some(entry + 8)
-        })
-    }
-
-    // The value position and length of a number entry, a short or long.
-    fn number(&self, directory: usize, tag: u16) -> Option<(usize, usize)> {
-        self.entry(directory, tag, SHORT)
-            .map(|at| (at, 2))
-            .or_else(|| self.entry(directory, tag, LONG).map(|at| (at, 4)))
-    }
-
-    /// The value of a number entry, a short or long.
-    pub(crate) fn get(&self, directory: usize, tag: u16) -> Option<u32> {
-        let (at, length) = self.number(directory, tag)?;
-        self.read(at, length)
-    }
-}
-
 // Writes a number in a byte order.
+#[cfg(feature = "jpeg")]
 fn write(data: &mut [u8], at: usize, length: usize, value: u32, little: bool) {
     if let Some(bytes) = data.get_mut(at..at + length) {
         for (index, byte) in bytes.iter_mut().enumerate() {
@@ -216,6 +168,7 @@ fn write(data: &mut [u8], at: usize, length: usize, value: u32, little: bool) {
 }
 
 // Changes a number entry of a directory that EXIF data has.
+#[cfg(feature = "jpeg")]
 fn set(data: &mut [u8], directory: usize, tag: u16, value: u32) {
     let Some(exif) = ExifData::new(data) else {
         return;
@@ -227,6 +180,7 @@ fn set(data: &mut [u8], directory: usize, tag: u16, value: u32) {
 }
 
 // A big endian EXIF segment with only an orientation.
+#[cfg(feature = "jpeg")]
 fn orientation_segment(orientation: Orientation) -> Vec<u8> {
     let mut exif = b"MM\0\x2a\0\0\0\x08\0\x01".to_vec();
     exif.extend_from_slice(&ORIENTATION.to_be_bytes());
@@ -243,6 +197,7 @@ fn orientation_segment(orientation: Orientation) -> Vec<u8> {
 /// Returns a JPEG file shown with an extra orientation, by changing its EXIF orientation
 /// instead of encoding its pixels again, which keeps their quality. Returns `None` for files
 /// that are not JPEG, or have EXIF without an orientation, which cannot be added in place.
+#[cfg(feature = "jpeg")]
 pub fn reorient_jpeg(jpeg: &[u8], change: Orientation) -> Option<Vec<u8>> {
     let segments = segments(jpeg)?;
     let ranges = exif_ranges(jpeg, &segments);
@@ -276,6 +231,7 @@ pub fn reorient_jpeg(jpeg: &[u8], change: Orientation) -> Option<Vec<u8>> {
 /// JPEG of its pixels encoded again with a size. The decoder turns pixels and converts them to
 /// sRGB, so the orientation and color space are reset, the size follows the new pixels, and
 /// the thumbnail of the original is left out.
+#[cfg(feature = "jpeg")]
 pub fn copy_jpeg_exif(source: &[u8], jpeg: Vec<u8>, width: u32, height: u32) -> Vec<u8> {
     let (Some(source_segments), Some(segments)) = (segments(source), segments(&jpeg)) else {
         return jpeg;
@@ -309,7 +265,134 @@ pub fn copy_jpeg_exif(source: &[u8], jpeg: Vec<u8>, width: u32, height: u32) -> 
     output
 }
 
-#[cfg(test)]
+// MARK: TIFF directories
+
+pub(crate) const SHORT: u16 = 3;
+#[cfg(feature = "jpeg")]
+pub(crate) const LONG: u16 = 4;
+
+pub(crate) struct ExifData<'a> {
+    data: &'a [u8],
+    little: bool,
+}
+
+impl<'a> ExifData<'a> {
+    pub(crate) fn new(data: &'a [u8]) -> Option<Self> {
+        let little = match data.get(..2)? {
+            b"II" => true,
+            b"MM" => false,
+            _ => return None,
+        };
+        let exif = Self { data, little };
+        (exif.read(2, 2)? == 42).then_some(exif)
+    }
+
+    pub(crate) fn read(&self, at: usize, length: usize) -> Option<u32> {
+        let bytes = self.data.get(at..at.checked_add(length)?)?;
+        Some(bytes.iter().enumerate().fold(0, |value, (index, byte)| {
+            let shift = if self.little {
+                index
+            } else {
+                length - 1 - index
+            } * 8;
+            value | u32::from(*byte) << shift
+        }))
+    }
+
+    /// The first image directory.
+    pub(crate) fn first_directory(&self) -> Option<usize> {
+        self.read(4, 4).map(|offset| offset as usize)
+    }
+
+    pub(crate) fn orientation(&self) -> Option<u16> {
+        let directory = self.first_directory()?;
+        let value = self.read(self.entry(directory, ORIENTATION, SHORT)?, 2)? as u16;
+        Orientation::from_exif(value).map(Orientation::exif)
+    }
+
+    /// The value position of a single-value entry of a type in a directory.
+    pub(crate) fn entry(&self, directory: usize, tag: u16, kind: u16) -> Option<usize> {
+        (0..self.read(directory, 2)? as usize).find_map(|index| {
+            let entry = directory.checked_add(2 + index * 12)?;
+            (self.read(entry, 2)? == u32::from(tag)
+                && self.read(entry + 2, 2)? == u32::from(kind)
+                && (kind == ASCII || self.read(entry + 4, 4)? == 1))
+                .then_some(entry + 8)
+        })
+    }
+
+    // The value position and length of a number entry, a short or long.
+    #[cfg(feature = "jpeg")]
+    fn number(&self, directory: usize, tag: u16) -> Option<(usize, usize)> {
+        self.entry(directory, tag, SHORT)
+            .map(|at| (at, 2))
+            .or_else(|| self.entry(directory, tag, LONG).map(|at| (at, 4)))
+    }
+
+    /// The value of a number entry, a short or long.
+    #[cfg(feature = "jpeg")]
+    pub(crate) fn get(&self, directory: usize, tag: u16) -> Option<u32> {
+        let (at, length) = self.number(directory, tag)?;
+        self.read(at, length)
+    }
+}
+
+// MARK: Pixel orientation
+
+pub(super) fn orient(
+    width: u32,
+    height: u32,
+    mut pixels: Vec<u8>,
+    orientation: u16,
+    budget: &mut Budget,
+) -> Result<(u32, u32, Vec<u8>)> {
+    if orientation == 1 {
+        return Ok((width, height, pixels));
+    }
+    if (2..=4).contains(&orientation) {
+        let pixel_chunks = pixels.as_chunks_mut::<4>().0;
+        let row_width = width as usize;
+        let row_height = height as usize;
+        match orientation {
+            2 => {
+                for row in pixel_chunks.chunks_exact_mut(row_width) {
+                    row.reverse();
+                }
+            }
+            3 => pixel_chunks.reverse(),
+            4 => {
+                for y in 0..row_height / 2 {
+                    for x in 0..row_width {
+                        pixel_chunks.swap(y * row_width + x, (row_height - 1 - y) * row_width + x);
+                    }
+                }
+            }
+            _ => unreachable!(),
+        }
+        return Ok((width, height, pixels));
+    }
+    let (w, h) = (height, width);
+    let mut output = budget.zeroed(pixels.len())?;
+    for y in 0..height {
+        for x in 0..width {
+            let (dx, dy) = match orientation {
+                5 => (y, x),
+                6 => (height - 1 - y, x),
+                7 => (height - 1 - y, width - 1 - x),
+                8 => (y, width - 1 - x),
+                _ => unreachable!("orientation was checked"),
+            };
+            let src = (y as usize * width as usize + x as usize) * 4;
+            let dst = (dy as usize * w as usize + dx as usize) * 4;
+            output[dst..dst + 4].copy_from_slice(&pixels[src..src + 4]);
+        }
+    }
+    Ok((w, h, output))
+}
+
+// MARK: Tests
+
+#[cfg(all(test, feature = "jpeg"))]
 mod tests {
     use super::*;
     use crate::{Bitmap, Format, decode, encode};

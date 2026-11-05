@@ -8,8 +8,8 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use super::color::{ADOBE_RGB, ColorModel, Curve, Transform};
-use super::exif::{
-    ASCII, COLOR_SPACE, EXIF_DIRECTORY, ExifData, INTEROPERABILITY_DIRECTORY, ORIENTATION, SHORT,
+use super::metadata::{
+    ASCII, COLOR_SPACE, EXIF_DIRECTORY, ExifData, INTEROPERABILITY_DIRECTORY, orient,
 };
 use super::{
     Bitmap, Budget, Compression, DecodeError, EncodeError, Format, Image, Reader, Result,
@@ -1071,11 +1071,7 @@ impl Exif {
         let data = bytes.strip_prefix(b"Exif\0\0")?;
         let exif = ExifData::new(data)?;
         let directory = exif.first_directory()?;
-        let orientation = exif
-            .entry(directory, ORIENTATION, SHORT)
-            .and_then(|at| exif.read(at, 2))
-            .map(|value| value as u16)
-            .filter(|value| (1..=8).contains(value));
+        let orientation = exif.orientation();
         let adobe_rgb = (|| {
             let exif_directory = exif.get(directory, EXIF_DIRECTORY)? as usize;
             if exif.get(exif_directory, COLOR_SPACE)? != 0xffff {
@@ -1092,57 +1088,6 @@ impl Exif {
             adobe_rgb,
         })
     }
-}
-
-fn orient(
-    width: u32,
-    height: u32,
-    mut pixels: Vec<u8>,
-    orientation: u16,
-    budget: &mut Budget,
-) -> Result<(u32, u32, Vec<u8>)> {
-    if orientation == 1 {
-        return Ok((width, height, pixels));
-    }
-    if (2..=4).contains(&orientation) {
-        let pixel_chunks = pixels.as_chunks_mut::<4>().0;
-        let row_width = width as usize;
-        let row_height = height as usize;
-        match orientation {
-            2 => {
-                for row in pixel_chunks.chunks_exact_mut(row_width) {
-                    row.reverse();
-                }
-            }
-            3 => pixel_chunks.reverse(),
-            4 => {
-                for y in 0..row_height / 2 {
-                    for x in 0..row_width {
-                        pixel_chunks.swap(y * row_width + x, (row_height - 1 - y) * row_width + x);
-                    }
-                }
-            }
-            _ => unreachable!(),
-        }
-        return Ok((width, height, pixels));
-    }
-    let (w, h) = (height, width);
-    let mut output = budget.zeroed(pixels.len())?;
-    for y in 0..height {
-        for x in 0..width {
-            let (dx, dy) = match orientation {
-                5 => (y, x),
-                6 => (height - 1 - y, x),
-                7 => (height - 1 - y, width - 1 - x),
-                8 => (y, width - 1 - x),
-                _ => unreachable!("orientation was checked"),
-            };
-            let src = (y as usize * width as usize + x as usize) * 4;
-            let dst = (dy as usize * w as usize + dx as usize) * 4;
-            output[dst..dst + 4].copy_from_slice(&pixels[src..src + 4]);
-        }
-    }
-    Ok((w, h, output))
 }
 
 // MARK: Encoder

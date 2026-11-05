@@ -28,19 +28,19 @@ pub use encoder::{
     encode_animation_with_options, encode_with_options,
 };
 #[cfg(feature = "jpeg")]
-pub use exif::{Orientation, copy_jpeg_exif, reorient_jpeg};
+pub use metadata::{Orientation, copy_jpeg_exif, reorient_jpeg};
 
 #[cfg(feature = "bmp")]
 mod bmp;
 mod color;
-#[cfg(feature = "jpeg")]
-mod exif;
 #[cfg(feature = "gif")]
 mod gif;
 #[cfg(feature = "ico")]
 mod ico;
 #[cfg(feature = "jpeg")]
 mod jpeg;
+#[cfg(feature = "jpeg")]
+mod metadata;
 #[cfg(feature = "png")]
 mod png;
 #[cfg(feature = "qoi")]
