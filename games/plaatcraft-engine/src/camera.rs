@@ -271,14 +271,22 @@ impl Camera {
         {
             self.position[1] += 0.5;
         }
-        let climb = self.auto_jump
-            && !shift
+        // A swimmer's feet sit below the surface, so a one-block bank needs a little
+        // more clearance than a step walked into from solid ground.
+        let step_height = if self.in_liquid && !self.grounded {
+            1.5
+        } else {
+            1.0
+        };
+        let step_up = !shift
             && ahead.is_some_and(|[dx, dz]| {
                 self.overlaps([dx, 0.0, dz], &mut solid)
-                    && !self.overlaps([0.0, 1.0, 0.0], &mut solid)
-                    && !self.overlaps([dx, 1.0, dz], &mut solid)
+                    && !self.overlaps([0.0, step_height, 0.0], &mut solid)
+                    && !self.overlaps([dx, step_height, dz], &mut solid)
             });
-        if (space || climb) && self.grounded && !self.in_liquid {
+        let climb = self.auto_jump && step_up;
+        // Push out of the water onto a bank, even without a solid block underfoot.
+        if (space || climb) && (self.grounded || self.in_liquid && step_up) {
             self.vertical_velocity = 8.0;
             self.grounded = false;
         }
@@ -287,8 +295,12 @@ impl Camera {
         for _ in 0..ticks {
             let previous = self.vertical_velocity;
             self.vertical_velocity = if self.in_liquid {
-                // Liquids slowly sink the player, holding Space swims up.
-                let target = if space { SWIM_SPEED } else { -SINK_SPEED };
+                // Swim up manually or towards a clear step when auto-jump is enabled.
+                let target = if space || climb {
+                    SWIM_SPEED
+                } else {
+                    -SINK_SPEED
+                };
                 self.vertical_velocity + (target - self.vertical_velocity) * (step * 6.0).min(1.0)
             } else {
                 (self.vertical_velocity - 24.0 * step).max(-50.0)
@@ -675,6 +687,103 @@ mod tests {
         ] {
             assert!(position[0] < 2.71);
             assert!((position[1] - 2.7).abs() < 0.0001);
+        }
+    }
+
+    #[test]
+    fn auto_jump_walks_up_submerged_steps_and_out_onto_shore() {
+        for dt in [1.0 / 60.0, 0.05] {
+            for fluid in [world::WATER, world::LAVA] {
+                let mut camera = Camera {
+                    position: [0.5, 2.7, 0.5],
+                    yaw: core::f32::consts::FRAC_PI_2,
+                    auto_jump: true,
+                    ..Camera::default()
+                };
+                camera.input.direction = [0.0, 1.0];
+                for _ in 0..(8.0 / dt) as usize {
+                    camera.tick(dt, |p| {
+                        Some(if p[1] < 1 + p[0].div_euclid(2).clamp(0, 5) {
+                            1
+                        } else if p[1] < 5 {
+                            fluid
+                        } else {
+                            0
+                        })
+                    });
+                }
+                assert!(camera.position[0] > 12.0, "{dt}: {:?}", camera.position);
+                assert!((camera.position[1] - 7.7).abs() < 0.001);
+                assert!(!camera.in_liquid);
+            }
+        }
+    }
+
+    #[test]
+    fn swimming_climbs_a_bank_one_block_above_the_water_surface() {
+        for (auto_jump, jump) in [(true, false), (false, true)] {
+            for dt in [1.0 / 60.0, 0.05] {
+                let mut camera = Camera {
+                    position: [2.65, 3.4, 0.5],
+                    yaw: core::f32::consts::FRAC_PI_2,
+                    auto_jump,
+                    ..Camera::default()
+                };
+                camera.input.direction = [0.0, 1.0];
+                camera.input.jump = jump;
+                for _ in 0..(4.0 / dt) as usize {
+                    camera.tick(dt, |p| {
+                        Some(if p[1] < 1 || p[0] >= 3 && p[1] < 3 {
+                            1
+                        } else if p[1] < 2 {
+                            world::WATER
+                        } else {
+                            0
+                        })
+                    });
+                }
+                assert!(
+                    camera.position[0] > 4.0,
+                    "auto={auto_jump} jump={jump} dt={dt}: {:?}",
+                    camera.position
+                );
+                assert!(camera.position[1] >= 4.7 - 1e-7);
+            }
+        }
+    }
+
+    #[test]
+    fn underwater_auto_jump_requires_a_clear_step_and_respects_sneaking() {
+        for (auto_jump, sneak, obstacle, ceiling) in [
+            (false, false, 1, false),
+            (true, true, 1, false),
+            (true, false, 3, false),
+            (true, false, 1, true),
+            (true, false, 0, false),
+        ] {
+            let mut camera = Camera {
+                position: [0.5, 2.7, 0.5],
+                yaw: core::f32::consts::FRAC_PI_2,
+                auto_jump,
+                ..Camera::default()
+            };
+            camera.input.direction = [0.0, 1.0];
+            camera.input.sneak = sneak;
+            for _ in 0..120 {
+                camera.tick(1.0 / 60.0, |p| {
+                    Some(
+                        if p[1] < 1 || p[0] >= 3 && p[1] < 1 + obstacle || ceiling && p[1] >= 3 {
+                            1
+                        } else {
+                            world::WATER
+                        },
+                    )
+                });
+            }
+            assert!((camera.position[1] - 2.7).abs() < 0.001);
+            if obstacle > 0 {
+                assert!(camera.position[0] < 2.71);
+            }
         }
     }
 
