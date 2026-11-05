@@ -36,6 +36,12 @@ pub fn compress(data: &[u8]) -> Vec<u8> {
 
 /// Decompress a single gzip member, returning `None` for invalid data or output over 1 GiB.
 pub fn decompress(data: &[u8]) -> Option<Vec<u8>> {
+    decompress_with_limit(data, MAX_OUTPUT_SIZE)
+}
+
+/// Decompress a single gzip member, returning `None` for invalid data or output over
+/// `limit` bytes. The limit is capped at 1 GiB.
+pub fn decompress_with_limit(data: &[u8], limit: usize) -> Option<Vec<u8>> {
     if data.len() < 18 || data[..3] != [0x1f, 0x8b, 0x08] || data[3] & 0xe0 != 0 {
         return None;
     }
@@ -60,12 +66,14 @@ pub fn decompress(data: &[u8]) -> Option<Vec<u8>> {
         offset += 2;
     }
     let compressed = data.get(offset..footer)?;
-    let output = deflate::decompress(compressed, MAX_OUTPUT_SIZE).ok()?;
+    let output = deflate::decompress(compressed, limit.min(MAX_OUTPUT_SIZE)).ok()?;
     let expected_crc = u32::from_le_bytes(data.get(footer..footer + 4)?.try_into().ok()?);
     let expected_size = u32::from_le_bytes(data.get(footer + 4..)?.try_into().ok()?);
     (CRC32.checksum(&output) == expected_crc && output.len() as u32 == expected_size)
         .then_some(output)
 }
+
+// MARK: Tests
 
 #[cfg(test)]
 mod tests {
@@ -76,6 +84,20 @@ mod tests {
     #[test]
     fn decompresses_gzip() {
         assert_eq!(decompress(SMALL).as_deref(), Some(&b"hello world"[..]));
+    }
+
+    #[test]
+    fn output_limit_is_enforced() {
+        assert!(decompress_with_limit(SMALL, 10).is_none());
+        assert_eq!(
+            decompress_with_limit(SMALL, 11).as_deref(),
+            Some(&b"hello world"[..])
+        );
+        // Forging ISIZE must not bypass the actual decompression limit.
+        let mut forged = SMALL.to_vec();
+        let end = forged.len();
+        forged[end - 4..].copy_from_slice(&1u32.to_le_bytes());
+        assert!(decompress_with_limit(&forged, 10).is_none());
     }
 
     #[test]
