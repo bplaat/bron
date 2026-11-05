@@ -1,6 +1,6 @@
 # Vector
 
-A safe Rust decoder for SVG (subset) and TinyVG. Documents decode to an immutable,
+A safe Rust decoder for SVG/SVGZ (subset) and TinyVG. Documents decode to an immutable,
 backend-neutral display list containing paths, paints, and drawing commands.
 
 ## Usage
@@ -12,7 +12,8 @@ println!("{}x{}", document.size().width, document.size().height);
 ```
 
 Both formats are enabled by default. Use `default-features = false` with `svg`
-or `tinyvg` to select a decoder. Input is limited to 64 MiB.
+or `tinyvg` to select a decoder. Input is limited to 64 MiB. SVGZ is detected from its gzip signature and uses
+the SVG decoder after decompression, also limited to 64 MiB.
 
 ## SVG subset
 

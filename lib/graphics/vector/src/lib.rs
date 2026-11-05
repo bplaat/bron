@@ -14,7 +14,8 @@ mod svg;
 #[cfg(feature = "tinyvg")]
 mod tinyvg;
 
-#[cfg(all(test, feature = "tinyvg"))]
+#[cfg(all(test, any(feature = "svg", feature = "tinyvg")))]
+#[cfg_attr(not(feature = "tinyvg"), allow(dead_code))]
 #[path = "../../image/src/fixture_corpus.rs"]
 mod test_support;
 
@@ -32,6 +33,8 @@ pub enum ColorSpace {
 pub enum VectorFormat {
     /// Scalable Vector Graphics.
     Svg,
+    /// Gzip-compressed Scalable Vector Graphics.
+    Svgz,
     /// Binary TinyVG.
     TinyVg,
 }
@@ -512,6 +515,10 @@ pub fn vector_format(_data: &[u8]) -> Option<VectorFormat> {
         return Some(VectorFormat::TinyVg);
     }
     #[cfg(feature = "svg")]
+    if _data.starts_with(&[0x1f, 0x8b, 8]) {
+        return Some(VectorFormat::Svgz);
+    }
+    #[cfg(feature = "svg")]
     if svg::is_svg(_data) {
         return Some(VectorFormat::Svg);
     }
@@ -526,6 +533,17 @@ pub fn decode_vector(data: &[u8]) -> Result<VectorImage, VectorDecodeError> {
     match vector_format(data) {
         #[cfg(feature = "svg")]
         Some(VectorFormat::Svg) => svg::decode(data),
+        #[cfg(feature = "svg")]
+        Some(VectorFormat::Svgz) => {
+            let svg = gzip::decompress_with_limit(data, 64 * 1024 * 1024)
+                .ok_or(VectorDecodeError::InvalidData)?;
+            if !svg::is_svg(&svg) {
+                return Err(VectorDecodeError::InvalidData);
+            }
+            let mut image = svg::decode(&svg)?;
+            image.format = VectorFormat::Svgz;
+            Ok(image)
+        }
         #[cfg(feature = "tinyvg")]
         Some(VectorFormat::TinyVg) => decode_tinyvg(data),
         _ => Err(VectorDecodeError::InvalidMagic),
@@ -1314,5 +1332,32 @@ pub(crate) fn append_arc(
             control_1: map(c1 + alpha * s1, s1 - alpha * c1),
             to: if index + 1 == count { to } else { map(c1, s1) },
         });
+    }
+}
+
+// MARK: Tests
+
+#[cfg(all(test, feature = "svg"))]
+mod svgz_tests {
+    use super::*;
+
+    #[test]
+    fn svgz_preserves_the_svg_display_list() {
+        let svg = br#"<svg xmlns="http://www.w3.org/2000/svg" width="12" height="8"><rect width="12" height="8" fill="red"/></svg>"#;
+        let compressed = gzip::compress(svg);
+        assert_eq!(vector_format(&compressed), Some(VectorFormat::Svgz));
+        let mut expected = decode_vector(svg).expect("SVG");
+        expected.format = VectorFormat::Svgz;
+        assert_eq!(decode_vector(&compressed).expect("SVGZ"), expected);
+    }
+
+    #[test]
+    fn damaged_gzip_and_non_svg_payloads_fail() {
+        let mut compressed = gzip::compress(b"<svg/>");
+        compressed[10] ^= 255;
+        assert!(decode_vector(&compressed).is_err());
+        assert!(decode_vector(&[0x1f, 0x8b, 8]).is_err());
+        assert!(decode_vector(&gzip::compress(b"<html/>")).is_err());
+        assert!(decode_vector(&gzip::compress(b"<svg>")).is_err());
     }
 }
