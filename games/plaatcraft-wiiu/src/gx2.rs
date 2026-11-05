@@ -4,8 +4,8 @@
  * SPDX-License-Identifier: MIT
  */
 
-//! Drawing with GX2 on the TV, the GamePad shows a copy. Linear lighting, sRGB textures and
-//! output, per-pixel radial fog and animated water follow the desktop shaders. The chunks
+//! Drawing with GX2 on the TV and a separate player-one view on the GamePad. Linear lighting,
+//! sRGB textures and output, per-pixel radial fog and animated water follow the desktop shaders. The chunks
 //! have day and night colors so the night needs no new meshes. Other draws stream vertices
 //! to a buffer that starts over every frame.
 
@@ -188,6 +188,8 @@ pub struct Gx2 {
     stream: Buffer,
     used: usize,
     size: [f32; 2],
+    gamepad_size: [f32; 2],
+    gamepad: bool,
     night: f32,
     time: f32,
     bound: Option<Texture>,
@@ -272,11 +274,13 @@ impl Gx2 {
                 }
                 sampler
             };
-            let buffer = WHBGfxGetTVColourBuffer();
-            let surface = &mut (*buffer).surface;
-            surface.format = GX2_SURFACE_FORMAT_SRGB_R8_G8_B8_A8;
-            let aspect = surface.width as f32 / surface.height as f32;
-            GX2InitColorBufferRegs(buffer);
+            let sizes = [WHBGfxGetTVColourBuffer(), WHBGfxGetDRCColourBuffer()].map(|buffer| {
+                let surface = &mut (*buffer).surface;
+                surface.format = GX2_SURFACE_FORMAT_SRGB_R8_G8_B8_A8;
+                let aspect = surface.width as f32 / surface.height as f32;
+                GX2InitColorBufferRegs(buffer);
+                [480.0 * aspect, 480.0]
+            });
             Some(Self {
                 group,
                 projection,
@@ -302,12 +306,58 @@ impl Gx2 {
                 ),
                 stream: Buffer::new(STREAM_SIZE / size_of::<GpuVertex>()),
                 used: 0,
-                size: [480.0 * aspect, 480.0],
+                size: sizes[0],
+                gamepad_size: sizes[1],
+                gamepad: false,
                 night: 0.0,
                 time: 0.0,
                 bound: None,
             })
         }
+    }
+
+    fn color_buffer(&self) -> *mut GX2ColorBuffer {
+        unsafe {
+            if self.gamepad {
+                WHBGfxGetDRCColourBuffer()
+            } else {
+                WHBGfxGetTVColourBuffer()
+            }
+        }
+    }
+
+    fn begin_screen(&mut self, [r, g, b]: [f32; 3]) {
+        self.bound = None;
+        unsafe {
+            if self.gamepad {
+                WHBGfxBeginRenderDRC();
+            } else {
+                WHBGfxBeginRenderTV();
+            }
+            // Clearing restores the selected screen's context state, so shaders follow.
+            WHBGfxClearColor(r, g, b, 1.0);
+            // libwhb restores its original context after clearing; rebind the sRGB target.
+            GX2SetColorBuffer(self.color_buffer(), GX2_RENDER_TARGET_0);
+            GX2SetFetchShader(&self.group.fetch_shader);
+            GX2SetVertexShader(self.group.vertex_shader);
+            GX2SetPixelShader(self.group.pixel_shader);
+            GX2SetBlendControl(
+                GX2_RENDER_TARGET_0,
+                GX2_BLEND_MODE_SRC_ALPHA,
+                GX2_BLEND_MODE_INV_SRC_ALPHA,
+                GX2_BLEND_COMBINE_MODE_ADD,
+                TRUE,
+                GX2_BLEND_MODE_ONE,
+                GX2_BLEND_MODE_INV_SRC_ALPHA,
+                GX2_BLEND_COMBINE_MODE_ADD,
+            );
+            GX2SetLineWidth(3.0);
+            GX2Invalidate(INVALIDATE_ATTRIBUTE_BUFFER, ptr::null_mut(), u32::MAX);
+        }
+        let params = [self.night, 0.0, 0.0, 0.0];
+        unsafe { GX2SetVertexUniformReg(self.params, 4, params.as_ptr().cast()) };
+        self.water(false);
+        self.fog(None);
     }
 
     fn texture(&mut self, texture: Texture) {
@@ -424,44 +474,28 @@ impl Gpu for Gx2 {
         self.size
     }
 
+    fn primary_screen_size(&self) -> Option<[f32; 2]> {
+        Some(self.gamepad_size)
+    }
+
+    fn begin_primary_screen(&mut self) {
+        self.gamepad = true;
+        self.begin_screen([0.0; 3]);
+    }
+
     fn begin(&mut self, clear: [u8; 3], daylight: f32, time: f32) {
         let [r, g, b] = linear_rgb(clear);
         self.night = if daylight < 0.5 { 1.0 } else { 0.0 };
         self.time = time;
         self.used = 0;
-        self.bound = None;
-        unsafe {
-            WHBGfxBeginRender();
-            WHBGfxBeginRenderTV();
-            // Clearing sets the TV's context state, so the shaders follow
-            WHBGfxClearColor(r, g, b, 1.0);
-            // libwhb restores its original context after clearing; rebind the sRGB target.
-            GX2SetColorBuffer(WHBGfxGetTVColourBuffer(), GX2_RENDER_TARGET_0);
-            GX2SetFetchShader(&self.group.fetch_shader);
-            GX2SetVertexShader(self.group.vertex_shader);
-            GX2SetPixelShader(self.group.pixel_shader);
-            GX2SetBlendControl(
-                GX2_RENDER_TARGET_0,
-                GX2_BLEND_MODE_SRC_ALPHA,
-                GX2_BLEND_MODE_INV_SRC_ALPHA,
-                GX2_BLEND_COMBINE_MODE_ADD,
-                TRUE,
-                GX2_BLEND_MODE_ONE,
-                GX2_BLEND_MODE_INV_SRC_ALPHA,
-                GX2_BLEND_COMBINE_MODE_ADD,
-            );
-            GX2SetLineWidth(3.0);
-            GX2Invalidate(INVALIDATE_ATTRIBUTE_BUFFER, ptr::null_mut(), u32::MAX);
-        }
-        let params = [self.night, 0.0, 0.0, 0.0];
-        unsafe { GX2SetVertexUniformReg(self.params, 4, params.as_ptr().cast()) };
-        self.water(false);
-        self.fog(None);
+        self.gamepad = false;
+        unsafe { WHBGfxBeginRender() };
+        self.begin_screen([r, g, b]);
     }
 
     fn viewport(&mut self, [x, y, width, height]: [f32; 4]) {
         unsafe {
-            let surface = &(*WHBGfxGetTVColourBuffer()).surface;
+            let surface = &(*self.color_buffer()).surface;
             let fw = surface.width as f32;
             let fh = surface.height as f32;
             GX2SetViewport(x * fw, y * fh, width * fw, height * fh, 0.0, 1.0);
@@ -551,12 +585,15 @@ impl Gpu for Gx2 {
         unsafe {
             // libwhb's scan buffers are UNORM. Copy the stored sRGB bytes through an UNORM
             // view, so presentation does not decode them to linear and darken the image.
-            let mut scanout = *WHBGfxGetTVColourBuffer();
-            scanout.surface.format = GX2_SURFACE_FORMAT_UNORM_R8_G8_B8_A8;
-            GX2InitColorBufferRegs(&mut scanout);
-            GX2CopyColorBufferToScanBuffer(&scanout, GX2_SCAN_TARGET_TV);
-            // The GamePad shows the TV image scaled down, instead of drawing the scene twice
-            GX2CopyColorBufferToScanBuffer(&scanout, GX2_SCAN_TARGET_DRC);
+            for (buffer, target) in [
+                (WHBGfxGetTVColourBuffer(), GX2_SCAN_TARGET_TV),
+                (WHBGfxGetDRCColourBuffer(), GX2_SCAN_TARGET_DRC),
+            ] {
+                let mut scanout = *buffer;
+                scanout.surface.format = GX2_SURFACE_FORMAT_UNORM_R8_G8_B8_A8;
+                GX2InitColorBufferRegs(&mut scanout);
+                GX2CopyColorBufferToScanBuffer(&scanout, target);
+            }
             WHBGfxFinishRender();
         }
     }

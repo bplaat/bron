@@ -41,7 +41,10 @@ menu opens, and when leaving a world.
 
 ## Controls
 
-The TV shows the game and the GamePad a copy of it. Player 1 uses the GamePad, with controls
+The GamePad shows player 1's full-screen view, including menus, chat, inventory and other
+overlays. In split-screen, the TV shows only the other players: a full-screen view for 2 players,
+horizontal halves for 3, and a two-by-two grid for 4-5. In single-player, the TV also shows
+player 1. Player 1 uses the GamePad, with controls
 like Minecraft: Wii U Edition. Additional local players use Wii Remotes with Nunchuks, with
 the same controls as on the Wii:
 

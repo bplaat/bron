@@ -235,31 +235,55 @@ impl<P: Platform> Game<P> {
         }
     }
 
+    fn screen_players(&self) -> usize {
+        if self.gpu.primary_screen_size().is_some() && !self.locals.is_empty() {
+            self.locals.len()
+        } else {
+            self.locals.len() + 1
+        }
+    }
+
     fn view_size(&self) -> [f32; 2] {
         let [width, height] = self.gpu.size();
-        let [_, _, w, h] = viewport(self.locals.len() + 1, 0);
+        let [_, _, w, h] = viewport(self.screen_players(), 0);
         [width * w / h, height]
     }
 
+    fn control_size(&self) -> [f32; 2] {
+        self.gpu
+            .primary_screen_size()
+            .unwrap_or_else(|| self.gpu.size())
+    }
+
     fn map_pointer(&mut self, index: usize) {
-        if self.menu.is_some() || self.inventory {
+        if self.menu.is_some()
+            || self.inventory
+            || (index == 0 && self.gpu.primary_screen_size().is_some())
+        {
             return;
         }
+        let [_, _, w, h] = viewport(self.screen_players(), 0);
         if let Some(pointer) = &mut self.player.pad.pointer {
-            let [_, _, w, h] = viewport(self.locals.len() + 1, index);
             // Each controller points at its own view using the whole sensor bar or touch screen.
             pointer[0] = pointer[0] * w / h;
         }
     }
 
     fn draw_player(&mut self, index: usize, now: f32, dt: f32) {
-        let rect = viewport(self.locals.len() + 1, index);
-        self.gpu.viewport(rect);
-        self.renderer = Renderer::new(self.view_size(), self.stream.distance());
         self.player.others.update(self.player.players.clone());
         self.player.others.animate(dt);
         self.player.swing = (self.player.swing - dt).max(0.0);
-        self.render(now);
+        let count = self.screen_players();
+        let offset = self.locals.len() + 1 - count;
+        if let Some(index) = index.checked_sub(offset) {
+            self.draw_view(viewport(count, index), self.view_size(), now);
+        }
+    }
+
+    fn draw_view(&mut self, rect: [f32; 4], size: [f32; 2], now: f32) {
+        self.gpu.viewport(rect);
+        self.renderer = Renderer::new(size, self.stream.distance());
+        self.render(now, size);
     }
 
     fn set_local_players(&mut self, count: usize) {
@@ -685,7 +709,12 @@ impl<P: Platform> Game<P> {
             core::mem::swap(&mut self.player, &mut self.locals[index]);
         }
         self.gpu.viewport([0.0, 0.0, 1.0, 1.0]);
-        self.draw_overlay(now);
+        self.draw_overlay(now, self.gpu.size());
+        if let Some(size) = self.gpu.primary_screen_size() {
+            self.gpu.begin_primary_screen();
+            self.draw_view([0.0, 0.0, 1.0, 1.0], size, now);
+            self.draw_overlay(now, size);
+        }
         self.gpu.present();
     }
 
@@ -717,7 +746,7 @@ impl<P: Platform> Game<P> {
 
     // The engine's menus with the pointer and the D-pad, select presses and back goes back.
     fn menu(&mut self) {
-        let size = self.gpu.size();
+        let size = self.control_size();
         let (pad, session) = (self.player.pad, self.session());
         let status = (self.page() == Some(Page::Remotes)).then(|| self.controller.status());
         let Some(menu) = &mut self.menu else {
@@ -1269,7 +1298,7 @@ impl<P: Platform> Game<P> {
             }
         }
         if let Some([x, y, _]) = pad.pointer {
-            let left = (self.gpu.size()[0] - CELL * COLUMNS as f32) / 2.0;
+            let left = (self.control_size()[0] - CELL * COLUMNS as f32) / 2.0;
             let bottom = INVENTORY_TOP + CELL * ROWS as f32;
             if x >= left && x < left + CELL * COLUMNS as f32 && (INVENTORY_TOP..bottom).contains(&y)
             {
@@ -1290,7 +1319,7 @@ impl<P: Platform> Game<P> {
         }
         // Pressing on a hotbar slot selects it, elsewhere it fills the selected slot
         if pad.pressed(Button::Select) {
-            match self.hotbar_slot(pad.pointer) {
+            match self.hotbar_slot(pad.pointer, true) {
                 Some(slot) => hotbar.selected = slot,
                 None => hotbar.assign(hotbar.selected, world::MATERIALS[self.focus].0),
             }
@@ -1354,7 +1383,7 @@ impl<P: Platform> Game<P> {
             hotbar.cycle(-1);
         }
         if pad.pressed(Button::Tap)
-            && let Some(slot) = self.hotbar_slot(pad.pointer)
+            && let Some(slot) = self.hotbar_slot(pad.pointer, menus)
         {
             hotbar.selected = slot;
         }
@@ -1368,16 +1397,18 @@ impl<P: Platform> Game<P> {
         }
     }
     // The hotbar slot under the pointer.
-    fn hotbar_slot(&self, pointer: Option<[f32; 3]>) -> Option<usize> {
+    fn hotbar_slot(&self, pointer: Option<[f32; 3]>, primary: bool) -> Option<usize> {
         let [x, y, _] = pointer?;
-        hud::hotbar_slot(
-            if self.inventory {
-                self.gpu.size()
-            } else {
-                self.view_size()
-            },
-            [x, y],
-        )
+        let size = if self.inventory {
+            self.control_size()
+        } else if primary {
+            self.gpu
+                .primary_screen_size()
+                .unwrap_or_else(|| self.view_size())
+        } else {
+            self.view_size()
+        };
+        hud::hotbar_slot(size, [x, y])
     }
 
     fn aim(&mut self) {
@@ -1440,8 +1471,7 @@ impl<P: Platform> Game<P> {
         hud.hotbar(hotbar);
     }
 
-    fn render(&mut self, now: f32) {
-        let [width, height] = self.view_size();
+    fn render(&mut self, now: f32, [width, height]: [f32; 2]) {
         let gpu = &mut self.gpu;
         let daylight = if self.night { NIGHT_DAYLIGHT } else { 1.0 };
         // Between the last two physics ticks, so the player moves smoothly
@@ -1510,9 +1540,10 @@ impl<P: Platform> Game<P> {
             }
         }
     }
-    // Shared messages and menus are drawn once after restoring the full-screen viewport.
-    fn draw_overlay(&mut self, now: f32) {
-        let size = self.gpu.size();
+    // Shared messages and menus are drawn once per screen in the full-screen viewport.
+    fn draw_overlay(&mut self, now: f32, size: [f32; 2]) {
+        let pointer_size = self.gpu.size();
+        let primary_pointer_size = self.control_size();
         let context = self.context();
         let mut hud = Hud::begin(&mut self.gpu, size);
         if self.settings.game.show_stats && (self.active || self.stream.remote) {
@@ -1556,7 +1587,20 @@ impl<P: Platform> Game<P> {
                 if let Some(cursor) = self.controller.cursor_index(player)
                     && let Some(pointer) = self.controller.read_player(player, context).pointer
                 {
-                    hud.cursor(pointer, cursor);
+                    let [x, y, angle] = pointer;
+                    let pointer_size = if player == 0 {
+                        primary_pointer_size
+                    } else {
+                        pointer_size
+                    };
+                    hud.cursor(
+                        [
+                            x * size[0] / pointer_size[0],
+                            y * size[1] / pointer_size[1],
+                            angle,
+                        ],
+                        cursor,
+                    );
                 }
             }
         }
@@ -1607,8 +1651,11 @@ pub(crate) mod tests {
         projections: Vec<[f32; 2]>,
         pads: [super::super::input::Wiimote; 5],
         draws: Vec<Draw>,
+        primary_size: Option<[f32; 2]>,
+        primary_screen: bool,
     }
     struct Draw {
+        primary_screen: bool,
         viewport: [f32; 4],
         size: [f32; 2],
         texture: Texture,
@@ -1681,7 +1728,15 @@ pub(crate) mod tests {
         fn size(&self) -> [f32; 2] {
             [640.0, 480.0]
         }
-        fn begin(&mut self, _: [u8; 3], _: f32, _: f32) {}
+        fn primary_screen_size(&self) -> Option<[f32; 2]> {
+            self.primary_size
+        }
+        fn begin_primary_screen(&mut self) {
+            self.primary_screen = true;
+        }
+        fn begin(&mut self, _: [u8; 3], _: f32, _: f32) {
+            self.primary_screen = false;
+        }
         fn viewport(&mut self, rect: [f32; 4]) {
             self.viewports.push(rect);
         }
@@ -1696,6 +1751,7 @@ pub(crate) mod tests {
         fn fog(&mut self, _: Option<Fog>) {}
         fn quads(&mut self, texture: Texture, vertices: &[Vertex]) {
             self.draws.push(Draw {
+                primary_screen: self.primary_screen,
                 viewport: *self.viewports.last().unwrap(),
                 size: *self.projections.last().unwrap(),
                 texture,
@@ -2261,6 +2317,143 @@ pub(crate) mod tests {
                         && draw.vertices.iter().all(|v| v.color == 0x0000_00c0))
             );
         }
+    }
+
+    #[test]
+    fn separate_primary_screen_draws_one_full_view_with_chat_menus_and_inventory() {
+        let mut game = game_for::<5>();
+        let primary_size = [854.0, 480.0];
+        game.gpu.primary_size = Some(primary_size);
+        game.settings.game.show_stats = true;
+        for count in 1..=5 {
+            game.set_local_players(count);
+            game.messages.clear();
+            game.messages.push_back(("Shared chat".into(), 0.0));
+            for context in [Context::Play, Context::Menu, Context::Inventory] {
+                game.show(if context == Context::Menu {
+                    Some(Page::Pause)
+                } else {
+                    None
+                });
+                game.inventory = context == Context::Inventory;
+                game.player.swing = 0.5;
+                game.gpu.draws.clear();
+                game.gpu.viewports.clear();
+                game.draw_frame(1.0, 0.1);
+                assert!((game.player.swing - 0.4).abs() < 0.001);
+                let screen_players = (count - 1).max(1);
+                assert_eq!(
+                    &game.gpu.viewports[..screen_players],
+                    &(0..screen_players)
+                        .map(|index| viewport(screen_players, index))
+                        .collect::<Vec<_>>()
+                );
+                assert_eq!(
+                    &game.gpu.viewports[screen_players..],
+                    &[[0.0, 0.0, 1.0, 1.0]; 2]
+                );
+                for primary in [false, true] {
+                    let size = if primary {
+                        primary_size
+                    } else {
+                        [640.0, 480.0]
+                    };
+                    let draws: Vec<_> = game
+                        .gpu
+                        .draws
+                        .iter()
+                        .filter(|draw| draw.primary_screen == primary)
+                        .collect();
+                    assert!(!draws.is_empty());
+                    let rows: Vec<_> = draws
+                        .iter()
+                        .filter(|draw| {
+                            draw.texture == Texture::None
+                                && draw.vertices.iter().all(|v| v.color == 0x0000_00c0)
+                        })
+                        .collect();
+                    assert_eq!(rows.len(), 1);
+                    assert_eq!(rows[0].viewport, [0.0, 0.0, 1.0, 1.0]);
+                    assert!((rows[0].size[0] - size[0]).abs() < 0.001);
+                    assert_eq!(
+                        rows[0].vertices[1].position[0] - rows[0].vertices[0].position[0],
+                        size[0] - 16.0
+                    );
+                    if primary {
+                        assert!(
+                            draws
+                                .iter()
+                                .all(|draw| draw.viewport == [0.0, 0.0, 1.0, 1.0])
+                        );
+                        assert!(
+                            draws
+                                .iter()
+                                .all(|draw| (draw.size[0] - size[0]).abs() < 0.001
+                                    && (draw.size[1] - size[1]).abs() < 0.001)
+                        );
+                    }
+                    if context == Context::Inventory {
+                        assert!(draws.iter().any(|draw| draw.texture == Texture::None
+                            && draw.vertices.iter().all(|v| v.color == 0x0000_00aa)));
+                    }
+                    if context != Context::Play {
+                        assert!(
+                            draws
+                                .iter()
+                                .filter(|draw| draw.texture == Texture::Font)
+                                .all(|draw| draw.viewport == [0.0, 0.0, 1.0, 1.0])
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn separate_primary_screen_uses_full_screen_touch_coordinates() {
+        let mut game = game_for::<5>();
+        game.gpu.primary_size = Some([854.0, 480.0]);
+        game.set_local_players(2);
+        game.show(None);
+        game.player.pad.pointer = Some([427.0, 450.0, 0.0]);
+        game.map_pointer(0);
+        assert_eq!(game.player.pad.pointer, Some([427.0, 450.0, 0.0]));
+        assert_eq!(game.hotbar_slot(game.player.pad.pointer, true), Some(4));
+        game.player.pad.pointer = Some([320.0, 450.0, 0.0]);
+        game.map_pointer(1);
+        assert_eq!(game.player.pad.pointer, Some([320.0, 450.0, 0.0]));
+        assert_eq!(game.hotbar_slot(game.player.pad.pointer, false), Some(4));
+        for count in 2..=5 {
+            game.set_local_players(count);
+            game.show(None);
+            for index in 1..count {
+                game.player.pad.pointer = Some([320.0, 450.0, 0.0]);
+                game.map_pointer(index);
+                let width = if count == 3 { 1280.0 } else { 640.0 };
+                assert_eq!(game.view_size(), [width, 480.0]);
+                assert_eq!(game.player.pad.pointer, Some([width / 2.0, 450.0, 0.0]));
+                assert_eq!(game.hotbar_slot(game.player.pad.pointer, false), Some(4));
+            }
+        }
+        game.inventory = true;
+        assert_eq!(game.hotbar_slot(Some([427.0, 450.0, 0.0]), true), Some(4));
+        game.show(Some(Page::Pause));
+        assert_eq!(game.control_size(), [854.0, 480.0]);
+        let layout = Layout::new(
+            game.menu.as_ref().unwrap(),
+            TestPlatform::MENU,
+            game.control_size(),
+            [0.0; 4],
+        );
+        let y = (0..480)
+            .find(|&y| layout.action_at([427.0, y as f32]) == Some(Action::Settings))
+            .unwrap() as f32;
+        game.player.pad.pointer = Some([427.0, y, 0.0]);
+        game.menu();
+        assert_eq!(
+            game.menu.as_ref().unwrap().focused(&layout),
+            Some(Action::Settings)
+        );
     }
 
     #[test]

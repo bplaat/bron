@@ -237,7 +237,7 @@ pub struct Gamepad {
     pub left: [f32; 2],
     /// The right stick, x to the right and y up.
     pub right: [f32; 2],
-    /// Where the touch screen is touched on the 2D screen space, the GamePad shows the TV.
+    /// Where the touch screen is touched in the GamePad's 2D screen space.
     pub touch: Option<[f32; 2]>,
     /// Whether the touch started since the last read.
     pub touched: bool,

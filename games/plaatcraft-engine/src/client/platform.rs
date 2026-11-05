@@ -238,6 +238,12 @@ pub trait Gpu {
 
     /// The size of the 2D screen space, square pixels with a height of 480.
     fn size(&self) -> [f32; 2];
+    /// The coordinate size of a separate full-screen display for player one, when available.
+    fn primary_screen_size(&self) -> Option<[f32; 2]> {
+        None
+    }
+    /// Starts drawing on the separate player-one display after the main screen is drawn.
+    fn begin_primary_screen(&mut self) {}
     /// Starts a frame cleared to the color, with chunks lit for the daylight.
     fn begin(&mut self, clear: [u8; 3], daylight: f32, time: f32);
     /// Selects a viewport as fractions of the full framebuffer.

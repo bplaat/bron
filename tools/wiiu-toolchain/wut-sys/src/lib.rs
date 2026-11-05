@@ -333,6 +333,8 @@ unsafe extern "C" {
     pub fn WHBGfxShutdown();
     pub fn WHBGfxBeginRender();
     pub fn WHBGfxFinishRender();
+    pub fn WHBGfxBeginRenderDRC();
+    pub fn WHBGfxGetDRCColourBuffer() -> *mut GX2ColorBuffer;
     pub fn WHBGfxBeginRenderTV();
     pub fn WHBGfxFinishRenderTV();
     pub fn WHBGfxGetTVColourBuffer() -> *mut GX2ColorBuffer;

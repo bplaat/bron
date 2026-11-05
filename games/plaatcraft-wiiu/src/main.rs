@@ -118,7 +118,8 @@ pub extern "C" fn app_main() -> c_int {
         unsafe { WHBProcShutdown() };
         return 1;
     };
-    let controllers = Controllers::new(gx2.size());
+    let controllers =
+        Controllers::new(gx2.size(), gx2.primary_screen_size().expect("GamePad size"));
     let mut game = Game::<WiiU>::new(gx2, Ax::new(), controllers);
     let quit = game.run();
     // ProcUI's foreground-release callbacks still need GX2 during the exit transition.
