@@ -12,6 +12,14 @@ An 8x8 pixel font editor built with [bwebview](../../../lib/ui/bwebview), a clon
 - Copy hex bytes to clipboard / paste from clipboard
 - Export as assembler file (`.asm`) or C header file (`.h`)
 
+## Windows file icons
+
+The MSIX package registers a custom `.pf` file icon with editable
+[SVG sources](docs/images/windows/file-types/) and copies of the shared document bases.
+The ICO files are embedded in the Windows executable and referenced by resource ID in the MSIX manifest.
+ICO sizes 16, 20, 24, 32, 40, and 48 px use the `.small.svg` artwork;
+sizes 64, 96, 128, and 256 px use the regular `.svg` artwork.
+
 ## Screenshot
 
 ![Pixel Font Editor Screenshot](docs/images/screenshot.png)

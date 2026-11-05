@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 32 32">
+    <defs>
+        <linearGradient id="paper" x1="0" y1="0" x2="1" y2="1">
+            <stop stop-color="#fdfdfd" />
+            <stop offset="1" stop-color="#f4f4f4" />
+        </linearGradient>
+        <linearGradient id="fold" x1="0" y1="0" x2="1" y2="1">
+            <stop stop-color="#fafafa" />
+            <stop offset="1" stop-color="#dedede" />
+        </linearGradient>
+    </defs>
+    <path d="M4 0H21L28 7V32H4Z" fill="#a5a5a5" />
+    <path d="M5 1H21L27 7V31H5Z" fill="url(#paper)" />
+    <path d="M20 1H21V7H27V8H20Z" fill="#000000" opacity=".1" transform="translate(0 1)" />
+    <path d="M20.5 1V7.5H27" fill="url(#fold)" stroke="#a5a5a5" stroke-linejoin="round" />
+    <g transform="translate(6 14.333333) scale(1.333333)">
+        <path
+            fill="#171717"
+            d="M2 0h3v1h-3ZM1 1h2v1h-2ZM4 1h2v1h-2ZM0 2h2v1h-2ZM5 2h2v1h-2ZM0 3h7v1h-7ZM0 4h2v1h-2ZM5 4h2v1h-2ZM0 5h2v1h-2ZM5 5h2v1h-2ZM0 6h2v1h-2ZM5 6h2v1h-2ZM9 2h4v1h-4ZM12 3h2v1h-2ZM9 4h5v1h-5ZM8 5h2v1h-2ZM12 5h2v1h-2ZM9 6h3v1h-3ZM13 6h2v1h-2Z"
+        />
+    </g>
+</svg>
