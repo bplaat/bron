@@ -1,0 +1,76 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+    <defs>
+        <linearGradient id="paper" x1="0" y1="0" x2="1" y2="1">
+            <stop stop-color="#fdfdfd" />
+            <stop offset="1" stop-color="#f4f4f4" />
+        </linearGradient>
+        <linearGradient id="fold" x1="0" y1="0" x2="1" y2="1">
+            <stop stop-color="#fafafa" />
+            <stop offset="1" stop-color="#e5e5e5" />
+        </linearGradient>
+        <linearGradient id="fold-shadow" x1="0" y1="0" x2="0" y2="1">
+            <stop stop-color="#000000" stop-opacity=".16" />
+            <stop offset="1" stop-color="#000000" stop-opacity="0" />
+        </linearGradient>
+    </defs>
+    <path d="M35.5 5.5H167.5L220.5 58.5V251.5H35.5Z" fill="#000000" opacity=".12" transform="translate(0 1)" />
+    <path d="M35.5 4.5H167.5L220.5 57.5V250.5H35.5Z" fill="url(#paper)" stroke="#a5a5a5" stroke-linejoin="round" />
+    <path d="M167 57H220V61H167Z" fill="url(#fold-shadow)" />
+    <path d="M167.5 5V57.5H220" fill="url(#fold)" stroke="#a5a5a5" stroke-linejoin="round" />
+    <path d="M169 8.5V56H216.5" fill="none" stroke="#ffffff" stroke-opacity=".65" />
+    <g color="#c47a24" transform="translate(58.666667 62.666667) scale(5.777778)">
+        <path
+            d="M17.75 3C19.5449 3 21 4.45507 21 6.25V17.75C21 19.5449 19.5449 21 17.75 21H6.25C4.45507 21 3 19.5449 3 17.75V6.25C3 4.45507 4.45507 3 6.25 3H17.75Z"
+            fill="url(#paint0_radial_72095_9341)"
+        />
+        <path
+            d="M20.5149 19.4593C19.9419 20.3841 18.918 21 17.7502 21H6.25018C5.08229 21 4.05828 20.384 3.48535 19.4591L10.4239 12.6475L10.5593 12.5248C11.3942 11.8274 12.615 11.8293 13.4478 12.5306L13.5763 12.6475L20.5149 19.4593Z"
+            fill="url(#paint1_linear_72095_9341)"
+        />
+        <path
+            d="M16 6C17.1046 6 18 6.89543 18 8C18 9.10457 17.1046 10 16 10C14.8954 10 14 9.10457 14 8C14 6.89543 14.8954 6 16 6Z"
+            fill="url(#paint2_linear_72095_9341)"
+        />
+        <defs>
+            <radialGradient
+                id="paint0_radial_72095_9341"
+                cx="0"
+                cy="0"
+                r="1"
+                gradientUnits="userSpaceOnUse"
+                gradientTransform="translate(-4.07143 -7.125) rotate(51.6869) scale(49.7729 45.2718)"
+            >
+                <stop offset="0.337728" stop-color="#d39b5b" />
+                <stop offset="0.529425" stop-color="#c47a24" />
+            </radialGradient>
+            <linearGradient
+                id="paint1_linear_72095_9341"
+                x1="9.56733"
+                y1="12.0032"
+                x2="11.5942"
+                y2="21.4772"
+                gradientUnits="userSpaceOnUse"
+            >
+                <stop stop-color="#eedac2" />
+                <stop offset="1" stop-color="#e6c7a3" />
+            </linearGradient>
+            <linearGradient
+                id="paint2_linear_72095_9341"
+                x1="15.2"
+                y1="5.55556"
+                x2="16.6613"
+                y2="10.8163"
+                gradientUnits="userSpaceOnUse"
+            >
+                <stop stop-color="#FDFDFD" />
+                <stop offset="1" stop-color="#eedac2" />
+            </linearGradient>
+        </defs>
+    </g>
+    <g transform="translate(0 -8)">
+        <path
+            d="M125.023,214.858 C123.127,215.891 121.016,216.407 118.688,216.407 C115.997,216.407 113.817,215.569 112.15,213.894 C110.483,212.218 109.649,210 109.649,207.241 C109.649,204.423 110.561,202.11 112.385,200.303 C114.209,198.496 116.526,197.593 119.335,197.593 C121.358,197.593 123.059,197.889 124.439,198.481 L124.439,201.592 C123.043,200.661 121.379,200.195 119.45,200.195 C117.512,200.195 115.923,200.834 114.683,202.112 C113.443,203.39 112.823,205.045 112.823,207.076 C112.823,209.167 113.356,210.811 114.422,212.008 C115.489,213.206 116.936,213.805 118.764,213.805 C120.017,213.805 121.1,213.564 122.014,213.081 L122.014,208.752 L118.18,208.752 L118.18,206.213 L125.023,206.213 Z M132.044,216.103 L128.933,216.103 L128.933,197.898 L132.044,197.898 Z M146.351,200.462 L139.546,200.462 L139.546,205.934 L145.818,205.934 L145.818,208.485 L139.546,208.485 L139.546,216.103 L136.525,216.103 L136.525,197.898 L146.351,197.898 Z"
+            fill="#c47a24"
+        />
+    </g>
+</svg>

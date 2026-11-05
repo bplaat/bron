@@ -47,6 +47,21 @@ fn main() {
             .set("FileDescription", "ImageView")
             .set("LegalCopyright", "Copyright © 2026 Bastiaan van der Plaat")
             .set_icon("meta/windows/icon.ico")
+            .set_icon_with_id("meta/windows/file-types/apng.ico", "2")
+            .set_icon_with_id("meta/windows/file-types/bmp.ico", "3")
+            .set_icon_with_id("meta/windows/file-types/gif.ico", "4")
+            .set_icon_with_id("meta/windows/file-types/icns.ico", "5")
+            .set_icon_with_id("meta/windows/file-types/ico.ico", "6")
+            .set_icon_with_id("meta/windows/file-types/jpeg2000.ico", "7")
+            .set_icon_with_id("meta/windows/file-types/jpeg.ico", "8")
+            .set_icon_with_id("meta/windows/file-types/netpbm.ico", "9")
+            .set_icon_with_id("meta/windows/file-types/png.ico", "10")
+            .set_icon_with_id("meta/windows/file-types/qoi.ico", "11")
+            .set_icon_with_id("meta/windows/file-types/svg.ico", "12")
+            .set_icon_with_id("meta/windows/file-types/tga.ico", "13")
+            .set_icon_with_id("meta/windows/file-types/tiff.ico", "14")
+            .set_icon_with_id("meta/windows/file-types/tinyvg.ico", "15")
+            .set_icon_with_id("meta/windows/file-types/webp.ico", "16")
             .set_manifest(&manifest);
         res.compile().expect("Failed to compile Windows resources.");
     }

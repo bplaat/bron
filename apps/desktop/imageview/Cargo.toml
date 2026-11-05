@@ -36,44 +36,94 @@ assets = "meta/windows"
 windows_app_sdk = "2.0"
 
 [[package.metadata.bundle.windows.file_types]]
+name = "Animated PNG Image"
+icon = 2
+extensions = ["apng"]
+perceived_type = "image"
+
+[[package.metadata.bundle.windows.file_types]]
 name = "BMP Image"
+icon = 3
 extensions = ["bmp", "dib"]
+perceived_type = "image"
 
 [[package.metadata.bundle.windows.file_types]]
 name = "GIF Image"
+icon = 4
 extensions = ["gif"]
+perceived_type = "image"
+
+[[package.metadata.bundle.windows.file_types]]
+name = "Apple Icon"
+icon = 5
+extensions = ["icns"]
+perceived_type = "image"
 
 [[package.metadata.bundle.windows.file_types]]
 name = "Icon"
+icon = 6
 extensions = ["ico"]
+perceived_type = "image"
+
+[[package.metadata.bundle.windows.file_types]]
+name = "JPEG 2000 Image"
+icon = 7
+extensions = ["j2c", "j2k", "jp2", "jpc"]
+perceived_type = "image"
 
 [[package.metadata.bundle.windows.file_types]]
 name = "JPEG Image"
-extensions = ["jpg", "jpeg", "jpe", "jfif"]
+icon = 8
+extensions = ["jfif", "jpe", "jpeg", "jpg"]
+perceived_type = "image"
+
+[[package.metadata.bundle.windows.file_types]]
+name = "Netpbm Image"
+icon = 9
+extensions = ["pam", "pbm", "pgm", "pnm", "ppm"]
+perceived_type = "image"
 
 [[package.metadata.bundle.windows.file_types]]
 name = "PNG Image"
+icon = 10
 extensions = ["png"]
-
-[[package.metadata.bundle.windows.file_types]]
-name = "Animated PNG Image"
-extensions = ["apng"]
+perceived_type = "image"
 
 [[package.metadata.bundle.windows.file_types]]
 name = "QOI Image"
+icon = 11
 extensions = ["qoi"]
-
-[[package.metadata.bundle.windows.file_types]]
-name = "TGA Image"
-extensions = ["tga"]
+perceived_type = "image"
 
 [[package.metadata.bundle.windows.file_types]]
 name = "SVG Image"
-extensions = ["svg"]
+icon = 12
+extensions = ["svg", "svgz"]
+perceived_type = "image"
+
+[[package.metadata.bundle.windows.file_types]]
+name = "TGA Image"
+icon = 13
+extensions = ["tga"]
+perceived_type = "image"
+
+[[package.metadata.bundle.windows.file_types]]
+name = "TIFF Image"
+icon = 14
+extensions = ["tif", "tiff"]
+perceived_type = "image"
 
 [[package.metadata.bundle.windows.file_types]]
 name = "TinyVG Image"
+icon = 15
 extensions = ["tvg"]
+perceived_type = "image"
+
+[[package.metadata.bundle.windows.file_types]]
+name = "WebP Image"
+icon = 16
+extensions = ["webp"]
+perceived_type = "image"
 
 [package.metadata.bundle.windows.shell_extension]
 package = "../imageview-windows-shell"

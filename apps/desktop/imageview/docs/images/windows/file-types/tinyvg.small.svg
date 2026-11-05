@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 32 32">
+    <defs>
+        <linearGradient id="paper" x1="0" y1="0" x2="1" y2="1">
+            <stop stop-color="#fdfdfd" />
+            <stop offset="1" stop-color="#f4f4f4" />
+        </linearGradient>
+        <linearGradient id="fold" x1="0" y1="0" x2="1" y2="1">
+            <stop stop-color="#fafafa" />
+            <stop offset="1" stop-color="#dedede" />
+        </linearGradient>
+    </defs>
+    <path d="M4 0H21L28 7V32H4Z" fill="#a5a5a5" />
+    <path d="M5 1H21L27 7V31H5Z" fill="url(#paper)" />
+    <path d="M20 1H21V7H27V8H20Z" fill="#000000" opacity=".1" transform="translate(0 1)" />
+    <path d="M20.5 1V7.5H27" fill="url(#fold)" stroke="#a5a5a5" stroke-linejoin="round" />
+    <g color="#32899c" transform="translate(5.333333 8.333333) scale(.888889)">
+        <path
+            d="M17.75 3C19.5449 3 21 4.45507 21 6.25V17.75C21 19.5449 19.5449 21 17.75 21H6.25C4.45507 21 3 19.5449 3 17.75V6.25C3 4.45507 4.45507 3 6.25 3H17.75Z"
+            fill="url(#paint0_radial_72095_9341)"
+        />
+        <path
+            d="M6.5 16.5C6.5 8.5 17.5 16 17.5 8"
+            fill="none"
+            stroke="#ffffff"
+            stroke-width="1.65"
+            stroke-linecap="round"
+            stroke-opacity=".9"
+        />
+        <rect x="5" y="15" width="3" height="3" rx=".35" fill="#ffffff" />
+        <rect x="16" y="6.5" width="3" height="3" rx=".35" fill="#ffffff" />
+        <defs>
+            <radialGradient
+                id="paint0_radial_72095_9341"
+                cx="0"
+                cy="0"
+                r="1"
+                gradientUnits="userSpaceOnUse"
+                gradientTransform="translate(-4.07143 -7.125) rotate(51.6869) scale(49.7729 45.2718)"
+            >
+                <stop offset="0.337728" stop-color="#65a6b5" />
+                <stop offset="0.529425" stop-color="#32899c" />
+            </radialGradient>
+        </defs>
+    </g>
+</svg>

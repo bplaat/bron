@@ -55,7 +55,10 @@ An Edit button swaps in an edit toolbar for still bitmaps, with popovers for its
   scroll bars, touch and touchpad pinch zoom and panning by dragging. Vector images are drawn
   again at the magnification they settle at, so they stay sharp
 - File Explorer thumbnails and preview pane from the [shell extension](../imageview-windows-shell),
-  which the MSIX package registers without changing the registry
+  registered by the MSIX package
+- Native file icons for each image format, with editable [SVG sources](docs/images/windows/file-types/)
+  and artwork for small icons, registered by the MSIX package for Details and other icon views;
+  the compressed ICO assets live in `meta/windows/file-types/`
 - Light and dark themes, also for the scroll bars and caption buttons
 - The edit controls in the header bar, with the controls of a tool in a card over the image and
   the Filters in a menu flyout. Save As uses the file types of the dialog for the format and adds
@@ -76,6 +79,15 @@ An Edit button swaps in an edit toolbar for still bitmaps, with popovers for its
 - `cargo xtask install` installs the binary, the [desktop entry](meta/freedesktop/.desktop),
   the [thumbnailer](meta/freedesktop/.thumbnailer) and the [MIME types](meta/freedesktop/mime.xml)
   of QOI and TinyVG into the user's data directory
+
+## Windows file icons
+
+The MSIX package registers custom file icons for each supported image format with editable
+[SVG sources](docs/images/windows/file-types/) and shared document bases.
+The ICO files are embedded in the Windows executable and referenced by resource ID in the MSIX manifest.
+ICO sizes 16, 20, 24, 32, 40, and 48 px use the `.small.svg` artwork;
+sizes 64, 96, 128, and 256 px use the regular `.svg` artwork.
+The PNG images embedded in `meta/windows/file-types/` ICO assets are losslessly optimized.
 
 ## macOS Entitlements
 

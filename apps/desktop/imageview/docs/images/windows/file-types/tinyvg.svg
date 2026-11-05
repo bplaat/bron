@@ -1,0 +1,73 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+    <defs>
+        <linearGradient id="paper" x1="0" y1="0" x2="1" y2="1">
+            <stop stop-color="#fdfdfd" />
+            <stop offset="1" stop-color="#f4f4f4" />
+        </linearGradient>
+        <linearGradient id="fold" x1="0" y1="0" x2="1" y2="1">
+            <stop stop-color="#fafafa" />
+            <stop offset="1" stop-color="#e5e5e5" />
+        </linearGradient>
+        <linearGradient id="fold-shadow" x1="0" y1="0" x2="0" y2="1">
+            <stop stop-color="#000000" stop-opacity=".16" />
+            <stop offset="1" stop-color="#000000" stop-opacity="0" />
+        </linearGradient>
+    </defs>
+    <path d="M35.5 5.5H167.5L220.5 58.5V251.5H35.5Z" fill="#000000" opacity=".12" transform="translate(0 1)" />
+    <path d="M35.5 4.5H167.5L220.5 57.5V250.5H35.5Z" fill="url(#paper)" stroke="#a5a5a5" stroke-linejoin="round" />
+    <path d="M167 57H220V61H167Z" fill="url(#fold-shadow)" />
+    <path d="M167.5 5V57.5H220" fill="url(#fold)" stroke="#a5a5a5" stroke-linejoin="round" />
+    <path d="M169 8.5V56H216.5" fill="none" stroke="#ffffff" stroke-opacity=".65" />
+    <g color="#32899c" transform="translate(58.666667 62.666667) scale(5.777778)">
+        <path
+            d="M17.75 3C19.5449 3 21 4.45507 21 6.25V17.75C21 19.5449 19.5449 21 17.75 21H6.25C4.45507 21 3 19.5449 3 17.75V6.25C3 4.45507 4.45507 3 6.25 3H17.75Z"
+            fill="url(#paint0_radial_72095_9341)"
+        />
+        <path
+            d="M6.5 16.5C6.5 8.5 17.5 16 17.5 8"
+            fill="none"
+            stroke="#ffffff"
+            stroke-width="1.65"
+            stroke-linecap="round"
+            stroke-opacity=".9"
+        />
+        <rect x="5" y="15" width="3" height="3" rx=".35" fill="#ffffff" />
+        <rect x="16" y="6.5" width="3" height="3" rx=".35" fill="#ffffff" />
+        <defs>
+            <radialGradient
+                id="paint0_radial_72095_9341"
+                cx="0"
+                cy="0"
+                r="1"
+                gradientUnits="userSpaceOnUse"
+                gradientTransform="translate(-4.07143 -7.125) rotate(51.6869) scale(49.7729 45.2718)"
+            >
+                <stop offset="0.337728" stop-color="#65a6b5" />
+                <stop offset="0.529425" stop-color="#32899c" />
+            </radialGradient>
+        </defs>
+    </g>
+    <g fill="#32899c" transform="translate(85.832520 208.103) scale(0.012695 -0.012695)">
+        <path d="M1097 1232H685V0H447V1232H36V1434H1097Z" transform="translate(0 0)" />
+        <path
+            d="M268 1239Q211 1239 170.5 1276.0Q130 1313 130 1370Q130 1427 170.5 1465.0Q211 1503 268 1503Q327 1503 368.0 1465.0Q409 1427 409 1370Q409 1316 368.0 1277.5Q327 1239 268 1239ZM383 0H151V1024H383Z"
+            transform="translate(1130 0)"
+        />
+        <path
+            d="M1063 0H831V577Q831 864 628 864Q522 864 453.0 784.5Q384 705 384 584V0H151V1024H384V854H388Q503 1048 720 1048Q887 1048 975.0 939.5Q1063 831 1063 626Z"
+            transform="translate(1665 0)"
+        />
+        <path
+            d="M1038 1024 576 -164Q432 -482 172 -482Q99 -482 50 -469V-276Q105 -294 150 -294Q280 -294 344 -166L413 2L6 1024H263L507 280Q511 266 525 206H530Q535 229 548 278L804 1024Z"
+            transform="translate(2860 0)"
+        />
+        <path
+            d="M1301 1434 786 0H520L14 1434H274L628 346Q645 294 654 225H658Q665 282 687 348L1049 1434Z"
+            transform="translate(3901 0)"
+        />
+        <path
+            d="M1296 98Q1072 -24 797 -24Q479 -24 282.0 174.0Q85 372 85 698Q85 1031 300.5 1244.5Q516 1458 848 1458Q1087 1458 1250 1388V1143Q1085 1253 857 1253Q628 1253 481.5 1102.0Q335 951 335 711Q335 464 461.0 322.5Q587 181 803 181Q951 181 1059 238V579H757V779H1296Z"
+            transform="translate(5215 0)"
+        />
+    </g>
+</svg>

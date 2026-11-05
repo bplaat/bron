@@ -1,0 +1,84 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+    <defs>
+        <linearGradient id="paper" x1="0" y1="0" x2="1" y2="1">
+            <stop stop-color="#fdfdfd" />
+            <stop offset="1" stop-color="#f4f4f4" />
+        </linearGradient>
+        <linearGradient id="fold" x1="0" y1="0" x2="1" y2="1">
+            <stop stop-color="#fafafa" />
+            <stop offset="1" stop-color="#e5e5e5" />
+        </linearGradient>
+        <linearGradient id="fold-shadow" x1="0" y1="0" x2="0" y2="1">
+            <stop stop-color="#000000" stop-opacity=".16" />
+            <stop offset="1" stop-color="#000000" stop-opacity="0" />
+        </linearGradient>
+    </defs>
+    <path d="M35.5 5.5H167.5L220.5 58.5V251.5H35.5Z" fill="#000000" opacity=".12" transform="translate(0 1)" />
+    <path d="M35.5 4.5H167.5L220.5 57.5V250.5H35.5Z" fill="url(#paper)" stroke="#a5a5a5" stroke-linejoin="round" />
+    <path d="M167 57H220V61H167Z" fill="url(#fold-shadow)" />
+    <path d="M167.5 5V57.5H220" fill="url(#fold)" stroke="#a5a5a5" stroke-linejoin="round" />
+    <path d="M169 8.5V56H216.5" fill="none" stroke="#ffffff" stroke-opacity=".65" />
+    <g color="#867324" transform="translate(58.666667 62.666667) scale(5.777778)">
+        <path
+            d="M17.75 3C19.5449 3 21 4.45507 21 6.25V17.75C21 19.5449 19.5449 21 17.75 21H6.25C4.45507 21 3 19.5449 3 17.75V6.25C3 4.45507 4.45507 3 6.25 3H17.75Z"
+            fill="url(#paint0_radial_72095_9341)"
+        />
+        <path
+            d="M20.5149 19.4593C19.9419 20.3841 18.918 21 17.7502 21H6.25018C5.08229 21 4.05828 20.384 3.48535 19.4591L10.4239 12.6475L10.5593 12.5248C11.3942 11.8274 12.615 11.8293 13.4478 12.5306L13.5763 12.6475L20.5149 19.4593Z"
+            fill="url(#paint1_linear_72095_9341)"
+        />
+        <path
+            d="M16 6C17.1046 6 18 6.89543 18 8C18 9.10457 17.1046 10 16 10C14.8954 10 14 9.10457 14 8C14 6.89543 14.8954 6 16 6Z"
+            fill="url(#paint2_linear_72095_9341)"
+        />
+        <defs>
+            <radialGradient
+                id="paint0_radial_72095_9341"
+                cx="0"
+                cy="0"
+                r="1"
+                gradientUnits="userSpaceOnUse"
+                gradientTransform="translate(-4.07143 -7.125) rotate(51.6869) scale(49.7729 45.2718)"
+            >
+                <stop offset="0.337728" stop-color="#a4965b" />
+                <stop offset="0.529425" stop-color="#867324" />
+            </radialGradient>
+            <linearGradient
+                id="paint1_linear_72095_9341"
+                x1="9.56733"
+                y1="12.0032"
+                x2="11.5942"
+                y2="21.4772"
+                gradientUnits="userSpaceOnUse"
+            >
+                <stop stop-color="#ddd8c2" />
+                <stop offset="1" stop-color="#ccc4a3" />
+            </linearGradient>
+            <linearGradient
+                id="paint2_linear_72095_9341"
+                x1="15.2"
+                y1="5.55556"
+                x2="16.6613"
+                y2="10.8163"
+                gradientUnits="userSpaceOnUse"
+            >
+                <stop stop-color="#FDFDFD" />
+                <stop offset="1" stop-color="#ddd8c2" />
+            </linearGradient>
+        </defs>
+    </g>
+    <g fill="#867324" transform="translate(98.413574 208.103) scale(0.012695 -0.012695)">
+        <path
+            d="M414 520V0H177V1434H612Q859 1434 995.0 1319.0Q1131 1204 1131 995Q1131 786 989.0 653.0Q847 520 605 520ZM414 1238V714H568Q721 714 801.0 785.0Q881 856 881 985Q881 1238 587 1238Z"
+            transform="translate(0 0)"
+        />
+        <path
+            d="M1393 0H1133L448 1054Q422 1094 405 1137H399Q407 1091 407 940V0H177V1434H454L1116 405Q1158 341 1170 317H1174Q1164 374 1164 510V1434H1393Z"
+            transform="translate(1197 0)"
+        />
+        <path
+            d="M1717 0H1481V928Q1481 1042 1495 1207H1491Q1469 1113 1452 1072L1024 0H860L431 1064Q413 1111 393 1207H389Q397 1121 397 926V0H177V1434H512L889 479Q932 369 945 315H950Q987 428 1010 483L1394 1434H1717Z"
+            transform="translate(2768 0)"
+        />
+    </g>
+</svg>
