@@ -103,13 +103,38 @@ impl Repeat {
     }
 }
 
+#[derive(Clone, Copy, Default)]
+struct MenuPointer {
+    position: Option<[f32; 2]>,
+    pointing: bool,
+}
+
+impl MenuPointer {
+    fn moved(&mut self, pointer: Option<[f32; 3]>) -> Option<[f32; 2]> {
+        let Some([x, y, _]) = pointer else {
+            self.position = None;
+            return None;
+        };
+        if !x.is_finite()
+            || !y.is_finite()
+            || self
+                .position
+                .is_some_and(|[px, py]| (x - px).abs() < 2.0 && (y - py).abs() < 2.0)
+        {
+            return None;
+        }
+        self.position = Some([x, y]);
+        self.pointing = true;
+        self.position
+    }
+}
+
 // The independent controls and prediction of one local player.
 struct LocalPlayer {
     menu: Option<Menu>,
     inventory: bool,
     focus: usize,
-    menu_pointer: Option<[f32; 2]>,
-    menu_pointing: bool,
+    menu_pointer: MenuPointer,
     camera: Camera,
     hotbar: Hotbar,
     target: Option<Hit>,
@@ -131,6 +156,7 @@ pub struct Game<P: Platform> {
     player: LocalPlayer,
     locals: Vec<LocalPlayer>,
     player_index: usize,
+    menu_pointers: Vec<MenuPointer>,
     gpu: P::Gpu,
     controller: P::Controller,
     renderer: Renderer,
@@ -173,8 +199,7 @@ impl LocalPlayer {
             menu: None,
             inventory: false,
             focus: 0,
-            menu_pointer: None,
-            menu_pointing: false,
+            menu_pointer: MenuPointer::default(),
             camera: background_camera(),
             hotbar: Hotbar::default(),
             target: None,
@@ -193,21 +218,7 @@ impl LocalPlayer {
     }
 
     fn moved_menu_pointer(&mut self) -> Option<[f32; 2]> {
-        let Some([x, y, _]) = self.pad.pointer else {
-            self.menu_pointer = None;
-            return None;
-        };
-        if !x.is_finite()
-            || !y.is_finite()
-            || self
-                .menu_pointer
-                .is_some_and(|[px, py]| (x - px).abs() < 2.0 && (y - py).abs() < 2.0)
-        {
-            return None;
-        }
-        self.menu_pointer = Some([x, y]);
-        self.menu_pointing = true;
-        self.menu_pointer
+        self.menu_pointer.moved(self.pad.pointer)
     }
 }
 
@@ -227,6 +238,9 @@ impl<P: Platform> Game<P> {
         player.menu = Some(menu);
         Self {
             player_index: 0,
+            menu_pointers: (0..P::MAX_LOCAL_PLAYERS)
+                .map(|_| MenuPointer::default())
+                .collect(),
             player,
             locals: Vec::new(),
             gpu,
@@ -384,8 +398,7 @@ impl<P: Platform> Game<P> {
     fn show_text(&mut self, page: Option<Page>, text: String) {
         self.player.inventory = false;
         self.player.focus = 0;
-        self.player.menu_pointer = None;
-        self.player.menu_pointing = false;
+        self.player.menu_pointer = MenuPointer::default();
         self.player.breaking.next = None;
         self.player.placing.next = None;
         let Some(page) = page else {
@@ -688,8 +701,7 @@ impl<P: Platform> Game<P> {
             self.player.pad = self.controller.read_player(0, self.context());
             self.map_pointer(0);
             self.network_events(now);
-            self.update_player(dt, now);
-            self.update_local_players(dt, now);
+            self.update_controls(dt, now);
             self.stream.set_views(
                 self.locals
                     .iter()
@@ -728,10 +740,79 @@ impl<P: Platform> Game<P> {
         self.exit
     }
 
-    fn update_local_players(&mut self, dt: f32, now: f32) {
+    fn update_controls(&mut self, dt: f32, now: f32) {
+        let shared_menu = self.global_menu();
+        let pause = !shared_menu
+            && self.playing()
+            && (self.locals.len() + 1..P::MAX_LOCAL_PLAYERS).any(|index| {
+                self.controller
+                    .read_player(index, Context::Play)
+                    .pressed(Button::Pause)
+            });
+        if pause {
+            self.show(Some(Page::Pause));
+            self.save();
+        } else if shared_menu {
+            self.update_shared_menu(dt, now);
+        } else {
+            self.update_player(dt, now);
+        }
+        self.update_local_players(dt, now, shared_menu || pause);
+    }
+
+    fn update_shared_menu(&mut self, dt: f32, now: f32) {
+        let size = self.control_size();
+        let mut selected: Option<(usize, Pad, bool)> = None;
+        // Button presses take priority over pointer movement from another controller.
+        for index in 0..P::MAX_LOCAL_PLAYERS {
+            let mut pad = self.controller.read_player(index, Context::Menu);
+            let source = if index == 0 {
+                self.gpu.primary_screen_size().unwrap_or(self.gpu.size())
+            } else {
+                self.gpu.size()
+            };
+            if let Some(pointer) = &mut pad.pointer {
+                pointer[0] *= size[0] / source[0];
+                pointer[1] *= size[1] / source[1];
+            }
+            let moved = self.menu_pointers[index].moved(pad.pointer).is_some();
+            if (pad.any_pressed() || moved)
+                && selected
+                    .is_none_or(|(_, previous, _)| pad.any_pressed() && !previous.any_pressed())
+            {
+                selected = Some((index, pad, moved));
+            }
+        }
+        let primary_pad = self.player.pad;
+        let primary_pointer = self.player.menu_pointer;
+        self.player.pad = Pad::default();
+        if let Some((index, mut pad, moved)) = selected {
+            let pointer = self.menu_pointers[index];
+            self.player.menu_pointer = pointer;
+            if pointer.pointing && (moved || pad.pressed(Button::Select)) {
+                self.player.menu_pointer.position = None;
+            } else {
+                pad.pointer = None;
+            }
+            self.player.pad = pad;
+            let page = self.page();
+            self.update_player(dt, now);
+            self.menu_pointers[index].pointing = self.player.menu_pointer.pointing;
+            if self.page() != page {
+                self.menu_pointers[index].position = None;
+            }
+        } else {
+            self.update_player(dt, now);
+        }
+        self.player.pad = primary_pad;
+        self.player.menu_pointer = primary_pointer;
+    }
+
+    fn update_local_players(&mut self, dt: f32, now: f32, shared_menu: bool) {
         for index in 0..self.locals.len() {
             let pad = self.controller.read_player(index + 1, Context::Play);
-            if !self.global_menu()
+            if !shared_menu
+                && !self.global_menu()
                 && !self.locals[index]
                     .menu
                     .as_ref()
@@ -741,7 +822,7 @@ impl<P: Platform> Game<P> {
                 self.show(Some(Page::Pause));
                 self.save();
             }
-            let paused = self.global_menu();
+            let paused = shared_menu || self.global_menu();
             core::mem::swap(&mut self.player, &mut self.locals[index]);
             self.player_index = index + 1;
             if paused {
@@ -829,7 +910,7 @@ impl<P: Platform> Game<P> {
             (Button::Right, [1.0, 0.0]),
         ] {
             if pad.pressed(button) {
-                self.player.menu_pointing = false;
+                self.player.menu_pointer.pointing = false;
                 menu.step(&Layout::new(menu, P::MENU, size, [0.0; 4]), direction);
             }
         }
@@ -1370,7 +1451,7 @@ impl<P: Platform> Game<P> {
             (Button::Down, COLUMNS),
         ] {
             if pad.pressed(button) {
-                self.player.menu_pointing = false;
+                self.player.menu_pointer.pointing = false;
                 self.player.focus = (self.player.focus + step) % count;
             }
         }
@@ -1383,7 +1464,10 @@ impl<P: Platform> Game<P> {
         }
         // Pressing on a hotbar slot selects it, elsewhere it fills the selected slot
         if pad.pressed(Button::Select) {
-            match self.hotbar_slot(pad.pointer.filter(|_| self.player.menu_pointing), true) {
+            match self.hotbar_slot(
+                pad.pointer.filter(|_| self.player.menu_pointer.pointing),
+                true,
+            ) {
                 Some(slot) => hotbar.selected = slot,
                 None => hotbar.assign(hotbar.selected, world::MATERIALS[self.player.focus].0),
             }
@@ -1999,7 +2083,7 @@ pub(crate) mod tests {
         );
         game.show(None);
         game.controller.pads[4].held = super::super::input::Wiimote::UP;
-        game.update_local_players(TICK, 0.0);
+        game.update_local_players(TICK, 0.0, false);
         assert_eq!(game.locals[3].camera.input.direction, [0.0, 1.0]);
         game.hosting = true;
         game.saved.guests.insert("Online".into(), Player::default());
@@ -2182,10 +2266,10 @@ pub(crate) mod tests {
         assert!(game.player.inventory);
         game.controller.pads[1].stick = Some([0.0, 1.0]);
         game.controller.pads[1].held = Wiimote::UP;
-        game.update_local_players(TICK, 0.0);
+        game.update_local_players(TICK, 0.0, false);
         assert_eq!(game.locals[0].camera.input.direction, [0.0, 1.0]);
         game.show(Some(Page::Pause));
-        game.update_local_players(TICK, 0.0);
+        game.update_local_players(TICK, 0.0, false);
         assert_eq!(game.locals[0].camera.input, Input::default());
         game.player.pad.pointer = Some([320.0, 240.0, 0.0]);
         game.map_pointer(0);
@@ -2223,7 +2307,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn secondary_inventory_tools_and_chat_are_local_and_pause_is_controlled_by_player_one() {
+    fn secondary_inventory_tools_and_chat_are_local_and_pause_is_shared() {
         use super::super::input::Wiimote;
 
         for primary_size in [None, Some([854.0, 480.0])] {
@@ -2233,7 +2317,7 @@ pub(crate) mod tests {
                 game.set_local_players(5);
                 game.show(None);
                 game.controller.pads[player].pressed = Wiimote::TWO;
-                game.update_local_players(0.0, 0.0);
+                game.update_local_players(0.0, 0.0, false);
                 assert!(game.locals[player - 1].inventory);
                 assert!(!game.player.inventory);
                 assert!(game.player.menu.is_none());
@@ -2241,7 +2325,7 @@ pub(crate) mod tests {
                 let other_hotbars: Vec<_> = game.locals.iter().map(|p| p.hotbar).collect();
                 game.locals[player - 1].focus = 1;
                 game.controller.pads[player].pressed = Wiimote::A;
-                game.update_local_players(0.0, 0.0);
+                game.update_local_players(0.0, 0.0, false);
                 assert_eq!(game.player.hotbar, host_hotbar);
                 for (index, other) in game.locals.iter().enumerate() {
                     if index == player - 1 {
@@ -2272,10 +2356,10 @@ pub(crate) mod tests {
                 assert_eq!(inventories[0].viewport, viewport(screen_players, view));
 
                 game.controller.pads[player].pressed = Wiimote::TWO;
-                game.update_local_players(0.0, 0.0);
+                game.update_local_players(0.0, 0.0, false);
                 assert!(!game.locals[player - 1].inventory);
                 game.controller.pads[player].pressed = Wiimote::MINUS;
-                game.update_local_players(0.0, 0.0);
+                game.update_local_players(0.0, 0.0, false);
                 assert_eq!(
                     game.locals[player - 1].menu.as_ref().unwrap().page,
                     Page::Tools
@@ -2295,26 +2379,161 @@ pub(crate) mod tests {
                     Page::Chat
                 );
                 game.controller.pads[player].pressed = Wiimote::PLUS;
-                game.update_local_players(0.0, 0.0);
+                game.update_local_players(0.0, 0.0, false);
                 assert!(game.locals[player - 1].menu.is_none());
                 assert!(game.player.menu.is_none());
                 game.serve(|server, world| server.tick(world));
                 assert!(!game.locals[player - 1].camera.flying);
 
-                game.update_local_players(0.0, 0.0);
+                game.update_local_players(0.0, 0.0, false);
                 assert_eq!(game.page(), Some(Page::Pause));
-                game.update_local_players(0.0, 0.0);
-                assert_eq!(game.page(), Some(Page::Pause));
-                game.player.pad = Wiimote {
-                    pressed: Wiimote::PLUS,
-                    ..Wiimote::default()
-                }
-                .pad(Context::Menu);
-                game.update_player(0.0, 0.0);
+                game.update_controls(0.0, 0.0);
                 assert!(game.player.menu.is_none());
                 assert_eq!(game.player_index, 0);
             }
         }
+    }
+
+    #[test]
+    fn all_connected_controllers_can_navigate_main_menus_without_joining() {
+        use super::super::input::Wiimote;
+
+        fn check<const PLAYERS: usize>(primary: Option<[f32; 2]>) {
+            for controller in 0..PLAYERS {
+                let mut game = game_for::<PLAYERS>();
+                game.gpu.primary_size = primary;
+                game.show(Some(Page::Title));
+                assert!(game.locals.is_empty());
+                let layout = Layout::new(
+                    game.player.menu.as_ref().unwrap(),
+                    TestPlatform::MENU,
+                    game.control_size(),
+                    [0.0; 4],
+                );
+                let first = game.player.menu.as_ref().unwrap().focused(&layout);
+                game.controller.pads[controller].pressed = Wiimote::DOWN;
+                game.update_controls(0.0, 0.0);
+                assert_ne!(game.player.menu.as_ref().unwrap().focused(&layout), first);
+                game.controller.pads[controller].pressed = Wiimote::UP;
+                game.update_controls(0.0, 0.0);
+                assert_eq!(game.player.menu.as_ref().unwrap().focused(&layout), first);
+                game.controller.pads[controller].pressed = Wiimote::A;
+                game.update_controls(0.0, 0.0);
+                assert_eq!(game.page(), Some(Page::Worlds));
+                game.controller.pads[controller].pressed = Wiimote::B;
+                game.update_controls(0.0, 0.0);
+                assert_eq!(game.page(), Some(Page::Title));
+                game.show(None);
+                game.controller.pads[controller].pressed = Wiimote::PLUS;
+                game.player.pad = game.controller.read_player(0, Context::Play);
+                game.update_controls(0.0, 0.0);
+                assert_eq!(game.page(), Some(Page::Pause));
+                game.update_controls(0.0, 0.0);
+                assert!(game.player.menu.is_none());
+            }
+        }
+        check::<4>(None);
+        check::<5>(Some([854.0, 480.0]));
+    }
+
+    #[test]
+    fn each_remote_can_click_shared_settings_using_its_own_pointer() {
+        use super::super::input::Wiimote;
+
+        for primary in [None, Some([854.0, 480.0])] {
+            for controller in 1..5 {
+                let mut game = game_for::<5>();
+                game.gpu.primary_size = primary;
+                game.show(Some(Page::Pause));
+                let size = game.control_size();
+                let layout = Layout::new(
+                    game.player.menu.as_ref().unwrap(),
+                    TestPlatform::MENU,
+                    size,
+                    [0.0; 4],
+                );
+                let y = (0..480)
+                    .find(|&y| {
+                        layout.action_at([size[0] / 2.0, y as f32]) == Some(Action::Settings)
+                    })
+                    .unwrap() as f32;
+                game.controller.pads[controller].pointer = Some([320.0, y, 0.0]);
+                game.update_controls(0.0, 0.0);
+                game.controller.pads[controller].pressed = Wiimote::A;
+                game.update_controls(0.0, 0.0);
+                assert_eq!(game.page(), Some(Page::Settings));
+                game.controller.pads[controller].pressed = Wiimote::B;
+                game.update_controls(0.0, 0.0);
+                assert_eq!(game.page(), Some(Page::Pause));
+            }
+        }
+    }
+
+    #[test]
+    fn an_unassigned_remote_can_change_the_split_screen_player_count() {
+        use super::super::input::Wiimote;
+
+        let mut game = game_for::<5>();
+        game.gpu.primary_size = Some([854.0, 480.0]);
+        game.set_local_players(2);
+        for action in [Action::SplitScreen, Action::LocalPlayers(3)] {
+            let size = game.control_size();
+            let layout = Layout::new(
+                game.player.menu.as_ref().unwrap(),
+                TestPlatform::MENU,
+                size,
+                [0.0; 4],
+            );
+            let y = (0..480)
+                .find(|&y| layout.action_at([size[0] / 2.0, y as f32]) == Some(action))
+                .unwrap();
+            game.controller.pads[4].pointer = Some([320.0, y as f32, 0.0]);
+            game.controller.pads[4].pressed = Wiimote::A;
+            game.update_controls(0.0, 0.0);
+        }
+        assert_eq!(game.locals.len(), 2);
+        assert_eq!(game.page(), Some(Page::Pause));
+    }
+
+    #[test]
+    fn resuming_with_a_secondary_remote_does_not_also_place_a_block() {
+        use super::super::input::Wiimote;
+
+        let mut game = game();
+        game.set_local_players(2);
+        game.controller.pads[1].pressed = Wiimote::A;
+        game.controller.pads[1].held = Wiimote::A | Wiimote::UP;
+        game.update_controls(TICK, 0.0);
+        assert!(game.player.menu.is_none());
+        assert_eq!(game.locals[0].camera.input, Input::default());
+        assert!(!game.locals[0].pad.pressed(Button::Place));
+    }
+
+    #[test]
+    fn stationary_shared_cursors_do_not_override_another_controllers_dpad() {
+        use super::super::input::Wiimote;
+
+        let mut game = game();
+        game.show(Some(Page::Pause));
+        let layout = Layout::new(
+            game.player.menu.as_ref().unwrap(),
+            TestPlatform::MENU,
+            game.control_size(),
+            [0.0; 4],
+        );
+        let first = layout.actions().next().unwrap();
+        let y = (0..480)
+            .find(|&y| layout.action_at([320.0, y as f32]) == Some(first))
+            .unwrap();
+        game.controller.pads[0].pointer = Some([320.0, y as f32, 0.0]);
+        game.update_controls(0.0, 0.0);
+        game.controller.pads[3].pressed = Wiimote::DOWN;
+        game.update_controls(0.0, 0.0);
+        let focused = game.player.menu.as_ref().unwrap().focused(&layout);
+        assert_ne!(focused, Some(first));
+        game.controller.pads[3].pressed = 0;
+        game.update_controls(0.0, 0.0);
+        assert_eq!(game.player.menu.as_ref().unwrap().focused(&layout), focused);
     }
 
     #[test]
@@ -2330,7 +2549,7 @@ pub(crate) mod tests {
         game.controller.pads[2].pressed = Wiimote::TWO;
         game.controller.pads[3].pressed = Wiimote::MINUS;
         game.controller.pads[4].held = Wiimote::UP;
-        game.update_local_players(TICK, 0.0);
+        game.update_local_players(TICK, 0.0, false);
         assert!(game.player.inventory);
         assert_eq!(game.locals[0].menu.as_ref().unwrap().page, Page::Tools);
         assert!(game.locals[1].inventory);
@@ -2340,7 +2559,7 @@ pub(crate) mod tests {
             remote.pressed = 0;
         }
         game.show(Some(Page::Pause));
-        game.update_local_players(TICK, 0.0);
+        game.update_local_players(TICK, 0.0, false);
         assert!(
             game.locals
                 .iter()
@@ -2349,7 +2568,7 @@ pub(crate) mod tests {
         assert_eq!(game.locals[0].menu.as_ref().unwrap().page, Page::Tools);
         assert!(game.locals[1].inventory);
         game.show(None);
-        game.update_local_players(TICK, 0.0);
+        game.update_local_players(TICK, 0.0, false);
         assert_eq!(game.locals[3].camera.input.direction, [0.0, 1.0]);
     }
 
@@ -2453,7 +2672,7 @@ pub(crate) mod tests {
             remote.held = Wiimote::UP;
             remote.stick = Some([0.0, 0.5]);
         }
-        game.update_local_players(TICK, 0.0);
+        game.update_local_players(TICK, 0.0, false);
         for player in &game.locals {
             assert!(!player.camera.input.fast);
             assert_eq!(player.camera.input.direction, [0.0, 1.0]);
@@ -2462,7 +2681,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn numbered_menu_cursors_are_visible_but_only_player_one_interacts() {
+    fn numbered_menu_cursors_are_visible_for_connected_remotes() {
         use super::super::input::Wiimote;
         let mut game = game();
         for count in 2..=LOCAL_PLAYERS {
@@ -2479,7 +2698,6 @@ pub(crate) mod tests {
             game.controller.pads[0].pointer = Some([20.0, 30.0, 0.0]);
             game.player.pad = game.controller.read_player(0, Context::Menu);
             game.menu();
-            let focused = game.player.menu.as_ref().unwrap().focused(&layout);
             for player in 1..count {
                 game.controller.pads[player] = Wiimote {
                     pointer: Some([320.0, settings_y, 0.0]),
@@ -2488,9 +2706,6 @@ pub(crate) mod tests {
                     ..Wiimote::default()
                 };
             }
-            game.update_local_players(0.0, 0.0);
-            assert_eq!(game.page(), Some(Page::Pause));
-            assert_eq!(game.player.menu.as_ref().unwrap().focused(&layout), focused);
             game.gpu.draws.clear();
             game.draw_frame(0.0, 0.0);
             let cursors: Vec<_> = game

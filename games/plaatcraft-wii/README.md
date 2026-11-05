@@ -77,8 +77,9 @@ undo remembers up to 32 changes within a 65536-block memory budget.
 
 For split-screen, pause a Local Play world and choose 2-4 players, each with a Wii Remote
 and Nunchuk. Inventory, build tools, and chat input stay in each player's view and are
-controlled by that player. Main and pause menus are global and controlled by player 1;
-all connected Remotes show their cursors, even before split-screen is enabled.
+controlled by that player. Main and pause menus accept every connected controller, including
+Remotes that have not joined split-screen. All connected Remotes show their cursors in these
+menus, even before split-screen is enabled.
 Each player's inventory changes their own hotbar.
 
 ## How it works

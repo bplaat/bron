@@ -76,7 +76,8 @@ Text fields have an on-screen keyboard where B erases and + finishes.
 For split-screen, pause a Local Play world and choose 2-5 players. Player 1 uses the GamePad;
 the others use Wii Remotes 1-4 with Nunchuks, managed through HOME. Inventory, build tools,
 and chat input stay in each player's view and are controlled by that player. Main and pause
-menus are global and controlled by player 1. Every connected Remote shows its cursor in
+menus are global and accept the GamePad and every connected Remote, including Remotes that
+have not joined split-screen. Every connected Remote shows its cursor in
 global menus, even before split-screen is enabled. Each player's inventory changes their
 own hotbar.
 

@@ -94,6 +94,10 @@ impl Pad {
         self.pressed & button.mask() != 0
     }
 
+    pub(super) const fn any_pressed(&self) -> bool {
+        self.pressed != 0
+    }
+
     const fn set(&mut self, button: Button, (held, pressed): (bool, bool)) {
         if held {
             self.held |= button.mask();
@@ -171,6 +175,23 @@ impl Wiimote {
     pub const C: u32 = 1 << 11;
     /// The Nunchuk's Z trigger.
     pub const Z: u32 = 1 << 12;
+
+    /// Lightly smooths screen positions, resetting immediately when tracking is lost.
+    /// The cursor's roll is kept from the current sample.
+    pub fn smooth_pointer(
+        previous: Option<[f32; 3]>,
+        current: Option<[f32; 3]>,
+    ) -> Option<[f32; 3]> {
+        let mut current = current.filter(|point| point.iter().all(|value| value.is_finite()))?;
+        if let Some(previous) = previous.filter(|point| point.iter().all(|value| value.is_finite()))
+        {
+            const CURRENT_WEIGHT: f32 = 0.65;
+            for axis in 0..2 {
+                current[axis] = previous[axis] + (current[axis] - previous[axis]) * CURRENT_WEIGHT;
+            }
+        }
+        Some(current)
+    }
 
     /// The pad for what the player does.
     pub fn pad(&self, context: Context) -> Pad {
@@ -315,6 +336,28 @@ impl Gamepad {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn remote_pointer_smoothing_reduces_jitter_and_quickly_follows_movement() {
+        let previous = Some([100.0, 200.0, 0.0]);
+        let point = Wiimote::smooth_pointer(previous, Some([110.0, 190.0, 90.0])).unwrap();
+        assert!((point[0] - 106.5).abs() < 0.001);
+        assert!((point[1] - 193.5).abs() < 0.001);
+        assert_eq!(point[2], 90.0);
+        let next = Wiimote::smooth_pointer(Some(point), Some([110.0, 190.0, 90.0])).unwrap();
+        assert!(next[0] > point[0] && next[0] < 110.0);
+        assert!(next[1] < point[1] && next[1] > 190.0);
+    }
+
+    #[test]
+    fn remote_pointer_smoothing_resets_on_tracking_loss_and_reacquires_without_lag() {
+        let point = Some([100.0, 200.0, 0.0]);
+        assert_eq!(Wiimote::smooth_pointer(point, None), None);
+        assert_eq!(Wiimote::smooth_pointer(None, point), point);
+        let invalid = Some([f32::NAN, 200.0, 0.0]);
+        assert_eq!(Wiimote::smooth_pointer(point, invalid), None);
+        assert_eq!(Wiimote::smooth_pointer(invalid, point), point);
+    }
 
     #[test]
     fn wiimote_stick_looks_and_dpad_moves_without_ir_tracking() {

@@ -159,13 +159,16 @@ impl Controllers {
             pressed: wiimote_buttons(status.trigger, pressed),
             stick: nunchuk.map(|n| stick(n.stick.x, n.stick.y)),
             // KPAD points from -1 to 1 with y down, from the center of the screen
-            pointer: (status.pos_valid > 0).then(|| {
-                [
-                    (status.pos.x + 1.0) * 0.5 * self.size[0],
-                    (status.pos.y + 1.0) * 0.5 * self.size[1],
-                    pointer_angle(status.angle),
-                ]
-            }),
+            pointer: Wiimote::smooth_pointer(
+                self.wiimotes[channel].pointer,
+                (status.pos_valid > 0).then(|| {
+                    [
+                        (status.pos.x + 1.0) * 0.5 * self.size[0],
+                        (status.pos.y + 1.0) * 0.5 * self.size[1],
+                        pointer_angle(status.angle),
+                    ]
+                }),
+            ),
         };
     }
 }

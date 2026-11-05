@@ -82,7 +82,10 @@ impl Controller for Remote {
                     held: buttons(WPAD_ButtonsHeld(channel)),
                     pressed: buttons(WPAD_ButtonsDown(channel)),
                     stick: (expansion.kind == WPAD_EXP_NUNCHUK).then(|| stick(&expansion.joystick)),
-                    pointer: (ir.valid != 0).then_some([ir.x, ir.y, ir.angle]),
+                    pointer: Wiimote::smooth_pointer(
+                        self.remotes[channel as usize].pointer,
+                        (ir.valid != 0).then_some([ir.x, ir.y, ir.angle]),
+                    ),
                 }
             };
         }
