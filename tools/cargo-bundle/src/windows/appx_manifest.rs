@@ -6,7 +6,7 @@
 
 use std::fmt::Write as _;
 
-use crate::manifest::{Manifest, ShellExtensionMetadata, WindowsMetadata};
+use crate::manifest::{FileTypeIcon, Manifest, ShellExtensionMetadata, WindowsMetadata};
 
 // Marks the package as unsigned so it can only be installed with `Add-AppxPackage -AllowUnsigned`
 // https://learn.microsoft.com/en-us/windows/msix/package/unsigned-package
@@ -77,8 +77,9 @@ pub(crate) fn appx_manifest(
     xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
     xmlns:desktop2="http://schemas.microsoft.com/appx/manifest/desktop/windows10/2"
     xmlns:desktop6="http://schemas.microsoft.com/appx/manifest/desktop/windows10/6"
+    xmlns:desktop7="http://schemas.microsoft.com/appx/manifest/desktop/windows10/7"
     xmlns:com="http://schemas.microsoft.com/appx/manifest/com/windows10"
-    IgnorableNamespaces="uap uap10 rescap desktop2 desktop6 com">
+    IgnorableNamespaces="uap uap10 rescap desktop2 desktop6 desktop7 com">
 "#);
     _ = writeln!(
         xml,
@@ -152,11 +153,39 @@ pub(crate) fn appx_manifest(
                 "                        <uap:DisplayName>{}</uap:DisplayName>",
                 xml_escape(&file_type.name)
             );
+            match &file_type.icon {
+                Some(FileTypeIcon::Resource(id)) => {
+                    _ = writeln!(
+                        xml,
+                        r#"                        <desktop7:Logo ResourceId="{id}">{}</desktop7:Logo>"#,
+                        xml_escape(executable)
+                    );
+                }
+                Some(FileTypeIcon::File(icon)) => {
+                    let element = if icon.ends_with(".ico") {
+                        "desktop7:Logo"
+                    } else {
+                        "uap:Logo"
+                    };
+                    _ = writeln!(
+                        xml,
+                        r#"                        <{element}>Assets\{}</{element}>"#,
+                        xml_escape(&icon.replace('/', "\\"))
+                    );
+                }
+                None => {}
+            }
             _ = writeln!(xml, "                        <uap:SupportedFileTypes>");
             for extension in &file_type.extensions {
+                let attributes = match &file_type.perceived_type {
+                    Some(perceived_type) => {
+                        format!(r#" uap10:PerceivedType="{}""#, xml_escape(perceived_type))
+                    }
+                    None => String::new(),
+                };
                 _ = writeln!(
                     xml,
-                    "                            <uap:FileType>.{}</uap:FileType>",
+                    "                            <uap:FileType{attributes}>.{}</uap:FileType>",
                     xml_escape(extension.trim_start_matches('.'))
                 );
             }
@@ -364,6 +393,48 @@ version = "1.2.3"
     }
 
     #[test]
+    fn embedded_file_icons_reference_executable_resources() {
+        let manifest: Manifest = basic_toml::from_str(
+            r#"
+[package]
+name = "viewer"
+version = "1.0.0"
+[package.metadata.bundle.windows]
+file_types = [
+    { name = "PNG Image", extensions = ["png", "apng"], icon = 2 },
+    { name = "JPEG Image", extensions = ["jpg", "jpeg"], icon = 3 },
+    { name = "Other Image", extensions = ["other"] },
+]
+"#,
+        )
+        .expect("Manifest");
+        let windows = manifest
+            .package
+            .metadata
+            .bundle
+            .windows
+            .as_ref()
+            .expect("Windows metadata");
+        let xml = appx_manifest(
+            &manifest,
+            windows,
+            "Publisher",
+            "viewer&app.exe",
+            "arm64",
+            0,
+        );
+        for id in [2, 3] {
+            assert!(xml.contains(&format!(
+                r#"<desktop7:Logo ResourceId="{id}">viewer&amp;app.exe</desktop7:Logo>"#
+            )));
+        }
+        assert_eq!(xml.matches("<desktop7:Logo").count(), 2);
+        assert!(!xml.contains("Assets\\file-types"));
+        assert!(xml.contains("<uap:FileType>.apng</uap:FileType>"));
+        assert!(xml.contains("<uap:FileType>.jpeg</uap:FileType>"));
+    }
+
+    #[test]
     fn shell_extension_registers_its_handlers_for_every_file_type() {
         let manifest: Manifest = basic_toml::from_str(
             r#"
@@ -371,7 +442,7 @@ version = "1.2.3"
 name = "viewer"
 version = "1.0.0"
 [package.metadata.bundle.windows]
-file_types = [{ name = "PNG Image", extensions = ["png"] }, { name = "QOI Image", extensions = ["qoi"] }]
+file_types = [{ name = "PNG Image", extensions = ["png"], icon = "png.png" }, { name = "QOI Image", extensions = ["qoi"], perceived_type = "image", icon = "file-types/qoi.ico" }]
 [package.metadata.bundle.windows.shell_extension]
 package = "../viewer-shell"
 library = "viewer-shell"
@@ -388,6 +459,10 @@ preview_handler = "A1B2C3D4-0000-4000-8000-000000000002"
             .clone()
             .expect("Windows metadata");
         let xml = appx_manifest(&manifest, &windows, "Publisher", "viewer.exe", "x64", 0);
+        assert!(xml.contains("<uap:FileType>.png</uap:FileType>"));
+        assert!(xml.contains(r#"<uap:FileType uap10:PerceivedType="image">.qoi</uap:FileType>"#));
+        assert!(xml.contains(r#"<desktop7:Logo>Assets\file-types\qoi.ico</desktop7:Logo>"#));
+        assert!(xml.contains(r#"<uap:Logo>Assets\png.png</uap:Logo>"#));
         assert_eq!(
             xml.matches(
                 r#"<desktop2:ThumbnailHandler Clsid="A1B2C3D4-0000-4000-8000-000000000001"/>"#

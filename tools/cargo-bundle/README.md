@@ -36,7 +36,7 @@ entitlements = "ios/Entitlements.plist" # optional
 assets = "meta/windows"
 sandbox = true # optional, run in an AppContainer
 capabilities = ["internetClient"] # optional
-file_types = [{ name = "Example Document", extensions = ["example"] }] # optional
+file_types = [{ name = "Example Document", extensions = ["example"], icon = 2 }] # optional
 windows_app_sdk = "2.0" # optional, minimum Windows App Runtime framework the app depends on
 
 [package.metadata.bundle.windows.shell_extension] # optional
@@ -45,6 +45,11 @@ library = "example-shell" # its DLL name in the package without .dll
 thumbnail_handler = "00000000-0000-0000-0000-000000000001" # optional IThumbnailProvider CLSID
 preview_handler = "00000000-0000-0000-0000-000000000002" # optional IPreviewHandler CLSID
 ```
+
+A Windows file type's `icon` can be a numeric icon resource ID in the app executable,
+embedded by the build script with `winresource::WindowsResource::set_icon_with_id`.
+Resource ID 1 is reserved for the app icon. File paths relative to `assets` are also
+supported for separate ICO or PNG files.
 
 Then run `cargo bundle` with the path argument, when using a Cargo workspace run the command in the root of the workspace:
 

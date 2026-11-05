@@ -18,7 +18,7 @@ mod version;
 
 /// Windows resource compiler supporting MSVC, LLVM, MinGW and Zig, with optional `RC` override.
 pub struct WindowsResource {
-    icon_path: Option<PathBuf>,
+    icons: BTreeMap<u16, PathBuf>,
     manifest: Option<String>,
     version_fields: BTreeMap<String, String>,
 }
@@ -46,7 +46,7 @@ impl WindowsResource {
         );
 
         Self {
-            icon_path: None,
+            icons: BTreeMap::new(),
             manifest: None,
             version_fields,
         }
@@ -61,7 +61,15 @@ impl WindowsResource {
 
     /// Set the icon file
     pub fn set_icon(&mut self, path: &str) -> &mut Self {
-        self.icon_path = Some(PathBuf::from(path));
+        self.set_icon_with_id(path, "1")
+    }
+
+    /// Set an icon file with a numeric resource ID
+    pub fn set_icon_with_id(&mut self, path: &str, id: &str) -> &mut Self {
+        let id = id
+            .parse()
+            .expect("Icon resource ID must be a 16-bit integer");
+        self.icons.insert(id, PathBuf::from(path));
         self
     }
 
@@ -86,9 +94,10 @@ impl WindowsResource {
         // Write resource.rc file
         let mut rc_content = "#pragma code_page(65001)\r\n\r\n".to_string();
 
-        if let Some(icon_path) = &self.icon_path {
+        for (id, icon_path) in &self.icons {
+            println!("cargo:rerun-if-changed={}", icon_path.display());
             rc_content.push_str(&format!(
-                "1 ICON \"{}\"\r\n\r\n",
+                "{id} ICON \"{}\"\r\n\r\n",
                 escape_string(&icon_path.display().to_string())
             ));
         }
@@ -503,6 +512,24 @@ mod test {
             &escape_string(r"C:\Program Files\Foobar"),
             r"C:\\Program Files\\Foobar"
         );
+    }
+
+    #[test]
+    fn setting_app_icon_preserves_file_type_icons() {
+        let mut resources = WindowsResource {
+            icons: BTreeMap::new(),
+            manifest: None,
+            version_fields: BTreeMap::new(),
+        };
+        resources
+            .set_icon_with_id("document.ico", "2")
+            .set_icon("original.ico")
+            .set_icon("app.ico")
+            .set_icon_with_id("other.ico", "3");
+        assert_eq!(resources.icons.len(), 3);
+        assert_eq!(resources.icons[&1], Path::new("app.ico"));
+        assert_eq!(resources.icons[&2], Path::new("document.ico"));
+        assert_eq!(resources.icons[&3], Path::new("other.ico"));
     }
 
     #[test]

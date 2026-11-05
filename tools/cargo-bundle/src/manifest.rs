@@ -140,11 +140,36 @@ pub(crate) struct ShellExtensionMetadata {
 pub(crate) struct FileTypeMetadata {
     pub name: String,
     pub extensions: Vec<String>,
+    pub perceived_type: Option<String>,
+    pub icon: Option<FileTypeIcon>,
+}
+
+#[derive(Clone, Deserialize)]
+#[serde(untagged)]
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) enum FileTypeIcon {
+    Resource(u16),
+    File(String),
 }
 
 #[cfg(test)]
 mod tests {
     use super::Manifest;
+
+    #[test]
+    fn file_icon_resource_ids_fit_windows_resources() {
+        for id in [-1, 65536] {
+            let source = format!(
+                r#"[package]
+name = "viewer"
+version = "1.0.0"
+[package.metadata.bundle.windows]
+file_types = [{{ name = "Image", extensions = ["png"], icon = {id} }}]
+"#
+            );
+            assert!(basic_toml::from_str::<Manifest>(&source).is_err());
+        }
+    }
 
     #[test]
     fn bundle_metadata_is_optional() {

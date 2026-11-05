@@ -9,7 +9,7 @@ use std::path::Path;
 use std::process::exit;
 
 use crate::args::Args;
-use crate::manifest::Manifest;
+use crate::manifest::{FileTypeIcon, Manifest};
 use crate::support::{assert_file_name, cargo_build, remove_path_if_exists};
 use crate::windows::appx_manifest::{appx_manifest, package_version, shell_extension_library};
 use crate::windows::publisher::publisher_name;
@@ -69,7 +69,58 @@ pub(crate) fn bundle(args: &Args, target_dir: &str, manifest: &Manifest) {
 
     let publisher = publisher_name(&args.path, manifest);
     let assets = windows.assets.as_deref().unwrap_or("meta/windows");
-    let logos = logo_files(&format!("{}/{assets}", args.path));
+    let asset_directory = format!("{}/{assets}", args.path);
+    let mut logos = logo_files(&asset_directory);
+    for file_type in windows.file_types.as_deref().unwrap_or_default() {
+        if let Some(FileTypeIcon::File(icon)) = &file_type.icon {
+            assert!(
+                !icon.is_empty()
+                    && Path::new(icon)
+                        .components()
+                        .all(|part| matches!(part, std::path::Component::Normal(_))),
+                "File type icons must be paths relative to the assets directory"
+            );
+            // Keep the artwork's licence alongside its packaged icons when supplied.
+            let license = Path::new(icon).with_file_name("license.txt");
+            if Path::new(&asset_directory).join(&license).is_file() {
+                logos.push(license.to_string_lossy().replace('\\', "/"));
+            }
+            if icon.ends_with(".ico") {
+                assert!(
+                    Path::new(&asset_directory).join(icon).is_file(),
+                    "Missing {asset_directory}/{icon}"
+                );
+                logos.push(icon.clone());
+                continue;
+            }
+            let icon_path = Path::new(icon);
+            let parent = icon_path.parent().unwrap_or_else(|| Path::new(""));
+            let stem = icon_path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .expect("UTF-8 icon name")
+                .strip_suffix(".png")
+                .expect("File type icons must be PNG files");
+            assert!(
+                Path::new(&asset_directory).join(icon).is_file(),
+                "Missing {asset_directory}/{icon}"
+            );
+            for entry in fs::read_dir(Path::new(&asset_directory).join(parent))
+                .expect("Failed to read icon assets")
+            {
+                let entry = entry.expect("Failed to read icon asset");
+                let name = entry.file_name().into_string().expect("UTF-8 icon name");
+                if name
+                    .strip_prefix(stem)
+                    .is_some_and(|rest| rest.starts_with('.') && rest.ends_with(".png"))
+                {
+                    logos.push(parent.join(name).to_string_lossy().replace('\\', "/"));
+                }
+            }
+        }
+    }
+    logos.sort();
+    logos.dedup();
     let msix_dir = format!("{target_dir}/msix");
     let packages = format!("{msix_dir}/packages");
     remove_path_if_exists(&msix_dir);
@@ -90,11 +141,11 @@ pub(crate) fn bundle(args: &Args, target_dir: &str, manifest: &Manifest) {
             .unwrap_or_else(|error| panic!("Failed to copy {artifact}: {error}"));
         }
         for logo in &logos {
-            fs::copy(
-                format!("{}/{assets}/{logo}", args.path),
-                format!("{layout}/Assets/{logo}"),
-            )
-            .unwrap_or_else(|error| panic!("Failed to copy {assets}/{logo}: {error}"));
+            let destination = Path::new(&layout).join("Assets").join(logo);
+            fs::create_dir_all(destination.parent().expect("Icon asset directory"))
+                .expect("Failed to create icon asset directory");
+            fs::copy(format!("{}/{assets}/{logo}", args.path), destination)
+                .unwrap_or_else(|error| panic!("Failed to copy {assets}/{logo}: {error}"));
         }
         fs::write(
             format!("{layout}/AppxManifest.xml"),
