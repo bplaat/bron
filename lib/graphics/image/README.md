@@ -1,6 +1,6 @@
 # Image
 
-Decode BMP, GIF, ICO, JPEG, JPEG 2000, PNG/APNG, QOI, and TGA images into sRGB RGBA
+Decode BMP, GIF, ICNS, ICO, JPEG, JPEG 2000, PNG/APNG, QOI, and TGA images into sRGB RGBA
 pixels. You can also encode images as BMP, GIF, JPEG, PNG/APNG, QOI, or TGA.
 
 ## Getting started
@@ -67,7 +67,7 @@ the new pixels and the thumbnail of the original is left out.
 
 Animated images expose full-size frames, display times, and a loop count.
 Decoding applies JPEG orientation, reduces 16-bit PNG samples to 8 bits, and
-selects the largest image in an ICO file. TGA has no file signature, so it is
+selects the largest image in an ICNS or ICO file. TGA has no file signature, so it is
 only detected when no other format matches and its header is valid. Streaming
 is not supported. Decoding has a cumulative 1 GiB allocation limit.
 
@@ -81,6 +81,9 @@ It supports reversible and irreversible wavelets, tiles, quality layers, custom
 precincts, all five progression orders, multiple tile-parts, arithmetic bypass,
 and per-pass termination. JPEG 2000 is decode-only. Its allocation budget releases
 scratch buffers between code-blocks, resolutions, and tiles.
+
+ICNS selects the largest image and supports PNG, JPEG 2000, and legacy RGB/ARGB
+entries with masks. Palette entries and ICNS encoding are unsupported.
 
 ## Color management
 
@@ -105,7 +108,7 @@ convert samples with `srgb_to_linear`, combine them in linear light, and encode
 the result with `linear_to_srgb`.
 
 All formats are enabled by default. You can enable only the codecs you need
-with the `bmp`, `gif`, `ico`, `jpeg`, `jpeg2000`, `png`, `qoi`, and `tga` Cargo features.
+with the `bmp`, `gif`, `icns`, `ico`, `jpeg`, `jpeg2000`, `png`, `qoi`, and `tga` Cargo features.
 The default `std` feature uses Rust math functions. Disable it for `no_std` with `alloc`
 and C library math (`exp`, `pow`, `round`, `roundf`, and `truncf`, depending on the codecs).
 The sRGB tables are generated at build time using host `std` math.

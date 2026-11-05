@@ -40,6 +40,8 @@ mod bmp;
 mod color;
 #[cfg(feature = "gif")]
 mod gif;
+#[cfg(feature = "icns")]
+mod icns;
 #[cfg(feature = "ico")]
 mod ico;
 #[cfg(feature = "jpeg")]
@@ -75,6 +77,9 @@ pub enum Format {
     /// Graphics Interchange Format.
     #[cfg(feature = "gif")]
     Gif,
+    /// Apple icon.
+    #[cfg(feature = "icns")]
+    Icns,
     /// Windows icon.
     #[cfg(feature = "ico")]
     Ico,
@@ -105,6 +110,8 @@ impl Format {
             "gif" => Some(Self::Gif),
             #[cfg(feature = "ico")]
             "ico" => Some(Self::Ico),
+            #[cfg(feature = "icns")]
+            "icns" => Some(Self::Icns),
             #[cfg(feature = "jpeg")]
             "jpg" | "jpeg" | "jpe" | "jfif" => Some(Self::Jpeg),
             #[cfg(feature = "jpeg2000")]
@@ -129,6 +136,8 @@ impl Format {
             [b'G', b'I', b'F', b'8', b'7' | b'9', b'a', ..] => Some(Self::Gif),
             #[cfg(feature = "ico")]
             [0, 0, 1, 0, ..] => Some(Self::Ico),
+            #[cfg(feature = "icns")]
+            [b'i', b'c', b'n', b's', ..] => Some(Self::Icns),
             #[cfg(feature = "jpeg")]
             [0xff, 0xd8, ..] => Some(Self::Jpeg),
             #[cfg(feature = "jpeg2000")]
@@ -146,6 +155,10 @@ impl Format {
     pub const fn can_encode(self) -> bool {
         #[cfg(feature = "ico")]
         if matches!(self, Self::Ico) {
+            return false;
+        }
+        #[cfg(feature = "icns")]
+        if matches!(self, Self::Icns) {
             return false;
         }
         #[cfg(feature = "jpeg2000")]
@@ -377,6 +390,8 @@ pub fn decode(_data: &[u8]) -> Result<Image> {
         Some(Format::Gif) => return gif::decode(_data),
         #[cfg(feature = "ico")]
         Some(Format::Ico) => return ico::decode(_data),
+        #[cfg(feature = "icns")]
+        Some(Format::Icns) => return icns::decode(_data),
         #[cfg(feature = "jpeg")]
         Some(Format::Jpeg) => return jpeg::decode(_data),
         #[cfg(feature = "jpeg2000")]
