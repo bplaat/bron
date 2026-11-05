@@ -378,6 +378,7 @@ build_tools() {
             -u CARGO_ENCODED_RUSTFLAGS -u CARGO_BUILD_TARGET \
             cargo build -q --release -p "$tool" --manifest-path "$ROOT_DIR/Cargo.toml" \
             --target-dir "$ROOT_DIR/target" || die "Failed to build $tool"
+        rm -f "$BUILD_DIR/$tool"
         cp "$ROOT_DIR/target/release/$tool" "$BUILD_DIR/$tool"
     done
     if outdated "$BUILD_DIR/elf2rpl" "$TOOLS_DIR/.patched" "$TOOLS_DIR/src"; then

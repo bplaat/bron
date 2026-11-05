@@ -331,6 +331,7 @@ build_tools() {
             -u CARGO_ENCODED_RUSTFLAGS -u CARGO_BUILD_TARGET \
             cargo build -q --release -p gxtexconv --manifest-path "$ROOT_DIR/Cargo.toml" \
             --target-dir "$ROOT_DIR/target" || die "Failed to build gxtexconv"
+        rm -f "$BUILD_DIR/gxtexconv"
         cp "$ROOT_DIR/target/release/gxtexconv" "$BUILD_DIR/gxtexconv"
     fi
 }
@@ -379,6 +380,7 @@ build_dolphin() {
     msg "Building Dolphin"
     ninja -C "$objects_dir" dolphin-runner > "$objects_dir.log" 2>&1 ||
         { tail -n 50 "$objects_dir.log" >&2; die "Failed to build Dolphin"; }
+    rm -f "$BUILD_DIR/dolphin-runner"
     cp "$objects_dir/Binaries/dolphin-runner" "$BUILD_DIR/dolphin-runner"
 }
 
