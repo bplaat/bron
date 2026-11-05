@@ -5,7 +5,7 @@ vector drawings, and follows the system light or dark theme.
 
 ## Features
 
-- Decode BMP, GIF, ICNS, ICO, JPEG, JPEG 2000, PBM/PGM/PPM/PAM, PNG/APNG, QOI, TGA, and WebP with a custom [image](../../../lib/graphics/image) decoder crate
+- Decode BMP, GIF, ICNS, ICO, JPEG, JPEG 2000, PBM/PGM/PPM/PAM, PNG/APNG, QOI, TGA, TIFF, and WebP with a custom [image](../../../lib/graphics/image) decoder crate
 - Play APNG/GIF/WebP animations with frame timings and loop counts
 - Render SVG/SVGZ and TinyVG with the shared [vector](../../../lib/graphics/vector) decoder, drawn
   by [imageview-core](../imageview-core) with [bcanvas](../../../lib/graphics/bcanvas): Core

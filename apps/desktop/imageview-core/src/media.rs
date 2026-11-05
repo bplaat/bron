@@ -236,6 +236,20 @@ mod tests {
     }
 
     #[test]
+    fn tiff_decodes_with_shared_codecs() {
+        for bytes in [
+            include_bytes!("../../../../lib/graphics/image/tests/images/tiff/rgba-lzw.tif")
+                .as_slice(),
+            include_bytes!("../../../../lib/graphics/image/tests/images/tiff/jpeg-ycbcr.tif")
+                .as_slice(),
+        ] {
+            let media = decode_media(bytes).expect("TIFF");
+            assert_eq!(media.size(), (37.0, 23.0));
+            assert!(media.is_still());
+        }
+    }
+
+    #[test]
     fn netpbm_decodes_to_display_pixels() {
         for bytes in [
             &b"P1\n1 1\n0"[..],

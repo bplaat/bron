@@ -32,7 +32,8 @@ mod render;
 /// The file name extensions of the formats the local decoders read.
 pub const EXTENSIONS: &[&str] = &[
     "apng", "bmp", "dib", "gif", "icns", "ico", "j2c", "j2k", "jfif", "jp2", "jpc", "jpe", "jpeg",
-    "jpg", "pam", "pbm", "pgm", "png", "pnm", "ppm", "qoi", "svg", "svgz", "tga", "tvg", "webp",
+    "jpg", "pam", "pbm", "pgm", "png", "pnm", "ppm", "qoi", "svg", "svgz", "tga", "tif", "tiff",
+    "tvg", "webp",
 ];
 
 /// The magnification the media may be shrunk and enlarged to.
