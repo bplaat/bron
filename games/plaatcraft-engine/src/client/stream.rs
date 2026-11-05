@@ -16,6 +16,7 @@
 use alloc::boxed::Box;
 use alloc::collections::{BTreeMap, BTreeSet, VecDeque};
 use alloc::string::String;
+use alloc::sync::Arc;
 use alloc::vec::Vec;
 
 use super::local::Saved;
@@ -105,7 +106,7 @@ struct Worker<P: Platform> {
     shared: Mutex<P::Lock, Shared<Mesh<P>>>,
     wake: Condvar<P::Lock, P::Signal>,
     saved: Condvar<P::Lock, P::Signal>,
-    sqlite: &'static Sqlite<P>,
+    sqlite: Arc<Sqlite<P>>,
 }
 
 pub(super) struct JobResult {
@@ -117,7 +118,7 @@ pub(super) struct JobResult {
 }
 
 pub(super) struct Stream<P: Platform> {
-    worker: &'static Worker<P>,
+    worker: Arc<Worker<P>>,
     pub(super) chunks: BTreeMap<Coord, Chunk<Mesh<P>>>,
     // The revision each chunk needs to be built with, set when an edit touches it
     needed: BTreeMap<Coord, u32>,
@@ -139,8 +140,8 @@ pub(super) struct Stream<P: Platform> {
 }
 
 impl<P: Platform> Stream<P> {
-    pub(super) fn start(sqlite: &'static Sqlite<P>) -> Self {
-        let worker: &'static Worker<P> = Box::leak(Box::new(Worker {
+    pub(super) fn start(sqlite: Arc<Sqlite<P>>) -> Self {
+        let worker = Arc::new(Worker {
             shared: Mutex::new(Shared {
                 seed: WORLD_SEED,
                 ..Shared::default()
@@ -148,8 +149,9 @@ impl<P: Platform> Stream<P> {
             wake: Condvar::new(),
             saved: Condvar::new(),
             sqlite,
-        }));
-        P::spawn(Thread::Worker, Box::new(move || work(worker)));
+        });
+        let thread_worker = worker.clone();
+        P::spawn(Thread::Worker, Box::new(move || work(&thread_worker)));
         Self {
             worker,
             chunks: BTreeMap::new(),
@@ -656,10 +658,10 @@ fn work<P: Platform>(worker: &Worker<P>) {
         // The edits and saves go before the chunks, which are built with the edits
         if !edits.is_empty() || save.is_some() || full {
             drop(shared);
-            store.edit::<P>(worker.sqlite, &edits);
+            store.edit::<P>(&worker.sqlite, &edits);
             let mut result = Ok(());
             if save.is_some() || unsaved(&store) > limit {
-                result = store.save::<P>(worker.sqlite, save);
+                result = store.save::<P>(&worker.sqlite, save);
                 limit = unsaved(&store) + MAX_UNSAVED;
             }
             let mut shared = worker.shared.lock();
@@ -715,7 +717,7 @@ fn work<P: Platform>(worker: &Worker<P>) {
         let (revision, epoch, world_revision) =
             (shared.revision, shared.epoch, shared.world_revision);
         drop(shared);
-        let chunk = supplied.unwrap_or_else(|| store.build::<P>(worker.sqlite, coord, &pending));
+        let chunk = supplied.unwrap_or_else(|| store.build::<P>(&worker.sqlite, coord, &pending));
         if let Some((id, coord, tag)) = job {
             let mut shared = worker.shared.lock();
             if shared.epoch == epoch {
@@ -750,6 +752,19 @@ mod tests {
     use super::*;
     use crate::client::game::tests::TestPlatform;
     use crate::client::storage::Storage;
+
+    #[test]
+    fn dropping_stream_and_storage_releases_worker_and_database() {
+        let storage = Storage::<TestPlatform>::new();
+        let sqlite = Arc::downgrade(&storage.sqlite);
+        let stream = Stream::<TestPlatform>::start(storage.sqlite.clone());
+        let worker = Arc::downgrade(&stream.worker);
+        drop(storage);
+        assert!(sqlite.upgrade().is_some());
+        drop(stream);
+        assert!(worker.upgrade().is_none());
+        assert!(sqlite.upgrade().is_none());
+    }
 
     #[test]
     fn split_screen_streams_and_retains_terrain_around_every_local_player() {

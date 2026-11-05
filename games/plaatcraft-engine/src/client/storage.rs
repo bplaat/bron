@@ -14,11 +14,11 @@
 //! chunks with it.
 #![allow(unsafe_code)]
 
-use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
 use alloc::ffi::CString;
 use alloc::format;
 use alloc::string::String;
+use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::ffi::{CStr, c_int};
 use core::marker::PhantomData;
@@ -53,7 +53,7 @@ pub(super) struct Opened {
 
 pub(super) struct Storage<P: Platform> {
     pub(super) ready: bool,
-    pub(super) sqlite: &'static Sqlite<P>,
+    pub(super) sqlite: Arc<Sqlite<P>>,
     platform: PhantomData<P>,
 }
 
@@ -61,7 +61,7 @@ impl<P: Platform> Storage<P> {
     pub(super) fn new() -> Self {
         Self {
             ready: mount::<P>(),
-            sqlite: Box::leak(Box::new(Mutex::new(None))),
+            sqlite: Arc::new(Mutex::new(None)),
             platform: PhantomData,
         }
     }

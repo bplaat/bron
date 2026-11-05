@@ -190,7 +190,7 @@ impl<P: Platform> Game<P> {
     pub fn new(gpu: P::Gpu, audio: P::Audio, controller: P::Controller) -> Self {
         let renderer = Renderer::new(gpu.size(), P::RENDER_DISTANCE);
         let storage = Storage::new();
-        let sqlite = storage.sqlite;
+        let sqlite = storage.sqlite.clone();
         let worlds = storage.worlds();
         let settings = storage.load_settings().unwrap_or_else(Settings::new::<P>);
         let mut sounds = Sounds::new(audio);

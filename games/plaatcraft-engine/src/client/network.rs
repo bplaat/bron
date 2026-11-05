@@ -10,6 +10,7 @@ use alloc::boxed::Box;
 use alloc::collections::{BTreeMap, VecDeque};
 use alloc::format;
 use alloc::string::String;
+use alloc::sync::Arc;
 use alloc::vec::Vec;
 
 use super::platform::{Address, Io, Platform, Socket, Thread};
@@ -52,16 +53,17 @@ struct Shared {
 }
 
 pub(super) struct Network<P: Platform> {
-    shared: &'static Mutex<P::Lock, Shared>,
+    shared: Arc<Mutex<P::Lock, Shared>>,
 }
 
 impl<P: Platform> Network<P> {
     pub(super) fn new() -> Self {
-        let shared: &'static Mutex<P::Lock, Shared> = Box::leak(Box::new(Mutex::new(Shared {
+        let shared = Arc::new(Mutex::new(Shared {
             commands: VecDeque::new(),
             events: VecDeque::new(),
-        })));
-        P::spawn(Thread::Network, Box::new(move || run::<P>(shared)));
+        }));
+        let network = shared.clone();
+        P::spawn(Thread::Network, Box::new(move || run::<P>(&network)));
         Self { shared }
     }
 
@@ -495,6 +497,15 @@ fn run<P: Platform>(shared: &Mutex<P::Lock, Shared>) {
 mod tests {
     use super::*;
     use crate::client::game::tests::{Device, TestPlatform};
+
+    #[test]
+    fn dropping_network_releases_shared_state() {
+        let network = Network::<TestPlatform>::new();
+        let shared = Arc::downgrade(&network.shared);
+        network.discover();
+        drop(network);
+        assert!(shared.upgrade().is_none());
+    }
 
     #[test]
     fn lan_discovery_counts_local_players_and_only_accepted_online_guests() {
