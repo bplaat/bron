@@ -1,6 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
-    <title>Frogger</title>
     <defs>
         <linearGradient id="grass" x1="0" y1="0" x2="0.8" y2="1">
             <stop stop-color="#d2e9a8" />
