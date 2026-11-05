@@ -315,6 +315,8 @@ struct Jpeg {
     orientation: u16,
     icc: Vec<IccChunk>,
     adobe_rgb: bool,
+    /// Whether three components are RGB instead of YCbCr, when the container says so.
+    rgb: Option<bool>,
 }
 
 /// One APP2 part of an ICC profile, which is split to fit in segments.
@@ -325,7 +327,24 @@ struct IccChunk {
 }
 
 pub(super) fn decode(data: &[u8]) -> Result<Image> {
-    Jpeg::decode(data)
+    let mut budget = Budget::default();
+    let mut jpeg = Jpeg::new();
+    jpeg.read(data, &mut budget)?;
+    jpeg.render(&mut budget)
+}
+
+/// Decodes a JPEG strip or tile of a TIFF image, after the abbreviated tables stream of its
+/// JPEGTables tag, with RGB or YCbCr components as its photometric interpretation says.
+#[cfg(feature = "tiff")]
+pub(super) fn decode_tiff(tables: Option<&[u8]>, data: &[u8], rgb: bool) -> Result<Image> {
+    let mut budget = Budget::default();
+    let mut jpeg = Jpeg::new();
+    jpeg.rgb = Some(rgb);
+    if let Some(tables) = tables {
+        jpeg.read(tables, &mut budget)?;
+    }
+    jpeg.read(data, &mut budget)?;
+    jpeg.render(&mut budget)
 }
 
 impl Jpeg {
@@ -348,26 +367,20 @@ impl Jpeg {
             orientation: 1,
             icc: Vec::new(),
             adobe_rgb: false,
+            rgb: None,
         }
     }
 
-    fn decode(data: &[u8]) -> Result<Image> {
-        let mut r = Reader::new(&data[2..]);
-        let mut budget = Budget::default();
-        let mut jpeg = Self::new();
-        let mut scans = 0;
+    // Reads the segments of a stream up to its end, which may only hold tables.
+    fn read(&mut self, data: &[u8], budget: &mut Budget) -> Result<()> {
+        let mut r = Reader::new(
+            data.strip_prefix(&[0xff, 0xd8])
+                .ok_or(DecodeError::InvalidMagic)?,
+        );
         loop {
             let m = marker(&mut r)?;
             if m == 0xd9 {
-                if scans == 0
-                    || jpeg
-                        .components
-                        .iter()
-                        .any(|component| component.approximation[0] < 0)
-                {
-                    return Err(DecodeError::InvalidData);
-                }
-                return jpeg.render(&mut budget);
+                return Ok(());
             }
             if matches!(m, 0xd0..=0xd8 | 0x01) {
                 return Err(DecodeError::InvalidData);
@@ -379,7 +392,7 @@ impl Jpeg {
             let bytes = r.take(len as usize - 2)?;
             let mut segment = Reader::new(bytes);
             match m {
-                0xc0..=0xc2 => jpeg.header(&mut segment, m == 0xc2, &mut budget)?,
+                0xc0..=0xc2 => self.header(&mut segment, m == 0xc2, budget)?,
                 0xc4 => {
                     while segment.remaining() > 0 {
                         let id = segment.byte()?;
@@ -389,9 +402,9 @@ impl Jpeg {
                         budget.claim(size_of::<Huffman>() + 256)?;
                         let table = Huffman::read(&mut segment)?;
                         if id >> 4 == 0 {
-                            jpeg.dc[(id & 15) as usize] = Some(table);
+                            self.dc[(id & 15) as usize] = Some(table);
                         } else {
-                            jpeg.ac[(id & 15) as usize] = Some(table);
+                            self.ac[(id & 15) as usize] = Some(table);
                         }
                     }
                 }
@@ -412,35 +425,34 @@ impl Jpeg {
                                 return Err(DecodeError::InvalidData);
                             }
                         }
-                        jpeg.quant[(id & 15) as usize] = Some(q);
+                        self.quant[(id & 15) as usize] = Some(q);
                     }
                 }
                 0xdd => {
-                    jpeg.restart = segment.be16()? as usize;
+                    self.restart = segment.be16()? as usize;
                     if segment.remaining() != 0 {
                         return Err(DecodeError::InvalidData);
                     }
                 }
                 0xda => {
-                    jpeg.scan(&mut segment, &mut r)?;
-                    scans += 1;
+                    self.scan(&mut segment, &mut r)?;
                 }
                 0xe0 => {
                     if bytes.starts_with(b"JFIF\0") {
-                        jpeg.jfif = true;
+                        self.jfif = true;
                     }
                 }
                 0xe1 => {
                     if let Some(exif) = Exif::parse(bytes) {
-                        jpeg.orientation = exif.orientation.unwrap_or(jpeg.orientation);
-                        jpeg.adobe_rgb = exif.adobe_rgb;
+                        self.orientation = exif.orientation.unwrap_or(self.orientation);
+                        self.adobe_rgb = exif.adobe_rgb;
                     }
                 }
                 0xe2 => {
                     if let Some([sequence, count, data @ ..]) = bytes.strip_prefix(b"ICC_PROFILE\0")
                     {
                         budget.claim(data.len())?;
-                        jpeg.icc.push(IccChunk {
+                        self.icc.push(IccChunk {
                             sequence: *sequence,
                             count: *count,
                             data: data.to_vec(),
@@ -449,7 +461,7 @@ impl Jpeg {
                 }
                 0xee => {
                     if bytes.starts_with(b"Adobe") && bytes.len() >= 12 {
-                        jpeg.adobe = Some(bytes[11]);
+                        self.adobe = Some(bytes[11]);
                     }
                 }
                 0xe3..=0xed | 0xef | 0xfe => {}
@@ -720,6 +732,14 @@ impl Jpeg {
     }
 
     fn render(mut self, budget: &mut Budget) -> Result<Image> {
+        if self.components.is_empty()
+            || self
+                .components
+                .iter()
+                .any(|component| component.approximation[0] < 0)
+        {
+            return Err(DecodeError::InvalidData);
+        }
         // Transform component blocks, upsample chroma, convert to RGB, then apply EXIF orientation.
         let mut planes = budget.zeroed::<Vec<u8>>(self.components.len())?;
         for (c, output) in self.components.iter_mut().zip(&mut planes) {
@@ -742,13 +762,15 @@ impl Jpeg {
             *output = plane;
         }
         let mut pixels = budget.zeroed(pixel_len(self.width, self.height)?)?;
-        let rgb = !self.jfif
-            && (self.adobe == Some(0)
-                || self
-                    .components
-                    .iter()
-                    .map(|c| c.id)
-                    .eq(b"RGB".iter().copied()));
+        let rgb = self.rgb.unwrap_or_else(|| {
+            !self.jfif
+                && (self.adobe == Some(0)
+                    || self
+                        .components
+                        .iter()
+                        .map(|c| c.id)
+                        .eq(b"RGB".iter().copied()))
+        });
         if self.adobe.is_some_and(|v| v > 2) {
             return Err(DecodeError::UnsupportedFeature);
         }

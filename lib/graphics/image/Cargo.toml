@@ -25,6 +25,7 @@ default = [
     "pnm",
     "qoi",
     "tga",
+    "tiff",
     "webp",
 ]
 std = []
@@ -38,6 +39,7 @@ png = ["dep:crc", "dep:deflate"]
 pnm = []
 qoi = []
 tga = []
+tiff = ["jpeg", "dep:deflate"]
 webp = []
 
 [dependencies]

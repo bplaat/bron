@@ -63,12 +63,15 @@ mod qoi;
         feature = "jpeg",
         feature = "png",
         feature = "qoi",
-        feature = "tga"
+        feature = "tga",
+        feature = "tiff"
     )
 ))]
 mod test_support;
 #[cfg(feature = "tga")]
 mod tga;
+#[cfg(feature = "tiff")]
+mod tiff;
 #[cfg(feature = "webp")]
 mod webp;
 
@@ -105,6 +108,9 @@ pub enum Format {
     /// Truevision TGA.
     #[cfg(feature = "tga")]
     Tga,
+    /// TIFF, with LZW, Deflate, PackBits, JPEG, or CCITT fax compression.
+    #[cfg(feature = "tiff")]
+    Tiff,
     /// WebP, including lossy, lossless and animated images.
     #[cfg(feature = "webp")]
     WebP,
@@ -134,6 +140,8 @@ impl Format {
             "qoi" => Some(Self::Qoi),
             #[cfg(feature = "tga")]
             "tga" => Some(Self::Tga),
+            #[cfg(feature = "tiff")]
+            "tif" | "tiff" => Some(Self::Tiff),
             #[cfg(feature = "webp")]
             "webp" => Some(Self::WebP),
             _ => None,
@@ -184,6 +192,8 @@ impl Format {
             ] => Some(Self::Pnm),
             #[cfg(feature = "qoi")]
             [b'q', b'o', b'i', b'f', ..] => Some(Self::Qoi),
+            #[cfg(feature = "tiff")]
+            [b'I', b'I', 42, 0, ..] | [b'M', b'M', 0, 42, ..] => Some(Self::Tiff),
             _ => None,
         }
     }
@@ -204,6 +214,10 @@ impl Format {
         }
         #[cfg(feature = "pnm")]
         if matches!(self, Self::Pnm) {
+            return false;
+        }
+        #[cfg(feature = "tiff")]
+        if matches!(self, Self::Tiff) {
             return false;
         }
         #[cfg(feature = "webp")]
@@ -365,6 +379,7 @@ impl Image {
         feature = "qoi",
         feature = "pnm",
         feature = "tga",
+        feature = "tiff",
         feature = "webp"
     ))]
     fn still(format: Format, width: u32, height: u32, pixels: Vec<u8>) -> Self {
@@ -427,6 +442,7 @@ type Result<T> = core::result::Result<T, DecodeError>;
         feature = "qoi",
         feature = "pnm",
         feature = "tga",
+        feature = "tiff",
         feature = "webp"
     )),
     allow(clippy::missing_const_for_fn)
@@ -453,6 +469,8 @@ pub fn decode(_data: &[u8]) -> Result<Image> {
         Some(Format::Pnm) => return pnm::decode(_data),
         #[cfg(feature = "qoi")]
         Some(Format::Qoi) => return qoi::decode(_data),
+        #[cfg(feature = "tiff")]
+        Some(Format::Tiff) => return tiff::decode(_data),
         _ => {}
     }
     // A headerless DIB starts with its header size, so it is tried after the signatures.
@@ -483,6 +501,7 @@ pub fn decode(_data: &[u8]) -> Result<Image> {
     feature = "qoi",
     feature = "pnm",
     feature = "tga",
+    feature = "tiff",
     feature = "webp"
 ))]
 const MAX_BYTES: usize = 1024 * 1024 * 1024;
@@ -499,6 +518,7 @@ const MAX_BYTES: usize = 1024 * 1024 * 1024;
     feature = "qoi",
     feature = "pnm",
     feature = "tga",
+    feature = "tiff",
     feature = "webp"
 ))]
 struct Budget {
@@ -514,6 +534,7 @@ struct Budget {
     feature = "qoi",
     feature = "pnm",
     feature = "tga",
+    feature = "tiff",
     feature = "webp"
 ))]
 impl Budget {
@@ -535,6 +556,7 @@ impl Budget {
         feature = "qoi",
         feature = "pnm",
         feature = "tga",
+        feature = "tiff",
         feature = "webp"
     ))]
     fn zeroed<T: Default + Clone>(&mut self, len: usize) -> Result<Vec<T>> {
@@ -606,6 +628,7 @@ impl Budget {
     feature = "jpeg2000",
     feature = "png",
     feature = "tga",
+    feature = "tiff",
     feature = "webp"
 ))]
 fn pixel_len(width: u32, height: u32) -> Result<usize> {
@@ -770,7 +793,8 @@ impl Area {
         feature = "jpeg",
         feature = "png",
         feature = "qoi",
-        feature = "tga"
+        feature = "tga",
+        feature = "tiff"
     )
 ))]
 mod tests {
@@ -857,6 +881,12 @@ mod tests {
         test_support::run_raster_format("tga");
     }
 
+    #[cfg(feature = "tiff")]
+    #[test]
+    fn tiff_reference_corpus() {
+        test_support::run_raster_format("tiff");
+    }
+
     #[cfg(feature = "qoi")]
     #[test]
     fn qoi_color_reference_corpus() {
@@ -888,7 +918,8 @@ mod tests {
         feature = "jpeg",
         feature = "png",
         feature = "qoi",
-        feature = "tga"
+        feature = "tga",
+        feature = "tiff"
     ))]
     #[test]
     fn every_truncation_is_rejected() {
@@ -910,7 +941,8 @@ mod tests {
         feature = "jpeg",
         feature = "png",
         feature = "qoi",
-        feature = "tga"
+        feature = "tga",
+        feature = "tiff"
     ))]
     #[test]
     fn corrupted_inputs_do_not_panic() {
@@ -937,6 +969,7 @@ mod tests {
                 b"\0\0\x01\0",
                 b"qoif",
                 b"\x89PNG\r\n\x1a\n",
+                b"II*\0\x08\0\0\0",
                 // A 16x16 RLE true color TGA header.
                 b"\0\0\x0a\0\0\0\0\0\0\0\0\0\x10\0\x10\0\x20\x08",
             ] {

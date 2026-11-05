@@ -1,7 +1,8 @@
 # Image
 
-Decode BMP, GIF, ICNS, ICO, JPEG, JPEG 2000, Netpbm, PNG/APNG, QOI, TGA, and WebP images into
-sRGB RGBA pixels. You can also encode images as BMP, GIF, JPEG, PNG/APNG, QOI, or TGA.
+Decode BMP, GIF, ICNS, ICO, JPEG, JPEG 2000, Netpbm, PNG/APNG, QOI, TGA, TIFF, and WebP
+images into sRGB RGBA pixels. You can also encode images as BMP, GIF, JPEG, PNG/APNG, QOI,
+or TGA.
 
 ## Getting started
 
@@ -78,7 +79,16 @@ clears frame rectangles to transparent, matching libwebp and browser playback.
 Netpbm supports plain and binary PBM, PGM, and PPM (P1-P6), plus PAM (P7)
 with grayscale, RGB, and alpha tuples. Samples up to 16 bits are scaled to 8 bits;
 samples are treated as sRGB. Only the first image in a Netpbm stream is read.
-ICNS, JPEG 2000, Netpbm,
+TIFF reads the first full-resolution image of little and big-endian files, in strips
+or tiles with contiguous or separate planes. It supports uncompressed, LZW, Deflate,
+PackBits, JPEG, and CCITT Modified Huffman, Group 3, and Group 4 fax compression, with
+the horizontal and floating-point predictors. Bilevel, gray, palette, RGB, and CMYK
+samples of 1 to 32-bit integers or 16, 32, and 64-bit floats can have associated or
+unassociated alpha, and JPEG also reads YCbCr. Samples above 16 bits are reduced to
+16 bits first, and floats are scaled from 0 to 1. The orientation tag is applied.
+BigTIFF, old-style JPEG, CIELab, uncompressed YCbCr, and signed integer samples are
+unsupported.
+ICNS, JPEG 2000, Netpbm, TIFF,
 and WebP are decode-only. TGA has no file signature, so it is
 only detected when no other format matches and its header is valid. Streaming
 is not supported. Decoding has a 1 GiB allocation budget. JPEG 2000 releases
@@ -98,6 +108,7 @@ the file and converts the pixels, clipping colors outside the sRGB gamut:
 | JPEG 2000 | Embedded ICC profile; otherwise the declared gray, RGB, CMYK, or YCbCr color space     |
 | PNG       | `cICP`, then `iCCP`, then `sRGB`, then `cHRM` and `gAMA`; 16-bit samples convert first |
 | QOI       | The linear RGB header flag                                                             |
+| TIFF      | Embedded ICC profile                                                                   |
 | WebP      | Embedded ICC profile                                                                   |
 
 ICC v2 and v4 profiles for gray, RGB, and CMYK samples are supported, both
@@ -111,7 +122,7 @@ convert samples with `srgb_to_linear`, combine them in linear light, and encode
 the result with `linear_to_srgb`.
 
 All formats are enabled by default. You can enable only the codecs you need
-with the `bmp`, `gif`, `icns`, `ico`, `jpeg`, `jpeg2000`, `png`, `pnm`, `qoi`, `tga`, and `webp` Cargo features.
+with the `bmp`, `gif`, `icns`, `ico`, `jpeg`, `jpeg2000`, `png`, `pnm`, `qoi`, `tga`, `tiff`, and `webp` Cargo features.
 All decoders are implemented in this crate. They also support `no_std` with `alloc`.
 The default `std` feature uses Rust math functions. Disable it for `no_std` with `alloc`
 and C library math (`exp`, `pow`, `round`, `roundf`, and `truncf`, depending on the codecs).
@@ -120,12 +131,17 @@ The sRGB tables are generated at build time using host `std` math.
 ## Tests and benchmarks
 
 Run `cargo test -p image` for tests or `cargo bench -p image --bench image` for
-benchmarks. Tests use reference images from image-rs, synthetic ICNS and TGA images, and
-images written by macOS `sips` and `iconutil`. WebP fixtures are encoded with
-`cwebp` and `webpmux`; RGBA pixel references are decoded with `dwebp`.
-The animated ball reference stacks all frames decoded by libwebp's `WebPAnimDecoder`.
-JPEG 2000 fixtures and RGBA references use OpenJPEG; the ICC reference is a
-PNG with the same samples and color profile.
+benchmarks.
+
+Fixtures are in `tests/images`, and their expected pixels are in `tests/reference` as raw
+straight-alpha RGBA8 files: the fixture name with `.rgba` appended, or `.anim_NN.rgba` for
+each animation frame. The fixtures are reference images from image-rs, synthetic ICNS and
+TGA images, and images written by macOS `sips` and `iconutil`. WebP fixtures are encoded
+with `cwebp` and `webpmux` and decoded with `dwebp`; the animated ball reference stacks all
+frames of libwebp's `WebPAnimDecoder`. JPEG 2000 fixtures are encoded and decoded with
+OpenJPEG, except the ICC reference, which is decoded from a PNG with the same samples and
+color profile. TIFF fixtures are written by libtiff `tiffcp` and ImageMagick, which decodes
+them with libtiff.
 
 ## License
 
