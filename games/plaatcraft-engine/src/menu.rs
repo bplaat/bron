@@ -809,7 +809,7 @@ impl Menu {
     }
 
     /// Moves the focus to the nearest widget in a direction, with dx and dy from -1 to 1, the
-    /// list scrolls and rows are selected on the way.
+    /// list scrolls and rows are selected on the way. At an edge the focus wraps around.
     pub fn step(&mut self, layout: &Layout, [dx, dy]: [f32; 2]) {
         let Some(current) = self.focused(layout) else {
             return;
@@ -834,23 +834,33 @@ impl Menu {
             return;
         };
         let [x, y] = widget.center();
-        let best = layout
-            .widgets
-            .iter()
-            .filter(|other| other.enabled && other.action != current)
-            .filter_map(|other| {
-                let [cx, cy] = other.center();
-                let along = (cx - x) * dx + (cy - y) * dy;
-                let across = ((cx - x) * dy).abs() + ((cy - y) * dx).abs();
-                // Sideways moves stay in the row
-                let same_row = dy != 0.0 || across < other.height;
-                (along > 1.0 && same_row).then_some((other.action, along + across * 2.0))
-            })
-            .min_by(|a, b| a.1.total_cmp(&b.1));
-        if let Some((action, _)) = best {
+        let nearest = |wrap: bool| {
+            layout
+                .widgets
+                .iter()
+                .filter(|other| other.enabled && other.action != current)
+                .filter_map(|other| {
+                    let [cx, cy] = other.center();
+                    let along = (cx - x) * dx + (cy - y) * dy;
+                    let across = ((cx - x) * dy).abs() + ((cy - y) * dx).abs();
+                    // Sideways moves stay in the row.
+                    let same_row = dy != 0.0 || across < other.height;
+                    let ahead = if wrap { along < -1.0 } else { along > 1.0 };
+                    (ahead && same_row).then_some((other.action, along + across * 2.0))
+                })
+                .min_by(|a, b| a.1.total_cmp(&b.1))
+        };
+        let best = nearest(false);
+        let wrapped = best.is_none();
+        let best = best.or_else(|| nearest(true));
+        if let Some((mut action, _)) = best {
+            if wrapped && matches!(action, Action::Row(_)) && dy != 0.0 {
+                action = Action::Row(if dy > 0.0 { 0 } else { self.rows.len() - 1 });
+            }
             self.focus = Some(action);
             if let Action::Row(index) = action {
                 self.selected = Some(index);
+                self.scroll_to_selected();
             }
         }
     }
@@ -1607,6 +1617,56 @@ mod tests {
         for count in 1..=4 {
             assert!(actions(&menu).contains(&Action::LocalPlayers(count)));
         }
+    }
+
+    #[test]
+    fn console_dpad_wraps_between_the_first_and_last_menu_items() {
+        let platform = Platform {
+            keyboard: Keyboard::OnScreen,
+            ..DESKTOP
+        };
+        for page in [
+            Page::Title,
+            Page::Pause,
+            Page::Tools,
+            Page::SplitScreen,
+            Page::Settings,
+        ] {
+            let mut menu = menu(page, 0);
+            menu.session = Session::Host { lan: None };
+            let layout = Layout::new(&menu, platform, [640.0, 480.0], [0.0; 4]);
+            let first = layout.actions().next().unwrap();
+            let last = layout.actions().last().unwrap();
+            menu.focus = Some(first);
+            menu.step(&layout, [0.0, -1.0]);
+            assert_eq!(menu.focused(&layout), Some(last), "{page:?}");
+            menu.step(&layout, [0.0, 1.0]);
+            assert_eq!(menu.focused(&layout), Some(first), "{page:?}");
+        }
+    }
+
+    #[test]
+    fn console_dpad_wraps_a_scrolled_list_and_keyboard_row() {
+        let platform = Platform {
+            keyboard: Keyboard::OnScreen,
+            ..DESKTOP
+        };
+        let mut menu = menu(Page::Worlds, 12);
+        menu.selected = Some(11);
+        menu.scroll_to_selected();
+        let layout = Layout::new(&menu, platform, [640.0, 480.0], [0.0; 4]);
+        menu.focus = layout.actions().last();
+        menu.step(&layout, [0.0, 1.0]);
+        assert_eq!(menu.focus, Some(Action::Row(0)));
+        assert_eq!(menu.selected, Some(0));
+        assert_eq!(menu.scroll, 0);
+        menu.show(Page::Chat, String::new());
+        let layout = Layout::new(&menu, platform, [640.0, 480.0], [0.0; 4]);
+        menu.focus = Some(Action::Key(0));
+        menu.step(&layout, [-1.0, 0.0]);
+        assert_ne!(menu.focus, Some(Action::Key(0)));
+        menu.step(&layout, [1.0, 0.0]);
+        assert_eq!(menu.focus, Some(Action::Key(0)));
     }
 
     #[test]

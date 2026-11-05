@@ -35,14 +35,13 @@ const GAMEPAD_BUTTONS: [(u32, u32); 15] = [
     (VPAD_BUTTON_STICK_L, Gamepad::STICK_L),
 ];
 
-const WIIMOTE_BUTTONS: [(u32, u32); 13] = [
+const WIIMOTE_BUTTONS: [(u32, u32); 12] = [
     (WPAD_BUTTON_A, Wiimote::A),
     (WPAD_BUTTON_B, Wiimote::B),
     (WPAD_BUTTON_1, Wiimote::ONE),
     (WPAD_BUTTON_2, Wiimote::TWO),
     (WPAD_BUTTON_PLUS, Wiimote::PLUS),
     (WPAD_BUTTON_MINUS, Wiimote::MINUS),
-    (WPAD_BUTTON_HOME, Wiimote::HOME),
     (WPAD_BUTTON_UP, Wiimote::UP),
     (WPAD_BUTTON_DOWN, Wiimote::DOWN),
     (WPAD_BUTTON_LEFT, Wiimote::LEFT),
@@ -56,6 +55,14 @@ fn buttons(table: &[(u32, u32)], raw: u32) -> u32 {
         .iter()
         .filter(|&&(mask, _)| raw & mask != 0)
         .fold(0, |buttons, &(_, button)| buttons | button)
+}
+
+fn wiimote_buttons(remote: u32, nunchuk: u32) -> u32 {
+    // Nunchuk stick emulation shares the D-pad bits; only merge its C and Z buttons.
+    buttons(
+        &WIIMOTE_BUTTONS,
+        remote | (nunchuk & (WPAD_BUTTON_C | WPAD_BUTTON_Z)),
+    )
 }
 
 fn stick(x: f32, y: f32) -> [f32; 2] {
@@ -148,8 +155,8 @@ impl Controllers {
         .then(|| unsafe { status.extension.nunchuk });
         let (held, pressed) = nunchuk.map_or((0, 0), |n| (n.hold, n.trigger));
         self.wiimotes[channel] = Wiimote {
-            held: buttons(&WIIMOTE_BUTTONS, status.hold | held),
-            pressed: buttons(&WIIMOTE_BUTTONS, status.trigger | pressed),
+            held: wiimote_buttons(status.hold, held),
+            pressed: wiimote_buttons(status.trigger, pressed),
             stick: nunchuk.map(|n| stick(n.stick.x, n.stick.y)),
             // KPAD points from -1 to 1 with y down, from the center of the screen
             pointer: (status.pos_valid > 0).then(|| {
@@ -192,6 +199,63 @@ mod tests {
     use super::*;
 
     #[test]
+    fn home_is_reserved_for_the_wii_u_system_menu() {
+        use plaatcraft_engine::client::input::Button;
+
+        let remote = Wiimote {
+            held: wiimote_buttons(WPAD_BUTTON_HOME, 0),
+            pressed: wiimote_buttons(WPAD_BUTTON_HOME, 0),
+            ..Wiimote::default()
+        };
+        for context in [Context::Play, Context::Menu, Context::Inventory] {
+            assert!(!remote.pad(context).pressed(Button::Pause));
+        }
+    }
+
+    #[test]
+    fn remote_minus_plus_one_and_two_reach_the_game_actions() {
+        use plaatcraft_engine::client::input::Button;
+
+        for (raw, action) in [
+            (0x1000, Button::Tools),
+            (0x0010, Button::Pause),
+            (0x0200, Button::Pick),
+            (0x0100, Button::Inventory),
+        ] {
+            let remote = Wiimote {
+                held: wiimote_buttons(raw, 0),
+                pressed: wiimote_buttons(raw, 0),
+                ..Wiimote::default()
+            };
+            let pad = remote.pad(Context::Play);
+            assert!(pad.held(action) && pad.pressed(action));
+        }
+    }
+
+    #[test]
+    fn nunchuk_stick_emulation_does_not_press_the_remote_dpad() {
+        for direction in [
+            WPAD_BUTTON_LEFT,
+            WPAD_BUTTON_RIGHT,
+            WPAD_BUTTON_UP,
+            WPAD_BUTTON_DOWN,
+        ] {
+            assert_eq!(wiimote_buttons(0, direction), 0);
+            assert_eq!(
+                wiimote_buttons(direction, 0),
+                buttons(&WIIMOTE_BUTTONS, direction)
+            );
+        }
+        assert_eq!(
+            wiimote_buttons(
+                WPAD_BUTTON_A,
+                WPAD_BUTTON_C | WPAD_BUTTON_Z | WPAD_BUTTON_LEFT
+            ),
+            Wiimote::A | Wiimote::C | Wiimote::Z
+        );
+    }
+
+    #[test]
     fn gamepad_is_player_one_and_the_four_remotes_are_players_two_to_five() {
         let mut controllers = Controllers {
             size: [640.0, 480.0],
@@ -215,7 +279,7 @@ mod tests {
         assert_eq!(controllers.cursor_index(0), None);
         for player in 1..=4 {
             assert_eq!(
-                controllers.read_player(player, Context::Play).walk,
+                controllers.read_player(player, Context::Play).look,
                 [0.0, player as f32 / 5.0]
             );
             assert_eq!(controllers.cursor_index(player), Some(player - 1));

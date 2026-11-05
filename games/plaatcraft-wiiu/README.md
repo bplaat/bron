@@ -46,27 +46,39 @@ overlays. In split-screen, the TV shows only the other players: a full-screen vi
 horizontal halves for 3, and a two-by-two grid for 4-5. In single-player, the TV also shows
 player 1. Player 1 uses the GamePad, with controls
 like Minecraft: Wii U Edition. Additional local players use Wii Remotes with Nunchuks, with
-the same controls as on the Wii:
+the same [controls as on the Wii](../plaatcraft-wii/README.md#controls): the Nunchuk looks
+around, the D-pad moves forward/backward and selects hotbar slots, B breaks, and A places.
+C jumps, Z sneaks or flies down, 1 picks a block, 2 opens inventory, Minus opens tools, and
+Plus pauses. HOME opens the Wii U system menu. No sensor bar is needed for looking.
 
-| GamePad      | Action                                |
-| ------------ | ------------------------------------- |
-| Left stick   | Walk, click it to run or fly faster   |
-| Right stick  | Look around                           |
-| ZL / ZR      | Break/place a block; hold to repeat   |
-| A            | Jump, swim, fly up; double tap to fly |
-| B            | Sneak or fly down                     |
-| L / R, D-pad | Select a hotbar slot, or touch it     |
-| X            | Full inventory                        |
-| Y            | Pick the targeted block               |
-| Minus        | Build tools, day/night, and chat      |
-| +            | Pause menu                            |
+GamePad controls, ordered by button name:
+
+| GamePad          | Action                                |
+| ---------------- | ------------------------------------- |
+| A                | Jump, swim, fly up; double tap to fly |
+| B                | Sneak or fly down                     |
+| D-pad left/right | Previous/next hotbar slot             |
+| L / R            | Previous/next hotbar slot             |
+| Left stick       | Walk, click it to run or fly faster   |
+| Minus (-)        | Build tools, day/night, and chat      |
+| Plus (+)         | Pause menu                            |
+| Right stick      | Look around                           |
+| Touch screen     | Select a hotbar slot or menu item     |
+| X                | Full inventory                        |
+| Y                | Pick the targeted block               |
+| ZL               | Break a block; hold to repeat         |
+| ZR               | Place a block; hold to repeat         |
 
 The menus and the inventory are touched on the GamePad, or moved through with the D-pad, A
-presses and B goes back. Text fields have an on-screen keyboard where B erases and + finishes.
+presses and B goes back. D-pad navigation wraps from the first item to the last and back.
+Text fields have an on-screen keyboard where B erases and + finishes.
 
 For split-screen, pause a Local Play world and choose 2-5 players. Player 1 uses the GamePad;
-the others use Wii Remotes 1-4 with Nunchuks, managed through HOME. Menus and inventory are
-full-screen and controlled by player 1.
+the others use Wii Remotes 1-4 with Nunchuks, managed through HOME. Inventory, build tools,
+and chat input stay in each player's view and are controlled by that player. Main and pause
+menus are global and controlled by player 1. Every connected Remote shows its cursor in
+global menus, even before split-screen is enabled. Each player's inventory changes their
+own hotbar.
 
 ## How it works
 

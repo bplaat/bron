@@ -44,33 +44,42 @@ leaving a world, because SD card writes are slow.
 
 ## Controls
 
-Hold the Wii Remote with the Nunchuk attached:
+Hold the Wii Remote with the Nunchuk attached. Controls are ordered by button name:
 
-| Button           | Action                                |
-| ---------------- | ------------------------------------- |
-| Nunchuk stick    | Walk forward/back and turn left/right |
-| D-pad up/down    | Look up/down                          |
-| D-pad left/right | Select a hotbar slot                  |
-| A / B            | Place/break a block; hold to repeat   |
-| C                | Jump, swim, fly up; double tap to fly |
-| Z                | Sneak or fly down                     |
-| 2                | Fly faster, push the stick far to run |
-| Minus            | Full inventory                        |
-| Z + Minus        | Pick the targeted block               |
-| 1                | Build tools, day/night, and chat      |
-| + / Home         | Pause menu                            |
+| Button           | Action                                  |
+| ---------------- | --------------------------------------- |
+| 1                | Pick the targeted block                 |
+| 2                | Open/close inventory                    |
+| A                | Place a block; hold to repeat           |
+| B                | Break a block; hold to repeat           |
+| C                | Jump, swim, fly up; double tap to fly   |
+| D-pad left/right | Previous/next hotbar slot               |
+| D-pad up/down    | Move forward/backward                   |
+| Home             | Pause menu on Wii; system menu on Wii U |
+| Minus (-)        | Build tools, day/night, and chat        |
+| Nunchuk stick    | Look left/right/up/down                 |
+| Plus (+)         | Pause menu                              |
+| Z                | Sneak or fly down                       |
+
+The Nunchuk looks around and the D-pad moves forward/backward. Camera control needs no
+sensor bar or motion tracking. Pointing is optional for menu cursors; the D-pad can navigate
+all menus. In the inventory, Z/C selects the previous/next hotbar slot.
 
 The menus are the desktop game's: the title screen over the turning default world with Local
 Play, Online Play and Settings, the world list, the LAN world list, and the pause menu.
-Point with the Wii Remote or move with the D-pad, A presses and B goes back, text fields
-have an on-screen keyboard where B erases and + finishes. In the inventory, the D-pad browses
-the blocks, A assigns a block to the selected hotbar slot, C/Z changes the slot, and B or
-Minus closes it. The on-screen keyboard accepts commands and chat. Build tools provide `/pos1`, `/pos2`,
+Point with the Wii Remote or move with the D-pad, A presses and B goes back. D-pad navigation
+wraps from the first item to the last and back. Text fields have an on-screen keyboard where
+B erases and + finishes. In the inventory, the D-pad browses
+the blocks, A assigns a block to the selected hotbar slot, Z/C changes the slot, and B or
+2 closes it. The on-screen keyboard accepts commands and chat. Build tools provide `/pos1`, `/pos2`,
 `/fill`, `/clear`, and `/undo` without typing. A selection holds up to 32768 blocks;
 undo remembers up to 32 changes within a 65536-block memory budget.
 
 For split-screen, pause a Local Play world and choose 2-4 players, each with a Wii Remote
-and Nunchuk. Menus and inventory are full-screen and controlled by player 1.
+and Nunchuk. Inventory, build tools, and chat input stay in each player's view and are
+controlled by that player. Main and pause menus are global and controlled by player 1;
+all connected Remotes show their cursors, even before split-screen is enabled.
+Each player's inventory changes their own hotbar.
 
 ## How it works
 

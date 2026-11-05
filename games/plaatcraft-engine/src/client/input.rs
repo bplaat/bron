@@ -73,7 +73,9 @@ impl Button {
 pub struct Pad {
     held: u32,
     pressed: u32,
-    /// Walking, x to the right and y forward, from -1.0 to 1.0.
+    /// Digital movement, x to the right and y forward, from -1.0 to 1.0.
+    pub direction: [f32; 2],
+    /// Analog walking, x to the right and y forward, from -1.0 to 1.0.
     pub walk: [f32; 2],
     /// Turning, x to the right and y up, from -1.0 to 1.0.
     pub look: [f32; 2],
@@ -107,6 +109,7 @@ impl Pad {
         Self {
             held: self.held | other.held,
             pressed: self.pressed | other.pressed,
+            direction: add(self.direction, other.direction),
             walk: add(self.walk, other.walk),
             look: add(self.look, other.look),
             pointer: self.pointer.or(other.pointer),
@@ -123,18 +126,19 @@ const fn or((a, b): (bool, bool), (c, d): (bool, bool)) -> (bool, bool) {
     (a || c, b || d)
 }
 
-/// A Wii Remote with a Nunchuk: the Nunchuk stick walks and turns, D-pad up and down look up
-/// and down and D-pad left and right select a hotbar slot. A places and B breaks blocks, C
-/// jumps and double tapping it flies, Z sneaks, 2 runs or flies faster, Minus opens the
-/// inventory, Z and Minus picks a block, 1 opens the build tools and + or Home the menu,
-/// where the pointer or the D-pad with A choose a button and B goes back.
+/// A Wii Remote with a Nunchuk: the stick looks around, D-pad up and down move forward
+/// and backward, and left and right select a hotbar slot. B breaks and A places blocks,
+/// C jumps and double tapping it flies, Z sneaks or flies down, 1 picks a block, 2 opens
+/// the inventory, Minus opens the build tools and + opens the pause menu. The Wii also
+/// maps Home to pause; the Wii U reserves it for the system menu. In menus the pointer or
+/// D-pad selects a button, A presses and B goes back.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Wiimote {
     /// The held buttons, of the masks of this type.
     pub held: u32,
     /// The buttons pressed since the last read.
     pub pressed: u32,
-    /// The Nunchuk stick, x to the right and y forward, `None` without a Nunchuk.
+    /// The Nunchuk stick, x looks right and y looks up, `None` without a Nunchuk.
     pub stick: Option<[f32; 2]>,
     /// Where the remote points on the 2D screen space, and its roll in degrees.
     pub pointer: Option<[f32; 3]>,
@@ -186,35 +190,25 @@ impl Wiimote {
                 pad.set(Button::Back, button(Self::B));
                 pad.set(Button::Confirm, button(Self::PLUS));
                 if context == Context::Inventory {
-                    pad.set(Button::Back, button(Self::MINUS));
+                    pad.set(Button::Back, button(Self::TWO));
                     pad.set(Button::Previous, button(Self::Z));
                     pad.set(Button::Next, button(Self::C));
                 }
             }
             Context::Play => {
-                let picking = self.held & Self::Z != 0;
-                let [x, y] = self.stick.unwrap_or_default();
-                pad.walk = [0.0, y];
-                let pitch = f32::from(u8::from(self.held & Self::UP != 0))
+                pad.look = self.stick.unwrap_or_default();
+                let forward = f32::from(u8::from(self.held & Self::UP != 0))
                     - f32::from(u8::from(self.held & Self::DOWN != 0));
-                pad.look = [x, pitch];
-                pad.set(Button::Place, button(Self::A));
+                pad.direction = [0.0, forward];
                 pad.set(Button::Break, button(Self::B));
+                pad.set(Button::Place, button(Self::A));
                 pad.set(Button::Jump, button(Self::C));
                 pad.set(Button::Sneak, button(Self::Z));
-                pad.set(Button::Fast, button(Self::TWO));
-                pad.set(Button::Tools, button(Self::ONE));
+                pad.set(Button::Pick, button(Self::ONE));
+                pad.set(Button::Inventory, button(Self::TWO));
+                pad.set(Button::Tools, button(Self::MINUS));
                 pad.set(Button::Previous, button(Self::LEFT));
                 pad.set(Button::Next, button(Self::RIGHT));
-                let minus = button(Self::MINUS);
-                pad.set(
-                    if picking {
-                        Button::Pick
-                    } else {
-                        Button::Inventory
-                    },
-                    minus,
-                );
             }
         }
         pad
@@ -323,19 +317,116 @@ mod tests {
     use super::*;
 
     #[test]
-    fn wiimote_minus_opens_inventory_or_picks_with_z() {
-        let minus = Wiimote {
-            held: Wiimote::MINUS,
-            pressed: Wiimote::MINUS,
+    fn wiimote_stick_looks_and_dpad_moves_without_ir_tracking() {
+        for [x, y] in [[-1.0, 0.0], [1.0, 0.0], [0.0, -1.0], [0.0, 1.0]] {
+            for (button, forward) in [
+                (0, 0.0),
+                (Wiimote::UP, 1.0),
+                (Wiimote::DOWN, -1.0),
+                (Wiimote::UP | Wiimote::DOWN, 0.0),
+            ] {
+                let mut remote = Wiimote {
+                    stick: Some([x, y]),
+                    held: button,
+                    ..Wiimote::default()
+                };
+                let pad = remote.pad(Context::Play);
+                assert_eq!(pad.look, [x, y]);
+                assert_eq!(pad.direction, [0.0, forward]);
+                assert_eq!(pad.walk, [0.0; 2]);
+                remote.pointer = Some([0.0, 480.0, 90.0]);
+                assert_eq!(remote.pad(Context::Play).look, [x, y]);
+                for context in [Context::Menu, Context::Inventory] {
+                    let pad = remote.pad(context);
+                    assert_eq!(pad.look, [0.0; 2]);
+                    assert_eq!(pad.walk, [0.0; 2]);
+                    assert_eq!(pad.direction, [0.0; 2]);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn wiimote_buttons_match_the_nunchuk_look_scheme() {
+        for (button, action) in [
+            (Wiimote::ONE, Button::Pick),
+            (Wiimote::TWO, Button::Inventory),
+            (Wiimote::A, Button::Place),
+            (Wiimote::B, Button::Break),
+            (Wiimote::C, Button::Jump),
+            (Wiimote::Z, Button::Sneak),
+            (Wiimote::LEFT, Button::Previous),
+            (Wiimote::RIGHT, Button::Next),
+            (Wiimote::MINUS, Button::Tools),
+            (Wiimote::PLUS, Button::Pause),
+            (Wiimote::HOME, Button::Pause),
+        ] {
+            let pad = Wiimote {
+                held: button,
+                pressed: button,
+                ..Wiimote::default()
+            }
+            .pad(Context::Play);
+            assert!(pad.held(action) && pad.pressed(action));
+        }
+        let pad = Wiimote {
+            held: Wiimote::C | Wiimote::Z,
+            pressed: Wiimote::C | Wiimote::Z,
             ..Wiimote::default()
-        };
-        assert!(minus.pad(Context::Play).pressed(Button::Inventory));
-        let pick = Wiimote {
-            held: Wiimote::MINUS | Wiimote::Z,
-            ..minus
-        };
-        let pad = pick.pad(Context::Play);
-        assert!(pad.pressed(Button::Pick) && !pad.pressed(Button::Inventory));
+        }
+        .pad(Context::Play);
+        assert!(pad.pressed(Button::Jump) && pad.pressed(Button::Sneak));
+        assert!(!pad.pressed(Button::Pick));
+    }
+
+    #[test]
+    fn wiimote_inventory_keeps_dpad_a_b_and_slot_controls_and_closes_with_two() {
+        for (button, action) in [
+            (Wiimote::UP, Button::Up),
+            (Wiimote::DOWN, Button::Down),
+            (Wiimote::LEFT, Button::Left),
+            (Wiimote::RIGHT, Button::Right),
+            (Wiimote::A, Button::Select),
+            (Wiimote::B, Button::Back),
+            (Wiimote::TWO, Button::Back),
+            (Wiimote::Z, Button::Previous),
+            (Wiimote::C, Button::Next),
+        ] {
+            let pad = Wiimote {
+                pressed: button,
+                ..Wiimote::default()
+            }
+            .pad(Context::Inventory);
+            assert!(pad.pressed(action));
+        }
+    }
+
+    #[test]
+    fn gamepad_keeps_analog_movement_look_and_its_existing_buttons() {
+        for (button, action) in [
+            (Gamepad::A, Button::Jump),
+            (Gamepad::B, Button::Sneak),
+            (Gamepad::ZL, Button::Break),
+            (Gamepad::ZR, Button::Place),
+            (Gamepad::X, Button::Inventory),
+            (Gamepad::Y, Button::Pick),
+            (Gamepad::MINUS, Button::Tools),
+            (Gamepad::PLUS, Button::Pause),
+            (Gamepad::STICK_L, Button::Fast),
+        ] {
+            let pad = Gamepad {
+                left: [0.4, 0.6],
+                right: [-0.2, 0.3],
+                held: button,
+                pressed: button,
+                ..Gamepad::default()
+            }
+            .pad(Context::Play);
+            assert_eq!(pad.walk, [0.4, 0.6]);
+            assert_eq!(pad.direction, [0.0; 2]);
+            assert_eq!(pad.look, [-0.2, 0.3]);
+            assert!(pad.held(action) && pad.pressed(action));
+        }
     }
 
     #[test]
@@ -360,12 +451,13 @@ mod tests {
             ..Gamepad::default()
         };
         let wiimote = Wiimote {
-            held: Wiimote::B,
+            held: Wiimote::B | Wiimote::UP,
             stick: Some([0.0, 0.75]),
             ..Wiimote::default()
         };
         let pad = gamepad.pad(Context::Play).merge(wiimote.pad(Context::Play));
         assert!(pad.held(Button::Jump) && pad.held(Button::Break));
-        assert_eq!(pad.walk, [0.75, 1.0]);
+        assert_eq!(pad.walk, [0.75, 0.5]);
+        assert_eq!(pad.direction, [0.0, 1.0]);
     }
 }

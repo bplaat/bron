@@ -56,8 +56,9 @@ impl Platform for Wii {
         confirm: "+",
         open: "Press A on a world",
         controls: &[
-            "+ pause - Stick walk - D-pad look and slot - A place - B break",
-            "C jump - Z sneak - Minus blocks - Z+Minus pick - 1 tools",
+            "Stick look - D-pad up/down move - D-pad left/right slot",
+            "A place - B break - C jump - Z sneak/down",
+            "1 pick - 2 blocks - Minus tools - +/HOME pause",
         ],
     };
     // Less fluid flows than on computers, the Wii has less time per frame
@@ -67,7 +68,7 @@ impl Platform for Wii {
     };
     const RENDER_DISTANCE: i64 = 8;
     const MAX_GUESTS: usize = 3;
-    const INVENTORY_HELP: &'static str = "A assign - C/Z slot - B close";
+    const INVENTORY_HELP: &'static str = "A assign - Z/C slot - B/2 close";
 
     fn spawn(thread: Thread, entry: Box<dyn FnOnce() + Send>) {
         system::spawn(thread, entry);
