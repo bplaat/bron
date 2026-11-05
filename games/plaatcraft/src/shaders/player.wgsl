@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: MIT
  */
 
-// The other players: textured boxes for the head, body, arms, and legs, see the engine's avatars.
+// The other players and their selected blocks, see the engine's avatars.
 // Camera bindings match camera.rs.
 struct Camera {
     eye: vec4<f32>,
@@ -17,6 +17,17 @@ struct Camera {
 @group(0) @binding(0) var<uniform> camera: Camera;
 @group(0) @binding(1) var tiles: texture_2d_array<f32>;
 @group(0) @binding(2) var tile_sampler: sampler;
+
+struct Material {
+    tint: vec3<f32>,
+    flags: u32,
+    layers: array<u32, 8>,
+}
+struct Scene {
+    materials: array<Material, 128>,
+    chunk_origins: array<vec4<f32>>,
+}
+@group(0) @binding(3) var<storage, read> scene: Scene;
 
 struct VertexOutput {
     @builtin(position) position: vec4<f32>,
@@ -50,7 +61,26 @@ fn vs_player(
 
     // The sprites are side views facing left, so the front is the left edge.
     let uv_inset = vec2(0.5 / 128.0);
-    let uv = clamp(vec2(1.0 - corner.z, 1.0 - corner.y), uv_inset, 1.0 - uv_inset);
+    var uv = clamp(vec2(1.0 - corner.z, 1.0 - corner.y), uv_inset, 1.0 - uv_inset);
+    var layer = i32(rotation.z);
+    var tint = vec3(1.0);
+    if rotation.z < 0.0 {
+        let encoded = u32(-rotation.z - 1.0);
+        let material = scene.materials[encoded % 128u];
+        let bits = material.flags >> (17u + (encoded / 128u) * 6u);
+        let low = vec3(f32(bits & 1u), f32((bits >> 1u) & 1u), f32((bits >> 2u) & 1u)) * 0.5;
+        let high = 1.0 - vec3(f32((bits >> 3u) & 1u), f32((bits >> 4u) & 1u), f32((bits >> 5u) & 1u)) * 0.5;
+        let point = mix(low, high, corner);
+        uv = vec2(point.x, 1.0 - point.y);
+        if face < 2u { uv = vec2(point.z, 1.0 - point.y); }
+        if face == 2u || face == 3u { uv = point.xz; }
+        layer = i32(material.layers[face]);
+        if (material.flags & 1u) != 0u {
+            uv = vec2(corner.x, 1.0 - corner.y);
+            layer = i32(material.layers[6]);
+        }
+        tint = material.tint;
+    }
 
     // Pitch turns around the sideways axis, positive raises the front, then yaw turns
     // around the up axis like the camera.
@@ -71,10 +101,10 @@ fn vs_player(
         dot(relative, camera.up.xyz) * camera.up.w, far * (depth - near) / (far - near), depth);
     out.world = p;
     out.uv = uv;
-    out.layer = i32(rotation.z);
+    out.layer = layer;
     let face_light = array(0.8, 0.8, 1.0, 0.5, 0.65, 0.65)[face];
     let daylight = vec3(0.85, 0.92, 1.0) * camera.environment.z;
-    out.illumination = max(vec3(0.06), daylight) * face_light;
+    out.illumination = max(vec3(0.06), daylight) * face_light * tint;
     return out;
 }
 

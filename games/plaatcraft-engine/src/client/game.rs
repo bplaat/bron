@@ -1786,6 +1786,54 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn console_players_draw_selected_blocks_with_their_material_textures() {
+        let mut gpu = Device {
+            viewports: alloc::vec![[0.0, 0.0, 1.0, 1.0]],
+            projections: alloc::vec![[640.0, 480.0]],
+            ..Device::default()
+        };
+        let renderer = Renderer::new([640.0, 480.0], 8);
+        let camera = Camera::default();
+        let view = camera.view(640, 480, 8);
+        let mut others = Others::default();
+        for &(material, _) in world::MATERIALS {
+            others.update(alloc::vec![PlayerInfo {
+                id: 1,
+                name: "Guest".into(),
+                pose: crate::protocol::Pose::default(),
+                held: material,
+            }]);
+            gpu.draws.clear();
+            renderer.draw_players(&mut gpu, &view, camera.chunk(), &others);
+            let tiles: Vec<_> = gpu
+                .draws
+                .iter()
+                .filter_map(|draw| match draw.texture {
+                    Texture::Tile(tile) => Some(tile),
+                    _ => None,
+                })
+                .collect();
+            let expected: Vec<_> = if world::is_sprite(material) {
+                alloc::vec![crate::tiles::tile(material, 6)]
+            } else {
+                (0..world::boxes(material).len().max(1))
+                    .flat_map(|_| (0..6).map(|face| crate::tiles::tile(material, face)))
+                    .collect()
+            };
+            assert_eq!(tiles, expected, "{material}");
+            assert!(
+                gpu.draws
+                    .iter()
+                    .flat_map(|draw| &draw.vertices)
+                    .all(|vertex| {
+                        vertex.position.iter().all(|v| v.is_finite())
+                            && vertex.uv.iter().all(|v| (0.0..=1.0).contains(v))
+                    })
+            );
+        }
+    }
+
+    #[test]
     fn wii_u_supports_five_players_with_four_existing_cursor_images() {
         let mut game = game_for::<5>();
         game.set_local_players(5);
@@ -1845,6 +1893,11 @@ pub(crate) mod tests {
         }
         game.serve(|server, world| server.tick(world));
         assert_eq!(game.player.hotbar, host);
+        assert_eq!(game.player.players.len(), 3);
+        for (other, local) in game.player.players.iter().zip(&game.locals) {
+            assert_eq!(other.id, local.id);
+            assert_eq!(other.held, local.hotbar.material());
+        }
         assert!(!game.player.camera.flying);
         for player in &game.locals {
             assert!(player.camera.flying);

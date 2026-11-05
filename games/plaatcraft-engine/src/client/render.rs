@@ -391,26 +391,53 @@ impl Renderer {
                 [sy, cy * sp, -cy * cp, v[2]],
             ];
             gpu.model_view(&concat(&base, &model));
+            let held = (v[5] < 0.0).then(|| {
+                let encoded = (-v[5] - 1.0) as usize;
+                ((encoded % 128) as u8, encoded / 128)
+            });
             for (index, face) in BOX_FACES.into_iter().enumerate() {
+                if held.is_some_and(|(material, _)| world::is_sprite(material)) && index != 4 {
+                    continue;
+                }
                 let positions = face.map(|p| core::array::from_fn(|a| v[9 + a] + p[a] * v[6 + a]));
                 let inset = 0.5 / 128.0;
-                let uvs = face.map(|p| {
+                let mut uvs = face.map(|p| {
                     [
                         (1.0 - p[2]).clamp(inset, 1.0 - inset),
                         (1.0 - p[1]).clamp(inset, 1.0 - inset),
                     ]
                 });
-                let color =
-                    rgba(encode_rgb(daylight.map(|value| {
-                        value * [0.8, 0.8, 1.0, 0.5, 0.65, 0.65][index]
-                    })));
-                quad(
-                    gpu,
-                    Texture::Character(v[5] as usize),
-                    positions,
-                    uvs,
-                    color,
-                );
+                let mut tint = [1.0; 3];
+                let texture = if let Some((material, box_index)) = held {
+                    let sprite = world::is_sprite(material);
+                    let bounds = world::boxes(material)
+                        .get(box_index)
+                        .copied()
+                        .unwrap_or([[0.0; 3], [1.0; 3]]);
+                    uvs = face.map(|corner| {
+                        let p: [f32; 3] = core::array::from_fn(|a| {
+                            (bounds[0][a] + (bounds[1][a] - bounds[0][a]) * f64::from(corner[a]))
+                                as f32
+                        });
+                        if sprite {
+                            [corner[0], 1.0 - corner[1]]
+                        } else if index < 2 {
+                            [p[2], 1.0 - p[1]]
+                        } else if index < 4 {
+                            [p[0], p[2]]
+                        } else {
+                            [p[0], 1.0 - p[1]]
+                        }
+                    });
+                    tint = world::look(material).map_or(tint, |look| look.tint);
+                    Texture::Tile(tiles::tile(material, if sprite { 6 } else { index as u32 }))
+                } else {
+                    Texture::Character(v[5] as usize)
+                };
+                let color = rgba(encode_rgb(core::array::from_fn(|a| {
+                    daylight[a] * tint[a] * [0.8, 0.8, 1.0, 0.5, 0.65, 0.65][index]
+                })));
+                quad(gpu, texture, positions, uvs, color);
             }
         }
     }

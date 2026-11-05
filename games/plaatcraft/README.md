@@ -36,7 +36,8 @@ cargo bundle --path games/plaatcraft --android --run
 Pause a world and choose **Open to LAN**, other players on the network then find it in
 **Multi Player**, or join by address with **Direct Connect**, like `192.168.1.5`. Guests
 continue where they left the world. It uses TCP and UDP port 47820 and UDP port 47821 for
-finding worlds.
+finding worlds. Players carry their selected hotbar block, including in Wii and Wii U
+split-screen. All players need a matching game protocol version.
 
 ## Controls
 

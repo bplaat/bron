@@ -627,6 +627,7 @@ impl Server {
                     .map(|(&other, client)| PlayerInfo {
                         id: other,
                         name: client.name.clone(),
+                        held: client.hotbar.material(),
                         pose: Pose {
                             position: client.body.position,
                             yaw: client.body.yaw,
@@ -760,6 +761,33 @@ mod tests {
         }
         fn save_fluids(&mut self, _: &[[i64; 3]]) -> Result<(), String> {
             Ok(())
+        }
+    }
+
+    #[test]
+    fn player_states_show_the_selected_hotbar_material() {
+        let mut world = TestWorld::default();
+        let mut server = Server::new(&mut world, Limits::default(), &[]);
+        let host = server.join(&mut world, None, "Host").unwrap();
+        let guest = server.join(&mut world, None, "Guest").unwrap();
+        let mut hotbar = Hotbar::default();
+        for material in [world::WATER, 85, 90, 6] {
+            hotbar.pick(material);
+            server.request(&mut world, host.id, Request::Hotbar(hotbar));
+            server.tick(&mut world);
+            let others = server
+                .outgoing()
+                .into_iter()
+                .find_map(|outgoing| match outgoing {
+                    Outgoing::To(id, Response::State { others, .. }) if id == guest.id => {
+                        Some(others)
+                    }
+                    _ => None,
+                })
+                .unwrap();
+            assert_eq!(others.len(), 1);
+            assert_eq!(others[0].id, host.id);
+            assert_eq!(others[0].held, material);
         }
     }
 

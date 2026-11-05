@@ -19,7 +19,7 @@ use crate::camera::View;
 #[cfg(not(feature = "std"))]
 use crate::math::Float;
 use crate::protocol::{ClientId, MAX_PLAYERS, PlayerInfo, Pose};
-use crate::world::{CHUNK_SIZE, Coord};
+use crate::world::{self, Bounds, CHUNK_SIZE, Coord};
 
 /// The body parts, in the order of their sprites.
 pub const PARTS: [&str; 4] = ["head", "body", "arm", "leg"];
@@ -29,8 +29,13 @@ const SPRITES: [[f32; 2]; PARTS.len()] = [[64.0, 64.0], [44.0, 59.0], [28.0, 66.
 const PIXEL: f32 = 0.01;
 // The eye above the feet, as in the engine's physics.
 const EYE_HEIGHT: f64 = 1.7;
-const BOXES: usize = 6;
-/// The size of a box instance: pivot, yaw, pitch, texture layer, size, and offset.
+const BODY_BOXES: usize = 6;
+const BOXES: usize = BODY_BOXES + 2;
+// The held block is smaller than a world block and follows the right arm.
+const HELD_SIZE: f32 = 0.36;
+const FULL: &[Bounds] = &[[[0.0; 3], [1.0; 3]]];
+/// The size of a box instance: pivot, yaw, pitch, texture, size, and offset.
+/// Character textures use their array layer. Held blocks use -(1 + material + box_index * 128).
 pub const INSTANCE_BYTES: u64 = 12 * 4;
 /// The most box instances, of all players.
 pub const MAX_INSTANCES: usize = MAX_PLAYERS * BOXES;
@@ -42,6 +47,7 @@ struct Other {
     name: String,
     pose: Pose,
     target: Pose,
+    held: u8,
     // The walk cycle and how far the limbs swing.
     phase: f32,
     stride: f32,
@@ -68,11 +74,13 @@ impl Others {
                 name: String::new(),
                 pose: player.pose,
                 target: player.pose,
+                held: player.held,
                 phase: 0.0,
                 stride: 0.0,
             });
             other.name = player.name;
             other.target = player.pose;
+            other.held = player.held;
         }
     }
 
@@ -104,7 +112,12 @@ impl Others {
         let mut bytes = Vec::with_capacity(self.players.len() * BOXES * INSTANCE_BYTES as usize);
         for other in self.players.values().take(MAX_PLAYERS) {
             for part in other.boxes() {
-                let layer = first_layer + part.sprite as u32;
+                let texture = match part.texture {
+                    Texture::Character(sprite) => (first_layer + sprite as u32) as f32,
+                    Texture::Block(material, index) => {
+                        -(1.0 + f32::from(material) + index as f32 * 128.0)
+                    }
+                };
                 let feet = [
                     (other.pose.position[0] - (center.0 * CHUNK_SIZE as i64) as f64) as f32,
                     (other.pose.position[1] - EYE_HEIGHT) as f32,
@@ -118,7 +131,7 @@ impl Others {
                 ];
                 let values = pivot
                     .into_iter()
-                    .chain([other.pose.yaw, part.pitch, layer as f32])
+                    .chain([other.pose.yaw, part.pitch, texture])
                     .chain(part.size)
                     .chain(part.offset);
                 for value in values {
@@ -146,8 +159,13 @@ impl Others {
     }
 }
 
+enum Texture {
+    Character(usize),
+    Block(u8, usize),
+}
+
 struct Part {
-    sprite: usize,
+    texture: Texture,
     // The rotation point, sideways and up from the feet.
     pivot: [f32; 2],
     pitch: f32,
@@ -168,7 +186,7 @@ fn height() -> f32 {
 }
 
 impl Other {
-    fn boxes(&self) -> [Part; BOXES] {
+    fn boxes(&self) -> impl Iterator<Item = Part> + '_ {
         let [head, body, arm, leg] = sizes();
         let width = leg[0] * 2.0;
         let swing = self.phase.sin() * 0.8 * self.stride;
@@ -177,32 +195,56 @@ impl Other {
         let shoulder = neck - arm[0] / 2.0;
         let hanging =
             |sprite: usize, [depth, height]: [f32; 2], side: f32, y: f32, pitch: f32| Part {
-                sprite,
+                texture: Texture::Character(sprite),
                 pivot: [side, y],
                 pitch,
                 size: [depth, height, depth],
                 offset: [-depth / 2.0, -height, -depth / 2.0],
             };
-        [
+        let held_pitch = 0.5 + self.pose.pitch.clamp(-1.2, 1.2) * 0.3 + swing * 0.35;
+        let parts = [
             Part {
-                sprite: 0,
+                texture: Texture::Character(0),
                 pivot: [0.0, neck],
                 pitch: self.pose.pitch.clamp(-1.2, 1.2),
                 size: [head[0].min(head[1]), head[1], head[0]],
                 offset: [-head[0].min(head[1]) / 2.0, 0.0, -head[0] / 2.0],
             },
             Part {
-                sprite: 1,
+                texture: Texture::Character(1),
                 pivot: [0.0, hip],
                 pitch: 0.0,
                 size: [width, body[1], body[0]],
                 offset: [-width / 2.0, 0.0, -body[0] / 2.0],
             },
             hanging(2, arm, -(width + arm[0]) / 2.0, shoulder, -swing),
-            hanging(2, arm, (width + arm[0]) / 2.0, shoulder, swing),
+            hanging(2, arm, (width + arm[0]) / 2.0, shoulder, held_pitch),
             hanging(3, leg, -leg[0] / 2.0, hip, swing),
             hanging(3, leg, leg[0] / 2.0, hip, -swing),
-        ]
+        ];
+        let boxes = world::boxes(self.held);
+        parts.into_iter().chain(
+            if boxes.is_empty() { FULL } else { boxes }
+                .iter()
+                .enumerate()
+                .map(move |(index, bounds)| {
+                    let mut bounds = bounds.map(|corner| corner.map(|v| v as f32));
+                    if world::is_sprite(self.held) {
+                        bounds[0][2] = 0.5;
+                        bounds[1][2] = 0.5;
+                    }
+                    Part {
+                        texture: Texture::Block(self.held, index),
+                        pivot: [(width + arm[0]) / 2.0, shoulder],
+                        pitch: held_pitch,
+                        size: core::array::from_fn(|a| (bounds[1][a] - bounds[0][a]) * HELD_SIZE),
+                        offset: core::array::from_fn(|a| {
+                            [-HELD_SIZE / 2.0, -arm[1] - HELD_SIZE / 2.0 + 0.04, 0.06][a]
+                                + bounds[0][a] * HELD_SIZE
+                        }),
+                    }
+                }),
+        )
     }
 }
 
@@ -215,6 +257,7 @@ mod tests {
         PlayerInfo {
             id,
             name: format!("Player {id}"),
+            held: 1,
             pose: Pose {
                 position: [x, 71.7, 8.0],
                 yaw: 0.0,
@@ -255,11 +298,58 @@ mod tests {
     }
 
     #[test]
+    fn selected_blocks_follow_the_right_hand_with_their_material_and_shape() {
+        let mut others = Others::default();
+        for &(material, _) in world::MATERIALS {
+            let mut player = info(1, 8.0);
+            player.held = material;
+            player.pose.pitch = 0.6;
+            others.update(vec![player]);
+            let other = others.players.get_mut(&1).unwrap();
+            other.phase = 1.0;
+            other.stride = 0.8;
+            let parts: Vec<_> = other.boxes().collect();
+            let arm = &parts[3];
+            let boxes = world::boxes(material);
+            assert_eq!(parts.len(), BODY_BOXES + boxes.len().max(1));
+            for (index, held) in parts[BODY_BOXES..].iter().enumerate() {
+                assert!(
+                    matches!(held.texture, Texture::Block(m, i) if m == material && i == index)
+                );
+                assert_eq!(held.pivot, arm.pivot);
+                assert_eq!(held.pitch, arm.pitch);
+                assert!(
+                    held.size
+                        .iter()
+                        .all(|&size| (0.0..=HELD_SIZE).contains(&size))
+                );
+                assert!((held.offset[1] + sizes()[2][1]).abs() <= HELD_SIZE);
+                if world::is_sprite(material) {
+                    assert_eq!(held.size[2], 0.0);
+                } else if let Some(bounds) = boxes.get(index) {
+                    assert_eq!(
+                        held.size,
+                        core::array::from_fn(|a| {
+                            (bounds[1][a] - bounds[0][a]) as f32 * HELD_SIZE
+                        })
+                    );
+                }
+            }
+            let bytes = others.instances((0, 0), 100);
+            assert!(bytes.len() <= BOXES * INSTANCE_BYTES as usize);
+            for (index, chunk) in bytes.as_chunks::<48>().0[BODY_BOXES..].iter().enumerate() {
+                let texture = f32::from_ne_bytes(chunk[20..24].try_into().unwrap());
+                assert_eq!(texture, -(1.0 + f32::from(material) + index as f32 * 128.0));
+            }
+        }
+    }
+
+    #[test]
     fn boxes_stand_on_the_feet_and_tags_float_above() {
         let mut others = Others::default();
         others.update(vec![info(0, 8.0)]);
         let bytes = others.instances((0, 0), 100);
-        assert_eq!(bytes.len(), BOXES * INSTANCE_BYTES as usize);
+        assert_eq!(bytes.len(), (BODY_BOXES + 1) * INSTANCE_BYTES as usize);
         let floats: Vec<_> = bytes
             .as_chunks::<4>()
             .0

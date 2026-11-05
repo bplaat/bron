@@ -628,6 +628,11 @@ mod tests {
         });
         assert_eq!((by, revision), (welcome.id, Some(welcome.revision + 1)));
 
+        // Hotbar changes go over TCP and are visible in the player's next UDP state.
+        let mut hotbar = crate::inventory::Hotbar::default();
+        hotbar.pick(90);
+        host_connection.send(Request::Hotbar(hotbar));
+
         // Inputs and states go over UDP, the guest's body follows its inputs.
         let controls = |yaw| Controls {
             yaw,
@@ -649,7 +654,9 @@ mod tests {
                 sequence, others, ..
             }) = guest.receive()
                 && sequence > 0
-                && others.first().is_some_and(|other| other.pose.yaw == 1.0)
+                && others
+                    .first()
+                    .is_some_and(|other| other.pose.yaw == 1.0 && other.held == 90)
             {
                 break (sequence, others);
             }
@@ -658,6 +665,7 @@ mod tests {
         };
         assert!(acknowledged <= sequence);
         assert_eq!(others[0].name, "Host");
+        assert_eq!(others[0].held, hotbar.material());
 
         drop(host_connection);
         let reason = wait(&mut guest, |response| match response {

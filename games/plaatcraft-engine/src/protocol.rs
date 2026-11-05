@@ -31,7 +31,7 @@ pub const MAX_BLOB_SIZE: usize = 450_000;
 pub type ClientId = u32;
 
 /// Changes whenever the messages change, clients and servers must match.
-pub const VERSION: u32 = 1;
+pub const VERSION: u32 = 2;
 /// The TCP and UDP port of an opened world, unassigned by IANA.
 pub const GAME_PORT: u16 = 47820;
 /// The UDP port LAN worlds are announced on.
@@ -349,6 +349,8 @@ pub struct PlayerInfo {
     pub name: String,
     /// Where the player is and looks.
     pub pose: Pose,
+    /// The selected hotbar material, displayed in the player's hand.
+    pub held: u8,
 }
 
 /// A world opened to the LAN.
@@ -539,6 +541,9 @@ fn validate_state(body: &Body, others: &[PlayerInfo]) -> Result<()> {
     for player in others {
         text(&player.name)?;
         player.pose.validate()?;
+        if !world::valid_material(player.held) {
+            return Err("Invalid held material".into());
+        }
     }
     Ok(())
 }
@@ -900,6 +905,7 @@ mod tests {
                 id,
                 name: format!("{id:0>MAX_NAME_LENGTH$}"),
                 pose: pose(),
+                held: Hotbar::default().material(),
             })
             .collect::<Vec<_>>();
         let state = |others: Vec<PlayerInfo>| Datagram::State {
@@ -913,6 +919,9 @@ mod tests {
             Datagram::decode(&encoded).unwrap(),
             state(players[..MAX_PLAYERS].to_vec())
         );
+        let mut invalid = players[..1].to_vec();
+        invalid[0].held = u8::MAX;
+        assert!(Datagram::decode(&state(invalid).encode()).is_err());
         let inputs = |count: u32, controls: Controls| Datagram::Inputs {
             id: 4,
             token: 5,
