@@ -50,6 +50,8 @@ mod jpeg;
 mod jpeg2000;
 #[cfg(feature = "png")]
 mod png;
+#[cfg(feature = "pnm")]
+mod pnm;
 #[cfg(feature = "qoi")]
 mod qoi;
 #[cfg(all(
@@ -94,6 +96,9 @@ pub enum Format {
     /// PNG, including APNG animations.
     #[cfg(feature = "png")]
     Png,
+    /// Netpbm PBM, PGM, PPM, or PAM.
+    #[cfg(feature = "pnm")]
+    Pnm,
     /// Quite OK Image.
     #[cfg(feature = "qoi")]
     Qoi,
@@ -123,6 +128,8 @@ impl Format {
             "j2c" | "j2k" | "jp2" | "jpc" => Some(Self::Jpeg2000),
             #[cfg(feature = "png")]
             "png" | "apng" => Some(Self::Png),
+            #[cfg(feature = "pnm")]
+            "pbm" | "pgm" | "ppm" | "pnm" | "pam" => Some(Self::Pnm),
             #[cfg(feature = "qoi")]
             "qoi" => Some(Self::Qoi),
             #[cfg(feature = "tga")]
@@ -168,6 +175,13 @@ impl Format {
             | [0xff, 0x4f, 0xff, 0x51, ..] => Some(Self::Jpeg2000),
             #[cfg(feature = "png")]
             [0x89, b'P', b'N', b'G', b'\r', b'\n', 0x1a, b'\n', ..] => Some(Self::Png),
+            #[cfg(feature = "pnm")]
+            [
+                b'P',
+                b'1'..=b'7',
+                b' ' | b'\t' | b'\r' | b'\n' | 0x0b | 0x0c,
+                ..,
+            ] => Some(Self::Pnm),
             #[cfg(feature = "qoi")]
             [b'q', b'o', b'i', b'f', ..] => Some(Self::Qoi),
             _ => None,
@@ -186,6 +200,10 @@ impl Format {
         }
         #[cfg(feature = "jpeg2000")]
         if matches!(self, Self::Jpeg2000) {
+            return false;
+        }
+        #[cfg(feature = "pnm")]
+        if matches!(self, Self::Pnm) {
             return false;
         }
         #[cfg(feature = "webp")]
@@ -345,6 +363,7 @@ impl Image {
         feature = "jpeg2000",
         feature = "png",
         feature = "qoi",
+        feature = "pnm",
         feature = "tga",
         feature = "webp"
     ))]
@@ -406,6 +425,7 @@ type Result<T> = core::result::Result<T, DecodeError>;
         feature = "jpeg2000",
         feature = "png",
         feature = "qoi",
+        feature = "pnm",
         feature = "tga",
         feature = "webp"
     )),
@@ -429,6 +449,8 @@ pub fn decode(_data: &[u8]) -> Result<Image> {
         Some(Format::Jpeg2000) => return jpeg2000::decode(_data),
         #[cfg(feature = "png")]
         Some(Format::Png) => return png::decode(_data),
+        #[cfg(feature = "pnm")]
+        Some(Format::Pnm) => return pnm::decode(_data),
         #[cfg(feature = "qoi")]
         Some(Format::Qoi) => return qoi::decode(_data),
         _ => {}
@@ -459,6 +481,7 @@ pub fn decode(_data: &[u8]) -> Result<Image> {
     feature = "jpeg2000",
     feature = "png",
     feature = "qoi",
+    feature = "pnm",
     feature = "tga",
     feature = "webp"
 ))]
@@ -474,6 +497,7 @@ const MAX_BYTES: usize = 1024 * 1024 * 1024;
     feature = "jpeg2000",
     feature = "png",
     feature = "qoi",
+    feature = "pnm",
     feature = "tga",
     feature = "webp"
 ))]
@@ -488,6 +512,7 @@ struct Budget {
     feature = "jpeg2000",
     feature = "png",
     feature = "qoi",
+    feature = "pnm",
     feature = "tga",
     feature = "webp"
 ))]
@@ -508,6 +533,7 @@ impl Budget {
         feature = "jpeg2000",
         feature = "png",
         feature = "qoi",
+        feature = "pnm",
         feature = "tga",
         feature = "webp"
     ))]

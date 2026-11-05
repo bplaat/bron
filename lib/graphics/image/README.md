@@ -1,7 +1,7 @@
 # Image
 
-Decode BMP, GIF, ICNS, ICO, JPEG, JPEG 2000, PNG/APNG, QOI, TGA, and WebP images into sRGB RGBA
-pixels. You can also encode images as BMP, GIF, JPEG, PNG/APNG, QOI, or TGA.
+Decode BMP, GIF, ICNS, ICO, JPEG, JPEG 2000, Netpbm, PNG/APNG, QOI, TGA, and WebP images into
+sRGB RGBA pixels. You can also encode images as BMP, GIF, JPEG, PNG/APNG, QOI, or TGA.
 
 ## Getting started
 
@@ -75,7 +75,10 @@ JPEG 2000 also reads palettes, component mappings, ROI coding, progression-order
 changes, and packet headers packed in the main or tile headers.
 WebP supports lossy, lossless, alpha, and animation decoding. Animation disposal
 clears frame rectangles to transparent, matching libwebp and browser playback.
-ICNS, JPEG 2000,
+Netpbm supports plain and binary PBM, PGM, and PPM (P1-P6), plus PAM (P7)
+with grayscale, RGB, and alpha tuples. Samples up to 16 bits are scaled to 8 bits;
+samples are treated as sRGB. Only the first image in a Netpbm stream is read.
+ICNS, JPEG 2000, Netpbm,
 and WebP are decode-only. TGA has no file signature, so it is
 only detected when no other format matches and its header is valid. Streaming
 is not supported. Decoding has a 1 GiB allocation budget. JPEG 2000 releases
@@ -108,7 +111,7 @@ convert samples with `srgb_to_linear`, combine them in linear light, and encode
 the result with `linear_to_srgb`.
 
 All formats are enabled by default. You can enable only the codecs you need
-with the `bmp`, `gif`, `icns`, `ico`, `jpeg`, `jpeg2000`, `png`, `qoi`, `tga`, and `webp` Cargo features.
+with the `bmp`, `gif`, `icns`, `ico`, `jpeg`, `jpeg2000`, `png`, `pnm`, `qoi`, `tga`, and `webp` Cargo features.
 All decoders are implemented in this crate. They also support `no_std` with `alloc`.
 The default `std` feature uses Rust math functions. Disable it for `no_std` with `alloc`
 and C library math (`exp`, `pow`, `round`, `roundf`, and `truncf`, depending on the codecs).

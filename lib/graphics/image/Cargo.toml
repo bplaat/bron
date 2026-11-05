@@ -22,6 +22,7 @@ default = [
     "jpeg",
     "jpeg2000",
     "png",
+    "pnm",
     "qoi",
     "tga",
     "webp",
@@ -34,6 +35,7 @@ ico = ["bmp", "png"]
 jpeg = []
 jpeg2000 = []
 png = ["dep:crc", "dep:deflate"]
+pnm = []
 qoi = []
 tga = []
 webp = []
