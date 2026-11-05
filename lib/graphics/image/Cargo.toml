@@ -24,6 +24,7 @@ default = [
     "png",
     "qoi",
     "tga",
+    "webp",
 ]
 std = []
 bmp = []
@@ -35,6 +36,7 @@ jpeg2000 = []
 png = ["dep:crc", "dep:deflate"]
 qoi = []
 tga = []
+webp = []
 
 [dependencies]
 crc = { version = "3", optional = true }

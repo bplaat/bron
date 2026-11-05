@@ -16,7 +16,7 @@ use core::time::Duration;
 
 mod math;
 
-#[cfg(feature = "jpeg")]
+#[cfg(any(feature = "jpeg", feature = "webp"))]
 mod metadata;
 
 #[cfg(feature = "gif")]
@@ -30,7 +30,7 @@ pub use encoder::{
     Compression, EncodeError, EncodeOptions, encode, encode_animation,
     encode_animation_with_options, encode_with_options,
 };
-#[cfg(feature = "jpeg")]
+#[cfg(any(feature = "jpeg", feature = "webp"))]
 pub use metadata::Orientation;
 #[cfg(feature = "jpeg")]
 pub use metadata::{copy_jpeg_exif, reorient_jpeg};
@@ -67,6 +67,8 @@ mod qoi;
 mod test_support;
 #[cfg(feature = "tga")]
 mod tga;
+#[cfg(feature = "webp")]
+mod webp;
 
 /// The encoded format detected from an image's file signature.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -98,6 +100,9 @@ pub enum Format {
     /// Truevision TGA.
     #[cfg(feature = "tga")]
     Tga,
+    /// WebP, including lossy, lossless and animated images.
+    #[cfg(feature = "webp")]
+    WebP,
 }
 
 impl Format {
@@ -122,6 +127,8 @@ impl Format {
             "qoi" => Some(Self::Qoi),
             #[cfg(feature = "tga")]
             "tga" => Some(Self::Tga),
+            #[cfg(feature = "webp")]
+            "webp" => Some(Self::WebP),
             _ => None,
         }
     }
@@ -138,6 +145,22 @@ impl Format {
             [0, 0, 1, 0, ..] => Some(Self::Ico),
             #[cfg(feature = "icns")]
             [b'i', b'c', b'n', b's', ..] => Some(Self::Icns),
+            #[cfg(feature = "webp")]
+            [
+                b'R',
+                b'I',
+                b'F',
+                b'F',
+                _,
+                _,
+                _,
+                _,
+                b'W',
+                b'E',
+                b'B',
+                b'P',
+                ..,
+            ] => Some(Self::WebP),
             #[cfg(feature = "jpeg")]
             [0xff, 0xd8, ..] => Some(Self::Jpeg),
             #[cfg(feature = "jpeg2000")]
@@ -163,6 +186,10 @@ impl Format {
         }
         #[cfg(feature = "jpeg2000")]
         if matches!(self, Self::Jpeg2000) {
+            return false;
+        }
+        #[cfg(feature = "webp")]
+        if matches!(self, Self::WebP) {
             return false;
         }
         true
@@ -319,6 +346,7 @@ impl Image {
         feature = "png",
         feature = "qoi",
         feature = "tga",
+        feature = "webp"
     ))]
     fn still(format: Format, width: u32, height: u32, pixels: Vec<u8>) -> Self {
         Self {
@@ -379,6 +407,7 @@ type Result<T> = core::result::Result<T, DecodeError>;
         feature = "png",
         feature = "qoi",
         feature = "tga",
+        feature = "webp"
     )),
     allow(clippy::missing_const_for_fn)
 )]
@@ -392,6 +421,8 @@ pub fn decode(_data: &[u8]) -> Result<Image> {
         Some(Format::Ico) => return ico::decode(_data),
         #[cfg(feature = "icns")]
         Some(Format::Icns) => return icns::decode(_data),
+        #[cfg(feature = "webp")]
+        Some(Format::WebP) => return webp::decode(_data),
         #[cfg(feature = "jpeg")]
         Some(Format::Jpeg) => return jpeg::decode(_data),
         #[cfg(feature = "jpeg2000")]
@@ -429,6 +460,7 @@ pub fn decode(_data: &[u8]) -> Result<Image> {
     feature = "png",
     feature = "qoi",
     feature = "tga",
+    feature = "webp"
 ))]
 const MAX_BYTES: usize = 1024 * 1024 * 1024;
 
@@ -443,6 +475,7 @@ const MAX_BYTES: usize = 1024 * 1024 * 1024;
     feature = "png",
     feature = "qoi",
     feature = "tga",
+    feature = "webp"
 ))]
 struct Budget {
     used: usize,
@@ -456,6 +489,7 @@ struct Budget {
     feature = "png",
     feature = "qoi",
     feature = "tga",
+    feature = "webp"
 ))]
 impl Budget {
     fn claim(&mut self, bytes: usize) -> Result<()> {
@@ -475,6 +509,7 @@ impl Budget {
         feature = "png",
         feature = "qoi",
         feature = "tga",
+        feature = "webp"
     ))]
     fn zeroed<T: Default + Clone>(&mut self, len: usize) -> Result<Vec<T>> {
         self.claim(
@@ -513,7 +548,7 @@ impl Budget {
         Ok(())
     }
 
-    #[cfg(any(feature = "gif", feature = "png"))]
+    #[cfg(any(feature = "gif", feature = "png", feature = "webp"))]
     fn frame(
         &mut self,
         frames: &mut Vec<Frame>,
@@ -545,6 +580,7 @@ impl Budget {
     feature = "jpeg2000",
     feature = "png",
     feature = "tga",
+    feature = "webp"
 ))]
 fn pixel_len(width: u32, height: u32) -> Result<usize> {
     if width == 0 || height == 0 {

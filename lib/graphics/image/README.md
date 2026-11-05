@@ -1,6 +1,6 @@
 # Image
 
-Decode BMP, GIF, ICNS, ICO, JPEG, JPEG 2000, PNG/APNG, QOI, and TGA images into sRGB RGBA
+Decode BMP, GIF, ICNS, ICO, JPEG, JPEG 2000, PNG/APNG, QOI, TGA, and WebP images into sRGB RGBA
 pixels. You can also encode images as BMP, GIF, JPEG, PNG/APNG, QOI, or TGA.
 
 ## Getting started
@@ -17,7 +17,7 @@ for frame in image.frames() {
 To write an image, create a `Bitmap` from sRGB RGBA pixels and call `encode`.
 Use `Image::encode` to save a decoded image in another format.
 
-For GIF or APNG, give `encode_animation` a list of full-size frames, their
+For APNG or GIF, give `encode_animation` a list of full-size frames, their
 display times, and a loop count. GIF supports up to 256 colors per frame and
 binary transparency. JPEG requires opaque pixels.
 
@@ -66,36 +66,32 @@ the new pixels and the thumbnail of the original is left out.
 ## Reading
 
 Animated images expose full-size frames, display times, and a loop count.
-Decoding applies JPEG orientation, reduces 16-bit PNG samples to 8 bits, and
-selects the largest image in an ICNS or ICO file. TGA has no file signature, so it is
+Decoding applies JPEG and WebP EXIF orientation, reduces 16-bit PNG samples to 8 bits, and
+selects the largest image in an ICNS or ICO file. ICNS supports JPEG 2000 and PNG
+entries and legacy RGB/ARGB entries with masks;
+palette entries are unsupported. Standalone JPEG 2000 supports JP2 containers
+and raw codestreams (`j2c`, `j2k`, and `jpc`).
+WebP supports lossy, lossless, alpha, and animation decoding. Animation disposal
+clears frame rectangles to transparent, matching libwebp and browser playback.
+ICNS, JPEG 2000,
+and WebP are decode-only. TGA has no file signature, so it is
 only detected when no other format matches and its header is valid. Streaming
-is not supported. Decoding has a cumulative 1 GiB allocation limit.
-
-TGA decoding honors declared alpha and the TGA 2.0 extension attributes type,
-including premultiplied alpha. Legacy files without declared alpha whose alpha
-bytes are all zero are treated as opaque. TGA gamma, color-correction tables,
-and other extension metadata are not interpreted.
-
-JPEG 2000 reads JP2 containers and raw codestreams (`j2c`, `j2k`, and `jpc`).
-It supports reversible and irreversible wavelets, tiles, quality layers, custom
-precincts, all five progression orders, multiple tile-parts, arithmetic bypass,
-and per-pass termination. JPEG 2000 is decode-only. Its allocation budget releases
-scratch buffers between code-blocks, resolutions, and tiles.
-
-ICNS selects the largest image and supports PNG, JPEG 2000, and legacy RGB/ARGB
-entries with masks. Palette entries and ICNS encoding are unsupported.
+is not supported. Decoding has a 1 GiB allocation budget. JPEG 2000 releases
+scratch allocations between code-blocks, resolutions, and tiles.
 
 ## Color management
 
 Decoded pixels are always sRGB. Each decoder reads the color description of
 the file and converts the pixels, clipping colors outside the sRGB gamut:
 
-| Format | Color description                                                                      |
-| ------ | -------------------------------------------------------------------------------------- |
-| BMP    | V4/V5 calibrated RGB endpoints with gamma, or an embedded ICC profile                  |
-| JPEG   | ICC profile in APP2 segments, otherwise the EXIF Adobe RGB color space                 |
-| PNG    | `cICP`, then `iCCP`, then `sRGB`, then `cHRM` and `gAMA`; 16-bit samples convert first |
-| QOI    | The linear RGB header flag                                                             |
+| Format    | Color description                                                                      |
+| --------- | -------------------------------------------------------------------------------------- |
+| BMP       | V4/V5 calibrated RGB endpoints with gamma, or an embedded ICC profile                  |
+| JPEG      | ICC profile in APP2 segments, otherwise the EXIF Adobe RGB color space                 |
+| JPEG 2000 | Embedded ICC profile; otherwise the declared gray, RGB, CMYK, or YCbCr color space     |
+| PNG       | `cICP`, then `iCCP`, then `sRGB`, then `cHRM` and `gAMA`; 16-bit samples convert first |
+| QOI       | The linear RGB header flag                                                             |
+| WebP      | Embedded ICC profile                                                                   |
 
 ICC v2 and v4 profiles for gray, RGB, and CMYK samples are supported, both
 matrix/TRC profiles and `mft1`, `mft2`, and `mAB ` lookup tables. HDR transfer
@@ -108,7 +104,8 @@ convert samples with `srgb_to_linear`, combine them in linear light, and encode
 the result with `linear_to_srgb`.
 
 All formats are enabled by default. You can enable only the codecs you need
-with the `bmp`, `gif`, `icns`, `ico`, `jpeg`, `jpeg2000`, `png`, `qoi`, and `tga` Cargo features.
+with the `bmp`, `gif`, `icns`, `ico`, `jpeg`, `jpeg2000`, `png`, `qoi`, `tga`, and `webp` Cargo features.
+All decoders are implemented in this crate. They also support `no_std` with `alloc`.
 The default `std` feature uses Rust math functions. Disable it for `no_std` with `alloc`
 and C library math (`exp`, `pow`, `round`, `roundf`, and `truncf`, depending on the codecs).
 The sRGB tables are generated at build time using host `std` math.
@@ -116,10 +113,12 @@ The sRGB tables are generated at build time using host `std` math.
 ## Tests and benchmarks
 
 Run `cargo test -p image` for tests or `cargo bench -p image --bench image` for
-benchmarks. Tests use reference images from image-rs, and synthetic TGA images
-plus ones written by macOS `sips`.
-
-JPEG 2000 fixtures and RGBA references use OpenJPEG.
+benchmarks. Tests use reference images from image-rs, synthetic ICNS and TGA images, and
+images written by macOS `sips` and `iconutil`. WebP fixtures are encoded with
+`cwebp` and `webpmux`; RGBA pixel references are decoded with `dwebp`.
+The animated ball reference stacks all frames decoded by libwebp's `WebPAnimDecoder`.
+JPEG 2000 fixtures and RGBA references use OpenJPEG; the ICC reference is a
+PNG with the same samples and color profile.
 
 ## License
 
