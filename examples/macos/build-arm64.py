@@ -147,8 +147,11 @@ def main() -> None:
     output_file = source_file.with_suffix("")
     identifier = output_file.name.encode("ascii") + b"\0"
 
-    with tempfile.TemporaryDirectory(prefix=f"{output_file.name}.") as build_dir_name:
+    with tempfile.TemporaryDirectory(
+        prefix=f"{output_file.name}.", dir=output_file.parent
+    ) as build_dir_name:
         build_dir = Path(build_dir_name)
+        executable_file = build_dir / output_file.name
         prefix_file = build_dir / f"{output_file.name}.prefix"
         signature_file = build_dir / "signature.bin"
 
@@ -165,9 +168,10 @@ def main() -> None:
             )
         )
 
-        assemble(source_file, output_file, len(identifier), signature_file)
+        assemble(source_file, executable_file, len(identifier), signature_file)
 
-    os.chmod(output_file, output_file.stat().st_mode | stat.S_IXUSR)
+        os.chmod(executable_file, executable_file.stat().st_mode | stat.S_IXUSR)
+        executable_file.replace(output_file)
 
 
 if __name__ == "__main__":

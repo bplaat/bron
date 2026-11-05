@@ -208,8 +208,11 @@ def main() -> None:
     output_file = source_file.with_suffix(".com")
     identifier = output_file.name.encode("ascii") + b"\0"
 
-    with tempfile.TemporaryDirectory(prefix=f"{output_file.stem}.") as build_dir_name:
+    with tempfile.TemporaryDirectory(
+        prefix=f"{output_file.name}.", dir=output_file.parent
+    ) as build_dir_name:
         build_dir = Path(build_dir_name)
+        executable_file = build_dir / output_file.name
         prefix_file = build_dir / "prefix.com"
         x86_64_signature_file = build_dir / "x86_64-signature.bin"
         arm64_signature_file = build_dir / "arm64-signature.bin"
@@ -243,13 +246,14 @@ def main() -> None:
 
         assemble(
             source_file,
-            output_file,
+            executable_file,
             len(identifier),
             x86_64_signature_file,
             arm64_signature_file if has_arm64 else None,
         )
 
-    os.chmod(output_file, output_file.stat().st_mode | stat.S_IXUSR)
+        os.chmod(executable_file, executable_file.stat().st_mode | stat.S_IXUSR)
+        executable_file.replace(output_file)
 
 
 if __name__ == "__main__":

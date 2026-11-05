@@ -9,6 +9,7 @@ all: $(BINARY)
 
 $(BINARY): alert.s Info.plist Entitlements.plist
 	mkdir -p "$(APP)/Contents/MacOS"
+	rm -f "$(BINARY)"
 	nasm -f bin alert.s -o "$(BINARY)"
 	chmod +x "$(BINARY)"
 	plutil -convert binary1 -o "$(APP)/Contents/Info.plist" Info.plist
