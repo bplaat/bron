@@ -207,6 +207,13 @@ impl TaskAction {
         match self {
             TaskAction::Phony(dest) => dest.clone(),
             TaskAction::Copy(src, dst) => {
+                #[cfg(target_os = "macos")]
+                if let Err(error) = fs::remove_file(dst)
+                    && error.kind() != io::ErrorKind::NotFound
+                {
+                    eprintln!("Failed to replace {dst}: {error}");
+                    exit(1);
+                }
                 fs::copy(src, dst).unwrap_or_else(|_| {
                     eprintln!("Failed to copy {src} to {dst}");
                     exit(1)
@@ -575,6 +582,36 @@ impl Executor {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn copying_a_rebuilt_executable_replaces_its_inode() {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+        let directory = env::temp_dir().join(format!("bob-copy-test-{}", std::process::id()));
+        _ = fs::remove_dir_all(&directory);
+        fs::create_dir_all(&directory).unwrap();
+        let source = directory.join("source");
+        let destination = directory.join("destination");
+        let previous = directory.join("previous");
+        fs::write(&source, b"first build").unwrap();
+        fs::set_permissions(&source, fs::Permissions::from_mode(0o755)).unwrap();
+        let action = TaskAction::Copy(
+            source.to_string_lossy().into_owned(),
+            destination.to_string_lossy().into_owned(),
+        );
+        action.execute();
+        fs::hard_link(&destination, &previous).unwrap();
+        fs::write(&source, b"second build").unwrap();
+        action.execute();
+
+        let metadata = fs::metadata(&destination).unwrap();
+        assert_ne!(metadata.ino(), fs::metadata(&previous).unwrap().ino());
+        assert_eq!(metadata.permissions().mode() & 0o777, 0o755);
+        assert_eq!(fs::read(&destination).unwrap(), b"second build");
+        assert_eq!(fs::read(&previous).unwrap(), b"first build");
+        fs::remove_dir_all(directory).unwrap();
+    }
 
     #[test]
     fn download_reuses_existing_file_while_holding_lock() {
