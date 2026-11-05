@@ -392,6 +392,8 @@ fn resample_row(source: &[[f32; 4]], row: &mut [[f32; 4]], taps: &[Vec<(usize, f
     }
 }
 
+// MARK: Tests
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -613,7 +615,15 @@ mod tests {
                 .is_err()
         );
         assert!(is_jpeg(Path::new("a.JPEG")) && !is_jpeg(Path::new("a.png")));
-        assert!(!can_save(Path::new("a.ico")));
+        for extension in ["icns", "ico", "j2c", "j2k", "jp2", "jpc", "svgz", "webp"] {
+            let path = format!("a.{extension}");
+            assert!(!can_save(Path::new(&path)));
+            assert!(
+                picture()
+                    .encode_for(Path::new(&path), DEFAULT_JPEG_QUALITY)
+                    .is_err()
+            );
+        }
         assert!(SAVE_FORMATS.is_sorted());
         assert!(
             SAVE_FORMATS

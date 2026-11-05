@@ -6,6 +6,54 @@
     <array>
         <dict>
             <key>CFBundleTypeName</key>
+            <string>Image</string>
+            <key>CFBundleTypeRole</key>
+            <string>Viewer</string>
+            <key>LSHandlerRank</key>
+            <string>Alternate</string>
+            <key>LSItemContentTypes</key>
+            <array>
+                <string>public.image</string>
+            </array>
+        </dict>
+        <dict>
+            <key>CFBundleTypeName</key>
+            <string>JPEG 2000 Image</string>
+            <key>CFBundleTypeRole</key>
+            <string>Viewer</string>
+            <key>LSHandlerRank</key>
+            <string>Alternate</string>
+            <key>LSItemContentTypes</key>
+            <array>
+                <string>public.jpeg-2000</string>
+            </array>
+        </dict>
+        <dict>
+            <key>CFBundleTypeName</key>
+            <string>SVG Image</string>
+            <key>CFBundleTypeRole</key>
+            <string>Viewer</string>
+            <key>LSHandlerRank</key>
+            <string>Default</string>
+            <key>LSItemContentTypes</key>
+            <array>
+                <string>public.svg-image</string>
+            </array>
+        </dict>
+        <dict>
+            <key>CFBundleTypeName</key>
+            <string>Apple Icon</string>
+            <key>CFBundleTypeRole</key>
+            <string>Viewer</string>
+            <key>LSHandlerRank</key>
+            <string>Alternate</string>
+            <key>LSItemContentTypes</key>
+            <array>
+                <string>com.apple.icns</string>
+            </array>
+        </dict>
+        <dict>
+            <key>CFBundleTypeName</key>
             <string>BMP Image</string>
             <key>CFBundleTypeRole</key>
             <string>Viewer</string>
@@ -14,6 +62,18 @@
             <key>LSItemContentTypes</key>
             <array>
                 <string>com.microsoft.bmp</string>
+            </array>
+        </dict>
+        <dict>
+            <key>CFBundleTypeName</key>
+            <string>TGA Image</string>
+            <key>CFBundleTypeRole</key>
+            <string>Viewer</string>
+            <key>LSHandlerRank</key>
+            <string>Alternate</string>
+            <key>LSItemContentTypes</key>
+            <array>
+                <string>com.truevision.tga-image</string>
             </array>
         </dict>
         <dict>
@@ -54,30 +114,6 @@
         </dict>
         <dict>
             <key>CFBundleTypeName</key>
-            <string>TGA Image</string>
-            <key>CFBundleTypeRole</key>
-            <string>Viewer</string>
-            <key>LSHandlerRank</key>
-            <string>Alternate</string>
-            <key>LSItemContentTypes</key>
-            <array>
-                <string>com.truevision.tga-image</string>
-            </array>
-        </dict>
-        <dict>
-            <key>CFBundleTypeName</key>
-            <string>SVG Image</string>
-            <key>CFBundleTypeRole</key>
-            <string>Viewer</string>
-            <key>LSHandlerRank</key>
-            <string>Default</string>
-            <key>LSItemContentTypes</key>
-            <array>
-                <string>public.svg-image</string>
-            </array>
-        </dict>
-        <dict>
-            <key>CFBundleTypeName</key>
             <string>TinyVG Image</string>
             <key>CFBundleTypeRole</key>
             <string>Viewer</string>
@@ -90,14 +126,14 @@
         </dict>
         <dict>
             <key>CFBundleTypeName</key>
-            <string>Image</string>
+            <string>WebP Image</string>
             <key>CFBundleTypeRole</key>
             <string>Viewer</string>
             <key>LSHandlerRank</key>
             <string>Alternate</string>
             <key>LSItemContentTypes</key>
             <array>
-                <string>public.image</string>
+                <string>org.webmproject.webp</string>
             </array>
         </dict>
     </array>

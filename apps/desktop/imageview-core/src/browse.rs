@@ -103,6 +103,8 @@ pub fn compare_names(left: &str, right: &str) -> Ordering {
     }
 }
 
+// MARK: Tests
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -139,6 +141,11 @@ mod tests {
     fn supported_extensions_ignore_case() {
         assert!(is_supported(Path::new("a/B.PNG")));
         assert!(is_supported(Path::new("drawing.tvg")));
+        assert!(is_supported(Path::new("icon.ICNS")));
+        assert!(is_supported(Path::new("picture.WEBP")));
+        assert!(is_supported(Path::new("picture.JP2")));
+        assert!(is_supported(Path::new("picture.j2k")));
+        assert!(is_supported(Path::new("drawing.SVGZ")));
         assert!(!is_supported(Path::new("notes.txt")));
         assert!(!is_supported(Path::new("png")));
     }

@@ -53,6 +53,44 @@ fn word(data: &[u8]) -> Result<usize> {
     )))
 }
 
+struct Palette {
+    columns: usize,
+    values: Vec<u8>,
+}
+
+fn palette(data: &[u8], budget: &mut Budget) -> Result<Palette> {
+    let mut r = Reader::new(data);
+    let entries = r.word()?;
+    let columns = usize::from(r.byte()?);
+    if entries == 0 || columns == 0 {
+        return Err(DecodeError::InvalidData);
+    }
+    let depths = r.take(columns)?;
+    let mut values = budget.zeroed::<u8>(entries * columns)?;
+    for row in values.chunks_exact_mut(columns) {
+        for (sample, &depth) in row.iter_mut().zip(depths) {
+            let precision = usize::from(depth & 127) + 1;
+            if precision > 38 {
+                return Err(DecodeError::UnsupportedFeature);
+            }
+            let mut value = 0u64;
+            for &byte in r.take(precision.div_ceil(8))? {
+                value = (value << 8) | u64::from(byte);
+            }
+            let maximum = (1u64 << precision) - 1;
+            value &= maximum;
+            if depth & 128 != 0 {
+                value ^= 1u64 << (precision - 1);
+            }
+            *sample = ((value * 255 + maximum / 2) / maximum) as u8;
+        }
+    }
+    if r.position != data.len() {
+        return Err(DecodeError::InvalidData);
+    }
+    Ok(Palette { columns, values })
+}
+
 pub(super) fn decode(data: &[u8]) -> Result<Image> {
     let mut budget = Budget::default();
     budget.claim(data.len())?;
@@ -62,6 +100,8 @@ pub(super) fn decode(data: &[u8]) -> Result<Image> {
     let mut alpha = None;
     let mut premultiplied = false;
     let mut colors = Vec::new();
+    let mut palette = None;
+    let mut mapping = Vec::new();
     let mut dimensions = None;
     if data.starts_with(b"\0\0\0\x0cjP  \r\n\x87\n") {
         let mut boxes = Boxes { data };
@@ -131,7 +171,31 @@ pub(super) fn decode(data: &[u8]) -> Result<Image> {
                                     }
                                 }
                             }
-                            b"pclr" | b"cmap" => return Err(DecodeError::UnsupportedFeature),
+                            b"pclr" => {
+                                if palette.is_some() {
+                                    return Err(DecodeError::InvalidData);
+                                }
+                                palette = Some(self::palette(payload, &mut budget)?);
+                            }
+                            b"cmap" => {
+                                if !mapping.is_empty()
+                                    || payload.is_empty()
+                                    || payload.len() % 4 != 0
+                                {
+                                    return Err(DecodeError::InvalidData);
+                                }
+                                budget.claim(
+                                    payload.len() / 4 * size_of::<(usize, Option<usize>)>(),
+                                )?;
+                                for entry in payload.as_chunks::<4>().0 {
+                                    let column = match entry[2] {
+                                        0 if entry[3] == 0 => None,
+                                        1 => Some(usize::from(entry[3])),
+                                        _ => return Err(DecodeError::InvalidData),
+                                    };
+                                    mapping.push((word(entry)?, column));
+                                }
+                            }
                             _ => {}
                         }
                     }
@@ -144,10 +208,23 @@ pub(super) fn decode(data: &[u8]) -> Result<Image> {
         }
     }
     let decoded = decode_codestream(stream, &mut budget)?;
-    let channels = decoded.planes.len();
-    if dimensions.is_some_and(|size| size != (decoded.width, decoded.height, channels)) {
+    let components = decoded.planes.len();
+    if dimensions.is_some_and(|size| size != (decoded.width, decoded.height, components)) {
         return Err(DecodeError::InvalidHeader);
     }
+    if palette.is_some() && mapping.is_empty()
+        || mapping.iter().any(|&(component, column)| {
+            component >= components
+                || column.is_some_and(|column| palette.as_ref().is_none_or(|p| column >= p.columns))
+        })
+    {
+        return Err(DecodeError::InvalidData);
+    }
+    let channels = if mapping.is_empty() {
+        components
+    } else {
+        mapping.len()
+    };
     if space == 0 && decoded.subsampled {
         space = 18;
     }
@@ -198,6 +275,7 @@ pub(super) fn decode(data: &[u8]) -> Result<Image> {
         budget.zeroed::<u8>(pixel_len(decoded.width as u32, decoded.height as u32)?)?;
     for (index, pixel) in pixels.as_chunks_mut::<4>().0.iter_mut().enumerate() {
         let sample = |component: usize| {
+            let (component, column) = mapping.get(component).copied().unwrap_or((component, None));
             let maximum = ((1u64 << decoded.precision[component]) - 1) as f64;
             let (dx, dy) = decoded.sampling[component];
             let (cx0, cy0) = (decoded.origin.0.div_ceil(dx), decoded.origin.1.div_ceil(dy));
@@ -210,7 +288,13 @@ pub(super) fn decode(data: &[u8]) -> Result<Image> {
             } else {
                 decoded.planes[component][(cy.max(cy0) - cy0) * width + cx.max(cx0) - cx0]
             };
-            (value * 255.0 / maximum + 0.5).clamp(0.0, 255.0) as u8
+            if let Some(column) = column {
+                let palette = palette.as_ref().expect("validated palette");
+                let row = (value as usize).min(palette.values.len() / palette.columns - 1);
+                palette.values[row * palette.columns + column]
+            } else {
+                (value * 255.0 / maximum + 0.5).clamp(0.0, 255.0) as u8
+            }
         };
         let mut values = [0u8; 4];
         for (i, &(_, component)) in colors.iter().enumerate() {
@@ -308,6 +392,51 @@ impl<'a> Reader<'a> {
     }
 }
 
+#[derive(Clone, Default)]
+struct PackedHeaders<'a> {
+    segments: Vec<(u8, &'a [u8])>,
+}
+
+impl<'a> PackedHeaders<'a> {
+    fn push(&mut self, data: &'a [u8], budget: &mut Budget) -> Result<()> {
+        let (&index, bytes) = data.split_first().ok_or(DecodeError::InvalidData)?;
+        if bytes.is_empty() || self.segments.iter().any(|&(i, _)| i == index) {
+            return Err(DecodeError::InvalidData);
+        }
+        budget.claim(size_of::<(u8, &[u8])>())?;
+        self.segments.push((index, bytes));
+        Ok(())
+    }
+
+    fn finish(mut self, budget: &mut Budget) -> Result<Option<Vec<u8>>> {
+        if self.segments.is_empty() {
+            return Ok(None);
+        }
+        self.segments.sort_unstable_by_key(|&(i, _)| i);
+        let length = self.segments.iter().try_fold(0usize, |sum, &(_, data)| {
+            sum.checked_add(data.len())
+                .ok_or(DecodeError::ImageTooLarge)
+        })?;
+        let mut bytes = budget.zeroed::<u8>(length)?;
+        let mut offset = 0;
+        for &(_, data) in &self.segments {
+            bytes[offset..offset + data.len()].copy_from_slice(data);
+            offset += data.len();
+        }
+        budget.used -= self.segments.len() * size_of::<(u8, &[u8])>();
+        Ok(Some(bytes))
+    }
+}
+
+fn append_headers(bytes: &mut Vec<u8>, data: &[u8], budget: &mut Budget) -> Result<()> {
+    budget.claim(data.len())?;
+    bytes
+        .try_reserve_exact(data.len())
+        .map_err(|_| DecodeError::ImageTooLarge)?;
+    bytes.extend_from_slice(data);
+    Ok(())
+}
+
 #[derive(Clone, PartialEq)]
 struct Coding {
     levels: usize,
@@ -345,12 +474,29 @@ struct Component {
     roi: usize,
 }
 #[derive(Clone, PartialEq)]
+struct Progression {
+    resolutions: core::ops::Range<usize>,
+    components: core::ops::Range<usize>,
+    layers: usize,
+    order: u8,
+}
+
+impl Progression {
+    fn includes(&self, component: usize, resolution: usize, layer: usize) -> bool {
+        self.components.contains(&component)
+            && self.resolutions.contains(&resolution)
+            && layer < self.layers
+    }
+}
+
+#[derive(Clone, PartialEq)]
 struct Header {
     components: Vec<Component>,
     coding: Coding,
     quant: Quantization,
     layers: usize,
     progression: u8,
+    changes: Vec<Progression>,
     mct: bool,
     flags: u8,
 }
@@ -449,7 +595,7 @@ fn component_index(r: &mut Reader<'_>, count: usize) -> Result<usize> {
     }
     Ok(index)
 }
-fn update(header: &mut Header, marker: usize, data: &[u8]) -> Result<()> {
+fn update(header: &mut Header, marker: usize, data: &[u8], budget: &mut Budget) -> Result<()> {
     match marker {
         0xff52 => {
             let (c, l, p, m, f) = coding(data, false)?;
@@ -478,7 +624,47 @@ fn update(header: &mut Header, marker: usize, data: &[u8]) -> Result<()> {
             }
             header.components[index].roi = usize::from(r.byte()?);
         }
-        0xff5f..=0xff61 => return Err(DecodeError::UnsupportedFeature),
+        0xff5f => {
+            let record_size = if header.components.len() < 257 { 7 } else { 9 };
+            if data.is_empty() || !data.len().is_multiple_of(record_size) {
+                return Err(DecodeError::InvalidData);
+            }
+            let count = data.len() / record_size;
+            budget.claim(count * size_of::<Progression>())?;
+            header
+                .changes
+                .try_reserve_exact(count)
+                .map_err(|_| DecodeError::ImageTooLarge)?;
+            let mut r = Reader::new(data);
+            while r.position < data.len() {
+                let resolution = usize::from(r.byte()?);
+                let component = component_index(&mut r, header.components.len())?;
+                let layers = r.word()?;
+                let end_resolution = usize::from(r.byte()?);
+                let end_component = if header.components.len() < 257 {
+                    let value = usize::from(r.byte()?);
+                    if value == 0 { 256 } else { value }
+                } else {
+                    r.word()?
+                };
+                let order = r.byte()?;
+                if resolution >= end_resolution
+                    || end_resolution > 33
+                    || component >= end_component
+                    || end_component > header.components.len()
+                    || layers == 0
+                    || order > 4
+                {
+                    return Err(DecodeError::InvalidData);
+                }
+                header.changes.push(Progression {
+                    resolutions: resolution..end_resolution,
+                    components: component..end_component,
+                    layers,
+                    order,
+                });
+            }
+        }
         _ => {}
     }
     Ok(())
@@ -541,27 +727,42 @@ fn decode_codestream(data: &[u8], budget: &mut Budget) -> Result<Decoded> {
         quant: Quantization::default(),
         layers: 1,
         progression: 0,
+        changes: Vec::new(),
         mct: false,
         flags: 0,
     };
+    let mut packed = PackedHeaders::default();
     while r.bytes.get(r.position..r.position + 2) != Some(&[0xff, 0x90]) {
         let (marker, segment) = r.segment()?;
-        update(&mut header, marker, segment)?;
+        if marker == 0xff60 {
+            packed.push(segment, budget)?;
+        } else if marker == 0xff61 {
+            return Err(DecodeError::InvalidData);
+        } else {
+            update(&mut header, marker, segment, budget)?;
+        }
     }
-    let mut planes = Vec::new();
-    for component in &header.components {
-        let cw = width.div_ceil(component.dx) - x0.div_ceil(component.dx);
-        let ch = height.div_ceil(component.dy) - y0.div_ceil(component.dy);
-        planes.push(budget.zeroed::<f64>(cw * ch)?);
-    }
+    let packed = packed.finish(budget)?;
+    let mut ppm = packed.as_ref().map(|bytes| Reader::new(bytes));
     let columns = (width - tx0).div_ceil(tw);
     let rows = (height - ty0).div_ceil(th);
+    let single_tile = columns == 1 && rows == 1;
+    let mut planes = Vec::new();
+    if !single_tile {
+        for component in &header.components {
+            let cw = width.div_ceil(component.dx) - x0.div_ceil(component.dx);
+            let ch = height.div_ceil(component.dy) - y0.div_ceil(component.dy);
+            planes.push(budget.zeroed::<f64>(cw * ch)?);
+        }
+    }
     #[derive(Clone, Default)]
     struct Tile<'a> {
         header: Option<Header>,
         bodies: Vec<&'a [u8]>,
         next: usize,
         count: Option<usize>,
+        packed: Option<Vec<u8>>,
+        ppt: PackedHeaders<'a>,
     }
     let mut tiles = budget.zeroed::<Tile<'_>>(
         columns
@@ -609,13 +810,24 @@ fn decode_codestream(data: &[u8], budget: &mut Budget) -> Result<Decoded> {
         let mut tile_header = state.header.clone().unwrap_or_else(|| header.clone());
         while r.bytes.get(r.position..r.position + 2) != Some(&[0xff, 0x93]) {
             let (marker, segment) = r.segment()?;
-            update(&mut tile_header, marker, segment)?;
+            if marker == 0xff61 && ppm.is_none() {
+                state.ppt.push(segment, budget)?;
+            } else if matches!(marker, 0xff60 | 0xff61) {
+                return Err(DecodeError::InvalidData);
+            } else {
+                update(&mut tile_header, marker, segment, budget)?;
+            }
         }
         r.word()?;
         if end < r.position {
             return Err(DecodeError::InvalidData);
         }
         let body = r.take(end - r.position)?;
+        if let Some(ppm) = &mut ppm {
+            let length = ppm.long()?;
+            let headers = ppm.take(length)?;
+            append_headers(state.packed.get_or_insert_with(Vec::new), headers, budget)?;
+        }
         if state
             .header
             .as_ref()
@@ -628,13 +840,15 @@ fn decode_codestream(data: &[u8], budget: &mut Budget) -> Result<Decoded> {
         state.bodies.push(body);
     }
     if !finished
+        || ppm.is_some_and(|ppm| ppm.position != ppm.bytes.len())
         || tiles
             .iter()
             .any(|tile| tile.header.is_none() || tile.count.is_some_and(|count| tile.next != count))
     {
         return Err(DecodeError::InvalidData);
     }
-    for (tile, state) in tiles.into_iter().enumerate() {
+    for (tile, mut state) in tiles.into_iter().enumerate() {
+        let ppt = core::mem::take(&mut state.ppt).finish(budget)?;
         let tile_header = state.header.as_ref().ok_or(DecodeError::InvalidData)?;
         let allocated = budget.used;
         let mut joined = Vec::new();
@@ -660,7 +874,22 @@ fn decode_codestream(data: &[u8], budget: &mut Budget) -> Result<Decoded> {
         );
         let right = (tx0 + (tile % columns + 1) * tw).min(width);
         let bottom = (ty0 + (tile / columns + 1) * th).min(height);
-        let decoded = tile_data(tile_header, body, (left, top, right, bottom), budget)?;
+        let decoded = tile_data(
+            tile_header,
+            body,
+            state.packed.as_deref().or(ppt.as_deref()),
+            (left, top, right, bottom),
+            budget,
+        )?;
+        if single_tile {
+            // The tile already spans the image; retain its planes without a copy.
+            planes = decoded;
+            budget.release(joined);
+            if let Some(ppt) = ppt {
+                budget.release(ppt);
+            }
+            continue;
+        }
         for c in 0..count {
             let component = &header.components[c];
             let cx0 = left.div_ceil(component.dx);
@@ -1012,24 +1241,34 @@ fn resolutions(
     }
     Ok(out)
 }
+struct PacketData<'a> {
+    body: &'a [u8],
+    headers: Option<&'a [u8]>,
+}
+
 fn read_packet(
     resolution: &mut Resolution,
     precinct_index: usize,
     style: u8,
     layer: usize,
-    body: &[u8],
+    data: &mut PacketData<'_>,
     flags: u8,
     budget: &mut Budget,
-) -> Result<usize> {
+) -> Result<()> {
+    let body = data.body;
     let start = if flags & 2 != 0 {
-        if body.get(..2) != Some(&[0xff, 0x91]) {
+        if body.len() < 6 || body.get(..4) != Some(&[0xff, 0x91, 0, 4]) {
             return Err(DecodeError::InvalidData);
         }
         6
     } else {
         0
     };
-    let mut bits = Packet::new(body.get(start..).ok_or(DecodeError::InvalidData)?);
+    let headers = match data.headers {
+        Some(headers) => headers,
+        None => body.get(start..).ok_or(DecodeError::InvalidData)?,
+    };
+    let mut bits = Packet::new(headers);
     let present = bits.bit()?;
     let mut lengths = Vec::new();
     if present {
@@ -1114,13 +1353,19 @@ fn read_packet(
         }
     }
     bits.align()?;
-    let mut offset = start + bits.position;
+    let mut header_end = bits.position;
     if flags & 4 != 0 {
-        if body.get(offset..offset + 2) != Some(&[0xff, 0x92]) {
+        if headers.get(header_end..header_end + 2) != Some(&[0xff, 0x92]) {
             return Err(DecodeError::InvalidData);
         }
-        offset += 2;
+        header_end += 2;
     }
+    let mut offset = if data.headers.is_some() {
+        data.headers = Some(&headers[header_end..]);
+        start
+    } else {
+        start + header_end
+    };
     for (band_index, index, segment, length) in lengths {
         let block = &mut resolution.bands[band_index].precincts[precinct_index].blocks[index];
         let end = offset
@@ -1134,12 +1379,14 @@ fn read_packet(
         data.extend_from_slice(bytes);
         offset = end;
     }
-    Ok(offset)
+    data.body = &body[offset..];
+    Ok(())
 }
 
 fn tile_data(
     header: &Header,
     body: &[u8],
+    headers: Option<&[u8]>,
     bounds: (usize, usize, usize, usize),
     budget: &mut Budget,
 ) -> Result<Vec<Vec<f64>>> {
@@ -1173,31 +1420,47 @@ fn tile_data(
     if header.progression > 4 {
         return Err(DecodeError::UnsupportedFeature);
     }
-    packets.sort_unstable_by_key(|&(c, r, p, l, x, y)| match header.progression {
-        0 => (l, r, c, p, 0),
-        1 => (r, l, c, p, 0),
-        2 => (r, y, x, c, l),
-        3 => (y, x, c, r, l),
-        _ => (c, y, x, r, l),
+    if !header.changes.is_empty()
+        && packets.iter().any(|&(c, r, _, l, _, _)| {
+            !header.changes.iter().any(|change| change.includes(c, r, l))
+        })
+    {
+        return Err(DecodeError::InvalidData);
+    }
+    packets.sort_unstable_by_key(|&(c, r, p, l, x, y)| {
+        let (index, order) = header
+            .changes
+            .iter()
+            .enumerate()
+            .find(|(_, change)| change.includes(c, r, l))
+            .map_or((0, header.progression), |(i, change)| (i, change.order));
+        let key = match order {
+            0 => (l, r, c, p, 0),
+            1 => (r, l, c, p, 0),
+            2 => (r, y, x, c, l),
+            3 => (y, x, c, r, l),
+            _ => (c, y, x, r, l),
+        };
+        (index, key)
     });
-    let mut offset = 0;
+    let mut data = PacketData { body, headers };
     for (c, resolution, precinct, layer, _, _) in packets {
         let style = header.components[c]
             .coding
             .as_ref()
             .unwrap_or(&header.coding)
             .style;
-        offset += read_packet(
+        read_packet(
             &mut components[c][resolution],
             precinct,
             style,
             layer,
-            body.get(offset..).ok_or(DecodeError::InvalidData)?,
+            &mut data,
             header.flags,
             budget,
         )?;
     }
-    if offset != body.len() {
+    if !data.body.is_empty() || data.headers.is_some_and(|headers| !headers.is_empty()) {
         return Err(DecodeError::InvalidData);
     }
     let mut decoded = Vec::new();
@@ -1287,6 +1550,7 @@ fn reconstruct(
             let planes = quant
                 .guard
                 .checked_add(exponent)
+                .and_then(|n| n.checked_add(component.roi))
                 .and_then(|n| n.checked_sub(1))
                 .ok_or(DecodeError::InvalidData)?;
             let gain = if band.orientation == 0 {
@@ -1953,10 +2217,10 @@ mod tests {
     }
 
     #[test]
-    fn large_image_does_not_double_charge_planes_or_keep_scratch_allocations() {
-        let image = crate::decode(include_bytes!("../tests/images/jpeg2000/large.jp2"))
-            .expect("12 megapixel JPEG 2000");
-        assert_eq!((image.width(), image.height()), (4000, 3000));
+    fn large_single_tile_image_reuses_decoded_planes() {
+        let image = crate::decode(include_bytes!("../tests/images/jpeg2000/large-24mp.jp2"))
+            .expect("24 megapixel JPEG 2000");
+        assert_eq!((image.width(), image.height()), (6000, 4000));
         assert!(
             image
                 .pixels()
@@ -1965,6 +2229,142 @@ mod tests {
                 .iter()
                 .all(|p| *p == [80, 120, 160, 255])
         );
+    }
+
+    #[test]
+    fn roi_progression_changes_and_packed_headers_preserve_pixels() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/images/jpeg2000");
+        let expected: Vec<u8> = (0..97)
+            .flat_map(|y| {
+                (0..129).flat_map(move |x| {
+                    [
+                        (x * 13 + y * 7) as u8,
+                        (x * 13 + y * 7 + 83) as u8,
+                        (x * 13 + y * 7 + 166) as u8,
+                        255,
+                    ]
+                })
+            })
+            .collect();
+        for name in ["roi", "poc", "poc-layers", "ppm", "ppt"] {
+            let bytes = std::fs::read(root.join(format!("{name}.j2k"))).expect("OpenJPEG fixture");
+            let image = crate::decode(&bytes).unwrap_or_else(|error| panic!("{name}: {error}"));
+            assert_eq!((image.width(), image.height()), (129, 97), "{name}");
+            assert_eq!(image.pixels(), expected, "{name}");
+        }
+    }
+
+    #[test]
+    fn palette_maps_index_component_to_rgb() {
+        let image = crate::decode(include_bytes!("../tests/images/jpeg2000/palette.jp2"))
+            .expect("palette JPEG 2000");
+        assert_eq!((image.width(), image.height()), (32, 16));
+        for y in 0..16 {
+            for x in 0..32 {
+                let index = (x + y) % 16;
+                let offset = (y * 32 + x) * 4;
+                assert_eq!(
+                    &image.pixels()[offset..offset + 4],
+                    &[
+                        (index * 17) as u8,
+                        (255 - index * 17) as u8,
+                        (index * 31) as u8,
+                        255
+                    ]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn palette_supports_signed_and_high_precision_entries() {
+        // Two entries: signed 8-bit and unsigned 16-bit, at their extrema.
+        let values = palette(
+            &[0, 2, 2, 135, 15, 128, 0, 0, 127, 255, 255],
+            &mut Budget::default(),
+        )
+        .expect("palette entries");
+        assert_eq!(values.columns, 2);
+        assert_eq!(values.values, [0, 0, 255, 255]);
+    }
+
+    #[test]
+    fn component_mapping_reorders_direct_channels() {
+        let source = include_bytes!("../tests/images/jpeg2000/rgb.jp2");
+        let expected = crate::decode(source).expect("RGB");
+        let mut bytes = source.to_vec();
+        let header = source
+            .windows(4)
+            .position(|kind| kind == b"jp2h")
+            .expect("JP2 header")
+            - 4;
+        let length = u32::from_be_bytes(source[header..header + 4].try_into().expect("box length"));
+        let mapping = b"\0\0\0\x14cmap\0\x02\0\0\0\0\0\0\0\x01\0\0";
+        bytes.splice(
+            header + length as usize..header + length as usize,
+            mapping.iter().copied(),
+        );
+        bytes[header..header + 4].copy_from_slice(&(length + mapping.len() as u32).to_be_bytes());
+        let actual = crate::decode(&bytes).expect("mapped RGB");
+        for (actual, expected) in actual
+            .pixels()
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(expected.pixels().as_chunks::<4>().0)
+        {
+            assert_eq!(*actual, [expected[2], expected[0], expected[1], 255]);
+        }
+    }
+
+    #[test]
+    fn malformed_palette_progression_and_packed_headers_fail() {
+        for bytes in [
+            include_bytes!("../tests/images/jpeg2000/palette.jp2").as_slice(),
+            include_bytes!("../tests/images/jpeg2000/poc.j2k").as_slice(),
+            include_bytes!("../tests/images/jpeg2000/ppm.j2k").as_slice(),
+            include_bytes!("../tests/images/jpeg2000/ppt.j2k").as_slice(),
+        ] {
+            for end in 0..bytes.len().min(256) {
+                assert!(crate::decode(&bytes[..end]).is_err(), "truncation at {end}");
+            }
+        }
+        let source = include_bytes!("../tests/images/jpeg2000/palette.jp2");
+        let mapping = source
+            .windows(4)
+            .position(|kind| kind == b"cmap")
+            .expect("mapping");
+        for (offset, value) in [(5, 255), (6, 2), (7, 255)] {
+            let mut bytes = source.to_vec();
+            bytes[mapping + offset] = value;
+            assert!(crate::decode(&bytes).is_err());
+        }
+        let source = include_bytes!("../tests/images/jpeg2000/poc.j2k");
+        let poc = source
+            .windows(2)
+            .position(|marker| marker == [255, 0x5f])
+            .expect("POC");
+        for (offset, value) in [(4, 33), (5, 255), (8, 0), (9, 255), (10, 5)] {
+            let mut bytes = source.to_vec();
+            bytes[poc + offset] = value;
+            assert!(crate::decode(&bytes).is_err());
+        }
+        let source = include_bytes!("../tests/images/jpeg2000/ppm.j2k");
+        let ppm = source
+            .windows(2)
+            .position(|marker| marker == [255, 0x60])
+            .expect("PPM");
+        let mut bytes = source.to_vec();
+        bytes[ppm + 4] = 0; // Duplicate the second segment's index.
+        assert!(crate::decode(&bytes).is_err());
+        let source = include_bytes!("../tests/images/jpeg2000/ppt.j2k");
+        let ppt = source
+            .windows(2)
+            .position(|marker| marker == [255, 0x61])
+            .expect("PPT");
+        let mut bytes = source.to_vec();
+        bytes[ppt + 4] = 0;
+        assert!(crate::decode(&bytes).is_err());
     }
 
     #[test]

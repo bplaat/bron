@@ -144,6 +144,8 @@ pub(crate) fn premultiplied_bgra(pixels: &[u8]) -> Vec<u8> {
     output
 }
 
+// MARK: Tests
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -183,6 +185,54 @@ mod tests {
             panic!("expected a raster");
         };
         assert!(animated.frames.len() > 1);
+    }
+
+    #[test]
+    fn icns_and_webp_decode_with_shared_codecs() {
+        let bytes = include_bytes!("../tests/fixtures/rgb.icns");
+        let Media::Raster(icon) = decode_media(bytes).expect("ICNS") else {
+            panic!("expected icon raster");
+        };
+        assert_eq!((icon.width, icon.height), (512, 512));
+        assert_eq!(icon.frames.len(), 1);
+        assert!(
+            icon.frames[0]
+                .pixels
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .all(|pixel| *pixel == [96, 48, 16, 128])
+        );
+        for bytes in [
+            include_bytes!("../../../../lib/graphics/image/tests/images/webp/lossless.webp")
+                .as_slice(),
+            include_bytes!("../../../../lib/graphics/image/tests/images/webp/lossy.webp")
+                .as_slice(),
+        ] {
+            let media = decode_media(bytes).expect("WebP");
+            assert_eq!(media.size(), (16.0, 16.0));
+            assert!(media.is_still());
+        }
+    }
+
+    #[test]
+    fn jpeg2000_and_compressed_svg_decode() {
+        for bytes in [
+            include_bytes!("../../../../lib/graphics/image/tests/images/jpeg2000/rgb.jp2")
+                .as_slice(),
+            include_bytes!("../../../../lib/graphics/image/tests/images/jpeg2000/rgb.j2k")
+                .as_slice(),
+        ] {
+            let media = decode_media(bytes).expect("JPEG 2000 raster");
+            assert_eq!(media.size(), (32.0, 32.0));
+            assert!(media.is_still());
+        }
+        let media =
+            decode_media(include_bytes!("../../imageview/examples/tiger.svgz")).expect("SVGZ");
+        let Media::Vector(image) = media else {
+            panic!("expected SVGZ vector");
+        };
+        assert_eq!(image.format(), vector::VectorFormat::Svgz);
     }
 
     #[test]

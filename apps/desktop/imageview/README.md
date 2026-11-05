@@ -5,9 +5,9 @@ vector drawings, and follows the system light or dark theme.
 
 ## Features
 
-- Decode BMP, GIF, ICO, JPEG, PNG/APNG, QOI, and TGA with a custom [image](../../../lib/graphics/image) decoder crate
-- Play GIF/APNG animations with frame timings and loop counts
-- Render SVG and TinyVG with the shared [vector](../../../lib/graphics/vector) decoder, drawn
+- Decode BMP, GIF, ICNS, ICO, JPEG, JPEG 2000, PNG/APNG, QOI, TGA, and WebP with a custom [image](../../../lib/graphics/image) decoder crate
+- Play APNG/GIF/WebP animations with frame timings and loop counts
+- Render SVG/SVGZ and TinyVG with the shared [vector](../../../lib/graphics/vector) decoder, drawn
   by [imageview-core](../imageview-core) with [bcanvas](../../../lib/graphics/bcanvas): Core
   Graphics on macOS, Direct2D on Windows and Cairo on Linux
 - Zoom, pan, and fit images to the window

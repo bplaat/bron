@@ -31,8 +31,8 @@ mod render;
 
 /// The file name extensions of the formats the local decoders read.
 pub const EXTENSIONS: &[&str] = &[
-    "bmp", "dib", "gif", "ico", "jpg", "jpeg", "jpe", "jfif", "png", "apng", "qoi", "tga", "svg",
-    "tvg",
+    "apng", "bmp", "dib", "gif", "icns", "ico", "j2c", "j2k", "jfif", "jp2", "jpc", "jpe", "jpeg",
+    "jpg", "png", "qoi", "svg", "svgz", "tga", "tvg", "webp",
 ];
 
 /// The magnification the media may be shrunk and enlarged to.
@@ -102,6 +102,8 @@ impl FileVersion {
         })
     }
 }
+
+// MARK: Tests
 
 #[cfg(test)]
 mod tests {

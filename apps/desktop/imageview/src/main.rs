@@ -782,6 +782,8 @@ fn main() {
     });
 }
 
+// MARK: Tests
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -808,6 +810,8 @@ mod tests {
             ("dice.bmp", (800.0, 600.0)),
             ("dice.dib", (800.0, 600.0)),
             ("ball.gif", (100.0, 100.0)),
+            ("ball.webp", (100.0, 100.0)),
+            ("dice.j2k", (800.0, 600.0)),
             ("dice.jfif", (800.0, 600.0)),
             ("dice.png", (800.0, 600.0)),
             ("ball.apng", (100.0, 100.0)),

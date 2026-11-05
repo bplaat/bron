@@ -71,6 +71,8 @@ selects the largest image in an ICNS or ICO file. ICNS supports JPEG 2000 and PN
 entries and legacy RGB/ARGB entries with masks;
 palette entries are unsupported. Standalone JPEG 2000 supports JP2 containers
 and raw codestreams (`j2c`, `j2k`, and `jpc`).
+JPEG 2000 also reads palettes, component mappings, ROI coding, progression-order
+changes, and packet headers packed in the main or tile headers.
 WebP supports lossy, lossless, alpha, and animation decoding. Animation disposal
 clears frame rectangles to transparent, matching libwebp and browser playback.
 ICNS, JPEG 2000,
@@ -78,6 +80,8 @@ and WebP are decode-only. TGA has no file signature, so it is
 only detected when no other format matches and its header is valid. Streaming
 is not supported. Decoding has a 1 GiB allocation budget. JPEG 2000 releases
 scratch allocations between code-blocks, resolutions, and tiles.
+Single-tile JPEG 2000 images reuse their decoded planes, allowing a 24 megapixel
+RGB image to fit within this budget.
 
 ## Color management
 
