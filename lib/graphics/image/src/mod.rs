@@ -16,6 +16,9 @@ use core::time::Duration;
 
 mod math;
 
+#[cfg(feature = "jpeg")]
+mod metadata;
+
 #[cfg(feature = "gif")]
 use math::round;
 #[cfg(feature = "jpeg")]
@@ -28,7 +31,9 @@ pub use encoder::{
     encode_animation_with_options, encode_with_options,
 };
 #[cfg(feature = "jpeg")]
-pub use metadata::{Orientation, copy_jpeg_exif, reorient_jpeg};
+pub use metadata::Orientation;
+#[cfg(feature = "jpeg")]
+pub use metadata::{copy_jpeg_exif, reorient_jpeg};
 
 #[cfg(feature = "bmp")]
 mod bmp;
@@ -39,8 +44,8 @@ mod gif;
 mod ico;
 #[cfg(feature = "jpeg")]
 mod jpeg;
-#[cfg(feature = "jpeg")]
-mod metadata;
+#[cfg(feature = "jpeg2000")]
+mod jpeg2000;
 #[cfg(feature = "png")]
 mod png;
 #[cfg(feature = "qoi")]
@@ -76,6 +81,9 @@ pub enum Format {
     /// JPEG.
     #[cfg(feature = "jpeg")]
     Jpeg,
+    /// JPEG 2000 in a JP2 container or a raw codestream.
+    #[cfg(feature = "jpeg2000")]
+    Jpeg2000,
     /// PNG, including APNG animations.
     #[cfg(feature = "png")]
     Png,
@@ -99,6 +107,8 @@ impl Format {
             "ico" => Some(Self::Ico),
             #[cfg(feature = "jpeg")]
             "jpg" | "jpeg" | "jpe" | "jfif" => Some(Self::Jpeg),
+            #[cfg(feature = "jpeg2000")]
+            "j2c" | "j2k" | "jp2" | "jpc" => Some(Self::Jpeg2000),
             #[cfg(feature = "png")]
             "png" | "apng" => Some(Self::Png),
             #[cfg(feature = "qoi")]
@@ -121,6 +131,9 @@ impl Format {
             [0, 0, 1, 0, ..] => Some(Self::Ico),
             #[cfg(feature = "jpeg")]
             [0xff, 0xd8, ..] => Some(Self::Jpeg),
+            #[cfg(feature = "jpeg2000")]
+            [0, 0, 0, 12, b'j', b'P', b' ', b' ', 13, 10, 0x87, 10, ..]
+            | [0xff, 0x4f, 0xff, 0x51, ..] => Some(Self::Jpeg2000),
             #[cfg(feature = "png")]
             [0x89, b'P', b'N', b'G', b'\r', b'\n', 0x1a, b'\n', ..] => Some(Self::Png),
             #[cfg(feature = "qoi")]
@@ -129,10 +142,14 @@ impl Format {
         }
     }
 
-    /// Whether images can be encoded in the format, which all but ICO can.
+    /// Whether images can be encoded in the format.
     pub const fn can_encode(self) -> bool {
         #[cfg(feature = "ico")]
         if matches!(self, Self::Ico) {
+            return false;
+        }
+        #[cfg(feature = "jpeg2000")]
+        if matches!(self, Self::Jpeg2000) {
             return false;
         }
         true
@@ -212,7 +229,7 @@ impl Frame {
     }
 }
 
-/// A decoded image with sRGB pixels. Embedded color profiles and JPEG orientation are already
+/// A decoded image with sRGB pixels. Embedded color profiles and EXIF orientation are already
 /// applied to the pixels.
 #[derive(Debug, Eq, PartialEq)]
 pub struct Image {
@@ -285,9 +302,10 @@ impl Image {
     #[cfg(any(
         feature = "bmp",
         feature = "jpeg",
+        feature = "jpeg2000",
         feature = "png",
         feature = "qoi",
-        feature = "tga"
+        feature = "tga",
     ))]
     fn still(format: Format, width: u32, height: u32, pixels: Vec<u8>) -> Self {
         Self {
@@ -344,9 +362,10 @@ type Result<T> = core::result::Result<T, DecodeError>;
         feature = "bmp",
         feature = "gif",
         feature = "jpeg",
+        feature = "jpeg2000",
         feature = "png",
         feature = "qoi",
-        feature = "tga"
+        feature = "tga",
     )),
     allow(clippy::missing_const_for_fn)
 )]
@@ -360,6 +379,8 @@ pub fn decode(_data: &[u8]) -> Result<Image> {
         Some(Format::Ico) => return ico::decode(_data),
         #[cfg(feature = "jpeg")]
         Some(Format::Jpeg) => return jpeg::decode(_data),
+        #[cfg(feature = "jpeg2000")]
+        Some(Format::Jpeg2000) => return jpeg2000::decode(_data),
         #[cfg(feature = "png")]
         Some(Format::Png) => return png::decode(_data),
         #[cfg(feature = "qoi")]
@@ -389,9 +410,10 @@ pub fn decode(_data: &[u8]) -> Result<Image> {
     feature = "gif",
     feature = "ico",
     feature = "jpeg",
+    feature = "jpeg2000",
     feature = "png",
     feature = "qoi",
-    feature = "tga"
+    feature = "tga",
 ))]
 const MAX_BYTES: usize = 1024 * 1024 * 1024;
 
@@ -402,9 +424,10 @@ const MAX_BYTES: usize = 1024 * 1024 * 1024;
     feature = "gif",
     feature = "ico",
     feature = "jpeg",
+    feature = "jpeg2000",
     feature = "png",
     feature = "qoi",
-    feature = "tga"
+    feature = "tga",
 ))]
 struct Budget {
     used: usize,
@@ -414,9 +437,10 @@ struct Budget {
     feature = "bmp",
     feature = "gif",
     feature = "jpeg",
+    feature = "jpeg2000",
     feature = "png",
     feature = "qoi",
-    feature = "tga"
+    feature = "tga",
 ))]
 impl Budget {
     fn claim(&mut self, bytes: usize) -> Result<()> {
@@ -432,9 +456,10 @@ impl Budget {
         feature = "bmp",
         feature = "gif",
         feature = "jpeg",
+        feature = "jpeg2000",
         feature = "png",
         feature = "qoi",
-        feature = "tga"
+        feature = "tga",
     ))]
     fn zeroed<T: Default + Clone>(&mut self, len: usize) -> Result<Vec<T>> {
         self.claim(
@@ -446,6 +471,12 @@ impl Budget {
             .map_err(|_| DecodeError::ImageTooLarge)?;
         out.resize(len, T::default());
         Ok(out)
+    }
+
+    #[cfg(feature = "jpeg2000")]
+    fn release<T>(&mut self, values: Vec<T>) {
+        self.used -= values.len() * size_of::<T>();
+        drop(values);
     }
 
     #[cfg(any(feature = "gif", feature = "png"))]
@@ -496,8 +527,9 @@ impl Budget {
     feature = "bmp",
     feature = "gif",
     feature = "jpeg",
+    feature = "jpeg2000",
     feature = "png",
-    feature = "tga"
+    feature = "tga",
 ))]
 fn pixel_len(width: u32, height: u32) -> Result<usize> {
     if width == 0 || height == 0 {

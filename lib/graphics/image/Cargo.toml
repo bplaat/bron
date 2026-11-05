@@ -13,12 +13,13 @@ workspace = true
 path = "src/mod.rs"
 
 [features]
-default = ["std", "bmp", "gif", "ico", "jpeg", "png", "qoi", "tga"]
+default = ["std", "bmp", "gif", "ico", "jpeg", "jpeg2000", "png", "qoi", "tga"]
 std = []
 bmp = []
 gif = []
 ico = ["bmp", "png"]
 jpeg = []
+jpeg2000 = []
 png = ["dep:crc", "dep:deflate"]
 qoi = []
 tga = []

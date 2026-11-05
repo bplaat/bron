@@ -1,6 +1,6 @@
 # Image
 
-Decode BMP, GIF, ICO, JPEG, PNG/APNG, QOI, and TGA images into sRGB RGBA
+Decode BMP, GIF, ICO, JPEG, JPEG 2000, PNG/APNG, QOI, and TGA images into sRGB RGBA
 pixels. You can also encode images as BMP, GIF, JPEG, PNG/APNG, QOI, or TGA.
 
 ## Getting started
@@ -76,6 +76,12 @@ including premultiplied alpha. Legacy files without declared alpha whose alpha
 bytes are all zero are treated as opaque. TGA gamma, color-correction tables,
 and other extension metadata are not interpreted.
 
+JPEG 2000 reads JP2 containers and raw codestreams (`j2c`, `j2k`, and `jpc`).
+It supports reversible and irreversible wavelets, tiles, quality layers, custom
+precincts, all five progression orders, multiple tile-parts, arithmetic bypass,
+and per-pass termination. JPEG 2000 is decode-only. Its allocation budget releases
+scratch buffers between code-blocks, resolutions, and tiles.
+
 ## Color management
 
 Decoded pixels are always sRGB. Each decoder reads the color description of
@@ -99,7 +105,7 @@ convert samples with `srgb_to_linear`, combine them in linear light, and encode
 the result with `linear_to_srgb`.
 
 All formats are enabled by default. You can enable only the codecs you need
-with the `bmp`, `gif`, `ico`, `jpeg`, `png`, `qoi`, and `tga` Cargo features.
+with the `bmp`, `gif`, `ico`, `jpeg`, `jpeg2000`, `png`, `qoi`, and `tga` Cargo features.
 The default `std` feature uses Rust math functions. Disable it for `no_std` with `alloc`
 and C library math (`exp`, `pow`, `round`, `roundf`, and `truncf`, depending on the codecs).
 The sRGB tables are generated at build time using host `std` math.
@@ -109,6 +115,8 @@ The sRGB tables are generated at build time using host `std` math.
 Run `cargo test -p image` for tests or `cargo bench -p image --bench image` for
 benchmarks. Tests use reference images from image-rs, and synthetic TGA images
 plus ones written by macOS `sips`.
+
+JPEG 2000 fixtures and RGBA references use OpenJPEG.
 
 ## License
 
