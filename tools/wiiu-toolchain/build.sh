@@ -154,28 +154,39 @@ clone() {
     if [ -n "${SUBMODULES:-}" ]; then
         # Without auto maintenance, which would keep writing to $dir.part in the background
         # shellcheck disable=SC2086
-        git -C "$dir.part" -c gc.auto=0 -c maintenance.auto=false submodule update -q --init --depth 1 $SUBMODULES
+        git -C "$dir.part" -c gc.auto=0 -c maintenance.auto=false submodule update -q --init --depth 1 --jobs 8 $SUBMODULES
     fi
     mv "$dir.part" "$dir"
 }
 
+# Fetches only the dependencies needed by this command, before any builds start.
 fetch() {
-    local pids=() pid failed=0
-    clone "$wut_url" "$wut_version" "$wut_commit" "$WUT_DIR" &
-    pids+=($!)
-    SUBMODULES='libraries/fmt libraries/excmd' clone "$tools_url" "$tools_version" "$tools_commit" "$TOOLS_DIR" &
-    pids+=($!)
-    clone "$picolibc_url" "$picolibc_version" "$picolibc_commit" "$PICOLIBC_DIR" &
-    pids+=($!)
-    clone "$libogc_url" "$libogc_version" "$libogc_commit" "$LIBOGC_DIR" /gc/gctypes.h /gc/ogc/gu.h \
-        /gc/ogc/machine/ /libogc/gu.c /libogc/gu_psasm.S /libogc/gu_ps_concat44.S &
-    pids+=($!)
-    clone "$llvm_url" "$llvm_version" "$llvm_commit" "$COMPILER_RT_DIR" /compiler-rt/lib/builtins/ &
-    pids+=($!)
-    SUBMODULES='libraries/cnl libraries/fmt libraries/excmd libraries/cpp-peglib' clone "$decaf_url" "$decaf_version" \
-        "$decaf_commit" "$DECAF_DIR" /tools/latte-assembler/ /src/libgfd/ /src/libgpu/ /src/libcpu/ /src/common/ \
-        /src/libdecaf/src/cafe/libraries/gx2/ /libraries/ &
-    pids+=($!)
+    local mode="${1:-all}" pids=() pid failed=0
+    if [ "$mode" != cemu ]; then
+        clone "$wut_url" "$wut_version" "$wut_commit" "$WUT_DIR" &
+        pids+=($!)
+        SUBMODULES='libraries/fmt libraries/excmd' clone "$tools_url" "$tools_version" "$tools_commit" "$TOOLS_DIR" &
+        pids+=($!)
+        clone "$picolibc_url" "$picolibc_version" "$picolibc_commit" "$PICOLIBC_DIR" &
+        pids+=($!)
+        clone "$libogc_url" "$libogc_version" "$libogc_commit" "$LIBOGC_DIR" /gc/gctypes.h /gc/ogc/gu.h \
+            /gc/ogc/machine/ /libogc/gu.c /libogc/gu_psasm.S /libogc/gu_ps_concat44.S &
+        pids+=($!)
+        clone "$llvm_url" "$llvm_version" "$llvm_commit" "$COMPILER_RT_DIR" /compiler-rt/lib/builtins/ &
+        pids+=($!)
+        SUBMODULES='libraries/cnl libraries/fmt libraries/excmd libraries/cpp-peglib' clone "$decaf_url" "$decaf_version" \
+            "$decaf_commit" "$DECAF_DIR" /tools/latte-assembler/ /src/libgfd/ /src/libgpu/ /src/libcpu/ /src/common/ \
+            /src/libdecaf/src/cafe/libraries/gx2/ /libraries/ &
+        pids+=($!)
+    fi
+    if [ "$mode" != all ]; then
+        clone "$cemu_url" "$cemu_version" "$cemu_commit" "$CEMU_DIR" /src/ &
+        pids+=($!)
+        clone "$fmt_url" "$fmt_version" "$fmt_commit" "$FMT_DIR" /include/ &
+        pids+=($!)
+        clone "$pugixml_url" "$pugixml_version" "$pugixml_commit" "$PUGIXML_DIR" /src/ &
+        pids+=($!)
+    fi
     for pid in "${pids[@]}"; do
         wait "$pid" || failed=1
     done
@@ -413,9 +424,6 @@ build_tools() {
 # macOS only declares the ucontext functions of Cemu's fibers for X/Open sources.
 build_cemu() {
     local flags=()
-    clone "$cemu_url" "$cemu_version" "$cemu_commit" "$CEMU_DIR" /src/
-    clone "$fmt_url" "$fmt_version" "$fmt_commit" "$FMT_DIR" /include/
-    clone "$pugixml_url" "$pugixml_version" "$pugixml_commit" "$PUGIXML_DIR" /src/
     patch cemu "$cemu_commit"
     outdated "$BUILD_DIR/cemu-runner" "$TOOLCHAIN_DIR/cemu" "$CEMU_DIR"/{.patched,src} "$TOOLCHAIN_DIR/build.sh" || return 0
     [ "$(uname)" = Darwin ] && flags+=(-D_XOPEN_SOURCE)
@@ -429,10 +437,10 @@ build_cemu() {
 
 # Builds test/ with the toolchain and runs it in cemu-runner with a new user folder, which has the
 # SD card. The test reports its results with OSReport, the runner fails when a check failed or the
-# program didn't finish. Only build_cemu locks, make runs the toolchain build itself.
+# program didn't finish. Release the lock before make runs the toolchain build itself.
 run_test() {
     local user="$BUILD_DIR/test/cemu"
-    (lock; build_cemu)
+    (lock; fetch test; build_cemu)
     make -C "$TOOLCHAIN_DIR/test" --no-print-directory
     msg "Running the test in cemu-runner"
     rm -rf "$user"
@@ -471,7 +479,7 @@ for command in "$@"; do
             patch picolibc "$picolibc_commit"; patch libogc "$libogc_commit"; patch decaf-emu "$decaf_commit"
             build_picolibc; build_tools; build_imports; build_libraries ;;
         test) run_test ;;
-        cemu) lock; build_cemu ;;
+        cemu) lock; fetch cemu; build_cemu ;;
         export-patches) export_patches ;;
         clean) rm -rf "$BUILD_DIR" ;;
         *) die "Unknown command: $command" ;;
