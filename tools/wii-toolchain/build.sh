@@ -142,24 +142,42 @@ clone() {
     mv "$dir.part" "$dir"
 }
 
+# Fetches only the dependencies needed by this command, before any builds start.
 fetch() {
-    local pids=() pid failed=0
-    clone "$libogc_url" "$libogc_version" "$libogc_commit" "$LIBOGC_DIR" &
-    pids+=($!)
-    clone "$picolibc_url" "$picolibc_version" "$picolibc_commit" "$PICOLIBC_DIR" &
-    pids+=($!)
-    clone "$libdvm_url" "$libdvm_version" "$libdvm_commit" "$LIBDVM_DIR" &
-    pids+=($!)
-    clone "$fatfs_url" "$fatfs_version" "$fatfs_commit" "$FATFS_DIR" &
-    pids+=($!)
-    clone "$tools_url" "$tools_version" "$tools_commit" "$TOOLS_DIR" &
-    pids+=($!)
-    clone "$llvm_url" "$llvm_version" "$llvm_commit" "$COMPILER_RT_DIR" /compiler-rt/lib/builtins/ &
-    pids+=($!)
+    local mode="${1:-all}" pids=() pid failed=0
+    if [ "$mode" != dolphin ]; then
+        clone "$libogc_url" "$libogc_version" "$libogc_commit" "$LIBOGC_DIR" &
+        pids+=($!)
+        clone "$picolibc_url" "$picolibc_version" "$picolibc_commit" "$PICOLIBC_DIR" &
+        pids+=($!)
+        clone "$libdvm_url" "$libdvm_version" "$libdvm_commit" "$LIBDVM_DIR" &
+        pids+=($!)
+        clone "$fatfs_url" "$fatfs_version" "$fatfs_commit" "$FATFS_DIR" &
+        pids+=($!)
+        clone "$tools_url" "$tools_version" "$tools_commit" "$TOOLS_DIR" &
+        pids+=($!)
+        clone "$llvm_url" "$llvm_version" "$llvm_commit" "$COMPILER_RT_DIR" /compiler-rt/lib/builtins/ &
+        pids+=($!)
+    fi
+    if [ "$mode" != all ]; then
+        fetch_dolphin &
+        pids+=($!)
+    fi
     for pid in "${pids[@]}"; do
         wait "$pid" || failed=1
     done
     [ "$failed" = 0 ] || die "Failed to clone Wii toolchain dependencies"
+}
+
+# Publishes Dolphin only after its required submodules have finished cloning.
+fetch_dolphin() {
+    if [ ! -d "$DOLPHIN_DIR" ]; then
+        clone "$dolphin_url" "$dolphin_version" "$dolphin_commit" "$DOLPHIN_DIR.clone"
+        msg "Cloning Dolphin's submodules"
+        git -C "$DOLPHIN_DIR.clone" submodule update -q --init --depth 1 --jobs 8 "${DOLPHIN_SUBMODULES[@]}" ||
+            die "Failed to clone Dolphin's submodules"
+        mv "$DOLPHIN_DIR.clone" "$DOLPHIN_DIR"
+    fi
 }
 
 # Applies the patches of a repo as commits on top of its upstream tag, again when they changed
@@ -340,10 +358,10 @@ build_tools() {
 
 # Builds test/ with the toolchain and runs it headless in dolphin-runner with an SD card made from
 # an empty directory, the test writes its results to the debug UART, the runner fails when a check
-# failed or the program didn't finish. Doesn't lock, make runs the build itself.
+# failed or the program didn't finish. Release the lock before make runs the build itself.
 run_test() {
     local sd_dir="$BUILD_DIR/test/sd"
-    build_dolphin
+    (lock; fetch test; build_dolphin)
     make -C "$TOOLCHAIN_DIR/test" --no-print-directory
     rm -rf "$sd_dir"
     mkdir -p "$sd_dir"
@@ -358,13 +376,6 @@ run_test() {
 build_dolphin() {
     local objects_dir="$BUILD_DIR/objects/dolphin" options=()
     command -v cmake > /dev/null || die "Install cmake and ninja to build Dolphin"
-    if [ ! -d "$DOLPHIN_DIR" ]; then
-        clone "$dolphin_url" "$dolphin_version" "$dolphin_commit" "$DOLPHIN_DIR.clone"
-        msg "Cloning Dolphin's submodules"
-        git -C "$DOLPHIN_DIR.clone" submodule update -q --init --depth 1 --jobs 8 "${DOLPHIN_SUBMODULES[@]}" ||
-            die "Failed to clone Dolphin's submodules"
-        mv "$DOLPHIN_DIR.clone" "$DOLPHIN_DIR"
-    fi
     patch dolphin "$dolphin_commit"
     # Its bundled curl uses functions of the current macOS SDK, the runner only runs here
     [ "$(uname)" = Darwin ] && options+=(-DCMAKE_OSX_DEPLOYMENT_TARGET="$(sw_vers -productVersion)")
@@ -417,7 +428,7 @@ for command in "$@"; do
             patch libdvm "$libdvm_commit"; build_picolibc; build_dsp_mixer; build_libraries; build_tools ;;
         export-patches) export_patches ;;
         test) run_test ;;
-        dolphin) lock; build_dolphin ;;
+        dolphin) lock; fetch dolphin; build_dolphin ;;
         clean) rm -rf "$BUILD_DIR" ;;
         *) die "Unknown command: $command" ;;
     esac
