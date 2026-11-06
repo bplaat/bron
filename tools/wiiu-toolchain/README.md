@@ -63,7 +63,9 @@ The toolchain and the examples build separately from the main Cargo workspace.
 - `wiiu.json` is the Rust target; `build.rs` builds and links `../../target/wiiu-toolchain/libwut.a`,
   `libgu.a` and picolibc's `../../target/wiiu-toolchain/sysroot/lib/libc.a` and assembles shaders
 - `wut-sys/` has Rust bindings for graphics, matrices, picolibc, threads, input, audio and
-  networking. Raw sockets use `socketclose` and `socketlasterr` instead of the C file functions
+  networking. USB input uses the native `nsyskbd` keyboard callbacks and `nsyshid` device,
+  protocol, descriptor, and asynchronous report APIs; no external HID library is required.
+  Raw sockets use `socketclose` and `socketlasterr` instead of the C file functions
 - `gtxconv/` converts images to `.gtx` texture files from a TOML config, as a library and a CLI
 - `cc` is the C compiler for cc-rs build scripts of Rust projects: it builds the toolchain and
   compiles with the Wii U flags and the picolibc, wut and libogc matrix headers. `ar` is a separate

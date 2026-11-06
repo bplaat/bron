@@ -18,11 +18,13 @@ mod audio;
 mod input;
 mod network;
 mod thread;
+mod usb;
 
 pub use audio::*;
 pub use input::*;
 pub use network::*;
 pub use thread::*;
+pub use usb::*;
 
 pub type BOOL = i32;
 pub const TRUE: BOOL = 1;
