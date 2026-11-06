@@ -6,7 +6,9 @@ you:
 
 - Clones upstream [libogc](https://github.com/devkitPro/libogc) v2.11.0 and applies
   `libogc/patches/` as commits, then builds the parts we use (listed in `build.sh`) to
-  `../../target/wii-toolchain/libogc.a`
+  `../../target/wii-toolchain/libogc.a`, including the official USB mouse and boot-keyboard
+  drivers. `libogc-sys` exposes their event APIs, USB device enumeration, interrupt/control
+  transfers, and HID report-descriptor access
 - Clones [picolibc](https://github.com/picolibc/picolibc) 1.8.12 and applies `picolibc/patches/`,
   then builds it with meson as the C library, its headers and `libc.a` with the math library go
   to `../../target/wii-toolchain/sysroot/`

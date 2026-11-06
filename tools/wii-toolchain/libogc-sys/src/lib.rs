@@ -18,11 +18,13 @@ mod audio;
 mod input;
 mod network;
 mod thread;
+mod usb;
 
 pub use audio::*;
 pub use input::*;
 pub use network::*;
 pub use thread::*;
+pub use usb::*;
 
 // MARK: System and video
 pub const SYS_BASE_CACHED: u32 = 0x8000_0000;

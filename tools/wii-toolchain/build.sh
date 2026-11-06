@@ -88,6 +88,8 @@ LIBOGC_SOURCES=(
     libogc/{video_asm,gu_psasm,gu_ps_concat44}.S
     # IOS, the Wii system software, and serial ports for the GameCube controllers
     libogc/{conf,es,exi,ios,ipc,isfs,pad,si,stm,usb,wiilaunch,network_wii,network_common,wiisd}.c
+    # Official USB mouse and boot-keyboard drivers
+    libogc/usbmouse.c libwiikeyboard/usbkeyboard.c
     # Audio, the DSP mixes the voices of AESND
     libogc/{audio,dsp}.c libaesnd/aesndlib.c
     # Bluetooth stack and the Wii Remote library
@@ -301,7 +303,7 @@ build_dsp_mixer() {
 
 build_libraries() {
     # The libogc sources are checked too, so edits in dev mode get built
-    if outdated "$BUILD_DIR/libogc.a" "$LIBOGC_DIR/.patched" "$LIBOGC_DIR"/{gc,libogc,libaesnd,lwbt,wiiuse} \
+    if outdated "$BUILD_DIR/libogc.a" "$LIBOGC_DIR/.patched" "$LIBOGC_DIR"/{gc,libogc,libaesnd,libwiikeyboard,lwbt,wiiuse} \
         "$BUILD_DIR/include" "$SYSROOT/lib/libc.a" "$TOOLCHAIN_DIR/build.sh"; then
         build_archive libogc.a "${LIBOGC_CFLAGS[@]}" -- "${LIBOGC_SOURCES[@]/#/$LIBOGC_DIR/}"
     fi
