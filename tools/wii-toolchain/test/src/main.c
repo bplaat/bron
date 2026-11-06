@@ -9,6 +9,7 @@
 #include <malloc.h>
 #include <math.h>
 #include <ogc/cast.h>
+#include <ogc/es.h>
 #include <ogc/lwp_watchdog.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -758,6 +759,13 @@ static void test_time(void) {
     CHECK(unlink("sd:/time.txt") == 0);
 }
 
+static void test_es_alignment(void) {
+    _Alignas(32) tikview views[1];
+    // The aligned request may fail for an unknown title, but must reach IOS.
+    CHECK(ES_GetTicketViews(0, views, 1) != ES_EALIGN);
+    CHECK(ES_GetTicketViews(0, (tikview*)((uint8_t*)views + 1), 1) == ES_EALIGN);
+}
+
 static void test_entropy(void) {
     unsigned char bytes[257] = {0};
     CHECK(getentropy(NULL, 0) == 0);
@@ -799,6 +807,7 @@ int main(void) {
     run("SD errors and descriptors", test_descriptors);
     run("SD stdio streams", test_stdio_files);
     run("time", test_time);
+    run("ES buffer alignment", test_es_alignment);
     run("entropy arguments and generation", test_entropy);
 
     report("DONE %d failed\n", failures);

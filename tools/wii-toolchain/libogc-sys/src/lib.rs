@@ -66,6 +66,7 @@ unsafe extern "C" {
     pub fn SYS_ResetSystem(reset: i32, reset_code: u32, force_menu: i32);
     pub fn CONF_GetAspectRatio() -> c_int;
     pub fn CONF_GetNickName(nickname: *mut u8) -> i32;
+    pub fn IOS_ReloadIOS(version: i32) -> i32;
     pub fn DCFlushRange(pointer: *mut c_void, size: u32);
     pub fn DCInvalidateRange(pointer: *mut c_void, size: u32);
     pub fn gettime() -> u64;

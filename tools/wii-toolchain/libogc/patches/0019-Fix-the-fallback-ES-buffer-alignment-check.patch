@@ -1,0 +1,26 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Fri, 6 Nov 2026 11:11:00 +0100
+Subject: [PATCH] Fix the fallback ES buffer alignment check
+
+Equality binds more tightly than bitwise AND, so the fallback alignment
+macro always rejects buffers for power-of-two alignments greater than one.
+Group the mask operation before comparing it with zero. This allows IOS
+reload ticket queries while preserving rejection of misaligned buffers.
+---
+ libogc/es.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/libogc/es.c b/libogc/es.c
+index e9b5176..676ddb6 100644
+--- a/libogc/es.c
++++ b/libogc/es.c
+@@ -108,7 +108,7 @@ distribution.
+ #ifdef __builtin_is_aligned
+ # define ISALIGNED(x, a) __builtin_is_aligned(x, a)
+ #else
+-# define ISALIGNED(x, a) (((u32)x) & (a - 1) == 0)
++# define ISALIGNED(x, a) ((((u32)x) & (a - 1)) == 0)
+ #endif
+ 
+ static char __es_fs[] ATTRIBUTE_ALIGN(32) = "/dev/es";

@@ -37,6 +37,12 @@ mod usb;
 // The power button of the Wii and of the Wii Remotes, libogc calls it from an interrupt
 static POWER_PRESSED: AtomicBool = AtomicBool::new(false);
 
+// Start a fresh IOS58 session before constructors and peripheral initialization.
+#[unsafe(no_mangle)]
+pub extern "C" fn __IOS_LoadStartupIOS() -> i32 {
+    unsafe { IOS_ReloadIOS(58) }
+}
+
 struct Wii;
 
 impl Platform for Wii {

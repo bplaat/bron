@@ -150,6 +150,8 @@ The libogc patches:
   `libogc-sys` or the workspace's `getrandom` replacement.
   Its security depends on fresh, unpredictable IOS signing nonces; emulator
   tests do not establish the quality of this entropy source on real hardware.
+- `0019` fixes the fallback ES alignment check, which rejected aligned buffers when
+  building with clang
 
 The libdvm patch:
 
