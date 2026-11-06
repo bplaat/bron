@@ -147,16 +147,22 @@ clone() {
     mv "$dir.part" "$dir"
 }
 
+# Fetches only the dependencies needed by this command, before any builds start.
 fetch() {
-    local repo
-    for repo in "${REPOS[@]}"; do
+    local repos=("${REPOS[@]}") pids=() repo pid failed=0
+    case "${1:-all}" in
+        test) repos+=("$MELONDS_REPO") ;;
+        melonds) repos=("$MELONDS_REPO") ;;
+    esac
+    for repo in "${repos[@]}"; do
         # shellcheck disable=SC2086
         clone $repo &
+        pids+=($!)
     done
-    wait
-    for repo in "${REPOS[@]}"; do
-        [ -d "$BUILD_DIR/${repo%% *}" ] || die "Failed to clone ${repo%% *}"
+    for pid in "${pids[@]}"; do
+        wait "$pid" || failed=1
     done
+    [ "$failed" = 0 ] || die "Failed to clone Nintendo DS toolchain dependencies"
 }
 
 # Applies the patches of a repo as commits on top of the upstream tag, again when they changed
@@ -396,8 +402,6 @@ run_test() {
 build_melonds() {
     local objects_dir="$BUILD_DIR/objects/melonds"
     command -v cmake > /dev/null || die "Install cmake and ninja to build melonDS"
-    # shellcheck disable=SC2086
-    clone $MELONDS_REPO
     patch melonds "$(echo "$MELONDS_REPO" | cut -d' ' -f4)"
     [ -f "$objects_dir/build.ninja" ] || cmake -S "$BUILD_DIR/melonds" -B "$objects_dir" -G Ninja -Wno-dev \
         -DCMAKE_BUILD_TYPE=Release -DBUILD_QT_SDL=OFF -DENABLE_JIT=OFF -DENABLE_OGLRENDERER=OFF \
@@ -431,8 +435,8 @@ for command in "$@"; do
     case "$command" in
         all) lock; fetch; patch_all; build_libraries; build_arm7; build_ndstool ;;
         export-patches) export_patches ;;
-        test) lock; fetch; patch_all; build_libraries; build_arm7; build_ndstool; run_test ;;
-        melonds) lock; build_melonds ;;
+        test) lock; fetch test; patch_all; build_libraries; build_arm7; build_ndstool; run_test ;;
+        melonds) lock; fetch melonds; build_melonds ;;
         clean) rm -rf "$BUILD_DIR" ;;
         *) die "Unknown command: $command" ;;
     esac
