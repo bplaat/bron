@@ -12,6 +12,7 @@ use core::mem::MaybeUninit;
 
 use libogc_sys::*;
 use plaatcraft_engine::client::Controller;
+use plaatcraft_engine::client::desktop::Desktop;
 use plaatcraft_engine::client::input::{Context, Pad, Wiimote};
 use plaatcraft_engine::menu::Row;
 
@@ -42,11 +43,13 @@ fn buttons(wpad: u32) -> u32 {
 
 pub struct Remote {
     remotes: [Wiimote; 4],
+    desktop: Desktop,
 }
 
 impl Remote {
     /// Starts WPAD with the pointer in the 2D screen space.
     pub fn new([width, height]: [f32; 2]) -> Self {
+        crate::usb::start();
         unsafe {
             WPAD_Init();
             WPAD_SetDataFormat(WPAD_CHAN_ALL, WPAD_FMT_BTNS_ACC_IR);
@@ -56,12 +59,16 @@ impl Remote {
         }
         Self {
             remotes: [Wiimote::default(); 4],
+            desktop: Desktop::new([width, height]),
         }
     }
 }
 
 impl Controller for Remote {
     fn poll(&mut self) {
+        crate::usb::poll();
+        self.desktop
+            .poll(&crate::usb::EVENTS, crate::system::seconds());
         unsafe {
             WPAD_ScanPads();
         }
@@ -93,6 +100,16 @@ impl Controller for Remote {
 
     fn read_player(&self, player: usize, context: Context) -> Pad {
         self.remotes[player].pad(context)
+    }
+
+    fn desktop(&self, context: Context) -> Pad {
+        self.desktop.pad(context)
+    }
+    fn text(&self) -> &str {
+        self.desktop.text()
+    }
+    fn mouse_pointer(&self) -> Option<[f32; 2]> {
+        self.desktop.pointer()
     }
 
     fn status(&self) -> Vec<Row> {

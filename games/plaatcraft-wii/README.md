@@ -82,6 +82,23 @@ Remotes that have not joined split-screen. All connected Remotes show their curs
 menus, even before split-screen is enabled.
 Each player's inventory changes their own hotbar.
 
+USB keyboards and standard USB mice also control player 1, alongside the Remote. They can
+be connected or removed while playing. The Wii keyboard uses the US key layout.
+
+| Keyboard/mouse    | Action                                                 |
+| ----------------- | ------------------------------------------------------ |
+| WASD              | Move and strafe                                        |
+| Mouse movement    | Look around                                            |
+| Left/right mouse  | Break/place blocks                                     |
+| Middle mouse      | Pick the targeted block                                |
+| Mouse wheel       | Cycle hotbar; scroll inventory or lists                |
+| 1-9               | Select a hotbar slot; assign a hovered inventory block |
+| Space             | Jump/swim/fly up; double tap to fly                    |
+| Shift / Ctrl      | Sneak or fly down / run or fly faster                  |
+| E                 | Inventory                                              |
+| T / Enter / Slash | Chat / chat / command                                  |
+| Escape            | Pause or close the current menu                        |
+
 ## How it works
 
 The render distance is 8 chunks, or 4 per split-screen view. A worker loads or generates, lights, and meshes

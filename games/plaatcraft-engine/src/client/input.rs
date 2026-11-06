@@ -60,6 +60,14 @@ pub enum Button {
     Next,
     /// Touches the screen at the pointer, like a hotbar slot.
     Tap,
+    /// Opens chat input.
+    Chat,
+    /// Opens chat with a command prefix.
+    Command,
+    /// Native keyboard characters are available this frame.
+    Text,
+    /// Cancels a menu or text field without erasing text.
+    Cancel,
 }
 
 impl Button {
@@ -81,6 +89,12 @@ pub struct Pad {
     pub look: [f32; 2],
     /// Where the pointer is on the 2D screen space, and its roll in degrees.
     pub pointer: Option<[f32; 3]>,
+    /// Relative desktop mouse motion, in pixels.
+    pub mouse_motion: [f32; 2],
+    /// Mouse wheel steps, positive upward.
+    pub scroll: i32,
+    /// A hotbar slot selected with a number key.
+    pub hotbar: Option<usize>,
 }
 
 impl Pad {
@@ -94,11 +108,11 @@ impl Pad {
         self.pressed & button.mask() != 0
     }
 
-    pub(super) const fn any_pressed(&self) -> bool {
-        self.pressed != 0
+    pub(super) const fn has_action(&self) -> bool {
+        self.pressed != 0 || self.scroll != 0 || self.hotbar.is_some()
     }
 
-    const fn set(&mut self, button: Button, (held, pressed): (bool, bool)) {
+    pub(super) const fn set(&mut self, button: Button, (held, pressed): (bool, bool)) {
         if held {
             self.held |= button.mask();
         }
@@ -117,6 +131,12 @@ impl Pad {
             walk: add(self.walk, other.walk),
             look: add(self.look, other.look),
             pointer: self.pointer.or(other.pointer),
+            mouse_motion: [
+                self.mouse_motion[0] + other.mouse_motion[0],
+                self.mouse_motion[1] + other.mouse_motion[1],
+            ],
+            scroll: self.scroll.saturating_add(other.scroll),
+            hotbar: self.hotbar.or(other.hotbar),
         }
     }
 }

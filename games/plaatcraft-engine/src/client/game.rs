@@ -238,7 +238,7 @@ impl<P: Platform> Game<P> {
         player.menu = Some(menu);
         Self {
             player_index: 0,
-            menu_pointers: (0..P::MAX_LOCAL_PLAYERS)
+            menu_pointers: (0..=P::MAX_LOCAL_PLAYERS)
                 .map(|_| MenuPointer::default())
                 .collect(),
             player,
@@ -698,7 +698,10 @@ impl<P: Platform> Game<P> {
             let dt = (now - self.last_frame).min(0.1);
             self.last_frame = now;
             self.controller.poll();
-            self.player.pad = self.controller.read_player(0, self.context());
+            self.player.pad = self
+                .controller
+                .desktop(self.context())
+                .merge(self.controller.read_player(0, self.context()));
             self.map_pointer(0);
             self.network_events(now);
             self.update_controls(dt, now);
@@ -764,9 +767,13 @@ impl<P: Platform> Game<P> {
         let size = self.control_size();
         let mut selected: Option<(usize, Pad, bool)> = None;
         // Button presses take priority over pointer movement from another controller.
-        for index in 0..P::MAX_LOCAL_PLAYERS {
-            let mut pad = self.controller.read_player(index, Context::Menu);
-            let source = if index == 0 {
+        for index in 0..=P::MAX_LOCAL_PLAYERS {
+            let mut pad = if index == P::MAX_LOCAL_PLAYERS {
+                self.controller.desktop(Context::Menu)
+            } else {
+                self.controller.read_player(index, Context::Menu)
+            };
+            let source = if index == 0 || index == P::MAX_LOCAL_PLAYERS {
                 self.gpu.primary_screen_size().unwrap_or(self.gpu.size())
             } else {
                 self.gpu.size()
@@ -776,9 +783,9 @@ impl<P: Platform> Game<P> {
                 pointer[1] *= size[1] / source[1];
             }
             let moved = self.menu_pointers[index].moved(pad.pointer).is_some();
-            if (pad.any_pressed() || moved)
+            if (pad.has_action() || moved)
                 && selected
-                    .is_none_or(|(_, previous, _)| pad.any_pressed() && !previous.any_pressed())
+                    .is_none_or(|(_, previous, _)| pad.has_action() && !previous.has_action())
             {
                 selected = Some((index, pad, moved));
             }
@@ -900,6 +907,22 @@ impl<P: Platform> Game<P> {
         }
         menu.session = session;
         let page = menu.page;
+        if pad.scroll != 0 {
+            menu.scroll_steps(i64::from(pad.scroll));
+        }
+        if self.player_index == 0 && page.typing() {
+            let max = match page {
+                Page::Chat => MAX_CHAT_LENGTH,
+                Page::Username => MAX_NAME_LENGTH,
+                Page::DirectConnect => MAX_ADDRESS_LENGTH,
+                _ => database::MAX_NAME_LENGTH,
+            };
+            for ch in self.controller.text().chars().filter(|ch| !ch.is_control()) {
+                if menu.text.chars().count() < max {
+                    menu.text.push(ch);
+                }
+            }
+        }
         if let Some([x, y]) = pointer {
             menu.point(&Layout::new(menu, P::MENU, size, [0.0; 4]), [x, y]);
         }
@@ -920,12 +943,16 @@ impl<P: Platform> Game<P> {
             let volume = &mut self.settings.game.volume;
             let step = i16::from(pad.pressed(Button::Right)) - i16::from(pad.pressed(Button::Left));
             *volume = (i16::from(*volume) + step * 10).clamp(0, menu::MAX_VOLUME.into()) as u8;
-            if pad.pressed(Button::Select)
+            if pad.held(Button::Select)
                 && let Some([x, y, _]) = pad.pointer
             {
                 *volume = (layout.slider_fraction([x, y]) * 10.0 + 0.5) as u8 * 10;
             }
             self.sounds.set_volume(*volume);
+        }
+        if pad.pressed(Button::Cancel) {
+            self.back(page);
+            return;
         }
         // The keyboard erases with back and finishes with confirm
         if page.typing() {
@@ -1456,6 +1483,27 @@ impl<P: Platform> Game<P> {
             }
         }
         let mut hotbar = self.player.hotbar;
+        if let Some(slot) = pad.hotbar {
+            let left = (self.control_size()[0] - CELL * COLUMNS as f32) / 2.0;
+            let hovered = pad.pointer.is_some_and(|[x, y, _]| {
+                x >= left
+                    && x < left + CELL * COLUMNS as f32
+                    && (INVENTORY_TOP..INVENTORY_TOP + CELL * ROWS as f32).contains(&y)
+                    && (page
+                        + ((y - INVENTORY_TOP) / CELL) as usize * COLUMNS
+                        + ((x - left) / CELL) as usize)
+                        < count
+            });
+            if hovered {
+                hotbar.assign(slot, world::MATERIALS[self.player.focus].0);
+            } else {
+                hotbar.selected = slot;
+            }
+        }
+        if pad.scroll != 0 {
+            self.player.focus = (self.player.focus as i64 - i64::from(pad.scroll) * COLUMNS as i64)
+                .clamp(0, count as i64 - 1) as usize;
+        }
         if pad.pressed(Button::Previous) {
             hotbar.cycle(1);
         }
@@ -1481,6 +1529,21 @@ impl<P: Platform> Game<P> {
     // Looks around, selects blocks and edits, the physics runs in tick_player.
     fn play(&mut self, dt: f32, now: f32) {
         let pad = self.player.pad;
+        if pad.pressed(Button::Chat) || pad.pressed(Button::Command) {
+            let command = pad.pressed(Button::Command);
+            let mut text = if command {
+                String::from("/")
+            } else {
+                String::new()
+            };
+            // USB callbacks can deliver the shortcut and more text before the next frame.
+            let shortcut = if command { &['/'][..] } else { &['t', 'T'][..] };
+            if let Some((_, typed)) = self.controller.text().split_once(shortcut) {
+                text.extend(typed.chars().take(MAX_CHAT_LENGTH - text.chars().count()));
+            }
+            self.show_text(Some(Page::Chat), text);
+            return;
+        }
         if pad.pressed(Button::Pick) {
             if let Some(hit) = self.player.target
                 && let Some(material) = world::item_material(hit.material)
@@ -1502,9 +1565,10 @@ impl<P: Platform> Game<P> {
         }
         let turn = |value: f32| value * value.abs() * LOOK_SPEED * dt / 0.002;
         let [yaw, pitch] = pad.look;
-        self.player
-            .camera
-            .look(f64::from(turn(yaw)), f64::from(-turn(pitch)));
+        self.player.camera.look(
+            f64::from(turn(yaw) + pad.mouse_motion[0]),
+            f64::from(-turn(pitch) + pad.mouse_motion[1]),
+        );
         if pad.pressed(Button::Jump) {
             if self
                 .player
@@ -1524,6 +1588,10 @@ impl<P: Platform> Game<P> {
             }
         }
         let mut hotbar = self.player.hotbar;
+        if let Some(slot) = pad.hotbar {
+            hotbar.selected = slot;
+        }
+        hotbar.cycle(i64::from(pad.scroll));
         if pad.pressed(Button::Previous) {
             hotbar.cycle(1);
         }
@@ -1769,6 +1837,14 @@ impl<P: Platform> Game<P> {
                 );
             }
         }
+        if (global || self.player_index == 0)
+            && let Some([x, y]) = self.controller.mouse_pointer()
+        {
+            hud.mouse([
+                x * size[0] / primary_pointer_size[0],
+                y * size[1] / primary_pointer_size[1],
+            ]);
+        }
     }
 }
 /// The viewport of a local player, in fractions of the full screen.
@@ -1818,6 +1894,7 @@ pub(crate) mod tests {
         draws: Vec<Draw>,
         primary_size: Option<[f32; 2]>,
         primary_screen: bool,
+        desktop: Option<super::super::desktop::Desktop>,
     }
     struct Draw {
         primary_screen: bool,
@@ -1934,6 +2011,17 @@ pub(crate) mod tests {
         fn poll(&mut self) {}
         fn read_player(&self, player: usize, context: Context) -> Pad {
             self.pads[player].pad(context)
+        }
+        fn desktop(&self, context: Context) -> Pad {
+            self.desktop
+                .as_ref()
+                .map_or_else(Pad::default, |desktop| desktop.pad(context))
+        }
+        fn text(&self) -> &str {
+            self.desktop.as_ref().map_or("", |desktop| desktop.text())
+        }
+        fn mouse_pointer(&self) -> Option<[f32; 2]> {
+            self.desktop.as_ref().and_then(|desktop| desktop.pointer())
         }
     }
     impl<const PLAYERS: usize> Platform for TestConsole<PLAYERS> {
@@ -2392,6 +2480,243 @@ pub(crate) mod tests {
                 assert_eq!(game.player_index, 0);
             }
         }
+    }
+
+    #[test]
+    fn usb_slash_commands_toggle_flight_on_both_consoles() {
+        use super::super::desktop::{Desktop, DesktopEvents};
+
+        fn check<const PLAYERS: usize>() {
+            let events = DesktopEvents::new();
+            let mut game = game_for::<PLAYERS>();
+            game.show(None);
+            game.controller.desktop = Some(Desktop::new([640.0, 480.0]));
+            for expected in [true, false] {
+                for code in [0x38, 9, 15, 28, 0x28] {
+                    events.key(code, true, None);
+                    events.key(code, false, None);
+                    game.controller.desktop.as_mut().unwrap().poll(&events, 0.0);
+                    game.player.pad = game.controller.desktop(game.context());
+                    game.update_controls(TICK, 0.0);
+                }
+                assert!(game.player.menu.is_none());
+                game.serve(|server, world| server.tick(world));
+                assert_eq!(game.player.camera.flying, expected);
+                assert!(game.messages.iter().any(|(message, _)| {
+                    message == if expected { "Flying on" } else { "Flying off" }
+                }));
+            }
+        }
+        check::<4>();
+        check::<5>();
+    }
+
+    #[test]
+    fn slash_commands_keep_characters_received_in_the_opening_frame() {
+        use super::super::desktop::{Desktop, DesktopEvents};
+
+        let events = DesktopEvents::new();
+        let mut game = game();
+        game.show(None);
+        let mut desktop = Desktop::new([640.0, 480.0]);
+        for code in [0x38, 9, 15, 28] {
+            events.key(code, true, None);
+            events.key(code, false, None);
+        }
+        desktop.poll(&events, 0.0);
+        game.controller.desktop = Some(desktop);
+        game.player.pad = game.controller.desktop(Context::Play);
+        game.update_controls(TICK, 0.0);
+        assert_eq!(game.player.menu.as_ref().unwrap().text, "/fly");
+        events.key(0x28, true, None);
+        game.controller.desktop.as_mut().unwrap().poll(&events, 0.1);
+        game.player.pad = game.controller.desktop(Context::Menu);
+        game.update_controls(TICK, 0.1);
+        game.serve(|server, world| server.tick(world));
+        assert!(game.player.camera.flying);
+    }
+
+    #[test]
+    fn on_screen_slash_commands_toggle_flight_on_both_consoles() {
+        fn check<const PLAYERS: usize>() {
+            let mut game = game_for::<PLAYERS>();
+            for expected in [true, false] {
+                game.show(Some(Page::Chat));
+                // The on-screen keys for /fly.
+                for index in [46, 29, 34, 18] {
+                    game.menu_action(Page::Chat, Action::Key(index));
+                }
+                assert_eq!(game.player.menu.as_ref().unwrap().text, "/fly");
+                game.menu_action(Page::Chat, Action::Enter);
+                assert!(game.player.menu.is_none());
+                game.serve(|server, world| server.tick(world));
+                assert_eq!(game.player.camera.flying, expected);
+            }
+        }
+        check::<4>();
+        check::<5>();
+    }
+
+    #[test]
+    fn desktop_number_keys_assign_the_hovered_inventory_block() {
+        let mut game = game();
+        game.show(None);
+        game.player.inventory = true;
+        let left = (game.control_size()[0] - CELL * COLUMNS as f32) / 2.0;
+        let mut pad = Pad::default();
+        pad.hotbar = Some(2);
+        pad.pointer = Some([left + CELL * 1.5, INVENTORY_TOP + CELL / 2.0, 0.0]);
+        game.player.pad = pad;
+        game.inventory();
+        assert_eq!(game.player.hotbar.selected, 0);
+        assert_eq!(game.player.hotbar.slots[2], world::MATERIALS[1].0);
+    }
+
+    #[test]
+    fn inventory_number_keys_do_not_assign_empty_cells() {
+        let mut game = game();
+        game.show(None);
+        game.player.inventory = true;
+        game.player.focus = world::MATERIALS.len() - 1;
+        let empty = world::MATERIALS.len() - page_start(game.player.focus);
+        assert!(empty < INVENTORY_PAGE);
+        let left = (game.control_size()[0] - CELL * COLUMNS as f32) / 2.0;
+        let hotbar = game.player.hotbar;
+        game.player.pad.hotbar = Some(2);
+        game.player.pad.pointer = Some([
+            left + CELL * ((empty % COLUMNS) as f32 + 0.5),
+            INVENTORY_TOP + CELL * ((empty / COLUMNS) as f32 + 0.5),
+            0.0,
+        ]);
+        game.inventory();
+        assert_eq!(game.player.hotbar.slots, hotbar.slots);
+        assert_eq!(game.player.hotbar.selected, 2);
+    }
+
+    #[test]
+    fn usb_mouse_wheel_scrolls_shared_lists_without_moving_the_pointer() {
+        use super::super::desktop::{Desktop, DesktopEvents};
+
+        let events = DesktopEvents::new();
+        let mut game = game();
+        game.show(Some(Page::Worlds));
+        game.player.menu.as_mut().unwrap().set_rows(
+            (0..12)
+                .map(|index| Row {
+                    title: format!("World {index}"),
+                    details: String::new(),
+                    enabled: true,
+                })
+                .collect(),
+            None,
+        );
+        let mut desktop = Desktop::new([640.0, 480.0]);
+        events.mouse(0, 0, 0, -1);
+        desktop.poll(&events, 0.0);
+        game.controller.desktop = Some(desktop);
+        game.update_controls(0.0, 0.0);
+        let layout = Layout::new(
+            game.player.menu.as_ref().unwrap(),
+            TestPlatform::MENU,
+            game.control_size(),
+            [0.0; 4],
+        );
+        assert!(!layout.actions().any(|action| action == Action::Row(0)));
+        assert!(layout.actions().any(|action| action == Action::Row(1)));
+    }
+
+    #[test]
+    fn usb_desktop_controls_only_p1_and_types_chat_with_a_mouse_cursor() {
+        use super::super::desktop::{Desktop, DesktopEvents};
+
+        let events = DesktopEvents::new();
+        let mut game = game_for::<5>();
+        game.gpu.primary_size = Some([854.0, 480.0]);
+        game.set_local_players(2);
+        game.show(None);
+        let mut desktop = Desktop::new([854.0, 480.0]);
+        events.key(26, true, None);
+        events.mouse(0, 20, -10, 0);
+        desktop.poll(&events, 0.0);
+        game.controller.desktop = Some(desktop);
+        let yaw = game.player.camera.yaw;
+        let pitch = game.player.camera.pitch;
+        game.player.pad = game.controller.desktop(Context::Play);
+        game.update_controls(TICK, 0.0);
+        game.tick_player(TICK);
+        assert_eq!(game.player.camera.input.direction, [0.0, 1.0]);
+        assert_eq!(game.locals[0].camera.input.direction, [0.0; 2]);
+        assert!(
+            (game.player.camera.yaw - (yaw + 0.04).rem_euclid(TAU)).abs() < 0.001,
+            "yaw before {yaw}, after {}",
+            game.player.camera.yaw
+        );
+        assert!((game.player.camera.pitch - pitch - 0.02).abs() < 0.001);
+        events.key(26, false, None);
+        events.key(8, true, None);
+        game.controller.desktop.as_mut().unwrap().poll(&events, 0.1);
+        game.player.pad = game.controller.desktop(Context::Play);
+        game.update_controls(TICK, 0.1);
+        assert!(game.player.inventory);
+        assert!(!game.locals[0].inventory);
+        game.gpu.draws.clear();
+        game.draw_frame(0.1, 0.0);
+        let arrows: Vec<_> = game
+            .gpu
+            .draws
+            .iter()
+            .filter(|draw| draw.texture == Texture::Mouse)
+            .collect();
+        assert_eq!(arrows.len(), 1);
+        assert!(arrows[0].primary_screen);
+        let pointer = game.controller.mouse_pointer().unwrap();
+        assert_eq!(arrows[0].vertices[0].position[0] + 4.5, pointer[0]);
+        assert_eq!(arrows[0].vertices[0].position[1] + 4.5, pointer[1]);
+        assert_eq!(
+            arrows[0].vertices[1].position[0] - arrows[0].vertices[0].position[0],
+            48.0
+        );
+        events.key(8, false, None);
+        events.key(0x29, true, None);
+        game.controller.desktop.as_mut().unwrap().poll(&events, 0.2);
+        game.player.pad = game.controller.desktop(Context::Inventory);
+        game.update_controls(TICK, 0.2);
+        assert!(!game.player.inventory);
+        events.key(0x29, false, None);
+        events.key(23, true, None);
+        game.controller.desktop.as_mut().unwrap().poll(&events, 0.3);
+        game.player.pad = game.controller.desktop(Context::Play);
+        game.update_controls(TICK, 0.3);
+        assert_eq!(game.page(), Some(Page::Chat));
+        events.key(23, false, None);
+        for code in [11, 8, 15, 15, 18] {
+            events.key(code, true, None);
+            events.key(code, false, None);
+        }
+        game.controller.desktop.as_mut().unwrap().poll(&events, 0.4);
+        game.player.pad = game.controller.desktop(Context::Menu);
+        game.update_controls(TICK, 0.4);
+        assert_eq!(game.player.menu.as_ref().unwrap().text, "hello");
+        assert!(game.locals[0].menu.is_none());
+        events.key(0x28, true, None);
+        game.controller.desktop.as_mut().unwrap().poll(&events, 0.5);
+        game.player.pad = game.controller.desktop(Context::Menu);
+        game.update_controls(TICK, 0.5);
+        assert!(game.player.menu.is_none());
+        assert!(
+            game.messages
+                .iter()
+                .any(|(message, _)| message.ends_with(": hello"))
+        );
+    }
+
+    #[test]
+    fn mouse_hotspot_is_the_opaque_upper_left_tip_of_the_original_png() {
+        let image = image::decode(include_bytes!("../../assets/mouse.png")).unwrap();
+        assert_eq!([image.width(), image.height()], [64, 64]);
+        let pixels = image.pixels();
+        assert!(pixels[(6 * 64 + 6) * 4 + 3] >= 128);
+        assert!(pixels[(5 * 64 + 5) * 4 + 3] < 128);
     }
 
     #[test]

@@ -79,6 +79,8 @@ pub enum Thread {
     Worker,
     /// Polls the LAN sockets.
     Network,
+    /// Reads USB input without blocking rendering.
+    Input,
 }
 
 /// A mutex of the system's threads, it doesn't move after [`Lock::new`].
@@ -176,6 +178,8 @@ pub enum Texture {
     Font,
     /// A numbered Wii Remote pointer, zero-based for players 1-4.
     Cursor(usize),
+    /// The desktop mouse arrow.
+    Mouse,
 }
 
 /// How the draws test and write depth, cull and blend.
@@ -279,6 +283,18 @@ pub trait Controller {
     fn poll(&mut self);
     /// Maps one local controller to the current context.
     fn read_player(&self, player: usize, context: Context) -> Pad;
+    /// USB keyboard and mouse input, always assigned to player one.
+    fn desktop(&self, _context: Context) -> Pad {
+        Pad::default()
+    }
+    /// Native keyboard text typed this frame.
+    fn text(&self) -> &str {
+        ""
+    }
+    /// The desktop mouse position in player one's screen space.
+    fn mouse_pointer(&self) -> Option<[f32; 2]> {
+        None
+    }
     /// The numbered cursor image of a player; touch input may omit the hand cursor.
     fn cursor_index(&self, player: usize) -> Option<usize> {
         (player < 4).then_some(player)

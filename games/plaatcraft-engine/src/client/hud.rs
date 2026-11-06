@@ -223,6 +223,18 @@ impl<'a, G: Gpu> Hud<'a, G> {
         y
     }
 
+    /// A desktop arrow at the same 48-pixel size as the Remote cursors.
+    pub(super) fn mouse(&mut self, [x, y]: [f32; 2]) {
+        // The original 64-pixel PNG's tip is at (6, 6), scaled to (4.5, 4.5).
+        let (x, y) = (x - 4.5, y - 4.5);
+        self.quad(
+            Texture::Mouse,
+            [[x, y], [x + 48.0, y], [x + 48.0, y + 48.0], [x, y + 48.0]],
+            [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
+            [WHITE; 4],
+        );
+    }
+
     /// The Wii Remote cursor, rolled with the remote like in the Wii menu.
     pub(super) fn cursor(&mut self, [x, y, angle]: [f32; 3], player: usize) {
         // The cursor image's tip is at its center, so it turns around the pointer

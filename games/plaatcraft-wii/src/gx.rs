@@ -209,6 +209,7 @@ impl Gx {
             Texture::Character(part) => &self.textures.characters[part],
             Texture::Font => &self.textures.font,
             Texture::Cursor(player) => &self.textures.cursors[player],
+            Texture::Mouse => &self.textures.mouse,
         };
         self.bound = Some(texture);
         unsafe { GX_LoadTexObj(object, GX_TEXMAP0 as u8) };

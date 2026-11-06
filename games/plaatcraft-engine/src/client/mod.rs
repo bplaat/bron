@@ -10,6 +10,7 @@
 //! [`Platform`] with its GPU, input, sound output, threads and sockets and runs [`Game`].
 
 mod bench;
+pub mod desktop;
 mod files;
 mod font;
 mod game;

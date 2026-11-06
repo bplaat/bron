@@ -93,7 +93,7 @@ pub fn spawn(thread: Thread, entry: Box<dyn FnOnce() + Send>) {
     }
     let (affinity, priority) = match thread {
         Thread::Worker => (OS_THREAD_ATTRIB_AFFINITY_CPU2, 20),
-        Thread::Network => (OS_THREAD_ATTRIB_AFFINITY_CPU0, 18),
+        Thread::Network | Thread::Input => (OS_THREAD_ATTRIB_AFFINITY_CPU0, 18),
     };
     let handle = Box::leak(zeroed::<OSThread>()).get();
     let stack = Box::leak(unsafe { Box::<Stack>::new_zeroed().assume_init() });

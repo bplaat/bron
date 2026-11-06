@@ -128,6 +128,8 @@ fn main() {
     let client_assets = manifest_dir.join("../plaatcraft-engine/assets");
     let font = convert(&mut data, &client_assets.join("font.png"), false);
     writeln!(code, "pub const FONT: Texture = {font};").unwrap();
+    let mouse = convert(&mut data, &client_assets.join("mouse.png"), false);
+    writeln!(code, "pub const MOUSE: Texture = {mouse};").unwrap();
     code.push_str("pub const CURSORS: [Texture; 4] = [\n");
     for file in ["cursor1.png", "cursor2.png", "cursor3.png", "cursor4.png"] {
         writeln!(

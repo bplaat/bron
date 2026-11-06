@@ -32,6 +32,7 @@ mod input;
 mod memory;
 mod system;
 mod textures;
+mod usb;
 
 // The power button of the Wii and of the Wii Remotes, libogc calls it from an interrupt
 static POWER_PRESSED: AtomicBool = AtomicBool::new(false);

@@ -72,7 +72,7 @@ pub fn spawn(thread: Thread, entry: Box<dyn FnOnce() + Send>) {
     // Lower than the main thread, so generation uses the time the main thread waits for vsync
     let priority = match thread {
         Thread::Worker => 40,
-        Thread::Network => 45,
+        Thread::Network | Thread::Input => 45,
     };
     let stack = Box::leak(alloc::vec![0u8; STACK_SIZE].into_boxed_slice());
     let mut handle = LWP_THREAD_NULL;

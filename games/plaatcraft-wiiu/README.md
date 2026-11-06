@@ -81,6 +81,11 @@ have not joined split-screen. Every connected Remote shows its cursor in
 global menus, even before split-screen is enabled. Each player's inventory changes their
 own hotbar.
 
+USB keyboards and standard USB boot mice also control player 1, alongside the GamePad,
+using the [same desktop controls as PlaatCraft](../plaatcraft/README.md#controls).
+The native Wii U keyboard service translates text using its keyboard layout. Devices can
+be connected or removed while playing; the mouse arrow appears in menus and inventory.
+
 ## How it works
 
 The render distance is 12 chunks, or 4-6 per split-screen view. A worker on its own CPU core

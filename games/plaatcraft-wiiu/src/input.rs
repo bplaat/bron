@@ -10,6 +10,7 @@
 use core::mem::MaybeUninit;
 
 use plaatcraft_engine::client::Controller;
+use plaatcraft_engine::client::desktop::Desktop;
 use plaatcraft_engine::client::input::{Context, Gamepad, Pad, Wiimote};
 use wut_sys::*;
 
@@ -84,11 +85,13 @@ pub struct Controllers {
     gamepad_size: [f32; 2],
     gamepad: Gamepad,
     wiimotes: [Wiimote; 4],
+    desktop: Desktop,
 }
 
 impl Controllers {
     /// Starts KPAD with the pointer and touches in the 2D screen space.
     pub fn new(size: [f32; 2], gamepad_size: [f32; 2]) -> Self {
+        crate::usb::start();
         unsafe {
             VPADInit();
             KPADInit();
@@ -98,6 +101,7 @@ impl Controllers {
             gamepad_size,
             gamepad: Gamepad::default(),
             wiimotes: [Wiimote::default(); 4],
+            desktop: Desktop::new(gamepad_size),
         }
     }
 
@@ -175,6 +179,8 @@ impl Controllers {
 
 impl Controller for Controllers {
     fn poll(&mut self) {
+        self.desktop
+            .poll(&crate::usb::EVENTS, crate::system::seconds());
         self.read_gamepad();
         for channel in 0..4 {
             self.read_wiimote(channel);
@@ -194,6 +200,16 @@ impl Controller for Controllers {
         } else {
             self.wiimotes[player - 1].pad(context)
         }
+    }
+
+    fn desktop(&self, context: Context) -> Pad {
+        self.desktop.pad(context)
+    }
+    fn text(&self) -> &str {
+        self.desktop.text()
+    }
+    fn mouse_pointer(&self) -> Option<[f32; 2]> {
+        self.desktop.pointer()
     }
 }
 
@@ -261,6 +277,7 @@ mod tests {
     #[test]
     fn gamepad_is_player_one_and_the_four_remotes_are_players_two_to_five() {
         let mut controllers = Controllers {
+            desktop: Desktop::new([854.0, 480.0]),
             size: [640.0, 480.0],
             gamepad_size: [854.0, 480.0],
             gamepad: Gamepad {
@@ -299,6 +316,7 @@ mod tests {
     #[test]
     fn gamepad_touch_clicks_without_a_hand_cursor() {
         let controllers = Controllers {
+            desktop: Desktop::new([854.0, 480.0]),
             size: [640.0, 480.0],
             gamepad_size: [854.0, 480.0],
             gamepad: Gamepad {
@@ -319,6 +337,7 @@ mod tests {
     #[test]
     fn gamepad_touch_uses_the_entire_primary_screen_in_every_context() {
         let mut controllers = Controllers {
+            desktop: Desktop::new([854.0, 480.0]),
             size: [640.0, 480.0],
             gamepad_size: [854.0, 480.0],
             gamepad: Gamepad {

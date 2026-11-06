@@ -30,6 +30,7 @@ pub struct Textures {
     pub sky: Vec<GXTexObj>,
     pub characters: Vec<GXTexObj>,
     pub font: GXTexObj,
+    pub mouse: GXTexObj,
     pub cursors: [GXTexObj; 4],
 }
 
@@ -50,6 +51,7 @@ impl Textures {
                 .map(|texture| object(texture, GX_REPEAT))
                 .collect(),
             font: object(&FONT, GX_CLAMP),
+            mouse: object(&MOUSE, GX_CLAMP),
             cursors: CURSORS.map(|texture| object(&texture, GX_CLAMP)),
         }
     }

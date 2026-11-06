@@ -30,6 +30,7 @@ mod gx2;
 mod input;
 mod memory;
 mod system;
+mod usb;
 
 struct WiiU;
 

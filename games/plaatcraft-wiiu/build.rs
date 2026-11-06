@@ -99,6 +99,7 @@ fn main() {
         client_assets.join("cursor2.png"),
         client_assets.join("cursor3.png"),
         client_assets.join("cursor4.png"),
+        client_assets.join("mouse.png"),
         white,
     ] {
         textures.push(convert(&out_dir, &path, false, false).0);
@@ -114,7 +115,8 @@ fn main() {
     let rest = tiles + sky.len() + characters.len();
     writeln!(code, "pub const FONT: usize = {rest};").unwrap();
     writeln!(code, "pub const CURSORS: usize = {};", rest + 1).unwrap();
-    writeln!(code, "pub const WHITE: usize = {};", rest + 5).unwrap();
+    writeln!(code, "pub const MOUSE: usize = {};", rest + 5).unwrap();
+    writeln!(code, "pub const WHITE: usize = {};", rest + 6).unwrap();
     writeln!(code, "pub const COUNT: usize = {};", textures.len()).unwrap();
     writeln!(code, "pub const HAS_ALPHA: [bool; {tiles}] = {alpha:?};").unwrap();
     fs::write(out_dir.join("textures.rs"), code).expect("failed to write textures.rs");

@@ -371,6 +371,7 @@ impl Gx2 {
             Texture::Character(part) => (textures::CHARACTERS + part, &self.clamp),
             Texture::Font => (textures::FONT, &self.clamp),
             Texture::Cursor(player) => (textures::CURSORS + player, &self.clamp),
+            Texture::Mouse => (textures::MOUSE, &self.clamp),
             Texture::None => (textures::WHITE, &self.clamp),
         };
         unsafe {
