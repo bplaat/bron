@@ -60,7 +60,15 @@ impl MediaRenderer {
                         pixels.clone(),
                     )
                 });
+                // Enlarged pixels are drawn as sharp squares, like those of a small icon or a
+                // zoomed in photo, shrunk bitmaps are smoothed.
+                context.save();
+                context.set_image_smoothing_enabled(!is_pixelated(
+                    width * context.scale_factor(),
+                    raster.width,
+                ));
                 context.draw_image(image, x, y, width, height);
+                context.restore();
             }
             Media::Vector(document) => draw_vector(context, document, rect),
         }
@@ -90,6 +98,16 @@ impl MediaRenderer {
             ),
         );
     }
+}
+
+// The device pixels per bitmap pixel from which pixels are drawn as squares. Smaller
+// enlargements are smoothed, as nearest neighbor scaling would make some pixels wider than
+// others.
+const PIXELATED_SCALE: f32 = 2.0;
+
+// Whether a bitmap of a width drawn at a width in device pixels shows its pixels as squares.
+fn is_pixelated(device_width: f32, width: u32) -> bool {
+    device_width >= PIXELATED_SCALE * width as f32
 }
 
 /// Renders media fitted within a square of `size` pixels, without enlarging it, as a bitmap of
@@ -498,6 +516,33 @@ mod tests {
         env!("CARGO_MANIFEST_DIR"),
         "/../../../lib/graphics/vector/tests"
     );
+
+    #[test]
+    fn enlarged_pixels_are_squares_from_twice_their_size() {
+        assert!(!is_pixelated(16.0, 16));
+        assert!(!is_pixelated(31.0, 16));
+        assert!(is_pixelated(32.0, 16));
+        // An image at actual size on a Retina display is drawn sharp.
+        assert!(is_pixelated(800.0 * 2.0, 800));
+    }
+
+    #[test]
+    fn enlarged_bitmaps_are_drawn_without_smoothing() {
+        let media = Media::Raster(Raster {
+            width: 2,
+            height: 1,
+            frames: vec![Frame {
+                pixels: Arc::from([0, 0, 0, 255, 255, 255, 255, 255]),
+                delay: std::time::Duration::ZERO,
+            }],
+            loop_count: LoopCount::Finite(1),
+        });
+        let pixels = render(media, 8, 4, false);
+        for row in pixels.chunks(8 * 4) {
+            let values: Vec<u8> = row.chunks(4).map(|pixel| pixel[0]).collect();
+            assert_eq!(values, [0, 0, 0, 0, 255, 255, 255, 255]);
+        }
+    }
 
     // Renders media fitted into a canvas, as premultiplied RGBA8 pixels.
     fn render(media: Media, width: u32, height: u32, white_background: bool) -> Vec<u8> {
