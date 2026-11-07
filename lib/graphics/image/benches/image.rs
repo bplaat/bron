@@ -155,9 +155,12 @@ fn decode(c: &mut Criterion) {
             continue;
         }
         let decoded = image::decode(bytes).expect("valid raster image");
-        let pixels = u64::from(decoded.width())
-            * u64::from(decoded.height())
-            * decoded.frames().len() as u64;
+        // Icon frames each have their own size.
+        let pixels = decoded
+            .frames()
+            .iter()
+            .map(|frame| u64::from(frame.bitmap().width()) * u64::from(frame.bitmap().height()))
+            .sum();
         raster.throughput(Throughput::Elements(pixels));
         raster.bench_function(name, |b| {
             b.iter(|| black_box(image::decode(black_box(bytes)).expect("valid raster image")));

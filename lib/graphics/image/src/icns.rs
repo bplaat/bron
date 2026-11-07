@@ -4,6 +4,9 @@
  * SPDX-License-Identifier: MIT
  */
 
+use alloc::vec::Vec;
+use core::time::Duration;
+
 use super::{
     Budget, DecodeError, Format, Image, LoopCount, Reader, Result, jpeg2000, pixel_len, png,
 };
@@ -31,7 +34,11 @@ fn entry<'a>(r: &mut Reader<'a>) -> Result<(&'a [u8], &'a [u8])> {
     Ok((kind, r.take(length)?))
 }
 
-pub(super) fn decode(data: &[u8]) -> Result<Image> {
+// An icon entry of a file: its kind, payload and pixel size.
+type Icon<'a> = (&'a [u8], &'a [u8], u32);
+
+// Returns the entries after the header, and the icons among them in file order.
+fn icons(data: &[u8]) -> Result<(&[u8], Vec<Icon<'_>>)> {
     let mut r = Reader::new(data);
     if r.take(4)? != b"icns" {
         return Err(DecodeError::InvalidHeader);
@@ -42,30 +49,64 @@ pub(super) fn decode(data: &[u8]) -> Result<Image> {
     }
     let data = data.get(8..length).ok_or(DecodeError::InvalidData)?;
     let mut r = Reader::new(data);
-    let mut largest = None;
+    let mut icons = Vec::new();
     while r.remaining() != 0 {
         let (kind, payload) = entry(&mut r)?;
-        if let Some(size) = dimension(kind)
-            && largest.is_none_or(|(_, _, current)| size > current)
-        {
-            largest = Some((kind, payload, size));
+        if let Some(size) = dimension(kind) {
+            icons.push((kind, payload, size));
         }
     }
-    let (kind, payload, size) = largest.ok_or(DecodeError::UnsupportedFeature)?;
+    Ok((data, icons))
+}
+
+// Decodes every icon as a frame in file order, leaving out those that fail. The largest frame
+// has the most pixels.
+pub(super) fn decode(data: &[u8]) -> Result<Image> {
+    let (data, icons) = icons(data)?;
+    let mut frames = Vec::new();
+    let mut largest: Option<(usize, u32)> = None;
+    let mut error = None;
+    // All frames share the decoding budget.
+    let mut budget = Budget::default();
+    for icon in icons {
+        let size = icon.2;
+        match decode_icon(data, icon) {
+            Ok(mut image) => {
+                budget.claim(image.frames[0].bitmap.data.len())?;
+                if largest.is_none_or(|(_, largest)| size > largest) {
+                    largest = Some((frames.len(), size));
+                }
+                let mut frame = image.frames.swap_remove(0);
+                frame.delay = Duration::ZERO;
+                frames.push(frame);
+            }
+            Err(icon_error) => _ = error.get_or_insert(icon_error),
+        }
+    }
+    let Some((largest_frame, _)) = largest else {
+        return Err(error.unwrap_or(DecodeError::UnsupportedFeature));
+    };
+    Ok(Image {
+        format: Format::Icns,
+        frames,
+        largest_frame,
+        is_animated: false,
+        loop_count: LoopCount::Finite(1),
+        text: Vec::new(),
+    })
+}
+
+// Decodes an icon, with the masks of legacy RGB icons from the other entries.
+fn decode_icon(data: &[u8], (kind, payload, size): Icon<'_>) -> Result<Image> {
     let decoded = match Format::from_signature(payload) {
         Some(Format::Png) => Some(png::decode(payload)?),
         Some(Format::Jpeg2000) => Some(jpeg2000::decode(payload)?),
         _ => None,
     };
-    if let Some(mut image) = decoded {
+    if let Some(image) = decoded {
         if image.width() != size || image.height() != size {
             return Err(DecodeError::InvalidHeader);
         }
-        image.format = Format::Icns;
-        image.frames.truncate(1);
-        image.frames[0].delay = core::time::Duration::ZERO;
-        image.is_animated = false;
-        image.loop_count = LoopCount::Finite(1);
         return Ok(image);
     }
     let (channels, mask_kind): (usize, &[u8]) = match kind {
@@ -204,8 +245,34 @@ mod tests {
             );
             assert_eq!(image.frames().len(), 1);
             assert!(!image.is_animated());
-            assert_eq!(image.frames()[0].delay(), core::time::Duration::ZERO);
+            assert_eq!(image.frames()[0].delay(), Duration::ZERO);
         }
+    }
+
+    #[test]
+    fn frames_are_every_icon_in_file_order() {
+        let rgb = [plane(16), plane(32), plane(64)].concat();
+        let data = icon(&[
+            (b"ic12", png(64)),
+            (b"info", vec![0]),
+            (b"is32", rgb),
+            (b"s8mk", vec![128; 256]),
+            (b"icp4", vec![0]),
+            (b"icp5", png(32)),
+        ]);
+        let image = crate::decode(&data).expect("ICNS");
+        let sizes: Vec<_> = image
+            .frames()
+            .iter()
+            .map(|frame| frame.bitmap().width())
+            .collect();
+        assert_eq!(sizes, [64, 16, 32]);
+        assert_eq!((image.width(), image.height()), (64, 64));
+        assert_eq!(image.frames()[1].pixels(), [16, 32, 64, 128].repeat(256));
+        assert_eq!(
+            crate::decode(&icon(&[(b"info", vec![0])])),
+            Err(DecodeError::UnsupportedFeature)
+        );
     }
 
     #[test]
@@ -218,7 +285,7 @@ mod tests {
         assert_eq!((image.width(), image.height()), (32, 32));
         assert_eq!(image.pixels(), expected.pixels());
         assert!(!image.is_animated());
-        assert_eq!(image.frames()[0].delay(), core::time::Duration::ZERO);
+        assert_eq!(image.frames()[0].delay(), Duration::ZERO);
         assert!(crate::decode(&icon(&[(b"icp4", payload.to_vec())])).is_err());
     }
 

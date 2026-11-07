@@ -108,8 +108,9 @@ impl<'a> Decoder<'a> {
                         format: Format::Gif,
                         is_animated: self.has_loop_extension || self.frames.len() > 1,
                         frames: self.frames,
-                        text: Vec::new(),
+                        largest_frame: 0,
                         loop_count: self.loop_count,
+                        text: Vec::new(),
                     });
                 }
                 _ => return Err(DecodeError::InvalidData),

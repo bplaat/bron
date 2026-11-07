@@ -25,6 +25,11 @@ binary transparency. JPEG requires opaque pixels.
 `Format::from_extension` and `Format::from_signature` find the format of a file name or
 encoded bytes, and `Format::can_encode` tells whether images can be written in it.
 
+Animation frames all have the same canvas size. ICO and ICNS files hold the same icon in
+several sizes, which are decoded as frames of their own sizes in file order. `Image::width`,
+`Image::height` and `Image::pixels` are those of `Image::largest_frame`, the largest icon,
+or the first frame of other images.
+
 PNG/APNG files can carry text entries. Set `EncodeOptions::png_text` to keyword and
 text pairs: Latin-1 text is written as `tEXt` and other text as UTF-8 `iTXt`.
 Decoding reads `tEXt`, `zTXt`, and `iTXt` entries into `Image::text`.

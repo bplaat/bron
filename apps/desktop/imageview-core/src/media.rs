@@ -107,8 +107,13 @@ pub fn decode_media(bytes: &[u8]) -> Result<Media, String> {
             .map_err(|error| error.to_string());
     }
     let decoded = image::decode(bytes).map_err(|error| error.to_string())?;
-    let frames = decoded
-        .frames()
+    // A still image shows its largest frame, like the largest size of an icon.
+    let frames = if decoded.is_animated() {
+        decoded.frames()
+    } else {
+        core::slice::from_ref(decoded.largest_frame())
+    };
+    let frames = frames
         .iter()
         .map(|frame| Frame {
             pixels: premultiplied_bgra(frame.pixels()).into(),

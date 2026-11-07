@@ -528,13 +528,14 @@ pub(super) fn decode(data: &[u8]) -> Result<Image> {
                 return Ok(Image {
                     format: Format::Png,
                     frames: state.frames,
-                    text: state.text,
+                    largest_frame: 0,
                     is_animated: true,
                     loop_count: if plays == 0 {
                         LoopCount::Infinite
                     } else {
                         LoopCount::Finite(plays)
                     },
+                    text: state.text,
                 });
             }
             // Color chunks after the image data are ignored, as are malformed ones.

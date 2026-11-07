@@ -307,9 +307,10 @@ impl Frame {
 pub struct Image {
     format: Format,
     frames: Vec<Frame>,
-    text: Vec<(String, String)>,
+    largest_frame: usize,
     is_animated: bool,
     loop_count: LoopCount,
+    text: Vec<(String, String)>,
 }
 
 impl Image {
@@ -327,7 +328,7 @@ impl Image {
         if self.is_animated {
             encode_animation_with_options(format, &self.frames, self.loop_count, options)
         } else {
-            encode_with_options(&self.frames[0].bitmap, format, options)
+            encode_with_options(&self.largest_frame().bitmap, format, options)
         }
     }
 
@@ -336,24 +337,34 @@ impl Image {
         self.format
     }
 
-    /// Returns the displayed canvas width in pixels.
+    /// Returns the width of the largest frame in pixels, the canvas width of an animation.
     pub fn width(&self) -> u32 {
-        self.frames[0].bitmap.width()
+        self.largest_frame().bitmap.width()
     }
 
-    /// Returns the displayed canvas height in pixels.
+    /// Returns the height of the largest frame in pixels, the canvas height of an animation.
     pub fn height(&self) -> u32 {
-        self.frames[0].bitmap.height()
+        self.largest_frame().bitmap.height()
     }
 
-    /// Returns one or more fully composited frames.
+    /// Returns one or more fully composited frames, in file order.
     pub fn frames(&self) -> &[Frame] {
         &self.frames
     }
 
-    /// Returns the first displayed frame's RGBA8 pixels.
+    /// Returns the largest frame: the largest size of an icon, the first frame otherwise.
+    pub fn largest_frame(&self) -> &Frame {
+        &self.frames[self.largest_frame]
+    }
+
+    /// Returns the index of the largest frame in the frames.
+    pub const fn largest_frame_index(&self) -> usize {
+        self.largest_frame
+    }
+
+    /// Returns the largest frame's RGBA8 pixels.
     pub fn pixels(&self) -> &[u8] {
-        self.frames[0].pixels()
+        self.largest_frame().pixels()
     }
 
     /// Returns whether the image has animation frames or playback metadata.
@@ -393,9 +404,10 @@ impl Image {
                 },
                 delay: Duration::ZERO,
             }],
-            text: Vec::new(),
+            largest_frame: 0,
             is_animated: false,
             loop_count: LoopCount::Finite(1),
+            text: Vec::new(),
         }
     }
 }

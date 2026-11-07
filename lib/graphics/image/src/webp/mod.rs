@@ -235,9 +235,10 @@ pub(super) fn decode(data: &[u8]) -> Result<Image> {
     Ok(Image {
         format: Format::WebP,
         frames,
-        text: Vec::new(),
+        largest_frame: 0,
         is_animated: true,
         loop_count,
+        text: Vec::new(),
     })
 }
 
