@@ -16,7 +16,8 @@ pub use image::LoopCount;
 #[doc(hidden)]
 pub use crate::appkit::{__CFConstantStringClassReference, CFConstString};
 pub use crate::browse::{compare_names, is_supported, neighbour_path, sibling_index};
-pub use crate::media::{Frame, Media, Raster, decode_media};
+pub use crate::info::{Info, InfoSection};
+pub use crate::media::{Frame, Media, Pages, Raster, decode_media, decode_pages};
 pub use crate::render::{MediaRenderer, draw_checkerboard, render_media, render_thumbnail};
 
 /// AppKit images and rendering for macOS and its Quick Look extensions.
@@ -26,6 +27,7 @@ pub mod appkit;
 mod browse;
 /// Editing still images.
 pub mod edit;
+mod info;
 mod media;
 mod render;
 

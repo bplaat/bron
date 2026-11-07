@@ -10,6 +10,8 @@ use std::time::Duration;
 use image::LoopCount;
 use vector::VectorImage;
 
+use crate::Info;
+
 /// Decoded media, ready to draw with a canvas.
 #[derive(Clone)]
 pub enum Media {
@@ -99,33 +101,93 @@ impl Frame {
     }
 }
 
-/// Decodes an image with the local decoders.
+/// The pages of an image: each size of an icon, or the image itself.
+pub struct Pages {
+    /// The pages in file order.
+    pub pages: Vec<Media>,
+    /// The index of the largest page, which is shown first.
+    pub largest: usize,
+    /// The format and metadata of the file.
+    pub info: Info,
+}
+
+impl Pages {
+    /// The one page of media without a file, like an edited picture.
+    pub fn single(media: Media) -> Self {
+        Self {
+            pages: vec![media],
+            largest: 0,
+            info: Info::default(),
+        }
+    }
+}
+
+/// Decodes an image with the local decoders, the largest size of an icon.
 pub fn decode_media(bytes: &[u8]) -> Result<Media, String> {
-    if vector::vector_format(bytes).is_some() {
+    let Pages {
+        mut pages, largest, ..
+    } = decode_pages(bytes)?;
+    Ok(pages.swap_remove(largest))
+}
+
+/// Decodes every page of an image with the local decoders, like each size of an icon.
+pub fn decode_pages(bytes: &[u8]) -> Result<Pages, String> {
+    if let Some(format) = vector::vector_format(bytes) {
         return vector::decode_vector(bytes)
-            .map(Media::Vector)
+            .map(|vector| Pages {
+                pages: vec![Media::Vector(vector)],
+                largest: 0,
+                info: Info {
+                    format: match format {
+                        vector::VectorFormat::Svg => "SVG",
+                        vector::VectorFormat::Svgz => "Compressed SVG",
+                        vector::VectorFormat::TinyVg => "TinyVG",
+                    },
+                    metadata: Vec::new(),
+                },
+            })
             .map_err(|error| error.to_string());
     }
-    let decoded = image::decode(bytes).map_err(|error| error.to_string())?;
-    // A still image shows its largest frame, like the largest size of an icon.
-    let frames = if decoded.is_animated() {
-        decoded.frames()
-    } else {
-        core::slice::from_ref(decoded.largest_frame())
+    let image = image::decode(bytes).map_err(|error| error.to_string())?;
+    let info = Info {
+        format: image.format().name(),
+        metadata: image.metadata().to_vec(),
     };
-    let frames = frames
-        .iter()
-        .map(|frame| Frame {
-            pixels: premultiplied_bgra(frame.pixels()).into(),
-            delay: frame.delay(),
-        })
-        .collect();
-    Ok(Media::Raster(Raster {
-        width: decoded.width(),
-        height: decoded.height(),
-        frames,
-        loop_count: decoded.loop_count(),
-    }))
+    // An animation is one page, the frames of a still image are the sizes of an icon.
+    if image.is_animated() {
+        return Ok(Pages {
+            pages: vec![raster(image.frames(), image.loop_count())],
+            largest: 0,
+            info,
+        });
+    }
+    let largest = image.largest_frame_index();
+    Ok(Pages {
+        pages: image
+            .frames()
+            .chunks(1)
+            .map(|frame| raster(frame, image.loop_count()))
+            .collect(),
+        largest,
+        info,
+    })
+}
+
+// A bitmap of frames of the same size.
+fn raster(frames: &[image::Frame], loop_count: LoopCount) -> Media {
+    let bitmap = frames[0].bitmap();
+    Media::Raster(Raster {
+        width: bitmap.width(),
+        height: bitmap.height(),
+        frames: frames
+            .iter()
+            .map(|frame| Frame {
+                pixels: premultiplied_bgra(frame.pixels()).into(),
+                delay: frame.delay(),
+            })
+            .collect(),
+        loop_count,
+    })
 }
 
 // Converts straight-alpha RGBA8 pixels to premultiplied BGRA8 pixels.
@@ -218,6 +280,37 @@ mod tests {
             assert_eq!(media.size(), (16.0, 16.0));
             assert!(media.is_still());
         }
+    }
+
+    #[test]
+    fn icons_decode_every_page_and_find_the_largest() {
+        let bytes = std::fs::read(format!("{FIXTURES}/rgb.icns")).unwrap();
+        let Pages {
+            pages,
+            largest,
+            info,
+        } = decode_pages(&bytes).expect("ICNS pages");
+        assert_eq!(info.format, "ICNS");
+        let sizes: Vec<_> = pages.iter().map(Media::size).collect();
+        assert_eq!(
+            sizes,
+            [
+                (512.0, 512.0),
+                (32.0, 32.0),
+                (256.0, 256.0),
+                (16.0, 16.0),
+                (128.0, 128.0)
+            ]
+        );
+        assert_eq!(largest, 0);
+        assert!(pages.iter().all(Media::is_still));
+        let ico = include_bytes!("../../imageview/meta/windows/file-types/jpeg.ico");
+        let Pages { pages, largest, .. } = decode_pages(ico).expect("ICO pages");
+        assert_eq!(pages.len(), 10);
+        assert_eq!(pages[largest].size(), (256.0, 256.0));
+        assert_eq!(decode_media(ico).expect("ICO").size(), (256.0, 256.0));
+        let animated = std::fs::read(format!("{FIXTURES}/animated.gif")).unwrap();
+        assert_eq!(decode_pages(&animated).expect("GIF pages").pages.len(), 1);
     }
 
     #[test]
