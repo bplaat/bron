@@ -10,6 +10,7 @@
 
 use std::ffi::{CStr, c_char};
 use std::ptr::null_mut;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use imageview_core::appkit::ns_string;
 use objc2::rc::{Allocated, Retained};
@@ -21,9 +22,13 @@ use crate::AppEvent;
 
 const NS_TOOLBAR_DISPLAY_MODE_ICON_ONLY: u64 = 2;
 const NS_TOOLBAR_ITEM_GROUP_SELECTION_MODE_SELECT_ONE: i64 = 0;
+const NS_TOOLBAR_ITEM_GROUP_SELECTION_MODE_SELECT_ANY: i64 = 1;
 const NS_TOOLBAR_ITEM_GROUP_SELECTION_MODE_MOMENTARY: i64 = 2;
 const NS_TOOLBAR_ITEM_GROUP_CONTROL_REPRESENTATION_EXPANDED: i64 = 1;
 const NS_WINDOW_TOOLBAR_STYLE_UNIFIED: i64 = 3;
+
+// The separator that keeps the sidebar toggle above the sidebar.
+const SIDEBAR_SEPARATOR: &str = "imageview.toolbar.sidebar";
 
 // A button with its tooltip, menu action and SF Symbols image.
 struct Button {
@@ -124,6 +129,13 @@ const VIEW_ITEMS: &[Item] = &[
         ],
         navigational: false,
         toggled: false,
+    },
+    Item::Group {
+        label: "Info",
+        symbol: "info.circle",
+        buttons: &[button("Show Info", "view.info", "info.circle")],
+        navigational: false,
+        toggled: true,
     },
     Item::Text(button("Edit", "edit.toggle", "pencil.tip.crop.circle")),
 ];
@@ -240,23 +252,32 @@ const EDIT_ITEMS: &[Item] = &[
     Item::Text(button("Done", "edit.toggle", "checkmark.circle")),
 ];
 
+pub(super) struct DelegateIvars {
+    mode: Mode,
+    // The split view of the sidebar, which its separator follows.
+    split_view: Retained<Object>,
+}
+
 define_class!(
     // Creates the toolbar items of a mode and runs their actions, the toolbar does not
     // retain it.
     #[unsafe(super(NSObject))]
     #[name = "ImageViewToolbarDelegate"]
-    #[ivars = Mode]
+    #[ivars = DelegateIvars]
     struct ToolbarDelegate;
 
     impl ToolbarDelegate {
         #[unsafe(method(toolbarDefaultItemIdentifiers:))]
         fn _default_item_identifiers(&self, _: *mut Object) -> *mut Object {
-            item_identifiers(*self.ivars())
+            item_identifiers(self.ivars().mode, false)
         }
 
+        // The sidebar items are added to the view toolbar while the window has a sidebar,
+        // which is hidden while editing.
         #[unsafe(method(toolbarAllowedItemIdentifiers:))]
         fn _allowed_item_identifiers(&self, _: *mut Object) -> *mut Object {
-            item_identifiers(*self.ivars())
+            let mode = self.ivars().mode;
+            item_identifiers(mode, mode == Mode::View)
         }
 
         #[unsafe(method(toolbar:itemForItemIdentifier:willBeInsertedIntoToolbar:))]
@@ -290,17 +311,20 @@ define_class!(
 );
 
 impl ToolbarDelegate {
-    fn new(mode: Mode) -> Retained<Self> {
+    fn new(mode: Mode, split_view: Retained<Object>) -> Retained<Self> {
         // SAFETY: NSObject's `init` returns the initialized delegate.
         unsafe {
             let delegate: Allocated<Self> = msg_send![Self::class(), alloc];
-            msg_send![super(delegate.set_ivars(mode)), init]
+            msg_send![
+                super(delegate.set_ivars(DelegateIvars { mode, split_view })),
+                init
+            ]
         }
     }
 
     // The item of an identifier of this delegate's mode.
     fn item_at(&self, identifier: *mut Object) -> Option<&'static Item> {
-        let mode = *self.ivars();
+        let mode = self.ivars().mode;
         let identifier = string(identifier)?;
         let index = (0..mode.items().len()).find(|index| mode.identifier(*index) == identifier)?;
         mode.items().get(index)
@@ -308,6 +332,17 @@ impl ToolbarDelegate {
 
     fn item(&self, identifier: *mut Object) -> Option<Retained<Object>> {
         let target = self as *const Self as *mut Object;
+        if string(identifier) == Some(SIDEBAR_SEPARATOR) {
+            // SAFETY: The separator follows the first divider of the split view, the one
+            // after the sidebar, which is only added while the split view has the sidebar.
+            return unsafe {
+                msg_send![class!(NSTrackingSeparatorToolbarItem),
+                    trackingSeparatorToolbarItemWithIdentifier: identifier,
+                    splitView: &*self.ivars().split_view,
+                    dividerIndex: 0isize
+                ]
+            };
+        }
         // SAFETY: All objects are valid AppKit instances, the toolbar retains the items.
         unsafe {
             let item: Retained<Object> = match self.item_at(identifier)? {
@@ -332,7 +367,10 @@ impl ToolbarDelegate {
                     let group: Retained<Object> = msg_send![class!(NSToolbarItemGroup),
                         groupWithItemIdentifier: identifier,
                         images: images,
-                        selectionMode: if *toggled {
+                        // A toggled group of one button turns on and off, like a switch.
+                        selectionMode: if *toggled && buttons.len() == 1 {
+                            NS_TOOLBAR_ITEM_GROUP_SELECTION_MODE_SELECT_ANY
+                        } else if *toggled {
                             NS_TOOLBAR_ITEM_GROUP_SELECTION_MODE_SELECT_ONE
                         } else {
                             NS_TOOLBAR_ITEM_GROUP_SELECTION_MODE_MOMENTARY
@@ -347,7 +385,7 @@ impl ToolbarDelegate {
                         let _: () = msg_send![subitem, setToolTip: ns_string(button.label)];
                     }
                     // Editing starts with the first button on, like the whole image.
-                    if *toggled {
+                    if *toggled && buttons.len() > 1 {
                         let _: () = msg_send![&*group, setSelectedIndex: 0isize];
                     }
                     // Navigational items are available since macOS 14.
@@ -434,13 +472,29 @@ fn string<'a>(string: *mut Object) -> Option<&'a str> {
     }
 }
 
-// The autoreleased identifiers of all items of a mode.
-fn item_identifiers(mode: Mode) -> *mut Object {
+// The autoreleased identifiers of the sidebar toggle and its separator, in toolbar order.
+fn sidebar_identifiers() -> [*mut Object; 2] {
+    // SAFETY: The toggle identifier is a constant of AppKit, the string is autoreleased.
+    unsafe {
+        [
+            NSToolbarToggleSidebarItemIdentifier,
+            ns_string(SIDEBAR_SEPARATOR),
+        ]
+    }
+}
+
+// The autoreleased identifiers of all items of a mode, with the sidebar items first.
+fn item_identifiers(mode: Mode, sidebar: bool) -> *mut Object {
     // SAFETY: The array and strings are autoreleased, the flexible space identifier is a
     // constant of AppKit.
     unsafe {
         let identifiers: *mut Object =
-            msg_send![class!(NSMutableArray), arrayWithCapacity: mode.items().len()];
+            msg_send![class!(NSMutableArray), arrayWithCapacity: mode.items().len() + 2];
+        if sidebar {
+            for identifier in sidebar_identifiers() {
+                let _: () = msg_send![identifiers, addObject: identifier];
+            }
+        }
         for (index, item) in mode.items().iter().enumerate() {
             let identifier = match item {
                 Item::FlexibleSpace => NSToolbarFlexibleSpaceItemIdentifier,
@@ -549,9 +603,13 @@ pub(super) struct Toolbars {
 }
 
 impl Toolbars {
-    /// Shows the view toolbar in the window, unified with its titlebar.
-    pub(super) fn install(window: *mut Object) -> Self {
-        let delegates = [Mode::View, Mode::Edit].map(ToolbarDelegate::new);
+    /// Shows the view toolbar in the window, unified with its titlebar, the sidebar items
+    /// follow the sidebar of a split view.
+    pub(super) fn install(window: *mut Object, split_view: *mut Object) -> Self {
+        // SAFETY: The split view is a live NSSplitView.
+        let split_view = unsafe { Retained::retain(split_view) }.expect("split view");
+        let delegates =
+            [Mode::View, Mode::Edit].map(|mode| ToolbarDelegate::new(mode, split_view.clone()));
         let [view, edit] = [0, 1].map(|index| toolbar(&delegates[index]));
         // SAFETY: The window is a live NSWindow that retains its toolbar.
         unsafe {
@@ -577,6 +635,38 @@ impl Toolbars {
         }
     }
 
+    /// Adds the sidebar toggle and its separator to the view toolbar, or removes them.
+    pub(super) fn set_sidebar(&self, sidebar: bool) {
+        let toolbar = &self.view;
+        // SAFETY: The view toolbar allows the sidebar items, which are its first ones when
+        // added.
+        unsafe {
+            let items: *mut Object = msg_send![&**toolbar, items];
+            let count: usize = msg_send![items, count];
+            let first: *mut Object = if count == 0 {
+                null_mut()
+            } else {
+                msg_send![items, objectAtIndex: 0usize]
+            };
+            let has_sidebar = !first.is_null() && {
+                let identifier: *mut Object = msg_send![first, itemIdentifier];
+                string(identifier) == string(NSToolbarToggleSidebarItemIdentifier)
+            };
+            if sidebar && !has_sidebar {
+                for identifier in sidebar_identifiers().into_iter().rev() {
+                    let _: () = msg_send![&**toolbar,
+                        insertItemWithItemIdentifier: identifier,
+                        atIndex: 0isize
+                    ];
+                }
+            } else if !sidebar && has_sidebar {
+                for _ in sidebar_identifiers() {
+                    let _: () = msg_send![&**toolbar, removeItemAtIndex: 0isize];
+                }
+            }
+        }
+    }
+
     /// Shows the button of a toggled group of the edit toolbar with an action as on.
     pub(super) fn set_toggled(&self, action: &str) {
         for (index, item) in EDIT_ITEMS.iter().enumerate() {
@@ -596,6 +686,22 @@ impl Toolbars {
                 unsafe {
                     let _: () = msg_send![group, setSelectedIndex: on as isize];
                 }
+            }
+        }
+    }
+
+    /// Shows the switch of the view toolbar with an action as on or off.
+    pub(super) fn set_switch(&self, action: &str, on: bool) {
+        let Some(index) = VIEW_ITEMS
+            .iter()
+            .position(|item| item.buttons().iter().any(|button| button.action == action))
+        else {
+            return;
+        };
+        if let Some(group) = self.item_at(Mode::View, index) {
+            // SAFETY: The group has one segment, at index 0.
+            unsafe {
+                let _: () = msg_send![group, setSelected: objc_bool(on), atIndex: 0isize];
             }
         }
     }
@@ -665,12 +771,16 @@ impl Drop for Toolbars {
 }
 
 fn toolbar(delegate: &ToolbarDelegate) -> Retained<Object> {
-    let mode = *delegate.ivars();
+    let mode = delegate.ivars().mode;
     // SAFETY: The toolbar does not retain its delegate, which `Toolbars` keeps.
     unsafe {
         let toolbar: Allocated<Object> = msg_send![class!(NSToolbar), alloc];
+        // AppKit keeps toolbars with the same identifier alike, every window has its own
+        // sidebar items.
+        static NEXT: AtomicUsize = AtomicUsize::new(0);
+        let number = NEXT.fetch_add(1, Ordering::Relaxed);
         let toolbar: Retained<Object> = msg_send![toolbar,
-            initWithIdentifier: ns_string(&format!("imageview.toolbar.{}", mode.name()))
+            initWithIdentifier: ns_string(&format!("imageview.toolbar.{}.{number}", mode.name()))
         ];
         let _: () = msg_send![&*toolbar, setDelegate: delegate];
         let _: () = msg_send![&*toolbar, setDisplayMode: NS_TOOLBAR_DISPLAY_MODE_ICON_ONLY];

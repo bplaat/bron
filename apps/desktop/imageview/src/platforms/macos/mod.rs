@@ -14,17 +14,21 @@ use std::path::{Path, PathBuf};
 use std::ptr::null_mut;
 
 use block2::Block;
-use bwindow::{EventLoopProxy, NativeViewHandle, Theme, Window, WindowAttachment, WindowId};
-use imageview_core::Media;
+use bwindow::{
+    EventLoopProxy, LogicalSize, NativeViewHandle, Theme, Window, WindowAttachment, WindowId,
+};
 use imageview_core::appkit::{Point, Rect, Size, create_media_view, ns_string};
 use imageview_core::edit::{Control, Selection, Shape, Tool};
+use imageview_core::{InfoSection, Media};
 use objc2::rc::{Allocated, Retained, autoreleasepool};
 use objc2::runtime::{AnyObject as Object, Bool, Sel};
 use objc2::{class, define_class, msg_send, sel};
 
 pub(crate) use self::browse::neighbour_path;
 use self::headers::*;
+use self::inspector::Inspector;
 use self::popover::Popover;
+use self::sidebar::Sidebar;
 use self::toolbar::{Mode, Toolbars};
 use self::view::{View, rect};
 use crate::AppEvent;
@@ -32,8 +36,10 @@ use crate::viewport::Viewport;
 
 mod browse;
 mod headers;
+mod inspector;
 mod popover;
 mod save;
+mod sidebar;
 mod toolbar;
 mod view;
 
@@ -154,6 +160,10 @@ pub(crate) struct MediaView {
     toolbars: Toolbars,
     // The popover of the open edit tool.
     popover: Option<Popover>,
+    // The pages of a file with several, next to the view.
+    sidebar: Sidebar,
+    // The information about the image, on the right of the view.
+    inspector: Inspector,
     _attachment: WindowAttachment,
 }
 
@@ -164,25 +174,25 @@ impl MediaView {
         let loading = media.is_none();
         let attachment = window.attach_content().expect("window has no content yet");
         let size = window.size();
-        let view = View::new(
-            rect(0.0, 0.0, f64::from(size.width), f64::from(size.height)),
-            media,
-        );
+        let frame = rect(0.0, 0.0, f64::from(size.width), f64::from(size.height));
+        let view = View::new(frame, media);
         view.set_dark(theme == Theme::Dark);
-        // SAFETY: The attachment keeps the window that retains the view open while this view
+        let sidebar = Sidebar::new(frame, Retained::as_ptr(&view) as _, window.id());
+        let inspector = Inspector::new(sidebar.controller(), frame);
+        // SAFETY: The attachment keeps the window that retains the views open while this view
         // lives.
         let toolbars = unsafe {
-            attachment.set_native_view(NativeViewHandle::AppKit(Retained::as_ptr(&view) as _));
+            attachment.set_native_view(NativeViewHandle::AppKit(sidebar.view() as _));
             let window: *mut Object = msg_send![&*view, window];
+            // The sidebar reaches under the toolbar, the media view stays below it.
+            let style: u64 = msg_send![window, styleMask];
+            let _: () = msg_send![window, setStyleMask: style | NS_WINDOW_STYLE_MASK_FULL_SIZE_CONTENT_VIEW];
             // The unified toolbar changes the content size, so the window gets the size it was
             // built with back, keeping its top left corner in place.
             let frame: Rect = msg_send![window, frame];
-            let toolbars = Toolbars::install(window);
-            let content_size = Size {
-                width: f64::from(size.width),
-                height: f64::from(size.height),
-            };
-            let _: () = msg_send![window, setContentSize: content_size];
+            Sidebar::place_below_toolbar(Retained::as_ptr(&view) as _);
+            let toolbars = Toolbars::install(window, sidebar.split_view());
+            set_content_size(window, size);
             let top_left = Point {
                 x: frame.origin.x,
                 y: frame.origin.y + frame.size.height,
@@ -208,13 +218,36 @@ impl MediaView {
         // The view has its size now.
         view.update(Viewport::zoom_to_fit);
         view.advance_frame();
+
         Self {
             view,
             spinner,
             toolbars,
             popover: None,
+            sidebar,
+            inspector,
             _attachment: attachment,
         }
+    }
+
+    /// Lists the pages of a file with several in the sidebar with one selected, or hides it.
+    pub(crate) fn set_pages(&self, pages: &[Media], page: usize) {
+        let changed = self.sidebar.set_pages(pages, page);
+        self.sidebar_changed(changed);
+    }
+
+    // Shows the sidebar items in the toolbar while it is shown, the media fits the space that
+    // is left when the sidebar comes or goes.
+    fn sidebar_changed(&self, changed: bool) {
+        self.toolbars.set_sidebar(self.sidebar.is_shown());
+        if changed {
+            self.zoom_to_fit();
+        }
+    }
+
+    /// Selects the shown page in the sidebar.
+    pub(crate) fn select_page(&self, page: usize) {
+        self.sidebar.select(page);
     }
 
     /// The shown media.
@@ -255,8 +288,10 @@ impl MediaView {
         unsafe { msg_send![&*self.view, window] }
     }
 
-    /// Places the window in the middle of its screen, like new windows.
-    pub(crate) fn center_window(&self) {
+    /// Gives the area below the toolbar a size and places the window in the middle of its
+    /// screen, like new windows.
+    pub(crate) fn resize_window(&self, size: LogicalSize) {
+        set_content_size(self.window(), size);
         // SAFETY: The window is a live NSWindow.
         unsafe {
             let _: () = msg_send![self.window(), center];
@@ -268,6 +303,28 @@ impl MediaView {
         self.close_tool();
         let mode = if editing { Mode::Edit } else { Mode::View };
         self.toolbars.show(self.window(), mode);
+        // Only the shown page is edited, so the others and the information are hidden
+        // meanwhile.
+        let changed = self.sidebar.set_hidden(editing);
+        self.sidebar_changed(changed);
+        self.inspector.set_hidden(editing);
+    }
+
+    /// Collapses or expands the sidebar with the pages, when there is one.
+    pub(crate) fn toggle_sidebar(&self) {
+        self.sidebar.toggle();
+    }
+
+    /// Opens or closes the inspector with the information about the image.
+    pub(crate) fn toggle_info(&self) {
+        self.inspector.toggle();
+        self.toolbars
+            .set_switch("view.info", self.inspector.is_open());
+    }
+
+    /// Lists the information about the image in the inspector.
+    pub(crate) fn set_info(&self, sections: &[InfoSection]) {
+        self.inspector.set_sections(sections);
     }
 
     /// Marks the window as having unsaved changes, with a dot in its close button.
@@ -433,6 +490,20 @@ impl MediaView {
                 ];
             }
         });
+    }
+}
+
+// Gives the area of a window below its toolbar, which the content reaches under, a size.
+fn set_content_size(window: *mut Object, size: LogicalSize) {
+    // SAFETY: The window is a live NSWindow.
+    unsafe {
+        let frame: Rect = msg_send![window, frame];
+        let layout: Rect = msg_send![window, contentLayoutRect];
+        let content_size = Size {
+            width: f64::from(size.width),
+            height: f64::from(size.height) + frame.size.height - layout.size.height,
+        };
+        let _: () = msg_send![window, setContentSize: content_size];
     }
 }
 

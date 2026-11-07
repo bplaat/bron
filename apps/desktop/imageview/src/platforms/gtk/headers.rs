@@ -28,7 +28,11 @@ pub(crate) const GDK_KEY_DOWN: u32 = 0xff54;
 pub(crate) const GDK_KEY_PAGE_UP: u32 = 0xff55;
 pub(crate) const GDK_KEY_PAGE_DOWN: u32 = 0xff56;
 pub(crate) const GDK_KEY_END: u32 = 0xff57;
+pub(crate) const GTK_ALIGN_START: i32 = 1;
 pub(crate) const GTK_ALIGN_CENTER: i32 = 3;
+pub(crate) const GTK_REVEALER_TRANSITION_TYPE_SLIDE_RIGHT: i32 = 2;
+pub(crate) const GTK_REVEALER_TRANSITION_TYPE_SLIDE_LEFT: i32 = 3;
+pub(crate) const GTK_WRAP_WORD_CHAR: i32 = 2;
 pub(crate) const GTK_POLICY_NEVER: i32 = 2;
 pub(crate) const GTK_POLICY_AUTOMATIC: i32 = 1;
 pub(crate) const GTK_POS_BOTTOM: i32 = 3;
@@ -287,4 +291,16 @@ unsafe extern "C" {
     pub(crate) fn gtk_file_chooser_set_current_name(chooser: *mut c_void, name: *const c_char);
     pub(crate) fn gtk_file_chooser_get_current_name(chooser: *mut c_void) -> *mut c_char;
     pub(crate) fn g_free(memory: *mut c_void);
+    pub(crate) fn gtk_revealer_new() -> *mut c_void;
+    pub(crate) fn gtk_revealer_set_transition_type(revealer: *mut c_void, transition: i32);
+    pub(crate) fn gtk_revealer_set_reveal_child(revealer: *mut c_void, reveal: i32);
+    pub(crate) fn gtk_separator_new(orientation: i32) -> *mut c_void;
+    pub(crate) fn gtk_list_box_new() -> *mut c_void;
+    pub(crate) fn gtk_list_box_select_row(list: *mut c_void, row: *mut c_void);
+    pub(crate) fn gtk_list_box_get_row_at_index(list: *mut c_void, index: i32) -> *mut c_void;
+    pub(crate) fn gtk_list_box_row_get_index(row: *mut c_void) -> i32;
+    pub(crate) fn gtk_toggle_button_new() -> *mut c_void;
+    pub(crate) fn gtk_label_set_line_wrap(label: *mut c_void, wrap: i32);
+    pub(crate) fn gtk_label_set_line_wrap_mode(label: *mut c_void, mode: i32);
+    pub(crate) fn gtk_label_set_selectable(label: *mut c_void, selectable: i32);
 }

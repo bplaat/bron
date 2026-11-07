@@ -19,9 +19,10 @@ use std::rc::{Rc, Weak};
 use bcanvas::NativeContext;
 use bwindow::{NativeViewHandle, Theme, Window, WindowAttachment, WindowId};
 use imageview_core::edit::{Control, Selection, Shape, Tool};
-use imageview_core::{Media, WHEEL_ZOOM_RATE};
+use imageview_core::{InfoSection, Media, WHEEL_ZOOM_RATE};
 
 use self::headers::*;
+use self::panels::{Inspector, Sidebar};
 use self::popover::Popover;
 pub(crate) use self::save::SaveOptions;
 pub(crate) use self::thumbnail::thumbnail;
@@ -30,6 +31,7 @@ use crate::AppEvent;
 use crate::viewport::{Axis, LINE, Step, Viewport};
 
 mod headers;
+mod panels;
 mod popover;
 mod save;
 mod thumbnail;
@@ -67,6 +69,10 @@ pub(crate) struct MediaView {
     state: Rc<State>,
     // The popover of the open edit tool.
     popover: Option<Popover>,
+    // The pages of a file with several on the left of the image, the information about the
+    // image on the right.
+    sidebar: Sidebar,
+    inspector: Inspector,
     _attachment: WindowAttachment,
 }
 
@@ -139,14 +145,20 @@ impl MediaView {
             })
         };
         state.connect();
+        let sidebar = Sidebar::new(window.id());
+        let inspector = Inspector::new();
         // SAFETY: The overlay is a live widget that the window lays out from now on.
         unsafe {
+            let body = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+            gtk_box_pack_start(body, sidebar.widget(), 0, 0, 0);
+            gtk_box_pack_start(body, state.overlay, 1, 1, 0);
+            gtk_box_pack_start(body, inspector.widget(), 0, 0, 0);
             let content = if integrated_toolbar {
-                state.overlay
+                body
             } else {
                 let content = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
                 gtk_box_pack_start(content, header_bar, 0, 0, 0);
-                gtk_box_pack_start(content, state.overlay, 1, 1, 0);
+                gtk_box_pack_start(content, body, 1, 1, 0);
                 content
             };
             attachment.set_native_view(NativeViewHandle::Gtk(content));
@@ -170,11 +182,54 @@ impl MediaView {
         }
         state.update(Viewport::zoom_to_fit);
         state.start_animation();
-        Self {
+        let view = Self {
             state,
             popover: None,
+            sidebar,
+            inspector,
             _attachment: attachment,
+        };
+        view.update_switches();
+        view
+    }
+
+    /// Lists the pages of a file with several in the sidebar with one selected, or hides it.
+    pub(crate) fn set_pages(&self, pages: &[Media], page: usize) {
+        self.sidebar.set_pages(pages, page);
+        self.update_switches();
+    }
+
+    /// Selects the shown page in the sidebar.
+    pub(crate) fn select_page(&self, page: usize) {
+        self.sidebar.select(page);
+    }
+
+    /// Opens or closes the sidebar with the pages, when there is one.
+    pub(crate) fn toggle_sidebar(&self) {
+        if self.sidebar.is_available() {
+            self.sidebar.toggle();
         }
+        self.update_switches();
+    }
+
+    /// Opens or closes the inspector with the information about the image.
+    pub(crate) fn toggle_info(&self) {
+        self.inspector.toggle();
+        self.update_switches();
+    }
+
+    /// Lists the information about the image in the inspector.
+    pub(crate) fn set_info(&self, sections: &[InfoSection]) {
+        self.inspector.set_sections(sections);
+    }
+
+    // Shows the header bar switches of the panels as they are, the sidebar one only with
+    // several pages.
+    fn update_switches(&self) {
+        let toolbar = &self.state.toolbar;
+        toolbar.set_switch_visible("view.sidebar", self.sidebar.is_available());
+        toolbar.set_switch("view.sidebar", self.sidebar.is_open());
+        toolbar.set_switch("view.info", self.inspector.is_open());
     }
 
     /// The shown media.
@@ -224,6 +279,11 @@ impl MediaView {
     pub(crate) fn set_editing(&mut self, editing: bool) {
         self.close_tool();
         self.state.toolbar.set_editing(editing);
+        // Only the shown page is edited, so the other pages and the information are hidden
+        // meanwhile.
+        self.sidebar.set_hidden(editing);
+        self.inspector.set_hidden(editing);
+        self.update_switches();
     }
 
     /// Shows the popover with controls of a tool below the toolbar button of `action`, and

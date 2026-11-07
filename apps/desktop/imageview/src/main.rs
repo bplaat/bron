@@ -20,7 +20,8 @@ use bwindow::{
 #[cfg(not(windows))]
 use bwindow::{MessageDialog, MessageLevel};
 use imageview_core::{
-    EXTENSIONS, FileVersion, Media, ZOOM_STEP, decode_media, is_supported, preferred_content_size,
+    EXTENSIONS, FileVersion, Info, Media, Pages, ZOOM_STEP, decode_pages, is_supported,
+    preferred_content_size,
 };
 
 use crate::platforms::MediaView;
@@ -57,8 +58,10 @@ pub(crate) enum AppEvent {
     Open(Vec<PathBuf>),
     /// Check open files for changes.
     Tick,
-    /// A file finished decoding.
-    Loaded(Load, Result<Media, String>),
+    /// A file finished decoding, with all of its pages.
+    Loaded(Load, Result<Pages, String>),
+    /// Show a page of the file of a window, picked in its sidebar.
+    ShowPage(WindowId, usize),
     /// A file for a new window is still decoding after a while.
     SlowLoad(u64),
     /// Run a menu action from a native toolbar.
@@ -118,6 +121,11 @@ struct ImageWindow {
     // While a replacement decodes, retain the file of the displayed pixels for failure.
     replacing: Option<(PathBuf, Option<FileVersion>)>,
     editing: Option<edit::Editing>,
+    // The pages of a file with several, like the sizes of an icon, and the shown one.
+    pages: Vec<Media>,
+    page: usize,
+    // The format and metadata of the file, which the view lists in an inspector.
+    info: Info,
     // Whether an edit is being applied or the image saved in the background.
     busy: bool,
     #[cfg(windows)]
@@ -141,6 +149,35 @@ impl ImageWindow {
     // Whether the media is being edited, which keeps it from reloading.
     const fn is_editing(&self) -> bool {
         self.editing.is_some()
+    }
+
+    // Keeps the pages and information of the file and which page is shown, which the view lists
+    // in a sidebar and an inspector.
+    fn set_pages(&mut self, pages: Vec<Media>, page: usize, info: Info) {
+        self.view.set_pages(&pages, page);
+        self.pages = if pages.len() > 1 { pages } else { Vec::new() };
+        self.page = page;
+        self.info = info;
+        self.show_info();
+    }
+
+    // Shows a page of the pages of the file, keeping the zoom or fitting it to the window.
+    fn show_pages(&mut self, pages: Vec<Media>, page: usize, info: Info, zoom_to_fit: bool) {
+        let media = pages[page].clone();
+        self.window
+            .set_title(title(&self.path, Some(&media), false));
+        self.view.set_media(media, zoom_to_fit);
+        self.set_pages(pages, page, info);
+    }
+
+    // Lists the information about the file and shown page in the inspector.
+    fn show_info(&self) {
+        self.view.set_info(&self.info.sections(
+            &self.path,
+            &self.view.media(),
+            self.page,
+            self.pages.len().max(1),
+        ));
     }
 }
 
@@ -194,7 +231,7 @@ impl App {
             let version = FileVersion::of(&path);
             let result = std::fs::read(&path)
                 .map_err(|error| error.to_string())
-                .and_then(|bytes| decode_media(&bytes));
+                .and_then(|bytes| decode_pages(&bytes));
             _ = proxy.send_user_event(AppEvent::Loaded(
                 Load {
                     path,
@@ -222,14 +259,17 @@ impl App {
         }
     }
 
-    // Opens a window for media, or a loading window without it.
+    // Opens a window showing the largest page, or a loading window without pages.
     fn open_window(
         &mut self,
         path: PathBuf,
         version: Option<FileVersion>,
-        media: Option<Media>,
+        pages: Option<Pages>,
         opening: Option<u64>,
     ) {
+        let media = pages
+            .as_ref()
+            .map(|pages| pages.pages[pages.largest].clone());
         let size = content_size(media.as_ref());
         let window = WindowBuilder::new()
             .title(title(&path, media.as_ref(), false))
@@ -262,8 +302,14 @@ impl App {
             opening,
             replacing: None,
             editing: None,
+            pages: Vec::new(),
+            page: 0,
+            info: Info::default(),
             busy: false,
         });
+        if let (Some(window), Some(pages)) = (self.windows.last_mut(), pages) {
+            window.set_pages(pages.pages, pages.largest, pages.info);
+        }
     }
 
     fn slow_load(&mut self, id: u64) {
@@ -284,13 +330,13 @@ impl App {
         }
     }
 
-    fn loaded(&mut self, load: Load, result: Result<Media, String>) {
+    fn loaded(&mut self, load: Load, result: Result<Pages, String>) {
         self.pending_loads -= 1;
         match (load.target, result) {
-            (Target::Window(id), Ok(media)) => {
+            (Target::Window(id), Ok(pages)) => {
                 platforms::note_recent_file(&load.path);
                 if self.opening.remove(&id).is_some() {
-                    self.open_window(load.path, load.version, Some(media), None);
+                    self.open_window(load.path, load.version, Some(pages), None);
                 } else if let Some(window) = self
                     .windows
                     .iter_mut()
@@ -298,14 +344,13 @@ impl App {
                 {
                     window.opening = None;
                     window.version = load.version;
-                    window
-                        .window
-                        .set_title(title(&load.path, Some(&media), false));
                     // The window opened with the loading size gets the size of its media.
-                    window.window.set_size(content_size(Some(&media)));
+                    let size = content_size(Some(&pages.pages[pages.largest]));
                     #[cfg(target_os = "macos")]
-                    window.view.center_window();
-                    window.view.set_media(media, true);
+                    window.view.resize_window(size);
+                    #[cfg(not(target_os = "macos"))]
+                    window.window.set_size(size);
+                    window.show_pages(pages.pages, pages.largest, pages.info, true);
                 }
             }
             (
@@ -314,7 +359,7 @@ impl App {
                     generation,
                     zoom_to_fit,
                 },
-                Ok(media),
+                Ok(pages),
             ) => {
                 let Some(window) = self.window(window) else {
                     return;
@@ -323,12 +368,16 @@ impl App {
                     return;
                 }
                 window.replacing = None;
-                window
-                    .window
-                    .set_title(title(&load.path, Some(&media), false));
-                window.view.set_media(media, zoom_to_fit);
                 window.path = load.path;
                 window.version = load.version;
+                // A reload keeps showing the same page while the file has as many.
+                let shown_pages = window.pages.len().max(1);
+                let page = if !zoom_to_fit && pages.pages.len() == shown_pages {
+                    window.page
+                } else {
+                    pages.largest
+                };
+                window.show_pages(pages.pages, page, pages.info, zoom_to_fit);
             }
             // A file that is being saved may not decode yet, the next change reloads it.
             (
@@ -420,6 +469,28 @@ impl App {
         self.load(path, target);
     }
 
+    // Shows another page of the file of a window, fitted to it. The sidebar is hidden while
+    // editing, so the edited page stays.
+    fn show_page(&mut self, id: WindowId, page: usize) {
+        let Some(window) = self.window(id) else {
+            return;
+        };
+        if window.is_loading() || window.is_editing() || page >= window.pages.len() {
+            // The sidebar goes back to the shown page.
+            window.view.select_page(window.page);
+            return;
+        }
+        // The sidebar keeps its list, only what it selects changes.
+        let media = window.pages[page].clone();
+        window
+            .window
+            .set_title(title(&window.path, Some(&media), false));
+        window.view.set_media(media, true);
+        window.page = page;
+        window.view.select_page(page);
+        window.show_info();
+    }
+
     // Reloads files that changed on disk, keeping their zoom.
     fn reload_changed(&mut self) {
         let mut reloads = Vec::new();
@@ -465,6 +536,9 @@ impl App {
                 match action {
                     #[cfg(target_os = "macos")]
                     "file.print" => window.view.print(),
+                    // The sidebar and inspector are hidden while editing.
+                    "view.info" if !window.is_editing() => window.view.toggle_info(),
+                    "view.sidebar" if !window.is_editing() => window.view.toggle_sidebar(),
                     "view.zoom_in" => window.view.zoom_by(ZOOM_STEP),
                     "view.zoom_out" => window.view.zoom_by(1.0 / ZOOM_STEP),
                     "view.actual_size" => window.view.actual_size(),
@@ -520,6 +594,7 @@ impl App {
             Event::UserEvent(AppEvent::Tick) => self.reload_changed(),
             Event::UserEvent(AppEvent::Loaded(load, result)) => self.loaded(load, result),
             Event::UserEvent(AppEvent::SlowLoad(id)) => self.slow_load(id),
+            Event::UserEvent(AppEvent::ShowPage(id, page)) => self.show_page(id, page),
             Event::Action(action) => self.action(&action),
             Event::UserEvent(AppEvent::Action(action)) => self.action(action),
             Event::UserEvent(AppEvent::ToolChanged(id, index, values)) => {
@@ -607,29 +682,30 @@ fn menu() -> MenuBarBuilder {
         .separator();
     let menu_bar = MenuBarBuilder::new().menu(file);
     let menu_bar = menu_bar.menu(edit_menu()).menu(image_menu());
-    menu_bar.menu(
-        MenuBuilder::new("View")
-            .item(MenuItem::new("Zoom In", "view.zoom_in").accelerator(primary(KeyCode::Equal)))
-            .item(MenuItem::new("Zoom Out", "view.zoom_out").accelerator(primary(KeyCode::Minus)))
-            .separator()
-            .item(
-                MenuItem::new("Actual Size", "view.actual_size")
-                    .accelerator(primary(KeyCode::Digit0)),
-            )
-            .item(
-                MenuItem::new("Zoom to Fit", "view.zoom_to_fit")
-                    .accelerator(primary(KeyCode::Digit9)),
-            )
-            .separator()
-            .item(
-                MenuItem::new("Previous Image", "view.previous")
-                    .accelerator(Accelerator::new(Modifiers::NONE, KeyCode::ArrowLeft)),
-            )
-            .item(
-                MenuItem::new("Next Image", "view.next")
-                    .accelerator(Accelerator::new(Modifiers::NONE, KeyCode::ArrowRight)),
-            ),
-    )
+    let view = MenuBuilder::new("View")
+        .item(MenuItem::new("Zoom In", "view.zoom_in").accelerator(primary(KeyCode::Equal)))
+        .item(MenuItem::new("Zoom Out", "view.zoom_out").accelerator(primary(KeyCode::Minus)))
+        .separator()
+        .item(
+            MenuItem::new("Actual Size", "view.actual_size").accelerator(primary(KeyCode::Digit0)),
+        )
+        .item(
+            MenuItem::new("Zoom to Fit", "view.zoom_to_fit").accelerator(primary(KeyCode::Digit9)),
+        )
+        .separator()
+        .item(
+            MenuItem::new("Previous Image", "view.previous")
+                .accelerator(Accelerator::new(Modifiers::NONE, KeyCode::ArrowLeft)),
+        )
+        .item(
+            MenuItem::new("Next Image", "view.next")
+                .accelerator(Accelerator::new(Modifiers::NONE, KeyCode::ArrowRight)),
+        );
+    let view = view
+        .separator()
+        .item(MenuItem::new("Show Sidebar", "view.sidebar"))
+        .item(MenuItem::new("Show Info", "view.info").accelerator(primary(KeyCode::KeyI)));
+    menu_bar.menu(view)
 }
 
 // The selection items follow the default ones, Undo and Redo reach the image view through the
@@ -793,7 +869,7 @@ mod tests {
     fn window_size_reserves_the_header_above_the_image() {
         let bytes =
             std::fs::read(Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/dice.png")).unwrap();
-        let media = decode_media(&bytes).unwrap();
+        let media = imageview_core::decode_media(&bytes).unwrap();
         let size = content_size(Some(&media));
         assert_eq!(size.width, 800.0);
         assert_eq!(size.height, 600.0 + platforms::CONTENT_HEADER_HEIGHT);
@@ -822,7 +898,8 @@ mod tests {
             ("tiger.tvg", (600.0, 600.0)),
         ] {
             let bytes = std::fs::read(examples.join(name)).expect("read example");
-            let media = decode_media(&bytes).unwrap_or_else(|error| panic!("{name}: {error}"));
+            let media = imageview_core::decode_media(&bytes)
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
             assert_eq!(media.size(), size, "{name}");
         }
     }

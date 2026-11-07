@@ -25,17 +25,19 @@ use bwindow::{
 };
 use imageview_core::edit::{Control, Selection, Shape, Tool};
 use imageview_core::{
-    Media, clamp_magnification, draw_checkerboard, fit_magnification, window_title,
+    InfoSection, Media, clamp_magnification, draw_checkerboard, fit_magnification, window_title,
 };
 
 use self::headers::*;
+use self::panels::Panels;
 pub(crate) use self::save::SaveOptions;
 use self::tool::ToolPanel;
-use self::winui::{Bitmap, HEADER_HEIGHT, Handlers, Island, MIN_WIDTH, Mark};
+use self::winui::{Bitmap, HEADER_HEIGHT, Handlers, Island, MIN_WIDTH, Mark, Panel};
 use crate::AppEvent;
 use crate::viewport::Viewport;
 
 mod headers;
+mod panels;
 mod save;
 mod tool;
 mod winrt;
@@ -108,6 +110,8 @@ struct State {
     // Whether the window may show, and whether it held back showing until then.
     revealed: Cell<bool>,
     reveal_held: Cell<bool>,
+    // The sidebar with the pages and the inspector beside the image.
+    panels: Panels,
 }
 
 /// A native scroll view that zooms and pans media.
@@ -141,6 +145,7 @@ impl MediaView {
             window_backdrop: Cell::new(set_window_backdrop(parent)),
             revealed: Cell::new(false),
             reveal_held: Cell::new(false),
+            panels: Panels::new(window.id()),
         });
         state.update_background();
         register_class();
@@ -194,6 +199,7 @@ impl MediaView {
         // Only still bitmaps can be edited, the loading media has no frames.
         island.set_editable(!loading && state.viewport.borrow().media().is_still());
         island.set_spinner(loading);
+        state.panels.show(&island);
         *state.island.borrow_mut() = Some(island);
         state.update_heading();
         // SAFETY: The windows are alive, the subclass is removed before the state is freed.
@@ -302,6 +308,49 @@ impl MediaView {
         self.close_tool();
         if let Some(island) = self.state.island.borrow().as_ref() {
             island.set_editing(editing);
+        }
+        // Only the shown page is edited, so the other pages and the information are hidden
+        // meanwhile, the media fits the room that is left.
+        let shown = self.state.panels.width();
+        self.state.panels.set_hidden(editing);
+        self.state.show_panels(self.state.panels.width() != shown);
+    }
+
+    /// Lists the pages of a file with several in the sidebar with one selected, or hides it.
+    pub(crate) fn set_pages(&self, pages: &[Media], page: usize) {
+        let shown = self.state.panels.width();
+        if let Some(island) = self.state.island.borrow().as_ref()
+            && let Err(error) = self.state.panels.set_pages(island, pages, page)
+        {
+            eprintln!("Could not show the pages: 0x{error:08x}");
+        }
+        // The media fits the space that is left when the sidebar comes or goes.
+        self.state.show_panels(self.state.panels.width() != shown);
+    }
+
+    /// Selects the shown page in the sidebar.
+    pub(crate) fn select_page(&self, page: usize) {
+        self.state.panels.select(page);
+    }
+
+    /// Opens or closes the sidebar with the pages, when there is one.
+    pub(crate) fn toggle_sidebar(&self) {
+        self.state.panels.toggle(Panel::Pages);
+        self.state.show_panels(false);
+    }
+
+    /// Opens or closes the inspector with the information about the image.
+    pub(crate) fn toggle_info(&self) {
+        self.state.panels.toggle(Panel::Info);
+        self.state.show_panels(false);
+    }
+
+    /// Lists the information about the image in the inspector.
+    pub(crate) fn set_info(&self, sections: &[InfoSection]) {
+        if let Some(island) = self.state.island.borrow().as_ref()
+            && let Err(error) = self.state.panels.set_sections(island, sections)
+        {
+            eprintln!("Could not show the information: 0x{error:08x}");
         }
     }
 
@@ -573,16 +622,26 @@ impl State {
         f64::from(unsafe { GetDpiForWindow(self.content.get()) }.max(96)) / 96.0
     }
 
-    // The area of the scroll viewer in logical pixels.
+    // The area of the scroll viewer in logical pixels, beside the shown panels.
     fn visible(&self) -> (f64, f64) {
         let mut rect = RECT::default();
         // SAFETY: The content is alive while the state is.
         unsafe { GetClientRect(self.content.get(), &mut rect) };
         let scale = self.scale();
         (
-            f64::from(rect.right) / scale,
+            (f64::from(rect.right) / scale - self.panels.width()).max(0.0),
             (f64::from(rect.bottom) / scale - HEADER_HEIGHT).max(0.0),
         )
+    }
+
+    // Shows the panels as they are, fitting the media to the space left when asked.
+    fn show_panels(&self, zoom_to_fit: bool) {
+        if let Some(island) = self.island.borrow().as_ref() {
+            self.panels.show(island);
+        }
+        if zoom_to_fit {
+            self.zoom_to_fit();
+        }
     }
 
     fn media_size(&self) -> (f64, f64) {
@@ -1032,6 +1091,7 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use bwindow::{EventLoopBuilder, WindowBuilder};
+    use imageview_core::Pages;
     use imageview_core::edit::Picture;
 
     use super::*;
@@ -1143,7 +1203,12 @@ mod tests {
             theme: Theme::Dark,
         };
         let media = Picture::new(2, 1, vec![255; 8]).to_media();
-        app.open_window("alert-test.png".into(), None, Some(media), None);
+        app.open_window(
+            "alert-test.png".into(),
+            None,
+            Some(Pages::single(media)),
+            None,
+        );
         let id = app.windows[0].window.id();
         layout_frames();
         let answer = Rc::new(Cell::new(-1i32));
@@ -1167,7 +1232,7 @@ mod tests {
         app.open_window(
             "other-alert-test.png".into(),
             None,
-            Some(Picture::new(2, 1, vec![255; 8]).to_media()),
+            Some(Pages::single(Picture::new(2, 1, vec![255; 8]).to_media())),
             None,
         );
         let other_id = app.windows.last().unwrap().window.id();
@@ -1271,7 +1336,7 @@ mod tests {
         app.open_window(
             path.clone(),
             None,
-            Some(Picture::new(2, 1, vec![255; 8]).to_media()),
+            Some(Pages::single(Picture::new(2, 1, vec![255; 8]).to_media())),
             None,
         );
         let id = app.windows[0].window.id();

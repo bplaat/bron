@@ -24,10 +24,13 @@ pub(crate) const NS_PROGRESS_INDICATOR_STYLE_SPINNING: u64 = 1;
 // Flexible margins on all sides, which keep a view in the middle of its superview.
 pub(crate) const NS_VIEW_CENTERED: u64 = 1 | 4 | 8 | 32;
 pub(crate) const NS_WINDOW_COLLECTION_BEHAVIOR_FULL_SCREEN_PRIMARY: u64 = 1 << 7;
+pub(crate) const NS_WINDOW_STYLE_MASK_FULL_SIZE_CONTENT_VIEW: u64 = 1 << 15;
 
 #[link(name = "AppKit", kind = "framework")]
 unsafe extern "C" {
+    pub(crate) static NSSplitViewDidResizeSubviewsNotification: *mut Object;
     pub(crate) static NSToolbarFlexibleSpaceItemIdentifier: *mut Object;
+    pub(crate) static NSToolbarToggleSidebarItemIdentifier: *mut Object;
     pub(crate) static NSViewBoundsDidChangeNotification: *mut Object;
     pub(crate) static NSViewFrameDidChangeNotification: *mut Object;
 }

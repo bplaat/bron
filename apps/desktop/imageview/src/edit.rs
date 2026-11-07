@@ -22,7 +22,7 @@ use imageview_core::edit::{
     DEFAULT_JPEG_QUALITY, DEFAULT_SAVE_EXTENSION, Editor, Filter, Orientation, Picture,
     SAVE_FORMATS, Selection, Shape, Step, Tool, can_save, crop_aspect, is_jpeg,
 };
-use imageview_core::{FileVersion, Media};
+use imageview_core::{FileVersion, Info, Media, decode_pages};
 
 use crate::save::{SaveRequest, ask_save};
 use crate::{App, AppEvent, ImageWindow, file_name, title};
@@ -100,6 +100,8 @@ pub(crate) struct Saved {
     result: Result<Vec<u8>, String>,
     // Whether it saved a copy, which the window does not follow.
     export: bool,
+    // The format and metadata of the saved file, which the window shows when it follows it.
+    info: Info,
     after: AfterSave,
 }
 
@@ -300,7 +302,12 @@ impl App {
         if window.is_loading() {
             return false;
         }
-        let source = std::fs::read(&window.path).ok();
+        // A page of a file with several is not the file, its bytes cannot be kept.
+        let source = window
+            .pages
+            .is_empty()
+            .then(|| std::fs::read(&window.path).ok())
+            .flatten();
         let Some(editor) = Editor::new(window.view.media(), 0, source) else {
             return false;
         };
@@ -381,6 +388,8 @@ impl App {
         window.show_edited();
         window.view.set_selecting(None);
         window.view.set_editing(false);
+        // The size may have changed.
+        window.show_info();
     }
 
     // Asks whether to save the changes, returns whether they are dropped. Saving continues
@@ -858,10 +867,19 @@ impl App {
         std::thread::spawn(move || {
             let result =
                 encode(&path).and_then(|bytes| write_atomically(&path, &bytes).map(|()| bytes));
+            // The saved file can have other metadata than the one it replaced.
+            let info = result
+                .as_ref()
+                .ok()
+                .filter(|_| !export)
+                .and_then(|bytes| decode_pages(bytes).ok())
+                .map(|pages| pages.info)
+                .unwrap_or_default();
             let saved = Saved {
                 path,
                 result,
                 export,
+                info,
                 after,
             };
             _ = proxy.send_user_event(AppEvent::Saved(id, saved));
@@ -903,6 +921,8 @@ impl App {
                 crate::platforms::note_recent_file(&saved.path);
                 window.path = saved.path;
             }
+            // The saved file only has the edited page, with the metadata it was saved with.
+            window.set_pages(Vec::new(), 0, saved.info);
             window.show_edited();
         }
         self.continue_after_save(id, saved.after);

@@ -53,6 +53,13 @@
                 <Setter Property="Padding" Value="11,0" />
                 <Setter Property="AllowFocusOnInteraction" Value="False" />
             </Style>
+            <!-- A button that stays on while the panel it opens shows. -->
+            <Style x:Key="PanelToggle" TargetType="ToggleButton" BasedOn="{StaticResource DefaultToggleButtonStyle}">
+                <Setter Property="Width" Value="40" />
+                <Setter Property="Height" Value="32" />
+                <Setter Property="Padding" Value="0" />
+                <Setter Property="AllowFocusOnInteraction" Value="False" />
+            </Style>
             <Style TargetType="FontIcon">
                 <Setter Property="FontSize" Value="16" />
             </Style>
@@ -74,27 +81,38 @@
         <Image x:Name="Icon" Width="16" Height="16" Margin="16,0,12,0" />
 
         <StackPanel x:Name="Start" Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-            <Border x:Name="ViewStart" Style="{StaticResource Group}">
-                <StackPanel Orientation="Horizontal">
-                    <Button
-                        x:Name="Previous"
-                        Style="{StaticResource Segment}"
-                        CornerRadius="3,0,0,3"
-                        ToolTipService.ToolTip="Previous image (Left)"
-                    >
-                        <FontIcon Glyph="&#xE76B;" />
-                    </Button>
-                    <Rectangle Style="{StaticResource Divider}" />
-                    <Button
-                        x:Name="Next"
-                        Style="{StaticResource Segment}"
-                        CornerRadius="0,3,3,0"
-                        ToolTipService.ToolTip="Next image (Right)"
-                    >
-                        <FontIcon Glyph="&#xE76C;" />
-                    </Button>
-                </StackPanel>
-            </Border>
+            <StackPanel x:Name="ViewStart" Orientation="Horizontal" Spacing="8">
+                <!-- Shows only for a file with several pages, like the sizes of an icon. -->
+                <ToggleButton
+                    x:Name="SidebarButton"
+                    Style="{StaticResource PanelToggle}"
+                    Visibility="Collapsed"
+                    ToolTipService.ToolTip="Show sidebar"
+                >
+                    <FontIcon Glyph="&#xE8A0;" />
+                </ToggleButton>
+                <Border Style="{StaticResource Group}">
+                    <StackPanel Orientation="Horizontal">
+                        <Button
+                            x:Name="Previous"
+                            Style="{StaticResource Segment}"
+                            CornerRadius="3,0,0,3"
+                            ToolTipService.ToolTip="Previous image (Left)"
+                        >
+                            <FontIcon Glyph="&#xE76B;" />
+                        </Button>
+                        <Rectangle Style="{StaticResource Divider}" />
+                        <Button
+                            x:Name="Next"
+                            Style="{StaticResource Segment}"
+                            CornerRadius="0,3,3,0"
+                            ToolTipService.ToolTip="Next image (Right)"
+                        >
+                            <FontIcon Glyph="&#xE76C;" />
+                        </Button>
+                    </StackPanel>
+                </Border>
+            </StackPanel>
             <StackPanel x:Name="EditStart" Orientation="Horizontal" Spacing="8" Visibility="Collapsed">
                 <Border x:Name="HistoryGroup" Style="{StaticResource Group}">
                     <StackPanel Orientation="Horizontal">
@@ -249,6 +267,13 @@
                         </Button>
                     </StackPanel>
                 </Border>
+                <ToggleButton
+                    x:Name="InfoButton"
+                    Style="{StaticResource PanelToggle}"
+                    ToolTipService.ToolTip="Show info (Ctrl+I)"
+                >
+                    <FontIcon Glyph="&#xE946;" />
+                </ToggleButton>
                 <Button
                     x:Name="Edit"
                     Content="Edit"
@@ -349,57 +374,91 @@
     </Grid>
 
     <Grid Grid.Row="1">
-        <Image x:Name="Checkerboard" Stretch="Fill" HorizontalAlignment="Center" VerticalAlignment="Center" />
-        <ScrollViewer
-            x:Name="Scroller"
-            UseLayoutRounding="False"
-            ZoomMode="Enabled"
-            IsTabStop="True"
-            MinZoomFactor="{MIN_ZOOM}"
-            MaxZoomFactor="{MAX_ZOOM}"
-            HorizontalScrollMode="Auto"
-            VerticalScrollMode="Auto"
-            HorizontalScrollBarVisibility="Auto"
-            VerticalScrollBarVisibility="Auto"
-        >
-            <Image
-                x:Name="Media"
-                UseLayoutRounding="False"
-                Stretch="Fill"
-                HorizontalAlignment="Center"
-                VerticalAlignment="Center"
-            />
-        </ScrollViewer>
-        <!-- The crop rectangle or selection, drawn over the visible area. -->
-        <Image
-            x:Name="Overlay"
-            Stretch="Fill"
-            HorizontalAlignment="Left"
-            VerticalAlignment="Top"
-            IsHitTestVisible="False"
-            Visibility="Collapsed"
-        />
-        <!-- Shown until the media is decoded and while an edit is applied. -->
-        <ProgressRing
-            x:Name="Spinner"
-            Width="48"
-            Height="48"
-            IsActive="True"
-            IsHitTestVisible="False"
-            Visibility="Collapsed"
-        />
-        <!-- The controls of the open edit tool, like a flyout that stays open while the image is used. -->
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="Auto" />
+            <ColumnDefinition Width="*" />
+            <ColumnDefinition Width="Auto" />
+        </Grid.ColumnDefinitions>
+        <!-- The pages of a file with several, like the sizes of an icon. -->
         <Border
-            x:Name="Tool"
+            x:Name="PagesPanel"
+            Width="{SIDEBAR_WIDTH}"
             Visibility="Collapsed"
-            HorizontalAlignment="Right"
-            VerticalAlignment="Top"
-            Margin="12"
-            Padding="16"
-            CornerRadius="8"
-            BorderThickness="1"
-            Background="{ThemeResource AcrylicInAppFillColorDefaultBrush}"
-            BorderBrush="{ThemeResource SurfaceStrokeColorFlyoutBrush}"
-        />
+            BorderThickness="0,0,1,0"
+            BorderBrush="{ThemeResource DividerStrokeColorDefaultBrush}"
+            Background="{ThemeResource LayerFillColorDefaultBrush}"
+        >
+            <ScrollViewer HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+                <Border x:Name="PagesHost" />
+            </ScrollViewer>
+        </Border>
+        <!-- The information about the image. -->
+        <Border
+            x:Name="InfoPanel"
+            Grid.Column="2"
+            Width="{INSPECTOR_WIDTH}"
+            Visibility="Collapsed"
+            BorderThickness="1,0,0,0"
+            BorderBrush="{ThemeResource DividerStrokeColorDefaultBrush}"
+            Background="{ThemeResource LayerFillColorDefaultBrush}"
+        >
+            <ScrollViewer HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+                <Border x:Name="InfoHost" />
+            </ScrollViewer>
+        </Border>
+        <Grid Grid.Column="1">
+            <Image x:Name="Checkerboard" Stretch="Fill" HorizontalAlignment="Center" VerticalAlignment="Center" />
+            <ScrollViewer
+                x:Name="Scroller"
+                UseLayoutRounding="False"
+                ZoomMode="Enabled"
+                IsTabStop="True"
+                MinZoomFactor="{MIN_ZOOM}"
+                MaxZoomFactor="{MAX_ZOOM}"
+                HorizontalScrollMode="Auto"
+                VerticalScrollMode="Auto"
+                HorizontalScrollBarVisibility="Auto"
+                VerticalScrollBarVisibility="Auto"
+            >
+                <Image
+                    x:Name="Media"
+                    UseLayoutRounding="False"
+                    Stretch="Fill"
+                    HorizontalAlignment="Center"
+                    VerticalAlignment="Center"
+                />
+            </ScrollViewer>
+            <!-- The crop rectangle or selection, drawn over the visible area. -->
+            <Image
+                x:Name="Overlay"
+                Stretch="Fill"
+                HorizontalAlignment="Left"
+                VerticalAlignment="Top"
+                IsHitTestVisible="False"
+                Visibility="Collapsed"
+            />
+            <!-- Shown until the media is decoded and while an edit is applied. -->
+            <ProgressRing
+                x:Name="Spinner"
+                Width="48"
+                Height="48"
+                IsActive="True"
+                IsHitTestVisible="False"
+                Visibility="Collapsed"
+            />
+            <!-- The controls of the open edit tool, like a flyout that stays open while the image is used. -->
+            <Border
+                x:Name="Tool"
+                Visibility="Collapsed"
+                HorizontalAlignment="Right"
+                VerticalAlignment="Top"
+                Margin="12"
+                Padding="16"
+                CornerRadius="8"
+                BorderThickness="1"
+                Background="{ThemeResource AcrylicInAppFillColorDefaultBrush}"
+                BorderBrush="{ThemeResource SurfaceStrokeColorFlyoutBrush}"
+            />
+        </Grid>
     </Grid>
 </Grid>

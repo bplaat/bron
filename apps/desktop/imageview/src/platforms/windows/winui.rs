@@ -23,6 +23,9 @@ use super::winrt::*;
 
 /// The height of the header bar, the tall caption buttons of the window fill it.
 pub(crate) const HEADER_HEIGHT: f64 = 48.0;
+/// The width of the sidebar with the pages of a file and of the inspector, beside the image.
+pub(crate) const SIDEBAR_WIDTH: f64 = 168.0;
+pub(crate) const INSPECTOR_WIDTH: f64 = 260.0;
 
 thread_local! {
     static RUNTIME: RefCell<Option<(ComPtr, ComPtr, ComPtr)>> = const { RefCell::new(None) };
@@ -62,6 +65,8 @@ const ACTIONS: &[(&str, &str)] = &[
     ("ZoomOut", "view.zoom_out"),
     ("ResetZoom", "view.zoom_to_fit"),
     ("ZoomIn", "view.zoom_in"),
+    ("SidebarButton", "view.sidebar"),
+    ("InfoButton", "view.info"),
     ("Edit", "edit.toggle"),
     ("Done", "edit.toggle"),
     ("Undo", "edit.undo"),
@@ -170,15 +175,19 @@ const MORE_WIDTH: f64 = 40.0;
 // before the title gets narrower.
 const TITLE_WIDTH: f64 = 120.0;
 
-/// The narrowest header bar that fits the icon, the navigation buttons, a trimmed title, the zoom
-/// and Edit buttons and the tall caption buttons, so they never overlap. The edit groups that
-/// do not fit move to the More menu.
+/// The narrowest header bar that fits the icon, the sidebar and navigation buttons, a trimmed
+/// title, the zoom, Info and Edit buttons and the tall caption buttons, so they never overlap.
+/// The edit groups that do not fit move to the More menu.
 pub(crate) const MIN_WIDTH: f64 = BUTTONS_LEFT
+    // The sidebar button.
+    + 40.0 + GROUP_SPACING
     // Previous and next, with a divider and a border.
     + 2.0 * 40.0 + 3.0
     + TITLE_WIDTH
     // The zoom out, reset and zoom in buttons, with dividers and a border.
     + 40.0 + 56.0 + 40.0 + 4.0
+    // The Info button.
+    + GROUP_SPACING + 40.0
     // The Edit button.
     + GROUP_SPACING + 56.0
     + END_GAP
@@ -591,6 +600,8 @@ pub(crate) struct Island {
     edit_items: Vec<ComPtr>,
     edit_button: ComPtr,
     toggles: Vec<(&'static str, ComPtr)>,
+    // The panels beside the image, their contents and the buttons that open them.
+    panels: [PanelElements; 2],
     // The action of the toggle button that is on.
     toggled: Rc<Cell<&'static str>>,
     regions: Rc<Regions>,
@@ -603,6 +614,22 @@ pub(crate) struct Island {
     // The composition target statics and the registration of the rendered frame handler,
     // until the first frame is rendered.
     rendered: Cell<Option<(ComPtr, i64)>>,
+}
+
+/// A panel beside the image.
+#[derive(Clone, Copy)]
+pub(crate) enum Panel {
+    /// The sidebar with the pages of a file with several.
+    Pages,
+    /// The inspector with the information about the image.
+    Info,
+}
+
+// The elements of a panel: the panel, the border that holds its content and its toggle button.
+struct PanelElements {
+    panel: ComPtr,
+    host: ComPtr,
+    button: ComPtr,
 }
 
 // A group of edit buttons that moves to the More menu when the header bar is too narrow.
@@ -775,11 +802,27 @@ const IID_ICONTENT_DIALOG_CLOSED_EVENT_ARGS: GUID =
 // TypedEventHandler<ContentDialog, ContentDialogClosedEventArgs>.
 const IID_DIALOG_CLOSED_HANDLER: GUID = GUID::from_u128(0xaa8730ec_c9bd_50ea_8714_da30c29590d9);
 
-fn escape_xml(text: &str) -> String {
-    text.replace('&', "&amp;")
+/// Text escaped for a XAML attribute, without the characters XML does not allow, like control
+/// characters of image metadata. A leading brace would start a markup extension, `{}` keeps it
+/// text.
+pub(crate) fn escape_xml(text: &str) -> String {
+    let text: String = text
+        .chars()
+        .filter(|character| {
+            matches!(character, '\t' | '\n' | '\r' | ' '..='\u{d7ff}' | '\u{e000}'..='\u{fffd}')
+                || u32::from(*character) >= 0x10000
+        })
+        .collect();
+    let escaped = text
+        .replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
-        .replace('"', "&quot;")
+        .replace('"', "&quot;");
+    if escaped.starts_with('{') {
+        format!("{{}}{escaped}")
+    } else {
+        escaped
+    }
 }
 
 /// An asynchronous ContentDialog attached to this island's XamlRoot.
@@ -969,7 +1012,9 @@ impl Island {
 
         let xaml = XAML
             .replace("{MIN_ZOOM}", &MIN_ZOOM_FACTOR.to_string())
-            .replace("{MAX_ZOOM}", &MAX_ZOOM_FACTOR.to_string());
+            .replace("{MAX_ZOOM}", &MAX_ZOOM_FACTOR.to_string())
+            .replace("{SIDEBAR_WIDTH}", &SIDEBAR_WIDTH.to_string())
+            .replace("{INSPECTOR_WIDTH}", &INSPECTOR_WIDTH.to_string());
         let root = load_xaml(&xaml)
             .and_then(|root| root.cast(&IID_IFRAMEWORK_ELEMENT))
             .map_err(failed("window content"))?;
@@ -1017,6 +1062,22 @@ impl Island {
         let checkerboard = find("Checkerboard", &IID_IIMAGE).map_err(failed("window content"))?;
         let overlay = find("Overlay", &IID_IIMAGE).map_err(failed("window content"))?;
         let tool = find("Tool", &IID_IBORDER).map_err(failed("window content"))?;
+        let panels = [
+            ("PagesPanel", "PagesHost", "SidebarButton"),
+            ("InfoPanel", "InfoHost", "InfoButton"),
+        ]
+        .map(|(panel, host, button)| -> Result<PanelElements> {
+            Ok(PanelElements {
+                panel: find(panel, &IID_IUI_ELEMENT)?,
+                host: find(host, &IID_IBORDER)?,
+                button: find(button, &IID_ITOGGLE_BUTTON)?,
+            })
+        });
+        let [pages_panel, info_panel] = panels;
+        let panels = [
+            pages_panel.map_err(failed("window content"))?,
+            info_panel.map_err(failed("window content"))?,
+        ];
         let spinner = find("Spinner", &IID_IUI_ELEMENT).map_err(failed("window content"))?;
         let elements = |names: &[&str]| {
             names
@@ -1265,6 +1326,7 @@ impl Island {
             edit_items,
             edit_button,
             toggles,
+            panels,
             toggled,
             regions,
             tool_open,
@@ -1456,6 +1518,31 @@ impl Island {
         self.tool_open.set(element.is_some());
     }
 
+    /// Replaces the content of a panel.
+    pub(crate) fn set_panel_content(&self, panel: Panel, content: &ComPtr) {
+        let Ok(element) = content.cast(&IID_IUI_ELEMENT) else {
+            return;
+        };
+        // SAFETY: Slot 19 of IBorder is put_Child.
+        _ = unsafe { self.panels[panel as usize].host.put(19, element.as_raw()) };
+    }
+
+    /// Shows a panel beside the image, or hides it, with its button on or off.
+    pub(crate) fn set_panel_open(&self, panel: Panel, open: bool) {
+        let elements = &self.panels[panel as usize];
+        set_visible(&elements.panel, open);
+        if let Some(checked) = boxed_bool(open) {
+            // SAFETY: Slot 7 of IToggleButton is put_IsChecked.
+            _ = unsafe { elements.button.put(7, checked.as_raw()) };
+        }
+    }
+
+    /// Shows the button of a panel, or hides it when there is nothing to show.
+    pub(crate) fn set_panel_available(&self, panel: Panel, available: bool) {
+        set_visible(&self.panels[panel as usize].button, available);
+        self.regions.update();
+    }
+
     /// Shows the spinning progress ring in the middle of the image, or hides it.
     pub(crate) fn set_spinner(&self, spinning: bool) {
         set_visible(&self.spinner, spinning);
@@ -1578,8 +1665,8 @@ impl Drop for Island {
     }
 }
 
-// Shows a bitmap in an image element at a size in logical pixels.
-fn set_image(image: &ComPtr, bitmap: &Bitmap, (width, height): (f64, f64)) {
+/// Shows a bitmap in an image element at a size in logical pixels.
+pub(crate) fn set_image(image: &ComPtr, bitmap: &Bitmap, (width, height): (f64, f64)) {
     // SAFETY: Slot 7 of IImage is put_Source, slots 16 and 18 of IFrameworkElement are
     // put_Width and put_Height.
     unsafe {

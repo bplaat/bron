@@ -62,15 +62,29 @@ enum Item {
     Toggled(&'static [Button]),
     // A button with a label that opens a menu, with separators between its sections.
     Menu(&'static CStr, &'static [&'static [Button]]),
+    // A button that stays on while what it shows is open, like a sidebar.
+    Switch(Button),
 }
 
 // The items at the end are packed from the outer edge.
-const VIEW_START: &[Item] = &[Item::Group(&[
-    icon(c"Previous Image", c"go-previous-symbolic", "view.previous"),
-    icon(c"Next Image", c"go-next-symbolic", "view.next"),
-])];
+const VIEW_START: &[Item] = &[
+    Item::Switch(icon(
+        c"Show Sidebar",
+        c"sidebar-show-symbolic",
+        "view.sidebar",
+    )),
+    Item::Group(&[
+        icon(c"Previous Image", c"go-previous-symbolic", "view.previous"),
+        icon(c"Next Image", c"go-next-symbolic", "view.next"),
+    ]),
+];
 const VIEW_END: &[Item] = &[
     Item::Group(&[text(c"Edit", "edit.toggle")]),
+    Item::Switch(icon(
+        c"Show Info",
+        c"dialog-information-symbolic",
+        "view.info",
+    )),
     Item::Group(&[
         icon(c"Zoom Out", c"zoom-out-symbolic", "view.zoom_out"),
         icon(
@@ -159,6 +173,13 @@ extern "C" fn clicked(_: *mut c_void, button: &Button) {
     send(AppEvent::Action(button.action));
 }
 
+// Runs the action of a switch the user turned on or off.
+extern "C" fn switched(_: *mut c_void, button: &Button) {
+    if !SETTING.get() {
+        send(AppEvent::Action(button.action));
+    }
+}
+
 // Runs the action of a toggled button the user turned on, its group turns the others off.
 extern "C" fn toggled(widget: *mut c_void, button: &Button) {
     // SAFETY: GTK passes the live toggle button.
@@ -242,6 +263,8 @@ pub(super) struct Toolbar {
     buttons: Vec<(&'static str, *mut c_void)>,
     // The toggled buttons by their action.
     toggles: Vec<(&'static str, *mut c_void)>,
+    // The switches by their action.
+    switches: Vec<(&'static str, *mut c_void)>,
 }
 
 impl Toolbar {
@@ -276,6 +299,7 @@ impl Toolbar {
                 edit: Vec::new(),
                 buttons: Vec::new(),
                 toggles: Vec::new(),
+                switches: Vec::new(),
             };
             for (items, leading, editing) in [
                 (VIEW_START, true, false),
@@ -361,6 +385,18 @@ impl Toolbar {
                         }
                     }
                 }
+                Item::Switch(button) => {
+                    let widget = gtk_toggle_button_new();
+                    gtk_button_set_image(
+                        widget,
+                        gtk_image_new_from_icon_name(button.icon.as_ptr(), GTK_ICON_SIZE_BUTTON),
+                    );
+                    gtk_widget_set_tooltip_text(widget, button.label.as_ptr());
+                    gtk_button_set_focus_on_click(widget, 0);
+                    connect(widget, c"toggled", switched as *const c_void, button);
+                    gtk_container_add(group, widget);
+                    self.switches.push((button.action, widget));
+                }
                 Item::Menu(label, sections) => {
                     let widget = gtk_menu_button_new();
                     gtk_button_set_image(widget, gtk_label_new(label.as_ptr()));
@@ -416,6 +452,24 @@ impl Toolbar {
             unsafe { gtk_toggle_button_set_active(*widget, 1) };
         }
         SETTING.set(false);
+    }
+
+    /// Shows the switch of an action as on or off, without running the action.
+    pub(super) fn set_switch(&self, action: &str, on: bool) {
+        SETTING.set(true);
+        for (_, widget) in self.switches.iter().filter(|(name, _)| *name == action) {
+            // SAFETY: The bar owns its controls while the window is open.
+            unsafe { gtk_toggle_button_set_active(*widget, i32::from(on)) };
+        }
+        SETTING.set(false);
+    }
+
+    /// Shows or hides the switch of an action, like the sidebar one of a file with one page.
+    pub(super) fn set_switch_visible(&self, action: &str, visible: bool) {
+        for (_, widget) in self.switches.iter().filter(|(name, _)| *name == action) {
+            // SAFETY: The bar owns its controls while the window is open.
+            unsafe { gtk_widget_set_visible(*widget, i32::from(visible)) };
+        }
     }
 
     /// The control that runs an action, to show a popover at.

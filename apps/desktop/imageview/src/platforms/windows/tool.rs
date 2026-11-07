@@ -17,20 +17,12 @@ use bwindow::WindowId;
 use imageview_core::edit::{Control, Tool};
 
 use super::winrt::*;
-use super::winui::{add_event, boxed_bool, find_name, load_xaml};
+use super::winui::{add_event, boxed_bool, escape_xml, find_name, load_xaml};
 use crate::AppEvent;
 
 // The largest size of an image side.
 const MAXIMUM_LENGTH: f64 = 1_000_000.0;
 const SLIDER_WIDTH: f64 = 180.0;
-
-// Escapes text for a XAML attribute.
-fn escape(text: &str) -> String {
-    text.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-}
 
 // The XAML of the card of a tool: its title, a grid of labeled controls named `Control` and
 // their index, slider values named `Value` and their index, and the buttons.
@@ -44,14 +36,14 @@ fn xaml(tool: Tool, controls: &[Control]) -> String {
             _ = write!(
                 rows,
                 r#"<TextBlock Grid.Row="{row}" Grid.ColumnSpan="3" Margin="0,8,0,0" Text="{}" Style="{{StaticResource BodyStrongTextBlockStyle}}" />"#,
-                escape(parameter.section)
+                escape_xml(parameter.section)
             );
             row += 1;
         }
         let label = |text: &str| {
             format!(
                 r#"<TextBlock Grid.Row="{row}" VerticalAlignment="Center" HorizontalAlignment="Right" Text="{}:" />"#,
-                escape(text)
+                escape_xml(text)
             )
         };
         let name = format!(r#"x:Name="Control{index}" Grid.Row="{row}" Grid.Column="1""#);
@@ -80,7 +72,7 @@ fn xaml(tool: Tool, controls: &[Control]) -> String {
             } => {
                 let items: String = options
                     .iter()
-                    .map(|option| format!(r#"<ComboBoxItem Content="{}" />"#, escape(option)))
+                    .map(|option| format!(r#"<ComboBoxItem Content="{}" />"#, escape_xml(option)))
                     .collect();
                 _ = write!(
                     rows,
@@ -92,7 +84,7 @@ fn xaml(tool: Tool, controls: &[Control]) -> String {
                 _ = write!(
                     rows,
                     r#"<CheckBox {name} Grid.ColumnSpan="2" Content="{}" />"#,
-                    escape(text)
+                    escape_xml(text)
                 );
             }
         }
@@ -142,8 +134,8 @@ fn xaml(tool: Tool, controls: &[Control]) -> String {
         </Button>
     </Grid>
 </Grid>"#,
-        escape(tool.title()),
-        escape(tool.apply_label()),
+        escape_xml(tool.title()),
+        escape_xml(tool.apply_label()),
     )
 }
 
@@ -396,6 +388,10 @@ mod tests {
             assert_eq!(xaml.matches('<').count(), xaml.matches('>').count());
             assert!(!xaml.contains("{{"));
         }
-        assert_eq!(escape(r#"a & "b" <c>"#), "a &amp; &quot;b&quot; &lt;c&gt;");
+        assert_eq!(
+            escape_xml(r#"a & "b" <c>"#),
+            "a &amp; &quot;b&quot; &lt;c&gt;"
+        );
+        assert_eq!(escape_xml("{draft}\u{1}.png"), "{}{draft}.png");
     }
 }
