@@ -5,17 +5,18 @@
  */
 
 use alloc::string::String;
-use alloc::vec;
 use alloc::vec::Vec;
+use alloc::{format, vec};
 use core::time::Duration;
 
 use crc::{CRC_32_ISO_HDLC, Crc};
 use deflate::Level;
 
 use super::color::{self, ColorModel, Curve, Transform};
+use super::metadata::{decimal, list_exif, list_icc, list_xmp};
 use super::{
     Area, Bitmap, Budget, Compression, DecodeError, EncodeError, Format, Frame, Image, LoopCount,
-    MAX_BYTES, Reader, Result, pixel_len,
+    MAX_BYTES, Metadata, MetadataGroup, Reader, Result, pixel_len,
 };
 
 // MARK: Decoder
@@ -43,6 +44,35 @@ enum ColorType {
     Indexed,
     GrayscaleAlpha,
     TruecolorAlpha,
+}
+
+impl Header {
+    // The bit depth, color type and interlacing.
+    fn metadata(&self) -> Vec<Metadata> {
+        let color = match self.color {
+            ColorType::Grayscale => "Grayscale",
+            ColorType::Truecolor => "RGB",
+            ColorType::Indexed => "Palette",
+            ColorType::GrayscaleAlpha => "Grayscale with Alpha",
+            ColorType::TruecolorAlpha => "RGB with Alpha",
+        };
+        let mut metadata = vec![
+            Metadata::new(
+                MetadataGroup::Image,
+                "Bit Depth".into(),
+                format!("{}", self.depth),
+            ),
+            Metadata::new(MetadataGroup::Image, "Color Type".into(), color.into()),
+        ];
+        if self.interlace == InterlaceMethod::Adam7 {
+            metadata.push(Metadata::new(
+                MetadataGroup::Image,
+                "Interlaced".into(),
+                "Adam7".into(),
+            ));
+        }
+        metadata
+    }
 }
 
 impl ColorType {
@@ -178,7 +208,7 @@ struct PngState {
     frames: Vec<Frame>,
     data_phase: DataPhase,
     frame_data: FrameData,
-    text: Vec<(String, String)>,
+    metadata: Vec<Metadata>,
     color: ColorChunks,
     transform: Option<Transform>,
 }
@@ -231,7 +261,7 @@ impl PngState {
             frames: Vec::new(),
             data_phase: DataPhase::Before,
             frame_data: FrameData::None,
-            text: Vec::new(),
+            metadata: Vec::new(),
             color: ColorChunks {
                 cicp: None,
                 icc: None,
@@ -353,6 +383,7 @@ pub(super) fn decode(data: &[u8]) -> Result<Image> {
     };
     let mut budget = Budget::default();
     let mut state = PngState::new();
+    state.metadata = header.metadata();
     loop {
         let (kind, bytes) = chunk(&mut r)?;
         state.data_phase.observe(kind);
@@ -512,7 +543,7 @@ pub(super) fn decode(data: &[u8]) -> Result<Image> {
                 if state.animation.is_none() {
                     let pixels = header.raster(width, height, &state, &mut budget)?;
                     return Ok(Image {
-                        text: state.text,
+                        metadata: state.metadata,
                         ..Image::still(Format::Png, width, height, pixels)
                     });
                 }
@@ -535,7 +566,7 @@ pub(super) fn decode(data: &[u8]) -> Result<Image> {
                     } else {
                         LoopCount::Finite(plays)
                     },
-                    text: state.text,
+                    metadata: state.metadata,
                 });
             }
             // Color chunks after the image data are ignored, as are malformed ones.
@@ -549,14 +580,69 @@ pub(super) fn decode(data: &[u8]) -> Result<Image> {
                     state.color.icc = deflate::zlib_decompress(data, MAX_BYTES - budget.used)
                         .ok()
                         .filter(|icc| budget.claim(icc.len()).is_ok());
+                    if let Some(icc) = &state.color.icc {
+                        list_icc(icc, &mut state.metadata);
+                    }
                 }
             }
-            b"sRGB" if !state.data_phase.has_idat() => state.color.srgb = true,
+            b"sRGB" if !state.data_phase.has_idat() => {
+                state.color.srgb = true;
+                let intent = match bytes {
+                    [0] => "Perceptual",
+                    [1] => "Relative Colorimetric",
+                    [2] => "Saturation",
+                    [3] => "Absolute Colorimetric",
+                    _ => "Unknown",
+                };
+                state.metadata.push(Metadata::new(
+                    MetadataGroup::Image,
+                    "Rendering Intent".into(),
+                    intent.into(),
+                ));
+            }
             b"gAMA" if !state.data_phase.has_idat() => {
                 if let Ok(&value) = <&[u8; 4]>::try_from(bytes) {
                     state.color.gamma = Some(u32::from_be_bytes(value)).filter(|v| *v != 0);
+                    if let Some(gamma) = state.color.gamma {
+                        state.metadata.push(Metadata::new(
+                            MetadataGroup::Image,
+                            "Gamma".into(),
+                            decimal(100_000.0 / f64::from(gamma), 2),
+                        ));
+                    }
                 }
             }
+            b"pHYs" => {
+                if let [x @ .., 1] = bytes
+                    && let Ok(x) = <[u8; 8]>::try_from(x)
+                {
+                    let [x, y] = [0, 4].map(|at| {
+                        let value = u32::from_be_bytes(x[at..at + 4].try_into().expect("four"));
+                        decimal(f64::from(value) * 0.0254, 0)
+                    });
+                    let value = if x == y {
+                        format!("{x} dpi")
+                    } else {
+                        format!("{x} \u{d7} {y} dpi")
+                    };
+                    state.metadata.push(Metadata::new(
+                        MetadataGroup::Image,
+                        "Resolution".into(),
+                        value,
+                    ));
+                }
+            }
+            b"tIME" => {
+                if let &[year_high, year_low, month, day, hour, minute, second] = bytes {
+                    let year = u16::from_be_bytes([year_high, year_low]);
+                    state.metadata.push(Metadata::new(
+                        MetadataGroup::Image,
+                        "Date Modified".into(),
+                        format!("{year}-{month:02}-{day:02} {hour:02}:{minute:02}:{second:02}"),
+                    ));
+                }
+            }
+            b"eXIf" => list_exif(bytes, &mut state.metadata),
             b"cHRM" if !state.data_phase.has_idat() => {
                 if let Ok(values) = <&[u8; 32]>::try_from(bytes) {
                     let [white, red, green, blue] = core::array::from_fn(|i| {
@@ -573,7 +659,15 @@ pub(super) fn decode(data: &[u8]) -> Result<Image> {
             }
             // Malformed text is ancillary and skipped.
             b"tEXt" | b"zTXt" | b"iTXt" => {
-                state.text.extend(text_entry(kind, bytes, &mut budget));
+                if let Some((keyword, text)) = text_entry(kind, bytes, &mut budget) {
+                    if keyword == "XML:com.adobe.xmp" {
+                        list_xmp(text.as_bytes(), &mut state.metadata);
+                    } else {
+                        state
+                            .metadata
+                            .push(Metadata::new(MetadataGroup::Text, keyword, text));
+                    }
+                }
             }
             _ if kind[0] & 32 == 0 => return Err(DecodeError::UnsupportedFeature),
             _ => {}
@@ -1751,11 +1845,7 @@ mod tests {
             assert!(png.windows(4).any(|kind| kind == b"iTXt"));
             let decoded = crate::decode(&png).unwrap();
             assert_eq!(decoded.pixels(), bitmap.data());
-            let expected: Vec<_> = text
-                .iter()
-                .map(|(keyword, text)| (String::from(*keyword), String::from(*text)))
-                .collect();
-            assert_eq!(decoded.text(), expected);
+            assert!(decoded.text().eq(text));
         }
         let frames = [Frame::new(bitmap, Duration::from_millis(100))];
         let options = EncodeOptions {
@@ -1765,7 +1855,10 @@ mod tests {
         let apng =
             encode_animation_with_options(Format::Png, &frames, LoopCount::Infinite, options)
                 .unwrap();
-        assert_eq!(crate::decode(&apng).unwrap().text()[0].1, "600");
+        assert_eq!(
+            crate::decode(&apng).unwrap().text().next(),
+            Some(("Thumb::Image::Width", "600"))
+        );
     }
 
     #[test]
@@ -1783,11 +1876,9 @@ mod tests {
         // Malformed text is skipped.
         write_chunk(&mut chunks, b"tEXt", b"no separator").unwrap();
         png.splice(33..33, chunks);
-        let text = crate::decode(&png).unwrap().text().to_vec();
-        assert_eq!(
-            text,
-            [("A".into(), "Hello".into()), ("B".into(), "Hello".into())]
-        );
+        let image = crate::decode(&png).unwrap();
+        let text: Vec<_> = image.text().collect();
+        assert_eq!(text, [("A", "Hello"), ("B", "Hello")]);
     }
 
     #[test]

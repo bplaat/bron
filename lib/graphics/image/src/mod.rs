@@ -16,7 +16,7 @@ use core::time::Duration;
 
 mod math;
 
-#[cfg(any(feature = "jpeg", feature = "webp"))]
+#[cfg(any(feature = "jpeg", feature = "png", feature = "webp"))]
 mod metadata;
 
 #[cfg(feature = "gif")]
@@ -198,6 +198,36 @@ impl Format {
         }
     }
 
+    /// The common name of the format, like PNG.
+    pub const fn name(self) -> &'static str {
+        match self {
+            #[cfg(feature = "bmp")]
+            Self::Bmp => "BMP",
+            #[cfg(feature = "gif")]
+            Self::Gif => "GIF",
+            #[cfg(feature = "icns")]
+            Self::Icns => "ICNS",
+            #[cfg(feature = "ico")]
+            Self::Ico => "ICO",
+            #[cfg(feature = "jpeg")]
+            Self::Jpeg => "JPEG",
+            #[cfg(feature = "jpeg2000")]
+            Self::Jpeg2000 => "JPEG 2000",
+            #[cfg(feature = "png")]
+            Self::Png => "PNG",
+            #[cfg(feature = "pnm")]
+            Self::Pnm => "Netpbm",
+            #[cfg(feature = "qoi")]
+            Self::Qoi => "QOI",
+            #[cfg(feature = "tga")]
+            Self::Tga => "TGA",
+            #[cfg(feature = "tiff")]
+            Self::Tiff => "TIFF",
+            #[cfg(feature = "webp")]
+            Self::WebP => "WebP",
+        }
+    }
+
     /// Whether images can be encoded in the format.
     pub const fn can_encode(self) -> bool {
         #[cfg(feature = "ico")]
@@ -310,7 +340,7 @@ pub struct Image {
     largest_frame: usize,
     is_animated: bool,
     loop_count: LoopCount,
-    text: Vec<(String, String)>,
+    metadata: Vec<Metadata>,
 }
 
 impl Image {
@@ -372,9 +402,17 @@ impl Image {
         self.is_animated
     }
 
-    /// Returns the keyword and text pairs of the PNG/APNG text chunks.
-    pub fn text(&self) -> &[(String, String)] {
-        &self.text
+    /// Returns the keyword and text pairs of the PNG/APNG text chunks, and comments.
+    pub fn text(&self) -> impl Iterator<Item = (&str, &str)> {
+        self.metadata
+            .iter()
+            .filter(|entry| entry.group == MetadataGroup::Text)
+            .map(|entry| (entry.name.as_str(), entry.value.as_str()))
+    }
+
+    /// Returns the readable metadata, like the camera of a photo, in file order.
+    pub fn metadata(&self) -> &[Metadata] {
+        &self.metadata
     }
 
     /// Returns the total animation plays.
@@ -407,8 +445,56 @@ impl Image {
             largest_frame: 0,
             is_animated: false,
             loop_count: LoopCount::Finite(1),
-            text: Vec::new(),
+            metadata: Vec::new(),
         }
+    }
+}
+
+/// What a metadata entry describes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MetadataGroup {
+    /// How the image is stored, like its bit depth, resolution or color profile.
+    Image,
+    /// EXIF and TIFF tags, like the camera and exposure of a photo.
+    Exif,
+    /// EXIF GPS tags of where an image was taken.
+    Gps,
+    /// Keyword and text pairs of PNG text chunks, and comments.
+    Text,
+    /// Properties of an XMP packet.
+    Xmp,
+}
+
+/// A readable metadata entry of an image, like the camera of a photo.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Metadata {
+    group: MetadataGroup,
+    name: String,
+    value: String,
+}
+
+impl Metadata {
+    #[cfg_attr(
+        not(any(feature = "gif", feature = "jpeg", feature = "png", feature = "webp")),
+        allow(dead_code)
+    )]
+    pub(crate) const fn new(group: MetadataGroup, name: String, value: String) -> Self {
+        Self { group, name, value }
+    }
+
+    /// Returns what the entry describes.
+    pub const fn group(&self) -> MetadataGroup {
+        self.group
+    }
+
+    /// Returns the readable name, like Camera Model.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Returns the readable value.
+    pub fn value(&self) -> &str {
+        &self.value
     }
 }
 

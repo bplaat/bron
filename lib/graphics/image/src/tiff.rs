@@ -8,7 +8,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use super::color::{ColorModel, Transform};
-use super::metadata::{ExifData, ORIENTATION, orient};
+use super::metadata::{ExifData, ORIENTATION, list_exif, orient};
 use super::{Budget, DecodeError, Format, Image, Result, jpeg, pixel_len};
 
 const NEW_SUBFILE_TYPE: u16 = 254;
@@ -499,7 +499,12 @@ pub(super) fn decode(data: &[u8]) -> Result<Image> {
         },
         &mut budget,
     )?;
-    Ok(Image::still(Format::Tiff, width, height, pixels))
+    let mut metadata = Vec::new();
+    list_exif(data, &mut metadata);
+    Ok(Image {
+        metadata,
+        ..Image::still(Format::Tiff, width, height, pixels)
+    })
 }
 
 // The first full-resolution image, skipping reduced-resolution previews before it.

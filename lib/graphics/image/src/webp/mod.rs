@@ -8,8 +8,10 @@ use alloc::vec::Vec;
 use core::time::Duration;
 
 use super::color::{ColorModel, Transform};
-use super::metadata::{ExifData, orient};
-use super::{Budget, DecodeError, Format, Image, LoopCount, Result, pixel_len};
+use super::metadata::{ExifData, list_exif, list_icc, list_xmp, orient};
+use super::{
+    Budget, DecodeError, Format, Image, LoopCount, Metadata, MetadataGroup, Result, pixel_len,
+};
 
 mod lossless;
 mod lossy;
@@ -108,10 +110,13 @@ pub(super) fn decode(data: &[u8]) -> Result<Image> {
     let mut budget = Budget::default();
     budget.claim(data.len())?;
     let mut orientation = 1;
+    let mut metadata = Vec::new();
     let mut dimensions = None;
     let mut transform = None;
     let mut loop_count = LoopCount::Finite(1);
     let mut animated = false;
+    // Whether the first image data is lossless, of the image or the first animation frame.
+    let mut lossless = None;
     let mut chunks = Chunks { data };
     while let Some((kind, payload)) = chunks.next()? {
         match kind {
@@ -129,8 +134,17 @@ pub(super) fn decode(data: &[u8]) -> Result<Image> {
                 if let Some(value) = ExifData::new(data).and_then(|exif| exif.orientation()) {
                     orientation = value;
                 }
+                list_exif(data, &mut metadata);
             }
-            b"ICCP" => transform = Transform::icc(payload, ColorModel::Rgb),
+            b"XMP " => list_xmp(payload, &mut metadata),
+            b"ICCP" => {
+                transform = Transform::icc(payload, ColorModel::Rgb);
+                list_icc(payload, &mut metadata);
+            }
+            b"VP8 " | b"VP8L" => _ = lossless.get_or_insert(kind == b"VP8L"),
+            // The image data of a frame follows its header, an alpha chunk only comes with lossy
+            // data.
+            b"ANMF" => _ = lossless.get_or_insert(payload.get(16..20) == Some(b"VP8L")),
             b"ANIM" if animated => {
                 if payload.len() != 6 {
                     return Err(DecodeError::InvalidData);
@@ -144,6 +158,14 @@ pub(super) fn decode(data: &[u8]) -> Result<Image> {
             }
             _ => {}
         }
+    }
+    if let Some(lossless) = lossless {
+        let compression = if lossless { "Lossless" } else { "Lossy" };
+        metadata.push(Metadata::new(
+            MetadataGroup::Image,
+            "Compression".into(),
+            compression.into(),
+        ));
     }
     let mut frames = Vec::new();
     if !animated {
@@ -174,7 +196,10 @@ pub(super) fn decode(data: &[u8]) -> Result<Image> {
             orientation,
             &mut budget,
         )?;
-        return Ok(Image::still(Format::WebP, width, height, pixels));
+        return Ok(Image {
+            metadata,
+            ..Image::still(Format::WebP, width, height, pixels)
+        });
     }
     let (width, height) = dimensions.ok_or(DecodeError::InvalidHeader)?;
     let len = pixel_len(width as u32, height as u32)?;
@@ -238,7 +263,7 @@ pub(super) fn decode(data: &[u8]) -> Result<Image> {
         largest_frame: 0,
         is_animated: true,
         loop_count,
-        text: Vec::new(),
+        metadata,
     })
 }
 
@@ -476,13 +501,15 @@ mod tests {
     }
 
     #[test]
-    fn malformed_or_invalid_exif_orientation_is_ignored() {
+    fn malformed_or_invalid_exif_orientation_does_not_change_pixels() {
         let source = include_bytes!("../../tests/images/webp/odd.webp");
         let expected = crate::decode(source).expect("source WebP");
         for metadata in [b"".as_slice(), b"Exif\0\0", b"MM\0\x2a\xff\xff\xff\xff"] {
             assert_eq!(
-                crate::decode(&with_exif(source, metadata)).expect("WebP"),
-                expected
+                crate::decode(&with_exif(source, metadata))
+                    .expect("WebP")
+                    .frames(),
+                expected.frames()
             );
         }
         for value in [0u16, 9, 65535] {
@@ -490,8 +517,10 @@ mod tests {
             metadata.extend_from_slice(&value.to_be_bytes());
             metadata.extend_from_slice(&[0; 6]);
             assert_eq!(
-                crate::decode(&with_exif(source, &metadata)).expect("WebP"),
-                expected
+                crate::decode(&with_exif(source, &metadata))
+                    .expect("WebP")
+                    .frames(),
+                expected.frames()
             );
         }
     }

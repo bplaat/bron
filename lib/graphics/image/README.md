@@ -30,6 +30,11 @@ several sizes, which are decoded as frames of their own sizes in file order. `Im
 `Image::height` and `Image::pixels` are those of `Image::largest_frame`, the largest icon,
 or the first frame of other images.
 
+`Image::metadata` lists readable metadata in file order, each entry with a group, name and
+value: how the image is stored (bit depth, resolution, color profile description), EXIF and
+TIFF tags with GPS coordinates, PNG text and comments, and XMP properties. EXIF is read from
+JPEG, PNG, TIFF and WebP files, XMP from JPEG, PNG, TIFF and WebP files.
+
 PNG/APNG files can carry text entries. Set `EncodeOptions::png_text` to keyword and
 text pairs: Latin-1 text is written as `tEXt` and other text as UTF-8 `iTXt`.
 Decoding reads `tEXt`, `zTXt`, and `iTXt` entries into `Image::text`.

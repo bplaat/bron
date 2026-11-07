@@ -9,11 +9,12 @@ use alloc::vec::Vec;
 
 use super::color::{ADOBE_RGB, ColorModel, Curve, Transform};
 use super::metadata::{
-    ASCII, COLOR_SPACE, EXIF_DIRECTORY, ExifData, INTEROPERABILITY_DIRECTORY, orient,
+    ASCII, COLOR_SPACE, EXIF_DIRECTORY, ExifData, INTEROPERABILITY_DIRECTORY, decimal, list_exif,
+    list_icc, list_xmp, orient, text,
 };
 use super::{
-    Bitmap, Budget, Compression, DecodeError, EncodeError, Format, Image, Reader, Result,
-    pixel_len, roundf, truncf,
+    Bitmap, Budget, Compression, DecodeError, EncodeError, Format, Image, Metadata, MetadataGroup,
+    Reader, Result, pixel_len, roundf, truncf,
 };
 
 const ZIGZAG: [usize; 64] = [
@@ -314,9 +315,35 @@ struct Jpeg {
     jfif: bool,
     orientation: u16,
     icc: Vec<IccChunk>,
+    metadata: Vec<Metadata>,
     adobe_rgb: bool,
     /// Whether three components are RGB instead of YCbCr, when the container says so.
     rgb: Option<bool>,
+}
+
+// The resolution of a JFIF segment, after its identifier: a version, density unit and the
+// horizontal and vertical densities.
+fn jfif_resolution(jfif: &[u8]) -> Option<Metadata> {
+    let [_, _, unit, x_high, x_low, y_high, y_low, ..] = *jfif else {
+        return None;
+    };
+    let scale = match unit {
+        1 => 1.0,
+        2 => 2.54,
+        _ => return None,
+    };
+    let [x, y] = [[x_high, x_low], [y_high, y_low]]
+        .map(|density| decimal(f64::from(u16::from_be_bytes(density)) * scale, 0));
+    let value = if x == y {
+        alloc::format!("{x} dpi")
+    } else {
+        alloc::format!("{x} \u{d7} {y} dpi")
+    };
+    Some(Metadata::new(
+        MetadataGroup::Image,
+        "Resolution".into(),
+        value,
+    ))
 }
 
 /// One APP2 part of an ICC profile, which is split to fit in segments.
@@ -366,6 +393,7 @@ impl Jpeg {
             jfif: false,
             orientation: 1,
             icc: Vec::new(),
+            metadata: Vec::new(),
             adobe_rgb: false,
             rgb: None,
         }
@@ -438,14 +466,21 @@ impl Jpeg {
                     self.scan(&mut segment, &mut r)?;
                 }
                 0xe0 => {
-                    if bytes.starts_with(b"JFIF\0") {
+                    if let Some(jfif) = bytes.strip_prefix(b"JFIF\0") {
                         self.jfif = true;
+                        self.metadata.extend(jfif_resolution(jfif));
                     }
                 }
                 0xe1 => {
                     if let Some(exif) = Exif::parse(bytes) {
                         self.orientation = exif.orientation.unwrap_or(self.orientation);
                         self.adobe_rgb = exif.adobe_rgb;
+                    }
+                    if let Some(exif) = bytes.strip_prefix(b"Exif\0\0") {
+                        list_exif(exif, &mut self.metadata);
+                    } else if let Some(xmp) = bytes.strip_prefix(b"http://ns.adobe.com/xap/1.0/\0")
+                    {
+                        list_xmp(xmp, &mut self.metadata);
                     }
                 }
                 0xe2 => {
@@ -464,7 +499,17 @@ impl Jpeg {
                         self.adobe = Some(bytes[11]);
                     }
                 }
-                0xe3..=0xed | 0xef | 0xfe => {}
+                0xfe => {
+                    let comment = text(bytes);
+                    if !comment.is_empty() {
+                        self.metadata.push(Metadata::new(
+                            MetadataGroup::Text,
+                            "Comment".into(),
+                            comment,
+                        ));
+                    }
+                }
+                0xe3..=0xed | 0xef => {}
                 _ => return Err(DecodeError::UnsupportedFeature),
             }
         }
@@ -780,7 +825,21 @@ impl Jpeg {
             _ => ColorModel::Cmyk,
         };
         // An embedded profile takes precedence over the EXIF color space.
-        let transform = match self.icc_profile() {
+        let icc = self.icc_profile();
+        if let Some(icc) = &icc {
+            list_icc(icc, &mut self.metadata);
+        }
+        let encoding = if self.progressive {
+            "Progressive"
+        } else {
+            "Baseline"
+        };
+        self.metadata.push(Metadata::new(
+            MetadataGroup::Image,
+            "Encoding".into(),
+            encoding.into(),
+        ));
+        let transform = match icc {
             Some(icc) => Transform::icc(&icc, model),
             None if self.adobe_rgb && model == ColorModel::Rgb => {
                 Transform::rgb(&ADOBE_RGB, [&Curve::gamma(563.0 / 256.0); 3])
@@ -866,7 +925,10 @@ impl Jpeg {
         }
         let (width, height, pixels) =
             orient(self.width, self.height, pixels, self.orientation, budget)?;
-        Ok(Image::still(Format::Jpeg, width, height, pixels))
+        Ok(Image {
+            metadata: self.metadata,
+            ..Image::still(Format::Jpeg, width, height, pixels)
+        })
     }
 }
 

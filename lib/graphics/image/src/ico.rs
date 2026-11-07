@@ -97,7 +97,7 @@ pub(super) fn decode(data: &[u8]) -> Result<Image> {
         largest_frame,
         is_animated: false,
         loop_count: LoopCount::Finite(1),
-        text: Vec::new(),
+        metadata: Vec::new(),
     })
 }
 

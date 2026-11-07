@@ -151,12 +151,11 @@ mod tests {
         let text = |key: &str| {
             thumbnail
                 .text()
-                .iter()
-                .find(|(keyword, _)| keyword == key)
-                .map(|(_, text)| text.as_str())
+                .find(|(keyword, _)| *keyword == key)
+                .map(|(_, text)| text.to_owned())
         };
-        assert_eq!(text("Thumb::Image::Width"), Some("600"));
-        assert_eq!(text("Thumb::Image::Height"), Some("600"));
-        assert_eq!(text("Software"), Some("ImageView"));
+        assert_eq!(text("Thumb::Image::Width").as_deref(), Some("600"));
+        assert_eq!(text("Thumb::Image::Height").as_deref(), Some("600"));
+        assert_eq!(text("Software").as_deref(), Some("ImageView"));
     }
 }

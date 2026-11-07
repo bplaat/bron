@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: MIT
  */
 
+use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 use core::mem;
@@ -11,7 +12,7 @@ use core::time::Duration;
 
 use super::{
     Area, Bitmap, Budget, Compression, DecodeError, EncodeError, Format, Frame, Image, LoopCount,
-    Reader, Result, pixel_len, round,
+    Metadata, MetadataGroup, Reader, Result, pixel_len, round,
 };
 
 // MARK: Decoder
@@ -59,6 +60,7 @@ struct Decoder<'a> {
     has_loop_extension: bool,
     loop_count: LoopCount,
     control: GraphicControl,
+    metadata: Vec<Metadata>,
 }
 
 pub(super) fn decode(data: &[u8]) -> Result<Image> {
@@ -92,6 +94,11 @@ impl<'a> Decoder<'a> {
             has_loop_extension: false,
             loop_count: LoopCount::Finite(1),
             control: GraphicControl::default(),
+            metadata: vec![Metadata::new(
+                MetadataGroup::Image,
+                "Version".into(),
+                data[..6].iter().map(|byte| char::from(*byte)).collect(),
+            )],
         })
     }
 
@@ -110,7 +117,7 @@ impl<'a> Decoder<'a> {
                         frames: self.frames,
                         largest_frame: 0,
                         loop_count: self.loop_count,
-                        text: Vec::new(),
+                        metadata: self.metadata,
                     });
                 }
                 _ => return Err(DecodeError::InvalidData),
@@ -158,6 +165,24 @@ impl<'a> Decoder<'a> {
                     };
                 } else {
                     Self::skip_blocks(&mut self.reader)?;
+                }
+            }
+            0xfe => {
+                self.compressed.clear();
+                Self::read_blocks(&mut self.reader, &mut self.budget, &mut self.compressed)?;
+                // Comments are 7-bit ASCII, read as Latin-1 to keep any other byte.
+                let comment: String = self
+                    .compressed
+                    .iter()
+                    .map(|byte| char::from(*byte))
+                    .collect();
+                let comment = comment.trim();
+                if !comment.is_empty() {
+                    self.metadata.push(Metadata::new(
+                        MetadataGroup::Text,
+                        "Comment".into(),
+                        comment.into(),
+                    ));
                 }
             }
             0x01 => return Err(DecodeError::UnsupportedFeature), // Plain-text rendering.
