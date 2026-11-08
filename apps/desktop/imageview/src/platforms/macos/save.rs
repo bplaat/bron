@@ -169,7 +169,7 @@ unsafe fn add_controls(panel: *mut Object, request: &SaveRequest<'_>) -> Option<
         let anchor: *mut Object = msg_send![quality_slider, widthAnchor];
         let constraint: *mut Object = msg_send![anchor, constraintEqualToConstant: QUALITY_WIDTH];
         let _: () = msg_send![constraint, setActive: Bool::YES];
-        let value: *mut Object = msg_send![class!(NSTextField), labelWithString: ns_string("")];
+        let value: *mut Object = msg_send![class!(NSTextField), labelWithString: ns_string!("")];
         let font: *mut Object = msg_send![class!(NSFont),
             monospacedDigitSystemFontOfSize: 0.0f64,
             weight: 0.0f64

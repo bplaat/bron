@@ -303,9 +303,9 @@ impl Popover {
                 targeting.extend(Retained::retain(reset));
             }
             let cancel = text_button("Cancel", sel!(cancel:), target_ptr);
-            let _: () = msg_send![cancel, setKeyEquivalent: ns_string("\u{1b}")];
+            let _: () = msg_send![cancel, setKeyEquivalent: ns_string!("\u{1b}")];
             let apply = text_button(tool.apply_label(), sel!(apply:), target_ptr);
-            let _: () = msg_send![apply, setKeyEquivalent: ns_string("\r")];
+            let _: () = msg_send![apply, setKeyEquivalent: ns_string!("\r")];
             for button in [cancel, apply] {
                 let _: () = msg_send![&*buttons, addView: button, inGravity: NS_STACK_VIEW_GRAVITY_TRAILING];
                 targeting.extend(Retained::retain(button));
@@ -451,7 +451,7 @@ unsafe fn control_views(
                 let _: () = msg_send![slider, setContinuous: Bool::YES];
                 width(&*slider, SLIDER_WIDTH);
                 let value: *mut Object =
-                    msg_send![class!(NSTextField), labelWithString: ns_string("")];
+                    msg_send![class!(NSTextField), labelWithString: ns_string!("")];
                 let font: *mut Object = msg_send![class!(NSFont),
                     monospacedDigitSystemFontOfSize: 0.0f64,
                     weight: 0.0f64
@@ -467,11 +467,11 @@ unsafe fn control_views(
             }
             Control::Number { label: text } => {
                 let field: *mut Object =
-                    msg_send![class!(NSTextField), textFieldWithString: ns_string("")];
+                    msg_send![class!(NSTextField), textFieldWithString: ns_string!("")];
                 let _: () = msg_send![field, setDelegate: target];
                 width(&*field, FIELD_WIDTH);
                 let unit: *mut Object =
-                    msg_send![class!(NSTextField), labelWithString: ns_string("pixels")];
+                    msg_send![class!(NSTextField), labelWithString: ns_string!("pixels")];
                 (
                     Some(label(text)),
                     Retained::retain(field),

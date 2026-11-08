@@ -130,7 +130,8 @@ impl Sidebar {
         unsafe {
             let table: Retained<Object> = msg_send![class!(NSTableView), new];
             let column: Allocated<Object> = msg_send![class!(NSTableColumn), alloc];
-            let column: Retained<Object> = msg_send![column, initWithIdentifier: ns_string("page")];
+            let column: Retained<Object> =
+                msg_send![column, initWithIdentifier: ns_string!("page")];
             let _: () = msg_send![&*table, addTableColumn: &*column];
             let _: () = msg_send![&*table, setHeaderView: null_mut::<Object>()];
             let _: () = msg_send![&*table, setStyle: NS_TABLE_VIEW_STYLE_SOURCE_LIST];

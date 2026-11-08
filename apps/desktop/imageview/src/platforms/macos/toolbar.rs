@@ -362,7 +362,7 @@ impl ToolbarDelegate {
                     for button in *buttons {
                         let _: () =
                             msg_send![images, addObject: symbol(button.symbol, button.label)];
-                        let _: () = msg_send![labels, addObject: ns_string("")];
+                        let _: () = msg_send![labels, addObject: ns_string!("")];
                     }
                     let group: Retained<Object> = msg_send![class!(NSToolbarItemGroup),
                         groupWithItemIdentifier: identifier,
@@ -546,7 +546,7 @@ fn entry(
         let entry: Retained<Object> = msg_send![entry,
             initWithTitle: ns_string(button.label),
             action: sel!(menuItemSelected:),
-            keyEquivalent: ns_string("")
+            keyEquivalent: ns_string!("")
         ];
         let _: () = msg_send![&*entry, setImage: symbol(button.symbol, button.label)];
         let _: () = msg_send![&*entry, setTarget: target];
