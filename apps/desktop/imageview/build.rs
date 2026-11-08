@@ -12,7 +12,7 @@ fn main() {
     if std::env::var("CARGO_CFG_TARGET_OS").expect("CARGO_CFG_TARGET_OS not set") == "macos"
         && std::env::var_os("CARGO_BUNDLE").is_none()
     {
-        build_utils::macos::embed_info_plist("Info.plist");
+        build_utils::macos::embed_info_plist("meta/macos/Info.plist");
     }
 
     if std::env::var("CARGO_CFG_TARGET_OS").expect("CARGO_CFG_TARGET_OS not set") == "windows" {

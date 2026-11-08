@@ -13,6 +13,7 @@ copyright = "Copyright (c) 2026 Bastiaan van der Plaat"
 icon = "meta/macos/icon.icon"
 
 [package.metadata.bundle.macos]
+info_plist = "meta/macos/Info.plist"
 hardened_runtime = true
 
 [[package.metadata.bundle.macos.appex]]
