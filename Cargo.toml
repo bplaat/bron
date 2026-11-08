@@ -12,6 +12,7 @@ members = [
     "tools/wiiu-toolchain/wut-sys",
 ]
 exclude = [
+    "apps/web/bassiemusic",
     "examples/macos",
     "examples/wii",
     "examples/wiiu",

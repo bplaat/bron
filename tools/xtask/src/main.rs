@@ -168,6 +168,8 @@ impl Xtask {
     fn source_files(&self, extensions: &[&str]) -> Result<Vec<PathBuf>> {
         let mut files = Vec::new();
         collect_source_files(&self.root, &mut files)?;
+        let bassiemusic = self.root.join("apps/web/bassiemusic");
+        files.retain(|file| !file.starts_with(&bassiemusic));
         if !extensions.is_empty() {
             files.retain(|file| {
                 file.extension()

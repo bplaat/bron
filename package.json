@@ -2,6 +2,7 @@
     "private": true,
     "workspaces": [
         "apps/*/*/web",
+        "!apps/web/bassiemusic/web",
         "lib/*/*",
         "lib/*/*/examples/*"
     ],
