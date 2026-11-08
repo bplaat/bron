@@ -152,8 +152,9 @@ pub(crate) fn delete_credential(service: &str, account: &str) -> Result<()> {
     }
 }
 
-fn wide(value: &str) -> Vec<u16> {
-    value.encode_utf16().chain(Some(0)).collect()
+/// Encode a string as a null-terminated UTF-16 string.
+pub(crate) fn wide(text: &str) -> Vec<u16> {
+    text.encode_utf16().chain([0]).collect()
 }
 
 fn last_error(operation: &str) -> Error {
