@@ -176,8 +176,8 @@ pub(crate) unsafe fn read_stream(stream: *mut c_void) -> Option<Vec<u8>> {
 pub(crate) fn is_dark() -> bool {
     let mut light = 1u32;
     let mut size = size_of::<u32>() as u32;
-    let key = wide("Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize");
-    let value = wide("AppsUseLightTheme");
+    let key = w!("Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize");
+    let value = w!("AppsUseLightTheme");
     // SAFETY: The strings are null terminated and the data is a DWORD.
     let status = unsafe {
         RegGetValueW(

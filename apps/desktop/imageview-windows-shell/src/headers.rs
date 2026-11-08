@@ -217,7 +217,55 @@ unsafe extern "system" {
     ) -> i32;
 }
 
-/// Encode a string as a null-terminated UTF-16 string.
-pub(crate) fn wide(text: &str) -> Vec<u16> {
-    text.encode_utf16().chain([0]).collect()
+/// Encode a string literal as a null-terminated UTF-16 string at compile time.
+macro_rules! w {
+    ($text:literal) => {{
+        const TEXT: &str = $text;
+        const LEN: usize = {
+            let bytes = TEXT.as_bytes();
+            let mut len = 1;
+            let mut i = 0;
+            while i < bytes.len() {
+                if bytes[i] & 0xc0 != 0x80 {
+                    len += if bytes[i] >= 0xf0 { 2 } else { 1 };
+                }
+                i += 1;
+            }
+            len
+        };
+        const WIDE: &[u16] = &{
+            let bytes = TEXT.as_bytes();
+            let mut result = [0; LEN];
+            let mut i = 0;
+            let mut j = 0;
+            while i < bytes.len() {
+                let first = bytes[i];
+                let (mut code, extra) = match first {
+                    0..=0x7f => (first as u32, 0),
+                    0xc0..=0xdf => ((first & 0x1f) as u32, 1),
+                    0xe0..=0xef => ((first & 0x0f) as u32, 2),
+                    _ => ((first & 0x07) as u32, 3),
+                };
+                let end = i + extra + 1;
+                i += 1;
+                while i < end {
+                    code = (code << 6) | (bytes[i] & 0x3f) as u32;
+                    i += 1;
+                }
+                assert!(code != 0, "wide string literal contains a null character");
+                if code > 0xffff {
+                    code -= 0x10000;
+                    result[j] = 0xd800 | (code >> 10) as u16;
+                    j += 1;
+                    result[j] = 0xdc00 | (code & 0x3ff) as u16;
+                } else {
+                    result[j] = code as u16;
+                }
+                j += 1;
+            }
+            result
+        };
+        WIDE
+    }};
 }
+pub(crate) use w;

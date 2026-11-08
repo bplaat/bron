@@ -21,7 +21,7 @@ use imageview_core::{MediaRenderer, decode_media, draw_checkerboard};
 use crate::headers::*;
 use crate::{ComObject, Interfaces, guard, is_dark, read_stream, unknown};
 
-const CLASS_NAME: &str = "ImageViewPreview";
+const CLASS_NAME: &[u16] = w!("ImageViewPreview");
 const ANIMATION_TIMER: usize = 1;
 const E_NOTIMPL: HRESULT = 0x8000_4001_u32 as i32;
 
@@ -251,7 +251,7 @@ unsafe extern "system" fn do_preview(this: *mut c_void) -> HRESULT {
         };
         preview.close();
         register_class();
-        let class = wide(CLASS_NAME);
+        let class = CLASS_NAME;
         let (left, top, right, bottom) = preview.rect.get();
         // SAFETY: The class is registered and the parent is the window of the preview pane.
         let hwnd = per_monitor_dpi(|| unsafe {
@@ -426,7 +426,7 @@ fn module() -> *mut c_void {
 fn register_class() {
     static REGISTER: Once = Once::new();
     REGISTER.call_once(|| {
-        let class = wide(CLASS_NAME);
+        let class = CLASS_NAME;
         // SAFETY: The class structure is valid and its name is copied by the system.
         unsafe {
             RegisterClassExW(&WNDCLASSEXW {
