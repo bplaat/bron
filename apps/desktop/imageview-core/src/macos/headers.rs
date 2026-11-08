@@ -29,6 +29,7 @@ unsafe extern "C" {}
 unsafe extern "C" {
     /// The class of compile-time constant strings, which `ns_string!` fills in at load time.
     pub static __CFConstantStringClassReference: Object;
+    pub(crate) static NSRunLoopCommonModes: *mut Object;
 
     pub(crate) fn NSExtensionMain(argc: i32, argv: *const *const c_char) -> i32;
 }

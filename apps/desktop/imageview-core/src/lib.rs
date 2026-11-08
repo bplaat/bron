@@ -12,22 +12,25 @@ use std::time::SystemTime;
 pub use image::LoopCount;
 
 // The `ns_string!` macro refers to these through the crate root.
-#[cfg(target_os = "macos")]
-#[doc(hidden)]
-pub use crate::appkit::{__CFConstantStringClassReference, CFConstString};
 pub use crate::browse::{compare_names, is_supported, neighbour_path, sibling_index};
 pub use crate::info::{Info, InfoSection};
-pub use crate::media::{Frame, Media, Pages, Raster, decode_media, decode_pages};
-pub use crate::render::{MediaRenderer, draw_checkerboard, render_media, render_thumbnail};
-
-/// AppKit images and rendering for macOS and its Quick Look extensions.
 #[cfg(target_os = "macos")]
-#[allow(unsafe_code)]
-pub mod appkit;
+#[doc(hidden)]
+pub use crate::macos::{__CFConstantStringClassReference, CFConstString};
+pub use crate::media::{Frame, Media, Pages, Raster, decode_media, decode_pages};
+pub use crate::render::{
+    CheckerTiles, MediaRenderer, draw_checkerboard, draw_checkerboard_clipped, render_media,
+    render_thumbnail,
+};
+
 mod browse;
 /// Editing still images.
 pub mod edit;
 mod info;
+/// AppKit images and rendering for macOS and its Quick Look extensions.
+#[cfg(target_os = "macos")]
+#[allow(unsafe_code)]
+pub mod macos;
 mod media;
 mod render;
 

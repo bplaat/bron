@@ -11,7 +11,7 @@
 use std::ptr::null_mut;
 
 use block2::{Block, RcBlock};
-use imageview_core::appkit::{
+use imageview_core::macos::{
     NS_VIEW_HEIGHT_SIZABLE, NS_VIEW_WIDTH_SIZABLE, Point, Rect, Size, create_media_view,
     dispatch_async, dispatch_async_main, extension_main, load_media, make_error, ns_string,
 };

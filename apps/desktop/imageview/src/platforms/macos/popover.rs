@@ -12,28 +12,23 @@ use std::cell::RefCell;
 use std::ptr::null_mut;
 
 use bwindow::WindowId;
-use imageview_core::appkit::{Rect, Size, ns_string};
 use imageview_core::edit::{Control, Tool};
+use imageview_core::macos::{Rect, Size, ns_string};
 use objc2::rc::{Allocated, Retained};
 use objc2::runtime::{AnyObject as Object, Bool, Sel};
 use objc2::{Encode, Encoding, class, define_class, msg_send, sel};
 
+use super::headers::*;
 use super::view::rect;
 use crate::AppEvent;
 
 const NS_CONTROL_STATE_VALUE_ON: isize = 1;
 const NS_GRID_CELL_PLACEMENT_LEADING: isize = 2;
-const NS_GRID_CELL_PLACEMENT_TRAILING: isize = 3;
-const NS_GRID_ROW_ALIGNMENT_FIRST_BASELINE: isize = 2;
 const NS_POPOVER_BEHAVIOR_APPLICATION_DEFINED: isize = 0;
 // The bottom edge of a rectangle in a flipped view.
 const NS_RECT_EDGE_MAX_Y: u64 = 3;
 const NS_STACK_VIEW_GRAVITY_LEADING: isize = 1;
 const NS_STACK_VIEW_GRAVITY_TRAILING: isize = 3;
-// AppKit numbers its alignments like UIKit on Apple silicon.
-const NS_TEXT_ALIGNMENT_RIGHT: isize = if cfg!(target_arch = "x86_64") { 1 } else { 2 };
-const NS_USER_INTERFACE_LAYOUT_ORIENTATION_VERTICAL: isize = 1;
-const NS_LAYOUT_ATTRIBUTE_LEADING: isize = 5;
 const SLIDER_WIDTH: f64 = 200.0;
 const FIELD_WIDTH: f64 = 72.0;
 const VALUE_WIDTH: f64 = 40.0;
@@ -148,7 +143,10 @@ impl Target {
                         // Only the digits count, whatever separators are typed.
                         Control::Number { .. } => {
                             let text: *mut Object = msg_send![&*entry.view, stringValue];
-                            digits(text)
+                            string(text)
+                                .chars()
+                                .filter(char::is_ascii_digit)
+                                .collect::<String>()
                                 .parse::<u32>()
                                 .map_or(0.0, |value| value as f32)
                         }
@@ -506,22 +504,6 @@ unsafe fn control_views(
         let view = view.expect("AppKit creates controls");
         let _: () = msg_send![&*view, setTag: index as isize];
         (label, view, value)
-    }
-}
-
-// The digits of an NSString.
-unsafe fn digits(string: *mut Object) -> String {
-    // SAFETY: The caller passes a valid NSString, its UTF-8 representation lives in this pool.
-    unsafe {
-        let bytes: *const std::ffi::c_char = msg_send![string, UTF8String];
-        if bytes.is_null() {
-            return String::new();
-        }
-        std::ffi::CStr::from_ptr(bytes)
-            .to_string_lossy()
-            .chars()
-            .filter(char::is_ascii_digit)
-            .collect()
     }
 }
 

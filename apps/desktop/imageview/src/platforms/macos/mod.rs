@@ -10,15 +10,15 @@
 #![allow(unsafe_code)]
 
 use std::cell::RefCell;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::ptr::null_mut;
 
 use block2::Block;
 use bwindow::{
     EventLoopProxy, LogicalSize, NativeViewHandle, Theme, Window, WindowAttachment, WindowId,
 };
-use imageview_core::appkit::{Point, Rect, Size, create_media_view, ns_string};
 use imageview_core::edit::{Control, Selection, Shape, Tool};
+use imageview_core::macos::{Point, Rect, Size, create_media_view, file_path, ns_string};
 use imageview_core::{InfoSection, Media};
 use objc2::rc::{Allocated, Retained, autoreleasepool};
 use objc2::runtime::{AnyObject as Object, Bool, Sel};
@@ -37,6 +37,7 @@ use crate::viewport::Viewport;
 mod browse;
 mod headers;
 mod inspector;
+mod layers;
 mod popover;
 mod save;
 mod sidebar;
@@ -67,11 +68,7 @@ define_class!(
             completion: &Block<dyn Fn(*mut Object, Bool, *mut Object)>,
         ) {
             // SAFETY: AppKit passes a valid file URL.
-            let path: *const std::ffi::c_char = unsafe { msg_send![url, fileSystemRepresentation] };
-            if !path.is_null() {
-                // SAFETY: NSURL returns a null-terminated representation that lives in this pool.
-                let bytes = unsafe { std::ffi::CStr::from_ptr(path) }.to_bytes();
-                let path = PathBuf::from(<std::ffi::OsStr as std::os::unix::ffi::OsStrExt>::from_bytes(bytes));
+            if let Some(path) = unsafe { file_path(url) } {
                 send(AppEvent::Open(vec![path]));
             }
             // The application shows the file in its own window, not in an NSDocument.

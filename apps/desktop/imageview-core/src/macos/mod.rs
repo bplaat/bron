@@ -9,10 +9,12 @@
 use std::ffi::{CStr, CString, OsStr, c_char, c_void};
 use std::os::unix::ffi::OsStrExt;
 use std::path::PathBuf;
+use std::ptr::null_mut;
+use std::time::Duration;
 
 use bcanvas::{CanvasRenderingContext2d, NativeContext};
-use objc2::msg_send;
-use objc2::runtime::{AnyObject as Object, Bool};
+use objc2::runtime::{AnyObject as Object, Bool, Sel};
+use objc2::{Message, class, msg_send};
 
 use self::headers::*;
 pub use self::headers::{
@@ -99,12 +101,12 @@ pub unsafe fn load_media(url: *mut Object) -> Result<Media, String> {
     result
 }
 
-// Returns the Rust path represented by a file URL.
-//
-// # Safety
-//
-// `url` must point to a valid file `NSURL` for this call.
-unsafe fn file_path(url: *mut Object) -> Option<PathBuf> {
+/// Returns the Rust path represented by a file URL.
+///
+/// # Safety
+///
+/// `url` must point to a valid file `NSURL` for this call.
+pub unsafe fn file_path(url: *mut Object) -> Option<PathBuf> {
     // SAFETY: NSURL owns the representation, which is copied into the Rust path before return.
     let representation: *const c_char = unsafe { msg_send![url, fileSystemRepresentation] };
     if representation.is_null() {
@@ -142,6 +144,76 @@ pub unsafe fn draw_bottom_up(
     }
 }
 
+/// The device pixels per point of the window of a view, or 1 outside of a window, like while
+/// printing.
+pub fn backing_scale(view: &impl Message) -> f64 {
+    // SAFETY: Every NSView answers its window, which may be nil.
+    unsafe {
+        let window: *mut Object = msg_send![view, window];
+        if window.is_null() {
+            1.0
+        } else {
+            msg_send![window, backingScaleFactor]
+        }
+    }
+}
+
+/// Draws a flipped view with a canvas of its bounds, call this from its `drawRect:`.
+///
+/// # Safety
+///
+/// `view` must be a flipped NSView in AppKit's draw pass, whose current graphics context it
+/// draws.
+pub unsafe fn draw_view(
+    view: &impl Message,
+    draw: impl for<'frame> FnOnce(&mut CanvasRenderingContext2d<'frame>),
+) {
+    // SAFETY: The current graphics context of the draw pass stays valid during this call.
+    unsafe {
+        let graphics_context: *mut Object = msg_send![class!(NSGraphicsContext), currentContext];
+        if graphics_context.is_null() {
+            return;
+        }
+        let context: *mut c_void = msg_send![graphics_context, CGContext];
+        if context.is_null() {
+            return;
+        }
+        let bounds: Rect = msg_send![view, bounds];
+        bcanvas::draw_native(
+            NativeContext::CoreGraphics(context),
+            bounds.size.width as f32,
+            bounds.size.height as f32,
+            backing_scale(view) as f32,
+            draw,
+        );
+    }
+}
+
+/// Cancels the pending `selector` of `target`, then performs it after `delay` when there is
+/// one. It also runs while menus track and windows live resize, which the default run loop mode
+/// pauses. The pending request retains the target until it runs or is canceled.
+pub fn perform_after(target: &impl Message, selector: Sel, delay: Option<Duration>) {
+    // SAFETY: The target implements the selector without arguments, canceling only removes the
+    // target's own requests and the modes array is autoreleased.
+    unsafe {
+        let _: () = msg_send![class!(NSObject),
+            cancelPreviousPerformRequestsWithTarget: target,
+            selector: selector,
+            object: null_mut::<Object>()
+        ];
+        if let Some(delay) = delay {
+            let modes: *mut Object =
+                msg_send![class!(NSArray), arrayWithObject: NSRunLoopCommonModes];
+            let _: () = msg_send![target,
+                performSelector: selector,
+                withObject: null_mut::<Object>(),
+                afterDelay: delay.as_secs_f64(),
+                inModes: modes
+            ];
+        }
+    }
+}
+
 /// Creates an autoreleased `NSError` that carries `description` as its localized description.
 ///
 /// # Safety
@@ -151,11 +223,11 @@ pub unsafe fn make_error(domain: *mut Object, description: &str) -> *mut Object 
     // SAFETY: The Foundation convenience constructors return autoreleased objects, and the caller
     // guarantees the domain is a valid string.
     unsafe {
-        let user_info: *mut Object = msg_send![objc2::class!(NSDictionary),
+        let user_info: *mut Object = msg_send![class!(NSDictionary),
             dictionaryWithObject: ns_string(description),
             forKey: ns_string!("NSLocalizedDescription")
         ];
-        msg_send![objc2::class!(NSError),
+        msg_send![class!(NSError),
             errorWithDomain: domain,
             code: 1isize,
             userInfo: user_info

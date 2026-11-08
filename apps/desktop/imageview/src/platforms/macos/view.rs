@@ -4,27 +4,33 @@
  * SPDX-License-Identifier: MIT
  */
 
-//! The AppKit media view: a flipped view that draws the viewport with bcanvas, below a native
-//! NSScrollView that only shows the scrollers. The scroll view scrolls an empty document as large
+//! The AppKit media view: a flipped view that shows the viewport in Core Animation layers, below
+//! a native NSScrollView that only shows the scrollers. The scroll view scrolls an empty document as large
 //! as the magnified media, its scroll position is followed by the viewport and the other way
 //! around.
 
 use std::cell::{Cell, RefCell};
-use std::ffi::c_void;
 use std::ptr::null_mut;
+use std::time::Duration;
 
-use bcanvas::NativeContext;
 use bwindow::ffi::{file_drag_operation, perform_file_drop, register_dragged_types};
-use imageview_core::appkit::{NS_VIEW_HEIGHT_SIZABLE, NS_VIEW_WIDTH_SIZABLE, Point, Rect, Size};
 use imageview_core::edit::{Selection, Shape};
+use imageview_core::macos::{
+    NS_VIEW_HEIGHT_SIZABLE, NS_VIEW_WIDTH_SIZABLE, Point, Rect, Size, backing_scale, perform_after,
+};
 use imageview_core::{Media, PRECISE_ZOOM_RATE, WHEEL_ZOOM_RATE};
 use objc2::rc::{Allocated, Retained};
 use objc2::runtime::{AnyObject as Object, Bool, Sel};
 use objc2::{class, define_class, msg_send, sel};
 
 use super::headers::*;
+use super::layers::Layers;
 use crate::AppEvent;
 use crate::viewport::{Axis, Step, Viewport};
+
+// How long the view stays at a magnification or scroll position before a vector is drawn again
+// for it, which the GPU scales until then.
+const SETTLE_DELAY: Duration = Duration::from_millis(150);
 
 define_class!(
     // Leaves everything but its scrollers to the view below it.
@@ -63,6 +69,7 @@ define_class!(
 pub(super) struct ViewIvars {
     viewport: RefCell<Viewport>,
     dark: Cell<bool>,
+    layers: Layers,
     scroll_view: Retained<Object>,
     document: Retained<Object>,
 }
@@ -102,19 +109,46 @@ define_class!(
             Bool::YES
         }
 
-        #[unsafe(method(isOpaque))]
-        const fn _is_opaque(&self) -> Bool {
-            Bool::YES
-        }
-
         #[unsafe(method(acceptsFirstResponder))]
         const fn _accepts_first_responder(&self) -> Bool {
             Bool::YES
         }
 
-        #[unsafe(method(drawRect:))]
-        fn _draw_rect(&self, _: Rect) {
-            self.draw();
+        #[unsafe(method(viewDidChangeBackingProperties))]
+        fn _view_did_change_backing_properties(&self) {
+            // SAFETY: NSView implements `viewDidChangeBackingProperties`.
+            unsafe {
+                let _: () = msg_send![super(self), viewDidChangeBackingProperties];
+            }
+            self.show(true);
+        }
+
+        // Follows whether the new window is visible, to pause animations while it is not.
+        #[unsafe(method(viewDidMoveToWindow))]
+        fn _view_did_move_to_window(&self) {
+            // SAFETY: The view only changes its own observations, of a live window.
+            unsafe {
+                let center: *mut Object = msg_send![class!(NSNotificationCenter), defaultCenter];
+                let _: () = msg_send![center,
+                    removeObserver: self,
+                    name: NSWindowDidChangeOcclusionStateNotification,
+                    object: null_mut::<Object>()
+                ];
+                let window: *mut Object = msg_send![self, window];
+                if !window.is_null() {
+                    let _: () = msg_send![center,
+                        addObserver: self,
+                        selector: sel!(windowOcclusionChanged:),
+                        name: NSWindowDidChangeOcclusionStateNotification,
+                        object: window
+                    ];
+                }
+            }
+        }
+
+        #[unsafe(method(windowOcclusionChanged:))]
+        fn _window_occlusion_changed(&self, _: *mut Object) {
+            self.advance_frame();
         }
 
         #[unsafe(method(setFrameSize:))]
@@ -142,10 +176,7 @@ define_class!(
                 .viewport
                 .borrow_mut()
                 .scroll_to((bounds.origin.x, bounds.origin.y));
-            // SAFETY: The view is a live NSView.
-            unsafe {
-                let _: () = msg_send![self, setNeedsDisplay: Bool::YES];
-            }
+            self.show(false);
         }
 
         // Command + scroll magnifies around the pointer, the scroll view scrolls the others.
@@ -330,14 +361,19 @@ define_class!(
         fn _advance_frame(&self) {
             self.advance_frame();
         }
+
+        #[unsafe(method(settle))]
+        fn _settle(&self) {
+            self.show(true);
+        }
     }
 );
 
 impl View {
     /// Creates a view that shows the media zoomed to fit `frame`, or nothing while it loads.
     pub(super) fn new(frame: Rect, media: Option<Media>) -> Retained<Self> {
-        // SAFETY: All objects are valid AppKit instances, the view retains the scroll view as
-        // its subview and observes its clip view until `stop_observing`.
+        // SAFETY: All objects are valid AppKit instances, the view retains the layers and the
+        // scroll view above them as its subviews and observes its clip view until `stop`.
         unsafe {
             let document: Allocated<Document> = msg_send![Document::class(), alloc];
             let document: Retained<Object> = msg_send![document, initWithFrame: frame];
@@ -364,11 +400,13 @@ impl View {
                         (frame.size.width, frame.size.height)
                     )),
                     dark: Cell::new(false),
+                    layers: Layers::new(frame),
                     scroll_view,
                     document,
                 })),
                 initWithFrame: frame
             ];
+            let _: () = msg_send![&*view, addSubview: view.ivars().layers.host()];
             let _: () = msg_send![&*view, addSubview: &*view.ivars().scroll_view];
             register_dragged_types(Retained::as_ptr(&view) as *mut Object);
             let center: *mut Object = msg_send![class!(NSNotificationCenter), defaultCenter];
@@ -413,17 +451,9 @@ impl View {
 
     /// The longest side of the view in device pixels.
     pub(super) fn longest_pixels(&self) -> u32 {
-        // SAFETY: The view is a live NSView, its window may not be there yet.
-        unsafe {
-            let bounds: Rect = msg_send![self, bounds];
-            let window: *mut Object = msg_send![self, window];
-            let scale: f64 = if window.is_null() {
-                1.0
-            } else {
-                msg_send![window, backingScaleFactor]
-            };
-            (bounds.size.width.max(bounds.size.height) * scale).ceil() as u32
-        }
+        // SAFETY: The view is a live NSView.
+        let bounds: Rect = unsafe { msg_send![self, bounds] };
+        (bounds.size.width.max(bounds.size.height) * backing_scale(self)).ceil() as u32
     }
 
     /// Makes the crop rectangle keep a width divided by height.
@@ -502,42 +532,31 @@ impl View {
             };
             let _: () = msg_send![clip, scrollToPoint: origin];
             let _: () = msg_send![&*ivars.scroll_view, reflectScrolledClipView: clip];
-            let _: () = msg_send![self, setNeedsDisplay: Bool::YES];
             let window: *mut Object = msg_send![self, window];
             if !window.is_null() {
                 let _: () = msg_send![window, invalidateCursorRectsForView: self];
             }
         }
+        self.show(false);
     }
 
-    fn draw(&self) {
-        // SAFETY: Drawing occurs during AppKit's draw pass, whose flipped graphics context
-        // stays valid for this call.
-        unsafe {
-            let graphics_context: *mut Object =
-                msg_send![class!(NSGraphicsContext), currentContext];
-            if graphics_context.is_null() {
-                return;
-            }
-            let context: *mut c_void = msg_send![graphics_context, CGContext];
-            if context.is_null() {
-                return;
-            }
-            let bounds: Rect = msg_send![self, bounds];
-            let window: *mut Object = msg_send![self, window];
-            let scale: f64 = if window.is_null() {
-                1.0
-            } else {
-                msg_send![window, backingScaleFactor]
-            };
-            let ivars = self.ivars();
-            bcanvas::draw_native(
-                NativeContext::CoreGraphics(context),
-                bounds.size.width as f32,
-                bounds.size.height as f32,
-                scale as f32,
-                |canvas| ivars.viewport.borrow().paint(canvas, ivars.dark.get()),
-            );
+    // Shows the viewport in the layers. A vector is drawn again once the view settled, or right
+    // away when it `settled` already.
+    fn show(&self, settled: bool) {
+        let ivars = self.ivars();
+        let viewport = ivars.viewport.borrow();
+        // SAFETY: The view is a live NSView.
+        let bounds: Rect = unsafe { msg_send![self, bounds] };
+        ivars.layers.show(
+            &viewport,
+            bounds.size,
+            backing_scale(self),
+            ivars.dark.get(),
+            settled,
+        );
+        let vector = matches!(viewport.drawn().0.media(), Media::Vector(_));
+        if vector && !settled {
+            perform_after(self, sel!(settle), Some(SETTLE_DELAY));
         }
     }
 
@@ -551,40 +570,36 @@ impl View {
         (point.x, point.y)
     }
 
-    /// Stops following the scroll view and cancels the scheduled animation frame, before the
-    /// view is released.
+    /// Stops following the scroll view and window and cancels the scheduled animation frame
+    /// and drawing, before the view is released.
     pub(super) fn stop(&self) {
-        // SAFETY: Removing only affects this view's own observations and pending requests.
+        // SAFETY: Removing only affects this view's own observations.
         unsafe {
             let center: *mut Object = msg_send![class!(NSNotificationCenter), defaultCenter];
             let _: () = msg_send![center, removeObserver: self];
-            let _: () = msg_send![class!(NSObject),
-                cancelPreviousPerformRequestsWithTarget: self,
-                selector: sel!(advanceFrame),
-                object: null_mut::<Object>()
-            ];
         }
+        perform_after(self, sel!(advanceFrame), None);
+        perform_after(self, sel!(settle), None);
     }
 
-    /// Shows the current animation frame and schedules the next one.
+    /// Shows the current animation frame and schedules the next one, while the window is
+    /// visible. Once it is again, the animation continues where it would have been.
     pub(super) fn advance_frame(&self) {
         let (changed, next) = self.ivars().viewport.borrow_mut().advance_frame();
-        // SAFETY: Scheduling retains the view until the selector runs or is canceled.
+        if changed {
+            self.show(false);
+        }
+        perform_after(self, sel!(advanceFrame), next.filter(|_| self.is_visible()));
+    }
+
+    // Whether the window shows part of the view, or there is no window yet.
+    fn is_visible(&self) -> bool {
+        // SAFETY: Every NSView answers its window, which may be nil.
         unsafe {
-            let _: () = msg_send![class!(NSObject),
-                cancelPreviousPerformRequestsWithTarget: self,
-                selector: sel!(advanceFrame),
-                object: null_mut::<Object>()
-            ];
-            if changed {
-                let _: () = msg_send![self, setNeedsDisplay: Bool::YES];
-            }
-            if let Some(next) = next {
-                let _: () = msg_send![self,
-                    performSelector: sel!(advanceFrame),
-                    withObject: null_mut::<Object>(),
-                    afterDelay: next.as_secs_f64()
-                ];
+            let window: *mut Object = msg_send![self, window];
+            window.is_null() || {
+                let state: u64 = msg_send![window, occlusionState];
+                state & NS_WINDOW_OCCLUSION_STATE_VISIBLE != 0
             }
         }
     }
@@ -599,8 +614,8 @@ pub(super) const fn rect(x: f64, y: f64, width: f64, height: f64) -> Rect {
 
 #[cfg(test)]
 mod tests {
-    use imageview_core::appkit::ns_string;
     use imageview_core::decode_media;
+    use imageview_core::macos::ns_string;
     use objc2::rc::autoreleasepool;
 
     use super::*;

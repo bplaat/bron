@@ -15,7 +15,7 @@ use std::sync::Mutex;
 use bcanvas::Color;
 use block2::{Block, RcBlock};
 use imageview_core::MediaRenderer;
-use imageview_core::appkit::{
+use imageview_core::macos::{
     Point, Size, dispatch_async, draw_bottom_up, extension_main, load_media, make_error, ns_string,
 };
 use objc2::rc::Retained;

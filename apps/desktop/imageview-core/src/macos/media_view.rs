@@ -5,14 +5,11 @@
  */
 
 use std::cell::Cell;
-use std::ffi::c_void;
-use std::ptr::null_mut;
 use std::time::Instant;
 
-use bcanvas::NativeContext;
 use objc2::rc::{Allocated, Retained};
 use objc2::runtime::{AnyObject as Object, Bool};
-use objc2::{class, define_class, msg_send, sel};
+use objc2::{define_class, msg_send, sel};
 
 use super::Rect;
 use crate::{Media, MediaRenderer};
@@ -58,70 +55,36 @@ define_class!(
 
 impl MediaView {
     fn draw(&self) {
-        // SAFETY: Drawing occurs during AppKit's draw pass, whose flipped graphics context
-        // stays valid for this call.
+        let ivars = self.ivars();
+        // SAFETY: The view is flipped and drawn in AppKit's draw pass.
         unsafe {
-            let graphics_context: *mut Object =
-                msg_send![class!(NSGraphicsContext), currentContext];
-            if graphics_context.is_null() {
-                return;
-            }
-            let context: *mut c_void = msg_send![graphics_context, CGContext];
-            if context.is_null() {
-                return;
-            }
-            let bounds: Rect = msg_send![self, bounds];
-            let window: *mut Object = msg_send![self, window];
-            let scale: f64 = if window.is_null() {
-                1.0
-            } else {
-                msg_send![window, backingScaleFactor]
-            };
-            let (width, height) = (bounds.size.width as f32, bounds.size.height as f32);
-            let ivars = self.ivars();
-            bcanvas::draw_native(
-                NativeContext::CoreGraphics(context),
-                width,
-                height,
-                scale as f32,
-                |canvas| {
-                    ivars.renderer.draw_fitted(
-                        canvas,
-                        ivars.frame.get(),
-                        (0.0, 0.0, width, height),
-                    );
-                },
-            );
+            super::draw_view(self, |canvas| {
+                let (width, height) = (canvas.width(), canvas.height());
+                ivars
+                    .renderer
+                    .draw_fitted(canvas, ivars.frame.get(), (0.0, 0.0, width, height));
+            });
         }
     }
 
     // Shows the current animation frame and schedules the next one while in a window.
     fn advance_frame(&self) {
-        // SAFETY: Scheduling retains the view until the selector runs, and canceling only
-        // removes this view's own pending requests.
-        unsafe {
-            let _: () = msg_send![class!(NSObject),
-                cancelPreviousPerformRequestsWithTarget: self,
-                selector: sel!(advanceFrame),
-                object: null_mut::<Object>()
-            ];
-            let window: *mut Object = msg_send![self, window];
-            if window.is_null() {
-                return;
-            }
+        // SAFETY: Every NSView answers its window, which may be nil.
+        let window: *mut Object = unsafe { msg_send![self, window] };
+        let next = if window.is_null() {
+            None
+        } else {
             let ivars = self.ivars();
             let (frame, next) = ivars.renderer.media().frame_at(ivars.start.get().elapsed());
             if ivars.frame.replace(frame) != frame {
-                let _: () = msg_send![self, setNeedsDisplay: Bool::YES];
+                // SAFETY: The view is a live NSView.
+                unsafe {
+                    let _: () = msg_send![self, setNeedsDisplay: Bool::YES];
+                }
             }
-            if let Some(next) = next {
-                let _: () = msg_send![self,
-                    performSelector: sel!(advanceFrame),
-                    withObject: null_mut::<Object>(),
-                    afterDelay: next.as_secs_f64()
-                ];
-            }
-        }
+            next
+        };
+        super::perform_after(self, sel!(advanceFrame), next);
     }
 }
 

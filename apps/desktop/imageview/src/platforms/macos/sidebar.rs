@@ -13,7 +13,7 @@ use std::ptr::null_mut;
 
 use bwindow::WindowId;
 use imageview_core::Media;
-use imageview_core::appkit::{NS_VIEW_WIDTH_SIZABLE, Rect, create_media_view, ns_string};
+use imageview_core::macos::{NS_VIEW_WIDTH_SIZABLE, Rect, create_media_view, ns_string};
 use objc2::rc::{Allocated, Retained};
 use objc2::runtime::{AnyObject as Object, Bool};
 use objc2::{class, define_class, msg_send, sel};
@@ -24,7 +24,6 @@ use crate::AppEvent;
 
 const NS_TABLE_VIEW_STYLE_SOURCE_LIST: i64 = 3;
 const NS_TABLE_VIEW_UNIFORM_COLUMN_AUTORESIZING_STYLE: u64 = 1;
-const NS_TEXT_ALIGNMENT_CENTER: i64 = 1;
 const NS_VISUAL_EFFECT_BLENDING_MODE_WITHIN_WINDOW: i64 = 1;
 const NS_VISUAL_EFFECT_MATERIAL_TITLEBAR: i64 = 3;
 // Flexible left and right margins, which keep a view in the middle of a row.

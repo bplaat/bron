@@ -11,7 +11,7 @@
 use std::cell::{Cell, RefCell};
 
 use imageview_core::InfoSection;
-use imageview_core::appkit::{Rect, ns_string};
+use imageview_core::macos::{Rect, ns_string};
 use objc2::rc::{Allocated, Retained};
 use objc2::runtime::{AnyObject as Object, Bool};
 use objc2::{class, define_class, msg_send};
@@ -21,8 +21,6 @@ use super::sidebar::Sidebar;
 use super::view::rect;
 
 const NS_SPLIT_VIEW_ITEM_COLLAPSE_BEHAVIOR_PREFER_RESIZING_SPLIT_VIEW: i64 = 2;
-const NS_USER_INTERFACE_LAYOUT_ORIENTATION_VERTICAL: i64 = 1;
-const NS_LAYOUT_ATTRIBUTE_LEADING: i64 = 5;
 const NS_FONT_WEIGHT_SEMIBOLD: f64 = 0.3;
 
 // The width of the inspector and the space around and between its rows.

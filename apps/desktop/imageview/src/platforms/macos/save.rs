@@ -6,11 +6,10 @@
 
 //! The controls of the Save As sheet below its save panel, like Preview.
 
-use std::ffi::{CStr, c_char};
 use std::ptr::null_mut;
 
 use bwindow::NativeFileDialog;
-use imageview_core::appkit::ns_string;
+use imageview_core::macos::ns_string;
 use objc2::rc::{Allocated, Retained, autoreleasepool};
 use objc2::runtime::{AnyObject as Object, Bool};
 use objc2::{class, define_class, msg_send, sel};
@@ -20,8 +19,6 @@ use crate::save::{
     SaveRequest, format_of, has_quality, natural_scale, scale_at, scale_titles, with_extension,
 };
 
-const NS_GRID_ROW_ALIGNMENT_FIRST_BASELINE: isize = 2;
-const NS_GRID_CELL_PLACEMENT_TRAILING: isize = 3;
 const QUALITY_WIDTH: f64 = 160.0;
 
 struct TargetIvars {
@@ -225,13 +222,24 @@ unsafe fn add_controls(panel: *mut Object, request: &SaveRequest<'_>) -> Option<
         let accessory: Retained<Object> = msg_send![class!(NSView), new];
         let _: () = msg_send![grid, setTranslatesAutoresizingMaskIntoConstraints: Bool::NO];
         let _: () = msg_send![&*accessory, addSubview: grid];
-        for (grid_anchor, accessory_anchor, constant) in [
-            (sel!(topAnchor), sel!(topAnchor), 12.0f64),
-            (sel!(bottomAnchor), sel!(bottomAnchor), -12.0),
-            (sel!(centerXAnchor), sel!(centerXAnchor), 0.0),
-        ] {
-            let from: *mut Object = msg_send![grid, performSelector: grid_anchor];
-            let to: *mut Object = msg_send![&*accessory, performSelector: accessory_anchor];
+        let anchors: [(*mut Object, *mut Object, f64); 3] = [
+            (
+                msg_send![grid, topAnchor],
+                msg_send![&*accessory, topAnchor],
+                12.0,
+            ),
+            (
+                msg_send![grid, bottomAnchor],
+                msg_send![&*accessory, bottomAnchor],
+                -12.0,
+            ),
+            (
+                msg_send![grid, centerXAnchor],
+                msg_send![&*accessory, centerXAnchor],
+                0.0,
+            ),
+        ];
+        for (from, to, constant) in anchors {
             let constraint: *mut Object =
                 msg_send![from, constraintEqualToAnchor: to, constant: constant];
             let _: () = msg_send![constraint, setActive: Bool::YES];
@@ -261,18 +269,6 @@ unsafe fn add_controls(panel: *mut Object, request: &SaveRequest<'_>) -> Option<
         target.show_quality();
 
         Some(SaveOptions { target, scales })
-    }
-}
-
-// The contents of an NSString.
-unsafe fn string(string: *mut Object) -> String {
-    // SAFETY: The caller passes a valid NSString, its UTF-8 representation lives in this pool.
-    unsafe {
-        let bytes: *const c_char = msg_send![string, UTF8String];
-        if bytes.is_null() {
-            return String::new();
-        }
-        CStr::from_ptr(bytes).to_string_lossy().into_owned()
     }
 }
 

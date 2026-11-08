@@ -12,25 +12,25 @@ use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::ptr::null_mut;
 
-use imageview_core::appkit::ns_string;
+use imageview_core::macos::ns_string;
 use objc2::rc::autoreleasepool;
 use objc2::runtime::{AnyObject as Object, Bool};
 use objc2::{class, msg_send};
 
 /// Returns the path of the image `offset` places from `path` inside its folder.
 pub(crate) fn neighbour_path(path: &Path, offset: isize) -> Option<PathBuf> {
-    // The names compared are autoreleased.
-    autoreleasepool(|_| {
-        imageview_core::neighbour_path(path, offset, imageview_core::is_supported, compare_names)
-    })
+    imageview_core::neighbour_path(path, offset, imageview_core::is_supported, compare_names)
 }
 
 // Compares two file names the way Finder sorts them, which counts the numbers in a name.
 fn compare_names(left: &str, right: &str) -> Ordering {
-    // SAFETY: Both strings are autoreleased and valid for this call.
-    let result: isize =
-        unsafe { msg_send![ns_string(left), localizedStandardCompare: ns_string(right)] };
-    result.cmp(&0)
+    // Sorting a folder compares many names, so their strings are released after every one.
+    autoreleasepool(|_| {
+        // SAFETY: Both strings are autoreleased and valid for this call.
+        let result: isize =
+            unsafe { msg_send![ns_string(left), localizedStandardCompare: ns_string(right)] };
+        result.cmp(&0)
+    })
 }
 
 /// Returns an autoreleased file `NSURL` for a path, or null for a path holding a null byte.

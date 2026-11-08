@@ -8,11 +8,10 @@
 //! image and one to edit it, which are swapped by their Edit and Done buttons. Related
 //! buttons are one control with dividers, they run the same actions as the menu.
 
-use std::ffi::{CStr, c_char};
 use std::ptr::null_mut;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use imageview_core::appkit::ns_string;
+use imageview_core::macos::ns_string;
 use objc2::rc::{Allocated, Retained};
 use objc2::runtime::{AnyObject as Object, Bool};
 use objc2::{class, define_class, msg_send, sel};
@@ -325,14 +324,16 @@ impl ToolbarDelegate {
     // The item of an identifier of this delegate's mode.
     fn item_at(&self, identifier: *mut Object) -> Option<&'static Item> {
         let mode = self.ivars().mode;
-        let identifier = string(identifier)?;
+        // SAFETY: AppKit passes item identifiers, which are strings.
+        let identifier = unsafe { string(identifier) };
         let index = (0..mode.items().len()).find(|index| mode.identifier(*index) == identifier)?;
         mode.items().get(index)
     }
 
     fn item(&self, identifier: *mut Object) -> Option<Retained<Object>> {
         let target = self as *const Self as *mut Object;
-        if string(identifier) == Some(SIDEBAR_SEPARATOR) {
+        // SAFETY: AppKit passes item identifiers, which are strings.
+        if unsafe { string(identifier) } == SIDEBAR_SEPARATOR {
             // SAFETY: The separator follows the first divider of the split view, the one
             // after the sidebar, which is only added while the split view has the sidebar.
             return unsafe {
@@ -457,18 +458,6 @@ impl ToolbarDelegate {
         {
             super::send(AppEvent::Action(button.action));
         }
-    }
-}
-
-// The string of an NSString, which lives in the current pool.
-fn string<'a>(string: *mut Object) -> Option<&'a str> {
-    // SAFETY: AppKit passes a valid NSString, its UTF-8 representation lives in this pool.
-    unsafe {
-        let bytes: *const c_char = msg_send![string, UTF8String];
-        if bytes.is_null() {
-            return None;
-        }
-        CStr::from_ptr(bytes).to_str().ok()
     }
 }
 
@@ -752,7 +741,7 @@ impl Toolbars {
                 .map(|index| -> *mut Object { msg_send![items, objectAtIndex: index] })
                 .find(|item| {
                     let item_identifier: *mut Object = msg_send![*item, itemIdentifier];
-                    string(item_identifier) == Some(identifier.as_str())
+                    string(item_identifier) == identifier
                 })
         }
     }
