@@ -1231,6 +1231,51 @@ mod tests {
     }
 
     #[test]
+    fn buffered_rows_keep_values_until_reset() {
+        use crate::ColumnType;
+        use crate::connection::InnerConnection;
+        use crate::statement::PreparedStatement;
+
+        let mut connection = InnerConnection::Mysql(Client {
+            stream: Box::new(TestStream {
+                input: io::Cursor::new(ok_packet(ServerStatus::empty())),
+                output: Vec::new(),
+            }),
+            affected_rows: 0,
+            last_insert_id: 0,
+            capabilities: Capabilities::PROTOCOL_41,
+            in_transaction: false,
+        });
+        let mut statement = Prepared {
+            id: 1,
+            query: String::new(),
+            parameter_names: Vec::new(),
+            params: Vec::new(),
+            columns: Vec::new(),
+            rows: vec![
+                vec![Value::Text("first".to_string())],
+                vec![Value::Blob(vec![1, 2, 3])],
+            ],
+            row_index: 0,
+            current_row: None,
+            executed: true,
+        };
+        assert_eq!(statement.step(&mut connection).unwrap(), Some(()));
+        assert_eq!(statement.column_type(0), ColumnType::Text);
+        assert_eq!(statement.column_value(0), Value::Text("first".to_string()));
+        assert_eq!(statement.column_value(0), Value::Text("first".to_string()));
+        assert_eq!(statement.step(&mut connection).unwrap(), Some(()));
+        assert_eq!(statement.column_type(0), ColumnType::Blob);
+        assert_eq!(statement.column_value(0), Value::Blob(vec![1, 2, 3]));
+        assert_eq!(statement.step(&mut connection).unwrap(), None);
+        assert_eq!(statement.step(&mut connection).unwrap(), None);
+        statement.reset(&mut connection).unwrap();
+        assert!(statement.current_row.is_none());
+        assert!(statement.rows.is_empty());
+        assert_eq!(statement.row_index, 0);
+    }
+
+    #[test]
     fn transport_errors_mark_connections_as_broken() {
         assert!(statement_io(io::Error::from(io::ErrorKind::BrokenPipe)).connection_broken);
         assert!(protocol_error("invalid packet").connection_broken);
