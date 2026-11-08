@@ -25,10 +25,11 @@ struct Frame {
     scale: f32,
 }
 
-// Draws a CALayer at the bottom of the shared window content view with Core Graphics, the
-// window delivers the interaction and paces the animation frames.
+// Draws a CALayer with Core Graphics, in a view at the bottom of the shared window content
+// view, the window delivers the interaction and paces the animation frames.
 struct LayerState {
     view: Retained<Object>,
+    host: Retained<Object>,
     layer: Retained<Object>,
     sender: WindowEventSender,
     frame: Cell<Option<Frame>>,
@@ -94,7 +95,7 @@ impl LayerDelegate {
         unsafe {
             // The layer delegate is non-owning, so clear it before the delegate is released.
             let _: () = msg_send![&*state.layer, setDelegate:null_mut::<Object>()];
-            let _: () = msg_send![&*state.layer, removeFromSuperlayer];
+            let _: () = msg_send![&*state.host, removeFromSuperview];
         }
     }
 
@@ -136,17 +137,20 @@ pub(crate) struct PlatformCanvas {
 
 impl PlatformCanvas {
     pub(crate) fn new(attachment: WindowAttachment) -> Self {
-        let Some(NativeContentHandle::UIKit(view)) = (unsafe { attachment.content_handle() })
+        let Some(content @ NativeContentHandle::UIKit(view)) =
+            (unsafe { attachment.content_handle() })
         else {
             panic!("expected an open UIKit window");
         };
         unsafe {
             let view = Retained::retain(view.cast::<Object>()).expect("content view");
             let layer: Retained<Object> = msg_send![class!(CALayer), new];
+            let host = bwindow::ffi::add_layer_view(content, &layer);
             let delegate: Allocated<LayerDelegate> = msg_send![LayerDelegate::class(), alloc];
             let delegate: Retained<LayerDelegate> = msg_send![
                 super(delegate.set_ivars(Rc::new(LayerState {
                     view: view.clone(),
+                    host,
                     layer: layer.clone(),
                     sender: attachment.event_sender(),
                     frame: Cell::new(None),
@@ -160,8 +164,6 @@ impl PlatformCanvas {
             let _: () = msg_send![&*layer, setOpaque:Bool::NO];
             let _: () = msg_send![&*layer, setNeedsDisplayOnBoundsChange:Bool::YES];
             let _: () = msg_send![&*layer, setDelegate:&*delegate];
-            let backing: *mut Object = msg_send![&*view, layer];
-            let _: () = msg_send![backing, insertSublayer:&*layer, atIndex:0u32];
             delegate.layout(attachment.scale_factor());
 
             let resize = delegate.clone();

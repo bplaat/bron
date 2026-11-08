@@ -21,8 +21,8 @@ mod window;
 pub(crate) mod ffi {
     pub use super::activity::{android_read_asset, android_with_env};
     pub use super::event_loop::{
-        android_density, android_native_window, android_post, android_post_local, android_surface,
-        android_window_size,
+        android_density, android_native_window, android_on_native_window_destroyed, android_post,
+        android_post_local, android_surface, android_window_size,
     };
     pub use super::window::{android_back_pressed, android_default_background};
 }

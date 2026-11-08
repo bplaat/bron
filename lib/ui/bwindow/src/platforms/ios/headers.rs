@@ -67,7 +67,23 @@ unsafe impl Encode for UIEdgeInsets {
     );
 }
 
+#[derive(Clone, Copy)]
+#[repr(C)]
+pub(crate) struct CAFrameRateRange {
+    pub(crate) minimum: f32,
+    pub(crate) maximum: f32,
+    pub(crate) preferred: f32,
+}
+unsafe impl Encode for CAFrameRateRange {
+    const ENCODING: Encoding = Encoding::Struct(
+        "CAFrameRateRange",
+        &[f32::ENCODING, f32::ENCODING, f32::ENCODING],
+    );
+}
+
 pub(crate) const NS_UTF8_STRING_ENCODING: u64 = 4;
+// Flexible width and height.
+pub(crate) const UI_VIEW_AUTORESIZING_FLEXIBLE_SIZE: u64 = (1 << 1) | (1 << 4);
 
 #[repr(transparent)]
 pub(crate) struct NSString(Retained<Object>);

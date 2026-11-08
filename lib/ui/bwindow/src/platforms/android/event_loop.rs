@@ -11,7 +11,7 @@ use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::os::fd::FromRawFd;
 use std::ptr::{null, null_mut};
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicPtr, AtomicU32, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 
@@ -92,6 +92,8 @@ thread_local! {
     static SURFACE: RefCell<Option<Rc<Global<JObject<'static>>>>> = const { RefCell::new(None) };
     #[allow(clippy::missing_const_for_thread_local, reason = "false positive without native TLS")]
     static WINDOW: Cell<(*mut ANativeWindow, u64)> = const { Cell::new((null_mut(), 0)) };
+    #[allow(clippy::missing_const_for_thread_local, reason = "false positive without native TLS")]
+    static WINDOW_DESTROYED: RefCell<Vec<Weak<dyn Fn()>>> = const { RefCell::new(Vec::new()) };
 }
 
 /// The window's `android.view.Surface`, none while the window has no surface.
@@ -108,8 +110,23 @@ pub fn android_native_window() -> (*mut c_void, u64) {
     (window.cast(), generation)
 }
 
+/// Call `callback` when the native window is destroyed, before the framework releases it,
+/// while it is alive. Must be called on the Rust main thread.
+pub fn android_on_native_window_destroyed(callback: &Rc<dyn Fn()>) {
+    WINDOW_DESTROYED.with_borrow_mut(|callbacks| {
+        callbacks.retain(|callback| callback.strong_count() > 0);
+        callbacks.push(Rc::downgrade(callback));
+    });
+}
+
 /// Use a new native window, or none when null.
 pub(super) fn set_window(window: *mut ANativeWindow) {
+    if !WINDOW.get().0.is_null() {
+        let callbacks = WINDOW_DESTROYED.with_borrow(|callbacks| callbacks.clone());
+        for callback in callbacks.iter().filter_map(Weak::upgrade) {
+            callback();
+        }
+    }
     WINDOW.set((window, WINDOW.get().1 + 1));
     let surface = (!window.is_null()).then(|| {
         update_window_size(window);
@@ -263,15 +280,31 @@ pub(super) fn stop() {
     EXIT_REQUESTED.set(true);
 }
 
-// Serve the looper until a local task is pending or the loop should stop.
-fn poll() {
-    while let Some(task) = LOCAL_TASKS.with(|tasks| tasks.borrow_mut().pop_front()) {
+// Run at most `limit` pending local tasks, returns whether the loop should stop.
+fn run_local_tasks(limit: usize) -> bool {
+    for _ in 0..limit {
+        let Some(task) = LOCAL_TASKS.with(|tasks| tasks.borrow_mut().pop_front()) else {
+            break;
+        };
         task();
         if EXIT_REQUESTED.get() {
-            return;
+            return true;
         }
     }
-    unsafe { ALooper_pollOnce(-1, null_mut(), null_mut(), null_mut()) };
+    false
+}
+
+/// Run the local tasks pending now, like the paint a redraw scheduled, but not the ones
+/// they post. Must be called on the Rust main thread.
+pub(super) fn run_pending_local_tasks() {
+    run_local_tasks(LOCAL_TASKS.with(|tasks| tasks.borrow().len()));
+}
+
+// Serve the looper until a local task is pending or the loop should stop.
+fn poll() {
+    if !run_local_tasks(usize::MAX) {
+        unsafe { ALooper_pollOnce(-1, null_mut(), null_mut(), null_mut()) };
+    }
 }
 
 // MARK: EventLoop

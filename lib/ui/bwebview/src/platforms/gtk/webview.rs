@@ -32,6 +32,18 @@ pub(crate) struct PlatformWebview(pub(super) Rc<WebviewData>);
 
 const EDIT_COMMANDS: [&CStr; 6] = [c"Undo", c"Redo", c"Cut", c"Copy", c"Paste", c"SelectAll"];
 
+// Paints an opaque 0xRRGGBB color behind the page, like the window, so it is not blended.
+unsafe fn set_background_color(view: *mut WebKitWebView, color: u32) {
+    let channel = |shift: u32| f64::from((color >> shift) & 0xFF) / 255.0;
+    let rgba = GdkRGBA {
+        red: channel(16),
+        green: channel(8),
+        blue: channel(0),
+        alpha: 1.0,
+    };
+    unsafe { webkit_web_view_set_background_color(view, &rgba) };
+}
+
 unsafe fn install_edit_actions(view: *mut WebKitWebView) {
     extern "C" fn activate(action: *mut GSimpleAction, _: *mut GVariant, view: *mut WebKitWebView) {
         unsafe { webkit_web_view_execute_editing_command(view, g_action_get_name(action)) };
@@ -212,14 +224,8 @@ impl PlatformWebview {
             if data.attachment.allow_file_drop() {
                 connect_signals(webview, data);
             }
-            if data.background_color.get().is_some() {
-                let rgba = GdkRGBA {
-                    red: 0.0,
-                    green: 0.0,
-                    blue: 0.0,
-                    alpha: 0.0,
-                };
-                webkit_web_view_set_background_color(webview, &rgba);
+            if let Some(color) = data.background_color.get() {
+                set_background_color(webview, color);
             }
 
             let useragent = CString::new(format!(
@@ -392,15 +398,7 @@ impl crate::WebviewInterface for PlatformWebview {
             return;
         }
         self.0.background_color.set(Some(color));
-        unsafe {
-            let rgba = GdkRGBA {
-                red: ((color >> 16) & 0xFF) as f64 / 255.0,
-                green: ((color >> 8) & 0xFF) as f64 / 255.0,
-                blue: (color & 0xFF) as f64 / 255.0,
-                alpha: 1.0,
-            };
-            webkit_web_view_set_background_color(self.0.webview.get(), &rgba);
-        }
+        unsafe { set_background_color(self.0.webview.get(), color) };
     }
 
     fn load_html(&mut self, html: impl AsRef<str>) {

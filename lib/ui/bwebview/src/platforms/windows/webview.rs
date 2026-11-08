@@ -35,6 +35,8 @@ pub(super) struct WebviewData {
     pub(super) environment: Cell<Option<*mut ICoreWebView2Environment>>,
     pub(super) webview: Cell<Option<*mut ICoreWebView2>>,
     pub(super) controller: Cell<Option<*mut ICoreWebView2Controller>>,
+    // Whether the first page finished loading, which the webview stays hidden for.
+    loaded: Cell<bool>,
     #[cfg(feature = "file_drop")]
     #[allow(clippy::vec_box)]
     // Registered COM pointers must remain stable when the vector grows.
@@ -65,6 +67,7 @@ impl PlatformWebview {
             environment: Cell::new(None),
             webview: Cell::new(None),
             controller: Cell::new(None),
+            loaded: Cell::new(false),
             #[cfg(feature = "file_drop")]
             drop_targets: RefCell::new(Vec::new()),
             attachment,
@@ -159,6 +162,7 @@ impl WebviewData {
         self.attachment.disconnect();
         #[cfg(feature = "file_drop")]
         super::file_drop::revoke_file_drop_targets(self);
+        unsafe { RemoveWindowSubclass(self.hwnd, parent_proc, PARENT_SUBCLASS) };
         if let Some(controller) = self.controller.take() {
             unsafe {
                 (*controller).Close();
@@ -172,6 +176,37 @@ impl WebviewData {
             unsafe { release_interface(environment) };
         }
     }
+
+    // Shows the webview once its first page loaded, but not while the window is minimized,
+    // where it would keep rendering unseen.
+    fn update_visibility(&self) {
+        if let Some(controller) = self.controller.get() {
+            let visible = self.loaded.get() && unsafe { IsIconic(self.hwnd) } == FALSE;
+            unsafe { (*controller).put_IsVisible(BOOL::from(visible)) };
+        }
+    }
+}
+
+const PARENT_SUBCLASS: usize = 1;
+
+// Tells WebView2 when its parent window moves, so it places its popups like dropdowns and
+// tooltips next to the page.
+unsafe extern "system" fn parent_proc(
+    hwnd: HWND,
+    msg: u32,
+    w_param: WPARAM,
+    l_param: LPARAM,
+    _id: usize,
+    data: usize,
+) -> LRESULT {
+    if msg == WM_MOVE {
+        // SAFETY: The data is the webview, which removes this subclass before it is freed.
+        let data = unsafe { &*(data as *const WebviewData) };
+        if let Some(controller) = data.controller.get() {
+            unsafe { (*controller).NotifyParentWindowPositionChanged() };
+        }
+    }
+    unsafe { DefSubclassProc(hwnd, msg, w_param, l_param) }
 }
 
 impl Drop for PlatformWebview {
@@ -197,14 +232,14 @@ impl crate::WebviewInterface for PlatformWebview {
         unsafe {
             if let Some(webview) = self.webview_data.webview.get() {
                 let url = cfg_select! {
-                    feature = "custom_protocol" => replace_custom_protocol_in_url(
+                    feature = "custom_protocol" => &replace_custom_protocol_in_url(
                         url.as_ref(),
                         &self.webview_data.custom_protocols,
                     ),
                     _ => url.as_ref(),
                 };
-                self.webview_data.trusted_url.set(&url);
-                (*webview).Navigate(wide(&url).as_ptr() as *mut _);
+                self.webview_data.trusted_url.set(url);
+                (*webview).Navigate(wide(url).as_ptr() as *mut _);
             }
         }
     }
@@ -379,7 +414,9 @@ extern "system" fn controller_created(
         // Keep partial WebView2 paints hidden behind the native backing surface.
         (*controller).put_IsVisible(FALSE);
 
-        // Register resize callback on the window
+        // Follow the size of the window, hiding the webview while it is minimized, and its
+        // position.
+        let weak = Rc::downgrade(&owner);
         _self.attachment.on_resize(move |w, h| {
             (*controller).put_Bounds(RECT {
                 left: 0,
@@ -387,7 +424,16 @@ extern "system" fn controller_created(
                 right: w as i32,
                 bottom: h as i32,
             });
+            if let Some(data) = weak.upgrade() {
+                data.update_visibility();
+            }
         });
+        SetWindowSubclass(
+            _self.hwnd,
+            parent_proc,
+            PARENT_SUBCLASS,
+            Rc::as_ptr(&owner) as usize,
+        );
 
         // Set initial bounds
         let mut rect: RECT = mem::zeroed();
@@ -422,13 +468,15 @@ extern "system" fn controller_created(
                 &IID_ICoreWebView2Controller2,
                 &mut controller2 as *mut _ as *mut *mut c_void,
             );
-            (*controller2).put_DefaultBackgroundColor(COREWEBVIEW2_COLOR {
-                A: 0,
-                R: 0,
-                G: 0,
-                B: 0,
-            });
-            release_interface(controller2);
+            if !controller2.is_null() {
+                (*controller2).put_DefaultBackgroundColor(COREWEBVIEW2_COLOR {
+                    A: 0,
+                    R: 0,
+                    G: 0,
+                    B: 0,
+                });
+                release_interface(controller2);
+            }
         }
 
         // Set user agent
@@ -561,12 +609,12 @@ extern "system" fn controller_created(
         if let Some(url) = &_self.should_load_url {
             let url = cfg_select! {
                 feature = "custom_protocol" => {
-                    replace_custom_protocol_in_url(url, &_self.custom_protocols)
+                    &replace_custom_protocol_in_url(url, &_self.custom_protocols)
                 }
                 _ => url.as_str(),
             };
-            _self.trusted_url.set(&url);
-            (*webview).Navigate(wide(&url).as_ptr() as *mut _);
+            _self.trusted_url.set(url);
+            (*webview).Navigate(wide(url).as_ptr() as *mut _);
         }
         if let Some(html) = &_self.should_load_html {
             _self.trusted_url.set(TrustedUrl::HTML_URL);
@@ -616,10 +664,10 @@ extern "system" fn navigation_completed(
     if _self.closed.get() || _self.attachment.is_closed() {
         return S_OK;
     }
-    if let Some(controller) = _self.controller.get() {
-        unsafe { (*controller).put_IsVisible(TRUE) };
-    }
+    _self.loaded.set(true);
+    _self.update_visibility();
     _self.emit(WebviewEvent::PageLoadFinish);
+
     S_OK
 }
 

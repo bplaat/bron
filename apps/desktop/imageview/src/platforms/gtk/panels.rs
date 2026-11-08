@@ -9,7 +9,7 @@
 //! of an icon, and an inspector with the information about the image. The sidebar starts open,
 //! the inspector closed.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::ffi::{CString, c_void};
 use std::ptr::null_mut;
 use std::rc::{Rc, Weak};
@@ -18,6 +18,7 @@ use bcanvas::NativeContext;
 use bwindow::WindowId;
 use imageview_core::{InfoSection, Media, MediaRenderer};
 
+use super::Cache;
 use super::headers::*;
 use super::toolbar::send;
 use crate::AppEvent;
@@ -251,10 +252,16 @@ impl Sidebar {
     }
 }
 
+// The media of a page, drawn once for the size and scale factor of its drawing area.
+struct Thumbnail {
+    renderer: MediaRenderer,
+    cache: RefCell<Option<Cache>>,
+}
+
 // The row of a page: its media fitted in a square, with its number and size below it.
 unsafe fn page_row(index: usize, media: &Media) -> *mut c_void {
     let (width, height) = media.size();
-    // SAFETY: The row owns its children, the drawing area owns its boxed renderer through the
+    // SAFETY: The row owns its children, the drawing area owns its boxed thumbnail through the
     // destroy notification of its draw handler.
     unsafe {
         let row = gtk_box_new(GTK_ORIENTATION_VERTICAL, 2);
@@ -263,13 +270,16 @@ unsafe fn page_row(index: usize, media: &Media) -> *mut c_void {
         let area = gtk_drawing_area_new();
         gtk_widget_set_size_request(area, THUMBNAIL_SIZE, THUMBNAIL_SIZE);
         gtk_widget_set_halign(area, GTK_ALIGN_CENTER);
-        let renderer = Box::into_raw(Box::new(MediaRenderer::new(media.clone())));
+        let thumbnail = Box::into_raw(Box::new(Thumbnail {
+            renderer: MediaRenderer::new(media.clone()),
+            cache: RefCell::new(None),
+        }));
         g_signal_connect_data(
             area,
             c"draw".as_ptr(),
             draw_thumbnail as *const c_void,
-            renderer.cast(),
-            drop_renderer as *const c_void,
+            thumbnail.cast(),
+            drop_thumbnail as *const c_void,
             0,
         );
         gtk_box_pack_start(row, area, 0, 0, 0);
@@ -288,27 +298,57 @@ unsafe fn page_row(index: usize, media: &Media) -> *mut c_void {
     }
 }
 
-extern "C" fn draw_thumbnail(area: *mut c_void, cr: *mut c_void, renderer: &MediaRenderer) -> i32 {
-    // SAFETY: GTK passes the live drawing area and its cairo context while drawing.
+// Copies the media scaled down once, as scaling a large page down again is slow.
+extern "C" fn draw_thumbnail(area: *mut c_void, cr: *mut c_void, thumbnail: &Thumbnail) -> i32 {
+    // SAFETY: GTK passes the live realized drawing area and its cairo context while drawing.
     unsafe {
-        let (width, height) = (
-            gtk_widget_get_allocated_width(area) as f32,
-            gtk_widget_get_allocated_height(area) as f32,
+        let size = (
+            gtk_widget_get_allocated_width(area),
+            gtk_widget_get_allocated_height(area),
+            gtk_widget_get_scale_factor(area),
         );
-        bcanvas::draw_native(
-            NativeContext::Cairo(cr),
-            width,
-            height,
-            gtk_widget_get_scale_factor(area) as f32,
-            |canvas| renderer.draw_fitted(canvas, 0, (0.0, 0.0, width, height)),
-        );
+        let rect = GdkRectangle {
+            x: 0,
+            y: 0,
+            width: size.0,
+            height: size.1,
+        };
+        let draw = |cr| {
+            let (width, height) = (size.0 as f32, size.1 as f32);
+            bcanvas::draw_native(
+                NativeContext::Cairo(cr),
+                width,
+                height,
+                size.2 as f32,
+                |canvas| {
+                    thumbnail
+                        .renderer
+                        .draw_fitted(canvas, 0, (0.0, 0.0, width, height));
+                },
+            );
+        };
+        let mut cache = thumbnail.cache.borrow_mut();
+        if !cache.as_ref().is_some_and(|cache| cache.covers(size, rect)) {
+            *cache = None;
+            *cache = Cache::new(
+                gtk_widget_get_window(area),
+                CAIRO_CONTENT_COLOR_ALPHA,
+                size,
+                rect,
+                draw,
+            );
+        }
+        match &*cache {
+            Some(cache) => cache.paint(cr),
+            None => draw(cr),
+        }
     }
     1
 }
 
-extern "C" fn drop_renderer(data: *mut c_void, _: *mut c_void) {
-    // SAFETY: The draw handler owned the boxed renderer created in `page_row`.
-    drop(unsafe { Box::from_raw(data.cast::<MediaRenderer>()) });
+extern "C" fn drop_thumbnail(data: *mut c_void, _: *mut c_void) {
+    // SAFETY: The draw handler owned the boxed thumbnail created in `page_row`.
+    drop(unsafe { Box::from_raw(data.cast::<Thumbnail>()) });
 }
 
 extern "C" fn row_selected(_: *mut c_void, row: *mut c_void, pages: &Weak<Pages>) {

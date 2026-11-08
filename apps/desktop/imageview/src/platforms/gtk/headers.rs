@@ -44,6 +44,7 @@ pub(crate) const G_SIGNAL_MATCH_DATA: i32 = 1 << 4;
 pub(crate) const GDK_WINDOW_STATE_WITHDRAWN: u32 = 1 << 0;
 pub(crate) const GDK_WINDOW_STATE_ICONIFIED: u32 = 1 << 1;
 pub(crate) const CAIRO_CONTENT_COLOR: i32 = 0x1000;
+pub(crate) const CAIRO_CONTENT_COLOR_ALPHA: i32 = 0x3000;
 
 /// A clipboard format, as GTK reads it.
 #[repr(C)]
@@ -64,6 +65,11 @@ pub(crate) struct GdkRectangle {
 
 unsafe extern "C" {
     pub(crate) fn gdk_cairo_get_clip_rectangle(cr: *mut c_void, rect: *mut GdkRectangle) -> i32;
+    pub(crate) fn gdk_rectangle_union(
+        a: *const GdkRectangle,
+        b: *const GdkRectangle,
+        dest: *mut GdkRectangle,
+    );
     pub(crate) fn gdk_window_create_similar_surface(
         window: *mut c_void,
         content: i32,
@@ -149,12 +155,6 @@ unsafe extern "C" {
         handler: *mut c_void,
         data: *const c_void,
     ) -> u32;
-    pub(crate) fn g_timeout_add(
-        interval: u32,
-        function: extern "C" fn(*mut c_void) -> i32,
-        data: *const c_void,
-    ) -> u32;
-    pub(crate) fn g_source_remove(id: u32) -> i32;
 
     pub(crate) fn gtk_scrolled_window_new(h: *mut c_void, v: *mut c_void) -> *mut c_void;
     pub(crate) fn gtk_scrolled_window_get_hadjustment(window: *mut c_void) -> *mut c_void;
@@ -182,6 +182,20 @@ unsafe extern "C" {
     pub(crate) fn gtk_widget_set_can_focus(widget: *mut c_void, can_focus: i32);
     pub(crate) fn gtk_widget_grab_focus(widget: *mut c_void);
     pub(crate) fn gtk_widget_queue_draw(widget: *mut c_void);
+    pub(crate) fn gtk_widget_queue_draw_area(
+        widget: *mut c_void,
+        x: i32,
+        y: i32,
+        width: i32,
+        height: i32,
+    );
+    pub(crate) fn gtk_widget_add_tick_callback(
+        widget: *mut c_void,
+        callback: extern "C" fn(*mut c_void, *mut c_void, *mut c_void) -> i32,
+        data: *const c_void,
+        notify: Option<extern "C" fn(*mut c_void)>,
+    ) -> u32;
+    pub(crate) fn gtk_widget_remove_tick_callback(widget: *mut c_void, id: u32);
     pub(crate) fn gtk_widget_get_mapped(widget: *mut c_void) -> i32;
     pub(crate) fn gtk_widget_get_window(widget: *mut c_void) -> *mut c_void;
     pub(crate) fn gtk_widget_get_display(widget: *mut c_void) -> *mut c_void;

@@ -58,6 +58,10 @@ pub mod ffi {
         feature = "file_drop"
     ))]
     pub use crate::platforms::gtk::file_drop::gtk_dropped_paths;
+    #[cfg(target_os = "ios")]
+    pub use crate::platforms::ios::content::add_layer_view;
+    #[cfg(target_os = "macos")]
+    pub use crate::platforms::macos::content::add_layer_view;
     #[cfg(all(target_os = "macos", feature = "file_drop"))]
     pub use crate::platforms::macos::file_drop::{
         file_drag_operation, perform_file_drop, register_dragged_types,

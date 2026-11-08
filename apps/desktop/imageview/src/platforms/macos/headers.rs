@@ -57,6 +57,8 @@ unsafe extern "C" {
 
 // Premultiplied alpha first in little endian 32-bit pixels, which is BGRA in memory.
 pub(crate) const CG_BITMAP_PREMULTIPLIED_BGRA: u32 = 2 | (2 << 12);
+// The same pixels without alpha, which is skipped, so they are opaque.
+pub(crate) const CG_BITMAP_OPAQUE_BGRX: u32 = 6 | (2 << 12);
 
 #[link(name = "CoreGraphics", kind = "framework")]
 unsafe extern "C" {

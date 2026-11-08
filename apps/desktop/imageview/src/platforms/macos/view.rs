@@ -123,7 +123,8 @@ define_class!(
             self.show(true);
         }
 
-        // Follows whether the new window is visible, to pause animations while it is not.
+        // Follows whether the new window is visible, to pause animations while it is not or
+        // there is no window, and continues them in a visible one.
         #[unsafe(method(viewDidMoveToWindow))]
         fn _view_did_move_to_window(&self) {
             // SAFETY: The view only changes its own observations, of a live window.
@@ -144,6 +145,7 @@ define_class!(
                     ];
                 }
             }
+            self.advance_frame();
         }
 
         #[unsafe(method(windowOcclusionChanged:))]
@@ -592,12 +594,12 @@ impl View {
         perform_after(self, sel!(advanceFrame), next.filter(|_| self.is_visible()));
     }
 
-    // Whether the window shows part of the view, or there is no window yet.
+    // Whether the view is in a window that shows part of it.
     fn is_visible(&self) -> bool {
         // SAFETY: Every NSView answers its window, which may be nil.
         unsafe {
             let window: *mut Object = msg_send![self, window];
-            window.is_null() || {
+            !window.is_null() && {
                 let state: u64 = msg_send![window, occlusionState];
                 state & NS_WINDOW_OCCLUSION_STATE_VISIBLE != 0
             }
@@ -630,7 +632,12 @@ mod tests {
             let view = View::new(rect(0.0, 0.0, 320.0, 240.0), Some(media));
             // SAFETY: The test retains the view during these ownership checks.
             let before: usize = unsafe { msg_send![&*view, retainCount] };
+            // Without a window the animation is paused.
             view.advance_frame();
+            // SAFETY: The view remains live without a pending timer.
+            let paused: usize = unsafe { msg_send![&*view, retainCount] };
+            assert_eq!(paused, before, "animation ran without a window");
+            perform_after(&*view, sel!(advanceFrame), Some(Duration::from_secs(1)));
             // SAFETY: The view remains live with its pending timer.
             let scheduled: usize = unsafe { msg_send![&*view, retainCount] };
             view.stop();

@@ -7,6 +7,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use jni::objects::JObject;
 use jni::sys::jint;
 use jni::{JValue, jni_sig, jni_str};
 
@@ -14,9 +15,10 @@ use super::activity::{
     android_activity, android_with_env, move_task_to_back, set_dark_mode, set_system_bar_appearance,
 };
 use super::event_loop::{
-    android_density, android_post_local, android_surface, android_window_size, content_size,
-    safe_area, send_event, stop, system_theme,
+    android_density, android_native_window, android_post_local, android_surface,
+    android_window_size, content_size, safe_area, send_event, stop, system_theme,
 };
+use super::headers::ANativeWindow_toSurface;
 use crate::content::ContentHost;
 use crate::{
     AndroidSystemBarIcons, CloseRequest, Event, LogicalInsets, LogicalPoint, LogicalSize,
@@ -118,19 +120,22 @@ pub fn android_default_background() -> u32 {
     }
 }
 
-// Fill the window surface, with the same hardware canvas producer bcanvas draws with.
+// Fill the window surface with a hardware canvas of a temporary Surface. Releasing it
+// disconnects its renderer from the native window, which a Vulkan swapchain that takes over
+// the window could not connect to otherwise.
 fn paint_background(host: &ContentHost) {
-    let Some(surface) = android_surface() else {
-        return;
-    };
-    if host.is_closed() {
+    let (window, _) = android_native_window();
+    if window.is_null() || host.is_closed() {
         return;
     }
     let color = host.background().unwrap_or_else(android_default_background);
     android_with_env(|env| {
+        let surface = unsafe {
+            JObject::from_raw(env, ANativeWindow_toSurface(env.get_raw(), window.cast()))
+        };
         let canvas = env
             .call_method(
-                surface.as_obj(),
+                &surface,
                 jni_str!("lockHardwareCanvas"),
                 jni_sig!("()Landroid/graphics/Canvas;"),
                 &[],
@@ -144,12 +149,14 @@ fn paint_background(host: &ContentHost) {
         )?
         .v()?;
         env.call_method(
-            surface.as_obj(),
+            &surface,
             jni_str!("unlockCanvasAndPost"),
             jni_sig!("(Landroid/graphics/Canvas;)V"),
             &[(&canvas).into()],
         )?
-        .v()
+        .v()?;
+        env.call_method(&surface, jni_str!("release"), jni_sig!("()V"), &[])?
+            .v()
     });
 }
 

@@ -15,6 +15,7 @@ use std::sync::Arc;
 
 use bcanvas::{CanvasRenderingContext2d, NativeContext, OffscreenCanvas};
 use imageview_core::macos::{NS_VIEW_HEIGHT_SIZABLE, NS_VIEW_WIDTH_SIZABLE, Point, Rect, Size};
+use imageview_core::edit::Selection;
 use imageview_core::{CheckerTiles, Media, Raster};
 use objc2::rc::{Allocated, Retained};
 use objc2::runtime::{AnyObject as Object, Bool};
@@ -24,8 +25,7 @@ use super::headers::*;
 use super::view::rect;
 use crate::viewport::Viewport;
 
-// The longest side in device pixels of the bitmap a vector is drawn into, a larger vector is
-// only drawn where it is visible.
+// The longest side in device pixels of the bitmap a vector is drawn into.
 const MAX_BITMAP: f64 = 8192.0;
 
 define_class!(
@@ -58,6 +58,7 @@ struct State {
     frames: Vec<Option<Image>>,
     first_frame: Option<Arc<[u8]>>,
     vector: Option<Drawing>,
+    marks: Option<Marks>,
 }
 
 // A part of a vector drawn into a bitmap.
@@ -68,6 +69,15 @@ struct Drawing {
     part: [f64; 4],
     resolution: f64,
 }
+
+// The crop rectangle or selection drawn into an image, with what it was drawn for: the marks,
+// the media rectangle, the size of the area and the display scale.
+struct Marks {
+    key: MarksKey,
+    image: Option<Image>,
+}
+
+type MarksKey = ((Option<[f64; 4]>, Option<Selection>), [f64; 4], [f64; 3]);
 
 impl Layers {
     /// Creates the host view and its layers, with a top left origin.
@@ -119,23 +129,46 @@ impl Layers {
         settled: bool,
     ) {
         let mut state = self.state.borrow_mut();
-        let tiles = CheckerTiles::new(size.width as f32, size.height as f32, dark);
+        let (area_width, area_height) = (size.width as f32, size.height as f32);
+        let tiles = CheckerTiles::new(area_width, area_height, dark);
         let checkerboard = (state.tiles != Some(tiles)).then(|| {
             state.tiles = Some(tiles);
-            Image::from_pixels(tiles.columns, tiles.rows, Arc::from(tiles.pixels()))
+            Image::from_pixels(
+                tiles.columns,
+                tiles.rows,
+                Arc::from(tiles.pixels()),
+                CG_BITMAP_OPAQUE_BGRX,
+            )
         });
         let tile = f64::from(CheckerTiles::TILE);
-        let (columns, rows) = (f64::from(tiles.columns), f64::from(tiles.rows));
+        let (left, top) = tiles.origin(area_width, area_height, scale as f32);
         let checkerboard_frame = rect(
-            (size.width - columns * tile) / 2.0,
-            (size.height - rows * tile) / 2.0,
-            columns * tile,
-            rows * tile,
+            f64::from(left),
+            f64::from(top),
+            f64::from(tiles.columns) * tile,
+            f64::from(tiles.rows) * tile,
         );
 
         let (x, y, width, height) = viewport.media_rect();
+        // The marks are only drawn again when they or where they are drawn change.
+        let marks_key = viewport.has_marks().then(|| {
+            (
+                viewport.marks(),
+                [x, y, width, height],
+                [size.width, size.height, scale],
+            )
+        });
+        let marks = (state.marks.as_ref().map(|marks| &marks.key) != marks_key.as_ref()).then(|| {
+            state.marks = marks_key.map(|key| Marks {
+                key,
+                image: Image::draw((size.width, size.height), scale, |context| {
+                    viewport.paint_marks(context);
+                }),
+            });
+            Image::object(state.marks.as_ref().and_then(|marks| marks.image.as_ref()))
+        });
         let (renderer, frame) = viewport.drawn();
-        let (image, media_frame) = match renderer.media() {
+        let (image, mut media_frame) = match renderer.media() {
             Media::Raster(raster) => {
                 state.vector = None;
                 (state.frame(raster, frame), rect(x, y, width, height))
@@ -166,14 +199,14 @@ impl Layers {
             }
         };
         let pixelated = viewport.has_pixels(scale as f32);
-        let marks = viewport
-            .has_marks()
-            .then(|| {
-                Image::draw((size.width, size.height), scale, |context| {
-                    viewport.paint_marks(context);
-                })
-            })
-            .flatten();
+        if pixelated {
+            // Sharp pixels start on device pixels.
+            let snap = |value: f64| (value * scale).round() / scale;
+            media_frame.origin = Point {
+                x: snap(media_frame.origin.x),
+                y: snap(media_frame.origin.y),
+            };
+        }
 
         // SAFETY: The layers are live and only changed on the main thread, inside a transaction
         // without implicit animations.
@@ -197,7 +230,9 @@ impl Layers {
                 kCAFilterLinear
             };
             let _: () = msg_send![&*self.media, setMagnificationFilter: filter];
-            let _: () = msg_send![&*self.marks, setContents: Image::object(marks.as_ref())];
+            if let Some(marks) = marks {
+                let _: () = msg_send![&*self.marks, setContents: marks];
+            }
             let _: () = msg_send![&*self.marks,
                 setFrame: rect(0.0, 0.0, size.width, size.height)
             ];
@@ -225,13 +260,15 @@ impl State {
                 raster.width,
                 raster.height,
                 raster.frames[frame].pixels.clone(),
+                CG_BITMAP_PREMULTIPLIED_BGRA,
             );
         }
         image.as_ref()
     }
 
-    // Draws a vector at the magnification and display scale it is shown at, all of it or the
-    // visible part of one too large for a bitmap, when it is new or another part is shown.
+    // Draws the visible part of a vector at the magnification and display scale it is shown at,
+    // with a margin of up to half the area size around it that scrolling shows until it is
+    // drawn again, when it is new or another part is shown.
     fn draw(
         &mut self,
         vector: &Arc<OffscreenCanvas>,
@@ -242,16 +279,15 @@ impl State {
     ) {
         let (x, y, width, height) = viewport.media_rect();
         let magnification = width / f64::from(vector.logical_width());
-        let [left, top, right, bottom] = if width.max(height) * scale <= MAX_BITMAP {
-            [x, y, x + width, y + height]
-        } else {
-            [
-                x.max(0.0),
-                y.max(0.0),
-                (x + width).min(size.width),
-                (y + height).min(size.height),
-            ]
-        };
+        // The margin keeps the bitmap within its longest side at full resolution.
+        let margin = |length: f64| ((MAX_BITMAP / scale - length) / 2.0).clamp(0.0, length / 2.0);
+        let (margin_x, margin_y) = (margin(size.width), margin(size.height));
+        let [left, top, right, bottom] = [
+            x.max(-margin_x),
+            y.max(-margin_y),
+            (x + width).min(size.width + margin_x),
+            (y + height).min(size.height + margin_y),
+        ];
         let (part_width, part_height) = (right - left, bottom - top);
         let part = [
             (left - x) / magnification,
@@ -285,8 +321,8 @@ impl State {
 struct Image(NonNull<c_void>);
 
 impl Image {
-    // Makes an image of premultiplied BGRA pixels, which it shares.
-    fn from_pixels(width: u32, height: u32, pixels: Arc<[u8]>) -> Option<Self> {
+    // Makes an image of BGRA pixels in a Core Graphics bitmap layout, which it shares.
+    fn from_pixels(width: u32, height: u32, pixels: Arc<[u8]>, layout: u32) -> Option<Self> {
         unsafe extern "C" fn release(info: *mut c_void, _: *const c_void, _: usize) {
             // SAFETY: The data provider passes the box it was created with, once.
             drop(unsafe { Box::from_raw(info.cast::<Arc<[u8]>>()) });
@@ -312,7 +348,7 @@ impl Image {
                 32,
                 width as usize * 4,
                 space,
-                CG_BITMAP_PREMULTIPLIED_BGRA,
+                layout,
                 provider,
                 null(),
                 true,

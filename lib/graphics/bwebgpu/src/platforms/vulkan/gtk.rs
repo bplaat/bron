@@ -10,6 +10,7 @@ use std::cell::{Cell, RefCell};
 use std::ffi::{c_ulong, c_void};
 use std::ptr;
 use std::rc::Rc;
+use std::sync::OnceLock;
 
 use super::surface::{SurfaceOwner, Swapchain};
 use super::*;
@@ -61,6 +62,27 @@ pub(super) fn platform_window(handle: bwindow::NativeWindowHandle) -> Result<Pla
     }
 }
 
+type GetVersion = unsafe extern "C" fn(*mut c_void) -> u32;
+type Marshal = unsafe extern "C" fn(*mut c_void, u32, ...);
+
+// wl_proxy_get_version and wl_proxy_marshal of libwayland-client, which is GDK's, so they are
+// looked up in the process, once.
+fn wayland_proxy() -> Option<(GetVersion, Marshal)> {
+    static FUNCTIONS: OnceLock<Option<(GetVersion, Marshal)>> = OnceLock::new();
+    *FUNCTIONS.get_or_init(|| unsafe {
+        let process = dlopen(ptr::null(), 2);
+        let get_version = dlsym(process, c"wl_proxy_get_version".as_ptr());
+        let marshal = dlsym(process, c"wl_proxy_marshal".as_ptr());
+        dlclose(process);
+        (!get_version.is_null() && !marshal.is_null()).then(|| {
+            (
+                std::mem::transmute::<*mut c_void, GetVersion>(get_version),
+                std::mem::transmute::<*mut c_void, Marshal>(marshal),
+            )
+        })
+    })
+}
+
 pub(crate) struct Surface {
     pub(super) instance: Rc<Instance>,
     owner: Rc<SurfaceOwner>,
@@ -77,15 +99,7 @@ impl Drop for Surface {
     fn drop(&mut self) {
         unsafe {
             if !self.startup_clock.is_null() {
-                vk::g_signal_handlers_disconnect_matched(
-                    self.startup_clock.cast(),
-                    16, // G_SIGNAL_MATCH_DATA
-                    0,
-                    0,
-                    ptr::null_mut(),
-                    ptr::null_mut(),
-                    Rc::as_ptr(&self.redraw) as *mut c_void,
-                );
+                disconnect(self.startup_clock, Rc::as_ptr(&self.redraw));
                 vk::g_object_unref(self.startup_clock.cast());
             }
             let window = gtk_widget_get_window(self.widget);
@@ -93,16 +107,23 @@ impl Drop for Surface {
                 vk::gdk_window_set_invalidate_handler(window, None);
                 vk::g_object_set_data(window, c"bplaat-bwebgpu-redraw".as_ptr(), ptr::null_mut());
             }
-            vk::g_signal_handlers_disconnect_matched(
-                self.widget.cast(),
-                16, // G_SIGNAL_MATCH_DATA
-                0,
-                0,
-                ptr::null_mut(),
-                ptr::null_mut(),
-                Rc::as_ptr(&self.redraw) as *mut c_void,
-            );
+            disconnect(self.widget, Rc::as_ptr(&self.redraw));
         }
+    }
+}
+
+// Disconnects the handlers of an object that receive a repaint.
+unsafe fn disconnect(instance: *mut c_void, repaint: *const Repaint) {
+    unsafe {
+        vk::g_signal_handlers_disconnect_matched(
+            instance.cast(),
+            16, // G_SIGNAL_MATCH_DATA
+            0,
+            0,
+            ptr::null_mut(),
+            ptr::null_mut(),
+            repaint as *mut c_void,
+        );
     }
 }
 
@@ -112,11 +133,12 @@ pub(super) struct Repaint {
     ready: Cell<bool>,
 }
 
-extern "C" fn surface_after_paint(_: *mut c_void, data: *const Repaint) {
+// Only the first frame of the parent matters, so the handler disconnects itself.
+extern "C" fn surface_after_paint(clock: *mut c_void, data: *const Repaint) {
     let repaint = unsafe { &*data };
-    if !repaint.ready.replace(true) {
-        repaint.sender.request_animation_frame();
-    }
+    repaint.ready.set(true);
+    repaint.sender.request_animation_frame();
+    unsafe { disconnect(clock, data) };
 }
 
 extern "C" fn surface_invalidate(window: *mut c_void, region: *mut c_void) {
@@ -285,20 +307,11 @@ impl Surface {
         } else {
             1
         };
-        // libwayland-client is GDK's, so its functions are looked up in the process.
-        type GetVersion = unsafe extern "C" fn(*mut c_void) -> u32;
-        type Marshal = unsafe extern "C" fn(*mut c_void, u32, ...);
+        let Some((get_version, marshal)) = wayland_proxy() else {
+            return;
+        };
+        // wl_surface.set_buffer_scale exists since version 3.
         unsafe {
-            let process = dlopen(ptr::null(), 2);
-            let get_version = dlsym(process, c"wl_proxy_get_version".as_ptr());
-            let marshal = dlsym(process, c"wl_proxy_marshal".as_ptr());
-            dlclose(process);
-            if get_version.is_null() || marshal.is_null() {
-                return;
-            }
-            let get_version = std::mem::transmute::<*mut c_void, GetVersion>(get_version);
-            let marshal = std::mem::transmute::<*mut c_void, Marshal>(marshal);
-            // wl_surface.set_buffer_scale exists since version 3.
             if get_version(surface) >= 3 {
                 marshal(surface, 8, scale);
             }

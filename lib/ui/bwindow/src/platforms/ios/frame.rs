@@ -14,6 +14,7 @@ use objc2::rc::{Allocated, Retained};
 use objc2::runtime::{AnyObject as Object, Bool};
 use objc2::{class, define_class, msg_send, sel};
 
+use super::headers::CAFrameRateRange;
 use crate::NativeWindowHandle;
 use crate::content::ContentHost;
 
@@ -65,6 +66,16 @@ impl FrameSource {
             ];
             let display_link: Retained<Object> = msg_send![class!(CADisplayLink),
                 displayLinkWithTarget:&*target, selector:sel!(displayFrame:)];
+            // Run at up to the highest rate of the screen, like 120 Hz on ProMotion displays.
+            let screen: *mut Object = msg_send![class!(UIScreen), mainScreen];
+            let fps: isize = msg_send![screen, maximumFramesPerSecond];
+            let fps = fps as f32;
+            let range = CAFrameRateRange {
+                minimum: fps.min(60.0),
+                maximum: fps,
+                preferred: fps,
+            };
+            let _: () = msg_send![&display_link, setPreferredFrameRateRange:range];
             let _: () = msg_send![&display_link, setPaused:Bool::YES];
             let run_loop: *mut Object = msg_send![class!(NSRunLoop), mainRunLoop];
             let _: () =

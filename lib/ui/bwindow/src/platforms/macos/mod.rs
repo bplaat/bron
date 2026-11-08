@@ -13,7 +13,7 @@ pub(crate) use crate::platforms::macos::event_loop::{
 pub(crate) use crate::platforms::macos::frame::FrameSource;
 pub(crate) use crate::platforms::macos::window::{PlatformWindow, release_pointer_lock};
 
-mod content;
+pub(crate) mod content;
 #[cfg(feature = "dialog")]
 mod dialog;
 mod event_loop;

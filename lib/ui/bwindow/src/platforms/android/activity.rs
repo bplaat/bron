@@ -186,11 +186,15 @@ unsafe extern "C" fn on_native_window_resized(_: *mut ANativeActivity, native: *
     });
 }
 
+// The framework shows the window once this returns, so wait until the redraw painted it.
 unsafe extern "C" fn on_native_window_redraw_needed(
     _: *mut ANativeActivity,
     _: *mut ANativeWindow,
 ) {
-    android_post(window::redraw);
+    post_and_wait(|| {
+        window::redraw();
+        event_loop::run_pending_local_tasks();
+    });
 }
 
 unsafe extern "C" fn on_native_window_destroyed(_: *mut ANativeActivity, _: *mut ANativeWindow) {

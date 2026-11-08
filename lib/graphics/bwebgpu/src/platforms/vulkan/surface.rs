@@ -54,6 +54,8 @@ pub(super) struct Swapchain {
     views: Vec<u64>,
     finished: Vec<u64>,
     size: (u32, u32),
+    // The current transform of the surface at creation.
+    transform: u32,
 }
 
 impl Drop for Swapchain {
@@ -222,6 +224,7 @@ impl Context {
                 views: Vec::new(),
                 finished: Vec::new(),
                 size: (extent.width, extent.height),
+                transform: caps.current_transform,
             };
             check(call!(
                 d.instance,
@@ -287,7 +290,10 @@ impl Context {
             return Err(CurrentSurfaceTexture::Occluded);
         };
         match self.surface_status.replace(0) {
-            -1000001004 | 1000001003 => return Err(CurrentSurfaceTexture::Outdated),
+            -1000001004 => return Err(CurrentSurfaceTexture::Outdated),
+            1000001003 if self.is_suboptimal(surface) => {
+                return Err(CurrentSurfaceTexture::Outdated);
+            }
             -1000000000 => return Err(CurrentSurfaceTexture::Lost),
             _ => {}
         }
@@ -349,8 +355,32 @@ impl Context {
                 depth: false,
                 index: index as usize,
             },
-            result != 0,
+            result != 0 && self.is_suboptimal(surface),
         ))
+    }
+
+    /// Whether a swapchain reported as suboptimal needs reconfiguring. Android reports its
+    /// identity swapchain as suboptimal while the display is rotated, which only matters
+    /// once the rotation changes.
+    fn is_suboptimal(&self, surface: &Surface) -> bool {
+        if !cfg!(target_os = "android") {
+            return true;
+        }
+        let Some(swap) = surface.swap.borrow().clone() else {
+            return true;
+        };
+        let d = &self.device;
+        let mut caps = vk::SurfaceCapabilitiesKHR::default();
+        let result = unsafe {
+            call!(
+                d.instance,
+                GetPhysicalDeviceSurfaceCapabilitiesKHR,
+                d.physical,
+                swap.surface.handle,
+                &mut caps
+            )
+        };
+        result != 0 || caps.current_transform != swap.transform
     }
 
     pub(crate) fn present(&self, surface: &Surface, texture: &Texture) -> Result<()> {

@@ -16,6 +16,7 @@ pub(crate) type Factory = ();
 
 pub(crate) struct Surface {
     view: Object,
+    host: Object,
     layer: Object,
 }
 
@@ -24,7 +25,7 @@ impl Surface {
         attachment: &bwindow::WindowAttachment,
         _: &mut Option<Factory>,
     ) -> Result<Self> {
-        let Some(bwindow::NativeContentHandle::AppKit(view)) =
+        let Some(content @ bwindow::NativeContentHandle::AppKit(view)) =
             (unsafe { attachment.content_handle() })
         else {
             return Err(Error("Metal requires an AppKit window".into()));
@@ -38,14 +39,13 @@ impl Surface {
         }
         autoreleasepool(|_| unsafe {
             let view = retained(view.cast())?;
-            // A sublayer at the bottom of the shared content view, below its children.
             let layer = owned(msg_send![class!(CAMetalLayer), new])?;
             let _: () = msg_send![&*layer, setOpaque: Bool::YES];
             let _: () = msg_send![&*layer, setMaximumDrawableCount: 3usize];
             let _: () = msg_send![&*layer, setAllowsNextDrawableTimeout: Bool::YES];
             let _: () = msg_send![&*layer, setContentsScale: f64::from(attachment.scale_factor())];
-            let backing: *mut AnyObject = msg_send![&*view, layer];
-            let _: () = msg_send![backing, insertSublayer: &*layer, atIndex: 0u32];
+            // In a view at the bottom of the shared content view, below its children.
+            let host = bwindow::ffi::add_layer_view(content, &layer);
             layout_layer(&view, &layer);
             let (resize_view, resize_layer) = (view.clone(), layer.clone());
             attachment.on_resize(move |_, _| layout_layer(&resize_view, &resize_layer));
@@ -53,7 +53,7 @@ impl Surface {
             attachment.on_scale_factor_changed(move |scale| {
                 let _: () = msg_send![&*scale_layer, setContentsScale: f64::from(scale)];
             });
-            Ok(Self { view, layer })
+            Ok(Self { view, host, layer })
         })
     }
 
@@ -76,7 +76,7 @@ impl Surface {
 
 impl Drop for Surface {
     fn drop(&mut self) {
-        let _: () = unsafe { msg_send![&*self.layer, removeFromSuperlayer] };
+        let _: () = unsafe { msg_send![&*self.host, removeFromSuperview] };
     }
 }
 

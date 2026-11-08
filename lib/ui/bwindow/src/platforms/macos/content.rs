@@ -5,7 +5,7 @@
  */
 
 //! The shared content view of a window: a flipped, layer-backed NSView filling the content
-//! area, which renderers add their layers to. It delivers the pointer, scroll, keyboard and
+//! area, which renderers add views hosting their layers to. It delivers the pointer, scroll, keyboard and
 //! cursor interaction of the content. Window children like a web view receive their own
 //! input, so the view only reports events that target it and never delivers them twice.
 
@@ -127,7 +127,7 @@ impl ContentView {
                 })),
                 initWithFrame:frame
             ];
-            // Renderers add their layers to the backing layer.
+            // Layer backed, so the renderer layer views compose with the other children.
             let _: () = msg_send![&*view, setWantsLayer:Bool::YES];
             let tracking: Allocated<Object> = msg_send![class!(NSTrackingArea), alloc];
             let tracking: Retained<Object> = msg_send![tracking,
@@ -205,5 +205,43 @@ pub(crate) unsafe fn embed_native_view(
             msg_send![view, setAutoresizingMask:NS_VIEW_WIDTH_SIZABLE | NS_VIEW_HEIGHT_SIZABLE];
         let _: () = msg_send![content, addSubview:view, positioned:NS_WINDOW_BELOW, relativeTo:null_mut::<Object>()];
         let _: Bool = msg_send![window, makeFirstResponder:view];
+    }
+}
+
+define_class!(
+    // Hosts a renderer layer, leaving all input to the content view below it.
+    #[unsafe(super(NSView))]
+    #[name = "BwindowLayerView"]
+    struct LayerView;
+
+    impl LayerView {
+        #[unsafe(method(hitTest:))]
+        const fn _hit_test(&self, _: NSPoint) -> *mut Object { null_mut() }
+    }
+);
+
+/// Shows a renderer layer filling the content view, below its children, in a view of its own
+/// that resizes with the content view and leaves all input to it. Removing the returned view
+/// from its superview removes the layer, so its order to other children is that of the views.
+///
+/// # Safety
+///
+/// `content` must be the live content view of an open window, used on the main thread.
+pub unsafe fn add_layer_view(content: NativeContentHandle, layer: &Object) -> Retained<Object> {
+    let NativeContentHandle::AppKit(content) = content else {
+        panic!("expected an AppKit content view");
+    };
+    let content = content.cast::<Object>();
+    unsafe {
+        let bounds: NSRect = msg_send![content, bounds];
+        let view: Allocated<LayerView> = msg_send![LayerView::class(), alloc];
+        let view: Retained<Object> = msg_send![view, initWithFrame:bounds];
+        let _: () =
+            msg_send![&*view, setAutoresizingMask:NS_VIEW_WIDTH_SIZABLE | NS_VIEW_HEIGHT_SIZABLE];
+        // Setting the layer before wanting one makes the view host it.
+        let _: () = msg_send![&*view, setLayer:layer];
+        let _: () = msg_send![&*view, setWantsLayer:Bool::YES];
+        let _: () = msg_send![content, addSubview:&*view, positioned:NS_WINDOW_BELOW, relativeTo:null_mut::<Object>()];
+        view
     }
 }

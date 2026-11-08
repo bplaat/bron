@@ -166,17 +166,19 @@ pub fn draw_checkerboard_clipped(
     // for each tile.
     context.begin_path();
     let (half_columns, half_rows) = checker_grid(width, height);
+    let scale = context.scale_factor();
+    let (center_x, center_y) = (checker_center(width, scale), checker_center(height, scale));
     let tiles = |start: f32, length: f32, center: f32, half: i32| {
         let first = ((start - center) / TILE).floor() as i32;
         let last = ((start + length - center) / TILE).ceil() as i32;
         first.max(-half)..last.min(half)
     };
-    for row in tiles(clip_y, clip_height, height / 2.0, half_rows) {
-        for column in tiles(clip_x, clip_width, width / 2.0, half_columns) {
+    for row in tiles(clip_y, clip_height, center_y, half_rows) {
+        for column in tiles(clip_x, clip_width, center_x, half_columns) {
             if tile_is_filled(row, column) {
                 context.rect(
-                    width / 2.0 + column as f32 * TILE,
-                    height / 2.0 + row as f32 * TILE,
+                    center_x + column as f32 * TILE,
+                    center_y + row as f32 * TILE,
                     TILE,
                     TILE,
                 );
@@ -186,6 +188,8 @@ pub fn draw_checkerboard_clipped(
     let [red, green, blue] = alternate;
     context.set_fill_style(CanvasColor::rgb(red, green, blue));
     context.fill();
+    // Later draws must not copy along the path of every tile.
+    context.begin_path();
 }
 
 /// The tiles of the checkerboard of an area as an image with one pixel per tile, for a platform
@@ -212,6 +216,15 @@ impl CheckerTiles {
             rows: 2 * half_rows as u32,
             dark,
         }
+    }
+
+    /// Where the top left corner of the tile image goes in an area shown at a display scale, on
+    /// whole device pixels like the tiles of `draw_checkerboard`.
+    pub fn origin(&self, width: f32, height: f32, scale: f32) -> (f32, f32) {
+        (
+            checker_center(width, scale) - (self.columns / 2) as f32 * TILE,
+            checker_center(height, scale) - (self.rows / 2) as f32 * TILE,
+        )
     }
 
     /// One opaque BGRA pixel for each tile, row by row from the top.
@@ -247,6 +260,12 @@ fn checker_grid(width: f32, height: f32) -> (i32, i32) {
         (width / (2.0 * TILE)).ceil().max(0.0) as i32,
         (height / (2.0 * TILE)).ceil().max(0.0) as i32,
     )
+}
+
+// Returns the middle of an area length rounded down to whole device pixels, so tile edges stay
+// sharp when the area is an odd number of pixels.
+fn checker_center(length: f32, scale: f32) -> f32 {
+    (length * scale / 2.0).floor() / scale
 }
 
 // Returns whether the tile at the given center-relative indices gets the alternate color.
@@ -347,9 +366,24 @@ mod tests {
             assert_eq!(clipped[(y * 48 + x) * 4 + 2], red(x, y));
         }
         assert_eq!(clipped[(6 * 48 + 6) * 4 + 3], 0);
+        // An odd sized area keeps its tile edges on whole pixels.
+        let mut odd = OffscreenCanvas::new(49, 49);
+        odd.draw(|context| draw_checkerboard(context, 49.0, 49.0, false));
+        assert!(
+            odd.pixels()
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .all(|pixel| matches!(pixel[2], 219 | 240))
+        );
         // The tile image has a pixel for each of the same tiles.
         let tiles = CheckerTiles::new(48.0, 48.0, false);
         assert_eq!((tiles.columns, tiles.rows), (4, 4));
+        assert_eq!(tiles.origin(48.0, 48.0, 1.0), (0.0, 0.0));
+        assert_eq!(
+            CheckerTiles::new(49.0, 49.0, false).origin(49.0, 49.0, 1.0),
+            (-12.0, -12.0)
+        );
         let tile_pixels = tiles.pixels();
         for (x, y) in [(30, 30), (18, 30), (30, 18), (18, 18)] {
             let tile = y / TILE as usize * 4 + x / TILE as usize;

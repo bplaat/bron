@@ -58,14 +58,17 @@ struct State {
     // The spinner shown until the media is decoded or an edit is applied, or null.
     spinner: Cell<*mut c_void>,
     area: *mut c_void,
+    // The media drawn while a crop rectangle or selection is shown, and whether they changed
+    // since the drawing area was last drawn.
     cache: RefCell<Option<Cache>>,
+    remarked: Cell<bool>,
     gesture: *mut c_void,
     // Whether the adjustments are being set from the viewport.
     updating: Cell<bool>,
-    // The scale of the current pinch so far and the timer of the next animation frame, which
-    // only runs while the drawing area is shown.
+    // The scale of the current pinch so far and the frame clock tick callback that shows the
+    // animation frames, which only runs while the drawing area is shown.
     pinch: Cell<f64>,
-    timer: Cell<u32>,
+    tick: Cell<u32>,
 }
 
 /// A native view that zooms and pans media.
@@ -147,10 +150,11 @@ impl MediaView {
                 spinner: Cell::new(spinner),
                 area,
                 cache: RefCell::new(None),
+                remarked: Cell::new(false),
                 gesture: gtk_gesture_zoom_new(area),
                 updating: Cell::new(false),
                 pinch: Cell::new(1.0),
-                timer: Cell::new(0),
+                tick: Cell::new(0),
             })
         };
         state.connect();
@@ -596,16 +600,57 @@ impl State {
         (x - scroll.0, y - scroll.1)
     }
 
+    // The visible part of the drawing area, which has a width and height.
+    fn visible_rect(&self, width: i32, height: i32) -> GdkRectangle {
+        let [horizontal, vertical] = {
+            let viewport = self.viewport.borrow();
+            Axis::BOTH.map(|axis| viewport.scroll_bar(axis))
+        };
+        let rect = bounds([
+            horizontal.position,
+            vertical.position,
+            horizontal.position + horizontal.page,
+            vertical.position + vertical.page,
+        ]);
+        GdkRectangle {
+            width: rect.width.min(width - rect.x),
+            height: rect.height.min(height - rect.y),
+            ..rect
+        }
+    }
+
     // Changes what the viewport shows and redraws the drawing area.
     fn update(&self, change: impl FnOnce(&mut Viewport)) {
         self.lay_out(change);
         self.redraw_media();
     }
 
-    // Changes only the crop rectangle or selection, which are drawn over the cached media.
-    fn mark(&self, change: impl FnOnce(&mut Viewport)) {
-        change(&mut self.viewport.borrow_mut());
-        self.redraw();
+    // Changes only the crop rectangle or selection, which are drawn over the cached media, and
+    // redraws the part of the drawing area they changed. Returns what the change returns.
+    fn mark<T>(&self, change: impl FnOnce(&mut Viewport) -> T) -> T {
+        let before = self.viewport.borrow().document_marks();
+        let result = change(&mut self.viewport.borrow_mut());
+        let after = self.viewport.borrow().document_marks();
+        if before != after {
+            self.remarked.set(true);
+            match (before, after) {
+                (Some((old, before)), Some((new, after))) if old == new => {
+                    let rect = union(bounds(before), bounds(after));
+                    // SAFETY: The drawing area is alive while the state is.
+                    unsafe {
+                        gtk_widget_queue_draw_area(
+                            self.area,
+                            rect.x,
+                            rect.y,
+                            rect.width,
+                            rect.height,
+                        );
+                    }
+                }
+                _ => self.redraw(),
+            }
+        }
+        result
     }
 
     // Redraws the drawing area with the media drawn again instead of copied from the cache.
@@ -654,25 +699,25 @@ impl State {
         self.updating.set(false);
     }
 
-    // Shows the current animation frame and schedules the next one while the drawing area is
-    // shown, the frame follows the time when it is shown again.
+    // Shows the current animation frame and follows the frame clock of the drawing area to the
+    // next ones while it is shown, the frame follows the time when it is shown again.
     fn start_animation(&self) {
+        if self.advance_frame() && self.is_shown() {
+            // SAFETY: The view removes the tick callback before the state it receives is freed.
+            let tick = unsafe {
+                gtk_widget_add_tick_callback(self.area, next_frame, from_ref(self).cast(), None)
+            };
+            self.tick.set(tick);
+        }
+    }
+
+    // Shows the current animation frame, returns whether another one follows.
+    fn advance_frame(&self) -> bool {
         let (changed, next) = self.viewport.borrow_mut().advance_frame();
         if changed {
             self.redraw_media();
         }
-        let Some(next) = next.filter(|_| self.is_shown()) else {
-            return;
-        };
-        // SAFETY: The view removes the timer before the state it receives is freed.
-        let timer = unsafe {
-            g_timeout_add(
-                next.as_millis().max(1) as u32,
-                next_frame,
-                from_ref(self).cast(),
-            )
-        };
-        self.timer.set(timer);
+        next.is_some()
     }
 
     // Whether the drawing area is on screen: mapped in a window that is not minimized. GTK 3
@@ -701,21 +746,25 @@ impl State {
     }
 
     fn stop_animation(&self) {
-        let timer = self.timer.replace(0);
-        if timer != 0 {
-            // SAFETY: The timer is a pending source of this view.
-            unsafe { g_source_remove(timer) };
+        let tick = self.tick.replace(0);
+        if tick != 0 {
+            // SAFETY: The tick callback is a running callback of the drawing area.
+            unsafe { gtk_widget_remove_tick_callback(self.area, tick) };
         }
     }
 }
 
-extern "C" fn next_frame(state: *mut c_void) -> i32 {
-    // SAFETY: GLib passes the state of this timer, which is removed before the state is freed.
+// Each frame of the frame clock shows the animation frame of that time, until there are no
+// more. The frame clock stops with the window, like when it is minimized.
+extern "C" fn next_frame(_: *mut c_void, _: *mut c_void, state: *mut c_void) -> i32 {
+    // SAFETY: GTK passes the state of this tick callback, which is removed before the state is
+    // freed.
     let state = unsafe { &*state.cast::<State>() };
-    state.timer.set(0);
-    state.start_animation();
-    // Every frame schedules its own timer with the delay of that frame.
-    0
+    let more = state.advance_frame();
+    if !more {
+        state.tick.set(0);
+    }
+    i32::from(more)
 }
 
 // The animation pauses while the drawing area is hidden or its window is minimized, and
@@ -730,10 +779,9 @@ extern "C" fn window_state(window: *mut c_void, _: *const c_void, state: &State)
     0
 }
 
-// The checkerboard and media of a part of the drawing area, drawn once into a surface like its
-// window: a server side one on X11, which the X server scales the media into and copies from
-// with XRender. Redraws of the crop rectangle or selection, and of exposed parts it covers, copy
-// it instead of scaling a bitmap or tessellating a vector again.
+// A part of a drawing area, drawn once into a surface like its window: a server side one on
+// X11, which the X server scales media into and copies from with XRender. Later draws of the
+// part it covers copy it instead of scaling a bitmap or tessellating a vector again.
 struct Cache {
     surface: *mut c_void,
     rect: GdkRectangle,
@@ -742,28 +790,26 @@ struct Cache {
 }
 
 impl Cache {
-    // Draws the part inside `rect` of a drawing area, or none when no surface can hold it.
+    // Draws the part inside `rect` of a drawing area with a size and scale factor, without
+    // transparency or with for `CAIRO_CONTENT_COLOR_ALPHA`, or none when no surface can hold it.
     unsafe fn new(
         window: *mut c_void,
-        state: &State,
+        content: i32,
         area: (i32, i32, i32),
         rect: GdkRectangle,
+        draw: impl FnOnce(*mut c_void),
     ) -> Option<Self> {
         // SAFETY: The caller supplies the realized window of the drawing area.
         unsafe {
-            let surface = gdk_window_create_similar_surface(
-                window,
-                CAIRO_CONTENT_COLOR,
-                rect.width,
-                rect.height,
-            );
+            let surface =
+                gdk_window_create_similar_surface(window, content, rect.width, rect.height);
             if cairo_surface_status(surface) != 0 {
                 cairo_surface_destroy(surface);
                 return None;
             }
             let cr = cairo_create(surface);
             cairo_translate(cr, -f64::from(rect.x), -f64::from(rect.y));
-            paint_document(cr, state, area, rect);
+            draw(cr);
             cairo_destroy(cr);
             Some(Self {
                 surface,
@@ -782,6 +828,15 @@ impl Cache {
             && clip.x + clip.width <= rect.x + rect.width
             && clip.y + clip.height <= rect.y + rect.height
     }
+
+    // Copies the drawn part into a cairo context of the drawing area.
+    unsafe fn paint(&self, cr: *mut c_void) {
+        // SAFETY: The caller supplies a cairo context to draw with.
+        unsafe {
+            cairo_set_source_surface(cr, self.surface, self.rect.x.into(), self.rect.y.into());
+            cairo_paint(cr);
+        }
+    }
 }
 
 impl Drop for Cache {
@@ -789,6 +844,24 @@ impl Drop for Cache {
         // SAFETY: The cache owns its surface.
         unsafe { cairo_surface_destroy(self.surface) };
     }
+}
+
+// The smallest rectangle of whole pixels around a left, top, right and bottom.
+fn bounds([left, top, right, bottom]: [f64; 4]) -> GdkRectangle {
+    let (x, y) = (left.floor(), top.floor());
+    GdkRectangle {
+        x: x as i32,
+        y: y as i32,
+        width: (right.ceil() - x) as i32,
+        height: (bottom.ceil() - y) as i32,
+    }
+}
+
+fn union(a: GdkRectangle, b: GdkRectangle) -> GdkRectangle {
+    let mut rect = GdkRectangle::default();
+    // SAFETY: The rectangles are valid for the call.
+    unsafe { gdk_rectangle_union(&raw const a, &raw const b, &raw mut rect) };
+    rect
 }
 
 // Draws the checkerboard and media inside `clip` of a drawing area with a size and scale factor.
@@ -823,7 +896,9 @@ unsafe fn paint_document(
 
 // The scrolled window caches what the drawing area draws beyond the visible area and reuses it
 // while scrolling, so it is drawn as a document independent of the scroll position. Only the
-// exposed part of the document is drawn, which may be far larger.
+// exposed part of the document is drawn, which may be far larger. Exposed parts and animation
+// frames are drawn straight away, while a crop rectangle or selection is shown the visible part
+// of the media is cached once they change, so redrawing them copies it.
 extern "C" fn draw(area: *mut c_void, cr: *mut c_void, state: &State) -> i32 {
     // SAFETY: GTK passes the live realized drawing area and its cairo context while drawing.
     unsafe {
@@ -837,21 +912,23 @@ extern "C" fn draw(area: *mut c_void, cr: *mut c_void, state: &State) -> i32 {
             gtk_widget_get_scale_factor(area),
         );
         let mut cache = state.cache.borrow_mut();
-        if !cache.as_ref().is_some_and(|cache| cache.covers(size, clip)) {
+        let remarked = state.remarked.replace(false);
+        if state.viewport.borrow().document_marks().is_none() {
             *cache = None;
-            *cache = Cache::new(gtk_widget_get_window(area), state, size, clip);
+        } else if remarked && !cache.as_ref().is_some_and(|cache| cache.covers(size, clip)) {
+            let rect = union(clip, state.visible_rect(size.0, size.1));
+            *cache = None;
+            *cache = Cache::new(
+                gtk_widget_get_window(area),
+                CAIRO_CONTENT_COLOR,
+                size,
+                rect,
+                |cr| paint_document(cr, state, size, rect),
+            );
         }
         match &*cache {
-            Some(cache) => {
-                cairo_set_source_surface(
-                    cr,
-                    cache.surface,
-                    cache.rect.x.into(),
-                    cache.rect.y.into(),
-                );
-                cairo_paint(cr);
-            }
-            None => paint_document(cr, state, size, clip),
+            Some(cache) if cache.covers(size, clip) => cache.paint(cr),
+            _ => paint_document(cr, state, size, clip),
         }
         bcanvas::draw_native(
             NativeContext::Cairo(cr),
@@ -956,8 +1033,7 @@ extern "C" fn button_press(area: *mut c_void, event: *const c_void, state: &Stat
         gdk_event_get_coords(event, &mut area_x, &mut area_y);
     }
     let pointer = state.visible_point((area_x, area_y));
-    if state.viewport.borrow_mut().mark_begin(pointer) {
-        state.redraw();
+    if state.mark(|viewport| viewport.mark_begin(pointer)) {
         return 1;
     }
     if state.viewport.borrow_mut().drag_begin((x, y)) {
@@ -973,12 +1049,11 @@ extern "C" fn button_release(_: *mut c_void, event: *const c_void, state: &State
     if unsafe { gdk_event_get_button(event, &mut button) } == 0 || button != 1 {
         return 0;
     }
-    let (marked, cleared) = {
-        let mut viewport = state.viewport.borrow_mut();
+    let (marked, cleared) = state.mark(|viewport| {
         let marked = viewport.mark_end();
         let cleared = viewport.selecting().is_some() && viewport.selection().is_none();
         (marked, marked && cleared)
-    };
+    });
     // A click without a drag goes back to editing the whole image, the menu follows a drawn
     // selection.
     if cleared {
@@ -987,7 +1062,6 @@ extern "C" fn button_release(_: *mut c_void, event: *const c_void, state: &State
         send(AppEvent::Action("select.changed"));
     }
     if marked {
-        state.redraw();
         return 1;
     }
     if !state.viewport.borrow_mut().drag_end() {
@@ -1006,18 +1080,15 @@ extern "C" fn motion(_: *mut c_void, event: *const c_void, state: &State) -> i32
         gdk_event_get_state(event, &mut modifiers);
     }
     let pointer = state.visible_point((area_x, area_y));
-    if state
-        .viewport
-        .borrow_mut()
-        .mark_drag(pointer, modifiers & GDK_SHIFT_MASK != 0)
-    {
-        state.redraw();
-    } else if state.viewport.borrow_mut().drag_to((x, y)) {
-        // Panning only scrolls the drawn document.
-        state.lay_out(|_| {});
-    } else {
+    let square = modifiers & GDK_SHIFT_MASK != 0;
+    if state.mark(|viewport| viewport.mark_drag(pointer, square)) {
+        return 1;
+    }
+    if !state.viewport.borrow_mut().drag_to((x, y)) {
         return 0;
     }
+    // Panning only scrolls the drawn document.
+    state.lay_out(|_| {});
     1
 }
 

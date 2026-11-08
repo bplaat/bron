@@ -10,7 +10,7 @@ use std::cell::RefCell;
 use std::ptr;
 use std::rc::Rc;
 
-use bwindow::ffi::android_native_window;
+use bwindow::ffi::{android_native_window, android_on_native_window_destroyed};
 
 use super::surface::{SurfaceOwner, Swapchain};
 use super::*;
@@ -25,8 +25,9 @@ unsafe extern "C" {
 // so the Vulkan surface is created for every new window, and only once it exists.
 pub(crate) struct Surface {
     pub(super) instance: Rc<Instance>,
-    current: RefCell<Option<(Rc<SurfaceOwner>, u64)>>,
-    pub(super) swap: RefCell<Option<Rc<Swapchain>>>,
+    current: Rc<RefCell<Option<(Rc<SurfaceOwner>, u64)>>>,
+    pub(super) swap: Rc<RefCell<Option<Rc<Swapchain>>>>,
+    _destroyed: Rc<dyn Fn()>,
 }
 
 impl Surface {
@@ -46,10 +47,26 @@ impl Surface {
             *factory = Some(instance.clone());
             instance
         };
+        let current = Rc::new(RefCell::new(None));
+        let swap = Rc::new(RefCell::new(None));
+        // Release the swapchain and surface with the native window, not when next drawn.
+        let destroyed: Rc<dyn Fn()> = Rc::new({
+            let (current, swap) = (Rc::downgrade(&current), Rc::downgrade(&swap));
+            move || {
+                if let Some(swap) = swap.upgrade() {
+                    swap.borrow_mut().take();
+                }
+                if let Some(current) = current.upgrade() {
+                    current.borrow_mut().take();
+                }
+            }
+        });
+        android_on_native_window_destroyed(&destroyed);
         Ok(Self {
             instance,
-            current: RefCell::new(None),
-            swap: RefCell::new(None),
+            current,
+            swap,
+            _destroyed: destroyed,
         })
     }
 

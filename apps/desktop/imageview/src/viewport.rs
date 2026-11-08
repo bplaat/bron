@@ -75,6 +75,17 @@ pub(crate) struct ScrollBar {
     pub(crate) length: f64,
 }
 
+/// How the crop rectangle or selection drawn over a document dims or tints around itself.
+#[cfg(not(any(target_os = "macos", windows)))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Marking {
+    // The crop rectangle dims the document around it.
+    Crop,
+    // The selection tints the media around it, or only itself when inverted.
+    Selection,
+    InvertedSelection,
+}
+
 /// The media inside the visible area of a view, in logical pixels.
 pub(crate) struct Viewport {
     renderer: MediaRenderer,
@@ -455,6 +466,33 @@ impl Viewport {
         self.draw_marks(context, self.origin((0.0, 0.0)));
     }
 
+    /// The crop rectangle or selection drawn over the document by `paint_document_marks`: how it
+    /// dims or tints around itself, and the left, top, right and bottom of the part of the
+    /// document it draws in, with its outline and handles. Marks of the same kind only differ
+    /// inside their parts.
+    #[cfg(not(any(target_os = "macos", windows)))]
+    pub(crate) fn document_marks(&self) -> Option<(Marking, [f64; 4])> {
+        let (marking, marquee) = match (&self.crop, &self.selection) {
+            (Some(crop), _) => (Marking::Crop, crop),
+            (None, Some((_, marquee))) if self.inverted => (Marking::InvertedSelection, marquee),
+            (None, Some((_, marquee))) => (Marking::Selection, marquee),
+            (None, None) => return None,
+        };
+        let (x, y) = self.origin((0.0, 0.0));
+        // The handles reach past the edges, antialiasing a pixel further.
+        let reach = f64::from(HANDLE_WIDTH) + 2.0;
+        let [left, top, right, bottom] = marquee.edges().map(|edge| edge * self.magnification);
+        Some((
+            marking,
+            [
+                x + left - reach,
+                y + top - reach,
+                x + right + reach,
+                y + bottom + reach,
+            ],
+        ))
+    }
+
     // Where the media is drawn in a canvas scrolled to a position.
     fn origin(&self, scroll: (f64, f64)) -> (f64, f64) {
         (
@@ -506,6 +544,13 @@ impl Viewport {
     #[cfg(any(target_os = "macos", windows))]
     pub(crate) const fn has_marks(&self) -> bool {
         self.crop.is_some() || self.selection.is_some()
+    }
+
+    /// The edges of the crop rectangle and the selection that `paint_marks` draws, which tell
+    /// when its drawing changes.
+    #[cfg(target_os = "macos")]
+    pub(crate) fn marks(&self) -> (Option<[f64; 4]>, Option<Selection>) {
+        (self.crop.as_ref().map(Marquee::edges), self.selection())
     }
 
     /// Follows a platform view that zooms and scrolls by itself, like the WinUI scroll viewer:
@@ -780,6 +825,32 @@ mod tests {
         assert!(viewport.selection().is_some());
         viewport.set_media(media(), true);
         assert!(viewport.selection().is_none());
+    }
+
+    #[cfg(not(any(target_os = "macos", windows)))]
+    #[test]
+    fn document_marks_cover_their_outline_and_handles() {
+        // The 100x100 media is shown at 3x, 50 pixels from the left.
+        let mut viewport = Viewport::new(Some(media()), (400.0, 300.0));
+        assert_eq!(viewport.document_marks(), None);
+        viewport.set_selecting(Some(Shape::Rectangle));
+        viewport.mark_begin((80.0, 30.0));
+        viewport.mark_drag((140.0, 60.0), false);
+        viewport.mark_end();
+        assert_eq!(
+            viewport.document_marks(),
+            Some((Marking::Selection, [75.0, 25.0, 145.0, 65.0]))
+        );
+        viewport.invert_selection();
+        assert_eq!(
+            viewport.document_marks().map(|(marking, _)| marking),
+            Some(Marking::InvertedSelection)
+        );
+        viewport.set_cropping(true);
+        assert_eq!(
+            viewport.document_marks(),
+            Some((Marking::Crop, [45.0, -5.0, 355.0, 305.0]))
+        );
     }
 
     #[test]

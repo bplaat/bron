@@ -56,6 +56,7 @@ unsafe extern "system" {
 pub(crate) type HWND = HANDLE;
 pub(crate) type WPARAM = usize;
 pub(crate) type LPARAM = isize;
+pub(crate) type LRESULT = isize;
 
 pub(crate) const IDYES: i32 = 6;
 pub(crate) const SW_SHOWNORMAL: i32 = 1;
@@ -87,12 +88,41 @@ unsafe extern "system" {
         lParam: LPARAM,
     ) -> BOOL;
     pub(crate) fn GetClientRect(hWnd: HWND, rect: *mut RECT) -> i32;
+    pub(crate) fn IsIconic(hWnd: HWND) -> BOOL;
     pub(crate) fn MessageBoxW(
         hWnd: HWND,
         lpText: *const w_char,
         lpCaption: *const w_char,
         uType: u32,
     ) -> i32;
+}
+
+pub(crate) const WM_MOVE: u32 = 0x0003;
+
+pub(crate) type SUBCLASSPROC = unsafe extern "system" fn(
+    hWnd: HWND,
+    uMsg: u32,
+    wParam: WPARAM,
+    lParam: LPARAM,
+    uIdSubclass: usize,
+    dwRefData: usize,
+) -> LRESULT;
+
+#[link(name = "comctl32")]
+unsafe extern "system" {
+    pub(crate) fn SetWindowSubclass(
+        hWnd: HWND,
+        pfnSubclass: SUBCLASSPROC,
+        uIdSubclass: usize,
+        dwRefData: usize,
+    ) -> BOOL;
+    pub(crate) fn RemoveWindowSubclass(
+        hWnd: HWND,
+        pfnSubclass: SUBCLASSPROC,
+        uIdSubclass: usize,
+    ) -> BOOL;
+    pub(crate) fn DefSubclassProc(hWnd: HWND, uMsg: u32, wParam: WPARAM, lParam: LPARAM)
+    -> LRESULT;
 }
 
 pub(crate) type HDROP = HANDLE;
@@ -505,6 +535,10 @@ impl ICoreWebView2Controller {
         unsafe { ((*self.lpVtbl).put_Bounds)(self as *const _ as *mut _, bounds) }
     }
 
+    pub(crate) unsafe fn NotifyParentWindowPositionChanged(&self) -> HRESULT {
+        unsafe { ((*self.lpVtbl).NotifyParentWindowPositionChanged)(self as *const _ as *mut _) }
+    }
+
     pub(crate) unsafe fn get_CoreWebView2(&self, webview: *mut *mut ICoreWebView2) -> HRESULT {
         unsafe { ((*self.lpVtbl).get_CoreWebView2)(self as *const _ as *mut _, webview) }
     }
@@ -531,7 +565,9 @@ pub(crate) struct ICoreWebView2ControllerVtbl {
         handler: *mut c_void,
         token: *mut EventRegistrationToken,
     ) -> HRESULT,
-    padding4: [usize; 4],
+    padding4: [usize; 3],
+    NotifyParentWindowPositionChanged:
+        unsafe extern "system" fn(This: *mut ICoreWebView2Controller) -> HRESULT,
     Close: unsafe extern "system" fn(This: *mut ICoreWebView2Controller) -> HRESULT,
     get_CoreWebView2: unsafe extern "system" fn(
         This: *mut ICoreWebView2Controller,
