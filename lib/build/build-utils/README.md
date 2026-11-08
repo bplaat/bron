@@ -7,9 +7,9 @@ embedding for unbundled macOS binaries through `macos::embed_info_plist`. The
 manifests and compiles resources through winresource; callers select the Windows
 target condition.
 
-Library-specific minimum versions, fallback choices, and environment overrides
-remain in the consuming build scripts. Callers also select the platform and bundle
-conditions for plist embedding.
+Generic helpers handle library groups, linking, marker-symbol requirements, and
+conditional cfg flags. Library names, version requirements, fallback choices,
+environment overrides, and target conditions remain in the consuming build scripts.
 
 `npm_build(workspace, frontend, script)` installs workspace dependencies when needed,
 tracks frontend sources, runs the selected npm script, and copies `dist` into

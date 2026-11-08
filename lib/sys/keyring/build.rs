@@ -9,7 +9,7 @@
 use std::env;
 use std::path::PathBuf;
 
-use build_utils::{display_paths, find_library, library_has_symbol, link_library, push_unique};
+use build_utils::{display_paths, find_library, link_library, push_unique, require_symbol};
 
 fn main() {
     let target_os = env::var("CARGO_CFG_TARGET_OS").expect("CARGO_CFG_TARGET_OS not set");
@@ -26,19 +26,20 @@ fn main() {
         push_unique(&mut search_dirs, path);
     }
 
-    let secret = require_library(&search_dirs, "secret-1");
-    if !library_has_symbol(&secret, b"secret_password_store_binary_sync") {
-        panic!("keyring requires libsecret-1 0.19 or newer");
+    for name in ["secret-1", "glib-2.0"] {
+        let library = find_library(&search_dirs, name).unwrap_or_else(|| {
+            panic!(
+                "could not find the {name} runtime library; searched: {}. Set KEYRING_LIB_DIR to its library directory",
+                display_paths(&search_dirs)
+            )
+        });
+        if name == "secret-1" {
+            require_symbol(
+                &library,
+                b"secret_password_store_binary_sync",
+                "keyring requires libsecret-1 0.19 or newer",
+            );
+        }
+        link_library(&library);
     }
-    link_library(&secret);
-    link_library(&require_library(&search_dirs, "glib-2.0"));
-}
-
-fn require_library(search_dirs: &[PathBuf], name: &str) -> PathBuf {
-    find_library(search_dirs, name).unwrap_or_else(|| {
-        panic!(
-            "could not find the {name} runtime library; searched: {}. Set KEYRING_LIB_DIR to its library directory",
-            display_paths(search_dirs)
-        )
-    })
 }

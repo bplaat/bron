@@ -122,18 +122,47 @@ pub fn search_dirs() -> Vec<PathBuf> {
     search_dirs
 }
 
-/// Emits GTK 3.20 and 3.22 cfg flags when their marker symbols are available.
-pub fn gtk_cfgs(search_dirs: &[PathBuf]) {
-    if let Some(gtk) = find_library(search_dirs, "gtk-3")
-        && library_has_symbol(&gtk, b"gtk_file_chooser_native_new")
-    {
-        println!("cargo::rustc-cfg=gtk3_20");
+/// Links each named shared library from the supplied search directories.
+pub fn link_libraries(search_dirs: &[PathBuf], names: &[&str]) {
+    for name in names {
+        link_library(&require_library(search_dirs, name));
     }
-    if let Some(gdk) = find_library(search_dirs, "gdk-3")
-        && library_has_symbol(&gdk, b"gdk_display_get_n_monitors")
+}
+
+/// Requires a marker symbol in a library, using the supplied diagnostic on failure.
+pub fn require_symbol(library: &Path, symbol: &[u8], message: &str) {
+    assert!(library_has_symbol(library, symbol), "{message}");
+}
+
+/// Emits a Cargo cfg flag when a named library contains a marker symbol.
+pub fn cfg_if_symbol(search_dirs: &[PathBuf], library: &str, symbol: &[u8], cfg: &str) {
+    if let Some(path) = find_library(search_dirs, library)
+        && library_has_symbol(&path, symbol)
     {
-        println!("cargo::rustc-cfg=gtk3_22");
+        println!("cargo::rustc-cfg={cfg}");
     }
+}
+
+/// Finds libraries together in one directory with the same filename suffix.
+///
+/// Names omit `lib` and the suffix. Directories and suffixes are searched in the
+/// supplied order. Returns the matching directory and suffix.
+pub fn find_library_group(
+    search_dirs: &[PathBuf],
+    names: &[&str],
+    suffixes: &[&str],
+) -> Option<(PathBuf, String)> {
+    for directory in search_dirs {
+        for suffix in suffixes {
+            if names
+                .iter()
+                .all(|name| directory.join(format!("lib{name}{suffix}")).is_file())
+            {
+                return Some((directory.clone(), (*suffix).to_owned()));
+            }
+        }
+    }
+    None
 }
 
 #[cfg(test)]
@@ -142,7 +171,7 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use super::{find_library, library_has_symbol};
+    use super::{find_library, find_library_group, library_has_symbol};
 
     struct Fixture(PathBuf);
 
@@ -191,5 +220,32 @@ mod tests {
             &first.join("missing.so"),
             b"example_feature"
         ));
+    }
+
+    #[test]
+    fn library_groups_require_matching_directories_and_suffixes() {
+        let fixture = Fixture::new();
+        let first = fixture.0.join("first");
+        let second = fixture.0.join("second");
+        fs::create_dir(&first).expect("create first search directory");
+        fs::create_dir(&second).expect("create second search directory");
+        let directories = [first.clone(), second.clone()];
+        let names = ["one", "two"];
+        let suffixes = [".so.4", ".so.3"];
+        fs::write(first.join("libone.so.4"), []).expect("write first library");
+        fs::write(second.join("libtwo.so.4"), []).expect("write second library");
+        fs::write(first.join("libtwo.so.3"), []).expect("write mismatched version");
+        assert_eq!(find_library_group(&directories, &names, &suffixes), None);
+        fs::write(first.join("libone.so.3"), []).expect("write matching version");
+        fs::write(second.join("libone.so.4"), []).expect("complete second group");
+        assert_eq!(
+            find_library_group(&directories, &names, &suffixes),
+            Some((first.clone(), ".so.3".to_owned()))
+        );
+        fs::write(first.join("libtwo.so.4"), []).expect("complete preferred version");
+        assert_eq!(
+            find_library_group(&directories, &names, &suffixes),
+            Some((first, ".so.4".to_owned()))
+        );
     }
 }
