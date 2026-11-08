@@ -26,10 +26,7 @@ const TIMEOUT: Duration = Duration::from_secs(5);
 const VERSION: u32 = 2;
 
 fn name(key: &str, suffix: &str) -> Vec<u16> {
-    format!("{key}-{suffix}")
-        .encode_utf16()
-        .chain([0])
-        .collect()
+    wide(&format!("{key}-{suffix}"))
 }
 
 fn handle(raw: HANDLE) -> io::Result<OwnedHandle> {

@@ -161,7 +161,7 @@ impl PlatformWindow {
                 "bwindow".to_string()
             }
         };
-        let class_name = class_name.to_wide_string();
+        let class_name = wide(&class_name);
         unsafe {
             let mut wndclass = WNDCLASSEXW {
                 cbSize: size_of::<WNDCLASSEXW>() as u32,
@@ -169,11 +169,12 @@ impl PlatformWindow {
             };
             if GetClassInfoExW(instance, class_name.as_ptr(), &mut wndclass as *mut _) != TRUE {
                 // Get executable icons
-                let executable_path = env::current_exe()
-                    .expect("Can't get current exe path")
-                    .display()
-                    .to_string()
-                    .to_wide_string();
+                let executable_path = wide(
+                    &env::current_exe()
+                        .expect("Can't get current exe path")
+                        .display()
+                        .to_string(),
+                );
                 let mut large_icon = HICON::default();
                 let mut small_icon = HICON::default();
                 ExtractIconExW(
@@ -222,7 +223,7 @@ impl PlatformWindow {
             let (rect, position_set) =
                 calculate_window_rect(builder, &monitor_rect, style, initial_dpi);
 
-            let title = builder.title.to_wide_string();
+            let title = wide(&builder.title);
             let hwnd = CreateWindowExW(
                 0,
                 class_name.as_ptr(),
@@ -308,7 +309,7 @@ impl crate::WindowInterface for PlatformWindow {
     }
 
     fn set_title(&mut self, title: impl AsRef<str>) {
-        let title = title.as_ref().to_wide_string();
+        let title = wide(title.as_ref());
         unsafe { SetWindowTextW(self.0.hwnd, title.as_ptr()) };
     }
 

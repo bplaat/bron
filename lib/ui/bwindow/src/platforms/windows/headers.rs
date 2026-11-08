@@ -599,46 +599,6 @@ unsafe extern "system" {
 unsafe extern "system" {}
 
 // MARK: Utils
-pub(crate) const fn wide_ascii<const N: usize>(value: &str) -> [w_char; N] {
-    let bytes = value.as_bytes();
-    assert!(N == bytes.len() + 1);
-    let mut wide = [0; N];
-    let mut i = 0;
-    while i < bytes.len() {
-        assert!(bytes[i].is_ascii());
-        wide[i] = bytes[i] as w_char;
-        i += 1;
-    }
-    wide
-}
-
-/// Internal native string literal.
-macro_rules! wide {
-    ($value:literal) => {{
-        const WIDE: &[w_char] =
-            &$crate::platforms::windows::headers::wide_ascii::<{ $value.len() + 1 }>($value);
-        WIDE
-    }};
-}
-pub(crate) use wide;
-
-pub(crate) trait ToWideString {
-    fn to_wide_string(&self) -> Vec<u16>;
-}
-impl ToWideString for &str {
-    fn to_wide_string(&self) -> Vec<u16> {
-        let mut v: Vec<u16> = self.encode_utf16().collect();
-        v.push(0);
-        v
-    }
-}
-impl ToWideString for String {
-    fn to_wide_string(&self) -> Vec<u16> {
-        let mut v: Vec<u16> = self.encode_utf16().collect();
-        v.push(0);
-        v
-    }
-}
 
 pub(crate) struct LPWSTR(*mut w_char);
 impl Default for LPWSTR {
@@ -1024,3 +984,61 @@ pub(crate) struct TaskbarList3Vtable {
     pub(crate) set_progress_state:
         unsafe extern "system" fn(*mut TaskbarList3, HWND, i32) -> HRESULT,
 }
+
+/// Encode a string as a null-terminated UTF-16 string.
+pub(crate) fn wide(text: &str) -> Vec<u16> {
+    text.encode_utf16().chain([0]).collect()
+}
+
+/// Encode a string literal as a null-terminated UTF-16 string at compile time.
+macro_rules! w {
+    ($text:literal) => {{
+        const TEXT: &str = $text;
+        const LEN: usize = {
+            let bytes = TEXT.as_bytes();
+            let mut len = 1;
+            let mut i = 0;
+            while i < bytes.len() {
+                if bytes[i] & 0xc0 != 0x80 {
+                    len += if bytes[i] >= 0xf0 { 2 } else { 1 };
+                }
+                i += 1;
+            }
+            len
+        };
+        const WIDE: &[u16] = &{
+            let bytes = TEXT.as_bytes();
+            let mut result = [0; LEN];
+            let mut i = 0;
+            let mut j = 0;
+            while i < bytes.len() {
+                let first = bytes[i];
+                let (mut code, extra) = match first {
+                    0..=0x7f => (first as u32, 0),
+                    0xc0..=0xdf => ((first & 0x1f) as u32, 1),
+                    0xe0..=0xef => ((first & 0x0f) as u32, 2),
+                    _ => ((first & 0x07) as u32, 3),
+                };
+                let end = i + extra + 1;
+                i += 1;
+                while i < end {
+                    code = (code << 6) | (bytes[i] & 0x3f) as u32;
+                    i += 1;
+                }
+                assert!(code != 0, "wide string literal contains a null character");
+                if code > 0xffff {
+                    code -= 0x10000;
+                    result[j] = 0xd800 | (code >> 10) as u16;
+                    j += 1;
+                    result[j] = 0xdc00 | (code & 0x3ff) as u16;
+                } else {
+                    result[j] = code as u16;
+                }
+                j += 1;
+            }
+            result
+        };
+        WIDE
+    }};
+}
+pub(crate) use w;

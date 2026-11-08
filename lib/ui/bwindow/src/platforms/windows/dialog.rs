@@ -21,12 +21,12 @@ impl crate::MessageDialogInterface for PlatformMessageDialog {
             .parent
             .map(|window| window.0.hwnd)
             .unwrap_or_else(|| unsafe { GetActiveWindow() });
-        let title = dialog.title.to_wide_string();
-        let description = dialog.description.to_wide_string();
+        let title = wide(&dialog.title);
+        let description = wide(&dialog.description);
         let (common_buttons, labels) = task_dialog_buttons(&dialog.buttons);
         let label_storage = labels
             .iter()
-            .map(|label| label.to_wide_string().into_boxed_slice())
+            .map(|label| wide(label).into_boxed_slice())
             .collect::<Vec<_>>();
         let custom_buttons = label_storage
             .iter()
@@ -135,8 +135,8 @@ fn fallback_message_box(
     let selected = unsafe {
         MessageBoxW(
             parent,
-            dialog.description.to_wide_string().as_ptr(),
-            dialog.title.to_wide_string().as_ptr(),
+            wide(&dialog.description).as_ptr(),
+            wide(&dialog.title).as_ptr(),
             style,
         )
     };
@@ -177,7 +177,7 @@ impl crate::FileDialogInterface for PlatformFileDialog {
             }
             let dlg = &*raw;
             dlg.SetOptions(FOS_NOCHANGEDIR | FOS_PATHMUSTEXIST | FOS_FILEMUSTEXIST);
-            let title = dialog.title.as_deref().map(|s| s.to_wide_string());
+            let title = dialog.title.as_deref().map(wide);
             if let Some(ref t) = title {
                 dlg.SetTitle(t.as_ptr());
             }
@@ -228,7 +228,7 @@ impl crate::FileDialogInterface for PlatformFileDialog {
             dlg.SetOptions(
                 FOS_NOCHANGEDIR | FOS_PATHMUSTEXIST | FOS_FILEMUSTEXIST | FOS_ALLOWMULTISELECT,
             );
-            let title = dialog.title.as_deref().map(|s| s.to_wide_string());
+            let title = dialog.title.as_deref().map(wide);
             if let Some(ref t) = title {
                 dlg.SetTitle(t.as_ptr());
             }
@@ -292,7 +292,7 @@ impl crate::FileDialogInterface for PlatformFileDialog {
             }
             let dlg = &*raw;
             dlg.SetOptions(FOS_NOCHANGEDIR | FOS_OVERWRITEPROMPT);
-            let title = dialog.title.as_deref().map(|s| s.to_wide_string());
+            let title = dialog.title.as_deref().map(wide);
             if let Some(ref t) = title {
                 dlg.SetTitle(t.as_ptr());
             }
@@ -301,7 +301,7 @@ impl crate::FileDialogInterface for PlatformFileDialog {
                 dlg.SetFolder(item);
                 (*item).Release();
             }
-            let filename = dialog.filename.as_deref().map(|s| s.to_wide_string());
+            let filename = dialog.filename.as_deref().map(wide);
             if let Some(ref f) = filename {
                 dlg.SetFileName(f.as_ptr());
             }
@@ -313,7 +313,7 @@ impl crate::FileDialogInterface for PlatformFileDialog {
                 .filters
                 .first()
                 .and_then(|f| f.extensions.first())
-                .map(|e| e.to_wide_string());
+                .map(|e| wide(e));
             if let Some(ref e) = default_extension {
                 dlg.SetDefaultExtension(e.as_ptr());
             }
@@ -350,14 +350,14 @@ fn build_com_filters(
     let mut storage: FilterStorage = Vec::new();
     let mut specs: Vec<COMDLG_FILTERSPEC> = Vec::new();
     for f in filters {
-        let name: Box<[u16]> = f.name.to_wide_string().into_boxed_slice();
+        let name: Box<[u16]> = wide(&f.name).into_boxed_slice();
         let pattern = f
             .extensions
             .iter()
             .map(|e| format!("*.{e}"))
             .collect::<Vec<_>>()
             .join(";");
-        let spec: Box<[u16]> = pattern.to_wide_string().into_boxed_slice();
+        let spec: Box<[u16]> = wide(&pattern).into_boxed_slice();
         specs.push(COMDLG_FILTERSPEC {
             pszName: name.as_ptr(),
             pszSpec: spec.as_ptr(),
@@ -369,7 +369,7 @@ fn build_com_filters(
 
 unsafe fn make_shell_item_from_path(path: Option<&PathBuf>) -> Option<*mut IShellItem> {
     let path = path?;
-    let w = path.to_string_lossy().to_string().to_wide_string();
+    let w = wide(&path.to_string_lossy());
     let mut item: *mut IShellItem = null_mut();
     if unsafe {
         SHCreateItemFromParsingName(

@@ -4,8 +4,6 @@
  * SPDX-License-Identifier: MIT
  */
 
-use std::ffi::OsString;
-use std::os::windows::ffi::OsStringExt;
 use std::ptr::null_mut;
 
 use super::headers::*;
@@ -21,7 +19,7 @@ pub(super) unsafe fn handle_file_drop(window_id: crate::WindowId, drop: HDROP) {
         unsafe { DragQueryFileW(drop, index, buffer.as_mut_ptr(), buffer.len() as u32) };
         send_event(crate::Event::Window(
             window_id,
-            WindowEvent::DroppedFile(OsString::from_wide(&buffer[..length as usize]).into()),
+            WindowEvent::DroppedFile(String::from_utf16_lossy(&buffer[..length as usize]).into()),
         ));
     }
     unsafe { DragFinish(drop) };

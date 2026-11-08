@@ -40,14 +40,14 @@ impl PlatformEventLoop {
             #[cfg(feature = "progress_bar")]
             {
                 TASKBAR_BUTTON_CREATED =
-                    RegisterWindowMessageW(wide!("TaskbarButtonCreated").as_ptr());
+                    RegisterWindowMessageW(w!("TaskbarButtonCreated").as_ptr());
             }
 
             enable_high_dpi_awareness();
 
             let mailbox = Arc::new(Mailbox::new());
             let instance = GetModuleHandleW(null());
-            let class = wide!("bwindow-event-loop");
+            let class = w!("bwindow-event-loop");
             let definition = WNDCLASSEXW {
                 cbSize: size_of::<WNDCLASSEXW>() as u32,
                 lpfnWndProc: Some(message_window_proc),
@@ -116,7 +116,7 @@ impl PlatformEventLoop {
 unsafe fn enable_high_dpi_awareness() {
     type SetProcessDpiAwarenessContext = unsafe extern "system" fn(isize) -> BOOL;
 
-    let user32 = unsafe { GetModuleHandleW(wide!("user32.dll").as_ptr()) };
+    let user32 = unsafe { GetModuleHandleW(w!("user32.dll").as_ptr()) };
     if !user32.is_null() {
         let proc = unsafe { GetProcAddress(user32, c"SetProcessDpiAwarenessContext".as_ptr()) };
         if !proc.is_null() {
@@ -141,8 +141,8 @@ pub(super) fn system_theme() -> Theme {
     let status = unsafe {
         RegGetValueW(
             HKEY_CURRENT_USER,
-            wide!("Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize").as_ptr(),
-            wide!("AppsUseLightTheme").as_ptr(),
+            w!("Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize").as_ptr(),
+            w!("AppsUseLightTheme").as_ptr(),
             RRF_RT_REG_DWORD,
             null_mut(),
             &mut apps_use_light_theme as *mut _ as *mut c_void,
