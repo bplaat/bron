@@ -6,12 +6,11 @@
 
 #![allow(unsafe_code)]
 
-use std::ffi::{OsStr, c_void};
+use std::ffi::c_void;
 use std::io;
-use std::os::windows::ffi::OsStrExt;
 use std::ptr::null;
 
-use crate::win32::*;
+use crate::headers::*;
 
 pub(crate) fn is_process_elevated() -> bool {
     let mut token = null::<c_void>().cast_mut();
@@ -68,18 +67,11 @@ pub(crate) fn wait_for_parent_if_requested() {
 
 pub(crate) fn restart() -> io::Result<()> {
     let executable = std::env::current_exe()?;
-    let operation: Vec<u16> = OsStr::new("runas").encode_wide().chain(Some(0)).collect();
-    let executable: Vec<u16> = executable
-        .as_os_str()
-        .encode_wide()
-        .chain(Some(0))
-        .collect();
+    let operation = w!("runas");
+    let executable = wide(&executable.to_string_lossy());
     // SAFETY: GetCurrentProcessId has no preconditions.
     let parameters = format!("--elevated-from {}", unsafe { GetCurrentProcessId() });
-    let parameters: Vec<u16> = OsStr::new(&parameters)
-        .encode_wide()
-        .chain(Some(0))
-        .collect();
+    let parameters = wide(&parameters);
 
     let mut info = ShellExecuteInfoW {
         size: size_of::<ShellExecuteInfoW>() as u32,

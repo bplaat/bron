@@ -21,9 +21,9 @@ use crate::worker::{OPERATION_CLEAN, OPERATION_IDLE, OPERATION_SCAN, WorkerComma
 mod catalog;
 mod elevation;
 mod engine;
+mod headers;
 mod ipc;
 mod pattern;
-mod win32;
 mod worker;
 
 #[derive(Embed)]

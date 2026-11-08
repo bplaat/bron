@@ -5,8 +5,6 @@
  */
 
 use std::collections::HashSet;
-use std::ffi::OsString;
-use std::os::windows::ffi::OsStringExt;
 use std::os::windows::fs::OpenOptionsExt;
 use std::os::windows::io::AsRawHandle;
 use std::path::{Path, PathBuf};
@@ -16,8 +14,8 @@ use std::{fs, io};
 
 use super::CleanupResult;
 use crate::catalog::PathRule;
+use crate::headers::*;
 use crate::pattern;
-use crate::win32::*;
 
 #[derive(Default)]
 pub(super) struct ScanStats {
@@ -300,7 +298,7 @@ fn final_path(file: &fs::File) -> io::Result<PathBuf> {
             return Err(io::Error::last_os_error());
         }
         if length < buffer.len() {
-            return Ok(PathBuf::from(OsString::from_wide(&buffer[..length])));
+            return Ok(PathBuf::from(String::from_utf16_lossy(&buffer[..length])));
         }
         buffer.resize(length, 0);
     }

@@ -15,10 +15,7 @@ use crate::catalog::PathRoot;
 
 #[allow(unsafe_code)]
 fn system_directory() -> Option<PathBuf> {
-    use std::ffi::OsString;
-    use std::os::windows::ffi::OsStringExt;
-
-    use crate::win32::GetSystemDirectoryW;
+    use crate::headers::GetSystemDirectoryW;
 
     let mut buffer = vec![0_u16; 260];
     loop {
@@ -29,7 +26,7 @@ fn system_directory() -> Option<PathBuf> {
         }
         if (length as usize) < buffer.len() {
             buffer.truncate(length as usize);
-            return Some(PathBuf::from(OsString::from_wide(&buffer)));
+            return Some(PathBuf::from(String::from_utf16_lossy(&buffer)));
         }
         buffer.resize(length as usize + 1, 0);
     }
