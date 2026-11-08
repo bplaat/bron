@@ -28,4 +28,4 @@ bwebview = { path = "../../../lib/ui/bwebview" }
 bwindow = { path = "../../../lib/ui/bwindow" }
 
 [build-dependencies]
-winresource = "0.1.34"
+build-utils = { path = "../../../lib/build/build-utils" }

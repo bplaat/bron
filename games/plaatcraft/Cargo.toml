@@ -46,8 +46,8 @@ preferences = { path = "../../lib/sys/preferences" }
 libsqlite3-sys = { version = "0.39", features = ["bundled"] }
 
 [build-dependencies]
+build-utils = { path = "../../lib/build/build-utils" }
 bwebgpu-shader-build = { path = "../../lib/graphics/bwebgpu-shader-build" }
-winresource = "0.1.34"
 
 [lints]
 workspace = true

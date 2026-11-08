@@ -38,5 +38,5 @@ small-http = { version = "0.2.1", default-features = false }
 small-websocket = { path = "../../../lib/net/small-websocket", default-features = false }
 
 [build-dependencies]
+build-utils = { path = "../../../lib/build/build-utils" }
 copy_dir = "0.1.3"
-winresource = "0.1.34"

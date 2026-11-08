@@ -31,8 +31,8 @@ preferences = { path = "../../lib/sys/preferences" }
 sfxr = "0.1.4"
 
 [build-dependencies]
+build-utils = { path = "../../lib/build/build-utils" }
 bwebgpu-shader-build = { path = "../../lib/graphics/bwebgpu-shader-build" }
-winresource = "0.1.34"
 
 [dev-dependencies]
 bwebgpu = { path = "../../lib/graphics/bwebgpu", features = ["image"] }

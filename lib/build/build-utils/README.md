@@ -8,6 +8,9 @@ remain in the consuming build scripts.
 
 The Android module is also used by cargo-bundle and xtask.
 
+The `windows` module generates application manifests and compiles resources through
+winresource; callers select the Windows target condition.
+
 ## Android
 
 Locates the Android SDK, NDK, and a JDK, and compiles a crate's Java sources to dex in its

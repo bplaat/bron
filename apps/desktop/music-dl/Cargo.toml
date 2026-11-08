@@ -35,4 +35,4 @@ threadpool = "2.0"
 enable-ansi-support = "0.3.1"
 
 [build-dependencies]
-winresource = "0.1.34"
+build-utils = { path = "../../../lib/build/build-utils" }
