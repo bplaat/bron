@@ -14,6 +14,7 @@ use objc2::{class, msg_send};
 use super::event_loop::send_event;
 use super::headers::{
     NS_DRAG_OPERATION_COPY, NSFilenamesPboardType, NSPasteboardURLReadingFileURLsOnlyKey, NSString,
+    ns_string,
 };
 use crate::WindowEvent;
 
@@ -99,7 +100,7 @@ pub unsafe fn file_drag_operation(sender: *mut Object) -> u64 {
 pub unsafe fn register_dragged_types(view: *mut Object) {
     unsafe {
         let dragged_types: *mut Object = msg_send![class!(NSMutableArray), array];
-        let _: () = msg_send![dragged_types, addObject:&*NSString::new("public.file-url")];
+        let _: () = msg_send![dragged_types, addObject:ns_string!("public.file-url")];
         let _: () = msg_send![dragged_types, addObject:NSFilenamesPboardType];
         let _: () = msg_send![view, registerForDraggedTypes:dragged_types];
     }
