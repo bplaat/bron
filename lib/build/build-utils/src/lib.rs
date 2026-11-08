@@ -10,8 +10,11 @@ use std::path::{Path, PathBuf};
 
 /// Android SDK, NDK, JDK discovery and Java-to-dex compilation.
 pub mod android;
+mod npm;
 /// Windows application manifest and resource compilation.
 pub mod windows;
+
+pub use npm::npm_build;
 
 /// Finds a shared library by name in the supplied directory order.
 pub fn find_library(search_dirs: &[PathBuf], name: &str) -> Option<PathBuf> {

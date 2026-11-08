@@ -11,6 +11,11 @@ The Android module is also used by cargo-bundle and xtask.
 The `windows` module generates application manifests and compiles resources through
 winresource; callers select the Windows target condition.
 
+`npm_build(workspace, frontend, script)` installs workspace dependencies when needed,
+tracks frontend sources, runs the selected npm script, and copies `dist` into
+`OUT_DIR` under the frontend directory's name. Pass `build-debug` or `build-release`
+from the calling build script according to its build profile.
+
 ## Android
 
 Locates the Android SDK, NDK, and a JDK, and compiles a crate's Java sources to dex in its

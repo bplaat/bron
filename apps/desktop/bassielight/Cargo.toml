@@ -39,4 +39,3 @@ small-websocket = { path = "../../../lib/net/small-websocket", default-features 
 
 [build-dependencies]
 build-utils = { path = "../../../lib/build/build-utils" }
-copy_dir = "0.1.3"

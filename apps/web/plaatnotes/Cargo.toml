@@ -43,5 +43,5 @@ bsql = { version = "0.1.2", features = ["uuid", "chrono", "sqlite-bundled"] }
 small-http = { version = "0.2.1", features = ["tls-vendored"] }
 
 [build-dependencies]
-copy_dir = "0.1.3"
+build-utils = { path = "../../../lib/build/build-utils" }
 openapi-generator = { path = "../../../lib/build/openapi-generator" }

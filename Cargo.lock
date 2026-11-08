@@ -58,7 +58,6 @@ dependencies = [
  "build-utils",
  "bwebview",
  "bwindow",
- "copy_dir",
  "directories",
  "getrandom 0.4.3+patch",
  "local-ip-address",
@@ -184,6 +183,7 @@ dependencies = [
 name = "build-utils"
 version = "0.1.0"
 dependencies = [
+ "copy_dir",
  "winresource",
 ]
 
@@ -1056,8 +1056,8 @@ dependencies = [
  "anyhow",
  "base64",
  "bsql",
+ "build-utils",
  "chrono",
- "copy_dir",
  "dotenvy",
  "from_derive",
  "getrandom 0.4.3+patch",
