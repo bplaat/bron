@@ -262,32 +262,32 @@ impl Value {
 }
 
 // MARK: Binary plist writer
-enum Obj {
+enum Obj<'a> {
     Bool(bool),
     Int(Integer),
     Date(Date),
     Uid(Uid),
     Real(f64),
-    Str(String),
-    Data(Vec<u8>),
+    Str(&'a str),
+    Data(&'a [u8]),
     Array(Vec<usize>),
     Dict(Vec<usize>, Vec<usize>),
 }
 
-struct Collector {
-    objects: Vec<Obj>,
+struct Collector<'a> {
+    objects: Vec<Obj<'a>>,
 }
 
-impl Collector {
-    fn collect(&mut self, value: &Value) -> usize {
+impl<'a> Collector<'a> {
+    fn collect(&mut self, value: &'a Value) -> usize {
         match value {
             Value::Boolean(b) => self.push(Obj::Bool(*b)),
             Value::Integer(n) => self.push(Obj::Int(*n)),
             Value::Date(d) => self.push(Obj::Date(*d)),
             Value::Uid(u) => self.push(Obj::Uid(*u)),
             Value::Real(f) => self.push(Obj::Real(*f)),
-            Value::String(s) => self.push(Obj::Str(s.clone())),
-            Value::Data(d) => self.push(Obj::Data(d.clone())),
+            Value::String(s) => self.push(Obj::Str(s)),
+            Value::Data(d) => self.push(Obj::Data(d)),
             Value::Array(arr) => {
                 let i = self.objects.len();
                 self.objects.push(Obj::Array(vec![]));
@@ -302,7 +302,7 @@ impl Collector {
                 let mut vals = Vec::new();
                 for (k, v) in dict {
                     let k_idx = self.objects.len();
-                    self.objects.push(Obj::Str(k.clone()));
+                    self.objects.push(Obj::Str(k));
                     keys.push(k_idx);
                     vals.push(self.collect(v));
                 }
@@ -312,7 +312,7 @@ impl Collector {
         }
     }
 
-    fn push(&mut self, obj: Obj) -> usize {
+    fn push(&mut self, obj: Obj<'a>) -> usize {
         let i = self.objects.len();
         self.objects.push(obj);
         i
@@ -341,16 +341,16 @@ pub fn to_writer_binary<W: Write>(mut writer: W, value: &Value) -> Result<(), Er
     // Encode objects and track their byte offsets
     let mut offsets: Vec<u64> = Vec::with_capacity(num_objects);
     let mut pos: u64 = 8; // skip magic
-    let mut encoded: Vec<Vec<u8>> = Vec::with_capacity(num_objects);
     for obj in &objects {
-        let bytes = encode_obj(obj, ref_size);
         offsets.push(pos);
-        pos += bytes.len() as u64;
-        encoded.push(bytes);
-    }
-
-    for bytes in &encoded {
-        writer.write_all(bytes).map_err(Error::from)?;
+        let (header, payload) = match obj {
+            Obj::Data(data) => (count_tag(0x40, data.len()), *data),
+            Obj::Str(text) if text.is_ascii() => (count_tag(0x50, text.len()), text.as_bytes()),
+            _ => (encode_obj(obj, ref_size), &[][..]),
+        };
+        writer.write_all(&header).map_err(Error::from)?;
+        writer.write_all(payload).map_err(Error::from)?;
+        pos += (header.len() + payload.len()) as u64;
     }
 
     let offset_table_offset = pos;
@@ -390,7 +390,7 @@ pub fn to_writer_binary<W: Write>(mut writer: W, value: &Value) -> Result<(), Er
     Ok(())
 }
 
-fn encode_obj(obj: &Obj, ref_size: usize) -> Vec<u8> {
+fn encode_obj(obj: &Obj<'_>, ref_size: usize) -> Vec<u8> {
     match obj {
         Obj::Bool(false) => vec![0x08],
         Obj::Bool(true) => vec![0x09],
@@ -426,24 +426,13 @@ fn encode_obj(obj: &Obj, ref_size: usize) -> Vec<u8> {
             v
         }
         Obj::Str(s) => {
-            if s.is_ascii() {
-                let mut v = count_tag(0x50, s.len());
-                v.extend_from_slice(s.as_bytes());
-                v
-            } else {
-                let utf16: Vec<u16> = s.encode_utf16().collect();
-                let mut v = count_tag(0x60, utf16.len());
-                for ch in utf16 {
-                    v.extend_from_slice(&ch.to_be_bytes());
-                }
-                v
+            let mut v = count_tag(0x60, s.encode_utf16().count());
+            for ch in s.encode_utf16() {
+                v.extend_from_slice(&ch.to_be_bytes());
             }
-        }
-        Obj::Data(d) => {
-            let mut v = count_tag(0x40, d.len());
-            v.extend_from_slice(d);
             v
         }
+        Obj::Data(_) => unreachable!("data payloads are written directly"),
         Obj::Array(refs) => {
             let mut v = count_tag(0xA0, refs.len());
             for &r in refs {
