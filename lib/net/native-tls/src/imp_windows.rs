@@ -116,18 +116,64 @@ const SEC_E_OK: i32 = 0;
 const SEC_I_CONTINUE_NEEDED: i32 = 0x00090312u32 as i32;
 const SEC_E_INCOMPLETE_MESSAGE: i32 = 0x80090318u32 as i32;
 
-// "Schannel\0" as UTF-16
-const SCHANNEL_NAME_W: &[u16] = &[
-    b'S' as u16,
-    b'c' as u16,
-    b'h' as u16,
-    b'a' as u16,
-    b'n' as u16,
-    b'n' as u16,
-    b'e' as u16,
-    b'l' as u16,
-    0,
-];
+/// Encode a string as a null-terminated UTF-16 string.
+pub(crate) fn wide(text: &str) -> Vec<u16> {
+    text.encode_utf16().chain([0]).collect()
+}
+
+/// Encode a string literal as a null-terminated UTF-16 string at compile time.
+macro_rules! w {
+    ($text:literal) => {{
+        const TEXT: &str = $text;
+        const LEN: usize = {
+            let bytes = TEXT.as_bytes();
+            let mut len = 1;
+            let mut i = 0;
+            while i < bytes.len() {
+                if bytes[i] & 0xc0 != 0x80 {
+                    len += if bytes[i] >= 0xf0 { 2 } else { 1 };
+                }
+                i += 1;
+            }
+            len
+        };
+        const WIDE: &[u16] = &{
+            let bytes = TEXT.as_bytes();
+            let mut result = [0; LEN];
+            let mut i = 0;
+            let mut j = 0;
+            while i < bytes.len() {
+                let first = bytes[i];
+                let (mut code, extra) = match first {
+                    0..=0x7f => (first as u32, 0),
+                    0xc0..=0xdf => ((first & 0x1f) as u32, 1),
+                    0xe0..=0xef => ((first & 0x0f) as u32, 2),
+                    _ => ((first & 0x07) as u32, 3),
+                };
+                let end = i + extra + 1;
+                i += 1;
+                while i < end {
+                    code = (code << 6) | (bytes[i] & 0x3f) as u32;
+                    i += 1;
+                }
+                assert!(code != 0, "wide string literal contains a null character");
+                if code > 0xffff {
+                    code -= 0x10000;
+                    result[j] = 0xd800 | (code >> 10) as u16;
+                    j += 1;
+                    result[j] = 0xdc00 | (code & 0x3ff) as u16;
+                } else {
+                    result[j] = code as u16;
+                }
+                j += 1;
+            }
+            result
+        };
+        WIDE
+    }};
+}
+
+const SCHANNEL_NAME_W: &[u16] = w!("Schannel");
 
 // MARK: SSPI FFI
 #[link(name = "Secur32")]
@@ -201,10 +247,6 @@ impl Drop for ContextBuffer {
             unsafe { FreeContextBuffer(self.0) };
         }
     }
-}
-
-fn to_utf16(s: &str) -> Vec<u16> {
-    s.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
 fn acquire_cred(accept_invalid_certs: bool) -> Result<CredHandle, Error> {
@@ -452,7 +494,7 @@ impl TlsConnector {
             cred: acquire_cred(self.accept_invalid_certs)?,
             ctx: CtxtHandle::INVALID,
         };
-        let domain = to_utf16(domain);
+        let domain = wide(domain);
         let mut stream = stream;
         let enc_buf = do_handshake(&mut handles, &domain, &mut stream)?;
         let sizes = query_stream_sizes(&mut handles.ctx)?;
