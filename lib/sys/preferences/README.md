@@ -10,8 +10,6 @@ Minimal shared preferences for desktop and mobile, using native value types.
 
 ```rust,no_run
 use preferences::{Preferences, Value};
-
-# fn main() -> std::io::Result<()> {
 let prefs = Preferences::new("nl.bplaat.example")?;
 prefs.set("dark_mode", true)?;
 prefs.set("launches", 42_i64)?;
@@ -19,8 +17,7 @@ prefs.set("volume", 0.75_f32)?;
 prefs.set("username", "Bastiaan")?;
 assert_eq!(prefs.get("dark_mode")?, Some(Value::Bool(true)));
 prefs.remove("username")?;
-# Ok(())
-# }
+# Ok::<(), std::io::Error>(())
 ```
 
 Values are `bool`, `i64`, finite `f32`, or `String`. Floats use Android's native

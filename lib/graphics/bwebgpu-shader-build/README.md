@@ -19,11 +19,10 @@ GPU-neutral AIR, so they do not require separate x86_64 and arm64 slices.
 Add the crate as a build dependency and register shaders in `build.rs`:
 
 ```rust,no_run
-fn main() -> bwebgpu_shader_build::Result<()> {
-    bwebgpu_shader_build::Builder::new()
-        .shader("triangle.wgsl", "src/triangle.wgsl")
-        .compile()
-}
+bwebgpu_shader_build::Builder::new()
+    .shader("triangle.wgsl", "src/triangle.wgsl")
+    .compile()
+    .expect("failed to compile shaders");
 ```
 
 Load the generated target-specific descriptor in the application:

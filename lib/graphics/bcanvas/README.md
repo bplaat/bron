@@ -16,8 +16,6 @@ graphics API: Core Graphics on macOS and iOS, Direct2D on Windows, Cairo on Linu
 ## Getting Started
 
 ```rust,no_run
-# #[cfg(feature = "window")]
-# fn main() {
 use bcanvas::{CanvasBuilder, Color};
 use bwindow::{Event, EventLoopBuilder, WindowBuilder, WindowEvent};
 
@@ -37,9 +35,6 @@ event_loop.run(move |event| {
         }
     }
 });
-# }
-# #[cfg(not(feature = "window"))]
-# fn main() {}
 ```
 
 Drawing state resets each frame. `draw` returns whether its closure ran; handle that
