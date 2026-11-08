@@ -4,9 +4,8 @@
  * SPDX-License-Identifier: MIT
  */
 
-use std::ffi::{OsString, c_void};
+use std::ffi::c_void;
 use std::mem;
-use std::os::windows::ffi::OsStringExt;
 use std::path::PathBuf;
 use std::ptr::null_mut;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -188,7 +187,7 @@ unsafe fn file_drop_paths(data: *mut IDataObject) -> Option<Vec<PathBuf>> {
         let length = unsafe { DragQueryFileW(drop, index, null_mut(), 0) };
         let mut buffer = vec![0; length as usize + 1];
         unsafe { DragQueryFileW(drop, index, buffer.as_mut_ptr(), buffer.len() as u32) };
-        paths.push(OsString::from_wide(&buffer[..length as usize]).into());
+        paths.push(String::from_utf16_lossy(&buffer[..length as usize]).into());
     }
     unsafe { ReleaseStgMedium(&mut medium) };
     Some(paths)

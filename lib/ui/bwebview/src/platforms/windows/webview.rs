@@ -106,28 +106,30 @@ impl PlatformWebview {
                 self.webview_data.clone(),
             );
             let result = create_core_webview2_environment(
-                self.webview_data
-                    .attachment
-                    .windows_data_directory()
-                    .display()
-                    .to_string()
-                    .to_wide_string()
-                    .as_ptr() as *mut _,
+                wide(
+                    &self
+                        .webview_data
+                        .attachment
+                        .windows_data_directory()
+                        .display()
+                        .to_string(),
+                )
+                .as_ptr() as *mut _,
                 completed_handler.as_ptr(),
             );
             if result != S_OK {
                 if result == WEBVIEW2_RUNTIME_NOT_FOUND {
                     if MessageBoxW(
                         self.webview_data.hwnd,
-                        wide!("Microsoft Edge WebView2 Runtime is required to run this application.\n\nDownload it now?").as_ptr(),
-                        wide!("WebView2 Runtime Required").as_ptr(),
+                        w!("Microsoft Edge WebView2 Runtime is required to run this application.\n\nDownload it now?").as_ptr(),
+                        w!("WebView2 Runtime Required").as_ptr(),
                         MB_YESNO | MB_ICONWARNING,
                     ) == IDYES
                     {
                         ShellExecuteW(
                             self.webview_data.hwnd,
-                            wide!("open").as_ptr(),
-                            wide!("https://developer.microsoft.com/microsoft-edge/webview2/#download-section")
+                            w!("open").as_ptr(),
+                            w!("https://developer.microsoft.com/microsoft-edge/webview2/#download-section")
                                 .as_ptr(),
                             null(),
                             null(),
@@ -202,7 +204,7 @@ impl crate::WebviewInterface for PlatformWebview {
                     _ => url.as_ref(),
                 };
                 self.webview_data.trusted_url.set(&url);
-                (*webview).Navigate(url.to_wide_string().as_ptr() as *mut _);
+                (*webview).Navigate(wide(&url).as_ptr() as *mut _);
             }
         }
     }
@@ -233,7 +235,7 @@ impl crate::WebviewInterface for PlatformWebview {
         unsafe {
             if let Some(webview) = self.webview_data.webview.get() {
                 self.webview_data.trusted_url.set(TrustedUrl::HTML_URL);
-                (*webview).NavigateToString(html.as_ref().to_wide_string().as_ptr() as *mut _);
+                (*webview).NavigateToString(wide(html.as_ref()).as_ptr() as *mut _);
             }
         }
     }
@@ -241,10 +243,7 @@ impl crate::WebviewInterface for PlatformWebview {
     fn evaluate_script(&mut self, script: impl AsRef<str>) {
         unsafe {
             if let Some(webview) = self.webview_data.webview.get() {
-                (*webview).ExecuteScript(
-                    script.as_ref().to_wide_string().as_ptr() as *mut _,
-                    null_mut(),
-                );
+                (*webview).ExecuteScript(wide(script.as_ref()).as_ptr() as *mut _, null_mut());
             }
         }
     }
@@ -259,7 +258,7 @@ impl crate::WebviewInterface for PlatformWebview {
                     );
                 }
                 (*webview).AddScriptToExecuteOnDocumentCreated(
-                    script.to_wide_string().as_ptr() as *mut _,
+                    wide(&script).as_ptr() as *mut _,
                     null_mut(),
                 );
             }
@@ -446,7 +445,7 @@ extern "system" fn controller_created(
             &IID_ICoreWebView2Settings2,
             &mut settings2 as *mut _ as *mut *mut c_void,
         );
-        (*settings2).put_UserAgent(useragent.to_wide_string().as_ptr() as *mut _);
+        (*settings2).put_UserAgent(wide(&useragent).as_ptr() as *mut _);
         release_interface(settings2);
         release_interface(settings);
 
@@ -455,9 +454,8 @@ extern "system" fn controller_created(
         {
             for custom_protocol in &_self.custom_protocols {
                 (*webview).AddWebResourceRequestedFilter(
-                    format!("http://{}.localhost/*", custom_protocol.scheme)
-                        .to_wide_string()
-                        .as_ptr() as *mut _,
+                    wide(&format!("http://{}.localhost/*", custom_protocol.scheme)).as_ptr()
+                        as *mut _,
                     COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL,
                 );
             }
@@ -543,10 +541,7 @@ extern "system" fn controller_created(
 
         // Setup ipc and console logging
         let script = super::super::IPC_SCRIPT;
-        (*webview).AddScriptToExecuteOnDocumentCreated(
-            script.to_wide_string().as_ptr() as *mut _,
-            null_mut(),
-        );
+        (*webview).AddScriptToExecuteOnDocumentCreated(wide(script).as_ptr() as *mut _, null_mut());
 
         static VTBL: ICoreWebView2WebMessageReceivedEventHandlerVtbl =
             ICoreWebView2WebMessageReceivedEventHandlerVtbl {
@@ -571,11 +566,11 @@ extern "system" fn controller_created(
                 _ => url.as_str(),
             };
             _self.trusted_url.set(&url);
-            (*webview).Navigate(url.to_wide_string().as_ptr() as *mut _);
+            (*webview).Navigate(wide(&url).as_ptr() as *mut _);
         }
         if let Some(html) = &_self.should_load_html {
             _self.trusted_url.set(TrustedUrl::HTML_URL);
-            (*webview).NavigateToString(html.to_wide_string().as_ptr() as *mut _);
+            (*webview).NavigateToString(wide(html).as_ptr() as *mut _);
         }
 
         S_OK
@@ -583,16 +578,15 @@ extern "system" fn controller_created(
 }
 
 fn show_webview_error(hwnd: HWND, component: &str, result: HRESULT) {
-    let message = format!(
+    let message = wide(&format!(
         "Failed to create the WebView2 {component} (HRESULT 0x{:08X}).",
         result as u32
-    )
-    .to_wide_string();
+    ));
     unsafe {
         MessageBoxW(
             hwnd,
             message.as_ptr(),
-            wide!("WebView2 Error").as_ptr(),
+            w!("WebView2 Error").as_ptr(),
             MB_OK | MB_ICONERROR,
         );
     }
@@ -663,7 +657,7 @@ extern "system" fn new_window_requested(
         if is_external_url(&uri.to_string()) {
             ShellExecuteW(
                 null_mut(),
-                wide!("open").as_ptr(),
+                w!("open").as_ptr(),
                 uri.as_ptr(),
                 null(),
                 null(),
@@ -825,15 +819,16 @@ fn http_response_to_webview2_response(
         (*environment).CreateWebResourceResponse(
             body_stream,
             response.status as i32,
-            response.status.to_string().to_wide_string().as_ptr() as *mut _,
-            response
-                .headers
-                .iter()
-                .map(|(name, value)| format!("{name}: {value}"))
-                .collect::<Vec<_>>()
-                .join("\n")
-                .to_wide_string()
-                .as_ptr() as *mut _,
+            wide(&response.status.to_string()).as_ptr() as *mut _,
+            wide(
+                &response
+                    .headers
+                    .iter()
+                    .map(|(name, value)| format!("{name}: {value}"))
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            )
+            .as_ptr() as *mut _,
             &mut webview2_response,
         );
         (*body_stream).Release();

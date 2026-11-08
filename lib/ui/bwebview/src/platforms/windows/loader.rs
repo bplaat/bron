@@ -10,7 +10,6 @@
 //! WebView2Loader's policy, environment-variable, preview-channel, or packaged-app overrides.
 
 use std::ffi::{OsStr, OsString, c_void};
-use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use std::path::PathBuf;
 use std::ptr::null_mut;
 
@@ -18,8 +17,8 @@ use super::headers::{
     ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler, ICoreWebView2EnvironmentOptions, *,
 };
 
-const STABLE_RUNTIME_KEY: &str =
-    "SOFTWARE\\Microsoft\\EdgeUpdate\\ClientState\\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}";
+const STABLE_RUNTIME_KEY: &[u16] =
+    w!("SOFTWARE\\Microsoft\\EdgeUpdate\\ClientState\\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}");
 
 // ICoreWebView2Settings2 is used unconditionally and first shipped in SDK 1.0.864.35.
 // Newer interfaces used by bwebview are queried conditionally and have fallbacks.
@@ -80,14 +79,13 @@ pub(super) unsafe fn create_core_webview2_environment(
 }
 
 fn load_runtime(runtime_dir: OsString) -> Result<(HMODULE, CreateEnvironment), u32> {
-    let dll_path: Vec<_> = PathBuf::from(runtime_dir)
-        .join("EBWebView")
-        .join(RUNTIME_ARCH)
-        .join("EmbeddedBrowserWebView.dll")
-        .as_os_str()
-        .encode_wide()
-        .chain(Some(0))
-        .collect();
+    let dll_path = wide(
+        &PathBuf::from(runtime_dir)
+            .join("EBWebView")
+            .join(RUNTIME_ARCH)
+            .join("EmbeddedBrowserWebView.dll")
+            .to_string_lossy(),
+    );
 
     let module = unsafe { LoadLibraryW(dll_path.as_ptr()) };
     if module.is_null() {
@@ -111,8 +109,8 @@ fn load_runtime(runtime_dir: OsString) -> Result<(HMODULE, CreateEnvironment), u
 }
 
 fn find_evergreen_runtimes() -> Vec<OsString> {
-    let key = STABLE_RUNTIME_KEY.to_wide_string();
-    let value = "EBWebView".to_wide_string();
+    let key = STABLE_RUNTIME_KEY;
+    let value = w!("EBWebView");
     let mut runtimes = Vec::new();
     for root in [HKEY_LOCAL_MACHINE, HKEY_CURRENT_USER] {
         let mut byte_len = 0;
@@ -148,7 +146,7 @@ fn find_evergreen_runtimes() -> Vec<OsString> {
                 .iter()
                 .position(|&value| value == 0)
                 .unwrap_or(path.len());
-            let runtime = OsString::from_wide(&path[..len]);
+            let runtime = OsString::from(String::from_utf16_lossy(&path[..len]));
             if runtime_api_version(&runtime).is_some_and(|api| api >= MIN_RUNTIME_API_VERSION) {
                 runtimes.push(runtime);
             }
