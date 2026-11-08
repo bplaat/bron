@@ -11,10 +11,11 @@
 use std::time::{Duration, Instant};
 
 use bcanvas::{CanvasRenderingContext2d, Color, FillRule};
+#[cfg(not(any(target_os = "macos", windows)))]
+use imageview_core::draw_checkerboard_clipped;
 use imageview_core::edit::{Selection, Shape};
 use imageview_core::{
-    LoopCount, Media, MediaRenderer, Raster, clamp_magnification, draw_checkerboard,
-    fit_magnification,
+    LoopCount, Media, MediaRenderer, Raster, clamp_magnification, fit_magnification,
 };
 
 use crate::marquee::Marquee;
@@ -415,31 +416,58 @@ impl Viewport {
         (std::mem::replace(&mut self.frame, frame) != frame, next)
     }
 
-    /// Draws the checkerboard filling the visible area and the scrolled media above it.
+    /// Where the shown media is in the visible area: its position and magnified size.
     #[cfg(target_os = "macos")]
-    pub(crate) fn paint(&self, context: &mut CanvasRenderingContext2d<'_>, dark: bool) {
-        self.draw(context, dark, self.scroll);
-    }
-
-    /// Draws the checkerboard and media into a native scrolled document as large as the scroll bar
-    /// lengths, which scrolls itself.
-    #[cfg(not(any(target_os = "macos", windows)))]
-    pub(crate) fn paint_document(&self, context: &mut CanvasRenderingContext2d<'_>, dark: bool) {
-        self.draw(context, dark, (0.0, 0.0));
-    }
-
-    fn draw(&self, context: &mut CanvasRenderingContext2d<'_>, dark: bool, scroll: (f64, f64)) {
-        draw_checkerboard(context, context.width(), context.height(), dark);
+    pub(crate) fn media_rect(&self) -> (f64, f64, f64, f64) {
+        let (x, y) = self.origin(self.scroll);
         let (width, height) = self.content();
-        let origin = (
+        (x, y, width, height)
+    }
+
+    /// Draws the shown media into a canvas that starts at a position of the visible area, for a
+    /// platform that shows a bitmap of a part of it.
+    #[cfg(target_os = "macos")]
+    pub(crate) fn paint_media(
+        &self,
+        context: &mut CanvasRenderingContext2d<'_>,
+        (x, y): (f64, f64),
+    ) {
+        let origin = self.origin(self.scroll);
+        self.draw_media(context, (origin.0 - x, origin.1 - y));
+    }
+
+    /// Draws the part inside `clip` of the checkerboard and media of a native scrolled document as
+    /// large as the scroll bar lengths, which scrolls itself.
+    #[cfg(not(any(target_os = "macos", windows)))]
+    pub(crate) fn paint_document(
+        &self,
+        context: &mut CanvasRenderingContext2d<'_>,
+        dark: bool,
+        clip: (f32, f32, f32, f32),
+    ) {
+        draw_checkerboard_clipped(context, (context.width(), context.height()), clip, dark);
+        self.draw_media(context, self.origin((0.0, 0.0)));
+    }
+
+    /// Draws the crop rectangle or selection over the document drawn by `paint_document`.
+    #[cfg(not(any(target_os = "macos", windows)))]
+    pub(crate) fn paint_document_marks(&self, context: &mut CanvasRenderingContext2d<'_>) {
+        self.draw_marks(context, self.origin((0.0, 0.0)));
+    }
+
+    // Where the media is drawn in a canvas scrolled to a position.
+    fn origin(&self, scroll: (f64, f64)) -> (f64, f64) {
+        (
             self.offset(Axis::Horizontal) - scroll.0,
             self.offset(Axis::Vertical) - scroll.1,
-        );
-        // A preview is a still image, whichever frame the media is at.
-        let (renderer, frame) = self
-            .preview
-            .as_ref()
-            .map_or((&self.renderer, self.frame), |preview| (preview, 0));
+        )
+    }
+
+    // Draws the shown media at its magnified size from an origin.
+    #[cfg(not(windows))]
+    fn draw_media(&self, context: &mut CanvasRenderingContext2d<'_>, origin: (f64, f64)) {
+        let (renderer, frame) = self.drawn();
+        let (width, height) = self.content();
         renderer.draw(
             context,
             frame,
@@ -450,57 +478,32 @@ impl Viewport {
                 height as f32,
             ),
         );
-        self.draw_marks(context, origin);
     }
 
-    /// Draws the crop rectangle or selection over the visible area, for a platform that draws the
-    /// media itself.
-    #[cfg(windows)]
-    pub(crate) fn paint_marks(&self, context: &mut CanvasRenderingContext2d<'_>) {
-        let origin = Axis::BOTH.map(|axis| self.offset(axis) - axis.of(self.scroll));
-        self.draw_marks(context, (origin[0], origin[1]));
-    }
-
-    /// What a platform that draws the media itself shows: the preview or the media, with its
-    /// frame.
-    #[cfg(windows)]
+    /// What is shown: the preview or the media, with its frame. A preview is a still image,
+    /// whichever frame the media is at.
     pub(crate) fn drawn(&self) -> (&MediaRenderer, usize) {
-        // A preview is a still image, whichever frame the media is at.
         self.preview
             .as_ref()
             .map_or((&self.renderer, self.frame), |preview| (preview, 0))
     }
 
-    /// Whether the shown raster needs sharp pixels at this display scale.
-    #[cfg(windows)]
-    pub(crate) fn has_pixels(&self, scale: f32) -> bool {
-        let (renderer, _) = self.drawn();
-        let Media::Raster(raster) = renderer.media() else {
-            return false;
-        };
-        self.content().0 * f64::from(scale) >= 2.0 * f64::from(raster.width)
+    /// Draws the crop rectangle or selection over the visible area, for a platform that draws the
+    /// media itself.
+    #[cfg(any(target_os = "macos", windows))]
+    pub(crate) fn paint_marks(&self, context: &mut CanvasRenderingContext2d<'_>) {
+        self.draw_marks(context, self.origin(self.scroll));
     }
 
-    /// Draws enlarged raster pixels into the visible area, bypassing XAML image scaling.
-    #[cfg(windows)]
-    pub(crate) fn paint_pixels(&self, context: &mut CanvasRenderingContext2d<'_>) {
-        let (renderer, frame) = self.drawn();
-        let (width, height) = self.content();
-        let origin = Axis::BOTH.map(|axis| self.offset(axis) - axis.of(self.scroll));
-        renderer.draw(
-            context,
-            frame,
-            (
-                origin[0] as f32,
-                origin[1] as f32,
-                width as f32,
-                height as f32,
-            ),
-        );
+    /// Whether the shown media is a bitmap enlarged enough at this display scale to be drawn
+    /// with sharp pixels.
+    #[cfg(any(target_os = "macos", windows))]
+    pub(crate) fn has_pixels(&self, scale: f32) -> bool {
+        self.drawn().0.is_pixelated(self.content().0 as f32 * scale)
     }
 
     /// Whether there is a crop rectangle or selection to draw.
-    #[cfg(windows)]
+    #[cfg(any(target_os = "macos", windows))]
     pub(crate) const fn has_marks(&self) -> bool {
         self.crop.is_some() || self.selection.is_some()
     }
@@ -693,8 +696,7 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn display_pixels_stay_sharp_when_zoomed_and_scrolled() {
-        use bcanvas::OffscreenCanvas;
+    fn followed_rasters_are_pixelated_when_enlarged() {
         use imageview_core::Frame;
         use std::sync::Arc;
 
@@ -710,27 +712,6 @@ mod tests {
         let mut viewport = Viewport::new(Some(media), (4.0, 2.0));
         viewport.follow((4.0, 2.0), 4.0, (2.0, 0.0));
         assert!(viewport.has_pixels(1.0));
-        let mut canvas = OffscreenCanvas::new(4, 2);
-        canvas.draw(|context| viewport.paint_pixels(context));
-        for row in canvas.pixels().chunks(4 * 4) {
-            assert_eq!(
-                row.chunks(4).map(|pixel| pixel[0]).collect::<Vec<_>>(),
-                [0, 0, 255, 255]
-            );
-        }
-        for scale in [1.25, 1.5, 1.75, 2.625] {
-            let mut canvas = OffscreenCanvas::with_scale_factor(4, 2, scale);
-            canvas.draw(|context| viewport.paint_pixels(context));
-            assert!(
-                canvas.pixels().chunks_exact(4).all(|pixel| {
-                    (pixel[0] == 0 || pixel[0] == 255)
-                        && pixel[0] == pixel[1]
-                        && pixel[1] == pixel[2]
-                        && pixel[3] == 255
-                }),
-                "pixels must stay sharp at display scale {scale}"
-            );
-        }
         viewport.follow((4.0, 2.0), 1.0, (0.0, 0.0));
         assert!(!viewport.has_pixels(1.0));
         assert!(viewport.has_pixels(2.0));

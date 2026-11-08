@@ -55,15 +55,20 @@ impl MediaRenderer {
                 // Enlarged pixels are drawn as sharp squares, like those of a small icon or a
                 // zoomed in photo, shrunk bitmaps are smoothed.
                 context.save();
-                context.set_image_smoothing_enabled(!is_pixelated(
-                    width * context.scale_factor(),
-                    raster.width,
-                ));
+                context.set_image_smoothing_enabled(
+                    !self.is_pixelated(width * context.scale_factor()),
+                );
                 context.draw_image(image, x, y, width, height);
                 context.restore();
             }
             Media::Vector(vector) => context.draw_canvas(vector, x, y, width, height),
         }
+    }
+
+    /// Whether the media is a bitmap drawn `device_width` device pixels wide with its pixels as
+    /// sharp squares, instead of smoothed.
+    pub fn is_pixelated(&self, device_width: f32) -> bool {
+        matches!(&self.media, Media::Raster(raster) if is_pixelated(device_width, raster.width))
     }
 
     /// Draws the media scaled to fit inside a rectangle, centered and keeping its shape.
@@ -143,22 +148,33 @@ pub fn draw_checkerboard(
     height: f32,
     dark: bool,
 ) {
-    let (base, alternate) = if dark {
-        (CanvasColor::rgb(41, 41, 43), CanvasColor::rgb(59, 59, 64))
-    } else {
-        (
-            CanvasColor::rgb(240, 240, 240),
-            CanvasColor::rgb(219, 219, 219),
-        )
-    };
-    context.set_fill_style(base);
-    context.fill_rect(0.0, 0.0, width, height);
-    context.set_fill_style(alternate);
+    draw_checkerboard_clipped(context, (width, height), (0.0, 0.0, width, height), dark);
+}
+
+/// Draws only the part of the checkerboard of an area inside a clip rectangle, for an area much
+/// larger than what is shown, like a scrolled document.
+pub fn draw_checkerboard_clipped(
+    context: &mut CanvasRenderingContext2d<'_>,
+    (width, height): (f32, f32),
+    (clip_x, clip_y, clip_width, clip_height): (f32, f32, f32, f32),
+    dark: bool,
+) {
+    let ([red, green, blue], alternate) = checker_colors(dark);
+    context.set_fill_style(CanvasColor::rgb(red, green, blue));
+    context.fill_rect(clip_x, clip_y, clip_width, clip_height);
+    // The alternate tiles are filled as one path, which is a single draw call instead of one
+    // for each tile.
+    context.begin_path();
     let (half_columns, half_rows) = checker_grid(width, height);
-    for row in -half_rows..half_rows {
-        for column in -half_columns..half_columns {
+    let tiles = |start: f32, length: f32, center: f32, half: i32| {
+        let first = ((start - center) / TILE).floor() as i32;
+        let last = ((start + length - center) / TILE).ceil() as i32;
+        first.max(-half)..last.min(half)
+    };
+    for row in tiles(clip_y, clip_height, height / 2.0, half_rows) {
+        for column in tiles(clip_x, clip_width, width / 2.0, half_columns) {
             if tile_is_filled(row, column) {
-                context.fill_rect(
+                context.rect(
                     width / 2.0 + column as f32 * TILE,
                     height / 2.0 + row as f32 * TILE,
                     TILE,
@@ -166,6 +182,62 @@ pub fn draw_checkerboard(
                 );
             }
         }
+    }
+    let [red, green, blue] = alternate;
+    context.set_fill_style(CanvasColor::rgb(red, green, blue));
+    context.fill();
+}
+
+/// The tiles of the checkerboard of an area as an image with one pixel per tile, for a platform
+/// that enlarges it `TILE` times without smoothing on the GPU instead of drawing each tile. The
+/// image is centered in the area, like the tiles of `draw_checkerboard`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CheckerTiles {
+    /// The number of tile columns, as many on each side of the center.
+    pub columns: u32,
+    /// The number of tile rows, as many on each side of the center.
+    pub rows: u32,
+    dark: bool,
+}
+
+impl CheckerTiles {
+    /// The width and height of a single tile.
+    pub const TILE: f32 = TILE;
+
+    /// The tiles covering an area, in light or dark colors.
+    pub fn new(width: f32, height: f32, dark: bool) -> Self {
+        let (half_columns, half_rows) = checker_grid(width, height);
+        Self {
+            columns: 2 * half_columns as u32,
+            rows: 2 * half_rows as u32,
+            dark,
+        }
+    }
+
+    /// One opaque BGRA pixel for each tile, row by row from the top.
+    pub fn pixels(&self) -> Vec<u8> {
+        let (base, alternate) = checker_colors(self.dark);
+        let (half_columns, half_rows) = ((self.columns / 2) as i32, (self.rows / 2) as i32);
+        (-half_rows..half_rows)
+            .flat_map(|row| (-half_columns..half_columns).map(move |column| (row, column)))
+            .flat_map(|(row, column)| {
+                let [red, green, blue] = if tile_is_filled(row, column) {
+                    alternate
+                } else {
+                    base
+                };
+                [blue, green, red, 255]
+            })
+            .collect()
+    }
+}
+
+// Returns the base and alternate tile colors of the light or dark checkerboard.
+const fn checker_colors(dark: bool) -> ([u8; 3], [u8; 3]) {
+    if dark {
+        ([41, 41, 43], [59, 59, 64])
+    } else {
+        ([240, 240, 240], [219, 219, 219])
     }
 }
 
@@ -251,6 +323,40 @@ mod tests {
             assert!(tile_is_filled(0, 0));
             assert!(!tile_is_filled(0, -1));
             assert!(tile_is_filled(-1, -1));
+        }
+    }
+
+    #[test]
+    fn checkerboard_alternates_tiles_from_the_center() {
+        let mut canvas = OffscreenCanvas::new(48, 48);
+        canvas.draw(|context| draw_checkerboard(context, 48.0, 48.0, false));
+        let pixels = canvas.pixels();
+        let red = |x: usize, y: usize| pixels[(y * 48 + x) * 4 + 2];
+        // The tile right below the center has the alternate color, its neighbors the base one.
+        assert_eq!(red(30, 30), 219);
+        assert_eq!(red(18, 30), 240);
+        assert_eq!(red(30, 18), 240);
+        assert_eq!(red(18, 18), 219);
+        // A clipped part draws the same tiles there.
+        let mut clipped = OffscreenCanvas::new(48, 48);
+        clipped.draw(|context| {
+            draw_checkerboard_clipped(context, (48.0, 48.0), (24.0, 12.0, 24.0, 24.0), false);
+        });
+        let clipped = clipped.pixels();
+        for (x, y) in [(30, 18), (30, 30), (42, 30)] {
+            assert_eq!(clipped[(y * 48 + x) * 4 + 2], red(x, y));
+        }
+        assert_eq!(clipped[(6 * 48 + 6) * 4 + 3], 0);
+        // The tile image has a pixel for each of the same tiles.
+        let tiles = CheckerTiles::new(48.0, 48.0, false);
+        assert_eq!((tiles.columns, tiles.rows), (4, 4));
+        let tile_pixels = tiles.pixels();
+        for (x, y) in [(30, 30), (18, 30), (30, 18), (18, 18)] {
+            let tile = y / TILE as usize * 4 + x / TILE as usize;
+            assert_eq!(
+                &tile_pixels[tile * 4..][..4],
+                [red(x, y), red(x, y), red(x, y), 255]
+            );
         }
     }
 
