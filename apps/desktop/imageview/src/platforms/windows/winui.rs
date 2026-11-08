@@ -115,40 +115,40 @@ const ACTIONS: &[(&str, &str)] = &[
 const TOGGLES: [&str; 3] = ["SelectWhole", "SelectRectangle", "SelectEllipse"];
 
 // The elements shown while viewing and while editing.
-const VIEW_ITEMS: [&str; 2] = ["ViewStart", "ViewEnd"];
-const EDIT_ITEMS: [&str; 2] = ["EditStart", "EditEnd"];
+const VIEW_ITEMS: [&[u16]; 2] = [w!("ViewStart"), w!("ViewEnd")];
+const EDIT_ITEMS: [&[u16]; 2] = [w!("EditStart"), w!("EditEnd")];
 
 // The edit buttons that always show, and the groups that move to the More menu when the header
 // bar is too narrow, the first ones first, with their items in that menu. The menu lists them in
 // the order of the header bar, a separator shows with the group that needs it, so the menu
 // never starts or ends with one.
-const EDIT_FIXED: [&str; 3] = ["HistoryGroup", "Filters", "Done"];
-const OVERFLOW: [(&str, &[&str]); 3] = [
+const EDIT_FIXED: [&[u16]; 3] = [w!("HistoryGroup"), w!("Filters"), w!("Done")];
+const OVERFLOW: [(&[u16], &[&[u16]]); 3] = [
     (
-        "TransformGroup",
+        w!("TransformGroup"),
         &[
-            "MoreRotateLeft",
-            "MoreRotateRight",
-            "MoreFlipHorizontal",
-            "MoreFlipVertical",
+            w!("MoreRotateLeft"),
+            w!("MoreRotateRight"),
+            w!("MoreFlipHorizontal"),
+            w!("MoreFlipVertical"),
         ],
     ),
     (
-        "SelectGroup",
+        w!("SelectGroup"),
         &[
-            "MoreSelectWhole",
-            "MoreSelectRectangle",
-            "MoreSelectEllipse",
-            "MoreSelectSeparator",
+            w!("MoreSelectWhole"),
+            w!("MoreSelectRectangle"),
+            w!("MoreSelectEllipse"),
+            w!("MoreSelectSeparator"),
         ],
     ),
     (
-        "ToolsGroup",
+        w!("ToolsGroup"),
         &[
-            "MoreTransformSeparator",
-            "MoreCrop",
-            "MoreResize",
-            "MoreAdjust",
+            w!("MoreTransformSeparator"),
+            w!("MoreCrop"),
+            w!("MoreResize"),
+            w!("MoreAdjust"),
         ],
     ),
 ];
@@ -1068,14 +1068,14 @@ impl Island {
         let overlay = find(w!("Overlay"), &IID_IIMAGE).map_err(failed("window content"))?;
         let tool = find(w!("Tool"), &IID_IBORDER).map_err(failed("window content"))?;
         let panels = [
-            ("PagesPanel", "PagesHost", "SidebarButton"),
-            ("InfoPanel", "InfoHost", "InfoButton"),
+            (w!("PagesPanel"), w!("PagesHost"), w!("SidebarButton")),
+            (w!("InfoPanel"), w!("InfoHost"), w!("InfoButton")),
         ]
         .map(|(panel, host, button)| -> Result<PanelElements> {
             Ok(PanelElements {
-                panel: find(&wide(panel), &IID_IUI_ELEMENT)?,
-                host: find(&wide(host), &IID_IBORDER)?,
-                button: find(&wide(button), &IID_ITOGGLE_BUTTON)?,
+                panel: find(panel, &IID_IUI_ELEMENT)?,
+                host: find(host, &IID_IBORDER)?,
+                button: find(button, &IID_ITOGGLE_BUTTON)?,
             })
         });
         let [pages_panel, info_panel] = panels;
@@ -1084,10 +1084,10 @@ impl Island {
             info_panel.map_err(failed("window content"))?,
         ];
         let spinner = find(w!("Spinner"), &IID_IUI_ELEMENT).map_err(failed("window content"))?;
-        let elements = |names: &[&str]| {
+        let elements = |names: &[&[u16]]| {
             names
                 .iter()
-                .map(|name| find(&wide(name), &IID_IUI_ELEMENT))
+                .map(|name| find(name, &IID_IUI_ELEMENT))
                 .collect::<Result<Vec<_>>>()
         };
         let view_items = elements(&VIEW_ITEMS).map_err(failed("window content"))?;
@@ -1118,14 +1118,14 @@ impl Island {
         .map_err(failed("title bar"))?;
         let fixed = EDIT_FIXED
             .iter()
-            .map(|name| find(&wide(name), &IID_IFRAMEWORK_ELEMENT))
+            .map(|name| find(name, &IID_IFRAMEWORK_ELEMENT))
             .collect::<Result<Vec<_>>>()
             .map_err(failed("window content"))?;
         let overflow = OVERFLOW
             .iter()
             .map(|(group, items)| {
                 Ok(Overflow {
-                    group: find(&wide(group), &IID_IFRAMEWORK_ELEMENT)?,
+                    group: find(group, &IID_IFRAMEWORK_ELEMENT)?,
                     items: elements(items)?,
                     width: Cell::new(0.0),
                     hidden: Cell::new(false),
