@@ -300,6 +300,11 @@ impl Bitmap {
     pub fn data(&self) -> &[u8] {
         &self.data
     }
+
+    /// Consumes the bitmap and returns its row-major, straight-alpha sRGB RGBA8 pixels.
+    pub fn into_data(self) -> Vec<u8> {
+        self.data
+    }
 }
 
 /// A complete displayed frame, after animation blending and before disposal.
@@ -395,6 +400,14 @@ impl Image {
     /// Returns the largest frame's RGBA8 pixels.
     pub fn pixels(&self) -> &[u8] {
         self.largest_frame().pixels()
+    }
+
+    /// Consumes the image and returns the largest frame's RGBA8 pixels.
+    pub fn into_pixels(mut self) -> Vec<u8> {
+        self.frames
+            .swap_remove(self.largest_frame)
+            .bitmap
+            .into_data()
     }
 
     /// Returns whether the image has animation frames or playback metadata.

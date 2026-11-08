@@ -221,22 +221,19 @@ impl Request {
         client_addr: SocketAddr,
     ) -> Result<Request, InvalidRequestError> {
         // Read first line
-        let (method, path, version) = {
-            let line = read_http_line(reader, "first line")?;
-            let parts = line.trim_end_matches("\r\n").split(' ').collect::<Vec<_>>();
-            let [method, path, version] = parts.as_slice() else {
-                return Err(InvalidRequestError("Invalid request line".to_string()));
-            };
-            (
-                method
-                    .parse()
-                    .map_err(|_| InvalidRequestError("Can't parse method".to_string()))?,
-                (*path).to_string(),
-                version
-                    .parse()
-                    .map_err(|_| InvalidRequestError("Can't parse HTTP version".to_string()))?,
-            )
+        let line = read_http_line(reader, "first line")?;
+        let mut parts = line.trim_end_matches("\r\n").split(' ');
+        let (Some(method), Some(path), Some(version), None) =
+            (parts.next(), parts.next(), parts.next(), parts.next())
+        else {
+            return Err(InvalidRequestError("Invalid request line".to_string()));
         };
+        let method: Method = method
+            .parse()
+            .map_err(|_| InvalidRequestError("Can't parse method".to_string()))?;
+        let version: Version = version
+            .parse()
+            .map_err(|_| InvalidRequestError("Can't parse HTTP version".to_string()))?;
 
         // Read headers
         let mut headers = HeaderMap::new();
@@ -271,8 +268,16 @@ impl Request {
 
         // Read body
         let mut body = None;
-        let transfer_encoding = headers.get("Transfer-Encoding").map(|s| s.to_lowercase());
-        if transfer_encoding.as_deref() == Some("chunked") {
+        let chunked = match headers.get("Transfer-Encoding") {
+            Some(encoding) if encoding.eq_ignore_ascii_case("chunked") => true,
+            Some(_) => {
+                return Err(InvalidRequestError(
+                    "Unsupported Transfer-Encoding".to_string(),
+                ));
+            }
+            None => false,
+        };
+        if chunked {
             let mut chunks: Vec<u8> = Vec::new();
             loop {
                 let size_line = read_http_line(reader, "chunk size")?;
@@ -304,10 +309,6 @@ impl Request {
                 }
             }
             body = Some(chunks);
-        } else if transfer_encoding.is_some() {
-            return Err(InvalidRequestError(
-                "Unsupported Transfer-Encoding".to_string(),
-            ));
         } else if let Some(content_length) = headers.get("Content-Length") {
             let content_length = content_length
                 .parse()
@@ -510,18 +511,12 @@ impl Request {
         }
 
         // Write request
-        let path = self.url.path();
-        let path = if let Some(query) = self.url.query() {
-            format!("{path}?{query}")
-        } else {
-            path.to_string()
-        };
-        _ = write!(stream, "{} {} HTTP/1.1\r\n", self.method, path);
-        for (name, value) in &self.headers {
-            let safe_name = name.replace(['\r', '\n'], "");
-            let safe_value = value.replace(['\r', '\n'], "");
-            _ = write!(stream, "{safe_name}: {safe_value}\r\n");
+        _ = write!(stream, "{} {}", self.method, self.url.path());
+        if let Some(query) = self.url.query() {
+            _ = write!(stream, "?{query}");
         }
+        _ = write!(stream, " HTTP/1.1\r\n");
+        _ = self.headers.write_to(stream, "\r\n");
         _ = write!(stream, "\r\n");
         if let Some(body) = &self.body {
             _ = stream.write_all(body);

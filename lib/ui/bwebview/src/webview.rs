@@ -37,7 +37,7 @@ impl TrustedUrl {
     pub(crate) const HTML_URL: &str = "about:blank";
 
     pub(crate) fn set(&self, url: &str) {
-        *self.0.borrow_mut() = url.to_string();
+        url.clone_into(&mut self.0.borrow_mut());
     }
 
     pub(crate) fn allows(&self, url: &str) -> bool {
@@ -179,7 +179,7 @@ impl<'a> WebviewBuilder<'a> {
             self = self.with_custom_protocol("app", move |req| {
                 let mut path = req.url.path().to_string();
                 if path.ends_with('/') {
-                    path = format!("{path}index.html");
+                    path.push_str("index.html");
                 }
 
                 if let Some(handle) = &handler
@@ -258,16 +258,19 @@ impl Webview {
 
     /// Send IPC message
     pub fn send_ipc_message(&mut self, message: impl AsRef<str>) {
-        let json = json_string(message.as_ref());
-        self.evaluate_script(format!(
-            "window.ipc.dispatchEvent(new MessageEvent('message',{{data:{json}}}));",
-        ));
+        const PREFIX: &str = "window.ipc.dispatchEvent(new MessageEvent('message',{data:";
+        const SUFFIX: &str = "}));";
+        let message = message.as_ref();
+        let mut script = String::with_capacity(PREFIX.len() + message.len() + 2 + SUFFIX.len());
+        script.push_str(PREFIX);
+        push_json_string(&mut script, message);
+        script.push_str(SUFFIX);
+        self.evaluate_script(script);
     }
 }
 
-/// Encode a string as a JSON string literal that is also safe inside a JavaScript script
-fn json_string(value: &str) -> String {
-    let mut json = String::with_capacity(value.len() + 2);
+/// Append a string as a JSON string literal that is also safe inside a JavaScript script
+fn push_json_string(json: &mut String, value: &str) {
     json.push('"');
     for c in value.chars() {
         match c {
@@ -283,13 +286,18 @@ fn json_string(value: &str) -> String {
         }
     }
     json.push('"');
-    json
 }
 
 // MARK: Tests
 #[cfg(test)]
 mod test {
     use super::*;
+
+    fn json_string(value: &str) -> String {
+        let mut json = String::new();
+        push_json_string(&mut json, value);
+        json
+    }
 
     #[test]
     fn test_json_string() {

@@ -723,7 +723,7 @@ mod tests {
 
     #[test]
     fn previews_scale_lengths_in_pixels() {
-        let picture = Picture::new(64, 32, vec![255; 64 * 32 * 4]);
+        let picture = Arc::new(Picture::new(64, 32, vec![255; 64 * 32 * 4]));
         let (proxy, scale) = picture.proxy(16);
         assert_eq!((proxy.width, proxy.height, scale), (16, 8, 0.25));
         assert_eq!(picture.proxy(100).1, 1.0);
@@ -734,7 +734,7 @@ mod tests {
             inverted: false,
         };
         // Blocks of 8 pixels are 2 pixels on the proxy, only in its left half.
-        let mut checkered = proxy.clone();
+        let mut checkered = Picture::clone(&proxy);
         for (index, pixel) in checkered.pixels.chunks_mut(4).enumerate() {
             if (index % 16 + index / 16) % 2 == 0 {
                 pixel[..3].fill(0);

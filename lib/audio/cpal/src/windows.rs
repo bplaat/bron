@@ -362,6 +362,7 @@ impl Device {
 
 // MARK: Stream
 enum Service {
+    /// The samples buffer only holds silence, for packets the device marks as silent
     Capture(Com<sys::IAudioCaptureClientVtbl>, InputCallback, Vec<f32>),
     Render(Com<sys::IAudioRenderClientVtbl>, OutputCallback),
 }
@@ -497,7 +498,7 @@ impl Wasapi {
     fn capture(
         capture: &Com<sys::IAudioCaptureClientVtbl>,
         data: &mut InputCallback,
-        samples: &mut Vec<f32>,
+        silence: &mut Vec<f32>,
         channels: usize,
     ) -> Result<(), Error> {
         let vtable = capture.vtable();
@@ -512,9 +513,8 @@ impl Wasapi {
             let mut buffer = ptr::null_mut();
             let mut frames = 0;
             let mut flags = 0;
-            samples.clear();
             // SAFETY: the capture client returns a buffer of `frames` frames of the stream format,
-            // which is copied before it is released.
+            // which is passed to the callback before it is released.
             unsafe {
                 check((vtable.GetBuffer)(
                     capture.as_ptr(),
@@ -525,18 +525,15 @@ impl Wasapi {
                     ptr::null_mut(),
                 ))?;
                 let length = frames as usize * channels;
-                if flags & sys::AUDCLNT_BUFFERFLAGS_SILENT == 0 {
-                    samples.extend_from_slice(std::slice::from_raw_parts(
-                        buffer.cast::<f32>(),
-                        length,
-                    ));
-                } else {
-                    samples.resize(length, 0.0);
+                if length > 0 {
+                    if flags & sys::AUDCLNT_BUFFERFLAGS_SILENT == 0 {
+                        data(std::slice::from_raw_parts(buffer.cast::<f32>(), length));
+                    } else {
+                        silence.resize(length, 0.0);
+                        data(silence);
+                    }
                 }
                 check((vtable.ReleaseBuffer)(capture.as_ptr(), frames))?;
-            }
-            if !samples.is_empty() {
-                data(samples);
             }
         }
     }
@@ -575,8 +572,8 @@ impl Transfer for Wasapi {
             return Ok(());
         }
         match &mut self.service {
-            Service::Capture(capture, data, samples) => {
-                Self::capture(capture, data, samples, self.channels)
+            Service::Capture(capture, data, silence) => {
+                Self::capture(capture, data, silence, self.channels)
             }
             Service::Render(render, data) => Self::render(
                 &self.client,

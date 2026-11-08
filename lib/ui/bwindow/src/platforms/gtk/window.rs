@@ -83,7 +83,7 @@ impl PlatformWindow {
             if builder.allow_file_drop {
                 super::file_drop::gtk_connect_file_drop(window.cast(), host.event_sender());
             }
-            let title = CString::new(builder.title.clone()).expect("Can't convert to CString");
+            let title = CString::new(builder.title.as_str()).expect("Can't convert to CString");
             gtk_window_set_title(window, title.as_ptr());
             gtk_window_set_default_size(
                 window,

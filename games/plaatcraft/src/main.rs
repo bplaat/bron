@@ -1323,7 +1323,7 @@ impl Game {
                     body,
                     others,
                 } => {
-                    world.others.update(others);
+                    world.others.update(&others);
                     state = Some((sequence, body));
                 }
                 protocol::Response::Chat { name, text } => self.chat.push(Some(name), text),

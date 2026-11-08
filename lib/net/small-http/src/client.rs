@@ -165,11 +165,13 @@ impl Client {
         let res = Response::read_from_buffered_stream(&mut stream)
             .map_err(|e| FetchError(e.to_string()))?;
 
-        // Return connection
-        self.connection_pool
-            .lock()
-            .expect("Can't lock connection pool")
-            .return_connection(&conn_key, stream);
+        // Return connection, unless the server closes it
+        if !header_contains_close(res.headers.get("Connection")) {
+            self.connection_pool
+                .lock()
+                .expect("Can't lock connection pool")
+                .return_connection(conn_key, stream);
+        }
         Ok(res)
     }
 }
@@ -180,6 +182,14 @@ fn socket_address(host: &str, port: u16) -> String {
     } else {
         format!("{host}:{port}")
     }
+}
+
+fn header_contains_close(connection: Option<&str>) -> bool {
+    connection.is_some_and(|value| {
+        value
+            .split(',')
+            .any(|token| token.trim().eq_ignore_ascii_case("close"))
+    })
 }
 
 // MARK: ConnectionPool
@@ -200,11 +210,8 @@ impl ConnectionPool {
         Ok(BufReader::new(MaybeHttpsStream::connect(url)?))
     }
 
-    fn return_connection(&mut self, key: &str, conn: BufReader<MaybeHttpsStream>) {
-        self.connections
-            .entry(key.to_string())
-            .or_default()
-            .push(conn);
+    fn return_connection(&mut self, key: String, conn: BufReader<MaybeHttpsStream>) {
+        self.connections.entry(key).or_default().push(conn);
     }
 }
 
@@ -226,6 +233,14 @@ mod test {
 
         assert_eq!(request.headers.get("X-Test"), Some("request"));
         assert_eq!(request.headers.get_all("x-test").count(), 1);
+    }
+
+    #[test]
+    fn test_connection_close_is_detected() {
+        assert!(header_contains_close(Some("close")));
+        assert!(header_contains_close(Some("Upgrade, Close")));
+        assert!(!header_contains_close(Some("keep-alive")));
+        assert!(!header_contains_close(None));
     }
 
     #[test]

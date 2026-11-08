@@ -114,7 +114,13 @@ fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
             impl #name {
                 /// Get an embedded file and its metadata.
                 pub fn get(file_path: &str) -> Option<rust_embed::EmbeddedFile> {
-                    match file_path.replace('\\', "/").as_str() {
+                    // Only allocate a normalized path for Windows separators.
+                    let file_path: alloc::borrow::Cow<'_, str> = if file_path.contains('\\') {
+                        alloc::borrow::Cow::Owned(file_path.replace('\\', "/"))
+                    } else {
+                        alloc::borrow::Cow::Borrowed(file_path)
+                    };
+                    match file_path.as_ref() {
                         #(#file_paths => Some(rust_embed::EmbeddedFile {
                             data: alloc::borrow::Cow::Borrowed(include_bytes!(#sources)),
                             metadata: rust_embed::Metadata::__rust_embed_new([0; 32], None, None),

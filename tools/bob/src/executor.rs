@@ -7,7 +7,7 @@
 #![allow(unused_variables)]
 
 use std::collections::HashSet;
-use std::io::{self, IsTerminal};
+use std::io::{self, IsTerminal, Read};
 use std::path::Path;
 use std::process::{Command, exit};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -64,20 +64,7 @@ impl Task {
                 .expect("Time went backwards");
 
             // Get input hash
-            let hash = if !metadata.is_dir() {
-                // Calculate input hash
-                let buffer = fs::read(input).unwrap_or_else(|_| {
-                    eprintln!("Can't read input file: {input}");
-                    exit(1)
-                });
-                if !buffer.is_empty() {
-                    Some(Sha1::digest(buffer))
-                } else {
-                    None
-                }
-            } else {
-                None
-            };
+            let hash = input_hash(input, &metadata);
 
             // Check if the input has changed
             if log
@@ -121,20 +108,7 @@ impl Task {
                     .expect("Time went backwards");
 
                 // Get input hash
-                let hash = if !metadata.is_dir() {
-                    // Calculate input hash
-                    let buffer = fs::read(input).unwrap_or_else(|_| {
-                        eprintln!("Can't read input file: {input}");
-                        exit(1)
-                    });
-                    if !buffer.is_empty() {
-                        Some(Sha1::digest(buffer))
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                };
+                let hash = input_hash(input, &metadata);
 
                 if log
                     .get(input)
@@ -198,6 +172,28 @@ impl Task {
                     });
                 }
             }
+        }
+    }
+}
+
+/// Hashes an input file in chunks, directories and empty files have no hash.
+fn input_hash(input: &str, metadata: &fs::Metadata) -> Option<[u8; 20]> {
+    if metadata.is_dir() || metadata.len() == 0 {
+        return None;
+    }
+    let read_failed = || -> ! {
+        eprintln!("Can't read input file: {input}");
+        exit(1)
+    };
+    let mut file = fs::File::open(input).unwrap_or_else(|_| read_failed());
+    let mut hasher = Sha1::new();
+    let mut buffer = [0; 64 * 1024];
+    loop {
+        match file.read(&mut buffer) {
+            Ok(0) => return Some(hasher.finalize()),
+            Ok(read) => hasher.update(&buffer[..read]),
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+            Err(_) => read_failed(),
         }
     }
 }

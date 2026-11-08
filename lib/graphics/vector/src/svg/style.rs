@@ -652,7 +652,7 @@ impl Stylesheet {
                             return Err(VectorDecodeError::InvalidData);
                         }
                         if values.len() % 2 == 1 {
-                            values.extend(values.clone());
+                            values.extend_from_within(..);
                         }
                         style.stroke_style.dash_array = values;
                     }

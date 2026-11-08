@@ -566,10 +566,13 @@ struct NativeGradient(*mut c_void);
 impl NativeGradient {
     fn new(stops: &[(f32, Color)]) -> Self {
         // Core Graphics needs two stops, a single one is a uniform color.
-        let stops = if stops.len() == 1 {
-            vec![stops[0], (1.0, stops[0].1)]
-        } else {
-            stops.to_vec()
+        let padded;
+        let stops = match *stops {
+            [stop] => {
+                padded = [stop, (1.0, stop.1)];
+                &padded[..]
+            }
+            _ => stops,
         };
         let components: Vec<f64> = stops
             .iter()

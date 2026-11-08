@@ -106,23 +106,6 @@ pub fn main() -> Result<(), JsValue> {
         wall_form.add_event_listener_with_callback("submit", closure.as_ref().unchecked_ref())?;
         closure.forget();
     }
-    {
-        let wall_width_input = wall_width_input.clone();
-        let wall_height_input = wall_height_input.clone();
-        let wall_bond_select = wall_bond_select.clone();
-        let context = context.clone();
-        let closure = Closure::wrap(Box::new(move |event: Event| {
-            event.prevent_default();
-            wall_init(
-                &context,
-                &wall_width_input,
-                &wall_height_input,
-                &wall_bond_select,
-            );
-        }) as Box<dyn FnMut(_)>);
-        wall_form.add_event_listener_with_callback("submit", closure.as_ref().unchecked_ref())?;
-        closure.forget();
-    }
     wall_init(
         &context,
         &wall_width_input,

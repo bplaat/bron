@@ -615,17 +615,14 @@ impl FrameRate {
     }
 }
 
-fn material_names() -> Vec<String> {
-    world::Material::ALL
-        .into_iter()
-        .map(|material| material.file_name().to_owned())
-        .collect()
+fn material_names() -> [&'static str; world::Material::COUNT] {
+    world::Material::ALL.map(world::Material::file_name)
 }
 
 fn upload_materials(
     device: &bwebgpu::Device,
     queue: &bwebgpu::Queue,
-    material_names: &[String],
+    material_names: &[&str],
 ) -> bwebgpu::TextureView {
     let layer_count = u32::try_from(material_names.len()).expect("Material layer count");
 
@@ -657,7 +654,7 @@ fn upload_materials(
                 MATERIAL_SIZE,
                 "Unexpected height for {name}"
             );
-            image.pixels().to_vec()
+            image.into_pixels()
         })
         .collect::<Vec<_>>();
 
@@ -665,7 +662,7 @@ fn upload_materials(
     let mut width = MATERIAL_SIZE;
     let mut height = MATERIAL_SIZE;
     for mip_level in 0..MATERIAL_MIP_COUNT {
-        let pixels = layers.iter().flatten().copied().collect::<Vec<_>>();
+        let pixels = layers.concat();
         queue.write_texture(
             bwebgpu::TexelCopyTextureInfo {
                 texture: &texture,
@@ -793,7 +790,7 @@ mod tests {
             assert_eq!(names[material.index()], material.file_name());
         }
         for name in names {
-            let asset = MaterialAssets::get(&name).expect("Embedded material");
+            let asset = MaterialAssets::get(name).expect("Embedded material");
             let image = image::decode(asset.data.as_ref()).expect("Decode material");
             assert_eq!(image.format(), image::Format::Png);
             assert_eq!(

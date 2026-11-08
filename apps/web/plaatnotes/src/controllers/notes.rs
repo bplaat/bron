@@ -380,25 +380,21 @@ pub(crate) fn notes_reorder_for(
     filter: &str,
 ) -> Result<()> {
     ctx.database.transaction(|db| -> Result<()> {
-        let provided_ids: Vec<Uuid> = ids.to_vec();
-
         // Fetch all note IDs in this category ordered by current position
-        let all_ids: Vec<Uuid> = query_args!(
-            Note,
-            db,
-            format!(
-                "SELECT {} FROM notes WHERE {filter} AND user_id = :user_id ORDER BY position ASC, updated_at DESC",
-                Note::columns()
-            ),
-            Args { user_id: user.id }
-        )?
-        .filter_map(|r| r.ok())
-        .map(|n| n.id)
-        .collect();
+        let all_ids: Vec<Uuid> = db
+            .query::<Uuid>(
+                format!(
+                    "SELECT id FROM notes WHERE {filter} AND user_id = ? ORDER BY position ASC, updated_at DESC"
+                ),
+                user.id,
+            )?
+            .filter_map(|r| r.ok())
+            .collect();
 
         // Filter provided IDs to only include notes that belong to this user/filter
-        let provided_ids: Vec<Uuid> = provided_ids
-            .into_iter()
+        let provided_ids: Vec<Uuid> = ids
+            .iter()
+            .copied()
             .filter(|id| all_ids.contains(id))
             .collect();
 

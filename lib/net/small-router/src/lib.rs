@@ -6,6 +6,7 @@
 
 #![doc = include_str!("../README.md")]
 
+use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::error::Error;
@@ -432,25 +433,37 @@ impl<T: Clone> InnerRouter<T> {
         {
             // Find a matching method among routes with the same parsed path shape. Parameter names
             // may differ between method-specific route registrations.
-            let mut req = req.clone();
             if let Some(route) = self.routes.iter().find(|route| {
                 route.has_same_shape(first_match) && route.methods.contains(&req.method)
             }) {
-                req.params = if std::ptr::eq(route, first_match) {
+                let params = if std::ptr::eq(route, first_match) {
                     params
                 } else {
                     route.match_path(path).unwrap_or_default()
                 };
-                return route.handler.call(&req, ctx);
+                return route.handler.call(&with_params(req, params), ctx);
             }
 
             // Or run not allowed method handler
-            req.params = params;
-            return self.not_allowed_method_handler.call(&req, ctx);
+            return self
+                .not_allowed_method_handler
+                .call(&with_params(req, params), ctx);
         }
 
         // Or run fallback handler
         self.fallback_handler.call(req, ctx)
+    }
+}
+
+/// Set the route parameters of a request, only copying the request (and its body) when they change
+fn with_params(req: &Request, params: HashMap<String, String>) -> Cow<'_, Request> {
+    if params == req.params {
+        Cow::Borrowed(req)
+    } else {
+        Cow::Owned(Request {
+            params,
+            ..req.clone()
+        })
     }
 }
 

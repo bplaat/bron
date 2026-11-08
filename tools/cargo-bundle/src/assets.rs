@@ -5,6 +5,7 @@
  */
 
 use std::collections::BTreeMap;
+use std::collections::btree_map::Entry;
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
@@ -104,10 +105,14 @@ pub(crate) fn collect_shared(binaries: &[PathBuf]) -> io::Result<BTreeMap<String
     for binary in binaries {
         for (name, source) in collect(&fs::read(binary)?)? {
             let data = fs::read(source)?;
-            if let Some(previous) = shared.insert(name, data.clone())
-                && previous != data
-            {
-                return Err(io::Error::other("Conflicting assets across architectures"));
+            match shared.entry(name) {
+                Entry::Vacant(entry) => {
+                    entry.insert(data);
+                }
+                Entry::Occupied(entry) if *entry.get() != data => {
+                    return Err(io::Error::other("Conflicting assets across architectures"));
+                }
+                Entry::Occupied(_) => {}
             }
         }
     }

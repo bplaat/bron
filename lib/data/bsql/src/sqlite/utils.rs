@@ -13,11 +13,10 @@ use std::ffi::{CStr, c_char};
 pub fn preprocess_fts_query(q: &str) -> String {
     const FTS5_KEYWORDS: &[&str] = &["AND", "OR", "NOT"];
 
-    let tokens: Vec<_> = q.split_whitespace().collect();
-    let mut parts: Vec<String> = Vec::with_capacity(tokens.len());
+    let mut parts: Vec<String> = Vec::new();
 
-    for token in &tokens {
-        if FTS5_KEYWORDS.contains(token) {
+    for token in q.split_whitespace() {
+        if FTS5_KEYWORDS.contains(&token) {
             parts.push(token.to_string());
         } else {
             let clean: String = token

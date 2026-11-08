@@ -8,7 +8,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::{env, fs};
+use std::{env, fs, io};
 
 use anyhow::{Context, Result, bail};
 
@@ -152,9 +152,12 @@ impl Xtask {
                 vec![(destination.clone(), bundle)]
             };
             for (destination, source) in files {
-                // Writing the bytes skips the extended attributes, which macOS stores in `._`
+                // Streaming the bytes skips the extended attributes, which macOS stores in `._`
                 // files on FAT SD cards
-                fs::write(destination, fs::read(source)?)?;
+                io::copy(
+                    &mut fs::File::open(source)?,
+                    &mut fs::File::create(destination)?,
+                )?;
             }
             println!("Installed {}", destination.display());
         }

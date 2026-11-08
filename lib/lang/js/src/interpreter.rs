@@ -258,8 +258,7 @@ impl Interpreter {
 
                 let mut last_value = Value::Undefined;
                 for key in keys {
-                    let key_value = Value::String(key.clone());
-                    self.set_var(*declaration_type, variable, key_value);
+                    self.set_var(*declaration_type, variable, Value::String(key));
 
                     last_value = match self.eval_node(body) {
                         Err(Control::Break(break_label)) if break_label == *label => {
@@ -423,12 +422,12 @@ impl Interpreter {
                         // Bind arguments
                         for (i, arg_name) in arg_names.iter().enumerate() {
                             let arg_value = arg_values.get(i).cloned().unwrap_or(Value::Undefined);
-                            func_env.insert(arg_name.clone(), arg_value.clone());
+                            func_env.insert(arg_name.clone(), arg_value);
                         }
                         func_env.insert(
                             "arguments".to_string(),
                             Value::Array(ArrayValue {
-                                elements: Rc::new(RefCell::new(arg_values.to_vec())),
+                                elements: Rc::new(RefCell::new(arg_values)),
                             }),
                         );
 
@@ -765,21 +764,19 @@ impl Interpreter {
                         Some(DeclarationType::Let | DeclarationType::Const)
                     ) || env.contains_key(variable) =>
                 {
-                    env.insert(variable.to_string(), value);
+                    insert_var(env, variable, value);
                     return;
                 }
                 Scope::Function(env)
                     if declaration_type.is_some() || env.contains_key(variable) =>
                 {
-                    env.insert(variable.to_string(), value);
+                    insert_var(env, variable, value);
                     return;
                 }
                 _ => {}
             }
         }
-        self.global_env
-            .borrow_mut()
-            .insert(variable.to_string(), value);
+        insert_var(&mut self.global_env.borrow_mut(), variable, value);
     }
 
     // MARK: Utils
@@ -981,5 +978,15 @@ impl Interpreter {
             }
         }
         Ok(result)
+    }
+}
+
+/// Updates a variable in place, allocating its name only when it is new.
+fn insert_var(env: &mut IndexMap<String, Value>, variable: &str, value: Value) {
+    match env.get_mut(variable) {
+        Some(slot) => *slot = value,
+        None => {
+            env.insert(variable.to_string(), value);
+        }
     }
 }

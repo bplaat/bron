@@ -8,7 +8,7 @@ use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
-use std::sync::mpsc;
+use std::sync::{Arc, mpsc};
 
 use anyhow::{Result, ensure};
 use threadpool::ThreadPool;
@@ -54,9 +54,9 @@ pub(crate) enum ProgressEvent {
 }
 
 struct TrackJob {
-    album: Album,
+    album: Arc<Album>,
     album_folder: PathBuf,
-    album_cover: Option<Vec<u8>>,
+    album_cover: Option<Arc<[u8]>>,
     album_nb_disks: i64,
     track: Track,
     track_index: usize,
@@ -109,7 +109,7 @@ fn download_album(
     tx: mpsc::Sender<ProgressEvent>,
     track_start: usize,
 ) -> Result<usize> {
-    let album = metadata_service.get_album(album_id)?;
+    let album = Arc::new(metadata_service.get_album(album_id)?);
     ensure!(
         !album.contributors.is_empty(),
         "Album {album_id} has no artist"
@@ -125,7 +125,7 @@ fn download_album(
         if args.with_cover {
             fs::write(album_folder.join("cover.jpg"), &album_cover)?;
         }
-        Some(album_cover)
+        Some(Arc::from(album_cover))
     } else {
         None
     };
@@ -167,7 +167,7 @@ fn download_album(
 
     for (local_index, track) in tracks.into_iter().enumerate() {
         let job = TrackJob {
-            album: album.clone(),
+            album: Arc::clone(&album),
             album_folder: album_folder.clone(),
             album_cover: album_cover.clone(),
             album_nb_disks,
@@ -240,7 +240,7 @@ fn download_track(job: TrackJob) -> Result<()> {
                 && track.duration <= video.duration + TRACK_DURATION_SLACK
                 && !candidates.contains(&video.id)
             {
-                candidates.push(video.id.clone());
+                candidates.push(video.id);
                 if candidates.len() >= 3 {
                     break;
                 }
@@ -330,7 +330,7 @@ fn download_track(job: TrackJob) -> Result<()> {
         );
         tag.set_bpm(track.bpm as u16);
         if let Some(album_cover) = album_cover {
-            tag.set_artwork(mp4ameta::Img::jpeg(album_cover));
+            tag.set_artwork(mp4ameta::Img::jpeg(&*album_cover));
         }
         tag.write_to_path(&path)?;
 

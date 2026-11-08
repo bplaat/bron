@@ -166,7 +166,9 @@ pub(crate) fn lower_thread_priority() {
 }
 
 fn mesh(terrain: &ChunkData) -> CachedChunk {
-    let mesh = terrain.mesh();
+    // The mesh stays cached, so it gives back the slack of its growth.
+    let mut mesh = terrain.mesh();
+    mesh.shrink_to_fit();
     let mut sections: SectionRanges = std::array::from_fn(|_| [0..0, 0..0]);
     for (index, quad) in mesh
         .as_chunks::<{ world::QUAD_BYTES }>()

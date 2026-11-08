@@ -106,7 +106,7 @@ pub(crate) struct DatabaseState {
     backend: Option<DatabaseBackend>,
     mysql_settings: Option<MysqlConnectionSettings>,
     database: Option<String>,
-    table_metadata: HashMap<String, TableMetadata>,
+    table_metadata: HashMap<String, Arc<TableMetadata>>,
 }
 
 impl DatabaseState {
@@ -1431,7 +1431,7 @@ fn next_cursor(
 struct TableContext {
     connection: Connection,
     backend: DatabaseBackend,
-    metadata: TableMetadata,
+    metadata: Arc<TableMetadata>,
 }
 
 impl TableContext {
@@ -1511,7 +1511,7 @@ fn table_context(state: &State, name: &str) -> Result<TableContext, Response> {
     let connection = guard.connection.clone().expect("connection checked above");
     let backend = guard.backend.expect("backend set with connection");
     let metadata = match guard.table_metadata.get(name) {
-        Some(metadata) => metadata.clone(),
+        Some(metadata) => Arc::clone(metadata),
         None => {
             let database = match backend {
                 DatabaseBackend::Mysql => Some(
@@ -1521,11 +1521,13 @@ fn table_context(state: &State, name: &str) -> Result<TableContext, Response> {
                 ),
                 DatabaseBackend::Sqlite => None,
             };
-            let metadata = load_table_metadata(&connection, backend, database.as_deref(), name)
-                .map_err(error_response)?;
+            let metadata = Arc::new(
+                load_table_metadata(&connection, backend, database.as_deref(), name)
+                    .map_err(error_response)?,
+            );
             guard
                 .table_metadata
-                .insert(name.to_string(), metadata.clone());
+                .insert(name.to_string(), Arc::clone(&metadata));
             metadata
         }
     };

@@ -38,7 +38,8 @@ bitflags::bitflags! {
 // MARK: Entry metadata
 struct CdEntry {
     name: String,
-    name_bytes: Vec<u8>,
+    // The raw name, kept only when lossy decoding changed it.
+    raw_name: Option<Vec<u8>>,
     flags: GeneralPurposeFlags,
     compression: u16,
     crc32: u32,
@@ -196,13 +197,15 @@ impl<R: Read + Seek> ZipArchive<R> {
             if name_end > cd_end {
                 return Err(ZipError::InvalidZip("entry name extends beyond archive"));
             }
-            let name_bytes = bytes[pos + 46..name_end].to_vec();
+            let name_bytes = &bytes[pos + 46..name_end];
             let name = if flags.bits() & 0x800 != 0 {
-                String::from_utf8(name_bytes.clone())
+                std::str::from_utf8(name_bytes)
                     .map_err(|_| ZipError::InvalidZip("invalid UTF-8 name"))?
+                    .to_owned()
             } else {
-                String::from_utf8_lossy(&name_bytes).into_owned()
+                String::from_utf8_lossy(name_bytes).into_owned()
             };
+            let raw_name = (name.as_bytes() != name_bytes).then(|| name_bytes.to_vec());
             if name.is_empty() || name.contains('\0') {
                 return Err(ZipError::InvalidZip("empty or NUL-containing name"));
             }
@@ -257,7 +260,7 @@ impl<R: Read + Seek> ZipArchive<R> {
             pos = entry_end;
             entries.push(CdEntry {
                 name,
-                name_bytes,
+                raw_name,
                 flags,
                 compression,
                 crc32,
@@ -316,8 +319,6 @@ impl<R: Read + Seek> ZipArchive<R> {
     /// Returns the entry at the given index.
     pub fn by_index(&mut self, index: usize) -> Result<ZipFile, ZipError> {
         let entry = self.entries.get(index).ok_or(ZipError::FileNotFound)?;
-        let name = entry.name.clone();
-        let name_bytes = entry.name_bytes.clone();
         let flags = entry.flags;
         let compression = entry.compression;
         let expected_crc32 = entry.crc32;
@@ -366,7 +367,7 @@ impl<R: Read + Seek> ZipArchive<R> {
         }
         let mut local_name = vec![0; local_name_len];
         self.reader.read_exact(&mut local_name)?;
-        if local_name != name_bytes {
+        if local_name != entry.raw_name.as_deref().unwrap_or(entry.name.as_bytes()) {
             return Err(ZipError::InvalidZip(
                 "local and central directory names differ",
             ));
@@ -438,7 +439,7 @@ impl<R: Read + Seek> ZipArchive<R> {
         self.extracted_size += data.len();
 
         Ok(ZipFile {
-            name,
+            name: entry.name.clone(),
             data: Cursor::new(data),
             unix_mode,
             is_dir,

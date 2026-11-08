@@ -498,7 +498,7 @@ extern "C" fn webview_on_title_changed(
     }
     let title = unsafe { webkit_web_view_get_title(webview) };
     let title = unsafe { CStr::from_ptr(title) }.to_string_lossy();
-    _self.emit(WebviewEvent::PageTitleChange(title.to_string()));
+    _self.emit(WebviewEvent::PageTitleChange(title.into_owned()));
 }
 
 extern "C" fn webview_on_navigation_policy_decision(
@@ -636,7 +636,7 @@ fn webkit_uri_scheme_request_to_http_request(
                 let req = unsafe { &mut *(user_data as *mut small_http::Request) };
                 let key = unsafe { CStr::from_ptr(key) }.to_string_lossy();
                 let value = unsafe { CStr::from_ptr(value) }.to_string_lossy();
-                req.headers.insert(key.to_string(), value.to_string());
+                req.headers.insert(key.into_owned(), value.into_owned());
             }
             unsafe {
                 soup_message_headers_foreach(
@@ -662,14 +662,14 @@ fn webkit_uri_scheme_request_to_http_request(
                             null_mut(),
                         )
                     };
-                    if result || bytes_read == 0 {
-                        break;
-                    }
                     body_data.extend_from_slice(&buffer[..bytes_read]);
-                    if bytes_read < buffer.len() {
+                    // A short read means the end of the stream.
+                    if !result || bytes_read < buffer.len() {
                         break;
                     }
                 }
+                // The body stream is returned with a full reference.
+                unsafe { g_object_unref(body.cast()) };
                 req = req.body(body_data);
             }
 

@@ -4,6 +4,8 @@
  * SPDX-License-Identifier: MIT
  */
 
+use std::borrow::Cow;
+use std::io::{self, Write};
 use std::slice::{Iter, IterMut};
 
 /// HeaderMap
@@ -47,10 +49,10 @@ impl HeaderMap {
     /// Remove all values for a header case-insensitively
     pub fn remove(&mut self, name: &str) -> Option<String> {
         let mut first_value = None;
-        self.0.retain(|(header_name, value)| {
+        self.0.retain_mut(|(header_name, value)| {
             if header_name.eq_ignore_ascii_case(name) {
                 if first_value.is_none() {
-                    first_value = Some(value.clone());
+                    first_value = Some(std::mem::take(value));
                 }
                 false
             } else {
@@ -80,6 +82,21 @@ impl HeaderMap {
     /// Get iterator
     pub fn iter(&self) -> Iter<'_, (String, String)> {
         self.0.iter()
+    }
+
+    /// Write all headers as lines ending in `line_end`, stripping CR and LF to prevent injection
+    pub(crate) fn write_to(&self, stream: &mut dyn Write, line_end: &str) -> io::Result<()> {
+        fn sanitize(text: &str) -> Cow<'_, str> {
+            if text.contains(['\r', '\n']) {
+                Cow::Owned(text.replace(['\r', '\n'], ""))
+            } else {
+                Cow::Borrowed(text)
+            }
+        }
+        for (name, value) in &self.0 {
+            write!(stream, "{}: {}{line_end}", sanitize(name), sanitize(value))?;
+        }
+        Ok(())
     }
 }
 
@@ -152,5 +169,16 @@ mod tests {
         assert_eq!(headers.remove("x-Test"), Some("first".to_string()));
         assert!(!headers.contains_key("X-Test"));
         assert!(headers.is_empty());
+    }
+
+    #[test]
+    fn write_to_strips_line_breaks() {
+        let mut headers = HeaderMap::new();
+        headers.append("X-Te\r\nst".to_string(), "va\nlue".to_string());
+        headers.append("Host".to_string(), "localhost".to_string());
+
+        let mut output = Vec::new();
+        headers.write_to(&mut output, "\r\n").unwrap();
+        assert_eq!(output, b"X-Test: value\r\nHost: localhost\r\n");
     }
 }

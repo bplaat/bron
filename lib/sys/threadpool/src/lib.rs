@@ -46,6 +46,7 @@ struct State {
     jobs: VecDeque<Job>,
     worker_threads: usize,
     idle_worker_threads: usize,
+    panicked: bool,
     shutdown: bool,
 }
 
@@ -66,6 +67,7 @@ impl Drop for WorkerThreadGuard {
         if self.registered {
             let mut state = self.shared.state.lock().expect("Mutex lock failed");
             state.worker_threads -= 1;
+            state.panicked |= thread::panicking();
             self.shared.work_available.notify_all();
         }
     }
@@ -124,6 +126,7 @@ impl ThreadPool {
                     jobs: VecDeque::new(),
                     worker_threads: min_worker_threads,
                     idle_worker_threads: 0,
+                    panicked: false,
                     shutdown: false,
                 }),
                 work_available: Condvar::new(),
@@ -171,6 +174,15 @@ impl ThreadPool {
         for worker_thread in worker_threads {
             worker_thread.join().expect("A worker thread panicked");
         }
+        assert!(
+            !self
+                .shared
+                .state
+                .lock()
+                .expect("Mutex lock failed")
+                .panicked,
+            "A worker thread panicked"
+        );
     }
 
     fn spawn_worker_thread(&self) {
@@ -179,10 +191,10 @@ impl ThreadPool {
             .name("threadpool-worker".to_string())
             .spawn(move || worker_thread_loop(shared))
             .expect("Failed to spawn worker thread");
-        self.worker_threads
-            .lock()
-            .expect("Mutex lock failed")
-            .push(worker_thread);
+        let mut worker_threads = self.worker_threads.lock().expect("Mutex lock failed");
+        // Release the handles of idle worker threads that exited, a panic is tracked in the state
+        worker_threads.retain(|worker_thread| !worker_thread.is_finished());
+        worker_threads.push(worker_thread);
     }
 
     fn shutdown(&self) {
@@ -386,6 +398,53 @@ mod tests {
         release_jobs(&release);
         wait_for_worker_thread_count(&pool, 2);
         pool.join();
+    }
+
+    #[test]
+    fn test_exited_worker_threads_are_released() {
+        let pool = ThreadPool::new_with_options(Options {
+            min_worker_threads: 1,
+            max_worker_threads: 3,
+            worker_timeout: Duration::from_millis(20),
+        });
+        let (started_sender, started_receiver) = mpsc::channel();
+        for _ in 0..2 {
+            let release = Arc::new((Mutex::new(false), Condvar::new()));
+            for _ in 0..3 {
+                pool.execute(blocking_job(started_sender.clone(), Arc::clone(&release)));
+                started_receiver
+                    .recv_timeout(Duration::from_secs(1))
+                    .expect("Task did not start");
+            }
+            assert_eq!(
+                pool.worker_threads.lock().expect("Mutex lock failed").len(),
+                3
+            );
+            release_jobs(&release);
+            wait_for_worker_thread_count(&pool, 1);
+            let deadline = Instant::now() + Duration::from_secs(1);
+            while pool
+                .worker_threads
+                .lock()
+                .expect("Mutex lock failed")
+                .iter()
+                .filter(|worker_thread| worker_thread.is_finished())
+                .count()
+                != 2
+            {
+                assert!(Instant::now() < deadline, "Worker threads did not exit");
+                thread::yield_now();
+            }
+        }
+        pool.join();
+    }
+
+    #[test]
+    fn test_join_reports_worker_thread_panics() {
+        let pool = ThreadPool::new_fixed(1);
+        pool.execute(|| panic!("Task failed"));
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| pool.join()));
+        assert!(result.is_err());
     }
 
     #[test]

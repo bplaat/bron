@@ -52,17 +52,21 @@ fn append<R: Read + Write + Seek>(
         ));
     }
     reader.rewind()?;
-    let mut archive = ZipArchive::new(&mut reader)?;
+    let archive = ZipArchive::new(&mut reader)?;
     let count = u16::try_from(archive.len() + 1)
         .ok()
         .filter(|count| *count != u16::MAX)
         .ok_or(ZipError::InvalidZip("too many entries"))?;
-    for index in 0..archive.len() {
-        if archive.by_index(index)?.name() == name {
-            return Err(ZipError::InvalidZip("file already exists"));
-        }
+    // Check the central directory instead of extracting every existing entry.
+    if archive.entries.iter().any(|entry| entry.name == name) {
+        return Err(ZipError::InvalidZip("file already exists"));
     }
-    if archive.extracted_size + data.len() > MAX_TOTAL_UNCOMPRESSED_SIZE {
+    let total_size = archive
+        .entries
+        .iter()
+        .map(|entry| entry.uncompressed_size as usize)
+        .sum::<usize>();
+    if total_size + data.len() > MAX_TOTAL_UNCOMPRESSED_SIZE {
         return Err(ZipError::InvalidZip(
             "total uncompressed archive size exceeds limit",
         ));

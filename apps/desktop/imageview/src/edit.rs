@@ -12,6 +12,7 @@
 //! and are applied to the full picture in the background. Opening the tool of the last change
 //! again sets it up from the picture before it, so it can be changed instead of stacked.
 
+use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -341,16 +342,16 @@ impl App {
         };
         let picture = match &window.editing {
             Some(editing) => match window.view.selection() {
-                Some(selection) => selection.cut(editing.editor.picture()),
-                None => editing.editor.picture().clone(),
+                Some(selection) => Cow::Owned(selection.cut(editing.editor.picture())),
+                None => Cow::Borrowed(editing.editor.picture()),
             },
             None => match Picture::from_media(&window.view.media(), 0) {
-                Some(picture) => picture,
+                Some(picture) => Cow::Owned(picture),
                 None => return,
             },
         };
         if let Ok(png) = picture.encode_for(Path::new("copy.png"), DEFAULT_JPEG_QUALITY) {
-            window.view.copy_png(&png);
+            window.view.copy_png(png);
         }
     }
 
@@ -645,10 +646,7 @@ impl App {
             .filter(|proxy| Arc::ptr_eq(&proxy.base, &open.base))
             .map(|proxy| (Arc::clone(&proxy.picture), proxy.scale));
         std::thread::spawn(move || {
-            let (proxy, scale) = proxy.unwrap_or_else(|| {
-                let (picture, scale) = open.base.proxy(longest);
-                (Arc::new(picture), scale)
-            });
+            let (proxy, scale) = proxy.unwrap_or_else(|| open.base.proxy(longest));
             let media = open
                 .tool
                 .preview(&proxy, scale, &open.values, open.selection.as_ref())

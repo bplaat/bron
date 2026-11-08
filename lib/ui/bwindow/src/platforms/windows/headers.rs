@@ -610,11 +610,11 @@ impl LPWSTR {
     pub(crate) const fn as_mut_ptr(&mut self) -> *mut *mut w_char {
         &mut self.0
     }
-}
-impl std::fmt::Display for LPWSTR {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+
+    /// Decode the string, replacing invalid UTF-16 with the replacement character.
+    pub(crate) fn to_string_lossy(&self) -> String {
         if self.0.is_null() {
-            return Ok(());
+            return String::new();
         }
         let mut len = 0;
         unsafe {
@@ -622,8 +622,7 @@ impl std::fmt::Display for LPWSTR {
                 len += 1;
             }
         }
-        let str = String::from_utf16_lossy(unsafe { std::slice::from_raw_parts(self.0, len) });
-        write!(f, "{str}")
+        String::from_utf16_lossy(unsafe { std::slice::from_raw_parts(self.0, len) })
     }
 }
 impl Drop for LPWSTR {

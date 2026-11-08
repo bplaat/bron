@@ -389,7 +389,7 @@ unsafe fn make_shell_item_from_path(path: Option<&PathBuf>) -> Option<*mut IShel
 unsafe fn shell_item_path(item: *mut IShellItem) -> Option<PathBuf> {
     let mut name = LPWSTR::default();
     if unsafe { (*item).GetDisplayName(SIGDN_FILESYSPATH, name.as_mut_ptr()) } == S_OK {
-        Some(PathBuf::from(name.to_string()))
+        Some(PathBuf::from(name.to_string_lossy()))
     } else {
         None
     }

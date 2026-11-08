@@ -320,7 +320,7 @@ impl<P: Platform> Game<P> {
     }
 
     fn draw_player(&mut self, index: usize, now: f32, dt: f32) {
-        self.player.others.update(self.player.players.clone());
+        self.player.others.update(&self.player.players);
         self.player.others.animate(dt);
         self.player.swing = (self.player.swing - dt).max(0.0);
         let count = self.screen_players();
@@ -2106,7 +2106,7 @@ pub(crate) mod tests {
         let view = camera.view(640, 480, 8);
         let mut others = Others::default();
         for &(material, _) in world::MATERIALS {
-            others.update(alloc::vec![PlayerInfo {
+            others.update(&[PlayerInfo {
                 id: 1,
                 name: "Guest".into(),
                 pose: crate::protocol::Pose::default(),

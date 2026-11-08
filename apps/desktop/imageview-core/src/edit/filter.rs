@@ -784,27 +784,28 @@ fn radial_blur(picture: &Picture, amount: f32) -> Picture {
     )
 }
 
-// Adds the difference with a blurred copy, which strengthens edges.
+// Adds the difference with a blurred copy, which strengthens edges. The blurred copy becomes
+// the result, so no other picture is allocated.
 fn sharpen(picture: &Picture, amount: f32, radius: f32) -> Picture {
-    let blurred = gaussian_blur(picture, radius);
-    let mut pixels = picture.pixels.clone();
+    let mut sharpened = gaussian_blur(picture, radius);
     let row = picture.width as usize * 4;
-    for_rows(&mut pixels, row, |y, line| {
-        let blurred = &blurred.pixels[y * row..][..row];
-        for (pixel, blurred) in line
+    for_rows(&mut sharpened.pixels, row, |y, line| {
+        let original = &picture.pixels[y * row..][..row];
+        for (pixel, original) in line
             .as_chunks_mut::<4>()
             .0
             .iter_mut()
-            .zip(blurred.as_chunks::<4>().0)
+            .zip(original.as_chunks::<4>().0)
         {
-            for (value, blurred) in pixel[..3].iter_mut().zip(blurred) {
-                let value_f = f32::from(*value);
-                *value = (value_f + (value_f - f32::from(*blurred)) * amount + 0.5)
+            for (value, original) in pixel[..3].iter_mut().zip(original) {
+                let original = f32::from(*original);
+                *value = (original + (original - f32::from(*value)) * amount + 0.5)
                     .clamp(0.0, 255.0) as u8;
             }
+            pixel[3] = original[3];
         }
     });
-    Picture::new(picture.width, picture.height, pixels)
+    sharpened
 }
 
 #[cfg(test)]

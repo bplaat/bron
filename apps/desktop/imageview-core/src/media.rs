@@ -47,8 +47,8 @@ impl Media {
         if raster.frames.len() < 2 {
             return (0, None);
         }
-        let delays: Vec<Duration> = raster.frames.iter().map(Frame::shown_for).collect();
-        let period: Duration = delays.iter().sum();
+        let delays = raster.frames.iter().map(Frame::shown_for);
+        let period: Duration = delays.clone().sum();
         let plays = match raster.loop_count {
             LoopCount::Infinite => None,
             LoopCount::Finite(plays) => Some(plays.max(1)),
@@ -57,13 +57,13 @@ impl Media {
             return (raster.frames.len() - 1, None);
         }
         let mut time = Duration::from_nanos((elapsed.as_nanos() % period.as_nanos()) as u64);
-        for (index, delay) in delays.iter().enumerate() {
-            if time < *delay {
-                return (index, Some(*delay - time));
+        for (index, delay) in delays.enumerate() {
+            if time < delay {
+                return (index, Some(delay - time));
             }
-            time -= *delay;
+            time -= delay;
         }
-        (0, Some(delays[0]))
+        (0, Some(raster.frames[0].shown_for()))
     }
 }
 

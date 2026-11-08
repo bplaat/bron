@@ -350,13 +350,13 @@ impl MediaView {
 
     /// Puts a PNG image on the clipboard, for as long as this application lives or the desktop
     /// keeps a copy.
-    pub(crate) fn copy_png(&self, png: &[u8]) {
+    pub(crate) fn copy_png(&self, png: Vec<u8>) {
         let targets = [GtkTargetEntry {
             target: c"image/png".as_ptr(),
             flags: 0,
             info: 0,
         }];
-        let png = Box::into_raw(Box::new(png.to_vec())).cast::<c_void>();
+        let png = Box::into_raw(Box::new(png)).cast::<c_void>();
         // SAFETY: GTK copies the targets and hands the boxed image to the clipboard handlers,
         // the last of which frees it.
         unsafe {

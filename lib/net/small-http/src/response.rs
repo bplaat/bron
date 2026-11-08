@@ -230,11 +230,7 @@ impl Response {
         self.finish_headers(req, keep_alive);
 
         _ = write!(stream, "{} {}\r\n", req.version, self.status);
-        for (name, value) in &self.headers {
-            let safe_name = name.replace(['\r', '\n'], "");
-            let safe_value = value.replace(['\r', '\n'], "");
-            _ = write!(stream, "{safe_name}: {safe_value}\r\n");
-        }
+        _ = self.headers.write_to(stream, "\r\n");
         _ = write!(stream, "\r\n");
         // HEAD responses must not include a message body
         if req.method != crate::enums::Method::Head {
@@ -245,11 +241,7 @@ impl Response {
     #[cfg(feature = "cgi")]
     pub(crate) fn write_to_cgi_stdout(&self, stdout: &mut dyn Write) {
         _ = writeln!(stdout, "Status: {}", self.status);
-        for (name, value) in &self.headers {
-            let safe_name = name.replace(['\r', '\n'], "");
-            let safe_value = value.replace(['\r', '\n'], "");
-            _ = writeln!(stdout, "{safe_name}: {safe_value}");
-        }
+        _ = self.headers.write_to(stdout, "\n");
         _ = writeln!(stdout);
         _ = stdout.write_all(&self.body);
     }

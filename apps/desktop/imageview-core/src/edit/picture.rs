@@ -5,6 +5,7 @@
  */
 
 use std::path::Path;
+use std::sync::Arc;
 
 use bcanvas::premultiplied_bgra;
 use image::{Bitmap, Compression, EncodeOptions, Format, LoopCount, Orientation};
@@ -58,7 +59,7 @@ impl Picture {
         Some(Self::new(
             bitmap.width(),
             bitmap.height(),
-            bitmap.data().to_vec(),
+            bitmap.into_data(),
         ))
     }
 
@@ -174,14 +175,18 @@ impl Picture {
         Self::new(width, height, unpremultiply(&premultiplied))
     }
 
-    /// The picture shrunk to fit a length on its longest side, and the scale it is shown at.
-    pub fn proxy(&self, longest: u32) -> (Self, f64) {
+    /// The picture shrunk to fit a length on its longest side, and the scale it is shown at. A
+    /// picture that already fits is shared instead of copied.
+    pub fn proxy(self: &Arc<Self>, longest: u32) -> (Arc<Self>, f64) {
         let scale = (f64::from(longest) / f64::from(self.width.max(self.height))).min(1.0);
         if scale >= 1.0 {
-            return (self.clone(), 1.0);
+            return (Arc::clone(self), 1.0);
         }
         let size = |length: u32| ((f64::from(length) * scale).round() as u32).max(1);
-        (self.resize(size(self.width), size(self.height)), scale)
+        (
+            Arc::new(self.resize(size(self.width), size(self.height))),
+            scale,
+        )
     }
 
     /// Encodes the picture in the format of a file name extension as small as the encoder

@@ -8,6 +8,8 @@ use std::cell::Cell;
 #[cfg(feature = "file_drop")]
 use std::cell::RefCell;
 use std::ffi::c_void;
+#[cfg(feature = "custom_protocol")]
+use std::fmt::Write;
 use std::ptr::{null, null_mut};
 use std::rc::Rc;
 use std::{env, mem};
@@ -186,7 +188,7 @@ impl crate::WebviewInterface for PlatformWebview {
             if let Some(webview) = self.webview_data.webview.get() {
                 let mut uri = LPWSTR::default();
                 (*webview).get_Source(uri.as_mut_ptr());
-                Some(uri.to_string())
+                Some(uri.to_string_lossy())
             } else {
                 None
             }
@@ -196,15 +198,12 @@ impl crate::WebviewInterface for PlatformWebview {
     fn load_url(&mut self, url: impl AsRef<str>) {
         unsafe {
             if let Some(webview) = self.webview_data.webview.get() {
-                let url = cfg_select! {
-                    feature = "custom_protocol" => replace_custom_protocol_in_url(
-                        url.as_ref(),
-                        &self.webview_data.custom_protocols,
-                    ),
-                    _ => url.as_ref(),
-                };
-                self.webview_data.trusted_url.set(&url);
-                (*webview).Navigate(wide(&url).as_ptr() as *mut _);
+                let url = url.as_ref();
+                #[cfg(feature = "custom_protocol")]
+                let url =
+                    &*replace_custom_protocol_in_url(url, &self.webview_data.custom_protocols);
+                self.webview_data.trusted_url.set(url);
+                (*webview).Navigate(wide(url).as_ptr() as *mut _);
             }
         }
     }
@@ -249,18 +248,17 @@ impl crate::WebviewInterface for PlatformWebview {
     }
 
     fn add_user_script(&mut self, script: impl AsRef<str>, injection_time: InjectionTime) {
-        let mut script = script.as_ref().to_string();
         unsafe {
             if let Some(webview) = self.webview_data.webview.get() {
-                if let InjectionTime::DocumentLoaded = injection_time {
-                    script = format!(
+                let script = script.as_ref();
+                let script = match injection_time {
+                    InjectionTime::DocumentStart => wide(script),
+                    InjectionTime::DocumentLoaded => wide(&format!(
                         "window.addEventListener('DOMContentLoaded', function () {{ {script} }});"
-                    );
-                }
-                (*webview).AddScriptToExecuteOnDocumentCreated(
-                    wide(&script).as_ptr() as *mut _,
-                    null_mut(),
-                );
+                    )),
+                };
+                (*webview)
+                    .AddScriptToExecuteOnDocumentCreated(script.as_ptr() as *mut _, null_mut());
             }
         }
     }
@@ -559,14 +557,10 @@ extern "system" fn controller_created(
 
         // Load initial contents
         if let Some(url) = &_self.should_load_url {
-            let url = cfg_select! {
-                feature = "custom_protocol" => {
-                    replace_custom_protocol_in_url(url, &_self.custom_protocols)
-                }
-                _ => url.as_str(),
-            };
-            _self.trusted_url.set(&url);
-            (*webview).Navigate(wide(&url).as_ptr() as *mut _);
+            #[cfg(feature = "custom_protocol")]
+            let url = &*replace_custom_protocol_in_url(url, &_self.custom_protocols);
+            _self.trusted_url.set(url);
+            (*webview).Navigate(wide(url).as_ptr() as *mut _);
         }
         if let Some(html) = &_self.should_load_html {
             _self.trusted_url.set(TrustedUrl::HTML_URL);
@@ -636,7 +630,7 @@ extern "system" fn document_title_changed(
     unsafe {
         let mut title = LPWSTR::default();
         (*_sender).get_DocumentTitle(title.as_mut_ptr());
-        _self.emit(WebviewEvent::PageTitleChange(title.to_string()));
+        _self.emit(WebviewEvent::PageTitleChange(title.to_string_lossy()));
     }
     S_OK
 }
@@ -654,7 +648,7 @@ extern "system" fn new_window_requested(
         (*args).put_Handled(TRUE);
         let mut uri = LPWSTR::default();
         (*args).get_Uri(uri.as_mut_ptr());
-        if is_external_url(&uri.to_string()) {
+        if is_external_url(&uri.to_string_lossy()) {
             ShellExecuteW(
                 null_mut(),
                 w!("open").as_ptr(),
@@ -680,11 +674,14 @@ extern "system" fn web_message_received(
     }
     let mut message = LPWSTR::default();
     unsafe { (*args).TryGetWebMessageAsString(message.as_mut_ptr()) };
-    let message = message.to_string();
-    let (r#type, message) = message.split_at(1);
+    let mut message = message.to_string_lossy();
+    if message.is_empty() {
+        return S_OK;
+    }
+    let r#type = message.remove(0);
 
     #[cfg(feature = "log")]
-    if r#type == "c" {
+    if r#type == 'c' {
         let (level, message) = message.split_at(1);
         match level {
             "e" => log::error!("{message}"),
@@ -695,11 +692,11 @@ extern "system" fn web_message_received(
             _ => unimplemented!(),
         }
     }
-    if r#type == "i" {
+    if r#type == 'i' {
         let mut source = LPWSTR::default();
         unsafe { (*args).get_Source(source.as_mut_ptr()) };
-        if _self.trusted_url.allows(&source.to_string()) {
-            _self.emit(WebviewEvent::MessageReceive(message.to_string()));
+        if _self.trusted_url.allows(&source.to_string_lossy()) {
+            _self.emit(WebviewEvent::MessageReceive(message));
         }
     }
 
@@ -724,7 +721,12 @@ extern "system" fn web_resource_requested(
     unsafe { (*webview2_request).Release() };
 
     for custom_protocol in &_self.custom_protocols {
-        if http_request.url.host() == Some(&format!("{}.localhost", custom_protocol.scheme)) {
+        if http_request
+            .url
+            .host()
+            .and_then(|host| host.strip_suffix(".localhost"))
+            == Some(custom_protocol.scheme.as_str())
+        {
             let response = (custom_protocol.handler)(&http_request);
 
             let webview2_response = http_response_to_webview2_response(
@@ -741,16 +743,19 @@ extern "system" fn web_resource_requested(
 }
 
 #[cfg(feature = "custom_protocol")]
-fn replace_custom_protocol_in_url(url: &str, custom_protocols: &[CustomProtocol]) -> String {
-    for custom_protocol in custom_protocols {
-        if url.starts_with(&format!("{}://", custom_protocol.scheme)) {
-            return url.replace(
-                &format!("{}://", custom_protocol.scheme),
-                &format!("http://{}.localhost/", custom_protocol.scheme),
-            );
+fn replace_custom_protocol_in_url<'a>(
+    url: &'a str,
+    custom_protocols: &[CustomProtocol],
+) -> std::borrow::Cow<'a, str> {
+    for CustomProtocol { scheme, .. } in custom_protocols {
+        if let Some(path) = url
+            .strip_prefix(scheme.as_str())
+            .and_then(|url| url.strip_prefix("://"))
+        {
+            return format!("http://{scheme}.localhost/{path}").into();
         }
     }
-    url.to_string()
+    url.into()
 }
 
 #[cfg(feature = "custom_protocol")]
@@ -762,11 +767,11 @@ fn webview2_request_to_http_request(
 
         let mut method = LPWSTR::default();
         (*request).get_Method(method.as_mut_ptr());
-        let method = method.to_string();
+        let method = method.to_string_lossy();
 
         let mut uri = LPWSTR::default();
         (*request).get_Uri(uri.as_mut_ptr());
-        let uri = uri.to_string();
+        let uri = uri.to_string_lossy();
 
         let mut req = small_http::Request::with_method_and_url(
             small_http::Method::from_str(&method).unwrap_or(small_http::Method::Get),
@@ -783,7 +788,7 @@ fn webview2_request_to_http_request(
                 let mut name = LPWSTR::default();
                 let mut value = LPWSTR::default();
                 (*iterator).GetCurrentHeader(name.as_mut_ptr(), value.as_mut_ptr());
-                req = req.header(name.to_string(), value.to_string());
+                req = req.header(name.to_string_lossy(), value.to_string_lossy());
                 (*iterator).MoveNext(&mut has_current);
             }
             (*iterator).Release();
@@ -824,9 +829,13 @@ fn http_response_to_webview2_response(
                 &response
                     .headers
                     .iter()
-                    .map(|(name, value)| format!("{name}: {value}"))
-                    .collect::<Vec<_>>()
-                    .join("\n"),
+                    .fold(String::new(), |mut headers, (name, value)| {
+                        if !headers.is_empty() {
+                            headers.push('\n');
+                        }
+                        _ = write!(headers, "{name}: {value}");
+                        headers
+                    }),
             )
             .as_ptr() as *mut _,
             &mut webview2_response,

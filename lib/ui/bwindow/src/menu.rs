@@ -24,12 +24,22 @@ thread_local! {
     static ITEM_STATES: RefCell<HashMap<String, ItemState>> = RefCell::new(HashMap::new());
 }
 
+// Changes the state of an action, only allocating its key the first time.
+#[cfg(feature = "menu")]
+fn update_item_state<R>(action: &str, update: impl FnOnce(&mut ItemState) -> R) -> R {
+    ITEM_STATES.with_borrow_mut(|states| {
+        if let Some(state) = states.get_mut(action) {
+            return update(state);
+        }
+        update(states.entry(action.to_owned()).or_default())
+    })
+}
+
 /// Enables or disables the menu items and keyboard accelerators of an action. Disabled items
 /// are grayed out on macOS and GTK, and their action events are not sent.
 #[cfg(feature = "menu")]
 pub fn set_menu_item_enabled(action: &str, enabled: bool) {
-    let changed = ITEM_STATES.with_borrow_mut(|states| {
-        let state = states.entry(action.to_owned()).or_default();
+    let changed = update_item_state(action, |state| {
         std::mem::replace(&mut state.disabled, !enabled) == enabled
     });
     #[cfg(any(
@@ -56,9 +66,8 @@ pub fn set_menu_item_enabled(action: &str, enabled: bool) {
 /// opens.
 #[cfg(feature = "menu")]
 pub fn set_menu_item_title(action: &str, title: impl Into<String>) {
-    ITEM_STATES.with_borrow_mut(|states| {
-        states.entry(action.to_owned()).or_default().title = Some(title.into());
-    });
+    let title = title.into();
+    update_item_state(action, |state| state.title = Some(title));
 }
 
 /// Whether the menu items of an action are enabled, which they are until disabled.

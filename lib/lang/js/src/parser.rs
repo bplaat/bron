@@ -1238,7 +1238,6 @@ impl<'a> Parser<'a> {
             }
             Token::Variable(variable) => {
                 let variable = variable.clone();
-                let node = AstNode::Variable(variable.clone());
                 self.next();
 
                 // Arrow function
@@ -1250,7 +1249,7 @@ impl<'a> Parser<'a> {
                         body,
                     )))))
                 } else {
-                    Ok(node)
+                    Ok(AstNode::Variable(variable))
                 }
             }
             _ => Err(format!("Parser: unknown node type: {:?}", self.peek())),

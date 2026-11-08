@@ -218,15 +218,14 @@ pub fn reorient_jpeg(jpeg: &[u8], change: Orientation) -> Option<Vec<u8>> {
             Some((range.clone(), directory, exif.get(directory, ORIENTATION)?))
         })
         .collect();
-    let mut output = jpeg.to_vec();
     let Some((_, _, current)) = tagged.last() else {
         if !ranges.is_empty() {
             return None;
         }
         let at = exif_position(jpeg, &segments);
-        output.splice(at..at, orientation_segment(change));
-        return Some(output);
+        return Some([&jpeg[..at], &orientation_segment(change), &jpeg[at..]].concat());
     };
+    let mut output = jpeg.to_vec();
     let current = Orientation::from_exif(*current as u16).unwrap_or_default();
     let value = u32::from(current.then(change).exif());
     for (range, directory, _) in tagged {

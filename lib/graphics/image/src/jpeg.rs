@@ -298,7 +298,7 @@ impl Upsampler {
     }
 }
 
-struct Jpeg {
+struct Jpeg<'a> {
     width: u32,
     height: u32,
     max_h: usize,
@@ -314,7 +314,7 @@ struct Jpeg {
     adobe: Option<u8>,
     jfif: bool,
     orientation: u16,
-    icc: Vec<IccChunk>,
+    icc: Vec<IccChunk<'a>>,
     metadata: Vec<Metadata>,
     adobe_rgb: bool,
     /// Whether three components are RGB instead of YCbCr, when the container says so.
@@ -347,10 +347,10 @@ fn jfif_resolution(jfif: &[u8]) -> Option<Metadata> {
 }
 
 /// One APP2 part of an ICC profile, which is split to fit in segments.
-struct IccChunk {
+struct IccChunk<'a> {
     sequence: u8,
     count: u8,
-    data: Vec<u8>,
+    data: &'a [u8],
 }
 
 pub(super) fn decode(data: &[u8]) -> Result<Image> {
@@ -374,7 +374,7 @@ pub(super) fn decode_tiff(tables: Option<&[u8]>, data: &[u8], rgb: bool) -> Resu
     jpeg.render(&mut budget)
 }
 
-impl Jpeg {
+impl<'a> Jpeg<'a> {
     const fn new() -> Self {
         Self {
             width: 0,
@@ -400,7 +400,7 @@ impl Jpeg {
     }
 
     // Reads the segments of a stream up to its end, which may only hold tables.
-    fn read(&mut self, data: &[u8], budget: &mut Budget) -> Result<()> {
+    fn read(&mut self, data: &'a [u8], budget: &mut Budget) -> Result<()> {
         let mut r = Reader::new(
             data.strip_prefix(&[0xff, 0xd8])
                 .ok_or(DecodeError::InvalidMagic)?,
@@ -490,7 +490,7 @@ impl Jpeg {
                         self.icc.push(IccChunk {
                             sequence: *sequence,
                             count: *count,
-                            data: data.to_vec(),
+                            data,
                         });
                     }
                 }
@@ -531,7 +531,7 @@ fn marker(r: &mut Reader<'_>) -> Result<u8> {
     }
 }
 
-impl Jpeg {
+impl Jpeg<'_> {
     fn header(&mut self, r: &mut Reader<'_>, progressive: bool, budget: &mut Budget) -> Result<()> {
         if !self.components.is_empty() {
             return Err(DecodeError::InvalidData);
@@ -769,9 +769,9 @@ impl Jpeg {
         if !complete {
             return None;
         }
-        let mut profile = Vec::new();
+        let mut profile = Vec::with_capacity(self.icc.iter().map(|chunk| chunk.data.len()).sum());
         for chunk in &self.icc {
-            profile.extend_from_slice(&chunk.data);
+            profile.extend_from_slice(chunk.data);
         }
         Some(profile)
     }

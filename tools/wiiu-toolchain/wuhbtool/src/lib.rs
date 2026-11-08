@@ -189,16 +189,17 @@ fn tga_gz(
 ) -> Result<Vec<u8>> {
     let image = image::decode(&read(path)?)
         .map_err(|err| Error(format!("failed to decode {}: {err}", path.display())))?;
-    let mut pixels = image.pixels().to_vec();
-    if (image.width(), image.height()) != size {
+    let mut pixels = if (image.width(), image.height()) == size {
+        image.pixels().to_vec()
+    } else {
         warnings.push(format!(
             "Image {} has incorrect size (expected {}x{}), resizing...",
             path.display(),
             size.0,
             size.1
         ));
-        pixels = resize(&pixels, image.width(), image.height(), size);
-    }
+        resize(image.pixels(), image.width(), image.height(), size)
+    };
     if !alpha {
         for pixel in pixels.as_chunks_mut::<4>().0 {
             let opacity = u16::from(pixel[3]);

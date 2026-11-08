@@ -415,16 +415,16 @@ pub(super) fn decode(data: &[u8]) -> Result<Image> {
         let channels = samples / planes;
         let mut raw = Vec::new();
         let mut row_samples = budget.zeroed::<u64>(block_width * channels)?;
-        let (mut accumulated, mut ordered) = (Vec::new(), Vec::new());
+        let (mut accumulated, mut ordered, mut reversed) = (Vec::new(), Vec::new(), Vec::new());
         for index in 0..blocks {
             let block = block_at(index, across, block_width, block_height, width, height);
             // Strips stop at the last row, while tiles are always full.
             let rows = if tiled { block_height } else { block.height };
             for plane in 0..planes {
                 let mut input = block_data(plane * blocks + index)?;
-                let reversed;
                 if reverse {
-                    reversed = input.iter().map(|b| b.reverse_bits()).collect::<Vec<_>>();
+                    reversed.clear();
+                    reversed.extend(input.iter().map(|b| b.reverse_bits()));
                     input = &reversed;
                 }
                 let expected = row_bytes * rows;

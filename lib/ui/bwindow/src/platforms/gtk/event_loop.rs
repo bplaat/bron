@@ -210,9 +210,9 @@ pub(super) fn system_theme() -> Theme {
         false
     } else {
         let is_dark = unsafe { CStr::from_ptr(theme_name) }
-            .to_string_lossy()
-            .to_ascii_lowercase()
-            .contains("dark");
+            .to_bytes()
+            .windows(4)
+            .any(|window| window.eq_ignore_ascii_case(b"dark"));
         unsafe { g_free(theme_name as *mut c_void) };
         is_dark
     };

@@ -11,30 +11,37 @@ const BACKGROUND_COLOR: u32 = 0xc7dfb5;
 struct VertexBuffer {
     buffer: bwebgpu::Buffer,
     capacity: usize,
+    // Reused every frame, so uploads do not allocate
+    bytes: Vec<u8>,
 }
 
 impl VertexBuffer {
     fn new(device: &bwebgpu::Device, capacity: usize) -> Self {
         Self {
-            buffer: device.create_buffer(&bwebgpu::BufferDescriptor {
-                label: Some("scene vertices"),
-                size: capacity as u64,
-                usage: bwebgpu::BufferUsages::VERTEX | bwebgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            }),
+            buffer: Self::buffer(device, capacity),
             capacity,
+            bytes: Vec::new(),
         }
     }
 
+    fn buffer(device: &bwebgpu::Device, capacity: usize) -> bwebgpu::Buffer {
+        device.create_buffer(&bwebgpu::BufferDescriptor {
+            label: Some("scene vertices"),
+            size: capacity as u64,
+            usage: bwebgpu::BufferUsages::VERTEX | bwebgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        })
+    }
+
     fn upload(&mut self, device: &bwebgpu::Device, queue: &bwebgpu::Queue, vertices: &[f32]) {
-        let bytes: Vec<u8> = vertices
-            .iter()
-            .flat_map(|value| value.to_ne_bytes())
-            .collect();
-        if bytes.len() > self.capacity {
-            *self = Self::new(device, bytes.len().next_power_of_two());
+        self.bytes.clear();
+        self.bytes
+            .extend(vertices.iter().flat_map(|value| value.to_ne_bytes()));
+        if self.bytes.len() > self.capacity {
+            self.capacity = self.bytes.len().next_power_of_two();
+            self.buffer = Self::buffer(device, self.capacity);
         }
-        queue.write_buffer(&self.buffer, 0, &bytes);
+        queue.write_buffer(&self.buffer, 0, &self.bytes);
     }
 }
 

@@ -6,6 +6,7 @@
 
 #![doc = include_str!("../README.md")]
 
+use std::borrow::Cow;
 use std::fmt::{self, Display, Formatter};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -247,14 +248,15 @@ impl Texture {
                 lod.max
             )));
         }
-        let mut pixels = image.pixels().to_vec();
-        let coverage = coverage(&pixels);
+        let coverage = coverage(image.pixels());
+        let mut pixels = Cow::Borrowed(image.pixels());
         let (mut level_width, mut level_height) = (width as usize, height as usize);
         let mut data = Vec::new();
         for level in 0..=lod.max {
             if level > 0 {
-                pixels = downsample(&pixels, level_width, level_height);
-                preserve_coverage(&mut pixels, coverage);
+                let mut downsampled = downsample(&pixels, level_width, level_height);
+                preserve_coverage(&mut downsampled, coverage);
+                pixels = Cow::Owned(downsampled);
                 level_width /= 2;
                 level_height /= 2;
             }

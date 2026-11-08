@@ -80,9 +80,9 @@ struct Image {
 fn decode(bytes: &[u8]) -> Image {
     let image = image::decode(bytes).expect("Decode Kenney PNG");
     Image {
-        pixels: image.pixels().to_vec(),
         width: image.width(),
         height: image.height(),
+        pixels: image.into_pixels(),
     }
 }
 

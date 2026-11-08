@@ -196,10 +196,10 @@ impl Curve {
         }
     }
 
-    fn table(&self) -> Table {
+    fn into_table(self) -> Table {
         match self {
-            Self::Table(values) => Table(values.clone()),
-            _ if *self == Self::LINEAR => Table(alloc::vec![0.0, 1.0]),
+            Self::Table(values) => Table(values),
+            _ if self == Self::LINEAR => Table(alloc::vec![0.0, 1.0]),
             _ => Table::sample(|x| self.eval(x)),
         }
     }
@@ -453,7 +453,7 @@ impl Lut {
                         .map(|_| {
                             let (curve, len) = Curve::parse(data.get(pos..)?)?;
                             pos = pos.checked_add(len)?;
-                            Some(curve.table())
+                            Some(curve.into_table())
                         })
                         .collect()
                 };

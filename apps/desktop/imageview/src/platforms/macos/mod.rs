@@ -399,7 +399,7 @@ impl MediaView {
     }
 
     /// Puts a PNG image on the clipboard.
-    pub(crate) fn copy_png(&self, png: &[u8]) {
+    pub(crate) fn copy_png(&self, png: Vec<u8>) {
         autoreleasepool(|_| {
             // SAFETY: NSData copies the bytes, the pasteboard retains the autoreleased image.
             unsafe {

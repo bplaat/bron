@@ -6,6 +6,7 @@
 
 #![doc = include_str!("../README.md")]
 
+use std::borrow::Cow;
 use std::fmt::{self, Display, Formatter};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -174,17 +175,18 @@ impl Texture {
             addrlib::surface_layout(format.bpp(), width, height, levels, format.compressed());
         let mut image = vec![0; layout.image_size as usize];
         let mut mipmaps = vec![0; layout.mipmap_size as usize];
-        let mut pixels = pixels.to_vec();
-        let coverage = mipmap::coverage(&pixels);
+        let coverage = mipmap::coverage(pixels);
+        let mut pixels = Cow::Borrowed(pixels);
         for (level, level_layout) in layout.levels.iter().enumerate() {
             let (level_width, level_height) = (width >> level, height >> level);
             if level > 0 {
-                pixels = mipmap::downsample(
+                let mut downsampled = mipmap::downsample(
                     &pixels,
                     level_width as usize * 2,
                     level_height as usize * 2,
                 );
-                mipmap::preserve_coverage(&mut pixels, coverage);
+                mipmap::preserve_coverage(&mut downsampled, coverage);
+                pixels = Cow::Owned(downsampled);
             }
             let data = match level {
                 0 => &mut image[..],

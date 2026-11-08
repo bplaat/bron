@@ -116,6 +116,9 @@ const SEC_E_OK: i32 = 0;
 const SEC_I_CONTINUE_NEEDED: i32 = 0x00090312u32 as i32;
 const SEC_E_INCOMPLETE_MESSAGE: i32 = 0x80090318u32 as i32;
 
+/// Maximum ciphertext bytes read from the stream at once, one maximum size TLS record
+const READ_CHUNK_SIZE: usize = 16384;
+
 /// Encode a string as a null-terminated UTF-16 string.
 pub(crate) fn wide(text: &str) -> Vec<u16> {
     text.encode_utf16().chain([0]).collect()
@@ -407,23 +410,11 @@ fn do_handshake<S: Read + Write>(
                 // Only read from the network when there is no leftover data from
                 // SECBUFFER_EXTRA; if there is, loop immediately with that data.
                 if in_data.is_empty() {
-                    let mut chunk = vec![0u8; 16384];
-                    let n = stream.read(&mut chunk).map_err(|e| Error(e.to_string()))?;
-                    if n == 0 {
-                        return Err(Error("Connection closed during TLS handshake".to_string()));
-                    }
-                    in_data.extend_from_slice(&chunk[..n]);
+                    read_handshake_data(stream, &mut in_data)?;
                 }
             }
-            SEC_E_INCOMPLETE_MESSAGE => {
-                // Need more data - append to existing buffer
-                let mut chunk = vec![0u8; 4096];
-                let n = stream.read(&mut chunk).map_err(|e| Error(e.to_string()))?;
-                if n == 0 {
-                    return Err(Error("Connection closed during TLS handshake".to_string()));
-                }
-                in_data.extend_from_slice(&chunk[..n]);
-            }
+            // Need more data - append to existing buffer
+            SEC_E_INCOMPLETE_MESSAGE => read_handshake_data(stream, &mut in_data)?,
             _ => {
                 return Err(Error(format!(
                     "TLS handshake error: 0x{:08x}",
@@ -431,6 +422,23 @@ fn do_handshake<S: Read + Write>(
                 )));
             }
         }
+    }
+}
+
+/// Reads up to `max` more bytes from the stream directly into the end of `buffer`
+fn read_append<S: Read>(stream: &mut S, buffer: &mut Vec<u8>, max: usize) -> io::Result<usize> {
+    let len = buffer.len();
+    buffer.resize(len + max, 0);
+    let read = stream.read(&mut buffer[len..]);
+    buffer.truncate(len + read.as_ref().map_or(0, |n| *n));
+    read
+}
+
+fn read_handshake_data<S: Read>(stream: &mut S, in_data: &mut Vec<u8>) -> Result<(), Error> {
+    match read_append(stream, in_data, READ_CHUNK_SIZE) {
+        Ok(0) => Err(Error("Connection closed during TLS handshake".to_string())),
+        Ok(_) => Ok(()),
+        Err(err) => Err(Error(err.to_string())),
     }
 }
 
@@ -580,37 +588,29 @@ impl<S: Read + Write> Read for TlsStream<S> {
 
                 match status {
                     SEC_E_OK => {
-                        // Extract decrypted data and leftover extra data.
-                        // SECBUFFER_DATA and SECBUFFER_EXTRA pv_buffers point into self.enc_buf
-                        // (DecryptMessage operates in-place), so we copy before replacing enc_buf.
-                        let mut dec_data = Vec::new();
-                        let mut extra_data = Vec::new();
-                        for b in &bufs {
-                            if b.buffer_type == SECBUFFER_DATA && !b.pv_buffer.is_null() {
-                                // SAFETY: pv_buffer points into enc_buf (in-place decryption); cb_buffer bytes are valid.
-                                dec_data.extend_from_slice(unsafe {
-                                    slice::from_raw_parts(
-                                        b.pv_buffer as *const u8,
-                                        b.cb_buffer as usize,
-                                    )
-                                });
+                        // DecryptMessage operates in-place, so the SECBUFFER_DATA plaintext and
+                        // SECBUFFER_EXTRA leftover ciphertext are ranges of self.enc_buf.
+                        let base = self.enc_buf.as_ptr().addr();
+                        let range = |buffer_type| {
+                            bufs.iter()
+                                .find(|b| b.buffer_type == buffer_type && !b.pv_buffer.is_null())
+                                .map(|b| {
+                                    let start = b.pv_buffer.addr() - base;
+                                    start..start + b.cb_buffer as usize
+                                })
+                        };
+                        let data = range(SECBUFFER_DATA).unwrap_or_default();
+                        let n = buf.len().min(data.len());
+                        buf[..n].copy_from_slice(&self.enc_buf[data.start..data.start + n]);
+                        self.dec_buf
+                            .extend_from_slice(&self.enc_buf[data.start + n..data.end]);
+                        match range(SECBUFFER_EXTRA) {
+                            Some(extra) => {
+                                let len = extra.len();
+                                self.enc_buf.copy_within(extra, 0);
+                                self.enc_buf.truncate(len);
                             }
-                            if b.buffer_type == SECBUFFER_EXTRA && !b.pv_buffer.is_null() {
-                                // SAFETY: pv_buffer points into enc_buf; cb_buffer bytes are unconsumed ciphertext.
-                                extra_data.extend_from_slice(unsafe {
-                                    slice::from_raw_parts(
-                                        b.pv_buffer as *const u8,
-                                        b.cb_buffer as usize,
-                                    )
-                                });
-                            }
-                        }
-                        self.enc_buf = extra_data;
-
-                        let n = buf.len().min(dec_data.len());
-                        buf[..n].copy_from_slice(&dec_data[..n]);
-                        if dec_data.len() > n {
-                            self.dec_buf.extend_from_slice(&dec_data[n..]);
+                            None => self.enc_buf.clear(),
                         }
                         return Ok(n);
                     }
@@ -627,12 +627,9 @@ impl<S: Read + Write> Read for TlsStream<S> {
             }
 
             // Read more ciphertext from the underlying stream
-            let mut chunk = vec![0u8; 16384];
-            let n = self.stream.read(&mut chunk)?;
-            if n == 0 {
+            if read_append(&mut self.stream, &mut self.enc_buf, READ_CHUNK_SIZE)? == 0 {
                 return Ok(0);
             }
-            self.enc_buf.extend_from_slice(&chunk[..n]);
         }
     }
 }

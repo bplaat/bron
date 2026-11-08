@@ -260,8 +260,7 @@ unsafe fn add_gtk_filters(chooser: *mut c_void, filters: &[crate::FileDialogFilt
         let name = CString::new(filter.name.as_str()).expect("Can't convert to CString");
         unsafe { gtk_file_filter_set_name(f, name.as_ptr()) };
         for ext in &filter.extensions {
-            let pattern = format!("*.{ext}");
-            let pat = CString::new(pattern.as_str()).expect("Can't convert to CString");
+            let pat = CString::new(format!("*.{ext}")).expect("Can't convert to CString");
             unsafe { gtk_file_filter_add_pattern(f, pat.as_ptr()) };
         }
         unsafe { gtk_file_chooser_add_filter(chooser, f) };

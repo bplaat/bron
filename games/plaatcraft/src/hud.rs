@@ -434,12 +434,13 @@ impl Chat {
         let shown: Vec<_> = if typing {
             self.lines.iter().rev().take(CHAT_OPEN).rev().collect()
         } else {
-            let recent: Vec<_> = self
+            let mut recent: Vec<_> = self
                 .lines
                 .iter()
                 .filter(|line| line.received.elapsed() < CHAT_TIME)
                 .collect();
-            recent[recent.len().saturating_sub(CHAT_RECENT)..].to_vec()
+            recent.drain(..recent.len().saturating_sub(CHAT_RECENT));
+            recent
         };
         if shown.is_empty() && !typing {
             self.cached = None;

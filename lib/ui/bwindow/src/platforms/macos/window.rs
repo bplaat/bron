@@ -65,6 +65,11 @@ impl TitlebarDoubleClickAction {
     }
 }
 
+// The observed key path, hoisted out of Drop because trait methods can't use ns_string!
+fn effective_appearance_key_path() -> *mut Object {
+    ns_string!("effectiveAppearance")
+}
+
 fn titlebar_double_click_action() -> TitlebarDoubleClickAction {
     let defaults: *mut Object = unsafe { msg_send![class!(NSUserDefaults), standardUserDefaults] };
     let global_domain: *mut Object =
@@ -552,7 +557,7 @@ impl PlatformWindow {
             content_view.as_ptr().cast(),
         ));
         unsafe {
-            let _: () = msg_send![&window, addObserver:window_delegate.as_ptr(), forKeyPath:ns_string!("effectiveAppearance"), options:5usize, context:null_mut::<std::ffi::c_void>()];
+            let _: () = msg_send![&window, addObserver:window_delegate.as_ptr(), forKeyPath:effective_appearance_key_path(), options:5usize, context:null_mut::<std::ffi::c_void>()];
         }
         // Windows built before the launch finished are shown by it, later ones right away.
         if has_launched() {
@@ -572,9 +577,9 @@ impl PlatformWindow {
 
 impl Drop for PlatformWindow {
     fn drop(&mut self) {
-        let key = NSString::new("effectiveAppearance");
+        let key_path = effective_appearance_key_path();
         let _: () = unsafe {
-            msg_send![&self.0.window, removeObserver:self.0._delegate.as_ptr(), forKeyPath:&*key]
+            msg_send![&self.0.window, removeObserver:self.0._delegate.as_ptr(), forKeyPath:key_path]
         };
         // NSWindow.delegate is non-owning, so clear it before the retained delegate is dropped.
         let _: () = unsafe { msg_send![&self.0.window, setDelegate:null_mut::<Object>()] };

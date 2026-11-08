@@ -425,7 +425,7 @@ impl MediaView {
     }
 
     /// Puts a PNG image on the clipboard, in the format of that name.
-    pub(crate) fn copy_png(&self, png: &[u8]) {
+    pub(crate) fn copy_png(&self, png: Vec<u8>) {
         let format = w!("PNG");
         // SAFETY: The clipboard takes over the global memory once it has it, which is freed
         // here otherwise.

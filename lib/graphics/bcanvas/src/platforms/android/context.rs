@@ -541,6 +541,9 @@ impl Jni {
 }
 
 // MARK: Resources
+// A typeface family and whether it is bold.
+type TypefaceKey = (Arc<str>, bool);
+
 /// The paints, path, and matrix one canvas draws with, reused for every frame. The last
 /// state set on each paint is remembered, so unchanged state costs no JNI calls.
 pub(crate) struct Resources {
@@ -559,7 +562,7 @@ pub(crate) struct Resources {
     path: GlobalObject,
     matrix: GlobalObject,
     values: Global<JFloatArray<'static>>,
-    typefaces: RefCell<HashMap<(String, bool), Rc<GlobalObject>>>,
+    typefaces: RefCell<HashMap<TypefaceKey, Rc<GlobalObject>>>,
 }
 
 impl Resources {
@@ -626,15 +629,15 @@ impl Resources {
         &self,
         env: &mut Env,
         jni: &Jni,
-        family: &str,
+        family: &Arc<str>,
         bold: bool,
     ) -> Result<Rc<GlobalObject>> {
         const BOLD: jint = 1;
-        let key = (family.to_string(), bold);
+        let key = (family.clone(), bold);
         if let Some(typeface) = self.typefaces.borrow().get(&key) {
             return Ok(typeface.clone());
         }
-        let name = env.new_string(family)?;
+        let name = env.new_string(&**family)?;
         let typeface = unsafe {
             env.call_static_method_unchecked(
                 &jni.typeface_class,
@@ -848,12 +851,18 @@ impl PlatformCanvasContext {
     ) -> Result<JObject<'local>> {
         let jni = self.jni;
         // Android gradients need two stops, a single one is a uniform color.
-        let mut stops = gradient.stops.clone();
-        match stops.len() {
-            0 => stops = vec![(0.0, Color::rgba(0, 0, 0, 0)); 2],
-            1 => stops.push((1.0, stops[0].1)),
-            _ => {}
-        }
+        let padded;
+        let stops = match gradient.stops.as_slice() {
+            [] => {
+                padded = [(0.0, Color::rgba(0, 0, 0, 0)); 2];
+                &padded[..]
+            }
+            &[stop] => {
+                padded = [stop, (1.0, stop.1)];
+                &padded[..]
+            }
+            stops => stops,
+        };
         let argb = |color: Color| {
             (u32::from(color.alpha) << 24)
                 | (u32::from(color.red) << 16)

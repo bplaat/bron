@@ -9,10 +9,10 @@
 //! and back stretch the sprite's face and back edges.
 
 use alloc::collections::BTreeMap;
+#[cfg(all(test, feature = "std"))]
+use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
-#[cfg(all(test, feature = "std"))]
-use alloc::{format, vec};
 use core::f32::consts::{PI, TAU};
 
 use crate::camera::View;
@@ -66,7 +66,7 @@ fn angle_difference(from: f32, to: f32) -> f32 {
 
 impl Others {
     /// Adds, moves, and removes the players of a state.
-    pub fn update(&mut self, players: Vec<PlayerInfo>) {
+    pub fn update(&mut self, players: &[PlayerInfo]) {
         self.players
             .retain(|id, _| players.iter().any(|player| player.id == *id));
         for player in players {
@@ -78,7 +78,7 @@ impl Others {
                 phase: 0.0,
                 stride: 0.0,
             });
-            other.name = player.name;
+            other.name.clone_from(&player.name);
             other.target = player.pose;
             other.held = player.held;
         }
@@ -282,8 +282,8 @@ mod tests {
     #[test]
     fn players_glide_walk_and_leave() {
         let mut others = Others::default();
-        others.update(vec![info(1, 8.0), info(2, 0.0)]);
-        others.update(vec![info(1, 9.0)]);
+        others.update(&[info(1, 8.0), info(2, 0.0)]);
+        others.update(&[info(1, 9.0)]);
         assert_eq!(others.players.len(), 1);
         for _ in 0..10 {
             others.animate(1.0 / 60.0);
@@ -291,7 +291,7 @@ mod tests {
         let other = &others.players[&1];
         assert!(other.pose.position[0] > 8.5 && other.pose.position[0] < 9.0);
         assert!(other.stride > 0.0 && other.phase > 0.0);
-        others.update(vec![info(1, 100.0)]);
+        others.update(&[info(1, 100.0)]);
         others.animate(1.0 / 60.0);
         assert_eq!(others.players[&1].pose.position[0], 100.0);
         assert!((angle_difference(0.1, TAU - 0.1) + 0.2).abs() < 0.0001);
@@ -304,7 +304,7 @@ mod tests {
             let mut player = info(1, 8.0);
             player.held = material;
             player.pose.pitch = 0.6;
-            others.update(vec![player]);
+            others.update(&[player]);
             let other = others.players.get_mut(&1).unwrap();
             other.phase = 1.0;
             other.stride = 0.8;
@@ -347,7 +347,7 @@ mod tests {
     #[test]
     fn boxes_stand_on_the_feet_and_tags_float_above() {
         let mut others = Others::default();
-        others.update(vec![info(0, 8.0)]);
+        others.update(&[info(0, 8.0)]);
         let bytes = others.instances((0, 0), 100);
         assert_eq!(bytes.len(), (BODY_BOXES + 1) * INSTANCE_BYTES as usize);
         let floats: Vec<_> = bytes

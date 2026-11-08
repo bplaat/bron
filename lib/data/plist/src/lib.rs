@@ -233,7 +233,7 @@ impl Value {
             return Err(Error("Reading binary plist is not supported".to_string()));
         }
         let text = std::str::from_utf8(&bytes).map_err(|e| Error(e.to_string()))?;
-        parse_value(&tokenize(text)?, &mut 0)
+        parse_value(&mut tokenize(text)?, &mut 0)
     }
 
     /// Write this value to a file as a binary plist.
@@ -490,14 +490,14 @@ fn encode_uint(n: u64, size: usize) -> Vec<u8> {
 
 // MARK: XML plist reader
 #[derive(Debug)]
-enum Token {
-    Open(String),
-    Close(String),
-    SelfClose(String),
+enum Token<'a> {
+    Open(&'a str),
+    Close(&'a str),
+    SelfClose(&'a str),
     Text(String),
 }
 
-fn tokenize(input: &str) -> Result<Vec<Token>, Error> {
+fn tokenize(input: &str) -> Result<Vec<Token<'_>>, Error> {
     let mut tokens = Vec::new();
     let mut name = "";
     let mut text = String::new();
@@ -516,11 +516,9 @@ fn tokenize(input: &str) -> Result<Vec<Token>, Error> {
         match token {
             XmlToken::ElementStart { local, .. } => name = local.as_str(),
             XmlToken::ElementEnd { end, .. } => match end {
-                ElementEnd::Open => tokens.push(Token::Open(name.to_string())),
-                ElementEnd::Empty => tokens.push(Token::SelfClose(name.to_string())),
-                ElementEnd::Close(_, local) => {
-                    tokens.push(Token::Close(local.as_str().to_string()))
-                }
+                ElementEnd::Open => tokens.push(Token::Open(name)),
+                ElementEnd::Empty => tokens.push(Token::SelfClose(name)),
+                ElementEnd::Close(_, local) => tokens.push(Token::Close(local.as_str())),
             },
             XmlToken::Text { text: t } => text.push_str(&xml_unescape(t.as_str())?),
             XmlToken::Cdata { text: t, .. } => text.push_str(t.as_str()),
@@ -530,13 +528,12 @@ fn tokenize(input: &str) -> Result<Vec<Token>, Error> {
     Ok(tokens)
 }
 
-fn parse_value(tokens: &[Token], pos: &mut usize) -> Result<Value, Error> {
+fn parse_value(tokens: &mut [Token<'_>], pos: &mut usize) -> Result<Value, Error> {
     while *pos < tokens.len() {
-        match &tokens[*pos] {
+        match tokens[*pos] {
             Token::Open(name) => {
-                let name = name.clone();
                 *pos += 1;
-                return match name.as_str() {
+                return match name {
                     "plist" => parse_value(tokens, pos),
                     "dict" => parse_dict(tokens, pos),
                     "array" => parse_array(tokens, pos),
@@ -561,12 +558,11 @@ fn parse_value(tokens: &[Token], pos: &mut usize) -> Result<Value, Error> {
                             .map_err(|e| Error(e.to_string()))
                     }
                     "data" => {
-                        let text = read_text(tokens, pos);
+                        let mut text = read_text(tokens, pos);
                         consume_close(tokens, pos, "data")?;
-                        let clean: String =
-                            text.chars().filter(|c| !c.is_ascii_whitespace()).collect();
+                        text.retain(|c| !c.is_ascii_whitespace());
                         BASE64_STANDARD
-                            .decode(clean)
+                            .decode(text)
                             .map(Value::Data)
                             .map_err(|e| Error(e.to_string()))
                     }
@@ -574,9 +570,8 @@ fn parse_value(tokens: &[Token], pos: &mut usize) -> Result<Value, Error> {
                 };
             }
             Token::SelfClose(name) => {
-                let name = name.clone();
                 *pos += 1;
-                return match name.as_str() {
+                return match name {
                     "true" => Ok(Value::Boolean(true)),
                     "false" => Ok(Value::Boolean(false)),
                     other => Err(Error(format!("Unknown self-closing element: {other}"))),
@@ -591,15 +586,15 @@ fn parse_value(tokens: &[Token], pos: &mut usize) -> Result<Value, Error> {
     Err(Error("Unexpected end of plist".to_string()))
 }
 
-fn parse_dict(tokens: &[Token], pos: &mut usize) -> Result<Value, Error> {
+fn parse_dict(tokens: &mut [Token<'_>], pos: &mut usize) -> Result<Value, Error> {
     let mut dict = Dictionary::new();
     loop {
         match tokens.get(*pos) {
-            Some(Token::Close(name)) if name == "dict" => {
+            Some(Token::Close("dict")) => {
                 *pos += 1;
                 break;
             }
-            Some(Token::Open(name)) if name == "key" => {
+            Some(Token::Open("key")) => {
                 *pos += 1;
                 let key = read_text(tokens, pos);
                 consume_close(tokens, pos, "key")?;
@@ -615,11 +610,11 @@ fn parse_dict(tokens: &[Token], pos: &mut usize) -> Result<Value, Error> {
     Ok(Value::Dictionary(dict))
 }
 
-fn parse_array(tokens: &[Token], pos: &mut usize) -> Result<Value, Error> {
+fn parse_array(tokens: &mut [Token<'_>], pos: &mut usize) -> Result<Value, Error> {
     let mut arr = Vec::new();
     loop {
         match tokens.get(*pos) {
-            Some(Token::Close(name)) if name == "array" => {
+            Some(Token::Close("array")) => {
                 *pos += 1;
                 break;
             }
@@ -630,20 +625,19 @@ fn parse_array(tokens: &[Token], pos: &mut usize) -> Result<Value, Error> {
     Ok(Value::Array(arr))
 }
 
-fn read_text(tokens: &[Token], pos: &mut usize) -> String {
-    match tokens.get(*pos) {
-        Some(Token::Text(t)) => {
-            let s = t.clone();
+fn read_text(tokens: &mut [Token<'_>], pos: &mut usize) -> String {
+    match tokens.get_mut(*pos) {
+        Some(Token::Text(text)) => {
             *pos += 1;
-            s
+            std::mem::take(text)
         }
         _ => String::new(),
     }
 }
 
-fn consume_close(tokens: &[Token], pos: &mut usize, tag: &str) -> Result<(), Error> {
+fn consume_close(tokens: &[Token<'_>], pos: &mut usize, tag: &str) -> Result<(), Error> {
     match tokens.get(*pos) {
-        Some(Token::Close(name)) if name == tag => {
+        Some(Token::Close(name)) if *name == tag => {
             *pos += 1;
             Ok(())
         }
@@ -686,7 +680,7 @@ mod tests {
     use super::*;
 
     fn parse(xml: &str) -> Result<Value, Error> {
-        parse_value(&tokenize(xml)?, &mut 0)
+        parse_value(&mut tokenize(xml)?, &mut 0)
     }
 
     fn write_binary(value: &Value) -> Vec<u8> {

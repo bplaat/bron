@@ -1907,12 +1907,12 @@ impl<'a> CanvasRenderingContext2d<'a> {
     }
     /// Set text font family and size in logical pixels, rather than a CSS font string.
     /// Non-finite, zero, and negative sizes leave both properties unchanged.
-    pub fn set_font(&mut self, family: impl Into<String>, size: f32) {
+    pub fn set_font(&mut self, family: impl AsRef<str>, size: f32) {
         if !size.is_finite() || size <= 0.0 {
             return;
         }
-        let family = family.into();
-        if self.state.font_family.as_ref() != family {
+        let family = family.as_ref();
+        if *self.state.font_family != *family {
             self.state.font_family = family.into();
         }
         self.state.font_size = size;

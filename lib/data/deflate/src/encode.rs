@@ -999,23 +999,18 @@ fn optimize(
     initial: Vec<Symbol>,
     p: &Params,
 ) -> Vec<Symbol> {
-    let mut best_bits = block_bits(&Histogram::new(&initial));
-    let mut current = initial.clone();
+    let histogram = Histogram::new(&initial);
+    let mut best_bits = block_bits(&histogram);
+    let mut costs = Costs::new(&histogram);
     let mut best = initial;
     for _ in 0..p.passes {
-        current = parse_optimal(
-            data,
-            matches,
-            offset,
-            start,
-            end,
-            &Costs::new(&Histogram::new(&current)),
-            p.span,
-        );
-        let bits = block_bits(&Histogram::new(&current));
+        let current = parse_optimal(data, matches, offset, start, end, &costs, p.span);
+        let histogram = Histogram::new(&current);
+        let bits = block_bits(&histogram);
+        costs = Costs::new(&histogram);
         if bits < best_bits {
             best_bits = bits;
-            best.clone_from(&current);
+            best = current;
         }
     }
     best

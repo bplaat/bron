@@ -261,25 +261,29 @@ fn serve_guest(
                         .expect("Guests poisoned")
                         .get(&id)
                         .and_then(|&(_, address)| address);
-                    if let (
-                        Response::State {
-                            sequence,
-                            body,
-                            others,
-                        },
-                        Some(address),
-                    ) = (&response, address)
-                    {
-                        let datagram = Datagram::State {
-                            sequence: *sequence,
-                            body: *body,
-                            others: others.clone(),
-                        };
-                        _ = udp.send_to(&datagram.encode(), address);
-                    } else if write_frame(&mut writer, &ServerFrame::Response(response).encode())
-                        .is_err()
-                    {
-                        break;
+                    match (response, address) {
+                        (
+                            Response::State {
+                                sequence,
+                                body,
+                                others,
+                            },
+                            Some(address),
+                        ) => {
+                            let datagram = Datagram::State {
+                                sequence,
+                                body,
+                                others,
+                            };
+                            _ = udp.send_to(&datagram.encode(), address);
+                        }
+                        (response, _) => {
+                            if write_frame(&mut writer, &ServerFrame::Response(response).encode())
+                                .is_err()
+                            {
+                                break;
+                            }
+                        }
                     }
                 }
                 _ = writer.shutdown(Shutdown::Both);
@@ -553,10 +557,7 @@ impl Drop for Discovery {
 /// returns whether the list changed. A world on this computer is announced twice, once on
 /// the loopback address, which is only kept when its LAN address is not.
 pub(crate) fn merge(worlds: &mut Vec<Found>, found: Vec<Found>) -> bool {
-    let before: Vec<_> = worlds
-        .iter()
-        .map(|world| (world.address, world.announcement.clone()))
-        .collect();
+    let mut changed = false;
     for found in found {
         let same = |world: &&mut Found| {
             world.announcement.host == found.announcement.host
@@ -564,21 +565,26 @@ pub(crate) fn merge(worlds: &mut Vec<Found>, found: Vec<Found>) -> bool {
                 && world.address.port() == found.address.port()
         };
         if let Some(world) = worlds.iter_mut().find(same) {
-            if world.address.ip().is_loopback() || !found.address.ip().is_loopback() {
+            if (world.address.ip().is_loopback() || !found.address.ip().is_loopback())
+                && world.address != found.address
+            {
                 world.address = found.address;
+                changed = true;
             }
-            world.announcement = found.announcement;
+            if world.announcement != found.announcement {
+                world.announcement = found.announcement;
+                changed = true;
+            }
             world.compatible = found.compatible;
             world.seen = found.seen;
         } else {
             worlds.push(found);
+            changed = true;
         }
     }
+    let count = worlds.len();
     worlds.retain(|world| world.seen.elapsed() < ANNOUNCE_INTERVAL * 4);
-    worlds
-        .iter()
-        .map(|world| (world.address, world.announcement.clone()))
-        .ne(before)
+    changed || worlds.len() != count
 }
 
 #[cfg(test)]

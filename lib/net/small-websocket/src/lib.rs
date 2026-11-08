@@ -436,7 +436,7 @@ fn message_from_data_frame(opcode: u8, payload: Vec<u8>) -> io::Result<Message> 
     }
 }
 
-fn parse_close_message(payload: Vec<u8>) -> io::Result<Message> {
+fn parse_close_message(mut payload: Vec<u8>) -> io::Result<Message> {
     if payload.len() == 1 {
         return Err(invalid_data(
             "WebSocket close payload has an invalid length",
@@ -444,8 +444,9 @@ fn parse_close_message(payload: Vec<u8>) -> io::Result<Message> {
     }
     let code = (payload.len() >= 2).then(|| u16::from_be_bytes([payload[0], payload[1]]));
     let reason = if payload.len() > 2 {
+        payload.drain(..2);
         Some(
-            String::from_utf8(payload[2..].to_vec())
+            String::from_utf8(payload)
                 .map_err(|_| invalid_data("WebSocket close reason is not valid UTF-8"))?,
         )
     } else {
