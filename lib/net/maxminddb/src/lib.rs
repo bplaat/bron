@@ -67,6 +67,19 @@ mod tests {
     }
 
     #[test]
+    fn decoded_records_outlive_the_reader_and_can_be_decoded_repeatedly() {
+        let city = {
+            let reader = Reader::open_readfile(test_db_path()).unwrap();
+            let result = reader.lookup("89.160.20.128".parse().unwrap()).unwrap();
+            let first = result.decode::<geoip2::City>().unwrap().unwrap();
+            let second = result.decode::<geoip2::City>().unwrap().unwrap();
+            assert_eq!(first.country.iso_code, second.country.iso_code);
+            first
+        };
+        assert_eq!(city.country.iso_code.as_deref(), Some("SE"));
+    }
+
+    #[test]
     fn test_lookup_unknown_ip() {
         let reader = Reader::open_readfile(test_db_path()).expect("failed to open database");
         // 192.0.2.0/24 is reserved documentation range, not in the DB.

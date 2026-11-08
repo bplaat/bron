@@ -15,11 +15,11 @@ use crate::MaxMindDbError;
 
 /// A decoded MaxMind DB data value.
 #[derive(Debug, Clone)]
-pub(crate) enum Value {
+pub(crate) enum Value<'a> {
     /// A UTF-8 string.
-    Str(String),
+    Str(&'a str),
     /// Raw bytes.
-    Bytes(Vec<u8>),
+    Bytes(&'a [u8]),
     /// A 64-bit float (double).
     F64(f64),
     /// A 32-bit float.
@@ -37,9 +37,9 @@ pub(crate) enum Value {
     /// An unsigned 128-bit integer.
     U128(u128),
     /// A map of string keys to values.
-    Map(HashMap<String, Value>),
+    Map(HashMap<&'a str, Value<'a>>),
     /// An ordered array of values.
-    Array(Vec<Value>),
+    Array(Vec<Value<'a>>),
 }
 
 // MARK: Decoder
@@ -49,7 +49,7 @@ pub(crate) enum Value {
 pub(crate) fn decode_value_at(
     data: &[u8],
     offset: usize,
-) -> Result<(Value, usize), MaxMindDbError> {
+) -> Result<(Value<'_>, usize), MaxMindDbError> {
     if offset >= data.len() {
         return Err(MaxMindDbError::InvalidDatabase(
             "unexpected end of data".to_string(),
@@ -137,7 +137,7 @@ fn decode_pointer(
     ctrl: u8,
     data: &[u8],
     offset: usize,
-) -> Result<(Value, usize), MaxMindDbError> {
+) -> Result<(Value<'_>, usize), MaxMindDbError> {
     // Pointer size is encoded in bits 4-3 of ctrl (after the 3 type bits).
     let pointer_size = ((ctrl >> 3) & 0x3) as usize;
     let (ptr_value, new_offset) = match pointer_size {
@@ -182,15 +182,18 @@ fn decode_string(
     size: usize,
     data: &[u8],
     offset: usize,
-) -> Result<(Value, usize), MaxMindDbError> {
+) -> Result<(Value<'_>, usize), MaxMindDbError> {
     check_bounds(data, offset, size)?;
     let s = std::str::from_utf8(&data[offset..offset + size])
-        .map_err(|_| MaxMindDbError::InvalidDatabase("invalid UTF-8 string".to_string()))?
-        .to_string();
+        .map_err(|_| MaxMindDbError::InvalidDatabase("invalid UTF-8 string".to_string()))?;
     Ok((Value::Str(s), offset + size))
 }
 
-fn decode_f64(size: usize, data: &[u8], offset: usize) -> Result<(Value, usize), MaxMindDbError> {
+fn decode_f64(
+    size: usize,
+    data: &[u8],
+    offset: usize,
+) -> Result<(Value<'_>, usize), MaxMindDbError> {
     if size != 8 {
         return Err(MaxMindDbError::InvalidDatabase(
             "double must be 8 bytes".to_string(),
@@ -203,7 +206,11 @@ fn decode_f64(size: usize, data: &[u8], offset: usize) -> Result<(Value, usize),
     Ok((Value::F64(f64::from_be_bytes(bytes)), offset + 8))
 }
 
-fn decode_f32(size: usize, data: &[u8], offset: usize) -> Result<(Value, usize), MaxMindDbError> {
+fn decode_f32(
+    size: usize,
+    data: &[u8],
+    offset: usize,
+) -> Result<(Value<'_>, usize), MaxMindDbError> {
     if size != 4 {
         return Err(MaxMindDbError::InvalidDatabase(
             "float must be 4 bytes".to_string(),
@@ -216,12 +223,13 @@ fn decode_f32(size: usize, data: &[u8], offset: usize) -> Result<(Value, usize),
     Ok((Value::F32(f32::from_be_bytes(bytes)), offset + 4))
 }
 
-fn decode_bytes(size: usize, data: &[u8], offset: usize) -> Result<(Value, usize), MaxMindDbError> {
+fn decode_bytes(
+    size: usize,
+    data: &[u8],
+    offset: usize,
+) -> Result<(Value<'_>, usize), MaxMindDbError> {
     check_bounds(data, offset, size)?;
-    Ok((
-        Value::Bytes(data[offset..offset + size].to_vec()),
-        offset + size,
-    ))
+    Ok((Value::Bytes(&data[offset..offset + size]), offset + size))
 }
 
 fn decode_uint(
@@ -229,7 +237,7 @@ fn decode_uint(
     data: &[u8],
     offset: usize,
     max_bytes: usize,
-) -> Result<(Value, usize), MaxMindDbError> {
+) -> Result<(Value<'_>, usize), MaxMindDbError> {
     if size > max_bytes {
         return Err(MaxMindDbError::InvalidDatabase(format!(
             "uint size {size} exceeds maximum {max_bytes}"
@@ -254,7 +262,7 @@ fn decode_uint128(
     size: usize,
     data: &[u8],
     offset: usize,
-) -> Result<(Value, usize), MaxMindDbError> {
+) -> Result<(Value<'_>, usize), MaxMindDbError> {
     if size > 16 {
         return Err(MaxMindDbError::InvalidDatabase(
             "uint128 size exceeds 16".to_string(),
@@ -268,7 +276,11 @@ fn decode_uint128(
     Ok((Value::U128(v), offset + size))
 }
 
-fn decode_int32(size: usize, data: &[u8], offset: usize) -> Result<(Value, usize), MaxMindDbError> {
+fn decode_int32(
+    size: usize,
+    data: &[u8],
+    offset: usize,
+) -> Result<(Value<'_>, usize), MaxMindDbError> {
     if size > 4 {
         return Err(MaxMindDbError::InvalidDatabase(
             "int32 size exceeds 4".to_string(),
@@ -286,7 +298,7 @@ fn decode_map(
     count: usize,
     data: &[u8],
     mut offset: usize,
-) -> Result<(Value, usize), MaxMindDbError> {
+) -> Result<(Value<'_>, usize), MaxMindDbError> {
     let mut map = HashMap::with_capacity(count);
     for _ in 0..count {
         let (key_val, new_offset) = decode_value_at(data, offset)?;
@@ -310,7 +322,7 @@ fn decode_array(
     count: usize,
     data: &[u8],
     mut offset: usize,
-) -> Result<(Value, usize), MaxMindDbError> {
+) -> Result<(Value<'_>, usize), MaxMindDbError> {
     let mut arr = Vec::with_capacity(count);
     for _ in 0..count {
         let (val, new_offset) = decode_value_at(data, offset)?;
@@ -320,19 +332,22 @@ fn decode_array(
     Ok((Value::Array(arr), offset))
 }
 
-const fn decode_bool(size: usize, offset: usize) -> Result<(Value, usize), MaxMindDbError> {
+const fn decode_bool(
+    size: usize,
+    offset: usize,
+) -> Result<(Value<'static>, usize), MaxMindDbError> {
     Ok((Value::Bool(size != 0), offset))
 }
 
 // MARK: Serde Deserializer
 
 /// Deserialize a MaxMind DB `Value` into any `T: DeserializeOwned`.
-pub(crate) fn from_value<T: DeserializeOwned>(value: &Value) -> Result<T, MaxMindDbError> {
+pub(crate) fn from_value<T: DeserializeOwned>(value: &Value<'_>) -> Result<T, MaxMindDbError> {
     T::deserialize(ValueDeserializer(value))
         .map_err(|e| MaxMindDbError::InvalidDatabase(e.to_string()))
 }
 
-struct ValueDeserializer<'a>(&'a Value);
+struct ValueDeserializer<'a, 'data>(&'a Value<'data>);
 
 #[derive(Debug)]
 struct DeError(String);
@@ -365,7 +380,7 @@ macro_rules! forward_to_u64 {
     };
 }
 
-impl<'de> Deserializer<'de> for ValueDeserializer<'_> {
+impl<'de> Deserializer<'de> for ValueDeserializer<'_, '_> {
     type Error = DeError;
 
     fn deserialize_any<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Self::Error> {
@@ -550,12 +565,12 @@ impl<'de> Deserializer<'de> for ValueDeserializer<'_> {
     }
 }
 
-struct MapDeserializer<'a> {
-    iter: std::collections::hash_map::Iter<'a, String, Value>,
-    current_value: Option<&'a Value>,
+struct MapDeserializer<'a, 'data> {
+    iter: std::collections::hash_map::Iter<'a, &'data str, Value<'data>>,
+    current_value: Option<&'a Value<'data>>,
 }
 
-impl<'de> MapAccess<'de> for MapDeserializer<'_> {
+impl<'de> MapAccess<'de> for MapDeserializer<'_, '_> {
     type Error = DeError;
 
     fn next_key_seed<K: de::DeserializeSeed<'de>>(
@@ -564,7 +579,7 @@ impl<'de> MapAccess<'de> for MapDeserializer<'_> {
     ) -> Result<Option<K::Value>, Self::Error> {
         if let Some((key, val)) = self.iter.next() {
             self.current_value = Some(val);
-            seed.deserialize(de::value::StrDeserializer::new(key.as_str()))
+            seed.deserialize(de::value::StrDeserializer::new(key))
                 .map(Some)
         } else {
             Ok(None)
@@ -583,11 +598,11 @@ impl<'de> MapAccess<'de> for MapDeserializer<'_> {
     }
 }
 
-struct SeqDeserializer<'a> {
-    iter: std::slice::Iter<'a, Value>,
+struct SeqDeserializer<'a, 'data> {
+    iter: std::slice::Iter<'a, Value<'data>>,
 }
 
-impl<'de> SeqAccess<'de> for SeqDeserializer<'_> {
+impl<'de> SeqAccess<'de> for SeqDeserializer<'_, '_> {
     type Error = DeError;
 
     fn next_element_seed<T: de::DeserializeSeed<'de>>(
@@ -599,5 +614,28 @@ impl<'de> SeqAccess<'de> for SeqDeserializer<'_> {
         } else {
             Ok(None)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn decoded_payloads_borrow_database_storage() {
+        let data = [0x43, b'a', b'b', b'c', 0x83, 1, 2, 3];
+        let (text, next) = decode_value_at(&data, 0).unwrap();
+        let Value::Str(text) = text else {
+            panic!("expected string");
+        };
+        assert_eq!(text, "abc");
+        assert_eq!(text.as_ptr(), data[1..].as_ptr());
+        let (bytes, end) = decode_value_at(&data, next).unwrap();
+        let Value::Bytes(bytes) = bytes else {
+            panic!("expected bytes");
+        };
+        assert_eq!(bytes, [1, 2, 3]);
+        assert_eq!(bytes.as_ptr(), data[5..].as_ptr());
+        assert_eq!(end, data.len());
     }
 }

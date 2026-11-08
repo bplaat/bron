@@ -63,7 +63,7 @@ impl<S: AsRef<[u8]>> Reader<S> {
     }
 
     /// Look up an IP address in the database.
-    pub fn lookup(&self, addr: IpAddr) -> Result<LookupResult, MaxMindDbError> {
+    pub fn lookup(&self, addr: IpAddr) -> Result<LookupResult<'_>, MaxMindDbError> {
         let data = self.buf.as_ref();
         let node_count = self.metadata.node_count as usize;
 
@@ -209,11 +209,13 @@ impl<S: AsRef<[u8]>> Reader<S> {
 // MARK: LookupResult
 
 /// The result of looking up an IP address in a MaxMind DB.
-pub struct LookupResult {
-    pub(crate) data_value: Option<Value>,
+///
+/// Record strings and bytes borrow the reader; values returned by `decode` are owned.
+pub struct LookupResult<'a> {
+    pub(crate) data_value: Option<Value<'a>>,
 }
 
-impl LookupResult {
+impl LookupResult<'_> {
     /// Returns `true` if the database contains data for the looked-up IP.
     pub const fn has_data(&self) -> bool {
         self.data_value.is_some()
