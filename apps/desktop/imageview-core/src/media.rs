@@ -7,6 +7,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use bcanvas::premultiplied_bgra;
 use image::LoopCount;
 use vector::VectorImage;
 
@@ -182,33 +183,12 @@ fn raster(frames: &[image::Frame], loop_count: LoopCount) -> Media {
         frames: frames
             .iter()
             .map(|frame| Frame {
-                pixels: premultiplied_bgra(frame.pixels()).into(),
+                pixels: premultiplied_bgra(frame.pixels()),
                 delay: frame.delay(),
             })
             .collect(),
         loop_count,
     })
-}
-
-// Converts straight-alpha RGBA8 pixels to premultiplied BGRA8 pixels.
-pub(crate) fn premultiplied_bgra(pixels: &[u8]) -> Vec<u8> {
-    let mut output = pixels.to_vec();
-    for pixel in output.as_chunks_mut::<4>().0 {
-        let [red, green, blue, alpha] = *pixel;
-        // Opaque pixels, like all of a photo, only swap their channels.
-        *pixel = if alpha == 255 {
-            [blue, green, red, alpha]
-        } else {
-            let premultiply = |value: u8| ((u16::from(value) * u16::from(alpha) + 127) / 255) as u8;
-            [
-                premultiply(blue),
-                premultiply(green),
-                premultiply(red),
-                alpha,
-            ]
-        };
-    }
-    output
 }
 
 // MARK: Tests
@@ -218,14 +198,6 @@ mod tests {
     use super::*;
 
     const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures");
-
-    #[test]
-    fn pixels_become_premultiplied_bgra() {
-        assert_eq!(
-            premultiplied_bgra(&[255, 128, 0, 128, 10, 20, 30, 255]),
-            [0, 64, 128, 128, 30, 20, 10, 255]
-        );
-    }
 
     #[test]
     fn rasters_and_animations_decode() {

@@ -5,12 +5,11 @@
  */
 
 use std::path::Path;
-use std::sync::Arc;
 
+use bcanvas::premultiplied_bgra;
 use image::{Bitmap, Compression, EncodeOptions, Format, LoopCount, Orientation};
 
 use super::filter::for_rows;
-use crate::media::premultiplied_bgra;
 use crate::{Frame, Media, Raster, render_media};
 
 /// The JPEG quality photos are saved with by default, which keeps them close to the original.
@@ -69,7 +68,7 @@ impl Picture {
             width: self.width,
             height: self.height,
             frames: vec![Frame {
-                pixels: Arc::from(premultiplied_bgra(&self.pixels)),
+                pixels: premultiplied_bgra(&self.pixels),
                 delay: std::time::Duration::ZERO,
             }],
             loop_count: LoopCount::Finite(1),
