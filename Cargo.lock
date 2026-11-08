@@ -1562,6 +1562,7 @@ dependencies = [
 name = "vector"
 version = "0.1.0"
 dependencies = [
+ "bcanvas",
  "criterion",
  "gzip",
  "image",

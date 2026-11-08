@@ -15,6 +15,7 @@ svg = ["dep:gzip", "dep:xmlparser"]
 tinyvg = []
 
 [dependencies]
+bcanvas = { path = "../bcanvas", default-features = false }
 gzip = { path = "../../data/gzip", optional = true }
 xmlparser = { version = "0.13.6", optional = true }
 

@@ -7,9 +7,8 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use bcanvas::premultiplied_bgra;
+use bcanvas::{OffscreenCanvas, premultiplied_bgra};
 use image::LoopCount;
-use vector::VectorImage;
 
 use crate::Info;
 
@@ -18,8 +17,8 @@ use crate::Info;
 pub enum Media {
     /// A still or animated bitmap.
     Raster(Raster),
-    /// A vector display list.
-    Vector(VectorImage),
+    /// A vector image, recorded in a canvas of its natural size.
+    Vector(Arc<OffscreenCanvas>),
 }
 
 impl Media {
@@ -27,7 +26,10 @@ impl Media {
     pub fn size(&self) -> (f64, f64) {
         match self {
             Self::Raster(raster) => (f64::from(raster.width), f64::from(raster.height)),
-            Self::Vector(vector) => (vector.size().width, vector.size().height),
+            Self::Vector(vector) => (
+                f64::from(vector.logical_width()),
+                f64::from(vector.logical_height()),
+            ),
         }
     }
 
@@ -136,7 +138,7 @@ pub fn decode_pages(bytes: &[u8]) -> Result<Pages, String> {
     if let Some(format) = vector::vector_format(bytes) {
         return vector::decode_vector(bytes)
             .map(|vector| Pages {
-                pages: vec![Media::Vector(vector)],
+                pages: vec![Media::Vector(Arc::new(vector))],
                 largest: 0,
                 info: Info {
                     format: match format {
@@ -297,12 +299,10 @@ mod tests {
             assert_eq!(media.size(), (32.0, 32.0));
             assert!(media.is_still());
         }
-        let media =
-            decode_media(include_bytes!("../../imageview/examples/tiger.svgz")).expect("SVGZ");
-        let Media::Vector(image) = media else {
-            panic!("expected SVGZ vector");
-        };
-        assert_eq!(image.format(), vector::VectorFormat::Svgz);
+        let pages =
+            decode_pages(include_bytes!("../../imageview/examples/tiger.svgz")).expect("SVGZ");
+        assert!(matches!(pages.pages[0], Media::Vector(_)));
+        assert_eq!(pages.info.format, "Compressed SVG");
     }
 
     #[test]

@@ -6,10 +6,7 @@
 
 use super::values::number;
 use super::xml::Element;
-use crate::{
-    DrawCommand, LineCap, LineJoin, MaskType, PathSegment, Point, Rect, StrokeStyle, Transform,
-    VectorDecodeError, VectorImage, path_bounds,
-};
+use crate::{MaskType, PathSegment, Point, Rect, Transform, VectorDecodeError};
 
 pub(super) struct PathMetrics<'a> {
     path: &'a [PathSegment],
@@ -103,6 +100,7 @@ fn distance(a: Point, b: Point) -> f64 {
 pub(super) struct MarkerPlacement {
     pub(super) point: Point,
     pub(super) angle: f64,
+    pub(super) is_start: bool,
 }
 
 impl PathMetrics<'_> {
@@ -147,16 +145,19 @@ impl PathMetrics<'_> {
             starts.push(MarkerPlacement {
                 point: first.0,
                 angle: angle(None, first.2),
+                is_start: true,
             });
             for vertex in &vertices[1..vertices.len() - 1] {
                 mids.push(MarkerPlacement {
                     point: vertex.0,
                     angle: angle(vertex.1, vertex.2),
+                    is_start: false,
                 });
             }
             ends.push(MarkerPlacement {
                 point: last.0,
                 angle: angle(last.1, None),
+                is_start: false,
             });
             vertices.clear();
         };
@@ -262,40 +263,15 @@ pub(super) fn inverse_transform(transform: Transform) -> Option<Transform> {
     })
 }
 
-pub(super) fn commands_bounds(commands: &[DrawCommand]) -> Option<Rect> {
-    commands
-        .iter()
-        .filter_map(command_bounds)
-        .reduce(union_rect)
-}
-
-pub(super) fn commands_object_bounds(
-    image: &VectorImage,
-    commands: &[DrawCommand],
+// The bounds in object space of drawn paths, as their local bounds and transforms.
+pub(super) fn object_bounds(
+    drawn: &[(Rect, Transform)],
     document_to_object: Transform,
 ) -> Option<Rect> {
-    commands
+    drawn
         .iter()
-        .filter_map(|command| match command {
-            DrawCommand::Fill {
-                path, transform, ..
-            }
-            | DrawCommand::Stroke {
-                path, transform, ..
-            } => path_bounds(image.path(*path))
-                .map(|bounds| transform_bounds(bounds, transform.then(document_to_object))),
-            DrawCommand::PushScope { .. } | DrawCommand::PopScope => None,
-        })
+        .map(|&(bounds, transform)| transform_bounds(bounds, transform.then(document_to_object)))
         .reduce(union_rect)
-}
-
-const fn command_bounds(command: &DrawCommand) -> Option<Rect> {
-    match command {
-        DrawCommand::PushScope { bounds, .. }
-        | DrawCommand::Fill { bounds, .. }
-        | DrawCommand::Stroke { bounds, .. } => Some(*bounds),
-        DrawCommand::PopScope => None,
-    }
 }
 
 pub(super) fn union_rect(a: Rect, b: Rect) -> Rect {
@@ -362,25 +338,4 @@ pub(super) fn transform_segment(segment: &mut PathSegment, transform: Transform)
         }
         PathSegment::Close => {}
     }
-}
-
-pub(super) fn transform_scale(transform: Transform) -> f64 {
-    transform
-        .a
-        .hypot(transform.c)
-        .max(transform.b.hypot(transform.d))
-}
-
-pub(super) fn stroke_extent(style: &StrokeStyle, transform: Transform) -> f64 {
-    let join = if style.line_join == LineJoin::Miter {
-        style.miter_limit.max(1.0)
-    } else {
-        1.0
-    };
-    let cap = if style.line_cap == LineCap::Square {
-        std::f64::consts::SQRT_2
-    } else {
-        1.0
-    };
-    style.width.max(0.0) * transform_scale(transform) * join.max(cap) / 2.0
 }
