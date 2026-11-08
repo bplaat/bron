@@ -162,24 +162,20 @@ fn replace(source: &Path, destination: &Path) -> io::Result<()> {
 }
 
 #[cfg(windows)]
+/// Encode a string as a null-terminated UTF-16 string.
+pub(crate) fn wide(text: &str) -> Vec<u16> {
+    text.encode_utf16().chain([0]).collect()
+}
+
+#[cfg(windows)]
 #[allow(unsafe_code)]
 fn replace(source: &Path, destination: &Path) -> io::Result<()> {
-    use std::os::windows::ffi::OsStrExt;
-
     #[link(name = "kernel32")]
     unsafe extern "system" {
         fn MoveFileExW(source: *const u16, destination: *const u16, flags: u32) -> i32;
     }
-    let source = source
-        .as_os_str()
-        .encode_wide()
-        .chain(Some(0))
-        .collect::<Vec<_>>();
-    let destination = destination
-        .as_os_str()
-        .encode_wide()
-        .chain(Some(0))
-        .collect::<Vec<_>>();
+    let source = wide(&source.to_string_lossy());
+    let destination = wide(&destination.to_string_lossy());
     // SAFETY: both paths are valid null-terminated wide strings. REPLACE_EXISTING
     // and WRITE_THROUGH replace the destination without a delete-then-write gap.
     if unsafe { MoveFileExW(source.as_ptr(), destination.as_ptr(), 0x1 | 0x8) } == 0 {
