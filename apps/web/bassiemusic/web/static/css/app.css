@@ -1,0 +1,242 @@
+html {
+    overflow: hidden;
+}
+
+body {
+    -webkit-user-select: none;
+    -moz-user-select: none;
+    user-select: none;
+    cursor: default;
+}
+
+html,
+body {
+    height: 100%;
+}
+
+.hidden {
+    display: none;
+}
+
+.disabled {
+    opacity: 0.6;
+    pointer-events: none;
+}
+
+a {
+    color: currentColor;
+}
+
+a:hover,
+a:focus {
+    text-decoration: underline;
+}
+
+a.button,
+a.card,
+.card .title > a,
+.tabs a,
+.menu-list a,
+.dropdown a,
+.contextmenu a {
+    text-decoration: none !important;
+}
+
+img {
+    display: block;
+}
+
+img:-moz-loading {
+    visibility: hidden;
+}
+
+a,
+img {
+    -webkit-user-select: none;
+    -moz-user-select: none;
+    user-select: none;
+    -webkit-user-drag: none;
+    user-drag: none;
+    -webkit-touch-callout: none;
+}
+
+.table {
+    width: 100%;
+    table-layout: fixed;
+}
+
+.table td {
+    vertical-align: middle;
+}
+
+.card {
+    display: block;
+    cursor: pointer;
+    overflow: hidden;
+}
+
+.box {
+    overflow: hidden;
+}
+
+.media {
+    align-items: center;
+}
+
+.has-image-tags {
+    position: relative;
+}
+
+.image-tags {
+    position: absolute;
+    top: 0.5rem;
+    right: 0.5rem;
+}
+
+.image-play-button {
+    position: absolute;
+    display: none;
+    right: 0.5rem;
+    bottom: 0.5rem;
+}
+
+.has-image-play-button:hover .image-play-button {
+    display: block;
+}
+
+.icon {
+    display: block;
+    width: 24px;
+    height: 24px;
+}
+
+.icon:not(.is-colored) path {
+    fill: currentColor;
+}
+
+.icon.is-inline {
+    display: inline-block;
+    vertical-align: middle;
+    transform: translateY(-1px);
+}
+
+.flex {
+    flex: 1;
+}
+
+.ellipsis {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.modal {
+    z-index: 99999;
+}
+
+.contextmenu .dropdown-item {
+    padding: 0.375rem 1rem !important;
+}
+
+.app,
+.sidebar,
+.scrollable {
+    scrollbar-width: thin;
+    scrollbar-color: transparent transparent;
+}
+
+.app::-webkit-scrollbar,
+.sidebar::-webkit-scrollbar,
+.scrollable::-webkit-scrollbar {
+    width: 6px;
+}
+
+.app::-webkit-scrollbar-thumb,
+.sidebar::-webkit-scrollbar-thumb,
+.scrollable::-webkit-scrollbar-thumb {
+    background-color: transparent;
+}
+
+@media (min-width: 768px) {
+    .is-pulled-right-tablet {
+        float: right !important;
+    }
+
+    .dropdown.is-right-tablet > .dropdown-menu {
+        left: auto;
+        right: 0;
+    }
+}
+
+@media (max-width: 768px) {
+    .tabs {
+        width: 100%;
+    }
+
+    .tabs li {
+        flex: 1;
+    }
+
+    .mr-0-mobile {
+        margin-right: 0 !important;
+    }
+}
+
+/* System theme */
+.box.has-image,
+.card-image {
+    background-color: #ccc;
+}
+
+.app:hover,
+.sidebar:hover,
+.scrollable:hover {
+    scrollbar-color: rgba(0, 0, 0, 0.3) transparent;
+}
+
+.app:hover::-webkit-scrollbar-thumb,
+.sidebar:hover::-webkit-scrollbar-thumb,
+.scrollable:hover::-webkit-scrollbar-thumb {
+    background-color: rgba(0, 0, 0, 0.3);
+}
+
+@media (prefers-color-scheme: dark) {
+    .box.has-image,
+    .card-image {
+        background-color: #333;
+    }
+
+    .app:hover,
+    .sidebar:hover,
+    .scrollable:hover {
+        scrollbar-color: rgba(255, 255, 255, 0.3) transparent;
+    }
+
+    .app:hover::-webkit-scrollbar-thumb,
+    .sidebar:hover::-webkit-scrollbar-thumb,
+    .scrollable:hover::-webkit-scrollbar-thumb {
+        background-color: rgba(255, 255, 255, 0.3);
+    }
+}
+
+/* Light theme */
+.app.is-light .box.has-image,
+.app.is-light .card-image {
+    background-color: #ccc !important;
+}
+
+.app.is-light:hover,
+.app.is-light .sidebar:hover {
+    scrollbar-color: rgba(0, 0, 0, 0.3) transparent !important;
+}
+
+/* Dark theme */
+.app.is-dark .box.has-image,
+.app.is-dark .card-image {
+    background-color: #333 !important;
+}
+
+.app.is-dark:hover,
+.app.is-dark .sidebar:hover {
+    scrollbar-color: rgba(255, 255, 255, 0.3) transparent !important;
+}

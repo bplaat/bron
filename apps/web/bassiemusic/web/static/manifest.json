@@ -1,0 +1,36 @@
+{
+    "name": "BassieMusic",
+    "description": "An online music streaming platform with download capabilities",
+    "scope": "/",
+    "start_url": "/",
+    "theme_color": "#121212",
+    "background_color": "#0a0a0a",
+    "orientation": "portrait",
+    "display": "standalone",
+    "icons": [
+        {
+            "type": "image/png",
+            "src": "/images/icon-192x192.png",
+            "sizes": "192x192",
+            "purpose": "any"
+        },
+        {
+            "type": "image/png",
+            "src": "/images/icon-192x192-maskable.png",
+            "sizes": "192x192",
+            "purpose": "maskable"
+        },
+        {
+            "type": "image/png",
+            "src": "/images/icon-512x512.png",
+            "sizes": "512x512",
+            "purpose": "any"
+        },
+        {
+            "type": "image/png",
+            "src": "/images/icon-512x512-maskable.png",
+            "sizes": "512x512",
+            "purpose": "maskable"
+        }
+    ]
+}
