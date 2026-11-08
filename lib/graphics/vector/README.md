@@ -1,14 +1,18 @@
 # Vector
 
-A safe Rust decoder for SVG/SVGZ (subset) and TinyVG. Documents decode to an immutable,
-backend-neutral display list containing paths, paints, and drawing commands.
+A safe Rust decoder for SVG/SVGZ (subset) and TinyVG. Documents decode to a recording
+[bcanvas](../bcanvas) `OffscreenCanvas` of their intrinsic size, which `draw_canvas` draws
+sharp at any scale.
 
 ## Usage
 
 ```rs
 let bytes = std::fs::read("picture.svg").expect("read vector image");
-let document = vector::decode_vector(&bytes).expect("decode vector image");
-println!("{}x{}", document.size().width, document.size().height);
+let image = vector::decode_vector(&bytes).expect("decode vector image");
+println!("{}x{}", image.logical_width(), image.logical_height());
+
+let mut canvas = bcanvas::OffscreenCanvas::new(256, 256);
+canvas.draw(|ctx| ctx.draw_canvas(&image, 0.0, 0.0, 256.0, 256.0));
 ```
 
 Both formats are enabled by default. Use `default-features = false` with `svg`

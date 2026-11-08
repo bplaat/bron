@@ -4,12 +4,15 @@
  * SPDX-License-Identifier: MIT
  */
 
-//! Internal TinyVG parser, converted to the crate's shared vector display list.
+//! Internal TinyVG parser and renderer.
 
 use std::mem::size_of;
 use std::{error, fmt};
 
+pub(crate) use self::render::decode;
 use crate::{Color, ColorSpace, Point, Size};
+
+mod render;
 
 const MAX_ELEMENTS: usize = 1_000_000;
 const MAX_BYTES: usize = 256 * 1024 * 1024;
@@ -847,25 +850,27 @@ pub(crate) fn is_tinyvg(data: &[u8]) -> bool {
 }
 
 // MARK: Tests
+// A TinyVG header with one unit per pixel and 8-bit colors.
+#[cfg(test)]
+fn header(width: u8, height: u8, colors: &[[u8; 4]]) -> Vec<u8> {
+    let mut data = vec![0x72, 0x56, 1, 0x40, width, height, colors.len() as u8];
+    for color in colors {
+        data.extend_from_slice(color);
+    }
+    data
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn header(width: u8, height: u8, colors: &[[u8; 4]]) -> Vec<u8> {
-        let mut data = vec![0x72, 0x56, 1, 0x40, width, height, colors.len() as u8];
-        for color in colors {
-            data.extend_from_slice(color);
-        }
-        data
-    }
 
     #[test]
     fn rejects_textual_tinyvg_through_the_public_api() {
         let data = b"(tvg 1 (16 16 1/1 u8888 default) () ())";
         assert_eq!(crate::vector_format(data), None);
         assert_eq!(
-            crate::decode_vector(data),
-            Err(crate::VectorDecodeError::InvalidMagic)
+            crate::decode_vector(data).err(),
+            Some(crate::VectorDecodeError::InvalidMagic)
         );
     }
 
@@ -881,19 +886,13 @@ mod tests {
         for path in images {
             let name = corpus.relative_name(&path);
             let encoded = std::fs::read(&path).expect("read TinyVG fixture");
-            let vector = crate::decode_vector(&encoded)
+            let mut vector = crate::decode_vector(&encoded)
                 .unwrap_or_else(|error| panic!("{}: {error}", name.display()));
-            assert_eq!(
-                vector.format(),
-                crate::VectorFormat::TinyVg,
+            assert!(
+                vector.pixels().iter().any(|value| *value != 0),
                 "{}",
                 name.display()
             );
-            assert!(vector.size().width > 0.0, "{}", name.display());
-            assert!(vector.size().height > 0.0, "{}", name.display());
-            assert!(!vector.commands().is_empty(), "{}", name.display());
-            assert_ne!(vector.paths().len(), 0, "{}", name.display());
-            assert_ne!(vector.paints().len(), 0, "{}", name.display());
 
             let reference_path = corpus.reference_for(&path, ".png");
             assert!(reference_path.is_file(), "{} reference", name.display());
@@ -902,8 +901,8 @@ mod tests {
             let reference = image::decode(&reference_data)
                 .unwrap_or_else(|error| panic!("{} reference: {error}", name.display()));
             assert_eq!(
-                (f64::from(reference.width()), f64::from(reference.height())),
-                (vector.size().width, vector.size().height),
+                (reference.width() as f32, reference.height() as f32),
+                (vector.logical_width(), vector.logical_height()),
                 "{} reference",
                 name.display()
             );
@@ -911,6 +910,7 @@ mod tests {
 
         assert_eq!(used_references, references.into_iter().collect());
     }
+
     #[test]
     fn parses_a_filled_polygon_into_absolute_commands() {
         let mut data = header(10, 20, &[[255, 0, 128, 255]]);
@@ -970,71 +970,6 @@ mod tests {
         let mut data = header(10, 10, &[]);
         data.push(0x40);
         assert_eq!(parse(&data), Err(Error::InvalidData("unknown command")));
-    }
-
-    #[test]
-    fn outline_commands_keep_one_geometry_copy() {
-        let mut data = header(10, 10, &[[255, 0, 0, 255], [0, 0, 0, 255]]);
-        data.extend_from_slice(&[8, 2, 0, 1, 1, 0, 0, 9, 0, 0, 9, 0]);
-
-        let image = crate::decode_vector(&data).expect("outlined triangle");
-        assert_eq!(image.paths().len(), 1);
-        assert_eq!(image.paints().len(), 2);
-        assert_eq!(image.commands().len(), 2);
-    }
-
-    #[test]
-    fn converts_variable_width_strokes_to_tapered_fills() {
-        let mut data = header(10, 10, &[[0, 0, 0, 255]]);
-        data.extend_from_slice(&[7, 0, 0, 1, 0, 0, 0, 0x10, 2, 9, 0, 0]);
-
-        let image = crate::decode_vector(&data).expect("variable-width path");
-        let crate::DrawCommand::Fill { rule, bounds, .. } = image.commands()[0] else {
-            panic!("expected tapered fill");
-        };
-        assert_eq!(rule, crate::FillRule::NonZero);
-        assert!(bounds.y <= -1.0);
-        assert!(bounds.y + bounds.height >= 1.0);
-        let segment_count = image.paths().next().expect("stroke path").1.len();
-        assert!((7..=9).contains(&segment_count));
-    }
-
-    #[test]
-    fn outlined_variable_width_paths_keep_fill_before_stroke() {
-        let mut data = header(10, 10, &[[255, 0, 0, 255], [0, 0, 0, 255]]);
-        data.extend_from_slice(&[10, 0, 0, 1, 1, 0, 0, 0, 0x10, 2, 9, 0, 0]);
-
-        let image = crate::decode_vector(&data).expect("outlined variable-width path");
-        assert_eq!(image.paths().len(), 2);
-        assert_eq!(image.commands().len(), 2);
-        assert!(matches!(
-            image.commands(),
-            [
-                crate::DrawCommand::Fill {
-                    rule: crate::FillRule::EvenOdd,
-                    ..
-                },
-                crate::DrawCommand::Fill {
-                    rule: crate::FillRule::NonZero,
-                    ..
-                }
-            ]
-        ));
-    }
-
-    #[test]
-    fn variable_width_curves_follow_reference_subdivision_counts() {
-        let mut quadratic = header(20, 20, &[[0, 0, 0, 255]]);
-        quadratic.extend_from_slice(&[7, 0, 0, 2, 0, 1, 10, 0x17, 6, 10, 1, 19, 10, 0]);
-        let quadratic = crate::decode_vector(&quadratic).expect("variable-width quadratic");
-        let quadratic_segments = quadratic.paths().next().expect("quadratic outline").1.len();
-        assert!((112..=144).contains(&quadratic_segments));
-
-        let mut arc = header(20, 20, &[[0, 0, 0, 255]]);
-        arc.extend_from_slice(&[7, 0, 0, 2, 0, 1, 10, 0x14, 6, 0, 9, 19, 10, 0]);
-        let arc = crate::decode_vector(&arc).expect("variable-width arc");
-        let arc_segments = arc.paths().next().expect("arc outline").1.len();
-        assert!((700..=900).contains(&arc_segments));
     }
 
     #[test]

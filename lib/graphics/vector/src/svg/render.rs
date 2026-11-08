@@ -4,9 +4,11 @@
  * SPDX-License-Identifier: MIT
  */
 
+use bcanvas::{CanvasRenderingContext2d, OffscreenCanvas};
+
 use super::geometry::{
-    MarkerPlacement, PathMetrics, commands_bounds, commands_object_bounds, inverse_transform,
-    object_bbox_length, parse_mask_type, stroke_extent, transform_bounds, transform_segment,
+    MarkerPlacement, PathMetrics, inverse_transform, object_bbox_length, object_bounds,
+    parse_mask_type, transform_segment,
 };
 use super::path::rect_path;
 use super::style::{
@@ -17,9 +19,10 @@ use super::values::{
 };
 use super::xml::XmlDocument;
 use super::{MAX_ITEMS, MAX_SOURCE_BYTES};
+use crate::draw::{self, RenderMode, add_path, composite_operation, new_canvas, set_transform};
 use crate::{
-    DrawCommand, FillRule, Mask, Paint, Point, Rect, Size, Transform, VectorDecodeError,
-    VectorFormat, VectorImage, path_bounds,
+    BlendMode, FillRule, MaskType, Paint, PathSegment, Point, Rect, Size, StrokeStyle, Transform,
+    VectorDecodeError, path_bounds,
 };
 
 pub(super) struct Decoder<'a> {
@@ -39,18 +42,54 @@ impl<'a> Decoder<'a> {
         Ok(Self { document, styles })
     }
 
-    pub(super) fn decode(self) -> Result<VectorImage, VectorDecodeError> {
+    pub(super) fn decode(self) -> Result<OffscreenCanvas, VectorDecodeError> {
         Composer::new(&self.document, &self.styles)?.compose()
     }
 }
 
+// A path clipping the drawing of an element.
+struct Clip {
+    path: Vec<PathSegment>,
+    transform: Transform,
+    rule: FillRule,
+}
+
+// A resolved mask, whose content is drawn as the coverage of the masked content.
+struct Mask {
+    index: usize,
+    region: Clip,
+    content_transform: Transform,
+    viewport: Size,
+    style: Style,
+    mode: RenderMode,
+}
+
+// A visible shape with its resolved paints.
+struct Shape {
+    path: Vec<PathSegment>,
+    viewport: Size,
+    bounds: Rect,
+    fill: Option<Paint>,
+    stroke: Option<(Paint, StrokeStyle)>,
+    markers: Option<(
+        Vec<MarkerPlacement>,
+        Vec<MarkerPlacement>,
+        Vec<MarkerPlacement>,
+    )>,
+}
+
 struct Composer<'document, 'source> {
-    // The parsed document and cascade stay immutable while composition mutates only output state.
+    // The parsed document and cascade stay immutable while composition draws.
     document: &'document XmlDocument<'source>,
     styles: &'document Stylesheet,
-    image: VectorImage,
+    size: Size,
     references: Vec<usize>,
     items: usize,
+    // The local bounds and transform of each drawn path, for the object bounding boxes of
+    // masked content, which is measured while `measuring` is nonzero.
+    drawn: Vec<(Rect, Transform)>,
+    measuring: usize,
+    mode: RenderMode,
 }
 
 impl<'document, 'source> Composer<'document, 'source> {
@@ -71,69 +110,83 @@ impl<'document, 'source> Composer<'document, 'source> {
         Ok(Self {
             document,
             styles,
-            image: VectorImage::new(VectorFormat::Svg, Size { width, height }),
+            size: Size { width, height },
             references: Vec::new(),
             items: 0,
+            drawn: Vec::new(),
+            measuring: 0,
+            mode: RenderMode::Normal,
         })
     }
 
-    fn compose(mut self) -> Result<VectorImage, VectorDecodeError> {
+    fn compose(mut self) -> Result<OffscreenCanvas, VectorDecodeError> {
         let root = &self.document.elements[self.document.root];
-        let mut transform = Transform::IDENTITY;
         let view_box = root.attr("viewBox").map(parse_view_box).transpose()?;
         if view_box.is_some_and(|view| view.width == 0.0 || view.height == 0.0) {
-            return Ok(self.image);
+            return Ok(new_canvas(self.size));
         }
-        if let Some(view_box) = view_box {
-            transform = view_box_transform(
+        let transform = match view_box {
+            Some(view_box) => view_box_transform(
                 view_box,
-                self.image.size().width,
-                self.image.size().height,
+                self.size.width,
+                self.size.height,
                 root.attr("preserveAspectRatio"),
-            )?;
-        }
-        let viewport = view_box.map_or(self.image.size(), |view_box| Size {
+            )?,
+            None => Transform::IDENTITY,
+        };
+        let viewport = view_box.map_or(self.size, |view_box| Size {
             width: view_box.width,
             height: view_box.height,
         });
-        self.render(
-            self.document.root,
-            &Style::default(),
-            transform,
-            viewport,
-            true,
-            None,
-        )?;
-        if self.image.commands().len() > MAX_ITEMS {
-            return Err(VectorDecodeError::ResourceLimit);
-        }
-        Ok(self.image)
+        let root = self.document.root;
+        self.record(|this, context| {
+            this.render(context, root, &Style::default(), transform, viewport, None)
+        })
     }
 
+    // Draws into a new recording of the document size.
+    fn record(
+        &mut self,
+        draw: impl FnOnce(&mut Self, &mut CanvasRenderingContext2d<'_>) -> Result<(), VectorDecodeError>,
+    ) -> Result<OffscreenCanvas, VectorDecodeError> {
+        let mut canvas = new_canvas(self.size);
+        let mut result = Ok(());
+        canvas.draw(|context| result = draw(self, context));
+        result.map(|()| canvas)
+    }
+
+    // Counts decoded items against the resource limit.
+    fn claim(&mut self, items: usize) -> Result<(), VectorDecodeError> {
+        self.items = self
+            .items
+            .checked_add(items)
+            .filter(|&items| items <= MAX_ITEMS)
+            .ok_or(VectorDecodeError::ResourceLimit)?;
+        Ok(())
+    }
+
+    // Draws an element, skipping it when it needs an unsupported feature. Elements fail with
+    // an unsupported feature only before they draw.
     fn render(
         &mut self,
+        context: &mut CanvasRenderingContext2d<'_>,
         index: usize,
         inherited: &Style,
         parent_transform: Transform,
         viewport: Size,
-        is_root: bool,
         instance: Option<usize>,
     ) -> Result<(), VectorDecodeError> {
-        let command_start = self.image.command_len();
-        let (path_start, paint_start) = self.image.resource_lengths();
-        let item_start = self.items;
+        let items = self.items;
         match self.render_inner(
+            context,
             index,
             inherited,
             parent_transform,
             viewport,
-            is_root,
             instance,
         ) {
             Err(VectorDecodeError::UnsupportedFeature(_)) => {
-                self.image.drain_commands(command_start);
-                self.image.truncate_resources(path_start, paint_start);
-                self.items = item_start;
+                self.items = items;
                 Ok(())
             }
             result => result,
@@ -142,17 +195,18 @@ impl<'document, 'source> Composer<'document, 'source> {
 
     fn render_inner(
         &mut self,
+        context: &mut CanvasRenderingContext2d<'_>,
         index: usize,
         inherited: &Style,
         parent_transform: Transform,
         viewport: Size,
-        is_root: bool,
         instance: Option<usize>,
     ) -> Result<(), VectorDecodeError> {
         if self.references.len() >= 64 {
             return Err(VectorDecodeError::ResourceLimit);
         }
         let element = &self.document.elements[index];
+        let is_root = index == self.document.root && instance.is_none();
         if !element.is_svg || skips_unsupported_subtree(element.name) {
             return Ok(());
         }
@@ -180,8 +234,8 @@ impl<'document, 'source> Composer<'document, 'source> {
             let bounds = Rect {
                 x: 0.0,
                 y: 0.0,
-                width: self.image.size().width,
-                height: self.image.size().height,
+                width: self.size.width,
+                height: self.size.height,
             };
             Some(self.viewport_clip(bounds, Transform::IDENTITY)?)
         } else {
@@ -277,8 +331,11 @@ impl<'document, 'source> Composer<'document, 'source> {
             } else {
                 style.geometry.y.map_or(0.0, |value| value.length_or(0.0))
             };
+            // Each instance counts, which bounds nested references to the same content.
+            self.claim(1)?;
             self.references.push(target);
             let result = self.render(
+                context,
                 target,
                 &style,
                 Transform {
@@ -288,7 +345,6 @@ impl<'document, 'source> Composer<'document, 'source> {
                 }
                 .then(transform),
                 viewport,
-                false,
                 Some(index),
             );
             self.references.pop();
@@ -302,126 +358,198 @@ impl<'document, 'source> Composer<'document, 'source> {
                 Err(error) => return Err(error),
             }
         }
-        let command_start = self.image.command_len();
-        if let Some(path) = style.geometry.path(element)? {
-            if style.visible && !path.is_empty() {
-                self.items = self
-                    .items
-                    .checked_add(path.len())
-                    .ok_or(VectorDecodeError::ResourceLimit)?;
-                if self.items > MAX_ITEMS {
-                    return Err(VectorDecodeError::ResourceLimit);
+        let mut shape = match style.geometry.path(element)? {
+            Some(path) if style.visible && !path.is_empty() => {
+                self.shape(path, &style, parent_transform, viewport, &mut transform)?
+            }
+            Some(_) => None,
+            None if !matches!(element.name, "svg" | "g" | "a" | "symbol") => {
+                return Err(VectorDecodeError::UnsupportedFeature("element"));
+            }
+            None => None,
+        };
+        let scoped = style.opacity < 1.0
+            || style.blend_mode != BlendMode::Normal
+            || style.isolated
+            || !clips.is_empty()
+            || style.mask.is_some();
+        let mut content = |this: &mut Self, context: &mut CanvasRenderingContext2d<'_>| {
+            this.draw_content(
+                context,
+                index,
+                &style,
+                shape.as_mut(),
+                transform,
+                child_viewport,
+            )
+        };
+        if !scoped {
+            return content(self, context);
+        }
+        self.claim(1)?;
+        let Some(reference) = &style.mask else {
+            return self.scope(context, &style, &clips, None, content);
+        };
+        // The mask needs the bounds of the content, which is recorded first.
+        let start = self.drawn.len();
+        self.measuring += 1;
+        let content = self.record(content);
+        self.measuring -= 1;
+        let content = content?;
+        let inverse = inverse_transform(transform).ok_or(VectorDecodeError::InvalidData)?;
+        let bounds = object_bounds(&self.drawn[start..], inverse).unwrap_or(Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 0.0,
+            height: 0.0,
+        });
+        if self.measuring == 0 {
+            self.drawn.clear();
+        }
+        let mask = match self.resolve_mask(reference, transform, bounds, viewport) {
+            Ok(mask) => Some(mask),
+            Err(VectorDecodeError::UnsupportedFeature(_)) => None,
+            Err(error) => return Err(error),
+        };
+        self.scope(context, &style, &clips, mask.as_ref(), |_, context| {
+            context.reset_transform();
+            context.draw_canvas(
+                &content,
+                0.0,
+                0.0,
+                content.logical_width(),
+                content.logical_height(),
+            );
+            Ok(())
+        })
+    }
+
+    // Resolves the paints of a visible shape, which may move the transform to its origin.
+    fn shape(
+        &mut self,
+        path: Vec<PathSegment>,
+        style: &Style,
+        parent_transform: Transform,
+        viewport: Size,
+        transform: &mut Transform,
+    ) -> Result<Option<Shape>, VectorDecodeError> {
+        self.claim(path.len())?;
+        let local_bounds = path_bounds(&path).ok_or(VectorDecodeError::InvalidData)?;
+        if let (Some(local_transform), Some((origin_x, origin_y))) =
+            (style.transform, style.transform_origin)
+        {
+            let box_bounds = if style.transform_fill_box {
+                local_bounds
+            } else {
+                Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: viewport.width,
+                    height: viewport.height,
                 }
-                let local_bounds = path_bounds(&path).ok_or(VectorDecodeError::InvalidData)?;
-                if let (Some(local_transform), Some((origin_x, origin_y))) =
-                    (style.transform, style.transform_origin)
-                {
-                    let box_bounds = if style.transform_fill_box {
-                        local_bounds
+            };
+            let origin = Point {
+                x: origin_x.resolve(box_bounds.x, box_bounds.width),
+                y: origin_y.resolve(box_bounds.y, box_bounds.height),
+            };
+            *transform = Transform {
+                e: -origin.x,
+                f: -origin.y,
+                ..Transform::IDENTITY
+            }
+            .then(local_transform)
+            .then(Transform {
+                e: origin.x,
+                f: origin.y,
+                ..Transform::IDENTITY
+            })
+            .then(parent_transform);
+        }
+        let fill = self.resolve_paint(&style.fill, style.fill_opacity, local_bounds, viewport)?;
+        let stroke = self
+            .resolve_paint(&style.stroke, style.stroke_opacity, local_bounds, viewport)?
+            .map(|paint| {
+                let mut stroke_style = style.stroke_style.clone();
+                if let Some(author_length) = style.path_length {
+                    if author_length == 0.0 {
+                        stroke_style.dash_array.clear();
+                        stroke_style.dash_offset = 0.0;
                     } else {
-                        Rect {
-                            x: 0.0,
-                            y: 0.0,
-                            width: viewport.width,
-                            height: viewport.height,
+                        let scale = PathMetrics::new(&path).length() / author_length;
+                        for value in &mut stroke_style.dash_array {
+                            *value *= scale;
                         }
-                    };
-                    let origin = Point {
-                        x: origin_x.resolve(box_bounds.x, box_bounds.width),
-                        y: origin_y.resolve(box_bounds.y, box_bounds.height),
-                    };
-                    transform = Transform {
-                        e: -origin.x,
-                        f: -origin.y,
-                        ..Transform::IDENTITY
+                        stroke_style.dash_offset *= scale;
                     }
-                    .then(local_transform)
-                    .then(Transform {
-                        e: origin.x,
-                        f: origin.y,
-                        ..Transform::IDENTITY
-                    })
-                    .then(parent_transform);
                 }
-                let bounds = transform_bounds(local_bounds, transform);
-                let fill =
-                    self.resolve_paint(&style.fill, style.fill_opacity, local_bounds, viewport)?;
-                let stroke = self.resolve_paint(
-                    &style.stroke,
-                    style.stroke_opacity,
-                    local_bounds,
-                    viewport,
-                )?;
-                let has_markers = style.marker_start.is_some()
-                    || style.marker_mid.is_some()
-                    || style.marker_end.is_some();
-                if fill.is_some() || stroke.is_some() || has_markers {
-                    let path_id = self.image.add_path(path);
-                    let fill = fill.map(|paint| self.image.add_paint(paint));
-                    let stroke = stroke.map(|paint| self.image.add_paint(paint));
-                    let stroke_style = if stroke.is_some() {
-                        let mut stroke_style = style.stroke_style.clone();
-                        if let Some(author_length) = style.path_length {
-                            if author_length == 0.0 {
-                                stroke_style.dash_array.clear();
-                                stroke_style.dash_offset = 0.0;
-                            } else {
-                                let scale = PathMetrics::new(self.image.path(path_id)).length()
-                                    / author_length;
-                                for value in &mut stroke_style.dash_array {
-                                    *value *= scale;
-                                }
-                                stroke_style.dash_offset *= scale;
-                            }
-                        }
-                        Some(stroke_style)
-                    } else {
-                        None
-                    };
-                    let push_fill = |image: &mut VectorImage| {
-                        if let Some(paint) = fill {
-                            image.push(DrawCommand::Fill {
-                                path: path_id,
-                                paint,
+                (paint, stroke_style)
+            });
+        let markers = (style.marker_start.is_some()
+            || style.marker_mid.is_some()
+            || style.marker_end.is_some())
+        .then(|| PathMetrics::new(&path).marker_positions());
+        Ok(
+            (fill.is_some() || stroke.is_some() || markers.is_some()).then_some(Shape {
+                path,
+                viewport,
+                bounds: local_bounds,
+                fill,
+                stroke,
+                markers,
+            }),
+        )
+    }
+
+    // Draws a shape in its paint order, then the children.
+    fn draw_content(
+        &mut self,
+        context: &mut CanvasRenderingContext2d<'_>,
+        index: usize,
+        style: &Style,
+        shape: Option<&mut Shape>,
+        transform: Transform,
+        child_viewport: Size,
+    ) -> Result<(), VectorDecodeError> {
+        if let Some(shape) = shape {
+            // The path stays current until markers draw their own.
+            let mut current = false;
+            for layer in style.paint_order {
+                let paint = match layer {
+                    PaintLayer::Fill => shape.fill.as_ref(),
+                    PaintLayer::Stroke => shape.stroke.as_ref().map(|(paint, _)| paint),
+                    PaintLayer::Markers => {
+                        if let Some(positions) = shape.markers.take() {
+                            self.render_shape_markers(
+                                context,
+                                style,
                                 transform,
-                                rule: style.fill_rule,
-                                bounds,
-                            });
+                                shape.viewport,
+                                positions,
+                            )?;
+                            current = false;
                         }
-                    };
-                    let push_stroke = |image: &mut VectorImage| {
-                        if let (Some(paint), Some(stroke_style)) = (stroke, stroke_style.as_ref()) {
-                            let stroke_bounds =
-                                bounds.expand(stroke_extent(stroke_style, transform));
-                            image.push(DrawCommand::Stroke {
-                                path: path_id,
-                                paint,
-                                transform,
-                                style: stroke_style.clone(),
-                                bounds: stroke_bounds,
-                            });
-                        }
-                    };
-                    let mut marker_positions = has_markers
-                        .then(|| PathMetrics::new(self.image.path(path_id)).marker_positions());
-                    for layer in style.paint_order {
-                        match layer {
-                            PaintLayer::Fill => push_fill(&mut self.image),
-                            PaintLayer::Stroke => push_stroke(&mut self.image),
-                            PaintLayer::Markers => {
-                                if let Some(positions) = marker_positions.take() {
-                                    self.render_shape_markers(
-                                        &style, transform, viewport, positions,
-                                    )?;
-                                }
-                            }
-                        }
+                        continue;
                     }
+                };
+                let Some(paint) = paint else {
+                    continue;
+                };
+                if !current {
+                    set_transform(context, transform);
+                    add_path(context, &shape.path);
+                    if self.measuring > 0 {
+                        self.drawn.push((shape.bounds, transform));
+                    }
+                    current = true;
+                }
+                if let (PaintLayer::Stroke, Some((_, stroke))) = (layer, &shape.stroke) {
+                    draw::stroke(context, paint, stroke, self.mode);
+                } else {
+                    draw::fill(context, paint, style.fill_rule, self.mode);
                 }
             }
-        } else if !matches!(element.name, "svg" | "g" | "a" | "symbol") {
-            return Err(VectorDecodeError::UnsupportedFeature("element"));
         }
+        let element = &self.document.elements[index];
         if self.styles.uses_z_index() && element.children.len() > 1 {
             let mut children = element
                 .children
@@ -431,7 +559,7 @@ impl<'document, 'source> Composer<'document, 'source> {
                     match self.styles.compute(
                         &self.document.elements,
                         &self.document.elements[child],
-                        &style,
+                        style,
                         child_viewport,
                     ) {
                         Ok(child_style) => Ok((child_style.z_index, child)),
@@ -442,65 +570,54 @@ impl<'document, 'source> Composer<'document, 'source> {
                 .collect::<Result<Vec<_>, _>>()?;
             children.sort_by_key(|&(z_index, _)| z_index);
             for (_, child) in children {
-                self.render(child, &style, transform, child_viewport, false, None)?;
+                self.render(context, child, style, transform, child_viewport, None)?;
             }
         } else {
             for &child in &element.children {
-                self.render(child, &style, transform, child_viewport, false, None)?;
+                self.render(context, child, style, transform, child_viewport, None)?;
             }
         }
-        let content_bounds = commands_bounds(&self.image.commands()[command_start..]);
-        let mask = if let Some(reference) = &style.mask {
-            let inverse = inverse_transform(transform).ok_or(VectorDecodeError::InvalidData)?;
-            let local_bounds = commands_object_bounds(
-                &self.image,
-                &self.image.commands()[command_start..],
-                inverse,
-            )
-            .unwrap_or(Rect {
-                x: 0.0,
-                y: 0.0,
-                width: 0.0,
-                height: 0.0,
-            });
-            match self.resolve_mask(reference, transform, local_bounds, viewport) {
-                Ok(mask) => Some(mask),
-                Err(VectorDecodeError::UnsupportedFeature(_)) => None,
-                Err(error) => return Err(error),
-            }
-        } else {
-            None
-        };
-        let scope = style.opacity < 1.0
-            || style.blend_mode != crate::BlendMode::Normal
-            || style.isolated
-            || !clips.is_empty()
-            || mask.is_some();
-        if scope {
-            let bounds = content_bounds.unwrap_or(Rect {
-                x: 0.0,
-                y: 0.0,
-                width: 0.0,
-                height: 0.0,
-            });
-            self.image.insert_command(
-                command_start,
-                DrawCommand::PushScope {
-                    opacity: style.opacity,
-                    blend_mode: style.blend_mode,
-                    isolated: style.isolated,
-                    clips,
-                    mask,
-                    bounds,
-                },
-            );
-            self.image.push(DrawCommand::PopScope);
+        Ok(())
+    }
+
+    // Draws content clipped, masked and composited with the opacity and blend mode of a style.
+    fn scope(
+        &mut self,
+        context: &mut CanvasRenderingContext2d<'_>,
+        style: &Style,
+        clips: &[Clip],
+        mask: Option<&Mask>,
+        content: impl FnOnce(
+            &mut Self,
+            &mut CanvasRenderingContext2d<'_>,
+        ) -> Result<(), VectorDecodeError>,
+    ) -> Result<(), VectorDecodeError> {
+        context.save();
+        for clip in clips.iter().chain(mask.map(|mask| &mask.region)) {
+            draw::clip(context, &clip.path, clip.transform, clip.rule);
         }
+        context.begin_path();
+        context.set_global_alpha(style.opacity as f32);
+        context.set_global_composite_operation(composite_operation(style.blend_mode));
+        let layer = mask.is_some() || style.opacity < 1.0 || style.isolated;
+        if let Some(mask) = mask {
+            context.begin_mask_layer();
+            self.draw_mask(context, mask)?;
+            context.end_mask();
+        } else if layer {
+            context.begin_layer();
+        }
+        content(self, context)?;
+        if layer {
+            context.end_layer();
+        }
+        context.restore();
         Ok(())
     }
 
     fn render_shape_markers(
         &mut self,
+        context: &mut CanvasRenderingContext2d<'_>,
         style: &Style,
         transform: Transform,
         viewport: Size,
@@ -510,10 +627,10 @@ impl<'document, 'source> Composer<'document, 'source> {
             Vec<MarkerPlacement>,
         ),
     ) -> Result<(), VectorDecodeError> {
-        for (reference, placements, starts) in [
-            (style.marker_start.as_deref(), positions.0.as_slice(), true),
-            (style.marker_mid.as_deref(), positions.1.as_slice(), false),
-            (style.marker_end.as_deref(), positions.2.as_slice(), false),
+        for (reference, placements) in [
+            (style.marker_start.as_deref(), positions.0.as_slice()),
+            (style.marker_mid.as_deref(), positions.1.as_slice()),
+            (style.marker_end.as_deref(), positions.2.as_slice()),
         ] {
             let Some(reference) = reference else {
                 continue;
@@ -528,7 +645,11 @@ impl<'document, 'source> Composer<'document, 'source> {
                 continue;
             }
             for placement in placements {
-                self.render_marker(target, *placement, starts, style, transform, viewport)?;
+                // A marker with an unsupported feature is skipped like an element.
+                match self.render_marker(context, target, *placement, style, transform, viewport) {
+                    Err(VectorDecodeError::UnsupportedFeature(_)) => {}
+                    result => result?,
+                }
             }
         }
         Ok(())
@@ -536,10 +657,10 @@ impl<'document, 'source> Composer<'document, 'source> {
 
     fn render_marker(
         &mut self,
+        context: &mut CanvasRenderingContext2d<'_>,
         index: usize,
         placement: MarkerPlacement,
-        is_start: bool,
-        context: &Style,
+        context_style: &Style,
         parent_transform: Transform,
         viewport: Size,
     ) -> Result<(), VectorDecodeError> {
@@ -587,14 +708,14 @@ impl<'document, 'source> Composer<'document, 'source> {
         };
         let reference = view_transform.map(reference);
         let scale = match marker.attr("markerUnits").unwrap_or("strokeWidth") {
-            "strokeWidth" => context.stroke_style.width,
+            "strokeWidth" => context_style.stroke_style.width,
             "userSpaceOnUse" => 1.0,
             _ => return Err(VectorDecodeError::InvalidData),
         };
         let orient = marker.attr("orient").unwrap_or("0");
         let angle = if orient == "auto" || orient == "auto-start-reverse" {
             placement.angle
-                + if is_start && orient == "auto-start-reverse" {
+                + if placement.is_start && orient == "auto-start-reverse" {
                     std::f64::consts::PI
                 } else {
                     0.0
@@ -629,8 +750,10 @@ impl<'document, 'source> Composer<'document, 'source> {
         .then(parent_transform);
         let transform = view_transform.then(placement_transform);
         let mut marker_parent = Style::default();
-        marker_parent.context_fill.clone_from(&context.fill);
-        marker_parent.context_stroke.clone_from(&context.stroke);
+        marker_parent.context_fill.clone_from(&context_style.fill);
+        marker_parent
+            .context_stroke
+            .clone_from(&context_style.stroke);
         marker_parent.context_paint_available = true;
         let marker_style = self.styles.compute(
             &self.document.elements,
@@ -651,41 +774,34 @@ impl<'document, 'source> Composer<'document, 'source> {
                 )
             })
             .transpose()?;
-        let command_start = self.image.commands().len();
         self.references.push(index);
-        let result = marker.children.iter().try_for_each(|&child| {
-            self.render(child, &marker_style, transform, child_viewport, false, None)
-        });
+        let draw = |this: &mut Self, context: &mut CanvasRenderingContext2d<'_>| {
+            marker.children.iter().try_for_each(|&child| {
+                this.render(
+                    context,
+                    child,
+                    &marker_style,
+                    transform,
+                    child_viewport,
+                    None,
+                )
+            })
+        };
+        let result = if marker_style.opacity < 1.0 || clip.is_some() {
+            self.claim(1)?;
+            self.scope(context, &marker_style, clip.as_slice(), None, draw)
+        } else {
+            draw(self, context)
+        };
         self.references.pop();
-        result?;
-        if marker_style.opacity < 1.0 || clip.is_some() {
-            let bounds = commands_bounds(&self.image.commands()[command_start..]).unwrap_or(Rect {
-                x: 0.0,
-                y: 0.0,
-                width: 0.0,
-                height: 0.0,
-            });
-            self.image.insert_command(
-                command_start,
-                DrawCommand::PushScope {
-                    opacity: marker_style.opacity,
-                    blend_mode: marker_style.blend_mode,
-                    isolated: marker_style.isolated,
-                    clips: clip.into_iter().collect(),
-                    mask: None,
-                    bounds,
-                },
-            );
-            self.image.push(DrawCommand::PopScope);
-        }
-        Ok(())
+        result
     }
 
     fn viewport_clip(
         &mut self,
         local_bounds: Rect,
         transform: Transform,
-    ) -> Result<crate::Clip, VectorDecodeError> {
+    ) -> Result<Clip, VectorDecodeError> {
         let path = rect_path(
             local_bounds.x,
             local_bounds.y,
@@ -694,18 +810,11 @@ impl<'document, 'source> Composer<'document, 'source> {
             0.0,
             0.0,
         );
-        self.items = self
-            .items
-            .checked_add(path.len())
-            .ok_or(VectorDecodeError::ResourceLimit)?;
-        if self.items > MAX_ITEMS {
-            return Err(VectorDecodeError::ResourceLimit);
-        }
-        Ok(crate::Clip {
-            path: self.image.add_path(path),
+        self.claim(path.len())?;
+        Ok(Clip {
+            path,
             transform,
             rule: FillRule::NonZero,
-            bounds: transform_bounds(local_bounds, transform),
         })
     }
 
@@ -921,7 +1030,7 @@ impl<'document, 'source> Composer<'document, 'source> {
         reference: &str,
         parent: Transform,
         viewport: Size,
-    ) -> Result<crate::Clip, VectorDecodeError> {
+    ) -> Result<Clip, VectorDecodeError> {
         let index = *self
             .document
             .ids
@@ -983,17 +1092,13 @@ impl<'document, 'source> Composer<'document, 'source> {
         if self.items > MAX_ITEMS {
             return Err(VectorDecodeError::ResourceLimit);
         }
-        let local_bounds = path_bounds(&path).ok_or(VectorDecodeError::InvalidData)?;
-        let bounds = transform_bounds(local_bounds, transform);
-        let path = self.image.add_path(path);
-        Ok(crate::Clip {
+        Ok(Clip {
             path,
             transform,
             rule: match element.attr("clip-rule") {
                 Some("evenodd") => FillRule::EvenOdd,
                 _ => FillRule::NonZero,
             },
-            bounds,
         })
     }
 
@@ -1063,25 +1168,13 @@ impl<'document, 'source> Composer<'document, 'source> {
         if width < 0.0 || height < 0.0 {
             return Err(VectorDecodeError::InvalidData);
         }
-        let local_region = Rect {
-            x,
-            y,
-            width,
-            height,
-        };
-        let bounds = transform_bounds(local_region, parent);
-        let region_path = self
-            .image
-            .add_path(rect_path(x, y, width, height, 0.0, 0.0));
         let mask_style = self.styles.compute(
             &self.document.elements,
             element,
             &Style::default(),
             viewport,
         )?;
-        let start = self.image.command_len();
-        self.references.push(index);
-        let mask_viewport = if element.attr("maskContentUnits") == Some("objectBoundingBox") {
+        let viewport = if element.attr("maskContentUnits") == Some("objectBoundingBox") {
             Size {
                 width: 1.0,
                 height: 1.0,
@@ -1089,30 +1182,49 @@ impl<'document, 'source> Composer<'document, 'source> {
         } else {
             viewport
         };
-        for &child in &element.children {
-            if let Err(error) = self.render(
-                child,
-                &mask_style,
-                content_transform,
-                mask_viewport,
-                false,
-                None,
-            ) {
-                self.references.pop();
-                return Err(error);
-            }
-        }
-        self.references.pop();
-        let commands = self.image.drain_commands(start);
         Ok(Mask {
-            commands,
-            region: crate::Clip {
-                path: region_path,
+            index,
+            region: Clip {
+                path: rect_path(x, y, width, height, 0.0, 0.0),
                 transform: parent,
                 rule: FillRule::NonZero,
-                bounds,
             },
-            mask_type: parse_mask_type(element)?,
+            content_transform,
+            viewport,
+            style: mask_style,
+            mode: match parse_mask_type(element)? {
+                MaskType::Alpha => RenderMode::AlphaMask,
+                MaskType::Luminance => RenderMode::LuminanceMask,
+            },
         })
+    }
+
+    // Draws the content of a mask as its coverage.
+    fn draw_mask(
+        &mut self,
+        context: &mut CanvasRenderingContext2d<'_>,
+        mask: &Mask,
+    ) -> Result<(), VectorDecodeError> {
+        let mode = std::mem::replace(&mut self.mode, mask.mode);
+        let drawn = self.drawn.len();
+        self.references.push(mask.index);
+        let result = self.document.elements[mask.index]
+            .children
+            .iter()
+            .try_for_each(|&child| {
+                self.render(
+                    context,
+                    child,
+                    &mask.style,
+                    mask.content_transform,
+                    mask.viewport,
+                    None,
+                )
+            });
+        self.references.pop();
+        // Mask content is not part of the bounds of the masked content.
+        self.drawn.truncate(drawn);
+        self.mode = mode;
+        result
     }
 }

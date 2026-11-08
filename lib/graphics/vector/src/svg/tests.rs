@@ -7,11 +7,29 @@
 use std::collections::HashSet;
 use std::fs;
 
+use bcanvas::OffscreenCanvas;
+
 use super::path::parse_path;
 use super::xml::XmlDocument;
 use super::{decode, is_svg};
 use crate::test_support::FixtureCorpus;
-use crate::{Color, DrawCommand, MaskType, Paint, PathSegment, Point, VectorDecodeError};
+use crate::{PathSegment, Point, VectorDecodeError, pixel};
+
+fn render(svg: &[u8]) -> OffscreenCanvas {
+    decode(svg).unwrap_or_else(|error| panic!("{error}"))
+}
+
+fn error(svg: &[u8]) -> Option<VectorDecodeError> {
+    decode(svg).err()
+}
+
+fn alpha(image: &mut OffscreenCanvas, x: u32, y: u32) -> u8 {
+    pixel(image, x, y)[3]
+}
+
+fn is_blank(image: &mut OffscreenCanvas) -> bool {
+    image.pixels().iter().all(|value| *value == 0)
+}
 
 fn match_reference(source: &str) -> String {
     let document = XmlDocument::parse(source).expect("parse WPT SVG metadata");
@@ -60,14 +78,16 @@ fn decodes_wpt_reference_pairs_offline() {
                 .to_owned(),
         );
 
-        let image = crate::decode_vector(&data)
-            .unwrap_or_else(|error| panic!("{}: {error}", relative.display()));
+        let image = decode(&data).unwrap_or_else(|error| panic!("{}: {error}", relative.display()));
         let reference_data = fs::read(&reference).expect("read SVG match reference");
-        let reference_image = crate::decode_vector(&reference_data)
+        let reference_image = decode(&reference_data)
             .unwrap_or_else(|error| panic!("{} reference: {error}", relative.display()));
         assert_eq!(
-            image.size(),
-            reference_image.size(),
+            (image.logical_width(), image.logical_height()),
+            (
+                reference_image.logical_width(),
+                reference_image.logical_height()
+            ),
             "{}",
             relative.display()
         );
@@ -89,24 +109,18 @@ fn decodes_wpt_reference_pairs_offline() {
 
 #[test]
 fn decodes_compound_vector_artwork() {
-    let image = decode(
+    let mut image = render(
         br##"<svg xmlns="http://www.w3.org/2000/svg" width="60" height="40">
           <path d="M2 2h20v20H2z" fill="#f60"/>
           <g transform="translate(30 5)">
             <path d="M0 15C0 5 20 5 20 15Z" fill="#06f"/>
           </g>
         </svg>"##,
-    )
-    .expect("inline SVG should decode");
-    assert_eq!(image.size().width, 60.0);
-    assert_eq!(
-        image
-            .commands()
-            .iter()
-            .filter(|command| matches!(command, DrawCommand::Fill { .. }))
-            .count(),
-        2
     );
+    assert_eq!(image.logical_width(), 60.0);
+    assert_eq!(pixel(&mut image, 10, 10), [255, 102, 0, 255]);
+    assert_eq!(pixel(&mut image, 40, 18), [0, 102, 255, 255]);
+    assert_eq!(alpha(&mut image, 26, 10), 0);
 }
 
 #[test]
@@ -120,187 +134,116 @@ fn parses_compact_path_numbers_and_arcs() {
 
 #[test]
 fn normalizes_path_length_dashes() {
-    let image = decode(br#"<svg xmlns='http://www.w3.org/2000/svg'>
-      <rect width='100' height='100' fill='none' stroke='black' stroke-dasharray='.25' pathLength='4'/>
-      <path d='M0 0H100V100H0Z' fill='none' stroke='black' stroke-dasharray='.25' pathLength='4'/>
-      <circle cx='100' cy='100' r='100' fill='none' stroke='black' stroke-dasharray='.25' pathLength='4'/>
-    </svg>"#).expect("path length SVG");
-    let dashes = image
-        .commands()
-        .iter()
-        .filter_map(|command| match command {
-            DrawCommand::Stroke { style, .. } => style.dash_array.first().copied(),
-            _ => None,
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(dashes.len(), 3);
-    assert!((dashes[0] - 25.0).abs() < 1e-9);
-    assert!((dashes[0] - dashes[1]).abs() < 1e-9);
-    assert!((dashes[2] - 39.27).abs() < 0.01);
+    // A length of 4 makes dashes of .25 a quarter of each 100 unit side.
+    let mut image = render(br#"<svg xmlns='http://www.w3.org/2000/svg' width='120' height='40'>
+      <rect x='10' y='10' width='100' height='100' fill='none' stroke='black' stroke-width='2' stroke-dasharray='.25' pathLength='4'/>
+      <path d='M10 30H110' stroke='black' stroke-width='2' stroke-dasharray='.25' pathLength='1'/>
+    </svg>"#);
+    assert_eq!(alpha(&mut image, 20, 10), 255);
+    assert_eq!(alpha(&mut image, 45, 10), 0);
+    assert_eq!(alpha(&mut image, 70, 10), 255);
+    assert_eq!(alpha(&mut image, 20, 30), 255);
+    assert_eq!(alpha(&mut image, 45, 30), 0);
 }
 
 #[test]
 fn applies_svg_stacking_blending_and_isolation() {
-    let image = decode(
-        br#"<svg xmlns='http://www.w3.org/2000/svg'>
-          <style>
-            rect { mix-blend-mode: screen }
-            #normal > rect { mix-blend-mode: normal }
-          </style>
+    let mut stacked = render(
+        br#"<svg xmlns='http://www.w3.org/2000/svg' width='10' height='10'>
           <rect width='10' height='10' fill='red' style='z-index:1'/>
           <rect width='10' height='10' fill='lime'/>
-          <g isolation='isolate'><rect width='10' height='10'/></g>
-          <g id='normal'><rect width='10' height='10'/></g>
         </svg>"#,
-    )
-    .expect("stacking and compositing SVG");
-    let fills = image
-        .commands()
-        .iter()
-        .filter_map(|command| match command {
-            DrawCommand::Fill { paint, .. } => Some(image.paint(*paint)),
-            _ => None,
-        })
-        .collect::<Vec<_>>();
-    assert!(matches!(fills[0], Paint::Solid(Color { green, .. }) if *green == 1.0));
-    assert!(matches!(fills[3], Paint::Solid(Color { red, .. }) if *red == 1.0));
-    assert_eq!(
-        image
-            .commands()
-            .iter()
-            .filter(|command| matches!(
-                command,
-                DrawCommand::PushScope {
-                    blend_mode: crate::BlendMode::Screen,
-                    ..
-                }
-            ))
-            .count(),
-        3
     );
-    assert_eq!(
-        image
-            .commands()
-            .iter()
-            .filter(|command| matches!(command, DrawCommand::PushScope { isolated: true, .. }))
-            .count(),
-        1
+    assert_eq!(pixel(&mut stacked, 5, 5), [255, 0, 0, 255]);
+    let mut blended = render(
+        br#"<svg xmlns='http://www.w3.org/2000/svg' width='10' height='10'>
+          <rect width='10' height='10' fill='red'/>
+          <rect width='10' height='10' fill='lime' style='mix-blend-mode:screen'/>
+        </svg>"#,
     );
+    assert_eq!(pixel(&mut blended, 5, 5), [255, 255, 0, 255]);
+    for (isolation, expected) in [("isolate", [0, 0, 0, 255]), ("auto", [0, 255, 0, 255])] {
+        let source = format!(
+            "<svg xmlns='http://www.w3.org/2000/svg' width='10' height='10'>
+              <rect width='10' height='10' fill='lime'/>
+              <g isolation='{isolation}'><rect width='10' height='10' style='mix-blend-mode:screen'/></g>
+            </svg>"
+        );
+        assert_eq!(
+            pixel(&mut render(source.as_bytes()), 5, 5),
+            expected,
+            "{isolation}"
+        );
+    }
 }
 
 #[test]
 fn supports_css_transforms_paint_order_and_keyword_case() {
-    let image = decode(
-        br#"<svg xmlns='http://www.w3.org/2000/svg'>
+    let mut image = render(
+        br#"<svg xmlns='http://www.w3.org/2000/svg' width='50' height='30'>
           <rect width='10' height='10' color='red' fill='CURRENTCOLOR' stroke='blue'
                 style='transform:translate(29px,11px);paint-order:stroke fill'/>
         </svg>"#,
-    )
-    .expect("static CSS rendering properties");
-    let commands = image
-        .commands()
-        .iter()
-        .filter(|command| {
-            matches!(
-                command,
-                DrawCommand::Fill { .. } | DrawCommand::Stroke { .. }
-            )
-        })
-        .collect::<Vec<_>>();
-    assert!(matches!(
-        commands.as_slice(),
-        [DrawCommand::Stroke { .. }, DrawCommand::Fill { .. }]
-    ));
-    assert!(commands.iter().all(|command| match command {
-        DrawCommand::Fill { transform, .. } | DrawCommand::Stroke { transform, .. } => {
-            transform.e == 29.0 && transform.f == 11.0
-        }
-        _ => false,
-    }));
-    assert!(image.paints().any(|(_, paint)| {
-        matches!(paint, Paint::Solid(Color { red, green, blue, .. }) if *red == 1.0 && *green == 0.0 && *blue == 0.0)
-    }));
+    );
+    assert_eq!(pixel(&mut image, 34, 16), [255, 0, 0, 255]);
+    // The fill covers the inner half of the stroke.
+    assert_eq!(pixel(&mut image, 29, 16), [255, 0, 0, 255]);
+    let outside = pixel(&mut image, 28, 16);
+    assert!(outside[0] == 0 && outside[2] == 255 && outside[3] > 0);
 }
 
 #[test]
 fn inherits_complete_paint_order_and_rejects_invalid_transform_units() {
-    let image = decode(
-        br##"<svg xmlns='http://www.w3.org/2000/svg'>
-          <defs><marker id='dot' markerUnits='userSpaceOnUse' markerWidth='2' markerHeight='2'>
-            <rect width='2' height='2'/>
+    let mut image = render(
+        br##"<svg xmlns='http://www.w3.org/2000/svg' width='20' height='10'>
+          <defs><marker id='dot' markerUnits='userSpaceOnUse' markerWidth='4' markerHeight='4'>
+            <rect width='4' height='4'/>
           </marker></defs>
           <g paint-order='markers stroke'>
-            <path d='M0 0L10 0Z' fill='red' stroke='blue' marker-start='url(#dot)'/>
+            <path d='M0 2L10 2Z' fill='red' stroke='blue' stroke-width='2' marker-start='url(#dot)'/>
           </g>
         </svg>"##,
-    )
-    .expect("inherited complete paint order");
-    let layers = image
-        .commands()
-        .iter()
-        .filter_map(|command| match command {
-            DrawCommand::Fill { .. } => Some("fill"),
-            DrawCommand::Stroke { .. } => Some("stroke"),
-            _ => None,
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(layers, ["fill", "stroke", "fill"]);
+    );
+    // The stroke is drawn over the marker.
+    assert_eq!(pixel(&mut image, 1, 1), [0, 0, 255, 255]);
+    assert_eq!(pixel(&mut image, 1, 3), [0, 0, 0, 255]);
     assert_eq!(
-        decode(b"<svg><rect width='1' height='1' transform='scale(2px)'/></svg>"),
-        Err(VectorDecodeError::InvalidData)
+        error(b"<svg><rect width='1' height='1' transform='scale(2px)'/></svg>"),
+        Some(VectorDecodeError::InvalidData)
     );
 }
 
 #[test]
 fn clips_marker_viewports_and_measures_general_cubic_paths() {
-    let image = decode(
-        br##"<svg xmlns='http://www.w3.org/2000/svg'>
+    let mut image = render(
+        br##"<svg xmlns='http://www.w3.org/2000/svg' width='120' height='120'>
           <defs><marker id='mark' markerUnits='userSpaceOnUse' markerWidth='2' markerHeight='2'>
             <rect x='-10' y='-10' width='20' height='20'/>
           </marker></defs>
           <path d='M0 0L10 0' marker-start='url(#mark)'/>
-          <path d='M0 0C0 0 100 0 100 0C100 0 100 100 100 100C100 100 0 100 0 100C0 100 0 0 0 0Z'
-                fill='none' stroke='black' stroke-dasharray='.25' pathLength='4'/>
+          <path d='M10 10C10 10 110 10 110 10C110 10 110 110 110 110C110 110 10 110 10 110C10 110 10 10 10 10Z'
+                fill='none' stroke='black' stroke-width='2' stroke-dasharray='.25' pathLength='4'/>
         </svg>"##,
-    )
-    .expect("clipped marker and cubic path metrics");
-    assert!(image.commands().iter().any(|command| {
-        matches!(command, DrawCommand::PushScope { clips, .. } if !clips.is_empty())
-    }));
-    let dash = image.commands().iter().find_map(|command| match command {
-        DrawCommand::Stroke { style, .. } if !style.dash_array.is_empty() => {
-            style.dash_array.first().copied()
-        }
-        _ => None,
-    });
-    assert!(dash.is_some_and(|dash| (dash - 25.0).abs() < 1e-9));
+    );
+    assert_eq!(alpha(&mut image, 1, 1), 255);
+    assert_eq!(alpha(&mut image, 5, 5), 0);
+    assert_eq!(alpha(&mut image, 20, 10), 255);
+    assert_eq!(alpha(&mut image, 45, 10), 0);
 }
 
 #[test]
 fn expands_local_markers_with_context_paint() {
-    let image = decode(
-        br##"<svg xmlns='http://www.w3.org/2000/svg'>
+    let mut image = render(
+        br##"<svg xmlns='http://www.w3.org/2000/svg' width='40' height='20'>
           <defs><marker id='arrow' markerUnits='userSpaceOnUse' orient='auto'
-            markerWidth='4' markerHeight='4' refX='2' refY='2'>
-            <path d='M0 0L4 2L0 4Z' fill='context-stroke'/>
+            markerWidth='8' markerHeight='8' refX='4' refY='4'>
+            <path d='M0 0L8 4L0 8Z' fill='context-stroke'/>
           </marker></defs>
           <path d='M10 10L30 10' fill='none' stroke='lime' marker-end='url(#arrow)'/>
         </svg>"##,
-    )
-    .expect("bounded local marker");
-    assert_eq!(
-        image
-            .commands()
-            .iter()
-            .filter(|command| matches!(command, DrawCommand::Fill { .. }))
-            .count(),
-        1
     );
-    assert!(
-        image.paints().any(|(_, paint)| {
-            matches!(paint, Paint::Solid(Color { green, .. }) if *green == 1.0)
-        })
-    );
+    assert_eq!(pixel(&mut image, 27, 12), [0, 255, 0, 255]);
+    assert_eq!(alpha(&mut image, 15, 12), 0);
 }
 
 #[test]
@@ -308,25 +251,25 @@ fn recovers_valid_path_prefix_and_bounds_source_size() {
     let path = parse_path("M0 0L10 0L20 Z ignored").expect("valid path prefix");
     assert!(path.contains(&PathSegment::LineTo(Point { x: 10.0, y: 0.0 })));
     assert_eq!(
-        decode(&vec![b' '; super::MAX_SOURCE_BYTES + 1]),
-        Err(VectorDecodeError::ResourceLimit)
+        error(&vec![b' '; super::MAX_SOURCE_BYTES + 1]),
+        Some(VectorDecodeError::ResourceLimit)
     );
 }
 
 #[test]
 fn applies_gradient_color_interpolation() {
-    let image = decode(
-        br##"<svg xmlns='http://www.w3.org/2000/svg'>
-          <defs><linearGradient id='g' color-interpolation='linearRGB'>
-            <stop stop-color='black'/><stop offset='1' stop-color='white'/>
-          </linearGradient></defs>
-          <rect width='10' height='10' fill='url(#g)'/>
-        </svg>"##,
-    )
-    .expect("linear RGB gradient");
-    assert!(image.paints().any(|(_, paint)| {
-        matches!(paint, Paint::LinearGradient { stops, .. } if stops.iter().all(|stop| stop.color.color_space == crate::ColorSpace::LinearSrgb))
-    }));
+    let gradient = |interpolation: &str| {
+        let source = format!(
+            "<svg xmlns='http://www.w3.org/2000/svg' width='10' height='10'>
+              <defs><linearGradient id='g' color-interpolation='{interpolation}'>
+                <stop stop-color='gray'/><stop offset='1' stop-color='gray'/>
+              </linearGradient></defs>
+              <rect width='10' height='10' fill='url(#g)'/>
+            </svg>"
+        );
+        pixel(&mut render(source.as_bytes()), 5, 5)[0]
+    };
+    assert!(gradient("linearRGB") > gradient("sRGB") + 20);
 }
 
 #[test]
@@ -355,7 +298,7 @@ fn ignores_unsupported_content_and_keeps_supported_siblings() {
         );
         decode(source.as_bytes()).unwrap_or_else(|error| panic!("{fragment}: {error:?}"));
     }
-    let image = decode(
+    let mut image = render(
         br#"<?example ignored?><svg xmlns="http://www.w3.org/2000/svg">
           <script>ignored()</script>
           <text>ignored</text>
@@ -364,152 +307,131 @@ fn ignores_unsupported_content_and_keeps_supported_siblings() {
           <rect width="10" height="10" filter="url(#blur)" marker-start="url(#missing)"/>
           <circle cx="20" cy="20" r="1em"/>
         </svg>"#,
-    )
-    .expect("unsupported features should be ignored");
-    assert_eq!(
-        image
-            .commands()
-            .iter()
-            .filter(|command| matches!(command, DrawCommand::Fill { .. }))
-            .count(),
-        1
     );
+    assert_eq!(alpha(&mut image, 5, 5), 255);
+    assert_eq!(alpha(&mut image, 20, 20), 0);
 }
 
 #[test]
 fn preserves_xml_structure_and_ignores_foreign_namespaces() {
-    let image = decode(
+    let mut image = render(
         br#"<svg xmlns="http://www.w3.org/2000/svg" xmlns:rdf="urn:rdf">
           <rdf:metadata><rdf:value>ignored</rdf:value></rdf:metadata>
-          <g style="display:none"><rect width="5" height="5"/></g>
+          <g style="display:none"><rect x="20" width="5" height="5"/></g>
           <rect width="10" height="10"/>
         </svg>"#,
-    )
-    .expect("foreign metadata should not hide supported SVG content");
+    );
+    assert_eq!(alpha(&mut image, 5, 5), 255);
+    assert_eq!(alpha(&mut image, 22, 2), 0);
     assert_eq!(
-        image
-            .commands()
-            .iter()
-            .filter(|command| matches!(command, DrawCommand::Fill { .. }))
-            .count(),
-        1
+        error(b"outside<svg xmlns='http://www.w3.org/2000/svg'/>"),
+        Some(VectorDecodeError::InvalidData)
     );
     assert_eq!(
-        decode(b"outside<svg xmlns='http://www.w3.org/2000/svg'/>"),
-        Err(VectorDecodeError::InvalidData)
+        error(b"<svg xmlns='http://www.w3.org/2000/svg'><bad:item/></svg>"),
+        Some(VectorDecodeError::InvalidData)
     );
     assert_eq!(
-        decode(b"<svg xmlns='http://www.w3.org/2000/svg'><bad:item/></svg>"),
-        Err(VectorDecodeError::InvalidData)
+        error(br#"<svg xmlns="http://www.w3.org/2000/svg" xmlns:a="urn:x" xmlns:b="urn:x" a:value="1" b:value="2"/>"#),
+        Some(VectorDecodeError::InvalidData)
     );
     assert_eq!(
-            decode(br#"<svg xmlns="http://www.w3.org/2000/svg" xmlns:a="urn:x" xmlns:b="urn:x" a:value="1" b:value="2"/>"#),
-            Err(VectorDecodeError::InvalidData)
-        );
-    assert_eq!(
-        decode(br#"<svg xmlns="http://www.w3.org/2000/svg" xmlns:xml="urn:wrong"/>"#),
-        Err(VectorDecodeError::InvalidData)
+        error(br#"<svg xmlns="http://www.w3.org/2000/svg" xmlns:xml="urn:wrong"/>"#),
+        Some(VectorDecodeError::InvalidData)
     );
 }
 
 #[test]
 fn decodes_shapes_transforms_styles_and_clips() {
-    let image = decode(br#"<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80">
+    let mut image = render(br#"<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80">
             <defs><clipPath id="clip"><circle cx="20" cy="20" r="15"/></clipPath></defs>
             <g transform="translate(2, -3) rotate(10)" opacity=".5" clip-path="url(#clip)" color="blue">
               <rect x="1" y="2" width="30" height="20" rx="3" fill="currentColor"/>
               <ellipse cx="50" cy="20" rx="10" ry="5" fill="none" stroke="rgba(255,0,0,.5)" stroke-dasharray="2 3 4"/>
               <polygon points="0,0 10,0 5,10"/>
-            </g></svg>"#).expect("supported SVG should decode");
-    assert!(image.commands().iter().any(
-        |command| matches!(command, DrawCommand::PushScope { clips, .. } if !clips.is_empty())
-    ));
-    assert!(image.commands().iter().any(|command| matches!(command, DrawCommand::Stroke { style, .. } if style.dash_array.len() == 6)));
+            </g></svg>"#);
+    let inside = pixel(&mut image, 15, 15);
+    assert!(
+        inside[2] == 255 && (120..=136).contains(&inside[3]),
+        "{inside:?}"
+    );
+    // The ellipse is outside the clip.
+    assert_eq!(alpha(&mut image, 48, 27), 0);
+}
+
+#[test]
+fn repeats_odd_dash_lists() {
+    let mut image = render(
+        br#"<svg xmlns="http://www.w3.org/2000/svg" width="40" height="10">
+          <path d="M0 5H40" stroke="black" stroke-width="2" stroke-dasharray="10 5 5"/>
+        </svg>"#,
+    );
+    for (x, expected) in [(5, 255), (12, 0), (17, 255), (25, 0), (32, 255), (37, 0)] {
+        assert_eq!(alpha(&mut image, x, 5), expected, "{x}");
+    }
 }
 
 #[test]
 fn applies_transform_lists_in_svg_order() {
-    let image = decode(
+    let mut image = render(
         br#"<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
           <g transform="translate(20 30) scale(2)">
             <rect width="10" height="5"/>
           </g>
         </svg>"#,
-    )
-    .expect("transformed SVG should decode");
-    let bounds = image
-        .commands()
-        .iter()
-        .find_map(|command| match command {
-            DrawCommand::Fill { bounds, .. } => Some(*bounds),
-            _ => None,
-        })
-        .expect("transformed rectangle");
-    assert_eq!(bounds.x, 20.0);
-    assert_eq!(bounds.y, 30.0);
-    assert_eq!(bounds.width, 20.0);
-    assert_eq!(bounds.height, 10.0);
+    );
+    for (x, y, expected) in [
+        (21, 31, 255),
+        (39, 39, 255),
+        (19, 31, 0),
+        (41, 31, 0),
+        (21, 41, 0),
+    ] {
+        assert_eq!(alpha(&mut image, x, y), expected, "{x} {y}");
+    }
 }
 
 #[test]
 fn resolves_active_viewports_and_visibility() {
-    let image = decode(
+    let mut image = render(
         br#"<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100" viewBox="0 0 100 50" visibility="hidden">
-          <rect width="50%" height="50%"/>
+          <rect width="50%" height="50%" fill="red"/>
           <rect width="50%" height="50%" visibility="visible"/>
         </svg>"#,
-    )
-    .expect("viewport percentages should decode");
-    let fills = image
-        .commands()
-        .iter()
-        .filter_map(|command| match command {
-            DrawCommand::Fill { bounds, .. } => Some(bounds),
-            _ => None,
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(fills.len(), 1);
-    assert_eq!(fills[0].width, 100.0);
-    assert_eq!(fills[0].height, 50.0);
-    assert!(matches!(
-        image.commands().first(),
-        Some(DrawCommand::PushScope { clips, .. }) if clips.len() == 1
-    ));
+    );
+    assert_eq!(pixel(&mut image, 99, 49), [0, 0, 0, 255]);
+    assert_eq!(alpha(&mut image, 101, 51), 0);
 
-    let nested = decode(
+    let mut nested = render(
         br#"<svg xmlns="http://www.w3.org/2000/svg" width="100" height="50" viewBox="0 0 100 50">
           <svg x="10" y="5" width="50" height="20" viewBox="0 0 10 10">
             <rect width="100%" height="100%"/>
           </svg>
         </svg>"#,
-    )
-    .expect("nested viewport should decode");
-    let bounds = nested
-        .commands()
-        .iter()
-        .find_map(|command| match command {
-            DrawCommand::Fill { bounds, .. } => Some(*bounds),
-            _ => None,
-        })
-        .expect("nested rectangle");
-    assert_eq!(bounds.x, 25.0);
-    assert_eq!(bounds.y, 5.0);
-    assert_eq!(bounds.width, 20.0);
-    assert_eq!(bounds.height, 20.0);
+    );
+    for (x, y, expected) in [
+        (26, 6, 255),
+        (44, 24, 255),
+        (24, 6, 0),
+        (46, 6, 0),
+        (26, 26, 0),
+    ] {
+        assert_eq!(alpha(&mut nested, x, y), expected, "{x} {y}");
+    }
 }
 
 #[test]
 fn resolves_user_space_gradient_percentages() {
-    let image = decode(
+    let mut image = render(
         br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 50">
-          <defs><linearGradient id="g" gradientUnits="userSpaceOnUse" x2="100%"><stop/><stop offset="1"/></linearGradient></defs>
+          <defs><linearGradient id="g" gradientUnits="userSpaceOnUse" x2="100%">
+            <stop stop-color="red"/><stop offset="1" stop-color="blue"/>
+          </linearGradient></defs>
           <rect width="100" height="50" fill="url(#g)"/>
         </svg>"##,
-    )
-    .expect("user-space gradient percentages should decode");
-    assert!(image.paints().any(|(_, paint)| {
-        matches!(paint, Paint::LinearGradient { end, .. } if end.x == 100.0)
-    }));
+    );
+    let middle = pixel(&mut image, 50, 25);
+    assert!((100..156).contains(&middle[0]) && (100..156).contains(&middle[2]));
 }
 
 #[test]
@@ -522,37 +444,27 @@ fn disables_invalid_and_zero_sized_shapes() {
         "<rect width='1' height='0'/>",
     ] {
         let source = format!("<svg xmlns='http://www.w3.org/2000/svg'>{element}</svg>");
-        let image =
-            decode(source.as_bytes()).unwrap_or_else(|error| panic!("{element}: {error:?}"));
-        assert!(!image.commands().iter().any(|command| matches!(
-            command,
-            DrawCommand::Fill { .. } | DrawCommand::Stroke { .. }
-        )));
+        assert!(is_blank(&mut render(source.as_bytes())), "{element}");
     }
     assert_eq!(
-        decode(b"<svg><path d='M0 0L1 1' stroke='black' stroke-width='-1'/></svg>"),
-        Err(VectorDecodeError::InvalidData)
+        error(b"<svg><path d='M0 0L1 1' stroke='black' stroke-width='-1'/></svg>"),
+        Some(VectorDecodeError::InvalidData)
     );
-
-    let ellipse = decode(b"<svg><ellipse cx='10' cy='10' rx='-5' ry='5'/></svg>")
-        .expect("negative ellipse radius computes to auto");
-    assert!(
-        ellipse
-            .commands()
-            .iter()
-            .any(|command| matches!(command, DrawCommand::Fill { .. }))
-    );
+    // A negative radius computes to auto, which takes the other radius.
+    let mut ellipse = render(b"<svg><ellipse cx='10' cy='10' rx='-5' ry='5'/></svg>");
+    assert_eq!(alpha(&mut ellipse, 13, 10), 255);
 }
 
 #[test]
 fn validates_numeric_and_color_list_syntax() {
-    let image = decode(
+    let mut image = render(
         br#"<svg xmlns="http://www.w3.org/2000/svg"><rect width="1" height="1" fill="RGB(100% 0% 0% / 50%)"/></svg>"#,
-    )
-    .expect("modern RGB syntax should decode");
-    assert!(image.paints().any(|(_, paint)| {
-        matches!(paint, Paint::Solid(Color { red, alpha, .. }) if *red == 1.0 && *alpha > 0.49 && *alpha < 0.51)
-    }));
+    );
+    let color = pixel(&mut image, 0, 0);
+    assert!(
+        color[0] > 250 && (120..=136).contains(&color[3]),
+        "{color:?}"
+    );
 
     for source in [
         "<svg viewBox='0,,0 1 1'/>",
@@ -565,8 +477,8 @@ fn validates_numeric_and_color_list_syntax() {
         "<svg><rect width='1' height='1' fill='rgb(1,2 3)'/></svg>",
     ] {
         assert_eq!(
-            decode(source.as_bytes()),
-            Err(VectorDecodeError::InvalidData),
+            error(source.as_bytes()),
+            Some(VectorDecodeError::InvalidData),
             "{source}"
         );
     }
@@ -574,7 +486,7 @@ fn validates_numeric_and_color_list_syntax() {
 
 #[test]
 fn resolves_luminance_and_alpha_masks() {
-    let image = decode(
+    let mut image = render(
         br##"<svg xmlns="http://www.w3.org/2000/svg" width="100" height="80">
           <rect x="10" y="10" width="40" height="20" mask="url(#fade)"/>
           <defs>
@@ -583,190 +495,139 @@ fn resolves_luminance_and_alpha_masks() {
             </mask>
           </defs>
         </svg>"##,
-    )
-    .expect("local mask should decode");
-    let mask = image
-        .commands()
-        .iter()
-        .find_map(|command| match command {
-            DrawCommand::PushScope {
-                mask: Some(mask), ..
-            } => Some(mask),
-            _ => None,
-        })
-        .expect("masked scope");
-    assert_eq!(mask.mask_type, MaskType::Alpha);
-    assert!(!mask.commands.is_empty());
-    assert_eq!(mask.region.bounds.x, 6.0);
-    assert_eq!(mask.region.bounds.width, 48.0);
+    );
+    assert_eq!(alpha(&mut image, 15, 20), 255);
+    assert_eq!(alpha(&mut image, 40, 20), 0);
 }
 
 #[test]
 fn rotated_masks_use_the_untransformed_object_bounding_box() {
-    let image = decode(
+    let mut image = render(
         br##"<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
           <defs><mask id="mask"><rect width="100" height="100" fill="white"/></mask></defs>
           <rect x="10" y="20" width="40" height="10" transform="rotate(45)" mask="url(#mask)"/>
         </svg>"##,
-    )
-    .expect("rotated masked shape");
-    let mask = image
-        .commands()
-        .iter()
-        .find_map(|command| match command {
-            DrawCommand::PushScope {
-                mask: Some(mask), ..
-            } => Some(mask),
-            _ => None,
-        })
-        .expect("mask scope");
-    assert!(matches!(
-        image.path(mask.region.path).first(),
-        Some(PathSegment::MoveTo(Point { x, y })) if (*x - 6.0).abs() < 1e-9 && (*y - 19.0).abs() < 1e-9
-    ));
+    );
+    // The local points (30, 25) and (45, 25) of the rotated rectangle.
+    assert_eq!(alpha(&mut image, 3, 38), 255);
+    assert_eq!(alpha(&mut image, 14, 49), 255);
 }
 
 #[test]
 fn resolves_forward_nested_masks_and_rejects_cycles() {
-    decode(br##"<svg xmlns="http://www.w3.org/2000/svg">
+    let mut image = render(br##"<svg xmlns="http://www.w3.org/2000/svg">
           <rect width="20" height="20" mask="url(#outer)"/>
           <defs>
             <mask id="inner"><rect width="20" height="20" fill="white"/></mask>
             <mask id="outer"><g mask="url(#inner)"><circle cx="10" cy="10" r="10" fill="white"/></g></mask>
           </defs>
-        </svg>"##)
-        .expect("nested forward masks should decode");
+        </svg>"##);
+    assert_eq!(alpha(&mut image, 10, 10), 255);
+    assert_eq!(alpha(&mut image, 1, 1), 0);
     assert_eq!(
-        decode(
+        error(
             br##"<svg xmlns="http://www.w3.org/2000/svg">
               <defs><mask id="cycle"><rect width="1" height="1" mask="url(#cycle)"/></mask></defs>
               <rect width="1" height="1" mask="url(#cycle)"/>
             </svg>"##
         ),
-        Err(VectorDecodeError::InvalidData)
+        Some(VectorDecodeError::InvalidData)
     );
 }
 
 #[test]
 fn resolves_gradient_stops_and_forward_references() {
-    let image = decode(br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10">
-          <rect width="10" height="10" fill="url(#derived)"/>
+    let mut image = render(br##"<svg xmlns="http://www.w3.org/2000/svg" width="20" height="10" viewBox="0 0 20 10">
+          <rect width="20" height="10" fill="url(#derived)"/>
           <defs>
-            <linearGradient id="base"><stop offset="0" stop-color="#f00"/><stop offset="100%" stop-color="#00f8"/></linearGradient>
+            <linearGradient id="base"><stop offset="0" stop-color="#f00"/><stop offset="100%" stop-color="#00f"/></linearGradient>
             <linearGradient id="derived" href="#base" x2="50%" spreadMethod="reflect"/>
           </defs>
-        </svg>"##).expect("local gradient should resolve");
-    assert!(image.paints().any(|(_, paint)| matches!(paint, Paint::LinearGradient { stops, spread: crate::SpreadMethod::Reflect, .. } if stops.len() == 2)));
+        </svg>"##);
+    // The gradient runs to blue at the middle and is reflected back to red.
+    assert!(pixel(&mut image, 10, 5)[2] > 200);
+    assert!(pixel(&mut image, 19, 5)[0] > 200);
 }
 
 #[test]
 fn css_keeps_valid_fallback_when_later_value_is_invalid() {
-    let image = decode(br#"<svg xmlns="http://www.w3.org/2000/svg"><rect width="1" height="1" style="fill:red;fill:context-fill"/></svg>"#).expect("invalid CSS declaration should be ignored");
-    assert!(
-        image
-            .paints()
-            .any(|(_, paint)| matches!(paint, Paint::Solid(Color { red, .. }) if *red == 1.0))
-    );
+    let mut image = render(br#"<svg xmlns="http://www.w3.org/2000/svg"><rect width="1" height="1" style="fill:red;fill:context-fill"/></svg>"#);
+    assert_eq!(pixel(&mut image, 0, 0), [255, 0, 0, 255]);
 }
 
 #[test]
 fn recognized_malformed_svg_never_becomes_unknown_input() {
     let bytes = b"<!-- leading comment --><svg><path d='M0 nan'/></svg>";
     assert!(is_svg(bytes));
-    assert_eq!(decode(bytes), Err(VectorDecodeError::InvalidData));
+    assert_eq!(error(bytes), Some(VectorDecodeError::InvalidData));
 }
 
 #[test]
 fn uses_css_absolute_units_and_normalized_percentages() {
-    let image = decode(
-        br#"<svg width="300" height="400"><circle cx="150" cy="200" r="10%" fill="none" stroke="black" stroke-width="1in" stroke-dasharray="1pc 12pt"/></svg>"#,
-    )
-    .expect("length units");
-    let style = image
-        .commands()
-        .iter()
-        .find_map(|command| match command {
-            DrawCommand::Stroke { style, .. } => Some(style),
-            _ => None,
-        })
-        .expect("stroke");
-    assert_eq!(style.width, 96.0);
-    assert_eq!(style.dash_array, [16.0, 16.0]);
+    let mut stroke = render(
+        br#"<svg width="300" height="100"><path d="M0 50H300" stroke="black" stroke-width="1in" stroke-dasharray="1pc 12pt"/></svg>"#,
+    );
+    for (x, y, expected) in [(8, 3, 255), (8, 1, 0), (24, 50, 0), (40, 50, 255)] {
+        assert_eq!(alpha(&mut stroke, x, y), expected, "{x} {y}");
+    }
+    // Ten percent of the normalized diagonal of 300 by 400 is 35.36.
+    let mut circle =
+        render(br#"<svg width="300" height="400"><circle cx="150" cy="200" r="10%"/></svg>"#);
+    assert_eq!(alpha(&mut circle, 184, 200), 255);
+    assert_eq!(alpha(&mut circle, 187, 200), 0);
 }
 
 #[test]
 fn resolves_paint_fallbacks_and_gradient_templates() {
-    let image = decode(br##"<svg width="100" height="100"><defs>
-      <linearGradient id="base" gradientUnits="userSpaceOnUse" x2="75" gradientTransform="translate(2)" spreadMethod="reflect"><stop stop-color="red"/></linearGradient>
+    let mut image = render(br##"<svg width="100" height="10"><defs>
+      <linearGradient id="base" gradientUnits="userSpaceOnUse" x1="20" x2="30" spreadMethod="reflect">
+        <stop stop-color="red"/><stop offset="1" stop-color="blue"/>
+      </linearGradient>
       <linearGradient id="derived" href="#base"/></defs>
       <rect width="10" height="10" fill="url(#missing) currentColor" color="blue"/>
-      <rect x="20" width="10" height="10" fill="url(#derived)"/></svg>"##).expect("paint resolution");
-    assert!(
-        image
-            .paints()
-            .any(|(_, paint)| matches!(paint, Paint::Solid(Color { blue, .. }) if *blue == 1.0))
-    );
-    assert!(image.paints().any(|(_, paint)| matches!(paint, Paint::LinearGradient { end, spread: crate::SpreadMethod::Reflect, transform, .. } if end.x == 75.0 && transform.e == 2.0)));
+      <rect x="20" width="80" height="10" fill="url(#derived)"/></svg>"##);
+    assert_eq!(pixel(&mut image, 5, 5), [0, 0, 255, 255]);
+    assert!(pixel(&mut image, 21, 5)[0] > 200);
+    assert!(pixel(&mut image, 39, 5)[0] > 200);
 }
 
 #[test]
 fn uses_fallback_for_singular_gradient_transforms() {
-    let image = decode(br##"<svg width="20" height="10"><defs>
+    let mut image = render(br##"<svg width="20" height="10"><defs>
       <linearGradient id="linear" gradientTransform="scale(0)"><stop stop-color="red"/></linearGradient>
       <radialGradient id="radial" gradientTransform="matrix(0 0 0 0 0 0)"><stop stop-color="red"/></radialGradient>
     </defs><rect width="10" height="10" fill="url(#linear) green"/>
-    <rect x="10" width="10" height="10" fill="url(#radial) green"/></svg>"##)
-        .expect("singular gradient fallbacks");
-    assert_eq!(
-        image
-            .paints()
-            .filter(
-                |(_, paint)| matches!(paint, Paint::Solid(Color { green, .. }) if *green > 0.49)
-            )
-            .count(),
-        2
-    );
+    <rect x="10" width="10" height="10" fill="url(#radial) green"/></svg>"##);
+    assert_eq!(pixel(&mut image, 5, 5), [0, 128, 0, 255]);
+    assert_eq!(pixel(&mut image, 15, 5), [0, 128, 0, 255]);
 }
 
 #[test]
 fn instantiates_symbol_viewports_without_rendering_definitions() {
-    let image = decode(br##"<svg width="100" height="100"><symbol id="s" viewBox="0 0 10 10"><rect width="10" height="10"/></symbol><use href="#s" x="20" y="30" width="40" height="20"/></svg>"##).expect("symbol use");
-    let fills = image
-        .commands()
-        .iter()
-        .filter_map(|command| match command {
-            DrawCommand::Fill { bounds, .. } => Some(*bounds),
-            _ => None,
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(fills.len(), 1);
-    assert_eq!(
-        fills[0],
-        crate::Rect {
-            x: 30.0,
-            y: 30.0,
-            width: 20.0,
-            height: 20.0
-        }
-    );
+    let mut image = render(br##"<svg width="100" height="100"><symbol id="s" viewBox="0 0 10 10"><rect width="10" height="10"/></symbol><use href="#s" x="20" y="30" width="40" height="20"/></svg>"##);
+    for (x, y, expected) in [
+        (31, 31, 255),
+        (49, 49, 255),
+        (29, 31, 0),
+        (51, 31, 0),
+        (5, 5, 0),
+    ] {
+        assert_eq!(alpha(&mut image, x, y), expected, "{x} {y}");
+    }
 }
 
 #[test]
 fn applies_bounded_embedded_css_cascade() {
-    let image = decode(br##"<svg width="10" height="10"><style><![CDATA[
+    let mut image = render(br##"<svg width="10" height="10"><style><![CDATA[
       rect { fill: red; } .shape { fill: green; } #target.shape { fill: blue !important; }
       g rect { fill: white; } rect:hover { fill: white; }
-    ]]></style><rect id="target" class="shape extra" width="10" height="10" style="fill: yellow"/></svg>"##).expect("embedded CSS");
-    assert!(
-        image
-            .paints()
-            .any(|(_, paint)| matches!(paint, Paint::Solid(Color { blue, .. }) if *blue == 1.0))
-    );
+    ]]></style><rect id="target" class="shape extra" width="10" height="10" style="fill: yellow"/></svg>"##);
+    assert_eq!(pixel(&mut image, 5, 5), [0, 0, 255, 255]);
 }
 
 #[test]
 fn applies_css_geometry_to_shapes() {
-    let image = decode(
+    let mut image = render(
         br#"<svg width="200" height="100"><style>
       circle { cx: 25%; cy: 50%; r: 10%; }
       ellipse { rx: auto; ry: 20px; }
@@ -775,71 +636,56 @@ fn applies_css_geometry_to_shapes() {
     <ellipse cx="100" cy="50"/>
     <rect x="120" y="10" style="width: 40px; height: 30px"/>
     </svg>"#,
-    )
-    .expect("CSS geometry");
-    let bounds = image
-        .commands()
-        .iter()
-        .filter_map(|command| match command {
-            DrawCommand::Fill { bounds, .. } => Some(*bounds),
-            _ => None,
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(bounds.len(), 3);
-    let radius = 200.0_f64.hypot(100.0) / std::f64::consts::SQRT_2 * 0.1;
-    assert!((bounds[0].x - (50.0 - radius)).abs() < 1e-9);
-    assert!((bounds[0].y - (50.0 - radius)).abs() < 1e-9);
-    assert_eq!(bounds[1].width, 40.0);
-    assert_eq!(bounds[1].height, 40.0);
-    assert_eq!(bounds[2].x, 120.0);
-    assert_eq!(bounds[2].y, 10.0);
-    assert_eq!(bounds[2].width, 40.0);
-    assert_eq!(bounds[2].height, 30.0);
+    );
+    // Ten percent of the normalized diagonal of 200 by 100 is 15.81.
+    for (x, y, expected) in [
+        (64, 50, 255),
+        (67, 50, 0),
+        (2, 2, 0),
+        (118, 50, 255),
+        (100, 31, 255),
+        (100, 29, 0),
+        (121, 11, 255),
+        (159, 39, 255),
+        (161, 11, 0),
+        (121, 41, 0),
+    ] {
+        assert_eq!(alpha(&mut image, x, y), expected, "{x} {y}");
+    }
 
-    let cascade = decode(
+    let mut cascade = render(
         br#"<svg width="100" height="100"><style>
       rect { width: 10px; width: invalid; height: 20px !important; }
       #target { height: 30px; }
     </style><rect id="target" width="5" height="5" style="width: 40px"/></svg>"#,
-    )
-    .expect("geometry cascade");
-    let bounds = cascade
-        .commands()
-        .iter()
-        .find_map(|command| match command {
-            DrawCommand::Fill { bounds, .. } => Some(*bounds),
-            _ => None,
-        })
-        .expect("CSS-sized rectangle");
-    assert_eq!(bounds.width, 40.0);
-    assert_eq!(bounds.height, 20.0);
+    );
+    for (x, y, expected) in [(39, 19, 255), (41, 1, 0), (1, 21, 0)] {
+        assert_eq!(alpha(&mut cascade, x, y), expected, "{x} {y}");
+    }
 }
 
 #[test]
 fn uses_default_viewport_and_disables_zero_viewboxes() {
-    let default = decode(b"<svg><rect width='1' height='1'/></svg>").expect("default size");
-    assert_eq!(default.size().width, 300.0);
-    assert_eq!(default.size().height, 150.0);
+    let default = render(b"<svg><rect width='1' height='1'/></svg>");
+    assert_eq!(
+        (default.logical_width(), default.logical_height()),
+        (300.0, 150.0)
+    );
 
-    let root = decode(
+    let mut root = render(
         b"<svg width='200' height='100' viewBox='0 0 0 10'><rect width='10' height='10'/></svg>",
-    )
-    .expect("zero root viewBox");
-    assert!(root.commands().is_empty());
+    );
+    assert!(is_blank(&mut root));
 
-    let symbol = decode(
+    let mut symbol = render(
         br##"<svg width="200" height="100">
       <symbol id="empty" viewBox="0 0 10 0"><rect width="10" height="10"/></symbol>
       <use href="#empty" width="100" height="100"/>
     </svg>"##,
-    )
-    .expect("zero symbol viewBox");
-    assert!(!symbol.commands().iter().any(|command| matches!(
-        command,
-        DrawCommand::Fill { .. } | DrawCommand::Stroke { .. }
-    )));
+    );
+    assert!(is_blank(&mut symbol));
     assert_eq!(
-        decode(b"<svg viewBox='0 0 -1 10'/></svg>"),
-        Err(VectorDecodeError::InvalidData)
+        error(b"<svg viewBox='0 0 -1 10'/></svg>"),
+        Some(VectorDecodeError::InvalidData)
     );
 }

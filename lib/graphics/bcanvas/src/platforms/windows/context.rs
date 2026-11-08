@@ -97,7 +97,7 @@ impl<T> Clone for DrawTarget<T> {
 }
 
 enum Clip {
-    Rect,
+    Rect(D2D_RECT_F),
     Layer,
     // A canvas layer, which restores the transform of its start when it ends. Its opacity
     // brush stays alive while the layer is pushed.
@@ -178,7 +178,7 @@ impl PlatformCanvasContext {
 
     fn pop_clip(&mut self) -> Option<Clip> {
         let clip = self.clips.pop()?;
-        if matches!(clip, Clip::Rect) {
+        if matches!(clip, Clip::Rect(_)) {
             unsafe { self.target.PopAxisAlignedClip() };
         } else {
             unsafe { self.target.PopLayer() };
@@ -373,7 +373,27 @@ impl PlatformCanvasContext {
                     },
                 )
                 .ok()?;
-            bitmap.CopyFromRenderTarget(self.target.as_ptr()).ok()?;
+            // CopyFromRenderTarget rejects active clips. Rectangular clips do not
+            // buffer drawing, so suspend them while copying the backdrop.
+            let rectangles = self
+                .clips
+                .iter()
+                .rev()
+                .take_while(|clip| matches!(clip, Clip::Rect(_)))
+                .count();
+            for _ in 0..rectangles {
+                self.target.PopAxisAlignedClip();
+            }
+            let result = bitmap.CopyFromRenderTarget(self.target.as_ptr());
+            self.target.SetTransform(&D2D_MATRIX_3X2_F::identity());
+            for clip in &self.clips[self.clips.len() - rectangles..] {
+                if let Clip::Rect(rect) = clip {
+                    self.target
+                        .PushAxisAlignedClip(rect, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+                }
+            }
+            self.apply_transform();
+            result.ok()?;
             Some(bitmap)
         }
     }
@@ -747,7 +767,7 @@ impl PlatformCanvasContext {
                 self.target
                     .PushAxisAlignedClip(&rect, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE)
             };
-            self.clips.push(Clip::Rect);
+            self.clips.push(Clip::Rect(rect));
         } else {
             let geometry = self.geometry(Transform::IDENTITY, rule);
             let params = D2D1_LAYER_PARAMETERS {

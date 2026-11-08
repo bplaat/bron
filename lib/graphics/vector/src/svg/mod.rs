@@ -4,10 +4,11 @@
  * SPDX-License-Identifier: MIT
  */
 
+use bcanvas::OffscreenCanvas;
 use xmlparser::{Token, Tokenizer};
 
+use crate::VectorDecodeError;
 use crate::svg::render::Decoder;
-use crate::{VectorDecodeError, VectorImage};
 
 mod geometry;
 mod path;
@@ -47,7 +48,7 @@ pub(crate) fn is_svg(data: &[u8]) -> bool {
     source.find("<svg").is_some_and(|index| index < 1024)
 }
 
-pub(crate) fn decode(data: &[u8]) -> Result<VectorImage, VectorDecodeError> {
+pub(crate) fn decode(data: &[u8]) -> Result<OffscreenCanvas, VectorDecodeError> {
     Decoder::new(data)?.decode()
 }
 

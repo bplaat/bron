@@ -554,6 +554,47 @@ mod tests {
     }
 
     #[test]
+    fn rectangular_clips_preserve_composite_backdrops() {
+        for operation in [
+            super::CompositeOperation::Screen,
+            super::CompositeOperation::DestinationIn,
+        ] {
+            let mut canvas = super::OffscreenCanvas::new(6, 2);
+            canvas.draw(|ctx| {
+                ctx.set_fill_style(Color::rgb(255, 0, 0));
+                ctx.fill_rect(0.0, 0.0, 6.0, 2.0);
+                ctx.save();
+                ctx.rect(1.0, 0.0, 4.0, 2.0);
+                ctx.clip();
+                ctx.begin_path();
+                ctx.rect(2.0, 0.0, 2.0, 2.0);
+                ctx.clip();
+                ctx.translate(1.0, 0.0);
+                ctx.set_global_composite_operation(operation);
+                ctx.set_fill_style(Color::rgb(0, 255, 0));
+                ctx.fill_rect(-1.0, 0.0, 6.0, 2.0);
+                ctx.restore();
+                ctx.set_fill_style(Color::rgb(0, 0, 255));
+                ctx.fill_rect(5.0, 0.0, 1.0, 2.0);
+            });
+            let expected = if operation == super::CompositeOperation::Screen {
+                [255, 255, 0, 255]
+            } else {
+                [255, 0, 0, 255]
+            };
+            for x in 0..6 {
+                let pixel = &canvas.pixels()[x * 4..][..4];
+                let expected = match x {
+                    2 | 3 => expected,
+                    5 => [0, 0, 255, 255],
+                    _ => [255, 0, 0, 255],
+                };
+                assert_eq!(pixel, expected, "{operation:?}, x={x}");
+            }
+        }
+    }
+
+    #[test]
     fn nested_layers_blend_with_their_own_content() {
         let mut canvas = super::OffscreenCanvas::new(3, 1);
         canvas.draw(|ctx| {
