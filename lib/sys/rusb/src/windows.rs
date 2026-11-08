@@ -9,9 +9,8 @@
 #![allow(unsafe_code)]
 
 use std::collections::HashSet;
-use std::ffi::{OsString, c_void};
+use std::ffi::c_void;
 use std::mem::{size_of, zeroed};
-use std::os::windows::ffi::OsStringExt;
 use std::ptr::{self, NonNull};
 use std::sync::{Arc, LazyLock, Mutex, mpsc};
 use std::time::Duration;
@@ -42,7 +41,7 @@ impl Context {
     }
 
     pub(crate) fn devices(&self) -> Result<Vec<Arc<Device>>, Error> {
-        let usb = wide("USB");
+        let usb = w!("USB");
         // SAFETY: pointers are valid and SetupAPI returns an owned set handle.
         let set = unsafe {
             SetupDiGetClassDevsW(
@@ -436,7 +435,7 @@ fn interface_guids(set: &DeviceInfoSet, info: &mut SpDevinfoData) -> Result<Vec<
     }
     let key = RegistryKey(key);
     let mut values = Vec::new();
-    for name in ["DeviceInterfaceGUIDs", "DeviceInterfaceGUID"] {
+    for name in [w!("DeviceInterfaceGUIDs"), w!("DeviceInterfaceGUID")] {
         if let Some((value_type, data)) = registry_value(&key, name)? {
             values.push((value_type, data));
         }
@@ -452,8 +451,7 @@ fn first_registry_guids(values: &[(Dword, Vec<u16>)]) -> Vec<Guid> {
         .unwrap_or_default()
 }
 
-fn registry_value(key: &RegistryKey, name: &str) -> Result<Option<(Dword, Vec<u16>)>, Error> {
-    let name = wide(name);
+fn registry_value(key: &RegistryKey, name: &[u16]) -> Result<Option<(Dword, Vec<u16>)>, Error> {
     let mut value_type = 0;
     let mut size = 0;
     // SAFETY: this is a standard registry value size query.
@@ -643,9 +641,7 @@ fn parse_guid(value: &str) -> Option<Guid> {
 }
 
 fn path_matches_ids(path: &[u16], vendor_id: u16, product_id: u16) -> bool {
-    let path = OsString::from_wide(path)
-        .to_string_lossy()
-        .to_ascii_uppercase();
+    let path = String::from_utf16_lossy(path).to_ascii_uppercase();
     path.contains(&format!("VID_{vendor_id:04X}"))
         && path.contains(&format!("PID_{product_id:04X}"))
 }
@@ -653,7 +649,7 @@ fn path_matches_ids(path: &[u16], vendor_id: u16, product_id: u16) -> bool {
 fn wide_strings(data: &[u16]) -> impl Iterator<Item = String> + '_ {
     data.split(|unit| *unit == 0)
         .filter(|value| !value.is_empty())
-        .map(|value| OsString::from_wide(value).to_string_lossy().into_owned())
+        .map(String::from_utf16_lossy)
 }
 
 fn bytes_to_wide(bytes: &[u8]) -> Vec<u16> {
@@ -663,10 +659,6 @@ fn bytes_to_wide(bytes: &[u8]) -> Vec<u16> {
         .iter()
         .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
         .collect()
-}
-
-fn wide(value: &str) -> Vec<u16> {
-    value.encode_utf16().chain([0]).collect()
 }
 
 const fn timeout_millis(timeout: Duration) -> Dword {
@@ -701,7 +693,7 @@ mod tests {
     fn utf16_multi(values: &[&str]) -> Vec<u16> {
         values
             .iter()
-            .flat_map(|value| value.encode_utf16().chain([0]))
+            .flat_map(|value| wide(value))
             .chain([0])
             .collect()
     }
