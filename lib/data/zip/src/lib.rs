@@ -125,15 +125,26 @@ fn read_u32_le(data: &[u8], offset: usize) -> u32 {
 impl<R: Read + Seek> ZipArchive<R> {
     /// Open a ZIP archive from a reader.
     pub fn new(mut reader: R) -> Result<Self, ZipError> {
-        // Read all bytes for parsing
-        let bytes = read_limited(&mut reader, MAX_ARCHIVE_SIZE)?;
-
-        let end = end_record(&bytes)?;
+        let archive_size = reader.seek(SeekFrom::End(0))?;
+        if archive_size > MAX_ARCHIVE_SIZE as u64 {
+            return Err(ZipError::InvalidZip("archive size exceeds limit"));
+        }
+        // The end record and its comment fit in the last 65,557 bytes.
+        let tail_offset = archive_size.saturating_sub(65_557);
+        reader.seek(SeekFrom::Start(tail_offset))?;
+        let tail = read_limited(&mut reader, 65_557)?;
+        let end = end_record(&tail, tail_offset as usize)?;
         let cd_count = end.count;
         let cd_offset = end.directory_offset;
-        let cd_end = end.offset;
+        let cd_end = end.offset - cd_offset;
+        drop(tail);
+        reader.seek(SeekFrom::Start(cd_offset as u64))?;
+        let bytes = read_limited(&mut (&mut reader).take(cd_end as u64), cd_end)?;
+        if bytes.len() != cd_end {
+            return Err(ZipError::InvalidZip("central directory truncated"));
+        }
 
-        if cd_count > (cd_end - cd_offset) / 46 {
+        if cd_count > cd_end / 46 {
             return Err(ZipError::InvalidZip(
                 "entry count exceeds central directory size",
             ));
@@ -142,7 +153,7 @@ impl<R: Read + Seek> ZipArchive<R> {
         // Parse central directory entries
         let mut entries = Vec::with_capacity(cd_count);
         let mut total_uncompressed_size = 0usize;
-        let mut pos = cd_offset;
+        let mut pos = 0;
         for _ in 0..cd_count {
             if bytes.get(pos..pos + 4) != Some(&[0x50, 0x4b, 0x01, 0x02][..]) {
                 return Err(ZipError::InvalidZip("invalid central directory signature"));
@@ -443,7 +454,7 @@ struct EndRecord {
     count: usize,
 }
 
-fn end_record(bytes: &[u8]) -> Result<EndRecord, ZipError> {
+fn end_record(bytes: &[u8], base: usize) -> Result<EndRecord, ZipError> {
     let offset = (bytes.len().saturating_sub(65_557)..bytes.len().saturating_sub(21))
         .rev()
         .find(|&index| {
@@ -451,7 +462,7 @@ fn end_record(bytes: &[u8]) -> Result<EndRecord, ZipError> {
                 && index + 22 + usize::from(read_u16_le(bytes, index + 20)) == bytes.len()
                 && u64::from(read_u32_le(bytes, index + 16))
                     + u64::from(read_u32_le(bytes, index + 12))
-                    == index as u64
+                    == (base + index) as u64
         })
         .ok_or(ZipError::InvalidZip(
             "invalid or missing end of central directory",
@@ -466,7 +477,7 @@ fn end_record(bytes: &[u8]) -> Result<EndRecord, ZipError> {
         return Err(ZipError::InvalidZip("ZIP64 is unsupported"));
     }
     Ok(EndRecord {
-        offset,
+        offset: base + offset,
         directory_offset: read_u32_le(bytes, offset + 16) as usize,
         count: usize::from(count),
     })
@@ -723,6 +734,57 @@ mod tests {
         let end = bytes.len() - 22;
         bytes[end + 12..end + 16].copy_from_slice(&0u32.to_le_bytes());
         assert!(ZipArchive::new(Cursor::new(bytes)).is_err());
+    }
+
+    #[test]
+    fn opening_reads_only_the_tail_and_directory() {
+        struct CountedReader {
+            inner: Cursor<Vec<u8>>,
+            bytes_read: usize,
+        }
+        impl Read for CountedReader {
+            fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+                let count = self.inner.read(buffer)?;
+                self.bytes_read += count;
+                Ok(count)
+            }
+        }
+        impl Seek for CountedReader {
+            fn seek(&mut self, position: SeekFrom) -> io::Result<u64> {
+                self.inner.seek(position)
+            }
+        }
+
+        let data = vec![42; 1024 * 1024];
+        let mut bytes = Cursor::new(STORED_ZIP.to_vec());
+        append_stored_file(&mut bytes, "large.bin", &data).unwrap();
+        let mut reader = CountedReader {
+            inner: bytes,
+            bytes_read: 0,
+        };
+        {
+            let archive = ZipArchive::new(&mut reader).unwrap();
+            assert_eq!(archive.len(), 2);
+        }
+        assert!(reader.bytes_read < 128 * 1024);
+        let mut archive = ZipArchive::new(reader).unwrap();
+        let mut extracted = Vec::new();
+        archive
+            .by_index(1)
+            .unwrap()
+            .read_to_end(&mut extracted)
+            .unwrap();
+        assert_eq!(extracted, data);
+    }
+
+    #[test]
+    fn accepts_maximum_length_archive_comment() {
+        let mut bytes = STORED_ZIP.to_vec();
+        let end = bytes.len() - 22;
+        bytes[end + 20..end + 22].copy_from_slice(&u16::MAX.to_le_bytes());
+        bytes.resize(bytes.len() + usize::from(u16::MAX), b'x');
+        let mut archive = ZipArchive::new(Cursor::new(bytes)).unwrap();
+        assert_eq!(archive.by_index(0).unwrap().name(), "hello.txt");
     }
 
     #[test]
