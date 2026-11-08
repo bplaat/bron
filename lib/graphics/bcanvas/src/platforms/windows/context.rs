@@ -894,7 +894,8 @@ impl PlatformCanvasContext {
         let format = self.format(s);
         let mut wide = self.resources.text.borrow_mut();
         wide.clear();
-        // Canvas text is one line: line breaks render as spaces.
+        // DirectWrite takes a length-delimited buffer without a terminator.
+        // Reuse the allocation; canvas line breaks render as spaces.
         wide.extend(text.encode_utf16().map(|unit| match unit {
             0x09..=0x0d | 0x85 | 0x2028 | 0x2029 => 0x20,
             unit => unit,
@@ -1005,13 +1006,17 @@ impl PlatformCanvasContext {
         }) {
             return format.clone();
         }
-        let family = wide_string(match s.font_family.as_ref() {
-            "sans-serif" => "Segoe UI",
-            "serif" => "Times New Roman",
-            "monospace" => "Consolas",
-            name => name,
-        });
-        let locale = wide_string("en-us");
+        let custom_family;
+        let family = match s.font_family.as_ref() {
+            "sans-serif" => w!("Segoe UI"),
+            "serif" => w!("Times New Roman"),
+            "monospace" => w!("Consolas"),
+            name => {
+                custom_family = wide(name);
+                &custom_family
+            }
+        };
+        let locale = w!("en-us");
         let format = unsafe {
             self.resources
                 .write
