@@ -13,7 +13,7 @@ use objc2::rc::{Allocated, Retained, autoreleasepool};
 use objc2::runtime::{AnyObject as Object, Bool};
 use objc2::{class, define_class, msg_send, sel};
 
-use crate::cocoa::{
+use crate::headers::{
     MTL_PIXEL_FORMAT_BGRA8_UNORM, MTL_PRIMITIVE_TYPE_TRIANGLE, MTLClearColor,
     MTLCreateSystemDefaultDevice, NS_APPLICATION_ACTIVATION_POLICY_REGULAR,
     NS_BACKING_STORE_BUFFERED, NS_VIEW_HEIGHT_SIZABLE, NS_VIEW_WIDTH_SIZABLE,
@@ -22,7 +22,7 @@ use crate::cocoa::{
     NSPoint, NSRect, NSSize, dispatch_data_create, ns_string,
 };
 
-mod cocoa;
+mod headers;
 
 static EMBEDDED_METALLIB: &[u8] = include_bytes!("../target/default.metallib");
 

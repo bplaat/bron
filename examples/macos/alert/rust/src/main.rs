@@ -8,9 +8,9 @@ use objc2::rc::{Retained, autoreleasepool};
 use objc2::runtime::AnyObject;
 use objc2::{class, msg_send};
 
-use crate::cocoa::ns_string;
+use crate::headers::ns_string;
 
-mod cocoa;
+mod headers;
 
 fn main() {
     let message = ns_string!("Hello Cocoa from Rust!");

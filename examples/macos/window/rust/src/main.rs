@@ -11,14 +11,14 @@ use objc2::rc::{Allocated, Retained, autoreleasepool};
 use objc2::runtime::{AnyObject as Object, Bool};
 use objc2::{class, define_class, msg_send, sel};
 
-use crate::cocoa::{
+use crate::headers::{
     NS_APPLICATION_ACTIVATION_POLICY_REGULAR, NS_BACKING_STORE_BUFFERED,
     NS_WINDOW_STYLE_MASK_CLOSABLE, NS_WINDOW_STYLE_MASK_MINIATURIZABLE,
     NS_WINDOW_STYLE_MASK_RESIZABLE, NS_WINDOW_STYLE_MASK_TITLED, NSApp, NSAppearanceNameDarkAqua,
     NSFontAttributeName, NSForegroundColorAttributeName, NSPoint, NSRect, NSSize, ns_string,
 };
 
-mod cocoa;
+mod headers;
 
 // MARK: CanvasView
 define_class!(

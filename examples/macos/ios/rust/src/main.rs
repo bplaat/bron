@@ -13,12 +13,12 @@ use objc2::rc::{Allocated, Retained, autoreleasepool};
 use objc2::runtime::{AnyObject as Object, Bool};
 use objc2::{class, define_class, msg_send};
 
-use crate::uikit::{
+use crate::headers::{
     NSLog, NSRect, NSTEXT_ALIGNMENT_CENTER, UI_USER_INTERFACE_STYLE_DARK, UIApplicationMain,
     ns_string,
 };
 
-mod uikit;
+mod headers;
 
 // MARK: ViewController
 #[derive(Default)]

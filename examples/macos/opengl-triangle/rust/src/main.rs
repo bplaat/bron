@@ -13,7 +13,8 @@ use objc2::rc::{Allocated, Retained, autoreleasepool};
 use objc2::runtime::{AnyObject as Object, Bool};
 use objc2::{class, define_class, extern_class, msg_send, sel};
 
-use crate::cocoa::{
+use crate::gl::*;
+use crate::headers::{
     NS_APPLICATION_ACTIVATION_POLICY_REGULAR, NS_BACKING_STORE_BUFFERED,
     NS_OPENGL_CONTEXT_PARAMETER_SWAP_INTERVAL, NS_OPENGL_PFA_ACCELERATED, NS_OPENGL_PFA_ALPHA_SIZE,
     NS_OPENGL_PFA_COLOR_SIZE, NS_OPENGL_PFA_DOUBLE_BUFFER, NS_OPENGL_PFA_OPENGL_PROFILE,
@@ -22,10 +23,9 @@ use crate::cocoa::{
     NS_WINDOW_STYLE_MASK_RESIZABLE, NS_WINDOW_STYLE_MASK_TITLED, NSApp, NSAppearanceNameDarkAqua,
     NSPoint, NSRect, NSSize, ns_string,
 };
-use crate::gl::*;
 
-mod cocoa;
 mod gl;
+mod headers;
 
 #[repr(C)]
 struct Vertex {
