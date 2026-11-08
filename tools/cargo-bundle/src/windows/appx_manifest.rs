@@ -155,9 +155,11 @@ pub(crate) fn appx_manifest(
             );
             match &file_type.icon {
                 Some(FileTypeIcon::Resource(id)) => {
+                    // Windows copies this value into DefaultIcon: positive values are
+                    // zero-based icon indexes, negative values select resource IDs.
                     _ = writeln!(
                         xml,
-                        r#"                        <desktop7:Logo ResourceId="{id}">{}</desktop7:Logo>"#,
+                        r#"                        <desktop7:Logo ResourceId="-{id}">{}</desktop7:Logo>"#,
                         xml_escape(executable)
                     );
                 }
@@ -425,8 +427,9 @@ file_types = [
         );
         for id in [2, 3] {
             assert!(xml.contains(&format!(
-                r#"<desktop7:Logo ResourceId="{id}">viewer&amp;app.exe</desktop7:Logo>"#
+                r#"<desktop7:Logo ResourceId="-{id}">viewer&amp;app.exe</desktop7:Logo>"#
             )));
+            assert!(!xml.contains(&format!(r#"ResourceId="{id}""#)));
         }
         assert_eq!(xml.matches("<desktop7:Logo").count(), 2);
         assert!(!xml.contains("Assets\\file-types"));
