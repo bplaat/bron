@@ -21,7 +21,7 @@ use crate::{
 
 const TEXT_FORMATS: usize = 16;
 
-type TextFormatKey = (Rc<str>, u32, FontWeight);
+type TextFormatKey = (Arc<str>, u32, FontWeight);
 
 /// Device-independent objects shared by every frame of one canvas.
 pub(super) struct Resources {

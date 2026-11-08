@@ -64,6 +64,11 @@ pub(crate) struct PlatformOffscreenCanvas {
     dirty: bool,
 }
 
+// SAFETY: The single-threaded Direct2D factory and its objects may be used from any thread
+// when access is serialized, as is the shared DirectWrite factory and the GDI bitmap. The
+// shared resources only leave the canvas in the contexts of `draw`, which borrows it mutably.
+unsafe impl Send for PlatformOffscreenCanvas {}
+
 impl PlatformOffscreenCanvas {
     pub(crate) fn new(width: u32, height: u32, length: usize) -> Self {
         unsafe {

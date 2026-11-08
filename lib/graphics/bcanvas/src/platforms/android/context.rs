@@ -551,7 +551,7 @@ pub(crate) struct Resources {
     image: Paint,
     // Line width and miter limit bits, cap, and join.
     stroke_style: Cell<Option<(u32, u32, usize, usize)>>,
-    stroke_dash: RefCell<Option<(Rc<[f32]>, u32)>>,
+    stroke_dash: RefCell<Option<(Arc<[f32]>, u32)>>,
     image_filter: Cell<Option<bool>>,
     // Typeface reference and font size bits.
     text_font: Cell<Option<(usize, u32)>>,

@@ -6,7 +6,7 @@
 
 use std::marker::PhantomData;
 use std::rc::Rc;
-use std::sync::OnceLock;
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use std::time::{Duration, Instant};
 
 #[cfg(feature = "window")]
@@ -14,7 +14,9 @@ use bwindow::Window;
 
 #[cfg(feature = "window")]
 use crate::platforms::PlatformCanvas;
-use crate::platforms::{PlatformCanvasContext, PlatformOffscreenCanvas};
+use crate::platforms::{PlatformCanvasContext, PlatformImage, PlatformOffscreenCanvas};
+use crate::recording::{Backend, Ops, Recorder};
+use crate::transform::Transform;
 
 /// A portable sRGB color with alpha.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -77,7 +79,7 @@ mod tests {
     fn saved_state_shares_font_storage_and_preserves_its_value() {
         let mut state = super::CanvasState::default();
         let saved = state.clone();
-        assert!(super::Rc::ptr_eq(&state.font_family, &saved.font_family));
+        assert!(super::Arc::ptr_eq(&state.font_family, &saved.font_family));
         state.font_family = "monospace".into();
         assert_eq!(saved.font_family.as_ref(), "sans-serif");
         assert_eq!(state.font_family.as_ref(), "monospace");
@@ -444,6 +446,14 @@ mod tests {
     }
 
     #[test]
+    fn pixels_become_premultiplied_bgra() {
+        assert_eq!(
+            &*super::premultiplied_bgra(&[255, 128, 0, 128, 10, 20, 30, 255]),
+            [0, 64, 128, 128, 30, 20, 10, 255]
+        );
+    }
+
+    #[test]
     fn images_are_drawn_upright_and_scaled() {
         // Red on top of blue, as premultiplied BGRA.
         let pixels: std::sync::Arc<[u8]> = [0, 0, 255, 255, 255, 0, 0, 255].into();
@@ -641,6 +651,207 @@ mod tests {
         assert_eq!(stops[5], (1.0, Color::rgb(255, 0, 0)));
     }
 
+    // Draws shapes with most kinds of state, which recordings must replay the same.
+    fn draw_scene(ctx: &mut super::CanvasRenderingContext2d<'_>) {
+        ctx.set_fill_style(Color::rgb(20, 40, 60));
+        ctx.fill_rect(0.0, 0.0, 16.0, 16.0);
+        ctx.save();
+        ctx.translate(2.0, 2.0);
+        ctx.begin_path();
+        ctx.rect(0.0, 0.0, 10.0, 10.0);
+        ctx.clip();
+        let mut gradient = super::CanvasGradient::linear(0.0, 0.0, 12.0, 0.0);
+        gradient.add_color_stop(0.0, Color::rgb(255, 0, 0));
+        gradient.add_color_stop(1.0, Color::rgb(0, 0, 255));
+        ctx.set_fill_style(gradient);
+        ctx.begin_path();
+        ctx.ellipse(6.0, 6.0, 6.0, 4.0);
+        ctx.fill();
+        ctx.restore();
+        ctx.set_global_alpha(0.5);
+        ctx.begin_layer();
+        ctx.set_transform(1.0, 0.0, 0.0, 1.0, 8.0, 8.0);
+        ctx.set_stroke_style(Color::rgb(0, 255, 0));
+        ctx.set_line_width(2.0);
+        ctx.stroke_rect(0.0, 0.0, 6.0, 6.0);
+        ctx.end_layer();
+    }
+
+    fn scene_pixels(draw: impl FnOnce(&mut super::CanvasRenderingContext2d<'_>)) -> Vec<u8> {
+        let mut canvas = super::OffscreenCanvas::new(16, 16);
+        canvas.draw(draw);
+        canvas.pixels().to_vec()
+    }
+
+    #[test]
+    fn recordings_replay_like_drawing_directly() {
+        let mut recording = super::OffscreenCanvas::new_recording(16.0, 16.0);
+        recording.draw(draw_scene);
+        let expected = scene_pixels(draw_scene);
+        assert_eq!(
+            scene_pixels(|ctx| ctx.draw_canvas(&recording, 0.0, 0.0, 16.0, 16.0)),
+            expected
+        );
+        assert_eq!(recording.pixels(), expected);
+    }
+
+    #[test]
+    fn recordings_replay_relative_to_the_current_transform() {
+        let mut recording = super::OffscreenCanvas::new_recording(2.0, 2.0);
+        recording.draw(|ctx| {
+            ctx.set_transform(1.0, 0.0, 0.0, 1.0, 1.0, 0.0);
+            ctx.fill_rect(0.0, 0.0, 1.0, 1.0);
+            ctx.reset_transform();
+            ctx.fill_rect(0.0, 1.0, 1.0, 1.0);
+        });
+        // Scaled four times at an offset, with drawing outside the canvas clipped.
+        let pixels = scene_pixels(|ctx| {
+            ctx.translate(4.0, 4.0);
+            ctx.draw_canvas(&recording, 0.0, 0.0, 8.0, 8.0);
+            ctx.fill_rect(-4.0, -4.0, 1.0, 1.0);
+        });
+        let alpha = |x: usize, y: usize| pixels[(y * 16 + x) * 4 + 3];
+        assert_eq!(alpha(9, 5), 255);
+        assert_eq!(alpha(5, 5), 0);
+        assert_eq!(alpha(5, 9), 255);
+        assert_eq!(alpha(9, 9), 0);
+        assert_eq!(alpha(0, 0), 255);
+    }
+
+    #[test]
+    fn recordings_composite_as_one_layer_with_the_global_alpha() {
+        let mut recording = super::OffscreenCanvas::new_recording(2.0, 1.0);
+        recording.draw(|ctx| {
+            ctx.fill_rect(0.0, 0.0, 2.0, 1.0);
+            ctx.fill_rect(0.0, 0.0, 1.0, 1.0);
+        });
+        let pixels = scene_pixels(|ctx| {
+            ctx.set_global_alpha(0.5);
+            ctx.draw_canvas(&recording, 0.0, 0.0, 2.0, 1.0);
+        });
+        assert!((i16::from(pixels[3]) - 128).abs() <= 1);
+        assert!((i16::from(pixels[7]) - 128).abs() <= 1);
+    }
+
+    #[test]
+    fn recordings_keep_drawing_of_earlier_calls_and_nest() {
+        let mut inner = super::OffscreenCanvas::new_recording(1.0, 1.0);
+        inner.draw(|ctx| ctx.fill_rect(0.0, 0.0, 1.0, 1.0));
+        let mut outer = super::OffscreenCanvas::new_recording(4.0, 1.0);
+        outer.draw(|ctx| ctx.draw_canvas(&inner, 0.0, 0.0, 1.0, 1.0));
+        assert_eq!(outer.pixels()[3], 255);
+        outer.draw(|ctx| ctx.draw_canvas(&inner, 2.0, 0.0, 1.0, 1.0));
+        let alpha: Vec<u8> = outer.pixels().iter().skip(3).step_by(4).copied().collect();
+        assert_eq!(alpha, [255, 0, 255, 0]);
+    }
+
+    #[test]
+    fn recorded_ops_stay_small() {
+        assert!(size_of::<crate::recording::Op>() <= 32);
+    }
+
+    #[test]
+    fn recordings_drawn_again_keep_the_drawing_of_their_snapshot() {
+        let mut inner = super::OffscreenCanvas::new_recording(2.0, 1.0);
+        inner.draw(|ctx| ctx.fill_rect(0.0, 0.0, 1.0, 1.0));
+        let mut outer = super::OffscreenCanvas::new_recording(2.0, 1.0);
+        outer.draw(|ctx| ctx.draw_canvas(&inner, 0.0, 0.0, 2.0, 1.0));
+        inner.draw(|ctx| ctx.fill_rect(1.0, 0.0, 1.0, 1.0));
+        assert_eq!(&outer.pixels()[3..8], [255, 0, 0, 0, 0]);
+        assert_eq!(inner.pixels()[7], 255);
+    }
+
+    #[test]
+    fn recording_drawings_start_with_the_default_transform() {
+        let mut recording = super::OffscreenCanvas::new_recording(2.0, 1.0);
+        recording.draw(|ctx| ctx.translate(1.0, 0.0));
+        recording.draw(|ctx| ctx.fill_rect(0.0, 0.0, 1.0, 1.0));
+        assert_eq!(&recording.pixels()[3..8], [255, 0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn recordings_measure_text() {
+        let mut recording = super::OffscreenCanvas::new_recording(1.0, 1.0);
+        let mut widths = (0.0, 0.0);
+        recording.draw(|ctx| widths.0 = ctx.measure_text("Hello"));
+        scene_pixels(|ctx| widths.1 = ctx.measure_text("Hello"));
+        assert!(widths.0 > 0.0);
+        assert_eq!(widths.0, widths.1);
+    }
+
+    #[test]
+    fn recordings_larger_than_a_bitmap_have_no_pixels() {
+        let mut recording = super::OffscreenCanvas::new_recording(1e12, 70_000.0);
+        recording.draw(|ctx| ctx.fill_rect(0.0, 0.0, 1.0, 1.0));
+        assert_eq!((recording.width(), recording.height()), (0, 0));
+        assert!(recording.pixels().is_empty());
+        let mut wide = super::OffscreenCanvas::new_recording(70_000.0, 70_000.0);
+        assert!(wide.pixels().is_empty());
+    }
+
+    #[test]
+    fn empty_recordings_have_no_pixels() {
+        let mut recording = super::OffscreenCanvas::new_recording(0.0, 0.0);
+        recording.draw(|ctx| ctx.fill_rect(0.0, 0.0, 1.0, 1.0));
+        assert!(recording.pixels().is_empty());
+        let pixels = scene_pixels(|ctx| ctx.draw_canvas(&recording, 0.0, 0.0, 4.0, 4.0));
+        assert!(pixels.iter().all(|value| *value == 0));
+    }
+
+    #[test]
+    fn pixel_canvases_are_drawn_as_images() {
+        let mut source = super::OffscreenCanvas::new(1, 2);
+        source.draw(|ctx| {
+            ctx.set_fill_style(Color::rgb(255, 0, 0));
+            ctx.fill_rect(0.0, 0.0, 1.0, 1.0);
+        });
+        let pixels = scene_pixels(|ctx| {
+            ctx.set_image_smoothing_enabled(false);
+            ctx.draw_canvas(&source, 0.0, 0.0, 4.0, 8.0);
+        });
+        assert_eq!(&pixels[(16 + 1) * 4..][..4], [255, 0, 0, 255]);
+        assert_eq!(pixels[(6 * 16 + 2) * 4 + 3], 0);
+    }
+
+    #[test]
+    fn offscreen_canvases_are_shared_between_threads() {
+        fn assert_send<T: Send + Sync>(_: &T) {}
+        let mut recording = super::OffscreenCanvas::new_recording(2.0, 2.0);
+        recording.draw(|ctx| ctx.fill_rect(0.0, 0.0, 2.0, 2.0));
+        assert_send(&recording);
+        let mut canvas = std::thread::spawn(move || {
+            let mut canvas = super::OffscreenCanvas::new(2, 2);
+            canvas.draw(|ctx| ctx.draw_canvas(&recording, 0.0, 0.0, 2.0, 2.0));
+            canvas
+        })
+        .join()
+        .expect("drawing thread");
+        assert_eq!(&canvas.pixels()[..4], [0, 0, 0, 255]);
+    }
+
+    #[test]
+    fn layer_content_starts_with_the_transform_of_the_layer() {
+        let mut recording = super::OffscreenCanvas::new_recording(1.0, 1.0);
+        recording.draw(|ctx| ctx.fill_rect(0.0, 0.0, 1.0, 1.0));
+        let pixels = scene_pixels(|ctx| {
+            ctx.begin_mask_layer();
+            ctx.translate(8.0, 0.0);
+            ctx.fill_rect(-8.0, 0.0, 16.0, 16.0);
+            ctx.end_mask();
+            ctx.fill_rect(0.0, 0.0, 1.0, 1.0);
+            ctx.draw_canvas(&recording, 2.0, 0.0, 1.0, 1.0);
+            ctx.end_layer();
+        });
+        let alpha: Vec<u8> = pixels[..16 * 4]
+            .iter()
+            .skip(3)
+            .step_by(4)
+            .copied()
+            .collect();
+        assert_eq!(&alpha[..4], [255, 0, 255, 0]);
+        assert!(alpha[8..].iter().all(|alpha| *alpha == 0));
+    }
+
     #[test]
     #[should_panic(expected = "rounded rectangle radius must be nonnegative")]
     fn rounded_rectangle_rejects_negative_radius() {
@@ -702,11 +913,11 @@ pub(crate) struct Gradient {
 
 /// A linear or radial gradient fill or stroke style, like the HTML `CanvasGradient`.
 #[derive(Debug, Clone, PartialEq)]
-pub struct CanvasGradient(pub(crate) Rc<Gradient>);
+pub struct CanvasGradient(pub(crate) Arc<Gradient>);
 
 impl CanvasGradient {
     fn new(shape: GradientShape) -> Self {
-        Self(Rc::new(Gradient {
+        Self(Arc::new(Gradient {
             shape,
             stops: Vec::new(),
             spread: GradientSpread::Pad,
@@ -738,21 +949,21 @@ impl CanvasGradient {
             return;
         }
         let offset = offset.clamp(0.0, 1.0);
-        let stops = &mut Rc::make_mut(&mut self.0).stops;
+        let stops = &mut Arc::make_mut(&mut self.0).stops;
         let index = stops.partition_point(|(stop, _)| *stop <= offset);
         stops.insert(index, (offset, color));
     }
 
     /// Set how the gradient continues beyond its first and last stops.
     pub fn set_spread(&mut self, spread: GradientSpread) {
-        Rc::make_mut(&mut self.0).spread = spread;
+        Arc::make_mut(&mut self.0).spread = spread;
     }
 
     /// Set the transform from gradient space to the user space of the painted shape.
     /// Non-finite values are ignored.
     pub fn set_transform(&mut self, a: f32, b: f32, c: f32, d: f32, e: f32, f: f32) {
         if [a, b, c, d, e, f].iter().all(|value| value.is_finite()) {
-            Rc::make_mut(&mut self.0).transform = [a, b, c, d, e, f];
+            Arc::make_mut(&mut self.0).transform = [a, b, c, d, e, f];
         }
     }
 }
@@ -878,14 +1089,17 @@ pub enum CompositeOperation {
 /// A premultiplied sRGB BGRA8 bitmap that canvases draw with `draw_image`, which shares its
 /// pixels.
 #[derive(Clone)]
-pub struct CanvasImage(pub(crate) Rc<crate::platforms::PlatformImage>);
+pub struct CanvasImage {
+    image: Rc<PlatformImage>,
+    pixels: Arc<[u8]>,
+}
 
 impl CanvasImage {
     /// Create an image from tightly packed, row-major, premultiplied sRGB BGRA8 pixels.
     ///
     /// # Panics
     /// Panics if the dimensions are zero or do not match the pixel data.
-    pub fn from_premultiplied_bgra(width: u32, height: u32, pixels: std::sync::Arc<[u8]>) -> Self {
+    pub fn from_premultiplied_bgra(width: u32, height: u32, pixels: Arc<[u8]>) -> Self {
         assert!(width > 0 && height > 0, "image dimensions must be nonzero");
         assert_eq!(
             Some(pixels.len()),
@@ -894,19 +1108,20 @@ impl CanvasImage {
                 .and_then(|pixels| pixels.checked_mul(4)),
             "image pixels must match the dimensions"
         );
-        Self(Rc::new(crate::platforms::PlatformImage::new(
-            width, height, pixels,
-        )))
+        Self {
+            image: Rc::new(PlatformImage::new(width, height, pixels.clone())),
+            pixels,
+        }
     }
 
     /// Width in pixels.
     pub fn width(&self) -> u32 {
-        self.0.width
+        self.image.width
     }
 
     /// Height in pixels.
     pub fn height(&self) -> u32 {
-        self.0.height
+        self.image.height
     }
 }
 
@@ -978,8 +1193,9 @@ pub enum FontWeight {
     Bold,
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub(crate) struct CanvasState {
+    pub transform: Transform,
     pub fill: CanvasStyle,
     pub stroke: CanvasStyle,
     pub alpha: f32,
@@ -989,9 +1205,9 @@ pub(crate) struct CanvasState {
     pub line_cap: LineCap,
     pub line_join: LineJoin,
     pub miter_limit: f32,
-    pub line_dash: Rc<[f32]>,
+    pub line_dash: Arc<[f32]>,
     pub line_dash_offset: f32,
-    pub font_family: Rc<str>,
+    pub font_family: Arc<str>,
     pub font_size: f32,
     pub font_weight: FontWeight,
     pub text_align: TextAlign,
@@ -1001,6 +1217,7 @@ pub(crate) struct CanvasState {
 impl Default for CanvasState {
     fn default() -> Self {
         Self {
+            transform: Transform::IDENTITY,
             fill: Color::rgb(0, 0, 0).into(),
             stroke: Color::rgb(0, 0, 0).into(),
             alpha: 1.0,
@@ -1010,7 +1227,7 @@ impl Default for CanvasState {
             line_cap: LineCap::Butt,
             line_join: LineJoin::Miter,
             miter_limit: 10.0,
-            line_dash: Rc::from([]),
+            line_dash: Arc::from([]),
             line_dash_offset: 0.0,
             font_family: "sans-serif".into(),
             font_size: 10.0,
@@ -1089,13 +1306,24 @@ impl Canvas {
     }
 }
 
-/// A thread-bound native 2D canvas backed by tightly packed, straight-alpha sRGB RGBA8 pixels.
+/// A 2D canvas without a window, which paints tightly packed, straight-alpha sRGB RGBA8
+/// pixels or records its drawing to replay with `draw_canvas`. It can be shared between threads.
 pub struct OffscreenCanvas {
-    platform: PlatformOffscreenCanvas,
+    backend: OffscreenBackend,
     width: u32,
     height: u32,
     scale_factor: f32,
-    logical_size: (u32, u32),
+    logical_size: (f32, f32),
+}
+
+enum OffscreenBackend {
+    // Locked, so drawing the canvas into another can read its pixels.
+    Pixels(Mutex<PlatformOffscreenCanvas>),
+    // The recorded drawing, with its pixels once they are read.
+    Recording {
+        ops: Ops,
+        raster: Mutex<Option<PlatformOffscreenCanvas>>,
+    },
 }
 
 impl OffscreenCanvas {
@@ -1111,28 +1339,39 @@ impl OffscreenCanvas {
             scale_factor.is_finite() && scale_factor > 0.0,
             "invalid canvas scale factor"
         );
-        let logical_size = (width, height);
-        let width = (f64::from(width) * f64::from(scale_factor)).ceil();
-        let height = (f64::from(height) * f64::from(scale_factor)).ceil();
-        assert!(
-            width <= f64::from(i32::MAX) && height <= f64::from(i32::MAX),
-            "canvas dimensions are too large"
-        );
-        let (width, height) = (width as u32, height as u32);
-        assert!(
-            width > 0 && height > 0 && width <= i32::MAX as u32 && height <= i32::MAX as u32,
-            "canvas dimensions must be nonzero and fit in i32"
-        );
-        let length = width
-            .checked_mul(height)
-            .and_then(|pixels| pixels.checked_mul(4))
-            .and_then(|bytes| usize::try_from(bytes).ok())
-            .expect("canvas dimensions are too large");
+        let logical_size = (width as f32, height as f32);
+        let (width, height) = pixel_size(logical_size, scale_factor)
+            .filter(|&(width, height)| width > 0 && height > 0)
+            .expect("canvas dimensions must be nonzero and fit in i32");
+        let platform = new_platform(width, height).expect("canvas dimensions are too large");
         Self {
-            platform: PlatformOffscreenCanvas::new(width, height, length),
+            backend: OffscreenBackend::Pixels(Mutex::new(platform)),
             width,
             height,
             scale_factor,
+            logical_size,
+        }
+    }
+
+    /// Create a canvas that records its drawing instead of painting pixels. Drawing it with
+    /// `draw_canvas` replays the drawing, so it stays sharp at any size. The logical
+    /// dimensions may be fractional, zero or larger than a bitmap; its pixels are painted
+    /// when first read and are empty when they do not fit a bitmap.
+    pub fn new_recording(width: f32, height: f32) -> Self {
+        assert!(
+            width.is_finite() && height.is_finite() && width >= 0.0 && height >= 0.0,
+            "invalid canvas dimensions"
+        );
+        let logical_size = (width, height);
+        let (width, height) = pixel_size(logical_size, 1.0).unwrap_or((0, 0));
+        Self {
+            backend: OffscreenBackend::Recording {
+                ops: Ops::default(),
+                raster: Mutex::default(),
+            },
+            width,
+            height,
+            scale_factor: 1.0,
             logical_size,
         }
     }
@@ -1152,28 +1391,90 @@ impl OffscreenCanvas {
         self.height
     }
 
+    /// Logical width, the width of its drawing coordinates.
+    pub const fn logical_width(&self) -> f32 {
+        self.logical_size.0
+    }
+
+    /// Logical height, the height of its drawing coordinates.
+    pub const fn logical_height(&self) -> f32 {
+        self.logical_size.1
+    }
+
     /// Number of bytes between adjacent rows.
     pub const fn bytes_per_row(&self) -> u32 {
         self.width * 4
     }
 
-    /// Draw into the bitmap with the same API as a window canvas.
+    /// Draw into the canvas with the same API as a window canvas. A recording keeps the
+    /// drawing of earlier calls.
     pub fn draw(&mut self, draw: impl for<'frame> FnOnce(&mut CanvasRenderingContext2d<'frame>)) {
-        let platform = self.platform.begin_draw(self.scale_factor);
-        let mut context = CanvasRenderingContext2d::new(
-            platform,
-            self.logical_size.0 as f32,
-            self.logical_size.1 as f32,
-            self.scale_factor,
-        );
-        draw(&mut context);
-        drop(context);
-        self.platform.end_draw();
+        let (width, height) = self.logical_size;
+        match &mut self.backend {
+            OffscreenBackend::Pixels(platform) => {
+                let platform = platform.get_mut().unwrap_or_else(PoisonError::into_inner);
+                let mut context = CanvasRenderingContext2d::new(
+                    platform.begin_draw(self.scale_factor),
+                    width,
+                    height,
+                    self.scale_factor,
+                );
+                draw(&mut context);
+                drop(context);
+                platform.end_draw();
+            }
+            OffscreenBackend::Recording { ops, raster } => {
+                // Recordings that drew these ops keep them shared, the new ops replay them.
+                let previous = match Arc::get_mut(ops) {
+                    Some(unique) => std::mem::take(unique),
+                    None => vec![crate::recording::Op::Replay(Box::new((
+                        ops.clone(),
+                        Transform::IDENTITY,
+                    )))],
+                };
+                let backend = Backend::Recording(Recorder::new(previous));
+                let mut context =
+                    CanvasRenderingContext2d::with_backend(backend, width, height, 1.0);
+                // Drawings keep their transform and clip to themselves.
+                context.backend.save();
+                draw(&mut context);
+                context.close();
+                context.backend.restore();
+                if let Backend::Recording(recorder) = &mut context.backend {
+                    let mut recorded = std::mem::take(&mut recorder.ops);
+                    recorded.shrink_to_fit();
+                    match Arc::get_mut(ops) {
+                        Some(unique) => *unique = recorded,
+                        None => *ops = Arc::new(recorded),
+                    }
+                }
+                *raster.get_mut().unwrap_or_else(PoisonError::into_inner) = None;
+            }
+        }
     }
 
-    /// Return tightly packed sRGB pixels in RGBA byte order with straight alpha.
+    /// Return tightly packed sRGB pixels in RGBA byte order with straight alpha. A recording
+    /// without pixels returns no pixels.
     pub fn pixels(&mut self) -> &[u8] {
-        self.platform.pixels()
+        match &mut self.backend {
+            OffscreenBackend::Pixels(platform) => platform
+                .get_mut()
+                .unwrap_or_else(PoisonError::into_inner)
+                .pixels(),
+            OffscreenBackend::Recording { ops, raster } => {
+                let raster = raster.get_mut().unwrap_or_else(PoisonError::into_inner);
+                if raster.is_none()
+                    && let Some(mut platform) = new_platform(self.width, self.height)
+                {
+                    let mut backend = Backend::Platform(platform.begin_draw(self.scale_factor));
+                    backend.replay(ops, Transform::IDENTITY);
+                    drop(backend);
+                    platform.end_draw();
+                    *raster = Some(platform);
+                }
+                raster.as_mut().map_or(&[], PlatformOffscreenCanvas::pixels)
+            }
+        }
     }
 
     /// Copy the current pixels into an image bitmap for encoding or further processing.
@@ -1181,6 +1482,50 @@ impl OffscreenCanvas {
     pub fn to_bitmap(&mut self) -> Result<image::Bitmap, image::EncodeError> {
         image::Bitmap::new(self.width, self.height, self.pixels().to_vec())
     }
+}
+
+// The bitmap dimensions of logical dimensions, rounded up, when they fit in i32.
+fn pixel_size((width, height): (f32, f32), scale_factor: f32) -> Option<(u32, u32)> {
+    let width = (f64::from(width) * f64::from(scale_factor)).ceil();
+    let height = (f64::from(height) * f64::from(scale_factor)).ceil();
+    (width <= f64::from(i32::MAX) && height <= f64::from(i32::MAX))
+        .then_some((width as u32, height as u32))
+}
+
+// A bitmap of nonzero dimensions whose bytes fit in u32.
+fn new_platform(width: u32, height: u32) -> Option<PlatformOffscreenCanvas> {
+    let length = width
+        .checked_mul(height)
+        .and_then(|pixels| pixels.checked_mul(4))
+        .filter(|_| width > 0 && height > 0)?;
+    Some(PlatformOffscreenCanvas::new(
+        width,
+        height,
+        usize::try_from(length).ok()?,
+    ))
+}
+
+/// Convert straight-alpha sRGB RGBA8 pixels to the premultiplied BGRA8 pixels of a
+/// `CanvasImage`, in one allocation.
+pub fn premultiplied_bgra(rgba: &[u8]) -> Arc<[u8]> {
+    let mut pixels = Arc::<[u8]>::from(rgba);
+    let unique = Arc::get_mut(&mut pixels).expect("new pixels are unique");
+    for pixel in unique.as_chunks_mut::<4>().0 {
+        let [red, green, blue, alpha] = *pixel;
+        // Opaque pixels, like all of a photo, only swap their channels.
+        *pixel = if alpha == 255 {
+            [blue, green, red, alpha]
+        } else {
+            let premultiply = |value: u8| ((u16::from(value) * u16::from(alpha) + 127) / 255) as u8;
+            [
+                premultiply(blue),
+                premultiply(green),
+                premultiply(red),
+                alpha,
+            ]
+        };
+    }
+    pixels
 }
 
 /// A native drawing context owned by the caller, like the one of a native view drawing itself.
@@ -1292,7 +1637,7 @@ fn unpremultiply(component: u8, alpha: u8) -> u8 {
 /// });
 /// ```
 pub struct CanvasRenderingContext2d<'a> {
-    pub(crate) platform: PlatformCanvasContext,
+    pub(crate) backend: Backend,
     pub(crate) state: CanvasState,
     pub(crate) stack: Vec<(CanvasState, Option<LayerPhase>)>,
     width: f32,
@@ -1309,9 +1654,12 @@ impl<'a> CanvasRenderingContext2d<'a> {
         height: f32,
         scale_factor: f32,
     ) -> Self {
+        Self::with_backend(Backend::Platform(platform), width, height, scale_factor)
+    }
+    fn with_backend(backend: Backend, width: f32, height: f32, scale_factor: f32) -> Self {
         static START: OnceLock<Instant> = OnceLock::new();
         Self {
-            platform,
+            backend,
             state: CanvasState::default(),
             stack: Vec::new(),
             width,
@@ -1339,7 +1687,7 @@ impl<'a> CanvasRenderingContext2d<'a> {
     }
     /// Save styles, the transform, and the clipping region, but not the current path.
     pub fn save(&mut self) {
-        self.platform.save();
+        self.backend.save();
         self.stack.push((self.state.clone(), None));
     }
     /// Restore the most recently saved drawing state. An empty stack and a state saved by
@@ -1347,7 +1695,7 @@ impl<'a> CanvasRenderingContext2d<'a> {
     pub fn restore(&mut self) {
         if matches!(self.stack.last(), Some((_, None))) {
             let (state, _) = self.stack.pop().expect("saved state");
-            self.platform.restore();
+            self.backend.restore();
             self.state = state;
         }
     }
@@ -1355,13 +1703,13 @@ impl<'a> CanvasRenderingContext2d<'a> {
     /// global alpha and composite operation of now. Like `save`, the layer keeps the drawing
     /// state, and its drawing starts with full alpha and source over compositing.
     pub fn begin_layer(&mut self) {
-        self.platform.begin_layer(&self.state);
+        self.backend.begin_layer(&self.state);
         self.push_layer(LayerPhase::Content);
     }
     /// Start a layer that is masked: drawing until `end_mask` makes the mask, whose alpha
     /// is the coverage of the drawing after it until `end_layer`.
     pub fn begin_mask_layer(&mut self) {
-        self.platform.begin_mask_layer(&self.state);
+        self.backend.begin_mask_layer(&self.state);
         self.push_layer(LayerPhase::Mask);
     }
     /// Finish the mask of a masked layer and start its content, with the drawing state of
@@ -1374,9 +1722,11 @@ impl<'a> CanvasRenderingContext2d<'a> {
             return;
         }
         self.unwind_saves(index);
-        self.platform.end_mask();
+        self.backend.end_mask();
         self.stack[index].1 = Some(LayerPhase::Content);
         self.state = self.layer_state(index);
+        // Native contexts keep the transform of the mask drawing.
+        self.backend.set_transform(self.state.transform);
     }
     /// Composite the most recent layer and restore the drawing state of its start. Without
     /// a layer this is a no-op.
@@ -1386,9 +1736,9 @@ impl<'a> CanvasRenderingContext2d<'a> {
         };
         self.unwind_saves(index);
         if self.stack[index].1 == Some(LayerPhase::Mask) {
-            self.platform.end_mask();
+            self.backend.end_mask();
         }
-        self.platform.end_layer();
+        self.backend.end_layer();
         let (state, _) = self.stack.pop().expect("layer state");
         self.state = state;
     }
@@ -1411,7 +1761,7 @@ impl<'a> CanvasRenderingContext2d<'a> {
     fn unwind_saves(&mut self, index: usize) {
         while self.stack.len() > index + 1 {
             self.stack.pop();
-            self.platform.restore();
+            self.backend.restore();
         }
     }
     /// Current fill style.
@@ -1520,6 +1870,17 @@ impl<'a> CanvasRenderingContext2d<'a> {
         {
             return;
         }
+        // An odd list repeats once, like the HTML canvas. Unchanged dashes keep their storage.
+        let length = segments.len() * (1 + segments.len() % 2);
+        let current = &self.state.line_dash;
+        if current.len() == length
+            && current
+                .iter()
+                .zip(segments.iter().cycle())
+                .all(|(a, b)| a == b)
+        {
+            return;
+        }
         self.state.line_dash = if segments.len() % 2 == 1 {
             segments.iter().chain(segments).copied().collect()
         } else {
@@ -1585,50 +1946,50 @@ impl<'a> CanvasRenderingContext2d<'a> {
         if ![x, y, width, height].iter().all(|v| v.is_finite()) {
             return;
         }
-        self.platform.clear_rect(x, y, width, height);
+        self.backend.clear_rect(x, y, width, height);
     }
     /// Fill a rectangle.
     pub fn fill_rect(&mut self, x: f32, y: f32, width: f32, height: f32) {
         if ![x, y, width, height].iter().all(|v| v.is_finite()) {
             return;
         }
-        self.platform.fill_rect(&self.state, x, y, width, height);
+        self.backend.fill_rect(&self.state, x, y, width, height);
     }
     /// Stroke a rectangle.
     pub fn stroke_rect(&mut self, x: f32, y: f32, width: f32, height: f32) {
         if ![x, y, width, height].iter().all(|v| v.is_finite()) {
             return;
         }
-        self.platform.stroke_rect(&self.state, x, y, width, height);
+        self.backend.stroke_rect(&self.state, x, y, width, height);
     }
     /// Begin a new path.
     pub fn begin_path(&mut self) {
-        self.platform.begin_path();
+        self.backend.begin_path();
     }
     /// Close the current path.
     pub fn close_path(&mut self) {
-        self.platform.close_path();
+        self.backend.close_path();
     }
     /// Move the current point.
     pub fn move_to(&mut self, x: f32, y: f32) {
         if ![x, y].iter().all(|v| v.is_finite()) {
             return;
         }
-        self.platform.move_to(x, y);
+        self.backend.move_to(x, y);
     }
     /// Add a line segment.
     pub fn line_to(&mut self, x: f32, y: f32) {
         if ![x, y].iter().all(|v| v.is_finite()) {
             return;
         }
-        self.platform.line_to(x, y);
+        self.backend.line_to(x, y);
     }
     /// Add a rectangle to the path.
     pub fn rect(&mut self, x: f32, y: f32, width: f32, height: f32) {
         if ![x, y, width, height].iter().all(|v| v.is_finite()) {
             return;
         }
-        self.platform.rect(x, y, width, height);
+        self.backend.rect(x, y, width, height);
     }
     /// Add a rounded rectangle to the current path.
     /// Negative dimensions reverse the corresponding axis. Non-finite arguments are ignored.
@@ -1696,7 +2057,7 @@ impl<'a> CanvasRenderingContext2d<'a> {
             radius_x >= 0.0 && radius_y >= 0.0,
             "ellipse radii must be nonnegative"
         );
-        self.platform.ellipse(x, y, radius_x, radius_y);
+        self.backend.ellipse(x, y, radius_x, radius_y);
     }
     /// Add a circular arc, with angles in radians.
     /// Non-finite arguments are ignored.
@@ -1716,22 +2077,21 @@ impl<'a> CanvasRenderingContext2d<'a> {
             return;
         }
         assert!(radius >= 0.0, "arc radius must be nonnegative");
-        self.platform
-            .arc(x, y, radius, start, end, counterclockwise);
+        self.backend.arc(x, y, radius, start, end, counterclockwise);
     }
     /// Add a quadratic Bezier segment.
     pub fn quadratic_curve_to(&mut self, cpx: f32, cpy: f32, x: f32, y: f32) {
         if ![cpx, cpy, x, y].iter().all(|v| v.is_finite()) {
             return;
         }
-        self.platform.quadratic_curve_to(cpx, cpy, x, y);
+        self.backend.quadratic_curve_to(cpx, cpy, x, y);
     }
     /// Add a cubic Bezier segment.
     pub fn bezier_curve_to(&mut self, cp1x: f32, cp1y: f32, cp2x: f32, cp2y: f32, x: f32, y: f32) {
         if ![cp1x, cp1y, cp2x, cp2y, x, y].iter().all(|v| v.is_finite()) {
             return;
         }
-        self.platform.bezier_curve_to(cp1x, cp1y, cp2x, cp2y, x, y);
+        self.backend.bezier_curve_to(cp1x, cp1y, cp2x, cp2y, x, y);
     }
     /// Fill the current path without consuming it.
     pub fn fill(&mut self) {
@@ -1739,11 +2099,11 @@ impl<'a> CanvasRenderingContext2d<'a> {
     }
     /// Fill the current path with a fill rule without consuming it.
     pub fn fill_with(&mut self, rule: FillRule) {
-        self.platform.fill(&self.state, rule);
+        self.backend.fill(&self.state, rule);
     }
     /// Stroke the current path without consuming it.
     pub fn stroke(&mut self) {
-        self.platform.stroke(&self.state);
+        self.backend.stroke(&self.state);
     }
     /// Clip future drawing to the current path without consuming it.
     pub fn clip(&mut self) {
@@ -1751,78 +2111,159 @@ impl<'a> CanvasRenderingContext2d<'a> {
     }
     /// Clip future drawing to the current path with a fill rule without consuming it.
     pub fn clip_with(&mut self, rule: FillRule) {
-        self.platform.clip(rule);
+        self.backend.clip(rule);
     }
     /// Draw an image scaled into a rectangle.
     pub fn draw_image(&mut self, image: &CanvasImage, x: f32, y: f32, width: f32, height: f32) {
         if ![x, y, width, height].iter().all(|v| v.is_finite()) {
             return;
         }
-        self.platform
-            .draw_image(&self.state, &image.0, x, y, width, height);
+        self.backend.draw_image(
+            &self.state,
+            &image.image,
+            &image.pixels,
+            x,
+            y,
+            width,
+            height,
+        );
+    }
+    /// Draw an offscreen canvas scaled into a rectangle, like `drawImage` with an
+    /// `OffscreenCanvas`. A recording replays its drawing clipped to the rectangle, which
+    /// stays sharp at any scale, composites as one layer and resets the current path.
+    pub fn draw_canvas(
+        &mut self,
+        canvas: &OffscreenCanvas,
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+    ) {
+        if ![x, y, width, height].iter().all(|v| v.is_finite()) {
+            return;
+        }
+        match &canvas.backend {
+            OffscreenBackend::Pixels(platform) => {
+                let pixels = premultiplied_bgra(
+                    platform
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .pixels(),
+                );
+                let image = PlatformImage::new(canvas.width, canvas.height, pixels.clone());
+                self.backend
+                    .draw_image(&self.state, &image, &pixels, x, y, width, height);
+            }
+            OffscreenBackend::Recording { ops, .. } => {
+                let (canvas_width, canvas_height) = canvas.logical_size;
+                if [canvas_width, canvas_height, width, height].contains(&0.0) {
+                    return;
+                }
+                self.save();
+                self.begin_path();
+                self.rect(x, y, width, height);
+                self.clip();
+                self.begin_path();
+                let layer = self.state.alpha < 1.0
+                    || self.state.composite != CompositeOperation::SourceOver;
+                if layer {
+                    self.begin_layer();
+                }
+                self.translate(x, y);
+                self.scale(width / canvas_width, height / canvas_height);
+                self.backend.replay(ops, self.state.transform);
+                if layer {
+                    self.end_layer();
+                }
+                self.restore();
+            }
+        }
     }
     /// Translate the current transform.
     pub fn translate(&mut self, x: f32, y: f32) {
         if ![x, y].iter().all(|v| v.is_finite()) {
             return;
         }
-        self.platform.translate(x, y);
+        self.state.transform = self
+            .state
+            .transform
+            .concat(Transform([1.0, 0.0, 0.0, 1.0, x, y]));
+        self.backend.translate(x, y);
     }
     /// Rotate the current transform by radians.
     pub fn rotate(&mut self, angle: f32) {
         if !angle.is_finite() {
             return;
         }
-        self.platform.rotate(angle);
+        let (sin, cos) = angle.sin_cos();
+        self.state.transform = self
+            .state
+            .transform
+            .concat(Transform([cos, sin, -sin, cos, 0.0, 0.0]));
+        self.backend.rotate(angle);
     }
     /// Scale the current transform.
     pub fn scale(&mut self, x: f32, y: f32) {
         if ![x, y].iter().all(|v| v.is_finite()) {
             return;
         }
-        self.platform.scale(x, y);
+        self.state.transform = self
+            .state
+            .transform
+            .concat(Transform([x, 0.0, 0.0, y, 0.0, 0.0]));
+        self.backend.scale(x, y);
     }
     /// Multiply the current transform with an affine transform.
     pub fn transform(&mut self, a: f32, b: f32, c: f32, d: f32, e: f32, f: f32) {
         if ![a, b, c, d, e, f].iter().all(|v| v.is_finite()) {
             return;
         }
-        self.platform.transform(a, b, c, d, e, f);
+        self.state.transform = self.state.transform.concat(Transform([a, b, c, d, e, f]));
+        self.backend.transform(a, b, c, d, e, f);
     }
     /// Replace the current affine transform.
     pub fn set_transform(&mut self, a: f32, b: f32, c: f32, d: f32, e: f32, f: f32) {
         if ![a, b, c, d, e, f].iter().all(|v| v.is_finite()) {
             return;
         }
-        self.platform.set_transform(a, b, c, d, e, f);
+        self.state.transform = Transform([a, b, c, d, e, f]);
+        self.backend.set_transform(self.state.transform);
     }
     /// Reset the current transform.
     pub fn reset_transform(&mut self) {
-        self.platform.reset_transform();
+        self.state.transform = Transform::IDENTITY;
+        self.backend.reset_transform();
     }
     /// Draw filled text.
     pub fn fill_text(&mut self, text: impl AsRef<str>, x: f32, y: f32) {
         if ![x, y].iter().all(|v| v.is_finite()) {
             return;
         }
-        self.platform.fill_text(&self.state, text.as_ref(), x, y);
+        self.backend.fill_text(&self.state, text.as_ref(), x, y);
     }
     /// Measure text width in logical pixels.
     pub fn measure_text(&mut self, text: impl AsRef<str>) -> f32 {
-        self.platform.measure_text(&self.state, text.as_ref())
+        self.backend.measure_text(&self.state, text.as_ref())
     }
 }
 
 impl Drop for CanvasRenderingContext2d<'_> {
     fn drop(&mut self) {
+        self.close();
+    }
+}
+
+impl CanvasRenderingContext2d<'_> {
+    // Restore every saved state and end every layer.
+    fn close(&mut self) {
         while let Some((_, layer)) = self.stack.pop() {
             match layer {
-                None => self.platform.restore(),
+                None => self.backend.restore(),
                 Some(phase) => {
                     if phase == LayerPhase::Mask {
-                        self.platform.end_mask();
+                        self.backend.end_mask();
                     }
-                    self.platform.end_layer();
+                    self.backend.end_layer();
                 }
             }
         }

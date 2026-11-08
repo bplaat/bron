@@ -18,6 +18,10 @@ pub(crate) struct PlatformOffscreenCanvas {
     dirty: bool,
 }
 
+// SAFETY: Cairo image surfaces and their contexts may be used from any thread one at a time,
+// and only the canvas owns them.
+unsafe impl Send for PlatformOffscreenCanvas {}
+
 impl PlatformOffscreenCanvas {
     pub(crate) fn new(width: u32, height: u32, length: usize) -> Self {
         let mut storage = vec![0; length / 4];

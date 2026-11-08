@@ -22,6 +22,11 @@ pub(crate) struct PlatformOffscreenCanvas {
     output: Vec<u8>,
 }
 
+// SAFETY: Global JNI references are valid on every thread, which attaches to the VM for each
+// call. The shared resources only leave the canvas in the contexts of `draw`, which borrows it
+// mutably, so every reference moves with the canvas.
+unsafe impl Send for PlatformOffscreenCanvas {}
+
 impl PlatformOffscreenCanvas {
     pub(crate) fn new(width: u32, height: u32, length: usize) -> Self {
         let (bitmap, canvas, resources) = with_env(|env| {

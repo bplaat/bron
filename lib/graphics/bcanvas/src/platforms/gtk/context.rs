@@ -5,7 +5,6 @@
  */
 
 use std::ffi::{CString, c_void};
-use std::rc::Rc;
 use std::sync::Arc;
 
 use super::headers::*;
@@ -20,7 +19,7 @@ pub(crate) struct PlatformCanvasContext {
     // Cairo cannot hold a singular matrix, so drawing is skipped instead.
     degenerate: bool,
     saved: Vec<bool>,
-    font: Option<(Rc<str>, FontWeight, f32)>,
+    font: Option<(Arc<str>, FontWeight, f32)>,
     layers: Vec<Layer>,
 }
 

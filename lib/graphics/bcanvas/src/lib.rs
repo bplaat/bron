@@ -14,3 +14,5 @@ mod canvas;
 #[cfg_attr(not(any(windows, target_os = "android")), allow(dead_code))]
 mod path;
 mod platforms;
+mod recording;
+mod transform;

@@ -16,6 +16,11 @@ pub(crate) struct PlatformOffscreenCanvas {
     text_styles: TextStyleCache,
 }
 
+// SAFETY: The bitmap context and Core Foundation objects may be used from any thread one at a
+// time. The shared text style cache only leaves the canvas in the contexts of `draw`, which
+// borrows it mutably, so every reference moves with the canvas.
+unsafe impl Send for PlatformOffscreenCanvas {}
+
 impl PlatformOffscreenCanvas {
     pub(crate) fn new(width: u32, height: u32, length: usize) -> Self {
         let mut storage = vec![0; length];

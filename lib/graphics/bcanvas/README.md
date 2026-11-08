@@ -73,7 +73,7 @@ method names in snake_case, with getter/setter pairs such as `fill_style()` /
   with the global alpha and composite operation of its start. `begin_mask_layer()` draws a
   mask until `end_mask()`, whose alpha masks the layer content.
 - `draw_image(image, x, y, width, height)` draws a `CanvasImage` of premultiplied BGRA
-  pixels, which it shares.
+  pixels, which it shares. `premultiplied_bgra(rgba)` converts straight-alpha RGBA pixels to them.
 - Composite operations of drawing only change the area that is drawn, like Core Graphics,
   while a layer composites over the whole canvas when it ends.
 - Every backend supports the same features. Direct2D blends layers through Direct2D 1.1
@@ -111,6 +111,30 @@ canvas.draw(|ctx| {
 });
 let rgba = canvas.pixels();
 assert_eq!(rgba.len(), 128 * 32 * 4);
+```
+
+An offscreen canvas can be shared between threads. `draw_canvas(canvas, x, y, width, height)`
+draws one into any context, like `drawImage` with an `OffscreenCanvas`.
+
+### Recording
+
+`OffscreenCanvas::new_recording` creates a canvas that records its drawing instead of painting
+pixels. `draw_canvas` replays the recording scaled into its rectangle, so it stays sharp at any
+size, clipped to that rectangle and composited as one layer with the global alpha and composite
+operation. Recordings nest, and `pixels` paints a recording when it is first read:
+
+```rust
+use bcanvas::{Color, OffscreenCanvas};
+
+let mut icon = OffscreenCanvas::new_recording(16.0, 16.0);
+icon.draw(|ctx| {
+    ctx.set_fill_style(Color::rgb(30, 120, 200));
+    ctx.ellipse(8.0, 8.0, 8.0, 8.0);
+    ctx.fill();
+});
+
+let mut canvas = OffscreenCanvas::new(64, 64);
+canvas.draw(|ctx| ctx.draw_canvas(&icon, 0.0, 0.0, 64.0, 64.0));
 ```
 
 With the `image` feature, `to_bitmap` copies the pixels into an [image](../image)

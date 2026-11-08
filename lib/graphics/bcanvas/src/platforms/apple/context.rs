@@ -33,7 +33,7 @@ pub(super) struct TextStyleCache(Rc<RefCell<HashMap<TextStyleKey, Rc<TextStyle>>
 
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub(super) struct TextStyleKey {
-    family: Rc<str>,
+    family: Arc<str>,
     size: u32,
     weight: FontWeight,
 }
@@ -751,7 +751,7 @@ mod tests {
     #[test]
     fn bold_text_preserves_the_requested_family() {
         let state = CanvasState {
-            font_family: Rc::from("Menlo"),
+            font_family: Arc::from("Menlo"),
             font_size: 18.0,
             ..CanvasState::default()
         };
