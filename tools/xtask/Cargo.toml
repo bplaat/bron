@@ -10,8 +10,8 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
-android-build = { path = "../../lib/build/android-build" }
 anyhow = "1.0"
+build-utils = { path = "../../lib/build/build-utils" }
 directories = "6.0"
 regex = { version = "1.13", default-features = false, features = [
     "std",

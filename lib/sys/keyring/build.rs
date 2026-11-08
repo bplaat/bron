@@ -7,7 +7,9 @@
 #![doc = include_str!("README.md")]
 
 use std::env;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
+
+use build_utils::{display_paths, find_library, library_has_symbol, link_library, push_unique};
 
 fn main() {
     let target_os = env::var("CARGO_CFG_TARGET_OS").expect("CARGO_CFG_TARGET_OS not set");
@@ -18,24 +20,10 @@ fn main() {
     println!("cargo::rerun-if-env-changed=KEYRING_LIB_DIR");
     let mut search_dirs = Vec::new();
     if let Some(path) = env::var_os("KEYRING_LIB_DIR") {
-        push_unique(&mut search_dirs, PathBuf::from(path));
+        search_dirs.push(PathBuf::from(path));
     }
-    if let Some(multiarch) = command_stdout("cc", &["-print-multiarch"]) {
-        let multiarch = multiarch.trim();
-        if !multiarch.is_empty() {
-            push_unique(&mut search_dirs, PathBuf::from("/usr/lib").join(multiarch));
-            push_unique(&mut search_dirs, PathBuf::from("/lib").join(multiarch));
-        }
-    }
-    for path in [
-        "/usr/local/lib",
-        "/usr/pkg/lib",
-        "/usr/lib64",
-        "/lib64",
-        "/usr/lib",
-        "/lib",
-    ] {
-        push_unique(&mut search_dirs, PathBuf::from(path));
+    for path in build_utils::search_dirs() {
+        push_unique(&mut search_dirs, path);
     }
 
     let secret = require_library(&search_dirs, "secret-1");
@@ -46,29 +34,6 @@ fn main() {
     link_library(&require_library(&search_dirs, "glib-2.0"));
 }
 
-fn find_library(search_dirs: &[PathBuf], name: &str) -> Option<PathBuf> {
-    let prefix = format!("lib{name}.so");
-    for directory in search_dirs {
-        let Ok(entries) = std::fs::read_dir(directory) else {
-            continue;
-        };
-        let mut candidates = entries
-            .filter_map(Result::ok)
-            .map(|entry| entry.path())
-            .filter(|path| {
-                path.file_name()
-                    .and_then(|file| file.to_str())
-                    .is_some_and(|file| file == prefix || file.starts_with(&format!("{prefix}.")))
-            })
-            .collect::<Vec<_>>();
-        candidates.sort_by_key(|path| path.file_name().is_some_and(|file| file == prefix.as_str()));
-        if let Some(path) = candidates.into_iter().find(|path| path.is_file()) {
-            return Some(path);
-        }
-    }
-    None
-}
-
 fn require_library(search_dirs: &[PathBuf], name: &str) -> PathBuf {
     find_library(search_dirs, name).unwrap_or_else(|| {
         panic!(
@@ -76,46 +41,4 @@ fn require_library(search_dirs: &[PathBuf], name: &str) -> PathBuf {
             display_paths(search_dirs)
         )
     })
-}
-
-fn link_library(path: &Path) {
-    let directory = path
-        .parent()
-        .expect("library should have a parent directory");
-    let file_name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .expect("library filename should be valid UTF-8");
-    println!("cargo::rustc-link-search=native={}", directory.display());
-    println!("cargo::rustc-link-lib=dylib:+verbatim={file_name}");
-}
-
-fn library_has_symbol(path: &Path, symbol: &[u8]) -> bool {
-    std::fs::read(path)
-        .is_ok_and(|bytes| bytes.windows(symbol.len()).any(|window| window == symbol))
-}
-
-fn command_stdout(command: &str, args: &[&str]) -> Option<String> {
-    let output = std::process::Command::new(command)
-        .args(args)
-        .output()
-        .ok()?;
-    output
-        .status
-        .success()
-        .then(|| String::from_utf8_lossy_owned(output.stdout))
-}
-
-fn push_unique(paths: &mut Vec<PathBuf>, path: PathBuf) {
-    if !paths.contains(&path) {
-        paths.push(path);
-    }
-}
-
-fn display_paths(paths: &[PathBuf]) -> String {
-    paths
-        .iter()
-        .map(|path| path.display().to_string())
-        .collect::<Vec<_>>()
-        .join(", ")
 }

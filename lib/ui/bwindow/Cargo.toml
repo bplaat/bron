@@ -29,3 +29,6 @@ file_drop = []
 menu = []
 progress_bar = []
 remember_window_state = ["dep:directories"]
+
+[build-dependencies]
+build-utils = { path = "../../build/build-utils" }

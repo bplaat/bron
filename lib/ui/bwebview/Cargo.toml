@@ -24,7 +24,7 @@ block2 = "0.6.2"
 objc2 = "0.6.5"
 
 [build-dependencies]
-android-build = { path = "../../build/android-build" }
+build-utils = { path = "../../build/build-utils" }
 
 [dev-dependencies]
 bwindow = { path = "../bwindow", features = [

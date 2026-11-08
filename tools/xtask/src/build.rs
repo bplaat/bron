@@ -363,7 +363,7 @@ impl Xtask {
             bail!("no Android application bundle: {selected}");
         }
 
-        let adb = android_build::adb();
+        let adb = build_utils::android::adb();
         let output = capture(Command::new(&adb).arg("devices"))?;
         let device = String::from_utf8_lossy(&output.stdout)
             .lines()

@@ -52,11 +52,13 @@ pub(crate) fn bundle(args: &Args, target_dir: &str, manifest: &Manifest) {
              letter and only contain letters, digits, and underscores"
         ));
     }
-    let min_sdk = android.min_sdk_version.unwrap_or(android_build::MIN_SDK);
-    if min_sdk < android_build::MIN_SDK {
+    let min_sdk = android
+        .min_sdk_version
+        .unwrap_or(build_utils::android::MIN_SDK);
+    if min_sdk < build_utils::android::MIN_SDK {
         fail(&format!(
             "min_sdk_version {min_sdk} is too low, bwindow requires at least Android API level {}",
-            android_build::MIN_SDK
+            build_utils::android::MIN_SDK
         ));
     }
     let toolchain = Toolchain::find(android.target_sdk_version);
@@ -117,7 +119,7 @@ pub(crate) fn bundle(args: &Args, target_dir: &str, manifest: &Manifest) {
 // MARK: Run
 /// The most preferred ABI of the connected device or emulator that the bundle supports.
 fn device_abi() -> Abi {
-    let output = Command::new(android_build::adb())
+    let output = Command::new(build_utils::android::adb())
         .args(["shell", "getprop", "ro.product.cpu.abilist"])
         .output()
         .unwrap_or_else(|error| fail(&format!("Failed to run adb: {error}")));
@@ -136,7 +138,7 @@ fn device_abi() -> Abi {
 }
 
 fn install_and_run(apk: &Path, identifier: &str) -> ! {
-    let adb_path = android_build::adb();
+    let adb_path = build_utils::android::adb();
     let adb = |args: &[&str]| {
         Command::new(&adb_path)
             .args(args)

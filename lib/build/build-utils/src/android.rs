@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: MIT
  */
 
-#![doc = include_str!("../README.md")]
+//! Android SDK, NDK and JDK discovery and Java-to-dex compilation.
 
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
@@ -312,7 +312,7 @@ mod tests {
 
     #[test]
     fn finds_the_newest_versions_and_decimal_platforms() {
-        let sdk = env::temp_dir().join(format!("android-build-sdk-{}", std::process::id()));
+        let sdk = env::temp_dir().join(format!("build-utils-sdk-{}", std::process::id()));
         for dir in [
             "build-tools/9.0.0",
             "build-tools/36.0.0",

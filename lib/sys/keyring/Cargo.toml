@@ -15,3 +15,6 @@ workspace = true
 
 [dependencies]
 zeroize = "1.9"
+
+[build-dependencies]
+build-utils = { path = "../../build/build-utils" }

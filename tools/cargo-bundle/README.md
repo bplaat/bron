@@ -171,7 +171,7 @@ manifest = "meta/android/AndroidManifest.xml"
 res_dir = "meta/android/res"
 ```
 
-The SDK, NDK, and JDK are found with [android-build](../../lib/build/android-build): through
+The SDK, NDK, and JDK are found with [build-utils](../../lib/build/build-utils/README.md#android): through
 `ANDROID_HOME` (default `~/Library/Android/sdk` on macOS and `~/Android/Sdk` on Linux), the
 newest platform and build-tools, the newest NDK or `ANDROID_NDK_HOME`, and JDK 17 or 21 for
 `apksigner` and `keytool`.

@@ -23,3 +23,6 @@ objc2 = { version = "0.6.5", optional = true }
 default = ["window"]
 image = ["dep:image"]
 window = ["dep:bwindow", "dep:objc2"]
+
+[build-dependencies]
+build-utils = { path = "../../build/build-utils" }

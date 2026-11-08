@@ -6,7 +6,7 @@
 
 use std::path::PathBuf;
 
-use android_build::{Jdk, Sdk};
+use build_utils::android::{Jdk, Sdk};
 
 use super::fail;
 

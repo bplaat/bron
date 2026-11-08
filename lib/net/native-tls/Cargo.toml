@@ -27,3 +27,6 @@ rustls-pki-types = "1.15"
 
 [lints]
 workspace = true
+
+[build-dependencies]
+build-utils = { path = "../../build/build-utils" }

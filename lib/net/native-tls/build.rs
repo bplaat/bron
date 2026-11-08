@@ -8,6 +8,8 @@
 
 use std::path::PathBuf;
 
+use build_utils::{command_stdout, push_unique};
+
 fn main() {
     println!("cargo::rustc-check-cfg=cfg(openssl_v10x)");
     println!("cargo::rustc-check-cfg=cfg(openssl_v4xx)");
@@ -98,23 +100,6 @@ fn link_openssl(target_os: &str) {
             .collect::<Vec<_>>()
             .join(", ")
     );
-}
-
-fn command_stdout(command: &str, args: &[&str]) -> Option<String> {
-    let output = std::process::Command::new(command)
-        .args(args)
-        .output()
-        .ok()?;
-    output
-        .status
-        .success()
-        .then(|| String::from_utf8_lossy_owned(output.stdout))
-}
-
-fn push_unique(paths: &mut Vec<PathBuf>, path: PathBuf) {
-    if !path.as_os_str().is_empty() && !paths.iter().any(|existing| existing == &path) {
-        paths.push(path);
-    }
 }
 
 fn emit_version_cfg(version: &str) {

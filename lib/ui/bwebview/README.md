@@ -56,7 +56,7 @@ sudo dnf install gtk3 webkit2gtk4.1
 The WebView is shown in a panel window over the native activity window, padded by the
 system bars, display cutout, and keyboard. The back gesture navigates back in the
 WebView history, or sends `CloseRequested` to the window when there is none. Its Java glue is compiled to dex by the build
-script with [android-build](../../build/android-build) and loaded at runtime, which needs
+script with [build-utils](../../build/build-utils/README.md#android) and loaded at runtime, which needs
 JDK 17 or 21 and the Android SDK when building for Android.
 
 JavaScript and DOM storage are enabled and forced dark mode is disabled. Custom
