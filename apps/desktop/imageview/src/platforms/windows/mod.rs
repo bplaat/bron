@@ -1211,6 +1211,42 @@ mod tests {
         );
         let id = app.windows[0].window.id();
         layout_frames();
+        // Resize a live island in both modes, including restoring overflowed controls.
+        for width in [1600.0, MIN_WIDTH as f32, 900.0, MIN_WIDTH as f32, 1600.0] {
+            app.windows[0]
+                .window
+                .set_size(bwindow::LogicalSize::new(width, 480.0));
+            layout_frames();
+            for editing in [false, true] {
+                app.windows[0]
+                    .view
+                    .state
+                    .island
+                    .borrow()
+                    .as_ref()
+                    .unwrap()
+                    .set_editing(editing);
+                layout_frames();
+                app.windows[0]
+                    .view
+                    .state
+                    .island
+                    .borrow()
+                    .as_ref()
+                    .unwrap()
+                    .assert_header_layout(
+                        (editing && width != 900.0).then_some(width == MIN_WIDTH as f32),
+                    );
+            }
+        }
+        app.windows[0]
+            .view
+            .state
+            .island
+            .borrow()
+            .as_ref()
+            .unwrap()
+            .set_editing(false);
         let answer = Rc::new(Cell::new(-1i32));
         let output = answer.clone();
         let dialog = app.windows[0]

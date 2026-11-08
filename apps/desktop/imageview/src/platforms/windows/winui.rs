@@ -95,6 +95,19 @@ const ACTIONS: &[(&str, &str)] = &[
     ("Sharpen", "filter.sharpen"),
     ("ReduceNoise", "filter.reduce_noise"),
     ("Pixelate", "filter.pixelate"),
+    ("MoreAutoEnhance", "filter.auto_enhance"),
+    ("MoreGrayscale", "filter.grayscale"),
+    ("MoreSepia", "filter.sepia"),
+    ("MoreInvert", "filter.invert"),
+    ("MoreThreshold", "filter.threshold"),
+    ("MoreSolarize", "filter.solarize"),
+    ("MoreGaussianBlur", "filter.gaussian_blur"),
+    ("MoreBoxBlur", "filter.box_blur"),
+    ("MoreMotionBlur", "filter.motion_blur"),
+    ("MoreRadialBlur", "filter.radial_blur"),
+    ("MoreSharpen", "filter.sharpen"),
+    ("MoreReduceNoise", "filter.reduce_noise"),
+    ("MorePixelate", "filter.pixelate"),
     ("MoreRotateLeft", "image.rotate_left"),
     ("MoreRotateRight", "image.rotate_right"),
     ("MoreFlipHorizontal", "image.flip_horizontal"),
@@ -119,11 +132,10 @@ const VIEW_ITEMS: [&[u16]; 2] = [w!("ViewStart"), w!("ViewEnd")];
 const EDIT_ITEMS: [&[u16]; 2] = [w!("EditStart"), w!("EditEnd")];
 
 // The edit buttons that always show, and the groups that move to the More menu when the header
-// bar is too narrow, the first ones first, with their items in that menu. The menu lists them in
-// the order of the header bar, a separator shows with the group that needs it, so the menu
-// never starts or ends with one.
-const EDIT_FIXED: [&[u16]; 3] = [w!("HistoryGroup"), w!("Filters"), w!("Done")];
-const OVERFLOW: [(&[u16], &[&[u16]]); 3] = [
+// bar is too narrow, from left to right, keeping selection available until last. The menu lists
+// items in toolbar order; separators appear with their groups so none are left at the edges.
+const EDIT_FIXED: [&[u16]; 2] = [w!("HistoryGroup"), w!("Done")];
+const OVERFLOW: [(&[u16], &[&[u16]]); 4] = [
     (
         w!("TransformGroup"),
         &[
@@ -134,21 +146,22 @@ const OVERFLOW: [(&[u16], &[&[u16]]); 3] = [
         ],
     ),
     (
-        w!("SelectGroup"),
-        &[
-            w!("MoreSelectWhole"),
-            w!("MoreSelectRectangle"),
-            w!("MoreSelectEllipse"),
-            w!("MoreSelectSeparator"),
-        ],
-    ),
-    (
         w!("ToolsGroup"),
         &[
             w!("MoreTransformSeparator"),
             w!("MoreCrop"),
             w!("MoreResize"),
             w!("MoreAdjust"),
+        ],
+    ),
+    (w!("Filters"), &[w!("MoreFilters")]),
+    (
+        w!("SelectGroup"),
+        &[
+            w!("MoreSelectWhole"),
+            w!("MoreSelectRectangle"),
+            w!("MoreSelectEllipse"),
+            w!("MoreSelectSeparator"),
         ],
     ),
 ];
@@ -177,14 +190,14 @@ const MORE_WIDTH: f64 = 40.0;
 const TITLE_WIDTH: f64 = 120.0;
 
 /// The narrowest header bar that fits the icon, the sidebar and navigation buttons, a trimmed
-/// title, the zoom, Info and Edit buttons and the tall caption buttons, so they never overlap.
+/// title area, the zoom, Info and Edit buttons and the tall caption buttons, so they never overlap.
 /// The edit groups that do not fit move to the More menu.
 pub(crate) const MIN_WIDTH: f64 = BUTTONS_LEFT
     // The sidebar button.
     + 40.0 + GROUP_SPACING
     // Previous and next, with a divider and a border.
     + 2.0 * 40.0 + 3.0
-    + TITLE_WIDTH
+    // The title can shrink away at the minimum width.
     // The zoom out, reset and zoom in buttons, with dividers and a border.
     + 40.0 + 56.0 + 40.0 + 4.0
     // The Info button.
@@ -1571,6 +1584,41 @@ impl Island {
     /// The scroll offsets of the magnified media, in logical pixels.
     pub(crate) fn offsets(&self) -> (f64, f64) {
         scroll_offsets(&self.scroller)
+    }
+
+    #[cfg(test)]
+    pub(super) fn assert_header_layout(&self, filters_overflowed: Option<bool>) {
+        let (width, _, scale) = self.regions.size.get();
+        let mut inset = 0;
+        // SAFETY: Slot 36 of IAppWindowTitleBar is get_RightInset.
+        unsafe { call!(self.title_bar, 36, &mut inset => *mut i32) };
+        let controls = BUTTONS_LEFT
+            + actual_width(&self.regions.start)
+            + actual_width(&self.regions.end)
+            + END_GAP;
+        assert!(
+            controls <= f64::from(width - inset) / scale + 1.0,
+            "header controls overlap at width {width}, scale {scale}: {controls}"
+        );
+        if let Some(hidden) = filters_overflowed {
+            for (name, expected) in [(w!("Filters"), hidden), (w!("MoreFilters"), !hidden)] {
+                let element = find_name(&self.root, name, &IID_IUI_ELEMENT).unwrap();
+                let mut visibility = -1;
+                // SAFETY: Slot 23 of IUIElement is get_Visibility.
+                unsafe { call!(element, 23, &mut visibility => *mut i32) };
+                assert_eq!(visibility, i32::from(expected), "filter menu visibility");
+            }
+            let selection = find_name(&self.root, w!("SelectGroup"), &IID_IUI_ELEMENT).unwrap();
+            let mut visibility = -1;
+            // SAFETY: Slot 23 of IUIElement is get_Visibility.
+            unsafe { call!(selection, 23, &mut visibility => *mut i32) };
+            if visibility == 1 {
+                assert!(
+                    self.regions.overflow.iter().all(|group| group.hidden.get()),
+                    "selection must collapse only after every other group"
+                );
+            }
+        }
     }
 
     #[cfg(test)]

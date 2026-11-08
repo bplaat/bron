@@ -358,6 +358,24 @@
                             <MenuFlyoutItem x:Name="MoreCrop" Text="Crop" Visibility="Collapsed" />
                             <MenuFlyoutItem x:Name="MoreResize" Text="Resize" Visibility="Collapsed" />
                             <MenuFlyoutItem x:Name="MoreAdjust" Text="Adjust" Visibility="Collapsed" />
+                            <MenuFlyoutSubItem x:Name="MoreFilters" Text="Filters" Visibility="Collapsed">
+                                <MenuFlyoutItem x:Name="MoreAutoEnhance" Text="Auto Enhance" />
+                                <MenuFlyoutSeparator />
+                                <MenuFlyoutItem x:Name="MoreGrayscale" Text="Grayscale" />
+                                <MenuFlyoutItem x:Name="MoreSepia" Text="Sepia" />
+                                <MenuFlyoutItem x:Name="MoreInvert" Text="Invert" />
+                                <MenuFlyoutItem x:Name="MoreThreshold" Text="Threshold..." />
+                                <MenuFlyoutItem x:Name="MoreSolarize" Text="Solarize..." />
+                                <MenuFlyoutSeparator />
+                                <MenuFlyoutItem x:Name="MoreGaussianBlur" Text="Gaussian Blur..." />
+                                <MenuFlyoutItem x:Name="MoreBoxBlur" Text="Box Blur..." />
+                                <MenuFlyoutItem x:Name="MoreMotionBlur" Text="Motion Blur..." />
+                                <MenuFlyoutItem x:Name="MoreRadialBlur" Text="Radial Blur..." />
+                                <MenuFlyoutSeparator />
+                                <MenuFlyoutItem x:Name="MoreSharpen" Text="Sharpen..." />
+                                <MenuFlyoutItem x:Name="MoreReduceNoise" Text="Reduce Noise..." />
+                                <MenuFlyoutItem x:Name="MorePixelate" Text="Pixelate..." />
+                            </MenuFlyoutSubItem>
                         </MenuFlyout>
                     </Button.Flyout>
                 </Button>
