@@ -14,7 +14,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 use bwindow::NativeFileDialog;
 
-use super::headers::wide;
+use super::headers::{w, wide};
 use super::winrt::{ComPtr, GUID, HRESULT, IID_IUNKNOWN, call, check};
 use crate::save::{SaveRequest, format_of, has_quality, natural_scale, scale_at, scale_titles};
 
@@ -215,8 +215,7 @@ impl SaveOptions {
             call!(file_dialog, 4, specs.len() as u32 => u32, specs.as_ptr() => *const FilterSpec);
             call!(file_dialog, 5, selected as u32 + 1 => u32);
             call!(file_dialog, 22, extension.as_ptr() => *const u16);
-            let combo = |id: u32, group: u32, label: &str, items: &[String], selected: usize| {
-                let label = wide(label);
+            let combo = |id: u32, group: u32, label: &[u16], items: &[String], selected: usize| {
                 call!(customize, 26, group => u32, label.as_ptr() => *const u16);
                 call!(customize, 6, id => u32);
                 for (index, item) in items.iter().enumerate() {
@@ -236,13 +235,19 @@ impl SaveOptions {
                 .iter()
                 .any(|(_, extension)| has_quality(extension))
             {
-                combo(QUALITY, QUALITY_GROUP, "JPEG quality:", &qualities, quality);
+                combo(
+                    QUALITY,
+                    QUALITY_GROUP,
+                    w!("JPEG quality:"),
+                    &qualities,
+                    quality,
+                );
             }
             if let Some(size) = request.size {
                 combo(
                     SIZE,
                     SIZE_GROUP,
-                    "Size:",
+                    w!("Size:"),
                     &scale_titles(size),
                     natural_scale(),
                 );

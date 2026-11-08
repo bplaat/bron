@@ -15,6 +15,7 @@ use std::fmt::Write;
 use bwindow::WindowId;
 use imageview_core::{InfoSection, Media, render_media};
 
+use super::headers::wide;
 use super::winrt::*;
 use super::winui::{
     Bitmap, INSPECTOR_WIDTH, Island, Panel, SIDEBAR_WIDTH, add_event, escape_xml, find_name,
@@ -124,7 +125,7 @@ impl Panels {
         for (index, media) in pages.iter().enumerate() {
             if let Some((bitmap, size)) = thumbnail(media) {
                 set_image(
-                    &find_name(&content, &format!("Thumbnail{index}"), &IID_IIMAGE)?,
+                    &find_name(&content, &wide(&format!("Thumbnail{index}")), &IID_IIMAGE)?,
                     &bitmap,
                     size,
                 );
@@ -135,13 +136,13 @@ impl Panels {
             });
             // Slot 14 of IButtonBase is add_Click.
             add_event(
-                &find_name(&content, &format!("Page{index}"), &IID_IBUTTON_BASE)?,
+                &find_name(&content, &wide(&format!("Page{index}")), &IID_IBUTTON_BASE)?,
                 14,
                 &clicked,
             )?;
             selected.push(find_name(
                 &content,
-                &format!("Selected{index}"),
+                &wide(&format!("Selected{index}")),
                 &IID_IUI_ELEMENT,
             )?);
         }

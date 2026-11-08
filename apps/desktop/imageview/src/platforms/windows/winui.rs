@@ -51,10 +51,11 @@ pub(crate) fn shutdown() {
 
 // The oldest Windows App SDK release ImageView supports, cargo-bundle writes the same
 // dependency into the MSIX manifest.
-const FRAMEWORK_FAMILY: &str = "Microsoft.WindowsAppRuntime.2_8wekyb3d8bbwe";
+const FRAMEWORK_FAMILY: &[u16] = w!("Microsoft.WindowsAppRuntime.2_8wekyb3d8bbwe");
 const MIN_VERSION: u64 = 2 << 48;
 const MIN_VERSION_NAME: &str = "2.0";
-const DOWNLOAD_URL: &str = "https://learn.microsoft.com/windows/apps/windows-app-sdk/downloads";
+const DOWNLOAD_URL: &[u16] =
+    w!("https://learn.microsoft.com/windows/apps/windows-app-sdk/downloads");
 
 const STATEREPOSITORY_E_DEPENDENCY_NOT_RESOLVED: HRESULT = 0x8067_0016_u32 as i32;
 
@@ -223,12 +224,12 @@ impl StartError {
                     "ImageView needs the Windows App Runtime {MIN_VERSION_NAME} or newer \
                      ({architecture}).\n\nDownload it now?"
                 ),
-                "Windows App Runtime Required",
+                w!("Windows App Runtime Required"),
                 MB_YESNO | MB_ICONWARNING,
             ),
             Self::Unsupported => (
                 "ImageView needs Windows 11 to load the Windows App Runtime.".to_owned(),
-                "ImageView",
+                w!("ImageView"),
                 MB_OK | MB_ICONERROR,
             ),
             Self::Failed(component, result) => (
@@ -236,15 +237,15 @@ impl StartError {
                     "Failed to create the WinUI {component} (HRESULT 0x{:08X}).",
                     *result as u32
                 ),
-                "WinUI Error",
+                w!("WinUI Error"),
                 MB_OK | MB_ICONERROR,
             ),
         };
-        let (text, caption) = (wide(&text), wide(caption));
+        let text = wide(&text);
         // SAFETY: The strings outlive the message box.
         let answer = unsafe { MessageBoxW(hwnd, text.as_ptr(), caption.as_ptr(), kind) };
         if matches!(self, Self::Missing) && answer == IDYES {
-            let (open, url) = (wide("open"), wide(DOWNLOAD_URL));
+            let (open, url) = (w!("open"), DOWNLOAD_URL);
             // SAFETY: The strings outlive the call.
             unsafe {
                 ShellExecuteW(
@@ -278,7 +279,7 @@ fn start() -> std::result::Result<(), StartError> {
     // and go when the thread keeps its XAML manager. Shut both down before COM uninitializes.
     // SAFETY: Slot 7 of the statics is CreateOnCurrentThread.
     let dispatcher = factory(
-        "Microsoft.UI.Dispatching.DispatcherQueueController",
+        w!("Microsoft.UI.Dispatching.DispatcherQueueController"),
         &IID_IDISPATCHER_QUEUE_CONTROLLER_STATICS,
     )
     .and_then(|statics| unsafe { statics.get(7) })
@@ -287,13 +288,13 @@ fn start() -> std::result::Result<(), StartError> {
     let application = create_application().map_err(failed("application"))?;
     // SAFETY: Slot 6 of the statics is InitializeForCurrentThread.
     let manager = factory(
-        "Microsoft.UI.Xaml.Hosting.WindowsXamlManager",
+        w!("Microsoft.UI.Xaml.Hosting.WindowsXamlManager"),
         &IID_IWINDOWS_XAML_MANAGER_STATICS,
     )
     .and_then(|statics| unsafe { statics.get(6) })
     .map_err(failed("XAML manager"))?;
     // The Fluent styles of the WinUI controls, like the App.xaml of a WinUI app has.
-    let resources = activate("Microsoft.UI.Xaml.Controls.XamlControlsResources")
+    let resources = activate(w!("Microsoft.UI.Xaml.Controls.XamlControlsResources"))
         .and_then(|resources| resources.cast(&IID_IRESOURCE_DICTIONARY))
         .map_err(failed("controls resources"))?;
     // SAFETY: Slot 7 of IApplication is put_Resources.
@@ -331,7 +332,7 @@ fn add_framework() -> std::result::Result<(), StartError> {
 
     // SAFETY: kernelbase.dll is always loaded and the functions have these signatures.
     let (try_create, add) = unsafe {
-        let kernelbase = GetModuleHandleW(wide("kernelbase.dll").as_ptr());
+        let kernelbase = GetModuleHandleW(w!("kernelbase.dll").as_ptr());
         let try_create = GetProcAddress(kernelbase, c"TryCreatePackageDependency".as_ptr());
         let add = GetProcAddress(kernelbase, c"AddPackageDependency".as_ptr());
         if try_create.is_null() || add.is_null() {
@@ -355,7 +356,7 @@ fn add_framework() -> std::result::Result<(), StartError> {
             StartError::Failed("runtime dependency", result)
         }
     };
-    let family = wide(FRAMEWORK_FAMILY);
+    let family = FRAMEWORK_FAMILY;
     let mut id = null_mut();
     // SAFETY: The dependency lives as long as the process, its strings are freed from the
     // process heap.
@@ -395,7 +396,7 @@ fn window_id(hwnd: HWND) -> Result<WindowId> {
     let function = *FUNCTION.get_or_init(|| {
         // SAFETY: The names are valid null-terminated strings.
         unsafe {
-            let library = LoadLibraryW(wide("Microsoft.Internal.FrameworkUdk.dll").as_ptr());
+            let library = LoadLibraryW(w!("Microsoft.Internal.FrameworkUdk.dll").as_ptr());
             GetProcAddress(library, c"Windowing_GetWindowIdFromWindow".as_ptr()) as usize
         }
     });
@@ -422,7 +423,7 @@ impl Bitmap {
     /// Creates a transparent bitmap.
     pub(crate) fn new(width: u32, height: u32) -> Option<Self> {
         let factory = factory(
-            "Microsoft.UI.Xaml.Media.Imaging.WriteableBitmap",
+            w!("Microsoft.UI.Xaml.Media.Imaging.WriteableBitmap"),
             &IID_IWRITEABLE_BITMAP_FACTORY,
         )
         .ok()?;
@@ -570,7 +571,7 @@ fn icon_pixels(size: i32) -> Option<Vec<u8>> {
 // value statics is CreateSingle and slot 15 is CreateDouble.
 fn boxed<T: Copy>(slot: usize, value: T, iid: &GUID) -> Option<ComPtr> {
     let statics = factory(
-        "Windows.Foundation.PropertyValue",
+        w!("Windows.Foundation.PropertyValue"),
         &IID_IPROPERTY_VALUE_STATICS,
     )
     .ok()?;
@@ -788,7 +789,7 @@ pub(crate) enum Mark {
 /// Creates the object of a XAML document.
 pub(crate) fn load_xaml(xaml: &str) -> Result<ComPtr> {
     let statics = factory(
-        "Microsoft.UI.Xaml.Markup.XamlReader",
+        w!("Microsoft.UI.Xaml.Markup.XamlReader"),
         &IID_IXAML_READER_STATICS,
     )?;
     let xaml = HString::new(xaml);
@@ -903,8 +904,8 @@ impl Drop for Dialog {
 }
 
 /// Finds an element by its name in a XAML tree, as an interface.
-pub(crate) fn find_name(root: &ComPtr, name: &str, iid: &GUID) -> Result<ComPtr> {
-    let name = HString::new(name);
+pub(crate) fn find_name(root: &ComPtr, name: &[u16], iid: &GUID) -> Result<ComPtr> {
+    let name = HString::from_wide(name);
     // SAFETY: Slot 77 of IFrameworkElement is FindName.
     out(|raw| unsafe { call!(root, 77, name.as_raw() => HSTRING, raw => *mut *mut c_void) })
         .and_then(|element| element.cast(iid))
@@ -971,17 +972,19 @@ impl Island {
         let failed = |component| move |result| (component, result);
 
         // The content extends into the title bar, under the caption buttons.
-        let title_bar = factory("Microsoft.UI.Windowing.AppWindow", &IID_IAPP_WINDOW_STATICS)
-            .and_then(|statics| {
-                let id = window_id(window)?;
-                // SAFETY: Slot 9 of the statics is GetFromWindowId.
-                let app_window = out(|raw| unsafe {
-                    call!(statics, 9, id => WindowId, raw => *mut *mut c_void)
-                })?;
-                // SAFETY: Slot 16 of IAppWindow is get_TitleBar.
-                unsafe { app_window.get(16) }
-            })
-            .map_err(failed("title bar"))?;
+        let title_bar = factory(
+            w!("Microsoft.UI.Windowing.AppWindow"),
+            &IID_IAPP_WINDOW_STATICS,
+        )
+        .and_then(|statics| {
+            let id = window_id(window)?;
+            // SAFETY: Slot 9 of the statics is GetFromWindowId.
+            let app_window =
+                out(|raw| unsafe { call!(statics, 9, id => WindowId, raw => *mut *mut c_void) })?;
+            // SAFETY: Slot 16 of IAppWindow is get_TitleBar.
+            unsafe { app_window.get(16) }
+        })
+        .map_err(failed("title bar"))?;
         // SAFETY: Slot 25 is put_ExtendsContentIntoTitleBar, slot 7 of IAppWindowTitleBar2 is
         // put_PreferredHeightOption with 1 for tall caption buttons.
         unsafe {
@@ -996,7 +999,7 @@ impl Island {
         // IDesktopSiteBridge is Show.
         let (source, bridge) = unsafe {
             let source = compose(
-                "Microsoft.UI.Xaml.Hosting.DesktopWindowXamlSource",
+                w!("Microsoft.UI.Xaml.Hosting.DesktopWindowXamlSource"),
                 &IID_IDESKTOP_WINDOW_XAML_SOURCE_FACTORY,
             )
             .map_err(failed("XAML island"))?;
@@ -1024,7 +1027,7 @@ impl Island {
         // SAFETY: Slot 7 of IDesktopWindowXamlSource is put_Content.
         unsafe { source.put(7, element.as_raw()) }.map_err(failed("window content"))?;
 
-        let find = |name: &str, iid: &GUID| find_name(&root, name, iid);
+        let find = |name: &[u16], iid: &GUID| find_name(&root, name, iid);
 
         // Mica shows through the header bar where Windows supports it, otherwise it gets a solid
         // background. The backdrop needs the content of the island to attach to. Where the
@@ -1032,7 +1035,7 @@ impl Island {
         // island catches up. The island keeps its own backdrop then too: closing an island
         // without one fails fast in CoreUIComponents.dll once a file dialog has been shown.
         let mica = compose(
-            "Microsoft.UI.Xaml.Media.MicaBackdrop",
+            w!("Microsoft.UI.Xaml.Media.MicaBackdrop"),
             &IID_IMICA_BACKDROP_FACTORY,
         )
         .and_then(|mica| mica.cast(&IID_ISYSTEM_BACKDROP))
@@ -1040,37 +1043,39 @@ impl Island {
         .and_then(|mica| unsafe { source.put(10, mica.as_raw()) });
         if mica.is_err() {
             let background =
-                find("Background", &IID_IUI_ELEMENT).map_err(failed("window content"))?;
+                find(w!("Background"), &IID_IUI_ELEMENT).map_err(failed("window content"))?;
             // SAFETY: Slot 24 of IUIElement is put_Visibility, 0 is visible.
             unsafe { call!(background, 24, 0i32 => i32) };
         }
-        let title = find("Title", &IID_ITEXT_BLOCK).map_err(failed("window content"))?;
-        let subtitle = find("Subtitle", &IID_ITEXT_BLOCK).map_err(failed("window content"))?;
-        let heading = find("Heading", &IID_IUI_ELEMENT).map_err(failed("window content"))?;
+        let title = find(w!("Title"), &IID_ITEXT_BLOCK).map_err(failed("window content"))?;
+        let subtitle = find(w!("Subtitle"), &IID_ITEXT_BLOCK).map_err(failed("window content"))?;
+        let heading = find(w!("Heading"), &IID_IUI_ELEMENT).map_err(failed("window content"))?;
         // SAFETY: The window is alive.
         let scale = f64::from(unsafe { GetDpiForWindow(window) }.max(96)) / 96.0;
         if let Some(icon) = app_icon((16.0 * scale).round() as i32) {
-            let image = find("Icon", &IID_IIMAGE).map_err(failed("window content"))?;
+            let image = find(w!("Icon"), &IID_IIMAGE).map_err(failed("window content"))?;
             // SAFETY: Slot 7 of IImage is put_Source.
             _ = unsafe { image.put(7, icon.source.as_raw()) };
         }
-        let zoom = find("Zoom", &IID_ITEXT_BLOCK).map_err(failed("window content"))?;
-        let start = find("Start", &IID_IFRAMEWORK_ELEMENT).map_err(failed("window content"))?;
-        let end = find("End", &IID_IFRAMEWORK_ELEMENT).map_err(failed("window content"))?;
-        let scroller = find("Scroller", &IID_ISCROLL_VIEWER).map_err(failed("window content"))?;
-        let media = find("Media", &IID_IIMAGE).map_err(failed("window content"))?;
-        let checkerboard = find("Checkerboard", &IID_IIMAGE).map_err(failed("window content"))?;
-        let overlay = find("Overlay", &IID_IIMAGE).map_err(failed("window content"))?;
-        let tool = find("Tool", &IID_IBORDER).map_err(failed("window content"))?;
+        let zoom = find(w!("Zoom"), &IID_ITEXT_BLOCK).map_err(failed("window content"))?;
+        let start = find(w!("Start"), &IID_IFRAMEWORK_ELEMENT).map_err(failed("window content"))?;
+        let end = find(w!("End"), &IID_IFRAMEWORK_ELEMENT).map_err(failed("window content"))?;
+        let scroller =
+            find(w!("Scroller"), &IID_ISCROLL_VIEWER).map_err(failed("window content"))?;
+        let media = find(w!("Media"), &IID_IIMAGE).map_err(failed("window content"))?;
+        let checkerboard =
+            find(w!("Checkerboard"), &IID_IIMAGE).map_err(failed("window content"))?;
+        let overlay = find(w!("Overlay"), &IID_IIMAGE).map_err(failed("window content"))?;
+        let tool = find(w!("Tool"), &IID_IBORDER).map_err(failed("window content"))?;
         let panels = [
             ("PagesPanel", "PagesHost", "SidebarButton"),
             ("InfoPanel", "InfoHost", "InfoButton"),
         ]
         .map(|(panel, host, button)| -> Result<PanelElements> {
             Ok(PanelElements {
-                panel: find(panel, &IID_IUI_ELEMENT)?,
-                host: find(host, &IID_IBORDER)?,
-                button: find(button, &IID_ITOGGLE_BUTTON)?,
+                panel: find(&wide(panel), &IID_IUI_ELEMENT)?,
+                host: find(&wide(host), &IID_IBORDER)?,
+                button: find(&wide(button), &IID_ITOGGLE_BUTTON)?,
             })
         });
         let [pages_panel, info_panel] = panels;
@@ -1078,16 +1083,16 @@ impl Island {
             pages_panel.map_err(failed("window content"))?,
             info_panel.map_err(failed("window content"))?,
         ];
-        let spinner = find("Spinner", &IID_IUI_ELEMENT).map_err(failed("window content"))?;
+        let spinner = find(w!("Spinner"), &IID_IUI_ELEMENT).map_err(failed("window content"))?;
         let elements = |names: &[&str]| {
             names
                 .iter()
-                .map(|name| find(name, &IID_IUI_ELEMENT))
+                .map(|name| find(&wide(name), &IID_IUI_ELEMENT))
                 .collect::<Result<Vec<_>>>()
         };
         let view_items = elements(&VIEW_ITEMS).map_err(failed("window content"))?;
         let edit_items = elements(&EDIT_ITEMS).map_err(failed("window content"))?;
-        let edit_button = find("Edit", &IID_ICONTROL).map_err(failed("window content"))?;
+        let edit_button = find(w!("Edit"), &IID_ICONTROL).map_err(failed("window content"))?;
         let toggles = TOGGLES
             .iter()
             .map(|name| {
@@ -1095,14 +1100,14 @@ impl Island {
                     .iter()
                     .find(|(button, _)| button == name)
                     .map_or("", |(_, action)| *action);
-                find(name, &IID_ITOGGLE_BUTTON).map(|toggle| (action, toggle))
+                find(&wide(name), &IID_ITOGGLE_BUTTON).map(|toggle| (action, toggle))
             })
             .collect::<Result<Vec<_>>>()
             .map_err(failed("window content"))?;
 
         // The buttons in the title bar take clicks, the rest of it drags the window.
         let non_client = factory(
-            "Microsoft.UI.Input.InputNonClientPointerSource",
+            w!("Microsoft.UI.Input.InputNonClientPointerSource"),
             &IID_IINPUT_NON_CLIENT_POINTER_SOURCE_STATICS,
         )
         .and_then(|statics| {
@@ -1113,14 +1118,14 @@ impl Island {
         .map_err(failed("title bar"))?;
         let fixed = EDIT_FIXED
             .iter()
-            .map(|name| find(name, &IID_IFRAMEWORK_ELEMENT))
+            .map(|name| find(&wide(name), &IID_IFRAMEWORK_ELEMENT))
             .collect::<Result<Vec<_>>>()
             .map_err(failed("window content"))?;
         let overflow = OVERFLOW
             .iter()
             .map(|(group, items)| {
                 Ok(Overflow {
-                    group: find(group, &IID_IFRAMEWORK_ELEMENT)?,
+                    group: find(&wide(group), &IID_IFRAMEWORK_ELEMENT)?,
                     items: elements(items)?,
                     width: Cell::new(0.0),
                     hidden: Cell::new(false),
@@ -1135,7 +1140,7 @@ impl Island {
             end: end.clone(),
             fixed,
             overflow,
-            more: find("More", &IID_IUI_ELEMENT).map_err(failed("window content"))?,
+            more: find(w!("More"), &IID_IUI_ELEMENT).map_err(failed("window content"))?,
             editing: Cell::new(false),
             size: Cell::new((0, 0, 1.0)),
         });
@@ -1195,7 +1200,8 @@ impl Island {
         };
         // Slot 14 of IButtonBase and slot 17 of IMenuFlyoutItem are add_Click.
         for (name, _) in ACTIONS {
-            let element = find(name, &IID_IFRAMEWORK_ELEMENT).map_err(failed("window content"))?;
+            let element =
+                find(&wide(name), &IID_IFRAMEWORK_ELEMENT).map_err(failed("window content"))?;
             match element.cast(&IID_IBUTTON_BASE) {
                 Ok(button) => add_event(&button, 14, &clicked),
                 Err(_) => element
@@ -1295,7 +1301,7 @@ impl Island {
         // The window shows once the island has rendered its first frame, so it never shows the
         // empty window behind it.
         let statics = factory(
-            "Microsoft.UI.Xaml.Media.CompositionTarget",
+            w!("Microsoft.UI.Xaml.Media.CompositionTarget"),
             &IID_ICOMPOSITION_TARGET_STATICS,
         )
         .map_err(failed("window content"))?;

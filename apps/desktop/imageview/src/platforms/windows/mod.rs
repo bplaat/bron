@@ -43,7 +43,7 @@ mod tool;
 mod winrt;
 mod winui;
 
-const CLASS_NAME: &str = "ImageViewContent";
+const CLASS_NAME: &[u16] = w!("ImageViewContent");
 const FRAME_SUBCLASS: usize = 1;
 const ANIMATION_TIMER: usize = 1;
 const REVEAL_TIMER: usize = 2;
@@ -149,7 +149,7 @@ impl MediaView {
         });
         state.update_background();
         register_class();
-        let class = wide(CLASS_NAME);
+        let class = CLASS_NAME;
         // SAFETY: The class is registered and the state outlives the window, which this view
         // destroys before dropping the state.
         let content = unsafe {
@@ -426,7 +426,7 @@ impl MediaView {
 
     /// Puts a PNG image on the clipboard, in the format of that name.
     pub(crate) fn copy_png(&self, png: &[u8]) {
-        let format = wide("PNG");
+        let format = w!("PNG");
         // SAFETY: The clipboard takes over the global memory once it has it, which is freed
         // here otherwise.
         unsafe {
@@ -527,7 +527,7 @@ impl Drop for MediaView {
 fn register_class() {
     static REGISTER: Once = Once::new();
     REGISTER.call_once(|| {
-        let class = wide(CLASS_NAME);
+        let class = CLASS_NAME;
         // SAFETY: The class structure is valid and its name is copied by the system.
         unsafe {
             let atom = RegisterClassExW(&WNDCLASSEXW {

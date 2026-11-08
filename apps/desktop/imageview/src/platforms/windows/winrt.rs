@@ -17,6 +17,8 @@ use std::mem::{self, ManuallyDrop, offset_of};
 use std::ptr::{NonNull, null_mut};
 use std::sync::atomic::{AtomicU32, Ordering};
 
+use super::headers::{w, wide};
+
 pub(crate) type HRESULT = i32;
 pub(crate) type HSTRING = *mut c_void;
 pub(crate) type Result<T> = std::result::Result<T, HRESULT>;
@@ -299,10 +301,15 @@ pub(crate) struct HString(HSTRING);
 
 impl HString {
     pub(crate) fn new(text: &str) -> Self {
-        let text = text.encode_utf16().collect::<Vec<_>>();
+        Self::from_wide(&wide(text))
+    }
+
+    /// Copies a null-terminated UTF-16 string into an owned HSTRING.
+    pub(crate) fn from_wide(text: &[u16]) -> Self {
+        assert_eq!(text.last(), Some(&0));
         let mut string = null_mut();
         // SAFETY: The string is copied, an empty one is the null string.
-        unsafe { WindowsCreateString(text.as_ptr(), text.len() as u32, &mut string) };
+        unsafe { WindowsCreateString(text.as_ptr(), (text.len() - 1) as u32, &mut string) };
         Self(string)
     }
 
@@ -336,21 +343,21 @@ impl Drop for HString {
 }
 
 /// Returns an activation factory or statics interface of a runtime class.
-pub(crate) fn factory(class: &str, iid: &GUID) -> Result<ComPtr> {
-    let class = HString::new(class);
+pub(crate) fn factory(class: &[u16], iid: &GUID) -> Result<ComPtr> {
+    let class = HString::from_wide(class);
     // SAFETY: The class name and interface id are valid.
     out(|raw| unsafe { RoGetActivationFactory(class.as_raw(), iid, raw) })
 }
 
 /// Creates a runtime class with its default constructor.
-pub(crate) fn activate(class: &str) -> Result<ComPtr> {
-    let class = HString::new(class);
+pub(crate) fn activate(class: &[u16]) -> Result<ComPtr> {
+    let class = HString::from_wide(class);
     // SAFETY: The class name is valid.
     out(|raw| unsafe { RoActivateInstance(class.as_raw(), raw) })
 }
 
 /// Creates a composable runtime class without extending it.
-pub(crate) fn compose(class: &str, factory_iid: &GUID) -> Result<ComPtr> {
+pub(crate) fn compose(class: &[u16], factory_iid: &GUID) -> Result<ComPtr> {
     let factory = factory(class, factory_iid)?;
     let mut inner = null_mut();
     // SAFETY: Slot 6 of a composable factory is CreateInstance(outer, inner, value).
@@ -668,7 +675,10 @@ static XAML_METADATA_PROVIDER_VTBL: XamlMetadataProviderVtbl = XamlMetadataProvi
 
 /// Creates the `Microsoft.UI.Xaml.Application` of this thread and returns its `IApplication`.
 pub(crate) fn create_application() -> Result<ComPtr> {
-    let factory = factory("Microsoft.UI.Xaml.Application", &IID_IAPPLICATION_FACTORY)?;
+    let factory = factory(
+        w!("Microsoft.UI.Xaml.Application"),
+        &IID_IAPPLICATION_FACTORY,
+    )?;
     compose_application(|outer, inner, value| {
         // SAFETY: Slot 6 is CreateInstance(outer, inner, value). The caller retains outer
         // throughout composition and owns both returned interfaces.
@@ -774,7 +784,9 @@ unsafe extern "system" fn application_get_runtime_class_name(
     name: *mut HSTRING,
 ) -> HRESULT {
     // SAFETY: COM passes a valid out pointer, the caller owns the new string.
-    unsafe { *name = ManuallyDrop::new(HString::new("Microsoft.UI.Xaml.Application")).as_raw() };
+    unsafe {
+        *name = ManuallyDrop::new(HString::from_wide(w!("Microsoft.UI.Xaml.Application"))).as_raw()
+    };
     S_OK
 }
 
@@ -812,9 +824,11 @@ unsafe fn controls_provider(this: *mut c_void) -> Option<&'static ComPtr> {
     application
         .controls
         .get_or_init(|| {
-            activate("Microsoft.UI.Xaml.XamlTypeInfo.XamlControlsXamlMetaDataProvider")
-                .and_then(|provider| provider.cast(&IID_IXAML_METADATA_PROVIDER))
-                .ok()
+            activate(w!(
+                "Microsoft.UI.Xaml.XamlTypeInfo.XamlControlsXamlMetaDataProvider"
+            ))
+            .and_then(|provider| provider.cast(&IID_IXAML_METADATA_PROVIDER))
+            .ok()
         })
         .as_ref()
 }

@@ -16,6 +16,7 @@ use std::rc::{Rc, Weak};
 use bwindow::WindowId;
 use imageview_core::edit::{Control, Tool};
 
+use super::headers::{w, wide};
 use super::winrt::*;
 use super::winui::{add_event, boxed_bool, escape_xml, find_name, load_xaml};
 use crate::AppEvent;
@@ -280,9 +281,11 @@ impl ToolPanel {
                 };
                 Ok(Entry {
                     control: *control,
-                    interface: find_name(&content, &format!("Control{index}"), iid)?,
+                    interface: find_name(&content, &wide(&format!("Control{index}")), iid)?,
                     value: matches!(control, Control::Slider(_))
-                        .then(|| find_name(&content, &format!("Value{index}"), &IID_ITEXT_BLOCK))
+                        .then(|| {
+                            find_name(&content, &wide(&format!("Value{index}")), &IID_ITEXT_BLOCK)
+                        })
                         .transpose()?,
                 })
             })
@@ -333,7 +336,7 @@ impl ToolPanel {
             add_event(&interface, slot, &event_handler(iid, changed(index)))?;
         }
         // Tools without a preview have nothing to reset.
-        if let Ok(button) = find_name(&content, "Reset", &IID_IBUTTON_BASE) {
+        if let Ok(button) = find_name(&content, w!("Reset"), &IID_IBUTTON_BASE) {
             let reset = event_handler(IID_ROUTED_EVENT_HANDLER, move |_, _| {
                 if let Some(state) = weak.upgrade() {
                     state.set_values(&state.defaults);
@@ -342,7 +345,7 @@ impl ToolPanel {
             });
             add_event(&button, 14, &reset)?;
         }
-        for (name, action) in [("Cancel", "tool.cancel"), ("Apply", "tool.apply")] {
+        for (name, action) in [(w!("Cancel"), "tool.cancel"), (w!("Apply"), "tool.apply")] {
             let button = find_name(&content, name, &IID_IBUTTON_BASE)?;
             let clicked = event_handler(IID_ROUTED_EVENT_HANDLER, move |_, _| {
                 super::send(AppEvent::Action(action));
