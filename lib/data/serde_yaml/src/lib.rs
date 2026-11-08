@@ -9,6 +9,7 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fmt;
+use std::rc::Rc;
 
 use granit_parser::{Event, Parser, ScalarStyle, Tag};
 use serde::de::{
@@ -55,8 +56,8 @@ where
 #[derive(Clone)]
 enum Node<'de> {
     Scalar(Scalar<'de>),
-    Sequence(Vec<Node<'de>>),
-    Mapping(Vec<(Node<'de>, Node<'de>)>),
+    Sequence(Rc<Vec<Node<'de>>>),
+    Mapping(Rc<Vec<(Node<'de>, Node<'de>)>>),
 }
 
 #[derive(Clone)]
@@ -131,7 +132,7 @@ fn parse(input: &str) -> Result<Node<'_>, Error> {
                     return Err(Error::custom("unexpected YAML sequence end"));
                 };
                 finish_node(
-                    Node::Sequence(values),
+                    Node::Sequence(Rc::new(values)),
                     anchor,
                     &mut stack,
                     &mut anchors,
@@ -158,7 +159,7 @@ fn parse(input: &str) -> Result<Node<'_>, Error> {
                     return Err(Error::custom("YAML mapping key has no value"));
                 }
                 finish_node(
-                    Node::Mapping(values),
+                    Node::Mapping(Rc::new(values)),
                     anchor,
                     &mut stack,
                     &mut anchors,
@@ -316,10 +317,10 @@ impl<'de> de::Deserializer<'de> for Node<'de> {
     {
         match self {
             Self::Sequence(values) => visitor.visit_seq(NodeSeqAccess {
-                values: values.into_iter(),
+                values: Rc::unwrap_or_clone(values).into_iter(),
             }),
             Self::Mapping(values) => visitor.visit_map(NodeMapAccess {
-                values: values.into_iter(),
+                values: Rc::unwrap_or_clone(values).into_iter(),
                 value: None,
             }),
             Self::Scalar(scalar) => {
@@ -516,7 +517,7 @@ impl<'de> de::Deserializer<'de> for Node<'de> {
             return Err(Error::custom("expected a YAML sequence"));
         };
         visitor.visit_seq(NodeSeqAccess {
-            values: values.into_iter(),
+            values: Rc::unwrap_or_clone(values).into_iter(),
         })
     }
 
@@ -547,7 +548,7 @@ impl<'de> de::Deserializer<'de> for Node<'de> {
             return Err(Error::custom("expected a YAML mapping"));
         };
         visitor.visit_map(NodeMapAccess {
-            values: values.into_iter(),
+            values: Rc::unwrap_or_clone(values).into_iter(),
             value: None,
         })
     }
@@ -577,8 +578,8 @@ impl<'de> de::Deserializer<'de> for Node<'de> {
             Self::Scalar(scalar) => visitor.visit_enum(ScalarEnumAccess {
                 variant: scalar.value,
             }),
-            Self::Mapping(mut values) if values.len() == 1 => {
-                let (variant, value) = values
+            Self::Mapping(values) if values.len() == 1 => {
+                let (variant, value) = Rc::unwrap_or_clone(values)
                     .pop()
                     .ok_or_else(|| Error::custom("expected one YAML enum variant"))?;
                 let Self::Scalar(variant) = variant else {
@@ -804,6 +805,27 @@ mod tests {
                 optional: None,
             }
         );
+    }
+
+    #[test]
+    fn deserialize_collection_aliases_with_owned_strings() {
+        let values: BTreeMap<String, Vec<BTreeMap<String, String>>> =
+            super::from_str("original: &rows [{name: \"line\\nnext\"}]\nalias: *rows\n")
+                .expect("valid YAML");
+        assert_eq!(values["original"], values["alias"]);
+        assert_eq!(values["alias"][0]["name"], "line\nnext");
+    }
+
+    #[test]
+    fn ignored_nested_aliases_do_not_expand_the_tree() {
+        let mut input = String::from("a0: &a0 [value]\n");
+        for index in 1..24 {
+            let previous = index - 1;
+            input.push_str(&format!(
+                "a{index}: &a{index} [*a{previous}, *a{previous}]\n"
+            ));
+        }
+        super::from_str::<serde::de::IgnoredAny>(&input).expect("valid YAML aliases");
     }
 
     #[test]
