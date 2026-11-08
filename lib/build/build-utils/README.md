@@ -1,20 +1,22 @@
 # Build utils
 
 Shared helpers for Cargo build scripts: Unix runtime library discovery, exact-file
-linking, symbol checks, search paths, and GTK capability flags.
+linking, symbol checks, search paths, GTK capability flags, and custom Info.plist
+embedding for unbundled macOS binaries through `macos::embed_info_plist`. The
+`windows` module generates application
+manifests and compiles resources through winresource; callers select the Windows
+target condition.
 
 Library-specific minimum versions, fallback choices, and environment overrides
-remain in the consuming build scripts.
-
-The Android module is also used by cargo-bundle and xtask.
-
-The `windows` module generates application manifests and compiles resources through
-winresource; callers select the Windows target condition.
+remain in the consuming build scripts. Callers also select the platform and bundle
+conditions for plist embedding.
 
 `npm_build(workspace, frontend, script)` installs workspace dependencies when needed,
 tracks frontend sources, runs the selected npm script, and copies `dist` into
 `OUT_DIR` under the frontend directory's name. Pass `build-debug` or `build-release`
 from the calling build script according to its build profile.
+
+The Android module is also used by cargo-bundle and xtask.
 
 ## Android
 

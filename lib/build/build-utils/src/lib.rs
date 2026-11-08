@@ -10,6 +10,8 @@ use std::path::{Path, PathBuf};
 
 /// Android SDK, NDK, JDK discovery and Java-to-dex compilation.
 pub mod android;
+/// macOS executable metadata embedding.
+pub mod macos;
 mod npm;
 /// Windows application manifest and resource compilation.
 pub mod windows;

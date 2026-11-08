@@ -11,7 +11,9 @@ name = "PlaatCraft"
 identifier = "nl.bplaat.PlaatCraft"
 copyright = "Copyright (c) 2026 Bastiaan van der Plaat"
 icon = "meta/apple/icon.icon"
-info_plist = "meta/apple/Info.plist"
+
+[package.metadata.bundle.macos]
+info_plist = "meta/apple/macos/Info.plist"
 
 [package.metadata.bundle.windows]
 assets = "meta/windows"

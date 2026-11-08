@@ -7,6 +7,14 @@
 #![doc = include_str!("README.md")]
 
 fn main() {
+    println!("cargo:rerun-if-env-changed=CARGO_BUNDLE");
+
+    if std::env::var("CARGO_CFG_TARGET_OS").expect("CARGO_CFG_TARGET_OS not set") == "macos"
+        && std::env::var_os("CARGO_BUNDLE").is_none()
+    {
+        build_utils::macos::embed_info_plist("Info.plist");
+    }
+
     if std::env::var("CARGO_CFG_TARGET_OS").expect("CARGO_CFG_TARGET_OS not set") == "windows" {
         build_utils::windows::compile_application(
             "ImageView",
@@ -32,17 +40,5 @@ fn main() {
             ],
         )
         .expect("failed to compile Windows resources");
-    }
-
-    // Embed Info.plist so unbundled runs (e.g. cargo run) still know the document types
-    println!("cargo:rerun-if-env-changed=CARGO_BUNDLE");
-    if std::env::var("CARGO_CFG_TARGET_OS").expect("CARGO_CFG_TARGET_OS not set") == "macos"
-        && std::env::var_os("CARGO_BUNDLE").is_none()
-    {
-        println!("cargo:rerun-if-changed=Info.plist");
-        println!(
-            "cargo:rustc-link-arg-bins=-Wl,-sectcreate,__TEXT,__info_plist,{}/Info.plist",
-            env!("CARGO_MANIFEST_DIR")
-        );
     }
 }
