@@ -426,16 +426,6 @@
         </Border>
         <Grid Grid.Column="1">
             <Image x:Name="Checkerboard" Stretch="Fill" HorizontalAlignment="Center" VerticalAlignment="Center" />
-            <!-- Enlarged raster pixels drawn at display resolution, below the scroll bars. -->
-            <Image
-                x:Name="Pixels"
-                UseLayoutRounding="False"
-                Stretch="Fill"
-                HorizontalAlignment="Left"
-                VerticalAlignment="Top"
-                IsHitTestVisible="False"
-                Visibility="Collapsed"
-            />
             <ScrollViewer
                 x:Name="Scroller"
                 UseLayoutRounding="False"
@@ -448,10 +438,12 @@
                 HorizontalScrollBarVisibility="Auto"
                 VerticalScrollBarVisibility="Auto"
             >
-                <Image
+                <!-- Sized like the media, which a composition visual inside it shows. Its background
+                     takes the pointer input. -->
+                <Border
                     x:Name="Media"
                     UseLayoutRounding="False"
-                    Stretch="Fill"
+                    Background="Transparent"
                     HorizontalAlignment="Center"
                     VerticalAlignment="Center"
                 />

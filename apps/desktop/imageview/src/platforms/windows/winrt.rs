@@ -25,7 +25,7 @@ pub(crate) type Result<T> = std::result::Result<T, HRESULT>;
 
 const S_OK: HRESULT = 0;
 const E_NOINTERFACE: HRESULT = 0x8000_4002_u32 as i32;
-const E_POINTER: HRESULT = 0x8000_4003_u32 as i32;
+pub(crate) const E_POINTER: HRESULT = 0x8000_4003_u32 as i32;
 
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Eq)]

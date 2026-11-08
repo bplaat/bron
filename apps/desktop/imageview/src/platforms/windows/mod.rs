@@ -6,8 +6,9 @@
 
 //! The Windows media view: a WinUI 3 XAML island filling the window, with a header bar in the
 //! title bar and a scroll viewer that zooms and pans the media over a checkerboard, following
-//! the system light or dark theme. Media is drawn into XAML bitmaps, vector media again at the
-//! magnification it settles at so it stays sharp. While editing, the header bar shows the edit
+//! the system light or dark theme. Media is shown from GPU surfaces the compositor scales, with
+//! sharp enlarged raster pixels, vector media drawn again at the magnification it settles at so
+//! it stays sharp. Animations pause while the window is minimized or hidden. While editing, the header bar shows the edit
 //! controls, a card the controls of the open tool, and an overlay the crop rectangle or
 //! selection, which the shared viewport follows the scroll viewer for.
 
@@ -19,7 +20,7 @@ use std::ptr::{null, null_mut};
 use std::rc::Rc;
 use std::sync::Once;
 
-use bcanvas::OffscreenCanvas;
+use bcanvas::{CanvasRenderingContext2d, OffscreenCanvas};
 use bwindow::{
     EventLoopProxy, NativeViewHandle, NativeWindowHandle, Theme, Window, WindowAttachment, WindowId,
 };
@@ -28,14 +29,18 @@ use imageview_core::{
     InfoSection, Media, clamp_magnification, draw_checkerboard, fit_magnification, window_title,
 };
 
+use self::composition::Surface;
 use self::headers::*;
 use self::panels::Panels;
 pub(crate) use self::save::SaveOptions;
 use self::tool::ToolPanel;
-use self::winui::{Bitmap, HEADER_HEIGHT, Handlers, Island, MIN_WIDTH, Mark, Panel};
+use self::winui::{
+    Bitmap, HEADER_HEIGHT, Handlers, Island, MIN_WIDTH, Mark, Panel, premultiplied_bgra,
+};
 use crate::AppEvent;
 use crate::viewport::Viewport;
 
+mod composition;
 mod headers;
 mod panels;
 mod save;
@@ -53,8 +58,11 @@ const REVEAL_TIMEOUT_MS: u32 = 1000;
 const WM_REVEAL: u32 = WM_USER + 17;
 // Posted to the content once the island has rendered its first frame.
 const WM_RENDERED: u32 = WM_APP + 1;
-// The longest side of a media bitmap in pixels, larger media is drawn scaled down.
-const MAX_BITMAP: f64 = 8192.0;
+// The longest side of a media surface in pixels, larger media is drawn scaled down.
+const MAX_SURFACE: f64 = 8192.0;
+// The most bytes of animation frames kept on the GPU, the frames of larger animations share one
+// surface that each frame is uploaded into when it shows.
+const SURFACE_BUDGET: usize = 256 << 20;
 // The checkerboard grows in steps of this many pixels, so resizing rarely draws it again.
 const CHECKERBOARD_STEP: u32 = 512;
 
@@ -97,12 +105,13 @@ struct State {
     viewport: RefCell<Viewport>,
     // Whether the first media is decoded.
     loaded: Cell<bool>,
-    bitmap: RefCell<Option<Bitmap>>,
-    // Enlarged raster pixels at display resolution, bypassing XAML's linear scaling.
-    pixels: RefCell<Option<Bitmap>>,
-    pixel_canvas: RefCell<Option<OffscreenCanvas>>,
-    // The bitmap of the crop rectangle or selection over the visible area.
-    overlay: RefCell<Option<Bitmap>>,
+    surfaces: RefCell<Surfaces>,
+    // Whether the surfaces no longer show the media or preview.
+    stale: Cell<bool>,
+    // Whether the window is shown, not minimized or hidden, which the animation runs for.
+    shown: Cell<bool>,
+    // The crop rectangle or selection over the visible area.
+    overlay: RefCell<Layer>,
     // The controls of the open edit tool.
     tool: RefCell<Option<ToolPanel>>,
     // The checkerboard bitmap, whether it is dark and its scale.
@@ -140,10 +149,10 @@ impl MediaView {
             island: RefCell::new(None),
             viewport: RefCell::new(Viewport::new(media, (1.0, 1.0))),
             loaded: Cell::new(!loading),
-            bitmap: RefCell::new(None),
-            pixels: RefCell::new(None),
-            pixel_canvas: RefCell::new(None),
-            overlay: RefCell::new(None),
+            surfaces: RefCell::default(),
+            stale: Cell::new(false),
+            shown: Cell::new(is_shown(parent)),
+            overlay: RefCell::default(),
             tool: RefCell::new(None),
             checkerboard: RefCell::new(None),
             dark: Cell::new(theme == Theme::Dark),
@@ -239,8 +248,8 @@ impl MediaView {
         }
         state.viewport.borrow_mut().set_media(media, zoom_to_fit);
         state.loaded.set(true);
-        // A new bitmap shows the new media, also when it has the same size.
-        state.bitmap.borrow_mut().take();
+        // New surfaces show the new media, also when it has the same size.
+        state.stale.set(true);
         state.update_heading();
         if zoom_to_fit {
             state.zoom_to_fit();
@@ -457,6 +466,7 @@ impl MediaView {
     /// Shows a preview of any size in the place of the image, or the image again.
     pub(crate) fn set_preview(&self, preview: Option<Media>) {
         self.state.viewport.borrow_mut().set_preview(preview);
+        self.state.stale.set(true);
         self.state.render(self.state.zoom_factor());
     }
 
@@ -621,6 +631,77 @@ fn window_text(hwnd: HWND) -> String {
     }
 }
 
+// Whether a window is visible and not minimized.
+fn is_shown(window: HWND) -> bool {
+    // SAFETY: Querying the state of a window has no preconditions.
+    unsafe { IsWindowVisible(window) != 0 && IsIconic(window) == 0 }
+}
+
+// The surfaces of the shown media or preview, all of a size in pixels, with the frame each
+// shows: every frame drawn so far of an animation within the budget, else one.
+#[derive(Default)]
+struct Surfaces {
+    size: (u32, u32),
+    frames: Vec<(usize, Surface)>,
+}
+
+// A bitmap of the visible area drawn with a canvas, both kept to draw it again.
+#[derive(Default)]
+struct Layer {
+    canvas: Option<OffscreenCanvas>,
+    bitmap: Option<Bitmap>,
+}
+
+impl Layer {
+    // Draws an area of logical pixels at a display scale, returns the bitmap with its size in
+    // logical pixels.
+    fn draw(
+        &mut self,
+        (width, height): (f64, f64),
+        scale: f64,
+        paint: impl FnOnce(&mut CanvasRenderingContext2d<'_>),
+    ) -> Option<(&Bitmap, (f64, f64))> {
+        let logical = (width.ceil().max(1.0) as u32, height.ceil().max(1.0) as u32);
+        let scale = scale as f32;
+        let canvas = match self.canvas.take() {
+            Some(canvas)
+                if canvas.logical_width() == logical.0 as f32
+                    && canvas.logical_height() == logical.1 as f32
+                    && canvas.scale_factor() == scale =>
+            {
+                canvas
+            }
+            _ => OffscreenCanvas::with_scale_factor(logical.0, logical.1, scale),
+        };
+        let canvas = self.canvas.insert(canvas);
+        // The canvas rounds its pixels up, which the bitmap shows one to one: its logical size
+        // would shrink it by a fraction of a pixel, which XAML smooths.
+        let size = (canvas.width(), canvas.height());
+        let shown = (size.0 as f32 / scale, size.1 as f32 / scale);
+        canvas.draw(|context| {
+            // A reused canvas still has what it drew before.
+            context.clear_rect(0.0, 0.0, shown.0, shown.1);
+            paint(context);
+        });
+        if self
+            .bitmap
+            .as_ref()
+            .is_none_or(|bitmap| bitmap.size() != size)
+        {
+            self.bitmap = Bitmap::new(size.0, size.1);
+        }
+        let bitmap = self.bitmap.as_ref()?;
+        bitmap.write_rgba(canvas.pixels());
+        Some((bitmap, (f64::from(shown.0), f64::from(shown.1))))
+    }
+
+    // Frees the canvas and bitmap, returns whether there was a bitmap to hide.
+    fn clear(&mut self) -> bool {
+        self.canvas = None;
+        self.bitmap.take().is_some()
+    }
+}
+
 impl State {
     fn scale(&self) -> f64 {
         // SAFETY: The content is alive while the state is.
@@ -647,6 +728,8 @@ impl State {
         if zoom_to_fit {
             self.zoom_to_fit();
         }
+        // The visible area changed without the window being resized.
+        self.draw_view();
     }
 
     fn media_size(&self) -> (f64, f64) {
@@ -706,10 +789,10 @@ impl State {
         self.change_view((0.0, 0.0), magnification);
     }
 
-    // The scroll viewer zoomed or scrolled: the crop rectangle or selection follows it, and vector
-    // media is drawn again for its magnification once it settled.
+    // The scroll viewer zoomed or scrolled: the crop rectangle or selection and the sampling of
+    // the media follow it, and vector media is drawn again for its magnification once it settled.
     fn view_changed(&self, settled: bool) {
-        self.draw_marks();
+        self.draw_view();
         if settled {
             self.zoomed();
         }
@@ -768,98 +851,44 @@ impl State {
         self.draw_marks();
     }
 
+    // Shows what follows the scroll viewer: the crop rectangle or selection and the sampling of
+    // the media.
+    fn draw_view(&self) {
+        self.draw_marks();
+        self.update_sampling();
+    }
+
     // Draws the crop rectangle or selection over the visible area, or hides the overlay.
     fn draw_marks(&self) {
         self.follow();
-        self.draw_pixels();
         let island = self.island.borrow();
         let Some(island) = island.as_ref() else {
             return;
         };
         let viewport = self.viewport.borrow();
-        if !viewport.has_marks() {
-            island.set_overlay(None);
-            self.overlay.borrow_mut().take();
-            return;
-        }
-        let (width, height) = self.visible();
-        let logical = (width.ceil().max(1.0) as u32, height.ceil().max(1.0) as u32);
-        let mut canvas =
-            OffscreenCanvas::with_scale_factor(logical.0, logical.1, self.scale() as f32);
-        canvas.draw(|context| viewport.paint_marks(context));
-        let size = (canvas.width(), canvas.height());
         let mut overlay = self.overlay.borrow_mut();
-        if overlay.as_ref().is_none_or(|bitmap| bitmap.size() != size) {
-            *overlay = Bitmap::new(size.0, size.1);
+        if viewport.has_marks() {
+            island.set_overlay(overlay.draw(self.visible(), self.scale(), |context| {
+                viewport.paint_marks(context);
+            }));
+        } else if overlay.clear() {
+            island.set_overlay(None);
         }
-        let Some(bitmap) = overlay.as_ref() else {
-            return;
-        };
-        bitmap.write_rgba(canvas.pixels());
-        island.set_overlay(Some((bitmap, (f64::from(logical.0), f64::from(logical.1)))));
     }
 
-    fn draw_pixels(&self) {
-        let island = self.island.borrow();
-        let Some(island) = island.as_ref() else {
-            return;
-        };
-        let (width, height) = self.visible();
-        let scale = self.scale() as f32;
-        let mut pixels = self.pixels.borrow_mut();
-        let mut pixel_canvas = self.pixel_canvas.borrow_mut();
-        if !self.loaded.get() || !self.viewport.borrow().has_pixels(scale) {
-            if pixels.take().is_some() {
-                island.set_pixels(None);
-            }
-            pixel_canvas.take();
-            return;
+    // Samples the media nearest neighbor where raster pixels are enlarged to sharp squares, and
+    // linearly otherwise.
+    fn update_sampling(&self) {
+        self.follow();
+        if let Some(island) = self.island.borrow().as_ref() {
+            let pixelated = self.viewport.borrow().has_pixels(self.scale() as f32);
+            island.media_visual().set_pixelated(pixelated);
         }
-        let logical = (width.ceil().max(1.0) as u32, height.ceil().max(1.0) as u32);
-        if pixel_canvas.as_ref().is_none_or(|canvas| {
-            canvas.logical_width() != logical.0 as f32
-                || canvas.logical_height() != logical.1 as f32
-                || canvas.scale_factor() != scale
-        }) {
-            *pixel_canvas = Some(OffscreenCanvas::with_scale_factor(
-                logical.0, logical.1, scale,
-            ));
-        }
-        let canvas = pixel_canvas.as_mut().expect("pixel canvas initialized");
-        canvas.draw(|context| {
-            // Reused canvases must also erase pixels where the image became transparent or
-            // moved away. Include the last physical pixel at fractional display scales.
-            context.clear_rect(
-                0.0,
-                0.0,
-                width.ceil() as f32 + 1.0,
-                height.ceil() as f32 + 1.0,
-            );
-            self.viewport.borrow().paint_pixels(context);
-        });
-        let size = (canvas.width(), canvas.height());
-        if pixels.as_ref().is_none_or(|bitmap| bitmap.size() != size) {
-            *pixels = Bitmap::new(size.0, size.1);
-        }
-        let Some(bitmap) = pixels.as_ref() else {
-            island.set_pixels(None);
-            return;
-        };
-        bitmap.write_rgba(canvas.pixels());
-        // The canvas rounds its native dimensions up. Using the original logical dimensions
-        // here would shrink it by a fraction of a pixel and reintroduce linear filtering.
-        island.set_pixels(Some((
-            bitmap,
-            (
-                f64::from(size.0) / f64::from(scale),
-                f64::from(size.1) / f64::from(scale),
-            ),
-        )));
     }
 
-    // The pixel size of the bitmap of media: raster media at its own size, vector media at the
-    // size it is shown, both at most the largest bitmap.
-    fn bitmap_size(&self, media: &Media, magnification: f64) -> (u32, u32) {
+    // The pixel size of the surfaces of media: raster media at its own size, vector media at the
+    // size it is shown, both at most the largest surface.
+    fn surface_size(&self, media: &Media, magnification: f64) -> (u32, u32) {
         let (width, height) = match media {
             Media::Raster(raster) => (f64::from(raster.width), f64::from(raster.height)),
             Media::Vector(_) => {
@@ -868,55 +897,79 @@ impl State {
                 (width * scale, height * scale)
             }
         };
-        let shrink = (MAX_BITMAP / width.max(height)).min(1.0);
+        let shrink = (MAX_SURFACE / width.max(height)).min(1.0);
         (
             (width * shrink).round().max(1.0) as u32,
             (height * shrink).round().max(1.0) as u32,
         )
     }
 
-    // Draws the shown frame of the media, or the preview of an edit, into its bitmap, which gets
-    // the size the media is shown at.
+    // Shows the frame of the media, or the preview of an edit, from a surface of the size the
+    // media is shown at, which the frame is uploaded into once.
     fn render(&self, magnification: f64) {
         if !self.loaded.get() {
             return;
         }
-        let viewport = self.viewport.borrow();
-        let (renderer, frame) = viewport.drawn();
-        let size = self.bitmap_size(renderer.media(), magnification);
-        let mut bitmap = self.bitmap.borrow_mut();
-        let fresh = bitmap.as_ref().is_none_or(|bitmap| bitmap.size() != size);
-        if fresh {
-            *bitmap = Bitmap::new(size.0, size.1);
-        } else if matches!(renderer.media(), Media::Vector(_)) {
-            // Vector media has one frame, which is drawn at this size already.
-            return;
-        }
-        let Some(target) = bitmap.as_ref() else {
+        let island = self.island.borrow();
+        let Some(island) = island.as_ref() else {
             return;
         };
-        match renderer.media() {
-            Media::Raster(raster) if (raster.width, raster.height) == size => {
-                if let Some(frame) = raster.frames.get(frame) {
-                    target.write(&frame.pixels);
-                }
-            }
-            _ => {
+        let visual = island.media_visual();
+        let viewport = self.viewport.borrow();
+        let (renderer, frame) = viewport.drawn();
+        let size = self.surface_size(renderer.media(), magnification);
+        let mut surfaces = self.surfaces.borrow_mut();
+        if self.stale.replace(false) || surfaces.size != size {
+            *surfaces = Surfaces {
+                size,
+                frames: Vec::new(),
+            };
+        }
+        let raster = match renderer.media() {
+            Media::Raster(raster) if (raster.width, raster.height) == size => Some(raster),
+            _ => None,
+        };
+        let index = if let Some(index) = surfaces
+            .frames
+            .iter()
+            .position(|(shown, _)| *shown == frame)
+        {
+            index
+        } else {
+            let bytes = size.0 as usize * size.1 as usize * 4;
+            let keep = raster.is_some_and(|raster| raster.frames.len() * bytes <= SURFACE_BUDGET);
+            let reused = if keep {
+                None
+            } else {
+                surfaces.frames.pop().map(|(_, surface)| surface)
+            };
+            let Some(surface) = reused.or_else(|| visual.surface(size).ok()) else {
+                return;
+            };
+            let uploaded = if let Some(raster) = raster {
+                raster
+                    .frames
+                    .get(frame)
+                    .is_some_and(|frame| visual.upload(&surface, &frame.pixels).is_ok())
+            } else {
                 let mut canvas = OffscreenCanvas::new(size.0, size.1);
                 canvas.draw(|context| {
                     renderer.draw(context, frame, (0.0, 0.0, size.0 as f32, size.1 as f32));
                 });
-                target.write_rgba(canvas.pixels());
+                let mut pixels = vec![0; bytes];
+                premultiplied_bgra(&mut pixels, canvas.pixels());
+                visual.upload(&surface, &pixels).is_ok()
+            };
+            if !uploaded {
+                return;
             }
-        }
+            surfaces.frames.push((frame, surface));
+            surfaces.frames.len() - 1
+        };
         // A preview shows at the size of the media.
-        if fresh && let Some(island) = self.island.borrow().as_ref() {
-            island.set_media(target, viewport.media().size());
-        }
-        drop(bitmap);
-        drop(viewport);
-        self.follow();
-        self.draw_pixels();
+        island.set_media(&surfaces.frames[index].1, viewport.media().size());
+        drop((surfaces, viewport));
+        self.update_sampling();
     }
 
     // Draws the checkerboard behind the media when the view outgrew it or the theme changed.
@@ -968,9 +1021,14 @@ impl State {
         *checkerboard = Some((bitmap, dark, scale));
     }
 
-    // Shows the current animation frame and schedules the next one.
+    // Shows the current animation frame and schedules the next one, while the window is shown.
     fn start_animation(&self) {
         if !self.loaded.get() {
+            return;
+        }
+        if !self.shown.get() {
+            // SAFETY: The content is alive and owns its timer.
+            unsafe { KillTimer(self.content.get(), ANIMATION_TIMER) };
             return;
         }
         let (changed, next) = self.viewport.borrow_mut().advance_frame();
@@ -1030,6 +1088,15 @@ impl State {
         }
     }
 
+    // Pauses the animation while the window is minimized or hidden, it continues at the frame
+    // of the time that passed once shown again.
+    fn update_shown(&self) {
+        let shown = is_shown(self.window.get());
+        if self.shown.replace(shown) != shown {
+            self.start_animation();
+        }
+    }
+
     // Lets the window show, also when it held back showing before.
     fn reveal(&self) {
         if self.revealed.replace(true) {
@@ -1055,7 +1122,7 @@ impl State {
         }
         self.update_checkerboard();
         self.zoomed();
-        self.draw_marks();
+        self.draw_view();
     }
 }
 
@@ -1139,6 +1206,12 @@ unsafe extern "system" fn frame_proc(
     }
     // SAFETY: Messages pass through to the window first.
     let result = unsafe { DefSubclassProc(hwnd, message, wparam, lparam) };
+    // Minimizing, restoring, hiding and showing the window change its position.
+    if message == WM_WINDOWPOSCHANGED
+        && let Some(state) = state
+    {
+        state.update_shown();
+    }
     // The header bar shows the title, which changes with unsaved changes.
     if message == WM_SETTEXT
         && let Some(state) = state
@@ -1315,18 +1388,20 @@ mod tests {
             .as_ref()
             .unwrap()
             .set_editing(false);
-        // The display-sized layer is used for enlarged rasters and released when zoomed out.
-        assert!(app.windows[0].view.state.pixels.borrow().is_some());
+        // Enlarged rasters are sampled as sharp pixels, and smoothly when zoomed out.
+        let pixelated = |app: &crate::App| {
+            let island = app.windows[0].view.state.island.borrow();
+            island.as_ref().unwrap().media_visual().is_pixelated()
+        };
+        assert!(pixelated(&app));
         app.windows[0].view.actual_size();
         layout_frames();
         if app.windows[0].view.state.scale() < 2.0 {
-            assert!(app.windows[0].view.state.pixels.borrow().is_none());
-            assert!(app.windows[0].view.state.pixel_canvas.borrow().is_none());
+            assert!(!pixelated(&app));
         }
         app.windows[0].view.zoom_by(4.0);
         layout_frames();
-        assert!(app.windows[0].view.state.pixels.borrow().is_some());
-        assert!(app.windows[0].view.state.pixel_canvas.borrow().is_some());
+        assert!(pixelated(&app));
         let answer = Rc::new(Cell::new(-1i32));
         let output = answer.clone();
         let dialog = app.windows[0]

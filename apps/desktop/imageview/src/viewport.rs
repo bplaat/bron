@@ -697,8 +697,9 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn followed_rasters_are_pixelated_when_enlarged() {
-        use imageview_core::Frame;
         use std::sync::Arc;
+
+        use imageview_core::Frame;
 
         let media = Media::Raster(Raster {
             width: 2,

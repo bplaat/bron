@@ -18,6 +18,7 @@ use std::sync::OnceLock;
 
 use imageview_core::{MAXIMUM_MAGNIFICATION, MINIMUM_MAGNIFICATION};
 
+use super::composition::{MediaVisual, Surface};
 use super::headers::*;
 use super::winrt::*;
 
@@ -469,23 +470,7 @@ impl Bitmap {
     pub(crate) fn write_rgba(&self, pixels: &[u8]) {
         let length = self.size.0 as usize * self.size.1 as usize * 4;
         assert_eq!(pixels.len(), length, "bitmap pixels have the wrong size");
-        self.update(|buffer| {
-            for (dest, source) in buffer
-                .as_chunks_mut::<4>()
-                .0
-                .iter_mut()
-                .zip(pixels.as_chunks::<4>().0)
-            {
-                let [red, green, blue, alpha] = *source;
-                let premultiply = |channel: u8| (u16::from(channel) * u16::from(alpha) / 255) as u8;
-                *dest = [
-                    premultiply(blue),
-                    premultiply(green),
-                    premultiply(red),
-                    alpha,
-                ];
-            }
-        });
+        self.update(|buffer| premultiplied_bgra(buffer, pixels));
     }
 
     fn update(&self, write: impl FnOnce(&mut [u8])) {
@@ -507,6 +492,25 @@ impl Bitmap {
                 call!(self.bitmap, 7);
             }
         }
+    }
+}
+
+/// Converts RGBA pixels, like those of a canvas, into premultiplied BGRA pixels.
+pub(crate) fn premultiplied_bgra(target: &mut [u8], rgba: &[u8]) {
+    for (dest, source) in target
+        .as_chunks_mut::<4>()
+        .0
+        .iter_mut()
+        .zip(rgba.as_chunks::<4>().0)
+    {
+        let [red, green, blue, alpha] = *source;
+        let premultiply = |channel: u8| (u16::from(channel) * u16::from(alpha) / 255) as u8;
+        *dest = [
+            premultiply(blue),
+            premultiply(green),
+            premultiply(red),
+            alpha,
+        ];
     }
 }
 
@@ -606,8 +610,8 @@ pub(crate) struct Island {
     title_bar: ComPtr,
     scroller: ComPtr,
     media: ComPtr,
+    media_visual: MediaVisual,
     checkerboard: ComPtr,
-    pixels: ComPtr,
     overlay: ComPtr,
     tool: ComPtr,
     spinner: ComPtr,
@@ -1076,11 +1080,11 @@ impl Island {
         let end = find(w!("End"), &IID_IFRAMEWORK_ELEMENT).map_err(failed("window content"))?;
         let scroller =
             find(w!("Scroller"), &IID_ISCROLL_VIEWER).map_err(failed("window content"))?;
-        let media = find(w!("Media"), &IID_IIMAGE).map_err(failed("window content"))?;
+        let media = find(w!("Media"), &IID_IFRAMEWORK_ELEMENT).map_err(failed("window content"))?;
+        let media_visual = MediaVisual::new(&media).map_err(failed("media visual"))?;
         let checkerboard =
             find(w!("Checkerboard"), &IID_IIMAGE).map_err(failed("window content"))?;
         let overlay = find(w!("Overlay"), &IID_IIMAGE).map_err(failed("window content"))?;
-        let pixels = find(w!("Pixels"), &IID_IIMAGE).map_err(failed("window content"))?;
         let tool = find(w!("Tool"), &IID_IBORDER).map_err(failed("window content"))?;
         let panels = [
             (w!("PagesPanel"), w!("PagesHost"), w!("SidebarButton")),
@@ -1339,8 +1343,8 @@ impl Island {
             title_bar,
             scroller,
             media,
+            media_visual,
             checkerboard,
-            pixels,
             overlay,
             tool,
             spinner,
@@ -1477,31 +1481,16 @@ impl Island {
         unsafe { call!(self.heading, 10, if active { 1.0 } else { 0.5 } => f64) };
     }
 
-    /// Shows a bitmap as the media, stretched to its size in logical pixels.
-    pub(crate) fn set_media(&self, bitmap: &Bitmap, size: (f64, f64)) {
-        set_image(
-            &self.media,
-            bitmap,
-            (size.0 * CONTENT_SCALE, size.1 * CONTENT_SCALE),
-        );
+    /// The visual that shows the media, which makes its surfaces.
+    pub(crate) const fn media_visual(&self) -> &MediaVisual {
+        &self.media_visual
     }
 
-    /// Uses display-sized raster pixels instead of the image scaled by the scroll viewer.
-    pub(crate) fn set_pixels(&self, pixels: Option<(&Bitmap, (f64, f64))>) {
-        if let Some((bitmap, size)) = pixels {
-            set_image(&self.pixels, bitmap, size);
-        } else {
-            // SAFETY: Slot 7 of IImage is put_Source; null releases the bitmap.
-            _ = unsafe { self.pixels.put(7, null_mut()) };
-        }
-        set_visible(&self.pixels, pixels.is_some());
-        // Keep the media in layout for scrolling and pointer input.
-        let element = self
-            .media
-            .cast(&IID_IUI_ELEMENT)
-            .expect("image is a UI element");
-        // SAFETY: Slot 10 of IUIElement is put_Opacity.
-        unsafe { call!(element, 10, if pixels.is_some() { 0.0 } else { 1.0 } => f64) };
+    /// Shows a surface as the media, stretched to its size in logical pixels.
+    pub(crate) fn set_media(&self, surface: &Surface, size: (f64, f64)) {
+        let size = (size.0 * CONTENT_SCALE, size.1 * CONTENT_SCALE);
+        set_size(&self.media, size);
+        self.media_visual.show(surface, size);
     }
 
     /// Shows the edit controls in the header bar, or the view controls.
@@ -1741,12 +1730,17 @@ impl Drop for Island {
 }
 
 /// Shows a bitmap in an image element at a size in logical pixels.
-pub(crate) fn set_image(image: &ComPtr, bitmap: &Bitmap, (width, height): (f64, f64)) {
-    // SAFETY: Slot 7 of IImage is put_Source, slots 16 and 18 of IFrameworkElement are
-    // put_Width and put_Height.
-    unsafe {
-        _ = image.put(7, bitmap.source.as_raw());
-        if let Ok(element) = image.cast(&IID_IFRAMEWORK_ELEMENT) {
+pub(crate) fn set_image(image: &ComPtr, bitmap: &Bitmap, size: (f64, f64)) {
+    // SAFETY: Slot 7 of IImage is put_Source.
+    _ = unsafe { image.put(7, bitmap.source.as_raw()) };
+    set_size(image, size);
+}
+
+// Sizes an element in logical pixels.
+fn set_size(element: &ComPtr, (width, height): (f64, f64)) {
+    if let Ok(element) = element.cast(&IID_IFRAMEWORK_ELEMENT) {
+        // SAFETY: Slots 16 and 18 of IFrameworkElement are put_Width and put_Height.
+        unsafe {
             call!(element, 16, width => f64);
             call!(element, 18, height => f64);
         }

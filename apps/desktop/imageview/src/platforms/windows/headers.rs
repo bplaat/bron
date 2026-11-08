@@ -28,6 +28,7 @@ pub(crate) const WM_ACTIVATE: u32 = 0x0006;
 pub(crate) const WM_SETFOCUS: u32 = 0x0007;
 pub(crate) const WM_SETTEXT: u32 = 0x000c;
 pub(crate) const WM_ERASEBKGND: u32 = 0x0014;
+pub(crate) const WM_WINDOWPOSCHANGED: u32 = 0x0047;
 pub(crate) const WM_TIMER: u32 = 0x0113;
 pub(crate) const WM_USER: u32 = 0x0400;
 pub(crate) const WM_APP: u32 = 0x8000;
@@ -128,6 +129,8 @@ unsafe extern "system" {
     ) -> HWND;
     pub(crate) fn DestroyWindow(hwnd: HWND) -> BOOL;
     pub(crate) fn IsWindow(hwnd: HWND) -> BOOL;
+    pub(crate) fn IsWindowVisible(hwnd: HWND) -> BOOL;
+    pub(crate) fn IsIconic(hwnd: HWND) -> BOOL;
     pub(crate) fn DefWindowProcW(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT;
     pub(crate) fn SetWindowLongPtrW(hwnd: HWND, index: i32, value: isize) -> isize;
     pub(crate) fn GetWindowLongPtrW(hwnd: HWND, index: i32) -> isize;
