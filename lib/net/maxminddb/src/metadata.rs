@@ -73,7 +73,7 @@ impl Metadata {
                 .iter()
                 .filter_map(|v| {
                     if let crate::decoder::Value::Str(s) = v {
-                        Some(s.clone())
+                        Some((*s).to_string())
                     } else {
                         None
                     }
@@ -87,7 +87,7 @@ impl Metadata {
                 .iter()
                 .filter_map(|(k, v)| {
                     if let crate::decoder::Value::Str(s) = v {
-                        Some((k.clone(), s.clone()))
+                        Some(((*k).to_string(), (*s).to_string()))
                     } else {
                         None
                     }
@@ -113,7 +113,10 @@ impl Metadata {
     }
 }
 
-fn get_u64(map: &HashMap<String, crate::decoder::Value>, key: &str) -> Result<u64, MaxMindDbError> {
+fn get_u64(
+    map: &HashMap<&str, crate::decoder::Value<'_>>,
+    key: &str,
+) -> Result<u64, MaxMindDbError> {
     match map.get(key) {
         Some(crate::decoder::Value::U64(n)) => Ok(*n),
         Some(crate::decoder::Value::U32(n)) => Ok(u64::from(*n)),
@@ -125,11 +128,11 @@ fn get_u64(map: &HashMap<String, crate::decoder::Value>, key: &str) -> Result<u6
 }
 
 fn get_string(
-    map: &HashMap<String, crate::decoder::Value>,
+    map: &HashMap<&str, crate::decoder::Value<'_>>,
     key: &str,
 ) -> Result<String, MaxMindDbError> {
     match map.get(key) {
-        Some(crate::decoder::Value::Str(s)) => Ok(s.clone()),
+        Some(crate::decoder::Value::Str(s)) => Ok((*s).to_string()),
         _ => Err(MaxMindDbError::InvalidDatabase(format!(
             "missing or invalid metadata field: {key}"
         ))),
