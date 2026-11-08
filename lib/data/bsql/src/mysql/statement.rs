@@ -32,7 +32,7 @@ pub(crate) struct Prepared {
     pub(crate) columns: Vec<Column>,
     pub(crate) rows: Vec<Vec<Value>>,
     pub(crate) row_index: usize,
-    pub(crate) current_row: Option<Vec<Value>>,
+    pub(crate) current_row: Option<usize>,
     pub(crate) executed: bool,
 }
 
@@ -74,9 +74,9 @@ impl PreparedStatement for Prepared {
         if !self.executed {
             client.execute_prepared(self)?;
         }
-        if let Some(row) = self.rows.get(self.row_index).cloned() {
+        if self.row_index < self.rows.len() {
+            self.current_row = Some(self.row_index);
             self.row_index += 1;
-            self.current_row = Some(row);
             Ok(Some(()))
         } else {
             self.current_row = None;
@@ -91,7 +91,7 @@ impl PreparedStatement for Prepared {
         self.columns[index as usize].name.clone()
     }
     fn column_type(&self, index: i32) -> ColumnType {
-        column_type(&self.current_row.as_ref().expect("current row checked")[index as usize])
+        column_type(&self.rows[self.current_row.expect("current row checked")][index as usize])
     }
     fn column_declared_type(&self, index: i32) -> Option<String> {
         Some(self.columns[index as usize].declared_type())
@@ -103,7 +103,7 @@ impl PreparedStatement for Prepared {
         self.columns[index as usize].origin_name.clone()
     }
     fn column_value(&self, index: i32) -> Value {
-        self.current_row.as_ref().expect("current row checked")[index as usize].clone()
+        self.rows[self.current_row.expect("current row checked")][index as usize].clone()
     }
     fn close(&mut self, connection: &mut InnerConnection) -> Result<(), StatementError> {
         connection.mysql_mut()?.close(self.id)
