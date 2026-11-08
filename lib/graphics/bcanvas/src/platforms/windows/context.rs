@@ -10,6 +10,7 @@ use std::ops::Deref;
 use std::ptr::{null, null_mut};
 use std::rc::Rc;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use super::com::ComPtr;
 use super::headers::*;
@@ -74,16 +75,23 @@ impl Resources {
     }
 }
 
-/// A render target with the one brush that every draw recolors.
+/// A render target with the one brush that every draw recolors, and a unique id that images
+/// key their bitmaps of its resource domain on.
 pub(super) struct DrawTarget<T> {
     pub(super) native: ComPtr<T>,
     brush: ComPtr<ID2D1SolidColorBrush>,
+    id: u64,
 }
 
 impl<T: Deref<Target = ID2D1RenderTarget>> DrawTarget<T> {
     pub(super) fn new(native: ComPtr<T>) -> Result<Self, i32> {
+        static NEXT_ID: AtomicU64 = AtomicU64::new(0);
         let brush = unsafe { native.CreateSolidColorBrush(&D2D1_COLOR_F::default(), null()) }?;
-        Ok(Self { native, brush })
+        Ok(Self {
+            native,
+            brush,
+            id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
+        })
     }
 }
 
@@ -92,6 +100,7 @@ impl<T> Clone for DrawTarget<T> {
         Self {
             native: self.native.clone(),
             brush: self.brush.clone(),
+            id: self.id,
         }
     }
 }
@@ -128,6 +137,8 @@ enum Layer {
 
 pub(crate) struct PlatformCanvasContext {
     target: ComPtr<ID2D1RenderTarget>,
+    // The id of the draw target, whose compatible offscreen targets share its resources.
+    target_id: u64,
     brush: ComPtr<ID2D1SolidColorBrush>,
     resources: Rc<Resources>,
     path: Path,
@@ -147,6 +158,7 @@ impl PlatformCanvasContext {
         unsafe { native.SetTransform(&D2D_MATRIX_3X2_F::identity()) };
         Self {
             target: native,
+            target_id: target.id,
             brush: target.brush.clone(),
             resources,
             path: Path::default(),
@@ -725,7 +737,7 @@ impl PlatformCanvasContext {
             state,
             |this| Some(this.rect_geometry(x, y, w, h)),
             |this, state| {
-                let Some(bitmap) = image.bitmap(&this.target) else {
+                let Some(bitmap) = image.bitmap(&this.target, this.target_id) else {
                     return;
                 };
                 let context = unsafe {
@@ -1086,7 +1098,9 @@ pub(crate) struct PlatformImage {
     pub(crate) width: u32,
     pub(crate) height: u32,
     pixels: Arc<[u8]>,
-    bitmap: RefCell<Option<(ComPtr<ID2D1RenderTarget>, ComPtr<ID2D1Bitmap>)>>,
+    // The bitmap and the id of the draw target it was made for, which keeps no reference to
+    // the target itself, so a cached image never keeps a large render target alive.
+    bitmap: RefCell<Option<(u64, ComPtr<ID2D1Bitmap>)>>,
 }
 
 impl PlatformImage {
@@ -1099,10 +1113,14 @@ impl PlatformImage {
         }
     }
 
-    fn bitmap(&self, target: &ComPtr<ID2D1RenderTarget>) -> Option<ComPtr<ID2D1Bitmap>> {
+    fn bitmap(
+        &self,
+        target: &ComPtr<ID2D1RenderTarget>,
+        target_id: u64,
+    ) -> Option<ComPtr<ID2D1Bitmap>> {
         let mut cache = self.bitmap.borrow_mut();
         if let Some((cached, bitmap)) = &*cache
-            && cached.as_ptr() == target.as_ptr()
+            && *cached == target_id
         {
             return Some(bitmap.clone());
         }
@@ -1125,9 +1143,7 @@ impl PlatformImage {
             )
         }
         .ok()?;
-        // Keep the target alive with its bitmap. Otherwise a later target can reuse its
-        // address and incorrectly retrieve a bitmap from a different resource domain.
-        *cache = Some((target.clone(), bitmap.clone()));
+        *cache = Some((target_id, bitmap.clone()));
         Some(bitmap)
     }
 }
