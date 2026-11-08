@@ -503,8 +503,8 @@ impl PlatformCanvasContext {
         {
             return;
         }
-        let family = CString::new(s.font_family.as_ref())
-            .unwrap_or_else(|_| CString::new("sans-serif").expect("literal"));
+        let family = CString::new(s.font_family.as_ref()).ok();
+        let family = family.as_deref().unwrap_or(c"sans-serif");
         unsafe {
             cairo_select_font_face(
                 self.cr,
