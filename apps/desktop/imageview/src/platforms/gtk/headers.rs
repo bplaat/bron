@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: MIT
  */
 
-//! GTK, GDK and GLib declarations, bwindow links their libraries.
+//! GTK, GDK, GLib and cairo declarations, bwindow and bcanvas link their libraries.
 
 use std::ffi::{c_char, c_ulong, c_void};
 
@@ -41,6 +41,9 @@ pub(crate) const GTK_ORIENTATION_VERTICAL: i32 = 1;
 pub(crate) const GTK_ICON_SIZE_BUTTON: i32 = 4;
 pub(crate) const G_BINDING_SYNC_CREATE: u32 = 1 << 1;
 pub(crate) const G_SIGNAL_MATCH_DATA: i32 = 1 << 4;
+pub(crate) const GDK_WINDOW_STATE_WITHDRAWN: u32 = 1 << 0;
+pub(crate) const GDK_WINDOW_STATE_ICONIFIED: u32 = 1 << 1;
+pub(crate) const CAIRO_CONTENT_COLOR: i32 = 0x1000;
 
 /// A clipboard format, as GTK reads it.
 #[repr(C)]
@@ -50,7 +53,31 @@ pub(crate) struct GtkTargetEntry {
     pub(crate) info: u32,
 }
 
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub(crate) struct GdkRectangle {
+    pub(crate) x: i32,
+    pub(crate) y: i32,
+    pub(crate) width: i32,
+    pub(crate) height: i32,
+}
+
 unsafe extern "C" {
+    pub(crate) fn gdk_cairo_get_clip_rectangle(cr: *mut c_void, rect: *mut GdkRectangle) -> i32;
+    pub(crate) fn gdk_window_create_similar_surface(
+        window: *mut c_void,
+        content: i32,
+        width: i32,
+        height: i32,
+    ) -> *mut c_void;
+    pub(crate) fn gdk_window_get_state(window: *mut c_void) -> u32;
+    pub(crate) fn cairo_create(surface: *mut c_void) -> *mut c_void;
+    pub(crate) fn cairo_destroy(cr: *mut c_void);
+    pub(crate) fn cairo_translate(cr: *mut c_void, x: f64, y: f64);
+    pub(crate) fn cairo_set_source_surface(cr: *mut c_void, surface: *mut c_void, x: f64, y: f64);
+    pub(crate) fn cairo_paint(cr: *mut c_void);
+    pub(crate) fn cairo_surface_status(surface: *mut c_void) -> i32;
+    pub(crate) fn cairo_surface_destroy(surface: *mut c_void);
     pub(crate) fn gtk_header_bar_new() -> *mut c_void;
     pub(crate) fn gtk_header_bar_set_subtitle(bar: *mut c_void, subtitle: *const c_char);
     pub(crate) fn gtk_header_bar_set_show_close_button(bar: *mut c_void, show: i32);
@@ -122,18 +149,17 @@ unsafe extern "C" {
         handler: *mut c_void,
         data: *const c_void,
     ) -> u32;
-    pub(crate) fn g_timeout_add_full(
-        priority: i32,
+    pub(crate) fn g_timeout_add(
         interval: u32,
         function: extern "C" fn(*mut c_void) -> i32,
-        data: *mut c_void,
-        destroy: extern "C" fn(*mut c_void),
+        data: *const c_void,
     ) -> u32;
     pub(crate) fn g_source_remove(id: u32) -> i32;
 
     pub(crate) fn gtk_scrolled_window_new(h: *mut c_void, v: *mut c_void) -> *mut c_void;
     pub(crate) fn gtk_scrolled_window_get_hadjustment(window: *mut c_void) -> *mut c_void;
     pub(crate) fn gtk_scrolled_window_get_vadjustment(window: *mut c_void) -> *mut c_void;
+    pub(crate) fn gtk_bin_get_child(bin: *mut c_void) -> *mut c_void;
     pub(crate) fn gtk_overlay_new() -> *mut c_void;
     pub(crate) fn gtk_overlay_add_overlay(overlay: *mut c_void, widget: *mut c_void);
     pub(crate) fn gtk_overlay_set_overlay_pass_through(
@@ -156,6 +182,7 @@ unsafe extern "C" {
     pub(crate) fn gtk_widget_set_can_focus(widget: *mut c_void, can_focus: i32);
     pub(crate) fn gtk_widget_grab_focus(widget: *mut c_void);
     pub(crate) fn gtk_widget_queue_draw(widget: *mut c_void);
+    pub(crate) fn gtk_widget_get_mapped(widget: *mut c_void) -> i32;
     pub(crate) fn gtk_widget_get_window(widget: *mut c_void) -> *mut c_void;
     pub(crate) fn gtk_widget_get_display(widget: *mut c_void) -> *mut c_void;
     pub(crate) fn gtk_adjustment_get_value(adjustment: *mut c_void) -> f64;

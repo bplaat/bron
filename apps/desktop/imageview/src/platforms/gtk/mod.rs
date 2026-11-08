@@ -14,7 +14,7 @@
 use std::cell::{Cell, RefCell};
 use std::ffi::{CStr, c_void};
 use std::ptr::{from_ref, null, null_mut};
-use std::rc::{Rc, Weak};
+use std::rc::Rc;
 
 use bcanvas::NativeContext;
 use bwindow::{NativeViewHandle, Theme, Window, WindowAttachment, WindowId};
@@ -45,7 +45,9 @@ pub(crate) const MIN_SIZE: (f32, f32) = (240.0, 180.0);
 struct State {
     viewport: RefCell<Viewport>,
     dark: Cell<bool>,
-    // The overlay of the scrolled window and the loading spinner, which the window embeds.
+    // The GTK window, which minimizes, and the overlay of the scrolled window and the loading
+    // spinner, which it embeds.
+    window: *mut c_void,
     overlay: *mut c_void,
     toolbar: Toolbar,
     integrated_toolbar: bool,
@@ -56,10 +58,12 @@ struct State {
     // The spinner shown until the media is decoded or an edit is applied, or null.
     spinner: Cell<*mut c_void>,
     area: *mut c_void,
+    cache: RefCell<Option<Cache>>,
     gesture: *mut c_void,
     // Whether the adjustments are being set from the viewport.
     updating: Cell<bool>,
-    // The scale of the current pinch so far and the timer of the next animation frame.
+    // The scale of the current pinch so far and the timer of the next animation frame, which
+    // only runs while the drawing area is shown.
     pinch: Cell<f64>,
     timer: Cell<u32>,
 }
@@ -85,11 +89,14 @@ impl MediaView {
         let size = window.size();
         let integrated_toolbar = uses_header_bar();
         // SAFETY: The attachment keeps the GTK window alive on this thread.
+        let Some(bwindow::NativeWindowHandle::Gtk(native_window)) =
+            (unsafe { attachment.window_handle() })
+        else {
+            unreachable!("GTK view requires a GTK window");
+        };
+        // SAFETY: The GTK window is alive.
         let toolbar = unsafe {
-            let Some(bwindow::NativeWindowHandle::Gtk(window)) = attachment.window_handle() else {
-                unreachable!("GTK view requires a GTK window");
-            };
-            let toolbar = Toolbar::install(window, integrated_toolbar);
+            let toolbar = Toolbar::install(native_window, integrated_toolbar);
             if integrated_toolbar && let Some(media) = &media {
                 toolbar::show_size(toolbar.bar, media);
             }
@@ -128,6 +135,7 @@ impl MediaView {
                     (f64::from(size.width), f64::from(size.height)),
                 )),
                 dark: Cell::new(theme == Theme::Dark),
+                window: native_window,
                 overlay,
                 toolbar,
                 integrated_toolbar,
@@ -138,6 +146,7 @@ impl MediaView {
                 ],
                 spinner: Cell::new(spinner),
                 area,
+                cache: RefCell::new(None),
                 gesture: gtk_gesture_zoom_new(area),
                 updating: Cell::new(false),
                 pinch: Cell::new(1.0),
@@ -173,11 +182,8 @@ impl MediaView {
             }
             let width = (size.width.round() as i32).max(toolbar_width);
             let height = size.height.round() as i32 + toolbar_height;
-            let Some(bwindow::NativeWindowHandle::Gtk(window)) = attachment.window_handle() else {
-                unreachable!("GTK view requires a GTK window");
-            };
-            gtk_window_set_default_size(window, width, height);
-            gtk_window_resize(window, width, height);
+            gtk_window_set_default_size(native_window, width, height);
+            gtk_window_resize(native_window, width, height);
             gtk_widget_grab_focus(state.area);
         }
         state.update(Viewport::zoom_to_fit);
@@ -300,7 +306,7 @@ impl MediaView {
     ) {
         self.close_tool();
         if tool == Tool::Crop {
-            self.state.update(|viewport| viewport.set_cropping(true));
+            self.state.mark(|viewport| viewport.set_cropping(true));
             self.state.show_cursor();
         }
         let anchor = self.state.toolbar.button(action).unwrap_or(self.state.area);
@@ -319,7 +325,7 @@ impl MediaView {
     /// Closes the popover and crop rectangle of the open tool.
     pub(crate) fn close_tool(&mut self) {
         if self.popover.take().is_some() {
-            self.state.update(|viewport| viewport.set_cropping(false));
+            self.state.mark(|viewport| viewport.set_cropping(false));
             self.state.show_cursor();
             // SAFETY: The drawing area is alive while this view is.
             unsafe { gtk_widget_grab_focus(self.state.area) };
@@ -329,7 +335,7 @@ impl MediaView {
     /// Makes drags draw selections of a shape, or selects the whole image again, shown as on
     /// in the toolbar.
     pub(crate) fn set_selecting(&self, shape: Option<Shape>) {
-        self.state.update(|viewport| viewport.set_selecting(shape));
+        self.state.mark(|viewport| viewport.set_selecting(shape));
         self.state.show_cursor();
         self.state.toolbar.set_toggled(match shape {
             None => "select.whole",
@@ -345,7 +351,7 @@ impl MediaView {
 
     /// Selects everything outside the selection instead.
     pub(crate) fn invert_selection(&self) {
-        self.state.update(Viewport::invert_selection);
+        self.state.mark(Viewport::invert_selection);
     }
 
     /// Puts a PNG image on the clipboard, for as long as this application lives or the desktop
@@ -386,7 +392,7 @@ impl MediaView {
 
     /// Places the crop rectangle at a position with a size in pixels.
     pub(crate) fn set_crop_rect(&self, rect: (u32, u32, u32, u32)) {
-        self.state.update(|viewport| {
+        self.state.mark(|viewport| {
             if let Some(crop) = viewport.crop() {
                 crop.set_rect(rect);
             }
@@ -395,7 +401,7 @@ impl MediaView {
 
     /// Makes the crop rectangle keep a width divided by height, or any shape.
     pub(crate) fn set_crop_aspect(&self, aspect: Option<f64>) {
-        self.state.update(|viewport| {
+        self.state.mark(|viewport| {
             if let Some(crop) = viewport.crop() {
                 crop.set_aspect(aspect);
             }
@@ -438,8 +444,7 @@ impl MediaView {
     /// Redraws the checkerboard in the colors of the new theme.
     pub(crate) fn theme_changed(&self, theme: Theme) {
         self.state.dark.set(theme == Theme::Dark);
-        // SAFETY: The drawing area is alive while this view is.
-        unsafe { gtk_widget_queue_draw(self.state.area) };
+        self.state.redraw_media();
     }
 }
 
@@ -485,11 +490,12 @@ impl Drop for MediaView {
         let state = &self.state;
         state.stop_animation();
         let data = from_ref::<State>(state).cast::<c_void>();
-        // SAFETY: This view owns a reference to each object, the handlers using the state are
-        // disconnected before it is freed.
+        // SAFETY: This view owns a reference to each object and the attachment keeps the window
+        // alive, the handlers using the state are disconnected before it is freed.
         unsafe {
             let [horizontal, vertical] = state.adjustments;
             for object in [
+                state.window,
                 state.area,
                 state.gesture,
                 state.scrolled_window,
@@ -519,7 +525,14 @@ impl Drop for MediaView {
 impl State {
     fn connect(&self) {
         let data = from_ref(self).cast::<c_void>();
-        let signals: [(*mut c_void, &CStr, *const c_void); 11] = [
+        let signals: [(*mut c_void, &CStr, *const c_void); 14] = [
+            (
+                self.window,
+                c"window-state-event",
+                window_state as *const c_void,
+            ),
+            (self.area, c"map", shown as *const c_void),
+            (self.area, c"unmap", shown as *const c_void),
             (self.area, c"draw", draw as *const c_void),
             (self.area, c"scroll-event", scroll as *const c_void),
             (self.area, c"key-press-event", key_press as *const c_void),
@@ -583,10 +596,33 @@ impl State {
         (x - scroll.0, y - scroll.1)
     }
 
-    // Changes the viewport, then sizes the drawing area to the magnified media and scrolls the
-    // scrolled window along. The ranges are set before the next layout, so the scroll position
-    // is kept.
+    // Changes what the viewport shows and redraws the drawing area.
     fn update(&self, change: impl FnOnce(&mut Viewport)) {
+        self.lay_out(change);
+        self.redraw_media();
+    }
+
+    // Changes only the crop rectangle or selection, which are drawn over the cached media.
+    fn mark(&self, change: impl FnOnce(&mut Viewport)) {
+        change(&mut self.viewport.borrow_mut());
+        self.redraw();
+    }
+
+    // Redraws the drawing area with the media drawn again instead of copied from the cache.
+    fn redraw_media(&self) {
+        self.cache.take();
+        self.redraw();
+    }
+
+    fn redraw(&self) {
+        // SAFETY: The drawing area is alive while the state is.
+        unsafe { gtk_widget_queue_draw(self.area) };
+    }
+
+    // Changes the viewport, then sizes the drawing area to the magnified media and scrolls the
+    // scrolled window along, which moves the drawn document without redrawing it. The ranges
+    // are set before the next layout, so the scroll position is kept.
+    fn lay_out(&self, change: impl FnOnce(&mut Viewport)) {
         let (content, bars) = {
             let mut viewport = self.viewport.borrow_mut();
             change(&mut viewport);
@@ -598,8 +634,9 @@ impl State {
         self.updating.set(true);
         // SAFETY: The drawing area and adjustments are alive.
         unsafe {
-            // The scrolled window grows the drawing area to at least the visible area.
-            let length = |length: f64| length.ceil().min(f64::from(i32::MAX / 2)) as i32;
+            // The scrolled window grows the drawing area to at least the visible area. Rounding
+            // ignores the sub-pixel overflow of fitted media like its scroll bars do.
+            let length = |length: f64| length.round().min(f64::from(i32::MAX / 2)) as i32;
             gtk_widget_set_size_request(self.area, length(content.0), length(content.1));
             for (axis, bar) in Axis::BOTH.into_iter().zip(bars) {
                 let adjustment = self.adjustment(axis);
@@ -613,33 +650,42 @@ impl State {
                     bar.page,
                 );
             }
-            gtk_widget_queue_draw(self.area);
         }
         self.updating.set(false);
     }
 
-    // Shows the current animation frame and schedules the next one.
-    fn start_animation(self: &Rc<Self>) {
+    // Shows the current animation frame and schedules the next one while the drawing area is
+    // shown, the frame follows the time when it is shown again.
+    fn start_animation(&self) {
         let (changed, next) = self.viewport.borrow_mut().advance_frame();
         if changed {
-            // SAFETY: The drawing area is alive while the state is.
-            unsafe { gtk_widget_queue_draw(self.area) };
+            self.redraw_media();
         }
-        let Some(next) = next else {
+        let Some(next) = next.filter(|_| self.is_shown()) else {
             return;
         };
-        let weak = Box::into_raw(Box::new(Rc::downgrade(self))).cast::<c_void>();
-        // SAFETY: The timer owns the boxed weak state until GLib calls its destroy function.
+        // SAFETY: The view removes the timer before the state it receives is freed.
         let timer = unsafe {
-            g_timeout_add_full(
-                0,
+            g_timeout_add(
                 next.as_millis().max(1) as u32,
                 next_frame,
-                weak,
-                drop_weak,
+                from_ref(self).cast(),
             )
         };
         self.timer.set(timer);
+    }
+
+    // Whether the drawing area is on screen: mapped in a window that is not minimized. GTK 3
+    // does not report windows that are covered, nor minimized ones on Wayland, but does not
+    // draw those either.
+    fn is_shown(&self) -> bool {
+        // SAFETY: The drawing area and window are alive, a mapped widget has a realized window.
+        unsafe {
+            gtk_widget_get_mapped(self.area) != 0
+                && gdk_window_get_state(gtk_widget_get_window(self.window))
+                    & (GDK_WINDOW_STATE_WITHDRAWN | GDK_WINDOW_STATE_ICONIFIED)
+                    == 0
+        }
     }
 
     // Shows a crosshair while cropping or selecting.
@@ -663,55 +709,174 @@ impl State {
     }
 }
 
-extern "C" fn next_frame(data: *mut c_void) -> i32 {
-    // SAFETY: GLib passes the boxed weak state of this timer, which lives until its destroy.
-    let weak = unsafe { &*data.cast::<Weak<State>>() };
-    if let Some(state) = weak.upgrade() {
-        state.timer.set(0);
-        state.start_animation();
-    }
+extern "C" fn next_frame(state: *mut c_void) -> i32 {
+    // SAFETY: GLib passes the state of this timer, which is removed before the state is freed.
+    let state = unsafe { &*state.cast::<State>() };
+    state.timer.set(0);
+    state.start_animation();
     // Every frame schedules its own timer with the delay of that frame.
     0
 }
 
-extern "C" fn drop_weak(data: *mut c_void) {
-    // SAFETY: The timer owned the boxed weak state created in start_animation.
-    drop(unsafe { Box::from_raw(data.cast::<Weak<State>>()) });
+// The animation pauses while the drawing area is hidden or its window is minimized, and
+// continues at the current frame when shown again.
+extern "C" fn shown(_: *mut c_void, state: &State) {
+    state.stop_animation();
+    state.start_animation();
 }
 
-// The scrolled window caches what the drawing area draws beyond the visible area and reuses it
-// while scrolling, so it is drawn as a document independent of the scroll position.
-extern "C" fn draw(area: *mut c_void, cr: *mut c_void, state: &State) -> i32 {
-    // SAFETY: GTK passes the live drawing area and its cairo context while drawing.
+extern "C" fn window_state(window: *mut c_void, _: *const c_void, state: &State) -> i32 {
+    shown(window, state);
+    0
+}
+
+// The checkerboard and media of a part of the drawing area, drawn once into a surface like its
+// window: a server side one on X11, which the X server scales the media into and copies from
+// with XRender. Redraws of the crop rectangle or selection, and of exposed parts it covers, copy
+// it instead of scaling a bitmap or tessellating a vector again.
+struct Cache {
+    surface: *mut c_void,
+    rect: GdkRectangle,
+    // The width, height and scale factor of the drawing area it was drawn for.
+    area: (i32, i32, i32),
+}
+
+impl Cache {
+    // Draws the part inside `rect` of a drawing area, or none when no surface can hold it.
+    unsafe fn new(
+        window: *mut c_void,
+        state: &State,
+        area: (i32, i32, i32),
+        rect: GdkRectangle,
+    ) -> Option<Self> {
+        // SAFETY: The caller supplies the realized window of the drawing area.
+        unsafe {
+            let surface = gdk_window_create_similar_surface(
+                window,
+                CAIRO_CONTENT_COLOR,
+                rect.width,
+                rect.height,
+            );
+            if cairo_surface_status(surface) != 0 {
+                cairo_surface_destroy(surface);
+                return None;
+            }
+            let cr = cairo_create(surface);
+            cairo_translate(cr, -f64::from(rect.x), -f64::from(rect.y));
+            paint_document(cr, state, area, rect);
+            cairo_destroy(cr);
+            Some(Self {
+                surface,
+                rect,
+                area,
+            })
+        }
+    }
+
+    // Whether it holds the part inside `clip` of a drawing area with a size and scale factor.
+    fn covers(&self, area: (i32, i32, i32), clip: GdkRectangle) -> bool {
+        let rect = self.rect;
+        self.area == area
+            && clip.x >= rect.x
+            && clip.y >= rect.y
+            && clip.x + clip.width <= rect.x + rect.width
+            && clip.y + clip.height <= rect.y + rect.height
+    }
+}
+
+impl Drop for Cache {
+    fn drop(&mut self) {
+        // SAFETY: The cache owns its surface.
+        unsafe { cairo_surface_destroy(self.surface) };
+    }
+}
+
+// Draws the checkerboard and media inside `clip` of a drawing area with a size and scale factor.
+unsafe fn paint_document(
+    cr: *mut c_void,
+    state: &State,
+    (width, height, scale): (i32, i32, i32),
+    clip: GdkRectangle,
+) {
+    // SAFETY: The caller supplies a cairo context to draw with.
     unsafe {
         bcanvas::draw_native(
             NativeContext::Cairo(cr),
-            gtk_widget_get_allocated_width(area) as f32,
-            gtk_widget_get_allocated_height(area) as f32,
-            gtk_widget_get_scale_factor(area) as f32,
+            width as f32,
+            height as f32,
+            scale as f32,
             |canvas| {
-                state
-                    .viewport
-                    .borrow()
-                    .paint_document(canvas, state.dark.get());
+                state.viewport.borrow().paint_document(
+                    canvas,
+                    state.dark.get(),
+                    (
+                        clip.x as f32,
+                        clip.y as f32,
+                        clip.width as f32,
+                        clip.height as f32,
+                    ),
+                );
             },
+        );
+    }
+}
+
+// The scrolled window caches what the drawing area draws beyond the visible area and reuses it
+// while scrolling, so it is drawn as a document independent of the scroll position. Only the
+// exposed part of the document is drawn, which may be far larger.
+extern "C" fn draw(area: *mut c_void, cr: *mut c_void, state: &State) -> i32 {
+    // SAFETY: GTK passes the live realized drawing area and its cairo context while drawing.
+    unsafe {
+        let mut clip = GdkRectangle::default();
+        if gdk_cairo_get_clip_rectangle(cr, &raw mut clip) == 0 {
+            return 1;
+        }
+        let size = (
+            gtk_widget_get_allocated_width(area),
+            gtk_widget_get_allocated_height(area),
+            gtk_widget_get_scale_factor(area),
+        );
+        let mut cache = state.cache.borrow_mut();
+        if !cache.as_ref().is_some_and(|cache| cache.covers(size, clip)) {
+            *cache = None;
+            *cache = Cache::new(gtk_widget_get_window(area), state, size, clip);
+        }
+        match &*cache {
+            Some(cache) => {
+                cairo_set_source_surface(
+                    cr,
+                    cache.surface,
+                    cache.rect.x.into(),
+                    cache.rect.y.into(),
+                );
+                cairo_paint(cr);
+            }
+            None => paint_document(cr, state, size, clip),
+        }
+        bcanvas::draw_native(
+            NativeContext::Cairo(cr),
+            size.0 as f32,
+            size.1 as f32,
+            size.2 as f32,
+            |canvas| state.viewport.borrow().paint_document_marks(canvas),
         );
     }
     1
 }
 
-// The visible area changed with the scrolled window.
+// The visible area changed with the scrolled window or its scroll bars: the allocation of the
+// GtkViewport it wraps the drawing area in, which leaves out scroll bars that are not overlaid.
+// A changed size of the drawing area makes GTK redraw it, otherwise only the scroll moves.
 extern "C" fn resized(scrolled_window: *mut c_void, _: *mut c_void, state: &State) {
-    // SAFETY: GTK passes the live scrolled window.
+    // SAFETY: GTK passes the live scrolled window, which has allocated its viewport.
     let visible = unsafe {
+        let viewport = gtk_bin_get_child(scrolled_window);
         (
-            f64::from(gtk_widget_get_allocated_width(scrolled_window)),
-            f64::from(gtk_widget_get_allocated_height(scrolled_window)),
+            f64::from(gtk_widget_get_allocated_width(viewport)),
+            f64::from(gtk_widget_get_allocated_height(viewport)),
         )
     };
-    let mut viewport = state.viewport.borrow_mut();
-    viewport.resize(visible);
-    viewport.scroll_to(state.scroll());
+    state.lay_out(|viewport| viewport.resize(visible));
 }
 
 // The scrolled window scrolled by itself.
@@ -769,7 +934,7 @@ extern "C" fn key_press(_: *mut c_void, event: *const c_void, state: &State) -> 
         }
         _ => return 0,
     };
-    state.update(|viewport| viewport.step(Axis::Vertical, step));
+    state.lay_out(|viewport| viewport.step(Axis::Vertical, step));
     1
 }
 
@@ -792,7 +957,7 @@ extern "C" fn button_press(area: *mut c_void, event: *const c_void, state: &Stat
     }
     let pointer = state.visible_point((area_x, area_y));
     if state.viewport.borrow_mut().mark_begin(pointer) {
-        state.update(|_| {});
+        state.redraw();
         return 1;
     }
     if state.viewport.borrow_mut().drag_begin((x, y)) {
@@ -822,7 +987,7 @@ extern "C" fn button_release(_: *mut c_void, event: *const c_void, state: &State
         send(AppEvent::Action("select.changed"));
     }
     if marked {
-        state.update(|_| {});
+        state.redraw();
         return 1;
     }
     if !state.viewport.borrow_mut().drag_end() {
@@ -841,14 +1006,18 @@ extern "C" fn motion(_: *mut c_void, event: *const c_void, state: &State) -> i32
         gdk_event_get_state(event, &mut modifiers);
     }
     let pointer = state.visible_point((area_x, area_y));
-    let moved = {
-        let mut viewport = state.viewport.borrow_mut();
-        viewport.mark_drag(pointer, modifiers & GDK_SHIFT_MASK != 0) || viewport.drag_to((x, y))
-    };
-    if !moved {
+    if state
+        .viewport
+        .borrow_mut()
+        .mark_drag(pointer, modifiers & GDK_SHIFT_MASK != 0)
+    {
+        state.redraw();
+    } else if state.viewport.borrow_mut().drag_to((x, y)) {
+        // Panning only scrolls the drawn document.
+        state.lay_out(|_| {});
+    } else {
         return 0;
     }
-    state.update(|_| {});
     1
 }
 
