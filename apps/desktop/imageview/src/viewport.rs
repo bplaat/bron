@@ -471,6 +471,34 @@ impl Viewport {
             .map_or((&self.renderer, self.frame), |preview| (preview, 0))
     }
 
+    /// Whether the shown raster needs sharp pixels at this display scale.
+    #[cfg(windows)]
+    pub(crate) fn has_pixels(&self, scale: f32) -> bool {
+        let (renderer, _) = self.drawn();
+        let Media::Raster(raster) = renderer.media() else {
+            return false;
+        };
+        self.content().0 * f64::from(scale) >= 2.0 * f64::from(raster.width)
+    }
+
+    /// Draws enlarged raster pixels into the visible area, bypassing XAML image scaling.
+    #[cfg(windows)]
+    pub(crate) fn paint_pixels(&self, context: &mut CanvasRenderingContext2d<'_>) {
+        let (renderer, frame) = self.drawn();
+        let (width, height) = self.content();
+        let origin = Axis::BOTH.map(|axis| self.offset(axis) - axis.of(self.scroll));
+        renderer.draw(
+            context,
+            frame,
+            (
+                origin[0] as f32,
+                origin[1] as f32,
+                width as f32,
+                height as f32,
+            ),
+        );
+    }
+
     /// Whether there is a crop rectangle or selection to draw.
     #[cfg(windows)]
     pub(crate) const fn has_marks(&self) -> bool {
@@ -662,6 +690,56 @@ mod tests {
     use imageview_core::decode_media;
 
     use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    fn display_pixels_stay_sharp_when_zoomed_and_scrolled() {
+        use bcanvas::OffscreenCanvas;
+        use imageview_core::Frame;
+        use std::sync::Arc;
+
+        let media = Media::Raster(Raster {
+            width: 2,
+            height: 1,
+            frames: vec![Frame {
+                pixels: Arc::from([0, 0, 0, 255, 255, 255, 255, 255]),
+                delay: Duration::ZERO,
+            }],
+            loop_count: LoopCount::Finite(1),
+        });
+        let mut viewport = Viewport::new(Some(media), (4.0, 2.0));
+        viewport.follow((4.0, 2.0), 4.0, (2.0, 0.0));
+        assert!(viewport.has_pixels(1.0));
+        let mut canvas = OffscreenCanvas::new(4, 2);
+        canvas.draw(|context| viewport.paint_pixels(context));
+        for row in canvas.pixels().chunks(4 * 4) {
+            assert_eq!(
+                row.chunks(4).map(|pixel| pixel[0]).collect::<Vec<_>>(),
+                [0, 0, 255, 255]
+            );
+        }
+        for scale in [1.25, 1.5, 1.75, 2.625] {
+            let mut canvas = OffscreenCanvas::with_scale_factor(4, 2, scale);
+            canvas.draw(|context| viewport.paint_pixels(context));
+            assert!(
+                canvas.pixels().chunks_exact(4).all(|pixel| {
+                    (pixel[0] == 0 || pixel[0] == 255)
+                        && pixel[0] == pixel[1]
+                        && pixel[1] == pixel[2]
+                        && pixel[3] == 255
+                }),
+                "pixels must stay sharp at display scale {scale}"
+            );
+        }
+        viewport.follow((4.0, 2.0), 1.0, (0.0, 0.0));
+        assert!(!viewport.has_pixels(1.0));
+        assert!(viewport.has_pixels(2.0));
+        let vector =
+            decode_media(br#"<svg xmlns="http://www.w3.org/2000/svg" width="2" height="1"/>"#)
+                .unwrap();
+        viewport.set_media(vector, false);
+        assert!(!viewport.has_pixels(2.0));
+    }
 
     // An animation of 100x100 pixels.
     fn media() -> Media {

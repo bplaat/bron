@@ -98,6 +98,9 @@ struct State {
     // Whether the first media is decoded.
     loaded: Cell<bool>,
     bitmap: RefCell<Option<Bitmap>>,
+    // Enlarged raster pixels at display resolution, bypassing XAML's linear scaling.
+    pixels: RefCell<Option<Bitmap>>,
+    pixel_canvas: RefCell<Option<OffscreenCanvas>>,
     // The bitmap of the crop rectangle or selection over the visible area.
     overlay: RefCell<Option<Bitmap>>,
     // The controls of the open edit tool.
@@ -138,6 +141,8 @@ impl MediaView {
             viewport: RefCell::new(Viewport::new(media, (1.0, 1.0))),
             loaded: Cell::new(!loading),
             bitmap: RefCell::new(None),
+            pixels: RefCell::new(None),
+            pixel_canvas: RefCell::new(None),
             overlay: RefCell::new(None),
             tool: RefCell::new(None),
             checkerboard: RefCell::new(None),
@@ -766,6 +771,7 @@ impl State {
     // Draws the crop rectangle or selection over the visible area, or hides the overlay.
     fn draw_marks(&self) {
         self.follow();
+        self.draw_pixels();
         let island = self.island.borrow();
         let Some(island) = island.as_ref() else {
             return;
@@ -791,6 +797,64 @@ impl State {
         };
         bitmap.write_rgba(canvas.pixels());
         island.set_overlay(Some((bitmap, (f64::from(logical.0), f64::from(logical.1)))));
+    }
+
+    fn draw_pixels(&self) {
+        let island = self.island.borrow();
+        let Some(island) = island.as_ref() else {
+            return;
+        };
+        let (width, height) = self.visible();
+        let scale = self.scale() as f32;
+        let mut pixels = self.pixels.borrow_mut();
+        let mut pixel_canvas = self.pixel_canvas.borrow_mut();
+        if !self.loaded.get() || !self.viewport.borrow().has_pixels(scale) {
+            if pixels.take().is_some() {
+                island.set_pixels(None);
+            }
+            pixel_canvas.take();
+            return;
+        }
+        let logical = (width.ceil().max(1.0) as u32, height.ceil().max(1.0) as u32);
+        if pixel_canvas.as_ref().is_none_or(|canvas| {
+            canvas.logical_width() != logical.0 as f32
+                || canvas.logical_height() != logical.1 as f32
+                || canvas.scale_factor() != scale
+        }) {
+            *pixel_canvas = Some(OffscreenCanvas::with_scale_factor(
+                logical.0, logical.1, scale,
+            ));
+        }
+        let canvas = pixel_canvas.as_mut().expect("pixel canvas initialized");
+        canvas.draw(|context| {
+            // Reused canvases must also erase pixels where the image became transparent or
+            // moved away. Include the last physical pixel at fractional display scales.
+            context.clear_rect(
+                0.0,
+                0.0,
+                width.ceil() as f32 + 1.0,
+                height.ceil() as f32 + 1.0,
+            );
+            self.viewport.borrow().paint_pixels(context);
+        });
+        let size = (canvas.width(), canvas.height());
+        if pixels.as_ref().is_none_or(|bitmap| bitmap.size() != size) {
+            *pixels = Bitmap::new(size.0, size.1);
+        }
+        let Some(bitmap) = pixels.as_ref() else {
+            island.set_pixels(None);
+            return;
+        };
+        bitmap.write_rgba(canvas.pixels());
+        // The canvas rounds its native dimensions up. Using the original logical dimensions
+        // here would shrink it by a fraction of a pixel and reintroduce linear filtering.
+        island.set_pixels(Some((
+            bitmap,
+            (
+                f64::from(size.0) / f64::from(scale),
+                f64::from(size.1) / f64::from(scale),
+            ),
+        )));
     }
 
     // The pixel size of the bitmap of media: raster media at its own size, vector media at the
@@ -849,6 +913,10 @@ impl State {
         if fresh && let Some(island) = self.island.borrow().as_ref() {
             island.set_media(target, viewport.media().size());
         }
+        drop(bitmap);
+        drop(viewport);
+        self.follow();
+        self.draw_pixels();
     }
 
     // Draws the checkerboard behind the media when the view outgrew it or the theme changed.
@@ -1247,6 +1315,18 @@ mod tests {
             .as_ref()
             .unwrap()
             .set_editing(false);
+        // The display-sized layer is used for enlarged rasters and released when zoomed out.
+        assert!(app.windows[0].view.state.pixels.borrow().is_some());
+        app.windows[0].view.actual_size();
+        layout_frames();
+        if app.windows[0].view.state.scale() < 2.0 {
+            assert!(app.windows[0].view.state.pixels.borrow().is_none());
+            assert!(app.windows[0].view.state.pixel_canvas.borrow().is_none());
+        }
+        app.windows[0].view.zoom_by(4.0);
+        layout_frames();
+        assert!(app.windows[0].view.state.pixels.borrow().is_some());
+        assert!(app.windows[0].view.state.pixel_canvas.borrow().is_some());
         let answer = Rc::new(Cell::new(-1i32));
         let output = answer.clone();
         let dialog = app.windows[0]

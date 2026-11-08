@@ -1086,7 +1086,7 @@ pub(crate) struct PlatformImage {
     pub(crate) width: u32,
     pub(crate) height: u32,
     pixels: Arc<[u8]>,
-    bitmap: RefCell<Option<(*mut c_void, ComPtr<ID2D1Bitmap>)>>,
+    bitmap: RefCell<Option<(ComPtr<ID2D1RenderTarget>, ComPtr<ID2D1Bitmap>)>>,
 }
 
 impl PlatformImage {
@@ -1100,10 +1100,9 @@ impl PlatformImage {
     }
 
     fn bitmap(&self, target: &ComPtr<ID2D1RenderTarget>) -> Option<ComPtr<ID2D1Bitmap>> {
-        let key = target.as_ptr().cast::<c_void>();
         let mut cache = self.bitmap.borrow_mut();
         if let Some((cached, bitmap)) = &*cache
-            && *cached == key
+            && cached.as_ptr() == target.as_ptr()
         {
             return Some(bitmap.clone());
         }
@@ -1126,7 +1125,9 @@ impl PlatformImage {
             )
         }
         .ok()?;
-        *cache = Some((key, bitmap.clone()));
+        // Keep the target alive with its bitmap. Otherwise a later target can reuse its
+        // address and incorrectly retrieve a bitmap from a different resource domain.
+        *cache = Some((target.clone(), bitmap.clone()));
         Some(bitmap)
     }
 }

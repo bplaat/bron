@@ -470,6 +470,29 @@ mod tests {
     }
 
     #[test]
+    fn images_survive_replacing_offscreen_targets() {
+        let image = super::CanvasImage::from_premultiplied_bgra(
+            1,
+            1,
+            std::sync::Arc::from([0, 0, 255, 255]),
+        );
+        // Reuse an image while destroying and recreating its render target, as during resize.
+        for width in (1..=32).chain((1..=32).rev()) {
+            let mut canvas = super::OffscreenCanvas::new(width, 2);
+            canvas.draw(|ctx| {
+                ctx.set_image_smoothing_enabled(false);
+                ctx.draw_image(&image, 0.0, 0.0, width as f32, 2.0);
+            });
+            assert!(
+                canvas
+                    .pixels()
+                    .chunks_exact(4)
+                    .all(|pixel| pixel == [255, 0, 0, 255])
+            );
+        }
+    }
+
+    #[test]
     fn text_is_painted_with_gradients() {
         let mut canvas = super::OffscreenCanvas::new(60, 30);
         canvas.draw(|ctx| {

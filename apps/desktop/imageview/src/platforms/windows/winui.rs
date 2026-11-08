@@ -607,6 +607,7 @@ pub(crate) struct Island {
     scroller: ComPtr,
     media: ComPtr,
     checkerboard: ComPtr,
+    pixels: ComPtr,
     overlay: ComPtr,
     tool: ComPtr,
     spinner: ComPtr,
@@ -1079,6 +1080,7 @@ impl Island {
         let checkerboard =
             find(w!("Checkerboard"), &IID_IIMAGE).map_err(failed("window content"))?;
         let overlay = find(w!("Overlay"), &IID_IIMAGE).map_err(failed("window content"))?;
+        let pixels = find(w!("Pixels"), &IID_IIMAGE).map_err(failed("window content"))?;
         let tool = find(w!("Tool"), &IID_IBORDER).map_err(failed("window content"))?;
         let panels = [
             (w!("PagesPanel"), w!("PagesHost"), w!("SidebarButton")),
@@ -1338,6 +1340,7 @@ impl Island {
             scroller,
             media,
             checkerboard,
+            pixels,
             overlay,
             tool,
             spinner,
@@ -1481,6 +1484,24 @@ impl Island {
             bitmap,
             (size.0 * CONTENT_SCALE, size.1 * CONTENT_SCALE),
         );
+    }
+
+    /// Uses display-sized raster pixels instead of the image scaled by the scroll viewer.
+    pub(crate) fn set_pixels(&self, pixels: Option<(&Bitmap, (f64, f64))>) {
+        if let Some((bitmap, size)) = pixels {
+            set_image(&self.pixels, bitmap, size);
+        } else {
+            // SAFETY: Slot 7 of IImage is put_Source; null releases the bitmap.
+            _ = unsafe { self.pixels.put(7, null_mut()) };
+        }
+        set_visible(&self.pixels, pixels.is_some());
+        // Keep the media in layout for scrolling and pointer input.
+        let element = self
+            .media
+            .cast(&IID_IUI_ELEMENT)
+            .expect("image is a UI element");
+        // SAFETY: Slot 10 of IUIElement is put_Opacity.
+        unsafe { call!(element, 10, if pixels.is_some() { 0.0 } else { 1.0 } => f64) };
     }
 
     /// Shows the edit controls in the header bar, or the view controls.

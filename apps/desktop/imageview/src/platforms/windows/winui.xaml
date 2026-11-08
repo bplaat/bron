@@ -426,6 +426,16 @@
         </Border>
         <Grid Grid.Column="1">
             <Image x:Name="Checkerboard" Stretch="Fill" HorizontalAlignment="Center" VerticalAlignment="Center" />
+            <!-- Enlarged raster pixels drawn at display resolution, below the scroll bars. -->
+            <Image
+                x:Name="Pixels"
+                UseLayoutRounding="False"
+                Stretch="Fill"
+                HorizontalAlignment="Left"
+                VerticalAlignment="Top"
+                IsHitTestVisible="False"
+                Visibility="Collapsed"
+            />
             <ScrollViewer
                 x:Name="Scroller"
                 UseLayoutRounding="False"
