@@ -6,8 +6,9 @@
 
 //! Compiles the triangle shader for the selected native backend.
 
-fn main() -> bwebgpu_shader_build::Result<()> {
+fn main() {
     bwebgpu_shader_build::Builder::new()
         .shader("triangle.wgsl", "src/triangle.wgsl")
         .compile()
+        .expect("failed to compile shaders");
 }

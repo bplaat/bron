@@ -3,12 +3,13 @@
 
 //! Compiles the native game shader.
 
-fn main() -> bwebgpu_shader_build::Result<()> {
+fn main() {
     println!("cargo:rerun-if-env-changed=CARGO_BUNDLE");
 
     bwebgpu_shader_build::Builder::new()
         .shader("scene.wgsl", "src/scene.wgsl")
-        .compile()?;
+        .compile()
+        .expect("failed to compile shaders");
 
     if std::env::var("CARGO_CFG_TARGET_OS").expect("CARGO_CFG_TARGET_OS not set") == "macos"
         && std::env::var_os("CARGO_BUNDLE").is_none()
@@ -28,6 +29,4 @@ fn main() -> bwebgpu_shader_build::Result<()> {
         )
         .expect("failed to compile Windows resources");
     }
-
-    Ok(())
 }

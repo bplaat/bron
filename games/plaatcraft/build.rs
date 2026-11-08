@@ -6,7 +6,7 @@
 
 #![doc = include_str!("README.md")]
 
-fn main() -> bwebgpu_shader_build::Result<()> {
+fn main() {
     println!("cargo:rerun-if-env-changed=CARGO_BUNDLE");
 
     println!("cargo:rerun-if-changed=assets");
@@ -21,7 +21,8 @@ fn main() -> bwebgpu_shader_build::Result<()> {
         .shader("player.wgsl", "src/shaders/player.wgsl")
         .shader("held.wgsl", "src/shaders/held.wgsl")
         .shader("hud.wgsl", "src/shaders/hud.wgsl")
-        .compile()?;
+        .compile()
+        .expect("failed to compile shaders");
 
     if std::env::var("CARGO_CFG_TARGET_OS").expect("CARGO_CFG_TARGET_OS not set") == "macos"
         && std::env::var_os("CARGO_BUNDLE").is_none()
@@ -39,6 +40,4 @@ fn main() -> bwebgpu_shader_build::Result<()> {
         )
         .expect("failed to compile Windows resources");
     }
-
-    Ok(())
 }

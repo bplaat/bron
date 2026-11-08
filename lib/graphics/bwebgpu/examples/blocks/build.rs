@@ -6,10 +6,11 @@
 
 //! Compiles the shaders.
 
-fn main() -> bwebgpu_shader_build::Result<()> {
+fn main() {
     bwebgpu_shader_build::Builder::new()
         .shader("blocks.wgsl", "src/blocks.wgsl")
         .shader("sky.wgsl", "src/sky.wgsl")
         .shader("overlay.wgsl", "src/overlay.wgsl")
         .compile()
+        .expect("failed to compile shaders");
 }

@@ -6,9 +6,10 @@
 
 //! Compiles the cube shader for the selected native backend.
 
-fn main() -> bwebgpu_shader_build::Result<()> {
+fn main() {
     bwebgpu_shader_build::Builder::new()
         .shader("mesh.wgsl", "src/mesh.wgsl")
         .shader("overlay.wgsl", "src/overlay.wgsl")
         .compile()
+        .expect("failed to compile shaders");
 }
