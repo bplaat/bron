@@ -1562,11 +1562,26 @@ fn crunch_streams(png: &[u8]) -> core::result::Result<Vec<u8>, EncodeError> {
     }
 }
 
+struct EncodeFrame<'a> {
+    bitmap: &'a Bitmap,
+    delay: Duration,
+}
+
 fn encode_smallest(
     bitmap: &Bitmap,
     animation: Option<(LoopCount, &[Frame])>,
     compression: Compression,
 ) -> core::result::Result<Vec<u8>, EncodeError> {
+    let frames: Vec<_> = animation
+        .map(|(_, frames)| frames)
+        .unwrap_or_default()
+        .iter()
+        .map(|frame| EncodeFrame {
+            bitmap: &frame.bitmap,
+            delay: frame.delay,
+        })
+        .collect();
+    let animation = animation.map(|(loop_count, _)| (loop_count, frames.as_slice()));
     let best = encode_layouts(bitmap, animation, compression)?;
     if compression != Compression::Max {
         return Ok(best);
@@ -1575,25 +1590,20 @@ fn encode_smallest(
         Some((loop_count, frames)) => {
             let cleared: Vec<_> = frames
                 .iter()
-                .map(|frame| clear_transparent(&frame.bitmap))
+                .map(|frame| clear_transparent(frame.bitmap))
                 .collect();
             if cleared.iter().all(Option::is_none) {
                 return Ok(best);
             }
             let frames: Vec<_> = frames
                 .iter()
-                .zip(cleared)
-                .map(|(frame, cleared)| {
-                    Frame::new(
-                        cleared.unwrap_or_else(|| Bitmap {
-                            data: frame.bitmap.data.clone(),
-                            ..frame.bitmap
-                        }),
-                        frame.delay,
-                    )
+                .zip(&cleared)
+                .map(|(frame, cleared)| EncodeFrame {
+                    bitmap: cleared.as_ref().unwrap_or(frame.bitmap),
+                    delay: frame.delay,
                 })
                 .collect();
-            encode_layouts(&frames[0].bitmap, Some((loop_count, &frames)), compression)?
+            encode_layouts(frames[0].bitmap, Some((loop_count, &frames)), compression)?
         }
         None => match clear_transparent(bitmap) {
             Some(cleared) => encode_layouts(&cleared, None, compression)?,
@@ -1624,11 +1634,11 @@ fn clear_transparent(bitmap: &Bitmap) -> Option<Bitmap> {
 
 fn encode_layouts(
     bitmap: &Bitmap,
-    animation: Option<(LoopCount, &[Frame])>,
+    animation: Option<(LoopCount, &[EncodeFrame<'_>])>,
     compression: Compression,
 ) -> core::result::Result<Vec<u8>, EncodeError> {
     let bitmaps: Vec<_> = match animation {
-        Some((_, frames)) => frames.iter().map(|frame| &frame.bitmap).collect(),
+        Some((_, frames)) => frames.iter().map(|frame| frame.bitmap).collect(),
         None => vec![bitmap],
     };
     if compression == Compression::None {
@@ -1666,7 +1676,7 @@ fn encode_layouts(
 
 fn encode_png_variant(
     bitmap: &Bitmap,
-    animation: Option<(LoopCount, &[Frame])>,
+    animation: Option<(LoopCount, &[EncodeFrame<'_>])>,
     compression: Compression,
     palette: Option<&[[u8; 4]]>,
     transparent_key: Option<[u8; 3]>,
@@ -1675,7 +1685,7 @@ fn encode_png_variant(
         PngColor::Indexed(png_palette_depth(palette.len()))
     } else if let Some((_, frames)) = animation {
         png_color(
-            frames.iter().map(|frame| &frame.bitmap),
+            frames.iter().map(|frame| frame.bitmap),
             transparent_key.is_some(),
         )
     } else {
@@ -1739,8 +1749,8 @@ fn encode_png_variant(
                 u16::try_from(1_000_000_000 / divisor).map_err(|_| EncodeError::InvalidTiming)?;
             let region = if i != 0 && compression != Compression::None {
                 Some(super::encoder::crop_changed(
-                    &frames[i - 1].bitmap,
-                    &frame.bitmap,
+                    frames[i - 1].bitmap,
+                    frame.bitmap,
                 )?)
             } else {
                 None
@@ -1748,15 +1758,15 @@ fn encode_png_variant(
             let (mut x, mut y, mut frame_bitmap) = if let Some((x, y, bitmap)) = &region {
                 (*x, *y, bitmap)
             } else {
-                (0, 0, &frame.bitmap)
+                (0, 0, frame.bitmap)
             };
             let mut compressed =
                 compressed_frame(frame_bitmap, color, palette_lookup.as_ref(), compression)?;
             if region.is_some() && compression == Compression::Max {
                 let full =
-                    compressed_frame(&frame.bitmap, color, palette_lookup.as_ref(), compression)?;
+                    compressed_frame(frame.bitmap, color, palette_lookup.as_ref(), compression)?;
                 if full.len() < compressed.len() {
-                    (x, y, frame_bitmap) = (0, 0, &frame.bitmap);
+                    (x, y, frame_bitmap) = (0, 0, frame.bitmap);
                     compressed = full;
                 }
             }
@@ -1965,7 +1975,13 @@ mod tests {
         ];
         let encoded = encode_png_variant(
             &frames[0].bitmap,
-            Some((LoopCount::Infinite, &frames)),
+            Some((
+                LoopCount::Infinite,
+                &frames.each_ref().map(|frame| EncodeFrame {
+                    bitmap: &frame.bitmap,
+                    delay: frame.delay,
+                }),
+            )),
             Compression::Max,
             None,
             Some([0, 0, 0]),
@@ -2499,6 +2515,45 @@ mod tests {
     }
 
     #[cfg(feature = "png")]
+    #[test]
+    fn max_apng_preserves_mixed_transparent_and_opaque_frames() {
+        let frames = [
+            Frame::new(
+                Bitmap::new(8, 8, [80, 90, 100, 0].repeat(64)).unwrap(),
+                Duration::from_millis(50),
+            ),
+            Frame::new(
+                Bitmap::new(8, 8, [10, 20, 30, 255].repeat(64)).unwrap(),
+                Duration::from_millis(100),
+            ),
+            Frame::new(
+                Bitmap::new(8, 8, [10, 20, 30, 255].repeat(64)).unwrap(),
+                Duration::from_millis(150),
+            ),
+        ];
+        let encoded =
+            encode_animation_with_options(Format::Png, &frames, LoopCount::Infinite, smallest())
+                .unwrap();
+        let decoded = crate::decode(&encoded).unwrap();
+        assert_eq!(decoded.frames().len(), frames.len());
+        for (actual, expected) in decoded.frames().iter().zip(&frames) {
+            assert_eq!(actual.delay(), expected.delay());
+            for (actual, expected) in actual
+                .pixels()
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .zip(expected.pixels().as_chunks::<4>().0)
+            {
+                assert_eq!(actual[3], expected[3]);
+                if expected[3] != 0 {
+                    assert_eq!(actual, expected);
+                }
+            }
+        }
+        assert_eq!(frames[0].pixels(), [80, 90, 100, 0].repeat(64));
+    }
+
     #[test]
     fn max_png_clears_hidden_colors() {
         let mut pixels = Vec::new();
