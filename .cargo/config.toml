@@ -1,6 +1,10 @@
 [alias]
 xtask = "run --package xtask --"
 
+# Require SSE4.2 and POPCNT for Windows x86 builds, including dependencies.
+[target.'cfg(all(windows, any(target_arch = "x86", target_arch = "x86_64")))']
+rustflags = ["-Ctarget-feature=+sse4.2,+popcnt"]
+
 # Link the MSVC startup code and VC runtime statically, but use the dynamic
 # UCRT import library (`ucrt.lib`) because Windows 10+ provides the UCRT.
 [target.'cfg(all(windows, target_env = "msvc"))']
