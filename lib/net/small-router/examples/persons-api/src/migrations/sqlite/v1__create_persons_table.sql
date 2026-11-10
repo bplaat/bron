@@ -1,3 +1,4 @@
+-- Datetime columns store UTC Unix milliseconds.
 CREATE TABLE persons(
     id BLOB PRIMARY KEY,
     name TEXT NOT NULL,

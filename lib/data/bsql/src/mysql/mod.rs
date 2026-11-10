@@ -7,6 +7,9 @@
 use std::fmt::Write as _;
 use std::io::{self, Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
+#[cfg(unix)]
+use std::os::unix::net::UnixStream;
+use std::time::Duration;
 
 #[cfg(feature = "mysql-tls")]
 use native_tls::{HandshakeError, TlsConnector};
@@ -15,7 +18,7 @@ use sha1::Sha1;
 use sha2::Sha256;
 
 pub use crate::mysql::connection::MysqlTransport;
-pub(crate) use crate::mysql::connection::{Client, MysqlOptions, OpenedStream, Stream};
+pub(crate) use crate::mysql::connection::{Client, MysqlOptions, Stream};
 pub(crate) use crate::mysql::statement::{Column, Prepared};
 use crate::mysql::utils::*;
 use crate::{StatementError, Value};
@@ -62,14 +65,19 @@ const BINARY_CHARSET: u16 = 63;
 const MAX_PACKET_PAYLOAD: usize = 0x00ff_ffff;
 
 const COM_QUERY: u8 = 0x03;
+const COM_PING: u8 = 0x0e;
 const COM_STMT_PREPARE: u8 = 0x16;
 const COM_STMT_EXECUTE: u8 = 0x17;
 const COM_STMT_CLOSE: u8 = 0x19;
-const COM_STMT_RESET: u8 = 0x1a;
 
 impl Client {
     pub(crate) fn connect(options: &MysqlOptions) -> Result<Self, String> {
-        let (mut stream, tls_host, secure) = open_stream(options)?;
+        let OpenedStream {
+            mut stream,
+            socket,
+            tls_host,
+            secure,
+        } = open_stream(options).map_err(|error| error.to_string())?;
         let mut sequence = 0;
         let handshake_packet =
             read_packet(&mut *stream, &mut sequence).map_err(|error| error.to_string())?;
@@ -86,7 +94,7 @@ impl Client {
             | Capabilities::PLUGIN_AUTH
             | Capabilities::PLUGIN_AUTH_LENENC_CLIENT_DATA
             | Capabilities::DEPRECATE_EOF;
-        let wants_tls = cfg!(feature = "mysql-tls") && tls_host.is_some() && options.tls;
+        let wants_tls = cfg!(feature = "mysql-tls") && tls_host.is_some();
         if wants_tls && !handshake.capabilities.contains(Capabilities::SSL) {
             return Err("MySQL server does not support TLS".to_string());
         }
@@ -131,14 +139,30 @@ impl Client {
             secure || wants_tls,
             plugin,
         )?;
+        // The timeout only guards connecting; queries may legitimately run longer.
+        socket
+            .set_timeouts(None)
+            .map_err(|error| error.to_string())?;
 
-        Ok(Self {
+        let mut client = Self {
             stream,
             affected_rows: 0,
             last_insert_id: 0,
             capabilities,
             in_transaction: false,
-        })
+        };
+        // Temporal text values are exchanged in UTC, matching the chrono conversions.
+        client
+            .execute_script("SET time_zone = '+00:00'")
+            .map_err(|error| error.msg)?;
+        Ok(client)
+    }
+
+    pub(crate) fn ping(&mut self) -> Result<(), StatementError> {
+        let mut sequence = 0;
+        write_packet(&mut *self.stream, &mut sequence, &[COM_PING]).map_err(statement_io)?;
+        let packet = read_packet(&mut *self.stream, &mut sequence).map_err(statement_io)?;
+        parse_ok(&packet).map(|_| ())
     }
 
     pub(crate) fn execute_script(&mut self, sql: &str) -> Result<(), StatementError> {
@@ -236,7 +260,11 @@ impl Client {
             parse_result_terminator(&packet, false)?;
         }
         if parameter_names.len() != parameter_count {
-            return Err(protocol_error("prepared parameter count mismatch"));
+            self.close(id)?;
+            return Err(StatementError::new(format!(
+                "found {} parameters but MySQL expects {parameter_count} in statement '{query}'",
+                parameter_names.len()
+            )));
         }
         Ok(Prepared {
             id,
@@ -342,24 +370,6 @@ impl Client {
         Ok(())
     }
 
-    pub(crate) fn reset(&mut self, statement: &mut Prepared) -> Result<(), StatementError> {
-        let mut payload = Vec::with_capacity(5);
-        payload.push(COM_STMT_RESET);
-        payload.extend_from_slice(&statement.id.to_le_bytes());
-        let mut sequence = 0;
-        write_packet(&mut *self.stream, &mut sequence, &payload).map_err(statement_io)?;
-        let packet = read_packet(&mut *self.stream, &mut sequence).map_err(statement_io)?;
-        if packet.first() == Some(&0xff) {
-            return Err(server_error(&packet));
-        }
-        parse_ok(&packet)?;
-        statement.rows.clear();
-        statement.row_index = 0;
-        statement.current_row = None;
-        statement.executed = false;
-        Ok(())
-    }
-
     pub(crate) fn close(&mut self, statement_id: u32) -> Result<(), StatementError> {
         let mut payload = Vec::with_capacity(5);
         payload.push(COM_STMT_CLOSE);
@@ -373,37 +383,74 @@ impl Client {
     }
 }
 
-fn open_stream(options: &MysqlOptions) -> Result<OpenedStream, String> {
-    match &options.transport {
-        MysqlTransport::Tcp { host, port, tls: _ } => {
-            let address = (host.as_str(), *port)
-                .to_socket_addrs()
-                .map_err(|error| error.to_string())?
-                .next()
-                .ok_or_else(|| format!("could not resolve MySQL host '{host}'"))?;
-            let stream = TcpStream::connect_timeout(&address, options.timeout)
-                .map_err(|error| error.to_string())?;
-            stream
-                .set_read_timeout(Some(options.timeout))
-                .map_err(|error| error.to_string())?;
-            stream
-                .set_write_timeout(Some(options.timeout))
-                .map_err(|error| error.to_string())?;
-            Ok((Box::new(stream), Some(host.clone()), false))
+struct OpenedStream {
+    stream: Box<dyn Stream>,
+    socket: Socket,
+    tls_host: Option<String>,
+    secure: bool,
+}
+
+enum Socket {
+    Tcp(TcpStream),
+    #[cfg(unix)]
+    Unix(UnixStream),
+}
+
+impl Socket {
+    fn set_timeouts(&self, timeout: Option<Duration>) -> io::Result<()> {
+        match self {
+            Self::Tcp(stream) => {
+                stream.set_read_timeout(timeout)?;
+                stream.set_write_timeout(timeout)
+            }
+            #[cfg(unix)]
+            Self::Unix(stream) => {
+                stream.set_read_timeout(timeout)?;
+                stream.set_write_timeout(timeout)
+            }
+        }
+    }
+}
+
+fn open_stream(options: &MysqlOptions) -> io::Result<OpenedStream> {
+    let (stream, socket, tls_host, secure): (Box<dyn Stream>, _, _, _) = match &options.transport {
+        MysqlTransport::Tcp { host, port, tls } => {
+            let stream = connect_tcp(host, *port, options.timeout)?;
+            stream.set_nodelay(true)?;
+            let socket = Socket::Tcp(stream.try_clone()?);
+            (Box::new(stream), socket, tls.then(|| host.clone()), false)
         }
         #[cfg(unix)]
         MysqlTransport::Unix { path } => {
-            use std::os::unix::net::UnixStream;
-            let stream = UnixStream::connect(path).map_err(|error| error.to_string())?;
-            stream
-                .set_read_timeout(Some(options.timeout))
-                .map_err(|error| error.to_string())?;
-            stream
-                .set_write_timeout(Some(options.timeout))
-                .map_err(|error| error.to_string())?;
-            Ok((Box::new(stream), None, true))
+            let stream = UnixStream::connect(path)?;
+            let socket = Socket::Unix(stream.try_clone()?);
+            (Box::new(stream), socket, None, true)
+        }
+    };
+    socket.set_timeouts(Some(options.timeout))?;
+    Ok(OpenedStream {
+        stream,
+        socket,
+        tls_host,
+        secure,
+    })
+}
+
+fn connect_tcp(host: &str, port: u16, timeout: Duration) -> io::Result<TcpStream> {
+    // Try every resolved address, e.g. both ::1 and 127.0.0.1 for localhost.
+    let mut last_error = None;
+    for address in (host, port).to_socket_addrs()? {
+        match TcpStream::connect_timeout(&address, timeout) {
+            Ok(stream) => return Ok(stream),
+            Err(error) => last_error = Some(error),
         }
     }
+    Err(last_error.unwrap_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("could not resolve MySQL host '{host}'"),
+        )
+    }))
 }
 
 struct Handshake {
@@ -644,7 +691,12 @@ fn rewrite_named_parameters(query: &str) -> Result<(String, Vec<Option<String>>)
                         && bytes.get(index + 2).is_none_or(u8::is_ascii_whitespace))
                 {
                     state = State::LineComment;
-                } else if byte == b'/' && bytes.get(index + 1) == Some(&b'*') {
+                } else if byte == b'/'
+                    && bytes.get(index + 1) == Some(&b'*')
+                    // Executable comments (/*! ... */, MariaDB /*M! ... */) are SQL.
+                    && !bytes[index + 2..].starts_with(b"!")
+                    && !bytes[index + 2..].starts_with(b"M!")
+                {
                     state = State::BlockComment;
                 } else if byte == b'?' {
                     names.push(None);
@@ -726,6 +778,10 @@ const fn parameter_type(value: &Value) -> u8 {
         Value::Float(_) => 5,
         Value::Text(_) => 253,
         Value::Blob(_) => 252,
+        #[cfg(feature = "chrono")]
+        Value::Date(_) => 10,
+        #[cfg(feature = "chrono")]
+        Value::DateTime(_) => 12,
     }
 }
 
@@ -736,7 +792,40 @@ fn encode_parameter(output: &mut Vec<u8>, value: &Value) -> Result<(), Statement
         Value::Float(value) => output.extend_from_slice(&value.to_le_bytes()),
         Value::Text(value) => put_lenenc_bytes(output, value.as_bytes()),
         Value::Blob(value) => put_lenenc_bytes(output, value),
+        #[cfg(feature = "chrono")]
+        Value::Date(value) => {
+            output.push(4);
+            encode_date(output, *value)?;
+        }
+        #[cfg(feature = "chrono")]
+        Value::DateTime(value) => {
+            let datetime = value.naive_utc();
+            let micros = value.timestamp_subsec_micros();
+            output.push(if micros == 0 { 7 } else { 11 });
+            encode_date(output, datetime.date())?;
+            output.extend_from_slice(&[
+                datetime.hour() as u8,
+                datetime.minute() as u8,
+                datetime.second() as u8,
+            ]);
+            if micros != 0 {
+                output.extend_from_slice(&micros.to_le_bytes());
+            }
+        }
     }
+    Ok(())
+}
+
+#[cfg(feature = "chrono")]
+fn encode_date(output: &mut Vec<u8>, date: chrono::NaiveDate) -> Result<(), StatementError> {
+    let year = date.year();
+    if !(1000..=9999).contains(&year) {
+        return Err(protocol_error(
+            "date is outside MySQL's supported range (1000..=9999)",
+        ));
+    }
+    output.extend_from_slice(&(year as u16).to_le_bytes());
+    output.extend_from_slice(&[date.month() as u8, date.day() as u8]);
     Ok(())
 }
 
@@ -760,13 +849,15 @@ fn parse_column(packet: &[u8]) -> Result<Column, StatementError> {
     reader.u32()?;
     let type_code = reader.u8()?;
     let flags = ColumnFlags::from_bits_retain(reader.u16()?);
-    reader.skip(fixed_len - 9)?;
+    let decimals = reader.u8()?;
+    reader.skip(fixed_len - 10)?;
     Ok(Column {
         name,
         table,
         origin_name,
         type_code,
         flags,
+        decimals,
         charset,
     })
 }
@@ -798,7 +889,14 @@ fn decode_binary_value(reader: &mut Reader<'_>, column: &Column) -> Result<Value
         2 | 13 => integer_value(reader.u16()? as u64, unsigned, 16),
         3 | 9 => integer_value(reader.u32()? as u64, unsigned, 32),
         8 => integer_value(reader.u64()?, unsigned, 64),
-        4 => Ok(Value::Float(reader.f32()? as f64)),
+        // Widen via the shortest decimal form so FLOAT 1.1 reads as 1.1, not 1.100000023841858.
+        4 => Ok(Value::Float(
+            reader
+                .f32()?
+                .to_string()
+                .parse()
+                .expect("f32 display is a valid f64"),
+        )),
         5 => Ok(Value::Float(reader.f64()?)),
         0 | 246 => Ok(Value::Text(
             String::from_utf8(reader.lenenc_bytes()?.to_vec())
@@ -819,9 +917,12 @@ fn decode_binary_value(reader: &mut Reader<'_>, column: &Column) -> Result<Value
             }
         }
         16 | 255 => Ok(Value::Blob(reader.lenenc_bytes()?.to_vec())),
-        10 => Ok(Value::Text(decode_date(reader)?)),
-        7 | 12 | 17 | 18 => Ok(Value::Text(decode_date_time(reader)?)),
-        11 | 19 => Ok(Value::Text(decode_time(reader)?)),
+        10 => Ok(temporal_value(decode_date_time(reader, None)?, true)),
+        7 | 12 | 17 | 18 => Ok(temporal_value(
+            decode_date_time(reader, Some(column.decimals))?,
+            false,
+        )),
+        11 | 19 => Ok(Value::Text(decode_time(reader, column.decimals)?)),
         6 => Ok(Value::Null),
         code => Err(protocol_error(format!(
             "unsupported MySQL binary column type {code}"
@@ -845,67 +946,95 @@ fn integer_value(raw: u64, unsigned: bool, bits: u32) -> Result<Value, Statement
     Ok(Value::Integer(signed))
 }
 
-fn decode_date_time(reader: &mut Reader<'_>) -> Result<String, StatementError> {
-    let length = reader.u8()? as usize;
-    if length == 0 {
-        return Ok("0000-00-00 00:00:00".to_string());
+fn temporal_value(text: String, date: bool) -> Value {
+    #[cfg(feature = "chrono")]
+    {
+        if date {
+            if let Ok(value) = text.parse::<chrono::NaiveDate>() {
+                return Value::Date(value);
+            }
+        } else if let Ok(value) = text.parse::<chrono::NaiveDateTime>() {
+            return Value::DateTime(value.and_utc());
+        }
     }
-    if !matches!(length, 4 | 7 | 11) {
+    #[cfg(not(feature = "chrono"))]
+    let _ = date;
+    // Keep zero/incomplete MySQL dates inspectable; typed conversions reject them.
+    Value::Text(text)
+}
+
+/// Decode a DATE (`decimals` is `None`) or a DATETIME/TIMESTAMP value.
+fn decode_date_time(
+    reader: &mut Reader<'_>,
+    decimals: Option<u8>,
+) -> Result<String, StatementError> {
+    // The server omits trailing zero parts, e.g. sends only the date for midnight.
+    let length = reader.u8()?;
+    if !matches!(length, 0 | 4 | 7 | 11) || (decimals.is_none() && length > 4) {
         return Err(protocol_error("invalid MySQL date/time length"));
     }
-    let year = reader.u16()?;
-    let month = reader.u8()?;
-    let day = reader.u8()?;
-    if length == 4 {
-        return Ok(format!("{year:04}-{month:02}-{day:02}"));
+    let (year, month, day) = if length >= 4 {
+        (reader.u16()?, reader.u8()?, reader.u8()?)
+    } else {
+        (0, 0, 0)
+    };
+    let mut value = format!("{year:04}-{month:02}-{day:02}");
+    let Some(decimals) = decimals else {
+        return Ok(value);
+    };
+    let (hour, minute, second) = if length >= 7 {
+        (reader.u8()?, reader.u8()?, reader.u8()?)
+    } else {
+        (0, 0, 0)
+    };
+    write!(value, " {hour:02}:{minute:02}:{second:02}").expect("writing to a string cannot fail");
+    let microseconds = if length == 11 { reader.u32()? } else { 0 };
+    if microseconds >= 1_000_000 {
+        return Err(protocol_error("invalid MySQL microseconds"));
     }
-    let hour = reader.u8()?;
-    let minute = reader.u8()?;
-    let second = reader.u8()?;
-    let mut value = format!("{year:04}-{month:02}-{day:02} {hour:02}:{minute:02}:{second:02}");
-    if length == 11 {
-        let microseconds = reader.u32()?;
-        write!(value, ".{microseconds:06}").expect("writing to a string cannot fail");
-    }
+    write_fraction(&mut value, microseconds, decimals);
     Ok(value)
 }
 
-fn decode_date(reader: &mut Reader<'_>) -> Result<String, StatementError> {
-    let length = reader.u8()?;
-    if length == 0 {
-        return Ok("0000-00-00".to_string());
-    }
-    if length != 4 {
-        return Err(protocol_error("invalid MySQL date length"));
-    }
-    let year = reader.u16()?;
-    let month = reader.u8()?;
-    let day = reader.u8()?;
-    Ok(format!("{year:04}-{month:02}-{day:02}"))
-}
-
-fn decode_time(reader: &mut Reader<'_>) -> Result<String, StatementError> {
+fn decode_time(reader: &mut Reader<'_>, decimals: u8) -> Result<String, StatementError> {
     let length = reader.u8()? as usize;
-    if length == 0 {
-        return Ok("00:00:00".to_string());
-    }
-    if !matches!(length, 8 | 12) {
+    if !matches!(length, 0 | 8 | 12) {
         return Err(protocol_error("invalid MySQL time length"));
     }
-    let negative = reader.u8()? != 0;
-    let days = reader.u32()?;
-    let hours = days as u64 * 24 + reader.u8()? as u64;
-    let minute = reader.u8()?;
-    let second = reader.u8()?;
+    let (negative, hours, minute, second) = if length >= 8 {
+        let negative = reader.u8()? != 0;
+        let days = reader.u32()?;
+        let hours = days as u64 * 24 + reader.u8()? as u64;
+        (negative, hours, reader.u8()?, reader.u8()?)
+    } else {
+        (false, 0, 0, 0)
+    };
     let mut value = format!(
         "{}{hours:02}:{minute:02}:{second:02}",
         if negative { "-" } else { "" }
     );
-    if length == 12 {
-        let microseconds = reader.u32()?;
-        write!(value, ".{microseconds:06}").expect("writing to a string cannot fail");
+    let microseconds = if length == 12 { reader.u32()? } else { 0 };
+    if microseconds >= 1_000_000 {
+        return Err(protocol_error("invalid MySQL microseconds"));
     }
+    write_fraction(&mut value, microseconds, decimals);
     Ok(value)
+}
+
+/// Append fractional seconds like the server's text format: exactly `decimals` digits for
+/// TIME(n)/DATETIME(n)/TIMESTAMP(n), or all six when the precision is unknown (0x1f).
+fn write_fraction(value: &mut String, microseconds: u32, decimals: u8) {
+    let digits = match decimals {
+        1..=6 => decimals as usize,
+        0 => 0,
+        _ if microseconds != 0 => 6,
+        _ => 0,
+    };
+    if digits > 0 {
+        let fraction = format!("{microseconds:06}");
+        value.push('.');
+        value.push_str(&fraction[..digits]);
+    }
 }
 
 const fn mysql_type_name(code: u8, charset: u16) -> &'static str {
@@ -1238,7 +1367,7 @@ mod tests {
 
         let mut connection = InnerConnection::Mysql(Client {
             stream: Box::new(TestStream {
-                input: io::Cursor::new(ok_packet(ServerStatus::empty())),
+                input: io::Cursor::new(Vec::new()),
                 output: Vec::new(),
             }),
             affected_rows: 0,
@@ -1273,6 +1402,7 @@ mod tests {
         assert!(statement.current_row.is_none());
         assert!(statement.rows.is_empty());
         assert_eq!(statement.row_index, 0);
+        assert!(!statement.executed);
     }
 
     #[test]
@@ -1300,6 +1430,14 @@ mod tests {
         let (query, names) = rewrite_named_parameters("SELECT 'cafe', 'café', :naam").unwrap();
         assert_eq!(query, "SELECT 'cafe', 'café', ?");
         assert_eq!(names, vec![Some(":naam".to_string())]);
+
+        let (query, names) =
+            rewrite_named_parameters("SELECT :a /*! , :b */ /*M! , ? */ /* :c */").unwrap();
+        assert_eq!(query, "SELECT ? /*! , ? */ /*M! , ? */ /* :c */");
+        assert_eq!(
+            names,
+            vec![Some(":a".to_string()), Some(":b".to_string()), None]
+        );
     }
 
     #[test]
@@ -1368,12 +1506,74 @@ mod tests {
         assert!(parse_ok(&packet[..5]).is_err());
     }
 
+    #[cfg(feature = "chrono")]
+    #[test]
+    fn typed_temporal_parameters_use_binary_dates_and_microseconds() {
+        let date = chrono::NaiveDate::from_ymd_opt(2024, 8, 30).unwrap();
+        let datetime = date
+            .and_hms_nano_opt(1, 2, 3, 123_456_789)
+            .unwrap()
+            .and_utc();
+        assert_eq!(parameter_type(&Value::from(date)), 10);
+        assert_eq!(parameter_type(&Value::from(datetime)), 12);
+        let mut encoded = Vec::new();
+        encode_parameter(&mut encoded, &Value::from(date)).unwrap();
+        assert_eq!(encoded, [4, 0xe8, 0x07, 8, 30]);
+        assert_eq!(
+            temporal_value(
+                decode_date_time(&mut Reader::new(&encoded), None).unwrap(),
+                true
+            ),
+            Value::Date(date)
+        );
+        encoded.clear();
+        encode_parameter(&mut encoded, &Value::from(datetime)).unwrap();
+        assert_eq!(encoded, [11, 0xe8, 0x07, 8, 30, 1, 2, 3, 0x40, 0xe2, 1, 0]);
+        let text = decode_date_time(&mut Reader::new(&encoded), Some(6)).unwrap();
+        assert_eq!(text, "2024-08-30 01:02:03.123456");
+        let decoded =
+            chrono::DateTime::<chrono::Utc>::try_from(temporal_value(text, false)).unwrap();
+        assert_eq!(decoded.timestamp_micros(), datetime.timestamp_micros());
+        assert_eq!(decoded.timestamp_subsec_nanos(), 123_456_000);
+        encoded.clear();
+        encode_parameter(
+            &mut encoded,
+            &Value::from(date.and_hms_opt(0, 0, 0).unwrap()),
+        )
+        .unwrap();
+        assert_eq!(encoded, [7, 0xe8, 0x07, 8, 30, 0, 0, 0]);
+        assert_eq!(
+            temporal_value("0000-00-00".into(), true),
+            Value::Text("0000-00-00".into())
+        );
+        let invalid = [11, 0xe8, 0x07, 8, 30, 1, 2, 3, 0x40, 0x42, 0x0f, 0];
+        assert!(decode_date_time(&mut Reader::new(&invalid), Some(6)).is_err());
+        let date = chrono::NaiveDate::from_ymd_opt(999, 1, 1).unwrap();
+        assert!(encode_parameter(&mut Vec::new(), &Value::Date(date)).is_err());
+    }
+
     #[test]
     fn date_and_json_binary_values_keep_their_logical_types() {
-        let mut date = Reader::new(&[4, 0xe8, 0x07, 8, 30]);
-        assert_eq!(decode_date(&mut date).unwrap(), "2024-08-30");
-        let mut zero_date = Reader::new(&[0]);
-        assert_eq!(decode_date(&mut zero_date).unwrap(), "0000-00-00");
+        let date = [4, 0xe8, 0x07, 8, 30];
+        assert_eq!(
+            decode_date_time(&mut Reader::new(&date), None).unwrap(),
+            "2024-08-30"
+        );
+        assert_eq!(
+            decode_date_time(&mut Reader::new(&date), Some(0)).unwrap(),
+            "2024-08-30 00:00:00"
+        );
+        assert_eq!(
+            decode_date_time(&mut Reader::new(&[0]), None).unwrap(),
+            "0000-00-00"
+        );
+        assert_eq!(
+            decode_date_time(&mut Reader::new(&[0]), Some(0)).unwrap(),
+            "0000-00-00 00:00:00"
+        );
+        assert!(
+            decode_date_time(&mut Reader::new(&[7, 0xe8, 0x07, 8, 30, 1, 2, 3]), None).is_err()
+        );
 
         let column = Column {
             name: "document".to_string(),
@@ -1381,12 +1581,63 @@ mod tests {
             origin_name: None,
             type_code: 245,
             flags: ColumnFlags::empty(),
+            decimals: 0,
             charset: BINARY_CHARSET,
         };
         let row = [0x00, 0x00, 0x07, b'{', b'"', b'a', b'"', b':', b'1', b'}'];
         assert_eq!(
             decode_binary_row(&row, &[column]).unwrap(),
             vec![Value::Text("{\"a\":1}".to_string())]
+        );
+    }
+
+    #[test]
+    fn fractional_seconds_follow_the_column_precision() {
+        let micros = [11, 0xe8, 0x07, 8, 30, 1, 2, 3, 0x40, 0xe2, 0x01, 0x00]; // .123456
+        assert_eq!(
+            decode_date_time(&mut Reader::new(&micros), Some(3)).unwrap(),
+            "2024-08-30 01:02:03.123"
+        );
+        assert_eq!(
+            decode_date_time(&mut Reader::new(&micros), Some(0x1f)).unwrap(),
+            "2024-08-30 01:02:03.123456"
+        );
+        let whole = [7, 0xe8, 0x07, 8, 30, 1, 2, 3];
+        assert_eq!(
+            decode_date_time(&mut Reader::new(&whole), Some(3)).unwrap(),
+            "2024-08-30 01:02:03.000"
+        );
+        assert_eq!(
+            decode_date_time(&mut Reader::new(&whole), Some(0x1f)).unwrap(),
+            "2024-08-30 01:02:03"
+        );
+        assert_eq!(
+            decode_time(&mut Reader::new(&[0]), 2).unwrap(),
+            "00:00:00.00"
+        );
+        let time = [8, 1, 1, 0, 0, 0, 2, 3, 4];
+        assert_eq!(
+            decode_time(&mut Reader::new(&time), 0).unwrap(),
+            "-26:03:04"
+        );
+    }
+
+    #[test]
+    fn float_columns_widen_without_binary_noise() {
+        let column = Column {
+            name: "f".to_string(),
+            table: None,
+            origin_name: None,
+            type_code: 4,
+            flags: ColumnFlags::empty(),
+            decimals: 0x1f,
+            charset: BINARY_CHARSET,
+        };
+        let mut row = vec![0, 0];
+        row.extend_from_slice(&1.1_f32.to_le_bytes());
+        assert_eq!(
+            decode_binary_row(&row, &[column]).unwrap(),
+            vec![Value::Float(1.1)]
         );
     }
 
@@ -1398,6 +1649,7 @@ mod tests {
             origin_name: None,
             type_code: 252,
             flags: ColumnFlags::empty(),
+            decimals: 0,
             charset: 45,
         };
         let blob_column = Column {
@@ -1462,6 +1714,7 @@ mod tests {
                 origin_name: None,
                 type_code: 3,
                 flags: ColumnFlags::empty(),
+                decimals: 0,
                 charset: 63,
             },
             Column {
@@ -1470,6 +1723,7 @@ mod tests {
                 origin_name: None,
                 type_code: 8,
                 flags: ColumnFlags::UNSIGNED,
+                decimals: 0,
                 charset: 63,
             },
             Column {
@@ -1478,6 +1732,7 @@ mod tests {
                 origin_name: None,
                 type_code: 253,
                 flags: ColumnFlags::empty(),
+                decimals: 0,
                 charset: 45,
             },
         ];
@@ -1498,6 +1753,7 @@ mod tests {
             origin_name: None,
             type_code: 8,
             flags: ColumnFlags::UNSIGNED,
+            decimals: 0,
             charset: 63,
         };
         let mut packet = vec![0, 0];

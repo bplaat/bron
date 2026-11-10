@@ -68,12 +68,23 @@ impl NaiveDate {
 
     /// Create a [NaiveDateTime] from date with hour, minute and second
     pub const fn and_hms_opt(&self, hour: u32, minute: u32, second: u32) -> Option<NaiveDateTime> {
+        self.and_hms_nano_opt(hour, minute, second, 0)
+    }
+
+    /// Create a [NaiveDateTime] with nanosecond precision.
+    pub const fn and_hms_nano_opt(
+        &self,
+        hour: u32,
+        minute: u32,
+        second: u32,
+        nano: u32,
+    ) -> Option<NaiveDateTime> {
         if hour >= 24 || minute >= 60 || second >= 60 {
             return None;
         }
         let secs = (hour as i64) * SECS_IN_HOUR + (minute as i64) * SECS_IN_MIN + (second as i64);
         #[allow(deprecated)]
-        NaiveDateTime::from_timestamp(self.0 + secs, 0)
+        NaiveDateTime::from_timestamp(self.0 + secs, nano)
     }
 
     #[cfg(test)]

@@ -135,6 +135,52 @@ Supported authentication: empty passwords, `caching_sha2_password`, `auth_socket
 and, with `mysql-native-password`, `mysql_native_password`. Full `caching_sha2_password`
 authentication over TCP requires TLS; RSA password exchange is not implemented.
 
+Each MySQL session uses `time_zone = '+00:00'`, so `TIMESTAMP` values and `NOW()` are UTC.
+Pool connections idle for over a second are pinged before reuse and transparently replaced
+when the server has closed them.
+
+## Dates and times
+
+With the `chrono` feature, `Value::Date` and `Value::DateTime` preserve temporal types
+until binding. `NaiveDate` maps to a date; `NaiveDateTime` and `DateTime<Utc>` map to a
+UTC datetime. MySQL binds native `DATE`/`DATETIME` parameters; use `DATE` and
+`DATETIME(6)`/`TIMESTAMP(6)` columns. Nanoseconds are truncated to microseconds when
+binding to MySQL, and the column's fractional precision controls stored precision.
+Valid MySQL temporal results retain these types; zero/incomplete dates remain text
+and are rejected by chrono conversions. Without `chrono`, temporal results are text.
+
+SQLite stores dates as `YYYY-MM-DD` text and datetimes as Unix milliseconds in
+`INTEGER` columns, truncating submillisecond precision. Integer datetime reads always
+mean milliseconds; existing seconds-based data must be converted explicitly.
+Reads also accept SQL date/datetime text, preserving up to nine fractional digits.
+Naive datetime text is interpreted as UTC.
+
+## Full-text search queries
+
+Use `connection.preprocess_fts_query(query)` to translate one search syntax to
+SQLite FTS5 or MySQL boolean FULLTEXT syntax. Words automatically become prefixes;
+spaces and uppercase `AND` require both words, `OR` accepts either, and binary
+`NOT` excludes the right operand. Precedence is spaces, `NOT`, `AND`, then `OR`.
+For example, `Alice Smith`, `Alice OR Bob`, and `Alice NOT Smith` work on both.
+Quotes and parentheses are ignored; other punctuation separates words. Leading,
+trailing, and consecutive operators are ignored. A query without searchable words
+matches nothing. Bind the result as a parameter to the backend's full-text predicate.
+The free `preprocess_fts_query(query)` function produces SQLite syntax and also
+preserves SQLite column filters such as `title:Alice`.
+
+## Migrations
+
+`Migration` and `Connection::migration` support both SQLite and MySQL. With `derive`,
+`run_migrations!(database, "src/migrations/sqlite")` embeds versioned SQL files at
+compile time. For MySQL, pass a folder containing MySQL SQL instead. Applied versions
+are tracked individually in `schema_migrations`. Invalid or duplicate versions are
+rejected before any SQL runs. Migrations must run outside an existing transaction.
+
+Each SQLite migration is atomic. MySQL DDL implicitly commits, so failed migrations
+may leave partial schema changes and require manual recovery before retrying.
+The `-- bsql:create_fts5_table` directive is SQLite-only; use MySQL `FULLTEXT` indexes
+in MySQL migrations.
+
 ## Design goals
 
 - Connect to SQLite or MySQL through one API

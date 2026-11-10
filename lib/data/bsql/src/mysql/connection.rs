@@ -49,14 +49,6 @@ impl MysqlTransport {
     pub fn unix(path: impl Into<PathBuf>) -> Self {
         Self::Unix { path: path.into() }
     }
-
-    const fn tls(&self) -> bool {
-        match self {
-            Self::Tcp { tls, .. } => *tls,
-            #[cfg(unix)]
-            Self::Unix { .. } => false,
-        }
-    }
 }
 
 pub(crate) struct MysqlOptions {
@@ -64,7 +56,6 @@ pub(crate) struct MysqlOptions {
     pub(super) user: String,
     pub(super) password: String,
     pub(super) database: Option<String>,
-    pub(super) tls: bool,
     pub(super) timeout: Duration,
 }
 
@@ -76,7 +67,6 @@ impl MysqlOptions {
         database: Option<&str>,
     ) -> Self {
         Self {
-            tls: transport.tls(),
             transport,
             user: user.into(),
             password: password.into(),
@@ -88,7 +78,6 @@ impl MysqlOptions {
 
 pub(crate) trait Stream: Read + Write + Send {}
 impl<T: Read + Write + Send> Stream for T {}
-pub(crate) type OpenedStream = (Box<dyn Stream>, Option<String>, bool);
 
 pub(crate) struct Client {
     pub(crate) stream: Box<dyn Stream>,
@@ -108,7 +97,7 @@ impl Connection {
         pool_options: PoolOptions,
     ) -> Result<Self, ConnectionError> {
         #[cfg(not(feature = "mysql-tls"))]
-        if transport.tls() {
+        if let MysqlTransport::Tcp { tls: true, .. } = transport {
             return Err(ConnectionError::new(
                 "MySQL TLS requires the `mysql-tls` feature",
             ));

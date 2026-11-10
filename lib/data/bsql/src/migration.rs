@@ -4,10 +4,11 @@
  * SPDX-License-Identifier: MIT
  */
 
+use std::collections::HashSet;
 use std::error::Error;
 use std::fmt::{self, Display, Formatter, Write};
 
-use crate::{Connection, StatementError};
+use crate::{Connection, DatabaseType, StatementError};
 
 // MARK: MigrationError
 /// A migration error
@@ -48,53 +49,70 @@ pub struct Migration {
 // MARK: Connection::migration
 impl Connection {
     /// Apply all pending migrations in version order, tracking applied versions in
-    /// the `schema_migrations` table
+    /// the `schema_migrations` table.
+    ///
+    /// SQLite rolls back failed migrations atomically. MySQL DDL implicitly commits,
+    /// so a failed migration may leave schema changes that require manual recovery.
     pub fn migration(&self, migrations: &[Migration]) -> Result<(), MigrationError> {
-        if !self.is_sqlite() {
+        if self.is_transaction() {
             return Err(MigrationError::new(
-                "migrations are currently only supported by the SQLite backend",
+                "migrations cannot run inside a transaction",
             ));
         }
+        let mut sorted: Vec<_> = migrations.iter().collect();
+        sorted.sort_by_key(|migration| parse_version(migration.name));
+        for (index, migration) in sorted.iter().enumerate() {
+            let version = parse_version(migration.name);
+            if version == 0 {
+                return Err(MigrationError::new(format!(
+                    "migration '{}' has no valid version prefix (expected V<n>__...)",
+                    migration.name
+                )));
+            }
+            if index > 0 && parse_version(sorted[index - 1].name) == version {
+                return Err(MigrationError::new(format!(
+                    "duplicate migration version {version}"
+                )));
+            }
+        }
         self.execute(
-            "CREATE TABLE IF NOT EXISTS schema_migrations (
-                version    INTEGER PRIMARY KEY,
-                name       TEXT NOT NULL,
-                applied_at INTEGER NOT NULL
-            ) STRICT",
+            match self.database_type() {
+                DatabaseType::Sqlite => {
+                    "CREATE TABLE IF NOT EXISTS schema_migrations (
+                    version INTEGER PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    applied_at INTEGER NOT NULL
+                ) STRICT"
+                }
+                DatabaseType::Mysql => {
+                    "CREATE TABLE IF NOT EXISTS schema_migrations (
+                    version BIGINT PRIMARY KEY,
+                    name VARCHAR(255) NOT NULL,
+                    applied_at BIGINT NOT NULL
+                ) ENGINE=InnoDB"
+                }
+            },
             (),
         )?;
 
         let applied = self
-            .query::<i64>(
-                "SELECT COALESCE(MAX(version), 0) FROM schema_migrations",
-                (),
-            )?
-            .next()
-            .transpose()?
-            .unwrap_or(0);
-
-        let mut sorted: Vec<_> = migrations.iter().collect();
-        sorted.sort_by_key(|m| parse_version(m.name));
+            .query::<i64>("SELECT version FROM schema_migrations", ())?
+            .collect::<Result<HashSet<_>, _>>()?;
 
         for migration in sorted {
-            let version = parse_version(migration.name);
-            if version == 0 {
-                return Err(MigrationError {
-                    msg: format!(
-                        "migration '{}' has no valid version prefix (expected V<n>__...)",
-                        migration.name
-                    ),
-                });
-            }
-            if version as i64 <= applied {
+            let version = i64::from(parse_version(migration.name));
+            if applied.contains(&version) {
                 continue;
             }
             self.transaction(|db| -> Result<(), MigrationError> {
-                let sql = preprocess_migration_sql(migration.sql)?;
+                let sql = match self.database_type() {
+                    DatabaseType::Sqlite => preprocess_migration_sql(migration.sql)?,
+                    DatabaseType::Mysql => migration.sql.to_string(),
+                };
                 db.execute_script(&sql)?;
                 db.execute(
-                    "INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, unixepoch())",
-                    (version as i64, migration.name.to_string()),
+                    "INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)",
+                    (version, migration.name.to_string(), applied_at()?),
                 )?;
                 Ok(())
             })?;
@@ -103,10 +121,24 @@ impl Connection {
     }
 }
 
+fn applied_at() -> Result<i64, MigrationError> {
+    let duration = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|error| MigrationError::new(error.to_string()))?;
+    i64::try_from(duration.as_secs()).map_err(|error| MigrationError::new(error.to_string()))
+}
+
 fn parse_version(name: &str) -> u32 {
-    let s = name.trim_start_matches(['V', 'v']);
-    let end = s.find(|c: char| !c.is_ascii_digit()).unwrap_or(s.len());
-    s[..end].parse().unwrap_or(0)
+    let Some(version) = name.strip_prefix(['V', 'v']) else {
+        return 0;
+    };
+    let Some((version, description)) = version.split_once("__") else {
+        return 0;
+    };
+    if description.is_empty() || !version.chars().all(|c| c.is_ascii_digit()) {
+        return 0;
+    }
+    version.parse().unwrap_or(0)
 }
 
 fn preprocess_migration_sql(sql: &str) -> Result<String, MigrationError> {
@@ -219,10 +251,87 @@ fn validate_identifier(identifier: &str) -> Result<(), MigrationError> {
 }
 
 // MARK: Tests
-#[cfg(test)]
+#[cfg(all(test, feature = "sqlite"))]
 mod tests {
     use super::*;
     use crate::Connection;
+
+    #[test]
+    fn migration_validates_all_versions_before_changing_schema() {
+        for name in [
+            "v1__duplicate",
+            "1__missing_prefix",
+            "vv2__bad_prefix",
+            "v2suffix",
+            "v2__",
+        ] {
+            let db = Connection::open_sqlite_memory().unwrap();
+            let result = db.migration(&[
+                Migration {
+                    name: "v1__create_table",
+                    sql: "CREATE TABLE t (id INTEGER PRIMARY KEY) STRICT",
+                },
+                Migration {
+                    name,
+                    sql: "CREATE TABLE other (id INTEGER PRIMARY KEY) STRICT",
+                },
+            ]);
+            assert!(result.is_err(), "{name}");
+            assert_eq!(
+                db.query_some::<i64>(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table'",
+                    ()
+                )
+                .unwrap(),
+                0,
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn migration_applies_missing_versions_below_the_latest_version() {
+        let db = Connection::open_sqlite_memory().unwrap();
+        db.migration(&[Migration {
+            name: "v2__create_b",
+            sql: "CREATE TABLE b (id INTEGER PRIMARY KEY) STRICT",
+        }])
+        .unwrap();
+        db.migration(&[
+            Migration {
+                name: "v1__create_a",
+                sql: "CREATE TABLE a (id INTEGER PRIMARY KEY) STRICT",
+            },
+            Migration {
+                name: "v2__create_b",
+                sql: "CREATE TABLE b (id INTEGER PRIMARY KEY) STRICT",
+            },
+        ])
+        .unwrap();
+        assert_eq!(
+            db.query_some::<i64>("SELECT COUNT(*) FROM schema_migrations", ())
+                .unwrap(),
+            2
+        );
+        db.execute("INSERT INTO a VALUES (1)", ()).unwrap();
+    }
+
+    #[test]
+    fn migration_rejects_transaction_connections_before_changing_schema() {
+        let db = Connection::open_sqlite_memory().unwrap();
+        db.transaction(|transaction| -> Result<(), MigrationError> {
+            assert!(transaction.migration(&[]).is_err());
+            assert_eq!(
+                transaction.query_some::<i64>(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE name = 'schema_migrations'",
+                    ()
+                )?,
+                0
+            );
+            Ok(())
+        })
+        .unwrap();
+    }
 
     #[test]
     fn test_migration_applies_in_order() {

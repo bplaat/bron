@@ -44,9 +44,9 @@ fn note_from_json(json_bytes: &[u8], user_id: uuid::Uuid) -> Option<Note> {
         is_pinned: keep_note.is_pinned,
         is_archived: keep_note.is_archived,
         is_trashed: keep_note.is_trashed,
-        created_at: DateTime::from_timestamp_secs(keep_note.created_timestamp_usec / 1_000_000)
+        created_at: DateTime::from_timestamp_micros(keep_note.created_timestamp_usec)
             .unwrap_or_else(Utc::now),
-        updated_at: DateTime::from_timestamp_secs(keep_note.user_edited_timestamp_usec / 1_000_000)
+        updated_at: DateTime::from_timestamp_micros(keep_note.user_edited_timestamp_usec)
             .unwrap_or_else(Utc::now),
         ..Default::default()
     })
@@ -151,4 +151,19 @@ pub(crate) fn run(path: &str, email: &str, ctx: &Context) -> Result<()> {
 
     println!("Imported {count} notes");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn imported_timestamps_keep_microseconds() {
+        let note = note_from_json(
+            br#"{"title":"Imported","createdTimestampUsec":1700000000123456,"userEditedTimestampUsec":-1}"#,
+            uuid::Uuid::nil(),
+        ).unwrap();
+        assert_eq!(note.created_at.timestamp_micros(), 1_700_000_000_123_456);
+        assert_eq!(note.updated_at.timestamp_micros(), -1);
+    }
 }

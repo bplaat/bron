@@ -9,7 +9,7 @@
 use std::env;
 use std::net::{Ipv4Addr, TcpListener};
 
-use bsql::PoolOptions;
+use bsql::{Connection, MysqlTransport, PoolOptions, SqliteMode};
 use log::info;
 use small_router::{Router, RouterBuilder};
 
@@ -42,6 +42,30 @@ fn router(ctx: Context) -> Router<Context> {
         .build()
 }
 
+fn open_database(pool_options: PoolOptions) -> anyhow::Result<Connection> {
+    match env::var("DATABASE_DRIVER").as_deref().unwrap_or("sqlite") {
+        "sqlite" => Ok(Connection::open_sqlite(
+            env::var("DATABASE_PATH").unwrap_or_else(|_| "database.db".to_string()),
+            SqliteMode::ReadWrite,
+            pool_options,
+        )?),
+        "mysql" => {
+            let host = env::var("DATABASE_HOST").unwrap_or_else(|_| "localhost".to_string());
+            let port = env::var("DATABASE_PORT")
+                .unwrap_or_else(|_| "3306".to_string())
+                .parse()?;
+            Ok(Connection::open_mysql(
+                MysqlTransport::tcp(host, port, false),
+                env::var("DATABASE_USER").unwrap_or_else(|_| "root".to_string()),
+                env::var("DATABASE_PASSWORD").unwrap_or_default(),
+                Some(&env::var("DATABASE_NAME").unwrap_or_else(|_| "persons".to_string())),
+                pool_options,
+            )?)
+        }
+        driver => anyhow::bail!("Unsupported DATABASE_DRIVER: {driver}"),
+    }
+}
+
 fn main() {
     // Init logger
     if env::var("GATEWAY_INTERFACE").is_err() {
@@ -52,15 +76,15 @@ fn main() {
     _ = dotenvy::dotenv();
 
     // Create router and load database
-    let database_path = env::var("DATABASE_PATH").unwrap_or_else(|_| "database.db".to_string());
     let is_cgi = env::var("GATEWAY_INTERFACE").is_ok();
     let pool_options = if is_cgi {
         PoolOptions::single_connection()
     } else {
         PoolOptions::default()
     };
-    let context =
-        Context::with_database(&database_path, pool_options).expect("Can't open/create database");
+    let context = open_database(pool_options)
+        .and_then(Context::with_database)
+        .expect("Can't open/create database");
     let router = router(context);
 
     if is_cgi {

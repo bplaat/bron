@@ -10,6 +10,15 @@ use std::sync::{Arc, Condvar, Mutex};
 
 use crate::{Bind, FromRow, Statement, StatementError};
 
+/// Database engine used by a connection.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DatabaseType {
+    /// SQLite embedded database.
+    Sqlite,
+    /// MySQL database server.
+    Mysql,
+}
+
 /// Configuration for a database connection pool.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PoolOptions {
@@ -322,6 +331,11 @@ fn prepare_on_lease<T: FromRow>(
     result
 }
 
+/// Idle MySQL connections older than this are pinged before reuse, because the server may
+/// have closed them meanwhile (e.g. after `wait_timeout` or a restart).
+#[cfg(feature = "mysql")]
+const MYSQL_IDLE_CHECK_AFTER: std::time::Duration = std::time::Duration::from_secs(1);
+
 #[cfg(feature = "mysql")]
 struct MysqlPool {
     state: Mutex<MysqlState>,
@@ -332,7 +346,7 @@ struct MysqlPool {
 
 #[cfg(feature = "mysql")]
 struct MysqlState {
-    idle: Vec<InnerConnection>,
+    idle: Vec<(InnerConnection, std::time::Instant)>,
     total: usize,
 }
 
@@ -346,7 +360,7 @@ impl MysqlPool {
         let client = crate::mysql::Client::connect(&options).map_err(ConnectionError::new)?;
         Ok(Arc::new(Self {
             state: Mutex::new(MysqlState {
-                idle: vec![InnerConnection::Mysql(client)],
+                idle: vec![(InnerConnection::Mysql(client), std::time::Instant::now())],
                 total: 1,
             }),
             available: Condvar::new(),
@@ -358,9 +372,19 @@ impl MysqlPool {
     fn acquire(self: &Arc<Self>) -> Result<Arc<ConnectionLease>, StatementError> {
         let mut state = self.state.lock().map_err(|_| pool_lock_error())?;
         loop {
-            if let Some(connection) = state.idle.pop() {
+            if let Some((mut connection, idle_since)) = state.idle.pop() {
                 drop(state);
-                return Ok(self.lease(connection));
+                if idle_since.elapsed() < MYSQL_IDLE_CHECK_AFTER
+                    || connection
+                        .mysql_mut()
+                        .and_then(|client| client.ping())
+                        .is_ok()
+                {
+                    return Ok(self.lease(connection));
+                }
+                state = self.state.lock().map_err(|_| pool_lock_error())?;
+                state.total -= 1;
+                continue;
             }
             if state.total < self.max_connections {
                 state.total += 1;
@@ -387,7 +411,7 @@ impl MysqlPool {
 
     fn put_back(&self, connection: InnerConnection) {
         if let Ok(mut state) = self.state.lock() {
-            state.idle.push(connection);
+            state.idle.push((connection, std::time::Instant::now()));
             self.available.notify_one();
         }
     }
@@ -845,12 +869,26 @@ impl Connection {
         }
     }
 
-    #[cfg(feature = "sqlite")]
-    pub(crate) const fn is_sqlite(&self) -> bool {
-        matches!(
-            &self.source,
-            ConnectionSource::Pool(ConnectionPool::Sqlite(_))
-        )
+    pub(crate) const fn is_transaction(&self) -> bool {
+        matches!(self.source, ConnectionSource::Transaction(_))
+    }
+
+    /// Database engine used by this connection, including inside transactions.
+    pub fn database_type(&self) -> DatabaseType {
+        match &self.source {
+            ConnectionSource::Pool(pool) => match pool {
+                #[cfg(feature = "sqlite")]
+                ConnectionPool::Sqlite(_) => DatabaseType::Sqlite,
+                #[cfg(feature = "mysql")]
+                ConnectionPool::Mysql(_) => DatabaseType::Mysql,
+            },
+            ConnectionSource::Transaction(lease) => match &*lease.connection() {
+                #[cfg(feature = "sqlite")]
+                InnerConnection::Sqlite(_) => DatabaseType::Sqlite,
+                #[cfg(feature = "mysql")]
+                InnerConnection::Mysql(_) => DatabaseType::Mysql,
+            },
+        }
     }
 }
 
@@ -916,6 +954,16 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
+
+    #[test]
+    fn database_type_is_preserved_in_transactions() -> Result<(), StatementError> {
+        let database = Connection::open_sqlite_memory().expect("open SQLite");
+        assert_eq!(database.database_type(), DatabaseType::Sqlite);
+        database.transaction(|transaction| -> Result<(), StatementError> {
+            assert_eq!(transaction.database_type(), DatabaseType::Sqlite);
+            Ok(())
+        })
+    }
 
     #[test]
     fn pool_options_defaults() {

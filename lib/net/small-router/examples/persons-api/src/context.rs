@@ -5,7 +5,7 @@
  */
 
 use anyhow::Result;
-use bsql::{Connection, PoolOptions, SqliteMode, run_migrations};
+use bsql::{Connection, DatabaseType, run_migrations};
 
 use crate::models::{Person, Relation};
 
@@ -16,12 +16,16 @@ pub(crate) struct Context {
 }
 
 impl Context {
-    pub(crate) fn with_database(path: &str, pool_options: PoolOptions) -> Result<Self> {
-        let database = Connection::open_sqlite(path, SqliteMode::ReadWrite, pool_options)?;
-        database.execute_script("PRAGMA foreign_keys = ON")?;
-        database.enable_wal_logging()?;
+    pub(crate) fn with_database(database: Connection) -> Result<Self> {
+        match database.database_type() {
+            DatabaseType::Sqlite => {
+                database.execute_script("PRAGMA foreign_keys = ON")?;
+                database.enable_wal_logging()?;
+            }
+            DatabaseType::Mysql => {}
+        }
         log::info!("Running database migrations...");
-        run_migrations!(database, "src/migrations")?;
+        migrate(&database)?;
         database_seed(&database)?;
         Ok(Self { database })
     }
@@ -31,9 +35,17 @@ impl Context {
         let database = Connection::open_sqlite_memory()?;
         database.execute_script("PRAGMA foreign_keys = ON")?;
         log::info!("Running database migrations...");
-        run_migrations!(database, "src/migrations")?;
+        migrate(&database)?;
         Ok(Self { database })
     }
+}
+
+fn migrate(database: &Connection) -> Result<()> {
+    match database.database_type() {
+        DatabaseType::Sqlite => run_migrations!(database, "src/migrations/sqlite")?,
+        DatabaseType::Mysql => run_migrations!(database, "src/migrations/mysql")?,
+    }
+    Ok(())
 }
 
 // MARK: Database Helpers

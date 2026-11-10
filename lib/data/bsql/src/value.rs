@@ -20,6 +20,12 @@ pub enum Value {
     Text(String),
     /// A blob value
     Blob(Vec<u8>),
+    /// A calendar date, bound as a native MySQL DATE or SQLite date text.
+    #[cfg(feature = "chrono")]
+    Date(::chrono::NaiveDate),
+    /// A UTC datetime, bound as native MySQL DATETIME or SQLite Unix milliseconds.
+    #[cfg(feature = "chrono")]
+    DateTime(::chrono::DateTime<::chrono::Utc>),
 }
 
 // MARK: ValueError
@@ -53,7 +59,8 @@ macro_rules! impl_value_conversion {
         $variant:ident,
         $expected:literal,
         |$input:ident| $encode:expr,
-        |$stored:ident| $decode:expr $(,)?
+        |$stored:ident| $decode:expr
+        $(, |$other:ident: $other_variant:ident| $other_decode:expr)* $(,)?
     ) => {
         impl From<$type> for Value {
             fn from($input: $type) -> Self {
@@ -67,6 +74,7 @@ macro_rules! impl_value_conversion {
             fn try_from(value: Value) -> Result<Self> {
                 match value {
                     Value::$variant($stored) => $decode,
+                    $(Value::$other_variant($other) => $other_decode,)*
                     _ => Err(ValueError::new(concat!("expected ", $expected))),
                 }
             }
@@ -78,6 +86,7 @@ macro_rules! impl_value_conversion {
             fn try_from(value: Value) -> Result<Self> {
                 match value {
                     Value::$variant($stored) => ($decode).map(Some),
+                    $(Value::$other_variant($other) => ($other_decode).map(Some),)*
                     Value::Null => Ok(None),
                     _ => Err(ValueError::new(concat!("expected ", $expected, " or null"))),
                 }
@@ -140,36 +149,8 @@ mod uuid_impls {
     );
 }
 
-// MARK: Chrono
 #[cfg(feature = "chrono")]
-mod chrono_impls {
-    use chrono::{DateTime, NaiveDate, Utc};
-
-    use super::*;
-
-    impl_value_conversion!(
-        NaiveDate,
-        Integer,
-        "integer",
-        |value| value
-            .and_hms_opt(0, 0, 0)
-            .expect("midnight is a valid time")
-            .and_utc()
-            .timestamp(),
-        |value| DateTime::<Utc>::from_timestamp_secs(value)
-            .ok_or_else(|| ValueError::new(format!("invalid timestamp: {value}")))
-            .map(|value| value.naive_utc().date()),
-    );
-
-    impl_value_conversion!(
-        DateTime<Utc>,
-        Integer,
-        "integer",
-        |value| value.timestamp(),
-        |value| DateTime::<Utc>::from_timestamp_secs(value)
-            .ok_or_else(|| ValueError::new(format!("invalid timestamp: {value}"))),
-    );
-}
+mod chrono;
 
 // MARK: Tests
 #[cfg(test)]
@@ -282,48 +263,5 @@ mod tests {
         );
         assert_eq!(Option::<Uuid>::try_from(Value::Null).unwrap(), None);
         assert!(Uuid::try_from(Value::Blob(vec![1_u8, 2_u8])).is_err());
-    }
-
-    #[cfg(feature = "chrono")]
-    #[test]
-    fn test_chrono_value_roundtrips_and_type_errors() {
-        use chrono::{DateTime, NaiveDate, Utc};
-
-        let date = NaiveDate::from_ymd_opt(2024, 6, 15).unwrap();
-        let timestamp = 1_700_000_000_i64;
-        let datetime = DateTime::<Utc>::from_timestamp_secs(timestamp).unwrap();
-
-        assert_eq!(NaiveDate::try_from(Value::from(date)).unwrap(), date);
-        assert_eq!(
-            Option::<NaiveDate>::try_from(Value::from(Some(date))).unwrap(),
-            Some(date)
-        );
-        assert_eq!(Option::<NaiveDate>::try_from(Value::Null).unwrap(), None);
-
-        assert_eq!(
-            DateTime::<Utc>::try_from(Value::from(datetime)).unwrap(),
-            datetime
-        );
-        assert_eq!(
-            Option::<DateTime<Utc>>::try_from(Value::from(Some(datetime))).unwrap(),
-            Some(datetime)
-        );
-        assert_eq!(
-            Option::<DateTime<Utc>>::try_from(Value::Null).unwrap(),
-            None
-        );
-
-        assert_eq!(
-            NaiveDate::try_from(Value::Text("2024-06-15".to_string()))
-                .unwrap_err()
-                .to_string(),
-            "Value error: expected integer"
-        );
-        assert_eq!(
-            DateTime::<Utc>::try_from(Value::Text("2024-06-15T00:00:00Z".to_string()))
-                .unwrap_err()
-                .to_string(),
-            "Value error: expected integer"
-        );
     }
 }

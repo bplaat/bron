@@ -4,17 +4,17 @@
  * SPDX-License-Identifier: MIT
  */
 
-use crate::database::DatabaseBackend;
+use bsql::DatabaseType;
 
 // MARK: Quoting
-pub(crate) fn quote_identifier(backend: DatabaseBackend, identifier: &str) -> String {
+pub(crate) fn quote_identifier(backend: DatabaseType, identifier: &str) -> String {
     match backend {
-        DatabaseBackend::Sqlite => format!("\"{}\"", identifier.replace('"', "\"\"")),
-        DatabaseBackend::Mysql => format!("`{}`", identifier.replace('`', "``")),
+        DatabaseType::Sqlite => format!("\"{}\"", identifier.replace('"', "\"\"")),
+        DatabaseType::Mysql => format!("`{}`", identifier.replace('`', "``")),
     }
 }
 
-pub(crate) fn quote_identifiers(backend: DatabaseBackend, identifiers: &[String]) -> String {
+pub(crate) fn quote_identifiers(backend: DatabaseType, identifiers: &[String]) -> String {
     identifiers
         .iter()
         .map(|identifier| quote_identifier(backend, identifier))
@@ -60,7 +60,7 @@ impl SqlStatement {
 }
 
 /// Split a SQL script into statements, ignoring semicolons inside quotes and comments
-pub(crate) fn split_statements(backend: DatabaseBackend, sql: &str) -> Vec<SqlStatement> {
+pub(crate) fn split_statements(backend: DatabaseType, sql: &str) -> Vec<SqlStatement> {
     #[derive(Clone, Copy, PartialEq, Eq)]
     enum State {
         Normal,
@@ -71,7 +71,10 @@ pub(crate) fn split_statements(backend: DatabaseBackend, sql: &str) -> Vec<SqlSt
         BlockComment,
     }
 
-    let is_mysql = backend == DatabaseBackend::Mysql;
+    let is_mysql = match backend {
+        DatabaseType::Sqlite => false,
+        DatabaseType::Mysql => true,
+    };
     let bytes = sql.as_bytes();
     let mut statements = Vec::new();
     let mut start = 0;
@@ -177,7 +180,7 @@ mod tests {
     #[test]
     fn split_ignores_semicolons_in_quotes_and_comments() {
         let statements = split_statements(
-            DatabaseBackend::Sqlite,
+            DatabaseType::Sqlite,
             "SELECT ';' AS a; -- comment; here\nINSERT INTO \"t;\" VALUES (1); /* ; */ ;",
         );
         assert_eq!(statements.len(), 2);
@@ -188,18 +191,18 @@ mod tests {
     #[test]
     fn split_uses_backend_string_escapes() {
         // SQLite has no backslash escapes, so the string ends after the backslash
-        let sqlite = split_statements(DatabaseBackend::Sqlite, r"SELECT 'C:\'; SELECT 2");
+        let sqlite = split_statements(DatabaseType::Sqlite, r"SELECT 'C:\'; SELECT 2");
         assert_eq!(sqlite.len(), 2);
-        let mysql = split_statements(DatabaseBackend::Mysql, r"SELECT 'it\'s; fine'; # x;");
+        let mysql = split_statements(DatabaseType::Mysql, r"SELECT 'it\'s; fine'; # x;");
         assert_eq!(mysql.len(), 1);
         assert!(
-            split_statements(DatabaseBackend::Mysql, "SELECT /*! 1 */ 2")[0].has_executable_comment
+            split_statements(DatabaseType::Mysql, "SELECT /*! 1 */ 2")[0].has_executable_comment
         );
     }
 
     #[test]
     fn transaction_control_is_detected() {
-        let statements = split_statements(DatabaseBackend::Sqlite, "BEGIN; select 1; COMMIT");
+        let statements = split_statements(DatabaseType::Sqlite, "BEGIN; select 1; COMMIT");
         assert!(statements[0].is_transaction_control());
         assert!(!statements[1].is_transaction_control());
         assert!(statements[2].is_transaction_control());

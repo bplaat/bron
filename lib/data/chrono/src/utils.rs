@@ -4,6 +4,8 @@
  * SPDX-License-Identifier: MIT
  */
 
+use core::fmt::{self, Formatter};
+
 use crate::ParseError;
 use crate::consts::{
     DAYS_IN_MONTHS, DAYS_IN_MONTHS_LEAP, DAYS_IN_YEAR, DAYS_IN_YEAR_LEAP, EPOCH_YEAR, SECS_IN_DAY,
@@ -83,4 +85,30 @@ pub(crate) fn parse_offset(s: &str) -> Result<i64, ParseError> {
         return Err(ParseError);
     }
     Ok(sign * (hours * SECS_IN_HOUR + minutes * SECS_IN_MIN))
+}
+
+/// Split optional fractional seconds, preserving up to nanosecond precision.
+pub(crate) fn parse_fraction(s: &str) -> Result<(&str, u32), ParseError> {
+    let Some((seconds, fraction)) = s.split_once('.') else {
+        return Ok((s, 0));
+    };
+    if fraction.is_empty() || fraction.len() > 9 || !fraction.bytes().all(|b| b.is_ascii_digit()) {
+        return Err(ParseError);
+    }
+    let nanos =
+        fraction.parse::<u32>().map_err(|_| ParseError)? * 10_u32.pow(9 - fraction.len() as u32);
+    Ok((seconds, nanos))
+}
+
+/// Match chrono's automatic fractional precision: milliseconds, microseconds or nanoseconds.
+pub(crate) fn write_fraction(f: &mut Formatter<'_>, nanos: u32) -> fmt::Result {
+    if nanos == 0 {
+        Ok(())
+    } else if nanos.is_multiple_of(1_000_000) {
+        write!(f, ".{:03}", nanos / 1_000_000)
+    } else if nanos.is_multiple_of(1_000) {
+        write!(f, ".{:06}", nanos / 1_000)
+    } else {
+        write!(f, ".{nanos:09}")
+    }
 }

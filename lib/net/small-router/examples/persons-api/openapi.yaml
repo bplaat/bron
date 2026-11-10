@@ -135,10 +135,22 @@ components:
 
     Query:
       name: q
+      description: >-
+        Search names using word prefixes, with the same syntax on all databases.
+        Al and Al* both match Alice. Spaces or uppercase AND require both words
+        (Alice Smith or Alice AND Smith); OR accepts either (Alice OR Bob);
+        binary NOT excludes the following word (Alice NOT Smith). Precedence,
+        highest first: spaces, NOT, AND, OR. Operators are case-sensitive.
+        Quotes and parentheses are ignored; other punctuation separates words.
+        Leading, trailing, and consecutive operators are ignored. Matching is
+        case-insensitive and does not correct typos. An omitted or empty q lists
+        all persons; a nonempty query without searchable words matches nothing.
+        Queries longer than 128 characters return 400.
       in: query
       required: false
       schema:
         type: string
+        maxLength: 128
 
     Page:
       name: page

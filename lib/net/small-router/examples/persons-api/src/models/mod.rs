@@ -17,6 +17,7 @@ mod person;
 #[serde(default)]
 pub(crate) struct IndexQuery {
     #[serde(rename = "q")]
+    #[validate(custom(crate::validators::query_validator))]
     pub query: Option<String>,
     #[validate(range(min = 1))]
     pub page: i64,

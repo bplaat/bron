@@ -8,12 +8,12 @@ use std::collections::BTreeMap;
 use std::fmt::Write;
 
 use anyhow::Result;
-use bsql::{Connection, StatementError};
+use bsql::{Connection, DatabaseType, StatementError};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use small_http::{Request, Response};
 
-use crate::database::{DatabaseBackend, State, error_response};
+use crate::database::{State, error_response};
 use crate::sql::{quote_identifier, quote_identifiers, quote_mysql_text, quote_text};
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -134,9 +134,9 @@ pub(crate) fn db_table_schema(req: &Request, state: &State) -> Result<Response> 
             Err(error) => return Ok(error_response(error)),
         };
     let result = match (backend, database.as_deref()) {
-        (DatabaseBackend::Sqlite, _) => load_sqlite_schema(&connection, table),
-        (DatabaseBackend::Mysql, Some(database)) => load_mysql_schema(&connection, database, table),
-        (DatabaseBackend::Mysql, None) => return Ok(error_response("No MySQL database selected")),
+        (DatabaseType::Sqlite, _) => load_sqlite_schema(&connection, table),
+        (DatabaseType::Mysql, Some(database)) => load_mysql_schema(&connection, database, table),
+        (DatabaseType::Mysql, None) => return Ok(error_response("No MySQL database selected")),
     };
     Ok(match result {
         Ok(schema) => Response::with_json(&schema),
@@ -367,7 +367,7 @@ fn load_mysql_schema(
     let (_, sql) = connection.query_some::<(String, String)>(
         format!(
             "SHOW CREATE TABLE {}",
-            quote_identifier(DatabaseBackend::Mysql, table)
+            quote_identifier(DatabaseType::Mysql, table)
         ),
         (),
     )?;
@@ -512,7 +512,7 @@ fn mysql_default_sql(default: Option<String>, column_type: &str, extra: &str) ->
 
 fn apply_schema_change(
     connection: &Connection,
-    backend: DatabaseBackend,
+    backend: DatabaseType,
     database: Option<&str>,
     table: &str,
     change: SchemaChange,
@@ -575,12 +575,12 @@ fn apply_schema_change(
             validate_identifier(&old_name, "Index name")?;
             validate_index(&index)?;
             match backend {
-                DatabaseBackend::Sqlite => {
+                DatabaseType::Sqlite => {
                     connection.transaction::<_, StatementError>(|transaction| {
                         transaction.execute(
                             format!(
                                 "DROP INDEX {}",
-                                quote_identifier(DatabaseBackend::Sqlite, &old_name)
+                                quote_identifier(DatabaseType::Sqlite, &old_name)
                             ),
                             (),
                         )?;
@@ -588,7 +588,7 @@ fn apply_schema_change(
                         Ok(())
                     })?;
                 }
-                DatabaseBackend::Mysql => {
+                DatabaseType::Mysql => {
                     let unique = if index.unique { "UNIQUE " } else { "" };
                     connection.execute(
                         format!(
@@ -607,10 +607,10 @@ fn apply_schema_change(
         SchemaChange::DropIndex { name } => {
             validate_identifier(&name, "Index name")?;
             let sql = match backend {
-                DatabaseBackend::Sqlite => {
+                DatabaseType::Sqlite => {
                     format!("DROP INDEX {}", quote_identifier(backend, &name))
                 }
-                DatabaseBackend::Mysql => format!(
+                DatabaseType::Mysql => format!(
                     "ALTER TABLE {} DROP INDEX {}",
                     quote_identifier(backend, table),
                     quote_identifier(backend, &name)
@@ -622,7 +622,7 @@ fn apply_schema_change(
         SchemaChange::AddForeignKey { foreign_key } => {
             validate_foreign_key(&foreign_key)?;
             match backend {
-                DatabaseBackend::Sqlite => {
+                DatabaseType::Sqlite => {
                     let schema = load_sqlite_schema(connection, table)?;
                     let mut foreign_keys = schema.foreign_keys.clone();
                     foreign_keys.push(foreign_key);
@@ -635,7 +635,7 @@ fn apply_schema_change(
                         true,
                     )?;
                 }
-                DatabaseBackend::Mysql => {
+                DatabaseType::Mysql => {
                     let constraint = if foreign_key.name.trim().is_empty() {
                         String::new()
                     } else {
@@ -659,7 +659,7 @@ fn apply_schema_change(
         SchemaChange::DropForeignKey { name } => {
             validate_identifier(&name, "Foreign key name")?;
             match backend {
-                DatabaseBackend::Sqlite => {
+                DatabaseType::Sqlite => {
                     let schema = load_sqlite_schema(connection, table)?;
                     let foreign_keys = schema
                         .foreign_keys
@@ -679,7 +679,7 @@ fn apply_schema_change(
                         false,
                     )?;
                 }
-                DatabaseBackend::Mysql => {
+                DatabaseType::Mysql => {
                     connection.execute(
                         format!(
                             "ALTER TABLE {} DROP FOREIGN KEY {}",
@@ -698,16 +698,16 @@ fn apply_schema_change(
 // MARK: Table operations
 fn create_table(
     connection: &Connection,
-    backend: DatabaseBackend,
+    backend: DatabaseType,
     table: &str,
 ) -> Result<(), StatementError> {
     validate_identifier(table, "Table name")?;
     let table = quote_identifier(backend, table);
     let sql = match backend {
-        DatabaseBackend::Sqlite => {
+        DatabaseType::Sqlite => {
             format!("CREATE TABLE {table} (\"id\" INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL)")
         }
-        DatabaseBackend::Mysql => format!(
+        DatabaseType::Mysql => format!(
             "CREATE TABLE {table} (`id` INT UNSIGNED NOT NULL AUTO_INCREMENT, PRIMARY KEY (`id`))"
         ),
     };
@@ -717,7 +717,7 @@ fn create_table(
 
 fn apply_table_operation(
     connection: &Connection,
-    backend: DatabaseBackend,
+    backend: DatabaseType,
     database: Option<&str>,
     table: &str,
     operation: TableOperation,
@@ -731,10 +731,10 @@ fn apply_table_operation(
         }
         TableOperation::Truncate => {
             match backend {
-                DatabaseBackend::Mysql => {
+                DatabaseType::Mysql => {
                     connection.execute(format!("TRUNCATE TABLE {quoted_table}"), ())?;
                 }
-                DatabaseBackend::Sqlite => {
+                DatabaseType::Sqlite => {
                     connection.transaction::<_, StatementError>(|transaction| {
                         transaction.execute(format!("DELETE FROM {quoted_table}"), ())?;
                         // Reset AUTOINCREMENT counters like TRUNCATE does on MySQL
@@ -767,7 +767,7 @@ fn apply_table_operation(
 
 fn duplicate_table(
     connection: &Connection,
-    backend: DatabaseBackend,
+    backend: DatabaseType,
     database: Option<&str>,
     table: &str,
     new_name: &str,
@@ -776,8 +776,8 @@ fn duplicate_table(
     let source = quote_identifier(backend, table);
     let target = quote_identifier(backend, new_name);
     let schema = match backend {
-        DatabaseBackend::Sqlite => load_sqlite_schema(connection, table)?,
-        DatabaseBackend::Mysql => load_mysql_schema(
+        DatabaseType::Sqlite => load_sqlite_schema(connection, table)?,
+        DatabaseType::Mysql => load_mysql_schema(
             connection,
             database.ok_or_else(|| StatementError::new("No MySQL database selected"))?,
             table,
@@ -794,7 +794,7 @@ fn duplicate_table(
         quote_identifiers(backend, &columns)
     );
     match backend {
-        DatabaseBackend::Sqlite => {
+        DatabaseType::Sqlite => {
             let body = sqlite_table_body(&schema.sql)
                 .ok_or_else(|| StatementError::new("Could not read the table definition"))?;
             connection.transaction::<_, StatementError>(|transaction| {
@@ -812,7 +812,7 @@ fn duplicate_table(
                 Ok(())
             })?;
         }
-        DatabaseBackend::Mysql => {
+        DatabaseType::Mysql => {
             // MySQL DDL commits implicitly, so remove the copy again when the rows fail to copy
             connection.execute(format!("CREATE TABLE {target} LIKE {source}"), ())?;
             if with_data && let Err(error) = connection.execute(&copy_sql, ()) {
@@ -840,7 +840,7 @@ fn sqlite_table_body(sql: &str) -> Option<&str> {
     None
 }
 
-fn foreign_key_sql(backend: DatabaseBackend, foreign_key: &SchemaForeignKey) -> String {
+fn foreign_key_sql(backend: DatabaseType, foreign_key: &SchemaForeignKey) -> String {
     let mut sql = format!(
         "FOREIGN KEY ({}) REFERENCES {}",
         quote_identifiers(backend, &foreign_key.columns),
@@ -903,14 +903,14 @@ fn validate_foreign_key(foreign_key: &SchemaForeignKey) -> Result<(), StatementE
 
 fn update_column(
     connection: &Connection,
-    backend: DatabaseBackend,
+    backend: DatabaseType,
     database: Option<&str>,
     table: &str,
     old_name: &str,
     column: &SchemaColumn,
 ) -> Result<(), StatementError> {
     match backend {
-        DatabaseBackend::Mysql => {
+        DatabaseType::Mysql => {
             let definition = column_definition(backend, column, true)?;
             let schema = load_mysql_schema(
                 connection,
@@ -969,7 +969,7 @@ fn update_column(
                 (),
             )?;
         }
-        DatabaseBackend::Sqlite => {
+        DatabaseType::Sqlite => {
             let schema = load_sqlite_schema(connection, table)?;
             let old = schema
                 .columns
@@ -1050,7 +1050,7 @@ fn rebuild_sqlite_table(
     let temp_table = format!("__sequel_explorer_{table}");
     let mut definitions = columns
         .iter()
-        .map(|column| column_definition(DatabaseBackend::Sqlite, column, false))
+        .map(|column| column_definition(DatabaseType::Sqlite, column, false))
         .collect::<Result<Vec<_>, _>>()?;
     let mut primary = columns
         .iter()
@@ -1064,25 +1064,25 @@ fn rebuild_sqlite_table(
             .collect::<Vec<_>>();
         definitions.push(format!(
             "PRIMARY KEY ({})",
-            quote_identifiers(DatabaseBackend::Sqlite, &primary)
+            quote_identifiers(DatabaseType::Sqlite, &primary)
         ));
     }
     for index in &schema.indexes {
         if index.unique && !index.primary && index.read_only && !index.columns.is_empty() {
             definitions.push(format!(
                 "UNIQUE ({})",
-                quote_identifiers(DatabaseBackend::Sqlite, &index.columns)
+                quote_identifiers(DatabaseType::Sqlite, &index.columns)
             ));
         }
     }
     definitions.extend(
         foreign_keys
             .iter()
-            .map(|foreign_key| foreign_key_sql(DatabaseBackend::Sqlite, foreign_key)),
+            .map(|foreign_key| foreign_key_sql(DatabaseType::Sqlite, foreign_key)),
     );
     let suffix = sqlite_table_suffix(&schema.sql);
-    let quoted_table = quote_identifier(DatabaseBackend::Sqlite, table);
-    let quoted_temp = quote_identifier(DatabaseBackend::Sqlite, &temp_table);
+    let quoted_table = quote_identifier(DatabaseType::Sqlite, table);
+    let quoted_temp = quote_identifier(DatabaseType::Sqlite, &temp_table);
     let create_sql = format!(
         "CREATE TABLE {quoted_temp} (\n    {}\n) {suffix}",
         definitions.join(",\n    ")
@@ -1092,7 +1092,7 @@ fn rebuild_sqlite_table(
         .iter()
         .map(|column| column.name.clone())
         .collect::<Vec<_>>();
-    let column_list = quote_identifiers(DatabaseBackend::Sqlite, &column_names);
+    let column_list = quote_identifiers(DatabaseType::Sqlite, &column_names);
     let objects = connection
         .query::<String>(
             "SELECT sql FROM sqlite_master
@@ -1151,7 +1151,7 @@ fn rebuild_sqlite_table(
 }
 
 fn column_definition(
-    backend: DatabaseBackend,
+    backend: DatabaseType,
     column: &SchemaColumn,
     include_mysql_metadata: bool,
 ) -> Result<String, StatementError> {
@@ -1161,7 +1161,7 @@ fn column_definition(
         quote_identifier(backend, &column.name),
         column.r#type.trim()
     );
-    if backend == DatabaseBackend::Mysql && include_mysql_metadata {
+    if backend == DatabaseType::Mysql && include_mysql_metadata {
         if let Some(character_set) = &column.character_set {
             validate_fragment(character_set, "Character set")?;
             write!(definition, " CHARACTER SET {character_set}")
@@ -1183,7 +1183,7 @@ fn column_definition(
     }
     if column.auto_increment {
         match backend {
-            DatabaseBackend::Sqlite => {
+            DatabaseType::Sqlite => {
                 if !column.primary_key || !column.r#type.eq_ignore_ascii_case("INTEGER") {
                     return Err(StatementError::new(
                         "SQLite AUTOINCREMENT requires an INTEGER primary key",
@@ -1191,10 +1191,10 @@ fn column_definition(
                 }
                 definition.push_str(" PRIMARY KEY AUTOINCREMENT");
             }
-            DatabaseBackend::Mysql => definition.push_str(" AUTO_INCREMENT"),
+            DatabaseType::Mysql => definition.push_str(" AUTO_INCREMENT"),
         }
     }
-    if backend == DatabaseBackend::Mysql && include_mysql_metadata {
+    if backend == DatabaseType::Mysql && include_mysql_metadata {
         let extra = column.extra.to_ascii_lowercase();
         if let Some(on_update) = extra
             .split_once("on update ")
@@ -1243,7 +1243,7 @@ fn validate_index(index: &SchemaIndex) -> Result<(), StatementError> {
     Ok(())
 }
 
-fn create_index_sql(backend: DatabaseBackend, table: &str, index: &SchemaIndex) -> String {
+fn create_index_sql(backend: DatabaseType, table: &str, index: &SchemaIndex) -> String {
     let unique = if index.unique { "UNIQUE " } else { "" };
     format!(
         "CREATE {unique}INDEX {} ON {} ({})",
@@ -1330,12 +1330,11 @@ fn sqlite_table_suffix(sql: &str) -> &str {
 
 #[cfg(test)]
 mod tests {
-    use bsql::{Connection, PoolOptions, SqliteMode};
+    use bsql::{Connection, DatabaseType, PoolOptions, SqliteMode};
 
     use super::{
-        DatabaseBackend, SchemaChange, SchemaForeignKey, SchemaIndex, TableOperation,
-        apply_schema_change, apply_table_operation, create_table, load_sqlite_schema,
-        sqlite_table_body,
+        SchemaChange, SchemaForeignKey, SchemaIndex, TableOperation, apply_schema_change,
+        apply_table_operation, create_table, load_sqlite_schema, sqlite_table_body,
     };
 
     fn database() -> Connection {
@@ -1382,7 +1381,7 @@ mod tests {
 
         apply_schema_change(
             &connection,
-            DatabaseBackend::Sqlite,
+            DatabaseType::Sqlite,
             None,
             "items",
             SchemaChange::UpdateColumn {
@@ -1442,7 +1441,7 @@ mod tests {
             .expect("fixture should be created");
         apply_schema_change(
             &connection,
-            DatabaseBackend::Sqlite,
+            DatabaseType::Sqlite,
             None,
             "items",
             SchemaChange::AddIndex {
@@ -1465,7 +1464,7 @@ mod tests {
         );
         apply_schema_change(
             &connection,
-            DatabaseBackend::Sqlite,
+            DatabaseType::Sqlite,
             None,
             "items",
             SchemaChange::DropIndex {
@@ -1492,7 +1491,7 @@ mod tests {
             .expect("fixture should be created");
         apply_schema_change(
             &connection,
-            DatabaseBackend::Sqlite,
+            DatabaseType::Sqlite,
             None,
             "items",
             SchemaChange::UpdateIndex {
@@ -1531,7 +1530,7 @@ mod tests {
         old_id.primary_key_position = 0;
         apply_schema_change(
             &connection,
-            DatabaseBackend::Sqlite,
+            DatabaseType::Sqlite,
             None,
             "items",
             SchemaChange::UpdateColumn {
@@ -1546,7 +1545,7 @@ mod tests {
         new_id.primary_key_position = 1;
         apply_schema_change(
             &connection,
-            DatabaseBackend::Sqlite,
+            DatabaseType::Sqlite,
             None,
             "items",
             SchemaChange::UpdateColumn {
@@ -1578,8 +1577,7 @@ mod tests {
     #[test]
     fn sqlite_tables_can_be_created_duplicated_truncated_and_dropped() {
         let connection = database();
-        create_table(&connection, DatabaseBackend::Sqlite, "items")
-            .expect("table should be created");
+        create_table(&connection, DatabaseType::Sqlite, "items").expect("table should be created");
         connection
             .execute_script(
                 "ALTER TABLE items ADD COLUMN name TEXT;
@@ -1588,7 +1586,7 @@ mod tests {
             )
             .expect("fixture should be created");
         let run = |table: &str, operation| {
-            apply_table_operation(&connection, DatabaseBackend::Sqlite, None, table, operation)
+            apply_table_operation(&connection, DatabaseType::Sqlite, None, table, operation)
         };
 
         let copy = run(
@@ -1655,7 +1653,7 @@ mod tests {
         let add = || {
             apply_schema_change(
                 &connection,
-                DatabaseBackend::Sqlite,
+                DatabaseType::Sqlite,
                 None,
                 "items",
                 SchemaChange::AddForeignKey {
@@ -1689,7 +1687,7 @@ mod tests {
 
         apply_schema_change(
             &connection,
-            DatabaseBackend::Sqlite,
+            DatabaseType::Sqlite,
             None,
             "items",
             SchemaChange::DropForeignKey {

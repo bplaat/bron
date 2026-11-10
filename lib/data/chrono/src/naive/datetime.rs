@@ -12,20 +12,22 @@ use core::str::FromStr;
 use core::time::Duration;
 
 use crate::consts::{SECS_IN_DAY, SECS_IN_HOUR, SECS_IN_MIN};
-use crate::utils::{parse_hms, timestamp_to_ymd};
+use crate::utils::{parse_fraction, parse_hms, timestamp_to_ymd, write_fraction};
 use crate::{DateTime, NaiveDate, ParseError, Utc};
 
 // MARK: NaiveDateTime
 /// A DateTime without timezone
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub struct NaiveDateTime(i64);
+pub struct NaiveDateTime(i64, u32);
 
 impl NaiveDateTime {
     /// Create a [NaiveDateTime] from a unix timestamp
     #[deprecated]
-    #[allow(unused_variables)]
     pub const fn from_timestamp(secs: i64, nsecs: u32) -> Option<Self> {
-        Some(Self(secs))
+        if nsecs >= 1_000_000_000 {
+            return None;
+        }
+        Some(Self(secs, nsecs))
     }
 
     /// Get the [NaiveDate] of the date and time
@@ -63,9 +65,22 @@ impl NaiveDateTime {
         self.0.rem_euclid(SECS_IN_MIN) as u32
     }
 
+    /// Get the fractional second in nanoseconds.
+    pub const fn nanosecond(&self) -> u32 {
+        self.1
+    }
+
     /// Get the [DateTime] in UTC timezone
     pub const fn and_utc(&self) -> DateTime<Utc> {
-        DateTime::<Utc>::from_timestamp_secs(self.0).expect("Should be some")
+        DateTime::<Utc>::from_timestamp(self.0, self.1).expect("Should be some")
+    }
+
+    fn shift(self, nanos: i128) -> Self {
+        let total = i128::from(self.0) * 1_000_000_000 + i128::from(self.1) + nanos;
+        Self(
+            i64::try_from(total.div_euclid(1_000_000_000)).expect("datetime overflow"),
+            total.rem_euclid(1_000_000_000) as u32,
+        )
     }
 
     /// Get the unix timestamp of the [NaiveDateTime]
@@ -79,8 +94,7 @@ impl Add<Duration> for NaiveDateTime {
     type Output = Self;
 
     fn add(self, duration: Duration) -> Self::Output {
-        #[allow(deprecated)]
-        Self::from_timestamp(self.0 + duration.as_secs() as i64, 0).expect("Should be some")
+        self.shift(duration.as_nanos() as i128)
     }
 }
 
@@ -88,8 +102,7 @@ impl Sub<Duration> for NaiveDateTime {
     type Output = Self;
 
     fn sub(self, duration: Duration) -> Self::Output {
-        #[allow(deprecated)]
-        Self::from_timestamp(self.0 - duration.as_secs() as i64, 0).expect("Should be some")
+        self.shift(-(duration.as_nanos() as i128))
     }
 }
 
@@ -98,9 +111,10 @@ impl FromStr for NaiveDateTime {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let (date_part, time_part) = s.split_once(' ').ok_or(ParseError)?;
+        let (time_part, nanos) = parse_fraction(time_part)?;
         let (hour, minute, second) = parse_hms(time_part)?;
         NaiveDate::from_str(date_part)?
-            .and_hms_opt(hour, minute, second)
+            .and_hms_nano_opt(hour, minute, second, nanos)
             .ok_or(ParseError)
     }
 }
@@ -118,7 +132,8 @@ impl Display for NaiveDateTime {
             day_sec / SECS_IN_HOUR,
             (day_sec % SECS_IN_HOUR) / SECS_IN_MIN,
             day_sec % SECS_IN_MIN
-        )
+        )?;
+        write_fraction(f, self.1)
     }
 }
 
@@ -150,6 +165,29 @@ impl<'de> serde::Deserialize<'de> for NaiveDateTime {
 #[allow(deprecated)]
 mod test {
     use super::*;
+
+    #[test]
+    fn fractional_datetimes_cross_second_and_day_boundaries() {
+        let datetime: NaiveDateTime = "1969-12-31 23:59:59.999999999".parse().unwrap();
+        assert_eq!(datetime.nanosecond(), 999_999_999);
+        let midnight = datetime + Duration::from_nanos(1);
+        assert_eq!(midnight.to_string(), "1970-01-01 00:00:00");
+        assert_eq!(midnight - Duration::from_nanos(1), datetime);
+        assert_eq!(
+            NaiveDate::from_ymd_opt(1969, 12, 31)
+                .unwrap()
+                .and_hms_nano_opt(23, 59, 59, 999_999_999),
+            Some(datetime)
+        );
+        assert!(NaiveDateTime::from_timestamp(0, 1_000_000_000).is_none());
+        for fraction in ["", "1234567890", "12x"] {
+            assert!(
+                format!("2020-01-01 00:00:00.{fraction}")
+                    .parse::<NaiveDateTime>()
+                    .is_err()
+            );
+        }
+    }
 
     #[test]
     fn test_timestamp() {

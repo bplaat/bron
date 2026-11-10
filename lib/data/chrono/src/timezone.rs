@@ -66,7 +66,7 @@ fn now<T: TimeZone>() -> DateTime<T> {
     let now = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
         .expect("Time went backwards");
-    DateTime::from_timestamp_secs(now.as_secs() as i64).expect("Should be some")
+    DateTime::from_timestamp(now.as_secs() as i64, now.subsec_nanos()).expect("Should be some")
 }
 
 // MARK: Utc
@@ -103,7 +103,7 @@ impl TimeZone for Local {
     /// Daylight saving time transitions resolve as the system does.
     fn from_local_datetime(&self, local: &NaiveDateTime) -> LocalResult<DateTime<Self>> {
         match crate::sys::local_to_timestamp(local.and_utc().timestamp())
-            .and_then(DateTime::from_timestamp_secs)
+            .and_then(|secs| DateTime::from_timestamp(secs, local.nanosecond()))
         {
             Some(datetime) => LocalResult::Single(datetime),
             None => LocalResult::None,
@@ -157,6 +157,19 @@ mod test {
         // Time zones range from UTC-12 to UTC+14.
         assert!((-14 * 3600..=12 * 3600).contains(&(local.timestamp() - utc.timestamp())));
         assert!((Local::now().timestamp() - Utc::now().timestamp()).abs() <= 1);
+    }
+
+    #[cfg(feature = "clock")]
+    #[test]
+    fn local_conversion_preserves_nanoseconds() {
+        let naive: NaiveDateTime = "2024-07-01 12:00:00.123456789".parse().unwrap();
+        let local = Local.from_local_datetime(&naive).single().unwrap();
+        assert_eq!(local.naive_local(), naive);
+        assert_eq!(local.timestamp_subsec_nanos(), 123_456_789);
+        assert_eq!(
+            local.to_rfc3339().parse::<DateTime<Utc>>().unwrap(),
+            local.with_timezone(&Utc)
+        );
     }
 
     #[cfg(feature = "clock")]

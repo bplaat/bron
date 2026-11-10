@@ -4,11 +4,10 @@
  * SPDX-License-Identifier: MIT
  */
 
-use std::ffi::{CStr, CString};
+use std::ffi::{CStr, CString, c_char};
 
 use libsqlite3_sys::*;
 
-use super::utils::optional_string;
 #[cfg(test)]
 use crate::connection::Connection as GenericConnection;
 use crate::connection::InnerConnection;
@@ -59,6 +58,19 @@ impl Prepared {
                         SQLITE_TRANSIENT(),
                     )
                 }
+            }
+            #[cfg(feature = "chrono")]
+            Value::Date(value) => {
+                return self.bind_value(index - 1, Value::Text(value.to_string()));
+            }
+            #[cfg(feature = "chrono")]
+            Value::DateTime(value) => {
+                let millis = i128::from(value.timestamp()) * 1_000
+                    + i128::from(value.timestamp_subsec_millis());
+                let millis = i64::try_from(millis).map_err(|_| {
+                    StatementError::new("datetime is out of range for SQLite milliseconds")
+                })?;
+                return self.bind_value(index - 1, Value::Integer(millis));
             }
             Value::Blob(value) => {
                 let len = i32::try_from(value.len())
@@ -242,6 +254,19 @@ impl PreparedStatement for Prepared {
     fn close(&mut self, _connection: &mut InnerConnection) -> Result<(), StatementError> {
         self.finalize();
         Ok(())
+    }
+}
+
+fn optional_string(value: *const c_char) -> Option<String> {
+    if value.is_null() {
+        None
+    } else {
+        Some(
+            // SAFETY: value is non-null and points to a SQLite-owned NUL-terminated string.
+            unsafe { CStr::from_ptr(value) }
+                .to_string_lossy()
+                .into_owned(),
+        )
     }
 }
 

@@ -12,7 +12,9 @@ use std::sync::{Arc, Mutex};
 use anyhow::Result;
 use base64::Engine;
 use base64::prelude::BASE64_STANDARD;
-use bsql::{ColumnType, Connection, MysqlTransport, PoolOptions, StatementError, Value};
+use bsql::{
+    ColumnType, Connection, DatabaseType, MysqlTransport, PoolOptions, StatementError, Value,
+};
 use keyring::{Entry as CredentialEntry, Error as CredentialError};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -26,12 +28,6 @@ use crate::sql::{
 };
 
 // MARK: State
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum DatabaseBackend {
-    Sqlite,
-    Mysql,
-}
-
 #[derive(Clone)]
 pub(crate) enum MysqlConnectionSettings {
     Tcp {
@@ -103,7 +99,7 @@ impl MysqlConnectionSettings {
 #[derive(Default)]
 pub(crate) struct DatabaseState {
     connection: Option<Connection>,
-    backend: Option<DatabaseBackend>,
+    backend: Option<DatabaseType>,
     mysql_settings: Option<MysqlConnectionSettings>,
     database: Option<String>,
     table_metadata: HashMap<String, TableMetadata>,
@@ -113,7 +109,7 @@ impl DatabaseState {
     pub(crate) fn sqlite(connection: Connection) -> Self {
         Self {
             connection: Some(connection),
-            backend: Some(DatabaseBackend::Sqlite),
+            backend: Some(DatabaseType::Sqlite),
             ..Self::default()
         }
     }
@@ -125,7 +121,7 @@ impl DatabaseState {
     ) -> Self {
         Self {
             connection: Some(connection),
-            backend: Some(DatabaseBackend::Mysql),
+            backend: Some(DatabaseType::Mysql),
             mysql_settings: Some(settings),
             database: Some(database),
             table_metadata: HashMap::new(),
@@ -138,7 +134,7 @@ impl DatabaseState {
 
     pub(crate) fn connection_snapshot(
         &self,
-    ) -> Result<(Connection, DatabaseBackend, Option<String>), String> {
+    ) -> Result<(Connection, DatabaseType, Option<String>), String> {
         let connection = self
             .connection
             .as_ref()
@@ -318,7 +314,7 @@ pub(crate) fn open_mysql(
                 request.connection_generation,
                 DatabaseState {
                     connection: Some(connection),
-                    backend: Some(DatabaseBackend::Mysql),
+                    backend: Some(DatabaseType::Mysql),
                     mysql_settings: Some(settings),
                     database: None,
                     table_metadata: HashMap::new(),
@@ -446,7 +442,7 @@ pub(crate) fn db_databases(_req: &Request, state: &State) -> Result<Response> {
         Ok(guard) => guard,
         Err(response) => return Ok(response),
     };
-    if guard.backend != Some(DatabaseBackend::Mysql) {
+    if guard.backend != Some(DatabaseType::Mysql) {
         return Ok(Response::with_json(Vec::<String>::new()));
     }
     let conn = guard.connection.as_ref().expect("connection checked above");
@@ -496,7 +492,7 @@ fn create_database_sql(body: &DatabaseBody) -> Result<String, String> {
     validate_database_name(&body.name)?;
     let mut sql = format!(
         "CREATE DATABASE {}",
-        quote_identifier(DatabaseBackend::Mysql, &body.name)
+        quote_identifier(DatabaseType::Mysql, &body.name)
     );
     if let Some(character_set) = body
         .character_set
@@ -548,7 +544,7 @@ pub(crate) fn db_databases_drop(req: &Request, state: &State) -> Result<Response
     let conn = guard.connection.clone().expect("connection checked above");
     let sql = format!(
         "DROP DATABASE {}",
-        quote_identifier(DatabaseBackend::Mysql, &body.name)
+        quote_identifier(DatabaseType::Mysql, &body.name)
     );
     Ok(match conn.execute(sql, ()) {
         Ok(_) => {
@@ -611,7 +607,7 @@ const MYSQL_FULL_DATABASE_GRANT_PREDICATE: &str = "Select_priv = 'Y'
 
 fn mysql_connection(state: &State) -> Result<std::sync::MutexGuard<'_, DatabaseState>, Response> {
     let guard = get_connection(state)?;
-    if guard.backend != Some(DatabaseBackend::Mysql) {
+    if guard.backend != Some(DatabaseType::Mysql) {
         return Err(Response::with_json(
             json!({ "error": "This action is only available for MySQL connections" }),
         ));
@@ -922,13 +918,13 @@ pub(crate) fn db_tables(_req: &Request, state: &State) -> Result<Response> {
     };
     let conn = guard.connection.as_ref().expect("connection checked above");
     let table_names = match guard.backend.expect("backend set with connection") {
-        DatabaseBackend::Sqlite => conn
+        DatabaseType::Sqlite => conn
             .query::<String>(
                 "SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name",
                 (),
             )?
             .collect::<Result<Vec<_>, _>>()?,
-        DatabaseBackend::Mysql => conn
+        DatabaseType::Mysql => conn
             .query::<String>(
                 "SELECT TABLE_NAME FROM information_schema.TABLES
                  WHERE TABLE_SCHEMA = ? AND TABLE_TYPE = 'BASE TABLE'
@@ -989,6 +985,14 @@ fn cell_value(value: Value) -> CellValue {
             kind: "text",
             value: json!(value),
         },
+        Value::Date(value) => CellValue {
+            kind: "text",
+            value: json!(value.to_string()),
+        },
+        Value::DateTime(value) => CellValue {
+            kind: "text",
+            value: json!(value.naive_utc().to_string()),
+        },
         Value::Blob(value) => CellValue {
             kind: "blob",
             value: json!(BASE64_STANDARD.encode(&value)),
@@ -1031,13 +1035,13 @@ struct TableMetadata {
 
 fn load_foreign_keys(
     conn: &Connection,
-    backend: DatabaseBackend,
+    backend: DatabaseType,
     database: Option<&str>,
     tables: &HashSet<String>,
 ) -> Result<HashMap<(String, String), ColumnForeignKey>, StatementError> {
     let mut foreign_keys = HashMap::new();
     match backend {
-        DatabaseBackend::Sqlite => {
+        DatabaseType::Sqlite => {
             for table in tables {
                 // `REFERENCES parent` without a column list has a NULL `to` and targets the primary key
                 let rows = conn.query::<(String, String, Option<String>)>(
@@ -1063,7 +1067,7 @@ fn load_foreign_keys(
                 }
             }
         }
-        DatabaseBackend::Mysql => {
+        DatabaseType::Mysql => {
             if tables.is_empty() {
                 return Ok(foreign_keys);
             }
@@ -1183,7 +1187,7 @@ struct StatementOutput {
 fn add_foreign_keys(
     output: &mut StatementOutput,
     conn: &Connection,
-    backend: DatabaseBackend,
+    backend: DatabaseType,
     database: Option<&str>,
 ) -> Result<(), StatementError> {
     let source_tables = output
@@ -1206,13 +1210,13 @@ fn add_foreign_keys(
 
 fn load_table_metadata(
     conn: &Connection,
-    backend: DatabaseBackend,
+    backend: DatabaseType,
     database: Option<&str>,
     table: &str,
 ) -> Result<TableMetadata, StatementError> {
     match backend {
-        DatabaseBackend::Sqlite => load_sqlite_table_metadata(conn, table),
-        DatabaseBackend::Mysql => load_mysql_table_metadata(
+        DatabaseType::Sqlite => load_sqlite_table_metadata(conn, table),
+        DatabaseType::Mysql => load_mysql_table_metadata(
             conn,
             database.expect("MySQL database checked before loading table metadata"),
             table,
@@ -1266,7 +1270,7 @@ fn load_sqlite_table_metadata(
         .collect();
     let column_names = columns.into_iter().map(|(name, _, _)| name).collect();
     let tables = HashSet::from([table.to_string()]);
-    let foreign_keys = load_foreign_keys(conn, DatabaseBackend::Sqlite, None, &tables)?
+    let foreign_keys = load_foreign_keys(conn, DatabaseType::Sqlite, None, &tables)?
         .into_iter()
         .map(|((_, column), foreign_key)| (column, foreign_key))
         .collect();
@@ -1318,7 +1322,7 @@ fn load_mysql_table_metadata(
     };
     let column_names = columns.iter().map(|(name, _)| name.clone()).collect();
     let tables = HashSet::from([table.to_string()]);
-    let foreign_keys = load_foreign_keys(conn, DatabaseBackend::Mysql, Some(database), &tables)?
+    let foreign_keys = load_foreign_keys(conn, DatabaseType::Mysql, Some(database), &tables)?
         .into_iter()
         .map(|((_, column), foreign_key)| (column, foreign_key))
         .collect();
@@ -1430,7 +1434,7 @@ fn next_cursor(
 
 struct TableContext {
     connection: Connection,
-    backend: DatabaseBackend,
+    backend: DatabaseType,
     metadata: TableMetadata,
 }
 
@@ -1442,8 +1446,8 @@ impl TableContext {
     /// Null-safe equality on every primary key column, the values are bound in key order
     fn key_condition(&self) -> String {
         let comparison = match self.backend {
-            DatabaseBackend::Mysql => "<=>",
-            DatabaseBackend::Sqlite => "IS",
+            DatabaseType::Mysql => "<=>",
+            DatabaseType::Sqlite => "IS",
         };
         self.metadata
             .key_columns
@@ -1478,7 +1482,7 @@ impl TableContext {
 
     fn order_column(&self, column: &str) -> String {
         let quoted = quote_identifier(self.backend, column);
-        if self.backend == DatabaseBackend::Mysql
+        if self.backend == DatabaseType::Mysql
             && self
                 .metadata
                 .declared_types
@@ -1514,12 +1518,12 @@ fn table_context(state: &State, name: &str) -> Result<TableContext, Response> {
         Some(metadata) => metadata.clone(),
         None => {
             let database = match backend {
-                DatabaseBackend::Mysql => Some(
+                DatabaseType::Mysql => Some(
                     current_database(&guard)
                         .map_err(error_response)?
                         .to_string(),
                 ),
-                DatabaseBackend::Sqlite => None,
+                DatabaseType::Sqlite => None,
             };
             let metadata = load_table_metadata(&connection, backend, database.as_deref(), name)
                 .map_err(error_response)?;
@@ -1815,8 +1819,8 @@ fn insert_row(
     let table = context.table(name);
     let sql = if supplied.is_empty() {
         match context.backend {
-            DatabaseBackend::Mysql => format!("INSERT INTO {table} () VALUES ()"),
-            DatabaseBackend::Sqlite => format!("INSERT INTO {table} DEFAULT VALUES"),
+            DatabaseType::Mysql => format!("INSERT INTO {table} () VALUES ()"),
+            DatabaseType::Sqlite => format!("INSERT INTO {table} DEFAULT VALUES"),
         }
     } else {
         let names = supplied
@@ -1966,27 +1970,28 @@ const CUSTOM_QUERY_ROW_LIMIT: usize = 10_000;
 
 fn bounded_select(
     conn: &Connection,
-    backend: DatabaseBackend,
+    backend: DatabaseType,
     sql: &str,
 ) -> Result<String, StatementError> {
     let alias = quote_identifier(backend, "sequel_explorer_result");
     let limit = CUSTOM_QUERY_ROW_LIMIT + 1;
-    if backend == DatabaseBackend::Sqlite {
-        return Ok(format!("SELECT * FROM ({sql}\n) AS {alias} LIMIT {limit}"));
+    match backend {
+        DatabaseType::Sqlite => Ok(format!("SELECT * FROM ({sql}\n) AS {alias} LIMIT {limit}")),
+        DatabaseType::Mysql => {
+            let statement = conn.prepare::<()>(sql)?;
+            let output_names = (0..statement.column_count())
+                .map(|index| statement.column_name(index))
+                .collect::<Vec<_>>();
+            drop(statement);
+            Ok(mysql_bounded_select(sql, &output_names, limit))
+        }
     }
-
-    let statement = conn.prepare::<()>(sql)?;
-    let output_names = (0..statement.column_count())
-        .map(|index| statement.column_name(index))
-        .collect::<Vec<_>>();
-    drop(statement);
-    Ok(mysql_bounded_select(sql, &output_names, limit))
 }
 
 fn mysql_bounded_select(sql: &str, output_names: &[String], limit: usize) -> String {
-    let alias = quote_identifier(DatabaseBackend::Mysql, "sequel_explorer_result");
+    let alias = quote_identifier(DatabaseType::Mysql, "sequel_explorer_result");
     let internal_names = (0..output_names.len())
-        .map(|index| quote_identifier(DatabaseBackend::Mysql, &format!("column_{index}")))
+        .map(|index| quote_identifier(DatabaseType::Mysql, &format!("column_{index}")))
         .collect::<Vec<_>>();
     let projection = internal_names
         .iter()
@@ -1994,7 +1999,7 @@ fn mysql_bounded_select(sql: &str, output_names: &[String], limit: usize) -> Str
         .map(|(internal_name, output_name)| {
             format!(
                 "{alias}.{internal_name} AS {}",
-                quote_identifier(DatabaseBackend::Mysql, output_name)
+                quote_identifier(DatabaseType::Mysql, output_name)
             )
         })
         .collect::<Vec<_>>()
@@ -2005,7 +2010,7 @@ fn mysql_bounded_select(sql: &str, output_names: &[String], limit: usize) -> Str
 
 fn execute_custom_query(
     conn: &Connection,
-    backend: DatabaseBackend,
+    backend: DatabaseType,
     database: Option<&str>,
     sql: &str,
 ) -> Result<QueryResult, StatementError> {
@@ -2024,7 +2029,7 @@ fn execute_custom_query(
 
 pub(crate) struct QueryConnection {
     connection: Connection,
-    backend: DatabaseBackend,
+    backend: DatabaseType,
     database: Option<String>,
 }
 
@@ -2072,7 +2077,7 @@ pub(crate) enum RawQueryResponse {
 
 fn execute_raw_query(
     conn: &Connection,
-    backend: DatabaseBackend,
+    backend: DatabaseType,
     database: Option<&str>,
     sql: &str,
 ) -> Result<RawQueryResult, StatementError> {
@@ -2132,7 +2137,7 @@ pub(crate) fn run_raw_query(
             .map_err(|error| error.to_string());
     }
     // MySQL commits implicitly around DDL, so those statements cannot be rolled back
-    let has_implicit_commit = *backend == DatabaseBackend::Mysql
+    let has_implicit_commit = *backend == DatabaseType::Mysql
         && statements.iter().any(|statement| {
             [
                 "CREATE", "ALTER", "DROP", "RENAME", "TRUNCATE", "GRANT", "REVOKE",
@@ -2176,7 +2181,7 @@ pub(crate) fn run_raw_query(
 }
 
 /// Returns the single trimmed SELECT statement without its trailing semicolon
-fn validate_read_only_query(backend: DatabaseBackend, sql: &str) -> Result<String, &'static str> {
+fn validate_read_only_query(backend: DatabaseType, sql: &str) -> Result<String, &'static str> {
     let mut statements = split_statements(backend, sql);
     let [statement] = statements.as_mut_slice() else {
         return Err(if statements.is_empty() {
@@ -2222,6 +2227,18 @@ mod tests {
             )
             .expect("create query fixtures");
         Arc::new(Mutex::new(DatabaseState::sqlite(connection)))
+    }
+
+    #[test]
+    fn temporal_cells_render_as_date_and_datetime_text() {
+        let date = cell_value(Value::Date("2024-08-30".parse().unwrap()));
+        assert_eq!(date.kind, "text");
+        assert_eq!(date.value, json!("2024-08-30"));
+        let datetime = cell_value(Value::DateTime(
+            "2024-08-30T01:02:03.123456Z".parse().unwrap(),
+        ));
+        assert_eq!(datetime.kind, "text");
+        assert_eq!(datetime.value, json!("2024-08-30 01:02:03.123456"));
     }
 
     #[test]
@@ -2342,7 +2359,7 @@ mod tests {
             &generation,
             1,
             DatabaseState {
-                backend: Some(DatabaseBackend::Mysql),
+                backend: Some(DatabaseType::Mysql),
                 ..DatabaseState::default()
             },
         );
@@ -2418,7 +2435,7 @@ mod tests {
             .unwrap();
         let state = Arc::new(Mutex::new(DatabaseState {
             connection: Some(connection),
-            backend: Some(DatabaseBackend::Sqlite),
+            backend: Some(DatabaseType::Sqlite),
             ..DatabaseState::default()
         }));
         let mut request = Request::default();
@@ -2473,7 +2490,7 @@ mod tests {
             .unwrap();
         let state = Arc::new(Mutex::new(DatabaseState {
             connection: Some(connection),
-            backend: Some(DatabaseBackend::Sqlite),
+            backend: Some(DatabaseType::Sqlite),
             ..DatabaseState::default()
         }));
         let mut request = Request::default();
@@ -2514,7 +2531,7 @@ mod tests {
             .unwrap();
         let state = Arc::new(Mutex::new(DatabaseState {
             connection: Some(connection),
-            backend: Some(DatabaseBackend::Sqlite),
+            backend: Some(DatabaseType::Sqlite),
             ..DatabaseState::default()
         }));
         let mut request = Request::default();
@@ -2727,14 +2744,14 @@ mod tests {
 
         let update = execute_raw_query(
             &connection,
-            DatabaseBackend::Sqlite,
+            DatabaseType::Sqlite,
             None,
             "UPDATE items SET name = 'After' WHERE id = 1",
         )
         .unwrap();
         let select = execute_raw_query(
             &connection,
-            DatabaseBackend::Sqlite,
+            DatabaseType::Sqlite,
             None,
             "SELECT name FROM items WHERE id = 1",
         )
@@ -2752,7 +2769,7 @@ mod tests {
 
         let result = execute_raw_query(
             &connection,
-            DatabaseBackend::Sqlite,
+            DatabaseType::Sqlite,
             None,
             "WITH RECURSIVE numbers(value) AS (\
                 SELECT 1 UNION ALL SELECT value + 1 FROM numbers WHERE value <= 10000\
@@ -2784,7 +2801,7 @@ mod tests {
             )
             .expect("create fixtures");
         let tables = HashSet::from(["children".to_string()]);
-        let foreign_keys = load_foreign_keys(&connection, DatabaseBackend::Sqlite, None, &tables)
+        let foreign_keys = load_foreign_keys(&connection, DatabaseType::Sqlite, None, &tables)
             .expect("load foreign keys");
         let foreign_key = &foreign_keys[&("children".to_string(), "parent_id".to_string())];
         assert_eq!(

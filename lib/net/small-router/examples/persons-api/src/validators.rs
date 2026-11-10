@@ -13,3 +13,12 @@ pub(crate) fn name_validator(name: &str) -> validate::Result {
         Ok(())
     }
 }
+
+// MARK: Query
+pub(crate) fn query_validator(query: &str) -> validate::Result {
+    if query.chars().take(129).count() > 128 {
+        Err(validate::Error::new("Must be at most 128 characters long"))
+    } else {
+        Ok(())
+    }
+}

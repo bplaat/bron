@@ -15,6 +15,7 @@ pub(crate) struct Column {
     pub(crate) origin_name: Option<String>,
     pub(crate) type_code: u8,
     pub(crate) flags: super::ColumnFlags,
+    pub(crate) decimals: u8,
     pub(crate) charset: u16,
 }
 
@@ -37,8 +38,13 @@ pub(crate) struct Prepared {
 }
 
 impl PreparedStatement for Prepared {
-    fn reset(&mut self, connection: &mut InnerConnection) -> Result<(), StatementError> {
-        connection.mysql_mut()?.reset(self)
+    fn reset(&mut self, _connection: &mut InnerConnection) -> Result<(), StatementError> {
+        // Results are fully buffered and long data is never sent, so no COM_STMT_RESET is needed.
+        self.rows.clear();
+        self.row_index = 0;
+        self.current_row = None;
+        self.executed = false;
+        Ok(())
     }
 
     fn bind_value(&mut self, index: i32, value: Value) -> Result<(), StatementError> {
@@ -116,6 +122,8 @@ pub(crate) const fn column_type(value: &Value) -> ColumnType {
         Value::Integer(_) => ColumnType::Integer,
         Value::Float(_) => ColumnType::Float,
         Value::Text(_) => ColumnType::Text,
+        #[cfg(feature = "chrono")]
+        Value::Date(_) | Value::DateTime(_) => ColumnType::Text,
         Value::Blob(_) => ColumnType::Blob,
     }
 }

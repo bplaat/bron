@@ -6,9 +6,9 @@
 
 use std::fmt::Write;
 
-use bsql::{Connection, StatementError, Value};
+use bsql::{Connection, DatabaseType, StatementError, Value};
 
-use crate::database::{DatabaseBackend, State};
+use crate::database::State;
 use crate::sql::{quote_identifier, quote_text};
 
 const INSERT_BATCH_SIZE: usize = 100;
@@ -25,8 +25,8 @@ pub(crate) fn import_sql(state: &State, sql: &str) -> Result<(), String> {
         .connection_snapshot()?;
     // Dumps turn foreign key checks off, restore them even when the script fails halfway
     let foreign_keys_query = match backend {
-        DatabaseBackend::Sqlite => "PRAGMA foreign_keys",
-        DatabaseBackend::Mysql => "SELECT @@FOREIGN_KEY_CHECKS",
+        DatabaseType::Sqlite => "PRAGMA foreign_keys",
+        DatabaseType::Mysql => "SELECT @@FOREIGN_KEY_CHECKS",
     };
     let foreign_keys = connection
         .query_some::<i64>(foreign_keys_query, ())
@@ -38,8 +38,8 @@ pub(crate) fn import_sql(state: &State, sql: &str) -> Result<(), String> {
     let restore = connection
         .execute(
             match backend {
-                DatabaseBackend::Sqlite => format!("PRAGMA foreign_keys = {foreign_keys}"),
-                DatabaseBackend::Mysql => format!("SET FOREIGN_KEY_CHECKS = {foreign_keys}"),
+                DatabaseType::Sqlite => format!("PRAGMA foreign_keys = {foreign_keys}"),
+                DatabaseType::Mysql => format!("SET FOREIGN_KEY_CHECKS = {foreign_keys}"),
             },
             (),
         )
@@ -55,8 +55,8 @@ pub(crate) fn export_sql(state: &State) -> Result<String, String> {
         .expect("mutex poisoned")
         .connection_snapshot()?;
     match backend {
-        DatabaseBackend::Sqlite => export_sqlite(&connection),
-        DatabaseBackend::Mysql => export_mysql(
+        DatabaseType::Sqlite => export_sqlite(&connection),
+        DatabaseType::Mysql => export_mysql(
             &connection,
             database
                 .as_deref()
@@ -89,7 +89,7 @@ fn export_sqlite(connection: &Connection) -> Result<String, StatementError> {
         writeln!(
             dump,
             "DROP VIEW IF EXISTS {};",
-            quote_identifier(DatabaseBackend::Sqlite, &view)
+            quote_identifier(DatabaseType::Sqlite, &view)
         )
         .expect("writing to a string cannot fail");
     }
@@ -100,7 +100,7 @@ fn export_sqlite(connection: &Connection) -> Result<String, StatementError> {
         writeln!(
             dump,
             "DROP TABLE IF EXISTS {};",
-            quote_identifier(DatabaseBackend::Sqlite, table)
+            quote_identifier(DatabaseType::Sqlite, table)
         )
         .expect("writing to a string cannot fail");
         writeln!(dump, "{};\n", schema.trim_end_matches(';'))
@@ -121,13 +121,7 @@ fn export_sqlite(connection: &Connection) -> Result<String, StatementError> {
                 Err(error) => Some(Err(error)),
             })
             .collect::<Result<Vec<_>, _>>()?;
-        export_table_rows(
-            connection,
-            DatabaseBackend::Sqlite,
-            table,
-            &columns,
-            &mut dump,
-        )?;
+        export_table_rows(connection, DatabaseType::Sqlite, table, &columns, &mut dump)?;
     }
 
     let objects = connection
@@ -185,7 +179,7 @@ fn export_mysql(connection: &Connection, database: &str) -> Result<String, State
         writeln!(
             dump,
             "DROP VIEW IF EXISTS {};",
-            quote_identifier(DatabaseBackend::Mysql, view)
+            quote_identifier(DatabaseType::Mysql, view)
         )
         .expect("writing to a string cannot fail");
     }
@@ -194,7 +188,7 @@ fn export_mysql(connection: &Connection, database: &str) -> Result<String, State
     }
 
     for table in &tables {
-        let quoted_table = quote_identifier(DatabaseBackend::Mysql, table);
+        let quoted_table = quote_identifier(DatabaseType::Mysql, table);
         let (_, schema) = connection
             .query_some::<(String, String)>(format!("SHOW CREATE TABLE {quoted_table}"), ())?;
         writeln!(dump, "DROP TABLE IF EXISTS {quoted_table};")
@@ -211,20 +205,14 @@ fn export_mysql(connection: &Connection, database: &str) -> Result<String, State
                 (database.to_string(), table.clone()),
             )?
             .collect::<Result<Vec<_>, _>>()?;
-        export_table_rows(
-            connection,
-            DatabaseBackend::Mysql,
-            table,
-            &columns,
-            &mut dump,
-        )?;
+        export_table_rows(connection, DatabaseType::Mysql, table, &columns, &mut dump)?;
     }
 
     // Create views after the views they select from
     let mut views = views
         .iter()
         .map(|view| {
-            let quoted_view = quote_identifier(DatabaseBackend::Mysql, view);
+            let quoted_view = quote_identifier(DatabaseType::Mysql, view);
             show_create(connection, &format!("SHOW CREATE VIEW {quoted_view}"), 1)
                 .map(|schema| (format!(".{quoted_view}"), schema))
         })
@@ -244,7 +232,7 @@ fn export_mysql(connection: &Connection, database: &str) -> Result<String, State
     }
 
     for trigger in &triggers {
-        let quoted_trigger = quote_identifier(DatabaseBackend::Mysql, trigger);
+        let quoted_trigger = quote_identifier(DatabaseType::Mysql, trigger);
         let schema = show_create(
             connection,
             &format!("SHOW CREATE TRIGGER {quoted_trigger}"),
@@ -257,7 +245,7 @@ fn export_mysql(connection: &Connection, database: &str) -> Result<String, State
         .expect("writing to a string cannot fail");
     }
     for (kind, routine) in &routines {
-        let quoted_routine = quote_identifier(DatabaseBackend::Mysql, routine);
+        let quoted_routine = quote_identifier(DatabaseType::Mysql, routine);
         let kind = if kind == "FUNCTION" {
             "FUNCTION"
         } else {
@@ -272,7 +260,7 @@ fn export_mysql(connection: &Connection, database: &str) -> Result<String, State
             .expect("writing to a string cannot fail");
     }
     for event in &events {
-        let quoted_event = quote_identifier(DatabaseBackend::Mysql, event);
+        let quoted_event = quote_identifier(DatabaseType::Mysql, event);
         let schema = show_create(connection, &format!("SHOW CREATE EVENT {quoted_event}"), 3)?;
         writeln!(dump, "DROP EVENT IF EXISTS {quoted_event};\n{schema};\n")
             .expect("writing to a string cannot fail");
@@ -297,7 +285,7 @@ fn show_create(connection: &Connection, sql: &str, column: i32) -> Result<String
 
 fn export_table_rows(
     connection: &Connection,
-    backend: DatabaseBackend,
+    backend: DatabaseType,
     table: &str,
     columns: &[String],
     dump: &mut String,
@@ -308,10 +296,10 @@ fn export_table_rows(
             connection.query_some::<i64>(format!("SELECT COUNT(*) FROM {quoted_table}"), ())?;
         for _ in 0..count {
             match backend {
-                DatabaseBackend::Sqlite => {
+                DatabaseType::Sqlite => {
                     writeln!(dump, "INSERT INTO {quoted_table} DEFAULT VALUES;")
                 }
-                DatabaseBackend::Mysql => {
+                DatabaseType::Mysql => {
                     writeln!(dump, "INSERT INTO {quoted_table} () VALUES ();")
                 }
             }
@@ -354,7 +342,7 @@ fn export_table_rows(
     Ok(())
 }
 
-fn quote_value(backend: DatabaseBackend, value: Value) -> String {
+fn quote_value(backend: DatabaseType, value: Value) -> String {
     match value {
         Value::Null => "NULL".to_string(),
         Value::Integer(value) => value.to_string(),
@@ -363,13 +351,15 @@ fn quote_value(backend: DatabaseBackend, value: Value) -> String {
         Value::Float(value) if value.is_sign_positive() => "9e999".to_string(),
         Value::Float(_) => "-9e999".to_string(),
         // Hex keeps any text intact, the conversion lets JSON columns accept it
-        Value::Text(value) if backend == DatabaseBackend::Mysql => {
+        Value::Text(value) if backend == DatabaseType::Mysql => {
             format!("CONVERT({} USING utf8mb4)", hex_literal(value.as_bytes()))
         }
         Value::Text(value) if value.contains('\0') => {
             format!("CAST({} AS TEXT)", hex_literal(value.as_bytes()))
         }
         Value::Text(value) => quote_text(&value),
+        Value::Date(value) => quote_text(&value.to_string()),
+        Value::DateTime(value) => quote_text(&value.naive_utc().to_string()),
         Value::Blob(value) => hex_literal(&value),
     }
 }
@@ -388,10 +378,28 @@ fn hex_literal(bytes: &[u8]) -> String {
 mod tests {
     use std::sync::{Arc, Mutex};
 
-    use bsql::{Connection, PoolOptions, SqliteMode};
+    use bsql::{Connection, DatabaseType, PoolOptions, SqliteMode, Value};
 
-    use super::{export_sql, import_sql};
+    use super::{export_sql, import_sql, quote_value};
     use crate::database::DatabaseState;
+
+    #[test]
+    fn temporal_values_export_as_sql_literals() {
+        assert_eq!(
+            quote_value(
+                DatabaseType::Mysql,
+                Value::Date("2024-08-30".parse().unwrap())
+            ),
+            "'2024-08-30'"
+        );
+        assert_eq!(
+            quote_value(
+                DatabaseType::Mysql,
+                Value::DateTime("2024-08-30T01:02:03.123456Z".parse().unwrap())
+            ),
+            "'2024-08-30 01:02:03.123456'"
+        );
+    }
 
     #[test]
     fn sqlite_export_import_round_trip() {

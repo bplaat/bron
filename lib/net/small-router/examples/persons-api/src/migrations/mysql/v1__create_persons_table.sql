@@ -1,0 +1,9 @@
+CREATE TABLE persons (
+    id BINARY(16) PRIMARY KEY,
+    name VARCHAR(255) NOT NULL,
+    age BIGINT NOT NULL,
+    relation BIGINT NOT NULL,
+    created_at DATETIME(6) NOT NULL,
+    updated_at DATETIME(6) NOT NULL,
+    FULLTEXT INDEX persons_name_ft (name)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

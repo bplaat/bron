@@ -5,7 +5,7 @@
  */
 
 use anyhow::Result;
-use bsql::{execute_args, preprocess_fts_query, query_args};
+use bsql::{DatabaseType, execute_args, query_args};
 use chrono::Utc;
 use from_derive::FromStruct;
 use small_http::{Request, Response, Status};
@@ -33,16 +33,22 @@ pub(crate) fn persons_index(req: &Request, ctx: &Context) -> Result<Response> {
 
     // Get persons
     let (total, persons) = if let Some(q) = query.query.as_deref().filter(|s| !s.is_empty()) {
-        let fts_query = preprocess_fts_query(q);
+        let predicate = match ctx.database.database_type() {
+            DatabaseType::Sqlite => {
+                "id IN (SELECT id FROM persons_fts WHERE persons_fts MATCH :fts_query)"
+            }
+            DatabaseType::Mysql => "MATCH(name) AGAINST(:fts_query IN BOOLEAN MODE)",
+        };
+        let fts_query = ctx.database.preprocess_fts_query(q);
         let total = ctx.database.query_some::<i64>(
-            "SELECT COUNT(id) FROM persons WHERE id IN (SELECT id FROM persons_fts WHERE persons_fts MATCH ?)",
+            format!("SELECT COUNT(id) FROM persons WHERE {predicate}"),
             fts_query.clone(),
         )?;
         let persons = query_args!(
             Person,
             ctx.database,
             format!(
-                "SELECT {} FROM persons WHERE id IN (SELECT id FROM persons_fts WHERE persons_fts MATCH :fts_query) ORDER BY created_at DESC, id DESC LIMIT :limit OFFSET :offset",
+                "SELECT {} FROM persons WHERE {predicate} ORDER BY created_at DESC, id DESC LIMIT :limit OFFSET :offset",
                 Person::columns()
             ),
             Args {
@@ -234,6 +240,131 @@ mod test {
     use crate::router;
 
     #[test]
+    #[ignore = "requires DATABASE_DRIVER=mysql and a dedicated empty MySQL database"]
+    fn test_persons_mysql() -> Result<()> {
+        let database = crate::open_database(bsql::PoolOptions { max_connections: 2 })?;
+        assert_eq!(
+            database.database_type(),
+            DatabaseType::Mysql,
+            "set DATABASE_DRIVER=mysql"
+        );
+        let datetime = chrono::DateTime::<Utc>::from_timestamp(1_700_000_000, 123_456_789).unwrap();
+        let date = datetime.naive_utc().date();
+        let (read_date, read_datetime, read_naive) = database.query_some::<(
+            chrono::NaiveDate,
+            chrono::DateTime<Utc>,
+            chrono::NaiveDateTime,
+        )>(
+            "SELECT CAST(? AS DATE), CAST(? AS DATETIME(6)), CAST(? AS DATETIME(6))",
+            (date, datetime, datetime.naive_utc()),
+        )?;
+        assert_eq!(read_date, date);
+        assert_eq!(
+            read_datetime.timestamp_micros(),
+            datetime.timestamp_micros()
+        );
+        assert_eq!(read_naive, read_datetime.naive_utc());
+        database.transaction(|transaction| -> Result<()> {
+            assert_eq!(transaction.database_type(), DatabaseType::Mysql);
+            Ok(())
+        })?;
+        let ctx = Context::with_database(database.clone())?;
+        // Reopening must skip migrations that have already been applied.
+        Context::with_database(database.clone())?;
+        assert_eq!(
+            database.query_some::<i64>("SELECT COUNT(*) FROM schema_migrations", ())?,
+            1
+        );
+        let probe = Person {
+            name: "Migration Probe".to_string(),
+            ..Default::default()
+        };
+        let result = database.transaction(|transaction| -> Result<()> {
+            transaction.insert_person(probe.clone())?;
+            transaction.migration(&[])?;
+            Ok(())
+        });
+        assert!(result.is_err());
+        assert_eq!(
+            database.query_some::<i64>("SELECT COUNT(*) FROM persons WHERE id = ?", probe.id)?,
+            0
+        );
+        assert_search_syntax(ctx.clone());
+        let router = router(ctx);
+
+        let res = router.handle(
+            &Request::post("http://localhost/persons")
+                .json(json!({ "name": "Alice Smith", "ageInYears": 30, "relation": "me" })),
+        );
+        assert_eq!(res.status, Status::Created);
+        let person = serde_json::from_slice::<api::Person>(&res.body)?;
+        let url = format!("http://localhost/persons/{}", person.id);
+        let res = router.handle(&Request::get(&url));
+        assert_eq!(res.status, Status::Ok);
+        let fetched = serde_json::from_slice::<api::Person>(&res.body)?;
+        assert_eq!(fetched.id, person.id);
+        assert_eq!(
+            fetched.created_at.timestamp_micros(),
+            person.created_at.timestamp_micros()
+        );
+
+        for query in [
+            "Alice",
+            "Al",
+            "Al*",
+            "Alice%20Smith",
+            "Alice%20AND%20Smith",
+            "Alice%20NOT%20Smith",
+        ] {
+            let res = router.handle(&Request::get(format!(
+                "http://localhost/persons?q={query}&limit=1"
+            )));
+            assert_eq!(res.status, Status::Ok);
+            let response = serde_json::from_slice::<api::PersonIndexResponse>(&res.body)?;
+            let expected = if query == "Alice%20NOT%20Smith" { 0 } else { 1 };
+            assert_eq!(response.pagination.total, expected);
+            assert_eq!(response.data.len() as i64, expected);
+        }
+
+        let res =
+            router
+                .handle(&Request::put(&url).json(
+                    json!({ "name": "Carol White", "ageInYears": 31, "relation": "sister" }),
+                ));
+        assert_eq!(res.status, Status::Ok);
+        let updated = serde_json::from_slice::<api::Person>(&res.body)?;
+        assert_eq!(updated.name, "Carol White");
+        assert_eq!(updated.age_in_years, 31);
+        let res = router.handle(&Request::get("http://localhost/persons?q=Alice"));
+        assert_eq!(
+            serde_json::from_slice::<api::PersonIndexResponse>(&res.body)?
+                .pagination
+                .total,
+            0
+        );
+        let res = router.handle(&Request::get("http://localhost/persons?q=Carol"));
+        assert_eq!(
+            serde_json::from_slice::<api::PersonIndexResponse>(&res.body)?
+                .pagination
+                .total,
+            1
+        );
+        assert_eq!(
+            router.handle(&Request::delete(&url)).status,
+            Status::NoContent
+        );
+        assert_eq!(router.handle(&Request::get(&url)).status, Status::NotFound);
+        let res = router.handle(&Request::get("http://localhost/persons?q=Carol"));
+        assert_eq!(
+            serde_json::from_slice::<api::PersonIndexResponse>(&res.body)?
+                .pagination
+                .total,
+            0
+        );
+        Ok(())
+    }
+
+    #[test]
     fn test_persons_index() {
         let ctx = Context::with_test_database().expect("Can't create test database");
         let router = router(ctx.clone());
@@ -293,60 +424,129 @@ mod test {
     }
 
     #[test]
-    fn test_persons_index_fts5_search() {
+    fn test_persons_index_search_syntax() {
         let ctx = Context::with_test_database().expect("Can't create test database");
+        assert_search_syntax(ctx);
+    }
+
+    fn assert_search_syntax(ctx: Context) {
+        let names = ["Alice Smith", "Alice Johnson", "Bob Smith", "Carol White"];
+        for name in names {
+            ctx.database
+                .insert_person(Person {
+                    name: name.to_string(),
+                    ..Default::default()
+                })
+                .unwrap();
+        }
         let router = router(ctx.clone());
-
-        ctx.database
-            .insert_person(Person {
-                name: "Alice Smith".to_string(),
-                ..Default::default()
-            })
-            .unwrap();
-        ctx.database
-            .insert_person(Person {
-                name: "Alice Johnson".to_string(),
-                ..Default::default()
-            })
-            .unwrap();
-        ctx.database
-            .insert_person(Person {
-                name: "Bob Smith".to_string(),
-                ..Default::default()
-            })
-            .unwrap();
-        ctx.database
-            .insert_person(Person {
-                name: "Carol White".to_string(),
-                ..Default::default()
-            })
-            .unwrap();
-
-        // Prefix search (Al* preserved as-is)
-        let res = router.handle(&Request::get("http://localhost/persons?q=Al*"));
-        assert_eq!(res.status, Status::Ok);
-        let response = serde_json::from_slice::<api::PersonIndexResponse>(&res.body).unwrap();
-        assert_eq!(response.data.len(), 2);
-
-        // AND search
-        let res = router.handle(&Request::get("http://localhost/persons?q=Alice AND Smith"));
-        assert_eq!(res.status, Status::Ok);
-        let response = serde_json::from_slice::<api::PersonIndexResponse>(&res.body).unwrap();
-        assert_eq!(response.data.len(), 1);
-        assert_eq!(response.data[0].name, "Alice Smith");
-
-        // OR search
-        let res = router.handle(&Request::get("http://localhost/persons?q=Alice OR Bob"));
-        assert_eq!(res.status, Status::Ok);
-        let response = serde_json::from_slice::<api::PersonIndexResponse>(&res.body).unwrap();
-        assert_eq!(response.data.len(), 3);
-
-        // NOT search
-        let res = router.handle(&Request::get("http://localhost/persons?q=Alice NOT Smith"));
-        assert_eq!(res.status, Status::Ok);
-        let response = serde_json::from_slice::<api::PersonIndexResponse>(&res.body).unwrap();
-        assert_eq!(response.data.len(), 1);
-        assert_eq!(response.data[0].name, "Alice Johnson");
+        let cases: &[(&str, &[&str])] = &[
+            ("Al", &["Alice Johnson", "Alice Smith"]),
+            ("Al*", &["Alice Johnson", "Alice Smith"]),
+            ("alice", &["Alice Johnson", "Alice Smith"]),
+            ("Alice Smith", &["Alice Smith"]),
+            ("Alice AND Smith", &["Alice Smith"]),
+            (
+                "Alice OR Bob",
+                &["Alice Johnson", "Alice Smith", "Bob Smith"],
+            ),
+            ("Alice NOT Smith", &["Alice Johnson"]),
+            (
+                "Alice OR Bob AND Smith",
+                &["Alice Johnson", "Alice Smith", "Bob Smith"],
+            ),
+            ("Alice AND Smith OR Carol", &["Alice Smith", "Carol White"]),
+            ("Alice OR Bob NOT Smith", &["Alice Johnson", "Alice Smith"]),
+            ("Alice NOT Bob Smith", &["Alice Johnson", "Alice Smith"]),
+            ("Alice NOT Smith NOT Johnson", &[]),
+            (
+                "Alice NOT Smith OR Bob NOT White",
+                &["Alice Johnson", "Bob Smith"],
+            ),
+            ("Alice Smith NOT Bob", &["Alice Smith"]),
+            ("Alice AND Smith NOT Johnson", &["Alice Smith"]),
+            ("AND Alice AND OR Smith NOT", &["Alice Smith"]),
+            ("(Alice) \"Smith\"", &["Alice Smith"]),
+            ("Alice-Smith", &["Alice Smith"]),
+            ("OR NOT () * + - @", &[]),
+            ("   ", &[]),
+            ("Missing", &[]),
+            ("AND*", &[]),
+        ];
+        for (query, expected) in cases {
+            let params = serde_urlencoded::to_string([("q", *query)]).unwrap();
+            let res = router.handle(&Request::get(format!("http://localhost/persons?{params}")));
+            assert_eq!(res.status, Status::Ok, "{query}");
+            let response = serde_json::from_slice::<api::PersonIndexResponse>(&res.body).unwrap();
+            let mut actual: Vec<_> = response
+                .data
+                .iter()
+                .map(|person| person.name.as_str())
+                .collect();
+            actual.sort_unstable();
+            assert_eq!(actual, *expected, "{query}");
+            assert_eq!(
+                response.pagination.total as usize,
+                expected.len(),
+                "{query}"
+            );
+            let res = router.handle(&Request::get(format!(
+                "http://localhost/persons?{params}&limit=1&page=2"
+            )));
+            assert_eq!(res.status, Status::Ok, "{query}");
+            let response = serde_json::from_slice::<api::PersonIndexResponse>(&res.body).unwrap();
+            assert_eq!(
+                response.pagination.total as usize,
+                expected.len(),
+                "{query}"
+            );
+            assert_eq!(
+                response.data.len(),
+                usize::from(expected.len() > 1),
+                "{query}"
+            );
+        }
+        for separator in [" ", " AND ", " OR "] {
+            let query = vec!["Alice"; 200].join(separator);
+            let predicate = match ctx.database.database_type() {
+                DatabaseType::Sqlite => {
+                    "id IN (SELECT id FROM persons_fts WHERE persons_fts MATCH ?)"
+                }
+                DatabaseType::Mysql => "MATCH(name) AGAINST(? IN BOOLEAN MODE)",
+            };
+            let total = ctx
+                .database
+                .query_some::<i64>(
+                    format!("SELECT COUNT(*) FROM persons WHERE {predicate}"),
+                    ctx.database.preprocess_fts_query(&query),
+                )
+                .unwrap();
+            assert_eq!(total, 2, "{separator}");
+            let params = serde_urlencoded::to_string([("q", query)]).unwrap();
+            let res = router.handle(&Request::get(format!("http://localhost/persons?{params}")));
+            assert_eq!(res.status, Status::BadRequest, "{separator}");
+        }
+        for character in ["a", "\u{e9}"] {
+            for length in [128, 129] {
+                let params =
+                    serde_urlencoded::to_string([("q", character.repeat(length))]).unwrap();
+                let res =
+                    router.handle(&Request::get(format!("http://localhost/persons?{params}")));
+                assert_eq!(
+                    res.status,
+                    if length == 128 {
+                        Status::Ok
+                    } else {
+                        Status::BadRequest
+                    }
+                );
+            }
+        }
+        for name in names {
+            ctx.database
+                .execute("DELETE FROM persons WHERE name = ?", name.to_string())
+                .unwrap();
+        }
     }
 
     #[test]
