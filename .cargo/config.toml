@@ -1,6 +1,9 @@
 [alias]
 xtask = "run --package xtask --"
 
+[registry]
+global-min-publish-age = "3 days"
+
 # Require SSE4.2 and POPCNT for Windows x86 builds, including dependencies.
 [target.'cfg(all(windows, any(target_arch = "x86", target_arch = "x86_64")))']
 rustflags = ["-Ctarget-feature=+sse4.2,+popcnt"]
