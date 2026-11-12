@@ -233,7 +233,7 @@ fn parse_signed(value: &str) -> Result<i128, Error> {
     let (negative, digits) = value
         .strip_prefix('-')
         .map_or((false, value.as_str()), |digits| (true, digits));
-    let digits = digits.strip_prefix('+').unwrap_or(digits);
+    let digits = digits.trim_prefix('+');
     let (radix, digits) = if let Some(digits) = digits.strip_prefix("0x") {
         (16, digits)
     } else if let Some(digits) = digits.strip_prefix("0o") {
@@ -250,7 +250,7 @@ fn parse_signed(value: &str) -> Result<i128, Error> {
 
 fn parse_unsigned(value: &str) -> Result<u128, Error> {
     let value = value.replace('_', "");
-    let digits = value.strip_prefix('+').unwrap_or(&value);
+    let digits = value.trim_prefix('+');
     let (radix, digits) = if let Some(digits) = digits.strip_prefix("0x") {
         (16, digits)
     } else if let Some(digits) = digits.strip_prefix("0o") {

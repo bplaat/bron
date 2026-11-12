@@ -130,7 +130,7 @@ pub(super) fn decode(data: &[u8]) -> Result<Image> {
                 animated = payload[0] & 2 != 0;
             }
             b"EXIF" => {
-                let data = payload.strip_prefix(b"Exif\0\0").unwrap_or(payload);
+                let data = payload.trim_prefix(b"Exif\0\0");
                 if let Some(value) = ExifData::new(data).and_then(|exif| exif.orientation()) {
                     orientation = value;
                 }

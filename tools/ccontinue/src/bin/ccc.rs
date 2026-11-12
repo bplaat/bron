@@ -396,7 +396,7 @@ fn link_and_run(
         let base = &files[0];
         format!(
             "{}{}",
-            base.strip_suffix(".cc").unwrap_or(base),
+            base.trim_suffix(".cc"),
             std::env::consts::EXE_SUFFIX
         )
     });

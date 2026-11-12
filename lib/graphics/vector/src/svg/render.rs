@@ -36,7 +36,7 @@ impl<'a> Decoder<'a> {
             return Err(VectorDecodeError::ResourceLimit);
         }
         let source = std::str::from_utf8(data).map_err(|_| VectorDecodeError::InvalidData)?;
-        let source = source.strip_prefix('\u{feff}').unwrap_or(source);
+        let source = source.trim_prefix('\u{feff}');
         let document = XmlDocument::parse(source)?;
         let styles = Stylesheet::parse(&document.elements)?;
         Ok(Self { document, styles })
@@ -721,7 +721,7 @@ impl<'document, 'source> Composer<'document, 'source> {
                     0.0
                 }
         } else {
-            super::values::number(orient.strip_suffix("deg").unwrap_or(orient))?.to_radians()
+            super::values::number(orient.trim_suffix("deg"))?.to_radians()
         };
         let (sin, cos) = angle.sin_cos();
         let placement_transform = Transform {

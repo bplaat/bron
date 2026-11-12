@@ -34,10 +34,7 @@ pub(crate) fn is_svg(data: &[u8]) -> bool {
     let Ok(source) = std::str::from_utf8(data) else {
         return data.windows(4).take(1024).any(|window| window == b"<svg");
     };
-    let source = source
-        .strip_prefix('\u{feff}')
-        .unwrap_or(source)
-        .trim_start();
+    let source = source.trim_prefix('\u{feff}').trim_start();
     for token in Tokenizer::from(source) {
         match token {
             Ok(Token::ElementStart { local, .. }) => return local.as_str() == "svg",

@@ -14,7 +14,7 @@ use crate::sql::{quote_identifier, quote_text};
 const INSERT_BATCH_SIZE: usize = 100;
 
 pub(crate) fn import_sql(state: &State, sql: &str) -> Result<(), String> {
-    let sql = sql.strip_prefix('\u{feff}').unwrap_or(sql);
+    let sql = sql.trim_prefix('\u{feff}');
     if sql.trim().is_empty() {
         return Err("The selected SQL file is empty".to_string());
     }
