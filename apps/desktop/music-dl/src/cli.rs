@@ -5,6 +5,7 @@
  */
 
 use std::io::{self, IsTerminal, Write};
+use std::mem::DropGuard;
 use std::process::exit;
 use std::sync::mpsc;
 use std::thread;
@@ -169,14 +170,12 @@ fn subcommand_version() {
 
 // MARK: Renderer
 fn run_renderer(rx: mpsc::Receiver<ProgressEvent>, is_tty: bool) {
-    struct CursorGuard;
-    impl Drop for CursorGuard {
-        fn drop(&mut self) {
+    let _guard = is_tty.then(|| {
+        DropGuard::new((), |()| {
             print!("\x1b[?25h");
             io::stdout().flush().ok();
-        }
-    }
-    let _guard = if is_tty { Some(CursorGuard) } else { None };
+        })
+    });
 
     let mut tracks: Vec<TrackState> = Vec::new();
     let mut lines_drawn = 0usize;

@@ -7,6 +7,7 @@
 use std::any::Any;
 use std::ffi::{c_char, c_void};
 use std::marker::PhantomData;
+use std::mem::DropGuard;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::ptr::null_mut;
 
@@ -184,13 +185,9 @@ impl<'local> Env<'local> {
             return Err(Error::JniCall(JniError::from_code(result)).into());
         }
         // Pop the frame also when `f` panics, like a native method that catches it.
-        struct PopFrame(*mut sys::JNIEnv);
-        impl Drop for PopFrame {
-            fn drop(&mut self) {
-                unsafe { ((**self.0).PopLocalFrame)(self.0, null_mut()) };
-            }
-        }
-        let _frame = PopFrame(self.raw);
+        let _frame = DropGuard::new(self.raw, |raw| {
+            unsafe { ((**raw).PopLocalFrame)(raw, null_mut()) };
+        });
         f(&mut unsafe { Env::from_raw(self.raw) })
     }
 

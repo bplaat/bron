@@ -6,7 +6,7 @@
 
 use std::fmt;
 use std::marker::PhantomData;
-use std::mem::ManuallyDrop;
+use std::mem::{DropGuard, ManuallyDrop};
 use std::ops::Deref;
 use std::ptr::NonNull;
 
@@ -246,19 +246,11 @@ pub fn autoreleasepool<F, R>(f: F) -> R
 where
     F: FnOnce(&AutoreleasePool) -> R,
 {
-    // SAFETY: `objc_autoreleasePoolPush` and `objc_autoreleasePoolPop` must be called in
-    // matched pairs on the same thread. The token from Push is immediately passed back to
-    // Pop after the closure returns, satisfying the ObjC runtime's stack discipline.
-    struct PoolGuard(*mut std::ffi::c_void);
-    impl Drop for PoolGuard {
-        fn drop(&mut self) {
-            // SAFETY: The guard is dropped on the thread that pushed this pool.
-            unsafe { objc_autoreleasePoolPop(self.0) };
-        }
-    }
-
     // SAFETY: The guard guarantees a matching pop, including while unwinding.
-    let _guard = PoolGuard(unsafe { objc_autoreleasePoolPush() });
+    let _guard = DropGuard::new(unsafe { objc_autoreleasePoolPush() }, |pool| {
+        // SAFETY: The guard is dropped on the thread that pushed this pool.
+        unsafe { objc_autoreleasePoolPop(pool) };
+    });
     f(&AutoreleasePool(()))
 }
 
