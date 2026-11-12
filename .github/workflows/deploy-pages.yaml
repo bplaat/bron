@@ -29,10 +29,10 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       # Deploy the commit that the check run passed, not the latest master
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7.0.1
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
-      - uses: actions/cache@v5
+      - uses: actions/cache@v6.1.0
         id: cache-rust-toolchain
         with:
           path: |
@@ -48,9 +48,9 @@ jobs:
       - name: Build pages
         run: cargo xtask build-pages
       - name: Upload pages
-        uses: actions/upload-pages-artifact@v5
+        uses: actions/upload-pages-artifact@v5.0.0
         with:
           path: './target/pages'
       - id: deployment
         name: Deploy pages
-        uses: actions/deploy-pages@v5
+        uses: actions/deploy-pages@v5.0.1

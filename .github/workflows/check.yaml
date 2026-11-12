@@ -14,11 +14,25 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # MARK: Check GitHub Actions lockfile
+  check-lockfile:
+    runs-on: ubuntu-slim
+    permissions:
+      contents: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - run: gh extension install github/gh-actions-lock --pin v0.4.1
+      - run: gh actions-lock --verify
+
   # MARK: Check shared
   check-shared:
     runs-on: ubuntu-26.04
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7.0.1
       - name: Install packages and extra Rust tooling
         run: |
           wget -qO /usr/local/bin/clang-format https://github.com/cpp-linter/clang-tools-static-binaries/releases/download/llvm-23.1.3-2/clang-format-23_linux-amd64
@@ -57,7 +71,7 @@ jobs:
             cache-key: windows-aarch64
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7.0.1
 
       - name: Install packages (Linux)
         if: runner.os == 'Linux'
@@ -71,7 +85,7 @@ jobs:
           brew install cunit nasm
           xcrun --find metal >/dev/null 2>&1 || xcodebuild -downloadComponent MetalToolchain
 
-      - uses: actions/cache@v5
+      - uses: actions/cache@v6.1.0
         id: cache-rust-toolchain
         with:
           path: |
@@ -100,7 +114,7 @@ jobs:
         run: cargo xtask check-macos-examples
 
       - name: Report test results
-        uses: dorny/test-reporter@v3
+        uses: dorny/test-reporter@v3.2.0
         if: always()
         with:
           name: Tests (${{ matrix.name }})
@@ -112,8 +126,8 @@ jobs:
   check-e2e:
     runs-on: ubuntu-26.04
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/cache@v5
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/cache@v6.1.0
         id: cache-rust-toolchain
         with:
           path: |
@@ -128,7 +142,7 @@ jobs:
           cargo binstall -y --locked cargo-nextest
       - run: cargo xtask check-e2e
       - name: Report E2E test results
-        uses: dorny/test-reporter@v3
+        uses: dorny/test-reporter@v3.2.0
         if: always()
         with:
           name: E2E Tests
@@ -141,7 +155,7 @@ jobs:
     runs-on: ubuntu-26.04
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7.0.1
       - name: Install extra assembly and console dependencies
         run: |
           sudo apt-get update
@@ -152,17 +166,17 @@ jobs:
       # so date the checkout before any cached build, the exact keys keep a stale build from being used
       - name: Date toolchain sources before cached builds
         run: find tools/nds-toolchain tools/wii-toolchain tools/wiiu-toolchain lib/graphics/image -exec touch -d 2000-01-01 {} +
-      - uses: actions/cache@v5
+      - uses: actions/cache@v6.1.0
         with:
           path: target/nds-toolchain
           key: linux-x86_64-nds-toolchain-${{ hashFiles('tools/nds-toolchain/**', '!tools/nds-toolchain/test/**') }}
-      - uses: actions/cache@v5
+      - uses: actions/cache@v6.1.0
         with:
           path: |
             target/wii-toolchain
             !target/wii-toolchain/test
           key: linux-x86_64-wii-toolchain-${{ hashFiles('tools/wii-toolchain/**', '!tools/wii-toolchain/test/**', 'lib/graphics/image/**') }}
-      - uses: actions/cache@v5
+      - uses: actions/cache@v6.1.0
         with:
           path: target/wiiu-toolchain
           key: linux-x86_64-wiiu-toolchain-${{ hashFiles('tools/wiiu-toolchain/**', 'lib/graphics/image/**', 'Cargo.lock') }}
