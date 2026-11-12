@@ -113,10 +113,7 @@ fn enc_match(actual: &str, expected: &str) -> bool {
             other => other,
         }
     }
-    if sign_relax(actual) == sign_relax(expected) {
-        return true;
-    }
-    false
+    sign_relax(actual) == sign_relax(expected)
 }
 
 fn verify_method(cls: *const std::ffi::c_void, sel: Sel, args: &[Encoding], ret: &Encoding) {

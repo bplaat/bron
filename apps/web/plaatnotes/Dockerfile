@@ -1,5 +1,5 @@
 # Build container
-FROM rust:1.99-slim-bookworm AS builder
+FROM rust:1.100-slim-bookworm AS builder
 
 ARG TARGETARCH
 

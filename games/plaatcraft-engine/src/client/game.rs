@@ -3023,8 +3023,8 @@ pub(crate) mod tests {
             game.controller.pads[0].pointer = Some([20.0, 30.0, 0.0]);
             game.player.pad = game.controller.read_player(0, Context::Menu);
             game.menu();
-            for player in 1..count {
-                game.controller.pads[player] = Wiimote {
+            for pad in game.controller.pads.iter_mut().take(count).skip(1) {
+                *pad = Wiimote {
                     pointer: Some([320.0, settings_y, 0.0]),
                     pressed: Wiimote::A,
                     held: Wiimote::A,
