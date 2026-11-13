@@ -8,9 +8,12 @@
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
 use std::collections::HashMap;
+#[cfg(windows)]
+use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
+use std::{env, fs, thread};
 
 use bwindow::{
     Accelerator, Event, EventLoopBuilder, EventLoopProxy, FileDialog, KeyCode, LogicalSize,
@@ -129,7 +132,7 @@ struct ImageWindow {
     // Whether an edit is being applied or the image saved in the background.
     busy: bool,
     #[cfg(windows)]
-    alerts: std::collections::VecDeque<alert::Alert>,
+    alerts: VecDeque<alert::Alert>,
 }
 
 impl ImageWindow {
@@ -227,9 +230,9 @@ impl App {
     fn load(&mut self, path: PathBuf, target: Target) {
         self.pending_loads += 1;
         let proxy = Arc::clone(&self.proxy);
-        std::thread::spawn(move || {
+        thread::spawn(move || {
             let version = FileVersion::of(&path);
-            let result = std::fs::read(&path)
+            let result = fs::read(&path)
                 .map_err(|error| error.to_string())
                 .and_then(|bytes| decode_pages(&bytes));
             _ = proxy.send_user_event(AppEvent::Loaded(
@@ -252,8 +255,8 @@ impl App {
             self.opening.insert(id, path.clone());
             self.load(path, Target::Window(id));
             let proxy = Arc::clone(&self.proxy);
-            std::thread::spawn(move || {
-                std::thread::sleep(SLOW_LOAD);
+            thread::spawn(move || {
+                thread::sleep(SLOW_LOAD);
                 _ = proxy.send_user_event(AppEvent::SlowLoad(id));
             });
         }
@@ -293,7 +296,7 @@ impl App {
         self.active = Some(window.id());
         self.windows.push(ImageWindow {
             #[cfg(windows)]
-            alerts: std::collections::VecDeque::new(),
+            alerts: VecDeque::new(),
             window,
             view,
             path,
@@ -805,11 +808,11 @@ fn image_menu() -> MenuBuilder {
 fn main() {
     // The freedesktop thumbnailer runs this binary with the thumbnailer arguments.
     #[cfg(not(any(target_os = "macos", windows)))]
-    if std::env::args_os()
+    if env::args_os()
         .nth(1)
         .is_some_and(|argument| argument == "--thumbnail")
     {
-        std::process::exit(platforms::thumbnail(std::env::args_os().skip(2).collect()));
+        std::process::exit(platforms::thumbnail(env::args_os().skip(2).collect()));
     }
 
     let event_loop = EventLoopBuilder::new()
@@ -823,9 +826,9 @@ fn main() {
     platforms::init(event_loop.create_proxy());
 
     let ticker = Arc::clone(&proxy);
-    std::thread::spawn(move || {
+    thread::spawn(move || {
         while ticker.send_user_event(AppEvent::Tick).is_ok() {
-            std::thread::sleep(RELOAD_INTERVAL);
+            thread::sleep(RELOAD_INTERVAL);
         }
     });
 
@@ -838,7 +841,7 @@ fn main() {
         next_open: 0,
         theme: event_loop.theme(),
     };
-    let files: Vec<PathBuf> = std::env::args_os()
+    let files: Vec<PathBuf> = env::args_os()
         .skip(1)
         .filter(|argument| !argument.as_encoded_bytes().starts_with(b"-"))
         .map(PathBuf::from)
@@ -868,7 +871,7 @@ mod tests {
     #[test]
     fn window_size_reserves_the_header_above_the_image() {
         let bytes =
-            std::fs::read(Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/dice.png")).unwrap();
+            fs::read(Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/dice.png")).unwrap();
         let media = imageview_core::decode_media(&bytes).unwrap();
         let size = content_size(Some(&media));
         assert_eq!(size.width, 800.0);
@@ -897,7 +900,7 @@ mod tests {
             ("tiger.svg", (600.0, 600.0)),
             ("tiger.tvg", (600.0, 600.0)),
         ] {
-            let bytes = std::fs::read(examples.join(name)).expect("read example");
+            let bytes = fs::read(examples.join(name)).expect("read example");
             let media = imageview_core::decode_media(&bytes)
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             assert_eq!(media.size(), size, "{name}");

@@ -9,6 +9,7 @@
 use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
+use core::array;
 
 use serde::{Deserialize, Serialize};
 
@@ -900,10 +901,10 @@ impl ChunkData {
     pub fn generate(seed: u64, coord: Coord) -> Self {
         let mut chunk = Self::generate_unlit(seed, coord, false);
         // The generated halo is already right, the neighbors only give light
-        let neighbors: [Option<Self>; 9] = core::array::from_fn(|index| {
+        let neighbors: [Option<Self>; 9] = array::from_fn(|index| {
             (index != 4).then(|| Self::generate_unlit(seed, neighbor(coord, index), true))
         });
-        let light = Self::bake_light(core::array::from_fn(|index| {
+        let light = Self::bake_light(array::from_fn(|index| {
             neighbors[index].as_ref().unwrap_or(&chunk)
         }));
         chunk.light = light;
@@ -1067,7 +1068,7 @@ impl ChunkData {
 
     fn generate_unlit(seed: u64, coord: Coord, lighting_only: bool) -> Self {
         let origin = (coord.0 * CHUNK_SIZE as i64, coord.1 * CHUNK_SIZE as i64);
-        let columns = core::array::from_fn(|index| {
+        let columns = array::from_fn(|index| {
             let (x, z) = (index % PADDED_SIZE, index / PADDED_SIZE);
             // Lighting only uses the inside of a neighbor, so its halo isn't sampled.
             if lighting_only && (x % (PADDED_SIZE - 1) == 0 || z % (PADDED_SIZE - 1) == 0) {
@@ -1941,7 +1942,7 @@ mod tests {
             .0
             .iter()
             .map(|quad| {
-                let words: [u32; 3] = core::array::from_fn(|i| {
+                let words: [u32; 3] = array::from_fn(|i| {
                     u32::from_ne_bytes(quad[i * 4..i * 4 + 4].try_into().unwrap())
                 });
                 (words, full_block_quad(words))
@@ -1975,7 +1976,7 @@ mod tests {
 
     // Lights a chunk from the stored chunks around it, with the edits that fall in them.
     fn stored(coord: Coord, edits: &[Edit]) -> ChunkData {
-        let chunks: [ChunkData; 9] = core::array::from_fn(|index| {
+        let chunks: [ChunkData; 9] = array::from_fn(|index| {
             let neighbor = neighbor(coord, index);
             let mut chunk = ChunkData::generate_blocks(WORLD_SEED, neighbor);
             chunk.apply_edits(neighbor, edits);

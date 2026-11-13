@@ -13,6 +13,7 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::f32::consts::TAU;
+use core::mem;
 
 use super::files;
 use super::hud::{self, Hud, text_width};
@@ -625,9 +626,9 @@ impl<P: Platform> Game<P> {
                 if self.player.id == id {
                     self.response(response);
                 } else if let Some(index) = self.locals.iter().position(|player| player.id == id) {
-                    core::mem::swap(&mut self.player, &mut self.locals[index]);
+                    mem::swap(&mut self.player, &mut self.locals[index]);
                     self.response(response);
-                    core::mem::swap(&mut self.player, &mut self.locals[index]);
+                    mem::swap(&mut self.player, &mut self.locals[index]);
                 } else {
                     self.network.respond(id, ServerFrame::Response(response));
                 }
@@ -830,7 +831,7 @@ impl<P: Platform> Game<P> {
                 self.save();
             }
             let paused = shared_menu || self.global_menu();
-            core::mem::swap(&mut self.player, &mut self.locals[index]);
+            mem::swap(&mut self.player, &mut self.locals[index]);
             self.player_index = index + 1;
             if paused {
                 self.player.pad = Pad::default();
@@ -840,7 +841,7 @@ impl<P: Platform> Game<P> {
                 self.update_player(dt, now);
             }
             self.tick_player(dt);
-            core::mem::swap(&mut self.player, &mut self.locals[index]);
+            mem::swap(&mut self.player, &mut self.locals[index]);
             self.player_index = 0;
         }
     }
@@ -850,10 +851,10 @@ impl<P: Platform> Game<P> {
         self.gpu.begin([0; 3], daylight, now);
         self.draw_player(0, now, dt);
         for index in 0..self.locals.len() {
-            core::mem::swap(&mut self.player, &mut self.locals[index]);
+            mem::swap(&mut self.player, &mut self.locals[index]);
             self.player_index = index + 1;
             self.draw_player(index + 1, now, dt);
-            core::mem::swap(&mut self.player, &mut self.locals[index]);
+            mem::swap(&mut self.player, &mut self.locals[index]);
             self.player_index = 0;
         }
         self.gpu.viewport([0.0, 0.0, 1.0, 1.0]);
@@ -2193,12 +2194,12 @@ pub(crate) mod tests {
         assert_eq!(game.server.as_ref().unwrap().players(), 4);
         let host = game.player.hotbar;
         for index in 0..3 {
-            core::mem::swap(&mut game.player, &mut game.locals[index]);
+            mem::swap(&mut game.player, &mut game.locals[index]);
             let mut hotbar = game.player.hotbar;
             hotbar.selected = index + 1;
             game.set_hotbar(hotbar);
             game.command("/fly on");
-            core::mem::swap(&mut game.player, &mut game.locals[index]);
+            mem::swap(&mut game.player, &mut game.locals[index]);
         }
         game.serve(|server, world| server.tick(world));
         assert_eq!(game.player.hotbar, host);
@@ -2453,12 +2454,12 @@ pub(crate) mod tests {
                     Page::Tools
                 );
                 assert!(game.player.menu.is_none());
-                core::mem::swap(&mut game.player, &mut game.locals[player - 1]);
+                mem::swap(&mut game.player, &mut game.locals[player - 1]);
                 game.menu_action(Page::Tools, Action::Tool(5));
                 game.show(Some(Page::Tools));
                 game.menu_action(Page::Tools, Action::Tool(7));
                 game.player.menu.as_mut().unwrap().text = "/fly off".into();
-                core::mem::swap(&mut game.player, &mut game.locals[player - 1]);
+                mem::swap(&mut game.player, &mut game.locals[player - 1]);
                 game.serve(|server, world| server.tick(world));
                 assert!(game.locals[player - 1].camera.flying);
                 assert!(!game.player.camera.flying);

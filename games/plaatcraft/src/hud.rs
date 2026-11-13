@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: MIT
  */
 
+use std::collections::{HashMap, VecDeque};
 use std::time::{Duration, Instant};
 
 use bcanvas::{CanvasRenderingContext2d, Color, OffscreenCanvas, TextAlign, TextBaseline};
@@ -375,7 +376,7 @@ struct ChatLine {
 // typing.
 #[derive(Default)]
 pub(crate) struct Chat {
-    lines: std::collections::VecDeque<ChatLine>,
+    lines: VecDeque<ChatLine>,
     input: Option<String>,
     cached: Option<Cached>,
 }
@@ -520,7 +521,7 @@ const TAG_HEIGHT: f32 = 24.0;
 // The names above the other players.
 #[derive(Default)]
 pub(crate) struct NameTags {
-    cached: std::collections::HashMap<String, Cached>,
+    cached: HashMap<String, Cached>,
 }
 
 impl NameTags {

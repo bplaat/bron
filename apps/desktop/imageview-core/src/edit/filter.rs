@@ -4,6 +4,8 @@
  * SPDX-License-Identifier: MIT
  */
 
+use std::{array, mem, thread};
+
 use super::picture::{Picture, premultiply, to_byte, unpremultiply};
 
 /// A slider of a filter with its range and neutral value.
@@ -174,7 +176,7 @@ impl Filter {
                 .unwrap_or(self.parameters()[index].default)
         };
         match self {
-            Self::Adjust => adjust(picture, &std::array::from_fn(value)),
+            Self::Adjust => adjust(picture, &array::from_fn(value)),
             Self::AutoEnhance => auto_enhance(picture, picture),
             Self::Grayscale => {
                 map_colors(picture, |[red, green, blue]| [luma(red, green, blue); 3])
@@ -229,8 +231,8 @@ fn matrix(matrix: &[[f32; 3]; 3], rgb: [f32; 3]) -> [f32; 3] {
 }
 
 fn multiply(a: &[[f32; 3]; 3], b: &[[f32; 3]; 3]) -> [[f32; 3]; 3] {
-    std::array::from_fn(|row| {
-        std::array::from_fn(|column| (0..3).map(|index| a[row][index] * b[index][column]).sum())
+    array::from_fn(|row| {
+        array::from_fn(|column| (0..3).map(|index| a[row][index] * b[index][column]).sum())
     })
 }
 
@@ -239,7 +241,7 @@ fn multiply(a: &[[f32; 3]; 3], b: &[[f32; 3]; 3]) -> [[f32; 3]; 3] {
 fn worker_count(bytes: usize) -> usize {
     match bytes / (256 * 1024) {
         0 | 1 => 1,
-        workers => std::thread::available_parallelism()
+        workers => thread::available_parallelism()
             .map_or(1, usize::from)
             .min(workers),
     }
@@ -251,7 +253,7 @@ fn for_parts<T: Send>(parts: Vec<T>, work: impl Fn(usize, T) + Sync) {
         parts.into_iter().for_each(|part| work(0, part));
         return;
     }
-    std::thread::scope(|scope| {
+    thread::scope(|scope| {
         for (index, part) in parts.into_iter().enumerate() {
             let work = &work;
             scope.spawn(move || work(index, part));
@@ -309,7 +311,7 @@ fn map_pixels(
 // Changes every color channel on its own, in [0, 1] and keeping alpha, through a table of the
 // 256 possible samples.
 fn map_channels(picture: &Picture, map: impl Fn(f32) -> f32) -> Picture {
-    let table: [u8; 256] = std::array::from_fn(|value| to_byte(map(value as f32 / 255.0)));
+    let table: [u8; 256] = array::from_fn(|value| to_byte(map(value as f32 / 255.0)));
     let mut pixels = picture.pixels.clone();
     for_rows(&mut pixels, picture.width as usize * 4, |_, row| {
         for pixel in row.as_chunks_mut::<4>().0 {
@@ -345,7 +347,7 @@ fn adjust(picture: &Picture, values: &[f32; 11]) -> Picture {
         1.0 + contrast
     };
     let (highlights, shadows) = (highlights / 100.0, shadows / 100.0);
-    let tones: [f32; 256] = std::array::from_fn(|value| {
+    let tones: [f32; 256] = array::from_fn(|value| {
         let light = image::srgb_to_linear(value as u8) * gain;
         let value = f32::from(image::linear_to_srgb(light)) / 255.0 + brightness / 200.0;
         let value = ((value - 0.5) * contrast + 0.5).clamp(0.0, 1.0);
@@ -687,11 +689,11 @@ fn blur_both(pixels: &mut Vec<f32>, width: usize, radii: &[usize]) {
     let mut scratch = vec![0.0; pixels.len()];
     for &radius in radii.iter().filter(|&&radius| radius > 0) {
         blur_rows(pixels, &mut scratch, width, radius);
-        std::mem::swap(pixels, &mut scratch);
+        mem::swap(pixels, &mut scratch);
     }
     for &radius in radii.iter().filter(|&&radius| radius > 0) {
         blur_columns(pixels, &mut scratch, width, radius);
-        std::mem::swap(pixels, &mut scratch);
+        mem::swap(pixels, &mut scratch);
     }
 }
 
@@ -713,7 +715,7 @@ fn gaussian_radii(sigma: f32) -> [usize; 3] {
     let count = ((12.0 * sigma * sigma - 3.0 * lower_f * lower_f - 12.0 * lower_f - 9.0)
         / (-4.0 * lower_f - 4.0))
         .round();
-    std::array::from_fn(|index| {
+    array::from_fn(|index| {
         let size = if (index as f32) < count { lower } else { upper };
         size / 2
     })
@@ -738,7 +740,7 @@ fn sample_blur(
         return picture.clone();
     }
     filter_premultiplied(picture, |pixels, width, height| {
-        let source = std::mem::take(pixels);
+        let source = mem::take(pixels);
         let mut output = vec![0.0; source.len()];
         for_rows(&mut output, width * 4, |y, row| {
             for (x, pixel) in row.as_chunks_mut::<4>().0.iter_mut().enumerate() {

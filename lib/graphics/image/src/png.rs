@@ -8,6 +8,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use alloc::{format, vec};
 use core::time::Duration;
+use core::{array, iter, mem};
 
 use crc::{CRC_32_ISO_HDLC, Crc};
 use deflate::Level;
@@ -322,7 +323,7 @@ impl PngState {
             }
         }
         let pixels = if last {
-            core::mem::take(&mut self.canvas)
+            mem::take(&mut self.canvas)
         } else {
             budget.copy(&self.canvas)?
         };
@@ -645,8 +646,8 @@ pub(super) fn decode(data: &[u8]) -> Result<Image> {
             b"eXIf" => list_exif(bytes, &mut state.metadata),
             b"cHRM" if !state.data_phase.has_idat() => {
                 if let Ok(values) = <&[u8; 32]>::try_from(bytes) {
-                    let [white, red, green, blue] = core::array::from_fn(|i| {
-                        core::array::from_fn(|j| {
+                    let [white, red, green, blue] = array::from_fn(|i| {
+                        array::from_fn(|j| {
                             let at = (i * 2 + j) * 4;
                             let value = u32::from_be_bytes(
                                 values[at..at + 4].try_into().expect("four bytes"),
@@ -889,7 +890,7 @@ impl Header {
             }
             (ColorType::TruecolorAlpha, _) => {
                 for (p, s) in dest.zip(scan.as_chunks::<8>().0) {
-                    let [r, g, b] = color16(core::array::from_fn(|i| sample16(s, i)));
+                    let [r, g, b] = color16(array::from_fn(|i| sample16(s, i)));
                     *p = [r, g, b, scale_16_to_8(sample16(s, 3))];
                 }
             }
@@ -901,7 +902,7 @@ impl Header {
             }
             (ColorType::Truecolor, _) => {
                 for (p, s) in dest.zip(scan.as_chunks::<6>().0) {
-                    let samples = core::array::from_fn(|i| sample16(s, i));
+                    let samples = array::from_fn(|i| sample16(s, i));
                     let [r, g, b] = color16(samples);
                     *p = [r, g, b, alpha(transparency == Some(samples))];
                 }
@@ -1689,7 +1690,7 @@ fn encode_png_variant(
             transparent_key.is_some(),
         )
     } else {
-        png_color(core::iter::once(bitmap), transparent_key.is_some())
+        png_color(iter::once(bitmap), transparent_key.is_some())
     };
     // Grayscale is a smaller layout, so no compression keeps 8-bit RGB or RGBA samples
     let color = match color {
@@ -1926,7 +1927,7 @@ mod tests {
             }
         }
         let bitmap = Bitmap::new(16, 16, pixels).unwrap();
-        let palette = png_palette(core::iter::once(&bitmap)).unwrap();
+        let palette = png_palette(iter::once(&bitmap)).unwrap();
         assert_eq!(palette.len(), 256);
         let encoded = encode_png_variant(&bitmap, None, Compression::Max, Some(&palette), None)
             .expect("indexed PNG");
@@ -1962,7 +1963,7 @@ mod tests {
         assert_eq!(crate::decode(&encoded).unwrap().pixels(), gray.data());
 
         let collision = Bitmap::new(2, 1, vec![85, 85, 85, 0, 85, 85, 85, 255]).unwrap();
-        assert_eq!(png_transparent_key(core::iter::once(&collision)), None);
+        assert_eq!(png_transparent_key(iter::once(&collision)), None);
 
         let mut second = bitmap.data().to_vec();
         second[4..8].copy_from_slice(&[255, 0, 0, 255]);

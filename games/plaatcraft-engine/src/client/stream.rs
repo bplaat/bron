@@ -18,6 +18,7 @@ use alloc::collections::{BTreeMap, BTreeSet, VecDeque};
 use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
+use core::{array, mem};
 
 use super::local::Saved;
 use super::mesh;
@@ -247,7 +248,7 @@ impl<P: Platform> Stream<P> {
         let distance = self.distance();
         let visible = |coord| views.iter().any(|&view| in_range(coord, view, distance));
         let mut shared = self.worker.shared.lock();
-        for built in core::mem::take(&mut shared.built) {
+        for built in mem::take(&mut shared.built) {
             if built.epoch != self.epoch {
                 continue;
             }
@@ -423,7 +424,7 @@ impl<P: Platform> Stream<P> {
     }
 
     pub(super) fn results(&mut self) -> Vec<JobResult> {
-        let results = core::mem::take(&mut self.worker.shared.lock().results);
+        let results = mem::take(&mut self.worker.shared.lock().results);
         for result in &results {
             let distance = |c: Coord| {
                 self.centers
@@ -586,7 +587,7 @@ impl Store {
             self.changed.insert(coord);
         }
         let chunks: [&ChunkData; 9] =
-            core::array::from_fn(|index| &self.chunks[&world::neighbor(coord, index)]);
+            array::from_fn(|index| &self.chunks[&world::neighbor(coord, index)]);
         ChunkData::lit(chunks)
     }
 
@@ -613,7 +614,7 @@ impl Store {
         if saved.is_none() && self.changed.is_empty() && self.unsaved.is_empty() {
             return Ok(());
         }
-        for coord in core::mem::take(&mut self.changed) {
+        for coord in mem::take(&mut self.changed) {
             self.unsaved
                 .insert(coord, self.chunks[&coord].encode_blocks());
         }
@@ -652,7 +653,7 @@ fn work<P: Platform>(worker: &Worker<P>) {
             store_epoch = shared.epoch;
             limit = MAX_UNSAVED;
         }
-        let edits = core::mem::take(&mut shared.edits);
+        let edits = mem::take(&mut shared.edits);
         let save = shared.save.take();
         shared.saving = save.is_some();
         // The edits and saves go before the chunks, which are built with the edits

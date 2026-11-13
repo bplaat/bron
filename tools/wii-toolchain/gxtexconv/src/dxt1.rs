@@ -8,6 +8,8 @@
 //! compressor that devkitPro's gxtexconv uses, then searches nearby 565 colors for the lowest
 //! error with the palette the GX hardware decodes.
 
+use std::array;
+
 pub(crate) type Rgb = [i32; 3];
 
 /// The error weights per channel, roughly the squared weights of the luminance conversion.
@@ -35,7 +37,7 @@ fn nearest(color: &Rgb, palette: &[Rgb]) -> (usize, i32) {
 type Planes = [[i32; 16]; 3];
 
 fn split_planes(colors: &[Rgb; 16]) -> Planes {
-    std::array::from_fn(|channel| std::array::from_fn(|pixel| colors[pixel][channel]))
+    array::from_fn(|channel| array::from_fn(|pixel| colors[pixel][channel]))
 }
 
 const fn to_rgb565(color: &Rgb) -> u16 {
@@ -52,13 +54,10 @@ fn from_rgb565(color: u16) -> Rgb {
 fn hardware_palette(color0: u16, color1: u16) -> ([Rgb; 4], usize) {
     let (a, b) = (from_rgb565(color0), from_rgb565(color1));
     if color0 > color1 {
-        let blend = |x: &Rgb, y: &Rgb| std::array::from_fn(|c| (x[c] * 5 + y[c] * 3) >> 3);
+        let blend = |x: &Rgb, y: &Rgb| array::from_fn(|c| (x[c] * 5 + y[c] * 3) >> 3);
         ([a, b, blend(&a, &b), blend(&b, &a)], 4)
     } else {
-        (
-            [a, b, std::array::from_fn(|c| (a[c] + b[c]) / 2), [0; 3]],
-            3,
-        )
+        ([a, b, array::from_fn(|c| (a[c] + b[c]) / 2), [0; 3]], 3)
     }
 }
 
@@ -156,8 +155,8 @@ fn base_colors(colors: &[Rgb; 16]) -> [Rgb; 2] {
     let palette: [Rgb; 4] = [
         base[0],
         base[1],
-        std::array::from_fn(|c| (2 * base[0][c] + base[1][c]) / 3),
-        std::array::from_fn(|c| (base[0][c] + 2 * base[1][c]) / 3),
+        array::from_fn(|c| (2 * base[0][c] + base[1][c]) / 3),
+        array::from_fn(|c| (base[0][c] + 2 * base[1][c]) / 3),
     ];
     let mut errors = [[0; 3]; 2];
     let mut counts = [0; 2];
@@ -171,8 +170,8 @@ fn base_colors(colors: &[Rgb; 16]) -> [Rgb; 2] {
             counts[end] += share;
         }
     }
-    std::array::from_fn(|end| {
-        std::array::from_fn(|c| (base[end][c] + errors[end][c] / counts[end].max(1)).clamp(0, 255))
+    array::from_fn(|end| {
+        array::from_fn(|c| (base[end][c] + errors[end][c] / counts[end].max(1)).clamp(0, 255))
     })
 }
 
@@ -206,7 +205,7 @@ mod tests {
             state
         };
         for _ in 0..1000 {
-            let colors: [Rgb; 16] = std::array::from_fn(|_| {
+            let colors: [Rgb; 16] = array::from_fn(|_| {
                 let value = next();
                 [value & 255, value >> 8 & 255, value >> 16 & 255].map(|sample| sample as i32)
             });
@@ -234,13 +233,13 @@ mod tests {
     #[test]
     fn compresses_two_565_colors_losslessly() {
         let (a, b) = (from_rgb565(0xf800), from_rgb565(0x07ff));
-        let colors = std::array::from_fn(|i| if i % 3 == 0 { a } else { b });
+        let colors = array::from_fn(|i| if i % 3 == 0 { a } else { b });
         assert_eq!(decoded_error(&colors, &compress_block(&colors)), 0);
     }
 
     #[test]
     fn search_improves_on_base_colors() {
-        let colors: [Rgb; 16] = std::array::from_fn(|i| {
+        let colors: [Rgb; 16] = array::from_fn(|i| {
             let i = i as i32;
             [i * 16, 255 - i * 9, (i * 37) % 256]
         });

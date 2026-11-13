@@ -14,6 +14,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::{fs, mem, thread};
 
 use bwindow::WindowId;
 #[cfg(not(windows))]
@@ -306,7 +307,7 @@ impl App {
         let source = window
             .pages
             .is_empty()
-            .then(|| std::fs::read(&window.path).ok())
+            .then(|| fs::read(&window.path).ok())
             .flatten();
         let Some(editor) = Editor::new(window.view.media(), 0, source) else {
             return false;
@@ -644,7 +645,7 @@ impl App {
             .as_ref()
             .filter(|proxy| Arc::ptr_eq(&proxy.base, &open.base))
             .map(|proxy| (Arc::clone(&proxy.picture), proxy.scale));
-        std::thread::spawn(move || {
+        thread::spawn(move || {
             let (proxy, scale) = proxy.unwrap_or_else(|| {
                 let (picture, scale) = open.base.proxy(longest);
                 (Arc::new(picture), scale)
@@ -685,7 +686,7 @@ impl App {
             });
             window.view.set_preview(Some(media));
         }
-        if std::mem::take(&mut editing.stale) {
+        if mem::take(&mut editing.stale) {
             self.preview(id);
         }
     }
@@ -717,7 +718,7 @@ impl App {
     fn apply_in_background(&mut self, id: WindowId, base: Arc<Picture>, step: Step, amend: bool) {
         let proxy = Arc::clone(&self.proxy);
         self.set_busy(id, true);
-        std::thread::spawn(move || {
+        thread::spawn(move || {
             let picture = step.apply(&base);
             _ = proxy.send_user_event(AppEvent::Applied(id, picture, step, amend));
         });
@@ -864,7 +865,7 @@ impl App {
     ) {
         let proxy = Arc::clone(&self.proxy);
         self.set_busy(id, true);
-        std::thread::spawn(move || {
+        thread::spawn(move || {
             let result =
                 encode(&path).and_then(|bytes| write_atomically(&path, &bytes).map(|()| bytes));
             // The saved file can have other metadata than the one it replaced.
@@ -945,10 +946,10 @@ impl App {
 // Writes a file through a temporary file next to it, so it is never half written.
 fn write_atomically(path: &Path, bytes: &[u8]) -> Result<(), String> {
     let temporary = path.with_file_name(format!(".{}.saving", file_name(path)));
-    std::fs::write(&temporary, bytes)
-        .and_then(|()| std::fs::rename(&temporary, path))
+    fs::write(&temporary, bytes)
+        .and_then(|()| fs::rename(&temporary, path))
         .map_err(|error| {
-            _ = std::fs::remove_file(&temporary);
+            _ = fs::remove_file(&temporary);
             error.to_string()
         })
 }

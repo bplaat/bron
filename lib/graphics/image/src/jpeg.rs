@@ -6,6 +6,7 @@
 
 use alloc::vec;
 use alloc::vec::Vec;
+use core::{array, mem};
 
 use super::color::{ADOBE_RGB, ColorModel, Curve, Transform};
 use super::metadata::{
@@ -791,7 +792,7 @@ impl Jpeg {
             let stride = c.blocks_w * 8;
             let mut plane = budget.zeroed::<u8>(stride * c.blocks_h * 8)?;
             let table = idct_table(&c.quant.ok_or(DecodeError::InvalidData)?);
-            let coefficients = core::mem::take(&mut c.coefficients);
+            let coefficients = mem::take(&mut c.coefficients);
             for by in 0..c.blocks_h {
                 for bx in 0..c.blocks_w {
                     let offset = (by * c.blocks_w + bx) * 64;
@@ -907,7 +908,7 @@ impl Jpeg {
                         };
                         let [r, g, b] = match &transform {
                             Some(transform) => transform.cmyk(ink),
-                            None => core::array::from_fn(|k| {
+                            None => array::from_fn(|k| {
                                 ((u16::from(255 - ink[k]) * u16::from(255 - ink[3]) + 127) / 255)
                                     as u8
                             }),
@@ -1065,7 +1066,7 @@ const AAN_SCALE: [f32; 8] = [
 
 /// Folds the AAN scale factors and the final division by 8 into a dequantization table.
 fn idct_table(quant: &[u16; 64]) -> [f32; 64] {
-    core::array::from_fn(|i| f32::from(quant[i]) * AAN_SCALE[i / 8] * AAN_SCALE[i % 8] / 8.0)
+    array::from_fn(|i| f32::from(quant[i]) * AAN_SCALE[i / 8] * AAN_SCALE[i % 8] / 8.0)
 }
 
 // The AAN 8-point inverse DCT butterfly, as in libjpeg's jidctflt.
@@ -1116,7 +1117,7 @@ fn idct(block: &[i32], table: &[f32; 64], dest: &mut [u8], stride: usize) {
     }
     let mut columns = [[0.0f32; 8]; 8];
     for (x, column) in columns.iter_mut().enumerate() {
-        let input = core::array::from_fn(|y| block[y * 8 + x] as f32 * table[y * 8 + x]);
+        let input = array::from_fn(|y| block[y * 8 + x] as f32 * table[y * 8 + x]);
         *column = if input[1..].iter().all(|v| *v == 0.0) {
             [input[0]; 8]
         } else {
@@ -1124,7 +1125,7 @@ fn idct(block: &[i32], table: &[f32; 64], dest: &mut [u8], stride: usize) {
         };
     }
     for (y, dest) in dest.chunks_mut(stride).take(8).enumerate() {
-        let row = idct_1d(core::array::from_fn(|x| columns[x][y]));
+        let row = idct_1d(array::from_fn(|x| columns[x][y]));
         for (dest, value) in dest.iter_mut().zip(row) {
             *dest = sample(value);
         }
@@ -1419,16 +1420,16 @@ fn jpeg_fdct(plane: &[u8], stride: usize, scale: &[f32; 64]) -> [i16; 64] {
     let mut data = [[0.0f32; 8]; 8];
     for (y, row) in data.iter_mut().enumerate() {
         let samples = &plane[y * stride..y * stride + 8];
-        *row = jpeg_aan(core::array::from_fn(|x| f32::from(samples[x]) - 128.0));
+        *row = jpeg_aan(array::from_fn(|x| f32::from(samples[x]) - 128.0));
     }
     for x in 0..8 {
-        let column = jpeg_aan(core::array::from_fn(|y| data[y][x]));
+        let column = jpeg_aan(array::from_fn(|y| data[y][x]));
         for (row, value) in data.iter_mut().zip(column) {
             row[x] = value;
         }
     }
     // Rounds away from zero without a library call.
-    core::array::from_fn(|index| {
+    array::from_fn(|index| {
         let value = data[index / 8][index % 8] * scale[index];
         (value + 0.5f32.copysign(value)) as i16
     })
@@ -1562,7 +1563,7 @@ fn jpeg_optimized_huffman(mut frequencies: [u32; 257]) -> JpegOptimizedHuffman {
         .expect("Huffman tree has a code");
     counts[longest] -= 1; // Remove the pseudo-symbol reserved to avoid all-ones codes.
 
-    let lengths = core::array::from_fn(|index| counts[index + 1] as u8);
+    let lengths = array::from_fn(|index| counts[index + 1] as u8);
     let mut values = Vec::new();
     for size in 1..sizes.len() {
         for (symbol, &actual) in sizes[..256].iter().enumerate() {
@@ -1641,7 +1642,7 @@ impl JpegTables {
             0.275_899_38,
         ];
         let reciprocals = |quant: &[u8; 64]| {
-            core::array::from_fn(|index| {
+            array::from_fn(|index| {
                 1.0 / (f32::from(quant[index]) * AAN[index / 8] * AAN[index % 8] * 8.0)
             })
         };
@@ -1684,7 +1685,7 @@ fn jpeg_optimized_tables(
     jpeg_symbols(blocks, gray, sampling, |table, symbol, _, _| {
         frequencies[table][symbol] += 1;
     });
-    core::array::from_fn(|index| {
+    array::from_fn(|index| {
         if frequencies[index].iter().all(|&count| count == 0) {
             frequencies[index][0] = 1;
         }

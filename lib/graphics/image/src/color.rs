@@ -16,6 +16,7 @@
 
 use alloc::boxed::Box;
 use alloc::vec::Vec;
+use core::array;
 
 use super::math::{exp, pow};
 
@@ -40,11 +41,11 @@ impl ColorModel {
 }
 
 fn multiply(a: &Matrix, b: &Matrix) -> Matrix {
-    core::array::from_fn(|i| core::array::from_fn(|j| (0..3).map(|k| a[i][k] * b[k][j]).sum()))
+    array::from_fn(|i| array::from_fn(|j| (0..3).map(|k| a[i][k] * b[k][j]).sum()))
 }
 
 fn apply(m: &Matrix, v: [f64; 3]) -> [f64; 3] {
-    core::array::from_fn(|i| m[i][0] * v[0] + m[i][1] * v[1] + m[i][2] * v[2])
+    array::from_fn(|i| m[i][0] * v[0] + m[i][1] * v[1] + m[i][2] * v[2])
 }
 
 fn invert(m: &Matrix) -> Option<Matrix> {
@@ -57,9 +58,7 @@ fn invert(m: &Matrix) -> Option<Matrix> {
     if det.abs() < 1e-12 || !det.is_finite() {
         return None;
     }
-    Some(core::array::from_fn(|i| {
-        core::array::from_fn(|j| cofactor(j, i) / det)
-    }))
+    Some(array::from_fn(|i| array::from_fn(|j| cofactor(j, i) / det)))
 }
 
 const fn diagonal(v: [f64; 3]) -> Matrix {
@@ -117,7 +116,7 @@ fn rgb_to_xyz_d50(primaries: &Primaries) -> Option<Matrix> {
     let adapt = multiply(
         &invert(&BRADFORD)?,
         &multiply(
-            &diagonal(core::array::from_fn(|i| target[i] / source[i])),
+            &diagonal(array::from_fn(|i| target[i] / source[i])),
             &BRADFORD,
         ),
     );
@@ -358,7 +357,7 @@ impl Clut {
         if self.inputs == 4 {
             let low = self.simplex(base, &fraction, 1);
             let high = self.simplex(base + self.strides[0], &fraction, 1);
-            return core::array::from_fn(|c| low[c] + (high[c] - low[c]) * fraction[0]);
+            return array::from_fn(|c| low[c] + (high[c] - low[c]) * fraction[0]);
         }
         self.simplex(base, &fraction, 0)
     }
@@ -474,7 +473,7 @@ impl Lut {
                     None
                 } else {
                     let grid =
-                        core::array::from_fn(|i| data.get(clut + i).map_or(0, |v| usize::from(*v)));
+                        array::from_fn(|i| data.get(clut + i).map_or(0, |v| usize::from(*v)));
                     let bytes = usize::from(*data.get(clut + 16)?);
                     if !matches!(bytes, 1 | 2) {
                         return None;
@@ -529,7 +528,7 @@ impl Lut {
             *value = curve.eval(*value);
         }
         if let Some(m) = &self.matrix {
-            pcs = core::array::from_fn(|r| {
+            pcs = array::from_fn(|r| {
                 m[r][0] * pcs[0] + m[r][1] * pcs[1] + m[r][2] * pcs[2] + m[r][3]
             });
         }
@@ -548,7 +547,7 @@ impl Lut {
                 lab_to_xyz([l * 100.0, a * 255.0 - 128.0, b * 255.0 - 128.0])
             }
         };
-        core::array::from_fn(|r| {
+        array::from_fn(|r| {
             self.to_srgb[r][0] * xyz[0] + self.to_srgb[r][1] * xyz[1] + self.to_srgb[r][2] * xyz[2]
         })
     }
@@ -720,7 +719,7 @@ impl Transform {
             linear[c] = if let Some(previous) = (0..c).find(|&i| curves[i] == curves[c]) {
                 linear[previous]
             } else {
-                core::array::from_fn(|v| curves[c].eval(v as f64 / 255.0) as f32)
+                array::from_fn(|v| curves[c].eval(v as f64 / 255.0) as f32)
             };
         }
         let transform = Self::Matrix {
@@ -744,10 +743,8 @@ impl Transform {
     fn eval(&self, input: &[f32]) -> [u8; 3] {
         let linear = match self {
             Self::Matrix { linear, matrix } => {
-                let v: [f32; 3] = core::array::from_fn(|i| Table::lerp(&linear[i], input[i]));
-                core::array::from_fn(|i| {
-                    matrix[i][0] * v[0] + matrix[i][1] * v[1] + matrix[i][2] * v[2]
-                })
+                let v: [f32; 3] = array::from_fn(|i| Table::lerp(&linear[i], input[i]));
+                array::from_fn(|i| matrix[i][0] * v[0] + matrix[i][1] * v[1] + matrix[i][2] * v[2])
             }
             Self::Lut(lut) => lut.eval(&input[..lut.inputs()]),
         };
@@ -764,11 +761,11 @@ impl Transform {
             // The linear light of every 8-bit sample is looked up once instead of per pixel,
             // which gives the same results as `rgb8`.
             Self::Matrix { linear, matrix } => {
-                let linear: [[f32; 256]; 3] = core::array::from_fn(|i| {
-                    core::array::from_fn(|v| Table::lerp(&linear[i], v as f32 / 255.0))
+                let linear: [[f32; 256]; 3] = array::from_fn(|i| {
+                    array::from_fn(|v| Table::lerp(&linear[i], v as f32 / 255.0))
                 });
                 for pixel in pixels.as_chunks_mut::<4>().0 {
-                    let v: [f32; 3] = core::array::from_fn(|i| linear[i][usize::from(pixel[i])]);
+                    let v: [f32; 3] = array::from_fn(|i| linear[i][usize::from(pixel[i])]);
                     for (i, row) in matrix.iter().enumerate() {
                         pixel[i] = encode(row[0] * v[0] + row[1] * v[1] + row[2] * v[2]);
                     }
@@ -776,8 +773,8 @@ impl Transform {
             }
             Self::Lut(lut) => {
                 // Evaluate the input curves once per 8-bit value instead of per pixel.
-                let inputs: [[f32; 256]; 3] = core::array::from_fn(|i| {
-                    core::array::from_fn(|v| {
+                let inputs: [[f32; 256]; 3] = array::from_fn(|i| {
+                    array::from_fn(|v| {
                         let value = v as f32 / 255.0;
                         lut.a_curves.get(i).map_or(value, |curve| curve.eval(value))
                     })

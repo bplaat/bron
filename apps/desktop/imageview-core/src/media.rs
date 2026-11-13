@@ -197,13 +197,15 @@ fn raster(frames: &[image::Frame], loop_count: LoopCount) -> Media {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use super::*;
 
     const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures");
 
     #[test]
     fn rasters_and_animations_decode() {
-        let still = decode_media(&std::fs::read(format!("{FIXTURES}/rgb.qoi")).unwrap()).unwrap();
+        let still = decode_media(&fs::read(format!("{FIXTURES}/rgb.qoi")).unwrap()).unwrap();
         let Media::Raster(still) = still else {
             panic!("expected a raster");
         };
@@ -214,14 +216,14 @@ mod tests {
         );
 
         // TGA has no signature, so it is detected from its header.
-        let tga = decode_media(&std::fs::read(format!("{FIXTURES}/rgb.tga")).unwrap()).unwrap();
+        let tga = decode_media(&fs::read(format!("{FIXTURES}/rgb.tga")).unwrap()).unwrap();
         let Media::Raster(tga) = tga else {
             panic!("expected a raster");
         };
         assert_eq!(tga.frames[0].pixels, still.frames[0].pixels);
 
         let animated =
-            decode_media(&std::fs::read(format!("{FIXTURES}/animated.gif")).unwrap()).unwrap();
+            decode_media(&fs::read(format!("{FIXTURES}/animated.gif")).unwrap()).unwrap();
         let Media::Raster(animated) = animated else {
             panic!("expected a raster");
         };
@@ -258,7 +260,7 @@ mod tests {
 
     #[test]
     fn icons_decode_every_page_and_find_the_largest() {
-        let bytes = std::fs::read(format!("{FIXTURES}/rgb.icns")).unwrap();
+        let bytes = fs::read(format!("{FIXTURES}/rgb.icns")).unwrap();
         let Pages {
             pages,
             largest,
@@ -283,7 +285,7 @@ mod tests {
         assert_eq!(pages.len(), 10);
         assert_eq!(pages[largest].size(), (256.0, 256.0));
         assert_eq!(decode_media(ico).expect("ICO").size(), (256.0, 256.0));
-        let animated = std::fs::read(format!("{FIXTURES}/animated.gif")).unwrap();
+        let animated = fs::read(format!("{FIXTURES}/animated.gif")).unwrap();
         assert_eq!(decode_pages(&animated).expect("GIF pages").pages.len(), 1);
     }
 
@@ -349,7 +351,7 @@ mod tests {
     #[test]
     fn high_bit_depth_images_decode() {
         for name in ["16bit.png", "16bit-apng.png", "animated.png", "dib.ico"] {
-            let bytes = std::fs::read(format!("{FIXTURES}/{name}")).unwrap();
+            let bytes = fs::read(format!("{FIXTURES}/{name}")).unwrap();
             decode_media(&bytes).unwrap_or_else(|error| panic!("{name}: {error}"));
         }
     }

@@ -349,12 +349,8 @@ impl ProjectDirs {
     pub fn from(qualifier: &str, organization: &str, application: &str) -> Option<Self> {
         Self::from_path(cfg_select! {
             // Mobile apps are sandboxed, so their directories already belong to the app
-            any(target_os = "android", target_os = "ios") => {
-                PathBuf::new()
-            }
-            all(unix, not(target_vendor = "apple")) => {
-                PathBuf::from(application)
-            }
+            any(target_os = "android", target_os = "ios") => PathBuf::new(),
+            all(unix, not(target_vendor = "apple")) => PathBuf::from(application),
             target_vendor = "apple" => {
                 PathBuf::from(format!("{qualifier}.{organization}.{application}"))
             }

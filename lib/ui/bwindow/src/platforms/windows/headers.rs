@@ -512,7 +512,9 @@ pub(crate) unsafe fn GetClassLong(hwnd: HWND, index: i32) -> usize {
 /// Any stored pointer or window procedure must remain valid while installed.
 pub(crate) unsafe fn SetWindowLong(hwnd: HWND, index: i32, value: isize) -> isize {
     cfg_select! {
-        target_pointer_width = "32" => (unsafe { SetWindowLongW(hwnd, index, value as i32) }) as isize,
+        target_pointer_width = "32" => {
+            (unsafe { SetWindowLongW(hwnd, index, value as i32) }) as isize
+        }
         _ => unsafe { SetWindowLongPtrW(hwnd, index, value) },
     }
 }

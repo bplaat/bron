@@ -12,6 +12,7 @@ use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::vec::Vec;
 use alloc::{format, vec};
+use core::{array, mem};
 
 use crate::camera::Camera;
 use crate::flow;
@@ -174,7 +175,7 @@ impl Server {
 
     /// The messages and tasks for the platform since the last call.
     pub fn outgoing(&mut self) -> Vec<Outgoing> {
-        core::mem::take(&mut self.outgoing)
+        mem::take(&mut self.outgoing)
     }
 
     /// How many players play.
@@ -433,8 +434,8 @@ impl Server {
                 } else {
                     0
                 };
-                let low: [i64; 3] = core::array::from_fn(|axis| first[axis].min(second[axis]));
-                let high: [i64; 3] = core::array::from_fn(|axis| first[axis].max(second[axis]));
+                let low: [i64; 3] = array::from_fn(|axis| first[axis].min(second[axis]));
+                let high: [i64; 3] = array::from_fn(|axis| first[axis].max(second[axis]));
                 let count: usize = (0..3)
                     .map(|axis| (high[axis] - low[axis] + 1) as usize)
                     .product();
@@ -551,17 +552,14 @@ impl Server {
         ];
         let blocks = &mut self.blocks;
         for offset in AROUND.into_iter().chain([[0, -1, 0]]) {
-            let block: [i64; 3] = core::array::from_fn(|axis| position[axis] + offset[axis]);
+            let block: [i64; 3] = array::from_fn(|axis| position[axis] + offset[axis]);
             if !(3..HEIGHT as i64).contains(&block[1]) {
                 continue;
             }
             let fastest = AROUND
                 .into_iter()
                 .filter_map(|around| {
-                    blocks.block(
-                        world,
-                        core::array::from_fn(|axis| block[axis] + around[axis]),
-                    )
+                    blocks.block(world, array::from_fn(|axis| block[axis] + around[axis]))
                 })
                 .filter(|&material| world::fluid(material).is_some())
                 .map(flow::delay)
@@ -593,7 +591,7 @@ impl Server {
 
     /// Saves all players and the flowing fluid.
     pub fn save_all(&mut self, world: &mut impl World) {
-        let clients = core::mem::take(&mut self.clients);
+        let clients = mem::take(&mut self.clients);
         for (&id, client) in &clients {
             self.save(world, id, client);
         }

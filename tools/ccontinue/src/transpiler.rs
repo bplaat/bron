@@ -6,6 +6,8 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
+use std::process::exit;
+use std::{fs, iter};
 
 use indexmap::IndexMap;
 use regex::{Captures, Regex, regex};
@@ -57,7 +59,7 @@ impl Transpiler {
         }
         if class_.parent_name.is_none() {
             eprintln!("[ERROR] No class implements method: {method_name}");
-            std::process::exit(1);
+            exit(1);
         }
         self.find_class_for_method(
             &self.classes[class_.parent_name.as_ref().expect("parent_name is Some")],
@@ -117,7 +119,7 @@ impl Transpiler {
             );
             code += &format!("    this->vtbl = &_{}Vtbl;\n", class_.name);
             code += &format!("    {}_init(", class_.snake_name);
-            let args: Vec<String> = std::iter::once("this".to_owned())
+            let args: Vec<String> = iter::once("this".to_owned())
                 .chain(method.arguments.iter().map(|a| a.name.clone()))
                 .collect();
             code += &args.join(", ");
@@ -150,9 +152,9 @@ impl Transpiler {
         for include_path in &self.include_paths {
             let complete_path = format!("{include_path}/{base_path}");
             if Path::new(&complete_path).exists() {
-                let text = std::fs::read_to_string(&complete_path).unwrap_or_else(|_| {
+                let text = fs::read_to_string(&complete_path).unwrap_or_else(|_| {
                     eprintln!("[ERROR] Can't read include: {complete_path}");
-                    std::process::exit(1);
+                    exit(1);
                 });
                 return self.transpile(&complete_path, is_header, &text);
             }
@@ -163,7 +165,7 @@ impl Transpiler {
             return self.transpile(&virtual_path, is_header, &text);
         }
         eprintln!("[ERROR] Can't find include: {base_path}");
-        std::process::exit(1);
+        exit(1);
     }
 
     // MARK: Convert interfaces
@@ -189,7 +191,7 @@ impl Transpiler {
                 }
                 if !self.interfaces.contains_key(name) {
                     eprintln!("[ERROR] Can't find parent interface {name} for {iface_name}");
-                    std::process::exit(1);
+                    exit(1);
                 }
                 iface.parent_names.push(name.to_owned());
                 let parent_methods: Vec<Method> =
@@ -293,7 +295,7 @@ impl Transpiler {
                     }
                 } else {
                     eprintln!("[ERROR] Unknown class or interface '{name}' in class {class_name}");
-                    std::process::exit(1);
+                    exit(1);
                 }
             }
         }
@@ -303,7 +305,7 @@ impl Transpiler {
             && !self.classes.contains_key(pname.as_str())
         {
             eprintln!("[ERROR] Can't find parent class {pname} for {class_name}");
-            std::process::exit(1);
+            exit(1);
         }
 
         let mut class_ = Class::new(class_name, parent_name.clone());
@@ -394,7 +396,7 @@ impl Transpiler {
 
             if class_.fields.contains_key(&name) {
                 eprintln!("[ERROR] Can't inherit field: {name}");
-                std::process::exit(1);
+                exit(1);
             }
 
             class_.fields.insert(
@@ -443,7 +445,7 @@ impl Transpiler {
                     class_.is_abstract = true;
                 } else {
                     eprintln!("[ERROR] Only virtual methods can be set to zero: {name}");
-                    std::process::exit(1);
+                    exit(1);
                 }
             }
 
@@ -530,7 +532,7 @@ impl Transpiler {
                 let parent_snake = to_snake_case(&pname);
 
                 g += &format!("void _{snake_name}_init(");
-                let sig_args: Vec<String> = std::iter::once(format!("{class_name}* this"))
+                let sig_args: Vec<String> = iter::once(format!("{class_name}* this"))
                     .chain(init_args.iter().map(|a| format!("{} {}", a.type_, a.name)))
                     .collect();
                 g += &sig_args.join(", ");
@@ -538,7 +540,7 @@ impl Transpiler {
                 g += &format!(
                     "    {}_init({});\n",
                     parent_snake,
-                    std::iter::once("this".to_owned())
+                    iter::once("this".to_owned())
                         .chain(parent_init_args)
                         .collect::<Vec<_>>()
                         .join(", ")
@@ -756,7 +758,7 @@ impl Transpiler {
                     current_class_name = method.origin_class.clone();
                 }
                 c += &format!("    {} (*{})(", method.return_type, method.name);
-                c += &std::iter::once("void* this".to_owned())
+                c += &iter::once("void* this".to_owned())
                     .chain(
                         method
                             .arguments
@@ -803,7 +805,7 @@ impl Transpiler {
                         "{} _{}_{}(",
                         method.return_type, class_.snake_name, method.name
                     );
-                    c += &std::iter::once(format!("{}* this", class_.name))
+                    c += &iter::once(format!("{}* this", class_.name))
                         .chain(
                             method
                                 .arguments
@@ -854,7 +856,7 @@ impl Transpiler {
                             "[ERROR] Class {} implements {} but does not provide '{}' and there is no default",
                             class_.name, iface_name, method.name
                         );
-                        std::process::exit(1);
+                        exit(1);
                     }
                     for argument in &method.arguments {
                         c += &format!(", {}", argument.name);
@@ -954,7 +956,7 @@ impl Transpiler {
                 format!("_{}_{}", to_snake_case(&method.class_), method.name)
             };
             c += &format!("#define {}_{}(", class_.snake_name, method.name);
-            c += &std::iter::once("this".to_owned())
+            c += &iter::once("this".to_owned())
                 .chain(method.arguments.iter().map(|a| a.name.clone()))
                 .collect::<Vec<_>>()
                 .join(", ");
@@ -1013,14 +1015,14 @@ impl Transpiler {
 
         if !self.classes.contains_key(&class_name) {
             eprintln!("[ERROR] Can't find class: {class_name}");
-            std::process::exit(1);
+            exit(1);
         }
         let class_ = &self.classes[&class_name];
         let method = match class_.methods.get(&method_name) {
             Some(m) => m,
             None => {
                 eprintln!("[ERROR] Can't find method: {class_name}::{method_name}");
-                std::process::exit(1);
+                exit(1);
             }
         };
         let mut return_type = return_type;
@@ -1086,14 +1088,14 @@ impl Transpiler {
 
         if !self.classes.contains_key(&parent_class_name) {
             eprintln!("[ERROR] Can't find class: {parent_class_name}");
-            std::process::exit(1);
+            exit(1);
         }
         let parent_class = &self.classes[&parent_class_name];
         let method = match parent_class.methods.get(&method_name) {
             Some(m) => m,
             None => {
                 eprintln!("[ERROR] Can't find method: {parent_class_name}::{method_name}");
-                std::process::exit(1);
+                exit(1);
             }
         };
         format!(
@@ -1285,7 +1287,7 @@ impl Transpiler {
                     .contains_key(&method_name)
                 {
                     eprintln!("[ERROR] Interface {cur_iface_name} has no method '{method_name}'");
-                    std::process::exit(1);
+                    exit(1);
                 }
                 let dstart = dm_end - 1;
                 let dpos = find_matching_close(&text, dstart);

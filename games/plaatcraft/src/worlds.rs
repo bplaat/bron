@@ -7,9 +7,9 @@
 //! The saved worlds, each a SQLite file in the worlds folder named after the world.
 
 use std::hash::{BuildHasher, RandomState};
-use std::io;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
+use std::{fs, io};
 
 pub(crate) use plaatcraft_engine::database::MAX_NAME_LENGTH;
 use plaatcraft_engine::database::validate_name;
@@ -41,7 +41,7 @@ impl Worlds {
     }
 
     fn with_directory(directory: PathBuf) -> io::Result<Self> {
-        std::fs::create_dir_all(&directory)?;
+        fs::create_dir_all(&directory)?;
         Ok(Self { directory })
     }
 
@@ -51,7 +51,7 @@ impl Worlds {
 
     /// The worlds, the most recently played first.
     pub(crate) fn list(&self) -> Vec<World> {
-        let mut worlds: Vec<_> = std::fs::read_dir(&self.directory)
+        let mut worlds: Vec<_> = fs::read_dir(&self.directory)
             .into_iter()
             .flatten()
             .flatten()
@@ -124,7 +124,7 @@ impl Worlds {
         for sidecar in SIDECARS {
             remove_if_exists(&with_suffix(&path, sidecar))?;
         }
-        std::fs::remove_file(path)
+        fs::remove_file(path)
     }
 
     fn available<'a>(&self, name: &'a str) -> Result<&'a str, String> {
@@ -143,7 +143,7 @@ fn with_suffix(path: &Path, suffix: &str) -> PathBuf {
 }
 
 fn remove_if_exists(path: &Path) -> io::Result<()> {
-    match std::fs::remove_file(path) {
+    match fs::remove_file(path) {
         Err(error) if error.kind() != io::ErrorKind::NotFound => Err(error),
         _ => Ok(()),
     }
@@ -154,10 +154,10 @@ fn move_world(from: &Path, to: &Path) -> io::Result<()> {
     for sidecar in SIDECARS {
         let source = with_suffix(from, sidecar);
         if source.exists() {
-            std::fs::rename(source, with_suffix(to, sidecar))?;
+            fs::rename(source, with_suffix(to, sidecar))?;
         }
     }
-    std::fs::rename(from, to)
+    fs::rename(from, to)
 }
 
 #[cfg(test)]
@@ -178,7 +178,7 @@ mod tests {
     }
     impl Drop for TestWorlds {
         fn drop(&mut self) {
-            std::fs::remove_dir_all(&self.directory).unwrap();
+            fs::remove_dir_all(&self.directory).unwrap();
         }
     }
 
@@ -212,9 +212,7 @@ mod tests {
         worlds.delete("New World").unwrap();
         assert_eq!(names(worlds), ["Desert Island"]);
         assert_eq!(
-            std::fs::read_dir(test.directory.join("worlds"))
-                .unwrap()
-                .count(),
+            fs::read_dir(test.directory.join("worlds")).unwrap().count(),
             1
         );
     }

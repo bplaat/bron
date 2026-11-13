@@ -10,6 +10,7 @@
 
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
+use core::array;
 use core::f32::consts::PI;
 
 use super::light::{encode_rgb, fog_color, mix};
@@ -100,7 +101,7 @@ pub(super) fn ortho(width: f32, height: f32) -> Mtx44 {
 // The camera looks along negative z in eye space
 fn model_view(view: &View, offset: [f32; 3]) -> Mtx {
     let rows = [view.right, view.up, view.forward.map(|v| -v)];
-    let relative: [f32; 3] = core::array::from_fn(|i| offset[i] - view.eye[i]);
+    let relative: [f32; 3] = array::from_fn(|i| offset[i] - view.eye[i]);
     rows.map(|row| {
         [
             row[0],
@@ -112,8 +113,8 @@ fn model_view(view: &View, offset: [f32; 3]) -> Mtx {
 }
 
 fn concat(a: &Mtx, b: &Mtx) -> Mtx {
-    core::array::from_fn(|row| {
-        core::array::from_fn(|column| {
+    array::from_fn(|row| {
+        array::from_fn(|column| {
             let product = (0..3).map(|k| a[row][k] * b[k][column]).sum::<f32>();
             if column == 3 {
                 product + a[row][3]
@@ -144,7 +145,7 @@ fn quad(
     uvs: [[f32; 2]; 4],
     color: u32,
 ) {
-    let vertices: [Vertex; 4] = core::array::from_fn(|i| Vertex {
+    let vertices: [Vertex; 4] = array::from_fn(|i| Vertex {
         position: positions[i],
         color,
         uv: uvs[i],
@@ -160,15 +161,14 @@ fn draw_box(gpu: &mut impl Gpu, material: u8, bounds: [[f32; 3]; 2], daylight: f
             continue;
         }
         let mut positions = BOX_FACES[face]
-            .map(|p| core::array::from_fn(|a| bounds[0][a] + (bounds[1][a] - bounds[0][a]) * p[a]));
+            .map(|p| array::from_fn(|a| bounds[0][a] + (bounds[1][a] - bounds[0][a]) * p[a]));
         if sprite {
             for position in &mut positions {
                 position[2] = 0.5;
             }
         }
-        let light = core::array::from_fn(|i| {
-            daylight[i] * [0.8, 0.8, 1.0, 0.5, 0.65, 0.65][face] * tint[i]
-        });
+        let light =
+            array::from_fn(|i| daylight[i] * [0.8, 0.8, 1.0, 0.5, 0.65, 0.65][face] * tint[i]);
         let tile = tiles::tile(material, if sprite { 6 } else { face as u32 });
         quad(
             gpu,
@@ -339,7 +339,7 @@ impl Renderer {
         let right = [cos_a, 0.0, -sin_a];
         let up = [-sin_e * sin_a, cos_e, -sin_e * cos_a];
         let positions = UVS.map(|[u, v]| {
-            core::array::from_fn(|a| {
+            array::from_fn(|a| {
                 radius
                     * (body[a]
                         + right[a] * (u * 2.0 - 1.0) * 0.194
@@ -375,7 +375,7 @@ impl Renderer {
         let base = model_view(view, [0.0; 3]);
         let daylight = [0.85, 0.92, 1.0].map(|value: f32| (value * self.daylight).max(0.06));
         for bytes in others.instances(center, 0).as_chunks::<48>().0 {
-            let v: [f32; 12] = core::array::from_fn(|i| {
+            let v: [f32; 12] = array::from_fn(|i| {
                 f32::from_ne_bytes([
                     bytes[i * 4],
                     bytes[i * 4 + 1],
@@ -399,7 +399,7 @@ impl Renderer {
                 if held.is_some_and(|(material, _)| world::is_sprite(material)) && index != 4 {
                     continue;
                 }
-                let positions = face.map(|p| core::array::from_fn(|a| v[9 + a] + p[a] * v[6 + a]));
+                let positions = face.map(|p| array::from_fn(|a| v[9 + a] + p[a] * v[6 + a]));
                 let inset = 0.5 / 128.0;
                 let mut uvs = face.map(|p| {
                     [
@@ -415,7 +415,7 @@ impl Renderer {
                         .copied()
                         .unwrap_or([[0.0; 3], [1.0; 3]]);
                     uvs = face.map(|corner| {
-                        let p: [f32; 3] = core::array::from_fn(|a| {
+                        let p: [f32; 3] = array::from_fn(|a| {
                             (bounds[0][a] + (bounds[1][a] - bounds[0][a]) * f64::from(corner[a]))
                                 as f32
                         });
@@ -434,7 +434,7 @@ impl Renderer {
                 } else {
                     Texture::Character(v[5] as usize)
                 };
-                let color = rgba(encode_rgb(core::array::from_fn(|a| {
+                let color = rgba(encode_rgb(array::from_fn(|a| {
                     daylight[a] * tint[a] * [0.8, 0.8, 1.0, 0.5, 0.65, 0.65][index]
                 })));
                 quad(gpu, texture, positions, uvs, color);
@@ -462,7 +462,7 @@ impl Renderer {
             -0.4 + (progress.sqrt() * 2.0 * PI).sin() * 0.2,
             -0.85 - swing * 0.2,
         ];
-        let matrix: Mtx = core::array::from_fn(|row| {
+        let matrix: Mtx = array::from_fn(|row| {
             let [x, y, z] = rotation[row].map(|value| value * HELD_SIZE);
             [x, y, z, position[row] - (x + y + z) / 2.0]
         });

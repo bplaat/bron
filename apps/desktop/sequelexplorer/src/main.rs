@@ -13,8 +13,10 @@ mod schema;
 mod sql;
 mod sql_transfer;
 
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
+use std::thread;
 
 use bsql::{Connection, PoolOptions, SqliteMode};
 use bwebview::{WebviewBuilder, WebviewEvent};
@@ -96,11 +98,11 @@ fn spawn_api_worker(
     event_loop_proxy: Arc<EventLoopProxy<AppEvent>>,
 ) -> mpsc::Sender<ApiRequest> {
     let (sender, receiver) = mpsc::channel::<ApiRequest>();
-    std::thread::Builder::new()
+    thread::Builder::new()
         .name("api".to_string())
         .spawn(move || {
             for request in receiver {
-                let data = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let data = catch_unwind(AssertUnwindSafe(|| {
                     handle_api_request(&router, &request.method, &request.path, request.body)
                 }))
                 .unwrap_or_else(|_| json!({ "error": "The request failed" }));
@@ -483,7 +485,7 @@ fn main() {
                     if let Some(path) = path {
                         let state = Arc::clone(&state);
                         let event_loop_proxy = Arc::clone(&event_loop_proxy);
-                        std::thread::Builder::new()
+                        thread::Builder::new()
                             .name("sql-import".to_string())
                             .spawn(move || {
                                 let error = match std::fs::read_to_string(&path) {
@@ -529,7 +531,7 @@ fn main() {
                         }
                         let state = Arc::clone(&state);
                         let event_loop_proxy = Arc::clone(&event_loop_proxy);
-                        std::thread::Builder::new()
+                        thread::Builder::new()
                             .name("sql-export".to_string())
                             .spawn(move || {
                                 let error = export_sql(&state)
@@ -605,25 +607,24 @@ fn main() {
                     let event_loop_proxy = Arc::clone(&event_loop_proxy);
                     let mysql_connection_pending = Arc::clone(&mysql_connection_pending);
                     let connection_generation = Arc::clone(&connection_generation);
-                    std::thread::Builder::new()
+                    thread::Builder::new()
                         .name("mysql-connection".to_string())
                         .spawn(move || {
                             let _pending_guard =
                                 MysqlConnectionPendingGuard(mysql_connection_pending);
                             let request_id = request.request_id;
-                            let response =
-                                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                                    open_mysql(request, &state, &connection_generation)
-                                }))
-                                .unwrap_or_else(|_| {
-                                    IpcMessage::OpenMysqlResponse {
-                                        request_id,
-                                        ok: false,
-                                        error: Some("Failed to open MySQL connection".to_string()),
-                                        credential_saved: false,
-                                        credential_error: None,
-                                    }
-                                });
+                            let response = catch_unwind(AssertUnwindSafe(|| {
+                                open_mysql(request, &state, &connection_generation)
+                            }))
+                            .unwrap_or_else(|_| {
+                                IpcMessage::OpenMysqlResponse {
+                                    request_id,
+                                    ok: false,
+                                    error: Some("Failed to open MySQL connection".to_string()),
+                                    credential_saved: false,
+                                    credential_error: None,
+                                }
+                            });
                             let _ = event_loop_proxy.send_user_event(AppEvent::UserEvent(
                                 serde_json::to_string(&response)
                                     .expect("Failed to serialize MySQL response"),
@@ -634,14 +635,13 @@ fn main() {
                 IpcMessage::RunQuery { request_id, sql } => {
                     let connection = query_connection(&state);
                     let event_loop_proxy = Arc::clone(&event_loop_proxy);
-                    std::thread::Builder::new()
+                    thread::Builder::new()
                         .name("query".to_string())
                         .spawn(move || {
-                            let result =
-                                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                                    connection.and_then(|connection| run_query(&connection, &sql))
-                                }))
-                                .unwrap_or_else(|_| Err("Failed to run query".to_string()));
+                            let result = catch_unwind(AssertUnwindSafe(|| {
+                                connection.and_then(|connection| run_query(&connection, &sql))
+                            }))
+                            .unwrap_or_else(|_| Err("Failed to run query".to_string()));
                             let response = IpcMessage::RunQueryResponse {
                                 request_id,
                                 result: match result {
@@ -673,15 +673,13 @@ fn main() {
                     let connection = query_connection(&state);
                     let state = Arc::clone(&state);
                     let event_loop_proxy = Arc::clone(&event_loop_proxy);
-                    std::thread::Builder::new()
+                    thread::Builder::new()
                         .name("raw-query".to_string())
                         .spawn(move || {
-                            let result =
-                                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                                    connection
-                                        .and_then(|connection| run_raw_query(&connection, &sql))
-                                }))
-                                .unwrap_or_else(|_| Err("Failed to run query".to_string()));
+                            let result = catch_unwind(AssertUnwindSafe(|| {
+                                connection.and_then(|connection| run_raw_query(&connection, &sql))
+                            }))
+                            .unwrap_or_else(|_| Err("Failed to run query".to_string()));
                             // Raw statements can change any table, so forget cached table metadata
                             if let Ok(mut state) = state.lock() {
                                 state.clear_table_metadata();
@@ -710,7 +708,7 @@ fn main() {
                     let event_loop_proxy = Arc::clone(&event_loop_proxy);
                     let connection_generation = Arc::clone(&connection_generation);
                     // Connecting and waiting for the state lock can block, so keep it off the UI thread
-                    std::thread::Builder::new()
+                    thread::Builder::new()
                         .name("mysql-select-database".to_string())
                         .spawn(move || {
                             let settings = state.lock().expect("mutex poisoned").mysql_settings();
