@@ -1,0 +1,11 @@
+# Only what the Dockerfile builds from
+*
+!package.json
+!package-lock.json
+!index.html
+!vite.config.js
+!src
+!public
+!server
+server/target
+**/.DS_Store

@@ -25,4 +25,33 @@ My personal website inside a Windows XP desktop running in your browser with [v8
 
 ```sh
 npm run dev
+npm run server  # serves the built dist/ like in production, on http://localhost:8080
+```
+
+## Self hosting
+
+The `Dockerfile` builds the site (`npm run build` into `dist/`, which needs the built disk in `public/winxp`) and the
+server in `server/`: one static musl binary on Tokio and axum that serves `dist/`, in an image with nothing else.
+
+```sh
+docker build -t bastiaan .
+```
+
+Environment: `PORT` (8080) and `DIST_PATH` (`dist`).
+
+The server sends the caching headers (`immutable` for Vite's hashed assets, `no-cache` with `Last-Modified` for the
+rest) and leaves TLS, HTTP/2 and compression to the proxy. With Traefik, whose `compress` middleware must skip the disk
+chunks and snapshot (`application/octet-stream`, zstd already):
+
+```yaml
+services:
+    bastiaan:
+        image: bastiaan
+        labels:
+            traefik.enable: 'true'
+            traefik.http.routers.bastiaan.rule: Host(`bastiaan.example`)
+            traefik.http.routers.bastiaan.tls.certresolver: letsencrypt
+            traefik.http.routers.bastiaan.middlewares: bastiaan-compress
+            traefik.http.middlewares.bastiaan-compress.compress.excludedcontenttypes: application/octet-stream
+            traefik.http.services.bastiaan.loadbalancer.server.port: 8080
 ```
