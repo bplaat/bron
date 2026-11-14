@@ -1,2 +1,5 @@
 dist/
 node_modules/
+.DS_Store
+# Built by offline/build.sh
+public/winxp/

@@ -9,7 +9,7 @@
         "preview": "vite preview"
     },
     "dependencies": {
-        "@fontsource/pt-serif": "^5.2.8"
+        "v86": "^0.5.472"
     },
     "devDependencies": {
         "vite": "^8.1.3"

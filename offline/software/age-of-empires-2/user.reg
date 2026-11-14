@@ -1,0 +1,9 @@
+REGEDIT4
+
+; The license agreements count as accepted (EBUEula.dll stores the answer per user)
+
+[HKEY_USERS\V86Default\Software\Microsoft\Microsoft Games\Age of Empires\2.0\EULA]
+"FIRSTRUN"=dword:00000001
+
+[HKEY_USERS\V86Default\Software\Microsoft\Microsoft Games\Age of Empires II: The Conquerors Expansion\1.0\EULA]
+"FIRSTRUN"=dword:00000001

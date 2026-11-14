@@ -1,0 +1,57 @@
+; v86vid - display driver for the Bochs VBE adapter v86 emulates, with XP's stock framebuf.dll
+
+[Version]
+Signature = "$Windows NT$"
+Class = Display
+ClassGUID = {4D36E968-E325-11CE-BFC1-08002BE10318}
+Provider = %Provider%
+DriverVer = 11/10/2026,1.0.0.0
+
+[DestinationDirs]
+DefaultDestDir = 12
+
+[SourceDisksNames]
+1 = %Disk%
+
+[SourceDisksFiles]
+v86vid.sys = 1
+
+[Manufacturer]
+%Provider% = Models
+
+[Models]
+%DeviceDesc% = v86vid, PCI\VEN_1234&DEV_1111
+
+[v86vid]
+CopyFiles = v86vid.Files
+
+[v86vid.Files]
+v86vid.sys
+
+[v86vid.SoftwareSettings]
+AddReg = v86vid.AddReg
+
+[v86vid.AddReg]
+HKR,, InstalledDisplayDrivers, %REG_MULTI_SZ%, framebuf
+HKR,, VideoDebugLevel, %REG_DWORD%, 0
+HKR,, DefaultSettings.BitsPerPel, %REG_DWORD%, 32
+HKR,, DefaultSettings.XResolution, %REG_DWORD%, 1024
+HKR,, DefaultSettings.YResolution, %REG_DWORD%, 768
+HKR,, DefaultSettings.VRefresh, %REG_DWORD%, 60
+
+[v86vid.Services]
+AddService = v86vid, 0x00000002, v86vid.Service
+
+[v86vid.Service]
+ServiceType = 1
+StartType = 3
+ErrorControl = 0
+ServiceBinary = %12%\v86vid.sys
+LoadOrderGroup = Video
+
+[Strings]
+Provider = "v86"
+Disk = "v86 guest integration"
+DeviceDesc = "v86 Display Adapter"
+REG_MULTI_SZ = 0x00010000
+REG_DWORD = 0x00010001

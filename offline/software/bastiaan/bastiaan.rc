@@ -1,0 +1,34 @@
+// Resource IDs match ID_ICON and ID_ATLAS in bastiaan.c
+#include <winver.h>
+
+1 ICON "bastiaan.ico"
+2 BITMAP "atlas.bmp"
+1 24 "bastiaan.manifest"
+
+// The same version as in bastiaan.manifest
+1 VERSIONINFO
+FILEVERSION 1,0,0,0
+PRODUCTVERSION 1,0,0,0
+FILEFLAGSMASK VS_FFI_FILEFLAGSMASK
+FILEFLAGS 0
+FILEOS VOS_NT_WINDOWS32
+FILETYPE VFT_APP
+FILESUBTYPE VFT2_UNKNOWN
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904B0"
+        BEGIN
+            VALUE "FileDescription", "Bastiaan van der Plaat"
+            VALUE "FileVersion", "1.0.0"
+            VALUE "LegalCopyright", L"Copyright \x00A9 2026 Bastiaan van der Plaat"
+            VALUE "OriginalFilename", "bastiaan.exe"
+            VALUE "ProductName", "Bastiaan"
+            VALUE "ProductVersion", "1.0.0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x0409, 0x04B0
+    END
+END

@@ -1,0 +1,11 @@
+Makefile
+.gitignore
+*.c
+*.rc
+*.o
+*.manifest
+*.jpg
+*.png
+*.ico
+*.bmp
+icons
