@@ -64,11 +64,12 @@ Generated: `offline/out/` (install images, screenshots), the built `.exe`/`.sys`
   Player on the desktop
 - Account `bplaat` (Bastiaan), administrator without password, auto logon, the bassiebas picture
 - Folder Options: hidden and system files shown, extensions shown, full paths, Details view everywhere
-- No network, no pagefile, no hibernation, no System Restore, no prefetch or boot defrag, no system sounds, fewer
-  animations
+- No pagefile, no hibernation, no System Restore, no prefetch or boot defrag, no system sounds, fewer animations
 - MS Gothic linked into the interface fonts, so Japanese names show
-- Disabled services: everything for network, printing, updates, Security Center, error reporting, AutoPlay, time
-  sync and the task scheduler
+- Network: the NE2000 (Realtek RTL8029) with DHCP, the agent turns NetBIOS off and renews the address when the page
+  connects to the relay, every visitor resumes the same snapshot named WINXP
+- Disabled services: everything for network except the DHCP client, printing, updates, Security Center, error
+  reporting, AutoPlay, time sync and the task scheduler
 - No nags: Security Center, updates, balloons, the tour, the Desktop Cleanup Wizard, low disk warnings, AutoRun,
   the Media Player first run wizard, the Display Settings offer
 - Windows Media Player with the menu bar, the album art in Now Playing (`Folder.jpg` from the MP3 covers), its library
@@ -126,7 +127,8 @@ campaign narration are on disk.
 - `v86vid.sys` + `v86vid.inf`: video miniport for the Bochs VBE adapter (with the stock `framebuf.dll`) with 8 bit
   (palette), 16 and 32 bit modes for DirectDraw games, plus the page size as an extra mode
 - `v86agent.exe`: follows the page size (not while a game runs another colour depth) and the host clock, syncs the
-  clipboard, saves dropped files and is the http and https handler, so links open in a new browser tab
+  clipboard, saves dropped files and is the http and https handler, so links open in a new browser tab, on request
+  it turns NetBIOS off and renews the DHCP lease from the relay
 - `v86setup.exe`: the one shot setup above, `activate.vbs` + `activate/confid.exe` (from
   [UMSKT](https://github.com/UMSKT/UMSKT)) activate Windows, `library.vbs` fills the Media Player library
 

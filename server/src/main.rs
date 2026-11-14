@@ -1,14 +1,18 @@
-//! Serves the website: the static files Vite builds into dist/. Environment: PORT (8080) and DIST_PATH (dist).
+//! Serves the website: the static files Vite builds into dist/ and the LAN relay between the visitors' Windows XP
+//! desktops on /relay. Environment: PORT (8080), DIST_PATH (dist), ORIGIN and TRUST_PROXY, see relay.rs.
 
-use std::net::Ipv4Addr;
+use std::net::{Ipv4Addr, SocketAddr};
 use std::{env, io};
 
 use axum::Router;
 use axum::http::{HeaderValue, header};
+use axum::routing::get;
 use tokio::net::TcpListener;
 use tokio::signal;
 use tower_http::services::ServeDir;
 use tower_http::set_header::SetResponseHeaderLayer;
+
+mod relay;
 
 #[tokio::main]
 async fn main() -> io::Result<()> {
@@ -24,16 +28,20 @@ async fn main() -> io::Result<()> {
             HeaderValue::from_static("public, max-age=31536000, immutable"),
         ));
     let app = Router::new()
+        .route("/relay", get(relay::handler))
         .nest("/assets", assets)
         .fallback_service(ServeDir::new(&dist))
         .layer(SetResponseHeaderLayer::if_not_present(
             header::CACHE_CONTROL,
             HeaderValue::from_static("no-cache"),
-        ));
+        ))
+        .with_state(relay::Relay::spawn(relay::Config::from_env()));
 
     let listener = TcpListener::bind((Ipv4Addr::UNSPECIFIED, port)).await?;
     println!("Serving {dist} on http://localhost:{port}");
-    axum::serve(listener, app).with_graceful_shutdown(shutdown()).await
+    axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
+        .with_graceful_shutdown(shutdown())
+        .await
 }
 
 // Ctrl+C, or SIGTERM from docker stop

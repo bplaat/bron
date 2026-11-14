@@ -4,7 +4,7 @@ import path from 'node:path';
 import zlib from 'node:zlib';
 import { V86 } from 'v86';
 import { GuestHost } from '../src/guest-host.js';
-import { MACHINE } from '../src/machine.js';
+import { MACHINE, patchNetworkCard } from '../src/machine.js';
 
 const root = path.dirname(new URL(import.meta.url).pathname);
 const file = (name) => new Uint8Array(fs.readFileSync(path.join(root, 'bios', name))).buffer;
@@ -21,6 +21,7 @@ export async function boot(hda, options = {}) {
         autostart: true,
     });
     await new Promise((resolve) => emulator.add_listener('emulator-loaded', resolve));
+    patchNetworkCard(emulator);
     return { emulator, host: new GuestHost(emulator) };
 }
 

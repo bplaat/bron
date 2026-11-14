@@ -1,14 +1,16 @@
 /*
  * v86agent.exe - guest agent for v86, started at logon: follows the page size
  * and host clock, syncs the clipboard (text, HTML and images) and saves files
- * dropped on the page to the desktop. Started as "v86agent.exe /open <url>" it
- * opens the link in a new browser tab instead (the http and https handler).
+ * dropped on the page to the desktop and renews the LAN address when the page
+ * asks. Started as "v86agent.exe /open <url>" it opens the link in a new
+ * browser tab instead (the http and https handler).
  */
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <winioctl.h>
 #include <shlobj.h>
 #include <commctrl.h>
+#include <iphlpapi.h>
 #include <string.h>
 #include "v86.h"
 
@@ -450,6 +452,37 @@ static void file_end(void)
     SHChangeNotify(SHCNE_CREATE, SHCNF_PATHW, file_path, NULL);
 }
 
+/* Every visitor runs the same snapshot named WINXP: NetBIOS off on all adapters so the shared LAN has no duplicate
+   names, then a DHCP lease from the relay. In a thread, the renew waits for the relay's answer. */
+static DWORD WINAPI renew_network(LPVOID unused)
+{
+    (void)unused;
+    HKEY interfaces;
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"SYSTEM\\CurrentControlSet\\Services\\NetBT\\Parameters\\Interfaces", 0,
+                      KEY_READ | KEY_SET_VALUE, &interfaces) == ERROR_SUCCESS) {
+        WCHAR name[MAX_PATH];
+        DWORD disabled = 2;
+        for (DWORD i = 0, n = MAX_PATH; RegEnumKeyExW(interfaces, i, name, &n, NULL, NULL, NULL, NULL) == ERROR_SUCCESS;
+             i++, n = MAX_PATH) {
+            HKEY h;
+            if (RegOpenKeyExW(interfaces, name, 0, KEY_SET_VALUE, &h) != ERROR_SUCCESS) continue;
+            RegSetValueExW(h, L"NetbiosOptions", 0, REG_DWORD, (const BYTE *)&disabled, sizeof(disabled));
+            RegCloseKey(h);
+        }
+        RegCloseKey(interfaces);
+    }
+
+    ULONG size = 0;
+    if (GetInterfaceInfo(NULL, &size) != ERROR_INSUFFICIENT_BUFFER) return 0;
+    IP_INTERFACE_INFO *info = HeapAlloc(GetProcessHeap(), 0, size);
+    if (!info) return 0;
+    if (GetInterfaceInfo(info, &size) == NO_ERROR) {
+        for (LONG i = 0; i < info->NumAdapters; i++) IpRenewAddress(&info->Adapter[i]);
+    }
+    HeapFree(GetProcessHeap(), 0, info);
+    return 0;
+}
+
 static void poll(HWND hwnd)
 {
     static int tick;
@@ -472,6 +505,7 @@ static void poll(HWND hwnd)
         case V86_MSG_FILE_DATA: file_data(data, len); break;
         case V86_MSG_FILE_END: file_end(); break;
         case V86_MSG_SHUTDOWN: ExitWindowsEx(EWX_POWEROFF | EWX_FORCE, 0); break;
+        case V86_MSG_NET_RENEW: CloseHandle(CreateThread(NULL, 0, renew_network, NULL, 0, NULL)); break;
         }
     }
 }

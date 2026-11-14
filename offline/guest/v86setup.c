@@ -65,9 +65,9 @@ static const REG_VALUE machine[] = {
        L"\"%SystemRoot%\\system32\\v86agent.exe\" /open \"%1\""),
 };
 
-/* Services v86 has no use for: no network, no printer, no updates */
+/* Services v86 has no use for: the LAN only needs the DHCP client, no printer, no updates */
 static const WCHAR *const services[] = {
-    L"Alerter", L"Browser", L"Dhcp", L"Dnscache", L"ERSvc", L"helpsvc", L"lanmanserver", L"LmHosts",
+    L"Alerter", L"Browser", L"Dnscache", L"ERSvc", L"helpsvc", L"lanmanserver", L"LmHosts",
     L"Messenger", L"Nla", L"RasMan", L"RemoteRegistry", L"Schedule", L"seclogon", L"SharedAccess",
     L"ShellHWDetection", L"Spooler", L"srservice", L"SSDPSRV", L"stisvc", L"TapiSrv", L"TrkWks", L"upnphost",
     L"W32Time", L"WebClient", L"wscsvc", L"wuauserv", L"WZCSVC",
@@ -222,6 +222,14 @@ static void install_sound(void)
         update_driver(L"*PNPB003", inf);
     }
     SetupDiDestroyDeviceInfoList(set);
+}
+
+/* Network: v86's NE2000 is a Realtek RTL8029, XP has the driver; the site connects it to the LAN relay */
+static void install_network(void)
+{
+    WCHAR inf[MAX_PATH];
+    ExpandEnvironmentStringsW(L"%SystemRoot%\\inf\\netrtpnt.inf", inf, MAX_PATH);
+    update_driver(L"PCI\\VEN_10EC&DEV_8029", inf);
 }
 
 /* Mouse: system start filter above mouclass, also the host channel for the agent */
@@ -409,6 +417,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE prev, LPWSTR cmd, int show)
     install_agent();
     install_display();
     install_sound();
+    install_network();
     tune_machine();
     tune_default_user();
     create_user();

@@ -2,7 +2,7 @@ import { V86 } from 'v86';
 import wasmUrl from 'v86/build/v86.wasm?url';
 import { GuestHost } from './guest-host.js';
 import { SessionStore } from './persist.js';
-import { DISK_CHUNK_SIZE, MACHINE } from './machine.js';
+import { DISK_CHUNK_SIZE, MACHINE, patchNetworkCard } from './machine.js';
 import './index.css';
 
 const BASE = 'winxp/';
@@ -11,6 +11,8 @@ const MAX_SIZE = [2560, 1600];
 const MAX_DROP_BYTES = 256 * 1024 * 1024; // dropped files are kept in browser memory
 const IS_MAC = /Mac|iPhone|iPad/.test(navigator.platform);
 const SAVE_INTERVAL = 2 * 60 * 1000;
+// LAN with the other visitors through the server's relay next to the page, or VITE_RELAY_URL ('' turns it off)
+const RELAY_URL = import.meta.env.VITE_RELAY_URL ?? new URL('relay', location.href).href.replace(/^http/, 'ws');
 const BEST_EFFORT = 'Sessions are kept in this browser on a best effort basis, without guarantees.';
 
 const screen = document.getElementById('screen');
@@ -61,6 +63,8 @@ const emulator = new V86({
     // C: streams in compressed chunks as Windows reads it
     hda: { url: BASE + 'disk/c.img.zst', size: disk.size, async: true, fixed_chunk_size: DISK_CHUNK_SIZE, use_parts: true },
     initial_state: session ? { buffer: session.state } : { url: BASE + 'state.bin.zst' },
+    net_device: RELAY_URL ? { ...MACHINE.net_device, relay_url: RELAY_URL } : MACHINE.net_device,
+    mac_address_translation: true, // every visitor resumes the same snapshot, v86 gives each page its own MAC
     screen_container: screen,
     autostart: !session, // the saved disk blocks go back in first
 });
@@ -79,6 +83,7 @@ emulator.add_listener('download-error', () => {
 });
 
 const host = await new Promise((resolve) => emulator.add_listener('emulator-loaded', () => resolve(new GuestHost(emulator))));
+patchNetworkCard(emulator);
 
 // Session: saved when the page is hidden and every few minutes, a click on the notice starts over
 const hda = emulator.v86.cpu.devices.ide.primary.master.buffer;
@@ -97,6 +102,8 @@ if (session) {
         `The disk changed since your last visit, so your previous session could not be restored. ${BEST_EFFORT}`,
     );
 }
+// The snapshot's address belongs to everyone who resumed it
+if (RELAY_URL) host.renewNetwork();
 if (sessions) {
     sessions.track(hda, DISK_CHUNK_SIZE);
     const save = () => sessions.save(emulator).catch((error) => console.warn('Could not save the session', error));

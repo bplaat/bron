@@ -24,6 +24,7 @@ const MSG_SHUTDOWN = 6;
 const MSG_CLIP_DATA = 7;
 const MSG_CLIP_END = 8;
 const MSG_OPEN_URL = 9;
+const MSG_NET_RENEW = 10;
 const CHUNKED = new Set([MSG_FILE_DATA, MSG_CLIP_DATA]);
 
 const CLIP_TEXT = 0;
@@ -160,6 +161,11 @@ export class GuestHost extends EventTarget {
     // Powers the guest off, used by the build to store a clean disk
     shutdown() {
         this.push(MSG_SHUTDOWN);
+    }
+
+    // Gets a fresh address from the LAN relay, every visitor resumes the same snapshot
+    renewNetwork() {
+        this.push(MSG_NET_RENEW);
     }
 
     recv(cpu, reg) {

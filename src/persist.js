@@ -104,15 +104,20 @@ export class SessionStore {
         this.saving = true;
         const running = emulator.is_running();
         try {
-            // Capture state and changed chunks at the same instant, leave the disk out of the state
+            // Capture state and changed chunks at the same instant, leave the disk out of the state. The network card
+            // keeps the guest's MAC: with MAC translation v86 would store this page's random one, which Windows never saw
             if (running) await emulator.stop();
+            const net = emulator.v86.cpu.devices.net;
+            const mac = net?.mac;
             const diskState = this.disk.get_state;
             this.disk.get_state = () => [[]];
+            if (net?.mac_address_in_state) net.mac = net.mac_address_in_state;
             let state;
             try {
                 state = await emulator.save_state();
             } finally {
                 this.disk.get_state = diskState;
+                if (net) net.mac = mac;
             }
             const dirty = [...this.dirty];
             this.dirty.clear();

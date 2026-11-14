@@ -44,6 +44,7 @@
 #define V86_MSG_CLIP_DATA 7  /* both directions: next chunk of the current clipboard format */
 #define V86_MSG_CLIP_END 8   /* both directions: clipboard complete, replaces the previous one */
 #define V86_MSG_OPEN_URL 9   /* guest->host: UTF-16LE URL to open in a new browser tab */
+#define V86_MSG_NET_RENEW 10 /* host->guest: renew the DHCP lease, the snapshot comes up with a stale address */
 
 /* Clipboard formats */
 #define V86_CLIP_TEXT 0  /* UTF-16LE, CRLF line ends */

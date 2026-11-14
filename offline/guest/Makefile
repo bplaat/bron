@@ -19,7 +19,7 @@ v86vid.sys: v86vid.c v86.h
 	$(CC) $(KCFLAGS) $(KLDFLAGS) -o $@ $< -lvideoprt
 
 v86agent.exe: v86agent.c v86.h
-	$(CC) $(CFLAGS) $(ULDFLAGS) -o $@ $< -lshell32 -lole32 -luuid -ladvapi32
+	$(CC) $(CFLAGS) $(ULDFLAGS) -o $@ $< -lshell32 -lole32 -luuid -ladvapi32 -liphlpapi
 
 v86setup.exe: v86setup.c
 	$(CC) $(CFLAGS) $(ULDFLAGS) -o $@ $< -ladvapi32 -lnetapi32 -lsetupapi
