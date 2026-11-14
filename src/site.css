@@ -1,0 +1,122 @@
+/* The website as plain HTML, for search engines and visitors without JavaScript: with it the page runs Windows XP */
+:root:not(.vm) {
+    --text-color: #000;
+    --background-color: #fff;
+}
+
+@media (prefers-color-scheme: dark) {
+    :root:not(.vm) {
+        --text-color: #fff;
+        --background-color: #000;
+    }
+}
+
+:root:not(.vm) body {
+    margin: 0;
+    color: var(--text-color);
+    background-color: var(--background-color);
+    font-family: Georgia, serif;
+    font-size: 16px;
+    line-height: 1.5;
+    text-align: center;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+}
+
+@media (min-width: 768px) {
+    :root:not(.vm) body {
+        font-size: 20px;
+    }
+}
+
+#site h1,
+#site p,
+#site ul {
+    margin: 12px 0;
+}
+
+#site ul {
+    list-style-type: none;
+    padding: 0;
+}
+
+#site a {
+    color: inherit;
+    font-weight: 700;
+    text-decoration: none;
+    opacity: 0.8;
+}
+
+#site a:hover,
+#site a:focus {
+    opacity: 1;
+}
+
+#site .main {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    min-height: 100%;
+    display: flex;
+    align-items: center;
+}
+
+#site .container {
+    margin: auto;
+    min-width: 350px;
+    max-width: 800px;
+}
+
+#site .avatar {
+    width: 48px;
+    height: 48px;
+    vertical-align: middle;
+    transform: translateY(-4px);
+    margin-right: 4px;
+}
+
+#site .sites {
+    display: flex;
+    justify-content: center;
+}
+
+#site .sites > ul {
+    width: 300px;
+    margin: 0;
+}
+
+#site .links {
+    width: 70%;
+    margin: 0 auto;
+}
+
+#site .links li {
+    display: inline;
+    margin: 0 6px;
+}
+
+#site .links .separator {
+    margin: 0;
+}
+
+#site .links .separator::before {
+    content: '-';
+}
+
+#site .icon-link {
+    display: inline-flex;
+    align-items: center;
+    padding: 0 4px;
+}
+
+#site .icon {
+    width: 24px;
+    height: 24px;
+    margin-right: 8px;
+}
+
+#site .icon > path {
+    fill: currentColor;
+}

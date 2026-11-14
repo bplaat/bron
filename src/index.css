@@ -10,7 +10,8 @@ body {
     height: 100%;
 }
 
-body {
+/* The website without JavaScript is in site.css, with JavaScript the page is the machine */
+.vm body {
     margin: 0;
     overflow: hidden;
     background-color: var(--desktop);
@@ -196,8 +197,7 @@ body {
     opacity: 1;
 }
 
-noscript {
-    display: block;
-    padding: 16px;
-    color: #fff;
+.vm #site,
+:root:not(.vm) :is(#screen, #boot, #drop, #activity, #balloon) {
+    display: none;
 }
