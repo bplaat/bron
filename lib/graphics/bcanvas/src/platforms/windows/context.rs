@@ -345,8 +345,11 @@ impl PlatformCanvasContext {
         match (composite_mode(operation), blend_mode(operation)) {
             (Some(mode), _) => unsafe { context.DrawImage(image, mode) },
             (None, Some(mode)) => {
-                // The blend effect mixes the image with a snapshot of the target.
-                let blended = unsafe { self.snapshot() }.and_then(|snapshot| unsafe {
+                // The blend effect mixes the image with a snapshot of the target. Taking it
+                // restores the user transform, while the image covers the whole target.
+                let snapshot = unsafe { self.snapshot() };
+                unsafe { self.target.SetTransform(&D2D_MATRIX_3X2_F::identity()) };
+                let blended = snapshot.and_then(|snapshot| unsafe {
                     let effect = context.CreateEffect(&CLSID_D2D1_BLEND).ok()?;
                     effect.SetInput(0, snapshot.as_ptr().cast());
                     effect.SetInput(1, image);

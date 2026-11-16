@@ -664,6 +664,52 @@ mod tests {
     }
 
     #[test]
+    fn blend_modes_inside_scaled_layers_mix_with_the_layer() {
+        let mut canvas = super::OffscreenCanvas::with_scale_factor(4, 4, 1.5);
+        canvas.draw(|ctx| {
+            ctx.set_fill_style(Color::rgb(0, 0, 255));
+            ctx.fill_rect(0.0, 0.0, 4.0, 4.0);
+            ctx.begin_layer();
+            ctx.set_fill_style(Color::rgb(0, 255, 0));
+            ctx.fill_rect(0.0, 0.0, 4.0, 4.0);
+            ctx.set_global_composite_operation(super::CompositeOperation::Screen);
+            ctx.set_fill_style(Color::rgb(255, 0, 0));
+            ctx.fill_rect(0.0, 0.0, 2.0, 4.0);
+            ctx.end_layer();
+        });
+        // 6 by 6 pixels: screened yellow on the left, the layer's green on the right.
+        assert_eq!(&canvas.pixels()[6 * 4..][..4], [255, 255, 0, 255]);
+        assert_eq!(&canvas.pixels()[11 * 4..][..4], [0, 255, 0, 255]);
+    }
+
+    #[test]
+    fn blend_modes_follow_the_transform() {
+        let pixels = composite_pixels(super::CompositeOperation::Screen, |ctx| {
+            ctx.translate(1.0, 0.0);
+            ctx.fill_rect(-1.0, 0.0, 2.0, 4.0);
+        });
+        assert_eq!(&pixels[4 * 4..][..4], [255, 0, 255, 255]);
+        assert_eq!(&pixels[7 * 4..][..4], [255, 0, 0, 255]);
+    }
+
+    #[test]
+    fn blend_modes_onto_transparent_pixels_draw_the_source() {
+        let mut canvas = super::OffscreenCanvas::new(4, 4);
+        canvas.draw(|ctx| {
+            ctx.set_fill_style(Color::rgb(0, 0, 255));
+            ctx.fill_rect(0.0, 0.0, 4.0, 4.0);
+            ctx.begin_layer();
+            ctx.set_global_composite_operation(super::CompositeOperation::Screen);
+            ctx.set_fill_style(Color::rgb(255, 0, 0));
+            ctx.fill_rect(0.0, 0.0, 2.0, 4.0);
+            ctx.end_layer();
+        });
+        // The layer is red on the left, over blue.
+        assert_eq!(&canvas.pixels()[4 * 4..][..4], [255, 0, 0, 255]);
+        assert_eq!(&canvas.pixels()[7 * 4..][..4], [0, 0, 255, 255]);
+    }
+
+    #[test]
     fn gradients_outside_the_clip_leave_pixels_unchanged() {
         let mut canvas = super::OffscreenCanvas::new(32, 32);
         canvas.draw(|ctx| {
