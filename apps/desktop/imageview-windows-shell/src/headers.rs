@@ -174,7 +174,10 @@ unsafe extern "system" {
     ) -> HWND;
     pub(crate) fn DestroyWindow(hwnd: HWND) -> BOOL;
     pub(crate) fn DefWindowProcW(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT;
+    // On 32-bit Windows, LONG and pointers have the same ABI and only the LONG exports exist.
+    #[cfg_attr(target_pointer_width = "32", link_name = "SetWindowLongW")]
     pub(crate) fn SetWindowLongPtrW(hwnd: HWND, index: i32, value: isize) -> isize;
+    #[cfg_attr(target_pointer_width = "32", link_name = "GetWindowLongW")]
     pub(crate) fn GetWindowLongPtrW(hwnd: HWND, index: i32) -> isize;
     pub(crate) fn SetWindowPos(
         hwnd: HWND,
