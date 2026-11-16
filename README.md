@@ -18,6 +18,7 @@ My personal website inside a Windows XP desktop running in your browser with [v8
 - `bastiaan.exe`: this website as a native Win32 GDI program, opened on the desktop
 - Age of Empires, Age of Empires II, Civilization III, Minesweeper and Pinball on the desktop, music with album art in
   Windows Media Player
+- Internet Explorer 8
 - Without JavaScript, like for search engines, the page is the website as plain HTML
 
 ## Building the disk

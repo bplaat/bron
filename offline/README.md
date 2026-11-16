@@ -36,6 +36,7 @@ These must exist before building, they are ignored by git:
 | `offline/software/7zip/7z2605.exe`                     | [7-Zip](https://www.7-zip.org/) 26.05, 32-bit                  |
 | `offline/software/notepad-plus-plus/npp.7.9.2.Installer.exe`   | [Notepad++](https://notepad-plus-plus.org/) 7.9.2, the last version for XP |
 | `offline/software/mitec/*.zip`                         | [MiTeC](https://www.mitec.cz/) `EXE.zip` 2.5.5, `HEXEdit.zip` 6.3.0 and `TMX.zip` 3.5.0, see below |
+| `offline/software/internet-explorer-8/IE8-WindowsXP-x86-ENU.exe` | Microsoft's Internet Explorer 8 for XP, [from the Internet Archive](https://archive.org/details/IE8-WindowsXP-x86-ENU) (SHA-1 `e489483e5001f95da04e1ebf3c664173baef3e26`, Authenticode signed by Microsoft) |
 
 Generated: `offline/out/` (install images, screenshots), the built `.exe`/`.sys` files, `software/*/root/` and
 `public/winxp/`.
@@ -79,7 +80,7 @@ Generated: `offline/out/` (install images, screenshots), the built `.exe`/`.sys`
   Complete, Notepad++ (without its updater, opens text, ini, inf, xml and similar files), MiTeC EXE Explorer,
   Hexadecimal Editor and Task Manager DeLuxe in `Program Files\MiTeC`
 - Minesweeper and Pinball on the desktop
-- Start menu: 7-Zip
+- Start menu: 7-Zip, Internet Explorer 8 (without its first run wizard and default browser check)
 
 ## Adding software
 
