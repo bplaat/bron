@@ -219,6 +219,20 @@ pub fn fill(buf: &mut [u8]) -> Result<(), Error> {
                 .and_then(|mut file| file.read_exact(buf))
                 .map_err(|error| Error::from_io(&error))?;
         }
+        all(windows, target_vendor = "win7") => {
+            #[link(name = "advapi32")]
+            unsafe extern "system" {
+                #[link_name = "SystemFunction036"]
+                fn RtlGenRandom(buffer: *mut u8, length: u32) -> u8;
+            }
+            // Match upstream's windows_legacy backend and bound the native buffer length.
+            for chunk in buf.chunks_mut(i32::MAX as usize) {
+                // SAFETY: chunk is writable and its length fits in u32.
+                if unsafe { RtlGenRandom(chunk.as_mut_ptr(), chunk.len() as u32) } != 1 {
+                    return Err(Error::UNEXPECTED);
+                }
+            }
+        }
         windows => {
             #[cfg_attr(
                 target_arch = "x86",
