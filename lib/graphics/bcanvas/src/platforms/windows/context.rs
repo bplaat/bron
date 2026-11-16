@@ -170,6 +170,15 @@ impl PlatformCanvasContext {
         }
     }
 
+    // The Direct2D 1.1 interface of the target, which the backend requires.
+    fn device_context(&self) -> ComPtr<ID2D1DeviceContext> {
+        unsafe {
+            self.target
+                .query::<ID2D1DeviceContext>(&IID_ID2D1_DEVICE_CONTEXT)
+        }
+        .expect("Direct2D 1.1 device context")
+    }
+
     pub(crate) fn save(&mut self) {
         self.stack.push((self.transform, self.clips.len()));
     }
@@ -316,20 +325,7 @@ impl PlatformCanvasContext {
     // Composites a bitmap of the whole target onto it, through Direct2D 1.1 effects.
     fn composite(&self, bitmap: &ComPtr<ID2D1Bitmap>, alpha: f32, operation: CompositeOperation) {
         unsafe { self.target.SetTransform(&D2D_MATRIX_3X2_F::identity()) };
-        let Ok(context) = (unsafe {
-            self.target
-                .query::<ID2D1DeviceContext>(&IID_ID2D1_DEVICE_CONTEXT)
-        }) else {
-            unsafe {
-                self.target.DrawBitmap(
-                    bitmap.as_ptr(),
-                    null(),
-                    alpha,
-                    D2D1_BITMAP_INTERPOLATION_MODE_LINEAR,
-                )
-            };
-            return;
-        };
+        let context = self.device_context();
         let mut image: *mut c_void = bitmap.as_ptr().cast();
         let opacity = (alpha < 1.0)
             .then(|| unsafe { context.CreateEffect(&CLSID_D2D1_OPACITY) }.ok())
@@ -429,12 +425,8 @@ impl PlatformCanvasContext {
             _ => None,
         };
         if let Some(blend) = blend {
-            let context = (blend != D2D1_PRIMITIVE_BLEND_SOURCE_OVER)
-                .then(|| unsafe {
-                    self.target
-                        .query::<ID2D1DeviceContext>(&IID_ID2D1_DEVICE_CONTEXT)
-                })
-                .and_then(Result::ok);
+            let context =
+                (blend != D2D1_PRIMITIVE_BLEND_SOURCE_OVER).then(|| self.device_context());
             if let Some(context) = &context {
                 unsafe { context.SetPrimitiveBlend(blend) };
             }
@@ -480,11 +472,7 @@ impl PlatformCanvasContext {
             let bitmap = bitmap.expect("Direct2D composite bitmap");
             let brush = unsafe { self.target.CreateBitmapBrush(bitmap.as_ptr()) }
                 .expect("Direct2D composite brush");
-            let context = unsafe {
-                self.target
-                    .query::<ID2D1DeviceContext>(&IID_ID2D1_DEVICE_CONTEXT)
-            }
-            .expect("Direct2D composite context");
+            let context = self.device_context();
             unsafe {
                 self.target.SetTransform(&D2D_MATRIX_3X2_F::identity());
                 context.SetPrimitiveBlend(D2D1_PRIMITIVE_BLEND_COPY);
@@ -531,12 +519,8 @@ impl PlatformCanvasContext {
         // An axis-aligned clip is the transformed bounding box, so rotated or skewed
         // rects instead copy a transparent fill through the Direct2D 1.1 interface.
         let [a, b, c, d, _, _] = self.transform.0;
-        if !((b == 0.0 && c == 0.0) || (a == 0.0 && d == 0.0))
-            && let Ok(context) = unsafe {
-                self.target
-                    .query::<ID2D1DeviceContext>(&IID_ID2D1_DEVICE_CONTEXT)
-            }
-        {
+        if !((b == 0.0 && c == 0.0) || (a == 0.0 && d == 0.0)) {
+            let context = self.device_context();
             let brush = self.color_brush(Color::rgba(0, 0, 0, 0), 1.0);
             unsafe {
                 context.SetPrimitiveBlend(D2D1_PRIMITIVE_BLEND_COPY);
@@ -743,33 +727,17 @@ impl PlatformCanvasContext {
                 let Some(bitmap) = image.bitmap(&this.target, this.target_id) else {
                     return;
                 };
-                let context = unsafe {
-                    this.target
-                        .query::<ID2D1DeviceContext>(&IID_ID2D1_DEVICE_CONTEXT)
-                };
                 unsafe {
-                    match &context {
-                        Ok(context) => context.DrawBitmap(
-                            bitmap.as_ptr(),
-                            &rect,
-                            state.alpha,
-                            if state.image_smoothing {
-                                D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC
-                            } else {
-                                D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR
-                            },
-                        ),
-                        Err(_) => this.target.DrawBitmap(
-                            bitmap.as_ptr(),
-                            &rect,
-                            state.alpha,
-                            if state.image_smoothing {
-                                D2D1_BITMAP_INTERPOLATION_MODE_LINEAR
-                            } else {
-                                D2D1_BITMAP_INTERPOLATION_MODE_NEAREST_NEIGHBOR
-                            },
-                        ),
-                    }
+                    this.device_context().DrawBitmap(
+                        bitmap.as_ptr(),
+                        &rect,
+                        state.alpha,
+                        if state.image_smoothing {
+                            D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC
+                        } else {
+                            D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR
+                        },
+                    );
                 }
             },
         );

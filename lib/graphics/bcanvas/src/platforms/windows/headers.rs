@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: MIT
  */
 
-// Minimal Direct2D 1.0 and DirectWrite COM ABI. Unused inherited methods retain
+// Minimal Direct2D 1.1 and DirectWrite COM ABI. Unused inherited methods retain
 // their SDK vtable slots; only the methods used by the canvas are callable.
 #![allow(non_camel_case_types, non_snake_case)]
 #![allow(clippy::too_many_arguments, clippy::upper_case_acronyms)]
@@ -742,7 +742,7 @@ pub(super) struct ID2D1GradientStopCollection {
     _vtable: *const IUnknownVtbl,
 }
 
-/// Direct2D 1.1 interface, queried from a render target on Windows 8 and later.
+/// Direct2D 1.1 interface, queried from a render target.
 #[repr(C)]
 pub(super) struct ID2D1DeviceContext {
     lpVtbl: *const ID2D1DeviceContextVtbl,
