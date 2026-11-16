@@ -1,0 +1,7 @@
+#!/bin/sh
+# The archiver for cc-rs build scripts of Rust programs for Windows XP
+set -eu
+for bin in /opt/homebrew/opt/llvm/bin/ /usr/local/opt/llvm/bin/; do
+    [ -x "${bin}llvm-ar" ] && exec "${bin}llvm-ar" "$@"
+done
+exec llvm-ar "$@"

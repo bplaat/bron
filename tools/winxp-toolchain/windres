@@ -1,0 +1,8 @@
+#!/bin/sh
+# The resource compiler for winresource build scripts of Rust programs for Windows XP: LLVM's
+# windres, which compiles for the host unless it gets the target
+set -eu
+for bin in /opt/homebrew/opt/llvm/bin/ /usr/local/opt/llvm/bin/; do
+    [ -x "${bin}llvm-windres" ] && exec "${bin}llvm-windres" --target=pe-i386 "$@"
+done
+exec llvm-windres --target=pe-i386 "$@"

@@ -456,6 +456,12 @@ impl Xtask {
         println!("Running Wii U toolchain tests...");
         run(Command::new("bash").args(["tools/wiiu-toolchain/build.sh", "test"]))?;
 
+        println!("Building Reversi and the bcanvas showcase for Windows XP...");
+        run(Command::new("tools/winxp-toolchain/cargo")
+            .args(["build", "--release", "--locked", "-p", "reversi"])
+            .args(["-p", "example-bcanvas-showcase"])
+            .env_remove("RUSTUP_TOOLCHAIN"))?;
+
         println!("Building Wii examples...");
         for example in ["triangles", "cube", "blocks", "canvas"] {
             run(Command::new("make").args(["-C", &format!("examples/wii/{example}/c")]))?;

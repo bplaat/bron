@@ -1,0 +1,163 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Mon, 16 Nov 2026 19:14:19 +0100
+Subject: [PATCH] Fall back for the path, symbolic link, string comparison and
+ timer functions on Windows XP
+
+GetFinalPathNameByHandleW gives the NT path with NtQueryObject, std finds
+its drive letter itself. CreateSymbolicLinkW fails with
+ERROR_CALL_NOT_IMPLEMENTED, Windows XP has no symbolic links.
+CompareStringOrdinal compares with the case mapping of
+RtlUpcaseUnicodeChar. Without CreateWaitableTimerExW sleeps use Sleep.
+---
+ library/std/src/sys/pal/windows/c.rs    | 36 +++++++++++
+ library/std/src/sys/pal/windows/c/xp.rs | 80 +++++++++++++++++++++++--
+ 2 files changed, 112 insertions(+), 4 deletions(-)
+
+diff --git a/library/std/src/sys/pal/windows/c.rs b/library/std/src/sys/pal/windows/c.rs
+index 45dea38..6743b30 100644
+--- a/library/std/src/sys/pal/windows/c.rs
++++ b/library/std/src/sys/pal/windows/c.rs
+@@ -445,6 +445,42 @@ compat_fn_with_fallback! {
+         unsafe { xp::set_file_information_by_handle(hfile, fileinformationclass, lpfileinformation, dwbuffersize) }
+     }
+ 
++    // >= Vista / Server 2008, Windows XP has no symbolic links
++    // https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-createsymboliclinkw
++    #[cfg(target_vendor = "win7")]
++    pub fn CreateSymbolicLinkW(lpsymlinkfilename: PCWSTR, lptargetfilename: PCWSTR, dwflags: u32) -> bool {
++        unsafe { SetLastError(ERROR_CALL_NOT_IMPLEMENTED as u32); false }
++    }
++    // >= Vista / Server 2008, sleeps fall back to Sleep without it
++    // https://learn.microsoft.com/en-us/windows/win32/api/synchapi/nf-synchapi-createwaitabletimerexw
++    #[cfg(target_vendor = "win7")]
++    pub fn CreateWaitableTimerExW(
++        lptimerattributes: *const SECURITY_ATTRIBUTES,
++        lptimername: PCWSTR,
++        dwflags: u32,
++        dwdesiredaccess: u32
++    ) -> HANDLE {
++        unsafe { SetLastError(ERROR_CALL_NOT_IMPLEMENTED as u32); ptr::null_mut() }
++    }
++    // >= Vista / Server 2008
++    // https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-getfinalpathnamebyhandlew
++    #[cfg(target_vendor = "win7")]
++    pub fn GetFinalPathNameByHandleW(hfile: HANDLE, lpszfilepath: PWSTR, cchfilepath: u32, dwflags: u32) -> u32 {
++        unsafe { xp::get_final_path_name_by_handle(hfile, lpszfilepath, cchfilepath, dwflags) }
++    }
++    // >= Vista / Server 2008
++    // https://learn.microsoft.com/en-us/windows/win32/api/stringapiset/nf-stringapiset-comparestringordinal
++    #[cfg(target_vendor = "win7")]
++    pub fn CompareStringOrdinal(
++        lpstring1: *const u16,
++        cchcount1: i32,
++        lpstring2: *const u16,
++        cchcount2: i32,
++        bignorecase: BOOL
++    ) -> i32 {
++        unsafe { xp::compare_string_ordinal(lpstring1, cchcount1, lpstring2, cchcount2, bignorecase) }
++    }
++
+     // >= Vista / Server 2008, std reserves no stack for stack overflow messages without it
+     // https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-setthreadstackguarantee
+     #[cfg(target_vendor = "win7")]
+diff --git a/library/std/src/sys/pal/windows/c/xp.rs b/library/std/src/sys/pal/windows/c/xp.rs
+index c91660d..e179abf 100644
+--- a/library/std/src/sys/pal/windows/c/xp.rs
++++ b/library/std/src/sys/pal/windows/c/xp.rs
+@@ -1,8 +1,9 @@
+-//! The file information functions Windows XP lacks, as fallbacks for `compat_fn_with_fallback!`.
++//! Fallbacks for `compat_fn_with_fallback!` of the functions Windows XP lacks.
+ //!
+-//! `GetFileInformationByHandleEx` and `SetFileInformationByHandle` came with Vista, but they
+-//! only wrap NT functions XP already has. Their structures are the NT ones, only the class
+-//! numbers differ.
++//! Most came with Vista, but only wrap NT functions XP already has.
++
++use core::cmp::Ordering;
++use core::slice;
+ 
+ use super::*;
+ 
+@@ -27,6 +28,18 @@ windows_link::link!("ntdll.dll" "system" fn NtQueryDirectoryFile(
+     restartscan: bool
+ ) -> NTSTATUS);
+ 
++windows_link::link!("ntdll.dll" "system" fn NtQueryObject(
++    handle: HANDLE,
++    objectinformationclass: u32,
++    objectinformation: *mut c_void,
++    objectinformationlength: u32,
++    returnlength: *mut u32
++) -> NTSTATUS);
++windows_link::link!("ntdll.dll" "system" fn RtlUpcaseUnicodeChar(sourcecharacter: u16) -> u16);
++
++// `GetFileInformationByHandleEx` and `SetFileInformationByHandle` take the NT structures, only
++// the class numbers differ.
++
+ /// The NT class of a Win32 class std uses, with whether it lists a directory from the start.
+ #[allow(non_upper_case_globals)]
+ fn nt_class(class: FILE_INFO_BY_HANDLE_CLASS) -> Option<(FILE_INFORMATION_CLASS, Option<bool>)> {
+@@ -102,3 +115,62 @@ pub unsafe fn set_file_information_by_handle(
+     let mut io = IO_STATUS_BLOCK::PENDING;
+     result(unsafe { NtSetInformationFile(handle, &mut io, info, size, class) })
+ }
++
++/// Only gives the NT path, with `ERROR_INVALID_FUNCTION` for the others std finds the drive
++/// letter of the NT path itself.
++pub unsafe fn get_final_path_name_by_handle(
++    handle: HANDLE,
++    path: PWSTR,
++    size: u32,
++    flags: u32,
++) -> u32 {
++    const OBJECT_NAME_INFORMATION: u32 = 1;
++    if flags != VOLUME_NAME_NT as u32 {
++        unsafe { SetLastError(ERROR_INVALID_FUNCTION as u32) };
++        return 0;
++    }
++    // An OBJECT_NAME_INFORMATION, a UNICODE_STRING followed by the longest possible name
++    let mut buffer = vec![0usize; (size_of::<UNICODE_STRING>() + 0x10000) / size_of::<usize>()];
++    let status = unsafe {
++        NtQueryObject(
++            handle,
++            OBJECT_NAME_INFORMATION,
++            buffer.as_mut_ptr().cast(),
++            (buffer.len() * size_of::<usize>()) as u32,
++            ptr::null_mut(),
++        )
++    };
++    if result(status) == FALSE {
++        return 0;
++    }
++    let name = unsafe { &*buffer.as_ptr().cast::<UNICODE_STRING>() };
++    let length = u32::from(name.Length) / 2;
++    // Without room it gives the size it needs, with the null terminator
++    if length >= size {
++        return length + 1;
++    }
++    unsafe {
++        ptr::copy_nonoverlapping(name.Buffer, path, length as usize);
++        *path.add(length as usize) = 0;
++    }
++    length
++}
++
++/// Compares the UTF-16 code units, with the case mapping of the system like Vista.
++pub unsafe fn compare_string_ordinal(
++    a: *const u16,
++    a_length: i32,
++    b: *const u16,
++    b_length: i32,
++    ignore_case: BOOL,
++) -> i32 {
++    let (a, b) = unsafe {
++        (slice::from_raw_parts(a, a_length as usize), slice::from_raw_parts(b, b_length as usize))
++    };
++    let upcase = |c: &u16| if ignore_case != FALSE { unsafe { RtlUpcaseUnicodeChar(*c) } } else { *c };
++    match a.iter().map(upcase).cmp(b.iter().map(upcase)) {
++        Ordering::Less => CSTR_LESS_THAN,
++        Ordering::Equal => CSTR_EQUAL,
++        Ordering::Greater => CSTR_GREATER_THAN,
++    }
++}

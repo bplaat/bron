@@ -1,0 +1,12 @@
+[package]
+name = "winxp-toolchain-test"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+publish = false
+
+# Built with the Windows XP toolchain, separate from the main Cargo workspace
+[workspace]
+
+[profile.release]
+opt-level = "s"

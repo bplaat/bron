@@ -1,0 +1,47 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Mon, 16 Nov 2026 19:49:38 +0100
+Subject: [PATCH] Abort without the fast fail interrupt before Windows 8
+
+Windows XP and 7 don't know the fast fail interrupt, there it's an access
+violation, which starts the error reporting. Without it std ends the
+process with the exit code of a fast fail.
+---
+ library/std/src/sys/pal/windows/c.rs   | 6 ++++++
+ library/std/src/sys/pal/windows/mod.rs | 6 ++++++
+ 2 files changed, 12 insertions(+)
+
+diff --git a/library/std/src/sys/pal/windows/c.rs b/library/std/src/sys/pal/windows/c.rs
+index 6743b30..a954e58 100644
+--- a/library/std/src/sys/pal/windows/c.rs
++++ b/library/std/src/sys/pal/windows/c.rs
+@@ -284,6 +284,12 @@ pub const CONDITION_VARIABLE_INIT: CONDITION_VARIABLE = CONDITION_VARIABLE { Ptr
+ pub const SRWLOCK_INIT: SRWLOCK = SRWLOCK { Ptr: ptr::null_mut() };
+ #[cfg(target_vendor = "win7")]
+ pub const FindExInfoStandard: FINDEX_INFO_LEVELS = 0;
++#[cfg(target_vendor = "win7")]
++pub const PF_FASTFAIL_AVAILABLE: u32 = 23;
++#[cfg(target_vendor = "win7")]
++pub const STATUS_STACK_BUFFER_OVERRUN: NTSTATUS = 0xC0000409_u32 as _;
++#[cfg(target_vendor = "win7")]
++windows_link::link!("kernel32.dll" "system" fn IsProcessorFeaturePresent(processorfeature: u32) -> BOOL);
+ #[cfg(not(target_thread_local))]
+ pub const INIT_ONCE_STATIC_INIT: INIT_ONCE = INIT_ONCE { Ptr: ptr::null_mut() };
+ 
+diff --git a/library/std/src/sys/pal/windows/mod.rs b/library/std/src/sys/pal/windows/mod.rs
+index 0f79a4b..88d32da 100644
+--- a/library/std/src/sys/pal/windows/mod.rs
++++ b/library/std/src/sys/pal/windows/mod.rs
+@@ -266,6 +266,12 @@ pub fn abort_internal() -> ! {
+     unsafe {
+         cfg_select! {
+             any(target_arch = "x86", target_arch = "x86_64") => {
++                // Before Windows 8 the fast fail interrupt is an access violation, which starts
++                // the error reporting. End the process with the code a fast fail gives instead.
++                #[cfg(target_vendor = "win7")]
++                if c::IsProcessorFeaturePresent(c::PF_FASTFAIL_AVAILABLE) == c::FALSE {
++                    c::TerminateProcess(c::GetCurrentProcess(), c::STATUS_STACK_BUFFER_OVERRUN as u32);
++                }
+                 core::arch::asm!("int $$0x29", in("ecx") c::FAST_FAIL_FATAL_APP_EXIT, options(noreturn, nostack));
+             }
+             all(target_arch = "arm", target_feature = "thumb-mode") => {

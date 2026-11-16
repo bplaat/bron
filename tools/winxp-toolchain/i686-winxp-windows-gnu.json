@@ -1,0 +1,64 @@
+{
+    "llvm-target": "i686-pc-windows-gnu",
+    "metadata": {
+        "description": "32-bit MinGW (Windows XP+), LLVM ABI",
+        "std": true
+    },
+    "data-layout": "e-m:x-p:32:32-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:32-n8:16:32-a:0:32-S32",
+    "arch": "x86",
+    "cpu": "pentium4",
+    "rustc-abi": "x86-sse2",
+    "os": "windows",
+    "env": "gnu",
+    "abi": "llvm",
+    "vendor": "win7",
+    "target-family": ["windows"],
+    "target-pointer-width": 32,
+    "max-atomic-width": 64,
+    "binary-format": "coff",
+    "is-like-windows": true,
+    "abi-return-struct-as-int": true,
+    "dll-prefix": "",
+    "dll-suffix": ".dll",
+    "exe-suffix": ".exe",
+    "dll-tls-export": false,
+    "dynamic-linking": true,
+    "has-thread-local": true,
+    "eh-frame-header": false,
+    "emit-debug-gdb-scripts": false,
+    "frame-pointer": "always",
+    "panic-strategy": "abort",
+    "target-mcount": "_mcount",
+    "linker": "rust-lld",
+    "linker-flavor": "gnu-lld",
+    "pre-link-args": {
+        "gnu-lld": [
+            "-m",
+            "i386pe",
+            "--large-address-aware",
+            "--major-os-version=5",
+            "--minor-os-version=1",
+            "--major-subsystem-version=5",
+            "--minor-subsystem-version=1"
+        ]
+    },
+    "pre-link-objects": {
+        "dynamic-nopic-exe": ["crt2.o", "crtbegin.o"],
+        "dynamic-pic-exe": ["crt2.o", "crtbegin.o"],
+        "static-nopic-exe": ["crt2.o", "crtbegin.o"],
+        "static-pic-exe": ["crt2.o", "crtbegin.o"],
+        "dynamic-dylib": ["dllcrt2.o", "crtbegin.o"],
+        "static-dylib": ["dllcrt2.o", "crtbegin.o"]
+    },
+    "post-link-objects": {
+        "dynamic-nopic-exe": ["crtend.o"],
+        "dynamic-pic-exe": ["crtend.o"],
+        "static-nopic-exe": ["crtend.o"],
+        "static-pic-exe": ["crtend.o"],
+        "dynamic-dylib": ["crtend.o"],
+        "static-dylib": ["crtend.o"]
+    },
+    "late-link-args": {
+        "gnu-lld": ["-lmingw32", "-lclang_rt.builtins", "-lmingwex", "-lmsvcrt", "-lkernel32", "-luser32"]
+    }
+}

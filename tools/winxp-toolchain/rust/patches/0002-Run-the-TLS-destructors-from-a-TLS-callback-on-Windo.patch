@@ -1,0 +1,75 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Mon, 16 Nov 2026 18:34:36 +0100
+Subject: [PATCH] Run the TLS destructors from a TLS callback on Windows XP
+
+Windows XP has no fiber local storage, which the destructors run from
+since Windows 7 support moved to it. The loader calls the TLS callbacks
+when a thread exits, from Windows XP on.
+---
+ .../src/sys/thread_local/guard/windows_xp.rs  | 40 +++++++++++++++++++
+ library/std/src/sys/thread_local/mod.rs       |  4 ++
+ 2 files changed, 44 insertions(+)
+ create mode 100644 library/std/src/sys/thread_local/guard/windows_xp.rs
+
+diff --git a/library/std/src/sys/thread_local/guard/windows_xp.rs b/library/std/src/sys/thread_local/guard/windows_xp.rs
+new file mode 100644
+index 0000000..599ab67
+--- /dev/null
++++ b/library/std/src/sys/thread_local/guard/windows_xp.rs
+@@ -0,0 +1,40 @@
++//! Support for Windows TLS destructors without fiber local storage, which Windows XP lacks.
++//!
++//! The loader calls the TLS callbacks of an image when a thread exits, these come from the
++//! `.CRT$XLB` section that the CRT's TLS directory points at. That runs the destructors for every
++//! thread, also the threads std didn't start.
++
++use core::ffi::c_void;
++
++use crate::ptr;
++use crate::sys::c;
++
++unsafe extern "C" {
++    /// The CRT's TLS directory, an image only gets one when something references it.
++    #[link_name = "_tls_used"]
++    static TLS_USED: u8;
++}
++
++pub fn enable() {
++    // Keep the TLS directory and the callback, the linker would drop them as unused
++    unsafe {
++        ptr::from_ref(&TLS_USED).read_volatile();
++        ptr::from_ref(&CALLBACK).read_volatile();
++    }
++}
++
++#[used]
++#[unsafe(link_section = ".CRT$XLB")]
++static CALLBACK: unsafe extern "system" fn(*mut c_void, u32, *mut c_void) = tls_callback;
++
++unsafe extern "system" fn tls_callback(_module: *mut c_void, reason: u32, _reserved: *mut c_void) {
++    if reason == c::DLL_THREAD_DETACH as u32 || reason == c::DLL_PROCESS_DETACH as u32 {
++        unsafe {
++            #[cfg(target_thread_local)]
++            super::super::destructors::run();
++            #[cfg(not(target_thread_local))]
++            super::super::key::run_dtors();
++        }
++        crate::rt::thread_cleanup();
++    }
++}
+diff --git a/library/std/src/sys/thread_local/mod.rs b/library/std/src/sys/thread_local/mod.rs
+index 1c137e5..d07f5a4 100644
+--- a/library/std/src/sys/thread_local/mod.rs
++++ b/library/std/src/sys/thread_local/mod.rs
+@@ -106,6 +106,10 @@ pub(crate) mod guard {
+             pub(crate) use aix::enable;
+         }
+         target_os = "windows" => {
++            #[cfg(not(target_vendor = "win7"))]
++            mod windows;
++            #[cfg(target_vendor = "win7")]
++            #[path = "windows_xp.rs"]
+             mod windows;
+             pub(crate) use windows::enable;
+             #[cfg(not(target_thread_local))]

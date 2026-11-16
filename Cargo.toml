@@ -10,6 +10,7 @@ members = [
     "tools/wiiu-toolchain/gtxconv",
     "tools/wiiu-toolchain/wuhbtool",
     "tools/wiiu-toolchain/wut-sys",
+    "tools/winxp-toolchain/runner",
 ]
 exclude = [
     "apps/web/bassiemusic",
@@ -25,6 +26,7 @@ exclude = [
     "tools/nds-toolchain",
     "tools/wii-toolchain",
     "tools/wiiu-toolchain",
+    "tools/winxp-toolchain",
 ]
 resolver = "2"
 

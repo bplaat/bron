@@ -1,0 +1,33 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Mon, 16 Nov 2026 23:28:53 +0100
+Subject: [PATCH] Use the aborting personality stub on MinGW with panic=abort
+
+---
+ library/std/src/sys/personality/mod.rs | 9 +++++++--
+ 1 file changed, 7 insertions(+), 2 deletions(-)
+
+diff --git a/library/std/src/sys/personality/mod.rs b/library/std/src/sys/personality/mod.rs
+index be79643..7c444d5 100644
+--- a/library/std/src/sys/personality/mod.rs
++++ b/library/std/src/sys/personality/mod.rs
+@@ -14,12 +14,17 @@ mod dwarf;
+ 
+ #[cfg(not(any(test, doctest)))]
+ cfg_select! {
+-    any(target_env = "msvc", target_family = "wasm") => {
++    any(
++        target_env = "msvc",
++        target_family = "wasm",
++        all(target_family = "windows", target_env = "gnu", panic = "abort"),
++    ) => {
+         // This is required by the compiler to exist (e.g., it's a lang item),
+         // but it's never actually called by the compiler because
+         // __CxxFrameHandler3 (msvc) / __gxx_wasm_personality_v0 (wasm) is the
+         // personality function that is always used.  Hence this is just an
+-        // aborting stub.
++        // aborting stub. MinGW with panic=abort uses it too, so programs don't
++        // need an unwinder: a foreign exception aborts either way.
+         #[lang = "eh_personality"]
+         fn rust_eh_personality() {
+             core::intrinsics::abort_immediate()

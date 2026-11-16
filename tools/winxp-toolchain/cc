@@ -1,0 +1,13 @@
+#!/bin/sh
+# The C compiler for cc-rs build scripts of Rust programs for Windows XP: clang with the
+# toolchain's mingw-w64 sysroot for Windows XP
+set -eu
+dir=$(cd "$(dirname "$0")" && pwd)
+build=$(cd "$dir/../.." && pwd)/target/winxp-toolchain
+llvm=''
+for bin in /opt/homebrew/opt/llvm/bin/ /usr/local/opt/llvm/bin/; do
+    [ -d "$bin" ] && llvm="$bin" && break
+done
+"$dir/build.sh" >&2
+exec "${llvm}clang" --target=i686-w64-mingw32 --sysroot="$build/sysroot" -resource-dir="$build/clang" \
+    -march=pentium4 "$@"
