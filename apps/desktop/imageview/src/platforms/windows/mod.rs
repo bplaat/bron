@@ -182,7 +182,7 @@ impl MediaView {
                 null_mut(),
             );
             assert!(!content.is_null(), "could not create the media view");
-            SetWindowLongPtrW(content, GWLP_USERDATA, Rc::as_ptr(&state) as isize);
+            SetWindowLong(content, GWLP_USERDATA, Rc::as_ptr(&state) as isize);
             content
         };
         state.content.set(content);
@@ -532,7 +532,7 @@ impl Drop for MediaView {
             drop(island);
             let content = state.content.get();
             if IsWindow(content) != 0 {
-                SetWindowLongPtrW(content, GWLP_USERDATA, 0);
+                SetWindowLong(content, GWLP_USERDATA, 0);
                 DestroyWindow(content);
             }
         }
@@ -1083,7 +1083,7 @@ impl State {
         let brush = background_brush(self.window_backdrop.get(), self.dark.get());
         // SAFETY: The window is alive, all windows of its class follow the same theme.
         unsafe {
-            SetClassLongPtrW(self.window.get(), GCLP_HBRBACKGROUND, brush as isize);
+            SetClassLong(self.window.get(), GCLP_HBRBACKGROUND, brush as isize);
             InvalidateRect(self.window.get(), null(), 1);
         }
     }
@@ -1133,7 +1133,7 @@ unsafe extern "system" fn content_proc(
     lparam: LPARAM,
 ) -> LRESULT {
     // SAFETY: The user data is the state of the view, which clears it before freeing it.
-    let state = unsafe { (GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const State).as_ref() };
+    let state = unsafe { (GetWindowLong(hwnd, GWLP_USERDATA) as *const State).as_ref() };
     if let Some(state) = state {
         match message {
             WM_SIZE => {

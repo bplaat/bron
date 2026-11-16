@@ -7,6 +7,7 @@
 //! Win32 window, icon, dialog and package declarations.
 
 #![allow(non_snake_case, clippy::upper_case_acronyms)]
+#![allow(unused)]
 
 use std::ffi::c_void;
 
@@ -132,7 +133,9 @@ unsafe extern "system" {
     pub(crate) fn IsWindowVisible(hwnd: HWND) -> BOOL;
     pub(crate) fn IsIconic(hwnd: HWND) -> BOOL;
     pub(crate) fn DefWindowProcW(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT;
+    pub(crate) fn SetWindowLongW(hwnd: HWND, index: i32, value: i32) -> i32;
     pub(crate) fn SetWindowLongPtrW(hwnd: HWND, index: i32, value: isize) -> isize;
+    pub(crate) fn GetWindowLongW(hwnd: HWND, index: i32) -> i32;
     pub(crate) fn GetWindowLongPtrW(hwnd: HWND, index: i32) -> isize;
     pub(crate) fn GetClientRect(hwnd: HWND, rect: *mut RECT) -> BOOL;
     pub(crate) fn InvalidateRect(hwnd: HWND, rect: *const RECT, erase: BOOL) -> BOOL;
@@ -149,6 +152,7 @@ unsafe extern "system" {
     pub(crate) fn RegisterClipboardFormatW(name: *const u16) -> u32;
     pub(crate) fn SetClipboardData(format: u32, memory: *mut c_void) -> *mut c_void;
     pub(crate) fn PostMessageW(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> BOOL;
+    pub(crate) fn SetClassLongW(hwnd: HWND, index: i32, value: i32) -> u32;
     pub(crate) fn SetClassLongPtrW(hwnd: HWND, index: i32, value: isize) -> usize;
     pub(crate) fn MessageBoxW(hwnd: HWND, text: *const u16, caption: *const u16, kind: u32) -> i32;
     pub(crate) fn FillRect(hdc: *mut c_void, rect: *const RECT, brush: *mut c_void) -> i32;
@@ -164,6 +168,44 @@ unsafe extern "system" {
     ) -> *mut c_void;
     pub(crate) fn GetIconInfo(icon: *mut c_void, info: *mut ICONINFO) -> BOOL;
     pub(crate) fn DestroyIcon(icon: *mut c_void) -> BOOL;
+}
+
+/// # Safety
+/// The handle, index, and value must satisfy the Win32 SetWindowLongPtrW contract.
+/// Any stored pointer or window procedure must remain valid while installed.
+pub(crate) unsafe fn SetWindowLong(hwnd: HWND, index: i32, value: isize) -> isize {
+    cfg_select! {
+        // SAFETY: The caller guarantees valid arguments; Win32 uses LONG for pointers on 32-bit.
+        target_pointer_width = "32" => {
+            (unsafe { SetWindowLongW(hwnd, index, value as i32) }) as isize
+        }
+        // SAFETY: The caller guarantees the SetWindowLongPtrW contract.
+        _ => unsafe { SetWindowLongPtrW(hwnd, index, value) },
+    }
+}
+
+/// # Safety
+/// `hwnd` must be a live window handle; `index` must identify valid window data.
+pub(crate) unsafe fn GetWindowLong(hwnd: HWND, index: i32) -> isize {
+    cfg_select! {
+        // SAFETY: The caller guarantees a live window and valid data index.
+        target_pointer_width = "32" => (unsafe { GetWindowLongW(hwnd, index) }) as isize,
+        // SAFETY: The caller guarantees a live window and valid data index.
+        _ => unsafe { GetWindowLongPtrW(hwnd, index) },
+    }
+}
+
+/// # Safety
+/// The handle, index, and value must satisfy the Win32 SetClassLongPtrW contract.
+pub(crate) unsafe fn SetClassLong(hwnd: HWND, index: i32, value: isize) -> usize {
+    cfg_select! {
+        // SAFETY: The caller guarantees valid arguments; Win32 uses LONG for pointers on 32-bit.
+        target_pointer_width = "32" => {
+            (unsafe { SetClassLongW(hwnd, index, value as i32) }) as usize
+        }
+        // SAFETY: The caller guarantees the SetClassLongPtrW contract.
+        _ => unsafe { SetClassLongPtrW(hwnd, index, value) },
+    }
 }
 
 #[link(name = "gdi32")]
