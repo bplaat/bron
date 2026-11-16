@@ -8,6 +8,7 @@
 // their SDK vtable slots; only the methods used by the canvas are callable.
 #![allow(non_camel_case_types, non_snake_case)]
 #![allow(clippy::too_many_arguments, clippy::upper_case_acronyms)]
+#![allow(unused)]
 
 use std::ffi::c_void;
 use std::ops::Deref;
@@ -27,6 +28,29 @@ pub(super) struct RECT {
     pub(super) top: i32,
     pub(super) right: i32,
     pub(super) bottom: i32,
+}
+
+pub(super) const TRUE: BOOL = 1;
+pub(super) const FALSE: BOOL = 0;
+
+#[link(name = "kernel32")]
+unsafe extern "system" {
+    pub(super) fn GetModuleHandleA(name: *const i8) -> HANDLE;
+    pub(super) fn GetProcAddress(module: HANDLE, name: *const i8) -> *const c_void;
+}
+
+#[link(name = "user32")]
+unsafe extern "system" {
+    pub(super) fn GetClientRect(hwnd: HWND, rect: *mut RECT) -> BOOL;
+    pub(super) fn InvalidateRect(hwnd: HWND, rect: *const RECT, erase: BOOL) -> BOOL;
+    pub(super) fn ValidateRect(hwnd: HWND, rect: *const RECT) -> BOOL;
+    pub(super) fn GetDC(hwnd: HWND) -> HDC;
+    pub(super) fn ReleaseDC(hwnd: HWND, dc: HDC) -> i32;
+}
+
+#[link(name = "gdi32")]
+unsafe extern "system" {
+    pub(super) fn GetDeviceCaps(dc: HDC, index: i32) -> i32;
 }
 
 #[repr(C)]
@@ -1529,25 +1553,6 @@ mod tests {
         }
     }
 }
-
-// MARK: Window
-// The Win32 API the canvas draws window client areas with.
-mod window {
-    use super::{BOOL, HWND, RECT};
-
-    #[cfg(feature = "window")]
-    pub(crate) const TRUE: BOOL = 1;
-    pub(crate) const FALSE: BOOL = 0;
-
-    #[link(name = "user32")]
-    unsafe extern "system" {
-        pub(crate) fn GetClientRect(hwnd: HWND, rect: *mut RECT) -> BOOL;
-        pub(crate) fn InvalidateRect(hwnd: HWND, rect: *const RECT, erase: BOOL) -> BOOL;
-        pub(crate) fn GetDpiForWindow(hwnd: HWND) -> u32;
-        pub(crate) fn ValidateRect(hwnd: HWND, rect: *const RECT) -> BOOL;
-    }
-}
-pub(super) use window::*;
 
 /// Encode a string as a null-terminated UTF-16 string.
 pub(crate) fn wide(text: &str) -> Vec<u16> {

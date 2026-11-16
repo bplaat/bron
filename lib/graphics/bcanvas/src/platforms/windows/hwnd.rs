@@ -4,12 +4,38 @@
  * SPDX-License-Identifier: MIT
  */
 
+use std::ffi::c_void;
 use std::ptr::{null, null_mut};
 use std::rc::Rc;
 
 use crate::CanvasRenderingContext2d;
 use crate::platforms::windows::context::{DrawTarget, PlatformCanvasContext, Resources};
 use crate::platforms::windows::headers::*;
+
+unsafe fn window_dpi(hwnd: HWND) -> u32 {
+    type GetDpi = unsafe extern "system" fn(HWND) -> u32;
+    static GET_DPI: std::sync::OnceLock<Option<GetDpi>> = std::sync::OnceLock::new();
+    let get_dpi = GET_DPI.get_or_init(|| unsafe {
+        // user32 is held by the imports for the process lifetime.
+        let module = GetModuleHandleA(c"user32.dll".as_ptr());
+        if module.is_null() {
+            return None;
+        }
+        let address = GetProcAddress(module, c"GetDpiForWindow".as_ptr());
+        (!address.is_null()).then(|| std::mem::transmute::<*const c_void, GetDpi>(address))
+    });
+    if let Some(get_dpi) = get_dpi {
+        return unsafe { get_dpi(hwnd) };
+    }
+    // Without per-window DPI, use the system DPI.
+    let dc = unsafe { GetDC(hwnd) };
+    if dc.is_null() {
+        return 96;
+    }
+    let dpi = unsafe { GetDeviceCaps(dc, 88) }; // LOGPIXELSX
+    unsafe { ReleaseDC(hwnd, dc) };
+    dpi.max(1) as u32
+}
 
 /// A Direct2D render target for the client area of a window, kept sized to it.
 #[derive(Default)]
@@ -80,7 +106,7 @@ impl HwndTarget {
 pub(super) fn client_size(hwnd: HWND) -> (u32, u32, f32) {
     let mut rect = RECT::default();
     let _ = unsafe { GetClientRect(hwnd, &mut rect) };
-    let dpi = unsafe { GetDpiForWindow(hwnd) }.max(96) as f32;
+    let dpi = unsafe { window_dpi(hwnd) }.max(96) as f32;
     (
         (rect.right - rect.left).max(0) as u32,
         (rect.bottom - rect.top).max(0) as u32,
