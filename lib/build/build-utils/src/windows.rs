@@ -12,8 +12,8 @@ use winresource::WindowsResource;
 ///
 /// Call this only when the Cargo target is Windows.
 ///
-/// The manifest enables common controls v6, Windows 10/11 compatibility and
-/// per-monitor DPI awareness, and requests the caller's existing privileges.
+/// The manifest enables common controls v6, compatibility with the Windows versions the target
+/// supports and per-monitor DPI awareness, and requests the caller's existing privileges.
 /// Extra icons are `(path, resource_id)` pairs; the application icon uses ID 1.
 pub fn compile_application(
     name: &str,
@@ -29,14 +29,34 @@ pub fn compile_application(
         .set("FileDescription", description)
         .set("LegalCopyright", copyright)
         .set_icon(icon)
-        .set_manifest(&application_manifest(name, &version));
+        .set_manifest(&application_manifest(
+            name,
+            &version,
+            env::var("CARGO_CFG_TARGET_VENDOR").is_ok_and(|vendor| vendor == "win7"),
+        ));
     for &(path, id) in extra_icons {
         resources.set_icon_with_id(path, id);
     }
     resources.compile()
 }
 
-fn application_manifest(name: &str, version: &str) -> String {
+/// The manifest, the normal Windows targets need Windows 10, the `win7` targets also support
+/// Windows Vista, 7, 8 and 8.1, and Windows XP with the XP toolchain, which ignores the
+/// compatibility section
+fn application_manifest(name: &str, version: &str, win7: bool) -> String {
+    let older_supported_os = if win7 {
+        r#"
+            <!-- Windows Vista -->
+            <supportedOS Id="{e2011457-1546-43c5-a5fe-008deee3d3f0}"/>
+            <!-- Windows 7 -->
+            <supportedOS Id="{35138b9a-5d96-4fbd-8e2d-a2440225f93a}"/>
+            <!-- Windows 8 -->
+            <supportedOS Id="{4a2f28e3-53b9-4441-ba9c-d69d4a4a6e38}"/>
+            <!-- Windows 8.1 -->
+            <supportedOS Id="{1f676c76-80e1-4239-95bb-83d0f6d0da78}"/>"#
+    } else {
+        ""
+    };
     let name = name
         .replace('&', "&amp;")
         .replace('<', "&lt;")
@@ -53,7 +73,7 @@ fn application_manifest(name: &str, version: &str) -> String {
         </dependentAssembly>
     </dependency>
     <compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1">
-        <application>
+        <application>{older_supported_os}
             <!-- Windows 10/11 -->
             <supportedOS Id="{{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}}"/>
         </application>
@@ -82,7 +102,7 @@ mod tests {
 
     #[test]
     fn manifest_escapes_application_names() {
-        let manifest = application_manifest("A&B <\"App\">'", "1.2.3");
+        let manifest = application_manifest("A&B <\"App\">'", "1.2.3", false);
         assert!(
             manifest.contains("name=\"A&amp;B &lt;&quot;App&quot;&gt;&apos;\" version=\"1.2.3.0\"")
         );
@@ -91,5 +111,15 @@ mod tests {
         assert!(
             manifest.contains("name=\"Microsoft.Windows.Common-Controls\" version=\"6.0.0.0\"")
         );
+    }
+
+    #[test]
+    fn manifest_supports_the_windows_versions_of_the_target() {
+        let windows_10 = "{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}";
+        let windows_vista = "{e2011457-1546-43c5-a5fe-008deee3d3f0}";
+        let manifest = application_manifest("App", "1.0.0", false);
+        assert!(manifest.contains(windows_10) && !manifest.contains(windows_vista));
+        let manifest = application_manifest("App", "1.0.0", true);
+        assert!(manifest.contains(windows_10) && manifest.contains(windows_vista));
     }
 }
