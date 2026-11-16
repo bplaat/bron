@@ -47,9 +47,6 @@ unsafe extern "system" {
         mode: *const c_void,
     ) -> HDC;
     fn DeleteDC(hdc: HDC) -> BOOL;
-    fn D3DKMTOpenAdapterFromHdc(open: *mut D3dkmtOpenAdapterFromHdc) -> i32;
-    fn D3DKMTWaitForVerticalBlankEvent(wait: *const D3dkmtWaitForVerticalBlankEvent) -> i32;
-    fn D3DKMTCloseAdapter(adapter: *const u32) -> i32;
 }
 
 #[link(name = "user32")]
@@ -144,15 +141,22 @@ impl VerticalBlank {
         let waited = self
             .output
             .as_ref()
-            .is_some_and(|output| unsafe { D3DKMTWaitForVerticalBlankEvent(output) } == 0);
+            .zip(optional_proc!(
+                "gdi32",
+                D3DKMTWaitForVerticalBlankEvent(*const D3dkmtWaitForVerticalBlankEvent) -> i32
+            ))
+            .is_some_and(|(output, wait)| unsafe { wait(output) } == 0);
         if !waited {
             std::thread::sleep(Duration::from_millis(16));
         }
     }
 
     fn close(&mut self) {
-        if let Some(output) = self.output.take() {
-            unsafe { D3DKMTCloseAdapter(&output.adapter) };
+        if let Some((output, close)) = self.output.take().zip(optional_proc!(
+            "gdi32",
+            D3DKMTCloseAdapter(*const u32) -> i32
+        )) {
+            unsafe { close(&output.adapter) };
         }
     }
 }
@@ -164,6 +168,11 @@ impl Drop for VerticalBlank {
 }
 
 fn open_output(monitor: HMONITOR) -> Option<D3dkmtWaitForVerticalBlankEvent> {
+    // The display driver functions came with Windows Vista, Windows XP sleeps for its frames
+    let open_adapter = optional_proc!(
+        "gdi32",
+        D3DKMTOpenAdapterFromHdc(*mut D3dkmtOpenAdapterFromHdc) -> i32
+    )?;
     let mut info = MONITORINFOEXW {
         cbSize: size_of::<MONITORINFOEXW>() as u32,
         ..Default::default()
@@ -179,7 +188,7 @@ fn open_output(monitor: HMONITOR) -> Option<D3dkmtWaitForVerticalBlankEvent> {
         hdc,
         ..Default::default()
     };
-    let status = unsafe { D3DKMTOpenAdapterFromHdc(&mut open) };
+    let status = unsafe { open_adapter(&mut open) };
     unsafe { DeleteDC(hdc) };
     (status == 0).then_some(D3dkmtWaitForVerticalBlankEvent {
         adapter: open.adapter,

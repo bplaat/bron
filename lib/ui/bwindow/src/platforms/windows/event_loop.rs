@@ -4,7 +4,6 @@
  * SPDX-License-Identifier: MIT
  */
 
-use std::ffi::c_void;
 use std::mem::{self, size_of};
 use std::process::exit;
 use std::ptr::{null, null_mut};
@@ -12,6 +11,7 @@ use std::sync::Arc;
 
 use super::headers::*;
 use super::instance::SingleInstance;
+use super::{monitor_dpi, registry_dword, set_process_dpi_aware, set_process_dpi_awareness};
 use crate::mailbox::{Mailbox, Message};
 use crate::{AppId, EventLoopBuilder, LogicalPoint, LogicalSize, NativeEvent as Event, Theme};
 
@@ -128,28 +128,22 @@ unsafe fn enable_high_dpi_awareness() {
         }
     }
 
-    // Fall back to PerMonitor on older Windows versions
+    // Windows 8.1 supports PerMonitor; Windows 7 and 8 support system DPI awareness.
     unsafe {
-        SetProcessDpiAwareness(PROCESS_PER_MONITOR_DPI_AWARE);
+        if set_process_dpi_awareness(PROCESS_PER_MONITOR_DPI_AWARE) < 0 {
+            set_process_dpi_aware();
+        }
     }
 }
 
 // MARK: Theme
 pub(super) fn system_theme() -> Theme {
-    let mut apps_use_light_theme = 1u32;
-    let mut size = size_of::<u32>() as u32;
-    let status = unsafe {
-        RegGetValueW(
-            HKEY_CURRENT_USER,
-            w!("Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize").as_ptr(),
-            w!("AppsUseLightTheme").as_ptr(),
-            RRF_RT_REG_DWORD,
-            null_mut(),
-            &mut apps_use_light_theme as *mut _ as *mut c_void,
-            &mut size,
-        )
-    };
-    if status == ERROR_SUCCESS && apps_use_light_theme == 0 {
+    let apps_use_light_theme = registry_dword(
+        HKEY_CURRENT_USER,
+        w!("Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize"),
+        w!("AppsUseLightTheme"),
+    );
+    if apps_use_light_theme == Some(0) {
         Theme::Dark
     } else {
         Theme::Light
@@ -350,7 +344,7 @@ impl crate::MonitorInterface for PlatformMonitor {
         unsafe {
             let mut dpi_x = USER_DEFAULT_SCREEN_DPI;
             let mut dpi_y = USER_DEFAULT_SCREEN_DPI;
-            let result = GetDpiForMonitor(self.hmonitor, MDT_EFFECTIVE_DPI, &mut dpi_x, &mut dpi_y);
+            let result = monitor_dpi(self.hmonitor, MDT_EFFECTIVE_DPI, &mut dpi_x, &mut dpi_y);
             if result == S_OK {
                 dpi_x as f32 / USER_DEFAULT_SCREEN_DPI as f32
             } else {

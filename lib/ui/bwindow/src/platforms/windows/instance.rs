@@ -19,6 +19,7 @@ use std::time::{Duration, Instant};
 
 use super::event_loop::PlatformEventLoopProxy;
 use super::headers::*;
+use super::package_family_name;
 use crate::AppId;
 use crate::mailbox::Message;
 
@@ -282,10 +283,10 @@ fn key(app_id: &AppId) -> io::Result<String> {
     }
     // Package identity keeps an installed app separate from an unpackaged build.
     let mut length = 0;
-    let status = unsafe { GetCurrentPackageFamilyName(&mut length, null_mut()) };
+    let status = unsafe { package_family_name(&mut length, null_mut()) };
     if status == ERROR_INSUFFICIENT_BUFFER {
         let mut family = vec![0u16; length as usize];
-        let status = unsafe { GetCurrentPackageFamilyName(&mut length, family.as_mut_ptr()) };
+        let status = unsafe { package_family_name(&mut length, family.as_mut_ptr()) };
         if status != 0 {
             return Err(io::Error::from_raw_os_error(status));
         }

@@ -22,6 +22,8 @@ pub(crate) type HANDLE = *mut c_void;
 pub(crate) type HKEY = HANDLE;
 pub(crate) const HKEY_CURRENT_USER: HKEY = 0x80000001usize as HKEY;
 pub(crate) const RRF_RT_REG_DWORD: u32 = 0x00000018;
+pub(crate) const REG_DWORD: u32 = 4;
+pub(crate) const KEY_READ: u32 = 0x20019;
 pub(crate) const ERROR_SUCCESS: i32 = 0;
 
 // MARK: kernel32.dll
@@ -75,7 +77,8 @@ unsafe extern "system" {
         length: usize,
     ) -> *mut c_void;
     pub(crate) fn UnmapViewOfFile(address: *const c_void) -> i32;
-    pub(crate) fn GetCurrentPackageFamilyName(length: *mut u32, name: *mut u16) -> i32;
+    pub(crate) fn GetSystemDirectoryW(buffer: *mut u16, size: u32) -> u32;
+    pub(crate) fn LoadLibraryW(path: *const u16) -> HMODULE;
     pub(crate) fn GetModuleHandleW(lpModuleName: *const w_char) -> HMODULE;
     pub(crate) fn GetProcAddress(hModule: HMODULE, lpProcName: *const c_char) -> *const c_void;
     pub(crate) fn GetLastError() -> u32;
@@ -89,15 +92,22 @@ unsafe extern "system" {
 // MARK: advapi32.dll
 #[link(name = "advapi32")]
 unsafe extern "system" {
-    pub(crate) fn RegGetValueW(
+    pub(crate) fn RegOpenKeyExW(
         hkey: HKEY,
         lpSubKey: *const w_char,
-        lpValue: *const w_char,
-        dwFlags: u32,
-        pdwType: *mut u32,
-        pvData: *mut c_void,
-        pcbData: *mut u32,
+        ulOptions: u32,
+        samDesired: u32,
+        phkResult: *mut HKEY,
     ) -> i32;
+    pub(crate) fn RegQueryValueExW(
+        hkey: HKEY,
+        lpValueName: *const w_char,
+        lpReserved: *mut u32,
+        lpType: *mut u32,
+        lpData: *mut c_void,
+        lpcbData: *mut u32,
+    ) -> i32;
+    pub(crate) fn RegCloseKey(hkey: HKEY) -> i32;
 }
 
 // MARK: gdi32.dll
@@ -106,6 +116,7 @@ pub(crate) type HDC = HANDLE;
 
 #[link(name = "gdi32")]
 unsafe extern "system" {
+    pub(crate) fn GetDeviceCaps(dc: HDC, index: i32) -> i32;
     pub(crate) fn FillRect(hdc: HDC, lprc: *const RECT, hbr: HBRUSH) -> i32;
     pub(crate) fn CreateSolidBrush(color: u32) -> HBRUSH;
     pub(crate) fn DeleteObject(ho: *mut c_void) -> BOOL;
@@ -455,7 +466,6 @@ unsafe extern "system" {
     pub(crate) fn SetWindowLongW(hwnd: HWND, index: i32, value: i32) -> i32;
     pub(crate) fn SetWindowLongPtrW(hwnd: HWND, index: i32, value: isize) -> isize;
     pub(crate) fn GetClassLongW(hwnd: HWND, index: i32) -> u32;
-    #[cfg(target_pointer_width = "64")]
     pub(crate) fn GetClassLongPtrW(hwnd: HWND, index: i32) -> usize;
     pub(crate) fn MonitorFromPoint(pt: POINT, dwFlags: u32) -> *mut c_void;
     pub(crate) fn EnumDisplayMonitors(
@@ -472,15 +482,14 @@ unsafe extern "system" {
     pub(crate) fn PostMessageW(hWnd: HWND, Msg: u32, wParam: WPARAM, lParam: LPARAM) -> BOOL;
     pub(crate) fn RegisterWindowMessageW(lpString: *const w_char) -> u32;
     pub(crate) fn GetMonitorInfoW(hMonitor: HMONITOR, lpmi: *mut MONITORINFOEXW) -> BOOL;
-    pub(crate) fn GetDpiForSystem() -> u32;
-    pub(crate) fn GetDpiForWindow(hWnd: HWND) -> u32;
+    pub(crate) fn GetDC(hwnd: HWND) -> HDC;
+    pub(crate) fn ReleaseDC(hwnd: HWND, dc: HDC) -> i32;
     pub(crate) fn GetSystemMetrics(nIndex: i32) -> i32;
-    pub(crate) fn AdjustWindowRectExForDpi(
+    pub(crate) fn AdjustWindowRectEx(
         lpRect: *mut RECT,
         dwStyle: u32,
         bMenu: BOOL,
         dwExStyle: u32,
-        dpi: u32,
     ) -> BOOL;
     pub(crate) fn DestroyWindow(hWnd: HWND) -> BOOL;
     pub(crate) fn GetWindowPlacement(hWnd: HWND, lpwndpl: *mut WINDOWPLACEMENT) -> BOOL;
@@ -540,31 +549,9 @@ unsafe extern "system" {
     ) -> HRESULT;
 }
 
-// MARK: shcore.dll
-#[link(name = "shcore")]
-unsafe extern "system" {
-    pub(crate) fn SetProcessDpiAwareness(value: i32) -> HRESULT;
-    pub(crate) fn GetDpiForMonitor(
-        hmonitor: HMONITOR,
-        dpiType: i32,
-        dpiX: *mut u32,
-        dpiY: *mut u32,
-    ) -> HRESULT;
-}
-
 // MARK: dwmapi.dll
 pub(crate) const DWMWA_CLOAK: u32 = 13;
 pub(crate) const DWMWA_USE_IMMERSIVE_DARK_MODE: u32 = 20;
-
-#[link(name = "dwmapi")]
-unsafe extern "system" {
-    pub(crate) fn DwmSetWindowAttribute(
-        hwnd: HWND,
-        dwAttribute: u32,
-        pvAttribute: *const c_void,
-        cbAttribute: u32,
-    ) -> i32;
-}
 
 // MARK: ole32.dll
 pub(crate) type HRESULT = i32;

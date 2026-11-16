@@ -19,6 +19,7 @@ use super::interaction::{Interaction, release_pointer_lock};
 use super::progress_bar::ProgressBar;
 #[cfg(feature = "remember_window_state")]
 use super::window_state::{restore_window_state, save_window_state};
+use super::{adjust_window_rect_for_dpi, dwm_set_window_attribute, system_dpi, window_dpi};
 #[cfg(feature = "progress_bar")]
 use crate::WindowsProgressBarState;
 use crate::{
@@ -93,7 +94,7 @@ fn calculate_window_rect(
         bottom: y + height,
     };
     // SAFETY: rect is valid and style is a supported window style.
-    unsafe { AdjustWindowRectExForDpi(&mut rect, style, FALSE, 0, dpi) };
+    unsafe { adjust_window_rect_for_dpi(&mut rect, style, FALSE, 0, dpi) };
     (rect, position_set)
 }
 
@@ -117,8 +118,8 @@ impl WindowData {
                 rect.bottom += (outer.bottom - outer.top) - (client.bottom - client.top);
                 return rect;
             }
-            let style = GetWindowLongPtrW(self.hwnd, GWL_STYLE) as u32;
-            AdjustWindowRectExForDpi(&mut rect, style, FALSE, 0, self.dpi);
+            let style = GetWindowLong(self.hwnd, GWL_STYLE) as u32;
+            adjust_window_rect_for_dpi(&mut rect, style, FALSE, 0, self.dpi);
         }
         rect
     }
@@ -133,7 +134,7 @@ impl PlatformWindow {
         builder: &WindowBuilder,
         host: std::rc::Rc<crate::content::ContentHost>,
     ) -> Self {
-        let initial_dpi = unsafe { GetDpiForSystem() };
+        let initial_dpi = unsafe { system_dpi() };
         let mut window_data = Box::new(WindowData {
             host: host.clone(),
             window_id: builder.window_id,
@@ -263,7 +264,7 @@ impl PlatformWindow {
             let restored_window_state = builder.remember_window_state && restore_window_state(hwnd);
             #[cfg(not(feature = "remember_window_state"))]
             let restored_window_state = false;
-            let window_dpi = GetDpiForWindow(hwnd);
+            let window_dpi = window_dpi(hwnd);
             let dpi = if window_dpi == 0 {
                 initial_dpi
             } else {
@@ -417,7 +418,7 @@ const WM_REVEAL: u32 = WM_USER + 17;
 fn set_cloaked(hwnd: HWND, cloaked: bool) {
     let cloaked: BOOL = cloaked.into();
     unsafe {
-        DwmSetWindowAttribute(
+        dwm_set_window_attribute(
             hwnd,
             DWMWA_CLOAK,
             &cloaked as *const _ as *const _,
@@ -429,7 +430,7 @@ fn set_cloaked(hwnd: HWND, cloaked: bool) {
 unsafe fn set_titlebar_theme(hwnd: HWND, theme: Theme) {
     let enabled: BOOL = (theme == Theme::Dark).into();
     unsafe {
-        DwmSetWindowAttribute(
+        dwm_set_window_attribute(
             hwnd,
             DWMWA_USE_IMMERSIVE_DARK_MODE,
             &enabled as *const _ as *const _,

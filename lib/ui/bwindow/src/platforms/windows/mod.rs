@@ -15,6 +15,37 @@ pub(crate) use crate::platforms::windows::window::{
     PlatformWindow, config_dir as windows_config_dir, embed_native_view, resize_native_view,
 };
 
+/// Gets a function of a system DLL, `None` when this Windows doesn't have it. The normal Windows
+/// targets need Windows 10, which has them all, so they link it. The `win7` targets, which Windows
+/// XP uses too, load it once at runtime.
+macro_rules! optional_proc {
+    ($module:literal, $name:ident($($arg:ty),*) -> $ret:ty) => {{
+        type Function = unsafe extern "system" fn($($arg),*) -> $ret;
+        #[cfg(not(target_vendor = "win7"))]
+        let function: Option<Function> = {
+            #[link(name = $module)]
+            unsafe extern "system" {
+                fn $name($(_: $arg),*) -> $ret;
+            }
+            Some($name)
+        };
+        #[cfg(target_vendor = "win7")]
+        let function: Option<Function> = {
+            static FUNCTION: std::sync::OnceLock<Option<Function>> = std::sync::OnceLock::new();
+            *FUNCTION.get_or_init(|| {
+                let address = $crate::platforms::windows::load_system_proc(
+                    concat!($module, ".dll"),
+                    concat!(stringify!($name), "\0"),
+                );
+                (!address.is_null()).then(|| unsafe {
+                    std::mem::transmute::<*const std::ffi::c_void, Function>(address)
+                })
+            })
+        };
+        function
+    }};
+}
+
 #[cfg(feature = "dialog")]
 mod dialog;
 mod event_loop;
@@ -32,3 +63,169 @@ mod progress_bar;
 mod window;
 #[cfg(feature = "remember_window_state")]
 mod window_state;
+
+use std::ffi::c_void;
+
+use self::headers::*;
+
+/// Loads a function of a DLL in the system directory, the DLL stays loaded
+#[cfg(target_vendor = "win7")]
+fn load_system_proc(module: &str, symbol: &str) -> *const c_void {
+    const MAX_PATH: usize = 260;
+    let mut path = vec![0u16; MAX_PATH];
+    let length = unsafe { GetSystemDirectoryW(path.as_mut_ptr(), path.len() as u32) } as usize;
+    if length == 0 || length >= path.len() {
+        return std::ptr::null();
+    }
+    path.truncate(length);
+    path.extend(format!("\\{module}\0").encode_utf16());
+    let module = unsafe { LoadLibraryW(path.as_ptr()) };
+    if module.is_null() {
+        return std::ptr::null();
+    }
+    unsafe { GetProcAddress(module, symbol.as_ptr().cast()) }
+}
+
+pub(super) unsafe fn package_family_name(length: *mut u32, name: *mut u16) -> i32 {
+    match optional_proc!(
+        "kernel32",
+        GetCurrentPackageFamilyName(*mut u32, *mut u16) -> i32
+    ) {
+        Some(function) => unsafe { function(length, name) },
+        None => APPMODEL_ERROR_NO_PACKAGE,
+    }
+}
+
+/// Reads a DWORD registry value, with RegQueryValueExW where Windows XP has no RegGetValueW
+pub(super) fn registry_dword(key: HKEY, sub_key: &[u16], value: &[u16]) -> Option<u32> {
+    let mut data = 0u32;
+    let mut size = size_of::<u32>() as u32;
+    let data_ptr = (&raw mut data).cast::<c_void>();
+    if let Some(get_value) = optional_proc!(
+        "advapi32",
+        RegGetValueW(HKEY, *const u16, *const u16, u32, *mut u32, *mut c_void, *mut u32) -> i32
+    ) {
+        let status = unsafe {
+            get_value(
+                key,
+                sub_key.as_ptr(),
+                value.as_ptr(),
+                RRF_RT_REG_DWORD,
+                std::ptr::null_mut(),
+                data_ptr,
+                &mut size,
+            )
+        };
+        return (status == ERROR_SUCCESS).then_some(data);
+    }
+    let mut opened = std::ptr::null_mut();
+    if unsafe { RegOpenKeyExW(key, sub_key.as_ptr(), 0, KEY_READ, &mut opened) } != ERROR_SUCCESS {
+        return None;
+    }
+    let mut kind = 0;
+    let status = unsafe {
+        RegQueryValueExW(
+            opened,
+            value.as_ptr(),
+            std::ptr::null_mut(),
+            &mut kind,
+            data_ptr,
+            &mut size,
+        )
+    };
+    unsafe { RegCloseKey(opened) };
+    (status == ERROR_SUCCESS && kind == REG_DWORD).then_some(data)
+}
+
+// Windows XP has no DPI awareness, it never scales windows
+pub(super) unsafe fn set_process_dpi_aware() {
+    if let Some(function) = optional_proc!("user32", SetProcessDPIAware() -> BOOL) {
+        unsafe { function() };
+    }
+}
+
+// Windows XP has no desktop composition, so no cloaking and no dark title bar
+pub(super) unsafe fn dwm_set_window_attribute(
+    hwnd: HWND,
+    attribute: u32,
+    value: *const c_void,
+    size: u32,
+) -> HRESULT {
+    match optional_proc!(
+        "dwmapi",
+        DwmSetWindowAttribute(HWND, u32, *const c_void, u32) -> HRESULT
+    ) {
+        Some(function) => unsafe { function(hwnd, attribute, value, size) },
+        None => 0x8000_4001u32 as i32, // E_NOTIMPL
+    }
+}
+
+pub(super) unsafe fn system_dpi() -> u32 {
+    if let Some(function) = optional_proc!("user32", GetDpiForSystem() -> u32) {
+        return unsafe { function() };
+    }
+    unsafe { legacy_system_dpi() }
+}
+
+unsafe fn legacy_system_dpi() -> u32 {
+    let dc = unsafe { GetDC(std::ptr::null_mut()) };
+    if dc.is_null() {
+        return USER_DEFAULT_SCREEN_DPI;
+    }
+    let dpi = unsafe { GetDeviceCaps(dc, 88) }; // LOGPIXELSX
+    unsafe { ReleaseDC(std::ptr::null_mut(), dc) };
+    dpi.max(1) as u32
+}
+
+pub(super) unsafe fn window_dpi(hwnd: HWND) -> u32 {
+    match optional_proc!("user32", GetDpiForWindow(HWND) -> u32) {
+        Some(function) => unsafe { function(hwnd) },
+        None => unsafe { system_dpi() },
+    }
+}
+
+pub(super) unsafe fn adjust_window_rect_for_dpi(
+    rect: *mut RECT,
+    style: u32,
+    menu: BOOL,
+    ex_style: u32,
+    dpi: u32,
+) -> BOOL {
+    match optional_proc!(
+        "user32",
+        AdjustWindowRectExForDpi(*mut RECT, u32, BOOL, u32, u32) -> BOOL
+    ) {
+        Some(function) => unsafe { function(rect, style, menu, ex_style, dpi) },
+        // Windows 7 is system-DPI-aware: the native frame metrics already use system DPI.
+        None => unsafe { AdjustWindowRectEx(rect, style, menu, ex_style) },
+    }
+}
+
+pub(super) unsafe fn set_process_dpi_awareness(value: i32) -> HRESULT {
+    match optional_proc!("shcore", SetProcessDpiAwareness(i32) -> HRESULT) {
+        Some(function) => unsafe { function(value) },
+        None => 0x8000_4001u32 as i32, // E_NOTIMPL
+    }
+}
+
+pub(super) unsafe fn monitor_dpi(
+    monitor: HMONITOR,
+    kind: i32,
+    x: *mut u32,
+    y: *mut u32,
+) -> HRESULT {
+    match optional_proc!(
+        "shcore",
+        GetDpiForMonitor(HMONITOR, i32, *mut u32, *mut u32) -> HRESULT
+    ) {
+        Some(function) => unsafe { function(monitor, kind, x, y) },
+        None => {
+            let dpi = unsafe { system_dpi() };
+            unsafe {
+                *x = dpi;
+                *y = dpi;
+            }
+            S_OK
+        }
+    }
+}
