@@ -10,8 +10,9 @@ repository.workspace = true
 workspace = true
 
 [build-dependencies]
-cc = { version = "1.10", optional = true }
+cc = { version = "1.10" }
 
 [features]
-bundled = ["dep:cc"]
-bundled-fts5 = ["bundled"]
+bundled = []
+column-metadata = []
+fts5 = []

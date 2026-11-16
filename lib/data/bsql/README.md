@@ -6,6 +6,7 @@ A simple and minimal Rust SQLite and MySQL library with an ergonomic API.
 
 - `sqlite` (default): SQLite backend using the system library
 - `sqlite-bundled`: compile the bundled SQLite source instead
+- `sqlite-fts5`: enable full-text search in bundled SQLite; system SQLite must already provide FTS5
 - `mysql`: MySQL backend, including Unix socket transports on Unix
 - `mysql-tls`: verified TLS for MySQL over TCP
 - `mysql-native-password`: legacy `mysql_native_password` authentication

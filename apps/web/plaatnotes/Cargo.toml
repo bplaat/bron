@@ -12,7 +12,7 @@ workspace = true
 [dependencies]
 anyhow = "1.0"
 base64 = "0.23.1"
-bsql = { version = "0.1.2", features = ["uuid", "chrono"] }
+bsql = { version = "0.1.2", features = ["uuid", "chrono", "sqlite-fts5"] }
 chrono = { version = "0.4.45", default-features = false, features = [
     "now",
     "serde",
@@ -38,8 +38,10 @@ validate = { path = "../../../lib/data/validate" }
 zeroize = "1.9"
 zip = "9.1"
 
-[target.'cfg(not(any(target_os = "macos", windows)))'.dependencies]
+[target.'cfg(any(target_vendor = "win7", not(any(target_os = "macos", windows))))'.dependencies]
 bsql = { version = "0.1.2", features = ["uuid", "chrono", "sqlite-bundled"] }
+
+[target.'cfg(not(any(target_os = "macos", windows)))'.dependencies]
 small-http = { version = "0.2.1", features = ["tls-vendored"] }
 
 [build-dependencies]

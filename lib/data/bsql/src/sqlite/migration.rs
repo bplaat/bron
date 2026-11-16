@@ -328,6 +328,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "sqlite-fts5")]
     fn test_migration_fts5_directive_creates_synced_search_table() {
         let db = Connection::open_sqlite_memory().unwrap();
         db.migration(&[Migration {
