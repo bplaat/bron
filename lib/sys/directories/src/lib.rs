@@ -72,6 +72,9 @@ pub(crate) mod windows {
     }
 
     const KF_FLAG_DEFAULT: u32 = 0x00000000;
+    #[cfg(target_vendor = "win7")]
+    use win7::SHGetKnownFolderPath;
+    #[cfg(not(target_vendor = "win7"))]
     #[link(name = "shell32")]
     unsafe extern "system" {
         fn SHGetKnownFolderPath(
@@ -107,6 +110,101 @@ pub(crate) mod windows {
         data4: [0xBE, 0x97, 0x42, 0x22, 0x20, 0x08, 0x0E, 0x43],
     };
 
+    /// SHGetKnownFolderPath for the `win7` targets, which run on Windows 7 and newer, and with the
+    /// XP toolchain also on Windows XP and Vista. It came with Windows Vista, so it's loaded at
+    /// runtime, Windows XP gets the folder by its CSIDL instead.
+    #[cfg(target_vendor = "win7")]
+    mod win7 {
+        use super::*;
+
+        const CSIDL_LOCAL_APPDATA: i32 = 0x1c;
+        const CSIDL_APPDATA: i32 = 0x1a;
+        const CSIDL_DESKTOPDIRECTORY: i32 = 0x10;
+        const CSIDL_MYMUSIC: i32 = 0x0d;
+        const MAX_PATH: usize = 260;
+        const E_FAIL: i32 = 0x80004005u32 as i32;
+        const E_OUTOFMEMORY: i32 = 0x8007000Eu32 as i32;
+        #[link(name = "shell32")]
+        unsafe extern "system" {
+            fn SHGetFolderPathW(
+                hwnd: *mut std::ffi::c_void,
+                csidl: i32,
+                hToken: *const std::ffi::c_void,
+                dwFlags: u32,
+                pszPath: *mut u16,
+            ) -> i32;
+        }
+        #[link(name = "ole32")]
+        unsafe extern "system" {
+            fn CoTaskMemAlloc(size: usize) -> *mut std::ffi::c_void;
+        }
+
+        type GetKnownFolderPath = unsafe extern "system" fn(
+            *const Guid,
+            u32,
+            *const std::ffi::c_void,
+            *mut *mut u16,
+        ) -> i32;
+
+        #[allow(non_snake_case)]
+        pub(super) unsafe fn SHGetKnownFolderPath(
+            rfid: *const Guid,
+            dwFlags: u32,
+            hToken: *const std::ffi::c_void,
+            ppszPath: *mut *mut u16,
+        ) -> i32 {
+            static FUNCTION: std::sync::OnceLock<Option<GetKnownFolderPath>> =
+                std::sync::OnceLock::new();
+            let function = FUNCTION.get_or_init(|| {
+                // SAFETY: shell32 is held by the executable's imports, the export has this signature.
+                unsafe {
+                    let module = GetModuleHandleA(c"shell32.dll".as_ptr());
+                    let address = GetProcAddress(module, c"SHGetKnownFolderPath".as_ptr());
+                    (!address.is_null()).then(|| {
+                        std::mem::transmute::<*const std::ffi::c_void, GetKnownFolderPath>(address)
+                    })
+                }
+            });
+            if let Some(function) = function {
+                // SAFETY: the caller passes valid arguments for SHGetKnownFolderPath.
+                return unsafe { function(rfid, dwFlags, hToken, ppszPath) };
+            }
+
+            // SAFETY: rfid points to a valid GUID.
+            let rfid = unsafe { &*rfid };
+            let Some(csidl) = [
+                (&FOLDERID_LOCAL_APPDATA, CSIDL_LOCAL_APPDATA),
+                (&FOLDERID_ROAMING_APPDATA, CSIDL_APPDATA),
+                (&FOLDERID_DESKTOP, CSIDL_DESKTOPDIRECTORY),
+                (&FOLDERID_MUSIC, CSIDL_MYMUSIC),
+            ]
+            .into_iter()
+            .find_map(|(id, csidl)| (id == rfid).then_some(csidl)) else {
+                return E_FAIL;
+            };
+            let mut path = [0u16; MAX_PATH];
+            // SAFETY: path has room for the MAX_PATH code units SHGetFolderPathW writes at most.
+            let result = unsafe {
+                SHGetFolderPathW(std::ptr::null_mut(), csidl, hToken, 0, path.as_mut_ptr())
+            };
+            if result < 0 {
+                return result;
+            }
+            // Return it in task memory like SHGetKnownFolderPath, with its null terminator
+            let len = path.iter().position(|&c| c == 0).unwrap_or(MAX_PATH - 1) + 1;
+            // SAFETY: the allocation has room for len code units, ppszPath is a valid output pointer.
+            unsafe {
+                let copy = CoTaskMemAlloc(len * size_of::<u16>()).cast::<u16>();
+                if copy.is_null() {
+                    return E_OUTOFMEMORY;
+                }
+                std::ptr::copy_nonoverlapping(path.as_ptr(), copy, len);
+                *ppszPath = copy;
+            }
+            0
+        }
+    }
+
     pub(crate) fn get_known_folder_path(folder_id: &Guid) -> PathBuf {
         let mut path = LPWSTR::default();
         // SAFETY: folder_id is a valid GUID reference; path.as_mut_ptr() provides a valid output pointer; null token means current user.
@@ -129,7 +227,11 @@ pub(crate) mod windows {
     unsafe extern "system" {
         fn GetCurrentProcess() -> *mut std::ffi::c_void;
         fn CloseHandle(handle: *mut std::ffi::c_void) -> i32;
-        fn GetCurrentPackageFamilyName(length: *mut u32, name: *mut u16) -> i32;
+        fn GetModuleHandleA(name: *const i8) -> *mut std::ffi::c_void;
+        fn GetProcAddress(
+            module: *mut std::ffi::c_void,
+            name: *const i8,
+        ) -> *const std::ffi::c_void;
     }
     #[link(name = "advapi32")]
     unsafe extern "system" {
@@ -171,16 +273,30 @@ pub(crate) mod windows {
     }
 
     fn package_family_name() -> Option<String> {
+        type GetName = unsafe extern "system" fn(*mut u32, *mut u16) -> i32;
+        static GET_NAME: std::sync::OnceLock<Option<GetName>> = std::sync::OnceLock::new();
+        let get_name = GET_NAME.get_or_init(|| {
+            // SAFETY: kernel32 is held by the executable's imports. The export is optional
+            // because Windows 7 has no package identity and no AppContainer processes.
+            unsafe {
+                let module = GetModuleHandleA(c"kernel32.dll".as_ptr());
+                if module.is_null() {
+                    return None;
+                }
+                let address = GetProcAddress(module, c"GetCurrentPackageFamilyName".as_ptr());
+                (!address.is_null())
+                    .then(|| std::mem::transmute::<*const std::ffi::c_void, GetName>(address))
+            }
+        });
+        let get_name = (*get_name)?;
         let mut length = 0;
         // SAFETY: Querying the required length with a null buffer is allowed.
-        if unsafe { GetCurrentPackageFamilyName(&mut length, std::ptr::null_mut()) }
-            != ERROR_INSUFFICIENT_BUFFER
-        {
+        if unsafe { get_name(&mut length, std::ptr::null_mut()) } != ERROR_INSUFFICIENT_BUFFER {
             return None;
         }
         let mut name = vec![0u16; length as usize];
         // SAFETY: name has room for length code units including the null terminator.
-        if unsafe { GetCurrentPackageFamilyName(&mut length, name.as_mut_ptr()) } != ERROR_SUCCESS {
+        if unsafe { get_name(&mut length, name.as_mut_ptr()) } != ERROR_SUCCESS {
             return None;
         }
         Some(String::from_utf16_lossy(
