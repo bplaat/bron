@@ -5,6 +5,11 @@
  * 32 bit colour, so DirectDraw games find their fullscreen modes, plus one extra
  * 32 bit mode: the size the page currently wants (asked over the backdoor),
  * which is how the desktop follows the browser window.
+ *
+ * Hardware pointer: framebuf.dll hands monochrome pointers of up to 32x32 to
+ * the miniport, which passes them to the page; the page shows them as the
+ * browser's own cursor, so it moves at native speed and Windows no longer draws
+ * it. Colour pointers and shapes the page declines stay drawn by Windows.
  */
 #include <ntdef.h>
 #include <winerror.h>
@@ -29,6 +34,8 @@
 #define VGA_DAC_DATA ((PUCHAR)0x3C9)
 
 #define MAX_MODES 64
+#define POINTER_SIZE 32
+#define POINTER_MASKS (2 * (POINTER_SIZE / 8) * POINTER_SIZE) /* AND then XOR mask, 1 bit per pixel */
 
 typedef struct {
     USHORT width, height, bpp;
@@ -40,6 +47,12 @@ typedef struct {
     MODE modes[MAX_MODES];
     ULONG mode_count;
     MODE current;
+    BOOLEAN host;           /* the page answers the v86 backdoor commands */
+    BOOLEAN pointer_shown;  /* the page accepted the last shape, kept below for when it asks again */
+    union {
+        VIDEO_POINTER_ATTRIBUTES attr;
+        UCHAR bytes[sizeof(VIDEO_POINTER_ATTRIBUTES) + POINTER_MASKS];
+    } pointer;
 } DEVICE_EXT;
 
 static const MODE std_modes[] = {
@@ -68,6 +81,23 @@ static BOOLEAN host_present(void)
     return r.ebx == VMWARE_MAGIC;
 }
 
+/* The page reads the shape from the device extension, which is nonpaged */
+static BOOLEAN pointer_shape(DEVICE_EXT *ext)
+{
+    ext->pointer_shown = v86_call(V86_CMD_POINTER_SHAPE, (ULONG)&ext->pointer.attr) == 1;
+    return ext->pointer_shown;
+}
+
+static void pointer_move(DEVICE_EXT *ext, ULONG position)
+{
+    if (v86_call(V86_CMD_POINTER_MOVE, position) == V86_POINTER_RESEND && ext->pointer_shown) pointer_shape(ext);
+}
+
+static ULONG pointer_position(SHORT column, SHORT row)
+{
+    return ((ULONG)(USHORT)column << 16) | (USHORT)row;
+}
+
 static BOOLEAN mode_fits(DEVICE_EXT *ext, ULONG w, ULONG h, ULONG bpp)
 {
     return w >= 320 && h >= 240 && w <= 2560 && h <= 1600 && w * h * (bpp / 8) <= ext->vram;
@@ -91,7 +121,7 @@ static void build_modes(DEVICE_EXT *ext)
     for (ULONG d = 0; d < sizeof(depths) / sizeof(depths[0]); d++)
         for (ULONG i = 0; i < sizeof(std_modes) / sizeof(std_modes[0]); i++)
             add_mode(ext, std_modes[i].width, std_modes[i].height, depths[d]);
-    if (host_present()) {
+    if (ext->host) {
         ULONG size = v86_call(V86_CMD_GETSIZE, 0);
         if (size) add_mode(ext, size >> 16, size & 0xFFFF, 32);
     }
@@ -164,6 +194,7 @@ static VP_STATUS NTAPI find_adapter(PVOID hw, PVOID ctx, PWSTR args, PVIDEO_PORT
     }
     ext->vram = (ULONG)dispi_read(DISPI_VIDEO_MEMORY_64K) * 0x10000;
     if (ext->vram < 0x400000) ext->vram = 0x400000;
+    ext->host = host_present() && v86_call(V86_CMD_HELLO, 0) == V86_HELLO_REPLY;
 
     config->NumEmulatorAccessEntries = 0;
     config->EmulatorAccessEntries = NULL;
@@ -257,6 +288,46 @@ static BOOLEAN NTAPI start_io(PVOID hw, PVIDEO_REQUEST_PACKET rp)
     case IOCTL_VIDEO_UNMAP_VIDEO_MEMORY:
         if (rp->InputBufferLength < sizeof(VIDEO_MEMORY)) { status = ERROR_INSUFFICIENT_BUFFER; break; }
         status = VideoPortUnmapMemory(hw, ((PVIDEO_MEMORY)rp->InputBuffer)->RequestedVirtualAddress, NULL);
+        break;
+    case IOCTL_VIDEO_QUERY_POINTER_CAPABILITIES: {
+        if (!ext->host) break;
+        if (rp->OutputBufferLength < sizeof(VIDEO_POINTER_CAPABILITIES)) { status = ERROR_INSUFFICIENT_BUFFER; break; }
+        PVIDEO_POINTER_CAPABILITIES caps = rp->OutputBuffer;
+        caps->Flags = VIDEO_MODE_ASYNC_POINTER | VIDEO_MODE_MONO_POINTER;
+        caps->MaxWidth = caps->MaxHeight = POINTER_SIZE;
+        caps->HWPtrBitmapStart = caps->HWPtrBitmapEnd = (ULONG)-1;
+        rp->StatusBlock->Information = sizeof(VIDEO_POINTER_CAPABILITIES);
+        status = NO_ERROR;
+        break;
+    }
+    case IOCTL_VIDEO_SET_POINTER_ATTR: {
+        PVIDEO_POINTER_ATTRIBUTES attr = rp->InputBuffer;
+        if (!ext->host || rp->InputBufferLength < sizeof(VIDEO_POINTER_ATTRIBUTES) || attr->Width > POINTER_SIZE ||
+            attr->Height > POINTER_SIZE || attr->WidthInBytes != POINTER_SIZE / 8 ||
+            rp->InputBufferLength < sizeof(VIDEO_POINTER_ATTRIBUTES) + 2 * attr->WidthInBytes * attr->Height ||
+            (attr->Flags & VIDEO_MODE_COLOR_POINTER)) { status = ERROR_INVALID_PARAMETER; break; }
+        VideoPortZeroMemory(&ext->pointer, sizeof(ext->pointer));
+        VideoPortMoveMemory(&ext->pointer, attr,
+                            sizeof(VIDEO_POINTER_ATTRIBUTES) + 2 * attr->WidthInBytes * attr->Height);
+        status = pointer_shape(ext) ? NO_ERROR : ERROR_INVALID_PARAMETER;
+        if (status == NO_ERROR)
+            pointer_move(ext, attr->Enable && (attr->Column != -1 || attr->Row != -1)
+                                  ? pointer_position(attr->Column, attr->Row) : V86_POINTER_HIDDEN);
+        break;
+    }
+    case IOCTL_VIDEO_SET_POINTER_POSITION: {
+        if (rp->InputBufferLength < sizeof(VIDEO_POINTER_POSITION)) { status = ERROR_INSUFFICIENT_BUFFER; break; }
+        PVIDEO_POINTER_POSITION pos = rp->InputBuffer;
+        pointer_move(ext, pointer_position(pos->Column, pos->Row));
+        status = NO_ERROR;
+        break;
+    }
+    case IOCTL_VIDEO_DISABLE_POINTER:
+        pointer_move(ext, V86_POINTER_HIDDEN);
+        status = NO_ERROR;
+        break;
+    case IOCTL_VIDEO_ENABLE_POINTER:
+        status = NO_ERROR; /* shown again by the next position */
         break;
     case IOCTL_VIDEO_RESET_DEVICE:
         dispi_write(DISPI_ENABLE, 0);

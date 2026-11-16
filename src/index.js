@@ -169,10 +169,25 @@ function startAudio() {
 window.addEventListener('pointerdown', startAudio, true);
 window.addEventListener('keydown', startAudio, true);
 
-// Clipboard: guest to host, written on the next user interaction when the browser holds it back
-function imageToPng({ width, height, data }) {
+function imageCanvas({ width, height, data }) {
     const canvas = Object.assign(document.createElement('canvas'), { width, height });
     canvas.getContext('2d').putImageData(new ImageData(data, width, height), 0, 0);
+    return canvas;
+}
+
+// Hardware pointer: the pointer Windows sets is the browser's cursor over the screen, so it moves at native speed even
+// when Windows is busy, 'none' (v86's default) while Windows draws one itself
+const screenCanvas = screen.querySelector('canvas');
+const cursorUrls = new Map();
+host.addEventListener('pointer', ({ detail: pointer }) => {
+    if (!pointer) return void (screenCanvas.style.cursor = 'none');
+    if (!cursorUrls.has(pointer.key)) cursorUrls.set(pointer.key, imageCanvas(pointer).toDataURL());
+    screenCanvas.style.cursor = `url(${cursorUrls.get(pointer.key)}) ${pointer.x} ${pointer.y}, auto`;
+});
+
+// Clipboard: guest to host, written on the next user interaction when the browser holds it back
+function imageToPng(image) {
+    const canvas = imageCanvas(image);
     return new Promise((resolve, reject) => canvas.toBlob((blob) => (blob ? resolve(blob) : reject()), 'image/png'));
 }
 

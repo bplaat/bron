@@ -8,6 +8,7 @@ My personal website inside a Windows XP desktop running in your browser with [v8
   compressed 1 MB chunks as Windows reads it
 - Legacy PC: 256 MB RAM, Standard PC HAL (no ACPI), Sound Blaster 16, NE2000 network card
 - Absolute mouse over the VMware backdoor v86 emulates, the desktop resizes to the browser window
+- Hardware pointer: Windows' pointer is the browser's own cursor, it moves at native speed even when Windows is busy
 - Clipboard sync in both directions for text, HTML and images (Cmd acts as Ctrl on macOS)
 - Drop files on the page to copy them to the XP desktop, links opened in Windows open in a new browser tab
 - The session (memory and the disk blocks Windows wrote) is saved in IndexedDB and restored on the next visit, a

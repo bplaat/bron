@@ -126,7 +126,10 @@ campaign narration are on disk.
 - `v86mou.sys`: mouse filter above mouclass that turns the VMware backdoor queue into absolute input, and the
   `\\.\V86Tools` channel for the agent
 - `v86vid.sys` + `v86vid.inf`: video miniport for the Bochs VBE adapter (with the stock `framebuf.dll`) with 8 bit
-  (palette), 16 and 32 bit modes for DirectDraw games, plus the page size as an extra mode
+  (palette), 16 and 32 bit modes for DirectDraw games, plus the page size as an extra mode, and a hardware pointer:
+  `framebuf.dll` hands it the monochrome pointers (up to 32x32), the page shows them as the browser's own cursor so
+  it moves at native speed and Windows does not draw it, colour pointers and ones that invert the screen stay drawn
+  by Windows
 - `v86agent.exe`: follows the page size (not while a game runs another colour depth) and the host clock, syncs the
   clipboard, saves dropped files and is the http and https handler, so links open in a new browser tab, on request
   it turns NetBIOS off and renews the DHCP lease from the relay

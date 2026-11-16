@@ -30,6 +30,11 @@
 #define V86_CMD_GETSIZE 0x8601 /* returns (width << 16) | height wanted by the host, 0 = none */
 #define V86_CMD_RECV 0x8602    /* EBX = buffer phys, ESI = capacity; returns type, EBX = length */
 #define V86_CMD_SEND 0x8603    /* EBX = buffer phys, ESI = length, EDI = type */
+#define V86_CMD_POINTER_SHAPE 0x8604 /* EBX = VIDEO_POINTER_ATTRIBUTES (mono) in nonpaged memory; returns 1 if shown */
+#define V86_CMD_POINTER_MOVE 0x8605  /* EBX = (column << 16) | row of the top left, or V86_POINTER_HIDDEN;
+                                        returns V86_POINTER_RESEND when the page lost the shape (a reload) */
+#define V86_POINTER_HIDDEN 0xFFFFFFFF
+#define V86_POINTER_RESEND 1
 /* EDX always holds the port number, so arguments travel in EBX, ESI and EDI */
 #define V86_HELLO_REPLY 0x86868686
 
