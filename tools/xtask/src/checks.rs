@@ -274,6 +274,25 @@ impl Xtask {
             run(&mut command)?;
         }
 
+        // bcanvas draws with Direct2D, its tests draw with GDI+ when BCANVAS_TEST_GDI is set
+        if self.os == Os::Windows && !excludes.contains("bcanvas") {
+            println!("Running Rust tests for bcanvas with GDI+...");
+            let mut command = Command::new("cargo");
+            command.args([
+                "nextest",
+                "run",
+                "--all-features",
+                "--locked",
+                "--config-file",
+                "nextest.toml",
+            ]);
+            if env::var("CI").is_ok_and(|value| !value.is_empty()) {
+                command.args(["--profile", "ci"]);
+            }
+            command.args(["-p", "bcanvas"]).env("BCANVAS_TEST_GDI", "1");
+            run(&mut command)?;
+        }
+
         for feature in ["sqlite", "mysql"] {
             println!("Checking bsql with only the {feature} backend...");
             run(Command::new("cargo").args([

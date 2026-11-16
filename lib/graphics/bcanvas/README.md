@@ -1,7 +1,7 @@
 # Bassie Canvas Rust library
 
 Cross-platform 2D drawing for [bwindow](../../ui/bwindow) windows using the system-native
-graphics API: Core Graphics on macOS and iOS, Direct2D on Windows, Cairo on Linux, and
+graphics API: Core Graphics on macOS and iOS, Direct2D or GDI+ on Windows, Cairo on Linux, and
 `android.graphics.Canvas` on Android.
 
 ## Features
@@ -72,8 +72,10 @@ method names in snake_case, with getter/setter pairs such as `fill_style()` /
 - Composite operations of drawing only change the area that is drawn, like Core Graphics,
   while a layer composites over the whole canvas when it ends.
 - Every backend supports the same features. Direct2D blends layers through Direct2D 1.1
-  effects. Android needs Android 10 for the blend modes and Android 12 for radial
-  gradients with a focal point, before which the focal point is the center.
+  effects. GDI+ paints gradients and composite operations other than source over in
+  software, and its clips are not antialiased. Android needs Android 10 for the blend modes
+  and Android 12 for radial gradients with a focal point, before which the focal point is
+  the center.
 
 ## Native views
 

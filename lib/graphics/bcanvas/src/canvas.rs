@@ -1671,7 +1671,7 @@ pub unsafe fn draw_native(
 }
 
 /// A canvas painting a native Win32 window, like a scroll view, with a Direct2D render target
-/// that follows the size and DPI of its client area.
+/// or a GDI+ back buffer that follows the size and DPI of its client area.
 #[cfg(windows)]
 pub struct HwndCanvas(crate::platforms::PlatformHwndCanvas);
 

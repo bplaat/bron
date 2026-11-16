@@ -11,7 +11,7 @@ use std::ops::Deref;
 use std::ptr::{NonNull, null_mut};
 use std::rc::Rc;
 
-use super::headers::{GUID, IUnknownVtbl};
+use crate::platforms::windows::headers::{GUID, IUnknownVtbl};
 
 /// One owned COM reference. Canvas COM objects stay on the window thread.
 pub(crate) struct ComPtr<T> {

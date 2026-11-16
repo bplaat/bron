@@ -5,24 +5,21 @@
  */
 
 use std::cell::{Cell, RefCell};
-use std::ptr::{null, null_mut};
+use std::ptr::null;
 use std::rc::Rc;
 
 use bwindow::{NativeContentHandle, WindowAttachment, WindowEventSender};
 
 use crate::CanvasRenderingContext2d;
-use crate::platforms::windows::com::ComPtr;
-use crate::platforms::windows::context::{PlatformCanvasContext, Resources};
 use crate::platforms::windows::headers::*;
-use crate::platforms::windows::hwnd::{HwndTarget, client_size};
+use crate::platforms::windows::hwnd::{WindowTarget, client_size};
 
-// Draws the client area of the top-level window with a Direct2D HWND render target in the
+// Draws the client area of the top-level window with the surface of the backend in the
 // paint pass of its WM_PAINT. The window delivers the interaction.
 struct CanvasData {
     hwnd: Cell<Option<HWND>>,
     sender: WindowEventSender,
-    resources: Rc<Resources>,
-    target: RefCell<HwndTarget>,
+    target: RefCell<WindowTarget>,
     frame: RefCell<Option<CanvasRenderingContext2d<'static>>>,
     painting: Cell<bool>,
 }
@@ -66,32 +63,29 @@ impl CanvasData {
             self.painting.set(false);
             return;
         }
-        let target =
-            self.target
-                .borrow_mut()
-                .get(&self.resources, hwnd, width, height, scale * 96.0);
-        let Some(target) = target else {
+        let platform = self.target.borrow_mut().begin(hwnd, width, height, scale);
+        let Some(platform) = platform else {
             self.painting.set(false);
             self.lose_target();
             return;
         };
-        unsafe { target.native.BeginDraw() }
         *self.frame.borrow_mut() = Some(CanvasRenderingContext2d::new(
-            PlatformCanvasContext::new(&target, self.resources.clone()),
+            platform,
             width as f32 / scale,
             height as f32 / scale,
             scale,
         ));
-        if !self.sender.redraw(|| self.end_draw(&target.native)) {
-            self.end_draw(&target.native);
+        if !self.sender.redraw(|| self.end_draw(hwnd)) {
+            self.end_draw(hwnd);
             self.request_redraw();
         }
         self.painting.set(false);
     }
 
-    fn end_draw(&self, target: &ComPtr<ID2D1HwndRenderTarget>) {
+    fn end_draw(&self, hwnd: HWND) {
         self.frame.borrow_mut().take();
-        if unsafe { target.EndDraw(null_mut(), null_mut()) }.is_err() {
+        let presented = self.target.borrow_mut().end(hwnd);
+        if !presented {
             self.lose_target();
         }
     }
@@ -111,8 +105,7 @@ impl PlatformCanvas {
         let data = Rc::new(CanvasData {
             hwnd: Cell::new(Some(hwnd)),
             sender: attachment.event_sender(),
-            resources: Resources::new(),
-            target: RefCell::new(HwndTarget::default()),
+            target: RefCell::new(WindowTarget::new()),
             frame: RefCell::new(None),
             painting: Cell::new(false),
         });
