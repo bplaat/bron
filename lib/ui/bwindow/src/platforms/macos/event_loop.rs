@@ -18,8 +18,8 @@ use super::headers::*;
 use super::menu::create_menu_bar;
 use crate::mailbox::{Mailbox, Message};
 use crate::{
-    CloseRequest, EventLoopBuilder, LogicalPoint, LogicalSize, NativeEvent as Event, Theme,
-    WindowEvent,
+    CloseRequest, EventLoopBuilder, LogicalInsets, LogicalPoint, LogicalSize, NativeEvent as Event,
+    Theme, WindowEvent,
 };
 
 thread_local! {
@@ -425,5 +425,17 @@ impl crate::MonitorInterface for PlatformMonitor {
     fn is_primary(&self) -> bool {
         let main_screen: *mut Object = unsafe { msg_send![class!(NSScreen), mainScreen] };
         self.screen.as_ptr() == main_screen
+    }
+
+    fn safe_area(&self) -> LogicalInsets {
+        let frame: NSRect = unsafe { msg_send![&self.screen, frame] };
+        let visible: NSRect = unsafe { msg_send![&self.screen, visibleFrame] };
+        // Cocoa screen coordinates start at the bottom left
+        LogicalInsets::new(
+            (frame.origin.y + frame.size.height - visible.origin.y - visible.size.height) as f32,
+            (frame.origin.x + frame.size.width - visible.origin.x - visible.size.width) as f32,
+            (visible.origin.y - frame.origin.y) as f32,
+            (visible.origin.x - frame.origin.x) as f32,
+        )
     }
 }

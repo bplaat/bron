@@ -432,35 +432,6 @@ impl PlatformWindow {
         };
 
         // Create window
-        let screen_rect: NSRect = if let Some(monitor) = builder.monitor {
-            unsafe { msg_send![&monitor.screen, frame] }
-        } else {
-            let screen: *mut Object = unsafe { msg_send![class!(NSScreen), mainScreen] };
-            unsafe { msg_send![screen, frame] }
-        };
-        let window_rect = if builder.should_fullscreen {
-            screen_rect
-        } else {
-            NSRect::new(
-                if let Some(position) = builder.position {
-                    NSPoint::new(
-                        screen_rect.origin.x + position.x as f64,
-                        screen_rect.origin.y
-                            + (screen_rect.size.height - builder.size.height as f64)
-                            - position.y as f64,
-                    )
-                } else {
-                    NSPoint::new(
-                        screen_rect.origin.x
-                            + (screen_rect.size.width - builder.size.width as f64) / 2.0,
-                        screen_rect.origin.y
-                            + (screen_rect.size.height - builder.size.height as f64) / 2.0,
-                    )
-                },
-                NSSize::new(builder.size.width as f64, builder.size.height as f64),
-            )
-        };
-
         let mut window_style_mask = NS_WINDOW_STYLE_MASK_TITLED
             | NS_WINDOW_STYLE_MASK_CLOSABLE
             | NS_WINDOW_STYLE_MASK_MINIATURIZABLE;
@@ -476,12 +447,46 @@ impl PlatformWindow {
             window_style_mask = 0;
         }
 
+        let screen: *const Object = if let Some(monitor) = builder.monitor {
+            &*monitor.screen
+        } else {
+            unsafe { msg_send![class!(NSScreen), mainScreen] }
+        };
+        let screen_rect: NSRect = unsafe { msg_send![screen, frame] };
+        let content_size = if builder.should_fullscreen {
+            screen_rect.size
+        } else {
+            NSSize::new(builder.size.width as f64, builder.size.height as f64)
+        };
+        // The frame includes the title bar, Cocoa screen coordinates start at the bottom left
+        let frame: NSRect = unsafe {
+            msg_send![class!(NSWindow), frameRectForContentRect:NSRect::new(NSPoint::new(0.0, 0.0), content_size),
+                styleMask:window_style_mask]
+        };
+        let origin = if builder.should_fullscreen {
+            screen_rect.origin
+        } else if let Some(position) = builder.position {
+            NSPoint::new(
+                screen_rect.origin.x + position.x as f64,
+                screen_rect.origin.y + screen_rect.size.height
+                    - position.y as f64
+                    - frame.size.height,
+            )
+        } else {
+            // Centered in the area without the menu bar and Dock
+            let visible_rect: NSRect = unsafe { msg_send![screen, visibleFrame] };
+            NSPoint::new(
+                visible_rect.origin.x + (visible_rect.size.width - frame.size.width) / 2.0,
+                visible_rect.origin.y + (visible_rect.size.height - frame.size.height) / 2.0,
+            )
+        };
+
         let window = unsafe {
             let window: Allocated<Object> = msg_send![class!(NSWindow), alloc];
-            let window: Retained<Object> = msg_send![window, initWithContentRect:NSRect::new(NSPoint::new(0.0, 0.0), window_rect.size),
+            let window: Retained<Object> = msg_send![window, initWithContentRect:NSRect::new(NSPoint::new(0.0, 0.0), content_size),
                 styleMask:window_style_mask, backing:NS_BACKING_STORE_BUFFERED, defer:Bool::NO];
             let _: () = msg_send![&window, setReleasedWhenClosed:Bool::NO];
-            let _: () = msg_send![&window, setFrameOrigin:window_rect.origin];
+            let _: () = msg_send![&window, setFrameOrigin:origin];
             let _: () = msg_send![&window, setTitle:&*NSString::new(&builder.title)];
             if builder.should_fullscreen {
                 let _: () = msg_send![&window, setLevel: 25i64];

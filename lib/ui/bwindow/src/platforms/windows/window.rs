@@ -10,7 +10,7 @@ use std::ptr::{null, null_mut};
 
 #[cfg(feature = "progress_bar")]
 use super::event_loop::TASKBAR_BUTTON_CREATED;
-use super::event_loop::{APP_ID, send_event, system_theme};
+use super::event_loop::{APP_ID, PlatformMonitor, send_event, system_theme};
 #[cfg(feature = "file_drop")]
 use super::file_drop::handle_file_drop;
 use super::headers::*;
@@ -58,44 +58,62 @@ fn physical_to_logical(value: i32, dpi: u32) -> f32 {
 
 fn calculate_window_rect(
     builder: &WindowBuilder,
-    monitor_rect: &RECT,
+    monitor: &PlatformMonitor,
     style: u32,
     dpi: u32,
 ) -> (RECT, bool) {
-    let mut position_set = false;
-    let mut x = 0;
-    let mut y = 0;
-    let mut width = logical_to_physical(builder.size.width, dpi);
-    let mut height = logical_to_physical(builder.size.height, dpi);
-    if let Some(position) = builder.position {
-        position_set = true;
-        x = monitor_rect.left + logical_to_physical(position.x, dpi);
-        y = monitor_rect.top + logical_to_physical(position.y, dpi);
-    }
-    if builder.should_fullscreen {
-        position_set = true;
-        x = monitor_rect.left;
-        y = monitor_rect.top;
-        width = monitor_rect.right - monitor_rect.left;
-        height = monitor_rect.bottom - monitor_rect.top;
-    } else if builder.should_center {
-        position_set = true;
-        x = monitor_rect.left + ((monitor_rect.right - monitor_rect.left) - width) / 2;
-        y = monitor_rect.top + ((monitor_rect.bottom - monitor_rect.top) - height) / 2;
-    } else if !position_set && builder.monitor.is_some() {
-        position_set = true;
-        x = monitor_rect.left + logical_to_physical(64.0, dpi);
-        y = monitor_rect.top + logical_to_physical(64.0, dpi);
-    }
-    let mut rect = RECT {
-        left: x,
-        top: y,
-        right: x + width,
-        bottom: y + height,
+    let monitor_rect = monitor.rect();
+    let mut rect = if builder.should_fullscreen {
+        RECT {
+            left: 0,
+            top: 0,
+            right: monitor_rect.right - monitor_rect.left,
+            bottom: monitor_rect.bottom - monitor_rect.top,
+        }
+    } else {
+        RECT {
+            left: 0,
+            top: 0,
+            right: logical_to_physical(builder.size.width, dpi),
+            bottom: logical_to_physical(builder.size.height, dpi),
+        }
     };
+    // Grows the client rect around its origin by the title bar and borders
     // SAFETY: rect is valid and style is a supported window style.
     unsafe { adjust_window_rect_for_dpi(&mut rect, style, FALSE, 0, dpi) };
-    (rect, position_set)
+
+    // The client area origin
+    let origin = if builder.should_fullscreen {
+        Some((monitor_rect.left, monitor_rect.top))
+    } else if builder.should_center {
+        // The whole window centered in the area without the taskbar
+        let work_rect = monitor.work_rect();
+        Some((
+            work_rect.left + (work_rect.right - work_rect.left - (rect.right - rect.left)) / 2
+                - rect.left,
+            work_rect.top + (work_rect.bottom - work_rect.top - (rect.bottom - rect.top)) / 2
+                - rect.top,
+        ))
+    } else if let Some(position) = builder.position {
+        Some((
+            monitor_rect.left + logical_to_physical(position.x, dpi),
+            monitor_rect.top + logical_to_physical(position.y, dpi),
+        ))
+    } else if builder.monitor.is_some() {
+        Some((
+            monitor_rect.left + logical_to_physical(64.0, dpi),
+            monitor_rect.top + logical_to_physical(64.0, dpi),
+        ))
+    } else {
+        None
+    };
+    if let Some((x, y)) = origin {
+        rect.left += x;
+        rect.top += y;
+        rect.right += x;
+        rect.bottom += y;
+    }
+    (rect, origin.is_some())
 }
 
 impl WindowData {
@@ -211,18 +229,15 @@ impl PlatformWindow {
                 WS_OVERLAPPEDWINDOW & !WS_THICKFRAME & !WS_MAXIMIZEBOX
             };
 
-            let monitor_rect = if let Some(monitor) = builder.monitor {
-                monitor.rect()
-            } else {
-                RECT {
-                    left: 0,
-                    top: 0,
-                    right: GetSystemMetrics(SM_CXSCREEN),
-                    bottom: GetSystemMetrics(SM_CYSCREEN),
+            let primary_monitor;
+            let monitor = match builder.monitor {
+                Some(monitor) => monitor,
+                None => {
+                    primary_monitor = PlatformMonitor::primary();
+                    &primary_monitor
                 }
             };
-            let (rect, position_set) =
-                calculate_window_rect(builder, &monitor_rect, style, initial_dpi);
+            let (rect, position_set) = calculate_window_rect(builder, monitor, style, initial_dpi);
 
             let title = wide(&builder.title);
             let hwnd = CreateWindowExW(
@@ -273,8 +288,7 @@ impl PlatformWindow {
             window_data.dpi = dpi;
             host.scale_factor_changed(dpi as f32 / USER_DEFAULT_SCREEN_DPI as f32);
             if !restored_window_state && dpi != initial_dpi {
-                let (rect, position_set) =
-                    calculate_window_rect(builder, &monitor_rect, style, dpi);
+                let (rect, position_set) = calculate_window_rect(builder, monitor, style, dpi);
                 SetWindowPos(
                     hwnd,
                     null_mut(),

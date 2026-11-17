@@ -8,7 +8,7 @@ use std::ffi::{CString, c_void};
 use std::ptr::{null, null_mut};
 
 use super::content::{Content, release_pointer_lock};
-use super::event_loop::{primary_monitor_rect, send_event};
+use super::event_loop::{PlatformMonitor, send_event};
 use super::headers::*;
 #[cfg(feature = "progress_bar")]
 use super::progress_bar::update_progress_bar;
@@ -112,11 +112,15 @@ impl PlatformWindow {
                 );
             }
 
-            let monitor_rect = if let Some(monitor) = builder.monitor {
-                monitor.rect()
-            } else {
-                primary_monitor_rect()
+            let primary_monitor;
+            let monitor = match builder.monitor {
+                Some(monitor) => monitor,
+                None => {
+                    primary_monitor = PlatformMonitor::primary();
+                    &primary_monitor
+                }
             };
+            let monitor_rect = monitor.rect();
             if let Some(position) = builder.position {
                 gtk_window_move(
                     window,
@@ -130,10 +134,12 @@ impl PlatformWindow {
             }
             if builder.should_center {
                 if !is_wayland {
+                    // Centered in the area without panels and docks
+                    let work_rect = monitor.work_rect();
                     gtk_window_move(
                         window,
-                        monitor_rect.x + (monitor_rect.width - builder.size.width as i32) / 2,
-                        monitor_rect.y + (monitor_rect.height - builder.size.height as i32) / 2,
+                        work_rect.x + (work_rect.width - builder.size.width as i32) / 2,
+                        work_rect.y + (work_rect.height - builder.size.height as i32) / 2,
                     );
                 } else {
                     gtk_window_set_position(window, GTK_WIN_POS_CENTER);
@@ -247,12 +253,12 @@ impl crate::WindowInterface for PlatformWindow {
     }
 
     fn set_position(&mut self, point: LogicalPoint) {
-        let primary_monitor_rect = primary_monitor_rect();
+        let primary_rect = PlatformMonitor::primary().rect();
         unsafe {
             gtk_window_move(
                 self.0.window,
-                point.x as i32 + primary_monitor_rect.x,
-                point.y as i32 + primary_monitor_rect.y,
+                point.x as i32 + primary_rect.x,
+                point.y as i32 + primary_rect.y,
             )
         }
     }

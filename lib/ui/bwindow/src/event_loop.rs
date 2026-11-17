@@ -8,7 +8,7 @@ use std::marker::PhantomData;
 use std::rc::Rc;
 
 use crate::platforms::{PlatformEventLoop, PlatformEventLoopProxy, PlatformMonitor};
-use crate::{Event, LogicalPoint, LogicalSize, NativeEvent, Theme};
+use crate::{Event, LogicalInsets, LogicalPoint, LogicalSize, NativeEvent, Theme};
 
 // MARK: AppId
 #[cfg_attr(
@@ -227,6 +227,10 @@ pub(crate) trait MonitorInterface {
     fn size(&self) -> LogicalSize;
     fn scale_factor(&self) -> f32;
     fn is_primary(&self) -> bool;
+    // Mobile screens reserve nothing for system UI, the window safe area covers it.
+    fn safe_area(&self) -> LogicalInsets {
+        LogicalInsets::default()
+    }
 }
 
 /// Monitor
@@ -262,5 +266,12 @@ impl Monitor {
     /// Get if monitor is primary
     pub fn is_primary(&self) -> bool {
         self.0.is_primary()
+    }
+
+    /// Get the insets from each monitor edge to the area that windows can use, without the
+    /// system UI like the menu bar and Dock on macOS, the taskbar on Windows and panels on Linux.
+    /// Zero on mobile, see [`Window::safe_area`](crate::Window::safe_area) there.
+    pub fn safe_area(&self) -> LogicalInsets {
+        self.0.safe_area()
     }
 }

@@ -14,7 +14,9 @@ use std::sync::{Arc, Mutex};
 
 use super::headers::*;
 use crate::mailbox::{Mailbox, Message};
-use crate::{AppId, EventLoopBuilder, LogicalPoint, LogicalSize, NativeEvent as Event, Theme};
+use crate::{
+    AppId, EventLoopBuilder, LogicalInsets, LogicalPoint, LogicalSize, NativeEvent as Event, Theme,
+};
 
 // MARK: EventLoop
 pub(crate) struct PlatformEventLoop {
@@ -229,20 +231,7 @@ impl crate::EventLoopInterface for PlatformEventLoop {
     }
 
     fn primary_monitor(&self) -> PlatformMonitor {
-        cfg_select! {
-            gtk3_22 => unsafe {
-                let mut m = gdk_display_get_primary_monitor(gdk_display_get_default());
-                if m.is_null() {
-                    m = gdk_display_get_monitor(gdk_display_get_default(), 0);
-                }
-                PlatformMonitor::new(m)
-            },
-            _ => unsafe {
-                let screen = gdk_screen_get_default();
-                let idx = gdk_screen_get_primary_monitor(screen);
-                PlatformMonitor::new(idx)
-            },
-        }
+        PlatformMonitor::primary()
     }
 
     fn available_monitors(&self) -> Vec<PlatformMonitor> {
@@ -401,21 +390,55 @@ cfg_select! {
 }
 
 impl PlatformMonitor {
+    pub(super) fn primary() -> Self {
+        cfg_select! {
+            gtk3_22 => unsafe {
+                let display = gdk_display_get_default();
+                let monitor = gdk_display_get_primary_monitor(display);
+                // Null when no primary is set
+                Self::new(if monitor.is_null() {
+                    gdk_display_get_monitor(display, 0)
+                } else {
+                    monitor
+                })
+            },
+            _ => unsafe {
+                // -1 when no primary is set
+                Self::new(gdk_screen_get_primary_monitor(gdk_screen_get_default()).max(0))
+            },
+        }
+    }
+
     // Returns the screen rectangle for this monitor.
     pub(super) fn rect(&self) -> GdkRectangle {
+        let mut rect = MaybeUninit::<GdkRectangle>::uninit();
         cfg_select! {
-            gtk3_22 => {
-                let mut rect = MaybeUninit::<GdkRectangle>::uninit();
-                unsafe { gdk_monitor_get_geometry(self.monitor, rect.as_mut_ptr()) };
-                unsafe { rect.assume_init() }
-            }
-            _ => {
-                let screen = unsafe { gdk_screen_get_default() };
-                let mut rect = MaybeUninit::<GdkRectangle>::uninit();
-                unsafe { gdk_screen_get_monitor_geometry(screen, self.index, rect.as_mut_ptr()) };
-                unsafe { rect.assume_init() }
-            }
+            gtk3_22 => unsafe { gdk_monitor_get_geometry(self.monitor, rect.as_mut_ptr()) },
+            _ => unsafe {
+                gdk_screen_get_monitor_geometry(
+                    gdk_screen_get_default(),
+                    self.index,
+                    rect.as_mut_ptr(),
+                )
+            },
         }
+        unsafe { rect.assume_init() }
+    }
+
+    // Returns the screen rectangle without panels and docks.
+    pub(super) fn work_rect(&self) -> GdkRectangle {
+        let mut rect = MaybeUninit::<GdkRectangle>::uninit();
+        cfg_select! {
+            gtk3_22 => unsafe { gdk_monitor_get_workarea(self.monitor, rect.as_mut_ptr()) },
+            _ => unsafe {
+                gdk_screen_get_monitor_workarea(
+                    gdk_screen_get_default(),
+                    self.index,
+                    rect.as_mut_ptr(),
+                )
+            },
+        }
+        unsafe { rect.assume_init() }
     }
 }
 
@@ -442,7 +465,7 @@ impl crate::MonitorInterface for PlatformMonitor {
 
     fn position(&self) -> LogicalPoint {
         let rect = self.rect();
-        let primary_rect = primary_monitor_rect();
+        let primary_rect = PlatformMonitor::primary().rect();
         LogicalPoint::new(
             (rect.x - primary_rect.x) as f32,
             (rect.y - primary_rect.y) as f32,
@@ -469,30 +492,15 @@ impl crate::MonitorInterface for PlatformMonitor {
             _ => unsafe { gdk_screen_get_primary_monitor(gdk_screen_get_default()) == self.index },
         }
     }
-}
 
-// Returns the screen rectangle of the primary monitor.
-pub(super) fn primary_monitor_rect() -> GdkRectangle {
-    cfg_select! {
-        gtk3_22 => unsafe {
-            let display = gdk_display_get_default();
-            let mut m = gdk_display_get_primary_monitor(display);
-            if m.is_null() {
-                m = gdk_display_get_monitor(display, 0);
-            }
-            let mut r = MaybeUninit::<GdkRectangle>::uninit();
-            gdk_monitor_get_geometry(m, r.as_mut_ptr());
-            r.assume_init()
-        },
-        _ => unsafe {
-            let screen = gdk_screen_get_default();
-            let idx = gdk_screen_get_primary_monitor(screen);
-            // Normalize: -1 means no primary set, fall back to monitor 0.
-            let idx = if idx < 0 { 0 } else { idx };
-            let mut r = MaybeUninit::<GdkRectangle>::uninit();
-            gdk_screen_get_monitor_geometry(screen, idx, r.as_mut_ptr());
-            r.assume_init()
-        },
+    fn safe_area(&self) -> LogicalInsets {
+        let (monitor, work) = (self.rect(), self.work_rect());
+        LogicalInsets::new(
+            (work.y - monitor.y) as f32,
+            ((monitor.x + monitor.width) - (work.x + work.width)) as f32,
+            ((monitor.y + monitor.height) - (work.y + work.height)) as f32,
+            (work.x - monitor.x) as f32,
+        )
     }
 }
 

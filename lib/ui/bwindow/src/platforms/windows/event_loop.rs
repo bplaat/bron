@@ -13,7 +13,9 @@ use super::headers::*;
 use super::instance::SingleInstance;
 use super::{monitor_dpi, registry_dword, set_process_dpi_aware, set_process_dpi_awareness};
 use crate::mailbox::{Mailbox, Message};
-use crate::{AppId, EventLoopBuilder, LogicalPoint, LogicalSize, NativeEvent as Event, Theme};
+use crate::{
+    AppId, EventLoopBuilder, LogicalInsets, LogicalPoint, LogicalSize, NativeEvent as Event, Theme,
+};
 
 pub(super) static mut APP_ID: Option<AppId> = None;
 #[cfg(feature = "progress_bar")]
@@ -156,8 +158,7 @@ impl crate::EventLoopInterface for PlatformEventLoop {
     }
 
     fn primary_monitor(&self) -> PlatformMonitor {
-        let hmonitor = unsafe { MonitorFromPoint(POINT { x: 0, y: 0 }, MONITOR_DEFAULTTOPRIMARY) };
-        PlatformMonitor::new(hmonitor)
+        PlatformMonitor::primary()
     }
 
     fn available_monitors(&self) -> Vec<PlatformMonitor> {
@@ -308,8 +309,17 @@ impl PlatformMonitor {
         Self { hmonitor, info }
     }
 
-    pub(crate) fn rect(&self) -> RECT {
-        self.info.rcMonitor.clone()
+    pub(crate) fn primary() -> Self {
+        Self::new(unsafe { MonitorFromPoint(POINT { x: 0, y: 0 }, MONITOR_DEFAULTTOPRIMARY) })
+    }
+
+    pub(crate) const fn rect(&self) -> &RECT {
+        &self.info.rcMonitor
+    }
+
+    // The monitor without the taskbar and docked app bars
+    pub(crate) const fn work_rect(&self) -> &RECT {
+        &self.info.rcWork
     }
 }
 
@@ -355,5 +365,16 @@ impl crate::MonitorInterface for PlatformMonitor {
 
     fn is_primary(&self) -> bool {
         self.info.rcMonitor.left == 0 && self.info.rcMonitor.top == 0
+    }
+
+    fn safe_area(&self) -> LogicalInsets {
+        let scale = self.scale_factor();
+        let (monitor, work) = (&self.info.rcMonitor, &self.info.rcWork);
+        LogicalInsets::new(
+            (work.top - monitor.top) as f32 / scale,
+            (monitor.right - work.right) as f32 / scale,
+            (monitor.bottom - work.bottom) as f32 / scale,
+            (work.left - monitor.left) as f32 / scale,
+        )
     }
 }
