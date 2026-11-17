@@ -1,4 +1,4 @@
-// The emulated machine, shared by the site and the offline/ build: a snapshot only restores on the same machine
+// The emulated machine, shared by the site and the winxp-image/ build: a snapshot only restores on the same machine
 export const DISK_CHUNK_SIZE = 1024 * 1024;
 
 export const MACHINE = {

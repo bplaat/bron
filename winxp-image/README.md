@@ -8,10 +8,10 @@ activation, the software and a desktop snapshot that restores instantly.
 
 ```sh
 npm install                  # v86, used to run the guest headless
-offline/build.sh             # build what is missing in offline/out
-offline/build.sh software    # reinstall the software on the kept base install, e.g. after adding some
-offline/build.sh setup       # redo the v86 setup on the kept software install
-offline/build.sh install     # start over with a fresh Windows install
+winxp-image/build.sh             # build what is missing in winxp-image/out
+winxp-image/build.sh software    # reinstall the software on the kept base install, e.g. after adding some
+winxp-image/build.sh setup       # redo the v86 setup on the kept software install
+winxp-image/build.sh install     # start over with a fresh Windows install
 npm run dev                  # try the result
 ```
 
@@ -25,20 +25,20 @@ These must exist before building, they are ignored by git:
 
 | Path                                                   | What                                                          |
 | ------------------------------------------------------ | ------------------------------------------------------------- |
-| `offline/winxp.iso`                                    | `en_windows_xp_professional_with_service_pack_3_x86_cd_x14-80428.iso` |
-| `offline/product-key.txt`                              | the Windows XP Professional retail product key, one line      |
-| `offline/music/`                                       | music for bplaat's My Music, now `Snail's House/Ordinary Songs 3` and `4` |
-| `offline/software/age-of-empires/cd/AOE1/`             | Age of Empires CD contents                                     |
-| `offline/software/age-of-empires/cd/AOE1ROR/`          | Age of Empires: The Rise of Rome CD contents                   |
-| `offline/software/age-of-empires-2/cd/AOE2/`           | Age of Empires II: The Age of Kings CD contents                |
-| `offline/software/age-of-empires-2/cd/AOE2CONQ/`       | Age of Empires II: The Conquerors CD contents                  |
-| `offline/software/civilization-3/setup_civilization3_complete_2.0.0.7.exe` | Civilization III Complete (GOG)             |
-| `offline/software/7zip/7z2605.exe`                     | [7-Zip](https://www.7-zip.org/) 26.05, 32-bit                  |
-| `offline/software/notepad-plus-plus/npp.7.9.2.Installer.exe`   | [Notepad++](https://notepad-plus-plus.org/) 7.9.2, the last version for XP |
-| `offline/software/mitec/*.zip`                         | [MiTeC](https://www.mitec.cz/) `EXE.zip` 2.5.5, `HEXEdit.zip` 6.3.0 and `TMX.zip` 3.5.0, see below |
-| `offline/software/internet-explorer-8/IE8-WindowsXP-x86-ENU.exe` | Microsoft's Internet Explorer 8 for XP, [from the Internet Archive](https://archive.org/details/IE8-WindowsXP-x86-ENU) (SHA-1 `e489483e5001f95da04e1ebf3c664173baef3e26`, Authenticode signed by Microsoft) |
+| `winxp-image/winxp.iso`                                    | `en_windows_xp_professional_with_service_pack_3_x86_cd_x14-80428.iso` |
+| `winxp-image/product-key.txt`                              | the Windows XP Professional retail product key, one line      |
+| `winxp-image/music/`                                       | music for bplaat's My Music, now `Snail's House/Ordinary Songs 3` and `4` |
+| `winxp-image/software/age-of-empires/cd/AOE1/`             | Age of Empires CD contents                                     |
+| `winxp-image/software/age-of-empires/cd/AOE1ROR/`          | Age of Empires: The Rise of Rome CD contents                   |
+| `winxp-image/software/age-of-empires-2/cd/AOE2/`           | Age of Empires II: The Age of Kings CD contents                |
+| `winxp-image/software/age-of-empires-2/cd/AOE2CONQ/`       | Age of Empires II: The Conquerors CD contents                  |
+| `winxp-image/software/civilization-3/setup_civilization3_complete_2.0.0.7.exe` | Civilization III Complete (GOG)             |
+| `winxp-image/software/7zip/7z2605.exe`                     | [7-Zip](https://www.7-zip.org/) 26.05, 32-bit                  |
+| `winxp-image/software/notepad-plus-plus/npp.7.9.2.Installer.exe`   | [Notepad++](https://notepad-plus-plus.org/) 7.9.2, the last version for XP |
+| `winxp-image/software/mitec/*.zip`                         | [MiTeC](https://www.mitec.cz/) `EXE.zip` 2.5.5, `HEXEdit.zip` 6.3.0 and `TMX.zip` 3.5.0, see below |
+| `winxp-image/software/internet-explorer-8/IE8-WindowsXP-x86-ENU.exe` | Microsoft's Internet Explorer 8 for XP, [from the Internet Archive](https://archive.org/details/IE8-WindowsXP-x86-ENU) (SHA-1 `e489483e5001f95da04e1ebf3c664173baef3e26`, Authenticode signed by Microsoft) |
 
-Generated: `offline/out/` (install images, screenshots), the built `.exe`/`.sys` files, `software/*/root/` and
+Generated: `winxp-image/out/` (install images, screenshots), the built `.exe`/`.sys` files, `software/*/root/` and
 `public/winxp/`.
 
 ## Steps
@@ -92,7 +92,7 @@ Add a folder to `software/`:
   installers, `regedit /s` imports and shortcuts
 - `.diskignore`: files not to copy to the disk, `cd/`, `root/` and dotfiles never are
 
-Then run `offline/build.sh software`. Helpers in the guest:
+Then run `winxp-image/build.sh software`. Helpers in the guest:
 
 - `%SystemRoot%\v86\shortcut.vbs <Desktop | Start menu folder> <name> <target> [arguments]`: shortcut for all users
 - `call %SystemRoot%\v86\userreg.cmd <file.reg>`: imports per user settings into the Default User profile, keys

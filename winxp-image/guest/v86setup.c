@@ -1,8 +1,8 @@
 /*
  * v86setup.exe - one shot setup of the fresh install on its first v86 boot, run at the Administrator logon from the
- * Startup folder (see offline/disk.mjs). Expects its files next to it in %SystemRoot%\v86, installs the guest
+ * Startup folder (see winxp-image/disk.mjs). Expects its files next to it in %SystemRoot%\v86, installs the guest
  * integration, tunes Windows for v86, activates it offline, creates the bplaat account and reboots into it. The
- * software is already installed by offline/software.mjs.
+ * software is already installed by winxp-image/software.mjs.
  */
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>

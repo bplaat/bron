@@ -1,4 +1,4 @@
-// Host side of the v86 guest integration, see offline/guest/v86.h
+// Host side of the v86 guest integration, see winxp-image/guest/v86.h
 // Extends v86's VMware backdoor with commands the guest agent and drivers use.
 
 const VMWARE_PORT = 0x5658;

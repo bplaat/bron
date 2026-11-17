@@ -1,9 +1,9 @@
 #!/bin/sh
-# Builds the Windows XP disk and desktop snapshot into public/winxp, see offline/README.md
-# Usage: offline/build.sh           build what is missing
-#        offline/build.sh software  reinstall the software on the kept base install, e.g. after adding some
-#        offline/build.sh setup     redo the v86 setup on the kept software install
-#        offline/build.sh install   start over with a fresh Windows install
+# Builds the Windows XP disk and desktop snapshot into public/winxp, see winxp-image/README.md
+# Usage: winxp-image/build.sh           build what is missing
+#        winxp-image/build.sh software  reinstall the software on the kept base install, e.g. after adding some
+#        winxp-image/build.sh setup     redo the v86 setup on the kept software install
+#        winxp-image/build.sh install   start over with a fresh Windows install
 set -eu
 cd "$(dirname "$0")"
 mkdir -p out

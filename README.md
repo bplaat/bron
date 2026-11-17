@@ -24,7 +24,7 @@ My personal website inside a Windows XP desktop running in your browser with [v8
 
 ## Building the disk
 
-`offline/build.sh` builds the Windows XP disk and snapshot from the XP CD, see [offline/README.md](offline/README.md).
+`winxp-image/build.sh` builds the Windows XP disk and snapshot from the XP CD, see [winxp-image/README.md](winxp-image/README.md).
 
 ## Development
 

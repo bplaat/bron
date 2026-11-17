@@ -1,5 +1,5 @@
 @echo off
-rem Installs every folder in software\ with its install.cmd, then powers off (offline/software.mjs runs it in QEMU)
+rem Installs every folder in software\ with its install.cmd, then powers off (winxp-image/software.mjs runs it in QEMU)
 reg add "HKLM\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer" /v NoDriveTypeAutoRun /t REG_DWORD /d 255 /f >nul
 for /d %%d in ("%SystemRoot%\v86\software\*") do (
     echo LOG installing %%~nxd> COM1

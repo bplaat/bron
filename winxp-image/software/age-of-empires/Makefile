@@ -1,5 +1,5 @@
 # Installs Age of Empires and The Rise of Rome into root/ like their setups do (full install, see ../../ebu.py),
-# offline/disk.mjs copies root/ onto the C: drive
+# winxp-image/disk.mjs copies root/ onto the C: drive
 APP := Program Files/Microsoft Games/Age of Empires
 
 root: cd/AOE1/AOESETUP.EXE cd/AOE1ROR/AOESETUP.EXE ../../ebu.py Makefile

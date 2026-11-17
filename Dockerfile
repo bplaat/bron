@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-# The website and its LAN relay in one static binary. Needs public/winxp, see offline/README.md.
+# The website and its LAN relay in one static binary. Needs public/winxp, see winxp-image/README.md.
 
 # Static site
 FROM node:26-alpine AS site
