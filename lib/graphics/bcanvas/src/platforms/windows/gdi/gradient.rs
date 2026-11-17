@@ -94,28 +94,36 @@ fn offset(shape: &GradientShape, [x, y]: [f32; 2]) -> Option<f32> {
 
 // Premultiplied BGRA colors at evenly spaced offsets, interpolated between the stops.
 fn color_table(gradient: &Gradient, alpha: f32) -> Option<Vec<[u8; 4]>> {
-    let mut stops = gradient.stops.clone();
-    stops.sort_by(|a, b| a.0.total_cmp(&b.0));
     let premultiplied = |color: crate::Color| {
         let (r, g, b, a) = color.components(alpha);
         [b * a, g * a, r * a, a].map(|channel| channel as f32)
     };
+    // Each stop premultiplied once, the steps walk through them in order
+    let mut stops: Vec<(f32, [f32; 4])> = gradient
+        .stops
+        .iter()
+        .map(|&(offset, color)| (offset, premultiplied(color)))
+        .collect();
+    stops.sort_by(|a, b| a.0.total_cmp(&b.0));
     let first = *stops.first()?;
     let last = *stops.last()?;
+    let mut next = 0;
     Some(
         (0..STEPS)
             .map(|step| {
                 let t = step as f32 / (STEPS - 1) as f32;
                 let color = if t <= first.0 {
-                    premultiplied(first.1)
+                    first.1
                 } else if t >= last.0 {
-                    premultiplied(last.1)
+                    last.1
                 } else {
-                    let next = stops.iter().position(|stop| stop.0 > t).unwrap_or(0);
+                    while stops[next].0 <= t {
+                        next += 1;
+                    }
                     let (from, to) = (stops[next - 1], stops[next]);
                     let span = to.0 - from.0;
                     let k = if span > 0.0 { (t - from.0) / span } else { 1.0 };
-                    let (a, b) = (premultiplied(from.1), premultiplied(to.1));
+                    let (a, b) = (from.1, to.1);
                     std::array::from_fn(|i| a[i] + (b[i] - a[i]) * k)
                 };
                 color.map(|channel| (channel.clamp(0.0, 1.0) * 255.0).round() as u8)
