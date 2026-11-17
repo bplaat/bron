@@ -1,5 +1,5 @@
 // Installs Windows XP unattended in QEMU onto a fresh FAT32 disk
-// Usage: node install.mjs <xp.iso> <product key file> <mbr.bin> <disk.img>
+// Usage: node install.mjs <xp.iso> <mbr.bin> <disk.img>
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -10,7 +10,7 @@ const DISK_SIZE = 8 * 1024 ** 3; // room to add software later, free space strea
 const PART_START = 63; // sectors, the classic XP layout
 const HEADS = 255; // the LBA translation SeaBIOS picks for this disk size
 
-const [iso, keyFile, mbrFile, image] = process.argv.slice(2).map((file) => path.resolve(file));
+const [iso, mbrFile, image] = process.argv.slice(2).map((file) => path.resolve(file));
 const out = path.dirname(image);
 const run = (cmd, ...args) => execFileSync(cmd, args, { stdio: 'inherit' });
 
@@ -29,9 +29,8 @@ run('mformat', '-i', `${image}@@${PART_START * 512}`, '-F', '-T', String(sectors
 
 // Answer floppy: CD setup reads WINNT.SIF from A:
 const sif = path.join(out, 'WINNT.SIF');
-const key = fs.readFileSync(keyFile, 'utf8').trim();
 const template = fs.readFileSync(new URL('winnt.sif', import.meta.url), 'utf8');
-fs.writeFileSync(sif, template.replaceAll('{{PRODUCT_KEY}}', key).replace(/\r?\n/g, '\r\n'));
+fs.writeFileSync(sif, template.replace(/\r?\n/g, '\r\n'));
 const floppy = path.join(out, 'floppy.img');
 fs.rmSync(floppy, { force: true });
 run('mformat', '-i', floppy, '-C', '-f', '1440', '::');

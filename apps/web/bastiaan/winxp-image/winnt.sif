@@ -1,4 +1,4 @@
-; Answer file for the unattended Windows XP install, {{PRODUCT_KEY}} is filled in by install.mjs
+; Answer file for the unattended Windows XP Professional retail install
 [Data]
 AutoPartition=1
 MsDosInitiated="0"
@@ -32,7 +32,7 @@ OemSkipWelcome=1
 TimeZone=110
 
 [UserData]
-ProductKey="{{PRODUCT_KEY}}"
+ProductKey="CD87T-HFP4C-V7X7H-8VY68-W7D7M"
 FullName="Bastiaan"
 OrgName=""
 ComputerName=WINXP

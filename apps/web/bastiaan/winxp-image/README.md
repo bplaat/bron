@@ -27,7 +27,6 @@ These files are ignored by git. Add them before building:
 | Path                                                                           | What                                                                                                                                                 |
 | ------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `winxp-image/winxp.iso`                                                        | `en_windows_xp_professional_with_service_pack_3_x86_cd_x14-80428.iso`                                                                                |
-| `winxp-image/product-key.txt`                                                  | the Windows XP Professional retail product key, one line                                                                                             |
 | `winxp-image/music/`                                                           | Music for My Music: `Snail's House/Ordinary Songs 3` and `4`                                                                                         |
 | `winxp-image/software/age-of-empires/cd/AOE1/`                                 | Age of Empires CD contents                                                                                                                           |
 | `winxp-image/software/age-of-empires/cd/AOE1ROR/`                              | Age of Empires: The Rise of Rome CD contents                                                                                                         |
@@ -45,7 +44,8 @@ Generated: `winxp-image/out/` (install images, screenshots), the built `.exe`/`.
 ## Build stages
 
 1. **Install** (`install.mjs`, `qemu.mjs`, `winnt.sif`): creates an 8 GiB FAT32 disk with a syslinux MBR and installs
-   XP unattended in QEMU with 256 MB RAM and no ACPI. Output: `out/install.img`.
+   XP unattended in QEMU with 256 MB RAM and no ACPI, using the retail product key in `winnt.sif`. Output:
+   `out/install.img`.
 2. **Software** (`disk.mjs software`, `software.mjs`): replaces QEMU's APIC HAL with the Standard PC HAL required by
    v86, removes the extra `boot.ini` entry and copies software onto the disk. QEMU runs `guest/software.cmd` to
    execute each `install.cmd`. Output: `out/software.img`.

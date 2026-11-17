@@ -30,7 +30,7 @@ for app in bastiaan reversi; do cp "$root/target/i686-winxp-windows-gnu/release/
 # 1. Unattended Windows install in QEMU
 if [ ! -f out/install.img ]; then
     docker run --rm -v "$PWD/out:/out" winxp-tools cp /usr/lib/syslinux/mbr/mbr.bin /out/
-    node install.mjs winxp.iso product-key.txt out/mbr.bin out/install.part.img
+    node install.mjs winxp.iso out/mbr.bin out/install.part.img
     mv out/install.part.img out/install.img
 fi
 
