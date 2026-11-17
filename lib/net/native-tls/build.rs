@@ -28,13 +28,6 @@ fn main() {
             push_unique(&mut search_dirs, PathBuf::from(path));
         }
 
-        // pkg-config knows non-standard system prefixes when it is available. We
-        // only use it for discovery; linking below always uses the actual files.
-        let pkg_config_version = command_stdout("pkg-config", &["--modversion", "openssl"]);
-        if let Some(path) = command_stdout("pkg-config", &["--variable=libdir", "openssl"]) {
-            push_unique(&mut search_dirs, PathBuf::from(path.trim()));
-        }
-
         if target_os == "linux" {
             // Ask the target C compiler for its multiarch directory name. This also
             // handles cross builds when CC is configured for the target.
@@ -78,7 +71,6 @@ fn main() {
         let version = std::fs::canonicalize(directory.join(&ssl_name))
             .ok()
             .and_then(|path| path.file_name()?.to_str().map(str::to_owned))
-            .or(pkg_config_version)
             .or_else(|| command_stdout("openssl", &["version"]))
             .unwrap_or(suffix);
         if version.contains("1.0.") || version.ends_with(".so.10") {
