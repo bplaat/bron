@@ -114,12 +114,6 @@ unsafe extern "C" {
         delete: i32,
         time: u32,
     );
-    pub(crate) fn gtk_show_uri_on_window(
-        parent: *mut GtkWindow,
-        uri: *const c_char,
-        timestamp: u32,
-        error: *mut *mut GError,
-    );
     pub(crate) fn gtk_widget_destroy(widget: *mut GtkWidget);
     pub(crate) fn gtk_widget_get_action_group(
         widget: *mut GtkWidget,

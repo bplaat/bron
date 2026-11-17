@@ -58,7 +58,6 @@ pub(crate) type WPARAM = usize;
 pub(crate) type LPARAM = isize;
 
 pub(crate) const IDYES: i32 = 6;
-pub(crate) const SW_SHOWNORMAL: i32 = 1;
 pub(crate) const MB_OK: u32 = 0x00000000;
 pub(crate) const MB_YESNO: u32 = 0x00000004;
 pub(crate) const MB_ICONERROR: u32 = 0x00000010;
@@ -105,14 +104,6 @@ unsafe extern "system" {
         buffer: *mut w_char,
         buffer_size: u32,
     ) -> u32;
-    pub(crate) fn ShellExecuteW(
-        hwnd: HWND,
-        lpOperation: *const w_char,
-        lpFile: *const w_char,
-        lpParameters: *const w_char,
-        lpDirectory: *const w_char,
-        nShowCmd: i32,
-    ) -> isize;
 }
 
 pub(crate) type HRESULT = i32;

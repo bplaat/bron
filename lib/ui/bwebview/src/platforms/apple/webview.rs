@@ -108,8 +108,8 @@ impl WebviewDelegate {
             if target_frame.is_null() {
                 let request: *mut Object = msg_send![navigation_action, request];
                 let url: *mut Object = msg_send![request, URL];
-                if url_string(url).is_some_and(|url| is_external_url(&url)) {
-                    open_external_url(url);
+                if let Some(url) = url_string(url).filter(|url| is_external_url(url)) {
+                    bwindow::open_url(&url);
                 }
                 decision_handler.call((WK_NAVIGATION_ACTION_POLICY_CANCEL,));
             } else {
@@ -491,22 +491,6 @@ fn url_string(url: *mut Object) -> Option<String> {
     }
     let url: NSString = unsafe { msg_send![url, absoluteString] };
     Some(url.to_string())
-}
-
-fn open_external_url(url: *mut Object) {
-    unsafe {
-        #[cfg(target_os = "macos")]
-        {
-            let workspace: *mut Object = msg_send![class!(NSWorkspace), sharedWorkspace];
-            let _: Bool = msg_send![workspace, openURL:url];
-        }
-        #[cfg(target_os = "ios")]
-        {
-            let application: *mut Object = msg_send![class!(UIApplication), sharedApplication];
-            let options: *mut Object = msg_send![class!(NSDictionary), dictionary];
-            let _: () = msg_send![application, openURL:url, options:options, completionHandler:null_mut::<c_void>()];
-        }
-    }
 }
 
 fn close_webview(webview: &Object, delegate: &Object) {

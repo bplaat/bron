@@ -8,7 +8,7 @@ use std::cell::Cell;
 #[cfg(feature = "file_drop")]
 use std::cell::RefCell;
 use std::ffi::c_void;
-use std::ptr::{null, null_mut};
+use std::ptr::null_mut;
 use std::rc::Rc;
 use std::{env, mem};
 
@@ -126,14 +126,8 @@ impl PlatformWebview {
                         MB_YESNO | MB_ICONWARNING,
                     ) == IDYES
                     {
-                        ShellExecuteW(
-                            self.webview_data.hwnd,
-                            w!("open").as_ptr(),
-                            w!("https://developer.microsoft.com/microsoft-edge/webview2/#download-section")
-                                .as_ptr(),
-                            null(),
-                            null(),
-                            SW_SHOWNORMAL,
+                        bwindow::open_url(
+                            "https://developer.microsoft.com/microsoft-edge/webview2/#download-section",
                         );
                     }
                 } else {
@@ -654,15 +648,9 @@ extern "system" fn new_window_requested(
         (*args).put_Handled(TRUE);
         let mut uri = LPWSTR::default();
         (*args).get_Uri(uri.as_mut_ptr());
-        if is_external_url(&uri.to_string()) {
-            ShellExecuteW(
-                null_mut(),
-                w!("open").as_ptr(),
-                uri.as_ptr(),
-                null(),
-                null(),
-                SW_SHOWNORMAL,
-            );
+        let uri = uri.to_string();
+        if is_external_url(&uri) {
+            bwindow::open_url(&uri);
         }
     }
     S_OK

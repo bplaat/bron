@@ -515,13 +515,9 @@ extern "C" fn webview_on_navigation_policy_decision(
     if decision_type == WEBKIT_POLICY_DECISION_TYPE_NEW_WINDOW_ACTION {
         let request = unsafe { webkit_navigation_policy_decision_get_request(decision) };
         let uri = unsafe { webkit_uri_request_get_uri(request) };
-        if is_external_url(&unsafe { CStr::from_ptr(uri) }.to_string_lossy()) {
-            cfg_select! {
-                gtk3_22 => unsafe { gtk_show_uri_on_window(null_mut(), uri, 0, null_mut()) },
-                _ => unsafe {
-                    _ = gtk_show_uri(gdk_screen_get_default(), uri, 0, null_mut());
-                },
-            }
+        let uri = unsafe { CStr::from_ptr(uri) }.to_string_lossy();
+        if is_external_url(&uri) {
+            bwindow::open_url(&uri);
         }
         return true;
     }
