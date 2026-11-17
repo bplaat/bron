@@ -12,15 +12,20 @@ import { boot, screenshot, sleep, waitFor, waitIdle } from './lib.mjs';
 
 const zstd = (data) => zlib.zstdCompressSync(data, { params: { [zlib.constants.ZSTD_c_compressionLevel]: 19 } });
 const [, , image, outDir] = process.argv;
-fs.rmSync(outDir, { recursive: true, force: true });
 fs.mkdirSync(path.join(outDir, 'disk'), { recursive: true });
 const size = fs.statSync(image).size;
+// Chunks whose contents stay the same keep their compressed file, a new app build changes only a few
+const hashesFile = path.resolve('out/chunks.json');
+const previous = fs.existsSync(hashesFile) ? JSON.parse(fs.readFileSync(hashesFile, 'utf8')) : {};
 const count = os.availableParallelism(); // chunks.mjs compresses them in parallel
-const packed = (await Promise.all(Array.from({ length: count }, (_, index) => new Promise((resolve, reject) => {
-    const worker = new Worker(new URL('chunks.mjs', import.meta.url), { workerData: { image, outDir, size, index, count } });
-    worker.on('message', resolve).on('error', reject);
-})))).reduce((sum, bytes) => sum + bytes, 0);
-console.log(`disk ${(size / 2 ** 30).toFixed(1)} GiB, packed ${(packed / 2 ** 20).toFixed(1)} MiB`);
+const results = await Promise.all(Array.from({ length: count }, (_, index) => new Promise((resolve, reject) => {
+    const workerData = { image, outDir, size, index, count, previous };
+    new Worker(new URL('chunks.mjs', import.meta.url), { workerData }).on('message', resolve).on('error', reject);
+})));
+fs.writeFileSync(hashesFile, JSON.stringify(Object.assign({}, ...results.map((result) => result.hashes))));
+const packed = results.reduce((sum, result) => sum + result.packed, 0);
+const compressed = results.reduce((sum, result) => sum + result.compressed, 0);
+console.log(`disk ${(size / 2 ** 30).toFixed(1)} GiB, packed ${(packed / 2 ** 20).toFixed(1)} MiB, ${compressed} chunks compressed`);
 for (const name of ['seabios.bin', 'vgabios.bin']) {
     fs.copyFileSync(path.join(path.dirname(new URL(import.meta.url).pathname), 'bios', name), path.join(outDir, name));
 }
