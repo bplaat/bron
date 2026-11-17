@@ -20,7 +20,9 @@ export default defineConfig({
     build: {
         outDir: 'dist',
     },
-    plugins: [{ name: 'age', transformIndexHtml: { order: 'pre', handler: (html) => html.replace('%AGE%', age()) } }],
+    plugins: [
+        { name: 'age', transformIndexHtml: { order: 'pre', handler: (html) => html.replace('%AGE%', String(age())) } },
+    ],
     server: { proxy },
     preview: { proxy },
 });

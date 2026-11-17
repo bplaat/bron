@@ -7,6 +7,9 @@
 // Host side of the v86 guest integration, see winxp-image/guest/v86.h
 // Extends v86's VMware backdoor with commands the guest agent and drivers use.
 
+import type { V86 } from 'v86';
+import { cpu as emulatorCpu, type Cpu } from './machine.ts';
+
 const VMWARE_PORT = 0x5658;
 const VMWARE_MAGIC = 0x564d5868;
 const VMWARE_CMD_ABSPOINTER_DATA = 39;
@@ -47,7 +50,44 @@ const CLIP_HTML = 1;
 const CLIP_IMAGE = 2;
 const CLIP_MAX = 64 * 1024 * 1024;
 
-function utf16(text) {
+export interface Image {
+    width: number;
+    height: number;
+    data: Uint8ClampedArray<ArrayBuffer>;
+}
+
+// A pointer shape as RGBA, its key identifies the shape
+export interface PointerShape extends Image {
+    key: string;
+}
+
+// A shown pointer with its hotspot
+export interface Pointer extends PointerShape {
+    x: number;
+    y: number;
+}
+
+export interface Clipboard {
+    text?: string;
+    html?: string;
+    image?: Image | null;
+}
+
+export interface GuestHostEvents {
+    pointer: CustomEvent<Pointer | null>;
+    clipboard: CustomEvent<Clipboard>;
+    'open-url': CustomEvent<string>;
+}
+
+interface QueueItem {
+    type: number;
+    data: Uint8Array;
+    offset: number;
+    onProgress?: (progress: number) => void;
+    onDone?: () => void;
+}
+
+function utf16(text: string) {
     const out = new Uint8Array(text.length * 2);
     for (let i = 0; i < text.length; i++) {
         const c = text.charCodeAt(i);
@@ -57,11 +97,11 @@ function utf16(text) {
     return out;
 }
 
-function fromUtf16(bytes) {
+function fromUtf16(bytes: Uint8Array) {
     return new TextDecoder('utf-16le').decode(bytes);
 }
 
-function uint32s(...values) {
+function uint32s(...values: number[]) {
     const out = new Uint8Array(values.length * 4);
     const view = new DataView(out.buffer);
     values.forEach((value, i) => view.setUint32(i * 4, value, true));
@@ -69,7 +109,7 @@ function uint32s(...values) {
 }
 
 // RGBA <-> BGRX, the guest has no alpha
-function swapRedBlue(src, dst, alpha) {
+function swapRedBlue<T extends Uint8Array | Uint8ClampedArray>(src: ArrayLike<number>, dst: T, alpha: number) {
     for (let i = 0; i < dst.length; i += 4) {
         dst[i] = src[i + 2];
         dst[i + 1] = src[i + 1];
@@ -79,14 +119,14 @@ function swapRedBlue(src, dst, alpha) {
     return dst;
 }
 
-function encodeImage({ width, height, data }) {
+function encodeImage({ width, height, data }: Image) {
     const out = new Uint8Array(8 + width * height * 4);
     out.set(uint32s(width, height));
     swapRedBlue(data, out.subarray(8), 0);
     return out;
 }
 
-function decodeImage(bytes) {
+function decodeImage(bytes: Uint8Array): Image | null {
     const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
     if (bytes.length < 8) return null;
     const width = view.getUint32(0, true);
@@ -96,9 +136,9 @@ function decodeImage(bytes) {
 }
 
 // Guest memory at a linear address, through the page tables of the running code: null when a page is not present
-const u32 = (mem, address) =>
+const u32 = (mem: Uint8Array, address: number) =>
     (mem[address] | (mem[address + 1] << 8) | (mem[address + 2] << 16) | (mem[address + 3] << 24)) >>> 0;
-function translate(cpu, linear) {
+function translate(cpu: Cpu, linear: number) {
     const mem = cpu.mem8;
     if (!(cpu.cr[0] & 0x80000000)) return linear;
     if (cpu.cr[4] & 0x20) {
@@ -118,7 +158,7 @@ function translate(cpu, linear) {
     return pte & 1 ? ((pte & 0xfffff000) | (linear & 0xfff)) >>> 0 : -1;
 }
 
-function readLinear(cpu, address, length) {
+function readLinear(cpu: Cpu, address: number, length: number) {
     const out = new Uint8Array(length);
     for (let done = 0; done < length;) {
         const linear = (address + done) >>> 0;
@@ -133,7 +173,7 @@ function readLinear(cpu, address, length) {
 
 // A monochrome pointer (VIDEO_POINTER_ATTRIBUTES) as RGBA, null when it inverts the screen, which a browser cursor
 // cannot
-function decodePointer(bytes) {
+function decodePointer(bytes: Uint8Array): PointerShape | null {
     const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
     const [width, height, stride] = [view.getUint32(4, true), view.getUint32(8, true), view.getUint32(12, true)];
     if (width > POINTER_SIZE || height > POINTER_SIZE || stride !== POINTER_STRIDE) return null;
@@ -151,22 +191,37 @@ function decodePointer(bytes) {
     return { width, height, data, key: bytes.subarray(4, xorStart + stride * height).join() };
 }
 
+export interface GuestHost {
+    addEventListener<K extends keyof GuestHostEvents>(
+        type: K,
+        listener: (event: GuestHostEvents[K]) => void,
+        options?: boolean | AddEventListenerOptions,
+    ): void;
+    addEventListener(
+        type: string,
+        listener: EventListenerOrEventListenerObject | null,
+        options?: boolean | AddEventListenerOptions,
+    ): void;
+}
+
 export class GuestHost extends EventTarget {
-    constructor(emulator) {
+    queue: QueueItem[] = [];
+    clip: ({ data: Uint8Array; offset: number } | undefined)[] = [];
+    clipCurrent: { data: Uint8Array; offset: number } | null = null;
+    size = 0;
+    agentSeen = -Infinity;
+    // Hardware pointer: the shape the guest set (undefined until it does), its top left and the hotspot per shape
+    pointerShape: PointerShape | null | undefined = undefined;
+    pointerAt: [number, number] | null = null;
+    pointerHot = new Map<string, [number, number]>();
+    pointerShown: Pointer | null = null;
+    mouse: [number, number] | null = null; // the last absolute position the guest read, 0 to 0xffff
+    cpu: Cpu;
+    vmware: Cpu['devices']['vmware'];
+
+    constructor(emulator: V86) {
         super();
-        this.emulator = emulator;
-        this.queue = [];
-        this.clip = [];
-        this.clipCurrent = null;
-        this.size = 0;
-        this.agentSeen = -Infinity;
-        // Hardware pointer: the shape the guest set (undefined until it does), its top left and the hotspot per shape
-        this.pointerShape = undefined;
-        this.pointerAt = null;
-        this.pointerHot = new Map();
-        this.pointerShown = null;
-        this.mouse = null; // the last absolute position the guest read, 0 to 0xffff
-        const cpu = emulator.v86.cpu;
+        const cpu = emulatorCpu(emulator);
         const vmware = cpu.devices.vmware;
         const stock = vmware.port_read32;
         this.cpu = cpu;
@@ -211,14 +266,14 @@ export class GuestHost extends EventTarget {
         );
     }
 
-    setPointerShape(bytes) {
+    setPointerShape(bytes: Uint8Array | null) {
         this.pointerShape = bytes && decodePointer(bytes);
         this.pointerAt = null;
         this.updatePointer();
         return this.pointerShape ? 1 : 0;
     }
 
-    movePointer(position) {
+    movePointer(position: number) {
         if (this.pointerShape === undefined) return POINTER_RESEND;
         this.pointerAt = position === POINTER_HIDDEN ? null : [position >> 16, (position << 16) >> 16];
         this.learnHotspot();
@@ -241,7 +296,7 @@ export class GuestHost extends EventTarget {
     updatePointer() {
         const shape = this.pointerShape;
         const [x, y] = (shape && this.pointerHot.get(shape.key)) ?? [0, 0];
-        const shown = shape && this.pointerAt ? { ...shape, x, y } : null;
+        const shown: Pointer | null = shape && this.pointerAt ? { ...shape, x, y } : null;
         const old = this.pointerShown;
         if (shown?.key === old?.key && shown?.x === old?.x && shown?.y === old?.y) return;
         this.pointerShown = shown;
@@ -252,21 +307,21 @@ export class GuestHost extends EventTarget {
         return performance.now() - this.agentSeen < 2000;
     }
 
-    setSize(width, height) {
+    setSize(width: number, height: number) {
         this.size = ((width & 0xffff) << 16) | (height & 0xffff);
     }
 
-    push(type, data = new Uint8Array(0), extra = {}) {
+    push(type: number, data: Uint8Array = new Uint8Array(0), extra: Partial<QueueItem> = {}) {
         this.queue.push({ type, data, offset: 0, ...extra });
     }
 
-    // Replaces the guest clipboard with { text, html, image: ImageData }, resolves once the guest has it
-    setClipboard({ text, html, image }) {
-        const formats = [];
+    // Replaces the guest clipboard, resolves once the guest has it
+    setClipboard({ text, html, image }: Clipboard) {
+        const formats: [number, Uint8Array][] = [];
         if (text) formats.push([CLIP_TEXT, utf16(text.replace(/\r?\n/g, '\r\n'))]);
         if (html) formats.push([CLIP_HTML, new TextEncoder().encode(html)]);
         if (image) formats.push([CLIP_IMAGE, encodeImage(image)]);
-        return new Promise((resolve) => {
+        return new Promise<void>((resolve) => {
             for (const [format, data] of formats) {
                 if (data.length > CLIP_MAX) continue;
                 this.push(MSG_CLIP_FORMAT, uint32s(format, data.length));
@@ -277,12 +332,12 @@ export class GuestHost extends EventTarget {
     }
 
     // Resolves once the guest has received the whole file
-    sendFile(name, data, onProgress) {
+    sendFile(name: string, data: Uint8Array, onProgress: (progress: number) => void) {
         name = name.normalize('NFC'); // macOS can hand out decomposed names, Windows XP expects composed ones
         const header = new Uint8Array(4 + name.length * 2);
         header.set(uint32s(data.length));
         header.set(utf16(name), 4);
-        return new Promise((resolve) => {
+        return new Promise<void>((resolve) => {
             this.push(MSG_FILE_BEGIN, header);
             if (data.length) this.push(MSG_FILE_DATA, data, { onProgress });
             this.push(MSG_FILE_END, undefined, { onDone: resolve });
@@ -299,7 +354,7 @@ export class GuestHost extends EventTarget {
         this.push(MSG_NET_RENEW);
     }
 
-    recv(cpu, reg) {
+    recv(cpu: Cpu, reg: Int32Array) {
         const item = this.queue[0];
         if (!item) return 0;
         const phys = reg[REG_EBX] >>> 0;
@@ -314,7 +369,7 @@ export class GuestHost extends EventTarget {
         return item.type;
     }
 
-    receive(type, data) {
+    receive(type: number, data: Uint8Array) {
         if (type === MSG_CLIP_FORMAT) {
             const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
             const format = data.length >= 8 ? view.getUint32(0, true) : -1;
@@ -330,7 +385,7 @@ export class GuestHost extends EventTarget {
             const [text, html, image] = this.clip.map((format) => format?.data);
             this.clip = [];
             this.clipCurrent = null;
-            const detail = {
+            const detail: Clipboard = {
                 text: text && fromUtf16(text).replace(/\r\n/g, '\n'),
                 html: html && new TextDecoder().decode(html),
                 image: image && decodeImage(image),

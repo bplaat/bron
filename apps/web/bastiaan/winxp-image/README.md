@@ -125,5 +125,5 @@ narration are included.
 - `v86setup.exe`: configures the guest. `activate.vbs` and `activate/confid.exe` (from
   [UMSKT](https://github.com/UMSKT/UMSKT)) activate Windows; `library.vbs` fills the Media Player library.
 
-Host integration: [`web/src/guest-host.js`](../web/src/guest-host.js). Protocol: `guest/v86.h`. Shared machine
-configuration: [`web/src/machine.js`](../web/src/machine.js).
+Host integration: [`web/src/guest-host.ts`](../web/src/guest-host.ts). Protocol: `guest/v86.h`. Shared machine
+configuration: [`web/src/machine.ts`](../web/src/machine.ts).

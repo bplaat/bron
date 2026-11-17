@@ -4,7 +4,7 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
-import { MACHINE } from '../web/src/machine.js';
+import { MACHINE } from '../web/src/machine.ts';
 import { sleep } from './lib.mjs';
 
 async function connect(file) {

@@ -4,11 +4,11 @@
  * SPDX-License-Identifier: MIT
  */
 
-import { V86 } from 'v86';
+import { V86, type V86Options } from 'v86';
 import wasmUrl from 'v86/build/v86.wasm?url';
-import { GuestHost } from './guest-host.js';
-import { DISK_CHUNK_SIZE, MACHINE, patchNetworkCard } from './machine.js';
-import { SessionStore } from './persist.js';
+import { GuestHost, type Clipboard, type Image } from './guest-host.ts';
+import { cpu, DISK_CHUNK_SIZE, MACHINE, patchNetworkCard } from './machine.ts';
+import { SessionStore } from './persist.ts';
 import './index.css';
 
 const BASE = 'winxp/';
@@ -21,19 +21,26 @@ const SAVE_INTERVAL = 2 * 60 * 1000;
 const RELAY_URL = import.meta.env.VITE_RELAY_URL ?? new URL('relay', location.href).href.replace(/^http/, 'ws');
 const BEST_EFFORT = 'Sessions are kept in this browser on a best effort basis, without guarantees.';
 
-const screen = document.getElementById('screen');
-const boot = document.getElementById('boot');
-const bootStatus = document.getElementById('boot-status');
-const drop = document.getElementById('drop');
-const balloon = document.getElementById('balloon');
-const activity = document.getElementById('activity');
+const element = (id: string) => document.getElementById(id) as HTMLElement;
+const screen = element('screen');
+const boot = element('boot');
+const bootStatus = element('boot-status');
+const drop = element('drop');
+const balloon = element('balloon');
+const activity = element('activity');
 
 // Notification balloon, optionally doing something when clicked
-let balloonTimer;
-let balloonAction = null;
-function notify(title, text, { sticky = false, url = null, onClick = null } = {}) {
-    document.getElementById('balloon-title').textContent = title;
-    document.getElementById('balloon-text').textContent = text;
+interface NotifyOptions {
+    sticky?: boolean;
+    url?: string | null;
+    onClick?: (() => void) | null;
+}
+
+let balloonTimer: number | undefined;
+let balloonAction: (() => void) | null = null;
+function notify(title: string, text: string, { sticky = false, url = null, onClick = null }: NotifyOptions = {}) {
+    element('balloon-title').textContent = title;
+    element('balloon-text').textContent = text;
     balloonAction = url ? () => openTab(url) : onClick;
     balloon.classList.toggle('is-link', !!balloonAction);
     balloon.classList.add('is-visible');
@@ -42,7 +49,7 @@ function notify(title, text, { sticky = false, url = null, onClick = null } = {}
     if (!sticky) balloonTimer = setTimeout(() => balloon.classList.remove('is-visible'), duration);
 }
 // Returns false when the browser blocked the new tab
-function openTab(url) {
+function openTab(url: string) {
     const tab = window.open(url, '_blank');
     if (tab) tab.opener = null;
     return !!tab;
@@ -53,15 +60,16 @@ balloon.addEventListener('click', () => {
     balloon.classList.remove('is-visible');
 });
 
-function formatBytes(bytes) {
+function formatBytes(bytes: number) {
     return bytes < 1024 * 1024 ? `${Math.ceil(bytes / 1024)} KB` : `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
 // Emulator, resuming the session saved in this browser when there is one
-const disk = await fetch(BASE + 'disk.json').then((response) => response.json());
+const disk: { size: number; build: string } = await fetch(BASE + 'disk.json').then((response) => response.json());
 const sessions = await SessionStore.open(disk.build).catch(() => null);
 const session = await sessions?.load().catch(() => null);
-const emulator = new V86({
+// MAC address translation is missing from v86's types
+const options: V86Options & { mac_address_translation: boolean } = {
     ...MACHINE,
     wasm_path: wasmUrl,
     bios: { url: BASE + 'seabios.bin' },
@@ -79,9 +87,10 @@ const emulator = new V86({
     mac_address_translation: true, // every visitor resumes the same snapshot, v86 gives each page its own MAC
     screen_container: screen,
     autostart: !session, // the saved disk blocks go back in first
-});
+};
+const emulator = new V86(options);
 
-let activityTimer;
+let activityTimer: number | undefined;
 emulator.add_listener('download-progress', (event) => {
     if (event.file_name.includes('/disk/')) {
         // Show the disk light while chunks stream in
@@ -94,14 +103,14 @@ emulator.add_listener('download-error', () => {
     bootStatus.textContent = 'Windows XP could not be loaded, please reload the page.';
 });
 
-const host = await new Promise((resolve) =>
+const host = await new Promise<GuestHost>((resolve) =>
     emulator.add_listener('emulator-loaded', () => resolve(new GuestHost(emulator))),
 );
 patchNetworkCard(emulator);
 
 // Session: saved when the page is hidden and every few minutes, a click on the notice starts over
-const hda = emulator.v86.cpu.devices.ide.primary.master.buffer;
-if (session) {
+const hda = cpu(emulator).devices.ide.primary.master.buffer;
+if (sessions && session) {
     sessions.restore(hda, session.chunks);
     emulator.run();
     notify('Welcome back', `Your previous session was restored. ${BEST_EFFORT} Click here to start fresh.`, {
@@ -126,7 +135,7 @@ if (sessions) {
 }
 
 // Follow the window size: the guest switches to it, smaller windows scale the guest down
-function guestSize() {
+function guestSize(): [number, number] {
     // v86 undoes fractional device pixel ratios, so ask for device pixels there
     const ratio = window.devicePixelRatio % 1 ? window.devicePixelRatio : 1;
     return [
@@ -138,10 +147,10 @@ function guestSize() {
 function fitScreen() {
     const { offsetWidth: width, offsetHeight: height } = screen;
     const scale = width && height ? Math.min(1, window.innerWidth / width, window.innerHeight / height) : 1;
-    screen.style.setProperty('--scale', scale);
+    screen.style.setProperty('--scale', String(scale));
 }
 
-let resizeTimer;
+let resizeTimer: number | undefined;
 function resize() {
     fitScreen();
     clearTimeout(resizeTimer);
@@ -155,10 +164,10 @@ new ResizeObserver(fitScreen).observe(screen);
 const REVEAL_SETTLE = 800;
 const REVEAL_TIMEOUT = 8000;
 const revealStart = performance.now();
-let revealSized = null;
+let revealSized: number | null = null;
 const reveal = setInterval(() => {
     const [width, height] = guestSize();
-    const vga = emulator.v86.cpu.devices.vga;
+    const vga = cpu(emulator).devices.vga;
     const sized = vga.svga_width === width && vga.svga_height === height;
     revealSized = sized ? (revealSized ?? performance.now()) : null;
     const now = performance.now();
@@ -177,22 +186,23 @@ host.addEventListener('open-url', ({ detail: url }) => {
 
 // Sound: browsers only start audio after a user gesture
 function startAudio() {
-    const context = emulator.speaker_adapter?.audio_context;
+    const { speaker_adapter } = emulator as unknown as { speaker_adapter?: { audio_context: AudioContext } };
+    const context = speaker_adapter?.audio_context;
     if (context?.state === 'suspended') context.resume();
 }
 window.addEventListener('pointerdown', startAudio, true);
 window.addEventListener('keydown', startAudio, true);
 
-function imageCanvas({ width, height, data }) {
+function imageCanvas({ width, height, data }: Image) {
     const canvas = Object.assign(document.createElement('canvas'), { width, height });
-    canvas.getContext('2d').putImageData(new ImageData(data, width, height), 0, 0);
+    canvas.getContext('2d')?.putImageData(new ImageData(data, width, height), 0, 0);
     return canvas;
 }
 
 // Hardware pointer: the pointer Windows sets is the browser's cursor over the screen, so it moves at native speed even
 // when Windows is busy, 'none' (v86's default) while Windows draws one itself
-const screenCanvas = screen.querySelector('canvas');
-const cursorUrls = new Map();
+const screenCanvas = screen.querySelector('canvas') as HTMLCanvasElement;
+const cursorUrls = new Map<string, string>();
 host.addEventListener('pointer', ({ detail: pointer }) => {
     if (!pointer) return void (screenCanvas.style.cursor = 'none');
     if (!cursorUrls.has(pointer.key)) cursorUrls.set(pointer.key, imageCanvas(pointer).toDataURL());
@@ -200,12 +210,14 @@ host.addEventListener('pointer', ({ detail: pointer }) => {
 });
 
 // Clipboard: guest to host, written on the next user interaction when the browser holds it back
-function imageToPng(image) {
+function imageToPng(image: Image) {
     const canvas = imageCanvas(image);
-    return new Promise((resolve, reject) => canvas.toBlob((blob) => (blob ? resolve(blob) : reject()), 'image/png'));
+    return new Promise<Blob>((resolve, reject) =>
+        canvas.toBlob((blob) => (blob ? resolve(blob) : reject()), 'image/png'),
+    );
 }
 
-let pendingCopy = null;
+let pendingCopy: { items: Record<string, Blob | Promise<Blob>>; text?: string } | null = null;
 function writeClipboard() {
     if (!pendingCopy || !navigator.clipboard) return;
     const copy = pendingCopy;
@@ -218,7 +230,7 @@ function writeClipboard() {
     );
 }
 host.addEventListener('clipboard', ({ detail: { text, html, image } }) => {
-    const items = {};
+    const items: Record<string, Blob | Promise<Blob>> = {};
     if (text) items['text/plain'] = new Blob([text], { type: 'text/plain' });
     if (html) items['text/html'] = new Blob([html], { type: 'text/html' });
     if (image) items['image/png'] = imageToPng(image);
@@ -229,11 +241,11 @@ window.addEventListener('pointerdown', writeClipboard, true);
 window.addEventListener('focus', writeClipboard);
 
 // Clipboard: host to guest, the paste shortcut is held back until the guest has the clipboard
-async function decodeImage(blob) {
+async function decodeImage(blob: Blob) {
     try {
         const bitmap = await createImageBitmap(blob);
         const { width, height } = bitmap;
-        const context = Object.assign(document.createElement('canvas'), { width, height }).getContext('2d');
+        const context = Object.assign(document.createElement('canvas'), { width, height }).getContext('2d')!;
         context.fillStyle = '#fff'; // the guest has no alpha
         context.fillRect(0, 0, width, height);
         context.drawImage(bitmap, 0, 0);
@@ -243,22 +255,28 @@ async function decodeImage(blob) {
     }
 }
 
-async function readClipboard() {
+interface PastedData {
+    text?: string;
+    html?: string;
+    image?: Blob | null;
+}
+
+async function readClipboard(): Promise<PastedData> {
     try {
         const [item] = await navigator.clipboard.read();
-        const get = (type) => (item.types.includes(type) ? item.getType(type) : null);
+        const get = (type: string) => (item.types.includes(type) ? item.getType(type) : null);
         const imageType = item.types.find((type) => type.startsWith('image/'));
         return {
             text: await (await get('text/plain'))?.text(),
             html: await (await get('text/html'))?.text(),
-            image: imageType && (await item.getType(imageType)),
+            image: imageType ? await item.getType(imageType) : null,
         };
     } catch {
         return {};
     }
 }
 
-let pasteData = null;
+let pasteData: PastedData | null = null;
 document.addEventListener('paste', (event) => {
     const data = event.clipboardData;
     if (data) {
@@ -276,7 +294,7 @@ async function paste() {
     // Let the browser fire a paste event, fall back to the async clipboard API
     await new Promise((resolve) => setTimeout(resolve, 50));
     const { text, html, image } = pasteData ?? (await readClipboard());
-    const clip = { text, html, image: image && (await decodeImage(image)) };
+    const clip: Clipboard = { text, html, image: image && (await decodeImage(image)) };
     if (clip.text || clip.html || clip.image) {
         await Promise.race([host.setClipboard(clip), new Promise((resolve) => setTimeout(resolve, 5000))]);
     }
@@ -284,7 +302,7 @@ async function paste() {
 }
 
 // Keyboard: Cmd acts as Ctrl on macOS, and macOS drops key ups while Cmd is held
-let metaKeys = null;
+let metaKeys: Set<string> | null = null;
 window.addEventListener(
     'keydown',
     (event) => {
@@ -325,7 +343,7 @@ window.addEventListener('blur', () => {
 });
 
 // Drag and drop files onto the desktop
-const hasFiles = (event) => event.dataTransfer?.types.includes('Files');
+const hasFiles = (event: DragEvent) => event.dataTransfer?.types.includes('Files');
 let dragDepth = 0;
 window.addEventListener('dragenter', (event) => {
     if (!hasFiles(event)) return;
@@ -340,7 +358,7 @@ window.addEventListener('dragleave', (event) => {
 window.addEventListener('dragover', (event) => {
     if (!hasFiles(event)) return;
     event.preventDefault();
-    event.dataTransfer.dropEffect = 'copy';
+    event.dataTransfer!.dropEffect = 'copy';
 });
 window.addEventListener('drop', async (event) => {
     if (!hasFiles(event)) return;
@@ -349,7 +367,7 @@ window.addEventListener('drop', async (event) => {
     drop.classList.remove('is-visible');
     if (!host.agentAlive) return notify('Windows is starting', 'Try dropping the files again in a moment.');
 
-    const files = [...event.dataTransfer.files].filter((file) => file.size || file.type);
+    const files = [...event.dataTransfer!.files].filter((file) => file.size || file.type);
     const total = files.reduce((sum, file) => sum + file.size, 0);
     if (!files.length) return;
     if (total > MAX_DROP_BYTES) {

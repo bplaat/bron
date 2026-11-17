@@ -9,47 +9,70 @@
 // always match: a disk without the RAM that cached it would corrupt FAT32. Saves belong to one build of the disk.
 // Best-effort storage on purpose: navigator.storage.persist() shows a permission prompt in Firefox.
 
+import type { V86 } from 'v86';
+import { cpu, type AsyncDisk } from './machine.ts';
+
 const BLOCK_SIZE = 256; // v86's block size for chunked disks
 const STORES = ['state', 'chunks'];
 
-const request = (req) =>
-    new Promise((resolve, reject) => {
+export interface Chunk {
+    index: number;
+    mask: Uint8Array<ArrayBuffer>;
+    data: Uint8Array<ArrayBuffer>;
+}
+
+export interface Session {
+    state: ArrayBuffer;
+    chunks: Chunk[];
+}
+
+const request = <T>(req: IDBRequest<T>) =>
+    new Promise<T>((resolve, reject) => {
         req.onsuccess = () => resolve(req.result);
         req.onerror = () => reject(req.error);
     });
 
-async function transform(data, Stream) {
+async function transform(
+    data: ArrayBuffer | Uint8Array<ArrayBuffer>,
+    Stream: typeof CompressionStream | typeof DecompressionStream,
+) {
     const stream = new Blob([data]).stream().pipeThrough(new Stream('gzip'));
     return new Uint8Array(await new Response(stream).arrayBuffer());
 }
-const compress = (data) => transform(data, CompressionStream);
-const decompress = (data) => transform(data, DecompressionStream);
+const compress = (data: ArrayBuffer | Uint8Array<ArrayBuffer>) => transform(data, CompressionStream);
+const decompress = (data: Uint8Array<ArrayBuffer>) => transform(data, DecompressionStream);
 
 export class SessionStore {
-    static async open(build) {
+    db: IDBDatabase;
+    outdated: boolean;
+    saving = false;
+    disk!: AsyncDisk;
+    blocksPerChunk = 0;
+    dirty = new Set<number>();
+
+    static async open(build: string) {
         const name = `winxp-${build}`;
         // Saves of older builds no longer fit the disk, outdated tells the page one was dropped
         const older = ((await indexedDB.databases?.()) ?? [])
             .map((database) => database.name)
-            .filter((other) => other?.startsWith('winxp-') && other !== name);
+            .filter((other): other is string => !!other?.startsWith('winxp-') && other !== name);
         older.forEach((other) => indexedDB.deleteDatabase(other));
         const open = indexedDB.open(name, 1);
         open.onupgradeneeded = () => STORES.forEach((store) => open.result.createObjectStore(store));
         return new SessionStore(await request(open), older.length > 0);
     }
 
-    constructor(db, outdated) {
+    constructor(db: IDBDatabase, outdated: boolean) {
         this.db = db;
         this.outdated = outdated;
-        this.saving = false;
     }
 
-    // Resolves to { state: ArrayBuffer, chunks: [{ index, mask, data }] } or null without a save
-    async load() {
+    // Resolves to the saved session or null without a save
+    async load(): Promise<Session | null> {
         const tx = this.db.transaction(STORES, 'readonly');
         const [state, chunks] = await Promise.all([
-            request(tx.objectStore('state').get('state')),
-            request(tx.objectStore('chunks').getAll()),
+            request<Uint8Array<ArrayBuffer> | undefined>(tx.objectStore('state').get('state')),
+            request<Chunk[]>(tx.objectStore('chunks').getAll()),
         ]);
         if (!state) return null;
         return {
@@ -65,10 +88,9 @@ export class SessionStore {
     }
 
     // Disk chunks with blocks written since the last save
-    track(disk, chunkSize) {
+    track(disk: AsyncDisk, chunkSize: number) {
         this.disk = disk;
         this.blocksPerChunk = chunkSize / BLOCK_SIZE;
-        this.dirty = new Set();
         // Everything written so far, also by the snapshot, is not saved yet
         for (const block of disk.block_cache_is_write) this.dirty.add(Math.floor(block / this.blocksPerChunk));
         const write = disk.set.bind(disk);
@@ -81,7 +103,7 @@ export class SessionStore {
     }
 
     // Puts saved disk blocks back, before the emulator runs
-    restore(disk, chunks) {
+    restore(disk: AsyncDisk, chunks: Chunk[]) {
         for (const { index, mask, data } of chunks) {
             for (let i = 0; i < mask.length * 8; i++) {
                 if (!(mask[i >> 3] & (1 << (i & 7)))) continue;
@@ -93,19 +115,19 @@ export class SessionStore {
     }
 
     // Copies a chunk's written blocks into one buffer with a bitmask of which are set
-    readChunk(index) {
+    readChunk(index: number): Chunk {
         const data = new Uint8Array(this.blocksPerChunk * BLOCK_SIZE);
         const mask = new Uint8Array(this.blocksPerChunk / 8);
         for (let i = 0; i < this.blocksPerChunk; i++) {
             const block = index * this.blocksPerChunk + i;
             if (!this.disk.block_cache_is_write.has(block)) continue;
-            data.set(this.disk.block_cache.get(block), i * BLOCK_SIZE);
+            data.set(this.disk.block_cache.get(block)!, i * BLOCK_SIZE);
             mask[i >> 3] |= 1 << (i & 7);
         }
         return { index, mask, data };
     }
 
-    async save(emulator) {
+    async save(emulator: V86) {
         if (this.saving) return;
         this.saving = true;
         const running = emulator.is_running();
@@ -113,17 +135,17 @@ export class SessionStore {
             // Capture state and changed chunks at the same instant, leave the disk out of the state. The network card
             // keeps the guest's MAC: with MAC translation v86 would store this page's random one, which Windows never saw
             if (running) await emulator.stop();
-            const net = emulator.v86.cpu.devices.net;
+            const net = cpu(emulator).devices.net;
             const mac = net?.mac;
             const diskState = this.disk.get_state;
             this.disk.get_state = () => [[]];
             if (net?.mac_address_in_state) net.mac = net.mac_address_in_state;
-            let state;
+            let state: ArrayBuffer;
             try {
                 state = await emulator.save_state();
             } finally {
                 this.disk.get_state = diskState;
-                if (net) net.mac = mac;
+                if (net && mac) net.mac = mac;
             }
             const dirty = [...this.dirty];
             this.dirty.clear();

@@ -3,8 +3,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';
 import { createRequire } from 'node:module';
-import { GuestHost } from '../web/src/guest-host.js';
-import { MACHINE, patchNetworkCard } from '../web/src/machine.js';
+import { GuestHost } from '../web/src/guest-host.ts';
+import { MACHINE, patchNetworkCard } from '../web/src/machine.ts';
 
 const require = createRequire(new URL('../web/package.json', import.meta.url));
 const { V86 } = require('v86');
