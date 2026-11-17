@@ -11,10 +11,12 @@
  * browser's own cursor, so it moves at native speed and Windows no longer draws
  * it. Colour pointers and shapes the page declines stay drawn by Windows.
  */
+#include <ntdef.h>
+
+/* These headers depend on the Windows types above. */
 #include <devioctl.h>
 #include <miniport.h>
 #include <ntddvdeo.h>
-#include <ntdef.h>
 #include <video.h>
 #include <winerror.h>
 

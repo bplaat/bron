@@ -5,9 +5,11 @@
  * software is already installed by winxp-image/software.mjs.
  */
 #define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+
+/* These headers depend on the Windows types above. */
 #include <lm.h>
 #include <setupapi.h>
-#include <windows.h>
 
 #define USER_NAME L"bplaat"
 #define USER_FULL_NAME L"Bastiaan"
@@ -228,19 +230,25 @@ static void install_network(void) {
     update_driver(L"PCI\\VEN_10EC&DEV_8029", inf);
 }
 
-/* Mouse: system start filter above mouclass, also the host channel for the agent */
-static void install_mouse(void) {
-    WCHAR target[MAX_PATH];
-    copy_to_system(L"v86mou.sys", L"\\drivers", target);
+/* System start drivers: the host channel loads independently of the mouse filter */
+static void install_kernel_driver(const WCHAR* name, const WCHAR* display, const WCHAR* group) {
+    WCHAR file[MAX_PATH], target[MAX_PATH];
+    wsprintfW(file, L"%s.sys", name);
+    copy_to_system(file, L"\\drivers", target);
     SC_HANDLE scm = OpenSCManagerW(NULL, NULL, SC_MANAGER_CREATE_SERVICE);
     if (scm) {
-        SC_HANDLE service = CreateServiceW(scm, L"v86mou", L"v86 Mouse and Host Channel", SERVICE_ALL_ACCESS,
-                                           SERVICE_KERNEL_DRIVER, SERVICE_SYSTEM_START, SERVICE_ERROR_NORMAL,
-                                           L"system32\\drivers\\v86mou.sys", L"Pointer Class", NULL, NULL, NULL, NULL);
+        SC_HANDLE service =
+            CreateServiceW(scm, name, display, SERVICE_ALL_ACCESS, SERVICE_KERNEL_DRIVER, SERVICE_SYSTEM_START,
+                           SERVICE_ERROR_NORMAL, target, group, NULL, NULL, NULL, NULL);
         if (service)
             CloseServiceHandle(service);
         CloseServiceHandle(scm);
     }
+}
+
+/* Mouse: system start filter above mouclass */
+static void install_mouse(void) {
+    install_kernel_driver(L"v86mou", L"v86 Mouse", L"Pointer Class");
     static const WCHAR filters[] = L"mouclass\0v86mou\0";
     set_value(HKEY_LOCAL_MACHINE, CCS L"Control\\Class\\{4D36E96F-E325-11CE-BFC1-08002BE10318}", L"UpperFilters",
               REG_MULTI_SZ, filters, sizeof(filters));
@@ -403,6 +411,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE prev, LPWSTR cmd, int show) {
     enable_privilege(SE_RESTORE_NAME);
     enable_privilege(SE_SHUTDOWN_NAME);
 
+    install_kernel_driver(L"v86tools", L"v86 Host Channel", NULL);
     install_mouse();
     install_agent();
     install_display();

@@ -10,9 +10,9 @@ KLDFLAGS := -nostdlib -shared -Wl,--subsystem,native:5.01 -Wl,--image-base,0x100
             -Wl,--exclude-all-symbols
 ULDFLAGS := -municode -mwindows -Wl,--no-insert-timestamp
 
-all: v86mou.sys v86vid.sys v86agent.exe v86setup.exe activate/confid.exe user.bmp
+all: v86mou.sys v86tools.sys v86vid.sys v86agent.exe v86setup.exe activate/confid.exe user.bmp
 
-v86mou.sys: v86mou.c v86.h
+v86mou.sys v86tools.sys: %.sys: %.c v86.h
 	$(CC) $(KCFLAGS) $(KLDFLAGS) -o $@ $< -lntoskrnl -lhal
 
 v86vid.sys: v86vid.c v86.h
@@ -32,6 +32,6 @@ user.bmp: ../../web/public/images/avatar-48x48.png
 	convert $< -type TrueColor BMP3:$@
 
 clean:
-	rm -f v86mou.sys v86vid.sys v86agent.exe v86setup.exe activate/confid.exe user.bmp
+	rm -f v86mou.sys v86tools.sys v86vid.sys v86agent.exe v86setup.exe activate/confid.exe user.bmp
 
 .PHONY: all clean

@@ -62,7 +62,7 @@
 
 #define V86_BUFFER_SIZE (256 * 1024)
 
-/* Control device exposed by v86mou.sys for the user mode agent */
+/* Control device exposed by v86tools.sys for the user mode agent */
 #define V86_DEVICE_NAME L"\\Device\\V86Tools"
 #define V86_DOS_NAME L"\\DosDevices\\V86Tools"
 #define V86_USER_PATH "\\\\.\\V86Tools"

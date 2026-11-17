@@ -6,11 +6,13 @@
  * browser tab instead (the http and https handler).
  */
 #define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+
+/* These headers depend on the Windows types above. */
 #include <commctrl.h>
 #include <iphlpapi.h>
 #include <shlobj.h>
 #include <string.h>
-#include <windows.h>
 #include <winioctl.h>
 
 #include "v86.h"

@@ -163,8 +163,8 @@ if (mode === 'software') {
     copy(out('msgothic.ttc'), '/WINDOWS/Fonts/msgothic.ttc'); // registered and linked by v86setup
     tryMtools('mdeltree', `::${V86}`);
     tryMtools('mmd', `::${V86}`);
-    copyGuest('v86mou.sys', 'v86vid.sys', 'v86vid.inf', 'v86agent.exe', 'v86setup.exe', 'user.bmp', 'activate.vbs',
-        'library.vbs');
+    copyGuest('v86mou.sys', 'v86tools.sys', 'v86vid.sys', 'v86vid.inf', 'v86agent.exe', 'v86setup.exe', 'user.bmp',
+        'activate.vbs', 'library.vbs');
     tryMtools('mmd', `::${V86}/activate`);
     copyGuest('activate/confid.exe');
 

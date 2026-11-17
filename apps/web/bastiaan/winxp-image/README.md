@@ -116,8 +116,10 @@ narration are included.
 
 ## Guest integration (`guest/`)
 
-- `v86mou.sys`: mouse filter above mouclass for absolute input through the VMware backdoor. Exposes the
-  `\\.\V86Tools` channel to the guest agent.
+- `v86mou.sys`: mouse filter above mouclass for absolute and pointer-locked relative input through the VMware
+  backdoor, including buttons and scrolling.
+- `v86tools.sys`: independent host channel exposing `\\.\V86Tools` to the guest agent for display size, clock
+  and message transfers.
 - `v86vid.sys` and `v86vid.inf`: Bochs VBE video miniport using `framebuf.dll`. Supports 8-bit palette, 16-bit and
   32-bit DirectDraw modes, plus a mode matching the browser size. Monochrome pointers up to 32x32 use the browser
   cursor; Windows draws colour pointers and pointers that invert the screen.
