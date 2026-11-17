@@ -23,8 +23,18 @@ use crate::{
 };
 
 const TEXT_FORMATS: usize = 16;
+const TEXT_LAYOUTS: usize = 128;
 
 type TextFormatKey = (Arc<str>, u32, FontWeight);
+type TextLayoutKey = (Box<str>, TextFormatKey);
+
+// A laid out text with its metrics, and the metrics of its line when it has only one.
+#[derive(Clone)]
+struct TextLayout {
+    layout: ComPtr<IDWriteTextLayout>,
+    metrics: DWRITE_TEXT_METRICS,
+    line: Option<DWRITE_LINE_METRICS>,
+}
 
 /// Device-independent objects shared by every frame of one canvas.
 pub(super) struct Resources {
@@ -33,6 +43,8 @@ pub(super) struct Resources {
     // Indexed by cap * 3 + join, in the order of stroke_style.
     strokes: [ComPtr<ID2D1StrokeStyle>; 9],
     formats: RefCell<Vec<(TextFormatKey, ComPtr<IDWriteTextFormat>)>>,
+    // Least recently used first, so text drawn every frame is laid out once.
+    layouts: RefCell<Vec<(TextLayoutKey, TextLayout)>>,
     text: RefCell<Vec<u16>>,
 }
 
@@ -72,6 +84,7 @@ impl Resources {
             write: unsafe { IDWriteFactory::new() }.expect("DirectWrite factory"),
             strokes,
             formats: RefCell::new(Vec::new()),
+            layouts: RefCell::new(Vec::new()),
             text: RefCell::new(Vec::new()),
         })
     }
@@ -121,6 +134,7 @@ enum Clip {
 // A bitmap that drawing goes into before it becomes a mask or is composited.
 struct Offscreen {
     outer: ComPtr<ID2D1RenderTarget>,
+    outer_context: ComPtr<ID2D1DeviceContext>,
     outer_brush: ComPtr<ID2D1SolidColorBrush>,
     outer_clips: Vec<Clip>,
     native: ComPtr<ID2D1BitmapRenderTarget>,
@@ -139,11 +153,15 @@ enum Layer {
 
 pub(crate) struct Context {
     target: ComPtr<ID2D1RenderTarget>,
+    // The Direct2D 1.1 interface of the target, which the backend requires.
+    context: ComPtr<ID2D1DeviceContext>,
     // The id of the draw target, whose compatible offscreen targets share its resources.
     target_id: u64,
     brush: ComPtr<ID2D1SolidColorBrush>,
     resources: Rc<Resources>,
     path: Path,
+    // A path of only one ellipse: its command count, ellipse and transform.
+    lone_ellipse: Option<(usize, D2D1_ELLIPSE, Transform)>,
     transform: Transform,
     stack: Vec<(Transform, usize)>,
     clips: Vec<Clip>,
@@ -159,26 +177,19 @@ impl Context {
         let native = target.native.upcast();
         unsafe { native.SetTransform(&D2D_MATRIX_3X2_F::identity()) };
         Self {
+            context: device_context(&native),
             target: native,
             target_id: target.id,
             brush: target.brush.clone(),
             resources,
             path: Path::default(),
+            lone_ellipse: None,
             transform: Transform::IDENTITY,
             stack: Vec::new(),
             clips: Vec::new(),
             offscreens: Vec::new(),
             layers: Vec::new(),
         }
-    }
-
-    // The Direct2D 1.1 interface of the target, which the backend requires.
-    fn device_context(&self) -> ComPtr<ID2D1DeviceContext> {
-        unsafe {
-            self.target
-                .query::<ID2D1DeviceContext>(&IID_ID2D1_DEVICE_CONTEXT)
-        }
-        .expect("Direct2D 1.1 device context")
     }
 
     pub(crate) fn save(&mut self) {
@@ -286,10 +297,12 @@ impl Context {
             native.Clear(&D2D1_COLOR_F::default());
         }
         let outer = std::mem::replace(&mut self.target, native.upcast());
+        let outer_context = std::mem::replace(&mut self.context, device_context(&self.target));
         let outer_brush = std::mem::replace(&mut self.brush, brush);
         let outer_clips = std::mem::take(&mut self.clips);
         self.offscreens.push(Offscreen {
             outer,
+            outer_context,
             outer_brush,
             outer_clips,
             native,
@@ -309,6 +322,7 @@ impl Context {
             offscreen.native.GetBitmap()
         };
         self.target = offscreen.outer.clone();
+        self.context = offscreen.outer_context.clone();
         self.brush = offscreen.outer_brush.clone();
         let mut offscreen = offscreen;
         self.clips = std::mem::take(&mut offscreen.outer_clips);
@@ -327,7 +341,7 @@ impl Context {
     // Composites a bitmap of the whole target onto it, through Direct2D 1.1 effects.
     fn composite(&self, bitmap: &ComPtr<ID2D1Bitmap>, alpha: f32, operation: CompositeOperation) {
         unsafe { self.target.SetTransform(&D2D_MATRIX_3X2_F::identity()) };
-        let context = self.device_context();
+        let context = &self.context;
         let mut image: *mut c_void = bitmap.as_ptr().cast();
         let opacity = (alpha < 1.0)
             .then(|| unsafe { context.CreateEffect(&CLSID_D2D1_OPACITY) }.ok())
@@ -427,14 +441,16 @@ impl Context {
             _ => None,
         };
         if let Some(blend) = blend {
-            let context =
-                (blend != D2D1_PRIMITIVE_BLEND_SOURCE_OVER).then(|| self.device_context());
-            if let Some(context) = &context {
-                unsafe { context.SetPrimitiveBlend(blend) };
+            let blended = blend != D2D1_PRIMITIVE_BLEND_SOURCE_OVER;
+            if blended {
+                unsafe { self.context.SetPrimitiveBlend(blend) };
             }
             draw(self, state);
-            if let Some(context) = &context {
-                unsafe { context.SetPrimitiveBlend(D2D1_PRIMITIVE_BLEND_SOURCE_OVER) };
+            if blended {
+                unsafe {
+                    self.context
+                        .SetPrimitiveBlend(D2D1_PRIMITIVE_BLEND_SOURCE_OVER)
+                };
             }
             return;
         }
@@ -474,13 +490,13 @@ impl Context {
             let bitmap = bitmap.expect("Direct2D composite bitmap");
             let brush = unsafe { self.target.CreateBitmapBrush(bitmap.as_ptr()) }
                 .expect("Direct2D composite brush");
-            let context = self.device_context();
             unsafe {
                 self.target.SetTransform(&D2D_MATRIX_3X2_F::identity());
-                context.SetPrimitiveBlend(D2D1_PRIMITIVE_BLEND_COPY);
+                self.context.SetPrimitiveBlend(D2D1_PRIMITIVE_BLEND_COPY);
                 self.target
                     .FillGeometry(bounds.as_ptr(), brush.as_ptr(), null_mut());
-                context.SetPrimitiveBlend(D2D1_PRIMITIVE_BLEND_SOURCE_OVER);
+                self.context
+                    .SetPrimitiveBlend(D2D1_PRIMITIVE_BLEND_SOURCE_OVER);
             }
             self.transform = offscreen.transform;
             self.apply_transform();
@@ -522,12 +538,12 @@ impl Context {
         // rects instead copy a transparent fill through the Direct2D 1.1 interface.
         let [a, b, c, d, _, _] = self.transform.0;
         if !((b == 0.0 && c == 0.0) || (a == 0.0 && d == 0.0)) {
-            let context = self.device_context();
             let brush = self.color_brush(Color::rgba(0, 0, 0, 0), 1.0);
             unsafe {
-                context.SetPrimitiveBlend(D2D1_PRIMITIVE_BLEND_COPY);
+                self.context.SetPrimitiveBlend(D2D1_PRIMITIVE_BLEND_COPY);
                 self.target.FillRectangle(&rect, brush.as_ptr());
-                context.SetPrimitiveBlend(D2D1_PRIMITIVE_BLEND_SOURCE_OVER);
+                self.context
+                    .SetPrimitiveBlend(D2D1_PRIMITIVE_BLEND_SOURCE_OVER);
             }
             return;
         }
@@ -579,6 +595,7 @@ impl Context {
         let mut commands = std::mem::take(&mut self.path.commands);
         commands.clear();
         self.path = Path::default();
+        self.lone_ellipse = None;
         self.path.commands = commands;
     }
     pub(crate) fn close_path(&mut self) {
@@ -594,7 +611,19 @@ impl Context {
         self.path.rect(self.transform, x, y, w, h);
     }
     pub(crate) fn ellipse(&mut self, x: f32, y: f32, rx: f32, ry: f32) {
+        let empty = self.path.commands.is_empty();
         self.path.ellipse(self.transform, [x, y], [rx, ry]);
+        // Later commands make the path longer, so the count tells it is still alone.
+        let count = self.path.commands.len();
+        self.lone_ellipse = (empty && count > 0).then_some((
+            count,
+            D2D1_ELLIPSE {
+                point: D2D_POINT_2F { x, y },
+                radiusX: rx,
+                radiusY: ry,
+            },
+            self.transform,
+        ));
     }
     pub(crate) fn arc(&mut self, x: f32, y: f32, r: f32, start: f32, end: f32, ccw: bool) {
         self.path
@@ -670,6 +699,20 @@ impl Context {
     }
 
     pub(crate) fn fill(&mut self, state: &CanvasState, rule: FillRule) {
+        // A lone ellipse in a solid color fills without building a path, like particles.
+        if let Some((count, ellipse, transform)) = self.lone_ellipse
+            && count == self.path.commands.len()
+            && state.composite == CompositeOperation::SourceOver
+            && let CanvasStyle::Color(color) = &state.fill
+        {
+            let brush = self.color_brush(*color, state.alpha);
+            unsafe {
+                self.target.SetTransform(&matrix(transform));
+                self.target.FillEllipse(&ellipse, brush.as_ptr());
+            }
+            self.apply_transform();
+            return;
+        }
         // Paths are in device space, so the brush maps from the current transform.
         let geometry = self.geometry(Transform::IDENTITY, rule);
         self.draw_with(
@@ -731,7 +774,7 @@ impl Context {
                     return;
                 };
                 unsafe {
-                    this.device_context().DrawBitmap(
+                    this.context.DrawBitmap(
                         bitmap.as_ptr(),
                         &rect,
                         state.alpha,
@@ -849,14 +892,14 @@ impl Context {
     }
 
     pub(crate) fn fill_text(&mut self, s: &CanvasState, text: &str, x: f32, y: f32) {
-        let Some((layout, metrics)) = self.prepare_text(s, text) else {
+        let Some(TextLayout {
+            layout,
+            metrics,
+            line: Some(line),
+        }) = self.prepare_text(s, text)
+        else {
             return;
         };
-        let mut line = DWRITE_LINE_METRICS::default();
-        let mut count = 0;
-        if unsafe { layout.GetLineMetrics(&mut line, 1, &mut count) }.is_err() {
-            return;
-        }
         let width = metrics.widthIncludingTrailingWhitespace;
         let origin = D2D_POINT_2F {
             x: x - match s.text_align {
@@ -889,14 +932,25 @@ impl Context {
     }
     pub(crate) fn measure_text(&mut self, s: &CanvasState, text: &str) -> f32 {
         self.prepare_text(s, text)
-            .map_or(0.0, |(_, metrics)| metrics.widthIncludingTrailingWhitespace)
+            .map_or(0.0, |text| text.metrics.widthIncludingTrailingWhitespace)
     }
 
-    fn prepare_text(
-        &self,
-        s: &CanvasState,
-        text: &str,
-    ) -> Option<(ComPtr<IDWriteTextLayout>, DWRITE_TEXT_METRICS)> {
+    fn prepare_text(&self, s: &CanvasState, text: &str) -> Option<TextLayout> {
+        let size = s.font_size.to_bits();
+        let mut layouts = self.resources.layouts.borrow_mut();
+        if let Some(index) = layouts
+            .iter()
+            .position(|((cached, (family, key_size, weight)), _)| {
+                **cached == *text
+                    && *family == s.font_family
+                    && *key_size == size
+                    && *weight == s.font_weight
+            })
+        {
+            // Move the hit to the back, the most recently used end.
+            layouts[index..].rotate_left(1);
+            return layouts.last().map(|(_, layout)| layout.clone());
+        }
         let format = self.format(s);
         let mut wide = self.resources.text.borrow_mut();
         wide.clear();
@@ -906,7 +960,7 @@ impl Context {
             0x09..=0x0d | 0x85 | 0x2028 | 0x2029 => 0x20,
             unit => unit,
         }));
-        unsafe {
+        let layout = unsafe {
             let layout = self
                 .resources
                 .write
@@ -920,8 +974,24 @@ impl Context {
                 .ok()?;
             let mut metrics = DWRITE_TEXT_METRICS::default();
             layout.GetMetrics(&mut metrics).ok()?;
-            Some((layout, metrics))
+            let mut line = DWRITE_LINE_METRICS::default();
+            let mut count = 0;
+            let line = layout
+                .GetLineMetrics(&mut line, 1, &mut count)
+                .is_ok()
+                .then_some(line);
+            TextLayout {
+                layout,
+                metrics,
+                line,
+            }
+        };
+        if layouts.len() == TEXT_LAYOUTS {
+            layouts.remove(0);
         }
+        let key = (s.font_family.clone(), size, s.font_weight);
+        layouts.push(((text.into(), key), layout.clone()));
+        Some(layout)
     }
     fn color_brush(&self, color: Color, alpha: f32) -> ComPtr<ID2D1Brush> {
         unsafe { self.brush.SetColor(&color_f(color, alpha)) };
@@ -1117,6 +1187,12 @@ impl ImageCache {
         *cache = Some((target_id, bitmap.clone()));
         Some(bitmap)
     }
+}
+
+// The Direct2D 1.1 interface of a render target, which the backend requires.
+fn device_context(target: &ComPtr<ID2D1RenderTarget>) -> ComPtr<ID2D1DeviceContext> {
+    unsafe { target.query::<ID2D1DeviceContext>(&IID_ID2D1_DEVICE_CONTEXT) }
+        .expect("Direct2D 1.1 device context")
 }
 
 const fn matrix(Transform([a, b, c, d, e, f]): Transform) -> D2D_MATRIX_3X2_F {

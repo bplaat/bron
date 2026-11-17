@@ -12,7 +12,7 @@ use crate::{CanvasState, FillRule};
 
 /// A drawing context of the backend that the process draws with.
 pub(crate) enum PlatformCanvasContext {
-    Direct2D(direct2d::Context),
+    Direct2D(Box<direct2d::Context>),
     #[cfg(any(target_vendor = "winxp", target_vendor = "win7", test))]
     Gdi(Box<gdi::Context>),
 }

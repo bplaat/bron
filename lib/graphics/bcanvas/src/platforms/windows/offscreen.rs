@@ -49,7 +49,9 @@ impl PlatformOffscreenCanvas {
 
     pub(crate) fn begin_draw(&mut self, scale: f32) -> PlatformCanvasContext {
         match &mut self.target {
-            Target::Direct2D(target) => PlatformCanvasContext::Direct2D(target.begin(scale)),
+            Target::Direct2D(target) => {
+                PlatformCanvasContext::Direct2D(Box::new(target.begin(scale)))
+            }
             #[cfg(any(target_vendor = "winxp", target_vendor = "win7", test))]
             Target::Gdi(target) => PlatformCanvasContext::Gdi(Box::new(target.begin(scale))),
         }

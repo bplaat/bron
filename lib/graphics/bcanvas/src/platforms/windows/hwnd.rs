@@ -90,7 +90,7 @@ impl WindowTarget {
         match self {
             Self::Direct2D(target) => target
                 .begin(hwnd, width, height, scale)
-                .map(PlatformCanvasContext::Direct2D),
+                .map(|context| PlatformCanvasContext::Direct2D(Box::new(context))),
             #[cfg(any(target_vendor = "winxp", target_vendor = "win7", test))]
             Self::Gdi(target) => target
                 .begin(hwnd, width, height, scale)

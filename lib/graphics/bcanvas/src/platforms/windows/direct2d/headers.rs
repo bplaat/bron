@@ -179,7 +179,9 @@ struct ID2D1RenderTargetVtbl {
     ),
     FillRectangle:
         unsafe extern "system" fn(*mut ID2D1RenderTarget, *const D2D_RECT_F, *mut ID2D1Brush),
-    _unused_18_21: [*const c_void; 4],
+    _unused_18_20: [*const c_void; 3],
+    FillEllipse:
+        unsafe extern "system" fn(*mut ID2D1RenderTarget, *const D2D1_ELLIPSE, *mut ID2D1Brush),
     DrawGeometry: unsafe extern "system" fn(
         *mut ID2D1RenderTarget,
         *mut ID2D1PathGeometry,
@@ -281,6 +283,9 @@ impl ID2D1RenderTarget {
     }
     pub(super) unsafe fn FillRectangle(&self, rect: *const D2D_RECT_F, brush: *mut ID2D1Brush) {
         unsafe { ((*self.lpVtbl).FillRectangle)(self as *const Self as *mut Self, rect, brush) }
+    }
+    pub(super) unsafe fn FillEllipse(&self, ellipse: *const D2D1_ELLIPSE, brush: *mut ID2D1Brush) {
+        unsafe { ((*self.lpVtbl).FillEllipse)(self as *const Self as *mut Self, ellipse, brush) }
     }
     pub(super) unsafe fn DrawGeometry(
         &self,
@@ -1169,6 +1174,14 @@ pub(super) struct D2D_POINT_2F {
 
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
+pub(super) struct D2D1_ELLIPSE {
+    pub(super) point: D2D_POINT_2F,
+    pub(super) radiusX: f32,
+    pub(super) radiusY: f32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
 pub(super) struct D2D_MATRIX_3X2_F {
     pub(super) m11: f32,
     pub(super) m12: f32,
@@ -1425,6 +1438,7 @@ const _: () = {
     assert!(std::mem::offset_of!(ID2D1PathGeometryVtbl, Widen) == 16 * slot);
     assert!(std::mem::offset_of!(ID2D1RenderTargetVtbl, DrawRectangle) == 16 * slot);
     assert!(std::mem::offset_of!(ID2D1RenderTargetVtbl, FillRectangle) == 17 * slot);
+    assert!(std::mem::offset_of!(ID2D1RenderTargetVtbl, FillEllipse) == 21 * slot);
     assert!(std::mem::offset_of!(ID2D1RenderTargetVtbl, DrawGeometry) == 22 * slot);
     assert!(std::mem::offset_of!(ID2D1RenderTargetVtbl, FillGeometry) == 23 * slot);
     assert!(std::mem::offset_of!(ID2D1RenderTargetVtbl, DrawTextLayout) == 28 * slot);
