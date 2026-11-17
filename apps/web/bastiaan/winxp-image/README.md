@@ -82,7 +82,7 @@ Generated: `winxp-image/out/` (install images, screenshots), the built `.exe`/`.
 
 Add a folder to `software/`:
 
-- `Makefile` (optional): runs first in the `winxp-tools` Docker image (MinGW, cabextract, innoextract, Python), generated
+- `Makefile` (optional): runs first in the `winxp-tools` Docker image (MinGW, cabextract, innoextract, Node.js), generated
   `root/` contents are copied onto C: without replacing existing files
 - `install.cmd`: runs once, as Administrator, in the folder copied to `C:\WINDOWS\v86\software\<name>`, for silent
   installers, `regedit /s` imports and shortcuts
@@ -104,12 +104,12 @@ Hexadecimal Editor 7.0 and Task Manager DeLuxe 3.6.0 onward. The listed versions
 - [HEXEdit.zip 6.3.0](https://web.archive.org/web/20170320033643id_/http://www.mitec.cz/Downloads/HEXEdit.zip)
 - [TMX.zip 3.5.0](https://web.archive.org/web/20200622081830id_/http://www.mitec.cz/Downloads/TMX.zip)
 
-### Old Microsoft game setups (`ebu.py`)
+### Old Microsoft game setups (`ebu.mjs`)
 
 Silent installers run through `install.cmd`. Other installers are extracted on the host into `root/`: 7-Zip with
-7z, Civilization III with innoextract and Age of Empires with `ebu.py` and cabextract.
+7z, Civilization III with innoextract and Age of Empires with `ebu.mjs` and cabextract.
 
-`ebu.py` reads the Age of Empires setup file table as NUL-terminated CD path and destination pairs. It resolves
+`ebu.mjs` reads the Age of Empires setup file table as NUL-terminated CD path and destination pairs. It resolves
 `%APPPATH\%STRINGn` names from the setup DLL's string table and copies `SYSTEM` files to Windows. Registry values
 in `install.reg` come from the setup scripts and a reference install. Full game data, music, videos and campaign
 narration are included.
