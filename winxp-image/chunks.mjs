@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { parentPort, workerData } from 'node:worker_threads';
 import zlib from 'node:zlib';
-import { DISK_CHUNK_SIZE } from '../src/machine.js';
+import { DISK_CHUNK_SIZE } from '../web/src/machine.js';
 
 const { image, outDir, size, index, count } = workerData;
 const fd = fs.openSync(image, 'r');

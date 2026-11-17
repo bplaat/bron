@@ -1,5 +1,5 @@
 #!/bin/sh
-# Builds the Windows XP disk and desktop snapshot into public/winxp, see winxp-image/README.md
+# Builds the Windows XP disk and desktop snapshot into web/public/winxp, see winxp-image/README.md
 # Usage: winxp-image/build.sh           build what is missing
 #        winxp-image/build.sh software  reinstall the software on the kept base install, e.g. after adding some
 #        winxp-image/build.sh setup     redo the v86 setup on the kept software install
@@ -53,5 +53,5 @@ if [ ! -f out/disk.img ]; then
 fi
 
 # 4. Streamed disk chunks, the desktop snapshot and the boot screen for the site
-node make-state.mjs out/disk.img ../public/winxp
-node bootscreen.mjs out/disk.img ../public/winxp
+node make-state.mjs out/disk.img ../web/public/winxp
+node bootscreen.mjs out/disk.img ../web/public/winxp

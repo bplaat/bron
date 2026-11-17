@@ -29,21 +29,22 @@ My personal website inside a Windows XP desktop running in your browser with [v8
 ## Development
 
 ```sh
-npm run server  # the Rust server in server/ on http://localhost:8080, Vite proxies its LAN relay
-npm run dev
+cargo run --release  # http://localhost:8080; Vite proxies the LAN relay
+npm --prefix web install
+npm --prefix web run dev
 ```
 
 ## Self hosting
 
-The `Dockerfile` builds the site (`npm run build` into `dist/`, which needs the built disk in `public/winxp`) and the
-server in `server/`: one static musl binary on Tokio and axum that serves `dist/` and the LAN relay on `/relay`, in an
+The `Dockerfile` builds the site (`npm run build` into `web/dist/`, which needs the built disk in `web/public/winxp`) and the
+server in `src/`: one static musl binary on Tokio and axum that serves `dist/` and the LAN relay on `/relay`, in an
 image with nothing else.
 
 ```sh
 docker build -t bastiaan .
 ```
 
-Environment: `PORT` (8080), `DIST_PATH` (`dist`), `ORIGIN`, the site's origin so other pages cannot use the relay,
+Environment: `PORT` (8080), `DIST_PATH` (`web/dist`), `ORIGIN`, the site's origin so other pages cannot use the relay,
 and `TRUST_PROXY=true` behind a reverse proxy: the relay then counts visitors by the last `X-Forwarded-For` entry.
 Build with `VITE_RELAY_URL` to use another relay address, an empty value builds without network.
 

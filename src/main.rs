@@ -1,5 +1,5 @@
-//! Serves the website: the static files Vite builds into dist/ and the LAN relay between the visitors' Windows XP
-//! desktops on /relay. Environment: PORT (8080), DIST_PATH (dist), ORIGIN and TRUST_PROXY, see relay.rs.
+//! Serves the website: the static files Vite builds into web/dist/ and the LAN relay between the visitors' Windows XP
+//! desktops on /relay. Environment: PORT (8080), DIST_PATH (web/dist), ORIGIN and TRUST_PROXY, see relay.rs.
 
 use std::net::{Ipv4Addr, SocketAddr};
 use std::{env, io};
@@ -17,7 +17,7 @@ mod relay;
 #[tokio::main]
 async fn main() -> io::Result<()> {
     let port = env::var("PORT").ok().and_then(|port| port.parse().ok()).unwrap_or(8080);
-    let dist = env::var("DIST_PATH").unwrap_or_else(|_| "dist".to_string());
+    let dist = env::var("DIST_PATH").unwrap_or_else(|_| "web/dist".to_string());
 
     // Vite's hashed assets never change, everything else is checked with its Last-Modified date on every load.
     // Compression is the reverse proxy's job (see README.md), the disk chunks and snapshot are zstd already.

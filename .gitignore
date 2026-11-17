@@ -1,5 +1,6 @@
-dist/
-node_modules/
+target/
+web/dist/
+web/node_modules/
 .DS_Store
 # Built by winxp-image/build.sh
-public/winxp/
+web/public/winxp/

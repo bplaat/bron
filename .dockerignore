@@ -1,11 +1,11 @@
 # Only what the Dockerfile builds from
 *
-!package.json
-!package-lock.json
-!index.html
-!vite.config.js
+!Cargo.toml
+!Cargo.lock
+!rust-toolchain.toml
+!rustfmt.toml
 !src
-!public
-!server
-server/target
+!web
+web/node_modules
+web/dist
 **/.DS_Store

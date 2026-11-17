@@ -1,14 +1,14 @@
 # syntax=docker/dockerfile:1
-# The website and its LAN relay in one static binary. Needs public/winxp, see winxp-image/README.md.
+# The website and its LAN relay in one static binary. Needs web/public/winxp, see winxp-image/README.md.
 
 # Static site
 FROM node:26-alpine AS site
 WORKDIR /src
-COPY package.json package-lock.json ./
+COPY web/package.json web/package-lock.json ./
 RUN --mount=type=cache,target=/root/.npm npm ci
-COPY index.html vite.config.js ./
-COPY src src
-COPY public public
+COPY web/index.html web/vite.config.js ./
+COPY web/src src
+COPY web/public public
 RUN npm run build
 
 # Server, statically linked against musl
@@ -16,7 +16,8 @@ FROM rust:1.100-alpine AS server
 # hadolint ignore=DL3018
 RUN apk add --no-cache musl-dev
 WORKDIR /src
-COPY server .
+COPY Cargo.toml Cargo.lock rust-toolchain.toml rustfmt.toml ./
+COPY src src
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/src/target \
     cargo build --release --locked && cp target/release/bastiaan /bastiaan

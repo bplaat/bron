@@ -1,18 +1,18 @@
 # Offline Windows XP build
 
 Builds the Windows XP disk and desktop snapshot the site runs, from the Windows XP Professional SP3 CD, into
-`public/winxp`. Everything is automatic: a fresh unattended install, the v86 drivers, all settings, offline
+`web/public/winxp`. Everything is automatic: a fresh unattended install, the v86 drivers, all settings, offline
 activation, the software and a desktop snapshot that restores instantly.
 
 ## Commands
 
 ```sh
-npm install                  # v86, used to run the guest headless
+npm --prefix web install                  # v86, used to run the guest headless
 winxp-image/build.sh             # build what is missing in winxp-image/out
 winxp-image/build.sh software    # reinstall the software on the kept base install, e.g. after adding some
 winxp-image/build.sh setup       # redo the v86 setup on the kept software install
 winxp-image/build.sh install     # start over with a fresh Windows install
-npm run dev                  # try the result
+npm --prefix web run dev                  # try the result
 ```
 
 Needs macOS with Docker, Node.js, QEMU and mtools (`brew install qemu mtools`). Everything runs headless, no
@@ -39,7 +39,7 @@ These must exist before building, they are ignored by git:
 | `winxp-image/software/internet-explorer-8/IE8-WindowsXP-x86-ENU.exe` | Microsoft's Internet Explorer 8 for XP, [from the Internet Archive](https://archive.org/details/IE8-WindowsXP-x86-ENU) (SHA-1 `e489483e5001f95da04e1ebf3c664173baef3e26`, Authenticode signed by Microsoft) |
 
 Generated: `winxp-image/out/` (install images, screenshots), the built `.exe`/`.sys` files, `software/*/root/` and
-`public/winxp/`.
+`web/public/winxp/`.
 
 ## Steps
 
@@ -136,5 +136,5 @@ campaign narration are on disk.
 - `v86setup.exe`: the one shot setup above, `activate.vbs` + `activate/confid.exe` (from
   [UMSKT](https://github.com/UMSKT/UMSKT)) activate Windows, `library.vbs` fills the Media Player library
 
-The host side is `src/guest-host.js` (protocol in `guest/v86.h`), the machine config shared with the site is
-`src/machine.js`.
+The host side is `web/src/guest-host.js` (protocol in `guest/v86.h`), the machine config shared with the site is
+`web/src/machine.js`.
