@@ -775,10 +775,14 @@ fn main() {
     let event_loop = EventLoopBuilder::new()
         .app_id("nl", "bplaat", "Bastiaan")
         .build();
-    let monitor = event_loop.primary_monitor().size();
+    let monitor = event_loop.primary_monitor();
+    let (size, safe_area) = (monitor.size(), monitor.safe_area());
     let mut window = WindowBuilder::new()
         .title("Bastiaan van der Plaat")
-        .size(LogicalSize::new(monitor.width * 0.9, monitor.height * 0.9))
+        .size(LogicalSize::new(
+            (size.width - safe_area.left - safe_area.right) * 0.9,
+            (size.height - safe_area.top - safe_area.bottom) * 0.9,
+        ))
         .min_size(LogicalSize::new(400.0, 300.0))
         .background_color(Palette::for_theme(event_loop.theme()).background)
         .center()
