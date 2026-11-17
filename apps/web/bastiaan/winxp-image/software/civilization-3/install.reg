@@ -1,0 +1,31 @@
+REGEDIT4
+
+; What the Civilization III Complete (GOG) setup writes, from a real install
+
+[HKEY_LOCAL_MACHINE\SOFTWARE\Infogrames Interactive\Civilization III]
+"CD_Path"="C:\\Program Files\\Civilization III\\"
+"Install_Path"="C:\\Program Files\\Civilization III\\"
+
+[HKEY_LOCAL_MACHINE\SOFTWARE\Infogrames\Civ3PTW]
+"CD_Path"="C:\\Program Files\\Civilization III\\"
+"Gold_version"=dword:00000001
+"Install_Path"="C:\\Program Files\\Civilization III\\Civ3PTW"
+
+[HKEY_LOCAL_MACHINE\SOFTWARE\Infogrames\Conquests]
+"Complete_version"=dword:00000001
+"Install_Path"="C:\\Program Files\\Civilization III\\Conquests"
+
+[HKEY_LOCAL_MACHINE\SOFTWARE\GOG.com\Games\1471405734]
+"BUILD"="7"
+"EXE"="C:\\Program Files\\Civilization III\\Civ3Launcher.exe"
+"EXEFILE"="Civ3Launcher.exe"
+"GAMENAME"="Sid Meier's Civilization III Complete"
+"GOGGAMEDLL"="goggame-1471405734.dll"
+"GUID"="{51391754-1b3f-4e76-907f-28933b073c63}"
+"LANGUAGE"="english"
+"LAUNCHCOMMAND"="C:\\Program Files\\Civilization III\\Civ3Launcher.exe "
+"PATH"="C:\\Program Files\\Civilization III"
+"SAVEGAMEFOLDER"="C:\\Program Files\\Civilization III\\"
+"VER"="2.0.0.7"
+"WORKINGDIR"="C:\\Program Files\\Civilization III\\"
+"gameID"="1471405734"

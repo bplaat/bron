@@ -1,0 +1,203 @@
+:root {
+    --desktop: #000; /* around the screen, like a monitor: fullscreen games can use smaller modes */
+    --balloon-background: #ffffe1;
+    --balloon-border: #000;
+    --balloon-text: #000;
+}
+
+html,
+body {
+    height: 100%;
+}
+
+/* The website without JavaScript is in site.css, with JavaScript the page is the machine */
+.vm body {
+    margin: 0;
+    overflow: hidden;
+    background-color: var(--desktop);
+    font-family: Tahoma, Verdana, 'Segoe UI', sans-serif;
+    -webkit-user-select: none;
+    user-select: none;
+}
+
+/* The emulated screen, centred and scaled down when the window is smaller than the guest */
+#screen {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    line-height: 0;
+    transform: translate(-50%, -50%) scale(var(--scale, 1));
+}
+
+#screen > div {
+    white-space: pre;
+    font: 14px monospace;
+    line-height: 14px;
+    color: #fff;
+}
+
+#screen canvas {
+    display: none;
+}
+
+/* The Windows XP boot screen, extracted from the kernel by the build, while the snapshot downloads */
+#boot {
+    position: fixed;
+    inset: 0;
+    z-index: 2;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background-color: #000;
+    transition: opacity 0.6s;
+}
+
+#boot.is-hidden {
+    opacity: 0;
+    pointer-events: none;
+}
+
+.boot-screen {
+    position: relative;
+    /* A monitor shows the 640x480 boot screen with its black border, keep it a bit smaller than the window */
+    width: min(85vw, 85vh * 4 / 3, 960px);
+    aspect-ratio: 4 / 3;
+}
+
+.boot-screen img,
+.boot-bar > div {
+    image-rendering: pixelated;
+}
+
+.boot-screen img {
+    display: block;
+    width: 100%;
+    height: 100%;
+}
+
+/* The three blocks slide through the box in 8 pixel steps, like the kernel draws them */
+.boot-bar {
+    position: absolute;
+    left: calc(257 / 640 * 100%);
+    top: calc(354 / 480 * 100%);
+    width: calc(122 / 640 * 100%);
+    height: calc(9 / 480 * 100%);
+    overflow: hidden;
+}
+
+.boot-bar > div {
+    width: calc(22 / 122 * 100%);
+    height: 100%;
+    background: url('/winxp/boot-bar.png') 0 0 / 100% 100%;
+    animation: boot-bar 2.4s steps(18) infinite;
+}
+
+@keyframes boot-bar {
+    from {
+        transform: translateX(-100%);
+    }
+    to {
+        transform: translateX(calc(144 / 22 * 100% - 100%));
+    }
+}
+
+.boot-status {
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: calc(390 / 480 * 100%);
+    color: #fff;
+    font-size: 14px;
+    text-align: center;
+}
+
+/* Drag and drop overlay */
+#drop {
+    position: fixed;
+    inset: 0;
+    z-index: 3;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    padding: 16px;
+    background-color: rgb(0 30 80 / 0.45);
+    pointer-events: none;
+}
+
+#drop.is-visible {
+    display: flex;
+}
+
+.drop-box {
+    padding: 32px 40px;
+    border: 3px dashed #fff;
+    border-radius: 12px;
+    color: #fff;
+    font-size: 20px;
+    font-weight: 700;
+    text-align: center;
+    text-shadow: 1px 1px 2px #000;
+}
+
+/* XP style notification balloon */
+#balloon {
+    position: fixed;
+    right: 16px;
+    bottom: 48px;
+    z-index: 4;
+    max-width: min(320px, calc(100vw - 32px));
+    padding: 8px 12px;
+    border: 1px solid var(--balloon-border);
+    border-radius: 8px;
+    background-color: var(--balloon-background);
+    color: var(--balloon-text);
+    font-size: 12px;
+    line-height: 1.4;
+    box-shadow: 2px 2px 6px rgb(0 0 0 / 0.35);
+    opacity: 0;
+    transform: translateY(8px);
+    transition:
+        opacity 0.2s,
+        transform 0.2s;
+    pointer-events: none;
+}
+
+#balloon.is-visible {
+    opacity: 1;
+    transform: none;
+    pointer-events: auto;
+}
+
+#balloon.is-link {
+    cursor: pointer;
+}
+
+.balloon-title {
+    margin-bottom: 2px;
+    font-weight: 700;
+}
+
+/* Disk light while C: streams from the network */
+#activity {
+    position: fixed;
+    top: 12px;
+    right: 12px;
+    z-index: 4;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background-color: #5fdc3c;
+    box-shadow: 0 0 6px #5fdc3c;
+    opacity: 0;
+    transition: opacity 0.15s;
+    pointer-events: none;
+}
+
+#activity.is-visible {
+    opacity: 1;
+}
+
+.vm #site,
+:root:not(.vm) :is(#screen, #boot, #drop, #activity, #balloon) {
+    display: none;
+}

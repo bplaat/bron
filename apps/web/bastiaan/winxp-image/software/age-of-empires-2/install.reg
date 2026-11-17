@@ -1,0 +1,28 @@
+REGEDIT4
+
+; What the Age of Empires II and The Conquerors setups write, from their setup scripts and a real install
+
+[HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Microsoft Games\Age of Empires\2.0]
+"CDPath"="D:\\"
+"EXE Path"="C:\\Program Files\\Microsoft Games\\Age of Empires II"
+"InstallationDirectory"="C:\\Program Files\\Microsoft Games\\Age of Empires II"
+"InstalledGroup"="5"
+"InstallType"="5"
+"LangID"=dword:00000009
+"Launched"="1"
+"PID"="51160-442-3519764-57934"
+"Version"="2.0a"
+"VersionType"="RetailVersion"
+"Zone"="http://www.zone.com/asp/aoe2redir.asp"
+
+[HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Microsoft Games\Age of Empires\2.0\EULA]
+
+[HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Microsoft Games\Age of Empires II: The Conquerors Expansion\1.0]
+"CDPath"="D:\\"
+"EXE Path"="C:\\Program Files\\Microsoft Games\\Age of Empires II"
+"InstallationDirectory"="C:\\Program Files\\Microsoft Games\\Age of Empires II"
+"InstalledGroup"="3"
+"LangID"=dword:00000009
+"PID"="53532-442-8047817-37091"
+"Version"="1.0A"
+"VersionType"="RetailVersion"

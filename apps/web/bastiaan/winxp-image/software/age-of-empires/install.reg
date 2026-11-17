@@ -1,0 +1,30 @@
+REGEDIT4
+
+; What the Age of Empires and The Rise of Rome setups write, from their setup scripts and a real install
+
+[HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Games\Age of Empires\1.00]
+"CDPath"="D:\\"
+"InstallType"="3"
+"InstallationDirectory"="C:\\Program Files\\Microsoft Games\\Age of Empires"
+"PID"="55357-442-1277945-07160"
+"Version"="1.0b"
+"VersionType"="RetailVersion"
+"Zone"="http://www.zone.com/asp/aoferedir.asp"
+
+[HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Microsoft Games\Age of Empires Expansion\1.0]
+"Version"="1.0"
+"Zone"="http://www.zone.com/asp/aeepredir.asp"
+
+[HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\DirectPlay\Applications\Age of Empires]
+"Guid"="{3422E982-1A89-11d1-B093-00A024C74776}"
+"File"="Empires.Exe"
+"CommandLine"="lobby"
+"Path"="C:\\Program Files\\Microsoft Games\\Age of Empires"
+"CurrentDirectory"="C:\\Program Files\\Microsoft Games\\Age of Empires"
+
+[HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\DirectPlay\Applications\Age of Empires Expansion]
+"Guid"="{8701C5C1-337B-11d2-839B-00609707F508}"
+"File"="EmpiresX.Exe"
+"CommandLine"="lobby"
+"Path"="C:\\Program Files\\Microsoft Games\\Age of Empires"
+"CurrentDirectory"="C:\\Program Files\\Microsoft Games\\Age of Empires"

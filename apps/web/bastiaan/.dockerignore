@@ -1,0 +1,11 @@
+# Only what the Dockerfile builds from
+*
+!Cargo.toml
+!Cargo.lock
+!rust-toolchain.toml
+!rustfmt.toml
+!src
+!web
+web/node_modules
+web/dist
+**/.DS_Store
