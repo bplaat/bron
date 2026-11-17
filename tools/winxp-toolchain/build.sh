@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Builds the Windows XP toolchain in the repository target/winxp-toolchain/: copies the std
-# sources of the pinned nightly Rust and applies rust/patches/, fetches mingw-w64 and LLVM's
+# sources of the nightly Rust and applies rust/patches/, fetches mingw-w64 and LLVM's
 # compiler-rt builtins and builds them with clang into sysroot/, the C runtime on XP's own
 # msvcrt.dll, and builds the QEMU runner's guest agent.
 # The cargo wrapper and cc run this before they build.
@@ -73,7 +73,7 @@ clone() {
     mv "$dir.part" "$dir"
 }
 
-# Copies the std sources of the pinned nightly into a repo, its rust-src matches its compiler
+# Copies the std sources of the nightly into a repo, its rust-src matches its compiler
 copy_rust() {
     [ -d "$RUST_DIR" ] && return
     msg "Copying the std sources of Rust $rust_toolchain"

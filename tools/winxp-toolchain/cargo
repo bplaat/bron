@@ -1,5 +1,5 @@
 #!/bin/sh
-# Runs cargo for Windows XP: builds the toolchain, then runs the pinned nightly cargo with the
+# Runs cargo for Windows XP: builds the toolchain, then runs the nightly cargo with the
 # patched std, the i686-winxp-windows-gnu target and run.sh as the runner. Use it like cargo, for
 # example: tools/winxp-toolchain/cargo run --release -p reversi
 set -eu

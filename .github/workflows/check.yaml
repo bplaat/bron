@@ -13,6 +13,9 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  RUST_NIGHTLY: nightly-2026-11-14
+
 jobs:
   # MARK: Check GitHub Actions lockfile
   check-lockfile:
@@ -96,14 +99,14 @@ jobs:
       - name: Install extra Rust tooling (unix)
         if: steps.cache-rust-toolchain.outputs.cache-hit != 'true' && runner.os != 'Windows'
         run: |
-          rustup toolchain add nightly --component rust-src --component rustfmt
+          rustup toolchain add ${{ env.RUST_NIGHTLY }} --component rust-src --component rustfmt
           curl -L --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash
           cargo binstall -y --locked cargo-nextest
 
       - name: Install extra Rust tooling (windows)
         if: steps.cache-rust-toolchain.outputs.cache-hit != 'true' && runner.os == 'Windows'
         run: |
-          rustup toolchain add nightly --component rust-src --component rustfmt
+          rustup toolchain add ${{ env.RUST_NIGHTLY }} --component rust-src --component rustfmt
           iex (iwr "https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.ps1").Content
           cargo binstall -y --locked cargo-nextest
 
@@ -137,7 +140,7 @@ jobs:
       - name: Install extra Rust tooling
         if: steps.cache-rust-toolchain.outputs.cache-hit != 'true'
         run: |
-          rustup toolchain add nightly --component rust-src --component rustfmt
+          rustup toolchain add ${{ env.RUST_NIGHTLY }} --component rust-src --component rustfmt
           curl -L --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash
           cargo binstall -y --locked cargo-nextest
       - run: cargo xtask check-e2e

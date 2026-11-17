@@ -8,7 +8,7 @@ fallbacks. The normal Windows targets need Windows 10.
 `build.sh` builds it all in the repository root's `target/winxp-toolchain/`, the `cargo` wrapper
 runs it for you:
 
-- Copies the std sources of the pinned nightly Rust (`nightly-2026-11-14`), which match its
+- Copies the std sources of nightly Rust (`nightly-2026-11-14`), which match its
   compiler, and applies `rust/patches/` as commits. Programs build std from them with
   `-Zbuild-std`
 - Clones [mingw-w64](https://github.com/mingw-w64/mingw-w64) v14.0.0 and builds its headers for
@@ -39,7 +39,7 @@ the runner needs it.
 
 ## Integration
 
-Run cargo through the `cargo` wrapper, it builds the toolchain, then runs the pinned nightly
+Run cargo through the `cargo` wrapper, it builds the toolchain, then runs the nightly
 cargo with the patched std, the `i686-winxp-windows-gnu.json` target and `run.sh` as the runner:
 
 ```sh

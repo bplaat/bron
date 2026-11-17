@@ -232,7 +232,7 @@ Most of these libraries are intended primarily for personal use, but can still b
 - Install Rust nightly toolchain, `cargo-binstall`, `cargo-deny`, `cargo-nextest` and `taplo-cli`:
 
     ```sh
-    rustup toolchain add nightly --component rust-src --component rustfmt
+    rustup toolchain add nightly-2026-11-14 --component rust-src --component rustfmt
     cargo install cargo-binstall
     cargo binstall -y --locked cargo-deny cargo-nextest taplo-cli
     ```

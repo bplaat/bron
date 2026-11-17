@@ -26,7 +26,7 @@
         "editor.defaultFormatter": "tamasfe.even-better-toml",
         "editor.formatOnSave": true
     },
-    "rust-analyzer.rustfmt.extraArgs": ["+nightly"],
+    "rust-analyzer.rustfmt.extraArgs": ["+nightly-2026-11-14"],
     "rust-analyzer.check.overrideCommand": ["cargo", "xtask", "check-editor"],
 
     // Web extensions settings

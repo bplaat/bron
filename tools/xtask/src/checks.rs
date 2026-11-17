@@ -19,6 +19,10 @@ use crate::process::{capture, npm_program, npx_program, run, run_named};
 use crate::utils::{relative_slash, source_files};
 use crate::{Os, Xtask};
 
+// The nightly for rustfmt and the address sanitizer, keep in sync with the rust-toolchain.toml files of the console
+// ports, the GitHub workflow and tools/winxp-toolchain
+const NIGHTLY: &str = "+nightly-2026-11-14";
+
 pub(crate) const BACKEND_SWAP_PAIRS: [(&str, &str); 2] =
     [("native-tls", "vendored"), ("bsql", "sqlite-bundled")];
 
@@ -180,7 +184,7 @@ impl Xtask {
         let excludes = platform_excludes(&metadata, self.os);
 
         println!("Checking Rust formatting...");
-        run(Command::new("cargo").args(["+nightly", "fmt", "--", "--check"]))?;
+        run(Command::new("cargo").args([NIGHTLY, "fmt", "--", "--check"]))?;
 
         println!("Linting Rust code...");
         let mut command = Command::new("cargo");
@@ -303,7 +307,7 @@ impl Xtask {
     fn check_address_sanitizer(&self, metadata: &Value) -> Result<()> {
         println!("Running Rust tests with address sanitizer on unsafe libs...");
         let excludes = platform_excludes(metadata, self.os);
-        let output = capture(Command::new("rustc").args(["+nightly", "-vV"]))?;
+        let output = capture(Command::new("rustc").args([NIGHTLY, "-vV"]))?;
         let rustc_info = String::from_utf8(output.stdout)?;
         let target = rustc_info
             .lines()
@@ -362,7 +366,7 @@ impl Xtask {
                 );
             }
             command.args([
-                "+nightly", "test", "-p", package, "--lib", "--tests", "--locked",
+                NIGHTLY, "test", "-p", package, "--lib", "--tests", "--locked",
             ]);
             command.args(feature_args);
             command.args(["--target", target, "-Zbuild-std"]);
