@@ -64,6 +64,7 @@ directories = { path = "lib/sys/directories" }
 enable-ansi-support = { path = "lib/sys/enable-ansi-support" }
 getrandom = { path = "lib/crypto/getrandom" }
 hmac = { path = "lib/crypto/hmac" }
+jiff = { path = "lib/data/jiff" }
 jni = { path = "lib/sys/jni" }
 keyring = { path = "lib/sys/keyring" }
 libsqlite3-sys = { path = "lib/data/libsqlite3-sys" }

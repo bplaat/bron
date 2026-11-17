@@ -176,6 +176,7 @@ Most of these libraries are intended primarily for personal use, but can still b
 - [deflate](lib/data/deflate) A Deflate and zlib compression library with an optimal parsing mode
 - [from_derive](lib/data/from_derive) A FromEnum and FromStruct derive macro library
 - [gzip](lib/data/gzip) A gzip library and command-line utility with a benchmark
+- [jiff](lib/data/jiff) A minimal replacement for the [jiff](https://crates.io/crates/jiff) crate
 - [libsqlite3-sys](lib/data/libsqlite3-sys) A minimal replacement for the [libsqlite3-sys](https://crates.io/crates/libsqlite3-sys) crate
 - [plist](lib/data/plist) A minimal replacement for the [plist](https://crates.io/crates/plist) crate
 - [regex](lib/data/regex) A minimal replacement for the [regex](https://crates.io/crates/regex) crate
