@@ -12,8 +12,8 @@ My personal website inside a Windows XP desktop running in your browser with [v8
 - Sessions are saved in IndexedDB. The welcome back notice lets you start fresh. Browser storage cleanup and new
   disk builds clear saved sessions.
 - Visitors share a LAN for multiplayer games. The relay assigns 10.86.0.x addresses without internet access.
-- Includes a native Win32 version of this website, Age of Empires I and II, Civilization III, Minesweeper, Pinball,
-  Windows Media Player with music and album art, and Internet Explorer 8.
+- Includes [the website as a native app](../../desktop/bastiaan), [Reversi](../../../games/reversi), Age of Empires I
+  and II, Civilization III, Minesweeper, Pinball, Windows Media Player with music and album art, and Internet Explorer 8.
 - The website is also available as plain HTML without JavaScript.
 
 ## Building the image

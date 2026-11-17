@@ -22,6 +22,11 @@ make() { docker run --rm -v "$PWD/..:/w" -w "/w/winxp-image/$1" winxp-tools make
 make guest
 for dir in software/*/; do [ ! -f "$dir/Makefile" ] || make "$dir"; done
 
+# The native apps of the repository, built with its Windows XP toolchain
+root=../../../..
+"$root/tools/winxp-toolchain/cargo" build --release --locked -p bastiaan -p reversi
+for app in bastiaan reversi; do cp "$root/target/i686-winxp-windows-gnu/release/$app.exe" "software/$app/"; done
+
 # 1. Unattended Windows install in QEMU
 if [ ! -f out/install.img ]; then
     docker run --rm -v "$PWD/out:/out" winxp-tools cp /usr/lib/syslinux/mbr/mbr.bin /out/

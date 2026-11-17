@@ -5,7 +5,8 @@ The build installs Windows, guest drivers and software, applies settings, activa
 
 ## Building
 
-Requires macOS, Docker, Node.js, QEMU and mtools (`brew install qemu mtools`). Run from the root of the repository:
+Requires macOS, Docker, Node.js, QEMU, mtools (`brew install qemu mtools`) and the
+[Windows XP toolchain](../../../../tools/winxp-toolchain), which builds the native apps. Run from the root of the repository:
 
 ```sh
 npm install
@@ -59,7 +60,7 @@ Generated: `winxp-image/out/` (install images, screenshots), the built `.exe`/`.
 ## Image contents
 
 - Windows XP Professional SP3, activated, with the Luna theme, stretched Bliss wallpaper and computer name `WINXP`.
-- Administrator account `bplaat` (Bastiaan), with no password, automatic logon and the bassiebas picture.
+- Administrator account `bplaat` (Bastiaan), with no password, automatic logon and the site's avatar as picture.
 - Hidden files, system files, extensions and full paths shown; Details view in all folders.
 - Pagefile, hibernation, System Restore, prefetch, boot defrag and system sounds disabled; reduced animations.
 - MS Gothic linked to interface fonts for Japanese text.
@@ -69,7 +70,8 @@ Generated: `winxp-image/out/` (install images, screenshots), the built `.exe`/`.
   other than DHCP disabled.
 - Notification balloons, the XP tour, Desktop Cleanup Wizard, low disk warnings, AutoRun and first-run prompts disabled.
 - Windows Media Player with its menu bar, album art from MP3 covers (`Folder.jpg`), My Music and Windows MIDI files.
-- Desktop shortcuts for My Computer, My Documents, Media Player, Bastiaan, Minesweeper, Pinball and the games below.
+- Desktop shortcuts for My Computer, My Documents, Media Player, Bastiaan, Reversi, Minesweeper, Pinball and the games
+  below. [Bastiaan](../../../desktop/bastiaan), the website as a native app, starts at logon.
 - Age of Empires with The Rise of Rome and MIDI music; Age of Empires II with The Conquerors, CD music and videos;
   Civilization III Complete.
 - Notepad++ without its updater, associated with text, ini, inf and xml files; MiTeC EXE Explorer, Hexadecimal Editor
