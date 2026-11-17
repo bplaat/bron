@@ -110,6 +110,7 @@ unsafe extern "C" {
     pub(crate) fn gtk_window_move(window: *mut GtkWindow, x: i32, y: i32);
     pub(crate) fn gtk_window_get_size(window: *mut GtkWindow, width: *mut i32, height: *mut i32);
     pub(crate) fn gtk_window_set_default_size(window: *mut GtkWindow, width: i32, height: i32);
+    pub(crate) fn gtk_window_resize(window: *mut GtkWindow, width: i32, height: i32);
     pub(crate) fn gtk_window_set_resizable(window: *mut GtkWindow, resizable: bool);
     pub(crate) fn gtk_window_is_maximized(window: *mut GtkWindow) -> bool;
     pub(crate) fn gtk_window_maximize(window: *mut GtkWindow);

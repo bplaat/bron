@@ -264,7 +264,8 @@ impl crate::WindowInterface for PlatformWindow {
     }
 
     fn set_size(&mut self, size: LogicalSize) {
-        unsafe { gtk_window_set_default_size(self.0.window, size.width as i32, size.height as i32) }
+        // The default size only applies before the window is shown
+        unsafe { gtk_window_resize(self.0.window, size.width as i32, size.height as i32) }
     }
 
     fn set_min_size(&mut self, min_size: LogicalSize) {
