@@ -539,9 +539,15 @@ fn interface_paths(guid: Guid) -> Result<Vec<Vec<u16>>, Error> {
         let word_count = (required as usize).div_ceil(size_of::<usize>());
         let mut storage = vec![0usize; word_count];
         let detail = storage.as_mut_ptr().cast::<u8>();
-        // SP_DEVICE_INTERFACE_DETAIL_DATA_W.cbSize is 8 on all supported 64-bit Windows targets.
+        // SP_DEVICE_INTERFACE_DETAIL_DATA_W.cbSize: setupapi.h packs it to 1 byte on 32-bit
+        // Windows (6 bytes) and to 8 bytes on 64-bit Windows (8 bytes).
+        let size = if cfg!(target_pointer_width = "64") {
+            8
+        } else {
+            6
+        };
         // SAFETY: storage is aligned and large enough for the returned detail structure.
-        unsafe { detail.cast::<Dword>().write(8) };
+        unsafe { detail.cast::<Dword>().write(size) };
         // SAFETY: all input and output structures are valid for `required` bytes.
         if unsafe {
             SetupDiGetDeviceInterfaceDetailW(
