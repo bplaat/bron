@@ -106,6 +106,7 @@ Some desktop apps and games written with the [bwindow](lib/ui/bwindow), [bwebvie
 
 Various tools and websites. For the deployed sites, go to [bron.bplaat.nl](https://bron.bplaat.nl/).
 
+- [bastiaan](apps/web/bastiaan) My personal website, a Windows XP desktop in the browser with [v86](https://github.com/copy/v86) and a LAN relay server
 - [baksteen](apps/web/baksteen/) A brick-laying robot simulator
 - [bob](tools/bob) A simple build system for my projects, because I like the simplicity of Cargo
 - [ccontinue](tools/ccontinue) A transpiler that translates an OOP extension for the C programming language back to C

@@ -1,3 +1,9 @@
+/*
+ * Copyright (c) 2026 Bastiaan van der Plaat
+ *
+ * SPDX-License-Identifier: MIT
+ */
+
 // Host side of the v86 guest integration, see winxp-image/guest/v86.h
 // Extends v86's VMware backdoor with commands the guest agent and drivers use.
 
@@ -114,7 +120,7 @@ function translate(cpu, linear) {
 
 function readLinear(cpu, address, length) {
     const out = new Uint8Array(length);
-    for (let done = 0; done < length; ) {
+    for (let done = 0; done < length;) {
         const linear = (address + done) >>> 0;
         const physical = translate(cpu, linear);
         const count = Math.min(length - done, 0x1000 - (linear & 0xfff));

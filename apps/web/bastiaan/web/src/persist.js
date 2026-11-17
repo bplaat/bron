@@ -1,3 +1,9 @@
+/*
+ * Copyright (c) 2026 Bastiaan van der Plaat
+ *
+ * SPDX-License-Identifier: MIT
+ */
+
 // Keeps the session across reloads in IndexedDB: the machine state (RAM, CPU and devices) plus the disk blocks Windows
 // wrote, grouped per disk chunk. Both are saved together in one transaction while the emulator is paused, so they
 // always match: a disk without the RAM that cached it would corrupt FAT32. Saves belong to one build of the disk.
@@ -125,7 +131,9 @@ export class SessionStore {
             if (running) emulator.run();
 
             const packed = await compress(state);
-            const packedChunks = await Promise.all(chunks.map(async (chunk) => ({ ...chunk, data: await compress(chunk.data) })));
+            const packedChunks = await Promise.all(
+                chunks.map(async (chunk) => ({ ...chunk, data: await compress(chunk.data) })),
+            );
             const tx = this.db.transaction(STORES, 'readwrite');
             tx.objectStore('state').put(packed, 'state');
             for (const chunk of packedChunks) tx.objectStore('chunks').put(chunk, chunk.index);

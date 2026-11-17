@@ -5,21 +5,21 @@
  * software is already installed by winxp-image/software.mjs.
  */
 #define WIN32_LEAN_AND_MEAN
-#include <windows.h>
 #include <lm.h>
 #include <setupapi.h>
+#include <windows.h>
 
 #define USER_NAME L"bplaat"
 #define USER_FULL_NAME L"Bastiaan"
 #define DEFAULT_HIVE L"V86Default"
 
-typedef BOOL(WINAPI *UPDATE_DRIVER)(HWND, LPCWSTR, LPCWSTR, DWORD, PBOOL);
+typedef BOOL(WINAPI* UPDATE_DRIVER)(HWND, LPCWSTR, LPCWSTR, DWORD, PBOOL);
 static const GUID media_class = {0x4d36e96c, 0xe325, 0x11ce, {0xbf, 0xc1, 0x08, 0x00, 0x2b, 0xe1, 0x03, 0x18}};
 
 typedef struct {
     const WCHAR *key, *name;
     DWORD type;
-    const WCHAR *sz;
+    const WCHAR* sz;
     DWORD dw;
 } REG_VALUE;
 #define SZ(key, name, value) {key, name, REG_SZ, value, 0}
@@ -60,17 +60,18 @@ static const REG_VALUE machine[] = {
        L"msgothic.ttc"),
     /* Links open in a browser tab on the host, the Start menu still shows Internet Explorer as Internet */
     SZ(L"SOFTWARE\\Clients\\StartMenuInternet", NULL, L"IEXPLORE.EXE"),
-    SZ(L"SOFTWARE\\Classes\\http\\shell\\open\\command", NULL, L"\"%SystemRoot%\\system32\\v86agent.exe\" /open \"%1\""),
+    SZ(L"SOFTWARE\\Classes\\http\\shell\\open\\command", NULL,
+       L"\"%SystemRoot%\\system32\\v86agent.exe\" /open \"%1\""),
     SZ(L"SOFTWARE\\Classes\\https\\shell\\open\\command", NULL,
        L"\"%SystemRoot%\\system32\\v86agent.exe\" /open \"%1\""),
 };
 
 /* Services v86 has no use for: the LAN only needs the DHCP client, no printer, no updates */
-static const WCHAR *const services[] = {
-    L"Alerter", L"Browser", L"Dnscache", L"ERSvc", L"helpsvc", L"lanmanserver", L"LmHosts",
-    L"Messenger", L"Nla", L"RasMan", L"RemoteRegistry", L"Schedule", L"seclogon", L"SharedAccess",
-    L"ShellHWDetection", L"Spooler", L"srservice", L"SSDPSRV", L"stisvc", L"TapiSrv", L"TrkWks", L"upnphost",
-    L"W32Time", L"WebClient", L"wscsvc", L"wuauserv", L"WZCSVC",
+static const WCHAR* const services[] = {
+    L"Alerter",          L"Browser", L"Dnscache",  L"ERSvc",          L"helpsvc",  L"lanmanserver", L"LmHosts",
+    L"Messenger",        L"Nla",     L"RasMan",    L"RemoteRegistry", L"Schedule", L"seclogon",     L"SharedAccess",
+    L"ShellHWDetection", L"Spooler", L"srservice", L"SSDPSRV",        L"stisvc",   L"TapiSrv",      L"TrkWks",
+    L"upnphost",         L"W32Time", L"WebClient", L"wscsvc",         L"wuauserv", L"WZCSVC",
 };
 
 /* User settings, written to the Default User profile so the new account starts with them */
@@ -129,23 +130,21 @@ static const BYTE preferences_mask[] = {0x90, 0x12, 0x03, 0x80};
 
 static WCHAR dir[MAX_PATH];
 
-static void path(WCHAR *out, const WCHAR *name)
-{
+static void path(WCHAR* out, const WCHAR* name) {
     wsprintfW(out, L"%s\\%s", dir, name);
 }
 
-static void set_value(HKEY root, const WCHAR *key, const WCHAR *name, DWORD type, const void *data, DWORD size)
-{
+static void set_value(HKEY root, const WCHAR* key, const WCHAR* name, DWORD type, const void* data, DWORD size) {
     HKEY h;
-    if (RegCreateKeyExW(root, key, 0, NULL, 0, KEY_SET_VALUE, NULL, &h, NULL) != ERROR_SUCCESS) return;
+    if (RegCreateKeyExW(root, key, 0, NULL, 0, KEY_SET_VALUE, NULL, &h, NULL) != ERROR_SUCCESS)
+        return;
     RegSetValueExW(h, name, 0, type, data, size);
     RegCloseKey(h);
 }
 
-static void set_values(HKEY root, const REG_VALUE *values, size_t count)
-{
+static void set_values(HKEY root, const REG_VALUE* values, size_t count) {
     for (size_t i = 0; i < count; i++) {
-        const REG_VALUE *v = &values[i];
+        const REG_VALUE* v = &values[i];
         if (v->type == REG_SZ) {
             /* Values with environment variables expand when read */
             DWORD type = wcschr(v->sz, L'%') ? REG_EXPAND_SZ : REG_SZ;
@@ -156,11 +155,11 @@ static void set_values(HKEY root, const REG_VALUE *values, size_t count)
     }
 }
 
-static void enable_privilege(const WCHAR *name)
-{
+static void enable_privilege(const WCHAR* name) {
     HANDLE token;
     TOKEN_PRIVILEGES tp = {.PrivilegeCount = 1};
-    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES, &token)) return;
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES, &token))
+        return;
     if (LookupPrivilegeValueW(NULL, name, &tp.Privileges[0].Luid)) {
         tp.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
         AdjustTokenPrivileges(token, FALSE, &tp, 0, NULL, NULL);
@@ -168,20 +167,19 @@ static void enable_privilege(const WCHAR *name)
     CloseHandle(token);
 }
 
-static void run(const WCHAR *command, const WCHAR *cwd)
-{
+static void run(const WCHAR* command, const WCHAR* cwd) {
     WCHAR line[MAX_PATH * 2];
     lstrcpynW(line, command, ARRAYSIZE(line));
     STARTUPINFOW si = {.cb = sizeof(si), .dwFlags = STARTF_USESHOWWINDOW, .wShowWindow = SW_HIDE};
     PROCESS_INFORMATION pi;
-    if (!CreateProcessW(NULL, line, NULL, NULL, FALSE, CREATE_NO_WINDOW, NULL, cwd, &si, &pi)) return;
+    if (!CreateProcessW(NULL, line, NULL, NULL, FALSE, CREATE_NO_WINDOW, NULL, cwd, &si, &pi))
+        return;
     WaitForSingleObject(pi.hProcess, INFINITE);
     CloseHandle(pi.hThread);
     CloseHandle(pi.hProcess);
 }
 
-static void copy_to_system(const WCHAR *name, const WCHAR *subdir, WCHAR *target)
-{
+static void copy_to_system(const WCHAR* name, const WCHAR* subdir, WCHAR* target) {
     WCHAR source[MAX_PATH];
     path(source, name);
     GetSystemDirectoryW(target, MAX_PATH);
@@ -189,17 +187,16 @@ static void copy_to_system(const WCHAR *name, const WCHAR *subdir, WCHAR *target
     CopyFileW(source, target, FALSE);
 }
 
-static void update_driver(const WCHAR *hardware_id, const WCHAR *inf)
-{
+static void update_driver(const WCHAR* hardware_id, const WCHAR* inf) {
     HMODULE newdev = LoadLibraryW(L"newdev.dll");
     UPDATE_DRIVER update = newdev ? (UPDATE_DRIVER)GetProcAddress(newdev, "UpdateDriverForPlugAndPlayDevicesW") : NULL;
     BOOL reboot;
-    if (update) update(NULL, hardware_id, inf, 1 /* INSTALLFLAG_FORCE */, &reboot);
+    if (update)
+        update(NULL, hardware_id, inf, 1 /* INSTALLFLAG_FORCE */, &reboot);
 }
 
 /* Display: bind the Bochs VBE adapter to v86vid through its INF */
-static void install_display(void)
-{
+static void install_display(void) {
     WCHAR inf[MAX_PATH];
     path(inf, L"v86vid.inf");
     update_driver(L"PCI\\VEN_1234&DEV_1111", inf);
@@ -207,14 +204,14 @@ static void install_display(void)
 
 /* Sound: the Sound Blaster 16 is not Plug and Play, so add it as a root device like Add Hardware does; the INF's
    first resource choices (220h, IRQ 5, DMA 1 and 5) are what v86 emulates */
-static void install_sound(void)
-{
+static void install_sound(void) {
     static const WCHAR hardware_id[] = L"*PNPB003\0";
     HDEVINFO set = SetupDiCreateDeviceInfoList(&media_class, NULL);
-    if (set == INVALID_HANDLE_VALUE) return;
+    if (set == INVALID_HANDLE_VALUE)
+        return;
     SP_DEVINFO_DATA device = {.cbSize = sizeof(device)};
     if (SetupDiCreateDeviceInfoW(set, L"MEDIA", &media_class, NULL, NULL, DICD_GENERATE_ID, &device) &&
-        SetupDiSetDeviceRegistryPropertyW(set, &device, SPDRP_HARDWAREID, (const BYTE *)hardware_id,
+        SetupDiSetDeviceRegistryPropertyW(set, &device, SPDRP_HARDWAREID, (const BYTE*)hardware_id,
                                           sizeof(hardware_id)) &&
         SetupDiCallClassInstaller(DIF_REGISTERDEVICE, set, &device)) {
         WCHAR inf[MAX_PATH];
@@ -225,25 +222,23 @@ static void install_sound(void)
 }
 
 /* Network: v86's NE2000 is a Realtek RTL8029, XP has the driver; the site connects it to the LAN relay */
-static void install_network(void)
-{
+static void install_network(void) {
     WCHAR inf[MAX_PATH];
     ExpandEnvironmentStringsW(L"%SystemRoot%\\inf\\netrtpnt.inf", inf, MAX_PATH);
     update_driver(L"PCI\\VEN_10EC&DEV_8029", inf);
 }
 
 /* Mouse: system start filter above mouclass, also the host channel for the agent */
-static void install_mouse(void)
-{
+static void install_mouse(void) {
     WCHAR target[MAX_PATH];
     copy_to_system(L"v86mou.sys", L"\\drivers", target);
     SC_HANDLE scm = OpenSCManagerW(NULL, NULL, SC_MANAGER_CREATE_SERVICE);
     if (scm) {
         SC_HANDLE service = CreateServiceW(scm, L"v86mou", L"v86 Mouse and Host Channel", SERVICE_ALL_ACCESS,
                                            SERVICE_KERNEL_DRIVER, SERVICE_SYSTEM_START, SERVICE_ERROR_NORMAL,
-                                           L"system32\\drivers\\v86mou.sys", L"Pointer Class", NULL, NULL, NULL,
-                                           NULL);
-        if (service) CloseServiceHandle(service);
+                                           L"system32\\drivers\\v86mou.sys", L"Pointer Class", NULL, NULL, NULL, NULL);
+        if (service)
+            CloseServiceHandle(service);
         CloseServiceHandle(scm);
     }
     static const WCHAR filters[] = L"mouclass\0v86mou\0";
@@ -252,8 +247,7 @@ static void install_mouse(void)
 }
 
 /* Agent: start at every logon, and stand in as the web browser */
-static void install_agent(void)
-{
+static void install_agent(void) {
     WCHAR target[MAX_PATH];
     copy_to_system(L"v86agent.exe", L"", target);
     set_value(HKEY_LOCAL_MACHINE, CV L"Run", L"v86agent", REG_SZ, target, (lstrlenW(target) + 1) * sizeof(WCHAR));
@@ -265,21 +259,21 @@ static void install_agent(void)
     RegDeleteKeyW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Classes\\https\\shell\\open\\ddeexec");
 }
 
-static void tune_machine(void)
-{
+static void tune_machine(void) {
     set_values(HKEY_LOCAL_MACHINE, machine, ARRAYSIZE(machine));
     for (size_t i = 0; i < ARRAYSIZE(services); i++) {
         WCHAR key[MAX_PATH];
         wsprintfW(key, CCS L"Services\\%s", services[i]);
         DWORD disabled = SERVICE_DISABLED;
         HKEY h;
-        if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, key, 0, KEY_SET_VALUE, &h) != ERROR_SUCCESS) continue;
-        RegSetValueExW(h, L"Start", 0, REG_DWORD, (const BYTE *)&disabled, sizeof(disabled));
+        if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, key, 0, KEY_SET_VALUE, &h) != ERROR_SUCCESS)
+            continue;
+        RegSetValueExW(h, L"Start", 0, REG_DWORD, (const BYTE*)&disabled, sizeof(disabled));
         RegCloseKey(h);
     }
     /* Japanese text (like song names) falls back to MS Gothic in the interface fonts */
     static const WCHAR gothic[] = L"MSGOTHIC.TTC,MS UI Gothic\0";
-    static const WCHAR *const linked[] = {L"Tahoma", L"MS Shell Dlg", L"Microsoft Sans Serif", L"Trebuchet MS"};
+    static const WCHAR* const linked[] = {L"Tahoma", L"MS Shell Dlg", L"Microsoft Sans Serif", L"Trebuchet MS"};
     for (size_t i = 0; i < ARRAYSIZE(linked); i++)
         set_value(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\FontLink\\SystemLink",
                   linked[i], REG_MULTI_SZ, gothic, sizeof(gothic));
@@ -297,15 +291,16 @@ static void tune_machine(void)
 }
 
 /* Every event of the sound scheme gets no sound */
-static void silence_sounds(HKEY root)
-{
+static void silence_sounds(HKEY root) {
     HKEY apps;
-    if (RegOpenKeyExW(root, L"AppEvents\\Schemes\\Apps", 0, KEY_READ, &apps) != ERROR_SUCCESS) return;
+    if (RegOpenKeyExW(root, L"AppEvents\\Schemes\\Apps", 0, KEY_READ, &apps) != ERROR_SUCCESS)
+        return;
     WCHAR app[MAX_PATH], event[MAX_PATH], key[MAX_PATH * 3];
     for (DWORD i = 0, n = MAX_PATH; RegEnumKeyExW(apps, i, app, &n, NULL, NULL, NULL, NULL) == ERROR_SUCCESS;
          i++, n = MAX_PATH) {
         HKEY events;
-        if (RegOpenKeyExW(apps, app, 0, KEY_READ, &events) != ERROR_SUCCESS) continue;
+        if (RegOpenKeyExW(apps, app, 0, KEY_READ, &events) != ERROR_SUCCESS)
+            continue;
         for (DWORD j = 0, m = MAX_PATH; RegEnumKeyExW(events, j, event, &m, NULL, NULL, NULL, NULL) == ERROR_SUCCESS;
              j++, m = MAX_PATH) {
             wsprintfW(key, L"AppEvents\\Schemes\\Apps\\%s\\%s\\.Current", app, event);
@@ -316,8 +311,7 @@ static void silence_sounds(HKEY root)
     RegCloseKey(apps);
 }
 
-static void tune_user(HKEY root)
-{
+static void tune_user(HKEY root) {
     set_values(root, user, ARRAYSIZE(user));
     set_value(root, DESKTOP, L"UserPreferencesMask", REG_BINARY, preferences_mask, sizeof(preferences_mask));
     silence_sounds(root);
@@ -325,8 +319,7 @@ static void tune_user(HKEY root)
 
 /* Settings go into the Default User profile, so the new account starts with them, but the per user setup of Windows
    (Active Setup) resets some at the first logon, so the account applies them once more after it, see user_logon() */
-static void tune_default_user(void)
-{
+static void tune_default_user(void) {
     WCHAR hive[MAX_PATH];
     DWORD size = MAX_PATH;
     HKEY profiles;
@@ -334,17 +327,19 @@ static void tune_default_user(void)
                       KEY_QUERY_VALUE, &profiles) != ERROR_SUCCESS)
         return;
     WCHAR dir_raw[MAX_PATH];
-    LONG status = RegQueryValueExW(profiles, L"DefaultUserProfile", NULL, NULL, (BYTE *)hive, &size);
+    LONG status = RegQueryValueExW(profiles, L"DefaultUserProfile", NULL, NULL, (BYTE*)hive, &size);
     size = sizeof(dir_raw);
     if (status == ERROR_SUCCESS)
-        status = RegQueryValueExW(profiles, L"ProfilesDirectory", NULL, NULL, (BYTE *)dir_raw, &size);
+        status = RegQueryValueExW(profiles, L"ProfilesDirectory", NULL, NULL, (BYTE*)dir_raw, &size);
     RegCloseKey(profiles);
-    if (status != ERROR_SUCCESS) return;
+    if (status != ERROR_SUCCESS)
+        return;
     WCHAR profiles_dir[MAX_PATH], file[MAX_PATH];
     ExpandEnvironmentStringsW(dir_raw, profiles_dir, MAX_PATH);
     wsprintfW(file, L"%s\\%s\\NTUSER.DAT", profiles_dir, hive);
 
-    if (RegLoadKeyW(HKEY_USERS, DEFAULT_HIVE, file) != ERROR_SUCCESS) return;
+    if (RegLoadKeyW(HKEY_USERS, DEFAULT_HIVE, file) != ERROR_SUCCESS)
+        return;
     HKEY root;
     if (RegOpenKeyExW(HKEY_USERS, DEFAULT_HIVE, 0, KEY_ALL_ACCESS, &root) == ERROR_SUCCESS) {
         tune_user(root);
@@ -358,29 +353,26 @@ static void tune_default_user(void)
 }
 
 /* The account the desktop logs on with, with its picture on the Start menu */
-static void create_user(void)
-{
+static void create_user(void) {
     USER_INFO_1 info = {.usri1_name = USER_NAME,
                         .usri1_password = L"",
                         .usri1_priv = USER_PRIV_USER,
                         .usri1_flags = UF_SCRIPT | UF_DONT_EXPIRE_PASSWD};
-    NetUserAdd(NULL, 1, (BYTE *)&info, NULL);
+    NetUserAdd(NULL, 1, (BYTE*)&info, NULL);
     USER_INFO_1011 full_name = {.usri1011_full_name = USER_FULL_NAME};
-    NetUserSetInfo(NULL, USER_NAME, 1011, (BYTE *)&full_name, NULL);
+    NetUserSetInfo(NULL, USER_NAME, 1011, (BYTE*)&full_name, NULL);
     LOCALGROUP_MEMBERS_INFO_3 member = {.lgrmi3_domainandname = USER_NAME};
-    NetLocalGroupAddMembers(NULL, L"Administrators", 3, (BYTE *)&member, 1);
+    NetLocalGroupAddMembers(NULL, L"Administrators", 3, (BYTE*)&member, 1);
 
     WCHAR source[MAX_PATH], target[MAX_PATH];
     path(source, L"user.bmp");
-    ExpandEnvironmentStringsW(L"%ALLUSERSPROFILE%\\Application Data\\Microsoft\\User Account Pictures\\" USER_NAME
-                              L".bmp",
-                              target, MAX_PATH);
+    ExpandEnvironmentStringsW(
+        L"%ALLUSERSPROFILE%\\Application Data\\Microsoft\\User Account Pictures\\" USER_NAME L".bmp", target, MAX_PATH);
     CopyFileW(source, target, FALSE);
 }
 
 /* Offline activation: activate.vbs feeds the installation ID through confid.exe, it reports over COM1 */
-static void activate(void)
-{
+static void activate(void) {
     WCHAR command[MAX_PATH * 2];
     wsprintfW(command, L"cscript.exe //nologo \"%s\\activate.vbs\"", dir);
     run(command, dir);
@@ -388,8 +380,7 @@ static void activate(void)
 
 /* First logon of the account, after Active Setup: the user settings again and the Media Player library, which resets
    some Media Player settings, so those once more after it */
-static void user_logon(void)
-{
+static void user_logon(void) {
     tune_user(HKEY_CURRENT_USER);
     WCHAR command[MAX_PATH * 2];
     wsprintfW(command, L"wscript.exe //B \"%s\\library.vbs\"", dir);
@@ -398,8 +389,7 @@ static void user_logon(void)
     SendMessageTimeoutW(HWND_BROADCAST, WM_SETTINGCHANGE, 0, (LPARAM)L"Environment", SMTO_ABORTIFHUNG, 5000, NULL);
 }
 
-int WINAPI wWinMain(HINSTANCE inst, HINSTANCE prev, LPWSTR cmd, int show)
-{
+int WINAPI wWinMain(HINSTANCE inst, HINSTANCE prev, LPWSTR cmd, int show) {
     (void)inst;
     (void)prev;
     (void)show;

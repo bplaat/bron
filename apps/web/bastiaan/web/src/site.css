@@ -1,3 +1,9 @@
+/*
+ * Copyright (c) 2026 Bastiaan van der Plaat
+ *
+ * SPDX-License-Identifier: MIT
+ */
+
 /* The website as plain HTML, for search engines and visitors without JavaScript: with it the page runs Windows XP */
 :root:not(.vm) {
     --text-color: #000;

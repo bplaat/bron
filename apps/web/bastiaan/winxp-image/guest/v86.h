@@ -30,9 +30,11 @@
 #define V86_CMD_GETSIZE 0x8601 /* returns (width << 16) | height wanted by the host, 0 = none */
 #define V86_CMD_RECV 0x8602    /* EBX = buffer phys, ESI = capacity; returns type, EBX = length */
 #define V86_CMD_SEND 0x8603    /* EBX = buffer phys, ESI = length, EDI = type */
-#define V86_CMD_POINTER_SHAPE 0x8604 /* EBX = VIDEO_POINTER_ATTRIBUTES (mono) in nonpaged memory; returns 1 if shown */
-#define V86_CMD_POINTER_MOVE 0x8605  /* EBX = (column << 16) | row of the top left, or V86_POINTER_HIDDEN;
-                                        returns V86_POINTER_RESEND when the page lost the shape (a reload) */
+/* EBX = VIDEO_POINTER_ATTRIBUTES (mono) in nonpaged memory; returns 1 if shown */
+#define V86_CMD_POINTER_SHAPE 0x8604
+/* EBX = (column << 16) | row of the top left, or V86_POINTER_HIDDEN;
+   returns V86_POINTER_RESEND when the page lost the shape (a reload) */
+#define V86_CMD_POINTER_MOVE 0x8605
 #define V86_POINTER_HIDDEN 0xFFFFFFFF
 #define V86_POINTER_RESEND 1
 /* EDX always holds the port number, so arguments travel in EBX, ESI and EDI */
@@ -41,15 +43,15 @@
 /* Message types */
 #define V86_MSG_NONE 0
 #define V86_MSG_CLIP_FORMAT 1 /* both directions: UINT32 format, UINT32 size, starts a clipboard format */
-#define V86_MSG_FILE_BEGIN 2 /* host->guest: UINT32 size, UTF-16LE name */
-#define V86_MSG_FILE_DATA 3  /* host->guest: next chunk */
-#define V86_MSG_FILE_END 4   /* host->guest: file complete */
-#define V86_MSG_LOG 5        /* guest->host: UTF-16LE diagnostic line */
-#define V86_MSG_SHUTDOWN 6   /* host->guest: power off (used by the build) */
-#define V86_MSG_CLIP_DATA 7  /* both directions: next chunk of the current clipboard format */
-#define V86_MSG_CLIP_END 8   /* both directions: clipboard complete, replaces the previous one */
-#define V86_MSG_OPEN_URL 9   /* guest->host: UTF-16LE URL to open in a new browser tab */
-#define V86_MSG_NET_RENEW 10 /* host->guest: renew the DHCP lease, the snapshot comes up with a stale address */
+#define V86_MSG_FILE_BEGIN 2  /* host->guest: UINT32 size, UTF-16LE name */
+#define V86_MSG_FILE_DATA 3   /* host->guest: next chunk */
+#define V86_MSG_FILE_END 4    /* host->guest: file complete */
+#define V86_MSG_LOG 5         /* guest->host: UTF-16LE diagnostic line */
+#define V86_MSG_SHUTDOWN 6    /* host->guest: power off (used by the build) */
+#define V86_MSG_CLIP_DATA 7   /* both directions: next chunk of the current clipboard format */
+#define V86_MSG_CLIP_END 8    /* both directions: clipboard complete, replaces the previous one */
+#define V86_MSG_OPEN_URL 9    /* guest->host: UTF-16LE URL to open in a new browser tab */
+#define V86_MSG_NET_RENEW 10  /* host->guest: renew the DHCP lease, the snapshot comes up with a stale address */
 
 /* Clipboard formats */
 #define V86_CLIP_TEXT 0  /* UTF-16LE, CRLF line ends */
@@ -75,16 +77,14 @@ typedef struct {
     unsigned long eax, ebx, ecx, edx, esi, edi;
 } V86_REGS;
 
-static inline void v86_backdoor(V86_REGS *r)
-{
+static inline void v86_backdoor(V86_REGS* r) {
     __asm__ __volatile__("inl %%dx, %%eax"
                          : "=a"(r->eax), "=b"(r->ebx), "=c"(r->ecx), "=d"(r->edx), "=S"(r->esi), "=D"(r->edi)
                          : "a"(VMWARE_MAGIC), "b"(r->ebx), "c"(r->ecx), "d"(VMWARE_PORT), "S"(r->esi), "D"(r->edi)
                          : "memory");
 }
 
-static inline unsigned long v86_call(unsigned long cmd, unsigned long ebx)
-{
+static inline unsigned long v86_call(unsigned long cmd, unsigned long ebx) {
     V86_REGS r = {0, ebx, cmd, 0, 0, 0};
     v86_backdoor(&r);
     return r.eax;

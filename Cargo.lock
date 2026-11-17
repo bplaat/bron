@@ -73,6 +73,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "bastiaan-server"
+version = "0.1.0"
+dependencies = [
+ "jiff",
+ "mime_guess",
+ "small-http",
+ "small-websocket",
+]
+
+[[package]]
 name = "baudio"
 version = "0.1.0"
 dependencies = [

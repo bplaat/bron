@@ -1,8 +1,14 @@
+/*
+ * Copyright (c) 2026 Bastiaan van der Plaat
+ *
+ * SPDX-License-Identifier: MIT
+ */
+
 import { V86 } from 'v86';
 import wasmUrl from 'v86/build/v86.wasm?url';
 import { GuestHost } from './guest-host.js';
-import { SessionStore } from './persist.js';
 import { DISK_CHUNK_SIZE, MACHINE, patchNetworkCard } from './machine.js';
+import { SessionStore } from './persist.js';
 import './index.css';
 
 const BASE = 'winxp/';
@@ -61,7 +67,13 @@ const emulator = new V86({
     bios: { url: BASE + 'seabios.bin' },
     vga_bios: { url: BASE + 'vgabios.bin' },
     // C: streams in compressed chunks as Windows reads it
-    hda: { url: BASE + 'disk/c.img.zst', size: disk.size, async: true, fixed_chunk_size: DISK_CHUNK_SIZE, use_parts: true },
+    hda: {
+        url: BASE + 'disk/c.img.zst',
+        size: disk.size,
+        async: true,
+        fixed_chunk_size: DISK_CHUNK_SIZE,
+        use_parts: true,
+    },
     initial_state: session ? { buffer: session.state } : { url: BASE + 'state.bin.zst' },
     net_device: RELAY_URL ? { ...MACHINE.net_device, relay_url: RELAY_URL } : MACHINE.net_device,
     mac_address_translation: true, // every visitor resumes the same snapshot, v86 gives each page its own MAC
@@ -82,7 +94,9 @@ emulator.add_listener('download-error', () => {
     bootStatus.textContent = 'Windows XP could not be loaded, please reload the page.';
 });
 
-const host = await new Promise((resolve) => emulator.add_listener('emulator-loaded', () => resolve(new GuestHost(emulator))));
+const host = await new Promise((resolve) =>
+    emulator.add_listener('emulator-loaded', () => resolve(new GuestHost(emulator))),
+);
 patchNetworkCard(emulator);
 
 // Session: saved when the page is hidden and every few minutes, a click on the notice starts over

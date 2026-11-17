@@ -1,35 +1,43 @@
-//! LAN relay: puts the Windows XP of every visitor on one virtual Ethernet segment, without internet access.
+/*
+ * Copyright (c) 2026 Bastiaan van der Plaat
+ *
+ * SPDX-License-Identifier: MIT
+ */
+
+//! LAN relay: puts the Windows XP of every visitor on one virtual Ethernet segment, without
+//! internet access.
 //!
-//! v86 sends each Ethernet frame as one binary WebSocket message. The relay is a switch that forwards only IPv4 and
-//! ARP between visitors, hands out 10.86.0.x addresses with its own DHCP server and drops frames that use another
-//! visitor's MAC or IP address. Nothing leaves the LAN: there is no router and no DNS server. One task owns the
-//! switch, every connection talks to it over channels.
+//! v86 sends each Ethernet frame as one binary WebSocket message. The relay is a switch that
+//! forwards only IPv4 and ARP between visitors, hands out 10.86.0.x addresses with its own DHCP
+//! server and drops frames that use another visitor's MAC or IP address. Nothing leaves the LAN:
+//! there is no router and no DNS server. Every connection has a thread that hands its frames to the
+//! shared switch and one that sends the switch's frames for it.
 //!
-//! Environment: ORIGIN, the only page origin allowed to connect (any when unset), and TRUST_PROXY=true behind a
-//! reverse proxy, the visitor's address is then the last X-Forwarded-For entry.
+//! Environment: ORIGIN, the only page origin allowed to connect (any when unset), and
+//! TRUST_PROXY=true behind a reverse proxy, the visitor's address is then the last X-Forwarded-For
+//! entry.
 
 use std::collections::HashMap;
-use std::env;
-use std::net::{IpAddr, SocketAddr};
-use std::sync::Arc;
+use std::net::IpAddr;
+use std::sync::mpsc::{self, RecvTimeoutError, SyncSender};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
+use std::{env, thread};
 
-use axum::body::Bytes;
-use axum::extract::ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade, close_code};
-use axum::extract::{ConnectInfo, State};
-use axum::http::{HeaderMap, StatusCode, header};
-use axum::response::{IntoResponse, Response};
-use tokio::sync::{mpsc, oneshot};
-use tokio::time::{self, MissedTickBehavior};
+use small_http::{Request, Response, Status};
+use small_websocket::{Message, WebSocket};
 
 const MAX_FRAME: usize = 1536;
 const QUEUE: usize = 256; // frames waiting for a slow visitor, more are dropped
 const MAX_PER_ADDRESS: usize = 4; // browser tabs per visitor address
 const MAX_VISITORS: usize = 253;
-const LIMITS: [f64; 3] = [1024.0 * 1024.0, 1000.0, 100.0]; // bytes, frames and broadcasts per visitor per second
+// Bytes, frames and broadcasts per visitor per second
+const LIMITS: [f64; 3] = [1024.0 * 1024.0, 1000.0, 100.0];
 const PING_INTERVAL: Duration = Duration::from_secs(30);
 const IDLE_TIMEOUT: Duration = Duration::from_secs(75);
+const WRITE_TIMEOUT: Duration = Duration::from_secs(10);
 const LEASE_SECONDS: u32 = 24 * 60 * 60;
+const CLOSE_POLICY: u16 = 1008;
 
 const ETH_IPV4: u16 = 0x0800;
 const ETH_ARP: u16 = 0x0806;
@@ -59,120 +67,96 @@ impl Config {
     }
 }
 
-enum Event {
-    Join {
-        address: IpAddr,
-        frames: mpsc::Sender<Bytes>,
-        id: oneshot::Sender<Option<u64>>,
-    },
-    Frame {
-        id: u64,
-        frame: Bytes,
-    },
-    Leave {
-        id: u64,
-    },
-}
-
 #[derive(Clone)]
 pub(crate) struct Relay {
-    events: mpsc::Sender<Event>,
+    switch: Arc<Mutex<Switch>>,
     config: Arc<Config>,
 }
 
 impl Relay {
-    pub(crate) fn spawn(config: Config) -> Self {
-        let (events, receiver) = mpsc::channel(4096);
-        tokio::spawn(Switch::default().run(receiver));
+    pub(crate) fn new(config: Config) -> Self {
         Self {
-            events,
+            switch: Arc::default(),
             config: Arc::new(config),
         }
     }
-}
 
-pub(crate) async fn handler(
-    upgrade: WebSocketUpgrade,
-    State(relay): State<Relay>,
-    ConnectInfo(peer): ConnectInfo<SocketAddr>,
-    headers: HeaderMap,
-) -> Response {
-    let origin = headers.get(header::ORIGIN).and_then(|origin| origin.to_str().ok());
-    if relay
-        .config
-        .origin
-        .as_deref()
-        .is_some_and(|allowed| origin != Some(allowed))
-    {
-        return StatusCode::FORBIDDEN.into_response();
-    }
-    let forwarded = || {
-        let header = headers.get("x-forwarded-for")?.to_str().ok()?;
-        header.rsplit(',').next()?.trim().parse().ok()
-    };
-    let address = relay.config.trust_proxy.then(forwarded).flatten().unwrap_or(peer.ip());
-    upgrade
-        .max_message_size(MAX_FRAME)
-        .max_frame_size(MAX_FRAME)
-        .on_upgrade(move |socket| connection(socket, relay.events, address))
-}
-
-// Frames from the socket go to the switch, the switch's frames for this visitor go to the socket
-async fn connection(mut socket: WebSocket, events: mpsc::Sender<Event>, address: IpAddr) {
-    let (frames, mut queue) = mpsc::channel(QUEUE);
-    let (reply, id) = oneshot::channel();
-    if events
-        .send(Event::Join {
-            address,
-            frames,
-            id: reply,
-        })
-        .await
-        .is_err()
-    {
-        return;
-    }
-    let Ok(Some(id)) = id.await else {
-        let close = CloseFrame {
-            code: close_code::POLICY,
-            reason: "The LAN is full".into(),
+    pub(crate) fn handler(&self, request: &Request) -> Response {
+        let origin = request.headers.get("Origin");
+        if self
+            .config
+            .origin
+            .as_deref()
+            .is_some_and(|allowed| origin != Some(allowed))
+        {
+            return Response::with_status(Status::Forbidden);
+        }
+        let forwarded = || {
+            let header = request.headers.get("X-Forwarded-For")?;
+            header.rsplit(',').next()?.trim().parse().ok()
         };
-        socket.send(Message::Close(Some(close))).await.ok();
-        return;
-    };
+        let address = self
+            .config
+            .trust_proxy
+            .then(forwarded)
+            .flatten()
+            .unwrap_or_else(|| request.client_addr.ip());
+        let relay = self.clone();
+        small_websocket::upgrade(request, move |socket| relay.connection(socket, address))
+    }
 
-    let mut ping = time::interval(PING_INTERVAL);
-    ping.set_missed_tick_behavior(MissedTickBehavior::Delay);
-    let mut deadline = Instant::now() + IDLE_TIMEOUT;
-    loop {
-        tokio::select! {
-            message = socket.recv() => match message {
-                Some(Ok(Message::Binary(frame))) => {
-                    deadline = Instant::now() + IDLE_TIMEOUT;
-                    if events.send(Event::Frame { id, frame }).await.is_err() {
-                        break;
-                    }
-                }
-                Some(Ok(Message::Close(_))) | Some(Err(_)) | None => break,
-                Some(Ok(_)) => deadline = Instant::now() + IDLE_TIMEOUT, // pongs and pings
-            },
-            frame = queue.recv() => match frame {
-                Some(frame) => {
-                    if socket.send(Message::Binary(frame)).await.is_err() {
-                        break;
-                    }
-                }
-                None => break,
-            },
-            _ = ping.tick() => {
-                if socket.send(Message::Ping(Bytes::new())).await.is_err() {
+    fn switch(&self) -> MutexGuard<'_, Switch> {
+        self.switch.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    // Frames from the socket go to the switch, a writer thread sends the switch's frames for this
+    // visitor
+    fn connection(&self, mut socket: WebSocket, address: IpAddr) {
+        let (frames, queue) = mpsc::sync_channel(QUEUE);
+        let Some(id) = self.switch().join(address, frames) else {
+            socket
+                .send(Message::Close(
+                    Some(CLOSE_POLICY),
+                    Some("The LAN is full".to_string()),
+                ))
+                .ok();
+            return;
+        };
+
+        // The page went away without closing when nothing, not even a pong, arrives in time
+        socket.set_read_timeout(Some(IDLE_TIMEOUT)).ok();
+        socket.set_write_timeout(Some(WRITE_TIMEOUT)).ok();
+        let mut writer = socket.clone();
+        thread::spawn(move || {
+            loop {
+                let message = match queue.recv_timeout(PING_INTERVAL) {
+                    Ok(frame) => Message::Binary(frame),
+                    Err(RecvTimeoutError::Timeout) => Message::Ping(Vec::new()),
+                    Err(RecvTimeoutError::Disconnected) => break,
+                };
+                if writer.send(message).is_err() {
                     break;
                 }
             }
-            () = time::sleep_until(deadline.into()) => break, // the page went away without closing
+        });
+
+        loop {
+            match socket.recv() {
+                Ok(Message::Binary(frame)) if frame.len() <= MAX_FRAME => {
+                    self.switch().frame(id, &frame)
+                }
+                Ok(Message::Ping(payload)) => {
+                    if socket.send(Message::Pong(payload)).is_err() {
+                        break;
+                    }
+                }
+                Ok(Message::Binary(_) | Message::Close(..)) | Err(_) => break,
+                Ok(_) => {}
+            }
         }
+        // Drops the frame queue, which stops the writer
+        self.switch().leave(id);
     }
-    events.send(Event::Leave { id }).await.ok();
 }
 
 // Token buckets that refill every second
@@ -197,7 +181,12 @@ impl Budget {
         for (tokens, limit) in self.tokens.iter_mut().zip(LIMITS) {
             *tokens = (*tokens + refill * limit).min(limit);
         }
-        if self.tokens.iter().zip(cost).any(|(tokens, cost)| *tokens < cost) {
+        if self
+            .tokens
+            .iter()
+            .zip(cost)
+            .any(|(tokens, cost)| *tokens < cost)
+        {
             return false;
         }
         for (tokens, cost) in self.tokens.iter_mut().zip(cost) {
@@ -208,7 +197,7 @@ impl Budget {
 }
 
 struct Visitor {
-    frames: mpsc::Sender<Bytes>,
+    frames: SyncSender<Vec<u8>>,
     address: IpAddr,
     mac: Option<[u8; 6]>,
     host: Option<u8>,
@@ -225,19 +214,7 @@ struct Switch {
 }
 
 impl Switch {
-    async fn run(mut self, mut events: mpsc::Receiver<Event>) {
-        while let Some(event) = events.recv().await {
-            match event {
-                Event::Join { address, frames, id } => {
-                    id.send(self.join(address, frames)).ok();
-                }
-                Event::Frame { id, frame } => self.frame(id, &frame),
-                Event::Leave { id } => self.leave(id),
-            }
-        }
-    }
-
-    fn join(&mut self, address: IpAddr, frames: mpsc::Sender<Bytes>) -> Option<u64> {
+    fn join(&mut self, address: IpAddr, frames: SyncSender<Vec<u8>>) -> Option<u64> {
         let count = self.per_address.entry(address).or_default();
         if *count >= MAX_PER_ADDRESS || self.visitors.len() >= MAX_VISITORS {
             return None;
@@ -272,7 +249,7 @@ impl Switch {
     }
 
     // A full queue means the visitor cannot keep up, dropping the frame is what a switch does
-    fn send(&self, id: u64, frame: Bytes) {
+    fn send(&self, id: u64, frame: Vec<u8>) {
         if let Some(visitor) = self.visitors.get(&id) {
             visitor.frames.try_send(frame).ok();
         }
@@ -282,7 +259,8 @@ impl Switch {
         self.visitors.get(&id)?.host
     }
 
-    // The visitor's own address: kept, or taken when free, as after a relay restart the guest keeps its old lease
+    // The visitor's own address: kept, or taken when free, as after a relay restart the guest keeps
+    // its old lease
     fn claim(&mut self, id: u64, ip: &[u8]) -> bool {
         if ip.len() != 4 || ip[..3] != SUBNET {
             return false;
@@ -294,7 +272,8 @@ impl Switch {
         if visitor.host == Some(host) {
             return true;
         }
-        if visitor.host.is_some() || !(2..=254).contains(&host) || self.by_host.contains_key(&host) {
+        if visitor.host.is_some() || !(2..=254).contains(&host) || self.by_host.contains_key(&host)
+        {
             return false;
         }
         visitor.host = Some(host);
@@ -303,12 +282,16 @@ impl Switch {
     }
 
     fn release(&mut self, id: u64) {
-        if let Some(host) = self.visitors.get_mut(&id).and_then(|visitor| visitor.host.take()) {
+        if let Some(host) = self
+            .visitors
+            .get_mut(&id)
+            .and_then(|visitor| visitor.host.take())
+        {
             self.by_host.remove(&host);
         }
     }
 
-    fn frame(&mut self, id: u64, frame: &Bytes) {
+    fn frame(&mut self, id: u64, frame: &[u8]) {
         if frame.len() < 14 {
             return;
         }
@@ -364,18 +347,22 @@ impl Switch {
         if broadcast {
             for (&other, visitor) in &self.visitors {
                 if other != id {
-                    visitor.frames.try_send(frame.clone()).ok();
+                    visitor.frames.try_send(frame.to_vec()).ok();
                 }
             }
         } else if let Some(&target) = self.by_mac.get(&dst)
             && target != id
         {
-            self.send(target, frame.clone());
+            self.send(target, frame.to_vec());
         }
     }
 
     fn dhcp(&mut self, id: u64, mac: [u8; 6], bootp: &[u8]) {
-        if bootp.len() < 240 || bootp[0] != 1 || bootp[236..240] != DHCP_MAGIC || bootp[28..34] != mac {
+        if bootp.len() < 240
+            || bootp[0] != 1
+            || bootp[236..240] != DHCP_MAGIC
+            || bootp[28..34] != mac
+        {
             return;
         }
         let (mut kind, mut requested, mut server) = (None, None, None);
@@ -428,7 +415,12 @@ impl Switch {
 fn checksum(data: &[u8]) -> u16 {
     let mut sum = data
         .chunks(2)
-        .map(|pair| u32::from(u16::from_be_bytes([pair[0], pair.get(1).copied().unwrap_or_default()])))
+        .map(|pair| {
+            u32::from(u16::from_be_bytes([
+                pair[0],
+                pair.get(1).copied().unwrap_or_default(),
+            ]))
+        })
         .sum::<u32>();
     while sum > 0xffff {
         sum = (sum & 0xffff) + (sum >> 16);
@@ -436,18 +428,18 @@ fn checksum(data: &[u8]) -> u16 {
     !(sum as u16)
 }
 
-fn ethernet(dst: &[u8], kind: u16, payload: &[u8]) -> Bytes {
+fn ethernet(dst: &[u8], kind: u16, payload: &[u8]) -> Vec<u8> {
     let mut frame = Vec::with_capacity((14 + payload.len()).max(60));
     frame.extend_from_slice(dst);
     frame.extend_from_slice(&RELAY_MAC);
     frame.extend_from_slice(&kind.to_be_bytes());
     frame.extend_from_slice(payload);
     frame.resize(frame.len().max(60), 0);
-    Bytes::from(frame)
+    frame
 }
 
 // The relay answers ARP for its own address, DHCP renewals are sent to it directly
-fn arp_reply(request: &[u8]) -> Bytes {
+fn arp_reply(request: &[u8]) -> Vec<u8> {
     let mut reply = [0; 28];
     reply[..6].copy_from_slice(&request[..6]); // hardware and protocol types and sizes
     reply[6..8].copy_from_slice(&[0, 2]);
@@ -457,7 +449,7 @@ fn arp_reply(request: &[u8]) -> Bytes {
     ethernet(&request[8..14], ETH_ARP, &reply)
 }
 
-fn dhcp_reply(mac: [u8; 6], request: &[u8], kind: u8, host: Option<u8>) -> Bytes {
+fn dhcp_reply(mac: [u8; 6], request: &[u8], kind: u8, host: Option<u8>) -> Vec<u8> {
     let mut options = vec![53, 1, kind, 54, 4];
     options.extend_from_slice(&RELAY_IP);
     if kind != DHCP_NAK {
