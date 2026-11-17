@@ -142,6 +142,7 @@ impl VerticalBlank {
             .output
             .as_ref()
             .zip(optional_proc!(
+                7,
                 "gdi32",
                 D3DKMTWaitForVerticalBlankEvent(*const D3dkmtWaitForVerticalBlankEvent) -> i32
             ))
@@ -153,6 +154,7 @@ impl VerticalBlank {
 
     fn close(&mut self) {
         if let Some((output, close)) = self.output.take().zip(optional_proc!(
+            7,
             "gdi32",
             D3DKMTCloseAdapter(*const u32) -> i32
         )) {
@@ -170,6 +172,7 @@ impl Drop for VerticalBlank {
 fn open_output(monitor: HMONITOR) -> Option<D3dkmtWaitForVerticalBlankEvent> {
     // The display driver functions came with Windows Vista, Windows XP sleeps for its frames
     let open_adapter = optional_proc!(
+        7,
         "gdi32",
         D3DKMTOpenAdapterFromHdc(*mut D3dkmtOpenAdapterFromHdc) -> i32
     )?;

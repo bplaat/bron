@@ -5,7 +5,7 @@
  */
 
 use crate::platforms::windows::direct2d;
-#[cfg(any(target_vendor = "win7", test))]
+#[cfg(any(target_vendor = "winxp", target_vendor = "win7", test))]
 use crate::platforms::windows::gdi;
 use crate::platforms::windows::image::PlatformImage;
 use crate::{CanvasState, FillRule};
@@ -13,7 +13,7 @@ use crate::{CanvasState, FillRule};
 /// A drawing context of the backend that the process draws with.
 pub(crate) enum PlatformCanvasContext {
     Direct2D(direct2d::Context),
-    #[cfg(any(target_vendor = "win7", test))]
+    #[cfg(any(target_vendor = "winxp", target_vendor = "win7", test))]
     Gdi(Box<gdi::Context>),
 }
 
@@ -23,7 +23,7 @@ macro_rules! forward {
             pub(crate) fn $name(&mut self $(, $arg: $ty)*) $(-> $ret)? {
                 match self {
                     Self::Direct2D(context) => context.$name($($arg),*),
-                    #[cfg(any(target_vendor = "win7", test))]
+                    #[cfg(any(target_vendor = "winxp", target_vendor = "win7", test))]
                     Self::Gdi(context) => context.$name($($arg),*),
                 }
             }

@@ -11,7 +11,7 @@
     "os": "windows",
     "env": "gnu",
     "abi": "llvm",
-    "vendor": "win7",
+    "vendor": "winxp",
     "target-family": ["windows"],
     "target-pointer-width": 32,
     "max-atomic-width": 64,

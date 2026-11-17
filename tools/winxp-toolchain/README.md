@@ -2,9 +2,9 @@
 
 Builds Rust programs with the full standard library for 32-bit Windows XP SP3 and newer, with plain
 clang and lld, without a Microsoft SDK. One build runs on every Windows version from XP on. The
-target has the `win7` vendor, for which std and the bron libraries load the newer Windows functions
-at runtime where they exist and fall back on Windows XP, the normal Windows targets need Windows 10
-and link them directly.
+target has the `winxp` vendor, distinct from the `win7` vendor of Windows 7 targets. Each target
+imports the APIs provided by its minimum Windows version and loads newer APIs at runtime with
+fallbacks. The normal Windows targets need Windows 10.
 `build.sh` builds it all in the repository root's `target/winxp-toolchain/`, the `cargo` wrapper
 runs it for you:
 
@@ -58,8 +58,8 @@ Windows XP has some limits that the toolchain doesn't work around:
 ## Files
 
 - `i686-winxp-windows-gnu.json` is the Rust target: the `i686-pc-windows-gnullvm` target linked by
-  rust-lld for Windows XP (subsystem 5.01), with the `win7` vendor so std and crates like getrandom
-  take their Windows 7 paths, which the patches make work on Windows XP
+  rust-lld for Windows XP (subsystem 5.01), with the `winxp` vendor. The std patches and bron libraries
+  share compatibility paths with `win7`, while `cfg(target_vendor = "winxp")` selects XP-specific code
 - `cargo` is the cargo wrapper, `cc` and `ar` are the C compiler and archiver for cc-rs build
   scripts, `windres` is LLVM's resource compiler for winresource build scripts
 - `run.sh` runs a program in Windows XP with `winxp-runner`, which it builds first

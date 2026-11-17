@@ -1,0 +1,656 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Tue, 17 Nov 2026 15:09:47 +0100
+Subject: [PATCH] Support the Windows XP target vendor
+
+Recognize winxp alongside win7 so the XP toolchain can select its own
+compatibility paths. Import keyed event APIs directly on both targets,
+since they are available from Windows XP on.
+---
+ library/backtrace/src/symbolize/dbghelp.rs    |  6 +-
+ library/std/Cargo.toml                        |  1 +
+ library/std/src/fs/tests.rs                   | 16 ++---
+ library/std/src/net/tests.rs                  |  2 +-
+ library/std/src/os/windows/process.rs         |  4 +-
+ library/std/src/sys/io/is_terminal/windows.rs |  2 +-
+ library/std/src/sys/net/hostname/mod.rs       |  2 +-
+ library/std/src/sys/pal/windows/c.rs          | 70 ++++++++-----------
+ library/std/src/sys/pal/windows/compat.rs     |  8 +--
+ library/std/src/sys/paths/windows.rs          |  4 +-
+ library/std/src/sys/random/windows.rs         |  4 +-
+ library/std/src/sys/stdio/windows.rs          | 10 +--
+ library/std/src/sys/sync/condvar/mod.rs       |  4 +-
+ library/std/src/sys/sync/futex/mod.rs         |  2 +-
+ library/std/src/sys/sync/mutex/mod.rs         |  4 +-
+ library/std/src/sys/sync/once/mod.rs          |  2 +-
+ library/std/src/sys/sync/rwlock/mod.rs        |  4 +-
+ .../std/src/sys/sync/thread_parking/mod.rs    |  4 +-
+ .../src/sys/sync/thread_parking/windows7.rs   |  8 +--
+ library/std/tests/sync/rwlock.rs              |  4 +-
+ library/windows_link/Cargo.toml               |  4 ++
+ library/windows_link/src/lib.rs               |  2 +-
+ 22 files changed, 81 insertions(+), 86 deletions(-)
+
+diff --git a/library/backtrace/src/symbolize/dbghelp.rs b/library/backtrace/src/symbolize/dbghelp.rs
+index 62ce30c..f5f4cfb 100644
+--- a/library/backtrace/src/symbolize/dbghelp.rs
++++ b/library/backtrace/src/symbolize/dbghelp.rs
+@@ -79,7 +79,7 @@ impl Symbol<'_> {
+ #[repr(C, align(8))]
+ struct Aligned8<T>(T);
+ 
+-#[cfg(not(target_vendor = "win7"))]
++#[cfg(not(any(target_vendor = "winxp", target_vendor = "win7")))]
+ pub unsafe fn resolve(what: ResolveWhat<'_>, cb: &mut dyn FnMut(&super::Symbol)) {
+     // Ensure this process's symbols are initialized
+     let dbghelp = match dbghelp::init() {
+@@ -98,7 +98,7 @@ pub unsafe fn resolve(what: ResolveWhat<'_>, cb: &mut dyn FnMut(&super::Symbol))
+     }
+ }
+ 
+-#[cfg(target_vendor = "win7")]
++#[cfg(any(target_vendor = "winxp", target_vendor = "win7"))]
+ pub unsafe fn resolve(what: ResolveWhat<'_>, cb: &mut dyn FnMut(&super::Symbol)) {
+     // Ensure this process's symbols are initialized
+     let dbghelp = match dbghelp::init() {
+@@ -129,7 +129,7 @@ pub unsafe fn resolve(what: ResolveWhat<'_>, cb: &mut dyn FnMut(&super::Symbol))
+ ///
+ /// This should work all the way down to Windows XP. The inline context is
+ /// ignored, since this concept was only introduced in dbghelp 6.2+.
+-#[cfg(target_vendor = "win7")]
++#[cfg(any(target_vendor = "winxp", target_vendor = "win7"))]
+ unsafe fn resolve_legacy(
+     dbghelp: &dbghelp::Init,
+     addr: *mut c_void,
+diff --git a/library/std/Cargo.toml b/library/std/Cargo.toml
+index 6248f3c..cb51390 100644
+--- a/library/std/Cargo.toml
++++ b/library/std/Cargo.toml
+@@ -156,6 +156,7 @@ test = true
+ [lints.rust.unexpected_cfgs]
+ level = "warn"
+ check-cfg = [
++    'cfg(target_vendor, values("winxp"))',
+     # std use #[path] imports to portable-simd `std_float` crate
+     # and to the `backtrace` crate which messes-up with Cargo list
+     # of declared features, we therefor expect any feature cfg
+diff --git a/library/std/src/fs/tests.rs b/library/std/src/fs/tests.rs
+index 46ed659..047bbf3 100644
+--- a/library/std/src/fs/tests.rs
++++ b/library/std/src/fs/tests.rs
+@@ -643,7 +643,7 @@ fn set_get_permissions_nofollows() {
+             // Reset the read-only bit under Windows 7: avoids the
+             // `TempDir::drop` from crashing on a permission denial when
+             // trying to delete the file that has it.
+-            #[cfg(all(windows, target_vendor = "win7"))]
++            #[cfg(all(windows, any(target_vendor = "winxp", target_vendor = "win7")))]
+             {
+                 let mut permission_bits = metadata0.permissions();
+                 permission_bits.set_readonly(false);
+@@ -703,7 +703,7 @@ fn set_get_permissions_nofollows_symlink() {
+             // Reset the read-only bit under Windows 7: avoids the
+             // `TempDir::drop` from crashing on a permission denial when
+             // trying to delete the file that has it.
+-            #[cfg(all(windows, target_vendor = "win7"))]
++            #[cfg(all(windows, any(target_vendor = "winxp", target_vendor = "win7")))]
+             {
+                 let mut symlink_permission_bits = after_symlink_metadata.permissions();
+                 symlink_permission_bits.set_readonly(false);
+@@ -2165,7 +2165,7 @@ fn file_try_clone() {
+ }
+ 
+ #[test]
+-#[cfg(not(target_vendor = "win7"))]
++#[cfg(not(any(target_vendor = "winxp", target_vendor = "win7")))]
+ fn unlink_readonly() {
+     let tmpdir = tmpdir();
+     let path = tmpdir.join("file");
+@@ -2541,19 +2541,19 @@ fn test_eq_windows_file_type() {
+     let mut perms = file1.metadata().unwrap().permissions();
+     perms.set_readonly(true);
+     file1.set_permissions(perms.clone()).unwrap();
+-    #[cfg(target_vendor = "win7")]
++    #[cfg(any(target_vendor = "winxp", target_vendor = "win7"))]
+     let _g = ReadonlyGuard { file: &file1, perms };
+     assert_eq!(file1.metadata().unwrap().file_type(), file2.metadata().unwrap().file_type());
+ 
+     // Reset the attribute before the `TmpDir`'s drop that removes the
+     // associated directory, which fails with a `PermissionDenied` error when
+     // running under Windows 7.
+-    #[cfg(target_vendor = "win7")]
++    #[cfg(any(target_vendor = "winxp", target_vendor = "win7"))]
+     struct ReadonlyGuard<'f> {
+         file: &'f File,
+         perms: fs::Permissions,
+     }
+-    #[cfg(target_vendor = "win7")]
++    #[cfg(any(target_vendor = "winxp", target_vendor = "win7"))]
+     impl<'f> Drop for ReadonlyGuard<'f> {
+         fn drop(&mut self) {
+             self.perms.set_readonly(false);
+@@ -2765,7 +2765,7 @@ fn test_hidden_file_truncation() {
+ // See https://github.com/rust-lang/rust/pull/131072 for more details about why
+ // these two tests are disabled under Windows 7 here.
+ #[test]
+-#[cfg_attr(target_vendor = "win7", ignore = "Unsupported under Windows 7.")]
++#[cfg_attr(any(target_vendor = "winxp", target_vendor = "win7"), ignore = "Unsupported under Windows 7.")]
+ fn test_rename_file_over_open_file() {
+     // Make sure that std::fs::rename works if the target file is already opened with FILE_SHARE_DELETE. See #123985.
+     let tmpdir = tmpdir();
+@@ -2789,7 +2789,7 @@ fn test_rename_file_over_open_file() {
+ }
+ 
+ #[test]
+-#[cfg_attr(target_vendor = "win7", ignore = "Unsupported under Windows 7.")]
++#[cfg_attr(any(target_vendor = "winxp", target_vendor = "win7"), ignore = "Unsupported under Windows 7.")]
+ fn test_rename_directory_to_non_empty_directory() {
+     // Renaming a directory over a non-empty existing directory should fail.
+     let tmpdir: TempDir = tmpdir();
+diff --git a/library/std/src/net/tests.rs b/library/std/src/net/tests.rs
+index f07a7f6..f83fc60 100644
+--- a/library/std/src/net/tests.rs
++++ b/library/std/src/net/tests.rs
+@@ -92,7 +92,7 @@ impl Drop for ZeroedMmap {
+ fn hostname_smoketest() {
+     // Just a smoke test to ensure it can be called.
+     let name = crate::net::hostname();
+-    if cfg!(any(all(windows, not(target_vendor = "win7")), unix)) {
++    if cfg!(any(all(windows, not(any(target_vendor = "winxp", target_vendor = "win7"))), unix)) {
+         // At least on Windows and Unix, this should succeed.
+         // The `win7` Windows targets do not support it yet though.
+         name.unwrap();
+diff --git a/library/std/src/os/windows/process.rs b/library/std/src/os/windows/process.rs
+index 422e5f1..e81d7c0 100644
+--- a/library/std/src/os/windows/process.rs
++++ b/library/std/src/os/windows/process.rs
+@@ -611,8 +611,8 @@ impl<'a> ProcThreadAttributeListBuilder<'a> {
+     /// # Example
+     ///
+     #[cfg_attr(not(windows), doc = "```ignore (needs windows)")]
+-    #[cfg_attr(all(windows, target_vendor = "win7"), doc = "```no_run")]
+-    #[cfg_attr(all(windows, not(target_vendor = "win7")), doc = "```")]
++    #[cfg_attr(all(windows, any(target_vendor = "winxp", target_vendor = "win7")), doc = "```no_run")]
++    #[cfg_attr(all(windows, not(any(target_vendor = "winxp", target_vendor = "win7"))), doc = "```")]
+     /// #![feature(windows_process_extensions_raw_attribute)]
+     /// use std::ffi::c_void;
+     /// use std::os::windows::process::{CommandExt, ProcThreadAttributeList};
+diff --git a/library/std/src/sys/io/is_terminal/windows.rs b/library/std/src/sys/io/is_terminal/windows.rs
+index ba4e9c6..d21ea93 100644
+--- a/library/std/src/sys/io/is_terminal/windows.rs
++++ b/library/std/src/sys/io/is_terminal/windows.rs
+@@ -15,7 +15,7 @@ fn handle_is_console(handle: BorrowedHandle<'_>) -> bool {
+     }
+ 
+     cfg_select! {
+-        target_vendor = "win7" => {
++        any(target_vendor = "winxp", target_vendor = "win7") => {
+             let mut out = 0;
+             if unsafe { c::GetConsoleMode(handle.as_raw_handle(), &mut out) != 0 } {
+                 // False positives aren't possible. If we got a console then we definitely have a console.
+diff --git a/library/std/src/sys/net/hostname/mod.rs b/library/std/src/sys/net/hostname/mod.rs
+index 65fcd6b..8e7c2a5 100644
+--- a/library/std/src/sys/net/hostname/mod.rs
++++ b/library/std/src/sys/net/hostname/mod.rs
+@@ -4,7 +4,7 @@ cfg_select! {
+         pub use unix::hostname;
+     }
+     // `GetHostNameW` is only available starting with Windows 8.
+-    all(target_os = "windows", not(target_vendor = "win7")) => {
++    all(target_os = "windows", not(any(target_vendor = "winxp", target_vendor = "win7"))) => {
+         mod windows;
+         pub use windows::hostname;
+     }
+diff --git a/library/std/src/sys/pal/windows/c.rs b/library/std/src/sys/pal/windows/c.rs
+index 439edba..5e5c78e 100644
+--- a/library/std/src/sys/pal/windows/c.rs
++++ b/library/std/src/sys/pal/windows/c.rs
+@@ -20,9 +20,9 @@ pub type WCHAR = u16;
+ 
+ pub const INVALID_HANDLE_VALUE: HANDLE = ::core::ptr::without_provenance_mut(-1i32 as _);
+ 
+-#[cfg(not(target_vendor = "win7"))]
++#[cfg(not(any(target_vendor = "winxp", target_vendor = "win7")))]
+ pub const FILE_DEVICE_NAMED_PIPE: u32 = 0x00000011;
+-#[cfg(not(target_vendor = "win7"))]
++#[cfg(not(any(target_vendor = "winxp", target_vendor = "win7")))]
+ pub const FILE_DEVICE_CONSOLE: u32 = 0x00000050;
+ 
+ // https://learn.microsoft.com/en-us/cpp/c-runtime-library/exit-success-exit-failure?view=msvc-170
+@@ -57,7 +57,7 @@ pub const FILE_READ_ATTRIBUTES: u32 = cu(windows_sys::FILE_READ_ATTRIBUTES);
+ pub const FILE_WRITE_ATTRIBUTES: u32 = cu(windows_sys::FILE_WRITE_ATTRIBUTES);
+ pub const FILE_TRAVERSE: u32 = cu(windows_sys::FILE_TRAVERSE);
+ pub const TIMER_ALL_ACCESS: u32 = cu(windows_sys::TIMER_ALL_ACCESS);
+-#[cfg(target_vendor = "win7")]
++#[cfg(any(target_vendor = "winxp", target_vendor = "win7"))]
+ pub const TOKEN_READ: u32 = cu(windows_sys::TOKEN_READ);
+ 
+ // dwOptions -- DuplicateHandle
+@@ -276,9 +276,9 @@ pub const AF_INET: ADDRESS_FAMILY = windows_sys::AF_INET as ADDRESS_FAMILY;
+ pub const AF_INET6: ADDRESS_FAMILY = windows_sys::AF_INET6 as ADDRESS_FAMILY;
+ pub const AF_UNIX: ADDRESS_FAMILY = windows_sys::AF_UNIX as ADDRESS_FAMILY;
+ 
+-#[cfg(target_vendor = "win7")]
++#[cfg(any(target_vendor = "winxp", target_vendor = "win7"))]
+ pub const CONDITION_VARIABLE_INIT: CONDITION_VARIABLE = CONDITION_VARIABLE { Ptr: ptr::null_mut() };
+-#[cfg(target_vendor = "win7")]
++#[cfg(any(target_vendor = "winxp", target_vendor = "win7"))]
+ pub const SRWLOCK_INIT: SRWLOCK = SRWLOCK { Ptr: ptr::null_mut() };
+ #[cfg(not(target_thread_local))]
+ pub const INIT_ONCE_STATIC_INIT: INIT_ONCE = INIT_ONCE { Ptr: ptr::null_mut() };
+@@ -362,7 +362,7 @@ pub struct MOUNT_POINT_REPARSE_BUFFER {
+ pub const EXCEPTION_CONTINUE_SEARCH: i32 = 0;
+ 
+ // Use raw-dylib to import ProcessPrng as we can't rely on there being an import library.
+-#[cfg(not(target_vendor = "win7"))]
++#[cfg(not(any(target_vendor = "winxp", target_vendor = "win7")))]
+ #[cfg_attr(
+     target_arch = "x86",
+     link(name = "bcryptprimitives", kind = "raw-dylib", import_name_type = "undecorated")
+@@ -408,7 +408,7 @@ compat_fn_with_fallback! {
+ 
+     // >= Win8 / Server 2012
+     // https://docs.microsoft.com/en-us/windows/win32/api/sysinfoapi/nf-sysinfoapi-getsystemtimepreciseasfiletime
+-    #[cfg(target_vendor = "win7")]
++    #[cfg(any(target_vendor = "winxp", target_vendor = "win7"))]
+     pub fn GetSystemTimePreciseAsFileTime(lpsystemtimeasfiletime: *mut FILETIME) -> () {
+         unsafe { GetSystemTimeAsFileTime(lpsystemtimeasfiletime) }
+     }
+@@ -421,7 +421,7 @@ compat_fn_with_fallback! {
+ }
+ 
+ // These are loaded by `load_synch_functions`.
+-#[cfg(target_vendor = "win7")]
++#[cfg(any(target_vendor = "winxp", target_vendor = "win7"))]
+ compat_fn_optional! {
+     pub fn WaitOnAddress(
+         address: *const c_void,
+@@ -432,38 +432,28 @@ compat_fn_optional! {
+     pub fn WakeByAddressSingle(address: *const c_void);
+ }
+ 
+-#[cfg(any(target_vendor = "win7"))]
+-compat_fn_with_fallback! {
+-    pub static NTDLL: &CStr = c"ntdll";
+-
+-    #[cfg(target_vendor = "win7")]
+-    pub fn NtCreateKeyedEvent(
+-        KeyedEventHandle: *mut HANDLE,
+-        DesiredAccess: u32,
+-        ObjectAttributes: *mut c_void,
+-        Flags: u32
+-    ) -> NTSTATUS {
+-        panic!("keyed events not available")
+-    }
+-    #[cfg(target_vendor = "win7")]
+-    pub fn NtReleaseKeyedEvent(
+-        EventHandle: HANDLE,
+-        Key: *const c_void,
+-        Alertable: bool,
+-        Timeout: *mut i64
+-    ) -> NTSTATUS {
+-        panic!("keyed events not available")
+-    }
+-    #[cfg(target_vendor = "win7")]
+-    pub fn NtWaitForKeyedEvent(
+-        EventHandle: HANDLE,
+-        Key: *const c_void,
+-        Alertable: bool,
+-        Timeout: *mut i64
+-    ) -> NTSTATUS {
+-        panic!("keyed events not available")
+-    }
+-}
++// Keyed events are available on Windows XP and later.
++#[cfg(any(target_vendor = "winxp", target_vendor = "win7"))]
++windows_link::link!("ntdll.dll" "system" fn NtCreateKeyedEvent(
++    KeyedEventHandle: *mut HANDLE,
++    DesiredAccess: u32,
++    ObjectAttributes: *mut c_void,
++    Flags: u32
++) -> NTSTATUS);
++#[cfg(any(target_vendor = "winxp", target_vendor = "win7"))]
++windows_link::link!("ntdll.dll" "system" fn NtReleaseKeyedEvent(
++    EventHandle: HANDLE,
++    Key: *const c_void,
++    Alertable: bool,
++    Timeout: *mut i64
++) -> NTSTATUS);
++#[cfg(any(target_vendor = "winxp", target_vendor = "win7"))]
++windows_link::link!("ntdll.dll" "system" fn NtWaitForKeyedEvent(
++    EventHandle: HANDLE,
++    Key: *const c_void,
++    Alertable: bool,
++    Timeout: *mut i64
++) -> NTSTATUS);
+ 
+ cfg_select! {
+     target_vendor = "uwp" => {
+diff --git a/library/std/src/sys/pal/windows/compat.rs b/library/std/src/sys/pal/windows/compat.rs
+index 7e9f5bd..ce2b4f6 100644
+--- a/library/std/src/sys/pal/windows/compat.rs
++++ b/library/std/src/sys/pal/windows/compat.rs
+@@ -38,7 +38,7 @@ use crate::sys::c;
+ // file an issue for discussion; currently we don't guarantee any functionality
+ // before main.
+ // See https://docs.microsoft.com/en-us/cpp/c-runtime-library/crt-initialization?view=msvc-170
+-#[cfg(target_vendor = "win7")]
++#[cfg(any(target_vendor = "winxp", target_vendor = "win7"))]
+ #[used]
+ #[unsafe(link_section = ".CRT$XCT")]
+ static INIT_TABLE_ENTRY: unsafe extern "C" fn() = init;
+@@ -53,7 +53,7 @@ static INIT_TABLE_ENTRY: unsafe extern "C" fn() = init;
+ /// negative performance impact in practical situations.
+ ///
+ /// Currently we only preload `WaitOnAddress` and `WakeByAddressSingle`.
+-#[cfg(target_vendor = "win7")]
++#[cfg(any(target_vendor = "winxp", target_vendor = "win7"))]
+ unsafe extern "C" fn init() {
+     // In an exe this code is executed before main() so is single threaded.
+     // In a DLL the system's loader lock will be held thereby synchronizing
+@@ -305,7 +305,7 @@ macro_rules! compat_fn_with_fallback {
+ /// Optionally loaded functions.
+ ///
+ /// Relies on the functions being pre-loaded elsewhere.
+-#[cfg(target_vendor = "win7")]
++#[cfg(any(target_vendor = "winxp", target_vendor = "win7"))]
+ macro_rules! compat_fn_optional {
+     ($(
+         $(#[$meta:meta])*
+@@ -338,7 +338,7 @@ macro_rules! compat_fn_optional {
+ }
+ 
+ /// Load all needed functions from "api-ms-win-core-synch-l1-2-0".
+-#[cfg(target_vendor = "win7")]
++#[cfg(any(target_vendor = "winxp", target_vendor = "win7"))]
+ pub(super) fn load_synch_functions() {
+     fn try_load() -> Option<()> {
+         use crate::sync::atomic::Ordering;
+diff --git a/library/std/src/sys/paths/windows.rs b/library/std/src/sys/paths/windows.rs
+index 350a942..572d706 100644
+--- a/library/std/src/sys/paths/windows.rs
++++ b/library/std/src/sys/paths/windows.rs
+@@ -129,7 +129,7 @@ pub fn temp_dir() -> PathBuf {
+     fill_utf16_buf(|buf, sz| unsafe { c::GetTempPath2W(sz, buf) }, os2path).unwrap()
+ }
+ 
+-#[cfg(all(not(target_vendor = "uwp"), not(target_vendor = "win7")))]
++#[cfg(all(not(target_vendor = "uwp"), not(any(target_vendor = "winxp", target_vendor = "win7"))))]
+ fn home_dir_crt() -> Option<PathBuf> {
+     unsafe {
+         // Defined in processthreadsapi.h.
+@@ -155,7 +155,7 @@ fn home_dir_crt() -> Option<PathBuf> {
+     }
+ }
+ 
+-#[cfg(target_vendor = "win7")]
++#[cfg(any(target_vendor = "winxp", target_vendor = "win7"))]
+ fn home_dir_crt() -> Option<PathBuf> {
+     unsafe {
+         use crate::sys::handle::Handle;
+diff --git a/library/std/src/sys/random/windows.rs b/library/std/src/sys/random/windows.rs
+index f5da637..7ee71cc 100644
+--- a/library/std/src/sys/random/windows.rs
++++ b/library/std/src/sys/random/windows.rs
+@@ -1,6 +1,6 @@
+ use crate::sys::c;
+ 
+-#[cfg(not(target_vendor = "win7"))]
++#[cfg(not(any(target_vendor = "winxp", target_vendor = "win7")))]
+ #[inline]
+ pub fn fill_bytes(bytes: &mut [u8]) {
+     let ret = unsafe { c::ProcessPrng(bytes.as_mut_ptr(), bytes.len()) };
+@@ -9,7 +9,7 @@ pub fn fill_bytes(bytes: &mut [u8]) {
+     debug_assert_eq!(ret, c::TRUE);
+ }
+ 
+-#[cfg(target_vendor = "win7")]
++#[cfg(any(target_vendor = "winxp", target_vendor = "win7"))]
+ pub fn fill_bytes(mut bytes: &mut [u8]) {
+     while !bytes.is_empty() {
+         let len = bytes.len().try_into().unwrap_or(u32::MAX);
+diff --git a/library/std/src/sys/stdio/windows.rs b/library/std/src/sys/stdio/windows.rs
+index f669527..7cba29f 100644
+--- a/library/std/src/sys/stdio/windows.rs
++++ b/library/std/src/sys/stdio/windows.rs
+@@ -2,7 +2,7 @@
+ 
+ use core::str::utf8_char_width;
+ 
+-#[cfg(not(target_vendor = "win7"))]
++#[cfg(not(any(target_vendor = "winxp", target_vendor = "win7")))]
+ use crate::alloc::System;
+ use crate::mem::MaybeUninit;
+ use crate::os::windows::io::{FromRawHandle, IntoRawHandle};
+@@ -67,7 +67,7 @@ const MAX_BUFFER_SIZE: usize = 8192;
+ // UTF-16 to UTF-8.
+ pub const STDIN_BUF_SIZE: usize = MAX_BUFFER_SIZE / 2 * 3;
+ 
+-#[cfg(not(target_vendor = "win7"))]
++#[cfg(not(any(target_vendor = "winxp", target_vendor = "win7")))]
+ const MAX_WRITE_HEAP_LEN: usize = 64 * 1024; // In u16 -> 128KiB
+ 
+ pub fn get_handle(handle_id: u32) -> io::Result<c::HANDLE> {
+@@ -84,7 +84,7 @@ pub fn get_handle(handle_id: u32) -> io::Result<c::HANDLE> {
+ /// Returns true if `handle` refers to a proper console (aka conhost).
+ fn is_console(handle: c::HANDLE) -> bool {
+     cfg_select! {
+-        target_vendor = "win7" => {
++        any(target_vendor = "winxp", target_vendor = "win7") => {
+             // `GetConsoleMode` will return false (0) if this is a pipe (we don't care about the reported
+             // mode). This will only detect Windows Console, not other terminals connected to a pipe like
+             // MSYS. Which is exactly what we need, as only Windows Console needs a conversion to UTF-16.
+@@ -140,7 +140,7 @@ fn write_console_utf16(
+ ) -> io::Result<usize> {
+     // As stated for `MAX_BUFFER_SIZE`, Windows 7 does not support large writes at all.
+     // --> Fall back to the small-writes stack-alloc path.
+-    #[cfg(not(target_vendor = "win7"))]
++    #[cfg(not(any(target_vendor = "winxp", target_vendor = "win7")))]
+     if data.len() > MAX_BUFFER_SIZE
+         && let capacity = data.len().min(MAX_WRITE_HEAP_LEN)
+         && let Ok(mut utf16) = Box::<[u16], _>::try_new_uninit_slice_in(capacity, System)
+@@ -151,7 +151,7 @@ fn write_console_utf16(
+     write_console_stack(data, incomplete_utf8, handle)
+ }
+ 
+-#[cfg_attr(not(target_vendor = "win7"), inline(never))] // Avoid stack allocations unless called
++#[cfg_attr(not(any(target_vendor = "winxp", target_vendor = "win7")), inline(never))] // Avoid stack allocations unless called
+ fn write_console_stack(
+     data: &[u8],
+     incomplete_utf8: &mut IncompleteUtf8,
+diff --git a/library/std/src/sys/sync/condvar/mod.rs b/library/std/src/sys/sync/condvar/mod.rs
+index 615781e..297eb5d 100644
+--- a/library/std/src/sys/sync/condvar/mod.rs
++++ b/library/std/src/sys/sync/condvar/mod.rs
+@@ -1,6 +1,6 @@
+ cfg_select! {
+     any(
+-        all(target_os = "windows", not(target_vendor = "win7")),
++        all(target_os = "windows", not(any(target_vendor = "winxp", target_vendor = "win7"))),
+         target_os = "linux",
+         target_os = "android",
+         target_os = "freebsd",
+@@ -19,7 +19,7 @@ cfg_select! {
+         mod pthread;
+         pub use pthread::Condvar;
+     }
+-    all(target_os = "windows", target_vendor = "win7") => {
++    all(target_os = "windows", any(target_vendor = "winxp", target_vendor = "win7")) => {
+         mod windows7;
+         pub use windows7::Condvar;
+     }
+diff --git a/library/std/src/sys/sync/futex/mod.rs b/library/std/src/sys/sync/futex/mod.rs
+index 0edb46c..fe767e9 100644
+--- a/library/std/src/sys/sync/futex/mod.rs
++++ b/library/std/src/sys/sync/futex/mod.rs
+@@ -11,7 +11,7 @@ cfg_select! {
+         mod unix;
+         pub use unix::*;
+     }
+-    all(target_os = "windows", not(target_vendor = "win7")) => {
++    all(target_os = "windows", not(any(target_vendor = "winxp", target_vendor = "win7"))) => {
+         mod windows;
+         pub use windows::*;
+     }
+diff --git a/library/std/src/sys/sync/mutex/mod.rs b/library/std/src/sys/sync/mutex/mod.rs
+index 895ab9c..76b307e 100644
+--- a/library/std/src/sys/sync/mutex/mod.rs
++++ b/library/std/src/sys/sync/mutex/mod.rs
+@@ -1,6 +1,6 @@
+ cfg_select! {
+     any(
+-        all(target_os = "windows", not(target_vendor = "win7")),
++        all(target_os = "windows", not(any(target_vendor = "winxp", target_vendor = "win7"))),
+         target_os = "linux",
+         target_os = "android",
+         target_os = "freebsd",
+@@ -22,7 +22,7 @@ cfg_select! {
+         mod pthread;
+         pub use pthread::Mutex;
+     }
+-    all(target_os = "windows", target_vendor = "win7") => {
++    all(target_os = "windows", any(target_vendor = "winxp", target_vendor = "win7")) => {
+         mod windows7;
+         pub use windows7::{Mutex, raw};
+     }
+diff --git a/library/std/src/sys/sync/once/mod.rs b/library/std/src/sys/sync/once/mod.rs
+index eee7edf..7b76053 100644
+--- a/library/std/src/sys/sync/once/mod.rs
++++ b/library/std/src/sys/sync/once/mod.rs
+@@ -9,7 +9,7 @@
+ 
+ cfg_select! {
+     any(
+-        all(target_os = "windows", not(target_vendor = "win7")),
++        all(target_os = "windows", not(any(target_vendor = "winxp", target_vendor = "win7"))),
+         target_os = "linux",
+         target_os = "android",
+         all(target_family = "wasm", target_feature = "atomics"),
+diff --git a/library/std/src/sys/sync/rwlock/mod.rs b/library/std/src/sys/sync/rwlock/mod.rs
+index 9991f29..78c0f05 100644
+--- a/library/std/src/sys/sync/rwlock/mod.rs
++++ b/library/std/src/sys/sync/rwlock/mod.rs
+@@ -1,6 +1,6 @@
+ cfg_select! {
+     any(
+-        all(target_os = "windows", not(target_vendor = "win7")),
++        all(target_os = "windows", not(any(target_vendor = "winxp", target_vendor = "win7"))),
+         target_os = "linux",
+         target_os = "android",
+         target_os = "freebsd",
+@@ -17,7 +17,7 @@ cfg_select! {
+     }
+     any(
+         target_family = "unix",
+-        all(target_os = "windows", target_vendor = "win7"),
++        all(target_os = "windows", any(target_vendor = "winxp", target_vendor = "win7")),
+         all(target_vendor = "fortanix", target_env = "sgx"),
+         target_os = "xous",
+         target_os = "teeos",
+diff --git a/library/std/src/sys/sync/thread_parking/mod.rs b/library/std/src/sys/sync/thread_parking/mod.rs
+index dffa0ad..f148e96 100644
+--- a/library/std/src/sys/sync/thread_parking/mod.rs
++++ b/library/std/src/sys/sync/thread_parking/mod.rs
+@@ -1,6 +1,6 @@
+ cfg_select! {
+     any(
+-        all(target_os = "windows", not(target_vendor = "win7")),
++        all(target_os = "windows", not(any(target_vendor = "winxp", target_vendor = "win7"))),
+         target_os = "linux",
+         target_os = "android",
+         all(target_family = "wasm", target_feature = "atomics"),
+@@ -23,7 +23,7 @@ cfg_select! {
+         mod id;
+         pub use id::Parker;
+     }
+-    target_vendor = "win7" => {
++    any(target_vendor = "winxp", target_vendor = "win7") => {
+         mod windows7;
+         pub use windows7::Parker;
+     }
+diff --git a/library/std/src/sys/sync/thread_parking/windows7.rs b/library/std/src/sys/sync/thread_parking/windows7.rs
+index 96e94a8..0baed41 100644
+--- a/library/std/src/sys/sync/thread_parking/windows7.rs
++++ b/library/std/src/sys/sync/thread_parking/windows7.rs
+@@ -110,7 +110,7 @@ impl Parker {
+             return;
+         }
+ 
+-        #[cfg(target_vendor = "win7")]
++        #[cfg(any(target_vendor = "winxp", target_vendor = "win7"))]
+         if c::WaitOnAddress::option().is_none() {
+             return keyed_events::park(self);
+         }
+@@ -138,7 +138,7 @@ impl Parker {
+             return;
+         }
+ 
+-        #[cfg(target_vendor = "win7")]
++        #[cfg(any(target_vendor = "winxp", target_vendor = "win7"))]
+         if c::WaitOnAddress::option().is_none() {
+             return keyed_events::park_timeout(self, timeout);
+         }
+@@ -168,7 +168,7 @@ impl Parker {
+         // with park().
+         if self.state.swap(NOTIFIED, Release) == PARKED {
+             unsafe {
+-                #[cfg(target_vendor = "win7")]
++                #[cfg(any(target_vendor = "winxp", target_vendor = "win7"))]
+                 if c::WakeByAddressSingle::option().is_none() {
+                     return keyed_events::unpark(self);
+                 }
+@@ -182,7 +182,7 @@ impl Parker {
+     }
+ }
+ 
+-#[cfg(target_vendor = "win7")]
++#[cfg(any(target_vendor = "winxp", target_vendor = "win7"))]
+ mod keyed_events {
+     use core::pin::Pin;
+     use core::ptr;
+diff --git a/library/std/tests/sync/rwlock.rs b/library/std/tests/sync/rwlock.rs
+index 9715411..603fd5b 100644
+--- a/library/std/tests/sync/rwlock.rs
++++ b/library/std/tests/sync/rwlock.rs
+@@ -908,7 +908,7 @@ fn test_rwlock_max_readers() {
+     const MAX_READERS: u32 = cfg_select! {
+         miri => 100,
+         any(
+-            all(target_os = "windows", not(target_vendor = "win7")),
++            all(target_os = "windows", not(any(target_vendor = "winxp", target_vendor = "win7"))),
+             target_os = "linux",
+             target_os = "android",
+             target_os = "freebsd",
+@@ -921,7 +921,7 @@ fn test_rwlock_max_readers() {
+         ) => (1 << 30) - 2,
+         any(
+             target_family = "unix",
+-            all(target_os = "windows", target_vendor = "win7"),
++            all(target_os = "windows", any(target_vendor = "winxp", target_vendor = "win7")),
+             all(target_vendor = "fortanix", target_env = "sgx"),
+             target_os = "xous",
+             target_os = "teeos",
+diff --git a/library/windows_link/Cargo.toml b/library/windows_link/Cargo.toml
+index fc5d0a6..793d9c6 100644
+--- a/library/windows_link/Cargo.toml
++++ b/library/windows_link/Cargo.toml
+@@ -13,3 +13,7 @@ doc = false
+ # Enable using raw-dylib for Windows imports.
+ # This will eventually be the default.
+ windows_raw_dylib = []
++
++[lints.rust.unexpected_cfgs]
++level = "warn"
++check-cfg = ['cfg(target_vendor, values("winxp"))']
+diff --git a/library/windows_link/src/lib.rs b/library/windows_link/src/lib.rs
+index e92602d..260a21b 100644
+--- a/library/windows_link/src/lib.rs
++++ b/library/windows_link/src/lib.rs
+@@ -44,7 +44,7 @@ pub macro link($($tt:tt)*) {
+ 
+ #[cfg(not(feature = "windows_raw_dylib"))]
+ #[cfg(not(target_os = "cygwin"))] // Cygwin doesn't need these libs
+-#[cfg_attr(target_vendor = "win7", link(name = "advapi32"))]
++#[cfg_attr(any(target_vendor = "winxp", target_vendor = "win7"), link(name = "advapi32"))]
+ #[link(name = "ntdll")]
+ #[link(name = "userenv")]
+ #[link(name = "ws2_32")]

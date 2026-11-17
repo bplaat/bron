@@ -72,9 +72,7 @@ pub(crate) mod windows {
     }
 
     const KF_FLAG_DEFAULT: u32 = 0x00000000;
-    #[cfg(target_vendor = "win7")]
-    use win7::SHGetKnownFolderPath;
-    #[cfg(not(target_vendor = "win7"))]
+    #[cfg(not(target_vendor = "winxp"))]
     #[link(name = "shell32")]
     unsafe extern "system" {
         fn SHGetKnownFolderPath(
@@ -85,38 +83,16 @@ pub(crate) mod windows {
         ) -> i32;
     }
 
-    pub(crate) const FOLDERID_LOCAL_APPDATA: Guid = Guid {
-        data1: 0xF1B32785,
-        data2: 0x6FBA,
-        data3: 0x4FCF,
-        data4: [0x9D, 0x55, 0x7B, 0x8E, 0x7F, 0x15, 0x70, 0x91],
-    };
-    pub(crate) const FOLDERID_ROAMING_APPDATA: Guid = Guid {
-        data1: 0x3EB685DB,
-        data2: 0x65F9,
-        data3: 0x4CF6,
-        data4: [0xA0, 0x3A, 0xE3, 0xEF, 0x65, 0x72, 0x9F, 0x3D],
-    };
-    pub(crate) const FOLDERID_DESKTOP: Guid = Guid {
-        data1: 0xB4BFCC3A,
-        data2: 0xDB2C,
-        data3: 0x424C,
-        data4: [0xB0, 0x29, 0x7F, 0xE9, 0x9A, 0x87, 0xC6, 0x41],
-    };
-    pub(crate) const FOLDERID_MUSIC: Guid = Guid {
-        data1: 0x4BD8D571,
-        data2: 0x6D19,
-        data3: 0x48D3,
-        data4: [0xBE, 0x97, 0x42, 0x22, 0x20, 0x08, 0x0E, 0x43],
-    };
-
-    /// SHGetKnownFolderPath for the `win7` targets, which run on Windows 7 and newer, and with the
-    /// XP toolchain also on Windows XP and Vista. It came with Windows Vista, so it's loaded at
-    /// runtime, Windows XP gets the folder by its CSIDL instead.
-    #[cfg(target_vendor = "win7")]
-    mod win7 {
-        use super::*;
-
+    /// SHGetKnownFolderPath came with Windows Vista, so Windows XP loads it at runtime and gets
+    /// the folder by its CSIDL when it's missing.
+    #[cfg(target_vendor = "winxp")]
+    #[allow(non_snake_case)]
+    unsafe fn SHGetKnownFolderPath(
+        rfid: *const Guid,
+        dwFlags: u32,
+        hToken: *const std::ffi::c_void,
+        ppszPath: *mut *mut u16,
+    ) -> i32 {
         const CSIDL_LOCAL_APPDATA: i32 = 0x1c;
         const CSIDL_APPDATA: i32 = 0x1a;
         const CSIDL_DESKTOPDIRECTORY: i32 = 0x10;
@@ -146,64 +122,80 @@ pub(crate) mod windows {
             *mut *mut u16,
         ) -> i32;
 
-        #[allow(non_snake_case)]
-        pub(super) unsafe fn SHGetKnownFolderPath(
-            rfid: *const Guid,
-            dwFlags: u32,
-            hToken: *const std::ffi::c_void,
-            ppszPath: *mut *mut u16,
-        ) -> i32 {
-            static FUNCTION: std::sync::OnceLock<Option<GetKnownFolderPath>> =
-                std::sync::OnceLock::new();
-            let function = FUNCTION.get_or_init(|| {
-                // SAFETY: shell32 is held by the executable's imports, the export has this signature.
-                unsafe {
-                    let module = GetModuleHandleA(c"shell32.dll".as_ptr());
-                    let address = GetProcAddress(module, c"SHGetKnownFolderPath".as_ptr());
-                    (!address.is_null()).then(|| {
-                        std::mem::transmute::<*const std::ffi::c_void, GetKnownFolderPath>(address)
-                    })
-                }
-            });
-            if let Some(function) = function {
-                // SAFETY: the caller passes valid arguments for SHGetKnownFolderPath.
-                return unsafe { function(rfid, dwFlags, hToken, ppszPath) };
-            }
-
-            // SAFETY: rfid points to a valid GUID.
-            let rfid = unsafe { &*rfid };
-            let Some(csidl) = [
-                (&FOLDERID_LOCAL_APPDATA, CSIDL_LOCAL_APPDATA),
-                (&FOLDERID_ROAMING_APPDATA, CSIDL_APPDATA),
-                (&FOLDERID_DESKTOP, CSIDL_DESKTOPDIRECTORY),
-                (&FOLDERID_MUSIC, CSIDL_MYMUSIC),
-            ]
-            .into_iter()
-            .find_map(|(id, csidl)| (id == rfid).then_some(csidl)) else {
-                return E_FAIL;
-            };
-            let mut path = [0u16; MAX_PATH];
-            // SAFETY: path has room for the MAX_PATH code units SHGetFolderPathW writes at most.
-            let result = unsafe {
-                SHGetFolderPathW(std::ptr::null_mut(), csidl, hToken, 0, path.as_mut_ptr())
-            };
-            if result < 0 {
-                return result;
-            }
-            // Return it in task memory like SHGetKnownFolderPath, with its null terminator
-            let len = path.iter().position(|&c| c == 0).unwrap_or(MAX_PATH - 1) + 1;
-            // SAFETY: the allocation has room for len code units, ppszPath is a valid output pointer.
+        static FUNCTION: std::sync::OnceLock<Option<GetKnownFolderPath>> =
+            std::sync::OnceLock::new();
+        let function = FUNCTION.get_or_init(|| {
+            // SAFETY: shell32 is held by the executable's imports, the export has this signature.
             unsafe {
-                let copy = CoTaskMemAlloc(len * size_of::<u16>()).cast::<u16>();
-                if copy.is_null() {
-                    return E_OUTOFMEMORY;
-                }
-                std::ptr::copy_nonoverlapping(path.as_ptr(), copy, len);
-                *ppszPath = copy;
+                let module = GetModuleHandleA(c"shell32.dll".as_ptr());
+                let address = GetProcAddress(module, c"SHGetKnownFolderPath".as_ptr());
+                (!address.is_null()).then(|| {
+                    std::mem::transmute::<*const std::ffi::c_void, GetKnownFolderPath>(address)
+                })
             }
-            0
+        });
+        if let Some(function) = function {
+            // SAFETY: the caller passes valid arguments for SHGetKnownFolderPath.
+            return unsafe { function(rfid, dwFlags, hToken, ppszPath) };
         }
+
+        // SAFETY: rfid points to a valid GUID.
+        let rfid = unsafe { &*rfid };
+        let Some(csidl) = [
+            (&FOLDERID_LOCAL_APPDATA, CSIDL_LOCAL_APPDATA),
+            (&FOLDERID_ROAMING_APPDATA, CSIDL_APPDATA),
+            (&FOLDERID_DESKTOP, CSIDL_DESKTOPDIRECTORY),
+            (&FOLDERID_MUSIC, CSIDL_MYMUSIC),
+        ]
+        .into_iter()
+        .find_map(|(id, csidl)| (id == rfid).then_some(csidl)) else {
+            return E_FAIL;
+        };
+        let mut path = [0u16; MAX_PATH];
+        // SAFETY: path has room for the MAX_PATH code units SHGetFolderPathW writes at most.
+        let result =
+            unsafe { SHGetFolderPathW(std::ptr::null_mut(), csidl, hToken, 0, path.as_mut_ptr()) };
+        if result < 0 {
+            return result;
+        }
+        // Return it in task memory like SHGetKnownFolderPath, with its null terminator
+        let len = path.iter().position(|&c| c == 0).unwrap_or(MAX_PATH - 1) + 1;
+        // SAFETY: the allocation has room for len code units, ppszPath is a valid output pointer.
+        unsafe {
+            let copy = CoTaskMemAlloc(len * size_of::<u16>()).cast::<u16>();
+            if copy.is_null() {
+                return E_OUTOFMEMORY;
+            }
+            std::ptr::copy_nonoverlapping(path.as_ptr(), copy, len);
+            *ppszPath = copy;
+        }
+        0
     }
+
+    pub(crate) const FOLDERID_LOCAL_APPDATA: Guid = Guid {
+        data1: 0xF1B32785,
+        data2: 0x6FBA,
+        data3: 0x4FCF,
+        data4: [0x9D, 0x55, 0x7B, 0x8E, 0x7F, 0x15, 0x70, 0x91],
+    };
+    pub(crate) const FOLDERID_ROAMING_APPDATA: Guid = Guid {
+        data1: 0x3EB685DB,
+        data2: 0x65F9,
+        data3: 0x4CF6,
+        data4: [0xA0, 0x3A, 0xE3, 0xEF, 0x65, 0x72, 0x9F, 0x3D],
+    };
+    pub(crate) const FOLDERID_DESKTOP: Guid = Guid {
+        data1: 0xB4BFCC3A,
+        data2: 0xDB2C,
+        data3: 0x424C,
+        data4: [0xB0, 0x29, 0x7F, 0xE9, 0x9A, 0x87, 0xC6, 0x41],
+    };
+    pub(crate) const FOLDERID_MUSIC: Guid = Guid {
+        data1: 0x4BD8D571,
+        data2: 0x6D19,
+        data3: 0x48D3,
+        data4: [0xBE, 0x97, 0x42, 0x22, 0x20, 0x08, 0x0E, 0x43],
+    };
 
     pub(crate) fn get_known_folder_path(folder_id: &Guid) -> PathBuf {
         let mut path = LPWSTR::default();
@@ -226,6 +218,8 @@ pub(crate) mod windows {
     #[link(name = "kernel32")]
     unsafe extern "system" {
         fn GetCurrentProcess() -> *mut std::ffi::c_void;
+        #[cfg(not(any(target_vendor = "winxp", target_vendor = "win7")))]
+        fn GetCurrentPackageFamilyName(length: *mut u32, name: *mut u16) -> i32;
         fn CloseHandle(handle: *mut std::ffi::c_void) -> i32;
         fn GetModuleHandleA(name: *const i8) -> *mut std::ffi::c_void;
         fn GetProcAddress(
@@ -274,21 +268,26 @@ pub(crate) mod windows {
 
     fn package_family_name() -> Option<String> {
         type GetName = unsafe extern "system" fn(*mut u32, *mut u16) -> i32;
-        static GET_NAME: std::sync::OnceLock<Option<GetName>> = std::sync::OnceLock::new();
-        let get_name = GET_NAME.get_or_init(|| {
-            // SAFETY: kernel32 is held by the executable's imports. The export is optional
-            // because Windows 7 has no package identity and no AppContainer processes.
-            unsafe {
-                let module = GetModuleHandleA(c"kernel32.dll".as_ptr());
-                if module.is_null() {
-                    return None;
+        #[cfg(not(any(target_vendor = "winxp", target_vendor = "win7")))]
+        let get_name: GetName = GetCurrentPackageFamilyName;
+        #[cfg(any(target_vendor = "winxp", target_vendor = "win7"))]
+        let get_name = {
+            static GET_NAME: std::sync::OnceLock<Option<GetName>> = std::sync::OnceLock::new();
+            let get_name = GET_NAME.get_or_init(|| {
+                // SAFETY: kernel32 is held by the executable's imports. The export is optional
+                // because Windows 7 has no package identity and no AppContainer processes.
+                unsafe {
+                    let module = GetModuleHandleA(c"kernel32.dll".as_ptr());
+                    if module.is_null() {
+                        return None;
+                    }
+                    let address = GetProcAddress(module, c"GetCurrentPackageFamilyName".as_ptr());
+                    (!address.is_null())
+                        .then(|| std::mem::transmute::<*const std::ffi::c_void, GetName>(address))
                 }
-                let address = GetProcAddress(module, c"GetCurrentPackageFamilyName".as_ptr());
-                (!address.is_null())
-                    .then(|| std::mem::transmute::<*const std::ffi::c_void, GetName>(address))
-            }
-        });
-        let get_name = (*get_name)?;
+            });
+            (*get_name)?
+        };
         let mut length = 0;
         // SAFETY: Querying the required length with a null buffer is allowed.
         if unsafe { get_name(&mut length, std::ptr::null_mut()) } != ERROR_INSUFFICIENT_BUFFER {

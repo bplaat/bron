@@ -1086,8 +1086,8 @@ struct Exports {
     dwrite_create_factory: DWriteCreateFactoryFn,
 }
 
-/// The normal Windows targets need Windows 10, which has Direct2D 1.1 and DirectWrite.
-#[cfg(not(target_vendor = "win7"))]
+/// Windows 7+ provides both factory functions, even without the Direct2D 1.1 platform update.
+#[cfg(not(target_vendor = "winxp"))]
 fn exports() -> Option<&'static Exports> {
     #[link(name = "d2d1")]
     unsafe extern "system" {
@@ -1112,9 +1112,10 @@ fn exports() -> Option<&'static Exports> {
     })
 }
 
-/// The `win7` targets load Direct2D and DirectWrite at runtime, so the canvas starts on Windows
-/// without them and draws with GDI+ instead. The libraries stay loaded for the process lifetime.
-#[cfg(target_vendor = "win7")]
+/// The `winxp` target loads Direct2D and DirectWrite at runtime, so the canvas starts
+/// on Windows without them and draws with GDI+ instead. The libraries stay loaded for the
+/// process lifetime.
+#[cfg(target_vendor = "winxp")]
 fn exports() -> Option<&'static Exports> {
     static EXPORTS: std::sync::OnceLock<Option<Exports>> = std::sync::OnceLock::new();
     EXPORTS

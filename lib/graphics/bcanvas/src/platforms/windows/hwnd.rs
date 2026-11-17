@@ -7,13 +7,13 @@
 use std::ptr::null;
 
 use crate::CanvasRenderingContext2d;
-#[cfg(any(target_vendor = "win7", test))]
+#[cfg(any(target_vendor = "winxp", target_vendor = "win7", test))]
 use crate::platforms::windows::gdi;
 use crate::platforms::windows::headers::*;
 use crate::platforms::windows::{Backend, PlatformCanvasContext, backend, direct2d};
 
 /// The DPI of a window, the normal Windows targets need Windows 10
-#[cfg(not(target_vendor = "win7"))]
+#[cfg(not(any(target_vendor = "winxp", target_vendor = "win7")))]
 unsafe fn window_dpi(hwnd: HWND) -> u32 {
     #[link(name = "user32")]
     unsafe extern "system" {
@@ -23,7 +23,7 @@ unsafe fn window_dpi(hwnd: HWND) -> u32 {
 }
 
 /// The DPI of a window, GetDpiForWindow came with Windows 10
-#[cfg(target_vendor = "win7")]
+#[cfg(any(target_vendor = "winxp", target_vendor = "win7"))]
 unsafe fn window_dpi(hwnd: HWND) -> u32 {
     type GetDpi = unsafe extern "system" fn(HWND) -> u32;
     static GET_DPI: std::sync::OnceLock<Option<GetDpi>> = std::sync::OnceLock::new();
@@ -65,7 +65,7 @@ pub(crate) fn client_size(hwnd: HWND) -> (u32, u32, f32) {
 /// The drawing surface of the client area of a window, of the process backend.
 pub(crate) enum WindowTarget {
     Direct2D(direct2d::WindowTarget),
-    #[cfg(any(target_vendor = "win7", test))]
+    #[cfg(any(target_vendor = "winxp", target_vendor = "win7", test))]
     Gdi(gdi::WindowTarget),
 }
 
@@ -73,7 +73,7 @@ impl WindowTarget {
     pub(crate) fn new() -> Self {
         match backend() {
             Backend::Direct2D => Self::Direct2D(direct2d::WindowTarget::new()),
-            #[cfg(any(target_vendor = "win7", test))]
+            #[cfg(any(target_vendor = "winxp", target_vendor = "win7", test))]
             Backend::Gdi => Self::Gdi(gdi::WindowTarget::new()),
         }
     }
@@ -91,7 +91,7 @@ impl WindowTarget {
             Self::Direct2D(target) => target
                 .begin(hwnd, width, height, scale)
                 .map(PlatformCanvasContext::Direct2D),
-            #[cfg(any(target_vendor = "win7", test))]
+            #[cfg(any(target_vendor = "winxp", target_vendor = "win7", test))]
             Self::Gdi(target) => target
                 .begin(hwnd, width, height, scale)
                 .map(|context| PlatformCanvasContext::Gdi(Box::new(context))),
@@ -102,7 +102,7 @@ impl WindowTarget {
     pub(crate) fn end(&mut self, hwnd: HWND) -> bool {
         match self {
             Self::Direct2D(target) => target.end(hwnd),
-            #[cfg(any(target_vendor = "win7", test))]
+            #[cfg(any(target_vendor = "winxp", target_vendor = "win7", test))]
             Self::Gdi(target) => target.end(hwnd),
         }
     }
@@ -111,7 +111,7 @@ impl WindowTarget {
     pub(crate) fn lose(&mut self) {
         match self {
             Self::Direct2D(target) => target.lose(),
-            #[cfg(any(target_vendor = "win7", test))]
+            #[cfg(any(target_vendor = "winxp", target_vendor = "win7", test))]
             Self::Gdi(target) => target.lose(),
         }
     }

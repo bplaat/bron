@@ -4,14 +4,14 @@ Date: Mon, 16 Nov 2026 19:27:47 +0100
 Subject: [PATCH] Name the child process pipes on Windows XP
 
 Windows XP can't create pipes without a name, which std creates for the
-standard streams of child processes. The win7 targets give them a name
+standard streams of child processes. The winxp targets give them a name
 unique for the process instead and open the other side by that name.
 ---
  .../std/src/sys/process/windows/child_pipe.rs | 24 ++++++++++++++++++-
  1 file changed, 23 insertions(+), 1 deletion(-)
 
 diff --git a/library/std/src/sys/process/windows/child_pipe.rs b/library/std/src/sys/process/windows/child_pipe.rs
-index 2593130..0a50b19 100644
+index 2593130..89cb91b 100644
 --- a/library/std/src/sys/process/windows/child_pipe.rs
 +++ b/library/std/src/sys/process/windows/child_pipe.rs
 @@ -118,6 +118,25 @@ pub(super) fn child_pipe(ours_readable: bool, their_handle_inheritable: bool) ->
@@ -20,19 +20,19 @@ index 2593130..0a50b19 100644
  
 +        // Windows XP can't create a pipe without a name, so give it a name of its own, unique for
 +        // the process and other than those of `CreatePipe`, and open their side by that name.
-+        #[cfg(target_vendor = "win7")]
++        #[cfg(target_vendor = "winxp")]
 +        let mut name_buffer: Vec<u16> = {
 +            static COUNTER: Atomic<u32> = Atomic::<u32>::new(0);
 +            let (process, pipe) = (c::GetCurrentProcessId(), COUNTER.fetch_add(1, Relaxed));
 +            format!("RustPipes.{process:08x}.{pipe:08x}").encode_utf16().collect()
 +        };
-+        #[cfg(target_vendor = "win7")]
++        #[cfg(target_vendor = "winxp")]
 +        let name = c::UNICODE_STRING {
 +            Length: (name_buffer.len() * 2) as u16,
 +            MaximumLength: (name_buffer.len() * 2) as u16,
 +            Buffer: name_buffer.as_mut_ptr(),
 +        };
-+        #[cfg(target_vendor = "win7")]
++        #[cfg(target_vendor = "winxp")]
 +        {
 +            object_attributes.ObjectName = (&raw const name).cast_mut();
 +        }
@@ -45,7 +45,7 @@ index 2593130..0a50b19 100644
              // We can reopen the anonymous pipe without a name by setting
              // RootDirectory to the pipe handle and not setting a path name,
 -            object_attributes.RootDirectory = ours.as_raw_handle();
-+            #[cfg(not(target_vendor = "win7"))]
++            #[cfg(not(target_vendor = "winxp"))]
 +            {
 +                object_attributes.RootDirectory = ours.as_raw_handle();
 +            }

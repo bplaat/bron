@@ -15,7 +15,7 @@ RtlUpcaseUnicodeChar. Without CreateWaitableTimerExW sleeps use Sleep.
  2 files changed, 112 insertions(+), 4 deletions(-)
 
 diff --git a/library/std/src/sys/pal/windows/c.rs b/library/std/src/sys/pal/windows/c.rs
-index 45dea38..6743b30 100644
+index 3d62d44..ea11aeb 100644
 --- a/library/std/src/sys/pal/windows/c.rs
 +++ b/library/std/src/sys/pal/windows/c.rs
 @@ -445,6 +445,42 @@ compat_fn_with_fallback! {
@@ -24,13 +24,13 @@ index 45dea38..6743b30 100644
  
 +    // >= Vista / Server 2008, Windows XP has no symbolic links
 +    // https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-createsymboliclinkw
-+    #[cfg(target_vendor = "win7")]
++    #[cfg(target_vendor = "winxp")]
 +    pub fn CreateSymbolicLinkW(lpsymlinkfilename: PCWSTR, lptargetfilename: PCWSTR, dwflags: u32) -> bool {
 +        unsafe { SetLastError(ERROR_CALL_NOT_IMPLEMENTED as u32); false }
 +    }
 +    // >= Vista / Server 2008, sleeps fall back to Sleep without it
 +    // https://learn.microsoft.com/en-us/windows/win32/api/synchapi/nf-synchapi-createwaitabletimerexw
-+    #[cfg(target_vendor = "win7")]
++    #[cfg(target_vendor = "winxp")]
 +    pub fn CreateWaitableTimerExW(
 +        lptimerattributes: *const SECURITY_ATTRIBUTES,
 +        lptimername: PCWSTR,
@@ -41,13 +41,13 @@ index 45dea38..6743b30 100644
 +    }
 +    // >= Vista / Server 2008
 +    // https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-getfinalpathnamebyhandlew
-+    #[cfg(target_vendor = "win7")]
++    #[cfg(target_vendor = "winxp")]
 +    pub fn GetFinalPathNameByHandleW(hfile: HANDLE, lpszfilepath: PWSTR, cchfilepath: u32, dwflags: u32) -> u32 {
 +        unsafe { xp::get_final_path_name_by_handle(hfile, lpszfilepath, cchfilepath, dwflags) }
 +    }
 +    // >= Vista / Server 2008
 +    // https://learn.microsoft.com/en-us/windows/win32/api/stringapiset/nf-stringapiset-comparestringordinal
-+    #[cfg(target_vendor = "win7")]
++    #[cfg(target_vendor = "winxp")]
 +    pub fn CompareStringOrdinal(
 +        lpstring1: *const u16,
 +        cchcount1: i32,
@@ -60,7 +60,7 @@ index 45dea38..6743b30 100644
 +
      // >= Vista / Server 2008, std reserves no stack for stack overflow messages without it
      // https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-setthreadstackguarantee
-     #[cfg(target_vendor = "win7")]
+     #[cfg(target_vendor = "winxp")]
 diff --git a/library/std/src/sys/pal/windows/c/xp.rs b/library/std/src/sys/pal/windows/c/xp.rs
 index c91660d..e179abf 100644
 --- a/library/std/src/sys/pal/windows/c/xp.rs

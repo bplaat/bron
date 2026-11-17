@@ -5,7 +5,7 @@
  */
 
 //! Windows drawing with Direct2D 1.1. The normal Windows targets need Windows 10, which has it.
-//! The `win7` targets, which Windows XP uses too, draw with GDI+ where it is not available. The
+//! The `winxp` and `win7` targets draw with GDI+ where it is not available. The
 //! tests have GDI+ on every Windows and draw with it when `BCANVAS_TEST_GDI` is set.
 
 pub(crate) use self::context::PlatformCanvasContext;
@@ -19,7 +19,7 @@ mod com;
 mod context;
 mod dib;
 mod direct2d;
-#[cfg(any(target_vendor = "win7", test))]
+#[cfg(any(target_vendor = "winxp", target_vendor = "win7", test))]
 mod gdi;
 mod headers;
 mod hwnd;
@@ -32,19 +32,19 @@ mod window;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Backend {
     Direct2D,
-    #[cfg(any(target_vendor = "win7", test))]
+    #[cfg(any(target_vendor = "winxp", target_vendor = "win7", test))]
     Gdi,
 }
 
 /// The backend of every canvas of the process.
-#[cfg(not(any(target_vendor = "win7", test)))]
+#[cfg(not(any(target_vendor = "winxp", target_vendor = "win7", test)))]
 pub(crate) const fn backend() -> Backend {
     Backend::Direct2D
 }
 
 /// The backend of every canvas of the process, Direct2D when it is available, chosen once. The
 /// tests draw with GDI+ when `BCANVAS_TEST_GDI` is set.
-#[cfg(any(target_vendor = "win7", test))]
+#[cfg(any(target_vendor = "winxp", target_vendor = "win7", test))]
 pub(crate) fn backend() -> Backend {
     static BACKEND: std::sync::OnceLock<Backend> = std::sync::OnceLock::new();
     *BACKEND.get_or_init(|| {

@@ -12,7 +12,7 @@ Subject: [PATCH] Fall back to the NT file information functions on Windows XP
  create mode 100644 library/std/src/sys/pal/windows/c/xp.rs
 
 diff --git a/library/std/src/sys/fs/windows.rs b/library/std/src/sys/fs/windows.rs
-index 77311d2..b5f46c7 100644
+index 77311d2..5dec3ba 100644
 --- a/library/std/src/sys/fs/windows.rs
 +++ b/library/std/src/sys/fs/windows.rs
 @@ -1262,9 +1262,12 @@ pub fn readdir(p: &Path) -> io::Result<ReadDir> {
@@ -21,7 +21,7 @@ index 77311d2..b5f46c7 100644
          // but as we don't know user's use profile of this function, lets be conservative.
 +        // Windows XP only has `FindExInfoStandard`, `FindExInfoBasic` came with Windows 7.
 +        let info_level =
-+            if cfg!(target_vendor = "win7") { c::FindExInfoStandard } else { c::FindExInfoBasic };
++            if cfg!(target_vendor = "winxp") { c::FindExInfoStandard } else { c::FindExInfoBasic };
          let find_handle = c::FindFirstFileExW(
              path.as_ptr(),
 -            c::FindExInfoBasic,
@@ -30,23 +30,23 @@ index 77311d2..b5f46c7 100644
              c::FindExSearchNameMatch,
              ptr::null(),
 diff --git a/library/std/src/sys/pal/windows/c.rs b/library/std/src/sys/pal/windows/c.rs
-index 439edba..45dea38 100644
+index 5e5c78e..3d62d44 100644
 --- a/library/std/src/sys/pal/windows/c.rs
 +++ b/library/std/src/sys/pal/windows/c.rs
 @@ -15,6 +15,8 @@ use core::ptr;
  #[allow(unused)]
  mod windows_sys;
  pub use windows_sys::*;
-+#[cfg(target_vendor = "win7")]
++#[cfg(target_vendor = "winxp")]
 +mod xp;
  
  pub type WCHAR = u16;
  
 @@ -280,6 +282,8 @@ pub const AF_UNIX: ADDRESS_FAMILY = windows_sys::AF_UNIX as ADDRESS_FAMILY;
  pub const CONDITION_VARIABLE_INIT: CONDITION_VARIABLE = CONDITION_VARIABLE { Ptr: ptr::null_mut() };
- #[cfg(target_vendor = "win7")]
+ #[cfg(any(target_vendor = "winxp", target_vendor = "win7"))]
  pub const SRWLOCK_INIT: SRWLOCK = SRWLOCK { Ptr: ptr::null_mut() };
-+#[cfg(target_vendor = "win7")]
++// Also type-checked on newer targets through cfg!.
 +pub const FindExInfoStandard: FINDEX_INFO_LEVELS = 0;
  #[cfg(not(target_thread_local))]
  pub const INIT_ONCE_STATIC_INIT: INIT_ONCE = INIT_ONCE { Ptr: ptr::null_mut() };
@@ -58,7 +58,7 @@ index 439edba..45dea38 100644
 +
 +    // >= Vista / Server 2008, Windows XP has the NT functions they wrap
 +    // https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-getfileinformationbyhandleex
-+    #[cfg(target_vendor = "win7")]
++    #[cfg(target_vendor = "winxp")]
 +    pub fn GetFileInformationByHandleEx(
 +        hfile: HANDLE,
 +        fileinformationclass: FILE_INFO_BY_HANDLE_CLASS,
@@ -68,7 +68,7 @@ index 439edba..45dea38 100644
 +        unsafe { xp::get_file_information_by_handle_ex(hfile, fileinformationclass, lpfileinformation, dwbuffersize) }
 +    }
 +    // https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-setfileinformationbyhandle
-+    #[cfg(target_vendor = "win7")]
++    #[cfg(target_vendor = "winxp")]
 +    pub fn SetFileInformationByHandle(
 +        hfile: HANDLE,
 +        fileinformationclass: FILE_INFO_BY_HANDLE_CLASS,
@@ -80,7 +80,7 @@ index 439edba..45dea38 100644
 +
 +    // >= Vista / Server 2008, std reserves no stack for stack overflow messages without it
 +    // https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-setthreadstackguarantee
-+    #[cfg(target_vendor = "win7")]
++    #[cfg(target_vendor = "winxp")]
 +    pub fn SetThreadStackGuarantee(stacksizeinbytes: *mut u32) -> BOOL {
 +        unsafe { SetLastError(ERROR_CALL_NOT_IMPLEMENTED as u32); FALSE }
 +    }
@@ -198,7 +198,7 @@ index 0000000..c91660d
 +    result(unsafe { NtSetInformationFile(handle, &mut io, info, size, class) })
 +}
 diff --git a/library/std/src/sys/pal/windows/stack_overflow.rs b/library/std/src/sys/pal/windows/stack_overflow.rs
-index 2154975..538b2b8 100644
+index 2154975..361a27b 100644
 --- a/library/std/src/sys/pal/windows/stack_overflow.rs
 +++ b/library/std/src/sys/pal/windows/stack_overflow.rs
 @@ -8,7 +8,11 @@ pub fn reserve_stack() {
@@ -208,7 +208,7 @@ index 2154975..538b2b8 100644
 -    debug_assert_ne!(result, 0, "failed to reserve stack space for exception handling");
 +    // Windows XP doesn't have the function, there it always fails.
 +    debug_assert!(
-+        result != 0 || cfg!(target_vendor = "win7"),
++        result != 0 || cfg!(target_vendor = "winxp"),
 +        "failed to reserve stack space for exception handling"
 +    );
  }

@@ -8,10 +8,11 @@
 
 fn main() {
     let env = |name: &str| std::env::var(name).unwrap_or_else(|_| panic!("{name} not set"));
-    // Windows 7 has no system winsqlite3.dll. Inspect the Cargo target rather than
+    // Windows XP and 7 have no system winsqlite3.dll. Inspect the Cargo target rather than
     // cfg!(windows), which describes the host compiling this build script.
-    let win7 = env("CARGO_CFG_TARGET_OS") == "windows" && env("CARGO_CFG_TARGET_VENDOR") == "win7";
-    if cfg!(feature = "bundled") || win7 {
+    let legacy_windows = env("CARGO_CFG_TARGET_OS") == "windows"
+        && matches!(env("CARGO_CFG_TARGET_VENDOR").as_str(), "winxp" | "win7");
+    if cfg!(feature = "bundled") || legacy_windows {
         let mut build = cc::Build::new();
         build.file("sqlite3/sqlite3.c");
         if cfg!(feature = "column-metadata") {

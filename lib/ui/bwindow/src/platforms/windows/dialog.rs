@@ -4,11 +4,11 @@
  * SPDX-License-Identifier: MIT
  */
 
-#[cfg(any(target_vendor = "win7", test))]
+#[cfg(any(target_vendor = "winxp", test))]
 use std::ffi::OsString;
 use std::ffi::c_void;
 use std::mem::size_of;
-#[cfg(any(target_vendor = "win7", test))]
+#[cfg(any(target_vendor = "winxp", test))]
 use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use std::path::PathBuf;
 use std::ptr::{null, null_mut};
@@ -26,6 +26,7 @@ impl crate::MessageDialogInterface for PlatformMessageDialog {
             .map(|window| window.0.hwnd)
             .unwrap_or_else(|| unsafe { GetActiveWindow() });
         let Some(task_dialog) = optional_proc!(
+            7,
             "comctl32",
             TaskDialogIndirect(*const TASKDIALOGCONFIG, *mut i32, *mut i32, *mut BOOL) -> HRESULT
         ) else {
@@ -183,11 +184,11 @@ impl crate::FileDialogInterface for PlatformFileDialog {
                 &mut raw as *mut _ as *mut *mut c_void,
             ) != S_OK
             {
-                #[cfg(target_vendor = "win7")]
+                #[cfg(target_vendor = "winxp")]
                 return fallback_file_dialog(dialog, false, false)?
                     .into_iter()
                     .next();
-                #[cfg(not(target_vendor = "win7"))]
+                #[cfg(not(target_vendor = "winxp"))]
                 return None;
             }
             let dlg = &*raw;
@@ -237,9 +238,9 @@ impl crate::FileDialogInterface for PlatformFileDialog {
                 &mut raw as *mut _ as *mut *mut c_void,
             ) != S_OK
             {
-                #[cfg(target_vendor = "win7")]
+                #[cfg(target_vendor = "winxp")]
                 return fallback_file_dialog(dialog, false, true);
-                #[cfg(not(target_vendor = "win7"))]
+                #[cfg(not(target_vendor = "winxp"))]
                 return None;
             }
             let dlg = &*raw;
@@ -306,11 +307,11 @@ impl crate::FileDialogInterface for PlatformFileDialog {
                 &mut raw as *mut _ as *mut *mut c_void,
             ) != S_OK
             {
-                #[cfg(target_vendor = "win7")]
+                #[cfg(target_vendor = "winxp")]
                 return fallback_file_dialog(dialog, true, false)?
                     .into_iter()
                     .next();
-                #[cfg(not(target_vendor = "win7"))]
+                #[cfg(not(target_vendor = "winxp"))]
                 return None;
             }
             let dlg = &*raw;
@@ -393,6 +394,7 @@ fn build_com_filters(
 unsafe fn make_shell_item_from_path(path: Option<&PathBuf>) -> Option<*mut IShellItem> {
     let path = path?;
     let create_item = optional_proc!(
+        7,
         "shell32",
         SHCreateItemFromParsingName(
             *const u16,
@@ -427,7 +429,7 @@ unsafe fn shell_item_path(item: *mut IShellItem) -> Option<PathBuf> {
     }
 }
 
-#[cfg(target_vendor = "win7")]
+#[cfg(target_vendor = "winxp")]
 fn fallback_file_dialog(
     dialog: crate::FileDialog<'_>,
     save: bool,
@@ -503,7 +505,7 @@ fn fallback_file_dialog(
     selected_paths(&buffer)
 }
 
-#[cfg(any(target_vendor = "win7", test))]
+#[cfg(any(target_vendor = "winxp", test))]
 fn selected_paths(buffer: &[u16]) -> Option<Vec<PathBuf>> {
     let mut parts = buffer
         .split(|&unit| unit == 0)

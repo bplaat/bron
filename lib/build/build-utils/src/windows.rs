@@ -32,7 +32,7 @@ pub fn compile_application(
         .set_manifest(&application_manifest(
             name,
             &version,
-            env::var("CARGO_CFG_TARGET_VENDOR").is_ok_and(|vendor| vendor == "win7"),
+            &env::var("CARGO_CFG_TARGET_VENDOR").expect("CARGO_CFG_TARGET_VENDOR not set"),
         ));
     for &(path, id) in extra_icons {
         resources.set_icon_with_id(path, id);
@@ -40,14 +40,18 @@ pub fn compile_application(
     resources.compile()
 }
 
-/// The manifest, the normal Windows targets need Windows 10, the `win7` targets also support
-/// Windows Vista, 7, 8 and 8.1, and Windows XP with the XP toolchain, which ignores the
-/// compatibility section
-fn application_manifest(name: &str, version: &str, win7: bool) -> String {
-    let older_supported_os = if win7 {
+/// Declares support for XP+, Windows 7+ or Windows 10+ according to the target vendor.
+/// Windows XP ignores the compatibility section; later versions use their supportedOS entry.
+fn application_manifest(name: &str, version: &str, vendor: &str) -> String {
+    let windows_vista = if vendor == "winxp" {
         r#"
             <!-- Windows Vista -->
-            <supportedOS Id="{e2011457-1546-43c5-a5fe-008deee3d3f0}"/>
+            <supportedOS Id="{e2011457-1546-43c5-a5fe-008deee3d3f0}"/>"#
+    } else {
+        ""
+    };
+    let windows_7_8 = if matches!(vendor, "winxp" | "win7") {
+        r#"
             <!-- Windows 7 -->
             <supportedOS Id="{35138b9a-5d96-4fbd-8e2d-a2440225f93a}"/>
             <!-- Windows 8 -->
@@ -73,7 +77,7 @@ fn application_manifest(name: &str, version: &str, win7: bool) -> String {
         </dependentAssembly>
     </dependency>
     <compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1">
-        <application>{older_supported_os}
+        <application>{windows_vista}{windows_7_8}
             <!-- Windows 10/11 -->
             <supportedOS Id="{{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}}"/>
         </application>
@@ -102,7 +106,7 @@ mod tests {
 
     #[test]
     fn manifest_escapes_application_names() {
-        let manifest = application_manifest("A&B <\"App\">'", "1.2.3", false);
+        let manifest = application_manifest("A&B <\"App\">'", "1.2.3", "pc");
         assert!(
             manifest.contains("name=\"A&amp;B &lt;&quot;App&quot;&gt;&apos;\" version=\"1.2.3.0\"")
         );
@@ -115,11 +119,18 @@ mod tests {
 
     #[test]
     fn manifest_supports_the_windows_versions_of_the_target() {
-        let windows_10 = "{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}";
-        let windows_vista = "{e2011457-1546-43c5-a5fe-008deee3d3f0}";
-        let manifest = application_manifest("App", "1.0.0", false);
-        assert!(manifest.contains(windows_10) && !manifest.contains(windows_vista));
-        let manifest = application_manifest("App", "1.0.0", true);
-        assert!(manifest.contains(windows_10) && manifest.contains(windows_vista));
+        let supported_versions = [
+            ("{e2011457-1546-43c5-a5fe-008deee3d3f0}", 6),
+            ("{35138b9a-5d96-4fbd-8e2d-a2440225f93a}", 7),
+            ("{4a2f28e3-53b9-4441-ba9c-d69d4a4a6e38}", 8),
+            ("{1f676c76-80e1-4239-95bb-83d0f6d0da78}", 8),
+            ("{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}", 10),
+        ];
+        for (vendor, minimum) in [("winxp", 5), ("win7", 7), ("pc", 10)] {
+            let manifest = application_manifest("App", "1.0.0", vendor);
+            for (id, version) in supported_versions {
+                assert_eq!(manifest.contains(id), version >= minimum, "{vendor}: {id}");
+            }
+        }
     }
 }

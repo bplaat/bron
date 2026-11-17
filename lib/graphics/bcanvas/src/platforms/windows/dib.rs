@@ -62,7 +62,7 @@ impl Dib {
         self.width as usize * self.height as usize * 4
     }
 
-    #[cfg(any(target_vendor = "win7", test))]
+    #[cfg(any(target_vendor = "winxp", target_vendor = "win7", test))]
     pub(crate) const fn as_mut_ptr(&self) -> *mut u8 {
         self.storage.as_ptr()
     }

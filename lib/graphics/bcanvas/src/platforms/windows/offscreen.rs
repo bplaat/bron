@@ -6,13 +6,13 @@
 
 use crate::copy_bgra_premultiplied_to_rgba;
 use crate::platforms::windows::dib::Dib;
-#[cfg(any(target_vendor = "win7", test))]
+#[cfg(any(target_vendor = "winxp", target_vendor = "win7", test))]
 use crate::platforms::windows::gdi;
 use crate::platforms::windows::{Backend, PlatformCanvasContext, backend, direct2d};
 
 enum Target {
     Direct2D(direct2d::OffscreenTarget),
-    #[cfg(any(target_vendor = "win7", test))]
+    #[cfg(any(target_vendor = "winxp", target_vendor = "win7", test))]
     Gdi(gdi::OffscreenTarget),
 }
 
@@ -36,7 +36,7 @@ impl PlatformOffscreenCanvas {
         debug_assert_eq!(dib.len(), length);
         let target = match backend() {
             Backend::Direct2D => Target::Direct2D(direct2d::OffscreenTarget::new(&dib)),
-            #[cfg(any(target_vendor = "win7", test))]
+            #[cfg(any(target_vendor = "winxp", target_vendor = "win7", test))]
             Backend::Gdi => Target::Gdi(gdi::OffscreenTarget::new(&dib)),
         };
         Self {
@@ -50,7 +50,7 @@ impl PlatformOffscreenCanvas {
     pub(crate) fn begin_draw(&mut self, scale: f32) -> PlatformCanvasContext {
         match &mut self.target {
             Target::Direct2D(target) => PlatformCanvasContext::Direct2D(target.begin(scale)),
-            #[cfg(any(target_vendor = "win7", test))]
+            #[cfg(any(target_vendor = "winxp", target_vendor = "win7", test))]
             Target::Gdi(target) => PlatformCanvasContext::Gdi(Box::new(target.begin(scale))),
         }
     }
@@ -58,7 +58,7 @@ impl PlatformOffscreenCanvas {
     pub(crate) fn end_draw(&mut self) {
         match &mut self.target {
             Target::Direct2D(target) => target.end(),
-            #[cfg(any(target_vendor = "win7", test))]
+            #[cfg(any(target_vendor = "winxp", target_vendor = "win7", test))]
             Target::Gdi(_) => {}
         }
         self.dirty = true;

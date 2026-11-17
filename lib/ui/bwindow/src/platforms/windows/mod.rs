@@ -15,13 +15,18 @@ pub(crate) use crate::platforms::windows::window::{
     PlatformWindow, config_dir as windows_config_dir, embed_native_view, resize_native_view,
 };
 
-/// Gets a function of a system DLL, `None` when this Windows doesn't have it. The normal Windows
-/// targets need Windows 10, which has them all, so they link it. The `win7` targets, which Windows
-/// XP uses too, load it once at runtime.
+/// Imports an API available since the given baseline (7 or 10). Targets below that baseline
+/// load it once at runtime and return `None` when it is unavailable.
 macro_rules! optional_proc {
-    ($module:literal, $name:ident($($arg:ty),* $(,)?) -> $ret:ty) => {{
+    (7, $($function:tt)*) => {
+        optional_proc!(@resolve target_vendor = "winxp"; $($function)*)
+    };
+    (10, $($function:tt)*) => {
+        optional_proc!(@resolve any(target_vendor = "winxp", target_vendor = "win7"); $($function)*)
+    };
+    (@resolve $dynamic:meta; $module:literal, $name:ident($($arg:ty),* $(,)?) -> $ret:ty) => {{
         type Function = unsafe extern "system" fn($($arg),*) -> $ret;
-        #[cfg(not(target_vendor = "win7"))]
+        #[cfg(not($dynamic))]
         let function: Option<Function> = {
             #[link(name = $module)]
             unsafe extern "system" {
@@ -29,7 +34,7 @@ macro_rules! optional_proc {
             }
             Some($name)
         };
-        #[cfg(target_vendor = "win7")]
+        #[cfg($dynamic)]
         let function: Option<Function> = {
             static FUNCTION: std::sync::OnceLock<Option<Function>> = std::sync::OnceLock::new();
             *FUNCTION.get_or_init(|| {
@@ -69,7 +74,7 @@ use std::ffi::c_void;
 use self::headers::*;
 
 /// Loads a function of a DLL in the system directory, the DLL stays loaded
-#[cfg(target_vendor = "win7")]
+#[cfg(any(target_vendor = "winxp", target_vendor = "win7"))]
 fn load_system_proc(module: &str, symbol: &str) -> *const c_void {
     // Version 6 of comctl32 lives in WinSxS: only a load by bare name goes through the manifest's
     // activation context, a full path gets the old version 5.82 in the system directory
@@ -95,6 +100,7 @@ fn load_system_proc(module: &str, symbol: &str) -> *const c_void {
 
 pub(super) unsafe fn package_family_name(length: *mut u32, name: *mut u16) -> i32 {
     match optional_proc!(
+        10,
         "kernel32",
         GetCurrentPackageFamilyName(*mut u32, *mut u16) -> i32
     ) {
@@ -109,6 +115,7 @@ pub(super) fn registry_dword(key: HKEY, sub_key: &[u16], value: &[u16]) -> Optio
     let mut size = size_of::<u32>() as u32;
     let data_ptr = (&raw mut data).cast::<c_void>();
     if let Some(get_value) = optional_proc!(
+        7,
         "advapi32",
         RegGetValueW(HKEY, *const u16, *const u16, u32, *mut u32, *mut c_void, *mut u32) -> i32
     ) {
@@ -146,7 +153,7 @@ pub(super) fn registry_dword(key: HKEY, sub_key: &[u16], value: &[u16]) -> Optio
 
 // Windows XP has no DPI awareness, it never scales windows
 pub(super) unsafe fn set_process_dpi_aware() {
-    if let Some(function) = optional_proc!("user32", SetProcessDPIAware() -> BOOL) {
+    if let Some(function) = optional_proc!(7, "user32", SetProcessDPIAware() -> BOOL) {
         unsafe { function() };
     }
 }
@@ -159,6 +166,7 @@ pub(super) unsafe fn dwm_set_window_attribute(
     size: u32,
 ) -> HRESULT {
     match optional_proc!(
+        7,
         "dwmapi",
         DwmSetWindowAttribute(HWND, u32, *const c_void, u32) -> HRESULT
     ) {
@@ -168,7 +176,7 @@ pub(super) unsafe fn dwm_set_window_attribute(
 }
 
 pub(super) unsafe fn system_dpi() -> u32 {
-    if let Some(function) = optional_proc!("user32", GetDpiForSystem() -> u32) {
+    if let Some(function) = optional_proc!(10, "user32", GetDpiForSystem() -> u32) {
         return unsafe { function() };
     }
     unsafe { legacy_system_dpi() }
@@ -185,7 +193,7 @@ unsafe fn legacy_system_dpi() -> u32 {
 }
 
 pub(super) unsafe fn window_dpi(hwnd: HWND) -> u32 {
-    match optional_proc!("user32", GetDpiForWindow(HWND) -> u32) {
+    match optional_proc!(10, "user32", GetDpiForWindow(HWND) -> u32) {
         Some(function) => unsafe { function(hwnd) },
         None => unsafe { system_dpi() },
     }
@@ -199,6 +207,7 @@ pub(super) unsafe fn adjust_window_rect_for_dpi(
     dpi: u32,
 ) -> BOOL {
     match optional_proc!(
+        10,
         "user32",
         AdjustWindowRectExForDpi(*mut RECT, u32, BOOL, u32, u32) -> BOOL
     ) {
@@ -209,7 +218,7 @@ pub(super) unsafe fn adjust_window_rect_for_dpi(
 }
 
 pub(super) unsafe fn set_process_dpi_awareness(value: i32) -> HRESULT {
-    match optional_proc!("shcore", SetProcessDpiAwareness(i32) -> HRESULT) {
+    match optional_proc!(10, "shcore", SetProcessDpiAwareness(i32) -> HRESULT) {
         Some(function) => unsafe { function(value) },
         None => 0x8000_4001u32 as i32, // E_NOTIMPL
     }
@@ -222,6 +231,7 @@ pub(super) unsafe fn monitor_dpi(
     y: *mut u32,
 ) -> HRESULT {
     match optional_proc!(
+        10,
         "shcore",
         GetDpiForMonitor(HMONITOR, i32, *mut u32, *mut u32) -> HRESULT
     ) {

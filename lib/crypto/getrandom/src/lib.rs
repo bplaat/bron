@@ -219,7 +219,7 @@ pub fn fill(buf: &mut [u8]) -> Result<(), Error> {
                 .and_then(|mut file| file.read_exact(buf))
                 .map_err(|error| Error::from_io(&error))?;
         }
-        all(windows, target_vendor = "win7") => {
+        all(windows, any(target_vendor = "winxp", target_vendor = "win7")) => {
             #[link(name = "advapi32")]
             unsafe extern "system" {
                 #[link_name = "SystemFunction036"]

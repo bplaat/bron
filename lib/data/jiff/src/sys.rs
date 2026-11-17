@@ -140,6 +140,7 @@ cfg_select! {
             *mut SystemTime,
         ) -> i32;
 
+        #[cfg(not(target_vendor = "winxp"))]
         #[allow(unsafe_code)]
         #[link(name = "kernel32")]
         unsafe extern "system" {
@@ -154,6 +155,59 @@ cfg_select! {
                 local: *const SystemTime,
                 utc: *mut SystemTime,
             ) -> i32;
+        }
+        /// Windows XP loads the Vista/7 time zone functions at runtime and falls back to its older
+        /// ones, which omit the last two fields and use the current daylight saving rules.
+        #[cfg(target_vendor = "winxp")]
+        macro_rules! compat_fn {
+            ($($name:ident($($arg:ident: $type:ty),*) -> $return:ty = $fallback:ident;)*) => {$(
+                #[allow(unsafe_code, non_snake_case, reason = "Win32 function names")]
+                unsafe extern "system" fn $name($($arg: $type),*) -> $return {
+                    use core::ffi::c_void;
+
+                    #[link(name = "kernel32")]
+                    unsafe extern "system" {
+                        fn $fallback($($arg: $type),*) -> $return;
+                        fn GetModuleHandleA(name: *const u8) -> *mut c_void;
+                        fn GetProcAddress(module: *mut c_void, name: *const u8) -> *const c_void;
+                    }
+
+                    type Function = unsafe extern "system" fn($($type),*) -> $return;
+                    static FUNCTION: std::sync::OnceLock<Function> = std::sync::OnceLock::new();
+                    let function = FUNCTION.get_or_init(|| {
+                        // SAFETY: kernel32 is loaded in every process, the export has this
+                        // signature.
+                        unsafe {
+                            let address = GetProcAddress(
+                                GetModuleHandleA(c"kernel32.dll".as_ptr().cast()),
+                                concat!(stringify!($name), "\0").as_ptr(),
+                            );
+                            if address.is_null() {
+                                $fallback
+                            } else {
+                                core::mem::transmute::<*const c_void, Function>(address)
+                            }
+                        }
+                    });
+                    // SAFETY: the caller passes the arguments of the function.
+                    unsafe { function($($arg),*) }
+                }
+            )*};
+        }
+        #[cfg(target_vendor = "winxp")]
+        compat_fn! {
+            GetDynamicTimeZoneInformation(tz: *mut DynamicTimeZoneInformation) -> u32
+                = GetTimeZoneInformation;
+            SystemTimeToTzSpecificLocalTimeEx(
+                tz: *const DynamicTimeZoneInformation,
+                utc: *const SystemTime,
+                local: *mut SystemTime
+            ) -> i32 = SystemTimeToTzSpecificLocalTime;
+            TzSpecificLocalTimeToSystemTimeEx(
+                tz: *const DynamicTimeZoneInformation,
+                local: *const SystemTime,
+                utc: *mut SystemTime
+            ) -> i32 = TzSpecificLocalTimeToSystemTime;
         }
 
         /// Converts a date and time between UTC and local time with the current time zone and its
@@ -200,7 +254,10 @@ cfg_select! {
 
         /// Returns the local time zone's offset from UTC in seconds at a Unix timestamp.
         pub(crate) fn utc_offset(timestamp: i64) -> Option<i64> {
-            let local = convert(DateTime::from_second(timestamp), SystemTimeToTzSpecificLocalTimeEx)?;
+            let local = convert(
+                DateTime::from_second(timestamp),
+                SystemTimeToTzSpecificLocalTimeEx,
+            )?;
             Some(local.to_second() - timestamp)
         }
     }

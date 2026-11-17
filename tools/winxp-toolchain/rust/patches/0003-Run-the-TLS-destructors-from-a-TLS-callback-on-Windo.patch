@@ -59,16 +59,16 @@ index 0000000..599ab67
 +    }
 +}
 diff --git a/library/std/src/sys/thread_local/mod.rs b/library/std/src/sys/thread_local/mod.rs
-index 1c137e5..d07f5a4 100644
+index 1c137e5..11083ae 100644
 --- a/library/std/src/sys/thread_local/mod.rs
 +++ b/library/std/src/sys/thread_local/mod.rs
 @@ -106,6 +106,10 @@ pub(crate) mod guard {
              pub(crate) use aix::enable;
          }
          target_os = "windows" => {
-+            #[cfg(not(target_vendor = "win7"))]
++            #[cfg(not(target_vendor = "winxp"))]
 +            mod windows;
-+            #[cfg(target_vendor = "win7")]
++            #[cfg(target_vendor = "winxp")]
 +            #[path = "windows_xp.rs"]
              mod windows;
              pub(crate) use windows::enable;

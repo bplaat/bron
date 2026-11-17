@@ -41,7 +41,7 @@ unsafe extern "system" {
 
 /// Loads a DLL from the system directory by full path, so a missing DLL is never searched for in
 /// the current directory or PATH. The DLL stays loaded for the process lifetime.
-#[cfg(target_vendor = "win7")]
+#[cfg(target_vendor = "winxp")]
 pub(crate) fn load_system_library(name: &str) -> HANDLE {
     const MAX_PATH: usize = 260;
     let mut path = vec![0u16; MAX_PATH];

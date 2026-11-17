@@ -38,7 +38,7 @@ validate = { path = "../../../lib/data/validate" }
 zeroize = "1.9"
 zip = "9.1"
 
-[target.'cfg(any(target_vendor = "win7", not(any(target_os = "macos", windows))))'.dependencies]
+[target.'cfg(any(target_vendor = "winxp", target_vendor = "win7", not(any(target_os = "macos", windows))))'.dependencies]
 bsql = { version = "0.1.2", features = ["jiff", "uuid", "sqlite-bundled"] }
 
 [target.'cfg(not(any(target_os = "macos", windows)))'.dependencies]
