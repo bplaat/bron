@@ -153,7 +153,8 @@ if (mode === 'software') {
     // Every folder minus its CD contents and what its .diskignore lists, its built root/ goes onto C: as is
     // without replacing existing files, like setups keep newer system files
     tryMtools('mmd', `::${V86}/software`);
-    for (const name of fs.readdirSync(path.join(root, 'software'))) {
+    const folders = fs.readdirSync(path.join(root, 'software'), { withFileTypes: true }).filter((entry) => entry.isDirectory());
+    for (const { name } of folders) {
         const dir = path.join(root, 'software', name);
         if (fs.existsSync(path.join(dir, 'root'))) copyTree(path.join(dir, 'root'), '', { keep: true });
         const ignore = ['cd', 'root', ...readLines(path.join(dir, '.diskignore'))].map(glob);
