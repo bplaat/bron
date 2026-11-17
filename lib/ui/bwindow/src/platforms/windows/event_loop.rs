@@ -292,61 +292,59 @@ impl crate::EventLoopProxyInterface for PlatformEventLoopProxy {
 }
 
 // MARK: Monitor
+// Reads the monitor info on every call, a resolution or taskbar change updates it
 pub(crate) struct PlatformMonitor {
     hmonitor: HMONITOR,
-    info: MONITORINFOEXW,
 }
 
 impl PlatformMonitor {
-    pub(crate) fn new(hmonitor: HMONITOR) -> Self {
-        let mut info = MONITORINFOEXW {
-            cbSize: size_of::<MONITORINFOEXW>() as u32,
-            ..Default::default()
-        };
-        unsafe {
-            GetMonitorInfoW(hmonitor, &mut info as *mut _ as *mut _);
-        }
-        Self { hmonitor, info }
+    pub(crate) const fn new(hmonitor: HMONITOR) -> Self {
+        Self { hmonitor }
     }
 
     pub(crate) fn primary() -> Self {
         Self::new(unsafe { MonitorFromPoint(POINT { x: 0, y: 0 }, MONITOR_DEFAULTTOPRIMARY) })
     }
 
-    pub(crate) const fn rect(&self) -> &RECT {
-        &self.info.rcMonitor
+    fn info(&self) -> MONITORINFOEXW {
+        let mut info = MONITORINFOEXW {
+            cbSize: size_of::<MONITORINFOEXW>() as u32,
+            ..Default::default()
+        };
+        unsafe { GetMonitorInfoW(self.hmonitor, &mut info as *mut _ as *mut _) };
+        info
+    }
+
+    pub(crate) fn rect(&self) -> RECT {
+        self.info().rcMonitor
     }
 
     // The monitor without the taskbar and docked app bars
-    pub(crate) const fn work_rect(&self) -> &RECT {
-        &self.info.rcWork
+    pub(crate) fn work_rect(&self) -> RECT {
+        self.info().rcWork
     }
 }
 
 impl crate::MonitorInterface for PlatformMonitor {
     fn name(&self) -> String {
-        let len = self
-            .info
-            .szDevice
+        let device = self.info().szDevice;
+        let len = device
             .iter()
             .position(|&unit| unit == 0)
-            .unwrap_or(self.info.szDevice.len());
-        String::from_utf16_lossy(&self.info.szDevice[..len])
+            .unwrap_or(device.len());
+        String::from_utf16_lossy(&device[..len])
     }
 
     fn position(&self) -> LogicalPoint {
-        let scale = self.scale_factor();
-        LogicalPoint::new(
-            self.info.rcMonitor.left as f32 / scale,
-            self.info.rcMonitor.top as f32 / scale,
-        )
+        let (rect, scale) = (self.rect(), self.scale_factor());
+        LogicalPoint::new(rect.left as f32 / scale, rect.top as f32 / scale)
     }
 
     fn size(&self) -> LogicalSize {
-        let scale = self.scale_factor();
+        let (rect, scale) = (self.rect(), self.scale_factor());
         LogicalSize::new(
-            (self.info.rcMonitor.right - self.info.rcMonitor.left) as f32 / scale,
-            (self.info.rcMonitor.bottom - self.info.rcMonitor.top) as f32 / scale,
+            (rect.right - rect.left) as f32 / scale,
+            (rect.bottom - rect.top) as f32 / scale,
         )
     }
 
@@ -364,12 +362,13 @@ impl crate::MonitorInterface for PlatformMonitor {
     }
 
     fn is_primary(&self) -> bool {
-        self.info.rcMonitor.left == 0 && self.info.rcMonitor.top == 0
+        let rect = self.rect();
+        rect.left == 0 && rect.top == 0
     }
 
     fn safe_area(&self) -> LogicalInsets {
-        let scale = self.scale_factor();
-        let (monitor, work) = (&self.info.rcMonitor, &self.info.rcWork);
+        let (info, scale) = (self.info(), self.scale_factor());
+        let (monitor, work) = (info.rcMonitor, info.rcWork);
         LogicalInsets::new(
             (work.top - monitor.top) as f32 / scale,
             (monitor.right - work.right) as f32 / scale,
