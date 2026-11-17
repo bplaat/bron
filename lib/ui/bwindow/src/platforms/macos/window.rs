@@ -8,7 +8,7 @@ use std::ptr::null_mut;
 
 use objc2::rc::{Allocated, Retained};
 use objc2::runtime::{AnyObject as Object, Bool};
-use objc2::{class, define_class, msg_send};
+use objc2::{class, define_class, msg_send, sel};
 
 use super::content::ContentView;
 use super::event_loop::{allow_termination_if_last_window, has_launched, send_event};
@@ -118,6 +118,11 @@ define_class!(
             let name: NSString = unsafe { msg_send![appearance, name] };
             self.ivars().host.theme_changed(if name.to_string().contains("Dark") { Theme::Dark } else { Theme::Light });
         }
+        #[unsafe(method(screenParametersChanged:))]
+        fn _screen_parameters_changed(&self, _: *mut Object) {
+            self.ivars().host.event_sender().send(WindowEvent::MonitorChanged);
+        }
+
         #[unsafe(method(windowDidBecomeKey:))]
         fn _window_did_become_key(&self, notification: *mut Object) {
             self.layout_window_buttons(notification);
@@ -558,6 +563,10 @@ impl PlatformWindow {
         ));
         unsafe {
             let _: () = msg_send![&window, addObserver:window_delegate.as_ptr(), forKeyPath:ns_string!("effectiveAppearance"), options:5usize, context:null_mut::<std::ffi::c_void>()];
+            // Screens added, removed or rearranged, or a changed menu bar or Dock
+            let center: *mut Object = msg_send![class!(NSNotificationCenter), defaultCenter];
+            let _: () = msg_send![center, addObserver:window_delegate.as_ptr(), selector:sel!(screenParametersChanged:),
+                name:ns_string!("NSApplicationDidChangeScreenParametersNotification"), object:null_mut::<Object>()];
         }
         // Windows built before the launch finished are shown by it, later ones right away.
         if has_launched() {
@@ -581,6 +590,8 @@ impl Drop for PlatformWindow {
         let _: () = unsafe {
             msg_send![&self.0.window, removeObserver:self.0._delegate.as_ptr(), forKeyPath:&*key]
         };
+        let center: *mut Object = unsafe { msg_send![class!(NSNotificationCenter), defaultCenter] };
+        let _: () = unsafe { msg_send![center, removeObserver:self.0._delegate.as_ptr()] };
         // NSWindow.delegate is non-owning, so clear it before the retained delegate is dropped.
         let _: () = unsafe { msg_send![&self.0.window, setDelegate:null_mut::<Object>()] };
     }
@@ -614,6 +625,21 @@ impl crate::WindowInterface for PlatformWindow {
         unsafe {
             msg_send![&self.0.window, setFrameTopLeftPoint:NSPoint::new(point.x as f64, point.y as f64)]
         }
+    }
+
+    fn center(&mut self) {
+        let mut screen: *mut Object = unsafe { msg_send![&self.0.window, screen] };
+        if screen.is_null() {
+            screen = unsafe { msg_send![class!(NSScreen), mainScreen] };
+        }
+        // The whole frame centered in the area without the menu bar and Dock
+        let visible: NSRect = unsafe { msg_send![screen, visibleFrame] };
+        let frame: NSRect = unsafe { msg_send![&self.0.window, frame] };
+        let origin = NSPoint::new(
+            visible.origin.x + (visible.size.width - frame.size.width) / 2.0,
+            visible.origin.y + (visible.size.height - frame.size.height) / 2.0,
+        );
+        let _: () = unsafe { msg_send![&self.0.window, setFrameOrigin:origin] };
     }
 
     fn set_size(&mut self, size: LogicalSize) {

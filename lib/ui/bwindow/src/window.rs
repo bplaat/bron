@@ -255,6 +255,8 @@ pub(crate) trait WindowInterface {
     fn size(&self) -> LogicalSize;
     fn set_position(&mut self, point: LogicalPoint);
     fn set_size(&mut self, size: LogicalSize);
+    // Mobile windows fill the screen.
+    fn center(&mut self) {}
     fn set_min_size(&mut self, min_size: LogicalSize);
     fn set_resizable(&mut self, resizable: bool);
     fn set_theme(&mut self, theme: Theme);
@@ -398,6 +400,15 @@ impl Window {
             return;
         }
         self.platform.set_size(size)
+    }
+
+    /// Center the window in the work area of its monitor, see
+    /// [`Monitor::safe_area`](crate::Monitor::safe_area)
+    pub fn center(&mut self) {
+        if self.is_closed() {
+            return;
+        }
+        self.platform.center()
     }
 
     /// Set minimum size

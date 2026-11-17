@@ -85,6 +85,9 @@ pub enum WindowEvent {
     Resize(LogicalSize),
     /// The safe area insets changed, see [`Window::safe_area`](crate::Window::safe_area)
     SafeAreaChanged(LogicalInsets),
+    /// The monitors or their work areas changed, see [`Monitor::safe_area`](crate::Monitor::safe_area).
+    /// Only sent on desktop platforms.
+    MonitorChanged,
     /// Window close requested; closes normally unless prevented
     CloseRequested(CloseRequest),
     /// File dropped

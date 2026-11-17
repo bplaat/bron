@@ -360,6 +360,26 @@ impl crate::WindowInterface for PlatformWindow {
         };
     }
 
+    fn center(&mut self) {
+        let mut rect = RECT::default();
+        unsafe { GetWindowRect(self.0.hwnd, &mut rect) };
+        let monitor = PlatformMonitor::new(unsafe {
+            MonitorFromWindow(self.0.hwnd, MONITOR_DEFAULTTONEAREST)
+        });
+        let work_rect = monitor.work_rect();
+        unsafe {
+            SetWindowPos(
+                self.0.hwnd,
+                null_mut(),
+                work_rect.left + (work_rect.right - work_rect.left - (rect.right - rect.left)) / 2,
+                work_rect.top + (work_rect.bottom - work_rect.top - (rect.bottom - rect.top)) / 2,
+                0,
+                0,
+                SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+            )
+        };
+    }
+
     fn set_size(&mut self, size: LogicalSize) {
         let rect = self.0.client_rect(size);
         unsafe {
@@ -512,6 +532,18 @@ unsafe extern "system" fn window_proc(
             let host = _self.host.clone();
             unsafe { set_titlebar_theme(hwnd, theme) };
             host.theme_changed(theme);
+            if msg == 0x001A && w_param == SPI_SETWORKAREA {
+                host.event_sender().send(WindowEvent::MonitorChanged);
+            }
+            0
+        }
+        // WM_DISPLAYCHANGE
+        0x007E => {
+            _self
+                .host
+                .clone()
+                .event_sender()
+                .send(WindowEvent::MonitorChanged);
             0
         }
         #[cfg(feature = "progress_bar")]

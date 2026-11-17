@@ -29,8 +29,27 @@ pub(super) struct WindowData {
     pub(super) remember_window_state: bool,
 }
 
+// G_SIGNAL_MATCH_DATA
+const SIGNAL_MATCH_DATA: u32 = 1 << 4;
+
 extern "C" fn window_on_destroy(_: *mut GtkWidget, data: &WindowData) {
+    // The screen outlives the window
+    unsafe {
+        g_signal_handlers_disconnect_matched(
+            gdk_screen_get_default().cast(),
+            SIGNAL_MATCH_DATA,
+            0,
+            0,
+            null_mut(),
+            null_mut(),
+            data as *const WindowData as *mut c_void,
+        )
+    };
     data.host.close();
+}
+
+extern "C" fn window_on_monitors_changed(_: *mut GdkScreen, data: &WindowData) {
+    data.host.event_sender().send(WindowEvent::MonitorChanged);
 }
 
 extern "C" fn window_on_style_updated(_: *mut GtkWidget, data: &WindowData) {
@@ -158,6 +177,16 @@ impl PlatformWindow {
                 null(),
                 G_CONNECT_DEFAULT,
             );
+            for signal in [c"monitors-changed", c"size-changed"] {
+                g_signal_connect_data(
+                    gdk_screen_get_default().cast(),
+                    signal.as_ptr(),
+                    window_on_monitors_changed as *const c_void,
+                    window_data.as_mut() as *mut _ as *const c_void,
+                    null(),
+                    G_CONNECT_DEFAULT,
+                );
+            }
             g_signal_connect_data(
                 window as *mut GObject,
                 c"style-updated".as_ptr(),
@@ -261,6 +290,24 @@ impl crate::WindowInterface for PlatformWindow {
                 point.y as i32 + primary_rect.y,
             )
         }
+    }
+
+    fn center(&mut self) {
+        // Wayland compositors place windows themselves
+        if unsafe { gdk_display_is_wayland(gdk_display_get_default()) } {
+            return;
+        }
+        let (mut width, mut height) = (0, 0);
+        unsafe { gtk_window_get_size(self.0.window, &mut width, &mut height) };
+        // Centered in the area without panels and docks
+        let work_rect = PlatformMonitor::primary().work_rect();
+        unsafe {
+            gtk_window_move(
+                self.0.window,
+                work_rect.x + (work_rect.width - width) / 2,
+                work_rect.y + (work_rect.height - height) / 2,
+            )
+        };
     }
 
     fn set_size(&mut self, size: LogicalSize) {

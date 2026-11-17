@@ -318,6 +318,7 @@ pub(crate) const WM_USER: u32 = 0x0400;
 pub(crate) const RDW_ALLCHILDREN: u32 = 0x0080;
 pub(crate) const RDW_UPDATENOW: u32 = 0x0100;
 
+pub(crate) const SPI_SETWORKAREA: WPARAM = 0x002F;
 pub(crate) const SW_SHOWNORMAL: i32 = 1;
 pub(crate) const SW_SHOW: i32 = 5;
 pub(crate) const SW_RESTORE: i32 = 9;
@@ -335,6 +336,7 @@ pub(crate) const PROCESS_PER_MONITOR_DPI_AWARE: i32 = 2;
 pub(crate) const DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2: isize = -4isize;
 
 pub(crate) const MONITOR_DEFAULTTOPRIMARY: u32 = 0x00000001;
+pub(crate) const MONITOR_DEFAULTTONEAREST: u32 = 0x00000002;
 
 pub(crate) const USER_DEFAULT_SCREEN_DPI: u32 = 96;
 pub(crate) const MDT_EFFECTIVE_DPI: i32 = 0;
@@ -460,6 +462,7 @@ unsafe extern "system" {
     pub(crate) fn GetClassLongW(hwnd: HWND, index: i32) -> u32;
     pub(crate) fn GetClassLongPtrW(hwnd: HWND, index: i32) -> usize;
     pub(crate) fn MonitorFromPoint(pt: POINT, dwFlags: u32) -> *mut c_void;
+    pub(crate) fn MonitorFromWindow(hwnd: HWND, dwFlags: u32) -> *mut c_void;
     pub(crate) fn EnumDisplayMonitors(
         hdc: HDC,
         lprcClip: *const RECT,
