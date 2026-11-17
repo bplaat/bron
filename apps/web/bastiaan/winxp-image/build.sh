@@ -58,6 +58,10 @@ if [ ! -f out/disk.img ]; then
     mv out/disk.part.img out/disk.img
 fi
 
-# 4. Streamed disk chunks, the desktop snapshot and the boot screen for the site
-./make-state.mjs out/disk.img ../web/public/winxp
-./bootscreen.mjs out/disk.img ../web/public/winxp
+# 4. The freshly built native apps over the installed ones, on a copy so the stages above stay as they are
+cp -c out/disk.img out/site.img 2>/dev/null || cp out/disk.img out/site.img
+./disk.mjs apps out/site.img
+
+# 5. Streamed disk chunks, only the changed ones, the desktop snapshot and the boot screen for the site
+./make-state.mjs out/site.img ../web/public/winxp
+./bootscreen.mjs out/site.img ../web/public/winxp

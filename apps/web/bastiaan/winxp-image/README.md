@@ -10,15 +10,15 @@ Requires macOS, Docker, Node.js, QEMU, mtools (`brew install qemu mtools`) and t
 
 ```sh
 npm install
-apps/web/bastiaan/winxp-image/build.sh           # build missing stages in winxp-image/out
+apps/web/bastiaan/winxp-image/build.sh           # build missing stages, then the native apps and the site
 apps/web/bastiaan/winxp-image/build.sh software  # reinstall software from the base Windows install
 apps/web/bastiaan/winxp-image/build.sh setup     # rerun guest setup from the software image
 apps/web/bastiaan/winxp-image/build.sh install   # rebuild from a fresh Windows install
 npm run dev --workspace bastiaan
 ```
 
-The build runs headless. Approximate times: 25 minutes for Windows, 1 minute for software and 15 minutes for guest
-setup and the snapshot.
+The build runs headless. Approximate times: 25 minutes for Windows, 1 minute for software, 15 minutes for guest setup
+and about 2 minutes for the native apps and the site, all a changed native app needs.
 
 ## Required files
 
@@ -53,9 +53,11 @@ Generated: `winxp-image/out/` (install images, screenshots), the built `.exe`/`.
    boots v86. `v86setup.exe` installs drivers, applies settings, activates Windows and creates the `bplaat` account.
    Activation failure stops the build. The first user logon reapplies settings reset by Windows and fills the Media
    Player library. Setup files and caches are removed and free space is zeroed. Output: `out/disk.img`.
-4. **Site** (`make-state.mjs`, `chunks.mjs`, `bootscreen.mjs`): compresses the disk into 1 MiB zstd chunks, saves a
-   desktop snapshot at 1024x768 and extracts boot screen assets from `ntoskrnl.exe`. The build ID in `disk.json`
-   invalidates browser sessions from older builds.
+4. **Native apps** (`disk.mjs apps`): copies the freshly built Bastiaan and Reversi over the installed ones on a copy
+   of the disk, the software stage installs their shortcuts and logon entry. Output: `out/site.img`.
+5. **Site** (`make-state.mjs`, `chunks.mjs`, `bootscreen.mjs`): compresses the disk into 1 MiB zstd chunks, only the
+   chunks that changed since the last build, saves a desktop snapshot at 1024x768 and extracts boot screen assets from
+   `ntoskrnl.exe`. The build ID in `disk.json` invalidates browser sessions from older builds.
 
 ## Image contents
 

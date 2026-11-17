@@ -3,6 +3,7 @@
 // Usage: disk.mjs software <disk.img> - copy software/ in, software.cmd installs it at the next logon (QEMU)
 //        disk.mjs setup <disk.img>    - copy the guest integration and music in, v86setup runs at logon (v86)
 //        disk.mjs finish <disk.img>   - drop the setup files and caches, zero the free space
+//        disk.mjs apps <disk.img>     - copy the freshly built native apps over the installed ones
 
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -192,8 +193,13 @@ if (mode === 'software') {
     tryMtools('mdel', '::/pagefile.sys');
     tryMtools('mdel', '::/hiberfil.sys');
     zeroFree();
+} else if (mode === 'apps') {
+    // Their software/ folders install them with shortcuts and logon entries, a new build only replaces the exe
+    for (const [name, folder] of Object.entries({ bastiaan: 'Bastiaan', reversi: 'Reversi' })) {
+        copy(path.join(root, 'software', name, `${name}.exe`), `/Program Files/${folder}/${name}.exe`);
+    }
 } else {
-    throw new Error('usage: node disk.mjs software|setup|finish <disk.img>');
+    throw new Error('usage: disk.mjs software|setup|finish|apps <disk.img>');
 }
 fs.closeSync(fd);
 
