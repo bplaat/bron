@@ -172,7 +172,8 @@ pub(crate) const TD_WARNING_ICON: *const w_char = u16::MAX as usize as *const w_
 pub(crate) const TD_ERROR_ICON: *const w_char = (u16::MAX - 1) as usize as *const w_char;
 pub(crate) const TD_INFORMATION_ICON: *const w_char = (u16::MAX - 2) as usize as *const w_char;
 
-#[repr(C)]
+// commctrl.h declares the task dialog structures under #pragma pack(1).
+#[repr(C, packed)]
 pub(crate) struct TASKDIALOG_BUTTON {
     pub(crate) nButtonID: i32,
     pub(crate) pszButtonText: *const w_char,
@@ -181,7 +182,7 @@ pub(crate) struct TASKDIALOG_BUTTON {
 pub(crate) type TaskDialogCallback =
     Option<unsafe extern "system" fn(HWND, u32, WPARAM, LPARAM, isize) -> i32>;
 
-#[repr(C)]
+#[repr(C, packed)]
 pub(crate) struct TASKDIALOGCONFIG {
     pub(crate) cbSize: u32,
     pub(crate) hwndParent: HWND,

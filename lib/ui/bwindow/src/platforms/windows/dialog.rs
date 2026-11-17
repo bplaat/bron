@@ -394,3 +394,21 @@ unsafe fn shell_item_path(item: *mut IShellItem) -> Option<PathBuf> {
         None
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn task_dialog_layout_matches_windows_headers() {
+        assert_eq!(size_of::<TASKDIALOG_BUTTON>(), 4 + size_of::<*const u16>());
+        assert_eq!(
+            size_of::<TASKDIALOGCONFIG>(),
+            if cfg!(target_pointer_width = "32") {
+                96
+            } else {
+                160
+            }
+        );
+    }
+}
