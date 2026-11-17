@@ -12,7 +12,7 @@
 ; - linux x86_64, arm64
 ;
 ; Build instructions:
-; - build: ./build-portable.py hello.s
+; - build: ./build-portable.mjs hello.s
 ; - windows: ./hello.com
 ; - unix: sh ./hello.com
 

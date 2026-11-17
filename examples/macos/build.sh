@@ -10,12 +10,12 @@ case "${1:-assembly}" in
             chmod +x "${source%.s}"
         done
         for source in hello*-arm64.s; do
-            python3 build-arm64.py "$source"
+            node build-arm64.mjs "$source"
         done
         rm -f alert/asm/alert
         nasm -f bin alert/asm/alert.s -o alert/asm/alert
         for source in portable-executable/hello.s portable-executable/alert.s; do
-            python3 portable-executable/build-portable.py "$source"
+            node portable-executable/build-portable.mjs "$source"
         done
         ;;
     native)

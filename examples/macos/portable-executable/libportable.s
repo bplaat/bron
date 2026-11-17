@@ -2,7 +2,7 @@
 ; Written by Bastiaan van der Plaat (https://bplaat.nl/)
 
 %ifndef SIGNATURE_IDENTIFIER_SIZE
-    %error "Build with build-portable.py"
+    %error "Build with build-portable.mjs"
 %endif
 
 ; PE consts

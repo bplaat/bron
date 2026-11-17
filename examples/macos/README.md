@@ -40,7 +40,7 @@ Rust, Swift, and SwiftUI.
 ## Requirements
 
 - macOS with Xcode Command Line Tools
-- NASM and Python 3 for the assembly examples
+- NASM and Node.js for the assembly examples
 - Xcode's optional Metal Toolchain for the Metal examples
 - Rust and the required Apple targets for the Rust examples
 - The iOS Simulator SDK to build the iOS examples, and a booted simulator to run them

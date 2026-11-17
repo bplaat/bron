@@ -1,7 +1,7 @@
 ; A simple pure assembly Mach-O ARM64 ad-hoc code signed 'static' macOS executable.
 ; It is really a dynamically linked executable, but static ARM64 Mach-O executables don't exist,
 ; because when an executable is not following some strict rules it is killed before it will be started.
-; ./build-arm64.py hello-arm64.s
+; ./build-arm64.mjs hello-arm64.s
 
     origin equ 0x100000000
     alignment equ 0x4000
@@ -11,7 +11,7 @@
     [org origin]
 
     %ifndef SIGNATURE_IDENTIFIER_SIZE
-        %error "Build with build-arm64.py"
+        %error "Build with build-arm64.mjs"
     %endif
 
     %define MH_MAGIC_64 0xfeedfacf

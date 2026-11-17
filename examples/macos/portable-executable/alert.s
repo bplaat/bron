@@ -7,7 +7,7 @@
 ; - FIXME: linux x86_64
 ;
 ; Build instructions:
-; - build: ./build-portable.py alert.s
+; - build: ./build-portable.mjs alert.s
 ; - windows: ./alert.com
 ; - unix: sh ./alert.com
 

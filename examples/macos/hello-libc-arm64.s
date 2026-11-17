@@ -1,5 +1,5 @@
 ; A simple pure assembly Mach-O ARM64 ad-hoc code signed dynamically linked macOS executable with symbols.
-; ./build-arm64.py hello-libc-arm64.s
+; ./build-arm64.mjs hello-libc-arm64.s
 
     origin equ 0x100000000
     alignment equ 0x4000
@@ -9,7 +9,7 @@
     [org origin]
 
     %ifndef SIGNATURE_IDENTIFIER_SIZE
-        %error "Build with build-arm64.py"
+        %error "Build with build-arm64.mjs"
     %endif
 
     %define MH_MAGIC_64 0xfeedfacf
