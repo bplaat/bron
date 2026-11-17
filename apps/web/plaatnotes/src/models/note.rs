@@ -5,8 +5,8 @@
  */
 
 use bsql::FromRow;
-use chrono::{DateTime, Utc};
 use from_derive::FromStruct;
+use jiff::Timestamp;
 use uuid::Uuid;
 
 use crate::api;
@@ -29,13 +29,13 @@ pub(crate) struct Note {
     pub is_archived: bool,
     pub is_trashed: bool,
     pub position: i64,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
+    pub created_at: Timestamp,
+    pub updated_at: Timestamp,
 }
 
 impl Default for Note {
     fn default() -> Self {
-        let now = Utc::now();
+        let now = Timestamp::now();
         Self {
             id: Uuid::now_v7(),
             user_id: Uuid::nil(),

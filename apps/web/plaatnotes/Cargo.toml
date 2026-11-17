@@ -12,15 +12,15 @@ workspace = true
 [dependencies]
 anyhow = "1.0"
 base64 = "0.23.1"
-bsql = { version = "0.1.2", features = ["uuid", "chrono", "sqlite-fts5"] }
-chrono = { version = "0.4.45", default-features = false, features = [
-    "now",
-    "serde",
-] }
+bsql = { version = "0.1.2", features = ["jiff", "uuid", "sqlite-fts5"] }
 dotenvy = "0.15.7"
 from_derive = { path = "../../../lib/data/from_derive" }
 getrandom = "0.4.3"
 gzip = { path = "../../../lib/data/gzip" }
+jiff = { version = "1.0", default-features = false, features = [
+    "serde",
+    "std",
+] }
 log = "0.4.34"
 maxminddb = "0.32.0"
 mime_guess = { version = "2.0", default-features = false }
@@ -39,7 +39,7 @@ zeroize = "1.9"
 zip = "9.1"
 
 [target.'cfg(any(target_vendor = "win7", not(any(target_os = "macos", windows))))'.dependencies]
-bsql = { version = "0.1.2", features = ["uuid", "chrono", "sqlite-bundled"] }
+bsql = { version = "0.1.2", features = ["jiff", "uuid", "sqlite-bundled"] }
 
 [target.'cfg(not(any(target_os = "macos", windows)))'.dependencies]
 small-http = { version = "0.2.1", features = ["tls-vendored"] }

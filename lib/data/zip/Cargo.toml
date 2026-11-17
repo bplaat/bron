@@ -11,9 +11,9 @@ workspace = true
 
 [dependencies]
 bitflags = "2.13"
-chrono = { version = "0.4", default-features = false, features = ["clock"] }
 crc = "3"
 deflate = { path = "../deflate" }
+jiff = { version = "1.0", default-features = false, features = ["tz-system"] }
 
 [dev-dependencies]
 criterion = "0.8"

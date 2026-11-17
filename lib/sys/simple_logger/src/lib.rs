@@ -9,7 +9,7 @@
 use std::env;
 use std::io::{self, IsTerminal};
 
-use chrono::Utc;
+use jiff::Timestamp;
 use log::{Level, LevelFilter, Metadata, Record};
 
 // MARK: SimpleLogger
@@ -83,7 +83,7 @@ impl log::Log for SimpleLogger {
 
             println!(
                 "{} {} {}: {}",
-                Utc::now().to_rfc3339(),
+                Timestamp::now(),
                 level,
                 record.target(),
                 record.args()

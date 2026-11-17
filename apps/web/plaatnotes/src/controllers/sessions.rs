@@ -6,7 +6,7 @@
 
 use anyhow::Result;
 use bsql::{execute_args, preprocess_fts_query, query_args};
-use chrono::Utc;
+use jiff::Timestamp;
 use small_http::{Request, Response, Status};
 use uuid::Uuid;
 
@@ -82,7 +82,7 @@ pub(crate) fn sessions_delete(req: &Request, ctx: &Context) -> Result<Response> 
         ctx.database
             .execute("DELETE FROM sessions WHERE id = ?", session.id)?;
     } else {
-        let now = Utc::now();
+        let now = Timestamp::now();
         execute_args!(
             ctx.database,
             "UPDATE sessions SET expires_at = :now, updated_at = :now WHERE id = :id",
@@ -107,7 +107,7 @@ fn list_sessions(
     user_id: Uuid,
     query: &IndexQuery,
 ) -> Result<(i64, Vec<api::Session>)> {
-    let now = Utc::now();
+    let now = Timestamp::now();
     let offset = (query.page - 1) * query.limit;
     if let Some(q) = query.query.as_deref().filter(|s| !s.is_empty()) {
         let fts_query = preprocess_fts_query(q);
@@ -255,7 +255,8 @@ mod test {
                 ip_address: "1.2.3.4".to_string(),
                 ip_country: Some("Netherlands".to_string()),
                 client_name: Some("Firefox".to_string()),
-                expires_at: Utc::now() + Duration::from_secs(crate::consts::SESSION_EXPIRY_SECONDS),
+                expires_at: Timestamp::now()
+                    + Duration::from_secs(crate::consts::SESSION_EXPIRY_SECONDS),
                 ..Default::default()
             })
             .unwrap();
@@ -266,7 +267,8 @@ mod test {
                 token: "token-jane2".to_string(),
                 ip_address: "5.6.7.8".to_string(),
                 client_name: Some("Chrome".to_string()),
-                expires_at: Utc::now() + Duration::from_secs(crate::consts::SESSION_EXPIRY_SECONDS),
+                expires_at: Timestamp::now()
+                    + Duration::from_secs(crate::consts::SESSION_EXPIRY_SECONDS),
                 ..Default::default()
             })
             .unwrap();
@@ -398,8 +400,8 @@ mod test {
         .next()
         .map(|r| r.unwrap());
         let revoked = revoked.expect("Session history should be retained");
-        assert!(revoked.expires_at.timestamp() <= Utc::now().timestamp());
-        assert!(revoked.updated_at.timestamp() >= session.updated_at.timestamp());
+        assert!(revoked.expires_at <= Timestamp::now());
+        assert!(revoked.updated_at >= session.updated_at);
     }
 
     #[test]
@@ -525,7 +527,7 @@ mod test {
             .insert_session(Session {
                 user_id: user.id,
                 token: "token-expired".to_string(),
-                expires_at: Utc::now() - Duration::from_secs(3600),
+                expires_at: Timestamp::now() - Duration::from_secs(3600),
                 ..Default::default()
             })
             .unwrap();

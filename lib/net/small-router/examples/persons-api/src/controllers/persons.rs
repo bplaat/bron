@@ -6,8 +6,8 @@
 
 use anyhow::Result;
 use bsql::{execute_args, preprocess_fts_query, query_args};
-use chrono::Utc;
 use from_derive::FromStruct;
+use jiff::Timestamp;
 use small_http::{Request, Response, Status};
 use uuid::Uuid;
 use validate::Validate;
@@ -161,7 +161,7 @@ pub(crate) fn persons_update(req: &Request, ctx: &Context) -> Result<Response> {
     person.name = body.name;
     person.age_in_years = body.age_in_years;
     person.relation = body.relation;
-    person.updated_at = Utc::now();
+    person.updated_at = Timestamp::now();
     execute_args!(
         ctx.database,
         "UPDATE persons SET name = :name, age = :age, relation = :relation, updated_at = :updated_at WHERE id = :id",
@@ -368,7 +368,7 @@ mod test {
     fn test_persons_index_pagination() {
         let ctx = Context::with_test_database().expect("Can't create test database");
         let router = router(ctx.clone());
-        let created_at = chrono::DateTime::from_timestamp_secs(1_700_000_000).unwrap();
+        let created_at = Timestamp::from_second(1_700_000_000).unwrap();
 
         // Create multiple persons with the same timestamp to test deterministic ordering
         for i in 1_u8..=30 {

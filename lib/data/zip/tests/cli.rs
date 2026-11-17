@@ -175,9 +175,9 @@ fn restores_dos_local_and_ntfs_timestamps() {
     // Windows ignores TZ and always uses the system time zone.
     #[cfg(windows)]
     let dos_seconds = {
-        use chrono::{Local, TimeZone};
-        let local = Local.with_ymd_and_hms(2020, 2, 29, 12, 34, 56);
-        local.single().unwrap().timestamp() as u64
+        let local = jiff::civil::date(2020, 2, 29).at(12, 34, 56, 0);
+        let zoned = local.to_zoned_datetime(jiff::tz::TimeZone::system());
+        zoned.unwrap().timestamp().as_second() as u64
     };
     for (bytes, seconds, nanos) in [
         (

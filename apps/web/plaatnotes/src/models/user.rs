@@ -5,8 +5,8 @@
  */
 
 use bsql::{FromRow, FromValue};
-use chrono::{DateTime, Utc};
 use from_derive::FromEnum;
+use jiff::Timestamp;
 use uuid::Uuid;
 
 use crate::api;
@@ -23,13 +23,13 @@ pub(crate) struct User {
     pub theme: UserTheme,
     pub language: String,
     pub role: UserRole,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
+    pub created_at: Timestamp,
+    pub updated_at: Timestamp,
 }
 
 impl Default for User {
     fn default() -> Self {
-        let now = Utc::now();
+        let now = Timestamp::now();
         Self {
             id: Uuid::now_v7(),
             first_name: String::new(),

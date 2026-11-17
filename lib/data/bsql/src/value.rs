@@ -140,34 +140,25 @@ mod uuid_impls {
     );
 }
 
-// MARK: Chrono
-#[cfg(feature = "chrono")]
-mod chrono_impls {
-    use chrono::{DateTime, NaiveDate, Utc};
+// MARK: Jiff
+#[cfg(feature = "jiff")]
+mod jiff_impls {
+    use jiff::Timestamp;
+    use jiff::civil::Date;
 
     use super::*;
 
-    impl_value_conversion!(
-        NaiveDate,
-        Integer,
-        "integer",
-        |value| value
-            .and_hms_opt(0, 0, 0)
-            .expect("midnight is a valid time")
-            .and_utc()
-            .timestamp(),
-        |value| DateTime::<Utc>::from_timestamp_secs(value)
-            .ok_or_else(|| ValueError::new(format!("invalid timestamp: {value}")))
-            .map(|value| value.naive_utc().date()),
-    );
+    impl_value_conversion!(Date, Text, "text", |value| value.to_string(), |value| {
+        str::parse(&value).map_err(|_| ValueError::new(format!("invalid date: {value}")))
+    });
 
     impl_value_conversion!(
-        DateTime<Utc>,
+        Timestamp,
         Integer,
         "integer",
-        |value| value.timestamp(),
-        |value| DateTime::<Utc>::from_timestamp_secs(value)
-            .ok_or_else(|| ValueError::new(format!("invalid timestamp: {value}"))),
+        |value| value.as_second(),
+        |value| Timestamp::from_second(value)
+            .map_err(|_| ValueError::new(format!("invalid timestamp: {value}"))),
     );
 }
 
@@ -284,46 +275,50 @@ mod tests {
         assert!(Uuid::try_from(Value::Blob(vec![1_u8, 2_u8])).is_err());
     }
 
-    #[cfg(feature = "chrono")]
+    #[cfg(feature = "jiff")]
     #[test]
-    fn test_chrono_value_roundtrips_and_type_errors() {
-        use chrono::{DateTime, NaiveDate, Utc};
+    fn test_jiff_value_roundtrips_and_type_errors() {
+        use jiff::Timestamp;
+        use jiff::civil::{Date, date};
 
-        let date = NaiveDate::from_ymd_opt(2024, 6, 15).unwrap();
-        let timestamp = 1_700_000_000_i64;
-        let datetime = DateTime::<Utc>::from_timestamp_secs(timestamp).unwrap();
+        let date = date(2024, 6, 15);
+        let timestamp = Timestamp::from_second(1_700_000_000).unwrap();
 
-        assert_eq!(NaiveDate::try_from(Value::from(date)).unwrap(), date);
+        assert_eq!(Value::from(date), Value::Text("2024-06-15".to_string()));
+        assert_eq!(Date::try_from(Value::from(date)).unwrap(), date);
         assert_eq!(
-            Option::<NaiveDate>::try_from(Value::from(Some(date))).unwrap(),
+            Option::<Date>::try_from(Value::from(Some(date))).unwrap(),
             Some(date)
         );
-        assert_eq!(Option::<NaiveDate>::try_from(Value::Null).unwrap(), None);
+        assert_eq!(Option::<Date>::try_from(Value::Null).unwrap(), None);
+
+        assert_eq!(Value::from(timestamp), Value::Integer(1_700_000_000));
+        assert_eq!(
+            Timestamp::try_from(Value::from(timestamp)).unwrap(),
+            timestamp
+        );
+        assert_eq!(
+            Option::<Timestamp>::try_from(Value::from(Some(timestamp))).unwrap(),
+            Some(timestamp)
+        );
+        assert_eq!(Option::<Timestamp>::try_from(Value::Null).unwrap(), None);
 
         assert_eq!(
-            DateTime::<Utc>::try_from(Value::from(datetime)).unwrap(),
-            datetime
+            Date::try_from(Value::Integer(0)).unwrap_err().to_string(),
+            "Value error: expected text"
         );
         assert_eq!(
-            Option::<DateTime<Utc>>::try_from(Value::from(Some(datetime))).unwrap(),
-            Some(datetime)
+            Date::try_from(Value::Text("2024-02-30".to_string()))
+                .unwrap_err()
+                .to_string(),
+            "Value error: invalid date: 2024-02-30"
         );
         assert_eq!(
-            Option::<DateTime<Utc>>::try_from(Value::Null).unwrap(),
-            None
-        );
-
-        assert_eq!(
-            NaiveDate::try_from(Value::Text("2024-06-15".to_string()))
+            Timestamp::try_from(Value::Text("2024-06-15T00:00:00Z".to_string()))
                 .unwrap_err()
                 .to_string(),
             "Value error: expected integer"
         );
-        assert_eq!(
-            DateTime::<Utc>::try_from(Value::Text("2024-06-15T00:00:00Z".to_string()))
-                .unwrap_err()
-                .to_string(),
-            "Value error: expected integer"
-        );
+        assert!(Timestamp::try_from(Value::Integer(i64::MAX)).is_err());
     }
 }

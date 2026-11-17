@@ -8,7 +8,7 @@ use std::io::{Cursor, Read};
 use std::path::Path;
 
 use anyhow::Result;
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use serde::Deserialize;
 
 use crate::context::{Context, DatabaseHelpers};
@@ -44,10 +44,10 @@ fn note_from_json(json_bytes: &[u8], user_id: uuid::Uuid) -> Option<Note> {
         is_pinned: keep_note.is_pinned,
         is_archived: keep_note.is_archived,
         is_trashed: keep_note.is_trashed,
-        created_at: DateTime::from_timestamp_secs(keep_note.created_timestamp_usec / 1_000_000)
-            .unwrap_or_else(Utc::now),
-        updated_at: DateTime::from_timestamp_secs(keep_note.user_edited_timestamp_usec / 1_000_000)
-            .unwrap_or_else(Utc::now),
+        created_at: Timestamp::from_second(keep_note.created_timestamp_usec / 1_000_000)
+            .unwrap_or_else(|_| Timestamp::now()),
+        updated_at: Timestamp::from_second(keep_note.user_edited_timestamp_usec / 1_000_000)
+            .unwrap_or_else(|_| Timestamp::now()),
         ..Default::default()
     })
 }

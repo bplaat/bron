@@ -256,8 +256,12 @@ impl Response {
 
     fn finish_headers(&mut self, req: &Request, keep_alive: bool) {
         #[cfg(feature = "date")]
-        self.headers
-            .insert("Date".to_string(), chrono::Utc::now().to_rfc2822());
+        self.headers.insert(
+            "Date".to_string(),
+            jiff::fmt::rfc2822::DateTimePrinter::new()
+                .timestamp_to_rfc9110_string(&jiff::Timestamp::now())
+                .expect("the current year is printable"),
+        );
         self.headers
             .insert("Content-Length".to_string(), self.body.len().to_string());
         if req.version == Version::Http1_1 {

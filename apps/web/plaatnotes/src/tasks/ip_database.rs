@@ -7,7 +7,9 @@
 use crate::context::Context;
 
 fn try_download_mmdb(mmdb_path: &str) {
-    let date = chrono::Utc::now().naive_utc().date();
+    let date = jiff::Timestamp::now()
+        .to_zoned_datetime(jiff::tz::TimeZone::UTC)
+        .date();
     let (year, month) = (date.year(), date.month());
     let (prev_year, prev_month) = if month == 1 {
         (year - 1, 12)

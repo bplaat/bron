@@ -6,7 +6,8 @@
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use chrono::{Local, TimeZone};
+use jiff::civil::DateTime;
+use jiff::tz::TimeZone;
 
 use crate::{ZipError, read_u16_le, read_u32_le};
 
@@ -87,15 +88,21 @@ pub(crate) fn unix_time(seconds: i64) -> Option<SystemTime> {
 
 // DOS timestamps are local wall-clock times, without a stored time zone.
 pub(crate) fn dos_timestamp(date: u16, time: u16) -> Option<SystemTime> {
-    let local = Local.with_ymd_and_hms(
-        i32::from(date >> 9) + 1980,
-        u32::from((date >> 5) & 15),
-        u32::from(date & 31),
-        u32::from(time >> 11),
-        u32::from((time >> 5) & 63),
-        u32::from(time & 31) * 2,
-    );
-    unix_time(local.single()?.timestamp())
+    let local = DateTime::new(
+        (date >> 9) as i16 + 1980,
+        ((date >> 5) & 15) as i8,
+        (date & 31) as i8,
+        (time >> 11) as i8,
+        ((time >> 5) & 63) as i8,
+        (time & 31) as i8 * 2,
+        0,
+    )
+    .ok()?;
+    let timestamp = local
+        .to_zoned_datetime(TimeZone::system())
+        .ok()?
+        .timestamp();
+    unix_time(timestamp.as_second())
 }
 
 // MARK: Tests

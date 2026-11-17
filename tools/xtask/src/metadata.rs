@@ -163,14 +163,14 @@ mod tests {
                 "features": {
                     "default": [],
                     "bundled": [],
-                    "chrono": [],
+                    "jiff": [],
                     "uuid": []
                 }
             }]
         });
         assert_eq!(
             features_without_swap(&metadata, "example", "bundled")?,
-            ["--features", "chrono,uuid"]
+            ["--features", "jiff,uuid"]
         );
         Ok(())
     }

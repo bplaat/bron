@@ -11,13 +11,13 @@ workspace = true
 
 [dependencies]
 anyhow = "1.0"
-bsql = { version = "0.1.2", features = ["uuid", "chrono", "sqlite-fts5"] }
-chrono = { version = "0.4.45", default-features = false, features = [
-    "now",
-    "serde",
-] }
+bsql = { version = "0.1.2", features = ["jiff", "uuid", "sqlite-fts5"] }
 dotenvy = "0.15.7"
 from_derive = { path = "../../../../data/from_derive" }
+jiff = { version = "1.0", default-features = false, features = [
+    "serde",
+    "std",
+] }
 log = "0.4.34"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
@@ -29,7 +29,7 @@ uuid = { version = "1.29", features = ["v7", "serde"] }
 validate = { path = "../../../../data/validate" }
 
 [target.'cfg(any(target_vendor = "win7", not(any(target_os = "macos", windows))))'.dependencies]
-bsql = { version = "0.1.2", features = ["uuid", "chrono", "sqlite-bundled"] }
+bsql = { version = "0.1.2", features = ["jiff", "uuid", "sqlite-bundled"] }
 
 [build-dependencies]
 openapi-generator = { path = "../../../../build/openapi-generator" }

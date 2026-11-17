@@ -54,7 +54,6 @@ base64 = { path = "lib/data/base64" }
 block2 = { path = "lib/apple/block2" }
 bsql = { path = "lib/data/bsql" }
 bsql_derive = { path = "lib/data/bsql_derive" }
-chrono = { path = "lib/data/chrono" }
 copy_dir = { path = "lib/sys/copy_dir" }
 cpal = { path = "lib/audio/cpal" }
 crc = { path = "lib/data/crc" }

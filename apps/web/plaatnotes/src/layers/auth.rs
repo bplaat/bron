@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 use bsql::Connection;
-use chrono::Utc;
+use jiff::Timestamp;
 use small_http::{Request, Response, Status};
 
 use crate::Context;
@@ -71,7 +71,7 @@ fn lookup_session_and_user(token: &str, db: &Connection) -> Result<Option<(Sessi
                 "SELECT {} FROM sessions WHERE token = ? AND expires_at > ? LIMIT 1",
                 Session::columns()
             ),
-            (token.to_string(), Utc::now()),
+            (token.to_string(), Timestamp::now()),
         )?
         .next()
         .transpose()?
@@ -91,9 +91,10 @@ fn lookup_session_and_user(token: &str, db: &Connection) -> Result<Option<(Sessi
     };
 
     // Sliding-window refresh: extend expiry when less than SESSION_REFRESH_THRESHOLD_SECONDS remain
-    let refresh_threshold = Utc::now() + Duration::from_secs(SESSION_REFRESH_THRESHOLD_SECONDS);
-    if session.expires_at.timestamp() < refresh_threshold.timestamp() {
-        let new_expires_at = Utc::now() + Duration::from_secs(SESSION_EXPIRY_SECONDS);
+    let refresh_threshold =
+        Timestamp::now() + Duration::from_secs(SESSION_REFRESH_THRESHOLD_SECONDS);
+    if session.expires_at < refresh_threshold {
+        let new_expires_at = Timestamp::now() + Duration::from_secs(SESSION_EXPIRY_SECONDS);
         db.execute(
             "UPDATE sessions SET expires_at = ? WHERE token = ?",
             (new_expires_at, token.to_string()),
@@ -145,7 +146,7 @@ mod test {
 
         // Insert a session expiring in 15 days - below the 30-day refresh threshold
         let token = "sliding-window-token";
-        let short_expiry = Utc::now() + Duration::from_secs(15 * 24 * 60 * 60);
+        let short_expiry = Timestamp::now() + Duration::from_secs(15 * 24 * 60 * 60);
         ctx.database
             .insert_session(Session {
                 user_id: user.id,
@@ -163,7 +164,7 @@ mod test {
         assert_eq!(res.status, Status::Ok);
 
         // The session expiry must now be approximately now + 90 days (> 80 days away)
-        let min_expected = Utc::now() + Duration::from_secs(80 * 24 * 60 * 60);
+        let min_expected = Timestamp::now() + Duration::from_secs(80 * 24 * 60 * 60);
         let updated_session = ctx
             .database
             .query::<Session>(
@@ -178,7 +179,7 @@ mod test {
             .map(|r| r.unwrap())
             .unwrap();
         assert!(
-            updated_session.expires_at.timestamp() > min_expected.timestamp(),
+            updated_session.expires_at > min_expected,
             "expires_at should have been extended beyond 80 days"
         );
     }

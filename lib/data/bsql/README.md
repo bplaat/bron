@@ -11,7 +11,8 @@ A simple and minimal Rust SQLite and MySQL library with an ergonomic API.
 - `mysql-tls`: verified TLS for MySQL over TCP
 - `mysql-native-password`: legacy `mysql_native_password` authentication
 - `derive` (default): `FromRow` and `FromValue` derive macros
-- `chrono`, `uuid`: value conversions for these crates
+- `jiff`, `uuid`: value conversions for these crates, jiff dates are stored as `YYYY-MM-DD` text
+  and timestamps as Unix seconds
 
 At least one backend must be enabled.
 
@@ -142,7 +143,7 @@ authentication over TCP requires TLS; RSA password exchange is not implemented.
 - Implement the MySQL protocol without depending on a MySQL client crate
 - Bind and read portable `Value` types through server-side prepared statements
 - Have `FromRow` and `FromValue` derive macros for typed application models
-- Work well and efficient with popular crates like `uuid` and `chrono`
+- Work well and efficient with popular crates like `uuid` and `jiff`
 - Have helpful error messages on query errors
 
 ## License

@@ -10,7 +10,7 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
-chrono = { version = "0.4.45", default-features = false, features = ["now"] }
+jiff = { version = "1.0", default-features = false, features = ["std"] }
 log = { version = "0.4.34", features = ["std"] }
 
 [target.'cfg(windows)'.dependencies]

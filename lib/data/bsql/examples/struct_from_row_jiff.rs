@@ -4,18 +4,18 @@
  * SPDX-License-Identifier: MIT
  */
 
-//! A example that inserts and reads rows with structs that derive [FromRow] and have [chrono::DateTime] fields.
+//! A example that inserts and reads rows with structs that derive [FromRow] and have [jiff::Timestamp] fields.
 
 use std::fmt::Debug;
 
 use bsql::{Connection, FromRow};
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 
 #[derive(FromRow)]
 struct NewPerson {
     name: String,
     age: i64,
-    created_at: DateTime<Utc>,
+    created_at: Timestamp,
 }
 
 #[derive(Debug, FromRow)]
@@ -23,7 +23,7 @@ struct Person {
     id: i64,
     name: String,
     age: i64,
-    created_at: DateTime<Utc>,
+    created_at: Timestamp,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -44,12 +44,12 @@ fn main() -> anyhow::Result<()> {
         NewPerson {
             name: "Alice".to_string(),
             age: 30,
-            created_at: Utc::now(),
+            created_at: Timestamp::now(),
         },
         NewPerson {
             name: "Bob".to_string(),
             age: 40,
-            created_at: Utc::now(),
+            created_at: Timestamp::now(),
         },
     ];
     for person in persons {

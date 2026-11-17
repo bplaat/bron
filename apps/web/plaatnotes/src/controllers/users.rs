@@ -6,8 +6,8 @@
 
 use anyhow::Result;
 use bsql::{Connection, execute_args, preprocess_fts_query, query_args};
-use chrono::Utc;
 use from_derive::FromStruct;
+use jiff::Timestamp;
 use small_http::{Request, Response, Status};
 use uuid::Uuid;
 use validate::Validate;
@@ -219,7 +219,7 @@ pub(crate) fn users_update(req: &Request, ctx: &Context) -> Result<Response> {
     {
         user.password = password_hash(&password);
     }
-    user.updated_at = Utc::now();
+    user.updated_at = Timestamp::now();
     ctx.database.transaction(|database| -> Result<()> {
         execute_args!(
             database,
@@ -282,7 +282,7 @@ pub(crate) fn users_change_password(req: &Request, ctx: &Context) -> Result<Resp
 
     // Update password
     user.password = password_hash(&body.new_password);
-    user.updated_at = Utc::now();
+    user.updated_at = Timestamp::now();
     ctx.database.transaction(|database| -> Result<()> {
         execute_args!(
             database,
@@ -487,7 +487,7 @@ pub(crate) fn get_user(user_id: Uuid, ctx: &Context) -> Result<Option<User>> {
 }
 
 fn revoke_user_sessions(database: &Connection, user_id: Uuid) -> Result<()> {
-    let now = Utc::now();
+    let now = Timestamp::now();
     execute_args!(
         database,
         "UPDATE sessions SET expires_at = :now, updated_at = :now WHERE user_id = :user_id",
@@ -553,7 +553,7 @@ mod test {
             .database
             .query_some::<i64>(
                 "SELECT COUNT(*) FROM sessions WHERE user_id = ? AND expires_at > ?",
-                (user_id, Utc::now()),
+                (user_id, Timestamp::now()),
             )
             .unwrap();
         assert_eq!(total, expected_total);

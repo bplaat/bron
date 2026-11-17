@@ -7,7 +7,7 @@
 use std::sync::LazyLock;
 use std::time::Duration;
 
-use chrono::Utc;
+use jiff::Timestamp;
 
 use crate::consts::SESSION_EXPIRY_SECONDS;
 use crate::context::{Context, DatabaseHelpers};
@@ -45,7 +45,7 @@ pub(crate) fn create_test_user_with_session_and_role(
     let session = Session {
         user_id: user.id,
         token: token.clone(),
-        expires_at: Utc::now() + Duration::from_secs(SESSION_EXPIRY_SECONDS),
+        expires_at: Timestamp::now() + Duration::from_secs(SESSION_EXPIRY_SECONDS),
         ..Default::default()
     };
     ctx.database
@@ -78,7 +78,7 @@ pub(crate) fn insert_test_session(ctx: &Context, user_id: uuid::Uuid, token: &st
     let session = Session {
         user_id,
         token: token.to_string(),
-        expires_at: Utc::now() + Duration::from_secs(SESSION_EXPIRY_SECONDS),
+        expires_at: Timestamp::now() + Duration::from_secs(SESSION_EXPIRY_SECONDS),
         ..Default::default()
     };
     ctx.database

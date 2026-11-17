@@ -171,7 +171,6 @@ Most of these libraries are intended primarily for personal use, but can still b
 - [base64](lib/data/base64) A minimal replacement for the [base64](https://crates.io/crates/base64) crate
 - [bsql](lib/data/bsql) A simple and minimal Rust SQLite and MySQL library with an ergonomic API
 - [bsql_derive](lib/data/bsql_derive) The derive macros for the [bsql](lib/data/bsql) crate
-- [chrono](lib/data/chrono) A minimal replacement for the [chrono](https://crates.io/crates/chrono) crate
 - [crc](lib/data/crc) A minimal replacement for the [crc](https://crates.io/crates/crc) crate
 - [deflate](lib/data/deflate) A Deflate and zlib compression library with an optimal parsing mode
 - [from_derive](lib/data/from_derive) A FromEnum and FromStruct derive macro library

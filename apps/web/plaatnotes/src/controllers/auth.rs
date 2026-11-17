@@ -10,8 +10,8 @@ use std::time::Duration;
 use anyhow::Result;
 use base64::prelude::*;
 use bsql::execute_args;
-use chrono::Utc;
 use from_derive::FromStruct;
+use jiff::Timestamp;
 use serde::Deserialize;
 use simple_useragent::UserAgentParser;
 use small_http::{Request, Response, Status};
@@ -146,7 +146,7 @@ pub(crate) fn auth_logout(_req: &Request, ctx: &Context) -> Result<Response> {
         ctx.database,
         "UPDATE sessions SET expires_at = :now, updated_at = :now WHERE token = :token",
         Args {
-            now: Utc::now(),
+            now: Timestamp::now(),
             token: token
         }
     )?;
@@ -233,7 +233,7 @@ pub(crate) fn create_session(req: &Request, ctx: &Context, user_id: Uuid) -> Res
         client_name,
         client_version,
         client_os,
-        expires_at: Utc::now() + Duration::from_secs(SESSION_EXPIRY_SECONDS),
+        expires_at: Timestamp::now() + Duration::from_secs(SESSION_EXPIRY_SECONDS),
         ..Default::default()
     };
     ctx.database.insert_session(session)?;
@@ -329,7 +329,7 @@ mod test {
         .next()
         .map(|r| r.unwrap())
         .unwrap();
-        assert!(expired_session.expires_at.timestamp() <= Utc::now().timestamp());
+        assert!(expired_session.expires_at <= Timestamp::now());
     }
 
     #[test]
@@ -369,7 +369,7 @@ mod test {
             .insert_session(Session {
                 user_id: user.id,
                 token: "expired-token-789".to_string(),
-                expires_at: Utc::now() - Duration::from_secs(3600),
+                expires_at: Timestamp::now() - Duration::from_secs(3600),
                 ..Default::default()
             })
             .unwrap();

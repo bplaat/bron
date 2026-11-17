@@ -5,7 +5,7 @@
  */
 
 use bsql::FromRow;
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use uuid::Uuid;
 
 use crate::api;
@@ -24,14 +24,14 @@ pub(crate) struct Session {
     pub client_name: Option<String>,
     pub client_version: Option<String>,
     pub client_os: Option<String>,
-    pub expires_at: DateTime<Utc>,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
+    pub expires_at: Timestamp,
+    pub created_at: Timestamp,
+    pub updated_at: Timestamp,
 }
 
 impl Default for Session {
     fn default() -> Self {
-        let now = Utc::now();
+        let now = Timestamp::now();
         Self {
             id: Uuid::now_v7(),
             user_id: Uuid::nil(),

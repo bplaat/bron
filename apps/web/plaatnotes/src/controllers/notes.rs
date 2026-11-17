@@ -6,8 +6,8 @@
 
 use anyhow::Result;
 use bsql::{execute_args, preprocess_fts_query, query_args};
-use chrono::Utc;
 use from_derive::FromStruct;
+use jiff::Timestamp;
 use small_http::{Request, Response, Status};
 use uuid::Uuid;
 use validate::Validate;
@@ -143,7 +143,7 @@ pub(crate) fn notes_update(req: &Request, ctx: &Context) -> Result<Response> {
     note.is_pinned = body.is_pinned;
     note.is_archived = body.is_archived;
     note.is_trashed = body.is_trashed;
-    note.updated_at = Utc::now();
+    note.updated_at = Timestamp::now();
     ctx.database.transaction(|db| -> Result<()> {
         execute_args!(
             db,
