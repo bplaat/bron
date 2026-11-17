@@ -27,9 +27,9 @@ v86setup.exe: v86setup.c
 activate/confid.exe: activate/main.cpp activate/confid.cpp activate/confid.h
 	$(CXX) -O2 -s -std=c++17 -static -Wl,--no-insert-timestamp -o $@ activate/main.cpp activate/confid.cpp
 
-# The account picture: 48x48, 24-bit BMP
-user.bmp: ../software/bastiaan/bassiebas.jpg
-	convert $< -resize 48x48 -type TrueColor BMP3:$@
+# The account picture: the site's 48x48 avatar as a 24-bit BMP
+user.bmp: ../../web/public/images/avatar-48x48.png
+	convert $< -type TrueColor BMP3:$@
 
 clean:
 	rm -f v86mou.sys v86vid.sys v86agent.exe v86setup.exe activate/confid.exe user.bmp

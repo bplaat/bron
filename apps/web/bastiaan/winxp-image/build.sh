@@ -17,7 +17,8 @@ esac
 
 # Guest and software builds, cross-compiled with MinGW-w64
 docker build -q -t winxp-tools . >/dev/null
-make() { docker run --rm -v "$PWD:/w" -w "/w/$1" winxp-tools make; }
+# The project is mounted, the guest uses the site's avatar
+make() { docker run --rm -v "$PWD/..:/w" -w "/w/winxp-image/$1" winxp-tools make; }
 make guest
 for dir in software/*/; do [ ! -f "$dir/Makefile" ] || make "$dir"; done
 
