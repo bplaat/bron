@@ -34,8 +34,24 @@ pub(crate) const E_NOTIMPL: HRESULT = 0x80004001u32 as i32;
 #[link(name = "kernel32")]
 unsafe extern "system" {
     pub(crate) fn GetModuleHandleA(name: *const i8) -> HANDLE;
-    pub(crate) fn LoadLibraryA(name: *const i8) -> HANDLE;
+    pub(crate) fn GetSystemDirectoryW(buffer: *mut u16, size: u32) -> u32;
+    pub(crate) fn LoadLibraryW(name: *const u16) -> HANDLE;
     pub(crate) fn GetProcAddress(module: HANDLE, name: *const i8) -> *const c_void;
+}
+
+/// Loads a DLL from the system directory by full path, so a missing DLL is never searched for in
+/// the current directory or PATH. The DLL stays loaded for the process lifetime.
+#[cfg(target_vendor = "win7")]
+pub(crate) fn load_system_library(name: &str) -> HANDLE {
+    const MAX_PATH: usize = 260;
+    let mut path = vec![0u16; MAX_PATH];
+    let length = unsafe { GetSystemDirectoryW(path.as_mut_ptr(), path.len() as u32) } as usize;
+    if length == 0 || length >= path.len() {
+        return std::ptr::null_mut();
+    }
+    path.truncate(length);
+    path.extend(format!("\\{name}\0").encode_utf16());
+    unsafe { LoadLibraryW(path.as_ptr()) }
 }
 
 #[link(name = "user32")]
