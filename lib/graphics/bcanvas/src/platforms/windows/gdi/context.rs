@@ -78,6 +78,8 @@ fn intersect([ax, ay, aw, ah]: Rect, [bx, by, bw, bh]: Rect) -> Rect {
 pub(crate) struct Surface {
     // Deleted before the bitmap and pixels it draws into.
     graphics: Gp<GpGraphics>,
+    // The world transform, reused instead of a new matrix for every drawing.
+    world: Gp<GpMatrix>,
     _bitmap: Gp<GpImage>,
     pixels: *mut u8,
     rect: Rect,
@@ -111,8 +113,10 @@ impl Surface {
             GdipSetPixelOffsetMode(g, PixelOffsetModeHalf);
             GdipSetTextRenderingHint(g, TextRenderingHintAntiAlias);
             GdipSetInterpolationMode(g, InterpolationModeHighQualityBicubic);
+            let world = Gp::create(|out| GdipCreateMatrix2(1.0, 0.0, 0.0, 1.0, 0.0, 0.0, out))?;
             let surface = Self {
                 graphics,
+                world,
                 _bitmap: bitmap,
                 pixels,
                 rect,
@@ -149,9 +153,8 @@ impl Surface {
         ]);
         let Transform([a, b, c, d, e, f]) = origin.concat(transform);
         unsafe {
-            if let Some(matrix) = Gp::create(|out| GdipCreateMatrix2(a, b, c, d, e, f, out)) {
-                GdipSetWorldTransform(self.g(), matrix.get());
-            }
+            GdipSetMatrixElements(self.world.get(), a, b, c, d, e, f);
+            GdipSetWorldTransform(self.g(), self.world.get());
         }
     }
 
@@ -217,6 +220,8 @@ pub(crate) struct Context {
     // Device pixels per logical pixel.
     scale: f32,
     path: Path,
+    // A path of only one ellipse: its command count, logical bounds and transform
+    lone_ellipse: Option<(usize, [f32; 4], Transform)>,
     transform: Transform,
     stack: Vec<(Transform, usize)>,
     // The clip of the surface before each clip, in device pixels.
@@ -232,6 +237,7 @@ impl Context {
             resources,
             scale,
             path: Path::default(),
+            lone_ellipse: None,
             transform: Transform::IDENTITY,
             stack: Vec::new(),
             clips: Vec::new(),
@@ -523,10 +529,49 @@ impl Context {
     }
 
     pub(crate) fn fill_rect(&mut self, state: &CanvasState, x: f32, y: f32, w: f32, h: f32) {
+        // A rectangle on whole device pixels looks the same without antialiasing, which GDI+
+        // fills many times faster, like a page background
+        let user = self.user();
+        let [x0, y0] = user.point([x, y]);
+        let [x1, y1] = user.point([x + w, y + h]);
+        let aligned = user.0[1] == 0.0
+            && user.0[2] == 0.0
+            && [x0, y0, x1, y1]
+                .iter()
+                .all(|v| (v - v.round()).abs() < 1e-3);
+        // In a solid color it fills directly in device pixels without a path
+        if aligned
+            && state.composite == CompositeOperation::SourceOver
+            && let CanvasStyle::Color(color) = &state.fill
+        {
+            if let Some(brush) = Self::color_brush(*color, state.alpha) {
+                let g = self.surface.g();
+                self.set_world(Transform::IDENTITY);
+                unsafe {
+                    GdipSetSmoothingMode(g, SmoothingModeNone);
+                    GdipFillRectangle(
+                        g,
+                        brush.get(),
+                        x0.min(x1),
+                        y0.min(y1),
+                        (x1 - x0).abs(),
+                        (y1 - y0).abs(),
+                    );
+                    GdipSetSmoothingMode(g, SmoothingModeAntiAlias);
+                }
+            }
+            return;
+        }
         let Some(path) = self.rect_path(x, y, w, h) else {
             return;
         };
+        if aligned {
+            unsafe { GdipSetSmoothingMode(self.surface.g(), SmoothingModeNone) };
+        }
         self.fill_path(state, path);
+        if aligned {
+            unsafe { GdipSetSmoothingMode(self.surface.g(), SmoothingModeAntiAlias) };
+        }
     }
 
     pub(crate) fn stroke_rect(&mut self, state: &CanvasState, x: f32, y: f32, w: f32, h: f32) {
@@ -543,6 +588,7 @@ impl Context {
         let mut commands = std::mem::take(&mut self.path.commands);
         commands.clear();
         self.path = Path::default();
+        self.lone_ellipse = None;
         self.path.commands = commands;
     }
     pub(crate) fn close_path(&mut self) {
@@ -558,7 +604,15 @@ impl Context {
         self.path.rect(self.transform, x, y, w, h);
     }
     pub(crate) fn ellipse(&mut self, x: f32, y: f32, rx: f32, ry: f32) {
+        let empty = self.path.commands.is_empty();
         self.path.ellipse(self.transform, [x, y], [rx, ry]);
+        // Later commands make the path longer, so the count tells it is still alone
+        let count = self.path.commands.len();
+        self.lone_ellipse = (empty && count > 0).then_some((
+            count,
+            [x - rx, y - ry, rx * 2.0, ry * 2.0],
+            self.transform,
+        ));
     }
     pub(crate) fn arc(&mut self, x: f32, y: f32, r: f32, start: f32, end: f32, ccw: bool) {
         self.path
@@ -628,6 +682,18 @@ impl Context {
     }
 
     pub(crate) fn fill(&mut self, state: &CanvasState, rule: FillRule) {
+        // A lone ellipse in a solid color fills without building a path, like particles
+        if let Some((count, [x, y, w, h], transform)) = self.lone_ellipse
+            && count == self.path.commands.len()
+            && state.composite == CompositeOperation::SourceOver
+            && let CanvasStyle::Color(color) = &state.fill
+        {
+            if let Some(brush) = Self::color_brush(*color, state.alpha) {
+                self.set_world(self.device().concat(transform));
+                unsafe { GdipFillEllipse(self.surface.g(), brush.get(), x, y, w, h) };
+            }
+            return;
+        }
         let Some(path) = self.gp_path(&self.path, Transform::IDENTITY, rule) else {
             return;
         };
@@ -636,7 +702,12 @@ impl Context {
 
     // Fills a logical path.
     fn fill_path(&mut self, state: &CanvasState, path: Gp<GpPath>) {
-        let bounds = self.path_bounds(&path, None);
+        // Only gradients paint over the bounds
+        let bounds = if matches!(state.fill, CanvasStyle::Gradient(_)) {
+            self.path_bounds(&path, None)
+        } else {
+            [0; 4]
+        };
         self.draw_with(
             state,
             |_| clone_path(&path),
@@ -770,6 +841,16 @@ impl Context {
         h: f32,
     ) {
         let (x, y, w, h) = normalized(x, y, w, h);
+        // A copy pixel for pixel looks the same smoothed or not and is much faster without
+        let user = self.user();
+        let [left, top] = user.point([x, y]);
+        let exact = user.0[1] == 0.0
+            && user.0[2] == 0.0
+            && (user.0[0] * w - image.width as f32).abs() < 1e-3
+            && (user.0[3] * h - image.height as f32).abs() < 1e-3
+            && (left - left.round()).abs() < 1e-3
+            && (top - top.round()).abs() < 1e-3;
+        let smooth = state.image_smoothing && !exact;
         self.draw_with(
             state,
             |this| this.rect_path(x, y, w, h),
@@ -787,12 +868,20 @@ impl Context {
                 }) else {
                     return;
                 };
-                let Some(attributes) = Gp::create(|out| GdipCreateImageAttributes(out)) else {
-                    return;
+                // Image attributes take GDI+'s slow path, an opaque copy without smoothing needs none
+                let attributes = if state.alpha < 1.0 || smooth {
+                    let Some(attributes) = Gp::create(|out| GdipCreateImageAttributes(out)) else {
+                        return;
+                    };
+                    // Mirror the edge pixels, so scaled edges do not fade.
+                    GdipSetImageAttributesWrapMode(attributes.get(), WrapModeTileFlipXY, 0, FALSE);
+                    Some(attributes)
+                } else {
+                    None
                 };
-                // Mirror the edge pixels, so scaled edges do not fade.
-                GdipSetImageAttributesWrapMode(attributes.get(), WrapModeTileFlipXY, 0, FALSE);
-                if state.alpha < 1.0 {
+                if let Some(attributes) = &attributes
+                    && state.alpha < 1.0
+                {
                     let mut matrix = ColorMatrix { m: [[0.0; 5]; 5] };
                     for (i, row) in matrix.m.iter_mut().enumerate() {
                         row[i] = 1.0;
@@ -810,7 +899,7 @@ impl Context {
                 let g = this.surface.g();
                 GdipSetInterpolationMode(
                     g,
-                    if state.image_smoothing {
+                    if smooth {
                         InterpolationModeHighQualityBicubic
                     } else {
                         InterpolationModeNearestNeighbor
@@ -829,7 +918,7 @@ impl Context {
                     image.width as f32,
                     image.height as f32,
                     UnitPixel,
-                    attributes.get(),
+                    attributes.as_ref().map_or(null_mut(), Gp::get),
                     null(),
                     null(),
                 );
@@ -863,7 +952,16 @@ impl Context {
     pub(crate) fn fill_text(&mut self, s: &CanvasState, text: &str, x: f32, y: f32) {
         let font = self.font(s);
         let length = self.encode(text);
-        let width = self.measure(&font, length);
+        // Measuring is slow, solid text that starts at x only needs its width for a layer
+        let gradient = matches!(s.fill, CanvasStyle::Gradient(_));
+        let width = if gradient
+            || s.composite != CompositeOperation::SourceOver
+            || !matches!(s.text_align, TextAlign::Start | TextAlign::Left)
+        {
+            self.measure(&font, length)
+        } else {
+            0.0
+        };
         let size = s.font_size;
         let (ascent, line_height) = (font.ascent * size, font.line_height * size);
         let origin_x = x - match s.text_align {
@@ -877,13 +975,17 @@ impl Context {
             TextBaseline::Alphabetic => ascent,
             _ => 0.0,
         };
-        let Some(rect) = self.rect_path(origin_x, origin_y, width, line_height) else {
-            return;
+        let bounds = if gradient {
+            let Some(rect) = self.rect_path(origin_x, origin_y, width, line_height) else {
+                return;
+            };
+            self.path_bounds(&rect, Some(size * self.scale))
+        } else {
+            [0; 4]
         };
-        let bounds = self.path_bounds(&rect, Some(size * self.scale));
         self.draw_with(
             s,
-            |_| clone_path(&rect),
+            |this| this.rect_path(origin_x, origin_y, width, line_height),
             |this, s| {
                 let world = this.user();
                 let Some(brush) = this.brush(&s.fill, s.alpha, world, bounds) else {

@@ -213,6 +213,14 @@ unsafe extern "system" {
         width: f32,
         height: f32,
     ) -> GpStatus;
+    pub(super) fn GdipFillEllipse(
+        graphics: *mut GpGraphics,
+        brush: *mut GpBrush,
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+    ) -> GpStatus;
 
     pub(super) fn GdipCreateSolidFill(argb: u32, brush: *mut *mut GpBrush) -> GpStatus;
     pub(super) fn GdipCreateTexture(
