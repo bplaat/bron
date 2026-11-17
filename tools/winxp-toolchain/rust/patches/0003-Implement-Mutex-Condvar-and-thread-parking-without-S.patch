@@ -12,17 +12,17 @@ parker waits on an auto-reset event of its own, and the condition
 variable queues the waiting threads, which park until a notify takes
 them.
 ---
- library/std/src/sys/sync/condvar/windows7.rs  | 140 +++++++++++--
+ library/std/src/sys/sync/condvar/windows7.rs  | 143 ++++++++++++--
  library/std/src/sys/sync/keyed_event.rs       |  54 +++++
  library/std/src/sys/sync/mod.rs               |   2 +
  library/std/src/sys/sync/mutex/mod.rs         |   2 +-
  library/std/src/sys/sync/mutex/windows7.rs    |  86 +++++---
  .../src/sys/sync/thread_parking/windows7.rs   | 184 ++++++------------
- 6 files changed, 289 insertions(+), 179 deletions(-)
+ 6 files changed, 292 insertions(+), 179 deletions(-)
  create mode 100644 library/std/src/sys/sync/keyed_event.rs
 
 diff --git a/library/std/src/sys/sync/condvar/windows7.rs b/library/std/src/sys/sync/condvar/windows7.rs
-index c3f680b..ce5b6a5 100644
+index c3f680b..96759ed 100644
 --- a/library/std/src/sys/sync/condvar/windows7.rs
 +++ b/library/std/src/sys/sync/condvar/windows7.rs
 @@ -1,10 +1,28 @@
@@ -58,7 +58,7 @@ index c3f680b..ce5b6a5 100644
  }
  
  unsafe impl Send for Condvar {}
-@@ -13,37 +31,119 @@ unsafe impl Sync for Condvar {}
+@@ -13,37 +31,122 @@ unsafe impl Sync for Condvar {}
  impl Condvar {
      #[inline]
      pub const fn new() -> Condvar {
@@ -106,14 +106,17 @@ index c3f680b..ce5b6a5 100644
 +        // A deadline that doesn't fit waits forever
 +        let deadline = timeout.and_then(|timeout| Instant::now().checked_add(timeout));
 +        let mut notified = true;
++        // Parks with the waiter's handle, `thread::park` fails after the thread's locals are gone
 +        while !waiter.notified.load(Acquire) {
 +            let Some(deadline) = deadline else {
-+                thread::park();
++                // SAFETY: the handle is of this thread
++                unsafe { waiter.thread.park() };
 +                continue;
 +            };
 +            let left = deadline.saturating_duration_since(Instant::now());
 +            if !left.is_zero() {
-+                thread::park_timeout(left);
++                // SAFETY: the handle is of this thread
++                unsafe { waiter.thread.park_timeout(left) };
 +                continue;
 +            }
 +            // Timed out, unless a notify took it from the queue meanwhile, under the lock a
