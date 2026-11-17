@@ -7,8 +7,6 @@
 #![doc = include_str!("../README.md")]
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
-use std::process::Command;
-use std::thread;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use bcanvas::{
@@ -17,7 +15,7 @@ use bcanvas::{
 };
 use bwindow::{
     Event, EventLoopBuilder, LogicalPoint, LogicalSize, MouseButton, Theme, WindowBuilder,
-    WindowEvent,
+    WindowEvent, open_url,
 };
 use jiff::Timestamp;
 use jiff::tz::TimeZone;
@@ -749,25 +747,6 @@ impl App {
                 context.fill_text(&layout_box.text, x, center);
             }
         }
-    }
-}
-
-// Opens a link in the default browser
-fn open_url(url: &str) {
-    let mut command = if cfg!(windows) {
-        let mut command = Command::new("rundll32");
-        command.arg("url.dll,FileProtocolHandler");
-        command
-    } else if cfg!(target_os = "macos") {
-        Command::new("open")
-    } else {
-        Command::new("xdg-open")
-    };
-    match command.arg(url).spawn() {
-        Ok(mut child) => {
-            thread::spawn(move || child.wait());
-        }
-        Err(err) => eprintln!("Can't open {url}: {err}"),
     }
 }
 
