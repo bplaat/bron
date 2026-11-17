@@ -1,2 +1,7 @@
 # Third-party Windows XP activation code from UMSKT
 winxp-image/guest/activate/** linguist-vendored
+
+# Windows XP runs the scripts and registry files, which need CRLF line endings
+*.cmd text eol=crlf
+*.reg text eol=crlf
+*.vbs text eol=crlf
