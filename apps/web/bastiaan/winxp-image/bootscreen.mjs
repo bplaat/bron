@@ -1,6 +1,8 @@
+#!/usr/bin/env node
 // Extracts the Windows XP boot screen from the kernel for the site's loading screen: the 640x480 logo (bitmap 1) and
 // the progress bar blocks (bitmap 8). Both are 4-bit bitmaps with an empty palette, the kernel holds the real one.
-// Usage: node bootscreen.mjs <disk.img> <output dir>
+// Usage: bootscreen.mjs <disk.img> <output dir>
+
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';

@@ -1,5 +1,7 @@
+#!/usr/bin/env node
 // Installs Windows XP unattended in QEMU onto a fresh FAT32 disk
-// Usage: node install.mjs <xp.iso> <mbr.bin> <disk.img>
+// Usage: install.mjs <xp.iso> <mbr.bin> <disk.img>
+
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';

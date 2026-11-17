@@ -1,4 +1,5 @@
 // Worker for make-state.mjs: compresses every count-th disk chunk starting at index, replies with the packed bytes
+
 import fs from 'node:fs';
 import path from 'node:path';
 import { parentPort, workerData } from 'node:worker_threads';

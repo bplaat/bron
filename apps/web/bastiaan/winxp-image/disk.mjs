@@ -1,7 +1,9 @@
+#!/usr/bin/env node
 // Offline work on the FAT32 disk with mtools
-// Usage: node disk.mjs software <disk.img> - copy software/ in, software.cmd installs it at the next logon (QEMU)
-//        node disk.mjs setup <disk.img>    - copy the guest integration and music in, v86setup runs at logon (v86)
-//        node disk.mjs finish <disk.img>   - drop the setup files and caches, zero the free space
+// Usage: disk.mjs software <disk.img> - copy software/ in, software.cmd installs it at the next logon (QEMU)
+//        disk.mjs setup <disk.img>    - copy the guest integration and music in, v86setup runs at logon (v86)
+//        disk.mjs finish <disk.img>   - drop the setup files and caches, zero the free space
+
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';

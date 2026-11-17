@@ -1,6 +1,8 @@
+#!/usr/bin/env node
 // First v86 boot: v86setup.exe sets Windows up at the Administrator logon and reboots into the bplaat account, then
 // the guest powers off and its changes are written back to the image
-// Usage: node setup.mjs <disk.img>
+// Usage: setup.mjs <disk.img>
+
 import fs from 'node:fs';
 import path from 'node:path';
 import { boot, disk, logSerial, screenshot, waitFor, waitIdle } from './lib.mjs';

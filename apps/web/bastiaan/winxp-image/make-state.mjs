@@ -1,5 +1,7 @@
+#!/usr/bin/env node
 // Splits the disk into compressed chunks for streaming, then boots them and saves a snapshot of the desktop
-// Usage: node make-state.mjs <disk.img> <output dir>
+// Usage: make-state.mjs <disk.img> <output dir>
+
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';

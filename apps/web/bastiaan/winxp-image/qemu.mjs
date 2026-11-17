@@ -1,5 +1,6 @@
 // The QEMU machine for the install stages: a Standard PC like v86 (no ACPI, no APIC), so setup picks the matching HAL,
 // QEMU's translation is much faster than v86. The guest talks back over COM1, lines go to onLine.
+
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import net from 'node:net';

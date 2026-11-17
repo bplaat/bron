@@ -1,6 +1,8 @@
+#!/usr/bin/env node
 // Installs the software in QEMU: guest/software.cmd runs every software/*/install.cmd at the Administrator logon and
 // powers off. Install scripts can print progress over COM1 with "LOG <text>".
-// Usage: node software.mjs <disk.img>
+// Usage: software.mjs <disk.img>
+
 import path from 'node:path';
 import { sleep } from './lib.mjs';
 import { startQemu } from './qemu.mjs';
