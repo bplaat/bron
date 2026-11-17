@@ -92,6 +92,12 @@ unsafe extern "C" {
     );
     pub(super) fn cairo_font_extents(cr: *mut c_void, extents: *mut CairoFontExtents);
     pub(super) fn cairo_text_path(cr: *mut c_void, text: *const c_char);
+    pub(super) fn cairo_show_text(cr: *mut c_void, text: *const c_char);
+    pub(super) fn cairo_user_to_device(cr: *mut c_void, x: *mut f64, y: *mut f64);
+    pub(super) fn cairo_font_options_create() -> *mut c_void;
+    pub(super) fn cairo_font_options_destroy(options: *mut c_void);
+    pub(super) fn cairo_font_options_set_antialias(options: *mut c_void, antialias: i32);
+    pub(super) fn cairo_set_font_options(cr: *mut c_void, options: *const c_void);
     #[cfg(test)]
     pub(super) fn cairo_image_surface_create(format: i32, width: i32, height: i32) -> *mut c_void;
     pub(super) fn cairo_image_surface_create_for_data(
@@ -148,6 +154,7 @@ unsafe extern "C" {
 }
 
 pub(super) const CAIRO_FORMAT_ARGB32: i32 = 0;
+pub(super) const CAIRO_ANTIALIAS_GRAY: i32 = 2;
 pub(super) const CAIRO_OPERATOR_SOURCE: i32 = 1;
 pub(super) const CAIRO_OPERATOR_OVER: i32 = 2;
 pub(super) const CAIRO_EXTEND_PAD: i32 = 3;

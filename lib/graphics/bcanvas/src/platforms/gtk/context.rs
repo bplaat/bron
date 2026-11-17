@@ -450,13 +450,24 @@ impl PlatformCanvasContext {
             };
         }
         let path = self.take_path();
-        // Paint glyph outlines like other paths so the fill style also applies
-        // on Cairo versions that render gradient sources incorrectly with show_text.
-        unsafe {
-            cairo_move_to(self.cr, x, y);
-            cairo_text_path(self.cr, text.as_ptr());
+        let operator = operator(s.composite);
+        unsafe { cairo_move_to(self.cr, x, y) };
+        // Cached glyphs match the glyph outlines only at whole device pixels, as Cairo
+        // rounds glyph positions; gradients and unbounded operators keep painting outlines.
+        if matches!(s.fill, CanvasStyle::Color(_))
+            && !is_unbounded(operator)
+            && self.pixel_aligned(x, y)
+        {
+            self.set_source(&s.fill, s.alpha);
+            unsafe {
+                cairo_set_operator(self.cr, operator);
+                cairo_show_text(self.cr, text.as_ptr());
+                cairo_set_operator(self.cr, CAIRO_OPERATOR_OVER);
+            }
+        } else {
+            unsafe { cairo_text_path(self.cr, text.as_ptr()) };
+            self.paint(s, false, FillRule::NonZero);
         }
-        self.paint(s, false, FillRule::NonZero);
         self.restore_path(path);
     }
     pub(crate) fn measure_text(&mut self, s: &CanvasState, text: &str) -> f32 {
@@ -516,8 +527,23 @@ impl PlatformCanvasContext {
                 },
             );
             cairo_set_font_size(self.cr, s.font_size.into());
+            // Grayscale like filled outlines, as fontconfig may ask for subpixel glyphs.
+            let options = cairo_font_options_create();
+            cairo_font_options_set_antialias(options, CAIRO_ANTIALIAS_GRAY);
+            cairo_set_font_options(self.cr, options);
+            cairo_font_options_destroy(options);
         }
         self.font = Some((s.font_family.clone(), s.font_weight, s.font_size));
+    }
+    // Whether a point lies on whole device pixels with an unrotated transform.
+    fn pixel_aligned(&self, x: f64, y: f64) -> bool {
+        let mut m = self.initial;
+        let (mut x, mut y) = (x, y);
+        unsafe {
+            cairo_get_matrix(self.cr, &mut m);
+            cairo_user_to_device(self.cr, &mut x, &mut y);
+        }
+        m.xy == 0.0 && m.yx == 0.0 && [x, y].iter().all(|v| (v - v.round()).abs() < 1.0 / 256.0)
     }
     fn text_extents(&self, text: &CString) -> CairoTextExtents {
         let mut ext = CairoTextExtents::default();
@@ -771,5 +797,19 @@ mod tests {
         unsafe { cairo_get_matrix(surface.1, &mut m) };
         assert!(m.xx > 0.0 && m.xx < 0.001);
         assert_eq!(unsafe { cairo_status(surface.1) }, 0);
+    }
+
+    #[test]
+    fn cached_glyphs_are_only_used_on_whole_device_pixels() {
+        let surface = Surface::new();
+        unsafe { cairo_scale(surface.1, 2.0, 2.0) };
+        let mut canvas = unsafe { PlatformCanvasContext::new(surface.1) };
+        assert!(canvas.pixel_aligned(1.5, 2.0));
+        assert!(!canvas.pixel_aligned(1.25, 2.0));
+        canvas.translate(0.25, 0.0);
+        assert!(!canvas.pixel_aligned(1.5, 2.0));
+        canvas.set_transform(1.0, 0.0, 0.0, 1.0, 0.0, 0.0);
+        canvas.rotate(0.3);
+        assert!(!canvas.pixel_aligned(0.0, 0.0));
     }
 }
