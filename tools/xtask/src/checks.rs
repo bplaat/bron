@@ -16,7 +16,7 @@ use crate::metadata::{
     add_excludes, features_without_swap, has_target_kind, packages, platform_excludes,
 };
 use crate::process::{capture, npm_program, npx_program, run, run_named};
-use crate::utils::{collect_files, relative_slash};
+use crate::utils::{relative_slash, source_files};
 use crate::{Os, Xtask};
 
 pub(crate) const BACKEND_SWAP_PAIRS: [(&str, &str); 2] =
@@ -92,30 +92,6 @@ impl Xtask {
         Ok(())
     }
 
-    pub(crate) fn exclude_vendored_files(&self, files: &mut Vec<PathBuf>) -> Result<()> {
-        let mut command = Command::new("git");
-        command
-            .current_dir(&self.root)
-            .args(["check-attr", "-z", "linguist-vendored", "--"]);
-        let mut retained = Vec::new();
-        for batch in command_batches(files, command_argument_budget(&command, self.os)?, self.os)? {
-            let mut command = Command::new("git");
-            command
-                .current_dir(&self.root)
-                .args(["check-attr", "-z", "linguist-vendored", "--"])
-                .args(batch);
-            let output = capture(&mut command)?;
-            let fields = output.stdout.split(|byte| *byte == 0).collect::<Vec<_>>();
-            for (file, attributes) in batch.iter().zip(fields.as_chunks::<3>().0) {
-                if !matches!(attributes[2], b"set" | b"true") {
-                    retained.push(file.clone());
-                }
-            }
-        }
-        *files = retained;
-        Ok(())
-    }
-
     pub(crate) fn check_formatting(&self) -> Result<()> {
         self.ensure_npm_deps()?;
         println!("Checking Prettier formatting...");
@@ -125,13 +101,7 @@ impl Xtask {
         let files = self
             .source_files(&extensions)?
             .into_iter()
-            .filter(|file| {
-                let relative = relative_slash(&self.root, file);
-                !relative.starts_with(".vscode/")
-                    && !relative.contains("/playwright/")
-                    && !relative.contains("/test-results/")
-                    && !relative.ends_with(".min.js")
-            })
+            .filter(|file| !file.to_string_lossy().ends_with(".min.js"))
             .collect::<Vec<_>>();
         let mut command = Command::new(npx_program(self.os));
         command.args(["--no-install", "prettier", "--check"]);
@@ -153,15 +123,10 @@ impl Xtask {
         println!("Checking clang-format formatting...");
         let mut files = self.source_files(&[])?;
         files.retain(|file| {
-            file.file_name().is_none_or(|name| name != "stb_image.h")
-                && file
-                    .extension()
-                    .and_then(|ext| ext.to_str())
-                    .is_some_and(|ext| {
-                        matches!(ext, "c" | "h" | "cpp" | "hpp" | "m" | "mm" | "java")
-                    })
+            file.extension()
+                .and_then(|ext| ext.to_str())
+                .is_some_and(|ext| matches!(ext, "c" | "h" | "cpp" | "hpp" | "m" | "mm" | "java"))
         });
-        files.sort();
         let mut command = Command::new("clang-format");
         command.args(["--dry-run", "--Werror"]);
         for files in command_batches(&files, command_argument_budget(&command, self.os)?, self.os)?
@@ -358,15 +323,12 @@ impl Xtask {
                 .and_then(Value::as_str)
                 .and_then(|manifest| Path::new(manifest).parent())
                 .context("Cargo package has no manifest directory")?;
-            let mut rust_files = Vec::new();
-            collect_files(crate_dir, &mut rust_files)?;
-            rust_files.retain(|file| file.extension().is_some_and(|ext| ext == "rs"));
-            let has_unsafe =
-                rust_files
-                    .into_iter()
-                    .try_fold(false, |found, file| -> Result<bool> {
-                        Ok(found || contains_unsafe_block(&fs::read_to_string(file)?))
-                    })?;
+            let has_unsafe = source_files(crate_dir)?
+                .into_iter()
+                .filter(|file| file.extension().is_some_and(|ext| ext == "rs"))
+                .try_fold(false, |found, file| -> Result<bool> {
+                    Ok(found || contains_unsafe_block(&fs::read_to_string(file)?))
+                })?;
             if !has_unsafe {
                 continue;
             }

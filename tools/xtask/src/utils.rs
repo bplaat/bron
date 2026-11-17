@@ -6,8 +6,11 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use anyhow::{Context, Result};
+
+use crate::process::capture;
 
 pub(crate) fn normalize_path(path: &Path, root: &Path) -> PathBuf {
     if path.is_absolute() {
@@ -23,48 +26,28 @@ fn is_directory_without_following_symlinks(path: &Path) -> Result<bool> {
     Ok(metadata.is_dir() && !metadata.file_type().is_symlink())
 }
 
-pub(crate) fn collect_source_files(directory: &Path, files: &mut Vec<PathBuf>) -> Result<()> {
-    for entry in fs::read_dir(directory)
-        .with_context(|| format!("failed to read {}", directory.display()))?
-    {
-        let path = entry?.path();
-        if is_directory_without_following_symlinks(&path)? {
-            let name = path
-                .file_name()
-                .and_then(|name| name.to_str())
-                .unwrap_or_default();
-            if matches!(
-                name,
-                ".git"
-                    | "node_modules"
-                    | "dist"
-                    | "src-gen"
-                    | "target"
-                    | "playwright-report"
-                    | "test-results"
-            ) {
-                continue;
-            }
-            collect_source_files(&path, files)?;
-        } else {
-            files.push(path);
-        }
-    }
-    Ok(())
-}
-
-pub(crate) fn collect_files(directory: &Path, files: &mut Vec<PathBuf>) -> Result<()> {
-    for entry in fs::read_dir(directory)
-        .with_context(|| format!("failed to read {}", directory.display()))?
-    {
-        let path = entry?.path();
-        if is_directory_without_following_symlinks(&path)? {
-            collect_files(&path, files)?;
-        } else {
-            files.push(path);
-        }
-    }
-    Ok(())
+// Tracked and untracked files that git does not ignore, so generated and downloaded files are skipped, without
+// vendored files (linguist-vendored in .gitattributes)
+pub(crate) fn source_files(root: &Path) -> Result<Vec<PathBuf>> {
+    let output = capture(Command::new("git").current_dir(root).args([
+        "ls-files",
+        "-z",
+        "--cached",
+        "--others",
+        "--exclude-standard",
+        "--",
+        ".",
+        ":(exclude,attr:linguist-vendored)",
+        ":(exclude,attr:linguist-vendored=true)",
+    ]))?;
+    Ok(output
+        .stdout
+        .split(|byte| *byte == 0)
+        .filter(|path| !path.is_empty())
+        .map(|path| root.join(String::from_utf8_lossy(path).as_ref()))
+        // Tracked files deleted in the working tree
+        .filter(|path| fs::symlink_metadata(path).is_ok())
+        .collect())
 }
 
 pub(crate) fn collect_paths(
@@ -184,7 +167,7 @@ fn copy_symlink(source: &Path, destination: &Path) -> Result<()> {
 
 // MARK: Tests
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::collections::BTreeSet;
     use std::env;
 
@@ -194,6 +177,13 @@ mod tests {
         let path = env::temp_dir().join(format!("xtask-{name}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&path);
         path
+    }
+
+    pub(crate) fn git_repository(root: &Path, gitignore: &str) -> Result<()> {
+        fs::create_dir_all(root)?;
+        capture(Command::new("git").args(["init", "-q"]).arg(root))?;
+        fs::write(root.join(".gitignore"), gitignore)?;
+        Ok(())
     }
 
     #[test]
@@ -227,19 +217,24 @@ mod tests {
     }
 
     #[test]
-    fn collect_source_files_skips_generated_directories() -> Result<()> {
+    fn source_files_skips_git_ignored_and_vendored_files() -> Result<()> {
         let root = scratch("collect-src");
         fs::create_dir_all(root.join("src"))?;
+        git_repository(&root, "target/\nnode_modules/\n")?;
         fs::create_dir_all(root.join("target/debug"))?;
         fs::create_dir_all(root.join("node_modules/pkg"))?;
         fs::write(root.join("src/main.rs"), "")?;
         fs::write(root.join("target/debug/app"), "")?;
         fs::write(root.join("node_modules/pkg/index.js"), "")?;
         fs::write(root.join("README.md"), "")?;
+        fs::write(
+            root.join(".gitattributes"),
+            "vendor.c linguist-vendored\nvendor.h linguist-vendored=true\n",
+        )?;
+        fs::write(root.join("src/vendor.c"), "")?;
+        fs::write(root.join("src/vendor.h"), "")?;
 
-        let mut files = Vec::new();
-        collect_source_files(&root, &mut files)?;
-        let relative = files
+        let relative = source_files(&root)?
             .iter()
             .map(|file| relative_slash(&root, file))
             .collect::<BTreeSet<_>>();
@@ -252,6 +247,8 @@ mod tests {
                 .iter()
                 .any(|path| path.starts_with("node_modules/"))
         );
+        assert!(!relative.contains("src/vendor.c"));
+        assert!(!relative.contains("src/vendor.h"));
 
         fs::remove_dir_all(&root)?;
         Ok(())
@@ -295,7 +292,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn recursive_collectors_do_not_follow_directory_symlinks() -> Result<()> {
+    fn collect_paths_does_not_follow_directory_symlinks() -> Result<()> {
         use std::os::unix::fs::symlink;
 
         let base = scratch("symlink-walkers");
@@ -307,30 +304,6 @@ mod tests {
         fs::write(outside.join("target/external.db"), "outside")?;
         symlink(&outside, root.join("external"))?;
         symlink(&root, root.join("cycle"))?;
-
-        let mut source_files = Vec::new();
-        collect_source_files(&root, &mut source_files)?;
-        assert_eq!(
-            source_files
-                .iter()
-                .map(|path| relative_slash(&root, path))
-                .collect::<BTreeSet<_>>(),
-            ["cycle".to_owned(), "external".to_owned()]
-                .into_iter()
-                .collect()
-        );
-
-        let mut files = Vec::new();
-        collect_files(&root, &mut files)?;
-        assert_eq!(
-            files
-                .iter()
-                .map(|path| relative_slash(&root, path))
-                .collect::<BTreeSet<_>>(),
-            ["cycle".to_owned(), "external".to_owned()]
-                .into_iter()
-                .collect()
-        );
 
         let mut generated = Vec::new();
         collect_paths(&root, &mut generated, &|path, is_dir| {

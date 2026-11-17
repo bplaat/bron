@@ -13,7 +13,7 @@ use std::{env, fs};
 use anyhow::{Context, Result, bail};
 
 use crate::process::run;
-use crate::utils::collect_source_files;
+use crate::utils::source_files;
 use crate::{Os, Xtask};
 
 /// A console with homebrew programs that have a `meta/` folder.
@@ -76,8 +76,7 @@ struct Program {
 }
 
 fn discover_programs(root: &Path, console: Console) -> Result<Vec<Program>> {
-    let mut files = Vec::new();
-    collect_source_files(root, &mut files)?;
+    let files = source_files(root)?;
     let mut programs = Vec::new();
     for file in files {
         if !file.ends_with(Path::new("meta").join(console.meta_file())) {
@@ -295,6 +294,7 @@ impl Xtask {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::utils::tests::git_repository;
 
     #[test]
     fn discovers_wii_examples_with_homebrew_metadata() -> Result<()> {
@@ -302,6 +302,7 @@ mod tests {
         if root.exists() {
             fs::remove_dir_all(&root)?;
         }
+        git_repository(&root, "target/\n")?;
         for directory in [
             "examples/wii/new-example/c/meta",
             "examples/wii/new-example/rust/meta",
@@ -352,6 +353,7 @@ mod tests {
         if root.exists() {
             fs::remove_dir_all(&root)?;
         }
+        git_repository(&root, "")?;
         for (directory, meta, manifest) in [
             ("examples/wiiu/cube/c", "meta.ini", "Makefile"),
             ("examples/wiiu/cube/rust", "meta.ini", "Cargo.toml"),

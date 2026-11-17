@@ -15,7 +15,7 @@ use serde_json::Value;
 
 use crate::homebrew::Console;
 use crate::process::{capture, npm_program, run};
-use crate::utils::collect_source_files;
+use crate::utils::source_files;
 
 mod build;
 mod checks;
@@ -166,8 +166,7 @@ impl Xtask {
     }
 
     fn source_files(&self, extensions: &[&str]) -> Result<Vec<PathBuf>> {
-        let mut files = Vec::new();
-        collect_source_files(&self.root, &mut files)?;
+        let mut files = source_files(&self.root)?;
         let bassiemusic = self.root.join("apps/web/bassiemusic");
         files.retain(|file| !file.starts_with(&bassiemusic));
         if !extensions.is_empty() {
@@ -177,7 +176,6 @@ impl Xtask {
                     .is_some_and(|extension| extensions.contains(&extension))
             });
         }
-        self.exclude_vendored_files(&mut files)?;
         files.sort();
         Ok(files)
     }
