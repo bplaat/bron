@@ -37,10 +37,11 @@ pub enum Message {
     Close(Option<u16>, Option<String>),
 }
 
-/// WebSocket connection
+/// WebSocket connection, clones share it: one thread can send while another waits in `recv`
 #[derive(Clone)]
 pub struct WebSocket {
     state: Arc<Mutex<ConnectionState>>,
+    writer: Arc<Mutex<TcpStream>>,
     role: Role,
 }
 
@@ -78,27 +79,29 @@ struct Frame {
 impl WebSocket {
     #[cfg(test)]
     fn new(stream: TcpStream, role: Role) -> Self {
-        Self::new_with_buffer(stream, role, Vec::new())
+        Self::new_with_buffer(stream, role, Vec::new()).expect("Failed to clone stream")
     }
 
     /// Sets the timeout used when writing messages to this connection.
     pub fn set_write_timeout(&self, timeout: Option<Duration>) -> io::Result<()> {
-        self.state
-            .lock()
-            .map_err(|_| io::Error::other("WebSocket lock is poisoned"))?
-            .stream
-            .set_write_timeout(timeout)
+        lock(&self.writer)?.set_write_timeout(timeout)
     }
 
-    fn new_with_buffer(stream: TcpStream, role: Role, read_buffer: Vec<u8>) -> Self {
-        Self {
+    /// Sets the timeout of `recv`, which then fails with `WouldBlock` or `TimedOut`.
+    pub fn set_read_timeout(&self, timeout: Option<Duration>) -> io::Result<()> {
+        lock(&self.writer)?.set_read_timeout(timeout)
+    }
+
+    fn new_with_buffer(stream: TcpStream, role: Role, read_buffer: Vec<u8>) -> io::Result<Self> {
+        Ok(Self {
+            writer: Arc::new(Mutex::new(stream.try_clone()?)),
             state: Arc::new(Mutex::new(ConnectionState {
                 stream,
                 read_buffer,
                 fragmented: None,
             })),
             role,
-        }
+        })
     }
 
     /// Connect to a WebSocket server
@@ -149,20 +152,13 @@ impl WebSocket {
         }
 
         let read_buffer = reader.buffer().to_vec();
-        Ok(WebSocket::new_with_buffer(
-            reader.into_inner(),
-            Role::Client,
-            read_buffer,
-        ))
+        WebSocket::new_with_buffer(reader.into_inner(), Role::Client, read_buffer)
+            .map_err(|_| ConnectError)
     }
 
     /// Get the underlying TCP stream peer address
     pub fn peer_addr(&self) -> io::Result<std::net::SocketAddr> {
-        self.state
-            .lock()
-            .map_err(|_| io::Error::other("WebSocket lock is poisoned"))?
-            .stream
-            .peer_addr()
+        lock(&self.writer)?.peer_addr()
     }
 
     /// Receive WebSocket message
@@ -181,10 +177,7 @@ impl WebSocket {
     }
 
     fn receive(&self, nonblocking: bool) -> io::Result<Option<Message>> {
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| io::Error::other("WebSocket lock is poisoned"))?;
+        let mut state = lock(&self.state)?;
         loop {
             if let Some((frame, consumed)) = parse_frame(&state.read_buffer, self.role)? {
                 state.read_buffer.drain(..consumed);
@@ -195,6 +188,8 @@ impl WebSocket {
             }
 
             let read_result = if nonblocking {
+                // The socket is non-blocking for writes too, so sends wait until it blocks again
+                let _writer = lock(&self.writer)?;
                 state.stream.set_nonblocking(true)?;
                 let result = read_into_buffer(&mut state);
                 let restore_result = state.stream.set_nonblocking(false);
@@ -255,12 +250,14 @@ impl WebSocket {
         }
 
         let frame = build_frame(opcode, &payload, self.role)?;
-        self.state
-            .lock()
-            .map_err(|_| io::Error::other("WebSocket lock is poisoned"))?
-            .stream
-            .write_all(&frame)
+        lock(&self.writer)?.write_all(&frame)
     }
+}
+
+fn lock<T>(mutex: &Mutex<T>) -> io::Result<std::sync::MutexGuard<'_, T>> {
+    mutex
+        .lock()
+        .map_err(|_| io::Error::other("WebSocket lock is poisoned"))
 }
 
 fn read_into_buffer(state: &mut ConnectionState) -> io::Result<usize> {
@@ -554,11 +551,11 @@ pub fn upgrade(request: &Request, handler: impl FnOnce(WebSocket) + Send + 'stat
     );
     res = res.takeover(|reader| {
         let read_buffer = reader.buffer().to_vec();
-        handler(WebSocket::new_with_buffer(
-            reader.into_inner(),
-            Role::Server,
-            read_buffer,
-        ));
+        if let Ok(websocket) =
+            WebSocket::new_with_buffer(reader.into_inner(), Role::Server, read_buffer)
+        {
+            handler(websocket);
+        }
     });
     res
 }
@@ -651,14 +648,28 @@ mod test {
             .expect("Failed to set write timeout");
         assert_eq!(
             websocket
-                .state
+                .writer
                 .lock()
                 .expect("Failed to lock connection")
-                .stream
                 .write_timeout()
                 .expect("Failed to read write timeout"),
             Some(timeout)
         );
+    }
+
+    #[test]
+    fn sends_while_another_clone_receives() {
+        let (client, server) = connected_pair();
+        let mut receiver = WebSocket::new(server, Role::Server);
+        let mut sender = receiver.clone();
+        let receiving = thread::spawn(move || receiver.recv().unwrap());
+        thread::sleep(Duration::from_millis(50));
+        sender.send(Message::Text("ping".to_string())).unwrap();
+
+        let mut peer = WebSocket::new(client, Role::Client);
+        assert!(matches!(peer.recv().unwrap(), Message::Text(text) if text == "ping"));
+        peer.send(Message::Text("pong".to_string())).unwrap();
+        assert!(matches!(receiving.join().unwrap(), Message::Text(text) if text == "pong"));
     }
 
     #[cfg(feature = "client")]

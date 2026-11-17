@@ -24,7 +24,7 @@ the [example](examples/small-websocket-simple.rs) for a complete echo server.
 
 - WebSocket client and server handshakes
 - Text, binary, ping, pong, and close messages
-- Blocking and non-blocking receive methods
+- Blocking and non-blocking receive methods, clones send while another thread receives
 - Optional client support, enabled by default
 
 ## License
