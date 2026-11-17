@@ -27,6 +27,8 @@ mod platforms;
 const FONT: &str = "Georgia";
 const AVATAR_SIZE: f32 = 48.0;
 const ICON_SIZE: f32 = 24.0;
+// Georgia's ascent plus descent in ems, the height of a browser's inline text box
+const TEXT_HEIGHT: f32 = 1.136;
 
 // MARK: Palette
 // The colors of the website: black on white, or white on black in dark mode
@@ -301,8 +303,18 @@ impl LayoutBox {
         }
     }
 
-    fn contains(&self, x: f32, y: f32) -> bool {
-        x >= self.x && x < self.x + self.width && y >= self.y && y < self.y + self.height
+    // The height of the box's content like a browser's inline box: its text or picture and padding
+    fn content_height(&self, font_size: f32) -> f32 {
+        let text = match self.font {
+            Font::Heading => font_size * 2.0,
+            Font::Normal | Font::Bold => font_size,
+        } * TEXT_HEIGHT;
+        let picture = match self.picture {
+            Some(Picture::Avatar) => AVATAR_SIZE,
+            Some(Picture::Icon(_)) => ICON_SIZE,
+            None => 0.0,
+        };
+        text.max(picture) + 2.0 * self.pad
     }
 }
 
@@ -320,6 +332,7 @@ fn set_font(context: &mut CanvasRenderingContext2d<'_>, font: Font, size: f32) {
 struct Flow<'a, 'b> {
     context: &'a mut CanvasRenderingContext2d<'b>,
     boxes: Vec<LayoutBox>,
+    links: Vec<(&'static Link, [f32; 4])>,
     font_size: f32,
     left: f32,
     width: f32,
@@ -346,6 +359,27 @@ impl Flow<'_, '_> {
         let shift = self.left + (self.width - self.x) / 2.0;
         for layout_box in &mut self.boxes[self.line_start..] {
             layout_box.x += shift;
+        }
+        // Like a browser, a link hits on the rectangle of its words on the line with the spaces between
+        // them, as high as its content and centered on the line
+        let center = self.y + self.line_height / 2.0;
+        let mut boxes = self.boxes[self.line_start..].iter().peekable();
+        while let Some(first) = boxes.next() {
+            let Some(link) = first.link else {
+                continue;
+            };
+            let mut right = first.x + first.width;
+            let mut height = first.content_height(self.font_size);
+            while let Some(next) =
+                boxes.next_if(|next| next.link.is_some_and(|next| std::ptr::eq(next, link)))
+            {
+                right = next.x + next.width;
+                height = height.max(next.content_height(self.font_size));
+            }
+            self.links.push((
+                link,
+                [first.x, center - height / 2.0, right - first.x, height],
+            ));
         }
         self.y += self.line_height;
         self.x = 0.0;
@@ -398,6 +432,7 @@ impl Flow<'_, '_> {
 
 struct Layout {
     boxes: Vec<LayoutBox>,
+    links: Vec<(&'static Link, [f32; 4])>,
     font_size: f32,
     width: f32,
     height: f32,
@@ -413,6 +448,7 @@ fn layout(context: &mut CanvasRenderingContext2d<'_>, width: f32, age: &str) -> 
     let mut flow = Flow {
         context,
         boxes: Vec::new(),
+        links: Vec::new(),
         font_size,
         left: 0.0,
         width: 0.0,
@@ -510,6 +546,7 @@ fn layout(context: &mut CanvasRenderingContext2d<'_>, width: f32, age: &str) -> 
     }
     Layout {
         boxes: flow.boxes,
+        links: flow.links,
         font_size,
         width,
         height: (y + margin).ceil(),
@@ -640,11 +677,12 @@ impl App {
         let (x, y) = (point.x, point.y - self.offset(scroll));
         let layout = self.layout.as_ref()?;
         layout
-            .boxes
+            .links
             .iter()
-            .find(|layout_box| layout_box.link.is_some() && layout_box.contains(x, y))
-            .and_then(|layout_box| layout_box.link)
-            .map(|link| link.url)
+            .find(|(_, [left, top, width, height])| {
+                x >= *left && x < left + width && y >= *top && y < top + height
+            })
+            .map(|(link, _)| link.url)
     }
 
     fn step(&mut self) {
