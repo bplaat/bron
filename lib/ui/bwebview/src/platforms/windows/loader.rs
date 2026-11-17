@@ -191,6 +191,14 @@ mod tests {
     }
 
     #[test]
+    fn accepts_last_windows_7_runtime() {
+        let version = runtime_api_version(OsStr::new(
+            r"C:\Program Files (x86)\Microsoft\EdgeWebView\Application\109.0.1518.78",
+        ));
+        assert!(version.is_some_and(|api| api >= MIN_RUNTIME_API_VERSION));
+    }
+
+    #[test]
     fn rejects_invalid_runtime_version() {
         assert_eq!(
             runtime_api_version(OsStr::new(r"C:\WebView2\invalid")),
