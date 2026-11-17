@@ -14,7 +14,7 @@ use bcanvas::{
     premultiplied_bgra,
 };
 use bwindow::{
-    Event, EventLoopBuilder, LogicalPoint, LogicalSize, MouseButton, Theme, WindowBuilder,
+    Event, EventLoopBuilder, LogicalPoint, LogicalSize, Monitor, MouseButton, Theme, WindowBuilder,
     WindowEvent, open_url,
 };
 use jiff::Timestamp;
@@ -757,18 +757,24 @@ impl App {
     }
 }
 
+// MARK: Window placement
+// 90% of the monitor area without the menu bar, Dock or taskbar
+fn placed_size(monitor: &Monitor) -> LogicalSize {
+    let (size, safe_area) = (monitor.size(), monitor.safe_area());
+    LogicalSize::new(
+        (size.width - safe_area.left - safe_area.right) * 0.9,
+        (size.height - safe_area.top - safe_area.bottom) * 0.9,
+    )
+}
+
 fn main() {
     let event_loop = EventLoopBuilder::new()
         .app_id("nl", "bplaat", "Bastiaan")
         .build();
     let monitor = event_loop.primary_monitor();
-    let (size, safe_area) = (monitor.size(), monitor.safe_area());
     let mut window = WindowBuilder::new()
         .title("Bastiaan van der Plaat")
-        .size(LogicalSize::new(
-            (size.width - safe_area.left - safe_area.right) * 0.9,
-            (size.height - safe_area.top - safe_area.bottom) * 0.9,
-        ))
+        .size(placed_size(&monitor))
         .min_size(LogicalSize::new(400.0, 300.0))
         .background_color(Palette::for_theme(event_loop.theme()).background)
         .center()
@@ -778,6 +784,9 @@ fn main() {
     view.set_dark(event_loop.theme() == Theme::Dark);
     let mut app = App::new(window.size(), event_loop.theme());
     app.resize(window.size());
+    // Until the user resizes or maximizes the window, a changed screen places it again, like the screen size
+    // Windows XP follows from the browser. Only the size tells, Windows moves windows along with a new resolution
+    let mut placed = window.size();
 
     event_loop.run(move |event| match event {
         Event::Window(id, event) if id == window_id => match event {
@@ -797,6 +806,16 @@ fn main() {
                 view.request_redraw();
             }
             WindowEvent::ScaleFactorChanged(_) => view.request_redraw(),
+            WindowEvent::MonitorChanged => {
+                let size = window.size();
+                if (size.width - placed.width).abs() < 1.0
+                    && (size.height - placed.height).abs() < 1.0
+                {
+                    window.set_size(placed_size(&monitor));
+                    window.center();
+                    placed = window.size();
+                }
+            }
             WindowEvent::ThemeChanged(theme) => {
                 app.palette = Palette::for_theme(theme);
                 window.set_background_color(app.palette.background);
