@@ -86,6 +86,43 @@ pub(super) fn move_task_to_back() {
     });
 }
 
+/// Open a URL with a view intent, callable from every thread.
+pub(crate) fn open_url(url: &str) {
+    let url = url.to_owned();
+    android_run_on_ui_thread(move || {
+        android_with_env(|env| {
+            let url = env.new_string(url)?;
+            let class = env.find_class(jni_str!("android/net/Uri"))?;
+            let uri = env
+                .call_static_method(
+                    &class,
+                    jni_str!("parse"),
+                    jni_sig!("(Ljava/lang/String;)Landroid/net/Uri;"),
+                    &[(&url).into()],
+                )?
+                .l()?;
+            let action = env.new_string("android.intent.action.VIEW")?;
+            let class = env.find_class(jni_str!("android/content/Intent"))?;
+            let intent = env.new_object(
+                &class,
+                jni_sig!("(Ljava/lang/String;Landroid/net/Uri;)V"),
+                &[(&action).into(), (&uri).into()],
+            )?;
+            let started = env.call_method(
+                android_activity(),
+                jni_str!("startActivity"),
+                jni_sig!("(Landroid/content/Intent;)V"),
+                &[(&intent).into()],
+            );
+            // ActivityNotFoundException when no app handles the URL
+            if started.is_err() {
+                env.exception_clear();
+            }
+            Ok(())
+        });
+    });
+}
+
 fn sdk_version() -> i32 {
     unsafe { (*ACTIVITY.load(Ordering::Acquire)).sdkVersion }
 }

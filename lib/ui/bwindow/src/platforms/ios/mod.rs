@@ -5,7 +5,7 @@
  */
 
 pub(crate) use crate::platforms::ios::event_loop::{
-    PlatformEventLoop, PlatformEventLoopProxy, PlatformMonitor,
+    PlatformEventLoop, PlatformEventLoopProxy, PlatformMonitor, open_url,
 };
 pub(crate) use crate::platforms::ios::frame::FrameSource;
 pub(crate) use crate::platforms::ios::window::PlatformWindow;

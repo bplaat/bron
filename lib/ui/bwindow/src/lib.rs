@@ -19,6 +19,7 @@ pub use crate::event_loop::*;
 pub use crate::input::*;
 pub use crate::menu::*;
 pub use crate::sizes::*;
+pub use crate::url::*;
 pub use crate::window::*;
 
 mod content;
@@ -45,6 +46,7 @@ mod menu;
 mod platforms;
 mod sizes;
 mod touch;
+mod url;
 mod window;
 
 /// Platform-specific native ABI declarations for implementing content backends.

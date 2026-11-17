@@ -9,8 +9,8 @@
 
 use std::ffi::{c_char, c_void};
 
-use super::gdk::GdkRGBA;
-use super::glib::GSList;
+use super::gdk::{GdkRGBA, GdkScreen};
+use super::glib::{GError, GSList};
 
 // MARK: GTK
 #[repr(C)]
@@ -203,4 +203,22 @@ unsafe extern "C" {
         cancel_label: *const c_char,
     ) -> *mut GtkFileChooserNative;
     pub(crate) fn gtk_native_dialog_run(dialog: *mut GtkNativeDialog) -> i32;
+}
+
+// MARK: Show URI
+unsafe extern "C" {
+    // GTK < 3.22
+    pub(crate) fn gtk_show_uri(
+        screen: *mut GdkScreen,
+        uri: *const c_char,
+        timestamp: u32,
+        error: *mut *mut GError,
+    ) -> bool;
+    // GTK 3.22+
+    pub(crate) fn gtk_show_uri_on_window(
+        parent: *mut GtkWindow,
+        uri: *const c_char,
+        timestamp: u32,
+        error: *mut *mut GError,
+    ) -> bool;
 }

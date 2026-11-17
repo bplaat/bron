@@ -239,3 +239,16 @@ impl crate::MonitorInterface for PlatformMonitor {
         true
     }
 }
+
+// MARK: Open URL
+pub(crate) fn open_url(url: &str) {
+    let url: *mut Object = unsafe { msg_send![class!(NSURL), URLWithString:&*NSString::new(url)] };
+    if !url.is_null() {
+        let application: *mut Object =
+            unsafe { msg_send![class!(UIApplication), sharedApplication] };
+        let options: *mut Object = unsafe { msg_send![class!(NSDictionary), dictionary] };
+        let _: () = unsafe {
+            msg_send![application, openURL:url, options:options, completionHandler:null_mut::<std::ffi::c_void>()]
+        };
+    }
+}

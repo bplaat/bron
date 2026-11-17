@@ -8,7 +8,7 @@ pub(crate) use crate::platforms::macos::content::embed_native_view;
 #[cfg(feature = "dialog")]
 pub(crate) use crate::platforms::macos::dialog::{PlatformFileDialog, PlatformMessageDialog};
 pub(crate) use crate::platforms::macos::event_loop::{
-    PlatformEventLoop, PlatformEventLoopProxy, PlatformMonitor,
+    PlatformEventLoop, PlatformEventLoopProxy, PlatformMonitor, open_url,
 };
 pub(crate) use crate::platforms::macos::frame::FrameSource;
 pub(crate) use crate::platforms::macos::window::{PlatformWindow, release_pointer_lock};

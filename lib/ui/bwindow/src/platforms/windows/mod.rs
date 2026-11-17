@@ -7,7 +7,7 @@
 #[cfg(feature = "dialog")]
 pub(crate) use crate::platforms::windows::dialog::{PlatformFileDialog, PlatformMessageDialog};
 pub(crate) use crate::platforms::windows::event_loop::{
-    PlatformEventLoop, PlatformEventLoopProxy, PlatformMonitor,
+    PlatformEventLoop, PlatformEventLoopProxy, PlatformMonitor, open_url,
 };
 pub(crate) use crate::platforms::windows::frame::FrameSource;
 pub(crate) use crate::platforms::windows::interaction::release_pointer_lock;

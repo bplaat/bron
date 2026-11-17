@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: MIT
  */
 
+pub(crate) use crate::platforms::android::activity::open_url;
 pub(crate) use crate::platforms::android::event_loop::{
     PlatformEventLoop, PlatformEventLoopProxy, PlatformMonitor,
 };

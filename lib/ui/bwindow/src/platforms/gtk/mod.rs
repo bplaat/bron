@@ -8,7 +8,7 @@ pub(crate) use crate::platforms::gtk::content::release_pointer_lock;
 #[cfg(feature = "dialog")]
 pub(crate) use crate::platforms::gtk::dialog::{PlatformFileDialog, PlatformMessageDialog};
 pub(crate) use crate::platforms::gtk::event_loop::{
-    PlatformEventLoop, PlatformEventLoopProxy, PlatformMonitor,
+    PlatformEventLoop, PlatformEventLoopProxy, PlatformMonitor, open_url,
 };
 pub(crate) use crate::platforms::gtk::frame::FrameSource;
 #[cfg(feature = "menu")]

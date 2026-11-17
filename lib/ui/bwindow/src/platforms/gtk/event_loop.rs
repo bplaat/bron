@@ -504,6 +504,21 @@ impl crate::MonitorInterface for PlatformMonitor {
     }
 }
 
+// MARK: Open URL
+pub(crate) fn open_url(url: &str) {
+    let Ok(uri) = CString::new(url) else {
+        return;
+    };
+    cfg_select! {
+        gtk3_22 => {
+            _ = unsafe { gtk_show_uri_on_window(null_mut(), uri.as_ptr(), 0, null_mut()) };
+        }
+        _ => {
+            _ = unsafe { gtk_show_uri(gdk_screen_get_default(), uri.as_ptr(), 0, null_mut()) };
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

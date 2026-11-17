@@ -318,6 +318,7 @@ pub(crate) const WM_USER: u32 = 0x0400;
 pub(crate) const RDW_ALLCHILDREN: u32 = 0x0080;
 pub(crate) const RDW_UPDATENOW: u32 = 0x0100;
 
+pub(crate) const SW_SHOWNORMAL: i32 = 1;
 pub(crate) const SW_SHOW: i32 = 5;
 pub(crate) const SW_RESTORE: i32 = 9;
 pub(crate) const SW_SHOWDEFAULT: i32 = 10;
@@ -575,6 +576,14 @@ unsafe extern "system" {
         buffer: *mut w_char,
         buffer_size: u32,
     ) -> u32;
+    pub(crate) fn ShellExecuteW(
+        hwnd: HWND,
+        operation: *const w_char,
+        file: *const w_char,
+        parameters: *const w_char,
+        directory: *const w_char,
+        show_cmd: i32,
+    ) -> HMODULE;
 }
 
 // MARK: dwmapi.dll

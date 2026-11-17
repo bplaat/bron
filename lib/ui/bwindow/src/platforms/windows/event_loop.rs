@@ -378,3 +378,18 @@ impl crate::MonitorInterface for PlatformMonitor {
         )
     }
 }
+
+// MARK: Open URL
+pub(crate) fn open_url(url: &str) {
+    let url = wide(url);
+    unsafe {
+        ShellExecuteW(
+            null_mut(),
+            w!("open").as_ptr(),
+            url.as_ptr(),
+            null(),
+            null(),
+            SW_SHOWNORMAL,
+        )
+    };
+}
