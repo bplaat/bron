@@ -55,8 +55,7 @@ pub(crate) fn shutdown() {
 const FRAMEWORK_FAMILY: &[u16] = w!("Microsoft.WindowsAppRuntime.2_8wekyb3d8bbwe");
 const MIN_VERSION: u64 = 2 << 48;
 const MIN_VERSION_NAME: &str = "2.0";
-const DOWNLOAD_URL: &[u16] =
-    w!("https://learn.microsoft.com/windows/apps/windows-app-sdk/downloads");
+const DOWNLOAD_URL: &str = "https://learn.microsoft.com/windows/apps/windows-app-sdk/downloads";
 
 const STATEREPOSITORY_E_DEPENDENCY_NOT_RESOLVED: HRESULT = 0x8067_0016_u32 as i32;
 
@@ -259,18 +258,7 @@ impl StartError {
         // SAFETY: The strings outlive the message box.
         let answer = unsafe { MessageBoxW(hwnd, text.as_ptr(), caption.as_ptr(), kind) };
         if matches!(self, Self::Missing) && answer == IDYES {
-            let (open, url) = (w!("open"), DOWNLOAD_URL);
-            // SAFETY: The strings outlive the call.
-            unsafe {
-                ShellExecuteW(
-                    hwnd,
-                    open.as_ptr(),
-                    url.as_ptr(),
-                    null(),
-                    null(),
-                    SW_SHOWNORMAL,
-                )
-            };
+            bwindow::open_url(DOWNLOAD_URL);
         }
     }
 }

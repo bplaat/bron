@@ -44,7 +44,6 @@ pub(crate) const MB_YESNO: u32 = 0x0004;
 pub(crate) const MB_ICONERROR: u32 = 0x0010;
 pub(crate) const MB_ICONWARNING: u32 = 0x0030;
 pub(crate) const IDYES: i32 = 6;
-pub(crate) const SW_SHOWNORMAL: i32 = 1;
 pub(crate) const ERROR_INSUFFICIENT_BUFFER: i32 = 122;
 pub(crate) const IDC_ARROW: *const u16 = 32512 as *const u16;
 pub(crate) const IMAGE_ICON: u32 = 1;
@@ -247,18 +246,6 @@ unsafe extern "system" {
     pub(crate) fn GlobalFree(memory: *mut c_void) -> *mut c_void;
     pub(crate) fn HeapFree(heap: *mut c_void, flags: u32, memory: *mut c_void) -> BOOL;
     pub(crate) fn GetCurrentPackageFullName(length: *mut u32, name: *mut u16) -> i32;
-}
-
-#[link(name = "shell32")]
-unsafe extern "system" {
-    pub(crate) fn ShellExecuteW(
-        hwnd: HWND,
-        operation: *const u16,
-        file: *const u16,
-        parameters: *const u16,
-        directory: *const u16,
-        show: i32,
-    ) -> *mut c_void;
 }
 
 pub(crate) type SUBCLASSPROC =
