@@ -73,6 +73,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "bastiaan"
+version = "0.1.0"
+dependencies = [
+ "bcanvas",
+ "build-utils",
+ "bwindow",
+ "image",
+ "jiff",
+ "objc2",
+ "vector",
+]
+
+[[package]]
 name = "bastiaan-server"
 version = "0.1.0"
 dependencies = [
