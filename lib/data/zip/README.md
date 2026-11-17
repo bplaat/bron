@@ -25,5 +25,6 @@ and metadata while appending one regular file, `append_stored_file()` does the s
 without compression. Zero padding in extra fields, which aapt2 and zipalign add for
 alignment, is accepted.
 
-Python-generated interoperability fixtures and their regeneration script live in
-`tests/fixtures/`. Running the Rust tests does not require Python.
+Interoperability fixtures and `generate.mjs`, the independent ZIP writer that
+regenerates them with Node.js, live in `tests/fixtures/`. Running the Rust tests
+does not require Node.js.
