@@ -517,6 +517,13 @@ fn layout(context: &mut CanvasRenderingContext2d<'_>, width: f32, age: &str) -> 
 }
 
 // MARK: Particles
+// One particle per this many square logical pixels, Windows XP draws them in software so it gets a quarter
+const PARTICLE_AREA: f32 = if cfg!(target_vendor = "winxp") {
+    4000.0
+} else {
+    1000.0
+};
+
 // A xorshift generator, the particles only need to look random
 struct Random(u64);
 
@@ -609,7 +616,7 @@ impl App {
     fn resize(&mut self, size: LogicalSize) {
         self.size = size;
         self.layout = None;
-        let count = (size.width * size.height / 1000.0) as usize;
+        let count = (size.width * size.height / PARTICLE_AREA) as usize;
         self.particles.truncate(count);
         while self.particles.len() < count {
             let particle = Particle::new(&mut self.random, size, true);
