@@ -30,7 +30,7 @@ for app in bastiaan reversi; do cp "$root/target/i686-winxp-windows-gnu/release/
 # 1. Unattended Windows install in QEMU
 if [ ! -f out/install.img ]; then
     docker run --rm -v "$PWD/out:/out" winxp-tools cp /usr/lib/syslinux/mbr/mbr.bin /out/
-    node install.mjs winxp.iso out/mbr.bin out/install.part.img
+    ./install.mjs winxp.iso out/mbr.bin out/install.part.img
     mv out/install.part.img out/install.img
 fi
 
@@ -44,20 +44,20 @@ fi
 # 2. Software installs in QEMU, on a copy of the base install
 if [ ! -f out/software.img ]; then
     cp -c out/install.img out/software.part.img 2>/dev/null || cp out/install.img out/software.part.img
-    node disk.mjs software out/software.part.img
-    node software.mjs out/software.part.img
+    ./disk.mjs software out/software.part.img
+    ./software.mjs out/software.part.img
     mv out/software.part.img out/software.img
 fi
 
 # 3. First v86 boot: drivers, settings, activation and the bplaat account, then clean up
 if [ ! -f out/disk.img ]; then
     cp -c out/software.img out/disk.part.img 2>/dev/null || cp out/software.img out/disk.part.img
-    node disk.mjs setup out/disk.part.img
-    node setup.mjs out/disk.part.img
-    node disk.mjs finish out/disk.part.img
+    ./disk.mjs setup out/disk.part.img
+    ./setup.mjs out/disk.part.img
+    ./disk.mjs finish out/disk.part.img
     mv out/disk.part.img out/disk.img
 fi
 
 # 4. Streamed disk chunks, the desktop snapshot and the boot screen for the site
-node make-state.mjs out/disk.img ../web/public/winxp
-node bootscreen.mjs out/disk.img ../web/public/winxp
+./make-state.mjs out/disk.img ../web/public/winxp
+./bootscreen.mjs out/disk.img ../web/public/winxp
