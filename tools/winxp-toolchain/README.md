@@ -47,8 +47,13 @@ tools/winxp-toolchain/cargo build --release -p reversi
 tools/winxp-toolchain/cargo run --release -p example-bcanvas-showcase
 ```
 
-Programs land in `target/i686-winxp-windows-gnu/`. bcanvas draws with GDI+ where Direct2D 1.1 is
-not available, like on Windows XP.
+Windows XP has some limits that the toolchain doesn't work around:
+
+- `std::os::windows::process::ProcThreadAttributeList` links functions from Windows Vista, a
+  program that uses it doesn't start on Windows XP
+- DLLs that are loaded with `LoadLibrary` can't use thread locals, the Windows XP loader only sets
+  up the TLS of the DLLs that a program links
+- Without `SetThreadStackGuarantee` a stack overflow can end the process without its message
 
 ## Files
 
@@ -84,7 +89,7 @@ not available, like on Windows XP.
 `./build.sh test` builds `test/` and runs it in Windows XP. It checks threads, parking and sleeps,
 the mutex, condition variable, read-write lock, once cells, barrier and channels, thread local
 destructors, the clocks, the environment and arguments, files, directories, metadata, permissions,
-renames and canonical paths, child processes with piped output and the exit code of a panic, TCP
+renames, canonical paths, hard links, file locks, child processes with piped output and the exit code of a panic, TCP
 and UDP on the loopback interface, name lookups and random numbers. It prints every failed check
 and `DONE <n> failed`.
 

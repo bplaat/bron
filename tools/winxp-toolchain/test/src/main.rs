@@ -320,7 +320,23 @@ fn test_fs() {
     check!(fs::set_permissions(&path, permissions.clone()).is_ok());
     check!(fs::metadata(&path).unwrap().permissions().readonly());
     permissions.set_readonly(false);
-    check!(fs::set_permissions(&path, permissions).is_ok());
+    check!(fs::set_permissions(&path, permissions.clone()).is_ok());
+    // Through the handle, with SetFileInformationByHandle
+    let file = fs::OpenOptions::new().write(true).open(&path).unwrap();
+    permissions.set_readonly(true);
+    check!(file.set_permissions(permissions.clone()).is_ok());
+    check!(file.metadata().unwrap().permissions().readonly());
+    permissions.set_readonly(false);
+    check!(file.set_permissions(permissions).is_ok());
+    check!(
+        file.try_clone()
+            .is_ok_and(|clone| clone.metadata().is_ok_and(|m| m.len() == 5))
+    );
+    check!(file.lock().is_ok() && file.unlock().is_ok());
+    drop(file);
+    check!(fs::hard_link(&path, dir.join("a/hard.txt")).is_ok());
+    check!(fs::metadata(dir.join("a/hard.txt")).is_ok_and(|m| m.len() == 5));
+    check!(fs::remove_file(dir.join("a/hard.txt")).is_ok());
 
     check!(fs::copy(&path, dir.join("a/b/copy.txt")).ok() == Some(5));
     check!(fs::rename(dir.join("a/b/copy.txt"), dir.join("a/b/moved.txt")).is_ok());
