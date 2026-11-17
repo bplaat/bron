@@ -225,7 +225,8 @@ impl<'a> FileDialog<'a> {
     }
 
     /// Adds platform controls to a save dialog: runs with the native dialog right before it
-    /// opens, set up with everything else of this builder.
+    /// opens, set up with everything else of this builder. Windows XP file dialogs do not
+    /// support this callback; Windows Vista and newer use the COM save dialog.
     pub fn customize(mut self, customize: impl FnOnce(NativeFileDialog) + 'a) -> Self {
         self.customize = Some(Box::new(customize));
         self

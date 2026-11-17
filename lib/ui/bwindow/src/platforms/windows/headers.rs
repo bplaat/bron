@@ -210,16 +210,6 @@ pub(crate) struct TASKDIALOGCONFIG {
     pub(crate) cxWidth: u32,
 }
 
-#[link(name = "comctl32")]
-unsafe extern "system" {
-    pub(crate) fn TaskDialogIndirect(
-        pTaskConfig: *const TASKDIALOGCONFIG,
-        pnButton: *mut i32,
-        pnRadioButton: *mut i32,
-        pfVerificationFlagChecked: *mut BOOL,
-    ) -> i32;
-}
-
 #[repr(C)]
 pub(crate) struct CREATESTRUCTW {
     pub(crate) lpCreateParams: *mut c_void,
@@ -529,6 +519,49 @@ pub(crate) unsafe fn SetWindowLong(hwnd: HWND, index: i32, value: isize) -> isiz
     }
 }
 
+// MARK: comdlg32.dll
+pub(crate) const OFN_OVERWRITEPROMPT: u32 = 0x0000_0002;
+pub(crate) const OFN_NOCHANGEDIR: u32 = 0x0000_0008;
+pub(crate) const OFN_ALLOWMULTISELECT: u32 = 0x0000_0200;
+pub(crate) const OFN_PATHMUSTEXIST: u32 = 0x0000_0800;
+pub(crate) const OFN_FILEMUSTEXIST: u32 = 0x0000_1000;
+pub(crate) const OFN_EXPLORER: u32 = 0x0008_0000;
+
+// commdlg.h packs this structure on 32-bit Windows only.
+#[repr(C)]
+#[cfg_attr(target_pointer_width = "32", repr(packed))]
+pub(crate) struct OPENFILENAMEW {
+    pub(crate) lStructSize: u32,
+    pub(crate) hwndOwner: HWND,
+    pub(crate) hInstance: HMODULE,
+    pub(crate) lpstrFilter: *const u16,
+    pub(crate) lpstrCustomFilter: *mut u16,
+    pub(crate) nMaxCustFilter: u32,
+    pub(crate) nFilterIndex: u32,
+    pub(crate) lpstrFile: *mut u16,
+    pub(crate) nMaxFile: u32,
+    pub(crate) lpstrFileTitle: *mut u16,
+    pub(crate) nMaxFileTitle: u32,
+    pub(crate) lpstrInitialDir: *const u16,
+    pub(crate) lpstrTitle: *const u16,
+    pub(crate) Flags: u32,
+    pub(crate) nFileOffset: u16,
+    pub(crate) nFileExtension: u16,
+    pub(crate) lpstrDefExt: *const u16,
+    pub(crate) lCustData: isize,
+    pub(crate) lpfnHook: *const c_void,
+    pub(crate) lpTemplateName: *const u16,
+    pub(crate) pvReserved: *mut c_void,
+    pub(crate) dwReserved: u32,
+    pub(crate) FlagsEx: u32,
+}
+
+#[link(name = "comdlg32")]
+unsafe extern "system" {
+    pub(crate) fn GetOpenFileNameW(dialog: *mut OPENFILENAMEW) -> BOOL;
+    pub(crate) fn GetSaveFileNameW(dialog: *mut OPENFILENAMEW) -> BOOL;
+}
+
 // MARK: shell32.dll
 pub(crate) type HDROP = HANDLE;
 
@@ -542,12 +575,6 @@ unsafe extern "system" {
         buffer: *mut w_char,
         buffer_size: u32,
     ) -> u32;
-    pub(crate) fn SHCreateItemFromParsingName(
-        pszPath: *const w_char,
-        pbc: *mut c_void,
-        riid: *const GUID,
-        ppv: *mut *mut c_void,
-    ) -> HRESULT;
 }
 
 // MARK: dwmapi.dll

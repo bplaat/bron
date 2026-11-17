@@ -19,7 +19,7 @@ pub(crate) use crate::platforms::windows::window::{
 /// targets need Windows 10, which has them all, so they link it. The `win7` targets, which Windows
 /// XP uses too, load it once at runtime.
 macro_rules! optional_proc {
-    ($module:literal, $name:ident($($arg:ty),*) -> $ret:ty) => {{
+    ($module:literal, $name:ident($($arg:ty),* $(,)?) -> $ret:ty) => {{
         type Function = unsafe extern "system" fn($($arg),*) -> $ret;
         #[cfg(not(target_vendor = "win7"))]
         let function: Option<Function> = {
@@ -71,14 +71,21 @@ use self::headers::*;
 /// Loads a function of a DLL in the system directory, the DLL stays loaded
 #[cfg(target_vendor = "win7")]
 fn load_system_proc(module: &str, symbol: &str) -> *const c_void {
-    const MAX_PATH: usize = 260;
-    let mut path = vec![0u16; MAX_PATH];
-    let length = unsafe { GetSystemDirectoryW(path.as_mut_ptr(), path.len() as u32) } as usize;
-    if length == 0 || length >= path.len() {
-        return std::ptr::null();
-    }
-    path.truncate(length);
-    path.extend(format!("\\{module}\0").encode_utf16());
+    // Version 6 of comctl32 lives in WinSxS: only a load by bare name goes through the manifest's
+    // activation context, a full path gets the old version 5.82 in the system directory
+    let path = if module == "comctl32.dll" {
+        format!("{module}\0").encode_utf16().collect()
+    } else {
+        const MAX_PATH: usize = 260;
+        let mut path = vec![0u16; MAX_PATH];
+        let length = unsafe { GetSystemDirectoryW(path.as_mut_ptr(), path.len() as u32) } as usize;
+        if length == 0 || length >= path.len() {
+            return std::ptr::null();
+        }
+        path.truncate(length);
+        path.extend(format!("\\{module}\0").encode_utf16());
+        path
+    };
     let module = unsafe { LoadLibraryW(path.as_ptr()) };
     if module.is_null() {
         return std::ptr::null();

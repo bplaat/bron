@@ -4,8 +4,12 @@
  * SPDX-License-Identifier: MIT
  */
 
+#[cfg(any(target_vendor = "win7", test))]
+use std::ffi::OsString;
 use std::ffi::c_void;
 use std::mem::size_of;
+#[cfg(any(target_vendor = "win7", test))]
+use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use std::path::PathBuf;
 use std::ptr::{null, null_mut};
 
@@ -21,6 +25,12 @@ impl crate::MessageDialogInterface for PlatformMessageDialog {
             .parent
             .map(|window| window.0.hwnd)
             .unwrap_or_else(|| unsafe { GetActiveWindow() });
+        let Some(task_dialog) = optional_proc!(
+            "comctl32",
+            TaskDialogIndirect(*const TASKDIALOGCONFIG, *mut i32, *mut i32, *mut BOOL) -> HRESULT
+        ) else {
+            return fallback_message_box(parent, &dialog);
+        };
         let title = wide(&dialog.title);
         let description = wide(&dialog.description);
         let (common_buttons, labels) = task_dialog_buttons(&dialog.buttons);
@@ -76,7 +86,7 @@ impl crate::MessageDialogInterface for PlatformMessageDialog {
             cxWidth: 0,
         };
         let mut selected = 0;
-        let result = unsafe { TaskDialogIndirect(&config, &mut selected, null_mut(), null_mut()) };
+        let result = unsafe { task_dialog(&config, &mut selected, null_mut(), null_mut()) };
         if result != S_OK {
             return fallback_message_box(parent, &dialog);
         }
@@ -173,6 +183,11 @@ impl crate::FileDialogInterface for PlatformFileDialog {
                 &mut raw as *mut _ as *mut *mut c_void,
             ) != S_OK
             {
+                #[cfg(target_vendor = "win7")]
+                return fallback_file_dialog(dialog, false, false)?
+                    .into_iter()
+                    .next();
+                #[cfg(not(target_vendor = "win7"))]
                 return None;
             }
             let dlg = &*raw;
@@ -222,6 +237,9 @@ impl crate::FileDialogInterface for PlatformFileDialog {
                 &mut raw as *mut _ as *mut *mut c_void,
             ) != S_OK
             {
+                #[cfg(target_vendor = "win7")]
+                return fallback_file_dialog(dialog, false, true);
+                #[cfg(not(target_vendor = "win7"))]
                 return None;
             }
             let dlg = &*raw;
@@ -288,6 +306,11 @@ impl crate::FileDialogInterface for PlatformFileDialog {
                 &mut raw as *mut _ as *mut *mut c_void,
             ) != S_OK
             {
+                #[cfg(target_vendor = "win7")]
+                return fallback_file_dialog(dialog, true, false)?
+                    .into_iter()
+                    .next();
+                #[cfg(not(target_vendor = "win7"))]
                 return None;
             }
             let dlg = &*raw;
@@ -369,10 +392,19 @@ fn build_com_filters(
 
 unsafe fn make_shell_item_from_path(path: Option<&PathBuf>) -> Option<*mut IShellItem> {
     let path = path?;
+    let create_item = optional_proc!(
+        "shell32",
+        SHCreateItemFromParsingName(
+            *const u16,
+            *mut c_void,
+            *const GUID,
+            *mut *mut c_void,
+        ) -> HRESULT
+    )?;
     let w = wide(&path.to_string_lossy());
     let mut item: *mut IShellItem = null_mut();
     if unsafe {
-        SHCreateItemFromParsingName(
+        create_item(
             w.as_ptr(),
             null_mut(),
             &IID_IShellItem,
@@ -395,9 +427,139 @@ unsafe fn shell_item_path(item: *mut IShellItem) -> Option<PathBuf> {
     }
 }
 
+#[cfg(target_vendor = "win7")]
+fn fallback_file_dialog(
+    dialog: crate::FileDialog<'_>,
+    save: bool,
+    multiple: bool,
+) -> Option<Vec<PathBuf>> {
+    let mut buffer = vec![0u16; 32_768];
+    if let Some(filename) = &dialog.filename {
+        let filename = wide(filename);
+        if filename.len() > buffer.len() {
+            return None;
+        }
+        buffer[..filename.len()].copy_from_slice(&filename);
+    }
+    let (_, filters) = build_com_filters(&dialog.filters);
+    let filter = filters
+        .iter()
+        .flat_map(|(name, pattern)| name.iter().chain(pattern.iter()))
+        .copied()
+        .chain([0])
+        .collect::<Vec<_>>();
+    let title = dialog.title.as_deref().map(wide);
+    let directory = dialog.directory.as_ref().map(|path| {
+        path.as_os_str()
+            .encode_wide()
+            .chain([0])
+            .collect::<Vec<_>>()
+    });
+    let extension = dialog
+        .filters
+        .first()
+        .and_then(|filter| filter.extensions.first())
+        .filter(|_| save)
+        .map(|extension| wide(extension));
+    // All fields allow zero/null defaults. The backing buffers live through the modal call.
+    let mut config = OPENFILENAMEW {
+        lStructSize: size_of::<OPENFILENAMEW>() as u32,
+        hwndOwner: dialog
+            .parent
+            .map(|window| window.0.hwnd)
+            .unwrap_or_else(|| unsafe { GetActiveWindow() }),
+        lpstrFilter: if filters.is_empty() {
+            null()
+        } else {
+            filter.as_ptr()
+        },
+        nFilterIndex: 1,
+        lpstrFile: buffer.as_mut_ptr(),
+        nMaxFile: buffer.len() as u32,
+        lpstrInitialDir: directory.as_ref().map_or(null(), |value| value.as_ptr()),
+        lpstrTitle: title.as_ref().map_or(null(), |value| value.as_ptr()),
+        lpstrDefExt: extension.as_ref().map_or(null(), |value| value.as_ptr()),
+        Flags: OFN_EXPLORER
+            | OFN_NOCHANGEDIR
+            | OFN_PATHMUSTEXIST
+            | if save {
+                OFN_OVERWRITEPROMPT
+            } else {
+                OFN_FILEMUSTEXIST
+            }
+            | if multiple { OFN_ALLOWMULTISELECT } else { 0 },
+        ..unsafe { std::mem::zeroed() }
+    };
+    let success = unsafe {
+        if save {
+            GetSaveFileNameW(&mut config)
+        } else {
+            GetOpenFileNameW(&mut config)
+        }
+    };
+    if success == 0 {
+        return None;
+    }
+    selected_paths(&buffer)
+}
+
+#[cfg(any(target_vendor = "win7", test))]
+fn selected_paths(buffer: &[u16]) -> Option<Vec<PathBuf>> {
+    let mut parts = buffer
+        .split(|&unit| unit == 0)
+        .take_while(|part| !part.is_empty());
+    let first = PathBuf::from(OsString::from_wide(parts.next()?));
+    let mut paths = parts
+        .map(|name| first.join(OsString::from_wide(name)))
+        .collect::<Vec<_>>();
+    if paths.is_empty() {
+        paths.push(first);
+    }
+    Some(paths)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn common_dialog_layout_matches_windows_headers() {
+        assert_eq!(
+            size_of::<OPENFILENAMEW>(),
+            if cfg!(target_pointer_width = "32") {
+                88
+            } else {
+                152
+            }
+        );
+    }
+
+    #[test]
+    fn reads_single_and_multiple_selections() {
+        assert_eq!(
+            selected_paths(&wide("C:\\My Files\\one.txt")),
+            Some(vec![PathBuf::from("C:\\My Files\\one.txt")])
+        );
+        let buffer = wide("C:\\My Files\0one.txt\0two words.txt\0");
+        assert_eq!(
+            selected_paths(&buffer),
+            Some(vec![
+                PathBuf::from("C:\\My Files\\one.txt"),
+                PathBuf::from("C:\\My Files\\two words.txt")
+            ])
+        );
+        assert_eq!(selected_paths(&[0, 0]), None);
+    }
+
+    #[test]
+    fn preserves_non_unicode_windows_paths() {
+        let buffer = [b'C' as u16, b':' as u16, b'\\' as u16, 0xd800, 0, 0];
+        let paths = selected_paths(&buffer).unwrap();
+        assert_eq!(
+            paths[0].as_os_str().encode_wide().collect::<Vec<_>>(),
+            buffer[..4]
+        );
+    }
 
     #[test]
     fn task_dialog_layout_matches_windows_headers() {
