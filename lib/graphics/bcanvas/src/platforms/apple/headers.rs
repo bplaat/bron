@@ -65,6 +65,7 @@ unsafe extern "C" {
     pub(super) fn CGContextRestoreGState(context: CGContextRef);
     pub(super) fn CGContextFlush(context: CGContextRef);
     pub(super) fn CGContextClearRect(context: CGContextRef, rect: CGRect);
+    pub(super) fn CGContextFillRect(context: CGContextRef, rect: CGRect);
     pub(super) fn CGContextSetFillColorSpace(context: CGContextRef, space: *mut c_void);
     pub(super) fn CGContextSetStrokeColorSpace(context: CGContextRef, space: *mut c_void);
     pub(super) fn CGContextSetFillColor(context: CGContextRef, components: *const f64);

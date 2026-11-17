@@ -126,9 +126,7 @@ impl PlatformCanvasContext {
     fn begin_transparency_layer(&mut self, s: &CanvasState, masked: bool) {
         self.layers.push(masked);
         unsafe {
-            CGContextSaveGState(self.context);
-            CGContextSetAlpha(self.context, s.alpha.into());
-            CGContextSetBlendMode(self.context, blend_mode(s.composite));
+            begin_paint(self.context, s);
             CGContextBeginTransparencyLayer(self.context, null());
         }
     }
@@ -136,7 +134,17 @@ impl PlatformCanvasContext {
         self.preserving_path(|context| unsafe { CGContextClearRect(context, rect(x, y, w, h)) });
     }
     pub(crate) fn fill_rect(&mut self, s: &CanvasState, x: f32, y: f32, w: f32, h: f32) {
-        self.paint_rect(s, PaintMode::Fill(FillRule::NonZero), x, y, w, h);
+        // A color fills the rect directly, without building a path.
+        let CanvasStyle::Color(color) = s.fill else {
+            self.paint_rect(s, PaintMode::Fill(FillRule::NonZero), x, y, w, h);
+            return;
+        };
+        self.preserving_path(|context| unsafe {
+            begin_paint(context, s);
+            set_color(context, color, false);
+            CGContextFillRect(context, rect(x, y, w, h));
+            CGContextRestoreGState(context);
+        });
     }
     pub(crate) fn stroke_rect(&mut self, s: &CanvasState, x: f32, y: f32, w: f32, h: f32) {
         self.paint_rect(s, PaintMode::Stroke, x, y, w, h);
@@ -216,9 +224,7 @@ impl PlatformCanvasContext {
         h: f32,
     ) {
         unsafe {
-            CGContextSaveGState(self.context);
-            CGContextSetAlpha(self.context, s.alpha.into());
-            CGContextSetBlendMode(self.context, blend_mode(s.composite));
+            begin_paint(self.context, s);
             CGContextSetInterpolationQuality(
                 self.context,
                 if s.image_smoothing {
@@ -269,9 +275,7 @@ impl PlatformCanvasContext {
             _ => y + style.ascent,
         };
         unsafe {
-            CGContextSaveGState(self.context);
-            CGContextSetAlpha(self.context, s.alpha.into());
-            CGContextSetBlendMode(self.context, blend_mode(s.composite));
+            begin_paint(self.context, s);
             // The context is flipped, so flip the glyphs back upright.
             CGContextSetTextMatrix(self.context, affine([1.0, 0.0, 0.0, -1.0, 0.0, 0.0]));
             CGContextSetTextPosition(self.context, x.into(), y.into());
@@ -390,12 +394,19 @@ unsafe fn set_color(context: CGContextRef, color: Color, stroke: bool) {
     }
 }
 
-/// Paint the current path with the fill or stroke style, consuming it.
-unsafe fn paint_path(context: CGContextRef, s: &CanvasState, mode: PaintMode) {
+/// Save the state and apply the global alpha and composite operation.
+unsafe fn begin_paint(context: CGContextRef, s: &CanvasState) {
     unsafe {
         CGContextSaveGState(context);
         CGContextSetAlpha(context, s.alpha.into());
         CGContextSetBlendMode(context, blend_mode(s.composite));
+    }
+}
+
+/// Paint the current path with the fill or stroke style, consuming it.
+unsafe fn paint_path(context: CGContextRef, s: &CanvasState, mode: PaintMode) {
+    unsafe {
+        begin_paint(context, s);
         let style = match mode {
             PaintMode::Fill(_) => &s.fill,
             PaintMode::Stroke => {
