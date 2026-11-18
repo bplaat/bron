@@ -4,9 +4,9 @@
  * SPDX-License-Identifier: MIT
  */
 
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::{env, fs};
 
 use anyhow::{Context, Result, bail};
 use directories::{BaseDirs, UserDirs};
@@ -14,21 +14,8 @@ use serde_json::Value;
 
 use crate::metadata::{InstallableApp, has_target_kind, packages, supports_os};
 use crate::process::{capture, npm_program, run};
-use crate::utils::{
-    collect_paths, copy_directory, copy_directory_contents, relative_slash,
-    remove_directory_except, remove_path, remove_path_if_exists,
-};
+use crate::utils::{copy_directory, copy_directory_contents, remove_path_if_exists};
 use crate::{Os, Xtask};
-
-fn is_generated_database(root: &Path, path: &Path) -> bool {
-    let name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or_default();
-    name.contains(".db")
-        || (name.ends_with(".mmdb")
-            && path != root.join("lib/net/maxminddb/test-data/GeoLite2-City-Test.mmdb"))
-}
 
 fn cargo_install_path(path: &str) -> Result<()> {
     let mut offline = Command::new("cargo");
@@ -73,47 +60,6 @@ fn freedesktop_identity(path: &Path) -> Result<Option<(String, String)>> {
 }
 
 impl Xtask {
-    pub(crate) fn clean(&self) -> Result<()> {
-        if self.os == Os::Windows {
-            // Windows does not allow `cargo clean` to delete the xtask executable
-            // while it is running. Remove everything except that executable instead.
-            println!("Cleaning Cargo artifacts...");
-            let target = self.root.join("target");
-            if target.exists() {
-                let executable = env::current_exe().context("failed to locate xtask executable")?;
-                remove_directory_except(&target, &executable)?;
-            }
-        } else {
-            run(Command::new("cargo").arg("clean"))?;
-        }
-        let mut generated = Vec::new();
-        collect_paths(&self.root, &mut generated, &|path, is_dir| {
-            let name = path
-                .file_name()
-                .and_then(|name| name.to_str())
-                .unwrap_or_default();
-            if is_dir {
-                (name == "target" && path != self.root.join("target"))
-                    || matches!(
-                        name,
-                        "node_modules"
-                            | "dist"
-                            | "src-gen"
-                            | "playwright"
-                            | "playwright-report"
-                            | "test-results"
-                    )
-            } else {
-                is_generated_database(&self.root, path)
-            }
-        })?;
-        for path in generated {
-            println!("Removing {}", relative_slash(&self.root, &path));
-            remove_path(&path)?;
-        }
-        Ok(())
-    }
-
     pub(crate) fn build_pages(&self) -> Result<()> {
         let pages = self.root.join("target/pages");
         fs::create_dir_all(&pages)?;

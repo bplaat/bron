@@ -19,6 +19,7 @@ use crate::utils::source_files;
 
 mod build;
 mod checks;
+mod clean;
 #[cfg(unix)]
 mod headers;
 mod homebrew;
