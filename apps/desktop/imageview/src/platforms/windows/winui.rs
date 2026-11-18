@@ -18,12 +18,11 @@ use std::sync::OnceLock;
 
 use imageview_core::{MAXIMUM_MAGNIFICATION, MINIMUM_MAGNIFICATION};
 
+#[cfg(feature = "edit")]
+pub(crate) use self::edit::Mark;
 use super::composition::{MediaVisual, Surface};
 use super::headers::*;
 use super::winrt::*;
-
-#[cfg(feature = "edit")]
-pub(crate) use self::edit::Mark;
 
 #[cfg(feature = "edit")]
 mod edit;
