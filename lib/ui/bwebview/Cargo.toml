@@ -25,6 +25,8 @@ objc2 = "0.6.5"
 
 [build-dependencies]
 build-utils = { path = "../../build/build-utils" }
+sha2 = "0.11"
+zip = "9.1"
 
 [dev-dependencies]
 bwindow = { path = "../bwindow", features = [

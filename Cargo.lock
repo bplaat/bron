@@ -247,7 +247,9 @@ dependencies = [
  "rust-embed",
  "serde",
  "serde_json",
+ "sha2",
  "small-http",
+ "zip",
 ]
 
 [[package]]

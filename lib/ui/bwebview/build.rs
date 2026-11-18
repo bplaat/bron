@@ -6,13 +6,90 @@
 
 #![doc = include_str!("README.md")]
 
-use std::env;
+use std::io::{Cursor, Read};
 use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::{env, fs};
 
 use build_utils::{
     cfg_if_symbol, display_paths, find_library, library_has_symbol, link_libraries, link_library,
     require_symbol, search_dirs,
 };
+use sha2::Sha256;
+
+const MINIBLINK_ARCHIVE_SHA256: &str =
+    "6e0d1b6270be647bda1d0fc0be8a63e715622b168ffb93015c94d1659b3f6edc";
+
+fn download_verified(path: &Path, url: &str, expected_sha256: &str) -> Vec<u8> {
+    if !path.is_file() {
+        let temporary = path.with_extension("part");
+        let status = Command::new("curl")
+            .args(["--fail", "--location", "--retry", "3", "--output"])
+            .arg(&temporary)
+            .arg(url)
+            .status()
+            .expect("MiniBlink download requires curl");
+        assert!(status.success(), "MiniBlink download failed: {url}");
+        fs::rename(temporary, path).expect("cannot save MiniBlink download");
+    }
+    let bytes = fs::read(path).expect("cannot read MiniBlink download");
+    let checksum = Sha256::digest(&bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    assert_eq!(
+        checksum,
+        expected_sha256,
+        "MiniBlink checksum mismatch: {}",
+        path.display()
+    );
+    bytes
+}
+
+/// Places MiniBlink next to the executables, which load it from their own folder.
+fn install_miniblink() {
+    println!("cargo::rerun-if-env-changed=BWEBVIEW_MINIBLINK_ARCHIVE");
+    let out = PathBuf::from(env::var_os("OUT_DIR").expect("OUT_DIR not set"));
+    let dll = out.join("miniblink.dll");
+    if !dll.is_file() {
+        extract_miniblink(&out, &dll);
+    }
+    // OUT_DIR is inside <profile>/build/
+    let profile = out
+        .ancestors()
+        .find(|dir| dir.file_name().is_some_and(|name| name == "build"))
+        .and_then(Path::parent)
+        .expect("OUT_DIR is not inside a build folder");
+    fs::copy(&dll, profile.join("miniblink.dll"))
+        .expect("cannot copy MiniBlink next to the executables");
+}
+
+fn extract_miniblink(out: &Path, dll: &Path) {
+    let archive = env::var_os("BWEBVIEW_MINIBLINK_ARCHIVE")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| out.join("miniblink-20231115.zip"));
+    let bytes = download_verified(
+        &archive,
+        "https://github.com/weolar/miniblink49/releases/download/2023.11.15/miniblink-20231115.zip",
+        MINIBLINK_ARCHIVE_SHA256,
+    );
+    let mut archive = zip::ZipArchive::new(Cursor::new(bytes)).expect("invalid MiniBlink ZIP");
+    let name = "release/miniblink_4975_x32.dll";
+    for index in 0..archive.len() {
+        let mut entry = archive
+            .by_index(index)
+            .expect("invalid MiniBlink ZIP entry");
+        if entry.name() == name {
+            let mut bytes = Vec::new();
+            entry
+                .read_to_end(&mut bytes)
+                .expect("cannot extract MiniBlink");
+            fs::write(dll, bytes).expect("cannot write MiniBlink DLL");
+            return;
+        }
+    }
+    panic!("MiniBlink archive does not contain {name}");
+}
 
 fn main() {
     println!("cargo::rustc-check-cfg=cfg(gtk3_20)");
@@ -33,6 +110,9 @@ fn main() {
     }
     let target_vendor =
         env::var("CARGO_CFG_TARGET_VENDOR").expect("CARGO_CFG_TARGET_VENDOR not set");
+    if target_os == "windows" && target_vendor == "winxp" {
+        install_miniblink();
+    }
     if target_vendor != "apple" && !matches!(target_os.as_str(), "windows" | "android") {
         let search_dirs = search_dirs();
         cfg_if_symbol(

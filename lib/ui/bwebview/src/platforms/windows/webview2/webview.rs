@@ -12,9 +12,9 @@ use std::ptr::null_mut;
 use std::rc::Rc;
 use std::{env, mem};
 
-use super::callback::{self, CallbackHandle, release_interface};
 #[cfg(feature = "file_drop")]
-use super::file_drop::{FileDropTarget, install_file_drop_targets};
+use super::super::file_drop::{FileDropTarget, install_file_drop_targets};
+use super::callback::{self, CallbackHandle, release_interface};
 use super::headers::*;
 use super::loader::*;
 #[cfg(feature = "custom_protocol")]
@@ -152,7 +152,7 @@ impl WebviewData {
         }
         self.attachment.disconnect();
         #[cfg(feature = "file_drop")]
-        super::file_drop::revoke_file_drop_targets(self);
+        super::super::file_drop::revoke_file_drop_targets(&self.drop_targets);
         if let Some(controller) = self.controller.take() {
             unsafe {
                 (*controller).Close();
@@ -401,7 +401,11 @@ extern "system" fn controller_created(
                 (*controller4).put_AllowExternalDrop(FALSE);
                 (*controller4).Release();
             }
-            install_file_drop_targets(_self);
+            install_file_drop_targets(
+                _self.hwnd,
+                _self.attachment.event_sender(),
+                &_self.drop_targets,
+            );
         }
 
         // Get webview
@@ -534,7 +538,7 @@ extern "system" fn controller_created(
         }
 
         // Setup ipc and console logging
-        let script = super::super::IPC_SCRIPT;
+        let script = crate::platforms::IPC_SCRIPT;
         (*webview).AddScriptToExecuteOnDocumentCreated(wide(script).as_ptr() as *mut _, null_mut());
 
         static VTBL: ICoreWebView2WebMessageReceivedEventHandlerVtbl =

@@ -4,12 +4,15 @@
  * SPDX-License-Identifier: MIT
  */
 
-pub(crate) use crate::platforms::windows::webview::PlatformWebview;
+#[cfg(target_vendor = "winxp")]
+pub(crate) use self::miniblink::PlatformWebview;
+#[cfg(not(target_vendor = "winxp"))]
+pub(crate) use self::webview2::PlatformWebview;
 
-mod accelerators;
-mod callback;
 #[cfg(feature = "file_drop")]
 mod file_drop;
 mod headers;
-mod loader;
-mod webview;
+#[cfg(target_vendor = "winxp")]
+mod miniblink;
+#[cfg(not(target_vendor = "winxp"))]
+mod webview2;

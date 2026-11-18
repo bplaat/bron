@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: MIT
  */
 
+use std::cell::RefCell;
 use std::ffi::c_void;
 use std::mem;
 use std::path::PathBuf;
@@ -13,9 +14,8 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use bwindow::WindowEvent;
 
 use super::headers::*;
-use super::webview::WebviewData;
 
-/// The COM drop target registered on each WebView2 child window
+/// The COM drop target registered on each browser child window
 #[repr(C)]
 pub(super) struct FileDropTarget {
     interface: IDropTarget,
@@ -42,19 +42,31 @@ const IID_IDROP_TARGET: GUID = GUID {
     data4: [0xc0, 0, 0, 0, 0, 0, 0, 0x46],
 };
 
-pub(super) fn revoke_file_drop_targets(data: &WebviewData) {
-    let targets = mem::take(&mut *data.drop_targets.borrow_mut());
+#[allow(clippy::vec_box)]
+// Registered COM pointers must remain stable when the vector grows.
+pub(super) fn revoke_file_drop_targets(targets: &RefCell<Vec<Box<FileDropTarget>>>) {
+    let targets = mem::take(&mut *targets.borrow_mut());
     for target in &targets {
         unsafe { RevokeDragDrop(target.hwnd) };
     }
 }
 
-/// Registers a drop target on every WebView2 child window
-pub(super) unsafe fn install_file_drop_targets(data: &WebviewData) {
+/// Registers a drop target on every browser child window
+#[allow(clippy::vec_box)]
+pub(super) unsafe fn install_file_drop_targets(
+    hwnd: HWND,
+    sender: bwindow::WindowEventSender,
+    targets: &RefCell<Vec<Box<FileDropTarget>>>,
+) {
+    struct State<'a> {
+        sender: bwindow::WindowEventSender,
+        targets: &'a RefCell<Vec<Box<FileDropTarget>>>,
+    }
+    let state = State { sender, targets };
     unsafe extern "system" fn enum_child(hwnd: HWND, data: LPARAM) -> BOOL {
-        let data = unsafe { &*(data as *const WebviewData) };
+        let state = unsafe { &*(data as *const State<'_>) };
         let mut target = Box::new(FileDropTarget {
-            sender: data.attachment.event_sender(),
+            sender: state.sender.clone(),
             interface: IDropTarget {
                 lpVtbl: &FILE_DROP_TARGET_VTBL,
             },
@@ -66,12 +78,12 @@ pub(super) unsafe fn install_file_drop_targets(data: &WebviewData) {
         if revoked != DRAGDROP_E_INVALIDHWND
             && unsafe { RegisterDragDrop(hwnd, &mut target.interface) } == S_OK
         {
-            data.drop_targets.borrow_mut().push(target);
+            state.targets.borrow_mut().push(target);
         }
         TRUE
     }
 
-    unsafe { EnumChildWindows(data.hwnd, enum_child, data as *const WebviewData as LPARAM) };
+    unsafe { EnumChildWindows(hwnd, enum_child, &state as *const State<'_> as LPARAM) };
 }
 
 unsafe extern "system" fn file_drop_query_interface(
