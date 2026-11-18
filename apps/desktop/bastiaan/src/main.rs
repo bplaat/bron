@@ -356,9 +356,10 @@ impl Flow<'_, '_> {
         if self.boxes.len() == self.line_start {
             return;
         }
+        // Boxes start on whole pixels, where pictures copy and fills skip antialiasing
         let shift = self.left + (self.width - self.x) / 2.0;
         for layout_box in &mut self.boxes[self.line_start..] {
-            layout_box.x += shift;
+            layout_box.x = (layout_box.x + shift).round();
         }
         // Like a browser, a link hits on the rectangle of its words on the line with the spaces between
         // them, as high as its content and centered on the line
