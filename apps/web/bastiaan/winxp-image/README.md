@@ -53,8 +53,8 @@ Generated: `winxp-image/out/` (install images, screenshots), the built `.exe`/`.
    boots v86. `v86setup.exe` installs drivers, applies settings, activates Windows and creates the `bplaat` account.
    Activation failure stops the build. The first user logon reapplies settings reset by Windows and fills the Media
    Player library. Setup files and caches are removed and free space is zeroed. Output: `out/disk.img`.
-4. **Native apps** (`disk.mjs apps`): copies the freshly built Bastiaan and Reversi over the installed ones on a copy
-   of the disk, the software stage installs their shortcuts and logon entry. Output: `out/site.img`.
+4. **Native apps** (`disk.mjs apps`): copies freshly built Bastiaan, Reversi and 2048 with its
+   MiniBlink DLL onto a copy of the disk. The software stage installs their shortcuts and logon entry. Output: `out/site.img`.
 5. **Site** (`make-state.mjs`, `chunks.mjs`, `bootscreen.mjs`): compresses the disk into 1 MiB zstd chunks, only the
    chunks that changed since the last build, saves a desktop snapshot at 1024x768 and extracts boot screen assets from
    `ntoskrnl.exe`. The build ID in `disk.json` invalidates browser sessions from older builds.
@@ -72,7 +72,7 @@ Generated: `winxp-image/out/` (install images, screenshots), the built `.exe`/`.
   other than DHCP disabled.
 - Notification balloons, the XP tour, Desktop Cleanup Wizard, low disk warnings, AutoRun and first-run prompts disabled.
 - Windows Media Player with its menu bar, album art from MP3 covers (`Folder.jpg`), My Music and Windows MIDI files.
-- Desktop shortcuts for My Computer, My Documents, Media Player, Bastiaan, Reversi, Minesweeper, Pinball and the games
+- Desktop shortcuts for My Computer, My Documents, Media Player, Bastiaan, Reversi, 2048, Minesweeper, Pinball and the games
   below. [Bastiaan](../../../desktop/bastiaan), the website as a native app, starts at logon.
 - Age of Empires with The Rise of Rome and MIDI music; Age of Empires II with The Conquerors, CD music and videos;
   Civilization III Complete.
