@@ -13,7 +13,10 @@ use super::composite::{Plane, Rect, Target, composite};
 use super::gradient;
 use super::headers::*;
 use crate::path::{Command, Path, Transform};
-use crate::platforms::windows::headers::{FALSE, TRUE, w, wide};
+use crate::platforms::windows::headers::{
+    BITMAPINFOHEADER, DIB_RGB_COLORS, DeleteObject, FALSE, GdiFlush, HANDLE, HDC, SelectObject,
+    TRUE, w, wide,
+};
 use crate::platforms::windows::image::PlatformImage;
 use crate::{
     CanvasState, CanvasStyle, Color, CompositeOperation, FillRule, FontWeight, LineCap, LineJoin,
@@ -36,6 +39,8 @@ pub(crate) struct Resources {
     format: Gp<GpStringFormat>,
     fonts: RefCell<Vec<(FontKey, Rc<Font>)>>,
     text: RefCell<Vec<u16>>,
+    // The brush of the last GDI fill, most fills repeat a color
+    pattern: RefCell<Option<PatternBrush>>,
 }
 
 impl Resources {
@@ -61,7 +66,45 @@ impl Resources {
             format,
             fonts: RefCell::new(Vec::new()),
             text: RefCell::new(Vec::new()),
+            pattern: RefCell::new(None),
         })
+    }
+}
+
+/// A GDI brush of one premultiplied BGRA pixel. GDI's solid brushes clear the alpha of
+/// 32-bit bitmaps, a 32-bit pattern keeps it.
+struct PatternBrush {
+    pixel: u32,
+    brush: HANDLE,
+}
+
+impl PatternBrush {
+    fn new(pixel: u32) -> Option<Self> {
+        // An 8x8 pattern, the size every Windows version takes
+        #[repr(C)]
+        struct Pattern {
+            header: BITMAPINFOHEADER,
+            pixels: [u32; 64],
+        }
+        let pattern = Pattern {
+            header: BITMAPINFOHEADER {
+                size: size_of::<BITMAPINFOHEADER>() as u32,
+                width: 8,
+                height: 8,
+                planes: 1,
+                bit_count: 32,
+                ..Default::default()
+            },
+            pixels: [pixel; 64],
+        };
+        let brush = unsafe { CreateDIBPatternBrushPt((&raw const pattern).cast(), DIB_RGB_COLORS) };
+        (!brush.is_null()).then_some(Self { pixel, brush })
+    }
+}
+
+impl Drop for PatternBrush {
+    fn drop(&mut self) {
+        unsafe { DeleteObject(self.brush) };
     }
 }
 
@@ -83,17 +126,19 @@ pub(crate) struct Surface {
     _bitmap: Gp<GpImage>,
     pixels: *mut u8,
     rect: Rect,
+    // The device context of a canvas bitmap, which GDI fills, null for a layer.
+    dc: HDC,
     _storage: Option<Box<[u8]>>,
 }
 
 impl Surface {
     /// # Safety
-    /// The pixels must be `width * height * 4` bytes that outlive the surface.
-    pub(crate) unsafe fn new(pixels: *mut u8, width: u32, height: u32) -> Option<Self> {
-        unsafe { Self::at(pixels, [0, 0, width as i32, height as i32]) }
+    /// The pixels and device context of the bitmap must outlive the surface.
+    pub(crate) unsafe fn new(pixels: *mut u8, width: u32, height: u32, dc: HDC) -> Option<Self> {
+        unsafe { Self::at(pixels, [0, 0, width as i32, height as i32], dc) }
     }
 
-    unsafe fn at(pixels: *mut u8, rect: Rect) -> Option<Self> {
+    unsafe fn at(pixels: *mut u8, rect: Rect, dc: HDC) -> Option<Self> {
         unsafe {
             let bitmap = Gp::create(|out| {
                 GdipCreateBitmapFromScan0(
@@ -120,6 +165,7 @@ impl Surface {
                 _bitmap: bitmap,
                 pixels,
                 rect,
+                dc,
                 _storage: None,
             };
             surface.set_world(Transform::IDENTITY);
@@ -131,8 +177,8 @@ impl Surface {
     fn owned(rect: Rect) -> Self {
         let rect = [rect[0], rect[1], rect[2].max(1), rect[3].max(1)];
         let mut storage = vec![0u8; rect[2] as usize * rect[3] as usize * 4].into_boxed_slice();
-        let mut surface =
-            unsafe { Self::at(storage.as_mut_ptr(), rect) }.expect("GDI+ layer surface");
+        let mut surface = unsafe { Self::at(storage.as_mut_ptr(), rect, null_mut()) }
+            .expect("GDI+ layer surface");
         surface._storage = Some(storage);
         surface
     }
@@ -177,6 +223,31 @@ impl Surface {
         unsafe {
             GdipFlush(self.g(), FlushIntentionSync);
             std::slice::from_raw_parts_mut(self.pixels, self.len())
+        }
+    }
+
+    /// Fills a device rectangle with a pattern brush through GDI, which copies many times
+    /// faster than GDI+ fills. False for a layer, which has no device context. It ignores the
+    /// GDI+ clip.
+    fn pattern_fill(&self, [x, y, width, height]: Rect, brush: &PatternBrush) -> bool {
+        if self.dc.is_null() {
+            return false;
+        }
+        unsafe {
+            GdipFlush(self.g(), FlushIntentionSync);
+            let previous = SelectObject(self.dc, brush.brush);
+            let filled = PatBlt(
+                self.dc,
+                x - self.rect[0],
+                y - self.rect[1],
+                width,
+                height,
+                PATCOPY,
+            );
+            SelectObject(self.dc, previous);
+            // GDI+ draws next into the same pixels
+            GdiFlush();
+            filled != FALSE
         }
     }
 
@@ -507,6 +578,12 @@ impl Context {
 
     pub(crate) fn clear_rect(&mut self, x: f32, y: f32, w: f32, h: f32) {
         let (x, y, w, h) = normalized(x, y, w, h);
+        if let Some(rect) = self.pixel_rect(x, y, w, h)
+            && self.clips.is_empty()
+            && self.pattern_fill(rect, 0)
+        {
+            return;
+        }
         self.set_world(self.user());
         unsafe {
             let Some(brush) = Gp::create(|out| GdipCreateSolidFill(0, out)) else {
@@ -528,48 +605,84 @@ impl Context {
         self.gp_path(&path, Transform::IDENTITY, FillRule::NonZero)
     }
 
-    pub(crate) fn fill_rect(&mut self, state: &CanvasState, x: f32, y: f32, w: f32, h: f32) {
-        // A rectangle on whole device pixels looks the same without antialiasing, which GDI+
-        // fills many times faster, like a page background
+    // Fills device pixels with one premultiplied BGRA pixel through GDI, false when the
+    // surface is a layer.
+    fn pattern_fill(&self, rect: Rect, pixel: u32) -> bool {
+        let mut pattern = self.resources.pattern.borrow_mut();
+        if pattern.as_ref().is_none_or(|brush| brush.pixel != pixel) {
+            *pattern = None;
+            *pattern = PatternBrush::new(pixel);
+        }
+        pattern
+            .as_ref()
+            .is_some_and(|brush| self.surface.pattern_fill(rect, brush))
+    }
+
+    // The device pixels of a user-space rectangle that lies on whole device pixels, whose
+    // fills look the same without antialiasing
+    fn pixel_rect(&self, x: f32, y: f32, w: f32, h: f32) -> Option<Rect> {
         let user = self.user();
+        if user.0[1] != 0.0 || user.0[2] != 0.0 {
+            return None;
+        }
         let [x0, y0] = user.point([x, y]);
         let [x1, y1] = user.point([x + w, y + h]);
-        let aligned = user.0[1] == 0.0
-            && user.0[2] == 0.0
-            && [x0, y0, x1, y1]
-                .iter()
-                .all(|v| (v - v.round()).abs() < 1e-3);
-        // In a solid color it fills directly in device pixels without a path
-        if aligned
+        let edges = [x0.min(x1), y0.min(y1), x0.max(x1), y0.max(y1)];
+        if !edges
+            .iter()
+            .all(|v| (v - v.round()).abs() < 1e-3 && v.abs() < 1e9)
+        {
+            return None;
+        }
+        let [left, top, right, bottom] = edges.map(|v| v.round() as i32);
+        Some([left, top, right - left, bottom - top])
+    }
+
+    pub(crate) fn fill_rect(&mut self, state: &CanvasState, x: f32, y: f32, w: f32, h: f32) {
+        let rect = self.pixel_rect(x, y, w, h);
+        // A solid color on whole device pixels fills directly without a path, like a page
+        // background: GDI copies an opaque color without the clip, GDI+ without antialiasing
+        if let Some(rect) = rect
             && state.composite == CompositeOperation::SourceOver
             && let CanvasStyle::Color(color) = &state.fill
         {
-            if let Some(brush) = Self::color_brush(*color, state.alpha) {
-                let g = self.surface.g();
-                self.set_world(Transform::IDENTITY);
-                unsafe {
-                    GdipSetSmoothingMode(g, SmoothingModeNone);
-                    GdipFillRectangle(
-                        g,
-                        brush.get(),
-                        x0.min(x1),
-                        y0.min(y1),
-                        (x1 - x0).abs(),
-                        (y1 - y0).abs(),
-                    );
-                    GdipSetSmoothingMode(g, SmoothingModeAntiAlias);
+            let argb = Self::argb(*color, state.alpha);
+            let opaque = argb >> 24 == 0xff;
+            if opaque && self.clips.is_empty() && self.pattern_fill(rect, argb) {
+                return;
+            }
+            let Some(brush) = Self::color_brush(*color, state.alpha) else {
+                return;
+            };
+            let g = self.surface.g();
+            self.set_world(Transform::IDENTITY);
+            unsafe {
+                // An opaque color replaces the pixels, which skips blending
+                if opaque {
+                    GdipSetCompositingMode(g, CompositingModeSourceCopy);
                 }
+                GdipSetSmoothingMode(g, SmoothingModeNone);
+                GdipFillRectangle(
+                    g,
+                    brush.get(),
+                    rect[0] as f32,
+                    rect[1] as f32,
+                    rect[2] as f32,
+                    rect[3] as f32,
+                );
+                GdipSetSmoothingMode(g, SmoothingModeAntiAlias);
+                GdipSetCompositingMode(g, CompositingModeSourceOver);
             }
             return;
         }
         let Some(path) = self.rect_path(x, y, w, h) else {
             return;
         };
-        if aligned {
+        if rect.is_some() {
             unsafe { GdipSetSmoothingMode(self.surface.g(), SmoothingModeNone) };
         }
         self.fill_path(state, path);
-        if aligned {
+        if rect.is_some() {
             unsafe { GdipSetSmoothingMode(self.surface.g(), SmoothingModeAntiAlias) };
         }
     }
@@ -1080,10 +1193,15 @@ impl Context {
         font
     }
 
-    fn color_brush(color: Color, alpha: f32) -> Option<Brush> {
+    // A color with the global alpha as GDI+ ARGB, which is premultiplied when opaque.
+    fn argb(color: Color, alpha: f32) -> u32 {
         let (r, g, b, a) = color.components(alpha);
         let byte = |value: f64| u32::from((value.clamp(0.0, 1.0) * 255.0).round() as u8);
-        let argb = (byte(a) << 24) | (byte(r) << 16) | (byte(g) << 8) | byte(b);
+        (byte(a) << 24) | (byte(r) << 16) | (byte(g) << 8) | byte(b)
+    }
+
+    fn color_brush(color: Color, alpha: f32) -> Option<Brush> {
+        let argb = Self::argb(color, alpha);
         let brush = unsafe { Gp::create(|out| GdipCreateSolidFill(argb, out)) }?;
         Some(Brush {
             brush,

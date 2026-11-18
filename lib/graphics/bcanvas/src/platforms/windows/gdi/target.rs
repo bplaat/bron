@@ -43,7 +43,7 @@ impl WindowTarget {
         }
         let back = self.back.as_ref()?;
         // The back buffer outlives the context, which `end` requires to be dropped.
-        let surface = unsafe { Surface::new(back.as_mut_ptr(), width, height) }?;
+        let surface = unsafe { Surface::new(back.as_mut_ptr(), width, height, back.dc) }?;
         Some(Context::new(surface, self.resources.clone(), scale))
     }
 
@@ -86,6 +86,7 @@ pub(crate) struct OffscreenTarget {
     pixels: *mut u8,
     width: u32,
     height: u32,
+    dc: HDC,
 }
 
 impl OffscreenTarget {
@@ -96,11 +97,12 @@ impl OffscreenTarget {
             pixels: dib.as_mut_ptr(),
             width: dib.width,
             height: dib.height,
+            dc: dib.dc,
         }
     }
 
     pub(crate) fn begin(&mut self, scale: f32) -> Context {
-        let surface = unsafe { Surface::new(self.pixels, self.width, self.height) }
+        let surface = unsafe { Surface::new(self.pixels, self.width, self.height, self.dc) }
             .expect("GDI+ bitmap surface");
         Context::new(surface, self.resources.clone(), scale)
     }

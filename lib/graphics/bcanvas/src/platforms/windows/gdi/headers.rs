@@ -97,6 +97,15 @@ pub(super) const ColorAdjustTypeDefault: i32 = 0;
 pub(super) const ColorMatrixFlagsDefault: i32 = 0;
 pub(super) const FlushIntentionSync: i32 = 1;
 
+// GDI fills of the canvas bitmaps.
+pub(super) const PATCOPY: u32 = 0x00f0_0021;
+
+#[link(name = "gdi32")]
+unsafe extern "system" {
+    pub(super) fn CreateDIBPatternBrushPt(packed: *const c_void, usage: u32) -> HANDLE;
+    pub(super) fn PatBlt(dc: HDC, x: i32, y: i32, width: i32, height: i32, rop: u32) -> BOOL;
+}
+
 #[link(name = "gdiplus")]
 unsafe extern "system" {
     pub(super) fn GdiplusStartup(
