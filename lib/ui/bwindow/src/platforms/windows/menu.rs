@@ -258,6 +258,27 @@ mod tests {
             ..unsafe { std::mem::zeroed() }
         };
         let enabled = unsafe { translate(&mut message) };
+        let child = unsafe {
+            CreateWindowExW(
+                0,
+                w!("EDIT").as_ptr(),
+                std::ptr::null(),
+                0x5000_0000, // WS_CHILD | WS_VISIBLE
+                0,
+                0,
+                100,
+                30,
+                hwnd,
+                null_mut(),
+                null_mut(),
+                0,
+            )
+        };
+        assert!(!child.is_null(), "could not create focused child control");
+        unsafe { SetFocus(child) };
+        // Embedded native views take keyboard focus in a child window of the same message loop.
+        message.hwnd = child;
+        let child_enabled = unsafe { translate(&mut message) };
         crate::set_menu_item_enabled("test.native_save_as", false);
         let disabled = unsafe { translate(&mut message) };
         crate::set_menu_item_enabled("test.native_save_as", true);
@@ -266,6 +287,10 @@ mod tests {
         window.close();
         crate::dispatch::shutdown(&crate::mailbox::Mailbox::new());
         assert!(enabled, "Ctrl+Shift+S must work without a visible menu");
+        assert!(
+            child_enabled,
+            "shortcuts must work while a child control has focus"
+        );
         assert!(
             !disabled,
             "disabled shortcuts must reach the focused control"
