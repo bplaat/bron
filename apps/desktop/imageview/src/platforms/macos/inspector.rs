@@ -167,6 +167,7 @@ impl Inspector {
     }
 
     /// Hides the inspector while the image is edited, or shows it again when it is open.
+    #[cfg(feature = "edit")]
     pub(super) fn set_hidden(&self, hidden: bool) {
         // Dragging the divider can collapse the inspector, which then stays closed.
         if hidden && !self.hidden.get() {

@@ -14,5 +14,5 @@ workspace = true
 
 [dependencies]
 block2 = "0.6.2"
-imageview-core = { path = "../imageview-core" }
+imageview-core = { path = "../imageview-core", default-features = false }
 objc2 = "0.6.5"

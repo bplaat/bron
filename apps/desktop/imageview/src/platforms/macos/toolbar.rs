@@ -5,8 +5,9 @@
  */
 
 //! The toolbars of an image window: NSToolbars unified with the titlebar, one to view the
-//! image and one to edit it, which are swapped by their Edit and Done buttons. Related
-//! buttons are one control with dividers, they run the same actions as the menu.
+//! image and, with the `edit` feature, one to edit it, which are swapped by their Edit and Done
+//! buttons. Related buttons are one control with dividers, they run the same actions as the
+//! menu.
 
 use std::ptr::null_mut;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -56,12 +57,14 @@ enum Item {
         toggled: bool,
     },
     // A button with an image that opens a menu, with separators between its sections.
+    #[cfg(feature = "edit")]
     Menu {
         label: &'static str,
         symbol: &'static str,
         sections: &'static [&'static [Button]],
     },
     // A button with a title instead of an image.
+    #[cfg(feature = "edit")]
     Text(Button),
     FlexibleSpace,
 }
@@ -71,7 +74,9 @@ impl Item {
     fn buttons(&self) -> Vec<&Button> {
         match self {
             Self::Group { buttons, .. } => buttons.iter().collect(),
+            #[cfg(feature = "edit")]
             Self::Menu { sections, .. } => sections.iter().flat_map(|section| *section).collect(),
+            #[cfg(feature = "edit")]
             Self::Text(button) => vec![button],
             Self::FlexibleSpace => Vec::new(),
         }
@@ -82,13 +87,22 @@ impl Item {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum Mode {
     View,
+    #[cfg(feature = "edit")]
     Edit,
 }
 
 impl Mode {
+    // The modes, in the order of their toolbars.
+    const ALL: &[Self] = &[
+        Self::View,
+        #[cfg(feature = "edit")]
+        Self::Edit,
+    ];
+
     const fn name(self) -> &'static str {
         match self {
             Self::View => "view",
+            #[cfg(feature = "edit")]
             Self::Edit => "edit",
         }
     }
@@ -96,6 +110,7 @@ impl Mode {
     const fn items(self) -> &'static [Item] {
         match self {
             Self::View => VIEW_ITEMS,
+            #[cfg(feature = "edit")]
             Self::Edit => EDIT_ITEMS,
         }
     }
@@ -136,9 +151,11 @@ const VIEW_ITEMS: &[Item] = &[
         navigational: false,
         toggled: true,
     },
+    #[cfg(feature = "edit")]
     Item::Text(button("Edit", "edit.toggle", "pencil.tip.crop.circle")),
 ];
 
+#[cfg(feature = "edit")]
 const EDIT_ITEMS: &[Item] = &[
     Item::Group {
         label: "History",
@@ -292,6 +309,7 @@ define_class!(
             self.run_action(identifier, index);
         }
 
+        #[cfg(feature = "edit")]
         #[unsafe(method(buttonSelected:))]
         fn _button_selected(&self, sender: *mut Object) {
             // SAFETY: The sender is a toolbar item.
@@ -407,6 +425,7 @@ impl ToolbarDelegate {
                     let _: () = msg_send![&*group, setAction: sel!(itemSelected:)];
                     group
                 }
+                #[cfg(feature = "edit")]
                 Item::Menu {
                     label,
                     symbol: image,
@@ -426,6 +445,7 @@ impl ToolbarDelegate {
                     let _: () = msg_send![&*item, setToolTip: ns_string(label)];
                     item
                 }
+                #[cfg(feature = "edit")]
                 Item::Text(button) => {
                     let item: Allocated<Object> = msg_send![class!(NSToolbarItem), alloc];
                     let item: Retained<Object> =
@@ -583,12 +603,11 @@ fn symbol(name: &str, label: &str) -> *mut Object {
     }
 }
 
-/// The view and edit toolbars of a window with their delegates, which the toolbars do not
-/// retain.
+/// The toolbars of a window, one for each mode in order, with their delegates, which the
+/// toolbars do not retain.
 pub(super) struct Toolbars {
-    view: Retained<Object>,
-    edit: Retained<Object>,
-    _delegates: [Retained<ToolbarDelegate>; 2],
+    toolbars: Vec<Retained<Object>>,
+    _delegates: Vec<Retained<ToolbarDelegate>>,
 }
 
 impl Toolbars {
@@ -597,40 +616,35 @@ impl Toolbars {
     pub(super) fn install(window: *mut Object, split_view: *mut Object) -> Self {
         // SAFETY: The split view is a live NSSplitView.
         let split_view = unsafe { Retained::retain(split_view) }.expect("split view");
-        let delegates =
-            [Mode::View, Mode::Edit].map(|mode| ToolbarDelegate::new(mode, split_view.clone()));
-        let [view, edit] = [0, 1].map(|index| toolbar(&delegates[index]));
-        // SAFETY: The window is a live NSWindow that retains its toolbar.
-        unsafe {
-            let _: () = msg_send![window, setToolbar: &*view];
-            let _: () = msg_send![window, setToolbarStyle: NS_WINDOW_TOOLBAR_STYLE_UNIFIED];
-        }
-        Self {
-            view,
-            edit,
+        let delegates: Vec<_> = Mode::ALL
+            .iter()
+            .map(|mode| ToolbarDelegate::new(*mode, split_view.clone()))
+            .collect();
+        let toolbars = delegates.iter().map(|delegate| toolbar(delegate)).collect();
+        let toolbars = Self {
+            toolbars,
             _delegates: delegates,
-        }
-    }
-
-    /// Shows the toolbar of a mode in the window.
-    pub(super) fn show(&self, window: *mut Object, mode: Mode) {
-        let toolbar = match mode {
-            Mode::View => &self.view,
-            Mode::Edit => &self.edit,
         };
         // SAFETY: The window is a live NSWindow that retains its toolbar.
         unsafe {
-            let _: () = msg_send![window, setToolbar: &**toolbar];
+            let _: () = msg_send![window, setToolbar: toolbars.toolbar(Mode::View)];
+            let _: () = msg_send![window, setToolbarStyle: NS_WINDOW_TOOLBAR_STYLE_UNIFIED];
         }
+        toolbars
+    }
+
+    // The toolbar of a mode.
+    fn toolbar(&self, mode: Mode) -> &Object {
+        &self.toolbars[mode as usize]
     }
 
     /// Adds the sidebar toggle and its separator to the view toolbar, or removes them.
     pub(super) fn set_sidebar(&self, sidebar: bool) {
-        let toolbar = &self.view;
+        let toolbar = self.toolbar(Mode::View);
         // SAFETY: The view toolbar allows the sidebar items, which are its first ones when
         // added.
         unsafe {
-            let items: *mut Object = msg_send![&**toolbar, items];
+            let items: *mut Object = msg_send![toolbar, items];
             let count: usize = msg_send![items, count];
             let first: *mut Object = if count == 0 {
                 null_mut()
@@ -643,16 +657,60 @@ impl Toolbars {
             };
             if sidebar && !has_sidebar {
                 for identifier in sidebar_identifiers().into_iter().rev() {
-                    let _: () = msg_send![&**toolbar,
+                    let _: () = msg_send![toolbar,
                         insertItemWithItemIdentifier: identifier,
                         atIndex: 0isize
                     ];
                 }
             } else if !sidebar && has_sidebar {
                 for _ in sidebar_identifiers() {
-                    let _: () = msg_send![&**toolbar, removeItemAtIndex: 0isize];
+                    let _: () = msg_send![toolbar, removeItemAtIndex: 0isize];
                 }
             }
+        }
+    }
+
+    /// Shows the switch of the view toolbar with an action as on or off.
+    pub(super) fn set_switch(&self, action: &str, on: bool) {
+        let Some(index) = VIEW_ITEMS
+            .iter()
+            .position(|item| item.buttons().iter().any(|button| button.action == action))
+        else {
+            return;
+        };
+        if let Some(group) = self.item_at(Mode::View, index) {
+            // SAFETY: The group has one segment, at index 0.
+            unsafe {
+                let _: () = msg_send![group, setSelected: objc_bool(on), atIndex: 0isize];
+            }
+        }
+    }
+
+    // The item at an index of the items of the toolbar of a mode.
+    fn item_at(&self, mode: Mode, index: usize) -> Option<*mut Object> {
+        let identifier = mode.identifier(index);
+        // SAFETY: The toolbar keeps its items in an NSArray.
+        unsafe {
+            let items: *mut Object = msg_send![self.toolbar(mode), items];
+            let count: usize = msg_send![items, count];
+            (0..count)
+                .map(|index| -> *mut Object { msg_send![items, objectAtIndex: index] })
+                .find(|item| {
+                    let item_identifier: *mut Object = msg_send![*item, itemIdentifier];
+                    string(item_identifier) == identifier
+                })
+        }
+    }
+}
+
+// Swapping to the edit toolbar and following the edit state in it.
+#[cfg(feature = "edit")]
+impl Toolbars {
+    /// Shows the toolbar of a mode in the window.
+    pub(super) fn show(&self, window: *mut Object, mode: Mode) {
+        // SAFETY: The window is a live NSWindow that retains its toolbar.
+        unsafe {
+            let _: () = msg_send![window, setToolbar: self.toolbar(mode)];
         }
     }
 
@@ -675,22 +733,6 @@ impl Toolbars {
                 unsafe {
                     let _: () = msg_send![group, setSelectedIndex: on as isize];
                 }
-            }
-        }
-    }
-
-    /// Shows the switch of the view toolbar with an action as on or off.
-    pub(super) fn set_switch(&self, action: &str, on: bool) {
-        let Some(index) = VIEW_ITEMS
-            .iter()
-            .position(|item| item.buttons().iter().any(|button| button.action == action))
-        else {
-            return;
-        };
-        if let Some(group) = self.item_at(Mode::View, index) {
-            // SAFETY: The group has one segment, at index 0.
-            unsafe {
-                let _: () = msg_send![group, setSelected: objc_bool(on), atIndex: 0isize];
             }
         }
     }
@@ -725,26 +767,6 @@ impl Toolbars {
     fn edit_item_at(&self, index: usize) -> Option<*mut Object> {
         self.item_at(Mode::Edit, index)
     }
-
-    // The item at an index of the items of the toolbar of a mode.
-    fn item_at(&self, mode: Mode, index: usize) -> Option<*mut Object> {
-        let identifier = mode.identifier(index);
-        let toolbar = match mode {
-            Mode::View => &self.view,
-            Mode::Edit => &self.edit,
-        };
-        // SAFETY: The toolbar keeps its items in an NSArray.
-        unsafe {
-            let items: *mut Object = msg_send![&**toolbar, items];
-            let count: usize = msg_send![items, count];
-            (0..count)
-                .map(|index| -> *mut Object { msg_send![items, objectAtIndex: index] })
-                .find(|item| {
-                    let item_identifier: *mut Object = msg_send![*item, itemIdentifier];
-                    string(item_identifier) == identifier
-                })
-        }
-    }
 }
 
 impl Drop for Toolbars {
@@ -752,7 +774,7 @@ impl Drop for Toolbars {
         // SAFETY: The toolbars are live NSToolbars. Their delegates are not retained and the
         // window can keep a toolbar after this, so it forgets its delegate first.
         unsafe {
-            for toolbar in [&self.view, &self.edit] {
+            for toolbar in &self.toolbars {
                 let _: () = msg_send![&**toolbar, setDelegate: null_mut::<Object>()];
             }
         }

@@ -47,6 +47,8 @@ pub(super) struct Layers {
     host: Retained<Object>,
     checkerboard: Retained<Object>,
     media: Retained<Object>,
+    // The crop rectangle or selection.
+    #[cfg(feature = "edit")]
     marks: Retained<Object>,
     state: RefCell<State>,
 }
@@ -77,11 +79,14 @@ impl Layers {
         unsafe {
             let root: Retained<Object> = msg_send![class!(CALayer), new];
             let _: () = msg_send![&*root, setGeometryFlipped: Bool::YES];
-            let [checkerboard, media, marks] = [(); 3].map(|()| {
+            let sublayer = || -> Retained<Object> {
                 let layer: Retained<Object> = msg_send![class!(CALayer), new];
                 let _: () = msg_send![&*root, addSublayer: &*layer];
                 layer
-            });
+            };
+            let (checkerboard, media) = (sublayer(), sublayer());
+            #[cfg(feature = "edit")]
+            let marks = sublayer();
             let _: () = msg_send![&*checkerboard, setMagnificationFilter: kCAFilterNearest];
             let _: () = msg_send![&*media, setMinificationFilter: kCAFilterTrilinear];
             let host: Allocated<Host> = msg_send![Host::class(), alloc];
@@ -96,6 +101,7 @@ impl Layers {
                 host,
                 checkerboard,
                 media,
+                #[cfg(feature = "edit")]
                 marks,
                 state: RefCell::default(),
             }
@@ -166,6 +172,7 @@ impl Layers {
             }
         };
         let pixelated = viewport.has_pixels(scale as f32);
+        #[cfg(feature = "edit")]
         let marks = viewport
             .has_marks()
             .then(|| {
@@ -180,7 +187,12 @@ impl Layers {
         unsafe {
             let _: () = msg_send![class!(CATransaction), begin];
             let _: () = msg_send![class!(CATransaction), setDisableActions: Bool::YES];
-            for layer in [&self.checkerboard, &self.media, &self.marks] {
+            for layer in [
+                &self.checkerboard,
+                &self.media,
+                #[cfg(feature = "edit")]
+                &self.marks,
+            ] {
                 let _: () = msg_send![&**layer, setContentsScale: scale];
             }
             if let Some(checkerboard) = checkerboard {
@@ -197,10 +209,13 @@ impl Layers {
                 kCAFilterLinear
             };
             let _: () = msg_send![&*self.media, setMagnificationFilter: filter];
-            let _: () = msg_send![&*self.marks, setContents: Image::object(marks.as_ref())];
-            let _: () = msg_send![&*self.marks,
-                setFrame: rect(0.0, 0.0, size.width, size.height)
-            ];
+            #[cfg(feature = "edit")]
+            {
+                let _: () = msg_send![&*self.marks, setContents: Image::object(marks.as_ref())];
+                let _: () = msg_send![&*self.marks,
+                    setFrame: rect(0.0, 0.0, size.width, size.height)
+                ];
+            }
             let _: () = msg_send![class!(CATransaction), commit];
         }
     }

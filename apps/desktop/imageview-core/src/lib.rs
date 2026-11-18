@@ -25,6 +25,7 @@ pub use crate::render::{
 
 mod browse;
 /// Editing still images.
+#[cfg(feature = "edit")]
 pub mod edit;
 mod info;
 /// AppKit images and rendering for macOS and its Quick Look extensions.

@@ -9,6 +9,11 @@ repository.workspace = true
 [lints]
 workspace = true
 
+[features]
+default = ["edit"]
+# Editing still images: tools, filters, selections and saving.
+edit = []
+
 [dependencies]
 bcanvas = { path = "../../../lib/graphics/bcanvas", default-features = false }
 image = { path = "../../../lib/graphics/image" }
@@ -23,3 +28,4 @@ criterion = "0.8"
 [[bench]]
 name = "edit"
 harness = false
+required-features = ["edit"]

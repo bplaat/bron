@@ -258,7 +258,7 @@ impl MediaVisual {
         unsafe { call!(self.brush, 7, mode => i32) };
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "edit"))]
     pub(crate) fn is_pixelated(&self) -> bool {
         self.pixelated.get() == Some(true)
     }

@@ -11,6 +11,7 @@ use std::path::PathBuf;
 use bwindow::WindowId;
 use imageview_core::FileVersion;
 
+#[cfg(feature = "edit")]
 use crate::edit::AfterSave;
 use crate::{App, file_name};
 
@@ -21,11 +22,15 @@ pub(crate) struct Alert {
 }
 
 enum Purpose {
+    #[cfg(feature = "edit")]
     SaveChanges(AfterSave),
-    Error { close: bool },
+    Error {
+        close: bool,
+    },
 }
 
 impl App {
+    #[cfg(feature = "edit")]
     pub(crate) fn ask_save_changes(&mut self, id: WindowId, after: AfterSave) {
         let Some(window) = self.window(id) else {
             return;
@@ -79,11 +84,22 @@ impl App {
             id,
             &alert.title,
             &alert.description,
-            matches!(alert.purpose, Purpose::SaveChanges(_)),
+            !matches!(alert.purpose, Purpose::Error { .. }),
         );
     }
 
-    pub(crate) fn alert_closed(&mut self, id: WindowId, result: i32) {
+    pub(crate) fn alert_closed(
+        &mut self,
+        id: WindowId,
+        #[cfg_attr(
+            not(feature = "edit"),
+            expect(
+                unused_variables,
+                reason = "only the save changes alert has several answers"
+            )
+        )]
+        result: i32,
+    ) {
         let Some(window) = self.window(id) else {
             return;
         };
@@ -92,6 +108,7 @@ impl App {
             return;
         };
         match alert.purpose {
+            #[cfg(feature = "edit")]
             Purpose::SaveChanges(after) => match result {
                 1 => {
                     self.save(id, false, after);

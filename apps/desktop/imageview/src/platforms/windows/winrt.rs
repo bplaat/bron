@@ -119,24 +119,33 @@ pub(crate) const IID_ICOMPOSITION_TARGET_STATICS: GUID =
 // signature.
 pub(crate) const IID_RENDERED_EVENT_HANDLER: GUID =
     GUID::from_u128(0x19a913f7_9793_5d2e_b989_7ee26c263a2e);
+#[cfg(feature = "edit")]
 pub(crate) const IID_KEY_EVENT_HANDLER: GUID =
     GUID::from_u128(0xdb68e7cc_9a2b_527d_9989_25284daccc03);
+#[cfg(feature = "edit")]
 pub(crate) const IID_IKEY_ROUTED_EVENT_ARGS: GUID =
     GUID::from_u128(0xee357007_a2d6_5c75_9431_05fd66ec7915);
+#[cfg(feature = "edit")]
 pub(crate) const IID_ICONTROL: GUID = GUID::from_u128(0x857d6e8a_d45a_5c69_a99c_bf6a5c54fb38);
 pub(crate) const IID_ITOGGLE_BUTTON: GUID = GUID::from_u128(0x686fbaa4_c866_568b_8f75_481d8d545291);
+#[cfg(feature = "edit")]
 pub(crate) const IID_IRANGE_BASE: GUID = GUID::from_u128(0x540d6d61_8fac_5d5c_b5b0_e172a7dde103);
+#[cfg(feature = "edit")]
 pub(crate) const IID_ISELECTOR: GUID = GUID::from_u128(0x8f7e2159_e61d_576f_8476_f83fde3d689e);
+#[cfg(feature = "edit")]
 pub(crate) const IID_INUMBER_BOX: GUID = GUID::from_u128(0xc18eb0e9_29fb_525d_abbc_d6b2110f542e);
 pub(crate) const IID_IBORDER: GUID = GUID::from_u128(0x1ca13b47_ff5c_5abc_a411_a177df9482a9);
 pub(crate) const IID_IMENU_FLYOUT_ITEM: GUID =
     GUID::from_u128(0x4252df5a_44f9_5ee8_b1cc_53de9aaa4095);
+#[cfg(feature = "edit")]
 pub(crate) const IID_RANGE_BASE_VALUE_CHANGED_EVENT_HANDLER: GUID =
     GUID::from_u128(0x23f0e209_9455_54cb_b8bc_0b49553c7dcc);
+#[cfg(feature = "edit")]
 pub(crate) const IID_SELECTION_CHANGED_EVENT_HANDLER: GUID =
     GUID::from_u128(0xa232390d_0e34_595e_8931_fa928a9909f4);
 // TypedEventHandler<NumberBox, NumberBoxValueChangedEventArgs>, derived from its parameterized type
 // signature.
+#[cfg(feature = "edit")]
 pub(crate) const IID_NUMBER_BOX_VALUE_CHANGED_EVENT_HANDLER: GUID =
     GUID::from_u128(0x3afd17ac_1ac8_5e8c_9d28_35576eac9a94);
 // IReference<Boolean>, derived from its parameterized type signature.

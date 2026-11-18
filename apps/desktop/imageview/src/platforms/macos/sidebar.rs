@@ -266,6 +266,7 @@ impl Sidebar {
 
     /// Hides the sidebar, or shows it again when there are several pages. Returns whether
     /// the sidebar was added or removed. The window keeps its size, so the media gets the room.
+    #[cfg(feature = "edit")]
     pub(super) fn set_hidden(&self, hidden: bool) -> bool {
         self.delegate.ivars().hidden.set(hidden);
         self.update(false)

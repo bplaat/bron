@@ -14,9 +14,10 @@ use std::path::Path;
 use std::ptr::null_mut;
 
 use block2::Block;
-use bwindow::{
-    EventLoopProxy, LogicalSize, NativeViewHandle, Theme, Window, WindowAttachment, WindowId,
-};
+#[cfg(feature = "edit")]
+use bwindow::WindowId;
+use bwindow::{EventLoopProxy, LogicalSize, NativeViewHandle, Theme, Window, WindowAttachment};
+#[cfg(feature = "edit")]
 use imageview_core::edit::{Control, Selection, Shape, Tool};
 use imageview_core::macos::{Point, Rect, Size, create_media_view, file_path, ns_string};
 use imageview_core::{InfoSection, Media};
@@ -27,9 +28,12 @@ use objc2::{class, define_class, msg_send, sel};
 pub(crate) use self::browse::neighbour_path;
 use self::headers::*;
 use self::inspector::Inspector;
+#[cfg(feature = "edit")]
 use self::popover::Popover;
 use self::sidebar::Sidebar;
-use self::toolbar::{Mode, Toolbars};
+#[cfg(feature = "edit")]
+use self::toolbar::Mode;
+use self::toolbar::Toolbars;
 use self::view::{View, rect};
 use crate::AppEvent;
 use crate::viewport::Viewport;
@@ -38,12 +42,15 @@ mod browse;
 mod headers;
 mod inspector;
 mod layers;
+#[cfg(feature = "edit")]
 mod popover;
+#[cfg(feature = "edit")]
 mod save;
 mod sidebar;
 mod toolbar;
 mod view;
 
+#[cfg(feature = "edit")]
 pub(crate) use self::save::SaveOptions;
 
 /// The smallest window.
@@ -156,6 +163,7 @@ pub(crate) struct MediaView {
     spinner: Option<Retained<Object>>,
     toolbars: Toolbars,
     // The popover of the open edit tool.
+    #[cfg(feature = "edit")]
     popover: Option<Popover>,
     // The pages of a file with several, next to the view.
     sidebar: Sidebar,
@@ -211,6 +219,7 @@ impl MediaView {
             None
         };
         // Only still bitmaps can be edited, the loading media has no frames.
+        #[cfg(feature = "edit")]
         toolbars.set_editable(view.media().is_still());
         // The view has its size now.
         view.update(Viewport::zoom_to_fit);
@@ -220,6 +229,7 @@ impl MediaView {
             view,
             spinner,
             toolbars,
+            #[cfg(feature = "edit")]
             popover: None,
             sidebar,
             inspector,
@@ -255,6 +265,7 @@ impl MediaView {
     /// Replaces the media, keeping the zoom or fitting it to the window.
     pub(crate) fn set_media(&mut self, media: Media, zoom_to_fit: bool) {
         // Vectors and animations cannot be edited, only saved as bitmaps.
+        #[cfg(feature = "edit")]
         self.toolbars.set_editable(media.is_still());
         self.view
             .update(|viewport| viewport.set_media(media, zoom_to_fit));
@@ -295,18 +306,6 @@ impl MediaView {
         }
     }
 
-    /// Shows the edit toolbar, or the view toolbar again.
-    pub(crate) fn set_editing(&mut self, editing: bool) {
-        self.close_tool();
-        let mode = if editing { Mode::Edit } else { Mode::View };
-        self.toolbars.show(self.window(), mode);
-        // Only the shown page is edited, so the others and the information are hidden
-        // meanwhile.
-        let changed = self.sidebar.set_hidden(editing);
-        self.sidebar_changed(changed);
-        self.inspector.set_hidden(editing);
-    }
-
     /// Collapses or expands the sidebar with the pages, when there is one.
     pub(crate) fn toggle_sidebar(&self) {
         self.sidebar.toggle();
@@ -322,6 +321,61 @@ impl MediaView {
     /// Lists the information about the image in the inspector.
     pub(crate) fn set_info(&self, sections: &[InfoSection]) {
         self.inspector.set_sections(sections);
+    }
+
+    /// Follows the light or dark theme of the window.
+    pub(crate) fn theme_changed(&self, theme: Theme) {
+        self.view.set_dark(theme == Theme::Dark);
+    }
+
+    /// Prints the media at its natural size, scaled to fit one page.
+    pub(crate) fn print(&self) {
+        let media = self.view.media();
+        let (width, height) = media.size();
+        autoreleasepool(|_| {
+            // SAFETY: All objects are valid AppKit instances. The print info copy and the media
+            // view are released after the operation that retains them has run.
+            unsafe {
+                let print_info: *mut Object = msg_send![class!(NSPrintInfo), sharedPrintInfo];
+                let print_info: Retained<Object> = msg_send![print_info, copy];
+                let _: () = msg_send![&*print_info,
+                    setHorizontalPagination: NS_PRINTING_PAGINATION_MODE_FIT
+                ];
+                let _: () =
+                    msg_send![&*print_info, setVerticalPagination: NS_PRINTING_PAGINATION_MODE_FIT];
+                let _: () = msg_send![&*print_info, setHorizontallyCentered: Bool::YES];
+                let _: () = msg_send![&*print_info, setVerticallyCentered: Bool::YES];
+                let view = create_media_view(rect(0.0, 0.0, width, height), media);
+                let operation: *mut Object = msg_send![class!(NSPrintOperation),
+                    printOperationWithView: view.as_ptr(),
+                    printInfo: print_info.as_ptr()
+                ];
+                let window: *mut Object = msg_send![&*self.view, window];
+                let _: () = msg_send![operation,
+                    runOperationModalForWindow: window,
+                    delegate: null_mut::<Object>(),
+                    didRunSelector: Sel(std::ptr::null()),
+                    contextInfo: null_mut::<std::ffi::c_void>()
+                ];
+            }
+        });
+    }
+}
+
+// Editing the image: the edit toolbar, the popovers of the tools, the crop rectangle and
+// selection, and the spinner while an edit is applied.
+#[cfg(feature = "edit")]
+impl MediaView {
+    /// Shows the edit toolbar, or the view toolbar again.
+    pub(crate) fn set_editing(&mut self, editing: bool) {
+        self.close_tool();
+        let mode = if editing { Mode::Edit } else { Mode::View };
+        self.toolbars.show(self.window(), mode);
+        // Only the shown page is edited, so the others and the information are hidden
+        // meanwhile.
+        let changed = self.sidebar.set_hidden(editing);
+        self.sidebar_changed(changed);
+        self.inspector.set_hidden(editing);
     }
 
     /// Marks the window as having unsaved changes, with a dot in its close button.
@@ -450,44 +504,6 @@ impl MediaView {
     pub(crate) fn crop_rect(&self) -> (u32, u32, u32, u32) {
         self.view.crop_rect()
     }
-
-    /// Follows the light or dark theme of the window.
-    pub(crate) fn theme_changed(&self, theme: Theme) {
-        self.view.set_dark(theme == Theme::Dark);
-    }
-
-    /// Prints the media at its natural size, scaled to fit one page.
-    pub(crate) fn print(&self) {
-        let media = self.view.media();
-        let (width, height) = media.size();
-        autoreleasepool(|_| {
-            // SAFETY: All objects are valid AppKit instances. The print info copy and the media
-            // view are released after the operation that retains them has run.
-            unsafe {
-                let print_info: *mut Object = msg_send![class!(NSPrintInfo), sharedPrintInfo];
-                let print_info: Retained<Object> = msg_send![print_info, copy];
-                let _: () = msg_send![&*print_info,
-                    setHorizontalPagination: NS_PRINTING_PAGINATION_MODE_FIT
-                ];
-                let _: () =
-                    msg_send![&*print_info, setVerticalPagination: NS_PRINTING_PAGINATION_MODE_FIT];
-                let _: () = msg_send![&*print_info, setHorizontallyCentered: Bool::YES];
-                let _: () = msg_send![&*print_info, setVerticallyCentered: Bool::YES];
-                let view = create_media_view(rect(0.0, 0.0, width, height), media);
-                let operation: *mut Object = msg_send![class!(NSPrintOperation),
-                    printOperationWithView: view.as_ptr(),
-                    printInfo: print_info.as_ptr()
-                ];
-                let window: *mut Object = msg_send![&*self.view, window];
-                let _: () = msg_send![operation,
-                    runOperationModalForWindow: window,
-                    delegate: null_mut::<Object>(),
-                    didRunSelector: Sel(std::ptr::null()),
-                    contextInfo: null_mut::<std::ffi::c_void>()
-                ];
-            }
-        });
-    }
 }
 
 // Gives the area of a window below its toolbar, which the content reaches under, a size.
@@ -547,7 +563,8 @@ fn show_size(view: &View) {
 
 impl Drop for MediaView {
     fn drop(&mut self) {
-        self.popover = None;
+        #[cfg(feature = "edit")]
+        self.popover.take();
         self.view.stop();
     }
 }

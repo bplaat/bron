@@ -135,6 +135,11 @@ preview_handler = "1D468AD5-F899-453B-8915-D19CD884DBAD"
 [lints]
 workspace = true
 
+[features]
+default = ["edit"]
+# The edit mode with its tools, filters and selections, and saving. Without it ImageView only views images.
+edit = ["imageview-core/edit"]
+
 [dependencies]
 bcanvas = { path = "../../../lib/graphics/bcanvas", default-features = false }
 bwindow = { path = "../../../lib/ui/bwindow", features = [
@@ -142,7 +147,7 @@ bwindow = { path = "../../../lib/ui/bwindow", features = [
     "file_drop",
     "menu",
 ] }
-imageview-core = { path = "../imageview-core" }
+imageview-core = { path = "../imageview-core", default-features = false }
 
 [target.'cfg(not(any(target_vendor = "apple", windows)))'.dependencies]
 image = { path = "../../../lib/graphics/image" }

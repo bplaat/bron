@@ -37,6 +37,7 @@ struct Panel {
     open: Cell<bool>,
     // Whether there is something to show, and whether the panel is hidden while editing.
     available: Cell<bool>,
+    #[cfg(feature = "edit")]
     hidden: Cell<bool>,
 }
 
@@ -80,6 +81,7 @@ impl Panel {
                 content: Cell::new(null_mut()),
                 open: Cell::new(open),
                 available: Cell::new(false),
+                #[cfg(feature = "edit")]
                 hidden: Cell::new(false),
             };
             panel.update();
@@ -94,7 +96,11 @@ impl Panel {
 
     // Whether the panel can be opened now.
     const fn is_available(&self) -> bool {
-        self.available.get() && !self.hidden.get()
+        #[cfg(feature = "edit")]
+        if self.hidden.get() {
+            return false;
+        }
+        self.available.get()
     }
 
     fn toggle(&self) {
@@ -107,6 +113,7 @@ impl Panel {
         self.update();
     }
 
+    #[cfg(feature = "edit")]
     fn set_hidden(&self, hidden: bool) {
         self.hidden.set(hidden);
         self.update();
@@ -203,6 +210,7 @@ impl Sidebar {
     }
 
     /// Hides the sidebar while editing, or shows it again.
+    #[cfg(feature = "edit")]
     pub(super) fn set_hidden(&self, hidden: bool) {
         self.panel.set_hidden(hidden);
     }
@@ -362,6 +370,7 @@ impl Inspector {
     }
 
     /// Hides the inspector while editing, or shows it again.
+    #[cfg(feature = "edit")]
     pub(super) fn set_hidden(&self, hidden: bool) {
         self.panel.set_hidden(hidden);
     }

@@ -6,6 +6,7 @@
 
 //! Native header bar or inline toolbar controls, one set to view the image and one to edit it,
 //! which are swapped by their Edit and Done buttons. They run the same actions as the menu.
+//! Without the `edit` feature there are only the view controls.
 
 use std::cell::{Cell, RefCell};
 use std::ffi::{CStr, CString, c_void};
@@ -19,7 +20,7 @@ use crate::AppEvent;
 
 thread_local! {
     static PROXY: RefCell<Option<EventLoopProxy<AppEvent>>> = const { RefCell::new(None) };
-    // Whether a toggled button is set by the application instead of the user.
+    // Whether a switch or toggled button is set by the application instead of the user.
     static SETTING: Cell<bool> = const { Cell::new(false) };
 }
 
@@ -51,6 +52,7 @@ const fn icon(label: &'static CStr, icon: &'static CStr, action: &'static str) -
     }
 }
 
+#[cfg(feature = "edit")]
 const fn text(label: &'static CStr, action: &'static str) -> Button {
     icon(label, c"", action)
 }
@@ -59,14 +61,17 @@ enum Item {
     // Related buttons shown as one control.
     Group(&'static [Button]),
     // Related buttons of which one is always on.
+    #[cfg(feature = "edit")]
     Toggled(&'static [Button]),
     // A button with a label that opens a menu, with separators between its sections.
+    #[cfg(feature = "edit")]
     Menu(&'static CStr, &'static [&'static [Button]]),
     // A button that stays on while what it shows is open, like a sidebar.
     Switch(Button),
 }
 
-// The items at the end are packed from the outer edge.
+// The items at the start and end, which are packed from the outer edge.
+const VIEW: &[(&[Item], bool)] = &[(VIEW_START, true), (VIEW_END, false)];
 const VIEW_START: &[Item] = &[
     Item::Switch(icon(
         c"Show Sidebar",
@@ -79,6 +84,7 @@ const VIEW_START: &[Item] = &[
     ]),
 ];
 const VIEW_END: &[Item] = &[
+    #[cfg(feature = "edit")]
     Item::Group(&[text(c"Edit", "edit.toggle")]),
     Item::Switch(icon(
         c"Show Info",
@@ -95,6 +101,9 @@ const VIEW_END: &[Item] = &[
         icon(c"Zoom In", c"zoom-in-symbolic", "view.zoom_in"),
     ]),
 ];
+#[cfg(feature = "edit")]
+const EDIT: &[(&[Item], bool)] = &[(EDIT_START, true), (EDIT_END, false)];
+#[cfg(feature = "edit")]
 const EDIT_START: &[Item] = &[
     Item::Group(&[
         icon(c"Undo", c"edit-undo-symbolic", "edit.undo"),
@@ -136,6 +145,7 @@ const EDIT_START: &[Item] = &[
         ),
     ]),
 ];
+#[cfg(feature = "edit")]
 const EDIT_END: &[Item] = &[
     Item::Group(&[text(c"Done", "edit.toggle")]),
     Item::Menu(
@@ -181,6 +191,7 @@ extern "C" fn switched(_: *mut c_void, button: &Button) {
 }
 
 // Runs the action of a toggled button the user turned on, its group turns the others off.
+#[cfg(feature = "edit")]
 extern "C" fn toggled(widget: *mut c_void, button: &Button) {
     // SAFETY: GTK passes the live toggle button.
     if !SETTING.get() && unsafe { gtk_toggle_button_get_active(widget) } != 0 {
@@ -257,11 +268,16 @@ unsafe fn new_button(button: &Button) -> *mut c_void {
 pub(super) struct Toolbar {
     /// The bar with the controls.
     pub(super) bar: *mut c_void,
+    // The groups of the view and edit controls.
+    #[cfg(feature = "edit")]
     view: Vec<*mut c_void>,
+    #[cfg(feature = "edit")]
     edit: Vec<*mut c_void>,
     // The widget of every action, which is the menu button of the items of a menu.
+    #[cfg(feature = "edit")]
     buttons: Vec<(&'static str, *mut c_void)>,
     // The toggled buttons by their action.
+    #[cfg(feature = "edit")]
     toggles: Vec<(&'static str, *mut c_void)>,
     // The switches by their action.
     switches: Vec<(&'static str, *mut c_void)>,
@@ -295,42 +311,23 @@ impl Toolbar {
             };
             let mut toolbar = Self {
                 bar,
+                #[cfg(feature = "edit")]
                 view: Vec::new(),
+                #[cfg(feature = "edit")]
                 edit: Vec::new(),
+                #[cfg(feature = "edit")]
                 buttons: Vec::new(),
+                #[cfg(feature = "edit")]
                 toggles: Vec::new(),
                 switches: Vec::new(),
             };
-            for (items, leading, editing) in [
-                (VIEW_START, true, false),
-                (VIEW_END, false, false),
-                (EDIT_START, true, true),
-                (EDIT_END, false, true),
-            ] {
-                for item in items {
-                    let group = toolbar.add_item(item);
-                    if !integrated {
-                        gtk_widget_set_valign(group, GTK_ALIGN_CENTER);
-                        gtk_widget_set_margin_top(group, 6);
-                        gtk_widget_set_margin_bottom(group, 6);
-                    }
-                    match (integrated, leading) {
-                        (true, true) => gtk_header_bar_pack_start(bar, group),
-                        (true, false) => gtk_header_bar_pack_end(bar, group),
-                        (false, true) => gtk_box_pack_start(bar, group, 0, 0, 6),
-                        (false, false) => gtk_box_pack_end(bar, group, 0, 0, 6),
-                    }
-                    // Only the toolbar decides which controls show, also for showing all
-                    // children of the window.
-                    gtk_widget_show_all(group);
-                    gtk_widget_set_no_show_all(group, 1);
-                    if editing {
-                        gtk_widget_hide(group);
-                        toolbar.edit.push(group);
-                    } else {
-                        toolbar.view.push(group);
-                    }
-                }
+            #[cfg(not(feature = "edit"))]
+            toolbar.pack(VIEW, integrated);
+            #[cfg(feature = "edit")]
+            {
+                toolbar.view = toolbar.pack(VIEW, integrated);
+                toolbar.edit = toolbar.pack(EDIT, integrated);
+                toolbar.set_editing(false);
             }
             if integrated {
                 gtk_window_set_titlebar(window, bar);
@@ -347,6 +344,40 @@ impl Toolbar {
         }
     }
 
+    // Adds the groups of items at the start or end of the bar, returns them.
+    unsafe fn pack(
+        &mut self,
+        items: &'static [(&[Item], bool)],
+        integrated: bool,
+    ) -> Vec<*mut c_void> {
+        let mut groups = Vec::new();
+        for (items, leading) in items {
+            for item in *items {
+                // SAFETY: The bar owns the groups packed into it.
+                unsafe {
+                    let group = self.add_item(item);
+                    if !integrated {
+                        gtk_widget_set_valign(group, GTK_ALIGN_CENTER);
+                        gtk_widget_set_margin_top(group, 6);
+                        gtk_widget_set_margin_bottom(group, 6);
+                    }
+                    match (integrated, leading) {
+                        (true, true) => gtk_header_bar_pack_start(self.bar, group),
+                        (true, false) => gtk_header_bar_pack_end(self.bar, group),
+                        (false, true) => gtk_box_pack_start(self.bar, group, 0, 0, 6),
+                        (false, false) => gtk_box_pack_end(self.bar, group, 0, 0, 6),
+                    }
+                    // Only the toolbar decides which controls show, also for showing all
+                    // children of the window.
+                    gtk_widget_show_all(group);
+                    gtk_widget_set_no_show_all(group, 1);
+                    groups.push(group);
+                }
+            }
+        }
+        groups
+    }
+
     // Creates the widget of an item.
     unsafe fn add_item(&mut self, item: &'static Item) -> *mut c_void {
         // SAFETY: Containers own their children, the handlers take static descriptions.
@@ -360,9 +391,11 @@ impl Toolbar {
                         gtk_button_set_focus_on_click(widget, 0);
                         connect(widget, c"clicked", clicked as *const c_void, button);
                         gtk_container_add(group, widget);
+                        #[cfg(feature = "edit")]
                         self.buttons.push((button.action, widget));
                     }
                 }
+                #[cfg(feature = "edit")]
                 Item::Toggled(buttons) => {
                     let mut first = std::ptr::null_mut();
                     for button in *buttons {
@@ -397,6 +430,7 @@ impl Toolbar {
                     gtk_container_add(group, widget);
                     self.switches.push((button.action, widget));
                 }
+                #[cfg(feature = "edit")]
                 Item::Menu(label, sections) => {
                     let widget = gtk_menu_button_new();
                     gtk_button_set_image(widget, gtk_label_new(label.as_ptr()));
@@ -422,6 +456,27 @@ impl Toolbar {
         }
     }
 
+    /// Shows the switch of an action as on or off, without running the action.
+    pub(super) fn set_switch(&self, action: &str, on: bool) {
+        SETTING.set(true);
+        for (_, widget) in self.switches.iter().filter(|(name, _)| *name == action) {
+            // SAFETY: The bar owns its controls while the window is open.
+            unsafe { gtk_toggle_button_set_active(*widget, i32::from(on)) };
+        }
+        SETTING.set(false);
+    }
+
+    /// Shows or hides the switch of an action, like the sidebar one of a file with one page.
+    pub(super) fn set_switch_visible(&self, action: &str, visible: bool) {
+        for (_, widget) in self.switches.iter().filter(|(name, _)| *name == action) {
+            // SAFETY: The bar owns its controls while the window is open.
+            unsafe { gtk_widget_set_visible(*widget, i32::from(visible)) };
+        }
+    }
+}
+
+#[cfg(feature = "edit")]
+impl Toolbar {
     /// Shows the edit controls, or the view controls.
     pub(super) fn set_editing(&self, editing: bool) {
         for (widgets, visible) in [(&self.view, !editing), (&self.edit, editing)] {
@@ -452,24 +507,6 @@ impl Toolbar {
             unsafe { gtk_toggle_button_set_active(*widget, 1) };
         }
         SETTING.set(false);
-    }
-
-    /// Shows the switch of an action as on or off, without running the action.
-    pub(super) fn set_switch(&self, action: &str, on: bool) {
-        SETTING.set(true);
-        for (_, widget) in self.switches.iter().filter(|(name, _)| *name == action) {
-            // SAFETY: The bar owns its controls while the window is open.
-            unsafe { gtk_toggle_button_set_active(*widget, i32::from(on)) };
-        }
-        SETTING.set(false);
-    }
-
-    /// Shows or hides the switch of an action, like the sidebar one of a file with one page.
-    pub(super) fn set_switch_visible(&self, action: &str, visible: bool) {
-        for (_, widget) in self.switches.iter().filter(|(name, _)| *name == action) {
-            // SAFETY: The bar owns its controls while the window is open.
-            unsafe { gtk_widget_set_visible(*widget, i32::from(visible)) };
-        }
     }
 
     /// The control that runs an action, to show a popover at.

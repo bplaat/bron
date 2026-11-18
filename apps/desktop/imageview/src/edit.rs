@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::{fs, mem, thread};
 
-use bwindow::WindowId;
+use bwindow::{Accelerator, KeyCode, MenuBuilder, MenuItem, Modifiers, WindowId};
 #[cfg(not(windows))]
 use bwindow::{MessageButtons, MessageDialog, MessageDialogResult, MessageLevel};
 use imageview_core::edit::{
@@ -463,15 +463,13 @@ impl App {
         });
     }
 
-    /// Enables the menu items that work in the mode of the active window: viewing, editing or
-    /// busy applying an edit or saving, and names Edit Image after the mode.
-    pub(crate) fn update_menu(&mut self) {
-        let modal = self.active_window().is_some_and(|window| window.is_modal());
-        let window = self
-            .active_window()
-            .filter(|window| !window.is_loading() && !window.is_modal());
-        let shown = window.is_some();
-        let idle = shown && window.as_ref().is_some_and(|window| !window.busy);
+    /// Enables the edit menu items that work in the mode of the active window, which is `shown`
+    /// when it is not loading or showing an alert: viewing, editing or busy applying an edit or
+    /// saving, and names Edit Image after the mode. Returns whether the window is idle, and
+    /// whether keys reach the image instead of a tool.
+    pub(crate) fn update_edit_menu(&mut self, shown: bool) -> (bool, bool) {
+        let window = self.active_window().filter(|_| shown);
+        let idle = window.as_ref().is_some_and(|window| !window.busy);
         let editing = window.as_ref().and_then(|window| window.editing.as_ref());
         let edit = idle && editing.is_some();
         let editable = idle
@@ -491,11 +489,8 @@ impl App {
         let keys =
             cfg!(target_os = "macos") || editing.is_none_or(|editing| editing.tool.is_none());
         let states = [
-            ("file.open", !modal),
             ("file.save", edit && modified),
             ("file.save_as", idle),
-            #[cfg(target_os = "macos")]
-            ("file.print", shown),
             ("edit.toggle", editable),
             ("edit.undo", edit && undo && keys),
             ("edit.redo", edit && redo && keys),
@@ -508,12 +503,6 @@ impl App {
             ("select.ellipse", edit),
             ("image.crop", edit),
             ("image.resize", edit),
-            ("view.previous", idle && keys),
-            ("view.next", idle && keys),
-            ("view.zoom_in", shown),
-            ("view.zoom_out", shown),
-            ("view.actual_size", shown),
-            ("view.zoom_to_fit", shown),
         ];
         let tools = ORIENTATIONS
             .iter()
@@ -531,6 +520,7 @@ impl App {
                 "Edit Image"
             },
         );
+        (idle, keys)
     }
 
     // Opens the popover of a tool, set up like the last change when it was made by the tool.
@@ -941,6 +931,100 @@ impl App {
             AfterSave::Show(path) => self.show(id, path),
         }
     }
+}
+
+// The selection items follow the default ones, Undo and Redo reach the image view through the
+// responder chain.
+#[cfg(target_os = "macos")]
+pub(crate) fn edit_menu() -> MenuBuilder {
+    MenuBuilder::new("Edit")
+        .item(
+            MenuItem::new("Deselect", "select.none")
+                .accelerator(Accelerator::new(Modifiers::PRIMARY, KeyCode::KeyD)),
+        )
+        .item(
+            MenuItem::new("Invert Selection", "select.invert").accelerator(Accelerator::new(
+                Modifiers::PRIMARY | Modifiers::SHIFT,
+                KeyCode::KeyI,
+            )),
+        )
+}
+
+// These take the place of the default items of the same names, which only reach text fields.
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn edit_menu() -> MenuBuilder {
+    let primary = |key| Accelerator::new(Modifiers::PRIMARY, key);
+    MenuBuilder::new("Edit")
+        .item(MenuItem::new("Undo", "edit.undo").accelerator(primary(KeyCode::KeyZ)))
+        .item(
+            MenuItem::new("Redo", "edit.redo").accelerator(Accelerator::new(
+                Modifiers::PRIMARY | Modifiers::SHIFT,
+                KeyCode::KeyZ,
+            )),
+        )
+        .item(MenuItem::new("Copy", "edit.copy").accelerator(primary(KeyCode::KeyC)))
+        .item(MenuItem::new("Select All", "select.all").accelerator(primary(KeyCode::KeyA)))
+}
+
+pub(crate) fn image_menu() -> MenuBuilder {
+    let primary = |key| Accelerator::new(Modifiers::PRIMARY, key);
+    let menu = MenuBuilder::new("Image")
+        .item(MenuItem::new("Edit Image", "edit.toggle").accelerator(primary(KeyCode::KeyE)))
+        .separator()
+        .item(MenuItem::new("Whole Image", "select.whole"))
+        .item(MenuItem::new("Rectangle Selection", "select.rectangle"))
+        .item(MenuItem::new("Ellipse Selection", "select.ellipse"));
+    // Elsewhere the Edit menu has no room for these, so they stay with the other selection items.
+    #[cfg(not(target_os = "macos"))]
+    let menu = menu
+        .item(
+            MenuItem::new("Deselect", "select.none")
+                .accelerator(Accelerator::new(Modifiers::PRIMARY, KeyCode::KeyD)),
+        )
+        .item(
+            MenuItem::new("Invert Selection", "select.invert").accelerator(Accelerator::new(
+                Modifiers::PRIMARY | Modifiers::SHIFT,
+                KeyCode::KeyI,
+            )),
+        );
+    menu.separator()
+        .item(MenuItem::new("Rotate Left", "image.rotate_left").accelerator(primary(KeyCode::KeyL)))
+        .item(
+            MenuItem::new("Rotate Right", "image.rotate_right").accelerator(primary(KeyCode::KeyR)),
+        )
+        .item(MenuItem::new("Flip Horizontal", "image.flip_horizontal"))
+        .item(MenuItem::new("Flip Vertical", "image.flip_vertical"))
+        .separator()
+        .item(MenuItem::new("Crop...", "image.crop").accelerator(primary(KeyCode::KeyK)))
+        .item(MenuItem::new("Resize...", "image.resize"))
+        .separator()
+        .item(
+            MenuItem::new("Adjust...", "filter.adjust").accelerator(Accelerator::new(
+                Modifiers::PRIMARY | Modifiers::OPTION,
+                KeyCode::KeyC,
+            )),
+        )
+        .item(
+            MenuItem::new("Auto Enhance", "filter.auto_enhance").accelerator(Accelerator::new(
+                Modifiers::PRIMARY | Modifiers::SHIFT,
+                KeyCode::KeyE,
+            )),
+        )
+        .separator()
+        .item(MenuItem::new("Grayscale", "filter.grayscale"))
+        .item(MenuItem::new("Sepia", "filter.sepia"))
+        .item(MenuItem::new("Invert", "filter.invert"))
+        .item(MenuItem::new("Threshold...", "filter.threshold"))
+        .item(MenuItem::new("Solarize...", "filter.solarize"))
+        .separator()
+        .item(MenuItem::new("Gaussian Blur...", "filter.gaussian_blur"))
+        .item(MenuItem::new("Box Blur...", "filter.box_blur"))
+        .item(MenuItem::new("Motion Blur...", "filter.motion_blur"))
+        .item(MenuItem::new("Radial Blur...", "filter.radial_blur"))
+        .separator()
+        .item(MenuItem::new("Sharpen...", "filter.sharpen"))
+        .item(MenuItem::new("Reduce Noise...", "filter.reduce_noise"))
+        .item(MenuItem::new("Pixelate...", "filter.pixelate"))
 }
 
 // Writes a file through a temporary file next to it, so it is never half written.

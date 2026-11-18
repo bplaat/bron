@@ -31,9 +31,12 @@ use crate::platforms::MediaView;
 
 #[cfg(windows)]
 mod alert;
+#[cfg(feature = "edit")]
 mod edit;
+#[cfg(feature = "edit")]
 mod marquee;
 mod platforms;
+#[cfg(feature = "edit")]
 mod save;
 // The WinUI scroll viewer zooms and pans the media itself, Windows only crops and selects with it.
 #[cfg_attr(windows, allow(dead_code))]
@@ -71,9 +74,11 @@ pub(crate) enum AppEvent {
     #[cfg_attr(not(any(target_os = "macos", windows)), allow(dead_code))]
     Action(&'static str),
     /// A control of the open edit tool of a window changed, with the values of all controls.
+    #[cfg(feature = "edit")]
     ToolChanged(WindowId, usize, Vec<f32>),
     /// The preview of an edit tool of a window finished, with the smaller copy of the
     /// picture it was made from and its scale.
+    #[cfg(feature = "edit")]
     Previewed(
         WindowId,
         u64,
@@ -82,8 +87,10 @@ pub(crate) enum AppEvent {
         f64,
     ),
     /// A save of a window finished in the background.
+    #[cfg(feature = "edit")]
     Saved(WindowId, edit::Saved),
     /// An edit of a window finished in the background.
+    #[cfg(feature = "edit")]
     Applied(
         WindowId,
         imageview_core::edit::Picture,
@@ -123,6 +130,7 @@ struct ImageWindow {
     opening: Option<u64>,
     // While a replacement decodes, retain the file of the displayed pixels for failure.
     replacing: Option<(PathBuf, Option<FileVersion>)>,
+    #[cfg(feature = "edit")]
     editing: Option<edit::Editing>,
     // The pages of a file with several, like the sizes of an icon, and the shown one.
     pages: Vec<Media>,
@@ -130,6 +138,7 @@ struct ImageWindow {
     // The format and metadata of the file, which the view lists in an inspector.
     info: Info,
     // Whether an edit is being applied or the image saved in the background.
+    #[cfg(feature = "edit")]
     busy: bool,
     #[cfg(windows)]
     alerts: VecDeque<alert::Alert>,
@@ -150,8 +159,25 @@ impl ImageWindow {
     }
 
     // Whether the media is being edited, which keeps it from reloading.
+    #[cfg(feature = "edit")]
     const fn is_editing(&self) -> bool {
         self.editing.is_some()
+    }
+
+    #[cfg(not(feature = "edit"))]
+    const fn is_editing(&self) -> bool {
+        false
+    }
+
+    // Whether an edit is being applied or the image saved, which keeps it from reloading.
+    #[cfg(feature = "edit")]
+    const fn is_busy(&self) -> bool {
+        self.busy
+    }
+
+    #[cfg(not(feature = "edit"))]
+    const fn is_busy(&self) -> bool {
+        false
     }
 
     // Keeps the pages and information of the file and which page is shown, which the view lists
@@ -304,10 +330,12 @@ impl App {
             generation: 0,
             opening,
             replacing: None,
+            #[cfg(feature = "edit")]
             editing: None,
             pages: Vec::new(),
             page: 0,
             info: Info::default(),
+            #[cfg(feature = "edit")]
             busy: false,
         });
         if let (Some(window), Some(pages)) = (self.windows.last_mut(), pages) {
@@ -448,6 +476,7 @@ impl App {
 
     // Shows another image in a window, fitted to it.
     fn show(&mut self, id: WindowId, path: PathBuf) {
+        #[cfg(feature = "edit")]
         if !self.finish_editing(id, edit::AfterSave::Show(path.clone())) {
             return;
         }
@@ -498,7 +527,7 @@ impl App {
     fn reload_changed(&mut self) {
         let mut reloads = Vec::new();
         for window in &mut self.windows {
-            if window.is_loading() || window.is_editing() || window.busy || window.is_modal() {
+            if window.is_loading() || window.is_editing() || window.is_busy() || window.is_modal() {
                 continue;
             }
             let version = FileVersion::of(&window.path);
@@ -525,6 +554,7 @@ impl App {
         if self.active_window().is_some_and(|window| window.is_modal()) {
             return;
         }
+        #[cfg(feature = "edit")]
         if self.edit_action(action) {
             return;
         }
@@ -564,6 +594,7 @@ impl App {
                 }
             }
             WindowEvent::CloseRequested(request) if !request.default_prevented() => {
+                #[cfg(feature = "edit")]
                 if !self.finish_editing(id, edit::AfterSave::Close) {
                     request.prevent_default();
                     return;
@@ -600,17 +631,47 @@ impl App {
             Event::UserEvent(AppEvent::ShowPage(id, page)) => self.show_page(id, page),
             Event::Action(action) => self.action(&action),
             Event::UserEvent(AppEvent::Action(action)) => self.action(action),
+            #[cfg(feature = "edit")]
             Event::UserEvent(AppEvent::ToolChanged(id, index, values)) => {
                 self.tool_changed(id, index, values)
             }
+            #[cfg(feature = "edit")]
             Event::UserEvent(AppEvent::Previewed(id, generation, media, proxy, scale)) => {
                 self.previewed(id, generation, media, proxy, scale);
             }
+            #[cfg(feature = "edit")]
             Event::UserEvent(AppEvent::Applied(id, picture, step, amend)) => {
                 self.applied(id, picture, step, amend);
             }
+            #[cfg(feature = "edit")]
             Event::UserEvent(AppEvent::Saved(id, saved)) => self.saved(id, saved),
             Event::Window(id, event) => self.window_event(id, event),
+        }
+    }
+
+    /// Enables the menu items that work in the mode of the active window.
+    fn update_menu(&mut self) {
+        let modal = self.active_window().is_some_and(|window| window.is_modal());
+        let shown = self
+            .active_window()
+            .is_some_and(|window| !window.is_loading() && !window.is_modal());
+        // Whether the window is idle, and whether keys reach the image instead of a tool.
+        #[cfg(feature = "edit")]
+        let (idle, keys) = self.update_edit_menu(shown);
+        #[cfg(not(feature = "edit"))]
+        let (idle, keys) = (shown, true);
+        for (action, enabled) in [
+            ("file.open", !modal),
+            #[cfg(target_os = "macos")]
+            ("file.print", shown),
+            ("view.previous", idle && keys),
+            ("view.next", idle && keys),
+            ("view.zoom_in", shown),
+            ("view.zoom_out", shown),
+            ("view.actual_size", shown),
+            ("view.zoom_to_fit", shown),
+        ] {
+            bwindow::set_menu_item_enabled(action, enabled);
         }
     }
 }
@@ -669,6 +730,7 @@ fn menu() -> MenuBarBuilder {
     let primary = |key| Accelerator::new(Modifiers::PRIMARY, key);
     let file = MenuBuilder::new("File")
         .item(MenuItem::new("Open...", "file.open").accelerator(primary(KeyCode::KeyO)));
+    #[cfg(feature = "edit")]
     let file = file
         .separator()
         .item(MenuItem::new("Save", "file.save").accelerator(primary(KeyCode::KeyS)))
@@ -677,14 +739,14 @@ fn menu() -> MenuBarBuilder {
                 Modifiers::PRIMARY | Modifiers::SHIFT,
                 KeyCode::KeyS,
             )),
-        )
-        .separator();
+        );
     #[cfg(target_os = "macos")]
     let file = file
-        .item(MenuItem::new("Print...", "file.print").accelerator(primary(KeyCode::KeyP)))
-        .separator();
-    let menu_bar = MenuBarBuilder::new().menu(file);
-    let menu_bar = menu_bar.menu(edit_menu()).menu(image_menu());
+        .separator()
+        .item(MenuItem::new("Print...", "file.print").accelerator(primary(KeyCode::KeyP)));
+    let menu_bar = MenuBarBuilder::new().menu(file.separator());
+    #[cfg(feature = "edit")]
+    let menu_bar = menu_bar.menu(edit::edit_menu()).menu(edit::image_menu());
     let view = MenuBuilder::new("View")
         .item(MenuItem::new("Zoom In", "view.zoom_in").accelerator(primary(KeyCode::Equal)))
         .item(MenuItem::new("Zoom Out", "view.zoom_out").accelerator(primary(KeyCode::Minus)))
@@ -709,100 +771,6 @@ fn menu() -> MenuBarBuilder {
         .item(MenuItem::new("Show Sidebar", "view.sidebar"))
         .item(MenuItem::new("Show Info", "view.info").accelerator(primary(KeyCode::KeyI)));
     menu_bar.menu(view)
-}
-
-// The selection items follow the default ones, Undo and Redo reach the image view through the
-// responder chain.
-#[cfg(target_os = "macos")]
-fn edit_menu() -> MenuBuilder {
-    MenuBuilder::new("Edit")
-        .item(
-            MenuItem::new("Deselect", "select.none")
-                .accelerator(Accelerator::new(Modifiers::PRIMARY, KeyCode::KeyD)),
-        )
-        .item(
-            MenuItem::new("Invert Selection", "select.invert").accelerator(Accelerator::new(
-                Modifiers::PRIMARY | Modifiers::SHIFT,
-                KeyCode::KeyI,
-            )),
-        )
-}
-
-// These take the place of the default items of the same names, which only reach text fields.
-#[cfg(not(target_os = "macos"))]
-fn edit_menu() -> MenuBuilder {
-    let primary = |key| Accelerator::new(Modifiers::PRIMARY, key);
-    MenuBuilder::new("Edit")
-        .item(MenuItem::new("Undo", "edit.undo").accelerator(primary(KeyCode::KeyZ)))
-        .item(
-            MenuItem::new("Redo", "edit.redo").accelerator(Accelerator::new(
-                Modifiers::PRIMARY | Modifiers::SHIFT,
-                KeyCode::KeyZ,
-            )),
-        )
-        .item(MenuItem::new("Copy", "edit.copy").accelerator(primary(KeyCode::KeyC)))
-        .item(MenuItem::new("Select All", "select.all").accelerator(primary(KeyCode::KeyA)))
-}
-
-fn image_menu() -> MenuBuilder {
-    let primary = |key| Accelerator::new(Modifiers::PRIMARY, key);
-    let menu = MenuBuilder::new("Image")
-        .item(MenuItem::new("Edit Image", "edit.toggle").accelerator(primary(KeyCode::KeyE)))
-        .separator()
-        .item(MenuItem::new("Whole Image", "select.whole"))
-        .item(MenuItem::new("Rectangle Selection", "select.rectangle"))
-        .item(MenuItem::new("Ellipse Selection", "select.ellipse"));
-    // Elsewhere the Edit menu has no room for these, so they stay with the other selection items.
-    #[cfg(not(target_os = "macos"))]
-    let menu = menu
-        .item(
-            MenuItem::new("Deselect", "select.none")
-                .accelerator(Accelerator::new(Modifiers::PRIMARY, KeyCode::KeyD)),
-        )
-        .item(
-            MenuItem::new("Invert Selection", "select.invert").accelerator(Accelerator::new(
-                Modifiers::PRIMARY | Modifiers::SHIFT,
-                KeyCode::KeyI,
-            )),
-        );
-    menu.separator()
-        .item(MenuItem::new("Rotate Left", "image.rotate_left").accelerator(primary(KeyCode::KeyL)))
-        .item(
-            MenuItem::new("Rotate Right", "image.rotate_right").accelerator(primary(KeyCode::KeyR)),
-        )
-        .item(MenuItem::new("Flip Horizontal", "image.flip_horizontal"))
-        .item(MenuItem::new("Flip Vertical", "image.flip_vertical"))
-        .separator()
-        .item(MenuItem::new("Crop...", "image.crop").accelerator(primary(KeyCode::KeyK)))
-        .item(MenuItem::new("Resize...", "image.resize"))
-        .separator()
-        .item(
-            MenuItem::new("Adjust...", "filter.adjust").accelerator(Accelerator::new(
-                Modifiers::PRIMARY | Modifiers::OPTION,
-                KeyCode::KeyC,
-            )),
-        )
-        .item(
-            MenuItem::new("Auto Enhance", "filter.auto_enhance").accelerator(Accelerator::new(
-                Modifiers::PRIMARY | Modifiers::SHIFT,
-                KeyCode::KeyE,
-            )),
-        )
-        .separator()
-        .item(MenuItem::new("Grayscale", "filter.grayscale"))
-        .item(MenuItem::new("Sepia", "filter.sepia"))
-        .item(MenuItem::new("Invert", "filter.invert"))
-        .item(MenuItem::new("Threshold...", "filter.threshold"))
-        .item(MenuItem::new("Solarize...", "filter.solarize"))
-        .separator()
-        .item(MenuItem::new("Gaussian Blur...", "filter.gaussian_blur"))
-        .item(MenuItem::new("Box Blur...", "filter.box_blur"))
-        .item(MenuItem::new("Motion Blur...", "filter.motion_blur"))
-        .item(MenuItem::new("Radial Blur...", "filter.radial_blur"))
-        .separator()
-        .item(MenuItem::new("Sharpen...", "filter.sharpen"))
-        .item(MenuItem::new("Reduce Noise...", "filter.reduce_noise"))
-        .item(MenuItem::new("Pixelate...", "filter.pixelate"))
 }
 
 fn main() {

@@ -22,6 +22,12 @@ use super::composition::{MediaVisual, Surface};
 use super::headers::*;
 use super::winrt::*;
 
+#[cfg(feature = "edit")]
+pub(crate) use self::edit::Mark;
+
+#[cfg(feature = "edit")]
+mod edit;
+
 /// The height of the header bar, the tall caption buttons of the window fill it.
 pub(crate) const HEADER_HEIGHT: f64 = 48.0;
 /// The width of the sidebar with the pages of a file and of the inspector, beside the image.
@@ -59,8 +65,8 @@ const DOWNLOAD_URL: &str = "https://learn.microsoft.com/windows/apps/windows-app
 
 const STATEREPOSITORY_E_DEPENDENCY_NOT_RESOLVED: HRESULT = 0x8067_0016_u32 as i32;
 
-// The header bar buttons and menu items and the application actions they perform.
-const ACTIONS: &[(&str, &str)] = &[
+// The header bar buttons and the application actions they perform.
+const VIEW_ACTIONS: &[(&str, &str)] = &[
     ("Previous", "view.previous"),
     ("Next", "view.next"),
     ("ZoomOut", "view.zoom_out"),
@@ -68,108 +74,7 @@ const ACTIONS: &[(&str, &str)] = &[
     ("ZoomIn", "view.zoom_in"),
     ("SidebarButton", "view.sidebar"),
     ("InfoButton", "view.info"),
-    ("Edit", "edit.toggle"),
-    ("Done", "edit.toggle"),
-    ("Undo", "edit.undo"),
-    ("Redo", "edit.redo"),
-    ("SelectWhole", "select.whole"),
-    ("SelectRectangle", "select.rectangle"),
-    ("SelectEllipse", "select.ellipse"),
-    ("RotateLeft", "image.rotate_left"),
-    ("RotateRight", "image.rotate_right"),
-    ("FlipHorizontal", "image.flip_horizontal"),
-    ("FlipVertical", "image.flip_vertical"),
-    ("Crop", "image.crop"),
-    ("Resize", "image.resize"),
-    ("Adjust", "filter.adjust"),
-    ("AutoEnhance", "filter.auto_enhance"),
-    ("Grayscale", "filter.grayscale"),
-    ("Sepia", "filter.sepia"),
-    ("Invert", "filter.invert"),
-    ("Threshold", "filter.threshold"),
-    ("Solarize", "filter.solarize"),
-    ("GaussianBlur", "filter.gaussian_blur"),
-    ("BoxBlur", "filter.box_blur"),
-    ("MotionBlur", "filter.motion_blur"),
-    ("RadialBlur", "filter.radial_blur"),
-    ("Sharpen", "filter.sharpen"),
-    ("ReduceNoise", "filter.reduce_noise"),
-    ("Pixelate", "filter.pixelate"),
-    ("MoreAutoEnhance", "filter.auto_enhance"),
-    ("MoreGrayscale", "filter.grayscale"),
-    ("MoreSepia", "filter.sepia"),
-    ("MoreInvert", "filter.invert"),
-    ("MoreThreshold", "filter.threshold"),
-    ("MoreSolarize", "filter.solarize"),
-    ("MoreGaussianBlur", "filter.gaussian_blur"),
-    ("MoreBoxBlur", "filter.box_blur"),
-    ("MoreMotionBlur", "filter.motion_blur"),
-    ("MoreRadialBlur", "filter.radial_blur"),
-    ("MoreSharpen", "filter.sharpen"),
-    ("MoreReduceNoise", "filter.reduce_noise"),
-    ("MorePixelate", "filter.pixelate"),
-    ("MoreRotateLeft", "image.rotate_left"),
-    ("MoreRotateRight", "image.rotate_right"),
-    ("MoreFlipHorizontal", "image.flip_horizontal"),
-    ("MoreFlipVertical", "image.flip_vertical"),
-    ("MoreSelectWhole", "select.whole"),
-    ("MoreSelectRectangle", "select.rectangle"),
-    ("MoreSelectEllipse", "select.ellipse"),
-    ("MoreCrop", "image.crop"),
-    ("MoreResize", "image.resize"),
-    ("MoreAdjust", "filter.adjust"),
-    // Opening the filters or More menu closes the card of the open tool, like opening a popover
-    // closes the one that was open.
-    ("Filters", "tool.cancel"),
-    ("More", "tool.cancel"),
 ];
-
-// The toggle buttons of the selection shapes.
-const TOGGLES: [&str; 3] = ["SelectWhole", "SelectRectangle", "SelectEllipse"];
-
-// The elements shown while viewing and while editing.
-const VIEW_ITEMS: [&[u16]; 2] = [w!("ViewStart"), w!("ViewEnd")];
-const EDIT_ITEMS: [&[u16]; 2] = [w!("EditStart"), w!("EditEnd")];
-
-// The edit buttons that always show, and the groups that move to the More menu when the header
-// bar is too narrow, from left to right, keeping selection available until last. The menu lists
-// items in toolbar order; separators appear with their groups so none are left at the edges.
-const EDIT_FIXED: [&[u16]; 2] = [w!("HistoryGroup"), w!("Done")];
-const OVERFLOW: [(&[u16], &[&[u16]]); 4] = [
-    (
-        w!("TransformGroup"),
-        &[
-            w!("MoreRotateLeft"),
-            w!("MoreRotateRight"),
-            w!("MoreFlipHorizontal"),
-            w!("MoreFlipVertical"),
-        ],
-    ),
-    (
-        w!("ToolsGroup"),
-        &[
-            w!("MoreTransformSeparator"),
-            w!("MoreCrop"),
-            w!("MoreResize"),
-            w!("MoreAdjust"),
-        ],
-    ),
-    (w!("Filters"), &[w!("MoreFilters")]),
-    (
-        w!("SelectGroup"),
-        &[
-            w!("MoreSelectWhole"),
-            w!("MoreSelectRectangle"),
-            w!("MoreSelectEllipse"),
-            w!("MoreSelectSeparator"),
-        ],
-    ),
-];
-
-// VirtualKeyModifiers.Shift
-const SHIFT: u32 = 4;
-// VirtualKey.Escape
-const ESCAPE: i32 = 27;
 
 // The scroll viewer zooms from 0.1, so it shows the media at this scale and zooms that by the
 // magnification divided by it, which keeps the smallest magnification in its range.
@@ -183,11 +88,6 @@ const BUTTONS_LEFT: f64 = 44.0;
 const END_GAP: f64 = 8.0;
 // The space between groups of buttons.
 const GROUP_SPACING: f64 = 8.0;
-// The More button of the edit groups that do not fit.
-const MORE_WIDTH: f64 = 40.0;
-// The room for a few characters of the title and its margins, edit groups move to the More menu
-// before the title gets narrower.
-const TITLE_WIDTH: f64 = 120.0;
 
 /// The narrowest header bar that fits the icon, the sidebar and navigation buttons, a trimmed
 /// title area, the zoom, Info and Edit buttons and the tall caption buttons, so they never overlap.
@@ -203,7 +103,7 @@ pub(crate) const MIN_WIDTH: f64 = BUTTONS_LEFT
     // The Info button.
     + GROUP_SPACING + 40.0
     // The Edit button.
-    + GROUP_SPACING + 56.0
+    + if cfg!(feature = "edit") { GROUP_SPACING + 56.0 } else { 0.0 }
     + END_GAP
     // The three tall caption buttons.
     + 3.0 * 48.0;
@@ -212,7 +112,38 @@ pub(crate) const MIN_WIDTH: f64 = BUTTONS_LEFT
 // app icon and navigation buttons, the centered title and the zoom and Edit buttons before the
 // caption buttons, or the edit groups and the Done button, above a scroll viewer that zooms and
 // pans the media over a checkerboard.
-const XAML: &str = include_str!("winui.xaml");
+const XAML: &str = include_str!("winui/winui.xaml");
+
+// The XAML of the edit controls, empty in a build without editing.
+#[cfg(feature = "edit")]
+macro_rules! edit_xaml {
+    ($file:literal) => {
+        include_str!(concat!("winui/", $file))
+    };
+}
+#[cfg(not(feature = "edit"))]
+macro_rules! edit_xaml {
+    ($file:literal) => {
+        ""
+    };
+}
+
+// The edit controls with the placeholders of the XAML they take the place of.
+const EDIT_XAML: [(&str, &str); 5] = [
+    ("{EDIT_START}", edit_xaml!("edit_start.xaml")),
+    ("{EDIT_BUTTON}", edit_xaml!("edit_button.xaml")),
+    ("{EDIT_END}", edit_xaml!("edit_end.xaml")),
+    ("{OVERLAY}", edit_xaml!("overlay.xaml")),
+    ("{TOOL}", edit_xaml!("tool.xaml")),
+];
+
+// The header bar buttons and menu items and the application actions they perform.
+fn actions() -> impl Iterator<Item = &'static (&'static str, &'static str)> {
+    let actions = VIEW_ACTIONS.iter();
+    #[cfg(feature = "edit")]
+    let actions = actions.chain(edit::EDIT_ACTIONS);
+    actions
+}
 
 /// Why WinUI could not start.
 enum StartError {
@@ -600,20 +531,13 @@ pub(crate) struct Island {
     media: ComPtr,
     media_visual: MediaVisual,
     checkerboard: ComPtr,
-    overlay: ComPtr,
-    tool: ComPtr,
     spinner: ComPtr,
-    view_items: Vec<ComPtr>,
-    edit_items: Vec<ComPtr>,
-    edit_button: ComPtr,
-    toggles: Vec<(&'static str, ComPtr)>,
     // The panels beside the image, their contents and the buttons that open them.
     panels: [PanelElements; 2],
-    // The action of the toggle button that is on.
-    toggled: Rc<Cell<&'static str>>,
     regions: Rc<Regions>,
-    // Whether the card of a tool shows.
-    tool_open: Rc<Cell<bool>>,
+    // The edit controls, the overlay of the crop rectangle or selection and the tool card.
+    #[cfg(feature = "edit")]
+    edit: edit::EditElements,
     // A view change asked for before the scroll viewer was laid out, which it would ignore.
     pending: Rc<Cell<Option<View>>>,
     // Whether the window draws the Mica backdrop itself, under the transparent island.
@@ -639,28 +563,15 @@ struct PanelElements {
     button: ComPtr,
 }
 
-// A group of edit buttons that moves to the More menu when the header bar is too narrow.
-struct Overflow {
-    group: ComPtr,
-    // Its items in the More menu.
-    items: Vec<ComPtr>,
-    // Its width in logical pixels when it was last shown.
-    width: Cell<f64>,
-    hidden: Cell<bool>,
-}
-
 // The button groups in the header bar, which take clicks instead of dragging the window.
 struct Regions {
     non_client: ComPtr,
     title_bar: ComPtr,
     start: ComPtr,
     end: ComPtr,
-    // The edit buttons that always show, the groups that move to the More menu in order, and the
-    // More button.
-    fixed: Vec<ComPtr>,
-    overflow: Vec<Overflow>,
-    more: ComPtr,
-    editing: Cell<bool>,
+    // The edit groups, some of which move to the More menu while editing.
+    #[cfg(feature = "edit")]
+    edit: edit::EditRegions,
     // The width and header bar height in physical pixels and the scale.
     size: Cell<(i32, i32, f64)>,
 }
@@ -674,46 +585,6 @@ fn actual_width(element: &ComPtr) -> f64 {
 }
 
 impl Regions {
-    // Moves the edit groups that do not fit in `available` logical pixels to the More menu, the
-    // first ones first.
-    fn fit(&self, available: f64) {
-        for overflow in &self.overflow {
-            let width = actual_width(&overflow.group);
-            if !overflow.hidden.get() && width > 0.0 {
-                overflow.width.set(width);
-            }
-        }
-        let fixed: f64 = self
-            .fixed
-            .iter()
-            .map(|element| actual_width(element) + GROUP_SPACING)
-            .sum();
-        let hide = (0..=self.overflow.len())
-            .find(|&count| {
-                let shown: f64 = self.overflow[count..]
-                    .iter()
-                    .map(|overflow| overflow.width.get() + GROUP_SPACING)
-                    .sum();
-                let more = if count > 0 {
-                    MORE_WIDTH + GROUP_SPACING
-                } else {
-                    0.0
-                };
-                fixed + shown + more <= available
-            })
-            .unwrap_or(self.overflow.len());
-        for (index, overflow) in self.overflow.iter().enumerate() {
-            let hidden = index < hide;
-            if overflow.hidden.replace(hidden) != hidden {
-                set_visible(&overflow.group, !hidden);
-                for item in &overflow.items {
-                    set_visible(item, hidden);
-                }
-            }
-        }
-        set_visible(&self.more, hide > 0);
-    }
-
     fn update(&self) {
         let (width, height, scale) = self.size.get();
         if width == 0 {
@@ -732,9 +603,8 @@ impl Regions {
             };
             call!(self.end, 32, margin => Thickness);
         }
-        if self.editing.get() {
-            self.fit(f64::from(width - inset) / scale - BUTTONS_LEFT - END_GAP - TITLE_WIDTH);
-        }
+        #[cfg(feature = "edit")]
+        self.edit.update(f64::from(width - inset) / scale);
         let physical = |element: &ComPtr| (actual_width(element) * scale).round() as i32;
         let (start, end) = (physical(&self.start), physical(&self.end));
         let rects = [
@@ -778,18 +648,10 @@ pub(crate) struct Handlers {
     /// Follows every change of the zoom or scroll position, with whether it settled.
     pub(crate) view: Box<dyn Fn(bool)>,
     /// Takes drags that crop or select first, returns whether it does.
+    #[cfg(feature = "edit")]
     pub(crate) mark: Box<dyn Fn(Mark) -> bool>,
     /// Follows the first rendered frame, until [`Island::stop_rendered`].
     pub(crate) rendered: Box<dyn Fn()>,
-}
-
-/// A drag with the primary mouse button, which crops or selects, at a position in the visible
-/// area.
-pub(crate) enum Mark {
-    Begin((f64, f64)),
-    // Whether shift is held, which keeps a square.
-    Drag((f64, f64), bool),
-    End,
 }
 
 /// Creates the object of a XAML document.
@@ -972,7 +834,8 @@ impl Island {
         let Handlers {
             action: on_action,
             view: on_view,
-            mark: on_mark,
+            #[cfg(feature = "edit")]
+                mark: on_mark,
             rendered: on_rendered,
         } = handlers;
         let failed = |component| move |result| (component, result);
@@ -1019,7 +882,11 @@ impl Island {
             (source, bridge)
         };
 
-        let xaml = XAML
+        let xaml = EDIT_XAML
+            .iter()
+            .fold(XAML.to_owned(), |xaml, (placeholder, part)| {
+                xaml.replace(placeholder, part)
+            })
             .replace("{MIN_ZOOM}", &MIN_ZOOM_FACTOR.to_string())
             .replace("{MAX_ZOOM}", &MAX_ZOOM_FACTOR.to_string())
             .replace("{SIDEBAR_WIDTH}", &SIDEBAR_WIDTH.to_string())
@@ -1072,8 +939,6 @@ impl Island {
         let media_visual = MediaVisual::new(&media).map_err(failed("media visual"))?;
         let checkerboard =
             find(w!("Checkerboard"), &IID_IIMAGE).map_err(failed("window content"))?;
-        let overlay = find(w!("Overlay"), &IID_IIMAGE).map_err(failed("window content"))?;
-        let tool = find(w!("Tool"), &IID_IBORDER).map_err(failed("window content"))?;
         let panels = [
             (w!("PagesPanel"), w!("PagesHost"), w!("SidebarButton")),
             (w!("InfoPanel"), w!("InfoHost"), w!("InfoButton")),
@@ -1091,26 +956,8 @@ impl Island {
             info_panel.map_err(failed("window content"))?,
         ];
         let spinner = find(w!("Spinner"), &IID_IUI_ELEMENT).map_err(failed("window content"))?;
-        let elements = |names: &[&[u16]]| {
-            names
-                .iter()
-                .map(|name| find(name, &IID_IUI_ELEMENT))
-                .collect::<Result<Vec<_>>>()
-        };
-        let view_items = elements(&VIEW_ITEMS).map_err(failed("window content"))?;
-        let edit_items = elements(&EDIT_ITEMS).map_err(failed("window content"))?;
-        let edit_button = find(w!("Edit"), &IID_ICONTROL).map_err(failed("window content"))?;
-        let toggles = TOGGLES
-            .iter()
-            .map(|name| {
-                let action = ACTIONS
-                    .iter()
-                    .find(|(button, _)| button == name)
-                    .map_or("", |(_, action)| *action);
-                find(&wide(name), &IID_ITOGGLE_BUTTON).map(|toggle| (action, toggle))
-            })
-            .collect::<Result<Vec<_>>>()
-            .map_err(failed("window content"))?;
+        #[cfg(feature = "edit")]
+        let edit = edit::EditElements::find(&root).map_err(failed("window content"))?;
 
         // The buttons in the title bar take clicks, the rest of it drags the window.
         let non_client = factory(
@@ -1123,32 +970,13 @@ impl Island {
             out(|raw| unsafe { call!(statics, 6, id => WindowId, raw => *mut *mut c_void) })
         })
         .map_err(failed("title bar"))?;
-        let fixed = EDIT_FIXED
-            .iter()
-            .map(|name| find(name, &IID_IFRAMEWORK_ELEMENT))
-            .collect::<Result<Vec<_>>>()
-            .map_err(failed("window content"))?;
-        let overflow = OVERFLOW
-            .iter()
-            .map(|(group, items)| {
-                Ok(Overflow {
-                    group: find(group, &IID_IFRAMEWORK_ELEMENT)?,
-                    items: elements(items)?,
-                    width: Cell::new(0.0),
-                    hidden: Cell::new(false),
-                })
-            })
-            .collect::<Result<Vec<_>>>()
-            .map_err(failed("window content"))?;
         let regions = Rc::new(Regions {
             non_client,
             title_bar: title_bar.clone(),
             start: start.clone(),
             end: end.clone(),
-            fixed,
-            overflow,
-            more: find(w!("More"), &IID_IUI_ELEMENT).map_err(failed("window content"))?,
-            editing: Cell::new(false),
+            #[cfg(feature = "edit")]
+            edit: edit::EditRegions::find(&root).map_err(failed("title bar"))?,
             size: Cell::new((0, 0, 1.0)),
         });
         // The groups are measured after the island first shows them.
@@ -1169,11 +997,10 @@ impl Island {
         }
 
         let on_action: Rc<dyn Fn(&'static str)> = Rc::from(on_action);
-        let tool_open = Rc::new(Cell::new(false));
-        let toggled = Rc::new(Cell::new(""));
         let clicked = {
-            let (on_action, opened, toggled) =
-                (on_action.clone(), tool_open.clone(), toggled.clone());
+            let on_action = on_action.clone();
+            #[cfg(feature = "edit")]
+            let (opened, toggled) = (edit.tool_open.clone(), edit.toggled.clone());
             event_handler(IID_ROUTED_EVENT_HANDLER, move |sender, _| {
                 let Ok(sender) = sender.cast(&IID_IFRAMEWORK_ELEMENT) else {
                     return;
@@ -1186,27 +1013,18 @@ impl Island {
                 }
                 // SAFETY: The name is owned by this call.
                 let name = unsafe { HString::from_raw(name) }.to_string_lossy();
-                let Some((_, action)) = ACTIONS.iter().find(|(button, _)| *button == name) else {
+                let Some((_, action)) = actions().find(|(button, _)| *button == name) else {
                     return;
                 };
-                // A toggle button shows what the application selects rather than the click: it
-                // stays on when clicked while on, and stays as it was while the application
-                // ignores the action, like while an edit is applied.
-                if TOGGLES.contains(&name.as_str())
-                    && let Ok(toggle) = sender.cast(&IID_ITOGGLE_BUTTON)
-                    && let Some(checked) = boxed_bool(*action == toggled.get())
-                {
-                    // SAFETY: Slot 7 of IToggleButton is put_IsChecked.
-                    _ = unsafe { toggle.put(7, checked.as_raw()) };
+                #[cfg(feature = "edit")]
+                if !edit::clicked(&sender, &name, action, &toggled, &opened) {
+                    return;
                 }
-                // Canceling without an open tool would select the whole image again.
-                if *action != "tool.cancel" || opened.get() {
-                    on_action(action);
-                }
+                on_action(action);
             })
         };
         // Slot 14 of IButtonBase and slot 17 of IMenuFlyoutItem are add_Click.
-        for (name, _) in ACTIONS {
+        for (name, _) in actions() {
             let element =
                 find(&wide(name), &IID_IFRAMEWORK_ELEMENT).map_err(failed("window content"))?;
             match element.cast(&IID_IBUTTON_BASE) {
@@ -1249,32 +1067,14 @@ impl Island {
         })
         .map_err(failed("window content"))?;
 
-        Self::add_drag(&scroller, on_mark).map_err(failed("window content"))?;
-
-        // Escape in the image edits the whole image again, like on the other platforms. The
-        // card of an open tool cancels it with its own keyboard accelerator instead.
-        let key_down = {
-            let opened = tool_open.clone();
-            event_handler(IID_KEY_EVENT_HANDLER, move |_, args| {
-                let Some(args) = args.and_then(|args| args.cast(&IID_IKEY_ROUTED_EVENT_ARGS).ok())
-                else {
-                    return;
-                };
-                let mut key = 0i32;
-                // SAFETY: Slot 6 of IKeyRoutedEventArgs is get_Key and slot 9 is put_Handled.
-                unsafe {
-                    call!(args, 6, &mut key => *mut i32);
-                    if key == ESCAPE && !opened.get() {
-                        call!(args, 9, 1u8 => u8);
-                        on_action("tool.cancel");
-                    }
-                }
-            })
-        };
-        // Slot 132 of IUIElement is add_KeyDown.
-        scroller
-            .cast(&IID_IUI_ELEMENT)
-            .and_then(|element| add_event(&element, 132, &key_down))
+        Self::add_drag(
+            &scroller,
+            #[cfg(feature = "edit")]
+            on_mark,
+        )
+        .map_err(failed("window content"))?;
+        #[cfg(feature = "edit")]
+        edit::add_escape(&scroller, edit.tool_open.clone(), on_action)
             .map_err(failed("window content"))?;
 
         let on_rendered: Rc<dyn Fn()> = Rc::from(on_rendered);
@@ -1333,17 +1133,11 @@ impl Island {
             media,
             media_visual,
             checkerboard,
-            overlay,
-            tool,
             spinner,
-            view_items,
-            edit_items,
-            edit_button,
-            toggles,
             panels,
-            toggled,
             regions,
-            tool_open,
+            #[cfg(feature = "edit")]
+            edit,
             pending,
             window_backdrop,
             rendered: Cell::new(Some((statics, token))),
@@ -1362,12 +1156,17 @@ impl Island {
     // hand tool of other viewers. Touch and touchpads pan with the scroll viewer itself. The
     // handlers get the scroll viewer as their sender, so they keep no reference to it that would
     // keep it alive.
-    fn add_drag(scroller: &ComPtr, on_mark: impl Fn(Mark) -> bool + 'static) -> Result<()> {
-        let on_mark = Rc::new(on_mark);
+    fn add_drag(
+        scroller: &ComPtr,
+        #[cfg(feature = "edit")] on_mark: impl Fn(Mark) -> bool + 'static,
+    ) -> Result<()> {
         let drag = Rc::new(Cell::<Option<Drag>>::new(None));
-        let marking = Rc::new(Cell::new(false));
+        #[cfg(feature = "edit")]
+        let marks = edit::Marks::new(on_mark);
         let pressed = {
-            let (drag, marking, on_mark) = (drag.clone(), marking.clone(), on_mark.clone());
+            let drag = drag.clone();
+            #[cfg(feature = "edit")]
+            let marks = marks.clone();
             event_handler(IID_POINTER_EVENT_HANDLER, move |sender, args| {
                 let (Some((point, args)), Ok(scroller), Ok(element)) = (
                     args.and_then(|args| mouse_drag_point(sender, args)),
@@ -1376,9 +1175,11 @@ impl Island {
                 ) else {
                     return;
                 };
-                if on_mark(Mark::Begin(position(point))) {
-                    marking.set(true);
-                } else {
+                #[cfg(feature = "edit")]
+                let marked = marks.begin(point);
+                #[cfg(not(feature = "edit"))]
+                let marked = false;
+                if !marked {
                     drag.set(Some((point, scroll_offsets(&scroller))));
                 }
                 // SAFETY: Slot 6 of IPointerRoutedEventArgs is get_Pointer, slot 212 of
@@ -1393,17 +1194,16 @@ impl Island {
             })
         };
         let moved = {
-            let (drag, marking, on_mark) = (drag.clone(), marking.clone(), on_mark.clone());
+            let drag = drag.clone();
+            #[cfg(feature = "edit")]
+            let marks = marks.clone();
             event_handler(IID_POINTER_EVENT_HANDLER, move |sender, args| {
-                let Some((point, args)) = args.and_then(|args| mouse_drag_point(sender, args))
+                let Some((point, _args)) = args.and_then(|args| mouse_drag_point(sender, args))
                 else {
                     return;
                 };
-                if marking.get() {
-                    let mut modifiers = 0u32;
-                    // SAFETY: Slot 7 of IPointerRoutedEventArgs is get_KeyModifiers.
-                    unsafe { call!(args, 7, &mut modifiers => *mut u32) };
-                    on_mark(Mark::Drag(position(point), modifiers & SHIFT != 0));
+                #[cfg(feature = "edit")]
+                if marks.drag(point, &_args) {
                     return;
                 }
                 let (Some((start, (x, y))), Ok(scroller)) =
@@ -1421,9 +1221,8 @@ impl Island {
         };
         let released = event_handler(IID_POINTER_EVENT_HANDLER, move |_, _| {
             drag.set(None);
-            if marking.replace(false) {
-                on_mark(Mark::End);
-            }
+            #[cfg(feature = "edit")]
+            marks.end();
         });
         let element = scroller.cast(&IID_IUI_ELEMENT)?;
         // Slots 152, 154, 156 and 162 of IUIElement are add_PointerPressed, add_PointerMoved,
@@ -1481,60 +1280,6 @@ impl Island {
         self.media_visual.show(surface, size);
     }
 
-    /// Shows the edit controls in the header bar, or the view controls.
-    pub(crate) fn set_editing(&self, editing: bool) {
-        for (items, visible) in [(&self.view_items, !editing), (&self.edit_items, editing)] {
-            for item in items {
-                set_visible(item, visible);
-            }
-        }
-        self.regions.editing.set(editing);
-        self.regions.update();
-    }
-
-    /// Enables the Edit button, only still bitmaps can be edited.
-    pub(crate) fn set_editable(&self, editable: bool) {
-        // SAFETY: Slot 29 of IControl is put_IsEnabled.
-        unsafe { call!(self.edit_button, 29, editable => bool) };
-    }
-
-    /// Shows the toggle button of a selection action as on and the others as off.
-    pub(crate) fn set_toggled(&self, action: &str) {
-        for (toggle_action, toggle) in &self.toggles {
-            if *toggle_action == action {
-                self.toggled.set(toggle_action);
-            }
-            if let Some(checked) = boxed_bool(*toggle_action == action) {
-                // SAFETY: Slot 7 of IToggleButton is put_IsChecked.
-                _ = unsafe { toggle.put(7, checked.as_raw()) };
-            }
-        }
-    }
-
-    /// Shows a bitmap over the visible area at its size in logical pixels, or nothing.
-    pub(crate) fn set_overlay(&self, overlay: Option<(&Bitmap, (f64, f64))>) {
-        if let Some((bitmap, size)) = overlay {
-            set_image(&self.overlay, bitmap, size);
-        } else {
-            // Hidden image elements otherwise retain their last CPU buffer and GPU texture.
-            // SAFETY: Slot 7 of IImage is put_Source; null releases its image.
-            unsafe { self.overlay.put(7, null_mut()) }.ok();
-        }
-        set_visible(&self.overlay, overlay.is_some());
-    }
-
-    /// Shows the controls of an edit tool, or hides them.
-    pub(crate) fn set_tool(&self, content: Option<&ComPtr>) {
-        let element = content.and_then(|content| content.cast(&IID_IUI_ELEMENT).ok());
-        // SAFETY: Slot 19 of IBorder is put_Child, null removes the child.
-        _ = unsafe {
-            self.tool
-                .put(19, element.as_ref().map_or(null_mut(), ComPtr::as_raw))
-        };
-        set_visible(&self.tool, element.is_some());
-        self.tool_open.set(element.is_some());
-    }
-
     /// Replaces the content of a panel.
     pub(crate) fn set_panel_content(&self, panel: Panel, content: &ComPtr) {
         let Ok(element) = content.cast(&IID_IUI_ELEMENT) else {
@@ -1584,42 +1329,7 @@ impl Island {
         scroll_offsets(&self.scroller)
     }
 
-    #[cfg(test)]
-    pub(super) fn assert_header_layout(&self, filters_overflowed: Option<bool>) {
-        let (width, _, scale) = self.regions.size.get();
-        let mut inset = 0;
-        // SAFETY: Slot 36 of IAppWindowTitleBar is get_RightInset.
-        unsafe { call!(self.title_bar, 36, &mut inset => *mut i32) };
-        let controls = BUTTONS_LEFT
-            + actual_width(&self.regions.start)
-            + actual_width(&self.regions.end)
-            + END_GAP;
-        assert!(
-            controls <= f64::from(width - inset) / scale + 1.0,
-            "header controls overlap at width {width}, scale {scale}: {controls}"
-        );
-        if let Some(hidden) = filters_overflowed {
-            for (name, expected) in [(w!("Filters"), hidden), (w!("MoreFilters"), !hidden)] {
-                let element = find_name(&self.root, name, &IID_IUI_ELEMENT).unwrap();
-                let mut visibility = -1;
-                // SAFETY: Slot 23 of IUIElement is get_Visibility.
-                unsafe { call!(element, 23, &mut visibility => *mut i32) };
-                assert_eq!(visibility, i32::from(expected), "filter menu visibility");
-            }
-            let selection = find_name(&self.root, w!("SelectGroup"), &IID_IUI_ELEMENT).unwrap();
-            let mut visibility = -1;
-            // SAFETY: Slot 23 of IUIElement is get_Visibility.
-            unsafe { call!(selection, 23, &mut visibility => *mut i32) };
-            if visibility == 1 {
-                assert!(
-                    self.regions.overflow.iter().all(|group| group.hidden.get()),
-                    "selection must collapse only after every other group"
-                );
-            }
-        }
-    }
-
-    #[cfg(test)]
+    #[cfg(all(test, feature = "edit"))]
     pub(super) fn scrollable_size(&self) -> (f64, f64) {
         let (mut width, mut height) = (0.0, 0.0);
         // SAFETY: Slots 42 and 47 of IScrollViewer are ScrollableWidth and ScrollableHeight.
@@ -1777,11 +1487,6 @@ fn scroll_offsets(scroller: &ComPtr) -> (f64, f64) {
         call!(scroller, 45, &mut y => *mut f64);
     }
     (x, y)
-}
-
-// A pointer position in logical pixels.
-fn position(point: Point) -> (f64, f64) {
-    (f64::from(point.x), f64::from(point.y))
 }
 
 // The position of a mouse pointer with the primary button down relative to the element that got

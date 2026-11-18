@@ -12,8 +12,11 @@ use imageview_core::macos::Rect;
 use objc2::msg_send;
 use objc2::runtime::{AnyObject as Object, Bool};
 
+#[cfg(feature = "edit")]
 pub(crate) const KEY_RETURN: u16 = 36;
+#[cfg(feature = "edit")]
 pub(crate) const KEY_ESCAPE: u16 = 53;
+#[cfg(feature = "edit")]
 pub(crate) const KEY_ENTER: u16 = 76;
 pub(crate) const KEY_HOME: u16 = 115;
 pub(crate) const KEY_PAGE_UP: u16 = 116;
@@ -21,15 +24,19 @@ pub(crate) const KEY_END: u16 = 119;
 pub(crate) const KEY_PAGE_DOWN: u16 = 121;
 pub(crate) const KEY_DOWN: u16 = 125;
 pub(crate) const KEY_UP: u16 = 126;
+#[cfg(feature = "edit")]
 pub(crate) const NS_EVENT_MODIFIER_FLAG_SHIFT: u64 = 1 << 17;
 pub(crate) const NS_EVENT_MODIFIER_FLAG_COMMAND: u64 = 1 << 20;
+#[cfg(feature = "edit")]
 pub(crate) const NS_GRID_CELL_PLACEMENT_TRAILING: isize = 3;
+#[cfg(feature = "edit")]
 pub(crate) const NS_GRID_ROW_ALIGNMENT_FIRST_BASELINE: isize = 2;
 pub(crate) const NS_LAYOUT_ATTRIBUTE_LEADING: isize = 5;
 pub(crate) const NS_PRINTING_PAGINATION_MODE_FIT: u64 = 1;
 pub(crate) const NS_PROGRESS_INDICATOR_STYLE_SPINNING: u64 = 1;
 // AppKit numbers its alignments like UIKit on Apple silicon.
 pub(crate) const NS_TEXT_ALIGNMENT_CENTER: isize = if cfg!(target_arch = "x86_64") { 2 } else { 1 };
+#[cfg(feature = "edit")]
 pub(crate) const NS_TEXT_ALIGNMENT_RIGHT: isize = if cfg!(target_arch = "x86_64") { 1 } else { 2 };
 pub(crate) const NS_USER_INTERFACE_LAYOUT_ORIENTATION_VERTICAL: isize = 1;
 // Flexible margins on all sides, which keep a view in the middle of its superview.

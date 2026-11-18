@@ -38,6 +38,12 @@ An Edit button swaps in an edit toolbar for still bitmaps, with popovers for its
   size, draws vectors as bitmaps at a chosen size, and saves the first frame of animations,
   which cannot be edited
 
+Editing is the default `edit` feature, build without it for a viewer that only views images:
+
+```sh
+cargo build -p imageview --no-default-features
+```
+
 ### macOS
 
 - A toolbar in the titlebar with previous and next image and the zoom commands, and the

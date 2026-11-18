@@ -112,6 +112,7 @@ impl Panels {
     }
 
     /// Hides the panels while editing, or shows them again.
+    #[cfg(feature = "edit")]
     pub(super) fn set_hidden(&self, hidden: bool) {
         self.pages.hidden.set(hidden);
         self.info.hidden.set(hidden);

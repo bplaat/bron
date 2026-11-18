@@ -20,11 +20,10 @@ use std::ptr::{null, null_mut};
 use std::rc::Rc;
 use std::sync::Once;
 
-use bcanvas::{CanvasRenderingContext2d, OffscreenCanvas};
+use bcanvas::OffscreenCanvas;
 use bwindow::{
     EventLoopProxy, NativeViewHandle, NativeWindowHandle, Theme, Window, WindowAttachment, WindowId,
 };
-use imageview_core::edit::{Control, Selection, Shape, Tool};
 use imageview_core::{
     InfoSection, Media, clamp_magnification, draw_checkerboard, fit_magnification, window_title,
 };
@@ -32,18 +31,20 @@ use imageview_core::{
 use self::composition::Surface;
 use self::headers::*;
 use self::panels::Panels;
+#[cfg(feature = "edit")]
 pub(crate) use self::save::SaveOptions;
-use self::tool::ToolPanel;
-use self::winui::{
-    Bitmap, HEADER_HEIGHT, Handlers, Island, MIN_WIDTH, Mark, Panel, premultiplied_bgra,
-};
+use self::winui::{Bitmap, HEADER_HEIGHT, Handlers, Island, MIN_WIDTH, Panel, premultiplied_bgra};
 use crate::AppEvent;
 use crate::viewport::Viewport;
 
 mod composition;
+#[cfg(feature = "edit")]
+mod edit;
 mod headers;
 mod panels;
+#[cfg(feature = "edit")]
 mod save;
+#[cfg(feature = "edit")]
 mod tool;
 mod winrt;
 mod winui;
@@ -110,10 +111,9 @@ struct State {
     stale: Cell<bool>,
     // Whether the window is shown, not minimized or hidden, which the animation runs for.
     shown: Cell<bool>,
-    // The crop rectangle or selection over the visible area.
-    overlay: RefCell<Layer>,
-    // The controls of the open edit tool.
-    tool: RefCell<Option<ToolPanel>>,
+    // The crop rectangle or selection over the visible area, and the controls of the open tool.
+    #[cfg(feature = "edit")]
+    edit: edit::EditState,
     // The checkerboard bitmap, whether it is dark and its scale.
     checkerboard: RefCell<Option<(Bitmap, bool, f64)>>,
     dark: Cell<bool>,
@@ -152,8 +152,8 @@ impl MediaView {
             surfaces: RefCell::default(),
             stale: Cell::new(false),
             shown: Cell::new(is_shown(parent)),
-            overlay: RefCell::default(),
-            tool: RefCell::new(None),
+            #[cfg(feature = "edit")]
+            edit: edit::EditState::default(),
             checkerboard: RefCell::new(None),
             dark: Cell::new(theme == Theme::Dark),
             window_backdrop: Cell::new(set_window_backdrop(parent)),
@@ -187,7 +187,9 @@ impl MediaView {
         };
         state.content.set(content);
 
-        let (viewed, marked) = (Rc::downgrade(&state), Rc::downgrade(&state));
+        let viewed = Rc::downgrade(&state);
+        #[cfg(feature = "edit")]
+        let marked = Rc::downgrade(&state);
         let island = Island::new(
             content,
             parent,
@@ -200,6 +202,7 @@ impl MediaView {
                         state.view_changed(settled);
                     }
                 }),
+                #[cfg(feature = "edit")]
                 mark: Box::new(move |mark| marked.upgrade().is_some_and(|state| state.mark(mark))),
                 // Handled outside of the rendering of the island, which it stops following.
                 // SAFETY: Posting to a destroyed window does nothing.
@@ -211,6 +214,7 @@ impl MediaView {
         // SAFETY: GetActiveWindow reads the state of this thread.
         island.set_active(unsafe { GetActiveWindow() } == parent);
         // Only still bitmaps can be edited, the loading media has no frames.
+        #[cfg(feature = "edit")]
         island.set_editable(!loading && state.viewport.borrow().media().is_still());
         island.set_spinner(loading);
         state.panels.show(&island);
@@ -239,8 +243,9 @@ impl MediaView {
     /// Replaces the media, keeping the zoom or fitting it to the window.
     pub(crate) fn set_media(&mut self, media: Media, zoom_to_fit: bool) {
         let state = &self.state;
-        // Vectors and animations cannot be edited, only saved as bitmaps.
         if let Some(island) = state.island.borrow().as_ref() {
+            // Vectors and animations cannot be edited, only saved as bitmaps.
+            #[cfg(feature = "edit")]
             island.set_editable(media.is_still());
             if !state.loaded.get() {
                 island.set_spinner(false);
@@ -257,6 +262,7 @@ impl MediaView {
             state.render(state.zoom_factor());
         }
         state.start_animation();
+        #[cfg(feature = "edit")]
         state.draw_marks();
     }
 
@@ -317,19 +323,6 @@ impl MediaView {
         unsafe { InvalidateRect(state.content.get(), null(), 1) };
     }
 
-    /// Shows the edit controls in the header bar, or the view controls again.
-    pub(crate) fn set_editing(&mut self, editing: bool) {
-        self.close_tool();
-        if let Some(island) = self.state.island.borrow().as_ref() {
-            island.set_editing(editing);
-        }
-        // Only the shown page is edited, so the other pages and the information are hidden
-        // meanwhile, the media fits the room that is left.
-        let shown = self.state.panels.width();
-        self.state.panels.set_hidden(editing);
-        self.state.show_panels(self.state.panels.width() != shown);
-    }
-
     /// Lists the pages of a file with several in the sidebar with one selected, or hides it.
     pub(crate) fn set_pages(&self, pages: &[Media], page: usize) {
         let shown = self.state.panels.width();
@@ -367,148 +360,6 @@ impl MediaView {
             eprintln!("Could not show the information: 0x{error:08x}");
         }
     }
-
-    /// Shows the controls of a tool in a card over the image, and the crop rectangle for a crop.
-    /// Changes of the controls go to `window`. Reset goes back to the defaults.
-    pub(crate) fn show_tool(
-        &mut self,
-        window: WindowId,
-        tool: Tool,
-        controls: &[Control],
-        values: &[f32],
-        defaults: &[f32],
-        _action: &str,
-    ) {
-        self.close_tool();
-        // Without a card there is no tool that closing would remove the crop rectangle of.
-        let Ok(panel) = ToolPanel::new(window, tool, controls, values, defaults) else {
-            return;
-        };
-        if tool == Tool::Crop {
-            self.state
-                .change_marks(|viewport| viewport.set_cropping(true));
-        }
-        if let Some(island) = self.state.island.borrow().as_ref() {
-            island.set_tool(Some(panel.content()));
-        }
-        *self.state.tool.borrow_mut() = Some(panel);
-    }
-
-    /// Shows changed values of the open tool.
-    pub(crate) fn set_tool_values(&self, values: &[f32]) {
-        if let Some(panel) = self.state.tool.borrow().as_ref() {
-            panel.set_values(values);
-        }
-    }
-
-    /// Closes the controls and crop rectangle of the open tool.
-    pub(crate) fn close_tool(&mut self) {
-        if self.state.tool.borrow_mut().take().is_none() {
-            return;
-        }
-        if let Some(island) = self.state.island.borrow().as_ref() {
-            island.set_tool(None);
-            island.focus();
-        }
-        self.state
-            .change_marks(|viewport| viewport.set_cropping(false));
-    }
-
-    /// Makes drags draw selections of a shape, or selects the whole image again, shown as on in
-    /// the header bar.
-    pub(crate) fn set_selecting(&self, shape: Option<Shape>) {
-        self.state
-            .change_marks(|viewport| viewport.set_selecting(shape));
-        if let Some(island) = self.state.island.borrow().as_ref() {
-            island.set_toggled(match shape {
-                None => "select.whole",
-                Some(Shape::Rectangle) => "select.rectangle",
-                Some(Shape::Ellipse) => "select.ellipse",
-            });
-        }
-    }
-
-    /// The selected part of the media.
-    pub(crate) fn selection(&self) -> Option<Selection> {
-        self.state.viewport.borrow().selection()
-    }
-
-    /// Selects everything outside the selection instead.
-    pub(crate) fn invert_selection(&self) {
-        self.state.change_marks(Viewport::invert_selection);
-    }
-
-    /// Puts a PNG image on the clipboard, in the format of that name.
-    pub(crate) fn copy_png(&self, png: &[u8]) {
-        let format = w!("PNG");
-        // SAFETY: The clipboard takes over the global memory once it has it, which is freed
-        // here otherwise.
-        unsafe {
-            if OpenClipboard(self.state.window.get()) == 0 {
-                return;
-            }
-            EmptyClipboard();
-            let memory = GlobalAlloc(GMEM_MOVEABLE, png.len());
-            let target = GlobalLock(memory);
-            if !target.is_null() {
-                std::ptr::copy_nonoverlapping(png.as_ptr(), target.cast(), png.len());
-                GlobalUnlock(memory);
-                if SetClipboardData(RegisterClipboardFormatW(format.as_ptr()), memory).is_null() {
-                    GlobalFree(memory);
-                }
-            } else if !memory.is_null() {
-                GlobalFree(memory);
-            }
-            CloseClipboard();
-        }
-    }
-
-    /// Shows a preview of any size in the place of the image, or the image again.
-    pub(crate) fn set_preview(&self, preview: Option<Media>) {
-        self.state.viewport.borrow_mut().set_preview(preview);
-        self.state.stale.set(true);
-        self.state.render(self.state.zoom_factor());
-    }
-
-    /// Places the crop rectangle at a position with a size in pixels.
-    pub(crate) fn set_crop_rect(&self, rect: (u32, u32, u32, u32)) {
-        self.state.change_marks(|viewport| {
-            if let Some(crop) = viewport.crop() {
-                crop.set_rect(rect);
-            }
-        });
-    }
-
-    /// Makes the crop rectangle keep a width divided by height, or any shape.
-    pub(crate) fn set_crop_aspect(&self, aspect: Option<f64>) {
-        self.state.change_marks(|viewport| {
-            if let Some(crop) = viewport.crop() {
-                crop.set_aspect(aspect);
-            }
-        });
-    }
-
-    /// The crop rectangle in pixels, or all of the media without one.
-    pub(crate) fn crop_rect(&self) -> (u32, u32, u32, u32) {
-        let mut viewport = self.state.viewport.borrow_mut();
-        let (width, height) = viewport.media().size();
-        viewport
-            .crop()
-            .map_or((0, 0, width as u32, height as u32), |crop| crop.rect())
-    }
-
-    /// The longest side of the view in device pixels, which previews do not need to exceed.
-    pub(crate) fn longest_pixels(&self) -> u32 {
-        let (width, height) = self.state.visible();
-        (width.max(height) * self.state.scale()).ceil().max(1.0) as u32
-    }
-
-    /// Shows a progress bar while an edit is applied.
-    pub(crate) fn set_busy(&self, busy: bool) {
-        if let Some(island) = self.state.island.borrow().as_ref() {
-            island.set_spinner(busy || !self.state.loaded.get());
-        }
-    }
 }
 
 impl Drop for MediaView {
@@ -517,6 +368,7 @@ impl Drop for MediaView {
         // Hide immediately; releasing the XAML tree may wait for composition work.
         // SAFETY: The parent window belongs to this view and may already be destroyed.
         unsafe { ShowWindow(self.state.window.get(), 0) };
+        #[cfg(feature = "edit")]
         self.close_tool();
         let state = &self.state;
         // SAFETY: The window procedure and the subclass forget the state before it is freed,
@@ -645,63 +497,6 @@ struct Surfaces {
     frames: Vec<(usize, Surface)>,
 }
 
-// A bitmap of the visible area drawn with a canvas, both kept to draw it again.
-#[derive(Default)]
-struct Layer {
-    canvas: Option<OffscreenCanvas>,
-    bitmap: Option<Bitmap>,
-}
-
-impl Layer {
-    // Draws an area of logical pixels at a display scale, returns the bitmap with its size in
-    // logical pixels.
-    fn draw(
-        &mut self,
-        (width, height): (f64, f64),
-        scale: f64,
-        paint: impl FnOnce(&mut CanvasRenderingContext2d<'_>),
-    ) -> Option<(&Bitmap, (f64, f64))> {
-        let logical = (width.ceil().max(1.0) as u32, height.ceil().max(1.0) as u32);
-        let scale = scale as f32;
-        let canvas = match self.canvas.take() {
-            Some(canvas)
-                if canvas.logical_width() == logical.0 as f32
-                    && canvas.logical_height() == logical.1 as f32
-                    && canvas.scale_factor() == scale =>
-            {
-                canvas
-            }
-            _ => OffscreenCanvas::with_scale_factor(logical.0, logical.1, scale),
-        };
-        let canvas = self.canvas.insert(canvas);
-        // The canvas rounds its pixels up, which the bitmap shows one to one: its logical size
-        // would shrink it by a fraction of a pixel, which XAML smooths.
-        let size = (canvas.width(), canvas.height());
-        let shown = (size.0 as f32 / scale, size.1 as f32 / scale);
-        canvas.draw(|context| {
-            // A reused canvas still has what it drew before.
-            context.clear_rect(0.0, 0.0, shown.0, shown.1);
-            paint(context);
-        });
-        if self
-            .bitmap
-            .as_ref()
-            .is_none_or(|bitmap| bitmap.size() != size)
-        {
-            self.bitmap = Bitmap::new(size.0, size.1);
-        }
-        let bitmap = self.bitmap.as_ref()?;
-        bitmap.write_rgba(canvas.pixels());
-        Some((bitmap, (f64::from(shown.0), f64::from(shown.1))))
-    }
-
-    // Frees the canvas and bitmap, returns whether there was a bitmap to hide.
-    fn clear(&mut self) -> bool {
-        self.canvas = None;
-        self.bitmap.take().is_some()
-    }
-}
-
 impl State {
     fn scale(&self) -> f64 {
         // SAFETY: The content is alive while the state is.
@@ -818,62 +613,12 @@ impl State {
             .follow(visible, magnification, offsets);
     }
 
-    // Takes a drag that crops or selects, returns whether it does.
-    fn mark(&self, mark: Mark) -> bool {
-        self.follow();
-        let marked = {
-            let mut viewport = self.viewport.borrow_mut();
-            match mark {
-                Mark::Begin(pointer) => viewport.mark_begin(pointer),
-                Mark::Drag(pointer, square) => viewport.mark_drag(pointer, square),
-                Mark::End => {
-                    let marked = viewport.mark_end();
-                    // A click without a drag goes back to editing the whole image, the menu
-                    // follows a drawn selection.
-                    if marked && viewport.selecting().is_some() && viewport.selection().is_none() {
-                        send(AppEvent::Action("select.whole"));
-                    } else if marked {
-                        send(AppEvent::Action("select.changed"));
-                    }
-                    marked
-                }
-            }
-        };
-        if marked {
-            self.draw_marks();
-        }
-        marked
-    }
-
-    // Changes the crop rectangle or selection and shows it.
-    fn change_marks(&self, change: impl FnOnce(&mut Viewport)) {
-        change(&mut self.viewport.borrow_mut());
-        self.draw_marks();
-    }
-
     // Shows what follows the scroll viewer: the crop rectangle or selection and the sampling of
     // the media.
     fn draw_view(&self) {
+        #[cfg(feature = "edit")]
         self.draw_marks();
         self.update_sampling();
-    }
-
-    // Draws the crop rectangle or selection over the visible area, or hides the overlay.
-    fn draw_marks(&self) {
-        self.follow();
-        let island = self.island.borrow();
-        let Some(island) = island.as_ref() else {
-            return;
-        };
-        let viewport = self.viewport.borrow();
-        let mut overlay = self.overlay.borrow_mut();
-        if viewport.has_marks() {
-            island.set_overlay(overlay.draw(self.visible(), self.scale(), |context| {
-                viewport.paint_marks(context);
-            }));
-        } else if overlay.clear() {
-            island.set_overlay(None);
-        }
     }
 
     // Samples the media nearest neighbor where raster pixels are enlarged to sharp squares, and
@@ -1227,7 +972,8 @@ unsafe extern "system" fn frame_proc(
     result
 }
 
-#[cfg(test)]
+// The test edits images and asks to save them.
+#[cfg(all(test, feature = "edit"))]
 mod tests {
     use std::time::{Duration, Instant};
 

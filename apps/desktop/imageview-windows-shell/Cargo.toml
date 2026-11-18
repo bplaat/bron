@@ -18,4 +18,4 @@ workspace = true
 [dependencies]
 bcanvas = { path = "../../../lib/graphics/bcanvas", default-features = false }
 image = { path = "../../../lib/graphics/image" }
-imageview-core = { path = "../imageview-core" }
+imageview-core = { path = "../imageview-core", default-features = false }
