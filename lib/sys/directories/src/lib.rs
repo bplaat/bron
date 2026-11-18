@@ -34,12 +34,8 @@ pub(crate) mod windows {
     }
 
     #[allow(clippy::upper_case_acronyms)]
+    #[derive(Default)]
     pub(crate) struct LPWSTR(*mut u16);
-    impl Default for LPWSTR {
-        fn default() -> Self {
-            Self(std::ptr::null_mut())
-        }
-    }
     impl LPWSTR {
         pub(crate) const fn as_mut_ptr(&mut self) -> *mut *mut u16 {
             &mut self.0
