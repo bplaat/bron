@@ -846,11 +846,15 @@ fn main() {
             }
             WindowEvent::ScaleFactorChanged(_) => view.request_redraw(),
             WindowEvent::MonitorChanged => {
-                let size = window.size();
-                if (size.width - placed.width).abs() < 1.0
-                    && (size.height - placed.height).abs() < 1.0
+                // A smaller screen first shrinks the window into it, between the new and old placed size
+                let (size, target) = (window.size(), placed_size(&monitor));
+                let kept = |size: f32, placed: f32, target: f32| {
+                    (size - placed).abs() < 1.0 || (target..placed).contains(&size)
+                };
+                if kept(size.width, placed.width, target.width)
+                    && kept(size.height, placed.height, target.height)
                 {
-                    window.set_size(placed_size(&monitor));
+                    window.set_size(target);
                     window.center();
                     placed = window.size();
                 }
