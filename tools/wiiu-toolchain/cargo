@@ -1,0 +1,50 @@
+#!/bin/sh
+# Builds and runs Rust programs for Wii U with the toolchain's patched std.
+set -eu
+dir=$(cd "$(dirname "$0")" && pwd)
+build=$(cd "$dir/../.." && pwd)/target/wiiu-toolchain
+"$dir/build.sh" all std >&2
+
+export __CARGO_TESTS_ONLY_SRC_ROOT="$build/rust/library"
+export CARGO_BUILD_TARGET="$dir/powerpc-nintendo-wiiu.json"
+export CARGO_UNSTABLE_BUILD_STD=std,panic_abort
+export CARGO_UNSTABLE_JSON_TARGET_SPEC=true
+# Unoptimized code is too slow for the console, optimize for size without LTO over the workspace's
+# profiles, its per-package opt-level overrides still apply.
+# The build scripts convert every texture, optimized that takes seconds instead of half a minute.
+export CARGO_PROFILE_DEV_OPT_LEVEL=s
+export CARGO_PROFILE_DEV_PANIC=abort
+export CARGO_PROFILE_DEV_BUILD_OVERRIDE_OPT_LEVEL=3
+export CARGO_PROFILE_RELEASE_OPT_LEVEL=s
+export CARGO_PROFILE_RELEASE_PANIC=abort
+export CARGO_PROFILE_RELEASE_LTO=false
+export CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1
+export CARGO_PROFILE_RELEASE_STRIP=false
+export CARGO_PROFILE_RELEASE_BUILD_OVERRIDE_OPT_LEVEL=3
+export CARGO_TARGET_POWERPC_NINTENDO_WIIU_RUNNER="$dir/run.sh"
+# Cargo does not otherwise track edits to rust-src or these native link inputs.
+native_hash=$(
+    for input in "$dir/wiiu.ld" "$build/imports.ld" "$build/libwut.a" "$build/libgu.a" \
+        "$build/sysroot/lib/libc.a" "$build/libcompiler-rt.a"; do
+        cksum < "$input"
+    done | cksum
+)
+flags() {
+    printf '%s\037' \
+        "-Cmetadata=$(cat "$build/rust/.patched")-${native_hash%% *}" \
+        "-Clink-arg=-T$dir/wiiu.ld" \
+        -Clink-arg=--undefined=__rpx_start \
+        -Clink-arg=--emit-relocs \
+        -Clink-arg=-znocopyreloc \
+        "-Clink-arg=-L$build" \
+        -Clink-arg=--start-group \
+        "-Clink-arg=$build/libwut.a" \
+        "-Clink-arg=$build/libgu.a" \
+        "-Clink-arg=$build/sysroot/lib/libc.a" \
+        "-Clink-arg=$build/libcompiler-rt.a"
+    printf '%s' -Clink-arg=--end-group
+}
+export CARGO_ENCODED_RUSTFLAGS="$(flags)"
+export CC_powerpc_nintendo_wiiu="$dir/cc"
+export AR_powerpc_nintendo_wiiu="$dir/ar"
+exec cargo "+$(sed -n "s/^rust_toolchain='\(.*\)'$/\1/p" "$dir/build.sh")" "$@"

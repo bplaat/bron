@@ -1,0 +1,147 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Thu, 19 Nov 2026 13:08:08 +0100
+Subject: [PATCH] Translate connection errors and expose TCP_NODELAY on Wii U
+ sockets
+
+---
+ src/Cafe/OS/libs/nsysnet/nsysnet.cpp | 59 ++++++++++++++++++++++------
+ src/Common/socket.h                  |  6 +++
+ 2 files changed, 54 insertions(+), 11 deletions(-)
+
+diff --git a/src/Cafe/OS/libs/nsysnet/nsysnet.cpp b/src/Cafe/OS/libs/nsysnet/nsysnet.cpp
+index ffb84bd..ff66449 100644
+--- a/src/Cafe/OS/libs/nsysnet/nsysnet.cpp
++++ b/src/Cafe/OS/libs/nsysnet/nsysnet.cpp
+@@ -70,12 +70,18 @@
+ 
+ // error codes
+ #define WU_SO_SUCCESS		0x0000
++#define WU_SO_ETIMEDOUT		0x0002
++#define WU_SO_ECONNABORTED	0x0005
++#define WU_SO_ECONNREFUSED	0x0007
++#define WU_SO_EADDRNOTAVAIL	0x0013
++#define WU_SO_EADDRINUSE	0x0014
+ #define WU_SO_EWOULDBLOCK	0x0006
+ #define WU_SO_ECONNRESET	0x0008
+ #define WU_SO_ENOTCONN		0x0009
+ #define WU_SO_EINVAL		0x000B
+ #define WU_SO_EINPROGRESS	0x0016
+-#define WU_SO_EAFNOSUPPORT  0x0021
++#define WU_SO_EAFNOSUPPORT  0x0015
++#define WU_SO_ENETUNREACH	0x001E
+ 
+ #define WU_SO_ESHUTDOWN		0x000F
+ 
+@@ -159,10 +165,22 @@ sint32 _translateError(sint32 returnCode, sint32 wsaError, sint32 mode = _ERROR_
+ 		_setSockError(WU_SO_EINPROGRESS);
+ 		break;
+ 	case WSAECONNABORTED:
+-		debug_printf("WSAECONNABORTED\n");
+-#ifdef CEMU_DEBUG_ASSERT
+-		assert_dbg();
+-#endif
++		_setSockError(WU_SO_ECONNABORTED);
++		break;
++	case WSAECONNREFUSED:
++		_setSockError(WU_SO_ECONNREFUSED);
++		break;
++	case WSAECONNRESET:
++		_setSockError(WU_SO_ECONNRESET);
++		break;
++	case WSAETIMEDOUT:
++		_setSockError(WU_SO_ETIMEDOUT);
++		break;
++	case WSAEADDRNOTAVAIL:
++		_setSockError(WU_SO_EADDRNOTAVAIL);
++		break;
++	case WSAEADDRINUSE:
++		_setSockError(WU_SO_EADDRINUSE);
+ 		break;
+ 	case WSAESHUTDOWN:
+ 		_setSockError(WU_SO_ESHUTDOWN);
+@@ -170,6 +188,9 @@ sint32 _translateError(sint32 returnCode, sint32 wsaError, sint32 mode = _ERROR_
+ 	case WSAENOTCONN:
+ 		_setSockError(WU_SO_ENOTCONN);
+ 		break;
++	case WSAENETUNREACH:
++		_setSockError(WU_SO_ENETUNREACH);
++		break;
+ 	default:
+ 		cemuLog_logDebug(LogType::Force, "Unhandled wsaError {}", wsaError);
+ 		_setSockError(99999); // unhandled error
+@@ -576,9 +597,9 @@ void nsysnetExport_setsockopt(PPCInterpreter_t* hCPU)
+ 				if (optlen != 4)
+ 					assert_dbg();
+ 				sint32 optvalLE = _swapEndianU32(*(uint32*)optval);
+-				u_long mode = optvalLE;  // 1 -> enable, 0 -> disable
+-				if (setsockopt(vs->s, IPPROTO_TCP, TCP_NODELAY, (const char*)&mode, sizeof(u_long)) != 0)
+-					assert_dbg();
++				sint32 r = setsockopt(vs->s, IPPROTO_TCP, TCP_NODELAY, (const char*)&optvalLE, sizeof(optvalLE));
++				osLib_returnFromFunction(hCPU, _translateError(r, GETLASTERR));
++				return;
+ 			}
+ 			else
+ 			{
+@@ -641,8 +662,12 @@ void nsysnetExport_getsockopt(PPCInterpreter_t* hCPU)
+ 			if (memory_readU32(optlenMPTR) != 4)
+ 				assert_dbg();
+ 			memory_writeU32(optlenMPTR, 4);
+-			if (optvalLE != 0)
+-				assert_dbg(); // todo -> Translate error code/status
++			if (r == 0 && optvalLE != 0)
++			{
++				_translateError(-1, optvalLE);
++				optvalLE = _getSockError();
++				_setSockError(WU_SO_SUCCESS);
++			}
+ 			*(uint32*)optval = _swapEndianU32(optvalLE);
+ 			// YouTube app uses this to check if the connection attempt was successful after non-blocking connect()
+ 		}
+@@ -695,6 +720,18 @@ void nsysnetExport_getsockopt(PPCInterpreter_t* hCPU)
+ 			cemuLog_logDebug(LogType::Force, "getsockopt(WU_SOL_SOCKET): Unsupported optname 0x{:08x}", optname);
+ 		}
+ 	}
++	else if (level == WU_IPPROTO_TCP && optname == WU_TCP_NODELAY)
++	{
++		int value = 0;
++		socklen_t length = sizeof(value);
++		r = getsockopt(vs->s, IPPROTO_TCP, TCP_NODELAY, (char*)&value, &length);
++		_translateError(r, GETLASTERR);
++		if (r == 0)
++		{
++			memory_writeU32(optlenMPTR, sizeof(value));
++			*(uint32*)optval = _swapEndianU32(value);
++		}
++	}
+ 	else
+ 	{
+ 		cemuLog_logDebug(LogType::Force, "getsockopt(): Unsupported level 0x{:08x}", level);
+@@ -1916,7 +1953,7 @@ void nsysnetExport_sendto(PPCInterpreter_t* hCPU)
+ 		_setSocketSendRecvNonBlockingMode(vs->s, vs->isNonBlocking);
+ 	}
+ 
+-	_translateError(r <= 0 ? -1 : 0, wsaError);
++	_translateError(r < 0 ? -1 : 0, wsaError);
+ 
+ 	osLib_returnFromFunction(hCPU, r);
+ }
+diff --git a/src/Common/socket.h b/src/Common/socket.h
+index af0805c..5199c3b 100644
+--- a/src/Common/socket.h
++++ b/src/Common/socket.h
+@@ -21,8 +21,14 @@ typedef int socklen_t;
+ #define WSAEINPROGRESS EINPROGRESS
+ #define WSAESHUTDOWN ESHUTDOWN
+ #define WSAECONNABORTED ECONNABORTED
++#define WSAECONNREFUSED ECONNREFUSED
++#define WSAECONNRESET ECONNRESET
++#define WSAETIMEDOUT ETIMEDOUT
++#define WSAEADDRINUSE EADDRINUSE
++#define WSAEADDRNOTAVAIL EADDRNOTAVAIL
+ #define WSAHOST_NOT_FOUND EAI_NONAME
+ #define WSAENOTCONN ENOTCONN
++#define WSAENETUNREACH ENETUNREACH
+ 
+ #define GETLASTERR errno
+ 

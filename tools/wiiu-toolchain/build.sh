@@ -6,18 +6,20 @@
 # wutpicolibc, picolibc (the C library) in sysroot/, libogc's paired single matrix math in
 # libgu.a, libcompiler-rt.a and the host tools elf2rpl, rplimportgen, latte-assembler and our
 # gtxconv/ and wuhbtool/.
-# The example Makefiles and Rust build.rs files run this before they build.
+# The C Makefiles and Rust Cargo wrapper run this before building a program.
 #
 # Usage: ./build.sh [command]...
 #   (none)          fetch, patch and build
+#   std             prepare the patched Rust sources
 #   export-patches  write the commits in ../../target/wiiu-toolchain/<name>/ back to <name>/patches/
-#   test            build test/ and run it in cemu-runner
+#   test            build test/c and test/rust and run them in cemu-runner
 #   cemu            build Cemu's interpreter and Cafe OS with cemu/patches/ and cemu/runner.cpp to
 #                   ../../target/wiiu-toolchain/cemu-runner
 #   clean           remove ../../target/wiiu-toolchain/
 set -euo pipefail
 cd "$(dirname "$0")"
 
+rust_toolchain='nightly-2026-11-14'
 wut_url='https://github.com/devkitPro/wut.git'
 wut_version='v1.9.1'
 wut_commit='2016e429c16dab366d902455b43f21ccb520e23d'
@@ -62,6 +64,7 @@ FMT_DIR="$BUILD_DIR/fmt"
 PUGIXML_DIR="$BUILD_DIR/pugixml"
 DECAF_DIR="$BUILD_DIR/decaf-emu"
 SYSROOT="$BUILD_DIR/sysroot"
+RUST_DIR="$BUILD_DIR/rust"
 
 # Apple's clang can't target PowerPC, so prefer Homebrew's LLVM when it's installed
 LLVM=''
@@ -118,7 +121,7 @@ CEMU_SOURCES=(
     Cafe/HW/Espresso/Interpreter/PPCInterpreter{FPU,HLE,Impl,Main,OPC,PS}.cpp
     Cafe/HW/Espresso/{PPCScheduler,PPCTimer}.cpp Cafe/HW/Espresso/Debugger/GDBBreakpoints.cpp Cafe/HW/MMU/MMU.cpp
     Cafe/OS/common/OSCommon.cpp Cafe/OS/RPL/{elf,rpl,rpl_debug_symbols,rpl_symbol_storage}.cpp
-    Cafe/OS/libs/nlibnss/nlibnss.cpp
+    Cafe/OS/libs/nlibnss/nlibnss.cpp Cafe/OS/libs/nsysnet/nsysnet.cpp
     Cafe/IOSU/fsa/iosu_fsa.cpp Cafe/IOSU/kernel/iosu_kernel.cpp Cafe/Filesystem/{fsc,fscDeviceHostFS,fscDeviceRedirect}.cpp
     Common/{CafeStaticVar,SysAllocator,cpu_features}.cpp Common/unix/{FileStream_unix,platform}.cpp util/Fiber/FiberUnix.cpp
     util/MemMapper/MemMapperUnix.cpp util/highresolutiontimer/HighResolutionTimer.cpp util/crypto/crc32.cpp
@@ -193,6 +196,29 @@ fetch() {
     [ "$failed" = 0 ] || die "Failed to clone Wii U toolchain dependencies"
 }
 
+# The standard library sources must match the compiler that builds them.
+copy_rust() {
+    # The cargo wrapper runs this nightly, also when the Rust sources come from a cache
+    rustup toolchain list | grep -q "^$rust_toolchain-" ||
+        rustup -q toolchain install --profile minimal -c rust-src "$rust_toolchain"
+    if [ -d "$RUST_DIR" ]; then
+        [ "$(cat "$RUST_DIR/.toolchain")" = "$rust_toolchain" ] ||
+            die "Rust nightly changed, export any local Rust patches and remove $RUST_DIR"
+        return
+    fi
+    msg "Copying the std sources of Rust $rust_toolchain"
+    rm -rf "$RUST_DIR.part"
+    mkdir -p "$RUST_DIR.part"
+    cp -R "$(rustc "+$rust_toolchain" --print sysroot)/lib/rustlib/src/rust/library" "$RUST_DIR.part/library"
+    git -C "$RUST_DIR.part" init -q
+    git -C "$RUST_DIR.part" add library
+    git -C "$RUST_DIR.part" -c commit.gpgsign=false -c user.name=wiiu-toolchain -c user.email=wiiu-toolchain@localhost \
+        commit -q -m "Rust $rust_toolchain std sources"
+    git -C "$RUST_DIR.part" tag upstream
+    printf '%s\n' "$rust_toolchain" > "$RUST_DIR.part/.toolchain"
+    mv "$RUST_DIR.part" "$RUST_DIR"
+}
+
 # Applies the patches of a repo as commits on top of its upstream commit, again when they changed
 patch() {
     local name="$1" commit="$2" dir="$BUILD_DIR/$1"
@@ -225,10 +251,10 @@ patch() {
 # Writes the commits on top of upstream back to <name>/patches/ for every patched repo
 export_patches() {
     local name dir
-    for name in wut wut-tools picolibc libogc decaf-emu cemu; do
+    for name in wut wut-tools picolibc libogc decaf-emu cemu rust; do
         dir="$BUILD_DIR/$name"
-        # Cemu is only there once the cemu command ran
-        [ "$name" = cemu ] && [ ! -d "$dir" ] && continue
+        # Cemu and Rust are only there once the cemu or std command ran
+        [[ "$name" == cemu || "$name" == rust ]] && [ ! -d "$dir" ] && continue
         [ -d "$dir/.git" ] || die "No patched $name, run ./build.sh first"
         rm -f "$TOOLCHAIN_DIR/$name"/patches/*.patch
         git -C "$dir" format-patch -q --no-numbered --zero-commit --no-signature \
@@ -265,12 +291,12 @@ skip_sanity_check = true
 CROSS
     rm -rf "$BUILD_DIR/picolibc-build" "$SYSROOT"
     # Cafe OS starts the program, wutpicolibc gives picolibc its console, heap, locks and files.
-    # Threads share errno without thread-local storage, the streams lock and are flushed at exit.
+    # wutpicolibc supplies per-thread errno, and the streams lock and are flushed at exit.
     meson setup "$BUILD_DIR/picolibc-build" "$PICOLIBC_DIR" \
         --cross-file "$BUILD_DIR/picolibc-cross.txt" --prefix "$SYSROOT" --includedir include \
         --libdir lib --buildtype plain -Dc_args="['-ffunction-sections', '-fdata-sections', '-DESPRESSO', '-Os', '-g']" \
         -Dmultilib=false -Dpicocrt=false -Dsemihost=false -Dtests=false -Dspecsdir=none \
-        -Dthread-local-storage=false -Dposix-console=false -Dstdio-locking=true -Dstdio-exit-flush=true > /dev/null ||
+        -Dthread-local-storage=false -Derrno-function=__errno -Dposix-console=false -Dstdio-locking=true -Dstdio-exit-flush=true > /dev/null ||
         die "Failed to configure picolibc"
     meson install -C "$BUILD_DIR/picolibc-build" > /dev/null || die "Failed to build picolibc"
 }
@@ -303,8 +329,8 @@ build_archive() {
         wait "$pid" || failed=1
     done
     [ "$failed" = 0 ] || die "Failed to compile $(basename "$library")"
-    rm -f "$library"
-    "${LLVM}llvm-ar" rcs "$library" "${objects[@]}"
+    "${LLVM}llvm-ar" rcs "$objects_dir/archive.a" "${objects[@]}"
+    mv -f "$objects_dir/archive.a" "$library"
 }
 
 # Compiles host C++ sources, as many at the same time as there are CPUs, and links them to a program
@@ -384,9 +410,14 @@ build_tools() {
         outdated "$BUILD_DIR/$tool" "$TOOLCHAIN_DIR/$tool" "$ROOT_DIR/lib/graphics/image" "$ROOT_DIR/lib/data" ||
             continue
         msg "Building $tool"
-        # The Rust examples run this from their build.rs, so leave out their toolchain and target
+        # Build scripts under the cargo wrapper reach this through the cc script, so leave out the
+        # wrapper's toolchain, target and profiles
         env -u RUSTUP_TOOLCHAIN -u RUSTC -u RUSTC_WRAPPER -u RUSTC_WORKSPACE_WRAPPER \
-            -u CARGO_ENCODED_RUSTFLAGS -u CARGO_BUILD_TARGET \
+            -u CARGO_ENCODED_RUSTFLAGS -u CARGO_BUILD_TARGET -u CARGO_UNSTABLE_BUILD_STD \
+            -u CARGO_UNSTABLE_JSON_TARGET_SPEC -u __CARGO_TESTS_ONLY_SRC_ROOT \
+            -u CARGO_PROFILE_RELEASE_OPT_LEVEL -u CARGO_PROFILE_RELEASE_PANIC \
+            -u CARGO_PROFILE_RELEASE_LTO -u CARGO_PROFILE_RELEASE_CODEGEN_UNITS \
+            -u CARGO_PROFILE_RELEASE_STRIP -u CARGO_PROFILE_RELEASE_BUILD_OVERRIDE_OPT_LEVEL \
             cargo build -q --release -p "$tool" --manifest-path "$ROOT_DIR/Cargo.toml" \
             --target-dir "$ROOT_DIR/target" || die "Failed to build $tool"
         rm -f "$BUILD_DIR/$tool"
@@ -435,18 +466,32 @@ build_cemu() {
         "$PUGIXML_DIR/src/pugixml.cpp" "$TOOLCHAIN_DIR/cemu/runner.cpp" -- -lz -pthread
 }
 
-# Builds test/ with the toolchain and runs it in cemu-runner with a new user folder, which has the
-# SD card. The test reports its results with OSReport, the runner fails when a check failed or the
-# program didn't finish. Release the lock before make runs the toolchain build itself.
-run_test() {
-    local user="$BUILD_DIR/test/cemu"
+# Each guest reports through OSReport and gets its own user folder with an SD card.
+# Release the lock before make or the Cargo wrapper runs the toolchain build.
+run_test() (
+    local user elf="$TOOLCHAIN_DIR/test/rust/target/powerpc-nintendo-wiiu/release/wiiu-std-test.elf" rpx status
     (lock; fetch test; build_cemu)
-    make -C "$TOOLCHAIN_DIR/test" --no-print-directory
-    msg "Running the test in cemu-runner"
-    rm -rf "$user"
-    "$BUILD_DIR/cemu-runner" "$BUILD_DIR/test/test.rpx" test 60 "$user"
+    make -C "$TOOLCHAIN_DIR/test/c" --no-print-directory
+    user=$(mktemp -d)
+    trap 'rm -rf "$user"' EXIT
+    msg "Running the C suite in cemu-runner"
+    "$BUILD_DIR/cemu-runner" "$TOOLCHAIN_DIR/test/c/target/test.rpx" test 60 "$user/c"
+
+    "$TOOLCHAIN_DIR/cargo" build --locked --release --manifest-path "$TOOLCHAIN_DIR/test/rust/Cargo.toml"
+    mkdir -p "$user/rust/sdcard"
+    rpx="$user/rust/sdcard/boot.rpx"
+    "$BUILD_DIR/elf2rpl" "$elf" "$rpx" > /dev/null
+    msg "Running the Rust suite in cemu-runner"
+    "$BUILD_DIR/cemu-runner" "$rpx" test 60 "$user/rust" 'suite words'
+
+    msg "Checking panic output and abort in cemu-runner"
+    status=0
+    "$BUILD_DIR/cemu-runner" "$rpx" run 10 "$user/panic" 'panic' > "$user/panic.log" 2>&1 || status=$?
+    cat "$user/panic.log"
+    [ "$status" = 134 ] && grep -q 'wiiu-std-panic-marker' "$user/panic.log" ||
+        die "Rust panic did not print its message and exit with status 134"
     msg "All tests passed"
-}
+)
 
 # Only one build at a time, the C and Rust examples can start one at the same time. The lock holds
 # the process ID of its build, so the lock of a killed build is taken over instead of waited on.
@@ -472,13 +517,21 @@ lock() {
     locked=true
 }
 
+unlock() {
+    $locked || return 0
+    rm -rf "$BUILD_DIR/.lock"
+    trap - EXIT
+    locked=false
+}
+
 [ $# -gt 0 ] || set -- all
 for command in "$@"; do
     case "$command" in
         all) lock; fetch; patch wut "$wut_commit"; patch wut-tools "$tools_commit"
             patch picolibc "$picolibc_commit"; patch libogc "$libogc_commit"; patch decaf-emu "$decaf_commit"
             build_picolibc; build_tools; build_imports; build_libraries ;;
-        test) run_test ;;
+        std) lock; copy_rust; patch rust upstream ;;
+        test) unlock; run_test ;;
         cemu) lock; fetch cemu; build_cemu ;;
         export-patches) export_patches ;;
         clean) rm -rf "$BUILD_DIR" ;;

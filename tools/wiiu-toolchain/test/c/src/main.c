@@ -174,6 +174,14 @@ static void test_heap(void) {
         CHECK(aligned != NULL && ((uintptr_t)aligned & (alignment - 1)) == 0);
         free(aligned);
     }
+    int sentinel;
+    void* aligned = &sentinel;
+    errno = EDOM;
+    CHECK(posix_memalign(&aligned, 3, 128) == EINVAL && aligned == &sentinel && errno == EDOM);
+    CHECK(posix_memalign(&aligned, 64, huge) == ENOMEM && aligned == &sentinel && errno == EDOM);
+    CHECK(posix_memalign(&aligned, 64, 1000) == 0 && ((uintptr_t)aligned & 63) == 0 && errno == EDOM);
+    if (aligned != &sentinel)
+        free(aligned);
     free(NULL);
 }
 
@@ -409,7 +417,7 @@ static void test_matrices(void) {
 }
 
 _Alignas(4096) static const uint8_t textures[] = {
-#embed "../../../../target/wiiu-toolchain/test/fixtures.gtx"
+#embed "../target/fixtures.gtx"
 };
 static void test_textures(void) {
     GX2Texture texture;
@@ -430,7 +438,7 @@ static void test_textures(void) {
 }
 
 _Alignas(64) static const uint8_t shader[] = {
-#embed "../../../../target/wiiu-toolchain/test/fixture.gsh"
+#embed "../target/fixture.gsh"
 };
 static void test_shaders(void) {
     CHECK(GFDGetVertexShaderCount(shader) == 1 && GFDGetPixelShaderCount(shader) == 1);
@@ -481,13 +489,39 @@ static int count_up(int argc, const char** argv) {
 static int read_environment(int argc, const char** argv) {
     (void)argc;
     getenv("HOME");
-    *(volatile bool*)argv = true;
-    return 0;
+    *(_Atomic bool*)argv = true;
+    (void)strtol("99999999999", NULL, 10);
+    return errno;
 }
 
 static bool start_thread(OSThread* thread, OSThreadEntryPointFn entry, int argc, void* argv, uint8_t* stack) {
     return OSCreateThread(thread, entry, argc, argv, stack + 16 * 1024, 16 * 1024, 16, OS_THREAD_ATTRIB_AFFINITY_ANY) &&
            OSResumeThread(thread) == 1;
+}
+
+static int create_exclusive(int argc, const char** argv) {
+    (void)argc;
+    const char* path = (const char*)argv;
+    int fd = open(path, O_CREAT | O_EXCL | O_WRONLY, 0666);
+    return fd < 0 ? errno : close(fd);
+}
+
+static void test_concurrent_create(void) {
+    static char path[] = "sd:/exclusive.txt";
+    static OSThread threads[2];
+    static _Alignas(16) uint8_t stacks[2][16 * 1024];
+    int results[2] = {-1, -1};
+    bool started[2];
+    for (int i = 0; i < 2; i++) {
+        started[i] = start_thread(&threads[i], create_exclusive, 0, path, stacks[i]);
+        CHECK(started[i]);
+    }
+    for (int i = 0; i < 2; i++) {
+        if (started[i])
+            CHECK(OSJoinThread(&threads[i], &results[i]));
+    }
+    CHECK((results[0] == 0 && results[1] == EEXIST) || (results[1] == 0 && results[0] == EEXIST));
+    CHECK(unlink(path) == 0);
 }
 
 static void test_threads(void) {
@@ -502,14 +536,16 @@ static void test_threads(void) {
     CHECK(counter == 2000 && results[0] == 7 && results[1] == 8);
 
     // getenv waits while another thread holds the C library lock
-    volatile bool read = false;
+    _Atomic bool read = false;
+    int worker_errno = 0;
     __LIBC_LOCK();
+    errno = 0;
     CHECK(start_thread(&threads[0], read_environment, 0, (void*)&read, stacks[0]));
     usleep(10000);
     CHECK(!read);
     __LIBC_UNLOCK();
-    CHECK(OSJoinThread(&threads[0], NULL));
-    CHECK(read);
+    CHECK(OSJoinThread(&threads[0], &worker_errno));
+    CHECK(read && worker_errno == ERANGE && errno == 0);
 }
 
 static void test_clock(void) {
@@ -870,6 +906,7 @@ int main(void) {
     run("threads and locks", test_threads);
     run("clock and sleep", test_clock);
     run("SD files", test_files);
+    run("concurrent exclusive SD create", test_concurrent_create);
     run("SD reads after EOF preserve writes", test_read_after_end);
     run("SD directories and paths", test_directories);
     run("SD errors and descriptors", test_descriptors);

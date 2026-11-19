@@ -1,8 +1,9 @@
 # Wii U Toolchain
 
 Everything the [Wii U examples](../../examples/wiiu/) share to build Wii U programs with plain clang and lld, without devkitPro.
-`build.sh` builds it all in the repository root's `target/wiiu-toolchain/`, the example Makefiles and Rust `build.rs` files run it
-for you. For now the programs are only tested in the [Cemu](https://cemu.info/) emulator.
+`build.sh` builds the toolchain in the repository root's `target/wiiu-toolchain/`. The C
+Makefiles and the Rust Cargo wrapper invoke it before building a project. For now the
+programs are only tested in the [Cemu](https://cemu.info/) emulator.
 
 - Clones devkitPro's [wut](https://github.com/devkitPro/wut) v1.9.1 and applies `wut/patches/`,
   for its headers, the export lists of the system libraries in `cafe/*.def`, libwhb and libgfd
@@ -32,7 +33,8 @@ for you. For now the programs are only tested in the [Cemu](https://cemu.info/) 
 cd tools/wiiu-toolchain
 ./build.sh                 # fetch, patch and build
 ./build.sh clean           # remove ../../target/wiiu-toolchain/
-./build.sh test            # run the toolchain tests without a GPU or JIT
+./build.sh std             # prepare the patched Rust sources
+./build.sh test            # run the C and Rust suites without a GPU or JIT
 ./build.sh cemu            # build ../../target/wiiu-toolchain/cemu-runner
 ./build.sh export-patches  # write the commits in ../../target/wiiu-toolchain/<name>/ back to <name>/patches/
 ```
@@ -47,12 +49,34 @@ Downloaded sources, compiled libraries and host tools stay in the repository roo
 
 C projects include `wiiu.mk` from their Makefile, which also assembles `src/shader.vsh` and
 `src/shader.psh` to `target/shader.gsh` and converts the textures of `src/assets/textures.toml` to
-`target/textures.gtx`. Rust projects select `wiiu.json` and `run.sh` in `.cargo/config.toml`, then
-call the shared `build.rs` helper to build the libraries, configure the linker, assemble their
-shaders and convert their textures. They use the wut, libwhb, libgfd and picolibc functions through
-the `wut-sys` crate, which also binds the libogc matrix functions they use. Each project keeps its own build output in `target/`.
+`target/textures.gtx`. Rust projects use the toolchain's `cargo` wrapper and the shared
+`build.rs` helper for shader assembly and texture conversion. The `wut-sys` crate provides
+bindings to wut, libwhb, libgfd, picolibc and the libogc matrix functions. Each project
+keeps its build output in `target/`.
 
-The toolchain and the examples build separately from the main Cargo workspace.
+The toolchain and the examples build separately from the main Cargo workspace, the
+[PlaatCraft Wii U port](../../games/plaatcraft/docs/wiiu.md) builds in it.
+
+### Rust standard library
+
+Run the toolchain's `cargo` wrapper for standalone Cargo projects that use `std`.
+
+```sh
+./cargo build --release --manifest-path /path/to/my-project/Cargo.toml
+./run.sh /path/to/my-project/target/powerpc-nintendo-wiiu/release/my-project.elf
+```
+
+The wrapper uses `powerpc-nintendo-wiiu.json` and the upstream Rust nightly pinned in
+`build.sh`, and the Wii U's build profile: optimized for size, aborting panics, and no LTO, also
+in the Cargo workspace (its per-package optimization levels still apply). It installs the
+matching `rust-src` component when needed, applies `rust/patches/` to a local copy and builds
+`std` with Cargo. The Rust backend calls picolibc and Cafe OS directly. The target supports
+aborting panics, Cafe OS threads, thread-local storage and synchronization, clocks,
+environment and arguments, SD files, entropy, and IPv4 TCP and UDP.
+
+The port exposes SD file modification times. File timestamp and permission updates, file
+locks, hard links, symlinks, IPv6 and child processes are unsupported. Environment
+variables are process-local, and the Rust process ID is a fixed placeholder.
 
 ## Files
 
@@ -60,8 +84,8 @@ The toolchain and the examples build separately from the main Cargo workspace.
   code at 0x02000000, the data at 0x10000000 and the import sections, which it includes from the
   generated `../../target/wiiu-toolchain/imports.ld`, at 0xC0000000. Programs are linked with
   `--emit-relocs`, elf2rpl turns the relocations into the imports of the system libraries
-- `wiiu.json` is the Rust target; `build.rs` builds and links `../../target/wiiu-toolchain/libwut.a`,
-  `libgu.a` and picolibc's `../../target/wiiu-toolchain/sysroot/lib/libc.a` and assembles shaders
+- `powerpc-nintendo-wiiu.json` and `rust/patches/` provide the target and Rust changes used by the
+  `cargo` wrapper. `build.rs` assembles shaders and converts textures for Rust projects
 - `wut-sys/` has Rust bindings for graphics, matrices, picolibc, threads, input, audio and
   networking. USB input uses the native `nsyskbd` keyboard callbacks and `nsyshid` device,
   protocol, descriptor, and asynchronous report APIs; no external HID library is required.
@@ -69,27 +93,33 @@ The toolchain and the examples build separately from the main Cargo workspace.
 - `gtxconv/` converts images to `.gtx` texture files from a TOML config, as a library and a CLI
 - `cc` is the C compiler for cc-rs build scripts of Rust projects: it builds the toolchain and
   compiles with the Wii U flags and the picolibc, wut and libogc matrix headers. `ar` is a separate
-  wrapper for `llvm-ar`. Rust projects with C sources set `TARGET_CC` and `TARGET_AR` to these
-  scripts in `.cargo/config.toml`
+  wrapper for `llvm-ar`. The Cargo wrapper selects both for target builds
 - `run.sh` converts a program to an `.rpx` and starts it in Cemu, extra arguments go to Cemu
 - `cemu/` builds a headless runner from the main branch of [Cemu](https://github.com/cemu-project/Cemu)
   with `cemu/patches/`: Cemu's own interpreter, RPL loader, coreinit (threads, scheduler, memory,
-  time and the FSA file functions), nlibnss's random bytes and the FSA of IOSU on a host folder as
+  time and the FSA file functions), nlibnss random bytes, nsysnet sockets, and the FSA of IOSU on a host folder as
   the SD card, without the GPU, audio, input, JIT or GUI. `cemu/runner.cpp` replaces Cemu's system
   startup and stubs the rest of Cemu, `cemu/shim/` has the few parts of boost, glm, wxWidgets, X11,
   GTK, curl and the window system that Cemu's headers need. The other system libraries aren't
   there, so it doesn't run the graphical examples, use the normal Cemu for those
-- `test/` is the Wii U program run by `./build.sh test`
+- `test/c/` and `test/rust/` hold the Wii U acceptance suites run by `./build.sh test`
 
 ## Test
 
 Install a C++20 compiler and zlib in addition to the toolchain's normal dependencies.
-Run `./build.sh test` to build the toolchain, `cemu-runner` and the test program in
-`../../target/wiiu-toolchain/`, then run the guest suite with a new user folder
-`../../target/wiiu-toolchain/test/cemu/`, whose `sdcard/` is the SD card.
-`cargo xtask check-others` runs this suite and builds both the Wii and Wii U C and Rust examples.
+Run `./build.sh test` to build both suites and `cemu-runner` in
+`../../target/wiiu-toolchain/`. Each guest gets a fresh user folder whose `sdcard/` is
+its SD card. `cargo xtask check-others` runs both suites and builds the Wii and Wii U C
+and Rust examples.
 
-The guest suite checks constructors, finalizers, memory functions at different alignments,
+The Rust suite covers threads, synchronization,
+thread-local storage, clocks, environment, files, processes, networking and randomness.
+It checks the platform-specific filesystem and process errors, IPv4 loopback and
+a separate panic launch that must print the panic message and exit with status 134.
+The randomness checks cover both `std` hash seeding and the workspace's `getrandom`
+crate, including fills that span multiple native `getentropy` calls.
+
+The C suite checks constructors, finalizers, memory functions at different alignments,
 heap alignment and realloc preservation, calloc overflow, printf and scanf, standard streams,
 stdlib and string functions, setjmp and assert, math including IEEE edge cases, compiler-rt's
 64-bit operations, paired single matrices and vectors, threads with mutexes and the C library
@@ -107,9 +137,11 @@ first, which takes three seconds. The defaults are `run`, 60 seconds and `cemu-r
 temporary folder as the user folder, set `CEMU_RUNNER_LOG` to also print Cemu's log.
 
 ```sh
-../../target/wiiu-toolchain/cemu-runner ../../target/wiiu-toolchain/test/test.rpx test 60 ../../target/wiiu-toolchain/test/cemu
-../../target/wiiu-toolchain/cemu-runner ../../target/wiiu-toolchain/test/test.rpx run
+../../target/wiiu-toolchain/cemu-runner test/c/target/test.rpx test 60 test/c/target/manual-cemu
+../../target/wiiu-toolchain/cemu-runner test/c/target/test.rpx run
 ```
+
+An optional final argument supplies space-delimited arguments to the guest.
 
 Only Cemu's `src/` is checked out, without its submodules, with [fmt](https://github.com/fmtlib/fmt)
 12.0.0 and [pugixml](https://github.com/zeux/pugixml) v1.15 next to it. Its patches work like the
@@ -128,6 +160,8 @@ other repos, `./build.sh export-patches` also writes `../../target/wiiu-toolchai
   CSPRNG, with the error codes of [cafe-sys](https://github.com/rust-wiiu/cafe-sys). The headless
   runner links the implementation, and the guest suite checks NSS errors, fresh output and
   reinitialization through `getentropy()`.
+- `0007` translates host connection errors to nsysnet error codes, implements the
+  `TCP_NODELAY` getter, handles zero-length UDP sends and fixes the `EAFNOSUPPORT` number.
 
 ## Shaders
 
@@ -160,26 +194,12 @@ The wut patches:
 
 - `0001` adds wutpicolibc, which replaces wutcrt, wutnewlib and wutmalloc: `__rpx_start` runs the
   constructors and `main`, `malloc` uses the default heap of Cafe OS, the standard streams write
-  lines to `OSReport` and `gettimeofday` reads the time base
+  lines to `OSReport`, and Cafe OS supplies clocks, mutexes and per-thread `errno`
 - `0002` adds `GFDGetTextureInPlace` to libgfd, which points a texture at its image and mipmaps in a
   loaded `.gtx` file instead of copying them
-- `0003` implements picolibc's locks with Cafe OS mutexes, so threads can share the streams and the
-  other C library state, and `nanosleep` and `usleep` with `OSSleepTicks`. Without thread-local
-  storage the threads share `errno`
-- `0004` implements picolibc's POSIX file functions (`open`, `read`, `stat`, `opendir`, ...) on the
-  SD card with FSA, see below. picolibc's stdio only calls these functions, so without it no file
-  could be opened
-- `0005` implements `clock_gettime`, `clock_getres` and `times`, which `clock()` adds up: the
-  real time is the time base, the monotonic time the system time and the processor time counts
-  from the start of the program. picolibc only declares the monotonic and processor clocks with
-  `_GNU_SOURCE`
-- `0006` adds `geteuid`, `fchown`, `fchmod`, `readlink` and `utimes` for a single user system
-  without links, and lets sequential reads and writes skip seeking and looking up the file size
-- `0007` prints the console lines with `"%s"`, because Cemu's `OSReport` doesn't support the `*`
-  precision
-- `0008` fills the gap with zeros when writing after seeking past the end of a file, which FSA
-  allows like Cemu
-- `0009` adds `wutpicolibc/wut_entropy.c`, which supplies picolibc's `getentropy()`
+- `0003` implements picolibc's POSIX file functions (`open`, `read`, `stat`, `opendir`, ...) on the
+  SD card with FSA. A Cafe OS mutex protects the filesystem state shared by C and Rust callers
+- `0004` adds `wutpicolibc/wut_entropy.c`, which supplies picolibc's `getentropy()`
   through `NSSGetRandom`. C programs use `<unistd.h>`, Rust programs use `wut-sys`
   or the workspace's `getrandom` replacement.
 

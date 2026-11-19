@@ -1,0 +1,361 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Sun, 1 Nov 2026 21:09:17 +0100
+Subject: [PATCH] Implement the picolibc runtime on Cafe OS
+
+---
+ libraries/wutpicolibc/wut_picolibc.c | 345 +++++++++++++++++++++++++++
+ 1 file changed, 345 insertions(+)
+ create mode 100644 libraries/wutpicolibc/wut_picolibc.c
+
+diff --git a/libraries/wutpicolibc/wut_picolibc.c b/libraries/wutpicolibc/wut_picolibc.c
+new file mode 100644
+index 0000000..ab24b9a
+--- /dev/null
++++ b/libraries/wutpicolibc/wut_picolibc.c
+@@ -0,0 +1,345 @@
++/*
++ * The startup code and the system functions picolibc leaves to the platform:
++ * Cafe OS calls __rpx_start, malloc uses the default heap of coreinit, the
++ * standard streams write to OSReport, the clock reads the time base, sleeping
++ * waits in the scheduler and the C library locks are Cafe OS mutexes.
++ */
++
++// picolibc only declares the monotonic and processor clocks for GNU sources
++#define _GNU_SOURCE
++#include <coreinit/debug.h>
++#include <coreinit/exit.h>
++#include <coreinit/memdefaultheap.h>
++#include <coreinit/memexpheap.h>
++#include <coreinit/mutex.h>
++#include <coreinit/thread.h>
++#include <coreinit/time.h>
++#include <errno.h>
++#include <stdint.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <sys/lock.h>
++#include <sys/time.h>
++#include <sys/times.h>
++#include <time.h>
++#include <unistd.h>
++
++// The default heap of Cafe OS aligns its blocks to 64 bytes, like wutmalloc
++#define HEAP_ALIGNMENT 0x40
++// The time base starts at 2000-01-01, the Unix epoch 30 years earlier
++#define EPOCH_DIFF_SECS 946684800ull
++
++int
++main(int argc, char **argv);
++void
++__libc_init_array(void);
++void
++__wut_init_fs(void);
++
++// Cafe OS mutexes count recursive locks, so they serve both kinds of locks
++struct __lock
++{
++   OSMutex mutex;
++};
++
++struct __lock __lock___libc_recursive_mutex;
++
++// The system time when the program started, the processor time counts from it
++static OSTime sStartTime;
++
++void
++__rpx_start(int argc, char **argv)
++{
++   sStartTime = OSGetSystemTime();
++   OSInitMutex(&__lock___libc_recursive_mutex.mutex);
++   __wut_init_fs();
++   __libc_init_array();
++   exit(main(argc, argv));
++}
++
++void
++_exit(int status)
++{
++   RPLWRAP(exit)(status);
++   __builtin_unreachable();
++}
++
++void *
++malloc(size_t size)
++{
++   return MEMAllocFromDefaultHeapEx(size, HEAP_ALIGNMENT);
++}
++
++void *
++memalign(size_t alignment, size_t size)
++{
++   if (!alignment || (alignment & (alignment - 1))) {
++      errno = EINVAL;
++      return NULL;
++   }
++   size_t rounded;
++   if (alignment > INT32_MAX || __builtin_add_overflow(size, alignment - 1, &rounded)) {
++      errno = ENOMEM;
++      return NULL;
++   }
++   void *pointer = MEMAllocFromDefaultHeapEx(rounded & ~(alignment - 1),
++                                            alignment > HEAP_ALIGNMENT ? alignment : HEAP_ALIGNMENT);
++   if (!pointer) {
++      errno = ENOMEM;
++   }
++   return pointer;
++}
++
++void *
++aligned_alloc(size_t alignment, size_t size)
++{
++   if (!alignment || size % alignment) {
++      errno = EINVAL;
++      return NULL;
++   }
++   return memalign(alignment, size);
++}
++
++int
++posix_memalign(void **pointer, size_t alignment, size_t size)
++{
++   if (!alignment || alignment % sizeof(void *) || (alignment & (alignment - 1))) {
++      return EINVAL;
++   }
++   int savedErrno = errno;
++   void *aligned = memalign(alignment, size);
++   errno = savedErrno;
++   if (!aligned) {
++      return ENOMEM;
++   }
++   *pointer = aligned;
++   return 0;
++}
++
++void *
++calloc(size_t count, size_t size)
++{
++   size_t total;
++   if (__builtin_mul_overflow(count, size, &total)) {
++      return NULL;
++   }
++
++   void *pointer = malloc(total);
++   if (pointer) {
++      memset(pointer, 0, total);
++   }
++   return pointer;
++}
++
++void
++free(void *pointer)
++{
++   if (pointer) {
++      MEMFreeToDefaultHeap(pointer);
++   }
++}
++
++size_t
++malloc_usable_size(void *pointer)
++{
++   return pointer ? MEMGetSizeForMBlockExpHeap(pointer) : 0;
++}
++
++void *
++realloc(void *pointer, size_t size)
++{
++   void *resized = malloc(size);
++   if (resized && pointer) {
++      size_t oldSize = malloc_usable_size(pointer);
++      memcpy(resized, pointer, oldSize < size ? oldSize : size);
++      free(pointer);
++   }
++   return resized;
++}
++
++// OSReport prints whole lines, so the streams buffer until a newline or a
++// full buffer
++static char sLine[257];
++static size_t sLineLength;
++
++static int
++consoleFlush(FILE *file)
++{
++   (void)file;
++   if (sLineLength > 0) {
++      // Cemu's OSReport doesn't take a precision, so the line ends with a zero
++      sLine[sLineLength] = '\0';
++      OSReport("%s", sLine);
++      sLineLength = 0;
++   }
++   return 0;
++}
++
++static int
++consolePut(char c, FILE *file)
++{
++   sLine[sLineLength++] = c;
++   if (c == '\n' || sLineLength == sizeof(sLine) - 1) {
++      consoleFlush(file);
++   }
++   return (unsigned char)c;
++}
++
++static FILE sConsole = FDEV_SETUP_STREAM(consolePut, NULL, consoleFlush, _FDEV_SETUP_WRITE);
++FILE *const stdin  = &sConsole;
++FILE *const stdout = &sConsole;
++FILE *const stderr = &sConsole;
++
++// The real time is the time base, the monotonic time the system time since the console started
++int
++clock_gettime(clockid_t clock, struct timespec *ts)
++{
++   OSTime time;
++   uint64_t epoch = 0;
++   switch (clock) {
++   case CLOCK_REALTIME:
++      time  = OSGetTime();
++      epoch = EPOCH_DIFF_SECS;
++      break;
++   case CLOCK_MONOTONIC:
++      time = OSGetSystemTime();
++      break;
++   case CLOCK_PROCESS_CPUTIME_ID:
++      time = OSGetSystemTime() - sStartTime;
++      break;
++   default:
++      errno = EINVAL;
++      return -1;
++   }
++   uint64_t seconds = OSTicksToSeconds(time);
++   ts->tv_sec       = (time_t)(seconds + epoch);
++   ts->tv_nsec      = (long)OSTicksToNanoseconds(time - OSSecondsToTicks(seconds));
++   return 0;
++}
++
++// All clocks count time base ticks
++int
++clock_getres(clockid_t clock, struct timespec *resolution)
++{
++   if (clock != CLOCK_REALTIME && clock != CLOCK_MONOTONIC && clock != CLOCK_PROCESS_CPUTIME_ID) {
++      errno = EINVAL;
++      return -1;
++   }
++   if (resolution) {
++      *resolution = (struct timespec){.tv_nsec = (long)OSTicksToNanoseconds(1) + 1};
++   }
++   return 0;
++}
++
++int
++gettimeofday(struct timeval *restrict tv, void *restrict tz)
++{
++   (void)tz;
++   struct timespec ts;
++   clock_gettime(CLOCK_REALTIME, &ts);
++   tv->tv_sec  = ts.tv_sec;
++   tv->tv_usec = (suseconds_t)(ts.tv_nsec / 1000);
++   return 0;
++}
++
++// clock() adds these up, the program has the processor to itself
++clock_t
++times(struct tms *buffer)
++{
++   clock_t time = (clock_t)(OSTicksToMicroseconds(OSGetSystemTime() - sStartTime) / (1000000 / CLOCKS_PER_SEC));
++   *buffer      = (struct tms){.tms_utime = time};
++   return time;
++}
++
++// Nothing interrupts the sleep, so there is never a remaining time
++int
++nanosleep(const struct timespec *duration, struct timespec *remaining)
++{
++   (void)remaining;
++   if (duration->tv_sec < 0 || duration->tv_nsec < 0 || duration->tv_nsec >= 1000000000) {
++      errno = EINVAL;
++      return -1;
++   }
++   OSSleepTicks(OSSecondsToTicks((uint64_t)duration->tv_sec) + OSNanosecondsToTicks(duration->tv_nsec));
++   return 0;
++}
++
++int
++usleep(useconds_t microseconds)
++{
++   OSSleepTicks(OSMicrosecondsToTicks(microseconds));
++   return 0;
++}
++
++static void
++lockInit(_LOCK_T *lock)
++{
++   *lock = malloc(sizeof(struct __lock));
++   if (*lock) {
++      OSInitMutex(&(*lock)->mutex);
++   }
++}
++
++void
++__retarget_lock_init(_LOCK_T *lock)
++{
++   lockInit(lock);
++}
++
++void
++__retarget_lock_init_recursive(_LOCK_T *lock)
++{
++   lockInit(lock);
++}
++
++void
++__retarget_lock_close(_LOCK_T lock)
++{
++   free(lock);
++}
++
++void
++__retarget_lock_close_recursive(_LOCK_T lock)
++{
++   free(lock);
++}
++
++void
++__retarget_lock_acquire(_LOCK_T lock)
++{
++   if (lock) {
++      OSLockMutex(&lock->mutex);
++   }
++}
++
++void
++__retarget_lock_acquire_recursive(_LOCK_T lock)
++{
++   __retarget_lock_acquire(lock);
++}
++
++void
++__retarget_lock_release(_LOCK_T lock)
++{
++   if (lock) {
++      OSUnlockMutex(&lock->mutex);
++   }
++}
++
++void
++__retarget_lock_release_recursive(_LOCK_T lock)
++{
++   __retarget_lock_release(lock);
++}
++
++// The reserved WUT slot occupies one aligned 32-bit word in each Cafe OS thread.
++typedef int ErrnoSlot __attribute__((may_alias));
++
++ErrnoSlot *
++__errno(void)
++{
++   static int startupErrno;
++   OSThread *thread = OSGetCurrentThread();
++   return thread ? (ErrnoSlot *)&thread->specific[OS_THREAD_SPECIFIC_WUT_RESERVED_0] : &startupErrno;
++}

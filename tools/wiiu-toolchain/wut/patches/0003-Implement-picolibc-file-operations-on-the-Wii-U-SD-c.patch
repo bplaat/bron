@@ -1,24 +1,19 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
 Date: Mon, 2 Nov 2026 14:00:54 +0100
-Subject: [PATCH] Implement picolibc's POSIX file functions on the SD card
+Subject: [PATCH] Implement picolibc file operations on the Wii U SD card
 
-Paths go to the SD card at /vol/external01 through FSA, which mounts
-it on first use: "sd:/" paths, absolute paths and paths relative to the
-current directory. The file functions keep their own positions, write
-zeros into the gaps after the end of a file and read and write through
-an aligned buffer when FSA can't use the caller's.
 ---
- libraries/wutpicolibc/wut_files.c | 701 ++++++++++++++++++++++++++++++
- 1 file changed, 701 insertions(+)
+ libraries/wutpicolibc/wut_files.c | 836 ++++++++++++++++++++++++++++++
+ 1 file changed, 836 insertions(+)
  create mode 100644 libraries/wutpicolibc/wut_files.c
 
 diff --git a/libraries/wutpicolibc/wut_files.c b/libraries/wutpicolibc/wut_files.c
 new file mode 100644
-index 0000000..eb74653
+index 0000000..41b52aa
 --- /dev/null
 +++ b/libraries/wutpicolibc/wut_files.c
-@@ -0,0 +1,701 @@
+@@ -0,0 +1,836 @@
 +/*
 + * picolibc's POSIX file functions on the SD card, the only device: "sd:/"
 + * paths, absolute paths and paths relative to the current directory go to
@@ -28,14 +23,16 @@ index 0000000..eb74653
 +
 +#include <coreinit/debug.h>
 +#include <coreinit/filesystem_fsa.h>
++#include <coreinit/mutex.h>
 +#include <dirent.h>
 +#include <errno.h>
 +#include <fcntl.h>
 +#include <stdbool.h>
++#include <stdio.h>
 +#include <stdlib.h>
 +#include <string.h>
-+#include <sys/lock.h>
 +#include <sys/stat.h>
++#include <sys/time.h>
 +#include <unistd.h>
 +
 +#define MAX_FILES  32
@@ -51,14 +48,39 @@ index 0000000..eb74653
 +   bool dir;
 +   int flags;
 +   uint32_t position;
++   // Where the FSA file is, sequential reads and writes don't have to seek. Seeking may go
++   // after the end, only reading and writing there show it's inside the file.
++   uint32_t fsaPosition;
++   bool fsaInFile;
 +   uint32_t handle;
 +} Handle;
 +
++#define UNKNOWN_POSITION UINT32_MAX
++
++// Serialize the shared descriptor table, FSA client, and compound file operations.
++static OSMutex sFileLock;
 +static FSAClientHandle sClient;
 +static bool sMounted;
 +// The FSA path of the current directory
 +static char sCwd[FS_MAX_PATH + 1] = MOUNT_PATH;
 +static Handle sHandles[MAX_FILES];
++
++void
++__wut_init_fs(void)
++{
++   OSInitMutex(&sFileLock);
++}
++
++static void
++unlockFiles(OSMutex **lock)
++{
++   OSUnlockMutex(*lock);
++}
++
++// Release the mutex on every return from the enclosing function.
++#define LOCK_FILES() \
++   OSMutex *fileLock __attribute__((cleanup(unlockFiles))) = &sFileLock; \
++   OSLockMutex(fileLock)
 +
 +static int
 +fail(int error)
@@ -112,7 +134,6 @@ index 0000000..eb74653
 +static bool
 +mount(void)
 +{
-+   __LIBC_LOCK();
 +   if (!sMounted) {
 +      FSAInit();
 +      sClient = FSAAddClient(NULL);
@@ -123,7 +144,6 @@ index 0000000..eb74653
 +         FSADelClient(sClient);
 +      }
 +   }
-+   __LIBC_UNLOCK();
 +   if (!sMounted) {
 +      errno = ENODEV;
 +   }
@@ -209,19 +229,16 @@ index 0000000..eb74653
 +   return fsaPath(path, buffer) ? check(FSAGetStat(sClient, buffer, fs)) : -1;
 +}
 +
-+// Takes a free file descriptor, threads may open files at the same time
++// Takes a free file descriptor with sFileLock held
 +static int
 +takeFd(bool dir, int flags, uint32_t handle)
 +{
-+   __LIBC_LOCK();
 +   for (int fd = STDERR_FILENO + 1; fd < MAX_FILES; fd++) {
 +      if (!sHandles[fd].used) {
-+         sHandles[fd] = (Handle){.used = true, .dir = dir, .flags = flags, .handle = handle};
-+         __LIBC_UNLOCK();
++         sHandles[fd] = (Handle){.used = true, .dir = dir, .flags = flags, .fsaInFile = true, .handle = handle};
 +         return fd;
 +      }
 +   }
-+   __LIBC_UNLOCK();
 +   return fail(EMFILE);
 +}
 +
@@ -244,6 +261,7 @@ index 0000000..eb74653
 +int
 +open(const char *path, int flags, ...)
 +{
++   LOCK_FILES();
 +   char buffer[FS_MAX_PATH + 1];
 +   if (!fsaPath(path, buffer)) {
 +      return -1;
@@ -286,6 +304,7 @@ index 0000000..eb74653
 +int
 +close(int fd)
 +{
++   LOCK_FILES();
 +   if (isStandardStream(fd)) {
 +      return 0;
 +   }
@@ -309,9 +328,21 @@ index 0000000..eb74653
 +   return 0;
 +}
 +
++static FSError
++seek(Handle *h, uint32_t position)
++{
++   if (h->fsaPosition == position) {
++      return FS_ERROR_OK;
++   }
++   FSError error  = FSASetPosFile(sClient, h->handle, position);
++   h->fsaPosition = error < 0 ? UNKNOWN_POSITION : position;
++   h->fsaInFile   = false;
++   return error;
++}
++
 +// Reads or writes at the current position of the FSA file, through an aligned buffer when needed
 +static ssize_t
-+transfer(const Handle *h, void *data, size_t size, bool write)
++transfer(Handle *h, void *data, size_t size, bool write)
 +{
 +   __attribute__((aligned(FSA_ALIGNMENT))) uint8_t aligned[512];
 +   size_t done = 0;
@@ -329,9 +360,15 @@ index 0000000..eb74653
 +      }
 +      FSError count = write ? FSAWriteFile(sClient, buffer, 1, part, h->handle, 0)
 +                            : FSAReadFile(sClient, buffer, 1, part, h->handle, 0);
++      if (count == FS_ERROR_END_OF_FILE) {
++         break;
++      }
 +      if (count < 0) {
++         h->fsaPosition = UNKNOWN_POSITION;
 +         return done ? (ssize_t)done : check(count);
 +      }
++      h->fsaPosition += count;
++      h->fsaInFile = h->fsaInFile || count > 0;
 +      if (!write && buffer == aligned) {
 +         memcpy((uint8_t *)data + done, aligned, count);
 +      }
@@ -345,13 +382,13 @@ index 0000000..eb74653
 +
 +// Writes zeros up to the end, FAT doesn't clear new clusters
 +static int
-+zeroFill(const Handle *h, uint32_t start, uint32_t end)
++zeroFill(Handle *h, uint32_t start, uint32_t end)
 +{
 +   static const uint8_t zeros[512] = {0};
 +   if (start >= end) {
 +      return 0;
 +   }
-+   if (check(FSASetPosFile(sClient, h->handle, start)) == -1) {
++   if (check(seek(h, start)) == -1) {
 +      return -1;
 +   }
 +   while (start < end) {
@@ -372,21 +409,23 @@ index 0000000..eb74653
 +   if (fd == STDIN_FILENO) {
 +      return 0;
 +   }
++   LOCK_FILES();
 +   Handle *h = getHandle(fd, false);
-+   uint32_t fileLength;
-+   if (!h || fileSize(h, &fileLength) == -1) {
++   if (!h) {
 +      return -1;
 +   }
 +   if ((h->flags & O_ACCMODE) == O_WRONLY) {
 +      return fail(EBADF);
 +   }
-+   if (h->position >= fileLength || !size) {
++   if (!size) {
 +      return 0;
 +   }
-+   if (size > fileLength - h->position) {
-+      size = fileLength - h->position;
++   // Cafe OS doesn't seek after the end, where there is nothing to read
++   FSError error = seek(h, h->position);
++   if (error == FS_ERROR_OUT_OF_RANGE) {
++      return 0;
 +   }
-+   if (check(FSASetPosFile(sClient, h->handle, h->position)) == -1) {
++   if (check(error) == -1) {
 +      return -1;
 +   }
 +   ssize_t count = transfer(h, data, size, false);
@@ -399,15 +438,13 @@ index 0000000..eb74653
 +ssize_t
 +write(int fd, const void *data, size_t size)
 +{
++   // The standard streams share the console stream, so the output stays in order
 +   if (fd == STDOUT_FILENO || fd == STDERR_FILENO) {
-+      if (size) {
-+         OSReport("%.*s", (int)size, (const char *)data);
-+      }
-+      return size;
++      return fwrite(data, 1, size, stdout) == size && fflush(stdout) == 0 ? (ssize_t)size : fail(EIO);
 +   }
++   LOCK_FILES();
 +   Handle *h = getHandle(fd, false);
-+   uint32_t fileLength;
-+   if (!h || fileSize(h, &fileLength) == -1) {
++   if (!h) {
 +      return -1;
 +   }
 +   if ((h->flags & O_ACCMODE) == O_RDONLY) {
@@ -416,12 +453,18 @@ index 0000000..eb74653
 +   if (!size) {
 +      return 0;
 +   }
-+   if (h->flags & O_APPEND) {
-+      h->position = fileLength;
-+   }
-+   if (zeroFill(h, fileLength, h->position) == -1 ||
-+       check(FSASetPosFile(sClient, h->handle, h->position)) == -1) {
-+      return -1;
++   // Only appending and writing elsewhere than the last read or write need the size of the file
++   if ((h->flags & O_APPEND) || h->position != h->fsaPosition || !h->fsaInFile) {
++      uint32_t fileLength;
++      if (fileSize(h, &fileLength) == -1) {
++         return -1;
++      }
++      if (h->flags & O_APPEND) {
++         h->position = fileLength;
++      }
++      if (zeroFill(h, fileLength, h->position) == -1 || check(seek(h, h->position)) == -1) {
++         return -1;
++      }
 +   }
 +   ssize_t count = transfer(h, (void *)data, size, true);
 +   if (count > 0) {
@@ -434,12 +477,13 @@ index 0000000..eb74653
 +off_t
 +lseek(int fd, off_t offset, int whence)
 +{
++   LOCK_FILES();
 +   if (isStandardStream(fd)) {
 +      return fail(ESPIPE);
 +   }
 +   Handle *h = getHandle(fd, false);
 +   uint32_t fileLength;
-+   if (!h || fileSize(h, &fileLength) == -1) {
++   if (!h) {
 +      return -1;
 +   }
 +   off_t base;
@@ -451,6 +495,9 @@ index 0000000..eb74653
 +      base = h->position;
 +      break;
 +   case SEEK_END:
++      if (fileSize(h, &fileLength) == -1) {
++         return -1;
++      }
 +      base = fileLength;
 +      break;
 +   default:
@@ -467,6 +514,7 @@ index 0000000..eb74653
 +int
 +ftruncate(int fd, off_t length)
 +{
++   LOCK_FILES();
 +   Handle *h = getHandle(fd, false);
 +   uint32_t fileLength;
 +   if (!h || fileSize(h, &fileLength) == -1) {
@@ -481,15 +529,17 @@ index 0000000..eb74653
 +   if (length > fileLength) {
 +      return zeroFill(h, fileLength, length);
 +   }
-+   if (check(FSASetPosFile(sClient, h->handle, length)) == -1) {
++   if (check(seek(h, length)) == -1 || check(FSATruncateFile(sClient, h->handle)) == -1) {
 +      return -1;
 +   }
-+   return check(FSATruncateFile(sClient, h->handle));
++   h->fsaInFile = true;
++   return 0;
 +}
 +
 +int
 +fsync(int fd)
 +{
++   LOCK_FILES();
 +   Handle *h = getHandle(fd, false);
 +   return h ? check(FSAFlushFile(sClient, h->handle)) : -1;
 +}
@@ -503,6 +553,7 @@ index 0000000..eb74653
 +int
 +fstat(int fd, struct stat *st)
 +{
++   LOCK_FILES();
 +   if (isStandardStream(fd)) {
 +      *st = (struct stat){.st_mode = S_IFCHR | 0666};
 +      return 0;
@@ -519,6 +570,7 @@ index 0000000..eb74653
 +int
 +stat(const char *path, struct stat *st)
 +{
++   LOCK_FILES();
 +   char buffer[FS_MAX_PATH + 1];
 +   FSAStat fs;
 +   if (statPath(path, buffer, &fs) == -1) {
@@ -554,6 +606,7 @@ index 0000000..eb74653
 +int
 +fcntl(int fd, int command, ...)
 +{
++   LOCK_FILES();
 +   if (!isStandardStream(fd) && !getHandle(fd, false)) {
 +      return -1;
 +   }
@@ -568,9 +621,57 @@ index 0000000..eb74653
 +   }
 +}
 +
++// A single user system, the SD card has no owners, permissions to change, links or settable
++// times
++uid_t
++getuid(void)
++{
++   return 0;
++}
++
++uid_t
++geteuid(void)
++{
++   return 0;
++}
++
++int
++fchmod(int fd, mode_t mode)
++{
++   LOCK_FILES();
++   (void)mode;
++   return isStandardStream(fd) || getHandle(fd, false) ? fail(ENOSYS) : -1;
++}
++
++int
++fchown(int fd, uid_t owner, gid_t group)
++{
++   LOCK_FILES();
++   (void)owner, (void)group;
++   return isStandardStream(fd) || getHandle(fd, false) ? fail(ENOSYS) : -1;
++}
++
++ssize_t
++readlink(const char *path, char *buffer, size_t size)
++{
++   LOCK_FILES();
++   (void)buffer, (void)size;
++   FSAStat fs;
++   char fsa[FS_MAX_PATH + 1];
++   return statPath(path, fsa, &fs) == -1 ? -1 : fail(EINVAL);
++}
++
++int
++utimes(const char *path, const struct timeval times[2])
++{
++   (void)path, (void)times;
++   return fail(ENOSYS);
++}
++
 +int
 +mkdir(const char *path, mode_t mode)
 +{
++   LOCK_FILES();
 +   char buffer[FS_MAX_PATH + 1];
 +   if (!fsaPath(path, buffer)) {
 +      return -1;
@@ -583,6 +684,7 @@ index 0000000..eb74653
 +static int
 +removePath(const char *path, bool dir)
 +{
++   LOCK_FILES();
 +   char buffer[FS_MAX_PATH + 1];
 +   FSAStat fs;
 +   if (statPath(path, buffer, &fs) == -1) {
@@ -609,6 +711,7 @@ index 0000000..eb74653
 +int
 +rename(const char *oldPath, const char *newPath)
 +{
++   LOCK_FILES();
 +   char oldBuffer[FS_MAX_PATH + 1], newBuffer[FS_MAX_PATH + 1];
 +   if (!fsaPath(oldPath, oldBuffer) || !fsaPath(newPath, newBuffer)) {
 +      return -1;
@@ -619,6 +722,7 @@ index 0000000..eb74653
 +int
 +chdir(const char *path)
 +{
++   LOCK_FILES();
 +   char buffer[FS_MAX_PATH + 1];
 +   FSAStat fs;
 +   struct stat st;
@@ -629,16 +733,14 @@ index 0000000..eb74653
 +   if (!S_ISDIR(st.st_mode)) {
 +      return fail(ENOTDIR);
 +   }
-+   __LIBC_LOCK();
 +   strcpy(sCwd, buffer);
-+   __LIBC_UNLOCK();
 +   return 0;
 +}
 +
 +char *
 +getcwd(char *buffer, size_t size)
 +{
-+   __LIBC_LOCK();
++   LOCK_FILES();
 +   // The root is sd:/, other directories have no slash at their end
 +   const char *path = sCwd + sizeof(MOUNT_PATH) - 1;
 +   size_t length    = strlen(path);
@@ -647,7 +749,6 @@ index 0000000..eb74653
 +      memcpy(buffer, "sd:/", 5);
 +      memcpy(buffer + 3, path, length ? length + 1 : 0);
 +   }
-+   __LIBC_UNLOCK();
 +   if (!fits) {
 +      errno = ERANGE;
 +      return NULL;
@@ -658,6 +759,7 @@ index 0000000..eb74653
 +DIR *
 +opendir(const char *path)
 +{
++   LOCK_FILES();
 +   char buffer[FS_MAX_PATH + 1];
 +   FSADirectoryHandle handle;
 +   if (!fsaPath(path, buffer) || check(FSAOpenDir(sClient, buffer, &handle)) == -1) {
@@ -677,6 +779,7 @@ index 0000000..eb74653
 +struct dirent *
 +readdir(DIR *dir)
 +{
++   LOCK_FILES();
 +   Handle *h = getHandle(dir->fd, true);
 +   FSADirectoryEntry entry;
 +   if (!h) {
@@ -702,6 +805,7 @@ index 0000000..eb74653
 +void
 +rewinddir(DIR *dir)
 +{
++   LOCK_FILES();
 +   Handle *h = getHandle(dir->fd, true);
 +   if (h) {
 +      FSARewindDir(sClient, h->handle);
@@ -711,6 +815,7 @@ index 0000000..eb74653
 +int
 +closedir(DIR *dir)
 +{
++   LOCK_FILES();
 +   Handle *h = getHandle(dir->fd, true);
 +   if (!h) {
 +      return -1;
@@ -719,4 +824,29 @@ index 0000000..eb74653
 +   h->used    = false;
 +   free(dir);
 +   return result;
++}
++
++char *
++realpath(const char *path, char *output)
++{
++   LOCK_FILES();
++   char resolved[FS_MAX_PATH + 1];
++   FSAStat fs;
++   if (statPath(path, resolved, &fs) == -1) {
++      return NULL;
++   }
++   const char *tail = resolved + sizeof(MOUNT_PATH) - 1;
++   if (!*tail) {
++      tail = "/";
++   }
++   if (!output) {
++      output = malloc(strlen(tail) + sizeof("sd:"));
++      if (!output) {
++         errno = ENOMEM;
++         return NULL;
++      }
++   }
++   memcpy(output, "sd:", 3);
++   strcpy(output + 3, tail);
++   return output;
 +}

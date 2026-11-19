@@ -2,7 +2,7 @@
 // RPL loader and FSA, without the GPU, audio, input, JIT or GUI. It replaces Cemu's CafeSystem.cpp
 // and stubs what the OS emulation calls of the rest of Cemu.
 //
-// Usage: cemu-runner <program.rpx> [test | run] [seconds] [user folder]
+// Usage: cemu-runner <program.rpx> [test | run] [seconds] [user folder] [guest command line]
 // The program's OSReport lines go to stderr. A test finishes at a "DONE <n> failed" line and fails
 // when n isn't 0, a run returns the program's exit status. Both fail when the program doesn't
 // finish in time (60 seconds by default). The user folder (cemu-runner in the temporary folder by
@@ -34,6 +34,7 @@
 #include "Cafe/OS/libs/coreinit/coreinit_Thread.h"
 #include "Cafe/OS/libs/nlibnss/nlibnss.h"
 #include "Cafe/OS/libs/nn_act/nn_act.h"
+#include "Cafe/OS/libs/nsysnet/nsysnet.h"
 #include "Cafe/TitleList/TitleInfo.h"
 #include "Common/SysAllocator.h"
 #include "WindowSystem.h"
@@ -52,6 +53,7 @@ uint64 s_loggingFlagMask = cemuLog_getFlag(LogType::Force) | cemuLog_getFlag(Log
 
 // The program's finish: the failures of a test or the exit status of a run
 static std::atomic<int> s_failures{-1}, s_exitStatus{-1};
+static std::string s_guestCommandLine;
 
 // OSReport lines come as "[OSConsole] <line>"
 bool cemuLog_log(LogType type, std::string_view text) {
@@ -105,7 +107,7 @@ void WindowSystem::ShowErrorDialog(std::string_view message, std::string_view, s
 
 // The emulated system libraries, the others aren't there
 std::span<COSModule*> GetCOSModules() {
-    static COSModule* modules[] = {coreinit::GetModule(), nlibnss::GetModule()};
+    static COSModule* modules[] = {coreinit::GetModule(), nlibnss::GetModule(), nsysnet::GetModule()};
     return modules;
 }
 
@@ -131,6 +133,14 @@ uint8* extractCafeDefaultFont(sint32* size) {
 }
 sint32 iosuIoctl_pushAndWait(uint32, ioQueueEntry_t*) {
     return -1;
+}
+uint8* iosuCrypto_getCertificateDataById(sint32, sint32* size) {
+    *size = 0;
+    return nullptr;
+}
+uint8* iosuCrypto_getCertificatePrivateKeyById(sint32, sint32* size) {
+    *size = 0;
+    return nullptr;
 }
 void nnNfp_update() {}
 namespace snd_core {
@@ -162,7 +172,7 @@ CafeConsoleRegion GetPlatformRegion() {
     return CafeConsoleRegion::EUR;
 }
 std::string GetForegroundTitleArgStr() {
-    return {};
+    return s_guestCommandLine;
 }
 CosCapabilityBits GetForegroundTitleCosCapabilities(CosCapabilityGroup) {
     return CosCapabilityBits::All;
@@ -217,8 +227,10 @@ static bool load(const fs::path& rpx) {
 }
 
 int main(int argc, char** argv) {
-    if (argc < 2 || argc > 5)
-        return fail("Usage: cemu-runner <program.rpx> [test | run] [seconds] [user folder]");
+    if (argc < 2 || argc > 6)
+        return fail("Usage: cemu-runner <program.rpx> [test | run] [seconds] [user folder] [guest command line]");
+    if (argc == 6)
+        s_guestCommandLine = fs::path(argv[1]).filename().string() + " " + argv[5];
     std::string_view mode = argc > 2 ? argv[2] : "run";
     int seconds = argc > 3 ? atoi(argv[3]) : 60;
     if ((mode != "test" && mode != "run") || seconds <= 0)

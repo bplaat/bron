@@ -180,6 +180,6 @@ jobs:
       - uses: actions/cache@v6.1.0
         with:
           path: target/wiiu-toolchain
-          key: linux-x86_64-wiiu-toolchain-${{ hashFiles('tools/wiiu-toolchain/**', 'lib/graphics/image/**', 'Cargo.lock') }}
+          key: linux-x86_64-wiiu-toolchain-${{ hashFiles('tools/wiiu-toolchain/**', '!tools/wiiu-toolchain/test/**', 'lib/graphics/image/**', 'Cargo.lock') }}
       - name: Build assembly examples and games, run NDS, Wii and Wii U tests, and build Wii and Wii U examples and PlaatCraft for the Wii
         run: cargo xtask check-others

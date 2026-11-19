@@ -7,7 +7,7 @@ Provide picolibc getentropy in wutpicolibc through nlibnss. Initialize
 NSS when needed, keep the service available to other callers and
 report failures with POSIX errno values.
 ---
- libraries/wutpicolibc/wut_entropy.c | 44 ++++++++++++++++++++++++++++++++++++++++
+ libraries/wutpicolibc/wut_entropy.c | 44 +++++++++++++++++++++++++++++
  1 file changed, 44 insertions(+)
  create mode 100644 libraries/wutpicolibc/wut_entropy.c
 
