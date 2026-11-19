@@ -4,14 +4,12 @@
  * SPDX-License-Identifier: MIT
  */
 
-#![no_std]
-#![no_main]
 #![allow(unsafe_op_in_unsafe_fn)]
 
-use alloc::format;
-use core::ffi::{c_int, c_void};
+use core::ffi::c_void;
 use core::ptr;
 use core::sync::atomic::{AtomicBool, Ordering};
+use std::process::ExitCode;
 
 use libogc_sys::*;
 
@@ -250,24 +248,23 @@ extern "C" fn power() {
     POWER_PRESSED.store(true, Ordering::Relaxed);
 }
 
-#[unsafe(export_name = "main")]
-pub extern "C" fn app_main() -> c_int {
+fn main() -> ExitCode {
     unsafe {
         VIDEO_Init();
         VIDEO_SetBlack(true);
         let mode = VIDEO_GetPreferredMode(ptr::null_mut());
         if mode.is_null() {
-            return 1;
+            return ExitCode::FAILURE;
         }
         let mode_ref = &*mode;
         let Some(framebuffer0) = Framebuffer::new(mode_ref) else {
-            return 1;
+            return ExitCode::FAILURE;
         };
         let Some(framebuffer1) = Framebuffer::new(mode_ref) else {
-            return 1;
+            return ExitCode::FAILURE;
         };
         let Some(fifo) = AlignedBuffer::new_zeroed(FIFO_SIZE) else {
-            return 1;
+            return ExitCode::FAILURE;
         };
         let mut display = FrameState::new([framebuffer0, framebuffer1]);
         let aspect = if CONF_GetAspectRatio() == CONF_ASPECT_16_9 {
@@ -331,7 +328,7 @@ pub extern "C" fn app_main() -> c_int {
 
         let Some(mut scene) = CanvasScene::new(aspect, mode_ref, screen_width, screen_height)
         else {
-            return 1;
+            return ExitCode::FAILURE;
         };
         while !POWER_PRESSED.load(Ordering::Relaxed) {
             WPAD_ScanPads();
@@ -352,5 +349,5 @@ pub extern "C" fn app_main() -> c_int {
             SYS_ResetSystem(SYS_POWEROFF, 0, 0);
         }
     }
-    0
+    ExitCode::SUCCESS
 }

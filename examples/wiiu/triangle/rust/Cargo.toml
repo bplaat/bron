@@ -1,5 +1,3 @@
-cargo-features = ["panic-immediate-abort"]
-
 [package]
 name = "triangle"
 version = "0.1.0"
@@ -7,12 +5,3 @@ edition = "2024"
 
 [dependencies]
 wut-sys = { path = "../../../../tools/wiiu-toolchain/wut-sys" }
-
-[profile.dev]
-opt-level = "s"
-panic = "immediate-abort"
-
-[profile.release]
-opt-level = "s"
-panic = "immediate-abort"
-codegen-units = 1

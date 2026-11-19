@@ -4,13 +4,11 @@
  * SPDX-License-Identifier: MIT
  */
 
-#![no_std]
-#![no_main]
-
 use core::ffi::{c_int, c_void};
 use core::ptr;
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicBool, Ordering};
+use std::process::ExitCode;
 
 use libogc_sys::*;
 
@@ -187,24 +185,23 @@ fn home_pressed() -> bool {
         .any(|channel| unsafe { WPAD_ButtonsDown(channel) } & WPAD_BUTTON_HOME != 0)
 }
 
-#[unsafe(export_name = "main")]
-pub extern "C" fn main() -> c_int {
+fn main() -> ExitCode {
     unsafe {
         VIDEO_Init();
         VIDEO_SetBlack(true);
         let mode = VIDEO_GetPreferredMode(ptr::null_mut());
         if mode.is_null() {
-            return 1;
+            return ExitCode::FAILURE;
         }
         let mode_ref = &*mode;
         let Some(framebuffer0) = Framebuffer::new(mode_ref) else {
-            return 1;
+            return ExitCode::FAILURE;
         };
         let Some(framebuffer1) = Framebuffer::new(mode_ref) else {
-            return 1;
+            return ExitCode::FAILURE;
         };
         let Some(fifo) = AlignedBuffer::new_zeroed(FIFO_SIZE) else {
-            return 1;
+            return ExitCode::FAILURE;
         };
         let mut display = FrameState::new([framebuffer0, framebuffer1]);
         let aspect = if CONF_GetAspectRatio() == CONF_ASPECT_16_9 {
@@ -297,5 +294,5 @@ pub extern "C" fn main() -> c_int {
             SYS_ResetSystem(SYS_POWEROFF, 0, 0);
         }
     }
-    0
+    ExitCode::SUCCESS
 }

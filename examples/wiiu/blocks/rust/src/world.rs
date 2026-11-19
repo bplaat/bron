@@ -4,10 +4,6 @@
  * SPDX-License-Identifier: MIT
  */
 
-extern crate alloc;
-
-use alloc::vec::Vec;
-
 use wut_sys::{floorf, powf};
 
 pub(crate) const SIZE: usize = 64;
@@ -191,8 +187,8 @@ pub(crate) struct World {
 impl World {
     pub(crate) fn generate(seed: u32) -> Self {
         let mut world = Self {
-            voxels: alloc::vec![Block::Air; SIZE * SIZE * SIZE],
-            heights: alloc::vec![0; SIZE * SIZE],
+            voxels: vec![Block::Air; SIZE * SIZE * SIZE],
+            heights: vec![0; SIZE * SIZE],
             seed,
             sea_level: 0,
         };
@@ -335,7 +331,7 @@ impl World {
     }
 
     fn generate_heights(&mut self) {
-        let mut raw = alloc::vec![0.0; SIZE * SIZE];
+        let mut raw = vec![0.0; SIZE * SIZE];
         let (mut lowest, mut highest) = (f32::MAX, f32::MIN);
         for z in 0..SIZE {
             for x in 0..SIZE {
@@ -568,8 +564,8 @@ mod tests {
 
     fn empty_world() -> World {
         World {
-            voxels: alloc::vec![Block::Air; SIZE * SIZE * SIZE],
-            heights: alloc::vec![0; SIZE * SIZE],
+            voxels: vec![Block::Air; SIZE * SIZE * SIZE],
+            heights: vec![0; SIZE * SIZE],
             seed: 0,
             sea_level: 0,
         }

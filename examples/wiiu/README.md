@@ -19,7 +19,7 @@ brew install --cask cemu
 sudo apt install clang lld llvm make git meson ninja-build zlib1g-dev
 ```
 
-The Rust examples install the nightly toolchain by themselves with [rustup](https://rustup.rs/).
+Install [rustup](https://rustup.rs/) for Rust builds. The Cargo wrapper installs the pinned nightly and its Rust sources.
 
 From the Bron repository root, build and run a C example with make, the program ends up in `target/<name>.rpx`:
 
@@ -28,15 +28,13 @@ cd examples/wiiu/triangle/c
 make run
 ```
 
-Build and run a Rust example with cargo, `cargo run` also writes `target/wiiu/release/<name>.rpx`:
+Use the toolchain's Cargo wrapper to build a Rust example with patched `std` and run it in Cemu.
+It writes `target/powerpc-nintendo-wiiu/release/<name>.rpx` in the standalone project directory.
 
 ```sh
 cd examples/wiiu/triangle/rust
-cargo run --release
+../../../../tools/wiiu-toolchain/cargo run --release --locked
 ```
-
-The Rust examples are standalone nightly projects, separate from the main Cargo workspace.
-Run Cargo from the example directory so it loads the Wii U target and runner configuration.
 
 All examples draw on the TV with libwhb and copy the image to the GamePad. Their shaders are written in Latte
 assembly in `src/shader.vsh` and `src/shader.psh`. Their images are converted at build time to BC1

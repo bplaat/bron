@@ -6,11 +6,9 @@
 
 //! The rotating textured cube scene from the WebGPU example, on the TV and the GamePad.
 
-#![no_std]
-#![no_main]
-
-use core::ffi::{c_int, c_void};
+use core::ffi::c_void;
 use core::mem::{self, MaybeUninit};
+use std::process::ExitCode;
 
 use wut_sys::*;
 
@@ -190,13 +188,12 @@ fn cube_matrix(elapsed: f32) -> Mtx {
     matrix
 }
 
-#[unsafe(export_name = "main")]
-pub extern "C" fn main() -> c_int {
+fn main() -> ExitCode {
     unsafe {
         WHBProcInit();
         WHBGfxInit();
         let Some(mut cube) = Cube::new() else {
-            return 1;
+            return ExitCode::FAILURE;
         };
 
         // The TV renders at 1280x720 and the GamePad gets a copy at 854x480, both about 16:9
@@ -221,5 +218,5 @@ pub extern "C" fn main() -> c_int {
         WHBGfxShutdown();
         WHBProcShutdown();
     }
-    0
+    ExitCode::SUCCESS
 }

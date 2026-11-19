@@ -4,13 +4,11 @@
  * SPDX-License-Identifier: MIT
  */
 
-#![no_std]
-#![no_main]
-
 use core::f64::consts::TAU;
-use core::ffi::{c_int, c_void};
+use core::ffi::c_void;
 use core::ptr;
 use core::sync::atomic::{AtomicBool, Ordering};
+use std::process::ExitCode;
 
 use libogc_sys::*;
 
@@ -231,15 +229,14 @@ extern "C" fn power() {
     POWER_PRESSED.store(true, Ordering::Relaxed);
 }
 
-#[unsafe(export_name = "main")]
-pub extern "C" fn app_main() -> c_int {
+fn main() -> ExitCode {
     let Some(mut demo) = Demo::new() else {
-        return 1;
+        return ExitCode::FAILURE;
     };
     demo.run();
     // HOME returns to the loader, a power button turns the Wii off
     if POWER_PRESSED.load(Ordering::Relaxed) {
         unsafe { SYS_ResetSystem(SYS_POWEROFF, 0, 0) };
     }
-    0
+    ExitCode::SUCCESS
 }

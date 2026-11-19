@@ -4,8 +4,6 @@
  * SPDX-License-Identifier: MIT
  */
 
-use alloc::vec::Vec;
-
 use libogc_sys::*;
 
 use crate::materials::Materials;

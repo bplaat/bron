@@ -7,12 +7,9 @@
 //! Generates a random 64x64x64 voxel world and renders its visible block faces on the TV and the
 //! GamePad.
 
-#![no_std]
-#![no_main]
-
 use core::f64::consts::TAU;
-use core::ffi::c_int;
 use core::mem::{MaybeUninit, offset_of};
+use std::process::ExitCode;
 
 use wut_sys::*;
 
@@ -21,7 +18,6 @@ use crate::mesh::{Mesh, Vertex};
 use crate::world::World;
 
 mod materials;
-mod memory;
 mod mesh;
 mod world;
 
@@ -101,13 +97,12 @@ impl Drop for Blocks {
     }
 }
 
-#[unsafe(export_name = "main")]
-pub extern "C" fn main() -> c_int {
+fn main() -> ExitCode {
     unsafe {
         WHBProcInit();
         WHBGfxInit();
         let Some(blocks) = Blocks::new() else {
-            return 1;
+            return ExitCode::FAILURE;
         };
 
         // The TV renders at 1280x720 and the GamePad gets a copy at 854x480, both about 16:9
@@ -151,5 +146,5 @@ pub extern "C" fn main() -> c_int {
         WHBGfxShutdown();
         WHBProcShutdown();
     }
-    0
+    ExitCode::SUCCESS
 }

@@ -4,7 +4,6 @@
  * SPDX-License-Identifier: MIT
  */
 
-use core::alloc::{GlobalAlloc, Layout};
 use core::ffi::c_void;
 use core::ptr::NonNull;
 
@@ -78,18 +77,3 @@ impl Drop for HeapBuffer {
         unsafe { free(self.0.as_ptr()) }
     }
 }
-
-pub struct CHeapAllocator;
-
-unsafe impl GlobalAlloc for CHeapAllocator {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        unsafe { memalign(layout.align().max(32), layout.size().max(1)).cast() }
-    }
-
-    unsafe fn dealloc(&self, pointer: *mut u8, _layout: Layout) {
-        unsafe { free(pointer.cast()) }
-    }
-}
-
-#[global_allocator]
-static ALLOCATOR: CHeapAllocator = CHeapAllocator;

@@ -18,7 +18,7 @@ brew install --cask dolphin
 sudo apt install clang lld llvm make git meson ninja-build dolphin-emu
 ```
 
-The toolchain builds its texture converter with Cargo, so all examples need [rustup](https://rustup.rs/). The Rust examples install the nightly toolchain by themselves.
+The toolchain builds its texture converter with Cargo, so all examples need [rustup](https://rustup.rs/). The Cargo wrapper installs the pinned nightly and its Rust sources.
 
 From the Bron repository root, build and run a C example with make, the program ends up in `target/<name>.dol`:
 
@@ -27,17 +27,15 @@ cd examples/wii/triangles/c
 make run
 ```
 
-Build and run a Rust example with cargo, `cargo run` also writes `target/wii/release/<name>.dol`:
+Use the toolchain's Cargo wrapper to build a Rust example with patched `std` and run it in Dolphin.
+It writes `target/powerpc-nintendo-wii/release/<name>.dol` in the standalone project directory.
 
 ```sh
 cd examples/wii/triangles/rust
-cargo run --release
+../../../../tools/wii-toolchain/cargo run --release --locked
 ```
 
-The Rust examples are standalone nightly projects, separate from main Cargo workspace.
-Run Cargo from the example directory so it loads the Wii target and runner configuration.
-
-To run the examples on a Wii, install them all and [PlaatCraft](../../games/plaatcraft-wii) on
+To run the examples on a Wii, install them all and [PlaatCraft](../../games/plaatcraft/docs/wii.md) on
 the connected SD card from the repository root. Each program gets a Homebrew Channel folder like
 `apps/blocks-rust/` with its `meta/` name, description and icon, or add a name to install one:
 

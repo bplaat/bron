@@ -9,13 +9,9 @@ use std::{env, fs};
 
 use gxtexconv::{Format, Texture};
 
-#[path = "../../../../tools/wii-toolchain/build.rs"]
-mod wii;
-
 fn main() {
     let manifest_dir = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap());
     let out_dir = PathBuf::from(env::var_os("OUT_DIR").unwrap());
-    wii::build(manifest_dir.join("../../../../tools/wii-toolchain"));
 
     // Keep textures in Material order; materials.rs loads the concatenated image data.
     let assets = manifest_dir.join("src/assets");

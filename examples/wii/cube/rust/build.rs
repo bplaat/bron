@@ -7,9 +7,6 @@
 use std::path::{Path, PathBuf};
 use std::{env, fs};
 
-#[path = "../../../../tools/wii-toolchain/build.rs"]
-mod wii;
-
 fn main() {
     let out = PathBuf::from(env::var_os("OUT_DIR").unwrap());
     println!("cargo:rerun-if-changed=src/assets/crate.jpg");
@@ -25,5 +22,4 @@ fn main() {
         ),
     )
     .expect("write texture dimensions");
-    wii::build("../../../../tools/wii-toolchain");
 }
