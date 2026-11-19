@@ -8,10 +8,11 @@ initialization and argument errors. Use host getentropy or Windows
 BCryptGenRandom so successful calls fill fresh random bytes rather
 than passing through unsupported-function stubs.
 ---
- src/Cafe/OS/libs/nlibnss/nlibnss.cpp | 57 +++++++++++++++++++++++++++++++++++++++++
+ src/Cafe/OS/libs/nlibnss/nlibnss.cpp | 57 ++++++++++++++++++++++++++++
  1 file changed, 57 insertions(+)
 
 diff --git a/src/Cafe/OS/libs/nlibnss/nlibnss.cpp b/src/Cafe/OS/libs/nlibnss/nlibnss.cpp
+index f2da74a..0682c05 100644
 --- a/src/Cafe/OS/libs/nlibnss/nlibnss.cpp
 +++ b/src/Cafe/OS/libs/nlibnss/nlibnss.cpp
 @@ -1,8 +1,60 @@

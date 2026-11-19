@@ -52,7 +52,7 @@ index a775748..54c7a10 100644
  	INVALID_PARAM = -0x30000 - 0x21,
  	INVALID_PATH = -0x30000 - 0x22,
 diff --git a/src/Cafe/IOSU/fsa/iosu_fsa.cpp b/src/Cafe/IOSU/fsa/iosu_fsa.cpp
-index 1429d08..95ae924 100644
+index bba8b87..183fc5a 100644
 --- a/src/Cafe/IOSU/fsa/iosu_fsa.cpp
 +++ b/src/Cafe/IOSU/fsa/iosu_fsa.cpp
 @@ -59,6 +59,8 @@ namespace iosu

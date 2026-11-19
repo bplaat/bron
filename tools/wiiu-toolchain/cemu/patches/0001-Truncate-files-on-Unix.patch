@@ -11,10 +11,10 @@ emulator. It resizes the file at the current position now.
  2 files changed, 9 insertions(+), 3 deletions(-)
 
 diff --git a/src/Common/unix/FileStream_unix.cpp b/src/Common/unix/FileStream_unix.cpp
-index 4bc9b52..d05b873 100644
+index b54d3ef..80e6858 100644
 --- a/src/Common/unix/FileStream_unix.cpp
 +++ b/src/Common/unix/FileStream_unix.cpp
-@@ -101,11 +101,15 @@ uint64 FileStream::GetSize()
+@@ -99,11 +99,15 @@ uint64 FileStream::GetSize()
  	return fs;
  }
  
@@ -33,7 +33,7 @@ index 4bc9b52..d05b873 100644
  }
  
  void FileStream::extract(std::vector<uint8>& data)
-@@ -210,6 +214,7 @@ FileStream::~FileStream()
+@@ -213,6 +217,7 @@ FileStream::~FileStream()
  FileStream::FileStream(const fs::path& path, bool isOpen, bool isWriteable)
  {
  	fs::path CIPath = findPathCI(path);
@@ -42,10 +42,10 @@ index 4bc9b52..d05b873 100644
  	{
  		m_fileStream.open(CIPath, isWriteable ? (std::ios_base::in | std::ios_base::out | std::ios_base::binary) : (std::ios_base::in | std::ios_base::binary));
 diff --git a/src/Common/unix/FileStream_unix.h b/src/Common/unix/FileStream_unix.h
-index 12c971d..2b33101 100644
+index 29261dd..bc450ae 100644
 --- a/src/Common/unix/FileStream_unix.h
 +++ b/src/Common/unix/FileStream_unix.h
-@@ -50,6 +50,7 @@ class FileStream
+@@ -55,6 +55,7 @@ class FileStream
  	FileStream(const fs::path& path, bool isOpen, bool isWriteable);
  
  	bool m_isValid{};

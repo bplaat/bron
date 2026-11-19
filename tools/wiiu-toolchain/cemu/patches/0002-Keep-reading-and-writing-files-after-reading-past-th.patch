@@ -27,10 +27,10 @@ index 85a04af..31def18 100644
  	bytesLeft = std::min(bytesLeft, 0x7FFFFFFFu);
  	sint32 bytesToRead = std::min(bytesLeft, size);
 diff --git a/src/Common/unix/FileStream_unix.cpp b/src/Common/unix/FileStream_unix.cpp
-index d05b873..cbbdafd 100644
+index 80e6858..894d1db 100644
 --- a/src/Common/unix/FileStream_unix.cpp
 +++ b/src/Common/unix/FileStream_unix.cpp
-@@ -84,6 +84,7 @@ std::optional<std::vector<uint8>> FileStream::LoadIntoMemory(const fs::path& pat
+@@ -82,6 +82,7 @@ std::optional<std::vector<uint8>> FileStream::LoadIntoMemory(const fs::path& pat
  void FileStream::SetPosition(uint64 pos)
  {
  	cemu_assert(m_isValid);
@@ -38,7 +38,7 @@ index d05b873..cbbdafd 100644
  	if (m_prevOperationWasWrite)
  		m_fileStream.seekp((std::streampos)pos);
  	else
-@@ -234,6 +235,8 @@ FileStream::FileStream(const fs::path& path, bool isOpen, bool isWriteable)
+@@ -237,6 +238,8 @@ FileStream::FileStream(const fs::path& path, bool isOpen, bool isWriteable)
  
  void FileStream::SyncReadWriteSeek(bool nextOpIsWrite)
  {
