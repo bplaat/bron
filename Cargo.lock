@@ -1053,26 +1053,20 @@ dependencies = [
  "bwebgpu-shader-build",
  "bwindow",
  "cargo-bundle-assets",
+ "criterion",
  "deflate",
  "directories",
  "getrandom 0.4.3+patch",
+ "gtxconv",
+ "gxtexconv",
  "image",
- "libsqlite3-sys",
- "plaatcraft-engine",
- "preferences",
-]
-
-[[package]]
-name = "plaatcraft-engine"
-version = "0.2.0"
-dependencies = [
- "criterion",
- "deflate",
- "image",
+ "libogc-sys",
  "libsqlite3-sys",
  "postcard",
+ "preferences",
  "serde",
  "sfxr",
+ "wut-sys",
 ]
 
 [[package]]

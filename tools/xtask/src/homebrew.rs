@@ -33,7 +33,7 @@ impl Console {
         }
     }
 
-    /// The name of the Rust target, the toolchain and the bundle folder.
+    /// The name of the toolchain and the bundle folder.
     const fn target(self) -> &'static str {
         match self {
             Self::Wii => "wii",
@@ -65,9 +65,11 @@ impl Console {
     }
 }
 
-/// A homebrew program with a `meta/` folder.
+/// A homebrew program with a `meta/` folder, or a `meta/<target>/` folder when it also runs on
+/// other platforms.
 struct Program {
     directory: PathBuf,
+    meta: PathBuf,
     /// The name of the built program.
     name: String,
     /// The bundle name on the SD card.
@@ -79,13 +81,19 @@ fn discover_programs(root: &Path, console: Console) -> Result<Vec<Program>> {
     let files = source_files(root)?;
     let mut programs = Vec::new();
     for file in files {
-        if !file.ends_with(Path::new("meta").join(console.meta_file())) {
+        if file.file_name() != Some(console.meta_file().as_ref()) {
             continue;
         }
-        let directory = file
-            .parent()
-            .and_then(Path::parent)
-            .context("invalid metadata path")?;
+        let meta = file.parent().context("invalid metadata path")?;
+        let Some(directory) = (if meta.ends_with(console.target()) {
+            meta.parent()
+        } else {
+            Some(meta)
+        })
+        .filter(|meta| meta.ends_with("meta"))
+        .and_then(Path::parent) else {
+            continue;
+        };
         let leaf = directory
             .file_name()
             .and_then(|name| name.to_str())
@@ -102,16 +110,11 @@ fn discover_programs(root: &Path, console: Console) -> Result<Vec<Program>> {
                 .context("invalid example directory")?;
             (name.to_owned(), format!("{name}-{leaf}"))
         } else {
-            let suffix = format!("-{}", console.target());
-            (
-                leaf.to_owned(),
-                leaf.strip_suffix(suffix.as_str())
-                    .unwrap_or(leaf)
-                    .to_owned(),
-            )
+            (leaf.to_owned(), leaf.to_owned())
         };
         programs.push(Program {
             directory: directory.to_owned(),
+            meta: meta.to_owned(),
             name,
             bundle,
             rust,
@@ -189,16 +192,26 @@ impl Xtask {
             .join(console.target())
             .join(console.apps().rsplit('/').next().unwrap_or_default());
         let mut bundles = Vec::new();
+        let console_target = console.target();
+        let cargo = self
+            .root
+            .join(format!("tools/{console_target}-toolchain/cargo"));
         for program in programs {
             let directory = self.root.join(&program.directory);
-            let built = directory.join(if program.rust {
-                format!("target/{}/release/{}", console.target(), program.name)
+            let meta = self.root.join(&program.meta);
+            // Programs in the workspace build to its target folder, the others have their own
+            let target = if !program.rust || directory.join("Cargo.lock").is_file() {
+                directory.join("target")
             } else {
-                format!("target/{}", program.name)
+                self.root.join("target")
+            };
+            let built = target.join(if program.rust {
+                format!("powerpc-nintendo-{console_target}/release/{}", program.name)
+            } else {
+                program.name.clone()
             });
             if program.rust {
-                // The programs select their nightly toolchain themselves
-                run(Command::new("cargo")
+                run(Command::new(&cargo)
                     .args(["build", "--release", "--locked"])
                     .current_dir(&directory)
                     .env_remove("RUSTUP_TOOLCHAIN"))?;
@@ -223,7 +236,7 @@ impl Xtask {
                         fs::copy(built.with_extension("dol"), &dol)?;
                     }
                     for file in ["meta.xml", "icon.png"] {
-                        fs::copy(directory.join("meta").join(file), bundle.join(file))?;
+                        fs::copy(meta.join(file), bundle.join(file))?;
                     }
                     bundle
                 }
@@ -238,7 +251,7 @@ impl Xtask {
                         run(
                             Command::new(self.root.join("tools/wiiu-toolchain/bundle.sh"))
                                 .arg(rpx)
-                                .arg(directory.join("meta"))
+                                .arg(&meta)
                                 .arg(&bundle),
                         )?;
                     } else {
@@ -308,14 +321,18 @@ mod tests {
             "examples/wii/new-example/rust/meta",
             "examples/wii-extra/another/c/meta",
             "examples/wii/target/ignored/c/meta",
-            "games/plaatcraft-wii/meta",
+            "games/plaatcraft/meta/wii",
             "apps/homebrew/rust/meta",
         ] {
             let directory = root.join(directory);
             fs::create_dir_all(&directory)?;
             fs::write(directory.join("meta.xml"), "")?;
-            let program = directory.parent().unwrap();
-            let manifest = if program.ends_with("rust") || program.ends_with("plaatcraft-wii") {
+            let program = directory
+                .ancestors()
+                .find(|path| path.ends_with("meta"))
+                .and_then(Path::parent)
+                .unwrap();
+            let manifest = if program.ends_with("rust") || program.ends_with("plaatcraft") {
                 "Cargo.toml"
             } else {
                 "Makefile"
@@ -343,7 +360,8 @@ mod tests {
         assert_eq!(programs[2].name, "new-example");
         assert!(!programs[2].rust);
         assert!(programs[3].rust);
-        assert_eq!(programs[4].name, "plaatcraft-wii");
+        assert_eq!(programs[4].name, "plaatcraft");
+        assert!(programs[4].meta.ends_with("meta/wii"));
         Ok(())
     }
 
@@ -355,14 +373,14 @@ mod tests {
         }
         git_repository(&root, "")?;
         for (directory, meta, manifest) in [
-            ("examples/wiiu/cube/c", "meta.ini", "Makefile"),
-            ("examples/wiiu/cube/rust", "meta.ini", "Cargo.toml"),
-            ("games/plaatcraft-wiiu", "meta.ini", "Cargo.toml"),
-            ("examples/wii/cube/c", "meta.xml", "Makefile"),
+            ("examples/wiiu/cube/c", "meta", "Makefile"),
+            ("examples/wiiu/cube/rust", "meta", "Cargo.toml"),
+            ("games/plaatcraft", "meta/wiiu", "Cargo.toml"),
+            ("examples/wii/cube/c", "meta/wii", "Makefile"),
         ] {
             let directory = root.join(directory);
-            fs::create_dir_all(directory.join("meta"))?;
-            fs::write(directory.join("meta").join(meta), "")?;
+            fs::create_dir_all(directory.join(meta))?;
+            fs::write(directory.join(meta).join("meta.ini"), "")?;
             fs::write(directory.join(manifest), "")?;
         }
         let programs = discover_programs(&root, Console::WiiU)?;
@@ -375,7 +393,7 @@ mod tests {
             [
                 ("cube-c", "cube", false),
                 ("cube-rust", "cube", true),
-                ("plaatcraft", "plaatcraft-wiiu", true)
+                ("plaatcraft", "plaatcraft", true)
             ]
         );
         Ok(())

@@ -3,7 +3,7 @@
 A Minecraft like voxel sandbox written in Rust for macOS, Linux, Windows, iOS, and
 Android, built with [bwindow](../../lib/ui/bwindow), [bcanvas](../../lib/graphics/bcanvas)
 and [bwebgpu](../../lib/graphics/bwebgpu). The game itself lives in the
-[plaatcraft-engine](../plaatcraft-engine) crate, which the [Wii](../plaatcraft-wii) and [Wii U](../plaatcraft-wiiu) ports share.
+library of this crate, which the [Wii](docs/wii.md) and [Wii U](docs/wiiu.md) ports share.
 
 ## Features
 

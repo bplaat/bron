@@ -167,15 +167,10 @@ impl WindowsResource {
             &env::var("RUSTC_LINKER").unwrap_or_default(),
         )
         .map_err(io::Error::other)?;
-        let (resource_path, needs_link_search) =
-            run_resource_compiler(&compilers, Path::new(&out_dir), &rc_path)
-                .map_err(io::Error::other)?;
-        if needs_link_search {
-            println!("cargo:rustc-link-search=native={out_dir}");
-            println!("cargo:rustc-link-lib=static=resource");
-        } else {
-            println!("cargo:rustc-link-arg={}", resource_path.display());
-        }
+        let resource_path = run_resource_compiler(&compilers, Path::new(&out_dir), &rc_path)
+            .map_err(io::Error::other)?;
+        // MSVC accepts .res files directly, but rustc cannot bundle them into an rlib.
+        println!("cargo:rustc-link-arg={}", resource_path.display());
         Ok(())
     }
 }
@@ -264,7 +259,7 @@ impl ResourceCompiler {
             | Self::Zig {
                 target: Some(_), ..
             } => out_dir.join("resource.o"),
-            Self::Rc(_) | Self::Zig { target: None, .. } => out_dir.join("resource.lib"),
+            Self::Rc(_) | Self::Zig { target: None, .. } => out_dir.join("resource.res"),
         }
     }
 
@@ -472,7 +467,7 @@ fn run_resource_compiler(
     compilers: &[ResourceCompiler],
     out_dir: &Path,
     rc_path: &Path,
-) -> Result<(PathBuf, bool), String> {
+) -> Result<PathBuf, String> {
     let index = try_resource_compilers(compilers, |compiler| {
         compiler.command(out_dir, rc_path).status().map(|status| {
             if status.success() {
@@ -482,14 +477,7 @@ fn run_resource_compiler(
             }
         })
     })?;
-    let compiler = &compilers[index];
-    Ok((
-        compiler.output_path(out_dir),
-        matches!(
-            compiler,
-            ResourceCompiler::Rc(_) | ResourceCompiler::Zig { target: None, .. }
-        ),
-    ))
+    Ok(compilers[index].output_path(out_dir))
 }
 
 fn escape_string(string: &str) -> String {
@@ -662,7 +650,7 @@ mod test {
                 OsString::from("/c"),
                 OsString::from("65001"),
                 OsString::from("/fo"),
-                out_dir.join("resource.lib").into_os_string(),
+                out_dir.join("resource.res").into_os_string(),
                 rc_path.as_os_str().to_os_string(),
             ]
         );
@@ -687,7 +675,7 @@ mod test {
                 OsString::from("/c"),
                 OsString::from("65001"),
                 OsString::from("/fo"),
-                out_dir.join("resource.lib").into_os_string(),
+                out_dir.join("resource.res").into_os_string(),
                 rc_path.as_os_str().to_os_string(),
             ]
         );

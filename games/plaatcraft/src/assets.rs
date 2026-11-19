@@ -1,0 +1,100 @@
+/*
+ * Copyright (c) 2026 Bastiaan van der Plaat
+ *
+ * SPDX-License-Identifier: MIT
+ */
+
+//! The texture files of the `assets` folder that every port loads, the build script includes
+//! this file to convert them for the consoles.
+
+/// The block textures in the order of the texture array layers.
+pub const TILES: [&str; 73] = [
+    "tiles/grass_top.png",
+    "tiles/dirt_grass.png",
+    "tiles/dirt.png",
+    "tiles/stone.png",
+    "tiles/sand.png",
+    "tiles/snow.png",
+    "tiles/dirt_snow.png",
+    "tiles/trunk_side.png",
+    "tiles/trunk_top.png",
+    "tiles/trunk_white_side.png",
+    "tiles/trunk_white_top.png",
+    "tiles/leaves.png",
+    "tiles/leaves_orange.png",
+    "tiles/grass1.png",
+    "tiles/grass2.png",
+    "tiles/grass3.png",
+    "tiles/grass4.png",
+    "tiles/stone_coal.png",
+    "tiles/stone_gold.png",
+    "tiles/stone_diamond.png",
+    "tiles/stone_silver.png",
+    "tiles/water.png",
+    "tiles/lava.png",
+    "tiles/cactus_side.png",
+    "tiles/cactus_top.png",
+    "tiles/cactus_inside.png",
+    "tiles/brick_grey.png",
+    "tiles/brick_red.png",
+    "tiles/wood.png",
+    "tiles/wood_red.png",
+    "tiles/cotton_blue.png",
+    "tiles/cotton_green.png",
+    "tiles/cotton_red.png",
+    "tiles/cotton_white.png",
+    "tiles/gravel_dirt.png",
+    "tiles/gravel_stone.png",
+    "tiles/oven.png",
+    "tiles/redstone.png",
+    "tiles/greystone.png",
+    "tiles/cotton_tan.png",
+    "tiles/dirt_sand.png",
+    "tiles/greysand.png",
+    "tiles/greystone_ruby.png",
+    "tiles/greystone_ruby_alt.png",
+    "tiles/greystone_sand.png",
+    "tiles/ice.png",
+    "tiles/redsand.png",
+    "tiles/redstone_emerald.png",
+    "tiles/redstone_emerald_alt.png",
+    "tiles/redstone_sand.png",
+    "tiles/stone_iron.png",
+    "tiles/stone_iron_alt.png",
+    "tiles/stone_coal_alt.png",
+    "tiles/stone_diamond_alt.png",
+    "tiles/stone_dirt.png",
+    "tiles/stone_gold_alt.png",
+    "tiles/stone_grass.png",
+    "tiles/stone_sand.png",
+    "tiles/stone_silver_alt.png",
+    "tiles/stone_snow.png",
+    "tiles/table.png",
+    "tiles/glass.png",
+    "tiles/glass_frame.png",
+    "tiles/trunk_red_side.png",
+    "tiles/trunk_red_top.png",
+    "tiles/wood_white.png",
+    "tiles/grass_brown.png",
+    "tiles/grass_tan.png",
+    "tiles/mushroom_brown.png",
+    "tiles/mushroom_red.png",
+    "tiles/mushroom_tan.png",
+    "tiles/rock.png",
+    "tiles/rock_moss.png",
+];
+
+/// The sky layers, in the order of their texture array layers.
+pub const SKY: [&str; 8] = [
+    "sky/skybox_bottom.png",
+    "sky/skybox_side.png",
+    "sky/skybox_sideClouds.png",
+    "sky/skybox_sideHills.png",
+    "sky/skybox_top.png",
+    "sky/clouds.png",
+    "sky/sun.png",
+    "sky/moon.png",
+];
+
+/// The body parts, in the order of their sprites.
+pub const PARTS: [&str; 4] = ["head", "body", "arm", "leg"];

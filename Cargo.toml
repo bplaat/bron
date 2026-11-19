@@ -18,8 +18,6 @@ exclude = [
     "examples/wii",
     "examples/wiiu",
     "games/empires",
-    "games/plaatcraft-wii",
-    "games/plaatcraft-wiiu",
     "games/nds",
     "lib/ui/plaatui",
     "lib/ui/plaatui/examples/showcase",
@@ -36,9 +34,9 @@ license = "MIT"
 authors = ["Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>"]
 repository = "https://github.com/bplaat/bron"
 
-    'cfg(target_os, values("wii", "wiiu"))',
 [workspace.lints.rust]
 unexpected_cfgs = { level = "deny", check-cfg = [
+    'cfg(target_os, values("wii", "wiiu"))',
     'cfg(target_vendor, values("winxp"))',
 ] }
 warnings = "deny"
@@ -133,7 +131,7 @@ opt-level = 3
 [profile.release.package.pbkdf2]
 opt-level = 3
 
-[profile.release.package.plaatcraft-engine]
+[profile.release.package.plaatcraft]
 opt-level = 3
 
 [profile.release.package.reversi-engine]

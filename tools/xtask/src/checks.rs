@@ -19,8 +19,8 @@ use crate::process::{capture, npm_program, npx_program, run, run_named};
 use crate::utils::{relative_slash, source_files};
 use crate::{Os, Xtask};
 
-// The nightly for rustfmt and the address sanitizer, keep in sync with the rust-toolchain.toml files of the console
-// ports, the GitHub workflow and tools/winxp-toolchain
+// The nightly for rustfmt and the address sanitizer, keep in sync with rust_toolchain in
+// tools/{wii,wiiu}-toolchain/build.sh, the GitHub workflow and tools/winxp-toolchain
 const NIGHTLY: &str = "+nightly-2026-11-14";
 
 pub(crate) const BACKEND_SWAP_PAIRS: [(&str, &str); 2] =
@@ -436,31 +436,27 @@ impl Xtask {
             .args(["-p", "bastiaan-app", "-p", "example-bcanvas-showcase"])
             .env_remove("RUSTUP_TOOLCHAIN"))?;
 
-        println!("Building Wii examples...");
-        for example in ["triangles", "cube", "blocks", "canvas"] {
-            run(Command::new("make").args(["-C", &format!("examples/wii/{example}/c")]))?;
-            run(Command::new("cargo")
-                .args(["build", "--release", "--locked"])
-                .current_dir(format!("examples/wii/{example}/rust"))
-                .env_remove("RUSTUP_TOOLCHAIN"))?;
-        }
-
-        println!("Building Wii U examples...");
-        for example in ["triangle", "cube", "blocks"] {
-            run(Command::new("make").args(["-C", &format!("examples/wiiu/{example}/c")]))?;
-            run(Command::new("cargo")
-                .args(["build", "--release", "--locked"])
-                .current_dir(format!("examples/wiiu/{example}/rust"))
-                .env_remove("RUSTUP_TOOLCHAIN"))?;
-        }
-
-        // The ports select their nightly toolchain themselves, so drop the one cargo xtask runs
-        // with
-        for (name, port) in [("Wii", "plaatcraft-wii"), ("Wii U", "plaatcraft-wiiu")] {
+        for (name, console, examples) in [
+            (
+                "Wii",
+                "wii",
+                ["triangles", "cube", "blocks", "canvas"].as_slice(),
+            ),
+            ("Wii U", "wiiu", ["triangle", "cube", "blocks"].as_slice()),
+        ] {
+            let cargo = self.root.join(format!("tools/{console}-toolchain/cargo"));
+            println!("Building {name} examples...");
+            for example in examples {
+                run(Command::new("make").args(["-C", &format!("examples/{console}/{example}/c")]))?;
+                run(Command::new(&cargo)
+                    .args(["build", "--release", "--locked"])
+                    .current_dir(format!("examples/{console}/{example}/rust"))
+                    .env_remove("RUSTUP_TOOLCHAIN"))?;
+            }
             println!("Building the PlaatCraft {name} port...");
-            run(Command::new("cargo")
+            run(Command::new(&cargo)
                 .args(["build", "--release", "--locked"])
-                .current_dir(format!("games/{port}"))
+                .current_dir("games/plaatcraft")
                 .env_remove("RUSTUP_TOOLCHAIN"))?;
         }
         Ok(())

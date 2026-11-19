@@ -25,7 +25,21 @@ info_plist = "meta/apple/ios/Info.plist"
 
 [package.metadata.bundle.android]
 
+# Runs the chunk pipeline benchmark instead of the game on the consoles, see bench.sh
+[features]
+bench = []
+
 [dependencies]
+deflate = { path = "../../lib/data/deflate" }
+libsqlite3-sys = "0.39"
+postcard = { version = "1.1", default-features = false, features = ["alloc"] }
+serde = { version = "1.0", default-features = false, features = [
+    "alloc",
+    "derive",
+] }
+sfxr = { version = "0.1.4", default-features = false }
+
+[target.'cfg(not(any(target_os = "wii", target_os = "wiiu")))'.dependencies]
 baudio = { path = "../../lib/audio/baudio" }
 bcanvas = { path = "../../lib/graphics/bcanvas", default-features = false }
 bwebgpu = { path = "../../lib/graphics/bwebgpu" }
@@ -33,23 +47,41 @@ bwindow = { path = "../../lib/ui/bwindow", default-features = false, features = 
     "remember_window_state",
 ] }
 cargo-bundle-assets = { path = "../../lib/build/cargo-bundle-assets" }
-deflate = { path = "../../lib/data/deflate" }
 directories = "6.0"
 getrandom = "0.4.3"
 image = { path = "../../lib/graphics/image", default-features = false, features = [
     "png",
 ] }
-libsqlite3-sys = "0.39"
-plaatcraft-engine = { path = "../plaatcraft-engine" }
 preferences = { path = "../../lib/sys/preferences" }
 
-# Android has no public system SQLite library
-[target.'cfg(target_os = "android")'.dependencies]
+# Android and the consoles have no system SQLite library
+[target.'cfg(any(target_os = "android", target_os = "wii", target_os = "wiiu"))'.dependencies]
 libsqlite3-sys = { version = "0.39", features = ["bundled"] }
+
+[target.'cfg(target_os = "wii")'.dependencies]
+libogc-sys = { path = "../../tools/wii-toolchain/libogc-sys" }
+
+[target.'cfg(target_os = "wiiu")'.dependencies]
+wut-sys = { path = "../../tools/wiiu-toolchain/wut-sys" }
 
 [build-dependencies]
 build-utils = { path = "../../lib/build/build-utils" }
 bwebgpu-shader-build = { path = "../../lib/graphics/bwebgpu-shader-build" }
+gtxconv = { path = "../../tools/wiiu-toolchain/gtxconv" }
+gxtexconv = { path = "../../tools/wii-toolchain/gxtexconv" }
+image = { path = "../../lib/graphics/image", default-features = false, features = [
+    "png",
+] }
+
+[dev-dependencies]
+criterion = "0.8"
+image = { path = "../../lib/graphics/image", default-features = false, features = [
+    "png",
+] }
+
+[[bench]]
+name = "world"
+harness = false
 
 [lints]
 workspace = true
