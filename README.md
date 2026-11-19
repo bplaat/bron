@@ -115,7 +115,7 @@ Various tools and websites. For the deployed sites, go to [bron.bplaat.nl](https
 - [plaatnotes](apps/web/plaatnotes) A self-hosted note-taking web app with rich Markdown support
 - [nds-toolchain](tools/nds-toolchain/) An LLVM-based Nintendo DS toolchain with picolibc and a test ROM
 - [wii-toolchain](tools/wii-toolchain/) An LLVM-based Wii toolchain with Rust `std`, picolibc, libogc, the [gxtexconv](tools/wii-toolchain/crates/gxtexconv) texture converter, and Dolphin emulator tests
-- [wiiu-toolchain](tools/wiiu-toolchain/) An LLVM-based Wii U toolchain with Rust `std`, picolibc, wut, libwhb, decaf-emu's shader assembler, and the [gtxconv](tools/wiiu-toolchain/gtxconv) texture converter
+- [wiiu-toolchain](tools/wiiu-toolchain/) An LLVM-based Wii U toolchain with Rust `std`, picolibc, wut, libwhb, decaf-emu's shader assembler, and the [gtxconv](tools/wiiu-toolchain/crates/gtxconv) texture converter
 - [winxp-toolchain](tools/winxp-toolchain/) An LLVM-based Windows XP toolchain for Rust with the full standard library on mingw-w64, and Windows XP tests in QEMU
 
 ### Examples

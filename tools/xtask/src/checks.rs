@@ -444,11 +444,9 @@ impl Xtask {
             ),
             ("Wii U", "wiiu", ["triangle", "cube", "blocks"].as_slice()),
         ] {
-            let cargo = self.root.join(if console == "wii" {
-                "tools/wii-toolchain/bin/cargo"
-            } else {
-                "tools/wiiu-toolchain/cargo"
-            });
+            let cargo = self
+                .root
+                .join(format!("tools/{console}-toolchain/bin/cargo"));
             println!("Building {name} examples...");
             for example in examples {
                 run(Command::new("make").args(["-C", &format!("examples/{console}/{example}/c")]))?;

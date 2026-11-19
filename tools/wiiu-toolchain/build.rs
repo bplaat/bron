@@ -11,7 +11,7 @@ use std::process::Command;
 /// Converts the textures of a gtxconv config to `textures.gtx` in `OUT_DIR`.
 #[allow(dead_code, reason = "not every program has textures")]
 pub fn convert_textures(build_dir: &Path, config: &Path) -> PathBuf {
-    let tool = build_dir.join("gtxconv");
+    let tool = build_dir.join("bin/gtxconv");
     println!("cargo:rerun-if-changed={}", tool.display());
     println!("cargo:rerun-if-changed={}", config.display());
     let directory = config.parent().expect("config has a directory");
@@ -36,7 +36,7 @@ pub fn convert_textures(build_dir: &Path, config: &Path) -> PathBuf {
 
 /// Assembles a vertex and pixel shader with latte-assembler to `shader.gsh` in `OUT_DIR`.
 pub fn assemble_shader(build_dir: &Path, vertex: &Path, pixel: &Path) -> PathBuf {
-    let tool = build_dir.join("latte-assembler");
+    let tool = build_dir.join("bin/latte-assembler");
     println!("cargo:rerun-if-changed={}", tool.display());
     println!("cargo:rerun-if-changed={}", vertex.display());
     println!("cargo:rerun-if-changed={}", pixel.display());

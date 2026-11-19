@@ -1,42 +1,43 @@
 # Wii U Toolchain
 
 Everything the [Wii U examples](../../examples/wiiu/) share to build Wii U programs with plain clang and lld, without devkitPro.
-`build.sh` builds the toolchain in the repository root's `target/wiiu-toolchain/`. The C
+`build.sh` builds the toolchain in the repository root's `target/wiiu-toolchain/`: upstream sources
+in `src/`, libraries in `lib/`, host tools in `bin/` and intermediate files in `build/`. The C
 Makefiles and the Rust Cargo wrapper invoke it before building a project. For now the
 programs are only tested in the [Cemu](https://cemu.info/) emulator.
 
-- Clones devkitPro's [wut](https://github.com/devkitPro/wut) v1.9.1 and applies `wut/patches/`,
+- Clones devkitPro's [wut](https://github.com/devkitPro/wut) v1.9.1 and applies `patches/wut/`,
   for its headers, the export lists of the system libraries in `cafe/*.def`, libwhb and libgfd
 - Clones devkitPro's [wut-tools](https://github.com/devkitPro/wut-tools) v1.3.5 and applies
-  `wut-tools/patches/`, then builds `rplimportgen`, which writes the import stubs of the system
+  `patches/wut-tools/`, then builds `rplimportgen`, which writes the import stubs of the system
   libraries, and `elf2rpl`, which converts a linked `.elf` to the `.rpx` Cafe OS loads
-- Clones [picolibc](https://github.com/picolibc/picolibc) 1.8.12 and applies `picolibc/patches/`,
+- Clones [picolibc](https://github.com/picolibc/picolibc) 1.8.12 and applies `patches/picolibc/`,
   then builds it with meson as the C library, its headers and `libc.a` with the math library go
   to `../../target/wiiu-toolchain/sysroot/`
-- Builds `../../target/wiiu-toolchain/libwut.a` from the import stubs of all system libraries,
+- Builds `../../target/wiiu-toolchain/lib/libwut.a` from the import stubs of all system libraries,
   wutpicolibc, which wut patches add for picolibc (startup, heap, console, clock, sleep, locks and
   SD card files), libwhb (graphics, process lifecycle and logging) and libgfd
 - Clones the last commit of [decaf-emu](https://github.com/decaf-emu/decaf-emu) and applies
-  `decaf-emu/patches/`, then builds its `latte-assembler`, which assembles Latte shader assembly
+  `patches/decaf-emu/`, then builds its `latte-assembler`, which assembles Latte shader assembly
   to `.gsh` shader files
-- Builds our [gtxconv](gtxconv) with Cargo to `../../target/wiiu-toolchain/gtxconv`, which converts
+- Builds our [gtxconv](crates/gtxconv) with Cargo to `../../target/wiiu-toolchain/bin/gtxconv`, which converts
   images to `.gtx` texture files in the tiled layout of the GPU
 - Checks out only the matrix math of devkitPro's [libogc](https://github.com/devkitPro/libogc) v2.11.0,
-  applies `libogc/patches/` and builds `../../target/wiiu-toolchain/libgu.a`. Its `ps_` functions use
+  applies `patches/libogc/` and builds `../../target/wiiu-toolchain/lib/libgu.a`. Its `ps_` functions use
   the paired single instructions, which the Espresso CPU has like the Wii's Broadway. `gu.h` and the
   two files it includes go to `../../target/wiiu-toolchain/include/`
 - Checks out only the builtins of LLVM's [compiler-rt](https://github.com/llvm/llvm-project/tree/main/compiler-rt/lib/builtins)
   llvmorg-23.1.3 and builds the 64-bit integer math and conversions the PowerPC 750 can't do in
-  instructions to `../../target/wiiu-toolchain/libcompiler-rt.a`, the C examples link it (Rust has its own)
+  instructions to `../../target/wiiu-toolchain/lib/libcompiler-rt.a`, the C examples link it (Rust has its own)
 
 ```sh
 cd tools/wiiu-toolchain
 ./build.sh                 # fetch, patch and build
 ./build.sh clean           # remove ../../target/wiiu-toolchain/
-./build.sh std             # prepare the patched Rust sources
+./build.sh std             # prepare the patched Rust std sources
 ./build.sh test            # run the C and Rust suites without a GPU or JIT
-./build.sh cemu            # build ../../target/wiiu-toolchain/cemu-runner
-./build.sh export-patches  # write the commits in ../../target/wiiu-toolchain/<name>/ back to <name>/patches/
+./build.sh cemu            # build ../../target/wiiu-toolchain/bin/cemu-runner
+./build.sh export-patches  # write the commits in ../../target/wiiu-toolchain/src/<name>/ back to patches/<name>/
 ```
 
 All code is compiled for the PowerPC 750 compatible Espresso CPU (`-mcpu=750`) and optimized for
@@ -49,8 +50,8 @@ Downloaded sources, compiled libraries and host tools stay in the repository roo
 
 C projects include `wiiu.mk` from their Makefile, which also assembles `src/shader.vsh` and
 `src/shader.psh` to `target/shader.gsh` and converts the textures of `src/assets/textures.toml` to
-`target/textures.gtx`. Rust projects use the toolchain's `cargo` wrapper and the shared
-`build.rs` helper for shader assembly and texture conversion. The `wut-sys` crate provides
+`target/textures.gtx`. Rust projects use the toolchain's `bin/cargo` wrapper and the shared
+`build.rs` helper for shader assembly and texture conversion. The `crates/wut-sys` crate provides
 bindings to wut, libwhb, libgfd, picolibc and the libogc matrix functions. Each project
 keeps its build output in `target/`.
 
@@ -59,17 +60,17 @@ The toolchain and the examples build separately from the main Cargo workspace, t
 
 ### Rust standard library
 
-Run the toolchain's `cargo` wrapper for standalone Cargo projects that use `std`.
+Run the toolchain's `bin/cargo` wrapper for standalone Cargo projects that use `std`.
 
 ```sh
-./cargo build --release --manifest-path /path/to/my-project/Cargo.toml
-./run.sh /path/to/my-project/target/powerpc-nintendo-wiiu/release/my-project.elf
+bin/cargo build --release --manifest-path /path/to/my-project/Cargo.toml
+bin/run /path/to/my-project/target/powerpc-nintendo-wiiu/release/my-project.elf
 ```
 
 The wrapper uses `powerpc-nintendo-wiiu.json` and the upstream Rust nightly pinned in
 `build.sh`, and the Wii U's build profile: optimized for size, aborting panics, and no LTO, also
 in the Cargo workspace (its per-package optimization levels still apply). It installs the
-matching `rust-src` component when needed, applies `rust/patches/` to a local copy and builds
+matching `rust-src` component when needed, applies `patches/rust-std/` to a local copy and builds
 `std` with Cargo. The Rust backend calls picolibc and Cafe OS directly. The target supports
 aborting panics, Cafe OS threads, thread-local storage and synchronization, clocks,
 environment and arguments, SD files, entropy, and IPv4 TCP and UDP.
@@ -82,24 +83,26 @@ variables are process-local, and the Rust process ID is a fixed placeholder.
 
 - `wiiu.mk` has the make rules for the C examples, `wiiu.ld` is the linker script. It places the
   code at 0x02000000, the data at 0x10000000 and the import sections, which it includes from the
-  generated `../../target/wiiu-toolchain/imports.ld`, at 0xC0000000. Programs are linked with
+  generated `../../target/wiiu-toolchain/lib/imports.ld`, at 0xC0000000. Programs are linked with
   `--emit-relocs`, elf2rpl turns the relocations into the imports of the system libraries
-- `powerpc-nintendo-wiiu.json` and `rust/patches/` provide the target and Rust changes used by the
-  `cargo` wrapper. `build.rs` assembles shaders and converts textures for Rust projects
-- `wut-sys/` has Rust bindings for graphics, matrices, picolibc, threads, input, audio and
+- `powerpc-nintendo-wiiu.json` and `patches/rust-std/` provide the target and Rust changes used by the
+  `bin/cargo` wrapper. `build.rs` assembles shaders and converts textures for Rust projects
+- `crates/wut-sys/` has Rust bindings for graphics, matrices, picolibc, threads, input, audio and
   networking. USB input uses the native `nsyskbd` keyboard callbacks and `nsyshid` device,
   protocol, descriptor, and asynchronous report APIs; no external HID library is required.
   Raw sockets use `socketclose` and `socketlasterr` instead of the C file functions
-- `gtxconv/` converts images to `.gtx` texture files from a TOML config, as a library and a CLI
-- `cc` is the C compiler for cc-rs build scripts of Rust projects: it builds the toolchain and
-  compiles with the Wii U flags and the picolibc, wut and libogc matrix headers. `ar` is a separate
+- `crates/gtxconv/` converts images to `.gtx` texture files from a TOML config, as a library and a CLI
+- `bin/cc` is the C compiler for cc-rs build scripts of Rust projects: it builds the toolchain and
+  compiles with the Wii U flags and the picolibc, wut and libogc matrix headers. `bin/ar` is a separate
   wrapper for `llvm-ar`. The Cargo wrapper selects both for target builds
-- `run.sh` converts a program to an `.rpx` and starts it in Cemu, extra arguments go to Cemu
-- `cemu/` builds a headless runner from the main branch of [Cemu](https://github.com/cemu-project/Cemu)
-  with `cemu/patches/`: Cemu's own interpreter, RPL loader, coreinit (threads, scheduler, memory,
+- `bin/run` converts a program to an `.rpx` and starts it in Cemu, extra arguments go to Cemu
+- `bin/bundle` packs an `.rpx` with the names and images of a metadata folder into a `.wuhb` for the
+  Wii U Menu with `crates/wuhbtool/`, which also has its library and CLI
+- `runner/` builds a headless runner from the main branch of [Cemu](https://github.com/cemu-project/Cemu)
+  with `patches/cemu/`: Cemu's own interpreter, RPL loader, coreinit (threads, scheduler, memory,
   time and the FSA file functions), nlibnss random bytes, nsysnet sockets, and the FSA of IOSU on a host folder as
-  the SD card, without the GPU, audio, input, JIT or GUI. `cemu/runner.cpp` replaces Cemu's system
-  startup and stubs the rest of Cemu, `cemu/shim/` has the few parts of boost, glm, wxWidgets, X11,
+  the SD card, without the GPU, audio, input, JIT or GUI. `runner/runner.cpp` replaces Cemu's system
+  startup and stubs the rest of Cemu, `runner/shim/` has the few parts of boost, glm, wxWidgets, X11,
   GTK, curl and the window system that Cemu's headers need. The other system libraries aren't
   there, so it doesn't run the graphical examples, use the normal Cemu for those
 - `test/c/` and `test/rust/` hold the Wii U acceptance suites run by `./build.sh test`
@@ -108,7 +111,7 @@ variables are process-local, and the Rust process ID is a fixed placeholder.
 
 Install a C++20 compiler and zlib in addition to the toolchain's normal dependencies.
 Run `./build.sh test` to build both suites and `cemu-runner` in
-`../../target/wiiu-toolchain/`. Each guest gets a fresh user folder whose `sdcard/` is
+`../../target/wiiu-toolchain/bin/`. Each guest gets a fresh user folder whose `sdcard/` is
 its SD card. `cargo xtask check-others` runs both suites and builds the Wii and Wii U C
 and Rust examples.
 
@@ -137,16 +140,16 @@ first, which takes three seconds. The defaults are `run`, 60 seconds and `cemu-r
 temporary folder as the user folder, set `CEMU_RUNNER_LOG` to also print Cemu's log.
 
 ```sh
-../../target/wiiu-toolchain/cemu-runner test/c/target/test.rpx test 60 test/c/target/manual-cemu
-../../target/wiiu-toolchain/cemu-runner test/c/target/test.rpx run
+../../target/wiiu-toolchain/bin/cemu-runner test/c/target/test.rpx test 60 test/c/target/manual-cemu
+../../target/wiiu-toolchain/bin/cemu-runner test/c/target/test.rpx run
 ```
 
 An optional final argument supplies space-delimited arguments to the guest.
 
 Only Cemu's `src/` is checked out, without its submodules, with [fmt](https://github.com/fmtlib/fmt)
 12.0.0 and [pugixml](https://github.com/zeux/pugixml) v1.15 next to it. Its patches work like the
-other repos, `./build.sh export-patches` also writes `../../target/wiiu-toolchain/cemu/` back to
-`cemu/patches/` once it is there:
+other repos, `./build.sh export-patches` also writes `../../target/wiiu-toolchain/src/cemu/` back to
+`patches/cemu/` once it is there:
 
 - `0001` truncates host files on Unix, `FSATruncateFile` was a debug break
 - `0002` keeps files working after reading past their end, which left the Unix file stream failing
@@ -185,9 +188,9 @@ copying them.
 
 wut needs newlib and devkitPPC, its first patch makes it work with picolibc. The patches of wut-tools,
 picolibc and decaf-emu make them build and work with LLVM, and decaf-emu without its other
-libraries. To change them, edit and commit in `../../target/wiiu-toolchain/<name>/`, run
+libraries. To change them, edit and commit in `../../target/wiiu-toolchain/src/<name>/`, run
 `./build.sh` to try it and `./build.sh export-patches` to write the commits back. The build stops
-instead of applying changed patches over commits or edits in `../../target/wiiu-toolchain/<name>/`
+instead of applying changed patches over commits or edits in `../../target/wiiu-toolchain/src/<name>/`
 that aren't exported yet.
 
 The wut patches:

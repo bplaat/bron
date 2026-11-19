@@ -72,7 +72,7 @@ fn read(path: &Path) -> Result<Vec<u8>> {
 }
 
 /// The `[menu]` names of `meta/meta.ini`, they default to each other and then to the file name
-/// like in wuhbtool. Empty values count as missing, so `bundle.sh` can pass keys that `meta.ini`
+/// like in wuhbtool. Empty values count as missing, so `bin/bundle` can pass keys that `meta.ini`
 /// leaves out.
 fn meta_ini(options: &Options) -> String {
     fn given(value: &Option<String>) -> Option<&str> {
@@ -439,7 +439,7 @@ mod tests {
         assert!(
             meta_ini(&options(None, Some("Short"))).contains("longname=Short\nshortname=Short\n")
         );
-        // Empty values are missing ones, like the keys bundle.sh reads from a partial meta.ini
+        // Empty values are missing ones, like the keys bin/bundle reads from a partial meta.ini
         let partial = Options {
             author: Some(String::new()),
             ..options(Some("Long"), Some(""))

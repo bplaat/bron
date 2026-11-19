@@ -10,5 +10,5 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
-gzip = { path = "../../../lib/data/gzip" }
-image = { path = "../../../lib/graphics/image" }
+gzip = { path = "../../../../lib/data/gzip" }
+image = { path = "../../../../lib/graphics/image" }

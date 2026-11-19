@@ -193,10 +193,9 @@ impl Xtask {
             .join(console.apps().rsplit('/').next().unwrap_or_default());
         let mut bundles = Vec::new();
         let console_target = console.target();
-        let cargo = self.root.join(match console {
-            Console::Wii => "tools/wii-toolchain/bin/cargo",
-            Console::WiiU => "tools/wiiu-toolchain/cargo",
-        });
+        let cargo = self
+            .root
+            .join(format!("tools/{console_target}-toolchain/bin/cargo"));
         for program in programs {
             let directory = self.root.join(&program.directory);
             let meta = self.root.join(&program.meta);
@@ -246,11 +245,11 @@ impl Xtask {
                     let bundle = apps.join(format!("{}.wuhb", program.bundle));
                     if program.rust {
                         let rpx = built.with_extension("rpx");
-                        run(Command::new(toolchain.join("elf2rpl"))
+                        run(Command::new(toolchain.join("bin/elf2rpl"))
                             .arg(built.with_extension("elf"))
                             .arg(&rpx))?;
                         run(
-                            Command::new(self.root.join("tools/wiiu-toolchain/bundle.sh"))
+                            Command::new(self.root.join("tools/wiiu-toolchain/bin/bundle"))
                                 .arg(rpx)
                                 .arg(&meta)
                                 .arg(&bundle),

@@ -1,5 +1,5 @@
 #pragma once
-// Headless shim: only the error dialog of the OS emulation, which cemu/runner.cpp prints
+// Headless shim: only the error dialog of the OS emulation, which runner/runner.cpp prints
 namespace WindowSystem {
 enum class ErrorCategory {
     KEYS_TXT_CREATION = 0,

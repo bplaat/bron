@@ -13,7 +13,7 @@ Build it and start it in Cemu from the `games/plaatcraft` folder using the toolc
 wrapper and patched Rust `std`.
 
 ```sh
-../../tools/wiiu-toolchain/cargo run --release --locked
+../../tools/wiiu-toolchain/bin/cargo run --release --locked
 ```
 
 To play it on a Wii U with Aroma, run this from the repository root with the SD card connected.
@@ -97,7 +97,7 @@ palette, so the night needs no new meshes. One Latte shader in `src/wiiu/shader.
 exponential fog with a tint when immersed in water or lava. Water textures drift like the
 desktop version, with the same base color mix and increasing opacity in distance fog.
 The textures are converted at build time by the toolchain's
-[gtxconv](../../../tools/wiiu-toolchain/gtxconv).
+[gtxconv](../../../tools/wiiu-toolchain/crates/gtxconv).
 
 GX2's alpha test rejects cutout texels before they write color or depth.
 

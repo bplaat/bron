@@ -2,7 +2,7 @@ NAME := test
 BUILD := target
 include ../../wiiu.mk
 
-$(BUILD)/fixtures.gtx: ../../gtxconv/tests/fixtures/textures.toml ../../gtxconv/tests/fixtures/texture.png $(GTXCONV)
+$(BUILD)/fixtures.gtx: ../../crates/gtxconv/tests/fixtures/textures.toml ../../crates/gtxconv/tests/fixtures/texture.png $(GTXCONV)
 	@mkdir -p $(BUILD)
 	$(GTXCONV) -c $< -o $@
 

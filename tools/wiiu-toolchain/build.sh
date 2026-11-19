@@ -1,20 +1,19 @@
 #!/usr/bin/env bash
 # Builds the Wii U toolchain in the repository target/wiiu-toolchain/: fetches wut, wut-tools,
-# picolibc, libogc's matrix math, LLVM's compiler-rt and decaf-emu's latte-assembler, applies
-# wut/patches/, wut-tools/patches/, picolibc/patches/, libogc/patches/ and decaf-emu/patches/ and
-# builds libwut.a with the import stubs of the system libraries, libwhb and
-# wutpicolibc, picolibc (the C library) in sysroot/, libogc's paired single matrix math in
-# libgu.a, libcompiler-rt.a and the host tools elf2rpl, rplimportgen, latte-assembler and our
-# gtxconv/ and wuhbtool/.
+# picolibc, libogc's matrix math, LLVM's compiler-rt and decaf-emu's latte-assembler to src/,
+# applies patches/<name>/ and builds libwut.a with the import stubs of the system libraries, libwhb
+# and wutpicolibc, picolibc (the C library) in sysroot/, libogc's paired single matrix math in
+# libgu.a and libcompiler-rt.a to lib/ and the host tools elf2rpl, rplimportgen, latte-assembler
+# and our crates/gtxconv/ and crates/wuhbtool/ to bin/, with the intermediate files in build/.
 # The C Makefiles and Rust Cargo wrapper run this before building a program.
 #
 # Usage: ./build.sh [command]...
 #   (none)          fetch, patch and build
-#   std             prepare the patched Rust sources
-#   export-patches  write the commits in ../../target/wiiu-toolchain/<name>/ back to <name>/patches/
+#   std             prepare the patched Rust std sources in src/rust-std/
+#   export-patches  write the commits in ../../target/wiiu-toolchain/src/<name>/ back to patches/<name>/
 #   test            build test/c and test/rust and run them in cemu-runner
-#   cemu            build Cemu's interpreter and Cafe OS with cemu/patches/ and cemu/runner.cpp to
-#                   ../../target/wiiu-toolchain/cemu-runner
+#   cemu            build Cemu's interpreter and Cafe OS with patches/cemu/ and runner/ to
+#                   ../../target/wiiu-toolchain/bin/cemu-runner
 #   clean           remove ../../target/wiiu-toolchain/
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -39,7 +38,7 @@ llvm_commit='0d261d1ca552c95a8f007e061c787ac7132fbcbc'
 decaf_url='https://github.com/decaf-emu/decaf-emu.git'
 decaf_version='master'
 decaf_commit='e6c528a20a41c34e0f9eb91dd3da40f119db2dee'
-# Cemu, fmt and pugixml for cemu/runner.cpp, cloned by the cemu and test commands, only Cemu's
+# Cemu, fmt and pugixml for runner/runner.cpp, cloned by the cemu and test commands, only Cemu's
 # interpreter and Cafe OS are built
 cemu_url='https://github.com/cemu-project/Cemu.git'
 cemu_version='main'
@@ -54,17 +53,21 @@ pugixml_commit='ee86beb30e4973f5feffe3ce63bfa4fbadf72f38'
 TOOLCHAIN_DIR="$PWD"
 ROOT_DIR="$(cd ../.. && pwd)"
 BUILD_DIR="$ROOT_DIR/target/wiiu-toolchain"
-WUT_DIR="$BUILD_DIR/wut"
-TOOLS_DIR="$BUILD_DIR/wut-tools"
-PICOLIBC_DIR="$BUILD_DIR/picolibc"
-LIBOGC_DIR="$BUILD_DIR/libogc"
-COMPILER_RT_DIR="$BUILD_DIR/compiler-rt"
-CEMU_DIR="$BUILD_DIR/cemu"
-FMT_DIR="$BUILD_DIR/fmt"
-PUGIXML_DIR="$BUILD_DIR/pugixml"
-DECAF_DIR="$BUILD_DIR/decaf-emu"
+SRC_DIR="$BUILD_DIR/src"
+OBJ_DIR="$BUILD_DIR/build"
+LIB_DIR="$BUILD_DIR/lib"
+BIN_DIR="$BUILD_DIR/bin"
+WUT_DIR="$SRC_DIR/wut"
+TOOLS_DIR="$SRC_DIR/wut-tools"
+PICOLIBC_DIR="$SRC_DIR/picolibc"
+LIBOGC_DIR="$SRC_DIR/libogc"
+COMPILER_RT_DIR="$SRC_DIR/compiler-rt"
+CEMU_DIR="$SRC_DIR/cemu"
+FMT_DIR="$SRC_DIR/fmt"
+PUGIXML_DIR="$SRC_DIR/pugixml"
+DECAF_DIR="$SRC_DIR/decaf-emu"
 SYSROOT="$BUILD_DIR/sysroot"
-RUST_DIR="$BUILD_DIR/rust"
+RUST_DIR="$SRC_DIR/rust-std"
 
 # Apple's clang can't target PowerPC, so prefer Homebrew's LLVM when it's installed
 LLVM=''
@@ -114,7 +117,7 @@ LATTE_ASSEMBLER_SOURCES=(
     src/libgfd/src/{gfd_read,gfd_write}.cpp
 )
 
-# The Cemu sources cemu/runner.cpp runs programs with besides coreinit: the interpreter, the RPL
+# The Cemu sources runner/runner.cpp runs programs with besides coreinit: the interpreter, the RPL
 # loader, the FSA of IOSU on host folders, memory and the scheduler's fibers, without the GPU,
 # audio, input, JIT or GUI
 CEMU_SOURCES=(
@@ -165,6 +168,7 @@ clone() {
 # Fetches only the dependencies needed by this command, before any builds start.
 fetch() {
     local mode="${1:-all}" pids=() pid failed=0
+    mkdir -p "$SRC_DIR"
     if [ "$mode" != cemu ]; then
         clone "$wut_url" "$wut_version" "$wut_commit" "$WUT_DIR" &
         pids+=($!)
@@ -221,12 +225,12 @@ copy_rust() {
 
 # Applies the patches of a repo as commits on top of its upstream commit, again when they changed
 patch() {
-    local name="$1" commit="$2" dir="$BUILD_DIR/$1"
-    outdated "$dir/.patched" "$TOOLCHAIN_DIR/$name/patches" || return 0
-    # Applying resets ../../target/wiiu-toolchain/<name>/, so stop when it has work that isn't exported yet
+    local name="$1" commit="$2" dir="$SRC_DIR/$1"
+    outdated "$dir/.patched" "$TOOLCHAIN_DIR/patches/$name" || return 0
+    # Applying resets ../../target/wiiu-toolchain/src/<name>/, so stop when it has work that isn't exported yet
     if [ -s "$dir/.patched" ] && { [ -n "$(git -C "$dir" status --porcelain --untracked-files=no)" ] ||
         [ "$(git -C "$dir" rev-parse HEAD)" != "$(cat "$dir/.patched")" ]; }; then
-        die "../../target/wiiu-toolchain/$name/ has changes that aren't in $name/patches/, run ./build.sh export-patches or remove ../../target/wiiu-toolchain/$name/"
+        die "../../target/wiiu-toolchain/src/$name/ has changes that aren't in patches/$name/, run ./build.sh export-patches or remove ../../target/wiiu-toolchain/src/$name/"
     fi
     msg "Applying $name patches"
     # git am keeps the authors of the patches, but needs a committer identity
@@ -239,7 +243,7 @@ patch() {
     # A patch that failed to apply leaves git am half done, start over
     git -C "$dir" am --abort > /dev/null 2>&1 || true
     git -C "$dir" reset -q --hard upstream
-    if ! git -C "$dir" am -q --keep-cr --whitespace=nowarn "$TOOLCHAIN_DIR/$name"/patches/*.patch; then
+    if ! git -C "$dir" am -q --keep-cr --whitespace=nowarn "$TOOLCHAIN_DIR/patches/$name"/*.patch; then
         git -C "$dir" am --abort
         rm -f "$dir/.patched"
         die "Failed to apply the $name patches"
@@ -248,17 +252,17 @@ patch() {
     git -C "$dir" rev-parse HEAD > "$dir/.patched"
 }
 
-# Writes the commits on top of upstream back to <name>/patches/ for every patched repo
+# Writes the commits on top of upstream back to patches/<name>/ for every patched repo
 export_patches() {
     local name dir
-    for name in wut wut-tools picolibc libogc decaf-emu cemu rust; do
-        dir="$BUILD_DIR/$name"
+    for name in wut wut-tools picolibc libogc decaf-emu cemu rust-std; do
+        dir="$SRC_DIR/$name"
         # Cemu and Rust are only there once the cemu or std command ran
-        [[ "$name" == cemu || "$name" == rust ]] && [ ! -d "$dir" ] && continue
+        [[ "$name" == cemu || "$name" == rust-std ]] && [ ! -d "$dir" ] && continue
         [ -d "$dir/.git" ] || die "No patched $name, run ./build.sh first"
-        rm -f "$TOOLCHAIN_DIR/$name"/patches/*.patch
+        rm -f "$TOOLCHAIN_DIR/patches/$name"/*.patch
         git -C "$dir" format-patch -q --no-numbered --zero-commit --no-signature \
-            -o "$TOOLCHAIN_DIR/$name/patches" upstream..HEAD
+            -o "$TOOLCHAIN_DIR/patches/$name" upstream..HEAD
         git -C "$dir" rev-parse HEAD > "$dir/.patched"
         msg "Exported $(git -C "$dir" rev-list --count upstream..HEAD) $name patches"
     done
@@ -271,8 +275,9 @@ build_picolibc() {
     outdated "$SYSROOT/lib/libc.a" "$PICOLIBC_DIR/.patched" "$PICOLIBC_DIR"/{libc,libm,meson.build} \
         "$TOOLCHAIN_DIR/build.sh" || return 0
     msg "Building picolibc"
+    mkdir -p "$OBJ_DIR"
     # Meson calls the 32-bit PowerPC CPU family ppc
-    cat > "$BUILD_DIR/picolibc-cross.txt" << CROSS
+    cat > "$OBJ_DIR/picolibc-cross.txt" << CROSS
 [binaries]
 c = ['${LLVM}clang', '--target=powerpc-none-eabi', '-mcpu=750', '-nostdlib']
 c_ld = 'lld'
@@ -289,22 +294,22 @@ endian = 'big'
 [properties]
 skip_sanity_check = true
 CROSS
-    rm -rf "$BUILD_DIR/picolibc-build" "$SYSROOT"
+    rm -rf "$OBJ_DIR/picolibc" "$SYSROOT"
     # Cafe OS starts the program, wutpicolibc gives picolibc its console, heap, locks and files.
     # wutpicolibc supplies per-thread errno, and the streams lock and are flushed at exit.
-    meson setup "$BUILD_DIR/picolibc-build" "$PICOLIBC_DIR" \
-        --cross-file "$BUILD_DIR/picolibc-cross.txt" --prefix "$SYSROOT" --includedir include \
+    meson setup "$OBJ_DIR/picolibc" "$PICOLIBC_DIR" \
+        --cross-file "$OBJ_DIR/picolibc-cross.txt" --prefix "$SYSROOT" --includedir include \
         --libdir lib --buildtype plain -Dc_args="['-ffunction-sections', '-fdata-sections', '-DESPRESSO', '-Os', '-g']" \
         -Dmultilib=false -Dpicocrt=false -Dsemihost=false -Dtests=false -Dspecsdir=none \
         -Dthread-local-storage=false -Derrno-function=__errno -Dposix-console=false -Dstdio-locking=true -Dstdio-exit-flush=true > /dev/null ||
         die "Failed to configure picolibc"
-    meson install -C "$BUILD_DIR/picolibc-build" > /dev/null || die "Failed to build picolibc"
+    meson install -C "$OBJ_DIR/picolibc" > /dev/null || die "Failed to build picolibc"
 }
 
-# Compiles sources at the same time and archives them to the build directory,
+# Compiles sources at the same time and archives them to lib/,
 # usage: build_archive <library> <flags>... -- <sources>...
 build_archive() {
-    local library="$BUILD_DIR/$1" objects_dir="$BUILD_DIR/objects/${1%.a}" flags=() source object
+    local library="$LIB_DIR/$1" objects_dir="$OBJ_DIR/${1%.a}" flags=() source object
     local pids=() objects=() failed=0
     shift
     while [ "$1" != -- ]; do
@@ -314,7 +319,7 @@ build_archive() {
     shift
     msg "Building $(basename "$library")"
     rm -rf "$objects_dir"
-    mkdir -p "$objects_dir"
+    mkdir -p "$objects_dir" "$LIB_DIR"
     for source in "$@"; do
         object="$objects_dir/$(basename "$(dirname "$source")")_$(basename "$source").o"
         if [[ "$source" == *.S ]]; then
@@ -334,9 +339,9 @@ build_archive() {
 }
 
 # Compiles host C++ sources, as many at the same time as there are CPUs, and links them to a program
-# in the build directory, usage: build_host <program> <flags>... -- <sources>... -- <link flags>...
+# in bin/, usage: build_host <program> <flags>... -- <sources>... -- <link flags>...
 build_host() {
-    local program="$1" objects_dir="$BUILD_DIR/objects/$1" jobs flags=() objects=() pids=() source object pid failed=0
+    local program="$1" objects_dir="$OBJ_DIR/$1" jobs flags=() objects=() pids=() source object pid failed=0
     jobs=$(getconf _NPROCESSORS_ONLN)
     shift
     while [ "$1" != -- ]; do
@@ -345,7 +350,7 @@ build_host() {
     done
     shift
     msg "Building $program"
-    mkdir -p "$objects_dir"
+    mkdir -p "$objects_dir" "$BIN_DIR"
     while [ "$1" != -- ]; do
         source="$1"
         shift
@@ -363,51 +368,52 @@ build_host() {
     done
     shift
     [ "$failed" = 0 ] || die "Failed to compile $program"
-    c++ "${objects[@]}" "$@" -o "$BUILD_DIR/$program" || die "Failed to link $program"
+    c++ "${objects[@]}" "$@" -o "$BIN_DIR/$program" || die "Failed to link $program"
 }
 
 # rplimportgen writes the import stubs of every system library in wut's cafe/*.def files, the
-# linker script includes imports.ld, which puts each library's stubs in its own import section
+# linker script includes lib/imports.ld, which puts each library's stubs in its own import section
 build_imports() {
     local def name
-    outdated "$BUILD_DIR/imports.ld" "$BUILD_DIR/rplimportgen" "$WUT_DIR/cafe" "$TOOLCHAIN_DIR/build.sh" || return 0
+    outdated "$LIB_DIR/imports.ld" "$BIN_DIR/rplimportgen" "$WUT_DIR/cafe" "$TOOLCHAIN_DIR/build.sh" || return 0
     msg "Generating the import stubs"
-    rm -rf "$BUILD_DIR/imports"
-    mkdir -p "$BUILD_DIR/imports"
+    rm -rf "$OBJ_DIR/imports"
+    mkdir -p "$OBJ_DIR/imports" "$LIB_DIR"
     for def in "$WUT_DIR"/cafe/*.def; do
         name="$(basename "$def" .def)"
-        "$BUILD_DIR/rplimportgen" "$def" "$BUILD_DIR/imports/$name.S" "$BUILD_DIR/imports/$name.ld" > /dev/null ||
+        "$BIN_DIR/rplimportgen" "$def" "$OBJ_DIR/imports/$name.S" "$OBJ_DIR/imports/$name.ld" > /dev/null ||
             die "Failed to generate the $name import stubs"
     done
-    cat "$BUILD_DIR"/imports/*.ld > "$BUILD_DIR/imports.ld"
+    cat "$OBJ_DIR"/imports/*.ld > "$LIB_DIR/imports.ld"
 }
 
 build_libraries() {
     # The wut sources are checked too, so edits in dev mode get built
-    if outdated "$BUILD_DIR/libwut.a" "$WUT_DIR"/{.patched,include,libraries} "$BUILD_DIR/imports.ld" \
+    if outdated "$LIB_DIR/libwut.a" "$WUT_DIR"/{.patched,include,libraries} "$LIB_DIR/imports.ld" \
         "$SYSROOT/lib/libc.a" "$TOOLCHAIN_DIR/build.sh"; then
         build_archive libwut.a "${WIIU_CFLAGS[@]}" -std=gnu17 -Wall -Wno-unused -Wno-format-security -- \
-            "$BUILD_DIR"/imports/*.S "${WUT_SOURCES[@]/#/$WUT_DIR/}"
+            "$OBJ_DIR"/imports/*.S "${WUT_SOURCES[@]/#/$WUT_DIR/}"
     fi
     # The programs include gu.h from include/, with the two files it needs
-    if outdated "$BUILD_DIR/libgu.a" "$LIBOGC_DIR"/{.patched,gc,libogc} "$SYSROOT/lib/libc.a" "$TOOLCHAIN_DIR/build.sh"; then
+    if outdated "$LIB_DIR/libgu.a" "$LIBOGC_DIR"/{.patched,gc,libogc} "$SYSROOT/lib/libc.a" "$TOOLCHAIN_DIR/build.sh"; then
         build_archive libgu.a "${GU_CFLAGS[@]}" -- "${GU_SOURCES[@]/#/$LIBOGC_DIR/}"
         rm -rf "$BUILD_DIR/include"
         mkdir -p "$BUILD_DIR/include"
         cp "${GU_HEADERS[@]/#/$LIBOGC_DIR/}" "$BUILD_DIR/include/"
     fi
-    if outdated "$BUILD_DIR/libcompiler-rt.a" "$TOOLCHAIN_DIR/build.sh"; then
+    if outdated "$LIB_DIR/libcompiler-rt.a" "$TOOLCHAIN_DIR/build.sh"; then
         build_archive libcompiler-rt.a "${WIIU_CFLAGS[@]}" -std=gnu11 -- \
             "${COMPILER_RT_SOURCES[@]/#/$COMPILER_RT_DIR/compiler-rt/lib/builtins/}"
     fi
 }
 
-# elf2rpl and rplimportgen from wut-tools, latte-assembler from decaf-emu and our gtxconv/ and
-# wuhbtool/ run on the host
+# elf2rpl and rplimportgen from wut-tools, latte-assembler from decaf-emu and our crates/gtxconv/
+# and crates/wuhbtool/ run on the host
 build_tools() {
-    local objects_dir="$BUILD_DIR/objects/latte-assembler" tool
+    local objects_dir="$OBJ_DIR/latte-assembler" tool
+    mkdir -p "$BIN_DIR"
     for tool in gtxconv wuhbtool; do
-        outdated "$BUILD_DIR/$tool" "$TOOLCHAIN_DIR/$tool" "$ROOT_DIR/lib/graphics/image" "$ROOT_DIR/lib/data" ||
+        outdated "$BIN_DIR/$tool" "$TOOLCHAIN_DIR/crates/$tool" "$ROOT_DIR/lib/graphics/image" "$ROOT_DIR/lib/data" ||
             continue
         msg "Building $tool"
         # Build scripts under the cargo wrapper reach this through the cc script, so leave out the
@@ -420,21 +426,21 @@ build_tools() {
             -u CARGO_PROFILE_RELEASE_STRIP -u CARGO_PROFILE_RELEASE_BUILD_OVERRIDE_OPT_LEVEL \
             cargo build -q --release -p "$tool" --manifest-path "$ROOT_DIR/Cargo.toml" \
             --target-dir "$ROOT_DIR/target" || die "Failed to build $tool"
-        rm -f "$BUILD_DIR/$tool"
-        cp "$ROOT_DIR/target/release/$tool" "$BUILD_DIR/$tool"
+        rm -f "$BIN_DIR/$tool"
+        cp "$ROOT_DIR/target/release/$tool" "$BIN_DIR/$tool"
     done
-    if outdated "$BUILD_DIR/elf2rpl" "$TOOLS_DIR/.patched" "$TOOLS_DIR/src"; then
+    if outdated "$BIN_DIR/elf2rpl" "$TOOLS_DIR/.patched" "$TOOLS_DIR/src"; then
         msg "Building elf2rpl"
         c++ -std=c++17 -O2 -w -DFMT_HEADER_ONLY -I"$TOOLS_DIR/src/common" -I"$TOOLS_DIR/libraries/excmd/src" \
-            -I"$TOOLS_DIR/libraries/fmt/include" "$TOOLS_DIR/src/elf2rpl/main.cpp" -lz -o "$BUILD_DIR/elf2rpl" ||
+            -I"$TOOLS_DIR/libraries/fmt/include" "$TOOLS_DIR/src/elf2rpl/main.cpp" -lz -o "$BIN_DIR/elf2rpl" ||
             die "Failed to build elf2rpl"
     fi
-    if outdated "$BUILD_DIR/rplimportgen" "$TOOLS_DIR/.patched" "$TOOLS_DIR/src"; then
+    if outdated "$BIN_DIR/rplimportgen" "$TOOLS_DIR/.patched" "$TOOLS_DIR/src"; then
         msg "Building rplimportgen"
         c++ -std=c++17 -O2 -w -I"$TOOLS_DIR/src/common" "$TOOLS_DIR/src/rplimportgen/rplimportgen.cpp" \
-            -o "$BUILD_DIR/rplimportgen" || die "Failed to build rplimportgen"
+            -o "$BIN_DIR/rplimportgen" || die "Failed to build rplimportgen"
     fi
-    outdated "$BUILD_DIR/latte-assembler" "$DECAF_DIR/.patched" "$DECAF_DIR/tools" "$TOOLCHAIN_DIR/build.sh" || return 0
+    outdated "$BIN_DIR/latte-assembler" "$DECAF_DIR/.patched" "$DECAF_DIR/tools" "$TOOLCHAIN_DIR/build.sh" || return 0
     # The assembler parses with this PEG grammar, upstream CMake generates the same header
     rm -rf "$objects_dir"
     mkdir -p "$objects_dir"
@@ -449,21 +455,21 @@ build_tools() {
         -I"$DECAF_DIR/libraries/cnl/include" -- "${LATTE_ASSEMBLER_SOURCES[@]/#/$DECAF_DIR/}" --
 }
 
-# Builds cemu/runner.cpp with Cemu's interpreter and Cafe OS. Cemu's headers include boost, glm
-# and wxWidgets for things the OS emulation doesn't use, cemu/shim/ has the few parts it does.
+# Builds runner/runner.cpp with Cemu's interpreter and Cafe OS. Cemu's headers include boost, glm
+# and wxWidgets for things the OS emulation doesn't use, runner/shim/ has the few parts it does.
 # ENABLE_OPENGL only gives the unused graphics API setting a default.
 # macOS only declares the ucontext functions of Cemu's fibers for X/Open sources.
 build_cemu() {
     local flags=()
     patch cemu "$cemu_commit"
-    outdated "$BUILD_DIR/cemu-runner" "$TOOLCHAIN_DIR/cemu" "$CEMU_DIR"/{.patched,src} "$TOOLCHAIN_DIR/build.sh" || return 0
+    outdated "$BIN_DIR/cemu-runner" "$TOOLCHAIN_DIR/runner" "$CEMU_DIR"/{.patched,src} "$TOOLCHAIN_DIR/build.sh" || return 0
     [ "$(uname)" = Darwin ] && flags+=(-D_XOPEN_SOURCE)
     build_host cemu-runner -std=c++20 -O2 -w -fno-strict-aliasing -DFMT_HEADER_ONLY -DEMULATOR_VERSION_MAJOR=2 \
         -DEMULATOR_VERSION_MINOR=6 -DEMULATOR_VERSION_PATCH=0 -DEMULATOR_HASH="$cemu_version" ${flags[@]+"${flags[@]}"} \
-        -DENABLE_OPENGL -I"$CEMU_DIR/src" -I"$CEMU_DIR/src/Cafe" -I"$TOOLCHAIN_DIR/cemu/shim" -I"$FMT_DIR/include" \
+        -DENABLE_OPENGL -I"$CEMU_DIR/src" -I"$CEMU_DIR/src/Cafe" -I"$TOOLCHAIN_DIR/runner/shim" -I"$FMT_DIR/include" \
         -I"$PUGIXML_DIR/src" -include "$CEMU_DIR/src/Common/precompiled.h" -- \
         "${CEMU_SOURCES[@]/#/$CEMU_DIR/src/}" "$CEMU_DIR"/src/Cafe/OS/libs/coreinit/*.cpp \
-        "$PUGIXML_DIR/src/pugixml.cpp" "$TOOLCHAIN_DIR/cemu/runner.cpp" -- -lz -pthread
+        "$PUGIXML_DIR/src/pugixml.cpp" "$TOOLCHAIN_DIR/runner/runner.cpp" -- -lz -pthread
 }
 
 # Each guest reports through OSReport and gets its own user folder with an SD card.
@@ -475,18 +481,18 @@ run_test() (
     user=$(mktemp -d)
     trap 'rm -rf "$user"' EXIT
     msg "Running the C suite in cemu-runner"
-    "$BUILD_DIR/cemu-runner" "$TOOLCHAIN_DIR/test/c/target/test.rpx" test 60 "$user/c"
+    "$BIN_DIR/cemu-runner" "$TOOLCHAIN_DIR/test/c/target/test.rpx" test 60 "$user/c"
 
-    "$TOOLCHAIN_DIR/cargo" build --locked --release --manifest-path "$TOOLCHAIN_DIR/test/rust/Cargo.toml"
+    "$TOOLCHAIN_DIR/bin/cargo" build --locked --release --manifest-path "$TOOLCHAIN_DIR/test/rust/Cargo.toml"
     mkdir -p "$user/rust/sdcard"
     rpx="$user/rust/sdcard/boot.rpx"
-    "$BUILD_DIR/elf2rpl" "$elf" "$rpx" > /dev/null
+    "$BIN_DIR/elf2rpl" "$elf" "$rpx" > /dev/null
     msg "Running the Rust suite in cemu-runner"
-    "$BUILD_DIR/cemu-runner" "$rpx" test 60 "$user/rust" 'suite words'
+    "$BIN_DIR/cemu-runner" "$rpx" test 60 "$user/rust" 'suite words'
 
     msg "Checking panic output and abort in cemu-runner"
     status=0
-    "$BUILD_DIR/cemu-runner" "$rpx" run 10 "$user/panic" 'panic' > "$user/panic.log" 2>&1 || status=$?
+    "$BIN_DIR/cemu-runner" "$rpx" run 10 "$user/panic" 'panic' > "$user/panic.log" 2>&1 || status=$?
     cat "$user/panic.log"
     [ "$status" = 134 ] && grep -q 'wiiu-std-panic-marker' "$user/panic.log" ||
         die "Rust panic did not print its message and exit with status 134"
@@ -530,7 +536,7 @@ for command in "$@"; do
         all) lock; fetch; patch wut "$wut_commit"; patch wut-tools "$tools_commit"
             patch picolibc "$picolibc_commit"; patch libogc "$libogc_commit"; patch decaf-emu "$decaf_commit"
             build_picolibc; build_tools; build_imports; build_libraries ;;
-        std) lock; copy_rust; patch rust upstream ;;
+        std) lock; copy_rust; patch rust-std upstream ;;
         test) unlock; run_test ;;
         cemu) lock; fetch cemu; build_cemu ;;
         export-patches) export_patches ;;

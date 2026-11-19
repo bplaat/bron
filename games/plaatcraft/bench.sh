@@ -15,10 +15,8 @@ fi
 cd "$(dirname "$0")"
 root=../..
 build=$root/target/$console-toolchain
-cargo=$root/tools/$console-toolchain/cargo
-[[ $console == wiiu ]] || cargo=$root/tools/wii-toolchain/bin/cargo
 elf=$root/target/powerpc-nintendo-$console/release/plaatcraft.elf
-"$cargo" build --release --locked --features bench
+"$root/tools/$console-toolchain/bin/cargo" build --release --locked --features bench
 case $console in
 wii)
     "$root/tools/wii-toolchain/build.sh" dolphin
@@ -27,7 +25,7 @@ wii)
     ;;
 wiiu)
     "$root/tools/wiiu-toolchain/build.sh" cemu
-    "$build/elf2rpl" "$elf" "${elf%.elf}.rpx" >/dev/null
-    "$build/cemu-runner" "${elf%.elf}.rpx" run 600 2>&1 | grep -o 'BENCH.*'
+    "$build/bin/elf2rpl" "$elf" "${elf%.elf}.rpx" >/dev/null
+    "$build/bin/cemu-runner" "${elf%.elf}.rpx" run 600 2>&1 | grep -o 'BENCH.*'
     ;;
 esac

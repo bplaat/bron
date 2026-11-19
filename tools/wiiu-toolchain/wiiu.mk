@@ -12,11 +12,12 @@
 TOOLCHAIN := $(patsubst %/,%,$(dir $(lastword $(MAKEFILE_LIST))))
 TOOLCHAIN_BUILD := $(abspath $(TOOLCHAIN)/../../target/wiiu-toolchain)
 BUILD ?= target
-WUT := $(TOOLCHAIN_BUILD)/wut
-ELF2RPL := $(TOOLCHAIN_BUILD)/elf2rpl
-LATTE_ASSEMBLER := $(TOOLCHAIN_BUILD)/latte-assembler
-GTXCONV := $(TOOLCHAIN_BUILD)/gtxconv
-WUHBTOOL := $(TOOLCHAIN_BUILD)/wuhbtool
+TOOLCHAIN_LIB := $(TOOLCHAIN_BUILD)/lib
+WUT := $(TOOLCHAIN_BUILD)/src/wut
+ELF2RPL := $(TOOLCHAIN_BUILD)/bin/elf2rpl
+LATTE_ASSEMBLER := $(TOOLCHAIN_BUILD)/bin/latte-assembler
+GTXCONV := $(TOOLCHAIN_BUILD)/bin/gtxconv
+WUHBTOOL := $(TOOLCHAIN_BUILD)/bin/wuhbtool
 
 # Apple's clang can't target PowerPC, so prefer Homebrew's LLVM when it's installed
 LLVM := $(firstword $(wildcard /opt/homebrew/opt/llvm/bin/ /usr/local/opt/llvm/bin/))
@@ -32,20 +33,20 @@ CFLAGS := --target=powerpc-none-eabi -mcpu=750 -ffreestanding -nostdlibinc \
 	-I$(WUT)/libraries/libgfd/include -I$(TOOLCHAIN_BUILD)/include
 
 OBJECTS := $(patsubst src/%.c,$(BUILD)/%.o,$(wildcard src/*.c))
-LIBRARIES := $(addprefix $(TOOLCHAIN_BUILD)/,libwut.a libgu.a sysroot/lib/libc.a libcompiler-rt.a)
+LIBRARIES := $(TOOLCHAIN_LIB)/libwut.a $(TOOLCHAIN_LIB)/libgu.a $(TOOLCHAIN_BUILD)/sysroot/lib/libc.a $(TOOLCHAIN_LIB)/libcompiler-rt.a
 
 $(BUILD)/$(NAME).rpx: $(BUILD)/$(NAME).elf $(ELF2RPL)
 	$(ELF2RPL) $< $@ > /dev/null
 
 # elf2rpl needs the relocations to make the imports of the system libraries
-$(BUILD)/$(NAME).elf: $(OBJECTS) $(LIBRARIES) $(TOOLCHAIN)/wiiu.ld $(TOOLCHAIN_BUILD)/imports.ld
-	$(LD) -T $(TOOLCHAIN)/wiiu.ld -L $(TOOLCHAIN_BUILD) --gc-sections --emit-relocs -z nocopyreloc \
+$(BUILD)/$(NAME).elf: $(OBJECTS) $(LIBRARIES) $(TOOLCHAIN)/wiiu.ld $(TOOLCHAIN_LIB)/imports.ld
+	$(LD) -T $(TOOLCHAIN)/wiiu.ld -L $(TOOLCHAIN_LIB) --gc-sections --emit-relocs -z nocopyreloc \
 		$(OBJECTS) $(LIBRARIES) -o $@
 
 # The sources embed the assembled shaders and the converted textures
 SHADERS := $(if $(wildcard src/shader.vsh),$(BUILD)/shader.gsh)
 TEXTURES := $(if $(wildcard src/assets/textures.toml),$(BUILD)/textures.gtx)
-$(BUILD)/%.o: src/%.c $(SHADERS) $(TEXTURES) | $(TOOLCHAIN_BUILD)/libwut.a
+$(BUILD)/%.o: src/%.c $(SHADERS) $(TEXTURES) | $(TOOLCHAIN_LIB)/libwut.a
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -MMD -MP -c $< -o $@
 
@@ -54,20 +55,20 @@ $(BUILD)/shader.gsh: src/shader.vsh src/shader.psh $(LATTE_ASSEMBLER)
 	$(LATTE_ASSEMBLER) assemble --vsh=src/shader.vsh --psh=src/shader.psh $@
 
 $(BUILD)/$(NAME).wuhb: $(BUILD)/$(NAME).rpx $(wildcard meta/*) $(WUHBTOOL)
-	$(TOOLCHAIN)/bundle.sh $< meta $@
+	$(TOOLCHAIN)/bin/bundle $< meta $@
 
 $(BUILD)/textures.gtx: src/assets/textures.toml $(filter-out %.toml,$(wildcard src/assets/*)) $(GTXCONV)
 	@mkdir -p $(dir $@)
 	$(GTXCONV) -c $< -o $@
 
 # The toolchain script knows itself when it needs to rebuild, one run builds all libraries
-$(TOOLCHAIN_BUILD)/libwut.a: FORCE
+$(TOOLCHAIN_LIB)/libwut.a: FORCE
 	@$(TOOLCHAIN)/build.sh
-$(TOOLCHAIN_BUILD)/libgu.a $(TOOLCHAIN_BUILD)/sysroot/lib/libc.a $(TOOLCHAIN_BUILD)/libcompiler-rt.a $(TOOLCHAIN_BUILD)/imports.ld \
-	$(ELF2RPL) $(LATTE_ASSEMBLER) $(GTXCONV) $(WUHBTOOL): $(TOOLCHAIN_BUILD)/libwut.a ;
+$(TOOLCHAIN_LIB)/libgu.a $(TOOLCHAIN_BUILD)/sysroot/lib/libc.a $(TOOLCHAIN_LIB)/libcompiler-rt.a $(TOOLCHAIN_LIB)/imports.ld \
+	$(ELF2RPL) $(LATTE_ASSEMBLER) $(GTXCONV) $(WUHBTOOL): $(TOOLCHAIN_LIB)/libwut.a ;
 
 run: $(BUILD)/$(NAME).elf
-	$(TOOLCHAIN)/run.sh $<
+	$(TOOLCHAIN)/bin/run $<
 
 bundle: $(BUILD)/$(NAME).wuhb
 

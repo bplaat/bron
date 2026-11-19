@@ -1,7 +1,7 @@
 # gtxconv
 
-A Wii U texture converter, used by the [Wii U toolchain](..). It converts any image our
-[image](../../../lib/graphics/image) crate reads to GX2 RGBA8 or BC1 (DXT1) textures, optionally
+A Wii U texture converter, used by the [Wii U toolchain](../..). It converts any image our
+[image](../../../../lib/graphics/image) crate reads to GX2 RGBA8 or BC1 (DXT1) textures, optionally
 with mipmaps, and writes them to a GFD `.gtx` texture file that wut's libgfd reads. Like a TPL
 file, a `.gtx` file holds many textures.
 

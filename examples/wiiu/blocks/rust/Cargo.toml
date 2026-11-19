@@ -4,4 +4,4 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-wut-sys = { path = "../../../../tools/wiiu-toolchain/wut-sys" }
+wut-sys = { path = "../../../../tools/wiiu-toolchain/crates/wut-sys" }

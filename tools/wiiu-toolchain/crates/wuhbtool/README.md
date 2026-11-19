@@ -1,6 +1,6 @@
 # wuhbtool
 
-A Rust replacement for devkitPro's `wuhbtool`, used by the [Wii U toolchain](..). It bundles a
+A Rust replacement for devkitPro's `wuhbtool`, used by the [Wii U toolchain](../..). It bundles a
 Wii U program with its name, author, icon and splash screens into a `.wuhb` file, which the
 Aroma environment shows on the Wii U Menu like an installed title.
 
@@ -16,7 +16,7 @@ wuhbtool cube.rpx cube.wuhb --name="Cube" --author="Bastiaan" \
 - `--name` and `--short-name` default to each other, and both to the program's file name
 - `--icon` is the 128x128 icon on the Wii U Menu, `--tv-image` (1280x720) and `--drc-image`
   (854x480) are the splash screens on the TV and the GamePad while the program starts. Any
-  image our [image](../../../lib/graphics/image) crate reads works, other sizes are resized with
+  image our [image](../../../../lib/graphics/image) crate reads works, other sizes are resized with
   a warning
 - `--content` adds a directory as `content/`, which the program reads at runtime
 

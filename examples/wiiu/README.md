@@ -33,12 +33,12 @@ It writes `target/powerpc-nintendo-wiiu/release/<name>.rpx` in the standalone pr
 
 ```sh
 cd examples/wiiu/triangle/rust
-../../../../tools/wiiu-toolchain/cargo run --release --locked
+../../../../tools/wiiu-toolchain/bin/cargo run --release --locked
 ```
 
 All examples draw on the TV with libwhb and copy the image to the GamePad. Their shaders are written in Latte
 assembly in `src/shader.vsh` and `src/shader.psh`. Their images are converted at build time to BC1
-compressed textures with mipmaps by the toolchain's [gtxconv](../../tools/wiiu-toolchain/gtxconv),
+compressed textures with mipmaps by the toolchain's [gtxconv](../../tools/wiiu-toolchain/crates/gtxconv),
 from `src/assets/textures.toml`, and the GPU reads them in place from the program.
 
 ## Triangle

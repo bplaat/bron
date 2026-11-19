@@ -11,7 +11,7 @@ workspace = true
 
 [dependencies]
 basic-toml = "0.1.10"
-image = { path = "../../../lib/graphics/image" }
+image = { path = "../../../../lib/graphics/image" }
 serde = { version = "1.0", features = ["derive"] }
 
 [dev-dependencies]
