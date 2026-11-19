@@ -359,7 +359,7 @@ impl Xtask {
             );
             if self.os == Os::Linux && package == "bcanvas" {
                 let options = env::var("LSAN_OPTIONS").unwrap_or_default();
-                let suppressions = self.root.join("tools/xtask/lsan.supp");
+                let suppressions = self.root.join("tools/xtask/src/lsan.supp");
                 command.env(
                     "LSAN_OPTIONS",
                     format!("{options}:suppressions={}", suppressions.display()),
