@@ -908,9 +908,7 @@ resources_section
         2, LANG_NEUTRAL, app_icon_24, \
         3, LANG_NEUTRAL, app_icon_32, \
         4, LANG_NEUTRAL, app_icon_48, \
-        5, LANG_NEUTRAL, app_icon_64, \
-        6, LANG_NEUTRAL, app_icon_128, \
-        7, LANG_NEUTRAL, app_icon_256
+        5, LANG_NEUTRAL, app_icon_256
 
     resource icon_groups, \
         ICON_ID, LANG_NEUTRAL, app_icon_group
@@ -923,7 +921,7 @@ resources_section
 
     bitmap bassiebas_bitmap, "bassiebas.bmp"
 
-    ; Optimized PNG offsets and lengths match the directory entries in icon.ico.
+    ; Offsets and lengths match icon.ico.
     %macro icon_image 3
         align 4, db 0
         app_icon_%1:
@@ -933,22 +931,20 @@ resources_section
             .data_size equ $ - .data
     %endmacro
 
-    icon_image 16, 118, 220
-    icon_image 24, 338, 301
-    icon_image 32, 639, 349
-    icon_image 48, 988, 457
-    icon_image 64, 1445, 573
-    icon_image 128, 2018, 1219
-    icon_image 256, 3237, 2419
+    icon_image 16, 86, 1128
+    icon_image 24, 1214, 2440
+    icon_image 32, 3654, 4264
+    icon_image 48, 7918, 9640
+    icon_image 256, 17558, 2419
     %unmacro icon_image 3
 
     align 4, db 0
     app_icon_group:
         dd RVA(.data), .data_size, 0, 0
         .data:
-            dw 0, 1, 7
+            dw 0, 1, 5
             %assign icon_index 0
-            %rep 7
+            %rep 5
                 incbin "icon.ico", 6 + icon_index * 16, 12
                 dw icon_index + 1
                 %assign icon_index icon_index + 1
