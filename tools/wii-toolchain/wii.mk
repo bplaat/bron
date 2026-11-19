@@ -27,11 +27,11 @@ CFLAGS := --target=powerpc-none-eabi -mcpu=750 -ffreestanding -nostdlibinc \
 OBJECTS := $(patsubst src/%.c,$(BUILD)/%.o,$(wildcard src/*.c))
 LIBRARIES := $(addprefix $(TOOLCHAIN_BUILD)/,libogc.a libdvm.a sysroot/lib/libc.a libcompiler-rt.a)
 
-$(BUILD)/$(NAME).dol: $(BUILD)/$(NAME).elf
+$(BUILD)/$(NAME).dol: $(BUILD)/$(NAME).elf $(ELF2DOL)
 	$(ELF2DOL) $< $@
 
-$(BUILD)/$(NAME).elf: $(OBJECTS) $(LIBRARIES)
-	$(LD) -T $(TOOLCHAIN)/wii.ld --gc-sections $^ -o $@
+$(BUILD)/$(NAME).elf: $(OBJECTS) $(LIBRARIES) $(TOOLCHAIN)/wii.ld
+	$(LD) -T $(TOOLCHAIN)/wii.ld --gc-sections $(OBJECTS) $(LIBRARIES) -o $@
 
 $(BUILD)/%.o: src/%.c | $(TOOLCHAIN_BUILD)/libogc.a
 	@mkdir -p $(dir $@)
@@ -40,7 +40,8 @@ $(BUILD)/%.o: src/%.c | $(TOOLCHAIN_BUILD)/libogc.a
 # The toolchain script knows itself when it needs to rebuild, one run builds all libraries
 $(TOOLCHAIN_BUILD)/libogc.a: FORCE
 	@$(TOOLCHAIN)/build.sh
-$(TOOLCHAIN_BUILD)/libdvm.a $(TOOLCHAIN_BUILD)/sysroot/lib/libc.a $(TOOLCHAIN_BUILD)/libcompiler-rt.a: $(TOOLCHAIN_BUILD)/libogc.a ;
+$(TOOLCHAIN_BUILD)/libdvm.a $(TOOLCHAIN_BUILD)/sysroot/lib/libc.a $(TOOLCHAIN_BUILD)/libcompiler-rt.a \
+	$(ELF2DOL): $(TOOLCHAIN_BUILD)/libogc.a ;
 
 run: $(BUILD)/$(NAME).elf
 	$(TOOLCHAIN)/run.sh $<
