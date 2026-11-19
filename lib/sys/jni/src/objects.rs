@@ -19,7 +19,7 @@ use crate::{Env, jni_str};
 // MARK: JObject
 /// A local reference to a Java object, valid in the JNI stack frame of `'local`.
 #[repr(transparent)]
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct JObject<'local> {
     internal: jobject,
     lifetime: PhantomData<&'local ()>,
@@ -69,12 +69,6 @@ impl Deref for JObject<'_> {
 
     fn deref(&self) -> &jobject {
         &self.internal
-    }
-}
-
-impl Default for JObject<'_> {
-    fn default() -> Self {
-        Self::from_raw_unchecked(std::ptr::null_mut())
     }
 }
 
