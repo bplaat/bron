@@ -38,7 +38,7 @@ $(BUILD)/$(NAME).rpx: $(BUILD)/$(NAME).elf $(ELF2RPL)
 	$(ELF2RPL) $< $@ > /dev/null
 
 # elf2rpl needs the relocations to make the imports of the system libraries
-$(BUILD)/$(NAME).elf: $(OBJECTS) $(LIBRARIES) $(TOOLCHAIN)/wiiu.ld
+$(BUILD)/$(NAME).elf: $(OBJECTS) $(LIBRARIES) $(TOOLCHAIN)/wiiu.ld $(TOOLCHAIN_BUILD)/imports.ld
 	$(LD) -T $(TOOLCHAIN)/wiiu.ld -L $(TOOLCHAIN_BUILD) --gc-sections --emit-relocs -z nocopyreloc \
 		$(OBJECTS) $(LIBRARIES) -o $@
 
@@ -63,7 +63,7 @@ $(BUILD)/textures.gtx: src/assets/textures.toml $(filter-out %.toml,$(wildcard s
 # The toolchain script knows itself when it needs to rebuild, one run builds all libraries
 $(TOOLCHAIN_BUILD)/libwut.a: FORCE
 	@$(TOOLCHAIN)/build.sh
-$(TOOLCHAIN_BUILD)/libgu.a $(TOOLCHAIN_BUILD)/sysroot/lib/libc.a $(TOOLCHAIN_BUILD)/libcompiler-rt.a \
+$(TOOLCHAIN_BUILD)/libgu.a $(TOOLCHAIN_BUILD)/sysroot/lib/libc.a $(TOOLCHAIN_BUILD)/libcompiler-rt.a $(TOOLCHAIN_BUILD)/imports.ld \
 	$(ELF2RPL) $(LATTE_ASSEMBLER) $(GTXCONV) $(WUHBTOOL): $(TOOLCHAIN_BUILD)/libwut.a ;
 
 run: $(BUILD)/$(NAME).elf
