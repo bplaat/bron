@@ -4,13 +4,15 @@ Date: Mon, 2 Nov 2026 15:03:41 +0100
 Subject: [PATCH] Give host files their modification time
 
 FSAGetStat and FSAGetStatFile left the created and modified times at
-zero, 1980. Host files report the time they were last written.
+zero, 1980. Host files report the time they were last written, offset
+to the console's time zone like OSTime, as both times, since hosts have
+no portable creation time.
 ---
- src/Cafe/Filesystem/fsc.h               | 1 +
- src/Cafe/Filesystem/fscDeviceHostFS.cpp | 9 +++++++++
- src/Cafe/Filesystem/fscDeviceHostFS.h   | 2 +-
- src/Cafe/IOSU/fsa/iosu_fsa.cpp          | 4 ++++
- 4 files changed, 15 insertions(+), 1 deletion(-)
+ src/Cafe/Filesystem/fsc.h               |  1 +
+ src/Cafe/Filesystem/fscDeviceHostFS.cpp |  9 +++++++++
+ src/Cafe/Filesystem/fscDeviceHostFS.h   |  2 +-
+ src/Cafe/IOSU/fsa/iosu_fsa.cpp          | 12 ++++++++++++
+ 4 files changed, 23 insertions(+), 1 deletion(-)
 
 diff --git a/src/Cafe/Filesystem/fsc.h b/src/Cafe/Filesystem/fsc.h
 index aa98263..52b1f2c 100644
@@ -66,17 +68,32 @@ index 7121594..e267b91 100644
  };
 \ No newline at end of file
 diff --git a/src/Cafe/IOSU/fsa/iosu_fsa.cpp b/src/Cafe/IOSU/fsa/iosu_fsa.cpp
-index 95ae924..ea9d7f0 100644
+index 183fc5a..fca1d07 100644
 --- a/src/Cafe/IOSU/fsa/iosu_fsa.cpp
 +++ b/src/Cafe/IOSU/fsa/iosu_fsa.cpp
-@@ -392,6 +392,10 @@ namespace iosu
+@@ -369,6 +369,15 @@ namespace iosu
+ 			return FSA_convertFSCtoFSAStatus(fscStatus);
+ 		}
+ 
++		// FSTime counts microseconds since 1980 in the console's time zone, like OSTime, or is 0 before then
++		uint64 __FSA_FSTimeFromUnixTime(uint64 unixTime)
++		{
++			constexpr sint64 FS_TIME_EPOCH = 315532800; // 1980-01-01 in seconds since 1970
++			sint64 utcOffset = (sint64)(ppcCyclesSince2000 / ESPRESSO_CORE_CLOCK) - (sint64)(ppcCyclesSince2000_UTC / ESPRESSO_CORE_CLOCK);
++			sint64 time = (sint64)unixTime + utcOffset - FS_TIME_EPOCH;
++			return time > 0 ? (uint64)time * 1000000 : 0;
++		}
++
+ 		bool __FSA_GetStatFromFSCFile(FSCVirtualFile* fscFile, FSStat_t* fsStatOut)
+ 		{
+ 			memset(fsStatOut, 0x00, sizeof(FSStat_t));
+@@ -392,6 +401,9 @@ namespace iosu
  			}
  			fsStatOut->permissions = 0x777; // format matches unix (fstat) permissions?
  			fsStatOut->flag = statFlag;
-+			// FSTime counts microseconds since 1980
-+			uint64 modifiedTime = fscFile->fscQueryValueU64(FSC_QUERY_MODIFIED_TIME);
-+			if (modifiedTime >= 315532800)
-+				fsStatOut->createdTime = fsStatOut->modifiedTime = (modifiedTime - 315532800) * 1000000;
++			// Host files have no portable creation time, so it's the modification time too
++			if (uint64 modifiedTime = fscFile->fscQueryValueU64(FSC_QUERY_MODIFIED_TIME))
++				fsStatOut->createdTime = fsStatOut->modifiedTime = __FSA_FSTimeFromUnixTime(modifiedTime);
  			return true;
  		}
  

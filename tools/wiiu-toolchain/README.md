@@ -120,7 +120,8 @@ other repos, `./build.sh export-patches` also writes `../../target/wiiu-toolchai
 - `0002` keeps files working after reading past their end, which left the Unix file stream failing
   every later read and write
 - `0003` fails to remove a host directory that isn't empty, which reported success
-- `0004` gives host files their modification time, `FSAGetStat` returned 1980
+- `0004` gives host files their modification time, in the time zone of `OSTime`, `FSAGetStat`
+  returned 1980
 - `0005` fuses the multiply-add instructions on every host, on x86-64 they rounded twice
 - `0006` implements NSS initialization and random-byte exports using the host OS
   CSPRNG, with the error codes of [cafe-sys](https://github.com/rust-wiiu/cafe-sys). The headless
