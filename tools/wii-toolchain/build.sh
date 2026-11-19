@@ -4,18 +4,20 @@
 # picolibc/patches/ and libdvm/patches/ and builds libogc.a with the AESND DSP mixer, picolibc
 # (the C library) in sysroot/, libdvm.a for SD card files, libcompiler-rt.a, elf2dol and our
 # gxtexconv/.
-# The example Makefiles and Rust build.rs files run this before they build.
+# The C Makefiles and Rust Cargo wrapper run this before building a program.
 #
 # Usage: ./build.sh [command]...
 #   (none)          fetch, patch and build
+#   std             prepare the patched Rust sources
 #   export-patches  write the commits in ../../target/wii-toolchain/<name>/ back to <name>/patches/
-#   test            build test/ and run it headless in dolphin-runner
+#   test            build test/c and test/rust and run them headless in dolphin-runner
 #   dolphin         build Dolphin's core with dolphin/patches/ and dolphin/runner.cpp to
 #                   ../../target/wii-toolchain/dolphin-runner
 #   clean           remove ../../target/wii-toolchain/
 set -euo pipefail
 cd "$(dirname "$0")"
 
+rust_toolchain='nightly-2026-11-14'
 libogc_url='https://github.com/devkitPro/libogc.git'
 libogc_version='v2.11.0'
 libogc_commit='7a2c05b8d78cf3a5ae2606874ef3e4a117273bf9'
@@ -57,6 +59,7 @@ SYSROOT="$BUILD_DIR/sysroot"
 TOOLS_DIR="$BUILD_DIR/gamecube-tools"
 COMPILER_RT_DIR="$BUILD_DIR/compiler-rt"
 DOLPHIN_DIR="$BUILD_DIR/dolphin"
+RUST_DIR="$BUILD_DIR/rust"
 
 # Apple's clang can't target PowerPC, so prefer Homebrew's LLVM when it's installed
 LLVM=''
@@ -180,6 +183,29 @@ fetch_dolphin() {
     fi
 }
 
+# The standard library sources must match the compiler that builds them.
+copy_rust() {
+    # The cargo wrapper runs this nightly, also when the Rust sources come from a cache
+    rustup toolchain list | grep -q "^$rust_toolchain-" ||
+        rustup -q toolchain install --profile minimal -c rust-src "$rust_toolchain"
+    if [ -d "$RUST_DIR" ]; then
+        [ "$(cat "$RUST_DIR/.toolchain")" = "$rust_toolchain" ] ||
+            die "Rust nightly changed, export any local Rust patches and remove $RUST_DIR"
+        return
+    fi
+    msg "Copying the std sources of Rust $rust_toolchain"
+    rm -rf "$RUST_DIR.part"
+    mkdir -p "$RUST_DIR.part"
+    cp -R "$(rustc "+$rust_toolchain" --print sysroot)/lib/rustlib/src/rust/library" "$RUST_DIR.part/library"
+    git -C "$RUST_DIR.part" init -q
+    git -C "$RUST_DIR.part" add library
+    git -C "$RUST_DIR.part" -c commit.gpgsign=false -c user.name=wii-toolchain -c user.email=wii-toolchain@localhost \
+        commit -q -m "Rust $rust_toolchain std sources"
+    git -C "$RUST_DIR.part" tag upstream
+    printf '%s\n' "$rust_toolchain" > "$RUST_DIR.part/.toolchain"
+    mv "$RUST_DIR.part" "$RUST_DIR"
+}
+
 # Applies the patches of a repo as commits on top of its upstream tag, again when they changed
 patch() {
     local name="$1" commit="$2" dir="$BUILD_DIR/$1"
@@ -212,10 +238,10 @@ patch() {
 # Writes the commits on top of upstream back to <name>/patches/ for every patched repo
 export_patches() {
     local name dir
-    for name in libogc picolibc libdvm dolphin; do
+    for name in libogc picolibc libdvm dolphin rust; do
         dir="$BUILD_DIR/$name"
-        # Dolphin is only there once the dolphin command ran
-        [ "$name" = dolphin ] && [ ! -d "$dir" ] && continue
+        # Dolphin and the patched Rust sources are prepared on demand.
+        [[ "$name" == dolphin || "$name" == rust ]] && [ ! -d "$dir" ] && continue
         [ -d "$dir/.git" ] || die "No patched $name, run ./build.sh first"
         rm -f "$TOOLCHAIN_DIR/$name"/patches/*.patch
         git -C "$dir" format-patch -q --no-numbered --zero-commit --no-signature \
@@ -251,13 +277,14 @@ endian = 'big'
 skip_sanity_check = true
 CROSS
     rm -rf "$BUILD_DIR/picolibc-build" "$SYSROOT"
-    # libogc starts the program and has no thread-local storage, so picolibc gets neither.
+    # libogc starts the program and supplies errno from its own thread control block.
     # The minsize build type means -Oz with clang, -Os like everything else unrolls the copy loops.
     meson setup "$BUILD_DIR/picolibc-build" "$PICOLIBC_DIR" \
         --cross-file "$BUILD_DIR/picolibc-cross.txt" --prefix "$SYSROOT" --includedir include \
         --libdir lib --buildtype plain -Dc_args="['-ffunction-sections', '-fdata-sections', '-DHW_RVL', '-Os', '-g']" \
         -Dmultilib=false -Dpicocrt=false -Dsemihost=false -Dtests=false -Dspecsdir=none \
-        -Dthread-local-storage=false -Dposix-console=true -Dfast-bufio=true -Dstdio-exit-flush=true > /dev/null ||
+        -Dthread-local-storage=false -Derrno-function=__errno -Dposix-console=true \
+        -Dfast-bufio=true -Dstdio-exit-flush=true > /dev/null ||
         die "Failed to configure picolibc"
     meson install -C "$BUILD_DIR/picolibc-build" > /dev/null || die "Failed to build picolibc"
 }
@@ -290,8 +317,8 @@ build_archive() {
         wait "$pid" || failed=1
     done
     [ "$failed" = 0 ] || die "Failed to compile $(basename "$library")"
-    rm -f "$library"
-    "${LLVM}llvm-ar" rcs "$library" "${objects[@]}"
+    "${LLVM}llvm-ar" rcs "$objects_dir/archive.a" "${objects[@]}"
+    mv -f "$objects_dir/archive.a" "$library"
 }
 
 # Assembles the AESND mixer for the DSP with gcdsptool from gamecube-tools, aesndlib.c includes
@@ -346,9 +373,14 @@ build_tools() {
     fi
     if outdated "$BUILD_DIR/gxtexconv" "$TOOLCHAIN_DIR/gxtexconv" "$ROOT_DIR/lib/graphics/image"; then
         msg "Building gxtexconv"
-        # The Rust examples run this from their build.rs, so leave out their toolchain and target
+        # Build scripts under the cargo wrapper reach this through the cc script, so leave out the
+        # wrapper's toolchain, target and profiles
         env -u RUSTUP_TOOLCHAIN -u RUSTC -u RUSTC_WRAPPER -u RUSTC_WORKSPACE_WRAPPER \
-            -u CARGO_ENCODED_RUSTFLAGS -u CARGO_BUILD_TARGET \
+            -u CARGO_ENCODED_RUSTFLAGS -u CARGO_BUILD_TARGET -u CARGO_UNSTABLE_BUILD_STD \
+            -u CARGO_UNSTABLE_JSON_TARGET_SPEC -u __CARGO_TESTS_ONLY_SRC_ROOT \
+            -u CARGO_PROFILE_RELEASE_OPT_LEVEL -u CARGO_PROFILE_RELEASE_PANIC \
+            -u CARGO_PROFILE_RELEASE_LTO -u CARGO_PROFILE_RELEASE_CODEGEN_UNITS \
+            -u CARGO_PROFILE_RELEASE_STRIP -u CARGO_PROFILE_RELEASE_BUILD_OVERRIDE_OPT_LEVEL \
             cargo build -q --release -p gxtexconv --manifest-path "$ROOT_DIR/Cargo.toml" \
             --target-dir "$ROOT_DIR/target" || die "Failed to build gxtexconv"
         rm -f "$BUILD_DIR/gxtexconv"
@@ -356,19 +388,30 @@ build_tools() {
     fi
 }
 
-# Builds test/ with the toolchain and runs it headless in dolphin-runner with an SD card made from
-# an empty directory, the test writes its results to the debug UART, the runner fails when a check
-# failed or the program didn't finish. Release the lock before make runs the build itself.
-run_test() {
-    local sd_dir="$BUILD_DIR/test/sd"
+# Build the C and Rust guest suites and use the debug UART to report their results.
+# Release the lock before make and the Cargo wrapper build the toolchain.
+run_test() (
+    local sd_dir elf="$TOOLCHAIN_DIR/test/rust/target/powerpc-nintendo-wii/release/wii-std-test.elf" dol abort
     (lock; fetch test; build_dolphin)
-    make -C "$TOOLCHAIN_DIR/test" --no-print-directory
-    rm -rf "$sd_dir"
-    mkdir -p "$sd_dir"
-    msg "Running the test in Dolphin"
-    "$BUILD_DIR/dolphin-runner" --sd "$sd_dir" "$BUILD_DIR/test/test.dol" test-title 'test 3600'
+    make -C "$TOOLCHAIN_DIR/test/c" --no-print-directory
+    sd_dir=$(mktemp -d)
+    trap 'rm -rf "$sd_dir"' EXIT
+    mkdir -p "$sd_dir/c" "$sd_dir/rust"
+    msg "Running the C suite in Dolphin"
+    "$BUILD_DIR/dolphin-runner" --sd "$sd_dir/c" "$TOOLCHAIN_DIR/test/c/target/test.dol" test-title 'test 3600'
+
+    "$TOOLCHAIN_DIR/cargo" build --locked --release --manifest-path "$TOOLCHAIN_DIR/test/rust/Cargo.toml"
+    dol="$sd_dir/rust/boot.dol"
+    "$BUILD_DIR/elf2dol" "$elf" "$dol"
+    msg "Running the Rust suite in Dolphin"
+    "$BUILD_DIR/dolphin-runner" --sd "$sd_dir/rust" "$dol" test-title 'test-args suite' 'test 3600'
+    abort=$("${LLVM}llvm-nm" --defined-only "$elf" | awk '$3 == "_exit" { print "0x" $1 }')
+    [ -n "$abort" ] || die "Missing _exit in the Rust test program"
+    msg "Checking panic output and abort in Dolphin"
+    "$BUILD_DIR/dolphin-runner" --sd "$sd_dir/rust" "$dol" 'test-args panic' "hook $abort" \
+        'await wii-std-panic-marker 600' 'wait 2' 'expect-hook 1'
     msg "All tests passed"
-}
+)
 
 # Builds Dolphin's core without its user interfaces, JIT (a generic build has only the
 # interpreters), GPU video backends, sound output, controllers and network services, and
@@ -421,13 +464,21 @@ lock() {
     locked=true
 }
 
+unlock() {
+    $locked || return 0
+    rm -rf "$BUILD_DIR/.lock"
+    trap - EXIT
+    locked=false
+}
+
 [ $# -gt 0 ] || set -- all
 for command in "$@"; do
     case "$command" in
         all) lock; fetch; patch libogc "$libogc_commit"; patch picolibc "$picolibc_commit"
             patch libdvm "$libdvm_commit"; build_picolibc; build_dsp_mixer; build_libraries; build_tools ;;
+        std) lock; copy_rust; patch rust upstream ;;
         export-patches) export_patches ;;
-        test) run_test ;;
+        test) unlock; run_test ;;
         dolphin) lock; fetch dolphin; build_dolphin ;;
         clean) rm -rf "$BUILD_DIR" ;;
         *) die "Unknown command: $command" ;;

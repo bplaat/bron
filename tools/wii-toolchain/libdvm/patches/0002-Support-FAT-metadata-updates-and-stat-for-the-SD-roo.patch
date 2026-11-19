@@ -1,0 +1,86 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Thu, 19 Nov 2026 11:49:12 +0100
+Subject: [PATCH] Support FAT metadata updates and stat for the SD root
+
+---
+ source/fat_driver.c | 41 +++++++++++++++++++++++++++++++++++++++--
+ 1 file changed, 39 insertions(+), 2 deletions(-)
+
+diff --git a/source/fat_driver.c b/source/fat_driver.c
+index 416e3a3..c4d5b5e 100644
+--- a/source/fat_driver.c
++++ b/source/fat_driver.c
+@@ -32,6 +32,9 @@ static int _FAT_ftruncate_r(struct _reent*, void*, off_t);
+ static int _FAT_fsync_r(struct _reent*, void*);
+ static int _FAT_rmdir_r(struct _reent*, const char*);
+ 
++static int _FAT_chmod_r(struct _reent*, const char*, mode_t);
++static int _FAT_set_mtime_r(struct _reent*, const char*, time_t);
++
+ static const devoptab_t _FAT_devoptab = {
+ 	.structSize   = sizeof(FFFIL),
+ 	.open_r       = _FAT_open_r,
+@@ -55,6 +58,8 @@ static const devoptab_t _FAT_devoptab = {
+ 	.fsync_r      = _FAT_fsync_r,
+ 	.rmdir_r      = _FAT_rmdir_r,
+ 	.lstat_r      = _FAT_stat_r,
++	.chmod_r      = _FAT_chmod_r,
++	.set_mtime_r  = _FAT_set_mtime_r,
+ };
+ 
+ const DvmFsDriver g_vfatFsDriver = {
+@@ -344,7 +349,14 @@ int _FAT_stat_r(struct _reent* r, const char* path, struct stat* st)
+ {
+ 	FILINFO fno;
+ 	FatVolume* vol = (FatVolume*)r->deviceData;
+-	FRESULT fr = f_stat(&vol->fs, _FAT_strip_device(path), &fno);
++	const char* device_path = _FAT_strip_device(path);
++	if (!strcmp(device_path, "/") || !*device_path) {
++		fno = (FILINFO){ .fattrib = AM_DIR };
++		_FAT_set_stat(st, &fno, vol->disc);
++		st->st_atime = st->st_mtime = st->st_ctime = 0;
++		return 0;
++	}
++	FRESULT fr = f_stat(&vol->fs, device_path, &fno);
+ 
+ 	if (fr == FR_OK) {
+ 		_FAT_set_stat(st, &fno, vol->disc);
+@@ -420,7 +432,8 @@ int _FAT_dirnext_r(struct _reent* r, DIR_ITER* it, char* filename_buf, struct st
+ 
+ 	// Check for end of directory
+ 	if (fr == FR_OK && !fno->fname[0]) {
+-		fr = FR_NO_FILE;
++		r->_errno = 0;
++		return -1;
+ 	}
+ 
+ 	if (fr == FR_OK) {
+@@ -642,3 +655,27 @@ DRESULT disk_ioctl(void* pdrv, BYTE cmd, void* buff)
+ #endif
+ 	}
+ }
++
++static int _FAT_chmod_r(struct _reent* r, const char* path, mode_t mode)
++{
++	FatVolume* vol = r->deviceData;
++	FRESULT result = f_chmod(&vol->fs, _FAT_strip_device(path),
++		(mode & (S_IWUSR | S_IWGRP | S_IWOTH)) ? 0 : AM_RDO, AM_RDO);
++	return _FAT_set_errno(result, &r->_errno) ? 0 : -1;
++}
++
++static int _FAT_set_mtime_r(struct _reent* r, const char* path, time_t seconds)
++{
++	FatVolume* vol = r->deviceData;
++	struct tm date;
++	if (!localtime_r(&seconds, &date) || date.tm_year < 80 || date.tm_year > 207) {
++		r->_errno = EINVAL;
++		return -1;
++	}
++	FILINFO info = {
++		.fdate = (date.tm_year - 80) << 9 | (date.tm_mon + 1) << 5 | date.tm_mday,
++		.ftime = date.tm_hour << 11 | date.tm_min << 5 | (date.tm_sec >> 1),
++	};
++	FRESULT result = f_utime(&vol->fs, _FAT_strip_device(path), &info);
++	return _FAT_set_errno(result, &r->_errno) ? 0 : -1;
++}

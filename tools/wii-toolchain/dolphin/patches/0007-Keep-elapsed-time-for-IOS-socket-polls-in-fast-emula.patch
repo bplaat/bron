@@ -1,0 +1,32 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Thu, 19 Nov 2026 12:07:30 +0100
+Subject: [PATCH] Keep elapsed time for IOS socket polls in fast emulation
+
+---
+ Source/Core/Core/IOS/Network/Socket.cpp | 5 ++++-
+ 1 file changed, 4 insertions(+), 1 deletion(-)
+
+diff --git a/Source/Core/Core/IOS/Network/Socket.cpp b/Source/Core/Core/IOS/Network/Socket.cpp
+index 9e5ce3e..3c41fb8 100644
+--- a/Source/Core/Core/IOS/Network/Socket.cpp
++++ b/Source/Core/Core/IOS/Network/Socket.cpp
+@@ -1053,7 +1053,8 @@ void WiiSockMan::UpdatePollCommands()
+   const auto now = Clock::now();
+   const auto elapsed_d = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_time);
+   const auto elapsed = elapsed_d.count();
+-  last_time = now;
++  // Keep the fractional millisecond when update runs more than once a millisecond.
++  last_time += elapsed_d;
+ 
+   for (PollCommand& pcmd : pending_polls)
+   {
+@@ -1207,6 +1208,8 @@ void WiiSockMan::DoState(PointerWrap& p)
+ 
+ void WiiSockMan::AddPollCommand(const PollCommand& cmd)
+ {
++  if (pending_polls.empty())
++    last_time = Clock::now();
+   pending_polls.push_back(cmd);
+ }
+ 

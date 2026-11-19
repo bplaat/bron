@@ -1,0 +1,274 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Thu, 19 Nov 2026 11:53:26 +0100
+Subject: [PATCH] Implement single-transfer Wii sockets and native socket
+ queries
+
+---
+ gc/network.h         |   3 +-
+ libogc/network_wii.c | 209 +++++++++++++++++++++----------------------
+ 2 files changed, 102 insertions(+), 110 deletions(-)
+
+diff --git a/gc/network.h b/gc/network.h
+index 2d66372..b5945cb 100644
+--- a/gc/network.h
++++ b/gc/network.h
+@@ -275,7 +275,8 @@ s32 net_recvfrom(s32 s,void *mem,s32 len,u32 flags,struct sockaddr *from,socklen
+ s32 net_read(s32 s,void *mem,s32 len);
+ s32 net_close(s32 s);
+ s32 net_select(s32 maxfdp1,fd_set *readset,fd_set *writeset,fd_set *exceptset,struct timespec *timeout);
+-s32 net_getsockopt(s32 s,u32 level,u32 optname,const void *optval,socklen_t optlen);
++s32 net_getsockopt(s32 s,u32 level,u32 optname,void *optval,socklen_t *optlen);
++s32 net_getpeername(s32 socket, struct sockaddr *address, socklen_t *length);
+ s32 net_setsockopt(s32 s,u32 level,u32 optname,const void *optval,socklen_t optlen);
+ s32 net_getsockname(s32 s, struct sockaddr *addr, socklen_t *addrlen);
+ s32 net_ioctl(s32 s, u32 cmd, void *argp);
+diff --git a/libogc/network_wii.c b/libogc/network_wii.c
+index 27a6d36..d36d7ac 100644
+--- a/libogc/network_wii.c
++++ b/libogc/network_wii.c
+@@ -327,7 +327,7 @@ static s32 _net_convert_error(s32 ios_retval)
+ {
+ //	return ios_retval;
+ 	if (ios_retval >= 0) return ios_retval;
+-	if (ios_retval < -sizeof(_net_error_code_map)
++	if ((u32)-(s64)ios_retval >= sizeof(_net_error_code_map)
+ 		|| !_net_error_code_map[-ios_retval])
+ 			return NET_UNKNOWN_ERROR_OFFSET + ios_retval;
+ 	return -_net_error_code_map[-ios_retval];
+@@ -921,60 +921,37 @@ s32 net_send(s32 s, const void *data, s32 size, u32 flags)
+ 	return net_sendto(s, data, size, flags, NULL, 0);
+ }
+ 
+-s32 net_sendto(s32 s, const void *data, s32 len, u32 flags, struct sockaddr *to, socklen_t tolen)
++s32 net_sendto(s32 socket, const void *data, s32 len, u32 flags,
++		struct sockaddr *to, socklen_t tolen)
+ {
+-	s32 ret;
+-	u8 * message_buf = NULL;
+-	STACK_ALIGN(struct sendto_params,params,1,32);
+-
++	STACK_ALIGN(struct sendto_params, params, 1, 32);
+ 	if (net_ip_top_fd < 0) return -ENXIO;
+-	if (tolen > 28) return -EOVERFLOW;
+-	
+-	s32 blockSize = len > maxblocksize ? maxblocksize : len;
+-	message_buf = net_malloc(blockSize);
+-	if (message_buf == NULL) {
+-		debug_printf("net_send: failed to alloc %d bytes\n", blockSize);
+-		return IPC_ENOMEM;
++	if (to && tolen < sizeof(struct wii_sockaddr_in)) return -EINVAL;
++	if (to && to->sa_family != AF_INET) return -EAFNOSUPPORT;
++	if (len < 0) return -EMSGSIZE;
++	/* A stream sends what fits in one transfer and reports the partial count. */
++	if (len > 65507) {
++		if (to) return -EMSGSIZE;
++		len = 65507;
+ 	}
+-	
+-	for(ret = 0; ret < len;)
+-	{
+-		blockSize = len - ret;
+-		if(blockSize > maxblocksize)
+-			blockSize = maxblocksize;
+-		
+-		debug_printf("net_sendto(%d, %p, %d, %d, %p, %d)\n", s, data+ret, blockSize, flags, to, tolen);
+-		if (to && to->sa_len != tolen) {
+-			debug_printf("warning: to->sa_len was %d, setting to %d\n",	to->sa_len, tolen);
+-			to->sa_len = tolen;
+-		}
+-		
+-		memset(params, 0, sizeof(struct sendto_params));
+-		memcpy(message_buf, data+ret, blockSize);   // ensure message buf is aligned
+-		
+-		params->socket = s;
+-		params->flags = flags;
+-		if (to) {
+-			params->has_destaddr = 1;
+-			memcpy(params->destaddr, to, to->sa_len);
+-		} else {
+-			params->has_destaddr = 0;
+-		}
+-
+-		s32 sent = _net_convert_error(IOS_IoctlvFormat(__net_hid, net_ip_top_fd, IOCTLV_SO_SENDTO, "dd:", message_buf, blockSize, params, sizeof(struct sendto_params)));
+-		debug_printf("net_send retuned %d\n", sent);
+-		
+-		if(sent <= 0)
+-		{
+-			ret = sent;
+-			break;
+-		}
+-		
+-		ret += sent;
++	/* IOS invalidates whole cache lines, keep them out of other allocations. */
++	void *buffer = memalign(32, len ? (len + 31) & ~31 : 32);
++	if (!buffer) return -ENOMEM;
++
++	memset(params, 0, sizeof(*params));
++	params->socket = socket;
++	params->flags = flags;
++	if (to) {
++		params->has_destaddr = 1;
++		memcpy(params->destaddr, to, sizeof(struct wii_sockaddr_in));
++		params->destaddr[0] = sizeof(struct wii_sockaddr_in);
+ 	}
+ 
+-	if(message_buf!=NULL) net_free(message_buf);
+-	return ret;
++	if (len) memcpy(buffer, data, len);
++	s32 status = _net_convert_error(IOS_IoctlvFormat(__net_hid, net_ip_top_fd,
++		IOCTLV_SO_SENDTO, "dd:", buffer, len, params, sizeof(*params)));
++	free(buffer);
++	return status;
+ }
+ 
+ s32 net_recv(s32 s, void *mem, s32 len, u32 flags)
+@@ -982,70 +959,42 @@ s32 net_recv(s32 s, void *mem, s32 len, u32 flags)
+     return net_recvfrom(s, mem, len, flags, NULL, NULL);
+ }
+ 
+-s32 net_recvfrom(s32 s, void *mem, s32 len, u32 flags, struct sockaddr *from, socklen_t *fromlen)
++s32 net_recvfrom(s32 socket, void *data, s32 len, u32 flags,
++		struct sockaddr *from, socklen_t *fromlen)
+ {
+-	s32 ret;
+-	u8* message_buf = NULL;
+ 	STACK_ALIGN(u32, params, 2, 32);
+-
++	STACK_ALIGN(struct wii_sockaddr_in, address, 1, 32);
+ 	if (net_ip_top_fd < 0) return -ENXIO;
+-	if (len<=0) return -EINVAL;
+-
+-	if (fromlen && from->sa_len != *fromlen) {
+-		debug_printf("warning: from->sa_len was %d, setting to %d\n",from->sa_len, *fromlen);
+-		from->sa_len = *fromlen;
+-	}
+-	
+-	s32 blockSize = len > maxblocksize ? maxblocksize : len;
+-	message_buf = net_malloc(blockSize);
+-	if (message_buf == NULL) {
+-		debug_printf("SORecv: failed to alloc %d bytes\n", blockSize);
+-		return IPC_ENOMEM;
+-	}
+-	
+-	for(ret = 0; ret < len;)
+-	{
+-		blockSize = len - ret;
+-		if(blockSize > maxblocksize)
+-			blockSize = maxblocksize;
+-
+-		debug_printf("net_recvfrom(%d, '%s', %d, %d, %p, %d)\n", s, (char *)mem, blockSize, flags, from, fromlen?*fromlen:0);
+-
+-		memset(message_buf, 0, blockSize);
+-		params[0] = s;
+-		params[1] = flags;
+-
+-		s32 received = _net_convert_error(IOS_IoctlvFormat(__net_hid, net_ip_top_fd, IOCTLV_SO_RECVFROM,	"d:dd", params, 8, message_buf, blockSize, from, (fromlen?*fromlen:0)));
+-		debug_printf("net_recvfrom returned %d\n", received);
+-		
+-		//connection closed(0) or error(<0)
+-		if(received <= 0)
+-		{
+-			if (fromlen && from) *fromlen = from->sa_len;
+-			ret = received;
+-			break;
+-		}
+-		
+-		//well something went wrong lol
+-		if(received > blockSize)
+-		{
+-			ret = -EOVERFLOW;
+-			break;
++	if (len < 0) return -EMSGSIZE;
++	/* A stream receives what fits in one transfer, no datagram is larger. */
++	if (len > 65535) len = 65535;
++	if (from && (!fromlen || *fromlen < sizeof(*address))) return -EINVAL;
++
++	/* Use a byte of receive space for an empty slice so a datagram is consumed. */
++	s32 capacity = len ? len : 1;
++	/* IOS invalidates whole cache lines, keep them out of other allocations. */
++	void *buffer = memalign(32, (capacity + 31) & ~31);
++	if (!buffer) return -ENOMEM;
++	params[0] = socket;
++	params[1] = flags;
++	memset(address, 0, sizeof(*address));
++	s32 status = _net_convert_error(IOS_IoctlvFormat(__net_hid, net_ip_top_fd,
++		IOCTLV_SO_RECVFROM, "d:dd", params, 8, buffer, capacity,
++		from ? address : NULL, from ? sizeof(*address) : 0));
++	if (status >= 0) {
++		if (status > capacity) {
++			status = -EOVERFLOW;
++		} else {
++			if (status > len) status = len;
++			if (status) memcpy(data, buffer, status);
++			if (from) {
++				memcpy(from, address, sizeof(*address));
++				*fromlen = sizeof(*address);
++			}
+ 		}
+-		
+-		if (fromlen && from) *fromlen = from->sa_len;	
+-		memcpy(mem+ret, message_buf, received);
+-		ret += received;
+-		
+-		//we got a partial read, so we break and report the partial read
+-		if(received != blockSize)
+-			break;
+ 	}
+-	
+-	if(message_buf!=NULL) 
+-		net_free(message_buf);
+-	
+-	return ret;
++	free(buffer);
++	return status;
+ }
+ 
+ s32 net_read(s32 s, void *mem, s32 len)
+@@ -1372,4 +1321,46 @@ s32 if_config(char *local_ip, char *netmask, char *gateway, bool use_dhcp, int m
+ 	return ret;
+ }
+ 
++s32 net_getpeername(s32 socket, struct sockaddr *address, socklen_t *length)
++{
++	STACK_ALIGN(u32, input, 1, 32);
++	STACK_ALIGN(struct wii_sockaddr_in, output, 1, 32);
++	if (net_ip_top_fd < 0) return -ENXIO;
++	if (*length < sizeof(*output)) return -EINVAL;
++	*input = socket;
++	s32 status = _net_convert_error(IOS_Ioctl(net_ip_top_fd, IOCTL_SO_GETPEERNAME,
++		input, 4, output, sizeof(*output)));
++	if (status >= 0) {
++		memcpy(address, output, sizeof(*output));
++		*length = sizeof(*output);
++	}
++	return status;
++}
++
++s32 net_getsockopt(s32 socket, u32 level, u32 option, void *value, socklen_t *length)
++{
++	STACK_ALIGN(struct setsockopt_params, params, 1, 32);
++	if (net_ip_top_fd < 0) return -ENXIO;
++	if (*length > sizeof(params->optval)) return -EINVAL;
++	memset(params, 0, sizeof(*params));
++	params->socket = socket;
++	params->level = level;
++	params->optname = option;
++	params->optlen = *length;
++	s32 status = _net_convert_error(IOS_Ioctl(net_ip_top_fd, IOCTL_SO_GETSOCKOPT,
++		NULL, 0, params, sizeof(*params)));
++	if (status >= 0) {
++		if (params->optlen > sizeof(params->optval)) return -EOVERFLOW;
++		if (*length > params->optlen) *length = params->optlen;
++		memcpy(value, params->optval, *length);
++		/* IOS numbers SO_ERROR 0x1009, its pending error is an IOS error number, translate
++		   it like the return values. */
++		if (level == SOL_SOCKET && option == 0x1009 && *length == sizeof(s32)) {
++			s32 error = *(s32 *)value;
++			*(s32 *)value = error ? -_net_convert_error(error < 0 ? error : -error) : 0;
++		}
++	}
++	return status;
++}
++
+ #endif /* defined(HW_RVL) */

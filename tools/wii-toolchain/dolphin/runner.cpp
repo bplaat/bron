@@ -21,6 +21,8 @@
 //   wav <file>, wav stop      record the sound of the DSP to a WAV file, stop recording
 //   peek <address> [words]    print "peek <address> <word>..." of the memory, in hex
 //   test-title                supply synthetic title metadata for standalone ES signing tests
+//   test-args <suite|panic>   supply Homebrew Channel style arguments to the Rust suite
+//   expect-hook <count>       require the last hook to have run count times
 //   quit                      stop, also the end of the commands
 // Keys are the Wii Remote's a, b, 1, 2, plus, minus, home, up, down, left and right and the
 // Nunchuk's c and z, joined by +, like up+a.
@@ -362,11 +364,33 @@ static void set_test_title() {
         die("Test title setup failed: %d", static_cast<int>(result));
 }
 
+// Populate libogc's argv block before the DOL starts, as a homebrew loader would.
+static void set_test_args(const char* mode) {
+    constexpr u32 entry = 0x80004000;
+    constexpr u32 slot = entry - 0x100;
+    constexpr u32 magic = 0x5f617267;
+    constexpr char suite[] = "sd:/boot.dol\0suite\0two words";
+    constexpr char panic[] = "sd:/boot.dol\0panic";
+    if (!mode || (strcmp(mode, "suite") != 0 && strcmp(mode, "panic") != 0))
+        die("Expected test-args suite or test-args panic");
+    auto& memory = system().GetMemory();
+    if (memory.Read_U32(entry + 4) != magic)
+        die("The DOL has no libogc argument block");
+    const bool abort = strcmp(mode, "panic") == 0;
+    const auto size = abort ? sizeof(panic) : sizeof(suite);
+    memory.CopyToEmu(slot, abort ? panic : suite, size);
+    memory.Write_U32(magic, entry + 8);
+    memory.Write_U32(slot, entry + 12);
+    memory.Write_U32(size, entry + 16);
+}
+
 // Runs one command from its words, false on quit
 static bool command(char** words) {
     const char* name = words[0];
     if (strcmp(name, "test-title") == 0) {
         set_test_title();
+    } else if (strcmp(name, "test-args") == 0) {
+        set_test_args(words[1]);
     } else if (strcmp(name, "wait") == 0) {
         run(parse_number(words[1]));
     } else if (strcmp(name, "press") == 0) {
@@ -420,6 +444,14 @@ static bool command(char** words) {
         fprintf(answers, "count %llu\n", (unsigned long long)(hits - counted));
         fflush(answers);
         counted = hits;
+    } else if (strcmp(name, "expect-hook") == 0) {
+        if (!hooked)
+            die("No hook set");
+        const auto expected = static_cast<u64>(parse_number(words[1]));
+        const auto actual = hook_hits();
+        if (actual != expected)
+            die("Hook ran %llu times, expected %llu", static_cast<unsigned long long>(actual),
+                static_cast<unsigned long long>(expected));
     } else if (strcmp(name, "wav") == 0) {
         if (words[1] == nullptr)
             die("Expected a file");
@@ -446,7 +478,8 @@ static bool command(char** words) {
         await_uart(words[1], parse_number(words[2]));
     } else if (strcmp(name, "test") == 0) {
         int failures = 0;
-        sscanf(await_uart("DONE ", parse_number(words[1])).c_str(), "DONE %d failed", &failures);
+        if (sscanf(await_uart("DONE ", parse_number(words[1])).c_str(), "DONE %d failed", &failures) != 1)
+            die("Malformed test result on UART");
         if (failures != 0)
             die("Test failed (%d failed)", failures);
     } else if (strcmp(name, "quit") == 0) {

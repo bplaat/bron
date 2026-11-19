@@ -3,7 +3,7 @@
     "data-layout": "E-m:e-p:32:32-Fn32-i64:64-n32",
     "arch": "powerpc",
     "cpu": "750",
-    "os": "none",
+    "os": "wii",
     "env": "eabi",
     "vendor": "nintendo",
     "linker-flavor": "gnu-lld",

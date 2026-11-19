@@ -13,7 +13,7 @@ with udelay instead, with the same 150 ms limit.
  1 file changed, 5 insertions(+), 2 deletions(-)
 
 diff --git a/wiiuse/wpad.c b/wiiuse/wpad.c
-index a0cb316..ec5356d 100644
+index a0cb316..8be3749 100644
 --- a/wiiuse/wpad.c
 +++ b/wiiuse/wpad.c
 @@ -110,6 +110,7 @@ static WPADShutdownCallback __wpad_powcb = __wpad_def_powcb;

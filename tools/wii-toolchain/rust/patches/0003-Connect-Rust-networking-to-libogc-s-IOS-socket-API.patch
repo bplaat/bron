@@ -1,0 +1,837 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Thu, 19 Nov 2026 12:12:11 +0100
+Subject: [PATCH] Connect Rust networking to libogc's IOS socket API
+
+---
+ library/std/src/sys/net/connection/mod.rs     |   1 +
+ .../std/src/sys/net/connection/socket/mod.rs  |  89 ++-
+ .../std/src/sys/net/connection/socket/wii.rs  | 628 ++++++++++++++++++
+ 3 files changed, 689 insertions(+), 29 deletions(-)
+ create mode 100644 library/std/src/sys/net/connection/socket/wii.rs
+
+diff --git a/library/std/src/sys/net/connection/mod.rs b/library/std/src/sys/net/connection/mod.rs
+index 49a0f47..a0ce55f 100644
+--- a/library/std/src/sys/net/connection/mod.rs
++++ b/library/std/src/sys/net/connection/mod.rs
+@@ -5,6 +5,7 @@ cfg_select! {
+         target_os = "hermit",
+         all(target_os = "wasi", any(target_env = "p2", target_env = "p3")),
+         target_os = "solid_asp3",
++        target_os = "wii",
+     ) => {
+         mod socket;
+         pub use socket::*;
+diff --git a/library/std/src/sys/net/connection/socket/mod.rs b/library/std/src/sys/net/connection/socket/mod.rs
+index 7fbd12e..f14f4df 100644
+--- a/library/std/src/sys/net/connection/socket/mod.rs
++++ b/library/std/src/sys/net/connection/socket/mod.rs
+@@ -2,23 +2,32 @@
+ #[cfg(not(target_os = "l4re"))]
+ mod tests;
+ 
+-use crate::ffi::{c_int, c_void};
++use crate::ffi::c_int;
++#[cfg(not(target_os = "wii"))]
++use crate::ffi::c_void;
+ use crate::io::{self, BorrowedCursor, ErrorKind, IoSlice, IoSliceMut};
+ use crate::mem::MaybeUninit;
+ use crate::net::{
+     Ipv4Addr, Ipv6Addr, Shutdown, SocketAddr, SocketAddrV4, SocketAddrV6, ToSocketAddrs,
+ };
++#[cfg(not(target_os = "wii"))]
+ use crate::sys::helpers::run_with_cstr;
+ use crate::sys::net::connection::each_addr;
+ use crate::sys::{AsInner, FromInner};
+ use crate::time::Duration;
+-use crate::{cmp, fmt, mem, ptr};
++use crate::{fmt, mem, ptr};
++#[cfg(not(target_os = "wii"))]
++use crate::cmp;
+ 
+ cfg_select! {
+     target_os = "hermit" => {
+         mod hermit;
+         pub use hermit::*;
+     }
++    target_os = "wii" => {
++        mod wii;
++        pub use wii::*;
++    }
+     target_os = "solid_asp3" => {
+         mod solid;
+         pub use solid::*;
+@@ -52,7 +61,7 @@ use netc as c;
+ // so we need to clamp to i32::MAX.
+ const MAX_SEND_LEN: usize = cfg_select! {
+     any(target_vendor = "apple", target_os = "nto", target_os = "qnx") => c_int::MAX as usize,
+-    target_os = "windows" => i32::MAX as usize,
++    any(target_os = "windows", target_os = "wii") => i32::MAX as usize,
+     _ => libc::ssize_t::MAX as usize,
+ };
+ 
+@@ -112,6 +121,7 @@ cfg_select! {
+         use libc::MSG_NOSIGNAL;
+     }
+     _ => {
++        #[cfg(not(target_os = "wii"))]
+         const MSG_NOSIGNAL: c_int = 0x0;
+     }
+ }
+@@ -351,12 +361,14 @@ fn to_ipv6mr_interface(value: u32) -> crate::ffi::c_uint {
+ // lookup_host
+ ////////////////////////////////////////////////////////////////////////////////
+ 
++#[cfg(not(target_os = "wii"))]
+ pub struct LookupHost {
+     original: *mut c::addrinfo,
+     cur: *mut c::addrinfo,
+     port: u16,
+ }
+ 
++#[cfg(not(target_os = "wii"))]
+ impl Iterator for LookupHost {
+     type Item = SocketAddr;
+     fn next(&mut self) -> Option<SocketAddr> {
+@@ -376,15 +388,19 @@ impl Iterator for LookupHost {
+     }
+ }
+ 
++#[cfg(not(target_os = "wii"))]
+ unsafe impl Sync for LookupHost {}
++#[cfg(not(target_os = "wii"))]
+ unsafe impl Send for LookupHost {}
+ 
++#[cfg(not(target_os = "wii"))]
+ impl Drop for LookupHost {
+     fn drop(&mut self) {
+         unsafe { c::freeaddrinfo(self.original) }
+     }
+ }
+ 
++#[cfg(not(target_os = "wii"))]
+ pub fn lookup_host(host: &str, port: u16) -> io::Result<LookupHost> {
+     init();
+     run_with_cstr(host.as_bytes(), &|c_host| {
+@@ -491,11 +507,16 @@ impl TcpStream {
+     }
+ 
+     pub fn write(&self, buf: &[u8]) -> io::Result<usize> {
+-        let len = cmp::min(buf.len(), MAX_SEND_LEN) as wrlen_t;
+-        let ret = cvt(unsafe {
+-            c::send(self.inner.as_raw(), buf.as_ptr() as *const c_void, len, MSG_NOSIGNAL)
+-        })?;
+-        Ok(ret as usize)
++        cfg_select! {
++            target_os = "wii" => self.inner.send(buf, ptr::null()),
++            _ => {
++                let len = cmp::min(buf.len(), MAX_SEND_LEN) as wrlen_t;
++                let ret = cvt(unsafe {
++                    c::send(self.inner.as_raw(), buf.as_ptr() as *const c_void, len, MSG_NOSIGNAL)
++                })?;
++                Ok(ret as usize)
++            }
++        }
+     }
+ 
+     pub fn write_vectored(&self, bufs: &[IoSlice<'_>]) -> io::Result<usize> {
+@@ -817,18 +838,23 @@ impl UdpSocket {
+         if buf.len() > MAX_SEND_LEN {
+             return Err(io::Error::from_raw_os_error(c::EMSGSIZE));
+         }
+-        let (dst, dstlen) = socket_addr_to_c(dst);
+-        let ret = cvt(unsafe {
+-            c::sendto(
+-                self.inner.as_raw(),
+-                buf.as_ptr() as *const c_void,
+-                buf.len() as wrlen_t,
+-                MSG_NOSIGNAL,
+-                dst.as_ptr(),
+-                dstlen,
+-            )
+-        })?;
+-        Ok(ret as usize)
++        let (dst, _dstlen) = socket_addr_to_c(dst);
++        cfg_select! {
++            target_os = "wii" => self.inner.send(buf, dst.as_ptr()),
++            _ => {
++                let ret = cvt(unsafe {
++                    c::sendto(
++                        self.inner.as_raw(),
++                        buf.as_ptr() as *const c_void,
++                        buf.len() as wrlen_t,
++                        MSG_NOSIGNAL,
++                        dst.as_ptr(),
++                        _dstlen,
++                    )
++                })?;
++                Ok(ret as usize)
++            }
++        }
+     }
+ 
+     pub fn duplicate(&self) -> io::Result<UdpSocket> {
+@@ -1016,15 +1042,20 @@ impl UdpSocket {
+         if buf.len() > MAX_SEND_LEN {
+             return Err(io::Error::from_raw_os_error(c::EMSGSIZE));
+         }
+-        let ret = cvt(unsafe {
+-            c::send(
+-                self.inner.as_raw(),
+-                buf.as_ptr() as *const c_void,
+-                buf.len() as wrlen_t,
+-                MSG_NOSIGNAL,
+-            )
+-        })?;
+-        Ok(ret as usize)
++        cfg_select! {
++            target_os = "wii" => self.inner.send(buf, ptr::null()),
++            _ => {
++                let ret = cvt(unsafe {
++                    c::send(
++                        self.inner.as_raw(),
++                        buf.as_ptr() as *const c_void,
++                        buf.len() as wrlen_t,
++                        MSG_NOSIGNAL,
++                    )
++                })?;
++                Ok(ret as usize)
++            }
++        }
+     }
+ 
+     pub fn connect<A: ToSocketAddrs>(&self, addr: A) -> io::Result<()> {
+diff --git a/library/std/src/sys/net/connection/socket/wii.rs b/library/std/src/sys/net/connection/socket/wii.rs
+new file mode 100644
+index 0000000..485786d
+--- /dev/null
++++ b/library/std/src/sys/net/connection/socket/wii.rs
+@@ -0,0 +1,628 @@
++use super::{getsockopt, setsockopt, socket_addr_to_c};
++use crate::ffi::{CStr, c_char, c_void};
++use crate::io::{self, BorrowedBuf, BorrowedCursor, ErrorKind, IoSlice, IoSliceMut};
++use crate::net::{Ipv4Addr, Shutdown, SocketAddr};
++use crate::ptr;
++use crate::sync::{Arc, Mutex, PoisonError};
++use crate::sys::helpers::run_with_cstr;
++use crate::time::{Duration, Instant};
++
++#[allow(non_camel_case_types)]
++pub(super) mod netc {
++    use crate::ffi::c_void;
++
++    pub type socklen_t = u32;
++    pub type sa_family_t = u8;
++
++    // IOS is IPv4-only. The IPv6 layouts are used by the common address conversion,
++    // and families other than AF_INET are rejected before reaching the socket API.
++    pub const AF_INET: i32 = 2;
++    pub const AF_INET6: i32 = 10;
++    pub const SOCK_STREAM: i32 = 1;
++    pub const SOCK_DGRAM: i32 = 2;
++    pub const SOL_SOCKET: i32 = 0xffff;
++    pub const SO_REUSEADDR: i32 = 4;
++    pub const SO_KEEPALIVE: i32 = 8;
++    pub const SO_BROADCAST: i32 = 0x20;
++    pub const SO_LINGER: i32 = 0x80;
++    pub const SO_SNDTIMEO: i32 = 0x1005;
++    pub const SO_RCVTIMEO: i32 = 0x1006;
++    pub const SO_ERROR: i32 = 0x1009;
++    pub const IPPROTO_IP: i32 = 0;
++    pub const IPPROTO_TCP: i32 = 6;
++    pub const IPPROTO_IPV6: i32 = 41;
++    pub const IP_TTL: i32 = 2;
++    pub const IP_MULTICAST_TTL: i32 = 10;
++    pub const IP_MULTICAST_LOOP: i32 = 11;
++    pub const IP_ADD_MEMBERSHIP: i32 = 12;
++    pub const IP_DROP_MEMBERSHIP: i32 = 13;
++    pub const IPV6_UNICAST_HOPS: i32 = 4;
++    pub const IPV6_MULTICAST_HOPS: i32 = 10;
++    pub const IPV6_MULTICAST_LOOP: i32 = 11;
++    pub const IPV6_ADD_MEMBERSHIP: i32 = 12;
++    pub const IPV6_DROP_MEMBERSHIP: i32 = 13;
++    pub const IPV6_V6ONLY: i32 = 27;
++    pub const TCP_NODELAY: i32 = 0x2001;
++    pub const EINPROGRESS: i32 = 119;
++    pub const EMSGSIZE: i32 = 122;
++
++    #[derive(Clone, Copy)]
++    #[repr(C)]
++    pub struct in_addr {
++        pub s_addr: u32,
++    }
++
++    #[derive(Clone, Copy)]
++    #[repr(C)]
++    pub struct in6_addr {
++        pub s6_addr: [u8; 16],
++    }
++
++    #[derive(Clone, Copy)]
++    #[repr(C)]
++    pub struct sockaddr_in {
++        pub sin_len: u8,
++        pub sin_family: sa_family_t,
++        pub sin_port: u16,
++        pub sin_addr: in_addr,
++    }
++
++    #[derive(Clone, Copy)]
++    #[repr(C)]
++    pub struct sockaddr_in6 {
++        pub sin6_len: u8,
++        pub sin6_family: sa_family_t,
++        pub sin6_port: u16,
++        pub sin6_flowinfo: u32,
++        pub sin6_addr: in6_addr,
++        pub sin6_scope_id: u32,
++    }
++
++    pub type sockaddr = sockaddr_in;
++    #[repr(C, align(32))]
++    pub struct sockaddr_storage {
++        pub ss_len: u8,
++        pub ss_family: sa_family_t,
++        pub rest: [u8; 30],
++    }
++
++    #[repr(C)]
++    pub struct ip_mreq {
++        pub imr_multiaddr: in_addr,
++        pub imr_interface: in_addr,
++    }
++
++    #[repr(C)]
++    pub struct ipv6_mreq {
++        pub ipv6mr_multiaddr: in6_addr,
++        pub ipv6mr_interface: u32,
++    }
++
++    unsafe extern "C" {
++        fn net_bind(fd: i32, address: *mut sockaddr, length: socklen_t) -> i32;
++        fn net_connect(fd: i32, address: *mut sockaddr, length: socklen_t) -> i32;
++        #[link_name = "net_listen"]
++        pub fn listen(fd: i32, backlog: i32) -> i32;
++        #[link_name = "net_getsockname"]
++        pub fn getsockname(fd: i32, address: *mut sockaddr, length: *mut socklen_t) -> i32;
++        #[link_name = "net_getpeername"]
++        pub fn getpeername(fd: i32, address: *mut sockaddr, length: *mut socklen_t) -> i32;
++        #[link_name = "net_getsockopt"]
++        fn get_option(fd: i32, level: i32, kind: i32, buf: *mut c_void, len: *mut socklen_t)
++        -> i32;
++        #[link_name = "net_setsockopt"]
++        fn set_option(fd: i32, level: i32, kind: i32, buf: *const c_void, len: socklen_t) -> i32;
++    }
++
++    pub unsafe fn bind(fd: i32, address: *const sockaddr, length: socklen_t) -> i32 {
++        let mut address = unsafe { *address };
++        unsafe { net_bind(fd, &mut address, length) }
++    }
++
++    pub unsafe fn connect(fd: i32, address: *const sockaddr, length: socklen_t) -> i32 {
++        let mut address = unsafe { *address };
++        unsafe { net_connect(fd, &mut address, length) }
++    }
++
++    pub unsafe fn getsockopt(
++        fd: i32,
++        level: i32,
++        kind: i32,
++        buf: *mut c_void,
++        len: *mut socklen_t,
++    ) -> i32 {
++        if level == IPPROTO_IPV6 {
++            return -106; // EAFNOSUPPORT
++        }
++        unsafe { get_option(fd, level, kind, buf, len) }
++    }
++
++    pub unsafe fn setsockopt(
++        fd: i32,
++        level: i32,
++        kind: i32,
++        buf: *const c_void,
++        len: socklen_t,
++    ) -> i32 {
++        if level == IPPROTO_IPV6 {
++            return -106; // EAFNOSUPPORT
++        }
++        unsafe { set_option(fd, level, kind, buf, len) }
++    }
++}
++
++use netc::{sockaddr, sockaddr_storage, socklen_t};
++
++const MSG_PEEK: u32 = 2;
++// These flags are sent directly to IOS and use its native values.
++const MSG_DONTWAIT: u32 = 0x04;
++const POLLIN: u32 = 3;
++const POLLOUT: u32 = 8;
++const STREAM_CHUNK: usize = 32768;
++const MAX_DATAGRAM: usize = 65507;
++
++#[repr(C)]
++struct PollSocket {
++    fd: i32,
++    events: u32,
++    revents: u32,
++}
++
++#[repr(C)]
++struct HostEntry {
++    name: *const c_char,
++    aliases: *const *const c_char,
++    family: i16,
++    length: i16,
++    addresses: *const *const [u8; 4],
++}
++
++unsafe extern "C" {
++    fn net_init_async(callback: Option<extern "C" fn(i32, *mut c_void)>, data: *mut c_void) -> i32;
++    fn net_get_status() -> i32;
++    fn net_socket(domain: i32, kind: i32, protocol: i32) -> i32;
++    fn net_accept(fd: i32, address: *mut sockaddr, length: *mut socklen_t) -> i32;
++    fn net_close(fd: i32) -> i32;
++    fn net_shutdown(fd: i32, how: i32) -> i32;
++    fn net_poll(sockets: *mut PollSocket, count: i32, timeout_ms: i32) -> i32;
++    fn net_fcntl(fd: i32, cmd: u32, flags: u32) -> i32;
++    fn net_gethostbyname(name: *const c_char) -> *const HostEntry;
++    fn net_recvfrom(
++        fd: i32,
++        buffer: *mut u8,
++        len: i32,
++        flags: u32,
++        address: *mut sockaddr,
++        address_len: *mut socklen_t,
++    ) -> i32;
++    fn net_sendto(
++        fd: i32,
++        buffer: *const u8,
++        len: i32,
++        flags: u32,
++        address: *const sockaddr,
++        address_len: socklen_t,
++    ) -> i32;
++}
++
++pub fn cvt(result: i32) -> io::Result<i32> {
++    if result < 0 {
++        Err(io::Error::from_raw_os_error(result.saturating_neg()))
++    } else {
++        Ok(result)
++    }
++}
++
++pub fn cvt_r(mut f: impl FnMut() -> i32) -> io::Result<i32> {
++    loop {
++        match cvt(f()) {
++            Err(err) if err.kind() == ErrorKind::Interrupted => continue,
++            result => return result,
++        }
++    }
++}
++
++// Shared socket entry points call this on platforms that initialize globally.
++// Wii initialization can fail and is performed where the error can be returned.
++pub fn init() {}
++
++fn ensure_network() -> io::Result<()> {
++    static INIT: Mutex<()> = Mutex::new(());
++    let _lock = INIT.lock().unwrap_or_else(PoisonError::into_inner);
++    if unsafe { net_get_status() } == 0 {
++        return Ok(());
++    }
++
++    const BUSY: i32 = -16;
++    let result = unsafe { net_init_async(None, ptr::null_mut()) };
++    if result != BUSY {
++        cvt(result)?;
++    }
++    loop {
++        let status = unsafe { net_get_status() };
++        if status != BUSY {
++            cvt(status)?;
++            return Ok(());
++        }
++        crate::thread::sleep(Duration::from_millis(1));
++    }
++}
++
++pub type LookupHost = crate::vec::IntoIter<SocketAddr>;
++
++pub fn lookup_host(host: &str, port: u16) -> io::Result<LookupHost> {
++    if host.eq_ignore_ascii_case("localhost") {
++        return Ok(vec![SocketAddr::from((Ipv4Addr::LOCALHOST, port))].into_iter());
++    }
++    ensure_network()?;
++    run_with_cstr(host.as_bytes(), &|name: &CStr| {
++        // libogc returns a pointer into a reusable static buffer.
++        static DNS: Mutex<()> = Mutex::new(());
++        let _lock = DNS.lock().unwrap_or_else(PoisonError::into_inner);
++        let result = unsafe { net_gethostbyname(name.as_ptr()).as_ref() }
++            .filter(|entry| entry.family as i32 == netc::AF_INET && entry.length == 4)
++            .ok_or_else(|| io::Error::from(ErrorKind::NotFound))?;
++        let mut addresses = Vec::new();
++        let mut next = result.addresses;
++        if !next.is_null() {
++            unsafe {
++                while let Some(ip) = (*next).as_ref() {
++                    addresses.push(SocketAddr::from((Ipv4Addr::from(*ip), port)));
++                    next = next.add(1);
++                }
++            }
++        }
++        Ok(addresses.into_iter())
++    })
++}
++
++#[derive(Default)]
++struct Options {
++    nonblocking: bool,
++    read_timeout: Option<Duration>,
++    write_timeout: Option<Duration>,
++}
++
++struct SocketRef {
++    fd: i32,
++    datagram: bool,
++    options: Mutex<Options>,
++}
++
++impl Drop for SocketRef {
++    fn drop(&mut self) {
++        unsafe { net_close(self.fd) };
++    }
++}
++
++pub struct Socket(Arc<SocketRef>);
++
++impl Socket {
++    fn from_fd(fd: i32, datagram: bool) -> Self {
++        Self(Arc::new(SocketRef {
++            fd,
++            datagram,
++            options: Mutex::new(Options::default()),
++        }))
++    }
++
++    pub fn new(family: i32, kind: i32) -> io::Result<Self> {
++        if family != netc::AF_INET {
++            return crate::sys::unsupported();
++        }
++        ensure_network()?;
++        Ok(Self::from_fd(
++            cvt(unsafe { net_socket(family, kind, 0) })?,
++            kind == netc::SOCK_DGRAM,
++        ))
++    }
++
++    pub fn as_raw(&self) -> i32 {
++        self.0.fd
++    }
++
++    pub fn duplicate(&self) -> io::Result<Self> {
++        Ok(Self(self.0.clone()))
++    }
++
++    pub fn connect(&self, address: &SocketAddr) -> io::Result<()> {
++        let (address, length) = socket_addr_to_c(address);
++        cvt_r(|| unsafe { netc::connect(self.as_raw(), address.as_ptr(), length) }).map(drop)
++    }
++
++    pub fn poll_connected(&self, timeout: Duration) -> io::Result<()> {
++        if timeout.is_zero() {
++            return Err(io::Error::ZERO_TIMEOUT);
++        }
++        self.poll_until(POLLOUT, Instant::now(), timeout)?;
++        if let Some(error) = self.take_error()? {
++            return Err(error);
++        }
++        unsafe {
++            super::sockname(|address, length| netc::getpeername(self.as_raw(), address, length))
++        }
++        .map(drop)
++    }
++
++    fn poll_until(&self, events: u32, start: Instant, timeout: Duration) -> io::Result<()> {
++        let mut socket = PollSocket {
++            fd: self.as_raw(),
++            events,
++            revents: 0,
++        };
++        loop {
++            let millis = timeout
++                .saturating_sub(start.elapsed())
++                .as_nanos()
++                .div_ceil(1_000_000);
++            if millis == 0 {
++                return Err(ErrorKind::TimedOut.into());
++            }
++            match cvt(unsafe { net_poll(&mut socket, 1, millis.min(i32::MAX as u128) as i32) }) {
++                Ok(0) => continue,
++                Ok(_) => return Ok(()),
++                Err(err) if err.kind() == ErrorKind::Interrupted => continue,
++                Err(err) => return Err(err),
++            }
++        }
++    }
++
++    pub fn accept(&self, address: *mut sockaddr, length: *mut socklen_t) -> io::Result<Self> {
++        let fd = cvt_r(|| unsafe { net_accept(self.as_raw(), address, length) })?;
++        Ok(Self::from_fd(fd, false))
++    }
++
++    fn with_io(
++        &self,
++        writing: bool,
++        flags: u32,
++        mut call: impl FnMut(u32) -> i32,
++    ) -> io::Result<usize> {
++        let (nonblocking, timeout) = {
++            let opts = self
++                .0
++                .options
++                .lock()
++                .unwrap_or_else(PoisonError::into_inner);
++            (
++                opts.nonblocking,
++                if writing {
++                    opts.write_timeout
++                } else {
++                    opts.read_timeout
++                },
++            )
++        };
++
++        if nonblocking {
++            return cvt(call(flags | MSG_DONTWAIT)).map(|n| n as usize);
++        }
++        if let Some(timeout) = timeout {
++            let start = Instant::now();
++            loop {
++                match cvt(call(flags | MSG_DONTWAIT)) {
++                    Err(err) if err.kind() == ErrorKind::WouldBlock => {
++                        self.poll_until(if writing { POLLOUT } else { POLLIN }, start, timeout)?;
++                    }
++                    result => return result.map(|n| n as usize),
++                }
++            }
++        }
++        cvt(call(flags)).map(|n| n as usize)
++    }
++
++    fn recv_raw(
++        &self,
++        buf: *mut u8,
++        len: usize,
++        flags: u32,
++        address: *mut sockaddr,
++        length: *mut socklen_t,
++    ) -> io::Result<usize> {
++        if len == 0 && !self.0.datagram {
++            return Ok(0);
++        }
++        let len = len.min(if self.0.datagram { 65535 } else { STREAM_CHUNK }) as i32;
++        self.with_io(false, flags, |flags| unsafe {
++            net_recvfrom(self.as_raw(), buf, len, flags, address, length)
++        })
++    }
++
++    fn recv_with_flags(&self, mut buf: BorrowedCursor<'_, u8>, flags: u32) -> io::Result<()> {
++        let start = unsafe { buf.as_mut().as_mut_ptr().cast() };
++        let n = self.recv_raw(
++            start,
++            buf.capacity(),
++            flags,
++            ptr::null_mut(),
++            ptr::null_mut(),
++        )?;
++        unsafe { buf.advance(n) };
++        Ok(())
++    }
++
++    pub fn read_buf(&self, buf: BorrowedCursor<'_, u8>) -> io::Result<()> {
++        self.recv_with_flags(buf, 0)
++    }
++
++    pub fn read(&self, buf: &mut [u8]) -> io::Result<usize> {
++        let mut buf = BorrowedBuf::from(buf);
++        self.read_buf(buf.unfilled())?;
++        Ok(buf.len())
++    }
++
++    pub fn peek(&self, buf: &mut [u8]) -> io::Result<usize> {
++        self.recv_raw(
++            buf.as_mut_ptr(),
++            buf.len(),
++            MSG_PEEK,
++            ptr::null_mut(),
++            ptr::null_mut(),
++        )
++    }
++
++    fn recv_from_flags(&self, buf: &mut [u8], flags: u32) -> io::Result<(usize, SocketAddr)> {
++        let mut address: sockaddr_storage = unsafe { crate::mem::zeroed() };
++        let mut length = size_of::<sockaddr_storage>() as socklen_t;
++        let n = self.recv_raw(
++            buf.as_mut_ptr(),
++            buf.len(),
++            flags,
++            (&raw mut address).cast(),
++            &mut length,
++        )?;
++        Ok((n, unsafe {
++            super::socket_addr_from_c(&address, length as usize)?
++        }))
++    }
++
++    pub fn recv_from(&self, buf: &mut [u8]) -> io::Result<(usize, SocketAddr)> {
++        self.recv_from_flags(buf, 0)
++    }
++
++    pub fn peek_from(&self, buf: &mut [u8]) -> io::Result<(usize, SocketAddr)> {
++        self.recv_from_flags(buf, MSG_PEEK)
++    }
++
++    pub fn send(&self, buf: &[u8], address: *const sockaddr) -> io::Result<usize> {
++        let len = if self.0.datagram {
++            if buf.len() > MAX_DATAGRAM {
++                return Err(io::Error::from_raw_os_error(netc::EMSGSIZE));
++            }
++            buf.len()
++        } else {
++            if buf.is_empty() {
++                return Ok(0);
++            }
++            buf.len().min(STREAM_CHUNK)
++        };
++        self.with_io(true, 0, |flags| unsafe {
++            net_sendto(
++                self.as_raw(),
++                buf.as_ptr(),
++                len as i32,
++                flags,
++                address,
++                size_of::<sockaddr>() as socklen_t,
++            )
++        })
++    }
++
++    pub fn read_vectored(&self, bufs: &mut [IoSliceMut<'_>]) -> io::Result<usize> {
++        match bufs.iter_mut().find(|buf| !buf.is_empty()) {
++            Some(buf) => self.read(buf),
++            None => Ok(0),
++        }
++    }
++
++    pub fn write_vectored(&self, bufs: &[IoSlice<'_>]) -> io::Result<usize> {
++        match bufs.iter().find(|buf| !buf.is_empty()) {
++            Some(buf) => self.send(buf, ptr::null()),
++            None => Ok(0),
++        }
++    }
++
++    pub fn is_read_vectored(&self) -> bool {
++        false
++    }
++
++    pub fn is_write_vectored(&self) -> bool {
++        false
++    }
++
++    pub fn set_timeout(&self, timeout: Option<Duration>, kind: i32) -> io::Result<()> {
++        if timeout.is_some_and(|duration| duration.is_zero()) {
++            return Err(io::Error::ZERO_TIMEOUT);
++        }
++        let mut opts = self
++            .0
++            .options
++            .lock()
++            .unwrap_or_else(PoisonError::into_inner);
++        if kind == netc::SO_RCVTIMEO {
++            opts.read_timeout = timeout;
++        } else {
++            opts.write_timeout = timeout;
++        }
++        Ok(())
++    }
++
++    pub fn timeout(&self, kind: i32) -> io::Result<Option<Duration>> {
++        let opts = self
++            .0
++            .options
++            .lock()
++            .unwrap_or_else(PoisonError::into_inner);
++        Ok(if kind == netc::SO_RCVTIMEO {
++            opts.read_timeout
++        } else {
++            opts.write_timeout
++        })
++    }
++
++    pub fn shutdown(&self, how: Shutdown) -> io::Result<()> {
++        let how = match how {
++            Shutdown::Read => 0,
++            Shutdown::Write => 1,
++            Shutdown::Both => 2,
++        };
++        cvt(unsafe { net_shutdown(self.as_raw(), how) }).map(drop)
++    }
++
++    pub fn set_linger(&self, linger: Option<Duration>) -> io::Result<()> {
++        let value = [
++            i32::from(linger.is_some()),
++            linger.unwrap_or_default().as_secs().min(i32::MAX as u64) as i32,
++        ];
++        unsafe { setsockopt(self, netc::SOL_SOCKET, netc::SO_LINGER, value) }
++    }
++
++    pub fn linger(&self) -> io::Result<Option<Duration>> {
++        let [enabled, seconds] =
++            unsafe { getsockopt::<[i32; 2]>(self, netc::SOL_SOCKET, netc::SO_LINGER)? };
++        Ok((enabled != 0).then(|| Duration::from_secs(seconds.max(0) as u64)))
++    }
++
++    pub fn set_keepalive(&self, keepalive: bool) -> io::Result<()> {
++        self.set_bool_option(netc::SOL_SOCKET, netc::SO_KEEPALIVE, keepalive)
++    }
++
++    pub fn keepalive(&self) -> io::Result<bool> {
++        self.get_bool_option(netc::SOL_SOCKET, netc::SO_KEEPALIVE)
++    }
++
++    pub fn set_nodelay(&self, nodelay: bool) -> io::Result<()> {
++        self.set_bool_option(netc::IPPROTO_TCP, netc::TCP_NODELAY, nodelay)
++    }
++
++    pub fn nodelay(&self) -> io::Result<bool> {
++        self.get_bool_option(netc::IPPROTO_TCP, netc::TCP_NODELAY)
++    }
++
++    fn set_bool_option(&self, level: i32, kind: i32, enabled: bool) -> io::Result<()> {
++        unsafe { setsockopt(self, level, kind, i32::from(enabled)) }
++    }
++
++    fn get_bool_option(&self, level: i32, kind: i32) -> io::Result<bool> {
++        unsafe { getsockopt::<i32>(self, level, kind) }.map(|value| value != 0)
++    }
++
++    pub fn take_error(&self) -> io::Result<Option<io::Error>> {
++        let raw = unsafe { getsockopt::<i32>(self, netc::SOL_SOCKET, netc::SO_ERROR)? };
++        Ok((raw != 0).then(|| io::Error::from_raw_os_error(raw.saturating_abs())))
++    }
++
++    pub fn set_nonblocking(&self, enabled: bool) -> io::Result<()> {
++        let mut options = self
++            .0
++            .options
++            .lock()
++            .unwrap_or_else(PoisonError::into_inner);
++        // IOS fcntl uses commands 3/4 and bit 0x04 for nonblocking.
++        let old = cvt(unsafe { net_fcntl(self.as_raw(), 3, 0) })? as u32;
++        let flags = if enabled { old | 4 } else { old & !4 };
++        cvt(unsafe { net_fcntl(self.as_raw(), 4, flags) })?;
++        options.nonblocking = enabled;
++        Ok(())
++    }
++}

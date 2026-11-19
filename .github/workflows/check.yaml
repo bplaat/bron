@@ -175,9 +175,7 @@ jobs:
           key: linux-x86_64-nds-toolchain-${{ hashFiles('tools/nds-toolchain/**', '!tools/nds-toolchain/test/**') }}
       - uses: actions/cache@v6.1.0
         with:
-          path: |
-            target/wii-toolchain
-            !target/wii-toolchain/test
+          path: target/wii-toolchain
           key: linux-x86_64-wii-toolchain-${{ hashFiles('tools/wii-toolchain/**', '!tools/wii-toolchain/test/**', 'lib/graphics/image/**') }}
       - uses: actions/cache@v6.1.0
         with:

@@ -9,10 +9,10 @@ It lives in the network library that we don't build.
  1 file changed, 2 deletions(-)
 
 diff --git a/libogc/wiilaunch.c b/libogc/wiilaunch.c
-index 29072cb..82eb2a5 100644
+index 4b4e9bd..3f3ea03 100644
 --- a/libogc/wiilaunch.c
 +++ b/libogc/wiilaunch.c
-@@ -263,8 +263,6 @@ s32 WII_LaunchTitle(u64 titleID)
+@@ -262,8 +262,6 @@ s32 WII_LaunchTitle(u64 titleID)
  	if(res < 0)
  		return res;
  

@@ -1,0 +1,904 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Thu, 19 Nov 2026 12:12:11 +0100
+Subject: [PATCH] Implement Wii files and environment over picolibc
+
+---
+ library/std/src/sys/env/mod.rs   |   5 +
+ library/std/src/sys/env/wii.rs   |  74 ++++
+ library/std/src/sys/fs/mod.rs    |   4 +
+ library/std/src/sys/fs/wii.rs    | 606 +++++++++++++++++++++++++++++++
+ library/std/src/sys/path/unix.rs |   2 +-
+ library/std/src/sys/paths/mod.rs |   4 +
+ library/std/src/sys/paths/wii.rs | 122 +++++++
+ 7 files changed, 816 insertions(+), 1 deletion(-)
+ create mode 100644 library/std/src/sys/env/wii.rs
+ create mode 100644 library/std/src/sys/fs/wii.rs
+ create mode 100644 library/std/src/sys/paths/wii.rs
+
+diff --git a/library/std/src/sys/env/mod.rs b/library/std/src/sys/env/mod.rs
+index 8985651..541a138 100644
+--- a/library/std/src/sys/env/mod.rs
++++ b/library/std/src/sys/env/mod.rs
+@@ -8,6 +8,7 @@
+     target_os = "motor",
+     all(target_vendor = "fortanix", target_env = "sgx"),
+     target_os = "solid_asp3",
++    target_os = "wii",
+     target_os = "uefi",
+     target_os = "wasi",
+     target_os = "xous",
+@@ -35,6 +36,10 @@ cfg_select! {
+         mod sgx;
+         pub use sgx::*;
+     }
++    target_os = "wii" => {
++        mod wii;
++        pub use wii::*;
++    }
+     target_os = "solid_asp3" => {
+         mod solid;
+         pub use solid::*;
+diff --git a/library/std/src/sys/env/wii.rs b/library/std/src/sys/env/wii.rs
+new file mode 100644
+index 0000000..ebde99b
+--- /dev/null
++++ b/library/std/src/sys/env/wii.rs
+@@ -0,0 +1,74 @@
++pub use super::common::Env;
++use crate::ffi::{CStr, OsStr, OsString, c_char};
++use crate::io;
++use crate::sync::{PoisonError, RwLock};
++use crate::sys::helpers::run_with_cstr;
++
++static ENV: RwLock<()> = RwLock::new(());
++
++unsafe extern "C" {
++    static environ: *const *const c_char;
++    #[link_name = "getenv"]
++    fn getenv_c(name: *const c_char) -> *const c_char;
++    #[link_name = "setenv"]
++    fn setenv_c(name: *const c_char, value: *const c_char, overwrite: i32) -> i32;
++    #[link_name = "unsetenv"]
++    fn unsetenv_c(name: *const c_char) -> i32;
++}
++
++fn os_string(bytes: &[u8]) -> OsString {
++    // The Wii uses a byte-based OsString.
++    unsafe { OsString::from_encoded_bytes_unchecked(bytes.to_vec()) }
++}
++
++pub fn env() -> Env {
++    let _lock = ENV.read().unwrap_or_else(PoisonError::into_inner);
++    let mut pairs = Vec::new();
++    unsafe {
++        let mut vars = environ;
++        while !vars.is_null() && !(*vars).is_null() {
++            let bytes = CStr::from_ptr(*vars).to_bytes();
++            if let Some(i) = bytes.iter().position(|b| *b == b'=')
++                && i != 0
++            {
++                pairs.push((os_string(&bytes[..i]), os_string(&bytes[i + 1..])));
++            }
++            vars = vars.add(1);
++        }
++    }
++    Env::new(pairs)
++}
++
++pub fn getenv(name: &OsStr) -> Option<OsString> {
++    run_with_cstr(name.as_encoded_bytes(), &|name| {
++        let _lock = ENV.read().unwrap_or_else(PoisonError::into_inner);
++        let ptr = unsafe { getenv_c(name.as_ptr()) };
++        Ok((!ptr.is_null()).then(|| os_string(unsafe { CStr::from_ptr(ptr) }.to_bytes())))
++    })
++    .ok()
++    .flatten()
++}
++
++pub unsafe fn setenv(name: &OsStr, value: &OsStr) -> io::Result<()> {
++    run_with_cstr(name.as_encoded_bytes(), &|name| {
++        run_with_cstr(value.as_encoded_bytes(), &|value| {
++            let _lock = ENV.write().unwrap_or_else(PoisonError::into_inner);
++            status(unsafe { setenv_c(name.as_ptr(), value.as_ptr(), 1) })
++        })
++    })
++}
++
++pub unsafe fn unsetenv(name: &OsStr) -> io::Result<()> {
++    run_with_cstr(name.as_encoded_bytes(), &|name| {
++        let _lock = ENV.write().unwrap_or_else(PoisonError::into_inner);
++        status(unsafe { unsetenv_c(name.as_ptr()) })
++    })
++}
++
++fn status(result: i32) -> io::Result<()> {
++    if result == 0 {
++        Ok(())
++    } else {
++        Err(io::Error::last_os_error())
++    }
++}
+diff --git a/library/std/src/sys/fs/mod.rs b/library/std/src/sys/fs/mod.rs
+index e15841b..ca0f6f8 100644
+--- a/library/std/src/sys/fs/mod.rs
++++ b/library/std/src/sys/fs/mod.rs
+@@ -43,6 +43,10 @@ cfg_select! {
+         mod uefi;
+         use uefi as imp;
+     }
++    target_os = "wii" => {
++        mod wii;
++        use wii as imp;
++    }
+     target_os = "vexos" => {
+         mod vexos;
+         use vexos as imp;
+diff --git a/library/std/src/sys/fs/wii.rs b/library/std/src/sys/fs/wii.rs
+new file mode 100644
+index 0000000..5cd92c0
+--- /dev/null
++++ b/library/std/src/sys/fs/wii.rs
+@@ -0,0 +1,606 @@
++pub use super::common::{Dir, ExtraHomeDirs, ExtraMediaDirs, exists, remove_dir_all};
++use crate::ffi::{CStr, OsString, c_char, c_void};
++use crate::fmt;
++use crate::fs::TryLockError;
++use crate::io::{self, BorrowedCursor, IoSlice, IoSliceMut, SeekFrom};
++use crate::path::{Path, PathBuf};
++use crate::sync::Arc;
++use crate::sys::helpers::run_path_with_cstr;
++use crate::sys::time::{SystemTime, UNIX_EPOCH};
++use crate::sys::{ffi, unsupported, unsupported_err, wii_fs_lock};
++use crate::time::Duration;
++
++unsafe extern "C" {
++    fn chmod(path: *const c_char, mode: u32) -> i32;
++    fn utimensat(fd: i32, path: *const c_char, times: *const ffi::Timespec, flags: i32) -> i32;
++    fn close(fd: i32) -> i32;
++    fn read(fd: i32, buffer: *mut u8, length: usize) -> isize;
++    fn write(fd: i32, buffer: *const u8, length: usize) -> isize;
++    fn lseek(fd: i32, offset: i64, whence: i32) -> i64;
++    fn fsync(fd: i32) -> i32;
++    fn ftruncate(fd: i32, length: i64) -> i32;
++    fn opendir(path: *const c_char) -> *mut c_void;
++    fn closedir(dir: *mut c_void) -> i32;
++    #[link_name = "unlink"]
++    fn unlink_c(path: *const c_char) -> i32;
++    #[link_name = "rmdir"]
++    fn rmdir_c(path: *const c_char) -> i32;
++    #[link_name = "rename"]
++    fn rename_c(old: *const c_char, new: *const c_char) -> i32;
++    fn mkdir(path: *const c_char, mode: u32) -> i32;
++}
++
++fn cvt<T>(result: T) -> io::Result<T>
++where
++    T: PartialOrd + From<i8>,
++{
++    if result < 0.into() {
++        Err(io::Error::last_os_error())
++    } else {
++        Ok(result)
++    }
++}
++
++fn status(result: i32) -> io::Result<()> {
++    cvt(result).map(drop)
++}
++
++struct Descriptor(i32);
++
++impl Drop for Descriptor {
++    fn drop(&mut self) {
++        let _lock = wii_fs_lock();
++        unsafe { close(self.0) };
++    }
++}
++
++pub struct File(Arc<Descriptor>);
++
++impl fmt::Debug for File {
++    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
++        f.debug_struct("File").field("fd", &self.0.0).finish()
++    }
++}
++
++#[derive(Clone, Default)]
++#[repr(C)]
++pub struct FileAttr {
++    size: u64,
++    modified: i64,
++    mode: u32,
++}
++
++const TYPE_MASK: u32 = 0o170000;
++const WRITE_MASK: u32 = 0o222;
++const DIRECTORY: u32 = 0o040000;
++const REGULAR: u32 = 0o100000;
++
++impl From<ffi::Stat> for FileAttr {
++    fn from(stat: ffi::Stat) -> Self {
++        Self {
++            size: stat.size as u64,
++            modified: stat.mtime.sec,
++            mode: stat.mode,
++        }
++    }
++}
++
++impl FileAttr {
++    pub fn size(&self) -> u64 {
++        self.size
++    }
++
++    pub fn perm(&self) -> FilePermissions {
++        FilePermissions(self.mode & WRITE_MASK == 0)
++    }
++
++    pub fn file_type(&self) -> FileType {
++        FileType(self.mode & TYPE_MASK)
++    }
++
++    pub fn modified(&self) -> io::Result<SystemTime> {
++        if self.modified <= 0 {
++            return unsupported();
++        }
++        Ok(UNIX_EPOCH
++            .checked_add_duration(&Duration::from_secs(self.modified as u64))
++            .unwrap())
++    }
++
++    pub fn accessed(&self) -> io::Result<SystemTime> {
++        unsupported()
++    }
++
++    pub fn created(&self) -> io::Result<SystemTime> {
++        unsupported()
++    }
++}
++
++#[derive(Clone, Debug, PartialEq, Eq)]
++pub struct FilePermissions(bool);
++
++impl FilePermissions {
++    pub fn readonly(&self) -> bool {
++        self.0
++    }
++
++    pub fn set_readonly(&mut self, readonly: bool) {
++        self.0 = readonly;
++    }
++}
++
++#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
++pub struct FileType(u32);
++
++impl FileType {
++    pub fn is_dir(&self) -> bool {
++        self.0 == DIRECTORY
++    }
++
++    pub fn is_file(&self) -> bool {
++        self.0 == REGULAR
++    }
++
++    pub fn is_symlink(&self) -> bool {
++        false
++    }
++}
++
++#[derive(Copy, Clone, Default, Debug)]
++pub struct FileTimes {
++    accessed: Option<SystemTime>,
++    modified: Option<SystemTime>,
++}
++
++impl FileTimes {
++    pub fn set_accessed(&mut self, t: SystemTime) {
++        self.accessed = Some(t);
++    }
++
++    pub fn set_modified(&mut self, t: SystemTime) {
++        self.modified = Some(t);
++    }
++}
++
++#[derive(Clone, Debug, Default)]
++pub struct OpenOptions {
++    read: bool,
++    write: bool,
++    append: bool,
++    truncate: bool,
++    create: bool,
++    create_new: bool,
++}
++
++impl OpenOptions {
++    pub fn new() -> Self {
++        Self::default()
++    }
++
++    pub fn read(&mut self, read: bool) {
++        self.read = read;
++    }
++
++    pub fn write(&mut self, write: bool) {
++        self.write = write;
++    }
++
++    pub fn append(&mut self, append: bool) {
++        self.append = append;
++    }
++
++    pub fn truncate(&mut self, truncate: bool) {
++        self.truncate = truncate;
++    }
++
++    pub fn create(&mut self, create: bool) {
++        self.create = create;
++    }
++
++    pub fn create_new(&mut self, create_new: bool) {
++        self.create_new = create_new;
++    }
++
++    fn flags(&self) -> io::Result<i32> {
++        if (!self.read && !self.write && !self.append)
++            || (!self.write && !self.append && (self.create || self.truncate || self.create_new))
++            || (self.append && self.truncate && !self.create_new)
++        {
++            return Err(io::Error::from(io::ErrorKind::InvalidInput));
++        }
++        let writable = self.write || self.append;
++        let mut flags = match (self.read, writable) {
++            (true, true) => ffi::O_RDWR,
++            (true, false) => ffi::O_RDONLY,
++            (false, _) => ffi::O_WRONLY,
++        };
++        if self.append {
++            flags |= ffi::O_APPEND;
++        }
++        if self.create_new {
++            flags |= ffi::O_CREAT | ffi::O_EXCL;
++        } else {
++            if self.create {
++                flags |= ffi::O_CREAT;
++            }
++            if self.truncate {
++                flags |= ffi::O_TRUNC;
++            }
++        }
++        Ok(flags)
++    }
++}
++
++impl File {
++    pub fn open(path: &Path, options: &OpenOptions) -> io::Result<Self> {
++        let flags = options.flags()?;
++        let fd = with_path(path, |path| {
++            cvt(unsafe { ffi::open(path, flags, 0o666_u32) })
++        })?;
++        Ok(Self(Arc::new(Descriptor(fd))))
++    }
++
++    fn fd(&self) -> i32 {
++        self.0.0
++    }
++
++    pub fn file_attr(&self) -> io::Result<FileAttr> {
++        let _lock = wii_fs_lock();
++        let mut attr = ffi::Stat::default();
++        status(unsafe { ffi::fstat(self.fd(), &mut attr) })?;
++        Ok(FileAttr::from(attr))
++    }
++
++    pub fn fsync(&self) -> io::Result<()> {
++        let _lock = wii_fs_lock();
++        status(unsafe { fsync(self.fd()) })
++    }
++
++    pub fn datasync(&self) -> io::Result<()> {
++        self.fsync()
++    }
++
++    pub fn lock(&self) -> io::Result<()> {
++        unsupported()
++    }
++
++    pub fn lock_shared(&self) -> io::Result<()> {
++        unsupported()
++    }
++
++    pub fn try_lock(&self) -> Result<(), TryLockError> {
++        Err(TryLockError::Error(unsupported_err()))
++    }
++
++    pub fn try_lock_shared(&self) -> Result<(), TryLockError> {
++        self.try_lock()
++    }
++
++    pub fn unlock(&self) -> io::Result<()> {
++        unsupported()
++    }
++
++    pub fn truncate(&self, size: u64) -> io::Result<()> {
++        let size = i64::try_from(size).map_err(|_| io::Error::from(io::ErrorKind::InvalidInput))?;
++        let _lock = wii_fs_lock();
++        let offset = cvt(unsafe { lseek(self.fd(), 0, 1) })?;
++        status(unsafe { ftruncate(self.fd(), size) })?;
++        cvt(unsafe { lseek(self.fd(), offset, 0) }).map(drop)
++    }
++
++    fn read_raw(&self, data: *mut u8, len: usize) -> io::Result<usize> {
++        let _lock = wii_fs_lock();
++        cvt(unsafe { read(self.fd(), data, len.min(isize::MAX as usize)) }).map(|n| n as usize)
++    }
++
++    pub fn read(&self, buf: &mut [u8]) -> io::Result<usize> {
++        self.read_raw(buf.as_mut_ptr(), buf.len())
++    }
++
++    pub fn read_vectored(&self, bufs: &mut [IoSliceMut<'_>]) -> io::Result<usize> {
++        match bufs.iter_mut().find(|buf| !buf.is_empty()) {
++            Some(buf) => self.read(buf),
++            None => Ok(0),
++        }
++    }
++
++    pub fn is_read_vectored(&self) -> bool {
++        false
++    }
++
++    pub fn read_buf(&self, mut cursor: BorrowedCursor<'_, u8>) -> io::Result<()> {
++        let buf = unsafe { cursor.as_mut() };
++        let n = self.read_raw(buf.as_mut_ptr().cast(), buf.len())?;
++        unsafe { cursor.advance(n) };
++        Ok(())
++    }
++
++    pub fn write(&self, buf: &[u8]) -> io::Result<usize> {
++        let _lock = wii_fs_lock();
++        cvt(unsafe { write(self.fd(), buf.as_ptr(), buf.len().min(isize::MAX as usize)) })
++            .map(|n| n as usize)
++    }
++
++    pub fn write_vectored(&self, bufs: &[IoSlice<'_>]) -> io::Result<usize> {
++        match bufs.iter().find(|buf| !buf.is_empty()) {
++            Some(buf) => self.write(buf),
++            None => Ok(0),
++        }
++    }
++
++    pub fn is_write_vectored(&self) -> bool {
++        false
++    }
++
++    pub fn flush(&self) -> io::Result<()> {
++        Ok(())
++    }
++
++    pub fn seek(&self, position: SeekFrom) -> io::Result<u64> {
++        let (offset, whence) = match position {
++            SeekFrom::Start(n) => (
++                i64::try_from(n).map_err(|_| io::Error::from(io::ErrorKind::InvalidInput))?,
++                0,
++            ),
++            SeekFrom::Current(n) => (n, 1),
++            SeekFrom::End(n) => (n, 2),
++        };
++        let _lock = wii_fs_lock();
++        cvt(unsafe { lseek(self.fd(), offset, whence) }).map(|n| n as u64)
++    }
++
++    pub fn size(&self) -> Option<io::Result<u64>> {
++        Some(self.file_attr().map(|attr| attr.size()))
++    }
++
++    pub fn tell(&self) -> io::Result<u64> {
++        self.seek(SeekFrom::Current(0))
++    }
++
++    pub fn duplicate(&self) -> io::Result<Self> {
++        Ok(Self(self.0.clone()))
++    }
++
++    pub fn set_permissions(&self, _perm: FilePermissions) -> io::Result<()> {
++        unsupported()
++    }
++
++    pub fn set_times(&self, _times: FileTimes) -> io::Result<()> {
++        unsupported()
++    }
++}
++
++#[derive(Debug)]
++pub struct DirBuilder;
++
++impl DirBuilder {
++    pub fn new() -> Self {
++        Self
++    }
++
++    pub fn mkdir(&self, path: &Path) -> io::Result<()> {
++        with_path(path, |path| status(unsafe { mkdir(path, 0o777) }))
++    }
++}
++
++pub struct ReadDir {
++    handle: *mut c_void,
++    path: Arc<PathBuf>,
++}
++
++// The native handle is owned by ReadDir and next requires exclusive access.
++unsafe impl Send for ReadDir {}
++unsafe impl Sync for ReadDir {}
++
++impl fmt::Debug for ReadDir {
++    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
++        f.debug_tuple("ReadDir").field(&self.path).finish()
++    }
++}
++
++impl Drop for ReadDir {
++    fn drop(&mut self) {
++        let _lock = wii_fs_lock();
++        unsafe { closedir(self.handle) };
++    }
++}
++
++impl ReadDir {
++    pub fn dir(&self) -> io::Result<Dir> {
++        Dir::open_for_traversal(&self.path)
++    }
++}
++
++impl Iterator for ReadDir {
++    type Item = io::Result<DirEntry>;
++
++    fn next(&mut self) -> Option<Self::Item> {
++        loop {
++            let _lock = wii_fs_lock();
++            let entry = unsafe {
++                *ffi::__errno() = 0;
++                ffi::readdir(self.handle).as_ref()
++            };
++            let Some(entry) = entry else {
++                let errno = unsafe { *ffi::__errno() };
++                return (errno != 0).then(|| Err(io::Error::from_raw_os_error(errno)));
++            };
++            let bytes = unsafe { CStr::from_ptr(entry.name.as_ptr()) }.to_bytes();
++            if bytes == b"." || bytes == b".." {
++                continue;
++            }
++            let mode = match entry.kind {
++                ffi::DT_DIR => DIRECTORY,
++                ffi::DT_REG => REGULAR,
++                _ => 0,
++            };
++            let name = unsafe { OsString::from_encoded_bytes_unchecked(bytes.to_vec()) };
++            return Some(Ok(DirEntry {
++                path: self.path.clone(),
++                name,
++                mode,
++            }));
++        }
++    }
++}
++
++pub struct DirEntry {
++    path: Arc<PathBuf>,
++    name: OsString,
++    mode: u32,
++}
++
++impl DirEntry {
++    pub fn path(&self) -> PathBuf {
++        self.path.join(&self.name)
++    }
++
++    pub fn file_name(&self) -> OsString {
++        self.name.clone()
++    }
++
++    pub fn metadata(&self) -> io::Result<FileAttr> {
++        stat(&self.path())
++    }
++
++    pub fn file_type(&self) -> io::Result<FileType> {
++        if self.mode == 0 {
++            self.metadata().map(|attr| attr.file_type())
++        } else {
++            Ok(FileType(self.mode))
++        }
++    }
++}
++
++pub fn readdir(path: &Path) -> io::Result<ReadDir> {
++    let handle = with_path(path, |path| {
++        let dir = unsafe { opendir(path) };
++        if dir.is_null() {
++            Err(io::Error::last_os_error())
++        } else {
++            Ok(dir)
++        }
++    })?;
++    Ok(ReadDir {
++        handle,
++        path: Arc::new(path.to_owned()),
++    })
++}
++
++fn with_path<T>(path: &Path, operation: impl Fn(*const c_char) -> io::Result<T>) -> io::Result<T> {
++    run_path_with_cstr(path, &|path| {
++        let _lock = wii_fs_lock();
++        operation(path.as_ptr())
++    })
++}
++
++pub fn unlink(path: &Path) -> io::Result<()> {
++    with_path(path, |path| status(unsafe { unlink_c(path) }))
++}
++
++pub fn rmdir(path: &Path) -> io::Result<()> {
++    with_path(path, |path| status(unsafe { rmdir_c(path) }))
++}
++
++pub fn rename(old: &Path, new: &Path) -> io::Result<()> {
++    run_path_with_cstr(old, &|old| {
++        with_path(new, |new| status(unsafe { rename_c(old.as_ptr(), new) }))
++    })
++}
++
++pub use rename as rename_noreplace;
++
++pub fn set_perm(path: &Path, perm: FilePermissions) -> io::Result<()> {
++    with_path(path, |path| {
++        status(unsafe { chmod(path, if perm.readonly() { 0o444 } else { 0o666 }) })
++    })
++}
++
++pub use set_perm as set_perm_nofollow;
++
++pub fn set_times(path: &Path, times: FileTimes) -> io::Result<()> {
++    if times.accessed.is_some() {
++        return unsupported();
++    }
++    if let Some(modified) = times.modified {
++        let seconds = modified
++            .sub_time(&UNIX_EPOCH)
++            .map_err(|_| io::Error::from(io::ErrorKind::InvalidInput))?;
++        let seconds = i64::try_from(seconds.as_secs())
++            .map_err(|_| io::Error::from(io::ErrorKind::InvalidInput))?;
++        with_path(path, |path| {
++            const AT_FDCWD: i32 = -2;
++            const UTIME_OMIT: i32 = 1_073_741_822;
++            let times = [
++                ffi::Timespec {
++                    sec: 0,
++                    nsec: UTIME_OMIT,
++                },
++                ffi::Timespec {
++                    sec: seconds,
++                    nsec: 0,
++                },
++            ];
++            status(unsafe { utimensat(AT_FDCWD, path, times.as_ptr(), 0) })
++        })?;
++    }
++    Ok(())
++}
++
++pub use set_times as set_times_nofollow;
++
++pub fn readlink(_path: &Path) -> io::Result<PathBuf> {
++    unsupported()
++}
++
++pub fn symlink(_original: &Path, _link: &Path) -> io::Result<()> {
++    unsupported()
++}
++
++pub fn link(_src: &Path, _dst: &Path) -> io::Result<()> {
++    unsupported()
++}
++
++pub fn stat(path: &Path) -> io::Result<FileAttr> {
++    run_path_with_cstr(path, &|path| {
++        let _lock = wii_fs_lock();
++        let mut attr = ffi::Stat::default();
++        status(unsafe { ffi::stat(path.as_ptr(), &mut attr) })?;
++        Ok(FileAttr::from(attr))
++    })
++}
++
++pub use stat as lstat;
++
++pub fn canonicalize(path: &Path) -> io::Result<PathBuf> {
++    // Resolve and check existence under the same lock as set_current_dir.
++    let path = run_path_with_cstr(path, &|path| {
++        let _lock = wii_fs_lock();
++        let mut native = [0; 1024];
++        if unsafe { ffi::realpath(path.as_ptr(), native.as_mut_ptr()) }.is_null() {
++            return Err(io::Error::last_os_error());
++        }
++        Ok(native)
++    })?;
++    let bytes = unsafe { CStr::from_ptr(path.as_ptr()) }.to_bytes();
++    let mut absolute = Vec::with_capacity(bytes.len() + 1);
++    absolute.push(b'/');
++    absolute.extend_from_slice(bytes);
++    Ok(PathBuf::from(unsafe {
++        OsString::from_encoded_bytes_unchecked(absolute)
++    }))
++}
++
++pub fn copy(from: &Path, to: &Path) -> io::Result<u64> {
++    let mut source = crate::fs::File::open(from)?;
++    // FAT's fstat reports access mode from the opened handle. Preserve the
++    // read-only attribute by reading it from the directory entry.
++    let metadata = stat(from)?;
++    if !metadata.file_type().is_file() {
++        return Err(super::common::NOT_FILE_ERROR);
++    }
++    let mut target = crate::fs::File::create(to)?;
++    let copied = io::copy(&mut source, &mut target)?;
++    set_perm(to, metadata.perm())?;
++    Ok(copied)
++}
+diff --git a/library/std/src/sys/path/unix.rs b/library/std/src/sys/path/unix.rs
+index 5a8c0c7..a591953 100644
+--- a/library/std/src/sys/path/unix.rs
++++ b/library/std/src/sys/path/unix.rs
+@@ -58,7 +58,7 @@ pub(crate) fn absolute(path: &Path) -> io::Result<PathBuf> {
+ }
+ 
+ pub(crate) fn is_absolute(path: &Path) -> bool {
+-    if cfg!(any(unix, target_os = "hermit", target_os = "wasi", target_os = "motor")) {
++    if cfg!(any(unix, target_os = "hermit", target_os = "wasi", target_os = "motor", target_os = "wii")) {
+         path.has_root()
+     } else {
+         path.has_root() && path.prefix().is_some()
+diff --git a/library/std/src/sys/paths/mod.rs b/library/std/src/sys/paths/mod.rs
+index 865d06a..f48d1ec 100644
+--- a/library/std/src/sys/paths/mod.rs
++++ b/library/std/src/sys/paths/mod.rs
+@@ -34,6 +34,10 @@ cfg_select! {
+             };
+         }
+     }
++    target_os = "wii" => {
++        mod wii;
++        use wii as imp;
++    }
+     target_os = "uefi" => {
+         mod uefi;
+         use uefi as imp;
+diff --git a/library/std/src/sys/paths/wii.rs b/library/std/src/sys/paths/wii.rs
+new file mode 100644
+index 0000000..d650092
+--- /dev/null
++++ b/library/std/src/sys/paths/wii.rs
+@@ -0,0 +1,122 @@
++use crate::ffi::{CStr, OsStr, OsString, c_char};
++use crate::path::{Path, PathBuf};
++use crate::sys::helpers::run_path_with_cstr;
++use crate::sys::{unsupported, wii_fs_lock};
++use crate::{fmt, io};
++
++unsafe extern "C" {
++    #[link_name = "getcwd"]
++    fn getcwd_c(output: *mut c_char, size: usize) -> *mut c_char;
++    #[link_name = "chdir"]
++    fn chdir_c(path: *const c_char) -> i32;
++}
++
++pub fn getcwd() -> io::Result<PathBuf> {
++    let mut buf = [0; 1025];
++    {
++        let _lock = wii_fs_lock();
++        if unsafe { getcwd_c(buf[1..].as_mut_ptr(), buf.len() - 1) }.is_null() {
++            return Err(io::Error::last_os_error());
++        }
++    }
++    if buf[1] == 0 {
++        return unsupported();
++    }
++    buf[0] = b'/' as _;
++    let bytes = unsafe { CStr::from_ptr(buf.as_ptr()) }.to_bytes();
++    Ok(PathBuf::from(unsafe {
++        OsString::from_encoded_bytes_unchecked(bytes.to_vec())
++    }))
++}
++
++pub fn chdir(path: &Path) -> io::Result<()> {
++    run_path_with_cstr(path, &|path| {
++        let _lock = wii_fs_lock();
++        if unsafe { chdir_c(path.as_ptr()) } == 0 {
++            Ok(())
++        } else {
++            Err(io::Error::last_os_error())
++        }
++    })
++}
++
++pub fn current_exe() -> io::Result<PathBuf> {
++    if let Some(path) = crate::sys::args::args().next() {
++        Path::new(&path).canonicalize()
++    } else {
++        unsupported()
++    }
++}
++
++pub fn temp_dir() -> PathBuf {
++    PathBuf::from("/sd:/")
++}
++
++pub fn home_dir() -> Option<PathBuf> {
++    let path = temp_dir();
++    path.is_dir().then_some(path)
++}
++
++pub struct SplitPathsRef<'a>(crate::slice::Split<'a, u8, fn(&u8) -> bool>);
++pub struct SplitPaths<'a>(SplitPathsRef<'a>);
++
++impl<'a> Iterator for SplitPathsRef<'a> {
++    type Item = &'a Path;
++
++    fn next(&mut self) -> Option<Self::Item> {
++        self.0
++            .next()
++            .map(|p| Path::new(unsafe { OsStr::from_encoded_bytes_unchecked(p) }))
++    }
++}
++
++impl Iterator for SplitPaths<'_> {
++    type Item = PathBuf;
++
++    fn next(&mut self) -> Option<Self::Item> {
++        self.0.next().map(Path::to_path_buf)
++    }
++}
++
++fn split(paths: &OsStr) -> SplitPathsRef<'_> {
++    // Device paths use a colon, for example sd:/apps.
++    SplitPathsRef(paths.as_encoded_bytes().split(|b| *b == b';'))
++}
++
++pub fn split_paths(paths: &OsStr) -> SplitPaths<'_> {
++    SplitPaths(split(paths))
++}
++
++pub fn split_paths_ref(paths: &OsStr) -> Option<SplitPathsRef<'_>> {
++    Some(split(paths))
++}
++
++#[derive(Debug)]
++pub struct JoinPathsError;
++
++impl fmt::Display for JoinPathsError {
++    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
++        f.write_str("path contains ';'")
++    }
++}
++
++impl crate::error::Error for JoinPathsError {}
++
++pub fn join_paths<I, T>(paths: I) -> Result<OsString, JoinPathsError>
++where
++    I: Iterator<Item = T>,
++    T: AsRef<OsStr>,
++{
++    let mut bytes = Vec::new();
++    for (i, path) in paths.enumerate() {
++        let path = path.as_ref().as_encoded_bytes();
++        if path.contains(&b';') {
++            return Err(JoinPathsError);
++        }
++        if i > 0 {
++            bytes.push(b';');
++        }
++        bytes.extend_from_slice(path);
++    }
++    Ok(unsafe { OsString::from_encoded_bytes_unchecked(bytes) })
++}

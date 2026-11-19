@@ -1,0 +1,59 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Thu, 19 Nov 2026 14:08:01 +0100
+Subject: [PATCH] Report pending socket errors with IOS error numbers
+
+---
+ Source/Core/Core/IOS/Network/IP/Top.cpp | 11 ++++++-----
+ Source/Core/Core/IOS/Network/Socket.cpp |  2 +-
+ Source/Core/Core/IOS/Network/Socket.h   |  1 +
+ 3 files changed, 8 insertions(+), 6 deletions(-)
+
+diff --git a/Source/Core/Core/IOS/Network/IP/Top.cpp b/Source/Core/Core/IOS/Network/IP/Top.cpp
+index e38fd1d..ed748ff 100644
+--- a/Source/Core/Core/IOS/Network/IP/Top.cpp
++++ b/Source/Core/Core/IOS/Network/IP/Top.cpp
+@@ -692,12 +692,13 @@ IPCReply NetIPTopDevice::HandleGetSockOptRequest(const IOCtlRequest& request)
+   memory.Write_U32(optlen, request.buffer_out + 0xC);
+   memory.CopyToEmu(request.buffer_out + 0x10, optval, optlen);
+ 
+-  if (optname == SO_ERROR)
++  // The pending error is a host error number, IOS reports its own like the return values
++  if (ret == 0 && nat_level == SOL_SOCKET && nat_optname == SO_ERROR)
+   {
+-    s32 last_error = socket_manager->GetLastNetError();
+-
+-    memory.Write_U32(sizeof(s32), request.buffer_out + 0xC);
+-    memory.Write_U32(last_error, request.buffer_out + 0x10);
++    s32 error;
++    std::memcpy(&error, optval, sizeof(error));
++    memory.Write_U32(error ? -WiiSockMan::TranslateErrorCode(error, false) : 0,
++                     request.buffer_out + 0x10);
+   }
+ 
+   return IPCReply(return_value);
+diff --git a/Source/Core/Core/IOS/Network/Socket.cpp b/Source/Core/Core/IOS/Network/Socket.cpp
+index 3c41fb8..98e2cb2 100644
+--- a/Source/Core/Core/IOS/Network/Socket.cpp
++++ b/Source/Core/Core/IOS/Network/Socket.cpp
+@@ -44,7 +44,7 @@ namespace IOS::HLE
+ //  - EINPROGRESS: connect, bind
+ //  - WSAEWOULDBLOCK: send(to), recv(from), accept, connect
+ // On Windows is_rw is used to correct the return value for connect
+-static s32 TranslateErrorCode(s32 native_error, bool is_rw)
++s32 WiiSockMan::TranslateErrorCode(s32 native_error, bool is_rw)
+ {
+   switch (native_error)
+   {
+diff --git a/Source/Core/Core/IOS/Network/Socket.h b/Source/Core/Core/IOS/Network/Socket.h
+index 68ea889..af89124 100644
+--- a/Source/Core/Core/IOS/Network/Socket.h
++++ b/Source/Core/Core/IOS/Network/Socket.h
+@@ -252,6 +252,7 @@ public:
+   WiiSockMan& operator=(WiiSockMan&&) = delete;
+   ~WiiSockMan();
+ 
++  static s32 TranslateErrorCode(s32 native_error, bool is_rw);
+   s32 GetNetErrorCode(s32 ret, std::string_view caller, bool is_rw);
+ 
+   void Update();

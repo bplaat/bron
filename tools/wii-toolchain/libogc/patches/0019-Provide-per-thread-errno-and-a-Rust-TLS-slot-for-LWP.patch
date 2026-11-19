@@ -1,0 +1,87 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Thu, 19 Nov 2026 11:42:07 +0100
+Subject: [PATCH] Provide per-thread errno and a Rust TLS slot for LWP
+
+---
+ gc/ogc/lwp_config.h  |  2 +-
+ gc/ogc/lwp_threads.h |  3 +++
+ libogc/lwp.c         | 18 ++++++++++++++++++
+ libogc/lwp_threads.c |  4 ++++
+ 4 files changed, 26 insertions(+), 1 deletion(-)
+
+diff --git a/gc/ogc/lwp_config.h b/gc/ogc/lwp_config.h
+index beda421..4fbfa57 100644
+--- a/gc/ogc/lwp_config.h
++++ b/gc/ogc/lwp_config.h
+@@ -6,7 +6,7 @@
+ 
+ #define LWP_MAX_MUTEXES				64
+ 
+-#define LWP_MAX_THREADS				16
++#define LWP_MAX_THREADS				32
+ 
+ #define LWP_MAX_SEMAS				64
+ 
+diff --git a/gc/ogc/lwp_threads.h b/gc/ogc/lwp_threads.h
+index 69211a6..4796e40 100644
+--- a/gc/ogc/lwp_threads.h
++++ b/gc/ogc/lwp_threads.h
+@@ -54,6 +54,9 @@ typedef struct _lwpcntrl {
+ 	lwp_queue *ready;
+ 	lwp_thrqueue join_list;
+ 	frame_context context;		//16
++	int libc_errno;
++	void *rust_tls;
++	void (*rust_tls_cleanup)(void);
+ } lwp_cntrl, *lwp_cntrl_t;
+ 
+ extern lwp_cntrl *_thr_main;
+diff --git a/libogc/lwp.c b/libogc/lwp.c
+index df190ee..fc0ce4a 100644
+--- a/libogc/lwp.c
++++ b/libogc/lwp.c
+@@ -418,3 +418,21 @@ void LWP_ThreadSignal(lwpq_t thequeue)
+ 	__lwp_threadqueue_dequeue(&tq->tqueue);
+ 	__lwp_thread_dispatchenable();
+ }
++
++/* Picolibc uses this even before the scheduler starts. */
++int *__errno(void)
++{
++	static int startup_errno;
++	return _thr_executing ? &_thr_executing->libc_errno : &startup_errno;
++}
++
++void *__wii_lwp_tls_get(void)
++{
++	return _thr_executing->rust_tls;
++}
++
++void __wii_lwp_tls_set(void *value, void (*cleanup)(void))
++{
++	_thr_executing->rust_tls = value;
++	_thr_executing->rust_tls_cleanup = cleanup;
++}
+diff --git a/libogc/lwp_threads.c b/libogc/lwp_threads.c
+index 81b61e0..bf03dca 100644
+--- a/libogc/lwp_threads.c
++++ b/libogc/lwp_threads.c
+@@ -222,6 +222,7 @@ static void __lwp_thread_handler(void)
+ 	__lwp_msr_setlevel(level);
+ 	__lwp_thread_dispatchenable();
+ 	exec->wait.ret_arg = exec->entry(exec->arg);
++	if(exec->rust_tls_cleanup) exec->rust_tls_cleanup();
+ 
+ 	__lwp_thread_exit(exec->wait.ret_arg);
+ #ifdef _LWPTHREADS_DEBUG
+@@ -613,6 +614,9 @@ u32 __lwp_thread_init(lwp_cntrl *thethread,void *stack_area,u32 stack_size,u32 p
+ 	thethread->real_prio = prio;
+ 	thethread->cur_state = LWP_STATES_DORMANT;
+ 	thethread->cpu_time_budget = _lwp_ticks_per_timeslice;
++	thethread->libc_errno = 0;
++	thethread->rust_tls = NULL;
++	thethread->rust_tls_cleanup = NULL;
+ 	thethread->suspendcnt = 0;
+ 	thethread->res_cnt = 0;
+ 	__lwp_thread_setpriority(thethread,prio);

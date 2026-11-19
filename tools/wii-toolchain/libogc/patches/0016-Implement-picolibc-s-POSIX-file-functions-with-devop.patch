@@ -9,20 +9,20 @@ driver registers, and the standard streams to Dolphin's debug UART. Run
 constructors before main and finalizers at exit so buffered stdio can
 register its cleanup hooks. The linker script supplies their tables.
 ---
- gc/sys/iosupport.h  |  66 +++++
- libogc/iosupport.c  | 705 ++++++++++++++++++++++++++++++++++++++++++++
+ gc/sys/iosupport.h  |  67 ++++
+ libogc/iosupport.c  | 758 ++++++++++++++++++++++++++++++++++++++++++++
  libogc/sys_report.c |  31 +-
  libogc/system.c     |  13 +
- 4 files changed, 794 insertions(+), 21 deletions(-)
+ 4 files changed, 848 insertions(+), 21 deletions(-)
  create mode 100644 gc/sys/iosupport.h
  create mode 100644 libogc/iosupport.c
 
 diff --git a/gc/sys/iosupport.h b/gc/sys/iosupport.h
 new file mode 100644
-index 0000000..660cd09
+index 0000000..604bbb2
 --- /dev/null
 +++ b/gc/sys/iosupport.h
-@@ -0,0 +1,66 @@
+@@ -0,0 +1,67 @@
 +// SPDX-License-Identifier: ZPL-2.1
 +// SPDX-FileCopyrightText: Copyright fincs, devkitPro
 +#pragma once
@@ -81,6 +81,7 @@ index 0000000..660cd09
 +    int (*fchmod_r)(struct _reent* r, void* fd, mode_t mode);
 +    int (*rmdir_r)(struct _reent* r, const char* name);
 +    int (*lstat_r)(struct _reent* r, const char* file, struct stat* st);
++    int (*set_mtime_r)(struct _reent* r, const char* path, time_t seconds);
 +} devoptab_t;
 +
 +extern const devoptab_t* devoptab_list[STD_MAX];
@@ -91,10 +92,10 @@ index 0000000..660cd09
 +const devoptab_t* GetDeviceOpTab(const char* name);
 diff --git a/libogc/iosupport.c b/libogc/iosupport.c
 new file mode 100644
-index 0000000..f28ed6d
+index 0000000..b53d4cf
 --- /dev/null
 +++ b/libogc/iosupport.c
-@@ -0,0 +1,705 @@
+@@ -0,0 +1,758 @@
 +// SPDX-License-Identifier: ZPL-2.1
 +// SPDX-FileCopyrightText: Copyright fincs, devkitPro
 +#include <dirent.h>
@@ -678,7 +679,11 @@ index 0000000..f28ed6d
 +    struct _reent r;
 +    const Handle* h = _handle(dir->fd, true, &r);
 +    struct stat st;
-+    if (!h || h->device->dirnext_r(&r, h->file, dir->dirent.d_name, &st) == -1) {
++    if (!h) {
++        return NULL;
++    }
++    if (h->device->dirnext_r(&r, h->file, dir->dirent.d_name, &st) == -1) {
++        errno = r._errno;
 +        return NULL;
 +    }
 +    dir->dirent.d_ino = st.st_ino;
@@ -799,6 +804,55 @@ index 0000000..f28ed6d
 +    (void)path;
 +    (void)times;
 +    return _notSupported();
++}
++
++int chmod(const char* path, mode_t mode) {
++    char buffer[PATH_MAX];
++    struct _reent r;
++    const devoptab_t* dev = _pathDevice(&path, buffer, &r);
++    if (!dev) {
++        return -1;
++    }
++    return dev->chmod_r ? _result(dev->chmod_r(&r, path, mode), &r) : _notSupported();
++}
++
++int utimensat(int fd, const char* path, const struct timespec times[2], int flags) {
++    // FAT can set the modification time. It has no independently settable access time.
++    const long omit = 1073741822;
++    if (fd != AT_FDCWD || flags != 0 || !times || times[0].tv_nsec != omit) {
++        return _notSupported();
++    }
++    if (times[1].tv_nsec < 0 || times[1].tv_nsec >= 1000000000) {
++        errno = EINVAL;
++        return -1;
++    }
++    char buffer[PATH_MAX];
++    struct _reent r;
++    const devoptab_t* dev = _pathDevice(&path, buffer, &r);
++    if (!dev) {
++        return -1;
++    }
++    return dev->set_mtime_r ? _result(dev->set_mtime_r(&r, path, times[1].tv_sec), &r)
++                            : _notSupported();
++}
++
++char* realpath(const char* path, char* output) {
++    char buffer[PATH_MAX];
++    struct _reent r;
++    const devoptab_t* dev = _pathDevice(&path, buffer, &r);
++    if (!dev) {
++        return NULL;
++    }
++    struct stat st;
++    if (stat(path, &st) == -1) {
++        return NULL;
++    }
++    // Without a current directory the path stays as given, which can exceed PATH_MAX
++    if (output && strlen(path) >= PATH_MAX) {
++        errno = ENAMETOOLONG;
++        return NULL;
++    }
++    return output ? strcpy(output, path) : strdup(path);
 +}
 diff --git a/libogc/sys_report.c b/libogc/sys_report.c
 index 34ff489..b7125d8 100644

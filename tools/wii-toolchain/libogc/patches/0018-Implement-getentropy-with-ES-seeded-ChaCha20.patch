@@ -12,7 +12,7 @@ unavailable and erase old seed and keystream buffers. Never fall
 back to a timer or libc PRNG. The seed still depends on the security
 of IOS signing randomness.
 ---
- libogc/getentropy.c | 206 ++++++++++++++++++++++++++++++++++++++++
+ libogc/getentropy.c | 206 ++++++++++++++++++++++++++++++++++++++++++++
  1 file changed, 206 insertions(+)
  create mode 100644 libogc/getentropy.c
 

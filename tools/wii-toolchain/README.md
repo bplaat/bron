@@ -1,8 +1,8 @@
 # Wii Toolchain
 
 Everything the [Wii examples](../../examples/wii/) share to build Wii programs with plain clang and lld, without devkitPro.
-`build.sh` builds it all in the repository root's `target/wii-toolchain/`, the example Makefiles and Rust `build.rs` files run it for
-you:
+`build.sh` builds the toolchain in the repository root's `target/wii-toolchain/`. The C
+Makefiles and the Rust Cargo wrapper invoke it before building a project.
 
 - Clones upstream [libogc](https://github.com/devkitPro/libogc) v2.11.0 and applies
   `libogc/patches/` as commits, then builds the parts we use (listed in `build.sh`) to
@@ -26,9 +26,10 @@ you:
 ```sh
 cd tools/wii-toolchain
 ./build.sh                 # fetch, patch and build
+./build.sh std             # prepare the patched Rust sources
 ./build.sh clean           # remove ../../target/wii-toolchain/
 ./build.sh export-patches  # write the commits in ../../target/wii-toolchain/<name>/ back to <name>/patches/
-./build.sh test            # build test/ and run it headless in dolphin-runner
+./build.sh test            # run the C and Rust guest suites headlessly in Dolphin
 ./build.sh dolphin         # build ../../target/wii-toolchain/dolphin-runner
 ```
 
@@ -42,27 +43,48 @@ loops on plain variables, which LTO can optimize into endless loops. Code is com
 Install the host dependencies listed in the [examples README](../../examples/wii/README.md#getting-started).
 Downloaded sources, compiled libraries and host tools stay in the repository root's ignored `target/wii-toolchain/` folder.
 
-C projects include `wii.mk` from their Makefile. Rust projects select `wii.json` and `run.sh` in
-`.cargo/config.toml`, then call the shared `build.rs` helper to build the libraries and configure
-the linker with an absolute path to `wii.ld`. They use the libogc and picolibc functions through
-the `libogc-sys` crate. Each project keeps its own build output in `target/`.
+C projects include `wii.mk` from their Makefile. Rust projects use the toolchain's `cargo`
+wrapper and access libogc and picolibc through `libogc-sys`. Each project keeps its build
+output in `target/`.
 
-The toolchain, the examples and the [PlaatCraft Wii port](../../games/plaatcraft-wii) build
-separately from main Cargo workspace.
+The toolchain and the examples build separately from the main Cargo workspace, the
+[PlaatCraft Wii port](../../games/plaatcraft/docs/wii.md) builds in it.
+
+## Rust standard library
+
+Use the Cargo wrapper from a Rust project with an ordinary `fn main()`. It builds the native
+runtime, copies `rust-src` for the pinned upstream nightly, applies the toolchain's Rust patches,
+and builds `std` with the `powerpc-nintendo-wii` target. The wrapper supplies the linker script,
+native archives, Dolphin runner, and the Wii's build profile: optimized for size, aborting panics,
+and no LTO, also in the Cargo workspace (its per-package optimization levels still apply).
+
+```sh
+tools/wii-toolchain/cargo build --release --manifest-path path/to/Cargo.toml
+tools/wii-toolchain/cargo run --release --manifest-path path/to/Cargo.toml
+```
+
+The port uses panic abort, picolibc and devoptab for SD files, and libogc LWP for threads and
+thread-local storage. It mounts the SD card at startup when available. Absolute device paths
+returned by `std` have a leading slash, for example `/sd:/apps`. Arguments and the executable
+path come from the homebrew loader. IPv4 sockets initialize IOS networking on first use.
+
+The FAT backend supports path-based read-only permissions and modification times at FAT's
+two-second precision. File locking, changing metadata through an open file, hard links,
+symlinks, creating subprocesses, and IPv6 are unsupported. A FAT rename to an existing name
+returns `AlreadyExists`. Random seeding uses the entropy source described below.
 
 ## Files
 
 - `wii.mk` has the make rules for the C examples, `wii.ld` is the linker script
-- `wii.json` is the Rust target; `build.rs` builds and links `../../target/wii-toolchain/libogc.a`,
-  `../../target/wii-toolchain/libdvm.a` and picolibc's `../../target/wii-toolchain/sysroot/lib/libc.a`
+- `powerpc-nintendo-wii.json` and `rust/patches/` provide the target and Rust changes used by the
+  `cargo` wrapper. The Rust backend calls picolibc, LWP and libogc's IOS socket APIs directly
 - `gxtexconv/` converts images to GX textures, as a library for `build.rs` files and a CLI for
   the Makefiles
 - `libogc-sys/` has Rust bindings for graphics, matrices, picolibc, threads, Wii Remote input,
   AESND audio, SD card mounting and IOS network sockets
 - `cc` is the C compiler for cc-rs build scripts of Rust projects, like the bundled SQLite of
   `libsqlite3-sys`: it builds the toolchain and compiles with the Wii flags and picolibc.
-  `ar` is a separate wrapper for `llvm-ar`. Projects set `TARGET_CC` and `TARGET_AR` to
-  these scripts in `.cargo/config.toml`
+  `ar` is a separate wrapper for `llvm-ar`. The Cargo wrapper selects both for target builds
 - `run.sh` converts a program to a `.dol` and starts it in Dolphin, extra arguments go to Dolphin
 - `dolphin/runner.cpp` runs a Wii program headless in [Dolphin](https://dolphin-emu.org/)'s core,
   field exact, for scripts and agents: it presses the Wii Remote's and the Nunchuk's buttons, points
@@ -94,7 +116,7 @@ separately from main Cargo workspace.
     00:00 UTC, so runs are repeatable. Dolphin maps the emulated memory through `/dev/shm` on
     Linux, which Docker limits to 64 MiB, so give a container more, like `--shm-size=1g`
 
-- `test/` is a Wii program that tests the toolchain, see below
+- `test/c/` and `test/rust/` are the C runtime and Rust standard library guest suites
 
 The runner's `test-title` command supplies synthetic title metadata for standalone
 ES signing tests. `./build.sh test` uses it to check entropy generation without a
@@ -102,16 +124,20 @@ disc or NAND dump; normal programs keep their existing boot behavior.
 
 ## Test
 
-`./build.sh test` builds `test/` into the repository root's `target/wii-toolchain/test/` and runs
-it headless in `dolphin-runner`, which it builds first. It checks the startup code, the C library,
+`./build.sh test` builds both suites into their `target/` folders and runs them in
+`dolphin-runner` with fresh SD images. The C suite checks startup, the C library,
 compiler-rt, libogc's paired single math, threads and timers, the C library locks, RGBA8 and
 RGB5A3 textures converted by `gxtexconv`, constructors, the standard streams, the clock, and
-files, directories, relative paths, descriptors and stdio streams on a fresh FAT32 SD card that
-Dolphin makes from an empty directory for every run. The program writes
-its results to the debug UART after every group, the runner prints them and fails when a check
-failed or the program didn't finish within 3600 frames.
+files, directories, relative paths, descriptors and stdio streams.
 
-From the repository root on Linux, `cargo xtask check-others` builds the assembly examples, Empires, and the Nintendo DS test ROM, runs this test, then builds the PlaatCraft Wii port. On macOS, `cargo xtask check-macos-examples` builds the native macOS applications. `cargo xtask check` includes these platform checks.
+The Rust suite covers threads, parking, synchronization,
+TLS destructors, clocks, launcher arguments, environment variables, SD files, unsupported subprocess
+creation, TCP and UDP loopback, hostname lookup, and randomness through `std` hash seeding and
+the workspace's `getrandom` crate. A separate guest run verifies
+that a panic produces output and enters the Wii exit routine. Both suites report their results on
+the debug UART, and the runner requires `DONE 0 failed` within 3600 frames.
+
+From the repository root on Linux, `cargo xtask check-others` builds the assembly examples, Empires, and the Nintendo DS test ROM, runs this test, then builds the Wii examples and the PlaatCraft Wii port. On macOS, `cargo xtask check-macos-examples` builds the native macOS applications. `cargo xtask check` includes these platform checks.
 
 ## Patches
 
@@ -124,9 +150,9 @@ exported yet.
 
 The libogc patches:
 
-- `0002` uses standard C headers and removes unused POSIX header dependencies
 - `0001` to `0007` remove the newlib glue: reent structs, devoptab, malloc locks, time hooks,
-  the text console and the network cleanup
+  the text console and the network cleanup, `0002` also uses standard C headers instead of the
+  newlib and POSIX ones
 - `0008` to `0010` add assembler macros for the Gekko / Broadway paired single instructions,
   which LLVM doesn't know, so the fast paired single matrix code keeps working
 - `0011` and `0012` stop using small data sections, which clang doesn't support
@@ -139,7 +165,9 @@ The libogc patches:
   devoptab devices. `0003` and `0005` removed newlib's devoptab glue, and picolibc's stdio only
   calls these functions, so without it no file could be opened and the standard streams could
   not reach Dolphin's debug UART. It also runs the constructors and finalizers of the linker
-  script's init and fini arrays, because picolibc's stdio registers its flush at exit in one
+  script's init and fini arrays, because picolibc's stdio registers its flush at exit in one.
+  It also resolves device paths for `realpath`, implements `chmod` and `utimensat`, and keeps
+  the errors of directory iteration
 - `0017` implements `gettimeofday` with the time base, which libogc starts at the RTC time.
   picolibc leaves it to the platform, without it `time()` fails and the FAT driver can't give
   files their modification time
@@ -150,12 +178,20 @@ The libogc patches:
   `libogc-sys` or the workspace's `getrandom` replacement.
   Its security depends on fresh, unpredictable IOS signing nonces; emulator
   tests do not establish the quality of this entropy source on real hardware.
+- `0019` provides thread-local `errno` and a Rust TLS slot on LWP threads
+- `0020` sends and receives in single IOS transfers, a stream gets a partial count above 64 KiB,
+  and adds `net_getpeername` and `net_getsockopt` with `SO_ERROR` translated to `errno` values,
+  for the Rust networking backend
 
-The libdvm patch:
+The libdvm patches:
 
 - `0001` mounts only the SD card, because upstream `dvmInit` also probes USB storage and the
   GameCube card slots, which libogc is built without, so it wouldn't link. It adds
   `wiiMountSd` because `dvmInit` mounts once at startup, a game can't notice a replaced card
+- `0002` exposes FAT permission and modification-time updates and adds metadata for the SD root
+
+The Wii `rust/patches/` series adds the Wii startup and thread hooks, then SD files and
+environment support, then IOS networking. Run `./build.sh std` to prepare its working tree.
 
 The Dolphin patches, for `dolphin-runner`:
 
@@ -166,6 +202,9 @@ The Dolphin patches, for `dolphin-runner`:
 - `0005` lets frame stepping stop at every VI field, also when it shows the same frame, for an
   exact number of frames
 - `0006` builds `DOLPHIN_RUNNER_SOURCE`, a frontend outside Dolphin's source tree
+- `0007` keeps fractional elapsed time during IOS socket polling so guest timeouts expire
+  when Dolphin runs faster than real time
+- `0008` reports the pending error of `SO_ERROR` with an IOS error number instead of the host's
 
 ## SD card storage
 

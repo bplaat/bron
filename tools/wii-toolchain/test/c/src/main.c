@@ -25,7 +25,7 @@
 
 // libogc relocates the TPL headers in place.
 _Alignas(32) static uint8_t test_tpl[] = {
-#embed "../../../../target/wii-toolchain/test/test.tpl"
+#embed "../target/test.tpl"
 };
 
 _Alignas(32) static char results[16 * 1024];

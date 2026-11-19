@@ -1,0 +1,14 @@
+[package]
+name = "wii-std-test"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+getrandom = { path = "../../../../lib/crypto/getrandom" }
+
+[profile.release]
+opt-level = "s"
+panic = "abort"
