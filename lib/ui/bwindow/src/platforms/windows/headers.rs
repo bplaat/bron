@@ -629,12 +629,8 @@ unsafe extern "system" {}
 
 // MARK: Utils
 
+#[derive(Default)]
 pub(crate) struct LPWSTR(*mut w_char);
-impl Default for LPWSTR {
-    fn default() -> Self {
-        Self(std::ptr::null_mut())
-    }
-}
 impl LPWSTR {
     pub(crate) const fn as_mut_ptr(&mut self) -> *mut *mut w_char {
         &mut self.0
