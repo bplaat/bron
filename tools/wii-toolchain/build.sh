@@ -37,7 +37,7 @@ llvm_commit='0d261d1ca552c95a8f007e061c787ac7132fbcbc'
 # Dolphin for dolphin/runner.cpp, cloned by the dolphin and test commands, with only the submodules
 # its core needs, all its libraries are built from them. Fetch the pinned commit from master.
 dolphin_url='https://github.com/dolphin-emu/dolphin.git'
-dolphin_commit='a0ed231ff614ec6e03716d72fa8f3a11ce57c6a0'
+dolphin_commit='2fe162866282fa2806d62f69aa053315d750ab91'
 dolphin_version="$dolphin_commit"
 DOLPHIN_SUBMODULES=(
     Externals/{SFML/SFML,bzip2/bzip2,cpp-ipc/cpp-ipc,cpp-optparse/cpp-optparse,curl/curl,enet/enet}

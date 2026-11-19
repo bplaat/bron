@@ -25,10 +25,10 @@ index da5e755..4539483 100644
  
  struct TMemCheck
 diff --git a/Source/Core/Core/PowerPC/PowerPC.cpp b/Source/Core/Core/PowerPC/PowerPC.cpp
-index 564d74d..a560c81 100644
+index f6d0935..1fd11d5 100644
 --- a/Source/Core/Core/PowerPC/PowerPC.cpp
 +++ b/Source/Core/Core/PowerPC/PowerPC.cpp
-@@ -641,6 +641,7 @@ bool PowerPCManager::CheckBreakPoints()
+@@ -643,6 +643,7 @@ bool PowerPCManager::CheckBreakPoints()
        !EvaluateCondition(m_system, bp->condition))
      return false;
  
