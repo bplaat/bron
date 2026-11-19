@@ -42,7 +42,7 @@ decaf_commit='e6c528a20a41c34e0f9eb91dd3da40f119db2dee'
 # interpreter and Cafe OS are built
 cemu_url='https://github.com/cemu-project/Cemu.git'
 cemu_version='main'
-cemu_commit='04eaa92ae8e093ce161a9319ec09b9602fee6b7f'
+cemu_commit='ac8379ba66e8d149564f003569d9441464e7b228'
 fmt_url='https://github.com/fmtlib/fmt.git'
 fmt_version='12.0.0'
 fmt_commit='e424e3f2e607da02742f73db84873b8084fc714c'
