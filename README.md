@@ -89,7 +89,7 @@ Some desktop apps and games written with the [bwindow](lib/ui/bwindow), [bwebvie
 
 - [2048](games/game2048) An offline desktop 2048 game app
 - [BassieLight](apps/desktop/bassielight) A simple lights controller with GUI
-- [Bastiaan](apps/desktop/bastiaan) My personal website as a native canvas app, which also runs on Windows XP
+- [Bastiaan App](apps/desktop/bastiaan-app) My personal website as a native canvas app, which also runs on Windows XP
 - [Binman](apps/windows/binman) A safe and minimal Windows cleanup tool
 - [Empires](games/empires) An Age of Empires rendering demo and DRS archive viewer using SDL2
 - [Frogger](games/frogger) A colorful voxel crossing game with cars, trucks, rivers, and trains

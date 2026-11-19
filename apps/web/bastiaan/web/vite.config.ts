@@ -6,7 +6,7 @@
 
 import { defineConfig } from 'vite';
 
-// The LAN relay of the server (cargo run --release -p bastiaan-server) next to the page, like in production
+// The LAN relay of the server (cargo run --release -p bastiaan) next to the page, like in production
 const proxy = { '/relay': { target: 'ws://127.0.0.1:8080', ws: true } };
 
 // The plain website in index.html runs no script, its age is filled in at build time (born on 1 July 2002)

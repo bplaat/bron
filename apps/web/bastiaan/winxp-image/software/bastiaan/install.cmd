@@ -1,5 +1,5 @@
 @echo off
-rem Bastiaan (apps/desktop/bastiaan, built by build.sh): copy to Program Files, All Users desktop shortcut and start at every logon
+rem Bastiaan (apps/desktop/bastiaan-app, built by build.sh): copy to Program Files, All Users desktop shortcut and start at every logon
 cd /d "%~dp0"
 set "TARGET=%ProgramFiles%\Bastiaan"
 if not exist "%TARGET%" mkdir "%TARGET%"

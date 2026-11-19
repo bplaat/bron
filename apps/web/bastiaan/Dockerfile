@@ -16,7 +16,7 @@ WORKDIR /src
 COPY --exclude=apps/web/bastiaan/web . .
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/src/target \
-    cargo build --release --locked -p bastiaan-server && cp target/release/bastiaan-server /bastiaan
+    cargo build --release --locked -p bastiaan && cp target/release/bastiaan /bastiaan
 
 FROM scratch
 LABEL org.opencontainers.image.source="https://github.com/bplaat/bron"

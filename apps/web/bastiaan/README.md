@@ -26,7 +26,7 @@ See [winxp-image/README.md](winxp-image/README.md) for requirements and build op
 From the root of the repository:
 
 ```sh
-cargo run --release -p bastiaan-server  # http://localhost:8080, Vite proxies the LAN relay
+cargo run --release -p bastiaan  # http://localhost:8080, Vite proxies the LAN relay
 npm install
 npm run dev --workspace bastiaan
 ```
