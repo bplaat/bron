@@ -8,9 +8,10 @@
 
 fn main() {
     let env = |name: &str| std::env::var(name).unwrap_or_else(|_| panic!("{name} not set"));
+    let target_os = env("CARGO_CFG_TARGET_OS");
     // Windows XP and 7 have no system winsqlite3.dll. Inspect the Cargo target rather than
     // cfg!(windows), which describes the host compiling this build script.
-    let legacy_windows = env("CARGO_CFG_TARGET_OS") == "windows"
+    let legacy_windows = target_os == "windows"
         && matches!(env("CARGO_CFG_TARGET_VENDOR").as_str(), "winxp" | "win7");
     if cfg!(feature = "bundled") || legacy_windows {
         let mut build = cc::Build::new();
@@ -21,12 +22,9 @@ fn main() {
         if cfg!(feature = "fts5") {
             build.define("SQLITE_ENABLE_FTS5", None);
         }
-        if env("CARGO_CFG_TARGET_OS") == "none" {
-            // Bare metal targets with a POSIX C library, like the Wii, run one process without
-            // threads or file locks. Cargo names custom targets after their JSON file, which
-            // cc can't parse, and their C compiler (TARGET_CC) brings all flags.
+        if matches!(target_os.as_str(), "wii" | "wiiu") {
+            // The console C runtimes provide POSIX file I/O without pthreads or file locks.
             build
-                .target(&format!("{}-unknown-none", env("CARGO_CFG_TARGET_ARCH")))
                 .no_default_flags(true)
                 .warnings(false)
                 .define("SQLITE_THREADSAFE", "0")
@@ -44,7 +42,7 @@ fn main() {
             build.define("SQLITE_THREADSAFE", "1");
         }
         build.compile("sqlite3");
-    } else if env("CARGO_CFG_TARGET_OS") == "windows" {
+    } else if target_os == "windows" {
         println!("cargo:rustc-link-lib=winsqlite3");
     } else {
         println!("cargo:rustc-link-lib=sqlite3");
