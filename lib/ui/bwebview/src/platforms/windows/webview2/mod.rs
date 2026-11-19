@@ -4,6 +4,8 @@
  * SPDX-License-Identifier: MIT
  */
 
+#[cfg(target_vendor = "winxp")]
+pub(crate) use self::loader::runtime_available;
 pub(crate) use self::webview::PlatformWebview;
 
 mod accelerators;

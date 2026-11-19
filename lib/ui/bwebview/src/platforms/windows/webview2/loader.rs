@@ -108,6 +108,12 @@ fn load_runtime(runtime_dir: OsString) -> Result<(HMODULE, CreateEnvironment), u
     }))
 }
 
+/// Whether a supported WebView2 runtime is installed
+#[cfg(target_vendor = "winxp")]
+pub(crate) fn runtime_available() -> bool {
+    !find_evergreen_runtimes().is_empty()
+}
+
 fn find_evergreen_runtimes() -> Vec<OsString> {
     let key = STABLE_RUNTIME_KEY;
     let value = w!("EBWebView");
