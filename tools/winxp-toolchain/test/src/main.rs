@@ -24,7 +24,7 @@ macro_rules! check {
     ($condition:expr) => {
         if !$condition {
             FAILED.fetch_add(1, Ordering::Relaxed);
-            eprintln!("FAILED {}:{}: {}", file!(), line!(), stringify!($condition));
+            println!("  line {}: {}", line!(), stringify!($condition));
         }
     };
 }
@@ -53,11 +53,11 @@ fn main() -> ExitCode {
         let failed = FAILED.load(Ordering::Relaxed);
         test();
         println!(
-            "{name}: {}",
+            "{} {name}",
             if FAILED.load(Ordering::Relaxed) == failed {
-                "ok"
+                "ok  "
             } else {
-                "FAILED"
+                "FAIL"
             }
         );
     }
