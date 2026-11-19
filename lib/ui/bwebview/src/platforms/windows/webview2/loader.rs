@@ -115,50 +115,57 @@ pub(crate) fn runtime_available() -> bool {
 }
 
 fn find_evergreen_runtimes() -> Vec<OsString> {
-    let key = STABLE_RUNTIME_KEY;
-    let value = w!("EBWebView");
-    let mut runtimes = Vec::new();
-    for root in [HKEY_LOCAL_MACHINE, HKEY_CURRENT_USER] {
-        let mut byte_len = 0;
-        let status = unsafe {
-            RegGetValueW(
-                root,
-                key.as_ptr(),
-                value.as_ptr(),
-                RRF_RT_REG_SZ | RRF_SUBKEY_WOW6432KEY,
-                null_mut(),
-                null_mut(),
-                &mut byte_len,
-            )
-        };
-        if status != ERROR_SUCCESS || byte_len < 2 {
-            continue;
-        }
+    [HKEY_LOCAL_MACHINE, HKEY_CURRENT_USER]
+        .into_iter()
+        .filter_map(read_runtime_dir)
+        .filter(|runtime| {
+            runtime_api_version(runtime).is_some_and(|api| api >= MIN_RUNTIME_API_VERSION)
+        })
+        .collect()
+}
 
-        let mut path = vec![0_u16; byte_len as usize / 2];
-        let status = unsafe {
-            RegGetValueW(
-                root,
-                key.as_ptr(),
-                value.as_ptr(),
-                RRF_RT_REG_SZ | RRF_SUBKEY_WOW6432KEY,
-                null_mut(),
-                path.as_mut_ptr().cast(),
-                &mut byte_len,
-            )
-        };
-        if status == ERROR_SUCCESS {
-            let len = path
-                .iter()
-                .position(|&value| value == 0)
-                .unwrap_or(path.len());
-            let runtime = OsString::from(String::from_utf16_lossy(&path[..len]));
-            if runtime_api_version(&runtime).is_some_and(|api| api >= MIN_RUNTIME_API_VERSION) {
-                runtimes.push(runtime);
-            }
-        }
+/// Reads the runtime folder from the 32-bit registry view, where EdgeUpdate registers it. Uses
+/// `RegOpenKeyExW` because `RegGetValueW` only accepts `RRF_SUBKEY_WOW6432KEY` from Windows 10.
+fn read_runtime_dir(root: HKEY) -> Option<OsString> {
+    let mut key = null_mut();
+    let status = unsafe {
+        RegOpenKeyExW(
+            root,
+            STABLE_RUNTIME_KEY.as_ptr(),
+            0,
+            KEY_QUERY_VALUE | KEY_WOW64_32KEY,
+            &mut key,
+        )
+    };
+    if status != ERROR_SUCCESS {
+        return None;
     }
-    runtimes
+
+    let mut path = [0_u16; 512];
+    let mut value_type = 0;
+    let mut byte_len = size_of_val(&path) as u32;
+    let status = unsafe {
+        RegQueryValueExW(
+            key,
+            w!("EBWebView").as_ptr(),
+            null_mut(),
+            &mut value_type,
+            path.as_mut_ptr().cast(),
+            &mut byte_len,
+        )
+    };
+    unsafe { RegCloseKey(key) };
+    if status != ERROR_SUCCESS || value_type != REG_SZ {
+        return None;
+    }
+
+    // The stored string isn't always null-terminated
+    let path = &path[..byte_len as usize / 2];
+    let len = path
+        .iter()
+        .position(|&value| value == 0)
+        .unwrap_or(path.len());
+    (len > 0).then(|| OsString::from(String::from_utf16_lossy(&path[..len])))
 }
 
 fn runtime_api_version(runtime_dir: &OsStr) -> Option<u32> {

@@ -20,8 +20,9 @@ pub(crate) const E_POINTER: HRESULT = 0x80004003u32 as HRESULT;
 pub(crate) type HKEY = HANDLE;
 pub(crate) const HKEY_CURRENT_USER: HKEY = 0x80000001usize as HKEY;
 pub(crate) const HKEY_LOCAL_MACHINE: HKEY = 0x80000002usize as HKEY;
-pub(crate) const RRF_RT_REG_SZ: u32 = 0x00000002;
-pub(crate) const RRF_SUBKEY_WOW6432KEY: u32 = 0x00020000;
+pub(crate) const KEY_QUERY_VALUE: u32 = 0x0001;
+pub(crate) const KEY_WOW64_32KEY: u32 = 0x0200;
+pub(crate) const REG_SZ: u32 = 1;
 pub(crate) const ERROR_SUCCESS: i32 = 0;
 
 #[repr(C)]
@@ -35,18 +36,24 @@ unsafe extern "system" {
     pub(crate) fn FreeLibrary(hLibModule: HMODULE) -> BOOL;
 }
 
-#[cfg(not(target_vendor = "winxp"))]
 #[link(name = "advapi32")]
 unsafe extern "system" {
-    pub(crate) fn RegGetValueW(
-        hkey: HKEY,
+    pub(crate) fn RegOpenKeyExW(
+        hKey: HKEY,
         lpSubKey: *const w_char,
-        lpValue: *const w_char,
-        dwFlags: u32,
-        pdwType: *mut u32,
-        pvData: *mut c_void,
-        pcbData: *mut u32,
+        ulOptions: u32,
+        samDesired: u32,
+        phkResult: *mut HKEY,
     ) -> i32;
+    pub(crate) fn RegQueryValueExW(
+        hKey: HKEY,
+        lpValueName: *const w_char,
+        lpReserved: *mut u32,
+        lpType: *mut u32,
+        lpData: *mut u8,
+        lpcbData: *mut u32,
+    ) -> i32;
+    pub(crate) fn RegCloseKey(hKey: HKEY) -> i32;
 }
 
 pub(crate) const IDYES: i32 = 6;
@@ -232,44 +239,26 @@ macro_rules! w {
 }
 pub(crate) use w;
 
-/// Windows XP lacks these exports by name, the `winxp` target looks them up at runtime and
-/// returns the fallback without them. WebView2 needs a newer Windows, so it never gets there.
+/// Windows XP exports `SHCreateMemStream` only by ordinal, so the `winxp` target looks it up
+/// by name at runtime. WebView2 needs a newer Windows, so XP never calls it.
 #[cfg(target_vendor = "winxp")]
-macro_rules! optional_procs {
-    ($($module:literal fn $name:ident($($arg:ident: $type:ty),*) -> $ret:ty = $fallback:expr;)*) => {$(
-        pub(crate) unsafe fn $name($($arg: $type),*) -> $ret {
-            type Function = unsafe extern "system" fn($($type),*) -> $ret;
-            static FUNCTION: std::sync::OnceLock<Option<Function>> = std::sync::OnceLock::new();
-            let function = FUNCTION.get_or_init(|| unsafe {
-                // A known DLL, so it loads from the system directory, it stays loaded
-                let module = LoadLibraryW(w!($module).as_ptr());
-                let address = if module.is_null() {
-                    std::ptr::null()
-                } else {
-                    GetProcAddress(module, concat!(stringify!($name), "\0").as_ptr().cast())
-                };
-                (!address.is_null()).then(|| std::mem::transmute::<*const c_void, Function>(address))
-            });
-            match function {
-                Some(function) => unsafe { function($($arg),*) },
-                None => $fallback,
-            }
-        }
-    )*};
-}
-#[cfg(target_vendor = "winxp")]
-optional_procs! {
-    "advapi32.dll" fn RegGetValueW(
-        hkey: HKEY,
-        lpSubKey: *const w_char,
-        lpValue: *const w_char,
-        dwFlags: u32,
-        pdwType: *mut u32,
-        pvData: *mut c_void,
-        pcbData: *mut u32
-    ) -> i32 = 127; // ERROR_PROC_NOT_FOUND
-    "shlwapi.dll" fn SHCreateMemStream(pInit: *const u8, cbInit: u32) -> *mut IStream =
-        std::ptr::null_mut();
+pub(crate) unsafe fn SHCreateMemStream(pInit: *const u8, cbInit: u32) -> *mut IStream {
+    type Function = unsafe extern "system" fn(*const u8, u32) -> *mut IStream;
+    static FUNCTION: std::sync::OnceLock<Option<Function>> = std::sync::OnceLock::new();
+    let function = FUNCTION.get_or_init(|| unsafe {
+        // A known DLL, so it loads from the system directory and stays loaded
+        let module = LoadLibraryW(w!("shlwapi.dll").as_ptr());
+        let address = if module.is_null() {
+            std::ptr::null()
+        } else {
+            GetProcAddress(module, c"SHCreateMemStream".as_ptr())
+        };
+        (!address.is_null()).then(|| std::mem::transmute::<*const c_void, Function>(address))
+    });
+    match function {
+        Some(function) => unsafe { function(pInit, cbInit) },
+        None => std::ptr::null_mut(),
+    }
 }
 
 // MARK: WebView2
