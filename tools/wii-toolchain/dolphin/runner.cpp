@@ -306,7 +306,8 @@ static void shot(const char* path) {
 static void save_state(const char* path) {
     std::filesystem::remove(path);
     on_cpu_thread([path] { State::SaveAs(system(), path); });
-    State::WaitForSavesWritten();
+    // Saved states are written by a worker thread, flushing waits until they are
+    UICommon::FlushUnsavedData();
     if (!std::filesystem::exists(path))
         die("Can't save savestate %s", path);
 }

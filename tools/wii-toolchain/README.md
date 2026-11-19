@@ -166,7 +166,6 @@ The Dolphin patches, for `dolphin-runner`:
 - `0005` lets frame stepping stop at every VI field, also when it shows the same frame, for an
   exact number of frames
 - `0006` builds `DOLPHIN_RUNNER_SOURCE`, a frontend outside Dolphin's source tree
-- `0007` lets a frontend wait until saved states are written
 
 ## SD card storage
 
