@@ -91,7 +91,6 @@ Some desktop apps and games written with the [bwindow](lib/ui/bwindow), [bwebvie
 - [BassieLight](apps/desktop/bassielight) A simple lights controller with GUI
 - [Bastiaan App](apps/desktop/bastiaan-app) My personal website as a native canvas app, which also runs on Windows XP
 - [Binman](apps/windows/binman) A safe and minimal Windows cleanup tool
-- [Empires](games/empires) An Age of Empires rendering demo and DRS archive viewer using SDL2
 - [Frogger](games/frogger) A colorful voxel crossing game with cars, trucks, rivers, and trains
 - [ImageView](apps/desktop/imageview) A native bitmap, QOI, TGA, SVG, and TinyVG image viewer with file manager previews and thumbnails
 - [ManExplorer](apps/desktop/manexplorer) A simple man page explorer tool

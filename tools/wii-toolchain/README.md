@@ -139,7 +139,7 @@ the workspace's `getrandom` crate. A separate guest run verifies
 that a panic produces output and enters the Wii exit routine. Both suites report their results on
 the debug UART, and the runner requires `DONE 0 failed` within 3600 frames.
 
-From the repository root on Linux, `cargo xtask check-others` builds the assembly examples, Empires, and the Nintendo DS test ROM, runs this test, then builds the Wii examples and the PlaatCraft Wii port. On macOS, `cargo xtask check-macos-examples` builds the native macOS applications. `cargo xtask check` includes these platform checks.
+From the repository root on Linux, `cargo xtask check-others` builds the assembly examples and the Nintendo DS test ROM, runs this test, then builds the Wii examples and the PlaatCraft Wii port. On macOS, `cargo xtask check-macos-examples` builds the native macOS applications. `cargo xtask check` includes these platform checks.
 
 ## Patches
 

@@ -418,9 +418,6 @@ impl Xtask {
         println!("Building macOS assembly examples...");
         run(Command::new("sh").arg("examples/macos/build.sh"))?;
 
-        println!("Building Empires and the DRS viewer...");
-        run(Command::new("make").args(["-C", "games/empires"]))?;
-
         println!("Running Nintendo DS toolchain tests...");
         run(Command::new("bash").args(["tools/nds-toolchain/build.sh", "test"]))?;
 

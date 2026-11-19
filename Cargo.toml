@@ -17,7 +17,6 @@ exclude = [
     "examples/macos",
     "examples/wii",
     "examples/wiiu",
-    "games/empires",
     "games/nds",
     "lib/ui/plaatui",
     "lib/ui/plaatui/examples/showcase",
