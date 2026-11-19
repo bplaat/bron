@@ -271,15 +271,21 @@ impl ResourceCompiler {
     fn command(&self, out_dir: &Path, rc_path: &Path) -> Command {
         let output_path = self.output_path(out_dir);
         let mut command = Command::new(self.program());
+        // The resource script is UTF-8, LLVM's resource compilers ignore its code_page pragma.
         match self {
             Self::Rc(_) => {
-                command.arg("/fo").arg(output_path).arg(rc_path);
+                command
+                    .args(["/c", "65001"])
+                    .arg("/fo")
+                    .arg(output_path)
+                    .arg(rc_path);
             }
             Self::Windres { target, .. } => {
                 if let Some(target) = target {
                     command.arg("--target").arg(target);
                 }
                 command
+                    .args(["--codepage", "65001"])
                     .arg(rc_path)
                     .arg("-O")
                     .arg("coff")
@@ -295,7 +301,11 @@ impl ResourceCompiler {
                         .arg("/:target")
                         .arg(target);
                 }
-                command.arg("/fo").arg(output_path).arg(rc_path);
+                command
+                    .args(["/c", "65001"])
+                    .arg("/fo")
+                    .arg(output_path)
+                    .arg(rc_path);
             }
         }
         command
@@ -649,6 +659,8 @@ mod test {
         assert_eq!(
             args[0],
             [
+                OsString::from("/c"),
+                OsString::from("65001"),
                 OsString::from("/fo"),
                 out_dir.join("resource.lib").into_os_string(),
                 rc_path.as_os_str().to_os_string(),
@@ -659,6 +671,8 @@ mod test {
             [
                 OsString::from("--target"),
                 OsString::from("aarch64-w64-mingw32"),
+                OsString::from("--codepage"),
+                OsString::from("65001"),
                 rc_path.as_os_str().to_os_string(),
                 OsString::from("-O"),
                 OsString::from("coff"),
@@ -670,6 +684,8 @@ mod test {
             args[2],
             [
                 OsString::from("rc"),
+                OsString::from("/c"),
+                OsString::from("65001"),
                 OsString::from("/fo"),
                 out_dir.join("resource.lib").into_os_string(),
                 rc_path.as_os_str().to_os_string(),
@@ -683,6 +699,8 @@ mod test {
                 OsString::from("coff"),
                 OsString::from("/:target"),
                 OsString::from("aarch64"),
+                OsString::from("/c"),
+                OsString::from("65001"),
                 OsString::from("/fo"),
                 out_dir.join("resource.o").into_os_string(),
                 rc_path.as_os_str().to_os_string(),
