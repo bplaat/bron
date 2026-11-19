@@ -196,22 +196,12 @@ unsafe extern "C" {
 }
 
 #[repr(C)]
+#[derive(Default)]
 pub(crate) struct Dl_info {
     pub(crate) dli_fname: *const c_char,
     pub(crate) dli_fbase: *mut c_void,
     pub(crate) dli_sname: *const c_char,
     pub(crate) dli_saddr: *mut c_void,
-}
-
-impl Default for Dl_info {
-    fn default() -> Self {
-        Self {
-            dli_fname: std::ptr::null(),
-            dli_fbase: std::ptr::null_mut(),
-            dli_sname: std::ptr::null(),
-            dli_saddr: std::ptr::null_mut(),
-        }
-    }
 }
 
 unsafe extern "C" {
