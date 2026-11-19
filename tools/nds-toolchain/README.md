@@ -101,8 +101,9 @@ to write the commits back.
   so its 32 bits wrap after 24 days
 - default-arm7: calls `arm7PortInit`, which does nothing by default, before its main loop
 - melonds: the ARM9 interpreter calls a hook after each instruction with its address and cycles,
-  for `hook` and `profile` of the runner, a DSi SD card's CSD has the size of its image, so calico
-  doesn't reject its partition as bigger than the card, and complete SD writes of the R4 like card
+  for `hook` and `profile` of the runner, a DSi SD card's CSD and OCR describe its image, a
+  standard capacity card up to 2 GiB and a high capacity card above, so calico doesn't reject its
+  partition as bigger than the card, and complete SD writes of the R4 like card
   no longer print that they are incomplete
 - compiler-rt: the optimized float functions for ARMv5TE, divisions that return to Thumb on
   ARMv4T

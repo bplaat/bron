@@ -1,0 +1,147 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Fri, 30 Oct 2026 13:13:04 +0100
+Subject: [PATCH] Describe the SD card's capacity in its CSD and OCR
+
+The DSi SD card used the CSD of the DSi's 240 MiB eMMC, while the
+default card image is bigger, so software that checks its partitions
+against the card's size, like calico, found the partition too big and
+didn't mount the card. Its card capacity status bit was also copied
+from the host's capacity support bit, so a standard capacity card was
+addressed in blocks as soon as the host supported high capacity cards.
+
+The SD card now gets an SD CSD that describes its image: up to 2 GiB a
+standard capacity card with a version 1.0 CSD, addressed in bytes, and
+bigger a high capacity card (SDHC/SDXC) with a version 2.0 CSD and the
+CCS bit set, addressed in blocks. The OCR bit 30 is now always the
+card's, also for the eMMC's sector mode bit, instead of the host's.
+---
+ src/DSi_SD.cpp | 85 +++++++++++++++++++++++++++++++++++++++++---------
+ 1 file changed, 71 insertions(+), 14 deletions(-)
+
+diff --git a/src/DSi_SD.cpp b/src/DSi_SD.cpp
+index ee8c45c..ac5a686 100644
+--- a/src/DSi_SD.cpp
++++ b/src/DSi_SD.cpp
+@@ -18,6 +18,7 @@
+ 
+ #include <stdio.h>
+ #include <string.h>
++#include <algorithm>
+ #include "Args.h"
+ #include "DSi.h"
+ #include "DSi_SD.h"
+@@ -847,6 +848,58 @@ DSi_MMCStorage::DSi_MMCStorage(melonDS::DSi& dsi, DSi_SDHost* host, FATStorage&&
+ // std::variant's destructor will clean it up.
+ DSi_MMCStorage::~DSi_MMCStorage() = default;
+ 
++// Sets a field of a CSD, which is stored without its CRC byte, so its bits are shifted down by 8
++static void SetCSDField(u8* csd, int start, int width, u32 value)
++{
++    for (int i = 0; i < width; i++)
++    {
++        int bit = start - 8 + i;
++        csd[bit >> 3] = (csd[bit >> 3] & ~(1 << (bit & 7))) | (((value >> i) & 1) << (bit & 7));
++    }
++}
++
++// Builds the CSD of an SD card with the given number of 512-byte sectors, rounded up to the
++// card's size unit. Up to 2 GiB it's a standard capacity card with a version 1.0 CSD, bigger
++// it's a high capacity card (SDHC/SDXC) with a version 2.0 CSD. Returns whether it's the latter.
++static bool SetSDCardCSD(u8* csd, u64 sectors)
++{
++    memset(csd, 0, 16);
++    SetCSDField(csd, 112, 8, 0x0E);  // TAAC: 1 ms
++    SetCSDField(csd, 96, 8, 0x32);   // TRAN_SPEED: 25 MHz
++    SetCSDField(csd, 84, 12, 0x5B5); // CCC: classes 0, 2, 4, 5, 7, 8 and 10
++    SetCSDField(csd, 46, 1, 1);      // ERASE_BLK_EN
++    SetCSDField(csd, 39, 7, 0x7F);   // SECTOR_SIZE: 64 KiB
++    SetCSDField(csd, 26, 3, 2);      // R2W_FACTOR: writes take 4 times as long as reads
++
++    // A standard capacity card is (C_SIZE+1) << (C_SIZE_MULT+2) blocks of 1 << READ_BL_LEN bytes,
++    // with blocks of up to 1 KiB for cards of up to 2 GiB
++    for (u32 blocklen = 9; blocklen <= 10; blocklen++)
++    {
++        for (u32 mult = 0; mult <= 7; mult++)
++        {
++            u64 unit = 1ULL << (blocklen - 9 + mult + 2);
++            u64 size = std::max<u64>((sectors + unit - 1) / unit, 1);
++            if (size <= 4096)
++            {
++                SetCSDField(csd, 80, 4, blocklen);  // READ_BL_LEN
++                SetCSDField(csd, 79, 1, 1);         // READ_BL_PARTIAL
++                SetCSDField(csd, 62, 12, size - 1); // C_SIZE
++                SetCSDField(csd, 50, 12, 0xFFF);    // VDD_R/W_CURR_MIN/MAX: 100/200 mA
++                SetCSDField(csd, 47, 3, mult);      // C_SIZE_MULT
++                SetCSDField(csd, 22, 4, blocklen);  // WRITE_BL_LEN
++                return false;
++            }
++        }
++    }
++
++    // A high capacity card is (C_SIZE+1) units of 512 KiB, in blocks of 512 bytes
++    SetCSDField(csd, 126, 2, 1);                                  // CSD_STRUCTURE: version 2.0
++    SetCSDField(csd, 80, 4, 9);                                   // READ_BL_LEN
++    SetCSDField(csd, 48, 22, (u32)((sectors + 1023) / 1024 - 1)); // C_SIZE
++    SetCSDField(csd, 22, 4, 9);                                   // WRITE_BL_LEN
++    return true;
++}
++
+ void DSi_MMCStorage::Reset()
+ {
+     // TODO: reset file access????
+@@ -854,12 +907,20 @@ void DSi_MMCStorage::Reset()
+     CSR = 0x00000100; // checkme
+ 
+     // TODO: busy bit
+-    // TODO: SDHC/SDXC bit
+     OCR = 0x80FF8000;
+ 
+-    // TODO: customize based on card size etc
+-    u8 csd_template[16] = {0x40, 0x40, 0x96, 0xE9, 0x7F, 0xDB, 0xF6, 0xDF, 0x01, 0x59, 0x0F, 0x2A, 0x01, 0x26, 0x90, 0x00};
+-    memcpy(CSD, csd_template, 16);
++    if (auto* sd = std::get_if<FATStorage>(&Storage))
++    {
++        // A high capacity SD card is addressed in blocks, which its OCR tells with the CCS bit
++        if (SetSDCardCSD(CSD, sd->GetSectorCount()))
++            OCR |= (1<<30);
++    }
++    else
++    {
++        // The CSD of the DSi's 240 MiB eMMC, which is addressed in bytes
++        u8 csd_template[16] = {0x40, 0x40, 0x96, 0xE9, 0x7F, 0xDB, 0xF6, 0xDF, 0x01, 0x59, 0x0F, 0x2A, 0x01, 0x26, 0x90, 0x00};
++        memcpy(CSD, csd_template, 16);
++    }
+ 
+     // checkme
+     memset(SCR, 0, 8);
+@@ -912,9 +973,8 @@ void DSi_MMCStorage::SendCMD(MMCCommand cmd, u32 param)
+         // also TODO: it's different for the SD card
+         if (std::holds_alternative<DSi_NAND::NANDImage>(Storage))
+         {
+-            param &= ~(1<<30);
+-            OCR &= 0xBF000000;
+-            OCR |= (param & 0x40FFFFFF);
++            // The sector mode bit (30) is the card's, set at reset
++            OCR = (OCR & 0xFF000000) | (param & 0x00FFFFFF);
+             Host->SendResponse(OCR, true);
+             SetState(0x01);
+         }
+@@ -1047,13 +1107,10 @@ void DSi_MMCStorage::SendACMD(MMCAppCommand cmd, u32 param)
+         return;
+ 
+     case MMCAppCommand::SetOCR:
+-        // CHECKME:
+-        // DSi boot2 sets this to 0x40100000 (hardcoded)
+-        // then has two codepaths depending on whether bit30 did get set
+-        // is it settable at all on the MMC? probably not.
+-        if (holds_alternative<DSi_NAND::NANDImage>(Storage)) param &= ~(1<<30);
+-        OCR &= 0xBF000000;
+-        OCR |= (param & 0x40FFFFFF);
++        // DSi boot2 sets this to 0x40100000 (hardcoded), the host capacity support bit (30), then
++        // has two codepaths depending on whether the card capacity status bit (30) is set, which
++        // is the card's, set at reset
++        OCR = (OCR & 0xFF000000) | (param & 0x00FFFFFF);
+         Host->SendResponse(OCR, true);
+         SetState(0x01);
+         return;
