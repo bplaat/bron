@@ -15,13 +15,15 @@ fi
 cd "$(dirname "$0")"
 root=../..
 build=$root/target/$console-toolchain
+cargo=$root/tools/$console-toolchain/cargo
+[[ $console == wiiu ]] || cargo=$root/tools/wii-toolchain/bin/cargo
 elf=$root/target/powerpc-nintendo-$console/release/plaatcraft.elf
-"$root/tools/$console-toolchain/cargo" build --release --locked --features bench
+"$cargo" build --release --locked --features bench
 case $console in
 wii)
     "$root/tools/wii-toolchain/build.sh" dolphin
     # The runner writes the UART to stderr, the benchmark has ten emulated minutes
-    "$build/dolphin-runner" "$elf" 'await BENCH 36000' 2>&1 | grep -o 'BENCH.*'
+    "$build/bin/dolphin-runner" "$elf" 'await BENCH 36000' 2>&1 | grep -o 'BENCH.*'
     ;;
 wiiu)
     "$root/tools/wiiu-toolchain/build.sh" cemu

@@ -7,10 +7,11 @@
 
 TOOLCHAIN := $(patsubst %/,%,$(dir $(lastword $(MAKEFILE_LIST))))
 TOOLCHAIN_BUILD := $(abspath $(TOOLCHAIN)/../../target/wii-toolchain)
+TOOLCHAIN_LIB := $(TOOLCHAIN_BUILD)/lib
 BUILD ?= target
-LIBOGC := $(TOOLCHAIN_BUILD)/libogc
-ELF2DOL := $(TOOLCHAIN_BUILD)/elf2dol
-GXTEXCONV := $(TOOLCHAIN_BUILD)/gxtexconv
+LIBOGC := $(TOOLCHAIN_BUILD)/src/libogc
+ELF2DOL := $(TOOLCHAIN_BUILD)/bin/elf2dol
+GXTEXCONV := $(TOOLCHAIN_BUILD)/bin/gxtexconv
 
 # Apple's clang can't target PowerPC, so prefer Homebrew's LLVM when it's installed
 LLVM := $(firstword $(wildcard /opt/homebrew/opt/llvm/bin/ /usr/local/opt/llvm/bin/))
@@ -21,11 +22,12 @@ LD := ld.lld
 # All code is optimized for size, like the Rust examples (opt-level = "s").
 CFLAGS := --target=powerpc-none-eabi -mcpu=750 -ffreestanding -nostdlibinc \
 	-ffunction-sections -fdata-sections -DGEKKO -DHW_RVL -D_DEFAULT_SOURCE -Os -g -std=c23 -Wall -Wextra \
-	-I$(TOOLCHAIN_BUILD)/libdvm/include -I$(TOOLCHAIN_BUILD)/sysroot/include -I$(LIBOGC)/gc -I$(LIBOGC)/gc/ogc -I$(LIBOGC)/gc/ogc/machine \
+	-I$(TOOLCHAIN_BUILD)/src/libdvm/include -I$(TOOLCHAIN_BUILD)/sysroot/include -I$(LIBOGC)/gc -I$(LIBOGC)/gc/ogc -I$(LIBOGC)/gc/ogc/machine \
 	-I$(LIBOGC)/gc/bte -I$(LIBOGC)/gc/wiiuse
 
 OBJECTS := $(patsubst src/%.c,$(BUILD)/%.o,$(wildcard src/*.c))
-LIBRARIES := $(addprefix $(TOOLCHAIN_BUILD)/,libogc.a libdvm.a sysroot/lib/libc.a libcompiler-rt.a)
+LIBRARIES := $(TOOLCHAIN_LIB)/libogc.a $(TOOLCHAIN_LIB)/libdvm.a $(TOOLCHAIN_BUILD)/sysroot/lib/libc.a \
+	$(TOOLCHAIN_LIB)/libcompiler-rt.a
 
 $(BUILD)/$(NAME).dol: $(BUILD)/$(NAME).elf $(ELF2DOL)
 	$(ELF2DOL) $< $@
@@ -33,18 +35,18 @@ $(BUILD)/$(NAME).dol: $(BUILD)/$(NAME).elf $(ELF2DOL)
 $(BUILD)/$(NAME).elf: $(OBJECTS) $(LIBRARIES) $(TOOLCHAIN)/wii.ld
 	$(LD) -T $(TOOLCHAIN)/wii.ld --gc-sections $(OBJECTS) $(LIBRARIES) -o $@
 
-$(BUILD)/%.o: src/%.c | $(TOOLCHAIN_BUILD)/libogc.a
+$(BUILD)/%.o: src/%.c | $(TOOLCHAIN_LIB)/libogc.a
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -MMD -MP -c $< -o $@
 
 # The toolchain script knows itself when it needs to rebuild, one run builds all libraries
-$(TOOLCHAIN_BUILD)/libogc.a: FORCE
+$(TOOLCHAIN_LIB)/libogc.a: FORCE
 	@$(TOOLCHAIN)/build.sh
-$(TOOLCHAIN_BUILD)/libdvm.a $(TOOLCHAIN_BUILD)/sysroot/lib/libc.a $(TOOLCHAIN_BUILD)/libcompiler-rt.a \
-	$(ELF2DOL): $(TOOLCHAIN_BUILD)/libogc.a ;
+$(TOOLCHAIN_LIB)/libdvm.a $(TOOLCHAIN_BUILD)/sysroot/lib/libc.a $(TOOLCHAIN_LIB)/libcompiler-rt.a \
+	$(ELF2DOL) $(GXTEXCONV): $(TOOLCHAIN_LIB)/libogc.a ;
 
 run: $(BUILD)/$(NAME).elf
-	$(TOOLCHAIN)/run.sh $<
+	$(TOOLCHAIN)/bin/run $<
 
 clean:
 	rm -rf $(BUILD)

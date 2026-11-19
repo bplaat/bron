@@ -193,9 +193,10 @@ impl Xtask {
             .join(console.apps().rsplit('/').next().unwrap_or_default());
         let mut bundles = Vec::new();
         let console_target = console.target();
-        let cargo = self
-            .root
-            .join(format!("tools/{console_target}-toolchain/cargo"));
+        let cargo = self.root.join(match console {
+            Console::Wii => "tools/wii-toolchain/bin/cargo",
+            Console::WiiU => "tools/wiiu-toolchain/cargo",
+        });
         for program in programs {
             let directory = self.root.join(&program.directory);
             let meta = self.root.join(&program.meta);
@@ -229,7 +230,7 @@ impl Xtask {
                     fs::create_dir_all(&bundle)?;
                     let dol = bundle.join("boot.dol");
                     if program.rust {
-                        run(Command::new(toolchain.join("elf2dol"))
+                        run(Command::new(toolchain.join("bin/elf2dol"))
                             .arg(built.with_extension("elf"))
                             .arg(&dol))?;
                     } else {

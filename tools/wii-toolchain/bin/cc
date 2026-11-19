@@ -1,6 +1,6 @@
 #!/bin/sh
 set -eu
-dir=$(cd "$(dirname "$0")" && pwd)
+dir=$(cd "$(dirname "$0")/.." && pwd)
 
 # Apple's clang can't target PowerPC, so prefer Homebrew's LLVM like build.sh
 llvm=''

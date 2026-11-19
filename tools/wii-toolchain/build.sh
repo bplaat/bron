@@ -1,18 +1,18 @@
 #!/usr/bin/env bash
 # Builds the Wii toolchain in the repository target/wii-toolchain/: fetches libogc, picolibc,
-# libdvm, fatfs-mod, gamecube-tools and LLVM's compiler-rt, applies libogc/patches/,
-# picolibc/patches/ and libdvm/patches/ and builds libogc.a with the AESND DSP mixer, picolibc
-# (the C library) in sysroot/, libdvm.a for SD card files, libcompiler-rt.a, elf2dol and our
-# gxtexconv/.
+# libdvm, fatfs-mod, gamecube-tools and LLVM's compiler-rt to src/, applies patches/libogc/,
+# patches/picolibc/ and patches/libdvm/ and builds libogc.a with the AESND DSP mixer, libdvm.a for
+# SD card files and libcompiler-rt.a in lib/, picolibc (the C library) in sysroot/ and elf2dol and
+# our crates/gxtexconv in bin/, intermediate files go to build/.
 # The C Makefiles and Rust Cargo wrapper run this before building a program.
 #
 # Usage: ./build.sh [command]...
 #   (none)          fetch, patch and build
 #   std             prepare the patched Rust sources
-#   export-patches  write the commits in ../../target/wii-toolchain/<name>/ back to <name>/patches/
+#   export-patches  write the commits in ../../target/wii-toolchain/src/<name>/ back to patches/<name>/
 #   test            build test/c and test/rust and run them headless in dolphin-runner
-#   dolphin         build Dolphin's core with dolphin/patches/ and dolphin/runner.cpp to
-#                   ../../target/wii-toolchain/dolphin-runner
+#   dolphin         build Dolphin's core with patches/dolphin/ and runner/runner.cpp to
+#                   ../../target/wii-toolchain/bin/dolphin-runner
 #   clean           remove ../../target/wii-toolchain/
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -36,7 +36,7 @@ tools_commit='3b7f914df771d4b779d88607ceed2ec9264ff93a'
 llvm_url='https://github.com/llvm/llvm-project.git'
 llvm_version='llvmorg-23.1.3'
 llvm_commit='0d261d1ca552c95a8f007e061c787ac7132fbcbc'
-# Dolphin for dolphin/runner.cpp, cloned by the dolphin and test commands, with only the submodules
+# Dolphin for runner/runner.cpp, cloned by the dolphin and test commands, with only the submodules
 # its core needs, all its libraries are built from them. Fetch the pinned commit from master.
 dolphin_url='https://github.com/dolphin-emu/dolphin.git'
 dolphin_commit='2fe162866282fa2806d62f69aa053315d750ab91'
@@ -51,15 +51,19 @@ DOLPHIN_SUBMODULES=(
 TOOLCHAIN_DIR="$PWD"
 ROOT_DIR="$(cd ../.. && pwd)"
 BUILD_DIR="$ROOT_DIR/target/wii-toolchain"
-LIBOGC_DIR="$BUILD_DIR/libogc"
-PICOLIBC_DIR="$BUILD_DIR/picolibc"
-LIBDVM_DIR="$BUILD_DIR/libdvm"
-FATFS_DIR="$BUILD_DIR/fatfs"
+SRC_DIR="$BUILD_DIR/src"
+OBJ_DIR="$BUILD_DIR/build"
+LIB_DIR="$BUILD_DIR/lib"
+BIN_DIR="$BUILD_DIR/bin"
 SYSROOT="$BUILD_DIR/sysroot"
-TOOLS_DIR="$BUILD_DIR/gamecube-tools"
-COMPILER_RT_DIR="$BUILD_DIR/compiler-rt"
-DOLPHIN_DIR="$BUILD_DIR/dolphin"
-RUST_DIR="$BUILD_DIR/rust"
+LIBOGC_DIR="$SRC_DIR/libogc"
+PICOLIBC_DIR="$SRC_DIR/picolibc"
+LIBDVM_DIR="$SRC_DIR/libdvm"
+FATFS_DIR="$SRC_DIR/fatfs"
+TOOLS_DIR="$SRC_DIR/gamecube-tools"
+COMPILER_RT_DIR="$SRC_DIR/compiler-rt"
+DOLPHIN_DIR="$SRC_DIR/dolphin"
+RUST_DIR="$SRC_DIR/rust-std"
 
 # Apple's clang can't target PowerPC, so prefer Homebrew's LLVM when it's installed
 LLVM=''
@@ -128,6 +132,7 @@ clone() {
     [ -d "$dir" ] && return
     msg "Cloning $url $version"
     rm -rf "$dir.part"
+    mkdir -p "$(dirname "$dir")"
     if [ "$version" = "$commit" ]; then
         git init -q "$dir.part"
         git -C "$dir.part" fetch -q --depth 1 "$url" "$commit"
@@ -208,12 +213,12 @@ copy_rust() {
 
 # Applies the patches of a repo as commits on top of its upstream tag, again when they changed
 patch() {
-    local name="$1" commit="$2" dir="$BUILD_DIR/$1"
-    outdated "$dir/.patched" "$TOOLCHAIN_DIR/$name/patches" || return 0
-    # Applying resets ../../target/wii-toolchain/<name>/, so stop when it has work that isn't exported yet
+    local name="$1" commit="$2" dir="$SRC_DIR/$1"
+    outdated "$dir/.patched" "$TOOLCHAIN_DIR/patches/$name" || return 0
+    # Applying resets ../../target/wii-toolchain/src/<name>/, so stop when it has work that isn't exported yet
     if [ -s "$dir/.patched" ] && { [ -n "$(git -C "$dir" status --porcelain --untracked-files=no)" ] ||
         [ "$(git -C "$dir" rev-parse HEAD)" != "$(cat "$dir/.patched")" ]; }; then
-        die "../../target/wii-toolchain/$name/ has changes that aren't in $name/patches/, run ./build.sh export-patches or remove ../../target/wii-toolchain/$name/"
+        die "../../target/wii-toolchain/src/$name/ has changes that aren't in patches/$name/, run ./build.sh export-patches or remove ../../target/wii-toolchain/src/$name/"
     fi
     msg "Applying $name patches"
     # git am keeps the authors of the patches, but needs a committer identity
@@ -226,7 +231,7 @@ patch() {
     # A patch that failed to apply leaves git am half done, start over
     git -C "$dir" am --abort > /dev/null 2>&1 || true
     git -C "$dir" reset -q --hard upstream
-    if ! git -C "$dir" am -q --keep-cr --whitespace=nowarn "$TOOLCHAIN_DIR/$name"/patches/*.patch; then
+    if ! git -C "$dir" am -q --keep-cr --whitespace=nowarn "$TOOLCHAIN_DIR/patches/$name"/*.patch; then
         git -C "$dir" am --abort
         rm -f "$dir/.patched"
         die "Failed to apply the $name patches"
@@ -235,17 +240,17 @@ patch() {
     git -C "$dir" rev-parse HEAD > "$dir/.patched"
 }
 
-# Writes the commits on top of upstream back to <name>/patches/ for every patched repo
+# Writes the commits on top of upstream back to patches/<name>/ for every patched repo
 export_patches() {
     local name dir
-    for name in libogc picolibc libdvm dolphin rust; do
-        dir="$BUILD_DIR/$name"
+    for name in libogc picolibc libdvm dolphin rust-std; do
+        dir="$SRC_DIR/$name"
         # Dolphin and the patched Rust sources are prepared on demand.
-        [[ "$name" == dolphin || "$name" == rust ]] && [ ! -d "$dir" ] && continue
+        [[ "$name" == dolphin || "$name" == rust-std ]] && [ ! -d "$dir" ] && continue
         [ -d "$dir/.git" ] || die "No patched $name, run ./build.sh first"
-        rm -f "$TOOLCHAIN_DIR/$name"/patches/*.patch
+        rm -f "$TOOLCHAIN_DIR/patches/$name"/*.patch
         git -C "$dir" format-patch -q --no-numbered --zero-commit --no-signature \
-            -o "$TOOLCHAIN_DIR/$name/patches" upstream..HEAD
+            -o "$TOOLCHAIN_DIR/patches/$name" upstream..HEAD
         git -C "$dir" rev-parse HEAD > "$dir/.patched"
         msg "Exported $(git -C "$dir" rev-list --count upstream..HEAD) $name patches"
     done
@@ -258,8 +263,9 @@ build_picolibc() {
     outdated "$SYSROOT/lib/libc.a" "$PICOLIBC_DIR/.patched" "$PICOLIBC_DIR"/{libc,libm,meson.build} \
         "$TOOLCHAIN_DIR/build.sh" || return 0
     msg "Building picolibc"
+    mkdir -p "$OBJ_DIR"
     # Meson calls the 32-bit PowerPC CPU family ppc
-    cat > "$BUILD_DIR/picolibc-cross.txt" << CROSS
+    cat > "$OBJ_DIR/picolibc-cross.txt" << CROSS
 [binaries]
 c = ['${LLVM}clang', '--target=powerpc-none-eabi', '-mcpu=750', '-nostdlib']
 c_ld = 'lld'
@@ -276,23 +282,23 @@ endian = 'big'
 [properties]
 skip_sanity_check = true
 CROSS
-    rm -rf "$BUILD_DIR/picolibc-build" "$SYSROOT"
+    rm -rf "$OBJ_DIR/picolibc" "$SYSROOT"
     # libogc starts the program and supplies errno from its own thread control block.
     # The minsize build type means -Oz with clang, -Os like everything else unrolls the copy loops.
-    meson setup "$BUILD_DIR/picolibc-build" "$PICOLIBC_DIR" \
-        --cross-file "$BUILD_DIR/picolibc-cross.txt" --prefix "$SYSROOT" --includedir include \
+    meson setup "$OBJ_DIR/picolibc" "$PICOLIBC_DIR" \
+        --cross-file "$OBJ_DIR/picolibc-cross.txt" --prefix "$SYSROOT" --includedir include \
         --libdir lib --buildtype plain -Dc_args="['-ffunction-sections', '-fdata-sections', '-DHW_RVL', '-Os', '-g']" \
         -Dmultilib=false -Dpicocrt=false -Dsemihost=false -Dtests=false -Dspecsdir=none \
         -Dthread-local-storage=false -Derrno-function=__errno -Dposix-console=true \
         -Dfast-bufio=true -Dstdio-exit-flush=true > /dev/null ||
         die "Failed to configure picolibc"
-    meson install -C "$BUILD_DIR/picolibc-build" > /dev/null || die "Failed to build picolibc"
+    meson install -C "$OBJ_DIR/picolibc" > /dev/null || die "Failed to build picolibc"
 }
 
-# Compiles sources at the same time and archives them to the build directory,
+# Compiles sources at the same time and archives them to lib/,
 # usage: build_archive <library> <flags>... -- <sources>...
 build_archive() {
-    local library="$BUILD_DIR/$1" objects_dir="$BUILD_DIR/objects/${1%.a}" flags=() source object
+    local library="$LIB_DIR/$1" objects_dir="$OBJ_DIR/${1%.a}" flags=() source object
     local pids=() objects=() failed=0
     shift
     while [ "$1" != -- ]; do
@@ -302,7 +308,7 @@ build_archive() {
     shift
     msg "Building $(basename "$library")"
     rm -rf "$objects_dir"
-    mkdir -p "$objects_dir"
+    mkdir -p "$objects_dir" "$LIB_DIR"
     for source in "$@"; do
         object="$objects_dir/$(basename "$(dirname "$source")")_$(basename "$source").o"
         if [[ "$source" == *.S ]]; then
@@ -325,22 +331,23 @@ build_archive() {
 # it as a C array that the DSP loads its code from
 build_dsp_mixer() {
     local header="$BUILD_DIR/include/aesnd_dsp_mixer_bin.h" mixer="$LIBOGC_DIR/libaesnd/dspcode/dspmixer.s"
-    if outdated "$BUILD_DIR/gcdsptool" "$TOOLS_DIR/gdtool" "$TOOLS_DIR/gdopcode"; then
+    if outdated "$BIN_DIR/gcdsptool" "$TOOLS_DIR/gdtool" "$TOOLS_DIR/gdopcode"; then
         msg "Building gcdsptool"
+        mkdir -p "$BIN_DIR"
         c++ -O2 -w -DPACKAGE_VERSION="\"$tools_version\"" -I"$TOOLS_DIR/gdopcode" -I"$TOOLS_DIR/gdtool" \
             "$TOOLS_DIR/gdtool/gdtool.cpp" "$TOOLS_DIR"/gdopcode/{assemble,disassemble,opcodes}.cpp \
-            -o "$BUILD_DIR/gcdsptool" || die "Failed to build gcdsptool"
+            -o "$BIN_DIR/gcdsptool" || die "Failed to build gcdsptool"
     fi
-    outdated "$header" "$BUILD_DIR/gcdsptool" "$mixer" "$TOOLCHAIN_DIR/build.sh" || return 0
+    outdated "$header" "$BIN_DIR/gcdsptool" "$mixer" "$TOOLCHAIN_DIR/build.sh" || return 0
     msg "Assembling the AESND DSP mixer"
-    mkdir -p "$BUILD_DIR/include"
-    "$BUILD_DIR/gcdsptool" -c "$mixer" -o "$BUILD_DIR/aesnd_dsp_mixer.bin" > /dev/null ||
+    mkdir -p "$BUILD_DIR/include" "$OBJ_DIR"
+    "$BIN_DIR/gcdsptool" -c "$mixer" -o "$OBJ_DIR/aesnd_dsp_mixer.bin" > /dev/null ||
         die "Failed to assemble the AESND DSP mixer"
     # The DSP copies its code with DMA, which needs 32 byte alignment
     {
         echo '#include <gctypes.h>'
         echo 'static const u8 aesnd_dsp_mixer_bin[] __attribute__((aligned(32))) = {'
-        od -An -v -tx1 "$BUILD_DIR/aesnd_dsp_mixer.bin" | sed 's/ \([0-9a-f][0-9a-f]\)/0x\1,/g'
+        od -An -v -tx1 "$OBJ_DIR/aesnd_dsp_mixer.bin" | sed 's/ \([0-9a-f][0-9a-f]\)/0x\1,/g'
         echo '};'
         echo 'static const u32 aesnd_dsp_mixer_bin_size = sizeof(aesnd_dsp_mixer_bin);'
     } > "$header"
@@ -348,16 +355,16 @@ build_dsp_mixer() {
 
 build_libraries() {
     # The libogc sources are checked too, so edits in dev mode get built
-    if outdated "$BUILD_DIR/libogc.a" "$LIBOGC_DIR/.patched" "$LIBOGC_DIR"/{gc,libogc,libaesnd,libwiikeyboard,lwbt,wiiuse} \
+    if outdated "$LIB_DIR/libogc.a" "$LIBOGC_DIR/.patched" "$LIBOGC_DIR"/{gc,libogc,libaesnd,libwiikeyboard,lwbt,wiiuse} \
         "$BUILD_DIR/include" "$SYSROOT/lib/libc.a" "$TOOLCHAIN_DIR/build.sh"; then
         build_archive libogc.a "${LIBOGC_CFLAGS[@]}" -- "${LIBOGC_SOURCES[@]/#/$LIBOGC_DIR/}"
     fi
-    if outdated "$BUILD_DIR/libcompiler-rt.a" "$TOOLCHAIN_DIR/build.sh"; then
+    if outdated "$LIB_DIR/libcompiler-rt.a" "$TOOLCHAIN_DIR/build.sh"; then
         build_archive libcompiler-rt.a "${WII_CFLAGS[@]}" -std=gnu11 -- \
             "${COMPILER_RT_SOURCES[@]/#/$COMPILER_RT_DIR/compiler-rt/lib/builtins/}"
     fi
-    if outdated "$BUILD_DIR/libdvm.a" "$LIBDVM_DIR"/{.patched,source,include} "$FATFS_DIR/source" \
-        "$BUILD_DIR/libogc.a" "$TOOLCHAIN_DIR/build.sh"; then
+    if outdated "$LIB_DIR/libdvm.a" "$LIBDVM_DIR"/{.patched,source,include} "$FATFS_DIR/source" \
+        "$LIB_DIR/libogc.a" "$TOOLCHAIN_DIR/build.sh"; then
         build_archive libdvm.a "${WII_CFLAGS[@]}" -std=gnu23 -D__wii__ -DLIBDVM_BUFFER_ALIGN=32 \
             -I"$LIBDVM_DIR/include" -I"$FATFS_DIR/source" -I"$LIBDVM_DIR/source" -- \
             "$LIBDVM_DIR"/source/{dvm_disc,dvm_cache,dvm_volume,dvm_prober,dvm_libogc,fat_wrappers,fat_driver}.c \
@@ -365,13 +372,14 @@ build_libraries() {
     fi
 }
 
-# elf2dol from gamecube-tools and our gxtexconv/ run on the host
+# elf2dol from gamecube-tools and our crates/gxtexconv run on the host
 build_tools() {
-    if outdated "$BUILD_DIR/elf2dol" "$TOOLS_DIR/elftool"; then
+    mkdir -p "$BIN_DIR"
+    if outdated "$BIN_DIR/elf2dol" "$TOOLS_DIR/elftool"; then
         msg "Building elf2dol"
-        cc -O2 "$TOOLS_DIR/elftool/elf2dol.c" -o "$BUILD_DIR/elf2dol"
+        cc -O2 "$TOOLS_DIR/elftool/elf2dol.c" -o "$BIN_DIR/elf2dol"
     fi
-    if outdated "$BUILD_DIR/gxtexconv" "$TOOLCHAIN_DIR/gxtexconv" "$ROOT_DIR/lib/graphics/image"; then
+    if outdated "$BIN_DIR/gxtexconv" "$TOOLCHAIN_DIR/crates/gxtexconv" "$ROOT_DIR/lib/graphics/image"; then
         msg "Building gxtexconv"
         # Build scripts under the cargo wrapper reach this through the cc script, so leave out the
         # wrapper's toolchain, target and profiles
@@ -383,8 +391,8 @@ build_tools() {
             -u CARGO_PROFILE_RELEASE_STRIP -u CARGO_PROFILE_RELEASE_BUILD_OVERRIDE_OPT_LEVEL \
             cargo build -q --release -p gxtexconv --manifest-path "$ROOT_DIR/Cargo.toml" \
             --target-dir "$ROOT_DIR/target" || die "Failed to build gxtexconv"
-        rm -f "$BUILD_DIR/gxtexconv"
-        cp "$ROOT_DIR/target/release/gxtexconv" "$BUILD_DIR/gxtexconv"
+        rm -f "$BIN_DIR/gxtexconv"
+        cp "$ROOT_DIR/target/release/gxtexconv" "$BIN_DIR/gxtexconv"
     fi
 }
 
@@ -398,32 +406,32 @@ run_test() (
     trap 'rm -rf "$sd_dir"' EXIT
     mkdir -p "$sd_dir/c" "$sd_dir/rust"
     msg "Running the C suite in Dolphin"
-    "$BUILD_DIR/dolphin-runner" --sd "$sd_dir/c" "$TOOLCHAIN_DIR/test/c/target/test.dol" test-title 'test 3600'
+    "$BIN_DIR/dolphin-runner" --sd "$sd_dir/c" "$TOOLCHAIN_DIR/test/c/target/test.dol" test-title 'test 3600'
 
-    "$TOOLCHAIN_DIR/cargo" build --locked --release --manifest-path "$TOOLCHAIN_DIR/test/rust/Cargo.toml"
+    "$TOOLCHAIN_DIR/bin/cargo" build --locked --release --manifest-path "$TOOLCHAIN_DIR/test/rust/Cargo.toml"
     dol="$sd_dir/rust/boot.dol"
-    "$BUILD_DIR/elf2dol" "$elf" "$dol"
+    "$BIN_DIR/elf2dol" "$elf" "$dol"
     msg "Running the Rust suite in Dolphin"
-    "$BUILD_DIR/dolphin-runner" --sd "$sd_dir/rust" "$dol" test-title 'test-args suite' 'test 3600'
+    "$BIN_DIR/dolphin-runner" --sd "$sd_dir/rust" "$dol" test-title 'test-args suite' 'test 3600'
     abort=$("${LLVM}llvm-nm" --defined-only "$elf" | awk '$3 == "_exit" { print "0x" $1 }')
     [ -n "$abort" ] || die "Missing _exit in the Rust test program"
     msg "Checking panic output and abort in Dolphin"
-    "$BUILD_DIR/dolphin-runner" --sd "$sd_dir/rust" "$dol" 'test-args panic' "hook $abort" \
+    "$BIN_DIR/dolphin-runner" --sd "$sd_dir/rust" "$dol" 'test-args panic' "hook $abort" \
         'await wii-std-panic-marker 600' 'wait 2' 'expect-hook 1'
     msg "All tests passed"
 )
 
 # Builds Dolphin's core without its user interfaces, JIT (a generic build has only the
 # interpreters), GPU video backends, sound output, controllers and network services, and
-# dolphin/runner.cpp on it, which plays a program headless and takes screenshots
+# runner/runner.cpp on it, which plays a program headless and takes screenshots
 build_dolphin() {
-    local objects_dir="$BUILD_DIR/objects/dolphin" options=()
+    local objects_dir="$OBJ_DIR/dolphin" options=()
     command -v cmake > /dev/null || die "Install cmake and ninja to build Dolphin"
     patch dolphin "$dolphin_commit"
     # Its bundled curl uses functions of the current macOS SDK, the runner only runs here
     [ "$(uname)" = Darwin ] && options+=(-DCMAKE_OSX_DEPLOYMENT_TARGET="$(sw_vers -productVersion)")
     # Their output goes to a log, which is shown when they fail
-    mkdir -p "$BUILD_DIR/objects"
+    mkdir -p "$OBJ_DIR"
     [ -f "$objects_dir/build.ninja" ] || cmake -S "$DOLPHIN_DIR" -B "$objects_dir" -G Ninja \
         -DCMAKE_BUILD_TYPE=Release -DUSE_SYSTEM_LIBS=OFF -DENABLE_GENERIC=ON -DENABLE_HEADLESS=ON \
         -DENABLE_QT=OFF -DENABLE_NOGUI=OFF -DENABLE_CLI_TOOL=OFF -DENABLE_TESTS=OFF -DENABLE_VULKAN=OFF \
@@ -431,13 +439,14 @@ build_dolphin() {
         -DENABLE_CUBEB=OFF -DENABLE_ALSA=OFF -DENABLE_PULSEAUDIO=OFF -DENABLE_LLVM=OFF -DUSE_UPNP=OFF \
         -DUSE_DISCORD_PRESENCE=OFF -DUSE_MGBA=OFF -DUSE_RETRO_ACHIEVEMENTS=OFF -DENABLE_AUTOUPDATE=OFF \
         -DENABLE_ANALYTICS=OFF -DENCODE_FRAMEDUMPS=OFF -DMACOS_CODE_SIGNING=OFF -DUSE_BUNDLED_MOLTENVK=OFF \
-        -DDOLPHIN_RUNNER_SOURCE="$TOOLCHAIN_DIR/dolphin/runner.cpp" "${options[@]}" > "$objects_dir.log" 2>&1 ||
+        -DDOLPHIN_RUNNER_SOURCE="$TOOLCHAIN_DIR/runner/runner.cpp" "${options[@]}" > "$objects_dir.log" 2>&1 ||
         { cat "$objects_dir.log" >&2; die "Failed to configure Dolphin"; }
     msg "Building Dolphin"
     ninja -C "$objects_dir" dolphin-runner > "$objects_dir.log" 2>&1 ||
         { tail -n 50 "$objects_dir.log" >&2; die "Failed to build Dolphin"; }
-    rm -f "$BUILD_DIR/dolphin-runner"
-    cp "$objects_dir/Binaries/dolphin-runner" "$BUILD_DIR/dolphin-runner"
+    mkdir -p "$BIN_DIR"
+    rm -f "$BIN_DIR/dolphin-runner"
+    cp "$objects_dir/Binaries/dolphin-runner" "$BIN_DIR/dolphin-runner"
 }
 
 # Only one build at a time, the C and Rust examples can start one at the same time. The lock holds
@@ -476,7 +485,7 @@ for command in "$@"; do
     case "$command" in
         all) lock; fetch; patch libogc "$libogc_commit"; patch picolibc "$picolibc_commit"
             patch libdvm "$libdvm_commit"; build_picolibc; build_dsp_mixer; build_libraries; build_tools ;;
-        std) lock; copy_rust; patch rust upstream ;;
+        std) lock; copy_rust; patch rust-std upstream ;;
         export-patches) export_patches ;;
         test) unlock; run_test ;;
         dolphin) lock; fetch dolphin; build_dolphin ;;

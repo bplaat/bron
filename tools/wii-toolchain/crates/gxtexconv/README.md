@@ -1,7 +1,7 @@
 # gxtexconv
 
-A minimal Rust replacement for devkitPro's `gxtexconv`, used by the [Wii toolchain](..).
-It converts any image our [image](../../../lib/graphics/image) crate reads to GameCube / Wii RGB5A3 (`colfmt="5"`), RGBA8 (`colfmt="6"`) or
+A minimal Rust replacement for devkitPro's `gxtexconv`, used by the [Wii toolchain](../..).
+It converts any image our [image](../../../../lib/graphics/image) crate reads to GameCube / Wii RGB5A3 (`colfmt="5"`), RGBA8 (`colfmt="6"`) or
 CMPR (`colfmt="14"`) textures and writes them to a `.tpl` texture file, with a better CMPR
 compressor than the original.
 

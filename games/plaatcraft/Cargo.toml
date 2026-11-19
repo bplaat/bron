@@ -59,7 +59,7 @@ preferences = { path = "../../lib/sys/preferences" }
 libsqlite3-sys = { version = "0.39", features = ["bundled"] }
 
 [target.'cfg(target_os = "wii")'.dependencies]
-libogc-sys = { path = "../../tools/wii-toolchain/libogc-sys" }
+libogc-sys = { path = "../../tools/wii-toolchain/crates/libogc-sys" }
 
 [target.'cfg(target_os = "wiiu")'.dependencies]
 wut-sys = { path = "../../tools/wiiu-toolchain/wut-sys" }
@@ -68,7 +68,7 @@ wut-sys = { path = "../../tools/wiiu-toolchain/wut-sys" }
 build-utils = { path = "../../lib/build/build-utils" }
 bwebgpu-shader-build = { path = "../../lib/graphics/bwebgpu-shader-build" }
 gtxconv = { path = "../../tools/wiiu-toolchain/gtxconv" }
-gxtexconv = { path = "../../tools/wii-toolchain/gxtexconv" }
+gxtexconv = { path = "../../tools/wii-toolchain/crates/gxtexconv" }
 image = { path = "../../lib/graphics/image", default-features = false, features = [
     "png",
 ] }

@@ -10,7 +10,7 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
-image = { path = "../../../lib/graphics/image" }
+image = { path = "../../../../lib/graphics/image" }
 
 [dev-dependencies]
 criterion = "0.8"

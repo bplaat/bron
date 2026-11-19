@@ -1,11 +1,11 @@
 #!/bin/sh
 # Builds and runs Rust programs for Wii with the toolchain's patched std.
 set -eu
-dir=$(cd "$(dirname "$0")" && pwd)
+dir=$(cd "$(dirname "$0")/.." && pwd)
 build=$(cd "$dir/../.." && pwd)/target/wii-toolchain
 "$dir/build.sh" all std >&2
 
-export __CARGO_TESTS_ONLY_SRC_ROOT="$build/rust/library"
+export __CARGO_TESTS_ONLY_SRC_ROOT="$build/src/rust-std/library"
 export CARGO_BUILD_TARGET="$dir/powerpc-nintendo-wii.json"
 export CARGO_UNSTABLE_BUILD_STD=std,panic_abort
 export CARGO_UNSTABLE_JSON_TARGET_SPEC=true
@@ -21,27 +21,27 @@ export CARGO_PROFILE_RELEASE_LTO=false
 export CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1
 export CARGO_PROFILE_RELEASE_STRIP=false
 export CARGO_PROFILE_RELEASE_BUILD_OVERRIDE_OPT_LEVEL=3
-export CARGO_TARGET_POWERPC_NINTENDO_WII_RUNNER="$dir/run.sh"
+export CARGO_TARGET_POWERPC_NINTENDO_WII_RUNNER="$dir/bin/run"
 # Cargo does not otherwise track edits to rust-src or these native link inputs.
 native_hash=$(
-    for input in "$dir/wii.ld" "$build/libogc.a" "$build/libdvm.a" \
-        "$build/sysroot/lib/libc.a" "$build/libcompiler-rt.a"; do
+    for input in "$dir/wii.ld" "$build/lib/libogc.a" "$build/lib/libdvm.a" \
+        "$build/sysroot/lib/libc.a" "$build/lib/libcompiler-rt.a"; do
         cksum < "$input"
     done | cksum
 )
 flags() {
     printf '%s\037' \
-        "-Cmetadata=$(cat "$build/rust/.patched")-${native_hash%% *}" \
+        "-Cmetadata=$(cat "$build/src/rust-std/.patched")-${native_hash%% *}" \
         "-Clink-arg=-T$dir/wii.ld" \
         -Clink-arg=--undefined=_start \
         -Clink-arg=--start-group \
-        "-Clink-arg=$build/libogc.a" \
-        "-Clink-arg=$build/libdvm.a" \
+        "-Clink-arg=$build/lib/libogc.a" \
+        "-Clink-arg=$build/lib/libdvm.a" \
         "-Clink-arg=$build/sysroot/lib/libc.a" \
-        "-Clink-arg=$build/libcompiler-rt.a"
+        "-Clink-arg=$build/lib/libcompiler-rt.a"
     printf '%s' -Clink-arg=--end-group
 }
 export CARGO_ENCODED_RUSTFLAGS="$(flags)"
-export CC_powerpc_nintendo_wii="$dir/cc"
-export AR_powerpc_nintendo_wii="$dir/ar"
+export CC_powerpc_nintendo_wii="$dir/bin/cc"
+export AR_powerpc_nintendo_wii="$dir/bin/ar"
 exec cargo "+$(sed -n "s/^rust_toolchain='\(.*\)'$/\1/p" "$dir/build.sh")" "$@"

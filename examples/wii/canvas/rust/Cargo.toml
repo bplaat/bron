@@ -7,7 +7,7 @@ edition = "2024"
 image = { path = "../../../../lib/graphics/image", default-features = false, features = [
     "png",
 ] }
-libogc-sys = { path = "../../../../tools/wii-toolchain/libogc-sys" }
+libogc-sys = { path = "../../../../tools/wii-toolchain/crates/libogc-sys" }
 
 [patch.crates-io]
 crc = { path = "../../../../lib/data/crc" }

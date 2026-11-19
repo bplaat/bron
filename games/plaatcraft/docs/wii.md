@@ -12,7 +12,7 @@ Build it and start it in Dolphin from the `games/plaatcraft` folder using the to
 wrapper and patched Rust `std`.
 
 ```sh
-../../tools/wii-toolchain/cargo run --release --locked
+../../tools/wii-toolchain/bin/cargo run --release --locked
 ```
 
 To play it on a Wii, run this from the repository root with the SD card connected. It builds the

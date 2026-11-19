@@ -32,7 +32,7 @@ It writes `target/powerpc-nintendo-wii/release/<name>.dol` in the standalone pro
 
 ```sh
 cd examples/wii/triangles/rust
-../../../../tools/wii-toolchain/cargo run --release --locked
+../../../../tools/wii-toolchain/bin/cargo run --release --locked
 ```
 
 To run the examples on a Wii, install them all and [PlaatCraft](../../games/plaatcraft/docs/wii.md) on
