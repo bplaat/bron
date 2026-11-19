@@ -29,7 +29,7 @@ REPOS=(
 # melonDS for melonds/runner.cpp, cloned by the melonds and test commands. Its free DSi BIOS, which
 # runs DSi mode without dumps, is newer than its last release, so it's a commit of master, a version
 # that is the commit fetches that commit.
-MELONDS_REPO='melonds https://github.com/melonDS-emu/melonDS.git 1e654443e4c0a54b40709c0208aa0eeba41e6142 1e654443e4c0a54b40709c0208aa0eeba41e6142'
+MELONDS_REPO='melonds https://github.com/melonDS-emu/melonDS.git 361ffa9501b631d53d7150fe57dec40a8341f664 361ffa9501b631d53d7150fe57dec40a8341f664'
 
 TOOLCHAIN_DIR="$PWD"
 BUILD_DIR="$(cd ../.. && pwd)/target/nds-toolchain"
