@@ -431,7 +431,7 @@ impl Xtask {
         run(Command::new("bash").args(["tools/wiiu-toolchain/build.sh", "test"]))?;
 
         println!("Building Bastiaan, Reversi and the bcanvas showcase for Windows XP...");
-        run(Command::new("tools/winxp-toolchain/cargo")
+        run(Command::new("tools/winxp-toolchain/bin/cargo")
             .args(["build", "--release", "--locked", "-p", "reversi"])
             .args(["-p", "bastiaan-app", "-p", "example-bcanvas-showcase"])
             .env_remove("RUSTUP_TOOLCHAIN"))?;

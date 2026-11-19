@@ -1,22 +1,22 @@
 #!/bin/sh
 # Runs cargo for Windows XP: builds the toolchain, then runs the nightly cargo with the
-# patched std, the i686-winxp-windows-gnu target and run.sh as the runner. Use it like cargo, for
-# example: tools/winxp-toolchain/cargo run --release -p reversi
+# patched std, the i686-winxp-windows-gnu target and bin/run as the runner. Use it like cargo, for
+# example: tools/winxp-toolchain/bin/cargo run --release -p reversi
 set -eu
-dir=$(cd "$(dirname "$0")" && pwd)
+dir=$(cd "$(dirname "$0")/.." && pwd)
 build=$(cd "$dir/../.." && pwd)/target/winxp-toolchain
 "$dir/build.sh" >&2
 
-export __CARGO_TESTS_ONLY_SRC_ROOT="$build/rust/library"
+export __CARGO_TESTS_ONLY_SRC_ROOT="$build/src/rust-std/library"
 export CARGO_BUILD_TARGET="$dir/i686-winxp-windows-gnu.json"
 export CARGO_UNSTABLE_BUILD_STD=std,panic_abort
 export CARGO_UNSTABLE_JSON_TARGET_SPEC=true
-export CARGO_TARGET_I686_WINXP_WINDOWS_GNU_RUNNER="$dir/run.sh"
+export CARGO_TARGET_I686_WINXP_WINDOWS_GNU_RUNNER="$dir/bin/run"
 # Cargo doesn't notice changes to the std sources, the patch commit in the flags rebuilds std
-export CARGO_TARGET_I686_WINXP_WINDOWS_GNU_RUSTFLAGS="-L native=$build/sysroot/lib -C metadata=$(cat "$build/rust/.patched")"
+export CARGO_TARGET_I686_WINXP_WINDOWS_GNU_RUSTFLAGS="-L native=$build/sysroot/lib -C metadata=$(cat "$build/src/rust-std/.patched")"
 # cc-rs build scripts compile C for the target with the toolchain's clang, winresource compiles
 # Windows resources with LLVM's windres
-export CC_i686_winxp_windows_gnu="$dir/cc"
-export AR_i686_winxp_windows_gnu="$dir/ar"
-export RC="$dir/windres"
+export CC_i686_winxp_windows_gnu="$dir/bin/cc"
+export AR_i686_winxp_windows_gnu="$dir/bin/ar"
+export RC="$dir/bin/windres"
 exec cargo "+$(sed -n "s/^rust_toolchain='\(.*\)'$/\1/p" "$dir/build.sh")" "$@"

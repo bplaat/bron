@@ -5,25 +5,25 @@ clang and lld, without a Microsoft SDK. One build runs on every Windows version 
 target has the `winxp` vendor, distinct from the `win7` vendor of Windows 7 targets. Each target
 imports the APIs provided by its minimum Windows version and loads newer APIs at runtime with
 fallbacks. The normal Windows targets need Windows 10.
-`build.sh` builds it all in the repository root's `target/winxp-toolchain/`, the `cargo` wrapper
-runs it for you:
+`build.sh` builds it all in the repository root's `target/winxp-toolchain/`, the `bin/cargo`
+wrapper runs it for you:
 
 - Copies the std sources of nightly Rust (`nightly-2026-11-14`), which match its
-  compiler, and applies `rust/patches/` as commits. Programs build std from them with
+  compiler, to `../../target/winxp-toolchain/src/rust-std/` and applies `patches/rust-std/` as commits. Programs build std from them with
   `-Zbuild-std`
-- Clones [mingw-w64](https://github.com/mingw-w64/mingw-w64) v14.0.0 and builds its headers for
+- Clones [mingw-w64](https://github.com/mingw-w64/mingw-w64) v14.0.0 to `../../target/winxp-toolchain/src/` and builds its headers for
   Windows XP (`_WIN32_WINNT=0x501`), its C runtime on XP's own `msvcrt.dll` and the import
   libraries of the system DLLs to `../../target/winxp-toolchain/sysroot/`
 - Checks out LLVM's [compiler-rt](https://github.com/llvm/llvm-project/tree/main/compiler-rt/lib/builtins)
   builtins of llvmorg-23.1.3 and builds them to the sysroot
-- Builds the guest agent of the QEMU runner
+- Builds the guest agent of the QEMU runner to `../../target/winxp-toolchain/bin/`
 
 ```sh
 cd tools/winxp-toolchain
 ./build.sh                 # fetch, patch and build
 ./build.sh clean           # remove ../../target/winxp-toolchain/
-./build.sh export-patches  # write the commits in ../../target/winxp-toolchain/rust/ back to rust/patches/
-./build.sh test            # build test/ and run it in Windows XP in QEMU
+./build.sh export-patches  # write the commits in ../../target/winxp-toolchain/src/rust-std/ back to patches/rust-std/
+./build.sh test            # build test/rust/ and run it in Windows XP in QEMU
 ```
 
 Everything is compiled for the Pentium 4 (`pentium4`, SSE2), the oldest CPU of the Rust i686
@@ -39,12 +39,12 @@ the runner needs it.
 
 ## Integration
 
-Run cargo through the `cargo` wrapper, it builds the toolchain, then runs the nightly
-cargo with the patched std, the `i686-winxp-windows-gnu.json` target and `run.sh` as the runner:
+Run cargo through the `bin/cargo` wrapper, it builds the toolchain, then runs the nightly
+cargo with the patched std, the `i686-winxp-windows-gnu.json` target and `bin/run` as the runner:
 
 ```sh
-tools/winxp-toolchain/cargo build --release -p reversi
-tools/winxp-toolchain/cargo run --release -p example-bcanvas-showcase
+tools/winxp-toolchain/bin/cargo build --release -p reversi
+tools/winxp-toolchain/bin/cargo run --release -p example-bcanvas-showcase
 ```
 
 Windows XP has some limits that the toolchain doesn't work around:
@@ -60,9 +60,9 @@ Windows XP has some limits that the toolchain doesn't work around:
 - `i686-winxp-windows-gnu.json` is the Rust target: the `i686-pc-windows-gnullvm` target linked by
   rust-lld for Windows XP (subsystem 5.01), with the `winxp` vendor. The std patches and bron libraries
   share compatibility paths with `win7`, while `cfg(target_vendor = "winxp")` selects XP-specific code
-- `cargo` is the cargo wrapper, `cc` and `ar` are the C compiler and archiver for cc-rs build
-  scripts, `windres` is LLVM's resource compiler for winresource build scripts
-- `run.sh` runs a program in Windows XP with `winxp-runner`, which it builds first
+- `bin/cargo` is the cargo wrapper, `bin/cc` and `bin/ar` are the C compiler and archiver for
+  cc-rs build scripts, `bin/windres` is LLVM's resource compiler for winresource build scripts
+- `bin/run` runs a program in Windows XP with `winxp-runner`, which it builds first
 - `runner/` is `winxp-runner`, which runs a program headless in Windows XP in QEMU. The first run
   copies the Windows XP disk as a copy-on-write clone, puts `runner/agent.c` in its Startup
   folder, boots it until the agent is ready and saves that as a QEMU snapshot. Every run restores
@@ -71,7 +71,7 @@ Windows XP has some limits that the toolchain doesn't work around:
   for windowed programs, `--timeout <seconds>` (default 600) limits a run:
 
     ```sh
-    ./run.sh --shot reversi.png --wait 30 ../../target/i686-winxp-windows-gnu/release/reversi.exe
+    bin/run --shot reversi.png --wait 30 ../../target/i686-winxp-windows-gnu/release/reversi.exe
     ```
 
     The machine is the one Windows XP was installed on: a Pentium III with SSE2 added, no ACPI,
@@ -82,11 +82,12 @@ Windows XP has some limits that the toolchain doesn't work around:
     first logon and asks for a restart, after which COM1 doesn't receive anymore, so the runner
     waits a minute and answers No before it saves the snapshot
 
-- `test/` is a Rust program that tests the toolchain, see below
+- `patches/rust-std/` are the std patches, see below
+- `test/rust/` is a Rust program that tests the toolchain, see below
 
 ## Test
 
-`./build.sh test` builds `test/` and runs it in Windows XP. It checks threads, parking and sleeps,
+`./build.sh test` builds `test/rust/` and runs it in Windows XP. It checks threads, parking and sleeps,
 the mutex, condition variable, read-write lock, once cells, barrier and channels, thread local
 destructors, the clocks, the environment and arguments, files, directories, metadata, permissions,
 renames, canonical paths, hard links, file locks, child processes with piped output and the exit code of a panic, TCP
@@ -99,7 +100,7 @@ XP, without running them, so it doesn't need a Windows XP disk.
 ## Patches
 
 The std sources are the nightly's, the patches make its Windows 7 paths work on Windows XP. To
-change them, edit and commit in `../../target/winxp-toolchain/rust/`, run `./build.sh` to try it
+change them, edit and commit in `../../target/winxp-toolchain/src/rust-std/`, run `./build.sh` to try it
 and `./build.sh export-patches` to write the commits back. The build stops instead of applying
 changed patches over commits or edits that aren't exported yet. Cargo doesn't notice changes to the
 std sources, the wrapper passes the patch commit to rustc so std is rebuilt.

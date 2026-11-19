@@ -87,7 +87,7 @@ fn image() -> io::Result<PathBuf> {
 }
 
 fn run(options: &Options) -> io::Result<u8> {
-    let dir = build_dir().join("qemu");
+    let dir = build_dir().join("build/qemu");
     prepare(&dir)?;
     let program = fs::read(&options.program)?;
 
@@ -205,7 +205,7 @@ fn forward_output(serial: UnixStream) -> mpsc::Receiver<Option<u32>> {
 /// agent or the runner, which prepares the disk, changed
 fn prepare(dir: &Path) -> io::Result<()> {
     let ready = dir.join("ready.qcow2");
-    let agent = build_dir().join("winxp-runner-agent.exe");
+    let agent = build_dir().join("bin/winxp-runner-agent.exe");
     let runner = env::current_exe()?;
     let image = image()?;
     let changed = [image.as_path(), &agent, &runner]

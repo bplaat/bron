@@ -2,7 +2,7 @@
 # The C compiler for cc-rs build scripts of Rust programs for Windows XP: clang with the
 # toolchain's mingw-w64 sysroot for Windows XP
 set -eu
-dir=$(cd "$(dirname "$0")" && pwd)
+dir=$(cd "$(dirname "$0")/.." && pwd)
 build=$(cd "$dir/../.." && pwd)/target/winxp-toolchain
 llvm=''
 for bin in /opt/homebrew/opt/llvm/bin/ /usr/local/opt/llvm/bin/; do

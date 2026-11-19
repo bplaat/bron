@@ -24,7 +24,7 @@ for dir in software/*/; do [ ! -f "$dir/Makefile" ] || make "$dir"; done
 
 # The native apps of the repository, built with its Windows XP toolchain
 root=../../../..
-"$root/tools/winxp-toolchain/cargo" build --release --locked -p bastiaan-app -p reversi -p game2048
+"$root/tools/winxp-toolchain/bin/cargo" build --release --locked -p bastiaan-app -p reversi -p game2048
 release=$root/target/i686-winxp-windows-gnu/release
 cp "$release/bastiaan-app.exe" software/bastiaan/bastiaan.exe
 for app in reversi game2048; do cp "$release/$app.exe" "software/$app/"; done

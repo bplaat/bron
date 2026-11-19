@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # Builds the Windows XP toolchain in the repository target/winxp-toolchain/: copies the std
-# sources of the nightly Rust and applies rust/patches/, fetches mingw-w64 and LLVM's
-# compiler-rt builtins and builds them with clang into sysroot/, the C runtime on XP's own
-# msvcrt.dll, and builds the QEMU runner's guest agent.
-# The cargo wrapper and cc run this before they build.
+# sources of the nightly Rust to src/rust-std/ and applies patches/rust-std/, fetches mingw-w64
+# and LLVM's compiler-rt builtins to src/ and builds them with clang into sysroot/, the C runtime
+# on XP's own msvcrt.dll, and builds the QEMU runner's guest agent to bin/.
+# bin/cargo and bin/cc run this before they build.
 #
 # Usage: ./build.sh [command]...
 #   (none)          fetch, patch and build
-#   export-patches  write the commits in ../../target/winxp-toolchain/rust/ back to rust/patches/
-#   test            build test/ and run it in Windows XP in QEMU
+#   export-patches  write the commits in ../../target/winxp-toolchain/src/rust-std/ back to patches/rust-std/
+#   test            build test/rust/ and run it in Windows XP in QEMU
 #   clean           remove ../../target/winxp-toolchain/
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -25,9 +25,11 @@ llvm_commit='0d261d1ca552c95a8f007e061c787ac7132fbcbc'
 TOOLCHAIN_DIR="$PWD"
 ROOT_DIR="$(cd ../.. && pwd)"
 BUILD_DIR="$ROOT_DIR/target/winxp-toolchain"
-RUST_DIR="$BUILD_DIR/rust"
-MINGW_DIR="$BUILD_DIR/mingw-w64"
-LLVM_DIR="$BUILD_DIR/llvm"
+SRC_DIR="$BUILD_DIR/src"
+OBJECTS_DIR="$BUILD_DIR/build"
+RUST_DIR="$SRC_DIR/rust-std"
+MINGW_DIR="$SRC_DIR/mingw-w64"
+LLVM_DIR="$SRC_DIR/llvm"
 SYSROOT="$BUILD_DIR/sysroot"
 
 LLVM=''
@@ -65,6 +67,7 @@ clone() {
     [ -d "$dir" ] && return
     msg "Cloning $url $version"
     rm -rf "$dir.part"
+    mkdir -p "$SRC_DIR"
     # Annotated release tags make git warn that the tag "is not a commit", which it is
     git -c advice.detachedHead=false clone -q --depth 1 --branch "$version" --filter=blob:none \
         --sparse "$url" "$dir.part" 2>&1 | grep -v 'is not a commit' >&2 || true
@@ -105,12 +108,12 @@ fetch() {
 
 # Applies the patches of a repo as commits on top of its upstream commit, again when they changed
 patch() {
-    local name="$1" dir="$BUILD_DIR/$1"
-    outdated "$dir/.patched" "$TOOLCHAIN_DIR/$name/patches" || return 0
-    # Applying resets ../../target/winxp-toolchain/<name>/, so stop when it has work that isn't exported yet
+    local name="$1" dir="$SRC_DIR/$1"
+    outdated "$dir/.patched" "$TOOLCHAIN_DIR/patches/$name" || return 0
+    # Applying resets ../../target/winxp-toolchain/src/<name>/, so stop when it has work that isn't exported yet
     if [ -s "$dir/.patched" ] && { [ -n "$(git -C "$dir" status --porcelain --untracked-files=no)" ] ||
         [ "$(git -C "$dir" rev-parse HEAD)" != "$(cat "$dir/.patched")" ]; }; then
-        die "../../target/winxp-toolchain/$name/ has changes that aren't in $name/patches/, run ./build.sh export-patches or remove ../../target/winxp-toolchain/$name/"
+        die "../../target/winxp-toolchain/src/$name/ has changes that aren't in patches/$name/, run ./build.sh export-patches or remove ../../target/winxp-toolchain/src/$name/"
     fi
     msg "Applying $name patches"
     # git am keeps the authors of the patches, but needs a committer identity
@@ -122,7 +125,7 @@ patch() {
     git -C "$dir" rev-parse -q --verify upstream > /dev/null || git -C "$dir" tag upstream
     git -C "$dir" am --abort > /dev/null 2>&1 || true
     git -C "$dir" reset -q --hard upstream
-    if ! git -C "$dir" am -q --keep-cr --whitespace=nowarn "$TOOLCHAIN_DIR/$name"/patches/*.patch; then
+    if ! git -C "$dir" am -q --keep-cr --whitespace=nowarn "$TOOLCHAIN_DIR/patches/$name"/*.patch; then
         git -C "$dir" am --abort
         rm -f "$dir/.patched"
         die "Failed to apply the $name patches"
@@ -131,12 +134,12 @@ patch() {
 }
 
 export_patches() {
-    [ -d "$RUST_DIR/.git" ] || die "No patched rust, run ./build.sh first"
-    rm -f "$TOOLCHAIN_DIR"/rust/patches/*.patch
+    [ -d "$RUST_DIR/.git" ] || die "No patched rust-std, run ./build.sh first"
+    rm -f "$TOOLCHAIN_DIR"/patches/rust-std/*.patch
     git -C "$RUST_DIR" format-patch -q --no-numbered --zero-commit --no-signature \
-        -o "$TOOLCHAIN_DIR/rust/patches" upstream..HEAD
+        -o "$TOOLCHAIN_DIR/patches/rust-std" upstream..HEAD
     git -C "$RUST_DIR" rev-parse HEAD > "$RUST_DIR/.patched"
-    msg "Exported $(git -C "$RUST_DIR" rev-list --count upstream..HEAD) rust patches"
+    msg "Exported $(git -C "$RUST_DIR" rev-list --count upstream..HEAD) rust-std patches"
 }
 
 # The mingw-w64 headers for Windows XP and its C runtime on msvcrt.dll, with the import
@@ -147,7 +150,7 @@ build_mingw() {
     ln -sfn "$("${LLVM}clang" -print-resource-dir)/include" "$BUILD_DIR/clang/include"
     outdated "$SYSROOT/lib/crt2.o" "$TOOLCHAIN_DIR/build.sh" || return 0
     msg "Building mingw-w64"
-    local objects_dir="$BUILD_DIR/objects/mingw-w64"
+    local objects_dir="$OBJECTS_DIR/mingw-w64"
     rm -rf "$objects_dir" "$SYSROOT/include" "$SYSROOT/lib"
     mkdir -p "$objects_dir/headers" "$objects_dir/crt"
     (cd "$objects_dir/headers" && "$MINGW_DIR/mingw-w64-headers/configure" -q --host=i686-w64-mingw32 \
@@ -164,7 +167,7 @@ build_mingw() {
 # Compiles sources at the same time and archives them in the sysroot,
 # usage: build_archive <library> <flags>... -- <sources>...
 build_archive() {
-    local library="$SYSROOT/lib/$1" objects_dir="$BUILD_DIR/objects/${1%.a}" flags=() source object
+    local library="$SYSROOT/lib/$1" objects_dir="$OBJECTS_DIR/${1%.a}" flags=() source object
     local pids=() objects=() failed=0
     shift
     while [ "$1" != -- ]; do
@@ -210,10 +213,11 @@ build_libraries() {
 
 # The guest agent of the QEMU runner
 build_agent() {
-    outdated "$BUILD_DIR/winxp-runner-agent.exe" "$TOOLCHAIN_DIR/runner/agent.c" "$SYSROOT/lib/crt2.o" || return 0
+    outdated "$BUILD_DIR/bin/winxp-runner-agent.exe" "$TOOLCHAIN_DIR/runner/agent.c" "$SYSROOT/lib/crt2.o" || return 0
     msg "Building the runner agent"
+    mkdir -p "$BUILD_DIR/bin"
     "${LLVM}clang" "${XP_CFLAGS[@]}" "${XP_LDFLAGS[@]}" -Wall -Wextra -Werror -mwindows -s \
-        "$TOOLCHAIN_DIR/runner/agent.c" -o "$BUILD_DIR/winxp-runner-agent.exe" || die "Failed to build the runner agent"
+        "$TOOLCHAIN_DIR/runner/agent.c" -o "$BUILD_DIR/bin/winxp-runner-agent.exe" || die "Failed to build the runner agent"
 }
 
 clean() {
@@ -246,7 +250,7 @@ lock() {
 build() {
     lock
     fetch
-    patch rust
+    patch rust-std
     build_mingw
     build_libraries
     build_agent
@@ -258,8 +262,8 @@ for command in "$@"; do
         all) build ;;
         export-patches) lock; export_patches ;;
         # The cargo wrapper builds the toolchain itself, so release the lock before it runs
-        test) (build); "$TOOLCHAIN_DIR/cargo" run --release --manifest-path "$TOOLCHAIN_DIR/test/Cargo.toml" \
-            --target-dir "$BUILD_DIR/test" -- one 'two words' ;;
+        test) (build); "$TOOLCHAIN_DIR/bin/cargo" run --release --manifest-path "$TOOLCHAIN_DIR/test/rust/Cargo.toml" \
+            --target-dir "$OBJECTS_DIR/test" -- one 'two words' ;;
         clean) lock; clean ;;
         *) die "Unknown command: $command" ;;
     esac
