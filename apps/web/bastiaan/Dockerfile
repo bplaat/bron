@@ -10,8 +10,6 @@ RUN --mount=type=cache,target=/root/.npm npm ci --workspace bastiaan && npm run 
 
 # Server, statically linked against musl
 FROM rust:1.100-alpine AS server
-# hadolint ignore=DL3018
-RUN apk add --no-cache musl-dev
 WORKDIR /src
 COPY --exclude=apps/web/bastiaan/web . .
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
