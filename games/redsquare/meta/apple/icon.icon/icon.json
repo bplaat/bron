@@ -1,0 +1,17 @@
+{
+    "fill": { "solid": "srgb:0.92,0.90,0.86,1.0" },
+    "groups": [
+        {
+            "layers": [
+                {
+                    "image-name": "redsquare.png",
+                    "name": "RedSquare",
+                    "glass": false,
+                    "position": { "scale": 3.2, "translation-in-points": [0, -12] }
+                }
+            ],
+            "name": "RedSquare"
+        }
+    ],
+    "supported-platforms": { "squares": ["iOS", "macOS"] }
+}

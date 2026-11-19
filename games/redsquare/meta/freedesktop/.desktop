@@ -1,0 +1,9 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=RedSquare
+Comment=Dodge the blue blocks
+Exec="$BIN_DIR/RedSquare"
+Icon=nl.bplaat.RedSquare
+Terminal=false
+Categories=Game;ArcadeGame;
