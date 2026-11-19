@@ -6,7 +6,10 @@
 
 //! A minimal replacement for the [getrandom](https://crates.io/crates/getrandom) crate
 
-#![cfg_attr(not(any(test, feature = "std", unix)), no_std)]
+#![cfg_attr(
+    not(any(test, feature = "std", unix, target_os = "wii", target_os = "wiiu")),
+    no_std
+)]
 
 use core::fmt;
 use core::num::NonZeroI32;
@@ -42,7 +45,7 @@ impl Error {
         }
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, target_os = "wii", target_os = "wiiu"))]
     #[allow(dead_code)]
     fn from_io(error: &std::io::Error) -> Self {
         error
@@ -128,11 +131,8 @@ pub fn fill(buf: &mut [u8]) -> Result<(), Error> {
         any(
             target_os = "macos",
             target_os = "openbsd",
-            all(
-                target_os = "none",
-                target_vendor = "nintendo",
-                target_arch = "powerpc"
-            ),
+            target_os = "wii",
+            target_os = "wiiu",
         ) => {
             unsafe extern "C" {
                 fn getentropy(buf: *mut u8, buflen: usize) -> i32;
@@ -140,14 +140,7 @@ pub fn fill(buf: &mut [u8]) -> Result<(), Error> {
             for chunk in buf.chunks_mut(256) {
                 // SAFETY: chunk is a valid mutable byte slice with length <= 256, satisfying getentropy's requirements.
                 if unsafe { getentropy(chunk.as_mut_ptr(), chunk.len()) } != 0 {
-                    cfg_select! {
-                        target_os = "none" => {
-                            // These toolchains use a shared, non-thread-local errno.
-                            // Avoid racing other libc callers when reading it.
-                            return Err(Error::UNEXPECTED);
-                        }
-                        _ => return Err(Error::from_io(&std::io::Error::last_os_error())),
-                    }
+                    return Err(Error::from_io(&std::io::Error::last_os_error()));
                 }
             }
         }
