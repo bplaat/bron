@@ -1,5 +1,5 @@
 #!/bin/sh
-# Starts a program in melonDS, set MELONDS to use a different melonDS. Usage: ./run.sh <program.nds>
+# Starts a program in melonDS, set MELONDS to use a different melonDS. Usage: bin/run <program.nds>
 set -eu
 
 if [ -z "${MELONDS:-}" ]; then

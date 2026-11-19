@@ -33,22 +33,22 @@ LD := ld.lld
 CFLAGS := --target=armv5te-none-eabi -mcpu=arm946e-s -mthumb -DARM9 -D__NDS__ -D_DEFAULT_SOURCE \
 	-nostdlibinc -ffunction-sections -fdata-sections -g -O3 -fno-builtin-memcpy \
 	-fno-builtin-memmove -fno-builtin-memset -Wall -I$(TOOLCHAIN_TARGET)/sysroot9/include \
-	-I$(TOOLCHAIN_TARGET)/calico/include -I$(TOOLCHAIN_TARGET)/libnds/include \
-	-I$(TOOLCHAIN_TARGET)/libdvm/include
-LIBS := $(addprefix $(TOOLCHAIN_TARGET)/,libnds9.a libdvm.a libcalico9.a sysroot9/lib/libc.a \
-	libcompiler-rt9.a)
+	-I$(TOOLCHAIN_TARGET)/src/calico/include -I$(TOOLCHAIN_TARGET)/src/libnds/include \
+	-I$(TOOLCHAIN_TARGET)/src/libdvm/include
+LIBS := $(addprefix $(TOOLCHAIN_TARGET)/,lib/libnds9.a lib/libdvm.a lib/libcalico9.a sysroot9/lib/libc.a \
+	lib/libcompiler-rt9.a)
 
 # The ARM7 is an ARM7TDMI (ARMv4T), which can't switch between ARM and Thumb code in a direct call,
 # so its calls are long calls through a register
 ARM7_CFLAGS := --target=armv4t-none-eabi -mcpu=arm7tdmi -marm -mlong-calls -DARM7 -D__NDS__ \
 	-D_DEFAULT_SOURCE -nostdlibinc -ffunction-sections -fdata-sections -g -O2 -Wall \
-	-I$(TOOLCHAIN_TARGET)/sysroot7/include -I$(TOOLCHAIN_TARGET)/calico/include
-ARM7_LIBS := $(addprefix $(TOOLCHAIN_TARGET)/,libcalico7.a sysroot7/lib/libc.a libcompiler-rt7.a)
+	-I$(TOOLCHAIN_TARGET)/sysroot7/include -I$(TOOLCHAIN_TARGET)/src/calico/include
+ARM7_LIBS := $(addprefix $(TOOLCHAIN_TARGET)/,lib/libcalico7.a sysroot7/lib/libc.a lib/libcompiler-rt7.a)
 ARM7_OFILES := $(addprefix $(BUILD)/,$(addsuffix .arm7.o,$(ARM7_SOURCES)))
-ARM7_ELF := $(if $(ARM7_SOURCES),$(NAME)7.elf,$(TOOLCHAIN_TARGET)/ds7.elf)
+ARM7_ELF := $(if $(ARM7_SOURCES),$(NAME)7.elf,$(TOOLCHAIN_TARGET)/lib/ds7.elf)
 
 HEADER_TITLE ?= $(GAME_TITLE)
-ICON ?= $(TOOLCHAIN_TARGET)/calico/share/nds-icon.bmp
+ICON ?= $(TOOLCHAIN_TARGET)/src/calico/share/nds-icon.bmp
 
 # Homebrew has no game code
 $(NAME).nds: $(NAME).elf $(ARM7_ELF) $(ICON) $(if $(NITRO_DIR),$(shell find $(NITRO_DIR) -type f))
@@ -57,12 +57,12 @@ $(NAME).nds: $(NAME).elf $(ARM7_ELF) $(ICON) $(if $(NITRO_DIR),$(shell find $(NI
 		$(if $(NITRO_DIR),-d $(NITRO_DIR))
 
 $(NAME).elf: $(OFILES) $(LIBS)
-	$(LD) -T $(TOOLCHAIN_TARGET)/calico/share/ds9.ld --gc-sections --nmagic -Map $(NAME).map \
+	$(LD) -T $(TOOLCHAIN_TARGET)/src/calico/share/ds9.ld --gc-sections --nmagic -Map $(NAME).map \
 		$(OFILES) --start-group $(LIBS) --end-group -o $@
 
-$(NAME)7.elf: $(TOOLCHAIN_TARGET)/objects/ds7/arm7_main.o $(ARM7_OFILES) $(ARM7_LIBS)
-	$(LD) -T $(TOOLCHAIN_TARGET)/calico/share/ds7.ld --gc-sections --nmagic --section-start=.main=0x02ff0000 \
-		$(TOOLCHAIN_TARGET)/objects/ds7/arm7_main.o $(ARM7_OFILES) --start-group $(ARM7_LIBS) \
+$(NAME)7.elf: $(TOOLCHAIN_TARGET)/build/ds7/arm7_main.o $(ARM7_OFILES) $(ARM7_LIBS)
+	$(LD) -T $(TOOLCHAIN_TARGET)/src/calico/share/ds7.ld --gc-sections --nmagic --section-start=.main=0x02ff0000 \
+		$(TOOLCHAIN_TARGET)/build/ds7/arm7_main.o $(ARM7_OFILES) --start-group $(ARM7_LIBS) \
 		--end-group -o $@
 
 $(BUILD)/%.arm7.o: %.c
@@ -89,7 +89,7 @@ $(BUILD)/%.o: %.s
 	$(CC) $(CFLAGS) -MMD -MP -x assembler-with-cpp -c $< -o $@
 
 run: $(NAME).nds
-	$(TOOLCHAIN)/run.sh $<
+	$(TOOLCHAIN)/bin/run $<
 
 clean:
 	rm -rf $(BUILD) $(NAME).elf $(NAME)7.elf $(NAME).map $(NAME).nds

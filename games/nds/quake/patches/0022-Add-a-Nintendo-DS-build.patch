@@ -84,7 +84,7 @@ index 0000000..77d6345
 +	-Wno-format-security -Wno-deprecated-non-prototype \
 +	-fno-strict-aliasing -fno-short-enums -fcommon -cl-single-precision-constant -std=gnu17
 +
-+$(BUILD)/softfloat/%.itcm.o: $(TOOLCHAIN_TARGET)/libcompiler-rt9.a
++$(BUILD)/softfloat/%.itcm.o: $(TOOLCHAIN_TARGET)/lib/libcompiler-rt9.a
 +	@mkdir -p $(dir $@)
 +	cd $(dir $@) && $(AR) x $(abspath $<) $*.o && mv $*.o $(notdir $@)
 diff --git a/WinQuake/fcmp_nds.s b/WinQuake/fcmp_nds.s

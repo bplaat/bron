@@ -116,7 +116,7 @@ index 0000000..060fb65
 +COLD_SOURCES := animlib config console control cvar_defs cvars global keyboard menues premap rts scriplib
 +$(addprefix $(BUILD)/Game/src/,$(addsuffix .o,$(COLD_SOURCES))): CFLAGS += -Os
 +# The startup wants libdvm's filesystem.h, not the engine's
-+$(BUILD)/nds/duke3d_nds.o: CFLAGS := -I$(TOOLCHAIN_TARGET)/libdvm/include $(CFLAGS)
++$(BUILD)/nds/duke3d_nds.o: CFLAGS := -I$(TOOLCHAIN_TARGET)/src/libdvm/include $(CFLAGS)
 +
 +$(BUILD)/%.arm.o: CFLAGS += -marm
 +

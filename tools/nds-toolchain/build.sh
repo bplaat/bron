@@ -1,20 +1,20 @@
 #!/usr/bin/env bash
 # Builds the Nintendo DS toolchain in ../../target/nds-toolchain/: fetches calico, libnds, libdvm, FatFs, the default
-# ARM7 program, picolibc, ndstool and LLVM's compiler-rt, applies the patches in <name>/patches/ and
-# builds the libraries, picolibc (the C library) in sysroot9/ and sysroot7/, the ARM7 program and
-# ndstool.
+# ARM7 program, picolibc, ndstool and LLVM's compiler-rt to src/, applies the patches in
+# patches/<name>/ and builds the libraries and the ARM7 program to lib/, picolibc (the C library) in
+# sysroot9/ and sysroot7/ and ndstool to bin/, with the intermediates in build/.
 # The port build scripts run this before they build.
 #
 # Usage: ./build.sh [command]...
 #   (none)          fetch, patch and build
-#   export-patches  write the commits in target/<name>/ back to <name>/patches/
-#   test            build test/ and run it headless in melonDS, as a DS and as a DSi
-#   melonds         build melonDS's core library and melonds/runner.cpp to target/bin/melonds-runner
+#   export-patches  write the commits in target/src/<name>/ back to patches/<name>/
+#   test            build test/c/ and run it headless in melonDS, as a DS and as a DSi
+#   melonds         build melonDS's core library and runner/runner.cpp to target/bin/melonds-runner
 #   clean           remove target/
 set -euo pipefail
 cd "$(dirname "$0")"
 
-# name url version commit [sparse paths], every repo with a <name>/patches/ directory gets patched
+# name url version commit [sparse paths], every repo with a patches/<name>/ directory gets patched
 REPOS=(
     'calico https://github.com/devkitPro/calico.git v1.2.0 741ca15cdb7e72de879c20d8f7877633caf92eaf'
     'libnds https://github.com/devkitPro/libnds.git v2.0.2 84e6082ce27c87ed218fb369a9944644aa2243a6'
@@ -26,19 +26,23 @@ REPOS=(
     'compiler-rt https://github.com/llvm/llvm-project.git llvmorg-23.1.3 0d261d1ca552c95a8f007e061c787ac7132fbcbc /compiler-rt/lib/builtins/'
 )
 
-# melonDS for melonds/runner.cpp, cloned by the melonds and test commands. Its free DSi BIOS, which
+# melonDS for runner/runner.cpp, cloned by the melonds and test commands. Its free DSi BIOS, which
 # runs DSi mode without dumps, is newer than its last release, so it's a commit of master, a version
 # that is the commit fetches that commit.
 MELONDS_REPO='melonds https://github.com/melonDS-emu/melonDS.git 361ffa9501b631d53d7150fe57dec40a8341f664 361ffa9501b631d53d7150fe57dec40a8341f664'
 
 TOOLCHAIN_DIR="$PWD"
 BUILD_DIR="$(cd ../.. && pwd)/target/nds-toolchain"
-CALICO_DIR="$BUILD_DIR/calico"
-LIBNDS_DIR="$BUILD_DIR/libnds"
-LIBDVM_DIR="$BUILD_DIR/libdvm"
-FATFS_DIR="$BUILD_DIR/fatfs"
-PICOLIBC_DIR="$BUILD_DIR/picolibc"
-BUILTINS_DIR="$BUILD_DIR/compiler-rt/compiler-rt/lib/builtins"
+SRC_DIR="$BUILD_DIR/src"
+OBJECTS_DIR="$BUILD_DIR/build"
+LIB_DIR="$BUILD_DIR/lib"
+BIN_DIR="$BUILD_DIR/bin"
+CALICO_DIR="$SRC_DIR/calico"
+LIBNDS_DIR="$SRC_DIR/libnds"
+LIBDVM_DIR="$SRC_DIR/libdvm"
+FATFS_DIR="$SRC_DIR/fatfs"
+PICOLIBC_DIR="$SRC_DIR/picolibc"
+BUILTINS_DIR="$SRC_DIR/compiler-rt/compiler-rt/lib/builtins"
 
 # Apple's clang can't target ARM bare metal, so prefer Homebrew's LLVM when it's installed
 LLVM=''
@@ -125,7 +129,7 @@ outdated() {
 # Clones a tag of a repo to dir (unless present) and verifies its commit, when paths are given
 # only those are checked out
 clone() {
-    local name="$1" url="$2" version="$3" commit="$4" dir="$BUILD_DIR/$1"
+    local name="$1" url="$2" version="$3" commit="$4" dir="$SRC_DIR/$1"
     shift 4
     [ -d "$dir" ] && return
     msg "Cloning $name $version"
@@ -167,12 +171,12 @@ fetch() {
 
 # Applies the patches of a repo as commits on top of the upstream tag, again when they changed
 patch() {
-    local name="$1" commit="$2" dir="$BUILD_DIR/$1"
-    outdated "$dir/.patched" "$TOOLCHAIN_DIR/$name/patches" || return 0
-    # Applying resets target/<name>/, so stop when it has work that isn't exported yet
+    local name="$1" commit="$2" dir="$SRC_DIR/$1"
+    outdated "$dir/.patched" "$TOOLCHAIN_DIR/patches/$name" || return 0
+    # Applying resets target/src/<name>/, so stop when it has work that isn't exported yet
     if [ -s "$dir/.patched" ] && { [ -n "$(git -C "$dir" status --porcelain --untracked-files=no)" ] ||
         [ "$(git -C "$dir" rev-parse HEAD)" != "$(cat "$dir/.patched")" ]; }; then
-        die "target/$name/ has changes that aren't in $name/patches/, run ./build.sh export-patches or remove target/$name/"
+        die "target/src/$name/ has changes that aren't in patches/$name/, run ./build.sh export-patches or remove target/src/$name/"
     fi
     msg "Applying $name patches"
     # git am keeps the authors of the patches, but needs a committer identity
@@ -186,7 +190,7 @@ patch() {
     git -C "$dir" am --abort > /dev/null 2>&1 || true
     git -C "$dir" reset -q --hard upstream
     # Preserve intentional CRLF in MIME-encoded patches without warning about it.
-    if ! git -C "$dir" am -q --keep-cr --quoted-cr=nowarn --whitespace=nowarn "$TOOLCHAIN_DIR/$name"/patches/*.patch; then
+    if ! git -C "$dir" am -q --keep-cr --quoted-cr=nowarn --whitespace=nowarn "$TOOLCHAIN_DIR/patches/$name"/*.patch; then
         git -C "$dir" am --abort
         rm -f "$dir/.patched"
         die "Failed to apply the $name patches"
@@ -199,24 +203,24 @@ patch_all() {
     local repo name url version commit
     for repo in "${REPOS[@]}"; do
         read -r name url version commit _ <<< "$repo"
-        [ -d "$TOOLCHAIN_DIR/$name/patches" ] && patch "$name" "$commit"
+        [ -d "$TOOLCHAIN_DIR/patches/$name" ] && patch "$name" "$commit"
     done
     return 0
 }
 
-# Writes the commits on top of upstream back to <name>/patches/
+# Writes the commits on top of upstream back to patches/<name>/
 export_patches() {
     local repo name dir
     for repo in "${REPOS[@]}" "$MELONDS_REPO"; do
         name="${repo%% *}"
-        dir="$BUILD_DIR/$name"
-        [ -d "$TOOLCHAIN_DIR/$name/patches" ] || continue
+        dir="$SRC_DIR/$name"
+        [ -d "$TOOLCHAIN_DIR/patches/$name" ] || continue
         # melonDS is only there once the melonds command ran
         [ "$repo" = "$MELONDS_REPO" ] && [ ! -d "$dir" ] && continue
         [ -d "$dir/.git" ] || die "No patched $name, run ./build.sh first"
-        rm -f "$TOOLCHAIN_DIR/$name"/patches/*.patch
+        rm -f "$TOOLCHAIN_DIR/patches/$name"/*.patch
         git -C "$dir" format-patch -q --no-numbered --zero-commit --no-signature \
-            -o "$TOOLCHAIN_DIR/$name/patches" upstream..HEAD
+            -o "$TOOLCHAIN_DIR/patches/$name" upstream..HEAD
         git -C "$dir" rev-parse HEAD > "$dir/.patched"
         msg "Exported $(git -C "$dir" rev-list --count upstream..HEAD) $name patches"
     done
@@ -232,17 +236,17 @@ meson_array() {
 # Builds picolibc with meson for a CPU (9 or 7) and installs its headers and libc.a, which
 # includes the math library, in target/sysroot<cpu>/
 build_picolibc() {
-    local cpu="$1" sysroot="$BUILD_DIR/sysroot$1" build="$BUILD_DIR/objects/picolibc$1" target cflags
+    local cpu="$1" sysroot="$BUILD_DIR/sysroot$1" build="$OBJECTS_DIR/picolibc$1" target cflags
     if [ "$cpu" = 9 ]; then
         target=("${ARM9_TARGET[@]}") cflags=("${ARM9_LIBC_CFLAGS[@]}")
     else
         target=("${ARM7_TARGET[@]}") cflags=("${ARM7_LIBC_CFLAGS[@]}")
     fi
-    # The sources are checked too, so edits in target/ get built
+    # The sources are checked too, so edits in target/src/ get built
     outdated "$sysroot/lib/libc.a" "$PICOLIBC_DIR"/{.patched,libc,libm,meson.build} "$TOOLCHAIN_DIR/build.sh" ||
         return 0
     msg "Building picolibc for the ARM$cpu"
-    mkdir -p "$BUILD_DIR/objects"
+    mkdir -p "$OBJECTS_DIR"
     cat > "$build.txt" << CROSS
 [binaries]
 c = $(meson_array "${LLVM}clang" "${target[@]}" -nostdlib)
@@ -272,11 +276,11 @@ CROSS
     meson install -C "$build" > /dev/null || die "Failed to build picolibc"
 }
 
-# Compiles sources at the same time and archives them to target/<library>, objects keep the
+# Compiles sources at the same time and archives them to target/lib/<library>, objects keep the
 # suffixes of their source (like .32 and .twl) the linker scripts look for,
 # usage: build_archive <library> <flags>... -- <sources>...
 build_archive() {
-    local library="$BUILD_DIR/$1" objects_dir="$BUILD_DIR/objects/${1%.a}" flags=() source object
+    local library="$LIB_DIR/$1" objects_dir="$OBJECTS_DIR/${1%.a}" flags=() source object
     local pids=() objects=() failed=0 name
     shift
     while [ "$1" != -- ]; do
@@ -307,6 +311,7 @@ build_archive() {
     done
     [ "$failed" = 0 ] || die "Failed to compile $(basename "$library")"
     rm -f "$library"
+    mkdir -p "$LIB_DIR"
     "${LLVM}llvm-ar" rcs "$library" "${objects[@]}"
 }
 
@@ -315,32 +320,32 @@ build_libraries() {
     local builtins=("${BUILTINS_SOURCES[@]/#/$BUILTINS_DIR/}") floats=("${FLOAT_SOURCES[@]/#/$BUILTINS_DIR/}")
     build_picolibc 9
     build_picolibc 7
-    # The library sources are checked too, so edits in target/ get built
-    outdated "$BUILD_DIR/libcalico9.a" "$CALICO_DIR"/{source,include} "$BUILD_DIR/sysroot9/lib/libc.a" \
+    # The library sources are checked too, so edits in target/src/ get built
+    outdated "$LIB_DIR/libcalico9.a" "$CALICO_DIR"/{source,include} "$BUILD_DIR/sysroot9/lib/libc.a" \
         "$TOOLCHAIN_DIR/build.sh" && build_archive libcalico9.a "${ARM9_CFLAGS[@]}" "${LIB_CFLAGS[@]}" -- \
             "${calico[@]}" "${CALICO9_SOURCES[@]/#/$CALICO_DIR/source/}"
-    outdated "$BUILD_DIR/libcalico7.a" "$CALICO_DIR"/{source,include} "$BUILD_DIR/sysroot7/lib/libc.a" \
+    outdated "$LIB_DIR/libcalico7.a" "$CALICO_DIR"/{source,include} "$BUILD_DIR/sysroot7/lib/libc.a" \
         "$TOOLCHAIN_DIR/build.sh" && build_archive libcalico7.a "${ARM7_CFLAGS[@]}" "${LIB_CFLAGS[@]}" -- \
             "${calico[@]}" "${CALICO7_SOURCES[@]/#/$CALICO_DIR/source/}"
-    if outdated "$BUILD_DIR/libnds9.a" "$LIBNDS_DIR"/{source,include} "$BUILD_DIR/sysroot9/lib/libc.a" \
+    if outdated "$LIB_DIR/libnds9.a" "$LIBNDS_DIR"/{source,include} "$BUILD_DIR/sysroot9/lib/libc.a" \
         "$TOOLCHAIN_DIR/build.sh"; then
         # The console font is embedded as it is
-        mkdir -p "$BUILD_DIR/generated"
-        echo 'extern const unsigned char default_font_bin[];' > "$BUILD_DIR/generated/default_font_bin.h"
+        mkdir -p "$OBJECTS_DIR/generated"
+        echo 'extern const unsigned char default_font_bin[];' > "$OBJECTS_DIR/generated/default_font_bin.h"
         printf '.section .rodata.default_font_bin, "a"\n.global default_font_bin\n.balign 4\ndefault_font_bin:\n.incbin "%s"\n' \
-            "$LIBNDS_DIR/source/arm9/default_font.bin" > "$BUILD_DIR/generated/default_font.s"
-        build_archive libnds9.a "${ARM9_CFLAGS[@]}" "${LIB_CFLAGS[@]}" -DNDEBUG -I"$BUILD_DIR/generated" -- \
-            "${LIBNDS_SOURCES[@]/#/$LIBNDS_DIR/source/}" "$BUILD_DIR/generated/default_font.s"
+            "$LIBNDS_DIR/source/arm9/default_font.bin" > "$OBJECTS_DIR/generated/default_font.s"
+        build_archive libnds9.a "${ARM9_CFLAGS[@]}" "${LIB_CFLAGS[@]}" -DNDEBUG -I"$OBJECTS_DIR/generated" -- \
+            "${LIBNDS_SOURCES[@]/#/$LIBNDS_DIR/source/}" "$OBJECTS_DIR/generated/default_font.s"
     fi
-    outdated "$BUILD_DIR/libdvm.a" "$LIBDVM_DIR"/{source,include} "$FATFS_DIR/source" \
+    outdated "$LIB_DIR/libdvm.a" "$LIBDVM_DIR"/{source,include} "$FATFS_DIR/source" \
         "$BUILD_DIR/sysroot9/lib/libc.a" "$TOOLCHAIN_DIR/build.sh" &&
         build_archive libdvm.a "${ARM9_CFLAGS[@]}" "${LIB_CFLAGS[@]}" -DLIBDVM_BUFFER_ALIGN=32 \
             -DLIBDVM_WITH_CACHE_COPY -DLIBDVM_WITH_ALIGNED_ACCESS -- \
             "$LIBDVM_DIR"/source/{dvm_disc,dvm_cache,dvm_volume,dvm_prober,fat_wrappers,fat_driver}.c \
             "$LIBDVM_DIR"/source/{dvm_calico,nitrofs}.c "$FATFS_DIR"/source/{ff,ffunicode}.c
-    outdated "$BUILD_DIR/libcompiler-rt9.a" "$BUILTINS_DIR" "$TOOLCHAIN_DIR/build.sh" &&
+    outdated "$LIB_DIR/libcompiler-rt9.a" "$BUILTINS_DIR" "$TOOLCHAIN_DIR/build.sh" &&
         build_archive libcompiler-rt9.a "${ARM9_CFLAGS[@]}" -marm -std=gnu11 -w -- "${builtins[@]}" "${floats[@]}"
-    outdated "$BUILD_DIR/libcompiler-rt7.a" "$BUILTINS_DIR" "$TOOLCHAIN_DIR/build.sh" &&
+    outdated "$LIB_DIR/libcompiler-rt7.a" "$BUILTINS_DIR" "$TOOLCHAIN_DIR/build.sh" &&
         build_archive libcompiler-rt7.a "${ARM7_CFLAGS[@]}" -marm -std=gnu11 -w -- "${builtins[@]}"
     return 0
 }
@@ -348,73 +353,73 @@ build_libraries() {
 # The default ARM7 program with the SD card (DSi) and DLDI storage and sound drivers, the ARM9 runs
 # the ports and talks to it through calico
 build_arm7() {
-    local objects_dir="$BUILD_DIR/objects/ds7"
-    outdated "$BUILD_DIR/ds7.elf" "$BUILD_DIR"/lib{calico7,compiler-rt7}.a "$BUILD_DIR/sysroot7/lib/libc.a" \
-        "$BUILD_DIR/default-arm7" "$CALICO_DIR/share/ds7.ld" || return 0
+    local objects_dir="$OBJECTS_DIR/ds7"
+    outdated "$LIB_DIR/ds7.elf" "$LIB_DIR"/lib{calico7,compiler-rt7}.a "$BUILD_DIR/sysroot7/lib/libc.a" \
+        "$SRC_DIR/default-arm7" "$CALICO_DIR/share/ds7.ld" || return 0
     msg "Building ds7.elf"
     mkdir -p "$objects_dir"
     "${LLVM}clang" "${ARM7_CFLAGS[@]}" -Wall -DENABLE_BLKDEV -DENABLE_SOUND \
-        -c "$BUILD_DIR/default-arm7/arm7_main.c" -o "$objects_dir/arm7_main.o"
+        -c "$SRC_DIR/default-arm7/arm7_main.c" -o "$objects_dir/arm7_main.o"
     ld.lld -T "$CALICO_DIR/share/ds7.ld" --gc-sections --nmagic --section-start=.main=0x02ff0000 \
-        "$objects_dir/arm7_main.o" --start-group "$BUILD_DIR/libcalico7.a" "$BUILD_DIR/sysroot7/lib/libc.a" \
-        "$BUILD_DIR/libcompiler-rt7.a" --end-group -o "$BUILD_DIR/ds7.elf"
+        "$objects_dir/arm7_main.o" --start-group "$LIB_DIR/libcalico7.a" "$BUILD_DIR/sysroot7/lib/libc.a" \
+        "$LIB_DIR/libcompiler-rt7.a" --end-group -o "$LIB_DIR/ds7.elf"
 }
 
 # ndstool runs on the host, it puts the ARM9 and ARM7 programs, the icon and NitroFS in a .nds
 build_ndstool() {
-    outdated "$BUILD_DIR/bin/ndstool" "$BUILD_DIR/ndstool/source" "$TOOLCHAIN_DIR/build.sh" || return 0
+    outdated "$BIN_DIR/ndstool" "$SRC_DIR/ndstool/source" "$TOOLCHAIN_DIR/build.sh" || return 0
     msg "Building ndstool"
-    local version source objects_dir="$BUILD_DIR/objects/ndstool"
+    local version source objects_dir="$OBJECTS_DIR/ndstool"
     version="$(printf '%s\n' "${REPOS[@]}" | awk '$1 == "ndstool" { print substr($3, 2) }')"
-    mkdir -p "$BUILD_DIR/bin" "$objects_dir"
-    for source in "$BUILD_DIR"/ndstool/source/*.c; do
+    mkdir -p "$BIN_DIR" "$objects_dir"
+    for source in "$SRC_DIR"/ndstool/source/*.c; do
         cc -O2 -w -c "$source" -o "$objects_dir/$(basename "${source%.c}").o"
     done
-    c++ -O2 -w -DPACKAGE_VERSION="\"$version\"" "$BUILD_DIR"/ndstool/source/*.cpp \
-        "$objects_dir"/*.o -o "$BUILD_DIR/bin/ndstool"
+    c++ -O2 -w -DPACKAGE_VERSION="\"$version\"" "$SRC_DIR"/ndstool/source/*.cpp \
+        "$objects_dir"/*.o -o "$BIN_DIR/ndstool"
 }
 
-# Builds test/ with the toolchain and runs it headless in melonds-runner, as a DS with an R4 card
-# and as a DSi with an SD card, both holding the ROM in test/target/sd/, the runner reads the results
+# Builds test/c/ with the toolchain and runs it headless in melonds-runner, as a DS with an R4 card
+# and as a DSi with an SD card, both holding the ROM in test/c/target/sd/, the runner reads the results
 # from RAM and fails when a check fails
 run_test() {
-    local target="$TOOLCHAIN_DIR/test/target" address
+    local target="$TOOLCHAIN_DIR/test/c/target" address
     build_melonds
-    make -C "$TOOLCHAIN_DIR/test" --no-print-directory
+    make -C "$TOOLCHAIN_DIR/test/c" --no-print-directory
     address=$("${LLVM}llvm-nm" "$target/test.elf" | awk '$3 == "test_results" { print $1 }')
     [ -n "$address" ] || die "Missing test results symbol"
     rm -rf "$target/sd"
     mkdir -p "$target/sd"
     cp "$target/test.nds" "$target/sd/test.nds"
     msg "Running the test in melonDS as a DS"
-    "$BUILD_DIR/bin/melonds-runner" --fat "$target/sd" "$target/sd/test.nds" "test $address 3600"
+    "$BIN_DIR/melonds-runner" --fat "$target/sd" "$target/sd/test.nds" "test $address 3600"
     msg "Running the test in melonDS as a DSi"
-    "$BUILD_DIR/bin/melonds-runner" --dsi --fat "$target/sd" "$target/sd/test.nds" "test $address 3600"
+    "$BIN_DIR/melonds-runner" --dsi --fat "$target/sd" "$target/sd/test.nds" "test $address 3600"
     msg "Running the test in melonDS as a DS with synthetic microphone noise"
-    "$BUILD_DIR/bin/melonds-runner" --mic-noise --fat "$target/sd" "$target/sd/test.nds" "test $address 3600"
+    "$BIN_DIR/melonds-runner" --mic-noise --fat "$target/sd" "$target/sd/test.nds" "test $address 3600"
     msg "Running the test in melonDS as a DSi with synthetic microphone noise"
-    "$BUILD_DIR/bin/melonds-runner" --dsi --mic-noise --fat "$target/sd" "$target/sd/test.nds" "test $address 3600"
+    "$BIN_DIR/melonds-runner" --dsi --mic-noise --fat "$target/sd" "$target/sd/test.nds" "test $address 3600"
     msg "All tests passed"
 }
 
 # Builds melonDS's core library, without its frontend, JIT, OpenGL renderer and GDB stub, and the
 # runner on it, which plays a program headless and takes screenshots
 build_melonds() {
-    local objects_dir="$BUILD_DIR/objects/melonds"
+    local objects_dir="$OBJECTS_DIR/melonds"
     command -v cmake > /dev/null || die "Install cmake and ninja to build melonDS"
     patch melonds "$(echo "$MELONDS_REPO" | cut -d' ' -f4)"
-    [ -f "$objects_dir/build.ninja" ] || cmake -S "$BUILD_DIR/melonds" -B "$objects_dir" -G Ninja -Wno-dev \
+    [ -f "$objects_dir/build.ninja" ] || cmake -S "$SRC_DIR/melonds" -B "$objects_dir" -G Ninja -Wno-dev \
         -DCMAKE_BUILD_TYPE=Release -DBUILD_QT_SDL=OFF -DENABLE_JIT=OFF -DENABLE_OGLRENDERER=OFF \
         -DENABLE_GDBSTUB=OFF -DENABLE_LTO_RELEASE=OFF > /dev/null
     msg "Building melonDS"
     ninja -C "$objects_dir" core teakra > /dev/null
-    outdated "$BUILD_DIR/bin/melonds-runner" "$TOOLCHAIN_DIR/melonds/runner.cpp" "$objects_dir"/src/libcore.a ||
+    outdated "$BIN_DIR/melonds-runner" "$TOOLCHAIN_DIR/runner/runner.cpp" "$objects_dir"/src/libcore.a ||
         return 0
     msg "Building melonds-runner"
-    mkdir -p "$BUILD_DIR/bin"
-    c++ -std=c++17 -O2 -Wall -Wextra -fwrapv -isystem "$BUILD_DIR/melonds/src" -isystem "$objects_dir/src" \
-        "$TOOLCHAIN_DIR/melonds/runner.cpp" "$objects_dir/src/libcore.a" "$objects_dir/src/teakra/src/libteakra.a" \
-        -lz -lpthread -o "$BUILD_DIR/bin/melonds-runner"
+    mkdir -p "$BIN_DIR"
+    c++ -std=c++17 -O2 -Wall -Wextra -fwrapv -isystem "$SRC_DIR/melonds/src" -isystem "$objects_dir/src" \
+        "$TOOLCHAIN_DIR/runner/runner.cpp" "$objects_dir/src/libcore.a" "$objects_dir/src/teakra/src/libteakra.a" \
+        -lz -lpthread -o "$BIN_DIR/melonds-runner"
 }
 
 # Only one build at a time, the ports can start one at the same time

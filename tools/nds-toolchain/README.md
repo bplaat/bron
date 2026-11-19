@@ -1,27 +1,29 @@
 # Nintendo DS Toolchain
 
 What the ports share to build Nintendo DS programs with plain clang and lld, without devkitPro.
-`build.sh` builds it all in `../../target/nds-toolchain/`, the port build scripts run it for you:
+`build.sh` builds it all in `../../target/nds-toolchain/`, the port build scripts run it for you. It
+clones the sources to `src/`, builds the libraries to `lib/`, the host tools to `bin/` and keeps
+the intermediates in `build/`:
 
 - devkitPro's [calico](https://github.com/devkitPro/calico) v1.2.0,
   [libnds](https://github.com/devkitPro/libnds) v2.0.2,
   [libdvm](https://github.com/devkitPro/libdvm) v2.1.0 with
   [FatFs](https://github.com/devkitPro/fatfs-mod) v0.15.3 and the
   [default ARM7 program](https://github.com/devkitPro/default-arm7) v0.8.4, with their
-  `<name>/patches/`, to `../../target/nds-toolchain/lib*.a` and `../../target/nds-toolchain/ds7.elf`
-- [picolibc](https://github.com/picolibc/picolibc) 1.8.12 with `picolibc/patches/`, built with meson
+  `patches/<name>/`, to `../../target/nds-toolchain/lib/lib*.a` and `../../target/nds-toolchain/lib/ds7.elf`
+- [picolibc](https://github.com/picolibc/picolibc) 1.8.12 with `patches/picolibc/`, built with meson
   as the C library for each CPU, its headers and `libc.a` with the math library go to
   `../../target/nds-toolchain/sysroot9/` and `../../target/nds-toolchain/sysroot7/`
 - [ndstool](https://github.com/devkitPro/ndstool) v2.3.1 to `../../target/nds-toolchain/bin/ndstool`
 - the builtins of LLVM's [compiler-rt](https://github.com/llvm/llvm-project/tree/main/compiler-rt/lib/builtins)
   llvmorg-23.1.3 (64-bit integer math, division and software floating point) to
-  `../../target/nds-toolchain/libcompiler-rt9.a` and `../../target/nds-toolchain/libcompiler-rt7.a`
+  `../../target/nds-toolchain/lib/libcompiler-rt9.a` and `../../target/nds-toolchain/lib/libcompiler-rt7.a`
 
 ```sh
 ./build.sh                 # fetch, patch and build
 ./build.sh clean           # remove ../../target/nds-toolchain/
-./build.sh export-patches  # write the commits in ../../target/nds-toolchain/<name>/ back to <name>/patches/
-./build.sh test            # build test/ and run it headless in melonDS, as a DS and as a DSi
+./build.sh export-patches  # write the commits in ../../target/nds-toolchain/src/<name>/ back to patches/<name>/
+./build.sh test            # build test/c/ and run it headless in melonDS, as a DS and as a DSi
 ./build.sh melonds         # build ../../target/nds-toolchain/bin/melonds-runner
 ```
 
@@ -35,8 +37,8 @@ functions.
 
 - `nds.mk` has the make rules for the ports' `Makefile.nds`, at `-O3`. A port's own ARM7 code
   (`ARM7_SOURCES`) is linked with the default ARM7 program, which calls its `arm7PortInit`
-- `run.sh` starts a program in melonDS, `make run` uses it
-- `melonds/runner.cpp` runs a `.nds` headless in [melonDS](https://github.com/melonDS-emu/melonDS)'s
+- `bin/run` starts a program in melonDS, `make run` uses it
+- `runner/runner.cpp` runs a `.nds` headless in [melonDS](https://github.com/melonDS-emu/melonDS)'s
   core library, with its interpreter, software renderer, free BIOSes and generated firmware, frame
   exact, for scripts and agents: it presses buttons, touches the touch screen, takes PNG
   screenshots of both screens and saves and loads savestates. Each argument is a command, without
@@ -64,16 +66,16 @@ functions.
     `test <address> <frames>` reads the test ROM's status and log from RAM, returning an error on
     failed tests or a frame timeout.
 
-- `test/` is a DS program that checks the startup code, the C library, compiler-rt, threads, ITCM,
+- `test/c/` is a DS program that checks the startup code, the C library, compiler-rt, threads, ITCM,
   FAT, NitroFS, random-byte generation and the console's escape sequences. `./build.sh test` builds melonDS and runs it
   headless in DS and DSi modes, each with silent input and with synthetic microphone noise.
   The DS uses a writable R4 card and the DSi a writable SD card, both
-  initialized from `test/target/sd/`. It prints the results and fails when a check fails or the ROM
+  initialized from `test/c/target/sd/`. It prints the results and fails when a check fails or the ROM
   does not finish within 3600 emulated frames. The ROM also saves `test.txt` on the emulated card.
 
 ## Patches
 
-Edit and commit in `../../target/nds-toolchain/<name>/`, run `./build.sh` to try it and `./build.sh export-patches`
+Edit and commit in `../../target/nds-toolchain/src/<name>/`, run `./build.sh` to try it and `./build.sh export-patches`
 to write the commits back.
 
 - calico: unified assembly syntax for LLVM, no newlib glue, linker scripts that work with lld, and
