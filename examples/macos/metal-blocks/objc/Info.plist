@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="UTF-8"?>
+<?xml version="1.0" encoding="UTF-8" ?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
@@ -11,7 +11,7 @@
 	<key>CFBundleDisplayName</key>
 	<string>Blocks</string>
 	<key>CFBundleIdentifier</key>
-	<string>nl.plaatsoft.Blocks</string>
+	<string>nl.bplaat.Blocks</string>
 	<key>CFBundleVersion</key>
 	<string>0.1.0</string>
 	<key>CFBundleShortVersionString</key>
@@ -23,6 +23,6 @@
 	<key>NSHumanReadableCopyright</key>
 	<string>Copyright © 2026 Bastiaan van der Plaat</string>
 	<key>NSHighResolutionCapable</key>
-	<true/>
+	<true />
 </dict>
 </plist>
