@@ -8,4 +8,4 @@ for source in *.asm; do
     nasm -DWIN64 -f bin "$source" -o "$name-x64.exe"
 done
 
-sh redsquare/build.sh
+make -C redsquare

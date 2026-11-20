@@ -13,11 +13,13 @@ nasm -DWIN64 -f bin hello.asm -o hello-x64.exe
 
 Run the executables on Windows or with Wine.
 
-To build all examples using only NASM and a POSIX shell, run:
+To build all examples with NASM and Make, run:
 
 ```sh
 ./build.sh
 ```
+
+To build only RedSquare for x86 and x64, run `make -C redsquare`.
 
 ## License
 
