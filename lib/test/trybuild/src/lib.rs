@@ -173,9 +173,9 @@ impl TestCases {
         let edition = resolve_edition(&source_dir, source.package.edition)?;
         let tests = expand_tests(&source_dir, &self.tests.borrow())?;
         let workspace_dir = workspace_root(&source_dir)?;
-        let project_dir = workspace_dir
-            .join("target/tests/trybuild")
-            .join(&source.package.name);
+        let trybuild_dir = workspace_dir.join("target/tests/trybuild");
+        let project_dir = trybuild_dir.join(&source.package.name);
+        let build_dir = trybuild_dir.join(".build");
 
         fs::create_dir_all(&project_dir).map_err(|error| error.to_string())?;
         fs::write(
@@ -236,7 +236,7 @@ impl TestCases {
         for (index, test) in tests.iter().enumerate() {
             let name = format!("trybuild{index:03}");
             print!("test {} ... ", test.display);
-            match run_test(&project_dir, &source_dir, &name, test) {
+            match run_test(&project_dir, &build_dir, &source_dir, &name, test) {
                 Ok(()) => println!("ok"),
                 Err(error) => {
                     failures += 1;
@@ -388,12 +388,16 @@ fn push_test(
 
 fn run_test(
     project_dir: &Path,
+    build_dir: &Path,
     source_dir: &Path,
     name: &str,
     test: &ExpandedTest,
 ) -> Result<(), String> {
     let output = Command::new(env::var_os("CARGO").unwrap_or_else(|| "cargo".into()))
         .args(["build", "--quiet", "--message-format=json", "--bin", name])
+        .arg("--target-dir")
+        .arg(project_dir.join("target"))
+        .env("CARGO_BUILD_BUILD_DIR", build_dir)
         .env_remove("CARGO_ENCODED_RUSTFLAGS")
         .env_remove("RUSTFLAGS")
         .current_dir(project_dir)
