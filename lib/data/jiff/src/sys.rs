@@ -55,6 +55,7 @@ cfg_select! {
         }
 
         /// Converts a wall-clock date and time in the local time zone to a Unix timestamp.
+        /// The system can normalize skipped times, so the caller validates the result.
         #[allow(unsafe_code)]
         pub(crate) fn local_to_timestamp(datetime: DateTime) -> Option<i64> {
             let date = datetime.date();
@@ -78,7 +79,8 @@ cfg_select! {
                 clippy::useless_conversion,
                 reason = "time_t is 32 bits on some systems"
             )]
-            (timestamp != -1).then(|| i64::from(timestamp))
+            // An error returns -1, which the caller rejects as it doesn't match the wall-clock time.
+            Some(i64::from(timestamp))
         }
 
         /// Returns the local time zone's offset from UTC in seconds at a Unix timestamp.
@@ -248,6 +250,7 @@ cfg_select! {
         }
 
         /// Converts a wall-clock date and time in the local time zone to a Unix timestamp.
+        /// The system can normalize skipped times, so the caller validates the result.
         pub(crate) fn local_to_timestamp(datetime: DateTime) -> Option<i64> {
             Some(convert(datetime, TzSpecificLocalTimeToSystemTimeEx)?.to_second())
         }

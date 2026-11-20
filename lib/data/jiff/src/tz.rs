@@ -33,7 +33,7 @@ impl TimeZone {
     pub const UTC: Self = Self(Kind::Utc);
 
     /// The system's time zone, which converts with the C library on Unix and Win32 on Windows.
-    /// Wall-clock times in daylight saving time transitions resolve as the system does.
+    /// Skipped wall-clock times return an error. Repeated times use the earlier occurrence.
     #[cfg(feature = "tz-system")]
     pub fn system() -> Self {
         Self(Kind::System)
@@ -54,7 +54,23 @@ impl TimeZone {
         let second = match self.0 {
             Kind::Utc => datetime.to_second(),
             #[cfg(feature = "tz-system")]
-            Kind::System => crate::sys::local_to_timestamp(datetime).ok_or(Error::TIME_ZONE)?,
+            Kind::System => {
+                let second = crate::sys::local_to_timestamp(datetime).ok_or(Error::TIME_ZONE)?;
+                let local = datetime.to_second();
+                let matches_local = |second| {
+                    crate::sys::utc_offset(second).is_some_and(|offset| second + offset == local)
+                };
+                // The system can normalize a skipped time to a different wall-clock time.
+                if !matches_local(second) {
+                    return Err(Error::TIME_ZONE);
+                }
+
+                // A day before a repeated time is on the earlier side of the rollback.
+                crate::sys::utc_offset(second - 24 * 60 * 60)
+                    .map(|offset| local - offset)
+                    .filter(|&earlier| earlier < second && matches_local(earlier))
+                    .unwrap_or(second)
+            }
         };
         Timestamp::from_second(second)
     }
@@ -88,5 +104,14 @@ mod test {
         // Time zones range from UTC-12 to UTC+14
         assert!((-12 * 3600..=14 * 3600).contains(&offset));
         assert_eq!(local.as_second() + offset, datetime.to_second());
+    }
+
+    #[cfg(all(unix, feature = "tz-system"))]
+    #[test]
+    fn round_trips_the_second_before_the_epoch() {
+        let zone = TimeZone::system();
+        let timestamp = Timestamp::from_second(-1).unwrap();
+        let local = timestamp.to_zoned_datetime(zone.clone()).datetime();
+        assert_eq!(zone.to_timestamp(local).unwrap(), timestamp);
     }
 }

@@ -76,7 +76,7 @@ impl Date {
         }
     }
 
-    /// Returns the start of this date in a time zone
+    /// Returns midnight on this date in a time zone. Returns an error if midnight is skipped.
     pub fn to_zoned_datetime(self, tz: TimeZone) -> Result<ZonedDateTime, Error> {
         self.at(0, 0, 0, 0).to_zoned_datetime(tz)
     }
