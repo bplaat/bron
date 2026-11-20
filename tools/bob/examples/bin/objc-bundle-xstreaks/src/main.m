@@ -7,6 +7,27 @@
 #import <Cocoa/Cocoa.h>
 #include "XStreaks/secrets.h"
 
+static NSInteger countStreakDays(NSArray* posts, NSDate* now, NSCalendar* calendar) {
+    NSISO8601DateFormatter* formatter = [NSISO8601DateFormatter new];
+    formatter.formatOptions = NSISO8601DateFormatWithInternetDateTime | NSISO8601DateFormatWithFractionalSeconds;
+
+    NSMutableSet<NSDate*>* postDays = [NSMutableSet set];
+    for (NSDictionary* post in posts) {
+        NSDate* postDate = [formatter dateFromString:post[@"created_at"]];
+        if (postDate)
+            [postDays addObject:[calendar startOfDayForDate:postDate]];
+    }
+
+    NSInteger streakDays = 0;
+    NSDate* day = [calendar startOfDayForDate:now];
+    while ([postDays containsObject:day]) {
+        streakDays++;
+        // The previous local day can be shorter or longer than 24 hours.
+        day = [calendar startOfDayForDate:[calendar dateByAddingUnit:NSCalendarUnitDay value:-1 toDate:day options:0]];
+    }
+    return streakDays;
+}
+
 @interface AppDelegate : NSObject <NSApplicationDelegate>
 @property(strong, nonatomic) NSString* username;
 @property NSInteger userId;
@@ -64,11 +85,10 @@
 
     // Load streak days from settings
     if (self.userId != 0) {
-        NSString* streakUpdateTime = [defaults stringForKey:@"streakUpdateTime"];
-        if (streakUpdateTime) {
-            NSDateFormatter* isoDateFormatter = [NSDateFormatter new];
-            [isoDateFormatter setDateFormat:@"yyyy-MM-dd'T'HH:mm:ss.SSS'Z'"];
-            if ([[NSDate date] timeIntervalSinceDate:[isoDateFormatter dateFromString:streakUpdateTime]] < 60 * 60) {
+        NSDate* streakUpdateTime = [defaults objectForKey:@"streakUpdateTime"];
+        if ([streakUpdateTime isKindOfClass:[NSDate class]]) {
+            NSTimeInterval age = [[NSDate date] timeIntervalSinceDate:streakUpdateTime];
+            if (age >= 0 && age < 60 * 60) {
                 NSInteger streakDays = [defaults integerForKey:@"streakDays"];
                 NSLog(@"[INFO] Use cached streak days: %ld", streakDays);
                 [self updateStreakLabel:streakDays];
@@ -238,26 +258,8 @@
 
               NSArray* posts = json[@"data"];
               if (posts) {
-                  NSDateFormatter* isoDateFormatter = [NSDateFormatter new];
-                  [isoDateFormatter setDateFormat:@"yyyy-MM-dd'T'HH:mm:ss.SSS'Z'"];
-
-                  // Count streak days
-                  NSInteger streakDays = 0;
-                  NSDate* currentDate = [NSDate date];
-                  for (;;) {
-                      bool foundPost = false;
-                      for (NSDictionary* post in posts) {
-                          NSDate* postDate = [isoDateFormatter dateFromString:post[@"created_at"]];
-                          if ([[NSCalendar currentCalendar] isDate:postDate inSameDayAsDate:currentDate]) {
-                              streakDays++;
-                              currentDate = [currentDate dateByAddingTimeInterval:-24 * 60 * 60];
-                              foundPost = true;
-                              break;
-                          }
-                      }
-                      if (!foundPost)
-                          break;
-                  }
+                  NSDate* now = [NSDate date];
+                  NSInteger streakDays = countStreakDays(posts, now, [NSCalendar currentCalendar]);
                   NSLog(@"[INFO] Current streak: %ld days", streakDays);
 
                   dispatch_async(dispatch_get_main_queue(), ^{
@@ -265,7 +267,7 @@
 
                       NSUserDefaults* defaults = [NSUserDefaults standardUserDefaults];
                       [defaults setInteger:streakDays forKey:@"streakDays"];
-                      [defaults setObject:[isoDateFormatter stringFromDate:[NSDate date]] forKey:@"streakUpdateTime"];
+                      [defaults setObject:now forKey:@"streakUpdateTime"];
                       [defaults synchronize];
                   });
               }
