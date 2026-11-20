@@ -959,11 +959,11 @@ resources_section
             0x0001000000000000, 0x0001000000000000, \
             VOS__WINDOWS32, VFT_APP, VFT2_UNKNOWN, \
             LANG_ENGLISH + SUBLANG_ENGLISH_US, \
-            CompanyName, "PlaatSoft", \
+            CompanyName, "Bastiaan van der Plaat", \
             FileDescription, "RedSquare", \
             FileVersion, "1.0.0.0", \
             InternalName, "RedSquare", \
-            LegalCopyright, "Copyright (c) 2021 PlaatSoft", \
+            LegalCopyright, "Copyright (c) 2021 Bastiaan van der Plaat", \
             OriginalFilename, "redsquare-x64.exe", \
             ProductName, "RedSquare", \
             ProductVersion, "1.0.0.0"
@@ -972,11 +972,11 @@ resources_section
             0x0001000000000000, 0x0001000000000000, \
             VOS__WINDOWS32, VFT_APP, VFT2_UNKNOWN, \
             LANG_ENGLISH + SUBLANG_ENGLISH_US, \
-            CompanyName, "PlaatSoft", \
+            CompanyName, "Bastiaan van der Plaat", \
             FileDescription, "RedSquare", \
             FileVersion, "1.0.0.0", \
             InternalName, "RedSquare", \
-            LegalCopyright, "Copyright (c) 2021 PlaatSoft", \
+            LegalCopyright, "Copyright (c) 2021 Bastiaan van der Plaat", \
             OriginalFilename, "redsquare-x86.exe", \
             ProductName, "RedSquare", \
             ProductVersion, "1.0.0.0"
