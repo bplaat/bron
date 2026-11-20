@@ -2,7 +2,7 @@
 # Builds the Nintendo DS toolchain in ../../target/nds-toolchain/: fetches calico, libnds, libdvm, FatFs, the default
 # ARM7 program, picolibc, ndstool and LLVM's compiler-rt to src/, applies the patches in
 # patches/<name>/ and builds the libraries and the ARM7 program to lib/, picolibc (the C library) in
-# sysroot9/ and sysroot7/ and ndstool to bin/, with the intermediates in build/.
+# sysroot-arm9/ and sysroot-arm7/ and ndstool to bin/, with the intermediates in build/.
 # The port build scripts run this before they build.
 #
 # Usage: ./build.sh [command]...
@@ -62,9 +62,9 @@ COMMON_CFLAGS=(-ffunction-sections -fdata-sections -g -D__NDS__)
 ARM9_LIBC_CFLAGS=("${COMMON_CFLAGS[@]}" -DARM9 -O2)
 ARM7_LIBC_CFLAGS=("${COMMON_CFLAGS[@]}" -DARM7 -Os)
 ARM9_CFLAGS=("${ARM9_TARGET[@]}" "${ARM9_LIBC_CFLAGS[@]}" -nostdlibinc -D_DEFAULT_SOURCE
-    -I"$BUILD_DIR/sysroot9/include" -I"$CALICO_DIR/include")
+    -I"$BUILD_DIR/sysroot-arm9/include" -I"$CALICO_DIR/include")
 ARM7_CFLAGS=("${ARM7_TARGET[@]}" "${ARM7_LIBC_CFLAGS[@]}" -nostdlibinc -D_DEFAULT_SOURCE
-    -I"$BUILD_DIR/sysroot7/include" -I"$CALICO_DIR/include")
+    -I"$BUILD_DIR/sysroot-arm7/include" -I"$CALICO_DIR/include")
 LIB_CFLAGS=(-std=gnu17 -w -I"$LIBNDS_DIR/include" -I"$LIBDVM_DIR/include"
     -I"$FATFS_DIR/source")
 
@@ -234,9 +234,9 @@ meson_array() {
 }
 
 # Builds picolibc with meson for a CPU (9 or 7) and installs its headers and libc.a, which
-# includes the math library, in target/sysroot<cpu>/
+# includes the math library, in target/nds-toolchain/sysroot-arm<cpu>/
 build_picolibc() {
-    local cpu="$1" sysroot="$BUILD_DIR/sysroot$1" build="$OBJECTS_DIR/picolibc$1" target cflags
+    local cpu="$1" sysroot="$BUILD_DIR/sysroot-arm$1" build="$OBJECTS_DIR/picolibc$1" target cflags
     if [ "$cpu" = 9 ]; then
         target=("${ARM9_TARGET[@]}") cflags=("${ARM9_LIBC_CFLAGS[@]}")
     else
@@ -321,13 +321,13 @@ build_libraries() {
     build_picolibc 9
     build_picolibc 7
     # The library sources are checked too, so edits in target/src/ get built
-    outdated "$LIB_DIR/libcalico9.a" "$CALICO_DIR"/{source,include} "$BUILD_DIR/sysroot9/lib/libc.a" \
+    outdated "$LIB_DIR/libcalico9.a" "$CALICO_DIR"/{source,include} "$BUILD_DIR/sysroot-arm9/lib/libc.a" \
         "$TOOLCHAIN_DIR/build.sh" && build_archive libcalico9.a "${ARM9_CFLAGS[@]}" "${LIB_CFLAGS[@]}" -- \
             "${calico[@]}" "${CALICO9_SOURCES[@]/#/$CALICO_DIR/source/}"
-    outdated "$LIB_DIR/libcalico7.a" "$CALICO_DIR"/{source,include} "$BUILD_DIR/sysroot7/lib/libc.a" \
+    outdated "$LIB_DIR/libcalico7.a" "$CALICO_DIR"/{source,include} "$BUILD_DIR/sysroot-arm7/lib/libc.a" \
         "$TOOLCHAIN_DIR/build.sh" && build_archive libcalico7.a "${ARM7_CFLAGS[@]}" "${LIB_CFLAGS[@]}" -- \
             "${calico[@]}" "${CALICO7_SOURCES[@]/#/$CALICO_DIR/source/}"
-    if outdated "$LIB_DIR/libnds9.a" "$LIBNDS_DIR"/{source,include} "$BUILD_DIR/sysroot9/lib/libc.a" \
+    if outdated "$LIB_DIR/libnds9.a" "$LIBNDS_DIR"/{source,include} "$BUILD_DIR/sysroot-arm9/lib/libc.a" \
         "$TOOLCHAIN_DIR/build.sh"; then
         # The console font is embedded as it is
         mkdir -p "$OBJECTS_DIR/generated"
@@ -338,7 +338,7 @@ build_libraries() {
             "${LIBNDS_SOURCES[@]/#/$LIBNDS_DIR/source/}" "$OBJECTS_DIR/generated/default_font.s"
     fi
     outdated "$LIB_DIR/libdvm.a" "$LIBDVM_DIR"/{source,include} "$FATFS_DIR/source" \
-        "$BUILD_DIR/sysroot9/lib/libc.a" "$TOOLCHAIN_DIR/build.sh" &&
+        "$BUILD_DIR/sysroot-arm9/lib/libc.a" "$TOOLCHAIN_DIR/build.sh" &&
         build_archive libdvm.a "${ARM9_CFLAGS[@]}" "${LIB_CFLAGS[@]}" -DLIBDVM_BUFFER_ALIGN=32 \
             -DLIBDVM_WITH_CACHE_COPY -DLIBDVM_WITH_ALIGNED_ACCESS -- \
             "$LIBDVM_DIR"/source/{dvm_disc,dvm_cache,dvm_volume,dvm_prober,fat_wrappers,fat_driver}.c \
@@ -354,14 +354,14 @@ build_libraries() {
 # the ports and talks to it through calico
 build_arm7() {
     local objects_dir="$OBJECTS_DIR/ds7"
-    outdated "$LIB_DIR/ds7.elf" "$LIB_DIR"/lib{calico7,compiler-rt7}.a "$BUILD_DIR/sysroot7/lib/libc.a" \
+    outdated "$LIB_DIR/ds7.elf" "$LIB_DIR"/lib{calico7,compiler-rt7}.a "$BUILD_DIR/sysroot-arm7/lib/libc.a" \
         "$SRC_DIR/default-arm7" "$CALICO_DIR/share/ds7.ld" || return 0
     msg "Building ds7.elf"
     mkdir -p "$objects_dir"
     "${LLVM}clang" "${ARM7_CFLAGS[@]}" -Wall -DENABLE_BLKDEV -DENABLE_SOUND \
         -c "$SRC_DIR/default-arm7/arm7_main.c" -o "$objects_dir/arm7_main.o"
     ld.lld -T "$CALICO_DIR/share/ds7.ld" --gc-sections --nmagic --section-start=.main=0x02ff0000 \
-        "$objects_dir/arm7_main.o" --start-group "$LIB_DIR/libcalico7.a" "$BUILD_DIR/sysroot7/lib/libc.a" \
+        "$objects_dir/arm7_main.o" --start-group "$LIB_DIR/libcalico7.a" "$BUILD_DIR/sysroot-arm7/lib/libc.a" \
         "$LIB_DIR/libcompiler-rt7.a" --end-group -o "$LIB_DIR/ds7.elf"
 }
 

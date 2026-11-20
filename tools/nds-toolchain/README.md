@@ -13,7 +13,7 @@ the intermediates in `build/`:
   `patches/<name>/`, to `../../target/nds-toolchain/lib/lib*.a` and `../../target/nds-toolchain/lib/ds7.elf`
 - [picolibc](https://github.com/picolibc/picolibc) 1.8.12 with `patches/picolibc/`, built with meson
   as the C library for each CPU, its headers and `libc.a` with the math library go to
-  `../../target/nds-toolchain/sysroot9/` and `../../target/nds-toolchain/sysroot7/`
+  `../../target/nds-toolchain/sysroot-arm9/` and `../../target/nds-toolchain/sysroot-arm7/`
 - [ndstool](https://github.com/devkitPro/ndstool) v2.3.1 to `../../target/nds-toolchain/bin/ndstool`
 - the builtins of LLVM's [compiler-rt](https://github.com/llvm/llvm-project/tree/main/compiler-rt/lib/builtins)
   llvmorg-23.1.3 (64-bit integer math, division and software floating point) to

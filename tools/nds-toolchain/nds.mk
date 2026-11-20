@@ -17,7 +17,8 @@
 
 TOOLCHAIN_TARGET := $(abspath $(TOOLCHAIN)/../../target/nds-toolchain)
 BUILD ?= build
-OFILES += $(addprefix $(BUILD)/,$(addsuffix .o,$(SOURCES)) $(addsuffix .itcm.o,$(ITCM_SOURCES)))
+ARM9_OFILES = $(addprefix $(BUILD)/,$(addsuffix .o,$(SOURCES)) $(addsuffix .itcm.o,$(ITCM_SOURCES)))
+OFILES += $(ARM9_OFILES)
 
 # Apple's clang can't target ARM bare metal, so prefer Homebrew's LLVM when it's installed
 LLVM := $(firstword $(wildcard /opt/homebrew/opt/llvm/bin/ /usr/local/opt/llvm/bin/))
@@ -32,18 +33,18 @@ LD := ld.lld
 # through a byte pointer writes bytes, which VRAM ignores
 CFLAGS := --target=armv5te-none-eabi -mcpu=arm946e-s -mthumb -DARM9 -D__NDS__ -D_DEFAULT_SOURCE \
 	-nostdlibinc -ffunction-sections -fdata-sections -g -O3 -fno-builtin-memcpy \
-	-fno-builtin-memmove -fno-builtin-memset -Wall -I$(TOOLCHAIN_TARGET)/sysroot9/include \
+	-fno-builtin-memmove -fno-builtin-memset -Wall -I$(TOOLCHAIN_TARGET)/sysroot-arm9/include \
 	-I$(TOOLCHAIN_TARGET)/src/calico/include -I$(TOOLCHAIN_TARGET)/src/libnds/include \
 	-I$(TOOLCHAIN_TARGET)/src/libdvm/include
-LIBS := $(addprefix $(TOOLCHAIN_TARGET)/,lib/libnds9.a lib/libdvm.a lib/libcalico9.a sysroot9/lib/libc.a \
+LIBS := $(addprefix $(TOOLCHAIN_TARGET)/,lib/libnds9.a lib/libdvm.a lib/libcalico9.a sysroot-arm9/lib/libc.a \
 	lib/libcompiler-rt9.a)
 
 # The ARM7 is an ARM7TDMI (ARMv4T), which can't switch between ARM and Thumb code in a direct call,
 # so its calls are long calls through a register
 ARM7_CFLAGS := --target=armv4t-none-eabi -mcpu=arm7tdmi -marm -mlong-calls -DARM7 -D__NDS__ \
 	-D_DEFAULT_SOURCE -nostdlibinc -ffunction-sections -fdata-sections -g -O2 -Wall \
-	-I$(TOOLCHAIN_TARGET)/sysroot7/include -I$(TOOLCHAIN_TARGET)/src/calico/include
-ARM7_LIBS := $(addprefix $(TOOLCHAIN_TARGET)/,lib/libcalico7.a sysroot7/lib/libc.a lib/libcompiler-rt7.a)
+	-I$(TOOLCHAIN_TARGET)/sysroot-arm7/include -I$(TOOLCHAIN_TARGET)/src/calico/include
+ARM7_LIBS := $(addprefix $(TOOLCHAIN_TARGET)/,lib/libcalico7.a sysroot-arm7/lib/libc.a lib/libcompiler-rt7.a)
 ARM7_OFILES := $(addprefix $(BUILD)/,$(addsuffix .arm7.o,$(ARM7_SOURCES)))
 ARM7_ELF := $(if $(ARM7_SOURCES),$(NAME)7.elf,$(TOOLCHAIN_TARGET)/lib/ds7.elf)
 
@@ -64,6 +65,8 @@ $(NAME)7.elf: $(TOOLCHAIN_TARGET)/build/ds7/arm7_main.o $(ARM7_OFILES) $(ARM7_LI
 	$(LD) -T $(TOOLCHAIN_TARGET)/src/calico/share/ds7.ld --gc-sections --nmagic --section-start=.main=0x02ff0000 \
 		$(TOOLCHAIN_TARGET)/build/ds7/arm7_main.o $(ARM7_OFILES) --start-group $(ARM7_LIBS) \
 		--end-group -o $@
+
+$(ARM9_OFILES) $(ARM7_OFILES): $(TOOLCHAIN)/nds.mk
 
 $(BUILD)/%.arm7.o: %.c
 	@mkdir -p $(dir $@)
