@@ -57,18 +57,16 @@ impl Particles {
                 index / (SPLIT * SPLIT),
             ]
             .map(|cell| (cell as f32 + 0.5) / SPLIT as f32);
-            let velocity = core::array::from_fn(|axis| {
+            let velocity = std::array::from_fn(|axis| {
                 (cell[axis] - 0.5) * 3.0 + (self.random() - 0.5) * 1.5 + [0.0, 2.5, 0.0][axis]
             });
             let life = 0.5 + self.random() * 0.6;
-            let spin = self.random() * core::f32::consts::TAU;
+            let spin = self.random() * std::f32::consts::TAU;
             if self.particles.len() == MAX_PARTICLES {
                 self.particles.remove(0);
             }
             self.particles.push(Particle {
-                position: core::array::from_fn(|axis| {
-                    position[axis] as f64 + f64::from(cell[axis])
-                }),
+                position: std::array::from_fn(|axis| position[axis] as f64 + f64::from(cell[axis])),
                 material,
                 spin,
                 velocity,

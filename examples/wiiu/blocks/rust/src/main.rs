@@ -7,8 +7,8 @@
 //! Generates a random 64x64x64 voxel world and renders its visible block faces on the TV and the
 //! GamePad.
 
-use core::f64::consts::TAU;
-use core::mem::{MaybeUninit, offset_of};
+use std::f64::consts::TAU;
+use std::mem::{MaybeUninit, offset_of};
 use std::process::ExitCode;
 
 use wut_sys::*;

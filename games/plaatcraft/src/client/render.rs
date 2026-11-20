@@ -8,9 +8,9 @@
 //! distance, the sky, the other players, the particles, the held block and the targeted
 //! block's outline, after the shaders of the desktop game.
 
-use core::array;
-use core::f32::consts::PI;
+use std::array;
 use std::collections::BTreeMap;
+use std::f32::consts::PI;
 
 use super::light::{encode_rgb, fog_color, mix};
 use super::platform::{Fog, Gpu, Mtx, Mtx44, Pass, State, Texture, Vertex};

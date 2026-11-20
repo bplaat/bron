@@ -4,8 +4,8 @@
  * SPDX-License-Identifier: MIT
  */
 
-use core::mem;
-use core::ptr::NonNull;
+use std::mem;
+use std::ptr::NonNull;
 
 use wut_sys::*;
 
@@ -132,8 +132,8 @@ impl Drop for Mesh {
 fn face_vertices(face: &Face, water: bool) -> [Vertex; 4] {
     let corners = face.side.corners();
     let shade = ((0.42 + 0.58 * face.side.light()) * f32::from(face.ambient_occlusion)) as u8;
-    core::array::from_fn(|corner| Vertex {
-        position: core::array::from_fn(|axis| {
+    std::array::from_fn(|corner| Vertex {
+        position: std::array::from_fn(|axis| {
             f32::from(face.position[axis] + corners[corner][axis])
         }),
         tex_coord: UV[corner],

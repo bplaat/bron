@@ -8,8 +8,8 @@
 //! voxel pack's male character. The texture coordinates of a box follow its side, so its front
 //! and back stretch the sprite's face and back edges.
 
-use core::f32::consts::{PI, TAU};
 use std::collections::BTreeMap;
+use std::f32::consts::{PI, TAU};
 
 use crate::assets::PARTS;
 use crate::camera::View;
@@ -230,8 +230,8 @@ impl Other {
                         texture: Texture::Block(self.held, index),
                         pivot: [(width + arm[0]) / 2.0, shoulder],
                         pitch: held_pitch,
-                        size: core::array::from_fn(|a| (bounds[1][a] - bounds[0][a]) * HELD_SIZE),
-                        offset: core::array::from_fn(|a| {
+                        size: std::array::from_fn(|a| (bounds[1][a] - bounds[0][a]) * HELD_SIZE),
+                        offset: std::array::from_fn(|a| {
                             [-HELD_SIZE / 2.0, -arm[1] - HELD_SIZE / 2.0 + 0.04, 0.06][a]
                                 + bounds[0][a] * HELD_SIZE
                         }),
@@ -322,7 +322,7 @@ mod tests {
                 } else if let Some(bounds) = boxes.get(index) {
                     assert_eq!(
                         held.size,
-                        core::array::from_fn(|a| {
+                        std::array::from_fn(|a| {
                             (bounds[1][a] - bounds[0][a]) as f32 * HELD_SIZE
                         })
                     );

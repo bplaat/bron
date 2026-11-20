@@ -7,9 +7,9 @@
 //! A mutex and condition variable on top of the system's, like std's.
 #![allow(unsafe_code)]
 
-use core::cell::UnsafeCell;
-use core::marker::PhantomData;
-use core::ops::{Deref, DerefMut};
+use std::cell::UnsafeCell;
+use std::marker::PhantomData;
+use std::ops::{Deref, DerefMut};
 
 use super::platform::{Lock, Signal};
 

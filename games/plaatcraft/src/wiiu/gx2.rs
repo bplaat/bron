@@ -9,11 +9,11 @@
 //! have day and night colors so the night needs no new meshes. Other draws stream vertices
 //! to a buffer that starts over every frame.
 
-use core::ffi::c_void;
-use core::mem::{MaybeUninit, offset_of};
-use core::ops::Range;
-use core::ptr::{self, NonNull};
-use core::sync::atomic::{AtomicPtr, Ordering};
+use std::ffi::c_void;
+use std::mem::{MaybeUninit, offset_of};
+use std::ops::Range;
+use std::ptr::{self, NonNull};
+use std::sync::atomic::{AtomicPtr, Ordering};
 
 use plaatcraft::client::{
     Fog, Gpu, Mtx, Mtx44, NIGHT_DAYLIGHT, Pass, State, Texture, Vertex, linear_palette, linear_rgb,
@@ -82,7 +82,7 @@ impl Buffer {
     }
 
     fn slice(&mut self) -> &mut [GpuVertex] {
-        unsafe { core::slice::from_raw_parts_mut(self.pointer.as_ptr(), self.length) }
+        unsafe { std::slice::from_raw_parts_mut(self.pointer.as_ptr(), self.length) }
     }
 
     // The GPU reads vertex buffers from their aligned start, draws give their first vertex
@@ -133,7 +133,7 @@ fn palettes() -> &'static Palettes {
         let made = Box::into_raw(Box::new(Palettes {
             day: linear_palette(1.0),
             night: linear_palette(NIGHT_DAYLIGHT),
-            srgb: core::array::from_fn(|value| linear_rgb([value as u8; 3])[0]),
+            srgb: std::array::from_fn(|value| linear_rgb([value as u8; 3])[0]),
         }));
         palettes = match PALETTES.compare_exchange(
             ptr::null_mut(),

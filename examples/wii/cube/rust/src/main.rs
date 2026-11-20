@@ -4,11 +4,11 @@
  * SPDX-License-Identifier: MIT
  */
 
-use core::ffi::{c_int, c_void};
-use core::ptr;
-use core::ptr::NonNull;
-use core::sync::atomic::{AtomicBool, Ordering};
+use std::ffi::{c_int, c_void};
 use std::process::ExitCode;
+use std::ptr;
+use std::ptr::NonNull;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use libogc_sys::*;
 

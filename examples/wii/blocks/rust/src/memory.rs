@@ -4,8 +4,8 @@
  * SPDX-License-Identifier: MIT
  */
 
-use core::ffi::c_void;
-use core::ptr::NonNull;
+use std::ffi::c_void;
+use std::ptr::NonNull;
 
 use libogc_sys::{
     DCInvalidateRange, GXRModeObj, SYS_AllocateFramebuffer, SYS_BASE_CACHED, SYS_BASE_UNCACHED,
@@ -63,7 +63,7 @@ impl AlignedBuffer {
     }
 
     pub fn zero(&mut self) {
-        unsafe { core::ptr::write_bytes(self.as_ptr(), 0, self.size as usize) }
+        unsafe { std::ptr::write_bytes(self.as_ptr(), 0, self.size as usize) }
     }
 
     pub fn invalidate(&mut self) {

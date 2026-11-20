@@ -7,7 +7,7 @@
 //! The Wii U GamePad and a Wii Remote with Nunchuk, read with VPAD and KPAD for the engine's
 //! controls, both play at the same time.
 
-use core::mem::MaybeUninit;
+use std::mem::MaybeUninit;
 
 use plaatcraft::client::Controller;
 use plaatcraft::client::desktop::Desktop;
@@ -284,7 +284,7 @@ mod tests {
                 left: [0.2, 0.3],
                 ..Gamepad::default()
             },
-            wiimotes: core::array::from_fn(|channel| Wiimote {
+            wiimotes: std::array::from_fn(|channel| Wiimote {
                 stick: Some([0.0, (channel + 1) as f32 / 5.0]),
                 pressed: Wiimote::A,
                 ..Wiimote::default()

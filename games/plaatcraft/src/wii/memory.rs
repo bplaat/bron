@@ -4,9 +4,9 @@
  * SPDX-License-Identifier: MIT
  */
 
-use core::alloc::{GlobalAlloc, Layout};
-use core::ffi::c_void;
-use core::ptr::NonNull;
+use std::alloc::{GlobalAlloc, Layout};
+use std::ffi::c_void;
+use std::ptr::NonNull;
 
 use libogc_sys::{
     DCFlushRange, GXRModeObj, SYS_AllocateFramebuffer, SYS_BASE_CACHED, SYS_BASE_UNCACHED, free,
@@ -55,7 +55,7 @@ impl AlignedBuffer {
             return None;
         }
         let buffer = HeapBuffer::from_raw(unsafe { memalign(32, size) })?;
-        unsafe { core::ptr::write_bytes(buffer.as_ptr(), 0, size) };
+        unsafe { std::ptr::write_bytes(buffer.as_ptr(), 0, size) };
         Some(Self {
             buffer,
             size: size as u32,

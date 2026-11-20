@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: MIT
  */
 
-use core::ffi::c_void;
+use std::ffi::c_void;
 
 use wut_sys::DCFlushRange;
 

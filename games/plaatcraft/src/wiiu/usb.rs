@@ -6,9 +6,9 @@
 
 //! Native nsyskbd keyboard input and nsyshid boot mice, assigned to P1.
 
-use core::ffi::c_void;
-use core::ptr;
-use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::ffi::c_void;
+use std::ptr;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use plaatcraft::client::Thread;
 use plaatcraft::client::desktop::DesktopEvents;
@@ -106,7 +106,7 @@ unsafe extern "C" fn read(
     if handle == MOUSE.load(Ordering::Acquire) {
         if error == 0 && !buffer.is_null() && (3..=64).contains(&length) {
             // nsyshid owns this aligned buffer until the callback completes.
-            let report = unsafe { core::slice::from_raw_parts(buffer, length as usize) };
+            let report = unsafe { std::slice::from_raw_parts(buffer, length as usize) };
             EVENTS.boot_mouse(report);
         } else {
             EVENTS.disconnect_mouse();

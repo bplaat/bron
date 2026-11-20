@@ -48,7 +48,7 @@ impl<'a, G: Gpu> Hud<'a, G> {
         uvs: [[f32; 2]; 4],
         colors: [u32; 4],
     ) {
-        let vertices: [Vertex; 4] = core::array::from_fn(|i| Vertex {
+        let vertices: [Vertex; 4] = std::array::from_fn(|i| Vertex {
             position: [corners[i][0], corners[i][1], 0.0],
             color: colors[i],
             uv: uvs[i],

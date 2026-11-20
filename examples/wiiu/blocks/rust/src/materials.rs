@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: MIT
  */
 
-use core::mem;
+use std::mem;
 
 use wut_sys::*;
 

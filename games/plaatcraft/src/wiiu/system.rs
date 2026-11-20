@@ -6,9 +6,9 @@
 
 //! Threads, mutexes and condition variables of Cafe OS, the nsysnet sockets and the time base.
 
-use core::cell::UnsafeCell;
-use core::ffi::{c_char, c_int, c_void};
-use core::mem::MaybeUninit;
+use std::cell::UnsafeCell;
+use std::ffi::{c_char, c_int, c_void};
+use std::mem::MaybeUninit;
 
 use plaatcraft::client::{Address, Io, Lock, Signal, Socket, Thread};
 use wut_sys::*;

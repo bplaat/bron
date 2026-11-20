@@ -4,11 +4,11 @@
  * SPDX-License-Identifier: MIT
  */
 
-use core::ffi::{c_int, c_void};
-use core::ptr;
-use core::ptr::NonNull;
-use core::sync::atomic::{AtomicBool, Ordering};
+use std::ffi::{c_int, c_void};
 use std::process::ExitCode;
+use std::ptr;
+use std::ptr::NonNull;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use libogc_sys::*;
 
@@ -130,9 +130,9 @@ impl TriangleScene {
                 for x in -2..2 {
                     let mut matrix = [[0.0; 4]; 3];
                     let mut temp = [[0.0; 4]; 3];
-                    let radians = self.rotation * (core::f32::consts::PI / 180.0);
-                    ps_guMtxRotRad(&mut matrix, b'x' as core::ffi::c_char, radians);
-                    ps_guMtxRotRad(&mut temp, b'y' as core::ffi::c_char, radians);
+                    let radians = self.rotation * (std::f32::consts::PI / 180.0);
+                    ps_guMtxRotRad(&mut matrix, b'x' as std::ffi::c_char, radians);
+                    ps_guMtxRotRad(&mut temp, b'y' as std::ffi::c_char, radians);
                     ps_guMtxConcat(&matrix, &temp, &mut matrix);
                     ps_guMtxTransApply(
                         &matrix,

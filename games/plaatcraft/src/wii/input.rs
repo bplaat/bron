@@ -6,7 +6,7 @@
 
 //! The Wii Remote with Nunchuk, read with WPAD for the engine's Wii Remote controls.
 
-use core::mem::MaybeUninit;
+use std::mem::MaybeUninit;
 
 use libogc_sys::*;
 use plaatcraft::client::Controller;

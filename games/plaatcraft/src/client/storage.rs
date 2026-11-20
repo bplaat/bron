@@ -14,11 +14,10 @@
 //! chunks with it.
 #![allow(unsafe_code)]
 
-use core::ffi::{CStr, c_int};
-use core::marker::PhantomData;
-use core::ptr;
 use std::collections::BTreeMap;
-use std::ffi::CString;
+use std::ffi::{CStr, CString, c_int};
+use std::marker::PhantomData;
+use std::ptr;
 use std::sync::Arc;
 
 use libsqlite3_sys as sql;
@@ -427,7 +426,7 @@ impl Statement<'_> {
         }
         // SAFETY: SQLite keeps the blob of the size until the statement steps again, the slice
         // borrows the statement.
-        Ok(unsafe { core::slice::from_raw_parts(data.cast(), size as usize) })
+        Ok(unsafe { std::slice::from_raw_parts(data.cast(), size as usize) })
     }
 
     // SQLite borrows the data until the statement steps.

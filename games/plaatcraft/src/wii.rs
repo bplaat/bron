@@ -9,8 +9,8 @@
 
 #![cfg_attr(feature = "bench", allow(dead_code, unused_imports))]
 
-use core::sync::atomic::{AtomicBool, Ordering};
 use std::process::ExitCode;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use libogc_sys::*;
 use plaatcraft::client::{Game, Gpu, Platform, Thread};
@@ -110,7 +110,7 @@ pub(crate) fn main() {
     println!("{}", plaatcraft::client::bench::<Wii>());
     // Returning reloads the system menu, the script stops Dolphin after the results
     loop {
-        core::hint::spin_loop();
+        std::hint::spin_loop();
     }
 }
 

@@ -49,7 +49,7 @@ pub const MAX_CHAT_LENGTH: usize = 100;
 /// Input datagrams repeat the last inputs, so a lost datagram loses no input.
 pub const REPEATED_INPUTS: usize = 3;
 
-type Result<T> = core::result::Result<T, String>;
+type Result<T> = std::result::Result<T, String>;
 
 /// What a player asks the server.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -456,21 +456,21 @@ fn encode<T: Serialize>(value: &T, prefix: Vec<u8>) -> Vec<u8> {
 }
 
 // Text is cut off at the most a message holds.
-fn bounded<S: Serializer>(value: &str, serializer: S) -> core::result::Result<S::Ok, S::Error> {
+fn bounded<S: Serializer>(value: &str, serializer: S) -> std::result::Result<S::Ok, S::Error> {
     serializer.serialize_str(&value[..value.floor_char_boundary(MAX_STRING)])
 }
 
 fn first_players<S: Serializer>(
     others: &[PlayerInfo],
     serializer: S,
-) -> core::result::Result<S::Ok, S::Error> {
+) -> std::result::Result<S::Ok, S::Error> {
     others[..others.len().min(MAX_PLAYERS)].serialize(serializer)
 }
 
 fn newest_inputs<S: Serializer>(
     inputs: &[(u32, Controls)],
     serializer: S,
-) -> core::result::Result<S::Ok, S::Error> {
+) -> std::result::Result<S::Ok, S::Error> {
     inputs[inputs.len().saturating_sub(REPEATED_INPUTS)..].serialize(serializer)
 }
 

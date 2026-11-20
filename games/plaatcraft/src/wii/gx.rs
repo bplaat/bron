@@ -7,8 +7,8 @@
 //! The display and drawing with GX: the chunks as display lists of fixed point vertices lit
 //! by an indexed palette, the other draws in immediate mode.
 
-use core::ops::Range;
-use core::ptr;
+use std::ops::Range;
+use std::ptr;
 
 use libogc_sys::*;
 use plaatcraft::client::{Fog, Gpu, Mtx, Mtx44, Pass, State, Texture, Vertex, mesh, palette};

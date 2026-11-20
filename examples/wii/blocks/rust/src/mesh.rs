@@ -24,7 +24,7 @@ pub struct Mesh {
 
 impl Mesh {
     pub fn build(faces: &[Vec<Face>; Material::COUNT]) -> Option<Self> {
-        let mut lists = core::array::from_fn(|_| None);
+        let mut lists = std::array::from_fn(|_| None);
         for (material, instances) in Material::ALL.into_iter().zip(faces) {
             if instances.is_empty() {
                 continue;
@@ -107,5 +107,5 @@ fn emit_face(face: &Face, water: bool) {
 
 #[inline]
 unsafe fn pipe_u8(value: u8) {
-    unsafe { core::ptr::write_volatile(wgPipe.cast::<u8>(), value) }
+    unsafe { std::ptr::write_volatile(wgPipe.cast::<u8>(), value) }
 }

@@ -6,7 +6,7 @@
 
 //! Desktop controls shared by the consoles' USB keyboard and mouse backends.
 
-use core::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicUsize, Ordering};
 
 use super::input::{Button, Context, Pad};
 

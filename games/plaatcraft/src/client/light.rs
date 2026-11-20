@@ -46,7 +46,7 @@ pub(super) fn encode_rgb(color: [f32; 3]) -> [u8; 3] {
 }
 
 pub(super) fn mix(a: [f32; 3], b: [f32; 3], t: f32) -> [f32; 3] {
-    core::array::from_fn(|i| a[i] + (b[i] - a[i]) * t)
+    std::array::from_fn(|i| a[i] + (b[i] - a[i]) * t)
 }
 
 pub(super) fn fog_color(daylight: f32) -> [f32; 3] {
@@ -94,7 +94,7 @@ fn color(index: u16, daylight: f32) -> [f32; 4] {
     let lit: [f32; 3] = if tint == TINT_LAVA {
         [1.0; 3]
     } else {
-        core::array::from_fn(|i| sky[i].max(block[i]).max(minimum) * faces[face] * color[i])
+        std::array::from_fn(|i| sky[i].max(block[i]).max(minimum) * faces[face] * color[i])
     };
     let [r, g, b] = lit.map(|value| value * occlusion);
     [r, g, b, f32::from(alpha) / 255.0]

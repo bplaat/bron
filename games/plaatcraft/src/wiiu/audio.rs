@@ -7,7 +7,7 @@
 //! The sound effects rendered at startup, the DSP mixes them with AX and changes their pitch
 //! and volume, on the TV and the GamePad.
 
-use core::ptr;
+use std::ptr;
 
 use plaatcraft::client::Audio;
 use plaatcraft::client::sound::samples;
@@ -42,7 +42,7 @@ impl Ax {
                 memory::flush(&samples);
                 samples
             }),
-            voices: core::array::from_fn(|_| unsafe { AXAcquireVoice(31, None, ptr::null_mut()) }),
+            voices: std::array::from_fn(|_| unsafe { AXAcquireVoice(31, None, ptr::null_mut()) }),
             next: 0,
         }
     }

@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: MIT
  */
 
-use core::ffi::c_char;
+use std::ffi::c_char;
 
 use libogc_sys::*;
 
@@ -13,11 +13,11 @@ use crate::texture::Texture;
 
 #[inline]
 unsafe fn pipe_u32(value: u32) {
-    unsafe { core::ptr::write_volatile(wgPipe.cast::<u32>(), value) }
+    unsafe { std::ptr::write_volatile(wgPipe.cast::<u32>(), value) }
 }
 #[inline]
 unsafe fn pipe_f32(value: f32) {
-    unsafe { core::ptr::write_volatile(wgPipe.cast::<f32>(), value) }
+    unsafe { std::ptr::write_volatile(wgPipe.cast::<f32>(), value) }
 }
 
 #[inline]
@@ -212,5 +212,5 @@ pub unsafe fn draw_cube(texture: &Texture, rotation: f32, projection: &Mtx44) {
 }
 #[inline]
 pub unsafe fn rotate_degrees(matrix: *mut Mtx, axis: c_char, degrees: f32) {
-    unsafe { ps_guMtxRotRad(matrix, axis, degrees * (core::f32::consts::PI / 180.0)) }
+    unsafe { ps_guMtxRotRad(matrix, axis, degrees * (std::f32::consts::PI / 180.0)) }
 }

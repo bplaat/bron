@@ -97,7 +97,7 @@ pub fn raycast(
             1.0 / v.abs()
         }
     });
-    let mut next = core::array::from_fn::<_, 3, _>(|axis| {
+    let mut next = std::array::from_fn::<_, 3, _>(|axis| {
         if step[axis] == 0 {
             f64::INFINITY
         } else {

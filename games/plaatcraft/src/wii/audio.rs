@@ -7,7 +7,7 @@
 //! The sound effects rendered at startup, the DSP mixes them with AESND and changes their
 //! pitch, volume and pan in hardware.
 
-use core::ptr;
+use std::ptr;
 
 use libogc_sys::*;
 use plaatcraft::client::Audio;
@@ -40,7 +40,7 @@ impl Aesnd {
                 memory::flush(&samples);
                 samples
             }),
-            voices: core::array::from_fn(|_| unsafe {
+            voices: std::array::from_fn(|_| unsafe {
                 AESND_AllocateVoiceWithArg(None, ptr::null_mut())
             }),
             next: 0,

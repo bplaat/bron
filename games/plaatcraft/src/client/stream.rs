@@ -13,9 +13,9 @@
 //! memory until a save writes them, because SD card writes are slow. Lighting a chunk needs
 //! its neighbors, so it keeps the chunks next to the chunks it still has to build.
 
-use core::{array, mem};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Arc;
+use std::{array, mem};
 
 use super::local::Saved;
 use super::mesh;

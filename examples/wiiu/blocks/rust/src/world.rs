@@ -200,7 +200,7 @@ impl World {
     }
 
     pub(crate) fn faces_by_material(&self) -> [Vec<Face>; Material::COUNT] {
-        let mut faces = core::array::from_fn(|_| Vec::new());
+        let mut faces = std::array::from_fn(|_| Vec::new());
         for water in [false, true] {
             for z in 0..SIZE {
                 for y in 0..SIZE {
@@ -282,7 +282,7 @@ impl World {
 
     fn noise(&self, seed: u32, point: [f32; 3]) -> f32 {
         let cell = point.map(|value| floorf(value));
-        let fraction = core::array::from_fn::<_, 3, _>(|axis| point[axis] - cell[axis]);
+        let fraction = std::array::from_fn::<_, 3, _>(|axis| point[axis] - cell[axis]);
         let weight = fraction.map(|value| value * value * (3.0 - 2.0 * value));
         let [x, y, z] = cell.map(|value| value as i32);
         let mix = |from: f32, to: f32, amount: f32| from + (to - from) * amount;
@@ -624,8 +624,8 @@ mod tests {
         let sun_length = (0.45_f32 * 0.45 + 0.78 * 0.78 + 0.30 * 0.30).sqrt();
         for side in FaceSide::ALL {
             let corners = side.corners().map(|corner| corner.map(i32::from));
-            let a = core::array::from_fn::<_, 3, _>(|axis| corners[1][axis] - corners[0][axis]);
-            let b = core::array::from_fn::<_, 3, _>(|axis| corners[2][axis] - corners[0][axis]);
+            let a = std::array::from_fn::<_, 3, _>(|axis| corners[1][axis] - corners[0][axis]);
+            let b = std::array::from_fn::<_, 3, _>(|axis| corners[2][axis] - corners[0][axis]);
             assert_eq!(
                 [
                     a[1] * b[2] - a[2] * b[1],

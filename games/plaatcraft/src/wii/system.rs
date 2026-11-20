@@ -7,9 +7,9 @@
 //! Threads, mutexes and condition variables of libogc's LWP kernel, its sockets, the time
 //! base and the system settings.
 
-use core::ffi::{CStr, c_void};
-use core::ptr;
-use core::sync::atomic::{AtomicBool, AtomicI32, Ordering};
+use std::ffi::{CStr, c_void};
+use std::ptr;
+use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 
 use libogc_sys::*;
 use plaatcraft::client::{Address, Io, Lock, Signal, Socket, Thread};

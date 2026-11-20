@@ -12,7 +12,7 @@
 //! [`ChunkData::encode_blocks`]: crate::world::ChunkData::encode_blocks
 //! [`Player::encode`]: crate::protocol::Player::encode
 
-use core::ffi::CStr;
+use std::ffi::CStr;
 
 use crate::protocol::valid_char;
 

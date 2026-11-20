@@ -110,7 +110,7 @@ impl<P: Platform> Network<P> {
     }
 
     pub(super) fn events(&self) -> VecDeque<Event> {
-        core::mem::take(&mut self.shared.lock().events)
+        std::mem::take(&mut self.shared.lock().events)
     }
 }
 
@@ -286,7 +286,7 @@ fn run<P: Platform>(shared: &Mutex<P::Lock, Shared>) {
     let mut next_id = P::MAX_LOCAL_PLAYERS as u32;
     let mut last_announce = 0.0;
     loop {
-        let commands = core::mem::take(&mut shared.lock().commands);
+        let commands = std::mem::take(&mut shared.lock().commands);
         for command in commands {
             if !ready && !matches!(command, Command::Stop) {
                 match P::connect_network() {

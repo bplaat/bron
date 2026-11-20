@@ -30,7 +30,7 @@ impl Perlin {
         hash ^= hash >> 13;
         hash = hash.wrapping_mul(0x85eb_ca6b);
         hash ^= hash >> 16;
-        let diagonal = core::f64::consts::FRAC_1_SQRT_2;
+        let diagonal = std::f64::consts::FRAC_1_SQRT_2;
         match hash & 7 {
             0 => dx,
             1 => -dx,
@@ -85,7 +85,7 @@ mod tests {
         };
         // The gradients of this offset are all distinct, so they identify the hash
         let (dx, dz) = (1.0, 2.0);
-        let diagonal = core::f64::consts::FRAC_1_SQRT_2;
+        let diagonal = std::f64::consts::FRAC_1_SQRT_2;
         let gradients = [
             dx,
             -dx,

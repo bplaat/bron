@@ -383,7 +383,7 @@ pub fn ground(camera: &Camera) -> [i64; 3] {
 /// The volume and pan of a block, from its distance and direction to the camera
 fn spatial(camera: &Camera, position: [i64; 3]) -> (f32, f32) {
     let offset: [f64; 3] =
-        core::array::from_fn(|axis| position[axis] as f64 + 0.5 - camera.position[axis]);
+        std::array::from_fn(|axis| position[axis] as f64 + 0.5 - camera.position[axis]);
     let distance = offset.iter().map(|value| value * value).sum::<f64>().sqrt();
     let horizontal = offset[0].hypot(offset[2]);
     // The camera looks along (sin yaw, -cos yaw), so its right is (cos yaw, sin yaw)

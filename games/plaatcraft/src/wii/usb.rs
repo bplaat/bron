@@ -6,7 +6,7 @@
 
 //! Official libogc USB keyboard and mouse drivers, assigned to P1.
 
-use core::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use libogc_sys::*;
 use plaatcraft::client::Thread;

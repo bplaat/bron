@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: MIT
  */
 
-use core::ffi::c_void;
+use std::ffi::c_void;
 
 use libogc_sys::{GX_CLAMP, GX_FALSE, GX_InitTexObj, GX_TF_RGBA8, GXTexObj};
 

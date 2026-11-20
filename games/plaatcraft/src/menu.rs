@@ -9,7 +9,7 @@
 //! layout that fits them on the screen, and drawing them on a platform's [`Canvas`]. The
 //! platforms handle the chosen [`Action`]s.
 
-use core::hash::{Hash, Hasher};
+use std::hash::{Hash, Hasher};
 
 use serde::{Deserialize, Serialize};
 
@@ -1500,7 +1500,7 @@ mod tests {
         menu.select_step(10);
         assert_eq!(menu.selected_row().unwrap().title, "World 7");
         assert_eq!(rows(&menu), [3, 4, 5, 6, 7]);
-        let rows_again = core::mem::take(&mut menu.rows);
+        let rows_again = std::mem::take(&mut menu.rows);
         menu.show_list(Page::Worlds, rows_again, Some(6));
         assert_eq!(menu.selected, Some(6));
         assert_eq!(rows(&menu), [2, 3, 4, 5, 6]);

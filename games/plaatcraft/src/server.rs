@@ -8,8 +8,8 @@
 //! physics, chat and commands, block edits with undo, and flowing fluid. The platforms keep the
 //! world in a [`World`], load the terrain, and deliver the [`Outgoing`] messages.
 
-use core::{array, mem};
 use std::collections::BTreeMap;
+use std::{array, mem};
 
 use crate::camera::Camera;
 use crate::flow;

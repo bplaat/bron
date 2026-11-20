@@ -89,7 +89,7 @@ impl Prediction {
             camera.tick(TICK, &mut block);
         }
         (camera.yaw, camera.pitch) = view;
-        let error: [f64; 3] = core::array::from_fn(|axis| predicted[axis] - camera.position[axis]);
+        let error: [f64; 3] = std::array::from_fn(|axis| predicted[axis] - camera.position[axis]);
         if error.iter().map(|value| value * value).sum::<f64>() < MAX_CORRECTION * MAX_CORRECTION {
             for ((previous, correction), error) in self
                 .previous
@@ -111,7 +111,7 @@ impl Prediction {
     pub fn view(&self, camera: &Camera) -> Camera {
         let alpha = f64::from(self.accumulator / TICK);
         Camera {
-            position: core::array::from_fn(|axis| {
+            position: std::array::from_fn(|axis| {
                 self.previous[axis]
                     + (camera.position[axis] - self.previous[axis]) * alpha
                     + self.correction[axis]

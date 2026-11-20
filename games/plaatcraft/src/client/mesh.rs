@@ -8,7 +8,7 @@
 //! pass and tile so a GPU draws each group with one texture. Each vertex has its position in
 //! the chunk, a texture coordinate on the block grid and its index in the light palette.
 
-use core::ops::Range;
+use std::ops::Range;
 
 use super::light::{TINT_BEDROCK, TINT_LAVA, TINT_PINE, TINT_WATER};
 use super::platform::Pass;

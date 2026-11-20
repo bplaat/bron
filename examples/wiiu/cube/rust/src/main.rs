@@ -6,8 +6,8 @@
 
 //! The rotating textured cube scene from the WebGPU example, on the TV and the GamePad.
 
-use core::ffi::c_void;
-use core::mem::{self, MaybeUninit};
+use std::ffi::c_void;
+use std::mem::{self, MaybeUninit};
 use std::process::ExitCode;
 
 use wut_sys::*;

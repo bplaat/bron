@@ -4,11 +4,11 @@
  * SPDX-License-Identifier: MIT
  */
 
-use core::f64::consts::TAU;
-use core::ffi::c_void;
-use core::ptr;
-use core::sync::atomic::{AtomicBool, Ordering};
+use std::f64::consts::TAU;
+use std::ffi::c_void;
 use std::process::ExitCode;
+use std::ptr;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use libogc_sys::*;
 

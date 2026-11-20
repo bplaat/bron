@@ -6,10 +6,10 @@
 
 #![allow(unsafe_op_in_unsafe_fn)]
 
-use core::ffi::c_void;
-use core::ptr;
-use core::sync::atomic::{AtomicBool, Ordering};
+use std::ffi::c_void;
 use std::process::ExitCode;
+use std::ptr;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use libogc_sys::*;
 
@@ -168,7 +168,7 @@ impl CanvasScene {
             GX_SetTevOp(GX_TEVSTAGE0, GX_MODULATE);
 
             let mut transform = [[0.0; 4]; 3];
-            rotate_degrees(&mut transform, b'z' as core::ffi::c_char, self.rotation);
+            rotate_degrees(&mut transform, b'z' as std::ffi::c_char, self.rotation);
             GX_LoadPosMtxImm(&transform, GX_PNMTX0);
             for (x, y, color) in [
                 (50.0, 100.0, 0xffff_ffff),
@@ -228,7 +228,7 @@ impl CanvasScene {
             if cursor.valid != 0 {
                 // Screen y points down, so positive roll turns the cursor clockwise.
                 let mut cursor_matrix = [[0.0; 4]; 3];
-                rotate_degrees(&mut cursor_matrix, b'z' as core::ffi::c_char, cursor.angle);
+                rotate_degrees(&mut cursor_matrix, b'z' as std::ffi::c_char, cursor.angle);
                 draw_image(
                     &self.assets.cursors[0],
                     &cursor_matrix,
@@ -335,7 +335,7 @@ fn main() -> ExitCode {
             if WPAD_ButtonsDown(0) & WPAD_BUTTON_HOME != 0 {
                 break;
             }
-            let mut ir = core::mem::MaybeUninit::<IrData>::zeroed();
+            let mut ir = std::mem::MaybeUninit::<IrData>::zeroed();
             WPAD_IR(0, ir.as_mut_ptr());
             let ir = ir.assume_init();
 

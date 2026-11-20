@@ -6,7 +6,7 @@
 
 //! Chunk generation, storage encoding, and greedy meshing.
 
-use core::array;
+use std::array;
 
 use serde::{Deserialize, Serialize};
 

@@ -18,8 +18,8 @@ pub(crate) fn bake<const WIDTH: usize, const HEIGHT: usize>(
     emission: impl Fn(u8) -> u8,
 ) -> Vec<u8> {
     assert_eq!(blocks.len(), WIDTH * WIDTH * HEIGHT);
-    let opacity: [u8; 256] = core::array::from_fn(|material| opacity(material as u8));
-    let emission: [u8; 256] = core::array::from_fn(|material| emission(material as u8));
+    let opacity: [u8; 256] = std::array::from_fn(|material| opacity(material as u8));
+    let emission: [u8; 256] = std::array::from_fn(|material| emission(material as u8));
     let mut light = vec![0; blocks.len()];
     // Each column is open sky of air, material 0, above its highest block. Below that
     // skylight fades until `dark`, under which only light sources are lit.

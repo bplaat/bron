@@ -8,9 +8,9 @@
 //! menus, playing a world of the SD card in the integrated server or a LAN world, and the
 //! inventory's block grid.
 
-use core::f32::consts::TAU;
-use core::mem;
 use std::collections::VecDeque;
+use std::f32::consts::TAU;
+use std::mem;
 
 use super::files;
 use super::hud::{self, Hud, text_width};
@@ -1899,19 +1899,19 @@ pub(crate) mod tests {
         vertices: Vec<Vertex>,
     }
 
-    pub(crate) struct TestLock(core::sync::atomic::AtomicBool);
+    pub(crate) struct TestLock(std::sync::atomic::AtomicBool);
 
     // SAFETY: The acquire swap grants exclusive ownership or panics before returning.
     #[allow(unsafe_code)]
     unsafe impl Lock for TestLock {
         fn new() -> Self {
-            Self(core::sync::atomic::AtomicBool::new(false))
+            Self(std::sync::atomic::AtomicBool::new(false))
         }
         fn lock(&self) {
-            assert!(!self.0.swap(true, core::sync::atomic::Ordering::Acquire));
+            assert!(!self.0.swap(true, std::sync::atomic::Ordering::Acquire));
         }
         unsafe fn unlock(&self) {
-            self.0.store(false, core::sync::atomic::Ordering::Release);
+            self.0.store(false, std::sync::atomic::Ordering::Release);
         }
     }
     // SAFETY: The test device panics without releasing the mutex.

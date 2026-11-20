@@ -21,7 +21,7 @@ const FULL: &[Bounds] = &[[[0.0; 3], [1.0; 3]]];
 
 // A box inside the block at a cell, in world coordinates.
 fn offset_bounds(bounds: &Bounds, cell: [i64; 3]) -> Bounds {
-    bounds.map(|corner| core::array::from_fn(|a| cell[a] as f64 + corner[a]))
+    bounds.map(|corner| std::array::from_fn(|a| cell[a] as f64 + corner[a]))
 }
 
 // Whether two boxes overlap by more than touching.
@@ -131,7 +131,7 @@ impl Camera {
 
     /// Turns the view like a mouse moving by `dx` and `dy` pixels.
     pub fn look(&mut self, dx: f64, dy: f64) {
-        self.yaw = (self.yaw + dx as f32 * 0.002).rem_euclid(core::f32::consts::TAU);
+        self.yaw = (self.yaw + dx as f32 * 0.002).rem_euclid(std::f32::consts::TAU);
         self.pitch = (self.pitch - dy as f32 * 0.002).clamp(-1.55, 1.55);
     }
 
@@ -315,7 +315,7 @@ impl Camera {
     // The player's box shifted by `offset`.
     fn body(&self, offset: [f64; 3]) -> Bounds {
         [LOWER, UPPER]
-            .map(|corner| core::array::from_fn(|a| self.position[a] + offset[a] + corner[a]))
+            .map(|corner| std::array::from_fn(|a| self.position[a] + offset[a] + corner[a]))
     }
 
     // Whether the box shifted by `offset` overlaps the boxes of the blocks.
@@ -471,7 +471,7 @@ impl View {
     fn visible_height(&self, offset: [f32; 3], height: f32) -> bool {
         let mut outside = [true; 6];
         for corner in 0..8 {
-            let p = core::array::from_fn(|axis| {
+            let p = std::array::from_fn(|axis| {
                 offset[axis]
                     + if corner & (1 << axis) == 0 {
                         0.0
@@ -615,7 +615,7 @@ mod tests {
     fn walking_leaves_ledges_and_ceiling_hits_stop_jumps() {
         let mut camera = Camera {
             position: [0.5, 2.7, 0.5],
-            yaw: core::f32::consts::FRAC_PI_2,
+            yaw: std::f32::consts::FRAC_PI_2,
             ..Camera::default()
         };
         camera.input.direction = [0.0, 1.0];
@@ -645,7 +645,7 @@ mod tests {
     fn holding_space_and_forward_climbs_one_block_steps() {
         let mut camera = Camera {
             position: [0.5, 2.7, 0.5],
-            yaw: core::f32::consts::FRAC_PI_2,
+            yaw: std::f32::consts::FRAC_PI_2,
             ..Camera::default()
         };
         camera.input.jump = true;
@@ -662,7 +662,7 @@ mod tests {
         let walk = |auto_jump, sneak, solid: fn([i64; 3]) -> bool| {
             let mut camera = Camera {
                 position: [0.5, 2.7, 0.5],
-                yaw: core::f32::consts::FRAC_PI_2,
+                yaw: std::f32::consts::FRAC_PI_2,
                 auto_jump,
                 ..Camera::default()
             };
@@ -694,7 +694,7 @@ mod tests {
             for fluid in [world::WATER, world::LAVA] {
                 let mut camera = Camera {
                     position: [0.5, 2.7, 0.5],
-                    yaw: core::f32::consts::FRAC_PI_2,
+                    yaw: std::f32::consts::FRAC_PI_2,
                     auto_jump: true,
                     ..Camera::default()
                 };
@@ -723,7 +723,7 @@ mod tests {
             for dt in [1.0 / 60.0, 0.05] {
                 let mut camera = Camera {
                     position: [2.65, 3.4, 0.5],
-                    yaw: core::f32::consts::FRAC_PI_2,
+                    yaw: std::f32::consts::FRAC_PI_2,
                     auto_jump,
                     ..Camera::default()
                 };
@@ -761,7 +761,7 @@ mod tests {
         ] {
             let mut camera = Camera {
                 position: [0.5, 2.7, 0.5],
-                yaw: core::f32::consts::FRAC_PI_2,
+                yaw: std::f32::consts::FRAC_PI_2,
                 auto_jump,
                 ..Camera::default()
             };
@@ -965,7 +965,7 @@ mod tests {
         assert!(!view.visible([2000.0, 0.0, -32.0]));
         camera.look(100000.0, 100000.0);
         assert!(camera.pitch.abs() <= 1.55);
-        assert!(camera.yaw >= 0.0 && camera.yaw < core::f32::consts::TAU);
+        assert!(camera.yaw >= 0.0 && camera.yaw < std::f32::consts::TAU);
     }
 
     #[test]
