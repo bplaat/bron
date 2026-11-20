@@ -349,6 +349,8 @@ impl Xtask {
                 None => vec!["--all-features".to_owned()],
             };
             let mut command = Command::new("cargo");
+            command.env("CARGO_INCREMENTAL", "0");
+            command.env("CARGO_PROFILE_DEV_DEBUG", "line-tables-only");
             let rustflags = env::var("RUSTFLAGS").unwrap_or_default();
             command.env(
                 "RUSTFLAGS",

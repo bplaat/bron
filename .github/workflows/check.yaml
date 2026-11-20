@@ -111,6 +111,9 @@ jobs:
           cargo binstall -y --locked cargo-nextest
 
       - run: cargo xtask check-rust
+        env:
+          CARGO_INCREMENTAL: '0'
+          CARGO_PROFILE_DEV_DEBUG: line-tables-only
 
       - name: Build macOS examples
         if: runner.os == 'macOS'
