@@ -2,9 +2,11 @@
 # Builds and runs Rust programs for Wii with the toolchain's patched std.
 set -eu
 dir=$(cd "$(dirname "$0")/.." && pwd)
-build=$(cd "$dir/../.." && pwd)/target/wii-toolchain
+target=$(cd "$dir/../.." && pwd)/target
+build=$target/wii-toolchain
 "$dir/build.sh" all std >&2
 
+export CARGO_BUILD_BUILD_DIR="${CARGO_BUILD_BUILD_DIR:-$target/cargo-build/wii}"
 export __CARGO_TESTS_ONLY_SRC_ROOT="$build/src/rust-std/library"
 export CARGO_BUILD_TARGET="$dir/powerpc-nintendo-wii.json"
 export CARGO_UNSTABLE_BUILD_STD=std,panic_abort

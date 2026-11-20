@@ -384,7 +384,7 @@ build_tools() {
         # Build scripts under the cargo wrapper reach this through the cc script, so leave out the
         # wrapper's toolchain, target and profiles
         env -u RUSTUP_TOOLCHAIN -u RUSTC -u RUSTC_WRAPPER -u RUSTC_WORKSPACE_WRAPPER \
-            -u CARGO_ENCODED_RUSTFLAGS -u CARGO_BUILD_TARGET -u CARGO_UNSTABLE_BUILD_STD \
+            -u CARGO_ENCODED_RUSTFLAGS -u CARGO_BUILD_TARGET -u CARGO_BUILD_BUILD_DIR -u CARGO_UNSTABLE_BUILD_STD \
             -u CARGO_UNSTABLE_JSON_TARGET_SPEC -u __CARGO_TESTS_ONLY_SRC_ROOT \
             -u CARGO_PROFILE_RELEASE_OPT_LEVEL -u CARGO_PROFILE_RELEASE_PANIC \
             -u CARGO_PROFILE_RELEASE_LTO -u CARGO_PROFILE_RELEASE_CODEGEN_UNITS \
