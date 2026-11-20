@@ -4,11 +4,10 @@
  * SPDX-License-Identifier: MIT
  */
 
-use std::env;
-use std::fs;
 use std::io::ErrorKind;
 use std::path::Path;
 use std::process::Command;
+use std::{env, fs};
 
 use anyhow::{Context, Result};
 
