@@ -1,6 +1,6 @@
 [package]
 name = "XStreaks"
-id = "nl.plaatsoft.XStreaks"
+id = "nl.bplaat.XStreaks"
 version = "0.1.0"
 
 [dependencies]
