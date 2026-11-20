@@ -12,8 +12,10 @@ cargo run -p zip --bin unzip -- archive.zip -d output
 
 Extraction refuses to overwrite existing files. It restores modification times
 from Unix or NTFS extra fields, falling back to DOS timestamps interpreted in the
-local time zone. On Unix it restores ordinary permission bits, including executable
-bits, and creates relative symlinks whose targets remain inside the destination.
+local time zone. Repeated local times use the earlier occurrence. Skipped local
+times leave the modification time assigned at extraction. On Unix it restores
+ordinary permission bits, including executable bits, and creates relative
+symlinks whose targets remain inside the destination.
 Directory permissions and times are applied after their children are extracted.
 Unsafe paths, escaping or cyclic symlinks, and special files are rejected. Symlink
 extraction on other operating systems reports an unsupported-feature error.

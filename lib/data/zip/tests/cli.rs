@@ -285,3 +285,48 @@ fn interprets_dos_timestamps_in_the_local_timezone() {
     );
     fs::remove_dir_all(root).unwrap();
 }
+
+#[cfg(unix)]
+#[test]
+fn restores_dos_timestamps_across_daylight_saving_transitions() {
+    for (month, day, expected) in [(3u16, 29u16, None), (10, 25, Some(1_603_585_800))] {
+        let root = temp_directory();
+        let archive = root.join("dos.zip");
+        let mut bytes = *include_bytes!("fixtures/dos.zip");
+        let time = ((2u16 << 11) | (30 << 5)).to_le_bytes();
+        let date = (((2020u16 - 1980) << 9) | (month << 5) | day).to_le_bytes();
+        // Update the DOS timestamp in the local and central headers.
+        for offset in [10, 47 + 12] {
+            bytes[offset..offset + 2].copy_from_slice(&time);
+            bytes[offset + 2..offset + 4].copy_from_slice(&date);
+        }
+        fs::write(&archive, bytes).unwrap();
+
+        let before_extraction = SystemTime::now() - std::time::Duration::from_secs(2);
+        let output = Command::new(env!("CARGO_BIN_EXE_unzip"))
+            .env("TZ", "CET-1CEST,M3.5.0/2,M10.5.0/3")
+            .arg(&archive)
+            .arg("-d")
+            .arg(root.join("out"))
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let modified = fs::metadata(root.join("out/file"))
+            .unwrap()
+            .modified()
+            .unwrap();
+        if let Some(expected) = expected {
+            assert_eq!(
+                modified.duration_since(UNIX_EPOCH).unwrap().as_secs(),
+                expected
+            );
+        } else {
+            assert!(modified >= before_extraction);
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+}
