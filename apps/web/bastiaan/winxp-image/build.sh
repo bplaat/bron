@@ -54,6 +54,9 @@ fi
 
 # 2. Software installs in QEMU, on a copy of the base install
 if [ ! -f out/software.img ]; then
+    ./winxp-dev-toolchain/build.sh
+    mkdir -p software/toolchain/Toolchain
+    cp -R "$root/target/winxp-dev-toolchain/Toolchain/." software/toolchain/Toolchain/
     cp -c out/install.img out/software.part.img 2>/dev/null || cp out/install.img out/software.part.img
     ./disk.mjs software out/software.part.img
     ./software.mjs out/software.part.img
