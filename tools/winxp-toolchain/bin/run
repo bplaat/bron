@@ -4,7 +4,8 @@
 set -eu
 root=$(cd "$(dirname "$0")/../../.." && pwd)
 # Cargo runs this as the runner of a build for Windows XP, leave out its toolchain and target
-env -u RUSTUP_TOOLCHAIN -u RUSTC -u RUSTC_WRAPPER -u RUSTC_WORKSPACE_WRAPPER -u CARGO_BUILD_TARGET \
+env -u RUSTUP_TOOLCHAIN -u RUSTC -u RUSTC_WRAPPER -u RUSTC_WORKSPACE_WRAPPER \
+    -u CARGO_BUILD_TARGET -u CARGO_BUILD_BUILD_DIR \
     -u CARGO_UNSTABLE_BUILD_STD -u CARGO_UNSTABLE_JSON_TARGET_SPEC -u __CARGO_TESTS_ONLY_SRC_ROOT \
     cargo build -q --release -p winxp-runner --manifest-path "$root/Cargo.toml" --target-dir "$root/target"
 exec "$root/target/release/winxp-runner" "$@"

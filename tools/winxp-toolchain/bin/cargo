@@ -4,9 +4,11 @@
 # example: tools/winxp-toolchain/bin/cargo run --release -p reversi
 set -eu
 dir=$(cd "$(dirname "$0")/.." && pwd)
-build=$(cd "$dir/../.." && pwd)/target/winxp-toolchain
+target=$(cd "$dir/../.." && pwd)/target
+build=$target/winxp-toolchain
 "$dir/build.sh" >&2
 
+export CARGO_BUILD_BUILD_DIR="${CARGO_BUILD_BUILD_DIR:-$target/cargo-build/winxp}"
 export __CARGO_TESTS_ONLY_SRC_ROOT="$build/src/rust-std/library"
 export CARGO_BUILD_TARGET="$dir/i686-winxp-windows-gnu.json"
 export CARGO_UNSTABLE_BUILD_STD=std,panic_abort
