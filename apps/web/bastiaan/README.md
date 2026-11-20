@@ -31,6 +31,8 @@ npm install
 npm run dev --workspace bastiaan
 ```
 
+To check the rendered age, run `npm run build --workspace bastiaan` and open the Rust server at `http://localhost:8080`.
+
 ## Self hosting
 
 Build the XP image into `web/public/winxp` first. The `Dockerfile` builds the site and Rust server, which serves the
@@ -51,7 +53,8 @@ Server environment variables:
 
 Set `VITE_RELAY_URL` at build time to use another relay address, or an empty value to disable networking.
 
-The server uses `immutable` caching for Vite's hashed assets and `no-cache` with `Last-Modified` for other files.
+The Rust server fills in `%AGE%` on each home page request and serves it with `no-store`.
+It uses `immutable` caching for Vite's hashed assets and `no-cache` with `Last-Modified` for other files.
 Configure TLS, HTTP/2 and compression in the reverse proxy. Exclude `application/octet-stream` from compression:
 the disk chunks and snapshot are already zstd compressed. Example Traefik configuration:
 

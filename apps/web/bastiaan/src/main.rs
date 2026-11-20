@@ -15,6 +15,7 @@ use std::{env, fs};
 
 use jiff::Timestamp;
 use jiff::fmt::rfc2822::DateTimePrinter;
+use jiff::tz::TimeZone;
 use small_http::{Method, Request, Response, Status};
 
 use crate::relay::{Config, Relay};
@@ -44,9 +45,8 @@ fn main() {
     });
 }
 
-// Vite's hashed assets never change, everything else is checked with its Last-Modified date on
-// every load. Compression is the reverse proxy's job (see README.md), the disk chunks and snapshot
-// are zstd already.
+// Vite's hashed assets never change. The home page is rendered on each request, and the remaining
+// files are checked with their Last-Modified date. The disk chunks and snapshot are zstd already.
 fn static_file(dist: &Path, request: &Request) -> Response {
     if request.method != Method::Get {
         return Response::with_status(Status::MethodNotAllowed);
@@ -69,6 +69,16 @@ fn static_file(dist: &Path, request: &Request) -> Response {
     else {
         return Response::with_status(Status::NotFound);
     };
+    if relative == "index.html" {
+        let Ok(html) = fs::read_to_string(&path) else {
+            return Response::with_status(Status::InternalServerError);
+        };
+        let today = Timestamp::now().to_zoned_datetime(TimeZone::UTC).date();
+        let age = today.year() - 2002 - i16::from(today.month() < 7);
+        return Response::with_header("Cache-Control", "no-store")
+            .header("Content-Type", "text/html; charset=utf-8")
+            .body(html.replace("%AGE%", &age.to_string()));
+    }
     let last_modified = modified
         .duration_since(UNIX_EPOCH)
         .ok()
