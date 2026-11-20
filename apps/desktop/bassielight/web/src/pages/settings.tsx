@@ -20,7 +20,7 @@ export function SettingsPage() {
                     Bastiaan van der Plaat
                 </a>{' '}
                 and{' '}
-                <a href="https://leonard.plaatsoft.nl/" target="_blank">
+                <a href="https://lplaat.nl/" target="_blank">
                     Leonard van der Plaat
                 </a>
             </p>
