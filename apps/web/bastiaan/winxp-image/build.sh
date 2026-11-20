@@ -25,11 +25,13 @@ for dir in software/*/; do [ ! -f "$dir/Makefile" ] || make "$dir"; done
 # The native apps of the repository, built with its Windows XP toolchain
 root=../../../..
 "$root/tools/winxp-toolchain/bin/cargo" build --release --locked -p bastiaan-app -p reversi -p game2048
-release=$root/target/i686-winxp-windows-gnu/release
+target=i686-winxp-windows-gnu
+release=$root/target/$target/release
 cp "$release/bastiaan-app.exe" software/bastiaan/bastiaan.exe
 for app in reversi game2048; do cp "$release/$app.exe" "software/$app/"; done
 # 2048's web view, which loads it from its own folder
-cp "$release/miniblink.dll" software/game2048/
+build_dir=${CARGO_BUILD_BUILD_DIR:-$root/target/cargo-build/winxp}
+cp "$build_dir/$target/release/miniblink.dll" software/game2048/
 
 # 1. Unattended Windows install in QEMU
 if [ ! -f out/install.img ]; then
