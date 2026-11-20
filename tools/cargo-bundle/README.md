@@ -44,6 +44,9 @@ package = "../example-shell" # cdylib crate exporting DllGetClassObject and DllC
 library = "example-shell" # its DLL name in the package without .dll
 thumbnail_handler = "00000000-0000-0000-0000-000000000001" # optional IThumbnailProvider CLSID
 preview_handler = "00000000-0000-0000-0000-000000000002" # optional IPreviewHandler CLSID
+property_handler = "00000000-0000-0000-0000-000000000003" # optional IPropertyStore CLSID
+preview_details = "prop:System.Image.Dimensions;System.Size" # optional details pane properties
+full_details = "prop:System.Image.HorizontalSize;System.Image.VerticalSize" # optional Properties dialog fields
 ```
 
 A Windows file type's `icon` can be a numeric icon resource ID in the app executable,
@@ -132,8 +135,9 @@ dynamic dependency API instead.
 
 A `shell_extension` is built for the same architectures and its DLL is packaged beside the
 executable. The manifest registers its classes as a COM surrogate server and adds the
-thumbnail and preview handlers to every file type, so File Explorer shows thumbnails and
-previews without changing the registry.
+thumbnail, preview and property handlers to every file type. Property handlers also receive
+an in-process registration for Explorer's property reader; a surrogate registration alone
+leaves the Properties dialog's values empty.
 
 Shared asset packages require an NTFS installation volume. Publishing them through
 the Microsoft Store requires approval from Windows developer support; see

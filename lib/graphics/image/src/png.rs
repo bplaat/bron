@@ -613,24 +613,9 @@ pub(super) fn decode(data: &[u8]) -> Result<Image> {
                 }
             }
             b"pHYs" => {
-                if let [x @ .., 1] = bytes
-                    && let Ok(x) = <[u8; 8]>::try_from(x)
-                {
-                    let [x, y] = [0, 4].map(|at| {
-                        let value = u32::from_be_bytes(x[at..at + 4].try_into().expect("four"));
-                        decimal(f64::from(value) * 0.0254, 0)
-                    });
-                    let value = if x == y {
-                        format!("{x} dpi")
-                    } else {
-                        format!("{x} \u{d7} {y} dpi")
-                    };
-                    state.metadata.push(Metadata::new(
-                        MetadataGroup::Image,
-                        "Resolution".into(),
-                        value,
-                    ));
-                }
+                state
+                    .metadata
+                    .extend(super::metadata::png_resolution(bytes));
             }
             b"tIME" => {
                 if let &[year_high, year_low, month, day, hour, minute, second] = bytes {
@@ -675,7 +660,7 @@ pub(super) fn decode(data: &[u8]) -> Result<Image> {
     }
 }
 
-fn chunk<'a>(r: &mut Reader<'a>) -> Result<(&'a [u8], &'a [u8])> {
+pub(super) fn chunk<'a>(r: &mut Reader<'a>) -> Result<(&'a [u8], &'a [u8])> {
     let len = r.be32()? as usize;
     if len > 0x7fff_ffff {
         return Err(DecodeError::InvalidData);
@@ -695,7 +680,11 @@ fn chunk<'a>(r: &mut Reader<'a>) -> Result<(&'a [u8], &'a [u8])> {
 static CRC32: Crc<u32> = Crc::<u32>::new(&CRC_32_ISO_HDLC);
 
 // Reads the keyword and text of a tEXt, zTXt or iTXt chunk.
-fn text_entry(kind: &[u8], bytes: &[u8], budget: &mut Budget) -> Option<(String, String)> {
+pub(super) fn text_entry(
+    kind: &[u8],
+    bytes: &[u8],
+    budget: &mut Budget,
+) -> Option<(String, String)> {
     let mut inflate = |data: &[u8]| {
         let data = deflate::zlib_decompress(data, MAX_BYTES - budget.used).ok()?;
         budget.claim(data.len()).ok()?;

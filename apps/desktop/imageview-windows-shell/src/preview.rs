@@ -19,7 +19,7 @@ use bcanvas::HwndCanvas;
 use imageview_core::{MediaRenderer, decode_media, draw_checkerboard};
 
 use crate::headers::*;
-use crate::{ComObject, Interfaces, guard, is_dark, read_stream, unknown};
+use crate::{ComObject, Interfaces, Stream, guard, is_dark, read_stream, unknown};
 
 const CLASS_NAME: &[u16] = w!("ImageViewPreview");
 const ANIMATION_TIMER: usize = 1;
@@ -28,14 +28,14 @@ const E_NOTIMPL: HRESULT = 0x8000_4001_u32 as i32;
 struct Preview {
     parent: Cell<HWND>,
     rect: Cell<(i32, i32, i32, i32)>,
-    bytes: RefCell<Option<Vec<u8>>>,
+    bytes: RefCell<Option<(Stream, Vec<u8>)>>,
     site: Cell<*mut c_void>,
     view: RefCell<Option<Box<View>>>,
 }
 
 // The child window that shows the media.
 struct View {
-    hwnd: HWND,
+    hwnd: Cell<HWND>,
     canvas: RefCell<HwndCanvas>,
     renderer: MediaRenderer,
     dark: bool,
@@ -142,22 +142,29 @@ impl Drop for Preview {
 
 impl Preview {
     fn close(&self) {
-        if let Some(view) = self.view.borrow_mut().take() {
+        let view = self.view.borrow_mut().take();
+        if let Some(view) = view {
             // SAFETY: The view owns its window, which forgets the view before it is freed.
             unsafe {
-                SetWindowLongPtrW(view.hwnd, GWLP_USERDATA, 0);
-                DestroyWindow(view.hwnd);
+                let hwnd = view.hwnd.get();
+                if !hwnd.is_null() {
+                    SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+                    DestroyWindow(hwnd);
+                }
             }
         }
     }
 
     fn place(&self) {
         if let Some(view) = &*self.view.borrow() {
+            if view.hwnd.get().is_null() {
+                return;
+            }
             let (left, top, right, bottom) = self.rect.get();
             // SAFETY: The view window is alive.
             per_monitor_dpi(|| unsafe {
                 SetWindowPos(
-                    view.hwnd,
+                    view.hwnd.get(),
                     null_mut(),
                     left,
                     top,
@@ -165,7 +172,7 @@ impl Preview {
                     bottom - top,
                     SWP_NOZORDER | SWP_NOACTIVATE,
                 );
-                InvalidateRect(view.hwnd, null(), 0);
+                InvalidateRect(view.hwnd.get(), null(), 0);
             });
         }
     }
@@ -174,13 +181,20 @@ impl Preview {
 // Explorer is per monitor DPI aware and passes rectangles in physical pixels, so the preview
 // window is created and placed with that awareness instead of the one of the host process.
 fn per_monitor_dpi<T>(f: impl FnOnce() -> T) -> T {
+    struct RestoreDpi(isize);
+    impl Drop for RestoreDpi {
+        fn drop(&mut self) {
+            if self.0 != 0 {
+                // SAFETY: This context was returned by SetThreadDpiAwarenessContext.
+                unsafe { SetThreadDpiAwarenessContext(self.0) };
+            }
+        }
+    }
     // SAFETY: Only the DPI awareness of this thread changes, until it is restored below.
     let previous =
         unsafe { SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) };
-    let result = f();
-    // SAFETY: The previous context came from the call above.
-    unsafe { SetThreadDpiAwarenessContext(previous) };
-    result
+    let _restore = RestoreDpi(previous);
+    f()
 }
 
 // Replaces the retained site object.
@@ -197,8 +211,10 @@ fn set_site_object(site: &Cell<*mut c_void>, object: *mut c_void) {
     }
 }
 
-const fn rect_of(rect: &RECT) -> (i32, i32, i32, i32) {
-    (rect.left, rect.top, rect.right, rect.bottom)
+fn rect_of(rect: &RECT) -> Option<(i32, i32, i32, i32)> {
+    let width = rect.right.checked_sub(rect.left)?;
+    let height = rect.bottom.checked_sub(rect.top)?;
+    (width >= 0 && height >= 0).then_some((rect.left, rect.top, rect.right, rect.bottom))
 }
 
 unsafe extern "system" fn set_window(
@@ -209,15 +225,27 @@ unsafe extern "system" fn set_window(
     if rect.is_null() {
         return E_POINTER;
     }
+    if parent.is_null() {
+        return E_INVALIDARG;
+    }
     guard(|| {
         // SAFETY: COM calls this with the first interface and a valid rectangle.
         let preview = unsafe { &Object::from_interface(this, 0).value };
         // SAFETY: The rectangle was checked to be non-null.
-        preview.rect.set(rect_of(unsafe { &*rect }));
-        // A new parent needs a new window, which the next preview creates.
-        if preview.parent.replace(parent) != parent {
-            preview.close();
+        let Some(rect) = rect_of(unsafe { &*rect }) else {
+            return E_INVALIDARG;
+        };
+        if preview.parent.get() != parent {
+            let hwnd = preview.view.borrow().as_ref().map(|view| view.hwnd.get());
+            if let Some(hwnd) = hwnd.filter(|hwnd| !hwnd.is_null()) {
+                // SAFETY: Both windows are live; reparent without discarding an active preview.
+                if per_monitor_dpi(|| unsafe { SetParent(hwnd, parent) }).is_null() {
+                    return E_FAIL;
+                }
+            }
         }
+        preview.parent.set(parent);
+        preview.rect.set(rect);
         preview.place();
         S_OK
     })
@@ -231,7 +259,10 @@ unsafe extern "system" fn set_rect(this: *mut c_void, rect: *const RECT) -> HRES
         // SAFETY: COM calls this with the first interface and a valid rectangle.
         let preview = unsafe { &Object::from_interface(this, 0).value };
         // SAFETY: The rectangle was checked to be non-null.
-        preview.rect.set(rect_of(unsafe { &*rect }));
+        let Some(rect) = rect_of(unsafe { &*rect }) else {
+            return E_INVALIDARG;
+        };
+        preview.rect.set(rect);
         preview.place();
         S_OK
     })
@@ -241,10 +272,14 @@ unsafe extern "system" fn do_preview(this: *mut c_void) -> HRESULT {
     guard(|| {
         // SAFETY: COM calls this with the first interface.
         let preview = unsafe { &Object::from_interface(this, 0).value };
+        if preview.parent.get().is_null() {
+            return E_FAIL;
+        }
         let Some(media) = preview
             .bytes
             .borrow()
-            .as_deref()
+            .as_ref()
+            .map(|(_, bytes)| bytes.as_slice())
             .and_then(|bytes| decode_media(bytes).ok())
         else {
             return E_FAIL;
@@ -274,7 +309,7 @@ unsafe extern "system" fn do_preview(this: *mut c_void) -> HRESULT {
             return E_FAIL;
         }
         let view = Box::new(View {
-            hwnd,
+            hwnd: Cell::new(hwnd),
             // SAFETY: The window lives as long as the view, which destroys it.
             canvas: RefCell::new(unsafe { HwndCanvas::new(hwnd) }),
             renderer: MediaRenderer::new(media),
@@ -283,7 +318,10 @@ unsafe extern "system" fn do_preview(this: *mut c_void) -> HRESULT {
             frame: Cell::new(0),
         });
         // SAFETY: The boxed view outlives its window, which forgets it before it is freed.
-        unsafe { SetWindowLongPtrW(hwnd, GWLP_USERDATA, &*view as *const View as isize) };
+        unsafe {
+            SetWindowLongPtrW(hwnd, GWLP_USERDATA, &*view as *const View as isize);
+            InvalidateRect(hwnd, null(), 0);
+        }
         view.advance();
         *preview.view.borrow_mut() = Some(view);
         S_OK
@@ -303,9 +341,10 @@ unsafe extern "system" fn unload(this: *mut c_void) -> HRESULT {
 unsafe extern "system" fn set_focus(this: *mut c_void) -> HRESULT {
     // SAFETY: COM calls this with the first interface.
     let preview = unsafe { &Object::from_interface(this, 0).value };
-    if let Some(view) = &*preview.view.borrow() {
+    let hwnd = preview.view.borrow().as_ref().map(|view| view.hwnd.get());
+    if let Some(hwnd) = hwnd.filter(|hwnd| !hwnd.is_null()) {
         // SAFETY: The view window is alive.
-        unsafe { SetFocus(view.hwnd) };
+        unsafe { SetFocus(hwnd) };
     }
     S_OK
 }
@@ -324,14 +363,22 @@ const unsafe extern "system" fn translate_accelerator(_: *mut c_void, _: *mut c_
 }
 
 unsafe extern "system" fn initialize(this: *mut c_void, stream: *mut c_void, _: u32) -> HRESULT {
+    if stream.is_null() {
+        return E_POINTER;
+    }
     guard(|| {
         // SAFETY: COM calls this with the second interface and a live stream.
-        let (preview, bytes) =
-            unsafe { (&Object::from_interface(this, 1).value, read_stream(stream)) };
+        let preview = unsafe { &Object::from_interface(this, 1).value };
+        if preview.bytes.borrow().is_some() {
+            return ERROR_ALREADY_INITIALIZED;
+        }
+        // SAFETY: The caller supplies a live source stream.
+        let bytes = unsafe { read_stream(stream) };
         let Some(bytes) = bytes else {
             return E_FAIL;
         };
-        *preview.bytes.borrow_mut() = Some(bytes);
+        // SAFETY: Keep the source open until Unload or the handler is released.
+        *preview.bytes.borrow_mut() = Some((unsafe { Stream::retain(stream) }, bytes));
         S_OK
     })
 }
@@ -348,6 +395,14 @@ unsafe extern "system" fn get_site(
     iid: *const GUID,
     out: *mut *mut c_void,
 ) -> HRESULT {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    // SAFETY: COM supplies a writable out pointer even when no site is set.
+    unsafe { *out = null_mut() };
+    if iid.is_null() {
+        return E_POINTER;
+    }
     // SAFETY: COM calls this with the third interface.
     let preview = unsafe { &Object::from_interface(this, 2).value };
     let site = preview.site.get();
@@ -368,7 +423,7 @@ unsafe extern "system" fn get_window(this: *mut c_void, hwnd: *mut HWND) -> HRES
         .view
         .borrow()
         .as_ref()
-        .map_or(preview.parent.get(), |view| view.hwnd);
+        .map_or(preview.parent.get(), |view| view.hwnd.get());
     // SAFETY: The out pointer was checked.
     unsafe { *hwnd = window };
     S_OK
@@ -381,21 +436,27 @@ const unsafe extern "system" fn context_sensitive_help(_: *mut c_void, _: BOOL) 
 impl View {
     // Shows the current animation frame and schedules the next one.
     fn advance(&self) {
+        if self.hwnd.get().is_null() {
+            return;
+        }
         let (frame, next) = self.renderer.media().frame_at(self.start.elapsed());
         if self.frame.replace(frame) != frame {
             // SAFETY: The window is alive while the view is.
-            unsafe { InvalidateRect(self.hwnd, null(), 0) };
+            unsafe { InvalidateRect(self.hwnd.get(), null(), 0) };
         }
         if let Some(next) = next {
             // SAFETY: The window is alive and owns its timer.
             unsafe {
                 SetTimer(
-                    self.hwnd,
+                    self.hwnd.get(),
                     ANIMATION_TIMER,
                     next.as_millis().max(1) as u32,
                     null(),
                 )
             };
+        } else {
+            // SAFETY: A finished animation must stop its repeating Win32 timer.
+            unsafe { KillTimer(self.hwnd.get(), ANIMATION_TIMER) };
         }
     }
 
@@ -460,6 +521,9 @@ unsafe extern "system" fn window_proc(
         (WM_ERASEBKGND, _) => return 1,
         (WM_TIMER, Some(view)) if wparam == ANIMATION_TIMER => view.advance(),
         (WM_NCDESTROY, _) => {
+            if let Some(view) = view {
+                view.hwnd.set(null_mut());
+            }
             // SAFETY: The window is going away, so it forgets the view.
             unsafe { SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0) };
         }
@@ -467,4 +531,141 @@ unsafe extern "system" fn window_proc(
         _ => return unsafe { DefWindowProcW(hwnd, message, wparam, lparam) },
     }
     0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_support::{Apartment, Interface, MemoryStream};
+
+    #[link(name = "user32")]
+    unsafe extern "system" {
+        fn GetParent(window: HWND) -> HWND;
+        fn IsWindow(window: HWND) -> BOOL;
+        fn SendMessageW(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT;
+    }
+
+    // A hidden standard window keeps the test on real HWNDs without displaying any UI.
+    struct Window(HWND);
+
+    impl Window {
+        fn new() -> Self {
+            // SAFETY: STATIC is a built-in class; the root window is never made visible.
+            let window = unsafe {
+                CreateWindowExW(
+                    0,
+                    w!("STATIC").as_ptr(),
+                    null(),
+                    0,
+                    0,
+                    0,
+                    100,
+                    100,
+                    null_mut(),
+                    null_mut(),
+                    null_mut(),
+                    null_mut(),
+                )
+            };
+            assert!(!window.is_null());
+            Self(window)
+        }
+    }
+
+    impl Drop for Window {
+        fn drop(&mut self) {
+            // SAFETY: This guard owns the hidden window on its creating thread.
+            unsafe { DestroyWindow(self.0) };
+        }
+    }
+
+    #[test]
+    fn live_preview_reparents_and_survives_host_destruction() {
+        let _apartment = Apartment::new();
+        let first = Window::new();
+        let second = Window::new();
+        let handler = Interface::create(&crate::CLSID_PREVIEW_HANDLER, &IID_IPREVIEW_HANDLER);
+        let initializer = handler.query(&IID_IINITIALIZE_WITH_STREAM);
+        let ole_window = handler.query(&IID_IOLE_WINDOW);
+        let source = include_bytes!("../../imageview/tests/fixtures/rgb.qoi");
+        let stream = MemoryStream::new(source);
+        let rect = RECT {
+            left: 0,
+            top: 0,
+            right: 80,
+            bottom: 60,
+        };
+        // SAFETY: All interfaces and HWNDs are live; all rectangle and output buffers are valid.
+        unsafe {
+            assert_eq!(do_preview(handler.0), E_FAIL);
+            assert_eq!(initialize(initializer.0, null_mut(), 0), E_POINTER);
+            assert_eq!(initialize(initializer.0, stream.0.0, 0), S_OK);
+            assert_eq!(stream.references(), 2);
+            assert_eq!(
+                initialize(initializer.0, stream.0.0, 0),
+                ERROR_ALREADY_INITIALIZED
+            );
+            assert_eq!(set_window(handler.0, null_mut(), &rect), E_INVALIDARG);
+            assert_eq!(set_window(handler.0, first.0, &rect), S_OK);
+            assert_eq!(do_preview(handler.0), S_OK);
+            let mut child = null_mut();
+            assert_eq!(get_window(ole_window.0, &mut child), S_OK);
+            assert_eq!(GetParent(child), first.0);
+            SendMessageW(child, WM_PAINT, 0, 0);
+            assert_eq!(set_window(handler.0, second.0, &rect), S_OK);
+            let mut after = null_mut();
+            assert_eq!(get_window(ole_window.0, &mut after), S_OK);
+            assert_eq!(
+                after, child,
+                "SetWindow must preserve the existing preview window"
+            );
+            assert_eq!(GetParent(child), second.0);
+            let invalid = RECT {
+                left: i32::MIN,
+                top: 0,
+                right: i32::MAX,
+                bottom: 1,
+            };
+            assert_eq!(set_rect(handler.0, &invalid), E_INVALIDARG);
+            drop(second);
+            let preview = &Object::from_interface(handler.0, 0).value;
+            assert!(
+                preview
+                    .view
+                    .borrow()
+                    .as_ref()
+                    .expect("view")
+                    .hwnd
+                    .get()
+                    .is_null()
+            );
+            let replacement = Window::new();
+            assert_eq!(unload(handler.0), S_OK);
+            assert_ne!(
+                IsWindow(replacement.0),
+                0,
+                "Unload must not destroy a reused HWND"
+            );
+            assert_eq!(stream.references(), 1);
+            assert_eq!(unload(handler.0), S_OK);
+            let next = MemoryStream::new(source);
+            assert_eq!(initialize(initializer.0, next.0.0, 0), S_OK);
+            assert_eq!(set_window(handler.0, first.0, &rect), S_OK);
+            assert_eq!(do_preview(handler.0), S_OK);
+            assert_eq!(unload(handler.0), S_OK);
+            assert_eq!(next.references(), 1);
+        }
+    }
+
+    #[test]
+    fn missing_preview_site_clears_its_output() {
+        let _apartment = Apartment::new();
+        let handler = Interface::create(&crate::CLSID_PREVIEW_HANDLER, &IID_IOBJECT_WITH_SITE);
+        let mut output = std::ptr::dangling_mut();
+        // SAFETY: The handler and output are valid; no site has been assigned.
+        unsafe {
+            assert_eq!(get_site(handler.0, &IID_IUNKNOWN, &mut output), E_FAIL);
+            assert!(output.is_null());
+        }
+    }
 }

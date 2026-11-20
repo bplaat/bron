@@ -131,6 +131,9 @@ package = "../imageview-windows-shell"
 library = "imageview-shell"
 thumbnail_handler = "80982B38-AE66-4D28-952E-410E1858801B"
 preview_handler = "1D468AD5-F899-453B-8915-D19CD884DBAD"
+property_handler = "A76A0BD7-62C2-4D5A-842B-87F517D63FC0"
+preview_details = "prop:System.ItemNameDisplay;System.ItemTypeText;System.Photo.DateTaken;System.Photo.CameraModel;System.Image.Dimensions;System.Photo.FNumber;System.Photo.ExposureTime;System.Photo.ISOSpeed;System.Author;System.Size;System.DateModified"
+full_details = "prop:System.PropGroup.Description;System.Title;System.Comment;System.Author;System.Copyright;System.PropGroup.Image;System.Image.Dimensions;System.Image.HorizontalSize;System.Image.VerticalSize;System.Image.BitDepth;System.Image.HorizontalResolution;System.Image.VerticalResolution;System.Photo.Orientation;System.PropGroup.Camera;System.Photo.DateTaken;System.Photo.CameraManufacturer;System.Photo.CameraModel;System.Photo.ISOSpeed;System.Photo.ExposureTime;System.Photo.FNumber;System.Photo.Aperture;System.Photo.ExposureBias;System.Photo.FocalLength;System.PropGroup.FileSystem;System.ItemNameDisplay;System.ItemTypeText;System.Size;System.DateModified"
 
 [lints]
 workspace = true

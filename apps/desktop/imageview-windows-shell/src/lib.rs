@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: MIT
  */
 
-//! Windows Explorer preview and thumbnail handlers for the image formats ImageView displays.
+//! Windows Explorer preview, thumbnail and property handlers for ImageView's image formats.
 
 #![allow(unsafe_code)]
 // The MSVC linker wants the COM entry points exported as PRIVATE, which rustc can't express.
@@ -19,7 +19,11 @@ use crate::headers::*;
 
 mod headers;
 mod preview;
+mod properties;
 mod thumbnail;
+
+#[cfg(test)]
+mod test_support;
 
 const CLSID_THUMBNAIL_PROVIDER: GUID = GUID::new(
     0x8098_2b38,
@@ -32,6 +36,12 @@ const CLSID_PREVIEW_HANDLER: GUID = GUID::new(
     0xf899,
     0x453b,
     [0x89, 0x15, 0xd1, 0x9c, 0xd8, 0x84, 0xdb, 0xad],
+);
+const CLSID_PROPERTY_HANDLER: GUID = GUID::new(
+    0xa76a_0bd7,
+    0x62c2,
+    0x4d5a,
+    [0x84, 0x2b, 0x87, 0xf5, 0x17, 0xd6, 0x3f, 0xc0],
 );
 
 // Larger files are not shown, which keeps a thumbnail request from exhausting memory.
@@ -99,6 +109,11 @@ pub(crate) const fn unknown<T: Interfaces<N>, const N: usize, const I: usize>() 
         iid: *const GUID,
         out: *mut *mut c_void,
     ) -> HRESULT {
+        if out.is_null() {
+            return E_POINTER;
+        }
+        // SAFETY: COM supplies a writable out pointer, including on failure.
+        unsafe { *out = null_mut() };
         if iid.is_null() {
             return E_POINTER;
         }
@@ -141,6 +156,11 @@ pub(crate) fn guard(method: impl FnOnce() -> HRESULT) -> HRESULT {
 /// # Safety
 /// `stream` must be a live IStream.
 pub(crate) unsafe fn read_stream(stream: *mut c_void) -> Option<Vec<u8>> {
+    // SAFETY: The caller supplies a live stream.
+    unsafe { read_stream_limit(stream, MAX_FILE_SIZE) }
+}
+
+unsafe fn read_stream_limit(stream: *mut c_void, limit: usize) -> Option<Vec<u8>> {
     if stream.is_null() {
         return None;
     }
@@ -162,13 +182,44 @@ pub(crate) unsafe fn read_stream(stream: *mut c_void) -> Option<Vec<u8>> {
         if result < 0 {
             return None;
         }
-        bytes.extend_from_slice(&chunk[..read as usize]);
-        if bytes.len() > MAX_FILE_SIZE {
+        let read = read as usize;
+        if read > chunk.len() {
             return None;
         }
+        let length = bytes.len().checked_add(read)?;
+        if length > limit {
+            return None;
+        }
+        if length > bytes.capacity() {
+            let capacity = bytes.capacity().saturating_mul(2).max(length).min(limit);
+            bytes.try_reserve_exact(capacity - bytes.len()).ok()?;
+        }
+        bytes.extend_from_slice(&chunk[..read]);
         if result == S_FALSE || read == 0 {
             return Some(bytes);
         }
+    }
+}
+
+/// Keeps an initialized handler's source stream open until it is unloaded or released.
+pub(crate) struct Stream(*mut c_void);
+
+impl Stream {
+    /// Retains a live, non-null IStream.
+    ///
+    /// # Safety
+    /// `stream` must point to a live IStream.
+    pub(crate) unsafe fn retain(stream: *mut c_void) -> Self {
+        // SAFETY: The caller supplies a live stream with an IUnknown vtable.
+        unsafe { ((**stream.cast::<*const IUnknownVtbl>()).AddRef)(stream) };
+        Self(stream)
+    }
+}
+
+impl Drop for Stream {
+    fn drop(&mut self) {
+        // SAFETY: This object owns the reference acquired by retain.
+        unsafe { ((**self.0.cast::<*const IUnknownVtbl>()).Release)(self.0) };
     }
 }
 
@@ -236,13 +287,22 @@ static PREVIEW_FACTORY: ClassFactory = ClassFactory {
     vtable: &FACTORY_VTABLE,
     create: preview::create,
 };
+static PROPERTY_FACTORY: ClassFactory = ClassFactory {
+    vtable: &FACTORY_VTABLE,
+    create: properties::create,
+};
 
 unsafe extern "system" fn factory_query_interface(
     this: *mut c_void,
     iid: *const GUID,
     out: *mut *mut c_void,
 ) -> HRESULT {
-    if iid.is_null() || out.is_null() {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    // SAFETY: COM supplies a writable out pointer.
+    unsafe { *out = null_mut() };
+    if iid.is_null() {
         return E_POINTER;
     }
     // SAFETY: COM supplies a valid IID and a writable out pointer.
@@ -268,6 +328,14 @@ unsafe extern "system" fn factory_create_instance(
     iid: *const GUID,
     out: *mut *mut c_void,
 ) -> HRESULT {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    // SAFETY: COM supplies a writable out pointer.
+    unsafe { *out = null_mut() };
+    if iid.is_null() {
+        return E_POINTER;
+    }
     if !outer.is_null() {
         return CLASS_E_NOAGGREGATION;
     }
@@ -290,7 +358,7 @@ const unsafe extern "system" fn factory_lock_server(_: *mut c_void, _: BOOL) -> 
     S_OK
 }
 
-/// Returns the class factory of the thumbnail provider or the preview handler.
+/// Returns the class factory of the thumbnail, preview or property handler.
 ///
 /// # Safety
 /// COM supplies valid class and interface IDs and a writable out pointer.
@@ -300,13 +368,19 @@ pub unsafe extern "system" fn DllGetClassObject(
     iid: *const c_void,
     out: *mut *mut c_void,
 ) -> HRESULT {
-    if clsid.is_null() || out.is_null() {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    // SAFETY: COM supplies a writable out pointer even when the class or IID is invalid.
+    unsafe { *out = null_mut() };
+    if clsid.is_null() || iid.is_null() {
         return E_POINTER;
     }
     // SAFETY: COM supplies a valid class ID.
     let factory = match unsafe { *clsid.cast::<GUID>() } {
         CLSID_THUMBNAIL_PROVIDER => &THUMBNAIL_FACTORY,
         CLSID_PREVIEW_HANDLER => &PREVIEW_FACTORY,
+        CLSID_PROPERTY_HANDLER => &PROPERTY_FACTORY,
         _ => return CLASS_E_CLASSNOTAVAILABLE,
     };
     // SAFETY: The factory is a static that lives for the whole process.
@@ -323,4 +397,78 @@ pub unsafe extern "system" fn DllGetClassObject(
 #[unsafe(no_mangle)]
 pub const extern "system" fn DllCanUnloadNow() -> HRESULT {
     S_FALSE
+}
+
+#[cfg(test)]
+mod tests {
+    use std::ptr::{dangling_mut, null};
+
+    use super::*;
+    use crate::test_support::{Apartment, Interface, MemoryStream};
+
+    #[test]
+    fn failed_com_queries_clear_output_pointers() {
+        let _apartment = Apartment::new();
+        let unknown = GUID::new(0xdead_beef, 0, 0, [0; 8]);
+        let mut output = dangling_mut();
+        // SAFETY: All non-null inputs are valid IDs; sentinels only enter writable outputs.
+        unsafe {
+            assert_eq!(
+                DllGetClassObject(
+                    std::ptr::from_ref(&unknown).cast(),
+                    std::ptr::from_ref(&IID_ICLASS_FACTORY).cast(),
+                    &mut output
+                ),
+                CLASS_E_CLASSNOTAVAILABLE
+            );
+            assert!(output.is_null());
+            output = dangling_mut();
+            assert_eq!(DllGetClassObject(null(), null(), &mut output), E_POINTER);
+            assert!(output.is_null());
+            assert_eq!(
+                DllGetClassObject(
+                    std::ptr::from_ref(&CLSID_THUMBNAIL_PROVIDER).cast(),
+                    std::ptr::from_ref(&IID_ICLASS_FACTORY).cast(),
+                    &mut output
+                ),
+                S_OK
+            );
+            let factory = Interface(output);
+            let vtable = &**factory.0.cast::<*const IClassFactoryVtbl>();
+            output = dangling_mut();
+            assert_eq!(
+                (vtable.CreateInstance)(factory.0, factory.0, &IID_IUNKNOWN, &mut output),
+                CLASS_E_NOAGGREGATION
+            );
+            assert!(output.is_null());
+            output = dangling_mut();
+            assert_eq!(
+                (vtable.CreateInstance)(factory.0, null_mut(), null(), &mut output),
+                E_POINTER
+            );
+            assert!(output.is_null());
+            let object = Interface::create(&CLSID_THUMBNAIL_PROVIDER, &IID_IUNKNOWN);
+            let unknown_vtable = &**object.0.cast::<*const IUnknownVtbl>();
+            output = dangling_mut();
+            assert_eq!(
+                (unknown_vtable.QueryInterface)(object.0, null(), &mut output),
+                E_POINTER
+            );
+            assert!(output.is_null());
+        }
+    }
+
+    #[test]
+    fn stream_reads_enforce_the_limit_before_appending() {
+        let _apartment = Apartment::new();
+        let exact = MemoryStream::new(b"1234");
+        let oversized = MemoryStream::new(b"12345");
+        let empty = MemoryStream::new(b"");
+        // SAFETY: The wrappers keep all streams alive through each read.
+        unsafe {
+            assert_eq!(read_stream_limit(exact.0.0, 4), Some(b"1234".to_vec()));
+            assert_eq!(read_stream_limit(oversized.0.0, 4), None);
+            assert_eq!(read_stream_limit(empty.0.0, 0), Some(Vec::new()));
+        }
+    }
 }

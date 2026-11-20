@@ -133,6 +133,9 @@ pub(crate) struct ShellExtensionMetadata {
     pub library: String,
     pub thumbnail_handler: Option<String>,
     pub preview_handler: Option<String>,
+    pub property_handler: Option<String>,
+    pub preview_details: Option<String>,
+    pub full_details: Option<String>,
 }
 
 #[derive(Clone, Deserialize)]

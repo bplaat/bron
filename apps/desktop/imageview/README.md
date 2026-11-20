@@ -49,6 +49,8 @@ An Edit button swaps in an edit toolbar for still bitmaps, with popovers for its
 
 ### Windows
 
+- Recently opened images in the taskbar Jump List (right-click ImageView's taskbar icon),
+  including images opened from the command line, dropped onto a window, or browsed in a folder
 - A WinUI 3 window from one XAML island, through handwritten Windows App SDK bindings without
   extra crates: a header bar with the toolbar buttons in the title bar, like a GTK header bar or
   a unified macOS toolbar, with Mica and tall caption buttons, above a ScrollViewer with overlay
@@ -56,6 +58,11 @@ An Edit button swaps in an edit toolbar for still bitmaps, with popovers for its
   again at the magnification they settle at, so they stay sharp
 - File Explorer thumbnails and preview pane from the [shell extension](../imageview-windows-shell),
   registered by the MSIX package
+- Read-only dimensions, width, and height in Explorer's details pane and Properties dialog for
+  all supported formats, including vectors and icons (using the largest icon size)
+- Available camera, capture date, ISO, exposure, aperture, focal length, orientation, resolution,
+  bit depth, title, author, and copyright metadata in Explorer; JPEG, PNG/APNG, TIFF, and WebP
+  properties are read from their headers without decoding pixels
 - Native file icons for each image format, with editable [SVG sources](docs/images/windows/file-types/)
   and artwork for small icons, registered by the MSIX package for Details and other icon views;
   the compressed ICO assets live in `meta/windows/file-types/`
@@ -88,6 +95,16 @@ The ICO files are embedded in the Windows executable and referenced by resource 
 ICO sizes 16, 20, 24, 32, 40, and 48 px use the `.small.svg` artwork;
 sizes 64, 96, 128, and 256 px use the regular `.svg` artwork.
 The PNG images embedded in `meta/windows/file-types/` ICO assets are losslessly optimized.
+
+After installing a Windows package, check Explorer's actual property-loading path from a
+fresh PowerShell process (use any supported image with known dimensions):
+
+```powershell
+pwsh -NoProfile -File apps/desktop/imageview-windows-shell/tests/check-installed-properties.ps1 -Path image.png
+```
+
+This checks file size and image dimensions through `SHGetPropertyStoreFromParsingName`.
+It catches COM registration failures that direct calls to the handler's factory cannot detect.
 
 ## macOS Entitlements
 

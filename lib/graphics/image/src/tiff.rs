@@ -166,6 +166,32 @@ impl<'a> Directory<'a> {
 }
 
 // MARK: Decoder
+pub(super) fn inspect(data: &[u8]) -> Result<super::ImageInfo> {
+    let tiff = ExifData::new(data).ok_or(DecodeError::InvalidMagic)?;
+    let directory = select(&tiff, data)?;
+    let width = directory.value(IMAGE_WIDTH, 0)?;
+    let height = directory.value(IMAGE_LENGTH, 0)?;
+    let samples = directory.value(SAMPLES_PER_PIXEL, 1)?;
+    let bits = directory
+        .values(BITS_PER_SAMPLE)?
+        .unwrap_or_else(|| vec![1]);
+    let depth = if bits.len() == 1 {
+        bits[0].checked_mul(samples)
+    } else {
+        bits.iter()
+            .try_fold(0u32, |sum, bits| sum.checked_add(*bits))
+    };
+    let mut metadata = Vec::new();
+    super::metadata::list_directory(
+        &tiff,
+        directory.at,
+        super::MetadataGroup::Exif,
+        true,
+        &mut metadata,
+    );
+    super::ImageInfo::new(width, height, depth, metadata).map(super::ImageInfo::oriented)
+}
+
 // How the samples of a pixel turn into RGBA.
 struct Color<'a> {
     photometric: u32,
@@ -1084,6 +1110,9 @@ mod tests {
         directory(&mut data, 0, 2, 255, true);
         let image = decode(&data).expect("TIFF");
         assert_eq!(image.pixels(), [255; 8]);
+        let info = inspect(&data).expect("TIFF properties");
+        assert_eq!((info.width, info.height), (2, 1));
+        assert_eq!(info.bit_depth, Some(8));
     }
 
     #[test]

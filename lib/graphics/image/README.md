@@ -25,6 +25,13 @@ binary transparency. JPEG requires opaque pixels.
 `Format::from_extension` and `Format::from_signature` find the format of a file name or
 encoded bytes, and `Format::can_encode` tells whether images can be written in it.
 
+`inspect` reads dimensions, encoded bit depth, and metadata from JPEG, PNG/APNG, TIFF, and
+WebP headers without decoding pixels. Other formats use their decoder. Header inspection
+does not validate compressed pixel data. `Metadata::properties` exposes typed camera,
+capture date, exposure, resolution, author, and copyright values alongside readable text;
+fractions retain their original numerator and denominator, and capture dates retain their
+UTC offset when one is present.
+
 Animation frames all have the same canvas size. ICO and ICNS files hold the same icon in
 several sizes, which are decoded as frames of their own sizes in file order. `Image::width`,
 `Image::height` and `Image::pixels` are those of `Image::largest_frame`, the largest icon,

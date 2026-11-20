@@ -367,6 +367,10 @@ impl App {
                 if window.generation != generation {
                     return;
                 }
+                #[cfg(windows)]
+                if zoom_to_fit {
+                    platforms::note_recent_file(&load.path);
+                }
                 window.replacing = None;
                 window.path = load.path;
                 window.version = load.version;

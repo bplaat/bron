@@ -15,6 +15,13 @@ use core::fmt::{self, Display, Formatter};
 use core::time::Duration;
 
 mod math;
+mod properties;
+pub use properties::{MetadataDateTime, MetadataKey, MetadataProperty, MetadataValue};
+
+#[cfg(any(feature = "jpeg", feature = "png", feature = "tiff", feature = "webp"))]
+mod inspect;
+#[cfg(any(feature = "jpeg", feature = "png", feature = "tiff", feature = "webp"))]
+pub use inspect::{ImageInfo, inspect};
 
 #[cfg(any(feature = "jpeg", feature = "png", feature = "webp"))]
 mod metadata;
@@ -471,6 +478,7 @@ pub struct Metadata {
     group: MetadataGroup,
     name: String,
     value: String,
+    properties: Vec<MetadataProperty>,
 }
 
 impl Metadata {
@@ -478,8 +486,44 @@ impl Metadata {
         not(any(feature = "gif", feature = "jpeg", feature = "png", feature = "webp")),
         allow(dead_code)
     )]
-    pub(crate) const fn new(group: MetadataGroup, name: String, value: String) -> Self {
-        Self { group, name, value }
+    pub(crate) fn new(group: MetadataGroup, name: String, value: String) -> Self {
+        let mut properties = Vec::new();
+        if group == MetadataGroup::Text && !value.is_empty() {
+            let key = if name.eq_ignore_ascii_case("author") {
+                Some(MetadataKey::Author)
+            } else if name.eq_ignore_ascii_case("copyright") {
+                Some(MetadataKey::Copyright)
+            } else if name.eq_ignore_ascii_case("title") {
+                Some(MetadataKey::Title)
+            } else if name.eq_ignore_ascii_case("description") {
+                Some(MetadataKey::Description)
+            } else {
+                None
+            };
+            if let Some(key) = key {
+                properties.push(MetadataProperty {
+                    key,
+                    value: MetadataValue::Text(value.clone()),
+                });
+            }
+        }
+        Self {
+            group,
+            name,
+            value,
+            properties,
+        }
+    }
+
+    #[cfg(any(feature = "jpeg", feature = "png"))]
+    pub(crate) fn with_property(mut self, key: MetadataKey, value: MetadataValue) -> Self {
+        self.properties.push(MetadataProperty { key, value });
+        self
+    }
+
+    /// Returns machine-readable properties, without units or rounded display formatting.
+    pub fn properties(&self) -> &[MetadataProperty] {
+        &self.properties
     }
 
     /// Returns what the entry describes.

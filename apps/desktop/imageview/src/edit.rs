@@ -912,12 +912,15 @@ impl App {
                 return;
             }
         };
+        #[cfg(windows)]
+        crate::platforms::note_recent_file(&saved.path);
         if !saved.export
             && let Some(editing) = &mut window.editing
         {
             editing.editor.saved(bytes);
             window.version = FileVersion::of(&saved.path);
             if saved.path != window.path {
+                #[cfg(not(windows))]
                 crate::platforms::note_recent_file(&saved.path);
                 window.path = saved.path;
             }

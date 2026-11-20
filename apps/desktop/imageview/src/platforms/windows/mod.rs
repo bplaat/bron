@@ -32,6 +32,7 @@ use imageview_core::{
 use self::composition::Surface;
 use self::headers::*;
 use self::panels::Panels;
+pub(crate) use self::recent::note_recent_file;
 pub(crate) use self::save::SaveOptions;
 use self::tool::ToolPanel;
 use self::winui::{
@@ -43,6 +44,7 @@ use crate::viewport::Viewport;
 mod composition;
 mod headers;
 mod panels;
+mod recent;
 mod save;
 mod tool;
 mod winrt;

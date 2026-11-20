@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: MIT
  */
 
-//! Browsing and launching for platforms that leave recent files to the file manager.
+//! Shared folder browsing and the fallback for platforms without recent-document integration.
 
 use std::path::{Path, PathBuf};
 
@@ -19,4 +19,5 @@ pub(crate) fn neighbour_path(path: &Path, offset: isize) -> Option<PathBuf> {
 }
 
 /// Recent files are left to the file manager.
+#[cfg(not(windows))]
 pub(crate) const fn note_recent_file(_path: &Path) {}

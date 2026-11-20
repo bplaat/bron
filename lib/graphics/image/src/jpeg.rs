@@ -323,7 +323,7 @@ struct Jpeg {
 
 // The resolution of a JFIF segment, after its identifier: a version, density unit and the
 // horizontal and vertical densities.
-fn jfif_resolution(jfif: &[u8]) -> Option<Metadata> {
+pub(super) fn jfif_resolution(jfif: &[u8]) -> Option<Metadata> {
     let [_, _, unit, x_high, x_low, y_high, y_low, ..] = *jfif else {
         return None;
     };
@@ -339,11 +339,21 @@ fn jfif_resolution(jfif: &[u8]) -> Option<Metadata> {
     } else {
         alloc::format!("{x} \u{d7} {y} dpi")
     };
-    Some(Metadata::new(
-        MetadataGroup::Image,
-        "Resolution".into(),
-        value,
-    ))
+    Some(
+        Metadata::new(MetadataGroup::Image, "Resolution".into(), value)
+            .with_property(
+                super::MetadataKey::HorizontalResolution,
+                super::MetadataValue::Integer(i64::from(u16::from_be_bytes([x_high, x_low]))),
+            )
+            .with_property(
+                super::MetadataKey::VerticalResolution,
+                super::MetadataValue::Integer(i64::from(u16::from_be_bytes([y_high, y_low]))),
+            )
+            .with_property(
+                super::MetadataKey::ResolutionUnit,
+                super::MetadataValue::Integer(if unit == 1 { 2 } else { 3 }),
+            ),
+    )
 }
 
 /// One APP2 part of an ICC profile, which is split to fit in segments.

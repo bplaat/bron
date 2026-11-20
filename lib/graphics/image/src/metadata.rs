@@ -16,7 +16,9 @@ use core::ops::Range;
 use super::math::pow;
 #[cfg(any(feature = "jpeg", feature = "webp"))]
 use super::{Budget, Result};
-use super::{Metadata, MetadataGroup};
+use super::{
+    Metadata, MetadataDateTime, MetadataGroup, MetadataKey, MetadataProperty, MetadataValue,
+};
 
 #[cfg(any(feature = "jpeg", feature = "webp"))]
 pub(crate) const ORIENTATION: u16 = 0x112;
@@ -447,7 +449,7 @@ pub(crate) fn list_exif(data: &[u8], metadata: &mut Vec<Metadata>) {
 
 // Lists the tags of a directory, and those of the EXIF and GPS directories it points to when it
 // is the first one, so directories pointing at each other are not followed around.
-fn list_directory(
+pub(super) fn list_directory(
     exif: &ExifData<'_>,
     directory: usize,
     group: MetadataGroup,
@@ -496,8 +498,232 @@ fn list_directory(
             || format!("Tag 0x{:04X}", entry.tag),
             |(_, name)| (*name).to_string(),
         );
-        metadata.push(Metadata::new(group, name, value));
+        let mut item = Metadata::new(group, name, value);
+        if group == MetadataGroup::Exif
+            && let Some(property) = exif_property(exif, &entries, entry)
+        {
+            item.properties.push(property);
+        }
+        metadata.push(item);
     }
+}
+
+// Preserve original tag values for property systems instead of parsing the readable labels.
+fn exif_property(
+    exif: &ExifData<'_>,
+    entries: &[Entry<'_>],
+    entry: &Entry<'_>,
+) -> Option<MetadataProperty> {
+    use MetadataKey::*;
+    let key = match entry.tag {
+        0x010e => Description,
+        0x010f => CameraMake,
+        0x0110 => CameraModel,
+        0x0112 => Orientation,
+        0x011a => HorizontalResolution,
+        0x011b => VerticalResolution,
+        0x0128 => ResolutionUnit,
+        0x013b | 0x9c9d => Author,
+        0x8298 => Copyright,
+        0x829a => ExposureTime,
+        0x829d => FNumber,
+        0x8827 | 0x8833 => Iso,
+        0x9003 => DateTaken,
+        0x9202 => Aperture,
+        0x9204 => ExposureBias,
+        0x920a => FocalLength,
+        0x9c9b => Title,
+        _ => return None,
+    };
+    let value = if key == DateTaken {
+        let offset = entries
+            .iter()
+            .find(|entry| entry.tag == 0x9011)
+            .map(|entry| text(entry.bytes));
+        let mut date = parse_datetime(&text(entry.bytes), offset.as_deref())?;
+        if let Some(nanosecond) = entries
+            .iter()
+            .find(|entry| entry.tag == 0x9291)
+            .and_then(|entry| parse_subseconds(&text(entry.bytes)))
+        {
+            date.nanosecond = nanosecond;
+        }
+        MetadataValue::DateTime(date)
+    } else if matches!(
+        key,
+        CameraMake | CameraModel | Author | Copyright | Title | Description
+    ) {
+        let value = if matches!(entry.tag, 0x9c9b..=0x9c9f) {
+            utf16(entry.bytes, true)
+        } else if entry.kind == 2 {
+            text(entry.bytes)
+        } else {
+            return None;
+        };
+        if value.is_empty() {
+            return None;
+        }
+        MetadataValue::Text(value)
+    } else {
+        if entry.count != 1 {
+            return None;
+        }
+        if matches!(entry.kind, 5 | 10) {
+            let data = ExifData {
+                data: entry.bytes,
+                little: exif.little,
+            };
+            let numerator = data.read(0, 4)?;
+            let denominator = data.read(4, 4)?;
+            let (numerator, denominator) = if entry.kind == 10 {
+                (i64::from(numerator as i32), i64::from(denominator as i32))
+            } else {
+                (i64::from(numerator), i64::from(denominator))
+            };
+            if denominator == 0 {
+                return None;
+            }
+            MetadataValue::Rational {
+                numerator: if denominator < 0 {
+                    -numerator
+                } else {
+                    numerator
+                },
+                denominator: denominator.unsigned_abs() as u32,
+            }
+        } else {
+            MetadataValue::Integer(exif.integer(entry, 0)?)
+        }
+    };
+    Some(MetadataProperty { key, value })
+}
+
+// EXIF and ISO dates, with calendar validation. A missing timezone remains unspecified.
+fn parse_datetime(text: &str, offset: Option<&str>) -> Option<MetadataDateTime> {
+    let bytes = text.as_bytes();
+    if bytes.len() < 19
+        || !matches!(bytes[4], b':' | b'-')
+        || bytes[7] != bytes[4]
+        || !matches!(bytes[10], b' ' | b'T')
+        || bytes[13] != b':'
+        || bytes[16] != b':'
+    {
+        return None;
+    }
+    let number = |start: usize, end: usize| -> Option<u16> {
+        let bytes = bytes.get(start..end)?;
+        if !bytes.iter().all(u8::is_ascii_digit) {
+            return None;
+        }
+        bytes.iter().try_fold(0u16, |value, byte| {
+            value.checked_mul(10)?.checked_add(u16::from(*byte - b'0'))
+        })
+    };
+    let (year, month, day) = (number(0, 4)?, number(5, 7)?, number(8, 10)?);
+    let (hour, minute, second) = (number(11, 13)?, number(14, 16)?, number(17, 19)?);
+    let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+    let days = match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 => {
+            if leap {
+                29
+            } else {
+                28
+            }
+        }
+        _ => return None,
+    };
+    if year == 0 || day == 0 || day > days || hour > 23 || minute > 59 || second > 59 {
+        return None;
+    }
+    let mut tail = text.get(19..)?;
+    let mut nanosecond = 0;
+    if let Some(fraction) = tail.strip_prefix('.') {
+        let count = fraction.bytes().take_while(u8::is_ascii_digit).count();
+        nanosecond = parse_subseconds(fraction.get(..count)?)?;
+        tail = fraction.get(count..)?;
+    }
+    if offset.is_some() && !tail.is_empty() {
+        return None;
+    }
+    let offset = offset.or_else(|| (!tail.is_empty()).then_some(tail));
+    let parse_offset = |offset: &str| {
+        if offset == "Z" {
+            return Some(0);
+        }
+        let bytes = offset.as_bytes();
+        if bytes.len() != 6 || !matches!(bytes[0], b'+' | b'-') || bytes[3] != b':' {
+            return None;
+        }
+        if ![bytes[1], bytes[2], bytes[4], bytes[5]]
+            .iter()
+            .all(u8::is_ascii_digit)
+        {
+            return None;
+        }
+        let hours = i16::from(bytes[1] - b'0') * 10 + i16::from(bytes[2] - b'0');
+        let minutes = i16::from(bytes[4] - b'0') * 10 + i16::from(bytes[5] - b'0');
+        if hours > 23 || minutes > 59 {
+            return None;
+        }
+        Some((hours * 60 + minutes) * if bytes[0] == b'-' { -1 } else { 1 })
+    };
+    let offset_minutes = match offset {
+        Some(offset) => Some(parse_offset(offset)?),
+        None => None,
+    };
+    Some(MetadataDateTime {
+        year,
+        month,
+        day,
+        hour,
+        minute,
+        second,
+        nanosecond,
+        offset_minutes,
+    })
+}
+
+fn parse_subseconds(digits: &str) -> Option<u32> {
+    if digits.is_empty() || digits.len() > 9 || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    let value = digits.parse::<u32>().ok()?;
+    Some(value * 10u32.pow(9 - digits.len() as u32))
+}
+
+#[cfg(feature = "png")]
+pub(crate) fn png_resolution(bytes: &[u8]) -> Option<Metadata> {
+    let [x @ .., 1] = bytes else {
+        return None;
+    };
+    let x = <[u8; 8]>::try_from(x).ok()?;
+    let [x, y] = [0, 4].map(|at| u32::from_be_bytes(x[at..at + 4].try_into().expect("four bytes")));
+    let [horizontal, vertical] = [x, y].map(|value| decimal(f64::from(value) * 0.0254, 0));
+    let value = if horizontal == vertical {
+        format!("{horizontal} dpi")
+    } else {
+        format!("{horizontal} × {vertical} dpi")
+    };
+    Some(
+        Metadata::new(MetadataGroup::Image, "Resolution".into(), value)
+            .with_property(
+                MetadataKey::HorizontalResolution,
+                MetadataValue::Rational {
+                    numerator: i64::from(x) * 127,
+                    denominator: 5000,
+                },
+            )
+            .with_property(
+                MetadataKey::VerticalResolution,
+                MetadataValue::Rational {
+                    numerator: i64::from(y) * 127,
+                    denominator: 5000,
+                },
+            )
+            .with_property(MetadataKey::ResolutionUnit, MetadataValue::Integer(2)),
+    )
 }
 
 // Structure of the pixel data and binary blobs that are not shown.
@@ -1030,13 +1256,37 @@ fn attributes_of(mut attributes: &str) -> impl Iterator<Item = (&str, &str)> {
 
 // Adds an XMP property, or a value to the property before it with the same name.
 fn add_xmp(metadata: &mut Vec<Metadata>, name: &str, value: &str) {
+    use MetadataKey::*;
+    let key = match name {
+        "dc:title" => Some(Title),
+        "dc:creator" => Some(Author),
+        "dc:rights" => Some(Copyright),
+        "dc:description" => Some(Description),
+        "tiff:Make" => Some(CameraMake),
+        "tiff:Model" => Some(CameraModel),
+        "exif:DateTimeOriginal" | "xmp:CreateDate" => Some(DateTaken),
+        _ => None,
+    };
+    let property = key.and_then(|key| {
+        let value = if key == DateTaken {
+            MetadataValue::DateTime(parse_datetime(value, None)?)
+        } else {
+            MetadataValue::Text(value.into())
+        };
+        Some(MetadataProperty { key, value })
+    });
     let name = readable_name(name);
     match metadata.last_mut() {
         Some(last) if last.group == MetadataGroup::Xmp && last.name == name => {
             last.value.push_str(", ");
             last.value.push_str(value);
+            last.properties.extend(property);
         }
-        _ => metadata.push(Metadata::new(MetadataGroup::Xmp, name, value.into())),
+        _ => {
+            let mut item = Metadata::new(MetadataGroup::Xmp, name, value.into());
+            item.properties.extend(property);
+            metadata.push(item);
+        }
     }
 }
 
@@ -1240,6 +1490,52 @@ pub(super) fn orient(
 #[cfg(all(test, feature = "jpeg"))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn capture_dates_validate_calendar_and_offsets() {
+        let fractional = parse_datetime("2024-02-29T12:34:56.1234567+02:00", None)
+            .expect("fractional timestamp");
+        assert_eq!(fractional.nanosecond, 123_456_700);
+        assert_eq!(fractional.offset_minutes, Some(120));
+        assert!(parse_datetime("2024-02-29T12:34:56.Z", None).is_none());
+        assert!(parse_datetime("2024-02-29T12:34:56.1234567890Z", None).is_none());
+        assert!(parse_datetime("2024:02:29 12:34:56", Some("+02:00")).is_some());
+        assert!(parse_datetime("2023:02:29 12:34:56", None).is_none());
+        assert!(parse_datetime("2024:01:00 12:34:56", None).is_none());
+        assert!(parse_datetime("2024:01:01 24:00:00", None).is_none());
+        assert!(parse_datetime("2024:01:01 12:34:56", Some("+99:00")).is_none());
+        assert_eq!(
+            parse_datetime("2024:01:01 12:34:56", None)
+                .expect("local date")
+                .offset_minutes,
+            None
+        );
+        assert_eq!(
+            parse_datetime("2024-01-01T12:34:56", Some("Z"))
+                .expect("UTC date")
+                .offset_minutes,
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn xmp_author_lists_keep_separate_typed_values() {
+        let mut metadata = Vec::new();
+        list_xmp(br#"<rdf:Description><dc:creator><rdf:Seq><rdf:li>Alice</rdf:li><rdf:li>Bob</rdf:li></rdf:Seq></dc:creator><dc:rights>Copyright</dc:rights></rdf:Description>"#, &mut metadata);
+        let authors: Vec<_> = metadata
+            .iter()
+            .flat_map(Metadata::properties)
+            .filter(|property| property.key == MetadataKey::Author)
+            .map(|property| &property.value)
+            .collect();
+        assert_eq!(
+            authors,
+            [
+                &MetadataValue::Text("Alice".into()),
+                &MetadataValue::Text("Bob".into())
+            ]
+        );
+    }
     use crate::{Bitmap, Format, decode, encode};
 
     // The compressed pixels of a JPEG, from its start of scan.

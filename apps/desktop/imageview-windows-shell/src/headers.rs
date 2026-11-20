@@ -22,6 +22,8 @@ pub(crate) const S_FALSE: HRESULT = 1;
 pub(crate) const E_NOINTERFACE: HRESULT = 0x8000_4002_u32 as i32;
 pub(crate) const E_POINTER: HRESULT = 0x8000_4003_u32 as i32;
 pub(crate) const E_FAIL: HRESULT = 0x8000_4005_u32 as i32;
+pub(crate) const E_INVALIDARG: HRESULT = 0x8007_0057_u32 as i32;
+pub(crate) const ERROR_ALREADY_INITIALIZED: HRESULT = 0x8007_04df_u32 as i32;
 pub(crate) const CLASS_E_NOAGGREGATION: HRESULT = 0x8004_0110_u32 as i32;
 pub(crate) const CLASS_E_CLASSNOTAVAILABLE: HRESULT = 0x8004_0111_u32 as i32;
 pub(crate) const WTSAT_ARGB: u32 = 2;
@@ -173,6 +175,7 @@ unsafe extern "system" {
         param: *mut c_void,
     ) -> HWND;
     pub(crate) fn DestroyWindow(hwnd: HWND) -> BOOL;
+    pub(crate) fn SetParent(hwnd: HWND, parent: HWND) -> HWND;
     pub(crate) fn DefWindowProcW(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT;
     pub(crate) fn SetWindowLongPtrW(hwnd: HWND, index: i32, value: isize) -> isize;
     pub(crate) fn GetWindowLongPtrW(hwnd: HWND, index: i32) -> isize;
@@ -189,6 +192,7 @@ unsafe extern "system" {
     pub(crate) fn SetFocus(hwnd: HWND) -> HWND;
     pub(crate) fn GetFocus() -> HWND;
     pub(crate) fn SetTimer(hwnd: HWND, id: usize, elapse: u32, function: *const c_void) -> usize;
+    pub(crate) fn KillTimer(hwnd: HWND, id: usize) -> BOOL;
     pub(crate) fn SetThreadDpiAwarenessContext(context: isize) -> isize;
 }
 

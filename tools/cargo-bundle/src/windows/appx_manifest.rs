@@ -76,10 +76,12 @@ pub(crate) fn appx_manifest(
     xmlns:uap10="http://schemas.microsoft.com/appx/manifest/uap/windows10/10"
     xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
     xmlns:desktop2="http://schemas.microsoft.com/appx/manifest/desktop/windows10/2"
+    xmlns:desktop3="http://schemas.microsoft.com/appx/manifest/desktop/windows10/3"
     xmlns:desktop6="http://schemas.microsoft.com/appx/manifest/desktop/windows10/6"
     xmlns:desktop7="http://schemas.microsoft.com/appx/manifest/desktop/windows10/7"
     xmlns:com="http://schemas.microsoft.com/appx/manifest/com/windows10"
-    IgnorableNamespaces="uap uap10 rescap desktop2 desktop6 desktop7 com">
+    xmlns:com4="http://schemas.microsoft.com/appx/manifest/com/windows10/4"
+    IgnorableNamespaces="uap uap10 rescap desktop2 desktop3 desktop6 desktop7 com com4">
 "#);
     _ = writeln!(
         xml,
@@ -209,6 +211,32 @@ pub(crate) fn appx_manifest(
                     clsid_attribute(clsid)
                 );
             }
+            if let Some(clsid) = shell_extension.and_then(|shell| shell.property_handler.as_deref())
+            {
+                _ = writeln!(
+                    xml,
+                    r#"                        <desktop2:DesktopPropertyHandler Clsid="{}"/>"#,
+                    clsid_attribute(clsid)
+                );
+            }
+            if let Some(shell) = shell_extension
+                && (shell.preview_details.is_some() || shell.full_details.is_some())
+            {
+                _ = writeln!(xml, "                        <desktop3:PropertyLists>");
+                for (property, value) in [
+                    ("previewDetails", &shell.preview_details),
+                    ("fullDetails", &shell.full_details),
+                ] {
+                    if let Some(value) = value {
+                        _ = writeln!(
+                            xml,
+                            r#"                            <desktop3:PropertyList Property="{property}" Value="{}"/>"#,
+                            xml_escape(value)
+                        );
+                    }
+                }
+                _ = writeln!(xml, "                        </desktop3:PropertyLists>");
+            }
             _ = writeln!(xml, "                    </uap:FileTypeAssociation>");
             _ = writeln!(xml, "                </uap:Extension>");
         }
@@ -223,9 +251,13 @@ pub(crate) fn appx_manifest(
                 xml,
                 r#"                        <com:SurrogateServer DisplayName="{name}">"#
             );
-            for clsid in [&shell.thumbnail_handler, &shell.preview_handler]
-                .into_iter()
-                .flatten()
+            for clsid in [
+                &shell.thumbnail_handler,
+                &shell.preview_handler,
+                &shell.property_handler,
+            ]
+            .into_iter()
+            .flatten()
             {
                 _ = writeln!(
                     xml,
@@ -237,6 +269,29 @@ pub(crate) fn appx_manifest(
             _ = writeln!(xml, "                        </com:SurrogateServer>");
             _ = writeln!(xml, "                    </com:ComServer>");
             _ = writeln!(xml, "                </com:Extension>");
+            if let Some(clsid) = &shell.property_handler {
+                // The property system also requests CLSCTX_INPROC_SERVER. Surrogate-only
+                // registration makes SHGetPropertyStoreFromParsingName fail with
+                // REGDB_E_CLASSNOTREG, leaving even filesystem values blank in Explorer.
+                _ = writeln!(
+                    xml,
+                    r#"                <com4:Extension Category="windows.comServer">"#
+                );
+                _ = writeln!(xml, "                    <com4:ComServer>");
+                _ = writeln!(
+                    xml,
+                    r#"                        <com4:InProcessServer Path="{}">"#,
+                    xml_escape(&shell_extension_library(shell))
+                );
+                _ = writeln!(
+                    xml,
+                    r#"                            <com4:ClassReference Id="{}" ThreadingModel="STA" Virtualization="disabled"/>"#,
+                    clsid_attribute(clsid)
+                );
+                _ = writeln!(xml, "                        </com4:InProcessServer>");
+                _ = writeln!(xml, "                    </com4:ComServer>");
+                _ = writeln!(xml, "                </com4:Extension>");
+            }
         }
         _ = writeln!(xml, "            </Extensions>");
     }
@@ -451,6 +506,9 @@ package = "../viewer-shell"
 library = "viewer-shell"
 thumbnail_handler = "{a1b2c3d4-0000-4000-8000-000000000001}"
 preview_handler = "A1B2C3D4-0000-4000-8000-000000000002"
+property_handler = "A1B2C3D4-0000-4000-8000-000000000003"
+preview_details = "prop:System.Image.Dimensions;System.Size"
+full_details = "prop:System.Image.HorizontalSize;System.Image.VerticalSize"
 "#,
         )
         .expect("Manifest");
@@ -481,6 +539,13 @@ preview_handler = "A1B2C3D4-0000-4000-8000-000000000002"
             2
         );
         assert!(xml.contains(r#"<com:SurrogateServer DisplayName="viewer">"#));
+        // Explorer's property reader requests in-process activation even though previews
+        // and thumbnails use the surrogate. Both paths must refer to the same property class.
+        assert!(xml.contains(r#"<com4:InProcessServer Path="viewer-shell.dll">"#));
+        assert!(xml.contains(
+            r#"<com4:ClassReference Id="A1B2C3D4-0000-4000-8000-000000000003" ThreadingModel="STA" Virtualization="disabled"/>"#
+        ));
+        assert_eq!(xml.matches("<com4:ClassReference ").count(), 1);
         assert!(xml.contains(
             r#"<com:Class Id="A1B2C3D4-0000-4000-8000-000000000001" Path="viewer-shell.dll" ThreadingModel="STA"/>"#
         ));
@@ -489,6 +554,62 @@ preview_handler = "A1B2C3D4-0000-4000-8000-000000000002"
         ));
         // The handlers follow the file types inside each association.
         assert!(xml.find("</uap:SupportedFileTypes>") < xml.find("<desktop2:ThumbnailHandler"));
+        for association in xml.split("<uap:FileTypeAssociation ").skip(1) {
+            let association = association
+                .split("</uap:FileTypeAssociation>")
+                .next()
+                .expect("Association");
+            assert!(association.contains(
+                r#"<desktop2:DesktopPropertyHandler Clsid="A1B2C3D4-0000-4000-8000-000000000003"/>"#
+            ));
+            assert!(association.contains(r#"<desktop3:PropertyList Property="previewDetails" Value="prop:System.Image.Dimensions;System.Size"/>"#));
+            assert!(association.contains(r#"<desktop3:PropertyList Property="fullDetails" Value="prop:System.Image.HorizontalSize;System.Image.VerticalSize"/>"#));
+            assert!(
+                association.find("<desktop2:DesktopPreviewHandler")
+                    < association.find("<desktop2:DesktopPropertyHandler")
+            );
+            assert!(
+                association.find("<desktop2:DesktopPropertyHandler")
+                    < association.find("<desktop3:PropertyLists>")
+            );
+        }
+        assert!(xml.contains(r#"<com:Class Id="A1B2C3D4-0000-4000-8000-000000000003" Path="viewer-shell.dll" ThreadingModel="STA"/>"#));
+    }
+
+    #[test]
+    fn imageview_registers_details_for_all_supported_formats() {
+        let manifest: Manifest = basic_toml::from_str(include_str!(
+            "../../../../apps/desktop/imageview/Cargo.toml"
+        ))
+        .expect("ImageView manifest");
+        let windows = manifest
+            .package
+            .metadata
+            .bundle
+            .windows
+            .as_ref()
+            .expect("Windows metadata");
+        let xml = appx_manifest(&manifest, windows, "Publisher", "imageview.exe", "arm64", 0);
+        let shell = windows.shell_extension.as_ref().expect("Shell extension");
+        let property =
+            clsid_attribute(shell.property_handler.as_deref().expect("Property handler"));
+        let mut extension_count = 0;
+        for association in xml.split("<uap:FileTypeAssociation ").skip(1) {
+            let association = association
+                .split("</uap:FileTypeAssociation>")
+                .next()
+                .expect("Association");
+            extension_count += association.matches("<uap:FileType ").count();
+            assert!(association.contains(&format!(
+                r#"<desktop2:DesktopPropertyHandler Clsid="{property}"/>"#
+            )));
+            assert!(association.contains("<desktop2:ThumbnailHandler "));
+            assert!(association.contains("<desktop2:DesktopPreviewHandler "));
+            for list in ["previewDetails", "fullDetails"] {
+                assert!(association.contains(&format!(r#"Property="{list}" Value="prop:"#)));
+            }
+        }
+        assert_eq!(extension_count, 28);
     }
 
     #[test]
