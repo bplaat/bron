@@ -5,7 +5,7 @@ The build installs Windows, guest drivers and software, applies settings, activa
 
 ## Building
 
-Requires macOS, Docker, Node.js, QEMU, mtools (`brew install qemu mtools`) and the
+Requires macOS, Docker, Node.js, Make, QEMU, mtools and NASM (`brew install qemu mtools nasm`) and the
 [Windows XP toolchain](../../../../tools/winxp-toolchain), which builds the native apps. Run from the root of the repository:
 
 ```sh
@@ -53,7 +53,7 @@ Generated: `winxp-image/out/` (install images, screenshots), the built `.exe`/`.
    boots v86. `v86setup.exe` installs drivers, applies settings, activates Windows and creates the `bplaat` account.
    Activation failure stops the build. The first user logon reapplies settings reset by Windows and fills the Media
    Player library. Setup files and caches are removed and free space is zeroed. Output: `out/disk.img`.
-4. **Native apps** (`disk.mjs apps`): copies freshly built Bastiaan, Reversi and 2048 with its
+4. **Native apps** (`disk.mjs apps`): copies freshly built Bastiaan, Reversi, RedSquare and 2048 with its
    MiniBlink DLL onto a copy of the disk. The software stage installs their shortcuts and logon entry. Output: `out/site.img`.
 5. **Site** (`make-state.mjs`, `chunks.mjs`, `bootscreen.mjs`): compresses the disk into 1 MiB zstd chunks, only the
    chunks that changed since the last build, saves a desktop snapshot at 1024x768 and extracts boot screen assets from
@@ -72,8 +72,8 @@ Generated: `winxp-image/out/` (install images, screenshots), the built `.exe`/`.
   other than DHCP disabled.
 - Notification balloons, the XP tour, Desktop Cleanup Wizard, low disk warnings, AutoRun and first-run prompts disabled.
 - Windows Media Player with its menu bar, album art from MP3 covers (`Folder.jpg`), My Music and Windows MIDI files.
-- Desktop shortcuts for My Computer, My Documents, Media Player, Bastiaan, Reversi, 2048, Minesweeper, Pinball and the games
-  below. [Bastiaan](../../../desktop/bastiaan), the website as a native app, starts at logon.
+- Desktop shortcuts for My Computer, My Documents, Media Player, Bastiaan, Reversi, RedSquare, 2048, Minesweeper,
+  Pinball and the games below. [Bastiaan](../../../desktop/bastiaan), the website as a native app, starts at logon.
 - Age of Empires with The Rise of Rome and MIDI music; Age of Empires II with The Conquerors, CD music and videos;
   Civilization III Complete.
 - Notepad++ without its updater, associated with text, ini, inf and xml files; MiTeC EXE Explorer, Hexadecimal Editor

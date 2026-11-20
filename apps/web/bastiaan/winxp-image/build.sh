@@ -33,6 +33,11 @@ for app in reversi game2048; do cp "$release/$app.exe" "software/$app/"; done
 build_dir=${CARGO_BUILD_BUILD_DIR:-$root/target/cargo-build/winxp}
 cp "$build_dir/$target/release/miniblink.dll" software/game2048/
 
+# RedSquare is built with NASM.
+redsquare=$root/examples/windows/redsquare
+command make -C "$redsquare" redsquare-x86.exe
+cp "$redsquare/redsquare-x86.exe" software/redsquare/redsquare.exe
+
 # 1. Unattended Windows install in QEMU
 if [ ! -f out/install.img ]; then
     docker run --rm -v "$PWD/out:/out" winxp-tools cp /usr/lib/syslinux/mbr/mbr.bin /out/

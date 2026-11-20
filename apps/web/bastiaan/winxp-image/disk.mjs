@@ -196,7 +196,8 @@ if (mode === 'software') {
 } else if (mode === 'apps') {
     // Their software/ folders install them with shortcuts and logon entries, a new build only replaces the exe and
     // 2048's MiniBlink
-    for (const [name, folder] of Object.entries({ bastiaan: 'Bastiaan', reversi: 'Reversi', game2048: '2048' })) {
+    const apps = { bastiaan: 'Bastiaan', reversi: 'Reversi', game2048: '2048', redsquare: 'RedSquare' };
+    for (const [name, folder] of Object.entries(apps)) {
         copy(path.join(root, 'software', name, `${name}.exe`), `/Program Files/${folder}/${name}.exe`);
     }
     copy(path.join(root, 'software', 'game2048', 'miniblink.dll'), '/Program Files/2048/miniblink.dll');
