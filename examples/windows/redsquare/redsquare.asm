@@ -50,8 +50,11 @@ code_section
     %define BASSIEBAS_BITMAP_ID 1
 
     %define FPS 50
+    %define FRAME_MS (1000 / FPS)
+    %define MAX_FRAME_LAG 10
     %define FRAME_TIMER_ID 1
     %define BLUE_SQUARES_COUNT 4
+    %define INITIAL_BLUE_SQUARE_SPEED 2
 
     struct Square, \
         rect, Rect_size, \
@@ -62,6 +65,7 @@ code_section
         bassiebas_bitmap, POINTER_size, \
         background_color, DWORD_size, \
         time, DWORD_size, \
+        next_tick, DWORD_size, \
         score, DWORD_size, \
         level, DWORD_size, \
         is_dragging, DWORD_size, \
@@ -113,8 +117,8 @@ code_section
 
         mov dword [_di + WindowData.blue_squares + 0 * Square_size + Square.rect + Rect.y], 16 + 20 + 16 + 20 + 16
 
-        mov dword [_di + WindowData.blue_squares + 0 * Square_size + Square.vx], 1
-        mov dword [_di + WindowData.blue_squares + 0 * Square_size + Square.vy], 1
+        mov dword [_di + WindowData.blue_squares + 0 * Square_size + Square.vx], INITIAL_BLUE_SQUARE_SPEED
+        mov dword [_di + WindowData.blue_squares + 0 * Square_size + Square.vy], INITIAL_BLUE_SQUARE_SPEED
 
         ; Set top right blue square
         mov dword [_di + WindowData.blue_squares + 1 * Square_size + Square.rect + Rect.width], 96
@@ -127,8 +131,8 @@ code_section
 
         mov dword [_di + WindowData.blue_squares + 1 * Square_size + Square.rect + Rect.y], 16 + 20 + 16 + 20 + 16
 
-        mov dword [_di + WindowData.blue_squares + 1 * Square_size + Square.vx], -1
-        mov dword [_di + WindowData.blue_squares + 1 * Square_size + Square.vy], 1
+        mov dword [_di + WindowData.blue_squares + 1 * Square_size + Square.vx], -INITIAL_BLUE_SQUARE_SPEED
+        mov dword [_di + WindowData.blue_squares + 1 * Square_size + Square.vy], INITIAL_BLUE_SQUARE_SPEED
 
         ; Set bottom left blue square
         mov dword [_di + WindowData.blue_squares + 2 * Square_size + Square.rect + Rect.width], 64
@@ -141,8 +145,8 @@ code_section
         sub eax, 16 + 20 + 16
         mov dword [_di + WindowData.blue_squares + 2 * Square_size + Square.rect + Rect.y], eax
 
-        mov dword [_di + WindowData.blue_squares + 2 * Square_size + Square.vx], 1
-        mov dword [_di + WindowData.blue_squares + 2 * Square_size + Square.vy], -1
+        mov dword [_di + WindowData.blue_squares + 2 * Square_size + Square.vx], INITIAL_BLUE_SQUARE_SPEED
+        mov dword [_di + WindowData.blue_squares + 2 * Square_size + Square.vy], -INITIAL_BLUE_SQUARE_SPEED
 
         ; Set bottom right blue square
         mov dword [_di + WindowData.blue_squares + 3 * Square_size + Square.rect + Rect.width], 128
@@ -158,11 +162,14 @@ code_section
         sub eax, 16 + 20 + 16
         mov dword [_di + WindowData.blue_squares + 3 * Square_size + Square.rect + Rect.y], eax
 
-        mov dword [_di + WindowData.blue_squares + 3 * Square_size + Square.vx], -1
-        mov dword [_di + WindowData.blue_squares + 3 * Square_size + Square.vy], -1
+        mov dword [_di + WindowData.blue_squares + 3 * Square_size + Square.vx], -INITIAL_BLUE_SQUARE_SPEED
+        mov dword [_di + WindowData.blue_squares + 3 * Square_size + Square.vy], -INITIAL_BLUE_SQUARE_SPEED
 
-        ; Create frame timer
-        invoke SetTimer, [hwnd], FRAME_TIMER_ID, 1000 / FPS, NULL
+        ; Create frame timer, game updates are timed by the tick count so speed is independent of timer and paint rate
+        invoke GetTickCount
+        mov _di, [window_data]
+        mov [_di + WindowData.next_tick], eax
+        invoke SetTimer, [hwnd], FRAME_TIMER_ID, FRAME_MS, NULL
 
         end_local
         return
@@ -272,6 +279,7 @@ code_section
 
         .wm_timer.frame_timer:
             local window_data, POINTER_size, \
+                now, DWORD_size, \
                 is_leveled, DWORD_size, \
                 index, DWORD_size
 
@@ -279,8 +287,25 @@ code_section
             invoke GetWindowLongPtrA, [hwnd], GWLP_USERDATA
             mov [window_data], _ax
 
-            ; Increase score
+            ; Skip ahead when too far behind instead of catching up all missed frames
+            invoke GetTickCount
+            mov [now], eax
             mov _si, [window_data]
+            sub eax, [_si + WindowData.next_tick]
+            if eax, ">", MAX_FRAME_LAG * FRAME_MS
+                mov eax, [now]
+                mov [_si + WindowData.next_tick], eax
+            end_if
+
+        .wm_timer.frame_timer.update:
+            ; Run fixed timestep updates until caught up with the tick count
+            mov _si, [window_data]
+            mov eax, [now]
+            sub eax, [_si + WindowData.next_tick]
+            js .wm_timer.frame_timer.draw
+            add dword [_si + WindowData.next_tick], FRAME_MS
+
+            ; Increase score
             mov eax, [_si + WindowData.level]
             add [_si + WindowData.score], eax
 
@@ -392,7 +417,9 @@ code_section
                 inc dword [index]
                 mov ecx, [index]
             end_while
+            jmp .wm_timer.frame_timer.update
 
+        .wm_timer.frame_timer.draw:
             ; Redraw window
             invoke InvalidateRect, [hwnd], NULL, TRUE
 
@@ -857,6 +884,7 @@ data_section
             GetLocalTime, "GetLocalTime", \
             GetModuleHandleA, "GetModuleHandleA", \
             GetProcessHeap, "GetProcessHeap", \
+            GetTickCount, "GetTickCount", \
             HeapAlloc, "HeapAlloc", \
             HeapFree, "HeapFree"
 
