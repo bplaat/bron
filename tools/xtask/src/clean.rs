@@ -5,12 +5,14 @@
  */
 
 use std::env;
+use std::fs;
+use std::io::ErrorKind;
 use std::path::Path;
 use std::process::Command;
 
 use anyhow::{Context, Result};
 
-use crate::process::run;
+use crate::process::{capture, run};
 use crate::utils::{collect_paths, relative_slash, remove_directory_except, remove_path};
 use crate::{Os, Xtask};
 
@@ -62,41 +64,119 @@ fn is_generated_path(root: &Path, path: &Path, is_dir: bool) -> bool {
             && path.with_extension("s").is_file())
 }
 
+fn path_size(path: &Path) -> Result<u64> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(0),
+        Err(error) => {
+            return Err(error).with_context(|| format!("failed to inspect {}", path.display()));
+        }
+    };
+    if metadata.is_dir() {
+        let entries =
+            fs::read_dir(path).with_context(|| format!("failed to read {}", path.display()))?;
+        entries.map(|entry| path_size(&entry?.path())).sum()
+    } else if metadata.is_file() {
+        Ok(metadata.len())
+    } else {
+        Ok(0)
+    }
+}
+
+fn format_bytes(bytes: u64) -> String {
+    if bytes < 1024 {
+        return format!("{bytes} {}", if bytes == 1 { "byte" } else { "bytes" });
+    }
+    let mut size = bytes as f64 / 1024.0;
+    let mut unit = "KiB";
+    for next in ["MiB", "GiB", "TiB", "PiB", "EiB"] {
+        if size < 1024.0 {
+            break;
+        }
+        size /= 1024.0;
+        unit = next;
+    }
+    format!("{size:.2} {unit}")
+}
+
 impl Xtask {
     pub(crate) fn clean(&self) -> Result<()> {
+        let bytes = self.clean_cargo_artifacts()? + self.clean_generated_files()?;
+        println!("Freed {}", format_bytes(bytes));
+        Ok(())
+    }
+
+    fn clean_cargo_artifacts(&self) -> Result<u64> {
         if self.os == Os::Windows {
             // Windows cannot delete the running xtask executable.
             println!("Cleaning Cargo artifacts...");
             let target = self.root.join("target");
             if target.exists() {
                 let executable = env::current_exe().context("failed to locate xtask executable")?;
-                remove_directory_except(&target, &executable)?;
+                return remove_directory_except(&target, &executable);
             }
-        } else {
-            run(Command::new("cargo").arg("clean"))?;
+            return Ok(0);
         }
-        self.clean_generated_files()
+
+        let output = capture(Command::new("cargo").current_dir(&self.root).args([
+            "metadata",
+            "--no-deps",
+            "--format-version",
+            "1",
+        ]))?;
+        let metadata: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+        let target = Path::new(
+            metadata["target_directory"]
+                .as_str()
+                .context("Cargo metadata has no target directory")?,
+        );
+        let build = Path::new(
+            metadata["build_directory"]
+                .as_str()
+                .context("Cargo metadata has no build directory")?,
+        );
+        let artifact_size = || {
+            if build.starts_with(target) {
+                path_size(target)
+            } else if target.starts_with(build) {
+                path_size(build)
+            } else {
+                Ok(path_size(target)? + path_size(build)?)
+            }
+        };
+        let before = artifact_size()?;
+        run(Command::new("cargo")
+            .current_dir(&self.root)
+            .args(["clean", "--quiet"]))?;
+        Ok(before.saturating_sub(artifact_size()?))
     }
 
-    fn clean_generated_files(&self) -> Result<()> {
+    fn clean_generated_files(&self) -> Result<u64> {
         let mut generated = Vec::new();
         collect_paths(&self.root, &mut generated, &|path, is_dir| {
             is_generated_path(&self.root, path, is_dir)
         })?;
+        let mut bytes = 0;
         for path in generated {
             println!("Removing {}", relative_slash(&self.root, &path));
+            let size = path_size(&path)?;
             remove_path(&path)?;
+            bytes += size;
         }
-        Ok(())
+        Ok(bytes)
     }
 }
 
 // MARK: Tests
 #[cfg(test)]
 mod tests {
-    use std::fs;
-
     use super::*;
+
+    #[test]
+    fn clean_summary_formats_mebibytes_and_gibibytes() {
+        assert_eq!(format_bytes(1_572_864), "1.50 MiB");
+        assert_eq!(format_bytes(2_684_354_560), "2.50 GiB");
+    }
 
     #[test]
     fn clean_removes_build_outputs_and_preserves_inputs() -> Result<()> {
@@ -157,7 +237,7 @@ mod tests {
             root: root.clone(),
             os: Os::detect()?,
         };
-        xtask.clean_generated_files()?;
+        assert_eq!(xtask.clean_generated_files()?, 7 * generated.len() as u64);
         for file in generated {
             assert!(!root.join(file).exists(), "generated file remains: {file}");
         }
@@ -165,7 +245,7 @@ mod tests {
             assert!(root.join(file).exists(), "input was deleted: {file}");
         }
         // Cleaning an already clean tree must also succeed.
-        xtask.clean_generated_files()?;
+        assert_eq!(xtask.clean_generated_files()?, 0);
         fs::remove_dir_all(root)?;
         Ok(())
     }

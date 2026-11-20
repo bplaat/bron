@@ -101,7 +101,8 @@ pub(crate) fn remove_path_if_exists(path: &Path) -> Result<()> {
     }
 }
 
-pub(crate) fn remove_directory_except(directory: &Path, preserve: &Path) -> Result<()> {
+pub(crate) fn remove_directory_except(directory: &Path, preserve: &Path) -> Result<u64> {
+    let mut bytes = 0;
     for entry in fs::read_dir(directory)
         .with_context(|| format!("failed to read {}", directory.display()))?
     {
@@ -111,7 +112,7 @@ pub(crate) fn remove_directory_except(directory: &Path, preserve: &Path) -> Resu
         }
         let metadata = fs::symlink_metadata(&path)?;
         if metadata.is_dir() && !metadata.file_type().is_symlink() {
-            remove_directory_except(&path, preserve)?;
+            bytes += remove_directory_except(&path, preserve)?;
             if !preserve.starts_with(&path) {
                 fs::remove_dir(&path)
                     .with_context(|| format!("failed to remove {}", path.display()))?;
@@ -119,9 +120,12 @@ pub(crate) fn remove_directory_except(directory: &Path, preserve: &Path) -> Resu
         } else {
             fs::remove_file(&path)
                 .with_context(|| format!("failed to remove {}", path.display()))?;
+            if metadata.is_file() {
+                bytes += metadata.len();
+            }
         }
     }
-    Ok(())
+    Ok(bytes)
 }
 
 pub(crate) fn copy_directory_contents(source: &Path, destination: &Path) -> Result<()> {
@@ -374,7 +378,7 @@ pub(crate) mod tests {
         fs::write(root.join("debug/unrelated.pdb"), "generated")?;
         fs::write(root.join("release/app.exe"), "generated")?;
 
-        remove_directory_except(&root, &executable)?;
+        assert_eq!(remove_directory_except(&root, &executable)?, 18);
 
         assert!(executable.exists());
         assert!(!root.join("debug/unrelated.pdb").exists());
