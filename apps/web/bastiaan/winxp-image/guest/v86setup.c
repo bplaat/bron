@@ -69,11 +69,12 @@ static const REG_VALUE machine[] = {
 };
 
 /* Services v86 has no use for: the LAN only needs the DHCP client, no printer, no updates */
+/* System Information needs Help and Support, so keep its default startup setting. */
 static const WCHAR* const services[] = {
-    L"Alerter",          L"Browser", L"Dnscache",  L"ERSvc",          L"helpsvc",  L"lanmanserver", L"LmHosts",
-    L"Messenger",        L"Nla",     L"RasMan",    L"RemoteRegistry", L"Schedule", L"seclogon",     L"SharedAccess",
-    L"ShellHWDetection", L"Spooler", L"srservice", L"SSDPSRV",        L"stisvc",   L"TapiSrv",      L"TrkWks",
-    L"upnphost",         L"W32Time", L"WebClient", L"wscsvc",         L"wuauserv", L"WZCSVC",
+    L"Alerter", L"Browser",   L"Dnscache",       L"ERSvc",    L"lanmanserver", L"LmHosts",      L"Messenger",
+    L"Nla",     L"RasMan",    L"RemoteRegistry", L"Schedule", L"seclogon",     L"SharedAccess", L"ShellHWDetection",
+    L"Spooler", L"srservice", L"SSDPSRV",        L"stisvc",   L"TapiSrv",      L"TrkWks",       L"upnphost",
+    L"W32Time", L"WebClient", L"wscsvc",         L"wuauserv", L"WZCSVC",
 };
 
 /* User settings, written to the Default User profile so the new account starts with them */
