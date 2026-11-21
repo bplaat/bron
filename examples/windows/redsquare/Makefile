@@ -1,5 +1,5 @@
 BINARIES := redsquare-x86.exe redsquare-x64.exe
-DEPS := redsquare.asm ../libwindows.inc redsquare.manifest icon.ico bassiebas.bmp Makefile
+DEPS := redsquare.asm ../libwindows.inc app.manifest icon.ico bassiebas.bmp Makefile
 
 .PHONY: all clean
 .DELETE_ON_ERROR:

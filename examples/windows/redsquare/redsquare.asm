@@ -1010,5 +1010,5 @@ resources_section
             ProductVersion, "1.0.0.0"
     %endif
 
-    manifest app_manifest, "redsquare.manifest"
+    manifest app_manifest, "app.manifest"
 end_resources_section
