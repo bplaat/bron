@@ -16,7 +16,6 @@ wrapper runs it for you:
   libraries of the system DLLs to `../../target/winxp-toolchain/sysroot/`
 - Checks out LLVM's [compiler-rt](https://github.com/llvm/llvm-project/tree/main/compiler-rt/lib/builtins)
   builtins of llvmorg-23.1.3 and builds them to the sysroot
-- Builds the guest agent of the QEMU runner to `../../target/winxp-toolchain/bin/`
 
 ```sh
 cd tools/winxp-toolchain
@@ -62,9 +61,10 @@ Windows XP has some limits that the toolchain doesn't work around:
   share compatibility paths with `win7`, while `cfg(target_vendor = "winxp")` selects XP-specific code
 - `bin/cargo` is the cargo wrapper, `bin/cc` and `bin/ar` are the C compiler and archiver for
   cc-rs build scripts, `bin/windres` is LLVM's resource compiler for winresource build scripts
-- `bin/run` runs a program in Windows XP with `winxp-runner`, which it builds first
-- `runner/` is `winxp-runner`, which runs a program headless in Windows XP in QEMU. The first run
-  copies the Windows XP disk as a copy-on-write clone, puts `runner/agent.c` in its Startup
+- `bin/run` runs a program in Windows XP with `winxp-runner`, which it builds first with its agent
+- `runner/` is `winxp-runner`, which runs a program headless in Windows XP in QEMU, with
+  `winxp-runner-agent`, its guest side, which `bin/run` builds for Windows XP. The first run
+  copies the Windows XP disk as a copy-on-write clone, puts the agent in its Startup
   folder, boots it until the agent is ready and saves that as a QEMU snapshot. Every run restores
   a copy of the snapshot, sends the program to the agent over COM1, prints its output and exits
   with its exit code. `--shot <file.png>` takes a screenshot after `--wait <seconds>` (default 10),

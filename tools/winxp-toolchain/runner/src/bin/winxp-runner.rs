@@ -76,6 +76,13 @@ fn build_dir() -> PathBuf {
     dir.canonicalize().unwrap_or(dir)
 }
 
+/// The agent, which bin/run builds for Windows XP
+fn agent() -> PathBuf {
+    let agent = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../../target/i686-winxp-windows-gnu/release/winxp-runner-agent.exe");
+    agent.canonicalize().unwrap_or(agent)
+}
+
 /// The Windows XP disk, which isn't in the repository
 fn image() -> io::Result<PathBuf> {
     env::var_os("WINXP_IMAGE")
@@ -205,7 +212,7 @@ fn forward_output(serial: UnixStream) -> mpsc::Receiver<Option<u32>> {
 /// agent or the runner, which prepares the disk, changed
 fn prepare(dir: &Path) -> io::Result<()> {
     let ready = dir.join("ready.qcow2");
-    let agent = build_dir().join("bin/winxp-runner-agent.exe");
+    let agent = agent();
     let runner = env::current_exe()?;
     let image = image()?;
     let changed = [image.as_path(), &agent, &runner]

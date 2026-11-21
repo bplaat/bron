@@ -1,11 +1,18 @@
 #!/bin/sh
-# Runs a Windows program in Windows XP in QEMU with winxp-runner, which it builds first.
+# Runs a Windows program in Windows XP in QEMU with winxp-runner, which it builds first with its
+# agent for Windows XP.
 # Usage: bin/run [winxp-runner options] <program.exe> [arguments]...
 set -eu
-root=$(cd "$(dirname "$0")/../../.." && pwd)
+dir=$(cd "$(dirname "$0")" && pwd)
+root=$(cd "$dir/../../.." && pwd)
 # Cargo runs this as the runner of a build for Windows XP, leave out its toolchain and target
-env -u RUSTUP_TOOLCHAIN -u RUSTC -u RUSTC_WRAPPER -u RUSTC_WORKSPACE_WRAPPER \
-    -u CARGO_BUILD_TARGET -u CARGO_BUILD_BUILD_DIR \
-    -u CARGO_UNSTABLE_BUILD_STD -u CARGO_UNSTABLE_JSON_TARGET_SPEC -u __CARGO_TESTS_ONLY_SRC_ROOT \
-    cargo build -q --release -p winxp-runner --manifest-path "$root/Cargo.toml" --target-dir "$root/target"
+clean_env() {
+    env -u RUSTUP_TOOLCHAIN -u RUSTC -u RUSTC_WRAPPER -u RUSTC_WORKSPACE_WRAPPER \
+        -u CARGO_BUILD_TARGET -u CARGO_BUILD_BUILD_DIR \
+        -u CARGO_UNSTABLE_BUILD_STD -u CARGO_UNSTABLE_JSON_TARGET_SPEC -u __CARGO_TESTS_ONLY_SRC_ROOT "$@"
+}
+clean_env cargo build -q --release -p winxp-runner --bin winxp-runner --manifest-path "$root/Cargo.toml" \
+    --target-dir "$root/target"
+clean_env "$dir/cargo" build -q --release -p winxp-runner --bin winxp-runner-agent \
+    --manifest-path "$root/Cargo.toml" --target-dir "$root/target"
 exec "$root/target/release/winxp-runner" "$@"

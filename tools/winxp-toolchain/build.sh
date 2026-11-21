@@ -2,7 +2,7 @@
 # Builds the Windows XP toolchain in the repository target/winxp-toolchain/: copies the std
 # sources of the nightly Rust to src/rust-std/ and applies patches/rust-std/, fetches mingw-w64
 # and LLVM's compiler-rt builtins to src/ and builds them with clang into sysroot/, the C runtime
-# on XP's own msvcrt.dll, and builds the QEMU runner's guest agent to bin/.
+# on XP's own msvcrt.dll.
 # bin/cargo and bin/cc run this before they build.
 #
 # Usage: ./build.sh [command]...
@@ -211,15 +211,6 @@ build_libraries() {
     fi
 }
 
-# The guest agent of the QEMU runner
-build_agent() {
-    outdated "$BUILD_DIR/bin/winxp-runner-agent.exe" "$TOOLCHAIN_DIR/runner/agent.c" "$SYSROOT/lib/crt2.o" || return 0
-    msg "Building the runner agent"
-    mkdir -p "$BUILD_DIR/bin"
-    "${LLVM}clang" "${XP_CFLAGS[@]}" "${XP_LDFLAGS[@]}" -Wall -Wextra -Werror -mwindows -s \
-        "$TOOLCHAIN_DIR/runner/agent.c" -o "$BUILD_DIR/bin/winxp-runner-agent.exe" || die "Failed to build the runner agent"
-}
-
 clean() {
     msg "Removing ../../target/winxp-toolchain/"
     rm -rf "$BUILD_DIR"
@@ -253,7 +244,6 @@ build() {
     patch rust-std
     build_mingw
     build_libraries
-    build_agent
 }
 
 [ $# -gt 0 ] || set -- all
