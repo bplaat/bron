@@ -4,49 +4,71 @@
  * SPDX-License-Identifier: MIT
  */
 
-use std::fs::{self, File};
-use std::io::Read;
-use std::mem;
+use std::{env, mem, slice};
 
+use super::event_loop::APP_ID;
 use super::headers::*;
-use super::window::config_dir;
+use super::{registry_value, set_registry_value};
+
+/// `HKEY_CURRENT_USER\Software\<organization>\<application>\Window`, next to the values of the
+/// preferences crate, or the executable name without an app id
+fn window_key() -> Vec<u16> {
+    let application = unsafe {
+        if let Some(ref app_id) = APP_ID {
+            format!("{}\\{}", app_id.organization, app_id.application)
+        } else {
+            env::current_exe()
+                .ok()
+                .and_then(|path| Some(path.file_stem()?.to_string_lossy().into_owned()))
+                .unwrap_or_else(|| "bwindow".to_owned())
+        }
+    };
+    format!("Software\\{application}\\Window\0")
+        .encode_utf16()
+        .collect()
+}
 
 /// Restores the window placement saved by [`save_window_state`], returns whether one was applied
 pub(super) unsafe fn restore_window_state(hwnd: HWND) -> bool {
-    let Ok(mut file) = File::open(config_dir().join("window.bin")) else {
-        return false;
+    let mut window_placement: WINDOWPLACEMENT = unsafe { mem::zeroed() };
+    let data = unsafe {
+        slice::from_raw_parts_mut(
+            (&raw mut window_placement).cast::<u8>(),
+            size_of::<WINDOWPLACEMENT>(),
+        )
     };
-    let size = size_of::<WINDOWPLACEMENT>();
-    let mut buffer = vec![0u8; size];
-    if file.read_exact(&mut buffer).is_err() {
+    if !registry_value(
+        HKEY_CURRENT_USER,
+        &window_key(),
+        w!("Placement"),
+        REG_BINARY,
+        data,
+    ) {
         return false;
     }
-    unsafe {
-        let mut window_placement: WINDOWPLACEMENT = std::ptr::read(buffer.as_ptr() as *const _);
-        window_placement.length = size as u32;
-        SetWindowPlacement(hwnd, &window_placement);
-    }
+    window_placement.length = size_of::<WINDOWPLACEMENT>() as u32;
+    unsafe { SetWindowPlacement(hwnd, &window_placement) };
     true
 }
 
-/// Writes the window's current placement to the config directory
+/// Writes the window's current placement to the registry
 pub(super) fn save_window_state(hwnd: HWND) {
-    let directory = config_dir();
-    if fs::create_dir_all(&directory).is_err() {
+    let mut window_placement: WINDOWPLACEMENT = unsafe { mem::zeroed() };
+    window_placement.length = size_of::<WINDOWPLACEMENT>() as u32;
+    if unsafe { GetWindowPlacement(hwnd, &mut window_placement) } == 0 {
         return;
     }
-    unsafe {
-        use std::io::Write;
-        let mut window_placement: WINDOWPLACEMENT = mem::zeroed();
-        window_placement.length = size_of::<WINDOWPLACEMENT>() as u32;
-        if GetWindowPlacement(hwnd, &mut window_placement) == 0 {
-            return;
-        }
-        if let Ok(mut file) = File::create(directory.join("window.bin")) {
-            _ = file.write_all(std::slice::from_raw_parts(
-                &window_placement as *const _ as *const u8,
-                size_of::<WINDOWPLACEMENT>(),
-            ));
-        }
-    }
+    let data = unsafe {
+        slice::from_raw_parts(
+            (&raw const window_placement).cast::<u8>(),
+            size_of::<WINDOWPLACEMENT>(),
+        )
+    };
+    set_registry_value(
+        HKEY_CURRENT_USER,
+        &window_key(),
+        w!("Placement"),
+        REG_BINARY,
+        data,
+    );
 }

@@ -21,9 +21,12 @@ pub(crate) type w_char = u16;
 pub(crate) type HANDLE = *mut c_void;
 pub(crate) type HKEY = HANDLE;
 pub(crate) const HKEY_CURRENT_USER: HKEY = 0x80000001usize as HKEY;
-pub(crate) const RRF_RT_REG_DWORD: u32 = 0x00000018;
+pub(crate) const REG_BINARY: u32 = 3;
 pub(crate) const REG_DWORD: u32 = 4;
-pub(crate) const KEY_READ: u32 = 0x20019;
+pub(crate) const RRF_RT_REG_BINARY: u32 = 0x0008;
+pub(crate) const RRF_RT_REG_DWORD: u32 = 0x0010;
+pub(crate) const KEY_QUERY_VALUE: u32 = 0x0001;
+pub(crate) const KEY_SET_VALUE: u32 = 0x0002;
 pub(crate) const ERROR_SUCCESS: i32 = 0;
 
 // MARK: kernel32.dll
@@ -99,6 +102,17 @@ unsafe extern "system" {
         samDesired: u32,
         phkResult: *mut HKEY,
     ) -> i32;
+    pub(crate) fn RegCreateKeyExW(
+        hkey: HKEY,
+        lpSubKey: *const w_char,
+        reserved: u32,
+        lpClass: *const w_char,
+        dwOptions: u32,
+        samDesired: u32,
+        lpSecurityAttributes: *const c_void,
+        phkResult: *mut HKEY,
+        lpdwDisposition: *mut u32,
+    ) -> i32;
     pub(crate) fn RegQueryValueExW(
         hkey: HKEY,
         lpValueName: *const w_char,
@@ -106,6 +120,14 @@ unsafe extern "system" {
         lpType: *mut u32,
         lpData: *mut c_void,
         lpcbData: *mut u32,
+    ) -> i32;
+    pub(crate) fn RegSetValueExW(
+        hkey: HKEY,
+        lpValueName: *const w_char,
+        reserved: u32,
+        dwType: u32,
+        lpData: *const c_void,
+        cbData: u32,
     ) -> i32;
     pub(crate) fn RegCloseKey(hkey: HKEY) -> i32;
 }

@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use super::headers::*;
 use super::instance::SingleInstance;
-use super::{monitor_dpi, registry_dword, set_process_dpi_aware, set_process_dpi_awareness};
+use super::{monitor_dpi, registry_value, set_process_dpi_aware, set_process_dpi_awareness};
 use crate::mailbox::{Mailbox, Message};
 use crate::{
     AppId, EventLoopBuilder, LogicalInsets, LogicalPoint, LogicalSize, NativeEvent as Event, Theme,
@@ -140,12 +140,15 @@ unsafe fn enable_high_dpi_awareness() {
 
 // MARK: Theme
 pub(super) fn system_theme() -> Theme {
-    let apps_use_light_theme = registry_dword(
+    let mut apps_use_light_theme = [0; 4];
+    let found = registry_value(
         HKEY_CURRENT_USER,
         w!("Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize"),
         w!("AppsUseLightTheme"),
+        REG_DWORD,
+        &mut apps_use_light_theme,
     );
-    if apps_use_light_theme == Some(0) {
+    if found && u32::from_ne_bytes(apps_use_light_theme) == 0 {
         Theme::Dark
     } else {
         Theme::Light

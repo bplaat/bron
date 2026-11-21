@@ -109,46 +109,115 @@ pub(super) unsafe fn package_family_name(length: *mut u32, name: *mut u16) -> i3
     }
 }
 
-/// Reads a DWORD registry value, with RegQueryValueExW where Windows XP has no RegGetValueW
-pub(super) fn registry_dword(key: HKEY, sub_key: &[u16], value: &[u16]) -> Option<u32> {
-    let mut data = 0u32;
-    let mut size = size_of::<u32>() as u32;
-    let data_ptr = (&raw mut data).cast::<c_void>();
-    if let Some(get_value) = optional_proc!(
+/// Reads a registry value of exactly the given type and size into `data`, with RegGetValueW and
+/// on Windows XP the open key API, whose type and size checks replace the RRF_RT flags
+pub(super) fn registry_value(
+    key: HKEY,
+    sub_key: &[u16],
+    value: &[u16],
+    kind: u32,
+    data: &mut [u8],
+) -> bool {
+    let (mut actual_kind, mut size) = (0, data.len() as u32);
+    let status = if let Some(get_value) = optional_proc!(
         7,
         "advapi32",
         RegGetValueW(HKEY, *const u16, *const u16, u32, *mut u32, *mut c_void, *mut u32) -> i32
     ) {
-        let status = unsafe {
+        let flags = match kind {
+            REG_BINARY => RRF_RT_REG_BINARY,
+            REG_DWORD => RRF_RT_REG_DWORD,
+            _ => unreachable!("unsupported registry value type"),
+        };
+        unsafe {
             get_value(
                 key,
                 sub_key.as_ptr(),
                 value.as_ptr(),
-                RRF_RT_REG_DWORD,
+                flags,
+                &mut actual_kind,
+                data.as_mut_ptr().cast(),
+                &mut size,
+            )
+        }
+    } else {
+        let mut opened = std::ptr::null_mut();
+        if unsafe { RegOpenKeyExW(key, sub_key.as_ptr(), 0, KEY_QUERY_VALUE, &mut opened) }
+            != ERROR_SUCCESS
+        {
+            return false;
+        }
+        let status = unsafe {
+            RegQueryValueExW(
+                opened,
+                value.as_ptr(),
                 std::ptr::null_mut(),
-                data_ptr,
+                &mut actual_kind,
+                data.as_mut_ptr().cast(),
                 &mut size,
             )
         };
-        return (status == ERROR_SUCCESS).then_some(data);
+        unsafe { RegCloseKey(opened) };
+        status
+    };
+    status == ERROR_SUCCESS && actual_kind == kind && size as usize == data.len()
+}
+
+/// Writes a registry value, creating its key when needed, with RegSetKeyValueW and on Windows XP
+/// the open key API
+#[cfg(feature = "remember_window_state")]
+pub(super) fn set_registry_value(
+    key: HKEY,
+    sub_key: &[u16],
+    value: &[u16],
+    kind: u32,
+    data: &[u8],
+) -> bool {
+    if let Some(set_value) = optional_proc!(
+        7,
+        "advapi32",
+        RegSetKeyValueW(HKEY, *const u16, *const u16, u32, *const c_void, u32) -> i32
+    ) {
+        return unsafe {
+            set_value(
+                key,
+                sub_key.as_ptr(),
+                value.as_ptr(),
+                kind,
+                data.as_ptr().cast(),
+                data.len() as u32,
+            )
+        } == ERROR_SUCCESS;
     }
     let mut opened = std::ptr::null_mut();
-    if unsafe { RegOpenKeyExW(key, sub_key.as_ptr(), 0, KEY_READ, &mut opened) } != ERROR_SUCCESS {
-        return None;
+    if unsafe {
+        RegCreateKeyExW(
+            key,
+            sub_key.as_ptr(),
+            0,
+            std::ptr::null(),
+            0,
+            KEY_SET_VALUE,
+            std::ptr::null(),
+            &mut opened,
+            std::ptr::null_mut(),
+        )
+    } != ERROR_SUCCESS
+    {
+        return false;
     }
-    let mut kind = 0;
     let status = unsafe {
-        RegQueryValueExW(
+        RegSetValueExW(
             opened,
             value.as_ptr(),
-            std::ptr::null_mut(),
-            &mut kind,
-            data_ptr,
-            &mut size,
+            0,
+            kind,
+            data.as_ptr().cast(),
+            data.len() as u32,
         )
     };
     unsafe { RegCloseKey(opened) };
-    (status == ERROR_SUCCESS && kind == REG_DWORD).then_some(data)
+    status == ERROR_SUCCESS
 }
 
 // Windows XP has no DPI awareness, it never scales windows
