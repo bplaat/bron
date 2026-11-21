@@ -5,11 +5,10 @@ The build installs Windows, guest drivers and software, applies settings, activa
 
 ## Building
 
-Builds on macOS and Linux. Requires Node.js, Make, a C compiler, curl, QEMU, mtools, NASM, bsdtar, innoextract and 7-Zip
-(`brew install qemu mtools nasm innoextract sevenzip`, macOS has bsdtar; on Debian or Ubuntu
-`apt install build-essential curl qemu-system-x86 mtools nasm libarchive-tools innoextract 7zip`) and the
-[Windows XP toolchain](../../../../tools/winxp-toolchain), which builds the guest integration, the native apps and the
-development toolchain. Run from the root of the repository:
+Builds on macOS and Linux with Node.js, QEMU, mtools, NASM, innoextract, 7-Zip and the
+[Windows XP toolchain](../../../../tools/winxp-toolchain): `brew install qemu mtools nasm innoextract sevenzip` on
+macOS, `apt install build-essential curl qemu-system-x86 mtools nasm libarchive-tools innoextract 7zip` on Linux. Run
+from the root of the repository:
 
 ```sh
 npm install
@@ -46,7 +45,7 @@ Generated: `winxp-image/out/` (install images, screenshots), the built `.exe`/`.
 
 ## Build stages
 
-1. **Install** (`install.mjs`, `qemu.mjs`, `winnt.sif`, `mbr.asm`): creates an 8 GiB FAT32 disk with our MBR and
+1. **Install** (`install.mjs`, `qemu.mjs`, `winnt.sif`): creates an 8 GiB FAT32 disk with the MBR of `mbr.asm` and
    installs XP unattended in QEMU with 256 MB RAM and no ACPI, using the retail product key in `winnt.sif`. Output:
    `out/install.img`.
 2. **Software** (`disk.mjs software`, `software.mjs`): replaces QEMU's APIC HAL with the Standard PC HAL required by
@@ -123,11 +122,7 @@ narration are included.
 
 ## Guest integration (`guest/`)
 
-One Rust crate with a binary per program and driver, built by `build.sh` with the
-[Windows XP toolchain](../../../../tools/winxp-toolchain): the programs with `bin/cargo`, the drivers with
-`bin/cargo-driver`, which builds them `no_std` without SSE for the kernel. The library has the host protocol
-(`src/protocol.rs`), the backdoor and port I/O (`src/port.rs`) and the bindings of the DDK (`src/ddk.rs`) and Win32
-(`src/win32.rs`).
+A Rust crate with a binary per program and driver, built with the Windows XP toolchain.
 
 - `v86mou.sys`: mouse filter above mouclass for absolute and pointer-locked relative input through the VMware
   backdoor, including buttons and scrolling.
@@ -139,8 +134,8 @@ One Rust crate with a binary per program and driver, built by `build.sh` with th
 - `v86agent.exe`: syncs the display size, host clock and clipboard, saves dropped files and opens HTTP/HTTPS links
   in the browser. Display resizing pauses when a game uses a different colour depth. On request, the agent disables
   NetBIOS and renews the relay's DHCP lease.
-- `v86setup.exe`: configures the guest. `activate.vbs` and `confid.exe`, which turns the installation ID into a
-  confirmation ID, activate Windows; `library.vbs` fills the Media Player library.
+- `v86setup.exe`: configures the guest. `activate.vbs` and `confid.exe` activate Windows offline; `library.vbs` fills
+  the Media Player library.
 
 Host integration: [`web/src/guest-host.ts`](../web/src/guest-host.ts). Protocol: `guest/src/protocol.rs`. Shared machine
 configuration: [`web/src/machine.ts`](../web/src/machine.ts).
