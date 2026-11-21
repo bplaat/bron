@@ -52,10 +52,21 @@ fn parse_json_with_comments(contents: &str) -> Result<Value, serde_json::Error> 
     serde_json::from_str(&json)
 }
 
+/// XML files that VS Code does not detect as XML by itself
+const XML_FILE_PATTERNS: [&str; 3] = ["*.entitlements", "*.manifest", "*.plist"];
+
 fn set_xml_format_on_save(settings: &mut Value) -> Result<()> {
     let settings = settings
         .as_object_mut()
         .context("VS Code settings must be a JSON object")?;
+    let associations = settings
+        .entry("files.associations")
+        .or_insert_with(|| Value::Object(Default::default()))
+        .as_object_mut()
+        .context("VS Code files.associations must be a JSON object")?;
+    for pattern in XML_FILE_PATTERNS {
+        associations.insert(pattern.to_owned(), Value::String("xml".to_owned()));
+    }
     settings.insert(
         "[xml]".to_owned(),
         serde_json::json!({
@@ -133,6 +144,22 @@ mod tests {
             json!({
                 "editor.defaultFormatter": "esbenp.prettier-vscode",
                 "editor.formatOnSave": true
+            })
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn xml_file_associations_keep_other_associations() -> Result<()> {
+        let mut settings = json!({ "files.associations": { "*.inc": "nasm" } });
+        set_xml_format_on_save(&mut settings)?;
+        assert_eq!(
+            settings["files.associations"],
+            json!({
+                "*.entitlements": "xml",
+                "*.inc": "nasm",
+                "*.manifest": "xml",
+                "*.plist": "xml"
             })
         );
         Ok(())
