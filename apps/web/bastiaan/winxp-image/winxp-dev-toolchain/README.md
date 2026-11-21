@@ -1,6 +1,8 @@
 # Windows XP development toolchain
 
-The XP image build cross-compiles the 32-bit tools from source with Docker and stages them in `target/winxp-dev-toolchain/Toolchain/`.
+The XP image build cross-compiles the 32-bit tools from source with the C compiler of the
+[Windows XP toolchain](../../../../../tools/winxp-toolchain) (`bin/cc`) and stages them in
+`target/winxp-dev-toolchain/Toolchain/`.
 
 - NASM and NDISASM 2.16.03
 - TinyCC 0.9.28rc, upstream commit `56b75101ef323cca9e45c925ba17042ce87134de`
