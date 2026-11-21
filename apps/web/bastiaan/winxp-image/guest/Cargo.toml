@@ -1,0 +1,38 @@
+[package]
+name = "v86-guest"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+publish = false
+
+# The v86 guest integration for Windows XP, separate from the main Cargo workspace: the programs
+# build with tools/winxp-toolchain/bin/cargo, the drivers with tools/winxp-toolchain/bin/cargo-driver
+[workspace]
+
+[lib]
+name = "v86"
+
+[dependencies]
+# no_std, the drivers share the dependencies of the programs
+sha1 = { path = "../../../../../lib/crypto/sha1", default-features = false }
+
+# Like the main workspace, the monorepo's crates stand in for the ones from crates.io
+[patch.crates-io]
+digest = { path = "../../../../../lib/crypto/digest" }
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+unused_qualifications = "deny"
+warnings = "deny"
+
+[lints.clippy]
+undocumented_unsafe_blocks = "deny"
+unwrap_used = "deny"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"
+overflow-checks = false

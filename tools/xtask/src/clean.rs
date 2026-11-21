@@ -48,8 +48,6 @@ fn is_generated_path(root: &Path, path: &Path, is_dir: bool) -> bool {
     name.contains(".db")
         || (extension == Some("mmdb")
             && relative != Path::new("lib/net/maxminddb/test-data/GeoLite2-City-Test.mmdb"))
-        || (relative.starts_with(xp.join("guest"))
-            && matches!(extension, Some("exe" | "sys" | "bmp")))
         || [
             "software/bastiaan/bastiaan.exe",
             "software/reversi/reversi.exe",
@@ -181,13 +179,8 @@ mod tests {
     fn clean_removes_build_outputs_and_preserves_inputs() -> Result<()> {
         let root = env::temp_dir().join(format!("xtask-clean-outputs-{}", std::process::id()));
         let generated = [
-            "apps/web/bastiaan/winxp-image/guest/v86agent.exe",
-            "apps/web/bastiaan/winxp-image/guest/v86setup.exe",
-            "apps/web/bastiaan/winxp-image/guest/v86mou.sys",
-            "apps/web/bastiaan/winxp-image/guest/v86tools.sys",
-            "apps/web/bastiaan/winxp-image/guest/v86vid.sys",
-            "apps/web/bastiaan/winxp-image/guest/activate/confid.exe",
-            "apps/web/bastiaan/winxp-image/guest/user.bmp",
+            "apps/web/bastiaan/winxp-image/guest/target/i686-winxp-windows-gnu/release/v86agent.exe",
+            "apps/web/bastiaan/winxp-image/guest/target/i686-winxp-windows-driver/release/v86vid.sys",
             "apps/web/bastiaan/winxp-image/out/disk.img",
             "apps/web/bastiaan/winxp-image/software/7zip/root/Program Files/7-Zip/7z.exe",
             "apps/web/bastiaan/winxp-image/software/civilization-3/extract/app/data",
@@ -217,7 +210,8 @@ mod tests {
             "apps/web/bastiaan/winxp-image/software/notepad-plus-plus/npp.7.9.2.Installer.exe",
             "apps/web/bastiaan/winxp-image/software/mitec/EXE.zip",
             "apps/web/bastiaan/winxp-image/software/age-of-empires/cd/root/data",
-            "apps/web/bastiaan/winxp-image/guest/v86agent.c",
+            "apps/web/bastiaan/winxp-image/guest/src/protocol.rs",
+            "apps/web/bastiaan/winxp-image/guest/user.bmp",
             "apps/web/bastiaan/winxp-image/guest/v86vid.inf",
             "examples/windows/hello.asm",
             "examples/macos/hello-arm64.s",

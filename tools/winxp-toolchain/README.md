@@ -104,8 +104,9 @@ renames, canonical paths, hard links, file locks, child processes with piped out
 and UDP on the loopback interface, name lookups and random numbers. It prints every failed check
 and `DONE <n> failed`.
 
-`cargo xtask check-others` builds the toolchain and Reversi and the bcanvas showcase for Windows
-XP, without running them, so it doesn't need a Windows XP disk.
+`cargo xtask check-others` builds the toolchain, Reversi, the bcanvas showcase and the runner agent
+for Windows XP and checks the v86 guest integration, without running them, so it doesn't need a
+Windows XP disk.
 
 ## Patches
 

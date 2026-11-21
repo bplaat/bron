@@ -10,7 +10,7 @@ For Each wpa In GetObject("winmgmts:").InstancesOf("Win32_WindowsProductActivati
     If wpa.ActivationRequired <> 0 Then
         result = wpa.GetInstallationID(iid)
         com.WriteLine "LOG activation: installation ID " & iid & " (" & result & ")"
-        shell.Run "cmd /c """"" & dir & "\activate\confid.exe"" " & iid & " > """ & output & """""", 0, True
+        shell.Run "cmd /c """"" & dir & "\confid.exe"" " & iid & " > """ & output & """""", 0, True
         cid = Replace(Trim(fso.OpenTextFile(output).ReadLine()), "-", "")
         fso.DeleteFile output
         result = wpa.ActivateOffline(cid)

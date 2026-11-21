@@ -15,17 +15,21 @@ setup) rm -f out/disk.img ;;
 *) echo "usage: $0 [install|software|setup]" >&2; exit 1 ;;
 esac
 
-# Guest and software builds, cross-compiled with MinGW-w64
+root=../../../..
+target=i686-winxp-windows-gnu
+
+# The guest integration in Rust with the Windows XP toolchain: the programs, then the drivers
+xp=$root/tools/winxp-toolchain/bin
+"$xp/cargo" build --release --locked --manifest-path guest/Cargo.toml --bin v86agent --bin v86setup --bin confid
+"$xp/cargo-driver" build --release --locked --manifest-path guest/Cargo.toml --bin v86mou --bin v86tools --bin v86vid
+
+# Software builds, cross-compiled with MinGW-w64
 docker build -q -t winxp-tools . >/dev/null
-# The project is mounted, the guest uses the site's avatar
 make() { docker run --rm -v "$PWD/..:/w" -w "/w/winxp-image/$1" winxp-tools make; }
-make guest
 for dir in software/*/; do [ ! -f "$dir/Makefile" ] || make "$dir"; done
 
 # The native apps of the repository, built with its Windows XP toolchain
-root=../../../..
-"$root/tools/winxp-toolchain/bin/cargo" build --release --locked -p bastiaan-app -p reversi -p game2048
-target=i686-winxp-windows-gnu
+"$xp/cargo" build --release --locked -p bastiaan-app -p reversi -p game2048
 release=$root/target/$target/release
 cp "$release/bastiaan-app.exe" software/bastiaan/bastiaan.exe
 for app in reversi game2048; do cp "$release/$app.exe" "software/$app/"; done

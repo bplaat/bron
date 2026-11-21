@@ -120,6 +120,12 @@ narration are included.
 
 ## Guest integration (`guest/`)
 
+One Rust crate with a binary per program and driver, built by `build.sh` with the
+[Windows XP toolchain](../../../../tools/winxp-toolchain): the programs with `bin/cargo`, the drivers with
+`bin/cargo-driver`, which builds them `no_std` without SSE for the kernel. The library has the host protocol
+(`src/protocol.rs`), the backdoor and port I/O (`src/port.rs`) and the bindings of the DDK (`src/ddk.rs`) and Win32
+(`src/win32.rs`).
+
 - `v86mou.sys`: mouse filter above mouclass for absolute and pointer-locked relative input through the VMware
   backdoor, including buttons and scrolling.
 - `v86tools.sys`: independent host channel exposing `\\.\V86Tools` to the guest agent for display size, clock
@@ -130,8 +136,8 @@ narration are included.
 - `v86agent.exe`: syncs the display size, host clock and clipboard, saves dropped files and opens HTTP/HTTPS links
   in the browser. Display resizing pauses when a game uses a different colour depth. On request, the agent disables
   NetBIOS and renews the relay's DHCP lease.
-- `v86setup.exe`: configures the guest. `activate.vbs` and `activate/confid.exe` (from
-  [UMSKT](https://github.com/UMSKT/UMSKT)) activate Windows; `library.vbs` fills the Media Player library.
+- `v86setup.exe`: configures the guest. `activate.vbs` and `confid.exe`, which turns the installation ID into a
+  confirmation ID, activate Windows; `library.vbs` fills the Media Player library.
 
-Host integration: [`web/src/guest-host.ts`](../web/src/guest-host.ts). Protocol: `guest/v86.h`. Shared machine
+Host integration: [`web/src/guest-host.ts`](../web/src/guest-host.ts). Protocol: `guest/src/protocol.rs`. Shared machine
 configuration: [`web/src/machine.ts`](../web/src/machine.ts).

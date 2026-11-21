@@ -122,6 +122,9 @@ const PLAYER_LINK = '/Documents and Settings/All Users/Desktop/Windows Media Pla
 
 const guest = path.join(root, 'guest');
 const copyGuest = (...names) => names.forEach((name) => copy(path.join(guest, name), `${V86}/${name}`));
+// The guest programs and drivers, built by build.sh
+const copyBuilt = (target, ...names) =>
+    names.forEach((name) => copy(path.join(guest, 'target', target, 'release', name), `${V86}/${name}`));
 // Runs a guest command once at the next logon, from the All Users Startup folder
 function runAtLogon(name, command) {
     const file = path.join(path.dirname(image), name);
@@ -167,10 +170,9 @@ if (mode === 'software') {
     copy(out('msgothic.ttc'), '/WINDOWS/Fonts/msgothic.ttc'); // registered and linked by v86setup
     tryMtools('mdeltree', `::${V86}`);
     tryMtools('mmd', `::${V86}`);
-    copyGuest('v86mou.sys', 'v86tools.sys', 'v86vid.sys', 'v86vid.inf', 'v86agent.exe', 'v86setup.exe', 'user.bmp',
-        'activate.vbs', 'library.vbs');
-    tryMtools('mmd', `::${V86}/activate`);
-    copyGuest('activate/confid.exe');
+    copyGuest('v86vid.inf', 'activate.vbs', 'library.vbs', 'user.bmp');
+    copyBuilt('i686-winxp-windows-gnu', 'v86agent.exe', 'v86setup.exe', 'confid.exe');
+    copyBuilt('i686-winxp-windows-driver', 'v86mou.sys', 'v86tools.sys', 'v86vid.sys');
 
     // Music: new profiles start with the Default User's My Music
     tryMtools('mmd', `::${path.dirname(MUSIC)}`);

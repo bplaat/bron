@@ -453,6 +453,30 @@ impl Xtask {
             .args(["-p", "winxp-runner", "--bin", "winxp-runner-agent"])
             .env_remove("RUSTUP_TOOLCHAIN"))?;
 
+        println!("Checking the v86 guest integration for Windows XP...");
+        let guest = "apps/web/bastiaan/winxp-image/guest/Cargo.toml";
+        for (cargo, bins) in [
+            ("cargo", ["v86agent", "v86setup", "confid"]),
+            ("cargo-driver", ["v86mou", "v86tools", "v86vid"]),
+        ] {
+            let mut command = Command::new(format!("tools/winxp-toolchain/bin/{cargo}"));
+            command
+                .args(["clippy", "--release", "--locked", "--manifest-path", guest])
+                .env_remove("RUSTUP_TOOLCHAIN");
+            for bin in bins {
+                command.args(["--bin", bin]);
+            }
+            run(&mut command)?;
+        }
+        run(Command::new("cargo").args([
+            "test",
+            "--locked",
+            "--manifest-path",
+            guest,
+            "--bin",
+            "confid",
+        ]))?;
+
         for (name, console, examples) in [
             (
                 "Wii",

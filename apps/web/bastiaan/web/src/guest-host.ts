@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: MIT
  */
 
-// Host side of the v86 guest integration, see winxp-image/guest/v86.h
+// Host side of the v86 guest integration, see winxp-image/guest/src/protocol.rs
 // Extends v86's VMware backdoor with commands the guest agent and drivers use.
 
 import type { V86 } from 'v86';
