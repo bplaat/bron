@@ -31,12 +31,10 @@ unwind tables.
 
 ## Requirements
 
-Rustup, LLVM with clang and lld, QEMU, mtools and bsdtar for the runner: on macOS `brew install llvm
-lld qemu mtools` (macOS has bsdtar), on Linux the distribution's or apt.llvm.org's LLVM in
-`/usr/lib/llvm-<version>` (or on the PATH) and `apt install qemu-system-x86 mtools libarchive-tools`.
-`llvm.sh` finds LLVM for the scripts. Running programs needs a raw Windows XP
-Professional SP3 disk image, set `WINXP_IMAGE` to its path. Building works without the disk, only
-the runner needs it.
+Rustup, LLVM with clang and lld, and QEMU, mtools and bsdtar for the runner: `brew install llvm lld
+qemu mtools` on macOS, `apt install clang lld llvm qemu-system-x86 mtools libarchive-tools` on
+Linux. Running programs needs a raw Windows XP Professional SP3 disk image, set `WINXP_IMAGE` to
+its path. Building works without the disk, only the runner needs it.
 
 ## Integration
 
@@ -61,22 +59,17 @@ Windows XP has some limits that the toolchain doesn't work around:
 - `i686-winxp-windows-gnu.json` is the Rust target: the `i686-pc-windows-gnullvm` target linked by
   rust-lld for Windows XP (subsystem 5.01), with the `winxp` vendor. The std patches and bron libraries
   share compatibility paths with `win7`, while `cfg(target_vendor = "winxp")` selects XP-specific code
-- `i686-winxp-windows-driver.json` is the Rust target for kernel drivers: `no_std` without MMX,
-  SSE or the x87, which the kernel doesn't save for drivers, linked as a `.sys` for the native
-  subsystem with `DriverEntry` as its entry point and the image checksum, without which Windows
-  doesn't load a driver. Drivers import from `ntoskrnl.exe`, `hal.dll`
-  and `videoprt.sys` with raw-dylib, so they don't need the sysroot. The
-  [v86 guest integration](../../apps/web/bastiaan/winxp-image/guest/) builds its three drivers with it
-- `bin/cargo` is the cargo wrapper, `bin/cargo-driver` the one for kernel drivers, which builds
-  only core for the driver target. `bin/cc` and `bin/ar` are the C compiler, which also links, and
-  the archiver for cc-rs build scripts and C programs, `bin/windres` is LLVM's resource compiler
-  for winresource build scripts
-- `bin/run` runs a program in Windows XP with `winxp-runner`, which it builds first with its agent
-- `runner/` is `winxp-runner`, which runs a program headless in Windows XP in QEMU, with
-  `winxp-runner-agent`, its guest side, which `bin/run` builds for Windows XP. The first run
-  copies the Windows XP disk as a copy-on-write clone, puts the agent in its Startup
-  folder, boots it until the agent is ready and saves that as a QEMU snapshot. Every run restores
-  a copy of the snapshot, sends the program to the agent over COM1, prints its output and exits
+- `i686-winxp-windows-driver.json` is the Rust target for kernel drivers, like the ones of the
+  [v86 guest integration](../../apps/web/bastiaan/winxp-image/guest/): `no_std` without SSE or
+  x87, which the kernel doesn't save, linked as a `.sys` with the checksum Windows requires
+- `bin/cargo` is the cargo wrapper, `bin/cargo-driver` the one for kernel drivers, `bin/cc`,
+  `bin/ar` and `bin/windres` are the C compiler, archiver and resource compiler for build scripts
+  and C programs
+- `bin/run` runs a program in Windows XP with `winxp-runner`, which it builds first
+- `runner/` has `winxp-runner`, which runs a program headless in Windows XP in QEMU, and
+  `winxp-runner-agent`, its guest side. The first run copies the Windows XP disk as a copy-on-write
+  clone, puts the agent in its Startup folder, boots it until the agent is ready and saves that as
+  a QEMU snapshot. Every run restores a copy of the snapshot, sends the program to the agent over COM1, prints its output and exits
   with its exit code. `--shot <file.png>` takes a screenshot after `--wait <seconds>` (default 10),
   for windowed programs, `--timeout <seconds>` (default 600) limits a run:
 
@@ -104,9 +97,8 @@ renames, canonical paths, hard links, file locks, child processes with piped out
 and UDP on the loopback interface, name lookups and random numbers. It prints every failed check
 and `DONE <n> failed`.
 
-`cargo xtask check-others` builds the toolchain, Reversi, the bcanvas showcase and the runner agent
-for Windows XP and checks the v86 guest integration, without running them, so it doesn't need a
-Windows XP disk.
+`cargo xtask check-others` builds the toolchain, Reversi, the bcanvas showcase, the runner agent and
+the v86 guest integration for Windows XP, without running them, so it doesn't need a Windows XP disk.
 
 ## Patches
 
