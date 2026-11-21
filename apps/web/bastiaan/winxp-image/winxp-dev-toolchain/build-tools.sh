@@ -6,7 +6,8 @@ build="$(gcc -dumpmachine)"
 jobs=$(getconf _NPROCESSORS_ONLN)
 export CFLAGS='-O2 -DWINVER=0x0501 -D_WIN32_WINNT=0x0501'
 export LDFLAGS='-static -static-libgcc -Wl,--major-subsystem-version,5,--minor-subsystem-version,1'
-mkdir -p downloads src obj Toolchain/bin Toolchain/include Toolchain/sysroot/include Toolchain/sysroot/lib Toolchain/licenses
+rm -rf Toolchain
+mkdir -p downloads src obj Toolchain/bin Toolchain/include Toolchain/sysroot/include Toolchain/sysroot/lib
 
 download() {
     archive=$1 url=$2 checksum=$3
@@ -105,7 +106,3 @@ sed -i 's/^#define DEFAULT_PREPROCESSOR_CMD "gcc"$/#define DEFAULT_PREPROCESSOR_
 )
 install -m 755 obj/nasm/nasm.exe obj/nasm/ndisasm.exe obj/binutils/binutils/windres.exe obj/make/make.exe Toolchain/bin/
 "$triple-strip" Toolchain/bin/*.exe
-cp src/tinycc/COPYING Toolchain/licenses/TinyCC.txt
-cp src/nasm/LICENSE Toolchain/licenses/NASM.txt
-cp src/binutils/COPYING3 Toolchain/licenses/Binutils.txt
-cp src/make/COPYING Toolchain/licenses/Make.txt
