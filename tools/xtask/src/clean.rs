@@ -182,7 +182,6 @@ mod tests {
             "apps/web/bastiaan/winxp-image/guest/target/i686-winxp-windows-gnu/release/v86agent.exe",
             "apps/web/bastiaan/winxp-image/guest/target/i686-winxp-windows-driver/release/v86vid.sys",
             "apps/web/bastiaan/winxp-image/out/disk.img",
-            "apps/web/bastiaan/winxp-image/software/7zip/root/Program Files/7-Zip/7z.exe",
             "apps/web/bastiaan/winxp-image/software/civilization-3/extract/app/data",
             "apps/web/bastiaan/winxp-image/software/mitec/files/EXE.exe",
             "apps/web/bastiaan/winxp-image/software/bastiaan/bastiaan.exe",
@@ -203,7 +202,7 @@ mod tests {
         let preserved = [
             "apps/web/bastiaan/winxp-image/winxp.iso",
             "apps/web/bastiaan/winxp-image/music/song.mp3",
-            "apps/web/bastiaan/winxp-image/software/7zip/7z2605.exe",
+            "apps/web/bastiaan/winxp-image/software/7zip/7z2606.exe",
             "apps/web/bastiaan/winxp-image/software/civilization-3/setup_civilization3_complete_2.0.0.7.exe",
             "apps/web/bastiaan/winxp-image/software/age-of-empires/cd/AOE1/AOESETUP.EXE",
             "apps/web/bastiaan/winxp-image/software/internet-explorer-8/IE8-WindowsXP-x86-ENU.exe",

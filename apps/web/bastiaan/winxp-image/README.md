@@ -5,10 +5,10 @@ The build installs Windows, guest drivers and software, applies settings, activa
 
 ## Building
 
-Builds on macOS and Linux with Node.js, QEMU, mtools, NASM, innoextract, 7-Zip and the
-[Windows XP toolchain](../../../../tools/winxp-toolchain): `brew install qemu mtools nasm innoextract sevenzip` on
-macOS, `apt install build-essential curl qemu-system-x86 mtools nasm libarchive-tools innoextract 7zip` on Linux. Run
-from the root of the repository:
+Builds on macOS and Linux with Node.js, QEMU, mtools, NASM, innoextract and the
+[Windows XP toolchain](../../../../tools/winxp-toolchain): `brew install qemu mtools nasm innoextract` on macOS,
+`apt install build-essential curl qemu-system-x86 mtools nasm libarchive-tools innoextract` on Linux. Run from the root
+of the repository:
 
 ```sh
 npm install
@@ -35,7 +35,7 @@ These files are ignored by git. Add them before building:
 | `winxp-image/software/age-of-empires-2/cd/AOE2/`                               | Age of Empires II: The Age of Kings CD contents                                                                                                      |
 | `winxp-image/software/age-of-empires-2/cd/AOE2CONQ/`                           | Age of Empires II: The Conquerors CD contents                                                                                                        |
 | `winxp-image/software/civilization-3/setup_civilization3_complete_2.0.0.7.exe` | Civilization III Complete (GOG)                                                                                                                      |
-| `winxp-image/software/7zip/7z2605.exe`                                         | [7-Zip](https://www.7-zip.org/) 26.05, 32-bit                                                                                                        |
+| `winxp-image/software/7zip/7z2606.exe`                                         | [7-Zip](https://www.7-zip.org/) 26.06, 32-bit                                                                                                        |
 | `winxp-image/software/notepad-plus-plus/npp.7.9.2.Installer.exe`               | [Notepad++](https://notepad-plus-plus.org/) 7.9.2, the last version for XP                                                                           |
 | `winxp-image/software/mitec/*.zip`                                             | [MiTeC](https://www.mitec.cz/) `EXE.zip` 2.5.5, `HEXEdit.zip` 6.3.0 and `TMX.zip` 3.5.0, see below                                                   |
 | `winxp-image/software/internet-explorer-8/IE8-WindowsXP-x86-ENU.exe`           | Internet Explorer 8 for XP, [Internet Archive](https://archive.org/details/IE8-WindowsXP-x86-ENU) (SHA-1 `e489483e5001f95da04e1ebf3c664173baef3e26`) |
@@ -88,7 +88,7 @@ Generated: `winxp-image/out/` (install images, screenshots), the built `.exe`/`.
 
 Add a folder to `software/`:
 
-- `Makefile` (optional): runs first on the host (bsdtar, 7-Zip, innoextract, Node.js), generated
+- `Makefile` (optional): runs first on the host (bsdtar, innoextract, Node.js), generated
   `root/` contents are copied onto C: without replacing existing files
 - `install.cmd`: runs once, as Administrator, in the folder copied to `C:\WINDOWS\v86\software\<name>`, for silent
   installers, `regedit /s` imports and shortcuts
@@ -112,8 +112,8 @@ Hexadecimal Editor 7.0 and Task Manager DeLuxe 3.6.0 onward. The listed versions
 
 ### Old Microsoft game setups (`ebu.mjs`)
 
-Silent installers run through `install.cmd`. Other installers are extracted on the host into `root/`: 7-Zip with
-7-Zip, Civilization III with innoextract and Age of Empires with `ebu.mjs` and bsdtar.
+Silent installers run through `install.cmd`. Other installers are extracted on the host into `root/`: Civilization III
+with innoextract and Age of Empires with `ebu.mjs` and bsdtar.
 
 `ebu.mjs` reads the Age of Empires setup file table as NUL-terminated CD path and destination pairs. It resolves
 `%APPPATH\%STRINGn` names from the setup DLL's string table and copies `SYSTEM` files to Windows. Registry values
