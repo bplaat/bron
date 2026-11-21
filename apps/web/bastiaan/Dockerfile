@@ -1,4 +1,3 @@
-# syntax=docker/dockerfile:1
 # The website and its LAN relay in one static binary, built from the root of the repository.
 # Needs apps/web/bastiaan/web/public/winxp, see winxp-image/README.md.
 
