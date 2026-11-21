@@ -29,11 +29,11 @@ pub fn compile_application(
         .set("FileDescription", description)
         .set("LegalCopyright", copyright)
         .set_icon(icon)
-        .set_manifest(&application_manifest(
+        .set_manifest(&minify_xml(&application_manifest(
             name,
             &version,
             &env::var("CARGO_CFG_TARGET_VENDOR").expect("CARGO_CFG_TARGET_VENDOR not set"),
-        ));
+        )));
     for &(path, id) in extra_icons {
         resources.set_icon_with_id(path, id);
     }
@@ -100,9 +100,81 @@ fn application_manifest(name: &str, version: &str, vendor: &str) -> String {
     )
 }
 
+/// Drops comments and the whitespace between and inside tags.
+fn minify_xml(xml: &str) -> String {
+    let mut without_comments = String::with_capacity(xml.len());
+    let mut rest = xml;
+    while let Some((before, after)) = rest.split_once("<!--") {
+        without_comments.push_str(before);
+        rest = after.split_once("-->").map_or("", |(_, after)| after);
+    }
+    without_comments.push_str(rest);
+
+    let mut minified = String::with_capacity(without_comments.len());
+    let (mut in_tag, mut quote) = (false, None);
+    let mut chars = without_comments.chars().peekable();
+    while let Some(char) = chars.next() {
+        if char.is_whitespace() && quote.is_none() {
+            while chars.next_if(|char| char.is_whitespace()).is_some() {}
+            let next = chars.peek().copied();
+            let keep = if in_tag {
+                !matches!(next, Some('/' | '?' | '>'))
+            } else {
+                !(minified.is_empty()
+                    || minified.ends_with('>')
+                    || matches!(next, None | Some('<')))
+            };
+            if keep {
+                minified.push(' ');
+            }
+            continue;
+        }
+        match char {
+            '<' if quote.is_none() => in_tag = true,
+            '>' if quote.is_none() => in_tag = false,
+            '"' | '\'' if in_tag => {
+                quote = match quote {
+                    None => Some(char),
+                    Some(open) if open == char => None,
+                    open => open,
+                }
+            }
+            _ => {}
+        }
+        minified.push(char);
+    }
+    minified
+}
+
 #[cfg(test)]
 mod tests {
-    use super::application_manifest;
+    use super::{application_manifest, minify_xml};
+
+    #[test]
+    fn minify_xml_drops_comments_and_whitespace_but_keeps_values() {
+        let xml = r#"<?xml version="1.0" ?>
+<assembly a="x  y">
+    <!-- Comment -->
+    <empty
+        b="1"
+    />
+    <text>PerMonitorV2, PerMonitor</text>
+</assembly>
+"#;
+        assert_eq!(
+            minify_xml(xml),
+            r#"<?xml version="1.0"?><assembly a="x  y"><empty b="1"/><text>PerMonitorV2, PerMonitor</text></assembly>"#
+        );
+    }
+
+    #[test]
+    fn minified_manifest_keeps_all_settings() {
+        let manifest = application_manifest("App", "1.0.0", "winxp");
+        let minified = minify_xml(&manifest);
+        assert!(!minified.contains('\n') && !minified.contains("<!--"));
+        assert!(minified.contains("<dpiAwareness xmlns=\"http://schemas.microsoft.com/SMI/2016/WindowsSettings\">PerMonitorV2, PerMonitor</dpiAwareness>"));
+        assert_eq!(minified.matches("<supportedOS ").count(), 5);
+    }
 
     #[test]
     fn manifest_escapes_application_names() {
