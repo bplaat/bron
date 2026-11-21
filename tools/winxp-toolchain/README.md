@@ -61,7 +61,14 @@ Windows XP has some limits that the toolchain doesn't work around:
 - `i686-winxp-windows-gnu.json` is the Rust target: the `i686-pc-windows-gnullvm` target linked by
   rust-lld for Windows XP (subsystem 5.01), with the `winxp` vendor. The std patches and bron libraries
   share compatibility paths with `win7`, while `cfg(target_vendor = "winxp")` selects XP-specific code
-- `bin/cargo` is the cargo wrapper, `bin/cc` and `bin/ar` are the C compiler, which also links, and
+- `i686-winxp-windows-driver.json` is the Rust target for kernel drivers: `no_std` without MMX,
+  SSE or the x87, which the kernel doesn't save for drivers, linked as a `.sys` for the native
+  subsystem with `DriverEntry` as its entry point and the image checksum, without which Windows
+  doesn't load a driver. Drivers import from `ntoskrnl.exe`, `hal.dll`
+  and `videoprt.sys` with raw-dylib, so they don't need the sysroot. The
+  [v86 guest integration](../../apps/web/bastiaan/winxp-image/guest/) builds its three drivers with it
+- `bin/cargo` is the cargo wrapper, `bin/cargo-driver` the one for kernel drivers, which builds
+  only core for the driver target. `bin/cc` and `bin/ar` are the C compiler, which also links, and
   the archiver for cc-rs build scripts and C programs, `bin/windres` is LLVM's resource compiler
   for winresource build scripts
 - `bin/run` runs a program in Windows XP with `winxp-runner`, which it builds first with its agent

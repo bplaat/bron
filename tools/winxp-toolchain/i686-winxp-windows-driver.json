@@ -1,0 +1,48 @@
+{
+    "llvm-target": "i686-pc-windows-gnu",
+    "metadata": {
+        "description": "32-bit Windows XP+ kernel drivers",
+        "std": false
+    },
+    "data-layout": "e-m:x-p:32:32-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:32-n8:16:32-a:0:32-S32",
+    "arch": "x86",
+    "cpu": "pentium4",
+    "features": "-mmx,-sse,+soft-float",
+    "rustc-abi": "softfloat",
+    "os": "windows",
+    "vendor": "winxp",
+    "target-family": ["windows"],
+    "target-pointer-width": 32,
+    "max-atomic-width": 64,
+    "binary-format": "coff",
+    "is-like-windows": true,
+    "abi-return-struct-as-int": true,
+    "exe-suffix": ".sys",
+    "dynamic-linking": false,
+    "has-thread-local": false,
+    "eh-frame-header": false,
+    "emit-debug-gdb-scripts": false,
+    "disable-redzone": true,
+    "frame-pointer": "always",
+    "panic-strategy": "abort",
+    "linker": "rust-lld",
+    "linker-flavor": "gnu-lld",
+    "pre-link-args": {
+        "gnu-lld": [
+            "-m",
+            "i386pe",
+            "--subsystem",
+            "native",
+            "--entry",
+            "_DriverEntry@8",
+            "--image-base",
+            "0x10000",
+            "--major-os-version=5",
+            "--minor-os-version=1",
+            "--major-subsystem-version=5",
+            "--minor-subsystem-version=1",
+            "-Xlink=/driver",
+            "-Xlink=/release"
+        ]
+    }
+}

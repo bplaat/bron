@@ -1,0 +1,18 @@
+#!/bin/sh
+# Runs cargo for Windows XP kernel drivers: the nightly cargo with the i686-winxp-windows-driver
+# target, which builds core without SSE and links .sys files for the native subsystem. Drivers
+# import from the kernel with raw-dylib, so they don't need the sysroot. Use it like cargo, for
+# example: tools/winxp-toolchain/bin/cargo-driver build --release --bin v86mou
+set -eu
+dir=$(cd "$(dirname "$0")/.." && pwd)
+target=$(cd "$dir/../.." && pwd)/target
+"$dir/build.sh" >&2
+
+export CARGO_BUILD_BUILD_DIR="${CARGO_BUILD_BUILD_DIR:-$target/cargo-build/winxp-driver}"
+export CARGO_BUILD_TARGET="$dir/i686-winxp-windows-driver.json"
+export CARGO_UNSTABLE_BUILD_STD=core,compiler_builtins
+export CARGO_UNSTABLE_BUILD_STD_FEATURES=compiler-builtins-mem
+export CARGO_UNSTABLE_JSON_TARGET_SPEC=true
+# core enables SSE for some SIMD functions, which soft-float targets warn about
+export CARGO_FUTURE_INCOMPAT_REPORT_FREQUENCY=never
+exec cargo "+$(sed -n "s/^rust_toolchain='\(.*\)'$/\1/p" "$dir/build.sh")" "$@"
