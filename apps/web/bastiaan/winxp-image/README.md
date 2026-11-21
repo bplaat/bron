@@ -76,8 +76,8 @@ Generated: `winxp-image/out/` (install images, screenshots), the built `.exe`/`.
   Pinball and the games below. [Bastiaan](../../../desktop/bastiaan), the website as a native app, starts at logon.
 - Age of Empires with The Rise of Rome and MIDI music; Age of Empires II with The Conquerors, CD music and videos;
   Civilization III Complete.
-- Notepad++ without its updater, associated with text, ini, inf and xml files; MiTeC EXE Explorer, Hexadecimal Editor
-  and Task Manager DeLuxe in `Program Files\MiTeC`.
+- Notepad++ without its updater, associated with text and source files; MiTeC EXE Explorer, Hexadecimal Editor and
+  Task Manager DeLuxe in `Program Files\MiTeC`.
 - [Win32 development toolchain](winxp-dev-toolchain/README.md) in `Program Files\Toolchain` with Hello World and
   Analog Clock sample projects in the user profile.
 - Start menu entries for 7-Zip and Internet Explorer 8, with IE's first-run wizard and default browser check disabled.
