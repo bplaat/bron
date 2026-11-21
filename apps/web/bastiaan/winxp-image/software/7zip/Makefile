@@ -3,4 +3,4 @@
 root: 7z2605.exe Makefile
 	rm -rf $@
 	mkdir -p "$@/Program Files/7-Zip"
-	7z x -y -o"$@/Program Files/7-Zip" $< -x!Uninstall.exe >/dev/null
+	7zz x -y -o"$@/Program Files/7-Zip" $< -x!Uninstall.exe >/dev/null

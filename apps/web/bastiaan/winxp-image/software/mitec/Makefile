@@ -2,4 +2,4 @@
 files: $(wildcard *.zip)
 	rm -rf $@
 	mkdir $@
-	for zip in $^; do unzip -q -o $$zip -x '*64.exe' -d $@; done
+	for zip in $^; do bsdtar -xf $$zip --exclude '*64.exe' -C $@; done

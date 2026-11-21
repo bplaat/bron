@@ -5,8 +5,11 @@ The build installs Windows, guest drivers and software, applies settings, activa
 
 ## Building
 
-Requires macOS, Docker, Node.js, Make, QEMU, mtools and NASM (`brew install qemu mtools nasm`) and the
-[Windows XP toolchain](../../../../tools/winxp-toolchain), which builds the native apps. Run from the root of the repository:
+Builds on macOS and Linux. Requires Node.js, Make, a C compiler, curl, QEMU, mtools, NASM, bsdtar, innoextract and 7-Zip
+(`brew install qemu mtools nasm innoextract sevenzip`, macOS has bsdtar; on Debian or Ubuntu
+`apt install build-essential curl qemu-system-x86 mtools nasm libarchive-tools innoextract 7zip`) and the
+[Windows XP toolchain](../../../../tools/winxp-toolchain), which builds the guest integration, the native apps and the
+development toolchain. Run from the root of the repository:
 
 ```sh
 npm install
@@ -43,8 +46,8 @@ Generated: `winxp-image/out/` (install images, screenshots), the built `.exe`/`.
 
 ## Build stages
 
-1. **Install** (`install.mjs`, `qemu.mjs`, `winnt.sif`): creates an 8 GiB FAT32 disk with a syslinux MBR and installs
-   XP unattended in QEMU with 256 MB RAM and no ACPI, using the retail product key in `winnt.sif`. Output:
+1. **Install** (`install.mjs`, `qemu.mjs`, `winnt.sif`, `mbr.asm`): creates an 8 GiB FAT32 disk with our MBR and
+   installs XP unattended in QEMU with 256 MB RAM and no ACPI, using the retail product key in `winnt.sif`. Output:
    `out/install.img`.
 2. **Software** (`disk.mjs software`, `software.mjs`): replaces QEMU's APIC HAL with the Standard PC HAL required by
    v86, removes the extra `boot.ini` entry and copies software onto the disk. QEMU runs `guest/software.cmd` to
@@ -86,7 +89,7 @@ Generated: `winxp-image/out/` (install images, screenshots), the built `.exe`/`.
 
 Add a folder to `software/`:
 
-- `Makefile` (optional): runs first in the `winxp-tools` Docker image (MinGW, cabextract, innoextract, Node.js), generated
+- `Makefile` (optional): runs first on the host (bsdtar, 7-Zip, innoextract, Node.js), generated
   `root/` contents are copied onto C: without replacing existing files
 - `install.cmd`: runs once, as Administrator, in the folder copied to `C:\WINDOWS\v86\software\<name>`, for silent
   installers, `regedit /s` imports and shortcuts
@@ -111,7 +114,7 @@ Hexadecimal Editor 7.0 and Task Manager DeLuxe 3.6.0 onward. The listed versions
 ### Old Microsoft game setups (`ebu.mjs`)
 
 Silent installers run through `install.cmd`. Other installers are extracted on the host into `root/`: 7-Zip with
-7z, Civilization III with innoextract and Age of Empires with `ebu.mjs` and cabextract.
+7-Zip, Civilization III with innoextract and Age of Empires with `ebu.mjs` and bsdtar.
 
 `ebu.mjs` reads the Age of Empires setup file table as NUL-terminated CD path and destination pairs. It resolves
 `%APPPATH\%STRINGn` names from the setup DLL's string table and copies `SYSTEM` files to Windows. Registry values

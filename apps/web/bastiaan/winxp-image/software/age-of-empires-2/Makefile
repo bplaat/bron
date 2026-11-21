@@ -5,6 +5,6 @@ APP := Program Files/Microsoft Games/Age of Empires II
 root: cd/AOE2/AOESETUP.EXE cd/AOE2CONQ/AOCSETUP.EXE ../../ebu.mjs Makefile
 	rm -rf $@
 	../../ebu.mjs cd/AOE2/AOESETUP.EXE cd/AOE2/SETUPENU.DLL cd/AOE2 $@ "$(APP)"
-	cabextract -q -d "$@/$(APP)" cd/AOE2/GAME/EMPIRES2.CAB
+	bsdtar -xf cd/AOE2/GAME/EMPIRES2.CAB -C "$@/$(APP)"
 	../../ebu.mjs cd/AOE2CONQ/AOCSETUP.EXE cd/AOE2CONQ/STPENUX.DLL cd/AOE2CONQ $@ "$(APP)"
-	cabextract -q -d "$@/$(APP)" cd/AOE2CONQ/MSGAME.CAB
+	bsdtar -xf cd/AOE2CONQ/MSGAME.CAB -C "$@/$(APP)"
