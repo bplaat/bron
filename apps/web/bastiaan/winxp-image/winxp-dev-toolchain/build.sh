@@ -111,7 +111,7 @@ mkdir -p obj/nasm obj/binutils obj/make
     configure ../../src/nasm/configure --build="$build" --host="$triple"
     make dirs
     cp ../../src/nasm/win/manifest.rc win/
-    make -j"$jobs" nasm.exe ndisasm.exe
+    make -j"$jobs" nasm.exe
 )
 edit 's/^#define DEFAULT_PREPROCESSOR_CMD "gcc"$/#define DEFAULT_PREPROCESSOR_CMD "tcc"/' \
     src/binutils/binutils/resrc.c
@@ -128,5 +128,5 @@ edit 's/^#define DEFAULT_PREPROCESSOR_CMD "gcc"$/#define DEFAULT_PREPROCESSOR_CM
     configure ../../src/make/configure --build="$build" --host="$triple" --disable-nls --without-guile
     make -j"$jobs"
 )
-install -m 755 obj/nasm/nasm.exe obj/nasm/ndisasm.exe obj/binutils/binutils/windres.exe obj/make/make.exe Toolchain/bin/
+install -m 755 obj/nasm/nasm.exe obj/binutils/binutils/windres.exe obj/make/make.exe Toolchain/bin/
 "$STRIP" Toolchain/bin/*.exe

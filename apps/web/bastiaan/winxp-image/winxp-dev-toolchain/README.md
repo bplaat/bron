@@ -3,7 +3,7 @@
 The XP image build cross-compiles the 32-bit tools from source with the
 [Windows XP toolchain](../../../../../tools/winxp-toolchain) and stages them in `target/winxp-dev-toolchain/Toolchain/`.
 
-- NASM and NDISASM 2.16.03
+- NASM 2.16.03
 - TinyCC 0.9.28rc, upstream commit `56b75101ef323cca9e45c925ba17042ce87134de`
 - GNU windres 2.42
 - GNU Make 4.4.1
