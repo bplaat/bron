@@ -13,3 +13,7 @@ for %%e in (.json .css .scss .ts .tsx .jsx) do assoc %%e=txtfile >nul
 for %%e in (.c .h .cpp .hpp .cc .asm .s .inc .rc .def .mk .mak) do assoc %%e=txtfile >nul
 assoc .=txtfile >nul
 for %%t in (txtfile inifile inffile xmlfile) do reg add "HKCR\%%t\shell\open\command" /ve /t REG_EXPAND_SZ /d "\"%NPP%\" \"%%1\"" /f >nul
+
+rem Folders open in the Folder as Workspace panel from their context menu
+reg add "HKCR\Directory\shell\notepad++" /ve /d "Open in Notepad++" /f >nul
+reg add "HKCR\Directory\shell\notepad++\command" /ve /t REG_EXPAND_SZ /d "\"%NPP%\" -openFoldersAsWorkspace \"%%1\"" /f >nul
