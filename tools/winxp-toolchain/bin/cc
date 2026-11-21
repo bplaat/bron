@@ -1,13 +1,13 @@
 #!/bin/sh
-# The C compiler for cc-rs build scripts of Rust programs for Windows XP: clang with the
-# toolchain's mingw-w64 sysroot for Windows XP
+# The C compiler for Windows XP: clang with the toolchain's mingw-w64 sysroot for Windows XP, which
+# links with lld and compiler-rt for subsystem 5.01. For cc-rs build scripts of Rust programs and
+# for C programs, like autotools ones with CC set to it.
 set -eu
 dir=$(cd "$(dirname "$0")/.." && pwd)
 build=$(cd "$dir/../.." && pwd)/target/winxp-toolchain
-llvm=''
-for bin in /opt/homebrew/opt/llvm/bin/ /usr/local/opt/llvm/bin/; do
-    [ -d "$bin" ] && llvm="$bin" && break
-done
-"$dir/build.sh" >&2
+. "$dir/llvm.sh"
+# bin/cargo builds the toolchain before cc-rs runs this, so only build it when it's missing
+[ -e "$build/sysroot/lib/crt2.o" ] || "$dir/build.sh" >&2
 exec "${llvm}clang" --target=i686-w64-mingw32 --sysroot="$build/sysroot" -resource-dir="$build/clang" \
-    -march=pentium4 "$@"
+    -march=pentium4 -Qunused-arguments -fuse-ld=lld --ld-path="$lld" -rtlib=compiler-rt -unwindlib=none \
+    -Wl,--major-os-version=5,--minor-os-version=1,--major-subsystem-version=5,--minor-subsystem-version=1 "$@"

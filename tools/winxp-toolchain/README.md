@@ -31,8 +31,10 @@ unwind tables.
 
 ## Requirements
 
-Rustup, Homebrew's LLVM and lld (`brew install llvm lld`), QEMU, mtools and bsdtar (`brew install
-qemu mtools`, macOS has bsdtar) for the runner. Running programs needs a raw Windows XP
+Rustup, LLVM with clang and lld, QEMU, mtools and bsdtar for the runner: on macOS `brew install llvm
+lld qemu mtools` (macOS has bsdtar), on Linux the distribution's or apt.llvm.org's LLVM in
+`/usr/lib/llvm-<version>` (or on the PATH) and `apt install qemu-system-x86 mtools libarchive-tools`.
+`llvm.sh` finds LLVM for the scripts. Running programs needs a raw Windows XP
 Professional SP3 disk image, set `WINXP_IMAGE` to its path. Building works without the disk, only
 the runner needs it.
 
@@ -59,8 +61,9 @@ Windows XP has some limits that the toolchain doesn't work around:
 - `i686-winxp-windows-gnu.json` is the Rust target: the `i686-pc-windows-gnullvm` target linked by
   rust-lld for Windows XP (subsystem 5.01), with the `winxp` vendor. The std patches and bron libraries
   share compatibility paths with `win7`, while `cfg(target_vendor = "winxp")` selects XP-specific code
-- `bin/cargo` is the cargo wrapper, `bin/cc` and `bin/ar` are the C compiler and archiver for
-  cc-rs build scripts, `bin/windres` is LLVM's resource compiler for winresource build scripts
+- `bin/cargo` is the cargo wrapper, `bin/cc` and `bin/ar` are the C compiler, which also links, and
+  the archiver for cc-rs build scripts and C programs, `bin/windres` is LLVM's resource compiler
+  for winresource build scripts
 - `bin/run` runs a program in Windows XP with `winxp-runner`, which it builds first with its agent
 - `runner/` is `winxp-runner`, which runs a program headless in Windows XP in QEMU, with
   `winxp-runner-agent`, its guest side, which `bin/run` builds for Windows XP. The first run

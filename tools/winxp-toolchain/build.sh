@@ -32,22 +32,14 @@ MINGW_DIR="$SRC_DIR/mingw-w64"
 LLVM_DIR="$SRC_DIR/llvm"
 SYSROOT="$BUILD_DIR/sysroot"
 
-LLVM=''
-for dir in /opt/homebrew/opt/llvm/bin/ /usr/local/opt/llvm/bin/; do
-    [ -d "$dir" ] && LLVM="$dir" && break
-done
-LLD=''
-for dir in /opt/homebrew/opt/lld/bin/ /usr/local/opt/lld/bin/ "$LLVM"; do
-    [ -x "${dir}ld.lld" ] && LLD="${dir}ld.lld" && break
-done
+. "$TOOLCHAIN_DIR/llvm.sh"
+LLVM=$llvm
 
 # Windows XP runs on a Pentium 4 or newer, everything is optimized for size like the Rust programs.
 # clang finds the mingw-w64 headers and libraries in the sysroot and compiler-rt in the resource
 # directory next to it.
 XP_CFLAGS=(--target=i686-w64-mingw32 --sysroot="$SYSROOT" -resource-dir="$BUILD_DIR/clang"
     -march=pentium4 -Os)
-XP_LDFLAGS=(-fuse-ld=lld --ld-path="${LLD:-ld.lld}" -rtlib=compiler-rt -unwindlib=none
-    -Wl,--major-os-version=5,--minor-os-version=1,--major-subsystem-version=5,--minor-subsystem-version=1)
 
 msg() { printf '\033[1;34m[toolchain]\033[0m %s\n' "$*"; }
 die() { printf '\033[1;31m[toolchain]\033[0m %s\n' "$*" >&2; exit 1; }
