@@ -12,6 +12,19 @@
             }
         },
         {
+            "files": "*.manifest",
+            "options": {
+                "parser": "xml"
+            }
+        },
+        {
+            "files": "*.{plist,entitlements}",
+            "options": {
+                "parser": "xml",
+                "xmlSelfClosingSpace": false
+            }
+        },
+        {
             "files": "*.{yml,yaml}",
             "options": {
                 "tabWidth": 2
