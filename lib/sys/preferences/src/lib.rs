@@ -17,7 +17,11 @@ cfg_select! {
         mod android;
         use android::Store;
     }
-    any(target_os = "linux", target_os = "windows") => {
+    target_os = "windows" => {
+        mod windows;
+        use windows::Store;
+    }
+    target_os = "linux" => {
         use file::Store;
     }
     _ => {
@@ -25,7 +29,7 @@ cfg_select! {
     }
 }
 
-#[cfg(any(test, target_os = "linux", target_os = "windows"))]
+#[cfg(any(target_os = "linux", all(test, not(windows))))]
 mod file;
 
 /// A native preference value. Floats use Android's native 32-bit precision.
@@ -70,9 +74,10 @@ pub struct Preferences {
 impl Preferences {
     /// Opens a store identified by a reverse-DNS application ID.
     ///
-    /// Uses SharedPreferences on Android, an NSUserDefaults suite on Apple, or an
-    /// application config directory on Windows and Linux. IDs may contain ASCII
-    /// letters, digits, '.', '_' and '-'. Android needs a registered Java VM.
+    /// Uses SharedPreferences on Android, an NSUserDefaults suite on Apple, the
+    /// current user's registry on Windows, or an application config directory on
+    /// Linux. IDs may contain ASCII letters, digits, '.', '_' and '-'. Android needs
+    /// a registered Java VM.
     pub fn new(application_id: &str) -> io::Result<Self> {
         validate_id(application_id)?;
         Ok(Self {
@@ -90,7 +95,8 @@ impl Preferences {
     /// Stores or replaces a value. Non-finite floats are rejected.
     ///
     /// Android commits synchronously; Apple schedules persistence through
-    /// NSUserDefaults; desktop JSON writes replace the file atomically.
+    /// NSUserDefaults; Windows writes one registry value; Linux JSON writes replace
+    /// the file atomically.
     pub fn set(&self, key: &str, value: impl Into<Value>) -> io::Result<()> {
         let value = value.into();
         if matches!(value, Value::Float(number) if !number.is_finite()) {

@@ -131,7 +131,6 @@ impl Drop for Temporary {
     }
 }
 
-#[cfg(not(windows))]
 fn create_directory(directory: &Path) -> io::Result<()> {
     if directory.is_dir() {
         return Ok(());
@@ -149,40 +148,10 @@ fn create_directory(directory: &Path) -> io::Result<()> {
     }
 }
 
-#[cfg(windows)]
-fn create_directory(directory: &Path) -> io::Result<()> {
-    fs::create_dir_all(directory)
-}
-
-#[cfg(not(windows))]
 fn replace(source: &Path, destination: &Path) -> io::Result<()> {
     fs::rename(source, destination)?;
     // Persist the rename as well as the temporary file's contents.
     fs::File::open(destination.parent().expect("preferences file has a parent"))?.sync_all()
-}
-
-#[cfg(windows)]
-/// Encode a string as a null-terminated UTF-16 string.
-pub(crate) fn wide(text: &str) -> Vec<u16> {
-    text.encode_utf16().chain([0]).collect()
-}
-
-#[cfg(windows)]
-#[allow(unsafe_code)]
-fn replace(source: &Path, destination: &Path) -> io::Result<()> {
-    #[link(name = "kernel32")]
-    unsafe extern "system" {
-        fn MoveFileExW(source: *const u16, destination: *const u16, flags: u32) -> i32;
-    }
-    let source = wide(&source.to_string_lossy());
-    let destination = wide(&destination.to_string_lossy());
-    // SAFETY: both paths are valid null-terminated wide strings. REPLACE_EXISTING
-    // and WRITE_THROUGH replace the destination without a delete-then-write gap.
-    if unsafe { MoveFileExW(source.as_ptr(), destination.as_ptr(), 0x1 | 0x8) } == 0 {
-        Err(io::Error::last_os_error())
-    } else {
-        Ok(())
-    }
 }
 
 #[cfg(test)]
