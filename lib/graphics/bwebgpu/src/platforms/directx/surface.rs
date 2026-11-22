@@ -20,8 +20,8 @@ pub(crate) struct Surface {
 }
 
 struct Swapchain {
-    object: Com,
-    buffers: Vec<Com>,
+    object: ComPtr<IDXGISwapChain3>,
+    buffers: Vec<ComPtr<ID3D12Resource>>,
     format: TextureFormat,
     width: u32,
     height: u32,
@@ -77,7 +77,7 @@ impl Context {
             if let Some(swap) = current.as_mut() {
                 swap.buffers.clear();
                 check(SwapChain3_ResizeBuffers(
-                    swap.object.0,
+                    swap.object.as_ptr(),
                     3,
                     config.width,
                     config.height,
@@ -101,10 +101,10 @@ impl Context {
                     SwapEffect: 4,
                     ..Default::default()
                 };
-                let swap = Com::create(|out| {
+                let swap = ComPtr::<IDXGISwapChain1>::create(|out| {
                     Factory4_CreateSwapChainForHwnd(
-                        self.factory.0,
-                        self.queue.0,
+                        self.factory.as_ptr(),
+                        self.queue.as_raw(),
                         surface.window,
                         &desc,
                         ptr::null(),
@@ -113,12 +113,12 @@ impl Context {
                     )
                 })?;
                 check(Factory4_MakeWindowAssociation(
-                    self.factory.0,
+                    self.factory.as_ptr(),
                     surface.window,
                     2,
                 ))?;
                 *current = Some(Swapchain {
-                    object: swap.query(&IDXGISwapChain3)?,
+                    object: swap.query_swap_chain3()?,
                     buffers: Vec::new(),
                     format: config.format,
                     width: config.width,
@@ -127,8 +127,8 @@ impl Context {
             }
             let swap = current.as_mut().expect("swap chain configured");
             for index in 0..3 {
-                swap.buffers.push(Com::create(|out| {
-                    SwapChain3_GetBuffer(swap.object.0, index, &ID3D12Resource, out)
+                swap.buffers.push(ComPtr::create(|out| {
+                    SwapChain3_GetBuffer(swap.object.as_ptr(), index, &ID3D12Resource, out)
                 })?);
             }
         }
@@ -148,14 +148,14 @@ impl Context {
         let swap = surface.swap.borrow();
         let swap = swap.as_ref().ok_or(CurrentSurfaceTexture::Validation)?;
         unsafe {
-            let status = SwapChain3_Present(swap.object.0, 0, 1);
+            let status = SwapChain3_Present(swap.object.as_ptr(), 0, 1);
             if status == 0x087a0001 {
                 return Err(CurrentSurfaceTexture::Occluded);
             }
             if status < 0 {
                 return Err(CurrentSurfaceTexture::Lost);
             }
-            let index = SwapChain3_GetCurrentBackBufferIndex(swap.object.0);
+            let index = SwapChain3_GetCurrentBackBufferIndex(swap.object.as_ptr());
             self.acquired.set(true);
             Ok((
                 Texture {
@@ -182,10 +182,10 @@ impl Context {
             .ok_or_else(|| Error("Surface not configured".into()))?;
         unsafe {
             require(
-                texture.index == Some(SwapChain3_GetCurrentBackBufferIndex(swap.object.0)),
+                texture.index == Some(SwapChain3_GetCurrentBackBufferIndex(swap.object.as_ptr())),
                 "Wrong swapchain buffer",
             );
-            check(SwapChain3_Present(swap.object.0, 1, 0))?;
+            check(SwapChain3_Present(swap.object.as_ptr(), 1, 0))?;
         }
         self.slot.set((self.slot.get() + 1) % 2);
         Ok(())

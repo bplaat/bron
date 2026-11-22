@@ -46,11 +46,456 @@ pub(super) struct IUnknownVtbl {
     pub(super) Release: unsafe extern "system" fn(*mut c_void) -> u32,
 }
 
-macro_rules! vtable_method {
-    ($object:expr, $slot:literal) => {{
-        let table = $object.cast::<*const *const c_void>();
-        std::mem::transmute(*(*table).add($slot))
-    }};
+#[repr(C)]
+struct ID3D12ObjectVtbl {
+    base: IUnknownVtbl,
+    _unused_3_6: [*const c_void; 4],
+}
+
+#[repr(C)]
+struct ID3D12DeviceChildVtbl {
+    base: ID3D12ObjectVtbl,
+    _unused_7_7: [*const c_void; 1],
+}
+
+#[repr(C)]
+struct ID3D12PageableVtbl {
+    base: ID3D12DeviceChildVtbl,
+}
+
+#[repr(C)]
+struct ID3D12CommandListVtbl {
+    base: ID3D12DeviceChildVtbl,
+    _unused_8_8: [*const c_void; 1],
+}
+
+#[repr(C)]
+struct IDXGIObjectVtbl {
+    base: IUnknownVtbl,
+    _unused_3_6: [*const c_void; 4],
+}
+
+#[repr(C)]
+struct IDXGIDeviceSubObjectVtbl {
+    base: IDXGIObjectVtbl,
+    _unused_7_7: [*const c_void; 1],
+}
+
+#[repr(C)]
+struct IDXGIFactory {
+    vtbl: *const IDXGIFactoryVtbl,
+}
+
+#[repr(C)]
+struct IDXGIFactoryVtbl {
+    base: IDXGIObjectVtbl,
+    _unused_7_7: [*const c_void; 1],
+    MakeWindowAssociation:
+        unsafe extern "system" fn(*mut IDXGIFactory, HWND, DXGI_MWA_FLAGS) -> i32,
+    _unused_9_11: [*const c_void; 3],
+}
+
+#[repr(C)]
+struct IDXGIFactory1 {
+    vtbl: *const IDXGIFactory1Vtbl,
+}
+
+#[repr(C)]
+struct IDXGIFactory1Vtbl {
+    base: IDXGIFactoryVtbl,
+    EnumAdapters1: unsafe extern "system" fn(*mut IDXGIFactory1, u32, *mut *mut c_void) -> HRESULT,
+    _unused_13_13: [*const c_void; 1],
+}
+
+#[repr(C)]
+struct IDXGIFactory2 {
+    vtbl: *const IDXGIFactory2Vtbl,
+}
+
+#[repr(C)]
+struct IDXGIFactory2Vtbl {
+    base: IDXGIFactory1Vtbl,
+    _unused_14_14: [*const c_void; 1],
+    CreateSwapChainForHwnd: unsafe extern "system" fn(
+        *mut IDXGIFactory2,
+        *mut c_void,
+        HWND,
+        *const DXGI_SWAP_CHAIN_DESC1,
+        *const DXGI_SWAP_CHAIN_FULLSCREEN_DESC,
+        *mut c_void,
+        *mut *mut c_void,
+    ) -> i32,
+    _unused_16_24: [*const c_void; 9],
+}
+
+#[repr(C)]
+struct IDXGIFactory3 {
+    vtbl: *const IDXGIFactory3Vtbl,
+}
+
+#[repr(C)]
+struct IDXGIFactory3Vtbl {
+    base: IDXGIFactory2Vtbl,
+    _unused_25_25: [*const c_void; 1],
+}
+
+#[repr(C)]
+pub(super) struct ID3D12Device {
+    vtbl: *const ID3D12DeviceVtbl,
+}
+
+#[repr(C)]
+struct ID3D12DeviceVtbl {
+    base: ID3D12ObjectVtbl,
+    _unused_7_7: [*const c_void; 1],
+    CreateCommandQueue: unsafe extern "system" fn(
+        *mut ID3D12Device,
+        *const D3D12_COMMAND_QUEUE_DESC,
+        *const GUID,
+        *mut *mut c_void,
+    ) -> i32,
+    CreateCommandAllocator: unsafe extern "system" fn(
+        *mut ID3D12Device,
+        D3D12_COMMAND_LIST_TYPE,
+        *const GUID,
+        *mut *mut c_void,
+    ) -> i32,
+    CreateGraphicsPipelineState: unsafe extern "system" fn(
+        *mut ID3D12Device,
+        *const D3D12_GRAPHICS_PIPELINE_STATE_DESC,
+        *const GUID,
+        *mut *mut c_void,
+    ) -> i32,
+    _unused_11_11: [*const c_void; 1],
+    CreateCommandList: unsafe extern "system" fn(
+        *mut ID3D12Device,
+        u32,
+        D3D12_COMMAND_LIST_TYPE,
+        *mut c_void,
+        *mut c_void,
+        *const GUID,
+        *mut *mut c_void,
+    ) -> i32,
+    _unused_13_13: [*const c_void; 1],
+    CreateDescriptorHeap: unsafe extern "system" fn(
+        *mut ID3D12Device,
+        *const D3D12_DESCRIPTOR_HEAP_DESC,
+        *const GUID,
+        *mut *mut c_void,
+    ) -> i32,
+    GetDescriptorHandleIncrementSize:
+        unsafe extern "system" fn(*mut ID3D12Device, D3D12_DESCRIPTOR_HEAP_TYPE) -> u32,
+    CreateRootSignature: unsafe extern "system" fn(
+        *mut ID3D12Device,
+        u32,
+        *const c_void,
+        usize,
+        *const GUID,
+        *mut *mut c_void,
+    ) -> i32,
+    _unused_17_17: [*const c_void; 1],
+    CreateShaderResourceView: unsafe extern "system" fn(
+        *mut ID3D12Device,
+        *mut c_void,
+        *const D3D12_SHADER_RESOURCE_VIEW_DESC,
+        D3D12_CPU_DESCRIPTOR_HANDLE,
+    ),
+    _unused_19_19: [*const c_void; 1],
+    CreateRenderTargetView: unsafe extern "system" fn(
+        *mut ID3D12Device,
+        *mut c_void,
+        *const D3D12_RENDER_TARGET_VIEW_DESC,
+        D3D12_CPU_DESCRIPTOR_HANDLE,
+    ),
+    CreateDepthStencilView: unsafe extern "system" fn(
+        *mut ID3D12Device,
+        *mut c_void,
+        *const D3D12_DEPTH_STENCIL_VIEW_DESC,
+        D3D12_CPU_DESCRIPTOR_HANDLE,
+    ),
+    CreateSampler: unsafe extern "system" fn(
+        *mut ID3D12Device,
+        *const D3D12_SAMPLER_DESC,
+        D3D12_CPU_DESCRIPTOR_HANDLE,
+    ),
+    _unused_23_26: [*const c_void; 4],
+    CreateCommittedResource: unsafe extern "system" fn(
+        *mut ID3D12Device,
+        *const D3D12_HEAP_PROPERTIES,
+        D3D12_HEAP_FLAGS,
+        *const D3D12_RESOURCE_DESC,
+        D3D12_RESOURCE_STATES,
+        *const D3D12_CLEAR_VALUE,
+        *const GUID,
+        *mut *mut c_void,
+    ) -> i32,
+    _unused_28_35: [*const c_void; 8],
+    CreateFence: unsafe extern "system" fn(
+        *mut ID3D12Device,
+        u64,
+        D3D12_FENCE_FLAGS,
+        *const GUID,
+        *mut *mut c_void,
+    ) -> i32,
+    GetDeviceRemovedReason: unsafe extern "system" fn(*mut ID3D12Device) -> i32,
+}
+
+#[repr(C)]
+pub(super) struct ID3D12CommandQueue {
+    vtbl: *const ID3D12CommandQueueVtbl,
+}
+
+#[repr(C)]
+struct ID3D12CommandQueueVtbl {
+    base: ID3D12PageableVtbl,
+    _unused_8_9: [*const c_void; 2],
+    ExecuteCommandLists:
+        unsafe extern "system" fn(*mut ID3D12CommandQueue, u32, *const *mut c_void),
+    _unused_11_13: [*const c_void; 3],
+    Signal: unsafe extern "system" fn(*mut ID3D12CommandQueue, *mut c_void, u64) -> i32,
+}
+
+#[repr(C)]
+pub(super) struct ID3D12CommandAllocator {
+    vtbl: *const ID3D12CommandAllocatorVtbl,
+}
+
+#[repr(C)]
+struct ID3D12CommandAllocatorVtbl {
+    base: ID3D12PageableVtbl,
+    Reset: unsafe extern "system" fn(*mut ID3D12CommandAllocator) -> i32,
+}
+
+#[repr(C)]
+pub(super) struct ID3D12GraphicsCommandList {
+    vtbl: *const ID3D12GraphicsCommandListVtbl,
+}
+
+#[repr(C)]
+struct ID3D12GraphicsCommandListVtbl {
+    base: ID3D12CommandListVtbl,
+    Close: unsafe extern "system" fn(*mut ID3D12GraphicsCommandList) -> i32,
+    Reset:
+        unsafe extern "system" fn(*mut ID3D12GraphicsCommandList, *mut c_void, *mut c_void) -> i32,
+    _unused_11_11: [*const c_void; 1],
+    DrawInstanced: unsafe extern "system" fn(*mut ID3D12GraphicsCommandList, u32, u32, u32, u32),
+    DrawIndexedInstanced:
+        unsafe extern "system" fn(*mut ID3D12GraphicsCommandList, u32, u32, u32, i32, u32),
+    _unused_14_14: [*const c_void; 1],
+    CopyBufferRegion: unsafe extern "system" fn(
+        *mut ID3D12GraphicsCommandList,
+        *mut c_void,
+        u64,
+        *mut c_void,
+        u64,
+        u64,
+    ),
+    CopyTextureRegion: unsafe extern "system" fn(
+        *mut ID3D12GraphicsCommandList,
+        *const D3D12_TEXTURE_COPY_LOCATION,
+        u32,
+        u32,
+        u32,
+        *const D3D12_TEXTURE_COPY_LOCATION,
+        *const D3D12_BOX,
+    ),
+    _unused_17_19: [*const c_void; 3],
+    IASetPrimitiveTopology:
+        unsafe extern "system" fn(*mut ID3D12GraphicsCommandList, D3D_PRIMITIVE_TOPOLOGY),
+    RSSetViewports:
+        unsafe extern "system" fn(*mut ID3D12GraphicsCommandList, u32, *const D3D12_VIEWPORT),
+    RSSetScissorRects: unsafe extern "system" fn(*mut ID3D12GraphicsCommandList, u32, *const RECT),
+    _unused_23_24: [*const c_void; 2],
+    SetPipelineState: unsafe extern "system" fn(*mut ID3D12GraphicsCommandList, *mut c_void),
+    ResourceBarrier: unsafe extern "system" fn(
+        *mut ID3D12GraphicsCommandList,
+        u32,
+        *const D3D12_RESOURCE_BARRIER,
+    ),
+    _unused_27_27: [*const c_void; 1],
+    SetDescriptorHeaps:
+        unsafe extern "system" fn(*mut ID3D12GraphicsCommandList, u32, *const *mut c_void),
+    _unused_29_29: [*const c_void; 1],
+    SetGraphicsRootSignature:
+        unsafe extern "system" fn(*mut ID3D12GraphicsCommandList, *mut c_void),
+    _unused_31_31: [*const c_void; 1],
+    SetGraphicsRootDescriptorTable:
+        unsafe extern "system" fn(*mut ID3D12GraphicsCommandList, u32, D3D12_GPU_DESCRIPTOR_HANDLE),
+    _unused_33_35: [*const c_void; 3],
+    SetGraphicsRoot32BitConstants:
+        unsafe extern "system" fn(*mut ID3D12GraphicsCommandList, u32, u32, *const c_void, u32),
+    _unused_37_37: [*const c_void; 1],
+    SetGraphicsRootConstantBufferView:
+        unsafe extern "system" fn(*mut ID3D12GraphicsCommandList, u32, u64),
+    _unused_39_39: [*const c_void; 1],
+    SetGraphicsRootShaderResourceView:
+        unsafe extern "system" fn(*mut ID3D12GraphicsCommandList, u32, u64),
+    _unused_41_42: [*const c_void; 2],
+    IASetIndexBuffer:
+        unsafe extern "system" fn(*mut ID3D12GraphicsCommandList, *const D3D12_INDEX_BUFFER_VIEW),
+    IASetVertexBuffers: unsafe extern "system" fn(
+        *mut ID3D12GraphicsCommandList,
+        u32,
+        u32,
+        *const D3D12_VERTEX_BUFFER_VIEW,
+    ),
+    _unused_45_45: [*const c_void; 1],
+    OMSetRenderTargets: unsafe extern "system" fn(
+        *mut ID3D12GraphicsCommandList,
+        u32,
+        *const D3D12_CPU_DESCRIPTOR_HANDLE,
+        i32,
+        *const D3D12_CPU_DESCRIPTOR_HANDLE,
+    ),
+    ClearDepthStencilView: unsafe extern "system" fn(
+        *mut ID3D12GraphicsCommandList,
+        D3D12_CPU_DESCRIPTOR_HANDLE,
+        D3D12_CLEAR_FLAGS,
+        f32,
+        u8,
+        u32,
+        *const RECT,
+    ),
+    ClearRenderTargetView: unsafe extern "system" fn(
+        *mut ID3D12GraphicsCommandList,
+        D3D12_CPU_DESCRIPTOR_HANDLE,
+        *const f32,
+        u32,
+        *const RECT,
+    ),
+}
+
+#[repr(C)]
+pub(super) struct ID3D12Resource {
+    vtbl: *const ID3D12ResourceVtbl,
+}
+
+#[repr(C)]
+struct ID3D12ResourceVtbl {
+    base: ID3D12PageableVtbl,
+    Map: unsafe extern "system" fn(
+        *mut ID3D12Resource,
+        u32,
+        *const D3D12_RANGE,
+        *mut *mut c_void,
+    ) -> i32,
+    Unmap: unsafe extern "system" fn(*mut ID3D12Resource, u32, *const D3D12_RANGE),
+    _unused_10_10: [*const c_void; 1],
+    GetGPUVirtualAddress: unsafe extern "system" fn(*mut ID3D12Resource) -> u64,
+}
+
+#[repr(C)]
+pub(super) struct ID3D12DescriptorHeap {
+    vtbl: *const ID3D12DescriptorHeapVtbl,
+}
+
+#[repr(C)]
+struct ID3D12DescriptorHeapVtbl {
+    base: ID3D12PageableVtbl,
+    _unused_8_8: [*const c_void; 1],
+    GetCPUDescriptorHandleForHeapStart:
+        unsafe extern "system" fn(*mut ID3D12DescriptorHeap, *mut D3D12_CPU_DESCRIPTOR_HANDLE),
+    GetGPUDescriptorHandleForHeapStart:
+        unsafe extern "system" fn(*mut ID3D12DescriptorHeap, *mut D3D12_GPU_DESCRIPTOR_HANDLE),
+}
+
+#[repr(C)]
+pub(super) struct ID3D12Fence {
+    vtbl: *const ID3D12FenceVtbl,
+}
+
+#[repr(C)]
+struct ID3D12FenceVtbl {
+    base: ID3D12PageableVtbl,
+    GetCompletedValue: unsafe extern "system" fn(*mut ID3D12Fence) -> u64,
+    SetEventOnCompletion: unsafe extern "system" fn(*mut ID3D12Fence, u64, HANDLE) -> i32,
+}
+
+#[repr(C)]
+pub(super) struct IDXGIFactory4 {
+    vtbl: *const IDXGIFactory4Vtbl,
+}
+
+#[repr(C)]
+struct IDXGIFactory4Vtbl {
+    base: IDXGIFactory3Vtbl,
+    _unused_26_26: [*const c_void; 1],
+    EnumWarpAdapter:
+        unsafe extern "system" fn(*mut IDXGIFactory4, *const GUID, *mut *mut c_void) -> HRESULT,
+}
+
+#[repr(C)]
+struct IDXGISwapChain {
+    vtbl: *const IDXGISwapChainVtbl,
+}
+
+#[repr(C)]
+struct IDXGISwapChainVtbl {
+    base: IDXGIDeviceSubObjectVtbl,
+    Present: unsafe extern "system" fn(*mut IDXGISwapChain, u32, DXGI_PRESENT) -> i32,
+    GetBuffer:
+        unsafe extern "system" fn(*mut IDXGISwapChain, u32, *const GUID, *mut *mut c_void) -> i32,
+    _unused_10_12: [*const c_void; 3],
+    ResizeBuffers:
+        unsafe extern "system" fn(*mut IDXGISwapChain, u32, u32, u32, DXGI_FORMAT, u32) -> i32,
+    _unused_14_17: [*const c_void; 4],
+}
+
+#[repr(C)]
+pub(super) struct IDXGISwapChain1 {
+    vtbl: *const IDXGISwapChain1Vtbl,
+}
+
+#[repr(C)]
+struct IDXGISwapChain1Vtbl {
+    base: IDXGISwapChainVtbl,
+    _unused_18_28: [*const c_void; 11],
+}
+
+#[repr(C)]
+struct IDXGISwapChain2Vtbl {
+    base: IDXGISwapChain1Vtbl,
+    _unused_29_35: [*const c_void; 7],
+}
+
+#[repr(C)]
+pub(super) struct IDXGISwapChain3 {
+    vtbl: *const IDXGISwapChain3Vtbl,
+}
+
+#[repr(C)]
+struct IDXGISwapChain3Vtbl {
+    base: IDXGISwapChain2Vtbl,
+    GetCurrentBackBufferIndex: unsafe extern "system" fn(*mut IDXGISwapChain3) -> u32,
+}
+
+#[repr(C)]
+pub(super) struct ID3DBlob {
+    vtbl: *const ID3DBlobVtbl,
+}
+
+#[repr(C)]
+struct ID3DBlobVtbl {
+    base: IUnknownVtbl,
+    GetBufferPointer: unsafe extern "system" fn(*mut ID3DBlob) -> *mut c_void,
+    GetBufferSize: unsafe extern "system" fn(*mut ID3DBlob) -> usize,
+}
+
+#[repr(C)]
+pub(super) struct IDXGIAdapter1 {
+    vtbl: *const IDXGIAdapter1Vtbl,
+}
+
+#[repr(C)]
+struct IDXGIAdapterVtbl {
+    base: IDXGIObjectVtbl,
+    _unused_7_9: [*const c_void; 3],
+}
+
+#[repr(C)]
+struct IDXGIAdapter1Vtbl {
+    base: IDXGIAdapterVtbl,
+    GetDesc1: unsafe extern "system" fn(*mut IDXGIAdapter1, *mut DXGI_ADAPTER_DESC1) -> HRESULT,
 }
 
 #[repr(C)]
@@ -66,7 +511,7 @@ pub(super) type D3D12_COMMAND_QUEUE_FLAGS = i32;
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
 pub(super) struct D3D12_GRAPHICS_PIPELINE_STATE_DESC {
-    pub(super) pRootSignature: ID3D12RootSignature,
+    pub(super) pRootSignature: *mut c_void,
     pub(super) VS: D3D12_SHADER_BYTECODE,
     pub(super) PS: D3D12_SHADER_BYTECODE,
     pub(super) DS: D3D12_SHADER_BYTECODE,
@@ -88,7 +533,20 @@ pub(super) struct D3D12_GRAPHICS_PIPELINE_STATE_DESC {
     pub(super) CachedPSO: D3D12_CACHED_PIPELINE_STATE,
     pub(super) Flags: D3D12_PIPELINE_STATE_FLAGS,
 }
-pub(super) type ID3D12RootSignature = *mut c_void;
+#[repr(C)]
+pub(super) struct ID3D12RootSignature {
+    vtbl: *const ID3D12DeviceChildVtbl,
+}
+
+#[repr(C)]
+pub(super) struct ID3D12PipelineState {
+    vtbl: *const ID3D12PageableVtbl,
+}
+
+#[repr(C)]
+pub(super) struct IDXGIAdapter {
+    vtbl: *const IDXGIAdapterVtbl,
+}
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
 pub(super) struct D3D12_SHADER_BYTECODE {
@@ -549,11 +1007,10 @@ pub(super) type D3D12_FENCE_FLAGS = i32;
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
 pub(super) struct D3D12_TEXTURE_COPY_LOCATION {
-    pub(super) pResource: ID3D12Resource,
+    pub(super) pResource: *mut c_void,
     pub(super) Type: D3D12_TEXTURE_COPY_TYPE,
     pub(super) Anonymous: D3D12_TEXTURE_COPY_LOCATION_0,
 }
-pub(super) type ID3D12Resource = *mut c_void;
 pub(super) type D3D12_TEXTURE_COPY_TYPE = i32;
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -626,7 +1083,7 @@ impl Default for D3D12_RESOURCE_BARRIER_0 {
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
 pub(super) struct D3D12_RESOURCE_TRANSITION_BARRIER {
-    pub(super) pResource: ID3D12Resource,
+    pub(super) pResource: *mut c_void,
     pub(super) Subresource: u32,
     pub(super) StateBefore: D3D12_RESOURCE_STATES,
     pub(super) StateAfter: D3D12_RESOURCE_STATES,
@@ -634,13 +1091,13 @@ pub(super) struct D3D12_RESOURCE_TRANSITION_BARRIER {
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
 pub(super) struct D3D12_RESOURCE_ALIASING_BARRIER {
-    pub(super) pResourceBefore: ID3D12Resource,
-    pub(super) pResourceAfter: ID3D12Resource,
+    pub(super) pResourceBefore: *mut c_void,
+    pub(super) pResourceAfter: *mut c_void,
 }
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
 pub(super) struct D3D12_RESOURCE_UAV_BARRIER {
-    pub(super) pResource: ID3D12Resource,
+    pub(super) pResource: *mut c_void,
 }
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
@@ -842,55 +1299,31 @@ pub(super) const IDXGISwapChain3: GUID = GUID {
     data4: [178, 54, 125, 160, 23, 14, 218, 177],
 };
 pub(super) unsafe fn Device_CreateCommandQueue(
-    a0: *mut c_void,
+    a0: *mut ID3D12Device,
     a1: *const D3D12_COMMAND_QUEUE_DESC,
     a2: *const GUID,
     a3: *mut *mut c_void,
 ) -> i32 {
-    unsafe {
-        let function: unsafe extern "system" fn(
-            *mut c_void,
-            *const D3D12_COMMAND_QUEUE_DESC,
-            *const GUID,
-            *mut *mut c_void,
-        ) -> i32 = vtable_method!(a0, 8);
-        function(a0, a1, a2, a3)
-    }
+    unsafe { ((*(*a0).vtbl).CreateCommandQueue)(a0, a1, a2, a3) }
 }
 pub(super) unsafe fn Device_CreateCommandAllocator(
-    a0: *mut c_void,
+    a0: *mut ID3D12Device,
     a1: D3D12_COMMAND_LIST_TYPE,
     a2: *const GUID,
     a3: *mut *mut c_void,
 ) -> i32 {
-    unsafe {
-        let function: unsafe extern "system" fn(
-            *mut c_void,
-            D3D12_COMMAND_LIST_TYPE,
-            *const GUID,
-            *mut *mut c_void,
-        ) -> i32 = vtable_method!(a0, 9);
-        function(a0, a1, a2, a3)
-    }
+    unsafe { ((*(*a0).vtbl).CreateCommandAllocator)(a0, a1, a2, a3) }
 }
 pub(super) unsafe fn Device_CreateGraphicsPipelineState(
-    a0: *mut c_void,
+    a0: *mut ID3D12Device,
     a1: *const D3D12_GRAPHICS_PIPELINE_STATE_DESC,
     a2: *const GUID,
     a3: *mut *mut c_void,
 ) -> i32 {
-    unsafe {
-        let function: unsafe extern "system" fn(
-            *mut c_void,
-            *const D3D12_GRAPHICS_PIPELINE_STATE_DESC,
-            *const GUID,
-            *mut *mut c_void,
-        ) -> i32 = vtable_method!(a0, 10);
-        function(a0, a1, a2, a3)
-    }
+    unsafe { ((*(*a0).vtbl).CreateGraphicsPipelineState)(a0, a1, a2, a3) }
 }
 pub(super) unsafe fn Device_CreateCommandList(
-    a0: *mut c_void,
+    a0: *mut ID3D12Device,
     a1: u32,
     a2: D3D12_COMMAND_LIST_TYPE,
     a3: *mut c_void,
@@ -898,129 +1331,65 @@ pub(super) unsafe fn Device_CreateCommandList(
     a5: *const GUID,
     a6: *mut *mut c_void,
 ) -> i32 {
-    unsafe {
-        let function: unsafe extern "system" fn(
-            *mut c_void,
-            u32,
-            D3D12_COMMAND_LIST_TYPE,
-            *mut c_void,
-            *mut c_void,
-            *const GUID,
-            *mut *mut c_void,
-        ) -> i32 = vtable_method!(a0, 12);
-        function(a0, a1, a2, a3, a4, a5, a6)
-    }
+    unsafe { ((*(*a0).vtbl).CreateCommandList)(a0, a1, a2, a3, a4, a5, a6) }
 }
 pub(super) unsafe fn Device_CreateDescriptorHeap(
-    a0: *mut c_void,
+    a0: *mut ID3D12Device,
     a1: *const D3D12_DESCRIPTOR_HEAP_DESC,
     a2: *const GUID,
     a3: *mut *mut c_void,
 ) -> i32 {
-    unsafe {
-        let function: unsafe extern "system" fn(
-            *mut c_void,
-            *const D3D12_DESCRIPTOR_HEAP_DESC,
-            *const GUID,
-            *mut *mut c_void,
-        ) -> i32 = vtable_method!(a0, 14);
-        function(a0, a1, a2, a3)
-    }
+    unsafe { ((*(*a0).vtbl).CreateDescriptorHeap)(a0, a1, a2, a3) }
 }
 pub(super) unsafe fn Device_GetDescriptorHandleIncrementSize(
-    a0: *mut c_void,
+    a0: *mut ID3D12Device,
     a1: D3D12_DESCRIPTOR_HEAP_TYPE,
 ) -> u32 {
-    unsafe {
-        let function: unsafe extern "system" fn(*mut c_void, D3D12_DESCRIPTOR_HEAP_TYPE) -> u32 =
-            vtable_method!(a0, 15);
-        function(a0, a1)
-    }
+    unsafe { ((*(*a0).vtbl).GetDescriptorHandleIncrementSize)(a0, a1) }
 }
 pub(super) unsafe fn Device_CreateRootSignature(
-    a0: *mut c_void,
+    a0: *mut ID3D12Device,
     a1: u32,
     a2: *const c_void,
     a3: usize,
     a4: *const GUID,
     a5: *mut *mut c_void,
 ) -> i32 {
-    unsafe {
-        let function: unsafe extern "system" fn(
-            *mut c_void,
-            u32,
-            *const c_void,
-            usize,
-            *const GUID,
-            *mut *mut c_void,
-        ) -> i32 = vtable_method!(a0, 16);
-        function(a0, a1, a2, a3, a4, a5)
-    }
+    unsafe { ((*(*a0).vtbl).CreateRootSignature)(a0, a1, a2, a3, a4, a5) }
 }
 pub(super) unsafe fn Device_CreateShaderResourceView(
-    a0: *mut c_void,
+    a0: *mut ID3D12Device,
     a1: *mut c_void,
     a2: *const D3D12_SHADER_RESOURCE_VIEW_DESC,
     a3: D3D12_CPU_DESCRIPTOR_HANDLE,
 ) {
-    unsafe {
-        let function: unsafe extern "system" fn(
-            *mut c_void,
-            *mut c_void,
-            *const D3D12_SHADER_RESOURCE_VIEW_DESC,
-            D3D12_CPU_DESCRIPTOR_HANDLE,
-        ) = vtable_method!(a0, 18);
-        function(a0, a1, a2, a3)
-    }
+    unsafe { ((*(*a0).vtbl).CreateShaderResourceView)(a0, a1, a2, a3) }
 }
 pub(super) unsafe fn Device_CreateRenderTargetView(
-    a0: *mut c_void,
+    a0: *mut ID3D12Device,
     a1: *mut c_void,
     a2: *const D3D12_RENDER_TARGET_VIEW_DESC,
     a3: D3D12_CPU_DESCRIPTOR_HANDLE,
 ) {
-    unsafe {
-        let function: unsafe extern "system" fn(
-            *mut c_void,
-            *mut c_void,
-            *const D3D12_RENDER_TARGET_VIEW_DESC,
-            D3D12_CPU_DESCRIPTOR_HANDLE,
-        ) = vtable_method!(a0, 20);
-        function(a0, a1, a2, a3)
-    }
+    unsafe { ((*(*a0).vtbl).CreateRenderTargetView)(a0, a1, a2, a3) }
 }
 pub(super) unsafe fn Device_CreateDepthStencilView(
-    a0: *mut c_void,
+    a0: *mut ID3D12Device,
     a1: *mut c_void,
     a2: *const D3D12_DEPTH_STENCIL_VIEW_DESC,
     a3: D3D12_CPU_DESCRIPTOR_HANDLE,
 ) {
-    unsafe {
-        let function: unsafe extern "system" fn(
-            *mut c_void,
-            *mut c_void,
-            *const D3D12_DEPTH_STENCIL_VIEW_DESC,
-            D3D12_CPU_DESCRIPTOR_HANDLE,
-        ) = vtable_method!(a0, 21);
-        function(a0, a1, a2, a3)
-    }
+    unsafe { ((*(*a0).vtbl).CreateDepthStencilView)(a0, a1, a2, a3) }
 }
 pub(super) unsafe fn Device_CreateSampler(
-    a0: *mut c_void,
+    a0: *mut ID3D12Device,
     a1: *const D3D12_SAMPLER_DESC,
     a2: D3D12_CPU_DESCRIPTOR_HANDLE,
 ) {
-    unsafe {
-        let function: unsafe extern "system" fn(
-            *mut c_void,
-            *const D3D12_SAMPLER_DESC,
-            D3D12_CPU_DESCRIPTOR_HANDLE,
-        ) = vtable_method!(a0, 22);
-        function(a0, a1, a2)
-    }
+    unsafe { ((*(*a0).vtbl).CreateSampler)(a0, a1, a2) }
 }
 pub(super) unsafe fn Device_CreateCommittedResource(
-    a0: *mut c_void,
+    a0: *mut ID3D12Device,
     a1: *const D3D12_HEAP_PROPERTIES,
     a2: D3D12_HEAP_FLAGS,
     a3: *const D3D12_RESOURCE_DESC,
@@ -1029,97 +1398,55 @@ pub(super) unsafe fn Device_CreateCommittedResource(
     a6: *const GUID,
     a7: *mut *mut c_void,
 ) -> i32 {
-    unsafe {
-        let function: unsafe extern "system" fn(
-            *mut c_void,
-            *const D3D12_HEAP_PROPERTIES,
-            D3D12_HEAP_FLAGS,
-            *const D3D12_RESOURCE_DESC,
-            D3D12_RESOURCE_STATES,
-            *const D3D12_CLEAR_VALUE,
-            *const GUID,
-            *mut *mut c_void,
-        ) -> i32 = vtable_method!(a0, 27);
-        function(a0, a1, a2, a3, a4, a5, a6, a7)
-    }
+    unsafe { ((*(*a0).vtbl).CreateCommittedResource)(a0, a1, a2, a3, a4, a5, a6, a7) }
 }
 pub(super) unsafe fn Device_CreateFence(
-    a0: *mut c_void,
+    a0: *mut ID3D12Device,
     a1: u64,
     a2: D3D12_FENCE_FLAGS,
     a3: *const GUID,
     a4: *mut *mut c_void,
 ) -> i32 {
-    unsafe {
-        let function: unsafe extern "system" fn(
-            *mut c_void,
-            u64,
-            D3D12_FENCE_FLAGS,
-            *const GUID,
-            *mut *mut c_void,
-        ) -> i32 = vtable_method!(a0, 36);
-        function(a0, a1, a2, a3, a4)
-    }
+    unsafe { ((*(*a0).vtbl).CreateFence)(a0, a1, a2, a3, a4) }
 }
-pub(super) unsafe fn Device_GetDeviceRemovedReason(a0: *mut c_void) -> i32 {
-    unsafe {
-        let function: unsafe extern "system" fn(*mut c_void) -> i32 = vtable_method!(a0, 37);
-        function(a0)
-    }
+pub(super) unsafe fn Device_GetDeviceRemovedReason(a0: *mut ID3D12Device) -> i32 {
+    unsafe { ((*(*a0).vtbl).GetDeviceRemovedReason)(a0) }
 }
 pub(super) unsafe fn CommandQueue_ExecuteCommandLists(
-    a0: *mut c_void,
+    a0: *mut ID3D12CommandQueue,
     a1: u32,
     a2: *const *mut c_void,
 ) {
-    unsafe {
-        let function: unsafe extern "system" fn(*mut c_void, u32, *const *mut c_void) =
-            vtable_method!(a0, 10);
-        function(a0, a1, a2)
-    }
+    unsafe { ((*(*a0).vtbl).ExecuteCommandLists)(a0, a1, a2) }
 }
-pub(super) unsafe fn CommandQueue_Signal(a0: *mut c_void, a1: *mut c_void, a2: u64) -> i32 {
-    unsafe {
-        let function: unsafe extern "system" fn(*mut c_void, *mut c_void, u64) -> i32 =
-            vtable_method!(a0, 14);
-        function(a0, a1, a2)
-    }
+pub(super) unsafe fn CommandQueue_Signal(
+    a0: *mut ID3D12CommandQueue,
+    a1: *mut c_void,
+    a2: u64,
+) -> i32 {
+    unsafe { ((*(*a0).vtbl).Signal)(a0, a1, a2) }
 }
-pub(super) unsafe fn CommandAllocator_Reset(a0: *mut c_void) -> i32 {
-    unsafe {
-        let function: unsafe extern "system" fn(*mut c_void) -> i32 = vtable_method!(a0, 8);
-        function(a0)
-    }
+pub(super) unsafe fn CommandAllocator_Reset(a0: *mut ID3D12CommandAllocator) -> i32 {
+    unsafe { ((*(*a0).vtbl).Reset)(a0) }
 }
-pub(super) unsafe fn GraphicsCommandList_Close(a0: *mut c_void) -> i32 {
-    unsafe {
-        let function: unsafe extern "system" fn(*mut c_void) -> i32 = vtable_method!(a0, 9);
-        function(a0)
-    }
+pub(super) unsafe fn GraphicsCommandList_Close(a0: *mut ID3D12GraphicsCommandList) -> i32 {
+    unsafe { ((*(*a0).vtbl).Close)(a0) }
 }
 pub(super) unsafe fn GraphicsCommandList_Reset(
-    a0: *mut c_void,
+    a0: *mut ID3D12GraphicsCommandList,
     a1: *mut c_void,
     a2: *mut c_void,
 ) -> i32 {
-    unsafe {
-        let function: unsafe extern "system" fn(*mut c_void, *mut c_void, *mut c_void) -> i32 =
-            vtable_method!(a0, 10);
-        function(a0, a1, a2)
-    }
+    unsafe { ((*(*a0).vtbl).Reset)(a0, a1, a2) }
 }
 pub(super) unsafe fn GraphicsCommandList_DrawInstanced(
-    a0: *mut c_void,
+    a0: *mut ID3D12GraphicsCommandList,
     a1: u32,
     a2: u32,
     a3: u32,
     a4: u32,
 ) {
-    unsafe {
-        let function: unsafe extern "system" fn(*mut c_void, u32, u32, u32, u32) =
-            vtable_method!(a0, 12);
-        function(a0, a1, a2, a3, a4)
-    }
+    unsafe { ((*(*a0).vtbl).DrawInstanced)(a0, a1, a2, a3, a4) }
 }
 
 #[repr(C)]
@@ -1130,7 +1457,7 @@ pub(super) struct D3D12_INDEX_BUFFER_VIEW {
 }
 
 pub(super) unsafe fn GraphicsCommandList_DrawIndexedInstanced(
-    command: *mut c_void,
+    command: *mut ID3D12GraphicsCommandList,
     index_count: u32,
     instance_count: u32,
     first_index: u32,
@@ -1138,9 +1465,7 @@ pub(super) unsafe fn GraphicsCommandList_DrawIndexedInstanced(
     first_instance: u32,
 ) {
     unsafe {
-        let function: unsafe extern "system" fn(*mut c_void, u32, u32, u32, i32, u32) =
-            vtable_method!(command, 13);
-        function(
+        ((*(*command).vtbl).DrawIndexedInstanced)(
             command,
             index_count,
             instance_count,
@@ -1152,37 +1477,25 @@ pub(super) unsafe fn GraphicsCommandList_DrawIndexedInstanced(
 }
 
 pub(super) unsafe fn GraphicsCommandList_IASetIndexBuffer(
-    command: *mut c_void,
+    command: *mut ID3D12GraphicsCommandList,
     view: *const D3D12_INDEX_BUFFER_VIEW,
 ) {
     unsafe {
-        let function: unsafe extern "system" fn(*mut c_void, *const D3D12_INDEX_BUFFER_VIEW) =
-            vtable_method!(command, 43);
-        function(command, view);
+        ((*(*command).vtbl).IASetIndexBuffer)(command, view);
     }
 }
 pub(super) unsafe fn GraphicsCommandList_CopyBufferRegion(
-    a0: *mut c_void,
+    a0: *mut ID3D12GraphicsCommandList,
     a1: *mut c_void,
     a2: u64,
     a3: *mut c_void,
     a4: u64,
     a5: u64,
 ) {
-    unsafe {
-        let function: unsafe extern "system" fn(
-            *mut c_void,
-            *mut c_void,
-            u64,
-            *mut c_void,
-            u64,
-            u64,
-        ) = vtable_method!(a0, 15);
-        function(a0, a1, a2, a3, a4, a5)
-    }
+    unsafe { ((*(*a0).vtbl).CopyBufferRegion)(a0, a1, a2, a3, a4, a5) }
 }
 pub(super) unsafe fn GraphicsCommandList_CopyTextureRegion(
-    a0: *mut c_void,
+    a0: *mut ID3D12GraphicsCommandList,
     a1: *const D3D12_TEXTURE_COPY_LOCATION,
     a2: u32,
     a3: u32,
@@ -1190,169 +1503,108 @@ pub(super) unsafe fn GraphicsCommandList_CopyTextureRegion(
     a5: *const D3D12_TEXTURE_COPY_LOCATION,
     a6: *const D3D12_BOX,
 ) {
-    unsafe {
-        let function: unsafe extern "system" fn(
-            *mut c_void,
-            *const D3D12_TEXTURE_COPY_LOCATION,
-            u32,
-            u32,
-            u32,
-            *const D3D12_TEXTURE_COPY_LOCATION,
-            *const D3D12_BOX,
-        ) = vtable_method!(a0, 16);
-        function(a0, a1, a2, a3, a4, a5, a6)
-    }
+    unsafe { ((*(*a0).vtbl).CopyTextureRegion)(a0, a1, a2, a3, a4, a5, a6) }
 }
 pub(super) unsafe fn GraphicsCommandList_IASetPrimitiveTopology(
-    a0: *mut c_void,
+    a0: *mut ID3D12GraphicsCommandList,
     a1: D3D_PRIMITIVE_TOPOLOGY,
 ) {
-    unsafe {
-        let function: unsafe extern "system" fn(*mut c_void, D3D_PRIMITIVE_TOPOLOGY) =
-            vtable_method!(a0, 20);
-        function(a0, a1)
-    }
+    unsafe { ((*(*a0).vtbl).IASetPrimitiveTopology)(a0, a1) }
 }
 pub(super) unsafe fn GraphicsCommandList_RSSetViewports(
-    a0: *mut c_void,
+    a0: *mut ID3D12GraphicsCommandList,
     a1: u32,
     a2: *const D3D12_VIEWPORT,
 ) {
-    unsafe {
-        let function: unsafe extern "system" fn(*mut c_void, u32, *const D3D12_VIEWPORT) =
-            vtable_method!(a0, 21);
-        function(a0, a1, a2)
-    }
+    unsafe { ((*(*a0).vtbl).RSSetViewports)(a0, a1, a2) }
 }
 pub(super) unsafe fn GraphicsCommandList_RSSetScissorRects(
-    a0: *mut c_void,
+    a0: *mut ID3D12GraphicsCommandList,
     a1: u32,
     a2: *const RECT,
 ) {
-    unsafe {
-        let function: unsafe extern "system" fn(*mut c_void, u32, *const RECT) =
-            vtable_method!(a0, 22);
-        function(a0, a1, a2)
-    }
+    unsafe { ((*(*a0).vtbl).RSSetScissorRects)(a0, a1, a2) }
 }
-pub(super) unsafe fn GraphicsCommandList_SetPipelineState(a0: *mut c_void, a1: *mut c_void) {
-    unsafe {
-        let function: unsafe extern "system" fn(*mut c_void, *mut c_void) = vtable_method!(a0, 25);
-        function(a0, a1)
-    }
+pub(super) unsafe fn GraphicsCommandList_SetPipelineState(
+    a0: *mut ID3D12GraphicsCommandList,
+    a1: *mut c_void,
+) {
+    unsafe { ((*(*a0).vtbl).SetPipelineState)(a0, a1) }
 }
 pub(super) unsafe fn GraphicsCommandList_ResourceBarrier(
-    a0: *mut c_void,
+    a0: *mut ID3D12GraphicsCommandList,
     a1: u32,
     a2: *const D3D12_RESOURCE_BARRIER,
 ) {
-    unsafe {
-        let function: unsafe extern "system" fn(*mut c_void, u32, *const D3D12_RESOURCE_BARRIER) =
-            vtable_method!(a0, 26);
-        function(a0, a1, a2)
-    }
+    unsafe { ((*(*a0).vtbl).ResourceBarrier)(a0, a1, a2) }
 }
 pub(super) unsafe fn GraphicsCommandList_SetDescriptorHeaps(
-    a0: *mut c_void,
+    a0: *mut ID3D12GraphicsCommandList,
     a1: u32,
     a2: *const *mut c_void,
 ) {
-    unsafe {
-        let function: unsafe extern "system" fn(*mut c_void, u32, *const *mut c_void) =
-            vtable_method!(a0, 28);
-        function(a0, a1, a2)
-    }
+    unsafe { ((*(*a0).vtbl).SetDescriptorHeaps)(a0, a1, a2) }
 }
 pub(super) unsafe fn GraphicsCommandList_SetGraphicsRootSignature(
-    a0: *mut c_void,
+    a0: *mut ID3D12GraphicsCommandList,
     a1: *mut c_void,
 ) {
-    unsafe {
-        let function: unsafe extern "system" fn(*mut c_void, *mut c_void) = vtable_method!(a0, 30);
-        function(a0, a1)
-    }
+    unsafe { ((*(*a0).vtbl).SetGraphicsRootSignature)(a0, a1) }
 }
 pub(super) unsafe fn GraphicsCommandList_SetGraphicsRootDescriptorTable(
-    a0: *mut c_void,
+    a0: *mut ID3D12GraphicsCommandList,
     a1: u32,
     a2: D3D12_GPU_DESCRIPTOR_HANDLE,
 ) {
-    unsafe {
-        let function: unsafe extern "system" fn(*mut c_void, u32, D3D12_GPU_DESCRIPTOR_HANDLE) =
-            vtable_method!(a0, 32);
-        function(a0, a1, a2)
-    }
+    unsafe { ((*(*a0).vtbl).SetGraphicsRootDescriptorTable)(a0, a1, a2) }
 }
 pub(super) unsafe fn GraphicsCommandList_SetGraphicsRootConstantBufferView(
-    a0: *mut c_void,
+    a0: *mut ID3D12GraphicsCommandList,
     a1: u32,
     a2: u64,
 ) {
-    unsafe {
-        let function: unsafe extern "system" fn(*mut c_void, u32, u64) = vtable_method!(a0, 38);
-        function(a0, a1, a2)
-    }
+    unsafe { ((*(*a0).vtbl).SetGraphicsRootConstantBufferView)(a0, a1, a2) }
 }
 pub(super) unsafe fn GraphicsCommandList_SetGraphicsRootShaderResourceView(
-    a0: *mut c_void,
+    a0: *mut ID3D12GraphicsCommandList,
     a1: u32,
     a2: u64,
 ) {
-    unsafe {
-        let function: unsafe extern "system" fn(*mut c_void, u32, u64) = vtable_method!(a0, 40);
-        function(a0, a1, a2)
-    }
+    unsafe { ((*(*a0).vtbl).SetGraphicsRootShaderResourceView)(a0, a1, a2) }
 }
 
 pub(super) unsafe fn GraphicsCommandList_SetGraphicsRoot32BitConstants(
-    command: *mut c_void,
+    command: *mut ID3D12GraphicsCommandList,
     parameter: u32,
     count: u32,
     values: *const c_void,
     offset: u32,
 ) {
     unsafe {
-        let function: unsafe extern "system" fn(*mut c_void, u32, u32, *const c_void, u32) =
-            vtable_method!(command, 36);
-        function(command, parameter, count, values, offset);
+        ((*(*command).vtbl).SetGraphicsRoot32BitConstants)(
+            command, parameter, count, values, offset,
+        );
     }
 }
 pub(super) unsafe fn GraphicsCommandList_IASetVertexBuffers(
-    a0: *mut c_void,
+    a0: *mut ID3D12GraphicsCommandList,
     a1: u32,
     a2: u32,
     a3: *const D3D12_VERTEX_BUFFER_VIEW,
 ) {
-    unsafe {
-        let function: unsafe extern "system" fn(
-            *mut c_void,
-            u32,
-            u32,
-            *const D3D12_VERTEX_BUFFER_VIEW,
-        ) = vtable_method!(a0, 44);
-        function(a0, a1, a2, a3)
-    }
+    unsafe { ((*(*a0).vtbl).IASetVertexBuffers)(a0, a1, a2, a3) }
 }
 pub(super) unsafe fn GraphicsCommandList_OMSetRenderTargets(
-    a0: *mut c_void,
+    a0: *mut ID3D12GraphicsCommandList,
     a1: u32,
     a2: *const D3D12_CPU_DESCRIPTOR_HANDLE,
     a3: i32,
     a4: *const D3D12_CPU_DESCRIPTOR_HANDLE,
 ) {
-    unsafe {
-        let function: unsafe extern "system" fn(
-            *mut c_void,
-            u32,
-            *const D3D12_CPU_DESCRIPTOR_HANDLE,
-            i32,
-            *const D3D12_CPU_DESCRIPTOR_HANDLE,
-        ) = vtable_method!(a0, 46);
-        function(a0, a1, a2, a3, a4)
-    }
+    unsafe { ((*(*a0).vtbl).OMSetRenderTargets)(a0, a1, a2, a3, a4) }
 }
 pub(super) unsafe fn GraphicsCommandList_ClearDepthStencilView(
-    a0: *mut c_void,
+    a0: *mut ID3D12GraphicsCommandList,
     a1: D3D12_CPU_DESCRIPTOR_HANDLE,
     a2: D3D12_CLEAR_FLAGS,
     a3: f32,
@@ -1360,101 +1612,51 @@ pub(super) unsafe fn GraphicsCommandList_ClearDepthStencilView(
     a5: u32,
     a6: *const RECT,
 ) {
-    unsafe {
-        let function: unsafe extern "system" fn(
-            *mut c_void,
-            D3D12_CPU_DESCRIPTOR_HANDLE,
-            D3D12_CLEAR_FLAGS,
-            f32,
-            u8,
-            u32,
-            *const RECT,
-        ) = vtable_method!(a0, 47);
-        function(a0, a1, a2, a3, a4, a5, a6)
-    }
+    unsafe { ((*(*a0).vtbl).ClearDepthStencilView)(a0, a1, a2, a3, a4, a5, a6) }
 }
 pub(super) unsafe fn GraphicsCommandList_ClearRenderTargetView(
-    a0: *mut c_void,
+    a0: *mut ID3D12GraphicsCommandList,
     a1: D3D12_CPU_DESCRIPTOR_HANDLE,
     a2: *const f32,
     a3: u32,
     a4: *const RECT,
 ) {
-    unsafe {
-        let function: unsafe extern "system" fn(
-            *mut c_void,
-            D3D12_CPU_DESCRIPTOR_HANDLE,
-            *const f32,
-            u32,
-            *const RECT,
-        ) = vtable_method!(a0, 48);
-        function(a0, a1, a2, a3, a4)
-    }
+    unsafe { ((*(*a0).vtbl).ClearRenderTargetView)(a0, a1, a2, a3, a4) }
 }
 pub(super) unsafe fn Resource_Map(
-    a0: *mut c_void,
+    a0: *mut ID3D12Resource,
     a1: u32,
     a2: *const D3D12_RANGE,
     a3: *mut *mut c_void,
 ) -> i32 {
-    unsafe {
-        let function: unsafe extern "system" fn(
-            *mut c_void,
-            u32,
-            *const D3D12_RANGE,
-            *mut *mut c_void,
-        ) -> i32 = vtable_method!(a0, 8);
-        function(a0, a1, a2, a3)
-    }
+    unsafe { ((*(*a0).vtbl).Map)(a0, a1, a2, a3) }
 }
-pub(super) unsafe fn Resource_Unmap(a0: *mut c_void, a1: u32, a2: *const D3D12_RANGE) {
-    unsafe {
-        let function: unsafe extern "system" fn(*mut c_void, u32, *const D3D12_RANGE) =
-            vtable_method!(a0, 9);
-        function(a0, a1, a2)
-    }
+pub(super) unsafe fn Resource_Unmap(a0: *mut ID3D12Resource, a1: u32, a2: *const D3D12_RANGE) {
+    unsafe { ((*(*a0).vtbl).Unmap)(a0, a1, a2) }
 }
-pub(super) unsafe fn Resource_GetGPUVirtualAddress(a0: *mut c_void) -> u64 {
-    unsafe {
-        let function: unsafe extern "system" fn(*mut c_void) -> u64 = vtable_method!(a0, 11);
-        function(a0)
-    }
+pub(super) unsafe fn Resource_GetGPUVirtualAddress(a0: *mut ID3D12Resource) -> u64 {
+    unsafe { ((*(*a0).vtbl).GetGPUVirtualAddress)(a0) }
 }
 pub(super) unsafe fn DescriptorHeap_GetCPUDescriptorHandleForHeapStart(
-    a0: *mut c_void,
+    a0: *mut ID3D12DescriptorHeap,
     a1: *mut D3D12_CPU_DESCRIPTOR_HANDLE,
 ) {
-    unsafe {
-        let function: unsafe extern "system" fn(*mut c_void, *mut D3D12_CPU_DESCRIPTOR_HANDLE) =
-            vtable_method!(a0, 9);
-        function(a0, a1)
-    }
+    unsafe { ((*(*a0).vtbl).GetCPUDescriptorHandleForHeapStart)(a0, a1) }
 }
 pub(super) unsafe fn DescriptorHeap_GetGPUDescriptorHandleForHeapStart(
-    a0: *mut c_void,
+    a0: *mut ID3D12DescriptorHeap,
     a1: *mut D3D12_GPU_DESCRIPTOR_HANDLE,
 ) {
-    unsafe {
-        let function: unsafe extern "system" fn(*mut c_void, *mut D3D12_GPU_DESCRIPTOR_HANDLE) =
-            vtable_method!(a0, 10);
-        function(a0, a1)
-    }
+    unsafe { ((*(*a0).vtbl).GetGPUDescriptorHandleForHeapStart)(a0, a1) }
 }
-pub(super) unsafe fn Fence_GetCompletedValue(a0: *mut c_void) -> u64 {
-    unsafe {
-        let function: unsafe extern "system" fn(*mut c_void) -> u64 = vtable_method!(a0, 8);
-        function(a0)
-    }
+pub(super) unsafe fn Fence_GetCompletedValue(a0: *mut ID3D12Fence) -> u64 {
+    unsafe { ((*(*a0).vtbl).GetCompletedValue)(a0) }
 }
-pub(super) unsafe fn Fence_SetEventOnCompletion(a0: *mut c_void, a1: u64, a2: HANDLE) -> i32 {
-    unsafe {
-        let function: unsafe extern "system" fn(*mut c_void, u64, HANDLE) -> i32 =
-            vtable_method!(a0, 9);
-        function(a0, a1, a2)
-    }
+pub(super) unsafe fn Fence_SetEventOnCompletion(a0: *mut ID3D12Fence, a1: u64, a2: HANDLE) -> i32 {
+    unsafe { ((*(*a0).vtbl).SetEventOnCompletion)(a0, a1, a2) }
 }
 pub(super) unsafe fn Factory4_CreateSwapChainForHwnd(
-    a0: *mut c_void,
+    a0: *mut IDXGIFactory4,
     a1: *mut c_void,
     a2: HWND,
     a3: *const DXGI_SWAP_CHAIN_DESC1,
@@ -1462,90 +1664,49 @@ pub(super) unsafe fn Factory4_CreateSwapChainForHwnd(
     a5: *mut c_void,
     a6: *mut *mut c_void,
 ) -> i32 {
-    unsafe {
-        let function: unsafe extern "system" fn(
-            *mut c_void,
-            *mut c_void,
-            HWND,
-            *const DXGI_SWAP_CHAIN_DESC1,
-            *const DXGI_SWAP_CHAIN_FULLSCREEN_DESC,
-            *mut c_void,
-            *mut *mut c_void,
-        ) -> i32 = vtable_method!(a0, 15);
-        function(a0, a1, a2, a3, a4, a5, a6)
-    }
+    unsafe { ((*(*a0).vtbl).base.base.CreateSwapChainForHwnd)(a0.cast(), a1, a2, a3, a4, a5, a6) }
 }
+
 pub(super) unsafe fn Factory4_MakeWindowAssociation(
-    a0: *mut c_void,
+    a0: *mut IDXGIFactory4,
     a1: HWND,
     a2: DXGI_MWA_FLAGS,
 ) -> i32 {
-    unsafe {
-        let function: unsafe extern "system" fn(*mut c_void, HWND, DXGI_MWA_FLAGS) -> i32 =
-            vtable_method!(a0, 8);
-        function(a0, a1, a2)
-    }
+    unsafe { ((*(*a0).vtbl).base.base.base.base.MakeWindowAssociation)(a0.cast(), a1, a2) }
 }
 pub(super) unsafe fn SwapChain3_GetBuffer(
-    a0: *mut c_void,
+    a0: *mut IDXGISwapChain3,
     a1: u32,
     a2: *const GUID,
     a3: *mut *mut c_void,
 ) -> i32 {
-    unsafe {
-        let function: unsafe extern "system" fn(
-            *mut c_void,
-            u32,
-            *const GUID,
-            *mut *mut c_void,
-        ) -> i32 = vtable_method!(a0, 9);
-        function(a0, a1, a2, a3)
-    }
+    unsafe { ((*(*a0).vtbl).base.base.base.GetBuffer)(a0.cast(), a1, a2, a3) }
 }
 pub(super) unsafe fn SwapChain3_ResizeBuffers(
-    a0: *mut c_void,
+    a0: *mut IDXGISwapChain3,
     a1: u32,
     a2: u32,
     a3: u32,
     a4: DXGI_FORMAT,
     a5: u32,
 ) -> i32 {
-    unsafe {
-        let function: unsafe extern "system" fn(
-            *mut c_void,
-            u32,
-            u32,
-            u32,
-            DXGI_FORMAT,
-            u32,
-        ) -> i32 = vtable_method!(a0, 13);
-        function(a0, a1, a2, a3, a4, a5)
-    }
+    unsafe { ((*(*a0).vtbl).base.base.base.ResizeBuffers)(a0.cast(), a1, a2, a3, a4, a5) }
 }
-pub(super) unsafe fn SwapChain3_Present(a0: *mut c_void, a1: u32, a2: DXGI_PRESENT) -> i32 {
-    unsafe {
-        let function: unsafe extern "system" fn(*mut c_void, u32, DXGI_PRESENT) -> i32 =
-            vtable_method!(a0, 8);
-        function(a0, a1, a2)
-    }
+pub(super) unsafe fn SwapChain3_Present(
+    a0: *mut IDXGISwapChain3,
+    a1: u32,
+    a2: DXGI_PRESENT,
+) -> i32 {
+    unsafe { ((*(*a0).vtbl).base.base.base.Present)(a0.cast(), a1, a2) }
 }
-pub(super) unsafe fn SwapChain3_GetCurrentBackBufferIndex(a0: *mut c_void) -> u32 {
-    unsafe {
-        let function: unsafe extern "system" fn(*mut c_void) -> u32 = vtable_method!(a0, 36);
-        function(a0)
-    }
+pub(super) unsafe fn SwapChain3_GetCurrentBackBufferIndex(a0: *mut IDXGISwapChain3) -> u32 {
+    unsafe { ((*(*a0).vtbl).GetCurrentBackBufferIndex)(a0) }
 }
-pub(super) unsafe fn Blob_GetBufferPointer(a0: *mut c_void) -> *mut c_void {
-    unsafe {
-        let function: unsafe extern "system" fn(*mut c_void) -> *mut c_void = vtable_method!(a0, 3);
-        function(a0)
-    }
+pub(super) unsafe fn Blob_GetBufferPointer(a0: *mut ID3DBlob) -> *mut c_void {
+    unsafe { ((*(*a0).vtbl).GetBufferPointer)(a0) }
 }
-pub(super) unsafe fn Blob_GetBufferSize(a0: *mut c_void) -> usize {
-    unsafe {
-        let function: unsafe extern "system" fn(*mut c_void) -> usize = vtable_method!(a0, 4);
-        function(a0)
-    }
+pub(super) unsafe fn Blob_GetBufferSize(a0: *mut ID3DBlob) -> usize {
+    unsafe { ((*(*a0).vtbl).GetBufferSize)(a0) }
 }
 
 #[link(name = "d3d12")]
@@ -1608,42 +1769,27 @@ pub(super) struct DXGI_ADAPTER_DESC1 {
 }
 
 pub(super) unsafe fn Factory_EnumAdapters1(
-    factory: *mut c_void,
+    factory: *mut IDXGIFactory4,
     index: u32,
     out: *mut *mut c_void,
 ) -> HRESULT {
-    unsafe {
-        let function: unsafe extern "system" fn(*mut c_void, u32, *mut *mut c_void) -> HRESULT =
-            vtable_method!(factory, 12);
-        function(factory, index, out)
-    }
+    unsafe { ((*(*factory).vtbl).base.base.base.EnumAdapters1)(factory.cast(), index, out) }
 }
 
 pub(super) unsafe fn Adapter_GetDesc1(
-    adapter: *mut c_void,
+    adapter: *mut IDXGIAdapter1,
     desc: *mut DXGI_ADAPTER_DESC1,
 ) -> HRESULT {
-    unsafe {
-        let function: unsafe extern "system" fn(*mut c_void, *mut DXGI_ADAPTER_DESC1) -> HRESULT =
-            vtable_method!(adapter, 10);
-        function(adapter, desc)
-    }
+    unsafe { ((*(*adapter).vtbl).GetDesc1)(adapter, desc) }
 }
 
 // IDXGIFactory4::EnumWarpAdapter, following EnumAdapterByLuid.
 pub(super) unsafe fn Factory4_EnumWarpAdapter(
-    factory: *mut c_void,
+    factory: *mut IDXGIFactory4,
     iid: *const GUID,
     out: *mut *mut c_void,
 ) -> HRESULT {
-    unsafe {
-        let function: unsafe extern "system" fn(
-            *mut c_void,
-            *const GUID,
-            *mut *mut c_void,
-        ) -> HRESULT = vtable_method!(factory, 27);
-        function(factory, iid, out)
-    }
+    unsafe { ((*(*factory).vtbl).EnumWarpAdapter)(factory, iid, out) }
 }
 pub(super) const IDXGIAdapter: GUID = GUID {
     data1: 0x2411e7e1,

@@ -8,7 +8,7 @@
 
 use std::cell::{Cell, RefCell};
 use std::ffi::c_void;
-use std::ptr;
+use std::ptr::{self, NonNull};
 use std::rc::Rc;
 
 #[cfg(feature = "window")]
@@ -65,37 +65,60 @@ fn check(result: i32) -> Result<()> {
     }
 }
 
-struct Com(*mut c_void);
+/// One owned COM reference.
+struct ComPtr<T>(NonNull<T>);
 
-impl Com {
-    fn create(create: impl FnOnce(*mut *mut c_void) -> HRESULT) -> Result<Self> {
+impl<T> ComPtr<T> {
+    /// The out parameter must receive an owned reference to T.
+    unsafe fn create(create: impl FnOnce(*mut *mut c_void) -> HRESULT) -> Result<Self> {
         let mut value = ptr::null_mut();
         let result = create(&mut value);
-        let owned = (!value.is_null()).then(|| Self(value));
+        let owned = unsafe { Self::from_raw(value.cast()) };
         check(result)?;
         owned.ok_or_else(|| Error("COM returned null".into()))
     }
 
-    #[cfg(feature = "window")]
-    fn query(&self, iid: &GUID) -> Result<Self> {
-        Self::create(|out| unsafe { (self.unknown().QueryInterface)(self.0, iid, out) })
+    /// Takes over an owned reference to a live COM interface.
+    unsafe fn from_raw(pointer: *mut T) -> Option<Self> {
+        NonNull::new(pointer).map(Self)
+    }
+
+    const fn as_ptr(&self) -> *mut T {
+        self.0.as_ptr()
+    }
+
+    const fn as_raw(&self) -> *mut c_void {
+        self.as_ptr().cast()
     }
 
     fn unknown(&self) -> &IUnknownVtbl {
-        unsafe { &**self.0.cast::<*const IUnknownVtbl>() }
+        unsafe { &**self.as_ptr().cast::<*const IUnknownVtbl>() }
     }
 }
 
-impl Clone for Com {
+#[cfg(feature = "window")]
+impl ComPtr<IDXGISwapChain1> {
+    fn query_swap_chain3(&self) -> Result<ComPtr<IDXGISwapChain3>> {
+        let mut pointer = ptr::null_mut();
+        // SAFETY: The source is live, the IID identifies IDXGISwapChain3, and pointer is writable.
+        check(unsafe {
+            (self.unknown().QueryInterface)(self.as_raw(), &IDXGISwapChain3, &mut pointer)
+        })?;
+        // SAFETY: A successful query transfers one IDXGISwapChain3 reference.
+        unsafe { ComPtr::from_raw(pointer.cast()) }.ok_or_else(|| Error("COM returned null".into()))
+    }
+}
+
+impl<T> Clone for ComPtr<T> {
     fn clone(&self) -> Self {
-        unsafe { (self.unknown().AddRef)(self.0) };
+        unsafe { (self.unknown().AddRef)(self.as_raw()) };
         Self(self.0)
     }
 }
 
-impl Drop for Com {
+impl<T> Drop for ComPtr<T> {
     fn drop(&mut self) {
-        unsafe { (self.unknown().Release)(self.0) };
+        unsafe { (self.unknown().Release)(self.as_raw()) };
     }
 }
 
@@ -121,11 +144,11 @@ const fn format(value: TextureFormat) -> i32 {
 
 // Buffers are implicitly promoted from COMMON and decay back after each submission.
 pub(crate) struct Buffer {
-    object: Com,
+    object: ComPtr<ID3D12Resource>,
 }
 
 pub(crate) struct Texture {
-    object: Com,
+    object: ComPtr<ID3D12Resource>,
     state: Cell<i32>,
     format: TextureFormat,
     mips: u32,
@@ -138,19 +161,19 @@ pub(crate) struct Sampler {
 }
 
 pub(crate) struct Pipeline {
-    object: Com,
-    root: Com,
+    object: ComPtr<ID3D12PipelineState>,
+    root: ComPtr<ID3D12RootSignature>,
 }
 
 struct Heap {
-    object: Com,
+    object: ComPtr<ID3D12DescriptorHeap>,
     cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
     gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
     stride: u32,
 }
 
 impl Heap {
-    fn new(device: &Com, kind: i32, count: u32, visible: bool) -> Result<Self> {
+    fn new(device: &ComPtr<ID3D12Device>, kind: i32, count: u32, visible: bool) -> Result<Self> {
         unsafe {
             let desc = D3D12_DESCRIPTOR_HEAP_DESC {
                 Type: kind,
@@ -158,20 +181,20 @@ impl Heap {
                 Flags: i32::from(visible),
                 ..Default::default()
             };
-            let object = Com::create(|out| {
-                Device_CreateDescriptorHeap(device.0, &desc, &ID3D12DescriptorHeap, out)
+            let object = ComPtr::create(|out| {
+                Device_CreateDescriptorHeap(device.as_ptr(), &desc, &ID3D12DescriptorHeap, out)
             })?;
             let mut cpu = D3D12_CPU_DESCRIPTOR_HANDLE::default();
             let mut gpu = D3D12_GPU_DESCRIPTOR_HANDLE::default();
-            DescriptorHeap_GetCPUDescriptorHandleForHeapStart(object.0, &mut cpu);
+            DescriptorHeap_GetCPUDescriptorHandleForHeapStart(object.as_ptr(), &mut cpu);
             if visible {
-                DescriptorHeap_GetGPUDescriptorHandleForHeapStart(object.0, &mut gpu);
+                DescriptorHeap_GetGPUDescriptorHandleForHeapStart(object.as_ptr(), &mut gpu);
             }
             Ok(Self {
                 object,
                 cpu,
                 gpu,
-                stride: Device_GetDescriptorHandleIncrementSize(device.0, kind),
+                stride: Device_GetDescriptorHandleIncrementSize(device.as_ptr(), kind),
             })
         }
     }
@@ -199,7 +222,7 @@ struct Descriptors {
 }
 
 impl Descriptors {
-    fn new(device: &Com, kind: i32, capacity: u32) -> Result<Rc<Self>> {
+    fn new(device: &ComPtr<ID3D12Device>, kind: i32, capacity: u32) -> Result<Rc<Self>> {
         Ok(Rc::new(Self {
             heap: Heap::new(device, kind, capacity, true)?,
             capacity,
@@ -246,23 +269,23 @@ impl Drop for Slot {
 }
 
 struct Frame {
-    allocator: Com,
-    list: Com,
+    allocator: ComPtr<ID3D12CommandAllocator>,
+    list: ComPtr<ID3D12GraphicsCommandList>,
     fence: u64,
     uploads: Vec<Upload>,
     passes: Vec<Pass>,
-    staging: Vec<Com>,
+    staging: Vec<ComPtr<ID3D12Resource>>,
     staging_capacity: u64,
 }
 
 pub(crate) struct Context {
-    device: Com,
-    queue: Com,
+    device: ComPtr<ID3D12Device>,
+    queue: ComPtr<ID3D12CommandQueue>,
     #[cfg(feature = "window")]
-    factory: Com,
-    fence: Com,
+    factory: ComPtr<IDXGIFactory4>,
+    fence: ComPtr<ID3D12Fence>,
     event: Event,
-    root: Com,
+    root: ComPtr<ID3D12RootSignature>,
     textures: Rc<Descriptors>,
     samplers: Rc<Descriptors>,
     // Render and depth target descriptors are read when recorded, so each pass reuses one.
@@ -307,23 +330,25 @@ impl Context {
 
     fn with_driver(warp: bool) -> std::result::Result<Rc<Self>, InitError> {
         unsafe {
-            let factory = Com::create(|out| CreateDXGIFactory2(0, &IDXGIFactory4, out))
+            let factory = ComPtr::create(|out| CreateDXGIFactory2(0, &IDXGIFactory4, out))
                 .map_err(InitError::fatal)?;
             let device = if warp {
-                let adapter =
-                    Com::create(|out| Factory4_EnumWarpAdapter(factory.0, &IDXGIAdapter, out))
-                        .map_err(InitError::fatal)?;
-                Self::create_device(&adapter)?
+                let adapter = ComPtr::<IDXGIAdapter>::create(|out| {
+                    Factory4_EnumWarpAdapter(factory.as_ptr(), &IDXGIAdapter, out)
+                })
+                .map_err(InitError::fatal)?;
+                Self::create_device(adapter.as_raw())?
             } else {
                 Self::hardware_device(&factory)?
             };
             (|| -> Result<Rc<Self>> {
                 let desc = D3D12_COMMAND_QUEUE_DESC::default();
-                let queue = Com::create(|out| {
-                    Device_CreateCommandQueue(device.0, &desc, &ID3D12CommandQueue, out)
+                let queue = ComPtr::create(|out| {
+                    Device_CreateCommandQueue(device.as_ptr(), &desc, &ID3D12CommandQueue, out)
                 })?;
-                let fence =
-                    Com::create(|out| Device_CreateFence(device.0, 0, 0, &ID3D12Fence, out))?;
+                let fence = ComPtr::create(|out| {
+                    Device_CreateFence(device.as_ptr(), 0, 0, &ID3D12Fence, out)
+                })?;
                 let event = CreateEventW(ptr::null(), 0, 0, ptr::null());
                 if event.is_null() {
                     return Err(Error("CreateEventW failed".into()));
@@ -361,17 +386,17 @@ impl Context {
         }
     }
 
-    fn create_device(adapter: &Com) -> std::result::Result<Com, InitError> {
+    fn create_device(adapter: *mut c_void) -> std::result::Result<ComPtr<ID3D12Device>, InitError> {
         let mut raw_device = ptr::null_mut();
         let status = unsafe {
             D3D12CreateDevice(
-                adapter.0,
+                adapter,
                 0xb000, // D3D_FEATURE_LEVEL_11_0, including resource binding tier 1.
                 &ID3D12Device,
                 &mut raw_device,
             )
         };
-        let device = (!raw_device.is_null()).then(|| Com(raw_device));
+        let device = unsafe { ComPtr::from_raw(raw_device.cast()) };
         if status < 0 {
             return Err(InitError::device(
                 Error(format!("D3D12CreateDevice: 0x{:08x}", status as u32)),
@@ -381,12 +406,15 @@ impl Context {
         device.ok_or_else(|| InitError::fatal(Error("D3D12 returned null".into())))
     }
 
-    fn hardware_device(factory: &Com) -> std::result::Result<Com, InitError> {
+    fn hardware_device(
+        factory: &ComPtr<IDXGIFactory4>,
+    ) -> std::result::Result<ComPtr<ID3D12Device>, InitError> {
         let mut failures = Vec::new();
         for index in 0.. {
             let mut raw_adapter = ptr::null_mut();
-            let status = unsafe { Factory_EnumAdapters1(factory.0, index, &mut raw_adapter) };
-            let adapter = (!raw_adapter.is_null()).then(|| Com(raw_adapter));
+            let status =
+                unsafe { Factory_EnumAdapters1(factory.as_ptr(), index, &mut raw_adapter) };
+            let adapter = unsafe { ComPtr::from_raw(raw_adapter.cast()) };
             if status as u32 == 0x887a0002 {
                 // DXGI_ERROR_NOT_FOUND: enumeration is finished.
                 break;
@@ -395,14 +423,14 @@ impl Context {
             let adapter =
                 adapter.ok_or_else(|| InitError::fatal(Error("DXGI returned null".into())))?;
             let mut desc = std::mem::MaybeUninit::<DXGI_ADAPTER_DESC1>::uninit();
-            check(unsafe { Adapter_GetDesc1(adapter.0, desc.as_mut_ptr()) })
+            check(unsafe { Adapter_GetDesc1(adapter.as_ptr(), desc.as_mut_ptr()) })
                 .map_err(InitError::fatal)?;
             let desc = unsafe { desc.assume_init() };
             if desc.Flags & 2 != 0 {
                 // DXGI_ADAPTER_FLAG_SOFTWARE: use the explicit WARP fallback.
                 continue;
             }
-            match Self::create_device(&adapter) {
+            match Self::create_device(adapter.as_raw()) {
                 Ok(device) => return Ok(device),
                 Err(error) if !error.fallback => return Err(error),
                 Err(error) => {
@@ -422,7 +450,7 @@ impl Context {
         })))
     }
 
-    fn root_signature(device: &Com) -> Result<Com> {
+    fn root_signature(device: &ComPtr<ID3D12Device>) -> Result<ComPtr<ID3D12RootSignature>> {
         unsafe {
             let texture = D3D12_DESCRIPTOR_RANGE {
                 RangeType: 0,
@@ -496,17 +524,18 @@ impl Context {
                 ..Default::default()
             };
             let mut errors = ptr::null_mut();
-            let blob = Com::create(|out| D3D12SerializeRootSignature(&desc, 1, out, &mut errors));
+            let blob =
+                ComPtr::create(|out| D3D12SerializeRootSignature(&desc, 1, out, &mut errors));
             if !errors.is_null() {
-                drop(Com(errors));
+                drop(ComPtr::<ID3DBlob>::from_raw(errors.cast()));
             }
             let blob = blob?;
-            Com::create(|out| {
+            ComPtr::create(|out| {
                 Device_CreateRootSignature(
-                    device.0,
+                    device.as_ptr(),
                     0,
-                    Blob_GetBufferPointer(blob.0),
-                    Blob_GetBufferSize(blob.0),
+                    Blob_GetBufferPointer(blob.as_ptr()),
+                    Blob_GetBufferSize(blob.as_ptr()),
                     &ID3D12RootSignature,
                     out,
                 )
@@ -515,7 +544,11 @@ impl Context {
     }
 
     // Tier 1 requires initialized entries even when a shader does not use them.
-    fn write_null_descriptors(device: &Com, textures: &Descriptors, samplers: &Descriptors) {
+    fn write_null_descriptors(
+        device: &ComPtr<ID3D12Device>,
+        textures: &Descriptors,
+        samplers: &Descriptors,
+    ) {
         let texture = D3D12_SHADER_RESOURCE_VIEW_DESC {
             Format: 28,
             ViewDimension: 4,
@@ -538,32 +571,32 @@ impl Context {
         };
         unsafe {
             Device_CreateShaderResourceView(
-                device.0,
+                device.as_ptr(),
                 ptr::null_mut(),
                 &texture,
                 textures.heap.cpu(0),
             );
-            Device_CreateSampler(device.0, &sampler, samplers.heap.cpu(0));
+            Device_CreateSampler(device.as_ptr(), &sampler, samplers.heap.cpu(0));
         }
     }
 
     fn frame(&self) -> Result<Frame> {
         unsafe {
-            let allocator = Com::create(|out| {
-                Device_CreateCommandAllocator(self.device.0, 0, &ID3D12CommandAllocator, out)
+            let allocator = ComPtr::create(|out| {
+                Device_CreateCommandAllocator(self.device.as_ptr(), 0, &ID3D12CommandAllocator, out)
             })?;
-            let list = Com::create(|out| {
+            let list = ComPtr::create(|out| {
                 Device_CreateCommandList(
-                    self.device.0,
+                    self.device.as_ptr(),
                     0,
                     0,
-                    allocator.0,
+                    allocator.as_raw(),
                     ptr::null_mut(),
                     &ID3D12GraphicsCommandList,
                     out,
                 )
             })?;
-            check(GraphicsCommandList_Close(list.0))?;
+            check(GraphicsCommandList_Close(list.as_ptr()))?;
             Ok(Frame {
                 allocator,
                 list,
@@ -578,13 +611,13 @@ impl Context {
 
     fn wait_value(&self, value: u64) -> Result<()> {
         unsafe {
-            let completed = Fence_GetCompletedValue(self.fence.0);
+            let completed = Fence_GetCompletedValue(self.fence.as_ptr());
             if completed == u64::MAX {
-                return check(Device_GetDeviceRemovedReason(self.device.0));
+                return check(Device_GetDeviceRemovedReason(self.device.as_ptr()));
             }
             if completed < value {
                 check(Fence_SetEventOnCompletion(
-                    self.fence.0,
+                    self.fence.as_ptr(),
                     value,
                     self.event.0,
                 ))?;
@@ -607,7 +640,11 @@ impl Context {
         let value = self.serial.get() + 1;
         self.serial.set(value);
         unsafe {
-            check(CommandQueue_Signal(self.queue.0, self.fence.0, value))?;
+            check(CommandQueue_Signal(
+                self.queue.as_ptr(),
+                self.fence.as_raw(),
+                value,
+            ))?;
         }
         Ok(value)
     }
@@ -628,7 +665,11 @@ impl Context {
         }
     }
 
-    fn resource(device: &Com, desc: &D3D12_RESOURCE_DESC, upload: bool) -> Result<Com> {
+    fn resource(
+        device: &ComPtr<ID3D12Device>,
+        desc: &D3D12_RESOURCE_DESC,
+        upload: bool,
+    ) -> Result<ComPtr<ID3D12Resource>> {
         let heap = D3D12_HEAP_PROPERTIES {
             Type: if upload { 2 } else { 1 },
             CreationNodeMask: 1,
@@ -636,9 +677,9 @@ impl Context {
             ..Default::default()
         };
         unsafe {
-            Com::create(|out| {
+            ComPtr::create(|out| {
                 Device_CreateCommittedResource(
-                    device.0,
+                    device.as_ptr(),
                     &heap,
                     0,
                     desc,
@@ -716,7 +757,12 @@ impl Context {
                 Anonymous: resource,
             };
             unsafe {
-                Device_CreateShaderResourceView(self.device.0, object.0, &view, slot.cpu());
+                Device_CreateShaderResourceView(
+                    self.device.as_ptr(),
+                    object.as_raw(),
+                    &view,
+                    slot.cpu(),
+                );
             }
             Some(slot)
         } else {
@@ -766,7 +812,7 @@ impl Context {
             ..Default::default()
         };
         unsafe {
-            Device_CreateSampler(self.device.0, &native, slot.cpu());
+            Device_CreateSampler(self.device.as_ptr(), &native, slot.cpu());
         }
         Ok(Sampler { slot })
     }
@@ -826,7 +872,7 @@ impl Context {
         let depth = desc.depth_stencil;
         unsafe {
             let native = D3D12_GRAPHICS_PIPELINE_STATE_DESC {
-                pRootSignature: self.root.0,
+                pRootSignature: self.root.as_raw(),
                 VS: D3D12_SHADER_BYTECODE {
                     pShaderBytecode: vertex.as_ptr().cast(),
                     BytecodeLength: vertex.len(),
@@ -889,9 +935,9 @@ impl Context {
                 ..Default::default()
             };
             Ok(Pipeline {
-                object: Com::create(|out| {
+                object: ComPtr::create(|out| {
                     Device_CreateGraphicsPipelineState(
-                        self.device.0,
+                        self.device.as_ptr(),
                         &native,
                         &ID3D12PipelineState,
                         out,
@@ -902,14 +948,24 @@ impl Context {
         }
     }
 
-    unsafe fn transition(list: &Com, object: &Com, state: &Cell<i32>, next: i32) {
+    unsafe fn transition(
+        list: &ComPtr<ID3D12GraphicsCommandList>,
+        object: &ComPtr<ID3D12Resource>,
+        state: &Cell<i32>,
+        next: i32,
+    ) {
         let previous = state.replace(next);
         if previous != next {
-            unsafe { Self::barrier(list, object.0, previous, next) };
+            unsafe { Self::barrier(list, object.as_raw(), previous, next) };
         }
     }
 
-    unsafe fn barrier(list: &Com, resource: *mut c_void, before: i32, after: i32) {
+    unsafe fn barrier(
+        list: &ComPtr<ID3D12GraphicsCommandList>,
+        resource: *mut c_void,
+        before: i32,
+        after: i32,
+    ) {
         let barrier = D3D12_RESOURCE_BARRIER {
             Type: 0,
             Flags: 0,
@@ -923,7 +979,7 @@ impl Context {
             },
         };
         unsafe {
-            GraphicsCommandList_ResourceBarrier(list.0, 1, &barrier);
+            GraphicsCommandList_ResourceBarrier(list.as_ptr(), 1, &barrier);
         }
     }
 
@@ -932,10 +988,10 @@ impl Context {
             let mut frames = self.frames.borrow_mut();
             let frame = &mut frames[self.slot.get()];
             self.wait(frame)?;
-            check(CommandAllocator_Reset(frame.allocator.0))?;
+            check(CommandAllocator_Reset(frame.allocator.as_ptr()))?;
             check(GraphicsCommandList_Reset(
-                frame.list.0,
-                frame.allocator.0,
+                frame.list.as_ptr(),
+                frame.allocator.as_raw(),
                 ptr::null_mut(),
             ))?;
             let list = &frame.list;
@@ -977,13 +1033,13 @@ impl Context {
                 };
                 let mut mapped = ptr::null_mut();
                 check(Resource_Map(
-                    staging.0,
+                    staging.as_ptr(),
                     0,
                     &D3D12_RANGE::default(),
                     &mut mapped,
                 ))?;
                 ptr::copy_nonoverlapping(staging_data.as_ptr(), mapped.cast(), staging_data.len());
-                Resource_Unmap(staging.0, 0, ptr::null());
+                Resource_Unmap(staging.as_ptr(), 0, ptr::null());
                 for (upload, &offset) in uploads.iter().zip(&offsets) {
                     match upload {
                         Upload::Buffer {
@@ -991,12 +1047,12 @@ impl Context {
                             offset: destination,
                             data,
                         } => {
-                            let object = buffer.inner.native.object.0;
+                            let object = buffer.inner.native.object.as_raw();
                             GraphicsCommandList_CopyBufferRegion(
-                                list.0,
+                                list.as_ptr(),
                                 object,
                                 *destination,
-                                staging.0,
+                                staging.as_raw(),
                                 offset,
                                 data.len() as u64,
                             );
@@ -1016,7 +1072,7 @@ impl Context {
                                 (u64::from(pitch) * u64::from(size.height)).div_ceil(512) * 512;
                             for layer in 0..size.depth_or_array_layers {
                                 let source = D3D12_TEXTURE_COPY_LOCATION {
-                                    pResource: staging.0,
+                                    pResource: staging.as_raw(),
                                     Type: 1,
                                     Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
                                         PlacedFootprint: D3D12_PLACED_SUBRESOURCE_FOOTPRINT {
@@ -1032,14 +1088,14 @@ impl Context {
                                     },
                                 };
                                 let destination = D3D12_TEXTURE_COPY_LOCATION {
-                                    pResource: native.object.0,
+                                    pResource: native.object.as_raw(),
                                     Type: 0,
                                     Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
                                         SubresourceIndex: *mip + (origin.z + layer) * native.mips,
                                     },
                                 };
                                 GraphicsCommandList_CopyTextureRegion(
-                                    list.0,
+                                    list.as_ptr(),
                                     &destination,
                                     origin.x,
                                     origin.y,
@@ -1066,8 +1122,11 @@ impl Context {
                     Self::transition(list, &native.object, &native.state, 128);
                 }
             }
-            let heaps = [self.textures.heap.object.0, self.samplers.heap.object.0];
-            GraphicsCommandList_SetDescriptorHeaps(list.0, 2, heaps.as_ptr());
+            let heaps = [
+                self.textures.heap.object.as_raw(),
+                self.samplers.heap.object.as_raw(),
+            ];
+            GraphicsCommandList_SetDescriptorHeaps(list.as_ptr(), 2, heaps.as_ptr());
             for pass in &passes {
                 let color = &pass.color.texture.inner.native;
                 Self::transition(list, &color.object, &color.state, 4);
@@ -1078,16 +1137,26 @@ impl Context {
                     ViewDimension: 4,
                     ..Default::default()
                 };
-                Device_CreateRenderTargetView(self.device.0, color.object.0, &color_desc, rtv);
+                Device_CreateRenderTargetView(
+                    self.device.as_ptr(),
+                    color.object.as_raw(),
+                    &color_desc,
+                    rtv,
+                );
                 let dsv_ptr = if let Some(depth) = &pass.depth {
                     let depth = &depth.texture.inner.native;
                     Self::transition(list, &depth.object, &depth.state, 16);
-                    Device_CreateDepthStencilView(self.device.0, depth.object.0, ptr::null(), dsv);
+                    Device_CreateDepthStencilView(
+                        self.device.as_ptr(),
+                        depth.object.as_raw(),
+                        ptr::null(),
+                        dsv,
+                    );
                     &dsv
                 } else {
                     ptr::null()
                 };
-                GraphicsCommandList_OMSetRenderTargets(list.0, 1, &rtv, 0, dsv_ptr);
+                GraphicsCommandList_OMSetRenderTargets(list.as_ptr(), 1, &rtv, 0, dsv_ptr);
                 if let Some(clear) = pass.clear {
                     let clear = [
                         clear.r as f32,
@@ -1096,7 +1165,7 @@ impl Context {
                         clear.a as f32,
                     ];
                     GraphicsCommandList_ClearRenderTargetView(
-                        list.0,
+                        list.as_ptr(),
                         rtv,
                         clear.as_ptr(),
                         0,
@@ -1105,7 +1174,7 @@ impl Context {
                 }
                 if let Some(clear) = pass.clear_depth {
                     GraphicsCommandList_ClearDepthStencilView(
-                        list.0,
+                        list.as_ptr(),
                         dsv,
                         1,
                         clear,
@@ -1114,11 +1183,14 @@ impl Context {
                         ptr::null(),
                     );
                 }
-                GraphicsCommandList_IASetPrimitiveTopology(list.0, 4);
+                GraphicsCommandList_IASetPrimitiveTopology(list.as_ptr(), 4);
                 for draw in &pass.draws {
                     let pipeline = &draw.pipeline.native;
-                    GraphicsCommandList_SetPipelineState(list.0, pipeline.object.0);
-                    GraphicsCommandList_SetGraphicsRootSignature(list.0, pipeline.root.0);
+                    GraphicsCommandList_SetPipelineState(list.as_ptr(), pipeline.object.as_raw());
+                    GraphicsCommandList_SetGraphicsRootSignature(
+                        list.as_ptr(),
+                        pipeline.root.as_raw(),
+                    );
                     // Slot zero holds null descriptors for draws without a texture or sampler.
                     let (mut texture_slot, mut sampler_slot) = (0, 0);
                     for (binding, resource) in
@@ -1126,14 +1198,19 @@ impl Context {
                     {
                         match resource {
                             Resource::Buffer(buffer) => {
-                                let address =
-                                    Resource_GetGPUVirtualAddress(buffer.inner.native.object.0);
+                                let address = Resource_GetGPUVirtualAddress(
+                                    buffer.inner.native.object.as_ptr(),
+                                );
                                 match binding {
                                     0 => GraphicsCommandList_SetGraphicsRootConstantBufferView(
-                                        list.0, 0, address,
+                                        list.as_ptr(),
+                                        0,
+                                        address,
                                     ),
                                     3 => GraphicsCommandList_SetGraphicsRootShaderResourceView(
-                                        list.0, 2, address,
+                                        list.as_ptr(),
+                                        2,
+                                        address,
                                     ),
                                     _ => panic!("Unsupported D3D12 buffer binding"),
                                 }
@@ -1157,12 +1234,12 @@ impl Context {
                         }
                     }
                     GraphicsCommandList_SetGraphicsRootDescriptorTable(
-                        list.0,
+                        list.as_ptr(),
                         1,
                         self.textures.heap.gpu(texture_slot),
                     );
                     GraphicsCommandList_SetGraphicsRootDescriptorTable(
-                        list.0,
+                        list.as_ptr(),
                         3,
                         self.samplers.heap.gpu(sampler_slot),
                     );
@@ -1171,13 +1248,13 @@ impl Context {
                             draw.vertex.as_ref().expect("vertex buffer validated");
                         let native = &buffer.inner.native;
                         let view = D3D12_VERTEX_BUFFER_VIEW {
-                            BufferLocation: Resource_GetGPUVirtualAddress(native.object.0)
+                            BufferLocation: Resource_GetGPUVirtualAddress(native.object.as_ptr())
                                 + range.start,
                             SizeInBytes: u32::try_from(range.end - range.start)
                                 .expect("Vertex buffer too large"),
                             StrideInBytes: layout.stride as u32,
                         };
-                        GraphicsCommandList_IASetVertexBuffers(list.0, 0, 1, &view);
+                        GraphicsCommandList_IASetVertexBuffers(list.as_ptr(), 0, 1, &view);
                     }
                     let v = draw.viewport;
                     let viewport = D3D12_VIEWPORT {
@@ -1188,7 +1265,7 @@ impl Context {
                         MinDepth: v[4],
                         MaxDepth: v[5],
                     };
-                    GraphicsCommandList_RSSetViewports(list.0, 1, &viewport);
+                    GraphicsCommandList_RSSetViewports(list.as_ptr(), 1, &viewport);
                     let s = draw.scissor;
                     let rect = RECT {
                         left: s[0] as i32,
@@ -1196,14 +1273,14 @@ impl Context {
                         right: (s[0] + s[2]) as i32,
                         bottom: (s[1] + s[3]) as i32,
                     };
-                    GraphicsCommandList_RSSetScissorRects(list.0, 1, &rect);
+                    GraphicsCommandList_RSSetScissorRects(list.as_ptr(), 1, &rect);
                     let first_vertex = match &draw.kind {
                         DrawKind::Direct(vertices) => vertices.start,
                         DrawKind::Indexed { base_vertex, .. } => *base_vertex as u32,
                     };
                     let offsets = [first_vertex, draw.instances.start, 0];
                     GraphicsCommandList_SetGraphicsRoot32BitConstants(
-                        list.0,
+                        list.as_ptr(),
                         4,
                         3,
                         offsets.as_ptr().cast(),
@@ -1211,7 +1288,7 @@ impl Context {
                     );
                     match &draw.kind {
                         DrawKind::Direct(vertices) => GraphicsCommandList_DrawInstanced(
-                            list.0,
+                            list.as_ptr(),
                             vertices.len() as u32,
                             draw.instances.len() as u32,
                             vertices.start,
@@ -1224,8 +1301,9 @@ impl Context {
                         } => {
                             let native = &binding.buffer.inner.native;
                             let view = D3D12_INDEX_BUFFER_VIEW {
-                                BufferLocation: Resource_GetGPUVirtualAddress(native.object.0)
-                                    + binding.range.start,
+                                BufferLocation: Resource_GetGPUVirtualAddress(
+                                    native.object.as_ptr(),
+                                ) + binding.range.start,
                                 SizeInBytes: u32::try_from(binding.range.end - binding.range.start)
                                     .expect("Index buffer too large"),
                                 Format: if binding.format == IndexFormat::Uint16 {
@@ -1234,9 +1312,9 @@ impl Context {
                                     42
                                 },
                             };
-                            GraphicsCommandList_IASetIndexBuffer(list.0, &view);
+                            GraphicsCommandList_IASetIndexBuffer(list.as_ptr(), &view);
                             GraphicsCommandList_DrawIndexedInstanced(
-                                list.0,
+                                list.as_ptr(),
                                 indices.len() as u32,
                                 draw.instances.len() as u32,
                                 indices.start,
@@ -1250,8 +1328,8 @@ impl Context {
                     Self::transition(list, &color.object, &color.state, 0);
                 }
             }
-            check(GraphicsCommandList_Close(list.0))?;
-            CommandQueue_ExecuteCommandLists(self.queue.0, 1, &list.0);
+            check(GraphicsCommandList_Close(list.as_ptr()))?;
+            CommandQueue_ExecuteCommandLists(self.queue.as_ptr(), 1, &list.as_raw());
             frame.fence = self.signal()?;
             frame.uploads = uploads;
             frame.passes = passes;
@@ -1279,9 +1357,9 @@ impl Context {
                 VisibleNodeMask: 1,
                 ..Default::default()
             };
-            let readback = Com::create(|out| {
+            let readback = ComPtr::create(|out| {
                 Device_CreateCommittedResource(
-                    self.device.0,
+                    self.device.as_ptr(),
                     &heap,
                     0,
                     &Self::buffer_desc(length),
@@ -1294,22 +1372,22 @@ impl Context {
             let mut frames = self.frames.borrow_mut();
             let frame = &mut frames[self.slot.get()];
             self.wait(frame)?;
-            check(CommandAllocator_Reset(frame.allocator.0))?;
+            check(CommandAllocator_Reset(frame.allocator.as_ptr()))?;
             check(GraphicsCommandList_Reset(
-                frame.list.0,
-                frame.allocator.0,
+                frame.list.as_ptr(),
+                frame.allocator.as_raw(),
                 ptr::null_mut(),
             ))?;
             Self::transition(&frame.list, &texture.object, &texture.state, 2048);
             let source = D3D12_TEXTURE_COPY_LOCATION {
-                pResource: texture.object.0,
+                pResource: texture.object.as_raw(),
                 Type: 0,
                 Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
                     SubresourceIndex: 0,
                 },
             };
             let destination = D3D12_TEXTURE_COPY_LOCATION {
-                pResource: readback.0,
+                pResource: readback.as_raw(),
                 Type: 1,
                 Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
                     PlacedFootprint: D3D12_PLACED_SUBRESOURCE_FOOTPRINT {
@@ -1325,7 +1403,7 @@ impl Context {
                 },
             };
             GraphicsCommandList_CopyTextureRegion(
-                frame.list.0,
+                frame.list.as_ptr(),
                 &destination,
                 0,
                 0,
@@ -1333,13 +1411,13 @@ impl Context {
                 &source,
                 ptr::null(),
             );
-            check(GraphicsCommandList_Close(frame.list.0))?;
-            CommandQueue_ExecuteCommandLists(self.queue.0, 1, &frame.list.0);
+            check(GraphicsCommandList_Close(frame.list.as_ptr()))?;
+            CommandQueue_ExecuteCommandLists(self.queue.as_ptr(), 1, &frame.list.as_raw());
             frame.fence = self.signal()?;
             self.wait_value(frame.fence)?;
             let mut mapped = ptr::null_mut();
             check(Resource_Map(
-                readback.0,
+                readback.as_ptr(),
                 0,
                 &D3D12_RANGE {
                     Begin: 0,
@@ -1352,7 +1430,7 @@ impl Context {
                 let start = mapped.cast::<u8>().add(row * pitch as usize);
                 bytes.extend_from_slice(std::slice::from_raw_parts(start, width as usize * 4));
             }
-            Resource_Unmap(readback.0, 0, ptr::null());
+            Resource_Unmap(readback.as_ptr(), 0, ptr::null());
             Ok(bytes)
         }
     }
