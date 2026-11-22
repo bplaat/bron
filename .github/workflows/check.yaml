@@ -172,21 +172,39 @@ jobs:
         run: |
           xp_nightly=$(sed -n "s/^rust_toolchain='\(.*\)'$/\1/p" tools/winxp-toolchain/build.sh)
           rustup toolchain install "$xp_nightly" --profile minimal --component rust-src --component clippy
+      - name: Identify toolchain compilers
+        id: compilers
+        shell: bash
+        run: |
+          . tools/winxp-toolchain/llvm.sh
+          signature=$({ clang --version; c++ --version; "${llvm}clang" --version; "$lld" --version; } | sha256sum)
+          rust_signature=$(rustc -vV | sha256sum)
+          echo "key=${signature%% *}" >> "$GITHUB_OUTPUT"
+          echo "host-rust=${rust_signature%% *}" >> "$GITHUB_OUTPUT"
       # The toolchains and emulator runners only rebuild when their inputs are newer than their outputs,
       # so date the checkout before any cached build, the exact keys keep a stale build from being used
       - name: Date toolchain sources before cached builds
-        run: find tools/nds-toolchain tools/wii-toolchain tools/wiiu-toolchain lib/graphics/image -exec touch -d 2000-01-01 {} +
+        run: |
+          find tools/{nds,wii,wiiu,winxp}-toolchain lib/graphics/image lib/data/{deflate,gzip} \
+            Cargo.toml Cargo.lock rust-toolchain.toml .cargo/config.toml -exec touch -d 2000-01-01 {} +
       - uses: actions/cache@v6.1.0
         with:
           path: target/nds-toolchain
-          key: linux-x86_64-nds-toolchain-${{ hashFiles('tools/nds-toolchain/**', '!tools/nds-toolchain/test/**') }}
+          key: ubuntu-26.04-nds-toolchain-${{ steps.compilers.outputs.key }}-${{ hashFiles('tools/nds-toolchain/**', '!tools/nds-toolchain/test/**') }}
       - uses: actions/cache@v6.1.0
         with:
           path: target/wii-toolchain
-          key: linux-x86_64-wii-toolchain-${{ hashFiles('tools/wii-toolchain/**', '!tools/wii-toolchain/test/**', 'lib/graphics/image/**') }}
+          key: ubuntu-26.04-wii-toolchain-${{ steps.compilers.outputs.key }}-${{ steps.compilers.outputs.host-rust }}-${{ hashFiles('tools/wii-toolchain/**', '!tools/wii-toolchain/test/**', 'lib/graphics/image/**', 'lib/data/deflate/**', 'Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', '.cargo/config.toml') }}
       - uses: actions/cache@v6.1.0
         with:
           path: target/wiiu-toolchain
-          key: linux-x86_64-wiiu-toolchain-${{ hashFiles('tools/wiiu-toolchain/**', '!tools/wiiu-toolchain/test/**', 'lib/graphics/image/**', 'Cargo.lock') }}
-      - name: Build assembly examples, run NDS, Wii and Wii U tests, and build Wii and Wii U examples and PlaatCraft for both
+          key: ubuntu-26.04-wiiu-toolchain-${{ steps.compilers.outputs.key }}-${{ steps.compilers.outputs.host-rust }}-${{ hashFiles('tools/wiiu-toolchain/**', '!tools/wiiu-toolchain/test/**', 'lib/graphics/image/**', 'lib/data/deflate/**', 'lib/data/gzip/**', 'Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', '.cargo/config.toml') }}
+      - uses: actions/cache@v6.1.0
+        with:
+          path: |
+            target/winxp-toolchain/src
+            target/winxp-toolchain/sysroot
+            target/winxp-toolchain/clang/lib
+          key: ubuntu-26.04-winxp-toolchain-${{ steps.compilers.outputs.key }}-${{ hashFiles('tools/winxp-toolchain/**', '!tools/winxp-toolchain/test/**') }}
+      - name: Build examples and check console and Windows XP toolchains
         run: cargo xtask check-others

@@ -413,7 +413,9 @@ build_tools() {
     local objects_dir="$OBJ_DIR/latte-assembler" tool
     mkdir -p "$BIN_DIR"
     for tool in gtxconv wuhbtool; do
-        outdated "$BIN_DIR/$tool" "$TOOLCHAIN_DIR/crates/$tool" "$ROOT_DIR/lib/graphics/image" "$ROOT_DIR/lib/data" ||
+        outdated "$BIN_DIR/$tool" "$TOOLCHAIN_DIR/crates/$tool" \
+            "$ROOT_DIR"/lib/{graphics/image,data/deflate,data/gzip} \
+            "$ROOT_DIR"/{Cargo.toml,Cargo.lock,rust-toolchain.toml,.cargo/config.toml} ||
             continue
         msg "Building $tool"
         # Build scripts under the cargo wrapper reach this through the cc script, so leave out the

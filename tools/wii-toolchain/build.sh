@@ -379,7 +379,9 @@ build_tools() {
         msg "Building elf2dol"
         cc -O2 "$TOOLS_DIR/elftool/elf2dol.c" -o "$BIN_DIR/elf2dol"
     fi
-    if outdated "$BIN_DIR/gxtexconv" "$TOOLCHAIN_DIR/crates/gxtexconv" "$ROOT_DIR/lib/graphics/image"; then
+    if outdated "$BIN_DIR/gxtexconv" "$TOOLCHAIN_DIR/crates/gxtexconv" \
+        "$ROOT_DIR"/lib/{graphics/image,data/deflate} \
+        "$ROOT_DIR"/{Cargo.toml,Cargo.lock,rust-toolchain.toml,.cargo/config.toml}; then
         msg "Building gxtexconv"
         # Build scripts under the cargo wrapper reach this through the cc script, so leave out the
         # wrapper's toolchain, target and profiles
