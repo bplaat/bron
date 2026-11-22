@@ -450,7 +450,13 @@ impl Xtask {
         run(Command::new("tools/winxp-toolchain/bin/cargo")
             .args(["build", "--release", "--locked", "-p", "reversi"])
             .args(["-p", "bastiaan-app", "-p", "example-bcanvas-showcase"])
-            .args(["-p", "winxp-runner", "--bin", "winxp-runner-agent"])
+            .args(["-p", "winxp-runner"])
+            .args([
+                "--bin=reversi",
+                "--bin=bastiaan-app",
+                "--bin=example-bcanvas-showcase",
+                "--bin=winxp-runner-agent",
+            ])
             .env_remove("RUSTUP_TOOLCHAIN"))?;
 
         println!("Checking the v86 guest integration for Windows XP...");
