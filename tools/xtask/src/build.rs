@@ -75,6 +75,7 @@ impl Xtask {
         run(Command::new("cargo").args([
             "build",
             "--release",
+            "--locked",
             "-p",
             "baksteen",
             "--target",

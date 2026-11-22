@@ -32,19 +32,34 @@ jobs:
       - uses: actions/checkout@v7.0.1
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
-      - uses: actions/cache@v6.1.0
-        id: cache-rust-toolchain
+      - name: Install Rust WASM target
+        run: rustup target add wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2.9.3
         with:
-          path: |
-            ~/.cargo
-            ~/.rustup
-          key: build-deploy-pages-rust-with-tools-toolchain
-      - name: Install extra Rust tooling
-        if: steps.cache-rust-toolchain.outputs.cache-hit != 'true'
+          key: ubuntu-26.04
+          cache-bin: 'false'
+      - uses: actions/cache@v6.1.0
+        with:
+          path: ~/.npm/_cacache
+          key: npm-ubuntu-26.04-${{ hashFiles('package-lock.json') }}
+          restore-keys: npm-ubuntu-26.04-
+      - name: Read the locked wasm-bindgen version
+        id: wasm-bindgen
         run: |
-          rustup target add wasm32-unknown-unknown
+          package=$(cargo pkgid --locked --offline -p wasm-bindgen)
+          echo "version=${package##*@}" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v6.1.0
+        id: cache-wasm-bindgen
+        with:
+          path: ~/.cargo/bin/wasm-bindgen
+          key: wasm-bindgen-ubuntu-26.04-${{ steps.wasm-bindgen.outputs.version }}
+      - name: Install wasm-bindgen
+        if: steps.cache-wasm-bindgen.outputs.cache-hit != 'true'
+        env:
+          WASM_BINDGEN_VERSION: ${{ steps.wasm-bindgen.outputs.version }}
+        run: |
           curl -L --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash
-          cargo binstall -y --locked wasm-bindgen-cli --version 0.2.130
+          cargo binstall -y --locked wasm-bindgen-cli --version "$WASM_BINDGEN_VERSION"
       - name: Build pages
         run: cargo xtask build-pages
       - name: Upload pages

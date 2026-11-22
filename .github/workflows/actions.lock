@@ -7,11 +7,13 @@ workflows:
         - 'actions/cache@v6.1.0'
         - 'actions/checkout@v7.0.1'
         - 'dorny/test-reporter@v3.2.0'
+        - 'swatinem/rust-cache@v2.9.3'
     '.github/workflows/deploy-pages.yaml':
         - 'actions/cache@v6.1.0'
         - 'actions/checkout@v7.0.1'
         - 'actions/deploy-pages@v5.0.1'
         - 'actions/upload-pages-artifact@v5.0.0'
+        - 'swatinem/rust-cache@v2.9.3'
     '.github/workflows/plaatnotes-release.yaml':
         - 'actions/checkout@v7.0.1'
         - 'docker/login-action@v4.8.0'
@@ -65,3 +67,8 @@ dependencies:
         commit: 'sha1-d1b5dff021aa968b288b02285a8bf47471c5928a'
         owner_id: 1588572
         repo_id: 300422142
+    'swatinem/rust-cache@v2.9.3':
+        ref: 'v2.9.3'
+        commit: 'sha1-d1527c8f67ef9af357290475d4af4b0fab8f12e0'
+        owner_id: 580492
+        repo_id: 298565987
