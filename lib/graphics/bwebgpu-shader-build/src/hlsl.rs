@@ -14,6 +14,7 @@ pub(crate) use crate::hlsl::platform::compile;
 mod platform {
     use std::ffi::{CStr, CString, c_void};
     use std::fs;
+    use std::ptr::NonNull;
 
     use super::*;
     use crate::output::write_if_changed;
@@ -151,7 +152,8 @@ mod platform {
                     &mut blob,
                     &mut errors,
                 );
-                let errors = Blob::from_raw(errors);
+                let errors = ComPtr::from_raw(errors);
+                let blob = ComPtr::from_raw(blob);
                 if result < 0 {
                     let message = errors
                         .as_ref()
@@ -159,7 +161,7 @@ mod platform {
                         .unwrap_or_else(|| format!("HLSL compilation failed: {result}"));
                     return Err(message.into());
                 }
-                let blob = Blob::from_raw(blob).ok_or("HLSL compiler returned null")?;
+                let blob = blob.ok_or("HLSL compiler returned null")?;
                 Ok(blob.bytes().to_vec())
             }
         }
@@ -173,44 +175,71 @@ mod platform {
         }
     }
 
-    struct Blob(*mut c_void);
+    struct ComPtr<T>(NonNull<T>);
 
-    impl Blob {
-        const unsafe fn from_raw(value: *mut c_void) -> Option<Self> {
-            if value.is_null() {
-                None
-            } else {
-                Some(Self(value))
-            }
+    impl<T> ComPtr<T> {
+        // The pointer must transfer one owned reference.
+        unsafe fn from_raw(pointer: *mut T) -> Option<Self> {
+            NonNull::new(pointer).map(Self)
         }
 
-        unsafe fn bytes(&self) -> &[u8] {
-            let vtable = unsafe { &**self.0.cast::<*const BlobVtable>() };
+        fn unknown(&self) -> &IUnknownVtbl {
+            unsafe { &**self.0.as_ptr().cast::<*const IUnknownVtbl>() }
+        }
+    }
+
+    impl<T> Clone for ComPtr<T> {
+        fn clone(&self) -> Self {
+            unsafe { (self.unknown().add_ref)(self.0.as_ptr().cast()) };
+            Self(self.0)
+        }
+    }
+
+    impl<T> Drop for ComPtr<T> {
+        fn drop(&mut self) {
+            unsafe { (self.unknown().release)(self.0.as_ptr().cast()) };
+        }
+    }
+
+    impl ComPtr<ID3DBlob> {
+        fn bytes(&self) -> &[u8] {
+            let blob = self.0.as_ptr();
             unsafe {
+                let vtbl = &*(*blob).vtbl;
                 std::slice::from_raw_parts(
-                    (vtable.get_buffer_pointer)(self.0).cast(),
-                    (vtable.get_buffer_size)(self.0),
+                    (vtbl.get_buffer_pointer)(blob).cast(),
+                    (vtbl.get_buffer_size)(blob),
                 )
             }
         }
     }
 
-    impl Drop for Blob {
-        fn drop(&mut self) {
-            unsafe {
-                let vtable = &**self.0.cast::<*const BlobVtable>();
-                (vtable.release)(self.0);
-            }
-        }
+    #[repr(C)]
+    struct Guid {
+        data1: u32,
+        data2: u16,
+        data3: u16,
+        data4: [u8; 8],
     }
 
     #[repr(C)]
-    struct BlobVtable {
-        _query_interface: unsafe extern "system" fn(),
-        _add_ref: unsafe extern "system" fn(),
+    struct IUnknownVtbl {
+        query_interface:
+            unsafe extern "system" fn(*mut c_void, *const Guid, *mut *mut c_void) -> i32,
+        add_ref: unsafe extern "system" fn(*mut c_void) -> u32,
         release: unsafe extern "system" fn(*mut c_void) -> u32,
-        get_buffer_pointer: unsafe extern "system" fn(*mut c_void) -> *mut c_void,
-        get_buffer_size: unsafe extern "system" fn(*mut c_void) -> usize,
+    }
+
+    #[repr(C)]
+    struct ID3DBlob {
+        vtbl: *const ID3DBlobVtbl,
+    }
+
+    #[repr(C)]
+    struct ID3DBlobVtbl {
+        base: IUnknownVtbl,
+        get_buffer_pointer: unsafe extern "system" fn(*mut ID3DBlob) -> *mut c_void,
+        get_buffer_size: unsafe extern "system" fn(*mut ID3DBlob) -> usize,
     }
 
     type D3DCompile = unsafe extern "system" fn(
@@ -223,8 +252,8 @@ mod platform {
         *const i8,
         u32,
         u32,
-        *mut *mut c_void,
-        *mut *mut c_void,
+        *mut *mut ID3DBlob,
+        *mut *mut ID3DBlob,
     ) -> i32;
 
     #[link(name = "kernel32")]
