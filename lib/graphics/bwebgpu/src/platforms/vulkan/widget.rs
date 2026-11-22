@@ -187,12 +187,15 @@ mod tests {
             .size(LogicalSize::new(640.0, 480.0))
             .resizable(true)
             .build();
-        let attachment = window.attach_content().expect("attach");
-        let Some(NativeWindowHandle::Gtk(parent)) = (unsafe { attachment.window_handle() }) else {
+        // A layer of the window gives its native handle, before the surface takes the
+        // whole window content, which excludes layers.
+        let layer = window.add_layer().attach().expect("attach layer");
+        let Some(NativeWindowHandle::Gtk(parent)) = (unsafe { layer.window_handle() }) else {
             panic!("expected GTK");
         };
+        drop(layer);
         let surface = crate::Instance::default()
-            .create_surface(attachment)
+            .create_surface(&window)
             .expect("surface");
         let instance = crate::Instance::default();
         let adapter = instance
@@ -296,7 +299,7 @@ mod tests {
             .build();
         settle();
         let surface = crate::Instance::default()
-            .create_surface(window.attach_content().expect("attach"))
+            .create_surface(&window)
             .expect("surface");
         let adapter = crate::Instance::default()
             .request_adapter(&crate::RequestAdapterOptions {

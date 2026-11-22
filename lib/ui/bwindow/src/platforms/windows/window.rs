@@ -17,6 +17,7 @@ use super::headers::*;
 use super::interaction::{Interaction, release_pointer_lock};
 #[cfg(feature = "progress_bar")]
 use super::progress_bar::ProgressBar;
+use super::scroll::Scroll;
 #[cfg(feature = "remember_window_state")]
 use super::window_state::{restore_window_state, save_window_state};
 use super::{adjust_window_rect_for_dpi, dwm_set_window_attribute, system_dpi, window_dpi};
@@ -36,6 +37,7 @@ pub(super) struct WindowData {
     pub(super) background_color: Option<u32>,
     theme: Option<Theme>,
     interaction: Interaction,
+    scroll: Scroll,
     #[cfg(feature = "remember_window_state")]
     pub(super) remember_window_state: bool,
     #[cfg(feature = "progress_bar")]
@@ -162,6 +164,7 @@ impl PlatformWindow {
             background_color: builder.background_color,
             theme: builder.theme,
             interaction: Interaction::default(),
+            scroll: Scroll::default(),
             #[cfg(feature = "remember_window_state")]
             remember_window_state: builder.remember_window_state,
             #[cfg(feature = "progress_bar")]
@@ -418,6 +421,7 @@ impl crate::WindowInterface for PlatformWindow {
         self.0.theme = Some(theme);
         let host = self.0.host.clone();
         unsafe { set_titlebar_theme(self.0.hwnd, theme) };
+        self.0.scroll.set_theme(self.0.hwnd, theme);
         host.theme_changed(theme);
     }
 
@@ -428,6 +432,24 @@ impl crate::WindowInterface for PlatformWindow {
 
     fn set_cursor(&mut self, cursor: CursorIcon) {
         self.0.interaction.set_cursor(self.0.hwnd, cursor);
+    }
+
+    fn set_scroll_size(&mut self, size: Option<LogicalSize>) {
+        let theme = self.0.theme.unwrap_or_else(system_theme);
+        self.0.scroll.set_size(self.0.hwnd, self.0.dpi, theme, size);
+    }
+
+    fn scroll_offset(&self) -> LogicalPoint {
+        self.0.scroll.offset()
+    }
+
+    fn set_scroll_offset(&mut self, offset: LogicalPoint) {
+        if let Some(offset) = self.0.scroll.scroll_to(self.0.hwnd, self.0.dpi, offset) {
+            send_event(crate::Event::Window(
+                self.0.window_id,
+                WindowEvent::Scroll(offset),
+            ));
+        }
     }
 
     fn request_pointer_lock(&mut self) -> Result<(), PointerLockError> {
@@ -493,6 +515,16 @@ unsafe extern "system" fn window_proc(
         };
         window_data
     };
+    // While scrolling natively the scroll bars and the wheel scroll the content.
+    if let Some(offset) = _self.scroll.handle(hwnd, _self.dpi, msg, w_param) {
+        if let Some(offset) = offset {
+            send_event(crate::Event::Window(
+                _self.window_id,
+                WindowEvent::Scroll(offset),
+            ));
+        }
+        return 0;
+    }
     if let Some(result) = unsafe {
         _self
             .interaction
@@ -531,6 +563,7 @@ unsafe extern "system" fn window_proc(
             let theme = _self.theme.unwrap_or_else(system_theme);
             let host = _self.host.clone();
             unsafe { set_titlebar_theme(hwnd, theme) };
+            _self.scroll.set_theme(hwnd, theme);
             host.theme_changed(theme);
             if msg == 0x001A && w_param == SPI_SETWORKAREA {
                 host.event_sender().send(WindowEvent::MonitorChanged);
@@ -598,6 +631,10 @@ unsafe extern "system" fn window_proc(
             let host = _self.host.clone();
             let id = _self.window_id;
             let dpi = _self.dpi;
+            // The scroll bars fit the new client area, which can move the content.
+            if let Some(offset) = _self.scroll.update(hwnd, dpi) {
+                send_event(crate::Event::Window(id, WindowEvent::Scroll(offset)));
+            }
             // Native content resizing may reenter application code and drop the window.
             host.resize(width as u32, height as u32);
             if host.is_closed() {

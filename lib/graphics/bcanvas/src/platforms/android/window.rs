@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: MIT
  */
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::rc::{Rc, Weak};
 
 use bwindow::ffi::{
@@ -12,6 +12,7 @@ use bwindow::ffi::{
     android_window_size,
 };
 use bwindow::{NativeContentHandle, WindowAttachment, WindowEventSender};
+use jni::objects::{Global, JObject};
 use jni::sys::{jint, jvalue};
 
 use crate::CanvasRenderingContext2d;
@@ -20,6 +21,8 @@ use crate::platforms::android::context::{
     Clear, Jni, OBJECT, PlatformCanvasContext, Resources, call_void, with_env,
 };
 
+type Surface = Rc<Global<JObject<'static>>>;
+
 #[derive(Clone, Copy)]
 struct Frame {
     width: f32,
@@ -27,18 +30,29 @@ struct Frame {
     scale: f32,
 }
 
-// Draws the window surface with a hardware accelerated android.graphics.Canvas on the
-// Rust main thread, the window paces the animation frames.
+// Draws the window surface, or the surface of a native window layer, with a hardware
+// accelerated android.graphics.Canvas on the Rust main thread, the window paces the
+// animation frames.
 struct SurfaceState {
     sender: WindowEventSender,
+    // The surface of a native layer with its size in pixels, else the window surface.
+    layer: Option<(Surface, Cell<(u32, u32)>)>,
     resources: Rc<Resources>,
     frame: Cell<Option<Frame>>,
     closed: Cell<bool>,
     painting: Cell<bool>,
     scheduled: Cell<bool>,
+    frame_end: RefCell<Option<Rc<dyn Fn()>>>,
 }
 
 impl SurfaceState {
+    fn surface(&self) -> Option<Surface> {
+        match &self.layer {
+            Some((surface, _)) => Some(surface.clone()),
+            None => android_surface(),
+        }
+    }
+
     fn request_redraw(self: &Rc<Self>) {
         if self.closed.get() {
             return;
@@ -58,10 +72,13 @@ fn paint(state: &Weak<SurfaceState>) {
         return;
     };
     state.scheduled.set(false);
-    if state.closed.get() || state.painting.get() || android_surface().is_none() {
+    if state.closed.get() || state.painting.get() || state.surface().is_none() {
         return;
     }
-    let (width, height) = android_window_size();
+    let (width, height) = state
+        .layer
+        .as_ref()
+        .map_or_else(android_window_size, |(_, size)| size.get());
     let scale = android_density();
     state.painting.set(true);
     state.frame.set(Some(Frame {
@@ -69,7 +86,15 @@ fn paint(state: &Weak<SurfaceState>) {
         height: height as f32 / scale,
         scale,
     }));
-    if !state.sender.redraw(|| state.frame.set(None)) {
+    if !state.sender.redraw(|| {
+        let hook = state.frame_end.borrow().clone();
+        if let Some(hook) = hook
+            && state.frame.get().is_some()
+        {
+            hook();
+        }
+        state.frame.set(None);
+    }) {
         state.frame.set(None);
         state.sender.request_animation_frame();
     }
@@ -83,16 +108,26 @@ pub(crate) struct PlatformCanvas {
 
 impl PlatformCanvas {
     pub(crate) fn new(attachment: WindowAttachment) -> Self {
-        let Some(NativeContentHandle::Android(_)) = (unsafe { attachment.content_handle() }) else {
-            panic!("expected an open Android window");
+        let layer = match unsafe { attachment.content_handle() } {
+            Some(NativeContentHandle::Android(_)) => None,
+            Some(NativeContentHandle::AndroidSurface(surface)) => Some((
+                Rc::new(with_env(|env| {
+                    let surface = unsafe { JObject::from_raw(env, surface.cast()) };
+                    env.new_global_ref(&surface)
+                })),
+                Cell::new(attachment.size()),
+            )),
+            _ => panic!("expected an open Android window"),
         };
         let state = Rc::new(SurfaceState {
             sender: attachment.event_sender(),
+            layer,
             resources: with_env(Resources::new),
             frame: Cell::new(None),
             closed: Cell::new(false),
             painting: Cell::new(false),
             scheduled: Cell::new(false),
+            frame_end: RefCell::new(None),
         });
         let redraw = Rc::downgrade(&state);
         attachment.on_redraw(move || {
@@ -101,8 +136,11 @@ impl PlatformCanvas {
             }
         });
         let resize = Rc::downgrade(&state);
-        attachment.on_resize(move |_, _| {
+        attachment.on_resize(move |width, height| {
             if let Some(state) = resize.upgrade() {
+                if let Some((_, size)) = &state.layer {
+                    size.set((width, height));
+                }
                 state.request_redraw();
             }
         });
@@ -124,11 +162,25 @@ impl PlatformCanvas {
         self.attachment.request_animation_frame();
     }
 
+    /// The logical size of the open native frame.
+    pub(crate) fn frame_size(&self) -> Option<(f32, f32)> {
+        self.state
+            .frame
+            .get()
+            .map(|frame| (frame.width, frame.height))
+    }
+
+    /// Run `hook` at the end of every native frame that nothing drew yet, which it can
+    /// still draw with `draw`.
+    pub(crate) fn on_frame_end(&self, hook: impl Fn() + 'static) {
+        *self.state.frame_end.borrow_mut() = Some(Rc::new(hook));
+    }
+
     pub(crate) fn draw(
         &mut self,
         draw: impl for<'frame> FnOnce(&mut CanvasRenderingContext2d<'frame>),
     ) -> bool {
-        let Some(surface) = android_surface() else {
+        let Some(surface) = self.state.surface() else {
             return false;
         };
         if self.attachment.is_closed() {
@@ -137,31 +189,33 @@ impl PlatformCanvas {
         let Some(frame) = self.state.frame.take() else {
             return false;
         };
-        let background = self
-            .attachment
-            .background_color()
-            .unwrap_or_else(android_default_background)
-            | 0xff00_0000;
+        // The window starts every frame from its background, a layer from transparency.
+        let clear = if self.state.layer.is_some() {
+            Clear::Transparent
+        } else {
+            Clear::Color(
+                self.attachment
+                    .background_color()
+                    .unwrap_or_else(android_default_background)
+                    | 0xff00_0000,
+            )
+        };
         with_env(|env| {
             let jni = Jni::get(env)?;
             let canvas = unsafe {
                 env.call_method_unchecked(&*surface, jni.lock_hardware_canvas, OBJECT, &[])
             }?
             .l()?;
-            // Start every frame from the window background.
+            let (color, mode) = match clear {
+                Clear::Color(color) => (color, &jni.mode_src),
+                Clear::Transparent => (0, &jni.mode_clear),
+            };
             unsafe {
                 call_void(
                     env,
                     &canvas,
                     jni.draw_color,
-                    &[
-                        jvalue {
-                            i: background as jint,
-                        },
-                        jvalue {
-                            l: jni.mode_src.as_raw(),
-                        },
-                    ],
+                    &[jvalue { i: color as jint }, jvalue { l: mode.as_raw() }],
                 )?;
             }
             let base = Transform([frame.scale, 0.0, 0.0, frame.scale, 0.0, 0.0]);
@@ -171,7 +225,7 @@ impl PlatformCanvas {
                     &canvas,
                     self.state.resources.clone(),
                     base,
-                    Clear::Color(background),
+                    clear,
                 )?,
                 frame.width,
                 frame.height,

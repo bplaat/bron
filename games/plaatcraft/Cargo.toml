@@ -41,8 +41,8 @@ sfxr = { version = "0.1.4", default-features = false }
 
 [target.'cfg(not(any(target_os = "wii", target_os = "wiiu")))'.dependencies]
 baudio = { path = "../../lib/audio/baudio" }
-bcanvas = { path = "../../lib/graphics/bcanvas", default-features = false }
-bwebgpu = { path = "../../lib/graphics/bwebgpu" }
+bcanvas = { path = "../../lib/graphics/bcanvas", default-features = false, features = ["window"] }
+bwebgpu = { path = "../../lib/graphics/bwebgpu", features = ["image"] }
 bwindow = { path = "../../lib/ui/bwindow", default-features = false, features = ["remember_window_state"] }
 cargo-bundle-assets = { path = "../../lib/build/cargo-bundle-assets" }
 directories = "6.0"

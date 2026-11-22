@@ -263,6 +263,9 @@ pub(crate) trait WindowInterface {
     fn set_background_color(&mut self, color: u32);
     // Touch screens have no pointer cursor.
     fn set_cursor(&mut self, _cursor: CursorIcon) {}
+    fn set_scroll_size(&mut self, size: Option<LogicalSize>);
+    fn scroll_offset(&self) -> LogicalPoint;
+    fn set_scroll_offset(&mut self, offset: LogicalPoint);
     // Touch screens have no pointer to lock.
     fn request_pointer_lock(&mut self) -> Result<(), PointerLockError> {
         Err(PointerLockError("pointer lock is not supported".into()))
@@ -331,9 +334,18 @@ impl Window {
         self.host.request_animation_frame();
     }
 
-    /// Attach one native content backend to this window.
+    /// Take the whole window content for one renderer, like a canvas, GPU surface or web
+    /// view, instead of stacking layers.
     pub fn attach_content(&self) -> Result<crate::WindowAttachment, crate::AttachError> {
-        self.host.attach()
+        self.host.attach_content()
+    }
+
+    /// Add a transparent layer above the window background and the layers added before,
+    /// which a canvas or GPU surface draws. Layers move and hide without redrawing. Without
+    /// native layers, like on Windows 7 and XP and Android 8 and 9, bcanvas composites canvas
+    /// layers itself.
+    pub fn add_layer(&self) -> crate::WindowLayer {
+        crate::WindowLayer::new(self.host.clone(), self.host.add_layer())
     }
 
     /// Get this window's stable identifier.
@@ -451,6 +463,36 @@ impl Window {
             return;
         }
         self.platform.set_cursor(cursor)
+    }
+
+    /// Scroll the window content with native scroll bars, for content of a size in logical
+    /// pixels, or remove them with none. A scroll bar shows for each direction the content
+    /// overflows. The native scroller handles the wheel, trackpad and scroll bars with the
+    /// platform's scroll physics and sends [`crate::WindowEvent::Scroll`], the app moves or
+    /// redraws its content, like a layer with [`crate::WindowLayer::set_frame`]. On macOS they
+    /// are overlay scrollers, on Windows and GTK the scroll bars narrow the content area. On
+    /// iOS and Android a touch drag scrolls with a fling, iOS shows scroll indicators and
+    /// Android none.
+    pub fn set_scroll_size(&mut self, size: Option<LogicalSize>) {
+        if !self.is_closed() {
+            self.platform.set_scroll_size(size);
+        }
+    }
+
+    /// The offset of the native scroller in logical pixels from the top left of the content.
+    pub fn scroll_offset(&self) -> LogicalPoint {
+        if self.is_closed() {
+            LogicalPoint::new(0.0, 0.0)
+        } else {
+            self.platform.scroll_offset()
+        }
+    }
+
+    /// Scroll the native scroller to an offset, clamped to the content, like for keys.
+    pub fn set_scroll_offset(&mut self, offset: LogicalPoint) {
+        if !self.is_closed() {
+            self.platform.set_scroll_offset(offset);
+        }
     }
 
     /// Lock and hide the pointer, analogous to DOM `requestPointerLock()`.

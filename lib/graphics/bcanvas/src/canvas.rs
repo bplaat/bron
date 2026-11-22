@@ -11,12 +11,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use std::time::{Duration, Instant};
 
-#[cfg(feature = "window")]
-use bwindow::Window;
-
 use crate::path::Path;
-#[cfg(feature = "window")]
-use crate::platforms::PlatformCanvas;
 use crate::platforms::{PlatformCanvasContext, PlatformImage, PlatformOffscreenCanvas};
 use crate::recording::{Backend, Ops, Recorder};
 use crate::transform::Transform;
@@ -1719,74 +1714,6 @@ impl Default for CanvasState {
             text_align: TextAlign::Start,
             text_baseline: TextBaseline::Alphabetic,
         }
-    }
-}
-
-/// Builder for one native 2D canvas attached to a window.
-#[cfg(feature = "window")]
-pub struct CanvasBuilder<'a> {
-    window: &'a Window,
-}
-
-#[cfg(feature = "window")]
-impl<'a> CanvasBuilder<'a> {
-    /// Create a canvas builder.
-    pub const fn new(window: &'a Window) -> Self {
-        Self { window }
-    }
-
-    /// Build the canvas, panicking if the window is closed or already has content.
-    pub fn build(self) -> Canvas {
-        self.try_build().expect("cannot attach canvas")
-    }
-
-    /// Build the canvas with a recoverable attachment error.
-    pub fn try_build(self) -> Result<Canvas, bwindow::AttachError> {
-        Ok(Canvas {
-            platform: PlatformCanvas::new(self.window.attach_content()?),
-        })
-    }
-}
-
-/// A native 2D canvas. All access is confined to the main thread.
-#[cfg(feature = "window")]
-pub struct Canvas {
-    platform: PlatformCanvas,
-}
-
-#[cfg(feature = "window")]
-impl Canvas {
-    /// Schedule a repaint. Repeated requests coalesce.
-    pub fn request_redraw(&self) {
-        self.platform.request_redraw();
-    }
-
-    /// Schedule one repaint at the next native display frame.
-    pub fn request_animation_frame(&self) {
-        self.platform.request_animation_frame();
-    }
-
-    /// Paint once during this canvas window's RedrawRequested callback.
-    ///
-    /// Returns false outside a native paint callback, after close, or if this frame
-    /// was already drawn. The closure is not called in those cases. Native frame
-    /// scheduling and recovery are handled by the library; callers must not assume
-    /// that every redraw produced a completed draw. The context cannot escape the closure.
-    ///
-    /// Ignoring whether a frame was drawn is diagnosed by Rust:
-    ///
-    /// ```compile_fail
-    /// #![deny(unused_must_use)]
-    /// fn paint(canvas: &mut bcanvas::Canvas) {
-    ///     canvas.draw(|_| {});
-    /// }
-    /// ```
-    #[must_use = "only update frame-dependent state when the draw closure ran"]
-    pub fn draw(
-        &mut self,
-        draw: impl for<'frame> FnOnce(&mut CanvasRenderingContext2d<'frame>),
-    ) -> bool {
-        self.platform.draw(draw)
     }
 }
 

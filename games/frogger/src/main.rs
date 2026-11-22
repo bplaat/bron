@@ -79,7 +79,7 @@ fn main() {
     let builder = builder.android_system_bar_icons(bwindow::AndroidSystemBarIcons::Light);
     let window = builder.build();
     let id = window.id();
-    let mut gpu = gpu::Gpu::new(window.attach_content().expect("Attach game surface"));
+    let mut gpu = gpu::Gpu::new(&window);
     let prefs = Preferences::new("nl.bplaat.frogger").expect("Open game preferences");
     let best = match prefs.get("best_score") {
         Ok(Some(Value::Integer(score))) => score.clamp(0, i64::from(i32::MAX)) as i32,

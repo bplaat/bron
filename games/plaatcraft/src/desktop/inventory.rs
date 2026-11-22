@@ -16,7 +16,7 @@ use plaatcraft::hotbar::name;
 pub(crate) use plaatcraft::hotbar::{Hotbar, SLOTS};
 use plaatcraft::world;
 
-use crate::desktop::hud::{Cached, Hud, MARGIN, Painter};
+use crate::desktop::hud::{Cached, MARGIN, Painter};
 
 const COLUMNS: usize = 9;
 const NAME_DURATION: Duration = Duration::from_secs(2);
@@ -310,7 +310,7 @@ impl Inventory {
     }
 
     // Draws the sprites again when what they show changed.
-    pub(crate) fn prepare(&mut self, painter: &Painter<'_>, layout: &Layout, hotbar: &Hotbar) {
+    pub(crate) fn prepare(&mut self, painter: Painter, layout: &Layout, hotbar: &Hotbar) {
         if self.open {
             self.scroll_by(layout, 0.0);
         }
@@ -362,46 +362,24 @@ impl Inventory {
     }
 
     // Draws the frames below the icons of the same element.
-    pub(crate) fn draw_hotbar(
-        &self,
-        hud: &Hud,
-        pass: &mut bwebgpu::RenderPass<'_>,
-        layout: &Layout,
-        scale: f32,
-        target: (u32, u32),
-    ) {
+    pub(crate) fn draw_hotbar(&self, ctx: &mut CanvasRenderingContext2d<'_>, layout: &Layout) {
         if let Some(cached) = &self.hotbar {
-            let position = (
-                (layout.hotbar_x - FRAME) * scale,
-                (layout.hotbar_y - FRAME) * scale,
-            );
-            hud.draw(pass, cached.sprite(), position, target);
+            let position = (layout.hotbar_x - FRAME, layout.hotbar_y - FRAME);
+            cached.sprite().draw(ctx, position);
         }
         if let (Some((_, shown)), Some(cached)) = (self.shown, &self.name)
             && shown.elapsed() < NAME_DURATION
             && !self.open
         {
-            let x = (layout.hotbar_x + (SLOTS as f32 * layout.slot - NAME_WIDTH) / 2.0) * scale;
-            let y = (layout.hotbar_y - FRAME - 26.0) * scale;
-            hud.draw(pass, cached.sprite(), (x, y), target);
+            let x = layout.hotbar_x + (SLOTS as f32 * layout.slot - NAME_WIDTH) / 2.0;
+            let y = layout.hotbar_y - FRAME - 26.0;
+            cached.sprite().draw(ctx, (x, y));
         }
     }
 
-    pub(crate) fn draw_panel(
-        &self,
-        hud: &Hud,
-        pass: &mut bwebgpu::RenderPass<'_>,
-        layout: &Layout,
-        scale: f32,
-        target: (u32, u32),
-    ) {
+    pub(crate) fn draw_panel(&self, ctx: &mut CanvasRenderingContext2d<'_>, layout: &Layout) {
         if let (Some(panel), Some(cached)) = (&layout.panel, &self.panel) {
-            hud.draw(
-                pass,
-                cached.sprite(),
-                (panel.x * scale, panel.y * scale),
-                target,
-            );
+            cached.sprite().draw(ctx, (panel.x, panel.y));
         }
     }
 }

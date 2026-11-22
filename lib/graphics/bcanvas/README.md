@@ -88,6 +88,13 @@ method names in snake_case, with getter/setter pairs such as `fill_style()` /
   and Android 12 for radial gradients with a focal point, before which the focal point is
   the center.
 
+## Layers
+
+A canvas built for the window takes all of it. To stack canvases, or draw over a GPU layer,
+build them for [bwindow layers](../../ui/bwindow#window-content) with
+`CanvasBuilder::new(&window.add_layer())`. Only layers that requested a redraw are drawn,
+and moving one with `set_frame` needs none. See `cargo run -p example-bcanvas-layers`.
+
 ## Native views
 
 `draw_native` draws into a Core Graphics or cairo context of a native view, like the

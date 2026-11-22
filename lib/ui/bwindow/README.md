@@ -111,26 +111,33 @@ is on, and repeated requests coalesce into one frame.
 
 ## Window Content
 
-- Empty window: use `WindowBuilder` alone.
-- Native 2D drawing: attach `bcanvas::CanvasBuilder` and paint during that window's
-  `RedrawRequested` callback.
-- Web content: attach `bwebview::WebviewBuilder` and map browser notifications into
-  your application's typed events with `on_event(proxy, mapper)`.
-- Native widgets: on macOS, Windows and GTK pass your own NSView, child HWND or
-  GtkWidget, like a native scroll view, to `WindowAttachment::set_native_view`. The window
-  sizes it to the content area and focuses it, the view handles its own input.
+The window background color is at the bottom. Above it goes one item that takes the whole
+window, or a stack of layers:
 
-A window has one content attachment, taken with `window.attach_content()`. The window
-keeps handling input and pacing frames, the attached content only draws. Content draws
-into `WindowAttachment::content_handle()`: the client area of the window on Windows, a
-layer-backed view on macOS and iOS, a drawing area on GTK and the window surface on
-Android.
+- One item: `bcanvas::CanvasBuilder::new(&window)`, `bwebgpu::Instance::create_surface(&window)`
+  or `bwebview::WebviewBuilder::new(&window)`. Native widgets go to
+  `WindowAttachment::set_native_view` of `window.attach_content()`.
+- Layers: `window.add_layer()` adds a transparent layer above the layers added before it,
+  which a canvas or GPU surface draws, like `CanvasBuilder::new(&layer)` or
+  `create_surface(&layer)`. Canvas and GPU layers mix in any order, like a game with a
+  canvas HUD over its GPU layer. Web views and native views are never layers.
 
-On Windows a new window stays cloaked until the event loop handles its first messages, so
-content attached right after creating the window is painted before the window shows, without
-an empty background or a layout change first. The event loop initializes COM as a
-single-threaded apartment, which the file dialogs, file drops and hosted content like WebView2
-or WinUI XAML islands need.
+A layer fills the window unless `set_frame` gives it a rectangle, which may reach outside
+the window to scroll. `set_hidden` hides it, dropping it removes it. Input always goes to
+the window.
+
+| Platform                                | Layers                               |
+| --------------------------------------- | ------------------------------------ |
+| macOS, iOS                              | A layer-backed view each             |
+| Windows 8.1+                            | A DirectComposition visual each      |
+| Android 10+                             | A `SurfaceControl` each              |
+| Linux on Wayland                        | A GDK subsurface each                |
+| Linux on X11 with Composite             | A redirected GDK child window each   |
+| Windows 7 and XP, Android 8 and 9       | Canvas layers only, drawn by bcanvas |
+
+Native layers move and hide without a redraw. Without them bcanvas records the canvas layers
+and replays them into the window, GPU layers are unsupported. X11 without Composite has no
+layers, attaching one fails with `AttachError::Unsupported`.
 
 ## Safe Area
 
@@ -155,6 +162,13 @@ and let backgrounds fill the window. Changes, like rotating the device, send
 Windows always fill the screen, so size, position and resizing options are ignored. The safe
 area is the view's `safeAreaInsets`. Menus and file drops are ignored, the `dialog` feature is
 not supported, and touches are delivered as left mouse button events.
+
+## Windows
+
+A new window stays cloaked until the event loop handles its first messages, so content
+attached right after creating it is painted before the window shows. The event loop
+initializes COM as a single-threaded apartment, which dialogs, file drops and WebView2 need.
+The `win7` and `winxp` targets load newer APIs like DirectComposition at runtime.
 
 ## Linux
 

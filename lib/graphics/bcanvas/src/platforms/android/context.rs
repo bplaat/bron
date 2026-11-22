@@ -133,7 +133,7 @@ pub(super) struct Jni {
     pub unlock_canvas_and_post: JMethodID,
     #[cfg_attr(not(feature = "window"), allow(dead_code))]
     pub mode_src: GlobalObject,
-    mode_clear: GlobalObject,
+    pub(super) mode_clear: GlobalObject,
     style_stroke: GlobalObject,
     caps: [GlobalObject; 3],
     joins: [GlobalObject; 3],
@@ -1355,9 +1355,13 @@ impl PlatformCanvasContext {
     }
     pub(crate) fn clear_rect(&mut self, x: f32, y: f32, w: f32, h: f32) {
         self.sync_transform();
+        // Inside a layer, clearing makes the layer transparent instead of showing the
+        // window background.
         let (color, mode) = match self.clear {
-            Clear::Color(color) => (color | 0xff00_0000, &self.jni.mode_src),
-            Clear::Transparent => (0, &self.jni.mode_clear),
+            Clear::Color(color) if self.layers.is_empty() => {
+                (color | 0xff00_0000, &self.jni.mode_src)
+            }
+            _ => (0, &self.jni.mode_clear),
         };
         let (jni, canvas) = (self.jni, &self.canvas);
         with_env(|env| unsafe {

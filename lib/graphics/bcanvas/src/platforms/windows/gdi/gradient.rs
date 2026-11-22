@@ -73,7 +73,7 @@ fn offset(shape: &GradientShape, [x, y]: [f32; 2]) -> Option<f32> {
             let b = px * cx + py * cy;
             let c = px * px + py * py;
             if a.abs() < 1e-6 {
-                return (b != 0.0).then(|| c / (2.0 * b)).filter(|t| *t >= 0.0);
+                return (b != 0.0).then_some(c / (2.0 * b)).filter(|t| *t >= 0.0);
             }
             let discriminant = b * b - a * c;
             if discriminant < 0.0 {

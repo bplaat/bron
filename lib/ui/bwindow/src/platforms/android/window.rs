@@ -204,6 +204,18 @@ impl crate::WindowInterface for PlatformWindow {
         destroy(&self.host);
     }
 
+    fn set_scroll_size(&mut self, size: Option<LogicalSize>) {
+        super::scroll::set_size(size);
+    }
+
+    fn scroll_offset(&self) -> LogicalPoint {
+        super::scroll::offset()
+    }
+
+    fn set_scroll_offset(&mut self, offset: LogicalPoint) {
+        super::scroll::scroll_to(offset);
+    }
+
     // Phones have no window title, position, size limits, or resizing.
     fn set_title(&mut self, _title: impl AsRef<str>) {}
 

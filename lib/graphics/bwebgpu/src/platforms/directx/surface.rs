@@ -4,9 +4,10 @@
  * SPDX-License-Identifier: MIT
  */
 
-//! DXGI swap chain presentation for bwindow content windows.
+//! DXGI swap chain presentation for bwindow content windows, or for a native window layer
+//! a premultiplied composition swap chain as the content of its DirectComposition visual.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::ptr;
 use std::rc::Rc;
 
@@ -15,8 +16,18 @@ use super::*;
 pub(crate) type Factory = ();
 
 pub(crate) struct Surface {
-    window: HWND,
+    target: Target,
     swap: RefCell<Option<Swapchain>>,
+}
+
+enum Target {
+    Window(HWND),
+    // The composition device and visual of a layer, with its size kept by its resizes.
+    Layer {
+        device: *mut c_void,
+        visual: *mut c_void,
+        size: Rc<Cell<(u32, u32)>>,
+    },
 }
 
 struct Swapchain {
@@ -32,20 +43,33 @@ impl Surface {
         attachment: &bwindow::WindowAttachment,
         _: &mut Option<Factory>,
     ) -> Result<Self> {
-        let Some(bwindow::NativeContentHandle::Win32(window)) =
-            (unsafe { attachment.content_handle() })
-        else {
-            return Err(Error("D3D12 requires a Win32 window".into()));
+        let target = match unsafe { attachment.content_handle() } {
+            Some(bwindow::NativeContentHandle::Win32(window)) => Target::Window(window),
+            Some(bwindow::NativeContentHandle::DirectComposition { device, visual }) => {
+                let size = Rc::new(Cell::new(attachment.size()));
+                let resized = size.clone();
+                attachment.on_resize(move |width, height| resized.set((width, height)));
+                Target::Layer {
+                    device,
+                    visual,
+                    size,
+                }
+            }
+            _ => return Err(Error("D3D12 requires a Win32 window".into())),
         };
         Ok(Self {
-            window,
+            target,
             swap: RefCell::new(None),
         })
     }
 
     pub(crate) fn size(&self) -> (u32, u32) {
+        let window = match &self.target {
+            Target::Window(window) => *window,
+            Target::Layer { size, .. } => return size.get(),
+        };
         let mut rect = RECT::default();
-        if unsafe { GetClientRect(self.window, &mut rect) } == 0 {
+        if unsafe { GetClientRect(window, &mut rect) } == 0 {
             return (0, 0);
         }
         (
@@ -101,22 +125,46 @@ impl Context {
                     SwapEffect: 4,
                     ..Default::default()
                 };
-                let swap = ComPtr::<IDXGISwapChain1>::create(|out| {
-                    Factory4_CreateSwapChainForHwnd(
-                        self.factory.as_ptr(),
-                        self.queue.as_raw(),
-                        surface.window,
-                        &desc,
-                        ptr::null(),
-                        ptr::null_mut(),
-                        out,
-                    )
-                })?;
-                check(Factory4_MakeWindowAssociation(
-                    self.factory.as_ptr(),
-                    surface.window,
-                    2,
-                ))?;
+                let swap = match surface.target {
+                    Target::Window(window) => {
+                        let swap = ComPtr::<IDXGISwapChain1>::create(|out| {
+                            Factory4_CreateSwapChainForHwnd(
+                                self.factory.as_ptr(),
+                                self.queue.as_raw(),
+                                window,
+                                &desc,
+                                ptr::null(),
+                                ptr::null_mut(),
+                                out,
+                            )
+                        })?;
+                        check(Factory4_MakeWindowAssociation(
+                            self.factory.as_ptr(),
+                            window,
+                            2,
+                        ))?;
+                        swap
+                    }
+                    Target::Layer { device, visual, .. } => {
+                        // Premultiplied, so the layers below show through transparent pixels.
+                        let desc = DXGI_SWAP_CHAIN_DESC1 {
+                            AlphaMode: 1,
+                            ..desc
+                        };
+                        let swap = ComPtr::<IDXGISwapChain1>::create(|out| {
+                            Factory4_CreateSwapChainForComposition(
+                                self.factory.as_ptr(),
+                                self.queue.as_raw(),
+                                &desc,
+                                ptr::null_mut(),
+                                out,
+                            )
+                        })?;
+                        check(Visual_SetContent(visual, swap.as_raw()))?;
+                        check(CompositionDevice_Commit(device))?;
+                        swap
+                    }
+                };
                 *current = Some(Swapchain {
                     object: swap.query_swap_chain3()?,
                     buffers: Vec::new(),

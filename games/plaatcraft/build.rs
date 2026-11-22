@@ -49,7 +49,6 @@ fn desktop(os: &str) {
         .shader("preview.wgsl", "src/desktop/shaders/preview.wgsl")
         .shader("player.wgsl", "src/desktop/shaders/player.wgsl")
         .shader("held.wgsl", "src/desktop/shaders/held.wgsl")
-        .shader("hud.wgsl", "src/desktop/shaders/hud.wgsl")
         .compile()
         .expect("failed to compile shaders");
 

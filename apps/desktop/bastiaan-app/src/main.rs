@@ -11,25 +11,23 @@ use std::f32::consts::TAU;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use bcanvas::{
-    CanvasImage, CanvasRenderingContext2d, Color, FontWeight, OffscreenCanvas, TextBaseline,
-    premultiplied_bgra,
+    CanvasBuilder, CanvasImage, CanvasRenderingContext2d, Color, FontWeight, OffscreenCanvas,
+    TextBaseline, premultiplied_bgra,
 };
 use bwindow::{
-    Event, EventLoopBuilder, LogicalPoint, LogicalSize, Monitor, MouseButton, Theme, WindowBuilder,
-    WindowEvent, open_url,
+    CursorIcon, Event, EventLoopBuilder, KeyCode, LogicalPoint, LogicalSize, Monitor, MouseButton,
+    Theme, WindowBuilder, WindowEvent, open_url,
 };
 use jiff::Timestamp;
 use jiff::tz::TimeZone;
-
-use crate::platforms::ScrollView;
-
-mod platforms;
 
 const FONT: &str = "Georgia";
 const AVATAR_SIZE: f32 = 48.0;
 const ICON_SIZE: f32 = 24.0;
 // Georgia's ascent plus descent in ems, the height of a browser's inline text box
 const TEXT_HEIGHT: f32 = 1.136;
+// The scroll distance of an arrow key in logical pixels
+const LINE: f32 = 40.0;
 
 // MARK: Palette
 // The colors of the website: black on white, or white on black in dark mode
@@ -619,6 +617,8 @@ struct App {
     random: Random,
     particles: Vec<Particle>,
     tick: Instant,
+    // The offset of the native scroller, outside the page while it bounces
+    scroll: f32,
 }
 
 impl App {
@@ -649,6 +649,7 @@ impl App {
             random: Random::new(),
             particles: Vec::new(),
             tick: Instant::now(),
+            scroll: 0.0,
         }
     }
 
@@ -667,16 +668,37 @@ impl App {
         self.layout.as_ref().map_or(0.0, |layout| layout.height)
     }
 
-    // The page's top in the view at a scroll position, it is centered when it fits
-    fn offset(&self, scroll: f32) -> f32 {
+    fn max_scroll(&self) -> f32 {
+        (self.content_height() - self.size.height).max(0.0)
+    }
+
+    // The page's top in the window, it is centered when it fits
+    fn offset(&self) -> f32 {
         ((self.size.height - self.content_height()) / 2.0)
             .max(0.0)
             .round()
-            - scroll
+            - self.scroll
     }
 
-    fn link_at(&self, point: LogicalPoint, scroll: f32) -> Option<&'static str> {
-        let (x, y) = (point.x, point.y - self.offset(scroll));
+    // The scroll offset a key scrolls to, none for other keys
+    fn key_scroll(&self, code: KeyCode, shift: bool) -> Option<f32> {
+        let page = self.size.height * 0.9;
+        let scroll = match code {
+            KeyCode::ArrowUp => self.scroll - LINE,
+            KeyCode::ArrowDown => self.scroll + LINE,
+            KeyCode::PageUp => self.scroll - page,
+            KeyCode::PageDown => self.scroll + page,
+            KeyCode::Space if shift => self.scroll - page,
+            KeyCode::Space => self.scroll + page,
+            KeyCode::Home => 0.0,
+            KeyCode::End => self.max_scroll(),
+            _ => return None,
+        };
+        Some(scroll)
+    }
+
+    fn link_at(&self, point: LogicalPoint) -> Option<&'static str> {
+        let (x, y) = (point.x, point.y - self.offset());
         let layout = self.layout.as_ref()?;
         layout
             .links
@@ -715,9 +737,8 @@ impl App {
         }
     }
 
-    fn draw(&mut self, context: &mut CanvasRenderingContext2d<'_>, scroll: f32) {
-        self.size = LogicalSize::new(context.width(), context.height());
-        self.update_layout(context);
+    // The bottom layer: the background and the drifting particles, drawn every frame
+    fn draw_particles(&self, context: &mut CanvasRenderingContext2d<'_>) {
         let palette = self.palette;
         let background = palette.background;
         context.set_fill_style(Color::rgb(
@@ -725,9 +746,9 @@ impl App {
             (background >> 8) as u8,
             background as u8,
         ));
-        context.fill_rect(0.0, 0.0, self.size.width, self.size.height);
+        context.fill_rect(0.0, 0.0, context.width(), context.height());
 
-        let (center_x, center_y) = (self.size.width / 2.0, self.size.height / 2.0);
+        let (center_x, center_y) = (context.width() / 2.0, context.height() / 2.0);
         for particle in &self.particles {
             let base = palette.particle;
             context.set_fill_style(Color::rgba(base, base, base, particle.alpha));
@@ -742,11 +763,18 @@ impl App {
             );
             context.fill();
         }
+    }
+
+    // The top layer: the page at its scroll position, drawn when it changes
+    fn draw_page(&mut self, context: &mut CanvasRenderingContext2d<'_>) {
+        self.size = LogicalSize::new(context.width(), context.height());
+        self.update_layout(context);
+        let palette = self.palette;
 
         let Some(layout) = &self.layout else {
             return;
         };
-        let offset = self.offset(scroll);
+        let offset = self.offset();
         let avatar = &self.avatars[usize::from(context.scale_factor() > 1.0)];
         context.set_text_baseline(TextBaseline::Middle);
         for layout_box in &layout.boxes {
@@ -822,8 +850,10 @@ fn main() {
         .center()
         .build();
     let window_id = window.id();
-    let view = ScrollView::new(&window);
-    view.set_dark(event_loop.theme() == Theme::Dark);
+    // The particles animate in their own layer, so the page only redraws when it changes
+    let layer = || window.add_layer();
+    let mut particles = CanvasBuilder::new(&layer()).build();
+    let mut page = CanvasBuilder::new(&layer()).build();
     let mut app = App::new(window.size(), event_loop.theme());
     app.resize(window.size());
     // Until the user resizes or maximizes the window, a changed screen places it again, like the screen size
@@ -832,22 +862,28 @@ fn main() {
 
     event_loop.run(move |event| match event {
         Event::Window(id, event) if id == window_id => match event {
-            // The view scrolls by itself, it draws at its scroll position and scrolls through
-            // the page that the drawing laid out
+            // Every particle frame steps the particles and asks for the next display frame
             WindowEvent::RedrawRequested => {
-                // Every painted frame steps the particles and asks for the next display frame
-                app.step();
-                let scroll = view.scroll();
-                if view.draw(|context| app.draw(context, scroll)) {
-                    view.set_content_height(app.content_height());
+                if particles.draw(|context| {
+                    app.step();
+                    app.draw_particles(context);
+                }) {
+                    particles.request_animation_frame();
                 }
-                view.request_animation_frame();
+                if page.draw(|context| app.draw_page(context)) {
+                    // The native scroll bar scrolls the page, which has no horizontal overflow
+                    window.set_scroll_size(Some(LogicalSize::new(0.0, app.content_height())));
+                }
+            }
+            WindowEvent::Scroll(offset) => {
+                app.scroll = offset.y;
+                page.request_redraw();
             }
             WindowEvent::Resize(size) => {
                 app.resize(size);
-                view.request_redraw();
+                page.request_redraw();
             }
-            WindowEvent::ScaleFactorChanged(_) => view.request_redraw(),
+            WindowEvent::ScaleFactorChanged(_) => page.request_redraw(),
             WindowEvent::MonitorChanged => {
                 // A smaller screen first shrinks the window into it, between the new and old placed size
                 let (size, target) = (window.size(), placed_size(&monitor));
@@ -865,28 +901,39 @@ fn main() {
             WindowEvent::ThemeChanged(theme) => {
                 app.palette = Palette::for_theme(theme);
                 window.set_background_color(app.palette.background);
-                view.set_dark(theme == Theme::Dark);
-                view.request_redraw();
+                page.request_redraw();
+            }
+            WindowEvent::KeyDown(key) => {
+                if let Some(scroll) = key
+                    .code
+                    .and_then(|code| app.key_scroll(code, key.modifiers.shift_key()))
+                {
+                    window.set_scroll_offset(LogicalPoint::new(0.0, scroll));
+                }
             }
             WindowEvent::MouseMove { position, .. } => {
-                let hover = app.link_at(position, view.scroll());
-                view.set_pointer_cursor(hover.is_some());
+                let hover = app.link_at(position);
+                window.set_cursor(if hover.is_some() {
+                    CursorIcon::Pointer
+                } else {
+                    CursorIcon::Default
+                });
                 if hover != app.hover {
                     app.hover = hover;
-                    view.request_redraw();
+                    page.request_redraw();
                 }
             }
             WindowEvent::MouseLeave => {
                 if app.hover.take().is_some() {
-                    view.request_redraw();
+                    page.request_redraw();
                 }
             }
             WindowEvent::MouseDown(event) if event.button == MouseButton::Left => {
-                app.pressed = app.link_at(event.position, view.scroll());
+                app.pressed = app.link_at(event.position);
             }
             WindowEvent::MouseUp(event) if event.button == MouseButton::Left => {
                 if let Some(url) = app.pressed.take()
-                    && app.link_at(event.position, view.scroll()) == Some(url)
+                    && app.link_at(event.position) == Some(url)
                 {
                     open_url(url);
                 }

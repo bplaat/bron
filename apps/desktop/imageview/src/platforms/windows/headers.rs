@@ -174,8 +174,8 @@ unsafe extern "system" {
 /// Any stored pointer or window procedure must remain valid while installed.
 pub(crate) unsafe fn SetWindowLong(hwnd: HWND, index: i32, value: isize) -> isize {
     cfg_select! {
-        // SAFETY: The caller guarantees valid arguments; Win32 uses LONG for pointers on 32-bit.
         target_pointer_width = "32" => {
+            // SAFETY: The caller guarantees valid arguments; Win32 uses LONG for pointers on 32-bit.
             (unsafe { SetWindowLongW(hwnd, index, value as i32) }) as isize
         }
         // SAFETY: The caller guarantees the SetWindowLongPtrW contract.
@@ -198,8 +198,8 @@ pub(crate) unsafe fn GetWindowLong(hwnd: HWND, index: i32) -> isize {
 /// The handle, index, and value must satisfy the Win32 SetClassLongPtrW contract.
 pub(crate) unsafe fn SetClassLong(hwnd: HWND, index: i32, value: isize) -> usize {
     cfg_select! {
-        // SAFETY: The caller guarantees valid arguments; Win32 uses LONG for pointers on 32-bit.
         target_pointer_width = "32" => {
+            // SAFETY: The caller guarantees valid arguments; Win32 uses LONG for pointers on 32-bit.
             (unsafe { SetClassLongW(hwnd, index, value as i32) }) as usize
         }
         // SAFETY: The caller guarantees the SetClassLongPtrW contract.

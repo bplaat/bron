@@ -4,7 +4,8 @@
  * SPDX-License-Identifier: MIT
  */
 
-//! Window presentation surfaces backed by bwindow content attachments.
+//! Window presentation surfaces drawing a bwindow window: its whole content, opaque, or a
+//! transparent layer that stacks with canvas and other GPU layers.
 
 use std::cell::RefCell;
 use std::marker::PhantomData;
@@ -32,20 +33,51 @@ pub struct SurfaceCapabilities {
 
 pub struct Surface<'a> {
     pub(crate) native: Rc<platform::Surface>,
-    owner: Rc<dyn std::any::Any>,
+    owner: Rc<bwindow::WindowAttachment>,
     shared: RefCell<Option<Rc<Shared>>>,
     config: RefCell<Option<SurfaceConfiguration>>,
     _lifetime: PhantomData<&'a ()>,
 }
 
+/// What a surface presents to: the whole window content, or a transparent window layer.
+#[derive(Clone, Copy)]
+pub enum SurfaceTarget<'a> {
+    /// The whole window content, opaque.
+    Window(&'a bwindow::Window),
+    /// A layer of the window, transparent with premultiplied alpha. It needs native window
+    /// layers, which every platform with a GPU backend has, except Android 8 and 9 and X11
+    /// without the Composite extension.
+    Layer(&'a bwindow::WindowLayer),
+}
+
+impl<'a> From<&'a bwindow::Window> for SurfaceTarget<'a> {
+    fn from(window: &'a bwindow::Window) -> Self {
+        Self::Window(window)
+    }
+}
+
+impl<'a> From<&'a bwindow::WindowLayer> for SurfaceTarget<'a> {
+    fn from(layer: &'a bwindow::WindowLayer) -> Self {
+        Self::Layer(layer)
+    }
+}
+
 impl Instance {
-    /// Create a presentation surface from an exclusive bwindow content attachment.
-    pub fn create_surface(
+    /// Create a presentation surface for a window, or a layer of it to stack with canvases.
+    pub fn create_surface<'a>(
         &self,
-        attachment: bwindow::WindowAttachment,
+        target: impl Into<SurfaceTarget<'a>>,
     ) -> Result<Surface<'static>> {
-        if attachment.is_closed() {
-            return Err(Error("The bwindow window is closed".into()));
+        let (attachment, layer) = match target.into() {
+            SurfaceTarget::Window(window) => (window.attach_content(), false),
+            SurfaceTarget::Layer(layer) => (layer.attach(), true),
+        };
+        let attachment =
+            attachment.map_err(|error| Error(format!("Cannot attach to the window: {error}")))?;
+        if layer && !attachment.is_native_layer() {
+            return Err(Error(
+                "GPU layers need native window layers, draw the whole window instead".into(),
+            ));
         }
         let native = Rc::new(platform::Surface::new(
             &attachment,
@@ -63,6 +95,12 @@ impl Instance {
 }
 
 impl Surface<'_> {
+    /// Redraw the surface at the next display frame of the window, without redrawing its
+    /// canvas layers.
+    pub fn request_animation_frame(&self) {
+        self.owner.request_animation_frame();
+    }
+
     /// Return the current drawable size in physical pixels.
     pub fn size(&self) -> (u32, u32) {
         self.native.size()
@@ -123,13 +161,12 @@ impl Surface<'_> {
                         mips: 1,
                         format: config.format,
                         usage: TextureUsages::RENDER_ATTACHMENT,
-                        _window: Some(self.owner.clone()),
+                        _window: Some(self.owner.clone() as Rc<dyn std::any::Any>),
                     }),
                 };
                 let frame = SurfaceTexture {
                     texture,
                     surface: self.native.clone(),
-                    _owner: self.owner.clone(),
                 };
                 if suboptimal {
                     CurrentSurfaceTexture::Suboptimal(frame)
@@ -155,7 +192,6 @@ pub enum CurrentSurfaceTexture {
 pub struct SurfaceTexture {
     pub texture: Texture,
     surface: Rc<platform::Surface>,
-    _owner: Rc<dyn std::any::Any>,
 }
 
 impl Queue {

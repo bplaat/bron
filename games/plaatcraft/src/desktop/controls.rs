@@ -11,10 +11,10 @@
 use std::f32::consts::TAU;
 use std::time::{Duration, Instant};
 
-use bcanvas::{Color, TextAlign, TextBaseline};
+use bcanvas::{CanvasRenderingContext2d, Color, TextAlign, TextBaseline};
 use bwindow::{LogicalInsets, LogicalPoint, LogicalSize, Touch};
 
-use crate::desktop::hud::{Hud, MARGIN, Sprite};
+use crate::desktop::hud::{MARGIN, Sprite};
 
 const JOYSTICK_SPLIT: f32 = 0.45;
 const JOYSTICK_RADIUS: f32 = 48.0;
@@ -139,7 +139,6 @@ struct Look {
 }
 
 struct Sprites {
-    scale: f32,
     flying: bool,
     base: Sprite,
     thumb: Sprite,
@@ -296,26 +295,19 @@ impl TouchControls {
         [dx / JOYSTICK_MAX, -dy / JOYSTICK_MAX]
     }
 
-    // Draws the button sprites again when the scale or the flight buttons changed.
-    pub(crate) fn prepare(
-        &mut self,
-        hud: &Hud,
-        device: &bwebgpu::Device,
-        queue: &bwebgpu::Queue,
-        scale: f32,
-        flying: bool,
-    ) {
+    // Draws the button sprites again when the flight buttons changed.
+    pub(crate) fn prepare(&mut self, flying: bool) {
         if self
             .sprites
             .as_ref()
-            .is_some_and(|sprites| sprites.scale == scale && sprites.flying == flying)
+            .is_some_and(|sprites| sprites.flying == flying)
         {
             return;
         }
         let circle = |radius: f32, pressed: bool, label: &str| {
             let size = (radius * 2.0).ceil() + 2.0;
-            let mut sprite = hud.sprite(device, size as u32, size as u32, scale);
-            sprite.redraw(queue, |ctx| {
+            let mut sprite = Sprite::new(size, size, 1.0);
+            sprite.redraw(|ctx| {
                 let center = size / 2.0;
                 ctx.begin_path();
                 ctx.arc(center, center, radius, 0.0, TAU, false);
@@ -360,7 +352,6 @@ impl TouchControls {
         })
         .collect();
         self.sprites = Some(Sprites {
-            scale,
             flying,
             base,
             thumb,
@@ -368,44 +359,29 @@ impl TouchControls {
         });
     }
 
-    pub(crate) fn draw(
-        &self,
-        hud: &Hud,
-        pass: &mut bwebgpu::RenderPass<'_>,
-        layout: &Layout,
-        target: (u32, u32),
-    ) {
+    pub(crate) fn draw(&self, ctx: &mut CanvasRenderingContext2d<'_>, layout: &Layout) {
         let Some(sprites) = &self.sprites else {
             return;
         };
-        let scale = sprites.scale;
         // Sprites are one logical pixel larger than their circle on each side.
-        let at = |center: LogicalPoint, radius: f32| {
-            (
-                (center.x - radius - 1.0) * scale,
-                (center.y - radius - 1.0) * scale,
-            )
-        };
+        let at =
+            |center: LogicalPoint, radius: f32| (center.x - radius - 1.0, center.y - radius - 1.0);
         let center = self
             .joystick
             .as_ref()
             .map_or(layout.joystick_rest, |joystick| joystick.origin);
-        hud.draw(pass, &sprites.base, at(center, JOYSTICK_RADIUS), target);
+        sprites.base.draw(ctx, at(center, JOYSTICK_RADIUS));
         let (dx, dy) = self.thumb();
         let thumb = LogicalPoint::new(center.x + dx, center.y + dy);
-        hud.draw(pass, &sprites.thumb, at(thumb, THUMB_RADIUS), target);
+        sprites.thumb.draw(ctx, at(thumb, THUMB_RADIUS));
         for &(button, center, radius) in &layout.buttons {
             let Some((_, normal, pressed)) = sprites.buttons.iter().find(|(b, ..)| *b == button)
             else {
                 continue;
             };
             let held = self.held.iter().any(|&(_, b)| b == button);
-            hud.draw(
-                pass,
-                if held { pressed } else { normal },
-                at(center, radius),
-                target,
-            );
+            let sprite = if held { pressed } else { normal };
+            sprite.draw(ctx, at(center, radius));
         }
     }
 }

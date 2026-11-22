@@ -97,7 +97,6 @@ dependencies = [
  "bwindow",
  "image",
  "jiff",
- "objc2",
  "vector",
 ]
 
@@ -467,6 +466,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "example-bcanvas-layers"
+version = "0.1.0"
+dependencies = [
+ "bcanvas",
+ "bwindow",
+]
+
+[[package]]
 name = "example-bcanvas-showcase"
 version = "0.1.0"
 dependencies = [
@@ -504,6 +511,16 @@ dependencies = [
  "bwebgpu",
  "bwebgpu-shader-build",
  "image",
+]
+
+[[package]]
+name = "example-bwebgpu-layers"
+version = "0.1.0"
+dependencies = [
+ "bcanvas",
+ "bwebgpu",
+ "bwebgpu-shader-build",
+ "bwindow",
 ]
 
 [[package]]

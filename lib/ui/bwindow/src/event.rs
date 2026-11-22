@@ -71,8 +71,12 @@ pub enum WindowEvent {
     TouchEnd(crate::TouchEvent),
     /// The system canceled touches, analogous to DOM `touchcancel`.
     TouchCancel(crate::TouchEvent),
-    /// Wheel or trackpad scroll.
+    /// Wheel or trackpad scroll. While the window scrolls natively, see
+    /// [`crate::Window::set_scroll_size`], it scrolls that instead.
     Wheel(crate::ScrollDelta, crate::Modifiers),
+    /// The native scroller of the window scrolled to an offset in logical pixels from the top
+    /// left of the content, which bounces a little outside the content on macOS.
+    Scroll(LogicalPoint),
     /// A keyboard key was pressed, including auto-repeat presses.
     KeyDown(crate::KeyboardEvent),
     /// A keyboard key was released.

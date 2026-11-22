@@ -60,6 +60,14 @@ pub mod ffi {
         feature = "file_drop"
     ))]
     pub use crate::platforms::gtk::file_drop::gtk_dropped_paths;
+    /// Set the buffer scale of a Wayland surface that GDK does not draw itself.
+    ///
+    /// # Safety
+    /// `surface` must be a live `wl_surface` of GDK's Wayland connection.
+    #[cfg(not(any(target_vendor = "apple", target_os = "android", windows)))]
+    pub unsafe fn gtk_wayland_set_buffer_scale(surface: *mut std::ffi::c_void, scale: i32) {
+        unsafe { crate::platforms::gtk::wayland::set_buffer_scale(surface, scale) };
+    }
     #[cfg(all(target_os = "macos", feature = "file_drop"))]
     pub use crate::platforms::macos::file_drop::{
         file_drag_operation, perform_file_drop, register_dragged_types,

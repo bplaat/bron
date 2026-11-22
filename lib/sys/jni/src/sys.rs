@@ -104,7 +104,8 @@ pub struct JNINativeInterface_ {
     pub(crate) NewGlobalRef: unsafe extern "system" fn(*mut JNIEnv, jobject) -> jobject,
     pub(crate) DeleteGlobalRef: unsafe extern "system" fn(*mut JNIEnv, jobject),
     pub(crate) DeleteLocalRef: unsafe extern "system" fn(*mut JNIEnv, jobject),
-    _reserved24: [Reserved; 6],
+    pub(crate) IsSameObject: unsafe extern "system" fn(*mut JNIEnv, jobject, jobject) -> jboolean,
+    _reserved25: [Reserved; 5],
     pub(crate) NewObjectA:
         unsafe extern "system" fn(*mut JNIEnv, jclass, jmethodID, *const jvalue) -> jobject,
     pub(crate) GetObjectClass: unsafe extern "system" fn(*mut JNIEnv, jobject) -> jclass,
@@ -285,6 +286,7 @@ assert_slots!(JNINativeInterface_ {
     NewGlobalRef = 21,
     DeleteGlobalRef = 22,
     DeleteLocalRef = 23,
+    IsSameObject = 24,
     NewObjectA = 30,
     GetObjectClass = 31,
     GetMethodID = 33,

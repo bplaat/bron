@@ -6,9 +6,13 @@
 
 //! The Direct2D 1.1 and DirectWrite backend.
 
+#[cfg(feature = "window")]
+pub(crate) use self::composition::CompositionTarget;
 pub(crate) use self::context::{Context, ImageCache};
 pub(crate) use self::target::{OffscreenTarget, WindowTarget};
 
+#[cfg(feature = "window")]
+mod composition;
 mod context;
 mod headers;
 mod target;

@@ -22,6 +22,7 @@ struct CanvasData {
     target: RefCell<WindowTarget>,
     frame: RefCell<Option<CanvasRenderingContext2d<'static>>>,
     painting: Cell<bool>,
+    frame_end: RefCell<Option<Rc<dyn Fn()>>>,
 }
 
 impl CanvasData {
@@ -83,6 +84,12 @@ impl CanvasData {
     }
 
     fn end_draw(&self, hwnd: HWND) {
+        let hook = self.frame_end.borrow().clone();
+        if let Some(hook) = hook
+            && self.frame.borrow().is_some()
+        {
+            hook();
+        }
         self.frame.borrow_mut().take();
         let presented = self.target.borrow_mut().end(hwnd);
         if !presented {
@@ -108,6 +115,7 @@ impl PlatformCanvas {
             target: RefCell::new(WindowTarget::new()),
             frame: RefCell::new(None),
             painting: Cell::new(false),
+            frame_end: RefCell::new(None),
         });
         let paint = Rc::downgrade(&data);
         attachment.windows_on_paint(move || {
@@ -139,6 +147,21 @@ impl PlatformCanvas {
 
     pub(crate) fn request_animation_frame(&self) {
         self.attachment.request_animation_frame();
+    }
+
+    /// The logical size of the open native frame.
+    pub(crate) fn frame_size(&self) -> Option<(f32, f32)> {
+        self.data
+            .frame
+            .borrow()
+            .as_ref()
+            .map(|frame| (frame.width(), frame.height()))
+    }
+
+    /// Run `hook` at the end of every native frame that nothing drew yet, which it can
+    /// still draw with `draw`.
+    pub(crate) fn on_frame_end(&self, hook: impl Fn() + 'static) {
+        *self.data.frame_end.borrow_mut() = Some(Rc::new(hook));
     }
 
     pub(crate) fn draw(

@@ -4,7 +4,10 @@
  * SPDX-License-Identifier: MIT
  */
 
-pub(crate) use crate::platforms::macos::content::embed_native_view;
+pub(crate) use crate::platforms::macos::content::{
+    add_layer_view, embed_native_view, native_layers, remove_layer_view, set_layer_view_frame,
+    set_layer_view_hidden,
+};
 #[cfg(feature = "dialog")]
 pub(crate) use crate::platforms::macos::dialog::{PlatformFileDialog, PlatformMessageDialog};
 pub(crate) use crate::platforms::macos::event_loop::{
@@ -23,4 +26,5 @@ mod frame;
 pub(crate) mod headers;
 mod input;
 mod menu;
+mod scroll;
 mod window;

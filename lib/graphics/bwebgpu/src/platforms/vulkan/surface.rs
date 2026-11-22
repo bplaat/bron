@@ -208,7 +208,10 @@ impl Context {
                 } else {
                     caps.current_transform
                 },
-                composite_alpha: 1 << caps.supported_composite_alpha.trailing_zeros(),
+                composite_alpha: composite_alpha(
+                    surface.is_layer(),
+                    caps.supported_composite_alpha,
+                ),
                 present_mode: 2,
                 clipped: 1,
                 old_swapchain: old,
@@ -418,4 +421,15 @@ impl Context {
             check(result)
         }
     }
+}
+
+// A window layer is premultiplied so the layers below show through, or inherits the alpha
+// mode of its native surface. The window content takes the first supported mode, opaque.
+fn composite_alpha(layer: bool, supported: u32) -> u32 {
+    const PRE_MULTIPLIED: u32 = 2;
+    const INHERIT: u32 = 8;
+    let layer_mode = [PRE_MULTIPLIED, INHERIT]
+        .into_iter()
+        .find(|mode| layer && supported & mode != 0);
+    layer_mode.unwrap_or(1 << supported.trailing_zeros())
 }

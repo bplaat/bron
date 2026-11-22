@@ -19,7 +19,7 @@ use plaatcraft::menu::{
 };
 pub(crate) use plaatcraft::menu::{Action, Page, Session};
 
-use crate::desktop::hud::{Cached, Hud, Painter};
+use crate::desktop::hud::{Cached, Painter};
 use crate::desktop::lan::Found;
 use crate::desktop::settings::Settings;
 use crate::desktop::worlds::World;
@@ -198,7 +198,7 @@ impl Menu {
 
     pub(crate) fn prepare(
         &mut self,
-        painter: &Painter<'_>,
+        painter: Painter,
         layout: &Layout,
         pointer: Option<LogicalPoint>,
         settings: Settings,
@@ -208,8 +208,7 @@ impl Menu {
             ctx.fill_rect(0.0, 0.0, ctx.width(), ctx.height());
         });
         let painter = Painter {
-            scale: painter.scale * layout.0.scale,
-            ..*painter
+            zoom: painter.zoom * layout.0.scale,
         };
         let hovered = pointer.and_then(|point| layout.action_at(point));
         let hash = KEYS.hash_one((&self.state, hovered, settings));
@@ -239,24 +238,16 @@ impl Menu {
         );
     }
 
-    pub(crate) fn draw(
-        &self,
-        hud: &Hud,
-        pass: &mut bwebgpu::RenderPass<'_>,
-        layout: &Layout,
-        scale: f32,
-        target: (u32, u32),
-    ) {
+    pub(crate) fn draw(&self, ctx: &mut CanvasRenderingContext2d<'_>, layout: &Layout) {
         let [x, y] = layout.0.content;
         if let Some(overlay) = &self.overlay {
-            hud.fill(pass, overlay.sprite(), target);
+            overlay.sprite().fill(ctx);
         }
         if let Some(content) = &self.content {
-            hud.draw(pass, content.sprite(), (x * scale, y * scale), target);
+            content.sprite().draw(ctx, (x, y));
         }
         if let Some(footer) = &self.footer {
-            let position = (x * scale, layout.0.footer_y * scale);
-            hud.draw(pass, footer.sprite(), position, target);
+            footer.sprite().draw(ctx, (x, layout.0.footer_y));
         }
     }
 }

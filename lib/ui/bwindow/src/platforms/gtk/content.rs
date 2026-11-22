@@ -17,7 +17,10 @@ use std::ptr::{null, null_mut};
 use super::headers::*;
 use super::input::gtk_input_event;
 use super::pointer_lock;
-use crate::{CursorIcon, PointerLockError, WindowEvent, WindowEventSender};
+use super::scroll::Scroll;
+use crate::{
+    CursorIcon, LogicalPoint, LogicalSize, PointerLockError, WindowEvent, WindowEventSender,
+};
 
 // Motion, buttons, key presses and releases, enter/leave, focus, scroll and smooth scroll.
 const INPUT_EVENTS: i32 = (1 << 2)
@@ -39,6 +42,10 @@ const GDK_SEAT_CAPABILITY_POINTER: u32 = 1;
 const GDK_BLANK_CURSOR: i32 = -2;
 
 unsafe extern "C" {
+    fn gtk_grid_new() -> *mut GtkWidget;
+    fn gtk_grid_attach(grid: *mut GtkWidget, child: *mut GtkWidget, x: i32, y: i32, w: i32, h: i32);
+    fn gtk_widget_set_hexpand(widget: *mut GtkWidget, expand: i32);
+    fn gtk_widget_set_vexpand(widget: *mut GtkWidget, expand: i32);
     fn gtk_drawing_area_new() -> *mut GtkWidget;
     fn g_object_ref_sink(object: *mut GObject) -> *mut GObject;
     fn gtk_widget_set_can_focus(widget: *mut GtkWidget, can_focus: i32);
@@ -74,13 +81,19 @@ unsafe extern "C" {
     fn gdk_seat_ungrab(seat: *mut c_void);
 }
 
+const GDK_SCROLL: i32 = 31;
+
 /// The content host and interaction state of one window.
 pub(super) struct Content {
     window: Cell<*mut GtkWindow>,
     area: Cell<*mut GtkWidget>,
+    // The grid around the content area, which scroll bars join without moving the area.
+    grid: Cell<*mut GtkWidget>,
     sender: WindowEventSender,
     keys: RefCell<HashSet<u16>>,
     cursor: Cell<CursorIcon>,
+    // The native scroll bars around the content area while it scrolls.
+    scroll: RefCell<Option<Box<Scroll>>>,
 }
 
 impl Content {
@@ -88,9 +101,11 @@ impl Content {
         Self {
             window: Cell::new(null_mut()),
             area: Cell::new(null_mut()),
+            grid: Cell::new(null_mut()),
             sender,
             keys: RefCell::new(HashSet::new()),
             cursor: Cell::new(CursorIcon::Default),
+            scroll: RefCell::new(None),
         }
     }
 
@@ -161,7 +176,13 @@ impl Content {
             connect(area, c"realize", realize as *const c_void, data, 0);
             self.area.set(area);
             let window = self.window.get();
-            gtk_container_add(window.cast(), area);
+            let grid = gtk_grid_new();
+            gtk_widget_set_hexpand(area, 1);
+            gtk_widget_set_vexpand(area, 1);
+            gtk_grid_attach(grid, area, 0, 0, 1, 1);
+            self.grid.set(grid);
+            gtk_container_add(window.cast(), grid);
+            gtk_widget_show(grid);
             gtk_widget_show(area);
             // Allocate the content area now, GTK otherwise leaves a newly attached widget
             // at its initial 1x1 allocation until the next layout pass.
@@ -172,6 +193,52 @@ impl Content {
     }
 
     /// Show `cursor` over the content.
+    /// The size of the content area while it is narrowed by scroll bars, which the window
+    /// otherwise fills.
+    pub(super) fn scrolled_size(&self) -> Option<(i32, i32)> {
+        let area = self.area.get();
+        (self.scroll.borrow().is_some() && !area.is_null()).then(|| unsafe {
+            (
+                gtk_widget_get_allocated_width(area),
+                gtk_widget_get_allocated_height(area),
+            )
+        })
+    }
+
+    /// Scroll the content with native scroll bars for content of a size, or stop with none.
+    /// Adding or removing the scroll bars lays out the window, which reads this state, so it
+    /// is not borrowed meanwhile.
+    pub(super) fn set_scroll_size(&self, size: Option<LogicalSize>) {
+        let Some(size) = size else {
+            let scroll = self.scroll.borrow_mut().take();
+            if let Some(scroll) = scroll {
+                scroll.remove();
+            }
+            return;
+        };
+        if self.scroll.borrow().is_none() {
+            let area = self.area();
+            let scroll = Scroll::new(self.grid.get(), area, self.sender.clone());
+            *self.scroll.borrow_mut() = Some(scroll);
+        }
+        if let Some(scroll) = &*self.scroll.borrow() {
+            scroll.set_size(size);
+        }
+    }
+
+    pub(super) fn scroll_offset(&self) -> LogicalPoint {
+        self.scroll
+            .borrow()
+            .as_ref()
+            .map_or(LogicalPoint::new(0.0, 0.0), |scroll| scroll.offset())
+    }
+
+    pub(super) fn set_scroll_offset(&self, offset: LogicalPoint) {
+        if let Some(scroll) = &*self.scroll.borrow() {
+            scroll.scroll_to(offset);
+        }
+    }
+
     pub(super) fn set_cursor(&self, cursor: CursorIcon) {
         if self.cursor.replace(cursor) != cursor {
             self.apply_cursor();
@@ -376,6 +443,13 @@ extern "C" fn pointer_event(_: *mut GtkWidget, event: *const GdkEvent, content: 
         unsafe { gtk_widget_grab_focus(content.area.get()) };
     }
     if unsafe { pointer_lock::motion(event, &content.sender) } {
+        return 1;
+    }
+    // While scrolling natively the wheel and touchpad scroll the content.
+    if unsafe { gdk_event_get_event_type(event) } == GDK_SCROLL
+        && let Some(scroll) = &*content.scroll.borrow()
+    {
+        scroll.wheel(event);
         return 1;
     }
     match unsafe { gtk_input_event(event.cast(), false) } {

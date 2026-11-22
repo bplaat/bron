@@ -8,7 +8,7 @@
 
 use std::time::{Duration, Instant};
 
-use bcanvas::{Color, OffscreenCanvas, TextAlign, TextBaseline};
+use bcanvas::{CanvasBuilder, CanvasRenderingContext2d, Color, TextAlign, TextBaseline};
 use bwindow::{
     Event, EventLoop, KeyCode, LogicalInsets, LogicalSize, Theme, WindowBuilder, WindowEvent,
 };
@@ -22,14 +22,6 @@ struct Gpu {
     config: bwebgpu::SurfaceConfiguration,
     depth: bwebgpu::TextureView,
     pipeline: bwebgpu::RenderPipeline,
-    overlay_pipeline: bwebgpu::RenderPipeline,
-    overlay_group: bwebgpu::BindGroup,
-    overlay_texture: bwebgpu::Texture,
-    overlay_canvas: OffscreenCanvas,
-    overlay_layout: bwebgpu::BindGroupLayout,
-    displayed_fps: u32,
-    // The safe area top and right insets in pixels, which the FPS overlay stays inside.
-    overlay_inset: (f32, f32),
     uniforms: bwebgpu::Buffer,
     vertices: bwebgpu::Buffer,
     indices: bwebgpu::Buffer,
@@ -38,11 +30,10 @@ struct Gpu {
 }
 
 impl Gpu {
-    fn new(attachment: bwindow::WindowAttachment) -> Self {
+    fn new(layer: &bwindow::WindowLayer) -> Self {
         // Configure the surface and device
-        let scale = attachment.scale_factor();
         let instance = bwebgpu::Instance::default();
-        let surface = instance.create_surface(attachment).expect("Create surface");
+        let surface = instance.create_surface(layer).expect("Create surface");
         let adapter = instance
             .request_adapter(&bwebgpu::RequestAdapterOptions {
                 compatible_surface: Some(&surface),
@@ -158,68 +149,6 @@ impl Gpu {
             cache: None,
         });
 
-        // Create the FPS overlay pipeline and resources
-        let overlay_layout = device.create_bind_group_layout(&bwebgpu::BindGroupLayoutDescriptor {
-            label: None,
-            entries: &[
-                bwebgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: bwebgpu::ShaderStages::FRAGMENT,
-                    ty: bwebgpu::BindingType::Texture {
-                        sample_type: bwebgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: bwebgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                bwebgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: bwebgpu::ShaderStages::FRAGMENT,
-                    ty: bwebgpu::BindingType::Sampler(bwebgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-            ],
-        });
-        let overlay_pipeline_layout =
-            device.create_pipeline_layout(&bwebgpu::PipelineLayoutDescriptor {
-                label: None,
-                bind_group_layouts: &[Some(&overlay_layout)],
-            });
-        let overlay_shader = device.create_shader_module(bwebgpu::include_wgsl!("overlay.wgsl"));
-        let overlay_pipeline = device.create_render_pipeline(&bwebgpu::RenderPipelineDescriptor {
-            label: None,
-            layout: Some(&overlay_pipeline_layout),
-            vertex: bwebgpu::VertexState {
-                module: &overlay_shader,
-                entry_point: Some("vs_main"),
-                compilation_options: Default::default(),
-                buffers: &[],
-            },
-            primitive: Default::default(),
-            depth_stencil: Some(bwebgpu::DepthStencilState {
-                format: bwebgpu::TextureFormat::Depth32Float,
-                depth_write_enabled: Some(false),
-                depth_compare: Some(bwebgpu::CompareFunction::Always),
-                stencil: Default::default(),
-                bias: Default::default(),
-            }),
-            multisample: Default::default(),
-            fragment: Some(bwebgpu::FragmentState {
-                module: &overlay_shader,
-                entry_point: Some("fs_main"),
-                compilation_options: Default::default(),
-                targets: &[Some(bwebgpu::ColorTargetState {
-                    format: config.format,
-                    blend: Some(bwebgpu::BlendState::ALPHA_BLENDING),
-                    write_mask: bwebgpu::ColorWrites::ALL,
-                })],
-            }),
-            multiview_mask: None,
-            cache: None,
-        });
-        let (overlay_canvas, overlay_texture, overlay_group) =
-            Self::create_overlay(&device, &overlay_layout, scale);
-
         // Upload the cube mesh and texture
         let uniforms = device.create_buffer(&bwebgpu::BufferDescriptor {
             label: None,
@@ -237,13 +166,6 @@ impl Gpu {
             config,
             depth,
             pipeline,
-            overlay_pipeline,
-            overlay_group,
-            overlay_texture,
-            overlay_canvas,
-            overlay_layout,
-            displayed_fps: u32::MAX,
-            overlay_inset: (0.0, 0.0),
             uniforms,
             vertices,
             indices,
@@ -272,66 +194,6 @@ impl Gpu {
                 view_formats: &[],
             })
             .create_view(&Default::default())
-    }
-
-    fn create_overlay(
-        device: &bwebgpu::Device,
-        overlay_layout: &bwebgpu::BindGroupLayout,
-        scale: f32,
-    ) -> (OffscreenCanvas, bwebgpu::Texture, bwebgpu::BindGroup) {
-        let overlay_canvas = OffscreenCanvas::with_scale_factor(120, 36, scale);
-        let overlay_texture = device.create_texture(&bwebgpu::TextureDescriptor {
-            label: None,
-            size: bwebgpu::Extent3d {
-                width: overlay_canvas.width(),
-                height: overlay_canvas.height(),
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: bwebgpu::TextureDimension::D2,
-            format: bwebgpu::TextureFormat::Rgba8UnormSrgb,
-            usage: bwebgpu::TextureUsages::TEXTURE_BINDING | bwebgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
-        });
-        let overlay_view = overlay_texture.create_view(&Default::default());
-        let overlay_sampler = device.create_sampler(&bwebgpu::SamplerDescriptor {
-            mag_filter: bwebgpu::FilterMode::Linear,
-            min_filter: bwebgpu::FilterMode::Linear,
-            ..Default::default()
-        });
-        let overlay_group = device.create_bind_group(&bwebgpu::BindGroupDescriptor {
-            label: None,
-            layout: overlay_layout,
-            entries: &[
-                bwebgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: bwebgpu::BindingResource::TextureView(&overlay_view),
-                },
-                bwebgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: bwebgpu::BindingResource::Sampler(&overlay_sampler),
-                },
-            ],
-        });
-        (overlay_canvas, overlay_texture, overlay_group)
-    }
-
-    fn set_safe_area(&mut self, safe_area: LogicalInsets, window_size: LogicalSize) {
-        let width = self.surface.size().0;
-        if width == 0 || window_size.width <= 0.0 {
-            return;
-        }
-        let scale = width as f32 / window_size.width;
-        self.overlay_inset = (safe_area.top * scale, safe_area.right * scale);
-        if (self.overlay_canvas.scale_factor() - scale).abs() > 0.001 {
-            (
-                self.overlay_canvas,
-                self.overlay_texture,
-                self.overlay_group,
-            ) = Self::create_overlay(&self.device, &self.overlay_layout, scale);
-            self.displayed_fps = u32::MAX;
-        }
     }
 
     fn resize(&mut self) {
@@ -454,7 +316,7 @@ impl Gpu {
         (vertices, indices, group)
     }
 
-    fn render(&mut self, elapsed: f32, fps: u32) -> bool {
+    fn render(&mut self, elapsed: f32) -> bool {
         let (frame, reconfigure) = match self.surface.get_current_texture() {
             bwebgpu::CurrentSurfaceTexture::Success(frame) => (frame, false),
             bwebgpu::CurrentSurfaceTexture::Suboptimal(frame) => (frame, true),
@@ -490,9 +352,8 @@ impl Gpu {
             bytes[index * 4..index * 4 + 4].copy_from_slice(&value.to_ne_bytes());
         }
         self.queue.write_buffer(&self.uniforms, 0, &bytes);
-        self.update_fps(fps);
 
-        // Draw the cube and FPS overlay
+        // Draw the cube
         let view = frame.texture.create_view(&Default::default());
         let mut encoder = self.device.create_command_encoder(&Default::default());
         {
@@ -524,22 +385,6 @@ impl Gpu {
             pass.set_vertex_buffer(0, self.vertices.slice(..));
             pass.set_index_buffer(self.indices.slice(..), bwebgpu::IndexFormat::Uint16);
             pass.draw_indexed(0..self.index_count, 0, 0..1);
-
-            let overlay_width = self.overlay_canvas.width() as f32;
-            let overlay_height = self.overlay_canvas.height() as f32;
-            let padding = 8.0 * self.overlay_canvas.scale_factor();
-            let (top, right) = self.overlay_inset;
-            pass.set_viewport(
-                (self.config.width as f32 - overlay_width - right - padding).max(0.0),
-                top + padding,
-                overlay_width,
-                overlay_height,
-                0.0,
-                1.0,
-            );
-            pass.set_pipeline(&self.overlay_pipeline);
-            pass.set_bind_group(0, &self.overlay_group, &[]);
-            pass.draw(0..3, 0..1);
         }
 
         self.queue.submit([encoder.finish()]);
@@ -550,45 +395,17 @@ impl Gpu {
 
         true
     }
+}
 
-    fn update_fps(&mut self, fps: u32) {
-        if self.displayed_fps == fps {
-            return;
-        }
-
-        self.displayed_fps = fps;
-        self.overlay_canvas.draw(|ctx| {
-            ctx.clear_rect(0.0, 0.0, ctx.width(), ctx.height());
-            ctx.set_fill_style(Color::rgb(255, 255, 255));
-            ctx.set_font("sans-serif", 16.0);
-            ctx.set_text_align(TextAlign::Right);
-            ctx.set_text_baseline(TextBaseline::Top);
-            ctx.fill_text(format!("{fps} FPS"), ctx.width() - 8.0, 8.0);
-        });
-
-        let width = self.overlay_canvas.width();
-        let height = self.overlay_canvas.height();
-        let bytes_per_row = self.overlay_canvas.bytes_per_row();
-        self.queue.write_texture(
-            bwebgpu::TexelCopyTextureInfo {
-                texture: &self.overlay_texture,
-                mip_level: 0,
-                origin: Default::default(),
-                aspect: bwebgpu::TextureAspect::All,
-            },
-            self.overlay_canvas.pixels(),
-            bwebgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(bytes_per_row),
-                rows_per_image: Some(height),
-            },
-            bwebgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-        );
-    }
+// Draws the frame rate in the top right corner, inside the safe area.
+fn draw_fps(ctx: &mut CanvasRenderingContext2d<'_>, fps: u32, safe_area: LogicalInsets) {
+    ctx.clear_rect(0.0, 0.0, ctx.width(), ctx.height());
+    ctx.set_fill_style(Color::rgb(255, 255, 255));
+    ctx.set_font("sans-serif", 16.0);
+    ctx.set_text_align(TextAlign::Right);
+    ctx.set_text_baseline(TextBaseline::Top);
+    let x = ctx.width() - safe_area.right - 16.0;
+    ctx.fill_text(format!("{fps} FPS"), x, safe_area.top + 16.0);
 }
 
 #[derive(Default)]
@@ -717,33 +534,37 @@ fn main() {
         .background_color(BACKGROUND_COLOR)
         .center()
         .build();
-    let mut gpu = Gpu::new(window.attach_content().expect("Attach graphics surface"));
-    gpu.set_safe_area(window.safe_area(), window.size());
+    // The cube animates in its layer, the frame rate canvas over it only redraws when it changes.
+    let mut gpu = Gpu::new(&window.add_layer());
+    let mut hud = CanvasBuilder::new(&window.add_layer()).build();
     let started = Instant::now();
     let mut frame_rate = FrameRate::default();
+    let mut fps = 0;
     let window_id = window.id();
 
-    window.request_animation_frame();
+    gpu.surface.request_animation_frame();
     event_loop.run(move |event| match event {
-        Event::Window(id, WindowEvent::RedrawRequested) if id == window_id => {
+        Event::Window(id, WindowEvent::RedrawRequested)
+            if id == window_id && !hud.draw(|ctx| draw_fps(ctx, fps, window.safe_area())) =>
+        {
             let elapsed = started.elapsed();
-            if gpu.render(elapsed.as_secs_f32(), frame_rate.sample(elapsed)) {
-                window.request_animation_frame();
+            let sampled = frame_rate.sample(elapsed);
+            if sampled != fps {
+                fps = sampled;
+                hud.request_redraw();
+            }
+            if gpu.render(elapsed.as_secs_f32()) {
+                gpu.surface.request_animation_frame();
             }
         }
-        Event::Window(id, WindowEvent::Resize(size)) if id == window_id => {
+        Event::Window(id, WindowEvent::Resize(_) | WindowEvent::ScaleFactorChanged(_))
+            if id == window_id =>
+        {
             gpu.resize();
-            gpu.set_safe_area(window.safe_area(), size);
-            window.request_animation_frame();
+            gpu.surface.request_animation_frame();
         }
-        Event::Window(id, WindowEvent::ScaleFactorChanged(_)) if id == window_id => {
-            gpu.resize();
-            gpu.set_safe_area(window.safe_area(), window.size());
-            window.request_animation_frame();
-        }
-        Event::Window(id, WindowEvent::SafeAreaChanged(safe_area)) if id == window_id => {
-            gpu.set_safe_area(safe_area, window.size());
-            window.request_animation_frame();
+        Event::Window(id, WindowEvent::SafeAreaChanged(_)) if id == window_id => {
+            hud.request_redraw();
         }
         Event::Window(id, WindowEvent::KeyDown(event))
             if id == window_id && event.code == Some(KeyCode::Escape) =>

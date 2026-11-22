@@ -29,16 +29,20 @@ code.
 
 ## Getting Started
 
-Create a surface from a bwindow content attachment:
+Create a surface that takes the whole window, opaque, or a transparent
+[layer](../../ui/bwindow#window-content) that stacks with canvas layers:
 
 ```rust,no_run
 let window = bwindow::WindowBuilder::new().build();
 let instance = bwebgpu::Instance::default();
-let surface = instance
-    .create_surface(window.attach_content().expect("attach graphics surface"))
-    .expect("create surface");
+let surface = instance.create_surface(&window).expect("create surface");
 let (width, height) = surface.size();
 ```
+
+A layer surface is `instance.create_surface(&window.add_layer())`, premultiplied so
+transparent pixels show the layers below. It needs native window layers, so it fails on
+Windows 7 and XP, Android 8 and 9 and X11 without Composite. `surface.request_animation_frame()` redraws only
+the surface, not the other layers.
 
 For headless rendering, request an adapter without a surface, then create a
 bitmap target with `device.create_bitmap_target(width, height)`. Render into
@@ -76,18 +80,11 @@ filtering and GPU mipmap generation are not implemented.
 
 ## Examples
 
-```sh
-cargo run -p example-bwebgpu-triangle
-cargo run -p example-bwebgpu-cube
-cargo run -p example-bwebgpu-blocks
-cargo run -p example-bwebgpu-headless
-```
-
-See [bwebgpu-triangle](examples/triangle),
-[bwebgpu-cube](examples/cube),
-[bwebgpu-blocks](examples/blocks), and
-[bwebgpu-headless](examples/headless). The headless example writes
-`frame.png` in the current directory.
+- `cargo run -p example-bwebgpu-triangle`: [a colored triangle](examples/triangle)
+- `cargo run -p example-bwebgpu-cube`: [a textured rotating cube](examples/cube)
+- `cargo run -p example-bwebgpu-blocks`: [a blocks diorama](examples/blocks)
+- `cargo run -p example-bwebgpu-layers`: [a GPU layer under canvas layers](examples/layers)
+- `cargo run -p example-bwebgpu-headless`: [writes `frame.png`](examples/headless)
 
 ## iOS Simulator
 

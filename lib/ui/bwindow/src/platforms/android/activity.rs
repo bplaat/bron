@@ -123,7 +123,7 @@ pub(crate) fn open_url(url: &str) {
     });
 }
 
-fn sdk_version() -> i32 {
+pub(super) fn sdk_version() -> i32 {
     unsafe { (*ACTIVITY.load(Ordering::Acquire)).sdkVersion }
 }
 

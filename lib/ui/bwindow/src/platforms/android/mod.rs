@@ -9,6 +9,9 @@ pub(crate) use crate::platforms::android::event_loop::{
     PlatformEventLoop, PlatformEventLoopProxy, PlatformMonitor,
 };
 pub(crate) use crate::platforms::android::frame::FrameSource;
+pub(crate) use crate::platforms::android::layers::{
+    add_layer_view, native_layers, remove_layer_view, set_layer_view_frame, set_layer_view_hidden,
+};
 pub(crate) use crate::platforms::android::window::PlatformWindow;
 
 mod activity;
@@ -17,6 +20,8 @@ mod event_loop;
 mod frame;
 pub(crate) mod headers;
 pub(crate) mod input;
+mod layers;
+mod scroll;
 mod window;
 
 pub(crate) mod ffi {

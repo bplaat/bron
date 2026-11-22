@@ -38,7 +38,13 @@ impl Surface {
         autoreleasepool(|_| unsafe {
             let view = retained(view.cast())?;
             let layer = owned(msg_send![class!(CAMetalLayer), new])?;
-            let _: () = msg_send![&*layer, setOpaque:Bool::YES];
+            // A window layer shows the layers below through transparent pixels.
+            let opaque = if attachment.is_native_layer() {
+                Bool::NO
+            } else {
+                Bool::YES
+            };
+            let _: () = msg_send![&*layer, setOpaque:opaque];
             let _: () = msg_send![&*layer, setMaximumDrawableCount:3usize];
             let _: () = msg_send![&*layer, setAllowsNextDrawableTimeout:Bool::YES];
             let _: () = msg_send![&*layer, setContentsScale:f64::from(attachment.scale_factor())];

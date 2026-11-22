@@ -11,7 +11,7 @@ workspace = true
 
 [features]
 default = ["remember_window_state"]
-dialog = []
+dialog = ["dep:block2"]
 file_drop = []
 menu = []
 progress_bar = []
@@ -21,8 +21,10 @@ remember_window_state = ["dep:directories"]
 directories = { version = "6.0", optional = true }
 
 [target.'cfg(target_vendor = "apple")'.dependencies]
-block2 = "0.6.2"
 objc2 = "0.6.5"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+block2 = { version = "0.6.2", optional = true }
 
 [target.'cfg(target_os = "android")'.dependencies]
 jni = "0.22.4"

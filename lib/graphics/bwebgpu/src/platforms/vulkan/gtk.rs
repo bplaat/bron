@@ -4,7 +4,8 @@
  * SPDX-License-Identifier: MIT
  */
 
-//! Vulkan surfaces for bwindow GTK content widgets.
+//! Vulkan surfaces for bwindow GTK content widgets and the subsurfaces of Wayland window
+//! layers.
 
 use std::cell::{Cell, RefCell};
 use std::ffi::{c_ulong, c_void};
@@ -18,6 +19,14 @@ use crate::platform::headers::{
     gdk_x11_display_get_xdisplay, gdk_x11_window_get_xid, gtk_widget_get_scale_factor,
     gtk_widget_get_window,
 };
+
+// The GDK functions of a window layer.
+unsafe extern "C" {
+    fn gdk_window_get_width(window: *mut c_void) -> i32;
+    fn gdk_window_get_height(window: *mut c_void) -> i32;
+    fn gdk_window_get_scale_factor(window: *mut c_void) -> i32;
+    fn gdk_window_get_frame_clock(window: *mut c_void) -> *mut c_void;
+}
 
 pub(super) enum PlatformWindow {
     Xlib {
@@ -63,14 +72,18 @@ pub(super) fn platform_window(handle: bwindow::NativeWindowHandle) -> Result<Pla
 
 pub(crate) struct Surface {
     pub(super) instance: Rc<Instance>,
-    owner: Rc<SurfaceOwner>,
+    // The Vulkan surface, none while a Wayland layer window is hidden.
+    owner: RefCell<Option<Rc<SurfaceOwner>>>,
     pub(super) swap: RefCell<Option<Rc<Swapchain>>>,
-    content: Rc<widget::Widget>,
+    // The content widget, or the GDK window of a window layer.
+    content: Option<Rc<widget::Widget>>,
     pub(super) widget: *mut c_void,
+    layer: Option<*mut c_void>,
     pub(super) redraw: Rc<Repaint>,
     pub(super) startup_clock: *mut c_void,
-    // The Wayland surface, which shows buffers at their scale instead of GDK.
-    wl_surface: Option<*mut c_void>,
+    // The Wayland surface, which shows buffers at their scale instead of GDK. GDK gives a
+    // layer window a new one each time it is shown.
+    wl_surface: Cell<Option<*mut c_void>>,
 }
 
 impl Drop for Surface {
@@ -88,20 +101,22 @@ impl Drop for Surface {
                 );
                 vk::g_object_unref(self.startup_clock.cast());
             }
-            let window = gtk_widget_get_window(self.widget);
+            let window = self.native_window();
             if !window.is_null() {
                 vk::gdk_window_set_invalidate_handler(window, None);
                 vk::g_object_set_data(window, c"bplaat-bwebgpu-redraw".as_ptr(), ptr::null_mut());
             }
-            vk::g_signal_handlers_disconnect_matched(
-                self.widget.cast(),
-                16, // G_SIGNAL_MATCH_DATA
-                0,
-                0,
-                ptr::null_mut(),
-                ptr::null_mut(),
-                Rc::as_ptr(&self.redraw) as *mut c_void,
-            );
+            if !self.widget.is_null() {
+                vk::g_signal_handlers_disconnect_matched(
+                    self.widget.cast(),
+                    16, // G_SIGNAL_MATCH_DATA
+                    0,
+                    0,
+                    ptr::null_mut(),
+                    ptr::null_mut(),
+                    Rc::as_ptr(&self.redraw) as *mut c_void,
+                );
+            }
         }
     }
 }
@@ -146,6 +161,10 @@ impl Surface {
     ) -> Result<Self> {
         unsafe {
             let sender = attachment.event_sender();
+            if let Some(bwindow::NativeContentHandle::GdkLayer(layer)) = attachment.content_handle()
+            {
+                return Self::new_layer(layer, sender, factory);
+            }
             let (
                 Some(bwindow::NativeWindowHandle::Gtk(parent)),
                 Some(bwindow::NativeContentHandle::Gtk(area)),
@@ -254,19 +273,132 @@ impl Surface {
                 vk::G_CONNECT_DEFAULT,
             );
             Ok(Self {
-                owner: Rc::new(SurfaceOwner {
+                owner: RefCell::new(Some(Rc::new(SurfaceOwner {
                     instance: instance.clone(),
                     handle: surface,
                     _window: Some(content.clone()),
-                }),
+                }))),
                 instance,
                 swap: RefCell::new(None),
-                content,
+                content: Some(content),
                 widget,
+                layer: None,
                 redraw,
                 startup_clock,
-                wl_surface,
+                wl_surface: Cell::new(wl_surface),
             })
+        }
+    }
+
+    // A surface presenting into the GDK window of a window layer, which GDK never draws.
+    // A Wayland subsurface only waits for the window's first frame.
+    unsafe fn new_layer(
+        layer: *mut c_void,
+        sender: bwindow::WindowEventSender,
+        factory: &mut Option<Factory>,
+    ) -> Result<Self> {
+        unsafe {
+            let display = gdk_window_get_display(layer);
+            let wayland =
+                vk::g_type_check_instance_is_a(display, vk::gdk_wayland_display_get_type()) != 0;
+            let extension = if wayland {
+                c"VK_KHR_wayland_surface"
+            } else {
+                c"VK_KHR_xlib_surface"
+            };
+            let instance = if let Some(instance) = factory {
+                instance.clone()
+            } else {
+                let instance = Instance::new(Some(extension))?;
+                *factory = Some(instance.clone());
+                instance
+            };
+            let (surface, wl_surface) = if wayland {
+                let wl_surface = gdk_wayland_window_get_wl_surface(layer);
+                (
+                    wayland_surface(&instance, display, wl_surface)?,
+                    Some(wl_surface),
+                )
+            } else {
+                let info = vk::XlibSurfaceCreateInfoKHR {
+                    s_type: 1000004000,
+                    dpy: gdk_x11_display_get_xdisplay(display),
+                    window: gdk_x11_window_get_xid(layer),
+                    ..Default::default()
+                };
+                let mut surface = 0;
+                check(call!(
+                    instance,
+                    CreateXlibSurfaceKHR,
+                    instance.handle,
+                    &info,
+                    ptr::null(),
+                    &mut surface
+                ))?;
+                (surface, None)
+            };
+            let redraw = Rc::new(Repaint {
+                sender,
+                ready: Cell::new(!wayland),
+            });
+            let clock = gdk_window_get_frame_clock(layer);
+            vk::g_object_ref(clock.cast());
+            vk::g_signal_connect_data(
+                clock.cast(),
+                c"after-paint".as_ptr(),
+                surface_after_paint as *const c_void,
+                Rc::as_ptr(&redraw).cast(),
+                ptr::null(),
+                1, // G_CONNECT_AFTER
+            );
+            // The subsurface belongs to Vulkan, GDK must not attach a buffer of its own.
+            vk::g_object_set_data(
+                layer,
+                c"bplaat-bwebgpu-redraw".as_ptr(),
+                Rc::as_ptr(&redraw) as *mut c_void,
+            );
+            vk::gdk_window_set_invalidate_handler(layer, Some(surface_invalidate));
+            Ok(Self {
+                owner: RefCell::new(Some(Rc::new(SurfaceOwner {
+                    instance: instance.clone(),
+                    handle: surface,
+                    _window: None,
+                }))),
+                instance,
+                swap: RefCell::new(None),
+                content: None,
+                widget: ptr::null_mut(),
+                layer: Some(layer),
+                redraw,
+                startup_clock: clock,
+                wl_surface: Cell::new(wl_surface),
+            })
+        }
+    }
+
+    // The GDK window the surface presents to.
+    fn native_window(&self) -> *mut c_void {
+        match self.layer {
+            Some(layer) => layer,
+            None => unsafe { gtk_widget_get_window(self.widget) },
+        }
+    }
+
+    // The logical size and scale of the window the surface presents to.
+    fn native_size(&self) -> (i32, i32, i32) {
+        unsafe {
+            match self.layer {
+                Some(layer) => (
+                    gdk_window_get_width(layer),
+                    gdk_window_get_height(layer),
+                    gdk_window_get_scale_factor(layer).max(1),
+                ),
+                None => (
+                    vk::gtk_widget_get_allocated_width(self.widget),
+                    vk::gtk_widget_get_allocated_height(self.widget),
+                    gtk_widget_get_scale_factor(self.widget).max(1),
+                ),
+            }
         }
     }
 
@@ -275,43 +407,30 @@ impl Surface {
     /// compositor shows every pixel as a logical pixel. The scale applies with the next
     /// present, which is the first one with images of this size.
     pub(super) fn set_buffer_size(&self, width: u32, height: u32) {
-        let Some(surface) = self.wl_surface else {
+        let Some(surface) = self.wl_surface.get() else {
             return;
         };
-        let scale = unsafe { gtk_widget_get_scale_factor(self.widget) }.max(1);
+        let (_, _, scale) = self.native_size();
         // Wayland requires buffer sizes that are a multiple of their scale.
         let scale = if width.is_multiple_of(scale as u32) && height.is_multiple_of(scale as u32) {
             scale
         } else {
             1
         };
-        // libwayland-client is GDK's, so its functions are looked up in the process.
-        type GetVersion = unsafe extern "C" fn(*mut c_void) -> u32;
-        type Marshal = unsafe extern "C" fn(*mut c_void, u32, ...);
-        unsafe {
-            let process = dlopen(ptr::null(), 2);
-            let get_version = dlsym(process, c"wl_proxy_get_version".as_ptr());
-            let marshal = dlsym(process, c"wl_proxy_marshal".as_ptr());
-            dlclose(process);
-            if get_version.is_null() || marshal.is_null() {
-                return;
-            }
-            let get_version = std::mem::transmute::<*mut c_void, GetVersion>(get_version);
-            let marshal = std::mem::transmute::<*mut c_void, Marshal>(marshal);
-            // wl_surface.set_buffer_scale exists since version 3.
-            if get_version(surface) >= 3 {
-                marshal(surface, 8, scale);
-            }
-        }
+        // libwayland-client is GDK's, bwindow marshals the request with it.
+        unsafe { bwindow::ffi::gtk_wayland_set_buffer_scale(surface, scale) };
+    }
+
+    /// Whether the surface presents to a window layer.
+    pub(super) const fn is_layer(&self) -> bool {
+        self.layer.is_some()
     }
 
     pub(crate) fn size(&self) -> (u32, u32) {
         if self.is_lost() {
             return (0, 0);
         }
-        let width = unsafe { vk::gtk_widget_get_allocated_width(self.widget) };
-        let height = unsafe { vk::gtk_widget_get_allocated_height(self.widget) };
-        let scale = unsafe { gtk_widget_get_scale_factor(self.widget) }.max(1);
+        let (width, height, scale) = self.native_size();
         (
             width.max(0).saturating_mul(scale) as u32,
             height.max(0).saturating_mul(scale) as u32,
@@ -319,7 +438,14 @@ impl Surface {
     }
 
     pub(super) fn is_lost(&self) -> bool {
-        self.content.lost.get() || unsafe { gtk_widget_get_window(self.widget) }.is_null()
+        match (&self.content, self.layer) {
+            // A layer window comes back with a new surface, see owner.
+            (_, Some(_)) => false,
+            (Some(content), None) => {
+                content.lost.get() || unsafe { gtk_widget_get_window(self.widget) }.is_null()
+            }
+            (None, None) => true,
+        }
     }
 
     /// GDK keeps a new Wayland subsurface synchronized until the parent commits a frame.
@@ -327,8 +453,60 @@ impl Surface {
         self.redraw.ready.get()
     }
 
-    /// The Vulkan surface, which lives as long as the content widget.
+    /// The Vulkan surface, which lives as long as the content widget. A Wayland layer window
+    /// gets a new surface each time GDK shows it again, so it gets a new Vulkan surface too,
+    /// and none while it is hidden.
     pub(super) fn owner(&self) -> Option<Rc<SurfaceOwner>> {
-        Some(self.owner.clone())
+        let mut owner = self.owner.borrow_mut();
+        if let (Some(layer), Some(current)) = (self.layer, self.wl_surface.get()) {
+            let surface = unsafe { gdk_wayland_window_get_wl_surface(layer) };
+            if surface != current {
+                // The swapchain of the old surface goes before it.
+                self.swap.borrow_mut().take();
+                owner.take();
+                if surface.is_null() {
+                    return None;
+                }
+                let display = unsafe { gdk_window_get_display(layer) };
+                let handle = unsafe { wayland_surface(&self.instance, display, surface) }.ok()?;
+                self.wl_surface.set(Some(surface));
+                *owner = Some(Rc::new(SurfaceOwner {
+                    instance: self.instance.clone(),
+                    handle,
+                    _window: None,
+                }));
+            }
+        }
+        owner.clone()
+    }
+}
+
+// A Vulkan surface for the Wayland surface of a GDK window.
+unsafe fn wayland_surface(
+    instance: &Rc<Instance>,
+    display: *mut c_void,
+    surface: *mut c_void,
+) -> Result<u64> {
+    unsafe {
+        let display = gdk_wayland_display_get_wl_display(display);
+        if display.is_null() || surface.is_null() {
+            return Err(Error("GDK returned invalid Wayland handles".into()));
+        }
+        let info = vk::WaylandSurfaceCreateInfoKHR {
+            s_type: 1000006000,
+            display,
+            surface,
+            ..Default::default()
+        };
+        let mut handle = 0;
+        check(call!(
+            instance,
+            CreateWaylandSurfaceKHR,
+            instance.handle,
+            &info,
+            ptr::null(),
+            &mut handle
+        ))?;
+        Ok(handle)
     }
 }

@@ -51,6 +51,10 @@ macro_rules! optional_proc {
     }};
 }
 
+pub(crate) use crate::platforms::windows::layers::{
+    add_layer_view, native_layers, remove_layer_view, set_layer_view_frame, set_layer_view_hidden,
+};
+
 mod com;
 #[cfg(feature = "dialog")]
 mod dialog;
@@ -62,10 +66,12 @@ pub(crate) mod headers;
 pub(crate) mod input;
 mod instance;
 mod interaction;
+mod layers;
 #[cfg(feature = "menu")]
 mod menu;
 #[cfg(feature = "progress_bar")]
 mod progress_bar;
+mod scroll;
 mod window;
 #[cfg(feature = "remember_window_state")]
 mod window_state;

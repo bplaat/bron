@@ -125,7 +125,14 @@ struct IDXGIFactory2Vtbl {
         *mut c_void,
         *mut *mut c_void,
     ) -> i32,
-    _unused_16_24: [*const c_void; 9],
+    _unused_16_23: [*const c_void; 8],
+    CreateSwapChainForComposition: unsafe extern "system" fn(
+        *mut IDXGIFactory2,
+        *mut c_void,
+        *const DXGI_SWAP_CHAIN_DESC1,
+        *mut c_void,
+        *mut *mut c_void,
+    ) -> i32,
 }
 
 #[repr(C)]
@@ -422,6 +429,29 @@ struct IDXGIFactory4Vtbl {
     _unused_26_26: [*const c_void; 1],
     EnumWarpAdapter:
         unsafe extern "system" fn(*mut IDXGIFactory4, *const GUID, *mut *mut c_void) -> HRESULT,
+}
+
+#[repr(C)]
+struct IDCompositionVisual {
+    vtbl: *const IDCompositionVisualVtbl,
+}
+
+#[repr(C)]
+struct IDCompositionVisualVtbl {
+    base: IUnknownVtbl,
+    _unused_3_14: [*const c_void; 12],
+    SetContent: unsafe extern "system" fn(*mut IDCompositionVisual, *mut c_void) -> i32,
+}
+
+#[repr(C)]
+struct IDCompositionDevice {
+    vtbl: *const IDCompositionDeviceVtbl,
+}
+
+#[repr(C)]
+struct IDCompositionDeviceVtbl {
+    base: IUnknownVtbl,
+    Commit: unsafe extern "system" fn(*mut IDCompositionDevice) -> i32,
 }
 
 #[repr(C)]
@@ -1666,7 +1696,30 @@ pub(super) unsafe fn Factory4_CreateSwapChainForHwnd(
 ) -> i32 {
     unsafe { ((*(*a0).vtbl).base.base.CreateSwapChainForHwnd)(a0.cast(), a1, a2, a3, a4, a5, a6) }
 }
-
+// IDXGIFactory2::CreateSwapChainForComposition, following CreateSwapChainForCoreWindow.
+pub(super) unsafe fn Factory4_CreateSwapChainForComposition(
+    a0: *mut IDXGIFactory4,
+    a1: *mut c_void,
+    a2: *const DXGI_SWAP_CHAIN_DESC1,
+    a3: *mut c_void,
+    a4: *mut *mut c_void,
+) -> i32 {
+    unsafe { ((*(*a0).vtbl).base.base.CreateSwapChainForComposition)(a0.cast(), a1, a2, a3, a4) }
+}
+// IDCompositionVisual::SetContent.
+pub(super) unsafe fn Visual_SetContent(a0: *mut c_void, a1: *mut c_void) -> i32 {
+    unsafe {
+        let this = a0.cast::<IDCompositionVisual>();
+        ((*(*this).vtbl).SetContent)(this, a1)
+    }
+}
+// IDCompositionDevice::Commit.
+pub(super) unsafe fn CompositionDevice_Commit(a0: *mut c_void) -> i32 {
+    unsafe {
+        let this = a0.cast::<IDCompositionDevice>();
+        ((*(*this).vtbl).Commit)(this)
+    }
+}
 pub(super) unsafe fn Factory4_MakeWindowAssociation(
     a0: *mut IDXGIFactory4,
     a1: HWND,

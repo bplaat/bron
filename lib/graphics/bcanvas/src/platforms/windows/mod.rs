@@ -11,6 +11,8 @@
 pub(crate) use self::context::PlatformCanvasContext;
 pub(crate) use self::hwnd::PlatformHwndCanvas;
 pub(crate) use self::image::PlatformImage;
+#[cfg(feature = "window")]
+pub(crate) use self::layer::PlatformLayerCanvas;
 pub(crate) use self::offscreen::PlatformOffscreenCanvas;
 #[cfg(feature = "window")]
 pub(crate) use self::window::PlatformCanvas;
@@ -24,6 +26,8 @@ mod gdi;
 mod headers;
 mod hwnd;
 mod image;
+#[cfg(feature = "window")]
+mod layer;
 mod offscreen;
 #[cfg(feature = "window")]
 mod window;

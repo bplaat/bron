@@ -497,6 +497,12 @@ impl Color {
         b: 0.,
         a: 1.,
     };
+    pub const TRANSPARENT: Self = Self {
+        r: 0.,
+        g: 0.,
+        b: 0.,
+        a: 0.,
+    };
 
     /// Convert a packed `0xRRGGBB` sRGB color to a clear color for the target format.
     pub fn from_rgb8(color: u32, format: TextureFormat) -> Self {

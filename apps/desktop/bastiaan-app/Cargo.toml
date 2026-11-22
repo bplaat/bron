@@ -27,8 +27,5 @@ image = { path = "../../../lib/graphics/image", default-features = false, featur
 jiff = { version = "1.0", default-features = false, features = ["std"] }
 vector = { path = "../../../lib/graphics/vector", default-features = false, features = ["tinyvg"] }
 
-[target.'cfg(target_os = "macos")'.dependencies]
-objc2 = "0.6.5"
-
 [build-dependencies]
 build-utils = { path = "../../../lib/build/build-utils" }

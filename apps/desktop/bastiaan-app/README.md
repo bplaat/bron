@@ -6,12 +6,10 @@ My personal website as a native app, built with [bwindow](../../../lib/ui/bwindo
 
 ## Features
 
-- The website's facts, sites, apps and links, which open in the browser
-- Drifting particles behind the page, like on the website
-- Native scrolling: a Win32 scroll bar, an AppKit NSScrollView or a GTK
-  scrolled window, with the wheel, trackpad and keyboard
-- Animation frames follow the display refresh, through the window's frame source
-- TinyVG icons and the avatar at 1x and 2x for high DPI displays
+- Website content with links that open in the browser
+- Animated background particles
+- Native scrolling
+- TinyVG icons and a high-DPI avatar
 
 ## License
 

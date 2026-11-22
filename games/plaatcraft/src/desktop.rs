@@ -9,6 +9,7 @@
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
+use bcanvas::CanvasBuilder;
 use bwindow::{
     Event, EventLoopBuilder, Key, KeyCode, KeyboardEvent, LogicalInsets, LogicalPoint, LogicalSize,
     Modifiers, MouseButton, NamedKey, Theme, Window, WindowBuilder, WindowEvent,
@@ -19,6 +20,7 @@ use plaatcraft::{avatars, camera, particles, protocol, world};
 mod controls;
 mod database;
 mod hud;
+mod icons;
 mod interaction;
 mod inventory;
 mod lan;
@@ -192,13 +194,14 @@ struct Game {
     sky_pipeline: bwebgpu::RenderPipeline,
     crosshair_pipeline: bwebgpu::RenderPipeline,
     selection_pipeline: bwebgpu::RenderPipeline,
-    preview_pipeline: bwebgpu::RenderPipeline,
     player_pipeline: bwebgpu::RenderPipeline,
     held_pipeline: bwebgpu::RenderPipeline,
     // The box instances of the other players and of the bits of broken blocks.
     player_buffer: bwebgpu::Buffer,
     particle_buffer: bwebgpu::Buffer,
-    hud: hud::Hud,
+    // The HUD canvas layer over the scene, with the block icons it draws.
+    hud: bcanvas::Canvas,
+    icons: icons::IconAtlas,
     stats: hud::Stats,
     chat: hud::Chat,
     name_tags: hud::NameTags,
@@ -250,14 +253,18 @@ struct Game {
 }
 
 impl Game {
-    fn new(window: Window, attachment: bwindow::WindowAttachment, worlds: worlds::Worlds) -> Self {
+    fn new(
+        window: Window,
+        scene: &bwindow::WindowLayer,
+        hud: bcanvas::Canvas,
+        worlds: worlds::Worlds,
+    ) -> Self {
         let preferences = settings::Store::new().expect("Open preferences");
         let mut menu = menu::Menu::default();
         menu.username.clone_from(&preferences.identity().name);
         let settings = preferences.settings();
-        let scale = attachment.scale_factor();
         let instance = bwebgpu::Instance::default();
-        let surface = instance.create_surface(attachment).expect("Create surface");
+        let surface = instance.create_surface(scene).expect("Create surface");
         let adapter = instance
             .request_adapter(&bwebgpu::RequestAdapterOptions {
                 compatible_surface: Some(&surface),
@@ -372,13 +379,6 @@ impl Game {
             config.format,
             "fs_selection",
         );
-        let preview_pipeline = pipeline(
-            &device,
-            bwebgpu::include_wgsl!("preview.wgsl"),
-            &layout,
-            config.format,
-            "fs_preview",
-        );
         let player_pipeline = pipeline(
             &device,
             bwebgpu::include_wgsl!("player.wgsl"),
@@ -405,8 +405,6 @@ impl Game {
             usage: bwebgpu::BufferUsages::VERTEX | bwebgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let hud = hud::Hud::new(&device, config.format);
-        let stats = hud::Stats::new(&hud, &device, scale);
         let selection_buffer = device.create_buffer(&bwebgpu::BufferDescriptor {
             label: Some("Target block"),
             size: 12,
@@ -436,6 +434,7 @@ impl Game {
                 },
             ],
         });
+        let icons = icons::IconAtlas::new(&device, &queue, &layout, &bind_group);
         let depth = Self::create_depth(&device, &config);
         let safe_area = window.safe_area();
         Self {
@@ -449,15 +448,15 @@ impl Game {
             sky_pipeline,
             crosshair_pipeline,
             selection_pipeline,
-            preview_pipeline,
             player_pipeline,
             held_pipeline,
             player_buffer,
             particle_buffer,
             hud,
+            icons,
             chat: hud::Chat::default(),
             name_tags: hud::NameTags::default(),
-            stats,
+            stats: hud::Stats::default(),
             touch: cfg!(any(target_os = "ios", target_os = "android"))
                 .then(controls::TouchControls::default),
             safe_area,
@@ -1608,40 +1607,79 @@ impl Game {
         }
     }
 
-    // Draws block icons with the preview pipeline, the instance index is the material.
-    fn draw_icons(
-        &self,
-        pass: &mut bwebgpu::RenderPass<'_>,
-        icons: &[inventory::Icon],
-        scale: f32,
-    ) {
-        let (width, height) = (self.config.width as f32, self.config.height as f32);
-        pass.set_pipeline(&self.preview_pipeline);
-        pass.set_bind_group(0, &self.bind_group, &[]);
-        for icon in icons {
-            let [x, y, size] = [icon.x, icon.y, icon.size].map(|value| (value * scale).round());
-            // Viewports must stay inside the target, scissors clip to the inventory grid.
-            if size < 1.0 || x < 0.0 || y < 0.0 || x + size > width || y + size > height {
-                continue;
-            }
-            let (clip_x, clip_y, clip_width, clip_height) = icon.clip;
-            let left = x.max(clip_x * scale);
-            let top = y.max(clip_y * scale);
-            let right = (x + size).min((clip_x + clip_width) * scale);
-            let bottom = (y + size).min((clip_y + clip_height) * scale);
-            if right <= left || bottom <= top {
-                continue;
-            }
-            pass.set_viewport(x, y, size, size, 0.0, 1.0);
-            pass.set_scissor_rect(
-                left as u32,
-                top as u32,
-                (right - left) as u32,
-                (bottom - top) as u32,
-            );
-            let material = u32::from(icon.material);
-            pass.draw(0..3, material..material + 1);
+    // Draws the HUD layer over the scene, false when this redraw is not its frame.
+    fn draw_hud(&mut self) -> bool {
+        if self.settings.show_stats {
+            let lines = self.stats_lines();
+            self.stats.update(lines);
         }
+        let inventory_layout = self.inventory_layout();
+        if self.inventory.open {
+            self.inventory.hover(&inventory_layout, self.pointer);
+        }
+        let painter = hud::Painter { zoom: 1.0 };
+        self.inventory
+            .prepare(painter, &inventory_layout, &self.hotbar);
+        let menu_layout = self.menu_layout();
+        let menu_open = self.menu_open();
+        if menu_open {
+            self.menu
+                .prepare(painter, &menu_layout, self.pointer, self.settings);
+        } else {
+            self.chat.prepare(painter);
+        }
+        // The camera projects the name tags in physical pixels.
+        let scale = self.scale();
+        let camera = self.camera_view();
+        let others = self.world.as_ref().map(|world| &world.others);
+        let tags = others.map_or_else(Vec::new, |others| {
+            others.name_tags(&camera, self.gpu_center)
+        });
+        self.name_tags
+            .prepare(painter, tags.iter().map(|&(name, _)| name));
+        let tags: Vec<_> = tags
+            .into_iter()
+            .map(|(name, [x, y])| (name, [x / scale, y / scale]))
+            .collect();
+        let icons = self.inventory.icons(&inventory_layout, &self.hotbar);
+        let touch_layout = self.touch_layout();
+        if let Some(touch) = &mut self.touch {
+            touch.prepare(self.camera.flying);
+        }
+        let Self {
+            hud,
+            icons: atlas,
+            menu,
+            name_tags,
+            touch,
+            settings,
+            stats,
+            safe_area,
+            inventory,
+            chat,
+            ..
+        } = self;
+        hud.draw(|ctx| {
+            ctx.clear_rect(0.0, 0.0, ctx.width(), ctx.height());
+            if menu_open {
+                menu.draw(ctx, &menu_layout);
+                return;
+            }
+            name_tags.draw(ctx, &tags);
+            if let Some(touch) = touch {
+                touch.draw(ctx, &touch_layout);
+            }
+            if settings.show_stats {
+                stats.draw(ctx, *safe_area);
+            }
+            // The block icons go on top of the frames of their slots.
+            let (hotbar_icons, panel_icons) = icons.split_at(inventory::SLOTS);
+            inventory.draw_hotbar(ctx, &inventory_layout);
+            atlas.draw(ctx, hotbar_icons);
+            inventory.draw_panel(ctx, &inventory_layout);
+            atlas.draw(ctx, panel_icons);
+            chat.draw(ctx, *safe_area);
+        })
     }
 
     fn render(&mut self) {
@@ -1722,39 +1760,7 @@ impl Game {
             self.queue
                 .write_buffer(&self.selection_buffer, 0, &offset_bytes(position)[..12]);
         }
-        let scale = self.scale();
-        if self.settings.show_stats {
-            let lines = self.stats_lines();
-            self.stats
-                .update(&self.hud, &self.device, &self.queue, scale, lines);
-        }
-        let inventory_layout = self.inventory_layout();
-        if self.inventory.open {
-            self.inventory.hover(&inventory_layout, self.pointer);
-        }
-        let painter = hud::Painter {
-            hud: &self.hud,
-            device: &self.device,
-            queue: &self.queue,
-            scale,
-        };
-        self.inventory
-            .prepare(&painter, &inventory_layout, &self.hotbar);
-        let menu_layout = self.menu_layout();
-        let menu_open = self.menu_open();
-        if menu_open {
-            self.menu
-                .prepare(&painter, &menu_layout, self.pointer, self.settings);
-        }
-        if !menu_open {
-            self.chat.prepare(&painter);
-        }
         let others = self.world.as_ref().map(|world| &world.others);
-        let name_tags = others.map_or_else(Vec::new, |others| {
-            others.name_tags(&camera, self.gpu_center)
-        });
-        self.name_tags
-            .prepare(&painter, name_tags.iter().map(|&(name, _)| name));
         let player_instances = others.map_or_else(Vec::new, |others| {
             others.instances(self.gpu_center, textures::CHARACTER_LAYER)
         });
@@ -1771,17 +1777,6 @@ impl Game {
         if !particle_instances.is_empty() {
             self.queue
                 .write_buffer(&self.particle_buffer, 0, &particle_instances);
-        }
-        let icons = self.inventory.icons(&inventory_layout, &self.hotbar);
-        let touch_layout = self.touch_layout();
-        if let Some(touch) = &mut self.touch {
-            touch.prepare(
-                &self.hud,
-                &self.device,
-                &self.queue,
-                scale,
-                self.camera.flying,
-            );
         }
         let view = frame.texture.create_view(&Default::default());
         let mut encoder = self.device.create_command_encoder(&Default::default());
@@ -1885,32 +1880,6 @@ impl Game {
                 pass.set_pipeline(&self.crosshair_pipeline);
                 pass.draw(0..3, 0..1);
             }
-            let target = (self.config.width, self.config.height);
-            if menu_open {
-                self.menu
-                    .draw(&self.hud, &mut pass, &menu_layout, scale, target);
-            } else {
-                self.name_tags
-                    .draw(&self.hud, &mut pass, &name_tags, target);
-                if let Some(touch) = &self.touch {
-                    touch.draw(&self.hud, &mut pass, &touch_layout, target);
-                }
-                if self.settings.show_stats {
-                    self.stats
-                        .draw(&self.hud, &mut pass, self.safe_area, target);
-                }
-                // The block icons go on top of the frames of their slots.
-                let (hotbar_icons, panel_icons) = icons.split_at(inventory::SLOTS);
-                self.inventory
-                    .draw_hotbar(&self.hud, &mut pass, &inventory_layout, scale, target);
-                self.draw_icons(&mut pass, hotbar_icons, scale);
-                self.inventory
-                    .draw_panel(&self.hud, &mut pass, &inventory_layout, scale, target);
-                self.draw_icons(&mut pass, panel_icons, scale);
-            }
-            if !menu_open {
-                self.chat.draw(&self.hud, &mut pass, self.safe_area, target);
-            }
         }
         self.queue.submit([encoder.finish()]);
         self.queue.present(frame);
@@ -1950,8 +1919,10 @@ pub(crate) fn main() {
         .remember_window_state()
         .build();
     let window_id = window.id();
-    let attachment = window.attach_content().expect("Attach graphics surface");
-    let mut game = Game::new(window, attachment, worlds);
+    // The scene renders in a GPU layer, the HUD draws over it in a canvas layer.
+    let scene = window.add_layer();
+    let hud = CanvasBuilder::new(&window.add_layer()).build();
+    let mut game = Game::new(window, &scene, hud, worlds);
     game.window.request_animation_frame();
 
     event_loop.run(move |event| match event {
@@ -2102,7 +2073,8 @@ pub(crate) fn main() {
             game.resize();
             game.window.request_animation_frame();
         }
-        Event::Window(id, WindowEvent::RedrawRequested) if id == window_id => {
+        // The HUD layer and the scene each get their own redraws.
+        Event::Window(id, WindowEvent::RedrawRequested) if id == window_id && !game.draw_hud() => {
             // Request the next frame first, so a frame that takes most of a display
             // refresh does not miss the next one and wait for the refresh after it.
             game.window.request_animation_frame();

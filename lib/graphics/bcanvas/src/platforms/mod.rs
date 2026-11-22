@@ -8,6 +8,11 @@
 pub(crate) use platform::PlatformCanvas;
 #[cfg(windows)]
 pub(crate) use platform::PlatformHwndCanvas;
+#[cfg(all(
+    feature = "window",
+    not(any(target_vendor = "apple", target_os = "android"))
+))]
+pub(crate) use platform::PlatformLayerCanvas;
 pub(crate) use platform::{PlatformCanvasContext, PlatformImage, PlatformOffscreenCanvas};
 
 #[cfg(target_os = "android")]

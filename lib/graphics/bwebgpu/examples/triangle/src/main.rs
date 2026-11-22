@@ -20,10 +20,10 @@ struct Gpu {
 }
 
 impl Gpu {
-    fn new(attachment: bwindow::WindowAttachment) -> Self {
+    fn new(window: &bwindow::Window) -> Self {
         // Configure the surface and device
         let instance = bwebgpu::Instance::default();
-        let surface = instance.create_surface(attachment).expect("Create surface");
+        let surface = instance.create_surface(window).expect("Create surface");
         let adapter = instance
             .request_adapter(&bwebgpu::RequestAdapterOptions {
                 compatible_surface: Some(&surface),
@@ -181,7 +181,7 @@ fn main() {
         .background_color(BACKGROUND_COLOR)
         .center()
         .build();
-    let mut gpu = Gpu::new(window.attach_content().expect("Attach graphics surface"));
+    let mut gpu = Gpu::new(&window);
     let window_id = window.id();
 
     window.request_redraw();

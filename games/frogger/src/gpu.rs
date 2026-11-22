@@ -49,10 +49,10 @@ pub(super) struct Gpu {
 }
 
 impl Gpu {
-    pub(super) fn new(attachment: bwindow::WindowAttachment) -> Self {
+    pub(super) fn new(window: &bwindow::Window) -> Self {
         // Configure the surface and device
         let instance = bwebgpu::Instance::default();
-        let surface = instance.create_surface(attachment).expect("Create surface");
+        let surface = instance.create_surface(window).expect("Create surface");
         let adapter = instance
             .request_adapter(&bwebgpu::RequestAdapterOptions {
                 compatible_surface: Some(&surface),

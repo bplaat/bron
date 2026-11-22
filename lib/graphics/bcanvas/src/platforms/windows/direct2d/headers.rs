@@ -22,7 +22,7 @@ pub(super) struct ID2D1Factory {
 }
 
 #[repr(C)]
-struct ID2D1FactoryVtbl {
+pub(super) struct ID2D1FactoryVtbl {
     base: IUnknownVtbl,
     _unused_3_9: [*const c_void; 7],
     CreatePathGeometry:
@@ -553,6 +553,12 @@ impl Deref for ID2D1HwndRenderTarget {
         unsafe { &*(self as *const Self).cast() }
     }
 }
+impl Deref for ID2D1DeviceContext {
+    type Target = ID2D1RenderTarget;
+    fn deref(&self) -> &ID2D1RenderTarget {
+        unsafe { &*(self as *const Self).cast() }
+    }
+}
 impl Deref for ID2D1DCRenderTarget {
     type Target = ID2D1RenderTarget;
     fn deref(&self) -> &ID2D1RenderTarget {
@@ -693,6 +699,20 @@ pub(super) struct ID2D1GradientStopCollection {
 
 /// Direct2D 1.1 interface, queried from a render target.
 #[repr(C)]
+pub(super) struct IDXGISurface {
+    vtbl: *const IUnknownVtbl,
+}
+
+#[repr(C)]
+pub(super) struct BitmapProperties1 {
+    pub(super) pixel_format: D2D1_PIXEL_FORMAT,
+    pub(super) dpi_x: f32,
+    pub(super) dpi_y: f32,
+    pub(super) options: u32,
+    pub(super) color_context: *mut c_void,
+}
+
+#[repr(C)]
 pub(super) struct ID2D1DeviceContext {
     vtbl: *const ID2D1DeviceContextVtbl,
 }
@@ -700,13 +720,21 @@ pub(super) struct ID2D1DeviceContext {
 #[repr(C)]
 struct ID2D1DeviceContextVtbl {
     base: ID2D1RenderTargetVtbl,
-    _unused_57_62: [*const c_void; 6],
+    _unused_57_61: [*const c_void; 5],
+    CreateBitmapFromDxgiSurface: unsafe extern "system" fn(
+        *mut ID2D1DeviceContext,
+        *mut IDXGISurface,
+        *const BitmapProperties1,
+        *mut *mut ID2D1Bitmap,
+    ) -> i32,
     CreateEffect: unsafe extern "system" fn(
         *mut ID2D1DeviceContext,
         *const GUID,
         *mut *mut ID2D1Effect,
     ) -> i32,
-    _unused_64_77: [*const c_void; 14],
+    _unused_64_73: [*const c_void; 10],
+    SetTarget: unsafe extern "system" fn(*mut ID2D1DeviceContext, *mut c_void),
+    _unused_75_77: [*const c_void; 3],
     SetPrimitiveBlend: unsafe extern "system" fn(*mut ID2D1DeviceContext, u32),
     _unused_79_82: [*const c_void; 4],
     DrawImage: unsafe extern "system" fn(
@@ -730,6 +758,29 @@ struct ID2D1DeviceContextVtbl {
 }
 
 impl ID2D1DeviceContext {
+    #[cfg(feature = "window")]
+    pub(super) unsafe fn CreateBitmapFromDxgiSurface(
+        &self,
+        surface: *mut IDXGISurface,
+        properties: &BitmapProperties1,
+    ) -> Result<ComPtr<ID2D1Bitmap>, i32> {
+        unsafe {
+            ComPtr::create(|out| {
+                ((*self.vtbl).CreateBitmapFromDxgiSurface)(
+                    (self as *const Self).cast_mut(),
+                    surface,
+                    properties,
+                    out,
+                )
+            })
+        }
+    }
+
+    #[cfg(feature = "window")]
+    pub(super) unsafe fn SetTarget(&self, image: *mut c_void) {
+        unsafe { ((*self.vtbl).SetTarget)((self as *const Self).cast_mut(), image) };
+    }
+
     pub(super) unsafe fn CreateEffect(&self, clsid: &GUID) -> Result<ComPtr<ID2D1Effect>, i32> {
         unsafe {
             ComPtr::create(|out| {
@@ -1457,7 +1508,9 @@ const _: () = {
     assert!(std::mem::offset_of!(ID2D1RenderTargetVtbl, DrawBitmap) == 26 * slot);
     assert!(std::mem::offset_of!(ID2D1BitmapRenderTargetVtbl, GetBitmap) == 57 * slot);
     assert!(std::mem::offset_of!(ID2D1DeviceContextVtbl, DrawBitmap) == 85 * slot);
+    assert!(std::mem::offset_of!(ID2D1DeviceContextVtbl, CreateBitmapFromDxgiSurface) == 62 * slot);
     assert!(std::mem::offset_of!(ID2D1DeviceContextVtbl, CreateEffect) == 63 * slot);
+    assert!(std::mem::offset_of!(ID2D1DeviceContextVtbl, SetTarget) == 74 * slot);
     assert!(std::mem::offset_of!(ID2D1DeviceContextVtbl, DrawImage) == 83 * slot);
     assert!(std::mem::offset_of!(ID2D1RenderTargetVtbl, GetDpi) == 52 * slot);
     assert!(std::mem::offset_of!(ID2D1RenderTargetVtbl, GetPixelSize) == 54 * slot);

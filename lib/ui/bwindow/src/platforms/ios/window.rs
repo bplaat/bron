@@ -15,6 +15,7 @@ use objc2::{class, define_class, msg_send};
 use super::content::ContentView;
 use super::event_loop::{send_event, theme_from_traits};
 use super::headers::*;
+use super::scroll::Scroller;
 use crate::content::ContentHost;
 use crate::{LogicalInsets, LogicalPoint, LogicalSize, Theme, WindowBuilder, WindowEvent};
 
@@ -182,6 +183,9 @@ const fn ui_user_interface_style(theme: Theme) -> isize {
 pub(super) struct PlatformWindowData {
     window_id: crate::WindowId,
     controller: Retained<WindowViewController>,
+    sender: crate::WindowEventSender,
+    // The native scroller over the content while it scrolls.
+    scroller: Option<Retained<Scroller>>,
 }
 
 pub(crate) struct PlatformWindow(Box<PlatformWindowData>);
@@ -234,6 +238,8 @@ impl PlatformWindow {
         PlatformWindow(Box::new(PlatformWindowData {
             window_id: builder.window_id,
             controller,
+            sender: host.event_sender(),
+            scroller: None,
         }))
     }
 }
@@ -264,6 +270,40 @@ impl crate::WindowInterface for PlatformWindow {
 
     fn safe_area(&self) -> LogicalInsets {
         self.0.controller.safe_area()
+    }
+
+    fn set_scroll_size(&mut self, size: Option<LogicalSize>) {
+        let Some(size) = size else {
+            if let Some(scroller) = self.0.scroller.take() {
+                scroller.remove();
+            }
+            return;
+        };
+        let view: *mut Object = unsafe { msg_send![&self.0.controller, view] };
+        let sender = self.0.sender.clone();
+        self.0
+            .scroller
+            .get_or_insert_with(|| Scroller::new(view, sender))
+            .set_size(CGSize::new(f64::from(size.width), f64::from(size.height)));
+    }
+
+    fn scroll_offset(&self) -> LogicalPoint {
+        self.0
+            .scroller
+            .as_ref()
+            .map_or(LogicalPoint::new(0.0, 0.0), |scroller| {
+                let offset = scroller.offset();
+                LogicalPoint::new(offset.x as f32, offset.y as f32)
+            })
+    }
+
+    fn set_scroll_offset(&mut self, offset: LogicalPoint) {
+        if let Some(scroller) = &self.0.scroller {
+            scroller.scroll_to(CGPoint {
+                x: f64::from(offset.x),
+                y: f64::from(offset.y),
+            });
+        }
     }
 
     fn set_position(&mut self, _point: LogicalPoint) {}

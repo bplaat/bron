@@ -688,6 +688,25 @@ impl crate::WindowInterface for PlatformWindow {
         self.0.content_view.set_cursor(cursor);
     }
 
+    fn set_scroll_size(&mut self, size: Option<LogicalSize>) {
+        self.0.content_view.set_scroll_size(size.map(|size| NSSize {
+            width: f64::from(size.width),
+            height: f64::from(size.height),
+        }));
+    }
+
+    fn scroll_offset(&self) -> LogicalPoint {
+        let offset = self.0.content_view.scroll_offset();
+        LogicalPoint::new(offset.x as f32, offset.y as f32)
+    }
+
+    fn set_scroll_offset(&mut self, offset: LogicalPoint) {
+        self.0.content_view.set_scroll_offset(NSPoint {
+            x: f64::from(offset.x),
+            y: f64::from(offset.y),
+        });
+    }
+
     fn request_pointer_lock(&mut self) -> Result<(), PointerLockError> {
         let status = unsafe { CGAssociateMouseAndMouseCursorPosition(0) };
         if status != 0 {

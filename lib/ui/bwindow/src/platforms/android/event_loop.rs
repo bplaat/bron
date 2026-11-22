@@ -451,7 +451,10 @@ unsafe fn handle_input(event: *mut AInputEvent) -> bool {
                         .collect();
                     if let Some(event) = input::touch_event(AMotionEvent_getAction(event), touches)
                     {
-                        window::send(event);
+                        // While scrolling natively a finger drag scrolls instead.
+                        if !super::scroll::touch(&event) {
+                            window::send(event);
+                        }
                         return true;
                     }
                     return false;
@@ -460,6 +463,11 @@ unsafe fn handle_input(event: *mut AInputEvent) -> bool {
                     AMotionEvent_getAxisValue(event, AMOTION_EVENT_AXIS_HSCROLL, 0),
                     -AMotionEvent_getAxisValue(event, AMOTION_EVENT_AXIS_VSCROLL, 0),
                 );
+                if AMotionEvent_getAction(event) & AMOTION_EVENT_ACTION_MASK == 8
+                    && super::scroll::wheel(scroll.0, scroll.1)
+                {
+                    return true;
+                }
                 let events = input::motion_events(
                     AMotionEvent_getAction(event) & AMOTION_EVENT_ACTION_MASK,
                     position,

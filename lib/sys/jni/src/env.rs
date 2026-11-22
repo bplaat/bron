@@ -204,6 +204,17 @@ impl<'local> Env<'local> {
         Ok(Global::new(unsafe { O::global_kind_from_raw(global) }))
     }
 
+    /// Whether two references refer to the same Java object, or are both null.
+    pub fn is_same_object<'other_local_1, 'other_local_2, O, T>(&self, a: O, b: T) -> Result<bool>
+    where
+        O: AsRef<JObject<'other_local_1>>,
+        T: AsRef<JObject<'other_local_2>>,
+    {
+        Ok(unsafe {
+            (self.table().IsSameObject)(self.raw, a.as_ref().as_raw(), b.as_ref().as_raw())
+        })
+    }
+
     /// Delete a local reference before its JNI stack frame is popped.
     pub fn delete_local_ref<'other_local, O>(&self, obj: O)
     where

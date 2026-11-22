@@ -240,10 +240,21 @@ impl PlatformWindow {
         host.set_handle(crate::NativeWindowHandle::Gtk(window.cast()));
         // The boxed window data keeps its address and outlives the open window.
         let content = &window_data.content as *const Content;
+        let data = window_data.as_mut() as *mut WindowData as *const c_void;
         host.set_content_factory(move || {
-            Some(crate::NativeContentHandle::Gtk(
-                unsafe { &*content }.area().cast(),
-            ))
+            let area = unsafe { &*content }.area();
+            // The content area resizes alone when scroll bars show or hide beside it.
+            unsafe {
+                g_signal_connect_data(
+                    area.cast(),
+                    c"size-allocate".as_ptr(),
+                    area_on_resize as *const c_void,
+                    data,
+                    null(),
+                    G_CONNECT_AFTER,
+                );
+            }
+            Some(crate::NativeContentHandle::Gtk(area.cast()))
         });
         host.scale_factor_changed(unsafe { gtk_widget_get_scale_factor(window.cast()) } as f32);
         unsafe { gtk_widget_show_all(window.cast()) };
@@ -362,6 +373,18 @@ impl crate::WindowInterface for PlatformWindow {
         self.0.content.set_cursor(cursor);
     }
 
+    fn set_scroll_size(&mut self, size: Option<LogicalSize>) {
+        self.0.content.set_scroll_size(size);
+    }
+
+    fn scroll_offset(&self) -> LogicalPoint {
+        self.0.content.scroll_offset()
+    }
+
+    fn set_scroll_offset(&mut self, offset: LogicalPoint) {
+        self.0.content.set_scroll_offset(offset);
+    }
+
     fn request_pointer_lock(&mut self) -> Result<(), PointerLockError> {
         self.0.content.lock_pointer()
     }
@@ -391,6 +414,13 @@ extern "C" fn window_on_move(
     false
 }
 
+extern "C" fn area_on_resize(_: *mut GtkWidget, _: *mut c_void, data: *mut WindowData) {
+    let data = unsafe { &mut *data };
+    if data.content.scrolled_size().is_some() {
+        window_on_resize(data.window, null_mut(), data);
+    }
+}
+
 extern "C" fn window_on_resize(
     _window: *mut GtkWindow,
     _allocation: *mut c_void,
@@ -399,6 +429,10 @@ extern "C" fn window_on_resize(
     let mut width = 0;
     let mut height = 0;
     unsafe { gtk_window_get_size(_self.window, &mut width, &mut height) };
+    // Scroll bars narrow the content area, the children are allocated before this handler.
+    if let Some((area_width, area_height)) = _self.content.scrolled_size() {
+        (width, height) = (area_width, area_height);
+    }
     let scale = unsafe { gtk_widget_get_scale_factor(_self.window.cast()) };
     let host = _self.host.clone();
     let id = _self.window_id;
