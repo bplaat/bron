@@ -17,6 +17,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 use crate::headers::*;
 
+mod com;
 mod headers;
 mod preview;
 mod thumbnail;
@@ -140,12 +141,12 @@ pub(crate) fn guard(method: impl FnOnce() -> HRESULT) -> HRESULT {
 ///
 /// # Safety
 /// `stream` must be a live IStream.
-pub(crate) unsafe fn read_stream(stream: *mut c_void) -> Option<Vec<u8>> {
+pub(crate) unsafe fn read_stream(stream: *mut IStream) -> Option<Vec<u8>> {
     if stream.is_null() {
         return None;
     }
     // SAFETY: The caller supplies a live stream, whose vtable starts with ISequentialStream.
-    let vtable = unsafe { &**stream.cast::<*const IStreamVtbl>() };
+    let vtable = unsafe { &(*(*stream).vtbl).base };
     let mut bytes = Vec::new();
     let mut chunk = vec![0; 64 * 1024];
     loop {
@@ -162,10 +163,11 @@ pub(crate) unsafe fn read_stream(stream: *mut c_void) -> Option<Vec<u8>> {
         if result < 0 {
             return None;
         }
-        bytes.extend_from_slice(&chunk[..read as usize]);
-        if bytes.len() > MAX_FILE_SIZE {
+        let data = chunk.get(..read as usize)?;
+        if data.len() > MAX_FILE_SIZE - bytes.len() {
             return None;
         }
+        bytes.extend_from_slice(data);
         if result == S_FALSE || read == 0 {
             return Some(bytes);
         }
@@ -278,10 +280,9 @@ unsafe extern "system" fn factory_create_instance(
         // SAFETY: Every created object starts with an IUnknown vtable, its own reference is
         // released after the requested interface took one.
         unsafe {
-            let vtable = &**object.cast::<*const IUnknownVtbl>();
-            let result = (vtable.QueryInterface)(object, iid, out);
-            (vtable.Release)(object);
-            result
+            let object = com::ComPtr::<IUnknown>::from_raw(object.cast())
+                .expect("class factory returned an allocated COM object");
+            ((*object.vtbl).QueryInterface)(object.as_ptr().cast(), iid, out)
         }
     })
 }

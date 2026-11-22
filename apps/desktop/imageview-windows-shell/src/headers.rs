@@ -98,9 +98,31 @@ pub(crate) struct IUnknownVtbl {
 }
 
 #[repr(C)]
-pub(crate) struct IStreamVtbl {
+pub(crate) struct IUnknown {
+    pub(crate) vtbl: *const IUnknownVtbl,
+}
+
+#[repr(C)]
+pub(crate) struct IStream {
+    pub(crate) vtbl: *const IStreamVtbl,
+}
+
+#[repr(C)]
+pub(crate) struct ISequentialStreamVtbl {
     pub(crate) base: IUnknownVtbl,
-    pub(crate) Read: unsafe extern "system" fn(*mut c_void, *mut c_void, u32, *mut u32) -> HRESULT,
+    pub(crate) Read: unsafe extern "system" fn(*mut IStream, *mut c_void, u32, *mut u32) -> HRESULT,
+    _unused_4: *const c_void,
+}
+
+#[repr(C)]
+pub(crate) struct IStreamVtbl {
+    pub(crate) base: ISequentialStreamVtbl,
+}
+
+#[repr(C)]
+pub(crate) struct IInitializeWithStreamVtbl {
+    pub(crate) base: IUnknownVtbl,
+    pub(crate) Initialize: unsafe extern "system" fn(*mut c_void, *mut IStream, u32) -> HRESULT,
 }
 
 #[repr(C)]

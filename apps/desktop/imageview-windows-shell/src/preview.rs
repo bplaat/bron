@@ -18,6 +18,7 @@ use std::time::Instant;
 use bcanvas::HwndCanvas;
 use imageview_core::{MediaRenderer, decode_media, draw_checkerboard};
 
+use crate::com::ComPtr;
 use crate::headers::*;
 use crate::{ComObject, Interfaces, guard, is_dark, read_stream, unknown};
 
@@ -29,7 +30,7 @@ struct Preview {
     parent: Cell<HWND>,
     rect: Cell<(i32, i32, i32, i32)>,
     bytes: RefCell<Option<Vec<u8>>>,
-    site: Cell<*mut c_void>,
+    site: RefCell<Option<ComPtr<IUnknown>>>,
     view: RefCell<Option<Box<View>>>,
 }
 
@@ -64,12 +65,6 @@ struct IPreviewHandlerVtbl {
     SetFocus: unsafe extern "system" fn(*mut c_void) -> HRESULT,
     QueryFocus: unsafe extern "system" fn(*mut c_void, *mut HWND) -> HRESULT,
     TranslateAccelerator: unsafe extern "system" fn(*mut c_void, *mut c_void) -> HRESULT,
-}
-
-#[repr(C)]
-struct IInitializeWithStreamVtbl {
-    base: IUnknownVtbl,
-    Initialize: unsafe extern "system" fn(*mut c_void, *mut c_void, u32) -> HRESULT,
 }
 
 #[repr(C)]
@@ -127,7 +122,7 @@ pub(crate) fn create() -> *mut c_void {
             parent: Cell::new(null_mut()),
             rect: Cell::new((0, 0, 0, 0)),
             bytes: RefCell::new(None),
-            site: Cell::new(null_mut()),
+            site: RefCell::new(None),
             view: RefCell::new(None),
         },
     )
@@ -136,7 +131,6 @@ pub(crate) fn create() -> *mut c_void {
 impl Drop for Preview {
     fn drop(&mut self) {
         self.close();
-        set_site_object(&self.site, null_mut());
     }
 }
 
@@ -181,20 +175,6 @@ fn per_monitor_dpi<T>(f: impl FnOnce() -> T) -> T {
     // SAFETY: The previous context came from the call above.
     unsafe { SetThreadDpiAwarenessContext(previous) };
     result
-}
-
-// Replaces the retained site object.
-fn set_site_object(site: &Cell<*mut c_void>, object: *mut c_void) {
-    // SAFETY: Sites are live COM objects, the new one is retained before the old is released.
-    unsafe {
-        if !object.is_null() {
-            ((**object.cast::<*const IUnknownVtbl>()).AddRef)(object);
-        }
-        let previous = site.replace(object);
-        if !previous.is_null() {
-            ((**previous.cast::<*const IUnknownVtbl>()).Release)(previous);
-        }
-    }
 }
 
 const fn rect_of(rect: &RECT) -> (i32, i32, i32, i32) {
@@ -323,7 +303,7 @@ const unsafe extern "system" fn translate_accelerator(_: *mut c_void, _: *mut c_
     S_FALSE
 }
 
-unsafe extern "system" fn initialize(this: *mut c_void, stream: *mut c_void, _: u32) -> HRESULT {
+unsafe extern "system" fn initialize(this: *mut c_void, stream: *mut IStream, _: u32) -> HRESULT {
     guard(|| {
         // SAFETY: COM calls this with the second interface and a live stream.
         let (preview, bytes) =
@@ -339,7 +319,9 @@ unsafe extern "system" fn initialize(this: *mut c_void, stream: *mut c_void, _: 
 unsafe extern "system" fn set_site(this: *mut c_void, site: *mut c_void) -> HRESULT {
     // SAFETY: COM calls this with the third interface.
     let preview = unsafe { &Object::from_interface(this, 2).value };
-    set_site_object(&preview.site, site);
+    // SAFETY: COM passes a borrowed IUnknown pointer or null.
+    let site = unsafe { ComPtr::retain(site.cast()) };
+    drop(preview.site.replace(site));
     S_OK
 }
 
@@ -350,12 +332,11 @@ unsafe extern "system" fn get_site(
 ) -> HRESULT {
     // SAFETY: COM calls this with the third interface.
     let preview = unsafe { &Object::from_interface(this, 2).value };
-    let site = preview.site.get();
-    if site.is_null() {
+    let Some(site) = preview.site.borrow().clone() else {
         return E_FAIL;
-    }
+    };
     // SAFETY: The retained site is a live COM object.
-    unsafe { ((**site.cast::<*const IUnknownVtbl>()).QueryInterface)(site, iid, out) }
+    unsafe { ((*site.vtbl).QueryInterface)(site.as_ptr().cast(), iid, out) }
 }
 
 unsafe extern "system" fn get_window(this: *mut c_void, hwnd: *mut HWND) -> HRESULT {

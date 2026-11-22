@@ -28,12 +28,6 @@ impl Interfaces<2> for Thumbnail {
 type Object = ComObject<Thumbnail, 2>;
 
 #[repr(C)]
-struct IInitializeWithStreamVtbl {
-    base: IUnknownVtbl,
-    Initialize: unsafe extern "system" fn(*mut c_void, *mut c_void, u32) -> HRESULT,
-}
-
-#[repr(C)]
 struct IThumbnailProviderVtbl {
     base: IUnknownVtbl,
     GetThumbnail:
@@ -63,7 +57,7 @@ pub(crate) fn create() -> *mut c_void {
     )
 }
 
-unsafe extern "system" fn initialize(this: *mut c_void, stream: *mut c_void, _: u32) -> HRESULT {
+unsafe extern "system" fn initialize(this: *mut c_void, stream: *mut IStream, _: u32) -> HRESULT {
     guard(|| {
         // SAFETY: COM calls this with the first interface and a live stream.
         let (object, bytes) = unsafe { (Object::from_interface(this, 0), read_stream(stream)) };
