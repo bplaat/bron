@@ -171,6 +171,16 @@ unsafe extern "system" {
         matrix: *mut GpMatrix,
         pen: *mut GpPen,
     ) -> GpStatus;
+    pub(super) fn GdipAddPathString(
+        path: *mut GpPath,
+        text: *const u16,
+        length: i32,
+        family: *const GpFontFamily,
+        style: i32,
+        size: f32,
+        layout: *const RectF,
+        format: *const GpStringFormat,
+    ) -> GpStatus;
     pub(super) fn GdipStartPathFigure(path: *mut GpPath) -> GpStatus;
     pub(super) fn GdipClosePathFigure(path: *mut GpPath) -> GpStatus;
     pub(super) fn GdipAddPathLine(
@@ -336,6 +346,7 @@ unsafe extern "system" {
         font: *mut *mut GpFont,
     ) -> GpStatus;
     pub(super) fn GdipDeleteFont(font: *mut GpFont) -> GpStatus;
+    pub(super) fn GdipGetFamily(font: *mut GpFont, family: *mut *mut GpFontFamily) -> GpStatus;
 
     pub(super) fn GdipStringFormatGetGenericTypographic(
         format: *mut *mut GpStringFormat,

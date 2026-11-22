@@ -30,6 +30,7 @@ type FontKey = (Arc<str>, u32, FontWeight);
 /// A GDI+ font with its metrics in units of its size.
 struct Font {
     font: Gp<GpFont>,
+    style: i32,
     ascent: f32,
     line_height: f32,
 }
@@ -1074,11 +1075,47 @@ impl Context {
         );
     }
 
-    // GDI+ has no glyph bounds, so the ink is the advance and font box.
     pub(crate) fn measure_text(&mut self, s: &CanvasState, text: &str) -> TextExtents {
         let font = self.font(s);
         let length = self.encode(text);
-        Self::extents(&font, s.font_size, self.measure(&font, length))
+        let mut extents = Self::extents(&font, s.font_size, self.measure(&font, length));
+        if length > 0 {
+            extents.ink = self
+                .text_ink(&font, length, s.font_size, extents.ascent)
+                .unwrap_or_default();
+        }
+        extents
+    }
+
+    fn text_ink(&self, font: &Font, length: i32, size: f32, ascent: f32) -> Option<[f32; 4]> {
+        let text = self.resources.text.borrow();
+        let layout = RectF::default();
+        let mut bounds = RectF::default();
+        unsafe {
+            let family = Gp::create(|out| GdipGetFamily(font.font.get(), out))?;
+            let path = Gp::create(|out| GdipCreatePath(FillModeWinding, out))?;
+            // Measure the outline with the same font, origin and format as GdipDrawString.
+            if GdipAddPathString(
+                path.get(),
+                text.as_ptr(),
+                length,
+                family.get(),
+                font.style,
+                size,
+                &layout,
+                self.resources.format.get(),
+            ) != GP_OK
+                || GdipGetPathWorldBounds(path.get(), &mut bounds, null_mut(), null_mut()) != GP_OK
+            {
+                return None;
+            }
+        }
+        Some([
+            bounds.x,
+            bounds.y - ascent,
+            bounds.x + bounds.width,
+            bounds.y + bounds.height - ascent,
+        ])
     }
 
     fn extents(font: &Font, size: f32, width: f32) -> TextExtents {
@@ -1086,7 +1123,7 @@ impl Context {
         let descent = line_height - ascent;
         TextExtents {
             width,
-            ink: [0.0, -ascent, width, descent],
+            ink: [0.0; 4],
             ascent,
             descent,
         }
@@ -1289,6 +1326,7 @@ fn new_font(family: &str, size: f32, style: i32) -> Font {
                 let em = metric(GdipGetEmHeight).max(1.0);
                 return Font {
                     font,
+                    style,
                     ascent: metric(GdipGetCellAscent) / em,
                     line_height: metric(GdipGetLineSpacing) / em,
                 };

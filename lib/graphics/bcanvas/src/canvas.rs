@@ -1190,11 +1190,13 @@ mod tests {
         canvas.draw(|ctx| {
             ctx.set_text_align(super::TextAlign::Center);
             let spaces = ctx.measure_text("   ");
+            assert!(spaces.width > 0.0);
             assert_eq!(
                 spaces.actual_bounding_box_left,
                 -spaces.actual_bounding_box_right
             );
             assert_eq!(spaces.actual_bounding_box_ascent, 0.0);
+            assert_eq!(spaces.actual_bounding_box_descent, 0.0);
             assert_eq!(
                 ctx.measure_text("a\nb").width,
                 ctx.measure_text("a b").width
