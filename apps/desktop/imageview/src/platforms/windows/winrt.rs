@@ -5,16 +5,15 @@
  */
 
 //! Handwritten WinRT bindings for the Windows App SDK: reference counted interface pointers,
-//! strings, activation and the COM objects ImageView implements itself. Methods are called by
-//! their vtable slot as listed in the Windows App SDK metadata, after the six `IInspectable`
-//! slots.
+//! strings, activation and the COM objects ImageView implements itself. Partial vtables
+//! preserve the interface layouts defined by the Windows App SDK metadata.
 
 #![allow(non_snake_case, clippy::upper_case_acronyms)]
 
 use std::cell::{Cell, OnceCell};
 use std::ffi::c_void;
-use std::mem::{self, ManuallyDrop, offset_of};
-use std::ptr::{NonNull, null_mut};
+use std::mem::{forget, offset_of};
+use std::ptr::{NonNull, from_ref, null_mut};
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use super::headers::{w, wide};
@@ -223,85 +222,139 @@ pub(crate) const fn check(result: HRESULT) -> Result<()> {
     if result < 0 { Err(result) } else { Ok(()) }
 }
 
-/// Calls the method in vtable `slot` of an interface with the given arguments and types,
-/// which must be the parameters of that method.
-macro_rules! call {
-    ($object:expr, $slot:expr $(, $arg:expr => $ty:ty)* $(,)?) => {
-        $object.method::<unsafe extern "system" fn(
-            *mut std::ffi::c_void $(, $ty)*
-        ) -> $crate::platforms::windows::winrt::HRESULT>($slot)(
-            $object.as_raw() $(, $arg)*
-        )
+/// Declares a partial COM interface, with its inherited vtable first.
+macro_rules! interface {
+    ($(#[$attr:meta])* $interface:ident, $vtable:ident : $base:ty { $($name:ident: $ty:ty,)* }) => {
+        $(#[$attr])*
+        #[repr(C)]
+        pub(super) struct $interface {
+            pub(super) vtbl: *const $vtable,
+        }
+
+        $(#[$attr])*
+        #[allow(non_snake_case)]
+        #[repr(C)]
+        pub(super) struct $vtable {
+            base: $base,
+            $(pub(super) $name: $ty,)*
+        }
     };
+}
+pub(super) use interface;
+
+/// Calls a named entry on the specified COM interface.
+/// The caller must hold that interface on the current apartment and satisfy the method contract.
+macro_rules! call {
+    ($object:expr, $interface:ident::$method:ident $(, $arg:expr)* $(,)?) => {{
+        let this = $object.as_raw().cast::<$interface>();
+        ((*(*this).vtbl).$method)(this.cast() $(, $arg)*)
+    }};
 }
 pub(crate) use call;
 
 /// Calls a function that returns an interface through its out parameter.
 pub(crate) fn out(f: impl FnOnce(*mut *mut c_void) -> HRESULT) -> Result<ComPtr> {
-    let mut raw = null_mut();
-    let result = f(&mut raw);
-    // SAFETY: A non-null out parameter transfers an owned reference, including a partial result.
-    let object = unsafe { ComPtr::from_raw(raw) };
-    check(result)?;
-    object.ok_or(E_POINTER)
+    // SAFETY: The caller supplies a COM out parameter returning an IUnknown-compatible interface.
+    unsafe { ComPtr::create(f) }
 }
 
-/// An owned reference to a COM interface.
-pub(crate) struct ComPtr(NonNull<c_void>);
+/// Associates an interface's ABI type with its IID.
+///
+/// # Safety
+/// Implementors must represent the interface identified by IID with an IUnknown-compatible vtable.
+pub(super) unsafe trait ComInterface {
+    const IID: GUID;
+}
 
-impl ComPtr {
-    /// Takes over an owned reference.
-    pub(crate) unsafe fn from_raw(raw: *mut c_void) -> Option<Self> {
+/// One owned COM reference. IUnknown is the common type of heterogeneous XAML objects.
+#[repr(transparent)]
+pub(crate) struct ComPtr<T = IUnknown>(NonNull<T>);
+
+impl<T> ComPtr<T> {
+    /// The function must return an owned COM reference of type T.
+    pub(super) unsafe fn create(f: impl FnOnce(*mut *mut c_void) -> HRESULT) -> Result<Self> {
+        let mut raw = null_mut();
+        let result = f(&mut raw);
+        // SAFETY: A non-null out parameter transfers an owned reference, including a partial result.
+        let object = unsafe { Self::from_interface(raw.cast()) };
+        check(result)?;
+        object.ok_or(E_POINTER)
+    }
+
+    /// Takes ownership of one reference to a live COM interface of type T.
+    pub(super) unsafe fn from_interface(raw: *mut T) -> Option<Self> {
         NonNull::new(raw).map(Self)
     }
 
     pub(crate) const fn as_raw(&self) -> *mut c_void {
-        self.0.as_ptr()
+        self.0.as_ptr().cast()
     }
 
-    /// Returns the method in vtable `slot`.
-    ///
-    /// # Safety
-    /// `F` must be the function pointer type of the method in that slot.
-    pub(crate) unsafe fn method<F: Copy>(&self, slot: usize) -> F {
-        debug_assert_eq!(size_of::<F>(), size_of::<usize>());
-        // SAFETY: Every COM interface starts with a pointer to its vtable.
-        unsafe {
-            let vtable = *self.0.as_ptr().cast::<*const usize>();
-            mem::transmute_copy(&*vtable.add(slot))
-        }
+    fn unknown(&self) -> &IUnknownVtbl {
+        // SAFETY: Every live interface starts with an IUnknown-compatible vtable.
+        unsafe { &*(*self.as_raw().cast::<IUnknown>()).vtbl }
     }
 
-    pub(crate) fn cast(&self, iid: &GUID) -> Result<Self> {
-        // SAFETY: Slot 0 is IUnknown::QueryInterface.
-        out(|raw| unsafe { call!(self, 0, iid => *const GUID, raw => *mut *mut c_void) })
+    /// Transfers this owned reference to the COM caller.
+    #[cfg(test)]
+    const fn into_raw(self) -> *mut c_void {
+        let raw = self.as_raw();
+        forget(self);
+        raw
     }
 
-    /// Calls a property getter that returns an interface.
-    pub(crate) unsafe fn get(&self, slot: usize) -> Result<Self> {
-        // SAFETY: The caller passes the slot of a getter returning an interface.
-        out(|raw| unsafe { call!(self, slot, raw => *mut *mut c_void) })
+    pub(crate) fn cast(&self, iid: &GUID) -> Result<ComPtr> {
+        let raw = self.query_raw(iid)?;
+        // SAFETY: Every queried interface can be held through its IUnknown prefix.
+        Ok(ComPtr(raw.cast()))
     }
 
-    /// Calls a property setter that takes an interface or a string.
-    pub(crate) unsafe fn put(&self, slot: usize, value: *mut c_void) -> Result<()> {
-        // SAFETY: The caller passes the slot of a setter taking a pointer.
-        check(unsafe { call!(self, slot, value => *mut c_void) })
+    pub(super) fn query<U: ComInterface>(&self) -> Result<ComPtr<U>> {
+        let raw = self.query_raw(&U::IID)?;
+        // U associates the requested IID with its ABI type.
+        Ok(ComPtr(raw.cast()))
+    }
+
+    fn query_raw(&self, iid: &GUID) -> Result<NonNull<c_void>> {
+        let mut raw = null_mut();
+        // SAFETY: The source interface is live and raw is writable.
+        check(unsafe { (self.unknown().QueryInterface)(self.as_raw(), iid, &mut raw) })?;
+        NonNull::new(raw).ok_or(E_POINTER)
     }
 }
 
-impl Clone for ComPtr {
+impl ComPtr {
+    /// Takes ownership of one reference through the common IUnknown prefix.
+    pub(crate) unsafe fn from_raw(raw: *mut c_void) -> Option<Self> {
+        // SAFETY: The caller transfers a reference with an IUnknown prefix.
+        unsafe { Self::from_interface(raw.cast()) }
+    }
+
+    /// Borrows an interface through its IUnknown prefix without changing its reference count.
+    ///
+    /// # Safety
+    /// A non-null pointer must remain a live COM interface on this apartment for the borrow.
+    pub(super) const unsafe fn from_raw_borrowed(raw: &*mut c_void) -> Option<&Self> {
+        if raw.is_null() {
+            return None;
+        }
+        // SAFETY: ComPtr is transparent over a non-null pointer, and the caller keeps it live.
+        Some(unsafe { &*from_ref(raw).cast::<Self>() })
+    }
+}
+
+impl<T> Clone for ComPtr<T> {
     fn clone(&self) -> Self {
-        // SAFETY: Slot 1 is IUnknown::AddRef.
-        unsafe { self.method::<unsafe extern "system" fn(*mut c_void) -> u32>(1)(self.as_raw()) };
+        // SAFETY: This reference keeps the object alive during AddRef.
+        unsafe { (self.unknown().AddRef)(self.as_raw()) };
         Self(self.0)
     }
 }
 
-impl Drop for ComPtr {
+impl<T> Drop for ComPtr<T> {
     fn drop(&mut self) {
-        // SAFETY: Slot 2 is IUnknown::Release and this reference is owned.
-        unsafe { self.method::<unsafe extern "system" fn(*mut c_void) -> u32>(2)(self.as_raw()) };
+        // SAFETY: This pointer owns the reference it releases.
+        unsafe { (self.unknown().Release)(self.as_raw()) };
     }
 }
 
@@ -329,6 +382,13 @@ impl HString {
 
     pub(crate) const fn as_raw(&self) -> HSTRING {
         self.0
+    }
+
+    /// Transfers the owned HSTRING to the COM caller.
+    const fn into_raw(self) -> HSTRING {
+        let raw = self.as_raw();
+        forget(self);
+        raw
     }
 
     pub(crate) fn to_string_lossy(&self) -> String {
@@ -369,9 +429,16 @@ pub(crate) fn activate(class: &[u16]) -> Result<ComPtr> {
 pub(crate) fn compose(class: &[u16], factory_iid: &GUID) -> Result<ComPtr> {
     let factory = factory(class, factory_iid)?;
     let mut inner = null_mut();
-    // SAFETY: Slot 6 of a composable factory is CreateInstance(outer, inner, value).
+    // SAFETY: The IID selects the composable factory, and both outputs are writable.
+    // A null outer requests an instance without aggregation.
     let value = out(|raw| unsafe {
-        call!(factory, 6, null_mut() => *mut c_void, &mut inner => *mut *mut c_void, raw => *mut *mut c_void)
+        call!(
+            factory,
+            IComposableFactory::CreateInstance,
+            null_mut(),
+            &mut inner,
+            raw
+        )
     });
     // SAFETY: Without an outer object there is no inner reference to keep.
     drop(unsafe { ComPtr::from_raw(inner) });
@@ -386,6 +453,26 @@ type RefCountFn = unsafe extern "system" fn(*mut c_void) -> u32;
 type GetIidsFn = unsafe extern "system" fn(*mut c_void, *mut u32, *mut *mut GUID) -> HRESULT;
 type GetRuntimeClassNameFn = unsafe extern "system" fn(*mut c_void, *mut HSTRING) -> HRESULT;
 type GetTrustLevelFn = unsafe extern "system" fn(*mut c_void, *mut i32) -> HRESULT;
+
+#[repr(C)]
+pub(crate) struct IUnknown {
+    vtbl: *const IUnknownVtbl,
+}
+
+#[repr(C)]
+pub(super) struct IUnknownVtbl {
+    pub(super) QueryInterface: QueryInterfaceFn,
+    pub(super) AddRef: RefCountFn,
+    pub(super) Release: RefCountFn,
+}
+
+#[repr(C)]
+pub(super) struct IInspectableVtbl {
+    base: IUnknownVtbl,
+    GetIids: GetIidsFn,
+    GetRuntimeClassName: GetRuntimeClassNameFn,
+    GetTrustLevel: GetTrustLevelFn,
+}
 
 // Returns `this` for the given interfaces, which every object here also is agile for.
 unsafe fn query_interface(
@@ -438,9 +525,7 @@ unsafe extern "system" fn base_trust(_: *mut c_void, level: *mut i32) -> HRESULT
 
 #[repr(C)]
 struct EventHandlerVtbl {
-    QueryInterface: QueryInterfaceFn,
-    AddRef: RefCountFn,
-    Release: RefCountFn,
+    base: IUnknownVtbl,
     Invoke: unsafe extern "system" fn(*mut c_void, *mut c_void, *mut c_void) -> HRESULT,
 }
 
@@ -449,16 +534,18 @@ type EventCallback = dyn Fn(&ComPtr, Option<&ComPtr>);
 
 #[repr(C)]
 struct EventHandler {
-    vtable: &'static EventHandlerVtbl,
+    vtbl: &'static EventHandlerVtbl,
     refs: AtomicU32,
     iid: GUID,
     callback: Box<EventCallback>,
 }
 
 static EVENT_HANDLER_VTBL: EventHandlerVtbl = EventHandlerVtbl {
-    QueryInterface: event_handler_query_interface,
-    AddRef: event_handler_add_ref,
-    Release: event_handler_release,
+    base: IUnknownVtbl {
+        QueryInterface: event_handler_query_interface,
+        AddRef: event_handler_add_ref,
+        Release: event_handler_release,
+    },
     Invoke: event_handler_invoke,
 };
 
@@ -470,7 +557,7 @@ pub(crate) fn event_handler(
     callback: impl Fn(&ComPtr, Option<&ComPtr>) + 'static,
 ) -> ComPtr {
     let handler = Box::new(EventHandler {
-        vtable: &EVENT_HANDLER_VTBL,
+        vtbl: &EVENT_HANDLER_VTBL,
         refs: AtomicU32::new(1),
         iid,
         callback: Box::new(callback),
@@ -525,10 +612,9 @@ unsafe extern "system" fn event_handler_invoke(
 ) -> HRESULT {
     // SAFETY: `this` is a live handler, the sender and arguments are borrowed for the call.
     unsafe {
-        if let Some(sender) = ComPtr::from_raw(sender) {
-            let sender = ManuallyDrop::new(sender);
-            let args = ComPtr::from_raw(args).map(ManuallyDrop::new);
-            ((*this.cast::<EventHandler>()).callback)(&sender, args.as_deref());
+        if let Some(sender) = ComPtr::from_raw_borrowed(&sender) {
+            let args = ComPtr::from_raw_borrowed(&args);
+            ((*this.cast::<EventHandler>()).callback)(sender, args);
         }
     }
     S_OK
@@ -538,36 +624,35 @@ unsafe extern "system" fn event_handler_invoke(
 
 #[repr(C)]
 struct ColorReferenceVtbl {
-    QueryInterface: QueryInterfaceFn,
-    AddRef: RefCountFn,
-    Release: RefCountFn,
-    GetIids: GetIidsFn,
-    GetRuntimeClassName: GetRuntimeClassNameFn,
-    GetTrustLevel: GetTrustLevelFn,
+    base: IInspectableVtbl,
     get_Value: unsafe extern "system" fn(*mut c_void, *mut Color) -> HRESULT,
 }
 
 #[repr(C)]
 struct ColorReference {
-    vtable: &'static ColorReferenceVtbl,
+    vtbl: &'static ColorReferenceVtbl,
     refs: AtomicU32,
     color: Color,
 }
 
 static COLOR_REFERENCE_VTBL: ColorReferenceVtbl = ColorReferenceVtbl {
-    QueryInterface: color_reference_query_interface,
-    AddRef: color_reference_add_ref,
-    Release: color_reference_release,
-    GetIids: no_iids,
-    GetRuntimeClassName: no_class_name,
-    GetTrustLevel: base_trust,
+    base: IInspectableVtbl {
+        base: IUnknownVtbl {
+            QueryInterface: color_reference_query_interface,
+            AddRef: color_reference_add_ref,
+            Release: color_reference_release,
+        },
+        GetIids: no_iids,
+        GetRuntimeClassName: no_class_name,
+        GetTrustLevel: base_trust,
+    },
     get_Value: color_reference_value,
 };
 
 /// Boxes a color as an `IReference<Windows.UI.Color>`.
 pub(crate) fn color_reference(color: Color) -> ComPtr {
     let reference = Box::new(ColorReference {
-        vtable: &COLOR_REFERENCE_VTBL,
+        vtbl: &COLOR_REFERENCE_VTBL,
         refs: AtomicU32::new(1),
         color,
     });
@@ -624,23 +709,18 @@ unsafe extern "system" fn color_reference_value(this: *mut c_void, value: *mut C
 
 #[repr(C)]
 struct ApplicationOverridesVtbl {
-    QueryInterface: QueryInterfaceFn,
-    AddRef: RefCountFn,
-    Release: RefCountFn,
-    GetIids: GetIidsFn,
-    GetRuntimeClassName: GetRuntimeClassNameFn,
-    GetTrustLevel: GetTrustLevelFn,
+    base: IInspectableVtbl,
     OnLaunched: unsafe extern "system" fn(*mut c_void, *mut c_void) -> HRESULT,
 }
 
 #[repr(C)]
+struct IXamlMetadataProvider {
+    vtbl: *const XamlMetadataProviderVtbl,
+}
+
+#[repr(C)]
 struct XamlMetadataProviderVtbl {
-    QueryInterface: QueryInterfaceFn,
-    AddRef: RefCountFn,
-    Release: RefCountFn,
-    GetIids: GetIidsFn,
-    GetRuntimeClassName: GetRuntimeClassNameFn,
-    GetTrustLevel: GetTrustLevelFn,
+    base: IInspectableVtbl,
     GetXamlType: unsafe extern "system" fn(*mut c_void, TypeName, *mut *mut c_void) -> HRESULT,
     GetXamlTypeByFullName:
         unsafe extern "system" fn(*mut c_void, HSTRING, *mut *mut c_void) -> HRESULT,
@@ -661,22 +741,30 @@ struct XamlApplication {
 }
 
 static APPLICATION_OVERRIDES_VTBL: ApplicationOverridesVtbl = ApplicationOverridesVtbl {
-    QueryInterface: application_query_interface,
-    AddRef: application_add_ref,
-    Release: application_release,
-    GetIids: application_get_iids,
-    GetRuntimeClassName: application_get_runtime_class_name,
-    GetTrustLevel: base_trust,
+    base: IInspectableVtbl {
+        base: IUnknownVtbl {
+            QueryInterface: application_query_interface,
+            AddRef: application_add_ref,
+            Release: application_release,
+        },
+        GetIids: application_get_iids,
+        GetRuntimeClassName: application_get_runtime_class_name,
+        GetTrustLevel: base_trust,
+    },
     OnLaunched: application_on_launched,
 };
 
 static XAML_METADATA_PROVIDER_VTBL: XamlMetadataProviderVtbl = XamlMetadataProviderVtbl {
-    QueryInterface: provider_query_interface,
-    AddRef: provider_add_ref,
-    Release: provider_release,
-    GetIids: application_get_iids,
-    GetRuntimeClassName: application_get_runtime_class_name,
-    GetTrustLevel: base_trust,
+    base: IInspectableVtbl {
+        base: IUnknownVtbl {
+            QueryInterface: provider_query_interface,
+            AddRef: provider_add_ref,
+            Release: provider_release,
+        },
+        GetIids: application_get_iids,
+        GetRuntimeClassName: application_get_runtime_class_name,
+        GetTrustLevel: base_trust,
+    },
     GetXamlType: provider_get_xaml_type,
     GetXamlTypeByFullName: provider_get_xaml_type_by_full_name,
     GetXmlnsDefinitions: provider_get_xmlns_definitions,
@@ -689,10 +777,16 @@ pub(crate) fn create_application() -> Result<ComPtr> {
         &IID_IAPPLICATION_FACTORY,
     )?;
     compose_application(|outer, inner, value| {
-        // SAFETY: Slot 6 is CreateInstance(outer, inner, value). The caller retains outer
-        // throughout composition and owns both returned interfaces.
+        // SAFETY: The caller retains the outer object through composition and supplies
+        // writable pointers for both owned outputs.
         unsafe {
-            call!(factory, 6, outer => *mut c_void, inner => *mut *mut c_void, value => *mut *mut c_void)
+            call!(
+                factory,
+                IComposableFactory::CreateInstance,
+                outer,
+                inner,
+                value
+            )
         }
     })
 }
@@ -742,11 +836,9 @@ unsafe extern "system" fn application_query_interface(
             return S_OK;
         }
         // Everything else is the Application itself.
-        match ComPtr::from_raw(application.inner.get()) {
-            Some(inner) => {
-                let inner = ManuallyDrop::new(inner);
-                call!(inner, 0, iid => *const GUID, object => *mut *mut c_void)
-            }
+        let inner = application.inner.get();
+        match ComPtr::from_raw_borrowed(&inner) {
+            Some(inner) => call!(inner, IUnknown::QueryInterface, iid, object),
             None => {
                 *object = null_mut();
                 E_NOINTERFACE
@@ -793,9 +885,7 @@ unsafe extern "system" fn application_get_runtime_class_name(
     name: *mut HSTRING,
 ) -> HRESULT {
     // SAFETY: COM passes a valid out pointer, the caller owns the new string.
-    unsafe {
-        *name = ManuallyDrop::new(HString::from_wide(w!("Microsoft.UI.Xaml.Application"))).as_raw()
-    };
+    unsafe { *name = HString::from_wide(w!("Microsoft.UI.Xaml.Application")).into_raw() };
     S_OK
 }
 
@@ -847,11 +937,16 @@ unsafe extern "system" fn provider_get_xaml_type(
     type_name: TypeName,
     result: *mut *mut c_void,
 ) -> HRESULT {
-    // SAFETY: Forwarded to the same slot of the controls provider.
+    // SAFETY: COM supplies a writable output, and the provider owns IXamlMetadataProvider.
     unsafe {
         *result = null_mut();
         match controls_provider(this) {
-            Some(provider) => call!(provider, 6, type_name => TypeName, result => *mut *mut c_void),
+            Some(provider) => call!(
+                provider,
+                IXamlMetadataProvider::GetXamlType,
+                type_name,
+                result
+            ),
             None => S_OK,
         }
     }
@@ -862,11 +957,16 @@ unsafe extern "system" fn provider_get_xaml_type_by_full_name(
     full_name: HSTRING,
     result: *mut *mut c_void,
 ) -> HRESULT {
-    // SAFETY: Forwarded to the same slot of the controls provider.
+    // SAFETY: COM supplies a live name and a writable output. The provider owns IXamlMetadataProvider.
     unsafe {
         *result = null_mut();
         match controls_provider(this) {
-            Some(provider) => call!(provider, 7, full_name => HSTRING, result => *mut *mut c_void),
+            Some(provider) => call!(
+                provider,
+                IXamlMetadataProvider::GetXamlTypeByFullName,
+                full_name,
+                result
+            ),
             None => S_OK,
         }
     }
@@ -877,13 +977,18 @@ unsafe extern "system" fn provider_get_xmlns_definitions(
     count: *mut u32,
     definitions: *mut *mut c_void,
 ) -> HRESULT {
-    // SAFETY: Forwarded to the same slot of the controls provider.
+    // SAFETY: COM supplies writable count and array outputs, and the provider owns IXamlMetadataProvider.
     unsafe {
         *count = 0;
         *definitions = null_mut();
         match controls_provider(this) {
             Some(provider) => {
-                call!(provider, 8, count => *mut u32, definitions => *mut *mut c_void)
+                call!(
+                    provider,
+                    IXamlMetadataProvider::GetXmlnsDefinitions,
+                    count,
+                    definitions
+                )
             }
             None => S_OK,
         }
@@ -897,6 +1002,29 @@ mod tests {
     use super::*;
 
     #[test]
+    fn callback_borrows_arguments_without_changing_refcounts() {
+        let sender = event_handler(IID_ROUTED_EVENT_HANDLER, |_, _| {});
+        let args = event_handler(IID_ROUTED_EVENT_HANDLER, |_, _| {});
+        let invoked = Rc::new(Cell::new(false));
+        let handler = event_handler(IID_ROUTED_EVENT_HANDLER, {
+            let invoked = invoked.clone();
+            move |sender, args| {
+                for object in [sender, args.expect("event args")] {
+                    // SAFETY: Both pointers were supplied by live EventHandler test objects.
+                    let object = unsafe { &*object.as_raw().cast::<EventHandler>() };
+                    assert_eq!(object.refs.load(Ordering::Relaxed), 1);
+                }
+                invoked.set(true);
+            }
+        });
+        // SAFETY: All three event objects are live for the duration of this call.
+        let result =
+            unsafe { event_handler_invoke(handler.as_raw(), sender.as_raw(), args.as_raw()) };
+        assert_eq!(result, S_OK);
+        assert!(invoked.get());
+    }
+
+    #[test]
     fn failed_interface_call_releases_a_partial_result() {
         let marker = Rc::new(());
         let weak = Rc::downgrade(&marker);
@@ -905,7 +1033,7 @@ mod tests {
                 let _ = &marker;
             });
             // SAFETY: The caller supplies a writable output for this owned interface.
-            unsafe { *value = ManuallyDrop::new(object).as_raw() };
+            unsafe { *value = object.into_raw() };
             E_NOINTERFACE
         });
         assert!(result.is_err());
@@ -930,7 +1058,7 @@ mod tests {
                 });
                 // SAFETY: Composition supplies writable outputs and borrows the live outer.
                 unsafe {
-                    *inner = ManuallyDrop::new(inner_object).as_raw();
+                    *inner = inner_object.into_raw();
                     let application = &*outer.cast::<XamlApplication>();
                     assert!(application.controls.set(Some(controls)).is_ok());
                     application_add_ref(outer);
@@ -954,5 +1082,11 @@ mod tests {
             }
             assert!(weak.upgrade().is_none(), "composition retained its state");
         }
+    }
+}
+
+interface! {
+    IComposableFactory, IComposableFactoryVtbl: IInspectableVtbl {
+        CreateInstance: unsafe extern "system" fn(*mut IComposableFactory, *mut c_void, *mut *mut c_void, *mut *mut c_void) -> HRESULT,
     }
 }

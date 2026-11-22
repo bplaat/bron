@@ -7,8 +7,8 @@
 //! The media on the GPU: a sprite visual inside the media element, which the scroll viewer zooms
 //! and pans on the compositor. Its brush shows a composition surface of premultiplied BGRA
 //! pixels, uploaded once with Direct3D, sampled nearest neighbor for enlarged raster pixels and
-//! linearly otherwise. Interop slots are listed in `Microsoft.UI.Composition.Interop.h` after the
-//! three `IUnknown` slots, D3D11 slots in `d3d11.h`.
+//! linearly otherwise. The interop layouts follow `Microsoft.UI.Composition.Interop.h`
+//! and `d3d11.h`.
 
 #![allow(non_snake_case, clippy::upper_case_acronyms)]
 
@@ -24,7 +24,10 @@ const IID_IELEMENT_COMPOSITION_PREVIEW_STATICS: GUID =
 const IID_ICOMPOSITION_OBJECT: GUID = GUID::from_u128(0x0e583d49_fb5e_5481_a426_d3c41e059a5a);
 const IID_ICOMPOSITION_BRUSH: GUID = GUID::from_u128(0x483924e7_99a5_5377_968b_dec6d40bbccd);
 const IID_ICOMPOSITION_SURFACE: GUID = GUID::from_u128(0x9ec612c3_a5d2_4f97_9df3_6b49ce736215);
-const IID_IVISUAL: GUID = GUID::from_u128(0xc0eeab6c_c897_5ac6_a1c9_63abd5055b9b);
+// SAFETY: This is the SDK IID for IVisual.
+unsafe impl ComInterface for IVisual {
+    const IID: GUID = GUID::from_u128(0xc0eeab6c_c897_5ac6_a1c9_63abd5055b9b);
+}
 const IID_ICOMPOSITOR_INTEROP: GUID = GUID::from_u128(0xfab19398_6d19_4d8a_b752_8f096c396069);
 const IID_ICOMPOSITION_DRAWING_SURFACE_INTEROP: GUID =
     GUID::from_u128(0x2d6355c2_ad57_4eae_92e4_4c3eff65d578);
@@ -44,7 +47,7 @@ const INTERPOLATION_LINEAR: i32 = 1;
 
 /// `Windows.Foundation.Numerics.Vector2` and `Windows.Foundation.Size`
 #[repr(C)]
-struct Vector2 {
+pub(super) struct Vector2 {
     x: f32,
     y: f32,
 }
@@ -52,14 +55,14 @@ struct Vector2 {
 /// `POINT`
 #[repr(C)]
 #[derive(Default)]
-struct POINT {
+pub(super) struct POINT {
     x: i32,
     y: i32,
 }
 
 /// `D3D11_BOX`
 #[repr(C)]
-struct TextureBox {
+pub(super) struct TextureBox {
     left: u32,
     top: u32,
     front: u32,
@@ -92,10 +95,10 @@ pub(crate) struct Surface {
 
 /// The visual that shows a surface stretched over the media element.
 pub(crate) struct MediaVisual {
-    graphics: ComPtr,
-    context: ComPtr,
-    visual: ComPtr,
-    brush: ComPtr,
+    graphics: ComPtr<ICompositionGraphicsDevice>,
+    context: ComPtr<ID3D11DeviceContext>,
+    visual: ComPtr<IVisual>,
+    brush: ComPtr<ICompositionSurfaceBrush>,
     // Whether the brush samples nearest neighbor, once set.
     pixelated: Cell<Option<bool>>,
 }
@@ -109,36 +112,48 @@ impl MediaVisual {
             &IID_IELEMENT_COMPOSITION_PREVIEW_STATICS,
         )?;
         let context = d3d11_context()?;
-        // SAFETY: Slot 6 of IElementCompositionPreviewStatics is GetElementVisual and slot 8
-        // SetElementChildVisual, slot 6 of ICompositionObject is get_Compositor, slot 3 of
-        // ICompositorInterop is CreateGraphicsDevice and slot 3 of ID3D11DeviceChild is
-        // GetDevice, slots 22 and 23 of ICompositor are CreateSpriteVisual and CreateSurfaceBrush
-        // and slot 7 of ISpriteVisual is put_Brush.
+        // SAFETY: The element and compositor are used on their XAML thread. Each
+        // requested interface uses its IID or the documented return type, and the
+        // owned pointers keep the device, visual, and brush alive through the calls.
         unsafe {
-            let compositor = out(
-                |raw| call!(statics, 6, element.as_raw() => *mut c_void, raw => *mut *mut c_void),
-            )?
-            .cast(&IID_ICOMPOSITION_OBJECT)?
-            .get(6)?;
+            let composition_object = out(|raw| {
+                call!(
+                    statics,
+                    IElementCompositionPreviewStatics::GetElementVisual,
+                    element.as_raw(),
+                    raw
+                )
+            })?
+            .cast(&IID_ICOMPOSITION_OBJECT)?;
+            let compositor =
+                out(|raw| call!(composition_object, ICompositionObject::GetCompositor, raw))?;
             let mut device = null_mut();
-            context.method::<unsafe extern "system" fn(*mut c_void, *mut *mut c_void)>(3)(
-                context.as_raw(),
-                &mut device,
-            );
+            call!(context, ID3D11DeviceChild::GetDevice, &mut device);
             let device = ComPtr::from_raw(device).ok_or(E_POINTER)?;
             let interop = compositor.cast(&IID_ICOMPOSITOR_INTEROP)?;
-            let graphics = out(
-                |raw| call!(interop, 3, device.as_raw() => *mut c_void, raw => *mut *mut c_void),
-            )?;
-            let sprite = compositor.get(22)?;
-            let brush = compositor.get(23)?;
-            sprite.put(7, brush.cast(&IID_ICOMPOSITION_BRUSH)?.as_raw())?;
-            let visual = sprite.cast(&IID_IVISUAL)?;
+            let graphics = ComPtr::create(|raw| {
+                call!(
+                    interop,
+                    ICompositorInterop::CreateGraphicsDevice,
+                    device.as_raw(),
+                    raw
+                )
+            })?;
+            let sprite = out(|raw| call!(compositor, ICompositor::CreateSpriteVisual, raw))?;
+            let brush = ComPtr::<ICompositionSurfaceBrush>::create(|raw| {
+                call!(compositor, ICompositor::CreateSurfaceBrush, raw)
+            })?;
+            check(call!(
+                sprite,
+                ISpriteVisual::SetBrush,
+                brush.cast(&IID_ICOMPOSITION_BRUSH)?.as_raw()
+            ))?;
+            let visual = sprite.query::<IVisual>()?;
             check(call!(
                 statics,
-                8,
-                element.as_raw() => *mut c_void,
-                visual.as_raw() => *mut c_void,
+                IElementCompositionPreviewStatics::SetElementChildVisual,
+                element.as_raw(),
+                visual.as_raw()
             ))?;
             Ok(Self {
                 graphics,
@@ -156,15 +171,15 @@ impl MediaVisual {
             x: width as f32,
             y: height as f32,
         };
-        // SAFETY: Slot 6 of ICompositionGraphicsDevice is CreateDrawingSurface.
+        // SAFETY: The graphics device retains ICompositionGraphicsDevice and out supplies writable storage.
         let surface = out(|raw| unsafe {
             call!(
                 self.graphics,
-                6,
-                size => Vector2,
-                PIXEL_FORMAT_BGRA => i32,
-                ALPHA_MODE_PREMULTIPLIED => i32,
-                raw => *mut *mut c_void,
+                ICompositionGraphicsDevice::CreateDrawingSurface,
+                size,
+                PIXEL_FORMAT_BGRA,
+                ALPHA_MODE_PREMULTIPLIED,
+                raw
             )
         })?;
         Ok(Surface {
@@ -185,18 +200,18 @@ impl MediaVisual {
             .surface
             .cast(&IID_ICOMPOSITION_DRAWING_SURFACE_INTEROP)?;
         let mut offset = POINT::default();
-        // SAFETY: Slot 3 of ICompositionDrawingSurfaceInterop is BeginDraw, which gives the
-        // texture the surface is a part of at an offset, slot 4 is EndDraw. Slot 48 of
-        // ID3D11DeviceContext is UpdateSubresource.
+        // SAFETY: The queried interop returns an owned texture and the offset of the
+        // drawing region. The byte count was checked for that region, and EndDraw
+        // completes the update before the surface is used again.
         unsafe {
             let texture = out(|raw| {
                 call!(
                     interop,
-                    3,
-                    null::<c_void>() => *const c_void,
-                    &IID_ID3D11_TEXTURE_2D => *const GUID,
-                    raw => *mut *mut c_void,
-                    &mut offset => *mut POINT,
+                    ICompositionDrawingSurfaceInterop::BeginDraw,
+                    null::<c_void>(),
+                    &IID_ID3D11_TEXTURE_2D,
+                    raw,
+                    &mut offset
                 )
             })?;
             let (x, y) = (offset.x as u32, offset.y as u32);
@@ -208,16 +223,9 @@ impl MediaVisual {
                 bottom: y + height,
                 back: 1,
             };
-            self.context.method::<unsafe extern "system" fn(
-                *mut c_void,
-                *mut c_void,
-                u32,
-                *const TextureBox,
-                *const c_void,
-                u32,
-                u32,
-            )>(48)(
-                self.context.as_raw(),
+            call!(
+                self.context,
+                ID3D11DeviceContext::UpdateSubresource,
                 texture.as_raw(),
                 0,
                 &area,
@@ -226,7 +234,7 @@ impl MediaVisual {
                 0,
             );
             drop(texture);
-            check(call!(interop, 4))
+            check(call!(interop, ICompositionDrawingSurfaceInterop::EndDraw))
         }
     }
 
@@ -236,11 +244,15 @@ impl MediaVisual {
             x: width as f32,
             y: height as f32,
         };
-        // SAFETY: Slot 13 of ICompositionSurfaceBrush is put_Surface, slot 36 of IVisual is
-        // put_Size.
+        // SAFETY: The visual, brush, and brush surface retain their matching interfaces
+        // through the calls on this XAML thread.
         unsafe {
-            _ = self.brush.put(13, surface.surface.as_raw());
-            call!(self.visual, 36, size => Vector2);
+            _ = check(call!(
+                self.brush,
+                ICompositionSurfaceBrush::SetSurface,
+                surface.surface.as_raw()
+            ));
+            call!(self.visual, IVisual::SetSize, size);
         }
     }
 
@@ -254,8 +266,14 @@ impl MediaVisual {
         } else {
             INTERPOLATION_LINEAR
         };
-        // SAFETY: Slot 7 of ICompositionSurfaceBrush is put_BitmapInterpolationMode.
-        unsafe { call!(self.brush, 7, mode => i32) };
+        // SAFETY: The brush owns ICompositionSurfaceBrush and mode is a valid interpolation enum.
+        unsafe {
+            call!(
+                self.brush,
+                ICompositionSurfaceBrush::SetBitmapInterpolationMode,
+                mode
+            )
+        };
     }
 
     #[cfg(all(test, feature = "edit"))]
@@ -266,33 +284,41 @@ impl MediaVisual {
 
 // The immediate context of a new Direct3D device for composition, on the GPU or else in
 // software.
-fn d3d11_context() -> Result<ComPtr> {
+fn d3d11_context() -> Result<ComPtr<ID3D11DeviceContext>> {
     let mut result = E_POINTER;
     for driver in [D3D_DRIVER_TYPE_HARDWARE, D3D_DRIVER_TYPE_WARP] {
         // SAFETY: The device is released again, the context keeps it alive.
-        let context = out(|raw| unsafe {
-            let mut device = null_mut();
-            let result = D3D11CreateDevice(
-                null_mut(),
-                driver,
-                null_mut(),
-                D3D11_CREATE_DEVICE_BGRA_SUPPORT,
-                null(),
-                0,
-                D3D11_SDK_VERSION,
-                &mut device,
-                null_mut(),
-                raw,
-            );
-            drop(ComPtr::from_raw(device));
-            result
-        });
+        let context = unsafe {
+            ComPtr::create(|raw| {
+                let mut device = null_mut();
+                let result = D3D11CreateDevice(
+                    null_mut(),
+                    driver,
+                    null_mut(),
+                    D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+                    null(),
+                    0,
+                    D3D11_SDK_VERSION,
+                    &mut device,
+                    null_mut(),
+                    raw,
+                );
+                drop(ComPtr::from_raw(device));
+                result
+            })
+        };
         match context {
             Ok(context) => {
                 // The compositor can use the device from its own thread too.
                 if let Ok(multithread) = context.cast(&IID_ID3D11_MULTITHREAD) {
-                    // SAFETY: Slot 5 of ID3D11Multithread is SetMultithreadProtected.
-                    unsafe { call!(multithread, 5, 1i32 => i32) };
+                    // SAFETY: The context was queried for ID3D11Multithread.
+                    unsafe {
+                        call!(
+                            multithread,
+                            ID3D11Multithread::SetMultithreadProtected,
+                            1i32
+                        )
+                    };
                 }
                 return Ok(context);
             }
@@ -300,4 +326,89 @@ fn d3d11_context() -> Result<ComPtr> {
         }
     }
     Err(result)
+}
+
+interface! {
+    ICompositionDrawingSurfaceInterop, ICompositionDrawingSurfaceInteropVtbl: IUnknownVtbl {
+        BeginDraw: unsafe extern "system" fn(*mut ICompositionDrawingSurfaceInterop, *const c_void, *const GUID, *mut *mut c_void, *mut POINT) -> HRESULT,
+        EndDraw: unsafe extern "system" fn(*mut ICompositionDrawingSurfaceInterop) -> HRESULT,
+    }
+}
+
+interface! {
+    ICompositionGraphicsDevice, ICompositionGraphicsDeviceVtbl: IInspectableVtbl {
+        CreateDrawingSurface: unsafe extern "system" fn(*mut ICompositionGraphicsDevice, Vector2, i32, i32, *mut *mut c_void) -> HRESULT,
+    }
+}
+
+interface! {
+    ICompositionObject, ICompositionObjectVtbl: IInspectableVtbl {
+        GetCompositor: unsafe extern "system" fn(*mut ICompositionObject, *mut *mut c_void) -> HRESULT,
+    }
+}
+
+interface! {
+    ICompositionSurfaceBrush, ICompositionSurfaceBrushVtbl: IInspectableVtbl {
+        _unused_6: [*const c_void; 1],
+        SetBitmapInterpolationMode: unsafe extern "system" fn(*mut ICompositionSurfaceBrush, i32) -> HRESULT,
+        _unused_8_12: [*const c_void; 5],
+        SetSurface: unsafe extern "system" fn(*mut ICompositionSurfaceBrush, *mut c_void) -> HRESULT,
+    }
+}
+
+interface! {
+    ICompositor, ICompositorVtbl: IInspectableVtbl {
+        _unused_6_21: [*const c_void; 16],
+        CreateSpriteVisual: unsafe extern "system" fn(*mut ICompositor, *mut *mut c_void) -> HRESULT,
+        CreateSurfaceBrush: unsafe extern "system" fn(*mut ICompositor, *mut *mut c_void) -> HRESULT,
+    }
+}
+
+interface! {
+    ICompositorInterop, ICompositorInteropVtbl: IUnknownVtbl {
+        CreateGraphicsDevice: unsafe extern "system" fn(*mut ICompositorInterop, *mut c_void, *mut *mut c_void) -> HRESULT,
+    }
+}
+
+interface! {
+    ID3D11DeviceContext, ID3D11DeviceContextVtbl: ID3D11DeviceChildVtbl {
+        _unused_7_47: [*const c_void; 41],
+        UpdateSubresource: unsafe extern "system" fn(*mut ID3D11DeviceContext, *mut c_void, u32, *const TextureBox, *const c_void, u32, u32),
+    }
+}
+
+interface! {
+    ID3D11Multithread, ID3D11MultithreadVtbl: IUnknownVtbl {
+        _unused_3_4: [*const c_void; 2],
+        SetMultithreadProtected: unsafe extern "system" fn(*mut ID3D11Multithread, i32) -> HRESULT,
+    }
+}
+
+interface! {
+    IElementCompositionPreviewStatics, IElementCompositionPreviewStaticsVtbl: IInspectableVtbl {
+        GetElementVisual: unsafe extern "system" fn(*mut IElementCompositionPreviewStatics, *mut c_void, *mut *mut c_void) -> HRESULT,
+        _unused_7: [*const c_void; 1],
+        SetElementChildVisual: unsafe extern "system" fn(*mut IElementCompositionPreviewStatics, *mut c_void, *mut c_void) -> HRESULT,
+    }
+}
+
+interface! {
+    ISpriteVisual, ISpriteVisualVtbl: IInspectableVtbl {
+        _unused_6: [*const c_void; 1],
+        SetBrush: unsafe extern "system" fn(*mut ISpriteVisual, *mut c_void) -> HRESULT,
+    }
+}
+
+interface! {
+    IVisual, IVisualVtbl: IInspectableVtbl {
+        _unused_6_35: [*const c_void; 30],
+        SetSize: unsafe extern "system" fn(*mut IVisual, Vector2) -> HRESULT,
+    }
+}
+
+interface! {
+    ID3D11DeviceChild, ID3D11DeviceChildVtbl: IUnknownVtbl {
+        GetDevice: unsafe extern "system" fn(*mut ID3D11DeviceChild, *mut *mut c_void),
+        _unused_4_6: [*const c_void; 3],
+    }
 }

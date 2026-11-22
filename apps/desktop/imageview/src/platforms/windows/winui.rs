@@ -42,14 +42,14 @@ pub(crate) fn shutdown() {
     let runtime = RUNTIME.with_borrow_mut(Option::take);
     if let Some((dispatcher, manager, application)) = runtime {
         if let Ok(closable) = manager.cast(&IID_ICLOSABLE) {
-            // SAFETY: IClosable::Close is slot 6.
-            unsafe { call!(closable, 6) };
+            // SAFETY: The XAML manager was queried for IClosable on its owning thread.
+            unsafe { call!(closable, IClosable::Close) };
         }
         let iid = GUID::from_u128(0x4c68ee2a_1cb1_5591_a3a2_9b590b8f8b9a);
         if let Ok(controller) = dispatcher.cast(&iid) {
-            // SAFETY: IDispatcherQueueController2::ShutdownQueue is slot 6. It drains the
-            // dispatcher on this thread, including the asynchronous XAML shutdown.
-            unsafe { call!(controller, 6) };
+            // SAFETY: The controller was queried on its owning thread. Shutting it down
+            // drains the queue, including the asynchronous XAML shutdown.
+            unsafe { call!(controller, IDispatcherQueueController2::ShutdownQueue) };
         }
         drop((application, manager, dispatcher));
     }
@@ -209,28 +209,51 @@ fn start() -> std::result::Result<(), StartError> {
     let failed = |component| move |result| StartError::Failed(component, result);
     // XAML runs on the dispatcher queue of this thread, and keeps running while windows come
     // and go when the thread keeps its XAML manager. Shut both down before COM uninitializes.
-    // SAFETY: Slot 7 of the statics is CreateOnCurrentThread.
+    // SAFETY: The factory IID selects the dispatcher statics for this thread.
     let dispatcher = factory(
         w!("Microsoft.UI.Dispatching.DispatcherQueueController"),
         &IID_IDISPATCHER_QUEUE_CONTROLLER_STATICS,
     )
-    .and_then(|statics| unsafe { statics.get(7) })
+    .and_then(|statics| unsafe {
+        out(|raw| {
+            call!(
+                statics,
+                IDispatcherQueueControllerStatics::CreateOnCurrentThread,
+                raw
+            )
+        })
+    })
     .map_err(failed("dispatcher queue"))?;
     // The application comes first, otherwise XAML starts with a default one.
     let application = create_application().map_err(failed("application"))?;
-    // SAFETY: Slot 6 of the statics is InitializeForCurrentThread.
+    // SAFETY: The factory IID selects the XAML manager statics for this thread.
     let manager = factory(
         w!("Microsoft.UI.Xaml.Hosting.WindowsXamlManager"),
         &IID_IWINDOWS_XAML_MANAGER_STATICS,
     )
-    .and_then(|statics| unsafe { statics.get(6) })
+    .and_then(|statics| unsafe {
+        out(|raw| {
+            call!(
+                statics,
+                IWindowsXamlManagerStatics::InitializeForCurrentThread,
+                raw
+            )
+        })
+    })
     .map_err(failed("XAML manager"))?;
     // The Fluent styles of the WinUI controls, like the App.xaml of a WinUI app has.
     let resources = activate(w!("Microsoft.UI.Xaml.Controls.XamlControlsResources"))
         .and_then(|resources| resources.cast(&IID_IRESOURCE_DICTIONARY))
         .map_err(failed("controls resources"))?;
-    // SAFETY: Slot 7 of IApplication is put_Resources.
-    unsafe { application.put(7, resources.as_raw()) }.map_err(failed("controls resources"))?;
+    // SAFETY: The application and resource dictionary live on this XAML thread.
+    unsafe {
+        check(call!(
+            application,
+            IApplication::SetResources,
+            resources.as_raw()
+        ))
+    }
+    .map_err(failed("controls resources"))?;
     RUNTIME.with_borrow_mut(|runtime| *runtime = Some((dispatcher, manager, application)));
     Ok(())
 }
@@ -360,9 +383,15 @@ impl Bitmap {
         )
         .ok()?;
         let (width, height) = (i32::try_from(width).ok()?, i32::try_from(height).ok()?);
-        // SAFETY: Slot 6 of the factory is CreateInstanceWithDimensions.
+        // SAFETY: The factory was queried for IWriteableBitmapFactory and out supplies writable storage.
         let bitmap = out(|raw| unsafe {
-            call!(factory, 6, width => i32, height => i32, raw => *mut *mut c_void)
+            call!(
+                factory,
+                IWriteableBitmapFactory::CreateInstanceWithDimensions,
+                width,
+                height,
+                raw
+            )
         })
         .ok()?;
         Some(Self {
@@ -393,21 +422,20 @@ impl Bitmap {
 
     fn update(&self, write: impl FnOnce(&mut [u8])) {
         let length = self.size.0 as usize * self.size.1 as usize * 4;
-        // SAFETY: Slot 6 of IWriteableBitmap is get_PixelBuffer, slot 3 of IBufferByteAccess is
-        // Buffer, which holds the pixels of the bitmap, and slot 7 of IWriteableBitmap is
-        // Invalidate.
+        // SAFETY: The owned bitmap and pixel buffer keep the byte pointer live during
+        // the write. The slice length is the bitmap extent times four bytes per pixel.
         unsafe {
-            let Ok(buffer) = self
-                .bitmap
-                .get(6)
+            let Ok(buffer) = out(|raw| call!(self.bitmap, IWriteableBitmap::GetPixelBuffer, raw))
                 .and_then(|buffer| buffer.cast(&IID_IBUFFER_BYTE_ACCESS))
             else {
                 return;
             };
             let mut bytes = null_mut::<u8>();
-            if check(call!(buffer, 3, &mut bytes => *mut *mut u8)).is_ok() && !bytes.is_null() {
+            if check(call!(buffer, IBufferByteAccess::Buffer, &mut bytes)).is_ok()
+                && !bytes.is_null()
+            {
                 write(std::slice::from_raw_parts_mut(bytes, length));
-                call!(self.bitmap, 7);
+                call!(self.bitmap, IWriteableBitmap::Invalidate);
             }
         }
     }
@@ -502,16 +530,14 @@ fn icon_pixels(size: i32) -> Option<Vec<u8>> {
     }
 }
 
-// Boxes a value for a WinRT parameter that takes an `IReference<T>`, slot 14 of the property
-// value statics is CreateSingle and slot 15 is CreateDouble.
-fn boxed<T: Copy>(slot: usize, value: T, iid: &GUID) -> Option<ComPtr> {
+/// Boxes a property value and queries its IReference interface.
+fn boxed(iid: &GUID, create: impl FnOnce(&ComPtr, *mut *mut c_void) -> HRESULT) -> Option<ComPtr> {
     let statics = factory(
         w!("Windows.Foundation.PropertyValue"),
         &IID_IPROPERTY_VALUE_STATICS,
     )
     .ok()?;
-    // SAFETY: The caller passes the slot creating a property value of this type.
-    out(|raw| unsafe { call!(statics, slot, value => T, raw => *mut *mut c_void) })
+    out(|raw| create(&statics, raw))
         .and_then(|value| value.cast(iid))
         .ok()
 }
@@ -578,8 +604,8 @@ struct Regions {
 // The width of an element in logical pixels.
 fn actual_width(element: &ComPtr) -> f64 {
     let mut width = 0.0;
-    // SAFETY: Slot 13 of IFrameworkElement is get_ActualWidth.
-    unsafe { call!(element, 13, &mut width => *mut f64) };
+    // SAFETY: The caller supplies an IFrameworkElement on this XAML thread.
+    unsafe { call!(element, IFrameworkElement::GetActualWidth, &mut width) };
     width
 }
 
@@ -590,17 +616,20 @@ impl Regions {
             return;
         }
         let mut inset = 0;
-        // SAFETY: Slot 36 of IAppWindowTitleBar is get_RightInset and slot 32 of
-        // IFrameworkElement is put_Margin.
+        // SAFETY: The title bar and end group retain their queried interfaces on this thread.
         unsafe {
-            call!(self.title_bar, 36, &mut inset => *mut i32);
+            call!(
+                self.title_bar,
+                IAppWindowTitleBar::GetRightInset,
+                &mut inset
+            );
             let margin = Thickness {
                 left: 0.0,
                 top: 0.0,
                 right: f64::from(inset) / scale + END_GAP,
                 bottom: 0.0,
             };
-            call!(self.end, 32, margin => Thickness);
+            call!(self.end, IFrameworkElement::SetMargin, margin);
         }
         #[cfg(feature = "edit")]
         self.edit.update(f64::from(width - inset) / scale);
@@ -620,15 +649,15 @@ impl Regions {
                 height,
             },
         ];
-        // SAFETY: Slot 10 of IInputNonClientPointerSource is SetRegionRects with a region kind,
-        // 9 is passthrough, and an array of rectangles.
+        // SAFETY: The title-bar region array lives through the call and the count matches
+        // its length. Region kind 9 passes input through to XAML.
         unsafe {
             call!(
                 self.non_client,
-                10,
-                9i32 => i32,
-                rects.len() as u32 => u32,
-                rects.as_ptr() => *const RectInt32,
+                IInputNonClientPointerSource::SetRegionRects,
+                9i32,
+                rects.len() as u32,
+                rects.as_ptr()
             )
         };
     }
@@ -660,8 +689,8 @@ pub(crate) fn load_xaml(xaml: &str) -> Result<ComPtr> {
         &IID_IXAML_READER_STATICS,
     )?;
     let xaml = HString::new(xaml);
-    // SAFETY: Slot 6 of the statics is Load.
-    out(|raw| unsafe { call!(statics, 6, xaml.as_raw() => HSTRING, raw => *mut *mut c_void) })
+    // SAFETY: The reader statics match the factory IID and the HSTRING lives through the call.
+    out(|raw| unsafe { call!(statics, IXamlReaderStatics::Load, xaml.as_raw(), raw) })
 }
 
 const IID_ICONTENT_DIALOG: GUID = GUID::from_u128(0xac2145a3_4a32_5305_a81d_47509515bfce);
@@ -721,31 +750,44 @@ impl Dialog {
         let content = load_xaml(&xaml)?.cast(&IID_ICONTENT_DIALOG)?;
         let element = content.cast(&IID_IUI_ELEMENT)?;
         let root = root.cast(&IID_IUI_ELEMENT)?;
-        // SAFETY: Slots 109 and 110 of IUIElement are get_XamlRoot and put_XamlRoot.
+        // SAFETY: Both elements were queried for IUIElement on the same XAML thread.
         unsafe {
-            let xaml_root = root.get(109)?;
-            element.put(110, xaml_root.as_raw())?;
+            let xaml_root = out(|raw| call!(root, IUIElement::GetXamlRoot, raw))?;
+            check(call!(element, IUIElement::SetXamlRoot, xaml_root.as_raw()))?;
             let root_theme = root.cast(&IID_IFRAMEWORK_ELEMENT)?;
             let dialog_theme = element.cast(&IID_IFRAMEWORK_ELEMENT)?;
             let mut theme = 0i32;
-            check(call!(root_theme, 57, &mut theme => *mut i32))?;
-            check(call!(dialog_theme, 58, theme => i32))?;
+            check(call!(
+                root_theme,
+                IFrameworkElement::GetRequestedTheme,
+                &mut theme
+            ))?;
+            check(call!(
+                dialog_theme,
+                IFrameworkElement::SetRequestedTheme,
+                theme
+            ))?;
         }
         let handler = event_handler(IID_DIALOG_CLOSED_HANDLER, move |_, args| {
             let mut result = 0i32;
             if let Some(args) =
                 args.and_then(|args| args.cast(&IID_ICONTENT_DIALOG_CLOSED_EVENT_ARGS).ok())
             {
-                // SAFETY: Slot 6 of IContentDialogClosedEventArgs is get_Result.
-                unsafe { call!(args, 6, &mut result => *mut i32) };
+                // SAFETY: The event arguments were queried for the closed-event interface.
+                unsafe { call!(args, IContentDialogClosedEventArgs::GetResult, &mut result) };
             }
             answered(result);
         });
         let mut closed = 0;
-        // SAFETY: Slot 44 is add_Closed; slot 55 is ShowAsync. The dialog keeps its handler.
+        // SAFETY: The dialog retains the matching delegate and writes its token to closed.
         let operation = unsafe {
-            check(call!(content, 44, handler.as_raw() => *mut c_void, &mut closed => *mut i64))?;
-            out(|raw| call!(content, 55, raw => *mut *mut c_void))?
+            check(call!(
+                content,
+                IContentDialog::AddClosed,
+                handler.as_raw(),
+                &mut closed
+            ))?;
+            out(|raw| call!(content, IContentDialog::ShowAsync, raw))?
         };
         Ok(Self {
             content,
@@ -755,8 +797,8 @@ impl Dialog {
     }
 
     pub(super) fn hide(&self) {
-        // SAFETY: Slot 54 of IContentDialog is Hide.
-        unsafe { call!(self.content, 54) };
+        // SAFETY: The dialog owns its IContentDialog reference on this XAML thread.
+        unsafe { call!(self.content, IContentDialog::Hide) };
     }
 }
 
@@ -764,7 +806,7 @@ impl Drop for Dialog {
     fn drop(&mut self) {
         // SAFETY: Unsubscribe before Hide, which can synchronously raise Closed during teardown.
         unsafe {
-            call!(self.content, 45, self.closed => i64);
+            call!(self.content, IContentDialog::RemoveClosed, self.closed);
         }
         self.hide();
     }
@@ -773,31 +815,38 @@ impl Drop for Dialog {
 /// Finds an element by its name in a XAML tree, as an interface.
 pub(crate) fn find_name(root: &ComPtr, name: &[u16], iid: &GUID) -> Result<ComPtr> {
     let name = HString::from_wide(name);
-    // SAFETY: Slot 77 of IFrameworkElement is FindName.
-    out(|raw| unsafe { call!(root, 77, name.as_raw() => HSTRING, raw => *mut *mut c_void) })
+    // SAFETY: The queried framework element and name HSTRING live through the call.
+    out(|raw| unsafe { call!(root, IFrameworkElement::FindName, name.as_raw(), raw) })
         .and_then(|element| element.cast(iid))
 }
 
 /// Shows or collapses an element.
 pub(crate) fn set_visible(element: &ComPtr, visible: bool) {
     if let Ok(element) = element.cast(&IID_IUI_ELEMENT) {
-        // SAFETY: Slot 24 of IUIElement is put_Visibility, 0 is visible and 1 collapsed.
-        unsafe { call!(element, 24, i32::from(!visible) => i32) };
+        // SAFETY: The query succeeded and the visibility value is Visible (0) or Collapsed (1).
+        unsafe { call!(element, IUIElement::SetVisibility, i32::from(!visible)) };
     }
 }
 
-/// Boxes a boolean as an `IReference<Boolean>`, slot 17 of the property value statics is
-/// CreateBoolean.
+/// Boxes a boolean as an `IReference<Boolean>`.
 pub(crate) fn boxed_bool(value: bool) -> Option<ComPtr> {
-    boxed(17, value, &IID_IREFERENCE_BOOLEAN)
+    boxed(&IID_IREFERENCE_BOOLEAN, |statics, out| {
+        // SAFETY: boxed supplies the property-value statics and a writable output pointer.
+        unsafe { call!(statics, IPropertyValueStatics::CreateBoolean, value, out) }
+    })
 }
 
-/// Adds a handler to the event in a vtable slot of an interface, which keeps it.
-pub(crate) fn add_event(object: &ComPtr, slot: usize, handler: &ComPtr) -> Result<()> {
-    let mut token = 0i64;
-    // SAFETY: The caller passes the slot of an event that takes a handler of this kind.
-    check(unsafe { call!(object, slot, handler.as_raw() => *mut c_void, &mut token => *mut i64) })
+/// Adds an event handler with a typed vtable entry.
+macro_rules! add_event {
+    ($object:expr, $interface:ident::$method:ident, $handler:expr $(,)?) => {{
+        let object = &$object;
+        let handler = &$handler;
+        let mut token = 0;
+        // SAFETY: The caller supplies the named interface and its matching event delegate.
+        check(unsafe { call!(object, $interface::$method, handler.as_raw(), &mut token) })
+    }};
 }
+pub(crate) use add_event;
 
 impl Island {
     pub(super) fn show_alert(
@@ -846,25 +895,35 @@ impl Island {
         )
         .and_then(|statics| {
             let id = window_id(window)?;
-            // SAFETY: Slot 9 of the statics is GetFromWindowId.
+            // SAFETY: The activation factory supplies the app-window statics for this window ID.
             let app_window =
-                out(|raw| unsafe { call!(statics, 9, id => WindowId, raw => *mut *mut c_void) })?;
-            // SAFETY: Slot 16 of IAppWindow is get_TitleBar.
-            unsafe { app_window.get(16) }
+                out(|raw| unsafe { call!(statics, IAppWindowStatics::GetFromWindowId, id, raw) })?;
+            // SAFETY: The statics returned an IAppWindow and out supplies writable storage.
+            unsafe { out(|raw| call!(app_window, IAppWindow::GetTitleBar, raw)) }
         })
         .map_err(failed("title bar"))?;
-        // SAFETY: Slot 25 is put_ExtendsContentIntoTitleBar, slot 7 of IAppWindowTitleBar2 is
-        // put_PreferredHeightOption with 1 for tall caption buttons.
+        // SAFETY: The title-bar interfaces are live on the window thread. Height option 1
+        // accommodates the taller caption buttons.
         unsafe {
-            check(call!(title_bar, 25, 1u8 => u8)).map_err(failed("title bar"))?;
+            check(call!(
+                title_bar,
+                IAppWindowTitleBar::SetExtendsContentIntoTitleBar,
+                1u8
+            ))
+            .map_err(failed("title bar"))?;
             let title_bar2 = title_bar
                 .cast(&IID_IAPP_WINDOW_TITLE_BAR2)
                 .map_err(failed("title bar"))?;
-            check(call!(title_bar2, 7, 1i32 => i32)).map_err(failed("title bar"))?;
+            check(call!(
+                title_bar2,
+                IAppWindowTitleBar2::SetPreferredHeightOption,
+                1i32
+            ))
+            .map_err(failed("title bar"))?;
         }
 
-        // SAFETY: Slot 17 is Initialize, slot 11 is get_SiteBridge and slot 17 of
-        // IDesktopSiteBridge is Show.
+        // SAFETY: The source is created on this XAML thread and initialized before accessing
+        // its site bridge. The bridge is queried for IDesktopSiteBridge before it is shown.
         let (source, bridge) = unsafe {
             let source = compose(
                 w!("Microsoft.UI.Xaml.Hosting.DesktopWindowXamlSource"),
@@ -872,12 +931,12 @@ impl Island {
             )
             .map_err(failed("XAML island"))?;
             let id = window_id(parent).map_err(failed("XAML island"))?;
-            check(call!(source, 17, id => WindowId)).map_err(failed("XAML island"))?;
-            let bridge = source
-                .get(11)
+            check(call!(source, IDesktopWindowXamlSource::Initialize, id))
+                .map_err(failed("XAML island"))?;
+            let bridge = out(|raw| call!(source, IDesktopWindowXamlSource::GetSiteBridge, raw))
                 .and_then(|bridge| bridge.cast(&IID_IDESKTOP_SITE_BRIDGE))
                 .map_err(failed("XAML island"))?;
-            check(call!(bridge, 17)).map_err(failed("XAML island"))?;
+            check(call!(bridge, IDesktopSiteBridge::Show)).map_err(failed("XAML island"))?;
             (source, bridge)
         };
 
@@ -896,8 +955,15 @@ impl Island {
         let element = root
             .cast(&IID_IUI_ELEMENT)
             .map_err(failed("window content"))?;
-        // SAFETY: Slot 7 of IDesktopWindowXamlSource is put_Content.
-        unsafe { source.put(7, element.as_raw()) }.map_err(failed("window content"))?;
+        // SAFETY: The XAML source and its new content live on the same thread.
+        unsafe {
+            check(call!(
+                source,
+                IDesktopWindowXamlSource::SetContent,
+                element.as_raw()
+            ))
+        }
+        .map_err(failed("window content"))?;
 
         let find = |name: &[u16], iid: &GUID| find_name(&root, name, iid);
 
@@ -911,13 +977,19 @@ impl Island {
             &IID_IMICA_BACKDROP_FACTORY,
         )
         .and_then(|mica| mica.cast(&IID_ISYSTEM_BACKDROP))
-        // SAFETY: Slot 10 is put_SystemBackdrop.
-        .and_then(|mica| unsafe { source.put(10, mica.as_raw()) });
+        // SAFETY: The backdrop was queried for ISystemBackdrop and lives through the call.
+        .and_then(|mica| unsafe {
+            check(call!(
+                source,
+                IDesktopWindowXamlSource::SetSystemBackdrop,
+                mica.as_raw()
+            ))
+        });
         if mica.is_err() {
             let background =
                 find(w!("Background"), &IID_IUI_ELEMENT).map_err(failed("window content"))?;
-            // SAFETY: Slot 24 of IUIElement is put_Visibility, 0 is visible.
-            unsafe { call!(background, 24, 0i32 => i32) };
+            // SAFETY: find queried the background for IUIElement. Visibility 0 shows it.
+            unsafe { call!(background, IUIElement::SetVisibility, 0i32) };
         }
         let title = find(w!("Title"), &IID_ITEXT_BLOCK).map_err(failed("window content"))?;
         let subtitle = find(w!("Subtitle"), &IID_ITEXT_BLOCK).map_err(failed("window content"))?;
@@ -926,8 +998,8 @@ impl Island {
         let scale = f64::from(unsafe { GetDpiForWindow(window) }.max(96)) / 96.0;
         if let Some(icon) = app_icon((16.0 * scale).round() as i32) {
             let image = find(w!("Icon"), &IID_IIMAGE).map_err(failed("window content"))?;
-            // SAFETY: Slot 7 of IImage is put_Source.
-            _ = unsafe { image.put(7, icon.source.as_raw()) };
+            // SAFETY: find queried the icon element for IImage, and the bitmap source is live.
+            _ = unsafe { check(call!(image, IImage::SetSource, icon.source.as_raw())) };
         }
         let zoom = find(w!("Zoom"), &IID_ITEXT_BLOCK).map_err(failed("window content"))?;
         let start = find(w!("Start"), &IID_IFRAMEWORK_ELEMENT).map_err(failed("window content"))?;
@@ -965,8 +1037,15 @@ impl Island {
         )
         .and_then(|statics| {
             let id = window_id(window)?;
-            // SAFETY: Slot 6 of the statics is GetForWindowId.
-            out(|raw| unsafe { call!(statics, 6, id => WindowId, raw => *mut *mut c_void) })
+            // SAFETY: The factory supplies the pointer-source statics for this window ID.
+            out(|raw| unsafe {
+                call!(
+                    statics,
+                    IInputNonClientPointerSourceStatics::GetForWindowId,
+                    id,
+                    raw
+                )
+            })
         })
         .map_err(failed("title bar"))?;
         let regions = Rc::new(Regions {
@@ -987,10 +1066,14 @@ impl Island {
         });
         for group in [&start, &end] {
             let mut token = 0i64;
-            // SAFETY: Slot 67 of IFrameworkElement is add_SizeChanged, the group keeps the
-            // handler.
+            // SAFETY: Each group is an IFrameworkElement and retains the size-changed delegate.
             check(unsafe {
-                call!(group, 67, resized.as_raw() => *mut c_void, &mut token => *mut i64)
+                call!(
+                    group,
+                    IFrameworkElement::AddSizeChanged,
+                    resized.as_raw(),
+                    &mut token
+                )
             })
             .map_err(failed("title bar"))?;
         }
@@ -1005,9 +1088,8 @@ impl Island {
                     return;
                 };
                 let mut name = null_mut();
-                // SAFETY: Slot 33 of IFrameworkElement is get_Name, which returns an owned
-                // string.
-                if check(unsafe { call!(sender, 33, &mut name => *mut HSTRING) }).is_err() {
+                // SAFETY: The sender was queried for IFrameworkElement and name receives an owned HSTRING.
+                if check(unsafe { call!(sender, IFrameworkElement::GetName, &mut name) }).is_err() {
                     return;
                 }
                 // SAFETY: The name is owned by this call.
@@ -1022,15 +1104,14 @@ impl Island {
                 on_action(action);
             })
         };
-        // Slot 14 of IButtonBase and slot 17 of IMenuFlyoutItem are add_Click.
         for (name, _) in actions() {
             let element =
                 find(&wide(name), &IID_IFRAMEWORK_ELEMENT).map_err(failed("window content"))?;
             match element.cast(&IID_IBUTTON_BASE) {
-                Ok(button) => add_event(&button, 14, &clicked),
+                Ok(button) => add_event!(&button, IButtonBase::AddClick, &clicked),
                 Err(_) => element
                     .cast(&IID_IMENU_FLYOUT_ITEM)
-                    .and_then(|item| add_event(&item, 17, &clicked)),
+                    .and_then(|item| add_event!(&item, IMenuFlyoutItem::AddClick, &clicked)),
             }
             .map_err(failed("window content"))?;
         }
@@ -1043,26 +1124,36 @@ impl Island {
                 return;
             };
             let mut factor = 1.0f32;
-            // SAFETY: Slot 54 of IScrollViewer is get_ZoomFactor.
-            unsafe { call!(scroller, 54, &mut factor => *mut f32) };
+            // SAFETY: The event sender was queried for IScrollViewer and factor is writable.
+            unsafe { call!(scroller, IScrollViewer::GetZoomFactor, &mut factor) };
             let magnification = f64::from(factor) * CONTENT_SCALE;
             let label = HString::new(&format!("{:.0}%", magnification * 100.0));
-            // SAFETY: Slot 27 of ITextBlock is put_Text.
-            _ = unsafe { zoom.put(27, label.as_raw()) };
+            // SAFETY: The captured zoom label is an ITextBlock and its new text lives through the call.
+            _ = unsafe { check(call!(zoom, ITextBlock::SetText, label.as_raw())) };
             let mut intermediate = 0u8;
             if let Some(args) =
                 args.and_then(|args| args.cast(&IID_ISCROLL_VIEWER_VIEW_CHANGED_EVENT_ARGS).ok())
             {
-                // SAFETY: Slot 6 of the arguments is get_IsIntermediate.
-                unsafe { call!(args, 6, &mut intermediate => *mut u8) };
+                // SAFETY: The arguments were queried for IScrollViewerViewChangedEventArgs.
+                unsafe {
+                    call!(
+                        args,
+                        IScrollViewerViewChangedEventArgs::GetIsIntermediate,
+                        &mut intermediate
+                    )
+                };
             }
             on_view(intermediate == 0);
         });
         let mut token = 0i64;
-        // SAFETY: Slot 74 of IScrollViewer is add_ViewChanged, the scroll viewer keeps the
-        // handler.
+        // SAFETY: The scroll viewer retains the matching view-changed delegate.
         check(unsafe {
-            call!(scroller, 74, view_changed.as_raw() => *mut c_void, &mut token => *mut i64)
+            call!(
+                scroller,
+                IScrollViewer::AddViewChanged,
+                view_changed.as_raw(),
+                &mut token
+            )
         })
         .map_err(failed("window content"))?;
 
@@ -1097,10 +1188,14 @@ impl Island {
             .cast(&IID_IFRAMEWORK_ELEMENT)
             .map_err(failed("window content"))?;
         let mut token = 0i64;
-        // SAFETY: Slot 67 of IFrameworkElement is add_SizeChanged, the scroll viewer keeps the
-        // handler.
+        // SAFETY: The scroll viewer was queried for IFrameworkElement and retains the delegate.
         check(unsafe {
-            call!(element, 67, laid_out.as_raw() => *mut c_void, &mut token => *mut i64)
+            call!(
+                element,
+                IFrameworkElement::AddSizeChanged,
+                laid_out.as_raw(),
+                &mut token
+            )
         })
         .map_err(failed("window content"))?;
 
@@ -1113,10 +1208,14 @@ impl Island {
         .map_err(failed("window content"))?;
         let rendered = event_handler(IID_RENDERED_EVENT_HANDLER, move |_, _| on_rendered());
         let mut token = 0i64;
-        // SAFETY: Slot 8 of ICompositionTargetStatics is add_Rendered, the composition target
-        // keeps the handler until it is removed.
+        // SAFETY: The composition target retains the rendered delegate until the token is removed.
         check(unsafe {
-            call!(statics, 8, rendered.as_raw() => *mut c_void, &mut token => *mut i64)
+            call!(
+                statics,
+                ICompositionTargetStatics::AddRendered,
+                rendered.as_raw(),
+                &mut token
+            )
         })
         .map_err(failed("window content"))?;
 
@@ -1146,8 +1245,8 @@ impl Island {
     /// Stops following the rendered frames.
     pub(crate) fn stop_rendered(&self) {
         if let Some((statics, token)) = self.rendered.take() {
-            // SAFETY: Slot 9 of ICompositionTargetStatics is remove_Rendered.
-            unsafe { call!(statics, 9, token => i64) };
+            // SAFETY: The token came from a subscription on this same composition target.
+            unsafe { call!(statics, ICompositionTargetStatics::RemoveRendered, token) };
         }
     }
 
@@ -1181,14 +1280,21 @@ impl Island {
                 if !marked {
                     drag.set(Some((point, scroll_offsets(&scroller))));
                 }
-                // SAFETY: Slot 6 of IPointerRoutedEventArgs is get_Pointer, slot 212 of
-                // IUIElement is CapturePointer and slot 9 of the arguments is put_Handled.
+                // SAFETY: The queried element and event arguments stay live while the pointer
+                // returned by the event is captured.
                 unsafe {
-                    if let Ok(pointer) = args.get(6) {
+                    if let Ok(pointer) =
+                        out(|raw| call!(args, IPointerRoutedEventArgs::GetPointer, raw))
+                    {
                         let mut captured = 0u8;
-                        call!(element, 212, pointer.as_raw() => *mut c_void, &mut captured => *mut u8);
+                        call!(
+                            element,
+                            IUIElement::CapturePointer,
+                            pointer.as_raw(),
+                            &mut captured
+                        );
                     }
-                    call!(args, 9, 1u8 => u8);
+                    call!(args, IPointerRoutedEventArgs::SetHandled, 1u8);
                 }
             })
         };
@@ -1224,16 +1330,10 @@ impl Island {
             marks.end();
         });
         let element = scroller.cast(&IID_IUI_ELEMENT)?;
-        // Slots 152, 154, 156 and 162 of IUIElement are add_PointerPressed, add_PointerMoved,
-        // add_PointerReleased and add_PointerCaptureLost.
-        for (slot, handler) in [
-            (152, &pressed),
-            (154, &moved),
-            (156, &released),
-            (162, &released),
-        ] {
-            add_event(&element, slot, handler)?;
-        }
+        add_event!(element, IUIElement::AddPointerPressed, pressed)?;
+        add_event!(element, IUIElement::AddPointerMoved, moved)?;
+        add_event!(element, IUIElement::AddPointerReleased, released)?;
+        add_event!(element, IUIElement::AddPointerCaptureLost, released)?;
         Ok(())
     }
 
@@ -1245,8 +1345,8 @@ impl Island {
             width,
             height,
         };
-        // SAFETY: Slot 13 of IDesktopSiteBridge is MoveAndResize.
-        unsafe { call!(self.bridge, 13, rect => RectInt32) };
+        // SAFETY: The site bridge belongs to this window thread and receives the rectangle by value.
+        unsafe { call!(self.bridge, IDesktopSiteBridge::MoveAndResize, rect) };
         let header = ((HEADER_HEIGHT * scale).round() as i32).min(height);
         self.regions.size.set((width, header, scale));
         self.regions.update();
@@ -1256,15 +1356,21 @@ impl Island {
     pub(crate) fn set_title(&self, title: &str, subtitle: &str) {
         for (text_block, text) in [(&self.title, title), (&self.subtitle, subtitle)] {
             let text = HString::new(text);
-            // SAFETY: Slot 27 of ITextBlock is put_Text.
-            _ = unsafe { text_block.put(27, text.as_raw()) };
+            // SAFETY: The title was queried for ITextBlock and text lives through the call.
+            _ = unsafe { check(call!(text_block, ITextBlock::SetText, text.as_raw())) };
         }
     }
 
     /// Dims the title while the window is inactive, like the system title bar does.
     pub(crate) fn set_active(&self, active: bool) {
-        // SAFETY: Slot 10 of IUIElement is put_Opacity.
-        unsafe { call!(self.heading, 10, if active { 1.0 } else { 0.5 } => f64) };
+        // SAFETY: The heading retains its IUIElement interface on this XAML thread.
+        unsafe {
+            call!(
+                self.heading,
+                IUIElement::SetOpacity,
+                if active { 1.0 } else { 0.5 }
+            )
+        };
     }
 
     /// The visual that shows the media, which makes its surfaces.
@@ -1284,8 +1390,14 @@ impl Island {
         let Ok(element) = content.cast(&IID_IUI_ELEMENT) else {
             return;
         };
-        // SAFETY: Slot 19 of IBorder is put_Child.
-        _ = unsafe { self.panels[panel as usize].host.put(19, element.as_raw()) };
+        // SAFETY: The panel host is an IBorder and the child was queried for IUIElement.
+        _ = unsafe {
+            check(call!(
+                self.panels[panel as usize].host,
+                IBorder::SetChild,
+                element.as_raw()
+            ))
+        };
     }
 
     /// Shows a panel beside the image, or hides it, with its button on or off.
@@ -1293,8 +1405,14 @@ impl Island {
         let elements = &self.panels[panel as usize];
         set_visible(&elements.panel, open);
         if let Some(checked) = boxed_bool(open) {
-            // SAFETY: Slot 7 of IToggleButton is put_IsChecked.
-            _ = unsafe { elements.button.put(7, checked.as_raw()) };
+            // SAFETY: The button retains its IToggleButton interface and checked owns the boxed boolean.
+            _ = unsafe {
+                check(call!(
+                    elements.button,
+                    IToggleButton::SetIsChecked,
+                    checked.as_raw()
+                ))
+            };
         }
     }
 
@@ -1318,8 +1436,8 @@ impl Island {
     /// The magnification of the media.
     pub(crate) fn zoom_factor(&self) -> f64 {
         let mut factor = 1.0f32;
-        // SAFETY: Slot 54 of IScrollViewer is get_ZoomFactor.
-        unsafe { call!(self.scroller, 54, &mut factor => *mut f32) };
+        // SAFETY: The island retains its IScrollViewer and factor is writable.
+        unsafe { call!(self.scroller, IScrollViewer::GetZoomFactor, &mut factor) };
         f64::from(factor) * CONTENT_SCALE
     }
 
@@ -1331,10 +1449,14 @@ impl Island {
     #[cfg(all(test, feature = "edit"))]
     pub(super) fn scrollable_size(&self) -> (f64, f64) {
         let (mut width, mut height) = (0.0, 0.0);
-        // SAFETY: Slots 42 and 47 of IScrollViewer are ScrollableWidth and ScrollableHeight.
+        // SAFETY: The island retains its IScrollViewer and both outputs are writable.
         unsafe {
-            call!(self.scroller, 42, &mut width => *mut f64);
-            call!(self.scroller, 47, &mut height => *mut f64);
+            call!(self.scroller, IScrollViewer::GetScrollableWidth, &mut width);
+            call!(
+                self.scroller,
+                IScrollViewer::GetScrollableHeight,
+                &mut height
+            );
         }
         (width, height)
     }
@@ -1343,8 +1465,8 @@ impl Island {
     /// out.
     pub(crate) fn change_view(&self, x: Option<f64>, y: Option<f64>, zoom: Option<f64>) {
         let mut width = 0.0f64;
-        // SAFETY: Slot 41 of IScrollViewer is get_ViewportWidth.
-        unsafe { call!(self.scroller, 41, &mut width => *mut f64) };
+        // SAFETY: The island retains its IScrollViewer and width is writable.
+        unsafe { call!(self.scroller, IScrollViewer::GetViewportWidth, &mut width) };
         if width > 0.0 {
             change_view(&self.scroller, x, y, zoom);
         } else {
@@ -1356,15 +1478,21 @@ impl Island {
     pub(crate) fn focus(&self) {
         if let Ok(element) = self.scroller.cast(&IID_IUI_ELEMENT) {
             let mut focused = 0u8;
-            // SAFETY: Slot 226 of IUIElement is Focus, 3 is programmatic focus.
-            unsafe { call!(element, 226, 3i32 => i32, &mut focused => *mut u8) };
+            // SAFETY: The element was queried for IUIElement. Focus state 3 is programmatic.
+            unsafe { call!(element, IUIElement::Focus, 3i32, &mut focused) };
         }
     }
 
     /// Follows the light or dark theme, also with the caption buttons.
     pub(crate) fn set_dark(&self, dark: bool) {
-        // SAFETY: Slot 58 of IFrameworkElement is put_RequestedTheme, 1 is light and 2 is dark.
-        unsafe { call!(self.root, 58, if dark { 2 } else { 1 } => i32) };
+        // SAFETY: The root retains its IFrameworkElement interface. Theme 1 is light and 2 is dark.
+        unsafe {
+            call!(
+                self.root,
+                IFrameworkElement::SetRequestedTheme,
+                if dark { 2 } else { 1 }
+            )
+        };
 
         let color = |a, value| Color {
             a,
@@ -1397,21 +1525,23 @@ impl Island {
         } else {
             color(0xff, if dark { 0x20 } else { 0xf3 })
         };
-        // The IAppWindowTitleBar setter slots of the title bar and caption button colors.
-        for (slot, color) in [
-            (7, background),
-            (32, background),
-            (9, transparent),
-            (11, foreground),
-            (13, hover),
-            (15, foreground),
-            (17, transparent),
-            (19, inactive),
-            (21, pressed),
-            (23, foreground),
+        let title_bar = self.title_bar.as_raw().cast::<IAppWindowTitleBar>();
+        // SAFETY: self.title_bar owns an IAppWindowTitleBar reference.
+        let vtbl = unsafe { &*(*title_bar).vtbl };
+        for (set_color, color) in [
+            (vtbl.SetBackgroundColor, background),
+            (vtbl.SetInactiveBackgroundColor, background),
+            (vtbl.SetButtonBackgroundColor, transparent),
+            (vtbl.SetButtonForegroundColor, foreground),
+            (vtbl.SetButtonHoverBackgroundColor, hover),
+            (vtbl.SetButtonHoverForegroundColor, foreground),
+            (vtbl.SetButtonInactiveBackgroundColor, transparent),
+            (vtbl.SetButtonInactiveForegroundColor, inactive),
+            (vtbl.SetButtonPressedBackgroundColor, pressed),
+            (vtbl.SetButtonPressedForegroundColor, foreground),
         ] {
-            // SAFETY: These slots take an IReference<Color>.
-            _ = unsafe { self.title_bar.put(slot, color_reference(color).as_raw()) };
+            // SAFETY: Each setter takes IReference<Color>, which lives through the call.
+            unsafe { set_color(title_bar, color_reference(color).as_raw()) };
         }
     }
 }
@@ -1420,34 +1550,47 @@ impl Drop for Island {
     fn drop(&mut self) {
         self.stop_rendered();
         if let Ok(closable) = self.source.cast(&IID_ICLOSABLE) {
-            // SAFETY: Slot 6 of IClosable is Close.
-            unsafe { call!(closable, 6) };
+            // SAFETY: The XAML source was queried for IClosable on its owning thread.
+            unsafe { call!(closable, IClosable::Close) };
         }
     }
 }
 
 /// Shows a bitmap in an image element at a size in logical pixels.
 pub(crate) fn set_image(image: &ComPtr, bitmap: &Bitmap, size: (f64, f64)) {
-    // SAFETY: Slot 7 of IImage is put_Source.
-    _ = unsafe { image.put(7, bitmap.source.as_raw()) };
+    // SAFETY: The caller supplies an IImage, and the bitmap owns the IImageSource for the call.
+    _ = unsafe { check(call!(image, IImage::SetSource, bitmap.source.as_raw())) };
     set_size(image, size);
 }
 
 // Sizes an element in logical pixels.
 fn set_size(element: &ComPtr, (width, height): (f64, f64)) {
     if let Ok(element) = element.cast(&IID_IFRAMEWORK_ELEMENT) {
-        // SAFETY: Slots 16 and 18 of IFrameworkElement are put_Width and put_Height.
+        // SAFETY: The element was queried for IFrameworkElement on this XAML thread.
         unsafe {
-            call!(element, 16, width => f64);
-            call!(element, 18, height => f64);
+            call!(element, IFrameworkElement::SetWidth, width);
+            call!(element, IFrameworkElement::SetHeight, height);
         }
     }
 }
 
 // Scrolls and zooms a scroll viewer right away, keeping what is not given.
 fn change_view(scroller: &ComPtr, x: Option<f64>, y: Option<f64>, zoom: Option<f64>) {
-    let x = x.and_then(|x| boxed(15, x.max(0.0), &IID_IREFERENCE_DOUBLE));
-    let y = y.and_then(|y| boxed(15, y.max(0.0), &IID_IREFERENCE_DOUBLE));
+    let offset = |value: f64| {
+        boxed(&IID_IREFERENCE_DOUBLE, |statics, out| {
+            // SAFETY: boxed supplies the property-value statics and a writable output.
+            unsafe {
+                call!(
+                    statics,
+                    IPropertyValueStatics::CreateDouble,
+                    value.max(0.0),
+                    out
+                )
+            }
+        })
+    };
+    let x = x.and_then(offset);
+    let y = y.and_then(offset);
     let zoom = zoom.and_then(|magnification| {
         let factor = (magnification / CONTENT_SCALE).clamp(MIN_ZOOM_FACTOR, MAX_ZOOM_FACTOR);
         // ChangeView takes a float. Rounding upward can put the fitted image just beyond
@@ -1458,21 +1601,24 @@ fn change_view(scroller: &ComPtr, x: Option<f64>, y: Option<f64>, zoom: Option<f
         } else {
             rounded
         };
-        boxed(14, rounded, &IID_IREFERENCE_SINGLE)
+        boxed(&IID_IREFERENCE_SINGLE, |statics, out| {
+            // SAFETY: boxed supplies the property-value statics and a writable output.
+            unsafe { call!(statics, IPropertyValueStatics::CreateSingle, rounded, out) }
+        })
     });
     let raw = |value: &Option<ComPtr>| value.as_ref().map_or(null_mut(), ComPtr::as_raw);
     let mut changed = 0u8;
-    // SAFETY: Slot 84 of IScrollViewer is ChangeView with optional horizontal and vertical
-    // offsets, an optional zoom factor and whether to skip the animation.
+    // SAFETY: The caller supplies an IScrollViewer. The optional values are null or
+    // live IReference values with the expected types for offsets and zoom.
     unsafe {
         call!(
             scroller,
-            84,
-            raw(&x) => *mut c_void,
-            raw(&y) => *mut c_void,
-            raw(&zoom) => *mut c_void,
-            1u8 => u8,
-            &mut changed => *mut u8,
+            IScrollViewer::ChangeView,
+            raw(&x),
+            raw(&y),
+            raw(&zoom),
+            1u8,
+            &mut changed
         )
     };
 }
@@ -1480,10 +1626,10 @@ fn change_view(scroller: &ComPtr, x: Option<f64>, y: Option<f64>, zoom: Option<f
 // The scroll offsets of a scroll viewer in logical pixels of the magnified media.
 fn scroll_offsets(scroller: &ComPtr) -> (f64, f64) {
     let (mut x, mut y) = (0.0f64, 0.0f64);
-    // SAFETY: Slots 40 and 45 of IScrollViewer are get_HorizontalOffset and get_VerticalOffset.
+    // SAFETY: The caller supplies an IScrollViewer and both offsets are writable.
     unsafe {
-        call!(scroller, 40, &mut x => *mut f64);
-        call!(scroller, 45, &mut y => *mut f64);
+        call!(scroller, IScrollViewer::GetHorizontalOffset, &mut x);
+        call!(scroller, IScrollViewer::GetVerticalOffset, &mut y);
     }
     (x, y)
 }
@@ -1493,23 +1639,369 @@ fn scroll_offsets(scroller: &ComPtr) -> (f64, f64) {
 fn mouse_drag_point(element: &ComPtr, args: &ComPtr) -> Option<(Point, ComPtr)> {
     let args = args.cast(&IID_IPOINTER_ROUTED_EVENT_ARGS).ok()?;
     let element = element.cast(&IID_IUI_ELEMENT).ok()?;
-    // SAFETY: Slot 11 of IPointerRoutedEventArgs is GetCurrentPoint, slot 8 of IPointerPoint is
-    // get_PointerDeviceType with 2 for a mouse, slot 10 is get_Position, slot 11 is
-    // get_Properties and slot 13 of IPointerPointProperties is get_IsLeftButtonPressed.
+    // SAFETY: The queried event arguments and element are live on this XAML thread.
+    // Each returned pointer object stays owned while its properties are read.
     unsafe {
-        let point =
-            out(|raw| call!(args, 11, element.as_raw() => *mut c_void, raw => *mut *mut c_void))
-                .ok()?;
+        let point = out(|raw| {
+            call!(
+                args,
+                IPointerRoutedEventArgs::GetCurrentPoint,
+                element.as_raw(),
+                raw
+            )
+        })
+        .ok()?;
         let mut device = 0i32;
-        call!(point, 8, &mut device => *mut i32);
-        let properties = point.get(11).ok()?;
+        call!(point, IPointerPoint::GetPointerDeviceType, &mut device);
+        let properties = out(|raw| call!(point, IPointerPoint::GetProperties, raw)).ok()?;
         let mut pressed = 0u8;
-        call!(properties, 13, &mut pressed => *mut u8);
+        call!(
+            properties,
+            IPointerPointProperties::GetIsLeftButtonPressed,
+            &mut pressed
+        );
+        // PointerDeviceType::Mouse is 2.
         if device != 2 || pressed == 0 {
             return None;
         }
         let mut position = Point::default();
-        call!(point, 10, &mut position => *mut Point);
+        call!(point, IPointerPoint::GetPosition, &mut position);
         Some((position, args))
+    }
+}
+
+interface! {
+    IAppWindow, IAppWindowVtbl: IInspectableVtbl {
+        _unused_6_15: [*const c_void; 10],
+        GetTitleBar: unsafe extern "system" fn(*mut IAppWindow, *mut *mut c_void) -> HRESULT,
+    }
+}
+
+interface! {
+    IAppWindowStatics, IAppWindowStaticsVtbl: IInspectableVtbl {
+        _unused_6_8: [*const c_void; 3],
+        GetFromWindowId: unsafe extern "system" fn(*mut IAppWindowStatics, WindowId, *mut *mut c_void) -> HRESULT,
+    }
+}
+
+interface! {
+    IAppWindowTitleBar, IAppWindowTitleBarVtbl: IInspectableVtbl {
+        _unused_6: [*const c_void; 1],
+        SetBackgroundColor: unsafe extern "system" fn(*mut IAppWindowTitleBar, *mut c_void) -> HRESULT,
+        _unused_8: [*const c_void; 1],
+        SetButtonBackgroundColor: unsafe extern "system" fn(*mut IAppWindowTitleBar, *mut c_void) -> HRESULT,
+        _unused_10: [*const c_void; 1],
+        SetButtonForegroundColor: unsafe extern "system" fn(*mut IAppWindowTitleBar, *mut c_void) -> HRESULT,
+        _unused_12: [*const c_void; 1],
+        SetButtonHoverBackgroundColor: unsafe extern "system" fn(*mut IAppWindowTitleBar, *mut c_void) -> HRESULT,
+        _unused_14: [*const c_void; 1],
+        SetButtonHoverForegroundColor: unsafe extern "system" fn(*mut IAppWindowTitleBar, *mut c_void) -> HRESULT,
+        _unused_16: [*const c_void; 1],
+        SetButtonInactiveBackgroundColor: unsafe extern "system" fn(*mut IAppWindowTitleBar, *mut c_void) -> HRESULT,
+        _unused_18: [*const c_void; 1],
+        SetButtonInactiveForegroundColor: unsafe extern "system" fn(*mut IAppWindowTitleBar, *mut c_void) -> HRESULT,
+        _unused_20: [*const c_void; 1],
+        SetButtonPressedBackgroundColor: unsafe extern "system" fn(*mut IAppWindowTitleBar, *mut c_void) -> HRESULT,
+        _unused_22: [*const c_void; 1],
+        SetButtonPressedForegroundColor: unsafe extern "system" fn(*mut IAppWindowTitleBar, *mut c_void) -> HRESULT,
+        _unused_24: [*const c_void; 1],
+        SetExtendsContentIntoTitleBar: unsafe extern "system" fn(*mut IAppWindowTitleBar, u8) -> HRESULT,
+        _unused_26_31: [*const c_void; 6],
+        SetInactiveBackgroundColor: unsafe extern "system" fn(*mut IAppWindowTitleBar, *mut c_void) -> HRESULT,
+        _unused_33_35: [*const c_void; 3],
+        GetRightInset: unsafe extern "system" fn(*mut IAppWindowTitleBar, *mut i32) -> HRESULT,
+    }
+}
+
+interface! {
+    IAppWindowTitleBar2, IAppWindowTitleBar2Vtbl: IInspectableVtbl {
+        _unused_6: [*const c_void; 1],
+        SetPreferredHeightOption: unsafe extern "system" fn(*mut IAppWindowTitleBar2, i32) -> HRESULT,
+    }
+}
+
+interface! {
+    IApplication, IApplicationVtbl: IInspectableVtbl {
+        _unused_6: [*const c_void; 1],
+        SetResources: unsafe extern "system" fn(*mut IApplication, *mut c_void) -> HRESULT,
+    }
+}
+
+interface! {
+    IBorder, IBorderVtbl: IInspectableVtbl {
+        _unused_6_18: [*const c_void; 13],
+        SetChild: unsafe extern "system" fn(*mut IBorder, *mut c_void) -> HRESULT,
+    }
+}
+
+interface! {
+    IBufferByteAccess, IBufferByteAccessVtbl: IUnknownVtbl {
+        Buffer: unsafe extern "system" fn(*mut IBufferByteAccess, *mut *mut u8) -> HRESULT,
+    }
+}
+
+interface! {
+    IButtonBase, IButtonBaseVtbl: IInspectableVtbl {
+        _unused_6_13: [*const c_void; 8],
+        AddClick: unsafe extern "system" fn(*mut IButtonBase, *mut c_void, *mut i64) -> HRESULT,
+    }
+}
+
+interface! {
+    IClosable, IClosableVtbl: IInspectableVtbl {
+        Close: unsafe extern "system" fn(*mut IClosable) -> HRESULT,
+    }
+}
+
+interface! {
+    ICompositionTargetStatics, ICompositionTargetStaticsVtbl: IInspectableVtbl {
+        _unused_6_7: [*const c_void; 2],
+        AddRendered: unsafe extern "system" fn(*mut ICompositionTargetStatics, *mut c_void, *mut i64) -> HRESULT,
+        RemoveRendered: unsafe extern "system" fn(*mut ICompositionTargetStatics, i64) -> HRESULT,
+    }
+}
+
+interface! {
+    IContentDialog, IContentDialogVtbl: IInspectableVtbl {
+        _unused_6_43: [*const c_void; 38],
+        AddClosed: unsafe extern "system" fn(*mut IContentDialog, *mut c_void, *mut i64) -> HRESULT,
+        RemoveClosed: unsafe extern "system" fn(*mut IContentDialog, i64) -> HRESULT,
+        _unused_46_53: [*const c_void; 8],
+        Hide: unsafe extern "system" fn(*mut IContentDialog) -> HRESULT,
+        ShowAsync: unsafe extern "system" fn(*mut IContentDialog, *mut *mut c_void) -> HRESULT,
+    }
+}
+
+interface! {
+    IContentDialogClosedEventArgs, IContentDialogClosedEventArgsVtbl: IInspectableVtbl {
+        GetResult: unsafe extern "system" fn(*mut IContentDialogClosedEventArgs, *mut i32) -> HRESULT,
+    }
+}
+
+interface! {
+    #[cfg(feature = "edit")]
+    IControl, IControlVtbl: IInspectableVtbl {
+        _unused_6_28: [*const c_void; 23],
+        SetIsEnabled: unsafe extern "system" fn(*mut IControl, bool) -> HRESULT,
+    }
+}
+
+interface! {
+    IDesktopSiteBridge, IDesktopSiteBridgeVtbl: IInspectableVtbl {
+        _unused_6_12: [*const c_void; 7],
+        MoveAndResize: unsafe extern "system" fn(*mut IDesktopSiteBridge, RectInt32) -> HRESULT,
+        _unused_14_16: [*const c_void; 3],
+        Show: unsafe extern "system" fn(*mut IDesktopSiteBridge) -> HRESULT,
+    }
+}
+
+interface! {
+    IDesktopWindowXamlSource, IDesktopWindowXamlSourceVtbl: IInspectableVtbl {
+        _unused_6: [*const c_void; 1],
+        SetContent: unsafe extern "system" fn(*mut IDesktopWindowXamlSource, *mut c_void) -> HRESULT,
+        _unused_8_9: [*const c_void; 2],
+        SetSystemBackdrop: unsafe extern "system" fn(*mut IDesktopWindowXamlSource, *mut c_void) -> HRESULT,
+        GetSiteBridge: unsafe extern "system" fn(*mut IDesktopWindowXamlSource, *mut *mut c_void) -> HRESULT,
+        _unused_12_16: [*const c_void; 5],
+        Initialize: unsafe extern "system" fn(*mut IDesktopWindowXamlSource, WindowId) -> HRESULT,
+    }
+}
+
+interface! {
+    IDispatcherQueueController2, IDispatcherQueueController2Vtbl: IInspectableVtbl {
+        ShutdownQueue: unsafe extern "system" fn(*mut IDispatcherQueueController2) -> HRESULT,
+    }
+}
+
+interface! {
+    IDispatcherQueueControllerStatics, IDispatcherQueueControllerStaticsVtbl: IInspectableVtbl {
+        _unused_6: [*const c_void; 1],
+        CreateOnCurrentThread: unsafe extern "system" fn(*mut IDispatcherQueueControllerStatics, *mut *mut c_void) -> HRESULT,
+    }
+}
+
+interface! {
+    IFrameworkElement, IFrameworkElementVtbl: IInspectableVtbl {
+        _unused_6_12: [*const c_void; 7],
+        GetActualWidth: unsafe extern "system" fn(*mut IFrameworkElement, *mut f64) -> HRESULT,
+        _unused_14_15: [*const c_void; 2],
+        SetWidth: unsafe extern "system" fn(*mut IFrameworkElement, f64) -> HRESULT,
+        _unused_17: [*const c_void; 1],
+        SetHeight: unsafe extern "system" fn(*mut IFrameworkElement, f64) -> HRESULT,
+        _unused_19_31: [*const c_void; 13],
+        SetMargin: unsafe extern "system" fn(*mut IFrameworkElement, Thickness) -> HRESULT,
+        GetName: unsafe extern "system" fn(*mut IFrameworkElement, *mut HSTRING) -> HRESULT,
+        _unused_34_56: [*const c_void; 23],
+        GetRequestedTheme: unsafe extern "system" fn(*mut IFrameworkElement, *mut i32) -> HRESULT,
+        SetRequestedTheme: unsafe extern "system" fn(*mut IFrameworkElement, i32) -> HRESULT,
+        _unused_59_66: [*const c_void; 8],
+        AddSizeChanged: unsafe extern "system" fn(*mut IFrameworkElement, *mut c_void, *mut i64) -> HRESULT,
+        _unused_68_76: [*const c_void; 9],
+        FindName: unsafe extern "system" fn(*mut IFrameworkElement, HSTRING, *mut *mut c_void) -> HRESULT,
+    }
+}
+
+interface! {
+    IImage, IImageVtbl: IInspectableVtbl {
+        _unused_6: [*const c_void; 1],
+        SetSource: unsafe extern "system" fn(*mut IImage, *mut c_void) -> HRESULT,
+    }
+}
+
+interface! {
+    IInputNonClientPointerSource, IInputNonClientPointerSourceVtbl: IInspectableVtbl {
+        _unused_6_9: [*const c_void; 4],
+        SetRegionRects: unsafe extern "system" fn(*mut IInputNonClientPointerSource, i32, u32, *const RectInt32) -> HRESULT,
+    }
+}
+
+interface! {
+    IInputNonClientPointerSourceStatics, IInputNonClientPointerSourceStaticsVtbl: IInspectableVtbl {
+        GetForWindowId: unsafe extern "system" fn(*mut IInputNonClientPointerSourceStatics, WindowId, *mut *mut c_void) -> HRESULT,
+    }
+}
+
+interface! {
+    #[cfg(feature = "edit")]
+    IKeyRoutedEventArgs, IKeyRoutedEventArgsVtbl: IInspectableVtbl {
+        GetKey: unsafe extern "system" fn(*mut IKeyRoutedEventArgs, *mut i32) -> HRESULT,
+        _unused_7_8: [*const c_void; 2],
+        SetHandled: unsafe extern "system" fn(*mut IKeyRoutedEventArgs, u8) -> HRESULT,
+    }
+}
+
+interface! {
+    IMenuFlyoutItem, IMenuFlyoutItemVtbl: IInspectableVtbl {
+        _unused_6_16: [*const c_void; 11],
+        AddClick: unsafe extern "system" fn(*mut IMenuFlyoutItem, *mut c_void, *mut i64) -> HRESULT,
+    }
+}
+
+interface! {
+    IPointerPoint, IPointerPointVtbl: IInspectableVtbl {
+        _unused_6_7: [*const c_void; 2],
+        GetPointerDeviceType: unsafe extern "system" fn(*mut IPointerPoint, *mut i32) -> HRESULT,
+        _unused_9: [*const c_void; 1],
+        GetPosition: unsafe extern "system" fn(*mut IPointerPoint, *mut Point) -> HRESULT,
+        GetProperties: unsafe extern "system" fn(*mut IPointerPoint, *mut *mut c_void) -> HRESULT,
+    }
+}
+
+interface! {
+    IPointerPointProperties, IPointerPointPropertiesVtbl: IInspectableVtbl {
+        _unused_6_12: [*const c_void; 7],
+        GetIsLeftButtonPressed: unsafe extern "system" fn(*mut IPointerPointProperties, *mut u8) -> HRESULT,
+    }
+}
+
+interface! {
+    IPointerRoutedEventArgs, IPointerRoutedEventArgsVtbl: IInspectableVtbl {
+        GetPointer: unsafe extern "system" fn(*mut IPointerRoutedEventArgs, *mut *mut c_void) -> HRESULT,
+        GetKeyModifiers: unsafe extern "system" fn(*mut IPointerRoutedEventArgs, *mut u32) -> HRESULT,
+        _unused_8: [*const c_void; 1],
+        SetHandled: unsafe extern "system" fn(*mut IPointerRoutedEventArgs, u8) -> HRESULT,
+        _unused_10: [*const c_void; 1],
+        GetCurrentPoint: unsafe extern "system" fn(*mut IPointerRoutedEventArgs, *mut c_void, *mut *mut c_void) -> HRESULT,
+    }
+}
+
+interface! {
+    IPropertyValueStatics, IPropertyValueStaticsVtbl: IInspectableVtbl {
+        _unused_6_13: [*const c_void; 8],
+        CreateSingle: unsafe extern "system" fn(*mut IPropertyValueStatics, f32, *mut *mut c_void) -> HRESULT,
+        CreateDouble: unsafe extern "system" fn(*mut IPropertyValueStatics, f64, *mut *mut c_void) -> HRESULT,
+        _unused_16: [*const c_void; 1],
+        CreateBoolean: unsafe extern "system" fn(*mut IPropertyValueStatics, bool, *mut *mut c_void) -> HRESULT,
+    }
+}
+
+interface! {
+    IScrollViewer, IScrollViewerVtbl: IInspectableVtbl {
+        _unused_6_39: [*const c_void; 34],
+        GetHorizontalOffset: unsafe extern "system" fn(*mut IScrollViewer, *mut f64) -> HRESULT,
+        GetViewportWidth: unsafe extern "system" fn(*mut IScrollViewer, *mut f64) -> HRESULT,
+        GetScrollableWidth: unsafe extern "system" fn(*mut IScrollViewer, *mut f64) -> HRESULT,
+        _unused_43_44: [*const c_void; 2],
+        GetVerticalOffset: unsafe extern "system" fn(*mut IScrollViewer, *mut f64) -> HRESULT,
+        _unused_46: [*const c_void; 1],
+        GetScrollableHeight: unsafe extern "system" fn(*mut IScrollViewer, *mut f64) -> HRESULT,
+        _unused_48_53: [*const c_void; 6],
+        GetZoomFactor: unsafe extern "system" fn(*mut IScrollViewer, *mut f32) -> HRESULT,
+        _unused_55_73: [*const c_void; 19],
+        AddViewChanged: unsafe extern "system" fn(*mut IScrollViewer, *mut c_void, *mut i64) -> HRESULT,
+        _unused_75_83: [*const c_void; 9],
+        ChangeView: unsafe extern "system" fn(*mut IScrollViewer, *mut c_void, *mut c_void, *mut c_void, u8, *mut u8) -> HRESULT,
+    }
+}
+
+interface! {
+    IScrollViewerViewChangedEventArgs, IScrollViewerViewChangedEventArgsVtbl: IInspectableVtbl {
+        GetIsIntermediate: unsafe extern "system" fn(*mut IScrollViewerViewChangedEventArgs, *mut u8) -> HRESULT,
+    }
+}
+
+interface! {
+    ITextBlock, ITextBlockVtbl: IInspectableVtbl {
+        _unused_6_26: [*const c_void; 21],
+        SetText: unsafe extern "system" fn(*mut ITextBlock, *mut c_void) -> HRESULT,
+    }
+}
+
+interface! {
+    IToggleButton, IToggleButtonVtbl: IInspectableVtbl {
+        GetIsChecked: unsafe extern "system" fn(*mut IToggleButton, *mut *mut c_void) -> HRESULT,
+        SetIsChecked: unsafe extern "system" fn(*mut IToggleButton, *mut c_void) -> HRESULT,
+    }
+}
+
+interface! {
+    IUIElement, IUIElementVtbl: IInspectableVtbl {
+        _unused_6_9: [*const c_void; 4],
+        SetOpacity: unsafe extern "system" fn(*mut IUIElement, f64) -> HRESULT,
+        _unused_11_22: [*const c_void; 12],
+        GetVisibility: unsafe extern "system" fn(*mut IUIElement, *mut i32) -> HRESULT,
+        SetVisibility: unsafe extern "system" fn(*mut IUIElement, i32) -> HRESULT,
+        _unused_25_108: [*const c_void; 84],
+        GetXamlRoot: unsafe extern "system" fn(*mut IUIElement, *mut *mut c_void) -> HRESULT,
+        SetXamlRoot: unsafe extern "system" fn(*mut IUIElement, *mut c_void) -> HRESULT,
+        _unused_111_131: [*const c_void; 21],
+        AddKeyDown: unsafe extern "system" fn(*mut IUIElement, *mut c_void, *mut i64) -> HRESULT,
+        _unused_133_151: [*const c_void; 19],
+        AddPointerPressed: unsafe extern "system" fn(*mut IUIElement, *mut c_void, *mut i64) -> HRESULT,
+        _unused_153: [*const c_void; 1],
+        AddPointerMoved: unsafe extern "system" fn(*mut IUIElement, *mut c_void, *mut i64) -> HRESULT,
+        _unused_155: [*const c_void; 1],
+        AddPointerReleased: unsafe extern "system" fn(*mut IUIElement, *mut c_void, *mut i64) -> HRESULT,
+        _unused_157_161: [*const c_void; 5],
+        AddPointerCaptureLost: unsafe extern "system" fn(*mut IUIElement, *mut c_void, *mut i64) -> HRESULT,
+        _unused_163_211: [*const c_void; 49],
+        CapturePointer: unsafe extern "system" fn(*mut IUIElement, *mut c_void, *mut u8) -> HRESULT,
+        _unused_213_225: [*const c_void; 13],
+        Focus: unsafe extern "system" fn(*mut IUIElement, i32, *mut u8) -> HRESULT,
+    }
+}
+
+interface! {
+    IWindowsXamlManagerStatics, IWindowsXamlManagerStaticsVtbl: IInspectableVtbl {
+        InitializeForCurrentThread: unsafe extern "system" fn(*mut IWindowsXamlManagerStatics, *mut *mut c_void) -> HRESULT,
+    }
+}
+
+interface! {
+    IWriteableBitmap, IWriteableBitmapVtbl: IInspectableVtbl {
+        GetPixelBuffer: unsafe extern "system" fn(*mut IWriteableBitmap, *mut *mut c_void) -> HRESULT,
+        Invalidate: unsafe extern "system" fn(*mut IWriteableBitmap) -> HRESULT,
+    }
+}
+
+interface! {
+    IWriteableBitmapFactory, IWriteableBitmapFactoryVtbl: IInspectableVtbl {
+        CreateInstanceWithDimensions: unsafe extern "system" fn(*mut IWriteableBitmapFactory, i32, i32, *mut *mut c_void) -> HRESULT,
+    }
+}
+
+interface! {
+    IXamlReaderStatics, IXamlReaderStaticsVtbl: IInspectableVtbl {
+        Load: unsafe extern "system" fn(*mut IXamlReaderStatics, HSTRING, *mut *mut c_void) -> HRESULT,
     }
 }

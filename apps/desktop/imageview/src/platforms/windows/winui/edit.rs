@@ -276,8 +276,8 @@ pub(super) fn clicked(
         && let Ok(toggle) = sender.cast(&IID_ITOGGLE_BUTTON)
         && let Some(checked) = boxed_bool(action == toggled.get())
     {
-        // SAFETY: Slot 7 of IToggleButton is put_IsChecked.
-        _ = unsafe { toggle.put(7, checked.as_raw()) };
+        // SAFETY: The sender was queried for IToggleButton and checked owns the boxed boolean.
+        _ = unsafe { check(call!(toggle, IToggleButton::SetIsChecked, checked.as_raw())) };
     }
     // Canceling without an open tool would select the whole image again.
     action != "tool.cancel" || opened.get()
@@ -295,19 +295,18 @@ pub(super) fn add_escape(
             return;
         };
         let mut key = 0i32;
-        // SAFETY: Slot 6 of IKeyRoutedEventArgs is get_Key and slot 9 is put_Handled.
+        // SAFETY: The event arguments were queried for IKeyRoutedEventArgs and key is writable.
         unsafe {
-            call!(args, 6, &mut key => *mut i32);
+            call!(args, IKeyRoutedEventArgs::GetKey, &mut key);
             if key == ESCAPE && !opened.get() {
-                call!(args, 9, 1u8 => u8);
+                call!(args, IKeyRoutedEventArgs::SetHandled, 1u8);
                 on_action("tool.cancel");
             }
         }
     });
-    // Slot 132 of IUIElement is add_KeyDown.
     scroller
         .cast(&IID_IUI_ELEMENT)
-        .and_then(|element| add_event(&element, 132, &key_down))
+        .and_then(|element| add_event!(&element, IUIElement::AddKeyDown, &key_down))
 }
 
 /// A drag with the primary mouse button, which crops or selects, at a position in the visible
@@ -348,8 +347,14 @@ impl Marks {
             return false;
         }
         let mut modifiers = 0u32;
-        // SAFETY: Slot 7 of IPointerRoutedEventArgs is get_KeyModifiers.
-        unsafe { call!(args, 7, &mut modifiers => *mut u32) };
+        // SAFETY: The event arguments were queried for IPointerRoutedEventArgs and modifiers is writable.
+        unsafe {
+            call!(
+                args,
+                IPointerRoutedEventArgs::GetKeyModifiers,
+                &mut modifiers
+            )
+        };
         (self.on_mark)(Mark::Drag(position(point), modifiers & SHIFT != 0));
         true
     }
@@ -384,8 +389,8 @@ impl Island {
 
     /// Enables the Edit button, only still bitmaps can be edited.
     pub(crate) fn set_editable(&self, editable: bool) {
-        // SAFETY: Slot 29 of IControl is put_IsEnabled.
-        unsafe { call!(self.edit.edit_button, 29, editable => bool) };
+        // SAFETY: The edit button retains its IControl interface on this XAML thread.
+        unsafe { call!(self.edit.edit_button, IControl::SetIsEnabled, editable) };
     }
 
     /// Shows the toggle button of a selection action as on and the others as off.
@@ -395,8 +400,8 @@ impl Island {
                 self.edit.toggled.set(toggle_action);
             }
             if let Some(checked) = boxed_bool(*toggle_action == action) {
-                // SAFETY: Slot 7 of IToggleButton is put_IsChecked.
-                _ = unsafe { toggle.put(7, checked.as_raw()) };
+                // SAFETY: The queried toggle and its boxed boolean live through the call.
+                _ = unsafe { check(call!(toggle, IToggleButton::SetIsChecked, checked.as_raw())) };
             }
         }
     }
@@ -407,8 +412,8 @@ impl Island {
             set_image(&self.edit.overlay, bitmap, size);
         } else {
             // Hidden image elements otherwise retain their last CPU buffer and GPU texture.
-            // SAFETY: Slot 7 of IImage is put_Source; null releases its image.
-            unsafe { self.edit.overlay.put(7, null_mut()) }.ok();
+            // SAFETY: The overlay retains IImage and accepts null to clear its source.
+            unsafe { check(call!(self.edit.overlay, IImage::SetSource, null_mut())) }.ok();
         }
         set_visible(&self.edit.overlay, overlay.is_some());
     }
@@ -416,11 +421,13 @@ impl Island {
     /// Shows the controls of an edit tool, or hides them.
     pub(crate) fn set_tool(&self, content: Option<&ComPtr>) {
         let element = content.and_then(|content| content.cast(&IID_IUI_ELEMENT).ok());
-        // SAFETY: Slot 19 of IBorder is put_Child, null removes the child.
+        // SAFETY: The border accepts the queried IUIElement or null to clear its child.
         _ = unsafe {
-            self.edit
-                .tool
-                .put(19, element.as_ref().map_or(null_mut(), ComPtr::as_raw))
+            check(call!(
+                self.edit.tool,
+                IBorder::SetChild,
+                element.as_ref().map_or(null_mut(), ComPtr::as_raw)
+            ))
         };
         set_visible(&self.edit.tool, element.is_some());
         self.edit.tool_open.set(element.is_some());
@@ -430,8 +437,14 @@ impl Island {
     pub(crate) fn assert_header_layout(&self, filters_overflowed: Option<bool>) {
         let (width, _, scale) = self.regions.size.get();
         let mut inset = 0;
-        // SAFETY: Slot 36 of IAppWindowTitleBar is get_RightInset.
-        unsafe { call!(self.title_bar, 36, &mut inset => *mut i32) };
+        // SAFETY: The title bar retains its IAppWindowTitleBar and inset is writable.
+        unsafe {
+            call!(
+                self.title_bar,
+                IAppWindowTitleBar::GetRightInset,
+                &mut inset
+            )
+        };
         let controls = BUTTONS_LEFT
             + actual_width(&self.regions.start)
             + actual_width(&self.regions.end)
@@ -444,14 +457,14 @@ impl Island {
             for (name, expected) in [(w!("Filters"), hidden), (w!("MoreFilters"), !hidden)] {
                 let element = find_name(&self.root, name, &IID_IUI_ELEMENT).unwrap();
                 let mut visibility = -1;
-                // SAFETY: Slot 23 of IUIElement is get_Visibility.
-                unsafe { call!(element, 23, &mut visibility => *mut i32) };
+                // SAFETY: The menu element was queried for IUIElement and visibility is writable.
+                unsafe { call!(element, IUIElement::GetVisibility, &mut visibility) };
                 assert_eq!(visibility, i32::from(expected), "filter menu visibility");
             }
             let selection = find_name(&self.root, w!("SelectGroup"), &IID_IUI_ELEMENT).unwrap();
             let mut visibility = -1;
-            // SAFETY: Slot 23 of IUIElement is get_Visibility.
-            unsafe { call!(selection, 23, &mut visibility => *mut i32) };
+            // SAFETY: The selection element was queried for IUIElement and visibility is writable.
+            unsafe { call!(selection, IUIElement::GetVisibility, &mut visibility) };
             if visibility == 1 {
                 assert!(
                     self.regions

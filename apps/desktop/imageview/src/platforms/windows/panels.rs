@@ -18,8 +18,8 @@ use imageview_core::{InfoSection, Media, render_media};
 use super::headers::wide;
 use super::winrt::*;
 use super::winui::{
-    Bitmap, INSPECTOR_WIDTH, Island, Panel, SIDEBAR_WIDTH, add_event, escape_xml, find_name,
-    load_xaml, set_image, set_visible,
+    Bitmap, IButtonBase, INSPECTOR_WIDTH, Island, Panel, SIDEBAR_WIDTH, add_event, escape_xml,
+    find_name, load_xaml, set_image, set_visible,
 };
 use crate::AppEvent;
 
@@ -135,10 +135,9 @@ impl Panels {
             let clicked = event_handler(IID_ROUTED_EVENT_HANDLER, move |_, _| {
                 super::send(AppEvent::ShowPage(window, index));
             });
-            // Slot 14 of IButtonBase is add_Click.
-            add_event(
+            add_event!(
                 &find_name(&content, &wide(&format!("Page{index}")), &IID_IBUTTON_BASE)?,
-                14,
+                IButtonBase::AddClick,
                 &clicked,
             )?;
             selected.push(find_name(

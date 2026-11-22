@@ -18,7 +18,9 @@ use imageview_core::edit::{Control, Tool};
 
 use super::headers::{w, wide};
 use super::winrt::*;
-use super::winui::{add_event, boxed_bool, escape_xml, find_name, load_xaml};
+use super::winui::{
+    IButtonBase, ITextBlock, IToggleButton, add_event, boxed_bool, escape_xml, find_name, load_xaml,
+};
 use crate::AppEvent;
 
 // The largest size of an image side.
@@ -173,21 +175,19 @@ impl State {
             .iter()
             .map(|entry| {
                 let interface = &entry.interface;
-                // SAFETY: The interface of every entry is the one of its kind of control: slot 14
-                // of IRangeBase and slot 10 of INumberBox are get_Value, slot 6 of ISelector is
-                // get_SelectedIndex and slot 6 of IToggleButton is get_IsChecked, an
-                // IReference<Boolean> with get_Value in slot 6.
+                // SAFETY: Each entry retains the interface selected for its control variant.
+                // The toggle getter returns a nullable IReference<Boolean>.
                 unsafe {
                     match entry.control {
                         Control::Slider(_) => {
                             let mut value = 0.0f64;
-                            call!(interface, 14, &mut value => *mut f64);
+                            call!(interface, IRangeBase::GetValue, &mut value);
                             value as f32
                         }
                         // An empty field is not a number.
                         Control::Number { .. } => {
                             let mut value = 0.0f64;
-                            call!(interface, 10, &mut value => *mut f64);
+                            call!(interface, INumberBox::GetValue, &mut value);
                             if value.is_nan() {
                                 0.0
                             } else {
@@ -196,14 +196,19 @@ impl State {
                         }
                         Control::Choice { .. } => {
                             let mut index = 0i32;
-                            call!(interface, 6, &mut index => *mut i32);
+                            call!(interface, ISelector::GetSelectedIndex, &mut index);
                             index.max(0) as f32
                         }
-                        Control::Toggle { .. } => interface.get(6).map_or(0.0, |checked| {
-                            let mut value = false;
-                            call!(checked, 6, &mut value => *mut bool);
-                            f32::from(u8::from(value))
-                        }),
+                        Control::Toggle { .. } => {
+                            out(|raw| call!(interface, IToggleButton::GetIsChecked, raw)).map_or(
+                                0.0,
+                                |checked| {
+                                    let mut value = false;
+                                    call!(checked, IBooleanReference::GetValue, &mut value);
+                                    f32::from(u8::from(value))
+                                },
+                            )
+                        }
                     }
                 }
             })
@@ -219,18 +224,21 @@ impl State {
                 continue;
             }
             let interface = &entry.interface;
-            // SAFETY: The interface of every entry is the one of its kind of control: slot 15 of
-            // IRangeBase and slot 11 of INumberBox are put_Value, slot 7 of ISelector is
-            // put_SelectedIndex and slot 7 of IToggleButton is put_IsChecked.
+            // SAFETY: Each entry retains the interface selected for its control variant.
+            // The boxed toggle value lives through the setter call.
             unsafe {
                 match entry.control {
-                    Control::Slider(_) => call!(interface, 15, f64::from(*value) => f64),
+                    Control::Slider(_) => call!(interface, IRangeBase::SetValue, f64::from(*value)),
                     Control::Number { .. } => {
-                        call!(interface, 11, f64::from(value.round()) => f64)
+                        call!(interface, INumberBox::SetValue, f64::from(value.round()))
                     }
-                    Control::Choice { .. } => call!(interface, 7, *value as i32 => i32),
+                    Control::Choice { .. } => {
+                        call!(interface, ISelector::SetSelectedIndex, *value as i32)
+                    }
                     Control::Toggle { .. } => match boxed_bool(*value != 0.0) {
-                        Some(checked) => call!(interface, 7, checked.as_raw() => *mut c_void),
+                        Some(checked) => {
+                            call!(interface, IToggleButton::SetIsChecked, checked.as_raw())
+                        }
                         None => 0,
                     },
                 };
@@ -245,8 +253,8 @@ impl State {
         for (entry, value) in self.entries.iter().zip(values) {
             if let (Control::Slider(parameter), Some(label)) = (entry.control, &entry.value) {
                 let text = HString::new(&parameter.value_text(*value));
-                // SAFETY: Slot 27 of ITextBlock is put_Text.
-                _ = unsafe { label.put(27, text.as_raw()) };
+                // SAFETY: The label retains its ITextBlock interface and text lives through the call.
+                _ = unsafe { check(call!(label, ITextBlock::SetText, text.as_raw())) };
             }
         }
     }
@@ -309,31 +317,29 @@ impl ToolPanel {
             }
         };
         for (index, entry) in state.entries.iter().enumerate() {
-            // Slot 16 of IRangeBase and ISelector and slot 44 of INumberBox are their changed
-            // events, slot 14 of IButtonBase is add_Click.
-            let (interface, slot, iid) = match entry.control {
-                Control::Slider(_) => (
-                    entry.interface.clone(),
-                    16,
-                    IID_RANGE_BASE_VALUE_CHANGED_EVENT_HANDLER,
-                ),
-                Control::Number { .. } => (
-                    entry.interface.clone(),
-                    44,
-                    IID_NUMBER_BOX_VALUE_CHANGED_EVENT_HANDLER,
-                ),
-                Control::Choice { .. } => (
-                    entry.interface.clone(),
-                    16,
-                    IID_SELECTION_CHANGED_EVENT_HANDLER,
-                ),
-                Control::Toggle { .. } => (
+            let callback = changed(index);
+            match entry.control {
+                Control::Slider(_) => add_event!(
+                    entry.interface,
+                    IRangeBase::AddValueChanged,
+                    event_handler(IID_RANGE_BASE_VALUE_CHANGED_EVENT_HANDLER, callback),
+                )?,
+                Control::Number { .. } => add_event!(
+                    entry.interface,
+                    INumberBox::AddValueChanged,
+                    event_handler(IID_NUMBER_BOX_VALUE_CHANGED_EVENT_HANDLER, callback),
+                )?,
+                Control::Choice { .. } => add_event!(
+                    entry.interface,
+                    ISelector::AddSelectionChanged,
+                    event_handler(IID_SELECTION_CHANGED_EVENT_HANDLER, callback),
+                )?,
+                Control::Toggle { .. } => add_event!(
                     entry.interface.cast(&IID_IBUTTON_BASE)?,
-                    14,
-                    IID_ROUTED_EVENT_HANDLER,
-                ),
-            };
-            add_event(&interface, slot, &event_handler(iid, changed(index)))?;
+                    IButtonBase::AddClick,
+                    event_handler(IID_ROUTED_EVENT_HANDLER, callback),
+                )?,
+            }
         }
         // Tools without a preview have nothing to reset.
         if let Ok(button) = find_name(&content, w!("Reset"), &IID_IBUTTON_BASE) {
@@ -343,14 +349,14 @@ impl ToolPanel {
                     state.changed(usize::MAX);
                 }
             });
-            add_event(&button, 14, &reset)?;
+            add_event!(&button, IButtonBase::AddClick, &reset)?;
         }
         for (name, action) in [(w!("Cancel"), "tool.cancel"), (w!("Apply"), "tool.apply")] {
             let button = find_name(&content, name, &IID_IBUTTON_BASE)?;
             let clicked = event_handler(IID_ROUTED_EVENT_HANDLER, move |_, _| {
                 super::send(AppEvent::Action(action));
             });
-            add_event(&button, 14, &clicked)?;
+            add_event!(&button, IButtonBase::AddClick, &clicked)?;
         }
         Ok(Self { content, state })
     }
@@ -396,5 +402,39 @@ mod tests {
             "a &amp; &quot;b&quot; &lt;c&gt;"
         );
         assert_eq!(escape_xml("{draft}\u{1}.png"), "{}{draft}.png");
+    }
+}
+
+interface! {
+    IBooleanReference, IBooleanReferenceVtbl: IInspectableVtbl {
+        GetValue: unsafe extern "system" fn(*mut IBooleanReference, *mut bool) -> HRESULT,
+    }
+}
+
+interface! {
+    INumberBox, INumberBoxVtbl: IInspectableVtbl {
+        _unused_6_9: [*const c_void; 4],
+        GetValue: unsafe extern "system" fn(*mut INumberBox, *mut f64) -> HRESULT,
+        SetValue: unsafe extern "system" fn(*mut INumberBox, f64) -> HRESULT,
+        _unused_12_43: [*const c_void; 32],
+        AddValueChanged: unsafe extern "system" fn(*mut INumberBox, *mut c_void, *mut i64) -> HRESULT,
+    }
+}
+
+interface! {
+    IRangeBase, IRangeBaseVtbl: IInspectableVtbl {
+        _unused_6_13: [*const c_void; 8],
+        GetValue: unsafe extern "system" fn(*mut IRangeBase, *mut f64) -> HRESULT,
+        SetValue: unsafe extern "system" fn(*mut IRangeBase, f64) -> HRESULT,
+        AddValueChanged: unsafe extern "system" fn(*mut IRangeBase, *mut c_void, *mut i64) -> HRESULT,
+    }
+}
+
+interface! {
+    ISelector, ISelectorVtbl: IInspectableVtbl {
+        GetSelectedIndex: unsafe extern "system" fn(*mut ISelector, *mut i32) -> HRESULT,
+        SetSelectedIndex: unsafe extern "system" fn(*mut ISelector, i32) -> HRESULT,
+        _unused_8_15: [*const c_void; 8],
+        AddSelectionChanged: unsafe extern "system" fn(*mut ISelector, *mut c_void, *mut i64) -> HRESULT,
     }
 }
