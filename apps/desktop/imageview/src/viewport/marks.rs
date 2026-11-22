@@ -9,7 +9,7 @@
 
 use std::f32::consts::TAU;
 
-use bcanvas::{CanvasRenderingContext2d, Color, FillRule};
+use bcanvas::{CanvasRenderingContext2d, Color, FillRule, Path2D};
 use imageview_core::edit::{Selection, Shape};
 use imageview_core::{Media, MediaRenderer};
 
@@ -227,17 +227,13 @@ impl Viewport {
     }
 }
 
-// Adds a shape to the path.
-fn shape_path(
-    context: &mut CanvasRenderingContext2d<'_>,
-    shape: Shape,
-    [left, top, right, bottom]: [f32; 4],
-) {
+// The path of a shape.
+fn shape_path(shape: Shape, [left, top, right, bottom]: [f32; 4]) -> Path2D {
+    let mut path = Path2D::new();
     match shape {
-        Shape::Rectangle => context.rect(left, top, right - left, bottom - top),
+        Shape::Rectangle => path.rect(left, top, right - left, bottom - top),
         Shape::Ellipse => {
-            context.move_to(right, f32::midpoint(top, bottom));
-            context.ellipse(
+            path.ellipse(
                 f32::midpoint(left, right),
                 f32::midpoint(top, bottom),
                 (right - left) / 2.0,
@@ -247,9 +243,10 @@ fn shape_path(
                 TAU,
                 false,
             );
-            context.close_path();
+            path.close_path();
         }
     }
+    path
 }
 
 // Tints what is not selected and draws the outline of the selection, dashed black on white so
@@ -261,23 +258,22 @@ fn draw_selection(
     media: [f32; 4],
     inverted: bool,
 ) {
-    context.begin_path();
+    let mut tint = Path2D::new();
     if !inverted {
-        context.rect(media[0], media[1], media[2] - media[0], media[3] - media[1]);
+        tint.rect(media[0], media[1], media[2] - media[0], media[3] - media[1]);
     }
-    shape_path(context, shape, edges);
+    tint.add_path(&shape_path(shape, edges));
     context.set_fill_style(Color::rgba(0, 0, 0, 70));
-    context.fill_with(FillRule::EvenOdd);
+    context.fill_path_with(&tint, FillRule::EvenOdd);
 
-    context.begin_path();
-    shape_path(context, shape, edges.map(|edge| edge + 0.5));
+    let outline = shape_path(shape, edges.map(|edge| edge + 0.5));
     context.set_line_width(1.0);
     context.set_stroke_style(Color::rgb(255, 255, 255));
     context.set_line_dash(&[]);
-    context.stroke();
+    context.stroke_path(&outline);
     context.set_stroke_style(Color::rgb(0, 0, 0));
     context.set_line_dash(&[4.0, 4.0]);
-    context.stroke();
+    context.stroke_path(&outline);
     context.set_line_dash(&[]);
 
     let [left, top, right, bottom] = edges;
