@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use bcanvas::{
     CanvasBuilder, CanvasGradient, CanvasImage, CanvasRenderingContext2d, Color,
-    CompositeOperation, FillRule, FontWeight, GradientSpread, LineCap, LineJoin, TextAlign,
+    CompositeOperation, FillRule, FontWeight, GradientSpread, LineCap, LineJoin, Path2D, TextAlign,
     TextBaseline,
 };
 use bwindow::{
@@ -260,7 +260,7 @@ fn draw_shapes(ctx: &mut CanvasRenderingContext2d<'_>, palette: &Palette, time: 
     gradient.add_color_stop(1.0, palette.blue);
     ctx.set_fill_style(gradient);
     ctx.begin_path();
-    ctx.round_rect(54.0, 173.0, 104.0, 64.0, &[16.0]);
+    ctx.round_rect(54.0, 173.0, 104.0, 64.0, &[24.0, 6.0]);
     ctx.fill();
     ctx.set_stroke_style(palette.cyan);
     ctx.set_line_width(4.0);
@@ -270,7 +270,16 @@ fn draw_shapes(ctx: &mut CanvasRenderingContext2d<'_>, palette: &Palette, time: 
 
     ctx.set_global_alpha(0.78);
     ctx.begin_path();
-    ctx.ellipse(103.0, 282.0, 49.0, 28.0, 0.0, 0.0, TAU, false);
+    ctx.ellipse(
+        103.0,
+        282.0,
+        49.0,
+        28.0,
+        (time * 0.8).sin() * 0.35,
+        0.0,
+        TAU,
+        false,
+    );
     ctx.set_fill_style(palette.violet);
     ctx.fill();
     ctx.set_global_alpha(1.0);
@@ -335,8 +344,8 @@ fn draw_paths(ctx: &mut CanvasRenderingContext2d<'_>, palette: &Palette, time: f
     ctx.set_stroke_style(palette.gold);
     ctx.begin_path();
     ctx.move_to(508.0, 319.0);
-    ctx.line_to(536.0, 288.0);
-    ctx.line_to(564.0, 319.0);
+    ctx.arc_to(536.0, 288.0, 564.0, 319.0, 8.0);
+    ctx.arc_to(564.0, 319.0, 592.0, 288.0, 8.0);
     ctx.line_to(592.0, 288.0);
     ctx.stroke();
     ctx.set_line_join(LineJoin::Miter);
@@ -602,15 +611,7 @@ fn draw_input(
     let y = pointer_y.clamp(viewport.y + 18.0, viewport.y + viewport.height - 18.0);
     let color = if pressed { palette.gold } else { palette.cyan };
     ctx.save();
-    ctx.begin_path();
-    ctx.round_rect(
-        viewport.x,
-        viewport.y,
-        viewport.width,
-        viewport.height,
-        &[10.0],
-    );
-    ctx.clip();
+    ctx.clip_path(&round_rect_path(viewport, 10.0));
     ctx.set_fill_style(palette.surface_high);
     ctx.fill_rect(viewport.x, viewport.y, viewport.width, viewport.height);
     ctx.set_stroke_style(palette.border);
@@ -674,12 +675,7 @@ fn gallery_panel(
     bounds: Rect,
     label: &str,
 ) {
-    round_rect(ctx, bounds, 14.0, palette.surface_high);
-    ctx.set_stroke_style(palette.border);
-    ctx.set_line_width(1.0);
-    ctx.begin_path();
-    ctx.round_rect(bounds.x, bounds.y, bounds.width, bounds.height, &[14.0]);
-    ctx.stroke();
+    panel(ctx, palette, bounds, 14.0, palette.surface_high);
     ctx.set_fill_style(palette.muted);
     ctx.set_font("sans-serif", 11.0);
     ctx.set_font_weight(FontWeight::Bold);
@@ -690,12 +686,7 @@ fn gallery_panel(
 }
 
 fn card(ctx: &mut CanvasRenderingContext2d<'_>, palette: &Palette, bounds: Rect, title: &str) {
-    round_rect(ctx, bounds, 16.0, palette.surface);
-    ctx.set_stroke_style(palette.border);
-    ctx.set_line_width(1.0);
-    ctx.begin_path();
-    ctx.round_rect(bounds.x, bounds.y, bounds.width, bounds.height, &[16.0]);
-    ctx.stroke();
+    panel(ctx, palette, bounds, 16.0, palette.surface);
     ctx.set_fill_style(palette.text);
     ctx.set_font("sans-serif", 16.0);
     ctx.set_font_weight(FontWeight::Bold);
@@ -703,11 +694,26 @@ fn card(ctx: &mut CanvasRenderingContext2d<'_>, palette: &Palette, bounds: Rect,
     ctx.fill_text(title, bounds.x + 20.0, bounds.y + 30.0);
 }
 
-fn round_rect(ctx: &mut CanvasRenderingContext2d<'_>, bounds: Rect, radius: f32, color: Color) {
-    ctx.begin_path();
-    ctx.round_rect(bounds.x, bounds.y, bounds.width, bounds.height, &[radius]);
+fn round_rect_path(bounds: Rect, radius: f32) -> Path2D {
+    let mut path = Path2D::new();
+    path.round_rect(bounds.x, bounds.y, bounds.width, bounds.height, &[radius]);
+    path
+}
+
+// Fills and outlines one rounded rectangle path.
+fn panel(
+    ctx: &mut CanvasRenderingContext2d<'_>,
+    palette: &Palette,
+    bounds: Rect,
+    radius: f32,
+    color: Color,
+) {
+    let path = round_rect_path(bounds, radius);
     ctx.set_fill_style(color);
-    ctx.fill();
+    ctx.fill_path(&path);
+    ctx.set_stroke_style(palette.border);
+    ctx.set_line_width(1.0);
+    ctx.stroke_path(&path);
 }
 
 fn circle(ctx: &mut CanvasRenderingContext2d<'_>, x: f32, y: f32, radius: f32, color: Color) {
