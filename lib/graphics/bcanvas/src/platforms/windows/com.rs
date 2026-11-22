@@ -4,7 +4,6 @@
  * SPDX-License-Identifier: MIT
  */
 
-#[cfg(test)]
 use std::ffi::c_void;
 use std::marker::PhantomData;
 use std::ops::Deref;
@@ -12,6 +11,16 @@ use std::ptr::{NonNull, null_mut};
 use std::rc::Rc;
 
 use crate::platforms::windows::headers::{GUID, IUnknownVtbl};
+
+/// Associates an interface's ABI type with its IID.
+///
+/// # Safety
+/// Implementors must represent the interface identified by IID with an IUnknown-compatible vtable.
+pub(crate) unsafe trait ComInterface {
+    const IID: GUID;
+}
+
+const E_POINTER: i32 = 0x80004003u32 as i32;
 
 /// One owned COM reference. Canvas COM objects stay on the window thread.
 pub(crate) struct ComPtr<T> {
@@ -30,7 +39,7 @@ impl<T> ComPtr<T> {
             _thread: PhantomData,
         });
         check(result)?;
-        owned.ok_or(0x80004003u32 as i32)
+        owned.ok_or(E_POINTER)
     }
 
     pub(crate) const fn as_ptr(&self) -> *mut T {
@@ -52,13 +61,29 @@ impl<T> ComPtr<T> {
         }
     }
 
-    /// The IID must identify interface U.
-    pub(crate) unsafe fn query<U>(&self, iid: &GUID) -> Result<ComPtr<U>, i32> {
-        unsafe {
-            ComPtr::create(|out: *mut *mut U| {
-                (self.unknown().QueryInterface)(self.as_ptr().cast(), iid, out.cast())
-            })
-        }
+    pub(crate) fn query<U: ComInterface>(&self) -> Result<ComPtr<U>, i32> {
+        let pointer = self.query_raw(&U::IID)?.cast();
+        Ok(ComPtr {
+            pointer,
+            _thread: PhantomData,
+        })
+    }
+
+    /// Checks for an interface and releases the reference obtained by QueryInterface.
+    pub(crate) fn supports(&self, iid: &GUID) -> bool {
+        let Ok(pointer) = self.query_raw(iid) else {
+            return false;
+        };
+        // SAFETY: The returned interface is live and starts with IUnknown.
+        unsafe { ((**pointer.as_ptr().cast::<*const IUnknownVtbl>()).Release)(pointer.as_ptr()) };
+        true
+    }
+
+    fn query_raw(&self, iid: &GUID) -> Result<NonNull<c_void>, i32> {
+        let mut pointer = null_mut();
+        // SAFETY: The source interface is live and pointer is writable.
+        check(unsafe { (self.unknown().QueryInterface)(self.as_ptr().cast(), iid, &mut pointer) })?;
+        NonNull::new(pointer).ok_or(E_POINTER)
     }
 
     fn unknown(&self) -> &IUnknownVtbl {
@@ -108,8 +133,24 @@ mod tests {
         releases: Cell<u32>,
     }
 
-    unsafe extern "system" fn query(_: *mut c_void, _: *const GUID, _: *mut *mut c_void) -> i32 {
-        0x80004002u32 as i32
+    // SAFETY: This IID describes the mock object's IUnknown-compatible interface.
+    unsafe impl ComInterface for Object {
+        const IID: GUID = GUID {
+            data1: 1,
+            data2: 0,
+            data3: 0,
+            data4: [0; 8],
+        };
+    }
+
+    unsafe extern "system" fn query(
+        this: *mut c_void,
+        _: *const GUID,
+        out: *mut *mut c_void,
+    ) -> i32 {
+        // Simulate a COM implementation that writes a borrowed pointer despite returning failure.
+        unsafe { *out = this };
+        -1
     }
 
     unsafe extern "system" fn add_ref(this: *mut c_void) -> u32 {
@@ -152,6 +193,27 @@ mod tests {
         drop(cloned);
         assert_eq!(object.refs.get(), 0);
         assert_eq!(object.releases.get(), 2);
+    }
+
+    #[test]
+    fn failed_query_does_not_adopt_the_output() {
+        let mut object = Object {
+            vtable: &VTABLE,
+            refs: Cell::new(1),
+            releases: Cell::new(0),
+        };
+        let owned = unsafe {
+            ComPtr::create(|out| {
+                *out = &mut object;
+                0
+            })
+        }
+        .expect("COM object");
+        assert!(matches!(owned.query::<Object>(), Err(-1)));
+        assert_eq!(object.refs.get(), 1);
+        assert_eq!(object.releases.get(), 0);
+        drop(owned);
+        assert_eq!(object.releases.get(), 1);
     }
 
     #[test]

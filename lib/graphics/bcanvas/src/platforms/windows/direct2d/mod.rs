@@ -17,10 +17,8 @@ mod target;
 #[cfg(any(target_vendor = "winxp", target_vendor = "win7", test))]
 pub(crate) fn available() -> bool {
     unsafe {
-        headers::ID2D1Factory::new().is_ok_and(|factory| {
-            factory
-                .query::<headers::ID2D1Factory>(&headers::IID_ID2D1_FACTORY1)
-                .is_ok()
-        }) && headers::IDWriteFactory::new().is_ok()
+        headers::ID2D1Factory::new()
+            .is_ok_and(|factory| factory.supports(&headers::IID_ID2D1_FACTORY1))
+            && headers::IDWriteFactory::new().is_ok()
     }
 }

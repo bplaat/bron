@@ -13,12 +13,12 @@
 use std::ffi::c_void;
 use std::ops::Deref;
 
-use crate::platforms::windows::com::{ComPtr, check};
+use crate::platforms::windows::com::{ComInterface, ComPtr, check};
 use crate::platforms::windows::headers::*;
 
 #[repr(C)]
 pub(super) struct ID2D1Factory {
-    lpVtbl: *const ID2D1FactoryVtbl,
+    vtbl: *const ID2D1FactoryVtbl,
 }
 
 #[repr(C)]
@@ -53,7 +53,7 @@ impl ID2D1Factory {
     pub(super) unsafe fn CreatePathGeometry(&self) -> Result<ComPtr<ID2D1PathGeometry>, i32> {
         unsafe {
             ComPtr::create(|out| {
-                ((*self.lpVtbl).CreatePathGeometry)(self as *const Self as *mut Self, out)
+                ((*self.vtbl).CreatePathGeometry)(self as *const Self as *mut Self, out)
             })
         }
     }
@@ -65,7 +65,7 @@ impl ID2D1Factory {
     ) -> Result<ComPtr<ID2D1StrokeStyle>, i32> {
         unsafe {
             ComPtr::create(|out| {
-                ((*self.lpVtbl).CreateStrokeStyle)(
+                ((*self.vtbl).CreateStrokeStyle)(
                     self as *const Self as *mut Self,
                     properties,
                     dashes,
@@ -82,7 +82,7 @@ impl ID2D1Factory {
     ) -> Result<ComPtr<ID2D1HwndRenderTarget>, i32> {
         unsafe {
             ComPtr::create(|out| {
-                ((*self.lpVtbl).CreateHwndRenderTarget)(
+                ((*self.vtbl).CreateHwndRenderTarget)(
                     self as *const Self as *mut Self,
                     properties,
                     hwnd_properties,
@@ -98,7 +98,7 @@ impl ID2D1Factory {
     ) -> Result<ComPtr<ID2D1DCRenderTarget>, i32> {
         unsafe {
             ComPtr::create(|out| {
-                ((*self.lpVtbl).CreateDCRenderTarget)(
+                ((*self.vtbl).CreateDCRenderTarget)(
                     self as *const Self as *mut Self,
                     properties,
                     out,
@@ -110,7 +110,7 @@ impl ID2D1Factory {
 
 #[repr(C)]
 pub(super) struct ID2D1RenderTarget {
-    lpVtbl: *const ID2D1RenderTargetVtbl,
+    vtbl: *const ID2D1RenderTargetVtbl,
 }
 
 #[repr(C)]
@@ -240,12 +240,12 @@ struct ID2D1RenderTargetVtbl {
 impl ID2D1RenderTarget {
     pub(super) unsafe fn GetDpi(&self) -> (f32, f32) {
         let (mut x, mut y) = (0.0, 0.0);
-        unsafe { ((*self.lpVtbl).GetDpi)(self as *const Self as *mut Self, &mut x, &mut y) };
+        unsafe { ((*self.vtbl).GetDpi)(self as *const Self as *mut Self, &mut x, &mut y) };
         (x, y)
     }
     pub(super) unsafe fn GetPixelSize(&self) -> D2D_SIZE_U {
         let mut size = D2D_SIZE_U::default();
-        unsafe { ((*self.lpVtbl).GetPixelSize)(self as *const Self as *mut Self, &mut size) };
+        unsafe { ((*self.vtbl).GetPixelSize)(self as *const Self as *mut Self, &mut size) };
         size
     }
     pub(super) unsafe fn CreateSolidColorBrush(
@@ -255,7 +255,7 @@ impl ID2D1RenderTarget {
     ) -> Result<ComPtr<ID2D1SolidColorBrush>, i32> {
         unsafe {
             ComPtr::create(|out| {
-                ((*self.lpVtbl).CreateSolidColorBrush)(
+                ((*self.vtbl).CreateSolidColorBrush)(
                     self as *const Self as *mut Self,
                     color,
                     properties,
@@ -272,7 +272,7 @@ impl ID2D1RenderTarget {
         style: *mut ID2D1StrokeStyle,
     ) {
         unsafe {
-            ((*self.lpVtbl).DrawRectangle)(
+            ((*self.vtbl).DrawRectangle)(
                 self as *const Self as *mut Self,
                 rect,
                 brush,
@@ -282,10 +282,10 @@ impl ID2D1RenderTarget {
         }
     }
     pub(super) unsafe fn FillRectangle(&self, rect: *const D2D_RECT_F, brush: *mut ID2D1Brush) {
-        unsafe { ((*self.lpVtbl).FillRectangle)(self as *const Self as *mut Self, rect, brush) }
+        unsafe { ((*self.vtbl).FillRectangle)(self as *const Self as *mut Self, rect, brush) }
     }
     pub(super) unsafe fn FillEllipse(&self, ellipse: *const D2D1_ELLIPSE, brush: *mut ID2D1Brush) {
-        unsafe { ((*self.lpVtbl).FillEllipse)(self as *const Self as *mut Self, ellipse, brush) }
+        unsafe { ((*self.vtbl).FillEllipse)(self as *const Self as *mut Self, ellipse, brush) }
     }
     pub(super) unsafe fn DrawGeometry(
         &self,
@@ -295,7 +295,7 @@ impl ID2D1RenderTarget {
         style: *mut ID2D1StrokeStyle,
     ) {
         unsafe {
-            ((*self.lpVtbl).DrawGeometry)(
+            ((*self.vtbl).DrawGeometry)(
                 self as *const Self as *mut Self,
                 geometry,
                 brush,
@@ -311,7 +311,7 @@ impl ID2D1RenderTarget {
         opacity_brush: *mut ID2D1Brush,
     ) {
         unsafe {
-            ((*self.lpVtbl).FillGeometry)(
+            ((*self.vtbl).FillGeometry)(
                 self as *const Self as *mut Self,
                 geometry,
                 brush,
@@ -327,7 +327,7 @@ impl ID2D1RenderTarget {
         options: u32,
     ) {
         unsafe {
-            ((*self.lpVtbl).DrawTextLayout)(
+            ((*self.vtbl).DrawTextLayout)(
                 self as *const Self as *mut Self,
                 origin,
                 layout,
@@ -345,7 +345,7 @@ impl ID2D1RenderTarget {
     ) -> Result<ComPtr<ID2D1Bitmap>, i32> {
         unsafe {
             ComPtr::create(|out| {
-                ((*self.lpVtbl).CreateBitmap)(
+                ((*self.vtbl).CreateBitmap)(
                     self as *const Self as *mut Self,
                     size,
                     pixels,
@@ -362,7 +362,7 @@ impl ID2D1RenderTarget {
     ) -> Result<ComPtr<ID2D1Brush>, i32> {
         unsafe {
             ComPtr::create(|out| {
-                ((*self.lpVtbl).CreateBitmapBrush)(
+                ((*self.vtbl).CreateBitmapBrush)(
                     self as *const Self as *mut Self,
                     bitmap,
                     std::ptr::null(),
@@ -379,7 +379,7 @@ impl ID2D1RenderTarget {
     ) -> Result<ComPtr<ID2D1GradientStopCollection>, i32> {
         unsafe {
             ComPtr::create(|out| {
-                ((*self.lpVtbl).CreateGradientStopCollection)(
+                ((*self.vtbl).CreateGradientStopCollection)(
                     self as *const Self as *mut Self,
                     stops.as_ptr(),
                     stops.len() as u32,
@@ -398,7 +398,7 @@ impl ID2D1RenderTarget {
     ) -> Result<ComPtr<ID2D1Brush>, i32> {
         unsafe {
             ComPtr::create(|out| {
-                ((*self.lpVtbl).CreateLinearGradientBrush)(
+                ((*self.vtbl).CreateLinearGradientBrush)(
                     self as *const Self as *mut Self,
                     gradient,
                     brush,
@@ -416,7 +416,7 @@ impl ID2D1RenderTarget {
     ) -> Result<ComPtr<ID2D1Brush>, i32> {
         unsafe {
             ComPtr::create(|out| {
-                ((*self.lpVtbl).CreateRadialGradientBrush)(
+                ((*self.vtbl).CreateRadialGradientBrush)(
                     self as *const Self as *mut Self,
                     gradient,
                     brush,
@@ -432,7 +432,7 @@ impl ID2D1RenderTarget {
     ) -> Result<ComPtr<ID2D1BitmapRenderTarget>, i32> {
         unsafe {
             ComPtr::create(|out| {
-                ((*self.lpVtbl).CreateCompatibleRenderTarget)(
+                ((*self.vtbl).CreateCompatibleRenderTarget)(
                     self as *const Self as *mut Self,
                     std::ptr::null(),
                     std::ptr::null(),
@@ -451,7 +451,7 @@ impl ID2D1RenderTarget {
         interpolation: u32,
     ) {
         unsafe {
-            ((*self.lpVtbl).DrawBitmap)(
+            ((*self.vtbl).DrawBitmap)(
                 self as *const Self as *mut Self,
                 bitmap,
                 rect,
@@ -462,35 +462,33 @@ impl ID2D1RenderTarget {
         }
     }
     pub(super) unsafe fn SetTransform(&self, transform: *const D2D_MATRIX_3X2_F) {
-        unsafe { ((*self.lpVtbl).SetTransform)(self as *const Self as *mut Self, transform) }
+        unsafe { ((*self.vtbl).SetTransform)(self as *const Self as *mut Self, transform) }
     }
     pub(super) unsafe fn PushLayer(
         &self,
         parameters: *const D2D1_LAYER_PARAMETERS,
         layer: *mut c_void,
     ) {
-        unsafe { ((*self.lpVtbl).PushLayer)(self as *const Self as *mut Self, parameters, layer) }
+        unsafe { ((*self.vtbl).PushLayer)(self as *const Self as *mut Self, parameters, layer) }
     }
     pub(super) unsafe fn PopLayer(&self) {
-        unsafe { ((*self.lpVtbl).PopLayer)(self as *const Self as *mut Self) }
+        unsafe { ((*self.vtbl).PopLayer)(self as *const Self as *mut Self) }
     }
     pub(super) unsafe fn PushAxisAlignedClip(&self, rect: *const D2D_RECT_F, mode: u32) {
-        unsafe {
-            ((*self.lpVtbl).PushAxisAlignedClip)(self as *const Self as *mut Self, rect, mode)
-        }
+        unsafe { ((*self.vtbl).PushAxisAlignedClip)(self as *const Self as *mut Self, rect, mode) }
     }
     pub(super) unsafe fn PopAxisAlignedClip(&self) {
-        unsafe { ((*self.lpVtbl).PopAxisAlignedClip)(self as *const Self as *mut Self) }
+        unsafe { ((*self.vtbl).PopAxisAlignedClip)(self as *const Self as *mut Self) }
     }
     pub(super) unsafe fn Clear(&self, color: *const D2D1_COLOR_F) {
-        unsafe { ((*self.lpVtbl).Clear)(self as *const Self as *mut Self, color) }
+        unsafe { ((*self.vtbl).Clear)(self as *const Self as *mut Self, color) }
     }
     pub(super) unsafe fn BeginDraw(&self) {
-        unsafe { ((*self.lpVtbl).BeginDraw)(self as *const Self as *mut Self) }
+        unsafe { ((*self.vtbl).BeginDraw)(self as *const Self as *mut Self) }
     }
     pub(super) unsafe fn EndDraw(&self, tag1: *mut u64, tag2: *mut u64) -> Result<(), i32> {
         unsafe {
-            check(((*self.lpVtbl).EndDraw)(
+            check(((*self.vtbl).EndDraw)(
                 self as *const Self as *mut Self,
                 tag1,
                 tag2,
@@ -498,13 +496,13 @@ impl ID2D1RenderTarget {
         }
     }
     pub(super) unsafe fn SetDpi(&self, x: f32, y: f32) {
-        unsafe { ((*self.lpVtbl).SetDpi)(self as *const Self as *mut Self, x, y) }
+        unsafe { ((*self.vtbl).SetDpi)(self as *const Self as *mut Self, x, y) }
     }
 }
 
 #[repr(C)]
 pub(super) struct ID2D1HwndRenderTarget {
-    lpVtbl: *const ID2D1HwndRenderTargetVtbl,
+    vtbl: *const ID2D1HwndRenderTargetVtbl,
 }
 
 #[repr(C)]
@@ -517,7 +515,7 @@ struct ID2D1HwndRenderTargetVtbl {
 impl ID2D1HwndRenderTarget {
     pub(super) unsafe fn Resize(&self, size: *const D2D_SIZE_U) -> Result<(), i32> {
         unsafe {
-            check(((*self.lpVtbl).Resize)(
+            check(((*self.vtbl).Resize)(
                 self as *const Self as *mut Self,
                 size,
             ))
@@ -527,7 +525,7 @@ impl ID2D1HwndRenderTarget {
 
 #[repr(C)]
 pub(super) struct ID2D1DCRenderTarget {
-    lpVtbl: *const ID2D1DCRenderTargetVtbl,
+    vtbl: *const ID2D1DCRenderTargetVtbl,
 }
 
 #[repr(C)]
@@ -539,7 +537,7 @@ struct ID2D1DCRenderTargetVtbl {
 impl ID2D1DCRenderTarget {
     pub(super) unsafe fn BindDC(&self, dc: HDC, rect: *const RECT) -> Result<(), i32> {
         unsafe {
-            check(((*self.lpVtbl).BindDC)(
+            check(((*self.vtbl).BindDC)(
                 self as *const Self as *mut Self,
                 dc,
                 rect,
@@ -564,7 +562,7 @@ impl Deref for ID2D1DCRenderTarget {
 
 #[repr(C)]
 pub(super) struct ID2D1BitmapRenderTarget {
-    lpVtbl: *const ID2D1BitmapRenderTargetVtbl,
+    vtbl: *const ID2D1BitmapRenderTargetVtbl,
 }
 
 #[repr(C)]
@@ -577,7 +575,7 @@ struct ID2D1BitmapRenderTargetVtbl {
 impl ID2D1BitmapRenderTarget {
     pub(super) unsafe fn GetBitmap(&self) -> Result<ComPtr<ID2D1Bitmap>, i32> {
         unsafe {
-            ComPtr::create(|out| ((*self.lpVtbl).GetBitmap)(self as *const Self as *mut Self, out))
+            ComPtr::create(|out| ((*self.vtbl).GetBitmap)(self as *const Self as *mut Self, out))
         }
     }
 }
@@ -605,7 +603,7 @@ impl Deref for ID2D1SolidColorBrush {
 
 #[repr(C)]
 pub(super) struct ID2D1Bitmap {
-    lpVtbl: *const ID2D1BitmapVtbl,
+    vtbl: *const ID2D1BitmapVtbl,
 }
 
 #[repr(C)]
@@ -627,7 +625,7 @@ impl ID2D1Bitmap {
         target: *mut ID2D1RenderTarget,
     ) -> Result<(), i32> {
         unsafe {
-            check(((*self.lpVtbl).CopyFromRenderTarget)(
+            check(((*self.vtbl).CopyFromRenderTarget)(
                 self as *const Self as *mut Self,
                 std::ptr::null(),
                 target,
@@ -640,7 +638,7 @@ impl ID2D1Bitmap {
 /// A Direct2D 1.1 effect.
 #[repr(C)]
 pub(super) struct ID2D1Effect {
-    lpVtbl: *const ID2D1EffectVtbl,
+    vtbl: *const ID2D1EffectVtbl,
 }
 
 #[repr(C)]
@@ -658,7 +656,7 @@ impl ID2D1Effect {
     /// Set a property to a value whose type is checked by its size.
     pub(super) unsafe fn SetValue<T: Copy>(&self, index: u32, value: T) -> Result<(), i32> {
         unsafe {
-            check(((*self.lpVtbl).SetValue)(
+            check(((*self.vtbl).SetValue)(
                 self as *const Self as *mut Self,
                 index,
                 0,
@@ -668,13 +666,13 @@ impl ID2D1Effect {
         }
     }
     pub(super) unsafe fn SetInput(&self, index: u32, image: *mut c_void) {
-        unsafe { ((*self.lpVtbl).SetInput)(self as *const Self as *mut Self, index, image, 1) }
+        unsafe { ((*self.vtbl).SetInput)(self as *const Self as *mut Self, index, image, 1) }
     }
     /// The output image, which holds a reference.
     pub(super) unsafe fn GetOutput(&self) -> ComPtr<ID2D1Image> {
         unsafe {
             ComPtr::create(|out: *mut *mut ID2D1Image| {
-                ((*self.lpVtbl).GetOutput)(self as *const Self as *mut Self, out.cast());
+                ((*self.vtbl).GetOutput)(self as *const Self as *mut Self, out.cast());
                 0
             })
         }
@@ -696,7 +694,7 @@ pub(super) struct ID2D1GradientStopCollection {
 /// Direct2D 1.1 interface, queried from a render target.
 #[repr(C)]
 pub(super) struct ID2D1DeviceContext {
-    lpVtbl: *const ID2D1DeviceContextVtbl,
+    vtbl: *const ID2D1DeviceContextVtbl,
 }
 
 #[repr(C)]
@@ -735,14 +733,14 @@ impl ID2D1DeviceContext {
     pub(super) unsafe fn CreateEffect(&self, clsid: &GUID) -> Result<ComPtr<ID2D1Effect>, i32> {
         unsafe {
             ComPtr::create(|out| {
-                ((*self.lpVtbl).CreateEffect)(self as *const Self as *mut Self, clsid, out)
+                ((*self.vtbl).CreateEffect)(self as *const Self as *mut Self, clsid, out)
             })
         }
     }
     /// Draw an image at the origin of the world transform with a composite mode.
     pub(super) unsafe fn DrawImage(&self, image: *mut c_void, composite: u32) {
         unsafe {
-            ((*self.lpVtbl).DrawImage)(
+            ((*self.vtbl).DrawImage)(
                 self as *const Self as *mut Self,
                 image,
                 std::ptr::null(),
@@ -753,7 +751,7 @@ impl ID2D1DeviceContext {
         }
     }
     pub(super) unsafe fn SetPrimitiveBlend(&self, blend: u32) {
-        unsafe { ((*self.lpVtbl).SetPrimitiveBlend)(self as *const Self as *mut Self, blend) }
+        unsafe { ((*self.vtbl).SetPrimitiveBlend)(self as *const Self as *mut Self, blend) }
     }
     /// Draw a bitmap with a Direct2D 1.1 interpolation mode, like high quality cubic.
     pub(super) unsafe fn DrawBitmap(
@@ -765,7 +763,7 @@ impl ID2D1DeviceContext {
         source: *const D2D_RECT_F,
     ) {
         unsafe {
-            ((*self.lpVtbl).DrawBitmap)(
+            ((*self.vtbl).DrawBitmap)(
                 self as *const Self as *mut Self,
                 bitmap,
                 rect,
@@ -780,7 +778,7 @@ impl ID2D1DeviceContext {
 
 #[repr(C)]
 pub(super) struct ID2D1PathGeometry {
-    lpVtbl: *const ID2D1PathGeometryVtbl,
+    vtbl: *const ID2D1PathGeometryVtbl,
 }
 
 #[repr(C)]
@@ -808,7 +806,7 @@ impl ID2D1PathGeometry {
         sink: *mut ID2D1GeometrySink,
     ) -> Result<(), i32> {
         unsafe {
-            check(((*self.lpVtbl).Widen)(
+            check(((*self.vtbl).Widen)(
                 self as *const Self as *mut Self,
                 width,
                 style,
@@ -819,15 +817,13 @@ impl ID2D1PathGeometry {
         }
     }
     pub(super) unsafe fn Open(&self) -> Result<ComPtr<ID2D1GeometrySink>, i32> {
-        unsafe {
-            ComPtr::create(|out| ((*self.lpVtbl).Open)(self as *const Self as *mut Self, out))
-        }
+        unsafe { ComPtr::create(|out| ((*self.vtbl).Open)(self as *const Self as *mut Self, out)) }
     }
 }
 
 #[repr(C)]
 pub(super) struct ID2D1GeometrySink {
-    lpVtbl: *const ID2D1GeometrySinkVtbl,
+    vtbl: *const ID2D1GeometrySinkVtbl,
 }
 
 #[repr(C)]
@@ -847,31 +843,31 @@ struct ID2D1GeometrySinkVtbl {
 
 impl ID2D1GeometrySink {
     pub(super) unsafe fn SetFillMode(&self, mode: u32) {
-        unsafe { ((*self.lpVtbl).SetFillMode)(self as *const Self as *mut Self, mode) }
+        unsafe { ((*self.vtbl).SetFillMode)(self as *const Self as *mut Self, mode) }
     }
     pub(super) unsafe fn BeginFigure(&self, point: D2D_POINT_2F, begin: u32) {
-        unsafe { ((*self.lpVtbl).BeginFigure)(self as *const Self as *mut Self, point, begin) }
+        unsafe { ((*self.vtbl).BeginFigure)(self as *const Self as *mut Self, point, begin) }
     }
     pub(super) unsafe fn EndFigure(&self, end: u32) {
-        unsafe { ((*self.lpVtbl).EndFigure)(self as *const Self as *mut Self, end) }
+        unsafe { ((*self.vtbl).EndFigure)(self as *const Self as *mut Self, end) }
     }
     pub(super) unsafe fn Close(&self) -> Result<(), i32> {
-        unsafe { check(((*self.lpVtbl).Close)(self as *const Self as *mut Self)) }
+        unsafe { check(((*self.vtbl).Close)(self as *const Self as *mut Self)) }
     }
     pub(super) unsafe fn AddLine(&self, point: D2D_POINT_2F) {
-        unsafe { ((*self.lpVtbl).AddLine)(self as *const Self as *mut Self, point) }
+        unsafe { ((*self.vtbl).AddLine)(self as *const Self as *mut Self, point) }
     }
     pub(super) unsafe fn AddBezier(&self, bezier: *const D2D1_BEZIER_SEGMENT) {
-        unsafe { ((*self.lpVtbl).AddBezier)(self as *const Self as *mut Self, bezier) }
+        unsafe { ((*self.vtbl).AddBezier)(self as *const Self as *mut Self, bezier) }
     }
     pub(super) unsafe fn AddQuadraticBezier(&self, bezier: *const D2D1_QUADRATIC_BEZIER_SEGMENT) {
-        unsafe { ((*self.lpVtbl).AddQuadraticBezier)(self as *const Self as *mut Self, bezier) }
+        unsafe { ((*self.vtbl).AddQuadraticBezier)(self as *const Self as *mut Self, bezier) }
     }
 }
 
 #[repr(C)]
 pub(super) struct IDWriteFactory {
-    lpVtbl: *const IDWriteFactoryVtbl,
+    vtbl: *const IDWriteFactoryVtbl,
 }
 
 #[repr(C)]
@@ -914,7 +910,7 @@ impl IDWriteFactory {
     ) -> Result<ComPtr<IDWriteTextFormat>, i32> {
         unsafe {
             ComPtr::create(|out| {
-                ((*self.lpVtbl).CreateTextFormat)(
+                ((*self.vtbl).CreateTextFormat)(
                     self as *const Self as *mut Self,
                     family,
                     collection,
@@ -938,7 +934,7 @@ impl IDWriteFactory {
     ) -> Result<ComPtr<IDWriteTextLayout>, i32> {
         unsafe {
             ComPtr::create(|out| {
-                ((*self.lpVtbl).CreateTextLayout)(
+                ((*self.vtbl).CreateTextLayout)(
                     self as *const Self as *mut Self,
                     text,
                     length,
@@ -954,7 +950,7 @@ impl IDWriteFactory {
 
 #[repr(C)]
 pub(super) struct IDWriteTextFormat {
-    lpVtbl: *const IDWriteTextFormatVtbl,
+    vtbl: *const IDWriteTextFormatVtbl,
 }
 
 #[repr(C)]
@@ -967,7 +963,7 @@ struct IDWriteTextFormatVtbl {
 impl IDWriteTextFormat {
     pub(super) unsafe fn SetTextAlignment(&self, alignment: u32) -> Result<(), i32> {
         unsafe {
-            check(((*self.lpVtbl).SetTextAlignment)(
+            check(((*self.vtbl).SetTextAlignment)(
                 self as *const Self as *mut Self,
                 alignment,
             ))
@@ -975,7 +971,7 @@ impl IDWriteTextFormat {
     }
     pub(super) unsafe fn SetParagraphAlignment(&self, alignment: u32) -> Result<(), i32> {
         unsafe {
-            check(((*self.lpVtbl).SetParagraphAlignment)(
+            check(((*self.vtbl).SetParagraphAlignment)(
                 self as *const Self as *mut Self,
                 alignment,
             ))
@@ -985,7 +981,7 @@ impl IDWriteTextFormat {
 
 #[repr(C)]
 pub(super) struct IDWriteTextLayout {
-    lpVtbl: *const IDWriteTextLayoutVtbl,
+    vtbl: *const IDWriteTextLayoutVtbl,
 }
 
 #[repr(C)]
@@ -1011,7 +1007,7 @@ impl IDWriteTextLayout {
         count: *mut u32,
     ) -> Result<(), i32> {
         unsafe {
-            check(((*self.lpVtbl).GetLineMetrics)(
+            check(((*self.vtbl).GetLineMetrics)(
                 self as *const Self as *mut Self,
                 metrics,
                 capacity,
@@ -1021,7 +1017,7 @@ impl IDWriteTextLayout {
     }
     pub(super) unsafe fn GetMetrics(&self, metrics: *mut DWRITE_TEXT_METRICS) -> Result<(), i32> {
         unsafe {
-            check(((*self.lpVtbl).GetMetrics)(
+            check(((*self.vtbl).GetMetrics)(
                 self as *const Self as *mut Self,
                 metrics,
             ))
@@ -1032,7 +1028,7 @@ impl IDWriteTextLayout {
         metrics: *mut DWRITE_OVERHANG_METRICS,
     ) -> Result<(), i32> {
         unsafe {
-            check(((*self.lpVtbl).GetOverhangMetrics)(
+            check(((*self.vtbl).GetOverhangMetrics)(
                 self as *const Self as *mut Self,
                 metrics,
             ))
@@ -1042,7 +1038,7 @@ impl IDWriteTextLayout {
 
 #[repr(C)]
 pub(super) struct ID2D1SolidColorBrush {
-    lpVtbl: *const ID2D1SolidColorBrushVtbl,
+    vtbl: *const ID2D1SolidColorBrushVtbl,
 }
 
 #[repr(C)]
@@ -1054,7 +1050,7 @@ struct ID2D1SolidColorBrushVtbl {
 
 impl ID2D1SolidColorBrush {
     pub(super) unsafe fn SetColor(&self, color: *const D2D1_COLOR_F) {
-        unsafe { ((*self.lpVtbl).SetColor)(self as *const Self as *mut Self, color) }
+        unsafe { ((*self.vtbl).SetColor)(self as *const Self as *mut Self, color) }
     }
 }
 
@@ -1076,12 +1072,15 @@ pub(super) const IID_ID2D1_FACTORY1: GUID = GUID {
     data3: 0x4b9a,
     data4: [0xaa, 0x1d, 0x14, 0xba, 0x40, 0x1c, 0xfa, 0x1f],
 };
-pub(super) const IID_ID2D1_DEVICE_CONTEXT: GUID = GUID {
-    data1: 0xe8f7fe7a,
-    data2: 0x191c,
-    data3: 0x466d,
-    data4: [0xad, 0x95, 0x97, 0x56, 0x78, 0xbd, 0xa9, 0x98],
-};
+// SAFETY: This is the SDK IID for ID2D1DeviceContext.
+unsafe impl ComInterface for ID2D1DeviceContext {
+    const IID: GUID = GUID {
+        data1: 0xe8f7fe7a,
+        data2: 0x191c,
+        data3: 0x466d,
+        data4: [0xad, 0x95, 0x97, 0x56, 0x78, 0xbd, 0xa9, 0x98],
+    };
+}
 /// Introduced with color fonts in Windows 8.1.
 pub(super) const IID_IDWRITE_FACTORY2: GUID = GUID {
     data1: 0x0439fc60,

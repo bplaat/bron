@@ -91,7 +91,7 @@ impl Resources {
             .expect("Direct2D stroke style")
         });
         let write = unsafe { IDWriteFactory::new() }.expect("DirectWrite factory");
-        let color_fonts = unsafe { write.query::<IDWriteFactory>(&IID_IDWRITE_FACTORY2) }.is_ok();
+        let color_fonts = write.supports(&IID_IDWRITE_FACTORY2);
         Rc::new(Self {
             factory,
             write,
@@ -1164,7 +1164,8 @@ impl ImageCache {
 
 // The Direct2D 1.1 interface of a render target, which the backend requires.
 fn device_context(target: &ComPtr<ID2D1RenderTarget>) -> ComPtr<ID2D1DeviceContext> {
-    unsafe { target.query::<ID2D1DeviceContext>(&IID_ID2D1_DEVICE_CONTEXT) }
+    target
+        .query::<ID2D1DeviceContext>()
         .expect("Direct2D 1.1 device context")
 }
 
