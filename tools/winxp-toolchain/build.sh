@@ -187,11 +187,19 @@ build_archive() {
 build_libraries() {
     local builtins="$LLVM_DIR/compiler-rt/lib/builtins" source sources=()
     if outdated "$SYSROOT/lib/libclang_rt.builtins.a" "$SYSROOT/lib/crt2.o" "$TOOLCHAIN_DIR/build.sh"; then
+        # Like compiler-rt, build the bfloat16 builtins only when clang supports the type for this target.
+        local has_bfloat16=false
+        if printf '__bf16 identity(__bf16 value) { return value; }\n' |
+            "${LLVM}clang" "${XP_CFLAGS[@]}" -x c -c -o /dev/null - 2>/dev/null; then
+            has_bfloat16=true
+        fi
         # The generic builtins, the x86 assembly ones replace those with the same name, without
         # the ones for other systems and the unwinder, which panic=abort doesn't need
         for source in "$builtins"/*.c; do
             case "$(basename "$source" .c)" in
                 atomic | crtbegin | crtend | emutls | gcc_personality_v0 | os_version_check) continue ;;
+                extendbfsf2 | truncdfbf2 | truncsfbf2 | truncxfbf2 | trunctfbf2)
+                    $has_bfloat16 || continue ;;
             esac
             [ -e "$builtins/i386/$(basename "$source" .c).S" ] || sources+=("$source")
         done
