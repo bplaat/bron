@@ -471,7 +471,7 @@ impl Chat {
                         Some(name) => format!("<{name}> {text}"),
                         None => text,
                     };
-                    let width = (ctx.measure_text(&text) + 12.0).min(CHAT_WIDTH);
+                    let width = (ctx.measure_text(&text).width + 12.0).min(CHAT_WIDTH);
                     ctx.set_fill_style(Color::rgba(0, 0, 0, 120));
                     ctx.fill_rect(0.0, y, width, CHAT_LINE);
                     ctx.set_fill_style(if line.name.is_some() {
@@ -538,7 +538,7 @@ impl NameTags {
                 ctx.set_font("sans-serif", 14.0);
                 ctx.set_text_align(TextAlign::Center);
                 ctx.set_text_baseline(TextBaseline::Middle);
-                let width = ctx.measure_text(name).min(TAG_WIDTH - 12.0) + 12.0;
+                let width = ctx.measure_text(name).width.min(TAG_WIDTH - 12.0) + 12.0;
                 ctx.set_fill_style(Color::rgba(0, 0, 0, 110));
                 ctx.fill_rect((TAG_WIDTH - width) / 2.0, 0.0, width, TAG_HEIGHT);
                 ctx.set_fill_style(Color::rgb(255, 255, 255));

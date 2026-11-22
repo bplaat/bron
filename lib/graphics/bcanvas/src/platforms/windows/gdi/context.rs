@@ -20,7 +20,7 @@ use crate::platforms::windows::headers::{
 use crate::platforms::windows::image::PlatformImage;
 use crate::{
     CanvasState, CanvasStyle, Color, CompositeOperation, FillRule, FontWeight, LineCap, LineJoin,
-    TextAlign, TextBaseline,
+    TextAlign, TextExtents,
 };
 
 const FONTS: usize = 16;
@@ -290,9 +290,6 @@ pub(crate) struct Context {
     resources: Rc<Resources>,
     // Device pixels per logical pixel.
     scale: f32,
-    path: Path,
-    // A path of only one ellipse: its command count, logical bounds and transform
-    lone_ellipse: Option<(usize, [f32; 4], Transform)>,
     transform: Transform,
     stack: Vec<(Transform, usize)>,
     // The clip of the surface before each clip, in device pixels.
@@ -302,13 +299,11 @@ pub(crate) struct Context {
 }
 
 impl Context {
-    pub(crate) fn new(surface: Surface, resources: Rc<Resources>, scale: f32) -> Self {
+    pub(crate) const fn new(surface: Surface, resources: Rc<Resources>, scale: f32) -> Self {
         Self {
             surface,
             resources,
             scale,
-            path: Path::default(),
-            lone_ellipse: None,
             transform: Transform::IDENTITY,
             stack: Vec::new(),
             clips: Vec::new(),
@@ -354,11 +349,11 @@ impl Context {
         self.surface.set_clip(&region);
     }
 
-    pub(crate) fn clip(&mut self, rule: FillRule) {
+    pub(crate) fn clip(&mut self, path: &Path, rule: FillRule) {
         let Some(saved) = self.surface.clip() else {
             return;
         };
-        let Some(path) = self.gp_path(&self.path, Transform::IDENTITY, rule) else {
+        let Some(path) = self.gp_path(path, self.transform, rule) else {
             return;
         };
         self.set_world(self.device());
@@ -601,8 +596,8 @@ impl Context {
     // The logical geometry of a user-space rectangle.
     fn rect_path(&self, x: f32, y: f32, w: f32, h: f32) -> Option<Gp<GpPath>> {
         let mut path = Path::default();
-        path.rect(self.transform, x, y, w, h);
-        self.gp_path(&path, Transform::IDENTITY, FillRule::NonZero)
+        path.rect(x, y, w, h);
+        self.gp_path(&path, self.transform, FillRule::NonZero)
     }
 
     // Fills device pixels with one premultiplied BGRA pixel through GDI, false when the
@@ -689,53 +684,11 @@ impl Context {
 
     pub(crate) fn stroke_rect(&mut self, state: &CanvasState, x: f32, y: f32, w: f32, h: f32) {
         let mut path = Path::default();
-        path.rect(Transform::IDENTITY, x, y, w, h);
+        path.rect(x, y, w, h);
         let Some(path) = self.gp_path(&path, Transform::IDENTITY, FillRule::NonZero) else {
             return;
         };
         self.stroke_path(state, path);
-    }
-
-    pub(crate) fn begin_path(&mut self) {
-        // Keep the command buffer allocation for the next path.
-        let mut commands = std::mem::take(&mut self.path.commands);
-        commands.clear();
-        self.path = Path::default();
-        self.lone_ellipse = None;
-        self.path.commands = commands;
-    }
-    pub(crate) fn close_path(&mut self) {
-        self.path.close();
-    }
-    pub(crate) fn move_to(&mut self, x: f32, y: f32) {
-        self.path.move_to(self.transform, [x, y]);
-    }
-    pub(crate) fn line_to(&mut self, x: f32, y: f32) {
-        self.path.line_to(self.transform, [x, y]);
-    }
-    pub(crate) fn rect(&mut self, x: f32, y: f32, w: f32, h: f32) {
-        self.path.rect(self.transform, x, y, w, h);
-    }
-    pub(crate) fn ellipse(&mut self, x: f32, y: f32, rx: f32, ry: f32) {
-        let empty = self.path.commands.is_empty();
-        self.path.ellipse(self.transform, [x, y], [rx, ry]);
-        // Later commands make the path longer, so the count tells it is still alone
-        let count = self.path.commands.len();
-        self.lone_ellipse = (empty && count > 0).then_some((
-            count,
-            [x - rx, y - ry, rx * 2.0, ry * 2.0],
-            self.transform,
-        ));
-    }
-    pub(crate) fn arc(&mut self, x: f32, y: f32, r: f32, start: f32, end: f32, ccw: bool) {
-        self.path
-            .arc(self.transform, [x, y], [r, r], start, end, ccw);
-    }
-    pub(crate) fn quadratic_curve_to(&mut self, a: f32, b: f32, x: f32, y: f32) {
-        self.path.quadratic(self.transform, [a, b], [x, y]);
-    }
-    pub(crate) fn bezier_curve_to(&mut self, a: f32, b: f32, c: f32, d: f32, x: f32, y: f32) {
-        self.path.cubic(self.transform, [a, b], [c, d], [x, y]);
     }
 
     // A GDI+ path of logical path commands mapped through `transform`.
@@ -794,20 +747,28 @@ impl Context {
         Some(gp)
     }
 
-    pub(crate) fn fill(&mut self, state: &CanvasState, rule: FillRule) {
+    pub(crate) fn fill(&mut self, state: &CanvasState, path: &Path, rule: FillRule) {
         // A lone ellipse in a solid color fills without building a path, like particles
-        if let Some((count, [x, y, w, h], transform)) = self.lone_ellipse
-            && count == self.path.commands.len()
+        if let Some(([x, y], [rx, ry])) = path.lone_ellipse()
             && state.composite == CompositeOperation::SourceOver
             && let CanvasStyle::Color(color) = &state.fill
         {
             if let Some(brush) = Self::color_brush(*color, state.alpha) {
-                self.set_world(self.device().concat(transform));
-                unsafe { GdipFillEllipse(self.surface.g(), brush.get(), x, y, w, h) };
+                self.set_world(self.user());
+                unsafe {
+                    GdipFillEllipse(
+                        self.surface.g(),
+                        brush.get(),
+                        x - rx,
+                        y - ry,
+                        rx * 2.0,
+                        ry * 2.0,
+                    )
+                };
             }
             return;
         }
-        let Some(path) = self.gp_path(&self.path, Transform::IDENTITY, rule) else {
+        let Some(path) = self.gp_path(path, self.transform, rule) else {
             return;
         };
         self.fill_path(state, path);
@@ -835,13 +796,8 @@ impl Context {
         );
     }
 
-    pub(crate) fn stroke(&mut self, state: &CanvasState) {
-        // Paths capture their construction transform, while strokes use the current
-        // transform for width/caps. Undo it on the geometry before native drawing.
-        let Some(inverse) = self.transform.inverse() else {
-            return;
-        };
-        let Some(path) = self.gp_path(&self.path, inverse, FillRule::NonZero) else {
+    pub(crate) fn stroke(&mut self, state: &CanvasState, path: &Path) {
+        let Some(path) = self.gp_path(path, Transform::IDENTITY, FillRule::NonZero) else {
             return;
         };
         self.stroke_path(state, path);
@@ -948,19 +904,17 @@ impl Context {
         &mut self,
         state: &CanvasState,
         image: &PlatformImage,
-        x: f32,
-        y: f32,
-        w: f32,
-        h: f32,
+        source: [f32; 4],
+        [x, y, w, h]: [f32; 4],
     ) {
-        let (x, y, w, h) = normalized(x, y, w, h);
+        let [sx, sy, sw, sh] = source;
         // A copy pixel for pixel looks the same smoothed or not and is much faster without
         let user = self.user();
         let [left, top] = user.point([x, y]);
         let exact = user.0[1] == 0.0
             && user.0[2] == 0.0
-            && (user.0[0] * w - image.width as f32).abs() < 1e-3
-            && (user.0[3] * h - image.height as f32).abs() < 1e-3
+            && (user.0[0] * w - sw).abs() < 1e-3
+            && (user.0[3] * h - sh).abs() < 1e-3
             && (left - left.round()).abs() < 1e-3
             && (top - top.round()).abs() < 1e-3;
         let smooth = state.image_smoothing && !exact;
@@ -1026,10 +980,10 @@ impl Context {
                     y,
                     w,
                     h,
-                    0.0,
-                    0.0,
-                    image.width as f32,
-                    image.height as f32,
+                    sx,
+                    sy,
+                    sw,
+                    sh,
                     UnitPixel,
                     attributes.as_ref().map_or(null_mut(), Gp::get),
                     null(),
@@ -1076,18 +1030,11 @@ impl Context {
             0.0
         };
         let size = s.font_size;
-        let (ascent, line_height) = (font.ascent * size, font.line_height * size);
-        let origin_x = x - match s.text_align {
-            TextAlign::Center => width / 2.0,
-            TextAlign::Right | TextAlign::End => width,
-            _ => 0.0,
-        };
-        let origin_y = y - match s.text_baseline {
-            TextBaseline::Middle => line_height / 2.0,
-            TextBaseline::Bottom | TextBaseline::Ideographic => line_height,
-            TextBaseline::Alphabetic => ascent,
-            _ => 0.0,
-        };
+        let extents = Self::extents(&font, size, width);
+        let line_height = font.line_height * size;
+        // GDI+ draws from the top of the line.
+        let [dx, dy] = extents.origin(s);
+        let (origin_x, origin_y) = (x + dx, y + dy - extents.ascent);
         let bounds = if gradient {
             let Some(rect) = self.rect_path(origin_x, origin_y, width, line_height) else {
                 return;
@@ -1127,10 +1074,22 @@ impl Context {
         );
     }
 
-    pub(crate) fn measure_text(&mut self, s: &CanvasState, text: &str) -> f32 {
+    // GDI+ has no glyph bounds, so the ink is the advance and font box.
+    pub(crate) fn measure_text(&mut self, s: &CanvasState, text: &str) -> TextExtents {
         let font = self.font(s);
         let length = self.encode(text);
-        self.measure(&font, length)
+        Self::extents(&font, s.font_size, self.measure(&font, length))
+    }
+
+    fn extents(font: &Font, size: f32, width: f32) -> TextExtents {
+        let (ascent, line_height) = (font.ascent * size, font.line_height * size);
+        let descent = line_height - ascent;
+        TextExtents {
+            width,
+            ink: [0.0, -ascent, width, descent],
+            ascent,
+            descent,
+        }
     }
 
     // Encodes text into the shared buffer, canvas line breaks render as spaces.

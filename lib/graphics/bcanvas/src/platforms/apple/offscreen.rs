@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: MIT
  */
 
-use super::context::{PlatformCanvasContext, TextStyleCache};
+use super::context::{PlatformCanvasContext, Resources};
 use super::headers::*;
 use crate::copy_rgba_premultiplied_to_straight;
 
@@ -13,7 +13,7 @@ pub(crate) struct PlatformOffscreenCanvas {
     storage: Vec<u8>,
     output: Vec<u8>,
     dirty: bool,
-    text_styles: TextStyleCache,
+    resources: Resources,
 }
 
 // SAFETY: The bitmap context and Core Foundation objects may be used from any thread one at a
@@ -43,7 +43,7 @@ impl PlatformOffscreenCanvas {
                 storage,
                 output: vec![0; length],
                 dirty: false,
-                text_styles: TextStyleCache::default(),
+                resources: Resources::default(),
             }
         }
     }
@@ -53,7 +53,7 @@ impl PlatformOffscreenCanvas {
         unsafe {
             CGContextSaveGState(self.context);
             CGContextScaleCTM(self.context, f64::from(scale), f64::from(scale));
-            PlatformCanvasContext::new(self.context, self.text_styles.clone())
+            PlatformCanvasContext::new(self.context, self.resources.clone())
         }
     }
 

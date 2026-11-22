@@ -78,16 +78,6 @@ unsafe extern "C" {
     pub(super) fn CGContextMoveToPoint(context: CGContextRef, x: f64, y: f64);
     pub(super) fn CGContextAddLineToPoint(context: CGContextRef, x: f64, y: f64);
     pub(super) fn CGContextAddRect(context: CGContextRef, rect: CGRect);
-    pub(super) fn CGContextAddEllipseInRect(context: CGContextRef, rect: CGRect);
-    pub(super) fn CGContextAddArc(
-        context: CGContextRef,
-        x: f64,
-        y: f64,
-        radius: f64,
-        start: f64,
-        end: f64,
-        clockwise: i32,
-    );
     pub(super) fn CGContextAddQuadCurveToPoint(
         context: CGContextRef,
         cpx: f64,
@@ -106,13 +96,34 @@ unsafe extern "C" {
     );
     pub(super) fn CGContextFillPath(context: CGContextRef);
     pub(super) fn CGContextStrokePath(context: CGContextRef);
-    pub(super) fn CGContextIsPathEmpty(context: CGContextRef) -> bool;
-    pub(super) fn CGContextCopyPath(context: CGContextRef) -> *mut c_void;
-    pub(super) fn CGContextAddPath(context: CGContextRef, path: *mut c_void);
-    pub(super) fn CGPathRelease(path: *mut c_void);
     pub(super) fn CGContextClip(context: CGContextRef);
+    pub(super) fn CGContextAddPath(context: CGContextRef, path: *mut c_void);
+    pub(super) fn CGPathCreateMutable() -> *mut c_void;
+    pub(super) fn CGPathMoveToPoint(path: *mut c_void, transform: *const c_void, x: f64, y: f64);
+    pub(super) fn CGPathAddLineToPoint(path: *mut c_void, transform: *const c_void, x: f64, y: f64);
+    pub(super) fn CGPathAddQuadCurveToPoint(
+        path: *mut c_void,
+        transform: *const c_void,
+        cpx: f64,
+        cpy: f64,
+        x: f64,
+        y: f64,
+    );
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn CGPathAddCurveToPoint(
+        path: *mut c_void,
+        transform: *const c_void,
+        cp1x: f64,
+        cp1y: f64,
+        cp2x: f64,
+        cp2y: f64,
+        x: f64,
+        y: f64,
+    );
+    pub(super) fn CGPathCloseSubpath(path: *mut c_void);
+    pub(super) fn CGPathRelease(path: *mut c_void);
+    pub(super) fn CGContextClipToRect(context: CGContextRef, rect: CGRect);
     pub(super) fn CGContextTranslateCTM(context: CGContextRef, x: f64, y: f64);
-    pub(super) fn CGContextRotateCTM(context: CGContextRef, angle: f64);
     pub(super) fn CGContextScaleCTM(context: CGContextRef, x: f64, y: f64);
     pub(super) fn CGContextConcatCTM(context: CGContextRef, transform: CGAffineTransform);
     pub(super) fn CGContextGetCTM(context: CGContextRef) -> CGAffineTransform;
@@ -208,13 +219,10 @@ unsafe extern "C" {
         intent: i32,
     ) -> *mut c_void;
     pub(super) fn CGImageRelease(image: *mut c_void);
+    pub(super) fn CGImageCreateWithImageInRect(image: *mut c_void, rect: CGRect) -> *mut c_void;
     pub(super) fn CGContextDrawImage(context: CGContextRef, rect: CGRect, image: *mut c_void);
     pub(super) fn CGContextSetInterpolationQuality(context: CGContextRef, quality: i32);
-    pub(super) fn CGContextSetTextDrawingMode(context: CGContextRef, mode: i32);
 }
-
-pub(super) const K_CG_TEXT_FILL: i32 = 0;
-pub(super) const K_CG_TEXT_CLIP: i32 = 7;
 
 pub(super) const K_CG_GRADIENT_DRAWS_BEFORE_START: u32 = 1;
 pub(super) const K_CG_GRADIENT_DRAWS_AFTER_END: u32 = 2;
@@ -309,6 +317,7 @@ unsafe extern "C" {
         leading: *mut f64,
     ) -> f64;
     pub(super) fn CTLineDraw(line: CFTypeRef, context: CGContextRef);
+    pub(super) fn CTLineGetBoundsWithOptions(line: CFTypeRef, options: usize) -> CGRect;
 }
 
 /// An owned Core Foundation object, released on drop.

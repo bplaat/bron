@@ -8,6 +8,7 @@
 //! dragging on the right side looks around, and round buttons for the other actions.
 //! Like Minecraft Pocket Edition, tapping the world places a block and holding breaks it.
 
+use std::f32::consts::TAU;
 use std::time::{Duration, Instant};
 
 use bcanvas::{Color, TextAlign, TextBaseline};
@@ -317,7 +318,8 @@ impl TouchControls {
             sprite.redraw(queue, |ctx| {
                 let center = size / 2.0;
                 ctx.begin_path();
-                ctx.ellipse(center, center, radius, radius);
+                ctx.arc(center, center, radius, 0.0, TAU, false);
+                ctx.close_path();
                 ctx.set_fill_style(Color::rgba(255, 255, 255, if pressed { 90 } else { 30 }));
                 ctx.fill();
                 ctx.set_line_width(2.0);

@@ -7,6 +7,8 @@
 //! What editing draws over the media of the viewport: the preview of an edit in its place, and
 //! the crop rectangle and selection that drags draw, move and resize.
 
+use std::f32::consts::TAU;
+
 use bcanvas::{CanvasRenderingContext2d, Color, FillRule};
 use imageview_core::edit::{Selection, Shape};
 use imageview_core::{Media, MediaRenderer};
@@ -233,12 +235,20 @@ fn shape_path(
 ) {
     match shape {
         Shape::Rectangle => context.rect(left, top, right - left, bottom - top),
-        Shape::Ellipse => context.ellipse(
-            f32::midpoint(left, right),
-            f32::midpoint(top, bottom),
-            (right - left) / 2.0,
-            (bottom - top) / 2.0,
-        ),
+        Shape::Ellipse => {
+            context.move_to(right, f32::midpoint(top, bottom));
+            context.ellipse(
+                f32::midpoint(left, right),
+                f32::midpoint(top, bottom),
+                (right - left) / 2.0,
+                (bottom - top) / 2.0,
+                0.0,
+                0.0,
+                TAU,
+                false,
+            );
+            context.close_path();
+        }
     }
 }
 

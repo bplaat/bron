@@ -560,7 +560,7 @@ fn draw_restart_button(ctx: &mut CanvasRenderingContext2d<'_>, game: &Game, pale
         RESTART_Y,
         RESTART_WIDTH,
         RESTART_HEIGHT,
-        RESTART_HEIGHT / 2.0,
+        &[RESTART_HEIGHT / 2.0],
     );
     ctx.set_fill_style(if game.active_hover() == Hover::Restart {
         palette.button_hover

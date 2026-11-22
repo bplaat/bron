@@ -232,7 +232,7 @@ fn draw_header(ctx: &mut CanvasRenderingContext2d<'_>, palette: &Palette, fps: u
     ctx.set_text_baseline(TextBaseline::Top);
     ctx.fill_text("Bassie Canvas", 32.0, 24.0);
 
-    let title_width = ctx.measure_text("Bassie Canvas");
+    let title_width = ctx.measure_text("Bassie Canvas").width;
     ctx.set_fill_style(palette.blue);
     ctx.fill_rect(32.0, 65.0, title_width, 3.0);
     ctx.set_fill_style(palette.muted);
@@ -260,17 +260,17 @@ fn draw_shapes(ctx: &mut CanvasRenderingContext2d<'_>, palette: &Palette, time: 
     gradient.add_color_stop(1.0, palette.blue);
     ctx.set_fill_style(gradient);
     ctx.begin_path();
-    ctx.round_rect(54.0, 173.0, 104.0, 64.0, 16.0);
+    ctx.round_rect(54.0, 173.0, 104.0, 64.0, &[16.0]);
     ctx.fill();
     ctx.set_stroke_style(palette.cyan);
     ctx.set_line_width(4.0);
     ctx.begin_path();
-    ctx.round_rect(174.0, 173.0, 104.0, 64.0, 16.0);
+    ctx.round_rect(174.0, 173.0, 104.0, 64.0, &[16.0]);
     ctx.stroke();
 
     ctx.set_global_alpha(0.78);
     ctx.begin_path();
-    ctx.ellipse(103.0, 282.0, 49.0, 28.0);
+    ctx.ellipse(103.0, 282.0, 49.0, 28.0, 0.0, 0.0, TAU, false);
     ctx.set_fill_style(palette.violet);
     ctx.fill();
     ctx.set_global_alpha(1.0);
@@ -372,7 +372,7 @@ fn draw_typography(ctx: &mut CanvasRenderingContext2d<'_>, palette: &Palette, ti
     ctx.set_font("sans-serif", 15.0);
     ctx.set_font_weight(FontWeight::Normal);
     let label = "measured text";
-    let width = ctx.measure_text(label);
+    let width = ctx.measure_text(label).width;
     ctx.set_fill_style(palette.surface_high);
     ctx.fill_rect(808.0 - width * 0.5 - 10.0, 250.0, width + 20.0, 34.0);
     ctx.set_fill_style(palette.muted);
@@ -436,7 +436,7 @@ fn draw_gallery(
 fn draw_flow(ctx: &mut CanvasRenderingContext2d<'_>, palette: &Palette, time: f32) {
     ctx.save();
     ctx.begin_path();
-    ctx.round_rect(68.0, 459.0, 256.0, 166.0, 12.0);
+    ctx.round_rect(68.0, 459.0, 256.0, 166.0, &[12.0]);
     ctx.clip();
     let mut wash = CanvasGradient::linear(0.0, 459.0, 0.0, 625.0);
     wash.add_color_stop(0.0, Color::from_rgb(0x122544));
@@ -608,7 +608,7 @@ fn draw_input(
         viewport.y,
         viewport.width,
         viewport.height,
-        10.0,
+        &[10.0],
     );
     ctx.clip();
     ctx.set_fill_style(palette.surface_high);
@@ -678,7 +678,7 @@ fn gallery_panel(
     ctx.set_stroke_style(palette.border);
     ctx.set_line_width(1.0);
     ctx.begin_path();
-    ctx.round_rect(bounds.x, bounds.y, bounds.width, bounds.height, 14.0);
+    ctx.round_rect(bounds.x, bounds.y, bounds.width, bounds.height, &[14.0]);
     ctx.stroke();
     ctx.set_fill_style(palette.muted);
     ctx.set_font("sans-serif", 11.0);
@@ -694,7 +694,7 @@ fn card(ctx: &mut CanvasRenderingContext2d<'_>, palette: &Palette, bounds: Rect,
     ctx.set_stroke_style(palette.border);
     ctx.set_line_width(1.0);
     ctx.begin_path();
-    ctx.round_rect(bounds.x, bounds.y, bounds.width, bounds.height, 16.0);
+    ctx.round_rect(bounds.x, bounds.y, bounds.width, bounds.height, &[16.0]);
     ctx.stroke();
     ctx.set_fill_style(palette.text);
     ctx.set_font("sans-serif", 16.0);
@@ -705,7 +705,7 @@ fn card(ctx: &mut CanvasRenderingContext2d<'_>, palette: &Palette, bounds: Rect,
 
 fn round_rect(ctx: &mut CanvasRenderingContext2d<'_>, bounds: Rect, radius: f32, color: Color) {
     ctx.begin_path();
-    ctx.round_rect(bounds.x, bounds.y, bounds.width, bounds.height, radius);
+    ctx.round_rect(bounds.x, bounds.y, bounds.width, bounds.height, &[radius]);
     ctx.set_fill_style(color);
     ctx.fill();
 }

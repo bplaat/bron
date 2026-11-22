@@ -19,7 +19,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         ctx.set_fill_style(Color::from_rgb(0xffbd69));
         ctx.begin_path();
-        ctx.ellipse(400.0, 300.0, 150.0, 150.0);
+        ctx.arc(400.0, 300.0, 150.0, 0.0, std::f32::consts::TAU, false);
         ctx.fill();
 
         ctx.set_fill_style(Color::from_rgb(0x101820));

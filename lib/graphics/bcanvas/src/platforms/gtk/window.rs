@@ -13,6 +13,7 @@ use bwindow::{NativeContentHandle, WindowAttachment, WindowEventSender};
 
 use crate::CanvasRenderingContext2d;
 use crate::platforms::gtk::context::PlatformCanvasContext;
+use crate::platforms::gtk::headers::g_object_unref;
 
 #[repr(C)]
 struct GObject([u8; 0]);
@@ -40,7 +41,6 @@ unsafe extern "C" {
         data: *mut c_void,
     ) -> u32;
     fn g_object_ref(object: *mut GObject) -> *mut GObject;
-    fn g_object_unref(object: *mut GObject);
     fn gtk_widget_get_allocated_width(widget: *mut GtkWidget) -> i32;
     fn gtk_widget_get_allocated_height(widget: *mut GtkWidget) -> i32;
     fn gtk_widget_get_scale_factor(widget: *mut GtkWidget) -> i32;

@@ -762,6 +762,7 @@ impl ID2D1DeviceContext {
         rect: *const D2D_RECT_F,
         opacity: f32,
         interpolation: u32,
+        source: *const D2D_RECT_F,
     ) {
         unsafe {
             ((*self.lpVtbl).DrawBitmap)(
@@ -770,7 +771,7 @@ impl ID2D1DeviceContext {
                 rect,
                 opacity,
                 interpolation,
-                std::ptr::null(),
+                source,
                 std::ptr::null(),
             )
         }
@@ -998,6 +999,8 @@ struct IDWriteTextLayoutVtbl {
         *mut u32,
     ) -> i32,
     GetMetrics: unsafe extern "system" fn(*mut IDWriteTextLayout, *mut DWRITE_TEXT_METRICS) -> i32,
+    GetOverhangMetrics:
+        unsafe extern "system" fn(*mut IDWriteTextLayout, *mut DWRITE_OVERHANG_METRICS) -> i32,
 }
 
 impl IDWriteTextLayout {
@@ -1019,6 +1022,17 @@ impl IDWriteTextLayout {
     pub(super) unsafe fn GetMetrics(&self, metrics: *mut DWRITE_TEXT_METRICS) -> Result<(), i32> {
         unsafe {
             check(((*self.lpVtbl).GetMetrics)(
+                self as *const Self as *mut Self,
+                metrics,
+            ))
+        }
+    }
+    pub(super) unsafe fn GetOverhangMetrics(
+        &self,
+        metrics: *mut DWRITE_OVERHANG_METRICS,
+    ) -> Result<(), i32> {
+        unsafe {
+            check(((*self.lpVtbl).GetOverhangMetrics)(
                 self as *const Self as *mut Self,
                 metrics,
             ))
@@ -1067,6 +1081,13 @@ pub(super) const IID_ID2D1_DEVICE_CONTEXT: GUID = GUID {
     data2: 0x191c,
     data3: 0x466d,
     data4: [0xad, 0x95, 0x97, 0x56, 0x78, 0xbd, 0xa9, 0x98],
+};
+/// Introduced with color fonts in Windows 8.1.
+pub(super) const IID_IDWRITE_FACTORY2: GUID = GUID {
+    data1: 0x0439fc60,
+    data2: 0xca44,
+    data3: 0x4994,
+    data4: [0x8d, 0xee, 0x3a, 0x9a, 0xf7, 0xb7, 0x32, 0xec],
 };
 const IID_IDWRITE_FACTORY: GUID = GUID {
     data1: 0xb859ee5a,
@@ -1323,6 +1344,15 @@ pub(super) struct D2D1_LAYER_PARAMETERS {
 
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
+pub(super) struct DWRITE_OVERHANG_METRICS {
+    pub(super) left: f32,
+    pub(super) top: f32,
+    pub(super) right: f32,
+    pub(super) bottom: f32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
 pub(super) struct DWRITE_TEXT_METRICS {
     pub(super) left: f32,
     pub(super) top: f32,
@@ -1403,6 +1433,7 @@ pub(super) const D2D1_LINE_JOIN_MITER_OR_BEVEL: u32 = 3;
 pub(super) const D2D1_PRIMITIVE_BLEND_SOURCE_OVER: u32 = 0;
 pub(super) const D2D1_PRIMITIVE_BLEND_COPY: u32 = 1;
 pub(super) const D2D1_DRAW_TEXT_OPTIONS_NONE: u32 = 0;
+pub(super) const D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT: u32 = 4;
 pub(super) const DWRITE_FONT_WEIGHT_NORMAL: u32 = 400;
 pub(super) const DWRITE_FONT_WEIGHT_BOLD: u32 = 700;
 pub(super) const DWRITE_FONT_STYLE_NORMAL: u32 = 0;

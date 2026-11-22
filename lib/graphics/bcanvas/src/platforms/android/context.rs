@@ -17,11 +17,16 @@ use jni::sys::{jint, jvalue};
 use jni::vm::JavaVM;
 use jni::{Env, JValue, jni_sig, jni_str};
 
+use crate::cache::{GradientKey, LruCache};
 use crate::path::{Command, Path, Transform};
 use crate::{
     CanvasState, CanvasStyle, Color, CompositeOperation, FillRule, FontWeight, Gradient,
-    GradientShape, GradientSpread, LineCap, LineJoin, TextAlign, TextBaseline,
+    GradientShape, GradientSpread, LineCap, LineJoin, TextAlign, TextExtents, baseline_offset,
+    single_line,
 };
+
+const GRADIENTS: usize = 32;
+const PATHS: usize = 64;
 
 /// Run `f` with the JNI environment of the current thread in a new local reference frame.
 /// Java exceptions and JNI errors panic.
@@ -82,6 +87,7 @@ pub(super) struct Jni {
     set_typeface: JMethodID,
     set_text_align: JMethodID,
     measure_text: JMethodID,
+    get_text_bounds: JMethodID,
     ascent: JMethodID,
     descent: JMethodID,
     set_shader: JMethodID,
@@ -115,6 +121,9 @@ pub(super) struct Jni {
     dash_new: JMethodID,
     rect_class: Global<JClass<'static>>,
     rect_new: JMethodID,
+    // The integer android.graphics.Rect of bitmap source rectangles.
+    int_rect_class: Global<JClass<'static>>,
+    int_rect_new: JMethodID,
     bitmap_class: Global<JClass<'static>>,
     create_bitmap: JStaticMethodID,
     argb_8888: GlobalObject,
@@ -304,6 +313,7 @@ impl Jni {
         let radial_gradient = class(env, jni_str!("android/graphics/RadialGradient"))?;
         let dash = class(env, jni_str!("android/graphics/DashPathEffect"))?;
         let rect = class(env, jni_str!("android/graphics/RectF"))?;
+        let int_rect = class(env, jni_str!("android/graphics/Rect"))?;
         let bitmap = class(env, jni_str!("android/graphics/Bitmap"))?;
         let [argb_8888] = constants(
             env,
@@ -372,6 +382,7 @@ impl Jni {
             )?,
             dash_new: env.get_method_id(&dash, jni_str!("<init>"), jni_sig!("([FF)V"))?,
             rect_new: env.get_method_id(&rect, jni_str!("<init>"), jni_sig!("(FFFF)V"))?,
+            int_rect_new: env.get_method_id(&int_rect, jni_str!("<init>"), jni_sig!("(IIII)V"))?,
             create_bitmap: env.get_static_method_id(
                 &bitmap,
                 jni_str!("createBitmap"),
@@ -395,6 +406,7 @@ impl Jni {
             radial_gradient_class: radial_gradient,
             dash_class: dash,
             rect_class: rect,
+            int_rect_class: int_rect,
             bitmap_class: bitmap,
             canvas_new: env.get_method_id(
                 &canvas,
@@ -482,6 +494,11 @@ impl Jni {
                 jni_str!("measureText"),
                 jni_sig!("(Ljava/lang/String;)F"),
             )?,
+            get_text_bounds: env.get_method_id(
+                &paint,
+                jni_str!("getTextBounds"),
+                jni_sig!("(Ljava/lang/String;IILandroid/graphics/Rect;)V"),
+            )?,
             ascent: env.get_method_id(&paint, jni_str!("ascent"), jni_sig!("()F"))?,
             descent: env.get_method_id(&paint, jni_str!("descent"), jni_sig!("()F"))?,
             path_new: env.get_method_id(&path, jni_str!("<init>"), jni_sig!("()V"))?,
@@ -556,7 +573,9 @@ pub(crate) struct Resources {
     // Typeface reference and font size bits.
     text_font: Cell<Option<(usize, u32)>>,
     text_align: Cell<Option<usize>>,
-    path: GlobalObject,
+    path: Rc<GlobalObject>,
+    paths: RefCell<LruCache<u64, Rc<GlobalObject>>>,
+    gradients: RefCell<LruCache<GradientKey, Rc<GlobalObject>>>,
     matrix: GlobalObject,
     values: Global<JFloatArray<'static>>,
     typefaces: RefCell<HashMap<(String, bool), Rc<GlobalObject>>>,
@@ -615,7 +634,9 @@ impl Resources {
             image_filter: Cell::new(Some(true)),
             text_font: Cell::new(None),
             text_align: Cell::new(None),
-            path,
+            path: Rc::new(path),
+            paths: RefCell::new(LruCache::new(PATHS)),
+            gradients: RefCell::new(LruCache::new(GRADIENTS)),
             matrix,
             values: env.new_global_ref(&values)?,
             typefaces: RefCell::new(HashMap::new()),
@@ -692,7 +713,6 @@ pub(crate) struct PlatformCanvasContext {
     base: Transform,
     clear: Clear,
     count: jint,
-    path: Path,
     transform: Transform,
     // Saved transforms with the canvas transform at that save.
     stack: Vec<(Transform, Transform)>,
@@ -738,7 +758,6 @@ impl PlatformCanvasContext {
             base,
             clear,
             count,
-            path: Path::default(),
             transform: Transform::IDENTITY,
             stack: Vec::new(),
             synced: Transform::IDENTITY,
@@ -833,10 +852,19 @@ impl PlatformCanvasContext {
                 paint.shaded.set(true);
                 // A shader takes the alpha of the paint color.
                 self.set_color(paint, Color::rgb(255, 255, 255), s.alpha);
-                with_env(|env| {
-                    let shader = self.gradient_shader(env, &gradient.0)?;
-                    set_shader(env, &shader)
-                });
+                let shader = self
+                    .resources
+                    .gradients
+                    .borrow_mut()
+                    .get_or_create(GradientKey(gradient.0.clone()), || {
+                        Some(with_env(|env| {
+                            let shader = self.gradient_shader(env, &gradient.0)?;
+                            Ok(Rc::new(env.new_global_ref(&shader)?))
+                        }))
+                    })
+                    .cloned()
+                    .expect("created shader");
+                with_env(|env| set_shader(env, &shader));
             }
         }
     }
@@ -1099,25 +1127,21 @@ impl PlatformCanvasContext {
         text
     }
 
-    // Paths capture their construction transform, map them back into the current user space
-    // so the canvas draws them, and scales strokes, with the current transform. Returns
-    // whether the path was built.
-    fn build_path(&mut self) -> bool {
-        let Some(inverse) = self.transform.inverse() else {
-            return false;
-        };
+    // The native path of a user-space path, which the canvas draws, and scales strokes,
+    // with the current transform. Reused paths keep their own, others share one.
+    fn build_path(&mut self, path: &Path) -> Rc<GlobalObject> {
         self.sync_transform();
-        let (jni, path) = (self.jni, &self.resources.path);
-        with_env(|env| unsafe {
+        let (jni, resources) = (self.jni, &self.resources);
+        let fill = |env: &mut Env, native: &GlobalObject| unsafe {
             let mut point = |method, points: &[[f32; 2]]| {
                 let mut args = [jvalue { f: 0.0 }; 6];
                 for (pair, &point) in args.as_chunks_mut::<2>().0.iter_mut().zip(points) {
-                    *pair = inverse.point(point).map(|f| jvalue { f });
+                    *pair = point.map(|f| jvalue { f });
                 }
-                call_void(env, path, method, &args[..points.len() * 2])
+                call_void(env, native, method, &args[..points.len() * 2])
             };
             point(jni.rewind, &[])?;
-            for command in &self.path.commands {
+            for command in &path.commands {
                 match *command {
                     Command::Move(to) => point(jni.move_to, &[to])?,
                     Command::Line(to) => point(jni.line_to, &[to])?,
@@ -1127,8 +1151,25 @@ impl PlatformCanvasContext {
                 }
             }
             Ok(())
-        });
-        true
+        };
+        if path.id == 0 {
+            with_env(|env| fill(env, &resources.path));
+            return resources.path.clone();
+        }
+        resources
+            .paths
+            .borrow_mut()
+            .get_or_create(path.id, || {
+                Some(with_env(|env| {
+                    let native =
+                        unsafe { env.new_object_unchecked(&jni.path_class, jni.path_new, &[]) }?;
+                    let native = env.new_global_ref(&native)?;
+                    fill(env, &native)?;
+                    Ok(Rc::new(native))
+                }))
+            })
+            .cloned()
+            .expect("created path")
     }
 
     fn draw_rect(&mut self, paint: &JObject, x: f32, y: f32, w: f32, h: f32) {
@@ -1149,9 +1190,9 @@ impl PlatformCanvasContext {
         });
     }
 
-    // Draw the built path with `paint`.
-    fn draw_path(&self, paint: &JObject) {
-        let path = self.resources.path.as_raw();
+    // Draw a native path with `paint`.
+    fn draw_path(&self, path: &GlobalObject, paint: &JObject) {
+        let path = path.as_raw();
         with_env(|env| unsafe {
             call_void(
                 env,
@@ -1220,10 +1261,8 @@ impl PlatformCanvasContext {
         &mut self,
         s: &CanvasState,
         image: &PlatformImage,
-        x: f32,
-        y: f32,
-        w: f32,
-        h: f32,
+        source: [f32; 4],
+        [x, y, w, h]: [f32; 4],
     ) {
         self.sync_transform();
         let paint = &self.resources.image;
@@ -1244,6 +1283,33 @@ impl PlatformCanvasContext {
         }
         with_env(|env| {
             let bitmap = image.bitmap(env, jni)?;
+            // Android bitmap sources are whole pixels, the full image needs none.
+            let [sx, sy, sw, sh] = source;
+            let full = source == [0.0, 0.0, image.width as f32, image.height as f32];
+            let source = if full {
+                None
+            } else {
+                Some(unsafe {
+                    env.new_object_unchecked(
+                        &jni.int_rect_class,
+                        jni.int_rect_new,
+                        &[
+                            jvalue {
+                                i: sx.round() as jint,
+                            },
+                            jvalue {
+                                i: sy.round() as jint,
+                            },
+                            jvalue {
+                                i: (sx + sw).round() as jint,
+                            },
+                            jvalue {
+                                i: (sy + sh).round() as jint,
+                            },
+                        ],
+                    )
+                }?)
+            };
             let rect = unsafe {
                 env.new_object_unchecked(
                     &jni.rect_class,
@@ -1264,7 +1330,9 @@ impl PlatformCanvasContext {
                     &[
                         jvalue { l: bitmap.as_raw() },
                         jvalue {
-                            l: std::ptr::null_mut(),
+                            l: source
+                                .as_ref()
+                                .map_or(std::ptr::null_mut(), |source| source.as_raw()),
                         },
                         jvalue { l: rect.as_raw() },
                         jvalue {
@@ -1276,21 +1344,14 @@ impl PlatformCanvasContext {
         });
     }
     // Paths are reused, so they get the fill rule of every fill and clip.
-    fn set_fill_rule(&self, rule: FillRule) {
+    fn set_fill_rule(&self, path: &GlobalObject, rule: FillRule) {
         let jni = self.jni;
         let rule = jni.fill_types[match rule {
             FillRule::NonZero => 0,
             FillRule::EvenOdd => 1,
         }]
         .as_raw();
-        with_env(|env| unsafe {
-            call_void(
-                env,
-                &self.resources.path,
-                jni.set_fill_type,
-                &[jvalue { l: rule }],
-            )
-        });
+        with_env(|env| unsafe { call_void(env, path, jni.set_fill_type, &[jvalue { l: rule }]) });
     }
     pub(crate) fn clear_rect(&mut self, x: f32, y: f32, w: f32, h: f32) {
         self.sync_transform();
@@ -1331,61 +1392,25 @@ impl PlatformCanvasContext {
         self.stroke_paint(s);
         self.draw_rect(&resources.stroke.object, x, y, w, h);
     }
-    pub(crate) fn begin_path(&mut self) {
-        self.path = Path::default();
+    pub(crate) fn fill(&mut self, s: &CanvasState, path: &Path, rule: FillRule) {
+        let native = self.build_path(path);
+        self.set_fill_rule(&native, rule);
+        let resources = &self.resources;
+        self.set_style(&resources.fill, &s.fill, s);
+        self.draw_path(&native, &resources.fill.object);
     }
-    pub(crate) fn close_path(&mut self) {
-        self.path.close();
+    pub(crate) fn stroke(&mut self, s: &CanvasState, path: &Path) {
+        let native = self.build_path(path);
+        self.set_fill_rule(&native, FillRule::NonZero);
+        self.draw_path(&native, self.stroke_paint(s));
     }
-    pub(crate) fn move_to(&mut self, x: f32, y: f32) {
-        self.path.move_to(self.transform, [x, y]);
-    }
-    pub(crate) fn line_to(&mut self, x: f32, y: f32) {
-        self.path.line_to(self.transform, [x, y]);
-    }
-    pub(crate) fn rect(&mut self, x: f32, y: f32, w: f32, h: f32) {
-        self.path.rect(self.transform, x, y, w, h);
-    }
-    pub(crate) fn ellipse(&mut self, x: f32, y: f32, rx: f32, ry: f32) {
-        self.path.ellipse(self.transform, [x, y], [rx, ry]);
-    }
-    pub(crate) fn arc(&mut self, x: f32, y: f32, r: f32, start: f32, end: f32, ccw: bool) {
-        self.path
-            .arc(self.transform, [x, y], [r, r], start, end, ccw);
-    }
-    pub(crate) fn quadratic_curve_to(&mut self, a: f32, b: f32, x: f32, y: f32) {
-        self.path.quadratic(self.transform, [a, b], [x, y]);
-    }
-    pub(crate) fn bezier_curve_to(&mut self, a: f32, b: f32, c: f32, d: f32, x: f32, y: f32) {
-        self.path.cubic(self.transform, [a, b], [c, d], [x, y]);
-    }
-    pub(crate) fn fill(&mut self, s: &CanvasState, rule: FillRule) {
-        if self.build_path() {
-            self.set_fill_rule(rule);
-            let resources = &self.resources;
-            self.set_style(&resources.fill, &s.fill, s);
-            self.draw_path(&resources.fill.object);
-        }
-    }
-    pub(crate) fn stroke(&mut self, s: &CanvasState) {
-        if self.build_path() {
-            self.set_fill_rule(FillRule::NonZero);
-            self.draw_path(self.stroke_paint(s));
-        }
-    }
-    pub(crate) fn clip(&mut self, rule: FillRule) {
-        let built = self.build_path();
-        self.set_fill_rule(rule);
+    pub(crate) fn clip(&mut self, path: &Path, rule: FillRule) {
+        let native = self.build_path(path);
+        self.set_fill_rule(&native, rule);
         let (jni, canvas) = (self.jni, &self.canvas);
-        let path = self.resources.path.as_raw();
+        let path = native.as_raw();
         with_env(|env| unsafe {
-            if built {
-                env.call_method_unchecked(canvas, jni.clip_path, BOOLEAN, &[jvalue { l: path }])?;
-            } else {
-                // A path under a non-invertible transform is empty, so nothing stays visible.
-                let empty = [jvalue { f: 0.0 }; 4];
-                env.call_method_unchecked(canvas, jni.clip_rect, BOOLEAN, &empty)?;
-            }
+            env.call_method_unchecked(canvas, jni.clip_path, BOOLEAN, &[jvalue { l: path }])?;
             Ok(())
         });
     }
@@ -1437,21 +1462,10 @@ impl PlatformCanvasContext {
                     }],
                 )?;
             }
-            // Offset from the requested baseline to the alphabetic baseline Android draws at.
-            let ascent = env
-                .call_method_unchecked(paint, jni.ascent, FLOAT, &[])?
-                .f()?;
-            let descent = env
-                .call_method_unchecked(paint, jni.descent, FLOAT, &[])?
-                .f()?;
-            let offset = match s.text_baseline {
-                TextBaseline::Top => -ascent,
-                TextBaseline::Hanging => -ascent * 0.8,
-                TextBaseline::Middle => -(ascent + descent) / 2.0,
-                TextBaseline::Alphabetic => 0.0,
-                TextBaseline::Ideographic | TextBaseline::Bottom => -descent,
-            };
-            let text = env.new_string(text)?;
+            // Android draws at the alphabetic baseline.
+            let (ascent, descent) = font_metrics(env, jni, paint)?;
+            let offset = baseline_offset(s.text_baseline, ascent, descent);
+            let text = env.new_string(&*single_line(text))?;
             call_void(
                 env,
                 &self.canvas,
@@ -1465,18 +1479,67 @@ impl PlatformCanvasContext {
             )
         });
     }
-    pub(crate) fn measure_text(&mut self, s: &CanvasState, text: &str) -> f32 {
+    pub(crate) fn measure_text(&mut self, s: &CanvasState, text: &str) -> TextExtents {
         let paint = self.text_paint(s);
+        let jni = self.jni;
         with_env(|env| unsafe {
-            let text = env.new_string(text)?;
-            env.call_method_unchecked(
+            let length = text.encode_utf16().count() as jint;
+            let text = env.new_string(&*single_line(text))?;
+            let width = env
+                .call_method_unchecked(
+                    paint,
+                    jni.measure_text,
+                    FLOAT,
+                    &[jvalue { l: text.as_raw() }],
+                )?
+                .f()?;
+            // The glyph ink relative to the start of the alphabetic baseline.
+            let bounds = env.new_object_unchecked(
+                &jni.int_rect_class,
+                jni.int_rect_new,
+                &[jvalue { i: 0 }; 4],
+            )?;
+            call_void(
+                env,
                 paint,
-                self.jni.measure_text,
-                FLOAT,
-                &[jvalue { l: text.as_raw() }],
-            )?
-            .f()
+                jni.get_text_bounds,
+                &[
+                    jvalue { l: text.as_raw() },
+                    jvalue { i: 0 },
+                    jvalue { i: length },
+                    jvalue { l: bounds.as_raw() },
+                ],
+            )?;
+            let mut ink = [0.0; 4];
+            for (edge, name) in ink.iter_mut().zip([
+                jni_str!("left"),
+                jni_str!("top"),
+                jni_str!("right"),
+                jni_str!("bottom"),
+            ]) {
+                *edge = env.get_field(&bounds, name, jni_sig!("I"))?.i()? as f32;
+            }
+            let (ascent, descent) = font_metrics(env, jni, paint)?;
+            Ok(TextExtents {
+                width,
+                ink,
+                ascent,
+                descent,
+            })
         })
+    }
+}
+
+// The positive ascent and descent of the font of a paint.
+unsafe fn font_metrics(env: &mut Env, jni: &Jni, paint: &JObject) -> Result<(f32, f32)> {
+    unsafe {
+        let ascent = env
+            .call_method_unchecked(paint, jni.ascent, FLOAT, &[])?
+            .f()?;
+        let descent = env
+            .call_method_unchecked(paint, jni.descent, FLOAT, &[])?
+            .f()?;
+        Ok((-ascent, descent))
     }
 }
 

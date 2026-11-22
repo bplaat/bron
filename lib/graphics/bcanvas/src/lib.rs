@@ -9,9 +9,10 @@
 #![allow(clippy::undocumented_unsafe_blocks)]
 
 pub use crate::canvas::*;
+// Cairo builds gradients and paths cheaply, the other backends cache theirs.
+#[cfg(any(target_vendor = "apple", target_os = "android", windows))]
+mod cache;
 mod canvas;
-#[cfg(any(windows, target_os = "android", test))]
-#[cfg_attr(not(any(windows, target_os = "android")), allow(dead_code))]
 mod path;
 mod platforms;
 mod recording;

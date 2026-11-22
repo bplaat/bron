@@ -8,9 +8,10 @@ use std::ffi::{CString, c_void};
 use std::sync::Arc;
 
 use super::headers::*;
+use crate::path::{Command, Path};
 use crate::{
     CanvasState, CanvasStyle, CompositeOperation, FillRule, FontWeight, Gradient, GradientShape,
-    GradientSpread, LineCap, LineJoin, TextAlign, TextBaseline,
+    GradientSpread, LineCap, LineJoin, TextExtents, single_line,
 };
 
 pub(crate) struct PlatformCanvasContext {
@@ -19,6 +20,8 @@ pub(crate) struct PlatformCanvasContext {
     // Cairo cannot hold a singular matrix, so drawing is skipped instead.
     degenerate: bool,
     saved: Vec<bool>,
+    // The text layout, created when text is first drawn or measured, and its font.
+    layout: Option<*mut c_void>,
     font: Option<(Arc<str>, FontWeight, f32)>,
     layers: Vec<Layer>,
 }
@@ -51,6 +54,7 @@ impl PlatformCanvasContext {
             initial,
             degenerate: false,
             saved: Vec::new(),
+            layout: None,
             font: None,
             layers: Vec::new(),
         }
@@ -65,15 +69,13 @@ impl PlatformCanvasContext {
     }
     pub(crate) fn restore(&mut self) {
         self.degenerate = self.saved.pop().unwrap_or(false);
-        // Cairo restores the font face and size too.
-        self.font = None;
         unsafe { cairo_restore(self.cr) }
     }
     pub(crate) fn clear_rect(&mut self, x: f32, y: f32, w: f32, h: f32) {
         if self.degenerate {
             return;
         }
-        let path = self.take_path();
+        unsafe { cairo_new_path(self.cr) };
         unsafe {
             cairo_save(self.cr);
             cairo_rectangle(self.cr, x.into(), y.into(), w.into(), h.into());
@@ -81,25 +83,22 @@ impl PlatformCanvasContext {
             cairo_fill(self.cr);
             cairo_restore(self.cr)
         }
-        self.restore_path(path);
     }
     pub(crate) fn fill_rect(&mut self, s: &CanvasState, x: f32, y: f32, w: f32, h: f32) {
         if self.degenerate {
             return;
         }
-        let path = self.take_path();
+        unsafe { cairo_new_path(self.cr) };
         unsafe { cairo_rectangle(self.cr, x.into(), y.into(), w.into(), h.into()) };
         self.paint(s, false, FillRule::NonZero);
-        self.restore_path(path);
     }
     pub(crate) fn stroke_rect(&mut self, s: &CanvasState, x: f32, y: f32, w: f32, h: f32) {
         if self.degenerate {
             return;
         }
-        let path = self.take_path();
+        unsafe { cairo_new_path(self.cr) };
         unsafe { cairo_rectangle(self.cr, x.into(), y.into(), w.into(), h.into()) };
         self.paint(s, true, FillRule::NonZero);
-        self.restore_path(path);
     }
     pub(crate) fn begin_layer(&mut self, s: &CanvasState) {
         self.push_layer(s, false);
@@ -120,8 +119,6 @@ impl PlatformCanvasContext {
         unsafe { cairo_push_group(self.cr) };
     }
     pub(crate) fn end_mask(&mut self) {
-        // Popping a group restores the drawing state of its start, like the font.
-        self.font = None;
         let layer = self.layers.last_mut().expect("open layer");
         unsafe {
             layer.mask = Some(cairo_pop_group(self.cr));
@@ -131,7 +128,6 @@ impl PlatformCanvasContext {
     pub(crate) fn end_layer(&mut self) {
         let layer = self.layers.pop().expect("open layer");
         self.degenerate = self.saved.pop().unwrap_or(false);
-        self.font = None;
         unsafe {
             if layer.masked {
                 let content = cairo_pop_group(self.cr);
@@ -152,24 +148,22 @@ impl PlatformCanvasContext {
         &mut self,
         s: &CanvasState,
         image: &PlatformImage,
-        x: f32,
-        y: f32,
-        w: f32,
-        h: f32,
+        source: [f32; 4],
+        [x, y, w, h]: [f32; 4],
     ) {
-        if self.degenerate || w == 0.0 || h == 0.0 {
+        if self.degenerate {
             return;
         }
-        let path = self.take_path();
+        let [sx, sy, sw, sh] = source.map(f64::from);
         unsafe {
+            cairo_new_path(self.cr);
+            // A subsurface of the source pads at its own edges.
+            let surface = cairo_surface_create_for_rectangle(image.surface, sx, sy, sw, sh);
             cairo_save(self.cr);
             cairo_translate(self.cr, x.into(), y.into());
-            cairo_scale(
-                self.cr,
-                f64::from(w) / f64::from(image.width),
-                f64::from(h) / f64::from(image.height),
-            );
-            cairo_set_source_surface(self.cr, image.surface, 0.0, 0.0);
+            cairo_scale(self.cr, f64::from(w) / sw, f64::from(h) / sh);
+            cairo_set_source_surface(self.cr, surface, 0.0, 0.0);
+            cairo_surface_destroy(surface);
             let pattern = cairo_get_source(self.cr);
             // Padding keeps the edge pixels from blending with transparency when scaled.
             cairo_pattern_set_extend(pattern, CAIRO_EXTEND_PAD);
@@ -181,96 +175,54 @@ impl PlatformCanvasContext {
                     CAIRO_FILTER_NEAREST
                 },
             );
-            cairo_rectangle(self.cr, 0.0, 0.0, image.width.into(), image.height.into());
+            cairo_rectangle(self.cr, 0.0, 0.0, sw, sh);
             cairo_clip(self.cr);
             cairo_set_operator(self.cr, operator(s.composite));
             cairo_paint_with_alpha(self.cr, s.alpha.into());
             cairo_restore(self.cr);
         }
-        self.restore_path(path);
     }
-    pub(crate) fn begin_path(&mut self) {
-        unsafe { cairo_new_path(self.cr) }
-    }
-    pub(crate) fn close_path(&mut self) {
-        unsafe { cairo_close_path(self.cr) }
-    }
-    pub(crate) fn move_to(&mut self, x: f32, y: f32) {
-        unsafe { cairo_move_to(self.cr, x.into(), y.into()) }
-    }
-    pub(crate) fn line_to(&mut self, x: f32, y: f32) {
-        unsafe { cairo_line_to(self.cr, x.into(), y.into()) }
-    }
-    pub(crate) fn rect(&mut self, x: f32, y: f32, w: f32, h: f32) {
-        unsafe { cairo_rectangle(self.cr, x.into(), y.into(), w.into(), h.into()) }
-    }
-    pub(crate) fn ellipse(&mut self, x: f32, y: f32, rx: f32, ry: f32) {
-        if ![x, y, rx, ry].iter().all(|v| v.is_finite()) || rx <= 0.0 || ry <= 0.0 {
-            return;
-        }
-        unsafe {
-            cairo_new_sub_path(self.cr);
-            cairo_save(self.cr);
-            cairo_translate(self.cr, x.into(), y.into());
-            cairo_scale(self.cr, rx.into(), ry.into());
-            cairo_arc(self.cr, 0.0, 0.0, 1.0, 0.0, std::f64::consts::TAU);
-            cairo_restore(self.cr);
-        }
-    }
-    pub(crate) fn arc(&mut self, x: f32, y: f32, r: f32, a: f32, b: f32, ccw: bool) {
-        unsafe {
-            if ccw {
-                cairo_arc_negative(self.cr, x.into(), y.into(), r.into(), a.into(), b.into())
-            } else {
-                cairo_arc(self.cr, x.into(), y.into(), r.into(), a.into(), b.into())
-            }
-        }
-    }
-    pub(crate) fn quadratic_curve_to(&mut self, cpx: f32, cpy: f32, x: f32, y: f32) {
-        let (mut x0, mut y0) = (0.0, 0.0);
-        unsafe {
-            if cairo_has_current_point(self.cr) == 0 {
-                cairo_move_to(self.cr, cpx.into(), cpy.into());
-            }
-            cairo_get_current_point(self.cr, &mut x0, &mut y0);
-            cairo_curve_to(
-                self.cr,
-                x0 + 2.0 / 3.0 * (f64::from(cpx) - x0),
-                y0 + 2.0 / 3.0 * (f64::from(cpy) - y0),
-                f64::from(x) + 2.0 / 3.0 * (f64::from(cpx) - f64::from(x)),
-                f64::from(y) + 2.0 / 3.0 * (f64::from(cpy) - f64::from(y)),
-                x.into(),
-                y.into(),
-            )
-        }
-    }
-    pub(crate) fn bezier_curve_to(&mut self, a: f32, b: f32, c: f32, d: f32, x: f32, y: f32) {
-        unsafe {
-            if cairo_has_current_point(self.cr) == 0 {
-                cairo_move_to(self.cr, a.into(), b.into());
-            }
-            cairo_curve_to(
-                self.cr,
-                a.into(),
-                b.into(),
-                c.into(),
-                d.into(),
-                x.into(),
-                y.into(),
-            )
-        }
-    }
-    pub(crate) fn fill(&mut self, s: &CanvasState, rule: FillRule) {
+    pub(crate) fn fill(&mut self, s: &CanvasState, path: &Path, rule: FillRule) {
         if self.degenerate {
             return;
         }
+        self.set_path(path);
         self.paint(s, false, rule);
     }
-    pub(crate) fn stroke(&mut self, s: &CanvasState) {
+    pub(crate) fn stroke(&mut self, s: &CanvasState, path: &Path) {
         if self.degenerate {
             return;
         }
+        self.set_path(path);
         self.paint(s, true, FillRule::NonZero);
+    }
+    // Replace the current path, every subpath of which starts with a move.
+    fn set_path(&self, path: &Path) {
+        let mut current = [0.0; 2];
+        unsafe {
+            cairo_new_path(self.cr);
+            for command in &path.commands {
+                match *command {
+                    Command::Move([x, y]) => cairo_move_to(self.cr, x.into(), y.into()),
+                    Command::Line([x, y]) => cairo_line_to(self.cr, x.into(), y.into()),
+                    Command::Quadratic(c, end) => {
+                        // The cubic Bezier curve of a quadratic one.
+                        let a = [0, 1].map(|i| current[i] + 2.0 / 3.0 * (c[i] - current[i]));
+                        let b = [0, 1].map(|i| end[i] + 2.0 / 3.0 * (c[i] - end[i]));
+                        curve_to(self.cr, a, b, end);
+                    }
+                    Command::Cubic(a, b, end) => curve_to(self.cr, a, b, end),
+                    Command::Close => cairo_close_path(self.cr),
+                }
+                current = match *command {
+                    Command::Move(point)
+                    | Command::Line(point)
+                    | Command::Quadratic(_, point)
+                    | Command::Cubic(_, _, point) => point,
+                    Command::Close => current,
+                };
+            }
+        }
     }
     // Fills or strokes the current path with the style, keeping the path.
     fn paint(&self, s: &CanvasState, stroke: bool, rule: FillRule) {
@@ -354,15 +306,12 @@ impl PlatformCanvasContext {
             }
         }
     }
-    pub(crate) fn clip(&mut self, rule: FillRule) {
-        unsafe { cairo_set_fill_rule(self.cr, fill_rule(rule)) };
-        if self.degenerate {
-            // Clipping to an empty path hides everything until restore.
-            let path = self.take_path();
-            unsafe { cairo_clip(self.cr) };
-            self.restore_path(path);
-        } else {
-            unsafe { cairo_clip_preserve(self.cr) }
+    pub(crate) fn clip(&mut self, path: &Path, rule: FillRule) {
+        // Clipping to an empty path hides everything until restore.
+        self.set_path(path);
+        unsafe {
+            cairo_set_fill_rule(self.cr, fill_rule(rule));
+            cairo_clip(self.cr);
         }
     }
     pub(crate) fn translate(&mut self, x: f32, y: f32) {
@@ -430,52 +379,77 @@ impl PlatformCanvasContext {
         if self.degenerate {
             return;
         }
-        let Ok(text) = CString::new(text) else { return };
-        self.select_font(s);
-        let (mut x, mut y) = (f64::from(x), f64::from(y));
-        match s.text_align {
-            TextAlign::Center => x -= self.text_extents(&text).x_advance / 2.0,
-            TextAlign::Right | TextAlign::End => x -= self.text_extents(&text).x_advance,
-            TextAlign::Left | TextAlign::Start => {}
-        }
-        if s.text_baseline != TextBaseline::Alphabetic {
-            let mut e = CairoFontExtents::default();
-            unsafe { cairo_font_extents(self.cr, &mut e) };
-            y += match s.text_baseline {
-                TextBaseline::Top => e.ascent,
-                TextBaseline::Hanging => e.ascent * 0.8,
-                TextBaseline::Middle => (e.ascent - e.descent) / 2.0,
-                TextBaseline::Bottom | TextBaseline::Ideographic => -e.descent,
-                TextBaseline::Alphabetic => 0.0,
-            };
-        }
-        let path = self.take_path();
+        let layout = self.layout(s, text);
+        let extents = layout_extents(layout);
+        let [dx, dy] = extents.origin(s);
         let operator = operator(s.composite);
-        unsafe { cairo_move_to(self.cr, x, y) };
-        // Cached glyphs match the glyph outlines only at whole device pixels, as Cairo
-        // rounds glyph positions; gradients and unbounded operators keep painting outlines.
-        if matches!(s.fill, CanvasStyle::Color(_))
-            && !is_unbounded(operator)
-            && self.pixel_aligned(x, y)
-        {
+        unsafe {
+            cairo_new_path(self.cr);
+            // Pango draws from the top left of the layout.
+            cairo_move_to(
+                self.cr,
+                f64::from(x + dx),
+                f64::from(y + dy - extents.ascent),
+            );
+        }
+        // Colors keep the colors of glyphs like emoji, other paints fill the glyph outlines.
+        if matches!(s.fill, CanvasStyle::Color(_)) && !is_unbounded(operator) {
             self.set_source(&s.fill, s.alpha);
             unsafe {
                 cairo_set_operator(self.cr, operator);
-                cairo_show_text(self.cr, text.as_ptr());
+                pango_cairo_show_layout(self.cr, layout);
                 cairo_set_operator(self.cr, CAIRO_OPERATOR_OVER);
             }
         } else {
-            unsafe { cairo_text_path(self.cr, text.as_ptr()) };
+            unsafe { pango_cairo_layout_path(self.cr, layout) };
             self.paint(s, false, FillRule::NonZero);
         }
-        self.restore_path(path);
     }
-    pub(crate) fn measure_text(&mut self, s: &CanvasState, text: &str) -> f32 {
-        let Ok(text) = CString::new(text) else {
-            return 0.0;
-        };
-        self.select_font(s);
-        self.text_extents(&text).x_advance as f32
+    pub(crate) fn measure_text(&mut self, s: &CanvasState, text: &str) -> TextExtents {
+        layout_extents(self.layout(s, text))
+    }
+    // The layout of one line of text in the font of a state, which follows the transform.
+    fn layout(&mut self, s: &CanvasState, text: &str) -> *mut c_void {
+        let cr = self.cr;
+        let layout = *self.layout.get_or_insert_with(|| unsafe {
+            let layout = pango_cairo_create_layout(cr);
+            // Grayscale like filled outlines, as fontconfig may ask for subpixel glyphs.
+            let options = cairo_font_options_create();
+            cairo_font_options_set_antialias(options, CAIRO_ANTIALIAS_GRAY);
+            pango_cairo_context_set_font_options(pango_layout_get_context(layout), options);
+            cairo_font_options_destroy(options);
+            pango_layout_context_changed(layout);
+            layout
+        });
+        let font = (s.font_family.clone(), s.font_weight, s.font_size);
+        if self.font.as_ref() != Some(&font) {
+            let family =
+                CString::new(s.font_family.as_ref()).unwrap_or_else(|_| c"sans-serif".to_owned());
+            unsafe {
+                let description = pango_font_description_new();
+                pango_font_description_set_family(description, family.as_ptr());
+                pango_font_description_set_weight(
+                    description,
+                    match s.font_weight {
+                        FontWeight::Normal => PANGO_WEIGHT_NORMAL,
+                        FontWeight::Bold => PANGO_WEIGHT_BOLD,
+                    },
+                );
+                pango_font_description_set_absolute_size(
+                    description,
+                    f64::from(s.font_size) * f64::from(PANGO_SCALE),
+                );
+                pango_layout_set_font_description(layout, description);
+                pango_font_description_free(description);
+            }
+            self.font = Some(font);
+        }
+        let text = single_line(text);
+        unsafe {
+            pango_cairo_update_layout(cr, layout);
+            pango_layout_set_text(layout, text.as_ptr().cast(), text.len() as i32);
+        }
+        layout
     }
     fn stroke_style(&self, s: &CanvasState) {
         let dash: Vec<f64> = s.line_dash.iter().copied().map(f64::from).collect();
@@ -506,75 +480,14 @@ impl PlatformCanvasContext {
             )
         }
     }
-    fn select_font(&mut self, s: &CanvasState) {
-        if let Some((family, weight, size)) = &self.font
-            && *family == s.font_family
-            && *weight == s.font_weight
-            && *size == s.font_size
-        {
-            return;
-        }
-        let family = CString::new(s.font_family.as_ref()).ok();
-        let family = family.as_deref().unwrap_or(c"sans-serif");
-        unsafe {
-            cairo_select_font_face(
-                self.cr,
-                family.as_ptr(),
-                0,
-                match s.font_weight {
-                    FontWeight::Normal => 0,
-                    FontWeight::Bold => 1,
-                },
-            );
-            cairo_set_font_size(self.cr, s.font_size.into());
-            // Grayscale like filled outlines, as fontconfig may ask for subpixel glyphs.
-            let options = cairo_font_options_create();
-            cairo_font_options_set_antialias(options, CAIRO_ANTIALIAS_GRAY);
-            cairo_set_font_options(self.cr, options);
-            cairo_font_options_destroy(options);
-        }
-        self.font = Some((s.font_family.clone(), s.font_weight, s.font_size));
-    }
-    // Whether a point lies on whole device pixels with an unrotated transform.
-    fn pixel_aligned(&self, x: f64, y: f64) -> bool {
-        let mut m = self.initial;
-        let (mut x, mut y) = (x, y);
-        unsafe {
-            cairo_get_matrix(self.cr, &mut m);
-            cairo_user_to_device(self.cr, &mut x, &mut y);
-        }
-        m.xy == 0.0 && m.yx == 0.0 && [x, y].iter().all(|v| (v - v.round()).abs() < 1.0 / 256.0)
-    }
-    fn text_extents(&self, text: &CString) -> CairoTextExtents {
-        let mut ext = CairoTextExtents::default();
-        unsafe { cairo_text_extents(self.cr, text.as_ptr(), &mut ext) };
-        ext
-    }
-    fn take_path(&self) -> *mut CairoPath {
-        unsafe {
-            if cairo_has_current_point(self.cr) == 0 {
-                return std::ptr::null_mut();
-            }
-            let path = cairo_copy_path(self.cr);
-            cairo_new_path(self.cr);
-            path
-        }
-    }
-    fn restore_path(&self, path: *mut CairoPath) {
-        unsafe {
-            // Text drawing leaves a current point even when no path was saved.
-            cairo_new_path(self.cr);
-            if !path.is_null() {
-                cairo_append_path(self.cr, path);
-                cairo_path_destroy(path);
-            }
-        }
-    }
 }
 
 impl Drop for PlatformCanvasContext {
     fn drop(&mut self) {
         unsafe {
+            if let Some(layout) = self.layout {
+                g_object_unref(layout);
+            }
             cairo_new_path(self.cr);
             cairo_restore(self.cr);
         }
@@ -665,6 +578,41 @@ fn gradient_pattern(gradient: &Gradient, alpha: f32) -> *mut c_void {
             cairo_pattern_set_matrix(pattern, &matrix);
         }
         pattern
+    }
+}
+
+fn layout_extents(layout: *mut c_void) -> TextExtents {
+    let (mut ink, mut logical) = (PangoRectangle::default(), PangoRectangle::default());
+    let baseline = unsafe {
+        pango_layout_get_extents(layout, &mut ink, &mut logical);
+        pango_layout_get_baseline(layout)
+    };
+    let pixels = |value: i32| value as f32 / PANGO_SCALE as f32;
+    let ascent = pixels(baseline);
+    TextExtents {
+        width: pixels(logical.width),
+        ink: [
+            pixels(ink.x),
+            pixels(ink.y) - ascent,
+            pixels(ink.x + ink.width),
+            pixels(ink.y + ink.height) - ascent,
+        ],
+        ascent,
+        descent: pixels(logical.height) - ascent,
+    }
+}
+
+unsafe fn curve_to(cr: *mut c_void, [ax, ay]: [f32; 2], [bx, by]: [f32; 2], [x, y]: [f32; 2]) {
+    unsafe {
+        cairo_curve_to(
+            cr,
+            ax.into(),
+            ay.into(),
+            bx.into(),
+            by.into(),
+            x.into(),
+            y.into(),
+        )
     }
 }
 
@@ -760,8 +708,6 @@ mod tests {
         canvas.translate(f32::INFINITY, 0.0);
         canvas.rotate(f32::NAN);
         canvas.set_transform(1.0, 0.0, 0.0, 1.0, f32::NAN, 0.0);
-        canvas.ellipse(f32::NAN, 0.0, 1.0, 1.0);
-        canvas.ellipse(0.0, 0.0, f32::INFINITY, 1.0);
         assert_eq!(unsafe { cairo_status(surface.1) }, 0);
         canvas.fill_rect(&state, 0.0, 0.0, 1.0, 1.0);
         canvas.restore();
@@ -771,7 +717,7 @@ mod tests {
         canvas.reset_transform();
         canvas.fill_rect(&state, 0.0, 0.0, 1.0, 1.0);
         canvas.scale(0.0, 1.0);
-        canvas.clip(FillRule::NonZero);
+        canvas.clip(&Path::default(), FillRule::NonZero);
         canvas.set_transform(1.0, 0.0, 0.0, 1.0, 0.0, 0.0);
         canvas.fill_rect(&state, 3.0, 0.0, 1.0, 1.0);
         canvas.restore();
@@ -797,19 +743,5 @@ mod tests {
         unsafe { cairo_get_matrix(surface.1, &mut m) };
         assert!(m.xx > 0.0 && m.xx < 0.001);
         assert_eq!(unsafe { cairo_status(surface.1) }, 0);
-    }
-
-    #[test]
-    fn cached_glyphs_are_only_used_on_whole_device_pixels() {
-        let surface = Surface::new();
-        unsafe { cairo_scale(surface.1, 2.0, 2.0) };
-        let mut canvas = unsafe { PlatformCanvasContext::new(surface.1) };
-        assert!(canvas.pixel_aligned(1.5, 2.0));
-        assert!(!canvas.pixel_aligned(1.25, 2.0));
-        canvas.translate(0.25, 0.0);
-        assert!(!canvas.pixel_aligned(1.5, 2.0));
-        canvas.set_transform(1.0, 0.0, 0.0, 1.0, 0.0, 0.0);
-        canvas.rotate(0.3);
-        assert!(!canvas.pixel_aligned(0.0, 0.0));
     }
 }

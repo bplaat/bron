@@ -13,7 +13,7 @@ use objc2::rc::{Allocated, Retained};
 use objc2::runtime::{AnyObject as Object, Bool};
 use objc2::{class, define_class, msg_send};
 
-use super::context::{PlatformCanvasContext, TextStyleCache};
+use super::context::{PlatformCanvasContext, Resources};
 use super::headers::*;
 use crate::CanvasRenderingContext2d;
 
@@ -137,7 +137,7 @@ impl LayerDelegate {
 pub(crate) struct PlatformCanvas {
     delegate: Retained<LayerDelegate>,
     attachment: WindowAttachment,
-    text_styles: TextStyleCache,
+    resources: Resources,
 }
 
 impl PlatformCanvas {
@@ -184,7 +184,7 @@ impl PlatformCanvas {
             Self {
                 delegate,
                 attachment,
-                text_styles: TextStyleCache::default(),
+                resources: Resources::default(),
             }
         }
     }
@@ -208,7 +208,7 @@ impl PlatformCanvas {
             return false;
         };
         let mut context = CanvasRenderingContext2d::new(
-            unsafe { PlatformCanvasContext::new(frame.context, self.text_styles.clone()) },
+            unsafe { PlatformCanvasContext::new(frame.context, self.resources.clone()) },
             frame.width,
             frame.height,
             frame.scale,

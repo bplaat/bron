@@ -13,27 +13,33 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use super::headers::*;
+use crate::cache::{GradientKey, LruCache};
 use crate::path::{Command, Path, Point, Transform};
 use crate::platforms::windows::com::ComPtr;
 use crate::platforms::windows::headers::{w, wide};
 use crate::platforms::windows::image::PlatformImage;
 use crate::{
     CanvasState, CanvasStyle, Color, CompositeOperation, FillRule, FontWeight, Gradient,
-    GradientShape, GradientSpread, LineCap, LineJoin, TextAlign, TextBaseline,
+    GradientShape, GradientSpread, LineCap, LineJoin, TextExtents,
 };
 
 const TEXT_FORMATS: usize = 16;
 const TEXT_LAYOUTS: usize = 128;
+const GRADIENTS: usize = 32;
+const PATHS: usize = 64;
+// The layout box of text, wide enough to never wrap.
+const LAYOUT_WIDTH: f32 = 100_000.0;
+const LAYOUT_HEIGHT: f32 = 10_000.0;
 
 type TextFormatKey = (Arc<str>, u32, FontWeight);
 type TextLayoutKey = (Box<str>, TextFormatKey);
 
-// A laid out text with its metrics, and the metrics of its line when it has only one.
+// A laid out line of text with its extents and line height.
 #[derive(Clone)]
 struct TextLayout {
     layout: ComPtr<IDWriteTextLayout>,
-    metrics: DWRITE_TEXT_METRICS,
-    line: Option<DWRITE_LINE_METRICS>,
+    extents: TextExtents,
+    height: f32,
 }
 
 /// Device-independent objects shared by every frame of one canvas.
@@ -46,6 +52,11 @@ pub(super) struct Resources {
     // Least recently used first, so text drawn every frame is laid out once.
     layouts: RefCell<Vec<(TextLayoutKey, TextLayout)>>,
     text: RefCell<Vec<u16>>,
+    gradient_stops: RefCell<LruCache<(GradientKey, u64), ComPtr<ID2D1GradientStopCollection>>>,
+    // The user-space geometries of reused paths with their fill rule.
+    geometries: RefCell<LruCache<(u64, FillRule), ComPtr<ID2D1PathGeometry>>>,
+    // Whether DirectWrite draws color fonts like emoji, since Windows 8.1.
+    color_fonts: bool,
 }
 
 impl Resources {
@@ -79,13 +90,18 @@ impl Resources {
             }
             .expect("Direct2D stroke style")
         });
+        let write = unsafe { IDWriteFactory::new() }.expect("DirectWrite factory");
+        let color_fonts = unsafe { write.query::<IDWriteFactory>(&IID_IDWRITE_FACTORY2) }.is_ok();
         Rc::new(Self {
             factory,
-            write: unsafe { IDWriteFactory::new() }.expect("DirectWrite factory"),
+            write,
             strokes,
             formats: RefCell::new(Vec::new()),
             layouts: RefCell::new(Vec::new()),
             text: RefCell::new(Vec::new()),
+            gradient_stops: RefCell::new(LruCache::new(GRADIENTS)),
+            geometries: RefCell::new(LruCache::new(PATHS)),
+            color_fonts,
         })
     }
 }
@@ -159,9 +175,6 @@ pub(crate) struct Context {
     target_id: u64,
     brush: ComPtr<ID2D1SolidColorBrush>,
     resources: Rc<Resources>,
-    path: Path,
-    // A path of only one ellipse: its command count, ellipse and transform.
-    lone_ellipse: Option<(usize, D2D1_ELLIPSE, Transform)>,
     transform: Transform,
     stack: Vec<(Transform, usize)>,
     clips: Vec<Clip>,
@@ -182,8 +195,6 @@ impl Context {
             target_id: target.id,
             brush: target.brush.clone(),
             resources,
-            path: Path::default(),
-            lone_ellipse: None,
             transform: Transform::IDENTITY,
             stack: Vec::new(),
             clips: Vec::new(),
@@ -528,8 +539,8 @@ impl Context {
     // The device-space geometry of a user-space rectangle.
     fn rect_geometry(&self, x: f32, y: f32, w: f32, h: f32) -> ComPtr<ID2D1PathGeometry> {
         let mut path = Path::default();
-        path.rect(self.transform, x, y, w, h);
-        self.path_geometry(&path, Transform::IDENTITY, FillRule::NonZero)
+        path.rect(x, y, w, h);
+        self.path_geometry(&path, self.transform, FillRule::NonZero)
     }
 
     pub(crate) fn clear_rect(&mut self, x: f32, y: f32, w: f32, h: f32) {
@@ -571,7 +582,7 @@ impl Context {
             state,
             |this| {
                 let mut path = Path::default();
-                path.rect(Transform::IDENTITY, x, y, w, h);
+                path.rect(x, y, w, h);
                 let geometry = this.path_geometry(&path, Transform::IDENTITY, FillRule::NonZero);
                 this.widened(&geometry, state)
             },
@@ -590,54 +601,18 @@ impl Context {
         );
     }
 
-    pub(crate) fn begin_path(&mut self) {
-        // Keep the command buffer allocation for the next path.
-        let mut commands = std::mem::take(&mut self.path.commands);
-        commands.clear();
-        self.path = Path::default();
-        self.lone_ellipse = None;
-        self.path.commands = commands;
-    }
-    pub(crate) fn close_path(&mut self) {
-        self.path.close();
-    }
-    pub(crate) fn move_to(&mut self, x: f32, y: f32) {
-        self.path.move_to(self.transform, [x, y]);
-    }
-    pub(crate) fn line_to(&mut self, x: f32, y: f32) {
-        self.path.line_to(self.transform, [x, y]);
-    }
-    pub(crate) fn rect(&mut self, x: f32, y: f32, w: f32, h: f32) {
-        self.path.rect(self.transform, x, y, w, h);
-    }
-    pub(crate) fn ellipse(&mut self, x: f32, y: f32, rx: f32, ry: f32) {
-        let empty = self.path.commands.is_empty();
-        self.path.ellipse(self.transform, [x, y], [rx, ry]);
-        // Later commands make the path longer, so the count tells it is still alone.
-        let count = self.path.commands.len();
-        self.lone_ellipse = (empty && count > 0).then_some((
-            count,
-            D2D1_ELLIPSE {
-                point: D2D_POINT_2F { x, y },
-                radiusX: rx,
-                radiusY: ry,
-            },
-            self.transform,
-        ));
-    }
-    pub(crate) fn arc(&mut self, x: f32, y: f32, r: f32, start: f32, end: f32, ccw: bool) {
-        self.path
-            .arc(self.transform, [x, y], [r, r], start, end, ccw);
-    }
-    pub(crate) fn quadratic_curve_to(&mut self, a: f32, b: f32, x: f32, y: f32) {
-        self.path.quadratic(self.transform, [a, b], [x, y]);
-    }
-    pub(crate) fn bezier_curve_to(&mut self, a: f32, b: f32, c: f32, d: f32, x: f32, y: f32) {
-        self.path.cubic(self.transform, [a, b], [c, d], [x, y]);
-    }
-
-    fn geometry(&self, transform: Transform, rule: FillRule) -> ComPtr<ID2D1PathGeometry> {
-        self.path_geometry(&self.path, transform, rule)
+    // The user-space geometry of a path, cached for a reused path.
+    fn user_geometry(&self, path: &Path, rule: FillRule) -> ComPtr<ID2D1PathGeometry> {
+        let build = || self.path_geometry(path, Transform::IDENTITY, rule);
+        if path.id == 0 {
+            return build();
+        }
+        self.resources
+            .geometries
+            .borrow_mut()
+            .get_or_create((path.id, rule), || Some(build()))
+            .cloned()
+            .expect("created geometry")
     }
 
     fn path_geometry(
@@ -649,29 +624,22 @@ impl Context {
         let geometry =
             unsafe { self.resources.factory.CreatePathGeometry() }.expect("Direct2D path");
         let sink = unsafe { geometry.Open() }.expect("Direct2D geometry sink");
+        // Every subpath of a path starts with a move.
         let mut open = false;
-        let mut start = [0.0; 2];
         unsafe {
             sink.SetFillMode(match rule {
                 FillRule::NonZero => D2D1_FILL_MODE_WINDING,
                 FillRule::EvenOdd => D2D1_FILL_MODE_ALTERNATE,
             });
             for command in &path.commands {
-                if let Command::Move(point) = *command {
-                    if open {
-                        sink.EndFigure(D2D1_FIGURE_END_OPEN);
-                    }
-                    start = point;
-                    sink.BeginFigure(vector(transform.point(point)), D2D1_FIGURE_BEGIN_FILLED);
-                    open = true;
-                    continue;
-                }
-                if !open {
-                    sink.BeginFigure(vector(transform.point(start)), D2D1_FIGURE_BEGIN_FILLED);
-                    open = true;
-                }
                 match *command {
-                    Command::Move(_) => unreachable!(),
+                    Command::Move(point) => {
+                        if open {
+                            sink.EndFigure(D2D1_FIGURE_END_OPEN);
+                        }
+                        sink.BeginFigure(vector(transform.point(point)), D2D1_FIGURE_BEGIN_FILLED);
+                        open = true;
+                    }
                     Command::Line(point) => sink.AddLine(vector(transform.point(point))),
                     Command::Cubic(a, b, end) => sink.AddBezier(&D2D1_BEZIER_SEGMENT {
                         point1: vector(transform.point(a)),
@@ -698,45 +666,38 @@ impl Context {
         geometry
     }
 
-    pub(crate) fn fill(&mut self, state: &CanvasState, rule: FillRule) {
+    pub(crate) fn fill(&mut self, state: &CanvasState, path: &Path, rule: FillRule) {
         // A lone ellipse in a solid color fills without building a path, like particles.
-        if let Some((count, ellipse, transform)) = self.lone_ellipse
-            && count == self.path.commands.len()
+        if let Some(([x, y], [rx, ry])) = path.lone_ellipse()
             && state.composite == CompositeOperation::SourceOver
             && let CanvasStyle::Color(color) = &state.fill
         {
             let brush = self.color_brush(*color, state.alpha);
-            unsafe {
-                self.target.SetTransform(&matrix(transform));
-                self.target.FillEllipse(&ellipse, brush.as_ptr());
-            }
-            self.apply_transform();
+            let ellipse = D2D1_ELLIPSE {
+                point: D2D_POINT_2F { x, y },
+                radiusX: rx,
+                radiusY: ry,
+            };
+            unsafe { self.target.FillEllipse(&ellipse, brush.as_ptr()) };
             return;
         }
-        // Paths are in device space, so the brush maps from the current transform.
-        let geometry = self.geometry(Transform::IDENTITY, rule);
+        let geometry = self.user_geometry(path, rule);
         self.draw_with(
             state,
-            |_| Some(geometry.clone()),
+            |this| Some(this.path_geometry(path, this.transform, rule)),
             |this, state| {
-                let brush = this.brush(&state.fill, state.alpha, this.transform);
+                let brush = this.brush(&state.fill, state.alpha, Transform::IDENTITY);
                 unsafe {
-                    this.target.SetTransform(&D2D_MATRIX_3X2_F::identity());
                     this.target
-                        .FillGeometry(geometry.as_ptr(), brush.as_ptr(), null_mut());
-                }
-                this.apply_transform();
+                        .FillGeometry(geometry.as_ptr(), brush.as_ptr(), null_mut())
+                };
             },
         );
     }
 
-    pub(crate) fn stroke(&mut self, state: &CanvasState) {
-        // Paths capture their construction transform, while strokes use the current
-        // transform for width/caps. Undo it on the geometry before native drawing.
-        let Some(inverse) = self.transform.inverse() else {
-            return;
-        };
-        let geometry = self.geometry(inverse, FillRule::NonZero);
+    pub(crate) fn stroke(&mut self, state: &CanvasState, path: &Path) {
+        // Strokes are drawn in user space, which the transform maps with their width.
+        let geometry = self.user_geometry(path, FillRule::NonZero);
         self.draw_with(
             state,
             |this| this.widened(&geometry, state),
@@ -759,12 +720,12 @@ impl Context {
         &mut self,
         state: &CanvasState,
         image: &PlatformImage,
-        x: f32,
-        y: f32,
-        w: f32,
-        h: f32,
+        source: [f32; 4],
+        [x, y, w, h]: [f32; 4],
     ) {
         let rect = rect(x, y, w, h);
+        let [sx, sy, sw, sh] = source;
+        let source = self::rect(sx, sy, sw, sh);
         self.draw_with(
             state,
             |this| Some(this.rect_geometry(x, y, w, h)),
@@ -783,27 +744,28 @@ impl Context {
                         } else {
                             D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR
                         },
+                        &source,
                     );
                 }
             },
         );
     }
 
-    pub(crate) fn clip(&mut self, rule: FillRule) {
+    pub(crate) fn clip(&mut self, path: &Path, rule: FillRule) {
         unsafe { self.target.SetTransform(&D2D_MATRIX_3X2_F::identity()) };
-        if let Some(rect) = device_rect(&self.path.commands) {
+        if let Some(rect) = device_rect(path, self.transform) {
             unsafe {
                 self.target
                     .PushAxisAlignedClip(&rect, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE)
             };
             self.clips.push(Clip::Rect(rect));
         } else {
-            let geometry = self.geometry(Transform::IDENTITY, rule);
+            let geometry = self.user_geometry(path, rule);
             let params = D2D1_LAYER_PARAMETERS {
                 contentBounds: rect(-1.0e10, -1.0e10, 2.0e10, 2.0e10),
                 geometricMask: geometry.as_ptr(),
                 maskAntialiasMode: D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
-                maskTransform: D2D_MATRIX_3X2_F::identity(),
+                maskTransform: matrix(self.transform),
                 opacity: 1.0,
                 ..Default::default()
             };
@@ -894,45 +856,39 @@ impl Context {
     pub(crate) fn fill_text(&mut self, s: &CanvasState, text: &str, x: f32, y: f32) {
         let Some(TextLayout {
             layout,
-            metrics,
-            line: Some(line),
+            extents,
+            height,
         }) = self.prepare_text(s, text)
         else {
             return;
         };
-        let width = metrics.widthIncludingTrailingWhitespace;
+        // The layout box starts at the top of the line.
+        let [dx, dy] = extents.origin(s);
         let origin = D2D_POINT_2F {
-            x: x - match s.text_align {
-                TextAlign::Center => width / 2.0,
-                TextAlign::Right | TextAlign::End => width,
-                _ => 0.0,
-            },
-            y: y - match s.text_baseline {
-                TextBaseline::Middle => line.height / 2.0,
-                TextBaseline::Bottom | TextBaseline::Ideographic => line.height,
-                TextBaseline::Alphabetic => line.baseline,
-                _ => 0.0,
-            },
+            x: x + dx,
+            y: y + dy - extents.ascent,
+        };
+        let options = if self.resources.color_fonts {
+            D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT
+        } else {
+            D2D1_DRAW_TEXT_OPTIONS_NONE
         };
         self.draw_with(
             s,
-            |this| Some(this.rect_geometry(origin.x, origin.y, width, line.height)),
+            |this| Some(this.rect_geometry(origin.x, origin.y, extents.width, height)),
             |this, s| {
                 let brush = this.brush(&s.fill, s.alpha, Transform::IDENTITY);
                 unsafe {
-                    this.target.DrawTextLayout(
-                        origin,
-                        layout.as_ptr(),
-                        brush.as_ptr(),
-                        D2D1_DRAW_TEXT_OPTIONS_NONE,
-                    )
+                    this.target
+                        .DrawTextLayout(origin, layout.as_ptr(), brush.as_ptr(), options)
                 };
             },
         );
     }
-    pub(crate) fn measure_text(&mut self, s: &CanvasState, text: &str) -> f32 {
+    pub(crate) fn measure_text(&mut self, s: &CanvasState, text: &str) -> TextExtents {
         self.prepare_text(s, text)
-            .map_or(0.0, |text| text.metrics.widthIncludingTrailingWhitespace)
+            .map(|text| text.extents)
+            .unwrap_or_default()
     }
 
     fn prepare_text(&self, s: &CanvasState, text: &str) -> Option<TextLayout> {
@@ -968,22 +924,33 @@ impl Context {
                     wide.as_ptr(),
                     wide.len() as u32,
                     format.as_ptr(),
-                    100000.0,
-                    10000.0,
+                    LAYOUT_WIDTH,
+                    LAYOUT_HEIGHT,
                 )
                 .ok()?;
             let mut metrics = DWRITE_TEXT_METRICS::default();
             layout.GetMetrics(&mut metrics).ok()?;
             let mut line = DWRITE_LINE_METRICS::default();
             let mut count = 0;
-            let line = layout
-                .GetLineMetrics(&mut line, 1, &mut count)
-                .is_ok()
-                .then_some(line);
+            layout.GetLineMetrics(&mut line, 1, &mut count).ok()?;
+            // Overhangs are the distances of the ink outside the layout box.
+            let mut overhang = DWRITE_OVERHANG_METRICS::default();
+            layout.GetOverhangMetrics(&mut overhang).ok()?;
+            let baseline = line.baseline;
             TextLayout {
                 layout,
-                metrics,
-                line,
+                extents: TextExtents {
+                    width: metrics.widthIncludingTrailingWhitespace,
+                    ink: [
+                        -overhang.left,
+                        -overhang.top - baseline,
+                        LAYOUT_WIDTH + overhang.right,
+                        LAYOUT_HEIGHT + overhang.bottom - baseline,
+                    ],
+                    ascent: baseline,
+                    descent: line.height - baseline,
+                },
+                height: line.height,
             }
         };
         if layouts.len() == TEXT_LAYOUTS {
@@ -1009,26 +976,36 @@ impl Context {
     }
     fn gradient_brush(
         &self,
-        gradient: &Gradient,
+        gradient: &Arc<Gradient>,
         alpha: f32,
         to_world: Transform,
     ) -> Option<ComPtr<ID2D1Brush>> {
         if gradient.stops.is_empty() {
             return None;
         }
-        let stops: Vec<D2D1_GRADIENT_STOP> = gradient
-            .stops
-            .iter()
-            .map(|&(position, color)| D2D1_GRADIENT_STOP {
-                position,
-                color: color_f(color, 1.0),
+        // Stop collections are resources of the render target.
+        let key = (GradientKey(gradient.clone()), self.target_id);
+        let collection = self
+            .resources
+            .gradient_stops
+            .borrow_mut()
+            .get_or_create(key, || {
+                let stops: Vec<D2D1_GRADIENT_STOP> = gradient
+                    .stops
+                    .iter()
+                    .map(|&(position, color)| D2D1_GRADIENT_STOP {
+                        position,
+                        color: color_f(color, 1.0),
+                    })
+                    .collect();
+                let extend = match gradient.spread {
+                    GradientSpread::Pad => D2D1_EXTEND_MODE_CLAMP,
+                    GradientSpread::Repeat => D2D1_EXTEND_MODE_WRAP,
+                    GradientSpread::Reflect => D2D1_EXTEND_MODE_MIRROR,
+                };
+                unsafe { self.target.CreateGradientStopCollection(&stops, extend) }.ok()
             })
-            .collect();
-        let extend = match gradient.spread {
-            GradientSpread::Pad => D2D1_EXTEND_MODE_CLAMP,
-            GradientSpread::Repeat => D2D1_EXTEND_MODE_WRAP,
-            GradientSpread::Reflect => D2D1_EXTEND_MODE_MIRROR,
-        };
+            .cloned()?;
         let [a, b, c, d, e, f] = to_world.concat(Transform(gradient.transform)).0;
         let properties = D2D1_BRUSH_PROPERTIES {
             opacity: alpha,
@@ -1043,10 +1020,6 @@ impl Context {
         };
         let point = |(x, y): (f32, f32)| D2D_POINT_2F { x, y };
         unsafe {
-            let collection = self
-                .target
-                .CreateGradientStopCollection(&stops, extend)
-                .ok()?;
             match gradient.shape {
                 GradientShape::Linear { start, end } => self.target.CreateLinearGradientBrush(
                     &D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES {
@@ -1251,18 +1224,19 @@ const fn blend_mode(operation: CompositeOperation) -> Option<u32> {
 const fn vector([x, y]: Point) -> D2D_POINT_2F {
     D2D_POINT_2F { x, y }
 }
-/// The device bounds of a path that is exactly one axis-aligned rectangle.
-fn device_rect(commands: &[Command]) -> Option<D2D_RECT_F> {
+/// The device bounds of a user-space path that is exactly one axis-aligned rectangle.
+fn device_rect(path: &Path, transform: Transform) -> Option<D2D_RECT_F> {
     let [
         Command::Move(a),
         Command::Line(b),
         Command::Line(c),
         Command::Line(d),
         Command::Close,
-    ] = *commands
+    ] = *path.commands
     else {
         return None;
     };
+    let [a, b, c, d] = [a, b, c, d].map(|point| transform.point(point));
     let aligned = (a[1] == b[1] && b[0] == c[0] && c[1] == d[1] && d[0] == a[0])
         || (a[0] == b[0] && b[1] == c[1] && c[0] == d[0] && d[1] == a[1]);
     aligned.then(|| rect(a[0], a[1], c[0] - a[0], c[1] - a[1]))

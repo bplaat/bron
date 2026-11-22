@@ -13,7 +13,6 @@ pub(crate) struct Transform(pub [f32; 6]);
 impl Transform {
     pub(crate) const IDENTITY: Self = Self([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
 
-    #[cfg_attr(not(any(windows, target_os = "android", test)), allow(dead_code))]
     pub(crate) fn point(self, [x, y]: Point) -> Point {
         let [a, b, c, d, e, f] = self.0;
         [a * x + c * y + e, b * x + d * y + f]
@@ -32,7 +31,6 @@ impl Transform {
         ])
     }
 
-    #[cfg_attr(not(any(windows, target_os = "android", test)), allow(dead_code))]
     pub(crate) fn inverse(self) -> Option<Self> {
         let [a, b, c, d, e, f] = self.0;
         let det = a * d - b * c;

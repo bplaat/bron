@@ -4,14 +4,17 @@
  * SPDX-License-Identifier: MIT
  */
 
+use std::borrow::Cow;
 use std::marker::PhantomData;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use std::time::{Duration, Instant};
 
 #[cfg(feature = "window")]
 use bwindow::Window;
 
+use crate::path::Path;
 #[cfg(feature = "window")]
 use crate::platforms::PlatformCanvas;
 use crate::platforms::{PlatformCanvasContext, PlatformImage, PlatformOffscreenCanvas};
@@ -73,6 +76,8 @@ impl Color {
 
 #[cfg(test)]
 mod tests {
+    use std::f32::consts::TAU;
+
     use super::Color;
 
     #[test]
@@ -165,7 +170,7 @@ mod tests {
                     if height < 0.0 { 36.0 } else { 12.0 },
                     width,
                     height,
-                    6.0,
+                    &[6.0],
                 );
                 ctx.fill();
             });
@@ -182,7 +187,7 @@ mod tests {
         let mut canvas = super::OffscreenCanvas::new(48, 32);
         canvas.draw(|ctx| {
             ctx.translate(8.0, 4.0);
-            ctx.round_rect(0.0, 0.0, 24.0, 24.0, 100.0);
+            ctx.round_rect(0.0, 0.0, 24.0, 24.0, &[100.0]);
             ctx.fill();
             ctx.fill_rect(32.0, 0.0, 4.0, 4.0);
         });
@@ -198,7 +203,7 @@ mod tests {
     fn rounded_rectangle_leaves_current_point_at_its_origin() {
         let mut canvas = super::OffscreenCanvas::new(40, 40);
         canvas.draw(|ctx| {
-            ctx.round_rect(20.0, 20.0, 12.0, 12.0, 6.0);
+            ctx.round_rect(20.0, 20.0, 12.0, 12.0, &[6.0]);
             ctx.line_to(20.0, 4.0);
             ctx.line_to(4.0, 4.0);
             ctx.close_path();
@@ -216,12 +221,12 @@ mod tests {
                 ctx.move_to(invalid, 0.0);
                 ctx.line_to(0.0, invalid);
                 ctx.rect(0.0, 0.0, invalid, 4.0);
-                ctx.round_rect(0.0, 0.0, 4.0, 4.0, invalid);
-                ctx.round_rect(invalid, 0.0, 4.0, 4.0, -1.0);
+                ctx.round_rect(0.0, 0.0, 4.0, 4.0, &[invalid]);
+                ctx.round_rect(invalid, 0.0, 4.0, 4.0, &[-1.0]);
                 ctx.arc(0.0, 0.0, invalid, 0.0, 1.0, false);
                 ctx.arc(invalid, 0.0, -1.0, 0.0, 1.0, false);
-                ctx.ellipse(0.0, 0.0, invalid, 1.0);
-                ctx.ellipse(invalid, 0.0, -1.0, 1.0);
+                ctx.ellipse(0.0, 0.0, invalid, 1.0, 0.0, 0.0, TAU, false);
+                ctx.ellipse(invalid, 0.0, -1.0, 1.0, 0.0, 0.0, TAU, false);
                 ctx.quadratic_curve_to(0.0, invalid, 1.0, 1.0);
                 ctx.bezier_curve_to(0.0, 0.0, 1.0, invalid, 2.0, 2.0);
                 ctx.translate(invalid, 0.0);
@@ -777,7 +782,7 @@ mod tests {
         gradient.add_color_stop(1.0, Color::rgb(0, 0, 255));
         ctx.set_fill_style(gradient);
         ctx.begin_path();
-        ctx.ellipse(6.0, 6.0, 6.0, 4.0);
+        ctx.ellipse(6.0, 6.0, 6.0, 4.0, 0.0, 0.0, TAU, false);
         ctx.fill();
         ctx.restore();
         ctx.set_global_alpha(0.5);
@@ -885,8 +890,8 @@ mod tests {
     fn recordings_measure_text() {
         let mut recording = super::OffscreenCanvas::new_recording(1.0, 1.0);
         let mut widths = (0.0, 0.0);
-        recording.draw(|ctx| widths.0 = ctx.measure_text("Hello"));
-        scene_pixels(|ctx| widths.1 = ctx.measure_text("Hello"));
+        recording.draw(|ctx| widths.0 = ctx.measure_text("Hello").width);
+        scene_pixels(|ctx| widths.1 = ctx.measure_text("Hello").width);
         assert!(widths.0 > 0.0);
         assert_eq!(widths.0, widths.1);
     }
@@ -965,13 +970,13 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "rounded rectangle radius must be nonnegative")]
+    #[should_panic(expected = "rounded rectangle radii must be nonnegative")]
     fn rounded_rectangle_rejects_negative_radius() {
-        super::OffscreenCanvas::new(4, 4).draw(|ctx| ctx.round_rect(0.0, 0.0, 4.0, 4.0, -1.0));
+        super::OffscreenCanvas::new(4, 4).draw(|ctx| ctx.round_rect(0.0, 0.0, 4.0, 4.0, &[-1.0]));
     }
 
     #[test]
-    #[should_panic(expected = "arc radius must be nonnegative")]
+    #[should_panic(expected = "ellipse radii must be nonnegative")]
     fn arc_rejects_negative_radius() {
         super::OffscreenCanvas::new(4, 4).draw(|ctx| ctx.arc(0.0, 0.0, -1.0, 0.0, 1.0, false));
     }
@@ -979,13 +984,283 @@ mod tests {
     #[test]
     #[should_panic(expected = "ellipse radii must be nonnegative")]
     fn ellipse_rejects_negative_horizontal_radius() {
-        super::OffscreenCanvas::new(4, 4).draw(|ctx| ctx.ellipse(0.0, 0.0, -1.0, 1.0));
+        super::OffscreenCanvas::new(4, 4)
+            .draw(|ctx| ctx.ellipse(0.0, 0.0, -1.0, 1.0, 0.0, 0.0, TAU, false));
     }
 
     #[test]
     #[should_panic(expected = "ellipse radii must be nonnegative")]
     fn ellipse_rejects_negative_vertical_radius() {
-        super::OffscreenCanvas::new(4, 4).draw(|ctx| ctx.ellipse(0.0, 0.0, 1.0, -1.0));
+        super::OffscreenCanvas::new(4, 4)
+            .draw(|ctx| ctx.ellipse(0.0, 0.0, 1.0, -1.0, 0.0, 0.0, TAU, false));
+    }
+
+    #[test]
+    fn current_path_keeps_its_device_position_when_the_transform_changes() {
+        let mut canvas = super::OffscreenCanvas::new(16, 4);
+        canvas.draw(|ctx| {
+            ctx.translate(8.0, 0.0);
+            ctx.rect(0.0, 0.0, 4.0, 4.0);
+            ctx.reset_transform();
+            ctx.scale(2.0, 1.0);
+            ctx.fill();
+        });
+        assert_eq!(alpha_at(&mut canvas, 2, 2), 0);
+        assert_eq!(alpha_at(&mut canvas, 10, 2), 255);
+        assert_eq!(alpha_at(&mut canvas, 14, 2), 0);
+    }
+
+    #[test]
+    fn path2d_draws_in_the_current_transform_and_keeps_the_current_path() {
+        let mut square = super::Path2D::new();
+        square.rect(0.0, 0.0, 2.0, 2.0);
+        let mut canvas = super::OffscreenCanvas::new(12, 4);
+        canvas.draw(|ctx| {
+            ctx.rect(0.0, 0.0, 2.0, 2.0);
+            ctx.translate(4.0, 0.0);
+            ctx.fill_path(&square);
+            ctx.translate(4.0, 0.0);
+            ctx.set_line_width(2.0);
+            ctx.stroke_path(&square);
+            ctx.reset_transform();
+            ctx.fill();
+        });
+        assert_eq!(alpha_at(&mut canvas, 1, 1), 255);
+        assert_eq!(alpha_at(&mut canvas, 5, 1), 255);
+        assert_eq!(alpha_at(&mut canvas, 1, 3), 0);
+        // The stroke covers one pixel on each side of the square's edges.
+        assert_eq!(alpha_at(&mut canvas, 7, 0), 255);
+        assert_eq!(alpha_at(&mut canvas, 11, 2), 0);
+    }
+
+    #[test]
+    fn path2d_clips_without_changing_the_current_path() {
+        let mut left = super::Path2D::new();
+        left.rect(0.0, 0.0, 4.0, 4.0);
+        let mut canvas = super::OffscreenCanvas::new(8, 4);
+        canvas.draw(|ctx| {
+            ctx.rect(0.0, 0.0, 8.0, 4.0);
+            ctx.clip_path(&left);
+            ctx.fill();
+        });
+        assert_eq!(alpha_at(&mut canvas, 2, 2), 255);
+        assert_eq!(alpha_at(&mut canvas, 6, 2), 0);
+    }
+
+    #[test]
+    fn point_in_path_tests_canvas_coordinates() {
+        let mut path = super::Path2D::new();
+        path.rect(0.0, 0.0, 4.0, 4.0);
+        assert!(path.contains(2.0, 2.0, super::FillRule::NonZero));
+        let mut canvas = super::OffscreenCanvas::new(1, 1);
+        canvas.draw(|ctx| {
+            ctx.translate(10.0, 0.0);
+            ctx.rect(0.0, 0.0, 4.0, 4.0);
+            ctx.reset_transform();
+            assert!(ctx.is_point_in_path(12.0, 2.0, super::FillRule::NonZero));
+            assert!(!ctx.is_point_in_path(2.0, 2.0, super::FillRule::NonZero));
+            ctx.scale(2.0, 2.0);
+            assert!(ctx.is_point_in_path2d(&path, 6.0, 6.0, super::FillRule::NonZero));
+            assert!(!ctx.is_point_in_path2d(&path, 9.0, 2.0, super::FillRule::NonZero));
+            assert_eq!(ctx.get_transform(), [2.0, 0.0, 0.0, 2.0, 0.0, 0.0]);
+        });
+    }
+
+    #[test]
+    fn singular_transforms_ignore_path_methods() {
+        let mut canvas = super::OffscreenCanvas::new(8, 4);
+        canvas.draw(|ctx| {
+            ctx.scale(0.0, 1.0);
+            ctx.rect(0.0, 0.0, 4.0, 4.0);
+            ctx.fill();
+            ctx.reset_transform();
+            ctx.rect(4.0, 0.0, 4.0, 4.0);
+            ctx.fill();
+        });
+        assert_eq!(alpha_at(&mut canvas, 0, 2), 0);
+        assert_eq!(alpha_at(&mut canvas, 6, 2), 255);
+    }
+
+    fn rgba_at(canvas: &mut super::OffscreenCanvas, x: usize, y: usize) -> [u8; 4] {
+        let width = canvas.width() as usize;
+        canvas.pixels()[(y * width + x) * 4..][..4]
+            .try_into()
+            .expect("pixel")
+    }
+
+    #[test]
+    fn image_regions_draw_and_clip_their_source() {
+        // A red and a blue pixel.
+        let pixels = super::premultiplied_bgra(&[255, 0, 0, 255, 0, 0, 255, 255]);
+        let image = super::CanvasImage::from_premultiplied_bgra(2, 1, pixels);
+        let mut canvas = super::OffscreenCanvas::new(8, 4);
+        canvas.draw(|ctx| {
+            ctx.set_image_smoothing_enabled(false);
+            ctx.draw_image_region(&image, 1.0, 0.0, 1.0, 1.0, 0.0, 0.0, 4.0, 4.0);
+            // Half of this source lies left of the image, so only the right half is drawn.
+            ctx.draw_image_region(&image, -1.0, 0.0, 2.0, 1.0, 4.0, 0.0, 4.0, 4.0);
+        });
+        assert_eq!(rgba_at(&mut canvas, 1, 1), [0, 0, 255, 255]);
+        assert_eq!(rgba_at(&mut canvas, 3, 3), [0, 0, 255, 255]);
+        assert_eq!(alpha_at(&mut canvas, 5, 2), 0);
+        assert_eq!(rgba_at(&mut canvas, 7, 2), [255, 0, 0, 255]);
+    }
+
+    #[test]
+    fn text_metrics_follow_alignment_and_baseline() {
+        let mut canvas = super::OffscreenCanvas::new(1, 1);
+        canvas.draw(|ctx| {
+            ctx.set_font("sans-serif", 40.0);
+            let metrics = ctx.measure_text("HH");
+            assert!(metrics.width > 20.0);
+            // Capitals stand on the alphabetic baseline, below the font ascent.
+            assert!(metrics.actual_bounding_box_descent.abs() < 2.0);
+            assert!(metrics.actual_bounding_box_ascent > 20.0);
+            assert!(metrics.font_bounding_box_ascent >= metrics.actual_bounding_box_ascent);
+            assert!(metrics.font_bounding_box_descent > 0.0);
+            assert!((metrics.actual_bounding_box_right - metrics.width).abs() < 6.0);
+            ctx.set_text_align(super::TextAlign::Center);
+            ctx.set_text_baseline(super::TextBaseline::Top);
+            let centered = ctx.measure_text("HH");
+            assert_eq!(centered.width, metrics.width);
+            assert!(
+                (centered.actual_bounding_box_left - centered.actual_bounding_box_right).abs()
+                    < 2.0
+            );
+            assert!(centered.font_bounding_box_ascent.abs() < 0.01);
+        });
+    }
+
+    #[test]
+    fn text_with_emoji_and_latin_extended_letters_is_measured() {
+        let mut canvas = super::OffscreenCanvas::new(1, 1);
+        canvas.draw(|ctx| {
+            ctx.set_font("sans-serif", 20.0);
+            let plain = ctx.measure_text("Zurich").width;
+            assert!(ctx.measure_text("Z\u{fc}rich \u{159}\u{17e}").width > plain);
+            assert!(ctx.measure_text("Zurich \u{1f600}").width > plain);
+        });
+    }
+
+    #[test]
+    fn changed_paths_and_gradients_are_not_drawn_from_their_cache() {
+        let mut path = super::Path2D::new();
+        path.rect(0.0, 0.0, 2.0, 2.0);
+        let mut gradient = super::CanvasGradient::linear(0.0, 0.0, 8.0, 0.0);
+        gradient.add_color_stop(0.0, Color::rgb(255, 0, 0));
+        let mut canvas = super::OffscreenCanvas::new(8, 2);
+        canvas.draw(|ctx| {
+            ctx.set_fill_style(gradient.clone());
+            ctx.fill_path(&path);
+        });
+        assert_eq!(rgba_at(&mut canvas, 1, 1), [255, 0, 0, 255]);
+        path.rect(4.0, 0.0, 2.0, 2.0);
+        gradient = super::CanvasGradient::linear(0.0, 0.0, 8.0, 0.0);
+        gradient.add_color_stop(0.0, Color::rgb(0, 0, 255));
+        canvas.draw(|ctx| {
+            ctx.clear_rect(0.0, 0.0, 8.0, 2.0);
+            ctx.set_fill_style(gradient.clone());
+            ctx.fill_path(&path);
+        });
+        assert_eq!(rgba_at(&mut canvas, 1, 1), [0, 0, 255, 255]);
+        assert_eq!(rgba_at(&mut canvas, 5, 1), [0, 0, 255, 255]);
+    }
+
+    #[test]
+    fn reset_clears_the_canvas_state_and_path() {
+        let mut canvas = super::OffscreenCanvas::new(4, 4);
+        canvas.draw(|ctx| {
+            ctx.fill_rect(0.0, 0.0, 4.0, 4.0);
+            ctx.save();
+            ctx.translate(2.0, 0.0);
+            ctx.set_fill_style(Color::rgb(255, 0, 0));
+            ctx.rect(0.0, 0.0, 1.0, 1.0);
+            ctx.reset();
+            assert_eq!(ctx.get_transform(), [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
+            assert_eq!(*ctx.fill_style(), Color::rgb(0, 0, 0).into());
+            ctx.fill();
+        });
+        assert_eq!(alpha_at(&mut canvas, 2, 0), 0);
+        assert_eq!(alpha_at(&mut canvas, 1, 1), 0);
+    }
+
+    #[test]
+    fn text_without_ink_has_an_empty_box_and_line_breaks_are_spaces() {
+        let mut canvas = super::OffscreenCanvas::new(1, 1);
+        canvas.draw(|ctx| {
+            ctx.set_text_align(super::TextAlign::Center);
+            let spaces = ctx.measure_text("   ");
+            assert_eq!(
+                spaces.actual_bounding_box_left,
+                -spaces.actual_bounding_box_right
+            );
+            assert_eq!(spaces.actual_bounding_box_ascent, 0.0);
+            assert_eq!(
+                ctx.measure_text("a\nb").width,
+                ctx.measure_text("a b").width
+            );
+        });
+    }
+
+    #[test]
+    fn fractional_image_regions_map_their_source_exactly() {
+        // Four pixels: red, green, blue, yellow.
+        let pixels = super::premultiplied_bgra(&[
+            255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 0, 255,
+        ]);
+        let image = super::CanvasImage::from_premultiplied_bgra(4, 1, pixels);
+        let mut canvas = super::OffscreenCanvas::new(8, 2);
+        canvas.draw(|ctx| {
+            ctx.set_image_smoothing_enabled(false);
+            // Half of green and half of blue, each two canvas pixels wide.
+            ctx.draw_image_region(&image, 1.5, 0.0, 2.0, 1.0, 0.0, 0.0, 8.0, 2.0);
+        });
+        assert_eq!(rgba_at(&mut canvas, 1, 1), [0, 255, 0, 255]);
+        assert_eq!(rgba_at(&mut canvas, 3, 1), [0, 0, 255, 255]);
+        assert_eq!(rgba_at(&mut canvas, 5, 1), [0, 0, 255, 255]);
+        assert_eq!(rgba_at(&mut canvas, 7, 1), [255, 255, 0, 255]);
+    }
+
+    #[test]
+    fn gradients_without_stops_paint_no_text() {
+        let mut canvas = super::OffscreenCanvas::new(40, 20);
+        canvas.draw(|ctx| {
+            ctx.set_font("sans-serif", 16.0);
+            ctx.set_fill_style(super::CanvasGradient::linear(0.0, 0.0, 40.0, 0.0));
+            ctx.fill_text("HH", 2.0, 16.0);
+        });
+        assert!(canvas.pixels().chunks(4).all(|pixel| pixel[3] == 0));
+    }
+
+    #[test]
+    fn rotated_ellipse_and_arc_to_fill_their_shapes() {
+        let mut canvas = super::OffscreenCanvas::new(20, 20);
+        canvas.draw(|ctx| {
+            // A wide ellipse turned upright.
+            ctx.ellipse(
+                5.0,
+                10.0,
+                8.0,
+                2.0,
+                std::f32::consts::FRAC_PI_2,
+                0.0,
+                TAU,
+                false,
+            );
+            ctx.fill();
+            ctx.begin_path();
+            ctx.move_to(10.0, 0.0);
+            ctx.arc_to(20.0, 0.0, 20.0, 20.0, 10.0);
+            ctx.line_to(20.0, 20.0);
+            ctx.line_to(10.0, 20.0);
+            ctx.fill();
+        });
+        assert_eq!(alpha_at(&mut canvas, 5, 4), 255);
+        assert_eq!(alpha_at(&mut canvas, 1, 10), 0);
+        // The arc rounds the upper right corner of the right half.
+        assert_eq!(alpha_at(&mut canvas, 12, 2), 255);
+        assert_eq!(alpha_at(&mut canvas, 19, 0), 0);
+        assert_eq!(alpha_at(&mut canvas, 18, 18), 255);
     }
 }
 
@@ -1293,6 +1568,100 @@ pub enum TextBaseline {
     Ideographic,
     /// Bottom edge.
     Bottom,
+}
+
+/// The measurements of a text in logical pixels, like the HTML `TextMetrics`. Bounding box
+/// distances are from the point text is drawn at with the current alignment and baseline,
+/// positive to the left, right, up and down that their names say.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct TextMetrics {
+    /// The advance width.
+    pub width: f32,
+    /// The distance to the left edge of the glyph ink.
+    pub actual_bounding_box_left: f32,
+    /// The distance to the right edge of the glyph ink.
+    pub actual_bounding_box_right: f32,
+    /// The distance to the top of the glyph ink.
+    pub actual_bounding_box_ascent: f32,
+    /// The distance to the bottom of the glyph ink.
+    pub actual_bounding_box_descent: f32,
+    /// The distance to the ascent of the font.
+    pub font_bounding_box_ascent: f32,
+    /// The distance to the descent of the font.
+    pub font_bounding_box_descent: f32,
+}
+
+/// The measurements of a text drawn from the start of its alphabetic baseline, with y down.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub(crate) struct TextExtents {
+    pub width: f32,
+    // The glyph ink: left, top, right and bottom.
+    pub ink: [f32; 4],
+    // The font ascent and descent, both positive.
+    pub ascent: f32,
+    pub descent: f32,
+}
+
+impl TextExtents {
+    /// The offset from the point text is drawn at to the start of its alphabetic baseline.
+    pub(crate) fn origin(&self, s: &CanvasState) -> [f32; 2] {
+        [
+            align_offset(s.text_align, self.width),
+            baseline_offset(s.text_baseline, self.ascent, self.descent),
+        ]
+    }
+
+    fn metrics(&self, s: &CanvasState) -> TextMetrics {
+        let [x, y] = self.origin(s);
+        // Text without ink, like spaces, has an empty box at the start of its baseline.
+        let [left, top, right, bottom] = self.ink;
+        let inked = right > left && bottom > top && finite(&self.ink);
+        let [left, top, right, bottom] = if inked {
+            [left, top, right, bottom]
+        } else {
+            [0.0; 4]
+        };
+        TextMetrics {
+            width: self.width,
+            actual_bounding_box_left: -(left + x),
+            actual_bounding_box_right: right + x,
+            actual_bounding_box_ascent: -(top + y),
+            actual_bounding_box_descent: bottom + y,
+            font_bounding_box_ascent: self.ascent - y,
+            font_bounding_box_descent: self.descent + y,
+        }
+    }
+}
+
+/// Text as one line, as canvas line breaks draw as spaces.
+#[cfg_attr(windows, allow(dead_code))]
+pub(crate) fn single_line(text: &str) -> Cow<'_, str> {
+    let is_break = |c: char| matches!(c, '\t'..='\r' | '\u{85}' | '\u{2028}' | '\u{2029}');
+    if text.contains(is_break) {
+        Cow::Owned(text.replace(is_break, " "))
+    } else {
+        Cow::Borrowed(text)
+    }
+}
+
+/// The horizontal offset of left-to-right text of a width with an alignment.
+pub(crate) fn align_offset(align: TextAlign, width: f32) -> f32 {
+    match align {
+        TextAlign::Center => -width / 2.0,
+        TextAlign::Right | TextAlign::End => -width,
+        TextAlign::Left | TextAlign::Start => 0.0,
+    }
+}
+
+/// The vertical offset from a baseline to the alphabetic baseline of a font.
+pub(crate) fn baseline_offset(baseline: TextBaseline, ascent: f32, descent: f32) -> f32 {
+    match baseline {
+        TextBaseline::Top => ascent,
+        TextBaseline::Hanging => ascent * 0.8,
+        TextBaseline::Middle => (ascent - descent) / 2.0,
+        TextBaseline::Alphabetic => 0.0,
+        TextBaseline::Ideographic | TextBaseline::Bottom => -descent,
+    }
 }
 
 /// Canvas font weight.
@@ -1728,6 +2097,270 @@ fn unpremultiply(component: u8, alpha: u8) -> u8 {
     }
 }
 
+fn finite(values: &[f32]) -> bool {
+    values.iter().all(|value| value.is_finite())
+}
+
+// Normalize negative sizes and clip a source rectangle to the image, mapping the destination
+// along with it, like `drawImage`. None when nothing is left to draw.
+fn clip_source(source: [f32; 4], dest: [f32; 4], size: [f32; 2]) -> Option<([f32; 4], [f32; 4])> {
+    let normalize = |[x, y, w, h]: [f32; 4]| [x.min(x + w), y.min(y + h), w.abs(), h.abs()];
+    let ([sx, sy, sw, sh], [dx, dy, dw, dh]) = (normalize(source), normalize(dest));
+    if sw == 0.0 || sh == 0.0 || dw == 0.0 || dh == 0.0 {
+        return None;
+    }
+    let (scale_x, scale_y) = (dw / sw, dh / sh);
+    let left = sx.max(0.0);
+    let top = sy.max(0.0);
+    let right = (sx + sw).min(size[0]);
+    let bottom = (sy + sh).min(size[1]);
+    (right > left && bottom > top).then_some((
+        [left, top, right - left, bottom - top],
+        [
+            dx + (left - sx) * scale_x,
+            dy + (top - sy) * scale_y,
+            (right - left) * scale_x,
+            (bottom - top) * scale_y,
+        ],
+    ))
+}
+
+// The path methods of the HTML `CanvasPath` mixin, shared by the context and `Path2D`, which
+// implement them on the `Path` of `path_mut`. Non-finite arguments are ignored.
+macro_rules! canvas_path_methods {
+    () => {
+        /// Close the current subpath with a line to its start.
+        pub fn close_path(&mut self) {
+            if let Some(path) = self.path_mut() {
+                path.close();
+            }
+        }
+        /// Start a new subpath at a point.
+        pub fn move_to(&mut self, x: f32, y: f32) {
+            if finite(&[x, y])
+                && let Some(path) = self.path_mut()
+            {
+                path.move_to([x, y]);
+            }
+        }
+        /// Add a line segment.
+        pub fn line_to(&mut self, x: f32, y: f32) {
+            if finite(&[x, y])
+                && let Some(path) = self.path_mut()
+            {
+                path.line_to([x, y]);
+            }
+        }
+        /// Add a quadratic Bezier segment.
+        pub fn quadratic_curve_to(&mut self, cpx: f32, cpy: f32, x: f32, y: f32) {
+            if finite(&[cpx, cpy, x, y])
+                && let Some(path) = self.path_mut()
+            {
+                path.quadratic([cpx, cpy], [x, y]);
+            }
+        }
+        /// Add a cubic Bezier segment.
+        pub fn bezier_curve_to(
+            &mut self,
+            cp1x: f32,
+            cp1y: f32,
+            cp2x: f32,
+            cp2y: f32,
+            x: f32,
+            y: f32,
+        ) {
+            if finite(&[cp1x, cp1y, cp2x, cp2y, x, y])
+                && let Some(path) = self.path_mut()
+            {
+                path.cubic([cp1x, cp1y], [cp2x, cp2y], [x, y]);
+            }
+        }
+        /// Add an arc of a circle tangent to the lines from the current point through the
+        /// first point to the second, with a line to its start.
+        ///
+        /// # Panics
+        /// Panics if the radius is negative and all arguments are finite.
+        pub fn arc_to(&mut self, x1: f32, y1: f32, x2: f32, y2: f32, radius: f32) {
+            if !finite(&[x1, y1, x2, y2, radius]) {
+                return;
+            }
+            assert!(radius >= 0.0, "arc radius must be nonnegative");
+            if let Some(path) = self.path_mut() {
+                path.arc_to([x1, y1], [x2, y2], radius);
+            }
+        }
+        /// Add a closed rectangle subpath.
+        pub fn rect(&mut self, x: f32, y: f32, width: f32, height: f32) {
+            if finite(&[x, y, width, height])
+                && let Some(path) = self.path_mut()
+            {
+                path.rect(x, y, width, height);
+            }
+        }
+        /// Add a closed rectangle subpath with rounded corners. Like the HTML canvas, one
+        /// radius rounds every corner, two are the upper left and lower right and the other
+        /// corners, three the upper left, the upper right and lower left, and the lower right,
+        /// and four every corner clockwise from the upper left. Overlapping radii scale down,
+        /// and a negative width or height mirrors the corners and the winding.
+        ///
+        /// # Panics
+        /// Panics if there are no or more than four radii, or a radius is negative, and all
+        /// arguments are finite.
+        pub fn round_rect(&mut self, x: f32, y: f32, width: f32, height: f32, radii: &[f32]) {
+            if !finite(&[x, y, width, height]) || !finite(radii) {
+                return;
+            }
+            let radii = match *radii {
+                [all] => [all; 4],
+                [a, b] => [a, b, a, b],
+                [a, b, c] => [a, b, c, b],
+                [a, b, c, d] => [a, b, c, d],
+                _ => panic!("rounded rectangle takes one to four radii"),
+            };
+            assert!(
+                radii.iter().all(|radius| *radius >= 0.0),
+                "rounded rectangle radii must be nonnegative"
+            );
+            if let Some(path) = self.path_mut() {
+                path.round_rect(x, y, width, height, radii);
+            }
+        }
+        /// Add a circular arc with angles in radians, with a line from the current point.
+        ///
+        /// # Panics
+        /// Panics if the radius is negative and all arguments are finite.
+        pub fn arc(
+            &mut self,
+            x: f32,
+            y: f32,
+            radius: f32,
+            start_angle: f32,
+            end_angle: f32,
+            counterclockwise: bool,
+        ) {
+            self.ellipse(
+                x,
+                y,
+                radius,
+                radius,
+                0.0,
+                start_angle,
+                end_angle,
+                counterclockwise,
+            );
+        }
+        /// Add an elliptical arc rotated around its center, with angles in radians, with a
+        /// line from the current point.
+        ///
+        /// # Panics
+        /// Panics if a radius is negative and all arguments are finite.
+        #[allow(clippy::too_many_arguments)]
+        pub fn ellipse(
+            &mut self,
+            x: f32,
+            y: f32,
+            radius_x: f32,
+            radius_y: f32,
+            rotation: f32,
+            start_angle: f32,
+            end_angle: f32,
+            counterclockwise: bool,
+        ) {
+            if !finite(&[x, y, radius_x, radius_y, rotation, start_angle, end_angle]) {
+                return;
+            }
+            assert!(
+                radius_x >= 0.0 && radius_y >= 0.0,
+                "ellipse radii must be nonnegative"
+            );
+            if let Some(path) = self.path_mut() {
+                path.ellipse(
+                    [x, y],
+                    [radius_x, radius_y],
+                    rotation,
+                    start_angle,
+                    end_angle,
+                    counterclockwise,
+                );
+            }
+        }
+    };
+}
+
+/// A reusable path, like the HTML `Path2D`. Contexts fill, stroke and clip it in their
+/// current transform, without changing their current path. Cloning shares the path until
+/// either is changed.
+///
+/// ```
+/// use std::f32::consts::TAU;
+///
+/// let mut dot = bcanvas::Path2D::new();
+/// dot.arc(0.0, 0.0, 4.0, 0.0, TAU, false);
+///
+/// let mut canvas = bcanvas::OffscreenCanvas::new(64, 64);
+/// canvas.draw(|ctx| {
+///     for x in [16.0, 32.0, 48.0] {
+///         ctx.save();
+///         ctx.translate(x, 32.0);
+///         ctx.fill_path(&dot);
+///         ctx.restore();
+///     }
+/// });
+/// ```
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Path2D(Arc<Path>);
+
+impl Path2D {
+    /// Create an empty path.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Add the subpaths of another path.
+    pub fn add_path(&mut self, path: &Self) {
+        self.changed().add_path(&path.0, Transform::IDENTITY);
+    }
+
+    /// Add the subpaths of another path mapped through an affine transform, like the
+    /// `setTransform` arguments. Non-finite values are ignored.
+    #[allow(clippy::too_many_arguments)]
+    pub fn add_path_with_transform(
+        &mut self,
+        path: &Self,
+        a: f32,
+        b: f32,
+        c: f32,
+        d: f32,
+        e: f32,
+        f: f32,
+    ) {
+        if finite(&[a, b, c, d, e, f]) {
+            self.changed()
+                .add_path(&path.0, Transform([a, b, c, d, e, f]));
+        }
+    }
+
+    /// Whether a point is inside the path.
+    pub fn contains(&self, x: f32, y: f32, rule: FillRule) -> bool {
+        self.0.contains([x, y], rule)
+    }
+
+    // The path to change, as a new version with a new id.
+    fn changed(&mut self) -> &mut Path {
+        static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+        let path = Arc::make_mut(&mut self.0);
+        path.id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+        path
+    }
+
+    #[allow(clippy::unnecessary_wraps)]
+    fn path_mut(&mut self) -> Option<&mut Path> {
+        Some(self.changed())
+    }
+
+    canvas_path_methods!();
+}
+
 /// A frame-scoped HTML5 Canvas 2D-like drawing context.
 ///
 /// A borrowed context cannot be retained beyond its draw closure:
@@ -1752,6 +2385,9 @@ pub struct CanvasRenderingContext2d<'a> {
     pub(crate) backend: Backend,
     pub(crate) state: CanvasState,
     pub(crate) stack: Vec<(CanvasState, Option<LayerPhase>)>,
+    // The current path in the user space of `path_transform`.
+    path: Arc<Path>,
+    path_transform: Transform,
     width: f32,
     height: f32,
     scale_factor: f32,
@@ -1774,6 +2410,8 @@ impl<'a> CanvasRenderingContext2d<'a> {
             backend,
             state: CanvasState::default(),
             stack: Vec::new(),
+            path: Arc::default(),
+            path_transform: Transform::IDENTITY,
             width,
             height,
             scale_factor,
@@ -2076,173 +2714,182 @@ impl<'a> CanvasRenderingContext2d<'a> {
     }
     /// Begin a new path.
     pub fn begin_path(&mut self) {
-        self.backend.begin_path();
-    }
-    /// Close the current path.
-    pub fn close_path(&mut self) {
-        self.backend.close_path();
-    }
-    /// Move the current point.
-    pub fn move_to(&mut self, x: f32, y: f32) {
-        if ![x, y].iter().all(|v| v.is_finite()) {
-            return;
+        match Arc::get_mut(&mut self.path) {
+            Some(path) => path.clear(),
+            None => self.path = Arc::default(),
         }
-        self.backend.move_to(x, y);
     }
-    /// Add a line segment.
-    pub fn line_to(&mut self, x: f32, y: f32) {
-        if ![x, y].iter().all(|v| v.is_finite()) {
-            return;
+    // Map the current path into the current user space, false when that space is singular,
+    // in which path methods are ignored and nothing is painted, like in browsers.
+    fn sync_path(&mut self) -> bool {
+        // The path space is always invertible, so an unchanged transform needs no check.
+        if self.path_transform == self.state.transform {
+            return true;
         }
-        self.backend.line_to(x, y);
-    }
-    /// Add a rectangle to the path.
-    pub fn rect(&mut self, x: f32, y: f32, width: f32, height: f32) {
-        if ![x, y, width, height].iter().all(|v| v.is_finite()) {
-            return;
+        let Some(inverse) = self.state.transform.inverse() else {
+            return false;
+        };
+        if !self.path.commands.is_empty() {
+            Arc::make_mut(&mut self.path).transform(inverse.concat(self.path_transform));
         }
-        self.backend.rect(x, y, width, height);
+        self.path_transform = self.state.transform;
+        true
     }
-    /// Add a rounded rectangle to the current path.
-    /// Negative dimensions reverse the corresponding axis. Non-finite arguments are ignored.
-    ///
-    /// # Panics
-    /// Panics if the radius is negative and all arguments are finite.
-    pub fn round_rect(&mut self, x: f32, y: f32, width: f32, height: f32, radius: f32) {
-        if ![x, y, width, height, radius].iter().all(|v| v.is_finite()) {
-            return;
-        }
-        assert!(
-            radius >= 0.0,
-            "rounded rectangle radius must be nonnegative"
-        );
-        let radius = radius.min(width.abs() / 2.0).min(height.abs() / 2.0);
-        let rx = radius.copysign(width);
-        let ry = radius.copysign(height);
-        // Cubic approximation of a quarter circle, shared by every native backend.
-        let k = 4.0 / 3.0 * (std::f32::consts::FRAC_PI_2 / 4.0).tan();
-        let (right, bottom) = (x + width, y + height);
-        self.move_to(x + rx, y);
-        self.line_to(right - rx, y);
-        self.bezier_curve_to(
-            right - rx + k * rx,
-            y,
-            right,
-            y + ry - k * ry,
-            right,
-            y + ry,
-        );
-        self.line_to(right, bottom - ry);
-        self.bezier_curve_to(
-            right,
-            bottom - ry + k * ry,
-            right - rx + k * rx,
-            bottom,
-            right - rx,
-            bottom,
-        );
-        self.line_to(x + rx, bottom);
-        self.bezier_curve_to(
-            x + rx - k * rx,
-            bottom,
-            x,
-            bottom - ry + k * ry,
-            x,
-            bottom - ry,
-        );
-        self.line_to(x, y + ry);
-        self.bezier_curve_to(x, y + ry - k * ry, x + rx - k * rx, y, x + rx, y);
-        self.close_path();
-        self.move_to(x, y);
+    fn path_mut(&mut self) -> Option<&mut Path> {
+        self.sync_path().then(|| Arc::make_mut(&mut self.path))
     }
-    /// Add a complete, axis-aligned ellipse to the current path.
-    /// Unlike browser Canvas 2D, this does not accept rotation or arc angles.
-    /// Non-finite arguments are ignored.
-    ///
-    /// # Panics
-    /// Panics if either radius is negative and all arguments are finite.
-    pub fn ellipse(&mut self, x: f32, y: f32, radius_x: f32, radius_y: f32) {
-        if ![x, y, radius_x, radius_y].iter().all(|v| v.is_finite()) {
-            return;
-        }
-        assert!(
-            radius_x >= 0.0 && radius_y >= 0.0,
-            "ellipse radii must be nonnegative"
-        );
-        self.backend.ellipse(x, y, radius_x, radius_y);
-    }
-    /// Add a circular arc, with angles in radians.
-    /// Non-finite arguments are ignored.
-    ///
-    /// # Panics
-    /// Panics if the radius is negative and all arguments are finite.
-    pub fn arc(
-        &mut self,
-        x: f32,
-        y: f32,
-        radius: f32,
-        start: f32,
-        end: f32,
-        counterclockwise: bool,
-    ) {
-        if ![x, y, radius, start, end].iter().all(|v| v.is_finite()) {
-            return;
-        }
-        assert!(radius >= 0.0, "arc radius must be nonnegative");
-        self.backend.arc(x, y, radius, start, end, counterclockwise);
-    }
-    /// Add a quadratic Bezier segment.
-    pub fn quadratic_curve_to(&mut self, cpx: f32, cpy: f32, x: f32, y: f32) {
-        if ![cpx, cpy, x, y].iter().all(|v| v.is_finite()) {
-            return;
-        }
-        self.backend.quadratic_curve_to(cpx, cpy, x, y);
-    }
-    /// Add a cubic Bezier segment.
-    pub fn bezier_curve_to(&mut self, cp1x: f32, cp1y: f32, cp2x: f32, cp2y: f32, x: f32, y: f32) {
-        if ![cp1x, cp1y, cp2x, cp2y, x, y].iter().all(|v| v.is_finite()) {
-            return;
-        }
-        self.backend.bezier_curve_to(cp1x, cp1y, cp2x, cp2y, x, y);
-    }
-    /// Fill the current path without consuming it.
+    canvas_path_methods!();
+    /// Fill the current path.
     pub fn fill(&mut self) {
         self.fill_with(FillRule::NonZero);
     }
-    /// Fill the current path with a fill rule without consuming it.
+    /// Fill the current path with a fill rule.
     pub fn fill_with(&mut self, rule: FillRule) {
-        self.backend.fill(&self.state, rule);
+        if self.sync_path() {
+            self.backend.fill(&self.state, &self.path, rule);
+        }
     }
-    /// Stroke the current path without consuming it.
+    /// Fill a path in the current transform.
+    pub fn fill_path(&mut self, path: &Path2D) {
+        self.fill_path_with(path, FillRule::NonZero);
+    }
+    /// Fill a path in the current transform with a fill rule.
+    pub fn fill_path_with(&mut self, path: &Path2D, rule: FillRule) {
+        if self.state.transform.inverse().is_some() {
+            self.backend.fill(&self.state, &path.0, rule);
+        }
+    }
+    /// Stroke the current path.
     pub fn stroke(&mut self) {
-        self.backend.stroke(&self.state);
+        if self.sync_path() {
+            self.backend.stroke(&self.state, &self.path);
+        }
     }
-    /// Clip future drawing to the current path without consuming it.
+    /// Stroke a path in the current transform.
+    pub fn stroke_path(&mut self, path: &Path2D) {
+        if self.state.transform.inverse().is_some() {
+            self.backend.stroke(&self.state, &path.0);
+        }
+    }
+    /// Clip future drawing to the current path.
     pub fn clip(&mut self) {
         self.clip_with(FillRule::NonZero);
     }
-    /// Clip future drawing to the current path with a fill rule without consuming it.
+    /// Clip future drawing to the current path with a fill rule. Under a singular transform
+    /// the clip is empty.
     pub fn clip_with(&mut self, rule: FillRule) {
-        self.backend.clip(rule);
+        if self.sync_path() {
+            self.backend.clip(&self.path, rule);
+        } else {
+            self.backend.clip(&Arc::default(), rule);
+        }
+    }
+    /// Clip future drawing to a path in the current transform.
+    pub fn clip_path(&mut self, path: &Path2D) {
+        self.clip_path_with(path, FillRule::NonZero);
+    }
+    /// Clip future drawing to a path in the current transform with a fill rule.
+    pub fn clip_path_with(&mut self, path: &Path2D, rule: FillRule) {
+        if self.state.transform.inverse().is_some() {
+            self.backend.clip(&path.0, rule);
+        } else {
+            self.backend.clip(&Arc::default(), rule);
+        }
+    }
+    /// Whether a point in canvas coordinates, without the transform, is inside the current
+    /// path.
+    pub fn is_point_in_path(&self, x: f32, y: f32, rule: FillRule) -> bool {
+        self.path_transform
+            .inverse()
+            .is_some_and(|inverse| self.path.contains(inverse.point([x, y]), rule))
+    }
+    /// Whether a point in canvas coordinates, without the transform, is inside a path in the
+    /// current transform.
+    pub fn is_point_in_path2d(&self, path: &Path2D, x: f32, y: f32, rule: FillRule) -> bool {
+        self.state
+            .transform
+            .inverse()
+            .is_some_and(|inverse| path.0.contains(inverse.point([x, y]), rule))
     }
     /// Draw an image scaled into a rectangle.
     pub fn draw_image(&mut self, image: &CanvasImage, x: f32, y: f32, width: f32, height: f32) {
-        if ![x, y, width, height].iter().all(|v| v.is_finite()) {
-            return;
-        }
-        self.backend.draw_image(
-            &self.state,
-            &image.image,
-            &image.pixels,
+        let (image_width, image_height) = (image.width() as f32, image.height() as f32);
+        self.draw_image_region(
+            image,
+            0.0,
+            0.0,
+            image_width,
+            image_height,
             x,
             y,
             width,
             height,
         );
     }
+    /// Draw a source rectangle in image pixels scaled into a rectangle, like the nine argument
+    /// `drawImage`. The part of the source outside the image is not drawn, which shrinks the
+    /// destination along with it, like sprites of a sprite sheet.
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw_image_region(
+        &mut self,
+        image: &CanvasImage,
+        sx: f32,
+        sy: f32,
+        sw: f32,
+        sh: f32,
+        dx: f32,
+        dy: f32,
+        dw: f32,
+        dh: f32,
+    ) {
+        if !finite(&[sx, sy, sw, sh, dx, dy, dw, dh]) {
+            return;
+        }
+        let (image_width, image_height) = (image.width() as f32, image.height() as f32);
+        let Some((source, dest)) = clip_source(
+            [sx, sy, sw, sh],
+            [dx, dy, dw, dh],
+            [image_width, image_height],
+        ) else {
+            return;
+        };
+        if source.iter().all(|value| value.fract() == 0.0) {
+            self.backend
+                .draw_image(&self.state, &image.image, &image.pixels, source, dest);
+            return;
+        }
+        // A fractional source is the whole image scaled and clipped to the destination, which
+        // every backend draws the same, like browsers sample it.
+        let ([sx, sy, sw, sh], [dx, dy, dw, dh]) = (source, dest);
+        let (scale_x, scale_y) = (dw / sw, dh / sh);
+        let whole = [
+            dx - sx * scale_x,
+            dy - sy * scale_y,
+            image_width * scale_x,
+            image_height * scale_y,
+        ];
+        self.save();
+        self.clip_rect(dest);
+        self.backend.draw_image(
+            &self.state,
+            &image.image,
+            &image.pixels,
+            [0.0, 0.0, image_width, image_height],
+            whole,
+        );
+        self.restore();
+    }
+    // Clip to a rectangle with a path that is not reused, so backends do not cache it.
+    fn clip_rect(&mut self, [x, y, width, height]: [f32; 4]) {
+        let mut path = Path::default();
+        if self.state.transform.inverse().is_some() {
+            path.rect(x, y, width, height);
+        }
+        self.backend.clip(&Arc::new(path), FillRule::NonZero);
+    }
     /// Draw an offscreen canvas scaled into a rectangle, like `drawImage` with an
     /// `OffscreenCanvas`. A recording replays its drawing clipped to the rectangle, which
-    /// stays sharp at any scale, composites as one layer and resets the current path.
+    /// stays sharp at any scale and composites as one layer.
     pub fn draw_canvas(
         &mut self,
         canvas: &OffscreenCanvas,
@@ -2262,9 +2909,15 @@ impl<'a> CanvasRenderingContext2d<'a> {
                         .unwrap_or_else(PoisonError::into_inner)
                         .pixels(),
                 );
+                let size = [canvas.width as f32, canvas.height as f32];
+                let Some((source, dest)) =
+                    clip_source([0.0, 0.0, size[0], size[1]], [x, y, width, height], size)
+                else {
+                    return;
+                };
                 let image = PlatformImage::new(canvas.width, canvas.height, pixels.clone());
                 self.backend
-                    .draw_image(&self.state, &image, &pixels, x, y, width, height);
+                    .draw_image(&self.state, &image, &pixels, source, dest);
             }
             OffscreenBackend::Recording { ops, .. } => {
                 let (canvas_width, canvas_height) = canvas.logical_size;
@@ -2272,10 +2925,7 @@ impl<'a> CanvasRenderingContext2d<'a> {
                     return;
                 }
                 self.save();
-                self.begin_path();
-                self.rect(x, y, width, height);
-                self.clip();
-                self.begin_path();
+                self.clip_rect([x, y, width, height]);
                 let layer = self.state.alpha < 1.0
                     || self.state.composite != CompositeOperation::SourceOver;
                 if layer {
@@ -2346,6 +2996,19 @@ impl<'a> CanvasRenderingContext2d<'a> {
         self.state.transform = Transform::IDENTITY;
         self.backend.reset_transform();
     }
+    /// Reset the context like `reset`: end every layer and saved state, restore the default
+    /// drawing state and an empty path, and clear the canvas.
+    pub fn reset(&mut self) {
+        self.close();
+        self.state = CanvasState::default();
+        self.begin_path();
+        self.backend.reset_transform();
+        self.backend.clear_rect(0.0, 0.0, self.width, self.height);
+    }
+    /// The current transform `[a, b, c, d, e, f]`, like `getTransform`.
+    pub const fn get_transform(&self) -> [f32; 6] {
+        self.state.transform.0
+    }
     /// Draw filled text.
     pub fn fill_text(&mut self, text: impl AsRef<str>, x: f32, y: f32) {
         if ![x, y].iter().all(|v| v.is_finite()) {
@@ -2353,9 +3016,11 @@ impl<'a> CanvasRenderingContext2d<'a> {
         }
         self.backend.fill_text(&self.state, text.as_ref(), x, y);
     }
-    /// Measure text width in logical pixels.
-    pub fn measure_text(&mut self, text: impl AsRef<str>) -> f32 {
-        self.backend.measure_text(&self.state, text.as_ref())
+    /// Measure text with the current font, alignment and baseline.
+    pub fn measure_text(&mut self, text: impl AsRef<str>) -> TextMetrics {
+        self.backend
+            .measure_text(&self.state, text.as_ref())
+            .metrics(&self.state)
     }
 }
 

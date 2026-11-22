@@ -1,12 +1,13 @@
 # Bassie Canvas Rust library
 
 Cross-platform 2D drawing for [bwindow](../../ui/bwindow) windows using the system-native
-graphics API: Core Graphics on macOS and iOS, Direct2D or GDI+ on Windows, Cairo on Linux, and
-`android.graphics.Canvas` on Android.
+graphics API: Core Graphics on macOS and iOS, Direct2D or GDI+ on Windows, Cairo with Pango
+text on Linux, and `android.graphics.Canvas` on Android.
 
 ## Features
 
-- Paths, clipping with fill rules, transforms, dashed strokes, and text
+- Paths and reusable `Path2D` paths, clipping with fill rules, transforms, and dashed strokes
+- Text with font fallback, color emoji, and measurements
 - Solid colors and linear or radial gradients with pad, reflect, or repeat spread
 - Layers with alpha, composite operations, and masks
 - Images drawn from premultiplied BGRA pixels
@@ -41,8 +42,8 @@ Drawing state resets each frame. `draw` returns whether its closure ran; handle 
 result before advancing frame-dependent state. It returns `false` outside a native paint
 callback, after close, or if the frame was already drawn. The library schedules native
 frames and retries unavailable paint passes; applications do not need platform-specific retries.
-For animation, call `canvas.request_animation_frame()` after drawing. Images and IME
-text editing are not supported.
+For animation, call `canvas.request_animation_frame()` after drawing. IME text editing is
+not supported.
 
 ## Canvas 2D API
 
@@ -53,14 +54,21 @@ method names in snake_case, with getter/setter pairs such as `fill_style()` /
 - Colors and style choices use `Color` and enums instead of CSS strings.
 - `set_font(family, size)` and `set_font_weight(weight)` use typed font settings;
   size is in logical pixels.
-- `measure_text(text)` returns width, not a browser `TextMetrics` object.
-- `ellipse(x, y, rx, ry)` adds a full axis-aligned ellipse, and `round_rect` accepts
-  one corner radius.
-- Text is left-to-right only; baselines approximate browser typography.
+- `measure_text(text)` returns `TextMetrics` with the width and the actual and font
+  bounding boxes, without the other baselines.
+- `Path2D` is a reusable path with the path methods of the context. `fill_path`,
+  `stroke_path`, `clip_path` and `is_point_in_path2d` take one where browsers overload
+  `fill(path)`, `stroke(path)`, `clip(path)` and `isPointInPath(path, x, y)`.
+- `round_rect(x, y, width, height, radii)` takes one to four corner radii as a slice.
+- `get_transform()` returns `[a, b, c, d, e, f]` instead of a `DOMMatrix`.
+- Text is one left-to-right line, line breaks draw as spaces; baselines approximate browser
+  typography. Color emoji keep their colors with a color fill style. They need Windows 8.1
+  with Direct2D and are not drawn in color by GDI+.
 - Invalid alpha and line-width values are ignored.
 - Drawing and transform methods ignore non-finite numeric arguments. Negative finite
-  radii in `arc`, `ellipse`, and `round_rect` panic instead of throwing JavaScript
-  exceptions. `round_rect` preserves winding when width or height is negative.
+  radii in `arc`, `arc_to`, `ellipse`, and `round_rect`, and a wrong number of
+  `round_rect` radii, panic instead of throwing JavaScript exceptions. Like browsers,
+  path methods are ignored and nothing is drawn under a non-invertible transform.
 - `save()` / `restore()` do not include the current path.
 - `fill_with(rule)` and `clip_with(rule)` take the fill rule of `fill(rule)` and
   `clip(rule)`, gradients add `set_spread` and `set_transform` for SVG paints.
@@ -68,12 +76,15 @@ method names in snake_case, with getter/setter pairs such as `fill_style()` /
   with the global alpha and composite operation of its start. `begin_mask_layer()` draws a
   mask until `end_mask()`, whose alpha masks the layer content.
 - `draw_image(image, x, y, width, height)` draws a `CanvasImage` of premultiplied BGRA
-  pixels, which it shares. `premultiplied_bgra(rgba)` converts straight-alpha RGBA pixels to them.
+  pixels, which it shares, and `draw_image_region` draws a source rectangle of it like the
+  nine argument `drawImage`. `premultiplied_bgra(rgba)` converts straight-alpha RGBA pixels
+  to them.
 - Composite operations of drawing only change the area that is drawn, like Core Graphics,
   while a layer composites over the whole canvas when it ends.
 - Every backend supports the same features. Direct2D blends layers through Direct2D 1.1
   effects. GDI+ paints gradients and composite operations other than source over in
-  software, and its clips are not antialiased. Android needs Android 10 for the blend modes
+  software, and its clips are not antialiased. Native gradients and the native paths of a
+  `Path2D` are cached between frames until they change. Android needs Android 10 for the blend modes
   and Android 12 for radial gradients with a focal point, before which the focal point is
   the center.
 
@@ -126,7 +137,7 @@ use bcanvas::{Color, OffscreenCanvas};
 let mut icon = OffscreenCanvas::new_recording(16.0, 16.0);
 icon.draw(|ctx| {
     ctx.set_fill_style(Color::rgb(30, 120, 200));
-    ctx.ellipse(8.0, 8.0, 8.0, 8.0);
+    ctx.arc(8.0, 8.0, 8.0, 0.0, std::f32::consts::TAU, false);
     ctx.fill();
 });
 
@@ -140,8 +151,8 @@ without creating a window. The [example](examples/headless) enables the `image`
 feature and the image crate's `png` feature, then calls `image::encode`.
 
 Disable default features to drop the `window` feature and with it `Canvas`, bwindow
-and the windowing frameworks. On macOS and iOS an offscreen-only build then links
-just Core Graphics, Core Text and Core Foundation:
+and the windowing frameworks. An offscreen-only build then links just Core Graphics, Core
+Text and Core Foundation on macOS and iOS, and Cairo, Pango and GObject on Linux:
 
 ```toml
 bcanvas = { path = "../bcanvas", default-features = false }

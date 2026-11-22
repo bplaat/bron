@@ -9,7 +9,8 @@
 
 use std::sync::Arc;
 
-use crate::canvas::{CanvasState, FillRule};
+use crate::canvas::{CanvasState, FillRule, TextExtents};
+use crate::path::Path;
 use crate::platforms::{PlatformCanvasContext, PlatformImage, PlatformOffscreenCanvas};
 use crate::transform::Transform;
 
@@ -58,10 +59,11 @@ macro_rules! ops {
             StrokeRect(Arc<CanvasState>, [f32; 4]),
             BeginLayer(Arc<CanvasState>),
             BeginMaskLayer(Arc<CanvasState>),
-            Fill(Arc<CanvasState>, FillRule),
-            Stroke(Arc<CanvasState>),
+            Fill(Arc<CanvasState>, Arc<Path>, FillRule),
+            Stroke(Arc<CanvasState>, Arc<Path>),
+            Clip(Arc<Path>, FillRule),
             FillText(Box<(Arc<CanvasState>, Box<str>, f32, f32)>),
-            DrawImage(Box<(Arc<CanvasState>, u32, u32, Arc<[u8]>, [f32; 4])>),
+            DrawImage(Box<(Arc<CanvasState>, u32, u32, Arc<[u8]>, [f32; 4], [f32; 4])>),
         }
 
         impl Backend {
@@ -88,16 +90,17 @@ macro_rules! ops {
                         Op::StrokeRect(s, [x, y, w, h]) => self.stroke_rect(s, *x, *y, *w, *h),
                         Op::BeginLayer(s) => self.begin_layer(s),
                         Op::BeginMaskLayer(s) => self.begin_mask_layer(s),
-                        Op::Fill(s, rule) => self.fill(s, *rule),
-                        Op::Stroke(s) => self.stroke(s),
+                        Op::Fill(s, path, rule) => self.fill(s, path, *rule),
+                        Op::Stroke(s, path) => self.stroke(s, path),
+                        Op::Clip(path, rule) => self.clip(path, *rule),
                         Op::FillText(text) => {
                             let (s, text, x, y) = &**text;
                             self.fill_text(s, text, *x, *y);
                         }
                         Op::DrawImage(image) => {
-                            let (s, width, height, pixels, [x, y, w, h]) = &**image;
+                            let (s, width, height, pixels, source, dest) = &**image;
                             let image = PlatformImage::new(*width, *height, pixels.clone());
-                            self.draw_image(s, &image, pixels, *x, *y, *w, *h);
+                            self.draw_image(s, &image, pixels, *source, *dest);
                         }
                     }
                 }
@@ -112,16 +115,6 @@ ops! {
     ClearRect => clear_rect(x: f32, y: f32, w: f32, h: f32);
     EndMask => end_mask();
     EndLayer => end_layer();
-    BeginPath => begin_path();
-    ClosePath => close_path();
-    MoveTo => move_to(x: f32, y: f32);
-    LineTo => line_to(x: f32, y: f32);
-    Rect => rect(x: f32, y: f32, w: f32, h: f32);
-    Ellipse => ellipse(x: f32, y: f32, rx: f32, ry: f32);
-    ArcSegment => arc(x: f32, y: f32, r: f32, start: f32, end: f32, ccw: bool);
-    QuadraticCurveTo => quadratic_curve_to(cpx: f32, cpy: f32, x: f32, y: f32);
-    BezierCurveTo => bezier_curve_to(a: f32, b: f32, c: f32, d: f32, x: f32, y: f32);
-    Clip => clip(rule: FillRule);
     Translate => translate(x: f32, y: f32);
     Rotate => rotate(angle: f32);
     Scale => scale(x: f32, y: f32);
@@ -186,23 +179,30 @@ impl Backend {
         }
     }
 
-    pub(crate) fn fill(&mut self, s: &CanvasState, rule: FillRule) {
+    pub(crate) fn fill(&mut self, s: &CanvasState, path: &Arc<Path>, rule: FillRule) {
         match self {
-            Self::Platform(platform) => platform.fill(s, rule),
+            Self::Platform(platform) => platform.fill(s, path, rule),
             Self::Recording(recorder) => {
                 let state = recorder.state(s);
-                recorder.ops.push(Op::Fill(state, rule));
+                recorder.ops.push(Op::Fill(state, path.clone(), rule));
             }
         }
     }
 
-    pub(crate) fn stroke(&mut self, s: &CanvasState) {
+    pub(crate) fn stroke(&mut self, s: &CanvasState, path: &Arc<Path>) {
         match self {
-            Self::Platform(platform) => platform.stroke(s),
+            Self::Platform(platform) => platform.stroke(s, path),
             Self::Recording(recorder) => {
                 let state = recorder.state(s);
-                recorder.ops.push(Op::Stroke(state));
+                recorder.ops.push(Op::Stroke(state, path.clone()));
             }
+        }
+    }
+
+    pub(crate) fn clip(&mut self, path: &Arc<Path>, rule: FillRule) {
+        match self {
+            Self::Platform(platform) => platform.clip(path, rule),
+            Self::Recording(recorder) => recorder.ops.push(Op::Clip(path.clone(), rule)),
         }
     }
 
@@ -218,19 +218,16 @@ impl Backend {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn draw_image(
         &mut self,
         s: &CanvasState,
         image: &PlatformImage,
         pixels: &Arc<[u8]>,
-        x: f32,
-        y: f32,
-        w: f32,
-        h: f32,
+        source: [f32; 4],
+        dest: [f32; 4],
     ) {
         match self {
-            Self::Platform(platform) => platform.draw_image(s, image, x, y, w, h),
+            Self::Platform(platform) => platform.draw_image(s, image, source, dest),
             Self::Recording(recorder) => {
                 let state = recorder.state(s);
                 recorder.ops.push(Op::DrawImage(Box::new((
@@ -238,23 +235,24 @@ impl Backend {
                     image.width,
                     image.height,
                     pixels.clone(),
-                    [x, y, w, h],
+                    source,
+                    dest,
                 ))));
             }
         }
     }
 
     // A recording measures with a native context of its own.
-    pub(crate) fn measure_text(&mut self, s: &CanvasState, text: &str) -> f32 {
+    pub(crate) fn measure_text(&mut self, s: &CanvasState, text: &str) -> TextExtents {
         match self {
             Self::Platform(platform) => platform.measure_text(s, text),
             Self::Recording(_) => {
                 let mut canvas = PlatformOffscreenCanvas::new(1, 1, 4);
                 let mut platform = canvas.begin_draw(1.0);
-                let width = platform.measure_text(s, text);
+                let extents = platform.measure_text(s, text);
                 drop(platform);
                 canvas.end_draw();
-                width
+                extents
             }
         }
     }

@@ -7,6 +7,7 @@
 #![doc = include_str!("../README.md")]
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
+use std::f32::consts::TAU;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use bcanvas::{
@@ -393,7 +394,7 @@ impl Flow<'_, '_> {
 
     fn measure(&mut self, font: Font, text: &str) -> f32 {
         set_font(self.context, font, self.font_size);
-        self.context.measure_text(text)
+        self.context.measure_text(text).width
     }
 
     // The glue is the spacing before the box, it is dropped at the start of a line
@@ -731,11 +732,13 @@ impl App {
             let base = palette.particle;
             context.set_fill_style(Color::rgba(base, base, base, particle.alpha));
             context.begin_path();
-            context.ellipse(
+            context.arc(
                 center_x + particle.x,
                 center_y + particle.y,
                 particle.size,
-                particle.size,
+                0.0,
+                TAU,
+                false,
             );
             context.fill();
         }

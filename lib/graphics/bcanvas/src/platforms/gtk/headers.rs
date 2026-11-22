@@ -17,29 +17,18 @@ pub(super) struct CairoMatrix {
     pub(super) y0: f64,
 }
 
-#[repr(C)]
-#[derive(Default)]
-pub(super) struct CairoTextExtents {
-    pub(super) x_bearing: f64,
-    pub(super) y_bearing: f64,
-    pub(super) width: f64,
-    pub(super) height: f64,
-    pub(super) x_advance: f64,
-    pub(super) y_advance: f64,
-}
+pub(super) const PANGO_SCALE: i32 = 1024;
+pub(super) const PANGO_WEIGHT_NORMAL: i32 = 400;
+pub(super) const PANGO_WEIGHT_BOLD: i32 = 700;
 
 #[repr(C)]
 #[derive(Default)]
-pub(super) struct CairoFontExtents {
-    pub(super) ascent: f64,
-    pub(super) descent: f64,
-    pub(super) height: f64,
-    pub(super) max_x_advance: f64,
-    pub(super) max_y_advance: f64,
+pub(super) struct PangoRectangle {
+    pub(super) x: i32,
+    pub(super) y: i32,
+    pub(super) width: i32,
+    pub(super) height: i32,
 }
-
-#[repr(C)]
-pub(super) struct CairoPath([u8; 0]);
 
 unsafe extern "C" {
     pub(super) fn cairo_save(cr: *mut c_void);
@@ -51,18 +40,10 @@ unsafe extern "C" {
     pub(super) fn cairo_fill_preserve(cr: *mut c_void);
     pub(super) fn cairo_stroke_preserve(cr: *mut c_void);
     pub(super) fn cairo_new_path(cr: *mut c_void);
-    pub(super) fn cairo_new_sub_path(cr: *mut c_void);
-    pub(super) fn cairo_copy_path(cr: *mut c_void) -> *mut CairoPath;
-    pub(super) fn cairo_append_path(cr: *mut c_void, path: *const CairoPath);
-    pub(super) fn cairo_path_destroy(path: *mut CairoPath);
     pub(super) fn cairo_close_path(cr: *mut c_void);
     pub(super) fn cairo_move_to(cr: *mut c_void, x: f64, y: f64);
     pub(super) fn cairo_line_to(cr: *mut c_void, x: f64, y: f64);
-    pub(super) fn cairo_arc(cr: *mut c_void, x: f64, y: f64, r: f64, a: f64, b: f64);
-    pub(super) fn cairo_arc_negative(cr: *mut c_void, x: f64, y: f64, r: f64, a: f64, b: f64);
     pub(super) fn cairo_curve_to(cr: *mut c_void, a: f64, b: f64, c: f64, d: f64, e: f64, f: f64);
-    pub(super) fn cairo_get_current_point(cr: *mut c_void, x: *mut f64, y: *mut f64);
-    pub(super) fn cairo_has_current_point(cr: *mut c_void) -> i32;
     pub(super) fn cairo_clip(cr: *mut c_void);
     pub(super) fn cairo_clip_preserve(cr: *mut c_void);
     pub(super) fn cairo_translate(cr: *mut c_void, x: f64, y: f64);
@@ -78,26 +59,9 @@ unsafe extern "C" {
     pub(super) fn cairo_set_line_width(cr: *mut c_void, w: f64);
     pub(super) fn cairo_set_line_cap(cr: *mut c_void, c: i32);
     pub(super) fn cairo_set_line_join(cr: *mut c_void, j: i32);
-    pub(super) fn cairo_select_font_face(
-        cr: *mut c_void,
-        family: *const c_char,
-        slant: i32,
-        weight: i32,
-    );
-    pub(super) fn cairo_set_font_size(cr: *mut c_void, size: f64);
-    pub(super) fn cairo_text_extents(
-        cr: *mut c_void,
-        text: *const c_char,
-        extents: *mut CairoTextExtents,
-    );
-    pub(super) fn cairo_font_extents(cr: *mut c_void, extents: *mut CairoFontExtents);
-    pub(super) fn cairo_text_path(cr: *mut c_void, text: *const c_char);
-    pub(super) fn cairo_show_text(cr: *mut c_void, text: *const c_char);
-    pub(super) fn cairo_user_to_device(cr: *mut c_void, x: *mut f64, y: *mut f64);
     pub(super) fn cairo_font_options_create() -> *mut c_void;
     pub(super) fn cairo_font_options_destroy(options: *mut c_void);
     pub(super) fn cairo_font_options_set_antialias(options: *mut c_void, antialias: i32);
-    pub(super) fn cairo_set_font_options(cr: *mut c_void, options: *const c_void);
     #[cfg(test)]
     pub(super) fn cairo_image_surface_create(format: i32, width: i32, height: i32) -> *mut c_void;
     pub(super) fn cairo_image_surface_create_for_data(
@@ -112,6 +76,13 @@ unsafe extern "C" {
     pub(super) fn cairo_surface_status(surface: *mut c_void) -> i32;
     pub(super) fn cairo_surface_flush(surface: *mut c_void);
     pub(super) fn cairo_surface_destroy(surface: *mut c_void);
+    pub(super) fn cairo_surface_create_for_rectangle(
+        target: *mut c_void,
+        x: f64,
+        y: f64,
+        width: f64,
+        height: f64,
+    ) -> *mut c_void;
     pub(super) fn cairo_create(surface: *mut c_void) -> *mut c_void;
     pub(super) fn cairo_destroy(cr: *mut c_void);
     pub(super) fn cairo_status(cr: *mut c_void) -> i32;
@@ -160,3 +131,31 @@ pub(super) const CAIRO_OPERATOR_OVER: i32 = 2;
 pub(super) const CAIRO_EXTEND_PAD: i32 = 3;
 pub(super) const CAIRO_FILTER_GOOD: i32 = 1;
 pub(super) const CAIRO_FILTER_NEAREST: i32 = 3;
+
+// Pango lays out text with font fallback for emoji and every script, drawn with Cairo.
+unsafe extern "C" {
+    pub(super) fn pango_cairo_create_layout(cr: *mut c_void) -> *mut c_void;
+    pub(super) fn pango_cairo_update_layout(cr: *mut c_void, layout: *mut c_void);
+    pub(super) fn pango_cairo_show_layout(cr: *mut c_void, layout: *mut c_void);
+    pub(super) fn pango_cairo_layout_path(cr: *mut c_void, layout: *mut c_void);
+    pub(super) fn pango_cairo_context_set_font_options(
+        context: *mut c_void,
+        options: *const c_void,
+    );
+    pub(super) fn pango_layout_get_context(layout: *mut c_void) -> *mut c_void;
+    pub(super) fn pango_layout_context_changed(layout: *mut c_void);
+    pub(super) fn pango_layout_set_text(layout: *mut c_void, text: *const c_char, length: i32);
+    pub(super) fn pango_layout_set_font_description(layout: *mut c_void, font: *const c_void);
+    pub(super) fn pango_layout_get_extents(
+        layout: *mut c_void,
+        ink: *mut PangoRectangle,
+        logical: *mut PangoRectangle,
+    );
+    pub(super) fn pango_layout_get_baseline(layout: *mut c_void) -> i32;
+    pub(super) fn pango_font_description_new() -> *mut c_void;
+    pub(super) fn pango_font_description_set_family(font: *mut c_void, family: *const c_char);
+    pub(super) fn pango_font_description_set_weight(font: *mut c_void, weight: i32);
+    pub(super) fn pango_font_description_set_absolute_size(font: *mut c_void, size: f64);
+    pub(super) fn pango_font_description_free(font: *mut c_void);
+    pub(super) fn g_object_unref(object: *mut c_void);
+}

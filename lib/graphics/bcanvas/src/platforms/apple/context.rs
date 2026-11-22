@@ -12,9 +12,11 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use super::headers::*;
+use crate::cache::{GradientKey, LruCache};
+use crate::path::{Command, Path};
 use crate::{
     CanvasState, CanvasStyle, Color, CompositeOperation, FillRule, FontWeight, Gradient,
-    GradientShape, GradientSpread, LineCap, LineJoin, TextAlign, TextBaseline,
+    GradientShape, GradientSpread, LineCap, LineJoin, TextExtents, single_line,
 };
 
 const MAX_TEXT_STYLES: usize = 64;
@@ -22,14 +24,40 @@ const MAX_TEXT_STYLES: usize = 64;
 pub(crate) struct PlatformCanvasContext {
     context: CGContextRef,
     initial_transform: CGAffineTransform,
-    text_styles: TextStyleCache,
+    resources: Resources,
     // Whether each open layer is masked.
     layers: Vec<bool>,
+    // Core Graphics cannot leave a singular CTM, so it is not applied and drawing is skipped.
+    singular: bool,
+    // The singular flag of each saved graphics state.
+    saved: Vec<bool>,
 }
 
-/// Text attributes shared by all frames of one canvas.
-#[derive(Default, Clone)]
-pub(super) struct TextStyleCache(Rc<RefCell<HashMap<TextStyleKey, Rc<TextStyle>>>>);
+const GRADIENTS: usize = 32;
+const PATHS: usize = 64;
+
+/// Text attributes, gradients and paths shared by all frames of one canvas.
+#[derive(Clone)]
+pub(super) struct Resources(Rc<ResourcesInner>);
+
+// A gradient with the periods of its spread stops, or [0, 0] for its own stops.
+type GradientPeriods = (GradientKey, [i32; 2]);
+
+pub(super) struct ResourcesInner {
+    text_styles: RefCell<HashMap<TextStyleKey, Rc<TextStyle>>>,
+    gradients: RefCell<LruCache<GradientPeriods, Rc<NativeGradient>>>,
+    paths: RefCell<LruCache<u64, NativePath>>,
+}
+
+impl Default for Resources {
+    fn default() -> Self {
+        Self(Rc::new(ResourcesInner {
+            text_styles: RefCell::default(),
+            gradients: RefCell::new(LruCache::new(GRADIENTS)),
+            paths: RefCell::new(LruCache::new(PATHS)),
+        }))
+    }
+}
 
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub(super) struct TextStyleKey {
@@ -45,14 +73,14 @@ struct TextStyle {
     descent: f32,
 }
 
-impl TextStyleCache {
-    fn get(&self, s: &CanvasState) -> Rc<TextStyle> {
+impl Resources {
+    fn text_style(&self, s: &CanvasState) -> Rc<TextStyle> {
         let key = TextStyleKey {
             family: s.font_family.clone(),
             size: s.font_size.to_bits(),
             weight: s.font_weight,
         };
-        let mut styles = self.0.borrow_mut();
+        let mut styles = self.0.text_styles.borrow_mut();
         if !styles.contains_key(&key) && styles.len() >= MAX_TEXT_STYLES {
             styles.clear();
         }
@@ -60,6 +88,104 @@ impl TextStyleCache {
             .entry(key)
             .or_insert_with(|| Rc::new(create_text_style(s)))
             .clone()
+    }
+
+    // The native gradient of the spread stops of periods, or [0, 0] for its own stops.
+    fn gradient(&self, gradient: &Arc<Gradient>, periods: [i32; 2]) -> Rc<NativeGradient> {
+        let key = (GradientKey(gradient.clone()), periods);
+        self.0
+            .gradients
+            .borrow_mut()
+            .get_or_create(key, || {
+                let stops = if periods == [0, 0] {
+                    gradient.stops.clone()
+                } else {
+                    gradient.spread_stops(periods[0], periods[1])
+                };
+                Some(Rc::new(NativeGradient::new(&stops)))
+            })
+            .cloned()
+            .expect("created gradient")
+    }
+
+    /// Replace the current path of a context, with the cached path of a reused one.
+    unsafe fn add_path(&self, context: CGContextRef, path: &Path) {
+        unsafe {
+            CGContextBeginPath(context);
+            if path.id == 0 {
+                build_path(path, |command| match command {
+                    PathCommand::Move(x, y) => CGContextMoveToPoint(context, x, y),
+                    PathCommand::Line(x, y) => CGContextAddLineToPoint(context, x, y),
+                    PathCommand::Quad(cx, cy, x, y) => {
+                        CGContextAddQuadCurveToPoint(context, cx, cy, x, y)
+                    }
+                    PathCommand::Cubic(ax, ay, bx, by, x, y) => {
+                        CGContextAddCurveToPoint(context, ax, ay, bx, by, x, y)
+                    }
+                    PathCommand::Close => CGContextClosePath(context),
+                });
+                return;
+            }
+            let mut paths = self.0.paths.borrow_mut();
+            let native = paths.get_or_create(path.id, || {
+                let native = CGPathCreateMutable();
+                let t = null();
+                build_path(path, |command| match command {
+                    PathCommand::Move(x, y) => CGPathMoveToPoint(native, t, x, y),
+                    PathCommand::Line(x, y) => CGPathAddLineToPoint(native, t, x, y),
+                    PathCommand::Quad(cx, cy, x, y) => {
+                        CGPathAddQuadCurveToPoint(native, t, cx, cy, x, y)
+                    }
+                    PathCommand::Cubic(ax, ay, bx, by, x, y) => {
+                        CGPathAddCurveToPoint(native, t, ax, ay, bx, by, x, y)
+                    }
+                    PathCommand::Close => CGPathCloseSubpath(native),
+                });
+                Some(NativePath(native))
+            });
+            if let Some(native) = native {
+                CGContextAddPath(context, native.0);
+            }
+        }
+    }
+}
+
+/// An owned Core Graphics path.
+struct NativePath(*mut c_void);
+
+impl Drop for NativePath {
+    fn drop(&mut self) {
+        unsafe { CGPathRelease(self.0) };
+    }
+}
+
+// A path command with the Core Graphics coordinates of its points.
+enum PathCommand {
+    Move(f64, f64),
+    Line(f64, f64),
+    Quad(f64, f64, f64, f64),
+    Cubic(f64, f64, f64, f64, f64, f64),
+    Close,
+}
+
+fn build_path(path: &Path, mut add: impl FnMut(PathCommand)) {
+    for command in &path.commands {
+        add(match *command {
+            Command::Move([x, y]) => PathCommand::Move(x.into(), y.into()),
+            Command::Line([x, y]) => PathCommand::Line(x.into(), y.into()),
+            Command::Quadratic([cx, cy], [x, y]) => {
+                PathCommand::Quad(cx.into(), cy.into(), x.into(), y.into())
+            }
+            Command::Cubic([ax, ay], [bx, by], [x, y]) => PathCommand::Cubic(
+                ax.into(),
+                ay.into(),
+                bx.into(),
+                by.into(),
+                x.into(),
+                y.into(),
+            ),
+            Command::Close => PathCommand::Close,
+        });
     }
 }
 
@@ -73,7 +199,7 @@ impl Drop for PlatformCanvasContext {
 }
 
 impl PlatformCanvasContext {
-    pub(super) unsafe fn new(context: CGContextRef, text_styles: TextStyleCache) -> Self {
+    pub(super) unsafe fn new(context: CGContextRef, resources: Resources) -> Self {
         unsafe {
             CGContextSaveGState(context);
             CGContextBeginPath(context);
@@ -81,20 +207,24 @@ impl PlatformCanvasContext {
         Self {
             context,
             initial_transform: unsafe { CGContextGetCTM(context) },
-            text_styles,
+            resources,
             layers: Vec::new(),
+            singular: false,
+            saved: Vec::new(),
         }
     }
 
     pub(crate) unsafe fn from_native(context: crate::NativeContext) -> Self {
         let crate::NativeContext::CoreGraphics(context) = context;
-        unsafe { Self::new(context, TextStyleCache::default()) }
+        unsafe { Self::new(context, Resources::default()) }
     }
 
     pub(crate) fn save(&mut self) {
+        self.saved.push(self.singular);
         unsafe { CGContextSaveGState(self.context) }
     }
     pub(crate) fn restore(&mut self) {
+        self.singular = self.saved.pop().unwrap_or(false);
         unsafe { CGContextRestoreGState(self.context) }
     }
     pub(crate) fn begin_layer(&mut self, s: &CanvasState) {
@@ -105,6 +235,7 @@ impl PlatformCanvasContext {
     }
     /// The content of a masked layer is a nested layer that composites into the mask.
     pub(crate) fn end_mask(&mut self) {
+        self.saved.push(self.singular);
         unsafe {
             CGContextSaveGState(self.context);
             CGContextSetAlpha(self.context, 1.0);
@@ -114,6 +245,10 @@ impl PlatformCanvasContext {
     }
     pub(crate) fn end_layer(&mut self) {
         let masked = self.layers.pop().expect("open layer");
+        if masked {
+            self.saved.pop();
+        }
+        self.singular = self.saved.pop().unwrap_or(false);
         unsafe {
             if masked {
                 CGContextEndTransparencyLayer(self.context);
@@ -125,104 +260,86 @@ impl PlatformCanvasContext {
     }
     fn begin_transparency_layer(&mut self, s: &CanvasState, masked: bool) {
         self.layers.push(masked);
+        self.saved.push(self.singular);
         unsafe {
             begin_paint(self.context, s);
             CGContextBeginTransparencyLayer(self.context, null());
         }
     }
     pub(crate) fn clear_rect(&mut self, x: f32, y: f32, w: f32, h: f32) {
-        self.preserving_path(|context| unsafe { CGContextClearRect(context, rect(x, y, w, h)) });
+        if self.singular {
+            return;
+        }
+        unsafe { CGContextClearRect(self.context, rect(x, y, w, h)) };
     }
     pub(crate) fn fill_rect(&mut self, s: &CanvasState, x: f32, y: f32, w: f32, h: f32) {
+        if self.singular {
+            return;
+        }
         // A color fills the rect directly, without building a path.
         let CanvasStyle::Color(color) = s.fill else {
             self.paint_rect(s, PaintMode::Fill(FillRule::NonZero), x, y, w, h);
             return;
         };
-        self.preserving_path(|context| unsafe {
-            begin_paint(context, s);
-            set_color(context, color, false);
-            CGContextFillRect(context, rect(x, y, w, h));
-            CGContextRestoreGState(context);
-        });
+        unsafe {
+            begin_paint(self.context, s);
+            set_color(self.context, color, false);
+            CGContextFillRect(self.context, rect(x, y, w, h));
+            CGContextRestoreGState(self.context);
+        }
     }
     pub(crate) fn stroke_rect(&mut self, s: &CanvasState, x: f32, y: f32, w: f32, h: f32) {
         self.paint_rect(s, PaintMode::Stroke, x, y, w, h);
     }
     fn paint_rect(&mut self, s: &CanvasState, mode: PaintMode, x: f32, y: f32, w: f32, h: f32) {
-        self.preserving_path(|context| unsafe {
-            CGContextBeginPath(context);
-            CGContextAddRect(context, rect(x, y, w, h));
-            paint_path(context, s, mode);
-        });
-    }
-    pub(crate) fn begin_path(&mut self) {
-        unsafe { CGContextBeginPath(self.context) }
-    }
-    pub(crate) fn close_path(&mut self) {
-        unsafe { CGContextClosePath(self.context) }
-    }
-    pub(crate) fn move_to(&mut self, x: f32, y: f32) {
-        unsafe { CGContextMoveToPoint(self.context, x.into(), y.into()) }
-    }
-    pub(crate) fn line_to(&mut self, x: f32, y: f32) {
-        unsafe { CGContextAddLineToPoint(self.context, x.into(), y.into()) }
-    }
-    pub(crate) fn rect(&mut self, x: f32, y: f32, w: f32, h: f32) {
-        unsafe { CGContextAddRect(self.context, rect(x, y, w, h)) }
-    }
-    pub(crate) fn ellipse(&mut self, x: f32, y: f32, rx: f32, ry: f32) {
-        unsafe { CGContextAddEllipseInRect(self.context, rect(x - rx, y - ry, rx * 2.0, ry * 2.0)) }
-    }
-    pub(crate) fn arc(&mut self, x: f32, y: f32, r: f32, start: f32, end: f32, ccw: bool) {
+        if self.singular {
+            return;
+        }
         unsafe {
-            CGContextAddArc(
-                self.context,
-                x.into(),
-                y.into(),
-                r.into(),
-                start.into(),
-                end.into(),
-                ccw.into(),
-            )
+            CGContextBeginPath(self.context);
+            CGContextAddRect(self.context, rect(x, y, w, h));
+            paint_path(self.context, &self.resources, s, mode);
         }
     }
-    pub(crate) fn quadratic_curve_to(&mut self, cpx: f32, cpy: f32, x: f32, y: f32) {
+    pub(crate) fn fill(&mut self, s: &CanvasState, path: &Path, rule: FillRule) {
+        if self.singular {
+            return;
+        }
         unsafe {
-            CGContextAddQuadCurveToPoint(self.context, cpx.into(), cpy.into(), x.into(), y.into())
+            self.resources.add_path(self.context, path);
+            paint_path(self.context, &self.resources, s, PaintMode::Fill(rule));
         }
     }
-    pub(crate) fn bezier_curve_to(&mut self, a: f32, b: f32, c: f32, d: f32, x: f32, y: f32) {
+    pub(crate) fn stroke(&mut self, s: &CanvasState, path: &Path) {
+        if self.singular {
+            return;
+        }
         unsafe {
-            CGContextAddCurveToPoint(
-                self.context,
-                a.into(),
-                b.into(),
-                c.into(),
-                d.into(),
-                x.into(),
-                y.into(),
-            )
+            self.resources.add_path(self.context, path);
+            paint_path(self.context, &self.resources, s, PaintMode::Stroke);
         }
     }
-    pub(crate) fn fill(&mut self, s: &CanvasState, rule: FillRule) {
-        self.preserving_path(|context| unsafe { paint_path(context, s, PaintMode::Fill(rule)) });
-    }
-    pub(crate) fn stroke(&mut self, s: &CanvasState) {
-        self.preserving_path(|context| unsafe { paint_path(context, s, PaintMode::Stroke) });
-    }
-    pub(crate) fn clip(&mut self, rule: FillRule) {
-        self.preserving_path(|context| unsafe { clip_path(context, rule) });
+    pub(crate) fn clip(&mut self, path: &Path, rule: FillRule) {
+        unsafe {
+            // Core Graphics ignores a clip to an empty path, which hides everything.
+            if path.commands.is_empty() {
+                CGContextClipToRect(self.context, rect(0.0, 0.0, 0.0, 0.0));
+            } else {
+                self.resources.add_path(self.context, path);
+                clip_path(self.context, rule);
+            }
+        }
     }
     pub(crate) fn draw_image(
         &mut self,
         s: &CanvasState,
         image: &PlatformImage,
-        x: f32,
-        y: f32,
-        w: f32,
-        h: f32,
+        source: [f32; 4],
+        [x, y, w, h]: [f32; 4],
     ) {
+        if self.singular {
+            return;
+        }
         unsafe {
             begin_paint(self.context, s);
             CGContextSetInterpolationQuality(
@@ -236,21 +353,52 @@ impl PlatformCanvasContext {
             // The context is flipped, so flip the image back upright.
             CGContextTranslateCTM(self.context, x.into(), f64::from(y) + f64::from(h));
             CGContextScaleCTM(self.context, 1.0, -1.0);
-            CGContextDrawImage(self.context, rect(0.0, 0.0, w, h), image.image);
+            // A source smaller than the image is a sub-image sharing its pixels.
+            let [sx, sy, sw, sh] = source;
+            let full = source == [0.0, 0.0, image.width as f32, image.height as f32];
+            let sub_image = if full {
+                null_mut()
+            } else {
+                CGImageCreateWithImageInRect(image.image, rect(sx, sy, sw, sh))
+            };
+            CGContextDrawImage(
+                self.context,
+                rect(0.0, 0.0, w, h),
+                if sub_image.is_null() {
+                    image.image
+                } else {
+                    sub_image
+                },
+            );
+            if !sub_image.is_null() {
+                CGImageRelease(sub_image);
+            }
             CGContextRestoreGState(self.context);
         }
     }
     pub(crate) fn translate(&mut self, x: f32, y: f32) {
-        unsafe { CGContextTranslateCTM(self.context, x.into(), y.into()) }
+        self.concat(affine([1.0, 0.0, 0.0, 1.0, x, y]));
     }
     pub(crate) fn rotate(&mut self, a: f32) {
-        unsafe { CGContextRotateCTM(self.context, a.into()) }
+        let (sin, cos) = a.sin_cos();
+        self.concat(affine([cos, sin, -sin, cos, 0.0, 0.0]));
     }
     pub(crate) fn scale(&mut self, x: f32, y: f32) {
-        unsafe { CGContextScaleCTM(self.context, x.into(), y.into()) }
+        self.concat(affine([x, 0.0, 0.0, y, 0.0, 0.0]));
     }
     pub(crate) fn transform(&mut self, a: f32, b: f32, c: f32, d: f32, e: f32, f: f32) {
-        unsafe { CGContextConcatCTM(self.context, affine([a, b, c, d, e, f])) }
+        self.concat(affine([a, b, c, d, e, f]));
+    }
+    // A singular transform stays singular until it is replaced.
+    fn concat(&mut self, transform: CGAffineTransform) {
+        if self.singular {
+            return;
+        }
+        let ctm = unsafe { CGAffineTransformConcat(transform, CGContextGetCTM(self.context)) };
+        self.singular = !invertible(ctm);
+        if !self.singular {
+            unsafe { CGContextConcatCTM(self.context, transform) };
+        }
     }
     pub(crate) fn set_transform(&mut self, a: f32, b: f32, c: f32, d: f32, e: f32, f: f32) {
         let transform = affine([a, b, c, d, e, f]);
@@ -260,20 +408,21 @@ impl PlatformCanvasContext {
         self.set_ctm(self.initial_transform);
     }
     pub(crate) fn fill_text(&mut self, s: &CanvasState, text: &str, x: f32, y: f32) {
-        let style = self.text_styles.get(s);
+        if self.singular {
+            return;
+        }
+        let style = self.resources.text_style(s);
         let line = text_line(text, &style);
-        let x = match s.text_align {
-            TextAlign::Center => x - line_width(&line) / 2.0,
-            TextAlign::Right | TextAlign::End => x - line_width(&line),
-            _ => x,
-        };
-        // Core Text draws from the alphabetic baseline, so offset by the font metrics.
-        let y = match s.text_baseline {
-            TextBaseline::Middle => y + (style.ascent - style.descent) / 2.0,
-            TextBaseline::Bottom | TextBaseline::Ideographic => y - style.descent,
-            TextBaseline::Alphabetic => y,
-            _ => y + style.ascent,
-        };
+        // Core Text draws from the alphabetic baseline.
+        let width = line_width(&line);
+        let [dx, dy] = TextExtents {
+            width,
+            ascent: style.ascent,
+            descent: style.descent,
+            ..TextExtents::default()
+        }
+        .origin(s);
+        let (x, y) = (x + dx, y + dy);
         unsafe {
             begin_paint(self.context, s);
             // The context is flipped, so flip the glyphs back upright.
@@ -284,36 +433,62 @@ impl PlatformCanvasContext {
                     set_color(self.context, *color, false);
                     CTLineDraw(line.as_ptr(), self.context);
                 }
-                // Gradients fill the clip of the glyphs.
-                CanvasStyle::Gradient(gradient) => {
-                    CGContextSetTextDrawingMode(self.context, K_CG_TEXT_CLIP);
+                // Gradients fill the glyphs in a layer bounded by the line, as Core Text
+                // ignores the clip drawing mode.
+                CanvasStyle::Gradient(gradient) if !gradient.0.stops.is_empty() => {
+                    let margin = s.font_size;
+                    CGContextClipToRect(
+                        self.context,
+                        rect(
+                            x - margin,
+                            y - style.ascent - margin,
+                            width + margin * 2.0,
+                            style.ascent + style.descent + margin * 2.0,
+                        ),
+                    );
+                    CGContextBeginTransparencyLayer(self.context, null());
+                    CGContextSetAlpha(self.context, 1.0);
+                    CGContextSetBlendMode(self.context, blend_mode(CompositeOperation::SourceOver));
+                    set_color(self.context, Color::rgb(0, 0, 0), false);
                     CTLineDraw(line.as_ptr(), self.context);
-                    CGContextSetTextDrawingMode(self.context, K_CG_TEXT_FILL);
-                    draw_gradient(self.context, &gradient.0);
+                    CGContextSetBlendMode(self.context, blend_mode(CompositeOperation::SourceIn));
+                    draw_gradient(self.context, &self.resources, &gradient.0);
+                    CGContextEndTransparencyLayer(self.context);
                 }
+                // A gradient without stops paints nothing.
+                CanvasStyle::Gradient(_) => {}
             }
             CGContextRestoreGState(self.context);
         }
     }
-    pub(crate) fn measure_text(&mut self, s: &CanvasState, text: &str) -> f32 {
-        line_width(&text_line(text, &self.text_styles.get(s)))
-    }
-    /// Core Graphics consumes the current path when painting, HTML canvas keeps it.
-    fn preserving_path(&mut self, paint: impl FnOnce(CGContextRef)) {
-        unsafe {
-            if CGContextIsPathEmpty(self.context) {
-                paint(self.context);
-                return;
-            }
-            let path = CGContextCopyPath(self.context);
-            paint(self.context);
-            CGContextBeginPath(self.context);
-            CGContextAddPath(self.context, path);
-            CGPathRelease(path);
+    pub(crate) fn measure_text(&mut self, s: &CanvasState, text: &str) -> TextExtents {
+        const K_CT_LINE_BOUNDS_USE_GLYPH_PATH_BOUNDS: usize = 1 << 3;
+        let style = self.resources.text_style(s);
+        let line = text_line(text, &style);
+        // The glyph bounds are above the baseline with y up.
+        let ink = unsafe {
+            CTLineGetBoundsWithOptions(line.as_ptr(), K_CT_LINE_BOUNDS_USE_GLYPH_PATH_BOUNDS)
+        };
+        let (left, bottom) = (ink.origin.x as f32, -ink.origin.y as f32);
+        TextExtents {
+            width: line_width(&line),
+            ink: [
+                left,
+                bottom - ink.size.height as f32,
+                left + ink.size.width as f32,
+                bottom,
+            ],
+            ascent: style.ascent,
+            descent: style.descent,
         }
     }
-    /// Replace the CTM with public API only, CGContextSetCTM is private.
+    /// Replace the CTM with public API only, CGContextSetCTM is private, which needs the
+    /// current CTM to be invertible.
     fn set_ctm(&mut self, transform: CGAffineTransform) {
+        self.singular = !invertible(transform);
+        if self.singular {
+            return;
+        }
         unsafe {
             let current = CGAffineTransformInvert(CGContextGetCTM(self.context));
             CGContextConcatCTM(self.context, CGAffineTransformConcat(transform, current));
@@ -404,7 +579,12 @@ unsafe fn begin_paint(context: CGContextRef, s: &CanvasState) {
 }
 
 /// Paint the current path with the fill or stroke style, consuming it.
-unsafe fn paint_path(context: CGContextRef, s: &CanvasState, mode: PaintMode) {
+unsafe fn paint_path(
+    context: CGContextRef,
+    resources: &Resources,
+    s: &CanvasState,
+    mode: PaintMode,
+) {
     unsafe {
         begin_paint(context, s);
         let style = match mode {
@@ -455,7 +635,7 @@ unsafe fn paint_path(context: CGContextRef, s: &CanvasState, mode: PaintMode) {
                         CGContextClip(context);
                     }
                 }
-                draw_gradient(context, &gradient.0);
+                draw_gradient(context, resources, &gradient.0);
             }
         }
         CGContextRestoreGState(context);
@@ -476,7 +656,7 @@ const MAX_SPREAD_PERIODS: f64 = 4096.0;
 
 /// Fill the clip with a gradient. Core Graphics only pads gradients, so a reflected or
 /// repeated one is drawn as one padded gradient over the periods the clip covers.
-unsafe fn draw_gradient(context: CGContextRef, gradient: &Gradient) {
+unsafe fn draw_gradient(context: CGContextRef, resources: &Resources, gradient: &Arc<Gradient>) {
     if gradient.stops.is_empty() {
         return;
     }
@@ -515,7 +695,7 @@ unsafe fn draw_gradient(context: CGContextRef, gradient: &Gradient) {
                 let (dx, dy) = (end.x - start.x, end.y - start.y);
                 let length_squared = dx * dx + dy * dy;
                 if pad || length_squared == 0.0 {
-                    let native = NativeGradient::new(&gradient.stops);
+                    let native = resources.gradient(gradient, [0, 0]);
                     CGContextDrawLinearGradient(context, native.0, start, end, extend);
                     return;
                 }
@@ -531,7 +711,7 @@ unsafe fn draw_gradient(context: CGContextRef, gradient: &Gradient) {
                     .fold(f64::NEG_INFINITY, f64::max);
                 let first = first.floor().max(-MAX_SPREAD_PERIODS / 2.0);
                 let last = last.ceil().min(first + MAX_SPREAD_PERIODS);
-                let native = NativeGradient::new(&gradient.spread_stops(first as i32, last as i32));
+                let native = resources.gradient(gradient, [first as i32, last as i32]);
                 let along = |t: f64| CGPoint {
                     x: start.x + dx * t,
                     y: start.y + dy * t,
@@ -545,7 +725,7 @@ unsafe fn draw_gradient(context: CGContextRef, gradient: &Gradient) {
             } => {
                 let (focal, center, radius) = (point(focal), point(center), f64::from(radius));
                 if pad || radius == 0.0 {
-                    let native = NativeGradient::new(&gradient.stops);
+                    let native = resources.gradient(gradient, [0, 0]);
                     CGContextDrawRadialGradient(
                         context, native.0, focal, 0.0, center, radius, extend,
                     );
@@ -556,7 +736,7 @@ unsafe fn draw_gradient(context: CGContextRef, gradient: &Gradient) {
                     .map(|(x, y)| (x - center.x).hypot(y - center.y))
                     .fold(0.0, f64::max);
                 let periods = (farthest / radius).ceil().clamp(1.0, MAX_SPREAD_PERIODS);
-                let native = NativeGradient::new(&gradient.spread_stops(0, periods as i32));
+                let native = resources.gradient(gradient, [0, periods as i32]);
                 CGContextDrawRadialGradient(
                     context,
                     native.0,
@@ -642,6 +822,11 @@ const fn blend_mode(operation: CompositeOperation) -> i32 {
     }
 }
 
+fn invertible(t: CGAffineTransform) -> bool {
+    let det = t.a * t.d - t.b * t.c;
+    det != 0.0 && det.is_finite() && [t.tx, t.ty].iter().all(|v| v.is_finite())
+}
+
 const fn affine([a, b, c, d, tx, ty]: [f32; 6]) -> CGAffineTransform {
     CGAffineTransform {
         a: a as f64,
@@ -667,7 +852,7 @@ fn rect(x: f32, y: f32, w: f32, h: f32) -> CGRect {
 }
 
 fn text_line(text: &str, style: &TextStyle) -> CFObject {
-    let string = CFObject::string(text);
+    let string = CFObject::string(&single_line(text));
     unsafe {
         let attributed = CFObject::from_create(CFAttributedStringCreate(
             null(),
@@ -686,7 +871,13 @@ fn line_width(line: &CFObject) -> f32 {
 
 fn create_text_style(s: &CanvasState) -> TextStyle {
     let size = f64::from(s.font_size);
-    let mut font = named_font(&s.font_family, size).unwrap_or_else(|| unsafe {
+    // Generic families map to fonts on every Apple platform, sans-serif is the system font.
+    let family = match s.font_family.as_ref() {
+        "serif" => "Times New Roman",
+        "monospace" => "Menlo",
+        family => family,
+    };
+    let mut font = named_font(family, size).unwrap_or_else(|| unsafe {
         CFObject::from_create(CTFontCreateUIFontForLanguage(
             K_CT_FONT_UI_FONT_SYSTEM,
             size,
@@ -831,7 +1022,7 @@ mod tests {
             );
             assert!(!context.is_null());
             {
-                let mut canvas = PlatformCanvasContext::new(context, TextStyleCache::default());
+                let mut canvas = PlatformCanvasContext::new(context, Resources::default());
                 let mut state = CanvasState {
                     fill: Color::rgb(255, 0, 0).into(),
                     ..CanvasState::default()
