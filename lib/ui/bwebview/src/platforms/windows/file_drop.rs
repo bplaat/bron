@@ -4,15 +4,16 @@
  * SPDX-License-Identifier: MIT
  */
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::ffi::c_void;
 use std::mem;
 use std::path::PathBuf;
 use std::ptr::null_mut;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, Ordering, fence};
 
 use bwindow::WindowEvent;
 
+use super::com::ComPtr;
 use super::headers::*;
 
 /// The COM drop target registered on each browser child window
@@ -22,13 +23,15 @@ pub(super) struct FileDropTarget {
     sender: bwindow::WindowEventSender,
     refs: AtomicU32,
     hwnd: HWND,
-    valid: bool,
+    valid: Cell<bool>,
 }
 
 static FILE_DROP_TARGET_VTBL: IDropTargetVtbl = IDropTargetVtbl {
-    QueryInterface: file_drop_query_interface,
-    AddRef: file_drop_add_ref,
-    Release: file_drop_release,
+    base: IUnknownVtbl {
+        QueryInterface: file_drop_query_interface,
+        AddRef: file_drop_add_ref,
+        Release: file_drop_release,
+    },
     DragEnter: file_drop_drag_enter,
     DragOver: file_drop_drag_over,
     DragLeave: file_drop_drag_leave,
@@ -42,9 +45,7 @@ const IID_IDROP_TARGET: GUID = GUID {
     data4: [0xc0, 0, 0, 0, 0, 0, 0, 0x46],
 };
 
-#[allow(clippy::vec_box)]
-// Registered COM pointers must remain stable when the vector grows.
-pub(super) fn revoke_file_drop_targets(targets: &RefCell<Vec<Box<FileDropTarget>>>) {
+pub(super) fn revoke_file_drop_targets(targets: &RefCell<Vec<ComPtr<FileDropTarget>>>) {
     let targets = mem::take(&mut *targets.borrow_mut());
     for target in &targets {
         unsafe { RevokeDragDrop(target.hwnd) };
@@ -52,31 +53,32 @@ pub(super) fn revoke_file_drop_targets(targets: &RefCell<Vec<Box<FileDropTarget>
 }
 
 /// Registers a drop target on every browser child window
-#[allow(clippy::vec_box)]
 pub(super) unsafe fn install_file_drop_targets(
     hwnd: HWND,
     sender: bwindow::WindowEventSender,
-    targets: &RefCell<Vec<Box<FileDropTarget>>>,
+    targets: &RefCell<Vec<ComPtr<FileDropTarget>>>,
 ) {
     struct State<'a> {
         sender: bwindow::WindowEventSender,
-        targets: &'a RefCell<Vec<Box<FileDropTarget>>>,
+        targets: &'a RefCell<Vec<ComPtr<FileDropTarget>>>,
     }
     let state = State { sender, targets };
     unsafe extern "system" fn enum_child(hwnd: HWND, data: LPARAM) -> BOOL {
         let state = unsafe { &*(data as *const State<'_>) };
-        let mut target = Box::new(FileDropTarget {
+        let target = Box::into_raw(Box::new(FileDropTarget {
             sender: state.sender.clone(),
             interface: IDropTarget {
-                lpVtbl: &FILE_DROP_TARGET_VTBL,
+                vtbl: &FILE_DROP_TARGET_VTBL,
             },
             refs: AtomicU32::new(1),
             hwnd,
-            valid: false,
-        });
+            valid: Cell::new(false),
+        }));
+        let target =
+            unsafe { ComPtr::from_raw(target) }.expect("drop target allocation is non-null");
         let revoked = unsafe { RevokeDragDrop(hwnd) };
         if revoked != DRAGDROP_E_INVALIDHWND
-            && unsafe { RegisterDragDrop(hwnd, &mut target.interface) } == S_OK
+            && unsafe { RegisterDragDrop(hwnd, target.as_ptr().cast()) } == S_OK
         {
             state.targets.borrow_mut().push(target);
         }
@@ -87,13 +89,16 @@ pub(super) unsafe fn install_file_drop_targets(
 }
 
 unsafe extern "system" fn file_drop_query_interface(
-    this: *mut IDropTarget,
+    this: *mut c_void,
     iid: *const GUID,
     object: *mut *mut c_void,
 ) -> HRESULT {
+    if object.is_null() {
+        return E_POINTER;
+    }
     if !iid.is_null() && (unsafe { *iid == IID_IUNKNOWN } || unsafe { *iid == IID_IDROP_TARGET }) {
         unsafe {
-            *object = this as *mut c_void;
+            *object = this;
             file_drop_add_ref(this);
         }
         S_OK
@@ -103,14 +108,19 @@ unsafe extern "system" fn file_drop_query_interface(
     }
 }
 
-unsafe extern "system" fn file_drop_add_ref(this: *mut IDropTarget) -> u32 {
-    let target = unsafe { &*(this as *mut FileDropTarget) };
+unsafe extern "system" fn file_drop_add_ref(this: *mut c_void) -> u32 {
+    let target = unsafe { &*this.cast::<FileDropTarget>() };
     target.refs.fetch_add(1, Ordering::Relaxed) + 1
 }
 
-unsafe extern "system" fn file_drop_release(this: *mut IDropTarget) -> u32 {
-    let target = unsafe { &*(this as *mut FileDropTarget) };
-    target.refs.fetch_sub(1, Ordering::Release) - 1
+unsafe extern "system" fn file_drop_release(this: *mut c_void) -> u32 {
+    let target = unsafe { &*this.cast::<FileDropTarget>() };
+    let remaining = target.refs.fetch_sub(1, Ordering::Release) - 1;
+    if remaining == 0 {
+        fence(Ordering::Acquire);
+        unsafe { drop(Box::from_raw(this.cast::<FileDropTarget>())) };
+    }
+    remaining
 }
 
 unsafe extern "system" fn file_drop_drag_enter(
@@ -120,10 +130,10 @@ unsafe extern "system" fn file_drop_drag_enter(
     _point: POINT,
     effect: *mut u32,
 ) -> HRESULT {
-    let target = unsafe { &mut *(this as *mut FileDropTarget) };
-    target.valid = unsafe { file_drop_paths(data) }.is_some();
+    let target = unsafe { &*this.cast::<FileDropTarget>() };
+    target.valid.set(unsafe { file_drop_paths(data) }.is_some());
     unsafe {
-        *effect = if target.valid {
+        *effect = if target.valid.get() {
             DROPEFFECT_COPY
         } else {
             DROPEFFECT_NONE
@@ -138,9 +148,9 @@ unsafe extern "system" fn file_drop_drag_over(
     _point: POINT,
     effect: *mut u32,
 ) -> HRESULT {
-    let target = unsafe { &*(this as *mut FileDropTarget) };
+    let target = unsafe { &*this.cast::<FileDropTarget>() };
     unsafe {
-        *effect = if target.valid {
+        *effect = if target.valid.get() {
             DROPEFFECT_COPY
         } else {
             DROPEFFECT_NONE
@@ -150,7 +160,7 @@ unsafe extern "system" fn file_drop_drag_over(
 }
 
 unsafe extern "system" fn file_drop_drag_leave(this: *mut IDropTarget) -> HRESULT {
-    unsafe { (*(this as *mut FileDropTarget)).valid = false };
+    unsafe { (*this.cast::<FileDropTarget>()).valid.set(false) };
     S_OK
 }
 
@@ -161,8 +171,8 @@ unsafe extern "system" fn file_drop(
     _point: POINT,
     effect: *mut u32,
 ) -> HRESULT {
-    let target = unsafe { &mut *(this as *mut FileDropTarget) };
-    if target.valid
+    let target = unsafe { &*this.cast::<FileDropTarget>() };
+    if target.valid.get()
         && let Some(paths) = unsafe { file_drop_paths(data) }
     {
         for path in paths {
@@ -172,7 +182,7 @@ unsafe extern "system" fn file_drop(
     } else {
         unsafe { *effect = DROPEFFECT_NONE };
     }
-    target.valid = false;
+    target.valid.set(false);
     S_OK
 }
 
@@ -188,7 +198,7 @@ unsafe fn file_drop_paths(data: *mut IDataObject) -> Option<Vec<PathBuf>> {
         tymed: TYMED_HGLOBAL,
     };
     let mut medium: STGMEDIUM = unsafe { mem::zeroed() };
-    if unsafe { ((*(*data).lpVtbl).GetData)(data, &mut format, &mut medium) } != S_OK {
+    if unsafe { ((*(*data).vtbl).GetData)(data, &mut format, &mut medium) } != S_OK {
         return None;
     }
 

@@ -7,6 +7,7 @@
 #[cfg(not(target_vendor = "winxp"))]
 pub(crate) use self::webview2::PlatformWebview;
 
+mod com;
 #[cfg(feature = "file_drop")]
 mod file_drop;
 mod headers;

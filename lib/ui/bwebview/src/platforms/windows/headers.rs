@@ -77,8 +77,17 @@ pub(crate) struct GUID {
     pub(crate) data4: [u8; 8],
 }
 
+#[repr(C)]
+pub(crate) struct IUnknownVtbl {
+    pub(crate) QueryInterface:
+        unsafe extern "system" fn(*mut c_void, *const GUID, *mut *mut c_void) -> HRESULT,
+    pub(crate) AddRef: unsafe extern "system" fn(*mut c_void) -> u32,
+    pub(crate) Release: unsafe extern "system" fn(*mut c_void) -> u32,
+}
+
 pub(crate) const S_OK: HRESULT = 0;
 pub(crate) const E_NOINTERFACE: HRESULT = 0x80004002u32 as HRESULT;
+pub(crate) const E_POINTER: HRESULT = 0x80004003u32 as HRESULT;
 pub(crate) const DRAGDROP_E_INVALIDHWND: HRESULT = 0x80040102u32 as HRESULT;
 pub(crate) const CF_HDROP: u16 = 15;
 pub(crate) const DVASPECT_CONTENT: u32 = 1;
@@ -104,30 +113,24 @@ pub(crate) struct STGMEDIUM {
 
 #[repr(C)]
 pub(crate) struct IDataObject {
-    pub(crate) lpVtbl: *const IDataObjectVtbl,
+    pub(crate) vtbl: *const IDataObjectVtbl,
 }
 
 #[repr(C)]
 pub(crate) struct IDataObjectVtbl {
-    pub(crate) QueryInterface:
-        unsafe extern "system" fn(*mut IDataObject, *const GUID, *mut *mut c_void) -> HRESULT,
-    pub(crate) AddRef: unsafe extern "system" fn(*mut IDataObject) -> u32,
-    pub(crate) Release: unsafe extern "system" fn(*mut IDataObject) -> u32,
+    pub(crate) base: IUnknownVtbl,
     pub(crate) GetData:
         unsafe extern "system" fn(*mut IDataObject, *mut FORMATETC, *mut STGMEDIUM) -> HRESULT,
 }
 
 #[repr(C)]
 pub(crate) struct IDropTarget {
-    pub(crate) lpVtbl: *const IDropTargetVtbl,
+    pub(crate) vtbl: *const IDropTargetVtbl,
 }
 
 #[repr(C)]
 pub(crate) struct IDropTargetVtbl {
-    pub(crate) QueryInterface:
-        unsafe extern "system" fn(*mut IDropTarget, *const GUID, *mut *mut c_void) -> HRESULT,
-    pub(crate) AddRef: unsafe extern "system" fn(*mut IDropTarget) -> u32,
-    pub(crate) Release: unsafe extern "system" fn(*mut IDropTarget) -> u32,
+    pub(crate) base: IUnknownVtbl,
     pub(crate) DragEnter: unsafe extern "system" fn(
         *mut IDropTarget,
         *mut IDataObject,

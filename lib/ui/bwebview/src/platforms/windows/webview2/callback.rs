@@ -9,6 +9,7 @@ use std::ffi::c_void;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU32, Ordering, fence};
 
+use super::super::com::ComPtr;
 use super::headers::*;
 use super::webview::WebviewData;
 
@@ -22,29 +23,22 @@ struct Callback {
     owner: Rc<dyn Any>,
 }
 
-pub(super) struct CallbackHandle<T>(*mut T);
+pub(super) struct CallbackHandle<T>(ComPtr<T>);
 
 impl<T> CallbackHandle<T> {
-    pub(super) fn new<V, O: Any>(vtable: &'static V, iid: GUID, owner: Rc<O>) -> Self {
-        Self(
-            Box::into_raw(Box::new(Callback {
-                vtable: (vtable as *const V).cast(),
-                refs: AtomicU32::new(1),
-                iid,
-                owner,
-            }))
-            .cast(),
-        )
+    /// The vtable must implement T and start with the callback IUnknown methods.
+    pub(super) unsafe fn new<V, O: Any>(vtable: &'static V, iid: GUID, owner: Rc<O>) -> Self {
+        let pointer = Box::into_raw(Box::new(Callback {
+            vtable: (vtable as *const V).cast(),
+            refs: AtomicU32::new(1),
+            iid,
+            owner,
+        }));
+        Self(unsafe { ComPtr::from_raw(pointer.cast()) }.expect("callback allocation is non-null"))
     }
 
     pub(super) const fn as_ptr(&self) -> *mut T {
-        self.0
-    }
-}
-
-impl<T> Drop for CallbackHandle<T> {
-    fn drop(&mut self) {
-        unsafe { release(self.0.cast()) };
+        self.0.as_ptr()
     }
 }
 
@@ -56,7 +50,7 @@ pub(super) unsafe fn state(this: *mut c_void) -> Rc<WebviewData> {
         .expect("wrong callback owner")
 }
 
-pub(super) unsafe extern "system" fn query_interface(
+unsafe extern "system" fn query_interface(
     this: *mut c_void,
     iid: *const GUID,
     object: *mut *mut c_void,
@@ -77,12 +71,12 @@ pub(super) unsafe extern "system" fn query_interface(
     }
 }
 
-pub(super) unsafe extern "system" fn add_ref(this: *mut c_void) -> u32 {
+unsafe extern "system" fn add_ref(this: *mut c_void) -> u32 {
     let callback = unsafe { &*this.cast::<Callback>() };
     callback.refs.fetch_add(1, Ordering::Relaxed) + 1
 }
 
-pub(super) unsafe extern "system" fn release(this: *mut c_void) -> u32 {
+unsafe extern "system" fn release(this: *mut c_void) -> u32 {
     let callback = unsafe { &*this.cast::<Callback>() };
     let remaining = callback.refs.fetch_sub(1, Ordering::Release) - 1;
     if remaining == 0 {
@@ -92,19 +86,11 @@ pub(super) unsafe extern "system" fn release(this: *mut c_void) -> u32 {
     remaining
 }
 
-#[repr(C)]
-struct UnknownVtable {
-    query: unsafe extern "system" fn(*mut c_void, *const GUID, *mut *mut c_void) -> HRESULT,
-    add_ref: unsafe extern "system" fn(*mut c_void) -> u32,
-    release: unsafe extern "system" fn(*mut c_void) -> u32,
-}
-
-pub(super) unsafe fn release_interface<T>(interface: *mut T) {
-    if !interface.is_null() {
-        let vtable = unsafe { *interface.cast::<*const UnknownVtable>() };
-        unsafe { ((*vtable).release)(interface.cast()) };
-    }
-}
+pub(super) const IUNKNOWN: IUnknownVtbl = IUnknownVtbl {
+    QueryInterface: query_interface,
+    AddRef: add_ref,
+    Release: release,
+};
 
 #[cfg(test)]
 mod tests {
@@ -114,12 +100,14 @@ mod tests {
     fn pending_callback_owns_state_until_final_com_release() {
         let owner = Rc::new(42u32);
         let weak = Rc::downgrade(&owner);
-        static VTABLE: [usize; 4] = [0; 4];
-        let callback: CallbackHandle<c_void> = CallbackHandle::new(
-            &VTABLE,
-            IID_ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler,
-            owner,
-        );
+        static VTABLE: IUnknownVtbl = IUNKNOWN;
+        let callback: CallbackHandle<c_void> = unsafe {
+            CallbackHandle::new(
+                &VTABLE,
+                IID_ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler,
+                owner,
+            )
+        };
         let mut object = std::ptr::null_mut();
         unsafe {
             assert_eq!(

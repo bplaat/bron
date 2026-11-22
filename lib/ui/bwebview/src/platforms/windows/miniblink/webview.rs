@@ -13,6 +13,8 @@ use std::rc::Rc;
 use std::sync::OnceLock;
 
 #[cfg(feature = "file_drop")]
+use super::super::com::ComPtr;
+#[cfg(feature = "file_drop")]
 use super::super::file_drop::{
     FileDropTarget, install_file_drop_targets, revoke_file_drop_targets,
 };
@@ -34,9 +36,8 @@ struct WebviewData {
     #[cfg(feature = "custom_protocol")]
     protocols: RefCell<Vec<crate::CustomProtocol>>,
     #[cfg(feature = "file_drop")]
-    #[allow(clippy::vec_box)]
     // Registered COM interfaces must stay at stable addresses.
-    drop_targets: RefCell<Vec<Box<FileDropTarget>>>,
+    drop_targets: RefCell<Vec<ComPtr<FileDropTarget>>>,
 }
 
 pub(crate) struct PlatformWebview(Rc<WebviewData>);

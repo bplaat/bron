@@ -21,52 +21,49 @@ const IID_HANDLER: GUID = GUID {
 };
 
 #[repr(C)]
-struct HandlerVtable {
-    query: unsafe extern "system" fn(*mut c_void, *const GUID, *mut *mut c_void) -> HRESULT,
-    add_ref: unsafe extern "system" fn(*mut c_void) -> u32,
-    release: unsafe extern "system" fn(*mut c_void) -> u32,
-    invoke:
-        unsafe extern "system" fn(*mut c_void, *mut ICoreWebView2Controller, *mut Args) -> HRESULT,
+struct AcceleratorKeyPressedHandlerVtbl {
+    base: IUnknownVtbl,
+    invoke: unsafe extern "system" fn(
+        *mut c_void,
+        *mut ICoreWebView2Controller,
+        *mut AcceleratorKeyPressedArgs,
+    ) -> HRESULT,
 }
 
 #[repr(C)]
-struct Args {
-    vtable: *const ArgsVtable,
+struct AcceleratorKeyPressedArgs {
+    vtable: *const AcceleratorKeyPressedArgsVtbl,
 }
 
 #[repr(C)]
-struct ArgsVtable {
-    unknown: [usize; 3],
-    kind: unsafe extern "system" fn(*mut Args, *mut i32) -> HRESULT,
-    key: unsafe extern "system" fn(*mut Args, *mut u32) -> HRESULT,
-    lparam: unsafe extern "system" fn(*mut Args, *mut i32) -> HRESULT,
-    unused: [usize; 2],
-    handled: unsafe extern "system" fn(*mut Args, BOOL) -> HRESULT,
+struct AcceleratorKeyPressedArgsVtbl {
+    base: IUnknownVtbl,
+    kind: unsafe extern "system" fn(*mut AcceleratorKeyPressedArgs, *mut i32) -> HRESULT,
+    key: unsafe extern "system" fn(*mut AcceleratorKeyPressedArgs, *mut u32) -> HRESULT,
+    lparam: unsafe extern "system" fn(*mut AcceleratorKeyPressedArgs, *mut i32) -> HRESULT,
+    _unused_6_7: [*const c_void; 2],
+    handled: unsafe extern "system" fn(*mut AcceleratorKeyPressedArgs, BOOL) -> HRESULT,
 }
 
-pub(super) unsafe fn register(controller: *mut ICoreWebView2Controller, owner: Rc<WebviewData>) {
-    static VTABLE: HandlerVtable = HandlerVtable {
-        query: callback::query_interface,
-        add_ref: callback::add_ref,
-        release: callback::release,
+pub(super) unsafe fn register(
+    controller: *mut ICoreWebView2Controller,
+    owner: Rc<WebviewData>,
+) -> HRESULT {
+    static VTABLE: AcceleratorKeyPressedHandlerVtbl = AcceleratorKeyPressedHandlerVtbl {
+        base: callback::IUNKNOWN,
         invoke,
     };
-    let handler = CallbackHandle::<c_void>::new(&VTABLE, IID_HANDLER, owner);
+    let handler = unsafe { CallbackHandle::<c_void>::new(&VTABLE, IID_HANDLER, owner) };
     let mut token = EventRegistrationToken { value: 0 };
-    let result = unsafe {
-        ((*(*controller).lpVtbl).add_AcceleratorKeyPressed)(
-            controller,
-            handler.as_ptr(),
-            &mut token,
-        )
-    };
-    assert_eq!(result, S_OK, "could not register WebView2 accelerators");
+    unsafe {
+        ((*(*controller).vtbl).add_AcceleratorKeyPressed)(controller, handler.as_ptr(), &mut token)
+    }
 }
 
 unsafe extern "system" fn invoke(
     this: *mut c_void,
     _: *mut ICoreWebView2Controller,
-    args: *mut Args,
+    args: *mut AcceleratorKeyPressedArgs,
 ) -> HRESULT {
     let owner = unsafe { callback::state(this) };
     if owner.attachment.is_closed() {
