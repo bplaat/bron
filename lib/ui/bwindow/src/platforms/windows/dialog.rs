@@ -13,6 +13,7 @@ use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use std::path::PathBuf;
 use std::ptr::{null, null_mut};
 
+use super::com::ComPtr;
 use super::headers::*;
 
 const FIRST_CUSTOM_BUTTON_ID: i32 = 1000;
@@ -175,23 +176,16 @@ pub(crate) struct PlatformFileDialog;
 impl crate::FileDialogInterface for PlatformFileDialog {
     fn pick_file(dialog: crate::FileDialog<'_>) -> Option<PathBuf> {
         unsafe {
-            let mut raw: *mut IFileOpenDialog = null_mut();
-            if CoCreateInstance(
-                &CLSID_FileOpenDialog,
-                null_mut(),
-                CLSCTX_INPROC_SERVER,
-                &IID_IFileOpenDialog,
-                &mut raw as *mut _ as *mut *mut c_void,
-            ) != S_OK
-            {
+            let Ok(dlg) =
+                create_dialog::<IFileOpenDialog>(&CLSID_FileOpenDialog, &IID_IFileOpenDialog)
+            else {
                 #[cfg(target_vendor = "winxp")]
                 return fallback_file_dialog(dialog, false, false)?
                     .into_iter()
                     .next();
                 #[cfg(not(target_vendor = "winxp"))]
                 return None;
-            }
-            let dlg = &*raw;
+            };
             dlg.SetOptions(FOS_NOCHANGEDIR | FOS_PATHMUSTEXIST | FOS_FILEMUSTEXIST);
             let title = dialog.title.as_deref().map(wide);
             if let Some(ref t) = title {
@@ -199,51 +193,34 @@ impl crate::FileDialogInterface for PlatformFileDialog {
             }
             let dir_item = make_shell_item_from_path(dialog.directory.as_ref());
             if let Some(item) = dir_item {
-                dlg.SetFolder(item);
-                (*item).Release();
+                dlg.SetFolder(item.as_ptr());
             }
             let (specs, _storage) = build_com_filters(&dialog.filters);
             if !specs.is_empty() {
-                dlg.SetFileTypes(specs.len() as u32, specs.as_ptr());
+                dlg.SetFileTypes(&specs);
             }
             let hwnd = dialog
                 .parent
                 .map(|window| window.0.hwnd)
                 .unwrap_or_else(|| GetActiveWindow());
-            let path = if dlg.Show(hwnd) == S_OK {
-                let mut item: *mut IShellItem = null_mut();
-                if dlg.GetResult(&mut item) == S_OK {
-                    let p = shell_item_path(item);
-                    (*item).Release();
-                    p
-                } else {
-                    None
-                }
-            } else {
-                None
-            };
-            dlg.Release();
-            path
+            if dlg.Show(hwnd) != S_OK {
+                return None;
+            }
+            let item = dlg.GetResult().ok()?;
+            shell_item_path(&item)
         }
     }
 
     fn pick_files(dialog: crate::FileDialog<'_>) -> Option<Vec<PathBuf>> {
         unsafe {
-            let mut raw: *mut IFileOpenDialog = null_mut();
-            if CoCreateInstance(
-                &CLSID_FileOpenDialog,
-                null_mut(),
-                CLSCTX_INPROC_SERVER,
-                &IID_IFileOpenDialog,
-                &mut raw as *mut _ as *mut *mut c_void,
-            ) != S_OK
-            {
+            let Ok(dlg) =
+                create_dialog::<IFileOpenDialog>(&CLSID_FileOpenDialog, &IID_IFileOpenDialog)
+            else {
                 #[cfg(target_vendor = "winxp")]
                 return fallback_file_dialog(dialog, false, true);
                 #[cfg(not(target_vendor = "winxp"))]
                 return None;
-            }
-            let dlg = &*raw;
+            };
             dlg.SetOptions(
                 FOS_NOCHANGEDIR | FOS_PATHMUSTEXIST | FOS_FILEMUSTEXIST | FOS_ALLOWMULTISELECT,
             );
@@ -253,68 +230,46 @@ impl crate::FileDialogInterface for PlatformFileDialog {
             }
             let dir_item = make_shell_item_from_path(dialog.directory.as_ref());
             if let Some(item) = dir_item {
-                dlg.SetFolder(item);
-                (*item).Release();
+                dlg.SetFolder(item.as_ptr());
             }
             let (specs, _storage) = build_com_filters(&dialog.filters);
             if !specs.is_empty() {
-                dlg.SetFileTypes(specs.len() as u32, specs.as_ptr());
+                dlg.SetFileTypes(&specs);
             }
             let hwnd = dialog
                 .parent
                 .map(|window| window.0.hwnd)
                 .unwrap_or_else(|| GetActiveWindow());
-            let paths = if dlg.Show(hwnd) == S_OK {
-                let mut items: *mut IShellItemArray = null_mut();
-                if dlg.GetResults(&mut items) == S_OK {
-                    let mut count: u32 = 0;
-                    (*items).GetCount(&mut count);
-                    let mut result = Vec::with_capacity(count as usize);
-                    for i in 0..count {
-                        let mut item: *mut IShellItem = null_mut();
-                        if (*items).GetItemAt(i, &mut item) == S_OK {
-                            if let Some(p) = shell_item_path(item) {
-                                result.push(p);
-                            }
-                            (*item).Release();
-                        }
-                    }
-                    (*items).Release();
-                    if result.is_empty() {
-                        None
-                    } else {
-                        Some(result)
-                    }
-                } else {
-                    None
+            if dlg.Show(hwnd) != S_OK {
+                return None;
+            }
+            let items = dlg.GetResults().ok()?;
+            let mut count = 0;
+            items.GetCount(&mut count);
+            let mut paths = Vec::with_capacity(count as usize);
+            for index in 0..count {
+                if let Ok(item) = items.GetItemAt(index)
+                    && let Some(path) = shell_item_path(&item)
+                {
+                    paths.push(path);
                 }
-            } else {
-                None
-            };
-            dlg.Release();
-            paths
+            }
+            (!paths.is_empty()).then_some(paths)
         }
     }
 
     fn save_file(mut dialog: crate::FileDialog<'_>) -> Option<PathBuf> {
         unsafe {
-            let mut raw: *mut IFileSaveDialog = null_mut();
-            if CoCreateInstance(
-                &CLSID_FileSaveDialog,
-                null_mut(),
-                CLSCTX_INPROC_SERVER,
-                &IID_IFileSaveDialog,
-                &mut raw as *mut _ as *mut *mut c_void,
-            ) != S_OK
-            {
+            let Ok(dlg) =
+                create_dialog::<IFileSaveDialog>(&CLSID_FileSaveDialog, &IID_IFileSaveDialog)
+            else {
                 #[cfg(target_vendor = "winxp")]
                 return fallback_file_dialog(dialog, true, false)?
                     .into_iter()
                     .next();
                 #[cfg(not(target_vendor = "winxp"))]
                 return None;
-            }
-            let dlg = &*raw;
+            };
             dlg.SetOptions(FOS_NOCHANGEDIR | FOS_OVERWRITEPROMPT);
             let title = dialog.title.as_deref().map(wide);
             if let Some(ref t) = title {
@@ -322,8 +277,7 @@ impl crate::FileDialogInterface for PlatformFileDialog {
             }
             let dir_item = make_shell_item_from_path(dialog.directory.as_ref());
             if let Some(item) = dir_item {
-                dlg.SetFolder(item);
-                (*item).Release();
+                dlg.SetFolder(item.as_ptr());
             }
             let filename = dialog.filename.as_deref().map(wide);
             if let Some(ref f) = filename {
@@ -331,7 +285,7 @@ impl crate::FileDialogInterface for PlatformFileDialog {
             }
             let (specs, _storage) = build_com_filters(&dialog.filters);
             if !specs.is_empty() {
-                dlg.SetFileTypes(specs.len() as u32, specs.as_ptr());
+                dlg.SetFileTypes(&specs);
             }
             let default_extension = dialog
                 .filters
@@ -342,26 +296,17 @@ impl crate::FileDialogInterface for PlatformFileDialog {
                 dlg.SetDefaultExtension(e.as_ptr());
             }
             if let Some(customize) = dialog.customize.take() {
-                customize(crate::NativeFileDialog::Win32(raw.cast()));
+                customize(crate::NativeFileDialog::Win32(dlg.as_ptr().cast()));
             }
             let hwnd = dialog
                 .parent
                 .map(|window| window.0.hwnd)
                 .unwrap_or_else(|| GetActiveWindow());
-            let path = if dlg.Show(hwnd) == S_OK {
-                let mut item: *mut IShellItem = null_mut();
-                if dlg.GetResult(&mut item) == S_OK {
-                    let p = shell_item_path(item);
-                    (*item).Release();
-                    p
-                } else {
-                    None
-                }
-            } else {
-                None
-            };
-            dlg.Release();
-            path
+            if dlg.Show(hwnd) != S_OK {
+                return None;
+            }
+            let item = dlg.GetResult().ok()?;
+            shell_item_path(&item)
         }
     }
 }
@@ -391,7 +336,15 @@ fn build_com_filters(
     (specs, storage)
 }
 
-unsafe fn make_shell_item_from_path(path: Option<&PathBuf>) -> Option<*mut IShellItem> {
+unsafe fn create_dialog<T>(class: &GUID, iid: &GUID) -> Result<ComPtr<T>, HRESULT> {
+    unsafe {
+        ComPtr::create(|out: *mut *mut T| {
+            CoCreateInstance(class, null_mut(), CLSCTX_INPROC_SERVER, iid, out.cast())
+        })
+    }
+}
+
+unsafe fn make_shell_item_from_path(path: Option<&PathBuf>) -> Option<ComPtr<IShellItem>> {
     let path = path?;
     let create_item = optional_proc!(
         7,
@@ -404,25 +357,17 @@ unsafe fn make_shell_item_from_path(path: Option<&PathBuf>) -> Option<*mut IShel
         ) -> HRESULT
     )?;
     let w = wide(&path.to_string_lossy());
-    let mut item: *mut IShellItem = null_mut();
-    if unsafe {
-        create_item(
-            w.as_ptr(),
-            null_mut(),
-            &IID_IShellItem,
-            &mut item as *mut _ as *mut *mut c_void,
-        )
-    } == S_OK
-    {
-        Some(item)
-    } else {
-        None
+    unsafe {
+        ComPtr::create(|out: *mut *mut IShellItem| {
+            create_item(w.as_ptr(), null_mut(), &IID_IShellItem, out.cast())
+        })
+        .ok()
     }
 }
 
-unsafe fn shell_item_path(item: *mut IShellItem) -> Option<PathBuf> {
+unsafe fn shell_item_path(item: &IShellItem) -> Option<PathBuf> {
     let mut name = LPWSTR::default();
-    if unsafe { (*item).GetDisplayName(SIGDN_FILESYSPATH, name.as_mut_ptr()) } == S_OK {
+    if unsafe { item.GetDisplayName(SIGDN_FILESYSPATH, name.as_mut_ptr()) } == S_OK {
         Some(PathBuf::from(name.to_string()))
     } else {
         None

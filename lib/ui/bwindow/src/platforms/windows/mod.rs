@@ -51,6 +51,7 @@ macro_rules! optional_proc {
     }};
 }
 
+mod com;
 #[cfg(feature = "dialog")]
 mod dialog;
 mod event_loop;

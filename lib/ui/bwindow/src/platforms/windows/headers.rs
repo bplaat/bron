@@ -13,6 +13,8 @@
 
 use std::ffi::{c_char, c_void};
 
+use super::com::ComPtr;
+
 // MARK: Base types
 pub(crate) type BOOL = i32;
 pub(crate) const TRUE: BOOL = 1;
@@ -627,6 +629,14 @@ pub(crate) struct GUID {
     pub(crate) data4: [u8; 8],
 }
 
+#[repr(C)]
+pub(super) struct IUnknownVtbl {
+    QueryInterface:
+        unsafe extern "system" fn(*mut c_void, *const GUID, *mut *mut c_void) -> HRESULT,
+    pub(super) AddRef: unsafe extern "system" fn(*mut c_void) -> u32,
+    pub(super) Release: unsafe extern "system" fn(*mut c_void) -> u32,
+}
+
 pub(crate) const S_OK: HRESULT = 0;
 
 #[link(name = "ole32")]
@@ -736,14 +746,7 @@ pub(crate) struct IShellItem {
 impl IShellItem {
     /// # Safety
     /// The interface must be live and usable on the current COM apartment.
-    /// The caller must own a reference and must not use it after releasing it.
-    pub(crate) unsafe fn Release(&self) -> u32 {
-        unsafe { ((*self.vtbl).Release)(self as *const _ as *mut _) }
-    }
-
-    /// # Safety
-    /// The interface must be live and usable on the current COM apartment.
-    /// Pointer arguments and buffer lengths must satisfy the native GetDisplayName contract.
+    /// ppszName must point to writable storage. On success, free the name with CoTaskMemFree.
     pub(crate) unsafe fn GetDisplayName(&self, sigdn: i32, ppszName: *mut *mut u16) -> HRESULT {
         unsafe { ((*self.vtbl).GetDisplayName)(self as *const _ as *mut _, sigdn, ppszName) }
     }
@@ -751,11 +754,10 @@ impl IShellItem {
 
 #[repr(C)]
 pub(crate) struct IShellItemVtbl {
-    _unk: [usize; 2], // QueryInterface, AddRef
-    pub(crate) Release: unsafe extern "system" fn(*mut c_void) -> u32,
-    _bind_parent: [usize; 2], // BindToHandler, GetParent
+    base: IUnknownVtbl,
+    _unused_3_4: [*const c_void; 2], // BindToHandler, GetParent
     pub(crate) GetDisplayName:
-        unsafe extern "system" fn(*mut c_void, i32, *mut *mut u16) -> HRESULT,
+        unsafe extern "system" fn(*mut IShellItem, i32, *mut *mut u16) -> HRESULT,
     // GetAttributes, Compare
 }
 
@@ -768,232 +770,170 @@ pub(crate) struct IShellItemArray {
 impl IShellItemArray {
     /// # Safety
     /// The interface must be live and usable on the current COM apartment.
-    /// The caller must own a reference and must not use it after releasing it.
-    pub(crate) unsafe fn Release(&self) -> u32 {
-        unsafe { ((*self.vtbl).Release)(self as *const _ as *mut _) }
-    }
-
-    /// # Safety
-    /// The interface must be live and usable on the current COM apartment.
-    /// Pointer arguments and buffer lengths must satisfy the native GetCount contract.
+    /// pdwNumItems must point to writable u32 storage.
     pub(crate) unsafe fn GetCount(&self, pdwNumItems: *mut u32) -> HRESULT {
         unsafe { ((*self.vtbl).GetCount)(self as *const _ as *mut _, pdwNumItems) }
     }
 
+    /// Returns an owned reference to the indexed item.
+    ///
     /// # Safety
     /// The interface must be live and usable on the current COM apartment.
-    /// Pointer arguments and buffer lengths must satisfy the native GetItemAt contract.
-    pub(crate) unsafe fn GetItemAt(&self, dwIndex: u32, ppsi: *mut *mut IShellItem) -> HRESULT {
-        unsafe { ((*self.vtbl).GetItemAt)(self as *const _ as *mut _, dwIndex, ppsi) }
+    pub(crate) unsafe fn GetItemAt(&self, index: u32) -> Result<ComPtr<IShellItem>, HRESULT> {
+        unsafe {
+            ComPtr::create(|out| {
+                ((*self.vtbl).GetItemAt)((self as *const Self).cast_mut(), index, out)
+            })
+        }
     }
 }
 
 #[repr(C)]
 pub(crate) struct IShellItemArrayVtbl {
-    _unk: [usize; 2], // QueryInterface, AddRef
-    pub(crate) Release: unsafe extern "system" fn(*mut c_void) -> u32,
-    _mid: [usize; 4], // BindToHandler, GetPropertyStore, GetPropertyDescriptionList, GetAttributes
-    pub(crate) GetCount: unsafe extern "system" fn(*mut c_void, *mut u32) -> HRESULT,
+    base: IUnknownVtbl,
+    _unused_3_6: [*const c_void; 4], // BindToHandler, GetPropertyStore, GetPropertyDescriptionList, GetAttributes
+    pub(crate) GetCount: unsafe extern "system" fn(*mut IShellItemArray, *mut u32) -> HRESULT,
     pub(crate) GetItemAt:
-        unsafe extern "system" fn(*mut c_void, u32, *mut *mut IShellItem) -> HRESULT,
+        unsafe extern "system" fn(*mut IShellItemArray, u32, *mut *mut IShellItem) -> HRESULT,
     // EnumItems
 }
 
-// IFileOpenDialog
 #[repr(C)]
-pub(crate) struct IFileOpenDialog {
-    pub(crate) vtbl: *const IFileOpenDialogVtbl,
+pub(crate) struct IModalWindow {
+    vtbl: *const IModalWindowVtbl,
 }
 
-impl IFileOpenDialog {
-    /// # Safety
-    /// The interface must be live and usable on the current COM apartment.
-    /// The caller must own a reference and must not use it after releasing it.
-    pub(crate) unsafe fn Release(&self) -> u32 {
-        unsafe { ((*self.vtbl).Release)(self as *const _ as *mut _) }
-    }
+#[repr(C)]
+struct IModalWindowVtbl {
+    base: IUnknownVtbl,
+    Show: unsafe extern "system" fn(*mut IModalWindow, HWND) -> HRESULT,
+}
 
-    /// # Safety
-    /// The interface must be live and usable on the current COM apartment.
-    /// Pointer arguments and buffer lengths must satisfy the native Show contract.
-    pub(crate) unsafe fn Show(&self, hwnd: HWND) -> HRESULT {
-        unsafe { ((*self.vtbl).Show)(self as *const _ as *mut _, hwnd) }
-    }
-
-    /// # Safety
-    /// The interface must be live and usable on the current COM apartment.
-    /// Pointer arguments and buffer lengths must satisfy the native SetFileTypes contract.
-    pub(crate) unsafe fn SetFileTypes(
-        &self,
-        cFileTypes: u32,
-        rgFilterSpec: *const COMDLG_FILTERSPEC,
-    ) -> HRESULT {
-        unsafe { ((*self.vtbl).SetFileTypes)(self as *const _ as *mut _, cFileTypes, rgFilterSpec) }
-    }
-
-    /// # Safety
-    /// The interface must be live and usable on the current COM apartment.
-    /// Pointer arguments and buffer lengths must satisfy the native SetOptions contract.
-    pub(crate) unsafe fn SetOptions(&self, fos: u32) -> HRESULT {
-        unsafe { ((*self.vtbl).SetOptions)(self as *const _ as *mut _, fos) }
-    }
-
-    /// # Safety
-    /// The interface must be live and usable on the current COM apartment.
-    /// Pointer arguments and buffer lengths must satisfy the native SetFolder contract.
-    pub(crate) unsafe fn SetFolder(&self, psi: *mut IShellItem) -> HRESULT {
-        unsafe { ((*self.vtbl).SetFolder)(self as *const _ as *mut _, psi) }
-    }
-
-    /// # Safety
-    /// The interface must be live and usable on the current COM apartment.
-    /// Pointer arguments and buffer lengths must satisfy the native SetTitle contract.
-    pub(crate) unsafe fn SetTitle(&self, pszTitle: *const u16) -> HRESULT {
-        unsafe { ((*self.vtbl).SetTitle)(self as *const _ as *mut _, pszTitle) }
-    }
-
-    /// # Safety
-    /// The interface must be live and usable on the current COM apartment.
-    /// Pointer arguments and buffer lengths must satisfy the native GetResult contract.
-    pub(crate) unsafe fn GetResult(&self, ppsi: *mut *mut IShellItem) -> HRESULT {
-        unsafe { ((*self.vtbl).GetResult)(self as *const _ as *mut _, ppsi) }
-    }
-
-    /// # Safety
-    /// The interface must be live and usable on the current COM apartment.
-    /// Pointer arguments and buffer lengths must satisfy the native GetResults contract.
-    pub(crate) unsafe fn GetResults(&self, ppsia: *mut *mut IShellItemArray) -> HRESULT {
-        unsafe { ((*self.vtbl).GetResults)(self as *const _ as *mut _, ppsia) }
+impl IModalWindow {
+    /// The dialog and parent window must be live on the current thread.
+    pub(crate) unsafe fn Show(&self, parent: HWND) -> HRESULT {
+        unsafe { ((*self.vtbl).Show)((self as *const Self).cast_mut(), parent) }
     }
 }
 
 #[repr(C)]
-pub(crate) struct IFileOpenDialogVtbl {
-    _unk: [usize; 2], // QueryInterface, AddRef
-    pub(crate) Release: unsafe extern "system" fn(*mut c_void) -> u32,
-    // IModalWindow
-    pub(crate) Show: unsafe extern "system" fn(*mut c_void, HWND) -> HRESULT,
-    // IFileDialog
-    pub(crate) SetFileTypes:
-        unsafe extern "system" fn(*mut c_void, u32, *const COMDLG_FILTERSPEC) -> HRESULT,
-    _type_idx: [usize; 4], // SetFileTypeIndex, GetFileTypeIndex, Advise, Unadvise
-    pub(crate) SetOptions: unsafe extern "system" fn(*mut c_void, u32) -> HRESULT,
-    _get_opts_def: [usize; 2], // GetOptions, SetDefaultFolder
-    pub(crate) SetFolder: unsafe extern "system" fn(*mut c_void, *mut IShellItem) -> HRESULT,
-    _get_folder_sel: [usize; 2], // GetFolder, GetCurrentSelection
-    _set_filename: usize,        // SetFileName
-    _get_filename: usize,        // GetFileName
-    pub(crate) SetTitle: unsafe extern "system" fn(*mut c_void, *const u16) -> HRESULT,
-    _labels: [usize; 2], // SetOkButtonLabel, SetFileNameLabel
-    pub(crate) GetResult: unsafe extern "system" fn(*mut c_void, *mut *mut IShellItem) -> HRESULT,
-    _add_place: usize,      // AddPlace
-    _def_ext: usize,        // SetDefaultExtension
-    _close_etc: [usize; 4], // Close, SetClientGuid, ClearClientData, SetFilter
-    // IFileOpenDialog
-    pub(crate) GetResults:
-        unsafe extern "system" fn(*mut c_void, *mut *mut IShellItemArray) -> HRESULT,
-    // GetSelectedItems
+pub(crate) struct IFileDialog {
+    vtbl: *const IFileDialogVtbl,
 }
 
-// IFileSaveDialog
 #[repr(C)]
-pub(crate) struct IFileSaveDialog {
-    pub(crate) vtbl: *const IFileSaveDialogVtbl,
+struct IFileDialogVtbl {
+    base: IModalWindowVtbl,
+    SetFileTypes:
+        unsafe extern "system" fn(*mut IFileDialog, u32, *const COMDLG_FILTERSPEC) -> HRESULT,
+    _unused_5_8: [*const c_void; 4],
+    SetOptions: unsafe extern "system" fn(*mut IFileDialog, u32) -> HRESULT,
+    _unused_10_11: [*const c_void; 2],
+    SetFolder: unsafe extern "system" fn(*mut IFileDialog, *mut IShellItem) -> HRESULT,
+    _unused_13_14: [*const c_void; 2],
+    SetFileName: unsafe extern "system" fn(*mut IFileDialog, *const u16) -> HRESULT,
+    _unused_16: *const c_void,
+    SetTitle: unsafe extern "system" fn(*mut IFileDialog, *const u16) -> HRESULT,
+    _unused_18_19: [*const c_void; 2],
+    GetResult: unsafe extern "system" fn(*mut IFileDialog, *mut *mut IShellItem) -> HRESULT,
+    _unused_21: *const c_void,
+    SetDefaultExtension: unsafe extern "system" fn(*mut IFileDialog, *const u16) -> HRESULT,
+    _unused_23_26: [*const c_void; 4],
 }
 
-impl IFileSaveDialog {
-    /// # Safety
-    /// The interface must be live and usable on the current COM apartment.
-    /// The caller must own a reference and must not use it after releasing it.
-    pub(crate) unsafe fn Release(&self) -> u32 {
-        unsafe { ((*self.vtbl).Release)(self as *const _ as *mut _) }
-    }
-
-    /// # Safety
-    /// The interface must be live and usable on the current COM apartment.
-    /// Pointer arguments and buffer lengths must satisfy the native Show contract.
-    pub(crate) unsafe fn Show(&self, hwnd: HWND) -> HRESULT {
-        unsafe { ((*self.vtbl).Show)(self as *const _ as *mut _, hwnd) }
-    }
-
-    /// # Safety
-    /// The interface must be live and usable on the current COM apartment.
-    /// Pointer arguments and buffer lengths must satisfy the native SetFileTypes contract.
-    pub(crate) unsafe fn SetFileTypes(
-        &self,
-        cFileTypes: u32,
-        rgFilterSpec: *const COMDLG_FILTERSPEC,
-    ) -> HRESULT {
-        unsafe { ((*self.vtbl).SetFileTypes)(self as *const _ as *mut _, cFileTypes, rgFilterSpec) }
-    }
-
-    /// # Safety
-    /// The interface must be live and usable on the current COM apartment.
-    /// Pointer arguments and buffer lengths must satisfy the native SetOptions contract.
-    pub(crate) unsafe fn SetOptions(&self, fos: u32) -> HRESULT {
-        unsafe { ((*self.vtbl).SetOptions)(self as *const _ as *mut _, fos) }
-    }
-
-    /// # Safety
-    /// The interface must be live and usable on the current COM apartment.
-    /// Pointer arguments and buffer lengths must satisfy the native SetFolder contract.
-    pub(crate) unsafe fn SetFolder(&self, psi: *mut IShellItem) -> HRESULT {
-        unsafe { ((*self.vtbl).SetFolder)(self as *const _ as *mut _, psi) }
-    }
-
-    /// # Safety
-    /// The interface must be live and usable on the current COM apartment.
-    /// Pointer arguments and buffer lengths must satisfy the native SetFileName contract.
-    pub(crate) unsafe fn SetFileName(&self, pszName: *const u16) -> HRESULT {
-        unsafe { ((*self.vtbl).SetFileName)(self as *const _ as *mut _, pszName) }
-    }
-
-    /// # Safety
-    /// The interface must be live and usable on the current COM apartment.
-    /// Pointer arguments and buffer lengths must satisfy the native SetTitle contract.
-    pub(crate) unsafe fn SetTitle(&self, pszTitle: *const u16) -> HRESULT {
-        unsafe { ((*self.vtbl).SetTitle)(self as *const _ as *mut _, pszTitle) }
-    }
-
-    /// # Safety
-    /// The interface must be live and usable on the current COM apartment.
-    /// Pointer arguments and buffer lengths must satisfy the native SetDefaultExtension contract.
-    pub(crate) unsafe fn SetDefaultExtension(&self, pszDefaultExtension: *const u16) -> HRESULT {
+impl IFileDialog {
+    pub(crate) unsafe fn SetFileTypes(&self, filters: &[COMDLG_FILTERSPEC]) -> HRESULT {
         unsafe {
-            ((*self.vtbl).SetDefaultExtension)(self as *const _ as *mut _, pszDefaultExtension)
+            ((*self.vtbl).SetFileTypes)(
+                (self as *const Self).cast_mut(),
+                filters.len() as u32,
+                filters.as_ptr(),
+            )
         }
     }
 
-    /// # Safety
-    /// The interface must be live and usable on the current COM apartment.
-    /// Pointer arguments and buffer lengths must satisfy the native GetResult contract.
-    pub(crate) unsafe fn GetResult(&self, ppsi: *mut *mut IShellItem) -> HRESULT {
-        unsafe { ((*self.vtbl).GetResult)(self as *const _ as *mut _, ppsi) }
+    pub(crate) unsafe fn SetOptions(&self, options: u32) -> HRESULT {
+        unsafe { ((*self.vtbl).SetOptions)((self as *const Self).cast_mut(), options) }
+    }
+
+    pub(crate) unsafe fn SetFolder(&self, item: *mut IShellItem) -> HRESULT {
+        unsafe { ((*self.vtbl).SetFolder)((self as *const Self).cast_mut(), item) }
+    }
+
+    pub(crate) unsafe fn SetFileName(&self, name: *const u16) -> HRESULT {
+        unsafe { ((*self.vtbl).SetFileName)((self as *const Self).cast_mut(), name) }
+    }
+
+    pub(crate) unsafe fn SetTitle(&self, title: *const u16) -> HRESULT {
+        unsafe { ((*self.vtbl).SetTitle)((self as *const Self).cast_mut(), title) }
+    }
+
+    pub(crate) unsafe fn GetResult(&self) -> Result<ComPtr<IShellItem>, HRESULT> {
+        unsafe {
+            ComPtr::create(|out| ((*self.vtbl).GetResult)((self as *const Self).cast_mut(), out))
+        }
+    }
+
+    pub(crate) unsafe fn SetDefaultExtension(&self, extension: *const u16) -> HRESULT {
+        unsafe { ((*self.vtbl).SetDefaultExtension)((self as *const Self).cast_mut(), extension) }
+    }
+}
+
+impl std::ops::Deref for IFileDialog {
+    type Target = IModalWindow;
+
+    fn deref(&self) -> &Self::Target {
+        // IModalWindow is the vtable prefix of IFileDialog.
+        unsafe { &*(self as *const Self).cast() }
     }
 }
 
 #[repr(C)]
-pub(crate) struct IFileSaveDialogVtbl {
-    _unk: [usize; 2], // QueryInterface, AddRef
-    pub(crate) Release: unsafe extern "system" fn(*mut c_void) -> u32,
-    // IModalWindow
-    pub(crate) Show: unsafe extern "system" fn(*mut c_void, HWND) -> HRESULT,
-    // IFileDialog
-    pub(crate) SetFileTypes:
-        unsafe extern "system" fn(*mut c_void, u32, *const COMDLG_FILTERSPEC) -> HRESULT,
-    _type_idx: [usize; 4], // SetFileTypeIndex, GetFileTypeIndex, Advise, Unadvise
-    pub(crate) SetOptions: unsafe extern "system" fn(*mut c_void, u32) -> HRESULT,
-    _get_opts_def: [usize; 2], // GetOptions, SetDefaultFolder
-    pub(crate) SetFolder: unsafe extern "system" fn(*mut c_void, *mut IShellItem) -> HRESULT,
-    _get_folder_sel: [usize; 2], // GetFolder, GetCurrentSelection
-    pub(crate) SetFileName: unsafe extern "system" fn(*mut c_void, *const u16) -> HRESULT,
-    _get_filename: usize, // GetFileName
-    pub(crate) SetTitle: unsafe extern "system" fn(*mut c_void, *const u16) -> HRESULT,
-    _labels: [usize; 2], // SetOkButtonLabel, SetFileNameLabel
-    pub(crate) GetResult: unsafe extern "system" fn(*mut c_void, *mut *mut IShellItem) -> HRESULT,
-    _add_place: usize, // AddPlace
-    pub(crate) SetDefaultExtension: unsafe extern "system" fn(*mut c_void, *const u16) -> HRESULT,
-    // Close, SetClientGuid, ClearClientData, SetFilter, then IFileSaveDialog methods
+pub(crate) struct IFileOpenDialog {
+    vtbl: *const IFileOpenDialogVtbl,
+}
+
+#[repr(C)]
+struct IFileOpenDialogVtbl {
+    base: IFileDialogVtbl,
+    GetResults:
+        unsafe extern "system" fn(*mut IFileOpenDialog, *mut *mut IShellItemArray) -> HRESULT,
+}
+
+impl IFileOpenDialog {
+    pub(crate) unsafe fn GetResults(&self) -> Result<ComPtr<IShellItemArray>, HRESULT> {
+        unsafe {
+            ComPtr::create(|out| ((*self.vtbl).GetResults)((self as *const Self).cast_mut(), out))
+        }
+    }
+}
+
+impl std::ops::Deref for IFileOpenDialog {
+    type Target = IFileDialog;
+
+    fn deref(&self) -> &Self::Target {
+        // IFileDialog is the vtable prefix of IFileOpenDialog.
+        unsafe { &*(self as *const Self).cast() }
+    }
+}
+
+#[repr(C)]
+pub(crate) struct IFileSaveDialog {
+    vtbl: *const IFileSaveDialogVtbl,
+}
+
+#[repr(C)]
+struct IFileSaveDialogVtbl {
+    base: IFileDialogVtbl,
+}
+
+impl std::ops::Deref for IFileSaveDialog {
+    type Target = IFileDialog;
+
+    fn deref(&self) -> &Self::Target {
+        // IFileDialog is the vtable prefix of IFileSaveDialog.
+        unsafe { &*(self as *const Self).cast() }
+    }
 }
 
 // MARK: ITaskbarList3
@@ -1011,25 +951,53 @@ pub(crate) const IID_TASKBAR_LIST3: GUID = GUID {
 };
 
 #[repr(C)]
-pub(crate) struct TaskbarList3 {
-    pub(crate) vtable: *const TaskbarList3Vtable,
+pub(crate) struct ITaskbarList3 {
+    pub(crate) vtbl: *const ITaskbarList3Vtbl,
 }
 
 #[repr(C)]
-pub(crate) struct TaskbarList3Vtable {
-    query_interface: usize,
-    add_ref: usize,
-    pub(crate) release: unsafe extern "system" fn(*mut TaskbarList3) -> u32,
-    pub(crate) hr_init: unsafe extern "system" fn(*mut TaskbarList3) -> HRESULT,
-    add_tab: usize,
-    delete_tab: usize,
-    activate_tab: usize,
-    set_active_alt: usize,
-    mark_fullscreen_window: usize,
-    pub(crate) set_progress_value:
-        unsafe extern "system" fn(*mut TaskbarList3, HWND, u64, u64) -> HRESULT,
-    pub(crate) set_progress_state:
-        unsafe extern "system" fn(*mut TaskbarList3, HWND, i32) -> HRESULT,
+struct ITaskbarListVtbl {
+    base: IUnknownVtbl,
+    hr_init: unsafe extern "system" fn(*mut ITaskbarList3) -> HRESULT,
+    _unused_4_7: [*const c_void; 4],
+}
+
+#[repr(C)]
+struct ITaskbarList2Vtbl {
+    base: ITaskbarListVtbl,
+    _unused_8: *const c_void,
+}
+
+#[repr(C)]
+pub(crate) struct ITaskbarList3Vtbl {
+    base: ITaskbarList2Vtbl,
+    set_progress_value: unsafe extern "system" fn(*mut ITaskbarList3, HWND, u64, u64) -> HRESULT,
+    set_progress_state: unsafe extern "system" fn(*mut ITaskbarList3, HWND, i32) -> HRESULT,
+}
+
+impl ITaskbarList3 {
+    pub(crate) unsafe fn init(&self) -> Result<(), HRESULT> {
+        super::com::check(unsafe {
+            ((*self.vtbl).base.base.hr_init)((self as *const Self).cast_mut())
+        })
+    }
+
+    pub(crate) unsafe fn set_progress_value(&self, window: HWND, value: u64, total: u64) {
+        unsafe {
+            ((*self.vtbl).set_progress_value)(
+                (self as *const Self).cast_mut(),
+                window,
+                value,
+                total,
+            )
+        };
+    }
+
+    pub(crate) unsafe fn set_progress_state(&self, window: HWND, state: i32) {
+        unsafe {
+            ((*self.vtbl).set_progress_state)((self as *const Self).cast_mut(), window, state)
+        };
+    }
 }
 
 /// Encode a string as a null-terminated UTF-16 string.

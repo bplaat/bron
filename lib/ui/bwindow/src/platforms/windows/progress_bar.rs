@@ -4,9 +4,9 @@
  * SPDX-License-Identifier: MIT
  */
 
-use std::ffi::c_void;
 use std::ptr::null_mut;
 
+use super::com::ComPtr;
 use super::headers::*;
 use crate::WindowsProgressBarState;
 
@@ -42,22 +42,21 @@ impl ProgressBar {
 
 // Shows, updates or hides the taskbar button progress of a window
 fn set_progress_bar(hwnd: HWND, progress: Option<f32>, state: WindowsProgressBarState) {
-    let mut taskbar = null_mut::<TaskbarList3>();
-    let result = unsafe {
-        CoCreateInstance(
-            &CLSID_TASKBAR_LIST,
-            null_mut(),
-            CLSCTX_INPROC_SERVER,
-            &IID_TASKBAR_LIST3,
-            &mut taskbar as *mut _ as *mut *mut c_void,
-        )
-    };
-    if result < 0 || taskbar.is_null() {
+    let Ok(taskbar) = (unsafe {
+        ComPtr::create(|out: *mut *mut ITaskbarList3| {
+            CoCreateInstance(
+                &CLSID_TASKBAR_LIST,
+                null_mut(),
+                CLSCTX_INPROC_SERVER,
+                &IID_TASKBAR_LIST3,
+                out.cast(),
+            )
+        })
+    }) else {
         return;
-    }
+    };
     unsafe {
-        let vtable = &*(*taskbar).vtable;
-        if (vtable.hr_init)(taskbar) >= 0 {
+        if taskbar.init().is_ok() {
             let taskbar_state = match (progress, state) {
                 (None, _) => 0,
                 (Some(_), WindowsProgressBarState::Normal) => 2,
@@ -70,10 +69,9 @@ fn set_progress_bar(hwnd: HWND, progress: Option<f32>, state: WindowsProgressBar
                 matches!(state, WindowsProgressBarState::Indeterminate),
             ) {
                 let progress = progress.clamp(0.0, 1.0);
-                _ = (vtable.set_progress_value)(taskbar, hwnd, (progress * 1000.0) as u64, 1000);
+                taskbar.set_progress_value(hwnd, (progress * 1000.0) as u64, 1000);
             }
-            _ = (vtable.set_progress_state)(taskbar, hwnd, taskbar_state);
+            taskbar.set_progress_state(hwnd, taskbar_state);
         }
-        _ = (vtable.release)(taskbar);
     }
 }
