@@ -9,7 +9,7 @@
 use bcanvas::{CanvasRenderingContext2d, OffscreenCanvas};
 
 use super::{Command, Error, Path, PathOperation, Style, Subpath, parse};
-use crate::draw::{RenderMode, add_path, fill, new_canvas, stroke};
+use crate::draw::{RenderMode, fill, new_canvas, path2d, stroke};
 use crate::{
     Color, FillRule, GradientStop, LineCap, LineJoin, Paint, PathSegment, Point, SpreadMethod,
     StrokeStyle, Transform, VectorDecodeError, append_arc,
@@ -41,20 +41,20 @@ fn draw(
     commands: &[Command],
 ) -> Result<(), VectorDecodeError> {
     let mut segments = 0_usize;
-    let mut add = |context: &mut CanvasRenderingContext2d<'_>, path: &[PathSegment]| {
+    let mut add = |path: &[PathSegment]| {
         segments += path.len();
         if segments > MAX_SEGMENTS {
             return Err(VectorDecodeError::ResourceLimit);
         }
-        add_path(context, path);
-        Ok(())
+        Ok(path2d(path))
     };
     for command in commands {
         match command {
             Command::Fill { path, style } => {
-                add(context, &convert_path(path)?)?;
+                let path = add(&convert_path(path)?)?;
                 fill(
                     context,
+                    &path,
                     &convert_paint(*style),
                     FillRule::EvenOdd,
                     RenderMode::Normal,
@@ -67,12 +67,19 @@ fn draw(
             } => {
                 let paint = convert_paint(*style);
                 if has_variable_width(path, *line_width) {
-                    add(context, &TinyVgStrokeBuilder::build(path, *line_width)?)?;
-                    fill(context, &paint, FillRule::NonZero, RenderMode::Normal);
+                    let outline = add(&TinyVgStrokeBuilder::build(path, *line_width)?)?;
+                    fill(
+                        context,
+                        &outline,
+                        &paint,
+                        FillRule::NonZero,
+                        RenderMode::Normal,
+                    );
                 } else {
-                    add(context, &convert_path(path)?)?;
+                    let path = add(&convert_path(path)?)?;
                     stroke(
                         context,
+                        &path,
                         &paint,
                         &tinyvg_stroke(*line_width),
                         RenderMode::Normal,
@@ -85,20 +92,28 @@ fn draw(
                 line_style,
                 line_width,
             } => {
-                add(context, &convert_path(path)?)?;
+                let shape = add(&convert_path(path)?)?;
                 fill(
                     context,
+                    &shape,
                     &convert_paint(*fill_style),
                     FillRule::EvenOdd,
                     RenderMode::Normal,
                 );
                 let paint = convert_paint(*line_style);
                 if has_variable_width(path, *line_width) {
-                    add(context, &TinyVgStrokeBuilder::build(path, *line_width)?)?;
-                    fill(context, &paint, FillRule::NonZero, RenderMode::Normal);
+                    let outline = add(&TinyVgStrokeBuilder::build(path, *line_width)?)?;
+                    fill(
+                        context,
+                        &outline,
+                        &paint,
+                        FillRule::NonZero,
+                        RenderMode::Normal,
+                    );
                 } else {
                     stroke(
                         context,
+                        &shape,
                         &paint,
                         &tinyvg_stroke(*line_width),
                         RenderMode::Normal,

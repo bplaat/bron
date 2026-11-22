@@ -9,7 +9,7 @@
 use bcanvas::{
     CanvasGradient, CanvasRenderingContext2d, CanvasStyle, Color as CanvasColor,
     CompositeOperation, FillRule as CanvasFillRule, GradientSpread, LineCap as CanvasLineCap,
-    LineJoin as CanvasLineJoin, OffscreenCanvas,
+    LineJoin as CanvasLineJoin, OffscreenCanvas, Path2D,
 };
 
 use crate::{
@@ -40,14 +40,14 @@ pub(crate) fn set_transform(context: &mut CanvasRenderingContext2d<'_>, transfor
     context.set_transform(a as f32, b as f32, c as f32, d as f32, e as f32, f as f32);
 }
 
-/// Replaces the current path.
-pub(crate) fn add_path(context: &mut CanvasRenderingContext2d<'_>, path: &[PathSegment]) {
-    context.begin_path();
+/// The canvas path of path segments.
+pub(crate) fn path2d(path: &[PathSegment]) -> Path2D {
+    let mut canvas_path = Path2D::new();
     for segment in path {
         match *segment {
-            PathSegment::MoveTo(to) => context.move_to(to.x as f32, to.y as f32),
-            PathSegment::LineTo(to) => context.line_to(to.x as f32, to.y as f32),
-            PathSegment::QuadraticTo { control, to } => context.quadratic_curve_to(
+            PathSegment::MoveTo(to) => canvas_path.move_to(to.x as f32, to.y as f32),
+            PathSegment::LineTo(to) => canvas_path.line_to(to.x as f32, to.y as f32),
+            PathSegment::QuadraticTo { control, to } => canvas_path.quadratic_curve_to(
                 control.x as f32,
                 control.y as f32,
                 to.x as f32,
@@ -57,7 +57,7 @@ pub(crate) fn add_path(context: &mut CanvasRenderingContext2d<'_>, path: &[PathS
                 control_0,
                 control_1,
                 to,
-            } => context.bezier_curve_to(
+            } => canvas_path.bezier_curve_to(
                 control_0.x as f32,
                 control_0.y as f32,
                 control_1.x as f32,
@@ -65,26 +65,29 @@ pub(crate) fn add_path(context: &mut CanvasRenderingContext2d<'_>, path: &[PathS
                 to.x as f32,
                 to.y as f32,
             ),
-            PathSegment::Close => context.close_path(),
+            PathSegment::Close => canvas_path.close_path(),
         }
     }
+    canvas_path
 }
 
-/// Fills the current path.
+/// Fills a path.
 pub(crate) fn fill(
     context: &mut CanvasRenderingContext2d<'_>,
+    path: &Path2D,
     paint: &Paint,
     rule: FillRule,
     mode: RenderMode,
 ) {
     set_mask_composite(context, mode);
     context.set_fill_style(style(paint, mode));
-    context.fill_with(fill_rule(rule));
+    context.fill_path_with(path, fill_rule(rule));
 }
 
-/// Strokes the current path.
+/// Strokes a path.
 pub(crate) fn stroke(
     context: &mut CanvasRenderingContext2d<'_>,
+    path: &Path2D,
     paint: &Paint,
     stroke: &StrokeStyle,
     mode: RenderMode,
@@ -113,7 +116,7 @@ pub(crate) fn stroke(
     context.set_line_dash(&dash);
     context.set_line_dash_offset(stroke.dash_offset as f32);
     context.set_stroke_style(style(paint, mode));
-    context.stroke();
+    context.stroke_path(path);
 }
 
 /// Clips to a path in a transform.
@@ -124,8 +127,7 @@ pub(crate) fn clip(
     rule: FillRule,
 ) {
     set_transform(context, transform);
-    add_path(context, path);
-    context.clip_with(fill_rule(rule));
+    context.clip_path_with(&path2d(path), fill_rule(rule));
 }
 
 // Luminance mask paints are their coverage, so later shapes replace the coverage below them,

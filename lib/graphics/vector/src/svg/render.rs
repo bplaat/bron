@@ -19,7 +19,7 @@ use super::values::{
 };
 use super::xml::XmlDocument;
 use super::{MAX_ITEMS, MAX_SOURCE_BYTES};
-use crate::draw::{self, RenderMode, add_path, composite_operation, new_canvas, set_transform};
+use crate::draw::{self, RenderMode, composite_operation, new_canvas, path2d, set_transform};
 use crate::{
     BlendMode, FillRule, MaskType, Paint, PathSegment, Point, Rect, Size, StrokeStyle, Transform,
     VectorDecodeError, path_bounds,
@@ -511,8 +511,9 @@ impl<'document, 'source> Composer<'document, 'source> {
         child_viewport: Size,
     ) -> Result<(), VectorDecodeError> {
         if let Some(shape) = shape {
-            // The path stays current until markers draw their own.
+            // The transform stays current until markers draw with their own.
             let mut current = false;
+            let mut path = None;
             for layer in style.paint_order {
                 let paint = match layer {
                     PaintLayer::Fill => shape.fill.as_ref(),
@@ -536,16 +537,16 @@ impl<'document, 'source> Composer<'document, 'source> {
                 };
                 if !current {
                     set_transform(context, transform);
-                    add_path(context, &shape.path);
                     if self.measuring > 0 {
                         self.drawn.push((shape.bounds, transform));
                     }
                     current = true;
                 }
+                let path = path.get_or_insert_with(|| path2d(&shape.path));
                 if let (PaintLayer::Stroke, Some((_, stroke))) = (layer, &shape.stroke) {
-                    draw::stroke(context, paint, stroke, self.mode);
+                    draw::stroke(context, path, paint, stroke, self.mode);
                 } else {
-                    draw::fill(context, paint, style.fill_rule, self.mode);
+                    draw::fill(context, path, paint, style.fill_rule, self.mode);
                 }
             }
         }
@@ -596,7 +597,6 @@ impl<'document, 'source> Composer<'document, 'source> {
         for clip in clips.iter().chain(mask.map(|mask| &mask.region)) {
             draw::clip(context, &clip.path, clip.transform, clip.rule);
         }
-        context.begin_path();
         context.set_global_alpha(style.opacity as f32);
         context.set_global_composite_operation(composite_operation(style.blend_mode));
         let layer = mask.is_some() || style.opacity < 1.0 || style.isolated;
