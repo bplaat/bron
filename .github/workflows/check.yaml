@@ -168,6 +168,10 @@ jobs:
           sudo apt-get install -y nasm meson
           # LLVM is preinstalled with versioned tools; expose its unversioned binaries.
           dirname "$(readlink -f "$(command -v clang)")" >> "$GITHUB_PATH"
+      - name: Install the Windows XP Rust toolchain
+        run: |
+          xp_nightly=$(sed -n "s/^rust_toolchain='\(.*\)'$/\1/p" tools/winxp-toolchain/build.sh)
+          rustup toolchain install "$xp_nightly" --profile minimal --component rust-src --component clippy
       # The toolchains and emulator runners only rebuild when their inputs are newer than their outputs,
       # so date the checkout before any cached build, the exact keys keep a stale build from being used
       - name: Date toolchain sources before cached builds
