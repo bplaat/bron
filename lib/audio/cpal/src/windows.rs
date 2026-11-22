@@ -8,7 +8,6 @@
 
 #![allow(unsafe_code)]
 
-use std::ffi::c_void;
 use std::marker::PhantomData;
 use std::ptr::{self, NonNull};
 
@@ -24,7 +23,6 @@ mod sys {
 
     pub(super) type HResult = i32;
     pub(super) type Handle = *mut c_void;
-    type Method<Args> = unsafe extern "system" fn(*mut c_void, Args) -> HResult;
 
     #[repr(C)]
     pub(super) struct Guid(u32, u16, u16, [u8; 8]);
@@ -107,24 +105,39 @@ mod sys {
     // The vtables are truncated after the last used method, unused methods are placeholders
     #[repr(C)]
     pub(super) struct IUnknownVtbl {
-        pub(super) QueryInterface: usize,
-        pub(super) AddRef: usize,
+        pub(super) QueryInterface:
+            unsafe extern "system" fn(*mut c_void, *const Guid, *mut *mut c_void) -> HResult,
+        pub(super) AddRef: unsafe extern "system" fn(*mut c_void) -> u32,
         pub(super) Release: unsafe extern "system" fn(*mut c_void) -> u32,
     }
 
     #[repr(C)]
+    pub(super) struct IMMDeviceEnumerator {
+        pub(super) vtbl: *const IMMDeviceEnumeratorVtbl,
+    }
+
+    #[repr(C)]
     pub(super) struct IMMDeviceEnumeratorVtbl {
-        pub(super) unknown: IUnknownVtbl,
+        pub(super) base: IUnknownVtbl,
         pub(super) EnumAudioEndpoints: usize,
-        pub(super) GetDefaultAudioEndpoint:
-            unsafe extern "system" fn(*mut c_void, i32, i32, *mut *mut c_void) -> HResult,
+        pub(super) GetDefaultAudioEndpoint: unsafe extern "system" fn(
+            *mut IMMDeviceEnumerator,
+            i32,
+            i32,
+            *mut *mut c_void,
+        ) -> HResult,
+    }
+
+    #[repr(C)]
+    pub(super) struct IMMDevice {
+        pub(super) vtbl: *const IMMDeviceVtbl,
     }
 
     #[repr(C)]
     pub(super) struct IMMDeviceVtbl {
-        pub(super) unknown: IUnknownVtbl,
+        pub(super) base: IUnknownVtbl,
         pub(super) Activate: unsafe extern "system" fn(
-            *mut c_void,
+            *mut IMMDevice,
             *const Guid,
             u32,
             *const c_void,
@@ -133,10 +146,15 @@ mod sys {
     }
 
     #[repr(C)]
+    pub(super) struct IAudioClient {
+        pub(super) vtbl: *const IAudioClientVtbl,
+    }
+
+    #[repr(C)]
     pub(super) struct IAudioClientVtbl {
-        pub(super) unknown: IUnknownVtbl,
+        pub(super) base: IUnknownVtbl,
         pub(super) Initialize: unsafe extern "system" fn(
-            *mut c_void,
+            *mut IAudioClient,
             i32,
             u32,
             i64,
@@ -144,40 +162,56 @@ mod sys {
             *const WaveFormatExtensible,
             *const Guid,
         ) -> HResult,
-        pub(super) GetBufferSize: Method<*mut u32>,
+        pub(super) GetBufferSize: unsafe extern "system" fn(*mut IAudioClient, *mut u32) -> HResult,
         pub(super) GetStreamLatency: usize,
-        pub(super) GetCurrentPadding: Method<*mut u32>,
+        pub(super) GetCurrentPadding:
+            unsafe extern "system" fn(*mut IAudioClient, *mut u32) -> HResult,
         pub(super) IsFormatSupported: usize,
-        pub(super) GetMixFormat: Method<*mut *mut WaveFormatEx>,
+        pub(super) GetMixFormat:
+            unsafe extern "system" fn(*mut IAudioClient, *mut *mut WaveFormatEx) -> HResult,
         pub(super) GetDevicePeriod: usize,
-        pub(super) Start: unsafe extern "system" fn(*mut c_void) -> HResult,
-        pub(super) Stop: unsafe extern "system" fn(*mut c_void) -> HResult,
-        pub(super) Reset: unsafe extern "system" fn(*mut c_void) -> HResult,
-        pub(super) SetEventHandle: Method<Handle>,
+        pub(super) Start: unsafe extern "system" fn(*mut IAudioClient) -> HResult,
+        pub(super) Stop: unsafe extern "system" fn(*mut IAudioClient) -> HResult,
+        pub(super) Reset: unsafe extern "system" fn(*mut IAudioClient) -> HResult,
+        pub(super) SetEventHandle: unsafe extern "system" fn(*mut IAudioClient, Handle) -> HResult,
         pub(super) GetService:
-            unsafe extern "system" fn(*mut c_void, *const Guid, *mut *mut c_void) -> HResult,
+            unsafe extern "system" fn(*mut IAudioClient, *const Guid, *mut *mut c_void) -> HResult,
+    }
+
+    #[repr(C)]
+    pub(super) struct IAudioRenderClient {
+        pub(super) vtbl: *const IAudioRenderClientVtbl,
     }
 
     #[repr(C)]
     pub(super) struct IAudioRenderClientVtbl {
-        pub(super) unknown: IUnknownVtbl,
-        pub(super) GetBuffer: unsafe extern "system" fn(*mut c_void, u32, *mut *mut u8) -> HResult,
-        pub(super) ReleaseBuffer: unsafe extern "system" fn(*mut c_void, u32, u32) -> HResult,
+        pub(super) base: IUnknownVtbl,
+        pub(super) GetBuffer:
+            unsafe extern "system" fn(*mut IAudioRenderClient, u32, *mut *mut u8) -> HResult,
+        pub(super) ReleaseBuffer:
+            unsafe extern "system" fn(*mut IAudioRenderClient, u32, u32) -> HResult,
+    }
+
+    #[repr(C)]
+    pub(super) struct IAudioCaptureClient {
+        pub(super) vtbl: *const IAudioCaptureClientVtbl,
     }
 
     #[repr(C)]
     pub(super) struct IAudioCaptureClientVtbl {
-        pub(super) unknown: IUnknownVtbl,
+        pub(super) base: IUnknownVtbl,
         pub(super) GetBuffer: unsafe extern "system" fn(
-            *mut c_void,
+            *mut IAudioCaptureClient,
             *mut *mut u8,
             *mut u32,
             *mut u32,
             *mut u64,
             *mut u64,
         ) -> HResult,
-        pub(super) ReleaseBuffer: Method<u32>,
-        pub(super) GetNextPacketSize: Method<*mut u32>,
+        pub(super) ReleaseBuffer:
+            unsafe extern "system" fn(*mut IAudioCaptureClient, u32) -> HResult,
+        pub(super) GetNextPacketSize:
+            unsafe extern "system" fn(*mut IAudioCaptureClient, *mut u32) -> HResult,
     }
 
     #[link(name = "ole32")]
@@ -245,79 +279,100 @@ impl Drop for ComGuard {
     }
 }
 
-/// An owned COM object with vtable `V`
-struct Com<V>(NonNull<c_void>, PhantomData<V>);
+/// One owned COM reference on the audio thread.
+struct ComPtr<T>(NonNull<T>, PhantomData<std::rc::Rc<()>>);
 
-impl<V> Com<V> {
-    /// Takes the object that `create` writes to its output pointer
-    fn new(create: impl FnOnce(*mut *mut c_void) -> sys::HResult) -> Result<Self, Error> {
+impl<T> ComPtr<T> {
+    /// The function must return an owned reference to a COM interface.
+    unsafe fn create(create: impl FnOnce(*mut *mut T) -> sys::HResult) -> Result<Self, Error> {
         let mut object = ptr::null_mut();
-        check(create(&mut object))?;
-        NonNull::new(object)
-            .map(|object| Self(object, PhantomData))
-            .ok_or_else(|| Error::new(ErrorKind::BackendError))
+        let result = create(&mut object);
+        let owned = NonNull::new(object).map(|object| Self(object, PhantomData));
+        check(result)?;
+        owned.ok_or_else(|| Error::new(ErrorKind::BackendError))
     }
 
-    const fn as_ptr(&self) -> *mut c_void {
+    const fn as_ptr(&self) -> *mut T {
         self.0.as_ptr()
     }
 
-    fn vtable(&self) -> &V {
-        // SAFETY: a COM object starts with a pointer to its vtable, which outlives the object.
-        unsafe { &**self.0.as_ptr().cast::<*const V>() }
+    fn unknown(&self) -> &sys::IUnknownVtbl {
+        // SAFETY: Every owned COM interface starts with the IUnknown vtable prefix.
+        unsafe { &**self.as_ptr().cast::<*const sys::IUnknownVtbl>() }
     }
 }
 
-impl<V> Drop for Com<V> {
+impl<T> std::ops::Deref for ComPtr<T> {
+    type Target = T;
+
+    fn deref(&self) -> &T {
+        // SAFETY: The interface remains live for the lifetime of the reference.
+        unsafe { self.0.as_ref() }
+    }
+}
+
+impl<T> Clone for ComPtr<T> {
+    fn clone(&self) -> Self {
+        // SAFETY: This reference keeps the interface alive during AddRef.
+        unsafe { (self.unknown().AddRef)(self.as_ptr().cast()) };
+        Self(self.0, PhantomData)
+    }
+}
+
+impl<T> Drop for ComPtr<T> {
     fn drop(&mut self) {
-        // SAFETY: every vtable starts with the IUnknown methods and the object is released once.
+        // SAFETY: The pointer holds one reference to release.
+        unsafe { (self.unknown().Release)(self.as_ptr().cast()) };
+    }
+}
+
+impl ComPtr<sys::IAudioClient> {
+    /// Gets an owned service from this client.
+    ///
+    /// # Safety
+    /// The client must be initialized and iid must identify T.
+    unsafe fn service<T>(&self, iid: &sys::Guid) -> Result<ComPtr<T>, Error> {
+        // SAFETY: The caller supplies the matching interface and the client writes an owned pointer.
         unsafe {
-            let unknown = &**self.0.as_ptr().cast::<*const sys::IUnknownVtbl>();
-            (unknown.Release)(self.as_ptr());
+            ComPtr::create(|object: *mut *mut T| {
+                ((*self.vtbl).GetService)(self.as_ptr(), iid, object.cast())
+            })
         }
     }
 }
 
-impl Com<sys::IAudioClientVtbl> {
-    /// Gets a service of an initialized audio client
-    fn service<V>(&self, iid: &sys::Guid) -> Result<Com<V>, Error> {
-        // SAFETY: the client is initialized and the service is written to the pointer.
-        Com::new(|object| unsafe { (self.vtable().GetService)(self.as_ptr(), iid, object) })
-    }
-}
-
 /// Activates an audio client on the default endpoint of the direction, COM must be initialized
-fn audio_client(direction: Direction) -> Result<Com<sys::IAudioClientVtbl>, Error> {
+fn audio_client(direction: Direction) -> Result<ComPtr<sys::IAudioClient>, Error> {
     let flow = match direction {
         Direction::Input => sys::E_CAPTURE,
         Direction::Output => sys::E_RENDER,
     };
     // SAFETY: the GUIDs are valid and each object is written to its output pointer.
     unsafe {
-        let enumerator = Com::<sys::IMMDeviceEnumeratorVtbl>::new(|object| {
+        let enumerator = ComPtr::<sys::IMMDeviceEnumerator>::create(|object| {
             sys::CoCreateInstance(
                 &sys::CLSID_MM_DEVICE_ENUMERATOR,
                 ptr::null_mut(),
                 sys::CLSCTX_ALL,
                 &sys::IID_IMM_DEVICE_ENUMERATOR,
-                object,
+                object.cast(),
             )
         })?;
-        let device = Com::<sys::IMMDeviceVtbl>::new(|object| {
-            (enumerator.vtable().GetDefaultAudioEndpoint)(
+        let device = ComPtr::<sys::IMMDevice>::create(|object| {
+            ((*enumerator.vtbl).GetDefaultAudioEndpoint)(
                 enumerator.as_ptr(),
                 flow,
                 sys::E_CONSOLE,
-                object,
+                object.cast(),
             )
         })?;
-        Com::new(|object| {
-            (device.vtable().Activate)(
+        ComPtr::create(|object: *mut *mut sys::IAudioClient| {
+            ((*device.vtbl).Activate)(
                 device.as_ptr(),
                 &sys::IID_IAUDIO_CLIENT,
                 sys::CLSCTX_ALL,
                 ptr::null(),
-                object,
+                object.cast(),
             )
         })
     }
@@ -341,7 +396,7 @@ impl Device {
         let mut format = ptr::null_mut();
         // SAFETY: the client is live, the returned format is freed with CoTaskMemFree.
         unsafe {
-            check((client.vtable().GetMixFormat)(client.as_ptr(), &mut format))?;
+            check(((*client.vtbl).GetMixFormat)(client.as_ptr(), &mut format))?;
             let rate = (*format).samples_per_sec;
             sys::CoTaskMemFree(format.cast());
             Ok(rate)
@@ -362,13 +417,13 @@ impl Device {
 
 // MARK: Stream
 enum Service {
-    Capture(Com<sys::IAudioCaptureClientVtbl>, InputCallback, Vec<f32>),
-    Render(Com<sys::IAudioRenderClientVtbl>, OutputCallback),
+    Capture(ComPtr<sys::IAudioCaptureClient>, InputCallback, Vec<f32>),
+    Render(ComPtr<sys::IAudioRenderClient>, OutputCallback),
 }
 
 struct Wasapi {
     service: Service,
-    client: Com<sys::IAudioClientVtbl>,
+    client: ComPtr<sys::IAudioClient>,
     event: sys::Handle,
     buffer_frames: u32,
     channels: usize,
@@ -404,7 +459,8 @@ impl Wasapi {
         // Buffer duration in 100 nanosecond units
         let duration = config.buffer_frames() as i64 * 10_000_000 / config.sample_rate as i64;
 
-        let client_vtable = client.vtable();
+        // SAFETY: The owned interface keeps its vtable live.
+        let client_vtable = unsafe { &*client.vtbl };
         let mut buffer_frames = 0;
         // SAFETY: the client is live and all pointers are valid for the calls, the event outlives
         // the client because it is closed on drop after stopping the client.
@@ -435,13 +491,16 @@ impl Wasapi {
             event
         };
 
-        let service = match callback {
-            Callback::Input(data) => client
-                .service(&sys::IID_IAUDIO_CAPTURE_CLIENT)
-                .map(|capture| Service::Capture(capture, data, Vec::new())),
-            Callback::Output(data) => client
-                .service(&sys::IID_IAUDIO_RENDER_CLIENT)
-                .map(|render| Service::Render(render, data)),
+        // SAFETY: The client is initialized and each IID matches the variant's interface.
+        let service = unsafe {
+            match callback {
+                Callback::Input(data) => client
+                    .service(&sys::IID_IAUDIO_CAPTURE_CLIENT)
+                    .map(|capture| Service::Capture(capture, data, Vec::new())),
+                Callback::Output(data) => client
+                    .service(&sys::IID_IAUDIO_RENDER_CLIENT)
+                    .map(|render| Service::Render(render, data)),
+            }
         };
         let service = match service {
             Ok(service) => service,
@@ -463,15 +522,15 @@ impl Wasapi {
 
     /// Plays the frames the client has room for
     fn render(
-        client: &Com<sys::IAudioClientVtbl>,
-        render: &Com<sys::IAudioRenderClientVtbl>,
+        client: &ComPtr<sys::IAudioClient>,
+        render: &ComPtr<sys::IAudioRenderClient>,
         data: &mut OutputCallback,
         buffer_frames: u32,
         channels: usize,
     ) -> Result<(), Error> {
         let mut padding = 0;
         // SAFETY: the client is live.
-        check(unsafe { (client.vtable().GetCurrentPadding)(client.as_ptr(), &mut padding) })?;
+        check(unsafe { ((*client.vtbl).GetCurrentPadding)(client.as_ptr(), &mut padding) })?;
         let frames = buffer_frames - padding;
         if frames == 0 {
             return Ok(());
@@ -480,7 +539,7 @@ impl Wasapi {
         // SAFETY: the render client returns a buffer of `frames` frames of the stream format,
         // which is ours until it is released.
         unsafe {
-            check((render.vtable().GetBuffer)(
+            check(((*render.vtbl).GetBuffer)(
                 render.as_ptr(),
                 frames,
                 &mut buffer,
@@ -489,18 +548,19 @@ impl Wasapi {
                 buffer.cast::<f32>(),
                 frames as usize * channels,
             ));
-            check((render.vtable().ReleaseBuffer)(render.as_ptr(), frames, 0))
+            check(((*render.vtbl).ReleaseBuffer)(render.as_ptr(), frames, 0))
         }
     }
 
     /// Reads all recorded packets
     fn capture(
-        capture: &Com<sys::IAudioCaptureClientVtbl>,
+        capture: &ComPtr<sys::IAudioCaptureClient>,
         data: &mut InputCallback,
         samples: &mut Vec<f32>,
         channels: usize,
     ) -> Result<(), Error> {
-        let vtable = capture.vtable();
+        // SAFETY: The owned interface keeps its vtable live.
+        let vtable = unsafe { &*capture.vtbl };
         loop {
             let mut packet_frames = 0;
             // SAFETY: the capture client is live.
@@ -546,7 +606,7 @@ impl Drop for Wasapi {
     fn drop(&mut self) {
         // SAFETY: the client is stopped before its event is closed.
         unsafe {
-            (self.client.vtable().Stop)(self.client.as_ptr());
+            ((*self.client.vtbl).Stop)(self.client.as_ptr());
             sys::CloseHandle(self.event);
         }
     }
@@ -555,12 +615,13 @@ impl Drop for Wasapi {
 impl Transfer for Wasapi {
     fn start(&mut self) -> Result<(), Error> {
         // SAFETY: the client is initialized.
-        check(unsafe { (self.client.vtable().Start)(self.client.as_ptr()) })
+        check(unsafe { ((*self.client.vtbl).Start)(self.client.as_ptr()) })
     }
 
     /// Stops and discards the buffered audio
     fn stop(&mut self) -> Result<(), Error> {
-        let vtable = self.client.vtable();
+        // SAFETY: The owned interface keeps its vtable live.
+        let vtable = unsafe { &*self.client.vtbl };
         // SAFETY: the client is initialized.
         unsafe {
             check((vtable.Stop)(self.client.as_ptr()))?;
