@@ -35,8 +35,11 @@ jobs:
       - name: Install Rust WASM target
         run: rustup target add wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2.9.3
+        env:
+          CI_RUNNER_IMAGE: ubuntu-26.04
         with:
-          key: ubuntu-26.04
+          prefix-key: cargo
+          env-vars: CI_RUNNER_IMAGE
           cache-bin: 'false'
       - uses: actions/cache@v6.1.0
         with:

@@ -50,7 +50,7 @@ jobs:
           path: |
             ~/.cargo/bin/cargo-deny
             ~/.cargo/bin/taplo
-          key: shared-tools-ubuntu-26.04-${{ env.CARGO_DENY_VERSION }}-${{ env.TAPLO_VERSION }}
+          key: cargo-tools-ubuntu-26.04-${{ env.CARGO_DENY_VERSION }}-${{ env.TAPLO_VERSION }}
       - name: Install formatting and Docker tools
         run: |
           wget -qO /usr/local/bin/clang-format https://github.com/cpp-linter/clang-tools-static-binaries/releases/download/llvm-23.1.3-2/clang-format-23_linux-amd64
@@ -108,8 +108,11 @@ jobs:
         run: rustup toolchain install ${{ env.RUST_NIGHTLY }} --profile minimal --component rust-src --component rustfmt
 
       - uses: Swatinem/rust-cache@v2.9.3
+        env:
+          CI_RUNNER_IMAGE: ${{ matrix.runner }}
         with:
-          key: ${{ matrix.runner }}
+          prefix-key: cargo
+          env-vars: CI_RUNNER_IMAGE
           cache-bin: 'false'
           save-if: ${{ github.ref == 'refs/heads/master' }}
 
@@ -152,8 +155,11 @@ jobs:
     steps:
       - uses: actions/checkout@v7.0.1
       - uses: Swatinem/rust-cache@v2.9.3
+        env:
+          CI_RUNNER_IMAGE: ubuntu-26.04
         with:
-          key: ubuntu-26.04
+          prefix-key: cargo
+          env-vars: CI_RUNNER_IMAGE
           cache-bin: 'false'
           save-if: ${{ github.ref == 'refs/heads/master' }}
       - uses: actions/cache@v6.1.0
@@ -187,15 +193,30 @@ jobs:
         run: |
           xp_nightly=$(sed -n "s/^rust_toolchain='\(.*\)'$/\1/p" tools/winxp-toolchain/build.sh)
           rustup toolchain install "$xp_nightly" --profile minimal --component rust-src --component clippy
-      - name: Identify toolchain compilers
-        id: compilers
+      - name: Fingerprint toolchain build inputs
+        id: toolchain-cache
         shell: bash
+        env:
+          NDS_SOURCES: ${{ hashFiles('tools/nds-toolchain/**', '!tools/nds-toolchain/test/**') }}
+          WII_SOURCES: ${{ hashFiles('tools/wii-toolchain/**', '!tools/wii-toolchain/test/**', 'lib/graphics/image/**', 'lib/data/deflate/**', 'Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', '.cargo/config.toml') }}
+          WIIU_SOURCES: ${{ hashFiles('tools/wiiu-toolchain/**', '!tools/wiiu-toolchain/test/**', 'lib/graphics/image/**', 'lib/data/deflate/**', 'lib/data/gzip/**', 'Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', '.cargo/config.toml') }}
+          WINXP_SOURCES: ${{ hashFiles('tools/winxp-toolchain/**', '!tools/winxp-toolchain/test/**') }}
         run: |
           . tools/winxp-toolchain/llvm.sh
-          signature=$({ clang --version; c++ --version; "${llvm}clang" --version; "$lld" --version; } | sha256sum)
-          rust_signature=$(rustc -vV | sha256sum)
-          echo "key=${signature%% *}" >> "$GITHUB_OUTPUT"
-          echo "host-rust=${rust_signature%% *}" >> "$GITHUB_OUTPUT"
+          native_compilers=$({ clang --version; c++ --version; "${llvm}clang" --version; "$lld" --version; } | sha256sum)
+          host_rust=$(rustc -vV | sha256sum)
+
+          fingerprint() {
+            local toolchain=$1 digest
+            shift
+            digest=$(printf '%s\n' "$@" | sha256sum)
+            printf '%s=%s\n' "$toolchain" "${digest:0:16}" >> "$GITHUB_OUTPUT"
+          }
+
+          fingerprint nds "${native_compilers%% *}" "$NDS_SOURCES"
+          fingerprint wii "${native_compilers%% *}" "${host_rust%% *}" "$WII_SOURCES"
+          fingerprint wiiu "${native_compilers%% *}" "${host_rust%% *}" "$WIIU_SOURCES"
+          fingerprint winxp "${native_compilers%% *}" "$WINXP_SOURCES"
       # The toolchains and emulator runners only rebuild when their inputs are newer than their outputs,
       # so date the checkout before any cached build, the exact keys keep a stale build from being used
       - name: Date toolchain sources before cached builds
@@ -205,21 +226,21 @@ jobs:
       - uses: actions/cache@v6.1.0
         with:
           path: target/nds-toolchain
-          key: ubuntu-26.04-nds-toolchain-${{ steps.compilers.outputs.key }}-${{ hashFiles('tools/nds-toolchain/**', '!tools/nds-toolchain/test/**') }}
+          key: toolchain-nds-ubuntu-26.04-${{ steps.toolchain-cache.outputs.nds }}
       - uses: actions/cache@v6.1.0
         with:
           path: target/wii-toolchain
-          key: ubuntu-26.04-wii-toolchain-${{ steps.compilers.outputs.key }}-${{ steps.compilers.outputs.host-rust }}-${{ hashFiles('tools/wii-toolchain/**', '!tools/wii-toolchain/test/**', 'lib/graphics/image/**', 'lib/data/deflate/**', 'Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', '.cargo/config.toml') }}
+          key: toolchain-wii-ubuntu-26.04-${{ steps.toolchain-cache.outputs.wii }}
       - uses: actions/cache@v6.1.0
         with:
           path: target/wiiu-toolchain
-          key: ubuntu-26.04-wiiu-toolchain-${{ steps.compilers.outputs.key }}-${{ steps.compilers.outputs.host-rust }}-${{ hashFiles('tools/wiiu-toolchain/**', '!tools/wiiu-toolchain/test/**', 'lib/graphics/image/**', 'lib/data/deflate/**', 'lib/data/gzip/**', 'Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', '.cargo/config.toml') }}
+          key: toolchain-wiiu-ubuntu-26.04-${{ steps.toolchain-cache.outputs.wiiu }}
       - uses: actions/cache@v6.1.0
         with:
           path: |
             target/winxp-toolchain/src
             target/winxp-toolchain/sysroot
             target/winxp-toolchain/clang/lib
-          key: ubuntu-26.04-winxp-toolchain-${{ steps.compilers.outputs.key }}-${{ hashFiles('tools/winxp-toolchain/**', '!tools/winxp-toolchain/test/**') }}
+          key: toolchain-winxp-ubuntu-26.04-${{ steps.toolchain-cache.outputs.winxp }}
       - name: Build examples and check console and Windows XP toolchains
         run: cargo xtask check-others
