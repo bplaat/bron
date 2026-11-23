@@ -115,8 +115,12 @@
 ```json
 {
     "recommendations": [
+        "13xforever.language-x86-64-assembly",
         "dprint.dprint",
         "EditorConfig.EditorConfig",
+        "mathiasfrohlich.Kotlin",
+        "Okerew.shader-with-metal",
+        "PolyMeilex.wgsl",
         "rust-lang.rust-analyzer",
         "tamasfe.even-better-toml",
         "xaver.clang-format"
