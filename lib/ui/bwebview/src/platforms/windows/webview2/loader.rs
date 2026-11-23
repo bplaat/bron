@@ -189,6 +189,7 @@ const fn hresult_from_win32(error: u32) -> HRESULT {
 const ERROR_FILE_NOT_FOUND: u32 = 2;
 const ERROR_PROC_NOT_FOUND: u32 = 127;
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use super::*;

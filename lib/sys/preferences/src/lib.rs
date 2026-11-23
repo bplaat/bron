@@ -130,6 +130,7 @@ fn validate_id(id: &str) -> io::Result<()> {
     Ok(())
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use super::*;

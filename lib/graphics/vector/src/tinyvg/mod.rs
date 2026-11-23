@@ -860,6 +860,7 @@ fn header(width: u8, height: u8, colors: &[[u8; 4]]) -> Vec<u8> {
     data
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use super::*;

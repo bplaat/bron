@@ -54,6 +54,7 @@ impl PartialEq for GradientKey {
     }
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use super::LruCache;

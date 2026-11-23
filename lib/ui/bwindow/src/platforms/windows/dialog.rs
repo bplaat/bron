@@ -465,6 +465,7 @@ fn selected_paths(buffer: &[u16]) -> Option<Vec<PathBuf>> {
     Some(paths)
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use super::*;

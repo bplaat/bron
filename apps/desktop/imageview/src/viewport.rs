@@ -368,6 +368,7 @@ impl Viewport {
     }
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use imageview_core::decode_media;

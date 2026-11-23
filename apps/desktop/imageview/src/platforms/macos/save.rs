@@ -272,6 +272,7 @@ unsafe fn add_controls(panel: *mut Object, request: &SaveRequest<'_>) -> Option<
     }
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use objc2::runtime::AnyClass;

@@ -196,6 +196,7 @@ const fn physical_key(code: u16) -> Option<KeyCode> {
     })
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use super::*;

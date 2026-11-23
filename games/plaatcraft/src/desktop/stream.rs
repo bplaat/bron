@@ -391,6 +391,7 @@ impl Drop for Stream {
     }
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use plaatcraft::protocol::Response;

@@ -581,6 +581,7 @@ pub(crate) fn merge(worlds: &mut Vec<Found>, found: Vec<Found>) -> bool {
         .ne(before)
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use plaatcraft::world::Edit;

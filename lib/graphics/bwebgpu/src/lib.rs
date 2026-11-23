@@ -1310,6 +1310,7 @@ macro_rules! vertex_attr_array {
     };
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use super::*;

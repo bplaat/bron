@@ -372,6 +372,7 @@ impl ToolPanel {
     }
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use imageview_core::edit::Filter;

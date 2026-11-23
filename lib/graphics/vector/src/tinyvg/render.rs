@@ -623,6 +623,7 @@ fn append_tinyvg_operation(
     }
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use super::super::header;

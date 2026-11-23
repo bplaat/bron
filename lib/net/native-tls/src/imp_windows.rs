@@ -701,6 +701,7 @@ impl<S: Read + Write> Write for TlsStream<S> {
     }
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use super::*;

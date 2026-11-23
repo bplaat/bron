@@ -607,6 +607,7 @@ fn accelerator_name(accelerator: Accelerator) -> String {
     name
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use super::*;

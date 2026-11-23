@@ -258,6 +258,7 @@ const fn is_transient(error: Error) -> bool {
     )
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use std::cell::RefCell;

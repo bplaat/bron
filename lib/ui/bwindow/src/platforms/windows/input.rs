@@ -109,6 +109,7 @@ pub fn windows_translate_accelerator(
     }
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use super::*;

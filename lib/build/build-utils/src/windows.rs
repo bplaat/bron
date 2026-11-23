@@ -146,6 +146,7 @@ fn minify_xml(xml: &str) -> String {
     minified
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use super::{application_manifest, minify_xml};

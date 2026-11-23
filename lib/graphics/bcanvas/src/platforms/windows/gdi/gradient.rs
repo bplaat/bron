@@ -132,6 +132,7 @@ fn color_table(gradient: &Gradient, alpha: f32) -> Option<Vec<[u8; 4]>> {
     )
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -106,6 +106,7 @@ pub unsafe fn register_dragged_types(view: *mut Object) {
     }
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use objc2::rc::{Retained, autoreleasepool};

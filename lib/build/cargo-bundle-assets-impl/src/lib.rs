@@ -219,6 +219,7 @@ fn visit(directory: &Path, files: &mut Vec<PathBuf>) -> std::io::Result<()> {
     Ok(())
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use super::*;

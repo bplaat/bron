@@ -617,6 +617,7 @@ impl<'de> SeqAccess<'de> for SeqDeserializer<'_, '_> {
     }
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use super::*;

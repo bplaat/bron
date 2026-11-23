@@ -275,6 +275,7 @@ fn single_sampler_tables(source: &str) -> Result<String> {
     Ok(output)
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use std::fs;

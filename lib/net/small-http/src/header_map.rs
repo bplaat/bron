@@ -110,6 +110,7 @@ impl<'a> IntoIterator for &'a mut HeaderMap {
     }
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use super::*;

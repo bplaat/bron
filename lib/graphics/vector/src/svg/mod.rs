@@ -49,5 +49,6 @@ pub(crate) fn decode(data: &[u8]) -> Result<OffscreenCanvas, VectorDecodeError> 
     Decoder::new(data)?.decode()
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests;

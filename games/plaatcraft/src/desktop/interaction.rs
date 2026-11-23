@@ -105,6 +105,7 @@ const fn nearby((x, z): Coord, center: Coord) -> bool {
     (x - center.0).abs() <= NEARBY_RADIUS && (z - center.1).abs() <= NEARBY_RADIUS
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use std::time::{Duration, Instant};

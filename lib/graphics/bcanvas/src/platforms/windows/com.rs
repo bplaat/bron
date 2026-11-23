@@ -120,6 +120,7 @@ pub(crate) const fn check(result: i32) -> Result<(), i32> {
     if result < 0 { Err(result) } else { Ok(()) }
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use std::cell::Cell;

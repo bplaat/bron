@@ -1867,6 +1867,7 @@ fn background_camera() -> Camera {
     }
 }
 
+// MARK: Tests
 #[cfg(test)]
 pub(crate) mod tests {
 

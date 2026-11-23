@@ -713,6 +713,7 @@ impl Server {
     }
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use super::*;

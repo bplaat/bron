@@ -995,6 +995,7 @@ unsafe extern "system" fn provider_get_xmlns_definitions(
     }
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use std::rc::Rc;

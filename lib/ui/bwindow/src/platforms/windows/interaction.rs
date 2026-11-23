@@ -377,6 +377,7 @@ fn pointer_position(dpi: u32, lparam: LPARAM) -> LogicalPoint {
     )
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use super::*;

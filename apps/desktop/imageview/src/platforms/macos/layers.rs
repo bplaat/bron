@@ -395,6 +395,7 @@ impl Drop for Image {
     }
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use std::time::Duration;

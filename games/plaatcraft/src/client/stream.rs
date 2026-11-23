@@ -745,6 +745,7 @@ fn work<P: Platform>(worker: &Worker<P>) {
     }
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use super::*;

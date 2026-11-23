@@ -208,6 +208,7 @@ fn validate_relative_pattern(value: &str) -> Result<()> {
     Ok(())
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use super::*;

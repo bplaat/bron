@@ -241,6 +241,7 @@ macro_rules! ns_string {
 }
 pub(crate) use ns_string;
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use objc2::msg_send;

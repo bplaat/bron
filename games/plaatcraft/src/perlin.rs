@@ -69,6 +69,7 @@ impl Perlin {
     }
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use super::*;

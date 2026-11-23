@@ -660,6 +660,7 @@ const fn operator(operation: CompositeOperation) -> i32 {
     }
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use super::*;

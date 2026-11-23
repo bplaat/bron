@@ -2207,6 +2207,7 @@ fn validate_read_only_query(backend: DatabaseBackend, sql: &str) -> Result<Strin
     Ok(std::mem::take(&mut statement.sql))
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use super::*;

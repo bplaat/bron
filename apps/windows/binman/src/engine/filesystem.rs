@@ -370,6 +370,7 @@ pub(super) fn is_reparse(metadata: &fs::Metadata) -> bool {
     metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};

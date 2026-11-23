@@ -647,6 +647,7 @@ fn circle(ctx: &mut CanvasRenderingContext2d<'_>, x: f32, y: f32, radius: f32, c
     ctx.fill();
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use super::*;

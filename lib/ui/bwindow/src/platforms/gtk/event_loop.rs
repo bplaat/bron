@@ -519,6 +519,7 @@ pub(crate) fn open_url(url: &str) {
     }
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use super::*;

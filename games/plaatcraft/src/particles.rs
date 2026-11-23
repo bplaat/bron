@@ -126,6 +126,7 @@ impl Particles {
     }
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use super::*;

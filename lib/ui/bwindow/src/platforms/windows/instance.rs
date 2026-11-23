@@ -401,6 +401,7 @@ impl Drop for SingleInstance {
     }
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;

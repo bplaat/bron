@@ -245,6 +245,7 @@ impl PreparedStatement for Prepared {
     }
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use super::*;

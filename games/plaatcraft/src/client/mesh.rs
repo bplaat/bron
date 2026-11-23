@@ -186,6 +186,7 @@ fn vertices([a, b, shape]: [u32; 3]) -> [Vertex; 4] {
     })
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use super::*;

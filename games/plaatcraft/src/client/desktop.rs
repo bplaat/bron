@@ -356,6 +356,7 @@ const fn combine(a: (bool, bool), b: (bool, bool)) -> (bool, bool) {
     (a.0 || b.0, a.1 || b.1)
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use super::*;

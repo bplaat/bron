@@ -1385,6 +1385,7 @@ fn draw_button(canvas: &mut impl Canvas, widget: &Widget, label: &str, highlight
     );
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use super::*;

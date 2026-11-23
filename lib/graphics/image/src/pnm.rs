@@ -253,6 +253,7 @@ pub(super) fn decode(data: &[u8]) -> Result<Image> {
     Ok(Image::still(Format::Pnm, width, height, pixels))
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use super::*;

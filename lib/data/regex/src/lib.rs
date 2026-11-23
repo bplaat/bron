@@ -26,6 +26,7 @@ macro_rules! regex {
     }};
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use super::*;

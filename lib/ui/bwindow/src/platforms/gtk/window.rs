@@ -498,6 +498,7 @@ impl Drop for PlatformWindow {
     }
 }
 
+// MARK: Tests
 #[cfg(all(test, feature = "menu"))]
 mod tests {
     use std::cell::Cell;

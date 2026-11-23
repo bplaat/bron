@@ -53,6 +53,7 @@ impl Mailbox {
     }
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;

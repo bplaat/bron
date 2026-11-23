@@ -279,6 +279,7 @@ impl Marquee {
     }
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use super::*;

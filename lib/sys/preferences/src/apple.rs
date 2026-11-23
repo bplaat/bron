@@ -199,6 +199,7 @@ fn text(object: &AnyObject) -> io::Result<String> {
     }
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use super::*;

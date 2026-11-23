@@ -181,6 +181,7 @@ fn main() {
     extension_main();
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use super::*;

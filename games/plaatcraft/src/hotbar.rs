@@ -68,6 +68,7 @@ impl Hotbar {
     }
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use super::*;

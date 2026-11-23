@@ -85,6 +85,7 @@ impl<A: Audio> Sounds<A> {
     }
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -154,6 +154,7 @@ fn replace(source: &Path, destination: &Path) -> io::Result<()> {
     fs::File::open(destination.parent().expect("preferences file has a parent"))?.sync_all()
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use super::*;

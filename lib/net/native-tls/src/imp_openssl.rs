@@ -991,6 +991,7 @@ impl<S> Drop for TlsStream<S> {
     }
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -348,6 +348,7 @@ const fn status_for_error(category: usb::ErrorCategory) -> UsbStatus {
     }
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use super::*;

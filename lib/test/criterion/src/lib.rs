@@ -498,6 +498,7 @@ macro_rules! criterion_main {
     };
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use std::cell::Cell;

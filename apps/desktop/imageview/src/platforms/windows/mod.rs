@@ -972,6 +972,7 @@ unsafe extern "system" fn frame_proc(
     result
 }
 
+// MARK: Tests
 // The test edits images and asks to save them.
 #[cfg(all(test, feature = "edit"))]
 mod tests {

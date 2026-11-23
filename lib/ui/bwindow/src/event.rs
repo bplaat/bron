@@ -128,6 +128,7 @@ impl<T> Event<T> {
     }
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use super::*;

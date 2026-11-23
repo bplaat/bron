@@ -258,6 +258,7 @@ fn set_sat(c: [f32; 3], s: f32) -> [f32; 3] {
     })
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use super::*;

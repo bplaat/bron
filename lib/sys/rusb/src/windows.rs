@@ -692,6 +692,7 @@ const fn map_win32_error(code: Dword) -> Error {
     }
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -435,6 +435,7 @@ pub enum ScrollDelta {
     Lines(f64, f64),
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use super::Modifiers;

@@ -56,6 +56,7 @@ pub const fn tile(material: u8, face: u32) -> usize {
     FACE_TILES[material as usize % 128][face as usize] as usize
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use super::*;

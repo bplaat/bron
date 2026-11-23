@@ -204,6 +204,7 @@ pub(crate) fn clean(cleanup: &CleanupDefinition, is_elevated: bool) -> CleanupRe
     result
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;

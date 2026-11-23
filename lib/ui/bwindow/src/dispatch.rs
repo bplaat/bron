@@ -181,6 +181,7 @@ pub(crate) fn send_then(event: NativeEvent, after: impl FnOnce() + 'static) {
     DISPATCHER.with(|dispatcher| dispatcher.send_then(event, after));
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use std::cell::{Cell, RefCell};

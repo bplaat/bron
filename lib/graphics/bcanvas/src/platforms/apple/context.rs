@@ -946,6 +946,7 @@ fn named_font(family: &str, size: f64) -> Option<CFObject> {
     }
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use super::*;

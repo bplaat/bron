@@ -124,6 +124,7 @@ pub(crate) fn append_apk(apk: &mut fs::File, binaries: &[PathBuf]) -> io::Result
     Ok(())
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use super::*;

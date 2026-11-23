@@ -249,6 +249,7 @@ fn build_executable(args: &Args, name: &str) -> String {
     executable.expect("Missing application executable")
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use super::select_simulator;

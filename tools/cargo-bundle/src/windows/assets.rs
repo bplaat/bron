@@ -41,6 +41,7 @@ pub(super) fn mapping(layout: &Path, files: &[String]) -> io::Result<String> {
     Ok(text)
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};

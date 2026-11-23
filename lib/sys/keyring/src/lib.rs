@@ -116,6 +116,7 @@ impl Entry {
     }
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use zeroize::Zeroizing;

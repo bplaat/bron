@@ -118,6 +118,7 @@ pub fn linear_palette(daylight: f32) -> Vec<[f32; 4]> {
         .collect()
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use super::*;

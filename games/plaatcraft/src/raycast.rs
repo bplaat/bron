@@ -151,6 +151,7 @@ pub fn overlaps_player(block: [i64; 3], eye: [f64; 3]) -> bool {
     })
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use super::*;

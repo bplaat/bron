@@ -843,6 +843,7 @@ const fn glyph(character: char) -> [u8; 7] {
     }
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use super::*;

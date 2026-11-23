@@ -297,6 +297,7 @@ fn played(modified: SystemTime) -> String {
     menu::played(modified.elapsed().map_or(0, |elapsed| elapsed.as_secs()))
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use super::*;

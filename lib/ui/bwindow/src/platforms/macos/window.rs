@@ -764,6 +764,7 @@ pub(super) fn window_id(window: *mut Object) -> Option<crate::WindowId> {
     (!host.is_closed()).then(|| host.id())
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use super::TitlebarDoubleClickAction;

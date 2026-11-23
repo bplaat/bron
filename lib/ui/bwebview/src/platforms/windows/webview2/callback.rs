@@ -92,6 +92,7 @@ pub(super) const IUNKNOWN: IUnknownVtbl = IUnknownVtbl {
     Release: release,
 };
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use super::*;

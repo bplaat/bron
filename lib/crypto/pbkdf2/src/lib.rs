@@ -53,6 +53,7 @@ pub fn pbkdf2_hmac_sha256(password: &[u8], salt: &[u8], iterations: u32, dklen: 
     derived_key
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use super::pbkdf2_hmac_sha256;

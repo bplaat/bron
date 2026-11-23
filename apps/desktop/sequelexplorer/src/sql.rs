@@ -170,6 +170,7 @@ fn push_statement(
     *has_executable_comment = false;
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use super::*;

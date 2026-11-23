@@ -353,6 +353,7 @@ fn parse_ytdlp_percent(line: &str) -> Option<f32> {
     rest.split('%').next()?.trim().parse().ok()
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use super::*;

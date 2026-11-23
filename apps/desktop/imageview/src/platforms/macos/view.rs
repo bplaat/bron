@@ -652,6 +652,7 @@ pub(super) const fn rect(x: f64, y: f64, width: f64, height: f64) -> Rect {
     }
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use imageview_core::decode_media;

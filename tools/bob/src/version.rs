@@ -58,6 +58,7 @@ fn parse_optional_component(component: Option<&str>, name: &str) -> Result<u16, 
     })
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use super::*;

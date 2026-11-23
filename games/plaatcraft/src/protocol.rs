@@ -706,6 +706,7 @@ pub fn read_frame(stream: &mut impl Read) -> io::Result<Vec<u8>> {
     Ok(message)
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use super::*;

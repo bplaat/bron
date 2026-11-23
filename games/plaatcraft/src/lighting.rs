@@ -122,6 +122,7 @@ pub(crate) fn bake<const WIDTH: usize, const HEIGHT: usize>(
     light
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use super::*;

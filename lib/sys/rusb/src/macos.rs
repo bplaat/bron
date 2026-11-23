@@ -326,6 +326,7 @@ const fn map_ioreturn(code: KernReturn) -> Error {
     }
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use super::*;

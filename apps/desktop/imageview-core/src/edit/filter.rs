@@ -809,6 +809,7 @@ fn sharpen(picture: &Picture, amount: f32, radius: f32) -> Picture {
     Picture::new(picture.width, picture.height, pixels)
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use super::*;

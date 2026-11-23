@@ -589,6 +589,7 @@ fn draw_chunk<G: Gpu>(gpu: &mut G, view: &View, mesh: &G::Mesh, offset: [f32; 3]
     }
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use super::*;

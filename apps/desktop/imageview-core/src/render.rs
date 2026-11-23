@@ -254,6 +254,7 @@ const fn tile_is_filled(row: i32, column: i32) -> bool {
     (row + column).rem_euclid(2) == 0
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;

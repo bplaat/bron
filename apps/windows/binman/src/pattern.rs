@@ -86,6 +86,7 @@ fn matches(pattern: &str, name: &str) -> bool {
     pattern[p..].iter().all(|&c| c == '*')
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use std::fs;

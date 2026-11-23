@@ -531,6 +531,7 @@ pub(super) unsafe fn show_size(bar: *mut c_void, media: &Media) {
     unsafe { gtk_header_bar_set_subtitle(bar, subtitle.as_ptr()) };
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use super::desktop_uses_header_bar;

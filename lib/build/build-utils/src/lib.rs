@@ -165,6 +165,7 @@ pub fn find_library_group(
     None
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use std::fs;

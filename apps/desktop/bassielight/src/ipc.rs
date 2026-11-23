@@ -332,6 +332,7 @@ fn parse_client_message(message: &str) -> Result<IpcMessage, &'static str> {
     }
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use super::*;

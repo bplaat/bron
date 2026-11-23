@@ -160,6 +160,7 @@ fn move_world(from: &Path, to: &Path) -> io::Result<()> {
     fs::rename(from, to)
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use super::*;

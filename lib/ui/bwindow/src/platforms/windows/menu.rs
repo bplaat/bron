@@ -188,6 +188,7 @@ pub(super) fn translate_webview(window: HWND, key: u32, lparam: isize, system: b
     unsafe { translate(&mut message) }
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use super::*;

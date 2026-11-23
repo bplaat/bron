@@ -489,6 +489,7 @@ fn run<P: Platform>(shared: &Mutex<P::Lock, Shared>) {
     }
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -372,6 +372,7 @@ impl Drop for Database {
     }
 }
 
+// MARK: Tests
 #[cfg(test)]
 pub(crate) mod tests {
     use std::path::PathBuf;

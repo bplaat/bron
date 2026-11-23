@@ -1169,6 +1169,7 @@ impl<'a> Reader<'a> {
     }
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use super::*;

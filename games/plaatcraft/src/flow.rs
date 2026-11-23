@@ -120,6 +120,7 @@ pub const fn delay(material: u8) -> u32 {
     }
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;

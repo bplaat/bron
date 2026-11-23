@@ -759,6 +759,7 @@ fn response_body_stream(body: Vec<u8>) -> *mut GInputStream {
     }
 }
 
+// MARK: Tests
 #[cfg(all(test, feature = "custom_protocol"))]
 mod tests {
     use super::*;

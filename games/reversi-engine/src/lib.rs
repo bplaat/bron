@@ -445,6 +445,7 @@ impl FromStr for Othello {
     }
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use super::*;

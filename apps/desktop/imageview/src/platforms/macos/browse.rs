@@ -49,6 +49,7 @@ pub(crate) unsafe fn file_url(path: &Path) -> *mut Object {
     }
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use super::*;

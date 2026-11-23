@@ -119,6 +119,7 @@ pub(crate) fn scale_at(index: usize) -> f64 {
     EXPORT_SCALES.get(index).copied().unwrap_or(1.0)
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -489,6 +489,7 @@ fn matches_protocol(request: &small_http::Request, scheme: &str) -> bool {
             .is_some_and(|host| host.eq_ignore_ascii_case(&format!("{scheme}.localhost")))
 }
 
+// MARK: Tests
 #[cfg(all(test, feature = "custom_protocol"))]
 mod tests {
     use super::*;

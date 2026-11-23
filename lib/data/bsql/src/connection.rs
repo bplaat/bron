@@ -909,6 +909,7 @@ macro_rules! execute_args {
     }};
 }
 
+// MARK: Tests
 #[cfg(all(test, feature = "sqlite"))]
 mod tests {
     use std::sync::atomic::AtomicU64;

@@ -166,6 +166,7 @@ impl Drop for PlatformCanvas {
     }
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use bwindow::{Event, EventLoop, WindowBuilder, WindowEvent};

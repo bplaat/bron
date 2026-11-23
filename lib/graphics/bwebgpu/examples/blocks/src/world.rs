@@ -619,6 +619,7 @@ pub(crate) fn face_bytes(faces: &[Vec<Face>; Material::COUNT]) -> (Vec<u8>, u32,
     (bytes, opaque, count)
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use super::*;

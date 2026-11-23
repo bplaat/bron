@@ -396,6 +396,7 @@ fn spatial(camera: &Camera, position: [i64; 3]) -> (f32, f32) {
     ((1.0 / (1.0 + distance * 0.15)) as f32, pan as f32)
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use super::*;

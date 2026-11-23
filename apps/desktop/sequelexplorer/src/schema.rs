@@ -1328,6 +1328,7 @@ fn sqlite_table_suffix(sql: &str) -> &str {
         .map_or("", |position| sql[position + 1..].trim())
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use bsql::{Connection, PoolOptions, SqliteMode};

@@ -376,6 +376,7 @@ fn invalid_data(error: impl Into<Box<dyn std::error::Error + Send + Sync>>) -> i
     io::Error::new(io::ErrorKind::InvalidData, error)
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};

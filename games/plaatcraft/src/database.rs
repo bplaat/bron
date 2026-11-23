@@ -78,6 +78,7 @@ pub fn validate_name(name: &str) -> Result<&str, String> {
     }
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
 

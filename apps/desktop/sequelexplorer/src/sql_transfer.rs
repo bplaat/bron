@@ -384,6 +384,7 @@ fn hex_literal(bytes: &[u8]) -> String {
     literal
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use std::sync::{Arc, Mutex};

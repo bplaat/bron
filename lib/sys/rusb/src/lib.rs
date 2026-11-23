@@ -339,6 +339,7 @@ fn release_reverse<T>(values: &mut Vec<T>, mut release: impl FnMut(T)) {
     }
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};

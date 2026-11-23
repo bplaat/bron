@@ -152,6 +152,7 @@ pub(crate) enum FileTypeIcon {
     File(String),
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use super::Manifest;

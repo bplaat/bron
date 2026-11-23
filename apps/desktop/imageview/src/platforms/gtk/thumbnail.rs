@@ -105,6 +105,7 @@ fn run(arguments: Arguments) -> Result<(), String> {
     std::fs::write(&arguments.output, png).map_err(|error| error.to_string())
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use super::*;

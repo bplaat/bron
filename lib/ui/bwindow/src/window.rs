@@ -556,6 +556,7 @@ impl Drop for Window {
     }
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;

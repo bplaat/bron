@@ -372,6 +372,7 @@ impl Drop for SaveOptions {
     }
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use super::super::winrt::out;

@@ -317,6 +317,7 @@ const fn check(code: c_int) -> Result<(), Error> {
     }
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use super::*;

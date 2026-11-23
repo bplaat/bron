@@ -1824,6 +1824,7 @@ const fn pack_quad(position: [i32; 3], face: u32, extent: [usize; 2], material: 
     ]
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use super::*;

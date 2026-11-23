@@ -122,6 +122,7 @@ pub(crate) fn send_push(proxy: &Arc<EventLoopProxy<crate::AppEvent>>, push: IpcP
     }
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use super::*;

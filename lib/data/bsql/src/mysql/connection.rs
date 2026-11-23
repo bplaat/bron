@@ -120,6 +120,7 @@ impl Connection {
     }
 }
 
+// MARK: Tests
 #[cfg(all(test, not(feature = "mysql-tls")))]
 mod tests {
     use super::*;

@@ -347,6 +347,7 @@ fn draw_crop(context: &mut CanvasRenderingContext2d<'_>, [left, top, right, bott
     }
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use imageview_core::decode_media;

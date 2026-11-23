@@ -117,6 +117,7 @@ extern "C" fn unmap(_: *mut c_void, pointer: *const Widget) {
     unsafe { &*pointer }.lost.set(true);
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use std::time::{Duration, Instant};

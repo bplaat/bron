@@ -489,6 +489,7 @@ fn compare_diagnostics(test: &ExpandedTest, actual: &str) -> Result<(), String> 
     }
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;

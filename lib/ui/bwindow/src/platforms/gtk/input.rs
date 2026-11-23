@@ -153,6 +153,7 @@ const fn gtk_physical_key(code: u16) -> Option<crate::KeyCode> {
     crate::input::set1_key_code(scan, evdev >= 102)
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use super::*;

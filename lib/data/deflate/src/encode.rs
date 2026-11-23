@@ -1234,6 +1234,7 @@ pub(crate) fn compress(data: &[u8], level: Level, out: &mut Vec<u8>) {
     writer.align();
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use super::*;

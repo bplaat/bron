@@ -42,6 +42,7 @@ pub fn feistel(block: &mut [u8], key: &[u8], forward: bool) {
     }
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use super::*;

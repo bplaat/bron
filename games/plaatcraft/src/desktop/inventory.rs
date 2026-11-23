@@ -521,6 +521,7 @@ fn draw_panel(
     ctx.fill_rect(track_x + 2.0, thumb_y + 2.0, 6.0, thumb - 4.0);
 }
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use super::*;

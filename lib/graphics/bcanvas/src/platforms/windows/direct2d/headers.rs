@@ -1520,6 +1520,7 @@ const _: () = {
     assert!(size_of::<DWRITE_LINE_METRICS>() == 24);
 };
 
+// MARK: Tests
 #[cfg(test)]
 mod tests {
     use std::ptr::{null, null_mut};
