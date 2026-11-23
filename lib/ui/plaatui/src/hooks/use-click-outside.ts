@@ -9,7 +9,7 @@ import { useEffect, useRef } from 'preact/hooks';
 
 // Returns a ref to attach to a container; while `active`, a pointer press
 // outside that container calls `onClose`.
-export function useClickOutside<T extends HTMLElement>(active: boolean, onClose: () => void): RefObject<T> {
+export function useClickOutside<T extends HTMLElement>(active: boolean, onClose: () => void): RefObject<T | null> {
     const ref = useRef<T>(null);
     const onCloseRef = useRef(onClose);
     onCloseRef.current = onClose;

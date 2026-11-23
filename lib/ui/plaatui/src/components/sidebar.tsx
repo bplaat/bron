@@ -33,7 +33,7 @@ export function SidebarLayout({ children, navbar, sidebar, version }: SidebarLay
     );
 }
 
-export type SidebarLinkProps = Omit<JSX.IntrinsicElements['a'], 'href' | 'icon'> & {
+export type SidebarLinkProps = Omit<JSX.IntrinsicElements['a'], 'href' | 'icon' | 'role'> & {
     href: string;
     label: string;
     icon: ComponentType<Omit<IconProps, 'path'>>;

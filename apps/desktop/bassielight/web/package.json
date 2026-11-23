@@ -9,15 +9,15 @@
     },
     "dependencies": {
         "@mdi/js": "^7.4.47",
-        "@preact/signals": "^2.3.1",
+        "@preact/signals": "^2.11.4",
         "minireset.css": "^0.0.7",
-        "preact": "^10.26.9",
-        "qr": "^0.5.0",
-        "wouter-preact": "^3.9.0"
+        "preact": "^11.2.0",
+        "qr": "^0.7.2",
+        "wouter-preact": "^3.13.0"
     },
     "devDependencies": {
-        "@preact/preset-vite": "^2.10.1",
-        "typescript": "^5.9.3",
-        "vite": "^8.0.0"
+        "@preact/preset-vite": "^2.10.6",
+        "typescript": "^7.0.2",
+        "vite": "^8.3.8"
     }
 }

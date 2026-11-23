@@ -25,7 +25,7 @@ export function FormSelect({ class: extraClass, children, ...props }: JSX.Intrin
     );
 }
 
-export type FormCheckboxProps = Omit<JSX.IntrinsicElements['input'], 'type'> & {
+export type FormCheckboxProps = Omit<JSX.IntrinsicElements['input'], 'type' | 'role'> & {
     label: ComponentChildren;
 };
 

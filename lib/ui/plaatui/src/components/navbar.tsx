@@ -5,7 +5,6 @@
  */
 
 import { type ComponentChildren } from 'preact';
-import { forwardRef } from 'preact/compat';
 import { type JSX } from 'preact/jsx-runtime';
 import { cx } from '../utils.ts';
 import './navbar.css';
@@ -44,11 +43,9 @@ export function NavbarSpacer() {
     return <div class="spacer" />;
 }
 
-export const NavbarMenu = forwardRef<HTMLDivElement, JSX.IntrinsicElements['div']>(
-    ({ class: extraClass, ...props }, ref) => (
-        <div ref={ref} {...props} class={cx('navbar-menu-wrapper', extraClass)} />
-    ),
-);
+export function NavbarMenu({ class: extraClass, ...props }: JSX.IntrinsicElements['div']) {
+    return <div {...props} class={cx('navbar-menu-wrapper', extraClass)} />;
+}
 
 export function NavbarUserButton({ class: extraClass, ...props }: JSX.IntrinsicElements['button']) {
     return <button type="button" {...props} class={cx('navbar-user', extraClass)} />;

@@ -12,6 +12,6 @@
         "minireset.css": "^0.0.7"
     },
     "peerDependencies": {
-        "preact": "^10.26.9"
+        "preact": "^11.2.0"
     }
 }
