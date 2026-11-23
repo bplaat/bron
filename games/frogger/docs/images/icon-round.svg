@@ -5,7 +5,9 @@
             <stop stop-color="#d2e9a8" />
             <stop offset="1" stop-color="#a2cb76" />
         </linearGradient>
-        <clipPath id="shape"><circle cx="256" cy="256" r="256" /></clipPath>
+        <clipPath id="shape">
+            <circle cx="256" cy="256" r="256" />
+        </clipPath>
     </defs>
     <g clip-path="url(#shape)">
         <rect width="512" height="512" fill="url(#grass)" />

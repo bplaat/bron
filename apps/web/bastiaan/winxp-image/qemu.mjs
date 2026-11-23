@@ -25,20 +25,43 @@ export async function startQemu({ image, cdrom, floppy, bootCd = false, onLine =
     const serialFile = path.join(out, 'serial.sock');
     fs.rmSync(monitorFile, { force: true });
     fs.rmSync(serialFile, { force: true });
-    const qemu = spawn('qemu-system-i386', [
-        '-machine', 'pc,acpi=off,hpet=off,vmport=off',
-        '-accel', 'tcg,thread=single,tb-size=512',
-        '-cpu', 'pentium3', '-smp', '1', '-m', `${MACHINE.memory_size / 2 ** 20}M`, // the same RAM as v86
-        '-vga', 'std', '-nic', 'none', '-display', 'none',
-        '-rtc', 'base=localtime',
-        '-drive', `file=${image},format=raw,if=ide,index=0,cache=unsafe`, // safe: every stage ends with a clean shutdown
-        '-drive', `${cdrom ? `file=${cdrom},file.locking=off,` : ''}media=cdrom,if=ide,index=2,readonly=on`,
-        ...(floppy ? ['-drive', `file=${floppy},format=raw,if=floppy,readonly=on`] : []),
-        '-boot', bootCd ? 'order=c,once=d,menu=off' : 'order=c',
-        '-serial', `unix:${serialFile},server=on,wait=off`,
-        '-monitor', `unix:${monitorFile},server=on,wait=off`,
-        '-monitor', `unix:${path.join(out, 'debug.sock')},server=on,wait=off`, // for looking in by hand
-    ], { stdio: 'inherit' });
+    const qemu = spawn(
+        'qemu-system-i386',
+        [
+            '-machine',
+            'pc,acpi=off,hpet=off,vmport=off',
+            '-accel',
+            'tcg,thread=single,tb-size=512',
+            '-cpu',
+            'pentium3',
+            '-smp',
+            '1',
+            '-m',
+            `${MACHINE.memory_size / 2 ** 20}M`, // the same RAM as v86
+            '-vga',
+            'std',
+            '-nic',
+            'none',
+            '-display',
+            'none',
+            '-rtc',
+            'base=localtime',
+            '-drive',
+            `file=${image},format=raw,if=ide,index=0,cache=unsafe`, // safe: every stage ends with a clean shutdown
+            '-drive',
+            `${cdrom ? `file=${cdrom},file.locking=off,` : ''}media=cdrom,if=ide,index=2,readonly=on`,
+            ...(floppy ? ['-drive', `file=${floppy},format=raw,if=floppy,readonly=on`] : []),
+            '-boot',
+            bootCd ? 'order=c,once=d,menu=off' : 'order=c',
+            '-serial',
+            `unix:${serialFile},server=on,wait=off`,
+            '-monitor',
+            `unix:${monitorFile},server=on,wait=off`,
+            '-monitor',
+            `unix:${path.join(out, 'debug.sock')},server=on,wait=off`, // for looking in by hand
+        ],
+        { stdio: 'inherit' },
+    );
     const exited = new Promise((resolve) => qemu.on('exit', resolve));
 
     const monitor = await connect(monitorFile);
@@ -69,7 +92,7 @@ export async function startQemu({ image, cdrom, floppy, bootCd = false, onLine =
         // Windows powers down to "It is now safe to turn off your computer": quit once the disk stays quiet
         async quitWhenIdle() {
             let writes = '';
-            for (let quiet = 0; quiet < 6; ) {
+            for (let quiet = 0; quiet < 6;) {
                 await sleep(10 * 1000);
                 const stats = (await command('info blockstats')).match(/wr_operations=\d+/g)?.join() ?? '';
                 quiet = stats === writes ? quiet + 1 : 0;

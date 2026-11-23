@@ -46,13 +46,17 @@ function folderEntries(cluster) {
             } else {
                 const chars = slots.flatMap((offset) => {
                     const entry = read(offset, 32);
-                    return [[1, 5], [14, 6], [28, 2]].flatMap(([at, n]) =>
-                        Array.from({ length: n }, (_, j) => entry.readUInt16LE(at + j * 2)));
+                    return [
+                        [1, 5],
+                        [14, 6],
+                        [28, 2],
+                    ].flatMap(([at, n]) => Array.from({ length: n }, (_, j) => entry.readUInt16LE(at + j * 2)));
                 });
                 const end = chars.indexOf(0);
                 const name = slots.length
                     ? String.fromCharCode(...(end < 0 ? chars : chars.slice(0, end)))
-                    : data.toString('latin1', i, i + 8).trim() + (data[i + 8] !== 0x20 ? '.' + data.toString('latin1', i + 8, i + 11).trim() : '');
+                    : data.toString('latin1', i, i + 8).trim() +
+                      (data[i + 8] !== 0x20 ? '.' + data.toString('latin1', i + 8, i + 11).trim() : '');
                 const first = (data.readUInt16LE(i + 20) << 16) | data.readUInt16LE(i + 26);
                 entries.push({ name, cluster: first, slots });
                 slots = [];
@@ -76,8 +80,13 @@ function fixFolderName(target) {
             if (!entry) return;
             entry.slots.forEach((offset, slot) => {
                 const slotEntry = read(offset, 32);
-                [[1, 5], [14, 6], [28, 2]].reduce((at, [field, n]) => {
-                    for (let j = 0; j < n; j++, at++) if (at < name.length) slotEntry.writeUInt16LE(name.charCodeAt(at), field + j * 2);
+                [
+                    [1, 5],
+                    [14, 6],
+                    [28, 2],
+                ].reduce((at, [field, n]) => {
+                    for (let j = 0; j < n; j++, at++)
+                        if (at < name.length) slotEntry.writeUInt16LE(name.charCodeAt(at), field + j * 2);
                     return at;
                 }, slot * 13);
                 fs.writeSync(fd, slotEntry, 0, 32, offset);
@@ -89,7 +98,10 @@ function fixFolderName(target) {
     }
 }
 const mtools = (cmd, ...args) =>
-    execFileSync(cmd, ['-i', drive, ...args], { stdio: ['ignore', 'ignore', 'inherit'], env: { ...process.env, MTOOLS_SKIP_CHECK: '1' } });
+    execFileSync(cmd, ['-i', drive, ...args], {
+        stdio: ['ignore', 'ignore', 'inherit'],
+        env: { ...process.env, MTOOLS_SKIP_CHECK: '1' },
+    });
 const tryMtools = (...args) => {
     try {
         mtools(...args);
@@ -102,11 +114,13 @@ const copy = (source, target) => mtools('mcopy', '-o', '-Q', source, `::${target
 function copyTree(source, target, { keep = false, skip = () => false } = {}) {
     if (target) tryMtools('mmd', `::${target}`);
     if (target.includes("'")) fixFolderName(target);
-    const entries = fs.readdirSync(source, { withFileTypes: true })
+    const entries = fs
+        .readdirSync(source, { withFileTypes: true })
         .filter((entry) => !entry.name.startsWith('.') && !skip(entry.name));
     const files = entries.filter((entry) => entry.isFile()).map((entry) => path.join(source, entry.name));
     // mcopy fails when it skips an existing file, which is intended with keep
-    if (files.length) (keep ? tryMtools : mtools)('mcopy', '-Q', ...(keep ? ['-D', 's'] : ['-o']), ...files, `::${target}/`);
+    if (files.length)
+        (keep ? tryMtools : mtools)('mcopy', '-Q', ...(keep ? ['-D', 's'] : ['-o']), ...files, `::${target}/`);
     for (const entry of entries.filter((entry) => entry.isDirectory())) {
         copyTree(path.join(source, entry.name), `${target}/${entry.name}`, { keep });
     }
@@ -142,10 +156,17 @@ if (mode === 'software') {
 
     // Setup also lists the boot sector of the FAT32 partition this build formatted as an unknown OS, drop it and the wait
     const bootIni = path.join(path.dirname(image), 'boot.ini');
-    fs.writeFileSync(bootIni, ['[boot loader]', 'timeout=0', 'default=multi(0)disk(0)rdisk(0)partition(1)\\WINDOWS',
-        '[operating systems]',
-        'multi(0)disk(0)rdisk(0)partition(1)\\WINDOWS="Microsoft Windows XP Professional" /noexecute=optin /fastdetect', '']
-        .join('\r\n'));
+    fs.writeFileSync(
+        bootIni,
+        [
+            '[boot loader]',
+            'timeout=0',
+            'default=multi(0)disk(0)rdisk(0)partition(1)\\WINDOWS',
+            '[operating systems]',
+            'multi(0)disk(0)rdisk(0)partition(1)\\WINDOWS="Microsoft Windows XP Professional" /noexecute=optin /fastdetect',
+            '',
+        ].join('\r\n'),
+    );
     tryMtools('mattrib', '-r', '-s', '-h', '::/boot.ini');
     copy(bootIni, '/boot.ini');
     mtools('mattrib', '+r', '+s', '+h', '::/boot.ini');
@@ -157,7 +178,9 @@ if (mode === 'software') {
     // Every folder minus its CD contents and what its .diskignore lists, its built root/ goes onto C: as is
     // without replacing existing files, like setups keep newer system files
     tryMtools('mmd', `::${V86}/software`);
-    const folders = fs.readdirSync(path.join(root, 'software'), { withFileTypes: true }).filter((entry) => entry.isDirectory());
+    const folders = fs
+        .readdirSync(path.join(root, 'software'), { withFileTypes: true })
+        .filter((entry) => entry.isDirectory());
     for (const { name } of folders) {
         const dir = path.join(root, 'software', name);
         if (fs.existsSync(path.join(dir, 'root'))) copyTree(path.join(dir, 'root'), '', { keep: true });
@@ -188,7 +211,12 @@ if (mode === 'software') {
     }
     tryMtools('mdeltree', `::${V86}`);
     for (const name of fs.readdirSync(path.join(root, 'music'))) tryMtools('mdeltree', `::${MUSIC}/${name}`);
-    for (const dir of ['/WINDOWS/Prefetch', '/WINDOWS/Temp', '/WINDOWS/system32/dllcache', '/WINDOWS/Driver Cache/i386']) {
+    for (const dir of [
+        '/WINDOWS/Prefetch',
+        '/WINDOWS/Temp',
+        '/WINDOWS/system32/dllcache',
+        '/WINDOWS/Driver Cache/i386',
+    ]) {
         tryMtools('mdeltree', `::${dir}`);
         tryMtools('mmd', `::${dir}`);
     }
@@ -215,7 +243,7 @@ function coverArt(file) {
     const version = data[3];
     const syncsafe = (at) => (data[at] << 21) | (data[at + 1] << 14) | (data[at + 2] << 7) | data[at + 3];
     const end = 10 + syncsafe(6);
-    for (let at = 10; at + 10 < end; ) {
+    for (let at = 10; at + 10 < end;) {
         const id = data.toString('latin1', at, at + 4);
         const size = version >= 4 ? syncsafe(at + 4) : data.readUInt32BE(at + 4);
         if (!size || !/^[A-Z0-9]{4}$/.test(id)) break;
@@ -258,7 +286,7 @@ function zeroFree() {
     const zero = Buffer.alloc(clusterSize * 256);
     const free = (cluster) => !(fat.readUInt32LE(cluster * 4) & 0x0fffffff);
     let freed = 0;
-    for (let cluster = 2; cluster < clusterCount + 2; ) {
+    for (let cluster = 2; cluster < clusterCount + 2;) {
         let run = 0;
         while (run < 256 && cluster + run < clusterCount + 2 && free(cluster + run)) run++;
         if (run) fs.writeSync(fd, zero, 0, run * clusterSize, clusterOffset(cluster));

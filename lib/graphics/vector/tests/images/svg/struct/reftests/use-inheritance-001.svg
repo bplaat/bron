@@ -34,16 +34,16 @@
         <use href="#r" xlink:href="#r" style="fill: green; fill-opacity: 0" />
     </g>
     <!--
-  This presume the SVG2 use inheritance rules, in SVG1 it will display as red.
+    This presume the SVG2 use inheritance rules, in SVG1 it will display as red.
 
-  1. The "rect" cloned by the "use" element is in a shadow DOM, so it DOES NOT
+    1. The "rect" cloned by the "use" element is in a shadow DOM, so it DOES NOT
      inherit the stroke from the "use rect" or ".container rect" style rules.
-  2. The cloned "rect" DOES get the rules set by the "rect" style rule, as that
+    2. The cloned "rect" DOES get the rules set by the "rect" style rule, as that
      still matches elements in the shadow DOM.
-  3. The "rect" DOES inherit "fill: green" from the <use>
-  4. The "rect"'s own "fill-opacity: 1" overrides the "fill-opacity: 0" inherited
+    3. The "rect" DOES inherit "fill: green" from the <use>
+    4. The "rect"'s own "fill-opacity: 1" overrides the "fill-opacity: 0" inherited
      from the "use" element.
-  5. Even though "rect" is considered to have no parent, it is not a root element
+    5. Even though "rect" is considered to have no parent, it is not a root element
      so does not match the rect:root style rule
-  -->
+    -->
 </svg>

@@ -24,7 +24,7 @@ impl Xtask {
             .with_context(|| format!("failed to read {}", settings_path.display()))?;
         let mut settings = parse_json_with_comments(&contents)
             .with_context(|| format!("failed to parse {}", settings_path.display()))?;
-        set_xml_format_on_save(&mut settings)?;
+        set_dprint_format_on_save(&mut settings)?;
         set_rust_analyzer_excludes(&mut settings, excludes)?;
 
         let mut output = Vec::new();
@@ -38,7 +38,7 @@ impl Xtask {
                 .with_context(|| format!("failed to write {}", settings_path.display()))?;
             println!("Configured VS Code for {}", self.os.name());
         }
-        Ok(())
+        self.build_dprint_plugin()
     }
 }
 
@@ -52,10 +52,24 @@ fn parse_json_with_comments(contents: &str) -> Result<Value, serde_json::Error> 
     serde_json::from_str(&json)
 }
 
-/// XML files that VS Code does not detect as XML by itself
-const XML_FILE_PATTERNS: [&str; 3] = ["*.entitlements", "*.manifest", "*.plist"];
+const DPRINT_LANGUAGES: [&str; 12] = [
+    "css",
+    "dockerfile",
+    "html",
+    "javascript",
+    "javascriptreact",
+    "json",
+    "jsonc",
+    "markdown",
+    "typescript",
+    "typescriptreact",
+    "xml",
+    "yaml",
+];
 
-fn set_xml_format_on_save(settings: &mut Value) -> Result<()> {
+const XML_FILE_PATTERNS: [&str; 5] = ["*.entitlements", "*.manifest", "*.plist", "*.svg", "*.xaml"];
+
+fn set_dprint_format_on_save(settings: &mut Value) -> Result<()> {
     let settings = settings
         .as_object_mut()
         .context("VS Code settings must be a JSON object")?;
@@ -67,13 +81,17 @@ fn set_xml_format_on_save(settings: &mut Value) -> Result<()> {
     for pattern in XML_FILE_PATTERNS {
         associations.insert(pattern.to_owned(), Value::String("xml".to_owned()));
     }
-    settings.insert(
-        "[xml]".to_owned(),
-        serde_json::json!({
-            "editor.defaultFormatter": "esbenp.prettier-vscode",
-            "editor.formatOnSave": true
-        }),
-    );
+
+    for language in DPRINT_LANGUAGES {
+        let key = format!("[{language}]");
+        let language_settings = settings
+            .entry(&key)
+            .or_insert_with(|| Value::Object(Default::default()))
+            .as_object_mut()
+            .with_context(|| format!("VS Code {key} settings must be a JSON object"))?;
+        language_settings.insert("editor.defaultFormatter".to_owned(), "dprint.dprint".into());
+        language_settings.insert("editor.formatOnSave".to_owned(), Value::Bool(true));
+    }
     Ok(())
 }
 
@@ -136,15 +154,24 @@ mod tests {
     }
 
     #[test]
-    fn xml_files_use_prettier_on_save() -> Result<()> {
-        let mut settings = json!({});
-        set_xml_format_on_save(&mut settings)?;
+    fn dprint_formats_supported_languages_on_save() -> Result<()> {
+        let mut settings = json!({
+            "[typescript]": { "editor.defaultFormatter": "esbenp.prettier-vscode", "editor.tabSize": 4 },
+            "[rust]": { "editor.defaultFormatter": "rust-lang.rust-analyzer" }
+        });
+        set_dprint_format_on_save(&mut settings)?;
+        for language in DPRINT_LANGUAGES {
+            let language_settings = &settings[format!("[{language}]")];
+            assert_eq!(
+                language_settings["editor.defaultFormatter"],
+                "dprint.dprint"
+            );
+            assert_eq!(language_settings["editor.formatOnSave"], true);
+        }
+        assert_eq!(settings["[typescript]"]["editor.tabSize"], 4);
         assert_eq!(
-            settings["[xml]"],
-            json!({
-                "editor.defaultFormatter": "esbenp.prettier-vscode",
-                "editor.formatOnSave": true
-            })
+            settings["[rust]"]["editor.defaultFormatter"],
+            "rust-lang.rust-analyzer"
         );
         Ok(())
     }
@@ -152,14 +179,16 @@ mod tests {
     #[test]
     fn xml_file_associations_keep_other_associations() -> Result<()> {
         let mut settings = json!({ "files.associations": { "*.inc": "nasm" } });
-        set_xml_format_on_save(&mut settings)?;
+        set_dprint_format_on_save(&mut settings)?;
         assert_eq!(
             settings["files.associations"],
             json!({
                 "*.entitlements": "xml",
                 "*.inc": "nasm",
                 "*.manifest": "xml",
-                "*.plist": "xml"
+                "*.plist": "xml",
+                "*.svg": "xml",
+                "*.xaml": "xml"
             })
         );
         Ok(())

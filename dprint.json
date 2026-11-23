@@ -1,0 +1,52 @@
+{
+    "lineWidth": 120,
+    "indentWidth": 4,
+    "newLineKind": "lf",
+    "includes": [
+        "**/*.{md,json,jsonc,yml,yaml,html,css,js,jsx,mjs,cjs,ts,tsx,mts,cts,xml,svg,plist,entitlements,manifest,xaml}",
+        "**/{Dockerfile,*.Dockerfile,*.dockerfile}"
+    ],
+    "excludes": [
+        "/apps/web/bassiemusic/",
+        "**/*.min.js",
+        "/apps/desktop/bassielight/meta/macos/icon.icon/icon.json",
+        "/apps/desktop/imageview/meta/macos/icon.icon/icon.json",
+        "/apps/desktop/manexplorer/meta/macos/icon.icon/icon.json",
+        "/apps/desktop/music-dl/meta/macos/icon.icon/icon.json",
+        "/apps/desktop/navidrome/meta/macos/icon.icon/icon.json",
+        "/apps/desktop/pixelfont/meta/macos/icon.icon/icon.json",
+        "/apps/desktop/sequelexplorer/meta/macos/icon.icon/icon.json",
+        "/games/game2048/meta/apple/icon.icon/icon.json",
+        "/games/plaatcraft/meta/apple/icon.icon/icon.json",
+        "/games/reversi/meta/apple/icon.icon/icon.json",
+        "/tools/bob/examples/bin/objc-bundle-xstreaks/icons/icon.icon/icon.json",
+        "/apps/desktop/imageview/examples/tiger.svg"
+    ],
+    "oxc": {
+        "quoteStyle": "single",
+        "sortPackageJson": false,
+        "experimentalSortImports": {
+            "groups": ["builtin", "external", ["parent", "sibling", "index"], "unknown"],
+            "newlinesBetween": false
+        },
+        "overrides": [
+            {
+                "files": ["**/*.{yml,yaml}"],
+                "indentWidth": 2
+            }
+        ]
+    },
+    "plist": {
+        "unindentedRoot": "plist"
+    },
+    "markup": {
+        "associations": ["**/*.{manifest,xaml}"]
+    },
+    "plugins": [
+        "https://plugins.dprint.dev/oxc-0.51.0.wasm",
+        "./target/wasm32-unknown-unknown/release/dprint_plist.wasm",
+        "https://plugins.dprint.dev/bartlomieju/lax-markup-0.3.2.wasm",
+        "https://plugins.dprint.dev/markdown-0.29.0.wasm",
+        "https://plugins.dprint.dev/dockerfile-0.8.0.wasm"
+    ]
+}

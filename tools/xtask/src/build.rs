@@ -60,6 +60,21 @@ fn freedesktop_identity(path: &Path) -> Result<Option<(String, String)>> {
 }
 
 impl Xtask {
+    pub(crate) fn build_dprint_plugin(&self) -> Result<()> {
+        run(Command::new("cargo")
+            .args([
+                "build",
+                "--release",
+                "--locked",
+                "-p",
+                "dprint-plist",
+                "--target",
+                "wasm32-unknown-unknown",
+                "--target-dir",
+            ])
+            .arg(self.root.join("target")))
+    }
+
     pub(crate) fn build_pages(&self) -> Result<()> {
         let pages = self.root.join("target/pages");
         fs::create_dir_all(&pages)?;

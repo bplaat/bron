@@ -26,8 +26,23 @@ mbr.writeUInt32LE(sectors, 458);
 mbr.writeUInt16LE(0xaa55, 510);
 fs.writeFileSync(image, mbr);
 fs.truncateSync(image, DISK_SIZE);
-run('mformat', '-i', `${image}@@${PART_START * 512}`, '-F', '-T', String(sectors), '-h', String(HEADS), '-s', '63',
-    '-H', String(PART_START), '-v', 'WINXP', '::');
+run(
+    'mformat',
+    '-i',
+    `${image}@@${PART_START * 512}`,
+    '-F',
+    '-T',
+    String(sectors),
+    '-h',
+    String(HEADS),
+    '-s',
+    '63',
+    '-H',
+    String(PART_START),
+    '-v',
+    'WINXP',
+    '::',
+);
 
 // Answer floppy: CD setup reads WINNT.SIF from A:
 const sif = path.join(out, 'WINNT.SIF');
@@ -61,7 +76,11 @@ function setupError() {
             env: { ...process.env, MTOOLS_SKIP_CHECK: '1' },
             stdio: ['ignore', 'pipe', 'ignore'],
         });
-        return log.toString('latin1').replace(/[\0\r]/g, '').match(/^[^\n]*(invalid|missing)[^\n]*$/im)?.[0].trim();
+        return log
+            .toString('latin1')
+            .replace(/[\0\r]/g, '')
+            .match(/^[^\n]*(invalid|missing)[^\n]*$/im)?.[0]
+            .trim();
     } catch {
         return null; // not written yet
     }

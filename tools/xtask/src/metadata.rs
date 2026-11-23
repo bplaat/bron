@@ -33,11 +33,11 @@ pub(crate) fn packages(metadata: &Value) -> Result<&[Value]> {
         .context("cargo metadata has no packages")
 }
 
-pub(crate) fn platform_excludes(metadata: &Value, os: Os) -> BTreeSet<String> {
+fn package_names(metadata: &Value, filter: impl Fn(&Value) -> bool) -> BTreeSet<String> {
     packages(metadata)
         .unwrap_or_default()
         .iter()
-        .filter(|package| !supports_os(package, os))
+        .filter(|package| filter(package))
         .filter_map(|package| {
             package
                 .get("name")
@@ -45,6 +45,24 @@ pub(crate) fn platform_excludes(metadata: &Value, os: Os) -> BTreeSet<String> {
                 .map(str::to_owned)
         })
         .collect()
+}
+
+pub(crate) fn platform_excludes(metadata: &Value, os: Os) -> BTreeSet<String> {
+    package_names(metadata, |package| !supports_os(package, os))
+}
+
+/// Packages without a target that cargo can doc test, such as cdylib-only libraries
+pub(crate) fn doctest_excludes(metadata: &Value) -> BTreeSet<String> {
+    package_names(metadata, |package| {
+        !package
+            .get("targets")
+            .and_then(Value::as_array)
+            .is_some_and(|targets| {
+                targets
+                    .iter()
+                    .any(|target| target.get("doctest").and_then(Value::as_bool) == Some(true))
+            })
+    })
 }
 
 pub(crate) fn platform_exclude_paths(
@@ -224,6 +242,21 @@ mod tests {
                 .collect()
         );
         Ok(())
+    }
+
+    #[test]
+    fn doctest_excludes_lists_packages_without_doc_tests() {
+        let metadata = json!({
+            "packages": [
+                { "name": "library", "targets": [{ "kind": ["lib"], "doctest": true }] },
+                { "name": "plugin", "targets": [{ "kind": ["cdylib"], "doctest": false }] },
+                { "name": "tool", "targets": [{ "kind": ["bin"], "doctest": false }] }
+            ]
+        });
+        assert_eq!(
+            doctest_excludes(&metadata),
+            ["plugin".to_owned(), "tool".to_owned()].into()
+        );
     }
 
     #[test]

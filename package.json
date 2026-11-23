@@ -5,10 +5,5 @@
         "!apps/web/bassiemusic/web",
         "lib/*/*",
         "lib/*/*/examples/*"
-    ],
-    "devDependencies": {
-        "@ianvs/prettier-plugin-sort-imports": "^4.7.1",
-        "@prettier/plugin-xml": "^3.4.2",
-        "prettier": "^3.8.4"
-    }
+    ]
 }

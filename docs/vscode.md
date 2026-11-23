@@ -30,50 +30,60 @@
     "rust-analyzer.check.overrideCommand": ["cargo", "xtask", "check-editor"],
 
     // Web extensions settings
+    "[dockerfile]": {
+        "editor.defaultFormatter": "dprint.dprint",
+        "editor.formatOnSave": true
+    },
     "[html]": {
-        "editor.defaultFormatter": "esbenp.prettier-vscode",
+        "editor.defaultFormatter": "dprint.dprint",
         "editor.formatOnSave": true
     },
     "[css]": {
-        "editor.defaultFormatter": "esbenp.prettier-vscode",
+        "editor.defaultFormatter": "dprint.dprint",
         "editor.formatOnSave": true
     },
     "[javascript]": {
-        "editor.defaultFormatter": "esbenp.prettier-vscode",
+        "editor.defaultFormatter": "dprint.dprint",
         "editor.formatOnSave": true
     },
     "[javascriptreact]": {
-        "editor.defaultFormatter": "esbenp.prettier-vscode",
+        "editor.defaultFormatter": "dprint.dprint",
         "editor.formatOnSave": true
     },
     "[typescript]": {
-        "editor.defaultFormatter": "esbenp.prettier-vscode",
+        "editor.defaultFormatter": "dprint.dprint",
         "editor.formatOnSave": true
     },
     "[typescriptreact]": {
-        "editor.defaultFormatter": "esbenp.prettier-vscode",
+        "editor.defaultFormatter": "dprint.dprint",
         "editor.formatOnSave": true
     },
     "[markdown]": {
-        "editor.defaultFormatter": "esbenp.prettier-vscode",
+        "editor.defaultFormatter": "dprint.dprint",
         "editor.formatOnSave": true
     },
     "[json]": {
-        "editor.defaultFormatter": "esbenp.prettier-vscode",
+        "editor.defaultFormatter": "dprint.dprint",
+        "editor.formatOnSave": true
+    },
+    "[jsonc]": {
+        "editor.defaultFormatter": "dprint.dprint",
         "editor.formatOnSave": true
     },
     "[yaml]": {
-        "editor.defaultFormatter": "esbenp.prettier-vscode",
+        "editor.defaultFormatter": "dprint.dprint",
         "editor.formatOnSave": true
     },
     "[xml]": {
-        "editor.defaultFormatter": "esbenp.prettier-vscode",
+        "editor.defaultFormatter": "dprint.dprint",
         "editor.formatOnSave": true
     },
     "files.associations": {
         "*.entitlements": "xml",
         "*.manifest": "xml",
-        "*.plist": "xml"
+        "*.plist": "xml",
+        "*.svg": "xml",
+        "*.xaml": "xml"
     },
 
     // Clang-format extension
@@ -105,10 +115,10 @@
 ```json
 {
     "recommendations": [
+        "dprint.dprint",
         "EditorConfig.EditorConfig",
         "rust-lang.rust-analyzer",
         "tamasfe.even-better-toml",
-        "esbenp.prettier-vscode",
         "xaver.clang-format"
     ]
 }
@@ -140,5 +150,5 @@
 ```
 
 Run `cargo xtask configure-vscode` or restart VSCode after creating the files above.
-It adds the XML file associations and `rust-analyzer.files.exclude` for packages unsupported on the current
-platform.
+It builds the dprint WebAssembly plugin, enables format-on-save for web and XML files and Dockerfiles,
+and sets `rust-analyzer.files.exclude` for packages unsupported on the current platform.

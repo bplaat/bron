@@ -24,7 +24,7 @@ const record = (data, offset) => ({
 
 function* entries(directory) {
     const data = read(directory.extent * SECTOR, directory.size);
-    for (let offset = 0; offset < data.length; ) {
+    for (let offset = 0; offset < data.length;) {
         const length = data[offset];
         if (length === 0) {
             // Records don't cross sectors, the rest of this one is padding
@@ -42,7 +42,8 @@ const root = record(volume, 156);
 
 for (const file of paths) {
     const entry = file.split('/').reduce((directory, name) => {
-        const found = directory && [...entries(directory)].find((entry) => entry.name.toUpperCase() === name.toUpperCase());
+        const found =
+            directory && [...entries(directory)].find((entry) => entry.name.toUpperCase() === name.toUpperCase());
         if (!found) throw new Error(`${image}: ${file} not found`);
         return found;
     }, root);

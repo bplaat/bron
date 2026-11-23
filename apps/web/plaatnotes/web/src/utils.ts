@@ -6,7 +6,7 @@
 
 // Dutch family-name particles (tussenvoegsels) sorted longest-first
 // so that multi-word particles are matched before their shorter components.
-// prettier-ignore
+// oxfmt-ignore
 const SURNAME_PARTICLES = [
     'van der', 'van den', 'van de', 'van het', "van 't", 'van ter',
     'in het', "in 't", 'in de', 'in den',

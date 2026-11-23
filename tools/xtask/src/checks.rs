@@ -13,7 +13,8 @@ use regex::regex;
 use serde_json::Value;
 
 use crate::metadata::{
-    add_excludes, features_without_swap, has_target_kind, packages, platform_excludes,
+    add_excludes, doctest_excludes, features_without_swap, has_target_kind, packages,
+    platform_excludes,
 };
 use crate::process::{capture, npm_program, npx_program, run, run_named};
 use crate::utils::{relative_slash, source_files};
@@ -89,47 +90,9 @@ impl Xtask {
     }
 
     pub(crate) fn check_formatting(&self) -> Result<()> {
-        self.ensure_npm_deps()?;
-        println!("Checking Prettier formatting...");
-        let extensions = [
-            "md",
-            "json",
-            "yml",
-            "yaml",
-            "html",
-            "css",
-            "js",
-            "jsx",
-            "ts",
-            "tsx",
-            "xml",
-            "svg",
-            "plist",
-            "manifest",
-            "entitlements",
-            "xaml",
-        ];
-        let files = self
-            .source_files(&extensions)?
-            .into_iter()
-            .filter(|file| !file.to_string_lossy().ends_with(".min.js"))
-            .collect::<Vec<_>>();
-        let mut command = Command::new(npx_program(self.os));
-        command.args(["--no-install", "prettier", "--check"]);
-        for files in command_batches(&files, command_argument_budget(&command, self.os)?, self.os)?
-        {
-            let mut command = Command::new(npx_program(self.os));
-            command.args(["--no-install", "prettier", "--check"]);
-            command.args(files);
-            run_named(
-                &mut command,
-                &format!(
-                    "{} prettier --check ({} files)",
-                    npx_program(self.os),
-                    files.len()
-                ),
-            )?;
-        }
+        self.build_dprint_plugin()?;
+        println!("Checking dprint formatting...");
+        run(Command::new("dprint").args(["check", "--list-different"]))?;
 
         println!("Checking clang-format formatting...");
         let mut files = self.source_files(&[])?;
@@ -212,7 +175,7 @@ impl Xtask {
         println!("Running Rust tests...");
         let mut command = Command::new("cargo");
         command.args(["test", "--doc", "--all-features", "--locked", "--workspace"]);
-        add_excludes(&mut command, &excludes);
+        add_excludes(&mut command, &(&excludes | &doctest_excludes(&metadata)));
         run(&mut command)?;
 
         let mut command = Command::new("cargo");

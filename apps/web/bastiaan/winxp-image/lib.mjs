@@ -1,9 +1,9 @@
 // Helpers for running the XP disk headless in v86
 
 import fs from 'node:fs';
+import { createRequire } from 'node:module';
 import path from 'node:path';
 import zlib from 'node:zlib';
-import { createRequire } from 'node:module';
 import { GuestHost } from '../web/src/guest-host.ts';
 import { MACHINE, patchNetworkCard } from '../web/src/machine.ts';
 
@@ -63,7 +63,7 @@ export async function waitFor(emulator, what, check, minutes) {
 export async function waitIdle(emulator, seconds) {
     const buffer = disk(emulator);
     let writes = -1;
-    for (let quiet = 0; quiet < seconds; ) {
+    for (let quiet = 0; quiet < seconds;) {
         await sleep(1000);
         quiet = buffer.block_cache_is_write.size === writes ? quiet + 1 : 0;
         writes = buffer.block_cache_is_write.size;

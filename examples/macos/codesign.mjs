@@ -28,7 +28,10 @@ function readLayout(macho) {
         const command = macho.readUInt32LE(offset);
         if (command === LC_CODE_SIGNATURE) {
             [codeLimit, capacity] = [macho.readUInt32LE(offset + 8), macho.readUInt32LE(offset + 12)];
-        } else if (command === LC_SEGMENT_64 && macho.toString('latin1', offset + 8, offset + 24).replace(/\0+$/, '') === '__TEXT') {
+        } else if (
+            command === LC_SEGMENT_64 &&
+            macho.toString('latin1', offset + 8, offset + 24).replace(/\0+$/, '') === '__TEXT'
+        ) {
             executableSize = macho.readBigUInt64LE(offset + 48);
         }
     }
@@ -44,7 +47,12 @@ export function adhocSignature(macho, name, pageSize) {
     const identifier = Buffer.from(`${name}\0`, 'ascii');
     const hashes = [];
     for (let offset = 0; offset < codeLimit; offset += pageSize) {
-        hashes.push(crypto.createHash('sha256').update(macho.subarray(offset, Math.min(offset + pageSize, codeLimit))).digest());
+        hashes.push(
+            crypto
+                .createHash('sha256')
+                .update(macho.subarray(offset, Math.min(offset + pageSize, codeLimit)))
+                .digest(),
+        );
     }
     const hashOffset = CODE_DIRECTORY_HEADER_SIZE + identifier.length;
 

@@ -13,9 +13,13 @@ const [image, outDir] = process.argv.slice(2);
 const part = Buffer.alloc(4);
 fs.readSync(fs.openSync(image, 'r'), part, 0, 4, 454);
 const kernelFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'winxp-')), 'ntoskrnl.exe');
-execFileSync('mcopy', ['-i', `${image}@@${part.readUInt32LE(0) * 512}`, '::/WINDOWS/system32/ntoskrnl.exe', kernelFile], {
-    env: { ...process.env, MTOOLS_SKIP_CHECK: '1' },
-});
+execFileSync(
+    'mcopy',
+    ['-i', `${image}@@${part.readUInt32LE(0) * 512}`, '::/WINDOWS/system32/ntoskrnl.exe', kernelFile],
+    {
+        env: { ...process.env, MTOOLS_SKIP_CHECK: '1' },
+    },
+);
 const pe = fs.readFileSync(kernelFile);
 fs.rmSync(path.dirname(kernelFile), { recursive: true });
 
@@ -62,11 +66,12 @@ function decode(dib) {
     if (compression === 0) {
         const stride = ((width + 7) >> 3) * 4;
         for (let y = 0; y < height; y++)
-            for (let x = 0; x < width; x++) index[y * width + x] = (bits[y * stride + (x >> 1)] >> (x & 1 ? 0 : 4)) & 15;
+            for (let x = 0; x < width; x++)
+                index[y * width + x] = (bits[y * stride + (x >> 1)] >> (x & 1 ? 0 : 4)) & 15;
     } else {
         let x = 0;
         let y = 0;
-        for (let i = 0; i < bits.length; ) {
+        for (let i = 0; i < bits.length;) {
             const count = bits[i++];
             const value = bits[i++];
             if (count) {
@@ -80,7 +85,8 @@ function decode(dib) {
                 x += bits[i++];
                 y += bits[i++];
             } else {
-                for (let n = 0; n < value; n++) index[y * width + x++] = n & 1 ? bits[i + (n >> 1)] & 15 : bits[i + (n >> 1)] >> 4;
+                for (let n = 0; n < value; n++)
+                    index[y * width + x++] = n & 1 ? bits[i + (n >> 1)] & 15 : bits[i + (n >> 1)] >> 4;
                 i += ((value + 3) >> 2) << 1;
             }
         }

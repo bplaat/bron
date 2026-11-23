@@ -13,7 +13,10 @@ import { boot, screenshot, sleep, waitFor, waitIdle } from './lib.mjs';
 // The snapshot compresses on every core, the same output in a third of the time
 const zstd = (data) =>
     zlib.zstdCompressSync(data, {
-        params: { [zlib.constants.ZSTD_c_compressionLevel]: 19, [zlib.constants.ZSTD_c_nbWorkers]: os.availableParallelism() },
+        params: {
+            [zlib.constants.ZSTD_c_compressionLevel]: 19,
+            [zlib.constants.ZSTD_c_nbWorkers]: os.availableParallelism(),
+        },
     });
 const [, , image, outDir] = process.argv;
 fs.mkdirSync(path.join(outDir, 'disk'), { recursive: true });
@@ -22,14 +25,24 @@ const size = fs.statSync(image).size;
 const hashesFile = path.resolve('out/chunks.json');
 const previous = fs.existsSync(hashesFile) ? JSON.parse(fs.readFileSync(hashesFile, 'utf8')) : {};
 const count = os.availableParallelism(); // chunks.mjs compresses them in parallel
-const results = await Promise.all(Array.from({ length: count }, (_, index) => new Promise((resolve, reject) => {
-    const workerData = { image, outDir, size, index, count, previous };
-    new Worker(new URL('chunks.mjs', import.meta.url), { workerData }).on('message', resolve).on('error', reject);
-})));
+const results = await Promise.all(
+    Array.from(
+        { length: count },
+        (_, index) =>
+            new Promise((resolve, reject) => {
+                const workerData = { image, outDir, size, index, count, previous };
+                new Worker(new URL('chunks.mjs', import.meta.url), { workerData })
+                    .on('message', resolve)
+                    .on('error', reject);
+            }),
+    ),
+);
 fs.writeFileSync(hashesFile, JSON.stringify(Object.assign({}, ...results.map((result) => result.hashes))));
 const packed = results.reduce((sum, result) => sum + result.packed, 0);
 const compressed = results.reduce((sum, result) => sum + result.compressed, 0);
-console.log(`disk ${(size / 2 ** 30).toFixed(1)} GiB, packed ${(packed / 2 ** 20).toFixed(1)} MiB, ${compressed} chunks compressed`);
+console.log(
+    `disk ${(size / 2 ** 30).toFixed(1)} GiB, packed ${(packed / 2 ** 20).toFixed(1)} MiB, ${compressed} chunks compressed`,
+);
 for (const name of ['seabios.bin', 'vgabios.bin']) {
     fs.copyFileSync(path.join(path.dirname(new URL(import.meta.url).pathname), 'bios', name), path.join(outDir, name));
 }
@@ -48,6 +61,8 @@ fs.writeFileSync(path.join(outDir, 'state.bin.zst'), packedState);
 // The build id ties sessions saved in browsers to this disk and snapshot
 const build = crypto.createHash('sha256').update(packedState).digest('hex').slice(0, 16);
 fs.writeFileSync(path.join(outDir, 'disk.json'), JSON.stringify({ size, build }) + '\n');
-console.log(`state ${(state.length / 2 ** 20).toFixed(1)} MiB, packed ${(packedState.length / 2 ** 20).toFixed(1)} MiB`);
+console.log(
+    `state ${(state.length / 2 ** 20).toFixed(1)} MiB, packed ${(packedState.length / 2 ** 20).toFixed(1)} MiB`,
+);
 emulator.destroy();
 process.exit(0);
