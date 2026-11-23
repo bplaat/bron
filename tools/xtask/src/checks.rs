@@ -44,15 +44,7 @@ impl Xtask {
         self.check_copyright()?;
         self.check_formatting()?;
         self.check_docker()?;
-        self.check_websites()?;
         self.check_rust_deps()
-    }
-
-    // Type checks and builds the websites that no Cargo build script builds
-    pub(crate) fn check_websites(&self) -> Result<()> {
-        println!("Building websites...");
-        self.ensure_npm_deps()?;
-        run(Command::new(npm_program(self.os)).args(["run", "build", "--workspace", "bastiaan"]))
     }
 
     pub(crate) fn check_editor(&self) -> Result<()> {
@@ -429,6 +421,10 @@ impl Xtask {
     }
 
     pub(crate) fn check_others(&self) -> Result<()> {
+        println!("Building the Bastiaan website...");
+        self.ensure_npm_deps()?;
+        run(Command::new(npm_program(self.os)).args(["run", "build", "--workspace", "bastiaan"]))?;
+
         println!("Building Windows examples...");
         run(Command::new("sh").arg("examples/windows/build.sh"))?;
 

@@ -183,6 +183,11 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7.0.1
+      - uses: actions/cache@v6.1.0
+        with:
+          path: ~/.npm/_cacache
+          key: npm-ubuntu-26.04-${{ hashFiles('package-lock.json') }}
+          restore-keys: npm-ubuntu-26.04-
       - name: Install extra assembly and console dependencies
         run: |
           sudo apt-get update
@@ -242,5 +247,5 @@ jobs:
             target/winxp-toolchain/sysroot
             target/winxp-toolchain/clang/lib
           key: toolchain-winxp-ubuntu-26.04-${{ steps.toolchain-cache.outputs.winxp }}
-      - name: Build examples and check console and Windows XP toolchains
+      - name: Build the Bastiaan website and examples and check console and Windows XP toolchains
         run: cargo xtask check-others

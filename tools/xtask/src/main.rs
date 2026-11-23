@@ -132,7 +132,9 @@ impl Xtask {
         println!("  check-rust       Format, lint, and test Rust code");
         println!("  check-e2e        Run PlaatNotes browser tests");
         println!("  check-macos-examples      Build native macOS examples");
-        println!("  check-others     Build examples and games; run console tests");
+        println!(
+            "  check-others     Build the Bastiaan website, examples, and games, and run console tests"
+        );
         println!("  configure-vscode Configure VS Code for the current platform");
         println!("  coverage         Generate Rust coverage");
         println!("  build-pages      Build GitHub Pages artifacts");
