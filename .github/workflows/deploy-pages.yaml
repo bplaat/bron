@@ -8,15 +8,13 @@ on:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 concurrency:
   group: ${{ github.workflow }}
   cancel-in-progress: true
 
 jobs:
-  deploy-pages:
+  build-pages:
     runs-on: ubuntu-26.04
     # The branches filter matches the head branch name, which a fork PR can also call master,
     # so only deploy check runs of pushes to this repository
@@ -24,9 +22,8 @@ jobs:
       github.event.workflow_run.conclusion == 'success' &&
       github.event.workflow_run.event == 'push' &&
       github.event.workflow_run.head_repository.full_name == github.repository
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
+    outputs:
+      artifact-name: github-pages-${{ github.run_attempt }}
     steps:
       # Deploy the commit that the check run passed, not the latest master
       - uses: actions/checkout@v7.0.1
@@ -68,7 +65,21 @@ jobs:
       - name: Upload pages
         uses: actions/upload-pages-artifact@v5.0.0
         with:
+          name: github-pages-${{ github.run_attempt }}
           path: './target/pages'
+
+  deploy-pages:
+    needs: build-pages
+    runs-on: ubuntu-26.04
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
       - id: deployment
         name: Deploy pages
         uses: actions/deploy-pages@v5.0.1
+        with:
+          artifact_name: ${{ needs.build-pages.outputs.artifact-name }}
