@@ -45,8 +45,8 @@
     %define BIND_OPCODE_DO_BIND 0x90
     %define BIND_OPCODE_DONE 0
 
-    %define	N_EXT 0x01
-    %define	N_SECT 0xe
+    %define N_EXT 0x01
+    %define N_SECT 0xe
 
 ; Macho Header
 macho_header:
