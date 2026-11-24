@@ -5,6 +5,9 @@ contents to the markup formatter while keeping the value directly under `<plist>
 writing self-closing tags without a space, such as `<true/>`, because some macOS command line tools reject
 `<true />`.
 
+Range formatting applies the markup formatter's whitespace edits inside the selected text. Binary
+property lists are skipped.
+
 The formatting checks and VS Code setup build the plugin into `target/`. To build it before running
 dprint directly, run these commands from the workspace root.
 

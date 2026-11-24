@@ -13,7 +13,7 @@ crate-type = ["cdylib"]
 xmlparser = "0.13"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-dprint-core = { version = "0.71", default-features = false, features = [
+dprint-core = { version = "0.77", default-features = false, features = [
     "wasm",
 ] }
 serde = { version = "1", features = ["derive"] }

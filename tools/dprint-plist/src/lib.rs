@@ -8,6 +8,7 @@
 
 #![cfg(any(test, target_arch = "wasm32"))]
 
+use std::borrow::Cow;
 use std::ops::Range;
 
 #[cfg(target_arch = "wasm32")]
@@ -64,6 +65,7 @@ impl SyncPluginHandler<Configuration> for PlistPlugin {
             .into(),
             config_schema_url: String::new(),
             update_url: None,
+            supports_range_formatting: true,
         }
     }
 
@@ -102,6 +104,11 @@ impl SyncPluginHandler<Configuration> for PlistPlugin {
             )
         };
         let formatted = format_plist(&original, request.config, markup_format)?;
+        if let Some(range) = request.range
+            && !(range.start == 0 && range.end >= original.len())
+        {
+            return Ok(apply_range(&original, &formatted, range).map(String::into_bytes));
+        }
         Ok((formatted != original).then(|| formatted.into_bytes()))
     }
 }
@@ -134,6 +141,94 @@ fn format_plist<E>(
     // Some macOS command line tools reject `<true />`, so always write `<true/>`
     remove_self_closing_spaces(&mut formatted);
     Ok(formatted)
+}
+
+/// Aligns the original and formatted XML on non-whitespace bytes. The markup formatter
+/// keeps their order and spelling, so each whitespace edit can be applied independently.
+fn apply_range(original: &str, formatted: &str, range: Range<usize>) -> Option<String> {
+    let end = range.end.min(original.len());
+    let start = range.start.min(end);
+    let range = if start == end {
+        let bytes = original.as_bytes();
+        let line_start = bytes[..start]
+            .iter()
+            .rposition(|&byte| byte == b'\n')
+            .map_or(0, |index| index + 1);
+        let line_end = bytes[start..]
+            .iter()
+            .position(|&byte| byte == b'\n')
+            .map_or(bytes.len(), |index| start + index);
+        line_start..line_end
+    } else {
+        start..end
+    };
+    let body = original.trim_start_matches('\u{feff}');
+    let bom_len = original.len() - body.len();
+    let mut before = body;
+    let mut after = formatted.trim_start_matches('\u{feff}');
+    let crlf = body
+        .find('\n')
+        .is_some_and(|index| body.as_bytes()[..index].ends_with(b"\r"));
+    let mut result = String::with_capacity(original.len());
+    result.push_str(&original[..bom_len]);
+    loop {
+        let old_content = before.trim_start_matches(is_xml_whitespace);
+        let new_content = after.trim_start_matches(is_xml_whitespace);
+        let old_gap = &before[..before.len() - old_content.len()];
+        let new_gap = &after[..after.len() - new_content.len()];
+        let new_gap = if old_gap == new_gap {
+            Cow::Borrowed(new_gap)
+        } else {
+            let lf = if new_gap.contains("\r\n") {
+                Cow::Owned(new_gap.replace("\r\n", "\n"))
+            } else {
+                Cow::Borrowed(new_gap)
+            };
+            if crlf && lf.contains('\n') {
+                Cow::Owned(lf.replace('\n', "\r\n"))
+            } else {
+                lf
+            }
+        };
+        let offset = original.len() - before.len();
+        let common_start = old_gap
+            .bytes()
+            .zip(new_gap.bytes())
+            .take_while(|(old, new)| old == new)
+            .count();
+        let common_end = old_gap.as_bytes()[common_start..]
+            .iter()
+            .rev()
+            .zip(new_gap.as_bytes()[common_start..].iter().rev())
+            .take_while(|(old, new)| old == new)
+            .count();
+        let edit_start = offset + common_start;
+        let edit_end = offset + old_gap.len() - common_end;
+        let before_range_end = edit_start < range.end || edit_start == original.len();
+        if edit_start >= range.start && edit_end <= range.end && before_range_end {
+            result.push_str(&new_gap);
+        } else {
+            result.push_str(old_gap);
+        }
+
+        if old_content.is_empty() || new_content.is_empty() {
+            return (old_content == new_content && result != original).then_some(result);
+        }
+        let run_len = old_content
+            .bytes()
+            .zip(new_content.bytes())
+            .take_while(|&(old, new)| old == new && !is_xml_whitespace(char::from(old)))
+            .count();
+        if run_len == 0
+            || !old_content.is_char_boundary(run_len)
+            || !new_content.is_char_boundary(run_len)
+        {
+            return None;
+        }
+        result.push_str(&old_content[..run_len]);
+        before = &old_content[run_len..];
+        after = &new_content[run_len..];
+    }
 }
 
 fn root_body(text: &str, root: &str) -> Option<Range<usize>> {
@@ -197,6 +292,30 @@ mod tests {
     use std::convert::Infallible;
 
     use super::*;
+
+    #[test]
+    fn range_formats_only_selected_xml_whitespace() {
+        let original = "<plist>\r\n<array>\r\n<true />\r\n<false />\r\n</array>\r\n</plist>\r\n";
+        let formatted = "<plist>\n<array>\n    <true/>\n    <false/>\n</array>\n</plist>\n";
+        let start = original.find("<true").unwrap();
+        let end = original.find("<false").unwrap();
+        assert_eq!(
+            apply_range(original, formatted, start..end).as_deref(),
+            Some("<plist>\r\n<array>\r\n    <true/>\r\n<false />\r\n</array>\r\n</plist>\r\n"),
+        );
+    }
+
+    #[test]
+    fn range_aligns_insertions_between_previously_adjacent_tags() {
+        let original = "<array><true /><string>caf\u{e9}</string></array>";
+        let formatted = "<array>\n    <true/>\n    <string>caf\u{e9}</string>\n</array>\n";
+        let start = original.find("<true").unwrap();
+        let end = original.find("<string").unwrap();
+        assert_eq!(
+            apply_range(original, formatted, start..end).as_deref(),
+            Some("<array>\n    <true/><string>caf\u{e9}</string></array>"),
+        );
+    }
 
     #[test]
     fn plist_root_value_is_formatted_as_a_standalone_element() -> Result<(), Infallible> {
