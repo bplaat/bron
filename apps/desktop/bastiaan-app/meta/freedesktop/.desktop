@@ -1,0 +1,8 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Bastiaan
+Exec="$BIN_DIR/Bastiaan"
+Icon=nl.bplaat.Bastiaan
+Terminal=false
+Categories=Utility;
