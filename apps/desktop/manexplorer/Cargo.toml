@@ -29,7 +29,5 @@ preferences = { path = "../../../lib/sys/preferences" }
 rust-embed = "8.13"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-small-http = { version = "0.2.1", default-features = false, features = [
-    "json",
-] }
+small-http = { version = "0.2.1", default-features = false, features = ["json"] }
 small-router = { version = "0.2.1" }

@@ -6,9 +6,6 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 
-[lints]
-workspace = true
-
 [package.metadata.bundle]
 name = "Reversi"
 identifier = "nl.bplaat.Reversi"
@@ -26,6 +23,9 @@ sandbox = true
 [package.metadata.bundle.ios]
 
 [package.metadata.bundle.android]
+
+[lints]
+workspace = true
 
 [dependencies]
 bcanvas = { path = "../../lib/graphics/bcanvas" }

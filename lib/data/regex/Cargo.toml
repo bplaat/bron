@@ -9,13 +9,10 @@ repository.workspace = true
 [lints]
 workspace = true
 
-[dependencies]
-regex-lite = { version = "0.1.9", default-features = false, features = [
-    "std",
-    "string",
-] }
-
 [features]
 default = ["std"]
 std = []
 unicode-perl = []
+
+[dependencies]
+regex-lite = { version = "0.1.9", default-features = false, features = ["std", "string"] }

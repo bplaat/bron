@@ -3,7 +3,7 @@
     "indentWidth": 4,
     "newLineKind": "lf",
     "includes": [
-        "**/*.{md,json,jsonc,yml,yaml,html,css,js,jsx,mjs,cjs,ts,tsx,mts,cts,xml,svg,plist,entitlements,manifest,xaml}",
+        "**/*.{md,json,jsonc,yml,yaml,toml,html,css,js,jsx,mjs,cjs,ts,tsx,mts,cts,xml,svg,plist,entitlements,manifest,xaml}",
         "**/{Dockerfile,*.Dockerfile,*.dockerfile}"
     ],
     "excludes": [
@@ -36,6 +36,10 @@
             }
         ]
     },
+    "toml": {
+        "array.preferSingleLine": true,
+        "comment.forceLeadingSpace": false
+    },
     "plist": {
         "unindentedRoot": "plist"
     },
@@ -43,6 +47,7 @@
         "associations": ["**/*.{manifest,xaml}"]
     },
     "plugins": [
+        "./target/wasm32-unknown-unknown/release/dprint_toml.wasm",
         "https://plugins.dprint.dev/oxc-0.51.0.wasm",
         "./target/wasm32-unknown-unknown/release/dprint_plist.wasm",
         "https://plugins.dprint.dev/bartlomieju/lax-markup-0.3.2.wasm",

@@ -6,9 +6,9 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 
+[lints]
+workspace = true
+
 [dependencies]
 bcanvas = { path = "../.." }
 bwindow = { path = "../../../../ui/bwindow", default-features = false }
-
-[lints]
-workspace = true

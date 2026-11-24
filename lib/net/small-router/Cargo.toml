@@ -9,11 +9,11 @@ repository.workspace = true
 [lints]
 workspace = true
 
+[features]
+log = ["dep:log"]
+
 [dependencies]
 anyhow = "1.0"
 log = { version = "0.4.34", optional = true }
 percent-encoding = "2.3"
 small-http = { version = "0.2.1", default-features = false }
-
-[features]
-log = ["dep:log"]

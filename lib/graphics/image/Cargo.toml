@@ -10,21 +10,7 @@ repository.workspace = true
 workspace = true
 
 [features]
-default = [
-    "std",
-    "bmp",
-    "gif",
-    "icns",
-    "ico",
-    "jpeg",
-    "jpeg2000",
-    "png",
-    "pnm",
-    "qoi",
-    "tga",
-    "tiff",
-    "webp",
-]
+default = ["std", "bmp", "gif", "icns", "ico", "jpeg", "jpeg2000", "png", "pnm", "qoi", "tga", "tiff", "webp"]
 std = []
 bmp = []
 gif = []

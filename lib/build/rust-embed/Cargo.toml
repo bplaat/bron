@@ -9,8 +9,8 @@ repository.workspace = true
 [lints]
 workspace = true
 
-[dependencies]
-rust-embed-impl = "8.13"
-
 [features]
 interpolate-folder-path = ["rust-embed-impl/interpolate-folder-path"]
+
+[dependencies]
+rust-embed-impl = "8.13"

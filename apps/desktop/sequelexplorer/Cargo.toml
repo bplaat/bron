@@ -26,29 +26,16 @@ workspace = true
 [dependencies]
 anyhow = "1.0"
 base64 = "0.23.1"
-bsql = { version = "0.1.2", features = [
-    "mysql",
-    "mysql-native-password",
-    "mysql-tls",
-] }
-bwebview = { path = "../../../lib/ui/bwebview", features = [
-    "rust-embed",
-    "file_drop",
-] }
-bwindow = { path = "../../../lib/ui/bwindow", features = [
-    "dialog",
-    "file_drop",
-    "menu",
-] }
+bsql = { version = "0.1.2", features = ["mysql", "mysql-native-password", "mysql-tls"] }
+bwebview = { path = "../../../lib/ui/bwebview", features = ["rust-embed", "file_drop"] }
+bwindow = { path = "../../../lib/ui/bwindow", features = ["dialog", "file_drop", "menu"] }
 keyring = "4.2"
 preferences = { path = "../../../lib/sys/preferences" }
 rust-embed = "8.13"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 serde_urlencoded = "0.7.1"
-small-http = { version = "0.2.1", default-features = false, features = [
-    "json",
-] }
+small-http = { version = "0.2.1", default-features = false, features = ["json"] }
 small-router = { version = "0.2.1" }
 url = { version = "2.5" }
 zeroize = { version = "1.9", features = ["serde"] }

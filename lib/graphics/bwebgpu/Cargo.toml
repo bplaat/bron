@@ -9,6 +9,11 @@ repository.workspace = true
 [lints]
 workspace = true
 
+[features]
+default = ["window"]
+image = ["dep:image"]
+window = ["dep:bwindow"]
+
 [dependencies]
 bitflags = "2.13"
 bwindow = { path = "../../ui/bwindow", default-features = false, optional = true }
@@ -16,8 +21,3 @@ image = { path = "../image", default-features = false, optional = true }
 
 [target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
 objc2 = "0.6"
-
-[features]
-default = ["window"]
-image = ["dep:image"]
-window = ["dep:bwindow"]

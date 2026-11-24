@@ -38,7 +38,7 @@ impl Xtask {
                 .with_context(|| format!("failed to write {}", settings_path.display()))?;
             println!("Configured VS Code for {}", self.os.name());
         }
-        self.build_dprint_plugin()
+        self.build_dprint_plugins()
     }
 }
 

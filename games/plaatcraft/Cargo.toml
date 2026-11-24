@@ -25,6 +25,9 @@ info_plist = "meta/apple/ios/Info.plist"
 
 [package.metadata.bundle.android]
 
+[lints]
+workspace = true
+
 # Runs the chunk pipeline benchmark instead of the game on the consoles, see bench.sh
 [features]
 bench = []
@@ -33,25 +36,18 @@ bench = []
 deflate = { path = "../../lib/data/deflate" }
 libsqlite3-sys = "0.39"
 postcard = { version = "1.1", default-features = false, features = ["alloc"] }
-serde = { version = "1.0", default-features = false, features = [
-    "alloc",
-    "derive",
-] }
+serde = { version = "1.0", default-features = false, features = ["alloc", "derive"] }
 sfxr = { version = "0.1.4", default-features = false }
 
 [target.'cfg(not(any(target_os = "wii", target_os = "wiiu")))'.dependencies]
 baudio = { path = "../../lib/audio/baudio" }
 bcanvas = { path = "../../lib/graphics/bcanvas", default-features = false }
 bwebgpu = { path = "../../lib/graphics/bwebgpu" }
-bwindow = { path = "../../lib/ui/bwindow", default-features = false, features = [
-    "remember_window_state",
-] }
+bwindow = { path = "../../lib/ui/bwindow", default-features = false, features = ["remember_window_state"] }
 cargo-bundle-assets = { path = "../../lib/build/cargo-bundle-assets" }
 directories = "6.0"
 getrandom = "0.4.3"
-image = { path = "../../lib/graphics/image", default-features = false, features = [
-    "png",
-] }
+image = { path = "../../lib/graphics/image", default-features = false, features = ["png"] }
 preferences = { path = "../../lib/sys/preferences" }
 
 # Android and the consoles have no system SQLite library
@@ -69,19 +65,12 @@ build-utils = { path = "../../lib/build/build-utils" }
 bwebgpu-shader-build = { path = "../../lib/graphics/bwebgpu-shader-build" }
 gtxconv = { path = "../../tools/wiiu-toolchain/crates/gtxconv" }
 gxtexconv = { path = "../../tools/wii-toolchain/crates/gxtexconv" }
-image = { path = "../../lib/graphics/image", default-features = false, features = [
-    "png",
-] }
+image = { path = "../../lib/graphics/image", default-features = false, features = ["png"] }
 
 [dev-dependencies]
 criterion = "0.8"
-image = { path = "../../lib/graphics/image", default-features = false, features = [
-    "png",
-] }
+image = { path = "../../lib/graphics/image", default-features = false, features = ["png"] }
 
 [[bench]]
 name = "world"
 harness = false
-
-[lints]
-workspace = true

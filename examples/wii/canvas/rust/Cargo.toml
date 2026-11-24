@@ -4,9 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-image = { path = "../../../../lib/graphics/image", default-features = false, features = [
-    "png",
-] }
+image = { path = "../../../../lib/graphics/image", default-features = false, features = ["png"] }
 libogc-sys = { path = "../../../../tools/wii-toolchain/crates/libogc-sys" }
 
 [patch.crates-io]

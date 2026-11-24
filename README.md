@@ -228,19 +228,19 @@ Most of these libraries are intended primarily for personal use, but can still b
 ## Getting Started
 
 - Install [Rust](https://rustup.rs/), [Node.js](https://nodejs.org/), [Hadolint](https://github.com/hadolint/hadolint), a C toolchain (such as GCC, Clang or MSVC), an LLVM toolchain, clang-format, [NASM](https://nasm.us/) and [Dolphin emulator](https://dolphin-emu.org/)
-- Install Rust nightly toolchain, wasm32 target, `cargo-binstall`, `cargo-deny`, `cargo-nextest`, `dprint` and `taplo-cli`:
+- Install Rust nightly toolchain, wasm32 target, `cargo-binstall`, `cargo-deny`, `cargo-nextest` and `dprint`:
 
     ```sh
     rustup toolchain add nightly-2026-11-14 --component rust-src --component rustfmt
     rustup target add wasm32-unknown-unknown
     cargo install cargo-binstall
-    cargo binstall -y --locked cargo-deny cargo-nextest dprint taplo-cli
+    cargo binstall -y --locked cargo-deny cargo-nextest dprint
     ```
 
 - Run checks, or run an example:
 
     ```sh
-    cargo build --release --locked -p dprint-plist --target wasm32-unknown-unknown --target-dir target
+    cargo build --release --locked -p dprint-plist -p dprint-toml --target wasm32-unknown-unknown --target-dir target
     dprint fmt
     cargo xtask check
     cargo run --bin example-persons-api

@@ -25,6 +25,9 @@ info_plist = "meta/apple/ios/Info.plist"
 
 [package.metadata.bundle.android]
 
+[lints]
+workspace = true
+
 [dependencies]
 baudio = { path = "../../lib/audio/baudio" }
 bwebgpu = { path = "../../lib/graphics/bwebgpu" }
@@ -38,9 +41,4 @@ bwebgpu-shader-build = { path = "../../lib/graphics/bwebgpu-shader-build" }
 
 [dev-dependencies]
 bwebgpu = { path = "../../lib/graphics/bwebgpu", features = ["image"] }
-image = { path = "../../lib/graphics/image", default-features = false, features = [
-    "png",
-] }
-
-[lints]
-workspace = true
+image = { path = "../../lib/graphics/image", default-features = false, features = ["png"] }

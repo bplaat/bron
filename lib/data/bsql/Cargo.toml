@@ -9,6 +9,18 @@ repository.workspace = true
 [lints]
 workspace = true
 
+[features]
+default = ["derive", "sqlite"]
+derive = ["dep:bsql_derive"]
+jiff = ["dep:jiff"]
+mysql = ["dep:bitflags", "dep:sha2"]
+mysql-native-password = ["mysql", "dep:sha1"]
+mysql-tls = ["mysql", "dep:native-tls"]
+sqlite = ["dep:libsqlite3-sys", "libsqlite3-sys/column-metadata"]
+sqlite-bundled = ["sqlite", "libsqlite3-sys/bundled"]
+sqlite-fts5 = ["sqlite", "libsqlite3-sys/fts5"]
+uuid = ["dep:uuid"]
+
 [dependencies]
 bitflags = { version = "2.13", optional = true }
 bsql_derive = { version = "0.1.1", optional = true }
@@ -23,18 +35,6 @@ uuid = { version = "1.29", optional = true }
 anyhow = "1.0"
 jiff = { version = "1.0", default-features = false, features = ["std"] }
 uuid = { version = "1.29", features = ["v7"] }
-
-[features]
-default = ["derive", "sqlite"]
-derive = ["dep:bsql_derive"]
-jiff = ["dep:jiff"]
-mysql = ["dep:bitflags", "dep:sha2"]
-mysql-native-password = ["mysql", "dep:sha1"]
-mysql-tls = ["mysql", "dep:native-tls"]
-sqlite = ["dep:libsqlite3-sys", "libsqlite3-sys/column-metadata"]
-sqlite-bundled = ["sqlite", "libsqlite3-sys/bundled"]
-sqlite-fts5 = ["sqlite", "libsqlite3-sys/fts5"]
-uuid = ["dep:uuid"]
 
 [[example]]
 name = "enum_from_value"

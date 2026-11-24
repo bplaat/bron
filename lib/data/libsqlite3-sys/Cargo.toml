@@ -9,10 +9,10 @@ repository.workspace = true
 [lints]
 workspace = true
 
-[build-dependencies]
-cc = { version = "1.10" }
-
 [features]
 bundled = []
 column-metadata = []
 fts5 = []
+
+[build-dependencies]
+cc = { version = "1.10" }

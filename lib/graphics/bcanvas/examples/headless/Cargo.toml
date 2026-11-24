@@ -6,11 +6,9 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 
-[dependencies]
-bcanvas = { path = "../..", default-features = false, features = ["image"] }
-image = { path = "../../../image", default-features = false, features = [
-    "png",
-] }
-
 [lints]
 workspace = true
+
+[dependencies]
+bcanvas = { path = "../..", default-features = false, features = ["image"] }
+image = { path = "../../../image", default-features = false, features = ["png"] }

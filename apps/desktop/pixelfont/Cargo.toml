@@ -24,15 +24,8 @@ file_types = [{ name = "Pixel Font", extensions = ["pf"], icon = 2 }]
 workspace = true
 
 [dependencies]
-bwebview = { path = "../../../lib/ui/bwebview", features = [
-    "rust-embed",
-    "file_drop",
-] }
-bwindow = { path = "../../../lib/ui/bwindow", features = [
-    "dialog",
-    "file_drop",
-    "menu",
-] }
+bwebview = { path = "../../../lib/ui/bwebview", features = ["rust-embed", "file_drop"] }
+bwindow = { path = "../../../lib/ui/bwindow", features = ["dialog", "file_drop", "menu"] }
 preferences = { path = "../../../lib/sys/preferences" }
 rust-embed = "8.13"
 serde = { version = "1.0", features = ["derive"] }

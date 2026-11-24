@@ -17,10 +17,7 @@ dotenvy = "0.15.7"
 from_derive = { path = "../../../lib/data/from_derive" }
 getrandom = "0.4.3"
 gzip = { path = "../../../lib/data/gzip" }
-jiff = { version = "1.0", default-features = false, features = [
-    "serde",
-    "std",
-] }
+jiff = { version = "1.0", default-features = false, features = ["serde", "std"] }
 log = "0.4.34"
 maxminddb = "0.32.0"
 mime_guess = { version = "2.0", default-features = false }

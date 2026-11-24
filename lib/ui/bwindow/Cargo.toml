@@ -9,6 +9,14 @@ repository.workspace = true
 [lints]
 workspace = true
 
+[features]
+default = ["remember_window_state"]
+dialog = []
+file_drop = []
+menu = []
+progress_bar = []
+remember_window_state = ["dep:directories"]
+
 [target.'cfg(any(target_os = "linux", target_os = "freebsd", target_os = "dragonfly", target_os = "openbsd", target_os = "netbsd"))'.dependencies]
 directories = { version = "6.0", optional = true }
 
@@ -21,14 +29,6 @@ jni = "0.22.4"
 
 [target.'cfg(windows)'.dependencies]
 directories = "6.0"
-
-[features]
-default = ["remember_window_state"]
-dialog = []
-file_drop = []
-menu = []
-progress_bar = []
-remember_window_state = ["dep:directories"]
 
 [build-dependencies]
 build-utils = { path = "../../build/build-utils" }

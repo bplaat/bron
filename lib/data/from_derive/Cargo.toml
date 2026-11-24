@@ -6,11 +6,11 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 
-[lints]
-workspace = true
-
 [lib]
 proc-macro = true
+
+[lints]
+workspace = true
 
 [dependencies]
 quote = "1.0"

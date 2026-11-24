@@ -90,7 +90,7 @@ impl Xtask {
     }
 
     pub(crate) fn check_formatting(&self) -> Result<()> {
-        self.build_dprint_plugin()?;
+        self.build_dprint_plugins()?;
         println!("Checking dprint formatting...");
         run(Command::new("dprint").args(["check", "--list-different"]))?;
 
@@ -128,9 +128,7 @@ impl Xtask {
                 &format!("swift format lint --strict ({} files)", files.len()),
             )?;
         }
-
-        println!("Checking TOML formatting...");
-        run(Command::new("taplo").args(["fmt", "--check"]))
+        Ok(())
     }
 
     pub(crate) fn check_docker(&self) -> Result<()> {

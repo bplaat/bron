@@ -9,6 +9,10 @@ repository.workspace = true
 [lints]
 workspace = true
 
+[features]
+default = ["std"]
+std = ["sha2/std"]
+
 [dependencies]
 base64 = "0.23.1"
 getrandom = "0.4.3"
@@ -22,7 +26,3 @@ criterion = "0.8"
 [[bench]]
 name = "pbkdf2"
 harness = false
-
-[features]
-default = ["std"]
-std = ["sha2/std"]

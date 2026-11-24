@@ -9,6 +9,10 @@ repository.workspace = true
 [lints]
 workspace = true
 
+[features]
+default = ["client"]
+client = ["dep:getrandom", "dep:url"]
+
 [dependencies]
 base64 = "0.23.1"
 getrandom = { version = "0.4.3", optional = true }
@@ -18,7 +22,3 @@ url = { version = "2.5", optional = true }
 
 [dev-dependencies]
 small-http = "0.2.1"
-
-[features]
-default = ["client"]
-client = ["dep:getrandom", "dep:url"]

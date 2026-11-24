@@ -6,9 +6,6 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 
-[lints]
-workspace = true
-
 [package.metadata.bundle]
 name = "2048"
 identifier = "nl.bplaat.game2048"
@@ -27,6 +24,9 @@ sandbox = true
 info_plist = "meta/apple/ios/Info.plist"
 
 [package.metadata.bundle.android]
+
+[lints]
+workspace = true
 
 [dependencies]
 bwebview = { path = "../../lib/ui/bwebview", features = ["rust-embed"] }

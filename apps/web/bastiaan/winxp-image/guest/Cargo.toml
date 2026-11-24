@@ -12,14 +12,6 @@ publish = false
 [lib]
 name = "v86"
 
-[dependencies]
-# no_std, the drivers share the dependencies of the programs
-sha1 = { path = "../../../../../lib/crypto/sha1", default-features = false }
-
-# Like the main workspace, the monorepo's crates stand in for the ones from crates.io
-[patch.crates-io]
-digest = { path = "../../../../../lib/crypto/digest" }
-
 [lints.rust]
 unsafe_op_in_unsafe_fn = "deny"
 unused_qualifications = "deny"
@@ -28,6 +20,14 @@ warnings = "deny"
 [lints.clippy]
 undocumented_unsafe_blocks = "deny"
 unwrap_used = "deny"
+
+[dependencies]
+# no_std, the drivers share the dependencies of the programs
+sha1 = { path = "../../../../../lib/crypto/sha1", default-features = false }
+
+# Like the main workspace, the monorepo's crates stand in for the ones from crates.io
+[patch.crates-io]
+digest = { path = "../../../../../lib/crypto/digest" }
 
 [profile.release]
 opt-level = "z"

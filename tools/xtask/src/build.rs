@@ -60,7 +60,7 @@ fn freedesktop_identity(path: &Path) -> Result<Option<(String, String)>> {
 }
 
 impl Xtask {
-    pub(crate) fn build_dprint_plugin(&self) -> Result<()> {
+    pub(crate) fn build_dprint_plugins(&self) -> Result<()> {
         run(Command::new("cargo")
             .args([
                 "build",
@@ -68,6 +68,8 @@ impl Xtask {
                 "--locked",
                 "-p",
                 "dprint-plist",
+                "-p",
+                "dprint-toml",
                 "--target",
                 "wasm32-unknown-unknown",
                 "--target-dir",

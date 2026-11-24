@@ -9,6 +9,13 @@ repository.workspace = true
 [lints]
 workspace = true
 
+[features]
+default = ["log"]
+custom_protocol = ["dep:small-http"]
+file_drop = ["bwindow/file_drop"]
+log = ["dep:log"]
+rust-embed = ["custom_protocol", "dep:rust-embed", "dep:mime_guess"]
+
 [dependencies]
 bwindow = { path = "../bwindow", default-features = false }
 log = { version = "0.4.34", optional = true }
@@ -29,21 +36,9 @@ sha2 = "0.11"
 zip = "9.1"
 
 [dev-dependencies]
-bwindow = { path = "../bwindow", features = [
-    "dialog",
-    "file_drop",
-    "menu",
-    "progress_bar",
-] }
+bwindow = { path = "../bwindow", features = ["dialog", "file_drop", "menu", "progress_bar"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-
-[features]
-default = ["log"]
-custom_protocol = ["dep:small-http"]
-file_drop = ["bwindow/file_drop"]
-log = ["dep:log"]
-rust-embed = ["custom_protocol", "dep:rust-embed", "dep:mime_guess"]
 
 [[example]]
 name = "bwebview-file-drop"

@@ -6,8 +6,8 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 
-[dependencies]
-digest = "0.11.3"
+[lints]
+workspace = true
 
 [features]
 default = ["std"]
@@ -15,16 +15,16 @@ std = []
 disable-software = []
 disable-simd = []
 
+[dependencies]
+digest = "0.11.3"
+
 [dev-dependencies]
 criterion = "0.8"
-
-[[bench]]
-name = "sha2"
-harness = false
-
-[lints]
-workspace = true
 
 [[bin]]
 name = "sha256sum"
 required-features = ["std"]
+
+[[bench]]
+name = "sha2"
+harness = false

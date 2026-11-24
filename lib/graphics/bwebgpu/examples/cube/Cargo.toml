@@ -6,16 +6,14 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 
+[lints]
+workspace = true
+
 [dependencies]
 bcanvas = { path = "../../../bcanvas" }
 bwebgpu = { path = "../.." }
 bwindow = { path = "../../../../ui/bwindow", default-features = false }
-image = { path = "../../../image", default-features = false, features = [
-    "jpeg",
-] }
+image = { path = "../../../image", default-features = false, features = ["jpeg"] }
 
 [build-dependencies]
 bwebgpu-shader-build = { path = "../../../bwebgpu-shader-build" }
-
-[lints]
-workspace = true

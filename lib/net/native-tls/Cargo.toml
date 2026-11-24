@@ -6,27 +6,21 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 
+[lints]
+workspace = true
+
 [features]
 vendored = ["dep:rustls", "dep:rustls-graviola", "dep:webpki-roots"]
 
 [dependencies]
-rustls = { version = "0.23.46", default-features = false, features = [
-    "std",
-    "tls12",
-], optional = true }
+rustls = { version = "0.23.46", default-features = false, features = ["std", "tls12"], optional = true }
 rustls-graviola = { version = "0.4", optional = true }
 webpki-roots = { version = "1.0", optional = true }
 
-[dev-dependencies]
-rustls = { version = "0.23.46", default-features = false, features = [
-    "std",
-    "tls12",
-] }
-rustls-graviola = "0.4"
-rustls-pki-types = "1.15"
-
-[lints]
-workspace = true
-
 [build-dependencies]
 build-utils = { path = "../../build/build-utils" }
+
+[dev-dependencies]
+rustls = { version = "0.23.46", default-features = false, features = ["std", "tls12"] }
+rustls-graviola = "0.4"
+rustls-pki-types = "1.15"
