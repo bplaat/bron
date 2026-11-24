@@ -348,3 +348,79 @@ name = "a"
 
 [lints]
 workspace = true
+
+== should preserve array element ownership when headers use escaped keys ==
+[package]
+name="example"
+
+[[package.metadata.items]]
+name="first"
+["\u0070ackage".metadata.items.extra]
+label="belongs to first"
+
+[[package.metadata.items]]
+name="second"
+
+[expect]
+[package]
+name = "example"
+
+[[package.metadata.items]]
+name = "first"
+["\u0070ackage".metadata.items.extra]
+label = "belongs to first"
+
+[[package.metadata.items]]
+name = "second"
+
+== should keep array descendants with their parent even when their ranks differ ==
+[[target.foo]]
+name="first"
+[target.foo.dependencies]
+example="1"
+
+[package]
+name="example"
+
+[[target.foo]]
+name="second"
+
+[expect]
+[package]
+name = "example"
+
+[[target.foo]]
+name = "first"
+
+[target.foo.dependencies]
+example = "1"
+
+[[target.foo]]
+name = "second"
+
+== should separate a table that keeps its position but follows a moved one ==
+[[bin]]
+name="a"
+[profile.dev]
+x=1
+[[bin]]
+name="b"
+[bin.c]
+d=1
+[lib]
+e=1
+
+[expect]
+[lib]
+e = 1
+
+[[bin]]
+name = "a"
+
+[[bin]]
+name = "b"
+[bin.c]
+d = 1
+
+[profile.dev]
+x = 1

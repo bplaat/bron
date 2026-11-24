@@ -5,6 +5,7 @@
  * SPDX-License-Identifier: MIT
  */
 
+use std::collections::HashMap;
 use std::path::Path;
 
 use crate::ast::*;
@@ -48,9 +49,9 @@ fn section_of(header: &TableHeader<'_>) -> Section {
 }
 
 /// Where a table goes in the conventional table order, tables of the same rank keep their order.
-fn table_rank(header: &TableHeader<'_>) -> usize {
+fn table_rank(key: &[&str]) -> usize {
     let dependency = |name: &str| DEPENDENCY_TABLES.iter().position(|table| *table == name);
-    match key_parts(header).as_slice() {
+    match key {
         ["package", ..] => 0,
         ["workspace", ..] => 1,
         ["lib", ..] => 2,
@@ -69,12 +70,32 @@ fn table_rank(header: &TableHeader<'_>) -> usize {
 
 /// Puts the tables in the conventional order: package, workspace, lib, lints, features, the
 /// dependencies each followed by their target specific ones, the build targets, patch and profile.
-/// Comments directly above a table header move with it, and a moved table gets a blank line above it.
+/// Comments directly above a table header move with it, and a table that moved or now follows a
+/// different one gets a blank line above it.
 pub(crate) fn sort_tables(root: &mut Root<'_>) {
     let mut starts = Vec::new();
+    let mut array_ranks = HashMap::new();
     let mut previous_header = 0;
     for (index, item) in root.items.iter().enumerate() {
-        if item.is_table_header() {
+        if let RootItem::TableHeader(header) = item {
+            // Escaped keys may name the same table as bare keys. Preserve the source order when
+            // the lexical keys cannot tell which tables belong to the same array element.
+            if header
+                .key
+                .parts()
+                .any(|part| part.text.starts_with('"') && part.text.contains('\\'))
+            {
+                return;
+            }
+            let key = key_parts(header);
+            // Descendants of an array must stay in order with its elements, even if their
+            // conventional ranks differ.
+            let rank = (1..key.len())
+                .find_map(|len| array_ranks.get(&key[..len]).copied())
+                .unwrap_or_else(|| table_rank(&key));
+            if header.is_array_of_tables {
+                array_ranks.insert(key, rank);
+            }
             let mut start = index;
             while start > previous_header
                 && matches!(root.items[start - 1], RootItem::Comment(_))
@@ -82,40 +103,35 @@ pub(crate) fn sort_tables(root: &mut Root<'_>) {
             {
                 start -= 1;
             }
-            starts.push(start);
+            starts.push((start, rank));
             previous_header = index + 1;
         }
     }
-    let Some(&first) = starts.first() else {
+    let Some(&(first, first_rank)) = starts.first() else {
         return;
     };
 
     let mut tables = Vec::with_capacity(starts.len());
     let mut items = root.items.drain(first..).collect::<Vec<_>>();
-    for start in starts.iter().skip(1).rev() {
-        tables.push(items.split_off(start - first));
+    for &(start, rank) in starts.iter().skip(1).rev() {
+        tables.push((rank, items.split_off(start - first)));
     }
-    tables.push(items);
+    tables.push((first_rank, items));
     tables.reverse();
 
     let mut tables = tables.into_iter().enumerate().collect::<Vec<_>>();
-    tables.sort_by_key(|(_, table)| {
-        table
-            .iter()
-            .find_map(|item| match item {
-                RootItem::TableHeader(header) => Some(table_rank(header)),
-                _ => None,
-            })
-            .unwrap_or_default()
-    });
-    for (position, (original_position, table)) in tables.iter_mut().enumerate() {
-        // A moved table is separated from whatever now comes before it
-        if position != *original_position {
+    tables.sort_by_key(|(_, (rank, _))| *rank);
+    let mut previous = None;
+    for (position, (original_position, (_, table))) in tables.iter_mut().enumerate() {
+        // A table that moved, or now follows a different one, is separated from what comes before
+        let original_previous = original_position.checked_sub(1);
+        if position != *original_position || previous != original_previous {
             table[0].set_blank_line_before(true);
         }
+        previous = Some(*original_position);
     }
     root.items
-        .extend(tables.into_iter().flat_map(|(_, table)| table));
+        .extend(tables.into_iter().flat_map(|(_, (_, table))| table));
 }
 
 /// Sorts package and dependency entries and the `[workspace]` `members` array.
