@@ -52,27 +52,14 @@ fn parse_json_with_comments(contents: &str) -> Result<Value, serde_json::Error> 
     serde_json::from_str(&json)
 }
 
-const DPRINT_LANGUAGES: [&str; 12] = [
-    "css",
-    "dockerfile",
-    "html",
-    "javascript",
-    "javascriptreact",
-    "json",
-    "jsonc",
-    "markdown",
-    "typescript",
-    "typescriptreact",
-    "xml",
-    "yaml",
-];
-
 const XML_FILE_PATTERNS: [&str; 5] = ["*.entitlements", "*.manifest", "*.plist", "*.svg", "*.xaml"];
 
 fn set_dprint_format_on_save(settings: &mut Value) -> Result<()> {
     let settings = settings
         .as_object_mut()
         .context("VS Code settings must be a JSON object")?;
+    settings.insert("editor.defaultFormatter".to_owned(), "dprint.dprint".into());
+    settings.insert("editor.formatOnSave".to_owned(), Value::Bool(true));
     let associations = settings
         .entry("files.associations")
         .or_insert_with(|| Value::Object(Default::default()))
@@ -80,17 +67,6 @@ fn set_dprint_format_on_save(settings: &mut Value) -> Result<()> {
         .context("VS Code files.associations must be a JSON object")?;
     for pattern in XML_FILE_PATTERNS {
         associations.insert(pattern.to_owned(), Value::String("xml".to_owned()));
-    }
-
-    for language in DPRINT_LANGUAGES {
-        let key = format!("[{language}]");
-        let language_settings = settings
-            .entry(&key)
-            .or_insert_with(|| Value::Object(Default::default()))
-            .as_object_mut()
-            .with_context(|| format!("VS Code {key} settings must be a JSON object"))?;
-        language_settings.insert("editor.defaultFormatter".to_owned(), "dprint.dprint".into());
-        language_settings.insert("editor.formatOnSave".to_owned(), Value::Bool(true));
     }
     Ok(())
 }
@@ -154,21 +130,14 @@ mod tests {
     }
 
     #[test]
-    fn dprint_formats_supported_languages_on_save() -> Result<()> {
+    fn dprint_is_the_default_formatter_on_save() -> Result<()> {
         let mut settings = json!({
-            "[typescript]": { "editor.defaultFormatter": "esbenp.prettier-vscode", "editor.tabSize": 4 },
+            "editor.defaultFormatter": "esbenp.prettier-vscode",
             "[rust]": { "editor.defaultFormatter": "rust-lang.rust-analyzer" }
         });
         set_dprint_format_on_save(&mut settings)?;
-        for language in DPRINT_LANGUAGES {
-            let language_settings = &settings[format!("[{language}]")];
-            assert_eq!(
-                language_settings["editor.defaultFormatter"],
-                "dprint.dprint"
-            );
-            assert_eq!(language_settings["editor.formatOnSave"], true);
-        }
-        assert_eq!(settings["[typescript]"]["editor.tabSize"], 4);
+        assert_eq!(settings["editor.defaultFormatter"], "dprint.dprint");
+        assert_eq!(settings["editor.formatOnSave"], true);
         assert_eq!(
             settings["[rust]"]["editor.defaultFormatter"],
             "rust-lang.rust-analyzer"
