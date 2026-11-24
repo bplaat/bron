@@ -1,0 +1,336 @@
+-- Cargo.toml --
+== should format "comit" Cargo.toml file ==
+[package]
+authors = ["Some author"]
+name = "package"
+description = "Description"
+version = "0.1.0"
+edition = "2018"
+
+[dependencies]
+b = "0.1"
+a = { version = "0.8", features = ["serde", "v4"] }
+
+[dev-dependencies]
+c = "0.1"
+a = { version = "0.8", features = ["serde", "v4"] }
+b = "0.2"
+
+[features]
+default = []
+test = ["feature"]
+
+[expect]
+[package]
+authors = ["Some author"]
+name = "package"
+description = "Description"
+version = "0.1.0"
+edition = "2018"
+
+[features]
+default = []
+test = ["feature"]
+
+[dependencies]
+a = { version = "0.8", features = ["serde", "v4"] }
+b = "0.1"
+
+[dev-dependencies]
+a = { version = "0.8", features = ["serde", "v4"] }
+b = "0.2"
+c = "0.1"
+
+== should handle comments between key value pairs in dependencies ==
+[dependencies]
+test4 = "5" # 1
+# 2
+# 3
+test2 = "5" # 4
+# 5
+test3 = "5" # 6
+# 7
+test1 = "5" # 8
+# 9
+
+[expect]
+[dependencies]
+# 7
+test1 = "5" # 8
+# 2
+# 3
+test2 = "5" # 4
+# 5
+test3 = "5" # 6
+test4 = "5" # 1
+# 9
+
+== should keep the order of the package table ==
+[package]
+name = "package"
+version = "1.12.2"
+edition = "2018"
+license = "MIT"
+authors = ["the package authors"]
+repository = "https://github.com"
+build = "build.rs"
+
+[expect]
+[package]
+name = "package"
+version = "1.12.2"
+edition = "2018"
+license = "MIT"
+authors = ["the package authors"]
+repository = "https://github.com"
+build = "build.rs"
+
+== should allow having dependencies in groups based on a blank line ==
+[dependencies]
+z = "2"
+b = "1"
+m = "3"
+
+u = "2"
+a = "1"
+
+[expect]
+[dependencies]
+b = "1"
+m = "3"
+z = "2"
+
+a = "1"
+u = "2"
+
+== should handle moving around comments in groups ==
+[dependencies]
+# 1
+b = "2"
+a = "1"
+
+# 2
+d = "3"
+# 3
+c = "4"
+
+[expect]
+[dependencies]
+a = "1"
+# 1
+b = "2"
+
+# 2
+# 3
+c = "4"
+d = "3"
+
+== should not invent blank lines in an array when sorting moves an entry ==
+[dependencies]
+zzz = "last"
+keywords = [
+  "macros",
+  "syn",
+]
+name = "x"
+
+[expect]
+[dependencies]
+keywords = [
+  "macros",
+  "syn",
+]
+name = "x"
+zzz = "last"
+
+== should keep a blank line under a group's comments when sorting reorders the group ==
+[dependencies]
+# a
+# b
+
+z = 1
+y = 2
+
+[expect]
+[dependencies]
+# a
+# b
+
+y = 2
+z = 1
+
+== should apply conventions to a quoted table header ==
+["dependencies"]
+z = "1"
+a = "2"
+
+[expect]
+["dependencies"]
+a = "2"
+z = "1"
+
+== should be stable when two package entries share a sort key ==
+[package]
+name = "x"
+version.workspace = true
+version.foo = 1
+
+[expect]
+[package]
+name = "x"
+version.workspace = true
+version.foo = 1
+
+== should ignore the quotes around a dependency key when sorting ==
+[dependencies]
+"zed" = "1"
+anyhow = "1"
+beta = "1"
+
+[expect]
+[dependencies]
+anyhow = "1"
+beta = "1"
+"zed" = "1"
+
+== should sort build and target specific dependencies ==
+[build-dependencies]
+b = "1"
+a = "1"
+
+[target.'cfg(windows)'.dependencies]
+b = "1"
+a = "1"
+
+[target."cfg(unix)".dev-dependencies]
+b = "1"
+a = "1"
+
+[target.wasm32-unknown-unknown.build-dependencies]
+b = "1"
+a = "1"
+
+[workspace.dependencies]
+b = "1"
+a = "1"
+
+[expect]
+[workspace.dependencies]
+a = "1"
+b = "1"
+
+[target.'cfg(windows)'.dependencies]
+a = "1"
+b = "1"
+
+[build-dependencies]
+a = "1"
+b = "1"
+
+[target.wasm32-unknown-unknown.build-dependencies]
+a = "1"
+b = "1"
+
+[target."cfg(unix)".dev-dependencies]
+a = "1"
+b = "1"
+
+== should not sort other tables ==
+[features]
+b = []
+a = []
+
+[target.'cfg(windows)'.other]
+b = "1"
+a = "1"
+
+[expect]
+[features]
+b = []
+a = []
+
+[target.'cfg(windows)'.other]
+b = "1"
+a = "1"
+
+== should put the tables in the conventional order ==
+# Comment about the profile
+[profile.release]
+lto = true
+
+[[bench]]
+name = "bench"
+harness = false
+
+[dev-dependencies]
+a = "1"
+
+[target.'cfg(windows)'.dependencies]
+a = "1"
+
+[dependencies]
+a = "1"
+
+[features]
+default = []
+[lints]
+workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[package.metadata.bundle]
+name = "Package"
+
+[package]
+name = "package"
+
+[expect]
+[package.metadata.bundle]
+name = "Package"
+
+[package]
+name = "package"
+
+[lib]
+crate-type = ["cdylib"]
+
+[lints]
+workspace = true
+
+[features]
+default = []
+
+[dependencies]
+a = "1"
+
+[target.'cfg(windows)'.dependencies]
+a = "1"
+
+[dev-dependencies]
+a = "1"
+
+[[bench]]
+name = "bench"
+harness = false
+
+# Comment about the profile
+[profile.release]
+lto = true
+
+== should separate a moved table that followed the root entries ==
+cargo-features = ["x"]
+[lints]
+workspace = true
+
+[package]
+name = "a"
+
+[expect]
+cargo-features = ["x"]
+
+[package]
+name = "a"
+
+[lints]
+workspace = true

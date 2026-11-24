@@ -1,0 +1,110 @@
+== should not add blank line at start of array with only comments ==
+disallowed-types = [
+  # some comment
+  # { path = "std::sync::Arc", reason = "use crate::sync::MaybeArc instead" },
+
+  # next comment
+]
+
+[expect]
+disallowed-types = [
+  # some comment
+  # { path = "std::sync::Arc", reason = "use crate::sync::MaybeArc instead" },
+
+  # next comment
+]
+
+== should format with nodes ==
+disallowed-types = [
+  # some comment
+  # { path = "std::sync::Arc", reason = "use crate::sync::MaybeArc instead" },
+
+  # next comment
+  "test"
+]
+
+[expect]
+disallowed-types = [
+  # some comment
+  # { path = "std::sync::Arc", reason = "use crate::sync::MaybeArc instead" },
+
+  # next comment
+  "test",
+]
+
+== comment first line ==
+disallowed-types = [ # comment
+  "test",
+]
+
+[expect]
+disallowed-types = [ # comment
+  "test",
+]
+
+== comment first line no elements ==
+disallowed-types = [ # comment
+]
+
+[expect]
+disallowed-types = [ # comment
+]
+
+== empty ==
+value = [
+]
+
+[expect]
+value = []
+
+== one element ==
+value = [
+  "value"
+]
+
+[expect]
+value = [
+  "value",
+]
+
+== one comment ==
+value = [
+  # comment
+]
+
+[expect]
+value = [
+  # comment
+]
+
+== should not keep a blank line between the bracket and the first comment ==
+value = [
+
+  # comment
+]
+
+[expect]
+value = [
+  # comment
+]
+
+== should break up a single line array that has a comment before the bracket ==
+a = [1, 2
+
+# c
+]
+b = [1
+# d
+]
+
+[expect]
+a = [
+  1,
+  2,
+
+  # c
+]
+b = [
+  1,
+  # d
+]

@@ -1,0 +1,101 @@
+~~ lineWidth: 40 ~~
+== should format array ==
+values = [ 1, 2, 3 ]
+
+[expect]
+values = [1, 2, 3]
+
+== should handle comments in array ==
+values = [ # start
+  # leading comment
+  # testing
+  1, # 1
+  2, # 2
+  # inner comment
+  3 # 3
+  # trailing comment
+] # end
+
+[expect]
+values = [ # start
+  # leading comment
+  # testing
+  1, # 1
+  2, # 2
+  # inner comment
+  3, # 3
+  # trailing comment
+] # end
+
+== should keep blank lines in the middle ==
+values = [
+
+  123456789012345466798,
+
+  2,
+  3,
+
+
+  4,
+
+]
+
+[expect]
+values = [
+  123456789012345466798,
+
+  2,
+  3,
+
+  4,
+]
+
+== should not invent a blank line when a comma trails onto a later line ==
+a = [
+  1 # a
+  , # b
+  2
+]
+
+[expect]
+a = [
+  1, # a
+  # b
+  2,
+]
+
+== should break up an array around a multi-line value wherever it sits ==
+a = [{ b = """
+x
+""" }, 1]
+c = [1, { d = """
+x
+""" }]
+
+[expect]
+a = [
+  { b = """
+x
+""" },
+  1,
+]
+c = [
+  1,
+  { d = """
+x
+""" },
+]
+
+== should break up an array holding one the author had already broken up ==
+z = [[[
+  1,
+]]]
+
+[expect]
+z = [
+  [
+    [
+      1,
+    ],
+  ],
+]

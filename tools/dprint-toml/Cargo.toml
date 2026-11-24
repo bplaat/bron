@@ -1,0 +1,20 @@
+[package]
+name = "dprint-toml"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[lints]
+workspace = true
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+dprint-core = { version = "0.77", default-features = false, features = ["formatting", "wasm"] }
+serde = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+dprint-core = { version = "0.77", default-features = false, features = ["formatting"] }
