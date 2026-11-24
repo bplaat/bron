@@ -1,15 +1,15 @@
 [package]
 name = "simple-useragent"
 version = "0.1.4"
+authors.workspace = true
+categories = ["parser-implementations", "web-programming"]
+edition = "2021"
+homepage = "https://github.com/bplaat/bron/tree/master/lib/net/simple-useragent"
+keywords = ["useragent", "user-agent", "user-agent-parser", "uap", "uap-core"]
+license.workspace = true
+repository.workspace = true
 rust-version = "1.85"
 description = "A simple user agent parser library based on the uap-core regexes"
-keywords = ["useragent", "user-agent", "user-agent-parser", "uap", "uap-core"]
-categories = ["parser-implementations", "web-programming"]
-homepage = "https://github.com/bplaat/bron/tree/master/lib/net/simple-useragent"
-edition = "2021"
-license.workspace = true
-authors.workspace = true
-repository.workspace = true
 
 [lints]
 workspace = true

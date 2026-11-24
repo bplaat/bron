@@ -6,25 +6,49 @@
  */
 
 use std::fs;
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 
 use dprint_core::configuration::{ConfigKeyMap, ConfigKeyValue, GlobalConfiguration};
-use dprint_core::formatting::Arena;
+use dprint_core::formatting::ArenaPool;
 
 use crate::configuration::resolve_config;
+use crate::format_range::format_text_range;
 use crate::format_text::{ParseError, format_text};
 
-fn format(file_name: &str, text: &str, config: ConfigKeyMap) -> Result<Option<String>, ParseError> {
+fn format(
+    file_name: &str,
+    text: &str,
+    range: Option<Range<usize>>,
+    config: ConfigKeyMap,
+) -> Result<Option<String>, ParseError> {
     let (config, diagnostics) = resolve_config(config, &GlobalConfiguration::default());
     assert!(
         diagnostics.is_empty(),
         "config diagnostics: {diagnostics:?}"
     );
-    format_text(&Arena::new(), Path::new(file_name), text, &config)
+    let path = Path::new(file_name);
+    let arena_pool = ArenaPool::new();
+    match range {
+        Some(range) => format_text_range(&arena_pool, path, text, range, &config),
+        None => format_text(&arena_pool.create_arena(), path, text, &config),
+    }
 }
 
 fn format_default(text: &str) -> Result<Option<String>, ParseError> {
-    format("file.toml", text, ConfigKeyMap::new())
+    format("file.toml", text, None, ConfigKeyMap::new())
+}
+
+fn parse_spec_range(text: &str) -> (String, Option<Range<usize>>) {
+    let Some((prefix, rest)) = text.split_once("[|") else {
+        return (text.to_owned(), None);
+    };
+    let (selected, suffix) = rest.split_once("|]").expect("spec range without |]");
+    let start = prefix.len();
+    (
+        format!("{prefix}{selected}{suffix}"),
+        Some(start..start + selected.len()),
+    )
 }
 
 /// Parses the `~~ key: value, ... ~~` config line of a spec file.
@@ -96,18 +120,20 @@ fn specs() {
             let (input, expected) = body
                 .split_once("[expect]\n")
                 .expect("spec without [expect]");
-            let input = input.strip_suffix('\n').unwrap_or(input);
+            let (input, input_range) = parse_spec_range(input.strip_suffix('\n').unwrap_or(input));
+            let (expected, expected_range) = parse_spec_range(expected);
             let config = if config_text.is_empty() {
                 ConfigKeyMap::new()
             } else {
                 parse_spec_config(config_text)
             };
-            let format_once = |text: &str| match format(file_name, text, config.clone()) {
-                Ok(formatted) => formatted.unwrap_or_else(|| text.to_owned()),
-                Err(err) => format!("error: {err}"),
-            };
-            let formatted = format_once(input);
-            let formatted_twice = format_once(&formatted);
+            let format_once =
+                |text: &str, range| match format(file_name, text, range, config.clone()) {
+                    Ok(formatted) => formatted.unwrap_or_else(|| text.to_owned()),
+                    Err(err) => format!("error: {err}"),
+                };
+            let formatted = format_once(&input, input_range);
+            let formatted_twice = format_once(&formatted, expected_range);
             if formatted != expected || formatted_twice != expected {
                 failures.push(format!(
                     "{}: {}\n--- expected ---\n{expected}--- got ---\n{formatted}--- got twice ---\n{formatted_twice}",
@@ -118,6 +144,23 @@ fn specs() {
         }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n\n"));
+}
+
+#[test]
+fn range_keeps_bom_crlf_and_untouched_lines() -> Result<(), ParseError> {
+    let text = "\u{FEFF}a   =   1\r\nb   =   [\r\n1]  \r\nc   =   3\r\n";
+    let start = text.find('b').unwrap();
+    assert_eq!(
+        format(
+            "file.toml",
+            text,
+            Some(start..start + 1),
+            ConfigKeyMap::new()
+        )?
+        .as_deref(),
+        Some("\u{FEFF}a   =   1\r\nb = [\r\n  1,\r\n]\r\nc   =   3\r\n")
+    );
+    Ok(())
 }
 
 #[test]

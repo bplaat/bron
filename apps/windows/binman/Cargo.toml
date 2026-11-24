@@ -1,11 +1,11 @@
 [package]
 name = "binman"
 version = "0.1.0"
+authors.workspace = true
+build = "build.rs"
 edition.workspace = true
 license.workspace = true
-authors.workspace = true
 repository.workspace = true
-build = "build.rs"
 
 [package.metadata]
 platforms = ["windows"]

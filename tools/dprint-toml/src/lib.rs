@@ -13,6 +13,7 @@
 mod ast;
 mod cargo;
 mod configuration;
+mod format_range;
 mod format_text;
 mod generation;
 mod parser;
@@ -30,6 +31,7 @@ mod plugin {
     };
 
     use crate::configuration::{Configuration, resolve_config};
+    use crate::format_range::format_text_range;
     use crate::format_text::format_text;
 
     struct TomlPlugin;
@@ -64,7 +66,7 @@ mod plugin {
                 .into(),
                 config_schema_url: String::new(),
                 update_url: None,
-                supports_range_formatting: false,
+                supports_range_formatting: true,
             }
         }
 
@@ -85,9 +87,22 @@ mod plugin {
             _: impl FnMut(SyncHostFormatRequest) -> FormatResult,
         ) -> FormatResult {
             let text = String::from_utf8(request.file_bytes)?;
-            let arena = request.arena_pool.create_arena();
-            let formatted = format_text(&arena, request.file_path, &text, request.config)
-                .map_err(FormatError::new)?;
+            let formatted = match request.range {
+                Some(range) => format_text_range(
+                    request.arena_pool,
+                    request.file_path,
+                    &text,
+                    range,
+                    request.config,
+                ),
+                None => format_text(
+                    &request.arena_pool.create_arena(),
+                    request.file_path,
+                    &text,
+                    request.config,
+                ),
+            }
+            .map_err(FormatError::new)?;
             Ok(formatted.map(String::into_bytes))
         }
     }

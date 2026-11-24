@@ -39,6 +39,7 @@ pub(crate) struct Comment<'a> {
     /// `maintain` indent settings go by. Zero for a comment that isn't on a line of its own at the
     /// top level, which is never indented independently.
     pub(crate) indent_in_source: usize,
+    pub(crate) start_in_source: usize,
 }
 
 /// A parsed TOML document.
@@ -76,6 +77,14 @@ impl RootItem<'_> {
     pub(crate) const fn is_table_header(&self) -> bool {
         matches!(self, RootItem::TableHeader(_))
     }
+
+    pub(crate) const fn start_in_source(&self) -> usize {
+        match self {
+            RootItem::Comment(comment) => comment.start_in_source,
+            RootItem::Entry(entry) => entry.start_in_source,
+            RootItem::TableHeader(header) => header.start_in_source,
+        }
+    }
 }
 
 /// A table header, either `[key]` or `[[key]]`.
@@ -89,6 +98,7 @@ pub(crate) struct TableHeader<'a> {
     /// How many whitespace characters preceded the header on its line, which is what the
     /// `maintain` indent settings go by.
     pub(crate) indent_in_source: usize,
+    pub(crate) start_in_source: usize,
 }
 
 /// A key/value pair.
@@ -105,6 +115,7 @@ pub(crate) struct Entry<'a> {
     /// indent settings go by. Always zero for an entry inside an inline table, which is never
     /// indented on its own.
     pub(crate) indent_in_source: usize,
+    pub(crate) start_in_source: usize,
 }
 
 /// A key, which may be dotted (`a.b.c`).

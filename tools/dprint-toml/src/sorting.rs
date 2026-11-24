@@ -18,8 +18,8 @@ use crate::configuration::Configuration;
 use crate::generation::BumpVec;
 
 /// Applies whichever of the sorting options are turned on.
-pub(crate) fn apply_sorting(root: &mut Root, config: &Configuration) {
-    if config.sort_keys {
+pub(crate) fn apply_sorting(root: &mut Root, config: &Configuration, reorder_entries: bool) {
+    if config.sort_keys && reorder_entries {
         sort_root_keys(root);
     }
     if config.sort_arrays || config.sort_inline_tables {

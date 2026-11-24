@@ -11,6 +11,7 @@ use std::path::Path;
 use dprint_core::configuration::resolve_new_line_kind;
 use dprint_core::formatting::{Arena, PrintOptions};
 
+use crate::ast::Root;
 use crate::configuration::Configuration;
 use crate::generation::generate;
 use crate::{cargo, parser, sorting};
@@ -37,25 +38,57 @@ pub(crate) fn format_text(
     text: &str,
     config: &Configuration,
 ) -> Result<Option<String>, ParseError> {
-    let stripped = text.strip_prefix('\u{FEFF}').unwrap_or(text);
-    let root = parse(arena, stripped)?;
-    sorting::apply_sorting(root, config);
+    let body = strip_bom(text);
+    let root = parse(arena, body)?;
+    process_node(file_path, root, config, Reorder::All);
+    let result = print(arena, root, body, config);
+    Ok((result != text).then_some(result))
+}
+
+pub(crate) fn strip_bom(text: &str) -> &str {
+    text.strip_prefix('\u{FEFF}').unwrap_or(text)
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Reorder {
+    Values,
+    Entries,
+    All,
+}
+
+pub(crate) fn process_node(
+    file_path: &Path,
+    root: &mut Root<'_>,
+    config: &Configuration,
+    reorder: Reorder,
+) {
+    let reorder_entries = reorder != Reorder::Values;
+    sorting::apply_sorting(root, config, reorder_entries);
     // After the general sorting, so that a Cargo.toml keeps its conventional order
     if config.cargo_apply_conventions && cargo::is_cargo_toml_file(file_path) {
-        cargo::apply_cargo_toml_conventions(root);
+        if reorder == Reorder::All {
+            cargo::sort_tables(root);
+        }
+        cargo::apply_cargo_toml_conventions(root, reorder_entries);
     }
+}
 
+pub(crate) fn print<'a>(
+    arena: &'a Arena,
+    root: &'a Root<'a>,
+    text: &str,
+    config: &'a Configuration,
+) -> String {
     let print_options = PrintOptions {
         indent_width: config.indent_width,
         max_width: config.line_width,
         use_tabs: config.use_tabs,
-        new_line_text: resolve_new_line_kind(stripped, config.new_line_kind),
+        new_line_text: resolve_new_line_kind(text, config.new_line_kind),
     };
-    let result = dprint_core::formatting::print(generate(arena, root, config), print_options);
-    Ok((result != text).then_some(result))
+    dprint_core::formatting::print(generate(arena, root, config), print_options)
 }
 
-fn parse<'a>(arena: &'a Arena, text: &'a str) -> Result<&'a mut crate::ast::Root<'a>, ParseError> {
+pub(crate) fn parse<'a>(arena: &'a Arena, text: &'a str) -> Result<&'a mut Root<'a>, ParseError> {
     parser::parse(arena.bump(), text).map_err(|err| {
         ParseError(
             dprint_core::formatting::utils::string_utils::format_diagnostic(

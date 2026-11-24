@@ -22,11 +22,11 @@ test = ["feature"]
 
 [expect]
 [package]
-authors = ["Some author"]
 name = "package"
-description = "Description"
 version = "0.1.0"
+authors = ["Some author"]
 edition = "2018"
+description = "Description"
 
 [features]
 default = []
@@ -65,7 +65,7 @@ test3 = "5" # 6
 test4 = "5" # 1
 # 9
 
-== should keep the order of the package table ==
+== should sort package metadata with name and version first and description last ==
 [package]
 name = "package"
 version = "1.12.2"
@@ -79,11 +79,25 @@ build = "build.rs"
 [package]
 name = "package"
 version = "1.12.2"
+authors = ["the package authors"]
+build = "build.rs"
 edition = "2018"
 license = "MIT"
-authors = ["the package authors"]
 repository = "https://github.com"
-build = "build.rs"
+
+== should use the same metadata order in the workspace package table ==
+[workspace.package]
+description = "Description"
+license = "MIT"
+edition = "2024"
+version = "1.0.0"
+
+[expect]
+[workspace.package]
+version = "1.0.0"
+edition = "2024"
+license = "MIT"
+description = "Description"
 
 == should allow having dependencies in groups based on a blank line ==
 [dependencies]

@@ -1,9 +1,9 @@
 [package]
 name = "rusb"
 version = "0.9.4+patch"
+authors.workspace = true
 edition.workspace = true
 license.workspace = true
-authors.workspace = true
 repository.workspace = true
 
 [lints]

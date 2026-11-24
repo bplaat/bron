@@ -20,6 +20,7 @@ pub(crate) fn is_cargo_toml_file(file_path: &Path) -> bool {
 /// A table whose contents the conventions rearrange.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Section {
+    Package,
     Dependencies,
     Workspace,
     Other,
@@ -38,6 +39,7 @@ fn section_of(header: &TableHeader<'_>) -> Section {
         return Section::Other;
     }
     match key_parts(header).as_slice() {
+        ["package"] | ["workspace", "package"] => Section::Package,
         [name] | ["target", _, name] if DEPENDENCY_TABLES.contains(name) => Section::Dependencies,
         ["workspace", "dependencies"] => Section::Dependencies,
         ["workspace"] => Section::Workspace,
@@ -68,7 +70,7 @@ fn table_rank(header: &TableHeader<'_>) -> usize {
 /// Puts the tables in the conventional order: package, workspace, lib, lints, features, the
 /// dependencies each followed by their target specific ones, the build targets, patch and profile.
 /// Comments directly above a table header move with it, and a moved table gets a blank line above it.
-fn sort_tables(root: &mut Root<'_>) {
+pub(crate) fn sort_tables(root: &mut Root<'_>) {
     let mut starts = Vec::new();
     let mut previous_header = 0;
     for (index, item) in root.items.iter().enumerate() {
@@ -116,21 +118,27 @@ fn sort_tables(root: &mut Root<'_>) {
         .extend(tables.into_iter().flat_map(|(_, table)| table));
 }
 
-/// Sorts the tables, the entries of every dependencies table, including the target specific ones,
-/// and the `[workspace]` `members` array. The entries of `[package]` keep the order they were written in.
-pub(crate) fn apply_cargo_toml_conventions(root: &mut Root<'_>) {
-    sort_tables(root);
+/// Sorts package and dependency entries and the `[workspace]` `members` array.
+pub(crate) fn apply_cargo_toml_conventions(root: &mut Root<'_>, reorder_entries: bool) {
     let mut last_header = Section::Other;
     for index in 0..root.items.len() {
         match &mut root.items[index] {
             RootItem::TableHeader(header) => {
                 last_header = section_of(header);
-                if last_header == Section::Dependencies {
-                    let end = section_end(&root.items, index + 1);
-                    sort_root_entries(&mut root.items, index + 1, end, &|left, right| {
-                        entry_sort_key(left).cmp(entry_sort_key(right))
-                    });
+                if !reorder_entries {
+                    continue;
                 }
+                let compare: fn(&Entry<'_>, &Entry<'_>) -> std::cmp::Ordering = match last_header {
+                    Section::Package => |left, right| {
+                        package_entry_sort_key(left).cmp(&package_entry_sort_key(right))
+                    },
+                    Section::Dependencies => {
+                        |left, right| entry_sort_key(left).cmp(entry_sort_key(right))
+                    }
+                    Section::Workspace | Section::Other => continue,
+                };
+                let end = section_end(&root.items, index + 1);
+                sort_root_entries(&mut root.items, index + 1, end, &compare);
             }
             RootItem::Entry(entry)
                 if last_header == Section::Workspace && entry_sort_key(entry) == "members" =>
@@ -146,6 +154,17 @@ pub(crate) fn apply_cargo_toml_conventions(root: &mut Root<'_>) {
 /// `serde.workspace` sorts beside `serde`, and the quotes around a quoted segment are ignored.
 fn entry_sort_key<'a>(entry: &'a Entry<'_>) -> &'a str {
     entry.key.first.unquoted_text()
+}
+
+fn package_entry_sort_key<'a>(entry: &'a Entry<'_>) -> (u8, &'a str) {
+    let name = entry_sort_key(entry);
+    let rank = match name {
+        "name" => 0,
+        "version" => 1,
+        "description" => 3,
+        _ => 2,
+    };
+    (rank, name)
 }
 
 /// Sorts the string members of a `[workspace]` `members` array by their contents.
