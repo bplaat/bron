@@ -60,6 +60,9 @@ fn set_dprint_format_on_save(settings: &mut Value) -> Result<()> {
         .context("VS Code settings must be a JSON object")?;
     settings.insert("editor.defaultFormatter".to_owned(), "dprint.dprint".into());
     settings.insert("editor.formatOnSave".to_owned(), Value::Bool(true));
+    if let Some(toml) = settings.get_mut("[toml]").and_then(Value::as_object_mut) {
+        toml.remove("editor.defaultFormatter");
+    }
     let associations = settings
         .entry("files.associations")
         .or_insert_with(|| Value::Object(Default::default()))
@@ -133,11 +136,13 @@ mod tests {
     fn dprint_is_the_default_formatter_on_save() -> Result<()> {
         let mut settings = json!({
             "editor.defaultFormatter": "esbenp.prettier-vscode",
-            "[rust]": { "editor.defaultFormatter": "rust-lang.rust-analyzer" }
+            "[rust]": { "editor.defaultFormatter": "rust-lang.rust-analyzer" },
+            "[toml]": { "editor.defaultFormatter": "example.formatter", "editor.tabSize": 4 }
         });
         set_dprint_format_on_save(&mut settings)?;
         assert_eq!(settings["editor.defaultFormatter"], "dprint.dprint");
         assert_eq!(settings["editor.formatOnSave"], true);
+        assert_eq!(settings["[toml]"], json!({ "editor.tabSize": 4 }));
         assert_eq!(
             settings["[rust]"]["editor.defaultFormatter"],
             "rust-lang.rust-analyzer"
