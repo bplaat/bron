@@ -46,7 +46,7 @@ fn generate_resources(path: &str, target_dir: &str, manifest: &Manifest) {
         assert!(status.success(), "iconutil failed");
     }
 
-    if let Some(icon) = &bundle.icon {
+    if let Some(icon) = bundle.macos_icon() {
         compile_icon(
             &format!("{path}/{icon}"),
             target_dir,
@@ -86,7 +86,7 @@ fn write_info_plist(path: &str, target_dir: &str, manifest: &Manifest) {
     }
     if has_icon(bundle) {
         info.insert("CFBundleIconFile".into(), "icon.icns".into());
-        if bundle.icon.is_some() {
+        if bundle.macos_icon().is_some() {
             info.insert("CFBundleIconName".into(), "icon".into());
         }
     }
@@ -135,7 +135,7 @@ fn create(path: &str, target_dir: &str, bundle: &BundleMetadata, binary: &str) {
         )
         .expect("Failed to copy icon.icns");
     }
-    if bundle.icon.is_some() {
+    if bundle.macos_icon().is_some() {
         fs::copy(
             format!("{target_dir}/Assets.car"),
             format!("{resources}/Assets.car"),
@@ -235,8 +235,8 @@ pub(crate) fn run(target_dir: &str, bundle: &BundleMetadata) -> ! {
     exit(status.code().unwrap_or(1));
 }
 
-const fn has_icon(bundle: &BundleMetadata) -> bool {
-    bundle.macos.iconset.is_some() || bundle.macos.icns.is_some() || bundle.icon.is_some()
+fn has_icon(bundle: &BundleMetadata) -> bool {
+    bundle.macos.iconset.is_some() || bundle.macos.icns.is_some() || bundle.macos_icon().is_some()
 }
 
 fn contents_dir(target_dir: &str, bundle: &BundleMetadata) -> String {

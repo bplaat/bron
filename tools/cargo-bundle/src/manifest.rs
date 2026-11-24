@@ -74,6 +74,13 @@ pub(crate) struct BundleMetadata {
     pub android: Option<AndroidMetadata>,
 }
 
+#[cfg(any(target_os = "macos", test))]
+impl BundleMetadata {
+    pub(crate) fn macos_icon(&self) -> Option<&str> {
+        self.macos.icon.as_deref().or(self.icon.as_deref())
+    }
+}
+
 #[derive(Clone, Default, Deserialize)]
 pub(crate) struct AndroidMetadata {
     pub min_sdk_version: Option<u32>,
@@ -99,6 +106,7 @@ pub(crate) struct AppexMetadata {
 pub(crate) struct MacosMetadata {
     pub minimal_os_version: Option<String>,
     pub lipo: Option<bool>,
+    pub icon: Option<String>,
     pub iconset: Option<String>,
     pub icns: Option<String>,
     pub info_plist: Option<String>,
@@ -156,6 +164,28 @@ pub(crate) enum FileTypeIcon {
 #[cfg(test)]
 mod tests {
     use super::Manifest;
+
+    #[test]
+    fn macos_icon_overrides_shared_icon() {
+        let source = r#"
+[package]
+name = "example-app"
+version = "0.1.0"
+[package.metadata.bundle]
+icon = "shared.icon"
+"#;
+        let manifest: Manifest = basic_toml::from_str(source).expect("valid shared icon");
+        assert_eq!(
+            manifest.package.metadata.bundle.macos_icon(),
+            Some("shared.icon")
+        );
+
+        let source = format!("{source}[package.metadata.bundle.macos]\nicon = \"macos.icon\"\n");
+        let manifest: Manifest = basic_toml::from_str(&source).expect("valid macOS icon override");
+        let bundle = manifest.package.metadata.bundle;
+        assert_eq!(bundle.macos_icon(), Some("macos.icon"));
+        assert_eq!(bundle.icon.as_deref(), Some("shared.icon"));
+    }
 
     #[test]
     fn file_icon_resource_ids_fit_windows_resources() {

@@ -13,9 +13,9 @@ platforms = ["macos", "linux"]
 name = "ManExplorer"
 identifier = "nl.bplaat.ManExplorer"
 copyright = "Copyright © 2025 Bastiaan van der Plaat"
-icon = "meta/macos/icon.icon"
 
 [package.metadata.bundle.macos]
+icon = "meta/macos/icon.icon"
 entitlements = "meta/macos/Entitlements.plist"
 
 [lints]

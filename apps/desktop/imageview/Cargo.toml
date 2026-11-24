@@ -10,9 +10,9 @@ repository.workspace = true
 name = "ImageView"
 identifier = "nl.bplaat.ImageView"
 copyright = "Copyright (c) 2026 Bastiaan van der Plaat"
-icon = "meta/macos/icon.icon"
 
 [package.metadata.bundle.macos]
+icon = "meta/macos/icon.icon"
 info_plist = "meta/macos/Info.plist"
 hardened_runtime = true
 

@@ -21,6 +21,7 @@ info_plist = "Info.plist" # optional, merged into the macOS and iOS Info.plist
 [package.metadata.bundle.macos]
 minimal_os_version = "11.0" # optional
 lipo = true # optional, build a universal x86_64 and arm64 binary
+icon = "path/to/macos/icon.icon" # optional, overrides the shared Icon Composer icon on macOS
 iconset = "path/to/icon.iconset" # optional, or icns = "path/to/icon.icns"
 info_plist = "macos/Info.plist" # optional, merged into the macOS Info.plist
 entitlements = "macos/Entitlements.plist" # optional
