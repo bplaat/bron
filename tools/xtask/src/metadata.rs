@@ -18,6 +18,7 @@ pub(crate) struct InstallableApp {
     pub(crate) package: String,
     pub(crate) directory: PathBuf,
     pub(crate) name: String,
+    pub(crate) bundle_name: String,
     pub(crate) identifier: String,
     /// Has a [package.metadata.bundle.ios] table
     pub(crate) ios: bool,

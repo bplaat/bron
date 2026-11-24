@@ -351,14 +351,13 @@ impl Xtask {
         subdirectory: &str,
         extension: &str,
     ) -> Result<PathBuf> {
-        let bundle_directory = self
+        let output = self
             .root
             .join(format!("target/bundle/{}", app.package))
-            .join(subdirectory);
-        fs::read_dir(&bundle_directory)?
-            .filter_map(|entry| entry.ok().map(|entry| entry.path()))
-            .find(|path| path.extension().is_some_and(|ext| ext == extension))
-            .with_context(|| format!("no .{extension} found in {}", bundle_directory.display()))
+            .join(subdirectory)
+            .join(format!("{}.{extension}", app.bundle_name));
+        fs::metadata(&output).with_context(|| format!("bundle output {}", output.display()))?;
+        Ok(output)
     }
 
     fn install_msix_packages(&self, packages: &[PathBuf]) -> Result<()> {
@@ -467,15 +466,53 @@ function Install-Bundle($Path) {{
                 let identifier = package_name.to_owned();
                 (default_name, identifier)
             });
+            let bundle_name = bundle
+                .and_then(|bundle| bundle.get("name"))
+                .and_then(Value::as_str)
+                .filter(|name| !name.is_empty())
+                .unwrap_or(package_name);
             apps.push(InstallableApp {
                 package: package_name.to_owned(),
                 directory: package_directory.to_path_buf(),
                 identifier,
                 name,
+                bundle_name: bundle_name.to_owned(),
                 ios: bundle.is_some_and(|bundle| bundle.get("ios").is_some()),
                 android: bundle.is_some_and(|bundle| bundle.get("android").is_some()),
             });
         }
         Ok(apps)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bundle_output_uses_configured_name_when_old_bundle_exists() -> Result<()> {
+        let root = std::env::temp_dir().join(format!("xtask-bundle-output-{}", std::process::id()));
+        let directory = root.join("target/bundle/bastiaan-app");
+        let expected = directory.join("Bastiaan.app");
+        fs::create_dir_all(directory.join("bastiaan-app.app"))?;
+        fs::create_dir_all(&expected)?;
+
+        let xtask = Xtask {
+            root,
+            os: Os::Macos,
+        };
+        let app = InstallableApp {
+            package: "bastiaan-app".to_owned(),
+            directory: PathBuf::new(),
+            name: "Bastiaan".to_owned(),
+            bundle_name: "Bastiaan".to_owned(),
+            identifier: "nl.bplaat.Bastiaan".to_owned(),
+            ios: false,
+            android: false,
+        };
+        let output = xtask.bundle_output(&app, "", "app");
+        fs::remove_dir_all(&xtask.root)?;
+        assert_eq!(output?, expected);
+        Ok(())
     }
 }
