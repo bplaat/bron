@@ -109,12 +109,18 @@ pub unsafe fn register_dragged_types(view: *mut Object) {
 // MARK: Tests
 #[cfg(test)]
 mod tests {
+    use std::sync::Mutex;
+
     use objc2::rc::{Retained, autoreleasepool};
 
     use super::*;
 
+    // Concurrent pasteboard operations can mix the fixtures on macOS CI.
+    static PASTEBOARD_LOCK: Mutex<()> = Mutex::new(());
+
     #[test]
     fn reads_file_urls_and_rejects_non_file_drags() {
+        let _guard = PASTEBOARD_LOCK.lock().unwrap();
         // SAFETY: Each pasteboard and item is retained for the test; all selectors use
         // their Foundation/AppKit signatures. No window or shared pasteboard is used.
         autoreleasepool(|_| unsafe {
@@ -157,6 +163,7 @@ mod tests {
 
     #[test]
     fn reads_legacy_filenames() {
+        let _guard = PASTEBOARD_LOCK.lock().unwrap();
         // SAFETY: Only retained Foundation/AppKit objects and a private pasteboard are used.
         autoreleasepool(|_| unsafe {
             let pasteboard: Retained<Object> =
