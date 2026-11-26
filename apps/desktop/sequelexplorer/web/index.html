@@ -475,9 +475,9 @@
                                                     </td>
                                                     <td>
                                                         <div class="check-list">
-                                                            <span class="badge" v-show="column.generated"
-                                                                >Generated</span
-                                                            >
+                                                            <span class="badge" v-show="column.generated">
+                                                                Generated
+                                                            </span>
                                                             <label class="checkbox" v-show="!column.generated">
                                                                 <input
                                                                     type="checkbox"
@@ -1358,9 +1358,9 @@
                             <form class="user-editor" v-show="editingUser" @submit.prevent="saveUser">
                                 <div class="dialog-body">
                                     <div>
-                                        <span class="eyebrow"
-                                            >{{ isCreatingUser ? 'New account' : 'Edit account' }}</span
-                                        >
+                                        <span class="eyebrow">
+                                            {{ isCreatingUser ? 'New account' : 'Edit account' }}
+                                        </span>
                                         <h2>
                                             {{ isCreatingUser ? 'Create MySQL user' :
                                             `${userForm.user}@${userForm.host}` }}
