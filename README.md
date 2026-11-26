@@ -1,4 +1,4 @@
-# Bassie's Bron des Codes
+# Bassie's Bron
 
 My personal monorepo for most of my hobby projects
 

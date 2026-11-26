@@ -133,7 +133,7 @@ static FACTS: [Link; 7] = [
 
 static SITES: [Link; 14] = [
     link("plaatsoft.nl", "https://www.plaatsoft.nl/"),
-    link("Bron des Codes", "https://github.com/bplaat/bron"),
+    link("Bassie's Bron", "https://github.com/bplaat/bron"),
     link("Strepen Systeem", "https://stam.diekantankys.nl/"),
     link("Neva Processor", "https://neva-processor.bplaat.nl/"),
     link("Coinlist", "https://coinlist.bplaat.nl/"),
