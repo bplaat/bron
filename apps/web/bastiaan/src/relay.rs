@@ -8,7 +8,7 @@
 //! internet access.
 //!
 //! v86 sends each Ethernet frame as one binary WebSocket message. The relay is a switch that
-//! forwards only IPv4 and ARP between visitors, hands out 10.86.0.x addresses with its own DHCP
+//! forwards only IPv4 and ARP between visitors, hands out 10.86.0.0/16 addresses with its own DHCP
 //! server and drops frames that use another visitor's MAC or IP address. Nothing leaves the LAN:
 //! there is no router and no DNS server. Every connection has a thread that hands its frames to the
 //! shared switch and one that sends the switch's frames for it.
@@ -30,7 +30,6 @@ use small_websocket::{Message, WebSocket};
 const MAX_FRAME: usize = 1536;
 const QUEUE: usize = 256; // frames waiting for a slow visitor, more are dropped
 const MAX_PER_ADDRESS: usize = 4; // browser tabs per visitor address
-const MAX_VISITORS: usize = 253;
 // Bytes, frames and broadcasts per visitor per second
 const LIMITS: [f64; 3] = [1024.0 * 1024.0, 1000.0, 100.0];
 const PING_INTERVAL: Duration = Duration::from_secs(30);
@@ -41,8 +40,12 @@ const CLOSE_POLICY: u16 = 1008;
 
 const ETH_IPV4: u16 = 0x0800;
 const ETH_ARP: u16 = 0x0806;
-const SUBNET: [u8; 3] = [10, 86, 0]; // 10.86.0.0/24: the relay is .1, visitors get .2 to .254
-const RELAY_IP: [u8; 4] = [10, 86, 0, 1];
+const SUBNET: [u8; 2] = [10, 86];
+const SUBNET_MASK: [u8; 4] = [255, 255, 0, 0];
+const RELAY_IP: [u8; 4] = host_ip(1);
+const FIRST_HOST: u16 = 2;
+const LAST_HOST: u16 = u16::MAX - 1;
+const MAX_VISITORS: usize = (LAST_HOST - FIRST_HOST + 1) as usize;
 const RELAY_MAC: [u8; 6] = [0x02, 0x86, 0x86, 0x86, 0x86, 0x01]; // locally administered
 const DHCP_MAGIC: [u8; 4] = [0x63, 0x82, 0x53, 0x63];
 const DHCP_DISCOVER: u8 = 1;
@@ -52,6 +55,11 @@ const DHCP_DECLINE: u8 = 4;
 const DHCP_ACK: u8 = 5;
 const DHCP_NAK: u8 = 6;
 const DHCP_RELEASE: u8 = 7;
+
+const fn host_ip(host: u16) -> [u8; 4] {
+    let [high, low] = host.to_be_bytes();
+    [SUBNET[0], SUBNET[1], high, low]
+}
 
 pub(crate) struct Config {
     origin: Option<String>,
@@ -127,18 +135,24 @@ impl Relay {
         socket.set_read_timeout(Some(IDLE_TIMEOUT)).ok();
         socket.set_write_timeout(Some(WRITE_TIMEOUT)).ok();
         let mut writer = socket.clone();
-        thread::spawn(move || {
-            loop {
-                let message = match queue.recv_timeout(PING_INTERVAL) {
-                    Ok(frame) => Message::Binary(frame),
-                    Err(RecvTimeoutError::Timeout) => Message::Ping(Vec::new()),
-                    Err(RecvTimeoutError::Disconnected) => break,
-                };
-                if writer.send(message).is_err() {
-                    break;
+        if thread::Builder::new()
+            .spawn(move || {
+                loop {
+                    let message = match queue.recv_timeout(PING_INTERVAL) {
+                        Ok(frame) => Message::Binary(frame),
+                        Err(RecvTimeoutError::Timeout) => Message::Ping(Vec::new()),
+                        Err(RecvTimeoutError::Disconnected) => break,
+                    };
+                    if writer.send(message).is_err() {
+                        break;
+                    }
                 }
-            }
-        });
+            })
+            .is_err()
+        {
+            self.switch().leave(id);
+            return;
+        }
 
         loop {
             match socket.recv() {
@@ -200,7 +214,7 @@ struct Visitor {
     frames: SyncSender<Vec<u8>>,
     address: IpAddr,
     mac: Option<[u8; 6]>,
-    host: Option<u8>,
+    host: Option<u16>,
     budget: Budget,
 }
 
@@ -208,15 +222,19 @@ struct Visitor {
 struct Switch {
     visitors: HashMap<u64, Visitor>,
     by_mac: HashMap<[u8; 6], u64>,
-    by_host: HashMap<u8, u64>,
+    by_host: HashMap<u16, u64>,
     per_address: HashMap<IpAddr, usize>,
     next_id: u64,
+    last_host: u16,
 }
 
 impl Switch {
     fn join(&mut self, address: IpAddr, frames: SyncSender<Vec<u8>>) -> Option<u64> {
+        if self.visitors.len() >= MAX_VISITORS {
+            return None;
+        }
         let count = self.per_address.entry(address).or_default();
-        if *count >= MAX_PER_ADDRESS || self.visitors.len() >= MAX_VISITORS {
+        if *count >= MAX_PER_ADDRESS {
             return None;
         }
         *count += 1;
@@ -255,24 +273,32 @@ impl Switch {
         }
     }
 
-    fn host(&self, id: u64) -> Option<u8> {
+    fn host(&self, id: u64) -> Option<u16> {
         self.visitors.get(&id)?.host
     }
 
     // The visitor's own address: kept, or taken when free, as after a relay restart the guest keeps
     // its old lease
     fn claim(&mut self, id: u64, ip: &[u8]) -> bool {
-        if ip.len() != 4 || ip[..3] != SUBNET {
+        let &[first, second, high, low] = ip else {
+            return false;
+        };
+        if [first, second] != SUBNET {
             return false;
         }
-        let host = ip[3];
+        self.claim_host(id, u16::from_be_bytes([high, low]))
+    }
+
+    fn claim_host(&mut self, id: u64, host: u16) -> bool {
         let Some(visitor) = self.visitors.get_mut(&id) else {
             return false;
         };
         if visitor.host == Some(host) {
             return true;
         }
-        if visitor.host.is_some() || !(2..=254).contains(&host) || self.by_host.contains_key(&host)
+        if visitor.host.is_some()
+            || !(FIRST_HOST..=LAST_HOST).contains(&host)
+            || self.by_host.contains_key(&host)
         {
             return false;
         }
@@ -385,11 +411,14 @@ impl Switch {
         let requested = requested.unwrap_or(&bootp[12..16]); // or the address being renewed
         match kind {
             Some(DHCP_DISCOVER) => {
-                if self.host(id).is_none() && !self.claim(id, requested) {
-                    let free = (2..=254).find(|host| !self.by_host.contains_key(host));
-                    if let Some(host) = free {
-                        self.claim(id, &[SUBNET[0], SUBNET[1], SUBNET[2], host]);
-                    }
+                if self.host(id).is_none()
+                    && !self.claim(id, requested)
+                    && let Some(host) = ((self.last_host + 1).max(FIRST_HOST)..=LAST_HOST)
+                        .chain(FIRST_HOST..=self.last_host)
+                        .find(|host| !self.by_host.contains_key(host))
+                    && self.claim_host(id, host)
+                {
+                    self.last_host = host;
                 }
                 if let Some(host) = self.host(id) {
                     self.send(id, dhcp_reply(mac, bootp, DHCP_OFFER, Some(host)));
@@ -449,13 +478,14 @@ fn arp_reply(request: &[u8]) -> Vec<u8> {
     ethernet(&request[8..14], ETH_ARP, &reply)
 }
 
-fn dhcp_reply(mac: [u8; 6], request: &[u8], kind: u8, host: Option<u8>) -> Vec<u8> {
+fn dhcp_reply(mac: [u8; 6], request: &[u8], kind: u8, host: Option<u16>) -> Vec<u8> {
     let mut options = vec![53, 1, kind, 54, 4];
     options.extend_from_slice(&RELAY_IP);
     if kind != DHCP_NAK {
         options.extend_from_slice(&[51, 4]);
         options.extend_from_slice(&LEASE_SECONDS.to_be_bytes());
-        options.extend_from_slice(&[1, 4, 255, 255, 255, 0]);
+        options.extend_from_slice(&[1, 4]);
+        options.extend_from_slice(&SUBNET_MASK);
     }
     options.push(255);
 
@@ -464,7 +494,7 @@ fn dhcp_reply(mac: [u8; 6], request: &[u8], kind: u8, host: Option<u8>) -> Vec<u
     bootp[4..8].copy_from_slice(&request[4..8]); // transaction id
     bootp[10..12].copy_from_slice(&request[10..12]); // flags
     if let Some(host) = host {
-        bootp[16..20].copy_from_slice(&[SUBNET[0], SUBNET[1], SUBNET[2], host]);
+        bootp[16..20].copy_from_slice(&host_ip(host));
     }
     bootp[20..24].copy_from_slice(&RELAY_IP);
     bootp[28..44].copy_from_slice(&request[28..44]); // client MAC
@@ -487,4 +517,52 @@ fn dhcp_reply(mac: [u8; 6], request: &[u8], kind: u8, host: Option<u8>) -> Vec<u
     ip.extend_from_slice(&[0, 0]);
     ip.extend_from_slice(&bootp);
     ethernet(&mac, ETH_IPV4, &ip)
+}
+
+// MARK: Tests
+#[cfg(test)]
+mod tests {
+    use std::net::Ipv4Addr;
+
+    use super::*;
+
+    #[test]
+    fn dhcp_allocates_and_reuses_the_full_subnet() {
+        let mut switch = Switch::default();
+        let (frames, replies) = mpsc::sync_channel(1);
+        let mac = [2, 0, 0, 0, 0, 1];
+        let mut discover = [0; 244];
+        discover[0] = 1;
+        discover[28..34].copy_from_slice(&mac);
+        discover[236..240].copy_from_slice(&DHCP_MAGIC);
+        discover[240..].copy_from_slice(&[53, 1, DHCP_DISCOVER, 255]);
+
+        let address = |host| IpAddr::V4(Ipv4Addr::from(u32::from(host)));
+        let mut first = None;
+        for host in FIRST_HOST..=LAST_HOST {
+            let id = switch.join(address(host), frames.clone()).unwrap();
+            if host == FIRST_HOST {
+                first = Some(id);
+                for reserved in [[10, 86, 0, 0], RELAY_IP, [10, 86, 255, 255], [10, 87, 0, 2]] {
+                    assert!(!switch.claim(id, &reserved));
+                }
+            }
+            switch.dhcp(id, mac, &discover);
+            let offer = replies.try_recv().unwrap();
+            let bootp = &offer[14 + 20 + 8..];
+            assert_eq!(bootp[16..20], host_ip(host));
+            assert_eq!(bootp[255..261], [1, 4, 255, 255, 0, 0]);
+            if host == 256 {
+                assert_eq!(bootp[16..20], [10, 86, 1, 0]);
+                assert!(!switch.claim(id, &[10, 86, 0, 2]));
+            }
+        }
+        assert_eq!(switch.visitors.len(), 65_533);
+        assert_eq!(switch.join(address(1), frames.clone()), None);
+
+        switch.leave(first.unwrap());
+        let id = switch.join(address(1), frames).unwrap();
+        switch.dhcp(id, mac, &discover);
+        assert_eq!(switch.host(id), Some(FIRST_HOST));
+    }
 }
