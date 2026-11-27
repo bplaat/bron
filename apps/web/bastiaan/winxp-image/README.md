@@ -26,19 +26,18 @@ and about 2 minutes for the native apps and the site, all a changed native app n
 
 These files are ignored by git. Add them before building:
 
-| Path                                                                           | What                                                                                                                                                 |
-| ------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `winxp-image/winxp.iso`                                                        | `en_windows_xp_professional_with_service_pack_3_x86_cd_x14-80428.iso`                                                                                |
-| `winxp-image/music/`                                                           | Music for My Music: `Snail's House/Ordinary Songs 3` and `4`                                                                                         |
-| `winxp-image/software/age-of-empires/cd/AOE1/`                                 | Age of Empires CD contents                                                                                                                           |
-| `winxp-image/software/age-of-empires/cd/AOE1ROR/`                              | Age of Empires: The Rise of Rome CD contents                                                                                                         |
-| `winxp-image/software/age-of-empires-2/cd/AOE2/`                               | Age of Empires II: The Age of Kings CD contents                                                                                                      |
-| `winxp-image/software/age-of-empires-2/cd/AOE2CONQ/`                           | Age of Empires II: The Conquerors CD contents                                                                                                        |
-| `winxp-image/software/civilization-3/setup_civilization3_complete_2.0.0.7.exe` | Civilization III Complete (GOG)                                                                                                                      |
-| `winxp-image/software/7zip/7z2606.exe`                                         | [7-Zip](https://www.7-zip.org/) 26.06, 32-bit                                                                                                        |
-| `winxp-image/software/notepad-plus-plus/npp.7.9.2.Installer.exe`               | [Notepad++](https://notepad-plus-plus.org/) 7.9.2, the last version for XP                                                                           |
-| `winxp-image/software/mitec/*.zip`                                             | [MiTeC](https://www.mitec.cz/) `EXE.zip` 2.5.5, `HEXEdit.zip` 6.3.0 and `TMX.zip` 3.5.0, see below                                                   |
-| `winxp-image/software/internet-explorer-8/IE8-WindowsXP-x86-ENU.exe`           | Internet Explorer 8 for XP, [Internet Archive](https://archive.org/details/IE8-WindowsXP-x86-ENU) (SHA-1 `e489483e5001f95da04e1ebf3c664173baef3e26`) |
+| Path                                                                           | What                                                                                               |
+| ------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------- |
+| `winxp-image/winxp.iso`                                                        | `en_windows_xp_professional_with_service_pack_3_x86_cd_x14-80428.iso`                              |
+| `winxp-image/music/`                                                           | Music for My Music: `Snail's House/Ordinary Songs 3` and `4`                                       |
+| `winxp-image/software/age-of-empires/cd/AOE1/`                                 | Age of Empires CD contents                                                                         |
+| `winxp-image/software/age-of-empires/cd/AOE1ROR/`                              | Age of Empires: The Rise of Rome CD contents                                                       |
+| `winxp-image/software/age-of-empires-2/cd/AOE2/`                               | Age of Empires II: The Age of Kings CD contents                                                    |
+| `winxp-image/software/age-of-empires-2/cd/AOE2CONQ/`                           | Age of Empires II: The Conquerors CD contents                                                      |
+| `winxp-image/software/civilization-3/setup_civilization3_complete_2.0.0.7.exe` | Civilization III Complete (GOG)                                                                    |
+| `winxp-image/software/7zip/7z2606.exe`                                         | [7-Zip](https://www.7-zip.org/) 26.06, 32-bit                                                      |
+| `winxp-image/software/notepad-plus-plus/npp.7.9.2.Installer.exe`               | [Notepad++](https://notepad-plus-plus.org/) 7.9.2, the last version for XP                         |
+| `winxp-image/software/mitec/*.zip`                                             | [MiTeC](https://www.mitec.cz/) `EXE.zip` 2.5.5, `HEXEdit.zip` 6.3.0 and `TMX.zip` 3.5.0, see below |
 
 Generated: `winxp-image/out/` (install images, screenshots), the built `.exe`/`.sys` files, `software/*/root/` and
 `web/public/winxp/`.
@@ -82,7 +81,7 @@ Generated: `winxp-image/out/` (install images, screenshots), the built `.exe`/`.
   Task Manager DeLuxe in `Program Files\MiTeC`.
 - [Win32 development toolchain](winxp-dev-toolchain/README.md) in `Program Files\Toolchain` with Hello World and
   Analog Clock sample projects in the user profile.
-- Start menu entries for 7-Zip and Internet Explorer 8, with IE's first-run wizard and default browser check disabled.
+- Start menu entry for 7-Zip.
 
 ## Adding software
 

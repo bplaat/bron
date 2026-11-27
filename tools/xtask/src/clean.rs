@@ -205,7 +205,6 @@ mod tests {
             "apps/web/bastiaan/winxp-image/software/7zip/7z2606.exe",
             "apps/web/bastiaan/winxp-image/software/civilization-3/setup_civilization3_complete_2.0.0.7.exe",
             "apps/web/bastiaan/winxp-image/software/age-of-empires/cd/AOE1/AOESETUP.EXE",
-            "apps/web/bastiaan/winxp-image/software/internet-explorer-8/IE8-WindowsXP-x86-ENU.exe",
             "apps/web/bastiaan/winxp-image/software/notepad-plus-plus/npp.7.9.2.Installer.exe",
             "apps/web/bastiaan/winxp-image/software/mitec/EXE.zip",
             "apps/web/bastiaan/winxp-image/software/age-of-empires/cd/root/data",

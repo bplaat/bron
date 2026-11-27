@@ -13,7 +13,7 @@ My personal website inside a Windows XP desktop running in your browser with [v8
   disk builds clear saved sessions.
 - Visitors share a LAN for multiplayer games. The relay assigns 10.86.0.x addresses without internet access.
 - Includes [the website as a native app](../../desktop/bastiaan), [Reversi](../../../games/reversi), [2048](../../../games/2048),
-  Age of Empires I and II, Civilization III, Minesweeper, Pinball, Windows Media Player with music, and Internet Explorer 8.
+  Age of Empires I and II, Civilization III, Minesweeper, Pinball and Windows Media Player with music.
 - The website is also available as plain HTML without JavaScript.
 
 ## License

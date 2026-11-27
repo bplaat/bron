@@ -1,5 +1,0 @@
-REGEDIT4
-
-; Internet Explorer 8 does not ask to become the default browser
-[HKEY_USERS\V86Default\Software\Microsoft\Internet Explorer\Main]
-"Check_Associations"="no"
