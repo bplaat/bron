@@ -1,0 +1,24 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Sat, 28 Nov 2026 10:31:55 +0100
+Subject: [PATCH] Build bcheck.o from its prerequisite
+
+The rule compiles bcheck.c from the current directory, which fails in
+the out of tree build of the Windows XP cross build, where it is in lib/.
+---
+ lib/Makefile | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/lib/Makefile b/lib/Makefile
+index 3b166a8..e70803c 100644
+--- a/lib/Makefile
++++ b/lib/Makefile
+@@ -96,7 +96,7 @@ $(TOP)/%.o : %.c $(TCC)
+ 
+ $(TOP)/bcheck.o : XFLAGS += $(BFLAGS)
+ $(TOP)/bcheck_run.o : bcheck.c $(TCC)
+-	$S$(XCC) -c bcheck.c -o $@ $(XFLAGS)  $(BFLAGS) -DBCHECK_RUN
++	$S$(XCC) -c $< -o $@ $(XFLAGS)  $(BFLAGS) -DBCHECK_RUN
+ 
+ $(X)crt1w.o : crt1.c
+ $(X)wincrt1w.o : wincrt1.c

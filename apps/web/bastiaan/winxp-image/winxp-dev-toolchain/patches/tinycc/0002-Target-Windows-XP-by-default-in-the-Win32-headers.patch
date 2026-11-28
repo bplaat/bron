@@ -1,0 +1,48 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Sat, 28 Nov 2026 10:31:55 +0100
+Subject: [PATCH] Target Windows XP by default in the Win32 headers
+
+WINVER and _WIN32_WINNT default to Windows XP and _WIN32_IE to Internet
+Explorer 6, the structure sizes of XP SP3. _mingw.h also gets
+__MSABI_LONG and _mingw_unicode.h, which the mingw-w64 headers for COM,
+Direct3D 8, the common controls and dialogs and multimedia expect.
+---
+ win32/include/_mingw.h | 16 ++++++++++++++--
+ 1 file changed, 14 insertions(+), 2 deletions(-)
+
+diff --git a/win32/include/_mingw.h b/win32/include/_mingw.h
+index 3a67720..9b5a899 100644
+--- a/win32/include/_mingw.h
++++ b/win32/include/_mingw.h
+@@ -155,11 +155,16 @@ typedef struct localeinfo_struct _locale_tstruct,*_locale_t;
+ #ifndef DUMMYSTRUCTNAME
+ #  define DUMMYSTRUCTNAME
+ #endif
++/* Windows XP SP3 with Internet Explorer 6, like the mingw-w64 headers of
++   the Windows XP toolchain */
+ #ifndef WINVER
+-# define WINVER 0x0502
++# define WINVER 0x0501
+ #endif
+ #ifndef _WIN32_WINNT
+-# define _WIN32_WINNT 0x502
++# define _WIN32_WINNT 0x0501
++#endif
++#ifndef _WIN32_IE
++# define _WIN32_IE 0x0600
+ #endif
+ 
+ #define __C89_NAMELESS
+@@ -168,4 +173,11 @@ typedef struct localeinfo_struct _locale_tstruct,*_locale_t;
+ #define MINGW_HAS_SECURE_API
+ #define WIN32 1
+ 
++/* For the mingw-w64 headers: COM, Direct3D 8, common controls and dialogs,
++   multimedia */
++#define __MSABI_LONG(x) x ## l
++#if __has_include(<_mingw_unicode.h>)
++# include <_mingw_unicode.h>
++#endif
++
+ #endif /* __MINGW_H */

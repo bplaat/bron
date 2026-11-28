@@ -1,0 +1,24 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Sat, 28 Nov 2026 10:31:56 +0100
+Subject: [PATCH] Preprocess resource scripts with tcc
+
+windres runs gcc to preprocess resource scripts, the Windows XP
+development kit has TinyCC.
+---
+ binutils/resrc.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/binutils/resrc.c b/binutils/resrc.c
+index 130ff7b..0e086a3 100644
+--- a/binutils/resrc.c
++++ b/binutils/resrc.c
+@@ -75,7 +75,7 @@
+ 
+ /* The default preprocessor.  */
+ 
+-#define DEFAULT_PREPROCESSOR_CMD "gcc"
++#define DEFAULT_PREPROCESSOR_CMD "tcc"
+ #define DEFAULT_PREPROCESSOR_ARGS "-E -xc -DRC_INVOKED"
+ 
+ /* We read the directory entries in a cursor or icon file into

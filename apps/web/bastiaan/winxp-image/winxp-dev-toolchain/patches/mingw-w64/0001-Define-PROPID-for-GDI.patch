@@ -1,0 +1,23 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Sat, 28 Nov 2026 10:31:56 +0100
+Subject: [PATCH] Define PROPID for GDI+
+
+TinyCC's Windows headers have no propidl.h, which defines the property
+identifier GDI+ uses.
+---
+ gdiplus/gdiplus.h | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/gdiplus/gdiplus.h b/gdiplus/gdiplus.h
+index 79366ea..f365080 100644
+--- a/gdiplus/gdiplus.h
++++ b/gdiplus/gdiplus.h
+@@ -49,6 +49,7 @@ namespace Gdiplus {
+ typedef float REAL;
+ typedef SHORT INT16;
+ typedef WORD UINT16;
++typedef ULONG PROPID;
+ 
+ #include "gdiplusenums.h"
+ #include "gdiplustypes.h"

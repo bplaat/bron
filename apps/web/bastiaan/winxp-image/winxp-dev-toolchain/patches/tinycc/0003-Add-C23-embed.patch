@@ -1,0 +1,204 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
+Date: Sat, 28 Nov 2026 10:31:55 +0100
+Subject: [PATCH] Add C23 #embed
+
+#embed with limit(), prefix(), suffix() and if_empty(), also spelled
+with underscores, searched like #include. Unknown preprocessing
+directives are errors instead of warnings that drop the line.
+---
+ tccpp.c  | 154 ++++++++++++++++++++++++++++++++++++++++++++++++++++++-
+ tcctok.h |   1 +
+ 2 files changed, 154 insertions(+), 1 deletion(-)
+
+diff --git a/tccpp.c b/tccpp.c
+index 214e9cd..8810b0d 100644
+--- a/tccpp.c
++++ b/tccpp.c
+@@ -1788,6 +1788,155 @@ ST_FUNC void tccpp_putfile(const char *filename)
+     tcc_debug_newfile(tcc_state);
+ }
+ 
++/* The text of the tokens up to the ')' that closes a '(' already read,
++   for the prefix(), suffix() and if_empty() parameters of #embed */
++static void embed_tokens(CString *out)
++{
++    int level = 0;
++    cstr_reset(out);
++    for (;;) {
++        next_nomacro();
++        if (tok == TOK_LINEFEED || tok == TOK_EOF)
++            tcc_error("'#embed' parameter without ')'");
++        if (tok == '(')
++            level++;
++        else if (tok == ')' && level-- == 0)
++            break;
++        if (out->size)
++            cstr_ccat(out, ' ');
++        cstr_cat(out, get_tok_str(tok, &tokc), -1);
++    }
++}
++
++/* C23 #embed: the bytes of a file as a comma separated list of integer
++   constants, with limit(), prefix(), suffix() and if_empty() */
++static void parse_embed(TCCState *s1)
++{
++    int c, i, fd, n;
++    char name[1024], buf[1024], number[8];
++    const char *param;
++    long limit = -1;
++    unsigned char *data = NULL;
++    long size = 0, allocated = 0;
++    CString prefix, suffix, if_empty, text;
++
++    c = skip_spaces();
++    if (c != '<' && c != '\"')
++        tcc_error("'#embed' expects \"FILENAME\" or <FILENAME>");
++    cstr_reset(&tokcstr);
++    file->buf_ptr = parse_pp_string(file->buf_ptr, c == '<' ? '>' : c, &tokcstr);
++    pstrncpy(name, sizeof name, tokcstr.data, tokcstr.size);
++
++    cstr_new(&prefix), cstr_new(&suffix), cstr_new(&if_empty), cstr_new(&text);
++    for (;;) {
++        next_nomacro();
++        if (tok == TOK_LINEFEED || tok == TOK_EOF)
++            break;
++        if (tok < TOK_IDENT)
++            tcc_error("invalid '#embed' parameter '%s'", get_tok_str(tok, &tokc));
++        param = get_tok_str(tok, NULL);
++        /* the __name__ spellings are the same parameters */
++        if (param[0] == '_' && param[1] == '_') {
++            n = strlen(param);
++            if (n > 4 && param[n - 1] == '_' && param[n - 2] == '_') {
++                pstrncpy(buf, sizeof buf, param + 2, n - 4);
++                param = buf;
++            }
++        }
++        next_nomacro();
++        if (tok != '(')
++            tcc_error("'#embed' parameter '%s' expects '('", param);
++        if (!strcmp(param, "limit")) {
++            next();
++            if (tok != TOK_CINT && tok != TOK_CUINT
++                && tok != TOK_CLONG && tok != TOK_CULONG)
++                tcc_error("'#embed' limit expects an integer constant");
++            limit = tokc.i;
++            next_nomacro();
++            if (tok != ')')
++                tcc_error("'#embed' limit expects ')'");
++        } else if (!strcmp(param, "prefix")) {
++            embed_tokens(&prefix);
++        } else if (!strcmp(param, "suffix")) {
++            embed_tokens(&suffix);
++        } else if (!strcmp(param, "if_empty")) {
++            embed_tokens(&if_empty);
++        } else {
++            tcc_error("unknown '#embed' parameter '%s'", param);
++        }
++    }
++
++    /* searched like #include */
++    fd = -1;
++    for (i = 0; fd < 0; ++i) {
++        if (i == 0) {
++            if (!IS_ABSPATH(name))
++                continue;
++            buf[0] = '\0';
++        } else if (i == 1) {
++            if (c != '\"')
++                continue;
++            pstrncpy(buf, sizeof buf, file->true_filename,
++                     tcc_basename(file->true_filename) - file->true_filename);
++        } else {
++            int j = i - 2, k = j - s1->nb_include_paths;
++            if (k < 0)
++                pstrcpy(buf, sizeof buf, s1->include_paths[j]);
++            else if (k < s1->nb_sysinclude_paths)
++                pstrcpy(buf, sizeof buf, s1->sysinclude_paths[k]);
++            else
++                tcc_error("embed file '%s' not found", name);
++            pstrcat(buf, sizeof buf, "/");
++        }
++        pstrcat(buf, sizeof buf, name);
++        fd = open(buf, O_RDONLY | O_BINARY);
++    }
++    for (;;) {
++        if (size == allocated) {
++            allocated = allocated ? allocated * 2 : 65536;
++            data = tcc_realloc(data, allocated);
++        }
++        n = read(fd, data + size, allocated - size);
++        if (n <= 0)
++            break;
++        size += n;
++    }
++    close(fd);
++    if (limit >= 0 && size > limit)
++        size = limit;
++    if (s1->gen_deps)
++        dynarray_add(&s1->target_deps, &s1->nb_target_deps, tcc_strdup(buf));
++
++    /* cstr_cat takes a length of 0 as "up to the NUL" */
++    if (size == 0) {
++        if (if_empty.size)
++            cstr_cat(&text, if_empty.data, if_empty.size);
++    } else {
++        if (prefix.size)
++            cstr_cat(&text, prefix.data, prefix.size);
++        for (i = 0; i < size; i++) {
++            snprintf(number, sizeof number, i ? ",%d" : " %d", data[i]);
++            cstr_cat(&text, number, -1);
++        }
++        cstr_ccat(&text, ' ');
++        if (suffix.size)
++            cstr_cat(&text, suffix.data, suffix.size);
++    }
++    cstr_ccat(&text, '\n');
++    tcc_free(data);
++
++    /* the list is read like an included file, which ends where the
++       directive's line did */
++    if (s1->include_stack_ptr >= s1->include_stack + INCLUDE_STACK_SIZE)
++        tcc_error("#include recursion too deep");
++    tcc_open_bf(s1, buf, text.size);
++    memcpy(file->buffer, text.data, text.size);
++    tok_flags = 0; /* the bytes never start a directive */
++    *s1->include_stack_ptr++ = file->prev;
++    tcc_debug_bincl(s1);
++    cstr_free(&prefix), cstr_free(&suffix), cstr_free(&if_empty), cstr_free(&text);
++}
++
+ /* is_bof is true if first non space token at beginning of file */
+ ST_FUNC void preprocess(int is_bof)
+ {
+@@ -1827,6 +1976,9 @@ ST_FUNC void preprocess(int is_bof)
+     case TOK_INCLUDE_NEXT:
+         parse_include(s1, tok - TOK_INCLUDE, 0);
+         goto the_end;
++    case TOK_EMBED:
++        parse_embed(s1);
++        goto the_end;
+     case TOK_IFNDEF:
+         c = 1;
+         goto do_ifdef;
+@@ -1973,7 +2125,7 @@ ST_FUNC void preprocess(int is_bof)
+         if (tok == '!' && is_bof)
+             /* '#!' is ignored at beginning to allow C scripts. */
+             goto ignore;
+-        tcc_warning("ignoring unknown preprocessing directive #%s", get_tok_str(tok, &tokc));
++        tcc_error("unknown preprocessing directive #%s", get_tok_str(tok, &tokc));
+     ignore:
+         skip_to_eol(0);
+         goto the_end;
+diff --git a/tcctok.h b/tcctok.h
+index 923092a..e7d8492 100644
+--- a/tcctok.h
++++ b/tcctok.h
+@@ -78,6 +78,7 @@
+      DEF(TOK_DEFINE, "define")
+      DEF(TOK_INCLUDE, "include")
+      DEF(TOK_INCLUDE_NEXT, "include_next")
++     DEF(TOK_EMBED, "embed")
+      DEF(TOK_IFDEF, "ifdef")
+      DEF(TOK_IFNDEF, "ifndef")
+      DEF(TOK_ELIF, "elif")
