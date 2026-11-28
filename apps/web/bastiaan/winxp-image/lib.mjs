@@ -70,6 +70,19 @@ export async function waitIdle(emulator, seconds) {
     }
 }
 
+// The shown pixel at x, y as 0xRRGGBB: from the first visible row (DirectDraw flips move it) in the mode's depth
+export function visiblePixel(vga, x, y) {
+    const index = vga.svga_offset + y * vga.svga_width + x;
+    const memory = vga.svga_memory;
+    if (vga.svga_bpp === 8) return vga.vga256_palette[memory[index]] & 0xffffff;
+    if (vga.svga_bpp === 16) {
+        const value = memory[index * 2] | (memory[index * 2 + 1] << 8);
+        const expand = (part, bits) => (part << (8 - bits)) | (part >> (2 * bits - 8));
+        return (expand(value >> 11, 5) << 16) | (expand((value >> 5) & 63, 6) << 8) | expand(value & 31, 5);
+    }
+    return (memory[index * 4 + 2] << 16) | (memory[index * 4 + 1] << 8) | memory[index * 4];
+}
+
 // Saves the VGA framebuffer as PNG, for debugging the headless runs
 export function screenshot(emulator, file) {
     const vga = emulator.v86.cpu.devices.vga;
@@ -87,10 +100,11 @@ export function screenshot(emulator, file) {
     }
     const [width, height] = [vga.svga_width || 1024, vga.svga_height || 768];
     const rgb = Buffer.alloc(width * height * 3);
-    for (let i = 0; i < width * height; i++) {
-        rgb[i * 3] = vga.svga_memory[i * 4 + 2];
-        rgb[i * 3 + 1] = vga.svga_memory[i * 4 + 1];
-        rgb[i * 3 + 2] = vga.svga_memory[i * 4];
+    for (let y = 0; y < height; y++) {
+        for (let x = 0; x < width; x++) {
+            const color = visiblePixel(vga, x, y);
+            rgb.set([color >> 16, (color >> 8) & 0xff, color & 0xff], (y * width + x) * 3);
+        }
     }
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(file, encodePng(width, height, rgb));

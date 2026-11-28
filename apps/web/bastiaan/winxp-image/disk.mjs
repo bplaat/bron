@@ -4,6 +4,7 @@
 //        disk.mjs setup <disk.img>    - copy the guest integration and music in, v86setup runs at logon (v86)
 //        disk.mjs finish <disk.img>   - drop the setup files and caches, zero the free space
 //        disk.mjs apps <disk.img>     - copy the freshly built native apps over the installed ones
+//        disk.mjs test <disk.img>     - the fresh display drivers, their conformance test runs at the next logon
 
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -233,8 +234,16 @@ if (mode === 'software') {
         copy(path.join(root, 'software', name, `${name}.exe`), `/Program Files/${folder}/${name}.exe`);
     }
     copy(path.join(root, 'software', 'game2048', 'miniblink.dll'), '/Program Files/2048/miniblink.dll');
+} else if (mode === 'test') {
+    // The freshly built display drivers over the installed ones, so a test needs no new setup
+    const drivers = path.join(guest, 'target', 'i686-winxp-windows-driver', 'release');
+    copy(path.join(drivers, 'v86disp.sys'), '/WINDOWS/system32/v86disp.dll');
+    copy(path.join(drivers, 'v86vid.sys'), '/WINDOWS/system32/drivers/v86vid.sys');
+    tryMtools('mmd', `::${V86}`);
+    copyBuilt('i686-winxp-windows-gnu', 'v86gputest.exe');
+    runAtLogon('v86gputest.cmd', '"%SystemRoot%\\v86\\v86gputest.exe"');
 } else {
-    throw new Error('usage: disk.mjs software|setup|finish|apps <disk.img>');
+    throw new Error('usage: disk.mjs software|setup|finish|apps|test <disk.img>');
 }
 fs.closeSync(fd);
 

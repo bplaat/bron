@@ -22,7 +22,8 @@ target=i686-winxp-windows-gnu
 
 # The guest integration in Rust with the Windows XP toolchain: the programs, then the drivers
 xp=$root/tools/winxp-toolchain/bin
-"$xp/cargo" build --release --locked --manifest-path guest/Cargo.toml --bin v86agent --bin v86setup --bin confid
+"$xp/cargo" build --release --locked --manifest-path guest/Cargo.toml --bin v86agent --bin v86setup --bin confid \
+    --bin v86gputest
 "$xp/cargo-driver" build --release --locked --manifest-path guest/Cargo.toml --bin v86mou --bin v86tools --bin v86vid --bin v86disp
 
 # Software that is unpacked on the host

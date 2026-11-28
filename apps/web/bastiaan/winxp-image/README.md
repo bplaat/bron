@@ -133,6 +133,7 @@ A Rust crate with a binary per program and driver, built with the Windows XP too
 - `v86disp.dll`: the display driver of the paravirtualized graphics adapter. The page draws
   GDI blits, patterns, text, lines, stretching, alpha and color keys onto the VRAM, the engine draws what it declines.
   A DirectDraw HAL with VRAM surfaces, blits, flips, vertical blanks and 8-bit palettes.
+- `v86gputest.exe`: the conformance test of the display driver, see [Testing](#testing).
 - `v86agent.exe`: syncs the display size, host clock and clipboard, saves dropped files and opens HTTP/HTTPS links
   in the browser. Display resizing pauses when a game uses a different colour depth. On request, the agent disables
   NetBIOS and renews the relay's DHCP lease.
@@ -142,3 +143,17 @@ A Rust crate with a binary per program and driver, built with the Windows XP too
 Host integration: [`web/src/guest-host.ts`](../web/src/guest-host.ts) and the display driver's 2D engine in
 [`web/src/gpu/`](../web/src/gpu). Protocols: `guest/src/protocol.rs` and `guest/src/gpu.rs`. Shared machine configuration:
 [`web/src/machine.ts`](../web/src/machine.ts).
+
+## Testing
+
+```sh
+npm test --workspace bastiaan                                                  # the 2D engine on the host
+cargo test --manifest-path apps/web/bastiaan/winxp-image/guest/Cargo.toml --lib # the command encoding
+apps/web/bastiaan/winxp-image/gpu-test.mjs                                     # the display driver in XP
+```
+
+`gpu-test.mjs` boots a copy of `out/site.img` headless with `v86gputest.exe` at logon. It draws every GDI case into a
+DIB section, which only the engine draws, and onto the screen through the display driver, in 32 and 16 bpp, and
+compares them. Then DirectDraw in 8, 16 and 32 bpp: fills, copies, color keys, stretching, mirroring, overlap, vertical
+blanks, flips and palettes, with the shown picture checked by the page. It takes a few minutes and fails on any
+difference.
