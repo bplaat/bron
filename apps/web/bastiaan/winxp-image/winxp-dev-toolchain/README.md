@@ -44,3 +44,9 @@ COM, DirectDraw and Direct3D 8, so programs need no `INITGUID`.
 
 - Hello World: centered text with GDI
 - Clock: an analog clock with GDI+ and the XP side-by-side GDI+ assembly
+- Triangle: a rotating colored triangle with Direct3D 8 fixed function
+- Cube: a rotating textured crate with Direct3D 8, the texture built in with `#embed` and decoded with GDI+
+- Blocks: a random voxel world with Direct3D 8, its textures built in with `#embed` and decoded with GDI+
+
+Triangle, Cube and Blocks need a Direct3D 8 device, which the paravirtualized graphics adapter doesn't provide yet;
+without one they say so.

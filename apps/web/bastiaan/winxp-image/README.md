@@ -79,8 +79,8 @@ Generated: `winxp-image/out/` (install images, screenshots), the built `.exe`/`.
   Civilization III Complete.
 - Notepad++ without its updater, associated with text and source files; MiTeC EXE Explorer, Hexadecimal Editor and
   Task Manager DeLuxe in `Program Files\MiTeC`.
-- [Win32 development toolchain](winxp-dev-toolchain/README.md) in `Program Files\Toolchain` with Hello World and
-  Analog Clock sample projects in the user profile.
+- [Win32 development toolchain](winxp-dev-toolchain/README.md) in `Program Files\Toolchain` with Hello World, Analog
+  Clock and the Direct3D 8 Triangle, Cube and Blocks sample projects in the user profile.
 - Start menu entry for 7-Zip.
 
 ## Adding software
