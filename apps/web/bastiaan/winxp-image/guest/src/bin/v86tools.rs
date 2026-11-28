@@ -20,11 +20,11 @@ use core::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, Ordering};
 use v86::ddk::*;
 use v86::port::{self, Regs};
 use v86::protocol::*;
-use v86::wide;
+use v86::w;
 
 const BUFFER_SIZE: usize = V86_BUFFER_SIZE as usize;
-const DEVICE_NAME: UnicodeString = UnicodeString::new(wide!(V86_DEVICE_NAME));
-const DOS_NAME: UnicodeString = UnicodeString::new(wide!(V86_DOS_NAME));
+const DEVICE_NAME: UnicodeString = UnicodeString::new(w!(V86_DEVICE_NAME));
+const DOS_NAME: UnicodeString = UnicodeString::new(w!(V86_DOS_NAME));
 
 static HOST: AtomicBool = AtomicBool::new(false);
 static BUFFER: AtomicPtr<u8> = AtomicPtr::new(ptr::null_mut());

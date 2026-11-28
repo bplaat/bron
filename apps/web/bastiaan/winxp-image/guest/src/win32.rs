@@ -15,6 +15,8 @@ use core::ptr;
 use std::string::String;
 use std::vec::Vec;
 
+pub use crate::{w, wide};
+
 pub type BOOL = i32;
 pub type HANDLE = *mut c_void;
 pub type HWND = *mut c_void;
@@ -498,18 +500,9 @@ unsafe extern "system" {
     ) -> u32;
 }
 
-/// A NUL terminated UTF-16 string
-pub fn wide(text: &str) -> Vec<u16> {
-    text.encode_utf16().chain([0]).collect()
-}
-
 /// UTF-16 strings, each NUL terminated, with the NUL that ends a REG_MULTI_SZ
 pub fn wide_multi(texts: &[&str]) -> Vec<u16> {
-    texts
-        .iter()
-        .flat_map(|text| wide(text))
-        .chain([0])
-        .collect()
+    texts.iter().flat_map(wide).chain([0]).collect()
 }
 
 /// The bytes of UTF-16 text for the registry

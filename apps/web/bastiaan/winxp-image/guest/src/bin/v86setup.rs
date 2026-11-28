@@ -371,7 +371,7 @@ fn update_driver(hardware_id: &str, inf: &str) {
     type UpdateDriver =
         unsafe extern "system" fn(HWND, *const u16, *const u16, u32, *mut BOOL) -> BOOL;
     const INSTALLFLAG_FORCE: u32 = 1;
-    let (library, hardware_id, inf) = (wide("newdev.dll"), wide(hardware_id), wide(inf));
+    let (library, hardware_id, inf) = (w!("newdev.dll"), wide(hardware_id), wide(inf));
     // SAFETY: The strings are NUL terminated and the export has this signature
     unsafe {
         let newdev = LoadLibraryW(library.as_ptr());
@@ -401,7 +401,7 @@ fn update_driver(hardware_id: &str, inf: &str) {
 /// emulates
 fn install_sound() {
     let hardware_id = utf16_bytes(&wide_multi(&["*PNPB003"]));
-    let class_name = wide("MEDIA");
+    let class_name = w!("MEDIA");
     // SAFETY: The class, the name and the hardware ID are valid for the calls, the set is
     // destroyed after
     unsafe {
@@ -445,7 +445,7 @@ fn install_kernel_driver(dir: &Path, name: &str, display_name: &str, group: Opti
     let (name, display_name, target) = (
         wide(name),
         wide(display_name),
-        wide(&target.to_string_lossy()),
+        wide(target.to_string_lossy().as_ref()),
     );
     let group = group.map(wide);
     // SAFETY: The strings are NUL terminated or null, the handles are closed after
@@ -596,10 +596,10 @@ fn tune_default_user(dir: &Path) {
 /// The account the desktop logs on with, with its picture on the Start menu
 fn create_user(dir: &Path) {
     let (name, password, full_name, group) = (
-        wide(USER_NAME),
-        wide(""),
-        wide(USER_FULL_NAME),
-        wide("Administrators"),
+        w!(USER_NAME),
+        w!(""),
+        w!(USER_FULL_NAME),
+        w!("Administrators"),
     );
     let info = USER_INFO_1 {
         name: name.as_ptr(),
@@ -649,7 +649,7 @@ fn user_logon(dir: &Path) {
         dir,
     );
     tune_user(&Key::CURRENT_USER);
-    let environment = wide("Environment");
+    let environment = w!("Environment");
     // SAFETY: The string is NUL terminated
     unsafe {
         SendMessageTimeoutW(

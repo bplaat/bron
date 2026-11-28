@@ -15,7 +15,7 @@ use std::cell::{Cell, RefCell};
 use std::ffi::OsString;
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
-use std::os::windows::ffi::{OsStrExt, OsStringExt};
+use std::os::windows::ffi::OsStringExt;
 use std::os::windows::io::AsRawHandle;
 use std::path::PathBuf;
 use std::{env, mem, ptr, thread};
@@ -125,7 +125,7 @@ thread_local! {
 /// Shows a warning without blocking the agent
 fn warn(text: &'static str) {
     thread::spawn(move || {
-        let (text, caption) = (wide(text), wide("v86"));
+        let (text, caption) = (wide(text), w!("v86"));
         // SAFETY: The strings are NUL terminated
         unsafe {
             MessageBoxW(
@@ -218,11 +218,7 @@ impl Agent {
             return;
         }
         // Brings the desktop icons back into view
-        let (progman, view, list) = (
-            wide("Progman"),
-            wide("SHELLDLL_DefView"),
-            wide("SysListView32"),
-        );
+        let (progman, view, list) = (w!("Progman"), w!("SHELLDLL_DefView"), w!("SysListView32"));
         // SAFETY: The class names are NUL terminated, a missing window gives null
         unsafe {
             let desktop = FindWindowW(progman.as_ptr(), ptr::null());
@@ -254,9 +250,9 @@ impl Agent {
             {
                 zone = mem::zeroed();
                 zone.Bias = bias;
-                let name = wide("Host Time");
-                zone.StandardName[..name.len()].copy_from_slice(&name);
-                zone.DaylightName[..name.len()].copy_from_slice(&name);
+                let name = w!("Host Time");
+                zone.StandardName[..name.len()].copy_from_slice(name);
+                zone.DaylightName[..name.len()].copy_from_slice(name);
                 SetTimeZoneInformation(&zone);
             }
 
@@ -375,12 +371,7 @@ impl Agent {
                     warn("Not enough disk space for the dropped file.");
                 } else {
                     // The exact UTF-16, which the name keeps
-                    let path = dropped
-                        .path
-                        .as_os_str()
-                        .encode_wide()
-                        .chain([0])
-                        .collect::<Vec<_>>();
+                    let path = wide(&dropped.path);
                     // SAFETY: The path is NUL terminated
                     unsafe {
                         SHChangeNotify(SHCNE_CREATE, SHCNF_PATHW, path.as_ptr().cast(), ptr::null())
@@ -536,7 +527,7 @@ fn main() {
         return;
     }
 
-    let name = wide("v86agent");
+    let name = w!("v86agent");
     // SAFETY: The strings are NUL terminated, the structures are valid for the calls and the
     // window procedure lives as long as the program
     unsafe {
@@ -577,7 +568,7 @@ fn main() {
             instance,
             ptr::null_mut(),
         );
-        let html = wide("HTML Format");
+        let html = w!("HTML Format");
         AGENT.with_borrow_mut(|agent| {
             agent.clipboard.html_format = RegisterClipboardFormatW(html.as_ptr())
         });

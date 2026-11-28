@@ -67,36 +67,15 @@ pub struct UnicodeString {
 }
 
 impl UnicodeString {
+    /// Builds a counted NT string from a NUL-terminated buffer.
     pub const fn new(text: &'static [u16]) -> Self {
-        let bytes = (text.len() * 2) as u16;
+        let bytes = ((text.len() - 1) * 2) as u16;
         Self {
             length: bytes,
             maximum_length: bytes,
             buffer: text.as_ptr(),
         }
     }
-}
-
-/// UTF-16 of an ASCII string at compile time, for [`UnicodeString`]
-#[macro_export]
-macro_rules! wide {
-    ($text:expr) => {{
-        const TEXT: &str = $text;
-        const WIDE: [u16; TEXT.len()] = $crate::ddk::ascii_to_utf16(TEXT);
-        &WIDE
-    }};
-}
-
-pub const fn ascii_to_utf16<const N: usize>(text: &str) -> [u16; N] {
-    let bytes = text.as_bytes();
-    let mut wide = [0; N];
-    let mut i = 0;
-    while i < N {
-        assert!(bytes[i].is_ascii());
-        wide[i] = bytes[i] as u16;
-        i += 1;
-    }
-    wide
 }
 
 #[repr(C)]
