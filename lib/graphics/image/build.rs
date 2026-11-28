@@ -21,7 +21,6 @@ fn decode(x: f64) -> f64 {
 }
 
 fn main() {
-    println!("cargo:rerun-if-changed=build.rs");
     let mut code = format!("const TABLE_STEPS: usize = {TABLE_STEPS};\n");
     for (name, length) in [
         ("SRGB_ENCODE", TABLE_STEPS + 1),

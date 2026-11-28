@@ -7,6 +7,8 @@
 //! A minimal replacement for the [libsqlite3-sys](https://crates.io/crates/libsqlite3-sys) crate.
 
 fn main() {
+    println!("cargo:rerun-if-changed=sqlite3");
+
     let env = |name: &str| std::env::var(name).unwrap_or_else(|_| panic!("{name} not set"));
     let target_os = env("CARGO_CFG_TARGET_OS");
     // Windows XP and 7 have no system winsqlite3.dll. Inspect the Cargo target rather than
