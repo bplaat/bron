@@ -39,7 +39,7 @@ macro_rules! optional_proc {
             static FUNCTION: std::sync::OnceLock<Option<Function>> = std::sync::OnceLock::new();
             *FUNCTION.get_or_init(|| {
                 let address = $crate::platforms::windows::load_system_proc(
-                    concat!($module, ".dll"),
+                    $crate::platforms::windows::headers::w!(concat!($module, ".dll")),
                     concat!(stringify!($name), "\0"),
                 );
                 (!address.is_null()).then(|| unsafe {
@@ -76,23 +76,25 @@ use self::headers::*;
 
 /// Loads a function of a DLL in the system directory, the DLL stays loaded
 #[cfg(any(target_vendor = "winxp", target_vendor = "win7"))]
-fn load_system_proc(module: &str, symbol: &str) -> *const c_void {
+fn load_system_proc(module: &[u16], symbol: &str) -> *const c_void {
     // Version 6 of comctl32 lives in WinSxS: only a load by bare name goes through the manifest's
     // activation context, a full path gets the old version 5.82 in the system directory
-    let path = if module == "comctl32.dll" {
-        format!("{module}\0").encode_utf16().collect()
+    let mut path;
+    let name = if module == w!("comctl32.dll") {
+        module
     } else {
         const MAX_PATH: usize = 260;
-        let mut path = vec![0u16; MAX_PATH];
+        path = vec![0; MAX_PATH];
         let length = unsafe { GetSystemDirectoryW(path.as_mut_ptr(), path.len() as u32) } as usize;
         if length == 0 || length >= path.len() {
             return std::ptr::null();
         }
         path.truncate(length);
-        path.extend(format!("\\{module}\0").encode_utf16());
-        path
+        path.push(u16::from(b'\\'));
+        path.extend_from_slice(module);
+        &path
     };
-    let module = unsafe { LoadLibraryW(path.as_ptr()) };
+    let module = unsafe { LoadLibraryW(name.as_ptr()) };
     if module.is_null() {
         return std::ptr::null();
     }

@@ -11,7 +11,8 @@
 #![allow(clippy::upper_case_acronyms)]
 #![allow(unused)]
 
-use std::ffi::{c_char, c_void};
+use std::ffi::{OsStr, c_char, c_void};
+use std::os::windows::ffi::OsStrExt;
 
 use super::com::ComPtr;
 
@@ -1001,13 +1002,13 @@ impl ITaskbarList3 {
 }
 
 /// Encode a string as a null-terminated UTF-16 string.
-pub(crate) fn wide(text: &str) -> Vec<u16> {
-    text.encode_utf16().chain([0]).collect()
+pub(crate) fn wide(text: &(impl AsRef<OsStr> + ?Sized)) -> Vec<u16> {
+    text.as_ref().encode_wide().chain([0]).collect()
 }
 
 /// Encode a string literal as a null-terminated UTF-16 string at compile time.
 macro_rules! w {
-    ($text:literal) => {{
+    ($text:expr) => {{
         const TEXT: &str = $text;
         const LEN: usize = {
             let bytes = TEXT.as_bytes();

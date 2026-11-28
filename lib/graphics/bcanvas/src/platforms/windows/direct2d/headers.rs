@@ -1145,8 +1145,8 @@ fn exports() -> Option<&'static Exports> {
     static EXPORTS: std::sync::OnceLock<Option<Exports>> = std::sync::OnceLock::new();
     EXPORTS
         .get_or_init(|| unsafe {
-            let d2d1 = load_system_library("d2d1.dll");
-            let dwrite = load_system_library("dwrite.dll");
+            let d2d1 = load_system_library(w!("d2d1.dll"));
+            let dwrite = load_system_library(w!("dwrite.dll"));
             if d2d1.is_null() || dwrite.is_null() {
                 return None;
             }

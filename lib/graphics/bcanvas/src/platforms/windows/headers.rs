@@ -42,7 +42,7 @@ unsafe extern "system" {
 /// Loads a DLL from the system directory by full path, so a missing DLL is never searched for in
 /// the current directory or PATH. The DLL stays loaded for the process lifetime.
 #[cfg(target_vendor = "winxp")]
-pub(crate) fn load_system_library(name: &str) -> HANDLE {
+pub(crate) fn load_system_library(name: &[u16]) -> HANDLE {
     const MAX_PATH: usize = 260;
     let mut path = vec![0u16; MAX_PATH];
     let length = unsafe { GetSystemDirectoryW(path.as_mut_ptr(), path.len() as u32) } as usize;
@@ -50,7 +50,8 @@ pub(crate) fn load_system_library(name: &str) -> HANDLE {
         return std::ptr::null_mut();
     }
     path.truncate(length);
-    path.extend(format!("\\{name}\0").encode_utf16());
+    path.push(u16::from(b'\\'));
+    path.extend_from_slice(name);
     unsafe { LoadLibraryW(path.as_ptr()) }
 }
 

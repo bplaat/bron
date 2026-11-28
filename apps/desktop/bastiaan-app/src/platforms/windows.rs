@@ -22,12 +22,65 @@ use bwindow::{
 
 use super::LINE;
 
+/// Encode a string literal as a null-terminated UTF-16 string at compile time.
+macro_rules! w {
+    ($text:literal) => {{
+        const TEXT: &str = $text;
+        const LEN: usize = {
+            let bytes = TEXT.as_bytes();
+            let mut len = 1;
+            let mut i = 0;
+            while i < bytes.len() {
+                if bytes[i] & 0xc0 != 0x80 {
+                    len += if bytes[i] >= 0xf0 { 2 } else { 1 };
+                }
+                i += 1;
+            }
+            len
+        };
+        const WIDE: &[u16] = &{
+            let bytes = TEXT.as_bytes();
+            let mut result = [0; LEN];
+            let mut i = 0;
+            let mut j = 0;
+            while i < bytes.len() {
+                let first = bytes[i];
+                let (mut code, extra) = match first {
+                    0..=0x7f => (first as u32, 0),
+                    0xc0..=0xdf => ((first & 0x1f) as u32, 1),
+                    0xe0..=0xef => ((first & 0x0f) as u32, 2),
+                    _ => ((first & 0x07) as u32, 3),
+                };
+                let end = i + extra + 1;
+                i += 1;
+                while i < end {
+                    code = (code << 6) | (bytes[i] & 0x3f) as u32;
+                    i += 1;
+                }
+                assert!(code != 0, "wide string literal contains a null character");
+                if code > 0xffff {
+                    code -= 0x10000;
+                    result[j] = 0xd800 | (code >> 10) as u16;
+                    j += 1;
+                    result[j] = 0xdc00 | (code & 0x3ff) as u16;
+                } else {
+                    result[j] = code as u16;
+                }
+                j += 1;
+            }
+            result
+        };
+        WIDE
+    }};
+}
+
+const CLASS_NAME: &[u16] = w!("BastiaanScrollView");
+
 type HWND = *mut c_void;
 type WPARAM = usize;
 type LPARAM = isize;
 type LRESULT = isize;
 
-const CLASS_NAME: &str = "BastiaanScrollView";
 const REPAINT_TIMER: usize = 1;
 const WS_CHILD: u32 = 0x4000_0000;
 const WS_VISIBLE: u32 = 0x1000_0000;
@@ -218,13 +271,12 @@ impl ScrollView {
             updating_scroll_bar: Cell::new(false),
         });
         register_class();
-        let class = wide(CLASS_NAME);
         // SAFETY: The class is registered and the boxed state outlives the window, which this
         // view destroys before dropping it.
         unsafe {
             let hwnd = CreateWindowExW(
                 0,
-                class.as_ptr(),
+                CLASS_NAME.as_ptr(),
                 null(),
                 WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WS_VSCROLL,
                 0,
@@ -294,11 +346,11 @@ impl ScrollView {
 
     /// Follows the light or dark theme with the scroll bar.
     pub(crate) fn set_dark(&self, dark: bool) {
-        let theme = wide(if dark {
-            "DarkMode_Explorer"
+        let theme = if dark {
+            w!("DarkMode_Explorer")
         } else {
-            "Explorer"
-        });
+            w!("Explorer")
+        };
         // SAFETY: The window is alive and the theme name is copied by the system.
         unsafe { SetWindowTheme(self.state.hwnd.get(), theme.as_ptr(), null()) };
     }
@@ -317,14 +369,9 @@ impl Drop for ScrollView {
     }
 }
 
-fn wide(text: &str) -> Vec<u16> {
-    text.encode_utf16().chain([0]).collect()
-}
-
 fn register_class() {
     static REGISTER: Once = Once::new();
     REGISTER.call_once(|| {
-        let class = wide(CLASS_NAME);
         // SAFETY: The class structure is valid and its name is copied by the system.
         unsafe {
             let atom = RegisterClassExW(&WNDCLASSEXW {
@@ -338,7 +385,7 @@ fn register_class() {
                 hCursor: null_mut(),
                 hbrBackground: null_mut(),
                 lpszMenuName: null(),
-                lpszClassName: class.as_ptr(),
+                lpszClassName: CLASS_NAME.as_ptr(),
                 hIconSm: null_mut(),
             });
             assert!(atom != 0, "could not register the scroll view class");

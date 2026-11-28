@@ -23,9 +23,7 @@ fn window_key() -> Vec<u16> {
                 .unwrap_or_else(|| "bwindow".to_owned())
         }
     };
-    format!("Software\\{application}\\Window\0")
-        .encode_utf16()
-        .collect()
+    wide(&format!("Software\\{application}\\Window"))
 }
 
 /// Restores the window placement saved by [`save_window_state`], returns whether one was applied

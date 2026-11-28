@@ -9,7 +9,7 @@ use std::ffi::OsString;
 use std::ffi::c_void;
 use std::mem::size_of;
 #[cfg(any(target_vendor = "winxp", test))]
-use std::os::windows::ffi::{OsStrExt, OsStringExt};
+use std::os::windows::ffi::OsStringExt;
 use std::path::PathBuf;
 use std::ptr::{null, null_mut};
 
@@ -291,7 +291,7 @@ impl crate::FileDialogInterface for PlatformFileDialog {
                 .filters
                 .first()
                 .and_then(|f| f.extensions.first())
-                .map(|e| wide(e));
+                .map(wide);
             if let Some(ref e) = default_extension {
                 dlg.SetDefaultExtension(e.as_ptr());
             }
@@ -356,7 +356,7 @@ unsafe fn make_shell_item_from_path(path: Option<&PathBuf>) -> Option<ComPtr<ISh
             *mut *mut c_void,
         ) -> HRESULT
     )?;
-    let w = wide(&path.to_string_lossy());
+    let w = wide(path.to_string_lossy().as_ref());
     unsafe {
         ComPtr::create(|out: *mut *mut IShellItem| {
             create_item(w.as_ptr(), null_mut(), &IID_IShellItem, out.cast())
@@ -396,18 +396,13 @@ fn fallback_file_dialog(
         .chain([0])
         .collect::<Vec<_>>();
     let title = dialog.title.as_deref().map(wide);
-    let directory = dialog.directory.as_ref().map(|path| {
-        path.as_os_str()
-            .encode_wide()
-            .chain([0])
-            .collect::<Vec<_>>()
-    });
+    let directory = dialog.directory.as_ref().map(wide);
     let extension = dialog
         .filters
         .first()
         .and_then(|filter| filter.extensions.first())
         .filter(|_| save)
-        .map(|extension| wide(extension));
+        .map(wide);
     // All fields allow zero/null defaults. The backing buffers live through the modal call.
     let mut config = OPENFILENAMEW {
         lStructSize: size_of::<OPENFILENAMEW>() as u32,
@@ -485,10 +480,16 @@ mod tests {
     #[test]
     fn reads_single_and_multiple_selections() {
         assert_eq!(
-            selected_paths(&wide("C:\\My Files\\one.txt")),
+            selected_paths(w!("C:\\My Files\\one.txt")),
             Some(vec![PathBuf::from("C:\\My Files\\one.txt")])
         );
-        let buffer = wide("C:\\My Files\0one.txt\0two words.txt\0");
+        let buffer = [
+            w!("C:\\My Files"),
+            w!("one.txt"),
+            w!("two words.txt"),
+            w!(""),
+        ]
+        .concat();
         assert_eq!(
             selected_paths(&buffer),
             Some(vec![
@@ -503,10 +504,7 @@ mod tests {
     fn preserves_non_unicode_windows_paths() {
         let buffer = [b'C' as u16, b':' as u16, b'\\' as u16, 0xd800, 0, 0];
         let paths = selected_paths(&buffer).unwrap();
-        assert_eq!(
-            paths[0].as_os_str().encode_wide().collect::<Vec<_>>(),
-            buffer[..4]
-        );
+        assert_eq!(wide(&paths[0]), buffer[..5]);
     }
 
     #[test]
