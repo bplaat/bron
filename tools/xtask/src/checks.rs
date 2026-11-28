@@ -385,6 +385,7 @@ impl Xtask {
         println!("Building the Bastiaan website...");
         self.ensure_npm_deps()?;
         run(Command::new(npm_program(self.os)).args(["run", "build", "--workspace", "bastiaan"]))?;
+        run(Command::new(npm_program(self.os)).args(["test", "--workspace", "bastiaan"]))?;
 
         println!("Building Windows examples...");
         run(Command::new("sh").arg("examples/windows/build.sh"))?;
@@ -419,8 +420,8 @@ impl Xtask {
         println!("Checking the v86 guest integration for Windows XP...");
         let guest = "apps/web/bastiaan/winxp-image/guest/Cargo.toml";
         for (cargo, bins) in [
-            ("cargo", ["v86agent", "v86setup", "confid"]),
-            ("cargo-driver", ["v86mou", "v86tools", "v86vid"]),
+            ("cargo", ["v86agent", "v86setup", "confid", "v86gputest"].as_slice()),
+            ("cargo-driver", ["v86mou", "v86tools", "v86vid", "v86disp"].as_slice()),
         ] {
             let mut command = Command::new(format!("tools/winxp-toolchain/bin/{cargo}"));
             command
@@ -436,6 +437,7 @@ impl Xtask {
             "--locked",
             "--manifest-path",
             guest,
+            "--lib",
             "--bin",
             "confid",
         ]))?;
