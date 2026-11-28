@@ -8,6 +8,8 @@
 // Extends v86's VMware backdoor with commands the guest agent and drivers use.
 
 import type { V86 } from 'v86';
+import { GpuDevice } from './gpu/device.ts';
+import { readLinear } from './guest-memory.ts';
 import { cpu as emulatorCpu, type Cpu } from './machine.ts';
 
 const VMWARE_PORT = 0x5658;
@@ -26,6 +28,8 @@ const CMD_RECV = 0x8602;
 const CMD_SEND = 0x8603;
 const CMD_POINTER_SHAPE = 0x8604;
 const CMD_POINTER_MOVE = 0x8605;
+const CMD_GPU = 0x8610;
+const CMD_GPU_SCANLINE = 0x8611;
 const POINTER_HIDDEN = 0xffffffff;
 const POINTER_RESEND = 1;
 const POINTER_ATTRIBUTES = 24; // VIDEO_POINTER_ATTRIBUTES before its pixels
@@ -135,42 +139,6 @@ function decodeImage(bytes: Uint8Array): Image | null {
     return { width, height, data: swapRedBlue(bytes.subarray(8), new Uint8ClampedArray(width * height * 4), 255) };
 }
 
-// Guest memory at a linear address, through the page tables of the running code: null when a page is not present
-const u32 = (mem: Uint8Array, address: number) =>
-    (mem[address] | (mem[address + 1] << 8) | (mem[address + 2] << 16) | (mem[address + 3] << 24)) >>> 0;
-function translate(cpu: Cpu, linear: number) {
-    const mem = cpu.mem8;
-    if (!(cpu.cr[0] & 0x80000000)) return linear;
-    if (cpu.cr[4] & 0x20) {
-        // PAE: 64-bit entries, the guest has less than 4 GB so the low halves are enough
-        const pdpte = u32(mem, (cpu.cr[3] & 0xffffffe0) + (linear >>> 30) * 8);
-        if (!(pdpte & 1)) return -1;
-        const pde = u32(mem, (pdpte & 0xfffff000) + ((linear >>> 21) & 0x1ff) * 8);
-        if (!(pde & 1)) return -1;
-        if (pde & 0x80) return ((pde & 0xffe00000) | (linear & 0x1fffff)) >>> 0;
-        const pte = u32(mem, (pde & 0xfffff000) + ((linear >>> 12) & 0x1ff) * 8);
-        return pte & 1 ? ((pte & 0xfffff000) | (linear & 0xfff)) >>> 0 : -1;
-    }
-    const pde = u32(mem, (cpu.cr[3] & 0xfffff000) + (linear >>> 22) * 4);
-    if (!(pde & 1)) return -1;
-    if (pde & 0x80 && cpu.cr[4] & 0x10) return ((pde & 0xffc00000) | (linear & 0x3fffff)) >>> 0;
-    const pte = u32(mem, (pde & 0xfffff000) + ((linear >>> 12) & 0x3ff) * 4);
-    return pte & 1 ? ((pte & 0xfffff000) | (linear & 0xfff)) >>> 0 : -1;
-}
-
-function readLinear(cpu: Cpu, address: number, length: number) {
-    const out = new Uint8Array(length);
-    for (let done = 0; done < length;) {
-        const linear = (address + done) >>> 0;
-        const physical = translate(cpu, linear);
-        const count = Math.min(length - done, 0x1000 - (linear & 0xfff));
-        if (physical < 0 || physical + count > cpu.mem8.length) return null;
-        out.set(cpu.mem8.subarray(physical, physical + count), done);
-        done += count;
-    }
-    return out;
-}
-
 // A monochrome pointer (VIDEO_POINTER_ATTRIBUTES) as RGBA, null when it inverts the screen, which a browser cursor
 // cannot
 function decodePointer(bytes: Uint8Array): PointerShape | null {
@@ -218,6 +186,7 @@ export class GuestHost extends EventTarget {
     mouse: [number, number] | null = null; // the last absolute position the guest read, 0 to 0xffff
     cpu: Cpu;
     vmware: Cpu['devices']['vmware'];
+    gpu: GpuDevice;
 
     constructor(emulator: V86) {
         super();
@@ -226,6 +195,7 @@ export class GuestHost extends EventTarget {
         const stock = vmware.port_read32;
         this.cpu = cpu;
         this.vmware = vmware;
+        this.gpu = new GpuDevice(cpu);
         cpu.io.register_read(
             VMWARE_PORT,
             vmware,
@@ -247,6 +217,10 @@ export class GuestHost extends EventTarget {
                         );
                     case CMD_POINTER_MOVE:
                         return this.movePointer(reg[REG_EBX] >>> 0);
+                    case CMD_GPU:
+                        return this.gpu.execute(reg[REG_EBX] >>> 0, reg[REG_ESI] >>> 0);
+                    case CMD_GPU_SCANLINE:
+                        return this.gpu.scanline();
                     case CMD_HELLO:
                         return HELLO_REPLY;
                     case CMD_GETSIZE:

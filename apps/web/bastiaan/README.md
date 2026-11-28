@@ -7,6 +7,7 @@ My personal website inside a Windows XP desktop running in your browser with [v8
 - Windows XP runs in [v86](https://github.com/copy/v86) with 256 MB RAM, Sound Blaster 16 audio and an NE2000 network card.
 - A saved desktop snapshot loads behind the XP boot screen. The disk streams in compressed 1 MiB chunks.
 - The desktop resizes to the browser window and uses the browser cursor.
+- A paravirtualized graphics adapter draws GDI and DirectDraw on the page.
 - Text, HTML and images sync through the clipboard. Cmd acts as Ctrl on macOS.
 - Dropped files appear on the XP desktop. Links open in a new browser tab.
 - Sessions are saved in IndexedDB. The welcome back notice lets you start fresh. Browser storage cleanup and new

@@ -11,7 +11,7 @@ export const DISK_CHUNK_SIZE = 1024 * 1024;
 
 export const MACHINE = {
     memory_size: 256 * 1024 * 1024,
-    vga_memory_size: 16 * 1024 * 1024,
+    vga_memory_size: 64 * 1024 * 1024, // like a DX8 card of 2002, DirectDraw gets what the desktop leaves
     acpi: false, // XP runs the Standard PC HAL
     cpuid_level: 2,
     net_device: { type: 'ne2k' }, // XP's in-box RTL8029 driver, the site connects it to the server's LAN relay
@@ -50,10 +50,11 @@ export interface Cpu {
     devices: {
         net?: NetworkCard;
         vmware: { port_read32(): number; queue: unknown[] };
-        vga: { svga_width: number; svga_height: number };
+        vga: { svga_width: number; svga_height: number; svga_memory: Uint8Array };
         ide: { primary: { master: { buffer: AsyncDisk } } };
     };
     write_blob(data: Uint8Array, address: number): void;
+    svga_mark_dirty(): void;
 }
 
 export const cpu = (emulator: V86): Cpu => (emulator as unknown as { v86: { cpu: Cpu } }).v86.cpu;

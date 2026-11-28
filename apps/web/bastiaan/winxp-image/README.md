@@ -139,5 +139,6 @@ A Rust crate with a binary per program and driver, built with the Windows XP too
 - `v86setup.exe`: configures the guest. `activate.vbs` and `confid.exe` activate Windows offline; `library.vbs` fills
   the Media Player library.
 
-Host integration: [`web/src/guest-host.ts`](../web/src/guest-host.ts). Protocol: `guest/src/protocol.rs`. Shared machine
-configuration: [`web/src/machine.ts`](../web/src/machine.ts).
+Host integration: [`web/src/guest-host.ts`](../web/src/guest-host.ts) and the display driver's 2D engine in
+[`web/src/gpu/`](../web/src/gpu). Protocols: `guest/src/protocol.rs` and `guest/src/gpu.rs`. Shared machine configuration:
+[`web/src/machine.ts`](../web/src/machine.ts).
