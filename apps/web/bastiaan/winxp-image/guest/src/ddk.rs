@@ -561,6 +561,22 @@ pub struct VideoMemoryInformation {
     pub frame_buffer_length: u32,
 }
 
+/// The input of the share and unshare requests, which map the VRAM into a process for DirectDraw
+#[repr(C)]
+pub struct VideoShareMemory {
+    pub process_handle: *mut c_void,
+    pub view_offset: u32,
+    pub view_size: u32,
+    pub requested_virtual_address: *mut c_void,
+}
+
+#[repr(C)]
+pub struct VideoShareMemoryInformation {
+    pub shared_view_offset: u32,
+    pub shared_view_size: u32,
+    pub virtual_address: *mut c_void,
+}
+
 #[repr(C)]
 pub struct VideoPointerCapabilities {
     pub flags: u32,
@@ -610,6 +626,8 @@ pub const IOCTL_VIDEO_SET_POINTER_POSITION: u32 = 0x230448;
 pub const IOCTL_VIDEO_QUERY_POINTER_CAPABILITIES: u32 = 0x230450;
 pub const IOCTL_VIDEO_MAP_VIDEO_MEMORY: u32 = 0x230458;
 pub const IOCTL_VIDEO_UNMAP_VIDEO_MEMORY: u32 = 0x23045C;
+pub const IOCTL_VIDEO_SHARE_VIDEO_MEMORY: u32 = 0x230474;
+pub const IOCTL_VIDEO_UNSHARE_VIDEO_MEMORY: u32 = 0x230478;
 
 pub const VIDEO_MODE_COLOR: u32 = 1;
 pub const VIDEO_MODE_GRAPHICS: u32 = 2;
@@ -619,6 +637,8 @@ pub const VIDEO_MODE_ASYNC_POINTER: u32 = 1;
 pub const VIDEO_MODE_MONO_POINTER: u32 = 2;
 pub const VIDEO_MODE_COLOR_POINTER: u32 = 4;
 pub const VIDEO_MEMORY_SPACE_MEMORY: u32 = 0;
+/// Maps into the process whose handle is passed in the virtual address
+pub const VIDEO_MEMORY_SPACE_USER_MODE: u32 = 2;
 
 #[link(
     name = "videoprt.sys",

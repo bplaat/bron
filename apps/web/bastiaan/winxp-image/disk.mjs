@@ -196,6 +196,8 @@ if (mode === 'software') {
     copyGuest('v86vid.inf', 'activate.vbs', 'library.vbs', 'user.bmp');
     copyBuilt('i686-winxp-windows-gnu', 'v86agent.exe', 'v86setup.exe', 'confid.exe');
     copyBuilt('i686-winxp-windows-driver', 'v86mou.sys', 'v86tools.sys', 'v86vid.sys');
+    // The display driver is a DLL, cargo names it like the other drivers
+    copy(path.join(guest, 'target', 'i686-winxp-windows-driver', 'release', 'v86disp.sys'), `${V86}/v86disp.dll`);
 
     // Music: new profiles start with the Default User's My Music
     tryMtools('mmd', `::${path.dirname(MUSIC)}`);

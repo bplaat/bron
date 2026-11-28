@@ -127,9 +127,12 @@ A Rust crate with a binary per program and driver, built with the Windows XP too
   backdoor, including buttons and scrolling.
 - `v86tools.sys`: independent host channel exposing `\\.\V86Tools` to the guest agent for display size, clock
   and message transfers.
-- `v86vid.sys` and `v86vid.inf`: Bochs VBE video miniport using `framebuf.dll`. Supports 8-bit palette, 16-bit and
+- `v86vid.sys` and `v86vid.inf`: Bochs VBE video miniport with 64 MB of VRAM. Supports 8-bit palette, 16-bit and
   32-bit DirectDraw modes, plus a mode matching the browser size. Monochrome pointers up to 32x32 use the browser
   cursor; Windows draws colour pointers and pointers that invert the screen.
+- `v86disp.dll`: the display driver of the paravirtualized graphics adapter. The page draws
+  GDI blits, patterns, text, lines, stretching, alpha and color keys onto the VRAM, the engine draws what it declines.
+  A DirectDraw HAL with VRAM surfaces, blits, flips, vertical blanks and 8-bit palettes.
 - `v86agent.exe`: syncs the display size, host clock and clipboard, saves dropped files and opens HTTP/HTTPS links
   in the browser. Display resizing pauses when a game uses a different colour depth. On request, the agent disables
   NetBIOS and renews the relay's DHCP lease.

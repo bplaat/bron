@@ -1,20 +1,23 @@
-; v86vid - display driver for the Bochs VBE adapter v86 emulates, with XP's stock framebuf.dll
+; v86vid - the paravirtualized display adapter of v86: the miniport v86vid.sys for the Bochs VBE and the
+; display driver v86disp.dll, which the page accelerates
 
 [Version]
 Signature = "$Windows NT$"
 Class = Display
 ClassGUID = {4D36E968-E325-11CE-BFC1-08002BE10318}
 Provider = %Provider%
-DriverVer = 11/10/2026,1.0.0.0
+DriverVer = 11/27/2026,0.1.0.0
 
 [DestinationDirs]
 DefaultDestDir = 12
+v86vid.Display = 11
 
 [SourceDisksNames]
 1 = %Disk%
 
 [SourceDisksFiles]
 v86vid.sys = 1
+v86disp.dll = 1
 
 [Manufacturer]
 %Provider% = Models
@@ -23,16 +26,19 @@ v86vid.sys = 1
 %DeviceDesc% = v86vid, PCI\VEN_1234&DEV_1111
 
 [v86vid]
-CopyFiles = v86vid.Files
+CopyFiles = v86vid.Files, v86vid.Display
 
 [v86vid.Files]
 v86vid.sys
+
+[v86vid.Display]
+v86disp.dll
 
 [v86vid.SoftwareSettings]
 AddReg = v86vid.AddReg
 
 [v86vid.AddReg]
-HKR,, InstalledDisplayDrivers, %REG_MULTI_SZ%, framebuf
+HKR,, InstalledDisplayDrivers, %REG_MULTI_SZ%, v86disp
 HKR,, VideoDebugLevel, %REG_DWORD%, 0
 HKR,, DefaultSettings.BitsPerPel, %REG_DWORD%, 32
 HKR,, DefaultSettings.XResolution, %REG_DWORD%, 1024

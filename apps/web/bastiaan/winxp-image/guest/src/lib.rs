@@ -14,12 +14,17 @@
 #[cfg(all(windows, target_env = "gnu"))]
 extern crate std;
 
+pub mod gpu;
 pub mod protocol;
 
+#[cfg(all(windows, not(target_env = "gnu")))]
+pub mod ddi;
 #[cfg(all(windows, not(target_env = "gnu")))]
 pub mod ddk;
 #[cfg(target_arch = "x86")]
 pub mod port;
+#[cfg(target_arch = "x86")]
+pub mod vbe;
 #[cfg(all(windows, target_env = "gnu"))]
 pub mod win32;
 

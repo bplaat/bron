@@ -6,13 +6,13 @@
 
 //! v86vid.sys - video miniport for the Bochs VBE (dispi) adapter v86 emulates.
 //!
-//! Pairs with the stock framebuf.dll of Windows XP. Common sizes in 8 bit (palette), 16 and 32
-//! bit colour, so DirectDraw games find their fullscreen modes, plus one extra 32 bit mode: the
-//! size the page currently wants (asked over the backdoor), which is how the desktop follows the
-//! browser window.
+//! Pairs with the display driver v86disp.dll. Common sizes in 8 bit (palette), 16 and 32 bit
+//! colour, so DirectDraw games find their fullscreen modes, plus one extra 32 bit mode: the size
+//! the page currently wants (asked over the backdoor), which is how the desktop follows the
+//! browser window. The whole VRAM can be mapped into a process for DirectDraw.
 //!
-//! Hardware pointer: framebuf.dll hands monochrome pointers of up to 32x32 to the miniport, which
-//! passes them to the page; the page shows them as the browser's own cursor, so it moves at
+//! Hardware pointer: the display driver hands monochrome pointers of up to 32x32 to the miniport,
+//! which passes them to the page; the page shows them as the browser's own cursor, so it moves at
 //! native speed and Windows no longer draws it. Colour pointers and shapes the page declines stay
 //! drawn by Windows.
 
@@ -24,20 +24,9 @@ use core::panic::PanicInfo;
 use core::ptr;
 
 use v86::ddk::*;
-use v86::port;
 use v86::protocol::*;
+use v86::{port, vbe};
 
-const DISPI_INDEX: u16 = 0x1CE;
-const DISPI_DATA: u16 = 0x1CF;
-const DISPI_ID: u16 = 0;
-const DISPI_XRES: u16 = 1;
-const DISPI_YRES: u16 = 2;
-const DISPI_BPP: u16 = 3;
-const DISPI_ENABLE: u16 = 4;
-const DISPI_VIDEO_MEMORY_64K: u16 = 0xA;
-const DISPI_ENABLED: u16 = 0x01;
-const DISPI_8BIT_DAC: u16 = 0x20;
-const DISPI_LFB: u16 = 0x40;
 const VGA_DAC_WRITE: u16 = 0x3C8;
 const VGA_DAC_DATA: u16 = 0x3C9;
 
@@ -101,28 +90,6 @@ struct Device {
 #[panic_handler]
 fn panic(_info: &PanicInfo) -> ! {
     bug_check()
-}
-
-/// # Safety
-///
-/// Kernel mode, the adapter is the Bochs VBE.
-unsafe fn dispi_write(index: u16, value: u16) {
-    // SAFETY: The ports belong to the adapter
-    unsafe {
-        port::write_u16(DISPI_INDEX, index);
-        port::write_u16(DISPI_DATA, value);
-    }
-}
-
-/// # Safety
-///
-/// Kernel mode, the adapter is the Bochs VBE.
-unsafe fn dispi_read(index: u16) -> u16 {
-    // SAFETY: The ports belong to the adapter
-    unsafe {
-        port::write_u16(DISPI_INDEX, index);
-        port::read_u16(DISPI_DATA)
-    }
 }
 
 const fn pointer_position(column: i16, row: i16) -> u32 {
@@ -250,14 +217,14 @@ fn mode_information(index: usize, mode: &Mode) -> VideoModeInformation {
 ///
 /// Kernel mode, the adapter is the Bochs VBE.
 unsafe fn set_mode(mode: &Mode) {
-    let dac = if mode.bpp == 8 { DISPI_8BIT_DAC } else { 0 };
+    let dac = if mode.bpp == 8 { vbe::DAC_8BIT } else { 0 };
     // SAFETY: The caller runs in kernel mode with the adapter
     unsafe {
-        dispi_write(DISPI_ENABLE, 0);
-        dispi_write(DISPI_BPP, mode.bpp as u16);
-        dispi_write(DISPI_XRES, mode.width as u16);
-        dispi_write(DISPI_YRES, mode.height as u16);
-        dispi_write(DISPI_ENABLE, DISPI_ENABLED | DISPI_LFB | dac);
+        vbe::write(vbe::ENABLE, 0);
+        vbe::write(vbe::BPP, mode.bpp as u16);
+        vbe::write(vbe::XRES, mode.width as u16);
+        vbe::write(vbe::YRES, mode.height as u16);
+        vbe::write(vbe::ENABLE, vbe::ENABLED | vbe::LFB | dac);
     }
 }
 
@@ -273,7 +240,7 @@ unsafe extern "system" fn find_adapter(
     unsafe {
         let device = &mut *extension.cast::<Device>();
         *again = 0;
-        if !(0xB0C0..=0xB0C5).contains(&dispi_read(DISPI_ID)) {
+        if !(0xB0C0..=0xB0C5).contains(&vbe::read(vbe::ID)) {
             return ERROR_DEV_NOT_EXIST;
         }
 
@@ -296,7 +263,7 @@ unsafe extern "system" fn find_adapter(
         {
             device.lfb = range.range_start;
         }
-        device.vram = (u32::from(dispi_read(DISPI_VIDEO_MEMORY_64K)) * 0x10000).max(0x400000);
+        device.vram = (u32::from(vbe::read(vbe::VIDEO_MEMORY_64K)) * 0x10000).max(0x400000);
         device.host = port::host_present() && port::call(V86_CMD_HELLO, 0) == V86_HELLO_REPLY;
 
         let config = &mut *config;
@@ -415,6 +382,54 @@ unsafe fn request(
                 let base = input.cast::<*mut c_void>().read();
                 (VideoPortUnmapMemory(extension, base, ptr::null_mut()), 0)
             }
+            // DirectDraw locks VRAM surfaces in the process that draws, the display driver asks
+            // for a mapping of the VRAM there
+            IOCTL_VIDEO_SHARE_VIDEO_MEMORY => {
+                if in_len < size_of::<VideoShareMemory>()
+                    || out_len < size_of::<VideoShareMemoryInformation>()
+                {
+                    return (ERROR_INSUFFICIENT_BUFFER, 0);
+                }
+                let share = input.cast::<VideoShareMemory>().read();
+                if share.view_offset > device.vram
+                    || share.view_size > device.vram - share.view_offset
+                {
+                    return (ERROR_INVALID_PARAMETER, 0);
+                }
+                // The process to map into goes in through the virtual address
+                let mut base = share.process_handle;
+                let (mut length, mut in_io_space) = (share.view_size, VIDEO_MEMORY_SPACE_USER_MODE);
+                let status = VideoPortMapMemory(
+                    extension,
+                    device.lfb + i64::from(share.view_offset),
+                    &mut length,
+                    &mut in_io_space,
+                    &mut base,
+                );
+                if status != NO_ERROR {
+                    return (status, 0);
+                }
+                output
+                    .cast::<VideoShareMemoryInformation>()
+                    .write(VideoShareMemoryInformation {
+                        shared_view_offset: share.view_offset,
+                        shared_view_size: length,
+                        virtual_address: base,
+                    });
+                (NO_ERROR, size_of::<VideoShareMemoryInformation>())
+            }
+            IOCTL_VIDEO_UNSHARE_VIDEO_MEMORY => {
+                if in_len < size_of::<VideoShareMemory>() {
+                    return (ERROR_INSUFFICIENT_BUFFER, 0);
+                }
+                let share = input.cast::<VideoShareMemory>().read();
+                let status = VideoPortUnmapMemory(
+                    extension,
+                    share.requested_virtual_address,
+                    share.process_handle,
+                );
+                (status, 0)
+            }
             IOCTL_VIDEO_SET_COLOR_REGISTERS => {
                 let header = size_of::<VideoClut>();
                 if in_len < header {
@@ -493,7 +508,7 @@ unsafe fn request(
             // Shown again by the next position
             IOCTL_VIDEO_ENABLE_POINTER => (NO_ERROR, 0),
             IOCTL_VIDEO_RESET_DEVICE => {
-                dispi_write(DISPI_ENABLE, 0);
+                vbe::write(vbe::ENABLE, 0);
                 (NO_ERROR, 0)
             }
             _ => (ERROR_INVALID_FUNCTION, 0),
@@ -515,7 +530,7 @@ unsafe extern "system" fn start_io(extension: *mut c_void, packet: *mut VideoReq
 
 unsafe extern "system" fn reset_hw(_extension: *mut c_void, _columns: u32, _rows: u32) -> u8 {
     // SAFETY: The video port resets the adapter of the driver
-    unsafe { dispi_write(DISPI_ENABLE, 0) };
+    unsafe { vbe::write(vbe::ENABLE, 0) };
     // Lets the HAL finish with an int 10h text mode set
     0
 }
